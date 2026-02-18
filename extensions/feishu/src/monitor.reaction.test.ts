@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { FeishuMessageEvent } from "./bot.js";
+import type { FeishuMessageInfo } from "./send.js";
 
 /**
  * Tests for reaction event handling in monitor.ts.
@@ -16,8 +17,13 @@ vi.mock("./bot.js", () => ({
   handleFeishuMessage: (...args: unknown[]) => mockHandleFeishuMessage(...args),
 }));
 
-// Simulate the reaction event filtering and synthetic message construction
-// extracted from monitor.ts registerEventHandlers
+/**
+ * Simulate the reaction event filtering and synthetic message construction
+ * extracted from monitor.ts registerEventHandlers.
+ *
+ * The `getReactedMessage` callback simulates getMessageFeishu — it returns
+ * the message info for the reacted message, or null if not found.
+ */
 function processReactionEvent(
   data: {
     message_id: string;
@@ -27,6 +33,7 @@ function processReactionEvent(
     action_time?: string;
   },
   botOpenId: string | undefined,
+  getReactedMessage?: (messageId: string) => FeishuMessageInfo | null,
 ): FeishuMessageEvent | null {
   const emoji = data.reaction_type?.emoji_type;
   const messageId = data.message_id;
@@ -40,6 +47,15 @@ function processReactionEvent(
   // Skip typing indicator emoji
   if (emoji === "Typing") {
     return null;
+  }
+
+  // Only process reactions on messages sent by this bot
+  if (botOpenId && getReactedMessage) {
+    const reactedMsg = getReactedMessage(messageId);
+    const isBotMessage = reactedMsg?.senderType === "app" || reactedMsg?.senderOpenId === botOpenId;
+    if (!reactedMsg || !isBotMessage) {
+      return null;
+    }
   }
 
   return {
@@ -56,6 +72,17 @@ function processReactionEvent(
         text: `[reacted with ${emoji} to message ${messageId}]`,
       }),
     },
+  };
+}
+
+/** Helper to create a mock FeishuMessageInfo */
+function mockMessageInfo(overrides: Partial<FeishuMessageInfo> = {}): FeishuMessageInfo {
+  return {
+    messageId: "om_msg1",
+    chatId: "oc_chat1",
+    content: "hello",
+    contentType: "text",
+    ...overrides,
   };
 }
 
@@ -104,7 +131,8 @@ describe("reaction event handling", () => {
       expect(result).toBeNull();
     });
 
-    it("allows normal user reactions through", () => {
+    it("allows reactions on bot messages (senderType=app)", () => {
+      const getBotMsg = () => mockMessageInfo({ senderType: "app" });
       const result = processReactionEvent(
         {
           message_id: "om_msg1",
@@ -113,11 +141,42 @@ describe("reaction event handling", () => {
           user_id: { open_id: "ou_user1" },
         },
         "ou_bot123",
+        getBotMsg,
       );
       expect(result).not.toBeNull();
     });
 
-    it("allows reactions when bot open_id is undefined", () => {
+    it("filters out reactions on non-bot messages", () => {
+      const getNonBotMsg = () => mockMessageInfo({ senderOpenId: "ou_other_user" });
+      const result = processReactionEvent(
+        {
+          message_id: "om_msg1",
+          reaction_type: { emoji_type: "THUMBSUP" },
+          operator_type: "user",
+          user_id: { open_id: "ou_user1" },
+        },
+        "ou_bot123",
+        getNonBotMsg,
+      );
+      expect(result).toBeNull();
+    });
+
+    it("filters out reactions when reacted message is not found", () => {
+      const getNull = () => null;
+      const result = processReactionEvent(
+        {
+          message_id: "om_deleted",
+          reaction_type: { emoji_type: "THUMBSUP" },
+          operator_type: "user",
+          user_id: { open_id: "ou_user1" },
+        },
+        "ou_bot123",
+        getNull,
+      );
+      expect(result).toBeNull();
+    });
+
+    it("allows reactions when bot open_id is undefined (skip sender check)", () => {
       const result = processReactionEvent(
         {
           message_id: "om_msg1",
