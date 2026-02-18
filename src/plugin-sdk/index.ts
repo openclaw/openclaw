@@ -457,3 +457,7 @@ export type { ProcessedLineMessage } from "../line/markdown-to-line.js";
 
 // Media utilities
 export { loadWebMedia, type WebMediaResult } from "../web/media.js";
+
+// Content utilities
+export { extractTextFromChatContent } from "../shared/chat-content.js";
+export { stripEnvelope, stripMessageIdHints } from "../shared/chat-envelope.js";
