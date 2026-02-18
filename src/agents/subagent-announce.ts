@@ -118,6 +118,19 @@ function extractToolResultText(content: unknown): string {
   return joined?.trim() ?? "";
 }
 
+function extractInlineTextContent(content: unknown): string {
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  return (
+    extractTextFromChatContent(content, {
+      sanitizeText: sanitizeTextContent,
+      normalizeText: (text) => text.trim(),
+      joinWith: "",
+    }) ?? ""
+  );
+}
+
 function extractSubagentOutputText(message: unknown): string {
   if (!message || typeof message !== "object") {
     return "";
@@ -133,13 +146,7 @@ function extractSubagentOutputText(message: unknown): string {
       return sanitizeTextContent(content);
     }
     if (Array.isArray(content)) {
-      return (
-        extractTextFromChatContent(content, {
-          sanitizeText: sanitizeTextContent,
-          normalizeText: (text) => text.trim(),
-          joinWith: "",
-        }) ?? ""
-      );
+      return extractInlineTextContent(content);
     }
     return "";
   }
@@ -150,13 +157,7 @@ function extractSubagentOutputText(message: unknown): string {
     return sanitizeTextContent(content);
   }
   if (Array.isArray(content)) {
-    return (
-      extractTextFromChatContent(content, {
-        sanitizeText: sanitizeTextContent,
-        normalizeText: (text) => text.trim(),
-        joinWith: "",
-      }) ?? ""
-    );
+    return extractInlineTextContent(content);
   }
   return "";
 }
