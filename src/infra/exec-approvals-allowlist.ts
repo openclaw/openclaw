@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { ExecAllowlistEntry } from "./exec-approvals.js";
 import {
   DEFAULT_SAFE_BINS,
   analyzeShellCommand,
@@ -11,7 +12,48 @@ import {
   type CommandResolution,
   type ExecCommandSegment,
 } from "./exec-approvals-analysis.js";
-import type { ExecAllowlistEntry } from "./exec-approvals.js";
+
+const DEFAULT_SAFE_BIN_TRUSTED_DIRS = [
+  "/bin",
+  "/usr/bin",
+  "/usr/local/bin",
+  "/opt/homebrew/bin",
+  "/opt/local/bin",
+  "/snap/bin",
+  "/run/current-system/sw/bin",
+];
+
+function normalizeTrustedDir(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  return path.resolve(trimmed);
+}
+
+function collectTrustedSafeBinDirs(): Set<string> {
+  const trusted = new Set<string>();
+  for (const entry of DEFAULT_SAFE_BIN_TRUSTED_DIRS) {
+    const normalized = normalizeTrustedDir(entry);
+    if (normalized) {
+      trusted.add(normalized);
+    }
+  }
+  const pathEntries = (process.env.PATH ?? process.env.Path ?? "")
+    .split(path.delimiter)
+    .map((entry) => normalizeTrustedDir(entry))
+    .filter((entry): entry is string => Boolean(entry));
+  for (const entry of pathEntries) {
+    trusted.add(entry);
+  }
+  return trusted;
+}
+
+const TRUSTED_SAFE_BIN_DIRS = collectTrustedSafeBinDirs();
+
+function isTrustedSafeBinPath(resolvedPath: string): boolean {
+  return TRUSTED_SAFE_BIN_DIRS.has(path.dirname(path.resolve(resolvedPath)));
+}
 
 function isPathLikeToken(value: string): boolean {
   const trimmed = value.trim();
@@ -88,6 +130,9 @@ export function isSafeBinUsage(params: {
     return false;
   }
   if (!resolution?.resolvedPath) {
+    return false;
+  }
+  if (!isTrustedSafeBinPath(resolution.resolvedPath)) {
     return false;
   }
   const cwd = params.cwd ?? process.cwd();
