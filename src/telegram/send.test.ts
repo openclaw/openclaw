@@ -1102,47 +1102,44 @@ describe("sendMessageTelegram", () => {
 });
 
 describe("reactMessageTelegram", () => {
-  it("sends emoji reactions", async () => {
-    const setMessageReaction = vi.fn().mockResolvedValue(undefined);
-    const api = { setMessageReaction } as unknown as {
-      setMessageReaction: typeof setMessageReaction;
-    };
-
-    await reactMessageTelegram("telegram:123", "456", "✅", {
-      token: "tok",
-      api,
-    });
-
-    expect(setMessageReaction).toHaveBeenCalledWith("123", 456, [{ type: "emoji", emoji: "✅" }]);
-  });
-
-  it("removes reactions when emoji is empty", async () => {
-    const setMessageReaction = vi.fn().mockResolvedValue(undefined);
-    const api = { setMessageReaction } as unknown as {
-      setMessageReaction: typeof setMessageReaction;
-    };
-
-    await reactMessageTelegram("123", 456, "", {
-      token: "tok",
-      api,
-    });
-
-    expect(setMessageReaction).toHaveBeenCalledWith("123", 456, []);
-  });
-
-  it("removes reactions when remove flag is set", async () => {
-    const setMessageReaction = vi.fn().mockResolvedValue(undefined);
-    const api = { setMessageReaction } as unknown as {
-      setMessageReaction: typeof setMessageReaction;
-    };
-
-    await reactMessageTelegram("123", 456, "✅", {
-      token: "tok",
-      api,
+  it.each([
+    {
+      testName: "sends emoji reactions",
+      target: "telegram:123",
+      messageId: "456",
+      emoji: "✅",
+      remove: false,
+      expected: [{ type: "emoji", emoji: "✅" }],
+    },
+    {
+      testName: "removes reactions when emoji is empty",
+      target: "123",
+      messageId: 456,
+      emoji: "",
+      remove: false,
+      expected: [],
+    },
+    {
+      testName: "removes reactions when remove flag is set",
+      target: "123",
+      messageId: 456,
+      emoji: "✅",
       remove: true,
+      expected: [],
+    },
+  ] as const)("$testName", async (testCase) => {
+    const setMessageReaction = vi.fn().mockResolvedValue(undefined);
+    const api = { setMessageReaction } as unknown as {
+      setMessageReaction: typeof setMessageReaction;
+    };
+
+    await reactMessageTelegram(testCase.target, testCase.messageId, testCase.emoji, {
+      token: "tok",
+      api,
+      ...(testCase.remove ? { remove: true } : {}),
     });
 
-    expect(setMessageReaction).toHaveBeenCalledWith("123", 456, []);
+    expect(setMessageReaction).toHaveBeenCalledWith("123", 456, testCase.expected);
   });
 });
 
