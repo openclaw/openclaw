@@ -10,6 +10,7 @@ import fsSync from "node:fs";
 import qrcode from "qrcode-terminal";
 import { formatCliCommand } from "../cli/command-format.js";
 import { danger, success } from "../globals.js";
+import { logInfo, logSuccess } from "../logger.js";
 import { getChildLogger, toPinoLikeLogger } from "../logging.js";
 import { ensureDir, resolveUserPath } from "../utils.js";
 import { VERSION } from "../version.js";
@@ -141,7 +142,7 @@ export async function createWaSocket(
         if (qr) {
           opts.onQr?.(qr);
           if (printQr) {
-            console.log("Scan this QR in WhatsApp (Linked Devices):");
+            logInfo("Scan this QR in WhatsApp (Linked Devices):");
             qrcode.generate(qr, { small: true });
           }
         }
@@ -156,7 +157,7 @@ export async function createWaSocket(
           }
         }
         if (connection === "open" && verbose) {
-          console.log(success("WhatsApp Web connected."));
+          logSuccess("WhatsApp Web connected.");
         }
       } catch (err) {
         sessionLogger.error({ error: String(err) }, "connection.update handler error");
