@@ -213,7 +213,7 @@
   "pnpm": {
     "minimumReleaseAge": 2880,
     "overrides": {
-      "fast-xml-parser": "5.3.4",
+      "fast-xml-parser": "5.3.6",
       "form-data": "2.5.4",
       "qs": "6.14.2",
       "@sinclair/typebox": "0.34.48",
