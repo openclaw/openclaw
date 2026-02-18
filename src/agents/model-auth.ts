@@ -295,6 +295,7 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
     openai: "OPENAI_API_KEY",
     google: "GEMINI_API_KEY",
     voyage: "VOYAGE_API_KEY",
+    telnyx: "TELNYX_API_KEY",
     groq: "GROQ_API_KEY",
     deepgram: "DEEPGRAM_API_KEY",
     cerebras: "CEREBRAS_API_KEY",

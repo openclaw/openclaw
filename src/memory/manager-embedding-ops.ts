@@ -240,6 +240,20 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         }),
       );
     }
+    if (this.provider.id === "telnyx" && this.telnyx) {
+      const entries = Object.entries(this.telnyx.headers)
+        .filter(([key]) => key.toLowerCase() !== "authorization")
+        .toSorted(([a], [b]) => a.localeCompare(b))
+        .map(([key, value]) => [key, value]);
+      return hashText(
+        JSON.stringify({
+          provider: "telnyx",
+          baseUrl: this.telnyx.baseUrl,
+          model: this.telnyx.model,
+          headers: entries,
+        }),
+      );
+    }
     return hashText(JSON.stringify({ provider: this.provider.id, model: this.provider.model }));
   }
 

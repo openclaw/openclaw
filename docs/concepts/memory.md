@@ -92,7 +92,8 @@ Defaults:
   2. `openai` if an OpenAI key can be resolved.
   3. `gemini` if a Gemini key can be resolved.
   4. `voyage` if a Voyage key can be resolved.
-  5. Otherwise memory search stays disabled until configured.
+  5. `telnyx` if a Telnyx key can be resolved.
+  6. Otherwise memory search stays disabled until configured.
 - Local mode uses node-llama-cpp and may require `pnpm approve-builds`.
 - Uses sqlite-vec (when available) to accelerate vector search inside SQLite.
 
@@ -101,8 +102,35 @@ resolves keys from auth profiles, `models.providers.*.apiKey`, or environment
 variables. Codex OAuth only covers chat/completions and does **not** satisfy
 embeddings for memory search. For Gemini, use `GEMINI_API_KEY` or
 `models.providers.google.apiKey`. For Voyage, use `VOYAGE_API_KEY` or
-`models.providers.voyage.apiKey`. When using a custom OpenAI-compatible endpoint,
+`models.providers.voyage.apiKey`. For Telnyx, use `TELNYX_API_KEY` or
+`models.providers.telnyx.apiKey`. When using a custom OpenAI-compatible endpoint,
 set `memorySearch.remote.apiKey` (and optional `memorySearch.remote.headers`).
+
+### Telnyx embeddings (native)
+
+Set the provider to `telnyx` to use the Telnyx embeddings API directly:
+
+```json5
+agents: {
+  defaults: {
+    memorySearch: {
+      provider: "telnyx",
+      model: "thenlper/gte-large",   // or "intfloat/multilingual-e5-large" for multilingual
+      remote: {
+        apiKey: "YOUR_TELNYX_API_KEY"
+      }
+    }
+  }
+}
+```
+
+Notes:
+
+- `remote.baseUrl` is optional (defaults to `https://api.telnyx.com/v2/ai/openai`).
+- `remote.headers` lets you add extra headers if needed.
+- Default model: `thenlper/gte-large` (1024 dimensions).
+- Token limit: 512 per chunk (enforced automatically).
+- Set `TELNYX_API_KEY` in your environment, or use `remote.apiKey` in config.
 
 ### QMD backend (experimental)
 
@@ -315,7 +343,7 @@ If you don't want to set an API key, use `memorySearch.provider = "local"` or se
 
 Fallbacks:
 
-- `memorySearch.fallback` can be `openai`, `gemini`, `local`, or `none`.
+- `memorySearch.fallback` can be `openai`, `gemini`, `voyage`, `telnyx`, `local`, or `none`.
 - The fallback provider is only used when the primary embedding provider fails.
 
 Batch indexing (OpenAI + Gemini + Voyage):

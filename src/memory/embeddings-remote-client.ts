@@ -1,7 +1,7 @@
 import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
 import type { EmbeddingProviderOptions } from "./embeddings.js";
 
-type RemoteEmbeddingProviderId = "openai" | "voyage";
+type RemoteEmbeddingProviderId = "openai" | "voyage" | "telnyx";
 
 export async function resolveRemoteEmbeddingBearerClient(params: {
   provider: RemoteEmbeddingProviderId;

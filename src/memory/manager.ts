@@ -13,6 +13,7 @@ import {
   type EmbeddingProviderResult,
   type GeminiEmbeddingClient,
   type OpenAiEmbeddingClient,
+  type TelnyxEmbeddingClient,
   type VoyageEmbeddingClient,
 } from "./embeddings.js";
 import { bm25RankToScore, buildFtsQuery, mergeHybridResults } from "./hybrid.js";
@@ -45,13 +46,14 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   protected readonly workspaceDir: string;
   protected readonly settings: ResolvedMemorySearchConfig;
   protected provider: EmbeddingProvider | null;
-  private readonly requestedProvider: "openai" | "local" | "gemini" | "voyage" | "auto";
-  protected fallbackFrom?: "openai" | "local" | "gemini" | "voyage";
+  private readonly requestedProvider: "openai" | "local" | "gemini" | "voyage" | "telnyx" | "auto";
+  protected fallbackFrom?: "openai" | "local" | "gemini" | "voyage" | "telnyx";
   protected fallbackReason?: string;
   private readonly providerUnavailableReason?: string;
   protected openAi?: OpenAiEmbeddingClient;
   protected gemini?: GeminiEmbeddingClient;
   protected voyage?: VoyageEmbeddingClient;
+  protected telnyx?: TelnyxEmbeddingClient;
   protected batch: {
     enabled: boolean;
     wait: boolean;
@@ -158,6 +160,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     this.openAi = params.providerResult.openAi;
     this.gemini = params.providerResult.gemini;
     this.voyage = params.providerResult.voyage;
+    this.telnyx = params.providerResult.telnyx;
     this.sources = new Set(params.settings.sources);
     this.db = this.openDatabase();
     this.providerKey = this.computeProviderKey();

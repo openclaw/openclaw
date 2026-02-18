@@ -345,6 +345,27 @@ describe("getApiKeyForModel", () => {
     });
   });
 
+  it("accepts TELNYX_API_KEY for telnyx", async () => {
+    const previous = process.env.TELNYX_API_KEY;
+
+    try {
+      process.env.TELNYX_API_KEY = "telnyx-test-key";
+
+      const resolved = await resolveApiKeyForProvider({
+        provider: "telnyx",
+        store: { version: 1, profiles: {} },
+      });
+      expect(resolved.apiKey).toBe("telnyx-test-key");
+      expect(resolved.source).toContain("TELNYX_API_KEY");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.TELNYX_API_KEY;
+      } else {
+        process.env.TELNYX_API_KEY = previous;
+      }
+    }
+  });
+
   it("strips embedded CR/LF from ANTHROPIC_API_KEY", async () => {
     await withEnvUpdates({ ANTHROPIC_API_KEY: "sk-ant-test-\r\nkey" }, async () => {
       const resolved = resolveEnvApiKey("anthropic");

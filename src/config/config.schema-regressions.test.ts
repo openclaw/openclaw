@@ -36,4 +36,32 @@ describe("config schema regressions", () => {
 
     expect(res.ok).toBe(true);
   });
+
+  it('accepts memorySearch provider "telnyx"', () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "telnyx",
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it('accepts memorySearch fallback "telnyx"', () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          memorySearch: {
+            fallback: "telnyx",
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
 });

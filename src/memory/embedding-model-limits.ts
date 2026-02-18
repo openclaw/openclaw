@@ -10,6 +10,8 @@ const KNOWN_EMBEDDING_MAX_INPUT_TOKENS: Record<string, number> = {
   "voyage:voyage-3": 32000,
   "voyage:voyage-3-lite": 16000,
   "voyage:voyage-code-3": 32000,
+  "telnyx:thenlper/gte-large": 512,
+  "telnyx:intfloat/multilingual-e5-large": 512,
 };
 
 export function resolveEmbeddingMaxInputTokens(provider: EmbeddingProvider): number {
@@ -29,6 +31,10 @@ export function resolveEmbeddingMaxInputTokens(provider: EmbeddingProvider): num
   // using the OpenAI default for providers with much smaller limits.
   if (provider.id.toLowerCase() === "gemini") {
     return 2048;
+  }
+
+  if (provider.id.toLowerCase() === "telnyx") {
+    return 512;
   }
 
   return DEFAULT_EMBEDDING_MAX_INPUT_TOKENS;
