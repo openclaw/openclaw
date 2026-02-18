@@ -1,6 +1,38 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+usage() {
+  cat <<'EOF'
+Usage: docker-setup.sh [--build-only]
+
+Options:
+  --build-only   Build the Docker image and exit (skip onboarding + starting gateway).
+EOF
+}
+
+build_only=false
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    --build-only)
+      build_only=true
+      shift
+      ;;
+    --)
+      shift
+      break
+      ;;
+    *)
+      echo "Unknown argument: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMPOSE_FILE="$ROOT_DIR/docker-compose.yml"
 EXTRA_COMPOSE_FILE="$ROOT_DIR/docker-compose.extra.yml"
@@ -13,6 +45,39 @@ require_cmd() {
     echo "Missing dependency: $1" >&2
     exit 1
   fi
+}
+
+is_uint() {
+  [[ "${1:-}" =~ ^[0-9]+$ ]]
+}
+
+resolve_numeric_id() {
+  local name="$1"
+  local default="$2"
+  local flag="$3"
+  local value="${!name-}"
+
+  if [[ -n "$value" ]]; then
+    if ! is_uint "$value"; then
+      echo "${name} must be a numeric id (got: ${value})" >&2
+      exit 2
+    fi
+    printf '%s' "$value"
+    return
+  fi
+
+  value="$(id "$flag" 2>/dev/null || true)"
+  if is_uint "$value"; then
+    printf '%s' "$value"
+    return
+  fi
+
+  if [[ -n "$value" ]]; then
+    echo "Warning: id ${flag} returned a non-numeric value (${value}); defaulting ${name}=${default}" >&2
+  else
+    echo "Warning: id ${flag} failed; defaulting ${name}=${default}" >&2
+  fi
+  printf '%s' "$default"
 }
 
 require_cmd docker
@@ -36,6 +101,10 @@ export OPENCLAW_IMAGE="$IMAGE_NAME"
 export OPENCLAW_DOCKER_APT_PACKAGES="${OPENCLAW_DOCKER_APT_PACKAGES:-}"
 export OPENCLAW_EXTRA_MOUNTS="$EXTRA_MOUNTS"
 export OPENCLAW_HOME_VOLUME="$HOME_VOLUME_NAME"
+
+OPENCLAW_UID="$(resolve_numeric_id OPENCLAW_UID 1000 -u)"
+OPENCLAW_GID="$(resolve_numeric_id OPENCLAW_GID 1000 -g)"
+export OPENCLAW_UID OPENCLAW_GID
 
 if [[ -z "${OPENCLAW_GATEWAY_TOKEN:-}" ]]; then
   if command -v openssl >/dev/null 2>&1; then
@@ -174,14 +243,24 @@ upsert_env "$ENV_FILE" \
   OPENCLAW_IMAGE \
   OPENCLAW_EXTRA_MOUNTS \
   OPENCLAW_HOME_VOLUME \
+  OPENCLAW_UID \
+  OPENCLAW_GID \
   OPENCLAW_DOCKER_APT_PACKAGES
 
 echo "==> Building Docker image: $IMAGE_NAME"
 docker build \
   --build-arg "OPENCLAW_DOCKER_APT_PACKAGES=${OPENCLAW_DOCKER_APT_PACKAGES}" \
+  --build-arg "OPENCLAW_UID=${OPENCLAW_UID}" \
+  --build-arg "OPENCLAW_GID=${OPENCLAW_GID}" \
   -t "$IMAGE_NAME" \
   -f "$ROOT_DIR/Dockerfile" \
   "$ROOT_DIR"
+
+if [[ "$build_only" == true ]]; then
+  echo ""
+  echo "==> Build-only mode: skipping onboarding and gateway start."
+  exit 0
+fi
 
 echo ""
 echo "==> Onboarding (interactive)"
