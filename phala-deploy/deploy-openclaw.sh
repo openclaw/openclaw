@@ -1,44 +1,42 @@
 #!/usr/bin/env bash
-# Deploy OpenClaw + mux-server to Phala CVMs and run smoke tests.
+# Deploy OpenClaw to a Phala CVM and run smoke tests.
 #
-# Reads CVM IDs and secrets config from .env.rollout-targets, then:
-#   1. Preflight — validate required vault secrets
-#   2. Deploy — push compose + env to both CVMs
-#   3. Wait — poll until services are healthy
-#   4. Smoke test — version, channels, mux registration
+# Reads CVM IDs from .env.rollout-targets (needs both — mux CVM ID is used
+# to derive MUX_BASE_URL for config generation).
+#
+# Secrets (via rv-exec --dotenv):
+#   MASTER_KEY REDPILL_API_KEY S3_BUCKET S3_ENDPOINT S3_PROVIDER S3_REGION
+#   AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
+# Also needs MUX_REGISTER_KEY for gen-cvm-config.sh (via rv-exec).
 #
 # Usage:
-#   ./phala-deploy/deploy.sh               # full deploy + smoke test
-#   ./phala-deploy/deploy.sh --dry-run     # print commands
-#   ./phala-deploy/deploy.sh --skip-test   # deploy without smoke test
-#   ./phala-deploy/deploy.sh --test-only   # smoke test only (no deploy)
+#   rv-exec MASTER_KEY REDPILL_API_KEY S3_BUCKET S3_ENDPOINT S3_PROVIDER S3_REGION \
+#     AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY MUX_REGISTER_KEY \
+#     -- bash phala-deploy/deploy-openclaw.sh
+#
+#   bash phala-deploy/deploy-openclaw.sh --dry-run
+#   bash phala-deploy/deploy-openclaw.sh --skip-test
+#   bash phala-deploy/deploy-openclaw.sh --test-only
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 DRY_RUN=0
 SKIP_TEST=0
 TEST_ONLY=0
-HEALTH_TIMEOUT=120    # seconds to wait for healthy
-HEALTH_INTERVAL=10    # seconds between polls
+HEALTH_TIMEOUT=120
+HEALTH_INTERVAL=10
 
-# ── defaults ─────────────────────────────────────────────────────────────────
-
-OPENCLAW_COMPOSE_FILE="${SCRIPT_DIR}/docker-compose.yml"
-OPENCLAW_DEPLOY_ENV_FILE="/tmp/openclaw-phala-deploy.env"
-OPENCLAW_DEPLOY_SECRETS="MASTER_KEY REDPILL_API_KEY S3_BUCKET S3_ENDPOINT S3_PROVIDER S3_REGION AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY"
-
-MUX_COMPOSE_FILE="${SCRIPT_DIR}/mux-server-compose.yml"
-MUX_DEPLOY_ENV_FILE="/tmp/mux-phala-deploy.env"
-MUX_DEPLOY_SECRETS="MUX_REGISTER_KEY MUX_ADMIN_TOKEN TELEGRAM_BOT_TOKEN DISCORD_BOT_TOKEN"
+COMPOSE_FILE="${SCRIPT_DIR}/docker-compose.yml"
+DEPLOY_ENV_FILE="/tmp/openclaw-phala-deploy.env"
+DEPLOY_SECRETS="MASTER_KEY REDPILL_API_KEY S3_BUCKET S3_ENDPOINT S3_PROVIDER S3_REGION AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY"
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
-log()  { printf '\033[1;34m[deploy]\033[0m %s\n' "$*"; }
-ok()   { printf '\033[1;32m[deploy] ✓\033[0m %s\n' "$*"; }
-warn() { printf '\033[1;33m[deploy] !\033[0m %s\n' "$*" >&2; }
-die()  { printf '\033[1;31m[deploy] ERROR:\033[0m %s\n' "$*" >&2; exit 1; }
+log()  { printf '\033[1;34m[deploy-openclaw]\033[0m %s\n' "$*"; }
+ok()   { printf '\033[1;32m[deploy-openclaw] ✓\033[0m %s\n' "$*"; }
+warn() { printf '\033[1;33m[deploy-openclaw] !\033[0m %s\n' "$*" >&2; }
+die()  { printf '\033[1;31m[deploy-openclaw] ERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 
 require_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
@@ -95,20 +93,14 @@ else
 fi
 
 CVM_SSH_HOST="${OPENCLAW_CVM_ID}-1022.${GATEWAY_DOMAIN}"
-MUX_HEALTH_URL="https://${MUX_CVM_ID}-18891.${GATEWAY_DOMAIN}/health"
 MUX_BASE_URL="https://${MUX_CVM_ID}-18891.${GATEWAY_DOMAIN}"
 
 # ── preflight: validate secrets ──────────────────────────────────────────────
 
 preflight_secrets() {
   log "Preflight: checking vault secrets..."
-  local all_secrets="${OPENCLAW_DEPLOY_SECRETS} ${MUX_DEPLOY_SECRETS}"
-  # deduplicate
-  local unique_secrets
-  unique_secrets=$(printf '%s\n' $all_secrets | sort -u | tr '\n' ' ')
-
   local missing=()
-  for key in $unique_secrets; do
+  for key in $DEPLOY_SECRETS MUX_REGISTER_KEY; do
     if ! rv-exec "$key" -- true 2>/dev/null; then
       missing+=("$key")
     fi
@@ -141,51 +133,34 @@ generate_openclaw_config() {
 
 # ── deploy ───────────────────────────────────────────────────────────────────
 
-deploy_role() {
-  local role="$1" cvm_id="$2" compose_file="$3" env_file="$4" secrets="$5"
-  log "Deploying ${role} (CVM: ${cvm_id})..."
+deploy() {
+  log "Deploying OpenClaw (CVM: ${OPENCLAW_CVM_ID})..."
 
-  [[ -f "$compose_file" ]] || die "compose file not found: $compose_file"
+  [[ -f "$COMPOSE_FILE" ]] || die "compose file not found: $COMPOSE_FILE"
 
   # Render secrets from vault to env file
-  local rv_tmp="${env_file}.rvtmp"
+  local rv_tmp="${DEPLOY_ENV_FILE}.rvtmp"
   local rv_cmd=(rv-exec --dotenv "$rv_tmp")
   # shellcheck disable=SC2206
-  rv_cmd+=($secrets)
-  rv_cmd+=(-- bash -lc "cp '$rv_tmp' '$env_file' && chmod 600 '$env_file'")
+  rv_cmd+=($DEPLOY_SECRETS)
+  rv_cmd+=(-- bash -lc "cp '$rv_tmp' '$DEPLOY_ENV_FILE' && chmod 600 '$DEPLOY_ENV_FILE'")
 
   if (( DRY_RUN )); then
     log "[dry-run] ${rv_cmd[*]}"
-    [[ "$role" == "openclaw" ]] && generate_openclaw_config "$env_file"
-    log "[dry-run] phala deploy --cvm-id $cvm_id -c $compose_file -e $env_file"
+    generate_openclaw_config "$DEPLOY_ENV_FILE"
+    log "[dry-run] phala deploy --cvm-id $OPENCLAW_CVM_ID -c $COMPOSE_FILE -e $DEPLOY_ENV_FILE"
     return 0
   fi
 
   "${rv_cmd[@]}"
   rm -f "$rv_tmp"
 
-  if [[ "$role" == "openclaw" ]]; then
-    generate_openclaw_config "$env_file"
-  fi
+  generate_openclaw_config "$DEPLOY_ENV_FILE"
 
-  phala deploy --cvm-id "$cvm_id" -c "$compose_file" -e "$env_file"
+  phala deploy --cvm-id "$OPENCLAW_CVM_ID" -c "$COMPOSE_FILE" -e "$DEPLOY_ENV_FILE"
 }
 
 # ── wait for health ──────────────────────────────────────────────────────────
-
-wait_for_mux_health() {
-  log "Waiting for mux-server health (${MUX_HEALTH_URL})..."
-  local elapsed=0
-  while [[ $elapsed -lt $HEALTH_TIMEOUT ]]; do
-    if curl -fsS --max-time 5 "$MUX_HEALTH_URL" >/dev/null 2>&1; then
-      ok "mux-server healthy"
-      return 0
-    fi
-    sleep "$HEALTH_INTERVAL"
-    elapsed=$((elapsed + HEALTH_INTERVAL))
-  done
-  die "mux-server not healthy after ${HEALTH_TIMEOUT}s"
-}
 
 wait_for_openclaw_ssh() {
   log "Waiting for OpenClaw SSH (${CVM_SSH_HOST})..."
@@ -207,18 +182,7 @@ smoke_test() {
   log "Running smoke tests..."
   local failures=0
 
-  # 1. mux-server /health
-  log "  mux-server /health..."
-  local mux_body
-  mux_body="$(curl -fsS --max-time 10 "$MUX_HEALTH_URL" 2>&1)" || true
-  if [[ "$mux_body" == *'"ok":true'* ]]; then
-    ok "  mux-server /health -> ok"
-  else
-    warn "  mux-server /health failed: ${mux_body}"
-    failures=$((failures + 1))
-  fi
-
-  # 2. openclaw --version
+  # 1. openclaw --version
   log "  openclaw --version..."
   local version
   version="$(CVM_SSH_HOST="$CVM_SSH_HOST" "$SCRIPT_DIR/cvm-exec" 'openclaw --version' 2>/dev/null)" || true
@@ -229,7 +193,7 @@ smoke_test() {
     failures=$((failures + 1))
   fi
 
-  # 3. openclaw channels status --probe (gateway reachable?)
+  # 2. openclaw channels status --probe (gateway reachable?)
   log "  openclaw channels status --probe..."
   local channels_output
   channels_output="$(CVM_SSH_HOST="$CVM_SSH_HOST" "$SCRIPT_DIR/cvm-exec" 'openclaw channels status --probe' 2>/dev/null)" || true
@@ -237,12 +201,11 @@ smoke_test() {
     ok "  gateway reachable"
   else
     warn "  gateway not reachable"
-    # Print channels output for debugging
     printf '%s\n' "$channels_output" | head -5 >&2
     failures=$((failures + 1))
   fi
 
-  # 4. mux config check (registerKey + inboundUrl present)
+  # 3. mux config check (registerKey + inboundUrl present)
   log "  openclaw mux config..."
   local mux_config
   mux_config="$(CVM_SSH_HOST="$CVM_SSH_HOST" "$SCRIPT_DIR/cvm-exec" 'node -e "
@@ -265,7 +228,7 @@ smoke_test() {
     failures=$((failures + 1))
   fi
 
-  # 5. mux registration probe (can we register/re-register with mux-server?)
+  # 4. mux registration probe
   log "  mux registration probe..."
   local device_id
   device_id="$(CVM_SSH_HOST="$CVM_SSH_HOST" "$SCRIPT_DIR/cvm-exec" 'node -e "
@@ -316,20 +279,14 @@ if [[ "$TEST_ONLY" -eq 1 ]]; then
 fi
 
 preflight_secrets
-
-deploy_role "openclaw" "$OPENCLAW_CVM_ID" "$OPENCLAW_COMPOSE_FILE" \
-  "$OPENCLAW_DEPLOY_ENV_FILE" "$OPENCLAW_DEPLOY_SECRETS"
-
-deploy_role "mux" "$MUX_CVM_ID" "$MUX_COMPOSE_FILE" \
-  "$MUX_DEPLOY_ENV_FILE" "$MUX_DEPLOY_SECRETS"
+deploy
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
   log "Dry-run complete."
   exit 0
 fi
 
-log "Both CVMs updated. Waiting for services..."
-wait_for_mux_health
+log "CVM updated. Waiting for OpenClaw..."
 wait_for_openclaw_ssh
 
 if [[ "$SKIP_TEST" -eq 0 ]]; then

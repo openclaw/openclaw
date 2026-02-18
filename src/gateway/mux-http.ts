@@ -1,7 +1,9 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
-import type { ChatImageContent } from "./chat-attachments.js";
 import { dispatchInboundMessage } from "../auto-reply/dispatch.js";
 import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
@@ -15,9 +17,11 @@ import {
   readMuxPositiveInt,
   resolveMuxThreadId,
   toMuxInboundPayload,
+  type MuxInboundAttachment,
   type MuxInboundPayload,
 } from "../channels/plugins/mux-envelope.js";
 import {
+  fetchMuxFileStream,
   resolveMuxOpenClawId,
   sendTypingViaMux,
   sendViaMux,
@@ -28,7 +32,6 @@ import {
   resolveTelegramCallbackAction,
   type TelegramCallbackButtons,
 } from "../telegram/callback-actions.js";
-import { parseMessageWithAttachments } from "./chat-attachments.js";
 import { readJsonBody } from "./hooks.js";
 import { verifyMuxInboundJwt } from "./mux-jwt.js";
 
@@ -173,25 +176,78 @@ async function sendTelegramEditViaMux(params: {
   });
 }
 
-async function parseInboundImages(params: {
-  message: string;
-  attachments: Array<{
-    type?: string;
-    mimeType?: string;
-    fileName?: string;
-    content: string;
-  }>;
-  logWarn: (message: string) => void;
-}): Promise<ChatImageContent[]> {
-  if (params.attachments.length === 0) {
-    return [];
+function inferExtFromMime(mime: string | undefined): string {
+  if (!mime) {
+    return "";
   }
-  const parsed = await parseMessageWithAttachments(params.message, params.attachments, {
-    maxBytes: 5_000_000,
-    log: { warn: params.logWarn },
-  });
-  // Transport layer contract: parse attachments, but never rewrite inbound text.
-  return parsed.images;
+  const lower = mime.toLowerCase();
+  if (lower === "image/jpeg") {
+    return ".jpg";
+  }
+  if (lower === "image/png") {
+    return ".png";
+  }
+  if (lower === "image/webp") {
+    return ".webp";
+  }
+  if (lower === "image/gif") {
+    return ".gif";
+  }
+  if (lower === "application/pdf") {
+    return ".pdf";
+  }
+  if (lower === "audio/ogg" || lower === "audio/opus") {
+    return ".ogg";
+  }
+  if (lower === "audio/mpeg") {
+    return ".mp3";
+  }
+  if (lower === "video/mp4") {
+    return ".mp4";
+  }
+  return "";
+}
+
+async function resolveAttachmentToTempFile(params: {
+  attachment: MuxInboundAttachment;
+  cfg: OpenClawConfig;
+  tmpDir: string;
+  index: number;
+}): Promise<{ path: string; mimeType: string } | null> {
+  const { attachment, cfg, tmpDir, index } = params;
+  const ext = inferExtFromMime(attachment.mimeType) || path.extname(attachment.fileName || "");
+  const baseName = attachment.fileName
+    ? path.basename(attachment.fileName, path.extname(attachment.fileName))
+    : `mux-att-${index}`;
+  const tmpPath = path.join(tmpDir, `${baseName}-${index}${ext}`);
+  const mimeType = attachment.mimeType || "application/octet-stream";
+
+  if (attachment.url) {
+    try {
+      const response = await fetchMuxFileStream({ cfg, url: attachment.url });
+      const buffer = Buffer.from(await response.arrayBuffer());
+      fs.writeFileSync(tmpPath, buffer);
+      return { path: tmpPath, mimeType };
+    } catch {
+      return null;
+    }
+  }
+
+  if (attachment.content) {
+    try {
+      const raw = attachment.content.replace(/^data:[^;]+;base64,/, "");
+      const buffer = Buffer.from(raw, "base64");
+      if (buffer.byteLength === 0) {
+        return null;
+      }
+      fs.writeFileSync(tmpPath, buffer);
+      return { path: tmpPath, mimeType };
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
 }
 
 export async function handleMuxInboundHttpRequest(
@@ -337,68 +393,94 @@ export async function handleMuxInboundHttpRequest(
   };
 
   const dispatchPromise = (async () => {
-    let parsedImages: ChatImageContent[] = [];
+    let tmpDir: string | undefined;
     try {
-      parsedImages = await parseInboundImages({
-        message: inboundBody,
-        attachments,
-        // Keep request handling resilient when non-image attachments are provided.
-        logWarn: () => {},
-      });
-    } catch (err) {
-      warn(`mux inbound attachment parse failed messageId=${messageId}: ${String(err)}`);
-      return;
-    }
-
-    let markDispatchIdle: (() => void) | undefined;
-    const typingChannel: "telegram" | "discord" | "whatsapp" | null =
-      channel === "telegram"
-        ? "telegram"
-        : channel === "discord"
-          ? "discord"
-          : channel === "whatsapp"
-            ? "whatsapp"
-            : null;
-    const onReplyStart = typingChannel
-      ? async () => {
-          try {
-            await sendTypingViaMux({
-              cfg,
-              channel: typingChannel,
-              accountId: ctx.AccountId,
-              sessionKey,
-            });
-          } catch {
-            // Best-effort typing signal for mux transport.
+      // Resolve attachments to temp files (same pattern as vanilla TG channel).
+      if (attachments.length > 0) {
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "mux-att-"));
+        const resolved = await Promise.all(
+          attachments.map((att, i) =>
+            resolveAttachmentToTempFile({ attachment: att, cfg, tmpDir: tmpDir!, index: i }),
+          ),
+        );
+        const mediaPaths: string[] = [];
+        const mediaTypes: string[] = [];
+        for (const r of resolved) {
+          if (r) {
+            mediaPaths.push(r.path);
+            mediaTypes.push(r.mimeType);
           }
         }
-      : undefined;
-    const dispatcher = createReplyDispatcher({
-      deliver: async () => {
-        // route-reply path handles outbound when OriginatingChannel differs from Surface.
-      },
-      onError: () => {
-        // route-reply errors are surfaced in dispatch flow and logs.
-      },
-    });
-    try {
-      await dispatchInboundMessage({
-        ctx,
-        cfg,
-        dispatcher,
-        replyOptions: {
-          ...(parsedImages.length > 0 ? { images: parsedImages } : {}),
-          ...(onReplyStart ? { onReplyStart } : {}),
-          onTypingController: (typing) => {
-            markDispatchIdle = () => typing.markDispatchIdle();
-          },
+        if (mediaPaths.length > 0) {
+          ctx.MediaPath = mediaPaths[0];
+          ctx.MediaUrl = mediaPaths[0];
+          ctx.MediaType = mediaTypes[0];
+          ctx.MediaPaths = mediaPaths;
+          ctx.MediaUrls = mediaPaths;
+          ctx.MediaTypes = mediaTypes;
+        }
+      }
+
+      let markDispatchIdle: (() => void) | undefined;
+      const typingChannel: "telegram" | "discord" | "whatsapp" | null =
+        channel === "telegram"
+          ? "telegram"
+          : channel === "discord"
+            ? "discord"
+            : channel === "whatsapp"
+              ? "whatsapp"
+              : null;
+      const onReplyStart = typingChannel
+        ? async () => {
+            try {
+              await sendTypingViaMux({
+                cfg,
+                channel: typingChannel,
+                accountId: ctx.AccountId,
+                sessionKey,
+              });
+            } catch {
+              // Best-effort typing signal for mux transport.
+            }
+          }
+        : undefined;
+      const dispatcher = createReplyDispatcher({
+        deliver: async () => {
+          // route-reply path handles outbound when OriginatingChannel differs from Surface.
+        },
+        onError: () => {
+          // route-reply errors are surfaced in dispatch flow and logs.
         },
       });
-      await dispatcher.waitForIdle();
+      try {
+        await dispatchInboundMessage({
+          ctx,
+          cfg,
+          dispatcher,
+          replyOptions: {
+            ...(onReplyStart ? { onReplyStart } : {}),
+            onTypingController: (typing) => {
+              markDispatchIdle = () => typing.markDispatchIdle();
+            },
+          },
+        });
+        await dispatcher.waitForIdle();
+      } catch (err) {
+        warn(`mux inbound dispatch failed messageId=${messageId}: ${String(err)}`);
+      } finally {
+        markDispatchIdle?.();
+      }
     } catch (err) {
-      warn(`mux inbound dispatch failed messageId=${messageId}: ${String(err)}`);
+      warn(`mux inbound attachment resolve failed messageId=${messageId}: ${String(err)}`);
     } finally {
-      markDispatchIdle?.();
+      // Clean up temp files.
+      if (tmpDir) {
+        try {
+          fs.rmSync(tmpDir, { recursive: true, force: true });
+        } catch {
+          // Best-effort cleanup.
+        }
+      }
     }
   })();
 

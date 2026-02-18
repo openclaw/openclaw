@@ -343,15 +343,21 @@ Two commands: build, then deploy.
 # Build and push both images (openclaw + mux-server)
 ./phala-deploy/build.sh
 
-# Deploy to both CVMs, wait for health, run smoke tests
-./phala-deploy/deploy.sh
+# Deploy OpenClaw CVM
+rv-exec MASTER_KEY REDPILL_API_KEY S3_BUCKET S3_ENDPOINT S3_PROVIDER S3_REGION \
+  AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY MUX_REGISTER_KEY \
+  -- bash phala-deploy/deploy-openclaw.sh
+
+# Deploy mux-server CVM
+rv-exec MUX_REGISTER_KEY MUX_ADMIN_TOKEN TELEGRAM_BOT_TOKEN_PROD DISCORD_BOT_TOKEN_PROD \
+  -- bash phala-deploy/deploy-mux.sh
 ```
 
-`build.sh` accepts `--openclaw-only` or `--mux-only` to build one image. `deploy.sh` accepts `--dry-run`, `--test-only` (smoke tests without deploying), and `--skip-test`.
+`build.sh` accepts `--openclaw-only` or `--mux-only` to build one image. Both deploy scripts accept `--dry-run`, `--test-only` (smoke tests without deploying), and `--skip-test`.
 
-Both scripts read CVM IDs from `phala-deploy/.env.rollout-targets` (see `cvm-rollout-targets.env.example`).
+All scripts read CVM IDs from `phala-deploy/.env.rollout-targets` (see `cvm-rollout-targets.env.example`).
 
-**Verification:** `deploy.sh` runs 5 smoke tests automatically (mux health, openclaw version, gateway reachability, mux config, mux registration). For manual checks:
+**Verification:** each deploy script runs smoke tests automatically. For manual checks:
 
 ```sh
 ./phala-deploy/cvm-exec 'openclaw --version'
@@ -381,7 +387,8 @@ If your CVM is destroyed (S3 mode only):
 | `build.sh`               | Build and push both images (wraps the two scripts below)          |
 | `build-pin-image.sh`     | Rebuild tarball + image, push, and pin compose image digest       |
 | `build-pin-mux-image.sh` | Rebuild mux image, push, and pin mux compose digest               |
-| `deploy.sh`              | Deploy both CVMs, wait for health, run smoke tests                |
+| `deploy-openclaw.sh`     | Deploy OpenClaw CVM, wait for health, run smoke tests             |
+| `deploy-mux.sh`          | Deploy mux-server CVM, wait for health, run smoke tests           |
 | `gen-cvm-config.sh`      | Generate `OPENCLAW_CONFIG_B64` from env vars (MASTER_KEY, etc.)   |
 | `mux-pair-token.sh`      | Mint mux pairing token for a tenant OpenClaw instance (admin API) |
 | `UPDATE_RUNBOOK.md`      | Detailed update runbook with fallback procedures                  |

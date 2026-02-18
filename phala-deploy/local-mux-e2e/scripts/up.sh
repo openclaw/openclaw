@@ -83,7 +83,7 @@ rv-exec TELEGRAM_BOT_TOKEN DISCORD_BOT_TOKEN \
 # --- Wait for gateway health ---
 echo "[local-mux-e2e] waiting for gateway health..."
 for i in $(seq 1 120); do
-  if curl -sf http://127.0.0.1:18789 >/dev/null 2>&1; then
+  if curl -so /dev/null http://127.0.0.1:18789/v1/mux/inbound 2>/dev/null; then
     break
   fi
   sleep 2

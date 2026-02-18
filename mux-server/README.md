@@ -12,6 +12,7 @@ This directory contains a standalone TypeScript mux server for staged rollout an
 - Implements `POST /v1/pairings/claim`
 - Implements `POST /v1/pairings/unbind`
 - Implements `POST /v1/mux/outbound/send`
+- Implements `GET /v1/mux/files/:channel` (file proxy for Telegram and WhatsApp media)
 - Implements Telegram inbound polling + forwarding to OpenClaw `POST /v1/mux/inbound`
 - Implements Discord inbound polling + forwarding to OpenClaw `POST /v1/mux/inbound`
 - Implements WhatsApp inbound monitoring + forwarding to OpenClaw `POST /v1/mux/inbound`
@@ -88,6 +89,7 @@ node --import tsx mux-server/src/server.ts
 - `MUX_API_KEY` (optional, legacy): seeds a single API-key tenant (`tenant-default`).
 - `MUX_TENANTS_JSON` (optional, legacy): JSON array for multi-tenant API-key auth seed.
 - `MUX_ADMIN_TOKEN` (optional): enables admin-only endpoints (for example `POST /v1/admin/pairings/token`, `GET /v1/admin/whatsapp/health`).
+- `MUX_PUBLIC_URL` (optional): public base URL for proxy endpoints (e.g. `https://mux.example.com`). Defaults to `http://<MUX_HOST>:<MUX_PORT>`. Used to construct file proxy URLs in inbound attachment metadata.
 - `MUX_HOST` (default `127.0.0.1`)
 - `MUX_PORT` (default `18891`)
 - `MUX_LOG_PATH` (default `./mux-server/logs/mux-server.log`)
@@ -102,10 +104,10 @@ node --import tsx mux-server/src/server.ts
 - `MUX_TELEGRAM_POLL_TIMEOUT_SEC` (default `25`): Telegram long-poll timeout.
 - `MUX_TELEGRAM_POLL_RETRY_MS` (default `1000`): backoff after poll errors.
 - `MUX_TELEGRAM_BOOTSTRAP_LATEST` (default `true`): when enabled, skips historical backlog on cold start.
-- `MUX_TELEGRAM_INBOUND_MEDIA_MAX_BYTES` (default `5000000`): max file size fetched from Telegram for inbound image attachments.
+- `MUX_TELEGRAM_INBOUND_MEDIA_MAX_BYTES` (default `5000000`): max file size for Telegram inbound media attachments (all types: images, documents, video, audio, animation).
 - `MUX_DISCORD_POLL_INTERVAL_MS` (default `2000`): Discord poll interval.
 - `MUX_DISCORD_BOOTSTRAP_LATEST` (default `true`): when enabled, skips historical backlog on cold start.
-- `MUX_DISCORD_INBOUND_MEDIA_MAX_BYTES` (default `5000000`): max file size fetched from Discord attachment URLs for inbound image attachments.
+- `MUX_DISCORD_INBOUND_MEDIA_MAX_BYTES` (default `5000000`): max file size for Discord inbound media attachments (all types). Note: Discord CDN URLs are passed through directly; this limit is not enforced at mux-server.
 - `MUX_DISCORD_GATEWAY_DM_ENABLED` (default `true`): enable Discord Gateway `MESSAGE_CREATE` handling for DM pairing/inbound.
 - `MUX_DISCORD_GATEWAY_GUILD_ENABLED` (default `true`): enable Discord Gateway `MESSAGE_CREATE` handling for guild + thread pairing/inbound.
 - `MUX_DISCORD_GATEWAY_INTENTS` (optional): override Discord Gateway intents bitmask (defaults include DM + guild message intents when guild mode is enabled).
@@ -113,7 +115,7 @@ node --import tsx mux-server/src/server.ts
 - `MUX_DISCORD_GATEWAY_RECONNECT_MAX_MS` (default `30000`): max Discord Gateway reconnect backoff.
 - `MUX_WHATSAPP_ACCOUNT_ID` (default `default`): WhatsApp account id to monitor.
 - `MUX_WHATSAPP_AUTH_DIR` (optional): WhatsApp auth directory; defaults to OpenClaw's default web auth dir.
-- `MUX_WHATSAPP_INBOUND_MEDIA_MAX_BYTES` (default `5000000`): max file size read from saved WhatsApp inbound media files for image attachments.
+- `MUX_WHATSAPP_INBOUND_MEDIA_MAX_BYTES` (default `5000000`): max file size for WhatsApp inbound media attachments (all types: images, documents, video, audio).
 - `MUX_WHATSAPP_INBOUND_RETRY_MS` (default `1000`): reconnect backoff when WhatsApp listener closes.
 - `MUX_TELEGRAM_BOT_USERNAME` (optional): enables Telegram deep link in pairing-token response.
 - `MUX_PAIRING_TOKEN_TTL_SEC` (default `900`): default one-time pairing-token TTL in seconds.
@@ -292,8 +294,13 @@ Behavior:
 Transport contract:
 
 - Transport layers preserve original text and provider payload structures.
-- Parsing is allowed for validation/routing and image decode, but transport must not rewrite user text.
-- Inbound envelopes now include `event.kind` + top-level `raw` for unmodified channel payload preservation.
+- Parsing is allowed for validation/routing, but transport must not rewrite user text.
+- Inbound envelopes include `event.kind` + top-level `raw` for unmodified channel payload preservation.
+- Inbound attachments support all file types (images, documents, audio, video, animation). Previous image-only filtering has been removed.
+- Attachments use `url` (proxy URL or direct CDN URL) instead of inline base64 `content`:
+  - Telegram/WhatsApp: `url` points to `GET /v1/mux/files/:channel` proxy endpoint.
+  - Discord: `url` is the direct Discord CDN URL (public, no proxy needed).
+  - OpenClaw downloads raw bytes on demand via the URL, avoiding 33% base64 size bloat in the JSON envelope.
 
 ### `POST /v1/pairings/claim`
 
@@ -567,6 +574,28 @@ Behavior:
 - Reports runtime listener state from the live mux process.
 - Requires `MUX_ADMIN_TOKEN` to be configured.
 
+### `GET /v1/mux/files/:channel`
+
+Auth: tenant runtime JWT (`Authorization: Bearer <runtime_jwt>`).
+
+Supported channels:
+
+- **`/v1/mux/files/telegram?fileId=<fileId>`**: Resolves the Telegram file via `getFile` API and streams raw bytes from `api.telegram.org/file/bot{token}/{path}`.
+- **`/v1/mux/files/whatsapp?path=<encodedPath>`**: Streams a locally saved WhatsApp media file.
+
+Response:
+
+- `200` with `Content-Type` and `Content-Disposition` headers, body is raw file bytes.
+- `400` if required query parameter is missing.
+- `401` if JWT is invalid or missing.
+- `404` if file is not found or channel is unsupported.
+- `502` if upstream file fetch fails (Telegram API error, etc.).
+
+Notes:
+
+- Discord attachments use public CDN URLs and do not need a proxy endpoint.
+- OpenClaw calls this endpoint (with its runtime JWT) to download attachment bytes on demand, rather than receiving base64-encoded content inline in the inbound JSON envelope.
+
 ## Reliability Notes
 
 ### Idempotency
@@ -633,8 +662,8 @@ Out of scope for this pass:
 - Forum topics are preserved when `threadId` is provided.
 - Replies can be pinned to parent message with `replyToId`.
 - Inbound forwarding uses route bindings first (`topic` then chat fallback) and emits OpenClaw mux-inbound events with a stable `sessionKey`.
-- Media-only Telegram messages are preserved as:
-- `attachments[]` (base64 image) when image fetch succeeds
+- Inbound media (images, documents, video, audio, animation) is forwarded as:
+- `attachments[]` with `url` pointing to `GET /v1/mux/files/telegram?fileId=<fileId>` proxy endpoint
 - `channelData.telegram.media[]` metadata always
 - `body` remains original text/caption only (empty string when no text)
 - `channelData.telegram.rawMessage` and `channelData.telegram.rawUpdate` preserve original Telegram payload
@@ -798,8 +827,14 @@ Current test coverage (`mux-server/test/server.test.ts`):
 - Telegram inbound forwarding to tenant inbound endpoint
 - Telegram retry without offset advance on failed forward
 - Telegram media-only inbound forwarding with attachment payload preservation
-- Discord inbound forwarding with raw payload + media attachment preservation
+- Discord inbound forwarding with raw payload + media attachment preservation (URL passthrough)
 - Discord retry without replaying already-acked earlier messages
 - dashboard token pairing via `/start <token>` then forwarding subsequent messages
 - idempotency replay + payload mismatch handling
 - idempotency persistence across process restart
+
+Envelope tests (`mux-server/test/mux-envelope.test.ts`):
+
+- normalization of url-only, content-only, and dual (url+content) attachments
+- rejection of attachments with neither content nor url
+- Discord inbound envelope with url-based attachments

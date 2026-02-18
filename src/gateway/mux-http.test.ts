@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { SignJWT } from "jose";
 import { generateKeyPairSync } from "node:crypto";
+import fs from "node:fs";
 import { Readable } from "node:stream";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { __resetMuxJwksCacheForTest } from "./mux-jwt.js";
@@ -15,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   })),
   resolveTelegramCallbackAction: vi.fn(),
   sendTypingViaMux: vi.fn(async () => {}),
+  fetchMuxFileStream: vi.fn(async () => new Response("", { status: 200 })),
 }));
 
 vi.mock("../config/config.js", async (importOriginal) => {
@@ -46,6 +48,7 @@ vi.mock("../channels/plugins/outbound/mux.js", async (importOriginal) => {
   return {
     ...actual,
     sendTypingViaMux: mocks.sendTypingViaMux,
+    fetchMuxFileStream: mocks.fetchMuxFileStream,
   };
 });
 
@@ -116,6 +119,7 @@ afterEach(() => {
   mocks.dispatchInboundMessage.mockClear();
   mocks.resolveTelegramCallbackAction.mockReset();
   mocks.sendTypingViaMux.mockReset();
+  mocks.fetchMuxFileStream.mockReset();
   __resetMuxJwksCacheForTest();
   __resetMuxRuntimeAuthCacheForTest();
   vi.unstubAllGlobals();
@@ -291,8 +295,8 @@ describe("handleMuxInboundHttpRequest", () => {
             RawBody?: string;
             CommandBody?: string;
             ChannelData?: Record<string, unknown>;
+            MediaPaths?: string[];
           };
-          replyOptions?: { images?: unknown[] };
         }
       | undefined;
     expect(call?.ctx).toMatchObject({
@@ -308,7 +312,7 @@ describe("handleMuxInboundHttpRequest", () => {
       CommandAuthorized: true,
     });
     expect(call?.ctx?.ChannelData).toBeUndefined();
-    expect(call?.replyOptions?.images).toBeUndefined();
+    expect(call?.ctx?.MediaPaths).toBeUndefined();
   });
 
   test("accepts mux inbound jwt auth and reuses cached jwks", async () => {
@@ -604,7 +608,7 @@ describe("handleMuxInboundHttpRequest", () => {
     },
   );
 
-  test("parses image attachments into replyOptions.images", async () => {
+  test("sets ctx.MediaPaths and MediaTypes from base64 content attachment", async () => {
     const jwtFixture = createJwtFixture();
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const url = resolveFetchUrl(input);
@@ -632,6 +636,8 @@ describe("handleMuxInboundHttpRequest", () => {
             mux: {
               enabled: true,
               baseUrl: "http://mux.local",
+              registerKey: "rk-test-1",
+              inboundUrl: "http://openclaw.local/v1/mux/inbound",
             },
           },
         },
@@ -669,20 +675,116 @@ describe("handleMuxInboundHttpRequest", () => {
     expect(mocks.dispatchInboundMessage).toHaveBeenCalledTimes(1);
     const call = mocks.dispatchInboundMessage.mock.calls[0]?.[0] as
       | {
-          ctx?: { MessageSid?: string };
-          replyOptions?: {
-            images?: Array<{ type: string; data: string; mimeType: string }>;
+          ctx?: {
+            MessageSid?: string;
+            MediaPaths?: string[];
+            MediaTypes?: string[];
+            MediaPath?: string;
+            MediaType?: string;
           };
         }
       | undefined;
     expect(call?.ctx?.MessageSid).toBe("mux-img-1");
-    expect(call?.replyOptions?.images).toEqual([
-      {
-        type: "image",
-        data: ONE_PIXEL_PNG_BASE64,
-        mimeType: "image/png",
+    expect(call?.ctx?.MediaPaths).toHaveLength(1);
+    expect(call?.ctx?.MediaTypes).toEqual(["image/png"]);
+    expect(call?.ctx?.MediaPath).toBeDefined();
+    expect(call?.ctx?.MediaType).toBe("image/png");
+    // Verify temp file was written with correct content
+    const writtenPath = call?.ctx?.MediaPaths?.[0];
+    expect(writtenPath).toBeDefined();
+    if (writtenPath && fs.existsSync(writtenPath)) {
+      const buffer = fs.readFileSync(writtenPath);
+      expect(buffer.toString("base64")).toBe(ONE_PIXEL_PNG_BASE64);
+    }
+  });
+
+  test("sets ctx.MediaPaths from attachment URL via fetchMuxFileStream", async () => {
+    const jwtFixture = createJwtFixture();
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = resolveFetchUrl(input);
+      if (url === "http://mux.local/.well-known/jwks.json") {
+        return new Response(JSON.stringify(jwtFixture.jwks), {
+          status: 200,
+          headers: { "Content-Type": "application/json; charset=utf-8" },
+        });
+      }
+      throw new Error(`unexpected fetch url ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const token = await jwtFixture.mintToken({
+      issuer: "http://mux.local",
+      subject: OPENCLAW_ID,
+      audience: "openclaw-mux-inbound",
+      scope: "mux:inbound",
+    });
+
+    mocks.loadConfig.mockReturnValue({
+      gateway: {
+        http: {
+          endpoints: {
+            mux: {
+              enabled: true,
+              baseUrl: "http://mux.local",
+              registerKey: "rk-test-1",
+              inboundUrl: "http://openclaw.local/v1/mux/inbound",
+            },
+          },
+        },
       },
-    ]);
+    });
+
+    const pdfBytes = Buffer.from("fake-pdf-content");
+    mocks.fetchMuxFileStream.mockResolvedValue(new Response(pdfBytes, { status: 200 }));
+
+    const req = createRequest({
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${token}`,
+        "x-openclaw-id": OPENCLAW_ID,
+      },
+      body: {
+        channel: "telegram",
+        sessionKey: "main",
+        to: "telegram:123",
+        body: "see doc",
+        messageId: "mux-doc-1",
+        openclawId: OPENCLAW_ID,
+        attachments: [
+          {
+            type: "application",
+            mimeType: "application/pdf",
+            fileName: "report.pdf",
+            url: "http://mux.local/v1/mux/files/telegram?fileId=abc123",
+          },
+        ],
+      },
+    });
+    const res = createResponse();
+    expect(await handleMuxInboundHttpRequest(req, res)).toBe(true);
+    expect(res.statusCode).toBe(202);
+
+    await waitForAsyncDispatch();
+    expect(mocks.fetchMuxFileStream).toHaveBeenCalledTimes(1);
+    expect(mocks.fetchMuxFileStream).toHaveBeenCalledWith({
+      cfg: expect.any(Object),
+      url: "http://mux.local/v1/mux/files/telegram?fileId=abc123",
+    });
+    expect(mocks.dispatchInboundMessage).toHaveBeenCalledTimes(1);
+    const call = mocks.dispatchInboundMessage.mock.calls[0]?.[0] as
+      | {
+          ctx?: {
+            MediaPaths?: string[];
+            MediaTypes?: string[];
+            MediaPath?: string;
+            MediaType?: string;
+          };
+        }
+      | undefined;
+    expect(call?.ctx?.MediaPaths).toHaveLength(1);
+    expect(call?.ctx?.MediaTypes).toEqual(["application/pdf"]);
+    expect(call?.ctx?.MediaPath).toBeDefined();
+    expect(call?.ctx?.MediaType).toBe("application/pdf");
   });
 
   test("acks immediately without waiting for slow dispatch completion", async () => {

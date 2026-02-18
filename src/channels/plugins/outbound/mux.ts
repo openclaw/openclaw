@@ -467,6 +467,40 @@ async function postMuxJson(params: {
   throw new Error("mux request failed after auth retry");
 }
 
+export async function fetchMuxFileStream(params: {
+  cfg: OpenClawConfig;
+  url: string;
+  timeoutMs?: number;
+}): Promise<Response> {
+  const endpointCfg = params.cfg.gateway?.http?.endpoints?.mux;
+  const baseUrl = normalizeBaseUrl(endpointCfg?.baseUrl);
+  const registerKey = readString(endpointCfg?.registerKey);
+  if (!baseUrl || !registerKey) {
+    throw new Error("mux baseUrl/registerKey not configured");
+  }
+  const openclawId = resolveDefaultOpenClawId();
+  const inboundUrl = resolveGatewayInboundUrl(params.cfg);
+
+  const resolved: ResolvedMuxConfig = {
+    baseUrl,
+    registerKey,
+    openclawId,
+    inboundUrl,
+    timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    sessionKey: "",
+  };
+
+  const headers = await resolveRuntimeHeaders({ resolved });
+  const response = await fetch(params.url, {
+    headers,
+    signal: AbortSignal.timeout(resolved.timeoutMs),
+  });
+  if (!response.ok) {
+    throw new Error(`mux file fetch failed (${response.status})`);
+  }
+  return response;
+}
+
 export function __resetMuxRuntimeAuthCacheForTest() {
   runtimeTokenCache.clear();
   runtimeTokenRefreshInFlight.clear();

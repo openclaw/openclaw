@@ -5,7 +5,7 @@ services:
     build:
       context: ../..
       dockerfile: phala-deploy/Dockerfile
-      target: base
+      target: dev
     image: openclaw/local-phala:dev
     container_name: openclaw-local-e2e
     privileged: true
@@ -18,21 +18,21 @@ services:
       OPENCLAW_RAW_STREAM: ${OPENCLAW_RAW_STREAM:-}
       OPENCLAW_ANTHROPIC_PAYLOAD_LOG: ${OPENCLAW_ANTHROPIC_PAYLOAD_LOG:-}
     volumes:
+      - ../../:/app:ro
       - openclaw_data:/data
       - openclaw_docker_data:/var/lib/docker
     restart: unless-stopped
 
   mux-server:
-    build:
-      context: ../..
-      dockerfile: mux-server/Dockerfile
-    image: openclaw/mux-server-local:dev
+    image: node:22-bookworm-slim
+    working_dir: /workspace
     container_name: mux-server-local-e2e
     depends_on:
       openclaw:
         condition: service_started
     ports:
       - "127.0.0.1:18891:18891"
+    command: ["node", "--import", "tsx", "mux-server/src/server.ts"]
     environment:
       MUX_HOST: 0.0.0.0
       MUX_PORT: 18891
@@ -53,6 +53,7 @@ services:
       MUX_DISCORD_INBOUND_MEDIA_MAX_BYTES: "5000000"
       MUX_WHATSAPP_INBOUND_MEDIA_MAX_BYTES: "5000000"
     volumes:
+      - ../../:/workspace:ro
       - mux_data:/data
       - ./state/wa-auth:/wa-auth
     restart: unless-stopped

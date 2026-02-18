@@ -92,7 +92,8 @@ export CVM_SSH_HOST=<openclaw-app-id>-1022.<gateway-domain>
 ### 1. Preflight
 
 ```bash
-./phala-deploy/deploy.sh --dry-run
+bash phala-deploy/deploy-openclaw.sh --dry-run
+bash phala-deploy/deploy-mux.sh --dry-run
 ```
 
 This validates vault secrets and prints the deploy commands without executing them.
@@ -114,10 +115,17 @@ mux-server (only when mux changed):
 ### 3. Deploy
 
 ```bash
-./phala-deploy/deploy.sh
+# Deploy OpenClaw
+rv-exec MASTER_KEY REDPILL_API_KEY S3_BUCKET S3_ENDPOINT S3_PROVIDER S3_REGION \
+  AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY MUX_REGISTER_KEY \
+  -- bash phala-deploy/deploy-openclaw.sh
+
+# Deploy mux-server
+rv-exec MUX_REGISTER_KEY MUX_ADMIN_TOKEN TELEGRAM_BOT_TOKEN_PROD DISCORD_BOT_TOKEN_PROD \
+  -- bash phala-deploy/deploy-mux.sh
 ```
 
-This deploys both CVMs, waits for health, and runs smoke tests.
+Each script deploys its CVM, waits for health, and runs smoke tests. They can be run independently.
 
 ### 4. Verify runtime
 
@@ -171,8 +179,8 @@ Cause: missing `TELEGRAM_BOT_TOKEN` / `DISCORD_BOT_TOKEN` in mux deploy env.
 
 Fix:
 
-1. Ensure `MUX_DEPLOY_SECRETS` in `deploy.sh` includes the required keys.
-2. Re-run: `./phala-deploy/deploy.sh`
+1. Ensure `TELEGRAM_BOT_TOKEN_PROD` / `DISCORD_BOT_TOKEN_PROD` are set in the vault.
+2. Re-run: `rv-exec MUX_REGISTER_KEY MUX_ADMIN_TOKEN TELEGRAM_BOT_TOKEN_PROD DISCORD_BOT_TOKEN_PROD -- bash phala-deploy/deploy-mux.sh`
 
 ### mux healthy but no messages forwarded to OpenClaw
 
@@ -197,11 +205,12 @@ Fix:
 1. SSH to the mux CVM host and clear mux state volume:
    - `docker rm -f mux-server || true`
    - `docker volume rm -f mux_data || true`
-2. Re-run: `./phala-deploy/deploy.sh`
+2. Re-run: `rv-exec MUX_REGISTER_KEY MUX_ADMIN_TOKEN TELEGRAM_BOT_TOKEN_PROD DISCORD_BOT_TOKEN_PROD -- bash phala-deploy/deploy-mux.sh`
 
 ## Related files
 
-- `phala-deploy/deploy.sh`
+- `phala-deploy/deploy-openclaw.sh`
+- `phala-deploy/deploy-mux.sh`
 - `phala-deploy/cvm-rollout-targets.env.example`
 - `phala-deploy/mux-pair-token.sh`
 - `phala-deploy/mux-server-compose.yml`

@@ -1,0 +1,68 @@
+{
+  "messages": {
+    "ackReactionScope": "group-mentions"
+  },
+  "gateway": {
+    "mode": "local",
+    "bind": "lan",
+    "port": 18789,
+    "controlUi": {
+      "dangerouslyDisableDeviceAuth": true
+    },
+    "nodes": {
+      "denyCommands": [
+        "camera.snap",
+        "camera.clip",
+        "screen.record",
+        "calendar.add",
+        "contacts.add",
+        "reminders.add"
+      ]
+    }
+  },
+  "update": {
+    "checkOnStart": false
+  },
+  "channels": {
+    "telegram": {
+      "accounts": {
+        "default": { "enabled": false },
+        "mux": { "enabled": true, "mux": { "enabled": true, "timeoutMs": 30000 } }
+      }
+    },
+    "discord": {
+      "accounts": {
+        "default": { "enabled": false },
+        "mux": { "enabled": true, "mux": { "enabled": true, "timeoutMs": 30000 } }
+      }
+    },
+    "whatsapp": {
+      "accounts": {
+        "default": { "enabled": false },
+        "mux": { "enabled": true, "mux": { "enabled": true, "timeoutMs": 30000 } }
+      }
+    }
+  },
+  "plugins": {
+    "entries": {
+      "telegram": { "enabled": true },
+      "discord": { "enabled": true },
+      "whatsapp": { "enabled": true }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "workspace": "/root/.openclaw/workspace",
+      "maxConcurrent": 4,
+      "subagents": { "maxConcurrent": 8 },
+      "compaction": { "mode": "safeguard" }
+    }
+  },
+  "skills": {
+    "entries": {
+      "gog": { "enabled": false },
+      "notion": { "enabled": false },
+      "composio": {}
+    }
+  }
+}

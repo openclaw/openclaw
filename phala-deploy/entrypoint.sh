@@ -152,7 +152,8 @@ ensure_symlink_dir() {
 
 ensure_symlink_dir "$DATA_DIR/openclaw" /root/.openclaw
 ensure_symlink_dir "$DATA_DIR/.config" /root/.config
-echo "Home symlinks created (~/.openclaw, ~/.config → $DATA_DIR)"
+ensure_symlink_dir "$DATA_DIR/.mcporter" /root/.mcporter
+echo "Home symlinks created (~/.openclaw, ~/.config, ~/.mcporter → $DATA_DIR)"
 
 # Bootstrap config from OPENCLAW_CONFIG_B64 (sent by clawdi control plane)
 CONFIG_FILE="/root/.openclaw/openclaw.json"
@@ -164,6 +165,30 @@ if [ ! -f "$CONFIG_FILE" ]; then
   else
     echo "Warning: No config file and no OPENCLAW_CONFIG_B64 set. Gateway may fail."
   fi
+fi
+
+# --- Configure mcporter for Composio MCP proxy ---
+# Reads composio skill config from openclaw.json and writes mcporter config.
+if [ -f "$CONFIG_FILE" ]; then
+  node -e '
+    const fs = require("fs");
+    const cfg = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    const env = cfg.skills?.entries?.composio?.env || {};
+    const url = env.COMPOSIO_MCP_URL || "";
+    const token = env.COMPOSIO_MCP_TOKEN || "";
+    if (!url || !token) { process.exit(0); }
+    const cfgPath = "/root/.mcporter/mcporter.json";
+    let mcpCfg = { mcpServers: {}, imports: [] };
+    try { mcpCfg = JSON.parse(fs.readFileSync(cfgPath, "utf8")); } catch {}
+    if (!mcpCfg.mcpServers) mcpCfg.mcpServers = {};
+    mcpCfg.mcpServers["clawdi-mcp"] = {
+      baseUrl: url,
+      headers: { Authorization: "Bearer " + token },
+    };
+    fs.mkdirSync("/root/.mcporter", { recursive: true });
+    fs.writeFileSync(cfgPath, JSON.stringify(mcpCfg, null, 2), { mode: 0o600 });
+    console.log("mcporter config written for Composio MCP proxy.");
+  ' "$CONFIG_FILE" 2>/dev/null || true
 fi
 
 # --- Pre-seed device pairing for local CLI ---
@@ -232,6 +257,9 @@ fi
 rm -f /var/run/docker.pid /var/run/containerd/containerd.pid
 
 # Start Docker daemon in background (best-effort, not critical for gateway)
+# TODO: This blocking wait adds ~20s to startup. The gateway HTTP/WS server
+# doesn't need Docker — only tool execution does. Move the wait into a
+# background task and let the gateway start immediately.
 dockerd --host=unix:///var/run/docker.sock --storage-driver=vfs &
 DOCKERD_PID=$!
 

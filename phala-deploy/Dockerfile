@@ -11,8 +11,8 @@ RUN CGO_ENABLED=0 go build \
         -X github.com/steipete/gogcli/internal/cmd.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
       -o /out/gog-bin ./cmd/gog
 
-# --- Stage 2: Base runtime image (for clawdi) ---
-FROM ubuntu:24.04 AS base
+# --- Stage 2: Base prerequisites (system deps, no openclaw) ---
+FROM ubuntu:24.04 AS base-prereqs
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -53,19 +53,13 @@ RUN NONINTERACTIVE=1 su - linuxbrew -c \
 ENV HOMEBREW_PREFIX="/home/linuxbrew/.linuxbrew"
 ENV PATH="${HOMEBREW_PREFIX}/bin:${HOMEBREW_PREFIX}/sbin:${PATH}"
 
-# Layer 5: Install build-essential, install OpenClaw from tarball, then purge build tools + cache
-COPY phala-deploy/openclaw.tgz /tmp/openclaw.tgz
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends build-essential && \
-    npm install -g /tmp/openclaw.tgz && \
-    rm -f /tmp/openclaw.tgz && \
-    apt-get purge -y --auto-remove build-essential && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/* /root/.npm /tmp/* /usr/include
-
-# Layer 6: Shell environment
+# Layer 5: Shell environment
 RUN echo 'eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"' >> /root/.bashrc && \
     echo 'export PATH="/root/.bun/bin:$PATH"' >> /root/.bashrc
+
+# Layer 7: mcporter (MCP client CLI, used by composio skill)
+RUN npm install -g mcporter && \
+    rm -rf /root/.npm /tmp/*
 
 # gogcli: static binary + credential-sourcing wrapper
 COPY --from=gogcli-builder /out/gog-bin /usr/local/bin/gog-bin
@@ -78,11 +72,29 @@ RUN chmod +x /entrypoint.sh
 ENV NODE_ENV=production
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
-  CMD curl -sf http://localhost:18789/ >/dev/null || exit 1
+  CMD curl -so /dev/null http://localhost:18789/v1/mux/inbound || exit 1
 
 ENTRYPOINT ["/entrypoint.sh"]
 
-# --- Stage 3: Full image (standalone with SSH + S3 support) ---
+# --- Stage 3: Production base (openclaw from tarball) ---
+FROM base-prereqs AS base
+
+COPY phala-deploy/openclaw.tgz /tmp/openclaw.tgz
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends build-essential && \
+    npm install -g /tmp/openclaw.tgz && \
+    rm -f /tmp/openclaw.tgz && \
+    apt-get purge -y --auto-remove build-essential && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* /root/.npm /tmp/* /usr/include
+
+# --- Stage 4: Dev image (openclaw via bind mount) ---
+FROM base-prereqs AS dev
+
+RUN printf '#!/bin/sh\nexec node /app/openclaw.mjs "$@"\n' > /usr/local/bin/openclaw && \
+    chmod +x /usr/local/bin/openclaw
+
+# --- Stage 5: Full image (standalone with SSH + S3 support) ---
 FROM base AS full
 
 # SSH daemon

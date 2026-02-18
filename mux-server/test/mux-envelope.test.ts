@@ -5,6 +5,7 @@ import {
   buildTelegramInboundEnvelope,
   buildWhatsAppInboundEnvelope,
   collectOutboundMediaUrls,
+  normalizeMuxInboundAttachments,
   readOutboundOperation,
   readOutboundText,
 } from "../src/mux-envelope.js";
@@ -95,7 +96,7 @@ describe("mux envelope helpers", () => {
     expect((envelope.raw as { callbackQuery: { id: string } }).callbackQuery.id).toBe("cbq-1");
   });
 
-  test("builds discord inbound envelope with optional attachments", () => {
+  test("builds discord inbound envelope with url attachments", () => {
     const envelope = buildDiscordInboundEnvelope({
       messageId: "999",
       sessionKey: "dc:dm:42",
@@ -114,13 +115,17 @@ describe("mux envelope helpers", () => {
           type: "image",
           mimeType: "image/jpeg",
           fileName: "photo.jpg",
-          content: "ZmFrZQ==",
+          url: "https://cdn.discordapp.com/attachments/123/456/photo.jpg",
         },
       ],
     });
 
     expect(envelope.body).toBe("");
     expect(envelope.attachments).toHaveLength(1);
+    expect(envelope.attachments![0].url).toBe(
+      "https://cdn.discordapp.com/attachments/123/456/photo.jpg",
+    );
+    expect(envelope.attachments![0].content).toBeUndefined();
     expect((envelope.channelData.discord as { rawMessage: unknown }).rawMessage).toEqual({
       id: "999",
     });
@@ -151,5 +156,65 @@ describe("mux envelope helpers", () => {
       id: "wa-1",
       chatId: "120363000000@g.us",
     });
+  });
+
+  test("normalizeMuxInboundAttachments accepts url-only attachments", () => {
+    const result = normalizeMuxInboundAttachments([
+      {
+        type: "application",
+        mimeType: "application/pdf",
+        fileName: "report.pdf",
+        url: "http://mux.local/v1/mux/files/telegram?fileId=abc",
+      },
+    ]);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toEqual({
+      type: "application",
+      mimeType: "application/pdf",
+      fileName: "report.pdf",
+      url: "http://mux.local/v1/mux/files/telegram?fileId=abc",
+    });
+    expect(result[0].content).toBeUndefined();
+  });
+
+  test("normalizeMuxInboundAttachments accepts content-only attachments", () => {
+    const result = normalizeMuxInboundAttachments([
+      {
+        type: "image",
+        mimeType: "image/png",
+        fileName: "dot.png",
+        content: "aWdub3Jl",
+      },
+    ]);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toEqual({
+      type: "image",
+      mimeType: "image/png",
+      fileName: "dot.png",
+      content: "aWdub3Jl",
+    });
+    expect(result[0].url).toBeUndefined();
+  });
+
+  test("normalizeMuxInboundAttachments rejects attachments with neither content nor url", () => {
+    const result = normalizeMuxInboundAttachments([
+      { type: "image", mimeType: "image/png", fileName: "dot.png" },
+      { type: "file" },
+    ]);
+    expect(result).toHaveLength(0);
+  });
+
+  test("normalizeMuxInboundAttachments accepts attachments with both content and url", () => {
+    const result = normalizeMuxInboundAttachments([
+      {
+        type: "image",
+        mimeType: "image/jpeg",
+        content: "aWdub3Jl",
+        url: "https://example.com/img.jpg",
+      },
+    ]);
+    expect(result).toHaveLength(1);
+    expect(result[0].content).toBe("aWdub3Jl");
+    expect(result[0].url).toBe("https://example.com/img.jpg");
   });
 });

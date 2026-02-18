@@ -2277,9 +2277,9 @@ describe("mux server", () => {
       ? (payload.attachments as Array<Record<string, unknown>>)
       : [];
     expect(attachments).toHaveLength(1);
-    expect(attachments[0]?.mimeType).toBe("image/png");
-    expect(typeof attachments[0]?.content).toBe("string");
-    expect(String(attachments[0]?.content)).toBe(pngBase64);
+    expect(attachments[0]?.mimeType).toBe("image/jpeg");
+    expect(typeof attachments[0]?.url).toBe("string");
+    expect(String(attachments[0]?.url)).toContain("/v1/mux/files/telegram?fileId=");
 
     const channelData =
       payload.channelData && typeof payload.channelData === "object"
@@ -2295,7 +2295,6 @@ describe("mux server", () => {
     expect(media).toHaveLength(1);
     expect(media[0]?.kind).toBe("photo");
     expect(media[0]?.fileId).toBe("best-photo-id");
-    expect(media[0]?.filePath).toBe("photos/cat.png");
     expect(channelData.telegram).toBeDefined();
     const rawTelegram =
       channelData.telegram && typeof channelData.telegram === "object"
@@ -2442,8 +2441,8 @@ describe("mux server", () => {
       : [];
     expect(attachments).toHaveLength(1);
     expect(attachments[0]?.mimeType).toBe("image/png");
-    expect(typeof attachments[0]?.content).toBe("string");
-    expect(String(attachments[0]?.content)).toBe(pngBase64);
+    expect(typeof attachments[0]?.url).toBe("string");
+    expect(String(attachments[0]?.url)).toContain("/files/cat.png");
 
     const channelData =
       payload.channelData && typeof payload.channelData === "object"

@@ -3,6 +3,9 @@ set -euo pipefail
 
 # Generate OPENCLAW_CONFIG_B64 for CVM deployments.
 #
+# Reads openclaw.template.json for static config, then merges in dynamic
+# values (secrets, URLs, model config) derived from environment variables.
+#
 # Required env vars:
 #   MASTER_KEY        — derives gateway auth token via HKDF-SHA256
 #   MUX_BASE_URL      — external mux-server URL (e.g. https://<hash>-18891.dstack-prod.phala.network)
@@ -18,6 +21,10 @@ set -euo pipefail
 : "${MUX_BASE_URL:?MUX_BASE_URL is required}"
 : "${MUX_REGISTER_KEY:?MUX_REGISTER_KEY is required}"
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TEMPLATE="${SCRIPT_DIR}/openclaw.template.json"
+[[ -f "$TEMPLATE" ]] || { echo "ERROR: template not found: $TEMPLATE" >&2; exit 1; }
+
 GATEWAY_PORT=18789
 MODEL_PRIMARY="openai/gpt-5.3-codex"
 
@@ -32,76 +39,37 @@ GATEWAY_AUTH_TOKEN=$(node -e "
 # resolved by the config loader's env-substitution (vars forwarded via docker-compose.yml)
 INBOUND_URL="https://\${DSTACK_APP_ID}-${GATEWAY_PORT}.\${DSTACK_GATEWAY_DOMAIN}/v1/mux/inbound"
 
-# --- Generate full openclaw config JSON ---
+# --- Merge dynamic values into template ---
 CONFIG_JSON=$(node -e "
-  const gatewayPort = parseInt(process.argv[5], 10);
-  const modelPrimary = process.argv[6];
-  const modelBaseUrl = process.argv[7] || '';
-  const modelApiKey = process.argv[8] || '';
+  const fs = require('fs');
+  const cfg = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
 
-  const cfg = {
-    messages: { ackReactionScope: 'group-mentions' },
-    gateway: {
-      mode: 'local',
-      bind: 'lan',
-      port: gatewayPort,
-      auth: { mode: 'token', token: process.argv[1] },
-      controlUi: { dangerouslyDisableDeviceAuth: true },
-      nodes: {
-        denyCommands: [
-          'camera.snap', 'camera.clip', 'screen.record',
-          'calendar.add', 'contacts.add', 'reminders.add',
-        ],
-      },
-      http: {
-        endpoints: {
-          mux: {
-            enabled: true,
-            baseUrl: process.argv[2],
-            registerKey: process.argv[3],
-            inboundUrl: process.argv[4],
-          },
-        },
+  // Gateway auth + mux endpoint (dynamic/secret)
+  cfg.gateway.auth = { mode: 'token', token: process.argv[2] };
+  cfg.gateway.http = {
+    endpoints: {
+      mux: {
+        enabled: true,
+        baseUrl: process.argv[3],
+        registerKey: process.argv[4],
+        inboundUrl: process.argv[5],
       },
     },
-    update: { checkOnStart: false },
-    channels: {},
-    plugins: { entries: {} },
   };
 
-  for (const ch of ['telegram', 'discord', 'whatsapp']) {
-    cfg.channels[ch] = {
-      accounts: {
-        default: { enabled: false },
-        mux: { enabled: true, mux: { enabled: true, timeoutMs: 30000 } },
-      },
-    };
-    cfg.plugins.entries[ch] = { enabled: true };
-  }
-
+  // Model config (dynamic, primary always set; provider only if URL+key given)
+  cfg.agents.defaults.model = { primary: process.argv[6] };
+  const modelBaseUrl = process.argv[7] || '';
+  const modelApiKey = process.argv[8] || '';
   if (modelBaseUrl && modelApiKey) {
     cfg.models = {
       providers: {
-        openai: {
-          baseUrl: modelBaseUrl,
-          apiKey: modelApiKey,
-          models: [],
-        },
+        openai: { baseUrl: modelBaseUrl, apiKey: modelApiKey, models: [] },
       },
     };
   }
 
-  cfg.agents = {
-    defaults: {
-      workspace: '/root/.openclaw/workspace',
-      model: { primary: modelPrimary },
-      maxConcurrent: 4,
-      subagents: { maxConcurrent: 8 },
-      compaction: { mode: 'safeguard' },
-    },
-  };
-
   process.stdout.write(JSON.stringify(cfg, null, 2));
-" "$GATEWAY_AUTH_TOKEN" "$MUX_BASE_URL" "$MUX_REGISTER_KEY" "$INBOUND_URL" "$GATEWAY_PORT" "$MODEL_PRIMARY" "${MODEL_BASE_URL:-}" "${MODEL_API_KEY:-}")
+" "$TEMPLATE" "$GATEWAY_AUTH_TOKEN" "$MUX_BASE_URL" "$MUX_REGISTER_KEY" "$INBOUND_URL" "$MODEL_PRIMARY" "${MODEL_BASE_URL:-}" "${MODEL_API_KEY:-}")
 
 printf '%s' "$CONFIG_JSON" | base64 -w0

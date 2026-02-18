@@ -25,7 +25,8 @@ export type MuxInboundAttachment = {
   type?: string;
   mimeType?: string;
   fileName?: string;
-  content: string;
+  content?: string;
+  url?: string;
 };
 
 export type MuxInboundPayload = {
@@ -146,6 +147,7 @@ export function normalizeMuxInboundAttachments(input: unknown): MuxInboundAttach
         mimeType?: unknown;
         fileName?: unknown;
         content?: unknown;
+        url?: unknown;
       };
       const content =
         typeof attachment?.content === "string"
@@ -157,14 +159,17 @@ export function normalizeMuxInboundAttachments(input: unknown): MuxInboundAttach
                 attachment.content.byteLength,
               ).toString("base64")
             : undefined;
-      if (!content) {
+      const url =
+        typeof attachment?.url === "string" && attachment.url.trim() ? attachment.url : undefined;
+      if (!content && !url) {
         return null;
       }
       return {
         type: typeof attachment?.type === "string" ? attachment.type : undefined,
         mimeType: typeof attachment?.mimeType === "string" ? attachment.mimeType : undefined,
         fileName: typeof attachment?.fileName === "string" ? attachment.fileName : undefined,
-        content,
+        ...(content ? { content } : {}),
+        ...(url ? { url } : {}),
       };
     })
     .filter((value): value is NonNullable<typeof value> => Boolean(value));

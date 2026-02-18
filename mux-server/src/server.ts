@@ -454,6 +454,7 @@ async function loadDiscordRuntimeModules(): Promise<DiscordRuntimeModules> {
 
 const host = process.env.MUX_HOST || "127.0.0.1";
 const port = Number(process.env.MUX_PORT || 18891);
+const muxPublicUrl = (process.env.MUX_PUBLIC_URL || `http://${host}:${port}`).replace(/\/+$/, "");
 const TELEGRAM_GENERAL_TOPIC_ID = 1;
 const muxAdminToken = readNonEmptyString(process.env.MUX_ADMIN_TOKEN);
 const muxRegisterKey = readNonEmptyString(process.env.MUX_REGISTER_KEY);
@@ -481,15 +482,9 @@ const telegramInboundEnabled = Boolean(readNonEmptyString(telegramBotToken));
 const telegramPollTimeoutSec = Number(process.env.MUX_TELEGRAM_POLL_TIMEOUT_SEC || 25);
 const telegramPollRetryMs = Number(process.env.MUX_TELEGRAM_POLL_RETRY_MS || 1_000);
 const telegramBootstrapLatest = process.env.MUX_TELEGRAM_BOOTSTRAP_LATEST !== "false";
-const telegramInboundMediaMaxBytes = Number(
-  process.env.MUX_TELEGRAM_INBOUND_MEDIA_MAX_BYTES || 5_000_000,
-);
 const discordInboundEnabled = Boolean(readNonEmptyString(discordBotToken));
 const discordPollIntervalMs = Number(process.env.MUX_DISCORD_POLL_INTERVAL_MS || 2_000);
 const discordBootstrapLatest = process.env.MUX_DISCORD_BOOTSTRAP_LATEST !== "false";
-const discordInboundMediaMaxBytes = Number(
-  process.env.MUX_DISCORD_INBOUND_MEDIA_MAX_BYTES || 5_000_000,
-);
 const discordPendingGcEnabled = process.env.MUX_DISCORD_PENDING_GC_ENABLED === "true";
 // TODO(phala): simplify to gateway-only Discord DM ingestion and remove
 // MUX_DISCORD_GATEWAY_DM_ENABLED plus DM polling fallback.
@@ -510,9 +505,6 @@ const discordGatewayReconnectMaxMs = Number(
   process.env.MUX_DISCORD_GATEWAY_RECONNECT_MAX_MS || 30_000,
 );
 const whatsappInboundEnabled = fs.existsSync(path.join(whatsappAuthDir, "creds.json"));
-const whatsappInboundMediaMaxBytes = Number(
-  process.env.MUX_WHATSAPP_INBOUND_MEDIA_MAX_BYTES || 5_000_000,
-);
 const whatsappInboundRetryMs = Number(process.env.MUX_WHATSAPP_INBOUND_RETRY_MS || 1_000);
 const whatsappQueuePollMs = Number(process.env.MUX_WHATSAPP_QUEUE_POLL_MS || 500);
 const whatsappQueueRetryInitialMs = Number(
@@ -2039,31 +2031,6 @@ function sortDiscordMessagesAsc(messages: Record<string, unknown>[]): Record<str
   });
 }
 
-async function downloadDiscordFileBase64(url: string): Promise<string | null> {
-  const maxBytes =
-    Number.isFinite(discordInboundMediaMaxBytes) && discordInboundMediaMaxBytes > 0
-      ? Math.trunc(discordInboundMediaMaxBytes)
-      : 5_000_000;
-  let response: Response;
-  try {
-    response = await fetch(url);
-  } catch {
-    return null;
-  }
-  if (!response.ok) {
-    return null;
-  }
-  const contentLength = readPositiveInt(response.headers.get("content-length"));
-  if (contentLength && contentLength > maxBytes) {
-    return null;
-  }
-  const buffer = Buffer.from(await response.arrayBuffer());
-  if (buffer.byteLength === 0 || buffer.byteLength > maxBytes) {
-    return null;
-  }
-  return buffer.toString("base64");
-}
-
 function listDiscordAttachmentCandidates(
   attachments: unknown,
 ): Array<{ id?: string; fileName?: string; mimeType?: string; url?: string; size?: number }> {
@@ -2098,28 +2065,18 @@ async function extractDiscordInboundMedia(params: {
       size: item.size,
       url: item.url,
     });
-    const inferredMime = inferImageMimeTypeFromPath(item.fileName ?? item.url);
-    if (!isImageMimeType(item.mimeType) && !inferredMime) {
-      continue;
-    }
     if (!item.url) {
       continue;
     }
-    const content = await downloadDiscordFileBase64(item.url);
-    if (!content) {
-      log({
-        type: "discord_media_download_failed",
-        messageId: params.messageId,
-        attachmentId: item.id,
-        url: item.url,
-      });
-      continue;
-    }
+    const resolvedMime =
+      item.mimeType ||
+      inferMimeTypeFromPath(item.fileName ?? item.url) ||
+      "application/octet-stream";
     attachments.push({
-      type: "image",
-      mimeType: item.mimeType || inferredMime || "image/jpeg",
-      fileName: item.fileName || item.id || `discord-${params.messageId}.jpg`,
-      content,
+      type: resolvedMime.split("/")[0] || "file",
+      mimeType: resolvedMime,
+      fileName: item.fileName || item.id || `discord-${params.messageId}`,
+      url: item.url,
     });
   }
   return { attachments, media: summaries };
@@ -2521,7 +2478,11 @@ function hasDiscordMessageContent(message: Record<string, unknown>): boolean {
     return true;
   }
   const attachments = Array.isArray(message.attachments) ? message.attachments : [];
-  return attachments.some((attachment) => Boolean(attachment && typeof attachment === "object"));
+  if (attachments.some((attachment) => Boolean(attachment && typeof attachment === "object"))) {
+    return true;
+  }
+  const snapshots = Array.isArray(message.message_snapshots) ? message.message_snapshots : [];
+  return snapshots.length > 0;
 }
 
 function isWhatsAppCommandText(input: string): boolean {
@@ -2543,31 +2504,57 @@ function hasWhatsAppMessageContent(message: WebInboundMessage): boolean {
   );
 }
 
-function isImageMimeType(value: string | undefined): boolean {
-  return typeof value === "string" && value.trim().toLowerCase().startsWith("image/");
-}
+const MIME_BY_EXT: Record<string, string> = {
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".png": "image/png",
+  ".webp": "image/webp",
+  ".gif": "image/gif",
+  ".bmp": "image/bmp",
+  ".svg": "image/svg+xml",
+  ".pdf": "application/pdf",
+  ".zip": "application/zip",
+  ".gz": "application/gzip",
+  ".tar": "application/x-tar",
+  ".7z": "application/x-7z-compressed",
+  ".rar": "application/vnd.rar",
+  ".doc": "application/msword",
+  ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  ".xls": "application/vnd.ms-excel",
+  ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  ".ppt": "application/vnd.ms-powerpoint",
+  ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  ".mp3": "audio/mpeg",
+  ".ogg": "audio/ogg",
+  ".oga": "audio/ogg",
+  ".opus": "audio/opus",
+  ".wav": "audio/wav",
+  ".flac": "audio/flac",
+  ".aac": "audio/aac",
+  ".m4a": "audio/mp4",
+  ".weba": "audio/webm",
+  ".mp4": "video/mp4",
+  ".webm": "video/webm",
+  ".mkv": "video/x-matroska",
+  ".avi": "video/x-msvideo",
+  ".mov": "video/quicktime",
+  ".txt": "text/plain",
+  ".csv": "text/csv",
+  ".json": "application/json",
+  ".xml": "application/xml",
+  ".html": "text/html",
+  ".htm": "text/html",
+  ".md": "text/markdown",
+  ".yaml": "text/yaml",
+  ".yml": "text/yaml",
+};
 
-function inferImageMimeTypeFromPath(filePath: string | undefined): string | undefined {
+function inferMimeTypeFromPath(filePath: string | undefined): string | undefined {
   if (!filePath) {
     return undefined;
   }
-  const lower = filePath.toLowerCase();
-  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) {
-    return "image/jpeg";
-  }
-  if (lower.endsWith(".png")) {
-    return "image/png";
-  }
-  if (lower.endsWith(".webp")) {
-    return "image/webp";
-  }
-  if (lower.endsWith(".gif")) {
-    return "image/gif";
-  }
-  if (lower.endsWith(".bmp")) {
-    return "image/bmp";
-  }
-  return undefined;
+  const ext = path.extname(filePath).toLowerCase();
+  return ext ? MIME_BY_EXT[ext] : undefined;
 }
 
 function pickBestTelegramPhotoSize(
@@ -2613,32 +2600,7 @@ async function resolveTelegramFilePath(fileId: string): Promise<string | null> {
   return readNonEmptyString(result.result?.file_path);
 }
 
-async function downloadTelegramFileBase64(filePath: string): Promise<string | null> {
-  const token = requireTelegramBotToken();
-  const normalizedPath = filePath.replace(/^\/+/, "");
-  if (!normalizedPath) {
-    return null;
-  }
-  const response = await fetch(`${telegramApiBaseUrl}/file/bot${token}/${normalizedPath}`);
-  if (!response.ok) {
-    return null;
-  }
-  const maxBytes =
-    Number.isFinite(telegramInboundMediaMaxBytes) && telegramInboundMediaMaxBytes > 0
-      ? Math.trunc(telegramInboundMediaMaxBytes)
-      : 5_000_000;
-  const contentLength = readPositiveInt(response.headers.get("content-length"));
-  if (contentLength && contentLength > maxBytes) {
-    return null;
-  }
-  const buffer = Buffer.from(await response.arrayBuffer());
-  if (buffer.byteLength === 0 || buffer.byteLength > maxBytes) {
-    return null;
-  }
-  return buffer.toString("base64");
-}
-
-async function resolveTelegramImageAttachment(params: {
+async function resolveTelegramAttachment(params: {
   updateId: number;
   kind: string;
   fileId: string;
@@ -2659,49 +2621,20 @@ async function resolveTelegramImageAttachment(params: {
     height: params.height,
     durationSec: params.durationSec,
   };
-  try {
-    const filePath = await resolveTelegramFilePath(params.fileId);
-    if (!filePath) {
-      log({
-        type: "telegram_media_get_file_failed",
-        updateId: params.updateId,
-        fileId: params.fileId,
-        kind: params.kind,
-      });
-      return { summary };
-    }
-    summary.filePath = filePath;
-    const inferredMime = inferImageMimeTypeFromPath(filePath);
-    summary.mimeType = inferredMime || summary.mimeType;
-    summary.fileName = summary.fileName || path.basename(filePath);
-    const content = await downloadTelegramFileBase64(filePath);
-    if (!content) {
-      log({
-        type: "telegram_media_download_failed",
-        updateId: params.updateId,
-        fileId: params.fileId,
-        kind: params.kind,
-        filePath,
-      });
-      return { summary };
-    }
-    const attachment: TelegramInboundAttachment = {
-      type: "image",
-      mimeType: summary.mimeType || "image/jpeg",
-      fileName: summary.fileName || `${params.kind}-${params.fileId}.jpg`,
-      content,
-    };
-    return { attachment, summary };
-  } catch (error) {
-    log({
-      type: "telegram_media_fetch_error",
-      updateId: params.updateId,
-      fileId: params.fileId,
-      kind: params.kind,
-      error: String(error),
-    });
-    return { summary };
-  }
+  const inferredMime =
+    inferMimeTypeFromPath(params.fileName) ?? inferMimeTypeFromPath(params.fileName);
+  const resolvedMime = params.mimeType || inferredMime;
+  summary.mimeType = resolvedMime || summary.mimeType;
+  summary.fileName =
+    summary.fileName || (params.fileId ? `${params.kind}-${params.fileId}` : undefined);
+  const proxyUrl = `${muxPublicUrl}/v1/mux/files/telegram?fileId=${encodeURIComponent(params.fileId)}`;
+  const attachment: TelegramInboundAttachment = {
+    type: resolvedMime?.split("/")[0] || "file",
+    mimeType: resolvedMime || "application/octet-stream",
+    fileName: summary.fileName,
+    url: proxyUrl,
+  };
+  return { attachment, summary };
 }
 
 async function extractTelegramInboundMedia(params: {
@@ -2714,7 +2647,7 @@ async function extractTelegramInboundMedia(params: {
   const bestPhoto = pickBestTelegramPhotoSize(params.message.photo);
   const photoFileId = readNonEmptyString(bestPhoto?.file_id);
   if (photoFileId) {
-    const result = await resolveTelegramImageAttachment({
+    const result = await resolveTelegramAttachment({
       updateId: params.updateId,
       kind: "photo",
       fileId: photoFileId,
@@ -2733,14 +2666,13 @@ async function extractTelegramInboundMedia(params: {
   const docFileId = readNonEmptyString(document?.file_id);
   const docMimeType = readNonEmptyString(document?.mime_type)?.toLowerCase();
   const docFileName = readNonEmptyString(document?.file_name);
-  const docMimeFromPath = inferImageMimeTypeFromPath(docFileName ?? undefined);
-  if (docFileId && (isImageMimeType(docMimeType) || Boolean(docMimeFromPath))) {
-    const result = await resolveTelegramImageAttachment({
+  if (docFileId) {
+    const result = await resolveTelegramAttachment({
       updateId: params.updateId,
       kind: "document",
       fileId: docFileId,
       fileName: docFileName ?? undefined,
-      mimeType: docMimeType ?? docMimeFromPath,
+      mimeType: docMimeType ?? inferMimeTypeFromPath(docFileName ?? undefined),
       fileSize: readPositiveInt(document?.file_size),
     });
     media.push(result.summary);
@@ -2752,7 +2684,8 @@ async function extractTelegramInboundMedia(params: {
   const video = params.message.video;
   const videoFileId = readNonEmptyString(video?.file_id);
   if (videoFileId) {
-    media.push({
+    const result = await resolveTelegramAttachment({
+      updateId: params.updateId,
       kind: "video",
       fileId: videoFileId,
       fileName: readNonEmptyString(video?.file_name) ?? undefined,
@@ -2762,12 +2695,17 @@ async function extractTelegramInboundMedia(params: {
       height: readPositiveInt(video?.height),
       durationSec: readPositiveInt(video?.duration),
     });
+    media.push(result.summary);
+    if (result.attachment) {
+      attachments.push(result.attachment);
+    }
   }
 
   const animation = params.message.animation;
   const animationFileId = readNonEmptyString(animation?.file_id);
   if (animationFileId) {
-    media.push({
+    const result = await resolveTelegramAttachment({
+      updateId: params.updateId,
       kind: "animation",
       fileId: animationFileId,
       fileName: readNonEmptyString(animation?.file_name) ?? undefined,
@@ -2777,6 +2715,10 @@ async function extractTelegramInboundMedia(params: {
       height: readPositiveInt(animation?.height),
       durationSec: readPositiveInt(animation?.duration),
     });
+    media.push(result.summary);
+    if (result.attachment) {
+      attachments.push(result.attachment);
+    }
   }
 
   return { attachments, media };
@@ -2852,36 +2794,14 @@ async function extractWhatsAppInboundMedia(params: {
   }
   media.push(summary);
 
-  const resolvedMime = mediaType || inferImageMimeTypeFromPath(mediaPath);
-  if (!isImageMimeType(resolvedMime)) {
-    return { attachments, media };
-  }
-  const maxBytes =
-    Number.isFinite(whatsappInboundMediaMaxBytes) && whatsappInboundMediaMaxBytes > 0
-      ? Math.trunc(whatsappInboundMediaMaxBytes)
-      : 5_000_000;
-  if (sizeBytes && sizeBytes > maxBytes) {
-    return { attachments, media };
-  }
-
-  try {
-    const buffer = fs.readFileSync(mediaPath);
-    if (buffer.byteLength === 0 || buffer.byteLength > maxBytes) {
-      return { attachments, media };
-    }
-    attachments.push({
-      type: "image",
-      mimeType: resolvedMime || "image/jpeg",
-      fileName: path.basename(mediaPath),
-      content: buffer.toString("base64"),
-    });
-  } catch (error) {
-    log({
-      type: "whatsapp_media_read_error",
-      mediaPath,
-      error: String(error),
-    });
-  }
+  const resolvedMime = mediaType || inferMimeTypeFromPath(mediaPath) || "application/octet-stream";
+  const proxyUrl = `${muxPublicUrl}/v1/mux/files/whatsapp?path=${encodeURIComponent(mediaPath)}`;
+  attachments.push({
+    type: resolvedMime.split("/")[0] || "file",
+    mimeType: resolvedMime,
+    fileName: path.basename(mediaPath),
+    url: proxyUrl,
+  });
   return { attachments, media };
 }
 
@@ -3981,9 +3901,6 @@ async function forwardDiscordMessageToTenant(params: {
     message: params.message,
     messageId: params.messageId,
   });
-  if (!params.body && inboundMedia.attachments.length === 0) {
-    return "ignored";
-  }
 
   const sessionKey = resolveDiscordInboundSessionKey({
     tenantId: params.tenantId,
@@ -6613,6 +6530,92 @@ const server = http.createServer(async (req, res) => {
       });
       res.writeHead(typingResult.statusCode, { "content-type": "application/json; charset=utf-8" });
       res.end(typingResult.bodyText);
+      return;
+    }
+
+    if (req.method === "GET" && pathname.startsWith("/v1/mux/files/")) {
+      const channel = pathname.slice("/v1/mux/files/".length).toLowerCase();
+      if (channel === "telegram") {
+        const fileId = requestUrl.searchParams.get("fileId");
+        if (!fileId) {
+          sendJson(res, 400, { ok: false, error: "fileId query param required" });
+          return;
+        }
+        try {
+          const filePath = await resolveTelegramFilePath(fileId);
+          if (!filePath) {
+            sendJson(res, 404, { ok: false, error: "file not found" });
+            return;
+          }
+          const token = requireTelegramBotToken();
+          const normalizedPath = filePath.replace(/^\/+/, "");
+          const upstream = await fetch(`${telegramApiBaseUrl}/file/bot${token}/${normalizedPath}`);
+          if (!upstream.ok || !upstream.body) {
+            sendJson(res, 502, { ok: false, error: "upstream fetch failed" });
+            return;
+          }
+          const mime =
+            inferMimeTypeFromPath(filePath) ||
+            upstream.headers.get("content-type") ||
+            "application/octet-stream";
+          const fileName = path.basename(filePath);
+          res.writeHead(200, {
+            "content-type": mime,
+            "content-disposition": `inline; filename="${fileName}"`,
+            ...(upstream.headers.get("content-length")
+              ? { "content-length": upstream.headers.get("content-length")! }
+              : {}),
+          });
+          const reader = upstream.body.getReader();
+          const pump = async () => {
+            for (;;) {
+              const { done, value } = await reader.read();
+              if (done) {
+                break;
+              }
+              res.write(value);
+            }
+            res.end();
+          };
+          await pump();
+        } catch (error) {
+          if (!res.headersSent) {
+            sendJson(res, 500, { ok: false, error: String(error) });
+          }
+        }
+        return;
+      }
+      if (channel === "whatsapp") {
+        const filePath = requestUrl.searchParams.get("path");
+        if (!filePath) {
+          sendJson(res, 400, { ok: false, error: "path query param required" });
+          return;
+        }
+        const resolved = path.resolve(filePath);
+        try {
+          const stat = fs.statSync(resolved);
+          if (!stat.isFile()) {
+            sendJson(res, 404, { ok: false, error: "not a file" });
+            return;
+          }
+          const mime = inferMimeTypeFromPath(resolved) || "application/octet-stream";
+          const fileName = path.basename(resolved);
+          res.writeHead(200, {
+            "content-type": mime,
+            "content-disposition": `inline; filename="${fileName}"`,
+            "content-length": String(stat.size),
+          });
+          const stream = fs.createReadStream(resolved);
+          stream.pipe(res);
+        } catch (error) {
+          log({ type: "whatsapp_file_proxy_error", filePath: resolved, error: String(error) });
+          if (!res.headersSent) {
+            sendJson(res, 404, { ok: false, error: "file not found" });
+          }
+        }
+        return;
+      }
+      sendJson(res, 400, { ok: false, error: `unsupported channel: ${channel}` });
       return;
     }
 
