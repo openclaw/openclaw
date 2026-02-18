@@ -3,9 +3,9 @@ import { createBlockReplyPipeline } from "./block-reply-pipeline.js";
 
 describe("BlockReplyPipeline.hasEnqueuedPayload", () => {
   it("returns true for payloads enqueued before pipeline abort", async () => {
-    const onBlockReply = vi.fn().mockImplementation(
-      () => new Promise((resolve) => setTimeout(resolve, 5_000)),
-    );
+    const onBlockReply = vi
+      .fn()
+      .mockImplementation(() => new Promise((resolve) => setTimeout(resolve, 5_000)));
 
     const pipeline = createBlockReplyPipeline({
       onBlockReply,
