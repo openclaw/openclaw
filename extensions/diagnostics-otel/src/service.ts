@@ -1,4 +1,11 @@
-import { metrics, trace, SpanStatusCode } from "@opentelemetry/api";
+import {
+  metrics,
+  trace,
+  SpanStatusCode,
+  diag,
+  DiagConsoleLogger,
+  DiagLogLevel,
+} from "@opentelemetry/api";
 import type { SeverityNumber } from "@opentelemetry/api-logs";
 import { OTLPLogExporter } from "@opentelemetry/exporter-logs-otlp-http";
 import { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-http";
@@ -44,6 +51,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
   let logProvider: LoggerProvider | null = null;
   let stopLogTransport: (() => void) | null = null;
   let unsubscribe: (() => void) | null = null;
+  let previousLogsExporter: string | undefined;
 
   return {
     id: "diagnostics-otel",
@@ -53,6 +61,8 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       if (!cfg?.enabled || !otel?.enabled) {
         return;
       }
+
+      diag.setLogger(new DiagConsoleLogger(), DiagLogLevel.WARN);
 
       const protocol = otel.protocol ?? process.env.OTEL_EXPORTER_OTLP_PROTOCOL ?? "http/protobuf";
       if (protocol !== "http/protobuf") {
@@ -104,10 +114,14 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         : undefined;
 
       if (tracesEnabled || metricsEnabled) {
+        // Prevent NodeSDK from auto-configuring exporters for signals we manage manually
+        previousLogsExporter = process.env.OTEL_LOGS_EXPORTER;
+        process.env.OTEL_LOGS_EXPORTER = "none";
+
         sdk = new NodeSDK({
           resource,
           ...(traceExporter ? { traceExporter } : {}),
-          ...(metricReader ? { metricReader } : {}),
+          ...(metricReader ? { metricReaders: [metricReader] } : {}),
           ...(sampleRate !== undefined
             ? {
                 sampler: new ParentBasedSampler({
@@ -117,7 +131,14 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
             : {}),
         });
 
-        sdk.start();
+        try {
+          sdk.start();
+          ctx.logger.info(
+            `diagnostics-otel: SDK started (traces=${tracesEnabled}, metrics=${metricsEnabled}, traceUrl=${traceUrl}, metricUrl=${metricUrl})`,
+          );
+        } catch (err) {
+          ctx.logger.error(`diagnostics-otel: SDK start failed: ${String(err)}`);
+        }
       }
 
       const logSeverityMap: Record<string, SeverityNumber> = {
@@ -628,6 +649,12 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         await sdk.shutdown().catch(() => undefined);
         sdk = null;
       }
+      if (previousLogsExporter === undefined) {
+        delete process.env.OTEL_LOGS_EXPORTER;
+      } else {
+        process.env.OTEL_LOGS_EXPORTER = previousLogsExporter;
+      }
+      previousLogsExporter = undefined;
     },
   } satisfies OpenClawPluginService;
 }

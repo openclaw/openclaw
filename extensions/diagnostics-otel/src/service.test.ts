@@ -41,6 +41,13 @@ vi.mock("@opentelemetry/api", () => ({
   SpanStatusCode: {
     ERROR: 2,
   },
+  diag: {
+    setLogger: vi.fn(),
+  },
+  DiagConsoleLogger: class {},
+  DiagLogLevel: {
+    WARN: 1,
+  },
 }));
 
 vi.mock("@opentelemetry/sdk-node", () => ({
