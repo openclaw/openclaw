@@ -369,8 +369,12 @@ function renderUsageOverviewQuotaPanel(providerUsage: ProviderUsageSummary | nul
   const rows = [
     { label: "GPT", aliases: ["openai-codex", "codex", "chatgpt", "gpt"] },
     { label: "Claude", aliases: ["anthropic", "claude"] },
-    { label: "Kimi", aliases: ["zai", "z.ai", "moonshot", "kimi"] },
-  ] as const;
+    { label: "Kimi", aliases: ["moonshot", "kimi"] },
+    { label: "z.ai", aliases: ["zai", "z.ai"] },
+    { label: "MiniMax", aliases: ["minimax"] },
+    { label: "Xiaomi", aliases: ["xiaomi"] },
+    { label: "Copilot", aliases: ["github-copilot", "copilot"] },
+  ] as const; // ordered display priority; only configured providers are rendered.
 
   const resolveRow = (aliases: readonly string[]) => {
     const snapshots = providerUsage?.providers ?? [];
@@ -487,7 +491,10 @@ function renderUsageOverviewQuotaPanel(providerUsage: ProviderUsageSummary | nul
     <section class="card" style="margin-top: 16px;">
       <div class="card-title">Provider Quota</div>
       <div class="quota-providers">
-        ${rows.map((row) => renderProviderRow(row.label, resolveRow(row.aliases)))}
+        ${rows
+          .map((row) => ({ row, snapshot: resolveRow(row.aliases) }))
+          .filter((item) => Boolean(item.snapshot))
+          .map((item) => renderProviderRow(item.row.label, item.snapshot))}
       </div>
     </section>
   `;
