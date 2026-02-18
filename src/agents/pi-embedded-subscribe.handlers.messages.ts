@@ -201,12 +201,25 @@ export function handleMessageUpdate(
   }
 
   if (evtType === "text_end" && ctx.state.blockReplyBreak === "text_end") {
-    if (ctx.blockChunker?.hasBuffered()) {
-      ctx.blockChunker.drain({ force: true, emit: ctx.emitBlockChunk });
-      ctx.blockChunker.reset();
-    } else if (ctx.state.blockBuffer.length > 0) {
-      ctx.emitBlockChunk(ctx.state.blockBuffer);
+    // Full-message dedup: when the full visible text matches the previous
+    // message, skip drain to suppress duplicate delivery after tool round-trips.
+    // Block chunking splits text into pieces whose individual chunks may differ
+    // across messages, so chunk-level dedup is insufficient — we compare the
+    // complete text before any chunking occurs.
+    if (next && ctx.state.lastFullMessageText && next === ctx.state.lastFullMessageText) {
       ctx.state.blockBuffer = "";
+      ctx.blockChunker?.reset();
+    } else {
+      if (next) {
+        ctx.state.lastFullMessageText = next;
+      }
+      if (ctx.blockChunker?.hasBuffered()) {
+        ctx.blockChunker.drain({ force: true, emit: ctx.emitBlockChunk });
+        ctx.blockChunker.reset();
+      } else if (ctx.state.blockBuffer.length > 0) {
+        ctx.emitBlockChunk(ctx.state.blockBuffer);
+        ctx.state.blockBuffer = "";
+      }
     }
   }
 }
@@ -308,7 +321,25 @@ export function handleMessageEnd(
     maybeEmitReasoning();
   }
 
+  // Full-message dedup: when the full visible text matches the previous
+  // message (e.g. model repeating after tool round-trips), suppress block reply.
+  // This complements the text_end check for message_end mode and catches
+  // duplicates even when block chunking is active.
+  const isFullTextDuplicate = Boolean(
+    trimmedText &&
+      ctx.state.lastFullMessageText &&
+      trimmedText === ctx.state.lastFullMessageText,
+  );
+  if (!isFullTextDuplicate && trimmedText) {
+    ctx.state.lastFullMessageText = trimmedText;
+  }
+  if (isFullTextDuplicate) {
+    ctx.blockChunker?.reset();
+    ctx.state.blockBuffer = "";
+  }
+
   if (
+    !isFullTextDuplicate &&
     (ctx.state.blockReplyBreak === "message_end" ||
       (ctx.blockChunker ? ctx.blockChunker.hasBuffered() : ctx.state.blockBuffer.length > 0)) &&
     text &&

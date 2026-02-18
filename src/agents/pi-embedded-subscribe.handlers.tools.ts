@@ -137,6 +137,9 @@ export async function handleToolExecutionStart(
   if (ctx.params.onBlockReplyFlush) {
     void ctx.params.onBlockReplyFlush();
   }
+  // Mark that a tool ran since last text — dedup state will be preserved
+  // across the next message boundary to catch repeated text after tool results.
+  ctx.state.hadToolSinceLastText = true;
 
   const rawToolName = String(evt.toolName);
   const toolName = normalizeToolName(rawToolName);
