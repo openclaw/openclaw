@@ -168,7 +168,15 @@ export type DiagnosticEventInput = DiagnosticEventPayload extends infer Event
     : never
   : never;
 let seq = 0;
-const listeners = new Set<(evt: DiagnosticEventPayload) => void>();
+// globalThis-backed Set so that plugin-sdk bundle and main bundle share the same listeners.
+// Without this, onDiagnosticEvent (plugin-sdk bundle) and emitDiagnosticEvent (main bundle)
+// operate on separate Sets due to tsdown producing isolated bundles.
+const GLOBAL_KEY = "__openclaw_diagnostic_listeners__";
+const listeners: Set<(evt: DiagnosticEventPayload) => void> =
+  ((globalThis as Record<string, unknown>)[GLOBAL_KEY] as Set<
+    (evt: DiagnosticEventPayload) => void
+  >) ?? new Set<(evt: DiagnosticEventPayload) => void>();
+(globalThis as Record<string, unknown>)[GLOBAL_KEY] = listeners;
 
 export function isDiagnosticsEnabled(config?: OpenClawConfig): boolean {
   return config?.diagnostics?.enabled === true;
