@@ -9,7 +9,7 @@ import type {
   GroupToolPolicyBySenderConfig,
   GroupToolPolicyConfig,
 } from "../../config/types.tools.js";
-import { normalizeHyphenSlug } from "../../shared/string-normalization.js";
+import { normalizeAtHashSlug, normalizeHyphenSlug } from "../../shared/string-normalization.js";
 import { resolveSlackAccount } from "../../slack/accounts.js";
 
 type GroupMentionParams = {
@@ -25,18 +25,7 @@ type GroupMentionParams = {
 };
 
 function normalizeDiscordSlug(value?: string | null) {
-  if (!value) {
-    return "";
-  }
-  let text = value.trim().toLowerCase();
-  if (!text) {
-    return "";
-  }
-  text = text.replace(/^[@#]+/, "");
-  text = text.replace(/[\s_]+/g, "-");
-  text = text.replace(/[^a-z0-9-]+/g, "-");
-  text = text.replace(/-{2,}/g, "-").replace(/^-+|-+$/g, "");
-  return text;
+  return normalizeAtHashSlug(value);
 }
 
 function parseTelegramGroupId(value?: string | null) {

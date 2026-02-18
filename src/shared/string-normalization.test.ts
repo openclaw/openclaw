@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  normalizeAtHashSlug,
   normalizeHyphenSlug,
   normalizeStringEntries,
   normalizeStringEntriesLower,
@@ -21,5 +22,12 @@ describe("shared/string-normalization", () => {
     expect(normalizeHyphenSlug("..foo---bar..")).toBe("foo-bar");
     expect(normalizeHyphenSlug(undefined)).toBe("");
     expect(normalizeHyphenSlug(null)).toBe("");
+  });
+
+  it("normalizes @/# prefixed slugs used by channel allowlists", () => {
+    expect(normalizeAtHashSlug(" #My_Channel + Alerts ")).toBe("my-channel-alerts");
+    expect(normalizeAtHashSlug("@@Room___Name")).toBe("room-name");
+    expect(normalizeAtHashSlug(undefined)).toBe("");
+    expect(normalizeAtHashSlug(null)).toBe("");
   });
 });
