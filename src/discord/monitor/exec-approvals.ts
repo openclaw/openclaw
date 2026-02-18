@@ -29,6 +29,7 @@ import {
   GATEWAY_CLIENT_NAMES,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
+import { safeRegexTest } from "../../utils/safe-regex.js";
 import { createDiscordClient, stripUndefinedFields } from "../send.shared.js";
 import { DiscordUiContainer } from "../ui.js";
 
@@ -352,18 +353,14 @@ export class DiscordExecApprovalHandler {
       }
     }
 
-    // Check session filter (substring match)
+    // Check session filter (ReDoS-safe regex match)
     if (config.sessionFilter?.length) {
       const session = request.request.sessionKey;
       if (!session) {
         return false;
       }
       const matches = config.sessionFilter.some((p) => {
-        try {
-          return session.includes(p) || new RegExp(p).test(session);
-        } catch {
-          return session.includes(p);
-        }
+        return safeRegexTest(p, session);
       });
       if (!matches) {
         return false;
