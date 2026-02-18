@@ -6,9 +6,8 @@ export const DEFAULT_TIMEOUT_MS = 5000;
 export const PROVIDER_LABELS: Record<UsageProviderId, string> = {
   anthropic: "Claude",
   "github-copilot": "Copilot",
-  "google-gemini-cli": "Gemini",
-  "google-antigravity": "Antigravity",
   minimax: "MiniMax",
+  moonshot: "Kimi",
   "openai-codex": "Codex",
   xiaomi: "Xiaomi",
   zai: "z.ai",
@@ -17,9 +16,8 @@ export const PROVIDER_LABELS: Record<UsageProviderId, string> = {
 export const usageProviders: UsageProviderId[] = [
   "anthropic",
   "github-copilot",
-  "google-gemini-cli",
-  "google-antigravity",
   "minimax",
+  "moonshot",
   "openai-codex",
   "xiaomi",
   "zai",

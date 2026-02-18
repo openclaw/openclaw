@@ -1,12 +1,11 @@
 import { resolveFetch } from "./fetch.js";
 import { type ProviderAuth, resolveProviderAuths } from "./provider-usage.auth.js";
 import {
-  fetchAntigravityUsage,
   fetchClaudeUsage,
   fetchCodexUsage,
   fetchCopilotUsage,
-  fetchGeminiUsage,
   fetchMinimaxUsage,
+  fetchMoonshotUsage,
   fetchZaiUsage,
 } from "./provider-usage.fetch.js";
 import {
@@ -29,6 +28,8 @@ type UsageSummaryOptions = {
   auth?: ProviderAuth[];
   agentDir?: string;
   fetch?: typeof fetch;
+  /** Session key for claude.ai web usage API. Falls back to CLAUDE_AI_SESSION_KEY env var. */
+  claudeWebSessionKey?: string;
 };
 
 export async function loadProviderUsageSummary(
@@ -55,17 +56,15 @@ export async function loadProviderUsageSummary(
       (async (): Promise<ProviderUsageSnapshot> => {
         switch (auth.provider) {
           case "anthropic":
-            return await fetchClaudeUsage(auth.token, timeoutMs, fetchFn);
+            return await fetchClaudeUsage(auth.token, timeoutMs, fetchFn, opts.claudeWebSessionKey);
           case "github-copilot":
             return await fetchCopilotUsage(auth.token, timeoutMs, fetchFn);
-          case "google-antigravity":
-            return await fetchAntigravityUsage(auth.token, timeoutMs, fetchFn);
-          case "google-gemini-cli":
-            return await fetchGeminiUsage(auth.token, timeoutMs, fetchFn, auth.provider);
           case "openai-codex":
             return await fetchCodexUsage(auth.token, auth.accountId, timeoutMs, fetchFn);
           case "minimax":
             return await fetchMinimaxUsage(auth.token, timeoutMs, fetchFn);
+          case "moonshot":
+            return await fetchMoonshotUsage(auth.token, timeoutMs, fetchFn);
           case "xiaomi":
             return {
               provider: "xiaomi",

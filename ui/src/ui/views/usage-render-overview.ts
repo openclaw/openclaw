@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { formatDurationCompact } from "../../../../src/infra/format-time/format-duration.ts";
+import type { ProviderUsageSummary } from "../usage-types.ts";
 import {
   formatCost,
   formatDayLabel,
@@ -14,7 +15,6 @@ import {
   UsageTotals,
   CostDailyEntry,
 } from "./usageTypes.ts";
-import type { ProviderUsageSummary } from "../usage-types.ts";
 
 function pct(part: number, total: number): number {
   if (total === 0) {
@@ -407,7 +407,10 @@ function renderUsageOverviewQuotaPanel(providerUsage: ProviderUsageSummary | nul
       };
     }
     if (low.includes("429") || low.includes("rate limit")) {
-      return { message: "Rate limited", hint: "Too many requests. The quota panel will retry shortly." };
+      return {
+        message: "Rate limited",
+        hint: "Too many requests. The quota panel will retry shortly.",
+      };
     }
     // Generic fallback — still surface the raw message but in a muted sub-line.
     return { message: "Unavailable", hint: error };
@@ -454,7 +457,7 @@ function renderUsageOverviewQuotaPanel(providerUsage: ProviderUsageSummary | nul
     }
 
     // Sort windows by usedPercent descending so highest-pressure window is shown first.
-    const sortedWindows = [...windows].sort((a, b) => b.usedPercent - a.usedPercent);
+    const sortedWindows = windows.toSorted((a, b) => b.usedPercent - a.usedPercent);
 
     return html`
       <div class="quota-provider-row">
