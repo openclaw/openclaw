@@ -63,8 +63,10 @@ export class BudgetTracker {
       return "normal";
     }
 
-    const costRatio = this.getTodayCost() / this.config.daily_budget_usd;
-    const tokenRatio = this.getTodayTokens() / this.config.daily_token_limit;
+    const costRatio =
+      this.config.daily_budget_usd > 0 ? this.getTodayCost() / this.config.daily_budget_usd : 0;
+    const tokenRatio =
+      this.config.daily_token_limit > 0 ? this.getTodayTokens() / this.config.daily_token_limit : 0;
     const ratio = Math.max(costRatio, tokenRatio);
 
     if (ratio >= 1.0) {
@@ -100,8 +102,10 @@ export class BudgetTracker {
 
   /** Budget usage as a percentage (0–100+) */
   getUsagePercent(): number {
-    const costRatio = this.getTodayCost() / this.config.daily_budget_usd;
-    const tokenRatio = this.getTodayTokens() / this.config.daily_token_limit;
+    const costRatio =
+      this.config.daily_budget_usd > 0 ? this.getTodayCost() / this.config.daily_budget_usd : 0;
+    const tokenRatio =
+      this.config.daily_token_limit > 0 ? this.getTodayTokens() / this.config.daily_token_limit : 0;
     return Math.round(Math.max(costRatio, tokenRatio) * 100);
   }
 
@@ -131,6 +135,6 @@ export class BudgetTracker {
 
   private getTodayStartMs(): number {
     const now = new Date();
-    return new Date(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()).getTime();
+    return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
   }
 }

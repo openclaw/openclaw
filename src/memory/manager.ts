@@ -6,6 +6,7 @@ import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope
 import type { ResolvedMemorySearchConfig } from "../agents/memory-search.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { getRoutingInstance } from "../gateway/routing/routing-instance.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   createEmbeddingProvider,
@@ -133,6 +134,17 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       purpose: params.purpose,
     });
     INDEX_CACHE.set(key, manager);
+
+    // Wire up the embedding provider to the semantic router (L1.5).
+    const routingConfig = cfg.routing;
+    if (routingConfig && providerResult.provider) {
+      const routingInstance = getRoutingInstance(routingConfig);
+      routingInstance.setEmbeddingProvider(
+        providerResult.provider,
+        routingConfig.semantic_router?.threshold,
+      );
+    }
+
     return manager;
   }
 

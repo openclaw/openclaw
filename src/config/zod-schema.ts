@@ -679,7 +679,7 @@ export const OpenClawSchema = z
         antiflap_enabled: z.boolean(),
         triggers: z.record(z.string(), z.string()),
         deny_list: z.array(z.string()),
-        ha_matrix: z.record(z.string(), z.record(z.string(), z.string()).optional()),
+        ha_matrix: z.record(z.string(), z.record(z.string(), z.string()).optional()).optional(),
         health: z
           .object({
             enabled: z.boolean(),
@@ -709,6 +709,14 @@ export const OpenClawSchema = z
             warning_threshold: z.number(),
             critical_action: z.union([z.literal("degrade"), z.literal("block")]),
             fallback_model: z.string().optional(),
+          })
+          .strict()
+          .optional(),
+        semantic_router: z
+          .object({
+            enabled: z.boolean(),
+            threshold: z.number().optional(),
+            min_gap: z.number().optional(),
           })
           .strict()
           .optional(),

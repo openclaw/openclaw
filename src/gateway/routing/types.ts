@@ -57,14 +57,22 @@ export type BudgetConfig = {
   fallback_model?: string; // model to degrade to when critical
 };
 
+export type SemanticRouterConfig = {
+  enabled: boolean;
+  threshold: number; // default 0.68
+  min_gap?: number; // top-1 与 top-2（不同 TaskType）最小分差，低于此值 fallback；default 0.05
+};
+
 export type RoutingConfig = {
   default_task_type: TaskType;
   cooldown_seconds: number;
   antiflap_enabled: boolean;
   triggers: Record<string, TaskType>;
   deny_list: string[];
-  ha_matrix: Partial<Record<TaskType, Partial<Record<ModelTier, string>>>>;
+  /** @deprecated Prefer agent task declarations in agents.list. Kept for backward compatibility. */
+  ha_matrix?: Partial<Record<TaskType, Partial<Record<ModelTier, string>>>>;
   health?: HealthConfig;
   review_gate?: ReviewGateConfig;
   budget?: BudgetConfig;
+  semantic_router?: SemanticRouterConfig;
 };

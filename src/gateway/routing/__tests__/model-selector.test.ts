@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { BudgetTracker } from "../budget-tracker.js";
 import { HealthTracker } from "../health-tracker.js";
-import { ModelSelector } from "../model-selector.js";
+import { type AgentListEntry, ModelSelector } from "../model-selector.js";
 import { ModelTier, TaskType, type BudgetConfig, type RoutingConfig } from "../types.js";
 
 function makeConfig(
@@ -437,5 +437,291 @@ describe("ModelSelector — budget-aware routing", () => {
     expect(models).not.toContain("model-a"); // skipped by budget
     expect(models).not.toContain("model-b"); // skipped by health
     expect(models).toContain("model-c");
+  });
+});
+
+// ── Agent-list-based routing tests ───────────────────────────────────────────
+
+/** Minimal config without ha_matrix (new architecture). */
+function makeConfigNoMatrix(overrides: Partial<RoutingConfig> = {}): RoutingConfig {
+  return {
+    default_task_type: TaskType.FALLBACK,
+    cooldown_seconds: 30,
+    antiflap_enabled: false,
+    triggers: {},
+    deny_list: [],
+    // ha_matrix intentionally omitted
+    ...overrides,
+  };
+}
+
+describe("ModelSelector — agent-list-based routing", () => {
+  const baseAgentList: AgentListEntry[] = [
+    {
+      id: "coder",
+      model: "anthropic/claude-sonnet-4-6",
+      tasks: ["code_edit", "code_debug", "code_refactor", "test_write", "git_ops"],
+      priority: 1,
+    },
+    {
+      id: "writer",
+      model: "minimax/MiniMax-M2.5",
+      tasks: ["doc_write", "translation", "memory_update"],
+      priority: 1,
+    },
+    {
+      id: "thinker",
+      model: "anthropic/claude-opus-4-6",
+      tasks: ["planning", "reasoning", "fallback"],
+      priority: 1,
+    },
+  ];
+
+  it("A1. resolves code_edit to coder model", () => {
+    const selector = new ModelSelector();
+    const config = makeConfigNoMatrix();
+    const models = selector.resolveModels(TaskType.CODE_EDIT, config, baseAgentList);
+    expect(models).toEqual(["anthropic/claude-sonnet-4-6"]);
+  });
+
+  it("A2. resolves doc_write to writer model", () => {
+    const selector = new ModelSelector();
+    const config = makeConfigNoMatrix();
+    const models = selector.resolveModels(TaskType.DOC_WRITE, config, baseAgentList);
+    expect(models).toEqual(["minimax/MiniMax-M2.5"]);
+  });
+
+  it("A3. resolves planning to thinker model", () => {
+    const selector = new ModelSelector();
+    const config = makeConfigNoMatrix();
+    const models = selector.resolveModels(TaskType.PLANNING, config, baseAgentList);
+    expect(models).toEqual(["anthropic/claude-opus-4-6"]);
+  });
+
+  it("A4. resolves fallback to thinker model", () => {
+    const selector = new ModelSelector();
+    const config = makeConfigNoMatrix();
+    const models = selector.resolveModels(TaskType.FALLBACK, config, baseAgentList);
+    expect(models).toEqual(["anthropic/claude-opus-4-6"]);
+  });
+
+  it("A5. multiple agents for same task — sorted by priority (lower first)", () => {
+    const agentList: AgentListEntry[] = [
+      { id: "agent-slow", model: "model-slow", tasks: ["code_edit"], priority: 5 },
+      { id: "agent-fast", model: "model-fast", tasks: ["code_edit"], priority: 2 },
+      { id: "agent-mid", model: "model-mid", tasks: ["code_edit"], priority: 3 },
+    ];
+    const selector = new ModelSelector();
+    const config = makeConfigNoMatrix();
+    const models = selector.resolveModels(TaskType.CODE_EDIT, config, agentList);
+    expect(models).toEqual(["model-fast", "model-mid", "model-slow"]);
+  });
+
+  it("A6. same priority — preserves original list order", () => {
+    const agentList: AgentListEntry[] = [
+      { id: "agent-a", model: "model-a", tasks: ["code_edit"], priority: 1 },
+      { id: "agent-b", model: "model-b", tasks: ["code_edit"], priority: 1 },
+      { id: "agent-c", model: "model-c", tasks: ["code_edit"], priority: 1 },
+    ];
+    const selector = new ModelSelector();
+    const config = makeConfigNoMatrix();
+    const models = selector.resolveModels(TaskType.CODE_EDIT, config, agentList);
+    expect(models).toEqual(["model-a", "model-b", "model-c"]);
+  });
+
+  it("A7. default priority (10) when unset — lower explicit priority wins", () => {
+    const agentList: AgentListEntry[] = [
+      { id: "agent-default", model: "model-default", tasks: ["code_edit"] }, // priority=10
+      { id: "agent-explicit", model: "model-explicit", tasks: ["code_edit"], priority: 2 },
+    ];
+    const selector = new ModelSelector();
+    const config = makeConfigNoMatrix();
+    const models = selector.resolveModels(TaskType.CODE_EDIT, config, agentList);
+    expect(models[0]).toBe("model-explicit");
+    expect(models[1]).toBe("model-default");
+  });
+
+  it("A8. no agents declare taskType — falls back to ha_matrix", () => {
+    const agentList: AgentListEntry[] = [
+      { id: "writer", model: "minimax/MiniMax-M2.5", tasks: ["doc_write"], priority: 1 },
+    ];
+    // config has ha_matrix for code_edit
+    const config: RoutingConfig = {
+      default_task_type: TaskType.FALLBACK,
+      cooldown_seconds: 30,
+      antiflap_enabled: false,
+      triggers: {},
+      deny_list: [],
+      ha_matrix: {
+        [TaskType.CODE_EDIT]: {
+          [ModelTier.TIER1]: "ha-model-tier1",
+          [ModelTier.TIER2]: "ha-model-tier2",
+        },
+      },
+    };
+    const selector = new ModelSelector();
+    const models = selector.resolveModels(TaskType.CODE_EDIT, config, agentList);
+    expect(models).toEqual(["ha-model-tier1", "ha-model-tier2"]);
+  });
+
+  it("A9. empty agentList — falls back to ha_matrix", () => {
+    const config: RoutingConfig = {
+      default_task_type: TaskType.FALLBACK,
+      cooldown_seconds: 30,
+      antiflap_enabled: false,
+      triggers: {},
+      deny_list: [],
+      ha_matrix: {
+        [TaskType.FALLBACK]: { [ModelTier.TIER1]: "fallback-model" },
+      },
+    };
+    const selector = new ModelSelector();
+    const models = selector.resolveModels(TaskType.FALLBACK, config, []);
+    expect(models).toEqual(["fallback-model"]);
+  });
+
+  it("A10. no agentList arg — falls back to ha_matrix", () => {
+    const config = makeConfig(); // has ha_matrix
+    const selector = new ModelSelector();
+    const models = selector.resolveModels(TaskType.CODE_EDIT, config);
+    expect(models).toEqual(["model-a", "model-b", "model-c"]);
+  });
+
+  it("A11. agent with object model shape — primary + fallbacks both returned", () => {
+    const agentList: AgentListEntry[] = [
+      {
+        id: "coder",
+        model: { primary: "openai/gpt-5", fallbacks: ["openai/gpt-4o"] },
+        tasks: ["code_edit"],
+        priority: 1,
+      },
+    ];
+    const selector = new ModelSelector();
+    const config = makeConfigNoMatrix();
+    const models = selector.resolveModels(TaskType.CODE_EDIT, config, agentList);
+    expect(models).toEqual(["openai/gpt-5", "openai/gpt-4o"]);
+  });
+
+  it("A16. multiple agents each with fallbacks — full chain expanded in priority order", () => {
+    const agentList: AgentListEntry[] = [
+      {
+        id: "primary-coder",
+        model: { primary: "claude-sonnet", fallbacks: ["claude-haiku"] },
+        tasks: ["code_edit"],
+        priority: 1,
+      },
+      {
+        id: "backup-coder",
+        model: { primary: "gpt-4o", fallbacks: ["gpt-4o-mini"] },
+        tasks: ["code_edit"],
+        priority: 2,
+      },
+    ];
+    const selector = new ModelSelector();
+    const config = makeConfigNoMatrix();
+    const models = selector.resolveModels(TaskType.CODE_EDIT, config, agentList);
+    // agent1.primary → agent1.fallbacks → agent2.primary → agent2.fallbacks
+    expect(models).toEqual(["claude-sonnet", "claude-haiku", "gpt-4o", "gpt-4o-mini"]);
+  });
+
+  it("A17. agent with empty fallbacks — only primary returned", () => {
+    const agentList: AgentListEntry[] = [
+      {
+        id: "coder",
+        model: { primary: "openai/gpt-5", fallbacks: [] },
+        tasks: ["code_edit"],
+        priority: 1,
+      },
+    ];
+    const selector = new ModelSelector();
+    const config = makeConfigNoMatrix();
+    const models = selector.resolveModels(TaskType.CODE_EDIT, config, agentList);
+    expect(models).toEqual(["openai/gpt-5"]);
+  });
+
+  it("A12. agent with no model field — skipped gracefully", () => {
+    const agentList: AgentListEntry[] = [
+      { id: "ghost", tasks: ["code_edit"], priority: 1 }, // no model
+      { id: "coder", model: "actual-model", tasks: ["code_edit"], priority: 2 },
+    ];
+    const selector = new ModelSelector();
+    const config = makeConfigNoMatrix();
+    const models = selector.resolveModels(TaskType.CODE_EDIT, config, agentList);
+    expect(models).toEqual(["actual-model"]);
+  });
+
+  it("A13. budget block → returns [] even with agent list", () => {
+    const budgetCfg = makeBudgetConfig({ critical_action: "block" });
+    const budgetTracker = new BudgetTracker(budgetCfg);
+    budgetTracker.recordUsage({
+      model: "x",
+      prompt_tokens: 0,
+      completion_tokens: 0,
+      cost_usd: 11.0,
+      timestamp: Date.now(),
+    });
+    const selector = new ModelSelector(undefined, budgetTracker);
+    const config = makeConfigNoMatrix({ budget: budgetCfg });
+    const models = selector.resolveModels(TaskType.CODE_EDIT, config, baseAgentList);
+    expect(models).toEqual([]);
+  });
+
+  it("A14. health filter skips unhealthy agent model", () => {
+    const healthTracker = new HealthTracker(10);
+    // make coder model unhealthy
+    for (let i = 0; i < 7; i++) {
+      healthTracker.recordResult("anthropic/claude-sonnet-4-6", {
+        timestamp: Date.now(),
+        success: false,
+        latencyMs: 100,
+        error: "error",
+      });
+    }
+    const agentList: AgentListEntry[] = [
+      {
+        id: "coder",
+        model: "anthropic/claude-sonnet-4-6",
+        tasks: ["code_edit"],
+        priority: 1,
+      },
+      {
+        id: "backup",
+        model: "backup-model",
+        tasks: ["code_edit"],
+        priority: 2,
+      },
+    ];
+    const selector = new ModelSelector(healthTracker);
+    const config = makeConfigNoMatrix({
+      health: { enabled: true, window_size: 10, threshold: 0.8, cooldown_ms: 60_000 },
+    });
+    const models = selector.resolveModels(TaskType.CODE_EDIT, config, agentList);
+    expect(models).not.toContain("anthropic/claude-sonnet-4-6");
+    expect(models).toContain("backup-model");
+  });
+
+  it("A15. all agent models unhealthy — safety net returns original list", () => {
+    const healthTracker = new HealthTracker(10);
+    for (const model of ["model-a", "model-b"]) {
+      for (let i = 0; i < 7; i++) {
+        healthTracker.recordResult(model, {
+          timestamp: Date.now(),
+          success: false,
+          latencyMs: 100,
+          error: "error",
+        });
+      }
+    }
+    const agentList: AgentListEntry[] = [
+      { id: "a1", model: "model-a", tasks: ["code_edit"], priority: 1 },
+      { id: "a2", model: "model-b", tasks: ["code_edit"], priority: 2 },
+    ];
+    const selector = new ModelSelector(healthTracker);
+    const config = makeConfigNoMatrix({
+      health: { enabled: true, window_size: 10, threshold: 0.8, cooldown_ms: 60_000 },
+    });
+    const models = selector.resolveModels(TaskType.CODE_EDIT, config, agentList);
+    // Safety net: should return original unfiltered list
+    expect(models).toEqual(["model-a", "model-b"]);
   });
 });
