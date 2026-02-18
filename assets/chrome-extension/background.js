@@ -653,15 +653,18 @@ async function onDebuggerDetach(source, reason) {
   if (!tabId) return
   if (!tabs.has(tabId)) return
 
+  // User explicitly cancelled or DevTools replaced the connection — respect their intent
   if (reason === 'canceled_by_user' || reason === 'replaced_with_devtools') {
     void detachTab(tabId, reason)
     return
   }
 
+  // Check if tab still exists — distinguishes navigation from tab close
   let tabInfo
   try {
     tabInfo = await chrome.tabs.get(tabId)
   } catch {
+    // Tab is gone (closed) — normal cleanup
     void detachTab(tabId, reason)
     return
   }
