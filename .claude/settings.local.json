@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git clone:*)",
+      "Bash(git init:*)",
+      "Bash(git remote add:*)",
+      "Bash(git fetch:*)",
+      "Bash(git checkout:*)",
+      "Bash(gh issue view:*)",
+      "Bash(where:*)",
+      "Bash(npx vitest run:*)",
+      "Bash(./node_modules/.bin/vitest run:*)",
+      "Bash(ls:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npx pnpm check:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
+    ]
+  }
+}
