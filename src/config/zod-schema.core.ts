@@ -248,6 +248,16 @@ export const HumanDelaySchema = z
   })
   .strict();
 
+const CliBackendWatchdogModeSchema = z
+  .object({
+    noOutputTimeoutMs: z.number().int().min(1000).optional(),
+    noOutputTimeoutRatio: z.number().min(0.05).max(0.95).optional(),
+    minMs: z.number().int().min(1000).optional(),
+    maxMs: z.number().int().min(1000).optional(),
+  })
+  .strict()
+  .optional();
+
 export const CliBackendSchema = z
   .object({
     command: z.string(),
@@ -279,24 +289,8 @@ export const CliBackendSchema = z
       .object({
         watchdog: z
           .object({
-            fresh: z
-              .object({
-                noOutputTimeoutMs: z.number().int().min(1000).optional(),
-                noOutputTimeoutRatio: z.number().min(0.05).max(0.95).optional(),
-                minMs: z.number().int().min(1000).optional(),
-                maxMs: z.number().int().min(1000).optional(),
-              })
-              .strict()
-              .optional(),
-            resume: z
-              .object({
-                noOutputTimeoutMs: z.number().int().min(1000).optional(),
-                noOutputTimeoutRatio: z.number().min(0.05).max(0.95).optional(),
-                minMs: z.number().int().min(1000).optional(),
-                maxMs: z.number().int().min(1000).optional(),
-              })
-              .strict()
-              .optional(),
+            fresh: CliBackendWatchdogModeSchema,
+            resume: CliBackendWatchdogModeSchema,
           })
           .strict()
           .optional(),
