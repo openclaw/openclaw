@@ -53,11 +53,11 @@ export async function monitorWebInbox(options: {
     inboundConsoleLog.info("WhatsApp connected with syncFullHistory=true - history sync in progress");
     // Give Baileys a moment to start syncing, then log store state
     setTimeout(() => {
-      const store = getMessageStore();
-      const totalMessages = store.getAllMessages().length;
-      const chatCount = store.getAllChats().length;
+      const store = getMessageStore(options.accountId);
+      const stats = store.getStats();
+      const storedChats = store.getStoredChats();
       inboundConsoleLog.info(
-        `Message store after sync: ${totalMessages} messages across ${chatCount} chats`,
+        `Message store after sync: ${stats.totalMessages} messages across ${stats.chatCount} chats (${storedChats.length} chat JIDs stored)`,
       );
     }, 5000);
   } else {
@@ -173,10 +173,29 @@ export async function monitorWebInbox(options: {
   };
 
   const handleMessagesUpsert = async (upsert: { type?: string; messages?: Array<WAMessage> }) => {
+    const messageCount = upsert.messages?.length ?? 0;
+    
+    if (shouldLogVerbose()) {
+      logVerbose(`[messages.upsert] Received event: type=${upsert.type}, messageCount=${messageCount}`);
+      if (messageCount > 0) {
+        const sample = upsert.messages![0];
+        logVerbose(`[messages.upsert] Sample message: id=${sample.key?.id}, remoteJid=${sample.key?.remoteJid}, fromMe=${sample.key?.fromMe}, hasMessage=${Boolean(sample.message)}`);
+      }
+    }
+    
     if (upsert.type !== "notify" && upsert.type !== "append") {
+      if (shouldLogVerbose()) {
+        logVerbose(`[messages.upsert] FILTERED OUT: type=${upsert.type} (only 'notify' and 'append' are processed)`);
+      }
       return;
     }
+    
+    inboundConsoleLog.info(`Processing ${messageCount} messages from upsert type=${upsert.type}`);
+    
     const messageStore = getMessageStore(options.accountId);
+    let storedCount = 0;
+    let skippedCount = 0;
+    let filteredReasons: Record<string, number> = {};
     
     for (const msg of upsert.messages ?? []) {
       recordChannelActivity({
@@ -187,17 +206,32 @@ export async function monitorWebInbox(options: {
       const id = msg.key?.id ?? undefined;
       const remoteJid = msg.key?.remoteJid;
       if (!remoteJid) {
+        skippedCount++;
+        filteredReasons["no-remoteJid"] = (filteredReasons["no-remoteJid"] || 0) + 1;
+        if (shouldLogVerbose()) {
+          logVerbose(`[messages.upsert] SKIPPED: no remoteJid`);
+        }
         continue;
       }
       if (remoteJid.endsWith("@status") || remoteJid.endsWith("@broadcast")) {
+        skippedCount++;
+        filteredReasons["status-or-broadcast"] = (filteredReasons["status-or-broadcast"] || 0) + 1;
+        if (shouldLogVerbose()) {
+          logVerbose(`[messages.upsert] SKIPPED: status/broadcast message from ${remoteJid}`);
+        }
         continue;
       }
 
       // Store the message for later retrieval
       if (id) {
         messageStore.store(remoteJid, id, msg as proto.IWebMessageInfo);
+        storedCount++;
         if (shouldLogVerbose()) {
-          logVerbose(`Stored message ${id} from ${remoteJid} in message store`);
+          logVerbose(`[messages.upsert] STORED: id=${id} from ${remoteJid} (total stored: ${storedCount})`);
+        }
+      } else {
+        if (shouldLogVerbose()) {
+          logVerbose(`[messages.upsert] NOT STORED: no message id for ${remoteJid}`);
         }
       }
 
@@ -373,6 +407,17 @@ export async function monitorWebInbox(options: {
         inboundConsoleLog.error(`Failed handling inbound web message: ${String(err)}`);
       }
     }
+    
+    // Log summary of what was processed
+    if (messageCount > 0) {
+      const stats = messageStore.getStats();
+      inboundConsoleLog.info(
+        `Upsert complete: type=${upsert.type}, received=${messageCount}, stored=${storedCount}, skipped=${skippedCount}, total_in_store=${stats.totalMessages}`,
+      );
+      if (Object.keys(filteredReasons).length > 0) {
+        inboundConsoleLog.info(`Filter reasons: ${JSON.stringify(filteredReasons)}`);
+      }
+    }
   };
   sock.ev.on("messages.upsert", handleMessagesUpsert);
 
@@ -436,10 +481,6 @@ export async function monitorWebInbox(options: {
     },
     downloadMedia: async (chatJid: string, messageId: string) => {
       return await downloadMediaById(chatJid, messageId, options.accountId, sock);
-    },
-    fetchHistory: async (chatJid: string, limit?: number) => {
-      const { fetchAndStoreHistory } = await import("../fetch-history.js");
-      return await fetchAndStoreHistory(chatJid, options.accountId, sock, { limit });
     },
     // IPC surface (sendMessage/sendPoll/sendReaction/sendComposingTo)
     ...sendApi,

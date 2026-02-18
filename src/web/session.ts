@@ -109,6 +109,7 @@ export async function createWaSocket(
   const syncFullHistory = opts.syncFullHistory ?? false;
   if (syncFullHistory) {
     sessionLogger.info("WhatsApp syncFullHistory enabled - will sync full message history on connection");
+    sessionLogger.info("Note: History messages will arrive via messages.upsert events with type='append'");
   }
   
   const sock = makeWASocket({
@@ -123,6 +124,10 @@ export async function createWaSocket(
     syncFullHistory,
     markOnlineOnConnect: false,
   });
+  
+  if (syncFullHistory) {
+    sessionLogger.info("Baileys socket created with syncFullHistory=true");
+  }
 
   sock.ev.on("creds.update", () => enqueueSaveCreds(authDir, saveCreds, sessionLogger));
   sock.ev.on(
