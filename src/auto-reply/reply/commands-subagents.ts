@@ -105,6 +105,20 @@ function resolveDisplayStatus(entry: SubagentRunRecord) {
   return status === "error" ? "failed" : status;
 }
 
+function formatSubagentListLine(params: {
+  entry: SubagentRunRecord;
+  index: number;
+  runtimeMs: number;
+  sessionEntry?: SessionEntry;
+}) {
+  const usageText = formatTokenUsageDisplay(params.sessionEntry);
+  const label = truncateLine(formatRunLabel(params.entry, { maxLength: 48 }), 48);
+  const task = formatTaskPreview(params.entry.task);
+  const runtime = formatDurationCompact(params.runtimeMs);
+  const status = resolveDisplayStatus(params.entry);
+  return `${params.index}. ${label} (${resolveModelDisplay(params.sessionEntry, params.entry.model)}, ${runtime}${usageText ? `, ${usageText}` : ""}) ${status}${task.toLowerCase() !== label.toLowerCase() ? ` - ${task}` : ""}`;
+}
+
 function formatTimestamp(valueMs?: number) {
   if (!valueMs || !Number.isFinite(valueMs) || valueMs <= 0) {
     return "n/a";
@@ -277,42 +291,37 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
     const recentCutoff = now - RECENT_WINDOW_MINUTES * 60_000;
     const storeCache: SessionStoreCache = new Map();
     let index = 1;
-    const activeLines = sorted
-      .filter((entry) => !entry.endedAt)
-      .map((entry) => {
+    const mapRuns = (
+      entries: SubagentRunRecord[],
+      runtimeMs: (entry: SubagentRunRecord) => number,
+    ) =>
+      entries.map((entry) => {
         const { entry: sessionEntry } = loadSubagentSessionEntry(
           params,
           entry.childSessionKey,
           storeCache,
         );
-        const usageText = formatTokenUsageDisplay(sessionEntry);
-        const label = truncateLine(formatRunLabel(entry, { maxLength: 48 }), 48);
-        const task = formatTaskPreview(entry.task);
-        const runtime = formatDurationCompact(now - (entry.startedAt ?? entry.createdAt));
-        const status = resolveDisplayStatus(entry);
-        const line = `${index}. ${label} (${resolveModelDisplay(sessionEntry, entry.model)}, ${runtime}${usageText ? `, ${usageText}` : ""}) ${status}${task.toLowerCase() !== label.toLowerCase() ? ` - ${task}` : ""}`;
+        const line = formatSubagentListLine({
+          entry,
+          index,
+          runtimeMs: runtimeMs(entry),
+          sessionEntry,
+        });
         index += 1;
         return line;
       });
-    const recentLines = sorted
-      .filter((entry) => !!entry.endedAt && (entry.endedAt ?? 0) >= recentCutoff)
-      .map((entry) => {
-        const { entry: sessionEntry } = loadSubagentSessionEntry(
-          params,
-          entry.childSessionKey,
-          storeCache,
-        );
-        const usageText = formatTokenUsageDisplay(sessionEntry);
-        const label = truncateLine(formatRunLabel(entry, { maxLength: 48 }), 48);
-        const task = formatTaskPreview(entry.task);
-        const runtime = formatDurationCompact(
-          (entry.endedAt ?? now) - (entry.startedAt ?? entry.createdAt),
-        );
-        const status = resolveDisplayStatus(entry);
-        const line = `${index}. ${label} (${resolveModelDisplay(sessionEntry, entry.model)}, ${runtime}${usageText ? `, ${usageText}` : ""}) ${status}${task.toLowerCase() !== label.toLowerCase() ? ` - ${task}` : ""}`;
-        index += 1;
-        return line;
-      });
+    const activeEntries = sorted.filter((entry) => !entry.endedAt);
+    const activeLines = mapRuns(
+      activeEntries,
+      (entry) => now - (entry.startedAt ?? entry.createdAt),
+    );
+    const recentEntries = sorted.filter(
+      (entry) => !!entry.endedAt && (entry.endedAt ?? 0) >= recentCutoff,
+    );
+    const recentLines = mapRuns(
+      recentEntries,
+      (entry) => (entry.endedAt ?? now) - (entry.startedAt ?? entry.createdAt),
+    );
 
     const lines = ["active subagents:", "-----"];
     if (activeLines.length === 0) {
