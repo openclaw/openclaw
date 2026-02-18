@@ -75,40 +75,52 @@ describe("shell env fallback", () => {
   });
 
   it("resolves PATH via login shell and caches it", () => {
-    resetShellPathCacheForTests();
-    const exec = vi.fn(() => Buffer.from("PATH=/usr/local/bin:/usr/bin\0HOME=/tmp\0"));
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    try {
+      resetShellPathCacheForTests();
+      const exec = vi.fn(() => Buffer.from("PATH=/usr/local/bin:/usr/bin\0HOME=/tmp\0"));
 
-    const first = getShellPathFromLoginShell({
-      env: {} as NodeJS.ProcessEnv,
-      exec: exec as unknown as Parameters<typeof getShellPathFromLoginShell>[0]["exec"],
-    });
-    const second = getShellPathFromLoginShell({
-      env: {} as NodeJS.ProcessEnv,
-      exec: exec as unknown as Parameters<typeof getShellPathFromLoginShell>[0]["exec"],
-    });
+      const first = getShellPathFromLoginShell({
+        env: {} as NodeJS.ProcessEnv,
+        exec: exec as unknown as Parameters<typeof getShellPathFromLoginShell>[0]["exec"],
+      });
+      const second = getShellPathFromLoginShell({
+        env: {} as NodeJS.ProcessEnv,
+        exec: exec as unknown as Parameters<typeof getShellPathFromLoginShell>[0]["exec"],
+      });
 
-    expect(first).toBe("/usr/local/bin:/usr/bin");
-    expect(second).toBe("/usr/local/bin:/usr/bin");
-    expect(exec).toHaveBeenCalledOnce();
+      expect(first).toBe("/usr/local/bin:/usr/bin");
+      expect(second).toBe("/usr/local/bin:/usr/bin");
+      expect(exec).toHaveBeenCalledOnce();
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+    }
   });
 
   it("returns null on shell env read failure and caches null", () => {
-    resetShellPathCacheForTests();
-    const exec = vi.fn(() => {
-      throw new Error("exec failed");
-    });
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    try {
+      resetShellPathCacheForTests();
+      const exec = vi.fn(() => {
+        throw new Error("exec failed");
+      });
 
-    const first = getShellPathFromLoginShell({
-      env: {} as NodeJS.ProcessEnv,
-      exec: exec as unknown as Parameters<typeof getShellPathFromLoginShell>[0]["exec"],
-    });
-    const second = getShellPathFromLoginShell({
-      env: {} as NodeJS.ProcessEnv,
-      exec: exec as unknown as Parameters<typeof getShellPathFromLoginShell>[0]["exec"],
-    });
+      const first = getShellPathFromLoginShell({
+        env: {} as NodeJS.ProcessEnv,
+        exec: exec as unknown as Parameters<typeof getShellPathFromLoginShell>[0]["exec"],
+      });
+      const second = getShellPathFromLoginShell({
+        env: {} as NodeJS.ProcessEnv,
+        exec: exec as unknown as Parameters<typeof getShellPathFromLoginShell>[0]["exec"],
+      });
 
-    expect(first).toBeNull();
-    expect(second).toBeNull();
-    expect(exec).toHaveBeenCalledOnce();
+      expect(first).toBeNull();
+      expect(second).toBeNull();
+      expect(exec).toHaveBeenCalledOnce();
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+    }
   });
 });
