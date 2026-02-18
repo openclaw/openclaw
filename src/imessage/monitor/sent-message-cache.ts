@@ -1,15 +1,20 @@
+import { createHash } from "node:crypto";
+
+function hashKey(scope: string, text: string): string {
+  return createHash("sha256").update(`${scope}:${text.trim()}`).digest("base64url");
+}
+
 /**
- * Bounded set of recently sent messages used for echo detection.
+ * Bounded set of recently sent message hashes used for echo detection.
  *
- * Instead of relying on a short TTL (which breaks when LLM inference exceeds the window),
- * this tracks sent text in a FIFO-bounded set with no time dependency.
+ * Bot-generated text is hashed on send; inbound text is hashed on arrival and
+ * compared — if the hash exists the message is a bot echo.  No dependency on
+ * `is_from_me`; pure content matching via SHA-256.
  *
- * - `remember()` stores the scoped text; oldest entries are evicted when the set is full.
- * - `has()` checks for a match and removes it on hit (one-shot) so the same user text
- *   sent later is not falsely detected as an echo.
+ * One-shot removal on match so the same user text sent later is not falsely blocked.
  */
 export class SentMessageCache {
-  private entries: Array<{ key: string }> = [];
+  private entries: string[] = [];
   private index = new Set<string>();
   private readonly maxEntries: number;
 
@@ -21,16 +26,16 @@ export class SentMessageCache {
     if (!text?.trim()) {
       return;
     }
-    const key = `${scope}:${text.trim()}`;
-    if (this.index.has(key)) {
-      return; // already tracked
+    const h = hashKey(scope, text);
+    if (this.index.has(h)) {
+      return;
     }
-    this.entries.push({ key });
-    this.index.add(key);
+    this.entries.push(h);
+    this.index.add(h);
     while (this.entries.length > this.maxEntries) {
       const evicted = this.entries.shift();
       if (evicted) {
-        this.index.delete(evicted.key);
+        this.index.delete(evicted);
       }
     }
   }
@@ -39,13 +44,12 @@ export class SentMessageCache {
     if (!text?.trim()) {
       return false;
     }
-    const key = `${scope}:${text.trim()}`;
-    if (!this.index.has(key)) {
+    const h = hashKey(scope, text);
+    if (!this.index.has(h)) {
       return false;
     }
-    // One-shot: remove after match so user can later send the same text.
-    this.index.delete(key);
-    const idx = this.entries.findIndex((e) => e.key === key);
+    this.index.delete(h);
+    const idx = this.entries.indexOf(h);
     if (idx >= 0) {
       this.entries.splice(idx, 1);
     }

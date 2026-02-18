@@ -71,4 +71,24 @@ describe("SentMessageCache", () => {
     // No time manipulation needed — the cache has no TTL.
     expect(cache.has("s", "persistent")).toBe(true);
   });
+
+  it("catches bot echo without is_from_me (replaces is_from_me check)", () => {
+    const cache = new SentMessageCache();
+    // Bot sends reply — deliverReplies calls remember().
+    cache.remember("default:chat_id:42", "안녕하세요! 무엇을 도와드릴까요?");
+    // Same text echoes back via bridge (is_from_me may be null).
+    expect(cache.has("default:chat_id:42", "안녕하세요! 무엇을 도와드릴까요?")).toBe(true);
+    // Real user message is not in cache — passes through.
+    expect(cache.has("default:chat_id:42", "오늘 날씨 어때?")).toBe(false);
+  });
+
+  it("stores hashes, not raw text", () => {
+    const cache = new SentMessageCache();
+    cache.remember("s", "secret message");
+    // Internal state should contain a hash, not the original text.
+    // Access private field to verify no raw text is stored.
+    const entries = (cache as unknown as { entries: string[] }).entries;
+    expect(entries.length).toBe(1);
+    expect(entries[0]).not.toContain("secret message");
+  });
 });
