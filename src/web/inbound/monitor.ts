@@ -17,6 +17,7 @@ import {
   extractLocationData,
   extractMediaPlaceholder,
   extractMentionedJids,
+  extractReaction,
   extractText,
 } from "./extract.js";
 import { downloadInboundMedia } from "./media.js";
@@ -237,6 +238,17 @@ export async function monitorWebInbox(options: {
         continue;
       }
 
+      // Handle reaction messages (emoji reactions to existing messages).
+      const reaction = extractReaction(msg.message ?? undefined);
+      if (reaction) {
+        if (reaction.isRemoval) {
+          continue; // Ignore reaction removals.
+        }
+        const senderName = msg.pushName ?? senderE164 ?? "someone";
+        const targetId = reaction.targetMessageId ?? "unknown";
+        logVerbose(`WhatsApp reaction: ${reaction.emoji} by ${senderName} on msg ${targetId}`);
+      }
+
       const location = extractLocationData(msg.message ?? undefined);
       const locationText = location ? formatLocationText(location) : undefined;
       let body = extractText(msg.message ?? undefined);
@@ -244,7 +256,9 @@ export async function monitorWebInbox(options: {
         body = [body, locationText].filter(Boolean).join("\n").trim();
       }
       if (!body) {
-        body = extractMediaPlaceholder(msg.message ?? undefined);
+        body = reaction
+          ? `<reaction:${reaction.emoji}>`
+          : extractMediaPlaceholder(msg.message ?? undefined);
         if (!body) {
           continue;
         }

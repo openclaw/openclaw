@@ -146,6 +146,20 @@ export function extractMediaPlaceholder(
   return undefined;
 }
 
+export function extractReaction(
+  rawMessage: proto.IMessage | undefined,
+): { emoji: string; targetMessageId: string | undefined; isRemoval: boolean } | undefined {
+  const message = unwrapMessage(rawMessage);
+  if (!message?.reactionMessage) {
+    return undefined;
+  }
+  const reaction = message.reactionMessage;
+  const emoji = (reaction.text ?? "").trim();
+  const targetMessageId = reaction.key?.id ?? undefined;
+  // Empty emoji text means the reaction was removed.
+  return { emoji, targetMessageId, isRemoval: !emoji };
+}
+
 function extractContactPlaceholder(rawMessage: proto.IMessage | undefined): string | undefined {
   const message = unwrapMessage(rawMessage);
   if (!message) {

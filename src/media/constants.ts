@@ -2,6 +2,7 @@ export const MAX_IMAGE_BYTES = 6 * 1024 * 1024; // 6MB
 export const MAX_AUDIO_BYTES = 16 * 1024 * 1024; // 16MB
 export const MAX_VIDEO_BYTES = 16 * 1024 * 1024; // 16MB
 export const MAX_DOCUMENT_BYTES = 100 * 1024 * 1024; // 100MB
+export const MAX_STICKER_BYTES = 500 * 1024; // 500KB — WhatsApp sticker limit
 
 export type MediaKind = "image" | "audio" | "video" | "document" | "unknown";
 
