@@ -52,15 +52,27 @@ function makeGroupEvent(opts: GroupEventOpts) {
   });
 }
 
-function createMentionGatedHistoryHandler() {
-  const groupHistories = new Map();
-  const handler = createSignalEventHandler(
+function createMentionHandler(params: {
+  requireMention: boolean;
+  mentionPattern?: string;
+  historyLimit?: number;
+  groupHistories?: Map<unknown, unknown>;
+}) {
+  return createSignalEventHandler(
     createBaseSignalEventHandlerDeps({
-      cfg: createSignalConfig({ requireMention: true }),
-      historyLimit: 5,
-      groupHistories,
+      cfg: createSignalConfig({
+        requireMention: params.requireMention,
+        mentionPattern: params.mentionPattern,
+      }),
+      ...(typeof params.historyLimit === "number" ? { historyLimit: params.historyLimit } : {}),
+      ...(params.groupHistories ? { groupHistories: params.groupHistories } : {}),
     }),
   );
+}
+
+function createMentionGatedHistoryHandler() {
+  const groupHistories = new Map();
+  const handler = createMentionHandler({ requireMention: true, historyLimit: 5, groupHistories });
   return { handler, groupHistories };
 }
 
@@ -92,11 +104,7 @@ async function expectSkippedGroupHistory(opts: GroupEventOpts, expectedBody: str
 describe("signal mention gating", () => {
   it("drops group messages without mention when requireMention is configured", async () => {
     capturedCtx = undefined;
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: createSignalConfig({ requireMention: true }),
-      }),
-    );
+    const handler = createMentionHandler({ requireMention: true });
 
     await handler(makeGroupEvent({ message: "hello everyone" }));
     expect(capturedCtx).toBeUndefined();
@@ -104,11 +112,7 @@ describe("signal mention gating", () => {
 
   it("allows group messages with mention when requireMention is configured", async () => {
     capturedCtx = undefined;
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: createSignalConfig({ requireMention: true }),
-      }),
-    );
+    const handler = createMentionHandler({ requireMention: true });
 
     await handler(makeGroupEvent({ message: "hey @bot what's up" }));
     expect(capturedCtx).toBeTruthy();
@@ -117,11 +121,7 @@ describe("signal mention gating", () => {
 
   it("sets WasMentioned=false for group messages without mention when requireMention is off", async () => {
     capturedCtx = undefined;
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: createSignalConfig({ requireMention: false }),
-      }),
-    );
+    const handler = createMentionHandler({ requireMention: false });
 
     await handler(makeGroupEvent({ message: "hello everyone" }));
     expect(capturedCtx).toBeTruthy();
@@ -152,11 +152,7 @@ describe("signal mention gating", () => {
 
   it("bypasses mention gating for authorized control commands", async () => {
     capturedCtx = undefined;
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: createSignalConfig({ requireMention: true }),
-      }),
-    );
+    const handler = createMentionHandler({ requireMention: true });
 
     await handler(makeGroupEvent({ message: "/help" }));
     expect(capturedCtx).toBeTruthy();
@@ -164,11 +160,7 @@ describe("signal mention gating", () => {
 
   it("hydrates mention placeholders before trimming so offsets stay aligned", async () => {
     capturedCtx = undefined;
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: createSignalConfig({ requireMention: false }),
-      }),
-    );
+    const handler = createMentionHandler({ requireMention: false });
 
     const placeholder = "\uFFFC";
     const message = `\n${placeholder} hi ${placeholder}`;
@@ -193,11 +185,10 @@ describe("signal mention gating", () => {
 
   it("counts mention metadata replacements toward requireMention gating", async () => {
     capturedCtx = undefined;
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: createSignalConfig({ requireMention: true, mentionPattern: "@123e4567" }),
-      }),
-    );
+    const handler = createMentionHandler({
+      requireMention: true,
+      mentionPattern: "@123e4567",
+    });
 
     const placeholder = "\uFFFC";
     const message = ` ${placeholder} ping`;
