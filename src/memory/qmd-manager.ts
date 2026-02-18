@@ -399,7 +399,8 @@ export class QmdMemoryManager implements MemorySearchManager {
       opts?.maxResults ?? this.qmd.limits.maxResults,
     );
     // Fetch more results to allow for client-side re-ranking (weighting)
-    const fetchLimit = this.qmd.weights ? limit * 5 : limit;
+    const hasWeights = this.qmd.weights && Object.keys(this.qmd.weights).length > 0;
+    const fetchLimit = hasWeights ? limit * 5 : limit;
 
     const collectionNames = this.listManagedCollectionNames();
     if (collectionNames.length === 0) {
@@ -446,7 +447,6 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
     const results: MemorySearchResult[] = [];
     const weights = this.qmd.weights || {};
-    const hasWeights = Object.keys(weights).length > 0;
 
     for (const entry of parsed) {
       const doc = await this.resolveDocLocation(entry.docid);
