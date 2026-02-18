@@ -22,7 +22,7 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  # Build amd64 image
+  # Build amd64 image (only pushes to arch-specific tags)
   build-amd64:
     runs-on: ubuntu-latest
     permissions:
@@ -51,12 +51,8 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=ref,event=branch
-            type=semver,pattern={{version}}
             type=semver,pattern={{version}},suffix=-amd64
-            type=semver,pattern={{version}},suffix=-arm64
             type=ref,event=branch,suffix=-amd64
-            type=ref,event=branch,suffix=-arm64
 
       - name: Build and push amd64 image
         id: build
@@ -71,7 +67,7 @@ jobs:
           provenance: false
           push: true
 
-  # Build arm64 image
+  # Build arm64 image (only pushes to arch-specific tags)
   build-arm64:
     runs-on: ubuntu-24.04-arm
     permissions:
@@ -100,11 +96,7 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=ref,event=branch
-            type=semver,pattern={{version}}
-            type=semver,pattern={{version}},suffix=-amd64
             type=semver,pattern={{version}},suffix=-arm64
-            type=ref,event=branch,suffix=-amd64
             type=ref,event=branch,suffix=-arm64
 
       - name: Build and push arm64 image
@@ -146,8 +138,11 @@ jobs:
 
       - name: Create and push manifest
         run: |
+          IMAGE="${REGISTRY}/${IMAGE_NAME}"
           docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
-            ${{ needs.build-amd64.outputs.image-digest }} \
-            ${{ needs.build-arm64.outputs.image-digest }}
+            "${IMAGE}@${{ needs.build-amd64.outputs.image-digest }}" \
+            "${IMAGE}@${{ needs.build-arm64.outputs.image-digest }}"
         env:
           DOCKER_METADATA_OUTPUT_JSON: ${{ steps.meta.outputs.json }}
+          REGISTRY: ${{ env.REGISTRY }}
+          IMAGE_NAME: ${{ env.IMAGE_NAME }}
