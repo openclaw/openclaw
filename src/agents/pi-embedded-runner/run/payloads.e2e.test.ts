@@ -271,17 +271,45 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads[0]?.text).toContain("required");
   });
 
-  it("shows mutating tool errors even when assistant output exists", () => {
+  it("suppresses mutating tool errors when the assistant already composed a reply", () => {
     const payloads = buildPayloads({
       assistantTexts: ["Done."],
       lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
       lastToolError: { toolName: "write", error: "file missing" },
     });
 
-    expect(payloads).toHaveLength(2);
+    // The assistant addressed the situation in its reply — surfacing the
+    // raw tool error separately creates a duplicate chat bubble (#9651).
+    expect(payloads).toHaveLength(1);
     expect(payloads[0]?.text).toBe("Done.");
-    expect(payloads[1]?.isError).toBe(true);
-    expect(payloads[1]?.text).toContain("missing");
+  });
+
+  it("shows mutating tool errors when the assistant has no user-facing reply", () => {
+    const payloads = buildPayloads({
+      lastToolError: { toolName: "write", error: "permission denied" },
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.isError).toBe(true);
+    expect(payloads[0]?.text).toContain("permission denied");
+  });
+
+  it("suppresses exec tool errors when the assistant already replied", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["The file does not contain that pattern."],
+      lastAssistant: { stopReason: "end_turn" } as AssistantMessage,
+      lastToolError: {
+        toolName: "exec",
+        meta: "grep -n '80%' SKILL.md",
+        error: "Command exited with code 1",
+      },
+    });
+
+    // grep returning exit code 1 (no match) is normal — the assistant already
+    // explained the result, so the raw error should not leak to the channel.
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("The file does not contain that pattern.");
+    expect(payloads[0]?.isError).toBeUndefined();
   });
 
   it("does not treat session_status read failures as mutating when explicitly flagged", () => {

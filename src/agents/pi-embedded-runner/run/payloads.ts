@@ -53,6 +53,12 @@ function shouldShowToolErrorWarning(params: {
   if (params.suppressToolErrorWarnings) {
     return false;
   }
+  // When the assistant already composed a user-facing reply it has
+  // acknowledged the tool failure in its response. Surfacing the raw
+  // error separately creates duplicate/noisy messages.
+  if (params.hasUserFacingReply) {
+    return false;
+  }
   const isMutatingToolError =
     params.lastToolError.mutatingAction ?? isLikelyMutatingToolName(params.lastToolError.toolName);
   if (isMutatingToolError) {
@@ -61,7 +67,7 @@ function shouldShowToolErrorWarning(params: {
   if (params.suppressToolErrors) {
     return false;
   }
-  return !params.hasUserFacingReply && !isRecoverableToolError(params.lastToolError.error);
+  return !isRecoverableToolError(params.lastToolError.error);
 }
 
 export function buildEmbeddedRunPayloads(params: {
