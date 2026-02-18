@@ -1,145 +1,144 @@
 ---
-summary: "OAuth in OpenClaw: token exchange, storage, and multi-account patterns"
+summary: "OpenClaw의 OAuth: 토큰 교환, 저장, 다중 계정 패턴"
 read_when:
-  - You want to understand OpenClaw OAuth end-to-end
-  - You hit token invalidation / logout issues
-  - You want setup-token or OAuth auth flows
-  - You want multiple accounts or profile routing
+  - OpenClaw OAuth 전체 흐름을 이해하고 싶을 때
+  - 토큰 무효화 / 로그아웃 문제에 직면했을 때
+  - setup-token 또는 OAuth 인증 흐름을 원할 때
+  - 여러 계정 또는 프로필 라우팅을 원할 때
 title: "OAuth"
 ---
 
 # OAuth
 
-OpenClaw supports “subscription auth” via OAuth for providers that offer it (notably **OpenAI Codex (ChatGPT OAuth)**). For Anthropic subscriptions, use the **setup-token** flow. This page explains:
+OpenClaw는 OAuth를 통한 "구독 인증"을 지원하며, 이를 제공하는 프로바이더 (주로 **OpenAI Codex (ChatGPT OAuth)**)에서 사용할 수 있습니다. Anthropic 구독에는 **setup-token** 흐름을 사용하세요. 이 페이지에서는 다음을 설명합니다:
 
-- how the OAuth **token exchange** works (PKCE)
-- where tokens are **stored** (and why)
-- how to handle **multiple accounts** (profiles + per-session overrides)
+- OAuth **토큰 교환**이 어떻게 작동하는지 (PKCE)
+- 토큰이 **어디에 저장**되는지 (그리고 그 이유)
+- **여러 개의 계정**을 어떻게 처리하는지 (프로필 + 세션별 오버라이드)
 
-OpenClaw also supports **provider plugins** that ship their own OAuth or API‑key
-flows. Run them via:
+OpenClaw는 자체 OAuth 또는 API 키 흐름을 지원하는 **프로바이더 플러그인**도 지원합니다. 다음 명령어로 실행하세요:
 
 ```bash
 openclaw models auth login --provider <id>
 ```
 
-## The token sink (why it exists)
+## 토큰 싱크 (존재 이유)
 
-OAuth providers commonly mint a **new refresh token** during login/refresh flows. Some providers (or OAuth clients) can invalidate older refresh tokens when a new one is issued for the same user/app.
+OAuth 프로바이더는 일반적으로 로그인/리프레시 흐름 중에 **새 리프레시 토큰**을 생성합니다. 일부 프로바이더 (또는 OAuth 클라이언트)는 동일 사용자/앱에 대해 새 토큰이 발급되면 이전의 리프레시 토큰을 무효화할 수 있습니다.
 
-Practical symptom:
+실질적인 증상:
 
-- you log in via OpenClaw _and_ via Claude Code / Codex CLI → one of them randomly gets “logged out” later
+- OpenClaw와 Claude Code / Codex CLI를 통해 로그인하면 → 그 중 하나가 나중에 랜덤하게 "로그아웃"됩니다.
 
-To reduce that, OpenClaw treats `auth-profiles.json` as a **token sink**:
+이를 줄이기 위해, OpenClaw는 `auth-profiles.json`을 **토큰 싱크**로 취급합니다:
 
-- the runtime reads credentials from **one place**
-- we can keep multiple profiles and route them deterministically
+- 런타임은 **한 곳**에서 자격 증명을 읽습니다
+- 우리는 여러 프로필을 유지하고 확정적으로 라우팅할 수 있습니다
 
-## Storage (where tokens live)
+## 저장소 (토큰이 저장되는 위치)
 
-Secrets are stored **per-agent**:
+비밀은 **에이전트 별로** 저장됩니다:
 
-- Auth profiles (OAuth + API keys): `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`
-- Runtime cache (managed automatically; don’t edit): `~/.openclaw/agents/<agentId>/agent/auth.json`
+- 인증 프로필 (OAuth + API 키): `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`
+- 런타임 캐시 (자동 관리; 수정하지 마세요): `~/.openclaw/agents/<agentId>/agent/auth.json`
 
-Legacy import-only file (still supported, but not the main store):
+레거시 가져오기 전용 파일 (여전히 지원되지만 주요 저장소는 아님):
 
-- `~/.openclaw/credentials/oauth.json` (imported into `auth-profiles.json` on first use)
+- `~/.openclaw/credentials/oauth.json` (처음 사용할 때 `auth-profiles.json`에 가져옴)
 
-All of the above also respect `$OPENCLAW_STATE_DIR` (state dir override). Full reference: [/gateway/configuration](/ko-KR/gateway/configuration#auth-storage-oauth--api-keys)
+위의 모든 것은 `$OPENCLAW_STATE_DIR` (상태 디렉토리 오버라이드)을 존중합니다. 전체 참조: [/gateway/configuration](/gateway/configuration#auth-storage-oauth--api-keys)
 
-## Anthropic setup-token (subscription auth)
+## Anthropic setup-token (구독 인증)
 
-Run `claude setup-token` on any machine, then paste it into OpenClaw:
+어느 기기에서든 `claude setup-token` 명령을 실행한 후, OpenClaw에 붙여 넣으세요:
 
 ```bash
 openclaw models auth setup-token --provider anthropic
 ```
 
-If you generated the token elsewhere, paste it manually:
+다른 곳에서 토큰을 생성한 경우, 수동으로 붙여 넣으세요:
 
 ```bash
 openclaw models auth paste-token --provider anthropic
 ```
 
-Verify:
+검증:
 
 ```bash
 openclaw models status
 ```
 
-## OAuth exchange (how login works)
+## OAuth 교환 (로그인 작동 방식)
 
-OpenClaw’s interactive login flows are implemented in `@mariozechner/pi-ai` and wired into the wizards/commands.
+OpenClaw의 대화형 로그인 흐름은 `@mariozechner/pi-ai`에 구현되어 있으며 마법사/명령어에 연결되어 있습니다.
 
 ### Anthropic (Claude Pro/Max) setup-token
 
-Flow shape:
+흐름 모양:
 
-1. run `claude setup-token`
-2. paste the token into OpenClaw
-3. store as a token auth profile (no refresh)
+1. `claude setup-token` 실행
+2. OpenClaw에 토큰 붙여 넣기
+3. 토큰 인증 프로필로 저장 (리프레시 없음)
 
-The wizard path is `openclaw onboard` → auth choice `setup-token` (Anthropic).
+마법사 경로는 `openclaw onboard` → 인증 선택 `setup-token` (Anthropic).
 
 ### OpenAI Codex (ChatGPT OAuth)
 
-Flow shape (PKCE):
+흐름 모양 (PKCE):
 
-1. generate PKCE verifier/challenge + random `state`
-2. open `https://auth.openai.com/oauth/authorize?...`
-3. try to capture callback on `http://127.0.0.1:1455/auth/callback`
-4. if callback can’t bind (or you’re remote/headless), paste the redirect URL/code
-5. exchange at `https://auth.openai.com/oauth/token`
-6. extract `accountId` from the access token and store `{ access, refresh, expires, accountId }`
+1. PKCE 검증자/챌린지 + 무작위 `state` 생성
+2. `https://auth.openai.com/oauth/authorize?...` 열기
+3. `http://127.0.0.1:1455/auth/callback`에서 콜백 잡기 시도
+4. 콜백을 연결할 수 없거나 (원격/헤드리스인 경우), 리디렉션 URL/코드 붙여 넣기
+5. `https://auth.openai.com/oauth/token`에서 교환
+6. 액세스 토큰에서 `accountId` 추출하여 `{ access, refresh, expires, accountId }` 저장
 
-Wizard path is `openclaw onboard` → auth choice `openai-codex`.
+마법사 경로는 `openclaw onboard` → 인증 선택 `openai-codex`.
 
-## Refresh + expiry
+## 리프레시 + 만료
 
-Profiles store an `expires` timestamp.
+프로필은 `expires` 타임스탬프를 저장합니다.
 
-At runtime:
+런타임 시:
 
-- if `expires` is in the future → use the stored access token
-- if expired → refresh (under a file lock) and overwrite the stored credentials
+- `expires`가 미래일 경우 → 저장된 액세스 토큰 사용
+- 만료된 경우 → 리프레시 (파일 잠금 하에)하고 저장된 자격 증명을 덮어 씁니다
 
-The refresh flow is automatic; you generally don't need to manage tokens manually.
+리프레시 흐름은 자동입니다; 일반적으로 토큰을 수동으로 관리할 필요는 없습니다.
 
-## Multiple accounts (profiles) + routing
+## 여러 계정 (프로필) + 라우팅
 
-Two patterns:
+두 가지 패턴:
 
-### 1) Preferred: separate agents
+### 1) 선호: 별도의 에이전트
 
-If you want “personal” and “work” to never interact, use isolated agents (separate sessions + credentials + workspace):
+"개인"과 "작업"이 절대 상호작용하지 않도록 하려면 고립된 에이전트 (별도 세션 + 자격 증명 + 작업 공간)를 사용하세요:
 
 ```bash
 openclaw agents add work
 openclaw agents add personal
 ```
 
-Then configure auth per-agent (wizard) and route chats to the right agent.
+그런 다음 에이전트별로 인증을 구성 (마법사)하고 채팅을 올바른 에이전트로 라우팅하세요.
 
-### 2) Advanced: multiple profiles in one agent
+### 2) 고급: 하나의 에이전트 내에서 다중 프로필
 
-`auth-profiles.json` supports multiple profile IDs for the same provider.
+`auth-profiles.json`은 동일한 프로바이더에 대해 여러 프로필 ID를 지원합니다.
 
-Pick which profile is used:
+사용할 프로필 선택:
 
-- globally via config ordering (`auth.order`)
-- per-session via `/model ...@<profileId>`
+- 전역적으로 구성 순서에 따라 (`auth.order`)
+- 세션별로 `/model ...@<profileId>`
 
-Example (session override):
+예시 (세션 오버라이드):
 
 - `/model Opus@anthropic:work`
 
-How to see what profile IDs exist:
+어떤 프로필 ID가 있는지 확인하는 방법:
 
-- `openclaw channels list --json` (shows `auth[]`)
+- `openclaw channels list --json` ( `auth[]` 표시)
 
-Related docs:
+관련 문서:
 
-- [/concepts/model-failover](/ko-KR/concepts/model-failover) (rotation + cooldown rules)
-- [/tools/slash-commands](/ko-KR/tools/slash-commands) (command surface)
+- [/concepts/model-failover](/concepts/model-failover) (회전 + 쿨다운 규칙)
+- [/tools/slash-commands](/tools/slash-commands) (명령 표면)

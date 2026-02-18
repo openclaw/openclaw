@@ -1,44 +1,44 @@
 ---
-summary: "Retry policy for outbound provider calls"
+summary: "아웃바운드 프로바이더 호출에 대한 재시도 정책"
 read_when:
-  - Updating provider retry behavior or defaults
-  - Debugging provider send errors or rate limits
-title: "Retry Policy"
+  - 프로바이더 재시도 동작 또는 기본값 업데이트
+  - 프로바이더 전송 오류 또는 속도 제한 디버깅
+title: "재시도 정책"
 ---
 
-# Retry policy
+# 재시도 정책
 
-## Goals
+## 목표
 
-- Retry per HTTP request, not per multi-step flow.
-- Preserve ordering by retrying only the current step.
-- Avoid duplicating non-idempotent operations.
+- 멀티 스텝 흐름이 아닌 HTTP 요청당 재시도합니다.
+- 현재 단계만 재시도하여 순서를 유지합니다.
+- 비멱등 작업을 중복 수행하지 않습니다.
 
-## Defaults
+## 기본값
 
-- Attempts: 3
-- Max delay cap: 30000 ms
-- Jitter: 0.1 (10 percent)
-- Provider defaults:
-  - Telegram min delay: 400 ms
-  - Discord min delay: 500 ms
+- 시도 횟수: 3
+- 최대 지연 상한: 30000 ms
+- 지터: 0.1 (10 퍼센트)
+- 프로바이더 기본값:
+  - Telegram 최소 지연: 400 ms
+  - Discord 최소 지연: 500 ms
 
-## Behavior
+## 동작
 
 ### Discord
 
-- Retries only on rate-limit errors (HTTP 429).
-- Uses Discord `retry_after` when available, otherwise exponential backoff.
+- 속도 제한 오류(HTTP 429)만 재시도합니다.
+- 가능할 경우 Discord `retry_after`를 사용하고, 그렇지 않으면 지수 백오프를 사용합니다.
 
 ### Telegram
 
-- Retries on transient errors (429, timeout, connect/reset/closed, temporarily unavailable).
-- Uses `retry_after` when available, otherwise exponential backoff.
-- Markdown parse errors are not retried; they fall back to plain text.
+- 일시적인 오류 (429, 타임아웃, 연결/재설정/닫힘, 일시적으로 사용 불가능) 에 대해 재시도합니다.
+- 가능할 경우 `retry_after`를 사용하고, 그렇지 않으면 지수 백오프를 사용합니다.
+- 마크다운 구문 오류는 재시도하지 않으며 일반 텍스트로 대체됩니다.
 
-## Configuration
+## 구성
 
-Set retry policy per provider in `~/.openclaw/openclaw.json`:
+`~/.openclaw/openclaw.json`에서 프로바이더별로 재시도 정책을 설정합니다:
 
 ```json5
 {
@@ -63,7 +63,7 @@ Set retry policy per provider in `~/.openclaw/openclaw.json`:
 }
 ```
 
-## Notes
+## 주의사항
 
-- Retries apply per request (message send, media upload, reaction, poll, sticker).
-- Composite flows do not retry completed steps.
+- 전송 요청 (메시지 전송, 미디어 업로드, 반응, 투표, 스티커) 당 재시도가 적용됩니다.
+- 복합 흐름은 완료된 단계에 대해 재시도하지 않습니다.

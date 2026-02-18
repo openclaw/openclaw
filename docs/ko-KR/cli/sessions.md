@@ -1,13 +1,13 @@
 ---
-summary: "CLI reference for `openclaw sessions` (list stored sessions + usage)"
+summary: "`openclaw sessions` CLI 참조 (저장된 세션 목록 + 사용법)"
 read_when:
-  - You want to list stored sessions and see recent activity
-title: "sessions"
+  - 저장된 세션을 나열하고 최근 활동을 보고 싶을 때
+title: "세션"
 ---
 
 # `openclaw sessions`
 
-List stored conversation sessions.
+저장된 대화 세션을 나열합니다.
 
 ```bash
 openclaw sessions

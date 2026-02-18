@@ -1,28 +1,28 @@
 ---
-title: "Vercel AI Gateway"
-summary: "Vercel AI Gateway setup (auth + model selection)"
+title: "Vercel AI 게이트웨이"
+summary: "Vercel AI 게이트웨이 설정 (인증 + 모델 선택)"
 read_when:
-  - You want to use Vercel AI Gateway with OpenClaw
-  - You need the API key env var or CLI auth choice
+  - OpenClaw와 Vercel AI 게이트웨이를 사용하고 싶을 때
+  - API 키 환경 변수 또는 CLI 인증 선택이 필요할 때
 ---
 
-# Vercel AI Gateway
+# Vercel AI 게이트웨이
 
-The [Vercel AI Gateway](https://vercel.com/ai-gateway) provides a unified API to access hundreds of models through a single endpoint.
+[Vercel AI 게이트웨이](https://vercel.com/ai-gateway)는 단일 엔드포인트를 통해 수백 개의 모델에 접근할 수 있는 통합 API를 제공합니다.
 
-- Provider: `vercel-ai-gateway`
-- Auth: `AI_GATEWAY_API_KEY`
-- API: Anthropic Messages compatible
+- 프로바이더: `vercel-ai-gateway`
+- 인증: `AI_GATEWAY_API_KEY`
+- API: Anthropic Messages 호환
 
-## Quick start
+## 빠른 시작
 
-1. Set the API key (recommended: store it for the Gateway):
+1. API 키를 설정합니다 (권장: 이를 게이트웨이에 저장하세요):
 
 ```bash
 openclaw onboard --auth-choice ai-gateway-api-key
 ```
 
-2. Set a default model:
+2. 기본 모델을 설정합니다:
 
 ```json5
 {
@@ -34,7 +34,7 @@ openclaw onboard --auth-choice ai-gateway-api-key
 }
 ```
 
-## Non-interactive example
+## 비대화형 예제
 
 ```bash
 openclaw onboard --non-interactive \
@@ -43,9 +43,6 @@ openclaw onboard --non-interactive \
   --ai-gateway-api-key "$AI_GATEWAY_API_KEY"
 ```
 
-## Environment note
+## 환경 주의사항
 
-If the Gateway runs as a daemon (launchd/systemd), make sure `AI_GATEWAY_API_KEY`
-is available to that process (for example, in `~/.openclaw/.env` or via
-`env.shellEnv`).
-
+게이트웨이가 데몬(launchd/systemd)으로 실행되는 경우, `AI_GATEWAY_API_KEY`가 해당 프로세스에 제공되는지 확인하세요 (예: `~/.openclaw/.env` 또는 `env.shellEnv`를 통해).

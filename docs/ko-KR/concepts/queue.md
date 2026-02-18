@@ -1,48 +1,46 @@
 ---
-summary: "Command queue design that serializes inbound auto-reply runs"
+summary: "인바운드 자동 응답 실행을 직렬화하는 명령어 큐 디자인"
 read_when:
-  - Changing auto-reply execution or concurrency
-title: "Command Queue"
+  - 자동 응답 실행 또는 동시성 변경
+title: "명령어 큐"
 ---
 
-# Command Queue (2026-01-16)
+# 명령어 큐 (2026-01-16)
 
-We serialize inbound auto-reply runs (all channels) through a tiny in-process queue to prevent multiple agent runs from colliding, while still allowing safe parallelism across sessions.
+우리는 여러 에이전트 실행이 충돌하는 것을 방지하기 위해 인프로세스의 작은 큐를 통해 인바운드 자동 응답 실행(모든 채널)을 직렬화하고, 여전히 세션 간의 안전한 병렬 처리를 허용합니다.
 
-## Why
+## 이유
 
-- Auto-reply runs can be expensive (LLM calls) and can collide when multiple inbound messages arrive close together.
-- Serializing avoids competing for shared resources (session files, logs, CLI stdin) and reduces the chance of upstream rate limits.
+- 자동 응답 실행은 비용이 많이 들 수 있으며 (LLM 호출) 다수의 인바운드 메시지가 비슷한 시기에 도착할 때 충돌할 수 있습니다.
+- 직렬화는 (세션 파일, 로그, CLI 표준 입력) 공유 리소스를 위한 경쟁을 피하고 업스트림 속도 제한 발생 가능성을 줄입니다.
 
-## How it works
+## 작동 방식
 
-- A lane-aware FIFO queue drains each lane with a configurable concurrency cap (default 1 for unconfigured lanes; main defaults to 4, subagent to 8).
-- `runEmbeddedPiAgent` enqueues by **session key** (lane `session:<key>`) to guarantee only one active run per session.
-- Each session run is then queued into a **global lane** (`main` by default) so overall parallelism is capped by `agents.defaults.maxConcurrent`.
-- When verbose logging is enabled, queued runs emit a short notice if they waited more than ~2s before starting.
-- Typing indicators still fire immediately on enqueue (when supported by the channel) so user experience is unchanged while we wait our turn.
+- 레인 인식 FIFO 큐는 설정 가능한 동시성 제한(구성되지 않은 레인의 경우 기본 1; 주요 레인은 기본 4, 하위 에이전트는 8)을 사용하여 각 레인을 배수 처리합니다.
+- `runEmbeddedPiAgent`는 **세션 키**(레인 `session:<key>`로)를 사용하여 대기열에 삽입되어 각 세션마다 하나의 활성 실행만 보장합니다.
+- 그런 다음 각 세션 실행은 **글로벌 레인**(`main` 기본값)으로 대기열에 추가되어 전체 병렬 처리가 `agents.defaults.maxConcurrent`에 의해 제한됩니다.
+- 자세한 로깅이 활성화되면 대기열에 있는 실행은 시작 전 약 2초 이상 대기했다면 짧은 알림을 전송합니다.
+- 입력 지표는 대기열에 삽입될 때 즉시 작동하여 (채널에서 지원되는 경우) 사용자가 기다리는 동안 사용자 경험이 변하지 않습니다.
 
-## Queue modes (per channel)
+## 큐 모드 (채널별)
 
-Inbound messages can steer the current run, wait for a followup turn, or do both:
+인바운드 메시지는 현재 실행을 조정하거나, 후속 턴을 위해 대기하거나, 둘 다 할 수 있습니다:
 
-- `steer`: inject immediately into the current run (cancels pending tool calls after the next tool boundary). If not streaming, falls back to followup.
-- `followup`: enqueue for the next agent turn after the current run ends.
-- `collect`: coalesce all queued messages into a **single** followup turn (default). If messages target different channels/threads, they drain individually to preserve routing.
-- `steer-backlog` (aka `steer+backlog`): steer now **and** preserve the message for a followup turn.
-- `interrupt` (legacy): abort the active run for that session, then run the newest message.
-- `queue` (legacy alias): same as `steer`.
+- `steer`: 현재 실행에 즉시 삽입합니다 (다음 도구 경계 이후 대기 중인 도구 호출을 취소). 스트리밍이 아니면, 후속으로 되돌아갑니다.
+- `followup`: 현재 실행이 끝난 후 다음 에이전트 턴을 위해 대기열에 추가합니다.
+- `collect`: 모든 대기열 메시지를 **단일** 후속 턴으로 합칩니다(기본값). 메시지가 서로 다른 채널/스레드를 대상으로 하면 각기 다른 대기열로 각각의 라우팅을 보존합니다.
+- `steer-backlog` (또는 `steer+backlog`): 지금 바로 조정 **하고** 후속 턴을 위해 메시지를 보존합니다.
+- `interrupt` (레거시): 해당 세션의 활성 실행을 중단하고 최신 메시지를 실행합니다.
+- `queue` (레거시 별칭): `steer`와 동일합니다.
 
-Steer-backlog means you can get a followup response after the steered run, so
-streaming surfaces can look like duplicates. Prefer `collect`/`steer` if you want
-one response per inbound message.
-Send `/queue collect` as a standalone command (per-session) or set `messages.queue.byChannel.discord: "collect"`.
+Steer-backlog는 조정된 실행 후에 후속 응답을 받을 수 있음을 의미하므로 스트리밍 표면은 중복으로 보일 수 있습니다. inbound 메시지당 한 번의 응답을 원한다면 `collect`/`steer`를 사용하세요.
+세션별로 `/queue collect`를 독립형 명령어로 보내거나 `messages.queue.byChannel.discord: "collect"`로 설정하세요.
 
-Defaults (when unset in config):
+기본값 (구성에 설정되지 않은 경우):
 
-- All surfaces → `collect`
+- 모든 표면 → `collect`
 
-Configure globally or per channel via `messages.queue`:
+`messages.queue`를 통해 전역적으로 또는 채널별로 구성합니다:
 
 ```json5
 {
@@ -58,32 +56,31 @@ Configure globally or per channel via `messages.queue`:
 }
 ```
 
-## Queue options
+## 큐 옵션
 
-Options apply to `followup`, `collect`, and `steer-backlog` (and to `steer` when it falls back to followup):
+옵션은 `followup`, `collect` 및 `steer-backlog`(그리고 `steer`가 후속으로 되돌아갈 때)에 적용됩니다:
 
-- `debounceMs`: wait for quiet before starting a followup turn (prevents “continue, continue”).
-- `cap`: max queued messages per session.
-- `drop`: overflow policy (`old`, `new`, `summarize`).
+- `debounceMs`: 후속 턴을 시작하기 전의 대기 시간(“계속, 계속”을 방지).
+- `cap`: 세션당 최대 대기열 메시지 수.
+- `drop`: 오버플로우 정책 (`old`, `new`, `summarize`).
 
-Summarize keeps a short bullet list of dropped messages and injects it as a synthetic followup prompt.
-Defaults: `debounceMs: 1000`, `cap: 20`, `drop: summarize`.
+Summarize는 삭제된 메시지의 짧은 불릿 목록을 유지하고 이를 인공적 후속 프롬프트로 삽입합니다. 기본값: `debounceMs: 1000`, `cap: 20`, `drop: summarize`.
 
-## Per-session overrides
+## 세션별 재정의
 
-- Send `/queue <mode>` as a standalone command to store the mode for the current session.
-- Options can be combined: `/queue collect debounce:2s cap:25 drop:summarize`
-- `/queue default` or `/queue reset` clears the session override.
+- `/queue <mode>`를 독립형 명령어로 보내 현재 세션의 모드를 저장합니다.
+- 옵션을 결합할 수 있습니다: `/queue collect debounce:2s cap:25 drop:summarize`
+- `/queue default` 또는 `/queue reset`로 세션 재정의를 지웁니다.
 
-## Scope and guarantees
+## 범위 및 보증
 
-- Applies to auto-reply agent runs across all inbound channels that use the gateway reply pipeline (WhatsApp web, Telegram, Slack, Discord, Signal, iMessage, webchat, etc.).
-- Default lane (`main`) is process-wide for inbound + main heartbeats; set `agents.defaults.maxConcurrent` to allow multiple sessions in parallel.
-- Additional lanes may exist (e.g. `cron`, `subagent`) so background jobs can run in parallel without blocking inbound replies.
-- Per-session lanes guarantee that only one agent run touches a given session at a time.
-- No external dependencies or background worker threads; pure TypeScript + promises.
+- 게이트웨이 응답 파이프라인을 사용하는 모든 인바운드 채널에 대한 자동 응답 에이전트 실행에 적용됩니다 (WhatsApp web, Telegram, Slack, Discord, Signal, iMessage, 웹챗 등).
+- 기본 레인 (`main`)은 인바운드 + 메인 하트비트에 대해 프로세스 전반에 적용됩니다; `agents.defaults.maxConcurrent`를 설정하여 여러 세션이 병렬로 실행될 수 있습니다.
+- 추가 레인이 존재할 수 있습니다 (예: `cron`, `subagent`), 따라서 백그라운드 작업은 인바운드 응답을 차단하지 않고 병렬로 실행될 수 있습니다.
+- 세션별 레인은 한 번에 하나의 에이전트 실행만 주어진 세션에 영향을 미치도록 보장합니다.
+- 외부 종속성이나 백그라운드 워커 스레드가 없으며, 순수한 TypeScript + 프로미스로 이루어져 있습니다.
 
-## Troubleshooting
+## 문제 해결
 
-- If commands seem stuck, enable verbose logs and look for “queued for …ms” lines to confirm the queue is draining.
-- If you need queue depth, enable verbose logs and watch for queue timing lines.
+- 명령어가 멈춘 것 같다면, 자세히 로그를 활성화하고 “queued for …ms” 라인을 찾아봐서 큐가 배수하고 있는지 확인하세요.
+- 큐 깊이가 필요하다면, 자세히 로그를 활성화하고 큐 타이밍 라인을 관찰하세요.

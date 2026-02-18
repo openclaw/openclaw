@@ -1,33 +1,33 @@
 ---
-title: "Pi Development Workflow"
+title: "Pi 개발 워크플로우"
 ---
 
-# Pi Development Workflow
+# Pi 개발 워크플로우
 
-This guide summarizes a sane workflow for working on the pi integration in OpenClaw.
+이 가이드는 OpenClaw의 pi 통합 작업을 위한 적절한 워크플로우를 요약한 것입니다.
 
-## Type Checking and Linting
+## 타입 체크 및 린트
 
-- Type check and build: `pnpm build`
-- Lint: `pnpm lint`
-- Format check: `pnpm format`
-- Full gate before pushing: `pnpm lint && pnpm build && pnpm test`
+- 타입 체크 및 빌드: `pnpm build`
+- 린트: `pnpm lint`
+- 포맷 체크: `pnpm format`
+- 푸시 전 전체 게이트: `pnpm lint && pnpm build && pnpm test`
 
-## Running Pi Tests
+## Pi 테스트 실행
 
-Use the dedicated script for the pi integration test set:
+Pi 통합 테스트 세트를 위한 전용 스크립트를 사용하세요:
 
 ```bash
 scripts/pi/run-tests.sh
 ```
 
-To include the live test that exercises real provider behavior:
+실제 프로바이더 동작을 테스트하는 라이브 테스트를 포함하려면:
 
 ```bash
 scripts/pi/run-tests.sh --live
 ```
 
-The script runs all pi related unit tests via these globs:
+이 스크립트는 다음의 글로브 패턴을 사용하여 Pi 관련 유닛 테스트를 모두 실행합니다:
 
 - `src/agents/pi-*.test.ts`
 - `src/agents/pi-embedded-*.test.ts`
@@ -36,35 +36,35 @@ The script runs all pi related unit tests via these globs:
 - `src/agents/pi-tool-definition-adapter.test.ts`
 - `src/agents/pi-extensions/*.test.ts`
 
-## Manual Testing
+## 수동 테스트
 
-Recommended flow:
+권장 흐름:
 
-- Run the gateway in dev mode:
+- 개발 모드로 게이트웨이 실행:
   - `pnpm gateway:dev`
-- Trigger the agent directly:
+- 에이전트를 직접 트리거:
   - `pnpm openclaw agent --message "Hello" --thinking low`
-- Use the TUI for interactive debugging:
+- 대화형 디버깅을 위한 TUI 사용:
   - `pnpm tui`
 
-For tool call behavior, prompt for a `read` or `exec` action so you can see tool streaming and payload handling.
+도구 호출 동작에 대해서는 `read` 또는 `exec` 액션을 프롬프트하여 도구 스트리밍과 페이로드 처리를 볼 수 있습니다.
 
-## Clean Slate Reset
+## 클린 슬레이트 리셋
 
-State lives under the OpenClaw state directory. Default is `~/.openclaw`. If `OPENCLAW_STATE_DIR` is set, use that directory instead.
+상태는 OpenClaw 상태 디렉터리 아래 저장됩니다. 기본값은 `~/.openclaw`입니다. `OPENCLAW_STATE_DIR`이 설정된 경우, 해당 디렉터리를 대신 사용합니다.
 
-To reset everything:
+모든 것을 리셋하려면:
 
-- `openclaw.json` for config
-- `credentials/` for auth profiles and tokens
-- `agents/<agentId>/sessions/` for agent session history
-- `agents/<agentId>/sessions.json` for the session index
-- `sessions/` if legacy paths exist
-- `workspace/` if you want a blank workspace
+- 설정은 `openclaw.json`
+- 인증 프로필 및 토큰은 `credentials/`
+- 에이전트 세션 기록은 `agents/<agentId>/sessions/`
+- 세션 인덱스는 `agents/<agentId>/sessions.json`
+- 레거시 경로가 존재할 경우 `sessions/`
+- 빈 작업 공간을 원한다면 `workspace/`
 
-If you only want to reset sessions, delete `agents/<agentId>/sessions/` and `agents/<agentId>/sessions.json` for that agent. Keep `credentials/` if you do not want to reauthenticate.
+세션만 리셋하고 싶다면 해당 에이전트의 `agents/<agentId>/sessions/`와 `agents/<agentId>/sessions.json`을 삭제하십시오. 인증을 다시 하고 싶지 않다면 `credentials/`를 유지하십시오.
 
-## References
+## 참고 자료
 
-- https://docs.openclaw.ai/testing
-- https://docs.openclaw.ai/start/getting-started
+- [https://docs.openclaw.ai/testing](https://docs.openclaw.ai/testing)
+- [https://docs.openclaw.ai/start/getting-started](https://docs.openclaw.ai/start/getting-started)

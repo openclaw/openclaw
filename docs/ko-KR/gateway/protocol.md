@@ -1,27 +1,26 @@
 ---
-summary: "Gateway WebSocket protocol: handshake, frames, versioning"
+summary: "게이트웨이 WebSocket 프로토콜: 핸드셰이크, 프레임, 버전 관리"
 read_when:
-  - Implementing or updating gateway WS clients
-  - Debugging protocol mismatches or connect failures
-  - Regenerating protocol schema/models
-title: "Gateway Protocol"
+  - 게이트웨이 WebSocket 클라이언트를 구현하거나 업데이트할 때
+  - 프로토콜 불일치 또는 연결 실패를 디버깅할 때
+  - 프로토콜 스키마/모델을 재생성할 때
+title: "게이트웨이 프로토콜"
 ---
 
-# Gateway protocol (WebSocket)
+# 게이트웨이 프로토콜 (WebSocket)
 
-The Gateway WS protocol is the **single control plane + node transport** for
-OpenClaw. All clients (CLI, web UI, macOS app, iOS/Android nodes, headless
-nodes) connect over WebSocket and declare their **role** + **scope** at
-handshake time.
+게이트웨이 WebSocket 프로토콜은 OpenClaw의 **단일 제어 플레인(control plane) + 노드 전송** 수단입니다.
+모든 클라이언트(CLI, 웹 UI, macOS 앱, iOS/Android 노드, 헤드리스 노드)는 WebSocket을 통해 연결하며,
+핸드셰이크 시 **역할(role)** + **범위(scope)** 를 선언합니다.
 
-## Transport
+## 전송 방식
 
-- WebSocket, text frames with JSON payloads.
-- First frame **must** be a `connect` request.
+- WebSocket, JSON 페이로드를 담은 텍스트 프레임.
+- 첫 번째 프레임은 **반드시** `connect` 요청이어야 합니다.
 
-## Handshake (connect)
+## 핸드셰이크 (connect)
 
-Gateway → Client (pre-connect challenge):
+게이트웨이 → 클라이언트 (연결 전 챌린지):
 
 ```json
 {
@@ -31,7 +30,7 @@ Gateway → Client (pre-connect challenge):
 }
 ```
 
-Client → Gateway:
+클라이언트 → 게이트웨이:
 
 ```json
 {
@@ -66,7 +65,7 @@ Client → Gateway:
 }
 ```
 
-Gateway → Client:
+게이트웨이 → 클라이언트:
 
 ```json
 {
@@ -77,7 +76,7 @@ Gateway → Client:
 }
 ```
 
-When a device token is issued, `hello-ok` also includes:
+디바이스 토큰이 발급될 때 `hello-ok`에는 다음도 포함됩니다:
 
 ```json
 {
@@ -89,7 +88,7 @@ When a device token is issued, `hello-ok` also includes:
 }
 ```
 
-### Node example
+### 노드 예시
 
 ```json
 {
@@ -124,24 +123,24 @@ When a device token is issued, `hello-ok` also includes:
 }
 ```
 
-## Framing
+## 프레임 구조
 
-- **Request**: `{type:"req", id, method, params}`
-- **Response**: `{type:"res", id, ok, payload|error}`
-- **Event**: `{type:"event", event, payload, seq?, stateVersion?}`
+- **요청(Request)**: `{type:"req", id, method, params}`
+- **응답(Response)**: `{type:"res", id, ok, payload|error}`
+- **이벤트(Event)**: `{type:"event", event, payload, seq?, stateVersion?}`
 
-Side-effecting methods require **idempotency keys** (see schema).
+부작용이 있는 메서드는 **멱등성 키(idempotency keys)** 가 필요합니다 (스키마 참조).
 
-## Roles + scopes
+## 역할 + 범위
 
-### Roles
+### 역할
 
-- `operator` = control plane client (CLI/UI/automation).
-- `node` = capability host (camera/screen/canvas/system.run).
+- `operator` = 제어 플레인 클라이언트 (CLI/UI/자동화).
+- `node` = 기능 호스트 (카메라/화면/캔버스/system.run).
 
-### Scopes (operator)
+### 범위 (operator)
 
-Common scopes:
+주요 범위:
 
 - `operator.read`
 - `operator.write`
@@ -151,71 +150,66 @@ Common scopes:
 
 ### Caps/commands/permissions (node)
 
-Nodes declare capability claims at connect time:
+노드는 연결 시 기능 클레임(capability claims)을 선언합니다:
 
-- `caps`: high-level capability categories.
-- `commands`: command allowlist for invoke.
-- `permissions`: granular toggles (e.g. `screen.record`, `camera.capture`).
+- `caps`: 상위 수준 기능 카테고리.
+- `commands`: 호출 허용 명령 목록(allowlist).
+- `permissions`: 세분화된 토글 (예: `screen.record`, `camera.capture`).
 
-The Gateway treats these as **claims** and enforces server-side allowlists.
+게이트웨이는 이를 **클레임**으로 취급하며 서버 측 허용 목록을 적용합니다.
 
-## Presence
+## 프레즌스(Presence)
 
-- `system-presence` returns entries keyed by device identity.
-- Presence entries include `deviceId`, `roles`, and `scopes` so UIs can show a single row per device
-  even when it connects as both **operator** and **node**.
+- `system-presence`는 디바이스 ID를 키로 하는 항목을 반환합니다.
+- 프레즌스 항목에는 `deviceId`, `roles`, `scopes`가 포함되어,
+  동일 디바이스가 **operator**와 **node** 양쪽으로 연결되더라도 UI에서 한 행으로 표시할 수 있습니다.
 
-### Node helper methods
+### 노드 헬퍼 메서드
 
-- Nodes may call `skills.bins` to fetch the current list of skill executables
-  for auto-allow checks.
+- 노드는 `skills.bins`를 호출하여 자동 허용 검사를 위한 현재 스킬 실행 파일 목록을 가져올 수 있습니다.
 
-## Exec approvals
+## Exec 승인
 
-- When an exec request needs approval, the gateway broadcasts `exec.approval.requested`.
-- Operator clients resolve by calling `exec.approval.resolve` (requires `operator.approvals` scope).
+- exec 요청에 승인이 필요한 경우, 게이트웨이는 `exec.approval.requested`를 브로드캐스트합니다.
+- 운영자 클라이언트는 `exec.approval.resolve`를 호출하여 처리합니다 (`operator.approvals` 범위 필요).
 
-## Versioning
+## 버전 관리
 
-- `PROTOCOL_VERSION` lives in `src/gateway/protocol/schema.ts`.
-- Clients send `minProtocol` + `maxProtocol`; the server rejects mismatches.
-- Schemas + models are generated from TypeBox definitions:
+- `PROTOCOL_VERSION`은 `src/gateway/protocol/schema.ts`에 정의되어 있습니다.
+- 클라이언트는 `minProtocol` + `maxProtocol`을 전송하며, 서버는 불일치 시 거부합니다.
+- 스키마 + 모델은 TypeBox 정의로부터 생성됩니다:
   - `pnpm protocol:gen`
   - `pnpm protocol:gen:swift`
   - `pnpm protocol:check`
 
-## Auth
+## 인증
 
-- If `OPENCLAW_GATEWAY_TOKEN` (or `--token`) is set, `connect.params.auth.token`
-  must match or the socket is closed.
-- After pairing, the Gateway issues a **device token** scoped to the connection
-  role + scopes. It is returned in `hello-ok.auth.deviceToken` and should be
-  persisted by the client for future connects.
-- Device tokens can be rotated/revoked via `device.token.rotate` and
-  `device.token.revoke` (requires `operator.pairing` scope).
+- `OPENCLAW_GATEWAY_TOKEN` (또는 `--token`)이 설정된 경우, `connect.params.auth.token`이
+  일치해야 하며, 그렇지 않으면 소켓이 닫힙니다.
+- 페어링 후, 게이트웨이는 연결 역할 + 범위에 한정된 **디바이스 토큰**을 발급합니다.
+  이 토큰은 `hello-ok.auth.deviceToken`에 반환되며, 클라이언트는 이후 연결을 위해 저장해야 합니다.
+- 디바이스 토큰은 `device.token.rotate` 및 `device.token.revoke`를 통해 교체/폐기할 수 있습니다
+  (`operator.pairing` 범위 필요).
 
-## Device identity + pairing
+## 디바이스 ID + 페어링
 
-- Nodes should include a stable device identity (`device.id`) derived from a
-  keypair fingerprint.
-- Gateways issue tokens per device + role.
-- Pairing approvals are required for new device IDs unless local auto-approval
-  is enabled.
-- **Local** connects include loopback and the gateway host’s own tailnet address
-  (so same‑host tailnet binds can still auto‑approve).
-- All WS clients must include `device` identity during `connect` (operator + node).
-  Control UI can omit it **only** when `gateway.controlUi.allowInsecureAuth` is enabled
-  (or `gateway.controlUi.dangerouslyDisableDeviceAuth` for break-glass use).
-- Non-local connections must sign the server-provided `connect.challenge` nonce.
+- 노드는 키페어 지문에서 파생된 안정적인 디바이스 ID(`device.id`)를 포함해야 합니다.
+- 게이트웨이는 디바이스 + 역할 단위로 토큰을 발급합니다.
+- 로컬 자동 승인이 활성화되지 않은 경우, 새 디바이스 ID에 대한 페어링 승인이 필요합니다.
+- **로컬** 연결에는 루프백과 게이트웨이 호스트 자체의 tailnet 주소가 포함됩니다
+  (동일 호스트 tailnet 바인드도 자동 승인 가능).
+- 모든 WebSocket 클라이언트는 `connect` 시 `device` ID를 포함해야 합니다 (operator + node).
+  Control UI는 `gateway.controlUi.allowInsecureAuth`가 활성화된 경우에만 생략할 수 있습니다
+  (긴급 사용 시 `gateway.controlUi.dangerouslyDisableDeviceAuth`).
+- 비로컬 연결은 서버가 제공한 `connect.challenge` nonce에 서명해야 합니다.
 
-## TLS + pinning
+## TLS + 핀 고정
 
-- TLS is supported for WS connections.
-- Clients may optionally pin the gateway cert fingerprint (see `gateway.tls`
-  config plus `gateway.remote.tlsFingerprint` or CLI `--tls-fingerprint`).
+- WebSocket 연결에 TLS가 지원됩니다.
+- 클라이언트는 선택적으로 게이트웨이 인증서 지문을 핀 고정할 수 있습니다
+  (`gateway.tls` 설정 및 `gateway.remote.tlsFingerprint` 또는 CLI `--tls-fingerprint` 참조).
 
-## Scope
+## 범위
 
-This protocol exposes the **full gateway API** (status, channels, models, chat,
-agent, sessions, nodes, approvals, etc.). The exact surface is defined by the
-TypeBox schemas in `src/gateway/protocol/schema.ts`.
+이 프로토콜은 **전체 게이트웨이 API** (상태, 채널, 모델, 채팅, 에이전트, 세션, 노드, 승인 등)를
+노출합니다. 정확한 표면은 `src/gateway/protocol/schema.ts`의 TypeBox 스키마로 정의됩니다.

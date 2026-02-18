@@ -164,7 +164,9 @@ function getChangedFiles(baseSha: string): FileChange[] {
   const raw = git(
     `diff --diff-filter=ADMR --name-status ${baseSha}..${SOURCE_BRANCH} -- "docs/**/*.md" "docs/**/*.mdx"`,
   );
-  if (!raw) return [];
+  if (!raw) {
+    return [];
+  }
 
   return raw
     .split("\n")
@@ -225,7 +227,9 @@ function loadGlossary(): GlossaryEntry[] {
 }
 
 function formatGlossary(entries: GlossaryEntry[]): string {
-  if (entries.length === 0) return "";
+  if (entries.length === 0) {
+    return "";
+  }
   const lines = entries.map((e) => `  "${e.source}" → "${e.target}"`);
   return `Preferred translations (use these consistently):\n${lines.join("\n")}`;
 }
@@ -239,6 +243,16 @@ interface LLMMessage {
   content: string;
 }
 
+/** Strip accidental code-fence wrapping that LLMs sometimes add (e.g. ```markdown ... ```) */
+function stripCodeFenceWrapper(text: string): string {
+  const trimmed = text.trim();
+  const match = trimmed.match(/^```[a-z]*\n([\s\S]*?)```\s*$/);
+  if (match) {
+    return match[1].trimEnd() + "\n";
+  }
+  return text;
+}
+
 async function callLLM(
   provider: Provider,
   model: string,
@@ -246,10 +260,11 @@ async function callLLM(
   messages: LLMMessage[],
   maxTokens = 16384,
 ): Promise<string> {
-  if (provider === "openai") {
-    return callOpenAI(model, system, messages, maxTokens);
-  }
-  return callAnthropic(model, system, messages, maxTokens);
+  const raw =
+    provider === "openai"
+      ? await callOpenAI(model, system, messages, maxTokens)
+      : await callAnthropic(model, system, messages, maxTokens);
+  return stripCodeFenceWrapper(raw);
 }
 
 async function callOpenAI(
@@ -259,7 +274,9 @@ async function callOpenAI(
   maxTokens: number,
 ): Promise<string> {
   const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) throw new Error("OPENAI_API_KEY environment variable is required.");
+  if (!apiKey) {
+    throw new Error("OPENAI_API_KEY environment variable is required.");
+  }
 
   const allMessages = [{ role: "system" as const, content: system }, ...messages];
 
@@ -294,7 +311,9 @@ async function callAnthropic(
   maxTokens: number,
 ): Promise<string> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error("ANTHROPIC_API_KEY environment variable is required.");
+  if (!apiKey) {
+    throw new Error("ANTHROPIC_API_KEY environment variable is required.");
+  }
 
   // Anthropic doesn't use "system" role in messages — it's a top-level field
   const anthropicMessages = messages
@@ -401,20 +420,24 @@ async function processModifiedFile(
   /** For renamed files, pass the old path to read old English and current Korean */
   oldFilePath?: string,
 ): Promise<string | null> {
-  const oldEn = gitShow(`${baseSha}`, oldFilePath || file);
+  const oldEn = gitShow(baseSha, oldFilePath || file);
   const newEn = gitShow(SOURCE_BRANCH, file);
   // Korean translations live under docs/ko-KR/ mirroring the English path
   const koFile = toKoPath(oldFilePath || file);
   const curKo = gitShow(TARGET_BRANCH, koFile);
 
   if (!newEn) {
-    if (verbose) console.log(`  [skip] Cannot read ${file} from ${SOURCE_BRANCH}`);
+    if (verbose) {
+      console.log(`  [skip] Cannot read ${file} from ${SOURCE_BRANCH}`);
+    }
     return null;
   }
 
   // If Korean file doesn't exist yet, do a full translation
   if (!curKo) {
-    if (verbose) console.log(`  [new] Full translation (no Korean version exists)`);
+    if (verbose) {
+      console.log(`  [new] Full translation (no Korean version exists)`);
+    }
     return callLLM(provider, model, buildSystemPrompt(glossary), [
       { role: "user", content: buildFullTranslatePrompt(newEn) },
     ]);
@@ -422,12 +445,16 @@ async function processModifiedFile(
 
   // If old English is same as new (shouldn't happen but safety check)
   if (oldEn === newEn) {
-    if (verbose) console.log(`  [skip] No actual content change`);
+    if (verbose) {
+      console.log(`  [skip] No actual content change`);
+    }
     return null;
   }
 
   // 3-way merge: old EN + new EN + current KO → updated KO
-  if (verbose) console.log(`  [sync] 3-way merge translation`);
+  if (verbose) {
+    console.log(`  [sync] 3-way merge translation`);
+  }
   return callLLM(provider, model, buildSystemPrompt(glossary), [
     { role: "user", content: buildSyncPrompt(oldEn || "", newEn, curKo) },
   ]);
@@ -441,9 +468,13 @@ async function processNewFile(
   verbose: boolean,
 ): Promise<string | null> {
   const newEn = gitShow(SOURCE_BRANCH, file);
-  if (!newEn) return null;
+  if (!newEn) {
+    return null;
+  }
 
-  if (verbose) console.log(`  [new] Full translation`);
+  if (verbose) {
+    console.log(`  [new] Full translation`);
+  }
   return callLLM(provider, model, buildSystemPrompt(glossary), [
     { role: "user", content: buildFullTranslatePrompt(newEn) },
   ]);
@@ -465,7 +496,9 @@ async function main() {
   console.log(`   Base SHA:  ${baseSha.slice(0, 10)}`);
   console.log(`   Model:     ${opts.model}`);
   console.log(`   Glossary:  ${glossaryEntries.length} entries`);
-  if (opts.dryRun) console.log(`   Mode:      DRY RUN`);
+  if (opts.dryRun) {
+    console.log(`   Mode:      DRY RUN`);
+  }
   console.log();
 
   // Detect changes
@@ -537,13 +570,21 @@ async function main() {
       let result: string | null = null;
 
       if (change.status === "A") {
-        result = await processNewFile(change.file, opts.provider, opts.model, glossary, opts.verbose);
+        result = await processNewFile(
+          change.file,
+          opts.provider,
+          opts.model,
+          glossary,
+          opts.verbose,
+        );
       } else if (change.status === "R" && change.renamedFrom) {
         // For renamed files, delete the old Korean file and translate the new one
         const oldKoPath = resolve(REPO_ROOT, toKoPath(change.renamedFrom));
         if (existsSync(oldKoPath)) {
           unlinkSync(oldKoPath);
-          if (opts.verbose) console.log(`  [rename] Deleted old: ${toKoPath(change.renamedFrom)}`);
+          if (opts.verbose) {
+            console.log(`  [rename] Deleted old: ${toKoPath(change.renamedFrom)}`);
+          }
         }
         result = await processModifiedFile(
           change.file,
@@ -580,7 +621,7 @@ async function main() {
       }
     } catch (err) {
       errors++;
-      console.error(`  ✗ Error: ${err instanceof Error ? err.message : err}`);
+      console.error(`  ✗ Error: ${err instanceof Error ? err.message : String(err)}`);
     }
 
     // Rate limiting — small delay between API calls
@@ -612,10 +653,10 @@ async function main() {
 Synced ${processed} files from main branch changes.
 Base: ${baseSha.slice(0, 10)} → ${mainSha.slice(0, 10)}`;
 
-      execSync(
-        `git commit -m "$(cat <<'EOF'\n${commitMsg}\nEOF\n)"`,
-        { cwd: REPO_ROOT, encoding: "utf-8" },
-      );
+      execSync(`git commit -m "$(cat <<'EOF'\n${commitMsg}\nEOF\n)"`, {
+        cwd: REPO_ROOT,
+        encoding: "utf-8",
+      });
 
       git(`push -u origin ${branchName}`);
 
@@ -645,7 +686,7 @@ ${changes.map((c) => `- [${c.status}] \`${c.file}\``).join("\n")}
       // Go back to the original branch
       git(`checkout ${TARGET_BRANCH}`);
     } catch (err) {
-      console.error(`Failed to create PR: ${err instanceof Error ? err.message : err}`);
+      console.error(`Failed to create PR: ${err instanceof Error ? err.message : String(err)}`);
       console.log("Changes have been written to the working tree. You can commit manually.");
     }
   }

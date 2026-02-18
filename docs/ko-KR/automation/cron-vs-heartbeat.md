@@ -1,286 +1,285 @@
 ---
-summary: "Guidance for choosing between heartbeat and cron jobs for automation"
+summary: "자동화를 위한 하트비트와 크론 작업 선택 가이드"
 read_when:
-  - Deciding how to schedule recurring tasks
-  - Setting up background monitoring or notifications
-  - Optimizing token usage for periodic checks
-title: "Cron vs Heartbeat"
+  - 반복 작업을 스케줄링할 방법을 결정할 때
+  - 백그라운드 모니터링 또는 알림을 설정할 때
+  - 주기적인 체크를 위한 토큰 사용을 최적화할 때
+title: "크론 vs 하트비트"
 ---
 
-# Cron vs Heartbeat: When to Use Each
+# 크론 vs 하트비트: 각 방법의 사용 시기
 
-Both heartbeats and cron jobs let you run tasks on a schedule. This guide helps you choose the right mechanism for your use case.
+하트비트와 크론 작업 모두 스케줄에 따라 작업을 실행할 수 있습니다. 이 가이드는 사용 사례에 맞는 올바른 메커니즘을 선택하는 데 도움을 줍니다.
 
-## Quick Decision Guide
+## 빠른 결정 가이드
 
-| Use Case                             | Recommended         | Why                                      |
-| ------------------------------------ | ------------------- | ---------------------------------------- |
-| Check inbox every 30 min             | Heartbeat           | Batches with other checks, context-aware |
-| Send daily report at 9am sharp       | Cron (isolated)     | Exact timing needed                      |
-| Monitor calendar for upcoming events | Heartbeat           | Natural fit for periodic awareness       |
-| Run weekly deep analysis             | Cron (isolated)     | Standalone task, can use different model |
-| Remind me in 20 minutes              | Cron (main, `--at`) | One-shot with precise timing             |
-| Background project health check      | Heartbeat           | Piggybacks on existing cycle             |
+| 사용 사례                            | 추천 방법           | 이유                                   |
+| ------------------------------------ | ------------------- | -------------------------------------- |
+| 인박스를 30분마다 확인               | 하트비트            | 다른 체크와 함께 일괄 처리, 상황 인식  |
+| 매일 오전 9시에 일간 보고서 전송     | 크론 (격리된)       | 정확한 시간 필요                       |
+| 예정된 이벤트에 대한 캘린더 모니터링 | 하트비트            | 주기적인 인식을 위한 자연스러운 적합   |
+| 매주 심층 분석 실행                  | 크론 (격리된)       | 독립적인 작업이며, 다른 모델 사용 가능 |
+| 20분 후 알림 설정                    | 크론 (메인, `--at`) | 정확한 타이밍으로 일회성 실행          |
+| 배경 프로젝트 상태 체크              | 하트비트            | 기존 사이클에 합류                     |
 
-## Heartbeat: Periodic Awareness
+## 하트비트: 주기적인 인식
 
-Heartbeats run in the **main session** at a regular interval (default: 30 min). They're designed for the agent to check on things and surface anything important.
+하트비트는 **메인 세션**에서 일정 간격(기본값: 30분)으로 실행됩니다. 이것은 에이전트가 중요한 것을 확인하고 드러내도록 설계되었습니다.
 
-### When to use heartbeat
+### 하트비트를 사용할 때
 
-- **Multiple periodic checks**: Instead of 5 separate cron jobs checking inbox, calendar, weather, notifications, and project status, a single heartbeat can batch all of these.
-- **Context-aware decisions**: The agent has full main-session context, so it can make smart decisions about what's urgent vs. what can wait.
-- **Conversational continuity**: Heartbeat runs share the same session, so the agent remembers recent conversations and can follow up naturally.
-- **Low-overhead monitoring**: One heartbeat replaces many small polling tasks.
+- **여러 주기적 체크**: 인박스, 캘린더, 날씨, 알림, 프로젝트 상태를 확인하기 위해 별도의 5개 크론 작업 대신 하나의 하트비트로 일괄 처리할 수 있습니다.
+- **상황에 따라 인식하는 결정**: 에이전트는 메인 세션의 전체 상황을 알고 있어 어떤 것이 긴급한지와 어떤 것이 기다릴 수 있는지를 스마트하게 결정할 수 있습니다.
+- **대화의 연속성**: 하트비트 실행은 동일한 세션을 공유하므로 에이전트는 최근 대화를 기억하고 자연스럽게 후속 조치를 취할 수 있습니다.
+- **낮은 오버헤드 모니터링**: 하나의 하트비트가 많은 작은 폴링 작업을 대체합니다.
 
-### Heartbeat advantages
+### 하트비트의 장점
 
-- **Batches multiple checks**: One agent turn can review inbox, calendar, and notifications together.
-- **Reduces API calls**: A single heartbeat is cheaper than 5 isolated cron jobs.
-- **Context-aware**: The agent knows what you've been working on and can prioritize accordingly.
-- **Smart suppression**: If nothing needs attention, the agent replies `HEARTBEAT_OK` and no message is delivered.
-- **Natural timing**: Drifts slightly based on queue load, which is fine for most monitoring.
+- **여러 체크를 일괄 처리**: 하나의 에이전트 턴이 인박스, 캘린더, 알림을 함께 확인할 수 있습니다.
+- **API 호출 감소**: 단일 하트비트가 5개의 독립적인 크론 작업보다 비용이 적습니다.
+- **상황 인식**: 에이전트는 사용자가 작업하고 있는 내용을 알고 이를 우선순위에 맞게 조정할 수 있습니다.
+- **스마트 억제**: 주의가 필요하지 않으면 에이전트는 `HEARTBEAT_OK`를 반환하며 메시지가 전달되지 않습니다.
+- **자연스러운 타이밍**: 대기열 부하에 따라 약간 변동되는데, 이는 대부분의 모니터링에 적합합니다.
 
-### Heartbeat example: HEARTBEAT.md checklist
+### 하트비트 예시: HEARTBEAT.md 체크리스트
 
 ```md
-# Heartbeat checklist
+# 하트비트 체크리스트
 
-- Check email for urgent messages
-- Review calendar for events in next 2 hours
-- If a background task finished, summarize results
-- If idle for 8+ hours, send a brief check-in
+- 긴급 메시지가 있는 이메일 확인
+- 향후 2시간 내 이벤트 확인
+- 백그라운드 작업이 완료된 경우 결과 요약
+- 8시간 이상 대기 상태일 경우 간단한 체크인 전송
 ```
 
-The agent reads this on each heartbeat and handles all items in one turn.
+에이전트는 각 하트비트에서 이를 읽고 모든 항목을 한 번에 처리합니다.
 
-### Configuring heartbeat
+### 하트비트 설정
 
 ```json5
 {
   agents: {
     defaults: {
       heartbeat: {
-        every: "30m", // interval
-        target: "last", // where to deliver alerts
-        activeHours: { start: "08:00", end: "22:00" }, // optional
+        every: "30m", // 간격
+        target: "last", // 경고를 전달할 위치
+        activeHours: { start: "08:00", end: "22:00" }, // 선택 사항
       },
     },
   },
 }
 ```
 
-See [Heartbeat](/ko-KR/gateway/heartbeat) for full configuration.
+전체 설정은 [Heartbeat](/gateway/heartbeat)를 참조하세요.
 
-## Cron: Precise Scheduling
+## 크론: 정확한 스케줄링
 
-Cron jobs run at **exact times** and can run in isolated sessions without affecting main context.
-Recurring top-of-hour schedules are automatically spread by a deterministic
-per-job offset in a 0-5 minute window.
+크론 작업은 정확한 시간에 실행되며, 메인 컨텍스트에 영향을 미치지 않고 독립된 세션에서 실행될 수 있습니다.
+시간 정해진 스케줄은 0-5분 창의 결정적 오프셋에 의해 자동으로 분산됩니다.
 
-### When to use cron
+### 크론을 사용할 때
 
-- **Exact timing required**: "Send this at 9:00 AM every Monday" (not "sometime around 9").
-- **Standalone tasks**: Tasks that don't need conversational context.
-- **Different model/thinking**: Heavy analysis that warrants a more powerful model.
-- **One-shot reminders**: "Remind me in 20 minutes" with `--at`.
-- **Noisy/frequent tasks**: Tasks that would clutter main session history.
-- **External triggers**: Tasks that should run independently of whether the agent is otherwise active.
+- **정확한 타이밍이 필요한 경우**: "매주 월요일 오전 9:00에 보내기" (약 9시가 아닌 정확히).
+- **독립적인 작업**: 대화 문맥이 필요 없는 작업.
+- **다른 모델/생각**: 더 강력한 모델이 필요한 무거운 분석.
+- **일회성 알림**: `--at`과 함께 "20분 후 알림".
+- **소음/빈도 높은 작업**: 메인 세션 기록을 어지럽힐 만한 작업.
+- **외부 트리거**: 에이전트 상태와 관계없이 독립적으로 실행되어야 하는 작업.
 
-### Cron advantages
+### 크론의 장점
 
-- **Exact timing**: 5-field cron expressions with timezone support.
-- **Built-in load spreading**: recurring top-of-hour schedules are staggered by up to 5 minutes by default.
-- **Per-job control**: override stagger with `--stagger <duration>` or force exact timing with `--exact`.
-- **Session isolation**: Runs in `cron:<jobId>` without polluting main history.
-- **Model overrides**: Use a cheaper or more powerful model per job.
-- **Delivery control**: Isolated jobs default to `announce` (summary); choose `none` as needed.
-- **Immediate delivery**: Announce mode posts directly without waiting for heartbeat.
-- **No agent context needed**: Runs even if main session is idle or compacted.
-- **One-shot support**: `--at` for precise future timestamps.
+- **정확한 타이밍**: 5필드 또는 6필드(초 단위) 크론 표현식과 시간대 지원.
+- **내장 로드 분산**: 시간을 정한 스케줄은 기본적으로 최대 5분까지 분산됩니다.
+- **작업 별 제어**: `--stagger <duration>`으로 분산을 덮어쓰거나 `--exact`으로 정확한 타이밍 강제 가능.
+- **세션 격리**: `cron:<jobId>`에서 실행되어 메인 기록 오염을 방지.
+- **모델 덮어쓰기**: 작업마다 더 저렴하거나 강력한 모델 사용 가능.
+- **전달 제어**: 격리된 작업은 기본적으로 `announce`(요약)이며, 필요에 따라 `none` 선택 가능.
+- **즉시 전달**: 알림 모드는 하트비트를 기다리지 않고 직접 게시.
+- **에이전트 문맥 불필요**: 메인 세션이 비어 있거나 압축되었어도 실행 가능.
+- **일회성 지원**: 미래의 정확한 타임스탬프를 위한 `--at`.
 
-### Cron example: Daily morning briefing
+### 크론 예시: 매일 아침 브리핑
 
 ```bash
 openclaw cron add \
-  --name "Morning briefing" \
+  --name "아침 브리핑" \
   --cron "0 7 * * *" \
   --tz "America/New_York" \
   --session isolated \
-  --message "Generate today's briefing: weather, calendar, top emails, news summary." \
+  --message "오늘의 브리핑 생성: 날씨, 캘린더, 중요한 이메일, 뉴스 요약." \
   --model opus \
   --announce \
   --channel whatsapp \
   --to "+15551234567"
 ```
 
-This runs at exactly 7:00 AM New York time, uses Opus for quality, and announces a summary directly to WhatsApp.
+이 작업은 뉴욕 시간으로 정확히 오전 7시에 실행되며, Opus 모델을 사용해 품질을 보장하고, 요약을 WhatsApp에 직접 발표합니다.
 
-### Cron example: One-shot reminder
+### 크론 예시: 일회성 알림
 
 ```bash
 openclaw cron add \
-  --name "Meeting reminder" \
+  --name "회의 알림" \
   --at "20m" \
   --session main \
-  --system-event "Reminder: standup meeting starts in 10 minutes." \
+  --system-event "알림: 스탠드업 미팅이 10분 후 시작합니다." \
   --wake now \
   --delete-after-run
 ```
 
-See [Cron jobs](/ko-KR/automation/cron-jobs) for full CLI reference.
+전체 CLI 참조는 [Cron jobs](/automation/cron-jobs)를 참조하세요.
 
-## Decision Flowchart
+## 결정 흐름도
 
 ```
-Does the task need to run at an EXACT time?
-  YES -> Use cron
-  NO  -> Continue...
+작업이 정확한 시간에 실행되어야 합니까?
+  예 -> 크론 사용
+  아니요  -> 계속...
 
-Does the task need isolation from main session?
-  YES -> Use cron (isolated)
-  NO  -> Continue...
+작업이 메인 세션에서 격리되어야 합니까?
+  예 -> 크론 사용 (격리된)
+  아니요  -> 계속...
 
-Can this task be batched with other periodic checks?
-  YES -> Use heartbeat (add to HEARTBEAT.md)
-  NO  -> Use cron
+이 작업을 다른 주기적 체크와 함께 일괄 처리할 수 있습니까?
+  예 -> 하트비트 사용 (HEARTBEAT.md에 추가)
+  아니요  -> 크론 사용
 
-Is this a one-shot reminder?
-  YES -> Use cron with --at
-  NO  -> Continue...
+일회성 알림입니까?
+  예 -> --at과 함께 크론 사용
+  아니요  -> 계속...
 
-Does it need a different model or thinking level?
-  YES -> Use cron (isolated) with --model/--thinking
-  NO  -> Use heartbeat
+다른 모델 또는 사고 레벨이 필요합니까?
+  예 -> --model/--thinking과 함께 크론 (격리된) 사용
+  아니요  -> 하트비트 사용
 ```
 
-## Combining Both
+## 둘 다 결합하기
 
-The most efficient setup uses **both**:
+가장 효율적인 설정은 **둘 다 사용하는 것**입니다:
 
-1. **Heartbeat** handles routine monitoring (inbox, calendar, notifications) in one batched turn every 30 minutes.
-2. **Cron** handles precise schedules (daily reports, weekly reviews) and one-shot reminders.
+1. **하트비트**는 30분마다 한 번씩 일괄적으로 (인박스, 캘린더, 알림) 루틴 모니터링을 처리합니다.
+2. **크론**은 정확한 일정 (일일 보고, 주간 검토)과 일회성 알림을 처리합니다.
 
-### Example: Efficient automation setup
+### 예시: 효율적인 자동화 설정
 
-**HEARTBEAT.md** (checked every 30 min):
+**HEARTBEAT.md** (매 30분마다 확인):
 
 ```md
-# Heartbeat checklist
+# 하트비트 체크리스트
 
-- Scan inbox for urgent emails
-- Check calendar for events in next 2h
-- Review any pending tasks
-- Light check-in if quiet for 8+ hours
+- 긴급 이메일 확인
+- 향후 2시간 내의 캘린더 이벤트 확인
+- 대기 중인 작업 검토
+- 8시간 이상 조용한 경우 간단한 체크인
 ```
 
-**Cron jobs** (precise timing):
+**크론 작업** (정확한 타이밍):
 
 ```bash
-# Daily morning briefing at 7am
+# 매일 아침 브리핑 오전 7시
 openclaw cron add --name "Morning brief" --cron "0 7 * * *" --session isolated --message "..." --announce
 
-# Weekly project review on Mondays at 9am
+# 매주 월요일 오전 9시에 프로젝트 리뷰
 openclaw cron add --name "Weekly review" --cron "0 9 * * 1" --session isolated --message "..." --model opus
 
-# One-shot reminder
+# 일회성 알림
 openclaw cron add --name "Call back" --at "2h" --session main --system-event "Call back the client" --wake now
 ```
 
-## Lobster: Deterministic workflows with approvals
+## Lobster: 승인과 함께 결정적 워크플로우
 
-Lobster is the workflow runtime for **multi-step tool pipelines** that need deterministic execution and explicit approvals.
-Use it when the task is more than a single agent turn, and you want a resumable workflow with human checkpoints.
+Lobster는 **다단계 도구 파이프라인**을 위한 워크플로우 런타임으로, 결정적인 실행과 명확한 승인이 필요합니다.
+에이전트 턴 이상의 작업이고, 대화 가능한 워크플로우가 필요할 때 사용하세요.
 
-### When Lobster fits
+### Lobster가 적합할 때
 
-- **Multi-step automation**: You need a fixed pipeline of tool calls, not a one-off prompt.
-- **Approval gates**: Side effects should pause until you approve, then resume.
-- **Resumable runs**: Continue a paused workflow without re-running earlier steps.
+- **다단계 자동화**: 일회성 프롬프트가 아닌 고정 파이프라인에서 도구 호출이 필요할 때.
+- **승인 관문**: 부작용이 승인될 때까지 일시 정지하고, 그 후에 다시 실행.
+- **재개 가능한 실행**: 이전 단계의 재실행 없이 일시 중단된 워크플로우 지속.
 
-### How it pairs with heartbeat and cron
+### 하트비트 및 크론과의 연계
 
-- **Heartbeat/cron** decide _when_ a run happens.
-- **Lobster** defines _what steps_ happen once the run starts.
+- **하트비트/크론**은 실행 시점을 결정합니다.
+- **Lobster**는 실행이 시작되면 발생할 단계들을 정의합니다.
 
-For scheduled workflows, use cron or heartbeat to trigger an agent turn that calls Lobster.
-For ad-hoc workflows, call Lobster directly.
+일정한 워크플로우에는 하트비트나 크론을 사용하여 에이전트 턴을 트리거하고 Lobster를 호출합니다.
+즉석 워크플로우는 Lobster를 직접 호출하세요.
 
-### Operational notes (from the code)
+### 코드에서 가져온 운영 노트
 
-- Lobster runs as a **local subprocess** (`lobster` CLI) in tool mode and returns a **JSON envelope**.
-- If the tool returns `needs_approval`, you resume with a `resumeToken` and `approve` flag.
-- The tool is an **optional plugin**; enable it additively via `tools.alsoAllow: ["lobster"]` (recommended).
-- If you pass `lobsterPath`, it must be an **absolute path**.
+- Lobster는 **로컬 서브프로세스**(`lobster` CLI)로 도구 모드에서 실행되며 **JSON 봉투**를 반환합니다.
+- 도구가 `needs_approval`를 반환하면, `resumeToken`과 `approve` 플래그로 재개합니다.
+- 도구는 **옵션 플러그인**으로, `tools.alsoAllow: ["lobster"]`를 통해 추가적으로 사용할 수 있습니다(권장).
+- `lobsterPath`를 전달할 경우, **절대 경로**여야 합니다.
 
-See [Lobster](/ko-KR/tools/lobster) for full usage and examples.
+전체 사용법과 예시는 [Lobster](/tools/lobster)를 참조하세요.
 
-## Main Session vs Isolated Session
+## 메인 세션 vs 격리된 세션
 
-Both heartbeat and cron can interact with the main session, but differently:
+하트비트와 크론 모두 메인 세션과 상호 작용할 수 있지만, 서로 다르게 작동합니다:
 
-|         | Heartbeat                       | Cron (main)              | Cron (isolated)            |
-| ------- | ------------------------------- | ------------------------ | -------------------------- |
-| Session | Main                            | Main (via system event)  | `cron:<jobId>`             |
-| History | Shared                          | Shared                   | Fresh each run             |
-| Context | Full                            | Full                     | None (starts clean)        |
-| Model   | Main session model              | Main session model       | Can override               |
-| Output  | Delivered if not `HEARTBEAT_OK` | Heartbeat prompt + event | Announce summary (default) |
+|      | 하트비트                    | 크론 (메인)                | 크론 (격리된)         |
+| ---- | --------------------------- | -------------------------- | --------------------- |
+| 세션 | 메인                        | 메인 (시스템 이벤트로)     | `cron:<jobId>`        |
+| 기록 | 공유                        | 공유                       | 매 실행마다 새로 생성 |
+| 문맥 | 전체                        | 전체                       | 없음 (새롭게 시작)    |
+| 모델 | 메인 세션 모델              | 메인 세션 모델             | 덮어쓰기 가능         |
+| 출력 | `HEARTBEAT_OK` 아닐 시 전달 | 하트비트 프롬프트 + 이벤트 | 알림 요약 (기본값)    |
 
-### When to use main session cron
+### 메인 세션 크론을 사용할 때
 
-Use `--session main` with `--system-event` when you want:
+`--session main`과 `--system-event`를 사용할 때 다음과 같은 경우가 있습니다:
 
-- The reminder/event to appear in main session context
-- The agent to handle it during the next heartbeat with full context
-- No separate isolated run
+- 메인 세션 문맥에 나타날 알림/이벤트가 필요한 경우
+- 에이전트가 전체 문맥을 가지고 다음 하트비트 중 다루기를 원하는 경우
+- 별도 격리 실행이 필요 없는 경우
 
 ```bash
 openclaw cron add \
-  --name "Check project" \
+  --name "프로젝트 체크" \
   --every "4h" \
   --session main \
-  --system-event "Time for a project health check" \
+  --system-event "프로젝트 상태 점검 시간입니다" \
   --wake now
 ```
 
-### When to use isolated cron
+### 격리된 크론을 사용할 때
 
-Use `--session isolated` when you want:
+`--session isolated`를 사용할 때 다음과 같은 경우가 있습니다:
 
-- A clean slate without prior context
-- Different model or thinking settings
-- Announce summaries directly to a channel
-- History that doesn't clutter main session
+- 이전 컨텍스트 없이 깨끗한 시작을 원하는 경우
+- 다른 모델이나 사고 설정이 필요한 경우
+- 알림 요약을 채널에 직접 발표하는 경우
+- 메인 세션을 어지럽히지 않는 기록을 원하는 경우
 
 ```bash
 openclaw cron add \
-  --name "Deep analysis" \
+  --name "심층 분석" \
   --cron "0 6 * * 0" \
   --session isolated \
-  --message "Weekly codebase analysis..." \
+  --message "주간 코드베이스 분석..." \
   --model opus \
   --thinking high \
   --announce
 ```
 
-## Cost Considerations
+## 비용 고려 사항
 
-| Mechanism       | Cost Profile                                            |
-| --------------- | ------------------------------------------------------- |
-| Heartbeat       | One turn every N minutes; scales with HEARTBEAT.md size |
-| Cron (main)     | Adds event to next heartbeat (no isolated turn)         |
-| Cron (isolated) | Full agent turn per job; can use cheaper model          |
+| 메커니즘      | 비용 프로파일                                      |
+| ------------- | -------------------------------------------------- |
+| 하트비트      | N분마다 한 턴; HEARTBEAT.md 크기에 따라 확장       |
+| 크론 (메인)   | 다음 하트비트에 이벤트 추가 (격리 턴 없음)         |
+| 크론 (격리된) | 작업 당 전체 에이전트 턴; 더 저렴한 모델 사용 가능 |
 
-**Tips**:
+**팁**:
 
-- Keep `HEARTBEAT.md` small to minimize token overhead.
-- Batch similar checks into heartbeat instead of multiple cron jobs.
-- Use `target: "none"` on heartbeat if you only want internal processing.
-- Use isolated cron with a cheaper model for routine tasks.
+- `HEARTBEAT.md`를 작게 유지하여 토큰 오버헤드를 최소화하세요.
+- 비슷한 체크를 하트비트에 일괄 처리하여 여러 크론 작업 대신 사용하세요.
+- 내부 처리만 원하는 경우 하트비트에 `target: "none"`을 사용하세요.
+- 일상 작업에 대해서는 더 저렴한 모델의 격리된 크론을 사용하세요.
 
-## Related
+## 관련 자료
 
-- [Heartbeat](/ko-KR/gateway/heartbeat) - full heartbeat configuration
-- [Cron jobs](/ko-KR/automation/cron-jobs) - full cron CLI and API reference
-- [System](/ko-KR/cli/system) - system events + heartbeat controls
+- [Heartbeat](/gateway/heartbeat) - 전체 하트비트 설정
+- [Cron jobs](/automation/cron-jobs) - 전체 크론 CLI 및 API 참조
+- [System](/cli/system) - 시스템 이벤트 + 하트비트 제어설정

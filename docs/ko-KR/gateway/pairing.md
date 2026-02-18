@@ -1,40 +1,35 @@
 ---
-summary: "Gateway-owned node pairing (Option B) for iOS and other remote nodes"
+summary: "게이트웨이 소유 노드 페어링 (옵션 B) - iOS 및 기타 원격 노드를 위한"
 read_when:
-  - Implementing node pairing approvals without macOS UI
-  - Adding CLI flows for approving remote nodes
-  - Extending gateway protocol with node management
-title: "Gateway-Owned Pairing"
+  - macOS UI 없이 노드 페어링 승인 구현하기
+  - 원격 노드를 위한 CLI 흐름 추가
+  - 노드 관리를 통해 게이트웨이 프로토콜 확장하기
+title: "게이트웨이 소유 페어링"
 ---
 
-# Gateway-owned pairing (Option B)
+# 게이트웨이 소유 페어링 (옵션 B)
 
-In Gateway-owned pairing, the **Gateway** is the source of truth for which nodes
-are allowed to join. UIs (macOS app, future clients) are just frontends that
-approve or reject pending requests.
+게이트웨이 소유 페어링에서는 **게이트웨이**가 어떤 노드가 참여할 수 있는지에 대한 진실의 근원입니다. UI(macOS 앱, 미래의 클라이언트)는 대기 중인 요청을 승인하거나 거부하는 프론트엔드일 뿐입니다.
 
-**Important:** WS nodes use **device pairing** (role `node`) during `connect`.
-`node.pair.*` is a separate pairing store and does **not** gate the WS handshake.
-Only clients that explicitly call `node.pair.*` use this flow.
+**중요:** WS 노드는 연결 중에 **장치 페어링**(역할 `node`)을 사용합니다. `node.pair.*`는 별도의 페어링 저장소이며 WS 핸드셰이크를 차단하지 **않습니다**. 명시적으로 `node.pair.*`를 호출하는 클라이언트만 이 흐름을 사용합니다.
 
-## Concepts
+## 개념
 
-- **Pending request**: a node asked to join; requires approval.
-- **Paired node**: approved node with an issued auth token.
-- **Transport**: the Gateway WS endpoint forwards requests but does not decide
-  membership. (Legacy TCP bridge support is deprecated/removed.)
+- **대기 중인 요청**: 노드가 참여를 요청했고 승인이 필요함.
+- **페어링된 노드**: 승인된 노드이며 인증 토큰이 발급됨.
+- **전송**: 게이트웨이 WS 엔드포인트는 요청을 전달하지만 멤버십을 결정하지 않습니다. (이전 TCP 브리지 지원은 폐기/제거되었습니다.)
 
-## How pairing works
+## 페어링이 작동하는 방법
 
-1. A node connects to the Gateway WS and requests pairing.
-2. The Gateway stores a **pending request** and emits `node.pair.requested`.
-3. You approve or reject the request (CLI or UI).
-4. On approval, the Gateway issues a **new token** (tokens are rotated on re‑pair).
-5. The node reconnects using the token and is now “paired”.
+1. 노드가 게이트웨이 WS에 연결하고 페어링을 요청합니다.
+2. 게이트웨이는 **대기 중인 요청**을 저장하고 `node.pair.requested`를 발행합니다.
+3. 당신은 요청을 승인하거나 거부합니다 (CLI 또는 UI).
+4. 승인 시, 게이트웨이는 **새로운 토큰**을 발행합니다 (재페어링 시 토큰이 회전됨).
+5. 노드는 토큰을 사용하여 다시 연결되며 이제 "페어링됨" 상태가 됩니다.
 
-Pending requests expire automatically after **5 minutes**.
+대기 중인 요청은 **5분** 후에 자동으로 만료됩니다.
 
-## CLI workflow (headless friendly)
+## CLI 작업 흐름 (헤드리스 친화적)
 
 ```bash
 openclaw nodes pending
@@ -44,56 +39,54 @@ openclaw nodes status
 openclaw nodes rename --node <id|name|ip> --name "Living Room iPad"
 ```
 
-`nodes status` shows paired/connected nodes and their capabilities.
+`nodes status`는 페어링된/연결된 노드와 그 기능을 보여줍니다.
 
-## API surface (gateway protocol)
+## API 표면 (게이트웨이 프로토콜)
 
-Events:
+이벤트:
 
-- `node.pair.requested` — emitted when a new pending request is created.
-- `node.pair.resolved` — emitted when a request is approved/rejected/expired.
+- `node.pair.requested` — 새로운 대기 중인 요청이 생성될 때 발생.
+- `node.pair.resolved` — 요청이 승인/거부/만료될 때 발생.
 
-Methods:
+메서드:
 
-- `node.pair.request` — create or reuse a pending request.
-- `node.pair.list` — list pending + paired nodes.
-- `node.pair.approve` — approve a pending request (issues token).
-- `node.pair.reject` — reject a pending request.
-- `node.pair.verify` — verify `{ nodeId, token }`.
+- `node.pair.request` — 대기 중인 요청 생성 또는 재사용.
+- `node.pair.list` — 대기 중 + 페어링된 노드 목록 확인.
+- `node.pair.approve` — 대기 중인 요청 승인 (토큰 발행).
+- `node.pair.reject` — 대기 중인 요청 거부.
+- `node.pair.verify` — `{ nodeId, token }` 검증.
 
-Notes:
+노트:
 
-- `node.pair.request` is idempotent per node: repeated calls return the same
-  pending request.
-- Approval **always** generates a fresh token; no token is ever returned from
-  `node.pair.request`.
-- Requests may include `silent: true` as a hint for auto-approval flows.
+- `node.pair.request`는 노드당 멱등성을 가집니다: 반복 호출은 같은 대기 중인 요청을 반환합니다.
+- 승인 시 **항상** 새로운 토큰이 생성됩니다; `node.pair.request`로부터는 토큰이 절대 반환되지 않습니다.
+- 요청은 자동 승인 흐름을 위한 힌트로 `silent: true`를 포함할 수 있습니다.
 
-## Auto-approval (macOS app)
+## 자동 승인 (macOS 앱)
 
-The macOS app can optionally attempt a **silent approval** when:
+macOS 앱은 다음의 경우 **자동 승인**을 시도할 수 있습니다:
 
-- the request is marked `silent`, and
-- the app can verify an SSH connection to the gateway host using the same user.
+- 요청이 `silent`로 표시된 경우,
+- 앱이 동일한 사용자로 게이트웨이 호스트에 대한 SSH 연결을 확인할 수 있는 경우.
 
-If silent approval fails, it falls back to the normal “Approve/Reject” prompt.
+자동 승인이 실패하면 일반적인 "승인/거부" 프롬프트로 대체됩니다.
 
-## Storage (local, private)
+## 저장소 (로컬, 개인)
 
-Pairing state is stored under the Gateway state directory (default `~/.openclaw`):
+페어링 상태는 게이트웨이 상태 디렉토리(기본값 `~/.openclaw`)에 저장됩니다:
 
 - `~/.openclaw/nodes/paired.json`
 - `~/.openclaw/nodes/pending.json`
 
-If you override `OPENCLAW_STATE_DIR`, the `nodes/` folder moves with it.
+`OPENCLAW_STATE_DIR`을 재정의하면, `nodes/` 폴더도 함께 이동합니다.
 
-Security notes:
+보안 노트:
 
-- Tokens are secrets; treat `paired.json` as sensitive.
-- Rotating a token requires re-approval (or deleting the node entry).
+- 토큰은 비밀입니다; `paired.json`을 민감하게 취급하십시오.
+- 토큰을 회전하기 위해서는 재승인이 필요합니다 (또는 노드 엔트리 삭제).
 
-## Transport behavior
+## 전송 동작
 
-- The transport is **stateless**; it does not store membership.
-- If the Gateway is offline or pairing is disabled, nodes cannot pair.
-- If the Gateway is in remote mode, pairing still happens against the remote Gateway’s store.
+- 전송은 **무상태**이며, 멤버십을 저장하지 않습니다.
+- 게이트웨이가 오프라인이거나 페어링이 비활성화된 경우, 노드들은 페어링할 수 없습니다.
+- 게이트웨이가 원격 모드인 경우, 페어링은 여전히 원격 게이트웨이의 저장소에서 발생합니다.

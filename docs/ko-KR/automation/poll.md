@@ -1,16 +1,16 @@
 ---
-summary: "Poll sending via gateway + CLI"
+summary: "게이트웨이 + CLI를 통한 투표 전송"
 read_when:
-  - Adding or modifying poll support
-  - Debugging poll sends from the CLI or gateway
-title: "Polls"
+  - 투표 지원을 추가하거나 수정할 때
+  - CLI 또는 게이트웨이에서 투표 전송을 디버깅할 때
+title: "투표"
 ---
 
-# Polls
+# 투표
 
-## Supported channels
+## 지원되는 채널
 
-- WhatsApp (web channel)
+- WhatsApp (웹 채널)
 - Discord
 - MS Teams (Adaptive Cards)
 
@@ -34,36 +34,36 @@ openclaw message poll --channel msteams --target conversation:19:abc@thread.tacv
   --poll-question "Lunch?" --poll-option "Pizza" --poll-option "Sushi"
 ```
 
-Options:
+옵션:
 
-- `--channel`: `whatsapp` (default), `discord`, or `msteams`
-- `--poll-multi`: allow selecting multiple options
-- `--poll-duration-hours`: Discord-only (defaults to 24 when omitted)
+- `--channel`: `whatsapp` (기본값), `discord`, 또는 `msteams`
+- `--poll-multi`: 여러 옵션 선택 허용
+- `--poll-duration-hours`: Discord 전용 (명시하지 않을 경우 기본값 24)
 
 ## Gateway RPC
 
-Method: `poll`
+메서드: `poll`
 
-Params:
+매개변수:
 
-- `to` (string, required)
-- `question` (string, required)
-- `options` (string[], required)
-- `maxSelections` (number, optional)
-- `durationHours` (number, optional)
-- `channel` (string, optional, default: `whatsapp`)
-- `idempotencyKey` (string, required)
+- `to` (string, 필수)
+- `question` (string, 필수)
+- `options` (string[], 필수)
+- `maxSelections` (number, 선택)
+- `durationHours` (number, 선택)
+- `channel` (string, 선택, 기본값: `whatsapp`)
+- `idempotencyKey` (string, 필수)
 
-## Channel differences
+## 채널 차이
 
-- WhatsApp: 2-12 options, `maxSelections` must be within option count, ignores `durationHours`.
-- Discord: 2-10 options, `durationHours` clamped to 1-768 hours (default 24). `maxSelections > 1` enables multi-select; Discord does not support a strict selection count.
-- MS Teams: Adaptive Card polls (OpenClaw-managed). No native poll API; `durationHours` is ignored.
+- WhatsApp: 2-12 옵션, `maxSelections`는 옵션 수 내에서 지정해야 하며, `durationHours`는 무시됩니다.
+- Discord: 2-10 옵션, `durationHours`는 1-768 시간으로 제한 (기본값 24). `maxSelections > 1`은 다중 선택을 활성화합니다; Discord는 엄격한 선택 수를 지원하지 않습니다.
+- MS Teams: Adaptive Card 투표 (OpenClaw 관리). 네이티브 투표 API가 없으며, `durationHours`는 무시됩니다.
 
-## Agent tool (Message)
+## 에이전트 도구 (메시지)
 
-Use the `message` tool with `poll` action (`to`, `pollQuestion`, `pollOption`, optional `pollMulti`, `pollDurationHours`, `channel`).
+`message` 도구를 `poll` 액션과 함께 사용합니다 (`to`, `pollQuestion`, `pollOption`, 선택적 `pollMulti`, `pollDurationHours`, `channel`).
 
-Note: Discord has no “pick exactly N” mode; `pollMulti` maps to multi-select.
-Teams polls are rendered as Adaptive Cards and require the gateway to stay online
-to record votes in `~/.openclaw/msteams-polls.json`.
+참고: Discord는 "정확히 N개를 선택" 모드를 지원하지 않습니다; `pollMulti`는 다중 선택으로 매핑됩니다.
+Teams 투표는 Adaptive Cards로 렌더링되며 투표 기록을 위해 게이트웨이가 온라인 상태를 유지해야 합니다
+`~/.openclaw/msteams-polls.json`에 기록됩니다.

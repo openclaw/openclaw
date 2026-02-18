@@ -1,22 +1,22 @@
 ---
-summary: "Brave Search API setup for web_search"
+summary: "web_search를 위한 Brave Search API 설정"
 read_when:
-  - You want to use Brave Search for web_search
-  - You need a BRAVE_API_KEY or plan details
+  - web_search에 Brave Search를 사용하고 싶을 때
+  - BRAVE_API_KEY 또는 계획 세부 정보가 필요할 때
 title: "Brave Search"
 ---
 
 # Brave Search API
 
-OpenClaw uses Brave Search as the default provider for `web_search`.
+OpenClaw는 `web_search`의 기본 프로바이더로 Brave Search를 사용합니다.
 
-## Get an API key
+## API 키 받기
 
-1. Create a Brave Search API account at https://brave.com/search/api/
-2. In the dashboard, choose the **Data for Search** plan and generate an API key.
-3. Store the key in config (recommended) or set `BRAVE_API_KEY` in the Gateway environment.
+1. [https://brave.com/search/api/](https://brave.com/search/api/)에서 Brave Search API 계정을 생성합니다.
+2. 대시보드에서 **Data for Search** 플랜을 선택하여 API 키를 생성합니다.
+3. 키를 설정에 저장하거나 (권장) `BRAVE_API_KEY` 를 게이트웨이 환경 변수에 설정합니다.
 
-## Config example
+## 설정 예시
 
 ```json5
 {
@@ -33,9 +33,9 @@ OpenClaw uses Brave Search as the default provider for `web_search`.
 }
 ```
 
-## Notes
+## 주의 사항
 
-- The Data for AI plan is **not** compatible with `web_search`.
-- Brave provides a free tier plus paid plans; check the Brave API portal for current limits.
+- `web_search`와 호환되지 않는 **Data for AI** 플랜입니다.
+- Brave는 무료 플랜과 유료 플랜을 제공합니다. 현재 한도는 Brave API 포털을 확인하세요.
 
-See [Web tools](/ko-KR/tools/web) for the full web_search configuration.
+전체 web_search 설정에 대한 내용은 [웹 도구](/tools/web)를 참조하세요.

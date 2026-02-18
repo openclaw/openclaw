@@ -1,50 +1,45 @@
 ---
-summary: "Markdown formatting pipeline for outbound channels"
+summary: "아웃바운드 채널을 위한 마크다운 포맷팅 파이프라인"
 read_when:
-  - You are changing markdown formatting or chunking for outbound channels
-  - You are adding a new channel formatter or style mapping
-  - You are debugging formatting regressions across channels
-title: "Markdown Formatting"
+  - 아웃바운드 채널을 위한 마크다운 포맷팅 또는 청크 작업을 변경하는 경우
+  - 새로운 채널 포매터 또는 스타일 매핑을 추가하는 경우
+  - 채널 전반에 걸쳐 포맷팅 회귀 문제를 디버깅하는 경우
+title: "마크다운 포맷팅"
 ---
 
-# Markdown formatting
+# 마크다운 포맷팅
 
-OpenClaw formats outbound Markdown by converting it into a shared intermediate
-representation (IR) before rendering channel-specific output. The IR keeps the
-source text intact while carrying style/link spans so chunking and rendering can
-stay consistent across channels.
+OpenClaw는 아웃바운드 마크다운을 채널별 출력으로 렌더링하기 전에 공통의 중간 표현(IR)로 변환하여 포맷팅합니다. IR은 소스 텍스트를 그대로 유지하면서 스타일/링크 구간을 포함하므로 청크 작업과 렌더링이 채널 전반에 걸쳐 일관성을 유지할 수 있습니다.
 
-## Goals
+## 목표
 
-- **Consistency:** one parse step, multiple renderers.
-- **Safe chunking:** split text before rendering so inline formatting never
-  breaks across chunks.
-- **Channel fit:** map the same IR to Slack mrkdwn, Telegram HTML, and Signal
-  style ranges without re-parsing Markdown.
+- **일관성:** 하나의 파싱 단계, 여러 렌더러.
+- **안전한 청크 작업:** 렌더링 전에 텍스트를 나누어 인라인 포맷팅이 청크 간에 끊기지 않도록 합니다.
+- **채널 적합성:** 동일한 IR을 Slack mrkdwn, Telegram HTML, Signal 스타일 범위로 매핑하여 마크다운을 다시 파싱하지 않도록 합니다.
 
-## Pipeline
+## 파이프라인
 
-1. **Parse Markdown -> IR**
-   - IR is plain text plus style spans (bold/italic/strike/code/spoiler) and link spans.
-   - Offsets are UTF-16 code units so Signal style ranges align with its API.
-   - Tables are parsed only when a channel opts into table conversion.
-2. **Chunk IR (format-first)**
-   - Chunking happens on the IR text before rendering.
-   - Inline formatting does not split across chunks; spans are sliced per chunk.
-3. **Render per channel**
-   - **Slack:** mrkdwn tokens (bold/italic/strike/code), links as `<url|label>`.
-   - **Telegram:** HTML tags (`<b>`, `<i>`, `<s>`, `<code>`, `<pre><code>`, `<a href>`).
-   - **Signal:** plain text + `text-style` ranges; links become `label (url)` when label differs.
+1. **마크다운 파싱 -> IR**
+   - IR은 일반 텍스트에 스타일 구간(굵게/기울임/취소선/코드/스포일러)과 링크 구간을 더한 것입니다.
+   - 오프셋은 UTF-16 코드 단위로 Signal 스타일 범위가 API와 일치합니다.
+   - 테이블은 채널이 테이블 변환을 선택한 경우에만 파싱됩니다.
+2. **청크 IR (포맷 우선)**
+   - 렌더링 전에 IR 텍스트에서 청크 작업이 이루어집니다.
+   - 인라인 포맷팅은 청크 간에 나뉘지 않으며, 각 청크에 맞게 구간이 잘립니다.
+3. **채널별 렌더링**
+   - **Slack:** mrkdwn 토큰(굵게/기울임/취소선/코드), 링크는 `<url|label>` 형태.
+   - **Telegram:** HTML 태그(`<b>`, `<i>`, `<s>`, `<code>`, `<pre><code>`, `<a href>`).
+   - **Signal:** 일반 텍스트 + `text-style` 범위; 링크는 레이블이 다를 경우 `label (url)`로 변환.
 
-## IR example
+## IR 예시
 
-Input Markdown:
+입력 마크다운:
 
 ```markdown
 Hello **world** — see [docs](https://docs.openclaw.ai).
 ```
 
-IR (schematic):
+IR (개요):
 
 ```json
 {
@@ -54,23 +49,20 @@ IR (schematic):
 }
 ```
 
-## Where it is used
+## 사용되는 위치
 
-- Slack, Telegram, and Signal outbound adapters render from the IR.
-- Other channels (WhatsApp, iMessage, MS Teams, Discord) still use plain text or
-  their own formatting rules, with Markdown table conversion applied before
-  chunking when enabled.
+- Slack, Telegram, Signal 아웃바운드 어댑터는 IR에서 렌더링합니다.
+- 다른 채널(WhatsApp, iMessage, MS Teams, Discord)은 여전히 일반 텍스트 또는 자체 포맷팅 규칙을 사용하며, 마크다운 테이블 변환은 활성화 시 청크 작업 전에 적용됩니다.
 
-## Table handling
+## 테이블 처리
 
-Markdown tables are not consistently supported across chat clients. Use
-`markdown.tables` to control conversion per channel (and per account).
+마크다운 테이블은 채팅 클라이언트 전반에 걸쳐 일관되게 지원되지 않습니다. `markdown.tables`를 사용하여 채널(및 계정)별로 변환을 제어합니다.
 
-- `code`: render tables as code blocks (default for most channels).
-- `bullets`: convert each row into bullet points (default for Signal + WhatsApp).
-- `off`: disable table parsing and conversion; raw table text passes through.
+- `code`: 테이블을 코드 블록으로 렌더링합니다(대부분의 채널에서 기본값).
+- `bullets`: 각 행을 불릿 포인트로 변환합니다(Signal + WhatsApp의 기본값).
+- `off`: 테이블 파싱 및 변환을 비활성화합니다. 원본 테이블 텍스트가 그대로 전달됩니다.
 
-Config keys:
+설정 키:
 
 ```yaml
 channels:
@@ -83,48 +75,36 @@ channels:
           tables: off
 ```
 
-## Chunking rules
+## 청크 작업 규칙
 
-- Chunk limits come from channel adapters/config and are applied to the IR text.
-- Code fences are preserved as a single block with a trailing newline so channels
-  render them correctly.
-- List prefixes and blockquote prefixes are part of the IR text, so chunking
-  does not split mid-prefix.
-- Inline styles (bold/italic/strike/inline-code/spoiler) are never split across
-  chunks; the renderer reopens styles inside each chunk.
+- 청크 한계는 채널 어댑터/설정에서 가져오며 IR 텍스트에 적용됩니다.
+- 코드 펜스는 단일 블록으로, 끝에 줄 바꿈이 추가된 상태로 보존되므로 채널이 올바르게 렌더링할 수 있습니다.
+- 리스트 접두사와 인용문 접두사는 IR 텍스트의 일부이므로 청크 작업이 접두사 중간에서 나뉘지 않습니다.
+- 인라인 스타일(굵게/기울임/취소선/인라인 코드/스포일러)은 청크 간에 절대 나누어지지 않으며, 렌더러가 각 청크 내에서 스타일을 재개합니다.
 
-If you need more on chunking behavior across channels, see
-[Streaming + chunking](/ko-KR/concepts/streaming).
+채널 간의 청크 작업 동작에 대한 자세한 내용이 필요하면 [스트리밍 + 청크 작업](/concepts/streaming)을 참조하세요.
 
-## Link policy
+## 링크 정책
 
-- **Slack:** `[label](url)` -> `<url|label>`; bare URLs remain bare. Autolink
-  is disabled during parse to avoid double-linking.
-- **Telegram:** `[label](url)` -> `<a href="url">label</a>` (HTML parse mode).
-- **Signal:** `[label](url)` -> `label (url)` unless label matches the URL.
+- **Slack:** `[label](url)` -> `<url|label>`; 링크 없음은 그대로 유지됩니다. 이중 링크를 피하기 위해 파싱 중 자동 링크는 비활성화됩니다.
+- **Telegram:** `[label](url)` -> `<a href="url">label</a>` (HTML 파싱 모드).
+- **Signal:** `[label](url)` -> `label (url)` 레이블이 URL과 일치하지 않는 경우.
 
-## Spoilers
+## 스포일러
 
-Spoiler markers (`||spoiler||`) are parsed only for Signal, where they map to
-SPOILER style ranges. Other channels treat them as plain text.
+스포일러 마커(`||spoiler||`)는 Signal에 대해서만 파싱되며, 해당 채널에서는 SPOILER 스타일 범위로 매핑됩니다. 다른 채널은 이를 일반 텍스트로 처리합니다.
 
-## How to add or update a channel formatter
+## 채널 포매터 추가 또는 업데이트 방법
 
-1. **Parse once:** use the shared `markdownToIR(...)` helper with channel-appropriate
-   options (autolink, heading style, blockquote prefix).
-2. **Render:** implement a renderer with `renderMarkdownWithMarkers(...)` and a
-   style marker map (or Signal style ranges).
-3. **Chunk:** call `chunkMarkdownIR(...)` before rendering; render each chunk.
-4. **Wire adapter:** update the channel outbound adapter to use the new chunker
-   and renderer.
-5. **Test:** add or update format tests and an outbound delivery test if the
-   channel uses chunking.
+1. **한 번 파싱:** 채널에 적합한 옵션(자동 링크, 머리글 스타일, 인용문 접두사)으로 공유 `markdownToIR(...)` 헬퍼를 사용하세요.
+2. **렌더링:** `renderMarkdownWithMarkers(...)`와 스타일 마커 맵(또는 Signal 스타일 범위)을 사용하여 렌더러를 구현합니다.
+3. **청크 작업:** 렌더링 전에 `chunkMarkdownIR(...)`를 호출하고 각 청크를 렌더링합니다.
+4. **어댑터 연결:** 새 청킹 및 렌더러를 사용하도록 채널 아웃바운드 어댑터를 업데이트합니다.
+5. **테스트:** 채널이 청크 작업을 사용하는 경우 포맷 테스트 및 아웃바운드 배송 테스트를 추가하거나 업데이트합니다.
 
-## Common gotchas
+## 일반적인 실수
 
-- Slack angle-bracket tokens (`<@U123>`, `<#C123>`, `<https://...>`) must be
-  preserved; escape raw HTML safely.
-- Telegram HTML requires escaping text outside tags to avoid broken markup.
-- Signal style ranges depend on UTF-16 offsets; do not use code point offsets.
-- Preserve trailing newlines for fenced code blocks so closing markers land on
-  their own line.
+- Slack 각괄호 토큰(`<@U123>`, `<#C123>`, `<https://...>`)은 보존해야 하며, 원시 HTML은 안전하게 이스케이프 처리하세요.
+- Telegram HTML은 태그 외부의 텍스트를 이스케이프 처리해야 잘못된 마크업을 피할 수 있습니다.
+- Signal 스타일 범위는 UTF-16 오프셋에 의존합니다; 코드 포인트 오프셋은 사용하지 마세요.
+- 펜스코드 블록의 닫힌 마커가 자체 라인에 배치되도록 마지막 줄 바꿈을 보존하세요.

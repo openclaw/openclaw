@@ -1,14 +1,14 @@
 ---
-summary: "Skills config schema and examples"
+summary: "스킬 설정 스키마 및 예제"
 read_when:
-  - Adding or modifying skills config
-  - Adjusting bundled allowlist or install behavior
-title: "Skills Config"
+  - 스킬 설정 추가 또는 수정
+  - 번들 허용 목록이나 설치 동작 조정
+title: "스킬 설정"
 ---
 
-# Skills Config
+# 스킬 설정
 
-All skills-related configuration lives under `skills` in `~/.openclaw/openclaw.json`.
+모든 스킬 관련 설정은 `~/.openclaw/openclaw.json`의 `skills` 아래에 있습니다.
 
 ```json5
 {
@@ -21,7 +21,7 @@ All skills-related configuration lives under `skills` in `~/.openclaw/openclaw.j
     },
     install: {
       preferBrew: true,
-      nodeManager: "npm", // npm | pnpm | yarn | bun (Gateway runtime still Node; bun not recommended)
+      nodeManager: "npm", // npm | pnpm | yarn | bun (게이트웨이 런타임은 여전히 Node; bun은 권장하지 않음)
     },
     entries: {
       "nano-banana-pro": {
@@ -38,39 +38,35 @@ All skills-related configuration lives under `skills` in `~/.openclaw/openclaw.j
 }
 ```
 
-## Fields
+## 필드
 
-- `allowBundled`: optional allowlist for **bundled** skills only. When set, only
-  bundled skills in the list are eligible (managed/workspace skills unaffected).
-- `load.extraDirs`: additional skill directories to scan (lowest precedence).
-- `load.watch`: watch skill folders and refresh the skills snapshot (default: true).
-- `load.watchDebounceMs`: debounce for skill watcher events in milliseconds (default: 250).
-- `install.preferBrew`: prefer brew installers when available (default: true).
-- `install.nodeManager`: node installer preference (`npm` | `pnpm` | `yarn` | `bun`, default: npm).
-  This only affects **skill installs**; the Gateway runtime should still be Node
-  (Bun not recommended for WhatsApp/Telegram).
-- `entries.<skillKey>`: per-skill overrides.
+- `allowBundled`: **번들**된 스킬에만 적용되는 선택적 허용 목록. 설정된 경우 목록에 있는 번들 스킬만 대상이 됩니다 (관리/작업 공간 스킬은 영향받지 않음).
+- `load.extraDirs`: 추가로 스캔할 스킬 디렉토리 (최하위 우선순위).
+- `load.watch`: 스킬 폴더를 감시하고 스킬 스냅샷을 갱신합니다 (기본값: true).
+- `load.watchDebounceMs`: 스킬 감시 이벤트에 대한 밀리초 단위 디바운스 (기본값: 250).
+- `install.preferBrew`: 사용 가능한 경우 brew 설치자를 우선 사용 (기본값: true).
+- `install.nodeManager`: 노드 설치자 우선순위 (`npm` | `pnpm` | `yarn` | `bun`, 기본값: npm).
+  이는 **스킬 설치**에만 영향을 미칩니다; 게이트웨이 런타임은 여전히 Node여야 합니다 (WhatsApp/Telegram에는 Bun 권장하지 않음).
+- `entries.<skillKey>`: 스킬별 오버라이드.
 
-Per-skill fields:
+스킬별 필드:
 
-- `enabled`: set `false` to disable a skill even if it’s bundled/installed.
-- `env`: environment variables injected for the agent run (only if not already set).
-- `apiKey`: optional convenience for skills that declare a primary env var.
+- `enabled`: 스킬이 번들되거나 설치되어 있어도 `false`로 설정하여 비활성화합니다.
+- `env`: 에이전트 실행 시 주입되는 환경 변수 (이미 설정되어 있지 않은 경우에만).
+- `apiKey`: 기본 환경 변수를 선언하는 스킬에 대한 선택적 편의 기능.
 
-## Notes
+## 주의사항
 
-- Keys under `entries` map to the skill name by default. If a skill defines
-  `metadata.openclaw.skillKey`, use that key instead.
-- Changes to skills are picked up on the next agent turn when the watcher is enabled.
+- `entries` 아래의 키는 기본적으로 스킬 이름에 매핑됩니다. 스킬이 `metadata.openclaw.skillKey`를 정의하는 경우, 해당 키를 사용합니다.
+- 스킬 변경 사항은 감시기가 활성화된 경우 다음 에이전트 턴에서 반영됩니다.
 
-### Sandboxed skills + env vars
+### 샌드박스 격리 스킬 + 환경 변수
 
-When a session is **sandboxed**, skill processes run inside Docker. The sandbox
-does **not** inherit the host `process.env`.
+세션이 **샌드박스 격리**될 때, 스킬 프로세스는 Docker 안에서 실행됩니다. 샌드박스는 호스트 `process.env`를 **상속하지 않습니다**.
 
-Use one of:
+다음 중 하나를 사용하십시오:
 
-- `agents.defaults.sandbox.docker.env` (or per-agent `agents.list[].sandbox.docker.env`)
-- bake the env into your custom sandbox image
+- `agents.defaults.sandbox.docker.env` (혹은 에이전트별 `agents.list[].sandbox.docker.env`)
+- 사용자 지정 샌드박스 이미지를 사용하여 환경 변수를 프로비저닝
 
-Global `env` and `skills.entries.<skill>.env/apiKey` apply to **host** runs only.
+글로벌 `env`와 `skills.entries.<skill>.env/apiKey`는 **호스트** 실행에만 적용됩니다.

@@ -1,24 +1,24 @@
 ---
-summary: "Dev agent tools notes (C-3PO)"
+summary: "개발 에이전트 도구 주의사항 (C-3PO)"
 read_when:
-  - Using the dev gateway templates
-  - Updating the default dev agent identity
+  - 개발 게이트웨이 템플릿 사용 시
+  - 기본 개발 에이전트 식별 정보 업데이트 시
 ---
 
-# TOOLS.md - User Tool Notes (editable)
+# TOOLS.md - 사용자 도구 메모 (편집 가능)
 
-This file is for _your_ notes about external tools and conventions.
-It does not define which tools exist; OpenClaw provides built-in tools internally.
+이 파일은 외부 도구와 관례에 대한 _귀하의_ 메모를 위한 것입니다.
+어떤 도구가 존재하는지를 정의하지 않습니다; OpenClaw는 내부에 내장된 도구를 제공합니다.
 
-## Examples
+## 예시
 
 ### imsg
 
-- Send an iMessage/SMS: describe who/what, confirm before sending.
-- Prefer short messages; avoid sending secrets.
+- iMessage/SMS 전송: 누구/무엇을 설명하고, 전송 전에 확인합니다.
+- 짧은 메시지를 선호하며, 비밀 정보 전송은 피하십시오.
 
 ### sag
 
-- Text-to-speech: specify voice, target speaker/room, and whether to stream.
+- 음성 변환: 음성, 대상 스피커/방 그리고 스트리밍 여부를 지정합니다.
 
-Add whatever else you want the assistant to know about your local toolchain.
+로컬 툴체인에 대해 비서가 알아야 할 다른 사항도 추가하십시오.

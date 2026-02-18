@@ -1,36 +1,37 @@
+```markdown
 ---
-summary: "Exploration: model config, auth profiles, and fallback behavior"
+summary: "탐색: 모델 설정, 인증 프로필 및 폴백 동작"
 read_when:
-  - Exploring future model selection + auth profile ideas
-title: "Model Config Exploration"
+  - 미래 모델 선택 및 인증 프로필 아이디어 탐색
+title: "모델 설정 탐색"
 ---
 
-# Model Config (Exploration)
+# 모델 설정 (탐색)
 
-This document captures **ideas** for future model configuration. It is not a
-shipping spec. For current behavior, see:
+이 문서는 미래 모델 설정을 위한 **아이디어**를 담고 있습니다. 이는 출하 사양이 아닙니다. 현재 동작에 대해서는 다음을 참조하십시오:
 
-- [Models](/ko-KR/concepts/models)
-- [Model failover](/ko-KR/concepts/model-failover)
-- [OAuth + profiles](/ko-KR/concepts/oauth)
+- [모델](/concepts/models)
+- [모델 장애 조치](/concepts/model-failover)
+- [OAuth + 프로필](/concepts/oauth)
 
-## Motivation
+## 동기
 
-Operators want:
+운영자는 다음을 원합니다:
 
-- Multiple auth profiles per provider (personal vs work).
-- Simple `/model` selection with predictable fallbacks.
-- Clear separation between text models and image-capable models.
+- 프로바이더당 여러 인증 프로필 (개인 vs 업무).
+- 예측 가능한 폴백을 가진 간단한 `/model` 선택.
+- 텍스트 모델과 이미지 지원 모델 간의 명확한 분리.
 
-## Possible direction (high level)
+## 가능한 방향 (고수준)
 
-- Keep model selection simple: `provider/model` with optional aliases.
-- Let providers have multiple auth profiles, with an explicit order.
-- Use a global fallback list so all sessions fail over consistently.
-- Only override image routing when explicitly configured.
+- 단순한 모델 선택 유지: `provider/model`에 선택적 별칭 추가.
+- 프로바이더가 여러 인증 프로필을 가지도록 하며 명시적인 순서를 지정.
+- 모든 세션이 일관되게 장애 조치를 할 수 있도록 글로벌 폴백 목록 사용.
+- 명시적으로 설정된 경우에만 이미지 라우팅 재정의.
 
-## Open questions
+## 열린 질문
 
-- Should profile rotation be per-provider or per-model?
-- How should the UI surface profile selection for a session?
-- What is the safest migration path from legacy config keys?
+- 프로필 회전은 프로바이더별로 해야 하나, 모델별로 해야 하나?
+- UI가 세션에 대한 프로필 선택을 어떻게 나타내야 하나?
+- 레거시 설정 키에서 안전하게 마이그레이션하는 방법은 무엇인가?
+```

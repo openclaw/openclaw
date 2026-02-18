@@ -1,14 +1,14 @@
 ---
-summary: "CLI reference for `openclaw dashboard` (open the Control UI)"
+summary: "`openclaw dashboard` 명령어에 대한 CLI 참조 (제어 UI 열기)"
 read_when:
-  - You want to open the Control UI with your current token
-  - You want to print the URL without launching a browser
-title: "dashboard"
+  - 현재 토큰으로 제어 UI를 열고 싶을 때
+  - 브라우저를 실행하지 않고 URL만 출력하고 싶을 때
+title: "대시보드"
 ---
 
 # `openclaw dashboard`
 
-Open the Control UI using your current auth.
+현재 인증을 사용하여 제어 UI를 엽니다.
 
 ```bash
 openclaw dashboard

@@ -1,48 +1,49 @@
+````markdown
 ---
-summary: "Plan: one clean plugin SDK + runtime for all messaging connectors"
+summary: "계획: 모든 메시징 커넥터를 위한 하나의 깔끔한 플러그인 SDK + 런타임"
 read_when:
-  - Defining or refactoring the plugin architecture
-  - Migrating channel connectors to the plugin SDK/runtime
-title: "Plugin SDK Refactor"
+  - 플러그인 아키텍처 정의 또는 리팩토링
+  - 채널 커넥터를 플러그인 SDK/런타임으로 마이그레이션
+title: "플러그인 SDK 리팩터링"
 ---
 
-# Plugin SDK + Runtime Refactor Plan
+# 플러그인 SDK + 런타임 리팩터링 계획
 
-Goal: every messaging connector is a plugin (bundled or external) using one stable API.
-No plugin imports from `src/**` directly. All dependencies go through the SDK or runtime.
+목표: 모든 메시징 커넥터가 하나의 안정적인 API를 사용하는 플러그인(번들 또는 외부)이다.
+모든 플러그인은 `src/**`에서 직접 가져오지 않는다. 모든 종속성은 SDK나 런타임을 통해 해결된다.
 
-## Why now
+## 왜 지금인가
 
-- Current connectors mix patterns: direct core imports, dist-only bridges, and custom helpers.
-- This makes upgrades brittle and blocks a clean external plugin surface.
+- 현재 커넥터는 패턴이 섞여 있음: 직접 코어 가져오기, 배포 전용 브리지, 커스텀 헬퍼.
+- 이것은 업그레이드를 불안정하게 만들고, 깨끗한 외부 플러그인 표면을 막는다.
 
-## Target architecture (two layers)
+## 목표 아키텍처 (두 계층)
 
-### 1) Plugin SDK (compile-time, stable, publishable)
+### 1) 플러그인 SDK (컴파일 시간, 안정적, 게시 가능)
 
-Scope: types, helpers, and config utilities. No runtime state, no side effects.
+범위: 유형, 헬퍼, 설정 유틸리티. 런타임 상태 없음, 부작용 없음.
 
-Contents (examples):
+내용 (예시):
 
-- Types: `ChannelPlugin`, adapters, `ChannelMeta`, `ChannelCapabilities`, `ChannelDirectoryEntry`.
-- Config helpers: `buildChannelConfigSchema`, `setAccountEnabledInConfigSection`, `deleteAccountFromConfigSection`,
+- 유형: `ChannelPlugin`, 어댑터, `ChannelMeta`, `ChannelCapabilities`, `ChannelDirectoryEntry`.
+- 설정 헬퍼: `buildChannelConfigSchema`, `setAccountEnabledInConfigSection`, `deleteAccountFromConfigSection`,
   `applyAccountNameToChannelSection`.
-- Pairing helpers: `PAIRING_APPROVED_MESSAGE`, `formatPairingApproveHint`.
-- Onboarding helpers: `promptChannelAccessConfig`, `addWildcardAllowFrom`, onboarding types.
-- Tool param helpers: `createActionGate`, `readStringParam`, `readNumberParam`, `readReactionParams`, `jsonResult`.
-- Docs link helper: `formatDocsLink`.
+- 페어링 헬퍼: `PAIRING_APPROVED_MESSAGE`, `formatPairingApproveHint`.
+- 온보딩 헬퍼: `promptChannelAccessConfig`, `addWildcardAllowFrom`, 온보딩 유형.
+- 도구 파라미터 헬퍼: `createActionGate`, `readStringParam`, `readNumberParam`, `readReactionParams`, `jsonResult`.
+- 문서 링크 헬퍼: `formatDocsLink`.
 
-Delivery:
+전달:
 
-- Publish as `openclaw/plugin-sdk` (or export from core under `openclaw/plugin-sdk`).
-- Semver with explicit stability guarantees.
+- `openclaw/plugin-sdk`로 게시 (또는 코어에서 `openclaw/plugin-sdk`로 내보내기).
+- 명시적인 안정성 보장과 함께 semver.
 
-### 2) Plugin Runtime (execution surface, injected)
+### 2) 플러그인 런타임 (실행 표면, 주입됨)
 
-Scope: everything that touches core runtime behavior.
-Accessed via `OpenClawPluginApi.runtime` so plugins never import `src/**`.
+범위: 코어 런타임 동작과 관련된 모든 것.
+플러그인에서 `src/**`를 가져오지 않고 `OpenClawPluginApi.runtime`을 통해 접근.
 
-Proposed surface (minimal but complete):
+제안된 표면 (최소하지만 완전함):
 
 ```ts
 export type PluginRuntime = {
@@ -65,7 +66,7 @@ export type PluginRuntime = {
           onError?: (err: unknown, info: { kind: string }) => void;
         };
       }): Promise<void>;
-      createReplyDispatcherWithTyping?: unknown; // adapter for Teams-style flows
+      createReplyDispatcherWithTyping?: unknown; // Teams 스타일 흐름에 대한 어댑터
     };
     routing: {
       resolveAgentRoute(params: {
@@ -143,72 +144,77 @@ export type PluginRuntime = {
   };
 };
 ```
+````
 
-Notes:
+주의사항:
 
-- Runtime is the only way to access core behavior.
-- SDK is intentionally small and stable.
-- Each runtime method maps to an existing core implementation (no duplication).
+- 런타임은 코어 동작에 접근하는 유일한 방법이다.
+- SDK는 의도적으로 작고 안정적이다.
+- 각 런타임 메서드는 기존 코어 구현에 매핑된다 (중복 없음).
 
-## Migration plan (phased, safe)
+## 마이그레이션 계획 (단계적, 안전함)
 
-### Phase 0: scaffolding
+### 0단계: 스캐폴딩
 
-- Introduce `openclaw/plugin-sdk`.
-- Add `api.runtime` to `OpenClawPluginApi` with the surface above.
-- Maintain existing imports during a transition window (deprecation warnings).
+- `openclaw/plugin-sdk` 도입.
+- `OpenClawPluginApi`에 위의 표면과 함께 `api.runtime` 추가.
+- 전환 기간 동안 기존 가져오기를 유지 (사용 중단 경고).
 
-### Phase 1: bridge cleanup (low risk)
+### 1단계: 브리지 정리 (낮은 위험)
 
-- Replace per-extension `core-bridge.ts` with `api.runtime`.
-- Migrate BlueBubbles, Zalo, Zalo Personal first (already close).
-- Remove duplicated bridge code.
+- 확장당 `core-bridge.ts`를 `api.runtime`으로 교체.
+- BlueBubbles, Zalo, Zalo Personal을 먼저 마이그레이션 (이미 가까워짐).
+- 중복된 브리지 코드 제거.
 
-### Phase 2: light direct-import plugins
+### 2단계: 가벼운 직접 가져오기 플러그인
 
-- Migrate Matrix to SDK + runtime.
-- Validate onboarding, directory, group mention logic.
+- Matrix를 SDK + 런타임으로 마이그레이션.
+- 온보딩, 디렉토리, 그룹 멘션 논리를 검증.
 
-### Phase 3: heavy direct-import plugins
+### 3단계: 무거운 직접 가져오기 플러그인
 
-- Migrate MS Teams (largest set of runtime helpers).
-- Ensure reply/typing semantics match current behavior.
+- MS Teams 마이그레이션 (가장 많은 런타임 헬퍼 세트).
+- 답장/타이핑 의미가 현재 동작과 일치하는지 확인.
 
-### Phase 4: iMessage pluginization
+### 4단계: iMessage 플러그인화
 
-- Move iMessage into `extensions/imessage`.
-- Replace direct core calls with `api.runtime`.
-- Keep config keys, CLI behavior, and docs intact.
+- iMessage를 `extensions/imessage`로 이동.
+- 직접 코어 호출을 `api.runtime`으로 교체.
+- 설정 키, CLI 동작 및 문서 그대로 유지.
 
-### Phase 5: enforcement
+### 5단계: 시행
 
-- Add lint rule / CI check: no `extensions/**` imports from `src/**`.
-- Add plugin SDK/version compatibility checks (runtime + SDK semver).
+- 린트 규칙/CI 검사 추가: `extensions/**`에서 `src/**`로 가져오기 금지.
+- 플러그인 SDK/버전 호환성 검사 추가 (런타임 + SDK semver).
 
-## Compatibility and versioning
+## 호환성 및 버전 관리
 
-- SDK: semver, published, documented changes.
-- Runtime: versioned per core release. Add `api.runtime.version`.
-- Plugins declare a required runtime range (e.g., `openclawRuntime: ">=2026.2.0"`).
+- SDK: semver, 게시, 문서화된 변경 사항.
+- 런타임: 코어 릴리스별 버전 관리. `api.runtime.version` 추가.
+- 플러그인은 필수 런타임 범위를 선언함 (예: `openclawRuntime: ">=2026.2.0"`).
 
-## Testing strategy
+## 테스트 전략
 
-- Adapter-level unit tests (runtime functions exercised with real core implementation).
-- Golden tests per plugin: ensure no behavior drift (routing, pairing, allowlist, mention gating).
-- A single end-to-end plugin sample used in CI (install + run + smoke).
+- 어댑터 수준 단위 테스트 (실제 코어 구현으로 런타임 함수 실행).
+- 플러그인별 골든 테스트: 동작 드리프트 없음 보장 (라우팅, 페어링, 허용 목록, 멘션 게이팅).
+- CI에서 사용되는 단일 엔드투엔드 플러그인 샘플 (설치 + 실행 + 스모크).
 
-## Open questions
+## 미해결 질문
 
-- Where to host SDK types: separate package or core export?
-- Runtime type distribution: in SDK (types only) or in core?
-- How to expose docs links for bundled vs external plugins?
-- Do we allow limited direct core imports for in-repo plugins during transition?
+- SDK 유형을 어디에 호스팅할 것인가: 개별 패키지 또는 코어 내보내기?
+- 런타임 유형 배포: SDK 내에서(유형만) 또는 코어 내에서?
+- 번들화된 플러그인 vs 외부 플러그인에 대한 문서 링크를 어떻게 노출할 것인가?
+- 전환 중에 리포 내 플러그인을 위해 제한된 직접 코어 가져오기를 허용할 것인가?
 
-## Success criteria
+## 성공 기준
 
-- All channel connectors are plugins using SDK + runtime.
-- No `extensions/**` imports from `src/**`.
-- New connector templates depend only on SDK + runtime.
-- External plugins can be developed and updated without core source access.
+- 모든 채널 커넥터는 SDK + 런타임을 사용하는 플러그인이 된다.
+- `extensions/**`에서 `src/**`의 가져오기가 없다.
+- 새로운 커넥터 템플릿은 SDK + 런타임에만 의존.
+- 외부 플러그인은 코어 소스 액세스 없이 개발 및 업데이트 가능.
 
-Related docs: [Plugins](/ko-KR/tools/plugin), [Channels](/ko-KR/channels/index), [Configuration](/ko-KR/gateway/configuration).
+관련 문서: [플러그인](/tools/plugin), [채널](/channels/index), [설정](/gateway/configuration).
+
+```
+
+```

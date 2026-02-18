@@ -1,67 +1,67 @@
 ---
-summary: "Voice wake and push-to-talk modes plus routing details in the mac app"
+summary: "음성 웨이크 및 푸시 투 톡 모드, mac 앱 내 라우팅 세부 정보"
 read_when:
-  - Working on voice wake or PTT pathways
-title: "Voice Wake"
+  - 음성 웨이크 또는 PTT 경로 작업 중
+title: "음성 웨이크"
 ---
 
-# Voice Wake & Push-to-Talk
+# 음성 웨이크 & 푸시 투 톡
 
-## Modes
+## 모드
 
-- **Wake-word mode** (default): always-on Speech recognizer waits for trigger tokens (`swabbleTriggerWords`). On match it starts capture, shows the overlay with partial text, and auto-sends after silence.
-- **Push-to-talk (Right Option hold)**: hold the right Option key to capture immediately—no trigger needed. The overlay appears while held; releasing finalizes and forwards after a short delay so you can tweak text.
+- **웨이크 워드 모드** (기본값): 항상 활성화된 음성 인식기는 트리거 토큰 (`swabbleTriggerWords`)을 기다립니다. 일치 시 캡처를 시작하고, 오버레이에 부분 텍스트를 표시하고, 침묵 후 자동 전송합니다.
+- **푸시 투 톡 (오른쪽 옵션 키 누름)**: 오른쪽 옵션 키를 눌러 즉시 캡처—트리거 불필요. 홀드 시 오버레이가 나타나며, 릴리스 후 짧은 지연 후에 텍스트 수정이 가능하도록 최종화하고 전송합니다.
 
-## Runtime behavior (wake-word)
+## 런타임 동작 (웨이크 워드)
 
-- Speech recognizer lives in `VoiceWakeRuntime`.
-- Trigger only fires when there’s a **meaningful pause** between the wake word and the next word (~0.55s gap). The overlay/chime can start on the pause even before the command begins.
-- Silence windows: 2.0s when speech is flowing, 5.0s if only the trigger was heard.
-- Hard stop: 120s to prevent runaway sessions.
-- Debounce between sessions: 350ms.
-- Overlay is driven via `VoiceWakeOverlayController` with committed/volatile coloring.
-- After send, recognizer restarts cleanly to listen for the next trigger.
+- 음성 인식기는 `VoiceWakeRuntime`에 있습니다.
+- 트리거는 웨이크 워드와 다음 단어 사이에 **의미 있는 일시 정지** (~0.55초 간격)이 있을 때만 발동됩니다. 명령 시작 전이라도 일시 정지 시 오버레이/차임이 시작될 수 있습니다.
+- 침묵 창: 음성이 흐를 때 2.0초, 트리거만 들렸을 때 5.0초.
+- 강제 종료: 세션 오작동을 방지하기 위해 120초로 제한.
+- 세션 간 디바운스: 350ms.
+- 오버레이는 `VoiceWakeOverlayController`를 통해 커밋/볼라티컬 컬러링으로 구동됩니다.
+- 전송 후, 인식기는 다음 트리거를 듣기 위해 깨끗하게 재시작됩니다.
 
-## Lifecycle invariants
+## 라이프사이클 불변성
 
-- If Voice Wake is enabled and permissions are granted, the wake-word recognizer should be listening (except during an explicit push-to-talk capture).
-- Overlay visibility (including manual dismiss via the X button) must never prevent the recognizer from resuming.
+- 음성 웨이크가 활성화되고 권한이 부여된 경우, 명시적 푸시 투 톡 캡처 동안을 제외하고 웨이크 워드 인식기는 항상 듣고 있어야 합니다.
+- 오버레이 가시성 (X 버튼을 통한 수동 닫기 포함)은 인식기가 재개하는 것을 방해해서는 안 됩니다.
 
-## Sticky overlay failure mode (previous)
+## 끈적한 오버레이 오류 모드 (이전)
 
-Previously, if the overlay got stuck visible and you manually closed it, Voice Wake could appear “dead” because the runtime’s restart attempt could be blocked by overlay visibility and no subsequent restart was scheduled.
+이전에는, 오버레이가 화면에 고정되고 사용자가 수동으로 닫을 경우, 음성 웨이크가 "죽은 것"처럼 보일 수 있었습니다. 이는 런타임의 재시작 시도가 오버레이 가시성에 의해 차단될 수 있으며, 이후에 재시작이 예약되지 않았기 때문입니다.
 
-Hardening:
+강화:
 
-- Wake runtime restart is no longer blocked by overlay visibility.
-- Overlay dismiss completion triggers a `VoiceWakeRuntime.refresh(...)` via `VoiceSessionCoordinator`, so manual X-dismiss always resumes listening.
+- 웨이크 런타임 재시작이 더 이상 오버레이 가시성에 의해 차단되지 않습니다.
+- 오버레이 닫기 완료 시 `VoiceWakeRuntime.refresh(...)`를 `VoiceSessionCoordinator`를 통해 트리거하여, 수동으로 X를 통해 닫아도 항상 듣기를 재개합니다.
 
-## Push-to-talk specifics
+## 푸시 투 톡 세부 사항
 
-- Hotkey detection uses a global `.flagsChanged` monitor for **right Option** (`keyCode 61` + `.option`). We only observe events (no swallowing).
-- Capture pipeline lives in `VoicePushToTalk`: starts Speech immediately, streams partials to the overlay, and calls `VoiceWakeForwarder` on release.
-- When push-to-talk starts we pause the wake-word runtime to avoid dueling audio taps; it restarts automatically after release.
-- Permissions: requires Microphone + Speech; seeing events needs Accessibility/Input Monitoring approval.
-- External keyboards: some may not expose right Option as expected—offer a fallback shortcut if users report misses.
+- 핫키 감지는 **오른쪽 옵션** (`keyCode 61` + `.option`)에 대한 전역 `.flagsChanged` 모니터를 사용합니다. 우리는 이벤트를 관찰만 합니다 (삼키지 않음).
+- 캡처 파이프라인은 `VoicePushToTalk`에서 실행됩니다: 즉시 음성을 시작하고, 오버레이로 부분 스트림을 보내며, 릴리스 시 `VoiceWakeForwarder`를 호출합니다.
+- 푸시 투 톡이 시작되면 듀얼 오디오 탭을 피하기 위해 웨이크 워드 런타임을 일시 중지합니다; 릴리스 후 자동으로 재시작됩니다.
+- 권한: 마이크 + 음성 필요; 이벤트 보기에는 접근성/입력 모니터링 승인이 필요합니다.
+- 외부 키보드: 일부는 오른쪽 옵션을 예상대로 노출하지 않을 수 있으며, 사용자가 문제를 보고할 경우 대체 단축키를 제공합니다.
 
-## User-facing settings
+## 사용자 노출 설정
 
-- **Voice Wake** toggle: enables wake-word runtime.
-- **Hold Cmd+Fn to talk**: enables the push-to-talk monitor. Disabled on macOS < 26.
-- Language & mic pickers, live level meter, trigger-word table, tester (local-only; does not forward).
-- Mic picker preserves the last selection if a device disconnects, shows a disconnected hint, and temporarily falls back to the system default until it returns.
-- **Sounds**: chimes on trigger detect and on send; defaults to the macOS “Glass” system sound. You can pick any `NSSound`-loadable file (e.g. MP3/WAV/AIFF) for each event or choose **No Sound**.
+- **음성 웨이크** 토글: 웨이크 워드 런타임 활성화.
+- **Cmd+Fn 누르고 말하기**: 푸시 투 톡 모니터 활성화. macOS < 26에서는 비활성화.
+- 언어 및 마이크 선택기, 실시간 레벨 미터, 트리거 워드 테이블, 테스터 (로컬 전용; 전송 안 함).
+- 마이크 선택기는 장치 연결이 끊어질 경우 마지막 선택을 유지하고, 연결이 재개될 때까지 시스템 기본값으로 일시적으로 되돌아갑니다.
+- **사운드**: 트리거 감지 및 전송 시 차임; macOS "유리" 시스템 사운드로 기본 설정. 각 이벤트에 대해 `NSSound`-로딩 가능한 파일(e.g. MP3/WAV/AIFF)을 선택하거나 **소리 없음**을 선택할 수 있습니다.
 
-## Forwarding behavior
+## 전송 동작
 
-- When Voice Wake is enabled, transcripts are forwarded to the active gateway/agent (the same local vs remote mode used by the rest of the mac app).
-- Replies are delivered to the **last-used main provider** (WhatsApp/Telegram/Discord/WebChat). If delivery fails, the error is logged and the run is still visible via WebChat/session logs.
+- 음성 웨이크가 활성화된 경우, 전사본은 활성 게이트웨이/에이전트로 전달됩니다 (mac 앱의 나머지와 동일한 로컬 대 원격 모드).
+- 답변은 **마지막으로 사용된 주요 프로바이더** (WhatsApp/Telegram/Discord/WebChat)로 전달됩니다. 전달이 실패하면 오류가 기록되고, 실행은 여전히 WebChat/세션 로그를 통해 볼 수 있습니다.
 
-## Forwarding payload
+## 전송 페이로드
 
-- `VoiceWakeForwarder.prefixedTranscript(_:)` prepends the machine hint before sending. Shared between wake-word and push-to-talk paths.
+- `VoiceWakeForwarder.prefixedTranscript(_:)`는 전송 전에 기계 힌트를 선행합니다. 웨이크 워드 및 푸시 투 톡 경로 간 공유됩니다.
 
-## Quick verification
+## 빠른 확인
 
-- Toggle push-to-talk on, hold Cmd+Fn, speak, release: overlay should show partials then send.
-- While holding, menu-bar ears should stay enlarged (uses `triggerVoiceEars(ttl:nil)`); they drop after release.
+- 푸시 투 톡을 토글하고, Cmd+Fn을 누르고, 말하고, 릴리스: 오버레이에 부분이 표시된 후 전송되어야 합니다.
+- 누르고 있는 동안 메뉴 바의 귀는 확장된 상태로 유지되어야 합니다 (`triggerVoiceEars(ttl:nil)` 사용); 릴리스 후에는 감소합니다.

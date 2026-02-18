@@ -1,32 +1,33 @@
+````markdown
 ---
-summary: "Use Synthetic's Anthropic-compatible API in OpenClaw"
+summary: "OpenClaw에서 Synthetic의 Anthropic 호환 API 사용"
 read_when:
-  - You want to use Synthetic as a model provider
-  - You need a Synthetic API key or base URL setup
+  - Synthetic을 모델 프로바이더로 사용하고 싶을 때
+  - Synthetic API 키 또는 기본 URL 설정이 필요할 때
 title: "Synthetic"
 ---
 
 # Synthetic
 
-Synthetic exposes Anthropic-compatible endpoints. OpenClaw registers it as the
-`synthetic` provider and uses the Anthropic Messages API.
+Synthetic은 Anthropic 호환 엔드포인트를 노출합니다. OpenClaw는 이를 `synthetic` 프로바이더로 등록하고 Anthropic 메시지 API를 사용합니다.
 
-## Quick setup
+## 빠른 설정
 
-1. Set `SYNTHETIC_API_KEY` (or run the wizard below).
-2. Run onboarding:
+1. `SYNTHETIC_API_KEY`를 설정하세요 (또는 아래의 마법사를 실행하세요).
+2. 온보딩을 실행하세요:
 
 ```bash
 openclaw onboard --auth-choice synthetic-api-key
 ```
+````
 
-The default model is set to:
+기본 모델은 다음으로 설정됩니다:
 
 ```
 synthetic/hf:MiniMaxAI/MiniMax-M2.1
 ```
 
-## Config example
+## 설정 예시
 
 ```json5
 {
@@ -61,13 +62,11 @@ synthetic/hf:MiniMaxAI/MiniMax-M2.1
 }
 ```
 
-Note: OpenClaw's Anthropic client appends `/v1` to the base URL, so use
-`https://api.synthetic.new/anthropic` (not `/anthropic/v1`). If Synthetic changes
-its base URL, override `models.providers.synthetic.baseUrl`.
+참고: OpenClaw의 Anthropic 클라이언트는 기본 URL에 `/v1`을 추가하므로 `https://api.synthetic.new/anthropic`을 사용하세요 (`/anthropic/v1` 아님). Synthetic이 기본 URL을 변경할 경우 `models.providers.synthetic.baseUrl`을 재정의하세요.
 
-## Model catalog
+## 모델 카탈로그
 
-All models below use cost `0` (input/output/cache).
+아래 모든 모델은 비용이 `0` 입니다 (입력/출력/캐시).
 
 | Model ID                                               | Context window | Max tokens | Reasoning | Input        |
 | ------------------------------------------------------ | -------------- | ---------- | --------- | ------------ |
@@ -91,9 +90,12 @@ All models below use cost `0` (input/output/cache).
 | `hf:deepseek-ai/DeepSeek-V3`                           | 128000         | 8192       | false     | text         |
 | `hf:Qwen/Qwen3-235B-A22B-Thinking-2507`                | 256000         | 8192       | true      | text         |
 
-## Notes
+## 주의사항
 
-- Model refs use `synthetic/<modelId>`.
-- If you enable a model allowlist (`agents.defaults.models`), add every model you
-  plan to use.
-- See [Model providers](/ko-KR/concepts/model-providers) for provider rules.
+- 모델 참조는 `synthetic/<modelId>` 형식을 사용합니다.
+- 모델 허용 목록을 활성화하려면 (`agents.defaults.models`), 사용할 계획인 모든 모델을 추가하세요.
+- [Model providers](/concepts/model-providers)에서 프로바이더 규칙을 참조하세요.
+
+```
+
+```

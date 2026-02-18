@@ -1,22 +1,18 @@
 ---
-summary: "Write agent tools in a plugin (schemas, optional tools, allowlists)"
+summary: "플러그인에서 에이전트 도구 작성하기 (스키마, 선택적 도구, 허용 목록)"
 read_when:
-  - You want to add a new agent tool in a plugin
-  - You need to make a tool opt-in via allowlists
-title: "Plugin Agent Tools"
+  - 플러그인에서 새로운 에이전트 도구를 추가하고 싶을 때
+  - 허용 목록을 통해 도구를 선택적으로 활성화해야 할 때
+title: "플러그인 에이전트 도구"
 ---
 
-# Plugin agent tools
+# 플러그인 에이전트 도구
 
-OpenClaw plugins can register **agent tools** (JSON‑schema functions) that are exposed
-to the LLM during agent runs. Tools can be **required** (always available) or
-**optional** (opt‑in).
+OpenClaw 플러그인은 에이전트 실행 중 LLM에 노출되는 **에이전트 도구**(JSON‑스키마 함수)를 등록할 수 있습니다. 도구는 **필수**(항상 사용 가능)거나 **선택적**(선택 가능)일 수 있습니다.
 
-Agent tools are configured under `tools` in the main config, or per‑agent under
-`agents.list[].tools`. The allowlist/denylist policy controls which tools the agent
-can call.
+에이전트 도구는 메인 설정의 `tools`에서, 또는 각 에이전트의 `agents.list[].tools` 아래에서 설정됩니다. 허용/거부 목록 정책은 에이전트가 호출할 수 있는 도구를 제어합니다.
 
-## Basic tool
+## 기본 도구
 
 ```ts
 import { Type } from "@sinclair/typebox";
@@ -35,10 +31,9 @@ export default function (api) {
 }
 ```
 
-## Optional tool (opt‑in)
+## 선택적 도구 (선택 가능)
 
-Optional tools are **never** auto‑enabled. Users must add them to an agent
-allowlist.
+선택적 도구는 **자동으로** 활성화되지 않습니다. 사용자가 에이전트 허용 목록에 추가해야 합니다.
 
 ```ts
 export default function (api) {
@@ -62,7 +57,7 @@ export default function (api) {
 }
 ```
 
-Enable optional tools in `agents.list[].tools.allow` (or global `tools.allow`):
+선택적 도구는 `agents.list[].tools.allow` (또는 전역 `tools.allow`)에서 활성화합니다:
 
 ```json5
 {
@@ -72,9 +67,9 @@ Enable optional tools in `agents.list[].tools.allow` (or global `tools.allow`):
         id: "main",
         tools: {
           allow: [
-            "workflow_tool", // specific tool name
-            "workflow", // plugin id (enables all tools from that plugin)
-            "group:plugins", // all plugin tools
+            "workflow_tool", // 특정 도구 이름
+            "workflow", // 플러그인 id (그 플러그인의 모든 도구를 활성화)
+            "group:plugins", // 모든 플러그인 도구
           ],
         },
       },
@@ -83,17 +78,15 @@ Enable optional tools in `agents.list[].tools.allow` (or global `tools.allow`):
 }
 ```
 
-Other config knobs that affect tool availability:
+도구 가용성에 영향을 미치는 다른 설정 요소:
 
-- Allowlists that only name plugin tools are treated as plugin opt-ins; core tools remain
-  enabled unless you also include core tools or groups in the allowlist.
-- `tools.profile` / `agents.list[].tools.profile` (base allowlist)
-- `tools.byProvider` / `agents.list[].tools.byProvider` (provider‑specific allow/deny)
-- `tools.sandbox.tools.*` (sandbox tool policy when sandboxed)
+- 플러그인 도구만 명명된 허용 목록은 플러그인 선택 허용으로 취급됩니다; 기본 도구는 허용 목록에 기본 도구나 그룹을 포함하지 않는 한 활성화된 상태로 남습니다.
+- `tools.profile` / `agents.list[].tools.profile` (기본 허용 목록)
+- `tools.byProvider` / `agents.list[].tools.byProvider` (프로바이더‑특정 허용/거부)
+- `tools.sandbox.tools.*` (샌드박스 격리 시 샌드박스 도구 정책)
 
-## Rules + tips
+## 규칙 + 팁
 
-- Tool names must **not** clash with core tool names; conflicting tools are skipped.
-- Plugin ids used in allowlists must not clash with core tool names.
-- Prefer `optional: true` for tools that trigger side effects or require extra
-  binaries/credentials.
+- 도구 이름은 기본 도구 이름과 **충돌하지 않아야** 합니다; 충돌하는 도구는 건너뛰어집니다.
+- 허용 목록에 사용된 플러그인 id는 기본 도구 이름과 충돌하지 않아야 합니다.
+- 부작용을 유발하거나 추가적인 바이너리/자격 증명이 필요한 도구에는 `optional: true`를 선호하십시오.

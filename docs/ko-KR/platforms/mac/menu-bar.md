@@ -1,81 +1,81 @@
 ---
-summary: "Menu bar status logic and what is surfaced to users"
+summary: "메뉴 바 상태 로직 및 사용자에게 표시되는 항목"
 read_when:
-  - Tweaking mac menu UI or status logic
-title: "Menu Bar"
+  - mac 메뉴 UI 또는 상태 로직 조정
+title: "메뉴 바"
 ---
 
-# Menu Bar Status Logic
+# 메뉴 바 상태 로직
 
-## What is shown
+## 표시되는 항목
 
-- We surface the current agent work state in the menu bar icon and in the first status row of the menu.
-- Health status is hidden while work is active; it returns when all sessions are idle.
-- The “Nodes” block in the menu lists **devices** only (paired nodes via `node.list`), not client/presence entries.
-- A “Usage” section appears under Context when provider usage snapshots are available.
+- 현재 에이전트 작업 상태는 메뉴 바 아이콘과 메뉴의 첫 번째 상태 행에 표시됩니다.
+- 작업이 진행 중일 때는 상태를 숨기며, 모든 세션이 유휴 상태일 때 다시 나타납니다.
+- 메뉴의 "노드" 블록은 **디바이스**만 나열합니다 (`node.list`를 통한 연결된 노드), 클라이언트/프레젠스 항목은 포함되지 않습니다.
+- 공급자 사용 스냅샷이 사용 가능할 때 컨텍스트 아래 "사용량" 섹션이 나타납니다.
 
-## State model
+## 상태 모델
 
-- Sessions: events arrive with `runId` (per-run) plus `sessionKey` in the payload. The “main” session is the key `main`; if absent, we fall back to the most recently updated session.
-- Priority: main always wins. If main is active, its state is shown immediately. If main is idle, the most recently active non‑main session is shown. We do not flip‑flop mid‑activity; we only switch when the current session goes idle or main becomes active.
-- Activity kinds:
-  - `job`: high‑level command execution (`state: started|streaming|done|error`).
-  - `tool`: `phase: start|result` with `toolName` and `meta/args`.
+- 세션: 이벤트는 페이로드에 `runId`(실행별)와 `sessionKey`와 함께 도착합니다. "메인" 세션은 키 `main`입니다. 없을 경우, 가장 최근에 업데이트된 세션을 사용합니다.
+- 우선순위: 항상 메인이 우선입니다. 메인이 활성 상태이면 그 상태가 즉시 표시됩니다. 메인이 유휴일 경우, 가장 최근에 활동했던 비 메인 세션이 표시됩니다. 활동 중간에 전환하지 않으며, 현재 세션이 유휴로 전환되거나 메인이 활성화될 때만 변경됩니다.
+- 활동 종류:
+  - `job`: 고수준 명령어 실행 (`state: 시작됨|스트리밍|완료|오류`).
+  - `tool`: `phase: 시작|결과`와 함께 `toolName`과 `meta/args`.
 
-## IconState enum (Swift)
+## IconState 열거형 (Swift)
 
 - `idle`
 - `workingMain(ActivityKind)`
 - `workingOther(ActivityKind)`
-- `overridden(ActivityKind)` (debug override)
+- `overridden(ActivityKind)` (디버그 오버라이드)
 
-### ActivityKind → glyph
+### ActivityKind → 글리프
 
 - `exec` → 💻
 - `read` → 📄
 - `write` → ✍️
 - `edit` → 📝
 - `attach` → 📎
-- default → 🛠️
+- 기본값 → 🛠️
 
-### Visual mapping
+### 시각적 매핑
 
-- `idle`: normal critter.
-- `workingMain`: badge with glyph, full tint, leg “working” animation.
-- `workingOther`: badge with glyph, muted tint, no scurry.
-- `overridden`: uses the chosen glyph/tint regardless of activity.
+- `idle`: 일반 동물.
+- `workingMain`: 글리프가 있는 배지, 풀 틴트, 다리 "작업 중" 애니메이션.
+- `workingOther`: 글리프가 있는 배지, 약한 틴트, 이동 없음.
+- `overridden`: 활동에 상관없이 선택한 글리프/틴트 사용.
 
-## Status row text (menu)
+## 상태 행 텍스트 (메뉴)
 
-- While work is active: `<Session role> · <activity label>`
-  - Examples: `Main · exec: pnpm test`, `Other · read: apps/macos/Sources/OpenClaw/AppState.swift`.
-- When idle: falls back to the health summary.
+- 작업이 활성화될 때: `<세션 역할> · <활동 레이블>`
+  - 예시: `메인 · exec: pnpm test`, `기타 · read: apps/macos/Sources/OpenClaw/AppState.swift`.
+- 유휴 상태일 때: 건강 요약본으로 돌아갑니다.
 
-## Event ingestion
+## 이벤트 수집
 
-- Source: control‑channel `agent` events (`ControlChannel.handleAgentEvent`).
-- Parsed fields:
-  - `stream: "job"` with `data.state` for start/stop.
-  - `stream: "tool"` with `data.phase`, `name`, optional `meta`/`args`.
-- Labels:
-  - `exec`: first line of `args.command`.
-  - `read`/`write`: shortened path.
-  - `edit`: path plus inferred change kind from `meta`/diff counts.
-  - fallback: tool name.
+- 소스: 제어 채널 `agent` 이벤트 (`ControlChannel.handleAgentEvent`).
+- 구문 분석된 필드:
+  - `stream: "job"`은 시작/정지 상태에 대한 `data.state`와 함께.
+  - `stream: "tool"`은 `data.phase`, `name`, 선택적 `meta`/`args`.
+- 라벨:
+  - `exec`: `args.command`의 첫 번째 줄.
+  - `read`/`write`: 단축 경로.
+  - `edit`: 경로와 `meta`/차이 수에서 추론된 변경 종류.
+  - 기본값: 도구 이름.
 
-## Debug override
+## 디버그 오버라이드
 
-- Settings ▸ Debug ▸ “Icon override” picker:
-  - `System (auto)` (default)
-  - `Working: main` (per tool kind)
-  - `Working: other` (per tool kind)
-  - `Idle`
-- Stored via `@AppStorage("iconOverride")`; mapped to `IconState.overridden`.
+- 설정 ▸ 디버그 ▸ "아이콘 오버라이드" 선택기:
+  - `시스템 (자동)` (기본값)
+  - `작업 중: 메인` (도구 종류별)
+  - `작업 중: 기타` (도구 종류별)
+  - `유휴`
+- `@AppStorage("iconOverride")`를 통해 저장; `IconState.overridden`에 매핑됩니다.
 
-## Testing checklist
+## 테스트 체크리스트
 
-- Trigger main session job: verify icon switches immediately and status row shows main label.
-- Trigger non‑main session job while main idle: icon/status shows non‑main; stays stable until it finishes.
-- Start main while other active: icon flips to main instantly.
-- Rapid tool bursts: ensure badge does not flicker (TTL grace on tool results).
-- Health row reappears once all sessions idle.
+- 메인 세션 작업 트리거: 아이콘이 즉시 전환되며 상태 행이 메인 레이블을 표시하는지 확인합니다.
+- 메인 유휴 상태에서 비 메인 세션 작업 트리거: 아이콘/상태가 비 메인으로 표시되며, 작업이 끝날 때까지 안정적으로 유지됩니다.
+- 다른 작업이 활성 상태일 때 메인 시작: 아이콘이 즉시 메인으로 전환됩니다.
+- 빠른 도구 버스트: 배지가 깜박이지 않도록 확인 (도구 결과의 TTL 유예).
+- 모든 세션이 유휴 상태가 되면 건강 상태 행이 다시 나타납니다.

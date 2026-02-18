@@ -124,7 +124,7 @@ flowchart LR
 - 원격 접근: [웹 서피스](/ko-KR/web) 및 [Tailscale](/ko-KR/gateway/tailscale)
 
 <p align="center">
-  <img src="whatsapp-openclaw.jpg" alt="OpenClaw" width="420" />
+  <img src="/ko-KR/whatsapp-openclaw-ai-ko.jpg" alt="OpenClaw" width="420" />
 </p>
 
 ## 설정 (선택 사항)

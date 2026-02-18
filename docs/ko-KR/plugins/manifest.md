@@ -1,21 +1,21 @@
+````markdown
 ---
-summary: "Plugin manifest + JSON schema requirements (strict config validation)"
+summary: "플러그인 매니페스트 + JSON 스키마 요구 사항 (엄격한 구성 검증)"
 read_when:
-  - You are building a OpenClaw plugin
-  - You need to ship a plugin config schema or debug plugin validation errors
-title: "Plugin Manifest"
+  - OpenClaw 플러그인을 개발하고 있습니다
+  - 플러그인 설정 스키마를 배포하거나 플러그인 검증 오류를 디버그해야 합니다
+title: "플러그인 매니페스트"
 ---
 
-# Plugin manifest (openclaw.plugin.json)
+# 플러그인 매니페스트 (openclaw.plugin.json)
 
-Every plugin **must** ship a `openclaw.plugin.json` file in the **plugin root**.
-OpenClaw uses this manifest to validate configuration **without executing plugin
-code**. Missing or invalid manifests are treated as plugin errors and block
-config validation.
+모든 플러그인은 **플러그인 루트**에 `openclaw.plugin.json` 파일을 **반드시** 포함해야 합니다.
+OpenClaw는 이 매니페스트를 사용하여 플러그인 코드를 **실행하지 않고** 구성을 검증합니다.
+매니페스트가 없거나 유효하지 않은 경우 플러그인 오류로 간주되어 구성 검증이 차단됩니다.
 
-See the full plugin system guide: [Plugins](/ko-KR/tools/plugin).
+전체 플러그인 시스템 가이드를 참고하세요: [플러그인](/tools/plugin).
 
-## Required fields
+## 필수 필드
 
 ```json
 {
@@ -27,45 +27,49 @@ See the full plugin system guide: [Plugins](/ko-KR/tools/plugin).
   }
 }
 ```
+````
 
-Required keys:
+필수 키:
 
-- `id` (string): canonical plugin id.
-- `configSchema` (object): JSON Schema for plugin config (inline).
+- `id` (문자열): 정식 플러그인 ID.
+- `configSchema` (객체): 플러그인 구성의 JSON 스키마 (인라인).
 
-Optional keys:
+옵션 키:
 
-- `kind` (string): plugin kind (example: `"memory"`).
-- `channels` (array): channel ids registered by this plugin (example: `["matrix"]`).
-- `providers` (array): provider ids registered by this plugin.
-- `skills` (array): skill directories to load (relative to the plugin root).
-- `name` (string): display name for the plugin.
-- `description` (string): short plugin summary.
-- `uiHints` (object): config field labels/placeholders/sensitive flags for UI rendering.
-- `version` (string): plugin version (informational).
+- `kind` (문자열): 플러그인 종류 (예: `"memory"`).
+- `channels` (배열): 이 플러그인이 등록한 채널 ID (예: `["matrix"]`).
+- `providers` (배열): 이 플러그인이 등록한 프로바이더 ID.
+- `skills` (배열): 로드할 스킬 디렉토리 (플러그인 루트 기준 경로).
+- `name` (문자열): 플러그인의 표시 이름.
+- `description` (문자열): 짧은 플러그인 요약.
+- `uiHints` (객체): UI 렌더링을 위한 구성 필드 레이블/플레이스홀더/민감성 플래그.
+- `version` (문자열): 플러그인 버전 (정보 제공용).
 
-## JSON Schema requirements
+## JSON 스키마 요구 사항
 
-- **Every plugin must ship a JSON Schema**, even if it accepts no config.
-- An empty schema is acceptable (for example, `{ "type": "object", "additionalProperties": false }`).
-- Schemas are validated at config read/write time, not at runtime.
+- **모든 플러그인은 JSON 스키마를 포함해야 합니다**, 설정이 없어도 마찬가지입니다.
+- 빈 스키마도 허용됩니다 (예: `{ "type": "object", "additionalProperties": false }`).
+- 스키마는 실행 시간(runtime)이 아닌 구성 읽기/쓰기 시간에 검증됩니다.
 
-## Validation behavior
+## 검증 동작
 
-- Unknown `channels.*` keys are **errors**, unless the channel id is declared by
-  a plugin manifest.
-- `plugins.entries.<id>`, `plugins.allow`, `plugins.deny`, and `plugins.slots.*`
-  must reference **discoverable** plugin ids. Unknown ids are **errors**.
-- If a plugin is installed but has a broken or missing manifest or schema,
-  validation fails and Doctor reports the plugin error.
-- If plugin config exists but the plugin is **disabled**, the config is kept and
-  a **warning** is surfaced in Doctor + logs.
+- 선언되지 않은 `channels.*` 키는 **오류**이며, 채널 ID가 플러그인 매니페스트에서 선언되지
+  않은 경우에 해당합니다.
+- `plugins.entries.<id>`, `plugins.allow`, `plugins.deny`, 그리고 `plugins.slots.*`
+  는 **발견 가능한** 플러그인 ID를 참조해야 합니다. 알려지지 않은 ID는 **오류**입니다.
+- 플러그인이 설치되어 있지만 매니페스트나 스키마가 손상되었거나 누락된 경우, 검증이 실패하고
+  Doctor가 플러그인 오류를 보고합니다.
+- 플러그인 구성이 존재하지만 플러그인이 **비활성화된 경우**, 구성은 유지되며 Doctor + 로그에
+  **경고**가 표시됩니다.
 
-## Notes
+## 노트
 
-- The manifest is **required for all plugins**, including local filesystem loads.
-- Runtime still loads the plugin module separately; the manifest is only for
-  discovery + validation.
-- If your plugin depends on native modules, document the build steps and any
-  package-manager allowlist requirements (for example, pnpm `allow-build-scripts`
-  - `pnpm rebuild <package>`).
+- 매니페스트는 **모든 플러그인에 필수**이며, 로컬 파일 시스템 로드도 포함됩니다.
+- 런타임은 여전히 플러그인 모듈을 별도로 로드하며, 매니페스트는 디바이스 검색 + 검증을 위한
+  것입니다.
+- 플러그인이 네이티브 모듈에 의존하는 경우, 빌드 단계와 패키지 관리자 허용 목록 요구 사항을
+  문서화하세요 (예: pnpm `allow-build-scripts` - `pnpm rebuild <package>`).
+
+```
+
+```

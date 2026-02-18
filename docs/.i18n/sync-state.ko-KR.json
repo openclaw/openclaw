@@ -1,6 +1,6 @@
 {
-  "last_sync_sha": "34851a78b2bbe517d6f5e6acc13a6db666bb2f6d",
-  "last_sync_date": "2026-02-18T12:00:00.000Z",
+  "last_sync_sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+  "last_sync_date": "2026-02-18T13:24:10.912Z",
   "synced_files": {
     "docs/automation/cron-jobs.md": {
       "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
@@ -380,7 +380,7 @@
     },
     "docs/install/ansible.md": {
       "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
-      "synced_at": "2026-02-17T11:11:24.317Z"
+      "synced_at": "2026-02-18T12:51:40.088Z"
     },
     "docs/install/docker.md": {
       "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
@@ -388,7 +388,7 @@
     },
     "docs/install/exe-dev.md": {
       "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
-      "synced_at": "2026-02-17T11:11:24.317Z"
+      "synced_at": "2026-02-18T13:12:20.443Z"
     },
     "docs/install/fly.md": {
       "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
@@ -396,7 +396,7 @@
     },
     "docs/install/gcp.md": {
       "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
-      "synced_at": "2026-02-17T11:11:24.317Z"
+      "synced_at": "2026-02-18T13:12:20.443Z"
     },
     "docs/install/hetzner.md": {
       "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
@@ -736,7 +736,7 @@
     },
     "docs/start/hubs.md": {
       "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
-      "synced_at": "2026-02-17T11:11:24.317Z"
+      "synced_at": "2026-02-18T13:24:10.912Z"
     },
     "docs/start/lore.md": {
       "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
@@ -760,7 +760,7 @@
     },
     "docs/start/setup.md": {
       "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
-      "synced_at": "2026-02-17T11:11:24.317Z"
+      "synced_at": "2026-02-18T13:24:10.912Z"
     },
     "docs/start/wizard-cli-automation.md": {
       "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
@@ -857,6 +857,18 @@
     "docs/web/webchat.md": {
       "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
       "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/install/bun.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-18T12:51:40.088Z"
+    },
+    "docs/install/uninstall.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-18T12:53:57.196Z"
+    },
+    "docs/install/development-channels.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-18T13:12:20.443Z"
     }
   }
 }

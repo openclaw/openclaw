@@ -1,20 +1,20 @@
 ---
-summary: "CLI reference for `openclaw voicecall` (voice-call plugin command surface)"
+summary: "`openclaw voicecall` (음성 통화 플러그인 명령 인터페이스)에 대한 CLI 참조"
 read_when:
-  - You use the voice-call plugin and want the CLI entry points
-  - You want quick examples for `voicecall call|continue|status|tail|expose`
+  - 음성 통화 플러그인을 사용하며 CLI 진입점을 원하는 경우
+  - "`voicecall call|continue|status|tail|expose`에 대한 빠른 예제를 원하는 경우"
 title: "voicecall"
 ---
 
 # `openclaw voicecall`
 
-`voicecall` is a plugin-provided command. It only appears if the voice-call plugin is installed and enabled.
+`voicecall`은 플러그인이 제공하는 명령어입니다. 음성 통화 플러그인이 설치되고 활성화된 경우에만 나타납니다.
 
-Primary doc:
+주요 문서:
 
-- Voice-call plugin: [Voice Call](/ko-KR/plugins/voice-call)
+- 음성 통화 플러그인: [Voice Call](/plugins/voice-call)
 
-## Common commands
+## 일반 명령어
 
 ```bash
 openclaw voicecall status --call-id <id>
@@ -23,7 +23,7 @@ openclaw voicecall continue --call-id <id> --message "Any questions?"
 openclaw voicecall end --call-id <id>
 ```
 
-## Exposing webhooks (Tailscale)
+## 웹훅 노출하기 (Tailscale)
 
 ```bash
 openclaw voicecall expose --mode serve
@@ -31,4 +31,4 @@ openclaw voicecall expose --mode funnel
 openclaw voicecall unexpose
 ```
 
-Security note: only expose the webhook endpoint to networks you trust. Prefer Tailscale Serve over Funnel when possible.
+보안 주의사항: 신뢰할 수 있는 네트워크에만 웹훅 엔드포인트를 노출하십시오. 가능하면 Funnel보다 Tailscale Serve를 선호하십시오.

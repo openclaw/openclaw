@@ -1,40 +1,42 @@
+```markdown
 ---
-summary: "RPC protocol notes for onboarding wizard and config schema"
-read_when: "Changing onboarding wizard steps or config schema endpoints"
-title: "Onboarding and Config Protocol"
+summary: "온보딩 마법사 및 설정 스키마를 위한 RPC 프로토콜 주의사항"
+read_when: "온보딩 마법사 단계 또는 설정 스키마 엔드포인트 변경 시"
+title: "온보딩 및 설정 프로토콜"
 ---
 
-# Onboarding + Config Protocol
+# 온보딩 + 설정 프로토콜
 
-Purpose: shared onboarding + config surfaces across CLI, macOS app, and Web UI.
+목적: CLI, macOS 앱 및 웹 UI 전반에 걸친 공통 온보딩 + 설정 인터페이스 제공.
 
-## Components
+## 구성 요소
 
-- Wizard engine (shared session + prompts + onboarding state).
-- CLI onboarding uses the same wizard flow as the UI clients.
-- Gateway RPC exposes wizard + config schema endpoints.
-- macOS onboarding uses the wizard step model.
-- Web UI renders config forms from JSON Schema + UI hints.
+- 마법사 엔진 (공유 세션 + 프롬프트 + 온보딩 상태).
+- CLI 온보딩은 UI 클라이언트와 동일한 마법사 흐름을 사용.
+- 게이트웨이 RPC는 마법사 + 설정 스키마 엔드포인트를 노출.
+- macOS 온보딩은 마법사 단계 모델을 사용.
+- 웹 UI는 JSON 스키마 + UI 힌트로부터 설정 양식을 렌더링.
 
-## Gateway RPC
+## 게이트웨이 RPC
 
-- `wizard.start` params: `{ mode?: "local"|"remote", workspace?: string }`
-- `wizard.next` params: `{ sessionId, answer?: { stepId, value? } }`
-- `wizard.cancel` params: `{ sessionId }`
-- `wizard.status` params: `{ sessionId }`
-- `config.schema` params: `{}`
+- `wizard.start` 매개변수: `{ mode?: "local"|"remote", workspace?: string }`
+- `wizard.next` 매개변수: `{ sessionId, answer?: { stepId, value? } }`
+- `wizard.cancel` 매개변수: `{ sessionId }`
+- `wizard.status` 매개변수: `{ sessionId }`
+- `config.schema` 매개변수: `{}`
 
-Responses (shape)
+응답 형태
 
-- Wizard: `{ sessionId, done, step?, status?, error? }`
-- Config schema: `{ schema, uiHints, version, generatedAt }`
+- 마법사: `{ sessionId, done, step?, status?, error? }`
+- 설정 스키마: `{ schema, uiHints, version, generatedAt }`
 
-## UI Hints
+## UI 힌트
 
-- `uiHints` keyed by path; optional metadata (label/help/group/order/advanced/sensitive/placeholder).
-- Sensitive fields render as password inputs; no redaction layer.
-- Unsupported schema nodes fall back to the raw JSON editor.
+- `uiHints`는 경로별로 키 지정; 선택적 메타데이터 (레이블/도움말/그룹/순서/고급/민감/플레이스홀더).
+- 민감한 필드는 비밀번호 입력으로 렌더링; 삭제 레이어 없음.
+- 지원되지 않는 스키마 노드는 원시 JSON 편집기로 되돌아감.
 
-## Notes
+## 주의사항
 
-- This doc is the single place to track protocol refactors for onboarding/config.
+- 이 문서는 온보딩/설정 프로토콜 리팩터링을 추적하는 유일한 문서입니다.
+```

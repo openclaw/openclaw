@@ -1,54 +1,54 @@
 ---
-title: "Creating Skills"
+title: "스킬 만들기"
 ---
 
-# Creating Custom Skills 🛠
+# 사용자 정의 스킬 만들기 🛠
 
-OpenClaw is designed to be easily extensible. "Skills" are the primary way to add new capabilities to your assistant.
+OpenClaw는 쉽게 확장할 수 있도록 설계되었습니다. "스킬"은 당신의 어시스턴트에 새로운 기능을 추가하는 주요 방법입니다.
 
-## What is a Skill?
+## 스킬이란?
 
-A skill is a directory containing a `SKILL.md` file (which provides instructions and tool definitions to the LLM) and optionally some scripts or resources.
+스킬은 LLM에 대한 지침과 도구 정의를 제공하는 `SKILL.md` 파일 및 선택적으로 몇 가지 스크립트나 리소스를 포함하는 디렉토리입니다.
 
-## Step-by-Step: Your First Skill
+## 단계별 가이드: 첫 번째 스킬
 
-### 1. Create the Directory
+### 1. 디렉토리 생성
 
-Skills live in your workspace, usually `~/.openclaw/workspace/skills/`. Create a new folder for your skill:
+스킬은 일반적으로 `~/.openclaw/workspace/skills/`에 있는 작업 공간에 저장됩니다. 스킬을 위한 새 폴더를 만드세요:
 
 ```bash
 mkdir -p ~/.openclaw/workspace/skills/hello-world
 ```
 
-### 2. Define the `SKILL.md`
+### 2. `SKILL.md` 정의
 
-Create a `SKILL.md` file in that directory. This file uses YAML frontmatter for metadata and Markdown for instructions.
+해당 디렉토리에 `SKILL.md` 파일을 만드세요. 이 파일은 메타데이터를 위한 YAML 프론트매터와 지침을 위한 Markdown을 사용합니다.
 
 ```markdown
 ---
 name: hello_world
-description: A simple skill that says hello.
+description: 간단한 인사말 스킬입니다.
 ---
 
-# Hello World Skill
+# 헬로 월드 스킬
 
-When the user asks for a greeting, use the `echo` tool to say "Hello from your custom skill!".
+사용자가 인사말을 요청하면 `echo` 도구를 사용하여 "Hello from your custom skill!"이라고 말하세요.
 ```
 
-### 3. Add Tools (Optional)
+### 3. 도구 추가 (선택 사항)
 
-You can define custom tools in the frontmatter or instruct the agent to use existing system tools (like `bash` or `browser`).
+프론트매터에 사용자 정의 도구를 정의하거나 `bash`나 `browser`와 같은 기존 시스템 도구를 사용하도록 에이전트를 지시할 수 있습니다.
 
-### 4. Refresh OpenClaw
+### 4. OpenClaw 갱신
 
-Ask your agent to "refresh skills" or restart the gateway. OpenClaw will discover the new directory and index the `SKILL.md`.
+에이전트에게 "스킬 갱신"을 요청하거나 게이트웨이를 재시작하세요. OpenClaw는 새 디렉토리를 발견하고 `SKILL.md`를 인덱싱하게 됩니다.
 
-## Best Practices
+## 모범 사례
 
-- **Be Concise**: Instruct the model on _what_ to do, not how to be an AI.
-- **Safety First**: If your skill uses `bash`, ensure the prompts don't allow arbitrary command injection from untrusted user input.
-- **Test Locally**: Use `openclaw agent --message "use my new skill"` to test.
+- **간결함 유지**: 모델에게 무엇을 할 것인지 지시하고, AI가 되라는 지시는 하지 마세요.
+- **안전 우선**: 스킬에서 `bash`를 사용할 경우, 신뢰할 수 없는 사용자 입력으로부터 임의의 명령어 삽입을 허용하지 않도록 프롬프트를 구성하세요.
+- **로컬 테스트**: `openclaw agent --message "use my new skill"`을 사용하여 테스트하세요.
 
-## Shared Skills
+## 공유 스킬
 
-You can also browse and contribute skills to [ClawHub](https://clawhub.com).
+[ClawHub](https://clawhub.com)에서 스킬을 탐색하고 기여할 수도 있습니다.

@@ -1,27 +1,27 @@
 ---
-summary: "Date and time handling across envelopes, prompts, tools, and connectors"
+summary: "엔벨로프, 프롬프트, 도구, 커넥터 전반에 걸친 날짜 및 시간 처리"
 read_when:
-  - You are changing how timestamps are shown to the model or users
-  - You are debugging time formatting in messages or system prompt output
-title: "Date and Time"
+  - 타임스탬프를 모델이나 사용자에게 표시하는 방식을 변경할 때
+  - 메시지나 시스템 프롬프트 출력에서 시간 포맷을 디버깅할 때
+title: "날짜 및 시간"
 ---
 
-# Date & Time
+# 날짜 & 시간
 
-OpenClaw defaults to **host-local time for transport timestamps** and **user timezone only in the system prompt**.
-Provider timestamps are preserved so tools keep their native semantics (current time is available via `session_status`).
+OpenClaw는 **전송 타임스탬프에 대해 호스트 로컬 시간을 기본값**으로 하며, **시스템 프롬프트에서는 사용자 시간대만**을 사용합니다.
+프로바이더 타임스탬프는 유지되므로 도구는 본래의 의미를 유지합니다 (현재 시간은 `session_status`를 통해 이용할 수 있습니다).
 
-## Message envelopes (local by default)
+## 메시지 엔벨로프 (기본적으로 로컬)
 
-Inbound messages are wrapped with a timestamp (minute precision):
+수신 메시지는 타임스탬프와 함께 래핑됩니다 (분 단위 정밀도):
 
 ```
-[Provider ... 2026-01-05 16:26 PST] message text
+[Provider ... 2026-01-05 16:26 PST] 메시지 텍스트
 ```
 
-This envelope timestamp is **host-local by default**, regardless of the provider timezone.
+이 엔벨로프 타임스탬프는 **기본적으로 호스트 로컬**이며, 프로바이더 시간대와는 상관없습니다.
 
-You can override this behavior:
+이 동작을 재정의할 수 있습니다:
 
 ```json5
 {
@@ -35,56 +35,52 @@ You can override this behavior:
 }
 ```
 
-- `envelopeTimezone: "utc"` uses UTC.
-- `envelopeTimezone: "local"` uses the host timezone.
-- `envelopeTimezone: "user"` uses `agents.defaults.userTimezone` (falls back to host timezone).
-- Use an explicit IANA timezone (e.g., `"America/Chicago"`) for a fixed zone.
-- `envelopeTimestamp: "off"` removes absolute timestamps from envelope headers.
-- `envelopeElapsed: "off"` removes elapsed time suffixes (the `+2m` style).
+- `envelopeTimezone: "utc"`는 UTC를 사용합니다.
+- `envelopeTimezone: "local"`은 호스트 시간대를 사용합니다.
+- `envelopeTimezone: "user"`는 `agents.defaults.userTimezone`을 사용하며 (호스트 시간대를 기본값으로 사용).
+- 고정된 시간대를 사용하려면 명시적인 IANA 시간대 (예: `"America/Chicago"`)를 사용하십시오.
+- `envelopeTimestamp: "off"`는 절대 타임스탬프를 엔벨로프 헤더에서 제거합니다.
+- `envelopeElapsed: "off"`는 경과 시간 접미사 (`+2m` 스타일)를 제거합니다.
 
-### Examples
+### 예시
 
-**Local (default):**
-
-```
-[WhatsApp +1555 2026-01-18 00:19 PST] hello
-```
-
-**User timezone:**
+**로컬 (기본):**
 
 ```
-[WhatsApp +1555 2026-01-18 00:19 CST] hello
+[WhatsApp +1555 2026-01-18 00:19 PST] 안녕하세요
 ```
 
-**Elapsed time enabled:**
+**사용자 시간대:**
 
 ```
-[WhatsApp +1555 +30s 2026-01-18T05:19Z] follow-up
+[WhatsApp +1555 2026-01-18 00:19 CST] 안녕하세요
 ```
 
-## System prompt: Current Date & Time
-
-If the user timezone is known, the system prompt includes a dedicated
-**Current Date & Time** section with the **time zone only** (no clock/time format)
-to keep prompt caching stable:
+**경과 시간 활성화:**
 
 ```
-Time zone: America/Chicago
+[WhatsApp +1555 +30s 2026-01-18T05:19Z] 후속 조치
 ```
 
-When the agent needs the current time, use the `session_status` tool; the status
-card includes a timestamp line.
+## 시스템 프롬프트: 현재 날짜 & 시간
 
-## System event lines (local by default)
-
-Queued system events inserted into agent context are prefixed with a timestamp using the
-same timezone selection as message envelopes (default: host-local).
+사용자 시간대가 알려진 경우, 시스템 프롬프트에는 **현재 날짜 & 시간** 섹션이 포함되며, **시간대만** 포함됩니다 (시간/시간 형식 없음). 이는 프롬프트 캐싱을 안정화하기 위해서입니다:
 
 ```
-System: [2026-01-12 12:19:17 PST] Model switched.
+시간대: America/Chicago
 ```
 
-### Configure user timezone + format
+에이전트가 현재 시간을 필요로 할 때는 `session_status` 도구를 사용하십시오. 상태 카드에는 타임스탬프 라인이 포함됩니다.
+
+## 시스템 이벤트 라인 (기본적으로 로컬)
+
+에이전트 컨텍스트에 삽입된 큐 시스템 이벤트들은 메시지 엔벨로프와 동일한 시간대 선택으로 타임스탬프로 접두어가 붙습니다 (기본: 호스트 로컬).
+
+```
+시스템: [2026-01-12 12:19:17 PST] 모델 전환됨.
+```
+
+### 사용자 시간대 + 포맷 구성
 
 ```json5
 {
@@ -97,32 +93,30 @@ System: [2026-01-12 12:19:17 PST] Model switched.
 }
 ```
 
-- `userTimezone` sets the **user-local timezone** for prompt context.
-- `timeFormat` controls **12h/24h display** in the prompt. `auto` follows OS prefs.
+- `userTimezone`은 프롬프트 컨텍스트에 대한 **사용자 로컬 시간대**를 설정합니다.
+- `timeFormat`은 프롬프트에서 **12시간/24시간 표시**를 제어합니다. `auto`는 OS 환경 설정을 따릅니다.
 
-## Time format detection (auto)
+## 시간 형식 감지 (자동)
 
-When `timeFormat: "auto"`, OpenClaw inspects the OS preference (macOS/Windows)
-and falls back to locale formatting. The detected value is **cached per process**
-to avoid repeated system calls.
+`timeFormat: "auto"`일 때, OpenClaw는 OS 환경 설정 (macOS/Windows)을 검사하고 지역 형식으로 대체합니다. 감지된 값은 반복적인 시스템 호출을 피하기 위해 **프로세스당 캐시됩니다**.
 
-## Tool payloads + connectors (raw provider time + normalized fields)
+## 도구 페이로드 + 커넥터 (원시 프로바이더 시간 + 정규화 필드)
 
-Channel tools return **provider-native timestamps** and add normalized fields for consistency:
+채널 도구는 **프로바이더 고유의 타임스탬프**를 반환하고 일관성을 위한 정규화된 필드를 추가합니다:
 
-- `timestampMs`: epoch milliseconds (UTC)
-- `timestampUtc`: ISO 8601 UTC string
+- `timestampMs`: 에포크 밀리초 (UTC)
+- `timestampUtc`: ISO 8601 UTC 문자열
 
-Raw provider fields are preserved so nothing is lost.
+원시 프로바이더 필드는 보존되므로 손실이 없습니다.
 
-- Slack: epoch-like strings from the API
-- Discord: UTC ISO timestamps
-- Telegram/WhatsApp: provider-specific numeric/ISO timestamps
+- Slack: API에서의 에포크 유사 문자열
+- Discord: UTC ISO 타임스탬프
+- Telegram/WhatsApp: 프로바이더 고유의 숫자/ISO 타임스탬프
 
-If you need local time, convert it downstream using the known timezone.
+로컬 시간이 필요하면 알려진 시간대를 사용해 하위 단계에서 변환하십시오.
 
-## Related docs
+## 관련 문서
 
-- [System Prompt](/ko-KR/concepts/system-prompt)
-- [Timezones](/ko-KR/concepts/timezone)
-- [Messages](/ko-KR/concepts/messages)
+- [시스템 프롬프트](/concepts/system-prompt)
+- [시간대](/concepts/timezone)
+- [메시지](/concepts/messages)

@@ -1,33 +1,30 @@
 ---
-summary: "Use Xiaomi MiMo (mimo-v2-flash) with OpenClaw"
+summary: "Xiaomi MiMo (mimo-v2-flash)를 OpenClaw와 함께 사용하기"
 read_when:
-  - You want Xiaomi MiMo models in OpenClaw
-  - You need XIAOMI_API_KEY setup
+  - OpenClaw에서 Xiaomi MiMo 모델을 원할 때
+  - XIAOMI_API_KEY 설정이 필요할 때
 title: "Xiaomi MiMo"
 ---
 
 # Xiaomi MiMo
 
-Xiaomi MiMo is the API platform for **MiMo** models. It provides REST APIs compatible with
-OpenAI and Anthropic formats and uses API keys for authentication. Create your API key in
-the [Xiaomi MiMo console](https://platform.xiaomimimo.com/#/console/api-keys). OpenClaw uses
-the `xiaomi` provider with a Xiaomi MiMo API key.
+Xiaomi MiMo는 **MiMo** 모델을 위한 API 플랫폼입니다. OpenAI 및 Anthropic 포맷과 호환되는 REST API를 제공하며 인증을 위해 API 키를 사용합니다. [Xiaomi MiMo 콘솔](https://platform.xiaomimimo.com/#/console/api-keys)에서 API 키를 생성하세요. OpenClaw는 Xiaomi MiMo API 키와 함께 `xiaomi` 프로바이더를 사용합니다.
 
-## Model overview
+## 모델 개요
 
-- **mimo-v2-flash**: 262144-token context window, Anthropic Messages API compatible.
-- Base URL: `https://api.xiaomimimo.com/anthropic`
-- Authorization: `Bearer $XIAOMI_API_KEY`
+- **mimo-v2-flash**: 262144-토큰 컨텍스트 창, Anthropic Messages API 호환.
+- 기본 URL: `https://api.xiaomimimo.com/anthropic`
+- 인증: `Bearer $XIAOMI_API_KEY`
 
-## CLI setup
+## CLI 설정
 
 ```bash
 openclaw onboard --auth-choice xiaomi-api-key
-# or non-interactive
+# 또는 비상호작용 모드
 openclaw onboard --auth-choice xiaomi-api-key --xiaomi-api-key "$XIAOMI_API_KEY"
 ```
 
-## Config snippet
+## 설정 코드 조각
 
 ```json5
 {
@@ -57,8 +54,8 @@ openclaw onboard --auth-choice xiaomi-api-key --xiaomi-api-key "$XIAOMI_API_KEY"
 }
 ```
 
-## Notes
+## 참고 사항
 
-- Model ref: `xiaomi/mimo-v2-flash`.
-- The provider is injected automatically when `XIAOMI_API_KEY` is set (or an auth profile exists).
-- See [/concepts/model-providers](/ko-KR/concepts/model-providers) for provider rules.
+- 모델 참조: `xiaomi/mimo-v2-flash`.
+- `XIAOMI_API_KEY`가 설정되면 (또는 인증 프로파일이 존재할 경우) 프로바이더가 자동으로 주입됩니다.
+- 프로바이더 규칙은 [/concepts/model-providers](/concepts/model-providers)에서 확인하세요.

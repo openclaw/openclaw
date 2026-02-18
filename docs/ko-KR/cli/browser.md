@@ -1,30 +1,30 @@
 ---
-summary: "CLI reference for `openclaw browser` (profiles, tabs, actions, extension relay)"
+summary: "`openclaw browser`에 대한 CLI 참조 (프로필, 탭, 작업, 확장 프로그램 릴레이)"
 read_when:
-  - You use `openclaw browser` and want examples for common tasks
-  - You want to control a browser running on another machine via a node host
-  - You want to use the Chrome extension relay (attach/detach via toolbar button)
-title: "browser"
+  - "`openclaw browser`를 사용하고 일반 작업에 대한 예제를 찾고 싶을 때"
+  - 노드 호스트를 통해 다른 컴퓨터에서 실행 중인 브라우저를 제어하고 싶을 때
+  - Chrome 확장 프로그램 릴레이를 사용하고 싶을 때 (도구 모음 버튼을 통해 연결/해제)
+title: "브라우저"
 ---
 
 # `openclaw browser`
 
-Manage OpenClaw’s browser control server and run browser actions (tabs, snapshots, screenshots, navigation, clicks, typing).
+OpenClaw의 브라우저 제어 서버를 관리하고 브라우저 작업을 실행합니다 (탭, 스냅샷, 스크린샷, 탐색, 클릭, 타이핑).
 
-Related:
+관련 항목:
 
-- Browser tool + API: [Browser tool](/ko-KR/tools/browser)
-- Chrome extension relay: [Chrome extension](/ko-KR/tools/chrome-extension)
+- 브라우저 도구 + API: [브라우저 도구](/tools/browser)
+- Chrome 확장 프로그램 릴레이: [Chrome 확장 프로그램](/tools/chrome-extension)
 
-## Common flags
+## 공통 플래그
 
-- `--url <gatewayWsUrl>`: Gateway WebSocket URL (defaults to config).
-- `--token <token>`: Gateway token (if required).
-- `--timeout <ms>`: request timeout (ms).
-- `--browser-profile <name>`: choose a browser profile (default from config).
-- `--json`: machine-readable output (where supported).
+- `--url <gatewayWsUrl>`: 게이트웨이 WebSocket URL (기본 설정에서 사용).
+- `--token <token>`: 게이트웨이 토큰 (필요할 경우).
+- `--timeout <ms>`: 요청 타임아웃 (밀리세컨드).
+- `--browser-profile <name>`: 브라우저 프로필 선택 (기본값은 설정에서).
+- `--json`: 기계 판독 가능한 출력 (지원되는 경우).
 
-## Quick start (local)
+## 빠른 시작 (로컬)
 
 ```bash
 openclaw browser --browser-profile chrome tabs
@@ -33,12 +33,12 @@ openclaw browser --browser-profile openclaw open https://example.com
 openclaw browser --browser-profile openclaw snapshot
 ```
 
-## Profiles
+## 프로필
 
-Profiles are named browser routing configs. In practice:
+프로필은 이름이 지정된 브라우저 라우팅 설정입니다. 실제로:
 
-- `openclaw`: launches/attaches to a dedicated OpenClaw-managed Chrome instance (isolated user data dir).
-- `chrome`: controls your existing Chrome tab(s) via the Chrome extension relay.
+- `openclaw`: 전용 OpenClaw 관리 Chrome 인스턴스를 실행/연결 (격리된 사용자 데이터 디렉토리).
+- `chrome`: Chrome 확장 프로그램 릴레이를 통해 기존 Chrome 탭을 제어.
 
 ```bash
 openclaw browser profiles
@@ -46,13 +46,13 @@ openclaw browser create-profile --name work --color "#FF5A36"
 openclaw browser delete-profile --name work
 ```
 
-Use a specific profile:
+특정 프로필 사용:
 
 ```bash
 openclaw browser --browser-profile work tabs
 ```
 
-## Tabs
+## 탭
 
 ```bash
 openclaw browser tabs
@@ -61,21 +61,21 @@ openclaw browser focus <targetId>
 openclaw browser close <targetId>
 ```
 
-## Snapshot / screenshot / actions
+## 스냅샷 / 스크린샷 / 작업
 
-Snapshot:
+스냅샷:
 
 ```bash
 openclaw browser snapshot
 ```
 
-Screenshot:
+스크린샷:
 
 ```bash
 openclaw browser screenshot
 ```
 
-Navigate/click/type (ref-based UI automation):
+탐색/클릭/타이핑 (참조 기반 UI 자동화):
 
 ```bash
 openclaw browser navigate https://example.com
@@ -83,25 +83,25 @@ openclaw browser click <ref>
 openclaw browser type <ref> "hello"
 ```
 
-## Chrome extension relay (attach via toolbar button)
+## Chrome 확장 프로그램 릴레이 (도구 모음 버튼을 통해 연결)
 
-This mode lets the agent control an existing Chrome tab that you attach manually (it does not auto-attach).
+이 모드는 에이전트가 수동으로 연결한 기존 Chrome 탭을 제어하도록 합니다 (자동 연결되지 않습니다).
 
-Install the unpacked extension to a stable path:
+고정된 경로에 확장 프로그램을 설치합니다:
 
 ```bash
 openclaw browser extension install
 openclaw browser extension path
 ```
 
-Then Chrome → `chrome://extensions` → enable “Developer mode” → “Load unpacked” → select the printed folder.
+그런 다음 Chrome → `chrome://extensions` → "개발자 모드" 활성화 → "압축 해제된 확장 프로그램 로드" → 출력된 폴더 선택.
 
-Full guide: [Chrome extension](/ko-KR/tools/chrome-extension)
+전체 가이드: [Chrome 확장 프로그램](/tools/chrome-extension)
 
-## Remote browser control (node host proxy)
+## 원격 브라우저 제어 (노드 호스트 프록시)
 
-If the Gateway runs on a different machine than the browser, run a **node host** on the machine that has Chrome/Brave/Edge/Chromium. The Gateway will proxy browser actions to that node (no separate browser control server required).
+게이트웨이가 브라우저가 실행되는 컴퓨터와 다른 컴퓨터에서 실행되는 경우, Chrome/Brave/Edge/Chromium이 있는 컴퓨터에서 **노드 호스트**를 실행하십시오. 게이트웨이는 해당 노드로 브라우저 작업을 프록시합니다 (별도의 브라우저 제어 서버가 필요하지 않음).
 
-Use `gateway.nodes.browser.mode` to control auto-routing and `gateway.nodes.browser.node` to pin a specific node if multiple are connected.
+`gateway.nodes.browser.mode`를 사용하여 자동 라우팅을 제어하고, 여러 노드가 연결된 경우 특정 노드를 고정하려면 `gateway.nodes.browser.node`를 사용합니다.
 
-Security + remote setup: [Browser tool](/ko-KR/tools/browser), [Remote access](/ko-KR/gateway/remote), [Tailscale](/ko-KR/gateway/tailscale), [Security](/ko-KR/gateway/security)
+보안 + 원격 설정: [브라우저 도구](/tools/browser), [원격 접속](/gateway/remote), [Tailscale](/gateway/tailscale), [보안](/gateway/security)

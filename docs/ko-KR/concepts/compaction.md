@@ -1,61 +1,60 @@
 ---
-summary: "Context window + compaction: how OpenClaw keeps sessions under model limits"
+summary: "컨텍스트 윈도우 + 컴팩션: OpenClaw가 세션을 모델 제한 내로 유지하는 방법"
 read_when:
-  - You want to understand auto-compaction and /compact
-  - You are debugging long sessions hitting context limits
-title: "Compaction"
+  - 자동 컴팩션과 /compact을 이해하고 싶을 때
+  - 컨텍스트 제한에 도달하는 긴 세션을 디버깅할 때
+title: "컴팩션"
 ---
 
-# Context Window & Compaction
+# 컨텍스트 윈도우 & 컴팩션
 
-Every model has a **context window** (max tokens it can see). Long-running chats accumulate messages and tool results; once the window is tight, OpenClaw **compacts** older history to stay within limits.
+모든 모델은 **컨텍스트 윈도우**(볼 수 있는 최대 토큰 수)를 가집니다. 장기간 실행되는 채팅은 메시지와 도구 결과를 축적합니다. 윈도우가 꽉 차면, OpenClaw는 제한 내에 머물기 위해 오래된 기록을 **컴팩트**합니다.
 
-## What compaction is
+## 컴팩션이란
 
-Compaction **summarizes older conversation** into a compact summary entry and keeps recent messages intact. The summary is stored in the session history, so future requests use:
+컴팩션은 **오래된 대화를 요약**하여 컴팩트한 요약 항목으로 만들고, 최근 메시지는 그대로 유지합니다. 요약은 세션 기록에 저장되며, 향후 요청에는 다음이 사용됩니다:
 
-- The compaction summary
-- Recent messages after the compaction point
+- 컴팩션 요약
+- 컴팩션 지점 이후의 최근 메시지
 
-Compaction **persists** in the session’s JSONL history.
+컴팩션은 세션의 JSONL 기록에 **지속**됩니다.
 
-## Configuration
+## 설정
 
-Use the `agents.defaults.compaction` setting in your `openclaw.json` to configure compaction behavior (mode, target tokens, etc.).
+`openclaw.json`의 `agents.defaults.compaction` 설정을 사용하여 컴팩션 동작(모드, 목표 토큰 등)을 구성합니다.
 
-## Auto-compaction (default on)
+## 자동 컴팩션 (기본 활성화)
 
-When a session nears or exceeds the model’s context window, OpenClaw triggers auto-compaction and may retry the original request using the compacted context.
+세션이 모델의 컨텍스트 윈도우에 근접하거나 초과할 때, OpenClaw는 자동 컴팩션을 트리거하며 컴팩트된 컨텍스트를 사용하여 원래 요청을 다시 시도할 수 있습니다.
 
-You’ll see:
+다음과 같은 내용을 볼 수 있습니다:
 
-- `🧹 Auto-compaction complete` in verbose mode
-- `/status` showing `🧹 Compactions: <count>`
+- 자세한 모드에서 `🧹 Auto-compaction complete`
+- `/status`에 `🧹 Compactions: <count>`로 표시
 
-Before compaction, OpenClaw can run a **silent memory flush** turn to store
-durable notes to disk. See [Memory](/ko-KR/concepts/memory) for details and config.
+컴팩션 전에, OpenClaw는 **무음 메모리 플러시** 턴을 실행하여 지속 가능한 노트를 디스크에 저장할 수 있습니다. 자세한 내용과 설정은 [메모리](/concepts/memory)를 참조하세요.
 
-## Manual compaction
+## 수동 컴팩션
 
-Use `/compact` (optionally with instructions) to force a compaction pass:
+컴팩션 패스를 강제하려면 (선택적으로 명령어와 함께) `/compact`를 사용하세요:
 
 ```
-/compact Focus on decisions and open questions
+/compact 결정을 내리고 열린 질문에 집중하세요
 ```
 
-## Context window source
+## 컨텍스트 윈도우 소스
 
-Context window is model-specific. OpenClaw uses the model definition from the configured provider catalog to determine limits.
+컨텍스트 윈도우는 모델 관련입니다. OpenClaw는 구성된 프로바이더 카탈로그의 모델 정의를 사용하여 제한을 결정합니다.
 
-## Compaction vs pruning
+## 컴팩션 vs 가지치기
 
-- **Compaction**: summarises and **persists** in JSONL.
-- **Session pruning**: trims old **tool results** only, **in-memory**, per request.
+- **컴팩션**: JSONL에 요약 및 **지속**됩니다.
+- **세션 가지치기**: 오래된 **도구 결과**만을 요청마다 **메모리 내에서** 잘라냅니다.
 
-See [/concepts/session-pruning](/ko-KR/concepts/session-pruning) for pruning details.
+가지치기 세부사항은 [/concepts/session-pruning](/concepts/session-pruning)을 참조하세요.
 
-## Tips
+## 팁
 
-- Use `/compact` when sessions feel stale or context is bloated.
-- Large tool outputs are already truncated; pruning can further reduce tool-result buildup.
-- If you need a fresh slate, `/new` or `/reset` starts a new session id.
+- 세션이 오래되었거나 컨텍스트가 방만해졌다고 느낄 때 `/compact`를 사용하세요.
+- 대규모 도구 출력은 이미 잘려 있으며, 가지치기는 도구 결과 축적을 추가로 줄일 수 있습니다.
+- 새롭게 시작이 필요하면 `/new` 또는 `/reset`으로 새로운 세션 ID를 시작하세요.

@@ -1,31 +1,30 @@
 ---
-summary: "Logging overview: file logs, console output, CLI tailing, and the Control UI"
+summary: "로깅 개요: 파일 로그, 콘솔 출력, CLI 테일링 및 제어 UI"
 read_when:
-  - You need a beginner-friendly overview of logging
-  - You want to configure log levels or formats
-  - You are troubleshooting and need to find logs quickly
-title: "Logging"
+  - 로깅에 대한 초보 친화적인 개요가 필요할 때
+  - 로그 레벨이나 포맷을 설정하고 싶을 때
+  - 문제를 해결하고 신속하게 로그를 찾아야 할 때
+title: "로깅"
 ---
 
-# Logging
+# 로깅
 
-OpenClaw logs in two places:
+OpenClaw는 두 장소에 로그를 남깁니다:
 
-- **File logs** (JSON lines) written by the Gateway.
-- **Console output** shown in terminals and the Control UI.
+- **파일 로그** (JSON 라인) 게이트웨이에서 작성.
+- **콘솔 출력**은 터미널과 제어 UI에 표시됩니다.
 
-This page explains where logs live, how to read them, and how to configure log
-levels and formats.
+이 페이지에서는 로그의 저장 위치, 로그를 읽는 방법, 로그 레벨 및 포맷을 설정하는 방법을 설명합니다.
 
-## Where logs live
+## 로그 저장 위치
 
-By default, the Gateway writes a rolling log file under:
+기본적으로 게이트웨이는 다음 위치에 순환 로그 파일을 작성합니다:
 
 `/tmp/openclaw/openclaw-YYYY-MM-DD.log`
 
-The date uses the gateway host's local timezone.
+날짜는 게이트웨이 호스트의 로컬 표준시를 사용합니다.
 
-You can override this in `~/.openclaw/openclaw.json`:
+이를 다음과 같이 변경할 수 있습니다: `~/.openclaw/openclaw.json`:
 
 ```json
 {
@@ -35,70 +34,69 @@ You can override this in `~/.openclaw/openclaw.json`:
 }
 ```
 
-## How to read logs
+## 로그 읽는 방법
 
-### CLI: live tail (recommended)
+### CLI: 실시간 테일링 (권장)
 
-Use the CLI to tail the gateway log file via RPC:
+CLI를 사용하여 RPC를 통해 게이트웨이 로그 파일을 테일링하십시오:
 
 ```bash
 openclaw logs --follow
 ```
 
-Output modes:
+출력 모드:
 
-- **TTY sessions**: pretty, colorized, structured log lines.
-- **Non-TTY sessions**: plain text.
-- `--json`: line-delimited JSON (one log event per line).
-- `--plain`: force plain text in TTY sessions.
-- `--no-color`: disable ANSI colors.
+- **TTY 세션**: 보기 좋은 컬러, 구조화된 로그 라인.
+- **비-TTY 세션**: 일반 텍스트.
+- `--json`: 줄로 구분된 JSON (한 줄당 하나의 로그 이벤트).
+- `--plain`: TTY 세션에서 일반 텍스트 강제 적용.
+- `--no-color`: ANSI 색상 비활성화.
 
-In JSON mode, the CLI emits `type`-tagged objects:
+JSON 모드에서는, CLI가 `type` 태그가 있는 객체를 내보냅니다:
 
-- `meta`: stream metadata (file, cursor, size)
-- `log`: parsed log entry
-- `notice`: truncation / rotation hints
-- `raw`: unparsed log line
+- `meta`: 스트림 메타데이터 (파일, 커서, 크기)
+- `log`: 해석된 로그 항목
+- `notice`: 자르기/회전 힌트
+- `raw`: 해석되지 않은 로그 줄
 
-If the Gateway is unreachable, the CLI prints a short hint to run:
+게이트웨이에 접근할 수 없으면, CLI는 다음을 실행하라는 짧은 힌트를 출력합니다:
 
 ```bash
 openclaw doctor
 ```
 
-### Control UI (web)
+### 제어 UI (웹)
 
-The Control UI’s **Logs** tab tails the same file using `logs.tail`.
-See [/web/control-ui](/ko-KR/web/control-ui) for how to open it.
+제어 UI의 **로그** 탭은 `logs.tail`을 사용하여 동일한 파일을 테일링합니다.
+열기 방법은 [/web/control-ui](/web/control-ui)에서 확인할 수 있습니다.
 
-### Channel-only logs
+### 채널 전용 로그
 
-To filter channel activity (WhatsApp/Telegram/etc), use:
+채널 활동(WhatsApp/Telegram 등)을 필터링하려면 다음을 사용하십시오:
 
 ```bash
 openclaw channels logs --channel whatsapp
 ```
 
-## Log formats
+## 로그 포맷
 
-### File logs (JSONL)
+### 파일 로그 (JSONL)
 
-Each line in the log file is a JSON object. The CLI and Control UI parse these
-entries to render structured output (time, level, subsystem, message).
+로그 파일의 각 줄은 JSON 객체입니다. CLI 및 제어 UI는 이러한 항목을 파싱하여 구조화된 출력(시간, 레벨, 서브시스템, 메시지)을 렌더링합니다.
 
-### Console output
+### 콘솔 출력
 
-Console logs are **TTY-aware** and formatted for readability:
+콘솔 로그는 **TTY 인식**을 하며 읽기 쉽게 포맷되어 있습니다:
 
-- Subsystem prefixes (e.g. `gateway/channels/whatsapp`)
-- Level coloring (info/warn/error)
-- Optional compact or JSON mode
+- 서브시스템 접두사 (예: `gateway/channels/whatsapp`)
+- 레벨 색상 (info/warn/error)
+- 선택적 compact 또는 JSON 모드
 
-Console formatting is controlled by `logging.consoleStyle`.
+콘솔 포맷은 `logging.consoleStyle`에 의해 제어됩니다.
 
-## Configuring logging
+## 로깅 설정
 
-All logging configuration lives under `logging` in `~/.openclaw/openclaw.json`.
+모든 로깅 설정은 `~/.openclaw/openclaw.json`의 `logging` 아래에 있습니다.
 
 ```json
 {
@@ -113,78 +111,74 @@ All logging configuration lives under `logging` in `~/.openclaw/openclaw.json`.
 }
 ```
 
-### Log levels
+### 로그 레벨
 
-- `logging.level`: **file logs** (JSONL) level.
-- `logging.consoleLevel`: **console** verbosity level.
+- `logging.level`: **파일 로그** (JSONL) 레벨.
+- `logging.consoleLevel`: **콘솔**의 상세도 레벨.
 
-`--verbose` only affects console output; it does not change file log levels.
+`--verbose`는 콘솔 출력에만 영향을 주며, 파일 로그 레벨은 변경하지 않습니다.
 
-### Console styles
+### 콘솔 스타일
 
 `logging.consoleStyle`:
 
-- `pretty`: human-friendly, colored, with timestamps.
-- `compact`: tighter output (best for long sessions).
-- `json`: JSON per line (for log processors).
+- `pretty`: 사람이 읽기 쉬운 컬러 및 타임스탬프 포함.
+- `compact`: 긴 세션에 적합한 간결한 출력.
+- `json`: 로그 처리기 용도로 줄 당 JSON.
 
-### Redaction
+### 편집
 
-Tool summaries can redact sensitive tokens before they hit the console:
+도구 요약은 콘솔에 도달하기 전에 민감한 토큰을 편집할 수 있습니다:
 
-- `logging.redactSensitive`: `off` | `tools` (default: `tools`)
-- `logging.redactPatterns`: list of regex strings to override the default set
+- `logging.redactSensitive`: `off` | `tools` (기본값: `tools`)
+- `logging.redactPatterns`: 기본 집합을 재정의하기 위한 정규식 문자열 목록
 
-Redaction affects **console output only** and does not alter file logs.
+편집은 **콘솔 출력에만** 영향을 미치며 파일 로그는 변경하지 않습니다.
 
-## Diagnostics + OpenTelemetry
+## 진단 + OpenTelemetry
 
-Diagnostics are structured, machine-readable events for model runs **and**
-message-flow telemetry (webhooks, queueing, session state). They do **not**
-replace logs; they exist to feed metrics, traces, and other exporters.
+진단은 모델 실행 및 메시지 흐름 텔레메트리 (웹훅, 대기열, 세션 상태)에 대한 구조화된 기계 판독 가능 이벤트입니다. 로그를 대체하지 않으며, 메트릭, 트레이스 및 기타 출력에 대한 피드 역할을 합니다.
 
-Diagnostics events are emitted in-process, but exporters only attach when
-diagnostics + the exporter plugin are enabled.
+진단 이벤트는 프로세스 내에서 발생하지만, 진단 및 출력 플러그인이 활성화되었을 경우에만 출력기가 연결됩니다.
 
 ### OpenTelemetry vs OTLP
 
-- **OpenTelemetry (OTel)**: the data model + SDKs for traces, metrics, and logs.
-- **OTLP**: the wire protocol used to export OTel data to a collector/backend.
-- OpenClaw exports via **OTLP/HTTP (protobuf)** today.
+- **OpenTelemetry (OTel)**: 트레이스, 메트릭 및 로그에 대한 데이터 모델 + SDK.
+- **OTLP**: OTel 데이터를 수집기/백엔드로 내보내기 위한 와이어 프로토콜.
+- OpenClaw는 현재 **OTLP/HTTP (protobuf)**를 통해 내보냅니다.
 
-### Signals exported
+### 내보내는 신호
 
-- **Metrics**: counters + histograms (token usage, message flow, queueing).
-- **Traces**: spans for model usage + webhook/message processing.
-- **Logs**: exported over OTLP when `diagnostics.otel.logs` is enabled. Log
-  volume can be high; keep `logging.level` and exporter filters in mind.
+- **메트릭**: 카운터 + 히스토그램 (토큰 사용량, 메시지 흐름, 대기열).
+- **트레이스**: 모델 사용 + 웹훅/메시지 처리에 대한 스팬.
+- **로그**: `diagnostics.otel.logs`가 활성화된 경우 OTLP를 통해 내보냅니다. 로그 볼륨이 높을 수 있으므로 `logging.level` 및 출력 필터를 염두에 두십시오.
 
-### Diagnostic event catalog
+### 진단 이벤트 카탈로그
 
-Model usage:
+모델 사용:
 
-- `model.usage`: tokens, cost, duration, context, provider/model/channel, session ids.
+- `model.usage`: 토큰, 비용, 기간, 컨텍스트, 프로바이더/모델/채널, 세션 IDs.
 
-Message flow:
+메시지 흐름:
 
-- `webhook.received`: webhook ingress per channel.
-- `webhook.processed`: webhook handled + duration.
-- `webhook.error`: webhook handler errors.
-- `message.queued`: message enqueued for processing.
-- `message.processed`: outcome + duration + optional error.
+- `webhook.received`: 채널 당 웹훅 인그레스.
+- `webhook.processed`: 웹훅 처리 완료 + 기간.
+- `webhook.error`: 웹훅 처리기 오류.
+- `message.queued`: 처리 대기열에 추가된 메시지.
+- `message.processed`: 결과 + 기간 + 선택적 오류.
 
-Queue + session:
+대기열 + 세션:
 
-- `queue.lane.enqueue`: command queue lane enqueue + depth.
-- `queue.lane.dequeue`: command queue lane dequeue + wait time.
-- `session.state`: session state transition + reason.
-- `session.stuck`: session stuck warning + age.
-- `run.attempt`: run retry/attempt metadata.
-- `diagnostic.heartbeat`: aggregate counters (webhooks/queue/session).
+- `queue.lane.enqueue`: 명령 대기열 항목 추가 + 깊이.
+- `queue.lane.dequeue`: 명령 대기열 항목 제거 + 대기 시간.
+- `session.state`: 세션 상태 전환 + 이유.
+- `session.stuck`: 세션 정체 경고 + 연령.
+- `run.attempt`: 실행 재시도/시도 메타데이터.
+- `diagnostic.heartbeat`: 집계 카운터 (웹훅/대기열/세션).
 
-### Enable diagnostics (no exporter)
+### 진단 활성화 (출력기 없음)
 
-Use this if you want diagnostics events available to plugins or custom sinks:
+플러그인 또는 사용자 정의 싱크에 진단 이벤트를 사용할 수 있도록 하려면:
 
 ```json
 {
@@ -194,10 +188,10 @@ Use this if you want diagnostics events available to plugins or custom sinks:
 }
 ```
 
-### Diagnostics flags (targeted logs)
+### 진단 플래그 (목표 로그)
 
-Use flags to turn on extra, targeted debug logs without raising `logging.level`.
-Flags are case-insensitive and support wildcards (e.g. `telegram.*` or `*`).
+`logging.level`을 높이지 않고도 추가 타겟 디버그 로그를 활성화하기 위해 플래그를 사용하십시오.
+플래그는 대소문자를 구분하지 않으며 와일드카드를 지원합니다 (예: `telegram.*` 또는 `*`).
 
 ```json
 {
@@ -207,22 +201,21 @@ Flags are case-insensitive and support wildcards (e.g. `telegram.*` or `*`).
 }
 ```
 
-Env override (one-off):
+환경 변수 오버라이드 (일회성):
 
 ```
 OPENCLAW_DIAGNOSTICS=telegram.http,telegram.payload
 ```
 
-Notes:
+주의사항:
 
-- Flag logs go to the standard log file (same as `logging.file`).
-- Output is still redacted according to `logging.redactSensitive`.
-- Full guide: [/diagnostics/flags](/ko-KR/diagnostics/flags).
+- 플래그 로그는 표준 로그 파일로 이동합니다 (`logging.file`과 동일).
+- 출력은 여전히 `logging.redactSensitive`에 따라 편집됩니다.
+- 전체 가이드: [/diagnostics/flags](/diagnostics/flags).
 
-### Export to OpenTelemetry
+### OpenTelemetry로 내보내기
 
-Diagnostics can be exported via the `diagnostics-otel` plugin (OTLP/HTTP). This
-works with any OpenTelemetry collector/backend that accepts OTLP/HTTP.
+`diagnostics-otel` 플러그인 (OTLP/HTTP)을 통해 진단을 내보낼 수 있습니다. OTLP/HTTP를 수용할 수 있는 모든 OpenTelemetry 수집기/백엔드와 작동합니다.
 
 ```json
 {
@@ -251,59 +244,57 @@ works with any OpenTelemetry collector/backend that accepts OTLP/HTTP.
 }
 ```
 
-Notes:
+주의사항:
 
-- You can also enable the plugin with `openclaw plugins enable diagnostics-otel`.
-- `protocol` currently supports `http/protobuf` only. `grpc` is ignored.
-- Metrics include token usage, cost, context size, run duration, and message-flow
-  counters/histograms (webhooks, queueing, session state, queue depth/wait).
-- Traces/metrics can be toggled with `traces` / `metrics` (default: on). Traces
-  include model usage spans plus webhook/message processing spans when enabled.
-- Set `headers` when your collector requires auth.
-- Environment variables supported: `OTEL_EXPORTER_OTLP_ENDPOINT`,
+- `openclaw plugins enable diagnostics-otel`을 사용하여 플러그인을 활성화할 수 있습니다.
+- `protocol`은 현재 `http/protobuf`만 지원합니다. `grpc`는 무시됩니다.
+- 메트릭에는 토큰 사용량, 비용, 컨텍스트 크기, 실행 시간 및 메시지 흐름 카운터/히스토그램 (웹훅, 대기열, 세션 상태, 대기열 깊이/대기)이 포함됩니다.
+- `traces` / `metrics` (기본값: 켜짐)으로 트레이스/메트릭을 토글할 수 있습니다. 트레이스에는 모델 사용 스팬과 웹훅/메시지 처리 스팬이 포함됩니다.
+- 수집기에 인증이 필요한 경우 `headers`를 설정하십시오.
+- 지원되는 환경 변수: `OTEL_EXPORTER_OTLP_ENDPOINT`,
   `OTEL_SERVICE_NAME`, `OTEL_EXPORTER_OTLP_PROTOCOL`.
 
-### Exported metrics (names + types)
+### 내보내는 메트릭 (이름 + 유형)
 
-Model usage:
+모델 사용:
 
-- `openclaw.tokens` (counter, attrs: `openclaw.token`, `openclaw.channel`,
+- `openclaw.tokens` (카운터, 속성: `openclaw.token`, `openclaw.channel`,
   `openclaw.provider`, `openclaw.model`)
-- `openclaw.cost.usd` (counter, attrs: `openclaw.channel`, `openclaw.provider`,
+- `openclaw.cost.usd` (카운터, 속성: `openclaw.channel`, `openclaw.provider`,
   `openclaw.model`)
-- `openclaw.run.duration_ms` (histogram, attrs: `openclaw.channel`,
+- `openclaw.run.duration_ms` (히스토그램, 속성: `openclaw.channel`,
   `openclaw.provider`, `openclaw.model`)
-- `openclaw.context.tokens` (histogram, attrs: `openclaw.context`,
+- `openclaw.context.tokens` (히스토그램, 속성: `openclaw.context`,
   `openclaw.channel`, `openclaw.provider`, `openclaw.model`)
 
-Message flow:
+메시지 흐름:
 
-- `openclaw.webhook.received` (counter, attrs: `openclaw.channel`,
+- `openclaw.webhook.received` (카운터, 속성: `openclaw.channel`,
   `openclaw.webhook`)
-- `openclaw.webhook.error` (counter, attrs: `openclaw.channel`,
+- `openclaw.webhook.error` (카운터, 속성: `openclaw.channel`,
   `openclaw.webhook`)
-- `openclaw.webhook.duration_ms` (histogram, attrs: `openclaw.channel`,
+- `openclaw.webhook.duration_ms` (히스토그램, 속성: `openclaw.channel`,
   `openclaw.webhook`)
-- `openclaw.message.queued` (counter, attrs: `openclaw.channel`,
+- `openclaw.message.queued` (카운터, 속성: `openclaw.channel`,
   `openclaw.source`)
-- `openclaw.message.processed` (counter, attrs: `openclaw.channel`,
+- `openclaw.message.processed` (카운터, 속성: `openclaw.channel`,
   `openclaw.outcome`)
-- `openclaw.message.duration_ms` (histogram, attrs: `openclaw.channel`,
+- `openclaw.message.duration_ms` (히스토그램, 속성: `openclaw.channel`,
   `openclaw.outcome`)
 
-Queues + sessions:
+큐 + 세션:
 
-- `openclaw.queue.lane.enqueue` (counter, attrs: `openclaw.lane`)
-- `openclaw.queue.lane.dequeue` (counter, attrs: `openclaw.lane`)
-- `openclaw.queue.depth` (histogram, attrs: `openclaw.lane` or
+- `openclaw.queue.lane.enqueue` (카운터, 속성: `openclaw.lane`)
+- `openclaw.queue.lane.dequeue` (카운터, 속성: `openclaw.lane`)
+- `openclaw.queue.depth` (히스토그램, 속성: `openclaw.lane` 또는
   `openclaw.channel=heartbeat`)
-- `openclaw.queue.wait_ms` (histogram, attrs: `openclaw.lane`)
-- `openclaw.session.state` (counter, attrs: `openclaw.state`, `openclaw.reason`)
-- `openclaw.session.stuck` (counter, attrs: `openclaw.state`)
-- `openclaw.session.stuck_age_ms` (histogram, attrs: `openclaw.state`)
-- `openclaw.run.attempt` (counter, attrs: `openclaw.attempt`)
+- `openclaw.queue.wait_ms` (히스토그램, 속성: `openclaw.lane`)
+- `openclaw.session.state` (카운터, 속성: `openclaw.state`, `openclaw.reason`)
+- `openclaw.session.stuck` (카운터, 속성: `openclaw.state`)
+- `openclaw.session.stuck_age_ms` (히스토그램, 속성: `openclaw.state`)
+- `openclaw.run.attempt` (카운터, 속성: `openclaw.attempt`)
 
-### Exported spans (names + key attributes)
+### 내보내는 스팬 (이름 + 주요 속성)
 
 - `openclaw.model.usage`
   - `openclaw.channel`, `openclaw.provider`, `openclaw.model`
@@ -322,29 +313,27 @@ Queues + sessions:
   - `openclaw.state`, `openclaw.ageMs`, `openclaw.queueDepth`,
     `openclaw.sessionKey`, `openclaw.sessionId`
 
-### Sampling + flushing
+### 샘플링 + 플러싱
 
-- Trace sampling: `diagnostics.otel.sampleRate` (0.0–1.0, root spans only).
-- Metric export interval: `diagnostics.otel.flushIntervalMs` (min 1000ms).
+- 트레이스 샘플링: `diagnostics.otel.sampleRate` (0.0–1.0, 루트 스팬만).
+- 메트릭 내보내기 간격: `diagnostics.otel.flushIntervalMs` (최소 1000ms).
 
-### Protocol notes
+### 프로토콜 주의사항
 
-- OTLP/HTTP endpoints can be set via `diagnostics.otel.endpoint` or
-  `OTEL_EXPORTER_OTLP_ENDPOINT`.
-- If the endpoint already contains `/v1/traces` or `/v1/metrics`, it is used as-is.
-- If the endpoint already contains `/v1/logs`, it is used as-is for logs.
-- `diagnostics.otel.logs` enables OTLP log export for the main logger output.
+- OTLP/HTTP 엔드포인트는 `diagnostics.otel.endpoint` 또는
+  `OTEL_EXPORTER_OTLP_ENDPOINT`를 통해 설정할 수 있습니다.
+- 엔드포인트가 이미 `/v1/traces` 또는 `/v1/metrics`를 포함한 경우 그대로 사용됩니다.
+- 엔드포인트가 이미 `/v1/logs`를 포함한 경우 로그에 그대로 사용됩니다.
+- `diagnostics.otel.logs`는 주 로그 출력에 대한 OTLP 로그 내보내기를 활성화합니다.
 
-### Log export behavior
+### 로그 내보내기 동작
 
-- OTLP logs use the same structured records written to `logging.file`.
-- Respect `logging.level` (file log level). Console redaction does **not** apply
-  to OTLP logs.
-- High-volume installs should prefer OTLP collector sampling/filtering.
+- OTLP 로그는 `logging.file`에 기록된 동일한 구조화된 레코드를 사용합니다.
+- `logging.level` (파일 로그 레벨)를 따릅니다. 콘솔 편집은 OTLP 로그에 **적용되지 않습니다**.
+- 고용량 설치는 OTLP 수집기 샘플링/필터링을 선호해야 합니다.
 
-## Troubleshooting tips
+## 문제 해결 팁
 
-- **Gateway not reachable?** Run `openclaw doctor` first.
-- **Logs empty?** Check that the Gateway is running and writing to the file path
-  in `logging.file`.
-- **Need more detail?** Set `logging.level` to `debug` or `trace` and retry.
+- **게이트웨이에 접근할 수 없습니까?** 먼저 `openclaw doctor`를 실행하세요.
+- **로그가 비어 있나요?** 게이트웨이가 실행 중이며 `logging.file`의 파일 경로에 기록하고 있는지 확인하세요.
+- **더 많은 세부 정보가 필요합니까?** `logging.level`을 `debug` 또는 `trace`로 설정하고 다시 시도하세요.

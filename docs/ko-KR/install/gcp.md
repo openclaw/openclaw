@@ -498,4 +498,3 @@ See [https://cloud.google.com/iam/docs/understanding-roles](https://cloud.google
 - Set up messaging channels: [Channels](/ko-KR/channels)
 - Pair local devices as nodes: [Nodes](/ko-KR/nodes)
 - Configure the Gateway: [Gateway configuration](/ko-KR/gateway/configuration)
-

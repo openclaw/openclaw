@@ -1,102 +1,94 @@
+```markdown
 ---
-summary: "How OpenClaw presence entries are produced, merged, and displayed"
+summary: "OpenClaw 존재 항목이 생성, 병합, 표시되는 방식"
 read_when:
-  - Debugging the Instances tab
-  - Investigating duplicate or stale instance rows
-  - Changing gateway WS connect or system-event beacons
+  - 인스턴스 탭 디버깅
+  - 중복되거나 오래된 인스턴스 행 조사
+  - 게이트웨이 WS 연결 또는 시스템 이벤트 비콘 변경
 title: "Presence"
 ---
 
 # Presence
 
-OpenClaw “presence” is a lightweight, best‑effort view of:
+OpenClaw "존재"는 다음과 같은 가벼운 최선의 노력을 위한 뷰입니다:
 
-- the **Gateway** itself, and
-- **clients connected to the Gateway** (mac app, WebChat, CLI, etc.)
+- **게이트웨이** 자체, 그리고
+- **게이트웨이에 연결된 클라이언트들** (mac 앱, WebChat, CLI 등)
 
-Presence is used primarily to render the macOS app’s **Instances** tab and to
-provide quick operator visibility.
+존재는 주로 macOS 앱의 **인스턴스** 탭을 렌더링하고 신속한 운영자 가시성을 제공하는 데 사용됩니다.
 
-## Presence fields (what shows up)
+## 존재 필드 (표시 항목)
 
-Presence entries are structured objects with fields like:
+존재 항목은 다음과 같은 필드를 가진 구조화된 객체입니다:
 
-- `instanceId` (optional but strongly recommended): stable client identity (usually `connect.client.instanceId`)
-- `host`: human‑friendly host name
-- `ip`: best‑effort IP address
-- `version`: client version string
-- `deviceFamily` / `modelIdentifier`: hardware hints
-- `mode`: `ui`, `webchat`, `cli`, `backend`, `probe`, `test`, `node`, ...
-- `lastInputSeconds`: “seconds since last user input” (if known)
-- `reason`: `self`, `connect`, `node-connected`, `periodic`, ...
-- `ts`: last update timestamp (ms since epoch)
+- `instanceId` (선택 사항이지만 강력 추천): 안정적인 클라이언트 ID (일반적으로 `connect.client.instanceId`)
+- `host`: 사람이 읽기 쉬운 호스트 이름
+- `ip`: 최선의 노력으로 얻은 IP 주소
+- `version`: 클라이언트 버전 문자열
+- `deviceFamily` / `modelIdentifier`: 하드웨어 힌트
+- `mode`: `ui`, `webchat`, `cli`, `backend`, `probe`, `test`, `node` 등
+- `lastInputSeconds`: "마지막 사용자 입력 이후 경과된 초" (알려진 경우)
+- `reason`: `self`, `connect`, `node-connected`, `periodic` 등
+- `ts`: 마지막 업데이트 타임스탬프 (에포크 이후 ms)
 
-## Producers (where presence comes from)
+## 생성자 (존재가 오는 곳)
 
-Presence entries are produced by multiple sources and **merged**.
+존재 항목은 여러 소스에서 생성되며 **병합**됩니다.
 
-### 1) Gateway self entry
+### 1) 게이트웨이 자체 항목
 
-The Gateway always seeds a “self” entry at startup so UIs show the gateway host
-even before any clients connect.
+게이트웨이는 클라이언트가 연결되기 전에도 게이트웨이 호스트를 UI에 표시하기 위해 항상 시작 시 "자체" 항목을 시딩합니다.
 
-### 2) WebSocket connect
+### 2) WebSocket 연결
 
-Every WS client begins with a `connect` request. On successful handshake the
-Gateway upserts a presence entry for that connection.
+모든 WS 클라이언트는 `connect` 요청으로 시작합니다. 핸드셰이크가 성공적으로 이루어지면 게이트웨이는 해당 연결에 대한 존재 항목을 upsert 합니다.
 
-#### Why one‑off CLI commands don’t show up
+#### 왜 단발성 CLI 명령어가 표시되지 않는가
 
-The CLI often connects for short, one‑off commands. To avoid spamming the
-Instances list, `client.mode === "cli"` is **not** turned into a presence entry.
+CLI는 종종 짧고 단발성인 명령어를 위해 연결됩니다. 인스턴스 목록을 스팸화하지 않기 위해 `client.mode === "cli"`는 존재 항목으로 변환되지 **않습니다**.
 
-### 3) `system-event` beacons
+### 3) `system-event` 비콘
 
-Clients can send richer periodic beacons via the `system-event` method. The mac
-app uses this to report host name, IP, and `lastInputSeconds`.
+클라이언트는 `system-event` 메소드를 통해 더욱 풍부한 주기적 비콘을 전송할 수 있습니다. mac 앱은 이를 사용하여 호스트 이름, IP, `lastInputSeconds`를 보고합니다.
 
-### 4) Node connects (role: node)
+### 4) 노드 연결 (역할: 노드)
 
-When a node connects over the Gateway WebSocket with `role: node`, the Gateway
-upserts a presence entry for that node (same flow as other WS clients).
+노드가 게이트웨이 WebSocket을 통해 `role: node`로 연결될 때, 게이트웨이는 해당 노드에 대한 존재 항목을 upsert 합니다 (다른 WS 클라이언트와 같은 흐름).
 
-## Merge + dedupe rules (why `instanceId` matters)
+## 병합 + 중복 제거 규칙 (`instanceId`가 중요한 이유)
 
-Presence entries are stored in a single in‑memory map:
+존재 항목은 단일 메모리 내 지도에 저장됩니다:
 
-- Entries are keyed by a **presence key**.
-- The best key is a stable `instanceId` (from `connect.client.instanceId`) that survives restarts.
-- Keys are case‑insensitive.
+- 항목은 **존재 키**로 키가 지정됩니다.
+- 최고의 키는 재시작 후에도 살아남는 안정적인 `instanceId` (`connect.client.instanceId`에서 가져옴)입니다.
+- 키는 대소문자를 구분하지 않습니다.
 
-If a client reconnects without a stable `instanceId`, it may show up as a
-**duplicate** row.
+클라이언트가 안정적인 `instanceId` 없이 재연결하면 **중복** 행으로 나타날 수 있습니다.
 
-## TTL and bounded size
+## TTL 및 제한된 크기
 
-Presence is intentionally ephemeral:
+존재는 의도적으로 일시적입니다:
 
-- **TTL:** entries older than 5 minutes are pruned
-- **Max entries:** 200 (oldest dropped first)
+- **TTL:** 5분을 지난 항목은 정리됩니다.
+- **최대 항목:** 200 (가장 오래된 항목부터 삭제)
 
-This keeps the list fresh and avoids unbounded memory growth.
+이는 목록이 신선하게 유지되고 메모리가 무한정 늘어나는 것을 방지합니다.
 
-## Remote/tunnel caveat (loopback IPs)
+## 원격/터널 주의사항 (루프백 IP)
 
-When a client connects over an SSH tunnel / local port forward, the Gateway may
-see the remote address as `127.0.0.1`. To avoid overwriting a good client‑reported
-IP, loopback remote addresses are ignored.
+클라이언트가 SSH 터널 / 로컬 포트 포워드를 통해 연결될 경우, 게이트웨이는 원격 주소를 `127.0.0.1`로 볼 수 있습니다. 좋은 클라이언트 보고 IP를 덮어쓰지 않기 위해 루프백 원격 주소는 무시됩니다.
 
-## Consumers
+## 소비자
 
-### macOS Instances tab
+### macOS 인스턴스 탭
 
-The macOS app renders the output of `system-presence` and applies a small status
-indicator (Active/Idle/Stale) based on the age of the last update.
+macOS 앱은 `system-presence`의 출력을 렌더링하고 마지막 업데이트의 연령에 따라 작은 상태 표시기 (활성/대기/오래됨)를 적용합니다.
 
-## Debugging tips
+## 디버깅 팁
 
-- To see the raw list, call `system-presence` against the Gateway.
-- If you see duplicates:
-  - confirm clients send a stable `client.instanceId` in the handshake
-  - confirm periodic beacons use the same `instanceId`
-  - check whether the connection‑derived entry is missing `instanceId` (duplicates are expected)
+- 원시 목록을 보려면 게이트웨이에 대해 `system-presence`를 호출하세요.
+- 중복 항목을 보면:
+  - 클라이언트가 핸드셰이크에서 안정적인 `client.instanceId`를 전송하는지 확인하세요.
+  - 주기적 비콘이 동일한 `instanceId`를 사용하는지 확인하세요.
+  - 연결 소스로 유도된 항목에 `instanceId`가 누락되어 있는지 확인하세요 (중복이 예상 됩니다).
+```

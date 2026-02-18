@@ -1,43 +1,43 @@
+```markdown
 ---
-summary: "VPS hosting hub for OpenClaw (Oracle/Fly/Hetzner/GCP/exe.dev)"
+summary: "OpenClaw 를 위한 VPS 호스팅 허브 (Oracle/Fly/Hetzner/GCP/exe.dev)"
 read_when:
-  - You want to run the Gateway in the cloud
-  - You need a quick map of VPS/hosting guides
-title: "VPS Hosting"
+  - 클라우드에서 게이트웨이를 실행하고 싶을 때
+  - VPS/호스팅 가이드의 빠른 지도가 필요할 때
+title: "VPS 호스팅"
 ---
 
-# VPS hosting
+# VPS 호스팅
 
-This hub links to the supported VPS/hosting guides and explains how cloud
-deployments work at a high level.
+이 허브는 지원되는 VPS/호스팅 가이드로 연결되며, 클라우드 배포가 높은 수준에서 어떻게 작동하는지를 설명합니다.
 
-## Pick a provider
+## 프로바이더 선택
 
-- **Railway** (one‑click + browser setup): [Railway](/ko-KR/railway)
-- **Northflank** (one‑click + browser setup): [Northflank](/ko-KR/northflank)
-- **Oracle Cloud (Always Free)**: [Oracle](/ko-KR/platforms/oracle) — $0/month (Always Free, ARM; capacity/signup can be finicky)
-- **Fly.io**: [Fly.io](/ko-KR/platforms/fly)
-- **Hetzner (Docker)**: [Hetzner](/ko-KR/platforms/hetzner)
-- **GCP (Compute Engine)**: [GCP](/ko-KR/platforms/gcp)
-- **exe.dev** (VM + HTTPS proxy): [exe.dev](/ko-KR/platforms/exe-dev)
-- **AWS (EC2/Lightsail/free tier)**: works well too. Video guide:
-  https://x.com/techfrenAJ/status/2014934471095812547
+- **Railway** (원클릭 + 브라우저 설정): [Railway](/install/railway)
+- **Northflank** (원클릭 + 브라우저 설정): [Northflank](/install/northflank)
+- **Oracle Cloud (항상 무료)**: [Oracle](/platforms/oracle) — $0/월 (항상 무료, ARM; 용량/가입이 불안정할 수 있음)
+- **Fly.io**: [Fly.io](/install/fly)
+- **Hetzner (Docker)**: [Hetzner](/install/hetzner)
+- **GCP (Compute Engine)**: [GCP](/install/gcp)
+- **exe.dev** (VM + HTTPS 프록시): [exe.dev](/install/exe-dev)
+- **AWS (EC2/Lightsail/무료 등급)**: 사용하기 좋습니다. 비디오 가이드:
+  [https://x.com/techfrenAJ/status/2014934471095812547](https://x.com/techfrenAJ/status/2014934471095812547)
 
-## How cloud setups work
+## 클라우드 설정 작동 방식
 
-- The **Gateway runs on the VPS** and owns state + workspace.
-- You connect from your laptop/phone via the **Control UI** or **Tailscale/SSH**.
-- Treat the VPS as the source of truth and **back up** the state + workspace.
-- Secure default: keep the Gateway on loopback and access it via SSH tunnel or Tailscale Serve.
-  If you bind to `lan`/`tailnet`, require `gateway.auth.token` or `gateway.auth.password`.
+- **게이트웨이는 VPS에서 실행**되며 상태 + 작업 공간을 소유합니다.
+- **제어 UI** 또는 **Tailscale/SSH**를 통해 노트북/전화기에서 연결합니다.
+- VPS를 기준으로 하여 상태 + 작업 공간을 **백업**하세요.
+- 기본 보안을 위해 게이트웨이를 루프백에 유지하고 SSH 터널 또는 Tailscale Serve로 접근합니다.
+  `lan`/`tailnet`에 바인딩하려면 `gateway.auth.token` 또는 `gateway.auth.password`가 필요합니다.
 
-Remote access: [Gateway remote](/ko-KR/gateway/remote)  
-Platforms hub: [Platforms](/ko-KR/platforms)
+원격 접근: [게이트웨이 원격](/gateway/remote)  
+플랫폼 허브: [플랫폼](/platforms)
 
-## Using nodes with a VPS
+## VPS와 노드를 사용하는 방법
 
-You can keep the Gateway in the cloud and pair **nodes** on your local devices
-(Mac/iOS/Android/headless). Nodes provide local screen/camera/canvas and `system.run`
-capabilities while the Gateway stays in the cloud.
+클라우드에 게이트웨이를 유지하면서 로컬 기기 (Mac/iOS/Android/헤드리스)에서 **노드**와 페어링할 수 있습니다.
+노드는 로컬 화면/카메라/캔버스와 `system.run` 기능을 제공하며, 게이트웨이는 클라우드에 남아 있습니다.
 
-Docs: [Nodes](/ko-KR/nodes), [Nodes CLI](/ko-KR/cli/nodes)
+문서: [노드](/nodes), [노드 CLI](/cli/nodes)
+```

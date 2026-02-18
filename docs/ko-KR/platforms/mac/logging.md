@@ -1,34 +1,34 @@
 ---
-summary: "OpenClaw logging: rolling diagnostics file log + unified log privacy flags"
+summary: "OpenClaw 로깅: 순환 진단 파일 로그 + 통합 로그 개인정보 보호 플래그"
 read_when:
-  - Capturing macOS logs or investigating private data logging
-  - Debugging voice wake/session lifecycle issues
-title: "macOS Logging"
+  - macOS 로그를 캡처하거나 개인 데이터 로깅을 조사할 때
+  - 음성 호출/세션 라이프사이클 문제를 디버깅할 때
+title: "macOS 로깅"
 ---
 
-# Logging (macOS)
+# 로깅 (macOS)
 
-## Rolling diagnostics file log (Debug pane)
+## 순환 진단 파일 로그 (디버그 창)
 
-OpenClaw routes macOS app logs through swift-log (unified logging by default) and can write a local, rotating file log to disk when you need a durable capture.
+OpenClaw는 macOS 앱 로그를 swift-log(기본적으로 통합 로깅)를 통해 라우팅하며, 내구성 있는 캡처가 필요할 때 로컬 순환 파일 로그를 디스크에 쓸 수 있습니다.
 
-- Verbosity: **Debug pane → Logs → App logging → Verbosity**
-- Enable: **Debug pane → Logs → App logging → “Write rolling diagnostics log (JSONL)”**
-- Location: `~/Library/Logs/OpenClaw/diagnostics.jsonl` (rotates automatically; old files are suffixed with `.1`, `.2`, …)
-- Clear: **Debug pane → Logs → App logging → “Clear”**
+- 상세 설정: **디버그 창 → 로그 → 앱 로깅 → 상세 설정**
+- 활성화: **디버그 창 → 로그 → 앱 로깅 → “순환 진단 로그 쓰기 (JSONL)”**
+- 위치: `~/Library/Logs/OpenClaw/diagnostics.jsonl` (자동으로 순환되며, 이전 파일은 `.1`, `.2`, …와 같이 접미사로 표시됨)
+- 삭제: **디버그 창 → 로그 → 앱 로깅 → “삭제”**
 
-Notes:
+주의사항:
 
-- This is **off by default**. Enable only while actively debugging.
-- Treat the file as sensitive; don’t share it without review.
+- 기본적으로 **비활성화**되어 있습니다. 적극적으로 디버깅할 때만 활성화하십시오.
+- 이 파일은 민감하게 취급하십시오. 검토 없이 공유하지 마세요.
 
-## Unified logging private data on macOS
+## macOS의 통합 로깅 개인 데이터
 
-Unified logging redacts most payloads unless a subsystem opts into `privacy -off`. Per Peter's write-up on macOS [logging privacy shenanigans](https://steipete.me/posts/2025/logging-privacy-shenanigans) (2025) this is controlled by a plist in `/Library/Preferences/Logging/Subsystems/` keyed by the subsystem name. Only new log entries pick up the flag, so enable it before reproducing an issue.
+통합 로깅은 대부분의 페이로드를 적출합니다. 특정 하위 시스템이 `privacy -off`를 선택하지 않는 한. Peter의 macOS [로깅 개인정보 장난질](https://steipete.me/posts/2025/logging-privacy-shenanigans) (2025)에 의하면 이는 하위 시스템 이름으로 키된 `/Library/Preferences/Logging/Subsystems/`에 있는 plist에 의해 제어됩니다. 새로운 로그 항목만 플래그를 픽업하므로 문제 재현 전에 활성화하세요.
 
-## Enable for OpenClaw (`bot.molt`)
+## OpenClaw (`bot.molt`)에 대해 활성화
 
-- Write the plist to a temp file first, then install it atomically as root:
+- 먼저 plist를 임시 파일에 작성한 다음 루트로 원자적으로 설치합니다:
 
 ```bash
 cat <<'EOF' >/tmp/bot.molt.plist
@@ -47,11 +47,11 @@ EOF
 sudo install -m 644 -o root -g wheel /tmp/bot.molt.plist /Library/Preferences/Logging/Subsystems/bot.molt.plist
 ```
 
-- No reboot is required; logd notices the file quickly, but only new log lines will include private payloads.
-- View the richer output with the existing helper, e.g. `./scripts/clawlog.sh --category WebChat --last 5m`.
+- 재부팅은 필요하지 않으며, logd가 파일을 빠르게 인식하지만 새로운 로그 줄만 개인 페이로드를 포함합니다.
+- 기존의 도우미를 사용하여 더 풍부한 출력을 확인하세요. 예: `./scripts/clawlog.sh --category WebChat --last 5m`.
 
-## Disable after debugging
+## 디버깅 후 비활성화
 
-- Remove the override: `sudo rm /Library/Preferences/Logging/Subsystems/bot.molt.plist`.
-- Optionally run `sudo log config --reload` to force logd to drop the override immediately.
-- Remember this surface can include phone numbers and message bodies; keep the plist in place only while you actively need the extra detail.
+- 오버라이드를 제거합니다: `sudo rm /Library/Preferences/Logging/Subsystems/bot.molt.plist`.
+- 선택적으로 `sudo log config --reload`를 실행하여 logd가 오버라이드를 즉시 제거하도록 할 수 있습니다.
+- 이 표면에는 전화번호와 메시지 본문이 포함될 수 있으므로, 추가 정보가 필요할 때만 plist를 유지하십시오.

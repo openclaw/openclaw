@@ -1,43 +1,43 @@
 ---
-summary: "RPC adapters for external CLIs (signal-cli, legacy imsg) and gateway patterns"
+summary: "외부 CLIs (signal-cli, 레거시 imsg) 및 게이트웨이 패턴용 RPC 어댑터"
 read_when:
-  - Adding or changing external CLI integrations
-  - Debugging RPC adapters (signal-cli, imsg)
-title: "RPC Adapters"
+  - 외부 CLI 통합을 추가하거나 변경하는 경우
+  - RPC 어댑터 (signal-cli, imsg) 디버깅
+title: "RPC 어댑터"
 ---
 
-# RPC adapters
+# RPC 어댑터
 
-OpenClaw integrates external CLIs via JSON-RPC. Two patterns are used today.
+OpenClaw는 JSON-RPC를 통해 외부 CLI를 통합합니다. 현재 두 가지 패턴이 사용되고 있습니다.
 
-## Pattern A: HTTP daemon (signal-cli)
+## 패턴 A: HTTP 데몬 (signal-cli)
 
-- `signal-cli` runs as a daemon with JSON-RPC over HTTP.
-- Event stream is SSE (`/api/v1/events`).
-- Health probe: `/api/v1/check`.
-- OpenClaw owns lifecycle when `channels.signal.autoStart=true`.
+- `signal-cli`는 JSON-RPC를 이용한 HTTP 데몬으로 실행됩니다.
+- 이벤트 스트림은 SSE (`/api/v1/events`) 입니다.
+- 상태 검사: `/api/v1/check`.
+- `channels.signal.autoStart=true`인 경우 OpenClaw가 라이프사이클을 관리합니다.
 
-See [Signal](/ko-KR/channels/signal) for setup and endpoints.
+설정 및 엔드포인트에 대한 자세한 내용은 [Signal](/channels/signal)을 참조하세요.
 
-## Pattern B: stdio child process (legacy: imsg)
+## 패턴 B: stdio 자식 프로세스 (레거시: imsg)
 
-> **Note:** For new iMessage setups, use [BlueBubbles](/ko-KR/channels/bluebubbles) instead.
+> **참고:** 새 iMessage 설정의 경우, [BlueBubbles](/channels/bluebubbles)를 대신 사용하세요.
 
-- OpenClaw spawns `imsg rpc` as a child process (legacy iMessage integration).
-- JSON-RPC is line-delimited over stdin/stdout (one JSON object per line).
-- No TCP port, no daemon required.
+- OpenClaw는 `imsg rpc`를 자식 프로세스로 실행합니다 (레거시 iMessage 통합).
+- JSON-RPC는 stdin/stdout을 통해 줄 단위로 구분됩니다 (각 줄에 하나의 JSON 객체).
+- TCP 포트가 필요하지 않으며 데몬도 필요 없습니다.
 
-Core methods used:
+사용되는 주요 메서드:
 
-- `watch.subscribe` → notifications (`method: "message"`)
+- `watch.subscribe` → 알림 (`method: "message"`)
 - `watch.unsubscribe`
 - `send`
-- `chats.list` (probe/diagnostics)
+- `chats.list` (검사/진단)
 
-See [iMessage](/ko-KR/channels/imessage) for legacy setup and addressing (`chat_id` preferred).
+레거시 설정 및 주소 지정(`chat_id` 권장)에 대한 자세한 내용은 [iMessage](/channels/imessage)를 참조하세요.
 
-## Adapter guidelines
+## 어댑터 가이드라인
 
-- Gateway owns the process (start/stop tied to provider lifecycle).
-- Keep RPC clients resilient: timeouts, restart on exit.
-- Prefer stable IDs (e.g., `chat_id`) over display strings.
+- 게이트웨이는 프로세스를 소유합니다 (시작/중지가 프로바이더 라이프사이클에 연결됨).
+- RPC 클라이언트를 견고하게 유지하세요: 타임아웃, 종료 시 재시작.
+- 표시 문자열보다는 안정적인 ID(예: `chat_id`)를 선호하세요.

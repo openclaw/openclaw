@@ -1,37 +1,37 @@
 ---
-summary: "Chrome extension: let OpenClaw drive your existing Chrome tab"
+summary: "Chrome 확장 프로그램: OpenClaw가 기존의 Chrome 탭을 제어하게 하세요"
 read_when:
-  - You want the agent to drive an existing Chrome tab (toolbar button)
-  - You need remote Gateway + local browser automation via Tailscale
-  - You want to understand the security implications of browser takeover
+  - 에이전트가 기존 Chrome 탭을 제어하기를 원할 때 (툴바 버튼)
+  - Tailscale을 통해 원격 게이트웨이 + 로컬 브라우저 자동화가 필요할 때
+  - 브라우저 인수의 보안 영향을 이해하고 싶을 때
 title: "Chrome Extension"
 ---
 
-# Chrome extension (browser relay)
+# Chrome 확장 프로그램 (브라우저 릴레이)
 
-The OpenClaw Chrome extension lets the agent control your **existing Chrome tabs** (your normal Chrome window) instead of launching a separate openclaw-managed Chrome profile.
+OpenClaw Chrome 확장 프로그램은 별도의 openclaw-관리 Chrome 프로필을 실행하는 대신 에이전트가 **기존 Chrome 탭**(일반적인 Chrome 창)을 제어할 수 있게 합니다.
 
-Attach/detach happens via a **single Chrome toolbar button**.
+부착/분리는 **단일 Chrome 툴바 버튼**을 통해 이루어집니다.
 
-## What it is (concept)
+## 개념
 
-There are three parts:
+세 가지 부분이 있습니다:
 
-- **Browser control service** (Gateway or node): the API the agent/tool calls (via the Gateway)
-- **Local relay server** (loopback CDP): bridges between the control server and the extension (`http://127.0.0.1:18792` by default)
-- **Chrome MV3 extension**: attaches to the active tab using `chrome.debugger` and pipes CDP messages to the relay
+- **브라우저 제어 서비스**(게이트웨이나 노드): 에이전트/도구가 호출하는 API (게이트웨이를 통해)
+- **로컬 릴레이 서버**(루프백 CDP): 제어 서버와 확장 프로그램 간의 브리지 역할을 합니다 (기본값 `http://127.0.0.1:18792`).
+- **Chrome MV3 확장 프로그램**: `chrome.debugger`를 사용하여 활성 탭에 부착하고 CDP 메시지를 릴레이로 전송합니다.
 
-OpenClaw then controls the attached tab through the normal `browser` tool surface (selecting the right profile).
+그 후 OpenClaw는 정상 `브라우저` 도구 표면을 통해 부착된 탭을 제어합니다 (올바른 프로필을 선택하며).
 
-## Install / load (unpacked)
+## 설치 / 로드 (압축 해제 형태)
 
-1. Install the extension to a stable local path:
+1. 확장 프로그램을 안정적인 로컬 경로에 설치합니다:
 
 ```bash
 openclaw browser extension install
 ```
 
-2. Print the installed extension directory path:
+2. 설치된 확장 프로그램 디렉토리 경로를 출력합니다:
 
 ```bash
 openclaw browser extension path
@@ -39,30 +39,30 @@ openclaw browser extension path
 
 3. Chrome → `chrome://extensions`
 
-- Enable “Developer mode”
-- “Load unpacked” → select the directory printed above
+- "개발자 모드" 활성화
+- "압축 해제 로드" → 위에서 출력된 디렉토리 선택
 
-4. Pin the extension.
+4. 확장 프로그램을 고정합니다.
 
-## Updates (no build step)
+## 업데이트 (빌드 단계 없음)
 
-The extension ships inside the OpenClaw release (npm package) as static files. There is no separate “build” step.
+확장 프로그램은 OpenClaw 릴리스(npm 패키지) 내부에 정적 파일로 제공됩니다. 별도의 "빌드" 단계는 없습니다.
 
-After upgrading OpenClaw:
+OpenClaw를 업그레이드한 후:
 
-- Re-run `openclaw browser extension install` to refresh the installed files under your OpenClaw state directory.
-- Chrome → `chrome://extensions` → click “Reload” on the extension.
+- `openclaw browser extension install`을 다시 실행하여 OpenClaw 상태 디렉토리 아래 설치된 파일을 새로 고칩니다.
+- Chrome → `chrome://extensions` → 확장 프로그램에서 "다시 로드"를 클릭합니다.
 
-## Use it (no extra config)
+## 사용법 (추가 설정 없음)
 
-OpenClaw ships with a built-in browser profile named `chrome` that targets the extension relay on the default port.
+OpenClaw에는 기본 포트에서 확장 프로그램 릴레이를 대상으로 하는 `chrome`이라는 내장 브라우저 프로필이 있습니다.
 
-Use it:
+사용 방법:
 
 - CLI: `openclaw browser --browser-profile chrome tabs`
-- Agent tool: `browser` with `profile="chrome"`
+- 에이전트 도구: `browser` with `profile="chrome"`
 
-If you want a different name or a different relay port, create your own profile:
+다른 이름이나 다른 릴레이 포트를 원한다면, 프로필을 직접 생성하세요:
 
 ```bash
 openclaw browser create-profile \
@@ -72,55 +72,54 @@ openclaw browser create-profile \
   --color "#00AA00"
 ```
 
-## Attach / detach (toolbar button)
+## 부착 / 분리 (툴바 버튼)
 
-- Open the tab you want OpenClaw to control.
-- Click the extension icon.
-  - Badge shows `ON` when attached.
-- Click again to detach.
+- OpenClaw가 제어할 탭을 엽니다.
+- 확장 프로그램 아이콘을 클릭합니다.
+  - 부착 시 배지에 `ON`이 표시됩니다.
+- 다시 클릭하여 분리합니다.
 
-## Which tab does it control?
+## 어떤 탭을 제어하나요?
 
-- It does **not** automatically control “whatever tab you’re looking at”.
-- It controls **only the tab(s) you explicitly attached** by clicking the toolbar button.
-- To switch: open the other tab and click the extension icon there.
+- 자동으로 "당신이 보고 있는 탭"을 제어하지 **않습니다**.
+- **툴바 버튼을 클릭하여 명시적으로 부착한 탭만** 제어합니다.
+- 전환하려면: 다른 탭을 열고 그곳에서 확장 아이콘을 클릭하세요.
 
-## Badge + common errors
+## 배지 + 일반 오류
 
-- `ON`: attached; OpenClaw can drive that tab.
-- `…`: connecting to the local relay.
-- `!`: relay not reachable (most common: browser relay server isn’t running on this machine).
+- `ON`: 부착됨; OpenClaw가 해당 탭을 제어할 수 있습니다.
+- `…`: 로컬 릴레이에 연결 중.
+- `!`: 릴레이에 연결할 수 없음 (가장 흔함: 브라우저 릴레이 서버가 이 기기에서 실행 중이지 않음).
 
-If you see `!`:
+`!`가 보이면:
 
-- Make sure the Gateway is running locally (default setup), or run a node host on this machine if the Gateway runs elsewhere.
-- Open the extension Options page; it shows whether the relay is reachable.
+- 게이트웨이가 로컬에서 실행 중인지 확인하세요 (기본 설정), 또는 게이트웨이가 다른 곳에서 실행 중이라면 이 기기에 노드 호스트를 실행하세요.
+- 확장 프로그램 옵션 페이지를 엽니다; 릴레이가 도달 가능한지 여부를 보여줍니다.
 
-## Remote Gateway (use a node host)
+## 원격 게이트웨이 (노드 호스트 사용)
 
-### Local Gateway (same machine as Chrome) — usually **no extra steps**
+### 로컬 게이트웨이 (Chrome과 동일 기기) — **추가 단계 없음**이 보통
 
-If the Gateway runs on the same machine as Chrome, it starts the browser control service on loopback
-and auto-starts the relay server. The extension talks to the local relay; the CLI/tool calls go to the Gateway.
+게이트웨이가 Chrome과 동일한 기기에서 실행 중인 경우, 루프백에서 브라우저 제어 서비스를 시작하고 자동으로 릴레이 서버를 시작합니다. 확장 프로그램은 로컬 릴레이와 통신하며, CLI 및 도구 호출은 게이트웨이로 갑니다.
 
-### Remote Gateway (Gateway runs elsewhere) — **run a node host**
+### 원격 게이트웨이 (게이트웨이가 다른 곳에서 실행 중) — **노드 호스트 실행**
 
-If your Gateway runs on another machine, start a node host on the machine that runs Chrome.
-The Gateway will proxy browser actions to that node; the extension + relay stay local to the browser machine.
+게이트웨이가 다른 기기에서 실행 중이라면, Chrome이 실행 중인 기기에 노드 호스트를 시작하세요.
+게이트웨이는 그 노드로 브라우저 작업을 프록시하며, 확장 프로그램과 릴레이는 브라우저 기기에 로컬로 유지됩니다.
 
-If multiple nodes are connected, pin one with `gateway.nodes.browser.node` or set `gateway.nodes.browser.mode`.
+여러 노드가 연결되어 있는 경우, `gateway.nodes.browser.node`로 하나를 고정하거나 `gateway.nodes.browser.mode`를 설정하세요.
 
-## Sandboxing (tool containers)
+## 샌드박스 격리 (도구 컨테이너)
 
-If your agent session is sandboxed (`agents.defaults.sandbox.mode != "off"`), the `browser` tool can be restricted:
+에이전트 세션이 샌드박스 격리된 경우 (`agents.defaults.sandbox.mode != "off"`), `browser` 도구가 제한될 수 있습니다:
 
-- By default, sandboxed sessions often target the **sandbox browser** (`target="sandbox"`), not your host Chrome.
-- Chrome extension relay takeover requires controlling the **host** browser control server.
+- 기본적으로, 샌드박스 격리 세션은 종종 **샌드박스 브라우저**(`target="sandbox"`)를 목표로 하며, 호스트 Chrome이 아닙니다.
+- Chrome 확장 프로그램 릴레이 인수는 **호스트** 브라우저 제어 서버를 제어해야 합니다.
 
-Options:
+옵션:
 
-- Easiest: use the extension from a **non-sandboxed** session/agent.
-- Or allow host browser control for sandboxed sessions:
+- 가장 쉬운 방법: **비-샌드박스 격리** 세션/에이전트에서 확장 프로그램을 사용하세요.
+- 아니면 샌드박스 격리 세션에 대해 호스트 브라우저 제어를 허용하세요:
 
 ```json5
 {
@@ -136,43 +135,43 @@ Options:
 }
 ```
 
-Then ensure the tool isn’t denied by tool policy, and (if needed) call `browser` with `target="host"`.
+그런 다음 도구가 도구 정책에 의해 거부되지 않도록 하고 (필요한 경우) `target="host"`와 함께 `browser`를 호출하세요.
 
-Debugging: `openclaw sandbox explain`
+디버깅: `openclaw sandbox explain`
 
-## Remote access tips
+## 원격 액세스 팁
 
-- Keep the Gateway and node host on the same tailnet; avoid exposing relay ports to LAN or public Internet.
-- Pair nodes intentionally; disable browser proxy routing if you don’t want remote control (`gateway.nodes.browser.mode="off"`).
+- 게이트웨이와 노드 호스트를 동일한 테일넷에 두세요; 릴레이 포트를 LAN이나 공용 인터넷에 노출하지 마세요.
+- 노드를 의도적으로 페어링하세요; 원격 제어를 원치 않는 경우 브라우저 프록시 라우팅을 비활성화하세요 (`gateway.nodes.browser.mode="off"`).
 
-## How “extension path” works
+## '확장 경로'의 작동 방식
 
-`openclaw browser extension path` prints the **installed** on-disk directory containing the extension files.
+`openclaw browser extension path`는 확장 프로그램 파일을 포함하는 **설치된** 디스크 디렉토리를 출력합니다.
 
-The CLI intentionally does **not** print a `node_modules` path. Always run `openclaw browser extension install` first to copy the extension to a stable location under your OpenClaw state directory.
+CLI는 의도적으로 `node_modules` 경로를 출력하지 **않습니다**. 항상 먼저 `openclaw browser extension install`을 실행하여 OpenClaw 상태 디렉토리 내에 확장을 안정된 위치에 복사하세요.
 
-If you move or delete that install directory, Chrome will mark the extension as broken until you reload it from a valid path.
+설치 디렉토리를 이동하거나 삭제하면 Chrome은 유효한 경로에서 다시 로드하기 전까지 확장을 잘못되었다고 표시할 것입니다.
 
-## Security implications (read this)
+## 보안 영향 (읽어보세요)
 
-This is powerful and risky. Treat it like giving the model “hands on your browser”.
+이것은 강력하면서도 위험합니다. 모델에게 브라우저를 '손에 들게 하는 것'처럼 취급하세요.
 
-- The extension uses Chrome’s debugger API (`chrome.debugger`). When attached, the model can:
-  - click/type/navigate in that tab
-  - read page content
-  - access whatever the tab’s logged-in session can access
-- **This is not isolated** like the dedicated openclaw-managed profile.
-  - If you attach to your daily-driver profile/tab, you’re granting access to that account state.
+- 확장은 Chrome의 디버거 API(`chrome.debugger`)를 사용합니다. 부착되면, 모델은 다음을 수행할 수 있습니다:
+  - 해당 탭에서 클릭/타이핑/탐색
+  - 페이지 콘텐츠 읽기
+  - 탭의 로그인된 세션이 액세스할 수 있는 것에 액세스
+- **이것은 별도로 격리되지 않습니다** openclaw-관리 전용 프로필처럼.
+  - 당신의 일상 사용 프로필/탭에 부착하면, 해당 계정 상태에 대한 액세스를 부여하는 것입니다.
 
-Recommendations:
+추천 사항:
 
-- Prefer a dedicated Chrome profile (separate from your personal browsing) for extension relay usage.
-- Keep the Gateway and any node hosts tailnet-only; rely on Gateway auth + node pairing.
-- Avoid exposing relay ports over LAN (`0.0.0.0`) and avoid Funnel (public).
-- The relay blocks non-extension origins and requires an internal auth token for CDP clients.
+- 확장 릴레이 사용을 위해 개인 브라우징과 별개의 전용 Chrome 프로필을 선호하세요.
+- 게이트웨이 및 모든 노드 호스트를 테일넷 전용으로 유지시키세요; 게이트웨이 인증 + 노드 페어링을 신뢰하세요.
+- 릴레이 포트를 LAN (`0.0.0.0`)에 노출시키지 말고, 퍼널 (공용)을 피하세요.
+- 릴레이는 비-확장 기원을 차단하고 CDP 클라이언트를 위한 내부 인증 토큰을 요구합니다.
 
-Related:
+관련 항목:
 
-- Browser tool overview: [Browser](/ko-KR/tools/browser)
-- Security audit: [Security](/ko-KR/gateway/security)
-- Tailscale setup: [Tailscale](/ko-KR/gateway/tailscale)
+- 브라우저 도구 개요: [Browser](/tools/browser)
+- 보안 감사: [Security](/gateway/security)
+- Tailscale 설정: [Tailscale](/gateway/tailscale)

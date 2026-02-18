@@ -1,21 +1,21 @@
 ---
-summary: "CLI reference for `openclaw doctor` (health checks + guided repairs)"
+summary: "`openclaw doctor` CLI 참조 (상태 점검 + 가이드 수리)"
 read_when:
-  - You have connectivity/auth issues and want guided fixes
-  - You updated and want a sanity check
+  - 연결/인증 문제를 겪고 있고 가이드 수리를 원할 때
+  - 업데이트하고 무결성 검사를 하고 싶을 때
 title: "doctor"
 ---
 
 # `openclaw doctor`
 
-Health checks + quick fixes for the gateway and channels.
+게이트웨이 및 채널에 대한 상태 점검 + 빠른 수정.
 
-Related:
+관련 항목:
 
-- Troubleshooting: [Troubleshooting](/ko-KR/gateway/troubleshooting)
-- Security audit: [Security](/ko-KR/gateway/security)
+- 문제 해결: [문제 해결](/gateway/troubleshooting)
+- 보안 감사: [보안](/gateway/security)
 
-## Examples
+## 예제
 
 ```bash
 openclaw doctor
@@ -23,14 +23,14 @@ openclaw doctor --repair
 openclaw doctor --deep
 ```
 
-Notes:
+참고 사항:
 
-- Interactive prompts (like keychain/OAuth fixes) only run when stdin is a TTY and `--non-interactive` is **not** set. Headless runs (cron, Telegram, no terminal) will skip prompts.
-- `--fix` (alias for `--repair`) writes a backup to `~/.openclaw/openclaw.json.bak` and drops unknown config keys, listing each removal.
+- 대화형 프롬프트(예: 키체인/OAuth 수정)는 표준 입력이 TTY이고 `--non-interactive`가 설정되어 있지 않을 때만 실행됩니다. 헤드리스 실행(크론, Telegram, 터미널 없음)에서는 프롬프트가 건너뜁니다.
+- `--fix` (또는 `--repair`의 별칭)는 `~/.openclaw/openclaw.json.bak`에 백업을 작성하고 알 수 없는 설정 키를 제거하며, 각 삭제 항목을 나열합니다.
 
-## macOS: `launchctl` env overrides
+## macOS: `launchctl` 환경 변수 오버라이드
 
-If you previously ran `launchctl setenv OPENCLAW_GATEWAY_TOKEN ...` (or `...PASSWORD`), that value overrides your config file and can cause persistent “unauthorized” errors.
+이전에 `launchctl setenv OPENCLAW_GATEWAY_TOKEN ...` (또는 `...PASSWORD`)를 실행한 경우, 해당 값이 설정 파일을 오버라이드하여 지속적인 "인증되지 않음" 오류를 유발할 수 있습니다.
 
 ```bash
 launchctl getenv OPENCLAW_GATEWAY_TOKEN

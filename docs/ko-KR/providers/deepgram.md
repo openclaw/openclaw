@@ -1,32 +1,31 @@
+```markdown
 ---
-summary: "Deepgram transcription for inbound voice notes"
+summary: "들어오는 음성 메모에 대한 Deepgram 필기 기록"
 read_when:
-  - You want Deepgram speech-to-text for audio attachments
-  - You need a quick Deepgram config example
+  - 오디오 첨부 파일에 대한 Deepgram 음성 인식을 원함
+  - 간단한 Deepgram 설정 예제가 필요함
 title: "Deepgram"
 ---
 
-# Deepgram (Audio Transcription)
+# Deepgram (오디오 필기 기록)
 
-Deepgram is a speech-to-text API. In OpenClaw it is used for **inbound audio/voice note
-transcription** via `tools.media.audio`.
+Deepgram은 음성 인식 API입니다. OpenClaw에서는 `tools.media.audio`를 통해 **들어오는 오디오/음성 메모 필기 기록**에 사용됩니다.
 
-When enabled, OpenClaw uploads the audio file to Deepgram and injects the transcript
-into the reply pipeline (`{{Transcript}}` + `[Audio]` block). This is **not streaming**;
-it uses the pre-recorded transcription endpoint.
+활성화되면, OpenClaw는 오디오 파일을 Deepgram에 업로드하고 필기록을 응답 파이프라인 (`{{Transcript}}` + `[Audio]` 블록)에 삽입합니다. 이는 **스트리밍이 아닙니다**. 미리 녹음된 필기 기록 엔드포인트를 사용합니다.
 
-Website: [https://deepgram.com](https://deepgram.com)  
-Docs: [https://developers.deepgram.com](https://developers.deepgram.com)
+웹사이트: [https://deepgram.com](https://deepgram.com)  
+문서: [https://developers.deepgram.com](https://developers.deepgram.com)
 
-## Quick start
+## 시작하기
 
-1. Set your API key:
-
-```
-DEEPGRAM_API_KEY=dg_...
+1. API 키 설정:
 ```
 
-2. Enable the provider:
+DEEPGRAM*API_KEY=dg*...
+
+````
+
+2. 프로바이더 활성화:
 
 ```json5
 {
@@ -39,17 +38,17 @@ DEEPGRAM_API_KEY=dg_...
     },
   },
 }
-```
+````
 
-## Options
+## 옵션
 
-- `model`: Deepgram model id (default: `nova-3`)
-- `language`: language hint (optional)
-- `tools.media.audio.providerOptions.deepgram.detect_language`: enable language detection (optional)
-- `tools.media.audio.providerOptions.deepgram.punctuate`: enable punctuation (optional)
-- `tools.media.audio.providerOptions.deepgram.smart_format`: enable smart formatting (optional)
+- `model`: Deepgram 모델 ID (기본값: `nova-3`)
+- `language`: 언어 힌트 (선택 사항)
+- `tools.media.audio.providerOptions.deepgram.detect_language`: 언어 감지 활성화 (선택 사항)
+- `tools.media.audio.providerOptions.deepgram.punctuate`: 구두점 활성화 (선택 사항)
+- `tools.media.audio.providerOptions.deepgram.smart_format`: 스마트 형식 활성화 (선택 사항)
 
-Example with language:
+언어 사용 예제:
 
 ```json5
 {
@@ -64,7 +63,7 @@ Example with language:
 }
 ```
 
-Example with Deepgram options:
+Deepgram 옵션 사용 예제:
 
 ```json5
 {
@@ -86,8 +85,12 @@ Example with Deepgram options:
 }
 ```
 
-## Notes
+## 주의사항
 
-- Authentication follows the standard provider auth order; `DEEPGRAM_API_KEY` is the simplest path.
-- Override endpoints or headers with `tools.media.audio.baseUrl` and `tools.media.audio.headers` when using a proxy.
-- Output follows the same audio rules as other providers (size caps, timeouts, transcript injection).
+- 인증은 표준 프로바이더 인증 순서를 따릅니다. `DEEPGRAM_API_KEY`가 가장 간단한 경로입니다.
+- 프록시를 사용할 때 `tools.media.audio.baseUrl`과 `tools.media.audio.headers`로 엔드포인트나 헤더를 재정의하세요.
+- 출력은 다른 프로바이더와 동일한 오디오 규칙을 따릅니다 (크기 제한, 타임아웃, 필기 기록 삽입).
+
+```
+
+```

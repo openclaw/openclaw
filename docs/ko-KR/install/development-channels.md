@@ -1,38 +1,26 @@
 ---
-summary: "Stable, beta, and dev channels: semantics, switching, and tagging"
+summary: "안정, 베타, 및 개발 채널: 의미, 전환, 태그 지정"
 read_when:
-  - You want to switch between stable/beta/dev
-  - You are tagging or publishing prereleases
+  - 안정/베타/개발간 전환을 원할 때
+  - 태그를 지정하거나 사전 릴리스를 게시할 때
 title: "개발 채널"
 ---
 
-# Development channels
+# 개발 채널
 
-Last updated: 2026-01-21
+마지막 업데이트: 2026-01-21
 
-OpenClaw ships three update channels:
+OpenClaw는 세 가지 업데이트 채널을 제공합니다:
 
 - **stable**: npm dist-tag `latest`.
-- **beta**: npm dist-tag `beta` (builds under test).
-- **dev**: moving head of `main` (git). npm dist-tag: `dev` (when published).
+- **beta**: npm dist-tag `beta` (테스트 중인 빌드).
+- **dev**: moving head of `main` (git). npm dist-tag: `dev` (게시 시).
 
-We ship builds to **beta**, test them, then **promote a vetted build to `latest`**
-without changing the version number — dist-tags are the source of truth for npm installs.
+우리는 빌드를 **beta**로 발송하고, 테스트한 후, 버전 번호를 변경하지 않고 검증된 빌드를 `latest`로 승격시킵니다 — dist-tag는 npm 설치의 진실의 원천입니다.
 
-## Switching channels
+## 채널 전환하기
 
-Git checkout:
-
-```bash
-openclaw update --channel stable
-openclaw update --channel beta
-openclaw update --channel dev
-```
-
-- `stable`/`beta` check out the latest matching tag (often the same tag).
-- `dev` switches to `main` and rebases on the upstream.
-
-npm/pnpm global install:
+Git 체크아웃:
 
 ```bash
 openclaw update --channel stable
@@ -40,36 +28,46 @@ openclaw update --channel beta
 openclaw update --channel dev
 ```
 
-This updates via the corresponding npm dist-tag (`latest`, `beta`, `dev`).
+- `stable`/`beta`는 최신의 일치하는 태그를 체크 아웃합니다 (종종 동일한 태그).
+- `dev`는 `main`으로 전환하고 업스트림에 리베이스합니다.
 
-When you **explicitly** switch channels with `--channel`, OpenClaw also aligns
-the install method:
+npm/pnpm 글로벌 설치:
 
-- `dev` ensures a git checkout (default `~/openclaw`, override with `OPENCLAW_GIT_DIR`),
-  updates it, and installs the global CLI from that checkout.
-- `stable`/`beta` installs from npm using the matching dist-tag.
+```bash
+openclaw update --channel stable
+openclaw update --channel beta
+openclaw update --channel dev
+```
 
-Tip: if you want stable + dev in parallel, keep two clones and point your gateway at the stable one.
+이는 해당하는 npm dist-tag (`latest`, `beta`, `dev`)를 통해 업데이트합니다.
 
-## Plugins and channels
+`--channel`로 **명시적으로** 채널을 전환할 때, OpenClaw는 설치 방법도 정렬합니다:
 
-When you switch channels with `openclaw update`, OpenClaw also syncs plugin sources:
+- `dev`는 git 체크아웃을 보장하고 (기본값 `~/openclaw`, `OPENCLAW_GIT_DIR`로 재정의),
+  이를 업데이트하며, 체크아웃에서 글로벌 CLI를 설치합니다.
+- `stable`/`beta`는 일치하는 dist-tag를 사용하여 npm을 통해 설치합니다.
 
-- `dev` prefers bundled plugins from the git checkout.
-- `stable` and `beta` restore npm-installed plugin packages.
+팁: 안정 + 개발을 병렬로 사용하고 싶다면, 두 개의 클론을 유지하고 당신의 게이트웨이를 안정 버전으로 지정하세요.
 
-## Tagging best practices
+## 플러그인 및 채널
 
-- Tag releases you want git checkouts to land on (`vYYYY.M.D` or `vYYYY.M.D-<patch>`).
-- Keep tags immutable: never move or reuse a tag.
-- npm dist-tags remain the source of truth for npm installs:
+`openclaw update`로 채널을 전환할 때, OpenClaw는 플러그인 소스를 동기화합니다:
+
+- `dev`는 git 체크아웃에서 번들된 플러그인을 선호합니다.
+- `stable` 및 `beta`는 npm에서 설치된 플러그인 패키지를 복원합니다.
+
+## 태그 지정 모범 사례
+
+- git 체크아웃이 도달하기를 원하는 릴리스를 태그 지정하세요 (`vYYYY.M.D` 또는 `vYYYY.M.D-<patch>`).
+- 태그를 변하지 않게 유지하세요: 태그를 이동하거나 재사용하지 마세요.
+- npm dist-tag는 npm 설치의 진실의 원천으로 남아 있습니다:
   - `latest` → stable
   - `beta` → candidate build
-  - `dev` → main snapshot (optional)
+  - `dev` → main snapshot (선택 사항)
 
-## macOS app availability
+## macOS 앱 가용성
 
-Beta and dev builds may **not** include a macOS app release. That’s OK:
+베타 및 개발 빌드는 **macOS 앱 릴리스**를 포함하지 않을 수 있습니다. 괜찮습니다:
 
-- The git tag and npm dist-tag can still be published.
-- Call out “no macOS build for this beta” in release notes or changelog.
+- git 태그와 npm dist-tag는 여전히 게시될 수 있습니다.
+- 릴리스 노트나 변경 로그에서 "이 베타 버전에 macOS 빌드 없음" 을 언급하세요.

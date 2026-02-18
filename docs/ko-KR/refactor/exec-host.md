@@ -1,117 +1,117 @@
 ---
-summary: "Refactor plan: exec host routing, node approvals, and headless runner"
+summary: "리팩터 계획: exec 호스트 라우팅, 노드 승인, 헤드리스 러너"
 read_when:
-  - Designing exec host routing or exec approvals
-  - Implementing node runner + UI IPC
-  - Adding exec host security modes and slash commands
-title: "Exec Host Refactor"
+  - exec 호스트 라우팅 또는 exec 승인을 설계할 때
+  - 노드 러너 + UI IPC 구현 시
+  - exec 호스트 보안 모드 및 슬래시 명령 추가 시
+title: "Exec 호스트 리팩터"
 ---
 
-# Exec host refactor plan
+# Exec 호스트 리팩터 계획
 
-## Goals
+## 목표
 
-- Add `exec.host` + `exec.security` to route execution across **sandbox**, **gateway**, and **node**.
-- Keep defaults **safe**: no cross-host execution unless explicitly enabled.
-- Split execution into a **headless runner service** with optional UI (macOS app) via local IPC.
-- Provide **per-agent** policy, allowlist, ask mode, and node binding.
-- Support **ask modes** that work _with_ or _without_ allowlists.
-- Cross-platform: Unix socket + token auth (macOS/Linux/Windows parity).
+- **샌드박스**, **게이트웨이**, **노드** 전반에 걸쳐 실행을 라우팅하기 위해 `exec.host` + `exec.security` 추가.
+- 기본값을 **안전하게** 유지: 명시적으로 활성화하지 않으면 호스트 간 실행 금지.
+- 실행을 **헤드리스 러너 서비스**로 분리하고, 로컬 IPC를 통해 선택적 UI (macOS 앱) 추가.
+- **에이전트별** 정책, 허용 목록, 묻기 모드 및 노드 바인딩 제공.
+- 허용 목록 _유무에 상관없이_ 작동하는 **묻기 모드** 지원.
+- 크로스 플랫폼: 유닉스 소켓 + 토큰 인증 (macOS/Linux/Windows 지원).
 
-## Non-goals
+## 비목표
 
-- No legacy allowlist migration or legacy schema support.
-- No PTY/streaming for node exec (aggregated output only).
-- No new network layer beyond the existing Bridge + Gateway.
+- 레거시 허용 목록 마이그레이션 또는 레거시 스키마 지원 없음.
+- 노드 exec에 대한 PTY/스트리밍 없음 (집계된 출력만 제공).
+- 기존 Bridge + Gateway에 더해 새로운 네트워크 레이어 없음.
 
-## Decisions (locked)
+## 결정 사항 (고정)
 
-- **Config keys:** `exec.host` + `exec.security` (per-agent override allowed).
-- **Elevation:** keep `/elevated` as an alias for gateway full access.
-- **Ask default:** `on-miss`.
-- **Approvals store:** `~/.openclaw/exec-approvals.json` (JSON, no legacy migration).
-- **Runner:** headless system service; UI app hosts a Unix socket for approvals.
-- **Node identity:** use existing `nodeId`.
-- **Socket auth:** Unix socket + token (cross-platform); split later if needed.
-- **Node host state:** `~/.openclaw/node.json` (node id + pairing token).
-- **macOS exec host:** run `system.run` inside the macOS app; node host service forwards requests over local IPC.
-- **No XPC helper:** stick to Unix socket + token + peer checks.
+- **설정 키:** `exec.host` + `exec.security` (에이전트별 덮어쓰기 허용).
+- **승격:** 게이트웨이 전체 액세스에 대한 별칭으로 `/elevated` 유지.
+- **묻기 기본 값:** `on-miss`.
+- **승인 저장소:** `~/.openclaw/exec-approvals.json` (JSON, 레거시 마이그레이션 없음).
+- **러너:** 헤드리스 시스템 서비스; UI 앱은 승인을 위한 유닉스 소켓 호스팅.
+- **노드 아이덴티티:** 기존 `nodeId` 사용.
+- **소켓 인증:** 유닉스 소켓 + 토큰 (크로스 플랫폼); 필요시 나중에 분리.
+- **노드 호스트 상태:** `~/.openclaw/node.json` (노드 ID + 페어링 토큰).
+- **macOS exec 호스트:** macOS 앱 내에서 `system.run` 실행; 노드 호스트 서비스가 요청을 로컬 IPC를 통해 전달.
+- **XPC 헬퍼 없음:** 유닉스 소켓 + 토큰 + 피어 검사로 유지.
 
-## Key concepts
+## 주요 개념
 
-### Host
+### 호스트
 
-- `sandbox`: Docker exec (current behavior).
-- `gateway`: exec on gateway host.
-- `node`: exec on node runner via Bridge (`system.run`).
+- `sandbox`: Docker 실행 (현재 동작).
+- `gateway`: 게이트웨이 호스트에서 실행.
+- `node`: Bridge를 통해 노드 러너에서 실행 (`system.run`).
 
-### Security mode
+### 보안 모드
 
-- `deny`: always block.
-- `allowlist`: allow only matches.
-- `full`: allow everything (equivalent to elevated).
+- `deny`: 항상 차단.
+- `allowlist`: 일치하는 항목만 허용.
+- `full`: 모든 것 허용 (승격과 동등).
 
-### Ask mode
+### 묻기 모드
 
-- `off`: never ask.
-- `on-miss`: ask only when allowlist does not match.
-- `always`: ask every time.
+- `off`: 절대 묻지 않음.
+- `on-miss`: 허용 목록이 일치하지 않을 때만 묻기.
+- `always`: 매번 묻기.
 
-Ask is **independent** of allowlist; allowlist can be used with `always` or `on-miss`.
+묻기는 허용 목록과 **독립적**이며, 허용 목록은 `always` 또는 `on-miss`와 함께 사용할 수 있습니다.
 
-### Policy resolution (per exec)
+### 정책 해결 (exec별)
 
-1. Resolve `exec.host` (tool param → agent override → global default).
-2. Resolve `exec.security` and `exec.ask` (same precedence).
-3. If host is `sandbox`, proceed with local sandbox exec.
-4. If host is `gateway` or `node`, apply security + ask policy on that host.
+1. `exec.host`를 해결 (도구 파라미터 → 에이전트 덮어쓰기 → 전역 기본값).
+2. `exec.security` 및 `exec.ask` 해결 (동일한 우선순위).
+3. 호스트가 `sandbox`인 경우, 로컬 샌드박스 exec을 진행.
+4. 호스트가 `gateway` 또는 `node`인 경우, 해당 호스트에서 보안 + 묻기 정책 적용.
 
-## Default safety
+## 기본 안전
 
-- Default `exec.host = sandbox`.
-- Default `exec.security = deny` for `gateway` and `node`.
-- Default `exec.ask = on-miss` (only relevant if security allows).
-- If no node binding is set, **agent may target any node**, but only if policy allows it.
+- 기본 `exec.host = sandbox`.
+- `gateway` 및 `node`에 대한 기본 `exec.security = deny`.
+- 기본 `exec.ask = on-miss` (보안이 허용할 경우에만 관련됨).
+- 노드 바인딩이 설정되지 않은 경우, **에이전트는 정책이 허용하는 경우에만** 임의의 노드를 대상으로 할 수 있습니다.
 
-## Config surface
+## 설정 표면
 
-### Tool parameters
+### 도구 파라미터
 
-- `exec.host` (optional): `sandbox | gateway | node`.
-- `exec.security` (optional): `deny | allowlist | full`.
-- `exec.ask` (optional): `off | on-miss | always`.
-- `exec.node` (optional): node id/name to use when `host=node`.
+- `exec.host` (선택): `sandbox | gateway | node`.
+- `exec.security` (선택): `deny | allowlist | full`.
+- `exec.ask` (선택): `off | on-miss | always`.
+- `exec.node` (선택): `host=node`일 때 사용할 노드 ID/이름.
 
-### Config keys (global)
+### 설정 키 (전역)
 
 - `tools.exec.host`
 - `tools.exec.security`
 - `tools.exec.ask`
-- `tools.exec.node` (default node binding)
+- `tools.exec.node` (기본 노드 바인딩)
 
-### Config keys (per agent)
+### 설정 키 (에이전트별)
 
 - `agents.list[].tools.exec.host`
 - `agents.list[].tools.exec.security`
 - `agents.list[].tools.exec.ask`
 - `agents.list[].tools.exec.node`
 
-### Alias
+### 별칭
 
-- `/elevated on` = set `tools.exec.host=gateway`, `tools.exec.security=full` for the agent session.
-- `/elevated off` = restore previous exec settings for the agent session.
+- `/elevated on` = 에이전트 세션에 대해 `tools.exec.host=gateway`, `tools.exec.security=full`로 설정.
+- `/elevated off` = 에이전트 세션에 대한 이전 exec 설정 복원.
 
-## Approvals store (JSON)
+## 승인 저장소 (JSON)
 
-Path: `~/.openclaw/exec-approvals.json`
+경로: `~/.openclaw/exec-approvals.json`
 
-Purpose:
+목적:
 
-- Local policy + allowlists for the **execution host** (gateway or node runner).
-- Ask fallback when no UI is available.
-- IPC credentials for UI clients.
+- **Execution host** (게이트웨이 또는 노드 런너)에 대한 로컬 정책 + 허용 목록.
+- UI가 없을 때 묻기 대체.
+- UI 클라이언트를 위한 IPC 인증 정보.
 
-Proposed schema (v1):
+제안된 스키마 (v1):
 
 ```json
 {
@@ -142,175 +142,175 @@ Proposed schema (v1):
 }
 ```
 
-Notes:
+참고 사항:
 
-- No legacy allowlist formats.
-- `askFallback` applies only when `ask` is required and no UI is reachable.
-- File permissions: `0600`.
+- 레거시 허용 목록 형식 없음.
+- `askFallback`은 `ask`가 필요하고 UI에 접근할 수 없을 때만 적용.
+- 파일 권한: `0600`.
 
-## Runner service (headless)
+## 러너 서비스 (헤드리스)
 
-### Role
+### 역할
 
-- Enforce `exec.security` + `exec.ask` locally.
-- Execute system commands and return output.
-- Emit Bridge events for exec lifecycle (optional but recommended).
+- 로컬에서 `exec.security` + `exec.ask` 강제 실행.
+- 시스템 명령어를 실행하고 출력을 반환.
+- exec 수명 주기에 대한 Bridge 이벤트 발행 (선택적이지만 권장).
 
-### Service lifecycle
+### 서비스 수명 주기
 
-- Launchd/daemon on macOS; system service on Linux/Windows.
-- Approvals JSON is local to the execution host.
-- UI hosts a local Unix socket; runners connect on demand.
+- macOS에서는 Launchd/데몬; Linux/Windows에서는 시스템 서비스.
+- 승인 JSON은 실행 호스트에 로컬.
+- UI는 로컬 유닉스 소켓을 호스팅하며, 러너는 필요할 때 연결.
 
-## UI integration (macOS app)
+## UI 통합 (macOS 앱)
 
 ### IPC
 
-- Unix socket at `~/.openclaw/exec-approvals.sock` (0600).
-- Token stored in `exec-approvals.json` (0600).
-- Peer checks: same-UID only.
-- Challenge/response: nonce + HMAC(token, request-hash) to prevent replay.
-- Short TTL (e.g., 10s) + max payload + rate limit.
+- `~/.openclaw/exec-approvals.sock`에서 유닉스 소켓 (0600).
+- `exec-approvals.json`에 저장된 토큰 (0600).
+- 피어 검사: 동일 UID만 허용.
+- 챌린지/응답: 재생 방지를 위한 nonce + HMAC(토큰, 요청 해시).
+- 짧은 TTL (예: 10초) + 최대 페이로드 + 속도 제한.
 
-### Ask flow (macOS app exec host)
+### 묻기 흐름 (macOS 앱 exec 호스트)
 
-1. Node service receives `system.run` from gateway.
-2. Node service connects to the local socket and sends the prompt/exec request.
-3. App validates peer + token + HMAC + TTL, then shows dialog if needed.
-4. App executes the command in UI context and returns output.
-5. Node service returns output to gateway.
+1. 게이트웨이로부터 `system.run`을 수신하는 노드 서비스.
+2. 노드 서비스는 로컬 소켓에 연결해 프롬프트/exec 요청을 보냄.
+3. 앱은 피어 + 토큰 + HMAC + TTL을 검증한 후 필요 시 대화 상자 표시.
+4. 앱은 UI 컨텍스트에서 명령을 실행하고 출력을 반환.
+5. 노드 서비스는 게이트웨이에 출력을 반환.
 
-If UI missing:
+UI가 없을 경우:
 
-- Apply `askFallback` (`deny|allowlist|full`).
+- `askFallback` 적용 (`deny|allowlist|full`).
 
-### Diagram (SCI)
+### 다이어그램 (SCI)
 
 ```
-Agent -> Gateway -> Bridge -> Node Service (TS)
-                         |  IPC (UDS + token + HMAC + TTL)
-                         v
-                     Mac App (UI + TCC + system.run)
+에이전트 -> 게이트웨이 -> 브리지 -> 노드 서비스 (TS)
+                             |  IPC (UDS + 토큰 + HMAC + TTL)
+                             v
+                         Mac 앱 (UI + TCC + system.run)
 ```
 
-## Node identity + binding
+## 노드 아이덴티티 + 바인딩
 
-- Use existing `nodeId` from Bridge pairing.
-- Binding model:
-  - `tools.exec.node` restricts the agent to a specific node.
-  - If unset, agent can pick any node (policy still enforces defaults).
-- Node selection resolution:
-  - `nodeId` exact match
-  - `displayName` (normalized)
+- Bridge 페어링에서 기존 `nodeId` 사용.
+- 바인딩 모델:
+  - `tools.exec.node`는 에이전트를 특정 노드로 제한.
+  - 설정되지 않았을 경우, 에이전트는 임의의 노드를 선택할 수 있음 (정책이 기본값을 강제하는 경우에만).
+- 노드 선택 해결:
+  - `nodeId` 정확한 일치
+  - `displayName` (정규화됨)
   - `remoteIp`
-  - `nodeId` prefix (>= 6 chars)
+  - `nodeId` 접두사 (>= 6자)
 
-## Eventing
+## 이벤트 처리
 
-### Who sees events
+### 이벤트를 보는 사람
 
-- System events are **per session** and shown to the agent on the next prompt.
-- Stored in the gateway in-memory queue (`enqueueSystemEvent`).
+- 시스템 이벤트는 **세션별**이며, 에이전트는 다음 프롬프트에서 확인.
+- 게이트웨이의 메모리 내 큐에 저장 (`enqueueSystemEvent`).
 
-### Event text
+### 이벤트 텍스트
 
-- `Exec started (node=<id>, id=<runId>)`
-- `Exec finished (node=<id>, id=<runId>, code=<code>)` + optional output tail
-- `Exec denied (node=<id>, id=<runId>, <reason>)`
+- `Exec 시작됨 (노드=<id>, id=<runId>)`
+- `Exec 완료됨 (노드=<id>, id=<runId>, 코드=<code>)` + 선택적 출력 꼬리
+- `Exec 거부됨 (노드=<id>, id=<runId>, <이유>)`
 
-### Transport
+### 전송
 
-Option A (recommended):
+옵션 A (권장):
 
-- Runner sends Bridge `event` frames `exec.started` / `exec.finished`.
-- Gateway `handleBridgeEvent` maps these into `enqueueSystemEvent`.
+- Runner는 Bridge `event` 프레임 `exec.started` / `exec.finished` 전송.
+- 게이트웨이 `handleBridgeEvent`가 이를 `enqueueSystemEvent`로 매핑.
 
-Option B:
+옵션 B:
 
-- Gateway `exec` tool handles lifecycle directly (synchronous only).
+- 게이트웨이 `exec` 도구가 수명 주기를 직접 처리 (동기식만).
 
-## Exec flows
+## Exec 흐름
 
-### Sandbox host
+### 샌드박스 호스트
 
-- Existing `exec` behavior (Docker or host when unsandboxed).
-- PTY supported in non-sandbox mode only.
+- 기존 `exec` 동작 (Docker 또는 비샌드박스 모드에서 호스트 실행).
+- PTY는 비샌드박스 모드에서만 지원됨.
 
-### Gateway host
+### 게이트웨이 호스트
 
-- Gateway process executes on its own machine.
-- Enforces local `exec-approvals.json` (security/ask/allowlist).
+- 게이트웨이 프로세스는 자체 머신에서 실행.
+- 로컬 `exec-approvals.json` 강제 적용 (보안/묻기/허용 목록).
 
-### Node host
+### 노드 호스트
 
-- Gateway calls `node.invoke` with `system.run`.
-- Runner enforces local approvals.
-- Runner returns aggregated stdout/stderr.
-- Optional Bridge events for start/finish/deny.
+- 게이트웨이는 `system.run`과 함께 `node.invoke` 호출.
+- 러너는 로컬 승인을 강제.
+- 러너는 집계된 stdout/stderr을 반환.
+- 시작/완료/거부에 대해 선택적인 Bridge 이벤트.
 
-## Output caps
+## 출력 제한
 
-- Cap combined stdout+stderr at **200k**; keep **tail 20k** for events.
-- Truncate with a clear suffix (e.g., `"… (truncated)"`).
+- 결합된 stdout+stderr을 **200k**로 제한; 이벤트용으로 **꼬리 20k** 유지.
+- 명확한 접미사로 절단 (예: `"… (truncated)"`).
 
-## Slash commands
+## 슬래시 명령어
 
 - `/exec host=<sandbox|gateway|node> security=<deny|allowlist|full> ask=<off|on-miss|always> node=<id>`
-- Per-agent, per-session overrides; non-persistent unless saved via config.
-- `/elevated on|off|ask|full` remains a shortcut for `host=gateway security=full` (with `full` skipping approvals).
+- 에이전트별, 세션별 오버라이드; 설정을 통해 저장되지 않으면 비휘발성 아님.
+- `/elevated on|off|ask|full`은 여전히 `host=gateway security=full`의 바로 가기 (승인 건너뛰기와 `full` 포함).
 
-## Cross-platform story
+## 크로스 플랫폼 이야기
 
-- The runner service is the portable execution target.
-- UI is optional; if missing, `askFallback` applies.
-- Windows/Linux support the same approvals JSON + socket protocol.
+- 러너 서비스는 휴대 가능한 실행 대상.
+- UI는 선택 사항; 누락 시 `askFallback` 적용.
+- Windows/Linux도 동일한 승인 JSON + 소켓 프로토콜 지원.
 
-## Implementation phases
+## 구현 단계
 
-### Phase 1: config + exec routing
+### 1단계: 설정 + exec 라우팅
 
-- Add config schema for `exec.host`, `exec.security`, `exec.ask`, `exec.node`.
-- Update tool plumbing to respect `exec.host`.
-- Add `/exec` slash command and keep `/elevated` alias.
+- `exec.host`, `exec.security`, `exec.ask`, `exec.node`를 위한 설정 스키마 추가.
+- 도구 배관을 업데이트하여 `exec.host`를 존중.
+- `/exec` 슬래시 명령어 추가하고 `/elevated` 별칭 유지.
 
-### Phase 2: approvals store + gateway enforcement
+### 2단계: 승인 저장소 + 게이트웨이 강제
 
-- Implement `exec-approvals.json` reader/writer.
-- Enforce allowlist + ask modes for `gateway` host.
-- Add output caps.
+- `exec-approvals.json` 리더/라이터 구현.
+- `게이트웨이` 호스트에 허용 목록 + 묻기 모드 강제.
+- 출력 제한 추가.
 
-### Phase 3: node runner enforcement
+### 3단계: 노드 러너 강제
 
-- Update node runner to enforce allowlist + ask.
-- Add Unix socket prompt bridge to macOS app UI.
-- Wire `askFallback`.
+- 노드 러너 업데이트하여 허용 목록 + 묻기 강제.
+- macOS 앱 UI에 유닉스 소켓 프롬프트 브리지 추가.
+- `askFallback` 연결.
 
-### Phase 4: events
+### 4단계: 이벤트
 
-- Add node → gateway Bridge events for exec lifecycle.
-- Map to `enqueueSystemEvent` for agent prompts.
+- exec 수명 주기를 위한 노드 → 게이트웨이 Bridge 이벤트 추가.
+- 에이전트 프롬프트용으로 `enqueueSystemEvent`로 매핑.
 
-### Phase 5: UI polish
+### 5단계: UI 연마
 
-- Mac app: allowlist editor, per-agent switcher, ask policy UI.
-- Node binding controls (optional).
+- Mac 앱: 허용 목록 편집기, 에이전트별 스위처, 묻기 정책 UI.
+- 노드 바인딩 컨트롤 (선택 사항).
 
-## Testing plan
+## 테스트 계획
 
-- Unit tests: allowlist matching (glob + case-insensitive).
-- Unit tests: policy resolution precedence (tool param → agent override → global).
-- Integration tests: node runner deny/allow/ask flows.
-- Bridge event tests: node event → system event routing.
+- 단위 테스트: 허용 목록 일치 (글로브 + 대소문자 구분하지 않음).
+- 단위 테스트: 정책 해결 우선순위 (도구 파라미터 → 에이전트 덮어쓰기 → 전역).
+- 통합 테스트: 노드 러너 거부/허용/묻기 흐름.
+- Bridge 이벤트 테스트: 노드 이벤트 → 시스템 이벤트 라우팅.
 
-## Open risks
+## 열린 위험 요소
 
-- UI unavailability: ensure `askFallback` is respected.
-- Long-running commands: rely on timeout + output caps.
-- Multi-node ambiguity: error unless node binding or explicit node param.
+- UI 사용 불가: `askFallback`이 존중되는지 확인.
+- 장시간 실행 명령: 타임아웃 + 출력 제한에 의존.
+- 다중 노드 모호성: 노드 바인딩 또는 명시적 노드 파라미터가 없을 경우 에러.
 
-## Related docs
+## 관련 문서
 
-- [Exec tool](/ko-KR/tools/exec)
-- [Exec approvals](/ko-KR/tools/exec-approvals)
-- [Nodes](/ko-KR/nodes)
-- [Elevated mode](/ko-KR/tools/elevated)
+- [Exec 도구](/tools/exec)
+- [Exec 승인](/tools/exec-approvals)
+- [노드](/nodes)
+- [승격 모드](/tools/elevated)

@@ -1,417 +1,417 @@
 ---
-summary: "Clawnet refactor: unify network protocol, roles, auth, approvals, identity"
+summary: "Clawnet 리팩터링: 네트워크 프로토콜, 역할, 인증, 승인, 정체성 통합"
 read_when:
-  - Planning a unified network protocol for nodes + operator clients
-  - Reworking approvals, pairing, TLS, and presence across devices
-title: "Clawnet Refactor"
+  - 노드 + 운영자 클라이언트를 위한 통합 네트워크 프로토콜 계획
+  - 디바이스 전반에 걸쳐 승인, 페어링, TLS 및 프레즌스 재작업
+title: "Clawnet 리팩터링"
 ---
 
-# Clawnet refactor (protocol + auth unification)
+# Clawnet 리팩터링 (프로토콜 + 인증 통합)
 
-## Hi
+## 안녕하세요
 
-Hi Peter — great direction; this unlocks simpler UX + stronger security.
+안녕하세요, Peter — 훌륭한 방향입니다. 이 방향은 더 간단한 UX와 강력한 보안을 제공합니다.
 
-## Purpose
+## 목적
 
-Single, rigorous document for:
+단일 엄격한 문서를 위한 목적:
 
-- Current state: protocols, flows, trust boundaries.
-- Pain points: approvals, multi‑hop routing, UI duplication.
-- Proposed new state: one protocol, scoped roles, unified auth/pairing, TLS pinning.
-- Identity model: stable IDs + cute slugs.
-- Migration plan, risks, open questions.
+- 현재 상태: 프로토콜, 플로우, 신뢰 경계.
+- 문제점: 승인, 다중 홉 라우팅, UI 중복.
+- 제안된 새로운 상태: 하나의 프로토콜, 범위 지정된 역할, 통합 인증/페어링, TLS 고정.
+- 정체성 모델: 안정적인 ID + 귀여운 슬러그.
+- 마이그레이션 계획, 위험, 오픈 퀘스천.
 
-## Goals (from discussion)
+## 목표 (논의 중)
 
-- One protocol for all clients (mac app, CLI, iOS, Android, headless node).
-- Every network participant authenticated + paired.
-- Role clarity: nodes vs operators.
-- Central approvals routed to where the user is.
-- TLS encryption + optional pinning for all remote traffic.
-- Minimal code duplication.
-- Single machine should appear once (no UI/node duplicate entry).
+- 모든 클라이언트를 위한 하나의 프로토콜 (mac 앱, CLI, iOS, Android, 무인 노드).
+- 모든 네트워크 참여자는 인증 및 페어링 완료.
+- 역할 명확화: 노드 대 운영자.
+- 사용자 위치에 따라 중앙 승인은 라우팅됨.
+- 모든 원격 트래픽에 대한 TLS 암호화 + 선택적 고정.
+- 최소한의 코드 중복.
+- 단일 머신은 한 번만 나타나야 함 (UI/노드 중복 항목 없음).
 
-## Non‑goals (explicit)
+## 명확한 목표 (명시적)
 
-- Remove capability separation (still need least‑privilege).
-- Expose full gateway control plane without scope checks.
-- Make auth depend on human labels (slugs remain non‑security).
+- 기능 분리를 제거하지 않음 (여전히 최소 권한 필요).
+- 범위 검사 없이 전체 게이트웨이 제어 플레인 공개하지 않음.
+- 인증이 인적 레이블에 의존하지 않게 하기 (슬러그는 보안 기능 아님).
 
 ---
 
-# Current state (as‑is)
+# 현재 상태 (as‑is)
 
-## Two protocols
+## 두 가지 프로토콜
 
-### 1) Gateway WebSocket (control plane)
+### 1) 게이트웨이 WebSocket (제어 플레인)
 
-- Full API surface: config, channels, models, sessions, agent runs, logs, nodes, etc.
-- Default bind: loopback. Remote access via SSH/Tailscale.
-- Auth: token/password via `connect`.
-- No TLS pinning (relies on loopback/tunnel).
-- Code:
+- 전체 API 표면: 설정, 채널, 모델, 세션, 에이전트 실행, 로그, 노드 등.
+- 기본 바인드: 로컬 루프백. SSH/Tailscale을 통한 원격 액세스.
+- 인증: `connect`를 통한 토큰/비밀번호.
+- TLS 고정 없음 (로컬 루프백/터널에 의존).
+- 코드:
   - `src/gateway/server/ws-connection/message-handler.ts`
   - `src/gateway/client.ts`
   - `docs/gateway/protocol.md`
 
-### 2) Bridge (node transport)
+### 2) 브릿지 (노드 전송)
 
-- Narrow allowlist surface, node identity + pairing.
-- JSONL over TCP; optional TLS + cert fingerprint pinning.
-- TLS advertises fingerprint in discovery TXT.
-- Code:
+- 좁은 허용 목록 표면, 노드 정체성 + 페어링.
+- TCP를 통한 JSONL; 선택적 TLS + 인증서 지문 고정.
+- 디바이스 검색 TXT에 TLS가 지문을 광고.
+- 코드:
   - `src/infra/bridge/server/connection.ts`
   - `src/gateway/server-bridge.ts`
   - `src/node-host/bridge-client.ts`
   - `docs/gateway/bridge-protocol.md`
 
-## Control plane clients today
+## 현재 제어 플레인 클라이언트
 
-- CLI → Gateway WS via `callGateway` (`src/gateway/call.ts`).
-- macOS app UI → Gateway WS (`GatewayConnection`).
-- Web Control UI → Gateway WS.
-- ACP → Gateway WS.
-- Browser control uses its own HTTP control server.
+- CLI → `callGateway`를 통한 게이트웨이 WS (`src/gateway/call.ts`).
+- macOS 앱 UI → 게이트웨이 WS (`GatewayConnection`).
+- 웹 제어 UI → 게이트웨이 WS.
+- ACP → 게이트웨이 WS.
+- 브라우저 제어는 자체 HTTP 제어 서버 사용.
 
-## Nodes today
+## 현재 노드
 
-- macOS app in node mode connects to Gateway bridge (`MacNodeBridgeSession`).
-- iOS/Android apps connect to Gateway bridge.
-- Pairing + per‑node token stored on gateway.
+- 노드 모드에서 macOS 앱은 게이트웨이 브릿지에 연결 (`MacNodeBridgeSession`).
+- iOS/Android 앱은 게이트웨이 브릿지에 연결.
+- 페어링 + 노드별 토큰은 게이트웨이에 저장됨.
 
-## Current approval flow (exec)
+## 현재 승인 흐름 (실행)
 
-- Agent uses `system.run` via Gateway.
-- Gateway invokes node over bridge.
-- Node runtime decides approval.
-- UI prompt shown by mac app (when node == mac app).
-- Node returns `invoke-res` to Gateway.
-- Multi‑hop, UI tied to node host.
+- 에이전트는 게이트웨이를 통해 `system.run` 사용.
+- 게이트웨이가 브릿지를 통해 노드 호출.
+- 노드 런타임이 승인을 결정함.
+- 노드가 mac 앱일 때 UI 프롬프트가 표시됨.
+- 노드는 게이트웨이에 `invoke-res` 반환.
+- 다중 홉, UI가 노드 호스트에 묶임.
 
-## Presence + identity today
+## 현재 프레즌스 + 정체성
 
-- Gateway presence entries from WS clients.
-- Node presence entries from bridge.
-- mac app can show two entries for same machine (UI + node).
-- Node identity stored in pairing store; UI identity separate.
-
----
-
-# Problems / pain points
-
-- Two protocol stacks to maintain (WS + Bridge).
-- Approvals on remote nodes: prompt appears on node host, not where user is.
-- TLS pinning only exists for bridge; WS depends on SSH/Tailscale.
-- Identity duplication: same machine shows as multiple instances.
-- Ambiguous roles: UI + node + CLI capabilities not clearly separated.
+- 게이트웨이 프레즌스 항목은 WS 클라이언트에서.
+- 노드 프레즌스 항목은 브릿지에서.
+- mac 앱은 동일한 머신에 대해 두 개의 항목을 표시할 수 있음 (UI + 노드).
+- 노드 정체성은 페어링 스토어에 저장되고 UI 정체성은 분리됨.
 
 ---
 
-# Proposed new state (Clawnet)
+# 문제점 / 불편사항
 
-## One protocol, two roles
-
-Single WS protocol with role + scope.
-
-- **Role: node** (capability host)
-- **Role: operator** (control plane)
-- Optional **scope** for operator:
-  - `operator.read` (status + viewing)
-  - `operator.write` (agent run, sends)
-  - `operator.admin` (config, channels, models)
-
-### Role behaviors
-
-**Node**
-
-- Can register capabilities (`caps`, `commands`, permissions).
-- Can receive `invoke` commands (`system.run`, `camera.*`, `canvas.*`, `screen.record`, etc).
-- Can send events: `voice.transcript`, `agent.request`, `chat.subscribe`.
-- Cannot call config/models/channels/sessions/agent control plane APIs.
-
-**Operator**
-
-- Full control plane API, gated by scope.
-- Receives all approvals.
-- Does not directly execute OS actions; routes to nodes.
-
-### Key rule
-
-Role is per‑connection, not per device. A device may open both roles, separately.
+- 유지해야 할 두 개의 프로토콜 스택 (WS + 브릿지).
+- 원격 노드에서의 승인: 프롬프트가 사용자가 있는 곳이 아니라 노드 호스트에 표시됨.
+- TLS 고정은 브릿지에만 존재하며 WS는 SSH/Tailscale에 의존.
+- 정체성 중복: 동일한 머신이 여러 인스턴스로 표시됨.
+- 모호한 역할: UI + 노드 + CLI 기능은 구체적으로 구분되지 않음.
 
 ---
 
-# Unified authentication + pairing
+# 제안된 새로운 상태 (Clawnet)
 
-## Client identity
+## 하나의 프로토콜, 두 가지 역할
 
-Every client provides:
+역할 + 범위를 갖춘 단일 WS 프로토콜.
 
-- `deviceId` (stable, derived from device key).
-- `displayName` (human name).
+- **역할: 노드** (기능 호스트)
+- **역할: 운영자** (제어 플레인)
+- 운영자를 위한 선택적 **범위**:
+  - `operator.read` (상태 + 보기)
+  - `operator.write` (에이전트 실행, 전송)
+  - `operator.admin` (설정, 채널, 모델)
+
+### 역할 행동
+
+**노드**
+
+- 기능등록 (`caps`, `commands`, 권한).
+- `invoke` 명령어를 수신 가능 (`system.run`, `camera.*`, `canvas.*`, `screen.record` 등).
+- 이벤트 전송 가능: `voice.transcript`, `agent.request`, `chat.subscribe`.
+- 설정/모델/채널/세션/에이전트 제어 플레인 API 호출 불가.
+
+**운영자**
+
+- 범위에 의해 제한되는 전체 제어 플레인 API.
+- 모든 승인을 수신.
+- OS 동작을 직접 실행하지 않음; 노드에 라우팅함.
+
+### 핵심 규칙
+
+역할은 연결당 하나로, 장치당 하나가 아님. 한 장치가 동시에 두 역할을 열 수 있음.
+
+---
+
+# 통합 인증 + 페어링
+
+## 클라이언트 정체성
+
+모든 클라이언트는 다음을 제공해야 합니다:
+
+- `deviceId` (안정적이며, 장치 키에서 파생됨).
+- `displayName` (인간 친화적 이름).
 - `role` + `scope` + `caps` + `commands`.
 
-## Pairing flow (unified)
+## 페어링 흐름 (통합)
 
-- Client connects unauthenticated.
-- Gateway creates a **pairing request** for that `deviceId`.
-- Operator receives prompt; approves/denies.
-- Gateway issues credentials bound to:
-  - device public key
-  - role(s)
-  - scope(s)
-  - capabilities/commands
-- Client persists token, reconnects authenticated.
+- 클라이언트는 인증 없이 연결됨.
+- 게이트웨이는 해당 `deviceId`에 대한 **페어링 요청**을 만듭니다.
+- 운영자는 프롬프트를 받고 승인 또는 거부합니다.
+- 게이트웨이는 다음에 바인딩된 자격 증명을 발행합니다:
+  - 장치 공개 키
+  - 역할
+  - 범위
+  - 기능/명령어
+- 클라이언트는 토큰을 유지하고 인증되어 다시 연결됩니다.
 
-## Device‑bound auth (avoid bearer token replay)
+## 장치‑바인드 인증 (배어러 토큰 재생 방지)
 
-Preferred: device keypairs.
+권장: 장치 키페어.
 
-- Device generates keypair once.
+- 장치는 한 번 키페어 생성.
 - `deviceId = fingerprint(publicKey)`.
-- Gateway sends nonce; device signs; gateway verifies.
-- Tokens are issued to a public key (proof‑of‑possession), not a string.
+- 게이트웨이는 nonce 전송; 장치는 서명; 게이트웨이는 검증.
+- 토큰은 문자열이 아닌 공개 키 (possession 증명)로 발행됨.
 
-Alternatives:
+대안:
 
-- mTLS (client certs): strongest, more ops complexity.
-- Short‑lived bearer tokens only as a temporary phase (rotate + revoke early).
+- mTLS (클라이언트 인증서): 가장 강력하며 운영 복잡성 증가.
+- 단기 배어러 토큰은 임시 단계로만 사용 (조기 회전 및 취소).
 
-## Silent approval (SSH heuristic)
+## 침묵 승인 (SSH 휴리스틱)
 
-Define it precisely to avoid a weak link. Prefer one:
+약한 링크를 피하기 위해 정확히 정의하세요. 하나를 선호:
 
-- **Local‑only**: auto‑pair when client connects via loopback/Unix socket.
-- **Challenge via SSH**: gateway issues nonce; client proves SSH by fetching it.
-- **Physical presence window**: after a local approval on gateway host UI, allow auto‑pair for a short window (e.g. 10 minutes).
+- **로컬‑전용**: 클라이언트가 로컬 루프백/유닉스 소켓을 통해 연결될 때 자동 페어.
+- **SSH를 통한 도전**: 게이트웨이는 nonce를 발급; 클라이언트는 SSH로 가져와서 증명.
+- **물리적 프레즌스 윈도우**: 게이트웨이 호스트 UI에서 로컬 승인을 받은 후 약간의 시간 동안 자동 페어링 허용 (예: 10분).
 
-Always log + record auto‑approvals.
+항상 자동 승인 기록 + 기록하세요.
 
 ---
 
-# TLS everywhere (dev + prod)
+# TLS 전반에 걸쳐 (개발 + 프로덕션)
 
-## Reuse existing bridge TLS
+## 기존 브릿지 TLS 재사용
 
-Use current TLS runtime + fingerprint pinning:
+현재 TLS 런타임 + 지문 고정을 사용:
 
 - `src/infra/bridge/server/tls.ts`
-- fingerprint verification logic in `src/node-host/bridge-client.ts`
+- `src/node-host/bridge-client.ts`에서 지문 검증 논리
 
-## Apply to WS
+## WS에 적용
 
-- WS server supports TLS with same cert/key + fingerprint.
-- WS clients can pin fingerprint (optional).
-- Discovery advertises TLS + fingerprint for all endpoints.
-  - Discovery is locator hints only; never a trust anchor.
+- WS 서버는 동일한 인증서/키 + 지문으로 TLS 지원.
+- WS 클라이언트는 지문을 고정 가능 (선택적).
+- 디바이스 검색은 모든 엔드포인트에 대해 TLS + 지문을 광고.
+  - 디바이스 검색은 위치 힌트만 제공하며, 신뢰 앵커가 아님.
 
-## Why
+## 이유
 
-- Reduce reliance on SSH/Tailscale for confidentiality.
-- Make remote mobile connections safe by default.
-
----
-
-# Approvals redesign (centralized)
-
-## Current
-
-Approval happens on node host (mac app node runtime). Prompt appears where node runs.
-
-## Proposed
-
-Approval is **gateway‑hosted**, UI delivered to operator clients.
-
-### New flow
-
-1. Gateway receives `system.run` intent (agent).
-2. Gateway creates approval record: `approval.requested`.
-3. Operator UI(s) show prompt.
-4. Approval decision sent to gateway: `approval.resolve`.
-5. Gateway invokes node command if approved.
-6. Node executes, returns `invoke-res`.
-
-### Approval semantics (hardening)
-
-- Broadcast to all operators; only the active UI shows a modal (others get a toast).
-- First resolution wins; gateway rejects subsequent resolves as already settled.
-- Default timeout: deny after N seconds (e.g. 60s), log reason.
-- Resolution requires `operator.approvals` scope.
-
-## Benefits
-
-- Prompt appears where user is (mac/phone).
-- Consistent approvals for remote nodes.
-- Node runtime stays headless; no UI dependency.
+- 기밀성을 위해 SSH/Tailscale 의존도 감소.
+- 원격 모바일 연결을 기본적으로 안전하게 만듭니다.
 
 ---
 
-# Role clarity examples
+# 승인 재설계 (중앙화됨)
 
-## iPhone app
+## 현재 상황
 
-- **Node role** for: mic, camera, voice chat, location, push‑to‑talk.
-- Optional **operator.read** for status and chat view.
-- Optional **operator.write/admin** only when explicitly enabled.
+승인은 노드 호스트에서 발생 (mac 앱 노드 런타임). 프롬프트는 노드가 실행되는 곳에 표시됨.
 
-## macOS app
+## 제안됨
 
-- Operator role by default (control UI).
-- Node role when “Mac node” enabled (system.run, screen, camera).
-- Same deviceId for both connections → merged UI entry.
+승인은 **게이트웨이 호스팅**되고, UI는 운영자 클라이언트로 전달됩니다.
+
+### 새로운 흐름
+
+1. 게이트웨이는 `system.run` 의도를 받습니다 (에이전트).
+2. 게이트웨이는 승인 기록 생성: `approval.requested`.
+3. 운영자 UI(들)은 프롬프트를 표시합니다.
+4. 승인 결정은 게이트웨이에 전송: `approval.resolve`.
+5. 승인되면 게이트웨이는 노드 명령을 호출합니다.
+6. 노드는 실행하고, `invoke-res`를 반환합니다.
+
+### 승인 의미론 (강화)
+
+- 모든 운영자에게 방송; 활성 UI만 모달 표시 (다른 UI는 알림 표시).
+- 첫 번째 해결 방법이 승리; 게이트웨이는 후속 해결을 이미 해결됨으로 거부.
+- 기본 타임아웃: N초 후 거부 (예: 60초), 이유 기록.
+- 해결에는 `operator.approvals` 범위가 필요함.
+
+## 이점
+
+- 프롬프트가 사용자가 있는 곳에 나타남 (mac/전화).
+- 원격 노드에 대한 일관된 승인.
+- 노드 런타임은 무인 상태로 유지됨; UI 의존성 없음.
+
+---
+
+# 역할의 명확성 예시
+
+## iPhone 앱
+
+- **노드 역할**: 마이크, 카메라, 음성 채팅, 위치, 푸시 투 토크.
+- 상태 및 채팅 보기를 위한 선택적 **operator.read**.
+- 명시적으로 활성화될 때만 **operator.write/admin**.
+
+## macOS 앱
+
+- 기본적으로 운영자 역할 (제어 UI).
+- "Mac node"가 활성화되면 노드 역할 (system.run, 화면, 카메라).
+- 동일한 deviceId에서 두 연결 모두에 대하여 → UI 항목 병합.
 
 ## CLI
 
-- Operator role always.
-- Scope derived by subcommand:
-  - `status`, `logs` → read
-  - `agent`, `message` → write
-  - `config`, `channels` → admin
-  - approvals + pairing → `operator.approvals` / `operator.pairing`
+- 항상 운영자 역할.
+- 하위 명령에 의해 도출된 범위:
+  - `status`, `logs` → 읽기
+  - `agent`, `message` → 쓰기
+  - `config`, `channels` → 관리
+  - 승인 + 페어링 → `operator.approvals` / `operator.pairing`
 
 ---
 
-# Identity + slugs
+# 정체성 + 슬러그
 
-## Stable ID
+## 안정적인 ID
 
-Required for auth; never changes.
-Preferred:
+인증에 필요하며 절대 변경되지 않음.
+권장:
 
-- Keypair fingerprint (public key hash).
+- 키페어 지문 (공개 키 해시).
 
-## Cute slug (lobster‑themed)
+## 귀여운 슬러그 (랍스터 테마)
 
-Human label only.
+인간 레이블 전용.
 
-- Example: `scarlet-claw`, `saltwave`, `mantis-pinch`.
-- Stored in gateway registry, editable.
-- Collision handling: `-2`, `-3`.
+- 예시: `scarlet-claw`, `saltwave`, `mantis-pinch`.
+- 게이트웨이 레지스트리에 저장, 수정 가능.
+- 충돌 처리: `-2`, `-3`.
 
-## UI grouping
+## UI 그룹화
 
-Same `deviceId` across roles → single “Instance” row:
+동일한 `deviceId`가 여러 역할에 걸쳐 있을 경우 → 단일 “인스턴스” 행:
 
-- Badge: `operator`, `node`.
-- Shows capabilities + last seen.
-
----
-
-# Migration strategy
-
-## Phase 0: Document + align
-
-- Publish this doc.
-- Inventory all protocol calls + approval flows.
-
-## Phase 1: Add roles/scopes to WS
-
-- Extend `connect` params with `role`, `scope`, `deviceId`.
-- Add allowlist gating for node role.
-
-## Phase 2: Bridge compatibility
-
-- Keep bridge running.
-- Add WS node support in parallel.
-- Gate features behind config flag.
-
-## Phase 3: Central approvals
-
-- Add approval request + resolve events in WS.
-- Update mac app UI to prompt + respond.
-- Node runtime stops prompting UI.
-
-## Phase 4: TLS unification
-
-- Add TLS config for WS using bridge TLS runtime.
-- Add pinning to clients.
-
-## Phase 5: Deprecate bridge
-
-- Migrate iOS/Android/mac node to WS.
-- Keep bridge as fallback; remove once stable.
-
-## Phase 6: Device‑bound auth
-
-- Require key‑based identity for all non‑local connections.
-- Add revocation + rotation UI.
+- 배지: `운영자`, `노드`.
+- 기능 + 마지막 조회 표시.
 
 ---
 
-# Security notes
+# 마이그레이션 전략
 
-- Role/allowlist enforced at gateway boundary.
-- No client gets “full” API without operator scope.
-- Pairing required for _all_ connections.
-- TLS + pinning reduces MITM risk for mobile.
-- SSH silent approval is a convenience; still recorded + revocable.
-- Discovery is never a trust anchor.
-- Capability claims are verified against server allowlists by platform/type.
+## Phase 0: 문서 작성 + 정렬
 
-# Streaming + large payloads (node media)
+- 이 문서를 발행.
+- 모든 프로토콜 호출 + 승인 흐름 인벤토리.
 
-WS control plane is fine for small messages, but nodes also do:
+## Phase 1: WS에 역할/범위 추가
 
-- camera clips
-- screen recordings
-- audio streams
+- `connect` 매개변수에 `role`, `scope`, `deviceId` 확장.
+- 노드 역할을 위한 허용 목록 게이팅 추가.
 
-Options:
+## Phase 2: 브릿지 호환성
 
-1. WS binary frames + chunking + backpressure rules.
-2. Separate streaming endpoint (still TLS + auth).
-3. Keep bridge longer for media‑heavy commands, migrate last.
+- 브릿지를 계속 실행.
+- 병행하여 WS 노드 지원 추가.
+- 설정 플래그 뒤에 기능 게이트 설정.
 
-Pick one before implementation to avoid drift.
+## Phase 3: 중앙 승인
 
-# Capability + command policy
+- WS에 승인 요청 + 해결 이벤트 추가.
+- mac 앱 UI를 업데이트하여 프롬프트 + 응답.
+- 노드 런타임이 UI에 프롬프트를 중지.
 
-- Node‑reported caps/commands are treated as **claims**.
-- Gateway enforces per‑platform allowlists.
-- Any new command requires operator approval or explicit allowlist change.
-- Audit changes with timestamps.
+## Phase 4: TLS 통합
 
-# Audit + rate limiting
+- 브릿지 TLS 런타임을 사용하여 WS용 TLS 설정 추가.
+- 클라이언트에 고정 추가.
 
-- Log: pairing requests, approvals/denials, token issuance/rotation/revocation.
-- Rate‑limit pairing spam and approval prompts.
+## Phase 5: 브릿지 폐기
 
-# Protocol hygiene
+- iOS/Android/mac 노드를 WS로 마이그레이션.
+- 브릿지를 백업으로 유지; 안정화됨에 따라 제거.
 
-- Explicit protocol version + error codes.
-- Reconnect rules + heartbeat policy.
-- Presence TTL and last‑seen semantics.
+## Phase 6: 장치‑바인드 인증
+
+- 모든 비로컬 연결에 대한 키 기반 정체성 요구.
+- 취소 + 회전 UI 추가.
 
 ---
 
-# Open questions
+# 보안 주의사항
 
-1. Single device running both roles: token model
-   - Recommend separate tokens per role (node vs operator).
-   - Same deviceId; different scopes; clearer revocation.
+- 게이트웨이 경계에서 역할/허용 목록 강제됨.
+- 운영자 범위 없이 어떤 클라이언트도 “전체” API를 얻지 못함.
+- 모든 연결에 대해 페어링 요구됨.
+- TLS + 고정은 모바일에 대한 MITM 위험을 줄임.
+- SSH 침묵 승인은 편의지만 여전히 기록 + 취소 가능함.
+- 디바이스 검색은 신뢰 앵커가 아님.
+- 기능 주장은 플랫폼/유형별 서버 허용 목록에 대해 검증됨.
 
-2. Operator scope granularity
-   - read/write/admin + approvals + pairing (minimum viable).
-   - Consider per‑feature scopes later.
+# 스트리밍 + 대형 페이로드 (노드 미디어)
 
-3. Token rotation + revocation UX
-   - Auto‑rotate on role change.
-   - UI to revoke by deviceId + role.
+WS 제어 플레인은 작은 메시지에는 적합하지만, 노드는 다음도 수행합니다:
 
-4. Discovery
-   - Extend current Bonjour TXT to include WS TLS fingerprint + role hints.
-   - Treat as locator hints only.
+- 카메라 클립
+- 화면 녹화
+- 오디오 스트림
 
-5. Cross‑network approval
-   - Broadcast to all operator clients; active UI shows modal.
-   - First response wins; gateway enforces atomicity.
+옵션:
+
+1. WS 바이너리 프레임 + 청킹 + 백프레셔 규칙.
+2. 별도의 스트리밍 엔드포인트 (여전히 TLS + 인증).
+3. 미디어‑헤비 명령어에 대해 브릿지를 더 오래 유지하고 최종 마이그레이션.
+
+구현 전에 하나를 선택하여 드리프트를 피하세요.
+
+# 기능 + 명령어 정책
+
+- 노드‑보고된 기능/명령어는 **주장**으로 간주됨.
+- 게이트웨이는 플랫폼별 허용 목록을 적용.
+- 새로운 명령어는 운영자 승인이 필요하거나 명시적인 허용 목록 변경이 필요.
+- 타임스탬프로 변경 사항을 감사.
+
+# 감사 + 속도 제한
+
+- 로그: 페어링 요청, 승인/거부, 토큰 발행/회전/취소.
+- 페어링 스팸 및 승인 프롬프트에 대한 속도 제한.
+
+# 프로토콜 정결성
+
+- 명시적 프로토콜 버전 + 오류 코드.
+- 재연결 규칙 + 하트비트 정책.
+- 프레즌스 TTL 및 마지막 조회 의미론.
 
 ---
 
-# Summary (TL;DR)
+# 오픈 퀘스천
 
-- Today: WS control plane + Bridge node transport.
-- Pain: approvals + duplication + two stacks.
-- Proposal: one WS protocol with explicit roles + scopes, unified pairing + TLS pinning, gateway‑hosted approvals, stable device IDs + cute slugs.
-- Outcome: simpler UX, stronger security, less duplication, better mobile routing.
+1. 두 역할을 모두 실행하는 단일 장치: 토큰 모델
+   - 각 역할별로 별도의 토큰 권장 (노드 대 운영자).
+   - 동일한 deviceId; 다른 범위; 더 명확한 취소.
+
+2. 운영자 범위 세분화
+   - 읽기/쓰기/관리 + 승인 + 페어링 (최소한의 실행 가능).
+   - 나중에 기능별 범위 고려.
+
+3. 토큰 회전 + 취소 UX
+   - 역할 변경 시 자동 회전.
+   - deviceId + 역할별로 취소하는 UI.
+
+4. 디바이스 검색
+   - 현재 Bonjour TXT를 확장하여 WS TLS 지문 + 역할 힌트 포함.
+   - 위치 힌트로만 취급.
+
+5. 네트워크 간 승인
+   - 모든 운영자 클라이언트에 방송; 활성 UI가 모달 표시.
+   - 첫 번째 응답이 승리; 게이트웨이는 원자성을 강제.
+
+---
+
+# 요약 (TL;DR)
+
+- 오늘날: WS 제어 플레인 + 브릿지 노드 전송.
+- 문제: 승인 + 중복 + 두 개의 스택.
+- 제안: 명시적 롤 + 범위가 있는 하나의 WS 프로토콜, 통합 페어링 + TLS 고정, 게이트웨이 호스팅 승인, 안정적인 장치 ID + 귀여운 슬러그.
+- 결과: 더 간단한 UX, 더 강력한 보안, 덜 중복, 더 나은 모바일 라우팅.

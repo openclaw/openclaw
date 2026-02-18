@@ -1,22 +1,21 @@
 ---
-summary: "CLI reference for `openclaw approvals` (exec approvals for gateway or node hosts)"
+summary: "`openclaw approvals` CLI 참조 (게이트웨이 또는 노드 호스트의 실행 승인)"
 read_when:
-  - You want to edit exec approvals from the CLI
-  - You need to manage allowlists on gateway or node hosts
-title: "approvals"
+  - CLI에서 실행 승인을 편집하고자 할 때
+  - 게이트웨이 또는 노드 호스트에서 허용 목록을 관리해야 할 때
+title: "승인"
 ---
 
 # `openclaw approvals`
 
-Manage exec approvals for the **local host**, **gateway host**, or a **node host**.
-By default, commands target the local approvals file on disk. Use `--gateway` to target the gateway, or `--node` to target a specific node.
+**로컬 호스트**, **게이트웨이 호스트** 또는 **노드 호스트**의 실행 승인을 관리합니다. 기본적으로 명령어는 디스크의 로컬 승인 파일을 대상으로 합니다. `--gateway`를 사용하여 게이트웨이를 대상으로 하거나 `--node`를 사용하여 특정 노드를 대상으로 합니다.
 
-Related:
+관련 항목:
 
-- Exec approvals: [Exec approvals](/ko-KR/tools/exec-approvals)
-- Nodes: [Nodes](/ko-KR/nodes)
+- 실행 승인: [실행 승인](/tools/exec-approvals)
+- 노드: [노드](/nodes)
 
-## Common commands
+## 일반 명령어
 
 ```bash
 openclaw approvals get
@@ -24,7 +23,7 @@ openclaw approvals get --node <id|name|ip>
 openclaw approvals get --gateway
 ```
 
-## Replace approvals from a file
+## 파일에서 승인 교체
 
 ```bash
 openclaw approvals set --file ./exec-approvals.json
@@ -32,7 +31,7 @@ openclaw approvals set --node <id|name|ip> --file ./exec-approvals.json
 openclaw approvals set --gateway --file ./exec-approvals.json
 ```
 
-## Allowlist helpers
+## 허용 목록 도우미
 
 ```bash
 openclaw approvals allowlist add "~/Projects/**/bin/rg"
@@ -42,9 +41,9 @@ openclaw approvals allowlist add --agent "*" "/usr/bin/uname"
 openclaw approvals allowlist remove "~/Projects/**/bin/rg"
 ```
 
-## Notes
+## 참고 사항
 
-- `--node` uses the same resolver as `openclaw nodes` (id, name, ip, or id prefix).
-- `--agent` defaults to `"*"`, which applies to all agents.
-- The node host must advertise `system.execApprovals.get/set` (macOS app or headless node host).
-- Approvals files are stored per host at `~/.openclaw/exec-approvals.json`.
+- `--node`는 `openclaw nodes`와 동일한 해석기를 사용합니다 (id, 이름, ip 또는 id 접두사).
+- `--agent`의 기본값은 `"*"`이며, 이는 모든 에이전트에 적용됩니다.
+- 노드 호스트는 `system.execApprovals.get/set`을 광고해야 합니다 (macOS 앱 또는 헤드리스 노드 호스트).
+- 승인 파일은 `~/.openclaw/exec-approvals.json`에 호스트별로 저장됩니다.

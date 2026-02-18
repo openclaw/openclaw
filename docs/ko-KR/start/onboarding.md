@@ -3,11 +3,11 @@ summary: "OpenClaw (macOS 앱)을 위한 첫 실행 온보딩 흐름"
 read_when:
   - macOS 온보딩 도우미 설계
   - 인증 또는 아이덴티티 설정 구현
-title: "Onboarding (macOS App)"
-sidebarTitle: "Onboarding: macOS App"
+title: "온보딩 (macOS 앱)"
+sidebarTitle: "온보딩: macOS 앱"
 ---
 
-# Onboarding (macOS App)
+# 온보딩 (macOS 앱)
 
 이 문서는 **현재** 첫 실행 온보딩 흐름에 대해 설명합니다. 목표는 매끄러운 "첫날" 경험을 제공하는 것입니다: 게이트웨이 실행 위치를 선택하고, 인증을 연결하고, 마법사를 실행하여 에이전트가 자체 부트스트랩하도록 합니다. 온보딩 경로의 일반 개요는 [Onboarding Overview](/ko-KR/start/onboarding-overview)를 참조하세요.
 

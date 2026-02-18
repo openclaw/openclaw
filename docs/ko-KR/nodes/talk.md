@@ -1,45 +1,45 @@
 ---
-summary: "Talk mode: continuous speech conversations with ElevenLabs TTS"
+summary: "Talk 모드: ElevenLabs TTS와 연속 음성 대화"
 read_when:
-  - Implementing Talk mode on macOS/iOS/Android
-  - Changing voice/TTS/interrupt behavior
-title: "Talk Mode"
+  - macOS/iOS/Android에서 Talk 모드 구현하기
+  - 음성/TTS/중단 동작 변경하기
+title: "Talk 모드"
 ---
 
-# Talk Mode
+# Talk 모드
 
-Talk mode is a continuous voice conversation loop:
+Talk 모드는 연속적인 음성 대화 루프입니다:
 
-1. Listen for speech
-2. Send transcript to the model (main session, chat.send)
-3. Wait for the response
-4. Speak it via ElevenLabs (streaming playback)
+1. 음성을 듣습니다
+2. 대본을 모델에 전송합니다 (주 세션, chat.send)
+3. 응답을 기다립니다
+4. ElevenLabs를 통해 읽어줍니다 (스트리밍 재생)
 
-## Behavior (macOS)
+## 동작 (macOS)
 
-- **Always-on overlay** while Talk mode is enabled.
-- **Listening → Thinking → Speaking** phase transitions.
-- On a **short pause** (silence window), the current transcript is sent.
-- Replies are **written to WebChat** (same as typing).
-- **Interrupt on speech** (default on): if the user starts talking while the assistant is speaking, we stop playback and note the interruption timestamp for the next prompt.
+- Talk 모드가 활성화된 동안 **항상 켜져 있는 오버레이**.
+- **듣기 → 생각하기 → 말하기** 단계 전환.
+- **짧은 일시정지** (무음 창) 시, 현재 대본이 전송됩니다.
+- 응답은 **WebChat에 작성**됩니다 (타이핑과 동일).
+- **음성 중단** (기본값 사용): 사용자가 에이전트가 말하는 동안 말을 시작하면 재생이 중지되고 다음 프롬프트를 위해 중단 타임스탬프가 기록됩니다.
 
-## Voice directives in replies
+## 응답에서의 음성 지시어
 
-The assistant may prefix its reply with a **single JSON line** to control voice:
+에이전트는 음성을 제어하기 위해 답변에 **단일 JSON 행**을 접두어로 붙일 수 있습니다:
 
 ```json
 { "voice": "<voice-id>", "once": true }
 ```
 
-Rules:
+규칙:
 
-- First non-empty line only.
-- Unknown keys are ignored.
-- `once: true` applies to the current reply only.
-- Without `once`, the voice becomes the new default for Talk mode.
-- The JSON line is stripped before TTS playback.
+- 첫 번째 비어 있지 않은 행만 사용.
+- 알 수 없는 키는 무시됩니다.
+- `once: true`는 현재 응답에만 적용됩니다.
+- `once`가 없으면 해당 음성이 Talk 모드의 새 기본값이 됩니다.
+- TTS 재생 전에 JSON 행이 제거됩니다.
 
-Supported keys:
+지원되는 키:
 
 - `voice` / `voice_id` / `voiceId`
 - `model` / `model_id` / `modelId`
@@ -47,7 +47,7 @@ Supported keys:
 - `seed`, `normalize`, `lang`, `output_format`, `latency_tier`
 - `once`
 
-## Config (`~/.openclaw/openclaw.json`)
+## 설정 (`~/.openclaw/openclaw.json`)
 
 ```json5
 {
@@ -61,30 +61,30 @@ Supported keys:
 }
 ```
 
-Defaults:
+기본값:
 
 - `interruptOnSpeech`: true
-- `voiceId`: falls back to `ELEVENLABS_VOICE_ID` / `SAG_VOICE_ID` (or first ElevenLabs voice when API key is available)
-- `modelId`: defaults to `eleven_v3` when unset
-- `apiKey`: falls back to `ELEVENLABS_API_KEY` (or gateway shell profile if available)
-- `outputFormat`: defaults to `pcm_44100` on macOS/iOS and `pcm_24000` on Android (set `mp3_*` to force MP3 streaming)
+- `voiceId`: `ELEVENLABS_VOICE_ID` / `SAG_VOICE_ID`로 대체 (또는 API 키가 있는 경우 첫 번째 ElevenLabs 음성)
+- `modelId`: 설정되지 않은 경우 기본값 `eleven_v3`
+- `apiKey`: `ELEVENLABS_API_KEY`로 대체 (또는 사용 가능한 경우 게이트웨이 셸 프로파일)
+- `outputFormat`: macOS/iOS에서는 기본값 `pcm_44100`, Android에서는 기본값 `pcm_24000` (MP3 스트리밍을 강제하려면 `mp3_*` 설정)
 
 ## macOS UI
 
-- Menu bar toggle: **Talk**
-- Config tab: **Talk Mode** group (voice id + interrupt toggle)
-- Overlay:
-  - **Listening**: cloud pulses with mic level
-  - **Thinking**: sinking animation
-  - **Speaking**: radiating rings
-  - Click cloud: stop speaking
-  - Click X: exit Talk mode
+- 메뉴 바 토글: **Talk**
+- 설정 탭: **Talk 모드** 그룹 (음성 ID + 중단 토글)
+- 오버레이:
+  - **Listening**: 마이크 레벨과 클라우드 펄싱
+  - **Thinking**: 싱킹 애니메이션
+  - **Speaking**: 방사형 고리
+  - 클라우드 클릭: 말하기 중지
+  - X 클릭: Talk 모드 종료
 
-## Notes
+## 주의사항
 
-- Requires Speech + Microphone permissions.
-- Uses `chat.send` against session key `main`.
-- TTS uses ElevenLabs streaming API with `ELEVENLABS_API_KEY` and incremental playback on macOS/iOS/Android for lower latency.
-- `stability` for `eleven_v3` is validated to `0.0`, `0.5`, or `1.0`; other models accept `0..1`.
-- `latency_tier` is validated to `0..4` when set.
-- Android supports `pcm_16000`, `pcm_22050`, `pcm_24000`, and `pcm_44100` output formats for low-latency AudioTrack streaming.
+- 음성 및 마이크 권한이 필요합니다.
+- 세션 키 `main`에 대해 `chat.send`를 사용합니다.
+- TTS는 `ELEVENLABS_API_KEY`를 사용하여 ElevenLabs 스트리밍 API와 macOS/iOS/Android에서 지연 시간을 줄이기 위한 점진적 재생을 사용합니다.
+- `eleven_v3`의 `stability`는 `0.0`, `0.5`, 또는 `1.0`으로 검증되며, 다른 모델은 `0..1`을 허용합니다.
+- `latency_tier`는 설정 시 `0..4`로 검증됩니다.
+- Android는 낮은 지연 시간의 AudioTrack 스트리밍을 위한 `pcm_16000`, `pcm_22050`, `pcm_24000` 및 `pcm_44100` 출력 포맷을 지원합니다.

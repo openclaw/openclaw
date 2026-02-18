@@ -1,16 +1,15 @@
 ---
-summary: "CLI reference for `openclaw config` (get/set/unset config values)"
+summary: "`openclaw config` CLI 참조 (설정 값 가져오기/설정하기/해제하기)"
 read_when:
-  - You want to read or edit config non-interactively
+  - 설정을 비대화식으로 읽거나 편집하고 싶을 때
 title: "config"
 ---
 
 # `openclaw config`
 
-Config helpers: get/set/unset values by path. Run without a subcommand to open
-the configure wizard (same as `openclaw configure`).
+설정 도우미: 경로로 값을 가져오기/설정하기/해제하기. 하위 명령어 없이 실행하면 구성 마법사가 열립니다 (`openclaw configure`와 동일).
 
-## Examples
+## 예제
 
 ```bash
 openclaw config get browser.executablePath
@@ -20,26 +19,25 @@ openclaw config set agents.list[0].tools.exec.node "node-id-or-name"
 openclaw config unset tools.web.search.apiKey
 ```
 
-## Paths
+## 경로
 
-Paths use dot or bracket notation:
+경로는 점 표기법이나 대괄호 표기법을 사용합니다:
 
 ```bash
 openclaw config get agents.defaults.workspace
 openclaw config get agents.list[0].id
 ```
 
-Use the agent list index to target a specific agent:
+에이전트 목록 인덱스를 사용하여 특정 에이전트를 대상으로 지정하세요:
 
 ```bash
 openclaw config get agents.list
 openclaw config set agents.list[1].tools.exec.node "node-id-or-name"
 ```
 
-## Values
+## 값
 
-Values are parsed as JSON5 when possible; otherwise they are treated as strings.
-Use `--json` to require JSON5 parsing.
+값은 가능할 경우 JSON5로 파싱되며, 그렇지 않으면 문자열로 처리됩니다. JSON5 파싱을 요구하려면 `--json`을 사용하세요.
 
 ```bash
 openclaw config set agents.defaults.heartbeat.every "0m"
@@ -47,4 +45,4 @@ openclaw config set gateway.port 19001 --json
 openclaw config set channels.whatsapp.groups '["*"]' --json
 ```
 
-Restart the gateway after edits.
+수정 후 게이트웨이를 재시작하세요.

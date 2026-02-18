@@ -1,41 +1,37 @@
+````markdown
 ---
-summary: "When OpenClaw shows typing indicators and how to tune them"
+summary: "OpenClaw에서 입력 중임을 나타내는 지표를 표시하는 시점과 이를 조정하는 방법"
 read_when:
-  - Changing typing indicator behavior or defaults
-title: "Typing Indicators"
+  - 입력 지표 동작 또는 기본값 변경
+title: "입력 지표"
 ---
 
-# Typing indicators
+# 입력 지표
 
-Typing indicators are sent to the chat channel while a run is active. Use
-`agents.defaults.typingMode` to control **when** typing starts and `typingIntervalSeconds`
-to control **how often** it refreshes.
+입력 지표는 실행이 활성 상태일 때 채팅 채널로 전송됩니다. `agents.defaults.typingMode`를 사용하여 입력이 시작되는 **시점**을 제어하고 `typingIntervalSeconds`를 사용하여 **갱신 빈도**를 제어합니다.
 
-## Defaults
+## 기본값
 
-When `agents.defaults.typingMode` is **unset**, OpenClaw keeps the legacy behavior:
+`agents.defaults.typingMode`가 **설정되지 않으면**, OpenClaw는 기존 동작을 유지합니다:
 
-- **Direct chats**: typing starts immediately once the model loop begins.
-- **Group chats with a mention**: typing starts immediately.
-- **Group chats without a mention**: typing starts only when message text begins streaming.
-- **Heartbeat runs**: typing is disabled.
+- **다이렉트 채팅**: 모델 루프가 시작되면 즉시 입력 시작.
+- **멘션이 있는 그룹 채팅**: 즉시 입력 시작.
+- **멘션이 없는 그룹 채팅**: 메시지 텍스트 스트리밍이 시작될 때만 입력 시작.
+- **하트비트 실행**: 입력 비활성화.
 
-## Modes
+## 모드
 
-Set `agents.defaults.typingMode` to one of:
+`agents.defaults.typingMode`를 다음 중 하나로 설정하십시오:
 
-- `never` — no typing indicator, ever.
-- `instant` — start typing **as soon as the model loop begins**, even if the run
-  later returns only the silent reply token.
-- `thinking` — start typing on the **first reasoning delta** (requires
-  `reasoningLevel: "stream"` for the run).
-- `message` — start typing on the **first non-silent text delta** (ignores
-  the `NO_REPLY` silent token).
+- `never` — 입력 지표가 전혀 표시되지 않음.
+- `instant` — 모델 루프가 시작되면 **즉시 입력 시작** (실행 후 깜짝 응답 전용 토큰이 반환되더라도).
+- `thinking` — **첫 번째 추론 델타**에서 입력 시작 (`reasoningLevel: "stream"` 필요).
+- `message` — **첫 번째 비침묵 텍스트 델타**에서 입력 시작 (`NO_REPLY` 깜짝 토큰 무시).
 
-Order of “how early it fires”:
+"얼마나 빨리 시작하는가"의 순서:
 `never` → `message` → `thinking` → `instant`
 
-## Configuration
+## 설정
 
 ```json5
 {
@@ -45,8 +41,9 @@ Order of “how early it fires”:
   },
 }
 ```
+````
 
-You can override mode or cadence per session:
+각 세션별로 모드나 주기를 재정의할 수 있습니다:
 
 ```json5
 {
@@ -57,12 +54,13 @@ You can override mode or cadence per session:
 }
 ```
 
-## Notes
+## 주의사항
 
-- `message` mode won’t show typing for silent-only replies (e.g. the `NO_REPLY`
-  token used to suppress output).
-- `thinking` only fires if the run streams reasoning (`reasoningLevel: "stream"`).
-  If the model doesn’t emit reasoning deltas, typing won’t start.
-- Heartbeats never show typing, regardless of mode.
-- `typingIntervalSeconds` controls the **refresh cadence**, not the start time.
-  The default is 6 seconds.
+- `message` 모드는 깜짝 응답 전용일 경우 입력을 표시하지 않습니다 (예: 출력 억제에 사용되는 `NO_REPLY` 토큰).
+- `thinking`은 실행이 추론을 스트리밍할 경우에만 시작합니다 (`reasoningLevel: "stream"`). 모델이 추론 델타를 방출하지 않으면 입력이 시작되지 않습니다.
+- 하트비트에서는 모드와 관계없이 입력이 표시되지 않습니다.
+- `typingIntervalSeconds`는 **갱신 주기**를 제어하며, 시작 시간을 제어하지는 않습니다. 기본값은 6초입니다.
+
+```
+
+```

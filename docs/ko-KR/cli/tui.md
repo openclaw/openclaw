@@ -1,20 +1,20 @@
 ---
-summary: "CLI reference for `openclaw tui` (terminal UI connected to the Gateway)"
+summary: "`openclaw tui`에 대한 CLI 참조 (게이트웨이에 연결된 터미널 UI)"
 read_when:
-  - You want a terminal UI for the Gateway (remote-friendly)
-  - You want to pass url/token/session from scripts
+  - 게이트웨이를 위한 터미널 UI가 필요하다면 (원격 사용에 적합)
+  - 스크립트에서 URL/토큰/세션을 전달하고 싶다면
 title: "tui"
 ---
 
 # `openclaw tui`
 
-Open the terminal UI connected to the Gateway.
+게이트웨이에 연결된 터미널 UI를 엽니다.
 
-Related:
+관련 문서:
 
-- TUI guide: [TUI](/ko-KR/web/tui)
+- TUI 가이드: [TUI](/web/tui)
 
-## Examples
+## 예시
 
 ```bash
 openclaw tui

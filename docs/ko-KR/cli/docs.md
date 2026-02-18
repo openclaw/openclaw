@@ -1,13 +1,13 @@
 ---
-summary: "CLI reference for `openclaw docs` (search the live docs index)"
+summary: "`openclaw docs` CLI 참조 (라이브 문서 색인 검색)"
 read_when:
-  - You want to search the live OpenClaw docs from the terminal
-title: "docs"
+  - 터미널에서 라이브 OpenClaw 문서를 검색하고 싶을 때
+title: "문서"
 ---
 
 # `openclaw docs`
 
-Search the live docs index.
+라이브 문서 색인을 검색합니다.
 
 ```bash
 openclaw docs browser extension

@@ -1,26 +1,26 @@
 ---
-summary: "Timezone handling for agents, envelopes, and prompts"
+summary: "에이전트, 봉투 및 프롬프트의 시간대 처리"
 read_when:
-  - You need to understand how timestamps are normalized for the model
-  - Configuring the user timezone for system prompts
-title: "Timezones"
+  - 모델을 위해 타임스탬프가 어떻게 표준화되는지 이해해야 할 때
+  - 시스템 프롬프트를 위해 사용자 시간대를 설정할 때
+title: "시간대"
 ---
 
-# Timezones
+# 시간대
 
-OpenClaw standardizes timestamps so the model sees a **single reference time**.
+OpenClaw는 타임스탬프를 표준화하여 모델이 **단일 기준 시간**을 보도록 합니다.
 
-## Message envelopes (local by default)
+## 메시지 봉투 (기본적으로 로컬)
 
-Inbound messages are wrapped in an envelope like:
+수신 메시지는 다음과 같이 봉투에 포장됩니다:
 
 ```
-[Provider ... 2026-01-05 16:26 PST] message text
+[Provider ... 2026-01-05 16:26 PST] 메시지 텍스트
 ```
 
-The timestamp in the envelope is **host-local by default**, with minutes precision.
+봉투 내 타임스탬프는 **기본적으로 호스트-로컬**이며, 분 단위의 정밀도를 가집니다.
 
-You can override this with:
+다음과 같이 재정의할 수 있습니다:
 
 ```json5
 {
@@ -34,46 +34,45 @@ You can override this with:
 }
 ```
 
-- `envelopeTimezone: "utc"` uses UTC.
-- `envelopeTimezone: "user"` uses `agents.defaults.userTimezone` (falls back to host timezone).
-- Use an explicit IANA timezone (e.g., `"Europe/Vienna"`) for a fixed offset.
-- `envelopeTimestamp: "off"` removes absolute timestamps from envelope headers.
-- `envelopeElapsed: "off"` removes elapsed time suffixes (the `+2m` style).
+- `envelopeTimezone: "utc"`는 UTC를 사용합니다.
+- `envelopeTimezone: "user"`는 `agents.defaults.userTimezone`을 사용합니다 (호스트 시간대로 대체됩니다).
+- 고정 오프셋을 위해 명시적인 IANA 시간대를 사용합니다 (예: `"Europe/Vienna"`).
+- `envelopeTimestamp: "off"`는 봉투 헤더에서 절대 타임스탬프를 제거합니다.
+- `envelopeElapsed: "off"`는 경과 시간 접미사를 제거합니다 (`+2m` 스타일).
 
-### Examples
+### 예
 
-**Local (default):**
+**로컬 (기본):**
 
 ```
 [Signal Alice +1555 2026-01-18 00:19 PST] hello
 ```
 
-**Fixed timezone:**
+**고정 시간대:**
 
 ```
 [Signal Alice +1555 2026-01-18 06:19 GMT+1] hello
 ```
 
-**Elapsed time:**
+**경과 시간:**
 
 ```
 [Signal Alice +1555 +2m 2026-01-18T05:19Z] follow-up
 ```
 
-## Tool payloads (raw provider data + normalized fields)
+## 도구 페이로드 (원시 프로바이더 데이터 + 표준화된 필드)
 
-Tool calls (`channels.discord.readMessages`, `channels.slack.readMessages`, etc.) return **raw provider timestamps**.
-We also attach normalized fields for consistency:
+도구 호출 (`channels.discord.readMessages`, `channels.slack.readMessages`, 등)은 **원시 프로바이더 타임스탬프**를 반환합니다.
+일관성을 위해 표준화된 필드도 첨부합니다:
 
-- `timestampMs` (UTC epoch milliseconds)
-- `timestampUtc` (ISO 8601 UTC string)
+- `timestampMs` (UTC epoch 밀리초)
+- `timestampUtc` (ISO 8601 UTC 문자열)
 
-Raw provider fields are preserved.
+원시 프로바이더 필드는 유지됩니다.
 
-## User timezone for the system prompt
+## 시스템 프롬프트를 위한 사용자 시간대
 
-Set `agents.defaults.userTimezone` to tell the model the user's local time zone. If it is
-unset, OpenClaw resolves the **host timezone at runtime** (no config write).
+모델에 사용자의 로컬 시간대를 알려주기 위해 `agents.defaults.userTimezone`을 설정하세요. 설정되지 않은 경우, OpenClaw는 **런타임에서 호스트 시간대**를 해결합니다 (구성 작성 없음).
 
 ```json5
 {
@@ -81,11 +80,11 @@ unset, OpenClaw resolves the **host timezone at runtime** (no config write).
 }
 ```
 
-The system prompt includes:
+시스템 프롬프트에는 다음이 포함됩니다:
 
-- `Current Date & Time` section with local time and timezone
-- `Time format: 12-hour` or `24-hour`
+- 로컬 시간과 시간대가 포함된 `현재 날짜 및 시간` 섹션
+- `시간 형식: 12시간` 또는 `24시간`
 
-You can control the prompt format with `agents.defaults.timeFormat` (`auto` | `12` | `24`).
+`agents.defaults.timeFormat` (`auto` | `12` | `24`)로 프롬프트 형식을 제어할 수 있습니다.
 
-See [Date & Time](/ko-KR/date-time) for the full behavior and examples.
+전체 동작 및 예시는 [Date & Time](/date-time)을 참조하세요.

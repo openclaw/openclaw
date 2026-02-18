@@ -1,83 +1,83 @@
 ---
-summary: "macOS app flow for controlling a remote OpenClaw gateway over SSH"
+summary: "SSH를 통해 원격 OpenClaw 게이트웨이를 제어하는 macOS 앱 흐름"
 read_when:
-  - Setting up or debugging remote mac control
-title: "Remote Control"
+  - 원격 mac 제어 설정 또는 디버깅
+title: "원격 제어"
 ---
 
-# Remote OpenClaw (macOS ⇄ remote host)
+# Remote OpenClaw (macOS ⇄ 원격 호스트)
 
-This flow lets the macOS app act as a full remote control for a OpenClaw gateway running on another host (desktop/server). It’s the app’s **Remote over SSH** (remote run) feature. All features—health checks, Voice Wake forwarding, and Web Chat—reuse the same remote SSH configuration from _Settings → General_.
+이 흐름은 macOS 앱이 다른 호스트(데스크탑/서버)에서 실행 중인 OpenClaw 게이트웨이의 전체 원격 제어 역할을 하게 합니다. 이는 앱의 **SSH를 통한 원격 제어**(원격 실행) 기능입니다. 모든 기능—상태 검사, Voice Wake 포워딩, Web Chat—이 *설정 → 일반*에서 동일한 원격 SSH 구성을 재사용합니다.
 
-## Modes
+## 모드
 
-- **Local (this Mac)**: Everything runs on the laptop. No SSH involved.
-- **Remote over SSH (default)**: OpenClaw commands are executed on the remote host. The mac app opens an SSH connection with `-o BatchMode` plus your chosen identity/key and a local port-forward.
-- **Remote direct (ws/wss)**: No SSH tunnel. The mac app connects to the gateway URL directly (for example, via Tailscale Serve or a public HTTPS reverse proxy).
+- **로컬(이 Mac)**: 모든 것이 노트북에서 실행됩니다. SSH는 포함되지 않습니다.
+- **SSH를 통한 원격(default)**: OpenClaw 명령어가 원격 호스트에서 실행됩니다. Mac 앱은 `-o BatchMode`와 선택한 ID/키, 로컬 포트 포워드를 사용하여 SSH 연결을 엽니다.
+- **직접 원격(ws/wss)**: SSH 터널이 없습니다. Mac 앱은 Tailscale Serve나 공용 HTTPS 역방향 프록시를 통해 게이트웨이 URL에 직접 연결합니다.
 
-## Remote transports
+## 원격 전송 프로토콜
 
-Remote mode supports two transports:
+원격 모드는 두 가지 전송 프로토콜을 지원합니다:
 
-- **SSH tunnel** (default): Uses `ssh -N -L ...` to forward the gateway port to localhost. The gateway will see the node’s IP as `127.0.0.1` because the tunnel is loopback.
-- **Direct (ws/wss)**: Connects straight to the gateway URL. The gateway sees the real client IP.
+- **SSH 터널(default)**: 게이트웨이 포트를 localhost로 포워드하기 위해 `ssh -N -L ...`을 사용합니다. 터널은 로컬 루프백이므로 게이트웨이는 노드의 IP를 `127.0.0.1`로 인식합니다.
+- **직접(ws/wss)**: 게이트웨이 URL에 직접 연결됩니다. 게이트웨이는 실제 클라이언트 IP를 인식합니다.
 
-## Prereqs on the remote host
+## 원격 호스트의 사전 요구사항
 
-1. Install Node + pnpm and build/install the OpenClaw CLI (`pnpm install && pnpm build && pnpm link --global`).
-2. Ensure `openclaw` is on PATH for non-interactive shells (symlink into `/usr/local/bin` or `/opt/homebrew/bin` if needed).
-3. Open SSH with key auth. We recommend **Tailscale** IPs for stable reachability off-LAN.
+1. Node 및 pnpm을 설치하고 OpenClaw CLI를 빌드/설치합니다. (`pnpm install && pnpm build && pnpm link --global`)
+2. 비대화형 셸에서 PATH에 `openclaw`가 있는지 확인합니다. 필요하면 `/usr/local/bin` 또는 `/opt/homebrew/bin`에 심볼릭 링크를 만드십시오.
+3. 키 인증을 사용하여 SSH를 엽니다. 안정적인 비LAN 접근성을 위해 **Tailscale** IP를 권장합니다.
 
-## macOS app setup
+## macOS 앱 설정
 
-1. Open _Settings → General_.
-2. Under **OpenClaw runs**, pick **Remote over SSH** and set:
-   - **Transport**: **SSH tunnel** or **Direct (ws/wss)**.
-   - **SSH target**: `user@host` (optional `:port`).
-     - If the gateway is on the same LAN and advertises Bonjour, pick it from the discovered list to auto-fill this field.
-   - **Gateway URL** (Direct only): `wss://gateway.example.ts.net` (or `ws://...` for local/LAN).
-   - **Identity file** (advanced): path to your key.
-   - **Project root** (advanced): remote checkout path used for commands.
-   - **CLI path** (advanced): optional path to a runnable `openclaw` entrypoint/binary (auto-filled when advertised).
-3. Hit **Test remote**. Success indicates the remote `openclaw status --json` runs correctly. Failures usually mean PATH/CLI issues; exit 127 means the CLI isn’t found remotely.
-4. Health checks and Web Chat will now run through this SSH tunnel automatically.
+1. *설정 → 일반*을 엽니다.
+2. **OpenClaw 실행** 아래에서 **SSH를 통한 원격**을 선택하고 다음을 설정합니다:
+   - **전송 방법**: **SSH 터널** 또는 **직접(ws/wss)**.
+   - **SSH 대상**: `user@host` (선택적으로 `:port` 추가).
+     - 게이트웨이가 동일한 LAN에 있고 Bonjour를 광고하는 경우, 발견된 목록에서 자동 완성을 위해 선택하십시오.
+   - **게이트웨이 URL** (직접 전용): `wss://gateway.example.ts.net` (`ws://...` 로컬/LAN의 경우).
+   - **신원 파일** (고급): 키 경로.
+   - **프로젝트 루트** (고급): 명령어에 사용되는 원격 체크아웃 경로.
+   - **CLI 경로** (고급): 실행 가능한 `openclaw` 진입점/바이너리의 선택적 경로 (광고될 때 자동 완료).
+3. **원격 테스트**를 클릭합니다. 성공은 원격에서 `openclaw status --json`이 올바르게 실행됨을 나타냅니다. 실패는 보통 PATH/CLI 문제를 의미합니다. 127 종료 코드는 CLI가 원격에서 발견되지 않음을 의미합니다.
+4. 상태 검사 및 Web Chat은 이제 이 SSH 터널을 통해 자동으로 실행됩니다.
 
 ## Web Chat
 
-- **SSH tunnel**: Web Chat connects to the gateway over the forwarded WebSocket control port (default 18789).
-- **Direct (ws/wss)**: Web Chat connects straight to the configured gateway URL.
-- There is no separate WebChat HTTP server anymore.
+- **SSH 터널**: Web Chat은 전달된 WebSocket 제어 포트(기본 18789)를 통해 게이트웨이에 연결됩니다.
+- **직접(ws/wss)**: Web Chat은 구성된 게이트웨이 URL에 직접 연결됩니다.
+- 별도의 WebChat HTTP 서버는 더 이상 존재하지 않습니다.
 
-## Permissions
+## 권한
 
-- The remote host needs the same TCC approvals as local (Automation, Accessibility, Screen Recording, Microphone, Speech Recognition, Notifications). Run onboarding on that machine to grant them once.
-- Nodes advertise their permission state via `node.list` / `node.describe` so agents know what’s available.
+- 원격 호스트는 로컬과 동일한 TCC 승인(자동화, 보조 기술, 화면 녹화, 마이크, 음성 인식, 알림)이 필요합니다. 해당 기기에서 온보딩을 실행하여 한 번 권한을 부여하십시오.
+- 노드는 그들의 권한 상태를 `node.list` / `node.describe`를 통해 광고하여 에이전트가 사용 가능성을 알 수 있습니다.
 
-## Security notes
+## 보안 주의사항
 
-- Prefer loopback binds on the remote host and connect via SSH or Tailscale.
-- If you bind the Gateway to a non-loopback interface, require token/password auth.
-- See [Security](/ko-KR/gateway/security) and [Tailscale](/ko-KR/gateway/tailscale).
+- 원격 호스트에서는 로컬 루프백 바인드를 선호하고 SSH 또는 Tailscale을 통해 연결합니다.
+- 게이트웨이를 비 루프백 인터페이스에 바인딩할 경우 토큰/비밀번호 인증을 요구합니다.
+- [보안](/gateway/security) 및 [Tailscale](/gateway/tailscale)을 참조하십시오.
 
-## WhatsApp login flow (remote)
+## WhatsApp 로그인 흐름 (원격)
 
-- Run `openclaw channels login --verbose` **on the remote host**. Scan the QR with WhatsApp on your phone.
-- Re-run login on that host if auth expires. Health check will surface link problems.
+- **원격 호스트에서** `openclaw channels login --verbose`를 실행합니다. 휴대폰의 WhatsApp으로 QR을 스캔합니다.
+- 인증이 만료되면 그 호스트에서 로그인을 다시 실행합니다. 상태 검사가 링크 문제를 표면화할 것입니다.
 
-## Troubleshooting
+## 문제 해결
 
-- **exit 127 / not found**: `openclaw` isn’t on PATH for non-login shells. Add it to `/etc/paths`, your shell rc, or symlink into `/usr/local/bin`/`/opt/homebrew/bin`.
-- **Health probe failed**: check SSH reachability, PATH, and that Baileys is logged in (`openclaw status --json`).
-- **Web Chat stuck**: confirm the gateway is running on the remote host and the forwarded port matches the gateway WS port; the UI requires a healthy WS connection.
-- **Node IP shows 127.0.0.1**: expected with the SSH tunnel. Switch **Transport** to **Direct (ws/wss)** if you want the gateway to see the real client IP.
-- **Voice Wake**: trigger phrases are forwarded automatically in remote mode; no separate forwarder is needed.
+- **127로 종료 / 발견되지 않음**: `openclaw`가 비로그인 셸에 대한 PATH에 없습니다. `/etc/paths`, 셸 rc에 추가하거나 `/usr/local/bin`/`/opt/homebrew/bin`에 심볼릭 링크하십시오.
+- **상태 프로브 실패**: SSH 접근성, PATH, Baileys가 로그인되었는지 (`openclaw status --json`) 확인하십시오.
+- **Web Chat 멈춤**: 게이트웨이가 원격 호스트에서 실행 중인지 확인하고 포워드된 포트가 게이트웨이 WS 포트와 일치하는지 확인하십시오. UI는 안정적인 WS 연결을 요구합니다.
+- **노드 IP가 127.0.0.1로 표시됨**: SSH 터널에서는 예상된 사항입니다. 게이트웨이가 실제 클라이언트 IP를 보길 원하면 **전송 방법**을 **직접(ws/wss)** 로 전환하십시오.
+- **Voice Wake**: 트리거 구문은 원격 모드에서 자동으로 포워딩되며 별도의 포워더가 필요하지 않습니다.
 
-## Notification sounds
+## 알림 소리
 
-Pick sounds per notification from scripts with `openclaw` and `node.invoke`, e.g.:
+`scripts`와 `openclaw`, `node.invoke`를 사용하여 알림별로 소리를 선택하십시오. 예를 들어:
 
 ```bash
 openclaw nodes notify --node <id> --title "Ping" --body "Remote gateway ready" --sound Glass
 ```
 
-There is no global “default sound” toggle in the app anymore; callers choose a sound (or none) per request.
+앱에 더 이상 글로벌 “기본 소리” 토글은 없습니다. 호출자는 요청별로 소리(또는 없음)를 선택합니다.

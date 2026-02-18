@@ -1,25 +1,25 @@
 ---
-summary: "Gmail Pub/Sub push wired into OpenClaw webhooks via gogcli"
+summary: "Gmail Pub/Sub 푸시를 gogcli를 통해 OpenClaw 웹훅에 연결"
 read_when:
-  - Wiring Gmail inbox triggers to OpenClaw
-  - Setting up Pub/Sub push for agent wake
+  - Gmail 받은 편지함 트리거를 OpenClaw로 연결하기
+  - 에이전트 웨이크를 위한 Pub/Sub 푸시 설정
 title: "Gmail PubSub"
 ---
 
 # Gmail Pub/Sub -> OpenClaw
 
-Goal: Gmail watch -> Pub/Sub push -> `gog gmail watch serve` -> OpenClaw webhook.
+목표: Gmail 감시 -> Pub/Sub 푸시 -> `gog gmail watch serve` -> OpenClaw 웹훅.
 
-## Prereqs
+## 필수 조건
 
-- `gcloud` installed and logged in ([install guide](https://docs.cloud.google.com/sdk/docs/install-sdk)).
-- `gog` (gogcli) installed and authorized for the Gmail account ([gogcli.sh](https://gogcli.sh/)).
-- OpenClaw hooks enabled (see [Webhooks](/ko-KR/automation/webhook)).
-- `tailscale` logged in ([tailscale.com](https://tailscale.com/)). Supported setup uses Tailscale Funnel for the public HTTPS endpoint.
-  Other tunnel services can work, but are DIY/unsupported and require manual wiring.
-  Right now, Tailscale is what we support.
+- `gcloud` 설치 및 로그인 ([설치 가이드](https://docs.cloud.google.com/sdk/docs/install-sdk)).
+- `gog` (gogcli) 설치 및 Gmail 계정에 대한 인증 ([gogcli.sh](https://gogcli.sh/)).
+- OpenClaw 훅 활성화됨 (참조 [웹훅](/automation/webhook)).
+- `tailscale` 로그인 ([tailscale.com](https://tailscale.com/)). 지원되는 설정은 Tailscale 퍼널을 사용하여 공개 HTTPS 엔드포인트 제공.
+  다른 터널 서비스도 사용 가능하지만 DIY, 비지원이며 수동 연결이 필요.
+  현재는 Tailscale을 지원.
 
-Example hook config (enable Gmail preset mapping):
+예시 훅 설정 (Gmail 프리셋 매핑 활성화):
 
 ```json5
 {
@@ -32,8 +32,7 @@ Example hook config (enable Gmail preset mapping):
 }
 ```
 
-To deliver the Gmail summary to a chat surface, override the preset with a mapping
-that sets `deliver` + optional `channel`/`to`:
+Gmail 요약을 채팅 화면으로 전달하려면 `deliver` + 선택적 `channel`/`to`를 설정하는 매핑으로 프리셋을 재정의:
 
 ```json5
 {
@@ -59,14 +58,11 @@ that sets `deliver` + optional `channel`/`to`:
 }
 ```
 
-If you want a fixed channel, set `channel` + `to`. Otherwise `channel: "last"`
-uses the last delivery route (falls back to WhatsApp).
+고정된 채널을 원하면 `channel` + `to`를 설정. 그렇지 않을 경우 `channel: "last"`는 마지막 전달 경로를 사용 (기본값은 WhatsApp).
 
-To force a cheaper model for Gmail runs, set `model` in the mapping
-(`provider/model` or alias). If you enforce `agents.defaults.models`, include it there.
+Gmail 실행 시 저렴한 모델을 강제하려면 매핑에서 `model` 설정 (`provider/model` 또는 별칭). `agents.defaults.models`을 설정하면 여기에도 포함.
 
-To set a default model and thinking level specifically for Gmail hooks, add
-`hooks.gmail.model` / `hooks.gmail.thinking` in your config:
+Gmail 훅에 대해 기본 모델 및 사고 수준을 설정하려면 설정에 `hooks.gmail.model` / `hooks.gmail.thinking` 추가:
 
 ```json5
 {
@@ -79,83 +75,74 @@ To set a default model and thinking level specifically for Gmail hooks, add
 }
 ```
 
-Notes:
+주의사항:
 
-- Per-hook `model`/`thinking` in the mapping still overrides these defaults.
-- Fallback order: `hooks.gmail.model` → `agents.defaults.model.fallbacks` → primary (auth/rate-limit/timeouts).
-- If `agents.defaults.models` is set, the Gmail model must be in the allowlist.
-- Gmail hook content is wrapped with external-content safety boundaries by default.
-  To disable (dangerous), set `hooks.gmail.allowUnsafeExternalContent: true`.
+- 매핑 내부의 훅 별 `model`/`thinking`은 여전히 이 기본값을 재정의.
+- 대체 순서: `hooks.gmail.model` → `agents.defaults.model.fallbacks` → 기본 (인증/속도 제한/시간 초과).
+- `agents.defaults.models`이 설정되어 있으면 Gmail 모델은 허용 목록에 있어야 함.
+- Gmail 훅 콘텐츠는 기본적으로 외부 콘텐츠 안전 경계로 감싸짐.
+  비활성화하려면 (위험) `hooks.gmail.allowUnsafeExternalContent: true` 설정.
 
-To customize payload handling further, add `hooks.mappings` or a JS/TS transform module
-under `~/.openclaw/hooks/transforms` (see [Webhooks](/ko-KR/automation/webhook)).
+페이로드 처리를 더욱 커스터마이즈하려면, 설정의 `hooks.mappings` 또는 `~/.openclaw/hooks/transforms` 아래에 JS/TS 변환 모듈 추가 (참조 [웹훅](/automation/webhook)).
 
-## Wizard (recommended)
+## 마법사 (권장)
 
-Use the OpenClaw helper to wire everything together (installs deps on macOS via brew):
+OpenClaw 도우미를 사용하여 모든 것을 함께 연결 (macOS에서 brew를 통해 종속성 설치):
 
 ```bash
 openclaw webhooks gmail setup \
   --account openclaw@gmail.com
 ```
 
-Defaults:
+기본값:
 
-- Uses Tailscale Funnel for the public push endpoint.
-- Writes `hooks.gmail` config for `openclaw webhooks gmail run`.
-- Enables the Gmail hook preset (`hooks.presets: ["gmail"]`).
+- 공개 푸시 엔드포인트로 Tailscale 퍼널 사용.
+- `openclaw webhooks gmail run`을 위한 `hooks.gmail` 설정 작성.
+- Gmail 훅 프리셋 활성화 (`hooks.presets: ["gmail"]`).
 
-Path note: when `tailscale.mode` is enabled, OpenClaw automatically sets
-`hooks.gmail.serve.path` to `/` and keeps the public path at
-`hooks.gmail.tailscale.path` (default `/gmail-pubsub`) because Tailscale
-strips the set-path prefix before proxying.
-If you need the backend to receive the prefixed path, set
-`hooks.gmail.tailscale.target` (or `--tailscale-target`) to a full URL like
-`http://127.0.0.1:8788/gmail-pubsub` and match `hooks.gmail.serve.path`.
+경로 주의사항: `tailscale.mode`가 활성화되면, OpenClaw는 자동으로 `hooks.gmail.serve.path`를 `/`로 설정하고 공개 경로를 `hooks.gmail.tailscale.path`에 유지 (기본값 `/gmail-pubsub`) Tailscale이 프록시 전에 지정된 경로 접두사를 제거하기 때문.
+백엔드에서 접두사 경로를 수신해야 하는 경우, `hooks.gmail.tailscale.target` (또는 `--tailscale-target`)을 `http://127.0.0.1:8788/gmail-pubsub`과 같은 전체 URL로 설정하고 `hooks.gmail.serve.path`에 맞춤 설정.
 
-Want a custom endpoint? Use `--push-endpoint <url>` or `--tailscale off`.
+커스텀 엔드포인트가 필요? `--push-endpoint <url>` 또는 `--tailscale off` 사용.
 
-Platform note: on macOS the wizard installs `gcloud`, `gogcli`, and `tailscale`
-via Homebrew; on Linux install them manually first.
+플랫폼 주의사항: macOS에서는 마법사가 `gcloud`, `gogcli`, `tailscale`을 Homebrew로 설치; Linux에서는 수동으로 먼저 설치.
 
-Gateway auto-start (recommended):
+게이트웨이 자동 시작 (권장):
 
-- When `hooks.enabled=true` and `hooks.gmail.account` is set, the Gateway starts
-  `gog gmail watch serve` on boot and auto-renews the watch.
-- Set `OPENCLAW_SKIP_GMAIL_WATCHER=1` to opt out (useful if you run the daemon yourself).
-- Do not run the manual daemon at the same time, or you will hit
-  `listen tcp 127.0.0.1:8788: bind: address already in use`.
+- `hooks.enabled=true` 및 `hooks.gmail.account`이 설정되면, 게이트웨이는 부팅 시 `gog gmail watch serve`를 시작하고 감시를 자동 갱신.
+- `OPENCLAW_SKIP_GMAIL_WATCHER=1` 설정하여 옵트아웃 (데몬을 직접 실행하는 경우 유용함).
+- 수동 데몬을 동시에 실행하지 말 것, 아니면 `listen tcp 127.0.0.1:8788: bind: address already in use`에 걸림.
 
-Manual daemon (starts `gog gmail watch serve` + auto-renew):
+수동 데몬 (자동 갱신과 함께 `gog gmail watch serve` 시작):
 
 ```bash
 openclaw webhooks gmail run
 ```
 
-## One-time setup
+## 일회성 설정
 
-1. Select the GCP project **that owns the OAuth client** used by `gog`.
+1. **gog 에서 사용한 OAuth 클라이언트를 소유한** GCP 프로젝트 선택:
 
 ```bash
 gcloud auth login
 gcloud config set project <project-id>
 ```
 
-Note: Gmail watch requires the Pub/Sub topic to live in the same project as the OAuth client.
+주의: Gmail 감시는 OAuth 클라이언트가 있는 동일한 프로젝트에 Pub/Sub 주제가 있어야 함.
 
-2. Enable APIs:
+2. API 활성화:
 
 ```bash
 gcloud services enable gmail.googleapis.com pubsub.googleapis.com
 ```
 
-3. Create a topic:
+3. 주제 생성:
 
 ```bash
 gcloud pubsub topics create gog-gmail-watch
 ```
 
-4. Allow Gmail push to publish:
+4. Gmail 푸시를 통한 게시 허용:
 
 ```bash
 gcloud pubsub topics add-iam-policy-binding gog-gmail-watch \
@@ -163,7 +150,7 @@ gcloud pubsub topics add-iam-policy-binding gog-gmail-watch \
   --role=roles/pubsub.publisher
 ```
 
-## Start the watch
+## 감시 시작
 
 ```bash
 gog gmail watch start \
@@ -172,11 +159,11 @@ gog gmail watch start \
   --topic projects/<project-id>/topics/gog-gmail-watch
 ```
 
-Save the `history_id` from the output (for debugging).
+출력에서 `history_id`를 저장 (디버깅 용).
 
-## Run the push handler
+## 푸시 핸들러 실행
 
-Local example (shared token auth):
+로컬 예제 (공유 토큰 인증):
 
 ```bash
 gog gmail watch serve \
@@ -191,24 +178,23 @@ gog gmail watch serve \
   --max-bytes 20000
 ```
 
-Notes:
+주의사항:
 
-- `--token` protects the push endpoint (`x-gog-token` or `?token=`).
-- `--hook-url` points to OpenClaw `/hooks/gmail` (mapped; isolated run + summary to main).
-- `--include-body` and `--max-bytes` control the body snippet sent to OpenClaw.
+- `--token`은 푸시 엔드포인트를 보호 (`x-gog-token` 또는 `?token=`).
+- `--hook-url`은 OpenClaw `/hooks/gmail`을 가리킴 (매핑됨; 격리 실행 + 요약을 메인으로).
+- `--include-body` 및 `--max-bytes`는 OpenClaw에 전송되는 본문 스니펫 제어.
 
-Recommended: `openclaw webhooks gmail run` wraps the same flow and auto-renews the watch.
+권장: `openclaw webhooks gmail run`은 동일한 흐름을 포장하고 감시를 자동 갱신.
 
-## Expose the handler (advanced, unsupported)
+## 핸들러 노출 (고급, 비지원)
 
-If you need a non-Tailscale tunnel, wire it manually and use the public URL in the push
-subscription (unsupported, no guardrails):
+비 Tailscale 터널이 필요하다면 수동으로 연결하고 푸시 구독에 공개 URL을 사용 (비지원, 안전장치 없음):
 
 ```bash
 cloudflared tunnel --url http://127.0.0.1:8788 --no-autoupdate
 ```
 
-Use the generated URL as the push endpoint:
+생성된 URL을 푸시 엔드포인트로 사용:
 
 ```bash
 gcloud pubsub subscriptions create gog-gmail-watch-push \
@@ -216,15 +202,15 @@ gcloud pubsub subscriptions create gog-gmail-watch-push \
   --push-endpoint "https://<public-url>/gmail-pubsub?token=<shared>"
 ```
 
-Production: use a stable HTTPS endpoint and configure Pub/Sub OIDC JWT, then run:
+프로덕션: 안전한 HTTPS 엔드포인트를 사용하고 Pub/Sub OIDC JWT를 구성한 뒤 실행:
 
 ```bash
 gog gmail watch serve --verify-oidc --oidc-email <svc@...>
 ```
 
-## Test
+## 테스트
 
-Send a message to the watched inbox:
+감시된 받은 편지함에 메시지 전송:
 
 ```bash
 gog gmail send \
@@ -234,20 +220,20 @@ gog gmail send \
   --body "ping"
 ```
 
-Check watch state and history:
+감시 상태 및 기록 확인:
 
 ```bash
 gog gmail watch status --account openclaw@gmail.com
 gog gmail history --account openclaw@gmail.com --since <historyId>
 ```
 
-## Troubleshooting
+## 문제 해결
 
-- `Invalid topicName`: project mismatch (topic not in the OAuth client project).
-- `User not authorized`: missing `roles/pubsub.publisher` on the topic.
-- Empty messages: Gmail push only provides `historyId`; fetch via `gog gmail history`.
+- `Invalid topicName`: 프로젝트 불일치 (주제가 OAuth 클라이언트 프로젝트에 없음).
+- `User not authorized`: 주제에서 `roles/pubsub.publisher` 누락.
+- 빈 메시지: Gmail 푸시는 `historyId`만 제공; `gog gmail history`를 통해 가져옴.
 
-## Cleanup
+## 정리
 
 ```bash
 gog gmail watch stop --account openclaw@gmail.com

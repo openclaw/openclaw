@@ -1,43 +1,43 @@
 ---
-summary: "OpenProse: .prose workflows, slash commands, and state in OpenClaw"
+summary: "OpenProse: OpenClaw의 .prose 워크플로우, 슬래시 명령어 및 상태"
 read_when:
-  - You want to run or write .prose workflows
-  - You want to enable the OpenProse plugin
-  - You need to understand state storage
+  - .prose 워크플로우를 실행하거나 작성하려는 경우
+  - OpenProse 플러그인을 활성화하려는 경우
+  - 상태 저장소를 이해해야 하는 경우
 title: "OpenProse"
 ---
 
 # OpenProse
 
-OpenProse is a portable, markdown-first workflow format for orchestrating AI sessions. In OpenClaw it ships as a plugin that installs an OpenProse skill pack plus a `/prose` slash command. Programs live in `.prose` files and can spawn multiple sub-agents with explicit control flow.
+OpenProse는 AI 세션을 조율하기 위한 휴대용 마크다운 우선 워크플로우 형식입니다. OpenClaw에서는 OpenProse 스킬 팩과 `/prose` 슬래시 명령어를 설치하는 플러그인으로 제공됩니다. 프로그램은 `.prose` 파일에 존재하며 명시적인 제어 흐름으로 여러 하위 에이전트를 생성할 수 있습니다.
 
-Official site: https://www.prose.md
+공식 사이트: [https://www.prose.md](https://www.prose.md)
 
-## What it can do
+## 기능
 
-- Multi-agent research + synthesis with explicit parallelism.
-- Repeatable approval-safe workflows (code review, incident triage, content pipelines).
-- Reusable `.prose` programs you can run across supported agent runtimes.
+- 명시적 병렬 처리를 통한 다중 에이전트 연구 및 합성.
+- 반복 가능한 승인 안전 워크플로우 (코드 리뷰, 사건 대응, 콘텐츠 파이프라인).
+- 지원되는 에이전트 런타임에서 실행할 수 있는 재사용 가능한 `.prose` 프로그램.
 
-## Install + enable
+## 설치 + 활성화
 
-Bundled plugins are disabled by default. Enable OpenProse:
+번들 플러그인은 기본적으로 비활성화되어 있습니다. OpenProse를 활성화하세요:
 
 ```bash
 openclaw plugins enable open-prose
 ```
 
-Restart the Gateway after enabling the plugin.
+플러그인을 활성화한 후 게이트웨이를 재시작하십시오.
 
-Dev/local checkout: `openclaw plugins install ./extensions/open-prose`
+개발/로컬 체크아웃: `openclaw plugins install ./extensions/open-prose`
 
-Related docs: [Plugins](/ko-KR/plugin), [Plugin manifest](/ko-KR/plugins/manifest), [Skills](/ko-KR/tools/skills).
+관련 문서: [플러그인](/tools/plugin), [플러그인 매니페스트](/plugins/manifest), [스킬](/tools/skills).
 
-## Slash command
+## 슬래시 명령어
 
-OpenProse registers `/prose` as a user-invocable skill command. It routes to the OpenProse VM instructions and uses OpenClaw tools under the hood.
+OpenProse는 사용자 호출 가능한 스킬 명령어로 `/prose`를 등록합니다. 이것은 OpenProse VM 명령어에 연결되며 내부적으로 OpenClaw 도구를 사용합니다.
 
-Common commands:
+일반 명령어:
 
 ```
 /prose help
@@ -49,20 +49,20 @@ Common commands:
 /prose update
 ```
 
-## Example: a simple `.prose` file
+## 예제: 간단한 `.prose` 파일
 
 ```prose
-# Research + synthesis with two agents running in parallel.
+# 두 에이전트가 병렬로 실행되는 연구 및 합성.
 
-input topic: "What should we research?"
+input topic: "우리가 연구해야 할 것은 무엇입니까?"
 
 agent researcher:
   model: sonnet
-  prompt: "You research thoroughly and cite sources."
+  prompt: "당신은 철저히 연구하고 출처를 인용합니다."
 
 agent writer:
   model: opus
-  prompt: "You write a concise summary."
+  prompt: "당신은 간결한 요약을 작성합니다."
 
 parallel:
   findings = session: researcher
@@ -70,13 +70,13 @@ parallel:
   draft = session: writer
     prompt: "Summarize {topic}."
 
-session "Merge the findings + draft into a final answer."
+session "결과 및 초안을 최종 답변으로 병합하세요."
 context: { findings, draft }
 ```
 
-## File locations
+## 파일 위치
 
-OpenProse keeps state under `.prose/` in your workspace:
+OpenProse는 워크스페이스 내의 `.prose/`에서 상태를 유지합니다:
 
 ```
 .prose/
@@ -90,45 +90,44 @@ OpenProse keeps state under `.prose/` in your workspace:
 └── agents/
 ```
 
-User-level persistent agents live at:
+사용자 수준의 영구 에이전트는 다음 위치에 존재합니다:
 
 ```
 ~/.prose/agents/
 ```
 
-## State modes
+## 상태 모드
 
-OpenProse supports multiple state backends:
+OpenProse는 여러 상태 백엔드를 지원합니다:
 
-- **filesystem** (default): `.prose/runs/...`
-- **in-context**: transient, for small programs
-- **sqlite** (experimental): requires `sqlite3` binary
-- **postgres** (experimental): requires `psql` and a connection string
+- **filesystem** (기본값): `.prose/runs/...`
+- **in-context**: 작은 프로그램을 위한 일시적 상태
+- **sqlite** (실험적): `sqlite3` 바이너리 필요
+- **postgres** (실험적): `psql`과 연결 문자열 필요
 
-Notes:
+주의사항:
 
-- sqlite/postgres are opt-in and experimental.
-- postgres credentials flow into subagent logs; use a dedicated, least-privileged DB.
+- sqlite/postgres는 명시적 선택 기능이며 실험적입니다.
+- postgres 자격 증명은 하위 에이전트 로그로 전송됩니다; 전용, 최소 권한의 DB를 사용하세요.
 
-## Remote programs
+## 원격 프로그램
 
-`/prose run <handle/slug>` resolves to `https://p.prose.md/<handle>/<slug>`.
-Direct URLs are fetched as-is. This uses the `web_fetch` tool (or `exec` for POST).
+`/prose run <handle/slug>`는 `https://p.prose.md/<handle>/<slug>`로 해석됩니다. 직접 URL은 그대로 가져옵니다. 이는 `web_fetch` 도구를 사용합니다. (또는 POST 요청을 위해 `exec` 사용).
 
-## OpenClaw runtime mapping
+## OpenClaw 런타임 매핑
 
-OpenProse programs map to OpenClaw primitives:
+OpenProse 프로그램은 OpenClaw 원시 도구와 매핑됩니다:
 
-| OpenProse concept         | OpenClaw tool    |
-| ------------------------- | ---------------- |
-| Spawn session / Task tool | `sessions_spawn` |
-| File read/write           | `read` / `write` |
-| Web fetch                 | `web_fetch`      |
+| OpenProse 개념        | OpenClaw 도구    |
+| --------------------- | ---------------- |
+| 세션 생성 / 작업 도구 | `sessions_spawn` |
+| 파일 읽기/쓰기        | `read` / `write` |
+| 웹 가져오기           | `web_fetch`      |
 
-If your tool allowlist blocks these tools, OpenProse programs will fail. See [Skills config](/ko-KR/tools/skills-config).
+도구 허용 목록에서 이러한 도구를 차단하면 OpenProse 프로그램이 실패할 수 있습니다. [스킬 설정](/tools/skills-config)을 참조하십시오.
 
-## Security + approvals
+## 보안 + 승인
 
-Treat `.prose` files like code. Review before running. Use OpenClaw tool allowlists and approval gates to control side effects.
+`.prose` 파일은 코드처럼 취급하세요. 실행 전에 검토하십시오. 부작용을 제어하기 위해 OpenClaw 도구 허용 목록과 승인 게이트를 사용하세요.
 
-For deterministic, approval-gated workflows, compare with [Lobster](/ko-KR/tools/lobster).
+결정론적이고 승인 기반 워크플로우를 위해 [Lobster](/tools/lobster)와 비교하세요.

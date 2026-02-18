@@ -1,34 +1,34 @@
 ---
-summary: "How the macOS app reports gateway/Baileys health states"
+summary: "macOS 앱이 게이트웨이/Baileys 상태를 보고하는 방법"
 read_when:
-  - Debugging mac app health indicators
-title: "Health Checks"
+  - mac 앱 상태 지표 디버깅
+title: "상태 검사"
 ---
 
-# Health Checks on macOS
+# macOS에서의 상태 검사
 
-How to see whether the linked channel is healthy from the menu bar app.
+메뉴 막대 앱에서 연결된 채널이 건강한지 여부를 확인하는 방법.
 
-## Menu bar
+## 메뉴 막대
 
-- Status dot now reflects Baileys health:
-  - Green: linked + socket opened recently.
-  - Orange: connecting/retrying.
-  - Red: logged out or probe failed.
-- Secondary line reads "linked · auth 12m" or shows the failure reason.
-- "Run Health Check" menu item triggers an on-demand probe.
+- 상태 점이 이제 Baileys 상태를 반영합니다:
+  - 초록색: 연결됨 + 최근에 소켓이 열림.
+  - 주황색: 연결 중/다시 시도 중.
+  - 빨간색: 로그아웃 또는 프로브 실패.
+- 보조 라인은 "연결됨 · 인증 12m"이라고 읽거나 실패 사유를 보여줍니다.
+- "상태 검사 실행" 메뉴 항목은 온디맨드 프로브를 트리거합니다.
 
-## Settings
+## 설정
 
-- General tab gains a Health card showing: linked auth age, session-store path/count, last check time, last error/status code, and buttons for Run Health Check / Reveal Logs.
-- Uses a cached snapshot so the UI loads instantly and falls back gracefully when offline.
-- **Channels tab** surfaces channel status + controls for WhatsApp/Telegram (login QR, logout, probe, last disconnect/error).
+- 일반 탭에 연결된 인증 연령, 세션 저장소 경로/개수, 마지막 검사 시간, 마지막 오류/상태 코드 및 상태 검사 실행 / 로그 보기 버튼을 보여주는 상태 카드가 추가되었습니다.
+- 캐시된 스냅샷을 사용하여 UI가 즉시 로드되고 오프라인 시에도 매끄럽게 작동합니다.
+- **채널 탭**에서는 WhatsApp/Telegram의 채널 상태 및 로그인 QR, 로그아웃, 프로브, 마지막 연결 끊김/오류에 대한 제어를 표시합니다.
 
-## How the probe works
+## 프로브 작동 방식
 
-- App runs `openclaw health --json` via `ShellExecutor` every ~60s and on demand. The probe loads creds and reports status without sending messages.
-- Cache the last good snapshot and the last error separately to avoid flicker; show the timestamp of each.
+- 앱은 `ShellExecutor`를 통해 약 60초마다 및 온디맨드로 `openclaw health --json`을 실행합니다. 프로브는 메시지를 보내지 않고 자격 증명을 로드하고 상태를 보고합니다.
+- 마지막 정상 스냅샷과 마지막 오류를 별도로 캐시하여 깜빡임을 방지하고 각 항목의 타임스탬프를 표시합니다.
 
-## When in doubt
+## 의심스러울 때
 
-- You can still use the CLI flow in [Gateway health](/ko-KR/gateway/health) (`openclaw status`, `openclaw status --deep`, `openclaw health --json`) and tail `/tmp/openclaw/openclaw-*.log` for `web-heartbeat` / `web-reconnect`.
+- [게이트웨이 상태](/gateway/health)에서 제공되는 CLI 흐름을 (`openclaw status`, `openclaw status --deep`, `openclaw health --json`) 여전히 사용할 수 있으며 `/tmp/openclaw/openclaw-*.log`에서 `web-heartbeat` / `web-reconnect`를 tail로 확인할 수 있습니다.

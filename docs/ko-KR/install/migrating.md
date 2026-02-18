@@ -1,192 +1,192 @@
 ---
-summary: "Move (migrate) a OpenClaw install from one machine to another"
+summary: "OpenClaw 설치를 한 기기에서 다른 기기로 이동(마이그레이션)하기"
 read_when:
-  - You are moving OpenClaw to a new laptop/server
-  - You want to preserve sessions, auth, and channel logins (WhatsApp, etc.)
-title: "Migration Guide"
+  - OpenClaw를 새 노트북/서버로 이동하고 있습니다
+  - 세션, 인증, 채널 로그인을 보존하고 싶습니다 (WhatsApp 등)
+title: "마이그레이션 가이드"
 ---
 
-# Migrating OpenClaw to a new machine
+# OpenClaw를 새 기기로 마이그레이션하기
 
-This guide migrates a OpenClaw Gateway from one machine to another **without redoing onboarding**.
+이 가이드는 **온보딩을 다시 하지 않고** OpenClaw 게이트웨이를 한 기기에서 다른 기기로 마이그레이션하는 방법을 설명합니다.
 
-The migration is simple conceptually:
+마이그레이션은 개념적으로 간단합니다:
 
-- Copy the **state directory** (`$OPENCLAW_STATE_DIR`, default: `~/.openclaw/`) — this includes config, auth, sessions, and channel state.
-- Copy your **workspace** (`~/.openclaw/workspace/` by default) — this includes your agent files (memory, prompts, etc.).
+- **상태 디렉터리** (`$OPENCLAW_STATE_DIR`, 기본: `~/.openclaw/`)를 복사합니다 — 여기에는 설정, 인증, 세션, 채널 상태가 포함됩니다.
+- **작업 공간** (`~/.openclaw/workspace/` 기본값)를 복사합니다 — 여기에 에이전트 파일(메모리, 프롬프트 등)이 포함됩니다.
 
-But there are common footguns around **profiles**, **permissions**, and **partial copies**.
+하지만 **프로필**, **권한**, **부분 복사**와 관련된 일반적인 실수들이 있습니다.
 
-## Before you start (what you are migrating)
+## 시작하기 전 (무엇을 마이그레이션하는지)
 
-### 1) Identify your state directory
+### 1) 상태 디렉터리 파악하기
 
-Most installs use the default:
+대부분의 설치에서는 기본값을 사용합니다:
 
-- **State dir:** `~/.openclaw/`
+- **상태 디렉터리:** `~/.openclaw/`
 
-But it may be different if you use:
+하지만 다음을 사용하는 경우 다를 수 있습니다:
 
-- `--profile <name>` (often becomes `~/.openclaw-<profile>/`)
+- `--profile <name>` (종종 `~/.openclaw-<profile>/`이 됨)
 - `OPENCLAW_STATE_DIR=/some/path`
 
-If you’re not sure, run on the **old** machine:
+확실하지 않으면 **기존** 기기에서 다음을 실행하세요:
 
 ```bash
 openclaw status
 ```
 
-Look for mentions of `OPENCLAW_STATE_DIR` / profile in the output. If you run multiple gateways, repeat for each profile.
+출력에서 `OPENCLAW_STATE_DIR` / 프로필 언급을 찾습니다. 여러 게이트웨이를 실행하는 경우 각 프로필마다 반복하세요.
 
-### 2) Identify your workspace
+### 2) 작업 공간 파악하기
 
-Common defaults:
+일반적인 기본값:
 
-- `~/.openclaw/workspace/` (recommended workspace)
-- a custom folder you created
+- `~/.openclaw/workspace/` (권장 작업 공간)
+- 사용자가 생성한 커스텀 폴더
 
-Your workspace is where files like `MEMORY.md`, `USER.md`, and `memory/*.md` live.
+작업 공간은 `MEMORY.md`, `USER.md` 및 `memory/*.md`와 같은 파일이 있는 곳입니다.
 
-### 3) Understand what you will preserve
+### 3) 보존할 사항 이해하기
 
-If you copy **both** the state dir and workspace, you keep:
+상태 디렉터리와 작업 공간을 **모두 복사**하면 다음을 유지합니다:
 
-- Gateway configuration (`openclaw.json`)
-- Auth profiles / API keys / OAuth tokens
-- Session history + agent state
-- Channel state (e.g. WhatsApp login/session)
-- Your workspace files (memory, skills notes, etc.)
+- 게이트웨이 설정 (`openclaw.json`)
+- 인증 프로필 / API 키 / OAuth 토큰
+- 세션 기록 + 에이전트 상태
+- 채널 상태 (예: WhatsApp 로그인/세션)
+- 작업 공간 파일 (메모리, 스킬 노트 등)
 
-If you copy **only** the workspace (e.g., via Git), you do **not** preserve:
+작업 공간만 **복사하는 경우** (예: Git을 통해) 다음을 **보존하지 않습니다**:
 
-- sessions
-- credentials
-- channel logins
+- 세션
+- 자격증명
+- 채널 로그인
 
-Those live under `$OPENCLAW_STATE_DIR`.
+이들은 `$OPENCLAW_STATE_DIR` 하에 있습니다.
 
-## Migration steps (recommended)
+## 마이그레이션 단계 (권장)
 
-### Step 0 — Make a backup (old machine)
+### Step 0 — 백업 만들기 (기존 기기)
 
-On the **old** machine, stop the gateway first so files aren’t changing mid-copy:
+**기존** 기기에서, 게이트웨이를 먼저 중지하십시오, 파일이 복사 중에 변경되지 않도록:
 
 ```bash
 openclaw gateway stop
 ```
 
-(Optional but recommended) archive the state dir and workspace:
+(선택 사항이지만 권장) 상태 디렉터리와 작업 공간을 아카이브하세요:
 
 ```bash
-# Adjust paths if you use a profile or custom locations
+# 프로필 또는 커스텀 위치를 사용하는 경우 경로 조정
 cd ~
 tar -czf openclaw-state.tgz .openclaw
 
 tar -czf openclaw-workspace.tgz .openclaw/workspace
 ```
 
-If you have multiple profiles/state dirs (e.g. `~/.openclaw-main`, `~/.openclaw-work`), archive each.
+여러 프로필/상태 디렉터리 (예: `~/.openclaw-main`, `~/.openclaw-work`)가 있는 경우 각각 아카이브하십시오.
 
-### Step 1 — Install OpenClaw on the new machine
+### Step 1 — 새 기기에 OpenClaw 설치하기
 
-On the **new** machine, install the CLI (and Node if needed):
+**새로운** 기기에서, CLI (필요 시 Node도) 설치하세요:
 
-- See: [Install](/ko-KR/install)
+- 참고: [설치하기](/install)
 
-At this stage, it’s OK if onboarding creates a fresh `~/.openclaw/` — you will overwrite it in the next step.
+이 단계에서는 온보딩이 새로운 `~/.openclaw/`를 생성해도 괜찮습니다 — 다음 단계에서 덮어쓸 것입니다.
 
-### Step 2 — Copy the state dir + workspace to the new machine
+### Step 2 — 상태 디렉터리 + 작업 공간을 새 기기로 복사하기
 
-Copy **both**:
+**둘 다** 복사하세요:
 
-- `$OPENCLAW_STATE_DIR` (default `~/.openclaw/`)
-- your workspace (default `~/.openclaw/workspace/`)
+- `$OPENCLAW_STATE_DIR` (기본값 `~/.openclaw/`)
+- 작업 공간 (기본값 `~/.openclaw/workspace/`)
 
-Common approaches:
+일반적인 방법:
 
-- `scp` the tarballs and extract
-- `rsync -a` over SSH
-- external drive
+- tarball을 `scp`로 전송하고 추출
+- `rsync -a`를 통해 SSH 전송
+- 외장 드라이브 사용
 
-After copying, ensure:
+복사 후, 다음을 확인하십시오:
 
-- Hidden directories were included (e.g. `.openclaw/`)
-- File ownership is correct for the user running the gateway
+- 숨김 디렉터리에 포함되었는지 확인 (예: `.openclaw/`)
+- 게이트웨이를 실행하는 사용자의 파일 소유권이 올바른지 확인
 
-### Step 3 — Run Doctor (migrations + service repair)
+### Step 3 — 닥터 실행하기 (마이그레이션 + 서비스 복구)
 
-On the **new** machine:
+**새** 기기에서:
 
 ```bash
 openclaw doctor
 ```
 
-Doctor is the “safe boring” command. It repairs services, applies config migrations, and warns about mismatches.
+닥터는 "안전한 무미건조" 명령입니다. 서비스 복구, 설정 마이그레이션 적용, 불일치에 대한 경고를 수행합니다.
 
-Then:
+그런 다음:
 
 ```bash
 openclaw gateway restart
 openclaw status
 ```
 
-## Common footguns (and how to avoid them)
+## 일반적인 실수 (및 피하는 방법)
 
-### Footgun: profile / state-dir mismatch
+### 실수: 프로필 / 상태 디렉터리 불일치
 
-If you ran the old gateway with a profile (or `OPENCLAW_STATE_DIR`), and the new gateway uses a different one, you’ll see symptoms like:
+기존 게이트웨이를 프로필 (또는 `OPENCLAW_STATE_DIR`)로 실행했고, 새 게이트웨이가 다른 것을 사용한다면, 다음과 같은 증상이 나타날 수 있습니다:
 
-- config changes not taking effect
-- channels missing / logged out
-- empty session history
+- 설정 변경이 적용되지 않음
+- 채널이 없음 / 로그아웃됨
+- 세션 기록이 비어 있음
 
-Fix: run the gateway/service using the **same** profile/state dir you migrated, then rerun:
+수정 방법: **이전**에 마이그레이션한 것과 동일한 프로필/상태 디렉터리로 게이트웨이/서비스를 실행한 다음 다시 실행하십시오:
 
 ```bash
 openclaw doctor
 ```
 
-### Footgun: copying only `openclaw.json`
+### 실수: `openclaw.json` 만 복사하기
 
-`openclaw.json` is not enough. Many providers store state under:
+`openclaw.json`만으로는 충분하지 않습니다. 많은 프로바이더가 상태를 저장하는 위치:
 
 - `$OPENCLAW_STATE_DIR/credentials/`
 - `$OPENCLAW_STATE_DIR/agents/<agentId>/...`
 
-Always migrate the entire `$OPENCLAW_STATE_DIR` folder.
+항상 전체 `$OPENCLAW_STATE_DIR` 폴더를 마이그레이션하십시오.
 
-### Footgun: permissions / ownership
+### 실수: 권한 / 소유권
 
-If you copied as root or changed users, the gateway may fail to read credentials/sessions.
+루트로 복사하거나 사용자를 변경한 경우, 게이트웨이가 자격증명/세션을 읽지 못할 수 있습니다.
 
-Fix: ensure the state dir + workspace are owned by the user running the gateway.
+수정 방법: 상태 디렉터리 + 작업 공간이 게이트웨이를 실행하는 사용자에게 소유되어 있는지 확인하십시오.
 
-### Footgun: migrating between remote/local modes
+### 실수: 원격/로컬 모드 사이의 마이그레이션
 
-- If your UI (WebUI/TUI) points at a **remote** gateway, the remote host owns the session store + workspace.
-- Migrating your laptop won’t move the remote gateway’s state.
+- UI (WebUI/TUI)가 **원격** 게이트웨이를 가리키는 경우, 원격 호스트가 세션 저장소 + 작업 공간을 소유합니다.
+- 노트북을 마이그레이션해도 원격 게이트웨이의 상태는 이동되지 않습니다.
 
-If you’re in remote mode, migrate the **gateway host**.
+원격 모드에 있는 경우, **게이트웨이 호스트**를 마이그레이션하십시오.
 
-### Footgun: secrets in backups
+### 실수: 백업의 비밀
 
-`$OPENCLAW_STATE_DIR` contains secrets (API keys, OAuth tokens, WhatsApp creds). Treat backups like production secrets:
+`$OPENCLAW_STATE_DIR`에는 비밀 (API 키, OAuth 토큰, WhatsApp 크레덴셜)이 포함됩니다.백업을 다음과 같이 취급하세요:
 
-- store encrypted
-- avoid sharing over insecure channels
-- rotate keys if you suspect exposure
+- 암호화하여 저장
+- 안전하지 않은 채널을 통한 공유를 피함
+- 노출이 의심되는 경우 키 회전
 
-## Verification checklist
+## 검증 체크리스트
 
-On the new machine, confirm:
+새 기기에서, 다음을 확인하십시오:
 
-- `openclaw status` shows the gateway running
-- Your channels are still connected (e.g. WhatsApp doesn’t require re-pair)
-- The dashboard opens and shows existing sessions
-- Your workspace files (memory, configs) are present
+- `openclaw status`가 게이트웨이가 실행 중임을 보여줌
+- 채널이 여전히 연결되어 있음 (예: WhatsApp이 재페어링을 요구하지 않음)
+- 대시보드가 열리고 기존 세션이 표시됨
+- 작업 공간 파일 (메모리, 설정)이 존재함
 
-## Related
+## 관련 문서
 
-- [Doctor](/ko-KR/gateway/doctor)
-- [Gateway troubleshooting](/ko-KR/gateway/troubleshooting)
-- [Where does OpenClaw store its data?](/ko-KR/help/faq#where-does-openclaw-store-its-data)
+- [닥터](/gateway/doctor)
+- [게이트웨이 문제 해결](/gateway/troubleshooting)
+- [OpenClaw는 데이터를 어디에 저장하나요?](/help/faq#where-does-openclaw-store-its-data)

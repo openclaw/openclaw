@@ -9,7 +9,7 @@ title: "구성"
 
 # 구성
 
-OpenClaw 는 `~/.openclaw/openclaw.json` 에서 선택적 <Tooltip tip="JSON5 supports comments and trailing commas">**JSON5**</Tooltip> 구성을 읽습니다.
+OpenClaw 는 `~/.openclaw/openclaw.json` 에서 선택적 <Tooltip tip="JSON5는 주석과 후행 쉼표를 지원합니다">**JSON5**</Tooltip> 구성을 읽습니다.
 
 파일이 없으면 OpenClaw 는 안전한 기본값을 사용합니다. 구성을 추가하는 일반적인 이유:
 
@@ -126,7 +126,7 @@ OpenClaw 는 스키마와 완전히 일치하는 구성만 허용합니다. 알 
 
     - `agents.defaults.models` 는 모델 카탈로그를 정의하며 `/model` 의 허용 목록으로 작동합니다.
     - 모델 참조는 `provider/model` 형식을 사용합니다 (예: `anthropic/claude-opus-4-6`).
-    - `agents.defaults.imageMaxDimensionPx` 는 프로바이더 호출 전 전사본/도구 이미지 다운스케일링을 제어합니다 (기본값 `1200`); 낮은 값은 일반적으로 스크린샷이 많은 실행에서 비전 토큰 사용량을 줄입니다.
+    - `agents.defaults.imageMaxDimensionPx` 는 전사본/도구 이미지 다운스케일링을 제어합니다 (기본값 `1200`); 낮은 값은 일반적으로 스크린샷이 많은 실행에서 비전 토큰 사용량을 줄입니다.
     - 채팅에서 모델 전환은 [Models CLI](/ko-KR/concepts/models)를, 인증 로테이션 및 대체 동작은 [Model Failover](/ko-KR/concepts/model-failover)를 참조하세요.
     - 커스텀/자체 호스팅 프로바이더는 레퍼런스의 [Custom providers](/ko-KR/gateway/configuration-reference#custom-providers-and-base-urls)를 참조하세요.
 
@@ -334,12 +334,12 @@ OpenClaw 는 스키마와 완전히 일치하는 구성만 허용합니다. 알 
 
 ### 리로드 모드
 
-| 모드                   | 동작                                                                                |
-| ---------------------- | --------------------------------------------------------------------------------------- |
-| **`hybrid`** (기본값) | 안전한 변경을 즉시 핫 적용합니다. 중요한 변경은 자동으로 재시작합니다.           |
-| **`hot`**              | 안전한 변경만 핫 적용합니다. 재시작이 필요할 때 경고를 기록합니다 — 직접 처리해야 합니다. |
-| **`restart`**          | 안전 여부와 관계없이 모든 구성 변경 시 게이트웨이를 재시작합니다.                                 |
-| **`off`**              | 파일 감시를 비활성화합니다. 변경 사항은 다음 수동 재시작 시 적용됩니다.                 |
+| 모드                  | 동작                                                                                      |
+| --------------------- | ----------------------------------------------------------------------------------------- |
+| **`hybrid`** (기본값) | 안전한 변경을 즉시 핫 적용합니다. 중요한 변경은 자동으로 재시작합니다.                    |
+| **`hot`**             | 안전한 변경만 핫 적용합니다. 재시작이 필요할 때 경고를 기록합니다 — 직접 처리해야 합니다. |
+| **`restart`**         | 안전 여부와 관계없이 모든 구성 변경 시 게이트웨이를 재시작합니다.                         |
+| **`off`**             | 파일 감시를 비활성화합니다. 변경 사항은 다음 수동 재시작 시 적용됩니다.                   |
 
 ```json5
 {
@@ -353,16 +353,16 @@ OpenClaw 는 스키마와 완전히 일치하는 구성만 허용합니다. 알 
 
 대부분의 필드는 다운타임 없이 핫 적용됩니다. `hybrid` 모드에서는 재시작이 필요한 변경이 자동으로 처리됩니다.
 
-| 카테고리            | 필드                                                               | 재시작 필요? |
-| ------------------- | -------------------------------------------------------------------- | --------------- |
-| 채널            | `channels.*`, `web` (WhatsApp) — 모든 내장 및 확장 채널 | 아니오              |
-| 에이전트 & 모델      | `agent`, `agents`, `models`, `routing`                               | 아니오              |
-| 자동화          | `hooks`, `cron`, `agent.heartbeat`                                   | 아니오              |
-| 세션 & 메시지 | `session`, `messages`                                                | 아니오              |
-| 도구 & 미디어       | `tools`, `browser`, `skills`, `audio`, `talk`                        | 아니오              |
-| UI & 기타           | `ui`, `logging`, `identity`, `bindings`                              | 아니오              |
-| 게이트웨이 서버      | `gateway.*` (port, bind, auth, tailscale, TLS, HTTP)                 | **예**         |
-| 인프라      | `discovery`, `canvasHost`, `plugins`                                 | **예**         |
+| 카테고리        | 필드                                                    | 재시작 필요? |
+| --------------- | ------------------------------------------------------- | ------------ |
+| 채널            | `channels.*`, `web` (WhatsApp) — 모든 내장 및 확장 채널 | 아니오       |
+| 에이전트 & 모델 | `agent`, `agents`, `models`, `routing`                  | 아니오       |
+| 자동화          | `hooks`, `cron`, `agent.heartbeat`                      | 아니오       |
+| 세션 & 메시지   | `session`, `messages`                                   | 아니오       |
+| 도구 & 미디어   | `tools`, `browser`, `skills`, `audio`, `talk`           | 아니오       |
+| UI & 기타       | `ui`, `logging`, `identity`, `bindings`                 | 아니오       |
+| 게이트웨이 서버 | `gateway.*` (port, bind, auth, tailscale, TLS, HTTP)    | **예**       |
+| 인프라          | `discovery`, `canvasHost`, `plugins`                    | **예**       |
 
 <Note>
 `gateway.reload` 와 `gateway.remote` 는 예외입니다 — 이들을 변경해도 재시작이 트리거되지 **않습니다**.

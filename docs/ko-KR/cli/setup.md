@@ -1,28 +1,28 @@
 ---
-summary: "CLI reference for `openclaw setup` (initialize config + workspace)"
+summary: "`openclaw setup` CLI 참조 (설정 + 작업 공간 초기화)"
 read_when:
-  - You’re doing first-run setup without the full onboarding wizard
-  - You want to set the default workspace path
+  - 전체 온보딩 마법사 없이 첫 실행 설정을 진행할 때
+  - 기본 작업 공간 경로를 설정하고 싶을 때
 title: "setup"
 ---
 
 # `openclaw setup`
 
-Initialize `~/.openclaw/openclaw.json` and the agent workspace.
+`~/.openclaw/openclaw.json` 및 에이전트 작업 공간을 초기화합니다.
 
-Related:
+관련 항목:
 
-- Getting started: [Getting started](/ko-KR/start/getting-started)
-- Wizard: [Onboarding](/ko-KR/start/onboarding)
+- 시작하기: [시작하기](/start/getting-started)
+- 마법사: [온보딩](/start/onboarding)
 
-## Examples
+## 예제
 
 ```bash
 openclaw setup
 openclaw setup --workspace ~/.openclaw/workspace
 ```
 
-To run the wizard via setup:
+설정을 통해 마법사를 실행하려면:
 
 ```bash
 openclaw setup --wizard

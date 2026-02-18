@@ -1,38 +1,38 @@
 ---
-summary: "Telegram allowlist hardening: prefix + whitespace normalization"
+summary: "Telegram 허용 목록 강화: 접두사 + 공백 정상화"
 read_when:
-  - Reviewing historical Telegram allowlist changes
-title: "Telegram Allowlist Hardening"
+  - Telegram 허용 목록 변경 사항 검토
+title: "Telegram 허용 목록 강화"
 ---
 
-# Telegram Allowlist Hardening
+# Telegram 허용 목록 강화
 
-**Date**: 2026-01-05  
-**Status**: Complete  
+**날짜**: 2026-01-05  
+**상태**: 완료  
 **PR**: #216
 
-## Summary
+## 요약
 
-Telegram allowlists now accept `telegram:` and `tg:` prefixes case-insensitively, and tolerate accidental whitespace. This aligns inbound allowlist checks with outbound send normalization.
+Telegram 허용 목록은 이제 `telegram:` 및 `tg:` 접두사를 대소문자 구분 없이 수용하며, 실수로 인한 공백도 허용합니다. 이는 들어오는 허용 목록 검사와 나가는 메시지 전송 정상화를 일치시킵니다.
 
-## What changed
+## 변경 사항
 
-- Prefixes `telegram:` and `tg:` are treated the same (case-insensitive).
-- Allowlist entries are trimmed; empty entries are ignored.
+- 접두사 `telegram:` 및 `tg:`는 동일하게 처리됩니다 (대소문자 구분 없음).
+- 허용 목록 항목은 트림되며, 빈 항목은 무시됩니다.
 
-## Examples
+## 예시
 
-All of these are accepted for the same ID:
+다음 모든 경우가 동일한 ID로 수용됩니다:
 
 - `telegram:123456`
 - `TG:123456`
 - `tg:123456`
 
-## Why it matters
+## 중요한 이유
 
-Copy/paste from logs or chat IDs often includes prefixes and whitespace. Normalizing avoids false negatives when deciding whether to respond in DMs or groups.
+로그 또는 채팅 ID에서 복사/붙여넣기를 할 때 접두사와 공백이 자주 포함됩니다. 이를 정상화하면 다이렉트 메시지나 그룹에서 응답할지를 결정할 때 오탐이 발생하지 않습니다.
 
-## Related docs
+## 관련 문서
 
-- [Group Chats](/ko-KR/channels/groups)
-- [Telegram Provider](/ko-KR/channels/telegram)
+- [그룹 채팅](/channels/groups)
+- [Telegram 프로바이더](/channels/telegram)

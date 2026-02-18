@@ -1,19 +1,19 @@
 ---
-summary: "CLI reference for `openclaw webhooks` (webhook helpers + Gmail Pub/Sub)"
+summary: "`openclaw webhooks` CLI 참조 (웹훅 도우미 + Gmail Pub/Sub)"
 read_when:
-  - You want to wire Gmail Pub/Sub events into OpenClaw
-  - You want webhook helper commands
+  - Gmail Pub/Sub 이벤트를 OpenClaw에 연결하고자 하는 경우
+  - 웹훅 도우미 명령어가 필요한 경우
 title: "webhooks"
 ---
 
 # `openclaw webhooks`
 
-Webhook helpers and integrations (Gmail Pub/Sub, webhook helpers).
+웹훅 도우미 및 통합 (Gmail Pub/Sub, 웹훅 도우미).
 
-Related:
+관련 사항:
 
-- Webhooks: [Webhook](/ko-KR/automation/webhook)
-- Gmail Pub/Sub: [Gmail Pub/Sub](/ko-KR/automation/gmail-pubsub)
+- 웹훅: [Webhook](/automation/webhook)
+- Gmail Pub/Sub: [Gmail Pub/Sub](/automation/gmail-pubsub)
 
 ## Gmail
 
@@ -22,4 +22,4 @@ openclaw webhooks gmail setup --account you@example.com
 openclaw webhooks gmail run
 ```
 
-See [Gmail Pub/Sub documentation](/ko-KR/automation/gmail-pubsub) for details.
+자세한 내용은 [Gmail Pub/Sub 문서](/automation/gmail-pubsub)를 참조하세요.
