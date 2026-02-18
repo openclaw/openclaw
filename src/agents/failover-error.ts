@@ -69,7 +69,7 @@ function getStatusCode(err: unknown): number | undefined {
   if (typeof candidate === "string" && /^\d+$/.test(candidate)) {
     return Number(candidate);
   }
-    // Fallback: extract status code from error message (e.g., "429 status code (no body)")
+  // Fallback: extract status code from error message (e.g., "429 status code (no body)")
   const message = getErrorMessage(err);
   if (message) {
     const statusMatch = message.match(/\b(\d{3})\s+(?:status\s+code|error|http)/i);
