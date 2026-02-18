@@ -21,8 +21,8 @@ installGatewayTestHooks({ scope: "suite" });
 
 async function expectNoForwardedInvoke(hasInvoke: () => boolean): Promise<void> {
   // Yield a couple of macrotasks so any accidental async forwarding would fire.
-  await sleep(0);
-  await sleep(0);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  await new Promise<void>((resolve) => setImmediate(resolve));
   expect(hasInvoke()).toBe(false);
 }
 
