@@ -9,6 +9,7 @@ import {
 } from "../../agents/model-auth.js";
 import {
   ANTIGRAVITY_OPUS_46_FORWARD_COMPAT_CANDIDATES,
+  ANTIGRAVITY_SONNET_46_FORWARD_COMPAT_CANDIDATES,
   resolveForwardCompatModel,
 } from "../../agents/model-forward-compat.js";
 import { ensureOpenClawModelsJson } from "../../agents/models-config.js";
@@ -146,7 +147,11 @@ function appendAntigravityForwardCompatModels(
   const nextModels = [...models];
   const synthesizedForwardCompat: SynthesizedForwardCompat[] = [];
 
-  for (const candidate of ANTIGRAVITY_OPUS_46_FORWARD_COMPAT_CANDIDATES) {
+  const allAntigravityCandidates = [
+    ...ANTIGRAVITY_OPUS_46_FORWARD_COMPAT_CANDIDATES,
+    ...ANTIGRAVITY_SONNET_46_FORWARD_COMPAT_CANDIDATES,
+  ];
+  for (const candidate of allAntigravityCandidates) {
     const key = modelKey("google-antigravity", candidate.id);
     const hasForwardCompat = nextModels.some((model) => modelKey(model.provider, model.id) === key);
     if (hasForwardCompat) {

@@ -27,6 +27,10 @@ const ANTIGRAVITY_OPUS_THINKING_TEMPLATE_MODEL_IDS = [
   "claude-opus-4.5-thinking",
 ] as const;
 
+const ANTIGRAVITY_SONNET_46_MODEL_ID = "claude-sonnet-4-6";
+const ANTIGRAVITY_SONNET_46_DOT_MODEL_ID = "claude-sonnet-4.6";
+const ANTIGRAVITY_SONNET_TEMPLATE_MODEL_IDS = ["claude-sonnet-4-5", "claude-sonnet-4.5"] as const;
+
 export const ANTIGRAVITY_OPUS_46_FORWARD_COMPAT_CANDIDATES = [
   {
     id: ANTIGRAVITY_OPUS_46_THINKING_MODEL_ID,
@@ -38,6 +42,16 @@ export const ANTIGRAVITY_OPUS_46_FORWARD_COMPAT_CANDIDATES = [
   {
     id: ANTIGRAVITY_OPUS_46_MODEL_ID,
     templatePrefixes: ["google-antigravity/claude-opus-4-5", "google-antigravity/claude-opus-4.5"],
+  },
+] as const;
+
+export const ANTIGRAVITY_SONNET_46_FORWARD_COMPAT_CANDIDATES = [
+  {
+    id: ANTIGRAVITY_SONNET_46_MODEL_ID,
+    templatePrefixes: [
+      "google-antigravity/claude-sonnet-4-5",
+      "google-antigravity/claude-sonnet-4.5",
+    ],
   },
 ] as const;
 
@@ -224,6 +238,41 @@ function resolveZaiGlm5ForwardCompatModel(
   } as Model<Api>);
 }
 
+function resolveAntigravitySonnet46ForwardCompatModel(
+  provider: string,
+  modelId: string,
+  modelRegistry: ModelRegistry,
+): Model<Api> | undefined {
+  const normalizedProvider = normalizeProviderId(provider);
+  if (normalizedProvider !== "google-antigravity") {
+    return undefined;
+  }
+  const trimmedModelId = modelId.trim();
+  const lower = trimmedModelId.toLowerCase();
+  const isSonnet46 =
+    lower === ANTIGRAVITY_SONNET_46_MODEL_ID ||
+    lower === ANTIGRAVITY_SONNET_46_DOT_MODEL_ID ||
+    lower.startsWith(`${ANTIGRAVITY_SONNET_46_MODEL_ID}-`) ||
+    lower.startsWith(`${ANTIGRAVITY_SONNET_46_DOT_MODEL_ID}-`);
+  if (!isSonnet46) {
+    return undefined;
+  }
+  const templateIds: string[] = [];
+  if (lower.startsWith(ANTIGRAVITY_SONNET_46_MODEL_ID)) {
+    templateIds.push(lower.replace(ANTIGRAVITY_SONNET_46_MODEL_ID, "claude-sonnet-4-5"));
+  }
+  if (lower.startsWith(ANTIGRAVITY_SONNET_46_DOT_MODEL_ID)) {
+    templateIds.push(lower.replace(ANTIGRAVITY_SONNET_46_DOT_MODEL_ID, "claude-sonnet-4.5"));
+  }
+  templateIds.push(...ANTIGRAVITY_SONNET_TEMPLATE_MODEL_IDS);
+  return cloneFirstTemplateModel({
+    normalizedProvider,
+    trimmedModelId,
+    templateIds,
+    modelRegistry,
+  });
+}
+
 function resolveAntigravityOpus46ForwardCompatModel(
   provider: string,
   modelId: string,
@@ -288,6 +337,7 @@ export function resolveForwardCompatModel(
     resolveAnthropicOpus46ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveAnthropicSonnet46ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveZaiGlm5ForwardCompatModel(provider, modelId, modelRegistry) ??
-    resolveAntigravityOpus46ForwardCompatModel(provider, modelId, modelRegistry)
+    resolveAntigravityOpus46ForwardCompatModel(provider, modelId, modelRegistry) ??
+    resolveAntigravitySonnet46ForwardCompatModel(provider, modelId, modelRegistry)
   );
 }

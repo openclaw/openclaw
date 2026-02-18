@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { buildDispatchInboundCaptureMock } from "../../../test/helpers/dispatch-inbound-capture.js";
+import type { HistoryEntry } from "../../auto-reply/reply/history.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import {
@@ -71,7 +72,7 @@ function createMentionHandler(params: {
 }
 
 function createMentionGatedHistoryHandler() {
-  const groupHistories = new Map();
+  const groupHistories = new Map<string, HistoryEntry[]>();
   const handler = createMentionHandler({ requireMention: true, historyLimit: 5, groupHistories });
   return { handler, groupHistories };
 }
@@ -98,7 +99,7 @@ async function expectSkippedGroupHistory(opts: GroupEventOpts, expectedBody: str
   const entries = groupHistories.get("g1");
   expect(entries).toBeTruthy();
   expect(entries).toHaveLength(1);
-  expect(entries[0].body).toBe(expectedBody);
+  expect(entries![0].body).toBe(expectedBody);
 }
 
 describe("signal mention gating", () => {
@@ -135,8 +136,8 @@ describe("signal mention gating", () => {
     expect(capturedCtx).toBeUndefined();
     const entries = groupHistories.get("g1");
     expect(entries).toHaveLength(1);
-    expect(entries[0].sender).toBe("Alice");
-    expect(entries[0].body).toBe("hello from alice");
+    expect(entries![0].sender).toBe("Alice");
+    expect(entries![0].body).toBe("hello from alice");
   });
 
   it("records attachment placeholder in pending history for skipped attachment-only group messages", async () => {
