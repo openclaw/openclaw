@@ -244,3 +244,120 @@ syno note search "关键词" --offset 0 --limit 20
 - 环境变量优先级高于 config 文件
 - 加密笔记内容使用 AES-256-CBC 加密，`--password` 参数会在客户端自动解密
 - 笔记内容均为 HTML 格式，`--md` / `--md-file` 会自动将 Markdown 转换为 HTML（支持表格、删除线、任务列表）
+
+## MCP 服务模式
+
+通过 `syno mcp` 启动 MCP（Model Context Protocol）SSE 服务器，将 NAS 操作暴露为 31 个工具供 AI 助手调用。
+
+```bash
+# 启动 MCP 服务（默认 0.0.0.0:3000）
+syno mcp
+
+# 指定地址和端口
+syno mcp --host 127.0.0.1 --port 8080
+```
+
+MCP 服务**不使用本地 .env 配置**，NAS 连接信息作为 tool 参数由客户端传入（公共服务设计）。
+
+### 协议
+
+- `GET /sse` — 建立 SSE 长连接，返回 `sessionId`
+- `POST /messages?sessionId=xxx` — 发送 JSON-RPC 请求
+- `GET /health` — 健康检查
+
+### 认证流程
+
+1. 调用 `syno_login`（传入 host/username/password）→ 返回 `nas_session_id`
+2. 后续调用只传 `nas_session_id`（服务端内存缓存，30 分钟过期）
+
+### 线上部署
+
+当前部署在 `https://mcp.syno.leot.fun`（c.leot.fun 服务器）。
+
+## 交叉编译与部署
+
+在 Windows 上交叉编译 Linux musl 静态二进制，然后部署到服务器容器中。
+
+### 前置条件
+
+- Rust toolchain（stable）
+- musl target：`rustup target add x86_64-unknown-linux-musl`
+- [Zig](https://ziglang.org/download/)（用作 C 交叉编译器，需要在 PATH 中）
+
+### 编译步骤
+
+```powershell
+cd cli/syno
+
+# 设置交叉编译环境变量
+$env:CC_x86_64_unknown_linux_musl = "$PWD\zig-cc.ps1"
+$env:AR_x86_64_unknown_linux_musl = "$PWD\zig-ar.bat"
+$env:RUSTFLAGS = "-C link-self-contained=no"
+
+# 编译 release 版本
+cargo build --release --target x86_64-unknown-linux-musl
+
+# 产物路径
+# target/x86_64-unknown-linux-musl/release/syno （约 3.9MB 静态二进制）
+```
+
+**关键说明：**
+- `zig-cc.ps1`：zig cc 的 wrapper，自动将 Rust 的 `x86_64-unknown-linux-musl` target 映射为 zig 的 `x86_64-linux-musl`
+- `zig-ar.bat`：zig ar 的 wrapper
+- `RUSTFLAGS='-C link-self-contained=no'`：让 Rust 不提供自己的 CRT，避免与 zig 的 musl CRT 符号冲突（`_start` 重复定义）
+
+### 构建 Docker 镜像
+
+```bash
+# 将编译好的二进制复制到 Dockerfile 同目录
+cp target/x86_64-unknown-linux-musl/release/syno .
+
+# 构建镜像（在服务器上或本地构建后推送）
+podman build -t syno-mcp:latest .
+```
+
+Dockerfile 基于 `alpine:3.20`，仅拷贝静态二进制，入口为 `syno mcp`。
+
+### 部署到服务器
+
+```bash
+# 上传二进制和 Dockerfile 到服务器
+scp target/x86_64-unknown-linux-musl/release/syno root@c.leot.fun:/opt/leot_svr/build/syno-mcp/
+scp Dockerfile root@c.leot.fun:/opt/leot_svr/build/syno-mcp/
+
+# SSH 到服务器构建镜像
+ssh root@c.leot.fun
+cd /opt/leot_svr/build/syno-mcp
+podman build -t syno-mcp:latest .
+
+# 停止旧容器（如存在）
+podman stop syno-mcp && podman rm syno-mcp
+
+# 启动新容器（加入 nginx-proxy 网络，自动配置反代和 HTTPS 证书）
+podman run -d \
+  --name syno-mcp \
+  --network proxy-network \
+  -e VIRTUAL_HOST=mcp.syno.leot.fun \
+  -e VIRTUAL_PORT=3000 \
+  -e LETSENCRYPT_HOST=mcp.syno.leot.fun \
+  -e LETSENCRYPT_EMAIL=admin@leot.fun \
+  syno-mcp:latest
+```
+
+nginx-proxy + acme-companion 会自动：
+- 生成反向代理配置（域名 → 容器 3000 端口）
+- 签发 Let's Encrypt HTTPS 证书
+
+### SSE 优化
+
+nginx vhost 已配置 SSE 所需参数（`/opt/leot_svr/data/gateway/nginx-vhost/mcp.syno.leot.fun_location`）：
+
+```nginx
+proxy_buffering off;
+proxy_cache off;
+proxy_read_timeout 86400s;
+proxy_send_timeout 86400s;
+proxy_set_header Connection '';
+proxy_http_version 1.1;
+chunked_transfer_encoding off;
+```
