@@ -5,6 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::sync::Mutex;
+use url::Url;
 
 use crate::channels::{ChannelCapabilities, DriverRegistry};
 use crate::config::{GroupActivationMode, SessionQueueMode};
@@ -301,6 +302,42 @@ impl MethodRegistry {
                     min_role: "client",
                 },
                 MethodSpec {
+                    name: "cron.list",
+                    family: MethodFamily::Cron,
+                    requires_auth: true,
+                    min_role: "client",
+                },
+                MethodSpec {
+                    name: "cron.status",
+                    family: MethodFamily::Cron,
+                    requires_auth: true,
+                    min_role: "client",
+                },
+                MethodSpec {
+                    name: "cron.update",
+                    family: MethodFamily::Cron,
+                    requires_auth: true,
+                    min_role: "client",
+                },
+                MethodSpec {
+                    name: "cron.remove",
+                    family: MethodFamily::Cron,
+                    requires_auth: true,
+                    min_role: "client",
+                },
+                MethodSpec {
+                    name: "cron.run",
+                    family: MethodFamily::Cron,
+                    requires_auth: true,
+                    min_role: "client",
+                },
+                MethodSpec {
+                    name: "cron.runs",
+                    family: MethodFamily::Cron,
+                    requires_auth: true,
+                    min_role: "client",
+                },
+                MethodSpec {
                     name: "gateway.restart",
                     family: MethodFamily::Gateway,
                     requires_auth: true,
@@ -352,6 +389,7 @@ pub struct RpcDispatcher {
     talk: TalkRegistry,
     models: ModelRegistry,
     agents: AgentRegistry,
+    cron: CronRegistry,
     config: ConfigRegistry,
     channel_capabilities: Vec<ChannelCapabilities>,
     started_at_ms: u64,
@@ -384,7 +422,10 @@ const AGENT_BOOTSTRAP_FILE_NAMES: &[&str] = &[
 ];
 const AGENT_PRIMARY_MEMORY_FILE_NAME: &str = "MEMORY.md";
 const AGENT_ALT_MEMORY_FILE_NAME: &str = "memory.md";
+const CRON_STORE_PATH: &str = "memory://cron/jobs.json";
+const MAX_CRON_RUN_LOGS_PER_JOB: usize = 500;
 static SESSION_ID_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+static CRON_ID_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 const SUPPORTED_RPC_METHODS: &[&str] = &[
     "health",
     "status",
@@ -405,6 +446,13 @@ const SUPPORTED_RPC_METHODS: &[&str] = &[
     "agents.files.list",
     "agents.files.get",
     "agents.files.set",
+    "cron.list",
+    "cron.status",
+    "cron.add",
+    "cron.update",
+    "cron.remove",
+    "cron.run",
+    "cron.runs",
     "channels.status",
     "channels.logout",
     "config.get",
@@ -441,6 +489,7 @@ impl RpcDispatcher {
             talk: TalkRegistry::new(),
             models: ModelRegistry::new(),
             agents: AgentRegistry::new(),
+            cron: CronRegistry::new(),
             config: ConfigRegistry::new(),
             channel_capabilities,
             started_at_ms: now_ms(),
@@ -468,6 +517,13 @@ impl RpcDispatcher {
             "agents.files.list" => self.handle_agents_files_list(req).await,
             "agents.files.get" => self.handle_agents_files_get(req).await,
             "agents.files.set" => self.handle_agents_files_set(req).await,
+            "cron.list" => self.handle_cron_list(req).await,
+            "cron.status" => self.handle_cron_status(req).await,
+            "cron.add" => self.handle_cron_add(req).await,
+            "cron.update" => self.handle_cron_update(req).await,
+            "cron.remove" => self.handle_cron_remove(req).await,
+            "cron.run" => self.handle_cron_run(req).await,
+            "cron.runs" => self.handle_cron_runs(req).await,
             "channels.status" => self.handle_channels_status(req).await,
             "channels.logout" => self.handle_channels_logout(req).await,
             "config.get" => self.handle_config_get(req).await,
@@ -888,6 +944,178 @@ impl RpcDispatcher {
             "agentId": agent_id,
             "workspace": workspace,
             "file": file
+        }))
+    }
+
+    async fn handle_cron_list(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
+        let params = match decode_params::<CronListParams>(&req.params) {
+            Ok(v) => v,
+            Err(err) => {
+                return RpcDispatchOutcome::bad_request(format!("invalid cron.list params: {err}"));
+            }
+        };
+        let jobs = self
+            .cron
+            .list(params.include_disabled.unwrap_or(false))
+            .await;
+        RpcDispatchOutcome::Handled(json!({
+            "jobs": jobs
+        }))
+    }
+
+    async fn handle_cron_status(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
+        if let Err(err) = decode_params::<CronStatusParams>(&req.params) {
+            return RpcDispatchOutcome::bad_request(format!("invalid cron.status params: {err}"));
+        }
+        let status = self.cron.status().await;
+        RpcDispatchOutcome::Handled(json!(status))
+    }
+
+    async fn handle_cron_add(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
+        let params = match decode_params::<CronAddParams>(&req.params) {
+            Ok(v) => v,
+            Err(err) => {
+                return RpcDispatchOutcome::bad_request(format!("invalid cron.add params: {err}"));
+            }
+        };
+        let job = match self.cron.add(params).await {
+            Ok(job) => job,
+            Err(CronRegistryError::NotFound(message)) => {
+                return RpcDispatchOutcome::not_found(message)
+            }
+            Err(CronRegistryError::Invalid(message)) => {
+                return RpcDispatchOutcome::bad_request(message);
+            }
+        };
+        self.system
+            .log_line(format!("cron.add id={} name={}", job.id, job.name))
+            .await;
+        RpcDispatchOutcome::Handled(json!(job))
+    }
+
+    async fn handle_cron_update(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
+        let params = match decode_params::<CronUpdateParams>(&req.params) {
+            Ok(v) => v,
+            Err(err) => {
+                return RpcDispatchOutcome::bad_request(format!(
+                    "invalid cron.update params: {err}"
+                ));
+            }
+        };
+        let job_id = match resolve_cron_job_id(params.id, params.job_id, "cron.update") {
+            Ok(id) => id,
+            Err(err) => return RpcDispatchOutcome::bad_request(err),
+        };
+        let job = match self.cron.update(&job_id, params.patch).await {
+            Ok(job) => job,
+            Err(CronRegistryError::NotFound(message)) => {
+                return RpcDispatchOutcome::not_found(message)
+            }
+            Err(CronRegistryError::Invalid(message)) => {
+                return RpcDispatchOutcome::bad_request(message);
+            }
+        };
+        self.system
+            .log_line(format!("cron.update id={job_id}"))
+            .await;
+        RpcDispatchOutcome::Handled(json!(job))
+    }
+
+    async fn handle_cron_remove(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
+        let params = match decode_params::<CronRemoveParams>(&req.params) {
+            Ok(v) => v,
+            Err(err) => {
+                return RpcDispatchOutcome::bad_request(format!(
+                    "invalid cron.remove params: {err}"
+                ));
+            }
+        };
+        let job_id = match resolve_cron_job_id(params.id, params.job_id, "cron.remove") {
+            Ok(id) => id,
+            Err(err) => return RpcDispatchOutcome::bad_request(err),
+        };
+        let removed = match self.cron.remove(&job_id).await {
+            Some(removed) => removed,
+            None => return RpcDispatchOutcome::not_found(format!("cron job not found: {job_id}")),
+        };
+        self.system
+            .log_line(format!("cron.remove id={job_id}"))
+            .await;
+        RpcDispatchOutcome::Handled(json!(removed))
+    }
+
+    async fn handle_cron_run(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
+        let params = match decode_params::<CronRunParams>(&req.params) {
+            Ok(v) => v,
+            Err(err) => {
+                return RpcDispatchOutcome::bad_request(format!("invalid cron.run params: {err}"));
+            }
+        };
+        let job_id = match resolve_cron_job_id(params.id, params.job_id, "cron.run") {
+            Ok(id) => id,
+            Err(err) => return RpcDispatchOutcome::bad_request(err),
+        };
+        let mode = match parse_cron_run_mode(params.mode) {
+            Ok(mode) => mode,
+            Err(err) => return RpcDispatchOutcome::bad_request(err),
+        };
+        let run = match self.cron.run(&job_id, mode).await {
+            Ok(run) => run,
+            Err(CronRegistryError::NotFound(message)) => {
+                return RpcDispatchOutcome::not_found(message)
+            }
+            Err(CronRegistryError::Invalid(message)) => {
+                return RpcDispatchOutcome::bad_request(message);
+            }
+        };
+        if let Some(text) = run.system_event_text {
+            self.system
+                .upsert_presence(SystemPresenceUpdate {
+                    text,
+                    device_id: None,
+                    instance_id: None,
+                    host: None,
+                    ip: None,
+                    mode: None,
+                    version: None,
+                    platform: None,
+                    device_family: None,
+                    model_identifier: None,
+                    last_input_seconds: None,
+                    reason: Some("cron".to_owned()),
+                    roles: Vec::new(),
+                    scopes: Vec::new(),
+                    tags: vec!["cron".to_owned()],
+                })
+                .await;
+        }
+        self.system.log_line(format!("cron.run id={job_id}")).await;
+        RpcDispatchOutcome::Handled(json!(run.entry))
+    }
+
+    async fn handle_cron_runs(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
+        let params = match decode_params::<CronRunsParams>(&req.params) {
+            Ok(v) => v,
+            Err(err) => {
+                return RpcDispatchOutcome::bad_request(format!("invalid cron.runs params: {err}"));
+            }
+        };
+        let job_id = match resolve_cron_job_id(params.id, params.job_id, "cron.runs") {
+            Ok(id) => id,
+            Err(err) => return RpcDispatchOutcome::bad_request(err),
+        };
+        let limit = params.limit.unwrap_or(50).clamp(1, 5_000);
+        let entries = match self.cron.runs(&job_id, limit).await {
+            Ok(entries) => entries,
+            Err(CronRegistryError::NotFound(message)) => {
+                return RpcDispatchOutcome::not_found(message)
+            }
+            Err(CronRegistryError::Invalid(message)) => {
+                return RpcDispatchOutcome::bad_request(message);
+            }
+        };
+        RpcDispatchOutcome::Handled(json!({
+            "entries": entries
         }))
     }
 
@@ -2642,6 +2870,486 @@ fn is_valid_agent_id(value: &str) -> bool {
     chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
 }
 
+struct CronRegistry {
+    state: Mutex<CronState>,
+}
+
+#[derive(Debug, Clone)]
+struct CronState {
+    enabled: bool,
+    jobs: HashMap<String, CronJob>,
+    run_logs: HashMap<String, VecDeque<CronRunLogEntry>>,
+}
+
+#[derive(Debug, Clone)]
+enum CronRegistryError {
+    NotFound(String),
+    Invalid(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CronRunMode {
+    Due,
+    Force,
+}
+
+#[derive(Debug, Clone)]
+struct CronRunExecution {
+    entry: CronRunLogEntry,
+    system_event_text: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind")]
+enum CronSchedule {
+    #[serde(rename = "at")]
+    At { at: String },
+    #[serde(rename = "every")]
+    Every {
+        #[serde(rename = "everyMs")]
+        every_ms: u64,
+        #[serde(rename = "anchorMs", skip_serializing_if = "Option::is_none")]
+        anchor_ms: Option<u64>,
+    },
+    #[serde(rename = "cron")]
+    Cron {
+        expr: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tz: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind")]
+enum CronPayload {
+    #[serde(rename = "systemEvent")]
+    SystemEvent { text: String },
+    #[serde(rename = "agentTurn")]
+    AgentTurn {
+        message: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        thinking: Option<String>,
+        #[serde(rename = "timeoutSeconds", skip_serializing_if = "Option::is_none")]
+        timeout_seconds: Option<u64>,
+        #[serde(
+            rename = "allowUnsafeExternalContent",
+            skip_serializing_if = "Option::is_none"
+        )]
+        allow_unsafe_external_content: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        deliver: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        channel: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        to: Option<String>,
+        #[serde(rename = "bestEffortDeliver", skip_serializing_if = "Option::is_none")]
+        best_effort_deliver: Option<bool>,
+    },
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CronDelivery {
+    mode: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    channel: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    to: Option<String>,
+    #[serde(rename = "bestEffort", skip_serializing_if = "Option::is_none")]
+    best_effort: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct CronJobState {
+    #[serde(rename = "nextRunAtMs", skip_serializing_if = "Option::is_none")]
+    next_run_at_ms: Option<u64>,
+    #[serde(rename = "runningAtMs", skip_serializing_if = "Option::is_none")]
+    running_at_ms: Option<u64>,
+    #[serde(rename = "lastRunAtMs", skip_serializing_if = "Option::is_none")]
+    last_run_at_ms: Option<u64>,
+    #[serde(rename = "lastStatus", skip_serializing_if = "Option::is_none")]
+    last_status: Option<CronRunStatus>,
+    #[serde(rename = "lastError", skip_serializing_if = "Option::is_none")]
+    last_error: Option<String>,
+    #[serde(rename = "lastDurationMs", skip_serializing_if = "Option::is_none")]
+    last_duration_ms: Option<u64>,
+    #[serde(rename = "consecutiveErrors", skip_serializing_if = "Option::is_none")]
+    consecutive_errors: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum CronRunStatus {
+    Ok,
+    Error,
+    Skipped,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct CronRunLogEntry {
+    ts: u64,
+    #[serde(rename = "jobId")]
+    job_id: String,
+    action: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status: Option<CronRunStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    summary: Option<String>,
+    #[serde(rename = "sessionId", skip_serializing_if = "Option::is_none")]
+    session_id: Option<String>,
+    #[serde(rename = "sessionKey", skip_serializing_if = "Option::is_none")]
+    session_key: Option<String>,
+    #[serde(rename = "runAtMs", skip_serializing_if = "Option::is_none")]
+    run_at_ms: Option<u64>,
+    #[serde(rename = "durationMs", skip_serializing_if = "Option::is_none")]
+    duration_ms: Option<u64>,
+    #[serde(rename = "nextRunAtMs", skip_serializing_if = "Option::is_none")]
+    next_run_at_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct CronJob {
+    id: String,
+    #[serde(rename = "agentId", skip_serializing_if = "Option::is_none")]
+    agent_id: Option<String>,
+    #[serde(rename = "sessionKey", skip_serializing_if = "Option::is_none")]
+    session_key: Option<String>,
+    name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
+    enabled: bool,
+    #[serde(rename = "deleteAfterRun", skip_serializing_if = "Option::is_none")]
+    delete_after_run: Option<bool>,
+    #[serde(rename = "createdAtMs")]
+    created_at_ms: u64,
+    #[serde(rename = "updatedAtMs")]
+    updated_at_ms: u64,
+    schedule: CronSchedule,
+    #[serde(rename = "sessionTarget")]
+    session_target: String,
+    #[serde(rename = "wakeMode")]
+    wake_mode: String,
+    payload: CronPayload,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    delivery: Option<CronDelivery>,
+    state: CronJobState,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct CronRemoveResult {
+    ok: bool,
+    id: String,
+    removed: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct CronStatusSnapshot {
+    enabled: bool,
+    jobs: usize,
+    #[serde(rename = "nextWakeAtMs", skip_serializing_if = "Option::is_none")]
+    next_wake_at_ms: Option<u64>,
+    #[serde(rename = "storePath")]
+    store_path: String,
+}
+
+impl CronRegistry {
+    fn new() -> Self {
+        Self {
+            state: Mutex::new(CronState {
+                enabled: true,
+                jobs: HashMap::new(),
+                run_logs: HashMap::new(),
+            }),
+        }
+    }
+
+    async fn list(&self, include_disabled: bool) -> Vec<CronJob> {
+        let guard = self.state.lock().await;
+        let mut jobs = guard
+            .jobs
+            .values()
+            .filter(|job| include_disabled || job.enabled)
+            .cloned()
+            .collect::<Vec<_>>();
+        jobs.sort_by(|a, b| {
+            a.created_at_ms
+                .cmp(&b.created_at_ms)
+                .then_with(|| a.id.cmp(&b.id))
+        });
+        jobs
+    }
+
+    async fn status(&self) -> CronStatusSnapshot {
+        let guard = self.state.lock().await;
+        let next_wake_at_ms = guard
+            .jobs
+            .values()
+            .filter(|job| job.enabled)
+            .filter_map(|job| job.state.next_run_at_ms)
+            .min();
+        CronStatusSnapshot {
+            enabled: guard.enabled,
+            jobs: guard.jobs.len(),
+            next_wake_at_ms,
+            store_path: CRON_STORE_PATH.to_owned(),
+        }
+    }
+
+    async fn add(&self, params: CronAddParams) -> Result<CronJob, CronRegistryError> {
+        let name = normalize_optional_text(Some(params.name), 128)
+            .ok_or_else(|| CronRegistryError::Invalid("cron.add name is required".to_owned()))?;
+        let schedule = normalize_cron_schedule(params.schedule)?;
+        let session_target = parse_cron_session_target(params.session_target)?;
+        let wake_mode = parse_cron_wake_mode(params.wake_mode)?;
+        let payload = normalize_cron_payload(params.payload)?;
+        let mut delivery = match params.delivery {
+            Some(raw) => Some(normalize_cron_delivery(raw, "cron.add")?),
+            None => None,
+        };
+        if delivery.is_none() {
+            delivery = legacy_cron_delivery_from_payload(&payload);
+        }
+        let now = now_ms();
+        let id = next_cron_job_id();
+        let job = CronJob {
+            id: id.clone(),
+            agent_id: normalize_optional_text(params.agent_id.flatten(), 64),
+            session_key: normalize_session_key_input(params.session_key.flatten()),
+            name,
+            description: normalize_optional_text(params.description, 512),
+            enabled: params.enabled.unwrap_or(true),
+            delete_after_run: params.delete_after_run,
+            created_at_ms: now,
+            updated_at_ms: now,
+            schedule: schedule.clone(),
+            session_target,
+            wake_mode,
+            payload,
+            delivery,
+            state: CronJobState {
+                next_run_at_ms: estimate_next_run_at_ms(&schedule, now),
+                ..CronJobState::default()
+            },
+        };
+        let mut guard = self.state.lock().await;
+        guard.jobs.insert(id, job.clone());
+        Ok(job)
+    }
+
+    async fn update(
+        &self,
+        job_id: &str,
+        patch: CronUpdatePatchInput,
+    ) -> Result<CronJob, CronRegistryError> {
+        let now = now_ms();
+        let mut guard = self.state.lock().await;
+        let Some(job) = guard.jobs.get_mut(job_id) else {
+            return Err(CronRegistryError::NotFound(format!(
+                "cron job not found: {job_id}"
+            )));
+        };
+        if let Some(value) = patch.name {
+            job.name = normalize_optional_text(Some(value), 128).ok_or_else(|| {
+                CronRegistryError::Invalid("cron.update patch.name cannot be empty".to_owned())
+            })?;
+        }
+        if let Some(value) = patch.agent_id {
+            job.agent_id = normalize_optional_text(value, 64);
+        }
+        if let Some(value) = patch.session_key {
+            job.session_key = normalize_session_key_input(value);
+        }
+        if let Some(value) = patch.description {
+            job.description = normalize_optional_text(value, 512);
+        }
+        if let Some(value) = patch.enabled {
+            job.enabled = value;
+        }
+        if let Some(value) = patch.delete_after_run {
+            job.delete_after_run = Some(value);
+        }
+        if let Some(value) = patch.schedule {
+            let schedule = normalize_cron_schedule(value)?;
+            job.schedule = schedule.clone();
+            job.state.next_run_at_ms = estimate_next_run_at_ms(&schedule, now);
+        }
+        if let Some(value) = patch.session_target {
+            job.session_target = parse_cron_session_target(Some(value))?;
+        }
+        if let Some(value) = patch.wake_mode {
+            job.wake_mode = parse_cron_wake_mode(Some(value))?;
+        }
+        if let Some(payload_patch) = patch.payload {
+            let (payload, legacy_delivery) = apply_cron_payload_patch(&job.payload, payload_patch)?;
+            job.payload = payload;
+            if patch.delivery.is_none() {
+                if let Some(raw) = legacy_delivery {
+                    job.delivery = Some(normalize_cron_delivery(raw, "cron.update")?);
+                }
+            }
+        }
+        if let Some(delivery_patch) = patch.delivery {
+            job.delivery = apply_cron_delivery_patch(job.delivery.clone(), delivery_patch)?;
+        }
+        if let Some(state_patch) = patch.state {
+            apply_cron_job_state_patch(&mut job.state, state_patch)?;
+        }
+        job.updated_at_ms = now;
+        Ok(job.clone())
+    }
+
+    async fn remove(&self, job_id: &str) -> Option<CronRemoveResult> {
+        let mut guard = self.state.lock().await;
+        guard.jobs.remove(job_id)?;
+        Some(CronRemoveResult {
+            ok: true,
+            id: job_id.to_owned(),
+            removed: true,
+        })
+    }
+
+    async fn run(
+        &self,
+        job_id: &str,
+        mode: CronRunMode,
+    ) -> Result<CronRunExecution, CronRegistryError> {
+        let now = now_ms();
+        let mut guard = self.state.lock().await;
+        let (entry, system_event_text, should_disable, should_delete) = {
+            let Some(job) = guard.jobs.get_mut(job_id) else {
+                return Err(CronRegistryError::NotFound(format!(
+                    "cron job not found: {job_id}"
+                )));
+            };
+            let mut status = CronRunStatus::Ok;
+            if !job.enabled {
+                status = CronRunStatus::Skipped;
+            } else if mode == CronRunMode::Due {
+                if let Some(next) = job.state.next_run_at_ms {
+                    if next > now {
+                        status = CronRunStatus::Skipped;
+                    }
+                }
+            }
+
+            let summary = match (&status, &job.payload) {
+                (CronRunStatus::Ok, CronPayload::SystemEvent { text }) => {
+                    Some(truncate_text(text, 256))
+                }
+                (CronRunStatus::Ok, CronPayload::AgentTurn { message, .. }) => {
+                    Some(truncate_text(message, 256))
+                }
+                (CronRunStatus::Skipped, _) if !job.enabled => Some("job disabled".to_owned()),
+                (CronRunStatus::Skipped, _) => Some("not due".to_owned()),
+                (CronRunStatus::Error, _) => None,
+            };
+
+            let system_event_text = if matches!(status, CronRunStatus::Ok) {
+                match &job.payload {
+                    CronPayload::SystemEvent { text } => Some(text.clone()),
+                    _ => None,
+                }
+            } else {
+                None
+            };
+
+            job.state.running_at_ms = None;
+            job.state.last_run_at_ms = Some(now);
+            job.state.last_duration_ms = Some(0);
+            job.state.last_status = Some(status.clone());
+            if matches!(status, CronRunStatus::Error) {
+                let current = job.state.consecutive_errors.unwrap_or(0);
+                job.state.consecutive_errors = Some(current.saturating_add(1));
+            } else {
+                job.state.consecutive_errors = Some(0);
+                job.state.last_error = None;
+            }
+
+            if matches!(status, CronRunStatus::Ok) {
+                match &job.schedule {
+                    CronSchedule::Every { every_ms, .. } => {
+                        job.state.next_run_at_ms = Some(now.saturating_add(*every_ms));
+                    }
+                    CronSchedule::At { .. } => {
+                        job.state.next_run_at_ms = None;
+                    }
+                    CronSchedule::Cron { .. } => {}
+                }
+            }
+            job.updated_at_ms = now;
+            let entry = CronRunLogEntry {
+                ts: now,
+                job_id: job_id.to_owned(),
+                action: "finished".to_owned(),
+                status: Some(status),
+                error: None,
+                summary,
+                session_id: None,
+                session_key: job.session_key.clone(),
+                run_at_ms: Some(now),
+                duration_ms: Some(0),
+                next_run_at_ms: job.state.next_run_at_ms,
+            };
+            (
+                entry,
+                system_event_text,
+                matches!(&job.schedule, CronSchedule::At { .. }),
+                job.delete_after_run.unwrap_or(false),
+            )
+        };
+
+        let logs = guard
+            .run_logs
+            .entry(job_id.to_owned())
+            .or_insert_with(VecDeque::new);
+        if logs.len() >= MAX_CRON_RUN_LOGS_PER_JOB {
+            let _ = logs.pop_front();
+        }
+        logs.push_back(entry.clone());
+
+        if should_delete {
+            let _ = guard.jobs.remove(job_id);
+        } else if should_disable {
+            if let Some(job) = guard.jobs.get_mut(job_id) {
+                job.enabled = false;
+                job.updated_at_ms = now;
+            }
+        }
+
+        Ok(CronRunExecution {
+            entry,
+            system_event_text,
+        })
+    }
+
+    async fn runs(
+        &self,
+        job_id: &str,
+        limit: usize,
+    ) -> Result<Vec<CronRunLogEntry>, CronRegistryError> {
+        let guard = self.state.lock().await;
+        if !guard.jobs.contains_key(job_id) && !guard.run_logs.contains_key(job_id) {
+            return Err(CronRegistryError::NotFound(format!(
+                "cron job not found: {job_id}"
+            )));
+        }
+        let mut entries = guard
+            .run_logs
+            .get(job_id)
+            .map(|logs| logs.iter().cloned().collect::<Vec<_>>())
+            .unwrap_or_default();
+        if entries.len() > limit {
+            entries = entries.split_off(entries.len() - limit);
+        }
+        Ok(entries)
+    }
+}
+
 struct ConfigRegistry {
     state: Mutex<ConfigState>,
 }
@@ -4127,6 +4835,146 @@ struct AgentsFilesSetParams {
 }
 
 #[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct CronListParams {
+    #[serde(rename = "includeDisabled", alias = "include_disabled")]
+    include_disabled: Option<bool>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct CronStatusParams {}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CronAddParams {
+    name: String,
+    #[serde(rename = "agentId", alias = "agent_id")]
+    agent_id: Option<Option<String>>,
+    #[serde(rename = "sessionKey", alias = "session_key")]
+    session_key: Option<Option<String>>,
+    description: Option<String>,
+    enabled: Option<bool>,
+    #[serde(rename = "deleteAfterRun", alias = "delete_after_run")]
+    delete_after_run: Option<bool>,
+    schedule: CronSchedule,
+    #[serde(rename = "sessionTarget", alias = "session_target")]
+    session_target: Option<String>,
+    #[serde(rename = "wakeMode", alias = "wake_mode")]
+    wake_mode: Option<String>,
+    payload: CronPayload,
+    delivery: Option<CronDelivery>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CronUpdateParams {
+    id: Option<String>,
+    #[serde(rename = "jobId", alias = "job_id")]
+    job_id: Option<String>,
+    patch: CronUpdatePatchInput,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+struct CronUpdatePatchInput {
+    name: Option<String>,
+    #[serde(rename = "agentId", alias = "agent_id")]
+    agent_id: Option<Option<String>>,
+    #[serde(rename = "sessionKey", alias = "session_key")]
+    session_key: Option<Option<String>>,
+    description: Option<Option<String>>,
+    enabled: Option<bool>,
+    #[serde(rename = "deleteAfterRun", alias = "delete_after_run")]
+    delete_after_run: Option<bool>,
+    schedule: Option<CronSchedule>,
+    #[serde(rename = "sessionTarget", alias = "session_target")]
+    session_target: Option<String>,
+    #[serde(rename = "wakeMode", alias = "wake_mode")]
+    wake_mode: Option<String>,
+    payload: Option<CronPayloadPatchInput>,
+    delivery: Option<CronDeliveryPatchInput>,
+    state: Option<CronJobStatePatchInput>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+struct CronPayloadPatchInput {
+    kind: Option<String>,
+    text: Option<String>,
+    message: Option<String>,
+    model: Option<String>,
+    thinking: Option<String>,
+    #[serde(rename = "timeoutSeconds", alias = "timeout_seconds")]
+    timeout_seconds: Option<u64>,
+    #[serde(
+        rename = "allowUnsafeExternalContent",
+        alias = "allow_unsafe_external_content"
+    )]
+    allow_unsafe_external_content: Option<bool>,
+    deliver: Option<bool>,
+    channel: Option<String>,
+    to: Option<String>,
+    #[serde(rename = "bestEffortDeliver", alias = "best_effort_deliver")]
+    best_effort_deliver: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+struct CronDeliveryPatchInput {
+    mode: Option<Option<String>>,
+    channel: Option<Option<String>>,
+    to: Option<Option<String>>,
+    #[serde(rename = "bestEffort", alias = "best_effort")]
+    best_effort: Option<Option<bool>>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+struct CronJobStatePatchInput {
+    #[serde(rename = "nextRunAtMs", alias = "next_run_at_ms")]
+    next_run_at_ms: Option<Option<u64>>,
+    #[serde(rename = "runningAtMs", alias = "running_at_ms")]
+    running_at_ms: Option<Option<u64>>,
+    #[serde(rename = "lastRunAtMs", alias = "last_run_at_ms")]
+    last_run_at_ms: Option<Option<u64>>,
+    #[serde(rename = "lastStatus", alias = "last_status")]
+    last_status: Option<Option<CronRunStatus>>,
+    #[serde(rename = "lastError", alias = "last_error")]
+    last_error: Option<Option<String>>,
+    #[serde(rename = "lastDurationMs", alias = "last_duration_ms")]
+    last_duration_ms: Option<Option<u64>>,
+    #[serde(rename = "consecutiveErrors", alias = "consecutive_errors")]
+    consecutive_errors: Option<Option<u64>>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct CronRemoveParams {
+    id: Option<String>,
+    #[serde(rename = "jobId", alias = "job_id")]
+    job_id: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct CronRunParams {
+    id: Option<String>,
+    #[serde(rename = "jobId", alias = "job_id")]
+    job_id: Option<String>,
+    mode: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct CronRunsParams {
+    id: Option<String>,
+    #[serde(rename = "jobId", alias = "job_id")]
+    job_id: Option<String>,
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct ChannelsStatusParams {
     probe: Option<bool>,
@@ -4356,6 +5204,375 @@ fn parse_wake_mode(value: Option<String>) -> Result<&'static str, String> {
         "next-heartbeat" => Ok("next-heartbeat"),
         _ => Err("invalid wake params: mode must be now|next-heartbeat".to_owned()),
     }
+}
+
+fn resolve_cron_job_id(
+    id: Option<String>,
+    job_id: Option<String>,
+    method_name: &str,
+) -> Result<String, String> {
+    normalize_optional_text(id.or(job_id), 128)
+        .ok_or_else(|| format!("invalid {method_name} params: missing id"))
+}
+
+fn parse_cron_run_mode(value: Option<String>) -> Result<CronRunMode, String> {
+    let Some(mode) = normalize_optional_text(value, 32) else {
+        return Ok(CronRunMode::Force);
+    };
+    match normalize(&mode).as_str() {
+        "force" => Ok(CronRunMode::Force),
+        "due" => Ok(CronRunMode::Due),
+        _ => Err("invalid cron.run params: mode must be force|due".to_owned()),
+    }
+}
+
+fn parse_cron_session_target(value: Option<String>) -> Result<String, CronRegistryError> {
+    let normalized = normalize_optional_text(value, 32).unwrap_or_else(|| "main".to_owned());
+    match normalize(&normalized).as_str() {
+        "main" => Ok("main".to_owned()),
+        "isolated" => Ok("isolated".to_owned()),
+        _ => Err(CronRegistryError::Invalid(
+            "sessionTarget must be main|isolated".to_owned(),
+        )),
+    }
+}
+
+fn parse_cron_wake_mode(value: Option<String>) -> Result<String, CronRegistryError> {
+    let normalized =
+        normalize_optional_text(value, 32).unwrap_or_else(|| "next-heartbeat".to_owned());
+    match normalize(&normalized).as_str() {
+        "now" => Ok("now".to_owned()),
+        "next-heartbeat" => Ok("next-heartbeat".to_owned()),
+        _ => Err(CronRegistryError::Invalid(
+            "wakeMode must be now|next-heartbeat".to_owned(),
+        )),
+    }
+}
+
+fn normalize_cron_schedule(schedule: CronSchedule) -> Result<CronSchedule, CronRegistryError> {
+    match schedule {
+        CronSchedule::At { at } => {
+            let at = normalize_optional_text(Some(at), 128).ok_or_else(|| {
+                CronRegistryError::Invalid("schedule.at is required for kind=at".to_owned())
+            })?;
+            Ok(CronSchedule::At { at })
+        }
+        CronSchedule::Every {
+            every_ms,
+            anchor_ms,
+        } => {
+            if every_ms == 0 {
+                return Err(CronRegistryError::Invalid(
+                    "schedule.everyMs must be greater than 0".to_owned(),
+                ));
+            }
+            Ok(CronSchedule::Every {
+                every_ms,
+                anchor_ms,
+            })
+        }
+        CronSchedule::Cron { expr, tz } => {
+            let expr = normalize_optional_text(Some(expr), 256).ok_or_else(|| {
+                CronRegistryError::Invalid("schedule.expr is required for kind=cron".to_owned())
+            })?;
+            Ok(CronSchedule::Cron {
+                expr,
+                tz: normalize_optional_text(tz, 64),
+            })
+        }
+    }
+}
+
+fn normalize_cron_payload(payload: CronPayload) -> Result<CronPayload, CronRegistryError> {
+    match payload {
+        CronPayload::SystemEvent { text } => {
+            let text = normalize_optional_text(Some(text), 4096).ok_or_else(|| {
+                CronRegistryError::Invalid(
+                    "payload.kind=systemEvent requires non-empty text".to_owned(),
+                )
+            })?;
+            Ok(CronPayload::SystemEvent { text })
+        }
+        CronPayload::AgentTurn {
+            message,
+            model,
+            thinking,
+            timeout_seconds,
+            allow_unsafe_external_content,
+            deliver,
+            channel,
+            to,
+            best_effort_deliver,
+        } => {
+            let message = normalize_optional_text(Some(message), 4096).ok_or_else(|| {
+                CronRegistryError::Invalid(
+                    "payload.kind=agentTurn requires non-empty message".to_owned(),
+                )
+            })?;
+            if matches!(timeout_seconds, Some(0)) {
+                return Err(CronRegistryError::Invalid(
+                    "payload.timeoutSeconds must be >= 1".to_owned(),
+                ));
+            }
+            Ok(CronPayload::AgentTurn {
+                message,
+                model: normalize_optional_text(model, 256),
+                thinking: normalize_optional_text(thinking, 64),
+                timeout_seconds,
+                allow_unsafe_external_content,
+                deliver,
+                channel: normalize_optional_text(channel, 64),
+                to: normalize_optional_text(to, 1024),
+                best_effort_deliver,
+            })
+        }
+    }
+}
+
+fn normalize_cron_delivery(
+    delivery: CronDelivery,
+    context: &str,
+) -> Result<CronDelivery, CronRegistryError> {
+    let mode = normalize_optional_text(Some(delivery.mode), 32)
+        .ok_or_else(|| CronRegistryError::Invalid(format!("invalid {context} delivery.mode")))?;
+    let mode = match normalize(&mode).as_str() {
+        "none" => "none",
+        "announce" => "announce",
+        "webhook" => "webhook",
+        _ => {
+            return Err(CronRegistryError::Invalid(format!(
+                "invalid {context} delivery.mode: expected none|announce|webhook"
+            )))
+        }
+    };
+    let normalized = CronDelivery {
+        mode: mode.to_owned(),
+        channel: normalize_optional_text(delivery.channel, 64),
+        to: normalize_optional_text(delivery.to, 1024),
+        best_effort: delivery.best_effort,
+    };
+    if normalized.mode == "webhook" {
+        let to = normalized.to.clone().ok_or_else(|| {
+            CronRegistryError::Invalid(format!(
+                "invalid {context} delivery.to: required for webhook"
+            ))
+        })?;
+        let parsed = Url::parse(&to).map_err(|_| {
+            CronRegistryError::Invalid(format!("invalid {context} delivery.to URL"))
+        })?;
+        let scheme = parsed.scheme();
+        if scheme != "http" && scheme != "https" {
+            return Err(CronRegistryError::Invalid(format!(
+                "invalid {context} delivery.to URL scheme"
+            )));
+        }
+    }
+    Ok(normalized)
+}
+
+fn legacy_cron_delivery_from_payload(payload: &CronPayload) -> Option<CronDelivery> {
+    let CronPayload::AgentTurn {
+        deliver,
+        channel,
+        to,
+        best_effort_deliver,
+        ..
+    } = payload
+    else {
+        return None;
+    };
+    let has_legacy_fields = deliver.is_some()
+        || channel.as_ref().is_some()
+        || to.as_ref().is_some()
+        || best_effort_deliver.is_some();
+    if !has_legacy_fields {
+        return None;
+    }
+    let mode = if matches!(deliver, Some(false)) {
+        "none"
+    } else {
+        "announce"
+    };
+    Some(CronDelivery {
+        mode: mode.to_owned(),
+        channel: normalize_optional_text(channel.clone(), 64),
+        to: normalize_optional_text(to.clone(), 1024),
+        best_effort: *best_effort_deliver,
+    })
+}
+
+fn apply_cron_payload_patch(
+    current: &CronPayload,
+    patch: CronPayloadPatchInput,
+) -> Result<(CronPayload, Option<CronDelivery>), CronRegistryError> {
+    let explicit_kind = match patch.kind.as_deref().map(normalize) {
+        None => None,
+        Some(kind) if kind == "systemevent" || kind == "system-event" || kind == "system_event" => {
+            Some("systemEvent")
+        }
+        Some(kind) if kind == "agentturn" || kind == "agent-turn" || kind == "agent_turn" => {
+            Some("agentTurn")
+        }
+        _ => {
+            return Err(CronRegistryError::Invalid(
+                "invalid cron.update patch.payload.kind".to_owned(),
+            ))
+        }
+    };
+
+    let current_kind = match current {
+        CronPayload::SystemEvent { .. } => "systemEvent",
+        CronPayload::AgentTurn { .. } => "agentTurn",
+    };
+    if let Some(kind) = explicit_kind {
+        if kind != current_kind {
+            return Err(CronRegistryError::Invalid(
+                "payload kind cannot be changed in cron.update".to_owned(),
+            ));
+        }
+    }
+
+    match current {
+        CronPayload::SystemEvent { text } => {
+            if patch.message.is_some()
+                || patch.model.is_some()
+                || patch.thinking.is_some()
+                || patch.timeout_seconds.is_some()
+                || patch.allow_unsafe_external_content.is_some()
+                || patch.deliver.is_some()
+                || patch.channel.is_some()
+                || patch.to.is_some()
+                || patch.best_effort_deliver.is_some()
+            {
+                return Err(CronRegistryError::Invalid(
+                    "patch.payload for systemEvent cannot include agentTurn fields".to_owned(),
+                ));
+            }
+            let next = normalize_cron_payload(CronPayload::SystemEvent {
+                text: patch.text.unwrap_or_else(|| text.clone()),
+            })?;
+            Ok((next, None))
+        }
+        CronPayload::AgentTurn {
+            message,
+            model,
+            thinking,
+            timeout_seconds,
+            allow_unsafe_external_content,
+            deliver,
+            channel,
+            to,
+            best_effort_deliver,
+        } => {
+            if patch.text.is_some() {
+                return Err(CronRegistryError::Invalid(
+                    "patch.payload for agentTurn cannot include systemEvent text".to_owned(),
+                ));
+            }
+            let next = normalize_cron_payload(CronPayload::AgentTurn {
+                message: patch.message.unwrap_or_else(|| message.clone()),
+                model: patch.model.or_else(|| model.clone()),
+                thinking: patch.thinking.or_else(|| thinking.clone()),
+                timeout_seconds: patch.timeout_seconds.or(*timeout_seconds),
+                allow_unsafe_external_content: patch
+                    .allow_unsafe_external_content
+                    .or(*allow_unsafe_external_content),
+                deliver: patch.deliver.or(*deliver),
+                channel: patch.channel.or_else(|| channel.clone()),
+                to: patch.to.or_else(|| to.clone()),
+                best_effort_deliver: patch.best_effort_deliver.or(*best_effort_deliver),
+            })?;
+            let legacy_delivery = legacy_cron_delivery_from_payload(&next);
+            Ok((next, legacy_delivery))
+        }
+    }
+}
+
+fn apply_cron_delivery_patch(
+    current: Option<CronDelivery>,
+    patch: CronDeliveryPatchInput,
+) -> Result<Option<CronDelivery>, CronRegistryError> {
+    let mut delivery = current.unwrap_or(CronDelivery {
+        mode: "none".to_owned(),
+        channel: None,
+        to: None,
+        best_effort: None,
+    });
+    if let Some(mode) = patch.mode {
+        delivery.mode = mode.unwrap_or_else(|| "none".to_owned());
+    }
+    if let Some(channel) = patch.channel {
+        delivery.channel = channel;
+    }
+    if let Some(to) = patch.to {
+        delivery.to = to;
+    }
+    if let Some(best_effort) = patch.best_effort {
+        delivery.best_effort = best_effort;
+    }
+    let normalized = normalize_cron_delivery(delivery, "cron.update")?;
+    Ok(Some(normalized))
+}
+
+fn apply_cron_job_state_patch(
+    state: &mut CronJobState,
+    patch: CronJobStatePatchInput,
+) -> Result<(), CronRegistryError> {
+    if let Some(value) = patch.next_run_at_ms {
+        state.next_run_at_ms = value;
+    }
+    if let Some(value) = patch.running_at_ms {
+        state.running_at_ms = value;
+    }
+    if let Some(value) = patch.last_run_at_ms {
+        state.last_run_at_ms = value;
+    }
+    if let Some(value) = patch.last_status {
+        state.last_status = value;
+    }
+    if let Some(value) = patch.last_error {
+        state.last_error = value.and_then(|v| normalize_optional_text(Some(v), 256));
+    }
+    if let Some(value) = patch.last_duration_ms {
+        state.last_duration_ms = value;
+    }
+    if let Some(value) = patch.consecutive_errors {
+        state.consecutive_errors = value;
+    }
+    if matches!(
+        (&state.last_status, &state.last_error),
+        (Some(CronRunStatus::Error), None)
+    ) {
+        return Err(CronRegistryError::Invalid(
+            "state.lastError is required when state.lastStatus=error".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn estimate_next_run_at_ms(schedule: &CronSchedule, now: u64) -> Option<u64> {
+    match schedule {
+        CronSchedule::At { .. } => Some(now),
+        CronSchedule::Every {
+            every_ms,
+            anchor_ms,
+        } => {
+            let every_ms = *every_ms;
+            let anchor = anchor_ms.unwrap_or(now);
+            if anchor >= now {
+                return Some(anchor);
+            }
+            let elapsed = now.saturating_sub(anchor);
+            let periods = elapsed / every_ms + 1;
+            Some(anchor.saturating_add(periods.saturating_mul(every_ms)))
+        }
+        CronSchedule::Cron { .. } => None,
+    }
+}
+
+fn next_cron_job_id() -> String {
+    let sequence = CRON_ID_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    format!("cron-{sequence:08x}-{}", now_ms())
 }
 
 fn channel_label(id: &str) -> String {
@@ -7635,5 +8852,308 @@ mod tests {
             }
             _ => panic!("expected agents.list handled after delete"),
         }
+    }
+
+    #[tokio::test]
+    async fn dispatcher_cron_methods_manage_jobs_and_runs() {
+        let dispatcher = RpcDispatcher::new();
+
+        let invalid_list = RpcRequestFrame {
+            id: "req-cron-list-invalid".to_owned(),
+            method: "cron.list".to_owned(),
+            params: serde_json::json!({
+                "extra": true
+            }),
+        };
+        let out = dispatcher.handle_request(&invalid_list).await;
+        assert!(matches!(out, RpcDispatchOutcome::Error { code: 400, .. }));
+
+        let add = RpcRequestFrame {
+            id: "req-cron-add".to_owned(),
+            method: "cron.add".to_owned(),
+            params: serde_json::json!({
+                "name": "Ops Reminder",
+                "enabled": true,
+                "schedule": {
+                    "kind": "every",
+                    "everyMs": 60_000
+                },
+                "sessionTarget": "isolated",
+                "wakeMode": "next-heartbeat",
+                "payload": {
+                    "kind": "agentTurn",
+                    "message": "run periodic check",
+                    "deliver": true,
+                    "channel": "telegram",
+                    "to": "42",
+                    "bestEffortDeliver": true
+                }
+            }),
+        };
+        let job_id = match dispatcher.handle_request(&add).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                let id = payload
+                    .pointer("/id")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToOwned::to_owned)
+                    .expect("cron job id");
+                assert_eq!(
+                    payload
+                        .pointer("/delivery/mode")
+                        .and_then(serde_json::Value::as_str),
+                    Some("announce")
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/delivery/channel")
+                        .and_then(serde_json::Value::as_str),
+                    Some("telegram")
+                );
+                id
+            }
+            _ => panic!("expected cron.add handled"),
+        };
+
+        let status = RpcRequestFrame {
+            id: "req-cron-status".to_owned(),
+            method: "cron.status".to_owned(),
+            params: serde_json::json!({}),
+        };
+        match dispatcher.handle_request(&status).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload
+                        .pointer("/enabled")
+                        .and_then(serde_json::Value::as_bool),
+                    Some(true)
+                );
+                assert_eq!(
+                    payload.pointer("/jobs").and_then(serde_json::Value::as_u64),
+                    Some(1)
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/storePath")
+                        .and_then(serde_json::Value::as_str),
+                    Some(super::CRON_STORE_PATH)
+                );
+            }
+            _ => panic!("expected cron.status handled"),
+        }
+
+        let update = RpcRequestFrame {
+            id: "req-cron-update".to_owned(),
+            method: "cron.update".to_owned(),
+            params: serde_json::json!({
+                "jobId": job_id.clone(),
+                "patch": {
+                    "enabled": false,
+                    "payload": {
+                        "model": "anthropic/claude-sonnet-4-5"
+                    }
+                }
+            }),
+        };
+        let out = dispatcher.handle_request(&update).await;
+        assert!(matches!(out, RpcDispatchOutcome::Handled(_)));
+
+        let run_disabled = RpcRequestFrame {
+            id: "req-cron-run-disabled".to_owned(),
+            method: "cron.run".to_owned(),
+            params: serde_json::json!({
+                "id": job_id.clone(),
+                "mode": "due"
+            }),
+        };
+        match dispatcher.handle_request(&run_disabled).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload
+                        .pointer("/status")
+                        .and_then(serde_json::Value::as_str),
+                    Some("skipped")
+                );
+            }
+            _ => panic!("expected cron.run handled for disabled job"),
+        }
+
+        let enable = RpcRequestFrame {
+            id: "req-cron-enable".to_owned(),
+            method: "cron.update".to_owned(),
+            params: serde_json::json!({
+                "id": job_id.clone(),
+                "patch": {
+                    "enabled": true
+                }
+            }),
+        };
+        let out = dispatcher.handle_request(&enable).await;
+        assert!(matches!(out, RpcDispatchOutcome::Handled(_)));
+
+        let run = RpcRequestFrame {
+            id: "req-cron-run".to_owned(),
+            method: "cron.run".to_owned(),
+            params: serde_json::json!({
+                "id": job_id.clone(),
+                "mode": "force"
+            }),
+        };
+        match dispatcher.handle_request(&run).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload
+                        .pointer("/status")
+                        .and_then(serde_json::Value::as_str),
+                    Some("ok")
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/action")
+                        .and_then(serde_json::Value::as_str),
+                    Some("finished")
+                );
+            }
+            _ => panic!("expected cron.run handled"),
+        }
+
+        let runs = RpcRequestFrame {
+            id: "req-cron-runs".to_owned(),
+            method: "cron.runs".to_owned(),
+            params: serde_json::json!({
+                "id": job_id.clone(),
+                "limit": 50
+            }),
+        };
+        match dispatcher.handle_request(&runs).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                let entries = payload
+                    .pointer("/entries")
+                    .and_then(serde_json::Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                assert!(!entries.is_empty());
+                assert_eq!(
+                    entries
+                        .last()
+                        .and_then(|entry| entry.pointer("/jobId"))
+                        .and_then(serde_json::Value::as_str),
+                    Some(job_id.as_str())
+                );
+            }
+            _ => panic!("expected cron.runs handled"),
+        }
+
+        let remove = RpcRequestFrame {
+            id: "req-cron-remove".to_owned(),
+            method: "cron.remove".to_owned(),
+            params: serde_json::json!({
+                "id": job_id.clone()
+            }),
+        };
+        match dispatcher.handle_request(&remove).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload.pointer("/ok").and_then(serde_json::Value::as_bool),
+                    Some(true)
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/removed")
+                        .and_then(serde_json::Value::as_bool),
+                    Some(true)
+                );
+            }
+            _ => panic!("expected cron.remove handled"),
+        }
+
+        let list_after_remove = RpcRequestFrame {
+            id: "req-cron-list-after-remove".to_owned(),
+            method: "cron.list".to_owned(),
+            params: serde_json::json!({
+                "includeDisabled": true
+            }),
+        };
+        match dispatcher.handle_request(&list_after_remove).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                let jobs = payload
+                    .pointer("/jobs")
+                    .and_then(serde_json::Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                assert!(jobs.is_empty());
+            }
+            _ => panic!("expected cron.list handled"),
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatcher_cron_update_rejects_payload_kind_change_and_invalid_webhook() {
+        let dispatcher = RpcDispatcher::new();
+
+        let add = RpcRequestFrame {
+            id: "req-cron-kind-add".to_owned(),
+            method: "cron.add".to_owned(),
+            params: serde_json::json!({
+                "name": "System Event Job",
+                "schedule": {
+                    "kind": "every",
+                    "everyMs": 30_000
+                },
+                "sessionTarget": "main",
+                "wakeMode": "next-heartbeat",
+                "payload": {
+                    "kind": "systemEvent",
+                    "text": "hello"
+                }
+            }),
+        };
+        let job_id = match dispatcher.handle_request(&add).await {
+            RpcDispatchOutcome::Handled(payload) => payload
+                .pointer("/id")
+                .and_then(serde_json::Value::as_str)
+                .map(ToOwned::to_owned)
+                .expect("cron id"),
+            _ => panic!("expected cron.add handled"),
+        };
+
+        let kind_change = RpcRequestFrame {
+            id: "req-cron-kind-update".to_owned(),
+            method: "cron.update".to_owned(),
+            params: serde_json::json!({
+                "id": job_id.clone(),
+                "patch": {
+                    "payload": {
+                        "kind": "agentTurn",
+                        "message": "not allowed"
+                    }
+                }
+            }),
+        };
+        let out = dispatcher.handle_request(&kind_change).await;
+        assert!(matches!(out, RpcDispatchOutcome::Error { code: 400, .. }));
+
+        let invalid_webhook = RpcRequestFrame {
+            id: "req-cron-webhook-invalid".to_owned(),
+            method: "cron.add".to_owned(),
+            params: serde_json::json!({
+                "name": "Invalid webhook",
+                "schedule": {
+                    "kind": "every",
+                    "everyMs": 60_000
+                },
+                "sessionTarget": "main",
+                "wakeMode": "next-heartbeat",
+                "payload": {
+                    "kind": "systemEvent",
+                    "text": "x"
+                },
+                "delivery": {
+                    "mode": "webhook",
+                    "to": "ftp://example.invalid"
+                }
+            }),
+        };
+        let out = dispatcher.handle_request(&invalid_webhook).await;
+        assert!(matches!(out, RpcDispatchOutcome::Error { code: 400, .. }));
     }
 }
