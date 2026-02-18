@@ -31,7 +31,7 @@ export async function configureZaiMcpTools(
   let config: ZaiMcpToolsConfig = { mcpServers: {} };
   try {
     const existing = await fs.readFile(configPath, "utf-8");
-    config = JSON.parse(existing);
+    config = { mcpServers: {}, ...JSON.parse(existing) };
   } catch {
     // File doesn't exist, create new config
   }
