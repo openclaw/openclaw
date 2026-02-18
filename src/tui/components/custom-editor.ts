@@ -32,6 +32,11 @@ export class CustomEditor extends Editor {
           !unescaped.includes("\n")
         ) {
           if (this.onPastedImagePath(unescaped)) {
+            // Pass through any data before the paste start marker
+            const before = data.substring(0, startIdx);
+            if (before.length > 0) {
+              super.handleInput(before);
+            }
             // Pass through any data after the paste end marker
             const remaining = data.substring(endIdx + endMarker.length);
             if (remaining.length > 0) {
