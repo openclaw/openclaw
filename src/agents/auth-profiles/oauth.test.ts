@@ -104,3 +104,53 @@ describe("resolveApiKeyForProfile config compatibility", () => {
     expect(result).toBeNull();
   });
 });
+
+describe("resolveApiKeyForProfile token expiry handling", () => {
+  it("returns null for expired token credentials", async () => {
+    const profileId = "anthropic:token-expired";
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        [profileId]: {
+          type: "token",
+          provider: "anthropic",
+          token: "tok-expired",
+          expires: Date.now() - 1_000,
+        },
+      },
+    };
+
+    const result = await resolveApiKeyForProfile({
+      cfg: cfgFor(profileId, "anthropic", "token"),
+      store,
+      profileId,
+    });
+    expect(result).toBeNull();
+  });
+
+  it("accepts token credentials when expires is 0", async () => {
+    const profileId = "anthropic:token-no-expiry";
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        [profileId]: {
+          type: "token",
+          provider: "anthropic",
+          token: "tok-123",
+          expires: 0,
+        },
+      },
+    };
+
+    const result = await resolveApiKeyForProfile({
+      cfg: cfgFor(profileId, "anthropic", "token"),
+      store,
+      profileId,
+    });
+    expect(result).toEqual({
+      apiKey: "tok-123",
+      provider: "anthropic",
+      email: undefined,
+    });
+  });
+});
