@@ -230,6 +230,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "session.dmScope": "DM Session Scope",
   "session.agentToAgent.maxPingPongTurns": "Agent-to-Agent Ping-Pong Turns",
   "messages.suppressToolErrors": "Suppress Tool Error Warnings",
+  "messages.suppressToolErrorWarnings": "Suppress All Tool Error Warnings (Including Mutating)",
   "messages.ackReaction": "Ack Reaction Emoji",
   "messages.ackReactionScope": "Ack Reaction Scope",
   "messages.inbound.debounceMs": "Inbound Message Debounce (ms)",

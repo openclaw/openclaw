@@ -252,10 +252,12 @@ export function buildEmbeddedRunPayloads(params: {
       lastToolError: params.lastToolError,
       hasUserFacingReply: hasUserFacingAssistantReply,
       suppressToolErrors: Boolean(params.config?.messages?.suppressToolErrors),
-      suppressToolErrorWarnings: params.suppressToolErrorWarnings,
+      suppressToolErrorWarnings:
+        params.suppressToolErrorWarnings ??
+        Boolean(params.config?.messages?.suppressToolErrorWarnings),
     });
 
-    // Always surface mutating tool failures so we do not silently confirm actions that did not happen.
+    // Surface mutating tool failures unless suppressToolErrorWarnings is enabled.
     // Otherwise, keep the previous behavior and only surface non-recoverable failures when no reply exists.
     if (shouldShowToolError) {
       const toolSummary = formatToolAggregate(
