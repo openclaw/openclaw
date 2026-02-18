@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 export type SentMessageLookup = {
   text?: string;
   messageId?: string;
@@ -10,10 +12,14 @@ export type SentMessageCache = {
 
 /**
  * Bounded set of recently sent messages used for echo detection.
- * No TTL so delayed reflections (e.g. after slow LLM reply) still match.
- * Same API as before: remember(scope, lookup), has(scope, lookup).
+ * Uses SHA-256 for text keys so storage is fixed-size; no TTL so delayed
+ * reflections (e.g. after slow LLM reply) still match.
  */
 const MAX_ENTRIES = 200;
+
+function sha256Hex(input: string): string {
+  return createHash("sha256").update(input, "utf8").digest("hex");
+}
 
 function normalizeEchoTextKey(text: string | undefined): string | null {
   if (!text) {
@@ -45,9 +51,10 @@ class DefaultSentMessageCache implements SentMessageCache {
   remember(scope: string, lookup: SentMessageLookup): void {
     const textKey = normalizeEchoTextKey(lookup.text);
     if (textKey) {
-      const storeKey = this.toStoreKey(scope, "text", textKey);
+      const hashed = sha256Hex(textKey);
+      const storeKey = this.toStoreKey(scope, "text", hashed);
       if (!this.index.has(storeKey)) {
-        this.entries.push({ scope, kind: "text", key: textKey });
+        this.entries.push({ scope, kind: "text", key: hashed });
         this.index.add(storeKey);
         this.evict();
       }
@@ -73,11 +80,12 @@ class DefaultSentMessageCache implements SentMessageCache {
     }
     const textKey = normalizeEchoTextKey(lookup.text);
     if (textKey) {
-      const storeKey = this.toStoreKey(scope, "text", textKey);
+      const hashed = sha256Hex(textKey);
+      const storeKey = this.toStoreKey(scope, "text", hashed);
       if (this.index.has(storeKey)) {
         this.index.delete(storeKey);
         const idx = this.entries.findIndex(
-          (e) => e.scope === scope && e.kind === "text" && e.key === textKey,
+          (e) => e.scope === scope && e.kind === "text" && e.key === hashed,
         );
         if (idx >= 0) {
           this.entries.splice(idx, 1);
