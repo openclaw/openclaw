@@ -141,6 +141,18 @@ function coerceRequest(val: unknown): OpenAiChatCompletionRequest {
   return val as OpenAiChatCompletionRequest;
 }
 
+function resolveAgentResponseText(result: unknown): string {
+  const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
+  if (!Array.isArray(payloads) || payloads.length === 0) {
+    return "No response from OpenClaw.";
+  }
+  const content = payloads
+    .map((p) => (typeof p.text === "string" ? p.text : ""))
+    .filter(Boolean)
+    .join("\n\n");
+  return content || "No response from OpenClaw.";
+}
+
 export async function handleOpenAiHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -197,14 +209,7 @@ export async function handleOpenAiHttpRequest(
         deps,
       );
 
-      const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
-      const content =
-        Array.isArray(payloads) && payloads.length > 0
-          ? payloads
-              .map((p) => (typeof p.text === "string" ? p.text : ""))
-              .filter(Boolean)
-              .join("\n\n")
-          : "No response from OpenClaw.";
+      const content = resolveAgentResponseText(result);
 
       sendJson(res, 200, {
         id: runId,
@@ -325,14 +330,7 @@ export async function handleOpenAiHttpRequest(
           });
         }
 
-        const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
-        const content =
-          Array.isArray(payloads) && payloads.length > 0
-            ? payloads
-                .map((p) => (typeof p.text === "string" ? p.text : ""))
-                .filter(Boolean)
-                .join("\n\n")
-            : "No response from OpenClaw.";
+        const content = resolveAgentResponseText(result);
 
         sawAssistantDelta = true;
         writeSse(res, {
