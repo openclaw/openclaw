@@ -556,6 +556,7 @@ export async function runEmbeddedAttempt(
         modelId: params.modelId,
         model: params.model,
         sessionKey: params.sessionKey,
+        sessionId: params.sessionId,
         sessionFile: params.sessionFile,
       });
       const contextDecayConfig = extensionResult.contextDecayConfig;
@@ -791,6 +792,7 @@ export async function runEmbeddedAttempt(
         enforceFinalTag: params.enforceFinalTag,
         config: params.config,
         sessionKey: params.sessionKey ?? params.sessionId,
+        lifecycleEmitter: extensionResult.lifecycleEmitter,
       });
 
       const {

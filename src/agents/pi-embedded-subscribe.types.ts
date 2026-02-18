@@ -2,6 +2,7 @@ import type { AgentSession } from "@mariozechner/pi-coding-agent";
 import type { ReasoningLevel, VerboseLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookRunner } from "../plugins/hooks.js";
+import type { ContextLifecycleEmitter } from "./context-lifecycle/emitter.js";
 import type { BlockReplyChunking } from "./pi-embedded-block-chunker.js";
 
 export type ToolResultFormat = "markdown" | "plain";
@@ -37,6 +38,7 @@ export type SubscribeEmbeddedPiSessionParams = {
   enforceFinalTag?: boolean;
   config?: OpenClawConfig;
   sessionKey?: string;
+  lifecycleEmitter?: ContextLifecycleEmitter;
 };
 
 export type { BlockReplyChunking } from "./pi-embedded-block-chunker.js";

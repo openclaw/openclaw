@@ -1,6 +1,20 @@
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ContextEvent, ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { applyContextDecay } from "./decay.js";
+import { estimateTokens } from "@mariozechner/pi-coding-agent";
+import { applyContextDecay, createEmptyDecayStats, type DecayStats } from "./decay.js";
 import { getContextDecayRuntime } from "./runtime.js";
+
+function sumEstimateTokens(messages: AgentMessage[]): number {
+  let total = 0;
+  for (const msg of messages) {
+    try {
+      total += estimateTokens(msg);
+    } catch {
+      // estimateTokens can fail on malformed messages — skip
+    }
+  }
+  return total;
+}
 
 /**
  * Pi extension that applies graduated context decay before each LLM call.
@@ -9,11 +23,18 @@ import { getContextDecayRuntime } from "./runtime.js";
  * enforce a hard message cap.
  */
 export default function contextDecayExtension(api: ExtensionAPI): void {
+  let turnCounter = 0;
+
   api.on("context", (event: ContextEvent, ctx: ExtensionContext) => {
     const runtime = getContextDecayRuntime(ctx.sessionManager);
     if (!runtime) {
       return undefined;
     }
+
+    turnCounter++;
+
+    const emitter = runtime.lifecycleEmitter;
+    const stats: DecayStats | undefined = emitter ? createEmptyDecayStats() : undefined;
 
     const next = applyContextDecay({
       messages: event.messages,
@@ -21,7 +42,21 @@ export default function contextDecayExtension(api: ExtensionAPI): void {
       summaryStore: runtime.summaryStore,
       groupSummaryStore: runtime.groupSummaryStore,
       swappedFileStore: runtime.swappedFileStore,
+      stats,
     });
+
+    if (next !== event.messages && emitter && stats) {
+      const beforeTokens = sumEstimateTokens(event.messages);
+      const afterTokens = sumEstimateTokens(next);
+      emitter.emit({
+        turn: turnCounter,
+        rule: "decay:pass",
+        beforeTokens,
+        afterTokens,
+        freedTokens: beforeTokens - afterTokens,
+        details: { ...stats },
+      });
+    }
 
     if (next === event.messages) {
       return undefined;

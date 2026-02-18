@@ -4,6 +4,24 @@ import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { EffectiveContextPruningSettings } from "./settings.js";
 import { makeToolPrunablePredicate } from "./tools.js";
 
+export interface PruneStats {
+  totalCharsBefore: number;
+  totalCharsAfter: number;
+  charRatio: number;
+  softTrimCount: number;
+  hardClearCount: number;
+}
+
+export function createEmptyPruneStats(): PruneStats {
+  return {
+    totalCharsBefore: 0,
+    totalCharsAfter: 0,
+    charRatio: 0,
+    softTrimCount: 0,
+    hardClearCount: 0,
+  };
+}
+
 const CHARS_PER_TOKEN_ESTIMATE = 4;
 // We currently skip pruning tool results that contain images. Still, we count them (approx.) so
 // we start trimming prunable tool results earlier when image-heavy context is consuming the window.
@@ -228,6 +246,7 @@ export function pruneContextMessages(params: {
   ctx: Pick<ExtensionContext, "model">;
   isToolPrunable?: (toolName: string) => boolean;
   contextWindowTokensOverride?: number;
+  stats?: PruneStats;
 }): AgentMessage[] {
   const { messages, settings, ctx } = params;
   const contextWindowTokens =
@@ -262,6 +281,11 @@ export function pruneContextMessages(params: {
   let totalChars = totalCharsBefore;
   let ratio = totalChars / charWindow;
   if (ratio < settings.softTrimRatio) {
+    if (params.stats) {
+      params.stats.totalCharsBefore = totalCharsBefore;
+      params.stats.totalCharsAfter = totalChars;
+      params.stats.charRatio = ratio;
+    }
     return messages;
   }
 
@@ -292,6 +316,9 @@ export function pruneContextMessages(params: {
     const beforeChars = estimateMessageChars(msg);
     const afterChars = estimateMessageChars(updated as unknown as AgentMessage);
     totalChars += afterChars - beforeChars;
+    if (params.stats) {
+      params.stats.softTrimCount++;
+    }
     if (!next) {
       next = messages.slice();
     }
@@ -300,10 +327,21 @@ export function pruneContextMessages(params: {
 
   const outputAfterSoftTrim = next ?? messages;
   ratio = totalChars / charWindow;
+
+  const populateStats = () => {
+    if (params.stats) {
+      params.stats.totalCharsBefore = totalCharsBefore;
+      params.stats.totalCharsAfter = totalChars;
+      params.stats.charRatio = ratio;
+    }
+  };
+
   if (ratio < settings.hardClearRatio) {
+    populateStats();
     return outputAfterSoftTrim;
   }
   if (!settings.hardClear.enabled) {
+    populateStats();
     return outputAfterSoftTrim;
   }
 
@@ -316,6 +354,7 @@ export function pruneContextMessages(params: {
     prunableToolChars += estimateMessageChars(msg);
   }
   if (prunableToolChars < settings.minPrunableToolChars) {
+    populateStats();
     return outputAfterSoftTrim;
   }
 
@@ -339,8 +378,13 @@ export function pruneContextMessages(params: {
     next[i] = cleared as unknown as AgentMessage;
     const afterChars = estimateMessageChars(cleared as unknown as AgentMessage);
     totalChars += afterChars - beforeChars;
+    if (params.stats) {
+      params.stats.hardClearCount++;
+    }
     ratio = totalChars / charWindow;
   }
 
-  return next ?? messages;
+  const output = next ?? messages;
+  populateStats();
+  return output;
 }

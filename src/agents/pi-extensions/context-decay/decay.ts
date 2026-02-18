@@ -5,6 +5,65 @@ import type { GroupSummaryStore, SummaryStore } from "../../context-decay/summar
 import { computeTurnAges } from "../../context-decay/turn-ages.js";
 import { repairToolUseResultPairing } from "../../session-transcript-repair.js";
 
+export interface DecayStats {
+  thinkingBlocksStripped: number;
+  thinkingCharsFreed: number;
+  toolResultsSummarized: number;
+  summarizeCharsFreed: number;
+  groupSummariesApplied: number;
+  groupCharsFreed: number;
+  toolResultsStripped: number;
+  stripCharsFreed: number;
+  messagesCapped: number;
+  capCharsFreed: number;
+}
+
+export function createEmptyDecayStats(): DecayStats {
+  return {
+    thinkingBlocksStripped: 0,
+    thinkingCharsFreed: 0,
+    toolResultsSummarized: 0,
+    summarizeCharsFreed: 0,
+    groupSummariesApplied: 0,
+    groupCharsFreed: 0,
+    toolResultsStripped: 0,
+    stripCharsFreed: 0,
+    messagesCapped: 0,
+    capCharsFreed: 0,
+  };
+}
+
+export function getMessageContentChars(msg: AgentMessage): number {
+  const content = (msg as unknown as Record<string, unknown>).content;
+  if (typeof content === "string") {
+    return content.length;
+  }
+  if (!Array.isArray(content)) {
+    return 0;
+  }
+  let total = 0;
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const b = block as Record<string, unknown>;
+    if (typeof b.text === "string") {
+      total += b.text.length;
+    }
+    if (typeof b.thinking === "string") {
+      total += b.thinking.length;
+    }
+    if ((b.type === "tool_use" || b.type === "toolCall") && b.input) {
+      try {
+        total += JSON.stringify(b.input).length;
+      } catch {
+        total += 128;
+      }
+    }
+  }
+  return total;
+}
+
 function isEnabled(value: number | undefined | null): value is number {
   return typeof value === "number" && value >= 1;
 }
@@ -26,8 +85,9 @@ export function applyContextDecay(params: {
   summaryStore: SummaryStore;
   groupSummaryStore?: GroupSummaryStore;
   swappedFileStore?: SwappedFileStore;
+  stats?: DecayStats;
 }): AgentMessage[] {
-  const { messages, config, summaryStore, groupSummaryStore, swappedFileStore } = params;
+  const { messages, config, summaryStore, groupSummaryStore, swappedFileStore, stats } = params;
 
   if (messages.length === 0) {
     return messages;
@@ -35,13 +95,23 @@ export function applyContextDecay(params: {
 
   // Check if any decay is actually enabled
   const hasStripThinking = isEnabled(config.stripThinkingAfterTurns);
-  const hasSwap = isEnabled(config.swapToolResultsAfterTurns) && swappedFileStore && Object.keys(swappedFileStore).length > 0;
+  const hasSwap =
+    isEnabled(config.swapToolResultsAfterTurns) &&
+    swappedFileStore &&
+    Object.keys(swappedFileStore).length > 0;
   const hasSummarize = isEnabled(config.summarizeToolResultsAfterTurns);
   const hasGroupSummarize = isEnabled(config.summarizeWindowAfterTurns);
   const hasStrip = isEnabled(config.stripToolResultsAfterTurns);
   const hasMaxMessages = isEnabled(config.maxContextMessages);
 
-  if (!hasStripThinking && !hasSwap && !hasSummarize && !hasGroupSummarize && !hasStrip && !hasMaxMessages) {
+  if (
+    !hasStripThinking &&
+    !hasSwap &&
+    !hasSummarize &&
+    !hasGroupSummarize &&
+    !hasStrip &&
+    !hasMaxMessages
+  ) {
     return messages;
   }
 
@@ -89,7 +159,13 @@ export function applyContextDecay(params: {
           (block: unknown) => (block as Record<string, unknown>)?.type !== "thinking",
         );
         if (filtered.length !== current.content.length) {
+          const charsBefore = stats ? getMessageContentChars(current) : 0;
+          const blocksRemoved = current.content.length - filtered.length;
           current = { ...current, content: filtered };
+          if (stats) {
+            stats.thinkingBlocksStripped += blocksRemoved;
+            stats.thinkingCharsFreed += charsBefore - getMessageContentChars(current);
+          }
           mutated = true;
         }
       }
@@ -102,16 +178,19 @@ export function applyContextDecay(params: {
       !absorbedIndices.has(idx) &&
       current.role === "toolResult" &&
       age >= config.swapToolResultsAfterTurns! &&
-      swappedFileStore![idx]
+      swappedFileStore[idx]
     ) {
       // Only apply swap if not past summarize or strip threshold (those take precedence)
-      const skipForSummarize = hasSummarize && age >= config.summarizeToolResultsAfterTurns! && summaryStore[idx];
+      const skipForSummarize =
+        hasSummarize && age >= config.summarizeToolResultsAfterTurns! && summaryStore[idx];
       const skipForStrip = hasStrip && age >= config.stripToolResultsAfterTurns!;
       if (!skipForSummarize && !skipForStrip) {
-        const entry = swappedFileStore![idx];
+        const entry = swappedFileStore[idx];
         current = {
           ...current,
-          content: [{ type: "text", text: `[Tool result saved to ${entry.filePath}]\n${entry.hint}` }],
+          content: [
+            { type: "text", text: `[Tool result saved to ${entry.filePath}]\n${entry.hint}` },
+          ],
         } as AgentMessage;
         mutated = true;
       }
@@ -120,6 +199,7 @@ export function applyContextDecay(params: {
     // 2. Apply group summaries
     if (anchorIndices.has(idx)) {
       // Anchor message: replace content with group summary
+      const charsBefore = stats ? getMessageContentChars(current) : 0;
       const summaryText = anchorToSummary.get(idx)!;
       if (current.role === "user") {
         current = { ...current, content: summaryText } as AgentMessage;
@@ -129,9 +209,14 @@ export function applyContextDecay(params: {
           content: [{ type: "text", text: summaryText }],
         } as AgentMessage;
       }
+      if (stats) {
+        stats.groupSummariesApplied++;
+        stats.groupCharsFreed += charsBefore - getMessageContentChars(current);
+      }
       mutated = true;
     } else if (absorbedIndices.has(idx)) {
       // Absorbed message: replace with placeholder, preserve structure
+      const charsBefore = stats ? getMessageContentChars(current) : 0;
       if (current.role === "user") {
         current = {
           ...current,
@@ -170,6 +255,9 @@ export function applyContextDecay(params: {
         } as AgentMessage;
         mutated = true;
       }
+      if (stats && mutated) {
+        stats.groupCharsFreed += charsBefore - getMessageContentChars(current);
+      }
     }
 
     // 3. Apply pre-computed individual summaries for old tool results (skip grouped msgs)
@@ -184,11 +272,16 @@ export function applyContextDecay(params: {
       // Only apply summary if we're not past the strip threshold
       const skipSummarize = hasStrip && age >= config.stripToolResultsAfterTurns!;
       if (!skipSummarize) {
+        const charsBefore = stats ? getMessageContentChars(current) : 0;
         const entry = summaryStore[idx];
         current = {
           ...current,
           content: [{ type: "text", text: `[Summarized] ${entry.summary}` }],
         } as AgentMessage;
+        if (stats) {
+          stats.toolResultsSummarized++;
+          stats.summarizeCharsFreed += charsBefore - getMessageContentChars(current);
+        }
         mutated = true;
       }
     }
@@ -197,6 +290,7 @@ export function applyContextDecay(params: {
     if (hasStrip && current.role === "toolResult" && age >= config.stripToolResultsAfterTurns!) {
       // Don't re-strip messages already handled by group summaries
       if (!anchorIndices.has(idx) && !absorbedIndices.has(idx)) {
+        const charsBefore = stats ? getMessageContentChars(current) : 0;
         current = {
           ...current,
           content: [
@@ -206,6 +300,10 @@ export function applyContextDecay(params: {
             },
           ],
         } as AgentMessage;
+        if (stats) {
+          stats.toolResultsStripped++;
+          stats.stripCharsFreed += charsBefore - getMessageContentChars(current);
+        }
         mutated = true;
       }
     }
@@ -219,6 +317,11 @@ export function applyContextDecay(params: {
   // 5. Apply maxContextMessages hard cap
   let truncated = false;
   if (hasMaxMessages && result.length > config.maxContextMessages!) {
+    if (stats) {
+      const dropped = result.slice(0, result.length - config.maxContextMessages!);
+      stats.messagesCapped = dropped.length;
+      stats.capCharsFreed = dropped.reduce((sum, m) => sum + getMessageContentChars(m), 0);
+    }
     result = result.slice(result.length - config.maxContextMessages!);
     changed = true;
     truncated = true;
