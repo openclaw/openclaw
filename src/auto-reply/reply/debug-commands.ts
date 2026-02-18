@@ -1,4 +1,4 @@
-import { parseSlashCommandWithSetUnset } from "./commands-setunset.js";
+import { parseStandardSetUnsetSlashCommand } from "./commands-setunset-standard.js";
 
 export type DebugCommand =
   | { action: "show" }
@@ -8,7 +8,7 @@ export type DebugCommand =
   | { action: "error"; message: string };
 
 export function parseDebugCommand(raw: string): DebugCommand | null {
-  return parseSlashCommandWithSetUnset<DebugCommand>({
+  return parseStandardSetUnsetSlashCommand<DebugCommand>({
     raw,
     slash: "/debug",
     invalidMessage: "Invalid /debug syntax.",
@@ -22,8 +22,5 @@ export function parseDebugCommand(raw: string): DebugCommand | null {
       }
       return undefined;
     },
-    onSet: (path, value) => ({ action: "set", path, value }),
-    onUnset: (path) => ({ action: "unset", path }),
-    onError: (message) => ({ action: "error", message }),
   });
 }
