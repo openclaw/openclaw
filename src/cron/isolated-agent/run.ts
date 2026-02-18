@@ -41,7 +41,7 @@ import {
 } from "../../auto-reply/thinking.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
 import { resolveSessionTranscriptPath, updateSessionStore } from "../../config/sessions.js";
-import { registerAgentRunContext } from "../../infra/agent-events.js";
+import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-events.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { logWarn } from "../../logger.js";
@@ -394,6 +394,8 @@ export async function runCronIsolatedAgentTurn(params: {
     fallbackProvider = fallbackResult.provider;
     fallbackModel = fallbackResult.model;
   } catch (err) {
+    // Clean up agent run context before returning error
+    clearAgentRunContext(cronSession.sessionEntry.sessionId);
     return { status: "error", error: String(err) };
   }
 
@@ -460,6 +462,7 @@ export async function runCronIsolatedAgentTurn(params: {
         };
       }
       logWarn(`[cron:${params.job.id}] ${resolvedDelivery.error.message}`);
+      clearAgentRunContext(cronSession.sessionEntry.sessionId);
       return { status: "ok", summary, outputText };
     }
     if (!resolvedDelivery.to) {
@@ -473,6 +476,7 @@ export async function runCronIsolatedAgentTurn(params: {
         };
       }
       logWarn(`[cron:${params.job.id}] ${message}`);
+      clearAgentRunContext(cronSession.sessionEntry.sessionId);
       return { status: "ok", summary, outputText };
     }
     try {
@@ -488,10 +492,12 @@ export async function runCronIsolatedAgentTurn(params: {
       });
     } catch (err) {
       if (!deliveryBestEffort) {
+        clearAgentRunContext(cronSession.sessionEntry.sessionId);
         return { status: "error", summary, outputText, error: String(err) };
       }
     }
   }
 
+  clearAgentRunContext(cronSession.sessionEntry.sessionId);
   return { status: "ok", summary, outputText };
 }
