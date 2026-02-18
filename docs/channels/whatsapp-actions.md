@@ -230,12 +230,14 @@ OPENCLAW_VERBOSE=1 openclaw gateway run
 
 ## Limitations
 
-1. **History Requires syncFullHistory**: The `read` action only returns messages in the store. Enable `syncFullHistory: true` to populate the store with historical messages at startup.
+1. **History Sync Limitations**: The `read` action only returns messages in the store. `syncFullHistory: true` syncs recently active chats at startup, but may not include all historical messages from all chats. New messages are always stored as they arrive.
 2. **Memory-Only Storage**: Message store is cleared on restart
 3. **Limited Capacity**: Maximum 1000 messages across all chats
 4. **24-Hour Retention**: Older messages are automatically purged
 5. **No Persistence**: Messages are not saved to disk
 6. **Sync Timing**: `syncFullHistory` only syncs once at connection time, not on-demand
+
+**Workaround for Historical Messages**: If a chat has no messages in the store, send a new message to that chat to make it "active", which may trigger Baileys to sync recent history for that chat.
 
 ## Future Enhancements
 
