@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 """Tests for package_skill.py symlink and path traversal protections."""
 
-import os
 import sys
-import tempfile
 import zipfile
 from pathlib import Path
 from unittest.mock import patch

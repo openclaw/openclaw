@@ -1,6 +1,5 @@
 """Tests for write_gallery HTML escaping (fixes #12538 – Stored XSS)."""
 
-import json
 import tempfile
 from pathlib import Path
 
