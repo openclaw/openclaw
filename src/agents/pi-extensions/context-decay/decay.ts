@@ -5,6 +5,9 @@ import type { GroupSummaryStore, SummaryStore } from "../../context-decay/summar
 import { computeTurnAges } from "../../context-decay/turn-ages.js";
 import { repairToolUseResultPairing } from "../../session-transcript-repair.js";
 
+/** Heuristic fallback length for non-serializable tool inputs (e.g. circular refs). */
+const FALLBACK_TOOL_INPUT_CHARS = 128;
+
 export interface DecayStats {
   thinkingBlocksStripped: number;
   thinkingCharsFreed: number;
@@ -57,7 +60,7 @@ export function getMessageContentChars(msg: AgentMessage): number {
       try {
         total += JSON.stringify(b.input).length;
       } catch {
-        total += 128;
+        total += FALLBACK_TOOL_INPUT_CHARS;
       }
     }
   }
@@ -164,7 +167,7 @@ export function applyContextDecay(params: {
           current = { ...current, content: filtered };
           if (stats) {
             stats.thinkingBlocksStripped += blocksRemoved;
-            stats.thinkingCharsFreed += charsBefore - getMessageContentChars(current);
+            stats.thinkingCharsFreed += Math.max(0, charsBefore - getMessageContentChars(current));
           }
           mutated = true;
         }
@@ -211,7 +214,7 @@ export function applyContextDecay(params: {
       }
       if (stats) {
         stats.groupSummariesApplied++;
-        stats.groupCharsFreed += charsBefore - getMessageContentChars(current);
+        stats.groupCharsFreed += Math.max(0, charsBefore - getMessageContentChars(current));
       }
       mutated = true;
     } else if (absorbedIndices.has(idx)) {
@@ -256,7 +259,7 @@ export function applyContextDecay(params: {
         mutated = true;
       }
       if (stats && mutated) {
-        stats.groupCharsFreed += charsBefore - getMessageContentChars(current);
+        stats.groupCharsFreed += Math.max(0, charsBefore - getMessageContentChars(current));
       }
     }
 
@@ -280,7 +283,7 @@ export function applyContextDecay(params: {
         } as AgentMessage;
         if (stats) {
           stats.toolResultsSummarized++;
-          stats.summarizeCharsFreed += charsBefore - getMessageContentChars(current);
+          stats.summarizeCharsFreed += Math.max(0, charsBefore - getMessageContentChars(current));
         }
         mutated = true;
       }
@@ -302,7 +305,7 @@ export function applyContextDecay(params: {
         } as AgentMessage;
         if (stats) {
           stats.toolResultsStripped++;
-          stats.stripCharsFreed += charsBefore - getMessageContentChars(current);
+          stats.stripCharsFreed += Math.max(0, charsBefore - getMessageContentChars(current));
         }
         mutated = true;
       }

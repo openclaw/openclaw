@@ -701,16 +701,20 @@ export async function compactEmbeddedPiSessionDirect(
           );
         }
         if (lifecycleEmitter) {
-          const beforeTokens = result.tokensBefore;
-          lifecycleEmitter.emit({
-            turn: 0,
-            rule: "compact:compaction",
-            beforeTokens,
-            afterTokens: tokensAfter ?? beforeTokens,
-            freedTokens: tokensAfter != null ? Math.max(0, beforeTokens - tokensAfter) : 0,
-            details: { trigger, diagId, manual: true },
-          });
-          void lifecycleEmitter.dispose();
+          try {
+            const beforeTokens = result.tokensBefore;
+            lifecycleEmitter.emit({
+              turn: 0,
+              rule: "compact:compaction",
+              beforeTokens,
+              afterTokens: tokensAfter ?? beforeTokens,
+              freedTokens: tokensAfter != null ? Math.max(0, beforeTokens - tokensAfter) : 0,
+              details: { trigger, diagId, manual: true },
+            });
+            void lifecycleEmitter.dispose();
+          } catch (err) {
+            log.warn(`lifecycle emit failed: ${String(err)}`);
+          }
         }
         return {
           ok: true,

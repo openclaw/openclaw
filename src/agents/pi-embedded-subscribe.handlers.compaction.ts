@@ -4,6 +4,7 @@ import { emitAgentEvent } from "../infra/agent-events.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 
 // Rough heuristic: average English text runs ~4 characters per token.
+// Heuristic for rough telemetry: ~4 chars per token across common models.
 const CHARS_PER_TOKEN_ESTIMATE = 4;
 
 /**

@@ -1,12 +1,12 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { describe, expect, it } from "vitest";
 import type { ContextDecayConfig } from "../../config/types.agent-defaults.js";
-import type { GroupSummaryStore, SummaryStore } from "./summary-store.js";
 import {
   findEligibleWindows,
   buildGroupSummarizationPrompt,
   type TurnWindow,
 } from "./group-summarizer.js";
+import type { GroupSummaryStore, SummaryStore } from "./summary-store.js";
 import { computeTurnAges } from "./turn-ages.js";
 
 // ---------------------------------------------------------------------------
@@ -27,7 +27,7 @@ function makeAssistant(text: string): AgentMessage {
     usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, total: 2 },
     stopReason: "stop",
     timestamp: Date.now(),
-  } as AgentMessage;
+  } as unknown as AgentMessage;
 }
 
 function makeAssistantWithToolUse(toolCallId: string, toolName: string): AgentMessage {
@@ -40,10 +40,18 @@ function makeAssistantWithToolUse(toolCallId: string, toolName: string): AgentMe
     api: "anthropic-messages",
     provider: "anthropic",
     model: "fake",
-    usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, total: 2 },
-    stopReason: "tool_use",
+    usage: {
+      input: 1,
+      output: 1,
+      cacheRead: 0,
+      cacheWrite: 0,
+      total: 2,
+      totalTokens: 2,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "toolUse",
     timestamp: Date.now(),
-  } as AgentMessage;
+  } as unknown as AgentMessage;
 }
 
 function makeToolResult(toolCallId: string, toolName: string, text: string): AgentMessage {

@@ -93,6 +93,7 @@ function resolveLifecycleEmitter(params: {
     return undefined;
   }
   const fileTemplate = logCfg.filePath ?? "logs/context-lifecycle.jsonl";
+  // Sanitize sessionKey: basename strips traversal, regexes remove separators and dot sequences.
   const safeSessionKey = path
     .basename(params.sessionKey)
     .replace(/[\\/:]/g, "_")

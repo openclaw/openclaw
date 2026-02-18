@@ -13,7 +13,7 @@ function makeUser(text: string): AgentMessage {
 }
 
 function makeAssistant(text: string, withThinking = false): AgentMessage {
-  const content: Array<Record<string, unknown>> = [];
+  const content: Array<{ type: string; [key: string]: unknown }> = [];
   if (withThinking) {
     content.push({ type: "thinking", thinking: "internal reasoning..." });
   }
@@ -24,10 +24,18 @@ function makeAssistant(text: string, withThinking = false): AgentMessage {
     api: "anthropic-messages",
     provider: "anthropic",
     model: "fake",
-    usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, total: 2 },
+    usage: {
+      input: 1,
+      output: 1,
+      cacheRead: 0,
+      cacheWrite: 0,
+      total: 2,
+      totalTokens: 2,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
     stopReason: "stop",
     timestamp: Date.now(),
-  } as AgentMessage;
+  } as unknown as AgentMessage;
 }
 
 function makeAssistantWithToolUse(toolCallId: string, toolName: string): AgentMessage {
@@ -40,10 +48,18 @@ function makeAssistantWithToolUse(toolCallId: string, toolName: string): AgentMe
     api: "anthropic-messages",
     provider: "anthropic",
     model: "fake",
-    usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, total: 2 },
-    stopReason: "tool_use",
+    usage: {
+      input: 1,
+      output: 1,
+      cacheRead: 0,
+      cacheWrite: 0,
+      total: 2,
+      totalTokens: 2,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "toolUse",
     timestamp: Date.now(),
-  } as AgentMessage;
+  } as unknown as AgentMessage;
 }
 
 function makeToolResult(toolCallId: string, toolName: string, text: string): AgentMessage {
@@ -58,11 +74,12 @@ function makeToolResult(toolCallId: string, toolName: string, text: string): Age
 }
 
 function getContentText(msg: AgentMessage): string {
-  if (typeof msg.content === "string") {
-    return msg.content;
+  const content = "content" in msg ? msg.content : undefined;
+  if (typeof content === "string") {
+    return content;
   }
-  if (Array.isArray(msg.content)) {
-    return (msg.content as Array<Record<string, unknown>>)
+  if (Array.isArray(content)) {
+    return (content as unknown as Array<Record<string, unknown>>)
       .filter((b) => b.type === "text")
       .map((b) => b.text as string)
       .join("\n");
@@ -71,10 +88,11 @@ function getContentText(msg: AgentMessage): string {
 }
 
 function hasThinkingBlock(msg: AgentMessage): boolean {
-  if (!Array.isArray(msg.content)) {
+  const content = "content" in msg ? msg.content : undefined;
+  if (!Array.isArray(content)) {
     return false;
   }
-  return (msg.content as Array<Record<string, unknown>>).some((b) => b.type === "thinking");
+  return (content as unknown as Array<Record<string, unknown>>).some((b) => b.type === "thinking");
 }
 
 // ---------------------------------------------------------------------------
@@ -346,7 +364,7 @@ describe("applyContextDecay", () => {
           if (m.role !== "assistant" || !Array.isArray(m.content)) {
             return false;
           }
-          return (m.content as Array<Record<string, unknown>>).some(
+          return (m.content as unknown as Array<Record<string, unknown>>).some(
             (b) => b.type === "tool_use" && b.id === trMsg.toolCallId,
           );
         });
@@ -462,7 +480,8 @@ describe("applyContextDecay", () => {
       });
 
       // Absorbed assistant should still have tool_use block for pairing
-      const assistantContent = result[1].content as Array<Record<string, unknown>>;
+      const assistantContent = (result[1] as unknown as { content: Array<Record<string, unknown>> })
+        .content;
       const toolUseBlocks = assistantContent.filter((b) => b.type === "tool_use");
       expect(toolUseBlocks).toHaveLength(1);
       expect(toolUseBlocks[0].id).toBe("call_1");
