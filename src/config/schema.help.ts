@@ -117,6 +117,8 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.web.fetch.firecrawl.maxAgeMs":
     "Firecrawl maxAge (ms) for cached results when supported by the API.",
   "tools.web.fetch.firecrawl.timeoutSeconds": "Timeout in seconds for Firecrawl requests.",
+  "tools.web.fetch.firecrawl.proxy":
+    'Firecrawl proxy mode ("auto", "basic", or "stealth"). Use "stealth" for sites with aggressive bot detection like Upwork or LinkedIn. Default: "auto".',
   "channels.slack.allowBots":
     "Allow bot-authored messages to trigger Slack replies (default: false).",
   "channels.slack.thread.historyScope":

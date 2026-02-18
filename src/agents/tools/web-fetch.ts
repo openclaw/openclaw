@@ -76,6 +76,7 @@ type FirecrawlFetchConfig =
       onlyMainContent?: boolean;
       maxAgeMs?: number;
       timeoutSeconds?: number;
+      proxy?: "auto" | "basic" | "stealth";
     }
   | undefined;
 
@@ -187,6 +188,17 @@ function resolveFirecrawlMaxAgeMsOrDefault(firecrawl?: FirecrawlFetchConfig): nu
     return resolved;
   }
   return DEFAULT_FIRECRAWL_MAX_AGE_MS;
+}
+
+function resolveFirecrawlProxy(firecrawl?: FirecrawlFetchConfig): "auto" | "basic" | "stealth" {
+  const raw =
+    firecrawl && "proxy" in firecrawl && typeof firecrawl.proxy === "string"
+      ? firecrawl.proxy
+      : "";
+  if (raw === "basic" || raw === "stealth" || raw === "auto") {
+    return raw;
+  }
+  return "auto";
 }
 
 function resolveMaxChars(value: unknown, fallback: number, cap: number): number {
@@ -724,6 +736,7 @@ export function createWebFetchTool(options?: {
   const firecrawlBaseUrl = resolveFirecrawlBaseUrl(firecrawl);
   const firecrawlOnlyMainContent = resolveFirecrawlOnlyMainContent(firecrawl);
   const firecrawlMaxAgeMs = resolveFirecrawlMaxAgeMsOrDefault(firecrawl);
+  const firecrawlProxy = resolveFirecrawlProxy(firecrawl);
   const firecrawlTimeoutSeconds = resolveTimeoutSeconds(
     firecrawl?.timeoutSeconds ?? fetch?.timeoutSeconds,
     DEFAULT_TIMEOUT_SECONDS,
@@ -763,7 +776,7 @@ export function createWebFetchTool(options?: {
         firecrawlBaseUrl,
         firecrawlOnlyMainContent,
         firecrawlMaxAgeMs,
-        firecrawlProxy: "auto",
+        firecrawlProxy,
         firecrawlStoreInCache: true,
         firecrawlTimeoutSeconds,
       });

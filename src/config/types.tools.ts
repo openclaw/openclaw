@@ -417,6 +417,14 @@ export type ToolsConfig = {
         maxAgeMs?: number;
         /** Timeout in seconds for Firecrawl requests. */
         timeoutSeconds?: number;
+        /**
+         * Proxy mode for bot circumvention (default: "auto").
+         * Use "stealth" for sites with aggressive bot detection (Upwork, LinkedIn).
+         * "stealth" uses residential proxies + browser fingerprint spoofing.
+         * "auto" tries basic first, then retries with stealth (uses more API credits).
+         * "basic" uses rotating datacenter proxies only.
+         */
+        proxy?: "auto" | "basic" | "stealth";
       };
     };
   };
