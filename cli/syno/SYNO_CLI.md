@@ -306,29 +306,44 @@ cargo build --release --target x86_64-unknown-linux-musl
 - `zig-ar.bat`：zig ar 的 wrapper
 - `RUSTFLAGS='-C link-self-contained=no'`：让 Rust 不提供自己的 CRT，避免与 zig 的 musl CRT 符号冲突（`_start` 重复定义）
 
-### 构建 Docker 镜像
+### 构建 Docker 镜像并推送到 Registry
+
+通过 `registry.leot.fun` 私有镜像仓库中转部署。
 
 ```bash
 # 将编译好的二进制复制到 Dockerfile 同目录
 cp target/x86_64-unknown-linux-musl/release/syno .
 
-# 构建镜像（在服务器上或本地构建后推送）
-podman build -t syno-mcp:latest .
+# 构建镜像并打上 registry tag
+podman build -t registry.leot.fun/syno-mcp:latest .
+
+# 登录私有 registry
+podman login registry.leot.fun -u leot
+
+# 推送镜像
+podman push registry.leot.fun/syno-mcp:latest
 ```
 
 Dockerfile 基于 `alpine:3.20`，仅拷贝静态二进制，入口为 `syno mcp`。
 
+> **本地构建说明：** Windows 上无 podman 时，可先 scp 二进制和 Dockerfile 到服务器构建：
+> ```bash
+> scp target/x86_64-unknown-linux-musl/release/syno root@c.leot.fun:/tmp/syno-mcp/
+> scp Dockerfile root@c.leot.fun:/tmp/syno-mcp/
+> ssh root@c.leot.fun "cd /tmp/syno-mcp && podman build -t registry.leot.fun/syno-mcp:latest . && podman push registry.leot.fun/syno-mcp:latest"
+> ```
+
 ### 部署到服务器
 
 ```bash
-# 上传二进制和 Dockerfile 到服务器
-scp target/x86_64-unknown-linux-musl/release/syno root@c.leot.fun:/opt/leot_svr/build/syno-mcp/
-scp Dockerfile root@c.leot.fun:/opt/leot_svr/build/syno-mcp/
-
-# SSH 到服务器构建镜像
+# SSH 到服务器
 ssh root@c.leot.fun
-cd /opt/leot_svr/build/syno-mcp
-podman build -t syno-mcp:latest .
+
+# 登录 registry（首次需要）
+podman login registry.leot.fun -u leot
+
+# 拉取最新镜像
+podman pull registry.leot.fun/syno-mcp:latest
 
 # 停止旧容器（如存在）
 podman stop syno-mcp && podman rm syno-mcp
@@ -341,7 +356,7 @@ podman run -d \
   -e VIRTUAL_PORT=3000 \
   -e LETSENCRYPT_HOST=mcp.syno.leot.fun \
   -e LETSENCRYPT_EMAIL=admin@leot.fun \
-  syno-mcp:latest
+  registry.leot.fun/syno-mcp:latest
 ```
 
 nginx-proxy + acme-companion 会自动：
