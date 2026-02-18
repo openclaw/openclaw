@@ -122,12 +122,27 @@ export async function resolveMatrixAuth(params?: {
       const tempClient = new MatrixClient(resolved.homeserver, resolved.accessToken);
       const whoami = await tempClient.getUserId();
       userId = whoami;
-      // Save the credentials with the fetched userId
+      // Also fetch deviceId from whoami endpoint to preserve it in credentials
+      let deviceId: string | undefined;
+      try {
+        const whoamiResp = await fetch(`${resolved.homeserver}/_matrix/client/v3/account/whoami`, {
+          headers: { Authorization: `Bearer ${resolved.accessToken}` },
+        });
+        if (whoamiResp.ok) {
+          const whoamiData = (await whoamiResp.json()) as { device_id?: string };
+          deviceId = whoamiData.device_id;
+        }
+      } catch {
+        // Fall back to cached deviceId if available
+        deviceId = cachedCredentials?.deviceId;
+      }
+      // Save the credentials with the fetched userId and deviceId
       saveMatrixCredentials(
         {
           homeserver: resolved.homeserver,
           userId,
           accessToken: resolved.accessToken,
+          ...(deviceId ? { deviceId } : {}),
         },
         env,
         accountId,
