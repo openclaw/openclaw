@@ -1,4 +1,5 @@
 import type { OpenClawConfig, SkillConfig } from "../../config/config.js";
+import type { SkillEligibilityContext, SkillEntry } from "./types.js";
 import {
   evaluateRuntimeRequires,
   hasBinary,
@@ -7,7 +8,6 @@ import {
   resolveRuntimePlatform,
 } from "../../shared/config-eval.js";
 import { resolveSkillKey } from "./frontmatter.js";
-import type { SkillEligibilityContext, SkillEntry } from "./types.js";
 
 const DEFAULT_CONFIG_VALUES: Record<string, boolean> = {
   "browser.enabled": true,
@@ -81,6 +81,14 @@ export function shouldIncludeSkill(params: {
 
   if (skillConfig?.enabled === false) {
     return false;
+  }
+  // Check agent-level allowlist
+  const allowedAgents = normalizeAllowlist(skillConfig?.allowedAgents);
+  if (allowedAgents && allowedAgents.length > 0) {
+    const agentId = eligibility?.agentId;
+    if (!agentId || !allowedAgents.includes(agentId)) {
+      return false;
+    }
   }
   if (!isBundledSkillAllowed(entry, allowBundled)) {
     return false;

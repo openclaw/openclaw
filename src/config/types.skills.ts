@@ -3,6 +3,8 @@ export type SkillConfig = {
   apiKey?: string;
   env?: Record<string, string>;
   config?: Record<string, unknown>;
+  /** List of agent IDs that are allowed to use this skill. If undefined, all agents can use it. */
+  allowedAgents?: string[];
 };
 
 export type SkillsLoadConfig = {

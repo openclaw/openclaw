@@ -1,8 +1,8 @@
 import crypto from "node:crypto";
+import type { OpenClawConfig } from "../../config/config.js";
 import { resolveUserTimezone } from "../../agents/date-time.js";
 import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
 import { ensureSkillsWatcher, getSkillsSnapshotVersion } from "../../agents/skills/refresh.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
 import { buildChannelSummary } from "../../infra/channel-summary.js";
 import {
@@ -12,6 +12,7 @@ import {
 } from "../../infra/format-time/format-datetime.ts";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { drainSystemEventEntries } from "../../infra/system-events.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 
 export async function prependSystemEvents(params: {
   cfg: OpenClawConfig;
@@ -152,6 +153,7 @@ export async function ensureSkillSnapshot(params: {
   let nextEntry = sessionEntry;
   let systemSent = sessionEntry?.systemSent ?? false;
   const remoteEligibility = getRemoteSkillEligibility();
+  const agentId = sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : undefined;
   const snapshotVersion = getSkillsSnapshotVersion(workspaceDir);
   ensureSkillsWatcher({ workspaceDir, config: cfg });
   const shouldRefreshSnapshot =
@@ -168,7 +170,7 @@ export async function ensureSkillSnapshot(params: {
         ? buildWorkspaceSkillSnapshot(workspaceDir, {
             config: cfg,
             skillFilter,
-            eligibility: { remote: remoteEligibility },
+            eligibility: { agentId, remote: remoteEligibility },
             snapshotVersion,
           })
         : current.skillsSnapshot;
@@ -192,7 +194,7 @@ export async function ensureSkillSnapshot(params: {
     ? buildWorkspaceSkillSnapshot(workspaceDir, {
         config: cfg,
         skillFilter,
-        eligibility: { remote: remoteEligibility },
+        eligibility: { agentId, remote: remoteEligibility },
         snapshotVersion,
       })
     : (nextEntry?.skillsSnapshot ??
@@ -201,7 +203,7 @@ export async function ensureSkillSnapshot(params: {
         : buildWorkspaceSkillSnapshot(workspaceDir, {
             config: cfg,
             skillFilter,
-            eligibility: { remote: remoteEligibility },
+            eligibility: { agentId, remote: remoteEligibility },
             snapshotVersion,
           })));
   if (
