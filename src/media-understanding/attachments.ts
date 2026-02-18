@@ -1,7 +1,9 @@
+import { execFile } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { MediaUnderstandingAttachmentsConfig } from "../config/types.tools.js";
@@ -124,7 +126,7 @@ export function resolveAttachmentKind(
   if (isAudioFileName(attachment.path ?? attachment.url)) {
     return "audio";
   }
-  if ([".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tiff", ".tif"].includes(ext)) {
+  if ([".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tiff", ".tif", ".heic", ".heif", ".avif"].includes(ext)) {
     return "image";
   }
   return "unknown";
@@ -248,17 +250,32 @@ export class MediaAttachmentCache {
             `Attachment ${params.attachmentIndex + 1} exceeds maxBytes ${params.maxBytes}`,
           );
         }
-        const buffer = await fs.readFile(entry.resolvedPath);
-        entry.buffer = buffer;
-        entry.bufferMime =
+        let buffer = await fs.readFile(entry.resolvedPath);
+        let mime =
           entry.bufferMime ??
           entry.attachment.mime ??
           (await detectMime({
             buffer,
             filePath: entry.resolvedPath,
           }));
-        entry.bufferFileName =
+        let fileName =
           path.basename(entry.resolvedPath) || `media-${params.attachmentIndex + 1}`;
+
+        // Convert HEIC/HEIF to JPEG via macOS sips for model compatibility
+        if (isHeicMime(mime) || isHeicExtension(entry.resolvedPath)) {
+          try {
+            const converted = await convertHeicToJpeg(entry.resolvedPath);
+            buffer = converted.buffer;
+            mime = "image/jpeg";
+            fileName = fileName.replace(/\.heic$/i, ".jpg").replace(/\.heif$/i, ".jpg");
+          } catch {
+            // Fall through with original buffer if conversion fails
+          }
+        }
+
+        entry.buffer = buffer;
+        entry.bufferMime = mime;
+        entry.bufferFileName = fileName;
         return {
           buffer,
           mime: entry.bufferMime,
@@ -421,5 +438,33 @@ export class MediaAttachmentCache {
       }
       return undefined;
     }
+  }
+}
+
+const HEIC_MIMES = new Set(["image/heic", "image/heif", "image/heic-sequence", "image/heif-sequence"]);
+
+function isHeicMime(mime: string | undefined): boolean {
+  return !!mime && HEIC_MIMES.has(mime.toLowerCase());
+}
+
+function isHeicExtension(filePath: string | undefined): boolean {
+  if (!filePath) return false;
+  const ext = path.extname(filePath).toLowerCase();
+  return ext === ".heic" || ext === ".heif";
+}
+
+const execFileAsync = promisify(execFile);
+
+async function convertHeicToJpeg(inputPath: string): Promise<{ buffer: Buffer }> {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "heic-convert-"));
+  const outPath = path.join(tmpDir, "converted.jpg");
+  try {
+    await execFileAsync("sips", ["-s", "format", "jpeg", inputPath, "--out", outPath], {
+      timeout: 15_000,
+    });
+    const buffer = await fs.readFile(outPath);
+    return { buffer };
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   }
 }
