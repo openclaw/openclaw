@@ -88,7 +88,7 @@ function createStreamFnWithExtraParams(
   }
   const cacheRetention = resolveCacheRetention(extraParams, provider);
   if (cacheRetention) {
-    streamParams.cacheRetention = cacheRetention;
+    (streamParams as Record<string, unknown>).cacheRetention = cacheRetention;
   }
 
   if (Object.keys(streamParams).length === 0) {
