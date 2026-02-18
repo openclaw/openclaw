@@ -4,10 +4,20 @@ export type MemoryBackend = "builtin" | "qmd";
 export type MemoryCitationsMode = "auto" | "on" | "off";
 export type MemoryQmdSearchMode = "query" | "search" | "vsearch";
 
+export type BioMemConfig = {
+  enabled?: boolean;
+  workingMemorySize?: number;
+  consolidationTurns?: number;
+  patternInterval?: number;
+  maxEpisodeInject?: number;
+  maxSemanticInject?: number;
+};
+
 export type MemoryConfig = {
   backend?: MemoryBackend;
   citations?: MemoryCitationsMode;
   qmd?: MemoryQmdConfig;
+  bioMem?: BioMemConfig;
 };
 
 export type MemoryQmdConfig = {

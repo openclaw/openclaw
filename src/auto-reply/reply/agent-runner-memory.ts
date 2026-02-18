@@ -4,6 +4,9 @@ import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions } from "../types.js";
 import type { FollowupRun } from "./queue.js";
+import { getBioMemManager } from "../../memory/bio-mem/index.js";
+import { consolidateToEpisode } from "../../memory/bio-mem/episode-consolidator.js";
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveAgentModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
@@ -199,4 +202,39 @@ export async function runMemoryFlushIfNeeded(params: {
   }
 
   return activeSessionEntry;
+}
+
+export function runBioMemConsolidationIfNeeded(params: {
+  cfg: OpenClawConfig;
+  followupRun: FollowupRun;
+  sessionKey?: string;
+}): void {
+  // Fire-and-forget: never blocks the reply pipeline
+  const { cfg, followupRun, sessionKey } = params;
+  const sessionFile = followupRun.run.sessionFile;
+  if (!sessionFile) {
+    return;
+  }
+  const agentId = resolveSessionAgentId({
+    sessionKey: sessionKey ?? followupRun.run.sessionKey,
+    config: cfg,
+  });
+
+  getBioMemManager(cfg, agentId)
+    .then(async (manager) => {
+      if (!manager) {
+        return;
+      }
+      const episode = await consolidateToEpisode({
+        sessionFile,
+        sessionKey: sessionKey ?? followupRun.run.sessionKey ?? agentId,
+      });
+      if (!episode) {
+        return;
+      }
+      await manager.storeEpisode(episode);
+    })
+    .catch(() => {
+      // Bio-mem consolidation failure is always silent
+    });
 }

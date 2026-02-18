@@ -30,7 +30,7 @@ import {
   isAudioPayload,
   signalTypingIfNeeded,
 } from "./agent-runner-helpers.js";
-import { runMemoryFlushIfNeeded } from "./agent-runner-memory.js";
+import { runBioMemConsolidationIfNeeded, runMemoryFlushIfNeeded } from "./agent-runner-memory.js";
 import { buildReplyPayloads } from "./agent-runner-payloads.js";
 import { appendUsageLine, formatResponseUsageLine } from "./agent-runner-utils.js";
 import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-reply-pipeline.js";
@@ -213,6 +213,8 @@ export async function runReplyAgent(params: {
     storePath,
     isHeartbeat,
   });
+
+  runBioMemConsolidationIfNeeded({ cfg, followupRun, sessionKey });
 
   const runFollowupTurn = createFollowupRunner({
     opts,

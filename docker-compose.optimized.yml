@@ -1,0 +1,409 @@
+version: '3.8'
+
+# ==========================================
+# Optimized Docker Compose for OpenClaw
+# ==========================================
+# Features:
+# - Health checks
+# - Resource limits
+# - Auto-restart
+# - Log management
+# - Network isolation
+# - Volume optimization
+# ==========================================
+
+networks:
+  openclaw-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+
+volumes:
+  openclaw-config:
+    driver: local
+  openclaw-workspace:
+    driver: local
+  openclaw-logs:
+    driver: local
+  openclaw-redis-data:
+    driver: local
+  openclaw-prometheus-data:
+    driver: local
+  openclaw-grafana-data:
+    driver: local
+
+services:
+  # ==========================================
+  # OpenClaw Gateway Service
+  # ==========================================
+  openclaw-gateway:
+    image: ${OPENCLAW_IMAGE:-openclaw:optimized}
+    container_name: openclaw-gateway
+    hostname: openclaw-gateway
+
+    # Build configuration (if building locally)
+    build:
+      context: .
+      dockerfile: Dockerfile.optimized
+      args:
+        OPENCLAW_DOCKER_APT_PACKAGES: ${OPENCLAW_DOCKER_APT_PACKAGES:-}
+      # cache_from omitted to avoid pull errors when image is local-only
+
+    # Environment variables
+    environment:
+      # Home and terminal
+      HOME: /home/openclaw
+      TERM: xterm-256color
+
+      # Gateway configuration
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
+      OPENCLAW_GATEWAY_BIND: ${OPENCLAW_GATEWAY_BIND:-lan}
+      OPENCLAW_GATEWAY_PORT: ${OPENCLAW_GATEWAY_PORT:-18789}
+
+      # Claude AI credentials (optional; leave empty if not used)
+      CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY:-}
+      CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}
+      CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
+
+      # Model API keys (optional)
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+
+      # Performance optimization
+      NODE_ENV: production
+      NODE_OPTIONS: --max-old-space-size=2048 --enable-source-maps
+
+      # Logging
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+
+    # Volume mounts
+    volumes:
+      - openclaw-config:/home/openclaw/.openclaw
+      # workspace 和 logs 已包含在 openclaw-config 中，不需要單獨掛載
+      # （當使用 host-config override 時，整個 .openclaw 會被 bind mount 替換）
+      # Optional: Mount local config for development
+      # - ${OPENCLAW_CONFIG_DIR:-./config}:/home/openclaw/.openclaw:rw
+
+    # Port mapping
+    ports:
+      - "${OPENCLAW_GATEWAY_PORT:-18789}:18789"
+      - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"
+
+    # Network configuration
+    networks:
+      openclaw-network:
+        ipv4_address: 172.28.0.10
+
+    # Health check
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:18789/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+    # Restart policy
+    restart: unless-stopped
+
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+        compress: "true"
+
+    # Security options
+    security_opt:
+      - no-new-privileges:true
+
+    # Process management
+    init: true
+
+    # Command override (if needed)
+    command:
+      - node
+      - openclaw.mjs
+      - gateway
+      - --bind
+      - ${OPENCLAW_GATEWAY_BIND:-lan}
+      - --port
+      - "18789"
+      - --allow-unconfigured
+      - --verbose
+
+    # Dependencies
+    depends_on:
+      openclaw-redis:
+        condition: service_healthy
+      searxng:
+        condition: service_healthy
+
+  # ==========================================
+  # SearXNG Search Service (免 API key 網路搜尋)
+  # ==========================================
+  searxng:
+    image: searxng/searxng:latest
+    container_name: searxng
+    hostname: searxng
+
+    environment:
+      SEARXNG_BASE_URL: "http://searxng:8080/"
+
+    volumes:
+      - ./docker/searxng:/etc/searxng:rw
+
+    networks:
+      openclaw-network:
+        ipv4_address: 172.28.0.50
+
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+    restart: unless-stopped
+
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+    security_opt:
+      - no-new-privileges:true
+
+  # ==========================================
+  # Redis Cache Service (Optional but Recommended)
+  # ==========================================
+  openclaw-redis:
+    image: redis:7-alpine
+    container_name: openclaw-redis
+    hostname: openclaw-redis
+
+    # Command with optimized settings
+    command: >
+      redis-server
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --save 60 1
+      --appendonly yes
+      --appendfsync everysec
+
+    # Volume for persistence
+    volumes:
+      - openclaw-redis-data:/data
+
+    # Network configuration
+    networks:
+      openclaw-network:
+        ipv4_address: 172.28.0.20
+
+    # Health check
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+    # Restart policy
+    restart: unless-stopped
+
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+    # Security options
+    security_opt:
+      - no-new-privileges:true
+
+  # ==========================================
+  # OpenClaw CLI Service (Optional)
+  # ==========================================
+  openclaw-cli:
+    image: ${OPENCLAW_IMAGE:-openclaw:optimized}
+    container_name: openclaw-cli
+    hostname: openclaw-cli
+
+    # Environment variables
+    environment:
+      HOME: /home/openclaw
+      TERM: xterm-256color
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
+      CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY:-}
+      CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}
+      CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
+      BROWSER: echo
+
+    # Volume mounts
+    volumes:
+      - openclaw-config:/home/openclaw/.openclaw:ro
+      # workspace 已包含在 openclaw-config 中
+
+    # Network configuration
+    networks:
+      openclaw-network:
+        ipv4_address: 172.28.0.11
+
+    # Interactive mode
+    stdin_open: true
+    tty: true
+
+    # Process management
+    init: true
+
+    # Restart policy (manual for CLI)
+    restart: "no"
+
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+    # Security options
+    security_opt:
+      - no-new-privileges:true
+
+    # Entry point
+    entrypoint: ["node", "openclaw.mjs"]
+
+    # Dependencies
+    depends_on:
+      openclaw-gateway:
+        condition: service_healthy
+
+  # ==========================================
+  # Monitoring: Prometheus (Optional)
+  # ==========================================
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: openclaw-prometheus
+    hostname: prometheus
+    profiles:
+      - monitoring
+
+    # Configuration
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - openclaw-prometheus-data:/prometheus
+
+    # Command
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=7d'
+
+    # Ports
+    ports:
+      - "9090:9090"
+
+    # Network
+    networks:
+      openclaw-network:
+        ipv4_address: 172.28.0.30
+
+    # Restart policy
+    restart: unless-stopped
+
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+
+  # ==========================================
+  # Monitoring: Grafana (Optional)
+  # ==========================================
+  grafana:
+    image: grafana/grafana:latest
+    container_name: openclaw-grafana
+    hostname: grafana
+    profiles:
+      - monitoring
+
+    # Environment
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+
+    # Volumes
+    volumes:
+      - openclaw-grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+
+    # Ports
+    ports:
+      - "3000:3000"
+
+    # Network
+    networks:
+      openclaw-network:
+        ipv4_address: 172.28.0.31
+
+    # Dependencies
+    depends_on:
+      - prometheus
+
+    # Restart policy
+    restart: unless-stopped
+
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+
+# Volumes defined at the top of the file

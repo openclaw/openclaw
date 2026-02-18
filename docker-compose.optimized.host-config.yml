@@ -1,0 +1,36 @@
+# ==========================================
+# Optional override: 使用本機 .openclaw 設定
+# ==========================================
+# 使用方式（在專案目錄下）：
+#   docker compose -f docker-compose.optimized.yml -f docker-compose.optimized.host-config.yml up -d
+#
+# 請先在 .env 設定：
+#   OPENCLAW_CONFIG_DIR=C:\Users\您的使用者名稱\.openclaw
+#   OPENCLAW_WORKSPACE_DIR=C:\Users\您的使用者名稱\.openclaw\workspace
+#
+# 掛載 Windows 路徑時需以 root 執行才能讀寫，故覆寫 user。
+# ==========================================
+
+version: '3.8'
+
+services:
+  openclaw-gateway:
+    user: "0:0"
+    environment:
+      LOG_LEVEL: info
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ${OPENCLAW_CONFIG_DIR}:/home/openclaw/.openclaw
+      - ${OPENCLAW_SHARED_DIR:-C:\Users\LENOVO\Desktop\PublicShare\openclaw_io}:/home/openclaw/shared:rw
+      - ./skills/test-ollama:/app/skills/test-ollama:ro
+      - ./skills/claude_dev:/app/skills/claude_dev:ro
+
+  openclaw-cli:
+    user: "0:0"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ${OPENCLAW_CONFIG_DIR}:/home/openclaw/.openclaw:ro
+      - ${OPENCLAW_SHARED_DIR:-C:\Users\LENOVO\Desktop\PublicShare\openclaw_io}:/home/openclaw/shared:rw
+      - ./skills/test-ollama:/app/skills/test-ollama:ro

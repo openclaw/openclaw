@@ -1,14 +1,24 @@
+export { createMemoryRecallTool } from "./memory-recall-tool.js";
 import { Type } from "@sinclair/typebox";
+import fs from "node:fs/promises";
+import path from "node:path";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { MemoryCitationsMode } from "../../config/types.memory.js";
 import type { MemorySearchResult } from "../../memory/types.js";
 import type { AnyAgentTool } from "./common.js";
 import { resolveMemoryBackendConfig } from "../../memory/backend-config.js";
 import { getMemorySearchManager } from "../../memory/index.js";
+import { isMemoryPath } from "../../memory/internal.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
-import { resolveSessionAgentId } from "../agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../agent-scope.js";
 import { resolveMemorySearchConfig } from "../memory-search.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
+
+const MemoryWriteSchema = Type.Object({
+  path: Type.String(),
+  content: Type.String(),
+  mode: Type.Optional(Type.Union([Type.Literal("append"), Type.Literal("write")])),
+});
 
 const MemorySearchSchema = Type.Object({
   query: Type.String(),
@@ -129,6 +139,83 @@ export function createMemoryGetTool(options: {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         return jsonResult({ path: relPath, text: "", disabled: true, error: message });
+      }
+    },
+  };
+}
+
+export function createMemoryWriteTool(options: {
+  config?: OpenClawConfig;
+  agentSessionKey?: string;
+}): AnyAgentTool | null {
+  const cfg = options.config;
+  if (!cfg) {
+    return null;
+  }
+  const agentId = resolveSessionAgentId({
+    sessionKey: options.agentSessionKey,
+    config: cfg,
+  });
+  if (!resolveMemorySearchConfig(cfg, agentId)) {
+    return null;
+  }
+  return {
+    label: "Memory Write",
+    name: "memory_write",
+    description:
+      "Append or overwrite a memory file (MEMORY.md or memory/*.md) to persist important facts, decisions, user preferences, and todos across sessions. Use mode='append' (default) to add new content, or mode='write' to replace the entire file.",
+    parameters: MemoryWriteSchema,
+    execute: async (_toolCallId, params) => {
+      const relPath = readStringParam(params, "path", { required: true });
+      const content = readStringParam(params, "content", { required: true, allowEmpty: true }) ?? "";
+      const mode = readStringParam(params, "mode") ?? "append";
+
+      if (!isMemoryPath(relPath)) {
+        return jsonResult({
+          ok: false,
+          error: `Invalid memory path: "${relPath}". Must be MEMORY.md or memory/*.md`,
+        });
+      }
+
+      const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+      const absPath = path.join(workspaceDir, relPath);
+
+      try {
+        await fs.mkdir(path.dirname(absPath), { recursive: true });
+
+        if (mode === "write") {
+          await fs.writeFile(absPath, content, "utf-8");
+        } else {
+          // append mode - add separator if file already has content
+          let existing = "";
+          try {
+            existing = await fs.readFile(absPath, "utf-8");
+          } catch {
+            // file doesn't exist yet - ok
+          }
+          const separator = existing
+            ? existing.endsWith("\n\n")
+              ? ""
+              : existing.endsWith("\n")
+                ? "\n"
+                : "\n\n"
+            : "";
+          await fs.appendFile(absPath, separator + content, "utf-8");
+        }
+
+        // Trigger memory index sync in background (non-blocking)
+        getMemorySearchManager({ cfg, agentId })
+          .then(({ manager }) => {
+            if (manager?.sync) {
+              return manager.sync({ reason: "memory_write", force: true });
+            }
+          })
+          .catch(() => {});
+
+        return jsonResult({ ok: true, path: relPath, mode });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return jsonResult({ ok: false, error: message });
       }
     },
   };

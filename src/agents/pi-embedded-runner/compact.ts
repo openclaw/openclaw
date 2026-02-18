@@ -55,6 +55,7 @@ import {
   resolveSkillsPromptForRun,
   type SkillSnapshot,
 } from "../skills.js";
+import { extractAndSaveMemories } from "../memory-extract.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import { buildEmbeddedExtensionPaths } from "./extensions.js";
 import {
@@ -137,6 +138,7 @@ export async function compactEmbeddedPiSessionDirect(
       reason: error ?? `Unknown model: ${provider}/${modelId}`,
     };
   }
+  let resolvedApiKey: string | undefined;
   try {
     const apiKeyInfo = await getApiKeyForModel({
       model,
@@ -159,6 +161,7 @@ export async function compactEmbeddedPiSessionDirect(
       authStorage.setRuntimeApiKey(model.provider, copilotToken.token);
     } else {
       authStorage.setRuntimeApiKey(model.provider, apiKeyInfo.apiKey);
+      resolvedApiKey = apiKeyInfo.apiKey;
     }
   } catch (err) {
     return {
@@ -446,7 +449,23 @@ export async function compactEmbeddedPiSessionDirect(
         if (limited.length > 0) {
           session.agent.replaceMessages(limited);
         }
+        // Capture messages before compaction for memory extraction
+        const messagesBeforeCompact = [...limited];
+
         const result = await session.compact(params.customInstructions);
+
+        // Fire-and-forget: extract and save important memories from compacted messages
+        if (model && resolvedApiKey) {
+          extractAndSaveMemories({
+            messages: messagesBeforeCompact,
+            model,
+            apiKey: resolvedApiKey,
+            workspaceDir: resolvedWorkspace,
+            config: params.config,
+            agentSessionKey: params.sessionKey,
+          }).catch(() => {});
+        }
+
         // Estimate tokens after compaction by summing token estimates for remaining messages
         let tokensAfter: number | undefined;
         try {

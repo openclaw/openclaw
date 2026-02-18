@@ -83,11 +83,23 @@ const MemoryQmdSchema = z
   })
   .strict();
 
+const BioMemSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    workingMemorySize: z.number().int().positive().optional(),
+    consolidationTurns: z.number().int().positive().optional(),
+    patternInterval: z.number().int().positive().optional(),
+    maxEpisodeInject: z.number().int().positive().optional(),
+    maxSemanticInject: z.number().int().positive().optional(),
+  })
+  .strict();
+
 const MemorySchema = z
   .object({
     backend: z.union([z.literal("builtin"), z.literal("qmd")]).optional(),
     citations: z.union([z.literal("auto"), z.literal("on"), z.literal("off")]).optional(),
     qmd: MemoryQmdSchema.optional(),
+    bioMem: BioMemSchema.optional(),
   })
   .strict()
   .optional();

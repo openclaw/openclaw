@@ -1,0 +1,46 @@
+# SearXNG 設定 - OpenClaw 整合用
+use_default_settings: true
+
+server:
+  # 設定 secret key（必填）
+  secret_key: "openclaw-searxng-2026-secret-key"
+  # 關閉限速（本機使用不需要）
+  limiter: false
+  # 不作為公開實例
+  public_instance: false
+  # 圖片 proxy（關閉以節省資源）
+  image_proxy: false
+
+search:
+  safe_search: 0
+  # 啟用 JSON 格式（讓 API 可用）
+  formats:
+    - html
+    - json
+
+# 關閉 botdetection（本機直連不需要）
+server.public_instance: false
+
+enabled_plugins:
+  - 'Hash plugin'
+  - 'Self Information'
+  - 'Tracker URL remover'
+
+# 使用最穩定的搜尋引擎
+engines:
+  - name: google
+    engine: google
+    shortcut: g
+    disabled: false
+  - name: bing
+    engine: bing
+    shortcut: b
+    disabled: false
+  - name: duckduckgo
+    engine: duckduckgo
+    shortcut: d
+    disabled: false
+  - name: wikipedia
+    engine: wikipedia
+    shortcut: wp
+    disabled: false
