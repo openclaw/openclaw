@@ -158,8 +158,16 @@ function createOpenAIResponsesStoreWrapper(baseStreamFn: StreamFn | undefined): 
   };
 }
 
+function stripAnthropic1MSuffix(modelId: string): string {
+  return modelId.trim().replace(/-1m$/i, "");
+}
+
+function hasAnthropic1MSuffix(modelId: string): boolean {
+  return /-1m$/i.test(modelId.trim());
+}
+
 function isAnthropic1MModel(modelId: string): boolean {
-  const normalized = modelId.trim().toLowerCase();
+  const normalized = stripAnthropic1MSuffix(modelId).trim().toLowerCase();
   return ANTHROPIC_1M_MODEL_PREFIXES.some((prefix) => normalized.startsWith(prefix));
 }
 
@@ -194,7 +202,9 @@ function resolveAnthropicBetas(
     }
   }
 
-  if (extraParams?.context1m === true) {
+  const context1mExplicit = extraParams?.context1m === true;
+  const context1mFromSuffix = hasAnthropic1MSuffix(modelId);
+  if (context1mExplicit || context1mFromSuffix) {
     if (isAnthropic1MModel(modelId)) {
       betas.add(ANTHROPIC_CONTEXT_1M_BETA);
     } else {
@@ -223,11 +233,18 @@ function createAnthropicBetaHeadersWrapper(
   betas: string[],
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
-  return (model, context, options) =>
-    underlying(model, context, {
+  return (model, context, options) => {
+    // Strip `-1m` suffix from model ID before sending to the Anthropic API.
+    // The suffix is a convention for requesting 1M context; the actual API
+    // model name does not include it.
+    const effectiveModel = hasAnthropic1MSuffix(model.id)
+      ? { ...model, id: stripAnthropic1MSuffix(model.id) }
+      : model;
+    return underlying(effectiveModel, context, {
       ...options,
       headers: mergeAnthropicBetaHeader(options?.headers, betas),
     });
+  };
 }
 
 /**
