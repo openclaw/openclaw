@@ -1,25 +1,9 @@
-import type {
-  NodeListNode,
-  PairedNode,
-  PairingList,
-  PendingRequest,
-} from "../../shared/node-list-types.js";
+import { parseNodeList, parsePairingList } from "../../shared/node-list-parse.js";
+import type { NodeListNode } from "../../shared/node-list-types.js";
 import { resolveNodeIdFromCandidates } from "../../shared/node-match.js";
 import { callGatewayTool, type GatewayCallOptions } from "./gateway.js";
 
 export type { NodeListNode };
-
-function parseNodeList(value: unknown): NodeListNode[] {
-  const obj = typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
-  return Array.isArray(obj.nodes) ? (obj.nodes as NodeListNode[]) : [];
-}
-
-function parsePairingList(value: unknown): PairingList {
-  const obj = typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
-  const pending = Array.isArray(obj.pending) ? (obj.pending as PendingRequest[]) : [];
-  const paired = Array.isArray(obj.paired) ? (obj.paired as PairedNode[]) : [];
-  return { pending, paired };
-}
 
 async function loadNodes(opts: GatewayCallOptions): Promise<NodeListNode[]> {
   try {
