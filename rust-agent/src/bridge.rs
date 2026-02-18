@@ -1207,7 +1207,7 @@ mod tests {
                         "id": "req-patch-label",
                         "method": "sessions.patch",
                         "params": {
-                            "sessionKey": "agent:ops:discord:group:g15",
+                            "sessionKey": "agent:ops:discord:subagent:g15",
                             "label": "deploy",
                             "spawnedBy": "main"
                         }
@@ -1230,7 +1230,7 @@ mod tests {
                             "label": "deploy",
                             "agentId": "ops",
                             "spawnedBy": "main",
-                            "includeUnknown": false,
+                            "includeUnknown": true,
                             "includeGlobal": false
                         }
                     })
@@ -1244,7 +1244,7 @@ mod tests {
             let resolve_json: Value = serde_json::from_str(resolve_response.to_text()?)?;
             assert_eq!(
                 resolve_json.pointer("/result/key").and_then(Value::as_str),
-                Some("agent:ops:discord:group:g15")
+                Some("agent:ops:discord:subagent:g15")
             );
 
             write.send(Message::Close(None)).await?;

@@ -542,7 +542,7 @@ impl RpcDispatcher {
             Err(err) => return RpcDispatchOutcome::bad_request(err),
         };
 
-        let patched = self
+        let patched = match self
             .sessions
             .patch(SessionPatch {
                 session_key: session_key.clone(),
@@ -563,7 +563,11 @@ impl RpcDispatcher {
                 exec_node,
                 model_override,
             })
-            .await;
+            .await
+        {
+            Ok(v) => v,
+            Err(err) => return RpcDispatchOutcome::bad_request(err),
+        };
         let resolved_model_provider = patched.provider_override.clone();
         let resolved_model = patched.model_override.clone();
         let entry = patched.clone();
@@ -1009,13 +1013,56 @@ impl SessionRegistry {
         (entry.to_view(false, false), record)
     }
 
-    async fn patch(&self, patch: SessionPatch) -> SessionView {
+    async fn patch(&self, patch: SessionPatch) -> Result<SessionView, String> {
         let now = now_ms();
         let mut guard = self.entries.lock().await;
+        if let PatchValue::Set(label) = &patch.label {
+            let duplicate = guard.iter().any(|(key, existing)| {
+                key != &patch.session_key
+                    && existing
+                        .label
+                        .as_deref()
+                        .map(|v| v.eq_ignore_ascii_case(label))
+                        .unwrap_or(false)
+            });
+            if duplicate {
+                return Err(format!("label already in use: {label}"));
+            }
+        }
         let entry = guard
             .entry(patch.session_key.clone())
             .or_insert_with(|| SessionEntry::new(&patch.session_key));
         entry.updated_at_ms = now;
+        if let PatchValue::Clear = &patch.spawned_by {
+            if entry.spawned_by.is_some() {
+                return Err("spawnedBy cannot be cleared once set".to_owned());
+            }
+        }
+        if let PatchValue::Set(spawned_by) = &patch.spawned_by {
+            if !is_subagent_session_key(&patch.session_key) {
+                return Err("spawnedBy is only supported for subagent sessions".to_owned());
+            }
+            if let Some(existing) = entry.spawned_by.as_deref() {
+                if !existing.eq_ignore_ascii_case(spawned_by) {
+                    return Err("spawnedBy cannot be changed once set".to_owned());
+                }
+            }
+        }
+        if let PatchValue::Clear = &patch.spawn_depth {
+            if entry.spawn_depth.is_some() {
+                return Err("spawnDepth cannot be cleared once set".to_owned());
+            }
+        }
+        if let PatchValue::Set(spawn_depth) = &patch.spawn_depth {
+            if !is_subagent_session_key(&patch.session_key) {
+                return Err("spawnDepth is only supported for subagent sessions".to_owned());
+            }
+            if let Some(existing) = entry.spawn_depth {
+                if existing != *spawn_depth {
+                    return Err("spawnDepth cannot be changed once set".to_owned());
+                }
+            }
+        }
         apply_patch_value(&mut entry.send_policy, patch.send_policy);
         apply_patch_value(&mut entry.group_activation, patch.group_activation);
         apply_patch_value(&mut entry.queue_mode, patch.queue_mode);
@@ -1042,7 +1089,7 @@ impl SessionRegistry {
                 entry.provider_override = model.provider_override;
             }
         }
-        entry.to_view(false, false)
+        Ok(entry.to_view(false, false))
     }
 
     async fn get(&self, session_key: &str) -> Option<SessionView> {
@@ -2300,6 +2347,10 @@ fn is_global_session(entry: &SessionEntry) -> bool {
     entry.key.eq_ignore_ascii_case("global") || entry.kind == SessionKind::Main
 }
 
+fn is_subagent_session_key(session_key: &str) -> bool {
+    normalize(session_key).contains(":subagent:")
+}
+
 fn normalize_optional_text(value: Option<String>, max_len: usize) -> Option<String> {
     let value = value?;
     let trimmed = value.trim();
@@ -2599,7 +2650,7 @@ mod tests {
     #[tokio::test]
     async fn dispatcher_patch_supports_extended_fields_and_null_clear() {
         let dispatcher = RpcDispatcher::new();
-        let key = "agent:main:discord:group:g-extended";
+        let key = "agent:main:discord:subagent:g-extended";
 
         let patch_set = RpcRequestFrame {
             id: "req-patch-extended-set".to_owned(),
@@ -2669,7 +2720,6 @@ mod tests {
                 "queueMode": null,
                 "verboseLevel": null,
                 "responseUsage": null,
-                "spawnDepth": null,
                 "model": null
             }),
         };
@@ -2681,12 +2731,90 @@ mod tests {
                 assert!(payload.pointer("/entry/queueMode").is_none());
                 assert!(payload.pointer("/entry/verboseLevel").is_none());
                 assert!(payload.pointer("/entry/responseUsage").is_none());
-                assert!(payload.pointer("/entry/spawnDepth").is_none());
+                assert_eq!(
+                    payload
+                        .pointer("/entry/spawnDepth")
+                        .and_then(serde_json::Value::as_u64),
+                    Some(2)
+                );
                 assert!(payload.pointer("/entry/modelOverride").is_none());
                 assert!(payload.pointer("/entry/providerOverride").is_none());
             }
             _ => panic!("expected clear patch handled"),
         }
+    }
+
+    #[tokio::test]
+    async fn dispatcher_patch_enforces_spawned_by_and_spawn_depth_rules() {
+        let dispatcher = RpcDispatcher::new();
+
+        let non_subagent = RpcRequestFrame {
+            id: "req-patch-non-subagent".to_owned(),
+            method: "sessions.patch".to_owned(),
+            params: serde_json::json!({
+                "key": "agent:main:discord:group:g-rules",
+                "spawnedBy": "agent:main:main"
+            }),
+        };
+        let out = dispatcher.handle_request(&non_subagent).await;
+        assert!(matches!(out, RpcDispatchOutcome::Error { code: 400, .. }));
+
+        let key = "agent:main:discord:subagent:g-rules";
+        let initial = RpcRequestFrame {
+            id: "req-patch-subagent-init".to_owned(),
+            method: "sessions.patch".to_owned(),
+            params: serde_json::json!({
+                "key": key,
+                "spawnedBy": "agent:main:main",
+                "spawnDepth": 1
+            }),
+        };
+        let out = dispatcher.handle_request(&initial).await;
+        assert!(matches!(out, RpcDispatchOutcome::Handled(_)));
+
+        let change_spawned_by = RpcRequestFrame {
+            id: "req-patch-subagent-change-spawned".to_owned(),
+            method: "sessions.patch".to_owned(),
+            params: serde_json::json!({
+                "key": key,
+                "spawnedBy": "agent:main:other"
+            }),
+        };
+        let out = dispatcher.handle_request(&change_spawned_by).await;
+        assert!(matches!(out, RpcDispatchOutcome::Error { code: 400, .. }));
+
+        let change_spawn_depth = RpcRequestFrame {
+            id: "req-patch-subagent-change-depth".to_owned(),
+            method: "sessions.patch".to_owned(),
+            params: serde_json::json!({
+                "key": key,
+                "spawnDepth": 2
+            }),
+        };
+        let out = dispatcher.handle_request(&change_spawn_depth).await;
+        assert!(matches!(out, RpcDispatchOutcome::Error { code: 400, .. }));
+
+        let clear_spawned_by = RpcRequestFrame {
+            id: "req-patch-subagent-clear-spawned".to_owned(),
+            method: "sessions.patch".to_owned(),
+            params: serde_json::json!({
+                "key": key,
+                "spawnedBy": null
+            }),
+        };
+        let out = dispatcher.handle_request(&clear_spawned_by).await;
+        assert!(matches!(out, RpcDispatchOutcome::Error { code: 400, .. }));
+
+        let clear_spawn_depth = RpcRequestFrame {
+            id: "req-patch-subagent-clear-depth".to_owned(),
+            method: "sessions.patch".to_owned(),
+            params: serde_json::json!({
+                "key": key,
+                "spawnDepth": null
+            }),
+        };
+        let out = dispatcher.handle_request(&clear_spawn_depth).await;
+        assert!(matches!(out, RpcDispatchOutcome::Error { code: 400, .. }));
     }
 
     #[tokio::test]
@@ -2883,11 +3011,16 @@ mod tests {
         for (id, key, label, spawned_by) in [
             (
                 "req-patch-a",
-                "agent:ops:discord:group:resolved-a",
+                "agent:ops:discord:subagent:resolved-a",
                 "deploy",
                 "main",
             ),
-            ("req-patch-b", "custom:other:resolved-b", "deploy", "other"),
+            (
+                "req-patch-b",
+                "agent:ops:discord:subagent:resolved-b",
+                "deploy",
+                "other",
+            ),
         ] {
             let patch = RpcRequestFrame {
                 id: id.to_owned(),
@@ -2908,7 +3041,7 @@ mod tests {
                 "label": "deploy",
                 "agentId": "ops",
                 "spawnedBy": "main",
-                "includeUnknown": false,
+                "includeUnknown": true,
                 "includeGlobal": false
             }),
         };
@@ -2921,7 +3054,7 @@ mod tests {
                 );
                 assert_eq!(
                     payload.pointer("/key").and_then(serde_json::Value::as_str),
-                    Some("agent:ops:discord:group:resolved-a")
+                    Some("agent:ops:discord:subagent:resolved-a")
                 );
             }
             _ => panic!("expected filtered resolve handled"),
@@ -3430,7 +3563,7 @@ mod tests {
     #[tokio::test]
     async fn dispatcher_list_supports_label_spawn_filters_and_message_hints() {
         let dispatcher = RpcDispatcher::new();
-        let key = "agent:main:discord:group:g-label";
+        let key = "agent:main:discord:subagent:g-label";
         let patch = RpcRequestFrame {
             id: "req-list-label-patch".to_owned(),
             method: "sessions.patch".to_owned(),

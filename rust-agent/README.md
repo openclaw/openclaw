@@ -60,6 +60,7 @@ systemctl --user status openclaw-agent-rs.service
 - Supports list filtering knobs on `sessions.list` (`includeGlobal`, `includeUnknown`, `agentId`, `search`, `label`, `spawnedBy`) plus optional hint fields (`displayName`, `derivedTitle`, `lastMessagePreview`) when `includeDerivedTitles`/`includeLastMessage` are set.
 - Supports `sessions.patch` via either `key` or `sessionKey` and returns parity-style envelope fields (`ok`, `path`, `key`, `entry`).
 - Supports extended `sessions.patch` parity fields (`thinkingLevel`, `verboseLevel`, `reasoningLevel`, `responseUsage`, `elevatedLevel`, `execHost`, `execSecurity`, `execAsk`, `execNode`, `model`, `spawnDepth`) with explicit `null` clear semantics.
+- Enforces parity-oriented patch guards for labels and subagent metadata (`label` uniqueness, `spawnedBy`/`spawnDepth` subagent-only and immutable after first set).
 - Responds to gateway introspection RPCs (`health`, `status`) with runtime/session metadata.
 - Responds to usage RPCs (`usage.status`, `usage.cost`) with Rust-side aggregate usage/cost placeholder summaries.
 - Tracks session metadata (`label`, `spawnedBy`) via `sessions.patch` and uses it for filtered `sessions.resolve` lookups.
