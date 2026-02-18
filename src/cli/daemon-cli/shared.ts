@@ -117,7 +117,7 @@ export function normalizeListenerAddress(raw: string): string {
 }
 
 export function renderRuntimeHints(
-  runtime: { missingUnit?: boolean; status?: string } | undefined,
+  runtime: { missingUnit?: boolean; status?: string; isSystemService?: boolean } | undefined,
   env: NodeJS.ProcessEnv = process.env,
 ): string[] {
   if (!runtime) {
@@ -148,7 +148,11 @@ export function renderRuntimeHints(
       hints.push(`Launchd stderr (if installed): ${logs.stderrPath}`);
     } else if (process.platform === "linux") {
       const unit = resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
-      hints.push(`Logs: journalctl --user -u ${unit}.service -n 200 --no-pager`);
+      if (runtime?.isSystemService) {
+        hints.push(`Logs: sudo journalctl -u ${unit}.service -n 200 --no-pager`);
+      } else {
+        hints.push(`Logs: journalctl --user -u ${unit}.service -n 200 --no-pager`);
+      }
     } else if (process.platform === "win32") {
       const task = resolveGatewayWindowsTaskName(env.OPENCLAW_PROFILE);
       hints.push(`Logs: schtasks /Query /TN "${task}" /V /FO LIST`);
