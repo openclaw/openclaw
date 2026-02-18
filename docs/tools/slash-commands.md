@@ -25,9 +25,9 @@ Access to commands is controlled by three independent layers, applied in order:
 
 **Command access** (`commands.allowFrom`) controls slash commands and directives independently of channel access. Useful when you have multiple chatters but only want some to run commands. When not set, command access falls back to `commands.useAccessGroups` (uses channel allowlists).
 
-**Owner access** (`commands.ownerAllowFrom`) designates the privileged owner. Owners can use all commands including owner-only ones (e.g. `/config`, `/debug`, `/send`). The owner's identity is also injected into the agent's system prompt as `Owner numbers: ...`. When not set, ownership is derived from channel allowlists — so in single-user setups you usually don't need to set this explicitly.
+**Owner access** (`commands.ownerAllowFrom`) designates the privileged owner. Owners can use all commands including owner-only ones (e.g. `/config`, `/debug`, `/send`). The owner's identity is also injected into the agent's system prompt as `Owner numbers: ...`. When not set, ownership is derived from `commands.allowFrom` or channel allowlists — so in single-user setups you usually don't need to set this explicitly.
 
-> **Common setup:** Lock `commands.allowFrom` to yourself across each channel. Leave `commands.ownerAllowFrom` unset — the gateway will derive ownership from your channel `allowFrom`. Only configure `ownerAllowFrom` explicitly if you want a different person to have owner-level command access than general command access.
+> **Common setup:** Lock `commands.allowFrom` to yourself across each channel. Leave `commands.ownerAllowFrom` unset — the gateway will derive ownership from your `commands.allowFrom`. Only configure `ownerAllowFrom` explicitly if you want a different person to have owner-level command access than general command access.
 
 There are two related systems:
 
@@ -61,6 +61,7 @@ They run immediately, are stripped before the model sees the message, and the re
       discord: ["user:123"],
     },
     useAccessGroups: true,
+    // ownerAllowFrom: ["user1", "whatsapp:+15551234567"], // explicit owner override (optional)
   },
 }
 ```
