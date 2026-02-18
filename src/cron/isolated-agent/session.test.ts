@@ -131,6 +131,8 @@ describe("resolveCronSession", () => {
           modelOverride: "gpt-4.1-mini",
           providerOverride: "openai",
           sendPolicy: "allow",
+          authProfileOverride: "cli-profile",
+          authProfileOverrideSource: "user",
         },
       });
       vi.mocked(evaluateSessionFreshness).mockReturnValue({ fresh: false });
@@ -148,6 +150,8 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.modelOverride).toBe("gpt-4.1-mini");
       expect(result.sessionEntry.providerOverride).toBe("openai");
       expect(result.sessionEntry.sendPolicy).toBe("allow");
+      expect(result.sessionEntry.authProfileOverride).toBe("cli-profile");
+      expect(result.sessionEntry.authProfileOverrideSource).toBe("user");
     });
 
     it("creates new sessionId when forceNew is true", () => {
