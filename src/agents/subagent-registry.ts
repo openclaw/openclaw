@@ -44,6 +44,8 @@ let listenerStop: (() => void) | null = null;
 // Use var to avoid TDZ when init runs across circular imports during bootstrap.
 var restoreAttempted = false;
 const SUBAGENT_ANNOUNCE_TIMEOUT_MS = 120_000;
+const MIN_ANNOUNCE_RETRY_DELAY_MS = 1_000;
+const MAX_ANNOUNCE_RETRY_DELAY_MS = 8_000;
 /**
  * Maximum number of announce delivery attempts before giving up.
  * Prevents infinite retry loops when `runSubagentAnnounceFlow` repeatedly
@@ -55,6 +57,12 @@ const MAX_ANNOUNCE_RETRY_COUNT = 3;
  * succeeded. Guards against stale registry entries surviving gateway restarts.
  */
 const ANNOUNCE_EXPIRY_MS = 5 * 60_000; // 5 minutes
+
+function resolveAnnounceRetryDelayMs(retryCount: number) {
+  const boundedRetryCount = Math.max(0, Math.min(retryCount, 10));
+  const baseDelay = MIN_ANNOUNCE_RETRY_DELAY_MS * 2 ** boundedRetryCount;
+  return Math.min(baseDelay, MAX_ANNOUNCE_RETRY_DELAY_MS);
+}
 
 function logAnnounceGiveUp(entry: SubagentRunRecord, reason: "retry-limit" | "expiry") {
   const retryCount = entry.announceRetryCount ?? 0;
@@ -128,6 +136,22 @@ function resumeSubagentRun(runId: string) {
     logAnnounceGiveUp(entry, "expiry");
     entry.cleanupCompletedAt = Date.now();
     persistSubagentRuns();
+    return;
+  }
+
+  const now = Date.now();
+  const delayMs = resolveAnnounceRetryDelayMs(entry.announceRetryCount ?? 0);
+  const earliestRetryAt = (entry.lastAnnounceRetryAt ?? 0) + delayMs;
+  if (
+    entry.expectsCompletionMessage === true &&
+    entry.lastAnnounceRetryAt &&
+    now < earliestRetryAt
+  ) {
+    const waitMs = Math.max(1, earliestRetryAt - now);
+    setTimeout(() => {
+      resumeSubagentRun(runId);
+    }, waitMs).unref?.();
+    resumedRuns.add(runId);
     return;
   }
 
@@ -317,6 +341,15 @@ function finalizeSubagentCleanup(runId: string, cleanup: "delete" | "keep", didA
     entry.cleanupHandled = false;
     resumedRuns.delete(runId);
     persistSubagentRuns();
+    if (entry.expectsCompletionMessage !== true) {
+      return;
+    }
+    setTimeout(
+      () => {
+        resumeSubagentRun(runId);
+      },
+      resolveAnnounceRetryDelayMs(entry.announceRetryCount ?? 0),
+    ).unref?.();
     return;
   }
   if (cleanup === "delete") {

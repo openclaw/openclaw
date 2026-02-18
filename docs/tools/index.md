@@ -477,6 +477,7 @@ Notes:
 - `sessions_spawn` starts a sub-agent run and posts an announce reply back to the requester chat.
   - Reply format includes `Status`, `Result`, and compact stats.
   - `Result` is the assistant completion text; if missing, the latest `toolResult` is used as fallback.
+- Manual completion-mode spawns send directly first, with queue fallback and retry on transient failures (`status: "ok"` means run finished, not that announce delivered).
 - `sessions_spawn` is non-blocking and returns `status: "accepted"` immediately.
 - `sessions_send` runs a reply‑back ping‑pong (reply `REPLY_SKIP` to stop; max turns via `session.agentToAgent.maxPingPongTurns`, 0–5).
 - After the ping‑pong, the target agent runs an **announce step**; reply `ANNOUNCE_SKIP` to suppress the announcement.
