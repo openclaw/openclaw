@@ -36,7 +36,7 @@ function isCiaoNetworkInterfaceAssertion(reason: unknown): boolean {
     stack.includes("CIAO") ||
     message.includes("ADDRESS CHANGE FROM DEFINED") ||
     message.includes("ADDRESS CHANGED FROM UNDEFINED") ||
-    message.includes("REACHED ILLEGAL STATE");
+    (message.includes("REACHED ILLEGAL STATE") && message.includes("ADDRESS"));
 
   return isCiaoOrigin;
 }

@@ -77,9 +77,9 @@ describe("ignoreCiaoCancellationRejection", () => {
     } catch (e) {
       err = e as Error;
     }
-    // Stack includes 'ciao' path but not 'MDNSServer' directly
+    // Stack includes 'ciao' path but not 'MDNSServer' directly (tests CIAO-only branch)
     err!.stack = `AssertionError [ERR_ASSERTION]: ${err!.message}
-    at Object.<anonymous> (/node_modules/@homebridge/ciao/lib/MDNSServer.js:515:26)`;
+    at Object.<anonymous> (/node_modules/@homebridge/ciao/lib/CiaoService.js:515:26)`;
 
     expect(ignoreCiaoCancellationRejection(err!)).toBe(true);
   });
