@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { UsageProviderId } from "./provider-usage.types.js";
 import {
+  dedupeProfileIds,
   ensureAuthProfileStore,
   listProfilesForProvider,
   resolveApiKeyForProfile,
@@ -12,6 +12,7 @@ import { getCustomProviderApiKey, resolveEnvApiKey } from "../agents/model-auth.
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { loadConfig } from "../config/config.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
+import type { UsageProviderId } from "./provider-usage.types.js";
 
 export type ProviderAuth = {
   provider: UsageProviderId;
@@ -80,61 +81,41 @@ function resolveZaiApiKey(): string | undefined {
 }
 
 function resolveMinimaxApiKey(): string | undefined {
-  const envDirect =
-    normalizeSecretInput(process.env.MINIMAX_CODE_PLAN_KEY) ||
-    normalizeSecretInput(process.env.MINIMAX_API_KEY);
-  if (envDirect) {
-    return envDirect;
-  }
-
-  const envResolved = resolveEnvApiKey("minimax");
-  if (envResolved?.apiKey) {
-    return envResolved.apiKey;
-  }
-
-  const cfg = loadConfig();
-  const key = getCustomProviderApiKey(cfg, "minimax");
-  if (key) {
-    return key;
-  }
-
-  const store = ensureAuthProfileStore();
-  const apiProfile = listProfilesForProvider(store, "minimax").find((id) => {
-    const cred = store.profiles[id];
-    return cred?.type === "api_key" || cred?.type === "token";
+  return resolveProviderApiKeyFromConfigAndStore({
+    providerId: "minimax",
+    envDirect: [process.env.MINIMAX_CODE_PLAN_KEY, process.env.MINIMAX_API_KEY],
   });
-  if (!apiProfile) {
-    return undefined;
-  }
-  const cred = store.profiles[apiProfile];
-  if (cred?.type === "api_key" && normalizeSecretInput(cred.key)) {
-    return normalizeSecretInput(cred.key);
-  }
-  if (cred?.type === "token" && normalizeSecretInput(cred.token)) {
-    return normalizeSecretInput(cred.token);
-  }
-  return undefined;
 }
 
 function resolveXiaomiApiKey(): string | undefined {
-  const envDirect = normalizeSecretInput(process.env.XIAOMI_API_KEY);
+  return resolveProviderApiKeyFromConfigAndStore({
+    providerId: "xiaomi",
+    envDirect: [process.env.XIAOMI_API_KEY],
+  });
+}
+
+function resolveProviderApiKeyFromConfigAndStore(params: {
+  providerId: UsageProviderId;
+  envDirect: Array<string | undefined>;
+}): string | undefined {
+  const envDirect = params.envDirect.map(normalizeSecretInput).find(Boolean);
   if (envDirect) {
     return envDirect;
   }
 
-  const envResolved = resolveEnvApiKey("xiaomi");
+  const envResolved = resolveEnvApiKey(params.providerId);
   if (envResolved?.apiKey) {
     return envResolved.apiKey;
   }
 
   const cfg = loadConfig();
-  const key = getCustomProviderApiKey(cfg, "xiaomi");
+  const key = getCustomProviderApiKey(cfg, params.providerId);
   if (key) {
     return key;
   }
 
   const store = ensureAuthProfileStore();
-  const apiProfile = listProfilesForProvider(store, "xiaomi").find((id) => {
+  const apiProfile = listProfilesForProvider(store, params.providerId).find((id) => {
     const cred = store.profiles[id];
     return cred?.type === "api_key" || cred?.type === "token";
   });
@@ -142,10 +123,10 @@ function resolveXiaomiApiKey(): string | undefined {
     return undefined;
   }
   const cred = store.profiles[apiProfile];
-  if (cred?.type === "api_key" && normalizeSecretInput(cred.key)) {
+  if (cred?.type === "api_key") {
     return normalizeSecretInput(cred.key);
   }
-  if (cred?.type === "token" && normalizeSecretInput(cred.token)) {
+  if (cred?.type === "token") {
     return normalizeSecretInput(cred.token);
   }
   return undefined;
@@ -164,14 +145,7 @@ async function resolveOAuthToken(params: {
     store,
     provider: params.provider,
   });
-
-  const candidates = order;
-  const deduped: string[] = [];
-  for (const entry of candidates) {
-    if (!deduped.includes(entry)) {
-      deduped.push(entry);
-    }
-  }
+  const deduped = dedupeProfileIds(order);
 
   for (const profileId of deduped) {
     const cred = store.profiles[profileId];

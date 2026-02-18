@@ -1,10 +1,12 @@
 import type { Dispatcher } from "undici";
+import { logWarn } from "../../logger.js";
+import { bindAbortRelay } from "../../utils/fetch-timeout.js";
 import {
   closeDispatcher,
   createPinnedDispatcher,
-  resolvePinnedHostname,
   resolvePinnedHostnameWithPolicy,
   type LookupFn,
+  SsrFBlockedError,
   type SsrFPolicy,
 } from "./ssrf.js";
 
@@ -20,6 +22,7 @@ export type GuardedFetchOptions = {
   policy?: SsrFPolicy;
   lookupFn?: LookupFn;
   pinDns?: boolean;
+  auditContext?: string;
 };
 
 export type GuardedFetchResult = {
@@ -48,8 +51,8 @@ function buildAbortSignal(params: { timeoutMs?: number; signal?: AbortSignal }):
   }
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-  const onAbort = () => controller.abort();
+  const timeoutId = setTimeout(controller.abort.bind(controller), timeoutMs);
+  const onAbort = bindAbortRelay(controller);
   if (signal) {
     if (signal.aborted) {
       controller.abort();
@@ -113,15 +116,10 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
 
     let dispatcher: Dispatcher | null = null;
     try {
-      const usePolicy = Boolean(
-        params.policy?.allowPrivateNetwork || params.policy?.allowedHostnames?.length,
-      );
-      const pinned = usePolicy
-        ? await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
-            lookupFn: params.lookupFn,
-            policy: params.policy,
-          })
-        : await resolvePinnedHostname(parsedUrl.hostname, params.lookupFn);
+      const pinned = await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
+        lookupFn: params.lookupFn,
+        policy: params.policy,
+      });
       if (params.pinDns !== false) {
         dispatcher = createPinnedDispatcher(pinned);
       }
@@ -164,6 +162,12 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
         release: async () => release(dispatcher),
       };
     } catch (err) {
+      if (err instanceof SsrFBlockedError) {
+        const context = params.auditContext ?? "url-fetch";
+        logWarn(
+          `security: blocked URL fetch (${context}) target=${parsedUrl.origin}${parsedUrl.pathname} reason=${err.message}`,
+        );
+      }
       await release(dispatcher);
       throw err;
     }

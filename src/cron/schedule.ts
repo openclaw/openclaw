@@ -1,6 +1,6 @@
 import { Cron } from "croner";
-import type { CronSchedule } from "./types.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
+import type { CronSchedule } from "./types.js";
 
 function resolveCronTimezone(tz?: string) {
   const trimmed = typeof tz === "string" ? tz.trim() : "";
@@ -49,17 +49,25 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
     timezone: resolveCronTimezone(schedule.tz),
     catch: false,
   });
-  // Cron operates at second granularity, so floor nowMs to the start of the
-  // current second.  This prevents the lookback from landing inside a matching
-  // second — if nowMs is e.g. 12:00:00.500 and the pattern fires at second 0,
-  // a 1ms lookback (12:00:00.499) is still *within* that second, causing
-  // croner to skip ahead to the next occurrence (e.g. the following day).
-  // Flooring first ensures the lookback always falls in the *previous* second.
-  const nowSecondMs = Math.floor(nowMs / 1000) * 1000;
-  const next = cron.nextRun(new Date(nowSecondMs - 1));
+  const next = cron.nextRun(new Date(nowMs));
   if (!next) {
     return undefined;
   }
   const nextMs = next.getTime();
-  return Number.isFinite(nextMs) && nextMs >= nowSecondMs ? nextMs : undefined;
+  if (!Number.isFinite(nextMs)) {
+    return undefined;
+  }
+  if (nextMs > nowMs) {
+    return nextMs;
+  }
+
+  // Guard against same-second rescheduling loops: if croner returns
+  // "now" (or an earlier instant), retry from the next whole second.
+  const nextSecondMs = Math.floor(nowMs / 1000) * 1000 + 1000;
+  const retry = cron.nextRun(new Date(nextSecondMs));
+  if (!retry) {
+    return undefined;
+  }
+  const retryMs = retry.getTime();
+  return Number.isFinite(retryMs) && retryMs > nowMs ? retryMs : undefined;
 }

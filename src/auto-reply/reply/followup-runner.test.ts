@@ -2,8 +2,8 @@ import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import type { FollowupRun } from "./queue.js";
 import { loadSessionStore, saveSessionStore, type SessionEntry } from "../../config/sessions.js";
+import type { FollowupRun } from "./queue.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 const runEmbeddedPiAgentMock = vi.fn();
@@ -81,7 +81,7 @@ describe("createFollowupRunner compaction", () => {
       }) => {
         params.onAgentEvent?.({
           stream: "compaction",
-          data: { phase: "end", willRetry: false },
+          data: { phase: "end", willRetry: true },
         });
         return { payloads: [{ text: "final" }], meta: {} };
       },
@@ -128,8 +128,71 @@ describe("createFollowupRunner compaction", () => {
     await runner(queued);
 
     expect(onBlockReply).toHaveBeenCalled();
-    expect(onBlockReply.mock.calls[0][0].text).toContain("Auto-compaction complete");
+    const firstCall = (onBlockReply.mock.calls as unknown as Array<Array<{ text?: string }>>)[0];
+    expect(firstCall?.[0]?.text).toContain("Auto-compaction complete");
     expect(sessionStore.main.compactionCount).toBe(1);
+  });
+
+  it("updates totalTokens after auto-compaction using lastCallUsage", async () => {
+    const storePath = path.join(
+      await fs.mkdtemp(path.join(tmpdir(), "openclaw-followup-compaction-")),
+      "sessions.json",
+    );
+    const sessionKey = "main";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 180_000,
+      compactionCount: 0,
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await saveSessionStore(storePath, sessionStore);
+    const onBlockReply = vi.fn(async () => {});
+
+    runEmbeddedPiAgentMock.mockImplementationOnce(
+      async (params: {
+        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void;
+      }) => {
+        params.onAgentEvent?.({
+          stream: "compaction",
+          data: { phase: "end", willRetry: false },
+        });
+        return {
+          payloads: [{ text: "done" }],
+          meta: {
+            agentMeta: {
+              // Accumulated usage across pre+post compaction calls.
+              usage: { input: 190_000, output: 8_000, total: 198_000 },
+              // Last call usage reflects post-compaction context.
+              lastCallUsage: { input: 11_000, output: 2_000, total: 13_000 },
+              model: "claude-opus-4-5",
+              provider: "anthropic",
+            },
+          },
+        };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      defaultModel: "anthropic/claude-opus-4-5",
+      agentCfgContextTokens: 200_000,
+    });
+
+    await runner(baseQueuedRun());
+
+    const store = loadSessionStore(storePath, { skipCache: true });
+    expect(store[sessionKey]?.compactionCount).toBe(1);
+    expect(store[sessionKey]?.totalTokens).toBe(11_000);
+    // We only keep the total estimate after compaction.
+    expect(store[sessionKey]?.inputTokens).toBeUndefined();
+    expect(store[sessionKey]?.outputTokens).toBeUndefined();
   });
 });
 
@@ -195,6 +258,47 @@ describe("createFollowupRunner messaging tool dedupe", () => {
     expect(onBlockReply).not.toHaveBeenCalled();
   });
 
+  it("drops media URL from payload when messaging tool already sent it", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ mediaUrl: "/tmp/img.png" }],
+      messagingToolSentMediaUrls: ["/tmp/img.png"],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    await runner(baseQueuedRun());
+
+    // Media stripped → payload becomes non-renderable → not delivered.
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("delivers media payload when not a duplicate", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ mediaUrl: "/tmp/img.png" }],
+      messagingToolSentMediaUrls: ["/tmp/other.png"],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    await runner(baseQueuedRun());
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+  });
+
   it("persists usage even when replies are suppressed", async () => {
     const storePath = path.join(
       await fs.mkdtemp(path.join(tmpdir(), "openclaw-followup-usage-")),
@@ -212,7 +316,8 @@ describe("createFollowupRunner messaging tool dedupe", () => {
       messagingToolSentTargets: [{ tool: "slack", provider: "slack", to: "channel:C1" }],
       meta: {
         agentMeta: {
-          usage: { input: 10, output: 5 },
+          usage: { input: 1_000, output: 50 },
+          lastCallUsage: { input: 400, output: 20 },
           model: "claude-opus-4-5",
           provider: "anthropic",
         },
@@ -234,7 +339,11 @@ describe("createFollowupRunner messaging tool dedupe", () => {
 
     expect(onBlockReply).not.toHaveBeenCalled();
     const store = loadSessionStore(storePath, { skipCache: true });
-    expect(store[sessionKey]?.totalTokens ?? 0).toBeGreaterThan(0);
+    // totalTokens should reflect the last call usage snapshot, not the accumulated input.
+    expect(store[sessionKey]?.totalTokens).toBe(400);
     expect(store[sessionKey]?.model).toBe("claude-opus-4-5");
+    // Accumulated usage is still stored for usage/cost tracking.
+    expect(store[sessionKey]?.inputTokens).toBe(1_000);
+    expect(store[sessionKey]?.outputTokens).toBe(50);
   });
 });
