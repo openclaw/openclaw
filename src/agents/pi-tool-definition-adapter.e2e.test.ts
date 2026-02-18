@@ -59,14 +59,19 @@ describe("pi tool definition adapter", () => {
       name: "boom",
       label: "Boom",
       description: "throws",
-      parameters: {},
+      parameters: Type.Object({}),
       execute: async () => {
         throw new Error("nope");
       },
-    } satisfies AgentTool<unknown, unknown>;
+    } satisfies AgentTool;
 
     const defs = toToolDefinitions([tool]);
-    const result = await defs[0].execute("call1", {}, undefined, undefined);
+    const def = defs[0];
+    if (!def) {
+      throw new Error("missing tool definition");
+    }
+    const execute = (...args: Parameters<(typeof defs)[0]["execute"]>) => def.execute(...args);
+    const result = await execute("call1", {}, undefined, undefined, extensionContext);
 
     expect(result.details).toMatchObject({
       status: "error",
@@ -82,14 +87,19 @@ describe("pi tool definition adapter", () => {
       name: "bash",
       label: "Bash",
       description: "throws",
-      parameters: {},
+      parameters: Type.Object({}),
       execute: async () => {
         throw new Error("nope");
       },
-    } satisfies AgentTool<unknown, unknown>;
+    } satisfies AgentTool;
 
     const defs = toToolDefinitions([tool]);
-    const result = await defs[0].execute("call2", {}, undefined, undefined);
+    const def = defs[0];
+    if (!def) {
+      throw new Error("missing tool definition");
+    }
+    const execute = (...args: Parameters<(typeof defs)[0]["execute"]>) => def.execute(...args);
+    const result = await execute("call2", {}, undefined, undefined, extensionContext);
 
     expect(result.details).toMatchObject({
       status: "error",

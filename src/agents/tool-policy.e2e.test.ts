@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import type { SandboxToolPolicy } from "./sandbox/types.js";
-import type { AnyAgentTool } from "./tools/common.js";
 import { isToolAllowed, resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
+import type { SandboxToolPolicy } from "./sandbox/types.js";
 import { TOOL_POLICY_CONFORMANCE } from "./tool-policy.conformance.js";
 import {
   applyOwnerOnlyToolPolicy,
@@ -12,6 +11,22 @@ import {
   resolveToolProfilePolicy,
   TOOL_GROUPS,
 } from "./tool-policy.js";
+import type { AnyAgentTool } from "./tools/common.js";
+
+function createOwnerPolicyTools() {
+  return [
+    {
+      name: "read",
+      // oxlint-disable-next-line typescript/no-explicit-any
+      execute: async () => ({ content: [], details: {} }) as any,
+    },
+    {
+      name: "whatsapp_login",
+      // oxlint-disable-next-line typescript/no-explicit-any
+      execute: async () => ({ content: [], details: {} }) as any,
+    },
+  ] as unknown as AnyAgentTool[];
+}
 
 describe("tool-policy", () => {
   it("expands groups and normalizes aliases", () => {
@@ -52,37 +67,13 @@ describe("tool-policy", () => {
   });
 
   it("strips owner-only tools for non-owner senders", async () => {
-    const tools = [
-      {
-        name: "read",
-        // oxlint-disable-next-line typescript/no-explicit-any
-        execute: async () => ({ content: [], details: {} }) as any,
-      },
-      {
-        name: "whatsapp_login",
-        // oxlint-disable-next-line typescript/no-explicit-any
-        execute: async () => ({ content: [], details: {} }) as any,
-      },
-    ] as unknown as AnyAgentTool[];
-
+    const tools = createOwnerPolicyTools();
     const filtered = applyOwnerOnlyToolPolicy(tools, false);
     expect(filtered.map((t) => t.name)).toEqual(["read"]);
   });
 
   it("keeps owner-only tools for the owner sender", async () => {
-    const tools = [
-      {
-        name: "read",
-        // oxlint-disable-next-line typescript/no-explicit-any
-        execute: async () => ({ content: [], details: {} }) as any,
-      },
-      {
-        name: "whatsapp_login",
-        // oxlint-disable-next-line typescript/no-explicit-any
-        execute: async () => ({ content: [], details: {} }) as any,
-      },
-    ] as unknown as AnyAgentTool[];
-
+    const tools = createOwnerPolicyTools();
     const filtered = applyOwnerOnlyToolPolicy(tools, true);
     expect(filtered.map((t) => t.name)).toEqual(["read", "whatsapp_login"]);
   });

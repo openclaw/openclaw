@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { ExecAllowlistEntry } from "./exec-approvals.js";
 import { splitShellArgs } from "../utils/shell-argv.js";
+import type { ExecAllowlistEntry } from "./exec-approvals.js";
 
 export const DEFAULT_SAFE_BINS = ["jq", "grep", "cut", "sort", "uniq", "head", "tail", "tr", "wc"];
 

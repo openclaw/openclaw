@@ -1,11 +1,13 @@
 import fs from "node:fs/promises";
 import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import {
   getRunEmbeddedPiAgentMock,
   installTriggerHandlingE2eTestHooks,
   MAIN_SESSION_KEY,
   makeCfg,
+  makeWhatsAppElevatedCfg,
   withTempHome,
 } from "./reply.triggers.trigger-handling.test-harness.js";
 
@@ -15,6 +17,14 @@ beforeAll(async () => {
 });
 
 installTriggerHandlingE2eTestHooks();
+
+function requireSessionStorePath(cfg: { session?: { store?: string } }): string {
+  const storePath = cfg.session?.store;
+  if (!storePath) {
+    throw new Error("expected session store path");
+  }
+  return storePath;
+}
 
 describe("trigger handling", () => {
   it("ignores inline elevated directive for unapproved sender", async () => {
@@ -26,25 +36,7 @@ describe("trigger handling", () => {
           agentMeta: { sessionId: "s", provider: "p", model: "m" },
         },
       });
-      const cfg = {
-        agents: {
-          defaults: {
-            model: "anthropic/claude-opus-4-5",
-            workspace: join(home, "openclaw"),
-          },
-        },
-        tools: {
-          elevated: {
-            allowFrom: { whatsapp: ["+1000"] },
-          },
-        },
-        channels: {
-          whatsapp: {
-            allowFrom: ["+1000"],
-          },
-        },
-        session: { store: join(home, "sessions.json") },
-      };
+      const cfg = makeWhatsAppElevatedCfg(home);
 
       const res = await getReplyFromConfig(
         {
@@ -73,7 +65,7 @@ describe("trigger handling", () => {
         },
         tools: { elevated: { allowFrom: { discord: ["steipete"] } } },
         session: { store: join(home, "sessions.json") },
-      };
+      } as OpenClawConfig;
 
       const res = await getReplyFromConfig(
         {
@@ -92,7 +84,7 @@ describe("trigger handling", () => {
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("Elevated mode set to ask");
 
-      const storeRaw = await fs.readFile(cfg.session.store, "utf-8");
+      const storeRaw = await fs.readFile(requireSessionStorePath(cfg), "utf-8");
       const store = JSON.parse(storeRaw) as Record<string, { elevatedLevel?: string }>;
       expect(store[MAIN_SESSION_KEY]?.elevatedLevel).toBe("on");
     });
@@ -112,7 +104,7 @@ describe("trigger handling", () => {
           },
         },
         session: { store: join(home, "sessions.json") },
-      };
+      } as OpenClawConfig;
 
       const res = await getReplyFromConfig(
         {

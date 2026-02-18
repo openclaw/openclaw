@@ -128,45 +128,14 @@ describe("web media loading", () => {
   });
 
   it("strips MEDIA: prefix before reading local file", async () => {
-    const buffer = await sharp({
-      create: { width: 2, height: 2, channels: 3, background: "#0000ff" },
-    })
-      .png()
-      .toBuffer();
-
-    const file = await writeTempFile(buffer, ".png");
-
-    const result = await loadWebMedia(`MEDIA:${file}`, 1024 * 1024);
-
-    expect(result.kind).toBe("image");
-    expect(result.buffer.length).toBeGreaterThan(0);
-  });
-
-  it("strips MEDIA: prefix with whitespace after colon", async () => {
-    const buffer = await sharp({
-      create: { width: 2, height: 2, channels: 3, background: "#0000ff" },
-    })
-      .png()
-      .toBuffer();
-
-    const file = await writeTempFile(buffer, ".png");
-
-    const result = await loadWebMedia(`MEDIA: ${file}`, 1024 * 1024);
+    const result = await loadWebMedia(`MEDIA:${tinyPngFile}`, 1024 * 1024);
 
     expect(result.kind).toBe("image");
     expect(result.buffer.length).toBeGreaterThan(0);
   });
 
   it("strips MEDIA: prefix with extra whitespace (LLM-friendly)", async () => {
-    const buffer = await sharp({
-      create: { width: 2, height: 2, channels: 3, background: "#0000ff" },
-    })
-      .png()
-      .toBuffer();
-
-    const file = await writeTempFile(buffer, ".png");
-
-    const result = await loadWebMedia(`  MEDIA :  ${file}`, 1024 * 1024);
+    const result = await loadWebMedia(`  MEDIA :  ${tinyPngFile}`, 1024 * 1024);
 
     expect(result.kind).toBe("image");
     expect(result.buffer.length).toBeGreaterThan(0);
@@ -218,7 +187,7 @@ describe("web media loading", () => {
       status: 404,
       statusText: "Not Found",
       url: "https://example.com/missing.jpg",
-    } as Response);
+    } as unknown as Response);
 
     await expect(loadWebMedia("https://example.com/missing.jpg", 1024 * 1024)).rejects.toThrow(
       /Failed to fetch media from https:\/\/example\.com\/missing\.jpg.*HTTP 404/i,
@@ -256,7 +225,7 @@ describe("web media loading", () => {
       arrayBuffer: async () => Buffer.alloc(2048).buffer,
       headers: { get: () => "image/png" },
       status: 200,
-    } as Response);
+    } as unknown as Response);
 
     await expect(loadWebMediaRaw("https://example.com/too-big.png", 1024)).rejects.toThrow(
       /exceeds maxBytes 1024/i,
@@ -282,7 +251,7 @@ describe("web media loading", () => {
         },
       },
       status: 200,
-    } as Response);
+    } as unknown as Response);
 
     const result = await loadWebMedia("https://example.com/download?id=1", 1024 * 1024);
 
@@ -305,7 +274,7 @@ describe("web media loading", () => {
         gifBytes.buffer.slice(gifBytes.byteOffset, gifBytes.byteOffset + gifBytes.byteLength),
       headers: { get: () => "image/gif" },
       status: 200,
-    } as Response);
+    } as unknown as Response);
 
     const result = await loadWebMedia("https://example.com/animation.gif", 1024 * 1024);
 

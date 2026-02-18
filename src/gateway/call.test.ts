@@ -281,18 +281,18 @@ describe("callGateway error details", () => {
     pickPrimaryTailnetIPv4.mockReturnValue(undefined);
 
     vi.useFakeTimers();
-    let err: Error | null = null;
+    let errMessage = "";
     const promise = callGateway({ method: "health", timeoutMs: 5 }).catch((caught) => {
-      err = caught as Error;
+      errMessage = caught instanceof Error ? caught.message : String(caught);
     });
 
     await vi.advanceTimersByTimeAsync(5);
     await promise;
 
-    expect(err?.message).toContain("gateway timeout after 5ms");
-    expect(err?.message).toContain("Gateway target: ws://127.0.0.1:18789");
-    expect(err?.message).toContain("Source: local loopback");
-    expect(err?.message).toContain("Bind: loopback");
+    expect(errMessage).toContain("gateway timeout after 5ms");
+    expect(errMessage).toContain("Gateway target: ws://127.0.0.1:18789");
+    expect(errMessage).toContain("Source: local loopback");
+    expect(errMessage).toContain("Bind: loopback");
   });
 
   it("does not overflow very large timeout values", async () => {
@@ -304,18 +304,18 @@ describe("callGateway error details", () => {
     pickPrimaryTailnetIPv4.mockReturnValue(undefined);
 
     vi.useFakeTimers();
-    let err: Error | null = null;
+    let errMessage = "";
     const promise = callGateway({ method: "health", timeoutMs: 2_592_010_000 }).catch((caught) => {
-      err = caught as Error;
+      errMessage = caught instanceof Error ? caught.message : String(caught);
     });
 
     await vi.advanceTimersByTimeAsync(1);
-    expect(err).toBeNull();
+    expect(errMessage).toBe("");
 
     lastClientOptions?.onClose?.(1006, "");
     await promise;
 
-    expect(err?.message).toContain("gateway closed (1006");
+    expect(errMessage).toContain("gateway closed (1006");
   });
 
   it("fails fast when remote mode is missing remote url", async () => {

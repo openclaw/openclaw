@@ -140,7 +140,11 @@ describe("sessions tools", () => {
 
     const result = await tool.execute("call1", { messageLimit: 1 });
     const details = result.details as {
-      sessions?: Array<Record<string, unknown>>;
+      sessions?: Array<{
+        key?: string;
+        channel?: string;
+        messages?: Array<{ role?: string }>;
+      }>;
     };
     expect(details.sessions).toHaveLength(3);
     const main = details.sessions?.find((s) => s.key === "main");
@@ -178,7 +182,7 @@ describe("sessions tools", () => {
     }
 
     const result = await tool.execute("call3", { sessionKey: "main" });
-    const details = result.details as { messages?: unknown[] };
+    const details = result.details as { messages?: Array<{ role?: string }> };
     expect(details.messages).toHaveLength(1);
     expect(details.messages?.[0]?.role).toBe("assistant");
 
@@ -764,6 +768,8 @@ describe("sessions tools", () => {
       .spyOn(sessionsModule, "loadSessionStore")
       .mockImplementation(() => ({
         "agent:main:subagent:usage-active": {
+          sessionId: "session-usage-active",
+          updatedAt: now,
           modelProvider: "anthropic",
           model: "claude-opus-4-6",
           inputTokens: 12,

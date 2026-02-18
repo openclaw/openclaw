@@ -124,10 +124,153 @@ describe("gateway server chat", () => {
     }
   });
 
+  test("chat.history hard-caps single oversized nested payloads", async () => {
+    const tempDirs: string[] = [];
+    const { server, ws } = await startServerWithClient();
+    try {
+      const historyMaxBytes = 64 * 1024;
+      __setMaxChatHistoryMessagesBytesForTest(historyMaxBytes);
+      await connectOk(ws);
+
+      const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+      tempDirs.push(sessionDir);
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+
+      await writeSessionStore({
+        entries: {
+          main: { sessionId: "sess-main", updatedAt: Date.now() },
+        },
+      });
+
+      const hugeNestedText = "n".repeat(450_000);
+      const oversizedLine = JSON.stringify({
+        message: {
+          role: "assistant",
+          timestamp: Date.now(),
+          content: [
+            {
+              type: "tool_result",
+              toolUseId: "tool-1",
+              output: {
+                nested: {
+                  payload: hugeNestedText,
+                },
+              },
+            },
+          ],
+        },
+      });
+      await fs.writeFile(path.join(sessionDir, "sess-main.jsonl"), `${oversizedLine}\n`, "utf-8");
+
+      const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
+        sessionKey: "main",
+        limit: 1000,
+      });
+      expect(historyRes.ok).toBe(true);
+      const messages = historyRes.payload?.messages ?? [];
+      expect(messages.length).toBe(1);
+
+      const serialized = JSON.stringify(messages);
+      const bytes = Buffer.byteLength(serialized, "utf8");
+      expect(bytes).toBeLessThanOrEqual(historyMaxBytes);
+      expect(serialized).toContain("[chat.history omitted: message too large]");
+      expect(serialized.includes(hugeNestedText.slice(0, 256))).toBe(false);
+    } finally {
+      __setMaxChatHistoryMessagesBytesForTest();
+      testState.sessionStorePath = undefined;
+      ws.close();
+      await server.close();
+      await Promise.all(tempDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
+    }
+  });
+
+  test("chat.history keeps recent small messages when latest message is oversized", async () => {
+    const tempDirs: string[] = [];
+    const { server, ws } = await startServerWithClient();
+    try {
+      const historyMaxBytes = 64 * 1024;
+      __setMaxChatHistoryMessagesBytesForTest(historyMaxBytes);
+      await connectOk(ws);
+
+      const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+      tempDirs.push(sessionDir);
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+
+      await writeSessionStore({
+        entries: {
+          main: { sessionId: "sess-main", updatedAt: Date.now() },
+        },
+      });
+
+      const baseText = "s".repeat(1_200);
+      const lines: string[] = [];
+      for (let i = 0; i < 30; i += 1) {
+        lines.push(
+          JSON.stringify({
+            message: {
+              role: "user",
+              timestamp: Date.now() + i,
+              content: [{ type: "text", text: `small-${i}:${baseText}` }],
+            },
+          }),
+        );
+      }
+
+      const hugeNestedText = "z".repeat(450_000);
+      lines.push(
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            timestamp: Date.now() + 1_000,
+            content: [
+              {
+                type: "tool_result",
+                toolUseId: "tool-1",
+                output: {
+                  nested: {
+                    payload: hugeNestedText,
+                  },
+                },
+              },
+            ],
+          },
+        }),
+      );
+
+      await fs.writeFile(
+        path.join(sessionDir, "sess-main.jsonl"),
+        `${lines.join("\n")}\n`,
+        "utf-8",
+      );
+
+      const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
+        sessionKey: "main",
+        limit: 1000,
+      });
+      expect(historyRes.ok).toBe(true);
+
+      const messages = historyRes.payload?.messages ?? [];
+      const serialized = JSON.stringify(messages);
+      const bytes = Buffer.byteLength(serialized, "utf8");
+
+      expect(bytes).toBeLessThanOrEqual(historyMaxBytes);
+      expect(messages.length).toBeGreaterThan(1);
+      expect(serialized).toContain("small-29:");
+      expect(serialized).toContain("[chat.history omitted: message too large]");
+      expect(serialized.includes(hugeNestedText.slice(0, 256))).toBe(false);
+    } finally {
+      __setMaxChatHistoryMessagesBytesForTest();
+      testState.sessionStorePath = undefined;
+      ws.close();
+      await server.close();
+      await Promise.all(tempDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
+    }
+  });
+
   test("smoke: supports abort and idempotent completion", async () => {
     const tempDirs: string[] = [];
     const { server, ws } = await startServerWithClient();
-    const spy = vi.mocked(getReplyFromConfig);
+    const spy = vi.mocked(getReplyFromConfig) as unknown as ReturnType<typeof vi.fn>;
     let aborted = false;
 
     try {

@@ -89,20 +89,13 @@ export function applyProviderConfigWithDefaultModels(
         ? existingModels
         : [...existingModels, ...defaultModels]
       : defaultModels;
-
-  const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as {
-    apiKey?: string;
-  };
-
-  const normalizedApiKey = typeof existingApiKey === "string" ? existingApiKey.trim() : undefined;
-
-  providers[params.providerId] = {
-    ...existingProviderRest,
-    baseUrl: params.baseUrl,
+  providers[params.providerId] = buildProviderConfig({
+    existingProvider,
     api: params.api,
-    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
-    models: mergedModels.length > 0 ? mergedModels : defaultModels,
-  };
+    baseUrl: params.baseUrl,
+    mergedModels,
+    fallbackModels: defaultModels,
+  });
 
   return applyOnboardAuthAgentModelsAndProviders(cfg, {
     agentModels: params.agentModels,
@@ -157,23 +150,37 @@ export function applyProviderConfigWithModelCatalog(
           ),
         ]
       : catalogModels;
-
-  const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as {
-    apiKey?: string;
-  };
-
-  const normalizedApiKey = typeof existingApiKey === "string" ? existingApiKey.trim() : undefined;
-
-  providers[params.providerId] = {
-    ...existingProviderRest,
-    baseUrl: params.baseUrl,
+  providers[params.providerId] = buildProviderConfig({
+    existingProvider,
     api: params.api,
-    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
-    models: mergedModels.length > 0 ? mergedModels : catalogModels,
-  };
+    baseUrl: params.baseUrl,
+    mergedModels,
+    fallbackModels: catalogModels,
+  });
 
   return applyOnboardAuthAgentModelsAndProviders(cfg, {
     agentModels: params.agentModels,
     providers,
   });
+}
+
+function buildProviderConfig(params: {
+  existingProvider: ModelProviderConfig | undefined;
+  api: ModelApi;
+  baseUrl: string;
+  mergedModels: ModelDefinitionConfig[];
+  fallbackModels: ModelDefinitionConfig[];
+}): ModelProviderConfig {
+  const { apiKey: existingApiKey, ...existingProviderRest } = (params.existingProvider ?? {}) as {
+    apiKey?: string;
+  };
+  const normalizedApiKey = typeof existingApiKey === "string" ? existingApiKey.trim() : undefined;
+
+  return {
+    ...existingProviderRest,
+    baseUrl: params.baseUrl,
+    api: params.api,
+    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
+    models: params.mergedModels.length > 0 ? params.mergedModels : params.fallbackModels,
+  };
 }
