@@ -92,6 +92,7 @@ export async function mergeHybridResults(params: {
       snippet: string;
       vectorScore: number;
       textScore: number;
+      embedding?: number[];
     }
   >();
 
@@ -105,6 +106,7 @@ export async function mergeHybridResults(params: {
       snippet: r.snippet,
       vectorScore: r.vectorScore,
       textScore: 0,
+      embedding: r.embedding,
     });
   }
 
@@ -131,8 +133,6 @@ export async function mergeHybridResults(params: {
 
   const merged = Array.from(byId.values()).map((entry) => {
     const score = params.vectorWeight * entry.vectorScore + params.textWeight * entry.textScore;
-    // Extract embedding from vector results if available
-    const vectorResult = params.vector.find((v) => v.id === entry.id);
     return {
       path: entry.path,
       startLine: entry.startLine,
@@ -140,7 +140,7 @@ export async function mergeHybridResults(params: {
       score,
       snippet: entry.snippet,
       source: entry.source,
-      embedding: vectorResult?.embedding,
+      embedding: entry.embedding,
     };
   });
 
@@ -165,7 +165,7 @@ export async function mergeHybridResults(params: {
     // Select diverse representatives from each cluster
     // This ensures we don't have too many similar results before MMR
     const representatives = selectClusterRepresentatives(
-      clusters.flatMap((c) => c.items),
+      clusters,
       1, // Take top 1 from each cluster
     );
     

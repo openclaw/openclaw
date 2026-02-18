@@ -189,13 +189,11 @@ function expandCluster<T extends ClusterableItem>(
     const currentIdx = queue.shift()!;
 
     if (labels[currentIdx] === -1) {
-      // Was noise, now part of cluster
+      // Unvisited or noise — assign to cluster
       labels[currentIdx] = clusterId;
-    } else if (labels[currentIdx] !== -1) {
-      // Already in another cluster
-      continue;
     } else {
-      labels[currentIdx] = clusterId;
+      // Already in another cluster — skip
+      continue;
     }
 
     const currentNeighbors = findNeighbors(items, currentIdx, epsilon);
