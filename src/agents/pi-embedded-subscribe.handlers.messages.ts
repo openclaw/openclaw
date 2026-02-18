@@ -7,6 +7,7 @@ import {
   isMessagingToolDuplicateNormalized,
   normalizeTextForComparison,
 } from "./pi-embedded-helpers.js";
+import { hasToolCall } from "../utils/transcript-tools.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 import { appendRawStream } from "./pi-embedded-subscribe.raw-stream.js";
 import {
@@ -262,7 +263,12 @@ export function handleMessageEnd(
     }
   }
 
-  if (!ctx.state.emittedAssistantUpdate && (cleanedText || hasMedia)) {
+  // #20005: When the assistant message contains tool calls, any text blocks are
+  // "narration" (e.g., "Let me search for that...") and should NOT be delivered
+  // to the user. Check early to also suppress emitAgentEvent for non-streaming providers.
+  const messageHasToolCalls = hasToolCall(assistantMessage as Record<string, unknown>);
+
+  if (!ctx.state.emittedAssistantUpdate && (cleanedText || hasMedia) && !messageHasToolCalls) {
     emitAgentEvent({
       runId: ctx.params.runId,
       stream: "assistant",
@@ -283,9 +289,19 @@ export function handleMessageEnd(
     ctx.state.emittedAssistantUpdate = true;
   }
 
+  // Clear narration text added during this message when tool calls are present.
+  if (messageHasToolCalls && ctx.state.assistantTexts.length > ctx.state.assistantTextBaseline) {
+    ctx.state.assistantTexts.splice(ctx.state.assistantTextBaseline);
+  }
+
   const addedDuringMessage = ctx.state.assistantTexts.length > ctx.state.assistantTextBaseline;
   const chunkerHasBuffered = ctx.blockChunker?.hasBuffered() ?? false;
-  ctx.finalizeAssistantTexts({ text, addedDuringMessage, chunkerHasBuffered });
+  // Pass empty text when tool calls present to prevent finalizeAssistantTexts from re-adding narration.
+  ctx.finalizeAssistantTexts({
+    text: messageHasToolCalls ? "" : text,
+    addedDuringMessage,
+    chunkerHasBuffered,
+  });
 
   const onBlockReply = ctx.params.onBlockReply;
   const shouldEmitReasoning = Boolean(
