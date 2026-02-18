@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { parseStorageKind, parseStorageMutationRequest } from "./agent.storage.js";
+import {
+  parseRequiredStorageMutationRequest,
+  parseStorageKind,
+  parseStorageMutationRequest,
+} from "./agent.storage.js";
 
 describe("browser storage route parsing", () => {
   describe("parseStorageKind", () => {
@@ -35,6 +39,27 @@ describe("browser storage route parsing", () => {
         kind: null,
         targetId: undefined,
       });
+    });
+  });
+
+  describe("parseRequiredStorageMutationRequest", () => {
+    it("returns parsed request for supported kinds", () => {
+      expect(
+        parseRequiredStorageMutationRequest("session", {
+          targetId: " tab-9 ",
+        }),
+      ).toEqual({
+        kind: "session",
+        targetId: "tab-9",
+      });
+    });
+
+    it("returns null for unsupported kind", () => {
+      expect(
+        parseRequiredStorageMutationRequest("cookie", {
+          targetId: "tab-1",
+        }),
+      ).toBeNull();
     });
   });
 });
