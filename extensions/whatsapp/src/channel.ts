@@ -212,6 +212,26 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
       return [escaped, `@${escaped}`];
     },
   },
+  agentPrompt: {
+    messageToolHints: ({ cfg }) => {
+      const gate = createActionGate(cfg.channels?.whatsapp?.actions);
+      const hints: string[] = [];
+      
+      if (gate("messages")) {
+        hints.push(
+          "- WhatsApp message history: use `action=read` with `channel=whatsapp`, `target=<chat_jid>`, and optional `limit=<number>` to retrieve recent messages from a chat or group.",
+        );
+      }
+      
+      if (gate("readFile")) {
+        hints.push(
+          "- WhatsApp media download: use `action=readFile` with `channel=whatsapp`, `chatJid=<chat_jid>`, and `messageId=<message_id>` to download media from a message.",
+        );
+      }
+      
+      return hints;
+    },
+  },
   commands: {
     enforceOwnerForCommands: true,
     skipWhenConfigEmpty: true,
@@ -260,7 +280,11 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
       if (gate("messages")) {
         actions.add("read");
       }
-      return Array.from(actions);
+      const actionList = Array.from(actions);
+      if (getWhatsAppRuntime().logging.shouldLogVerbose()) {
+        console.log(`[whatsapp] Actions available: ${actionList.join(", ") || "none"}`);
+      }
+      return actionList;
     },
     supportsAction: ({ action }) => action === "react" || action === "readFile" || action === "read",
     handleAction: async ({ action, params, cfg, accountId }) => {

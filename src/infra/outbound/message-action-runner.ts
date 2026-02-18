@@ -691,6 +691,7 @@ export async function runMessageAction(
 ): Promise<MessageActionRunResult> {
   const cfg = input.cfg;
   const params = { ...input.params };
+  console.log(`[message-action-runner] Running action: ${input.action}`);
   const resolvedAgentId =
     input.agentId ??
     (input.sessionKey

@@ -66,12 +66,12 @@ export async function readWhatsAppMessages(
     const body = extractText(message);
     const mediaPresent = hasMedia(message);
     const mediaTypeValue = getMediaType(message);
-    const fileName = message?.documentMessage?.fileName;
+    const fileName = message?.documentMessage?.fileName ?? undefined;
 
     return {
-      id: msg.key?.id,
-      from: msg.key?.remoteJid,
-      to: msg.key?.remoteJid, // In WhatsApp, this is the chat JID
+      id: msg.key?.id ?? undefined,
+      from: msg.key?.remoteJid ?? undefined,
+      to: msg.key?.remoteJid ?? undefined, // In WhatsApp, this is the chat JID
       body,
       timestamp: msg.messageTimestamp ? Number(msg.messageTimestamp) * 1000 : stored.timestamp,
       hasMedia: mediaPresent,

@@ -60,12 +60,18 @@ export function supportsChannelMessageCardsForChannel(params: {
 export async function dispatchChannelMessageAction(
   ctx: ChannelMessageActionContext,
 ): Promise<AgentToolResult<unknown> | null> {
+  console.log(`[message-actions] Dispatching action: ${ctx.action} for channel: ${ctx.channel}`);
   const plugin = getChannelPlugin(ctx.channel);
   if (!plugin?.actions?.handleAction) {
+    console.log(`[message-actions] No handler found for channel: ${ctx.channel}`);
     return null;
   }
   if (plugin.actions.supportsAction && !plugin.actions.supportsAction({ action: ctx.action })) {
+    console.log(
+      `[message-actions] Action ${ctx.action} not supported by channel: ${ctx.channel}`,
+    );
     return null;
   }
+  console.log(`[message-actions] Executing action ${ctx.action} via plugin handler`);
   return await plugin.actions.handleAction(ctx);
 }

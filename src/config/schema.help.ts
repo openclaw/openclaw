@@ -381,6 +381,10 @@ export const FIELD_HELP: Record<string, string> = {
   "channels.whatsapp.selfChatMode": "Same-phone setup (bot uses your personal WhatsApp number).",
   "channels.whatsapp.debounceMs":
     "Debounce window (ms) for batching rapid consecutive messages from the same sender (0 to disable).",
+  "channels.whatsapp.syncFullHistory":
+    "Sync full message history on connection (default: false). When enabled, Baileys syncs all history at gateway startup. Can be slow for accounts with many messages.",
+  "channels.whatsapp.allowChats":
+    "Optional allowlist of specific chats/groups by JID. When set, the bot will only read and respond to messages from these chats. Format: ['120363425273773444@g.us', '1234567890@s.whatsapp.net']",
   "channels.signal.dmPolicy":
     'Direct message access control ("pairing" recommended). "open" requires channels.signal.allowFrom=["*"].',
   "channels.imessage.dmPolicy":

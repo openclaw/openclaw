@@ -6,6 +6,13 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Subagents: nested sub-agents (sub-sub-agents) with configurable depth. Set `agents.defaults.subagents.maxSpawnDepth: 2` to allow sub-agents to spawn their own children. Includes `maxChildrenPerAgent` limit (default 5), depth-aware tool policy, and proper announce chain routing. (#14447) Thanks @tyler6204.
+- Discord: components v2 UI + embeds passthrough + exec approval UX refinements (CV2 containers, button layout, Discord-forwarding skip). Thanks @thewilloftheshadow.
+- Slack/Discord/Telegram: add per-channel ack reaction overrides (account/channel-level) to support platform-specific emoji formats. (#17092) Thanks @zerone0x.
+- WhatsApp: add `syncFullHistory` config option to sync full message history on gateway connection (default: false). When enabled, Baileys syncs all history at startup.
+- WhatsApp: add `allowChats` config option for chat-level access control. Restricts bot to specific chats/groups by JID (e.g., `["120363425273773444@g.us"]`).
+- WhatsApp: add `fetchHistory` parameter to `read` action to optionally fetch message history when store is empty (default: true).
+
 ### Fixes
 
 - Commands/Doctor: avoid rewriting invalid configs with new `gateway.auth.token` defaults during repair and only write when real config changes are detected, preventing accidental token duplication and backup churn.

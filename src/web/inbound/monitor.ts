@@ -36,11 +36,14 @@ export async function monitorWebInbox(options: {
   debounceMs?: number;
   /** Optional debounce gating predicate. */
   shouldDebounce?: (msg: WebInboundMessage) => boolean;
+  /** Sync full message history on connection (default: false). */
+  syncFullHistory?: boolean;
 }) {
   const inboundLogger = getChildLogger({ module: "web-inbound" });
   const inboundConsoleLog = createSubsystemLogger("gateway/channels/whatsapp").child("inbound");
   const sock = await createWaSocket(false, options.verbose, {
     authDir: options.authDir,
+    syncFullHistory: options.syncFullHistory,
   });
   await waitForWaConnection(sock);
   const connectedAtMs = Date.now();
@@ -177,6 +180,9 @@ export async function monitorWebInbox(options: {
       // Store the message for later retrieval
       if (id) {
         messageStore.store(remoteJid, id, msg as proto.IWebMessageInfo);
+        if (shouldLogVerbose()) {
+          logVerbose(`Stored message ${id} from ${remoteJid} in message store`);
+        }
       }
 
       const group = isJidGroup(remoteJid) === true;
@@ -414,6 +420,10 @@ export async function monitorWebInbox(options: {
     },
     downloadMedia: async (chatJid: string, messageId: string) => {
       return await downloadMediaById(chatJid, messageId, options.accountId, sock);
+    },
+    fetchHistory: async (chatJid: string, limit?: number) => {
+      const { fetchAndStoreHistory } = await import("../fetch-history.js");
+      return await fetchAndStoreHistory(chatJid, options.accountId, sock, { limit });
     },
     // IPC surface (sendMessage/sendPoll/sendReaction/sendComposingTo)
     ...sendApi,

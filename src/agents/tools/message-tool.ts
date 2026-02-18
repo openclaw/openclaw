@@ -249,12 +249,33 @@ function buildReactionSchema() {
 
 function buildFetchSchema() {
   return {
-    limit: Type.Optional(Type.Number()),
-    before: Type.Optional(Type.String()),
-    after: Type.Optional(Type.String()),
-    around: Type.Optional(Type.String()),
-    fromMe: Type.Optional(Type.Boolean()),
-    includeArchived: Type.Optional(Type.Boolean()),
+    limit: Type.Optional(
+      Type.Number({
+        description:
+          "Maximum number of messages to retrieve (for read action). Default varies by channel.",
+      }),
+    ),
+    before: Type.Optional(Type.String({ description: "Fetch messages before this message ID" })),
+    after: Type.Optional(Type.String({ description: "Fetch messages after this message ID" })),
+    around: Type.Optional(Type.String({ description: "Fetch messages around this message ID" })),
+    fromMe: Type.Optional(
+      Type.Boolean({ description: "Filter messages sent by the bot (for read action)" }),
+    ),
+    includeArchived: Type.Optional(
+      Type.Boolean({ description: "Include archived messages in results" }),
+    ),
+    chatJid: Type.Optional(
+      Type.String({
+        description:
+          "WhatsApp chat JID (for read/readFile actions). Use with channel=whatsapp and action=read or action=readFile.",
+      }),
+    ),
+    messageId: Type.Optional(
+      Type.String({
+        description:
+          "Message ID (for readFile, react, edit, delete actions). Required for readFile to download media.",
+      }),
+    ),
   };
 }
 
@@ -528,6 +549,22 @@ function buildMessageToolDescription(options?: {
 }): string {
   const baseDescription = "Send, delete, and manage messages via channel plugins.";
 
+  // Build action descriptions
+  const actionDescriptions: Record<string, string> = {
+    send: "send messages",
+    broadcast: "broadcast to multiple targets",
+    poll: "create polls",
+    react: "add/remove reactions",
+    read: "read message history",
+    readFile: "download media from messages",
+    edit: "edit messages",
+    delete: "delete messages",
+    pin: "pin messages",
+    unpin: "unpin messages",
+    reply: "reply to messages",
+    "thread-reply": "reply in threads",
+  };
+
   // If we have a current channel, show only its supported actions
   if (options?.currentChannel) {
     const channelActions = filterActionsForContext({
@@ -541,8 +578,16 @@ function buildMessageToolDescription(options?: {
     if (channelActions.length > 0) {
       // Always include "send" as a base action
       const allActions = new Set(["send", ...channelActions]);
-      const actionList = Array.from(allActions).toSorted().join(", ");
-      return `${baseDescription} Current channel (${options.currentChannel}) supports: ${actionList}.`;
+      const actionList = Array.from(allActions)
+        .toSorted()
+        .map((action) => {
+          const desc = actionDescriptions[action];
+          return desc ? `${action} (${desc})` : action;
+        })
+        .join(", ");
+      const description = `${baseDescription} Current channel (${options.currentChannel}) supports: ${actionList}.`;
+      console.log(`[message-tool] Channel-specific description: ${description}`);
+      return description;
     }
   }
 
@@ -550,11 +595,21 @@ function buildMessageToolDescription(options?: {
   if (options?.config) {
     const actions = listChannelMessageActions(options.config);
     if (actions.length > 0) {
-      return `${baseDescription} Supports actions: ${actions.join(", ")}.`;
+      const actionList = actions
+        .map((action) => {
+          const desc = actionDescriptions[action];
+          return desc ? `${action} (${desc})` : action;
+        })
+        .join(", ");
+      const description = `${baseDescription} Supports actions: ${actionList}.`;
+      console.log(`[message-tool] Generic description with actions: ${description}`);
+      return description;
     }
   }
 
-  return `${baseDescription} Supports actions: send, delete, react, poll, pin, threads, and more.`;
+  const fallback = `${baseDescription} Supports actions: send, delete, react, poll, pin, threads, and more.`;
+  console.log(`[message-tool] Fallback description: ${fallback}`);
+  return fallback;
 }
 
 export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {

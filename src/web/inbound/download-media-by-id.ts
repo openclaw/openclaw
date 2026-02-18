@@ -1,4 +1,4 @@
-import type { proto } from "@whiskeysockets/baileys";
+import type { proto, WAMessage } from "@whiskeysockets/baileys";
 import { downloadMediaMessage, normalizeMessageContent } from "@whiskeysockets/baileys";
 import type { createWaSocket } from "../session.js";
 import { logVerbose } from "../../globals.js";
@@ -76,7 +76,7 @@ export async function downloadMediaById(
     }
 
     const buffer = await downloadMediaMessage(
-      targetMessage,
+      targetMessage as WAMessage,
       "buffer",
       {},
       {

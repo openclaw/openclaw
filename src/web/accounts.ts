@@ -19,6 +19,7 @@ export type ResolvedWhatsAppAccount = {
   selfChatMode?: boolean;
   allowFrom?: string[];
   groupAllowFrom?: string[];
+  allowChats?: string[];
   groupPolicy?: GroupPolicy;
   dmPolicy?: DmPolicy;
   textChunkLimit?: number;
@@ -28,6 +29,7 @@ export type ResolvedWhatsAppAccount = {
   ackReaction?: WhatsAppAccountConfig["ackReaction"];
   groups?: WhatsAppAccountConfig["groups"];
   debounceMs?: number;
+  syncFullHistory?: boolean;
 };
 
 const { listConfiguredAccountIds, listAccountIds, resolveDefaultAccountId } =
@@ -140,6 +142,7 @@ export function resolveWhatsAppAccount(params: {
     dmPolicy: accountCfg?.dmPolicy ?? rootCfg?.dmPolicy,
     allowFrom: accountCfg?.allowFrom ?? rootCfg?.allowFrom,
     groupAllowFrom: accountCfg?.groupAllowFrom ?? rootCfg?.groupAllowFrom,
+    allowChats: accountCfg?.allowChats ?? rootCfg?.allowChats,
     groupPolicy: accountCfg?.groupPolicy ?? rootCfg?.groupPolicy,
     textChunkLimit: accountCfg?.textChunkLimit ?? rootCfg?.textChunkLimit,
     chunkMode: accountCfg?.chunkMode ?? rootCfg?.chunkMode,
@@ -148,6 +151,7 @@ export function resolveWhatsAppAccount(params: {
     ackReaction: accountCfg?.ackReaction ?? rootCfg?.ackReaction,
     groups: accountCfg?.groups ?? rootCfg?.groups,
     debounceMs: accountCfg?.debounceMs ?? rootCfg?.debounceMs,
+    syncFullHistory: accountCfg?.syncFullHistory ?? rootCfg?.syncFullHistory,
   };
 }
 

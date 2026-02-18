@@ -72,6 +72,12 @@ export type WhatsAppConfig = {
   /** Optional allowlist for WhatsApp group senders (E.164). */
   groupAllowFrom?: string[];
   /**
+   * Optional allowlist for specific chats/groups by JID.
+   * When set, the bot will only read and respond to messages from these chats.
+   * Format: ["120363425273773444@g.us", "1234567890@s.whatsapp.net"]
+   */
+  allowChats?: string[];
+  /**
    * Controls how group messages are handled:
    * - "open": groups bypass allowFrom, only mention-gating applies
    * - "disabled": block all group messages entirely
@@ -103,6 +109,12 @@ export type WhatsAppConfig = {
   debounceMs?: number;
   /** Heartbeat visibility settings for this channel. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /**
+   * Sync full message history on connection (default: false).
+   * When enabled, Baileys will sync all message history when the gateway connects.
+   * This can take time for accounts with many messages and only happens once per connection.
+   */
+  syncFullHistory?: boolean;
 };
 
 export type WhatsAppAccountConfig = {
@@ -130,6 +142,12 @@ export type WhatsAppAccountConfig = {
   selfChatMode?: boolean;
   allowFrom?: string[];
   groupAllowFrom?: string[];
+  /**
+   * Optional allowlist for specific chats/groups by JID.
+   * When set, the bot will only read and respond to messages from these chats.
+   * Format: ["120363425273773444@g.us", "1234567890@s.whatsapp.net"]
+   */
+  allowChats?: string[];
   groupPolicy?: GroupPolicy;
   /** Max group messages to keep as history context (0 disables). */
   historyLimit?: number;
@@ -151,4 +169,10 @@ export type WhatsAppAccountConfig = {
   debounceMs?: number;
   /** Heartbeat visibility settings for this account. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /**
+   * Sync full message history on connection (default: false).
+   * When enabled, Baileys will sync all message history when the gateway connects.
+   * This can take time for accounts with many messages and only happens once per connection.
+   */
+  syncFullHistory?: boolean;
 };

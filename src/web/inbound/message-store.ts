@@ -135,6 +135,36 @@ class MessageStore {
   size(): number {
     return this.messages.size;
   }
+
+  // Debug helper: get all stored chat JIDs
+  getStoredChats(): string[] {
+    return Array.from(this.messagesByChat.keys());
+  }
+
+  // Debug helper: get message count per chat
+  getStats(): { totalMessages: number; chatCount: number; oldestTimestamp: number | null; newestTimestamp: number | null } {
+    const now = Date.now();
+    let oldest: number | null = null;
+    let newest: number | null = null;
+    
+    for (const stored of this.messages.values()) {
+      if (now - stored.timestamp <= this.maxAgeMs) {
+        if (oldest === null || stored.timestamp < oldest) {
+          oldest = stored.timestamp;
+        }
+        if (newest === null || stored.timestamp > newest) {
+          newest = stored.timestamp;
+        }
+      }
+    }
+    
+    return {
+      totalMessages: this.messages.size,
+      chatCount: this.messagesByChat.size,
+      oldestTimestamp: oldest,
+      newestTimestamp: newest,
+    };
+  }
 }
 
 // Global message store per account
