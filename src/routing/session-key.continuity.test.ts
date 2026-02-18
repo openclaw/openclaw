@@ -5,6 +5,9 @@ describe("Discord Session Key Continuity", () => {
   const agentId = "main";
   const channel = "discord";
   const accountId = "default";
+  const channelGroups: Record<string, string[]> = {
+    "team-unified": ["discord:channel:123456789", "discord:channel:987654321"],
+  };
 
   it("generates distinct keys for DM vs Channel (dmScope=main)", () => {
     // Scenario: Default config (dmScope=main)
@@ -66,5 +69,38 @@ describe("Discord Session Key Continuity", () => {
 
     // Should still be distinct from main
     expect(missingIdKey).not.toBe("agent:main:main");
+  });
+
+  it("uses one shared key for channels listed in the same channel group", () => {
+    const firstGroupChannelKey = buildAgentSessionKey({
+      agentId,
+      channel,
+      accountId,
+      peer: { kind: "channel", id: "123456789" },
+      channelGroups,
+    });
+    const secondGroupChannelKey = buildAgentSessionKey({
+      agentId,
+      channel,
+      accountId,
+      peer: { kind: "channel", id: "987654321" },
+      channelGroups,
+    });
+
+    expect(firstGroupChannelKey).toBe("agent:main:discord:channel:team-unified");
+    expect(secondGroupChannelKey).toBe("agent:main:discord:channel:team-unified");
+    expect(firstGroupChannelKey).toBe(secondGroupChannelKey);
+  });
+
+  it("keeps unlisted channels on the default per-channel key", () => {
+    const unlistedChannelKey = buildAgentSessionKey({
+      agentId,
+      channel,
+      accountId,
+      peer: { kind: "channel", id: "555555555" },
+      channelGroups,
+    });
+
+    expect(unlistedChannelKey).toBe("agent:main:discord:channel:555555555");
   });
 });
