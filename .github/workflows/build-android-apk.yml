@@ -49,19 +49,11 @@ jobs:
           # Ensure AndroidX + no Jetifier
           echo "android.enableJetifier=false" >> /tmp/build/android/gradle.properties
           
-          # Debug: show build.gradle contents
-          echo "=== app/build.gradle ==="
-          cat /tmp/build/android/app/build.gradle
-          echo "=== settings.gradle ==="
-          cat /tmp/build/android/settings.gradle
+          echo "Overlay complete"
 
       - name: Install dependencies
         working-directory: /tmp/build
         run: flutter pub get
-
-      - name: Analyze
-        working-directory: /tmp/build
-        run: flutter analyze --no-fatal-infos || true
 
       - name: Build APK (debug)
         working-directory: /tmp/build

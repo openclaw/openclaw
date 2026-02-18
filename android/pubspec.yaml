@@ -16,7 +16,7 @@ dependencies:
   web_socket_channel: ^2.4.0
   
   # Audio
-  record: ^5.1.0
+  record: ^5.2.0
   
   # Storage
   sqflite: ^2.3.0
