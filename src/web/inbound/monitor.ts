@@ -584,6 +584,8 @@ export async function monitorWebInbox(options: {
         let mentionJids = await resolveMentionJids(text, {
           lidLookup,
           participants,
+          selfMentionJid,
+          selfMentionAliases,
         });
         if (group && hasMentionToken && participants?.length) {
           const inferred = inferMentionJidsFromNames({
