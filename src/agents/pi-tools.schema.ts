@@ -122,6 +122,11 @@ export function normalizeToolParameters(
       ? "oneOf"
       : null;
   if (!variantKey) {
+    // Ensure `properties` exists — OpenAI-compatible providers require it even
+    // when the schema only has `type` and no object fields (#20224).
+    if (!("properties" in schema)) {
+      return { ...tool, parameters: { ...schema, properties: {} } };
+    }
     return tool;
   }
   const variants = schema[variantKey] as unknown[];
