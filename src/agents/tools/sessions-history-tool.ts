@@ -1,8 +1,7 @@
-import { Type } from "@sinclair/typebox";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type { AnyAgentTool } from "./common.js";
+import { Type } from "@sinclair/typebox";
 import { loadConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
 import {
@@ -11,6 +10,7 @@ import {
 } from "../../gateway/session-utils.fs.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { truncateUtf16Safe } from "../../utils.js";
+import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam } from "./common.js";
 import {
   createSessionVisibilityGuard,

@@ -1,9 +1,9 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { TextContent } from "@mariozechner/pi-ai";
-import type { SessionManager } from "@mariozechner/pi-coding-agent";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { TextContent } from "@mariozechner/pi-ai";
+import type { SessionManager } from "@mariozechner/pi-coding-agent";
 import type {
   PluginHookBeforeMessageWriteEvent,
   PluginHookBeforeMessageWriteResult,
