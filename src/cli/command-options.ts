@@ -14,15 +14,12 @@ function getOptionSource(command: Command, name: string): string | undefined {
   return command.getOptionValueSource(name);
 }
 
-type InheritOptionConfig = {
-  // Defensive default: only direct-parent inheritance unless callers opt into deeper traversal.
-  maxDepth?: number;
-};
+// Defensive guardrail: allow expected parent/grandparent inheritance without unbounded deep traversal.
+const MAX_INHERIT_DEPTH = 2;
 
 export function inheritOptionFromParent<T = unknown>(
   command: Command | undefined,
   name: string,
-  config?: InheritOptionConfig,
 ): T | undefined {
   if (!command) {
     return undefined;
@@ -33,15 +30,9 @@ export function inheritOptionFromParent<T = unknown>(
     return undefined;
   }
 
-  const rawMaxDepth = config?.maxDepth;
-  const maxDepth =
-    typeof rawMaxDepth === "number" && Number.isFinite(rawMaxDepth)
-      ? Math.max(1, Math.floor(rawMaxDepth))
-      : 1;
-
   let depth = 0;
   let ancestor = command.parent;
-  while (ancestor && depth < maxDepth) {
+  while (ancestor && depth < MAX_INHERIT_DEPTH) {
     const source = getOptionSource(ancestor, name);
     if (source && source !== "default") {
       return ancestor.opts<Record<string, unknown>>()[name] as T | undefined;
