@@ -1,4 +1,5 @@
 import { execFile, spawn } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
 import { danger, shouldLogVerbose } from "../globals.js";
@@ -26,9 +27,21 @@ function resolveCommand(command: string): string {
   if (cmdCommands.includes(basename)) {
     return `${command}.cmd`;
   }
-  // CLI tools with .cmd wrappers on Windows (gcloud, gog, tailscale)
+  // CLI tools that may have .cmd wrappers on Windows (check .exe first, then .cmd)
   const windowsCmdTools = ["gcloud", "gog", "tailscale"];
   if (windowsCmdTools.includes(basename)) {
+    // Check if .exe exists in PATH
+    const pathEnv = process.env.PATH ?? "";
+    const parts = pathEnv.split(path.delimiter).filter(Boolean);
+    for (const part of parts) {
+      const exeCandidate = path.join(part, `${command}.exe`);
+      try {
+        fs.accessSync(exeCandidate, fs.constants.X_OK);
+        return `${command}.exe`;
+      } catch {
+        // .exe not found, try .cmd
+      }
+    }
     return `${command}.cmd`;
   }
   return command;
@@ -43,6 +56,11 @@ export function shouldSpawnWithShell(params: {
   // (like chat prompts passed as CLI args) into command-injection primitives.
   // If you need a shell, use an explicit shell-wrapper argv (e.g. `cmd.exe /c ...`)
   // and validate/escape at the call site.
+  //
+  // EXCEPTION: On Windows, .cmd files require shell: true to spawn correctly
+  if (params.platform === "win32" && params.resolvedCommand.endsWith(".cmd")) {
+    return true;
+  }
   void params;
   return false;
 }
