@@ -31,20 +31,14 @@ import {
 } from "./registry.js";
 
 type WriteDelayConfig = {
+  targetFile: "containers.json" | "browsers.json";
   containerName: string;
-  browserName: string;
-  containerDelayMs: number;
-  browserDelayMs: number;
+  started: boolean;
+  markStarted: () => void;
+  waitForRelease: Promise<void>;
 };
 
-let writeDelayConfig: WriteDelayConfig = {
-  containerName: "container-a",
-  browserName: "browser-a",
-  containerDelayMs: 0,
-  browserDelayMs: 0,
-};
-
-const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+let activeWriteGate: WriteDelayConfig | null = null;
 const realFsWriteFile = fs.writeFile;
 
 function payloadMentionsContainer(payload: string, containerName: string): boolean {
@@ -75,13 +69,36 @@ async function seedMalformedBrowserRegistry(payload: string) {
   await fs.writeFile(SANDBOX_BROWSER_REGISTRY_PATH, payload, "utf-8");
 }
 
-beforeEach(() => {
-  writeDelayConfig = {
-    containerName: "container-a",
-    browserName: "browser-a",
-    containerDelayMs: 0,
-    browserDelayMs: 0,
+function installWriteGate(
+  targetFile: "containers.json" | "browsers.json",
+  containerName: string,
+): { waitForStart: Promise<void>; release: () => void } {
+  let markStarted = () => {};
+  const waitForStart = new Promise<void>((resolve) => {
+    markStarted = resolve;
+  });
+  let resolveRelease = () => {};
+  const waitForRelease = new Promise<void>((resolve) => {
+    resolveRelease = resolve;
+  });
+  activeWriteGate = {
+    targetFile,
+    containerName,
+    started: false,
+    markStarted,
+    waitForRelease,
   };
+  return {
+    waitForStart,
+    release: () => {
+      resolveRelease();
+      activeWriteGate = null;
+    },
+  };
+}
+
+beforeEach(() => {
+  activeWriteGate = null;
   vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
     const [target, content] = args;
     if (typeof target !== "string") {
@@ -89,20 +106,17 @@ beforeEach(() => {
     }
 
     const payload = writeText(content);
+    const gate = activeWriteGate;
     if (
-      target.includes("containers.json") &&
-      payloadMentionsContainer(payload, writeDelayConfig.containerName) &&
-      writeDelayConfig.containerDelayMs > 0
+      gate &&
+      target.includes(gate.targetFile) &&
+      payloadMentionsContainer(payload, gate.containerName)
     ) {
-      await delay(writeDelayConfig.containerDelayMs);
-    }
-
-    if (
-      target.includes("browsers.json") &&
-      payloadMentionsContainer(payload, writeDelayConfig.browserName) &&
-      writeDelayConfig.browserDelayMs > 0
-    ) {
-      await delay(writeDelayConfig.browserDelayMs);
+      if (!gate.started) {
+        gate.started = true;
+        gate.markStarted();
+      }
+      await gate.waitForRelease;
     }
     return realFsWriteFile(...args);
   });
@@ -157,13 +171,6 @@ async function seedBrowserRegistry(entries: SandboxBrowserRegistryEntry[]) {
 
 describe("registry race safety", () => {
   it("keeps both container updates under concurrent writes", async () => {
-    writeDelayConfig = {
-      containerName: "container-a",
-      browserName: "browser-a",
-      containerDelayMs: 80,
-      browserDelayMs: 0,
-    };
-
     await Promise.all([
       updateRegistry(containerEntry({ containerName: "container-a" })),
       updateRegistry(containerEntry({ containerName: "container-b" })),
@@ -181,30 +188,21 @@ describe("registry race safety", () => {
 
   it("prevents concurrent container remove/update from resurrecting deleted entries", async () => {
     await seedContainerRegistry([containerEntry({ containerName: "container-x" })]);
-    writeDelayConfig = {
-      containerName: "container-x",
-      browserName: "browser-a",
-      containerDelayMs: 80,
-      browserDelayMs: 0,
-    };
+    const writeGate = installWriteGate("containers.json", "container-x");
 
-    await Promise.all([
-      updateRegistry(containerEntry({ containerName: "container-x", configHash: "updated" })),
-      removeRegistryEntry("container-x"),
-    ]);
+    const updatePromise = updateRegistry(
+      containerEntry({ containerName: "container-x", configHash: "updated" }),
+    );
+    await writeGate.waitForStart;
+    const removePromise = removeRegistryEntry("container-x");
+    writeGate.release();
+    await Promise.all([updatePromise, removePromise]);
 
     const registry = await readRegistry();
     expect(registry.entries).toHaveLength(0);
   });
 
   it("keeps both browser updates under concurrent writes", async () => {
-    writeDelayConfig = {
-      containerName: "container-a",
-      browserName: "browser-a",
-      containerDelayMs: 0,
-      browserDelayMs: 80,
-    };
-
     await Promise.all([
       updateBrowserRegistry(browserEntry({ containerName: "browser-a" })),
       updateBrowserRegistry(browserEntry({ containerName: "browser-b", cdpPort: 9223 })),
@@ -222,41 +220,34 @@ describe("registry race safety", () => {
 
   it("prevents concurrent browser remove/update from resurrecting deleted entries", async () => {
     await seedBrowserRegistry([browserEntry({ containerName: "browser-x" })]);
-    writeDelayConfig = {
-      containerName: "container-a",
-      browserName: "browser-x",
-      containerDelayMs: 0,
-      browserDelayMs: 80,
-    };
+    const writeGate = installWriteGate("browsers.json", "browser-x");
 
-    await Promise.all([
-      updateBrowserRegistry(browserEntry({ containerName: "browser-x", configHash: "updated" })),
-      removeBrowserRegistryEntry("browser-x"),
-    ]);
+    const updatePromise = updateBrowserRegistry(
+      browserEntry({ containerName: "browser-x", configHash: "updated" }),
+    );
+    await writeGate.waitForStart;
+    const removePromise = removeBrowserRegistryEntry("browser-x");
+    writeGate.release();
+    await Promise.all([updatePromise, removePromise]);
 
     const registry = await readBrowserRegistry();
     expect(registry.entries).toHaveLength(0);
   });
 
-  it("fails fast when container registry is malformed during update", async () => {
+  it("fails fast when registry files are malformed during update", async () => {
     await seedMalformedContainerRegistry("{bad json");
-    await expect(updateRegistry(containerEntry())).rejects.toThrow();
-  });
-
-  it("fails fast when browser registry is malformed during update", async () => {
     await seedMalformedBrowserRegistry("{bad json");
+    await expect(updateRegistry(containerEntry())).rejects.toThrow();
     await expect(updateBrowserRegistry(browserEntry())).rejects.toThrow();
   });
 
-  it("fails fast when container registry entries are invalid during update", async () => {
-    await seedMalformedContainerRegistry(`{"entries":[{"sessionKey":"agent:main"}]}`);
+  it("fails fast when registry entries are invalid during update", async () => {
+    const invalidEntries = `{"entries":[{"sessionKey":"agent:main"}]}`;
+    await seedMalformedContainerRegistry(invalidEntries);
+    await seedMalformedBrowserRegistry(invalidEntries);
     await expect(updateRegistry(containerEntry())).rejects.toThrow(
       /Invalid sandbox registry format/,
     );
-  });
-
-  it("fails fast when browser registry entries are invalid during update", async () => {
-    await seedMalformedBrowserRegistry(`{"entries":[{"sessionKey":"agent:main"}]}`);
     await expect(updateBrowserRegistry(browserEntry())).rejects.toThrow(
       /Invalid sandbox registry format/,
     );
