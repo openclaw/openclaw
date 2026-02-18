@@ -34,7 +34,7 @@ function createPostWebhookTestHarness(rawBody: string, secret = "secret") {
     runtime,
     readBody: async () => rawBody,
   });
-  return { bot, handler, secret };
+  return { bot, handler, runtime, secret };
 }
 
 describe("createLineNodeWebhookHandler", () => {
@@ -110,6 +110,27 @@ describe("createLineNodeWebhookHandler", () => {
     expect(bot.handleWebhook).toHaveBeenCalledWith(
       expect.objectContaining({ events: expect.any(Array) }),
     );
+  });
+
+  it("returns 500 when event processing fails and does not acknowledge with 200", async () => {
+    const rawBody = JSON.stringify({ events: [{ type: "message" }] });
+    const { bot, handler, runtime, secret } = createPostWebhookTestHarness(rawBody);
+    bot.handleWebhook.mockImplementation(async () => {
+      throw new Error("boom");
+    });
+
+    const { res } = createRes();
+    await handler(
+      {
+        method: "POST",
+        headers: { "x-line-signature": sign(rawBody, secret) },
+      } as unknown as IncomingMessage,
+      res,
+    );
+
+    expect(res.statusCode).toBe(500);
+    expect(res.body).toBe(JSON.stringify({ error: "Internal server error" }));
+    expect(runtime.error).toHaveBeenCalled();
   });
 
   it("returns 400 for invalid JSON payload even when signature is valid", async () => {
