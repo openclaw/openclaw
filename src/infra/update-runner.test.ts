@@ -387,6 +387,51 @@ describe("runGatewayUpdate", () => {
     expect(calls.some((call) => call === expectedInstallCommand)).toBe(true);
   });
 
+  it("runs global update with $HOME as cwd, not the install directory", async () => {
+    const nodeModules = path.join(tempDir, "node_modules");
+    const pkgRoot = path.join(nodeModules, "openclaw");
+    await fs.mkdir(pkgRoot, { recursive: true });
+    await fs.writeFile(
+      path.join(pkgRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "1.0.0" }),
+      "utf-8",
+    );
+
+    const cwds: string[] = [];
+    const runCommand = async (argv: string[], options: { cwd?: string }) => {
+      const key = argv.join(" ");
+      if (key === `git -C ${pkgRoot} rev-parse --show-toplevel`) {
+        return { stdout: "", stderr: "not a git repository", code: 128 };
+      }
+      if (key === "npm root -g") {
+        return { stdout: nodeModules, stderr: "", code: 0 };
+      }
+      if (key === "pnpm root -g") {
+        return { stdout: "", stderr: "", code: 1 };
+      }
+      if (key === "npm i -g openclaw@latest") {
+        if (options.cwd) {
+          cwds.push(options.cwd);
+        }
+        return { stdout: "ok", stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    };
+
+    await runGatewayUpdate({
+      cwd: pkgRoot,
+      runCommand: async (argv, options) => runCommand(argv, options),
+      timeoutMs: 5000,
+    });
+
+    // The global update command must NOT run inside the install directory,
+    // because npm replaces it during the update which causes post-install
+    // hooks (e.g. mise reshim) to panic when their cwd disappears.
+    expect(cwds).toHaveLength(1);
+    expect(cwds[0]).toBe(os.homedir());
+    expect(cwds[0]).not.toBe(pkgRoot);
+  });
+
   it("cleans stale npm rename dirs before global update", async () => {
     const nodeModules = path.join(tempDir, "node_modules");
     const pkgRoot = path.join(nodeModules, "openclaw");

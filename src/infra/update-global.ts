@@ -136,6 +136,23 @@ export function globalInstallArgs(manager: GlobalInstallManager, spec: string): 
   return ["npm", "i", "-g", spec];
 }
 
+/**
+ * Returns argv **and** a safe cwd for a global install command.
+ *
+ * Global installs determine the target directory via the package manager's
+ * prefix config (not cwd), so the child process cwd is functionally
+ * irrelevant. We use `$HOME` to guarantee the directory won't vanish
+ * mid-install — the previous approach of using the package install directory
+ * caused post-install hooks (e.g. mise reshim) to panic when npm replaced
+ * that directory during the update. (#7135)
+ */
+export function globalInstallConfig(
+  manager: GlobalInstallManager,
+  spec: string,
+): { argv: string[]; cwd: string } {
+  return { argv: globalInstallArgs(manager, spec), cwd: os.homedir() };
+}
+
 export async function cleanupGlobalRenameDirs(params: {
   globalRoot: string;
   packageName: string;

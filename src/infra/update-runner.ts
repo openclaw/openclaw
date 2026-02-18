@@ -21,7 +21,7 @@ import { compareSemverStrings } from "./update-check.js";
 import {
   cleanupGlobalRenameDirs,
   detectGlobalInstallManagerForRoot,
-  globalInstallArgs,
+  globalInstallConfig,
 } from "./update-global.js";
 
 export type UpdateStepResult = {
@@ -875,11 +875,12 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     const channel = opts.channel ?? DEFAULT_PACKAGE_CHANNEL;
     const tag = normalizeTag(opts.tag ?? channelToNpmTag(channel));
     const spec = `${packageName}@${tag}`;
+    const install = globalInstallConfig(globalManager, spec);
     const updateStep = await runStep({
       runCommand,
       name: "global update",
-      argv: globalInstallArgs(globalManager, spec),
-      cwd: pkgRoot,
+      argv: install.argv,
+      cwd: install.cwd,
       timeoutMs,
       progress,
       stepIndex: 0,
