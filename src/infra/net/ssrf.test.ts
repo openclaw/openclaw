@@ -17,6 +17,20 @@ describe("ssrf ip classification", () => {
     expect(isPrivateIpAddress("0:0:0:0:0:ffff:a9fe:a9fe")).toBe(true);
   });
 
+  it("treats private IPv4 embedded in NAT64 prefixes as private", () => {
+    expect(isPrivateIpAddress("64:ff9b::127.0.0.1")).toBe(true);
+    expect(isPrivateIpAddress("64:ff9b::169.254.169.254")).toBe(true);
+    expect(isPrivateIpAddress("64:ff9b:1::192.168.1.1")).toBe(true);
+    expect(isPrivateIpAddress("64:ff9b:1::10.0.0.1")).toBe(true);
+  });
+
+  it("treats private IPv4 embedded in 6to4 and Teredo prefixes as private", () => {
+    expect(isPrivateIpAddress("2002:7f00:0001::")).toBe(true);
+    expect(isPrivateIpAddress("2002:a9fe:a9fe::")).toBe(true);
+    expect(isPrivateIpAddress("2001:0000:0:0:0:0:80ff:fefe")).toBe(true);
+    expect(isPrivateIpAddress("2001:0000:0:0:0:0:3f57:fefe")).toBe(true);
+  });
+
   it("treats common IPv6 private/internal ranges as private", () => {
     expect(isPrivateIpAddress("::")).toBe(true);
     expect(isPrivateIpAddress("::1")).toBe(true);
@@ -29,6 +43,15 @@ describe("ssrf ip classification", () => {
     expect(isPrivateIpAddress("93.184.216.34")).toBe(false);
     expect(isPrivateIpAddress("2606:4700:4700::1111")).toBe(false);
     expect(isPrivateIpAddress("2001:db8::1")).toBe(false);
+    expect(isPrivateIpAddress("64:ff9b::8.8.8.8")).toBe(false);
+    expect(isPrivateIpAddress("64:ff9b:1::8.8.8.8")).toBe(false);
+    expect(isPrivateIpAddress("2002:0808:0808::")).toBe(false);
+    expect(isPrivateIpAddress("2001:0000:0:0:0:0:f7f7:f7f7")).toBe(false);
+  });
+
+  it("fails closed for malformed IPv6 input", () => {
+    expect(isPrivateIpAddress("::::")).toBe(true);
+    expect(isPrivateIpAddress("2001:db8::gggg")).toBe(true);
   });
 });
 
