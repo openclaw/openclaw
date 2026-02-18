@@ -251,6 +251,12 @@ export type AgentDefaultsConfig = {
     model?: string | { primary?: string; fallbacks?: string[] };
     /** Default thinking level for spawned sub-agents (e.g. "off", "low", "medium", "high"). */
     thinking?: string;
+    /**
+     * Base timeout (ms) for subagent completion announcement delivery.
+     * Used as initial timeout with exponential backoff on retries.
+     * Default: 120000 (2 minutes).
+     */
+    announceTimeoutMs?: number;
   };
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: {

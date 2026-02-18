@@ -201,6 +201,19 @@ const coreEntries: CoreCliEntry[] = [
       mod.registerBrowserCli(program);
     },
   },
+  {
+    commands: [
+      {
+        name: "subagents",
+        description: "Manage subagent operations (list-failed, recover)",
+        hasSubcommands: true,
+      },
+    ],
+    register: async ({ program }) => {
+      const mod = await import("../subagents-cli.js");
+      mod.registerSubagentsCli(program);
+    },
+  },
 ];
 
 function collectCoreCliCommandNames(predicate?: (command: CoreCliCommandDescriptor) => boolean) {
