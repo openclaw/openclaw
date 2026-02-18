@@ -675,6 +675,11 @@ struct OnboardingWizardView: View {
         // We intentionally stop reconnect churn while unpaired to avoid generating multiple pending requests.
         self.appModel.gatewayAutoReconnectEnabled = true
         self.appModel.gatewayPairingPaused = false
+        self.appModel.gatewayPairingRequestId = nil
+        // Pairing state is sticky to prevent UI flip-flop during reconnect churn.
+        // Once the user explicitly resumes after approving, clear the sticky issue
+        // so new status/auth errors can surface instead of being masked as pairing.
+        self.issue = .none
         self.connectMessage = "Retrying after approval…"
         self.statusLine = "Retrying after approval…"
         Task { await self.retryLastAttempt() }
