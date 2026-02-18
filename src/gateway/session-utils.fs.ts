@@ -155,6 +155,10 @@ export function searchSessionTranscript(
       const parsed = JSON.parse(line);
       const msg = parsed?.message;
       if (!msg) {
+        // Count compaction entries to stay aligned with readSessionMessages
+        if (parsed?.type === "compaction") {
+          messageIndex++;
+        }
         continue;
       }
       const text = extractMessageText(msg);
