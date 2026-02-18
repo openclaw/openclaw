@@ -127,10 +127,20 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
   const endIndex = Math.min(startIndex + pageSize, models.length);
   const pageModels = models.slice(startIndex, endIndex);
 
-  // Model buttons - one per row
-  const currentModelId = currentModel?.includes("/")
-    ? currentModel.split("/").slice(1).join("/")
-    : currentModel;
+  // Parse current selection. When provider is present, require provider+model
+  // match to avoid cross-provider false positives for same model IDs.
+  let currentModelProvider: string | undefined;
+  let currentModelId: string | undefined;
+  if (typeof currentModel === "string" && currentModel.trim().length > 0) {
+    const trimmed = currentModel.trim();
+    const slashIndex = trimmed.indexOf("/");
+    if (slashIndex > 0 && slashIndex < trimmed.length - 1) {
+      currentModelProvider = trimmed.slice(0, slashIndex).trim().toLowerCase();
+      currentModelId = trimmed.slice(slashIndex + 1);
+    } else {
+      currentModelId = trimmed;
+    }
+  }
 
   for (const model of pageModels) {
     const callbackData = `mdl_sel_${provider}/${model}`;
@@ -139,7 +149,9 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
       continue;
     }
 
-    const isCurrentModel = model === currentModelId;
+    const isCurrentModel =
+      model === currentModelId &&
+      (currentModelProvider == null || provider.toLowerCase() === currentModelProvider);
     const displayText = truncateModelId(model, 38);
     const text = isCurrentModel ? `${displayText} ✓` : displayText;
 

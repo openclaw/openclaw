@@ -146,6 +146,18 @@ describe("buildModelsKeyboard", () => {
     expect(result[1]?.[0]?.text).toBe("claude-opus-4");
   });
 
+  it("does not mark model from a different provider", () => {
+    const result = buildModelsKeyboard({
+      provider: "github-copilot",
+      models: ["gpt-5.3-codex", "claude-sonnet-4"],
+      currentModel: "openai-codex/gpt-5.3-codex",
+      currentPage: 1,
+      totalPages: 1,
+    });
+    expect(result[0]?.[0]?.text).toBe("gpt-5.3-codex");
+    expect(result[1]?.[0]?.text).toBe("claude-sonnet-4");
+  });
+
   it("shows pagination when multiple pages", () => {
     const result = buildModelsKeyboard({
       provider: "anthropic",
