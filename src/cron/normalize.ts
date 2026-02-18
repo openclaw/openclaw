@@ -15,6 +15,8 @@ type UnknownRecord = Record<string, unknown>;
 
 type NormalizeOptions = {
   applyDefaults?: boolean;
+  /** Session context for resolving "current" sessionTarget or auto-binding when not specified */
+  sessionContext?: { sessionKey?: string };
 };
 
 const DEFAULT_OPTIONS: NormalizeOptions = {
@@ -200,9 +202,17 @@ function normalizeSessionTarget(raw: unknown) {
   if (typeof raw !== "string") {
     return undefined;
   }
-  const trimmed = raw.trim().toLowerCase();
-  if (trimmed === "main" || trimmed === "isolated") {
-    return trimmed;
+  const trimmed = raw.trim();
+  const lower = trimmed.toLowerCase();
+  if (lower === "main" || lower === "isolated" || lower === "current") {
+    return lower;
+  }
+  // Support custom session IDs with "session:" prefix
+  if (lower.startsWith("session:")) {
+    const sessionId = trimmed.slice(8).trim();
+    if (sessionId) {
+      return `session:${sessionId}`;
+    }
   }
   return undefined;
 }
@@ -413,10 +423,29 @@ export function normalizeCronJobInput(
     }
     if (!next.sessionTarget && isRecord(next.payload)) {
       const kind = typeof next.payload.kind === "string" ? next.payload.kind : "";
+      // Keep default behavior unchanged for backward compatibility:
+      // - systemEvent defaults to "main"
+      // - agentTurn defaults to "isolated" (NOT "current", to avoid token accumulation)
+      // Users must explicitly specify "current" or "session:xxx" for custom session binding
       if (kind === "systemEvent") {
         next.sessionTarget = "main";
+      } else if (kind === "agentTurn") {
+        next.sessionTarget = "isolated";
       }
-      if (kind === "agentTurn") {
+    }
+
+    // Resolve "current" sessionTarget to the actual sessionKey from context
+    if (next.sessionTarget === "current") {
+      if (options.sessionContext?.sessionKey) {
+        const sessionKey = options.sessionContext.sessionKey.trim();
+        if (sessionKey) {
+          // Store as session:customId format for persistence
+          next.sessionTarget = `session:${sessionKey}`;
+        }
+      }
+      // If "current" wasn't resolved, fall back to "isolated" behavior
+      // This handles CLI/headless usage where no session context exists
+      if (next.sessionTarget === "current") {
         next.sessionTarget = "isolated";
       }
     }
@@ -444,8 +473,11 @@ export function normalizeCronJobInput(
     const payload = isRecord(next.payload) ? next.payload : null;
     const payloadKind = payload && typeof payload.kind === "string" ? payload.kind : "";
     const sessionTarget = typeof next.sessionTarget === "string" ? next.sessionTarget : "";
+    // Support "isolated", custom session IDs (session:xxx), and resolved "current" as isolated-like targets
     const isIsolatedAgentTurn =
-      sessionTarget === "isolated" || (sessionTarget === "" && payloadKind === "agentTurn");
+      sessionTarget === "isolated" ||
+      sessionTarget.startsWith("session:") ||
+      (sessionTarget === "" && payloadKind === "agentTurn");
     const hasDelivery = "delivery" in next && next.delivery !== undefined;
     const hasLegacyDelivery = payload ? hasLegacyDeliveryHints(payload) : false;
     if (!hasDelivery && isIsolatedAgentTurn && payloadKind === "agentTurn") {
@@ -463,7 +495,7 @@ export function normalizeCronJobInput(
 
 export function normalizeCronJobCreate(
   raw: unknown,
-  options?: NormalizeOptions,
+  options?: Omit<NormalizeOptions, "applyDefaults">,
 ): CronJobCreate | null {
   return normalizeCronJobInput(raw, {
     applyDefaults: true,

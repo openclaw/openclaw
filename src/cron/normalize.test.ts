@@ -372,6 +372,145 @@ describe("normalizeCronJobCreate", () => {
     expect(delivery.mode).toBeUndefined();
     expect(delivery.to).toBe("123");
   });
+
+  // Tests for custom session IDs and "current" sessionTarget
+  describe("sessionTarget handling", () => {
+    it("accepts 'current' as sessionTarget (with context resolves to session:<key>)", () => {
+      const normalized = normalizeCronJobCreate(
+        {
+          name: "current-session",
+          schedule: { kind: "cron", expr: "* * * * *" },
+          sessionTarget: "current",
+          payload: { kind: "agentTurn", message: "hello" },
+        },
+        { sessionContext: { sessionKey: "test-session" } },
+      ) as unknown as Record<string, unknown>;
+
+      expect(normalized.sessionTarget).toBe("session:test-session");
+    });
+
+    it("accepts custom session IDs with 'session:' prefix", () => {
+      const normalized = normalizeCronJobCreate({
+        name: "custom-session",
+        schedule: { kind: "cron", expr: "* * * * *" },
+        sessionTarget: "session:my-custom-session",
+        payload: { kind: "agentTurn", message: "hello" },
+      }) as unknown as Record<string, unknown>;
+
+      expect(normalized.sessionTarget).toBe("session:my-custom-session");
+    });
+
+    it("resolves 'current' to 'session:<key>' when sessionContext is provided", () => {
+      const normalized = normalizeCronJobCreate(
+        {
+          name: "resolve-current",
+          schedule: { kind: "cron", expr: "* * * * *" },
+          sessionTarget: "current",
+          payload: { kind: "agentTurn", message: "hello" },
+        },
+        { sessionContext: { sessionKey: "agent:main:user:123" } },
+      ) as unknown as Record<string, unknown>;
+
+      expect(normalized.sessionTarget).toBe("session:agent:main:user:123");
+    });
+
+    it("falls back to 'isolated' when 'current' is used without sessionContext", () => {
+      const normalized = normalizeCronJobCreate(
+        {
+          name: "fallback-current",
+          schedule: { kind: "cron", expr: "* * * * *" },
+          sessionTarget: "current",
+          payload: { kind: "agentTurn", message: "hello" },
+        },
+        { sessionContext: undefined },
+      ) as unknown as Record<string, unknown>;
+
+      expect(normalized.sessionTarget).toBe("isolated");
+    });
+
+    it("falls back to 'isolated' when sessionContext.sessionKey is empty", () => {
+      const normalized = normalizeCronJobCreate(
+        {
+          name: "empty-session-key",
+          schedule: { kind: "cron", expr: "* * * * *" },
+          sessionTarget: "current",
+          payload: { kind: "agentTurn", message: "hello" },
+        },
+        { sessionContext: { sessionKey: "" } },
+      ) as unknown as Record<string, unknown>;
+
+      expect(normalized.sessionTarget).toBe("isolated");
+    });
+
+    it("preserves session ID case sensitivity", () => {
+      const normalized = normalizeCronJobCreate({
+        name: "case-sensitive",
+        schedule: { kind: "cron", expr: "* * * * *" },
+        sessionTarget: "session:MySessionID",
+        payload: { kind: "agentTurn", message: "hello" },
+      }) as unknown as Record<string, unknown>;
+
+      expect(normalized.sessionTarget).toBe("session:MySessionID");
+    });
+
+    it("coerces 'CURRENT' to lowercase and resolves with context", () => {
+      const normalized = normalizeCronJobCreate(
+        {
+          name: "uppercase-current",
+          schedule: { kind: "cron", expr: "* * * * *" },
+          sessionTarget: "CURRENT",
+          payload: { kind: "agentTurn", message: "hello" },
+        },
+        { sessionContext: { sessionKey: "my-session" } },
+      ) as unknown as Record<string, unknown>;
+
+      expect(normalized.sessionTarget).toBe("session:my-session");
+    });
+
+    it("coerces 'SESSION:custom-id' to lowercase prefix 'session:custom-id'", () => {
+      const normalized = normalizeCronJobCreate({
+        name: "uppercase-session",
+        schedule: { kind: "cron", expr: "* * * * *" },
+        sessionTarget: "SESSION:CustomID",
+        payload: { kind: "agentTurn", message: "hello" },
+      }) as unknown as Record<string, unknown>;
+
+      expect(normalized.sessionTarget).toBe("session:CustomID");
+    });
+
+    it("defaults invalid sessionTarget values to 'isolated'", () => {
+      const normalized = normalizeCronJobCreate({
+        name: "invalid-session",
+        schedule: { kind: "cron", expr: "* * * * *" },
+        sessionTarget: "invalid-value",
+        payload: { kind: "agentTurn", message: "hello" },
+      }) as unknown as Record<string, unknown>;
+
+      expect(normalized.sessionTarget).toBe("isolated");
+    });
+
+    it("defaults empty session: prefix to 'isolated'", () => {
+      const normalized = normalizeCronJobCreate({
+        name: "empty-session-prefix",
+        schedule: { kind: "cron", expr: "* * * * *" },
+        sessionTarget: "session:",
+        payload: { kind: "agentTurn", message: "hello" },
+      }) as unknown as Record<string, unknown>;
+
+      expect(normalized.sessionTarget).toBe("isolated");
+    });
+
+    it("defaults session: prefix with only whitespace to 'isolated'", () => {
+      const normalized = normalizeCronJobCreate({
+        name: "whitespace-session",
+        schedule: { kind: "cron", expr: "* * * * *" },
+        sessionTarget: "session:   ",
+        payload: { kind: "agentTurn", message: "hello" },
+      }) as unknown as Record<string, unknown>;
+
+      expect(normalized.sessionTarget).toBe("isolated");
+    });
+  });
 });
 
 describe("normalizeCronJobPatch", () => {

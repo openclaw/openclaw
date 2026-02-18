@@ -75,28 +75,38 @@ function resolveEveryAnchorMs(params: {
 }
 
 export function assertSupportedJobSpec(job: Pick<CronJob, "sessionTarget" | "payload">) {
-  if (job.sessionTarget === "main" && job.payload.kind !== "systemEvent") {
+  const isMainSession = job.sessionTarget === "main";
+  const isIsolatedSession =
+    job.sessionTarget === "isolated" ||
+    job.sessionTarget === "current" ||
+    job.sessionTarget.startsWith("session:");
+
+  if (isMainSession && job.payload.kind !== "systemEvent") {
     throw new Error('main cron jobs require payload.kind="systemEvent"');
   }
-  if (job.sessionTarget === "isolated" && job.payload.kind !== "agentTurn") {
-    throw new Error('isolated cron jobs require payload.kind="agentTurn"');
+  if (isIsolatedSession && job.payload.kind !== "agentTurn") {
+    throw new Error('isolated/current/session:xxx cron jobs require payload.kind="agentTurn"');
   }
 }
 
 function assertDeliverySupport(job: Pick<CronJob, "sessionTarget" | "delivery">) {
-  if (!job.delivery) {
-    return;
-  }
-  if (job.delivery.mode === "webhook") {
+  const isIsolatedLike =
+    job.sessionTarget === "isolated" ||
+    job.sessionTarget === "current" ||
+    job.sessionTarget.startsWith("session:");
+  if (job.delivery?.mode === "webhook") {
     const target = normalizeHttpWebhookUrl(job.delivery.to);
     if (!target) {
       throw new Error("cron webhook delivery requires delivery.to to be a valid http(s) URL");
     }
     job.delivery.to = target;
-    return;
   }
-  if (job.sessionTarget !== "isolated") {
-    throw new Error('cron channel delivery config is only supported for sessionTarget="isolated"');
+  if (job.delivery && !isIsolatedLike) {
+    throw new Error(
+      "cron delivery config is only supported for isolated/current/session:xxx sessionTargets",
+    );
+  }
+}
   }
 }
 
@@ -410,18 +420,21 @@ export function applyJobPatch(job: CronJob, patch: CronJobPatch) {
   if (!patch.delivery && patch.payload?.kind === "agentTurn") {
     // Back-compat: legacy clients still update delivery via payload fields.
     const legacyDeliveryPatch = buildLegacyDeliveryPatch(patch.payload);
-    if (
-      legacyDeliveryPatch &&
-      job.sessionTarget === "isolated" &&
-      job.payload.kind === "agentTurn"
-    ) {
+    const isIsolatedLike =
+      job.sessionTarget === "isolated" ||
+      job.sessionTarget === "current" ||
+      job.sessionTarget.startsWith("session:");
+    if (legacyDeliveryPatch && isIsolatedLike && job.payload.kind === "agentTurn") {
       job.delivery = mergeCronDelivery(job.delivery, legacyDeliveryPatch);
     }
   }
   if (patch.delivery) {
     job.delivery = mergeCronDelivery(job.delivery, patch.delivery);
   }
-  if (job.sessionTarget === "main" && job.delivery?.mode !== "webhook") {
+  const isMainSession = job.sessionTarget === "main";
+  if (isMainSession && job.delivery) {
+    job.delivery = undefined;
+  }
     job.delivery = undefined;
   }
   if (patch.state) {

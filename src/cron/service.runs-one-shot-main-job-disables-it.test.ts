@@ -725,7 +725,7 @@ describe("CronService", () => {
         wakeMode: "next-heartbeat",
         payload: { kind: "systemEvent", text: "nope" },
       }),
-    ).rejects.toThrow(/isolated cron jobs require/);
+    ).rejects.toThrow(/isolated.*cron jobs require/);
 
     cron.stop();
     await store.cleanup();
