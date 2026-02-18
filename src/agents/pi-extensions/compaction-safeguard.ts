@@ -308,10 +308,9 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       const reserveTokens = Math.max(1, Math.floor(preparation.settings.reserveTokens));
       // Estimate output tokens: use reserveTokens as minimum, but allow up to 16K for summary output
       const estimatedOutputTokens = Math.max(
-      reserveTokens, 
-      Math.min(16000, Math.floor(contextWindowTokens * 0.25))
+        reserveTokens,
+        Math.min(16000, Math.floor(contextWindowTokens * 0.25)),
       );
-
       // Check if messages + output exceed context window (common when falling back to smaller-context models)
       // If so, prune more aggressively before attempting summarization
       let inputTokens = estimateMessagesTokens(messagesToSummarize);
