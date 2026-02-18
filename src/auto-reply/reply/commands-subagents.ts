@@ -118,8 +118,15 @@ function formatTimestampWithAge(valueMs?: number) {
   return `${formatTimestamp(valueMs)} (${formatTimeAgo(Date.now() - valueMs, { fallback: "n/a" })})`;
 }
 
-function resolveRequesterSessionKey(params: Parameters<CommandHandler>[0]): string | undefined {
-  const raw = params.sessionKey?.trim() || params.ctx.CommandTargetSessionKey?.trim();
+function resolveRequesterSessionKey(
+  params: Parameters<CommandHandler>[0],
+  opts?: { preferCommandTarget?: boolean },
+): string | undefined {
+  const commandTarget = params.ctx.CommandTargetSessionKey?.trim();
+  const commandSession = params.sessionKey?.trim();
+  const raw = opts?.preferCommandTarget
+    ? commandTarget || commandSession
+    : commandSession || commandTarget;
   if (!raw) {
     return undefined;
   }
@@ -286,7 +293,9 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
     action = "steer";
   }
 
-  const requesterKey = resolveRequesterSessionKey(params);
+  const requesterKey = resolveRequesterSessionKey(params, {
+    preferCommandTarget: action === "spawn",
+  });
   if (!requesterKey) {
     return { shouldContinue: false, reply: { text: "⚠️ Missing session key." } };
   }
@@ -673,13 +682,21 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
       };
     }
 
+    const commandTo = typeof params.command.to === "string" ? params.command.to.trim() : "";
+    const originatingTo =
+      typeof params.ctx.OriginatingTo === "string" ? params.ctx.OriginatingTo.trim() : "";
+    const fallbackTo = typeof params.ctx.To === "string" ? params.ctx.To.trim() : "";
+    // OriginatingTo reflects the active conversation target and is safer than
+    // command.to for cross-surface command dispatch.
+    const normalizedTo = originatingTo || commandTo || fallbackTo || undefined;
+
     const result = await spawnSubagentDirect(
-      { task, agentId, model, thinking, cleanup: "keep" },
+      { task, agentId, model, thinking, cleanup: "keep", expectsCompletionMessage: true },
       {
         agentSessionKey: requesterKey,
-        agentChannel: params.command.channel,
+        agentChannel: params.ctx.OriginatingChannel ?? params.command.channel,
         agentAccountId: params.ctx.AccountId,
-        agentTo: params.command.to,
+        agentTo: normalizedTo,
         agentThreadId: params.ctx.MessageThreadId,
         agentGroupId: params.sessionEntry?.groupId ?? null,
         agentGroupChannel: params.sessionEntry?.groupChannel ?? null,
@@ -690,7 +707,7 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
       return {
         shouldContinue: false,
         reply: {
-          text: `Spawned subagent ${agentId} (session ${result.childSessionKey}, run ${result.runId?.slice(0, 8)}).${result.warning ? ` Warning: ${result.warning}` : ""}`,
+          text: `Spawned subagent ${agentId} (session ${result.childSessionKey}, run ${result.runId?.slice(0, 8)}).`,
         },
       };
     }

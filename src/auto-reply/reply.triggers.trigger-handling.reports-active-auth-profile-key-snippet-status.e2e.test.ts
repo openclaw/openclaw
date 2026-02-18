@@ -6,14 +6,16 @@ import {
   createBlockReplyCollector,
   getRunEmbeddedPiAgentMock,
   installTriggerHandlingE2eTestHooks,
+  loadGetReplyFromConfig,
   makeCfg,
   mockRunEmbeddedPiAgentOk,
+  requireSessionStorePath,
   withTempHome,
 } from "./reply.triggers.trigger-handling.test-harness.js";
 
 let getReplyFromConfig: typeof import("./reply.js").getReplyFromConfig;
 beforeAll(async () => {
-  ({ getReplyFromConfig } = await import("./reply.js"));
+  getReplyFromConfig = await loadGetReplyFromConfig();
 });
 
 installTriggerHandlingE2eTestHooks();
@@ -50,7 +52,7 @@ describe("trigger handling", () => {
         Provider: "whatsapp",
       } as Parameters<typeof resolveSessionKey>[1]);
       await fs.writeFile(
-        cfg.session!.store,
+        requireSessionStorePath(cfg),
         JSON.stringify(
           {
             [sessionKey]: {

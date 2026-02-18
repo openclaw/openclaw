@@ -41,6 +41,22 @@ describe("restart-helper", () => {
       }
     });
 
+    it("uses OPENCLAW_SYSTEMD_UNIT override for systemd scripts", async () => {
+      Object.defineProperty(process, "platform", { value: "linux" });
+      const scriptPath = await prepareRestartScript({
+        OPENCLAW_PROFILE: "default",
+        OPENCLAW_SYSTEMD_UNIT: "custom-gateway",
+      });
+
+      expect(scriptPath).toBeTruthy();
+      const content = await fs.readFile(scriptPath!, "utf-8");
+      expect(content).toContain("systemctl --user restart 'custom-gateway.service'");
+
+      if (scriptPath) {
+        await fs.unlink(scriptPath);
+      }
+    });
+
     it("creates a launchd restart script on macOS", async () => {
       Object.defineProperty(process, "platform", { value: "darwin" });
       process.getuid = () => 501;
@@ -56,6 +72,24 @@ describe("restart-helper", () => {
       expect(content).toContain("#!/bin/sh");
       expect(content).toContain("launchctl kickstart -k 'gui/501/ai.openclaw.gateway'");
       expect(content).toContain('rm -f "$0"');
+
+      if (scriptPath) {
+        await fs.unlink(scriptPath);
+      }
+    });
+
+    it("uses OPENCLAW_LAUNCHD_LABEL override on macOS", async () => {
+      Object.defineProperty(process, "platform", { value: "darwin" });
+      process.getuid = () => 501;
+
+      const scriptPath = await prepareRestartScript({
+        OPENCLAW_PROFILE: "default",
+        OPENCLAW_LAUNCHD_LABEL: "com.custom.openclaw",
+      });
+
+      expect(scriptPath).toBeTruthy();
+      const content = await fs.readFile(scriptPath!, "utf-8");
+      expect(content).toContain("launchctl kickstart -k 'gui/501/com.custom.openclaw'");
 
       if (scriptPath) {
         await fs.unlink(scriptPath);
@@ -78,6 +112,24 @@ describe("restart-helper", () => {
       expect(content).toContain('schtasks /Run /TN "OpenClaw Gateway"');
       // Batch self-cleanup
       expect(content).toContain('del "%~f0"');
+
+      if (scriptPath) {
+        await fs.unlink(scriptPath);
+      }
+    });
+
+    it("uses OPENCLAW_WINDOWS_TASK_NAME override on Windows", async () => {
+      Object.defineProperty(process, "platform", { value: "win32" });
+
+      const scriptPath = await prepareRestartScript({
+        OPENCLAW_PROFILE: "default",
+        OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway (custom)",
+      });
+
+      expect(scriptPath).toBeTruthy();
+      const content = await fs.readFile(scriptPath!, "utf-8");
+      expect(content).toContain('schtasks /End /TN "OpenClaw Gateway (custom)"');
+      expect(content).toContain('schtasks /Run /TN "OpenClaw Gateway (custom)"');
 
       if (scriptPath) {
         await fs.unlink(scriptPath);

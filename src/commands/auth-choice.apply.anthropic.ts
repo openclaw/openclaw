@@ -6,7 +6,10 @@ import {
 } from "./auth-choice.api-key.js";
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { buildTokenProfileId, validateAnthropicSetupToken } from "./auth-token.js";
+import { applyAgentDefaultModelPrimary } from "./onboard-auth.config-shared.js";
 import { applyAuthProfileConfig, setAnthropicApiKey } from "./onboard-auth.js";
+
+const DEFAULT_ANTHROPIC_MODEL = "anthropic/claude-sonnet-4-6";
 
 export async function applyAuthChoiceAnthropic(
   params: ApplyAuthChoiceParams,
@@ -55,6 +58,9 @@ export async function applyAuthChoiceAnthropic(
       provider,
       mode: "token",
     });
+    if (params.setDefaultModel) {
+      nextConfig = applyAgentDefaultModelPrimary(nextConfig, DEFAULT_ANTHROPIC_MODEL);
+    }
     return { config: nextConfig };
   }
 
@@ -94,6 +100,9 @@ export async function applyAuthChoiceAnthropic(
       provider: "anthropic",
       mode: "api_key",
     });
+    if (params.setDefaultModel) {
+      nextConfig = applyAgentDefaultModelPrimary(nextConfig, DEFAULT_ANTHROPIC_MODEL);
+    }
     return { config: nextConfig };
   }
 
