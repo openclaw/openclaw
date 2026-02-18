@@ -31,6 +31,10 @@ export interface TimestampInjectionOptions {
  * spawned subagents, `sessions_send`, and heartbeat wake events date/time
  * awareness — without modifying the system prompt (which is cached).
  *
+ * NOTE: Timestamps are rounded to 5-minute intervals to maintain prompt cache
+ * compatibility with Anthropic. Without rounding, each request would have a
+ * unique timestamp, breaking the cache and causing 10x higher costs.
+ *
  * Channel messages (Discord, Telegram, etc.) already have timestamps via
  * envelope formatting and take a separate code path — they never reach
  * these handlers, so there is no double-stamping risk. The detection
@@ -54,9 +58,12 @@ export function injectTimestamp(message: string, opts?: TimestampInjectionOption
   }
 
   const now = opts?.now ?? new Date();
+  // Round to 5-minute intervals to maintain prompt cache compatibility
+  const fiveMinutes = 5 * 60 * 1000;
+  const rounded = new Date(Math.floor(now.getTime() / fiveMinutes) * fiveMinutes);
   const timezone = opts?.timezone ?? "UTC";
 
-  const formatted = formatZonedTimestamp(now, { timeZone: timezone });
+  const formatted = formatZonedTimestamp(rounded, { timeZone: timezone });
   if (!formatted) {
     return message;
   }
@@ -64,7 +71,7 @@ export function injectTimestamp(message: string, opts?: TimestampInjectionOption
   // 3-letter DOW: small models (8B) can't reliably derive day-of-week from
   // a date, and may treat a bare "Wed" as a typo. Costs ~1 token.
   const dow = new Intl.DateTimeFormat("en-US", { timeZone: timezone, weekday: "short" }).format(
-    now,
+    rounded,
   );
 
   return `[${dow} ${formatted}] ${message}`;
