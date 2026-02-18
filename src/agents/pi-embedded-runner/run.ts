@@ -465,8 +465,17 @@ export async function runEmbeddedPiAgent(
       const usageAccumulator = createUsageAccumulator();
       let lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
       let autoCompactionCount = 0;
+      // OC-54: Cap iterations to prevent unbounded loop DoS (CWE-400)
+      const MAX_ITERATIONS = 200;
+      let iterations = 0;
       try {
         while (true) {
+          if (iterations >= MAX_ITERATIONS) {
+            throw new Error(
+              `Agent runner exceeded maximum iteration limit (${MAX_ITERATIONS}). Terminating to prevent resource exhaustion.`,
+            );
+          }
+          iterations++;
           attemptedThinking.add(thinkLevel);
           await fs.mkdir(resolvedWorkspace, { recursive: true });
 
