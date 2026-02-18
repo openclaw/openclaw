@@ -1,6 +1,11 @@
 import { vi } from "vitest";
 
-export const callGatewayMock = vi.fn();
+type GatewayMockFn = ((opts: unknown) => unknown) & {
+  mockReset: () => void;
+  mockResolvedValue: (value: unknown) => void;
+};
+
+export const callGatewayMock = vi.fn() as GatewayMockFn;
 
 vi.mock("../../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
