@@ -60,6 +60,7 @@ systemctl --user status openclaw-agent-rs.service
 - Supports list filtering knobs on `sessions.list` (`includeGlobal`, `includeUnknown`, `agentId`, `search`) for parity-friendly session queries.
 - Responds to gateway introspection RPCs (`health`, `status`) with runtime/session metadata.
 - Responds to usage RPCs (`usage.status`, `usage.cost`) with Rust-side aggregate usage/cost placeholder summaries.
+- Tracks session metadata (`label`, `spawnedBy`) via `sessions.patch` and uses it for filtered `sessions.resolve` lookups.
 - Inspects incoming Gateway frames for actionable payloads (prompt/command/url/file).
 - Applies group activation policy (`mention` or `always`) before evaluation for group contexts.
 - Schedules one active request per session with configurable queue behavior (`followup`, `steer`, `collect`).

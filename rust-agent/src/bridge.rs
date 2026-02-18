@@ -1085,6 +1085,88 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rpc_sessions_resolve_by_label_roundtrip() -> Result<()> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await?;
+            let ws = accept_async(stream).await?;
+            let (mut write, mut read) = ws.split();
+
+            let _connect = read
+                .next()
+                .await
+                .ok_or_else(|| anyhow::anyhow!("missing connect frame"))??;
+
+            write
+                .send(Message::Text(
+                    json!({
+                        "type": "req",
+                        "id": "req-patch-label",
+                        "method": "sessions.patch",
+                        "params": {
+                            "sessionKey": "agent:ops:discord:group:g15",
+                            "label": "deploy",
+                            "spawnedBy": "main"
+                        }
+                    })
+                    .to_string(),
+                ))
+                .await?;
+            let _patch_response = timeout(Duration::from_secs(2), read.next())
+                .await
+                .map_err(|_| anyhow::anyhow!("timed out waiting for patch response"))?
+                .ok_or_else(|| anyhow::anyhow!("patch response stream ended"))??;
+
+            write
+                .send(Message::Text(
+                    json!({
+                        "type": "req",
+                        "id": "req-resolve-label",
+                        "method": "sessions.resolve",
+                        "params": {
+                            "label": "deploy",
+                            "agentId": "ops",
+                            "spawnedBy": "main",
+                            "includeUnknown": false,
+                            "includeGlobal": false
+                        }
+                    })
+                    .to_string(),
+                ))
+                .await?;
+            let resolve_response = timeout(Duration::from_secs(2), read.next())
+                .await
+                .map_err(|_| anyhow::anyhow!("timed out waiting for resolve response"))?
+                .ok_or_else(|| anyhow::anyhow!("resolve response stream ended"))??;
+            let resolve_json: Value = serde_json::from_str(resolve_response.to_text()?)?;
+            assert_eq!(
+                resolve_json.pointer("/result/key").and_then(Value::as_str),
+                Some("agent:ops:discord:group:g15")
+            );
+
+            write.send(Message::Close(None)).await?;
+            Ok::<(), anyhow::Error>(())
+        });
+
+        let bridge = GatewayBridge::new(
+            GatewayConfig {
+                url: format!("ws://{addr}"),
+                token: None,
+            },
+            "security.decision".to_owned(),
+            16,
+            SessionQueueMode::Followup,
+            GroupActivationMode::Always,
+        );
+        let evaluator: Arc<dyn ActionEvaluator> = Arc::new(StubEvaluator);
+        bridge.run_once(evaluator).await?;
+        server.await??;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn rpc_sessions_preview_and_compact_roundtrip() -> Result<()> {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let addr = listener.local_addr()?;

@@ -448,6 +448,8 @@ impl RpcDispatcher {
                 send_policy,
                 group_activation,
                 queue_mode,
+                label: normalize_optional_text(params.label, 128),
+                spawned_by: normalize_optional_text(params.spawned_by, 128),
             })
             .await;
         RpcDispatchOutcome::Handled(json!({
@@ -466,11 +468,34 @@ impl RpcDispatcher {
             .or(params.session_id)
             .map(|v| v.trim().to_owned())
             .filter(|v| !v.is_empty());
-        let Some(candidate) = candidate else {
-            return RpcDispatchOutcome::bad_request("sessionKey|key|sessionId is required");
-        };
+        if let Some(candidate) = candidate {
+            if let Some(key) = self.sessions.resolve_key(&candidate).await {
+                return RpcDispatchOutcome::Handled(json!({
+                    "ok": true,
+                    "key": key
+                }));
+            }
+            return RpcDispatchOutcome::not_found("session not found");
+        }
 
-        if let Some(key) = self.sessions.resolve_key(&candidate).await {
+        let label = normalize_optional_text(params.label, 128);
+        if label.is_none() {
+            return RpcDispatchOutcome::bad_request(
+                "sessionKey|key|sessionId or label is required",
+            );
+        }
+
+        let key = self
+            .sessions
+            .resolve_query(SessionResolveQuery {
+                label,
+                agent_id: normalize_optional_text(params.agent_id, 64),
+                spawned_by: normalize_optional_text(params.spawned_by, 64),
+                include_global: params.include_global.unwrap_or(true),
+                include_unknown: params.include_unknown.unwrap_or(true),
+            })
+            .await;
+        if let Some(key) = key {
             return RpcDispatchOutcome::Handled(json!({
                 "ok": true,
                 "key": key
@@ -763,6 +788,15 @@ struct SessionListQuery {
     agent_id: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+struct SessionResolveQuery {
+    label: Option<String>,
+    agent_id: Option<String>,
+    spawned_by: Option<String>,
+    include_global: bool,
+    include_unknown: bool,
+}
+
 impl SessionRegistry {
     fn new() -> Self {
         Self {
@@ -851,6 +885,12 @@ impl SessionRegistry {
         if let Some(queue_mode) = patch.queue_mode {
             entry.queue_mode = Some(queue_mode);
         }
+        if let Some(label) = patch.label {
+            entry.label = Some(label);
+        }
+        if let Some(spawned_by) = patch.spawned_by {
+            entry.spawned_by = Some(spawned_by);
+        }
         entry.to_view()
     }
 
@@ -868,6 +908,46 @@ impl SessionRegistry {
             .keys()
             .find(|key| key.eq_ignore_ascii_case(candidate))
             .cloned()
+    }
+
+    async fn resolve_query(&self, query: SessionResolveQuery) -> Option<String> {
+        let guard = self.entries.lock().await;
+        let mut entries = guard.values().cloned().collect::<Vec<_>>();
+        if !query.include_unknown {
+            entries.retain(|entry| entry.kind != SessionKind::Other);
+        }
+        if !query.include_global {
+            entries.retain(|entry| !is_global_session(entry));
+        }
+        if let Some(label) = query.label {
+            entries.retain(|entry| {
+                entry
+                    .label
+                    .as_deref()
+                    .map(|v| v.eq_ignore_ascii_case(&label))
+                    .unwrap_or(false)
+            });
+        }
+        if let Some(agent_id) = query.agent_id {
+            entries.retain(|entry| {
+                entry
+                    .agent_id
+                    .as_deref()
+                    .map(|v| v.eq_ignore_ascii_case(&agent_id))
+                    .unwrap_or(false)
+            });
+        }
+        if let Some(spawned_by) = query.spawned_by {
+            entries.retain(|entry| {
+                entry
+                    .spawned_by
+                    .as_deref()
+                    .map(|v| v.eq_ignore_ascii_case(&spawned_by))
+                    .unwrap_or(false)
+            });
+        }
+        entries.sort_by(|a, b| b.updated_at_ms.cmp(&a.updated_at_ms));
+        entries.first().map(|entry| entry.key.clone())
     }
 
     async fn list(&self, query: SessionListQuery) -> Vec<SessionView> {
@@ -903,6 +983,16 @@ impl SessionRegistry {
                         .unwrap_or(false)
                     || entry
                         .agent_id
+                        .as_deref()
+                        .map(|v| v.to_ascii_lowercase().contains(&needle))
+                        .unwrap_or(false)
+                    || entry
+                        .label
+                        .as_deref()
+                        .map(|v| v.to_ascii_lowercase().contains(&needle))
+                        .unwrap_or(false)
+                    || entry
+                        .spawned_by
                         .as_deref()
                         .map(|v| v.to_ascii_lowercase().contains(&needle))
                         .unwrap_or(false)
@@ -1095,6 +1185,8 @@ impl SessionRegistry {
                 kind: entry.kind,
                 agent_id: entry.agent_id,
                 channel: entry.channel,
+                label: entry.label,
+                spawned_by: entry.spawned_by,
                 total_requests: entry.total_requests,
                 allowed_count: entry.allowed_count,
                 review_count: entry.review_count,
@@ -1199,6 +1291,8 @@ struct SessionEntry {
     kind: SessionKind,
     agent_id: Option<String>,
     channel: Option<String>,
+    label: Option<String>,
+    spawned_by: Option<String>,
     updated_at_ms: u64,
     total_requests: u64,
     allowed_count: u64,
@@ -1220,6 +1314,8 @@ impl SessionEntry {
             kind: parsed.kind,
             agent_id: parsed.agent_id,
             channel: parsed.channel,
+            label: None,
+            spawned_by: None,
             updated_at_ms: now_ms(),
             total_requests: 0,
             allowed_count: 0,
@@ -1240,6 +1336,8 @@ impl SessionEntry {
             kind: self.kind,
             agent_id: self.agent_id.clone(),
             channel: self.channel.clone(),
+            label: self.label.clone(),
+            spawned_by: self.spawned_by.clone(),
             updated_at_ms: self.updated_at_ms,
             total_requests: self.total_requests,
             allowed_count: self.allowed_count,
@@ -1267,6 +1365,8 @@ struct SessionPatch {
     send_policy: Option<SendPolicyOverride>,
     group_activation: Option<GroupActivationMode>,
     queue_mode: Option<SessionQueueMode>,
+    label: Option<String>,
+    spawned_by: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -1386,6 +1486,10 @@ struct SessionUsageView {
     #[serde(rename = "agentId", skip_serializing_if = "Option::is_none")]
     agent_id: Option<String>,
     channel: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    label: Option<String>,
+    #[serde(rename = "spawnedBy", skip_serializing_if = "Option::is_none")]
+    spawned_by: Option<String>,
     #[serde(rename = "totalRequests")]
     total_requests: u64,
     #[serde(rename = "allowedCount")]
@@ -1447,6 +1551,10 @@ struct SessionView {
     #[serde(rename = "agentId", skip_serializing_if = "Option::is_none")]
     agent_id: Option<String>,
     channel: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    label: Option<String>,
+    #[serde(rename = "spawnedBy", skip_serializing_if = "Option::is_none")]
+    spawned_by: Option<String>,
     #[serde(rename = "updatedAtMs")]
     updated_at_ms: u64,
     #[serde(rename = "totalRequests")]
@@ -1523,6 +1631,9 @@ struct SessionsPatchParams {
     group_activation: Option<String>,
     #[serde(rename = "queueMode", alias = "queue_mode")]
     queue_mode: Option<String>,
+    label: Option<String>,
+    #[serde(rename = "spawnedBy", alias = "spawned_by")]
+    spawned_by: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -1533,6 +1644,15 @@ struct SessionsResolveParams {
     key: Option<String>,
     #[serde(rename = "sessionId", alias = "session_id")]
     session_id: Option<String>,
+    label: Option<String>,
+    #[serde(rename = "agentId", alias = "agent_id")]
+    agent_id: Option<String>,
+    #[serde(rename = "spawnedBy", alias = "spawned_by")]
+    spawned_by: Option<String>,
+    #[serde(rename = "includeGlobal", alias = "include_global")]
+    include_global: Option<bool>,
+    #[serde(rename = "includeUnknown", alias = "include_unknown")]
+    include_unknown: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -2086,6 +2206,57 @@ mod tests {
                 );
             }
             _ => panic!("expected resolve handled"),
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatcher_resolve_supports_label_agent_and_spawn_filters() {
+        let dispatcher = RpcDispatcher::new();
+        for (id, key, label, spawned_by) in [
+            (
+                "req-patch-a",
+                "agent:ops:discord:group:resolved-a",
+                "deploy",
+                "main",
+            ),
+            ("req-patch-b", "custom:other:resolved-b", "deploy", "other"),
+        ] {
+            let patch = RpcRequestFrame {
+                id: id.to_owned(),
+                method: "sessions.patch".to_owned(),
+                params: serde_json::json!({
+                    "sessionKey": key,
+                    "label": label,
+                    "spawnedBy": spawned_by
+                }),
+            };
+            let _ = dispatcher.handle_request(&patch).await;
+        }
+
+        let resolve = RpcRequestFrame {
+            id: "req-resolve-filtered".to_owned(),
+            method: "sessions.resolve".to_owned(),
+            params: serde_json::json!({
+                "label": "deploy",
+                "agentId": "ops",
+                "spawnedBy": "main",
+                "includeUnknown": false,
+                "includeGlobal": false
+            }),
+        };
+        let out = dispatcher.handle_request(&resolve).await;
+        match out {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload.pointer("/ok").and_then(serde_json::Value::as_bool),
+                    Some(true)
+                );
+                assert_eq!(
+                    payload.pointer("/key").and_then(serde_json::Value::as_str),
+                    Some("agent:ops:discord:group:resolved-a")
+                );
+            }
+            _ => panic!("expected filtered resolve handled"),
         }
     }
 

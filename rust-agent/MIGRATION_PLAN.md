@@ -31,6 +31,7 @@
   - `sessions.send`
   - `session.status`
 - Extended `sessions.list` with filter parity for `includeGlobal`, `includeUnknown`, `agentId`, and `search`.
+- Extended `sessions.patch` + `sessions.resolve` with metadata parity for `label` and `spawnedBy` filtered resolution.
 - Rust defender policy engine with bounded worker concurrency.
 - Prompt injection scoring + command risk scoring.
 - Host integrity baseline checks.
