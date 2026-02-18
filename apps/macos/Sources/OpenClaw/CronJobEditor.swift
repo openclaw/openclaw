@@ -47,10 +47,7 @@ struct CronJobEditor: View {
     @State var payloadKind: PayloadKind = .systemEvent
     @State var systemEventText: String = ""
     @State var agentMessage: String = ""
-    enum DeliveryChoice: String, CaseIterable, Identifiable { case announce, none; var id: String {
-        rawValue
-    } }
-    @State var deliveryMode: DeliveryChoice = .announce
+    @State var deliveryMode: CronDeliveryMode = .announce
     @State var channel: String = "last"
     @State var to: String = ""
     @State var thinking: String = ""
@@ -117,6 +114,10 @@ struct CronJobEditor: View {
                                 Picker("", selection: self.$sessionTarget) {
                                     Text("main").tag(CronSessionTarget.main)
                                     Text("isolated").tag(CronSessionTarget.isolated)
+                                    Text("current").tag(CronSessionTarget.current)
+                                    if case let .unknown(raw) = self.sessionTarget {
+                                        Text(raw).tag(self.sessionTarget)
+                                    }
                                 }
                                 .labelsHidden()
                                 .pickerStyle(.segmented)
@@ -127,6 +128,9 @@ struct CronJobEditor: View {
                                 Picker("", selection: self.$wakeMode) {
                                     Text("now").tag(CronWakeMode.now)
                                     Text("next-heartbeat").tag(CronWakeMode.nextHeartbeat)
+                                    if case let .unknown(raw) = self.wakeMode {
+                                        Text(raw).tag(self.wakeMode)
+                                    }
                                 }
                                 .labelsHidden()
                                 .pickerStyle(.segmented)
@@ -323,8 +327,14 @@ struct CronJobEditor: View {
                 GridRow {
                     self.gridLabel("Delivery")
                     Picker("", selection: self.$deliveryMode) {
-                        Text("Announce summary").tag(DeliveryChoice.announce)
-                        Text("None").tag(DeliveryChoice.none)
+                        Text("Announce summary").tag(CronDeliveryMode.announce)
+                        Text("Webhook").tag(CronDeliveryMode.webhook)
+                        Text("None").tag(CronDeliveryMode.none)
+                        if case let .unknown(raw) = self.deliveryMode {
+                            Text(raw).tag(self.deliveryMode)
+                        } else if self.deliveryMode == .raw {
+                            Text("raw").tag(CronDeliveryMode.raw)
+                        }
                     }
                     .labelsHidden()
                     .pickerStyle(.segmented)
@@ -356,6 +366,25 @@ struct CronJobEditor: View {
                             .toggleStyle(.switch)
                     }
                 }
+            } else if self.deliveryMode == .webhook {
+                Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 10) {
+                    GridRow {
+                        self.gridLabel("Webhook URL")
+                        TextField("https://example.invalid/cron", text: self.$to)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+            } else if case let .unknown(raw) = self.deliveryMode {
+                Text("Delivery mode ‘\(raw)’ is preserved unless you change it here.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if self.deliveryMode == .raw {
+                Text("Raw delivery is preserved unless you change it here.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
