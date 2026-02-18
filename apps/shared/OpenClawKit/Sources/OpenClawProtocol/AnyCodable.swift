@@ -62,9 +62,9 @@ public struct AnyCodable: Codable, @unchecked Sendable, Hashable {
 
     public static func == (lhs: AnyCodable, rhs: AnyCodable) -> Bool {
         switch (lhs.value, rhs.value) {
+        case let (l as Bool, r as Bool): l == r
         case let (l as Int, r as Int): l == r
         case let (l as Double, r as Double): l == r
-        case let (l as Bool, r as Bool): l == r
         case let (l as String, r as String): l == r
         case (_ as NSNull, _ as NSNull): true
         case let (l as [String: AnyCodable], r as [String: AnyCodable]): l == r
@@ -76,12 +76,12 @@ public struct AnyCodable: Codable, @unchecked Sendable, Hashable {
 
     public func hash(into hasher: inout Hasher) {
         switch self.value {
+        case let v as Bool:
+            hasher.combine(2); hasher.combine(v)
         case let v as Int:
             hasher.combine(0); hasher.combine(v)
         case let v as Double:
             hasher.combine(1); hasher.combine(v)
-        case let v as Bool:
-            hasher.combine(2); hasher.combine(v)
         case let v as String:
             hasher.combine(3); hasher.combine(v)
         case _ as NSNull:
