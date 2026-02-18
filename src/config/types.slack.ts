@@ -45,6 +45,7 @@ export type SlackChannelConfig = {
 };
 
 export type SlackReactionNotificationMode = "off" | "own" | "all" | "allowlist";
+export type SlackStreamMode = "replace" | "status_final" | "append";
 
 export type SlackActionConfig = {
   reactions?: boolean;
@@ -124,6 +125,15 @@ export type SlackAccountConfig = {
   blockStreaming?: boolean;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
+  /**
+   * Enable Slack native text streaming (Agents & AI Apps). Default: true.
+   *
+   * Set to `false` to disable native Slack text streaming and use normal reply
+   * delivery behavior only.
+   */
+  streaming?: boolean;
+  /** Slack stream preview mode (replace|status_final|append). Default: replace. */
+  streamMode?: SlackStreamMode;
   mediaMaxMb?: number;
   /** Reaction notification mode (off|own|all|allowlist). Default: own. */
   reactionNotifications?: SlackReactionNotificationMode;
@@ -156,6 +166,11 @@ export type SlackAccountConfig = {
   heartbeat?: ChannelHeartbeatVisibilityConfig;
   /** Outbound response prefix override for this channel/account. */
   responsePrefix?: string;
+  /**
+   * Per-channel ack reaction override.
+   * Slack uses shortcodes (e.g., "eyes") rather than unicode emoji.
+   */
+  ackReaction?: string;
 };
 
 export type SlackConfig = {

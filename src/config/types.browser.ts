@@ -38,4 +38,10 @@ export type BrowserConfig = {
   profiles?: Record<string, BrowserProfileConfig>;
   /** Default snapshot options (applied by the browser tool/CLI when unset). */
   snapshotDefaults?: BrowserSnapshotDefaults;
+  /**
+   * Additional Chrome launch arguments.
+   * Useful for stealth flags, window size overrides, or custom user-agent strings.
+   * Example: ["--window-size=1920,1080", "--disable-infobars"]
+   */
+  extraArgs?: string[];
 };
