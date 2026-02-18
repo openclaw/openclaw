@@ -44,6 +44,7 @@ private enum OnboardingStep: Int, CaseIterable {
 struct OnboardingWizardView: View {
     @Environment(NodeAppModel.self) private var appModel: NodeAppModel
     @Environment(GatewayConnectionController.self) private var gatewayController: GatewayConnectionController
+    @Environment(\.scenePhase) private var scenePhase
     @AppStorage("node.instanceId") private var instanceId: String = UUID().uuidString
     @AppStorage("gateway.discovery.domain") private var discoveryDomain: String = ""
     @AppStorage("onboarding.developerMode") private var developerModeEnabled: Bool = false
@@ -66,6 +67,7 @@ struct OnboardingWizardView: View {
     @State private var showQRScanner: Bool = false
     @State private var scannerError: String?
     @State private var selectedPhoto: PhotosPickerItem?
+    @State private var lastPairingAutoResumeAttemptAt: Date?
 
     let allowSkip: Bool
     let onClose: () -> Void
@@ -275,6 +277,10 @@ struct OnboardingWizardView: View {
                 self.didMarkCompleted = true
             }
             self.onClose()
+        }
+        .onChange(of: self.scenePhase) { _, newValue in
+            guard newValue == .active else { return }
+            self.attemptAutomaticPairingResumeIfNeeded()
         }
     }
 
@@ -517,27 +523,38 @@ struct OnboardingWizardView: View {
 
             if self.issue.needsPairing {
                 Section {
-                    Button("Copy: openclaw devices list") {
-                        UIPasteboard.general.string = "openclaw devices list"
+                    Button {
+                        self.resumeAfterPairingApproval()
+                    } label: {
+                        Label("Resume After Approval", systemImage: "arrow.clockwise")
                     }
-
-                    if let id = self.issue.requestId {
-                        Button("Copy: openclaw devices approve \(id)") {
-                            UIPasteboard.general.string = "openclaw devices approve \(id)"
-                        }
-                    } else {
-                        Button("Copy: openclaw devices approve <requestId>") {
-                            UIPasteboard.general.string = "openclaw devices approve <requestId>"
-                        }
-                    }
+                    .disabled(self.connectingGatewayID != nil)
                 } header: {
                     Text("Pairing Approval")
                 } footer: {
-                    Text("Approve this device on the gateway, then tap \"Resume After Approval\" below.")
+                    let requestLine: String = {
+                        if let id = self.issue.requestId, !id.isEmpty {
+                            return "Request ID: \(id)"
+                        }
+                        return "Request ID: check `openclaw devices list`."
+                    }()
+                    Text(
+                        "Approve this device on the gateway.\n"
+                            + "1) `openclaw devices approve` (or `openclaw devices approve <requestId>`)\n"
+                            + "2) `/pair approve` in Telegram\n"
+                            + "\(requestLine)\n"
+                            + "OpenClaw will also retry automatically when you return to this app.")
                 }
             }
 
             Section {
+                Button {
+                    self.openQRScannerFromOnboarding()
+                } label: {
+                    Label("Scan QR Code Again", systemImage: "qrcode.viewfinder")
+                }
+                .disabled(self.connectingGatewayID != nil)
+
                 Button {
                     Task { await self.retryLastAttempt() }
                 } label: {
@@ -547,20 +564,6 @@ struct OnboardingWizardView: View {
                     } else {
                         Text("Retry Connection")
                     }
-                }
-                .disabled(self.connectingGatewayID != nil)
-
-                Button {
-                    self.resumeAfterPairingApproval()
-                } label: {
-                    Label("Resume After Approval", systemImage: "arrow.clockwise")
-                }
-                .disabled(self.connectingGatewayID != nil || !self.issue.needsPairing)
-
-                Button {
-                    self.openQRScannerFromOnboarding()
-                } label: {
-                    Label("Scan QR Code Again", systemImage: "qrcode.viewfinder")
                 }
                 .disabled(self.connectingGatewayID != nil)
             }
@@ -675,6 +678,19 @@ struct OnboardingWizardView: View {
         self.connectMessage = "Retrying after approval…"
         self.statusLine = "Retrying after approval…"
         Task { await self.retryLastAttempt() }
+    }
+
+    private func attemptAutomaticPairingResumeIfNeeded() {
+        guard self.step == .auth else { return }
+        guard self.issue.needsPairing else { return }
+        guard self.connectingGatewayID == nil else { return }
+
+        let now = Date()
+        if let last = self.lastPairingAutoResumeAttemptAt, now.timeIntervalSince(last) < 6 {
+            return
+        }
+        self.lastPairingAutoResumeAttemptAt = now
+        self.resumeAfterPairingApproval()
     }
 
     private func detectQRCode(from data: Data) -> String? {
@@ -818,7 +834,7 @@ struct OnboardingWizardView: View {
 
     private func retryLastAttempt() async {
         self.connectingGatewayID = "retry"
-        self.issue = .none
+        // Keep current auth/pairing issue sticky while retrying to avoid Step 3 UI flip-flop.
         self.connectMessage = "Retrying…"
         self.statusLine = "Retrying last connection…"
         defer { self.connectingGatewayID = nil }

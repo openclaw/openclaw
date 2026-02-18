@@ -6,7 +6,6 @@ import type { DiscordProbe } from "../../discord/probe.js";
 import type { DiscordTokenResolution } from "../../discord/token.js";
 import type { IMessageProbe } from "../../imessage/probe.js";
 import type { LineProbeResult } from "../../line/types.js";
-import type { PluginRegistry } from "../../plugins/registry.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { SignalProbe } from "../../signal/probe.js";
 import type { SlackProbe } from "../../slack/probe.js";
@@ -118,23 +117,7 @@ describe("channel plugin catalog", () => {
   });
 });
 
-const createRegistry = (channels: PluginRegistry["channels"]): PluginRegistry => ({
-  plugins: [],
-  tools: [],
-  hooks: [],
-  typedHooks: [],
-  commands: [],
-  channels,
-  providers: [],
-  gatewayHandlers: {},
-  httpHandlers: [],
-  httpRoutes: [],
-  cliRegistrars: [],
-  services: [],
-  diagnostics: [],
-});
-
-const emptyRegistry = createRegistry([]);
+const emptyRegistry = createTestRegistry([]);
 
 const msteamsOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
@@ -160,7 +143,7 @@ const msteamsPlugin: ChannelPlugin = {
   outbound: msteamsOutbound,
 };
 
-const registryWithMSTeams = createRegistry([
+const registryWithMSTeams = createTestRegistry([
   { pluginId: "msteams", plugin: msteamsPlugin, source: "test" },
 ]);
 

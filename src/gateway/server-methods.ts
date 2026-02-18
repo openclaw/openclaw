@@ -11,7 +11,6 @@ import { deviceHandlers } from "./server-methods/devices.js";
 import { execApprovalsHandlers } from "./server-methods/exec-approvals.js";
 import { healthHandlers } from "./server-methods/health.js";
 import { logsHandlers } from "./server-methods/logs.js";
-import { meshHandlers } from "./server-methods/mesh.js";
 import { modelsHandlers } from "./server-methods/models.js";
 import { nodeHandlers } from "./server-methods/nodes.js";
 import { sendHandlers } from "./server-methods/send.js";
@@ -79,8 +78,6 @@ const READ_METHODS = new Set([
   "chat.history",
   "config.get",
   "talk.config",
-  "mesh.plan",
-  "mesh.status",
 ]);
 const WRITE_METHODS = new Set([
   "send",
@@ -97,9 +94,6 @@ const WRITE_METHODS = new Set([
   "chat.send",
   "chat.abort",
   "browser.request",
-  "mesh.plan.auto",
-  "mesh.run",
-  "mesh.retry",
 ]);
 
 function authorizeGatewayMethod(method: string, client: GatewayRequestOptions["client"]) {
@@ -177,7 +171,6 @@ function authorizeGatewayMethod(method: string, client: GatewayRequestOptions["c
 export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...connectHandlers,
   ...logsHandlers,
-  ...meshHandlers,
   ...voicewakeHandlers,
   ...healthHandlers,
   ...channelsHandlers,

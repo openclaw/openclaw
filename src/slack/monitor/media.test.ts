@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as ssrf from "../../infra/net/ssrf.js";
 import type { SavedMedia } from "../../media/store.js";
 import * as mediaStore from "../../media/store.js";
+import { type FetchMock, withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import {
   fetchWithSlackAuth,
   resolveSlackAttachmentContent,
@@ -11,7 +12,7 @@ import {
 
 // Store original fetch
 const originalFetch = globalThis.fetch;
-let mockFetch: ReturnType<typeof vi.fn>;
+let mockFetch: ReturnType<typeof vi.fn<FetchMock>>;
 const createSavedMedia = (filePath: string, contentType: string): SavedMedia => ({
   id: "saved-media-id",
   path: filePath,
@@ -22,8 +23,10 @@ const createSavedMedia = (filePath: string, contentType: string): SavedMedia => 
 describe("fetchWithSlackAuth", () => {
   beforeEach(() => {
     // Create a new mock for each test
-    mockFetch = vi.fn();
-    globalThis.fetch = mockFetch as typeof fetch;
+    mockFetch = vi.fn<FetchMock>(
+      async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(),
+    );
+    globalThis.fetch = withFetchPreconnect(mockFetch);
   });
 
   afterEach(() => {
@@ -169,7 +172,7 @@ describe("fetchWithSlackAuth", () => {
 describe("resolveSlackMedia", () => {
   beforeEach(() => {
     mockFetch = vi.fn();
-    globalThis.fetch = mockFetch as typeof fetch;
+    globalThis.fetch = withFetchPreconnect(mockFetch);
     vi.spyOn(ssrf, "resolvePinnedHostname").mockImplementation(async (hostname) => {
       const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
       const addresses = ["93.184.216.34"];
@@ -365,8 +368,9 @@ describe("resolveSlackMedia", () => {
       return createSavedMedia("/tmp/unknown", "application/octet-stream");
     });
 
-    mockFetch.mockImplementation(async (input) => {
-      const url = String(input);
+    mockFetch.mockImplementation(async (input: RequestInfo | URL) => {
+      const url =
+        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
       if (url.includes("/a.jpg")) {
         return new Response(Buffer.from("image a"), {
           status: 200,
@@ -432,7 +436,7 @@ describe("resolveSlackMedia", () => {
 describe("resolveSlackAttachmentContent", () => {
   beforeEach(() => {
     mockFetch = vi.fn();
-    globalThis.fetch = mockFetch as typeof fetch;
+    globalThis.fetch = withFetchPreconnect(mockFetch);
     vi.spyOn(ssrf, "resolvePinnedHostnameWithPolicy").mockImplementation(async (hostname) => {
       const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
       const addresses = ["93.184.216.34"];
