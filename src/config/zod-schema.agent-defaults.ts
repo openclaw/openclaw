@@ -115,6 +115,29 @@ export const AgentDefaultsSchema = z
         z.literal("xhigh"),
       ])
       .optional(),
+    thinkingEscalation: z
+      .object({
+        enabled: z.boolean().optional(),
+        thresholds: z
+          .array(
+            z
+              .object({
+                atContextPercent: z.number().int().min(0).max(100),
+                thinking: z.union([
+                  z.literal("off"),
+                  z.literal("minimal"),
+                  z.literal("low"),
+                  z.literal("medium"),
+                  z.literal("high"),
+                  z.literal("xhigh"),
+                ]),
+              })
+              .strict(),
+          )
+          .optional(),
+      })
+      .strict()
+      .optional(),
     verboseDefault: z.union([z.literal("off"), z.literal("on"), z.literal("full")]).optional(),
     elevatedDefault: z
       .union([z.literal("off"), z.literal("on"), z.literal("ask"), z.literal("full")])
