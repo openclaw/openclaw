@@ -1,10 +1,37 @@
 import SwiftUI
 import Foundation
+import os
+import UIKit
+
+final class OpenClawAppDelegate: NSObject, UIApplicationDelegate {
+    private let logger = Logger(subsystem: "ai.openclaw.ios", category: "Push")
+    weak var appModel: NodeAppModel?
+
+    func application(
+        _ application: UIApplication,
+        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
+    ) -> Bool
+    {
+        application.registerForRemoteNotifications()
+        return true
+    }
+
+    func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        Task { @MainActor in
+            self.appModel?.updateAPNsDeviceToken(deviceToken)
+        }
+    }
+
+    func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: any Error) {
+        self.logger.error("APNs registration failed: \(error.localizedDescription, privacy: .public)")
+    }
+}
 
 @main
 struct OpenClawApp: App {
     @State private var appModel: NodeAppModel
     @State private var gatewayController: GatewayConnectionController
+    @UIApplicationDelegateAdaptor(OpenClawAppDelegate.self) private var appDelegate
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
@@ -21,6 +48,9 @@ struct OpenClawApp: App {
                 .environment(self.appModel)
                 .environment(self.appModel.voiceWake)
                 .environment(self.gatewayController)
+                .task {
+                    self.appDelegate.appModel = self.appModel
+                }
                 .onOpenURL { url in
                     Task { await self.appModel.handleDeepLink(url: url) }
                 }
