@@ -533,47 +533,18 @@ export async function startGatewayServer(
     if (evt.stream === "lifecycle" && (evt.data?.phase === "end" || evt.data?.phase === "error")) {
       const sessionKey = resolveSessionKeyForRun(evt.runId);
       if (sessionKey) {
-        const chatLink = chatRunState.registry.peek(evt.runId);
-        const clientRunId = chatLink?.clientRunId ?? evt.runId;
-        const text = chatRunState.buffers.get(clientRunId)?.trim();
-
-        const isSignOff =
-          !text ||
-          text === SILENT_REPLY_TOKEN ||
-          text === "NO_REPLY" ||
-          text === "HEARTBEAT_OK" ||
-          text.endsWith(SILENT_REPLY_TOKEN) ||
-          text.endsWith("NO_REPLY");
-
-        log.info(
-          `Lifecycle end signoff check: ` +
-            JSON.stringify({
-              runId: evt.runId,
-              clientRunId,
-              hasBuffer: chatRunState.buffers.has(clientRunId),
-              textLen: text?.length,
-              textTail: text?.slice(-30),
-              isSignOff,
-            }),
-        );
-
-        if (isSignOff) {
-          replyEnforcer.onTranscriptUpdate({
-            sessionKey,
-            source: "agent",
-            text: SILENT_REPLY_TOKEN,
-          });
-          replyEnforcer.onAgentLifecycle({ sessionKey, phase: evt.data.phase });
-        } else if (evt.data.phase === "error") {
+        if (evt.data.phase === "error") {
           replyEnforcer.onAgentLifecycle({ sessionKey, phase: "error" });
         } else {
-          // Agent replied without signing off — arm watchdog.
-          // Buffer may be incomplete (last chunk race). The transcript file
-          // watcher will correct by disarming if NO_REPLY is in the file.
+          // Agent turn ended. Always arm the watchdog here.
+          // If the agent signed off with NO_REPLY, the transcript file watcher
+          // will disarm it when the complete text is persisted to disk.
+          // We don't check the buffer here because it may be incomplete
+          // (LLM streams "NO_REPLY" as "NO_" + "REPLY" tokens).
           replyEnforcer.onTranscriptUpdate({
             sessionKey,
             source: "agent",
-            text: text ?? "",
+            text: "agent-turn-ended",
           });
         }
       }
