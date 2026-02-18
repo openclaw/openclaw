@@ -5,7 +5,16 @@ import UIKit
 
 final class OpenClawAppDelegate: NSObject, UIApplicationDelegate {
     private let logger = Logger(subsystem: "ai.openclaw.ios", category: "Push")
-    weak var appModel: NodeAppModel?
+    private var pendingAPNsDeviceToken: Data?
+    weak var appModel: NodeAppModel? {
+        didSet {
+            guard let model = self.appModel, let token = self.pendingAPNsDeviceToken else { return }
+            self.pendingAPNsDeviceToken = nil
+            Task { @MainActor in
+                model.updateAPNsDeviceToken(token)
+            }
+        }
+    }
 
     func application(
         _ application: UIApplication,
@@ -17,9 +26,14 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate {
     }
 
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
-        Task { @MainActor in
-            self.appModel?.updateAPNsDeviceToken(deviceToken)
+        if let appModel = self.appModel {
+            Task { @MainActor in
+                appModel.updateAPNsDeviceToken(deviceToken)
+            }
+            return
         }
+
+        self.pendingAPNsDeviceToken = deviceToken
     }
 
     func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: any Error) {
