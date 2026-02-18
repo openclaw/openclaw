@@ -20,10 +20,6 @@ vi.mock("../../commands/status.js", () => ({
   getStatusSummary: vi.fn().mockResolvedValue({ ok: true }),
 }));
 
-type HealthStatusHandlerParams = Parameters<
-  (typeof import("./health.js"))["healthHandlers"]["status"]
->[0];
-
 describe("waitForAgentJob", () => {
   it("maps lifecycle end events with aborted=true to timeout", async () => {
     const runId = `run-timeout-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -240,7 +236,7 @@ describe("gateway chat transcript writes (guardrail)", () => {
 });
 
 describe("exec approval handlers", () => {
-  const execApprovalNoop = () => {};
+  const execApprovalNoop = () => false;
   type ExecApprovalHandlers = ReturnType<typeof createExecApprovalHandlers>;
   type ExecApprovalRequestArgs = Parameters<ExecApprovalHandlers["exec.approval.request"]>[0];
   type ExecApprovalResolveArgs = Parameters<ExecApprovalHandlers["exec.approval.resolve"]>[0];
@@ -276,7 +272,7 @@ describe("exec approval handlers", () => {
     } as unknown as ExecApprovalRequestArgs["params"];
     return params.handlers["exec.approval.request"]({
       params: requestParams,
-      respond: params.respond,
+      respond: params.respond as unknown as ExecApprovalRequestArgs["respond"],
       context: toExecApprovalRequestContext(params.context),
       client: null,
       req: { id: "req-1", type: "req", method: "exec.approval.request" },
@@ -292,9 +288,9 @@ describe("exec approval handlers", () => {
   }) {
     return params.handlers["exec.approval.resolve"]({
       params: { id: params.id, decision: "allow-once" } as ExecApprovalResolveArgs["params"],
-      respond: params.respond,
+      respond: params.respond as unknown as ExecApprovalResolveArgs["respond"],
       context: toExecApprovalResolveContext(params.context),
-      client: { connect: { client: { id: "cli", displayName: "CLI" } } },
+      client: null,
       req: { id: "req-2", type: "req", method: "exec.approval.resolve" },
       isWebchatConnect: execApprovalNoop,
     });
@@ -477,9 +473,13 @@ describe("gateway healthHandlers.status scope handling", () => {
     const { healthHandlers } = await import("./health.js");
 
     await healthHandlers.status({
-      respond,
-      client: { connect: { role: "operator", scopes: ["operator.read"] } },
-    } as HealthStatusHandlerParams);
+      req: {} as never,
+      params: {} as never,
+      respond: respond as never,
+      context: {} as never,
+      client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+      isWebchatConnect: () => false,
+    });
 
     expect(vi.mocked(status.getStatusSummary)).toHaveBeenCalledWith({ includeSensitive: false });
     expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
@@ -491,9 +491,13 @@ describe("gateway healthHandlers.status scope handling", () => {
     const { healthHandlers } = await import("./health.js");
 
     await healthHandlers.status({
-      respond,
-      client: { connect: { role: "operator", scopes: ["operator.admin"] } },
-    } as HealthStatusHandlerParams);
+      req: {} as never,
+      params: {} as never,
+      respond: respond as never,
+      context: {} as never,
+      client: { connect: { role: "operator", scopes: ["operator.admin"] } } as never,
+      isWebchatConnect: () => false,
+    });
 
     expect(vi.mocked(status.getStatusSummary)).toHaveBeenCalledWith({ includeSensitive: true });
     expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
