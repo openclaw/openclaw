@@ -124,8 +124,10 @@ beforeEach(() => {
 
 afterEach(async () => {
   vi.restoreAllMocks();
-  await fs.rm(TEST_STATE_DIR, { recursive: true, force: true });
-  await fs.mkdir(TEST_STATE_DIR, { recursive: true });
+  await fs.rm(SANDBOX_REGISTRY_PATH, { force: true });
+  await fs.rm(SANDBOX_BROWSER_REGISTRY_PATH, { force: true });
+  await fs.rm(`${SANDBOX_REGISTRY_PATH}.lock`, { force: true });
+  await fs.rm(`${SANDBOX_BROWSER_REGISTRY_PATH}.lock`, { force: true });
 });
 
 afterAll(async () => {
