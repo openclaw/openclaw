@@ -359,9 +359,8 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       "nvidia/deepseek-ai/deepseek-v3.2",
     ];
 
-    it("preserves defaults when agent overrides primary as string", async () => {
-      resolveAgentConfigMock.mockReturnValue({ model: "anthropic/claude-sonnet-4-5" });
-
+    async function expectPrimaryOverridePreservesDefaults(modelOverride: unknown) {
+      resolveAgentConfigMock.mockReturnValue({ model: modelOverride });
       const result = await runCronIsolatedAgentTurn(
         makeParams({
           cfg: {
@@ -383,34 +382,14 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
         | undefined;
       expect(model?.primary).toBe("anthropic/claude-sonnet-4-5");
       expect(model?.fallbacks).toEqual(defaultFallbacks);
+    }
+
+    it("preserves defaults when agent overrides primary as string", async () => {
+      await expectPrimaryOverridePreservesDefaults("anthropic/claude-sonnet-4-5");
     });
 
     it("preserves defaults when agent overrides primary in object form", async () => {
-      resolveAgentConfigMock.mockReturnValue({
-        model: { primary: "anthropic/claude-sonnet-4-5" },
-      });
-
-      const result = await runCronIsolatedAgentTurn(
-        makeParams({
-          cfg: {
-            agents: {
-              defaults: {
-                model: { primary: "openai-codex/gpt-5.3-codex", fallbacks: defaultFallbacks },
-              },
-            },
-          },
-          agentId: "scout",
-        }),
-      );
-
-      expect(result.status).toBe("ok");
-      expect(runWithModelFallbackMock).toHaveBeenCalledOnce();
-      const callCfg = runWithModelFallbackMock.mock.calls[0][0].cfg;
-      const model = callCfg?.agents?.defaults?.model as
-        | { primary?: string; fallbacks?: string[] }
-        | undefined;
-      expect(model?.primary).toBe("anthropic/claude-sonnet-4-5");
-      expect(model?.fallbacks).toEqual(defaultFallbacks);
+      await expectPrimaryOverridePreservesDefaults({ primary: "anthropic/claude-sonnet-4-5" });
     });
   });
 });
