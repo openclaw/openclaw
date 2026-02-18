@@ -518,6 +518,22 @@ export async function startGatewayServer(
 
   if (!minimalTestGateway) {
     void cron.start().catch((err) => logCron.error(`failed to start: ${String(err)}`));
+
+    // Register the dreaming process cron job if configured.
+    void (async () => {
+      try {
+        const { resolveDreamingConfig, buildDreamingCronJob } =
+          await import("../infra/dreaming.js");
+        const dreamingConfig = resolveDreamingConfig(cfgAtStart.dreaming);
+        if (dreamingConfig.enabled) {
+          const jobDef = buildDreamingCronJob(dreamingConfig, cfgAtStart.session?.timezone);
+          await cron.add(jobDef);
+          logCron.info("dreaming process registered");
+        }
+      } catch (err) {
+        logCron.warn(`dreaming process registration failed: ${String(err)}`);
+      }
+    })();
   }
 
   // Recover pending outbound deliveries from previous crash/restart.

@@ -15,7 +15,7 @@
  * to be active. It uses a dedicated low-cost model to minimize expense.
  */
 
-import { createSubsystemLogger } from "../log.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 
 const log = createSubsystemLogger("gateway/dreaming");
 
@@ -179,6 +179,7 @@ export function buildDreamingCronJob(config: DreamingConfig, timezone?: string) 
       tz,
     },
     sessionTarget: "isolated" as const,
+    wakeMode: "now" as const,
     payload: {
       kind: "agentTurn" as const,
       message: prompt,

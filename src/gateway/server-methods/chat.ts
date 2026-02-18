@@ -10,6 +10,7 @@ import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
+import { touchUserActivity } from "../../infra/user-activity.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import {
@@ -384,6 +385,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       return;
     }
     const inboundMessage = sanitizedMessageResult.message;
+    touchUserActivity();
     const stopCommand = isChatStopCommandText(inboundMessage);
     const normalizedAttachments =
       p.attachments

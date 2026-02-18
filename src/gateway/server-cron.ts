@@ -7,9 +7,11 @@ import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import { appendCronRunLog, resolveCronRunLogPath } from "../cron/run-log.js";
 import { CronService } from "../cron/service.js";
 import { resolveCronStorePath } from "../cron/store.js";
+import { resolveDreamingConfig, shouldDream } from "../infra/dreaming.js";
 import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
+import { getLastUserActivityMs } from "../infra/user-activity.js";
 import { getChildLogger } from "../logging.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
@@ -78,6 +80,14 @@ export function buildGatewayCronService(params: {
       });
     },
     runIsolatedAgentJob: async ({ job, message }) => {
+      // Skip dreaming jobs if user was recently active.
+      if (job.name?.includes("Dreaming")) {
+        const runtimeConfig = loadConfig();
+        const dreamingConfig = resolveDreamingConfig(runtimeConfig.dreaming);
+        if (!shouldDream(getLastUserActivityMs(), dreamingConfig.quietMinutes)) {
+          return { status: "skipped" as const, summary: "user recently active" };
+        }
+      }
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
       return await runCronIsolatedAgentTurn({
         cfg: runtimeConfig,
