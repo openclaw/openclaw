@@ -24,6 +24,11 @@ import { resolveImageSanitizationLimits } from "./image-sanitization.js";
 import type { ModelAuthMode } from "./model-auth.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { wrapToolWithAbortSignal } from "./pi-tools.abort.js";
+import {
+  wrapToolWithAgentShieldTrust,
+  resolveAgentShieldTrustContext,
+} from "./pi-tools.agentshield-trust.js";
+import { wrapToolWithAgentShieldApproval } from "./pi-tools.agentshield.js";
 import { wrapToolWithBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
 import {
   isToolAllowedByPolicies,
@@ -487,7 +492,30 @@ export function createOpenClawCodingTools(options?: {
   const normalized = subagentFiltered.map((tool) =>
     normalizeToolParameters(tool, { modelProvider: options?.modelProvider }),
   );
-  const withHooks = normalized.map((tool) =>
+  const trustMeta = resolveAgentShieldTrustContext({
+    agentId,
+    agentDir: options?.agentDir,
+    workspaceDir: options?.workspaceDir,
+    sessionKey: options?.sessionKey,
+    config: options?.config,
+  });
+  const withTrust = normalized.map((tool) =>
+    wrapToolWithAgentShieldTrust(tool, {
+      agentId,
+      sessionKey: options?.sessionKey,
+      publisherId: trustMeta.publisherId,
+      signedObject: trustMeta.signedTrustCard ?? undefined,
+      trustCardId: trustMeta.trustCardId ?? undefined,
+      contentSha256: trustMeta.contentSha256 ?? undefined,
+    }),
+  );
+  const withAgentShield = withTrust.map((tool) =>
+    wrapToolWithAgentShieldApproval(tool, {
+      agentId,
+      sessionKey: options?.sessionKey,
+    }),
+  );
+  const withHooks = withAgentShield.map((tool) =>
     wrapToolWithBeforeToolCallHook(tool, {
       agentId,
       sessionKey: options?.sessionKey,
