@@ -71,6 +71,8 @@ export type MatrixConfig = {
   groupAllowFrom?: Array<string | number>;
   /** Control reply threading when reply tags are present (off|first|all). */
   replyToMode?: ReplyToMode;
+  /** How to scope session routing for Matrix inbound messages. */
+  sessionScope?: "legacy" | "room";
   /** How to handle thread replies (off|inbound|always). */
   threadReplies?: "off" | "inbound" | "always";
   /** Outbound text chunk size (chars). Default: 4000. */

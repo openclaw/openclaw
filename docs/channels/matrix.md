@@ -180,7 +180,17 @@ Notes:
 ## Routing model
 
 - Replies always go back to Matrix.
-- DMs share the agent's main session; rooms map to group sessions.
+
+By default (`channels.matrix.sessionScope = "legacy"`):
+
+- DMs share the agent's main session (routed by sender ID).
+- Rooms map to group sessions (routed by room ID).
+
+If you want **one session per Matrix room**, including 2-member rooms / DM-like rooms, set:
+
+- `channels.matrix.sessionScope = "room"`
+
+In `"room"` mode, all inbound messages are routed by room ID (unique session key per room). This works for encrypted rooms too; encryption only affects message decryption, not session routing.
 
 ## Access control (DMs)
 
@@ -285,6 +295,7 @@ Provider options:
 - `channels.matrix.encryption`: enable E2EE (default: false).
 - `channels.matrix.initialSyncLimit`: initial sync limit.
 - `channels.matrix.threadReplies`: `off | inbound | always` (default: inbound).
+- `channels.matrix.sessionScope`: `legacy | room` (default: legacy). Controls whether sessions are routed by sender (legacy DM behavior) or always by room ID (one session per room).
 - `channels.matrix.textChunkLimit`: outbound text chunk size (chars).
 - `channels.matrix.chunkMode`: `length` (default) or `newline` to split on blank lines (paragraph boundaries) before length chunking.
 - `channels.matrix.dm.policy`: `pairing | allowlist | open | disabled` (default: pairing).

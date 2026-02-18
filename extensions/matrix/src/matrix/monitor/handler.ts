@@ -12,6 +12,22 @@ import {
 } from "openclaw/plugin-sdk";
 import type { CoreConfig, MatrixRoomConfig, ReplyToMode } from "../../types.js";
 import { fetchEventSummary } from "../actions/summary.js";
+
+export type MatrixSessionScope = "legacy" | "room";
+
+export function resolveMatrixRoutePeer(params: {
+  sessionScope: MatrixSessionScope;
+  isDirectMessage: boolean;
+  senderId: string;
+  roomId: string;
+}): { kind: "direct" | "channel"; id: string } {
+  if (params.sessionScope === "room") {
+    return { kind: "channel", id: params.roomId };
+  }
+  return params.isDirectMessage
+    ? { kind: "direct", id: params.senderId }
+    : { kind: "channel", id: params.roomId };
+}
 import {
   formatPollAsText,
   isPollStartType,
@@ -434,14 +450,24 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         isThreadRoot: false, // @vector-im/matrix-bot-sdk doesn't have this info readily available
       });
 
+      const sessionScope = (cfg.channels?.matrix?.sessionScope ?? "legacy") as MatrixSessionScope;
+      const routePeer = resolveMatrixRoutePeer({
+        sessionScope,
+        isDirectMessage,
+        senderId,
+        roomId,
+      });
+
+      // Verbose-only: helps diagnose session routing without spamming normal logs.
+      logVerboseMessage(
+        `matrix: sessionScope=${sessionScope} routePeer.kind=${routePeer.kind} routePeer.id=${routePeer.id}`,
+      );
+
       const baseRoute = core.channel.routing.resolveAgentRoute({
         cfg,
         channel: "matrix",
         accountId,
-        peer: {
-          kind: isDirectMessage ? "direct" : "channel",
-          id: isDirectMessage ? senderId : roomId,
-        },
+        peer: routePeer,
       });
 
       const route = {

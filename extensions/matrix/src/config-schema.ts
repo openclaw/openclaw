@@ -46,6 +46,12 @@ export const MatrixConfigSchema = z.object({
   initialSyncLimit: z.number().optional(),
   encryption: z.boolean().optional(),
   allowlistOnly: z.boolean().optional(),
+
+  // Session routing strategy:
+  // - "legacy" (default): DM rooms route by senderId; rooms route by roomId
+  // - "room": always route by roomId (one session per Matrix room)
+  sessionScope: z.enum(["legacy", "room"]).optional(),
+
   groupPolicy: z.enum(["open", "disabled", "allowlist"]).optional(),
   replyToMode: z.enum(["off", "first", "all"]).optional(),
   threadReplies: z.enum(["off", "inbound", "always"]).optional(),

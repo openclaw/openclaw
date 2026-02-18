@@ -34,6 +34,8 @@
 
 ### Changes
 
+- Add `channels.matrix.sessionScope` ("legacy" | "room") to control Matrix session routing.
+  - "room" routes all inbound messages by roomId (one session per Matrix room), avoiding DM-room collapse.
 - Version alignment with core OpenClaw release numbers.
 
 ## 2026.2.6-2
