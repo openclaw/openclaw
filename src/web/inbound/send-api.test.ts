@@ -209,10 +209,10 @@ describe("createWebSendApi", () => {
 
   it("resolves self alias mentions without participants", async () => {
     const mentions = await resolveMentionJids("@OpenClaw check this", {
-      selfMentionJid: "918586020845:2@s.whatsapp.net",
+      selfMentionJid: "14155550333:2@s.whatsapp.net",
       selfMentionAliases: ["openclaw", "bot"],
     });
-    expect(mentions).toEqual(["918586020845@s.whatsapp.net"]);
+    expect(mentions).toEqual(["14155550333@s.whatsapp.net"]);
   });
 
   it("sends self mention payload when text includes self alias", async () => {
@@ -220,53 +220,53 @@ describe("createWebSendApi", () => {
     const apiWithSelf = createWebSendApi({
       sock: { sendMessage: sendMessageWithSelf, sendPresenceUpdate },
       defaultAccountId: "main",
-      selfMentionJid: "918586020845:2@s.whatsapp.net",
+      selfMentionJid: "14155550333:2@s.whatsapp.net",
       selfMentionAliases: ["openclaw", "bot"],
     });
 
     await apiWithSelf.sendMessage("+1555", "@OpenClaw check this");
 
     expect(sendMessageWithSelf).toHaveBeenCalledWith("1555@s.whatsapp.net", {
-      text: "@918586020845 check this",
-      mentions: ["918586020845@s.whatsapp.net"],
+      text: "@14155550333 check this",
+      mentions: ["14155550333@s.whatsapp.net"],
     });
   });
 
   it("does not append duplicate self token when self name comes from participants", () => {
     const text = "@HelperBot check this";
-    const mentionJids = ["918586020845@s.whatsapp.net"];
+    const mentionJids = ["14155550333@s.whatsapp.net"];
     const outgoing = injectMentionTokens(
       text,
       mentionJids,
-      [{ jid: "918586020845@s.whatsapp.net", name: "HelperBot" }],
+      [{ jid: "14155550333@s.whatsapp.net", name: "HelperBot" }],
       {
-        selfMentionJid: "918586020845@s.whatsapp.net",
+        selfMentionJid: "14155550333@s.whatsapp.net",
         selfMentionAliases: ["bot"],
       },
     );
-    expect(outgoing).toBe("@918586020845 check this");
+    expect(outgoing).toBe("@14155550333 check this");
   });
 
   it("canonicalizes existing name mentions in-place without adding duplicate line", () => {
-    const text = "@Dhruv Kejriwal @Ankit joke time";
-    const mentionJids = ["918076538956@s.whatsapp.net", "919953301972@s.whatsapp.net"];
+    const text = "@Alice Example @Bob joke time";
+    const mentionJids = ["14155550111@s.whatsapp.net", "14155550222@s.whatsapp.net"];
     const outgoing = injectMentionTokens(text, mentionJids, [
-      { jid: "918076538956@s.whatsapp.net", name: "Dhruv Kejriwal" },
-      { jid: "919953301972@s.whatsapp.net", name: "Ankit School" },
+      { jid: "14155550111@s.whatsapp.net", name: "Alice Example" },
+      { jid: "14155550222@s.whatsapp.net", name: "Bob Example" },
     ]);
-    expect(outgoing).toBe("@918076538956 @919953301972 joke time");
+    expect(outgoing).toBe("@14155550111 @14155550222 joke time");
   });
 
   it("canonicalizes multi-word alias hints with variable spaces", () => {
-    const text = "@Dhruv   Kejriwal @Ankit done bhai ✅";
-    const mentionJids = ["918076538956@s.whatsapp.net", "919953301972@s.whatsapp.net"];
+    const text = "@Alice   Example @Bob done bhai ✅";
+    const mentionJids = ["14155550111@s.whatsapp.net", "14155550222@s.whatsapp.net"];
     const outgoing = injectMentionTokens(text, mentionJids, undefined, {
       mentionAliasHintsByUser: new Map<string, string[]>([
-        ["918076538956", ["Dhruv Kejriwal"]],
-        ["919953301972", ["Ankit"]],
+        ["14155550111", ["Alice Example"]],
+        ["14155550222", ["Bob"]],
       ]),
     });
-    expect(outgoing).toBe("@918076538956 @919953301972 done bhai ✅");
+    expect(outgoing).toBe("@14155550111 @14155550222 done bhai ✅");
   });
 
   it("resolves bare lid-like tokens via lid mapping lookup", async () => {
@@ -282,54 +282,54 @@ describe("createWebSendApi", () => {
   it("appends canonical numeric mention tokens when mentions are missing", () => {
     const text = "roll call done 😎";
     const mentionJids = [
-      "918076538956@s.whatsapp.net",
-      "919953301972@s.whatsapp.net",
-      "918586020845@s.whatsapp.net",
+      "14155550111@s.whatsapp.net",
+      "14155550222@s.whatsapp.net",
+      "14155550333@s.whatsapp.net",
     ];
     const outgoing = injectMentionTokens(text, mentionJids, [
-      { jid: "918076538956@s.whatsapp.net", name: "Dhruv Kejriwal" },
-      { jid: "919953301972@s.whatsapp.net", name: "Ankit School" },
-      { jid: "918586020845@s.whatsapp.net", name: "OpenClaw Bot" },
+      { jid: "14155550111@s.whatsapp.net", name: "Alice Example" },
+      { jid: "14155550222@s.whatsapp.net", name: "Bob Example" },
+      { jid: "14155550333@s.whatsapp.net", name: "OpenClaw Bot" },
     ]);
-    expect(outgoing).toBe("roll call done 😎\n@918076538956 @919953301972 @918586020845");
+    expect(outgoing).toBe("roll call done 😎\n@14155550111 @14155550222 @14155550333");
   });
 
   it("keeps natural text and appends canonical tokens for clickable mentions", () => {
-    const text = "@Dhruv Kejriwal @Ankit School @OpenClaw Bot roll call done 😎";
+    const text = "@Alice Example @Bob Example @OpenClaw Bot roll call done 😎";
     const mentionJids = [
-      "918076538956@s.whatsapp.net",
-      "919953301972@s.whatsapp.net",
-      "918586020845@s.whatsapp.net",
+      "14155550111@s.whatsapp.net",
+      "14155550222@s.whatsapp.net",
+      "14155550333@s.whatsapp.net",
     ];
     const outgoing = injectMentionTokens(text, mentionJids, [
-      { jid: "918076538956@s.whatsapp.net", name: "Dhruv Kejriwal" },
-      { jid: "919953301972@s.whatsapp.net", name: "Ankit School" },
-      { jid: "918586020845@s.whatsapp.net", name: "OpenClaw Bot" },
+      { jid: "14155550111@s.whatsapp.net", name: "Alice Example" },
+      { jid: "14155550222@s.whatsapp.net", name: "Bob Example" },
+      { jid: "14155550333@s.whatsapp.net", name: "OpenClaw Bot" },
     ]);
-    expect(outgoing).toBe("@918076538956 @919953301972 @918586020845 roll call done 😎");
+    expect(outgoing).toBe("@14155550111 @14155550222 @14155550333 roll call done 😎");
   });
 
   it("normalizes +prefixed numeric tokens to canonical mention tokens", () => {
-    const text = "@Dhruv Kejriwal @+919953301972 joke time";
-    const mentionJids = ["918076538956@s.whatsapp.net", "919953301972@s.whatsapp.net"];
+    const text = "@Alice Example @+14155550222 joke time";
+    const mentionJids = ["14155550111@s.whatsapp.net", "14155550222@s.whatsapp.net"];
     const outgoing = injectMentionTokens(text, mentionJids, [
-      { jid: "918076538956@s.whatsapp.net", name: "Dhruv Kejriwal" },
-      { jid: "919953301972@s.whatsapp.net", name: "Ankit School" },
+      { jid: "14155550111@s.whatsapp.net", name: "Alice Example" },
+      { jid: "14155550222@s.whatsapp.net", name: "Bob Example" },
     ]);
-    expect(outgoing).toBe("@918076538956 @919953301972 joke time");
+    expect(outgoing).toBe("@14155550111 @14155550222 joke time");
   });
 
   it("keeps existing numeric mention tokens unchanged", () => {
-    const text = "@918076538956 @919953301972 @918586020845 roll call done 😎";
+    const text = "@14155550111 @14155550222 @14155550333 roll call done 😎";
     const mentionJids = [
-      "918076538956@s.whatsapp.net",
-      "919953301972@s.whatsapp.net",
-      "918586020845@s.whatsapp.net",
+      "14155550111@s.whatsapp.net",
+      "14155550222@s.whatsapp.net",
+      "14155550333@s.whatsapp.net",
     ];
     const outgoing = injectMentionTokens(text, mentionJids, [
-      { jid: "918076538956@s.whatsapp.net", name: "Dhruv Kejriwal" },
-      { jid: "919953301972@s.whatsapp.net", name: "Ankit School" },
-      { jid: "918586020845@s.whatsapp.net", name: "OpenClaw Bot" },
+      { jid: "14155550111@s.whatsapp.net", name: "Alice Example" },
+      { jid: "14155550222@s.whatsapp.net", name: "Bob Example" },
+      { jid: "14155550333@s.whatsapp.net", name: "OpenClaw Bot" },
     ]);
     expect(outgoing).toBe(text);
   });

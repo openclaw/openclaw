@@ -261,14 +261,14 @@ describe("web monitor inbox", () => {
 
   it("keeps generated mentions for named targets in 'tag me and <name>' requests", async () => {
     const onMessage = vi.fn(async (msg) => {
-      await msg.reply("@918076538956 @919953301972 done ✅");
+      await msg.reply("@14155550111 @14155550222 done ✅");
     });
 
     const { listener, sock } = await startInboxMonitor(onMessage);
     const upsert = buildMessageUpsert({
       id: "g-1",
       remoteJid: "120363425190157453@g.us",
-      participant: "918076538956@s.whatsapp.net",
+      participant: "14155550111@s.whatsapp.net",
       text: "tag me and ankit",
       timestamp: 1_700_000_000,
     });
@@ -277,8 +277,8 @@ describe("web monitor inbox", () => {
     await tick();
 
     expect(sock.sendMessage).toHaveBeenCalledWith("120363425190157453@g.us", {
-      text: "@918076538956 @919953301972 done ✅",
-      mentions: ["918076538956@s.whatsapp.net", "919953301972@s.whatsapp.net"],
+      text: "@14155550111 @14155550222 done ✅",
+      mentions: ["14155550111@s.whatsapp.net", "14155550222@s.whatsapp.net"],
     });
 
     await listener.close();
@@ -293,7 +293,7 @@ describe("web monitor inbox", () => {
     const upsert = buildMessageUpsert({
       id: "g-2",
       remoteJid: "120363425190157453@g.us",
-      participant: "918076538956@s.whatsapp.net",
+      participant: "14155550111@s.whatsapp.net",
       text: "tag me",
       timestamp: 1_700_000_001,
     });
@@ -310,27 +310,25 @@ describe("web monitor inbox", () => {
 
   it("falls back to sender/self/remaining participant inference for @Name group replies", async () => {
     const onMessage = vi.fn(async (msg) => {
-      await msg.reply(
-        "😂 @Dhruv Kejriwal @Ankit @OpenClaw  \nTeam status update: 2 humans, 1 bot.",
-      );
+      await msg.reply("😂 @Alice Example @Bob @OpenClaw  \nTeam status update: 2 humans, 1 bot.");
     });
 
     const { listener, sock } = await startInboxMonitor(onMessage);
     sock.groupMetadata.mockResolvedValue({
       subject: "test-group",
       participants: [
-        { id: "918076538956@s.whatsapp.net", phoneNumber: "+918076538956" },
-        { id: "919953301972@s.whatsapp.net", phoneNumber: "+919953301972" },
-        { id: "918586020845@s.whatsapp.net", phoneNumber: "+918586020845" },
+        { id: "14155550111@s.whatsapp.net", phoneNumber: "+14155550111" },
+        { id: "14155550222@s.whatsapp.net", phoneNumber: "+14155550222" },
+        { id: "14155550333@s.whatsapp.net", phoneNumber: "+14155550333" },
       ],
     });
     const upsert = buildMessageUpsert({
       id: "g-3",
       remoteJid: "120363425190157453@g.us",
-      participant: "918076538956@s.whatsapp.net",
+      participant: "14155550111@s.whatsapp.net",
       text: "me and ankit and yourself and send something funny, tag all of us",
       timestamp: 1_700_000_002,
-      pushName: "Dhruv Kejriwal",
+      pushName: "Alice Example",
     });
 
     sock.ev.emit("messages.upsert", upsert);
@@ -343,26 +341,26 @@ describe("web monitor inbox", () => {
           jid === "120363425190157453@g.us" &&
           typeof (payload as { text?: unknown }).text === "string" &&
           ((payload as { text: string }).text.includes("Team status update") ||
-            (payload as { text: string }).text.includes("@Dhruv Kejriwal")),
+            (payload as { text: string }).text.includes("@Alice Example")),
       );
 
     expect(outboundCall).toBeDefined();
     const payload = outboundCall?.[1] as { text: string; mentions?: string[] };
     expect(payload.mentions).toEqual(
       expect.arrayContaining([
-        "918076538956@s.whatsapp.net",
-        "919953301972@s.whatsapp.net",
-        "918586020845@s.whatsapp.net",
+        "14155550111@s.whatsapp.net",
+        "14155550222@s.whatsapp.net",
+        "14155550333@s.whatsapp.net",
       ]),
     );
-    expect(payload.text).toContain("@918076538956");
-    expect(payload.text).toContain("@919953301972");
-    expect(payload.text).toContain("@918586020845");
-    expect(payload.text).not.toContain("@918076538956 Kejriwal");
-    expect(payload.text).not.toContain("@Dhruv");
-    expect(payload.text).not.toContain("@Ankit");
+    expect(payload.text).toContain("@14155550111");
+    expect(payload.text).toContain("@14155550222");
+    expect(payload.text).toContain("@14155550333");
+    expect(payload.text).not.toContain("@14155550111 Example");
+    expect(payload.text).not.toContain("@Alice");
+    expect(payload.text).not.toContain("@Bob");
     expect(payload.text).not.toContain("@OpenClaw");
-    expect(payload.text).not.toMatch(/\n@918076538956 @919953301972 @918586020845$/);
+    expect(payload.text).not.toMatch(/\n@14155550111 @14155550222 @14155550333$/);
 
     await listener.close();
   });
