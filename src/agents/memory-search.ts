@@ -49,6 +49,7 @@ export type ResolvedMemorySearchConfig = {
     watch: boolean;
     watchDebounceMs: number;
     intervalMinutes: number;
+    concurrency: number;
     sessions: {
       deltaBytes: number;
       deltaMessages: number;
@@ -84,6 +85,7 @@ const DEFAULT_VOYAGE_MODEL = "voyage-4-large";
 const DEFAULT_CHUNK_TOKENS = 400;
 const DEFAULT_CHUNK_OVERLAP = 80;
 const DEFAULT_WATCH_DEBOUNCE_MS = 1500;
+const DEFAULT_SYNC_CONCURRENCY = 4;
 const DEFAULT_SESSION_DELTA_BYTES = 100_000;
 const DEFAULT_SESSION_DELTA_MESSAGES = 50;
 const DEFAULT_MAX_RESULTS = 6;
@@ -216,6 +218,10 @@ function mergeConfig(
       defaults?.sync?.watchDebounceMs ??
       DEFAULT_WATCH_DEBOUNCE_MS,
     intervalMinutes: overrides?.sync?.intervalMinutes ?? defaults?.sync?.intervalMinutes ?? 0,
+    concurrency: Math.max(
+      1,
+      overrides?.sync?.concurrency ?? defaults?.sync?.concurrency ?? DEFAULT_SYNC_CONCURRENCY,
+    ),
     sessions: {
       deltaBytes:
         overrides?.sync?.sessions?.deltaBytes ??

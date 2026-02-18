@@ -687,6 +687,11 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   }
 
   protected getIndexConcurrency(): number {
+    // Check config first (non-batch mode)
+    if (!this.batch.enabled && typeof this.settings.sync.concurrency === "number") {
+      return Math.max(1, this.settings.sync.concurrency);
+    }
+    // Fall back to batch concurrency or hardcoded default
     return this.batch.enabled ? this.batch.concurrency : EMBEDDING_INDEX_CONCURRENCY;
   }
 

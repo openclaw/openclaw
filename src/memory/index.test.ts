@@ -329,4 +329,36 @@ describe("memory index", () => {
       );
     }
   });
+
+  it("respects custom sync concurrency config", async () => {
+    const customConcurrency = 2;
+    const concurrencyStorePath = path.join(workspaceDir, `index-concurrency-${Date.now()}.sqlite`);
+    const cfg: TestCfg = {
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          memorySearch: {
+            provider: "openai",
+            model: "mock-embed",
+            store: { path: concurrencyStorePath, vector: { enabled: false } },
+            chunking: { tokens: 4000, overlap: 0 },
+            sync: {
+              watch: false,
+              onSessionStart: false,
+              onSearch: true,
+              concurrency: customConcurrency,
+            },
+            query: { minScore: 0, hybrid: { enabled: false } },
+          },
+        },
+        list: [{ id: "main", default: true }],
+      },
+    };
+    const manager = await getPersistentManager(cfg);
+    // Access protected method through type assertion to verify config is applied
+    const actualConcurrency = (
+      manager as unknown as { getIndexConcurrency: () => number }
+    ).getIndexConcurrency();
+    expect(actualConcurrency).toBe(customConcurrency);
+  });
 });
