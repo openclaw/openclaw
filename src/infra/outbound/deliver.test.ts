@@ -4,7 +4,7 @@ import { signalOutbound } from "../../channels/plugins/outbound/signal.js";
 import { telegramOutbound } from "../../channels/plugins/outbound/telegram.js";
 import { whatsappOutbound } from "../../channels/plugins/outbound/whatsapp.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { resolveStateDir } from "../../config/paths.js";
+import { STATE_DIR } from "../../config/paths.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { markdownToSignalTextChunks } from "../../signal/format.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
@@ -60,8 +60,7 @@ vi.mock("./delivery-queue.js", () => ({
   failDelivery: queueMocks.failDelivery,
 }));
 
-let deliverOutboundPayloads: typeof import("./deliver.js").deliverOutboundPayloads;
-let normalizeOutboundPayloads: typeof import("./deliver.js").normalizeOutboundPayloads;
+const { deliverOutboundPayloads, normalizeOutboundPayloads } = await import("./deliver.js");
 
 const telegramChunkConfig: OpenClawConfig = {
   channels: { telegram: { botToken: "tok-1", textChunkLimit: 2 } },
@@ -88,9 +87,7 @@ async function deliverWhatsAppPayload(params: {
 }
 
 describe("deliverOutboundPayloads", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ deliverOutboundPayloads, normalizeOutboundPayloads } = await import("./deliver.js"));
+  beforeEach(() => {
     setActivePluginRegistry(defaultRegistry);
     hookMocks.runner.hasHooks.mockReset();
     hookMocks.runner.hasHooks.mockReturnValue(false);
@@ -201,7 +198,7 @@ describe("deliverOutboundPayloads", () => {
       "hi",
       expect.objectContaining({
         mediaUrl: "file:///tmp/f.png",
-        mediaLocalRoots: expect.arrayContaining([path.join(resolveStateDir(), "workspace-work")]),
+        mediaLocalRoots: expect.arrayContaining([path.join(STATE_DIR, "workspace-work")]),
       }),
     );
   });

@@ -3,7 +3,7 @@ import { allowListMatches, normalizeAllowList, normalizeAllowListLower } from ".
 import type { SlackMonitorContext } from "./context.js";
 
 export async function resolveSlackEffectiveAllowFrom(ctx: SlackMonitorContext) {
-  const storeAllowFrom = await Promise.resolve(readChannelAllowFromStore("slack")).catch(() => []);
+  const storeAllowFrom = await readChannelAllowFromStore("slack").catch(() => []);
   const allowFrom = normalizeAllowList([...ctx.allowFrom, ...storeAllowFrom]);
   const allowFromLower = normalizeAllowListLower(allowFrom);
   return { allowFrom, allowFromLower };
