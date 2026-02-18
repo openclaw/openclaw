@@ -63,7 +63,7 @@ function pickExistingWhatsAppJid(result: unknown): string | null {
 
 async function resolveOutboundJid(params: {
   to: string;
-  onWhatsApp?: (jid: string | string[]) => Promise<unknown>;
+  onWhatsApp?: (jid: string) => Promise<unknown>;
 }): Promise<string> {
   const initial = toWhatsappJid(params.to);
   if (!params.onWhatsApp || !isWhatsAppUserJid(initial)) {
@@ -71,8 +71,14 @@ async function resolveOutboundJid(params: {
   }
   const candidates = buildWhatsAppLookupCandidates(initial);
   try {
-    const lookup = await params.onWhatsApp(candidates.length === 1 ? candidates[0] : candidates);
-    return pickExistingWhatsAppJid(lookup) ?? initial;
+    for (const candidate of candidates) {
+      const lookup = await params.onWhatsApp(candidate);
+      const resolved = pickExistingWhatsAppJid(lookup);
+      if (resolved) {
+        return resolved;
+      }
+    }
+    return initial;
   } catch {
     return initial;
   }
@@ -82,7 +88,7 @@ export function createWebSendApi(params: {
   sock: {
     sendMessage: (jid: string, content: AnyMessageContent) => Promise<unknown>;
     sendPresenceUpdate: (presence: WAPresence, jid?: string) => Promise<unknown>;
-    onWhatsApp?: (jid: string | string[]) => Promise<unknown>;
+    onWhatsApp?: (jid: string) => Promise<unknown>;
   };
   defaultAccountId: string;
 }) {

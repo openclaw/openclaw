@@ -10,7 +10,9 @@ import { createWebSendApi } from "./send-api.js";
 describe("createWebSendApi", () => {
   const sendMessage = vi.fn(async () => ({ key: { id: "msg-1" } }));
   const sendPresenceUpdate = vi.fn(async () => {});
-  const onWhatsApp = vi.fn(async () => []);
+  const onWhatsApp = vi.fn(
+    async (_jid: string): Promise<Array<{ exists: boolean; jid: string }>> => [],
+  );
   const api = createWebSendApi({
     sock: { sendMessage, sendPresenceUpdate, onWhatsApp },
     defaultAccountId: "main",
@@ -70,12 +72,12 @@ describe("createWebSendApi", () => {
   });
 
   it("tries BR alternate candidate with/without 9 when resolving onWhatsApp", async () => {
-    onWhatsApp.mockResolvedValueOnce([{ exists: true, jid: "554784178525@s.whatsapp.net" }]);
+    onWhatsApp
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ exists: true, jid: "554784178525@s.whatsapp.net" }]);
     await api.sendMessage("+5547984178525", "hello");
-    expect(onWhatsApp).toHaveBeenCalledWith([
-      "5547984178525@s.whatsapp.net",
-      "554784178525@s.whatsapp.net",
-    ]);
+    expect(onWhatsApp).toHaveBeenNthCalledWith(1, "5547984178525@s.whatsapp.net");
+    expect(onWhatsApp).toHaveBeenNthCalledWith(2, "554784178525@s.whatsapp.net");
   });
 
   it("falls back to direct JID when onWhatsApp lookup fails", async () => {
