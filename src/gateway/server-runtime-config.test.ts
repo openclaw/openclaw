@@ -30,7 +30,7 @@ describe("resolveGatewayRuntimeConfig", () => {
       expect(result.bindHost).toBe("0.0.0.0");
     });
 
-    it("should reject loopback binding with trusted-proxy auth mode", async () => {
+    it("should allow loopback binding with trusted-proxy auth mode when trustedProxies is configured", async () => {
       const cfg = {
         gateway: {
           bind: "loopback" as const,
@@ -44,12 +44,13 @@ describe("resolveGatewayRuntimeConfig", () => {
         },
       };
 
-      await expect(
-        resolveGatewayRuntimeConfig({
-          cfg,
-          port: 18789,
-        }),
-      ).rejects.toThrow("gateway auth mode=trusted-proxy makes no sense with bind=loopback");
+      const result = await resolveGatewayRuntimeConfig({
+        cfg,
+        port: 18789,
+      });
+
+      expect(result.authMode).toBe("trusted-proxy");
+      expect(result.bindHost).toBe("127.0.0.1");
     });
 
     it("should reject trusted-proxy without trustedProxies configured", async () => {
