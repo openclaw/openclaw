@@ -707,7 +707,7 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
       return {
         shouldContinue: false,
         reply: {
-          text: `Spawned subagent ${agentId} (session ${result.childSessionKey}, run ${result.runId?.slice(0, 8)}).${result.warning ? ` Warning: ${result.warning}` : ""}`,
+          text: `Spawned subagent ${agentId} (session ${result.childSessionKey}, run ${result.runId?.slice(0, 8)}).`,
         },
       };
     }

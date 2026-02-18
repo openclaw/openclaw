@@ -122,6 +122,17 @@ describe("runGatewayUpdate", () => {
     return uiIndexPath;
   }
 
+  function buildStableTagResponses(stableTag: string): Record<string, CommandResponse> {
+    return {
+      [`git -C ${tempDir} rev-parse --show-toplevel`]: { stdout: tempDir },
+      [`git -C ${tempDir} rev-parse HEAD`]: { stdout: "abc123" },
+      [`git -C ${tempDir} status --porcelain -- :!dist/control-ui/`]: { stdout: "" },
+      [`git -C ${tempDir} fetch --all --prune --tags`]: { stdout: "" },
+      [`git -C ${tempDir} tag --list v* --sort=-v:refname`]: { stdout: `${stableTag}\n` },
+      [`git -C ${tempDir} checkout --detach ${stableTag}`]: { stdout: "" },
+    };
+  }
+
   async function removeControlUiAssets() {
     await fs.rm(path.join(tempDir, "dist", "control-ui"), { recursive: true, force: true });
   }
@@ -150,6 +161,15 @@ describe("runGatewayUpdate", () => {
       ...(options?.channel ? { channel: options.channel } : {}),
       ...(options?.tag ? { tag: options.tag } : {}),
     });
+  }
+
+  async function seedGlobalPackageRoot(pkgRoot: string, version = "1.0.0") {
+    await fs.mkdir(pkgRoot, { recursive: true });
+    await fs.writeFile(
+      path.join(pkgRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version }),
+      "utf-8",
+    );
   }
 
   it("skips git update when worktree is dirty", async () => {
@@ -196,12 +216,7 @@ describe("runGatewayUpdate", () => {
     await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
     const stableTag = "v1.0.1-1";
     const { runner, calls } = createRunner({
-      [`git -C ${tempDir} rev-parse --show-toplevel`]: { stdout: tempDir },
-      [`git -C ${tempDir} rev-parse HEAD`]: { stdout: "abc123" },
-      [`git -C ${tempDir} status --porcelain -- :!dist/control-ui/`]: { stdout: "" },
-      [`git -C ${tempDir} fetch --all --prune --tags`]: { stdout: "" },
-      [`git -C ${tempDir} tag --list v* --sort=-v:refname`]: { stdout: `${stableTag}\n` },
-      [`git -C ${tempDir} checkout --detach ${stableTag}`]: { stdout: "" },
+      ...buildStableTagResponses(stableTag),
       "pnpm install": { code: 1, stderr: "ERR_PNPM_NETWORK" },
     });
 
@@ -217,12 +232,7 @@ describe("runGatewayUpdate", () => {
     await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
     const stableTag = "v1.0.1-1";
     const { runner, calls } = createRunner({
-      [`git -C ${tempDir} rev-parse --show-toplevel`]: { stdout: tempDir },
-      [`git -C ${tempDir} rev-parse HEAD`]: { stdout: "abc123" },
-      [`git -C ${tempDir} status --porcelain -- :!dist/control-ui/`]: { stdout: "" },
-      [`git -C ${tempDir} fetch --all --prune --tags`]: { stdout: "" },
-      [`git -C ${tempDir} tag --list v* --sort=-v:refname`]: { stdout: `${stableTag}\n` },
-      [`git -C ${tempDir} checkout --detach ${stableTag}`]: { stdout: "" },
+      ...buildStableTagResponses(stableTag),
       "pnpm install": { stdout: "" },
       "pnpm build": { code: 1, stderr: "tsc: error TS2345" },
     });
@@ -293,12 +303,7 @@ describe("runGatewayUpdate", () => {
   }): Promise<{ calls: string[]; result: Awaited<ReturnType<typeof runGatewayUpdate>> }> {
     const nodeModules = path.join(tempDir, "node_modules");
     const pkgRoot = path.join(nodeModules, "openclaw");
-    await fs.mkdir(pkgRoot, { recursive: true });
-    await fs.writeFile(
-      path.join(pkgRoot, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "1.0.0" }),
-      "utf-8",
-    );
+    await seedGlobalPackageRoot(pkgRoot);
 
     const { calls, runCommand } = createGlobalInstallHarness({
       pkgRoot,
@@ -387,12 +392,7 @@ describe("runGatewayUpdate", () => {
     const pkgRoot = path.join(nodeModules, "openclaw");
     const staleDir = path.join(nodeModules, ".openclaw-stale");
     await fs.mkdir(staleDir, { recursive: true });
-    await fs.mkdir(pkgRoot, { recursive: true });
-    await fs.writeFile(
-      path.join(pkgRoot, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "1.0.0" }),
-      "utf-8",
-    );
+    await seedGlobalPackageRoot(pkgRoot);
 
     let stalePresentAtInstall = true;
     const runCommand = async (argv: string[]) => {
@@ -428,12 +428,7 @@ describe("runGatewayUpdate", () => {
     try {
       const bunGlobalRoot = path.join(bunInstall, "install", "global", "node_modules");
       const pkgRoot = path.join(bunGlobalRoot, "openclaw");
-      await fs.mkdir(pkgRoot, { recursive: true });
-      await fs.writeFile(
-        path.join(pkgRoot, "package.json"),
-        JSON.stringify({ name: "openclaw", version: "1.0.0" }),
-        "utf-8",
-      );
+      await seedGlobalPackageRoot(pkgRoot);
 
       const { calls, runCommand } = createGlobalInstallHarness({
         pkgRoot,
