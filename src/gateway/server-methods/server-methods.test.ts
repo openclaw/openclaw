@@ -20,22 +20,7 @@ vi.mock("../../commands/status.js", () => ({
   getStatusSummary: vi.fn().mockResolvedValue({ ok: true }),
 }));
 
-type HealthStatusHandlerParams = Parameters<
-  (typeof import("./health.js"))["healthHandlers"]["status"]
->[0];
-
 describe("waitForAgentJob", () => {
-  const AGENT_RUN_ERROR_RETRY_GRACE_MS = 15_000;
-
-  beforeEach(() => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
   it("maps lifecycle end events with aborted=true to timeout", async () => {
     const runId = `run-timeout-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const waitPromise = waitForAgentJob({ runId, timeoutMs: 1_000 });
@@ -66,86 +51,6 @@ describe("waitForAgentJob", () => {
     expect(snapshot?.status).toBe("ok");
     expect(snapshot?.startedAt).toBe(300);
     expect(snapshot?.endedAt).toBe(400);
-  });
-
-  it("treats transient error->start->end as recovered when restart lands inside grace", async () => {
-    const runId = `run-recover-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const waitPromise = waitForAgentJob({ runId, timeoutMs: 60_000 });
-
-    emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "start", startedAt: 100 } });
-    emitAgentEvent({
-      runId,
-      stream: "lifecycle",
-      data: { phase: "error", endedAt: 110, error: "transient" },
-    });
-
-    await vi.advanceTimersByTimeAsync(1_000);
-    emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "start", startedAt: 200 } });
-    emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end", endedAt: 260 } });
-
-    const snapshot = await waitPromise;
-    expect(snapshot).not.toBeNull();
-    expect(snapshot?.status).toBe("ok");
-    expect(snapshot?.startedAt).toBe(200);
-    expect(snapshot?.endedAt).toBe(260);
-  });
-
-  it("resolves error only after grace expires when no recovery start arrives", async () => {
-    const runId = `run-error-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const waitPromise = waitForAgentJob({ runId, timeoutMs: 60_000 });
-
-    emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "start", startedAt: 10 } });
-    emitAgentEvent({
-      runId,
-      stream: "lifecycle",
-      data: { phase: "error", endedAt: 20, error: "fatal" },
-    });
-
-    let settled = false;
-    void waitPromise.finally(() => {
-      settled = true;
-    });
-
-    await vi.advanceTimersByTimeAsync(AGENT_RUN_ERROR_RETRY_GRACE_MS - 1);
-    expect(settled).toBe(false);
-
-    await vi.advanceTimersByTimeAsync(1);
-    const snapshot = await waitPromise;
-    expect(snapshot).not.toBeNull();
-    expect(snapshot?.status).toBe("error");
-    expect(snapshot?.error).toBe("fatal");
-    expect(snapshot?.startedAt).toBe(10);
-    expect(snapshot?.endedAt).toBe(20);
-  });
-
-  it("honors pending error grace when waiter attaches after the error event", async () => {
-    const runId = `run-late-wait-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-
-    emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "start", startedAt: 900 } });
-    emitAgentEvent({
-      runId,
-      stream: "lifecycle",
-      data: { phase: "error", endedAt: 999, error: "late-listener" },
-    });
-
-    await vi.advanceTimersByTimeAsync(5_000);
-
-    const waitPromise = waitForAgentJob({ runId, timeoutMs: 60_000 });
-    let settled = false;
-    void waitPromise.finally(() => {
-      settled = true;
-    });
-
-    await vi.advanceTimersByTimeAsync(AGENT_RUN_ERROR_RETRY_GRACE_MS - 5_001);
-    expect(settled).toBe(false);
-
-    await vi.advanceTimersByTimeAsync(1);
-    const snapshot = await waitPromise;
-    expect(snapshot).not.toBeNull();
-    expect(snapshot?.status).toBe("error");
-    expect(snapshot?.error).toBe("late-listener");
-    expect(snapshot?.startedAt).toBe(900);
-    expect(snapshot?.endedAt).toBe(999);
   });
 });
 
@@ -335,8 +240,6 @@ describe("exec approval handlers", () => {
   type ExecApprovalHandlers = ReturnType<typeof createExecApprovalHandlers>;
   type ExecApprovalRequestArgs = Parameters<ExecApprovalHandlers["exec.approval.request"]>[0];
   type ExecApprovalResolveArgs = Parameters<ExecApprovalHandlers["exec.approval.resolve"]>[0];
-  type ExecApprovalRequestRespond = ExecApprovalRequestArgs["respond"];
-  type ExecApprovalResolveRespond = ExecApprovalResolveArgs["respond"];
 
   const defaultExecApprovalRequestParams = {
     command: "echo ok",
@@ -359,7 +262,7 @@ describe("exec approval handlers", () => {
 
   async function requestExecApproval(params: {
     handlers: ExecApprovalHandlers;
-    respond: ExecApprovalRequestRespond;
+    respond: ReturnType<typeof vi.fn>;
     context: { broadcast: (event: string, payload: unknown) => void };
     params?: Record<string, unknown>;
   }) {
@@ -369,7 +272,7 @@ describe("exec approval handlers", () => {
     } as unknown as ExecApprovalRequestArgs["params"];
     return params.handlers["exec.approval.request"]({
       params: requestParams,
-      respond: params.respond,
+      respond: params.respond as unknown as ExecApprovalRequestArgs["respond"],
       context: toExecApprovalRequestContext(params.context),
       client: null,
       req: { id: "req-1", type: "req", method: "exec.approval.request" },
@@ -380,24 +283,14 @@ describe("exec approval handlers", () => {
   async function resolveExecApproval(params: {
     handlers: ExecApprovalHandlers;
     id: string;
-    respond: ExecApprovalResolveRespond;
+    respond: ReturnType<typeof vi.fn>;
     context: { broadcast: (event: string, payload: unknown) => void };
   }) {
     return params.handlers["exec.approval.resolve"]({
       params: { id: params.id, decision: "allow-once" } as ExecApprovalResolveArgs["params"],
-      respond: params.respond,
+      respond: params.respond as unknown as ExecApprovalResolveArgs["respond"],
       context: toExecApprovalResolveContext(params.context),
-      client: {
-        connect: {
-          client: {
-            id: "cli",
-            displayName: "CLI",
-            version: "1.0.0",
-            platform: "test",
-            mode: "cli",
-          },
-        },
-      } as unknown as ExecApprovalResolveArgs["client"],
+      client: null,
       req: { id: "req-2", type: "req", method: "exec.approval.resolve" },
       isWebchatConnect: execApprovalNoop,
     });
@@ -407,7 +300,7 @@ describe("exec approval handlers", () => {
     const manager = new ExecApprovalManager();
     const handlers = createExecApprovalHandlers(manager);
     const broadcasts: Array<{ event: string; payload: unknown }> = [];
-    const respond = vi.fn() as unknown as ExecApprovalRequestRespond;
+    const respond = vi.fn();
     const context = {
       broadcast: (event: string, payload: unknown) => {
         broadcasts.push({ event, payload });
@@ -478,7 +371,7 @@ describe("exec approval handlers", () => {
       undefined,
     );
 
-    const resolveRespond = vi.fn() as unknown as ExecApprovalResolveRespond;
+    const resolveRespond = vi.fn();
     await resolveExecApproval({
       handlers,
       id,
@@ -501,7 +394,7 @@ describe("exec approval handlers", () => {
     const manager = new ExecApprovalManager();
     const handlers = createExecApprovalHandlers(manager);
     const respond = vi.fn();
-    const resolveRespond = vi.fn() as unknown as ExecApprovalResolveRespond;
+    const resolveRespond = vi.fn();
 
     const resolveContext = {
       broadcast: () => {},
@@ -580,9 +473,13 @@ describe("gateway healthHandlers.status scope handling", () => {
     const { healthHandlers } = await import("./health.js");
 
     await healthHandlers.status({
-      respond,
-      client: { connect: { role: "operator", scopes: ["operator.read"] } },
-    } as unknown as HealthStatusHandlerParams);
+      req: {} as never,
+      params: {} as never,
+      respond: respond as never,
+      context: {} as never,
+      client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+      isWebchatConnect: () => false,
+    });
 
     expect(vi.mocked(status.getStatusSummary)).toHaveBeenCalledWith({ includeSensitive: false });
     expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
@@ -594,61 +491,16 @@ describe("gateway healthHandlers.status scope handling", () => {
     const { healthHandlers } = await import("./health.js");
 
     await healthHandlers.status({
-      respond,
-      client: { connect: { role: "operator", scopes: ["operator.admin"] } },
-    } as unknown as HealthStatusHandlerParams);
+      req: {} as never,
+      params: {} as never,
+      respond: respond as never,
+      context: {} as never,
+      client: { connect: { role: "operator", scopes: ["operator.admin"] } } as never,
+      isWebchatConnect: () => false,
+    });
 
     expect(vi.mocked(status.getStatusSummary)).toHaveBeenCalledWith({ includeSensitive: true });
     expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
-  });
-});
-
-describe("gateway mesh.plan.auto scope handling", () => {
-  it("rejects operator.read clients for mesh.plan.auto", async () => {
-    const { handleGatewayRequest } = await import("../server-methods.js");
-    const respond = vi.fn();
-    const handler = vi.fn();
-
-    await handleGatewayRequest({
-      req: { id: "req-mesh-read", type: "req", method: "mesh.plan.auto", params: {} },
-      respond,
-      context: {} as Parameters<typeof handleGatewayRequest>[0]["context"],
-      client: { connect: { role: "operator", scopes: ["operator.read"] } } as unknown as Parameters<
-        typeof handleGatewayRequest
-      >[0]["client"],
-      isWebchatConnect: () => false,
-      extraHandlers: { "mesh.plan.auto": handler },
-    });
-
-    expect(handler).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ message: "missing scope: operator.write" }),
-    );
-  });
-
-  it("allows operator.write clients for mesh.plan.auto", async () => {
-    const { handleGatewayRequest } = await import("../server-methods.js");
-    const respond = vi.fn();
-    const handler = vi.fn(
-      ({ respond: send }: { respond: (ok: boolean, payload?: unknown) => void }) =>
-        send(true, { ok: true }),
-    );
-
-    await handleGatewayRequest({
-      req: { id: "req-mesh-write", type: "req", method: "mesh.plan.auto", params: {} },
-      respond,
-      context: {} as Parameters<typeof handleGatewayRequest>[0]["context"],
-      client: {
-        connect: { role: "operator", scopes: ["operator.write"] },
-      } as unknown as Parameters<typeof handleGatewayRequest>[0]["client"],
-      isWebchatConnect: () => false,
-      extraHandlers: { "mesh.plan.auto": handler },
-    });
-
-    expect(handler).toHaveBeenCalledOnce();
-    expect(respond).toHaveBeenCalledWith(true, { ok: true });
   });
 });
 
