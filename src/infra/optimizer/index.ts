@@ -6,6 +6,8 @@
  * - Connection Pooling: Efficient HTTP connection management
  * - Message Queue: Async message processing with retry logic
  * - Performance Monitoring: System metrics and health tracking
+ * - LRU Cache: High-performance Least Recently Used cache
+ * - Memoization: Function result caching with TTL support
  *
  * Note: LLM caching is handled by Provider-native Prompt Caching
  * via cacheRetention and sessionId options in the stream API.
@@ -36,6 +38,10 @@ export {
   type PerformanceMonitorOptions,
   type PerformanceStats,
 } from "./performance-monitor.js";
+
+export { LRUCache, createLRUCache } from "../lru-cache.js";
+export { memoize, memoizeAsync } from "../memoize.js";
+export { shallowClone, shallowCloneMap, shallowCloneSet, cloneWithFreeze } from "../clone.js";
 
 import { ConnectionPoolManager, getConnectionPool } from "./connection-pool.js";
 import { MessageQueue, getMessageQueue } from "./message-queue.js";

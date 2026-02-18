@@ -25,6 +25,27 @@ import { mergeSessionEntry, type SessionEntry } from "./types.js";
 
 const log = createSubsystemLogger("sessions/store");
 
+function shallowCloneSessionStore(
+  store: Record<string, SessionEntry>,
+): Record<string, SessionEntry> {
+  const cloned: Record<string, SessionEntry> = {};
+  for (const key of Object.keys(store)) {
+    const entry = store[key];
+    if (entry && typeof entry === "object") {
+      cloned[key] = {
+        ...entry,
+        origin: entry.origin ? { ...entry.origin } : undefined,
+        deliveryContext: entry.deliveryContext
+          ? { ...entry.deliveryContext }
+          : undefined,
+      };
+    } else {
+      cloned[key] = entry;
+    }
+  }
+  return cloned;
+}
+
 // ============================================================================
 // Session Store Cache with TTL Support
 // ============================================================================
@@ -155,8 +176,7 @@ export function loadSessionStore(
     if (cached && isSessionStoreCacheValid(cached)) {
       const currentMtimeMs = getFileMtimeMs(storePath);
       if (currentMtimeMs === cached.mtimeMs) {
-        // Return a deep copy to prevent external mutations affecting cache
-        return structuredClone(cached.store);
+        return shallowCloneSessionStore(cached.store);
       }
       invalidateSessionStoreCache(storePath);
     }
@@ -223,14 +243,14 @@ export function loadSessionStore(
   // Cache the result if caching is enabled
   if (!opts.skipCache && isSessionStoreCacheEnabled()) {
     SESSION_STORE_CACHE.set(storePath, {
-      store: structuredClone(store), // Store a copy to prevent external mutations
+      store: shallowCloneSessionStore(store),
       loadedAt: Date.now(),
       storePath,
       mtimeMs,
     });
   }
 
-  return structuredClone(store);
+  return shallowCloneSessionStore(store);
 }
 
 export function readSessionUpdatedAt(params: {
