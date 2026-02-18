@@ -1,6 +1,15 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const callGatewayMock = vi.fn();
+vi.mock("../../gateway/call.js", () => ({
+  callGateway: (opts: unknown) => callGatewayMock(opts),
+}));
+
+vi.mock("../agent-scope.js", () => ({
+  resolveSessionAgentId: () => "agent-123",
+}));
+
 import { createCronTool } from "./cron-tool.js";
-import { callGatewayMock, resetCronToolGatewayMock } from "./cron-tool.test-helpers.js";
 
 describe("cron tool", () => {
   async function executeAddAndReadDelivery(params: {
@@ -26,7 +35,8 @@ describe("cron tool", () => {
   }
 
   beforeEach(() => {
-    resetCronToolGatewayMock();
+    callGatewayMock.mockReset();
+    callGatewayMock.mockResolvedValue({ ok: true });
   });
 
   it.each([
