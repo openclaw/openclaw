@@ -2552,7 +2552,13 @@ fn parse_patch_reasoning_level(
         None => Ok(PatchValue::Keep),
         Some(None) | Some(Some(Value::Null)) => Ok(PatchValue::Clear),
         Some(Some(Value::String(raw))) => normalize_reasoning_level(&raw)
-            .map(|v| PatchValue::Set(v.to_owned()))
+            .map(|v| {
+                if v == "off" {
+                    PatchValue::Clear
+                } else {
+                    PatchValue::Set(v.to_owned())
+                }
+            })
             .ok_or_else(|| "reasoningLevel must be on|off|stream|null".to_owned()),
         Some(_) => Err("reasoningLevel must be string or null".to_owned()),
     }
@@ -2576,7 +2582,10 @@ fn parse_patch_response_usage(
         Some(None) => Ok(PatchValue::Clear),
         Some(Some(Value::Null)) => Ok(PatchValue::Clear),
         Some(Some(Value::String(v))) => parse_response_usage_mode(&v)
-            .map(PatchValue::Set)
+            .map(|mode| match mode {
+                ResponseUsageMode::Off => PatchValue::Clear,
+                _ => PatchValue::Set(mode),
+            })
             .ok_or_else(|| "responseUsage must be off|tokens|full|on|null".to_owned()),
         Some(_) => Err("responseUsage must be string or null".to_owned()),
     }
@@ -3133,6 +3142,24 @@ mod tests {
                 assert!(payload.pointer("/entry/providerOverride").is_none());
             }
             _ => panic!("expected clear patch handled"),
+        }
+
+        let patch_toggle_off = RpcRequestFrame {
+            id: "req-patch-extended-off-clears".to_owned(),
+            method: "sessions.patch".to_owned(),
+            params: serde_json::json!({
+                "key": key,
+                "reasoningLevel": "off",
+                "responseUsage": "off"
+            }),
+        };
+        let out = dispatcher.handle_request(&patch_toggle_off).await;
+        match out {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert!(payload.pointer("/entry/reasoningLevel").is_none());
+                assert!(payload.pointer("/entry/responseUsage").is_none());
+            }
+            _ => panic!("expected off-clear patch handled"),
         }
     }
 

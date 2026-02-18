@@ -70,6 +70,7 @@ systemctl --user status openclaw-agent-rs.service
 - Enforces upstream `sessions.patch.sendPolicy` parity (`allow|deny|null`); legacy `inherit` is rejected at the RPC boundary.
 - Adds session list parity hints for delivery metadata (`lastAccountId`, `deliveryContext`) and token freshness (`totalTokensFresh`).
 - Extends `sessions.history` lookups to accept `key` aliases and direct `sessionId` lookups.
+- Matches upstream patch semantics where `reasoningLevel="off"` and `responseUsage="off"` clear stored overrides.
 - Responds to gateway introspection RPCs (`health`, `status`) with runtime/session metadata.
 - Responds to usage RPCs (`usage.status`, `usage.cost`) with Rust-side aggregate usage/cost placeholder summaries.
 - Tracks session metadata (`label`, `spawnedBy`) via `sessions.patch` and uses it for filtered `sessions.resolve` lookups.
