@@ -512,9 +512,6 @@ export async function startGatewayServer(
         if (source === "user") {
           replyEnforcer.onTranscriptUpdate({ sessionKey, source, text });
         } else if (source === "agent") {
-          log.info(
-            `[watchdog] transcript agent check textTail=${JSON.stringify(text?.slice(-30))}`,
-          );
           // Transcript file is the single source of truth for arm/disarm.
           // The lifecycle handler does NOT arm (buffer is unreliable).
           replyEnforcer.onTranscriptUpdate({ sessionKey, source, text });
