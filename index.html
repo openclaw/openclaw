@@ -1,0 +1,2248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>OpenClaw GitHub Console</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#050816" />
+  <meta name="description" content="OpenClaw GitHub Console PWA - manage repo, files, issues, and actions from one screen." />
+
+  <!-- PWA Manifest (inlined via JS) -->
+  <link rel="manifest" id="pwa-manifest-placeholder" />
+
+  <!-- Icons (you can replace with your own) -->
+  <link rel="icon" type="image/png" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' ry='20' fill='%23050816'/%3E%3Ctext x='50' y='58' text-anchor='middle' font-size='40' fill='%23ffffff' font-family='system-ui, -apple-system, BlinkMacSystemFont, sans-serif'%3EOC%3C/text%3E%3C/svg%3E" />
+
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #050816;
+      --bg-elevated: #0b1020;
+      --bg-soft: #111827;
+      --accent: #38bdf8;
+      --accent-soft: rgba(56, 189, 248, 0.12);
+      --accent-strong: #0ea5e9;
+      --border-subtle: rgba(148, 163, 184, 0.35);
+      --text-main: #e5e7eb;
+      --text-soft: #9ca3af;
+      --text-muted: #6b7280;
+      --danger: #f97373;
+      --success: #4ade80;
+      --warning: #facc15;
+      --radius-lg: 18px;
+      --radius-md: 12px;
+      --radius-pill: 999px;
+      --shadow-soft: 0 18px 45px rgba(15, 23, 42, 0.75);
+      --shadow-subtle: 0 10px 30px rgba(15, 23, 42, 0.6);
+      --transition-fast: 150ms ease-out;
+      --transition-med: 220ms ease-out;
+      --font-main: system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      background: radial-gradient(circle at top, #0b1120 0, #020617 45%, #000 100%);
+      color: var(--text-main);
+      font-family: var(--font-main);
+    }
+
+    body {
+      display: flex;
+      flex-direction: column;
+      min-height: 100vh;
+      overscroll-behavior-y: none;
+    }
+
+    .app-shell {
+      display: flex;
+      flex-direction: column;
+      min-height: 100vh;
+      padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    }
+
+    .app-header {
+      padding: 14px 16px 8px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .brand-logo {
+      width: 34px;
+      height: 34px;
+      border-radius: 14px;
+      background: radial-gradient(circle at 30% 0, #38bdf8 0, #0ea5e9 35%, #0b1120 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.4), 0 12px 30px rgba(15, 23, 42, 0.9);
+    }
+
+    .brand-logo span {
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      color: #e5f2ff;
+    }
+
+    .brand-text {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .brand-title {
+      font-size: 16px;
+      font-weight: 600;
+      letter-spacing: 0.03em;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .brand-title span {
+      opacity: 0.9;
+    }
+
+    .brand-badge {
+      font-size: 10px;
+      padding: 2px 7px;
+      border-radius: 999px;
+      background: rgba(56, 189, 248, 0.12);
+      color: #bae6fd;
+      border: 1px solid rgba(56, 189, 248, 0.4);
+      text-transform: uppercase;
+    }
+
+    .brand-subtitle {
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .pill {
+      border-radius: var(--radius-pill);
+      border: 1px solid rgba(148, 163, 184, 0.4);
+      background: linear-gradient(135deg, rgba(15, 23, 42, 0.9), rgba(15, 23, 42, 0.7));
+      padding: 6px 10px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      color: var(--text-soft);
+      box-shadow: var(--shadow-subtle);
+    }
+
+    .pill-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 999px;
+      background: radial-gradient(circle at 30% 0, #4ade80 0, #22c55e 40%, #166534 100%);
+      box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.5), 0 0 12px rgba(34, 197, 94, 0.7);
+    }
+
+    .icon-button {
+      border-radius: 999px;
+      border: 1px solid rgba(148, 163, 184, 0.4);
+      background: radial-gradient(circle at 30% 0, rgba(15, 23, 42, 0.95), rgba(15, 23, 42, 0.8));
+      width: 32px;
+      height: 32px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--text-soft);
+      cursor: pointer;
+      transition: background var(--transition-fast), transform var(--transition-fast), box-shadow var(--transition-fast), border-color var(--transition-fast);
+      box-shadow: var(--shadow-subtle);
+    }
+
+    .icon-button:hover {
+      background: radial-gradient(circle at 30% 0, rgba(15, 23, 42, 1), rgba(15, 23, 42, 0.9));
+      border-color: rgba(148, 163, 184, 0.7);
+      transform: translateY(-1px);
+      box-shadow: 0 14px 35px rgba(15, 23, 42, 0.9);
+    }
+
+    .icon-button:active {
+      transform: translateY(0);
+      box-shadow: var(--shadow-subtle);
+    }
+
+    .icon-button span {
+      font-size: 15px;
+    }
+
+    .app-main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      padding: 0 12px 12px;
+      gap: 10px;
+    }
+
+    .top-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+      gap: 10px;
+    }
+
+    @media (max-width: 900px) {
+      .top-row {
+        grid-template-columns: minmax(0, 1fr);
+      }
+    }
+
+    .card {
+      border-radius: var(--radius-lg);
+      background: radial-gradient(circle at top left, rgba(15, 23, 42, 0.95), rgba(15, 23, 42, 0.9));
+      border: 1px solid rgba(148, 163, 184, 0.4);
+      box-shadow: var(--shadow-soft);
+      padding: 10px 10px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .card-title {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+      color: var(--text-soft);
+    }
+
+    .card-title-pill {
+      font-size: 10px;
+      padding: 2px 7px;
+      border-radius: 999px;
+      background: rgba(15, 23, 42, 0.9);
+      border: 1px solid rgba(148, 163, 184, 0.5);
+      color: var(--text-muted);
+    }
+
+    .card-subtitle {
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    .card-body {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .field-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .field {
+      flex: 1;
+      min-width: 120px;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+
+    .field-label {
+      font-size: 11px;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .field-label span {
+      font-size: 9px;
+      padding: 1px 5px;
+      border-radius: 999px;
+      border: 1px solid rgba(148, 163, 184, 0.5);
+      color: var(--text-soft);
+    }
+
+    .input {
+      border-radius: 999px;
+      border: 1px solid rgba(148, 163, 184, 0.5);
+      background: rgba(15, 23, 42, 0.9);
+      padding: 7px 10px;
+      font-size: 12px;
+      color: var(--text-main);
+      outline: none;
+      width: 100%;
+      box-shadow: 0 8px 20px rgba(15, 23, 42, 0.8);
+      transition: border-color var(--transition-fast), box-shadow var(--transition-fast), background var(--transition-fast), transform var(--transition-fast);
+    }
+
+    .input:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.4), 0 12px 30px rgba(15, 23, 42, 0.95);
+      background: rgba(15, 23, 42, 0.95);
+      transform: translateY(-0.5px);
+    }
+
+    .input::placeholder {
+      color: var(--text-muted);
+    }
+
+    .input-textarea {
+      border-radius: 12px;
+      resize: vertical;
+      min-height: 70px;
+      font-family: var(--font-main);
+    }
+
+    .button-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .btn {
+      border-radius: 999px;
+      border: 1px solid rgba(148, 163, 184, 0.6);
+      background: radial-gradient(circle at 30% 0, rgba(15, 23, 42, 0.95), rgba(15, 23, 42, 0.85));
+      padding: 7px 12px;
+      font-size: 11px;
+      color: var(--text-soft);
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+      box-shadow: var(--shadow-subtle);
+      transition: background var(--transition-fast), transform var(--transition-fast), box-shadow var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast);
+      white-space: nowrap;
+    }
+
+    .btn span.icon {
+      font-size: 13px;
+    }
+
+    .btn-primary {
+      border-color: rgba(56, 189, 248, 0.7);
+      background: radial-gradient(circle at 30% 0, #0ea5e9, #0369a1);
+      color: #e0f2fe;
+      box-shadow: 0 14px 35px rgba(8, 47, 73, 0.9);
+    }
+
+    .btn-primary:hover {
+      background: radial-gradient(circle at 30% 0, #38bdf8, #0284c7);
+      box-shadow: 0 18px 45px rgba(8, 47, 73, 1);
+      transform: translateY(-1px);
+    }
+
+    .btn-primary:active {
+      transform: translateY(0);
+      box-shadow: 0 12px 30px rgba(8, 47, 73, 0.9);
+    }
+
+    .btn-soft {
+      background: rgba(15, 23, 42, 0.9);
+    }
+
+    .btn-soft:hover {
+      background: rgba(15, 23, 42, 1);
+      border-color: rgba(148, 163, 184, 0.8);
+      transform: translateY(-1px);
+      box-shadow: 0 14px 35px rgba(15, 23, 42, 0.95);
+    }
+
+    .btn-danger {
+      border-color: rgba(248, 113, 113, 0.7);
+      background: radial-gradient(circle at 30% 0, #f97373, #b91c1c);
+      color: #fee2e2;
+      box-shadow: 0 14px 35px rgba(127, 29, 29, 0.9);
+    }
+
+    .btn-danger:hover {
+      background: radial-gradient(circle at 30% 0, #fecaca, #b91c1c);
+      box-shadow: 0 18px 45px rgba(127, 29, 29, 1);
+      transform: translateY(-1px);
+    }
+
+    .btn-ghost {
+      background: transparent;
+      border-style: dashed;
+      border-color: rgba(148, 163, 184, 0.6);
+    }
+
+    .btn-ghost:hover {
+      background: rgba(15, 23, 42, 0.9);
+      border-style: solid;
+      transform: translateY(-1px);
+      box-shadow: 0 14px 35px rgba(15, 23, 42, 0.95);
+    }
+
+    .status-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    .status-pill {
+      border-radius: 999px;
+      padding: 3px 8px;
+      border: 1px solid rgba(148, 163, 184, 0.5);
+      background: rgba(15, 23, 42, 0.9);
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 999px;
+      background: var(--accent);
+      box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.5), 0 0 10px rgba(56, 189, 248, 0.7);
+    }
+
+    .status-dot.error {
+      background: var(--danger);
+      box-shadow: 0 0 0 1px rgba(248, 113, 113, 0.5), 0 0 10px rgba(248, 113, 113, 0.7);
+    }
+
+    .status-dot.idle {
+      background: var(--text-muted);
+      box-shadow: none;
+    }
+
+    .status-pill strong {
+      font-weight: 500;
+      color: var(--text-soft);
+    }
+
+    .status-pill span.value {
+      color: var(--text-main);
+    }
+
+    .status-pill span.sub {
+      color: var(--text-muted);
+    }
+
+    .tabs {
+      display: flex;
+      gap: 6px;
+      padding: 2px;
+      border-radius: 999px;
+      background: rgba(15, 23, 42, 0.9);
+      border: 1px solid rgba(148, 163, 184, 0.5);
+    }
+
+    .tab {
+      flex: 1;
+      border-radius: 999px;
+      padding: 5px 8px;
+      font-size: 11px;
+      text-align: center;
+      cursor: pointer;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+      transition: background var(--transition-fast), color var(--transition-fast), transform var(--transition-fast), box-shadow var(--transition-fast);
+    }
+
+    .tab span.icon {
+      font-size: 13px;
+    }
+
+    .tab.active {
+      background: radial-gradient(circle at 30% 0, #0ea5e9, #0369a1);
+      color: #e0f2fe;
+      box-shadow: 0 10px 25px rgba(8, 47, 73, 0.9);
+      transform: translateY(-0.5px);
+    }
+
+    .tab-content {
+      margin-top: 6px;
+      border-radius: 14px;
+      border: 1px solid rgba(148, 163, 184, 0.4);
+      background: radial-gradient(circle at top left, rgba(15, 23, 42, 0.95), rgba(15, 23, 42, 0.9));
+      padding: 8px;
+      max-height: 260px;
+      overflow: auto;
+      font-size: 12px;
+      color: var(--text-soft);
+    }
+
+    .tab-content pre {
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-family: "SF Mono", ui-monospace, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: 11px;
+      line-height: 1.4;
+    }
+
+    .log-entry {
+      padding: 4px 0;
+      border-bottom: 1px dashed rgba(55, 65, 81, 0.7);
+    }
+
+    .log-entry:last-child {
+      border-bottom: none;
+    }
+
+    .log-entry strong {
+      color: var(--text-main);
+    }
+
+    .log-entry span.time {
+      color: var(--text-muted);
+      font-size: 10px;
+      margin-left: 4px;
+    }
+
+    .log-entry span.tag {
+      font-size: 10px;
+      padding: 1px 6px;
+      border-radius: 999px;
+      border: 1px solid rgba(148, 163, 184, 0.6);
+      margin-left: 6px;
+      color: var(--text-soft);
+    }
+
+    .log-entry span.tag.ok {
+      border-color: rgba(74, 222, 128, 0.7);
+      color: #bbf7d0;
+    }
+
+    .log-entry span.tag.err {
+      border-color: rgba(248, 113, 113, 0.7);
+      color: #fecaca;
+    }
+
+    .log-entry span.tag.info {
+      border-color: rgba(56, 189, 248, 0.7);
+      color: #bae6fd;
+    }
+
+    .pill-metric-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .metric-pill {
+      border-radius: 999px;
+      padding: 4px 9px;
+      border: 1px solid rgba(148, 163, 184, 0.5);
+      background: rgba(15, 23, 42, 0.9);
+      font-size: 11px;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      color: var(--text-soft);
+    }
+
+    .metric-pill strong {
+      color: var(--text-main);
+      font-weight: 500;
+    }
+
+    .metric-pill span.badge {
+      font-size: 10px;
+      padding: 1px 6px;
+      border-radius: 999px;
+      background: rgba(15, 23, 42, 0.9);
+      border: 1px solid rgba(148, 163, 184, 0.6);
+      color: var(--text-muted);
+    }
+
+    .metric-pill span.dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 999px;
+      background: var(--accent);
+    }
+
+    .metric-pill span.dot.warn {
+      background: var(--warning);
+    }
+
+    .metric-pill span.dot.err {
+      background: var(--danger);
+    }
+
+    .metric-pill span.dot.ok {
+      background: var(--success);
+    }
+
+    .bottom-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+      gap: 10px;
+    }
+
+    @media (max-width: 900px) {
+      .bottom-row {
+        grid-template-columns: minmax(0, 1fr);
+      }
+    }
+
+    .footer {
+      padding: 6px 16px 10px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      font-size: 10px;
+      color: var(--text-muted);
+    }
+
+    .footer span strong {
+      color: var(--text-soft);
+    }
+
+    .footer-right {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .footer-pill {
+      border-radius: 999px;
+      padding: 3px 8px;
+      border: 1px solid rgba(148, 163, 184, 0.5);
+      background: rgba(15, 23, 42, 0.9);
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .footer-pill span.dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 999px;
+      background: var(--accent);
+    }
+
+    .footer-pill span.dot.offline {
+      background: var(--danger);
+    }
+
+    .footer-pill span.dot.idle {
+      background: var(--text-muted);
+    }
+
+    .badge-inline {
+      font-size: 10px;
+      padding: 1px 6px;
+      border-radius: 999px;
+      border: 1px solid rgba(148, 163, 184, 0.6);
+      color: var(--text-soft);
+      background: rgba(15, 23, 42, 0.9);
+    }
+
+    .hidden {
+      display: none !important;
+    }
+
+    .mono {
+      font-family: "SF Mono", ui-monospace, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    }
+
+    .link-like {
+      color: var(--accent);
+      cursor: pointer;
+      text-decoration: underline;
+      text-decoration-style: dotted;
+      text-underline-offset: 2px;
+    }
+
+    .chip-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .chip {
+      border-radius: 999px;
+      padding: 3px 8px;
+      border: 1px solid rgba(148, 163, 184, 0.5);
+      background: rgba(15, 23, 42, 0.9);
+      font-size: 11px;
+      color: var(--text-soft);
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      cursor: pointer;
+      transition: background var(--transition-fast), border-color var(--transition-fast), transform var(--transition-fast), box-shadow var(--transition-fast);
+    }
+
+    .chip span.icon {
+      font-size: 12px;
+    }
+
+    .chip:hover {
+      background: rgba(15, 23, 42, 1);
+      border-color: rgba(148, 163, 184, 0.8);
+      transform: translateY(-0.5px);
+      box-shadow: 0 10px 25px rgba(15, 23, 42, 0.9);
+    }
+
+    .chip.active {
+      border-color: rgba(56, 189, 248, 0.7);
+      background: radial-gradient(circle at 30% 0, #0ea5e9, #0369a1);
+      color: #e0f2fe;
+      box-shadow: 0 12px 30px rgba(8, 47, 73, 0.9);
+    }
+
+    .badge-small {
+      font-size: 9px;
+      padding: 1px 5px;
+      border-radius: 999px;
+      border: 1px solid rgba(148, 163, 184, 0.6);
+      color: var(--text-muted);
+    }
+
+    .scroll-soft::-webkit-scrollbar {
+      width: 6px;
+    }
+
+    .scroll-soft::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    .scroll-soft::-webkit-scrollbar-thumb {
+      background: rgba(55, 65, 81, 0.8);
+      border-radius: 999px;
+    }
+
+    .scroll-soft::-webkit-scrollbar-thumb:hover {
+      background: rgba(75, 85, 99, 0.9);
+    }
+
+    .toast {
+      position: fixed;
+      left: 50%;
+      bottom: calc(16px + env(safe-area-inset-bottom));
+      transform: translateX(-50%);
+      z-index: 9999;
+      padding: 8px 12px;
+      border-radius: 999px;
+      border: 1px solid rgba(148, 163, 184, 0.7);
+      background: radial-gradient(circle at 30% 0, rgba(15, 23, 42, 0.98), rgba(15, 23, 42, 0.95));
+      color: var(--text-main);
+      font-size: 11px;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      box-shadow: 0 18px 45px rgba(15, 23, 42, 0.95);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 180ms ease-out, transform 180ms ease-out;
+    }
+
+    .toast.visible {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translateX(-50%) translateY(-4px);
+    }
+
+    .toast span.dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 999px;
+      background: var(--accent);
+      box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.5), 0 0 10px rgba(56, 189, 248, 0.7);
+    }
+
+    .toast span.dot.err {
+      background: var(--danger);
+      box-shadow: 0 0 0 1px rgba(248, 113, 113, 0.5), 0 0 10px rgba(248, 113, 113, 0.7);
+    }
+
+    .toast button {
+      border: none;
+      background: transparent;
+      color: var(--text-soft);
+      font-size: 11px;
+      cursor: pointer;
+      padding: 0;
+    }
+
+    .install-hint {
+      font-size: 10px;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .install-hint span.icon {
+      font-size: 12px;
+    }
+
+    .badge-env {
+      font-size: 10px;
+      padding: 1px 6px;
+      border-radius: 999px;
+      border: 1px solid rgba(148, 163, 184, 0.6);
+      color: var(--text-soft);
+      background: rgba(15, 23, 42, 0.9);
+    }
+
+    .badge-env span.dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 999px;
+      background: var(--accent);
+      display: inline-block;
+      margin-right: 4px;
+    }
+
+    .badge-env span.dot.dev {
+      background: var(--warning);
+    }
+
+    .badge-env span.dot.prod {
+      background: var(--success);
+    }
+
+    .badge-env span.dot.off {
+      background: var(--text-muted);
+    }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="app-header">
+      <div class="brand">
+        <div class="brand-logo">
+          <span>OC</span>
+        </div>
+        <div class="brand-text">
+          <div class="brand-title">
+            <span>OpenClaw</span>
+            <span class="brand-badge">GitHub Console</span>
+          </div>
+          <div class="brand-subtitle">
+            Repo control • Files • Issues • Actions • Webhooks
+          </div>
+        </div>
+      </div>
+      <div class="header-actions">
+        <div class="pill">
+          <div class="pill-dot" id="status-dot"></div>
+          <span id="status-label">Idle</span>
+        </div>
+        <button class="icon-button" id="install-btn" title="Install PWA">
+          <span>⬇️</span>
+        </button>
+        <button class="icon-button" id="theme-toggle" title="Toggle theme">
+          <span>🌗</span>
+        </button>
+      </div>
+    </header>
+
+    <main class="app-main">
+      <section class="top-row">
+        <!-- Connection & Repo Config -->
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <div class="card-title">
+                <span>GitHub Connection</span>
+                <span class="card-title-pill mono">api.github.com</span>
+              </div>
+              <div class="card-subtitle">
+                Configure token, owner, and repo for OpenClaw control.
+              </div>
+            </div>
+            <div class="chip-row">
+              <div class="chip" id="env-dev-chip">
+                <span class="icon">🧪</span>
+                <span>Dev</span>
+              </div>
+              <div class="chip active" id="env-prod-chip">
+                <span class="icon">🚀</span>
+                <span>Prod</span>
+              </div>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="field-row">
+              <div class="field">
+                <label class="field-label">
+                  GitHub Token
+                  <span>required</span>
+                </label>
+                <input id="gh-token" class="input" type="password" placeholder="ghp_... (repo scope)" autocomplete="off" />
+              </div>
+            </div>
+            <div class="field-row">
+              <div class="field">
+                <label class="field-label">
+                  Owner
+                  <span>user/org</span>
+                </label>
+                <input id="gh-owner" class="input" type="text" placeholder="openclaw-org or your-username" />
+              </div>
+              <div class="field">
+                <label class="field-label">
+                  Repo
+                  <span>name</span>
+                </label>
+                <input id="gh-repo" class="input" type="text" placeholder="openclaw" />
+              </div>
+            </div>
+            <div class="field-row">
+              <div class="field">
+                <label class="field-label">
+                  Default Branch
+                  <span>optional</span>
+                </label>
+                <input id="gh-branch" class="input" type="text" placeholder="main (or leave blank to auto-detect)" />
+              </div>
+              <div class="field">
+                <label class="field-label">
+                  Base Path
+                  <span>optional</span>
+                </label>
+                <input id="gh-basepath" class="input" type="text" placeholder="e.g. docs/, src/pages/ (for file ops)" />
+              </div>
+            </div>
+            <div class="button-row">
+              <button class="btn btn-primary" id="btn-connect">
+                <span class="icon">🔗</span>
+                <span>Connect & Fetch Repo</span>
+              </button>
+              <button class="btn btn-soft" id="btn-save-config">
+                <span class="icon">💾</span>
+                <span>Save Config (Local)</span>
+              </button>
+              <button class="btn btn-ghost" id="btn-clear-config">
+                <span class="icon">🧹</span>
+                <span>Clear</span>
+              </button>
+            </div>
+            <div class="status-bar">
+              <div class="status-pill">
+                <div class="status-dot idle" id="conn-dot"></div>
+                <span><strong>Connection:</strong></span>
+                <span class="value" id="conn-status">Not connected</span>
+              </div>
+              <div class="status-pill">
+                <span><strong>Repo:</strong></span>
+                <span class="value mono" id="conn-repo-label">—</span>
+              </div>
+              <div class="status-pill">
+                <span><strong>Branch:</strong></span>
+                <span class="value mono" id="conn-branch-label">—</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Quick Actions & Metrics -->
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <div class="card-title">
+                <span>Quick Actions</span>
+                <span class="card-title-pill">OpenClaw Ops</span>
+              </div>
+              <div class="card-subtitle">
+                One-tap operations for your OpenClaw repo.
+              </div>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="button-row">
+              <button class="btn btn-primary" id="btn-list-root">
+                <span class="icon">📂</span>
+                <span>List Root Files</span>
+              </button>
+              <button class="btn btn-soft" id="btn-list-basepath">
+                <span class="icon">📁</span>
+                <span>List Base Path</span>
+              </button>
+              <button class="btn btn-soft" id="btn-list-issues">
+                <span class="icon">🐞</span>
+                <span>List Open Issues</span>
+              </button>
+            </div>
+            <div class="button-row">
+              <button class="btn btn-soft" id="btn-list-workflows">
+                <span class="icon">⚙️</span>
+                <span>List Actions Workflows</span>
+              </button>
+              <button class="btn btn-soft" id="btn-list-runs">
+                <span class="icon">📊</span>
+                <span>Recent Workflow Runs</span>
+              </button>
+              <button class="btn btn-soft" id="btn-refresh-metrics">
+                <span class="icon">🔄</span>
+                <span>Refresh Metrics</span>
+              </button>
+            </div>
+            <div class="pill-metric-row">
+              <div class="metric-pill">
+                <span class="dot ok"></span>
+                <span><strong id="metric-files">—</strong> files</span>
+                <span class="badge">root</span>
+              </div>
+              <div class="metric-pill">
+                <span class="dot"></span>
+                <span><strong id="metric-issues">—</strong> open</span>
+                <span class="badge">issues</span>
+              </div>
+              <div class="metric-pill">
+                <span class="dot warn"></span>
+                <span><strong id="metric-runs">—</strong> runs</span>
+                <span class="badge">actions</span>
+              </div>
+            </div>
+            <div class="install-hint">
+              <span class="icon">💡</span>
+              <span>Tip: Install this as a PWA and pin it as your OpenClaw GitHub console.</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Bottom Row: File Ops / Issues / Actions / Logs -->
+      <section class="bottom-row">
+        <!-- File & Content Operations -->
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <div class="card-title">
+                <span>File & Content Ops</span>
+                <span class="card-title-pill">OpenClaw Pages</span>
+              </div>
+              <div class="card-subtitle">
+                Create, update, and inspect files in your repo.
+              </div>
+            </div>
+            <div class="tabs" id="file-tabs">
+              <div class="tab active" data-tab="create">
+                <span class="icon">➕</span>
+                <span>Create/Update</span>
+              </div>
+              <div class="tab" data-tab="view">
+                <span class="icon">👁️</span>
+                <span>View File</span>
+              </div>
+            </div>
+          </div>
+          <div class="card-body">
+            <div id="file-tab-create" class="tab-content scroll-soft">
+              <div class="field-row">
+                <div class="field">
+                  <label class="field-label">
+                    File Path
+                    <span>relative</span>
+                  </label>
+                  <input id="file-path" class="input" type="text" placeholder="e.g. docs/agents/telegram.md" />
+                </div>
+              </div>
+              <div class="field-row">
+                <div class="field">
+                  <label class="field-label">
+                    Commit Message
+                    <span>optional</span>
+                  </label>
+                  <input id="file-commit-message" class="input" type="text" placeholder="chore: update OpenClaw page" />
+                </div>
+              </div>
+              <div class="field-row">
+                <div class="field">
+                  <label class="field-label">
+                    File Content (Markdown/JSON/HTML/etc.)
+                    <span>content</span>
+                  </label>
+                  <textarea id="file-content" class="input input-textarea mono" placeholder="# OpenClaw Page&#10;..."></textarea>
+                </div>
+              </div>
+              <div class="button-row">
+                <button class="btn btn-primary" id="btn-file-upsert">
+                  <span class="icon">💾</span>
+                  <span>Create / Update File</span>
+                </button>
+                <button class="btn btn-soft" id="btn-file-load-existing">
+                  <span class="icon">📥</span>
+                  <span>Load Existing (if any)</span>
+                </button>
+              </div>
+              <div class="status-bar">
+                <div class="status-pill">
+                  <div class="status-dot idle" id="file-dot"></div>
+                  <span><strong>File:</strong></span>
+                  <span class="value mono" id="file-status">Idle</span>
+                </div>
+              </div>
+            </div>
+
+            <div id="file-tab-view" class="tab-content scroll-soft hidden">
+              <div class="field-row">
+                <div class="field">
+                  <label class="field-label">
+                    File Path
+                    <span>relative</span>
+                  </label>
+                  <input id="file-view-path" class="input" type="text" placeholder="e.g. docs/index.md" />
+                </div>
+              </div>
+              <div class="button-row">
+                <button class="btn btn-primary" id="btn-file-view">
+                  <span class="icon">👁️</span>
+                  <span>Fetch & View</span>
+                </button>
+                <button class="btn btn-soft" id="btn-file-view-raw">
+                  <span class="icon">📄</span>
+                  <span>View Raw JSON</span>
+                </button>
+              </div>
+              <div class="status-bar">
+                <div class="status-pill">
+                  <div class="status-dot idle" id="file-view-dot"></div>
+                  <span><strong>View:</strong></span>
+                  <span class="value mono" id="file-view-status">Idle</span>
+                </div>
+              </div>
+              <pre id="file-view-output"></pre>
+            </div>
+          </div>
+        </div>
+
+        <!-- Issues, Actions & Logs -->
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <div class="card-title">
+                <span>Issues • Actions • Logs</span>
+                <span class="card-title-pill">Observability</span>
+              </div>
+              <div class="card-subtitle">
+                Create issues, trigger workflows, and inspect logs.
+              </div>
+            </div>
+            <div class="tabs" id="obs-tabs">
+              <div class="tab active" data-tab="issues">
+                <span class="icon">🐞</span>
+                <span>Issues</span>
+              </div>
+              <div class="tab" data-tab="actions">
+                <span class="icon">⚙️</span>
+                <span>Actions</span>
+              </div>
+              <div class="tab" data-tab="logs">
+                <span class="icon">📜</span>
+                <span>Logs</span>
+              </div>
+            </div>
+          </div>
+          <div class="card-body">
+            <!-- Issues Tab -->
+            <div id="obs-tab-issues" class="tab-content scroll-soft">
+              <div class="field-row">
+                <div class="field">
+                  <label class="field-label">
+                    Issue Title
+                    <span>required</span>
+                  </label>
+                  <input id="issue-title" class="input" type="text" placeholder="[OpenClaw] Describe the issue or task" />
+                </div>
+              </div>
+              <div class="field-row">
+                <div class="field">
+                  <label class="field-label">
+                    Issue Body
+                    <span>markdown</span>
+                  </label>
+                  <textarea id="issue-body" class="input input-textarea mono" placeholder="## Context&#10;- ..."></textarea>
+                </div>
+              </div>
+              <div class="field-row">
+                <div class="field">
+                  <label class="field-label">
+                    Labels (comma-separated)
+                    <span>optional</span>
+                  </label>
+                  <input id="issue-labels" class="input" type="text" placeholder="openclaw, automation, pwa" />
+                </div>
+              </div>
+              <div class="button-row">
+                <button class="btn btn-primary" id="btn-issue-create">
+                  <span class="icon">🐞</span>
+                  <span>Create Issue</span>
+                </button>
+                <button class="btn btn-soft" id="btn-issue-list">
+                  <span class="icon">📋</span>
+                  <span>List Open Issues</span>
+                </button>
+              </div>
+              <div class="status-bar">
+                <div class="status-pill">
+                  <div class="status-dot idle" id="issue-dot"></div>
+                  <span><strong>Issues:</strong></span>
+                  <span class="value mono" id="issue-status">Idle</span>
+                </div>
+              </div>
+              <pre id="issue-output"></pre>
+            </div>
+
+            <!-- Actions Tab -->
+            <div id="obs-tab-actions" class="tab-content scroll-soft hidden">
+              <div class="field-row">
+                <div class="field">
+                  <label class="field-label">
+                    Workflow File Name
+                    <span>.yml</span>
+                  </label>
+                  <input id="workflow-file" class="input" type="text" placeholder=".github/workflows/deploy.yml" />
+                </div>
+              </div>
+              <div class="field-row">
+                <div class="field">
+                  <label class="field-label">
+                    Ref / Branch
+                    <span>optional</span>
+                  </label>
+                  <input id="workflow-ref" class="input" type="text" placeholder="main (or leave blank for default)" />
+                </div>
+              </div>
+              <div class="field-row">
+                <div class="field">
+                  <label class="field-label">
+                    Inputs (JSON)
+                    <span>optional</span>
+                  </label>
+                  <textarea id="workflow-inputs" class="input input-textarea mono" placeholder='{"env": "prod"}'></textarea>
+                </div>
+              </div>
+              <div class="button-row">
+                <button class="btn btn-primary" id="btn-workflow-dispatch">
+                  <span class="icon">🚀</span>
+                  <span>Dispatch Workflow</span>
+                </button>
+                <button class="btn btn-soft" id="btn-workflow-list">
+                  <span class="icon">⚙️</span>
+                  <span>List Workflows</span>
+                </button>
+                <button class="btn btn-soft" id="btn-workflow-runs">
+                  <span class="icon">📊</span>
+                  <span>Recent Runs</span>
+                </button>
+              </div>
+              <div class="status-bar">
+                <div class="status-pill">
+                  <div class="status-dot idle" id="workflow-dot"></div>
+                  <span><strong>Actions:</strong></span>
+                  <span class="value mono" id="workflow-status">Idle</span>
+                </div>
+              </div>
+              <pre id="workflow-output"></pre>
+            </div>
+
+            <!-- Logs Tab -->
+            <div id="obs-tab-logs" class="tab-content scroll-soft hidden">
+              <div class="button-row">
+                <button class="btn btn-soft" id="btn-log-clear">
+                  <span class="icon">🧹</span>
+                  <span>Clear Logs</span>
+                </button>
+                <button class="btn btn-soft" id="btn-log-copy">
+                  <span class="icon">📋</span>
+                  <span>Copy Logs</span>
+                </button>
+              </div>
+              <div id="log-container"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <span>
+        <strong>OpenClaw GitHub Console</strong> • Single-file PWA • <span class="mono">v1.0</span>
+      </span>
+      <div class="footer-right">
+        <div class="footer-pill">
+          <span class="dot idle" id="network-dot"></span>
+          <span id="network-label">Network idle</span>
+        </div>
+        <span class="badge-inline mono" id="env-label">
+          <span class="dot prod"></span>prod
+        </span>
+      </div>
+    </footer>
+  </div>
+
+  <div class="toast" id="toast">
+    <span class="dot" id="toast-dot"></span>
+    <span id="toast-message">Message</span>
+    <button id="toast-close">Dismiss</button>
+  </div>
+
+  <script>
+    // --- PWA Manifest Injection ---
+    (function injectManifest() {
+      const manifest = {
+        name: "OpenClaw GitHub Console",
+        short_name: "OC GitHub",
+        start_url: ".",
+        display: "standalone",
+        background_color: "#050816",
+        theme_color: "#050816",
+        description: "Single-file PWA console for managing OpenClaw GitHub repos.",
+        icons: [
+          {
+            src: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' ry='20' fill='%23050816'/%3E%3Ctext x='50' y='58' text-anchor='middle' font-size='40' fill='%23ffffff' font-family='system-ui, -apple-system, BlinkMacSystemFont, sans-serif'%3EOC%3C/text%3E%3C/svg%3E",
+            sizes: "100x100",
+            type: "image/svg+xml"
+          }
+        ]
+      };
+      const blob = new Blob([JSON.stringify(manifest)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.getElementById("pwa-manifest-placeholder");
+      if (link) {
+        link.setAttribute("href", url);
+      }
+    })();
+
+    // --- Service Worker Registration (inline script-based) ---
+    if ("serviceWorker" in navigator) {
+      const swCode = `
+        const CACHE_NAME = "oc-github-console-v1";
+        const OFFLINE_URLS = ["./"];
+
+        self.addEventListener("install", (event) => {
+          event.waitUntil(
+            caches.open(CACHE_NAME).then((cache) => cache.addAll(OFFLINE_URLS))
+          );
+          self.skipWaiting();
+        });
+
+        self.addEventListener("activate", (event) => {
+          event.waitUntil(
+            caches.keys().then((keys) =>
+              Promise.all(
+                keys.map((key) => {
+                  if (key !== CACHE_NAME) {
+                    return caches.delete(key);
+                  }
+                })
+              )
+            )
+          );
+          self.clients.claim();
+        });
+
+        self.addEventListener("fetch", (event) => {
+          const { request } = event;
+          if (request.method !== "GET") return;
+          event.respondWith(
+            caches.match(request).then((cached) => {
+              if (cached) return cached;
+              return fetch(request)
+                .then((response) => {
+                  const clone = response.clone();
+                  caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
+                  return response;
+                })
+                .catch(() => caches.match("./"));
+            })
+          );
+        });
+      `;
+      const blob = new Blob([swCode], { type: "text/javascript" });
+      const swUrl = URL.createObjectURL(blob);
+      navigator.serviceWorker
+        .register(swUrl)
+        .catch((err) => console.error("SW registration failed", err));
+    }
+
+    // --- State & Helpers ---
+    const state = {
+      env: "prod",
+      ghToken: "",
+      ghOwner: "",
+      ghRepo: "",
+      ghBranch: "",
+      ghBasePath: "",
+      connected: false,
+      defaultBranchResolved: "",
+      metrics: {
+        files: null,
+        issues: null,
+        runs: null
+      },
+      logs: []
+    };
+
+    const qs = (sel) => document.querySelector(sel);
+    const qsa = (sel) => Array.from(document.querySelectorAll(sel));
+
+    const statusDot = qs("#status-dot");
+    const statusLabel = qs("#status-label");
+    const connDot = qs("#conn-dot");
+    const connStatus = qs("#conn-status");
+    const connRepoLabel = qs("#conn-repo-label");
+    const connBranchLabel = qs("#conn-branch-label");
+    const networkDot = qs("#network-dot");
+    const networkLabel = qs("#network-label");
+    const envLabel = qs("#env-label");
+
+    const metricFiles = qs("#metric-files");
+    const metricIssues = qs("#metric-issues");
+    const metricRuns = qs("#metric-runs");
+
+    const fileDot = qs("#file-dot");
+    const fileStatus = qs("#file-status");
+    const fileViewDot = qs("#file-view-dot");
+    const fileViewStatus = qs("#file-view-status");
+    const fileViewOutput = qs("#file-view-output");
+
+    const issueDot = qs("#issue-dot");
+    const issueStatus = qs("#issue-status");
+    const issueOutput = qs("#issue-output");
+
+    const workflowDot = qs("#workflow-dot");
+    const workflowStatus = qs("#workflow-status");
+    const workflowOutput = qs("#workflow-output");
+
+    const logContainer = qs("#log-container");
+
+    const toastEl = qs("#toast");
+    const toastDot = qs("#toast-dot");
+    const toastMessage = qs("#toast-message");
+    const toastClose = qs("#toast-close");
+
+    let toastTimeout = null;
+    let deferredPrompt = null;
+
+    function setStatus(mode, text) {
+      statusLabel.textContent = text || mode;
+      statusDot.classList.remove("idle");
+      if (mode === "idle") {
+        statusDot.classList.add("idle");
+      }
+    }
+
+    function setNetworkStatus(mode, text) {
+      networkLabel.textContent = text || mode;
+      networkDot.classList.remove("idle", "offline");
+      if (mode === "idle") {
+        networkDot.classList.add("idle");
+      } else if (mode === "offline") {
+        networkDot.classList.add("offline");
+      }
+    }
+
+    function setConnStatus(connected, branch) {
+      state.connected = connected;
+      connDot.classList.remove("idle");
+      if (!connected) {
+        connDot.classList.add("idle");
+        connStatus.textContent = "Not connected";
+        connRepoLabel.textContent = "—";
+        connBranchLabel.textContent = "—";
+      } else {
+        connStatus.textContent = "Connected";
+        connRepoLabel.textContent = `${state.ghOwner}/${state.ghRepo}`;
+        connBranchLabel.textContent = branch || state.ghBranch || "default";
+      }
+    }
+
+    function setEnv(env) {
+      state.env = env;
+      envLabel.innerHTML = "";
+      const span = document.createElement("span");
+      span.className = "dot " + (env === "prod" ? "prod" : "dev");
+      envLabel.appendChild(span);
+      envLabel.appendChild(document.createTextNode(env));
+    }
+
+    function showToast(message, type = "info", duration = 2600) {
+      toastMessage.textContent = message;
+      toastDot.classList.remove("err");
+      if (type === "error") {
+        toastDot.classList.add("err");
+      }
+      toastEl.classList.add("visible");
+      if (toastTimeout) clearTimeout(toastTimeout);
+      toastTimeout = setTimeout(() => {
+        toastEl.classList.remove("visible");
+      }, duration);
+    }
+
+    toastClose.addEventListener("click", () => {
+      toastEl.classList.remove("visible");
+      if (toastTimeout) clearTimeout(toastTimeout);
+    });
+
+    function logEvent(message, level = "info") {
+      const time = new Date().toLocaleTimeString();
+      state.logs.unshift({ message, level, time });
+      if (state.logs.length > 200) state.logs.pop();
+      renderLogs();
+    }
+
+    function renderLogs() {
+      logContainer.innerHTML = "";
+      state.logs.forEach((entry) => {
+        const div = document.createElement("div");
+        div.className = "log-entry";
+        const tagClass = entry.level === "error" ? "err" : entry.level === "ok" ? "ok" : "info";
+        div.innerHTML = `
+          <strong>${entry.message}</strong>
+          <span class="time">${entry.time}</span>
+          <span class="tag ${tagClass}">${entry.level.toUpperCase()}</span>
+        `;
+        logContainer.appendChild(div);
+      });
+    }
+
+    function encodeBase64(str) {
+      return btoa(unescape(encodeURIComponent(str)));
+    }
+
+    function decodeBase64(str) {
+      try {
+        return decodeURIComponent(escape(atob(str)));
+      } catch (e) {
+        return atob(str);
+      }
+    }
+
+    function getConfigFromInputs() {
+      state.ghToken = qs("#gh-token").value.trim();
+      state.ghOwner = qs("#gh-owner").value.trim();
+      state.ghRepo = qs("#gh-repo").value.trim();
+      state.ghBranch = qs("#gh-branch").value.trim();
+      state.ghBasePath = qs("#gh-basepath").value.trim();
+    }
+
+    function saveConfig() {
+      getConfigFromInputs();
+      const payload = {
+        env: state.env,
+        ghOwner: state.ghOwner,
+        ghRepo: state.ghRepo,
+        ghBranch: state.ghBranch,
+        ghBasePath: state.ghBasePath
+      };
+      try {
+        localStorage.setItem("oc-github-console-config", JSON.stringify(payload));
+        showToast("Config saved locally.", "info");
+        logEvent("Config saved locally", "ok");
+      } catch (e) {
+        showToast("Failed to save config.", "error");
+        logEvent("Failed to save config: " + e.message, "error");
+      }
+    }
+
+    function loadConfig() {
+      try {
+        const raw = localStorage.getItem("oc-github-console-config");
+        if (!raw) return;
+        const cfg = JSON.parse(raw);
+        if (cfg.env) {
+          state.env = cfg.env;
+          setEnv(state.env);
+        }
+        if (cfg.ghOwner) qs("#gh-owner").value = cfg.ghOwner;
+        if (cfg.ghRepo) qs("#gh-repo").value = cfg.ghRepo;
+        if (cfg.ghBranch) qs("#gh-branch").value = cfg.ghBranch;
+        if (cfg.ghBasePath) qs("#gh-basepath").value = cfg.ghBasePath;
+        logEvent("Config loaded from local storage", "info");
+      } catch (e) {
+        logEvent("Failed to load config: " + e.message, "error");
+      }
+    }
+
+    function clearConfig() {
+      try {
+        localStorage.removeItem("oc-github-console-config");
+      } catch (e) {}
+      qs("#gh-token").value = "";
+      qs("#gh-owner").value = "";
+      qs("#gh-repo").value = "";
+      qs("#gh-branch").value = "";
+      qs("#gh-basepath").value = "";
+      setConnStatus(false);
+      showToast("Config cleared.", "info");
+      logEvent("Config cleared", "info");
+    }
+
+    async function ghFetch(path, options = {}) {
+      getConfigFromInputs();
+      if (!state.ghToken) {
+        showToast("GitHub token is required.", "error");
+        throw new Error("Missing token");
+      }
+      if (!state.ghOwner || !state.ghRepo) {
+        showToast("Owner and repo are required.", "error");
+        throw new Error("Missing owner/repo");
+      }
+
+      const url = `https://api.github.com/repos/${encodeURIComponent(state.ghOwner)}/${encodeURIComponent(state.ghRepo)}${path}`;
+      const headers = {
+        "Accept": "application/vnd.github+json",
+        "Authorization": `Bearer ${state.ghToken}`,
+        "X-GitHub-Api-Version": "2022-11-28"
+      };
+      const opts = Object.assign({ headers }, options);
+
+      setNetworkStatus("busy", "Calling GitHub…");
+      logEvent(`GitHub request: ${path}`, "info");
+
+      try {
+        const res = await fetch(url, opts);
+        const text = await res.text();
+        let json = null;
+        try {
+          json = text ? JSON.parse(text) : null;
+        } catch (e) {
+          json = text;
+        }
+        if (!res.ok) {
+          const msg = (json && json.message) || res.statusText || "GitHub error";
+          logEvent(`GitHub error: ${msg}`, "error");
+          showToast(msg, "error");
+          throw new Error(msg);
+        }
+        logEvent(`GitHub OK: ${path}`, "ok");
+        return json;
+      } finally {
+        setNetworkStatus("idle", "Network idle");
+      }
+    }
+
+    async function ghFetchNoRepo(path, options = {}) {
+      getConfigFromInputs();
+      if (!state.ghToken) {
+        showToast("GitHub token is required.", "error");
+        throw new Error("Missing token");
+      }
+      const url = `https://api.github.com${path}`;
+      const headers = {
+        "Accept": "application/vnd.github+json",
+        "Authorization": `Bearer ${state.ghToken}`,
+        "X-GitHub-Api-Version": "2022-11-28"
+      };
+      const opts = Object.assign({ headers }, options);
+
+      setNetworkStatus("busy", "Calling GitHub…");
+      logEvent(`GitHub request: ${path}`, "info");
+
+      try {
+        const res = await fetch(url, opts);
+        const text = await res.text();
+        let json = null;
+        try {
+          json = text ? JSON.parse(text) : null;
+        } catch (e) {
+          json = text;
+        }
+        if (!res.ok) {
+          const msg = (json && json.message) || res.statusText || "GitHub error";
+          logEvent(`GitHub error: ${msg}`, "error");
+          showToast(msg, "error");
+          throw new Error(msg);
+        }
+        logEvent(`GitHub OK: ${path}`, "ok");
+        return json;
+      } finally {
+        setNetworkStatus("idle", "Network idle");
+      }
+    }
+
+    async function connectAndFetchRepo() {
+      setStatus("busy", "Connecting…");
+      setConnStatus(false);
+      getConfigFromInputs();
+
+      if (!state.ghToken || !state.ghOwner || !state.ghRepo) {
+        showToast("Token, owner, and repo are required.", "error");
+        setStatus("idle", "Idle");
+        return;
+      }
+
+      try {
+        const repo = await ghFetch("");
+        const branch = state.ghBranch || repo.default_branch || "main";
+        state.defaultBranchResolved = branch;
+        setConnStatus(true, branch);
+        setStatus("ok", "Connected");
+        showToast(`Connected to ${state.ghOwner}/${state.ghRepo}`, "info");
+      } catch (e) {
+        setConnStatus(false);
+        setStatus("idle", "Idle");
+      }
+    }
+
+    async function listRootFiles() {
+      if (!state.connected) {
+        await connectAndFetchRepo();
+        if (!state.connected) return;
+      }
+      try {
+        const items = await ghFetch("/contents");
+        const files = Array.isArray(items) ? items.filter((i) => i.type === "file") : [];
+        state.metrics.files = files.length;
+        metricFiles.textContent = files.length;
+        showToast(`Root files: ${files.length}`, "info");
+        logEvent(`Root files listed: ${files.length}`, "ok");
+      } catch (e) {}
+    }
+
+    async function listBasePathFiles() {
+      if (!state.connected) {
+        await connectAndFetchRepo();
+        if (!state.connected) return;
+      }
+      const base = state.ghBasePath || "";
+      try {
+        const items = await ghFetch(`/contents/${encodeURIComponent(base)}`);
+        const files = Array.isArray(items) ? items.filter((i) => i.type === "file") : [];
+        showToast(`Base path files: ${files.length}`, "info");
+        logEvent(`Base path files listed: ${files.length}`, "ok");
+      } catch (e) {}
+    }
+
+    async function listIssues() {
+      if (!state.connected) {
+        await connectAndFetchRepo();
+        if (!state.connected) return;
+      }
+      issueDot.classList.remove("idle");
+      issueStatus.textContent = "Listing issues…";
+      try {
+        const issues = await ghFetch("/issues?state=open&per_page=50");
+        state.metrics.issues = Array.isArray(issues) ? issues.length : 0;
+        metricIssues.textContent = state.metrics.issues ?? "—";
+        issueOutput.textContent = JSON.stringify(
+          (issues || []).map((i) => ({
+            number: i.number,
+            title: i.title,
+            state: i.state,
+            labels: (i.labels || []).map((l) => l.name),
+            url: i.html_url
+          })),
+          null,
+          2
+        );
+        issueStatus.textContent = `Open issues: ${state.metrics.issues}`;
+        logEvent(`Issues listed: ${state.metrics.issues}`, "ok");
+      } catch (e) {
+        issueStatus.textContent = "Error listing issues";
+        logEvent("Error listing issues: " + e.message, "error");
+      } finally {
+        issueDot.classList.add("idle");
+      }
+    }
+
+    async function listWorkflows() {
+      if (!state.connected) {
+        await connectAndFetchRepo();
+        if (!state.connected) return;
+      }
+      workflowDot.classList.remove("idle");
+      workflowStatus.textContent = "Listing workflows…";
+      try {
+        const data = await ghFetch("/actions/workflows");
+        const workflows = data && data.workflows ? data.workflows : [];
+        workflowOutput.textContent = JSON.stringify(
+          workflows.map((w) => ({
+            id: w.id,
+            name: w.name,
+            path: w.path,
+            state: w.state,
+            created_at: w.created_at
+          })),
+          null,
+          2
+        );
+        workflowStatus.textContent = `Workflows: ${workflows.length}`;
+        logEvent(`Workflows listed: ${workflows.length}`, "ok");
+      } catch (e) {
+        workflowStatus.textContent = "Error listing workflows";
+        logEvent("Error listing workflows: " + e.message, "error");
+      } finally {
+        workflowDot.classList.add("idle");
+      }
+    }
+
+    async function listWorkflowRuns() {
+      if (!state.connected) {
+        await connectAndFetchRepo();
+        if (!state.connected) return;
+      }
+      workflowDot.classList.remove("idle");
+      workflowStatus.textContent = "Listing runs…";
+      try {
+        const data = await ghFetch("/actions/runs?per_page=20");
+        const runs = data && data.workflow_runs ? data.workflow_runs : [];
+        state.metrics.runs = runs.length;
+        metricRuns.textContent = state.metrics.runs ?? "—";
+        workflowOutput.textContent = JSON.stringify(
+          runs.map((r) => ({
+            id: r.id,
+            name: r.name,
+            status: r.status,
+            conclusion: r.conclusion,
+            event: r.event,
+            created_at: r.created_at
+          })),
+          null,
+          2
+        );
+        workflowStatus.textContent = `Runs: ${runs.length}`;
+        logEvent(`Workflow runs listed: ${runs.length}`, "ok");
+      } catch (e) {
+        workflowStatus.textContent = "Error listing runs";
+        logEvent("Error listing runs: " + e.message, "error");
+      } finally {
+        workflowDot.classList.add("idle");
+      }
+    }
+
+    async function refreshMetrics() {
+      await Promise.allSettled([listRootFiles(), listIssues(), listWorkflowRuns()]);
+      showToast("Metrics refreshed.", "info");
+    }
+
+    async function upsertFile() {
+      if (!state.connected) {
+        await connectAndFetchRepo();
+        if (!state.connected) return;
+      }
+      const pathInput = qs("#file-path").value.trim();
+      const contentInput = qs("#file-content").value;
+      const commitMessage = qs("#file-commit-message").value.trim() || "chore: update via OpenClaw console";
+
+      if (!pathInput) {
+        showToast("File path is required.", "error");
+        return;
+      }
+      if (!contentInput) {
+        showToast("File content is empty.", "error");
+        return;
+      }
+
+      fileDot.classList.remove("idle");
+      fileStatus.textContent = "Preparing…";
+
+      const fullPath = (state.ghBasePath || "") + pathInput;
+      const encodedContent = encodeBase64(contentInput);
+
+      try {
+        let existing = null;
+        try {
+          existing = await ghFetch(`/contents/${encodeURIComponent(fullPath)}`);
+        } catch (e) {
+          existing = null;
+        }
+
+        const body = {
+          message: commitMessage,
+          content: encodedContent,
+          branch: state.ghBranch || state.defaultBranchResolved || undefined
+        };
+        if (existing && existing.sha) {
+          body.sha = existing.sha;
+        }
+
+        fileStatus.textContent = existing ? "Updating file…" : "Creating file…";
+
+        const res = await ghFetch(`/contents/${encodeURIComponent(fullPath)}`, {
+          method: "PUT",
+          body: JSON.stringify(body)
+        });
+
+        fileStatus.textContent = `OK: ${res.content && res.content.path ? res.content.path : fullPath}`;
+        showToast("File upserted successfully.", "info");
+        logEvent(`File upserted: ${fullPath}`, "ok");
+      } catch (e) {
+        fileStatus.textContent = "Error upserting file";
+        logEvent("Error upserting file: " + e.message, "error");
+      } finally {
+        fileDot.classList.add("idle");
+      }
+    }
+
+    async function loadExistingFileIntoEditor() {
+      if (!state.connected) {
+        await connectAndFetchRepo();
+        if (!state.connected) return;
+      }
+      const pathInput = qs("#file-path").value.trim();
+      if (!pathInput) {
+        showToast("File path is required.", "error");
+        return;
+      }
+      fileDot.classList.remove("idle");
+      fileStatus.textContent = "Loading existing file…";
+      const fullPath = (state.ghBasePath || "") + pathInput;
+      try {
+        const res = await ghFetch(`/contents/${encodeURIComponent(fullPath)}`);
+        if (res && res.content) {
+          const decoded = decodeBase64(res.content);
+          qs("#file-content").value = decoded;
+          fileStatus.textContent = "Loaded existing content.";
+          showToast("Existing file loaded into editor.", "info");
+          logEvent(`Existing file loaded: ${fullPath}`, "ok");
+        } else {
+          fileStatus.textContent = "No content found.";
+        }
+      } catch (e) {
+        fileStatus.textContent = "Error loading file.";
+        logEvent("Error loading file: " + e.message, "error");
+      } finally {
+        fileDot.classList.add("idle");
+      }
+    }
+
+    async function viewFile() {
+      if (!state.connected) {
+        await connectAndFetchRepo();
+        if (!state.connected) return;
+      }
+      const pathInput = qs("#file-view-path").value.trim();
+      if (!pathInput) {
+        showToast("File path is required.", "error");
+        return;
+      }
+      fileViewDot.classList.remove("idle");
+      fileViewStatus.textContent = "Fetching file…";
+      fileViewOutput.textContent = "";
+      const fullPath = (state.ghBasePath || "") + pathInput;
+      try {
+        const res = await ghFetch(`/contents/${encodeURIComponent(fullPath)}`);
+        if (res && res.content) {
+          const decoded = decodeBase64(res.content);
+          fileViewOutput.textContent = decoded;
+          fileViewStatus.textContent = "OK";
+          logEvent(`File viewed: ${fullPath}`, "ok");
+        } else {
+          fileViewStatus.textContent = "No content.";
+        }
+      } catch (e) {
+        fileViewStatus.textContent = "Error viewing file.";
+        logEvent("Error viewing file: " + e.message, "error");
+      } finally {
+        fileViewDot.classList.add("idle");
+      }
+    }
+
+    async function viewFileRaw() {
+      if (!state.connected) {
+        await connectAndFetchRepo();
+        if (!state.connected) return;
+      }
+      const pathInput = qs("#file-view-path").value.trim();
+      if (!pathInput) {
+        showToast("File path is required.", "error");
+        return;
+      }
+      fileViewDot.classList.remove("idle");
+      fileViewStatus.textContent = "Fetching raw…";
+      fileViewOutput.textContent = "";
+      const fullPath = (state.ghBasePath || "") + pathInput;
+      try {
+        const res = await ghFetch(`/contents/${encodeURIComponent(fullPath)}`);
+        fileViewOutput.textContent = JSON.stringify(res, null, 2);
+        fileViewStatus.textContent = "OK (raw)";
+        logEvent(`File raw viewed: ${fullPath}`, "ok");
+      } catch (e) {
+        fileViewStatus.textContent = "Error viewing raw.";
+        logEvent("Error viewing raw: " + e.message, "error");
+      } finally {
+        fileViewDot.classList.add("idle");
+      }
+    }
+
+    async function createIssue() {
+      if (!state.connected) {
+        await connectAndFetchRepo();
+        if (!state.connected) return;
+      }
+      const title = qs("#issue-title").value.trim();
+      const body = qs("#issue-body").value;
+      const labelsRaw = qs("#issue-labels").value.trim();
+
+      if (!title) {
+        showToast("Issue title is required.", "error");
+        return;
+      }
+
+      issueDot.classList.remove("idle");
+      issueStatus.textContent = "Creating issue…";
+
+      const payload = { title, body };
+      if (labelsRaw) {
+        payload.labels = labelsRaw.split(",").map((s) => s.trim()).filter(Boolean);
+      }
+
+      try {
+        const res = await ghFetch("/issues", {
+          method: "POST",
+          body: JSON.stringify(payload)
+        });
+        issueOutput.textContent = JSON.stringify(
+          {
+            number: res.number,
+            title: res.title,
+            url: res.html_url,
+            state: res.state
+          },
+          null,
+          2
+        );
+        issueStatus.textContent = `Created #${res.number}`;
+        showToast(`Issue #${res.number} created.`, "info");
+        logEvent(`Issue created: #${res.number}`, "ok");
+      } catch (e) {
+        issueStatus.textContent = "Error creating issue.";
+        logEvent("Error creating issue: " + e.message, "error");
+      } finally {
+        issueDot.classList.add("idle");
+      }
+    }
+
+    async function dispatchWorkflow() {
+      if (!state.connected) {
+        await connectAndFetchRepo();
+        if (!state.connected) return;
+      }
+      const file = qs("#workflow-file").value.trim();
+      const ref = qs("#workflow-ref").value.trim() || state.ghBranch || state.defaultBranchResolved || "main";
+      const inputsRaw = qs("#workflow-inputs").value.trim();
+
+      if (!file) {
+        showToast("Workflow file name is required.", "error");
+        return;
+      }
+
+      workflowDot.classList.remove("idle");
+      workflowStatus.textContent = "Dispatching workflow…";
+
+      let inputs = undefined;
+      if (inputsRaw) {
+        try {
+          inputs = JSON.parse(inputsRaw);
+        } catch (e) {
+          showToast("Inputs must be valid JSON.", "error");
+          workflowDot.classList.add("idle");
+          workflowStatus.textContent = "Invalid inputs JSON.";
+          return;
+        }
+      }
+
+      const payload = { ref };
+      if (inputs) payload.inputs = inputs;
+
+      try {
+        await ghFetch(`/actions/workflows/${encodeURIComponent(file)}/dispatches`, {
+          method: "POST",
+          body: JSON.stringify(payload)
+        });
+        workflowStatus.textContent = `Dispatched ${file} on ${ref}`;
+        showToast("Workflow dispatched.", "info");
+        logEvent(`Workflow dispatched: ${file} on ${ref}`, "ok");
+      } catch (e) {
+        workflowStatus.textContent = "Error dispatching workflow.";
+        logEvent("Error dispatching workflow: " + e.message, "error");
+      } finally {
+        workflowDot.classList.add("idle");
+      }
+    }
+
+    function clearLogs() {
+      state.logs = [];
+      renderLogs();
+      showToast("Logs cleared.", "info");
+    }
+
+    async function copyLogs() {
+      const text = state.logs
+        .map((l) => `[${l.time}] [${l.level.toUpperCase()}] ${l.message}`)
+        .join("\n");
+      try {
+        await navigator.clipboard.writeText(text);
+        showToast("Logs copied to clipboard.", "info");
+      } catch (e) {
+        showToast("Failed to copy logs.", "error");
+      }
+    }
+
+    function setupTabs(containerId, mapping) {
+      const container = qs(containerId);
+      if (!container) return;
+      const tabs = container.querySelectorAll(".tab");
+      tabs.forEach((tab) => {
+        tab.addEventListener("click", () => {
+          const target = tab.getAttribute("data-tab");
+          tabs.forEach((t) => t.classList.remove("active"));
+          tab.classList.add("active");
+          Object.entries(mapping).forEach(([key, elId]) => {
+            const el = qs(elId);
+            if (!el) return;
+            if (key === target) {
+              el.classList.remove("hidden");
+            } else {
+              el.classList.add("hidden");
+            }
+          });
+        });
+      });
+    }
+
+    function setupEnvChips() {
+      const devChip = qs("#env-dev-chip");
+      const prodChip = qs("#env-prod-chip");
+      devChip.addEventListener("click", () => {
+        devChip.classList.add("active");
+        prodChip.classList.remove("active");
+        setEnv("dev");
+        showToast("Environment set to dev.", "info");
+        logEvent("Environment set to dev", "info");
+      });
+      prodChip.addEventListener("click", () => {
+        prodChip.classList.add("active");
+        devChip.classList.remove("active");
+        setEnv("prod");
+        showToast("Environment set to prod.", "info");
+        logEvent("Environment set to prod", "info");
+      });
+    }
+
+    function setupThemeToggle() {
+      const btn = qs("#theme-toggle");
+      btn.addEventListener("click", () => {
+        const current = document.documentElement.style.getPropertyValue("color-scheme") || "dark";
+        const next = current.trim() === "dark" ? "light" : "dark";
+        document.documentElement.style.setProperty("color-scheme", next);
+        showToast(`Theme: ${next}`, "info");
+      });
+    }
+
+    function setupPWAInstall() {
+      const installBtn = qs("#install-btn");
+      window.addEventListener("beforeinstallprompt", (e) => {
+        e.preventDefault();
+        deferredPrompt = e;
+        installBtn.classList.remove("hidden");
+      });
+
+      installBtn.addEventListener("click", async () => {
+        if (!deferredPrompt) {
+          showToast("Install prompt not available. Use browser menu.", "info");
+          return;
+        }
+        deferredPrompt.prompt();
+        const { outcome } = await deferredPrompt.userChoice;
+        if (outcome === "accepted") {
+          showToast("PWA install accepted.", "info");
+        } else {
+          showToast("PWA install dismissed.", "info");
+        }
+        deferredPrompt = null;
+      });
+    }
+
+    function setupNetworkListeners() {
+      window.addEventListener("online", () => {
+        setNetworkStatus("idle", "Online");
+      });
+      window.addEventListener("offline", () => {
+        setNetworkStatus("offline", "Offline");
+      });
+      if (!navigator.onLine) {
+        setNetworkStatus("offline", "Offline");
+      }
+    }
+
+    function setupButtons() {
+      qs("#btn-connect").addEventListener("click", connectAndFetchRepo);
+      qs("#btn-save-config").addEventListener("click", saveConfig);
+      qs("#btn-clear-config").addEventListener("click", clearConfig);
+
+      qs("#btn-list-root").addEventListener("click", listRootFiles);
+      qs("#btn-list-basepath").addEventListener("click", listBasePathFiles);
+      qs("#btn-list-issues").addEventListener("click", listIssues);
+      qs("#btn-list-workflows").addEventListener("click", listWorkflows);
+      qs("#btn-list-runs").addEventListener("click", listWorkflowRuns);
+      qs("#btn-refresh-metrics").addEventListener("click", refreshMetrics);
+
+      qs("#btn-file-upsert").addEventListener("click", upsertFile);
+      qs("#btn-file-load-existing").addEventListener("click", loadExistingFileIntoEditor);
+      qs("#btn-file-view").addEventListener("click", viewFile);
+      qs("#btn-file-view-raw").addEventListener("click", viewFileRaw);
+
+      qs("#btn-issue-create").addEventListener("click", createIssue);
+      qs("#btn-issue-list").addEventListener("click", listIssues);
+
+      qs("#btn-workflow-dispatch").addEventListener("click", dispatchWorkflow);
+      qs("#btn-workflow-list").addEventListener("click", listWorkflows);
+      qs("#btn-workflow-runs").addEventListener("click", listWorkflowRuns);
+
+      qs("#btn-log-clear").addEventListener("click", clearLogs);
+      qs("#btn-log-copy").addEventListener("click", copyLogs);
+    }
+
+    document.addEventListener("DOMContentLoaded", () => {
+      loadConfig();
+      setupTabs("#file-tabs", {
+        create: "#file-tab-create",
+        view: "#file-tab-view"
+      });
+      setupTabs("#obs-tabs", {
+        issues: "#obs-tab-issues",
+        actions: "#obs-tab-actions",
+        logs: "#obs-tab-logs"
+      });
+      setupEnvChips();
+      setupThemeToggle();
+      setupPWAInstall();
+      setupNetworkListeners();
+      setupButtons();
+      setEnv(state.env || "prod");
+      setStatus("idle", "Idle");
+      logEvent("OpenClaw GitHub Console loaded", "info");
+    });
+  </script>
+</body>
+</html>
+
