@@ -257,11 +257,12 @@ export function sanitizeToolsForGoogle<
   // AND Claude models.  This field does not support JSON Schema keywords such as
   // patternProperties, additionalProperties, $ref, etc.  We must clean schemas
   // for every provider that routes through this path, including the plain
-  // 'google' provider which also serves Gemini models.
+  // 'google' and 'google-generative-ai' providers which also serve Gemini models.
   if (
     params.provider !== "google-gemini-cli" &&
     params.provider !== "google-antigravity" &&
-    params.provider !== "google"
+    params.provider !== "google" &&
+    params.provider !== "google-generative-ai"
   ) {
     return params.tools;
   }
@@ -282,7 +283,8 @@ export function logToolSchemasForGoogle(params: { tools: AgentTool[]; provider: 
   if (
     params.provider !== "google-antigravity" &&
     params.provider !== "google-gemini-cli" &&
-    params.provider !== "google"
+    params.provider !== "google" &&
+    params.provider !== "google-generative-ai"
   ) {
     return;
   }
