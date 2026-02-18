@@ -1,20 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-
-const callGatewayMock = vi.fn();
-vi.mock("../../gateway/call.js", () => ({
-  callGateway: (opts: unknown) => callGatewayMock(opts),
-}));
-
-vi.mock("../agent-scope.js", () => ({
-  resolveSessionAgentId: () => "agent-123",
-}));
-
+import { beforeEach, describe, expect, it } from "vitest";
 import { createCronTool } from "./cron-tool.js";
+import { callGatewayMock, resetCronToolGatewayMock } from "./cron-tool.test-helpers.js";
 
 describe("cron tool flat-params", () => {
   beforeEach(() => {
-    callGatewayMock.mockReset();
-    callGatewayMock.mockResolvedValue({ ok: true });
+    resetCronToolGatewayMock();
   });
 
   it("preserves explicit top-level sessionKey during flat-params recovery", async () => {
