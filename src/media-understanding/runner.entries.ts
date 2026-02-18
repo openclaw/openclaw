@@ -1,11 +1,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
 import {
   collectProviderApiKeysForExecution,
   executeWithApiKeyRotation,
 } from "../agents/api-key-rotation.js";
+import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { applyTemplate } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -400,6 +400,7 @@ export async function runProviderEntry(params: {
     if (!provider.transcribeAudio) {
       throw new Error(`Audio transcription provider "${providerId}" not available.`);
     }
+    const transcribeAudio = provider.transcribeAudio;
     const media = await params.cache.getBuffer({
       attachmentIndex: params.attachmentIndex,
       maxBytes,
@@ -434,7 +435,7 @@ export async function runProviderEntry(params: {
       provider: providerId,
       apiKeys,
       execute: async (apiKey) =>
-        provider.transcribeAudio({
+        transcribeAudio({
           buffer: media.buffer,
           fileName: media.fileName,
           mime: media.mime,
@@ -460,6 +461,7 @@ export async function runProviderEntry(params: {
   if (!provider.describeVideo) {
     throw new Error(`Video understanding provider "${providerId}" not available.`);
   }
+  const describeVideo = provider.describeVideo;
   const media = await params.cache.getBuffer({
     attachmentIndex: params.attachmentIndex,
     maxBytes,
@@ -489,7 +491,7 @@ export async function runProviderEntry(params: {
     provider: providerId,
     apiKeys,
     execute: (apiKey) =>
-      provider.describeVideo({
+      describeVideo({
         buffer: media.buffer,
         fileName: media.fileName,
         mime: media.mime,

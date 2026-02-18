@@ -477,7 +477,11 @@ export function buildWorkspaceSkillSnapshot(
     ? `⚠️ Skills truncated: included ${skillsForPrompt.length} of ${resolvedSkills.length}. Run \`openclaw skills check\` to audit.`
     : "";
 
-  const prompt = [remoteNote, truncationNote, formatSkillsForPrompt(compactSkillPaths(skillsForPrompt))]
+  const prompt = [
+    remoteNote,
+    truncationNote,
+    formatSkillsForPrompt(compactSkillPaths(skillsForPrompt)),
+  ]
     .filter(Boolean)
     .join("\n");
   const skillFilter = normalizeSkillFilter(opts?.skillFilter);

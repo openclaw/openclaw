@@ -1,4 +1,28 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
+import type { loadSessionEntry as loadSessionEntryType } from "./session-utils.js";
+
+const buildSessionLookup = (
+  sessionKey: string,
+  entry: {
+    sessionId?: string;
+    lastChannel?: string;
+    lastTo?: string;
+    updatedAt?: number;
+  } = {},
+): ReturnType<typeof loadSessionEntryType> => ({
+  cfg: { session: { mainKey: "agent:main:main" } } as OpenClawConfig,
+  storePath: "/tmp/sessions.json",
+  store: {} as ReturnType<typeof loadSessionEntryType>["store"],
+  entry: {
+    sessionId: entry.sessionId ?? `sid-${sessionKey}`,
+    updatedAt: entry.updatedAt ?? Date.now(),
+    lastChannel: entry.lastChannel,
+    lastTo: entry.lastTo,
+  },
+  canonicalKey: sessionKey,
+  legacyKey: undefined,
+});
 
 vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent: vi.fn(),
@@ -17,11 +41,7 @@ vi.mock("../config/sessions.js", () => ({
   updateSessionStore: vi.fn(),
 }));
 vi.mock("./session-utils.js", () => ({
-  loadSessionEntry: vi.fn((sessionKey: string) => ({
-    storePath: "/tmp/sessions.json",
-    entry: { sessionId: `sid-${sessionKey}` },
-    canonicalKey: sessionKey,
-  })),
+  loadSessionEntry: vi.fn((sessionKey: string) => buildSessionLookup(sessionKey)),
   pruneLegacyStoreKeys: vi.fn(),
   resolveGatewaySessionStoreTarget: vi.fn(({ key }: { key: string }) => ({
     canonicalKey: key,
@@ -30,12 +50,12 @@ vi.mock("./session-utils.js", () => ({
 }));
 
 import type { CliDeps } from "../cli/deps.js";
-import type { HealthSummary } from "../commands/health.js";
-import type { NodeEventContext } from "./server-node-events-types.js";
 import { agentCommand } from "../commands/agent.js";
+import type { HealthSummary } from "../commands/health.js";
 import { updateSessionStore } from "../config/sessions.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
+import type { NodeEventContext } from "./server-node-events-types.js";
 import { handleNodeEvent } from "./server-node-events.js";
 import { loadSessionEntry } from "./session-utils.js";
 
@@ -279,11 +299,7 @@ describe("agent request events", () => {
     updateSessionStoreMock.mockImplementation(async (_storePath, update) => {
       update({});
     });
-    loadSessionEntryMock.mockImplementation((sessionKey: string) => ({
-      storePath: "/tmp/sessions.json",
-      entry: { sessionId: `sid-${sessionKey}` },
-      canonicalKey: sessionKey,
-    }));
+    loadSessionEntryMock.mockImplementation((sessionKey: string) => buildSessionLookup(sessionKey));
   });
 
   it("disables delivery when route is unresolved instead of falling back globally", async () => {
@@ -317,12 +333,11 @@ describe("agent request events", () => {
   it("reuses the current session route when delivery target is omitted", async () => {
     const ctx = buildCtx();
     loadSessionEntryMock.mockReturnValueOnce({
-      storePath: "/tmp/sessions.json",
-      entry: {
+      ...buildSessionLookup("agent:main:main", {
         sessionId: "sid-current",
         lastChannel: "telegram",
         lastTo: "123",
-      },
+      }),
       canonicalKey: "agent:main:main",
     });
 
