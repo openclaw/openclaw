@@ -9,6 +9,7 @@
 
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
+import { getPerformanceMonitor } from "./performance-monitor.js";
 
 export interface LLMCacheOptions {
   enabled?: boolean;
@@ -160,6 +161,7 @@ export class LLMResponseCache extends EventEmitter {
     node.entry.accessCount++;
     this.stats.hits++;
     this.emit("hit", { key, entry: node.entry });
+    getPerformanceMonitor()?.recordCacheHit();
     return node.entry;
   }
 
@@ -256,6 +258,7 @@ export class LLMResponseCache extends EventEmitter {
 
   recordMiss(): void {
     this.stats.misses++;
+    getPerformanceMonitor()?.recordCacheMiss();
   }
 }
 
@@ -280,10 +283,58 @@ export function generateCacheKey(
   temperature?: number,
   maxTokens?: number,
 ): string {
-  const data = `${provider}|${modelId}|${systemPrompt?.slice(0, 200) ?? ""}|${messagesHash}|${temperature ?? ""}|${maxTokens ?? ""}`;
+  const systemHash = systemPrompt
+    ? createHash("sha256").update(systemPrompt).digest("hex").slice(0, 16)
+    : "";
+  const data = `${provider}|${modelId}|${systemHash}|${messagesHash}|${temperature ?? ""}|${maxTokens ?? ""}`;
   return createHash("sha256").update(data).digest("hex").slice(0, 32);
 }
 
 export function hashMessages(messages: unknown[]): string {
   return createHash("sha256").update(JSON.stringify(messages)).digest("hex").slice(0, 16);
+}
+
+export function createCachedCompleteSimple(): (
+  model: { provider: string; id: string },
+  context: { messages: unknown[]; systemPrompt?: string },
+  options?: { temperature?: number; maxTokens?: number },
+) => Promise<{ response: unknown; cached: boolean }> {
+  return async (model, context, options = {}) => {
+    const cache = getLLMCache();
+    const messagesHash = hashMessages(context.messages);
+    const cacheKey = generateCacheKey(
+      model.provider,
+      model.id,
+      context.systemPrompt,
+      messagesHash,
+      options.temperature,
+      options.maxTokens,
+    );
+
+    const cached = cache.getCachedEntry(cacheKey);
+    if (cached) {
+      return { response: cached.response, cached: true };
+    }
+
+    return { response: null, cached: false };
+  };
+}
+
+export function cacheCompleteResponse(
+  model: { provider: string; id: string },
+  context: { messages: unknown[]; systemPrompt?: string },
+  response: unknown,
+  options?: { temperature?: number; maxTokens?: number },
+): void {
+  const cache = getLLMCache();
+  const messagesHash = hashMessages(context.messages);
+  const cacheKey = generateCacheKey(
+    model.provider,
+    model.id,
+    context.systemPrompt,
+    messagesHash,
+    options?.temperature,
+    options?.maxTokens,
+  );
+  cache.setCachedEntry(cacheKey, response);
 }

@@ -174,7 +174,7 @@ export function createStreamCacheWrapper(config: StreamCacheConfig): StreamCache
     maxByteSize: config.maxByteSize,
   });
 
-  const streamingDelay = config.streamingDelayMs ?? 5;
+  const streamingDelay = config.streamingDelayMs ?? 0;
 
   const wrapStreamFn: StreamCacheWrapper["wrapStreamFn"] = (streamFn) => {
     return (model, context, options) => {
@@ -254,7 +254,7 @@ export function getStreamCacheWrapper(config?: Partial<StreamCacheConfig>): Stre
       maxSize: config?.maxSize ?? 1000,
       maxByteSize: config?.maxByteSize ?? 100 * 1024 * 1024,
       skipCacheForTools: config?.skipCacheForTools ?? true,
-      streamingDelayMs: config?.streamingDelayMs ?? 5,
+      streamingDelayMs: config?.streamingDelayMs ?? 0,
     });
   }
   return globalStreamCacheWrapper;
