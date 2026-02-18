@@ -70,7 +70,14 @@ export class ReplyChainEnforcer {
       }
     } else if (evt.source === "agent") {
       const text = evt.text?.trim();
-      if (text === SILENT_REPLY_TOKEN || text === "NO_REPLY" || text === "HEARTBEAT_OK") {
+      if (
+        !text ||
+        text === SILENT_REPLY_TOKEN ||
+        text === "NO_REPLY" ||
+        text === "HEARTBEAT_OK" ||
+        text.endsWith(SILENT_REPLY_TOKEN) ||
+        text.endsWith("NO_REPLY")
+      ) {
         this.setState(evt.sessionKey, "disarmed", "Agent sign-off");
       } else {
         // Agent replied -> Reset timer AND ensure it is ARMED.
