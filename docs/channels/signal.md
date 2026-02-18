@@ -281,6 +281,8 @@ pgrep -af signal-cli
 grep -i "signal" "/tmp/openclaw/openclaw-$(date +%Y-%m-%d).log" | tail -20
 ```
 
+This log path is the default; if you set `logging.dir` or `logging.file`, use that path instead.
+
 For triage flow: [/channels/troubleshooting](/channels/troubleshooting).
 
 ## Security notes

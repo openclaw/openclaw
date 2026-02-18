@@ -200,7 +200,7 @@ openclaw status --deep   # adds gateway health probes (Telegram + Discord)
 openclaw health --json   # gateway health snapshot (WS)
 ```
 
-Logs live under `/tmp/openclaw/` (default: `openclaw-YYYY-MM-DD.log`).
+Logs live under `/tmp/openclaw/` by default (`openclaw-YYYY-MM-DD.log`). Set `logging.dir` to change the rolling logfile directory or `logging.file` to set an exact log path.
 
 ## Next steps
 

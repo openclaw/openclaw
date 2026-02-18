@@ -25,15 +25,18 @@ By default, the Gateway writes a rolling log file under:
 
 The date uses the gateway host's local timezone.
 
-You can override this in `~/.openclaw/openclaw.json`:
+You can customize this in `~/.openclaw/openclaw.json`:
 
 ```json
 {
   "logging": {
-    "file": "/path/to/openclaw.log"
+    "dir": "/path/to/openclaw-logs"
   }
 }
 ```
+
+Set `logging.file` if you want an exact file path instead of daily rolling files.
+When both are set, `logging.file` takes precedence over `logging.dir`.
 
 ## How to read logs
 
@@ -104,6 +107,7 @@ All logging configuration lives under `logging` in `~/.openclaw/openclaw.json`.
 {
   "logging": {
     "level": "info",
+    "dir": "/tmp/openclaw",
     "file": "/tmp/openclaw/openclaw-YYYY-MM-DD.log",
     "consoleLevel": "info",
     "consoleStyle": "pretty",
@@ -113,10 +117,12 @@ All logging configuration lives under `logging` in `~/.openclaw/openclaw.json`.
 }
 ```
 
-### Log levels
+### Log levels and destinations
 
 - `logging.level`: **file logs** (JSONL) level.
 - `logging.consoleLevel`: **console** verbosity level.
+- `logging.dir`: directory for rolling daily logs (`openclaw-YYYY-MM-DD.log`).
+- `logging.file`: exact log file path (overrides `logging.dir`) and disables rolling.
 
 `--verbose` only affects console output; it does not change file log levels.
 
@@ -215,7 +221,7 @@ OPENCLAW_DIAGNOSTICS=telegram.http,telegram.payload
 
 Notes:
 
-- Flag logs go to the standard log file (same as `logging.file`).
+- Flag logs go to the standard resolved log file (`logging.file`, or the rolling file under `logging.dir`).
 - Output is still redacted according to `logging.redactSensitive`.
 - Full guide: [/diagnostics/flags](/diagnostics/flags).
 
@@ -337,7 +343,7 @@ Queues + sessions:
 
 ### Log export behavior
 
-- OTLP logs use the same structured records written to `logging.file`.
+- OTLP logs use the same structured records written to the resolved log file (`logging.file`, or the rolling file under `logging.dir`).
 - Respect `logging.level` (file log level). Console redaction does **not** apply
   to OTLP logs.
 - High-volume installs should prefer OTLP collector sampling/filtering.
@@ -346,5 +352,5 @@ Queues + sessions:
 
 - **Gateway not reachable?** Run `openclaw doctor` first.
 - **Logs empty?** Check that the Gateway is running and writing to the file path
-  in `logging.file`.
+  in `logging.file` (or the rolling file under `logging.dir`).
 - **Need more detail?** Set `logging.level` to `debug` or `trace` and retry.

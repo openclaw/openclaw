@@ -20,6 +20,7 @@ const requireConfig = createRequire(import.meta.url);
 
 export type LoggerSettings = {
   level?: LogLevel;
+  dir?: string;
   file?: string;
   consoleLevel?: LogLevel;
   consoleStyle?: ConsoleStyle;
@@ -66,7 +67,7 @@ function resolveSettings(): ResolvedSettings {
   const defaultLevel =
     process.env.VITEST === "true" && process.env.OPENCLAW_TEST_FILE_LOG !== "1" ? "silent" : "info";
   const level = normalizeLogLevel(cfg?.level, defaultLevel);
-  const file = cfg?.file ?? defaultRollingPathForToday();
+  const file = cfg?.file ?? rollingPathForToday(cfg?.dir);
   return { level, file };
 }
 
@@ -211,9 +212,13 @@ function formatLocalDate(date: Date): string {
   return `${year}-${month}-${day}`;
 }
 
-function defaultRollingPathForToday(): string {
+function resolveLogDir(loggingDir: string | undefined): string {
+  return loggingDir ?? DEFAULT_LOG_DIR;
+}
+
+function rollingPathForToday(loggingDir: string | undefined): string {
   const today = formatLocalDate(new Date());
-  return path.join(DEFAULT_LOG_DIR, `${LOG_PREFIX}-${today}${LOG_SUFFIX}`);
+  return path.join(resolveLogDir(loggingDir), `${LOG_PREFIX}-${today}${LOG_SUFFIX}`);
 }
 
 function isRollingPath(file: string): boolean {

@@ -241,6 +241,8 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
    tail -f "$(ls -t /tmp/openclaw/openclaw-*.log | head -1)"
    ```
 
+   If you set `logging.dir` or `logging.file`, tail that path instead.
+
    File logs are separate from service logs; see [Logging](/logging) and [Troubleshooting](/gateway/troubleshooting).
 
 6. **Run the doctor (repairs)**
@@ -2490,7 +2492,7 @@ File logs (structured):
 /tmp/openclaw/openclaw-YYYY-MM-DD.log
 ```
 
-You can set a stable path via `logging.file`. File log level is controlled by `logging.level`. Console verbosity is controlled by `--verbose` and `logging.consoleLevel`.
+By default this file is under `/tmp/openclaw/`. Set `logging.dir` to change the rolling log directory, or `logging.file` for an exact path (`logging.file` takes precedence over `logging.dir`). File log level is controlled by `logging.level`. Console verbosity is controlled by `--verbose` and `logging.consoleLevel`.
 
 Fastest log tail:
 
