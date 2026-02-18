@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import type { ContextLifecycleEvent } from "./types.js";
 
 const FLUSH_INTERVAL_MS = 1_000;
@@ -12,6 +13,7 @@ export class ContextLifecycleEmitter {
   private buffer: string[] = [];
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private flushing = false;
+  private dirEnsured = false;
 
   constructor(
     private filePath: string,
@@ -63,6 +65,10 @@ export class ContextLifecycleEmitter {
     }
     const lines = this.buffer.splice(0);
     try {
+      if (!this.dirEnsured) {
+        await fs.mkdir(path.dirname(this.filePath), { recursive: true });
+        this.dirEnsured = true;
+      }
       await fs.appendFile(this.filePath, lines.join("\n") + "\n");
     } catch {
       // Best-effort — instrumentation must never block the agent pipeline
