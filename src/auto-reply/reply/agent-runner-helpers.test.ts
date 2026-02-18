@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../types.js";
+import type { TypingSignaler } from "./typing-mode.js";
 
 const hoisted = vi.hoisted(() => {
   const loadSessionStoreMock = vi.fn();
@@ -100,7 +101,7 @@ describe("agent runner helpers", () => {
 
   it("signals typing only when any payload has text or media", async () => {
     const signalRunStart = vi.fn().mockResolvedValue(undefined);
-    const typingSignals = { signalRunStart };
+    const typingSignals = { signalRunStart } as unknown as TypingSignaler;
     const emptyPayloads: ReplyPayload[] = [{ text: "   " }, {}];
     await signalTypingIfNeeded(emptyPayloads, typingSignals);
     expect(signalRunStart).not.toHaveBeenCalled();
