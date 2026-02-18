@@ -61,6 +61,10 @@ class TalkModeManager(
     // Buffer for client-server clock skew when filtering chat history by timestamp.
     // See comment in finalizeTranscript() for rationale.
     private const val CLOCK_SKEW_BUFFER_SECONDS = 5.0
+    // android.speech.SpeechRecognizer.ERROR_SERVER_DISCONNECTED (API 23+)
+    private const val ERROR_SERVER_DISCONNECTED = 11
+    // Maximum bytes to read from an error response to prevent OOM on malformed responses
+    private const val MAX_ERROR_RESPONSE_BYTES = 4 * 1024
   }
 
   private val mainHandler = Handler(Looper.getMainLooper())
@@ -69,9 +73,7 @@ class TalkModeManager(
   private val _isEnabled = MutableStateFlow(false)
   val isEnabled: StateFlow<Boolean> = _isEnabled
 
-  // ... (existing fields)
 
-  // init block removed
 
   private val _isListening = MutableStateFlow(false)
   val isListening: StateFlow<Boolean> = _isListening
@@ -683,7 +685,7 @@ class TalkModeManager(
       AudioTrack(
         AudioAttributes.Builder()
           .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-          .setUsage(AudioAttributes.USAGE_ASSISTANT)
+          .setUsage(AudioAttributes.USAGE_MEDIA)
           .build(),
         AudioFormat.Builder()
           .setSampleRate(sampleRate)
@@ -827,7 +829,11 @@ class TalkModeManager(
   }
 
   private fun cleanupPlayer() {
-    player?.stop()
+    try {
+      player?.stop()
+    } catch (_: IllegalStateException) {
+      // MediaPlayer may be in an invalid state; safe to ignore during cleanup
+    }
     player?.release()
     player = null
     streamingSource?.close()
@@ -887,7 +893,8 @@ class TalkModeManager(
       if (!modelOverrideActive) currentModelId = defaultModelId
       defaultOutputFormat = outputFormat ?: defaultOutputFormatFallback
       if (interrupt != null) interruptOnSpeech = interrupt
-    } catch (_: Throwable) {
+    } catch (err: Throwable) {
+      Log.w(tag, "reloadConfig failed; using env/defaults: ${err.message ?: err::class.simpleName}")
       defaultVoiceId = envVoice?.takeIf { it.isNotEmpty() } ?: sagVoice?.takeIf { it.isNotEmpty() }
       defaultModelId = defaultModelIdFallback
       if (!modelOverrideActive) currentModelId = defaultModelId
@@ -915,7 +922,7 @@ class TalkModeManager(
 
         val code = conn.responseCode
         if (code >= 400) {
-          val message = conn.errorStream?.readBytes()?.toString(Charsets.UTF_8) ?: ""
+          val message = conn.errorStream?.use { it.readNBytes(MAX_ERROR_RESPONSE_BYTES) }?.toString(Charsets.UTF_8) ?: ""
           sink.fail()
           throw IllegalStateException("ElevenLabs failed: $code $message")
         }
@@ -949,7 +956,7 @@ class TalkModeManager(
 
         val code = conn.responseCode
         if (code >= 400) {
-          val message = conn.errorStream?.readBytes()?.toString(Charsets.UTF_8) ?: ""
+          val message = conn.errorStream?.use { it.readNBytes(MAX_ERROR_RESPONSE_BYTES) }?.toString(Charsets.UTF_8) ?: ""
           throw IllegalStateException("ElevenLabs failed: $code $message")
         }
 
@@ -1200,21 +1207,23 @@ class TalkModeManager(
       conn.readTimeout = 15_000
       conn.setRequestProperty("xi-api-key", apiKey)
 
-      val code = conn.responseCode
-      val stream = if (code >= 400) conn.errorStream else conn.inputStream
-      val data = stream.readBytes()
-      if (code >= 400) {
-        val message = data.toString(Charsets.UTF_8)
-        throw IllegalStateException("ElevenLabs voices failed: $code $message")
-      }
-
-      val root = json.parseToJsonElement(data.toString(Charsets.UTF_8)).asObjectOrNull()
-      val voices = (root?.get("voices") as? JsonArray) ?: JsonArray(emptyList())
-      voices.mapNotNull { entry ->
-        val obj = entry.asObjectOrNull() ?: return@mapNotNull null
-        val voiceId = obj["voice_id"].asStringOrNull() ?: return@mapNotNull null
-        val name = obj["name"].asStringOrNull()
-        ElevenLabsVoice(voiceId, name)
+      try {
+        val code = conn.responseCode
+        if (code >= 400) {
+          val message = conn.errorStream?.use { it.readNBytes(MAX_ERROR_RESPONSE_BYTES) }?.toString(Charsets.UTF_8) ?: ""
+          throw IllegalStateException("ElevenLabs voices failed: $code $message")
+        }
+        val data = conn.inputStream.readBytes()
+        val root = json.parseToJsonElement(data.toString(Charsets.UTF_8)).asObjectOrNull()
+        val voices = (root?.get("voices") as? JsonArray) ?: JsonArray(emptyList())
+        voices.mapNotNull { entry ->
+          val obj = entry.asObjectOrNull() ?: return@mapNotNull null
+          val voiceId = obj["voice_id"].asStringOrNull() ?: return@mapNotNull null
+          val name = obj["name"].asStringOrNull()
+          ElevenLabsVoice(voiceId, name)
+        }
+      } finally {
+        conn.disconnect()
       }
     }
   }
@@ -1265,12 +1274,12 @@ class TalkModeManager(
             SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "Recognizer busy"
             SpeechRecognizer.ERROR_SERVER -> "Server error"
             SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "Listening"
-            11 -> "Server Disconnected" // ERROR_SERVER_DISCONNECTED
+            ERROR_SERVER_DISCONNECTED -> "Server Disconnected"
             else -> "Speech error ($error)"
           }
-        
-        // Error 11 (Server Disconnected) and 4 (Server) often require a full recognizer reset
-        if (error == 11 || error == SpeechRecognizer.ERROR_SERVER || error == SpeechRecognizer.ERROR_CLIENT) {
+
+        // ERROR_SERVER_DISCONNECTED and ERROR_SERVER/CLIENT often require a full recognizer reset
+        if (error == ERROR_SERVER_DISCONNECTED || error == SpeechRecognizer.ERROR_SERVER || error == SpeechRecognizer.ERROR_CLIENT) {
            Log.w(tag, "Severe speech error($error); recreating recognizer")
            recognizer?.cancel()
            recognizer?.destroy()
