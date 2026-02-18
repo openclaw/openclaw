@@ -7,7 +7,7 @@
  * 性能目标：单次 resolve < 50ms（本地 embedding + 点积计算）
  */
 
-import type { EmbeddingProvider } from "../memory/embeddings.js";
+import type { EmbeddingProvider } from "../../memory/embeddings.js";
 import type { TaskType } from "./types.js";
 
 /** 单条 route 向量缓存条目 */

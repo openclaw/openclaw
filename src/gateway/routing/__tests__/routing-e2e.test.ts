@@ -14,7 +14,7 @@
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { EmbeddingProvider } from "../../memory/embeddings.js";
+import type { EmbeddingProvider } from "../../../memory/embeddings.js";
 import { getRoutingInstance, resetRoutingInstance } from "../routing-instance.js";
 import { SemanticRouter } from "../semantic-router.js";
 import { resolveTaskType } from "../task-resolver.js";
@@ -303,7 +303,7 @@ describe("setEmbeddingProvider — threshold and min_gap wiring (end-to-end)", (
     const otherVec = [0, 1, 0, 0];
 
     const config = makeRoutingConfig({
-      semantic_router: { enabled: true }, // no threshold or min_gap
+      semantic_router: { enabled: true, threshold: 0.5 }, // no threshold or min_gap
     });
 
     const instance = getRoutingInstance(config);
@@ -444,7 +444,7 @@ describe("setEmbeddingProvider — threshold and min_gap wiring (end-to-end)", (
 
   it("setEmbeddingProvider is a no-op when semantic_router.enabled=false", () => {
     const config = makeRoutingConfig({
-      semantic_router: { enabled: false },
+      semantic_router: { enabled: false, threshold: 0.5 },
     });
 
     const instance = getRoutingInstance(config);
@@ -462,7 +462,7 @@ describe("setEmbeddingProvider — threshold and min_gap wiring (end-to-end)", (
 
   it("setEmbeddingProvider is a no-op on second call (already initialized)", async () => {
     const config = makeRoutingConfig({
-      semantic_router: { enabled: true },
+      semantic_router: { enabled: true, threshold: 0.5 },
     });
 
     const instance = getRoutingInstance(config);
