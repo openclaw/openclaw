@@ -1,7 +1,7 @@
 import type { ChannelGroupContext, GroupToolPolicyConfig } from "openclaw/plugin-sdk";
-import type { CoreConfig } from "./types.js";
 import { resolveMatrixAccountConfig } from "./matrix/accounts.js";
 import { resolveMatrixRoomConfig } from "./matrix/monitor/rooms.js";
+import type { CoreConfig } from "./types.js";
 
 function stripLeadingPrefixCaseInsensitive(value: string, prefix: string): string {
   return value.toLowerCase().startsWith(prefix.toLowerCase())

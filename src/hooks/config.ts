@@ -1,5 +1,4 @@
 import type { OpenClawConfig, HookConfig } from "../config/config.js";
-import type { HookEligibilityContext, HookEntry } from "./types.js";
 import {
   evaluateRuntimeRequires,
   hasBinary,
@@ -8,6 +7,7 @@ import {
   resolveRuntimePlatform,
 } from "../shared/config-eval.js";
 import { resolveHookKey } from "./frontmatter.js";
+import type { HookEligibilityContext, HookEntry } from "./types.js";
 
 const DEFAULT_CONFIG_VALUES: Record<string, boolean> = {
   "browser.enabled": true,

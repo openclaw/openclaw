@@ -1,5 +1,4 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import type { WebInboundMessage } from "./inbound.js";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../test/helpers/envelope-timestamp.js";
 import {
   installWebAutoReplyTestHomeHooks,
@@ -7,6 +6,7 @@ import {
   makeSessionStore,
   setLoadConfigMock,
 } from "./auto-reply.test-harness.js";
+import type { WebInboundMessage } from "./inbound.js";
 
 installWebAutoReplyTestHomeHooks();
 

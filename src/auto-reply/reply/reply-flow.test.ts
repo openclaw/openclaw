@@ -1,14 +1,14 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../config/config.js";
-import type { MsgContext, TemplateContext } from "../templating.js";
-import type { FollowupRun, QueueSettings } from "./queue.js";
 import { expectInboundContextContract } from "../../../test/helpers/inbound-contract.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { defaultRuntime } from "../../runtime.js";
+import type { MsgContext, TemplateContext } from "../templating.js";
 import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "../tokens.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 import { buildInboundUserContextPrefix } from "./inbound-meta.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { parseLineDirectives, hasLineDirectives } from "./line-directives.js";
+import type { FollowupRun, QueueSettings } from "./queue.js";
 import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { createReplyToModeFilter, resolveReplyToMode } from "./reply-threading.js";

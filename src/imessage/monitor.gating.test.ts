@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import type { IMessagePayload } from "./monitor/types.js";
 import {
   buildIMessageInboundContext,
   resolveIMessageInboundDecision,
 } from "./monitor/inbound-processing.js";
 import { parseIMessageNotification } from "./monitor/parse-notification.js";
+import type { IMessagePayload } from "./monitor/types.js";
 
 function baseCfg(): OpenClawConfig {
   return {

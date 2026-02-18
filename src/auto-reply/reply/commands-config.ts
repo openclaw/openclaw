@@ -1,4 +1,3 @@
-import type { CommandHandler } from "./commands-types.js";
 import { resolveChannelConfigWrites } from "../../channels/plugins/config-writes.js";
 import { normalizeChannelId } from "../../channels/registry.js";
 import {
@@ -19,6 +18,7 @@ import {
   unsetConfigOverride,
 } from "../../config/runtime-overrides.js";
 import { logVerbose } from "../../globals.js";
+import type { CommandHandler } from "./commands-types.js";
 import { parseConfigCommand } from "./config-commands.js";
 import { parseDebugCommand } from "./debug-commands.js";
 

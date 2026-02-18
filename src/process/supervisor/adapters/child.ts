@@ -1,7 +1,7 @@
 import type { ChildProcessWithoutNullStreams, SpawnOptions } from "node:child_process";
-import type { ManagedRunStdin } from "../types.js";
 import { killProcessTree } from "../../kill-tree.js";
 import { spawnWithFallback } from "../../spawn-utils.js";
+import type { ManagedRunStdin } from "../types.js";
 import { toStringEnv } from "./env.js";
 
 function resolveCommand(command: string): string {
