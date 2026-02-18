@@ -686,9 +686,9 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
       { task, agentId, model, thinking, cleanup: "keep", expectsCompletionMessage: true },
       {
         agentSessionKey: requesterKey,
-        agentChannel: params.command.channel,
+        agentChannel: params.ctx.OriginatingChannel ?? params.command.channel,
         agentAccountId: params.ctx.AccountId,
-        agentTo: params.command.to,
+        agentTo: params.ctx.OriginatingTo ?? params.command.to,
         agentThreadId: params.ctx.MessageThreadId,
         agentGroupId: params.sessionEntry?.groupId ?? null,
         agentGroupChannel: params.sessionEntry?.groupChannel ?? null,
