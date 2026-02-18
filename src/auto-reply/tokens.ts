@@ -10,11 +10,5 @@ export function isSilentReplyText(
   if (!text) {
     return false;
   }
-  const escaped = escapeRegExp(token);
-  const prefix = new RegExp(`^\\s*${escaped}(?=$|\\W)`);
-  if (prefix.test(text)) {
-    return true;
-  }
-  const suffix = new RegExp(`\\b${escaped}\\b\\W*$`);
-  return suffix.test(text);
+  return text.trim() === token;
 }
