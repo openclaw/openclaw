@@ -11,24 +11,51 @@ export const CANVAS_HOST_PATH = "/__openclaw__/canvas";
 
 export const CANVAS_WS_PATH = "/__openclaw__/ws";
 
-let cachedA2uiRootReal: string | null | undefined;
-let resolvingA2uiRoot: Promise<string | null> | null = null;
+export function getA2uiRootCandidates(opts: {
+  moduleDir: string;
+  cwd?: string;
+  execPath?: string;
+}): string[] {
+  const moduleDir = path.resolve(opts.moduleDir);
+  const cwd = path.resolve(opts.cwd ?? process.cwd());
 
-async function resolveA2uiRoot(): Promise<string | null> {
-  const here = path.dirname(fileURLToPath(import.meta.url));
   const candidates = [
     // Running from source (bun) or dist (tsc + copied assets).
-    path.resolve(here, "a2ui"),
+    path.resolve(moduleDir, "a2ui"),
+
+    // Bundled dist entrypoint (e.g. dist/entry.js) still needs to find dist/canvas-host/a2ui.
+    path.resolve(moduleDir, "canvas-host", "a2ui"),
+    path.resolve(moduleDir, "../canvas-host/a2ui"),
+
     // Running from dist without copied assets (fallback to source).
-    path.resolve(here, "../../src/canvas-host/a2ui"),
+    path.resolve(moduleDir, "../../src/canvas-host/a2ui"),
+
     // Running from repo root.
-    path.resolve(process.cwd(), "src/canvas-host/a2ui"),
-    path.resolve(process.cwd(), "dist/canvas-host/a2ui"),
+    path.resolve(cwd, "src/canvas-host/a2ui"),
+    path.resolve(cwd, "dist/canvas-host/a2ui"),
+
+    // Historical/packaged layouts.
+    path.resolve(cwd, "dist/a2ui"),
   ];
-  if (process.execPath) {
-    candidates.unshift(path.resolve(path.dirname(process.execPath), "a2ui"));
+
+  if (opts.execPath) {
+    // Packaged app layouts sometimes place assets alongside the node executable.
+    candidates.unshift(path.resolve(path.dirname(opts.execPath), "a2ui"));
   }
 
+  // Dedupe while preserving order.
+  const seen = new Set<string>();
+  return candidates.filter((c) => {
+    const resolved = path.resolve(c);
+    if (seen.has(resolved)) {
+      return false;
+    }
+    seen.add(resolved);
+    return true;
+  });
+}
+
+export async function resolveA2uiRootFromCandidates(candidates: string[]): Promise<string | null> {
   for (const dir of candidates) {
     try {
       const indexPath = path.join(dir, "index.html");
@@ -43,19 +70,54 @@ async function resolveA2uiRoot(): Promise<string | null> {
   return null;
 }
 
-async function resolveA2uiRootReal(): Promise<string | null> {
-  if (cachedA2uiRootReal !== undefined) {
-    return cachedA2uiRootReal;
-  }
-  if (!resolvingA2uiRoot) {
-    resolvingA2uiRoot = (async () => {
-      const root = await resolveA2uiRoot();
-      cachedA2uiRootReal = root ? await fs.realpath(root) : null;
-      return cachedA2uiRootReal;
+export function createA2uiRootRealResolver(deps: {
+  resolveRoot: () => Promise<string | null>;
+  realpath: (p: string) => Promise<string>;
+}): () => Promise<string | null> {
+  let cached: string | undefined;
+  let inflight: Promise<string | null> | null = null;
+
+  return async () => {
+    if (cached) {
+      return cached;
+    }
+    if (inflight) {
+      return inflight;
+    }
+
+    inflight = (async () => {
+      try {
+        const root = await deps.resolveRoot();
+        if (!root) {
+          // Important: do NOT cache null (transient fs issues / post-install fixes should recover).
+          return null;
+        }
+        const real = await deps.realpath(root);
+        cached = real;
+        return real;
+      } finally {
+        inflight = null;
+      }
     })();
-  }
-  return resolvingA2uiRoot;
+
+    return inflight;
+  };
 }
+
+async function resolveA2uiRoot(): Promise<string | null> {
+  const moduleDir = path.dirname(fileURLToPath(import.meta.url));
+  const candidates = getA2uiRootCandidates({
+    moduleDir,
+    cwd: process.cwd(),
+    execPath: process.execPath,
+  });
+  return await resolveA2uiRootFromCandidates(candidates);
+}
+
+const resolveA2uiRootReal = createA2uiRootRealResolver({
+  resolveRoot: resolveA2uiRoot,
+  realpath: fs.realpath,
+});
 
 export function injectCanvasLiveReload(html: string): string {
   const snippet = `
