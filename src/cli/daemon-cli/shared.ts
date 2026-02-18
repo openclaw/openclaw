@@ -27,6 +27,17 @@ export function createCliStatusTextStyles() {
   };
 }
 
+export function resolveRuntimeStatusColor(status: string | undefined): (value: string) => string {
+  const runtimeStatus = status ?? "unknown";
+  return runtimeStatus === "running"
+    ? theme.success
+    : runtimeStatus === "stopped"
+      ? theme.error
+      : runtimeStatus === "unknown"
+        ? theme.muted
+        : theme.warn;
+}
+
 export function parsePortFromArgs(programArguments: string[] | undefined): number | null {
   if (!programArguments?.length) {
     return null;
