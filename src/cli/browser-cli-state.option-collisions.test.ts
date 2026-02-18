@@ -4,8 +4,19 @@ import type { BrowserParentOpts } from "./browser-cli-shared.js";
 import { registerBrowserStateCommands } from "./browser-cli-state.js";
 
 const mocks = vi.hoisted(() => ({
-  callBrowserRequest: vi.fn(async () => ({ ok: true })),
-  runBrowserResizeWithOutput: vi.fn(async () => {}),
+  callBrowserRequest: vi.fn(
+    async (
+      _opts: BrowserParentOpts,
+      _params: {
+        method: "GET" | "POST" | "DELETE";
+        path: string;
+        query?: Record<string, string | number | boolean | undefined>;
+        body?: unknown;
+      },
+      _extra?: { timeoutMs?: number; progress?: boolean },
+    ) => ({ ok: true }),
+  ),
+  runBrowserResizeWithOutput: vi.fn(async (_params: unknown) => {}),
   runtime: {
     log: vi.fn(),
     error: vi.fn(),
@@ -14,7 +25,16 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./browser-cli-shared.js", () => ({
-  callBrowserRequest: (...args: unknown[]) => mocks.callBrowserRequest(...args),
+  callBrowserRequest: (
+    opts: BrowserParentOpts,
+    params: {
+      method: "GET" | "POST" | "DELETE";
+      path: string;
+      query?: Record<string, string | number | boolean | undefined>;
+      body?: unknown;
+    },
+    extra?: { timeoutMs?: number; progress?: boolean },
+  ) => mocks.callBrowserRequest(opts, params, extra),
 }));
 
 vi.mock("./browser-cli-resize.js", () => ({
@@ -61,7 +81,10 @@ describe("browser state option collisions", () => {
 
     const call = mocks.callBrowserRequest.mock.calls.at(-1);
     expect(call).toBeDefined();
-    const request = call?.[1] as { body?: { targetId?: string } };
+    if (!call) {
+      throw new Error("Expected callBrowserRequest to be called");
+    }
+    const request = call[1] as { body?: { targetId?: string } };
     expect(request.body?.targetId).toBe("tab-1");
   });
 
@@ -81,7 +104,10 @@ describe("browser state option collisions", () => {
 
     const call = mocks.callBrowserRequest.mock.calls.at(-1);
     expect(call).toBeDefined();
-    const request = call?.[1] as { body?: { headers?: Record<string, string> } };
+    if (!call) {
+      throw new Error("Expected callBrowserRequest to be called");
+    }
+    const request = call[1] as { body?: { headers?: Record<string, string> } };
     expect(request.body?.headers).toEqual({ "x-auth": "ok" });
   });
 });
