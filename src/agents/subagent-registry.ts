@@ -30,6 +30,7 @@ export type SubagentRunRecord = {
   cleanupCompletedAt?: number;
   cleanupHandled?: boolean;
   suppressAnnounceReason?: "steer-restart" | "killed";
+  expectsCompletionMessage?: boolean;
   /** Number of times announce delivery has been attempted and returned false (deferred). */
   announceRetryCount?: number;
   /** Timestamp of the last announce retry attempt (for backoff). */
@@ -91,6 +92,7 @@ function startSubagentAnnounceCleanupFlow(runId: string, entry: SubagentRunRecor
     requesterOrigin,
     requesterDisplayKey: entry.requesterDisplayKey,
     task: entry.task,
+    expectsCompletionMessage: entry.expectsCompletionMessage,
     timeoutMs: SUBAGENT_ANNOUNCE_TIMEOUT_MS,
     cleanup: entry.cleanup,
     waitForCompletion: false,
@@ -478,6 +480,7 @@ export function registerSubagentRun(params: {
   label?: string;
   model?: string;
   runTimeoutSeconds?: number;
+  expectsCompletionMessage?: boolean;
 }) {
   const now = Date.now();
   const cfg = loadConfig();
@@ -494,6 +497,7 @@ export function registerSubagentRun(params: {
     requesterDisplayKey: params.requesterDisplayKey,
     task: params.task,
     cleanup: params.cleanup,
+    expectsCompletionMessage: params.expectsCompletionMessage,
     label: params.label,
     model: params.model,
     runTimeoutSeconds,

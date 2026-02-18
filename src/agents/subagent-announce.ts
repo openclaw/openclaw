@@ -360,7 +360,11 @@ function buildAnnounceReplyInstruction(params: {
   remainingActiveSubagentRuns: number;
   requesterIsSubagent: boolean;
   announceType: SubagentAnnounceType;
+  expectsCompletionMessage?: boolean;
 }): string {
+  if (params.expectsCompletionMessage) {
+    return `A completed ${params.announceType} is ready for user delivery. Convert the result above into your normal assistant voice and send that user-facing update now. Keep this internal context private (don't mention system/log/stats/session details or announce type).`;
+  }
   if (params.remainingActiveSubagentRuns > 0) {
     const activeRunsLabel = params.remainingActiveSubagentRuns === 1 ? "run" : "runs";
     return `There are still ${params.remainingActiveSubagentRuns} active subagent ${activeRunsLabel} for this session. If they are part of the same workflow, wait for the remaining results before sending a user update. If they are unrelated, respond normally using only the result above.`;
@@ -387,8 +391,10 @@ export async function runSubagentAnnounceFlow(params: {
   label?: string;
   outcome?: SubagentRunOutcome;
   announceType?: SubagentAnnounceType;
+  expectsCompletionMessage?: boolean;
 }): Promise<boolean> {
   let didAnnounce = false;
+  const expectsCompletionMessage = params.expectsCompletionMessage === true;
   let shouldDeleteChildSession = params.cleanup === "delete";
   try {
     let targetRequesterSessionKey = params.requesterSessionKey;
@@ -506,7 +512,7 @@ export async function runSubagentAnnounceFlow(params: {
     let triggerMessage = "";
 
     let requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey);
-    let requesterIsSubagent = requesterDepth >= 1;
+    let requesterIsSubagent = !expectsCompletionMessage && requesterDepth >= 1;
     // If the requester subagent has already finished, bubble the announce to its
     // requester (typically main) so descendant completion is not silently lost.
     // BUT: only fallback if the parent SESSION is deleted, not just if the current
@@ -559,6 +565,7 @@ export async function runSubagentAnnounceFlow(params: {
       remainingActiveSubagentRuns,
       requesterIsSubagent,
       announceType,
+      expectsCompletionMessage,
     });
     const statsLine = await buildCompactAnnounceStatsLine({
       sessionKey: params.childSessionKey,
@@ -580,20 +587,22 @@ export async function runSubagentAnnounceFlow(params: {
       childSessionKey: params.childSessionKey,
       childRunId: params.childRunId,
     });
-    const queued = await maybeQueueSubagentAnnounce({
-      requesterSessionKey: targetRequesterSessionKey,
-      announceId,
-      triggerMessage,
-      summaryLine: taskLabel,
-      requesterOrigin: targetRequesterOrigin,
-    });
-    if (queued === "steered") {
-      didAnnounce = true;
-      return true;
-    }
-    if (queued === "queued") {
-      didAnnounce = true;
-      return true;
+    if (!expectsCompletionMessage) {
+      const queued = await maybeQueueSubagentAnnounce({
+        requesterSessionKey: targetRequesterSessionKey,
+        announceId,
+        triggerMessage,
+        summaryLine: taskLabel,
+        requesterOrigin: targetRequesterOrigin,
+      });
+      if (queued === "steered") {
+        didAnnounce = true;
+        return true;
+      }
+      if (queued === "queued") {
+        didAnnounce = true;
+        return true;
+      }
     }
 
     // Send to the requester session. For nested subagents this is an internal
