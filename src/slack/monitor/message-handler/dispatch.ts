@@ -180,9 +180,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     }
 
     const text = payload.text.trim();
+    let plannedThreadTs: string | undefined;
     try {
       if (!streamSession) {
         const streamThreadTs = replyPlan.nextThreadTs();
+        plannedThreadTs = streamThreadTs;
         if (!streamThreadTs) {
           logVerbose(
             "slack-stream: no reply thread target for stream start, falling back to normal delivery",
@@ -211,7 +213,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         danger(`slack-stream: streaming API call failed: ${String(err)}, falling back`),
       );
       streamFailed = true;
-      await deliverNormally(payload, streamSession?.threadTs);
+      await deliverNormally(payload, streamSession?.threadTs ?? plannedThreadTs);
     }
   };
 

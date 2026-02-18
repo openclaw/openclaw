@@ -322,9 +322,9 @@ describe("channel-health-monitor", () => {
   });
 
   it("runs checks single-flight when restart work is still in progress", async () => {
-    let releaseStart: (() => void) | null = null;
+    let releaseStart: (() => void) | undefined;
     const startGate = new Promise<void>((resolve) => {
-      releaseStart = resolve;
+      releaseStart = () => resolve();
     });
     const manager = createMockChannelManager({
       getRuntimeSnapshot: vi.fn(() =>
