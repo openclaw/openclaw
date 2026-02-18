@@ -103,6 +103,24 @@ export function isTransientNetworkError(err: unknown): boolean {
     return true;
   }
 
+  // Check error messages for common transient network phrases
+  const message = typeof err === "object" && "message" in err && typeof err.message === "string" ? err.message.toLowerCase() : "";
+  if (message) {
+    const transientPhrases = [
+      "socket hang up",
+      "network error",
+      "network failure",
+      "connection reset",
+      "connection timed out",
+      "connection refused",
+      "dns lookup failed",
+      "host not found",
+    ];
+    if (transientPhrases.some((phrase) => message.includes(phrase))) {
+      return true;
+    }
+  }
+
   // Check the cause chain recursively
   const cause = getErrorCause(err);
   if (cause && cause !== err) {
