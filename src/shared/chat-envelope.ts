@@ -17,6 +17,10 @@ const ENVELOPE_CHANNELS = [
 
 const MESSAGE_ID_LINE = /^\s*\[message_id:\s*[^\]]+\]\s*$/i;
 
+// Pattern to match untrusted metadata blocks like:
+// "Conversation info (untrusted metadata):\n```json\n{...}\n```"
+const UNTRUSTED_METADATA_PATTERN = /^Conversation info \(untrusted metadata\):[\s\S]*?```\s*/m;
+
 function looksLikeEnvelopeHeader(header: string): boolean {
   if (/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z\b/.test(header)) {
     return true;
@@ -28,15 +32,23 @@ function looksLikeEnvelopeHeader(header: string): boolean {
 }
 
 export function stripEnvelope(text: string): string {
+  // Strip envelope header first (if present)
+  let stripped = text;
   const match = text.match(ENVELOPE_PREFIX);
-  if (!match) {
-    return text;
+  if (match) {
+    const header = match[1] ?? "";
+    if (looksLikeEnvelopeHeader(header)) {
+      stripped = text.slice(match[0].length);
+    }
   }
-  const header = match[1] ?? "";
-  if (!looksLikeEnvelopeHeader(header)) {
-    return text;
+
+  // Then strip "Conversation info (untrusted metadata):" blocks
+  const metadataMatch = stripped.match(UNTRUSTED_METADATA_PATTERN);
+  if (metadataMatch) {
+    return stripped.replace(metadataMatch[0], "").trim();
   }
-  return text.slice(match[0].length);
+
+  return stripped;
 }
 
 export function stripMessageIdHints(text: string): string {
