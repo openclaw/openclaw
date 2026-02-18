@@ -100,6 +100,7 @@ describe("resolveCronSession", () => {
     expect(result.sessionEntry.providerOverride).toBeUndefined();
     expect(result.sessionEntry.model).toBeUndefined();
     expect(result.isNewSession).toBe(true);
+    expect(result.sessionEntry.sessionFile).toContain(result.sessionEntry.sessionId);
   });
 
   // New tests for session reuse behavior (#18027)
@@ -139,6 +140,7 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.modelOverride).toBe("gpt-4.1-mini");
       expect(result.sessionEntry.providerOverride).toBe("openai");
       expect(result.sessionEntry.sendPolicy).toBe("allow");
+      expect(result.sessionEntry.sessionFile).toContain(result.sessionEntry.sessionId);
       expect(clearBootstrapSnapshot).toHaveBeenCalledWith("webhook:stable-key");
     });
 
@@ -160,6 +162,7 @@ describe("resolveCronSession", () => {
       expect(result.systemSent).toBe(false);
       expect(result.sessionEntry.modelOverride).toBe("sonnet-4");
       expect(result.sessionEntry.providerOverride).toBe("anthropic");
+      expect(result.sessionEntry.sessionFile).toContain(result.sessionEntry.sessionId);
       expect(clearBootstrapSnapshot).toHaveBeenCalledWith("webhook:stable-key");
     });
 
@@ -263,6 +266,7 @@ describe("resolveCronSession", () => {
       expect(result.isNewSession).toBe(true);
       // Should still preserve other fields from entry
       expect(result.sessionEntry.modelOverride).toBe("some-model");
+      expect(result.sessionEntry.sessionFile).toContain(result.sessionEntry.sessionId);
     });
   });
 });
