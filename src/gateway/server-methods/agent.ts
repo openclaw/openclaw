@@ -626,6 +626,8 @@ export const agentHandlers: GatewayRequestHandlers = {
     thinkingFromHook = mutatedContext.thinking;
     modelFromHook = mutatedContext.model;
 
+
+
     void agentCommand(
       {
         message,
