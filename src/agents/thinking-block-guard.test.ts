@@ -16,12 +16,12 @@ function createMockAssistant(content: AssistantMessage["content"]): AssistantMes
     role: "assistant",
     content,
     timestamp: Date.now(),
-    api: "anthropic-messages",
+    api: "anthropic-messages" as const,
     provider: "anthropic",
     model: "claude-3-5-sonnet-20241022",
-    usage: { inputTokens: 0, outputTokens: 0 },
-    stopReason: "end_turn",
-  } as AssistantMessage;
+    usage: { input: 0, output: 0 },
+    stopReason: "end_turn" as const,
+  } as unknown as AssistantMessage;
 }
 
 describe("thinking-block-guard", () => {
@@ -128,12 +128,12 @@ describe("thinking-block-guard", () => {
     it("detects invalid thinking blocks missing required fields", () => {
       // Create a message with an invalid thinking block (missing 'thinking' field)
       const message = {
-        ...createMockAssistant([{ type: "text", text: "response" }]),
+        ...createMockAssistant([{ type: "text" as const, text: "response" }]),
         content: [
-          { type: "thinking" } as { type: "thinking"; thinking: string },
-          { type: "text", text: "response" },
+          { type: "thinking" as const } as { type: "thinking"; thinking: string },
+          { type: "text" as const, text: "response" },
         ],
-      };
+      } as unknown as AssistantMessage;
 
       const result = validateThinkingBlocks(message);
       expect(result.valid).toBe(false);
@@ -143,12 +143,12 @@ describe("thinking-block-guard", () => {
     it("validates redacted_thinking blocks", () => {
       // Use unknown cast since redacted_thinking isn't in the strict type
       const message = {
-        ...createMockAssistant([{ type: "text", text: "response" }]),
+        ...createMockAssistant([{ type: "text" as const, text: "response" }]),
         content: [
           { type: "redacted_thinking", redacted_thinking: "..." } as unknown,
-          { type: "text", text: "response" },
+          { type: "text" as const, text: "response" },
         ],
-      } as AssistantMessage;
+      } as unknown as AssistantMessage;
 
       const result = validateThinkingBlocks(message);
       expect(result.valid).toBe(true);
