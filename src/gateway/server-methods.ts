@@ -94,6 +94,7 @@ const WRITE_METHODS = new Set([
   "node.invoke",
   "chat.send",
   "chat.abort",
+  "abort", // Legacy alias for chat.abort (#5239)
   "browser.request",
 ]);
 
