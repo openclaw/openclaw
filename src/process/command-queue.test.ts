@@ -52,7 +52,7 @@ describe("command queue", () => {
       active += 1;
       maxActive = Math.max(maxActive, active);
       calls.push(id);
-      await new Promise((resolve) => setTimeout(resolve, 15));
+      await new Promise((resolve) => setTimeout(resolve, 2));
       active -= 1;
       return id;
     };
@@ -84,7 +84,7 @@ describe("command queue", () => {
 
     // First task holds the queue long enough to trigger wait notice.
     const first = enqueueCommand(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 30));
+      await new Promise((resolve) => setTimeout(resolve, 8));
     });
 
     const second = enqueueCommand(async () => {}, {

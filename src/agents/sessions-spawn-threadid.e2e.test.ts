@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { createOpenClawTools } from "./openclaw-tools.js";
 import "./test-helpers/fast-core-tools.js";
 import {
-  callGatewayMock,
-  setSubagentsConfigOverride,
-} from "./openclaw-tools.subagents.test-harness.js";
+  getCallGatewayMock,
+  getSessionsSpawnTool,
+  setSessionsSpawnConfigOverride,
+} from "./openclaw-tools.subagents.sessions-spawn.test-harness.js";
 import {
   listSubagentRunsForRequester,
   resetSubagentRegistryForTests,
@@ -12,9 +12,10 @@ import {
 
 describe("sessions_spawn requesterOrigin threading", () => {
   beforeEach(() => {
+    const callGatewayMock = getCallGatewayMock();
     resetSubagentRegistryForTests();
     callGatewayMock.mockReset();
-    setSubagentsConfigOverride({
+    setSessionsSpawnConfigOverride({
       session: {
         mainKey: "main",
         scope: "per-sender",
@@ -35,20 +36,18 @@ describe("sessions_spawn requesterOrigin threading", () => {
   });
 
   it("captures threadId in requesterOrigin", async () => {
-    const tool = createOpenClawTools({
+    const tool = await getSessionsSpawnTool({
       agentSessionKey: "main",
       agentChannel: "telegram",
       agentTo: "telegram:123",
       agentThreadId: 42,
-    }).find((candidate) => candidate.name === "sessions_spawn");
-    if (!tool) {
-      throw new Error("missing sessions_spawn tool");
-    }
+    });
 
-    await tool.execute("call", {
+    const result = await tool.execute("call", {
       task: "do thing",
       runTimeoutSeconds: 1,
     });
+    expect(result.details).toMatchObject({ status: "accepted", runId: "run-1" });
 
     const runs = listSubagentRunsForRequester("main");
     expect(runs).toHaveLength(1);
@@ -60,19 +59,17 @@ describe("sessions_spawn requesterOrigin threading", () => {
   });
 
   it("stores requesterOrigin without threadId when none is provided", async () => {
-    const tool = createOpenClawTools({
+    const tool = await getSessionsSpawnTool({
       agentSessionKey: "main",
       agentChannel: "telegram",
       agentTo: "telegram:123",
-    }).find((candidate) => candidate.name === "sessions_spawn");
-    if (!tool) {
-      throw new Error("missing sessions_spawn tool");
-    }
+    });
 
-    await tool.execute("call", {
+    const result = await tool.execute("call", {
       task: "do thing",
       runTimeoutSeconds: 1,
     });
+    expect(result.details).toMatchObject({ status: "accepted", runId: "run-1" });
 
     const runs = listSubagentRunsForRequester("main");
     expect(runs).toHaveLength(1);

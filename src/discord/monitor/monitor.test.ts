@@ -351,10 +351,10 @@ describe("discord component interactions", () => {
     expect(resolveDiscordComponentEntry({ id: "btn_1", consume: false })).not.toBeNull();
   });
 
-  it("routes modal submissions with field values", async () => {
+  async function runModalSubmission(params?: { reusable?: boolean }) {
     registerDiscordComponentEntries({
       entries: [],
-      modals: [createModalEntry()],
+      modals: [createModalEntry({ reusable: params?.reusable ?? false })],
     });
 
     const modal = createDiscordComponentModal(
@@ -365,6 +365,11 @@ describe("discord component interactions", () => {
     const { interaction, acknowledge } = createModalInteraction();
 
     await modal.run(interaction, { mid: "mdl_1" } as ComponentData);
+    return { acknowledge };
+  }
+
+  it("routes modal submissions with field values", async () => {
+    const { acknowledge } = await runModalSubmission();
 
     expect(acknowledge).toHaveBeenCalledTimes(1);
     expect(lastDispatchCtx?.BodyForAgent).toContain('Form "Details" submitted.');
@@ -376,19 +381,7 @@ describe("discord component interactions", () => {
   });
 
   it("keeps reusable modal entries active after submission", async () => {
-    registerDiscordComponentEntries({
-      entries: [],
-      modals: [createModalEntry({ reusable: true })],
-    });
-
-    const modal = createDiscordComponentModal(
-      createComponentContext({
-        discordConfig: createDiscordConfig({ replyToMode: "all" }),
-      }),
-    );
-    const { interaction, acknowledge } = createModalInteraction();
-
-    await modal.run(interaction, { mid: "mdl_1" } as ComponentData);
+    const { acknowledge } = await runModalSubmission({ reusable: true });
 
     expect(acknowledge).toHaveBeenCalledTimes(1);
     expect(resolveDiscordModalEntry({ id: "mdl_1", consume: false })).not.toBeNull();
@@ -790,27 +783,34 @@ describe("maybeCreateDiscordAutoThread", () => {
 });
 
 describe("resolveDiscordAutoThreadReplyPlan", () => {
-  it("switches delivery + session context to the created thread", async () => {
-    const client = {
-      rest: { post: async () => ({ id: "thread" }) },
-    } as unknown as Client;
-    const plan = await resolveDiscordAutoThreadReplyPlan({
-      client,
+  function createAutoThreadPlanParams(overrides?: {
+    client?: Client;
+    channelConfig?: DiscordChannelConfigResolved;
+    threadChannel?: { id: string } | null;
+  }) {
+    return {
+      client:
+        overrides?.client ??
+        ({ rest: { post: async () => ({ id: "thread" }) } } as unknown as Client),
       message: {
         id: "m1",
         channelId: "parent",
       } as unknown as import("./listeners.js").DiscordMessageEvent["message"],
       isGuildMessage: true,
-      channelConfig: {
-        autoThread: true,
-      } as unknown as DiscordChannelConfigResolved,
-      threadChannel: null,
+      channelConfig:
+        overrides?.channelConfig ??
+        ({ autoThread: true } as unknown as DiscordChannelConfigResolved),
+      threadChannel: overrides?.threadChannel ?? null,
       baseText: "hello",
       combinedBody: "hello",
-      replyToMode: "all",
+      replyToMode: "all" as const,
       agentId: "agent",
-      channel: "discord",
-    });
+      channel: "discord" as const,
+    };
+  }
+
+  it("switches delivery + session context to the created thread", async () => {
+    const plan = await resolveDiscordAutoThreadReplyPlan(createAutoThreadPlanParams());
     expect(plan.deliverTarget).toBe("channel:thread");
     expect(plan.replyReference.use()).toBeUndefined();
     expect(plan.autoThreadContext?.SessionKey).toBe(
@@ -823,24 +823,11 @@ describe("resolveDiscordAutoThreadReplyPlan", () => {
   });
 
   it("routes replies to an existing thread channel", async () => {
-    const client = { rest: { post: async () => ({ id: "thread" }) } } as unknown as Client;
-    const plan = await resolveDiscordAutoThreadReplyPlan({
-      client,
-      message: {
-        id: "m1",
-        channelId: "parent",
-      } as unknown as import("./listeners.js").DiscordMessageEvent["message"],
-      isGuildMessage: true,
-      channelConfig: {
-        autoThread: true,
-      } as unknown as DiscordChannelConfigResolved,
-      threadChannel: { id: "thread" },
-      baseText: "hello",
-      combinedBody: "hello",
-      replyToMode: "all",
-      agentId: "agent",
-      channel: "discord",
-    });
+    const plan = await resolveDiscordAutoThreadReplyPlan(
+      createAutoThreadPlanParams({
+        threadChannel: { id: "thread" },
+      }),
+    );
     expect(plan.deliverTarget).toBe("channel:thread");
     expect(plan.replyTarget).toBe("channel:thread");
     expect(plan.replyReference.use()).toBe("m1");
@@ -848,24 +835,11 @@ describe("resolveDiscordAutoThreadReplyPlan", () => {
   });
 
   it("does nothing when autoThread is disabled", async () => {
-    const client = { rest: { post: async () => ({ id: "thread" }) } } as unknown as Client;
-    const plan = await resolveDiscordAutoThreadReplyPlan({
-      client,
-      message: {
-        id: "m1",
-        channelId: "parent",
-      } as unknown as import("./listeners.js").DiscordMessageEvent["message"],
-      isGuildMessage: true,
-      channelConfig: {
-        autoThread: false,
-      } as unknown as DiscordChannelConfigResolved,
-      threadChannel: null,
-      baseText: "hello",
-      combinedBody: "hello",
-      replyToMode: "all",
-      agentId: "agent",
-      channel: "discord",
-    });
+    const plan = await resolveDiscordAutoThreadReplyPlan(
+      createAutoThreadPlanParams({
+        channelConfig: { autoThread: false } as unknown as DiscordChannelConfigResolved,
+      }),
+    );
     expect(plan.deliverTarget).toBe("channel:parent");
     expect(plan.autoThreadContext).toBeNull();
   });

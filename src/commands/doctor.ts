@@ -98,6 +98,8 @@ export async function doctorCommand(
     confirm: (p) => prompter.confirm(p),
   });
   let cfg: OpenClawConfig = configResult.cfg;
+  const cfgForPersistence = structuredClone(cfg);
+  const sourceConfigValid = configResult.sourceConfigValid ?? true;
 
   const configPath = configResult.path ?? CONFIG_PATH;
   if (!cfg.gateway?.mode) {
@@ -123,7 +125,7 @@ export async function doctorCommand(
   if (gatewayDetails.remoteFallbackNote) {
     note(gatewayDetails.remoteFallbackNote, "Gateway");
   }
-  if (resolveMode(cfg) === "local") {
+  if (resolveMode(cfg) === "local" && sourceConfigValid) {
     const auth = resolveGatewayAuth({
       authConfig: cfg.gateway?.auth,
       tailscaleMode: cfg.gateway?.tailscale?.mode ?? "off",
@@ -283,7 +285,8 @@ export async function doctorCommand(
     healthOk,
   });
 
-  const shouldWriteConfig = prompter.shouldRepair || configResult.shouldWriteConfig;
+  const shouldWriteConfig =
+    configResult.shouldWriteConfig || JSON.stringify(cfg) !== JSON.stringify(cfgForPersistence);
   if (shouldWriteConfig) {
     cfg = applyWizardMetadata(cfg, { command: "doctor", mode: resolveMode(cfg) });
     await writeConfigFile(cfg);
