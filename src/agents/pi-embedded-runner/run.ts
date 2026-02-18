@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
-import type { RunEmbeddedPiAgentParams } from "./run/params.js";
-import type { EmbeddedPiAgentMeta, EmbeddedPiRunResult } from "./types.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
@@ -51,11 +50,13 @@ import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { resolveModel } from "./model.js";
 import { runEmbeddedAttempt } from "./run/attempt.js";
+import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import {
   truncateOversizedToolResultsInSession,
   sessionLikelyHasOversizedToolResults,
 } from "./tool-result-truncation.js";
+import type { EmbeddedPiAgentMeta, EmbeddedPiRunResult } from "./types.js";
 import { describeUnknownError } from "./utils.js";
 
 type ApiKeyInfo = ResolvedProviderAuth;
@@ -96,6 +97,10 @@ const createUsageAccumulator = (): UsageAccumulator => ({
   lastCacheWrite: 0,
   lastInput: 0,
 });
+
+function createCompactionDiagId(): string {
+  return `ovf-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
 
 const hasUsageValues = (
   usage: ReturnType<typeof normalizeUsage>,
@@ -194,12 +199,62 @@ export async function runEmbeddedPiAgent(
       }
       const prevCwd = process.cwd();
 
-      const provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
-      const modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
+      let provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
+      let modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
       const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
       const fallbackConfigured =
         (params.config?.agents?.defaults?.model?.fallbacks?.length ?? 0) > 0;
       await ensureOpenClawModelsJson(params.config, agentDir);
+
+      // Run before_model_resolve hooks early so plugins can override the
+      // provider/model before resolveModel().
+      //
+      // Legacy compatibility: before_agent_start is also checked for override
+      // fields if present. New hook takes precedence when both are set.
+      let modelResolveOverride: { providerOverride?: string; modelOverride?: string } | undefined;
+      const hookRunner = getGlobalHookRunner();
+      const hookCtx = {
+        agentId: workspaceResolution.agentId,
+        sessionKey: params.sessionKey,
+        sessionId: params.sessionId,
+        workspaceDir: resolvedWorkspace,
+        messageProvider: params.messageProvider ?? undefined,
+      };
+      if (hookRunner?.hasHooks("before_model_resolve")) {
+        try {
+          modelResolveOverride = await hookRunner.runBeforeModelResolve(
+            { prompt: params.prompt },
+            hookCtx,
+          );
+        } catch (hookErr) {
+          log.warn(`before_model_resolve hook failed: ${String(hookErr)}`);
+        }
+      }
+      if (hookRunner?.hasHooks("before_agent_start")) {
+        try {
+          const legacyResult = await hookRunner.runBeforeAgentStart(
+            { prompt: params.prompt },
+            hookCtx,
+          );
+          modelResolveOverride = {
+            providerOverride:
+              modelResolveOverride?.providerOverride ?? legacyResult?.providerOverride,
+            modelOverride: modelResolveOverride?.modelOverride ?? legacyResult?.modelOverride,
+          };
+        } catch (hookErr) {
+          log.warn(
+            `before_agent_start hook (legacy model resolve path) failed: ${String(hookErr)}`,
+          );
+        }
+      }
+      if (modelResolveOverride?.providerOverride) {
+        provider = modelResolveOverride.providerOverride;
+        log.info(`[hooks] provider overridden to ${provider}`);
+      }
+      if (modelResolveOverride?.modelOverride) {
+        modelId = modelResolveOverride.modelOverride;
+        log.info(`[hooks] model overridden to ${modelId}`);
+      }
 
       const { model, error, authStorage, modelRegistry } = resolveModel(
         provider,
@@ -467,22 +522,33 @@ export async function runEmbeddedPiAgent(
             blockReplyBreak: params.blockReplyBreak,
             blockReplyChunking: params.blockReplyChunking,
             onReasoningStream: params.onReasoningStream,
+            onReasoningEnd: params.onReasoningEnd,
             onToolResult: params.onToolResult,
             onAgentEvent: params.onAgentEvent,
             extraSystemPrompt: params.extraSystemPrompt,
+            inputProvenance: params.inputProvenance,
             streamParams: params.streamParams,
             ownerNumbers: params.ownerNumbers,
             enforceFinalTag: params.enforceFinalTag,
           });
 
-          const { aborted, promptError, timedOut, sessionIdUsed, lastAssistant } = attempt;
+          const {
+            aborted,
+            promptError,
+            timedOut,
+            timedOutDuringCompaction,
+            sessionIdUsed,
+            lastAssistant,
+          } = attempt;
           const lastAssistantUsage = normalizeUsage(lastAssistant?.usage as UsageLike);
           const attemptUsage = attempt.attemptUsage ?? lastAssistantUsage;
           mergeUsageIntoAccumulator(usageAccumulator, attemptUsage);
           // Keep prompt size from the latest model call so session totalTokens
           // reflects current context usage, not accumulated tool-loop usage.
           lastRunPromptUsage = lastAssistantUsage ?? attemptUsage;
-          autoCompactionCount += Math.max(0, attempt.compactionCount ?? 0);
+          const lastTurnTotal = lastAssistantUsage?.total ?? attemptUsage?.total;
+          const attemptCompactionCount = Math.max(0, attempt.compactionCount ?? 0);
+          autoCompactionCount += attemptCompactionCount;
           const formattedAssistantErrorText = lastAssistant
             ? formatAssistantErrorText(lastAssistant, {
                 cfg: params.config,
@@ -514,20 +580,45 @@ export async function runEmbeddedPiAgent(
             : null;
 
           if (contextOverflowError) {
+            const overflowDiagId = createCompactionDiagId();
             const errorText = contextOverflowError.text;
             const msgCount = attempt.messagesSnapshot?.length ?? 0;
             log.warn(
               `[context-overflow-diag] sessionKey=${params.sessionKey ?? params.sessionId} ` +
                 `provider=${provider}/${modelId} source=${contextOverflowError.source} ` +
                 `messages=${msgCount} sessionFile=${params.sessionFile} ` +
-                `compactionAttempts=${overflowCompactionAttempts} error=${errorText.slice(0, 200)}`,
+                `diagId=${overflowDiagId} compactionAttempts=${overflowCompactionAttempts} ` +
+                `error=${errorText.slice(0, 200)}`,
             );
             const isCompactionFailure = isCompactionFailureError(errorText);
-            // Attempt auto-compaction on context overflow (not compaction_failure)
+            const hadAttemptLevelCompaction = attemptCompactionCount > 0;
+            // If this attempt already compacted (SDK auto-compaction), avoid immediately
+            // running another explicit compaction for the same overflow trigger.
             if (
               !isCompactionFailure &&
+              hadAttemptLevelCompaction &&
               overflowCompactionAttempts < MAX_OVERFLOW_COMPACTION_ATTEMPTS
             ) {
+              overflowCompactionAttempts++;
+              log.warn(
+                `context overflow persisted after in-attempt compaction (attempt ${overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}); retrying prompt without additional compaction for ${provider}/${modelId}`,
+              );
+              continue;
+            }
+            // Attempt explicit overflow compaction only when this attempt did not
+            // already auto-compact.
+            if (
+              !isCompactionFailure &&
+              !hadAttemptLevelCompaction &&
+              overflowCompactionAttempts < MAX_OVERFLOW_COMPACTION_ATTEMPTS
+            ) {
+              if (log.isEnabled("debug")) {
+                log.debug(
+                  `[compaction-diag] decision diagId=${overflowDiagId} branch=compact ` +
+                    `isCompactionFailure=${isCompactionFailure} hasOversizedToolResults=unknown ` +
+                    `attempt=${overflowCompactionAttempts + 1} maxAttempts=${MAX_OVERFLOW_COMPACTION_ATTEMPTS}`,
+                );
+              }
               overflowCompactionAttempts++;
               log.warn(
                 `context overflow detected (attempt ${overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}); attempting auto-compaction for ${provider}/${modelId}`,
@@ -547,11 +638,16 @@ export async function runEmbeddedPiAgent(
                 senderIsOwner: params.senderIsOwner,
                 provider,
                 model: modelId,
+                runId: params.runId,
                 thinkLevel,
                 reasoningLevel: params.reasoningLevel,
                 bashElevated: params.bashElevated,
                 extraSystemPrompt: params.extraSystemPrompt,
                 ownerNumbers: params.ownerNumbers,
+                trigger: "overflow",
+                diagId: overflowDiagId,
+                attempt: overflowCompactionAttempts,
+                maxAttempts: MAX_OVERFLOW_COMPACTION_ATTEMPTS,
               });
               if (compactResult.compacted) {
                 autoCompactionCount += 1;
@@ -575,6 +671,13 @@ export async function runEmbeddedPiAgent(
                 : false;
 
               if (hasOversized) {
+                if (log.isEnabled("debug")) {
+                  log.debug(
+                    `[compaction-diag] decision diagId=${overflowDiagId} branch=truncate_tool_results ` +
+                      `isCompactionFailure=${isCompactionFailure} hasOversizedToolResults=${hasOversized} ` +
+                      `attempt=${overflowCompactionAttempts} maxAttempts=${MAX_OVERFLOW_COMPACTION_ATTEMPTS}`,
+                  );
+                }
                 toolResultTruncationAttempted = true;
                 log.warn(
                   `[context-overflow-recovery] Attempting tool result truncation for ${provider}/${modelId} ` +
@@ -597,7 +700,25 @@ export async function runEmbeddedPiAgent(
                 log.warn(
                   `[context-overflow-recovery] Tool result truncation did not help: ${truncResult.reason ?? "unknown"}`,
                 );
+              } else if (log.isEnabled("debug")) {
+                log.debug(
+                  `[compaction-diag] decision diagId=${overflowDiagId} branch=give_up ` +
+                    `isCompactionFailure=${isCompactionFailure} hasOversizedToolResults=${hasOversized} ` +
+                    `attempt=${overflowCompactionAttempts} maxAttempts=${MAX_OVERFLOW_COMPACTION_ATTEMPTS}`,
+                );
               }
+            }
+            if (
+              (isCompactionFailure ||
+                overflowCompactionAttempts >= MAX_OVERFLOW_COMPACTION_ATTEMPTS ||
+                toolResultTruncationAttempted) &&
+              log.isEnabled("debug")
+            ) {
+              log.debug(
+                `[compaction-diag] decision diagId=${overflowDiagId} branch=give_up ` +
+                  `isCompactionFailure=${isCompactionFailure} hasOversizedToolResults=unknown ` +
+                  `attempt=${overflowCompactionAttempts} maxAttempts=${MAX_OVERFLOW_COMPACTION_ATTEMPTS}`,
+              );
             }
             const kind = isCompactionFailure ? "compaction_failure" : "context_overflow";
             return {
@@ -757,7 +878,9 @@ export async function runEmbeddedPiAgent(
           }
 
           // Treat timeout as potential rate limit (Antigravity hangs on rate limit)
-          const shouldRotate = (!aborted && failoverFailure) || timedOut;
+          // But exclude post-prompt compaction timeouts (model succeeded; no profile issue)
+          const shouldRotate =
+            (!aborted && failoverFailure) || (timedOut && !timedOutDuringCompaction);
 
           if (shouldRotate) {
             if (lastProfileId) {
@@ -823,6 +946,9 @@ export async function runEmbeddedPiAgent(
           }
 
           const usage = toNormalizedUsage(usageAccumulator);
+          if (usage && lastTurnTotal && lastTurnTotal > 0) {
+            usage.total = lastTurnTotal;
+          }
           // Extract the last individual API call's usage for context-window
           // utilization display. The accumulated `usage` sums input tokens
           // across all calls (tool-use loops, compaction retries), which
@@ -851,8 +977,36 @@ export async function runEmbeddedPiAgent(
             verboseLevel: params.verboseLevel,
             reasoningLevel: params.reasoningLevel,
             toolResultFormat: resolvedToolResultFormat,
+            suppressToolErrorWarnings: params.suppressToolErrorWarnings,
             inlineToolResultsAllowed: false,
           });
+
+          // Timeout aborts can leave the run without any assistant payloads.
+          // Emit an explicit timeout error instead of silently completing, so
+          // callers do not lose the turn as an orphaned user message.
+          if (timedOut && !timedOutDuringCompaction && payloads.length === 0) {
+            return {
+              payloads: [
+                {
+                  text:
+                    "Request timed out before a response was generated. " +
+                    "Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
+                  isError: true,
+                },
+              ],
+              meta: {
+                durationMs: Date.now() - started,
+                agentMeta,
+                aborted,
+                systemPromptReport: attempt.systemPromptReport,
+              },
+              didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+              messagingToolSentTexts: attempt.messagingToolSentTexts,
+              messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
+              messagingToolSentTargets: attempt.messagingToolSentTargets,
+              successfulCronAdds: attempt.successfulCronAdds,
+            };
+          }
 
           log.debug(
             `embedded run done: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - started} aborted=${aborted}`,
@@ -891,7 +1045,9 @@ export async function runEmbeddedPiAgent(
             },
             didSendViaMessagingTool: attempt.didSendViaMessagingTool,
             messagingToolSentTexts: attempt.messagingToolSentTexts,
+            messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
             messagingToolSentTargets: attempt.messagingToolSentTargets,
+            successfulCronAdds: attempt.successfulCronAdds,
           };
         }
       } finally {

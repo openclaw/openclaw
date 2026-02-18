@@ -75,7 +75,7 @@ export type HooksGmailConfig = {
 export type InternalHookHandlerConfig = {
   /** Event key to listen for (e.g., 'command:new', 'session:start') */
   event: string;
-  /** Path to handler module (absolute or relative to cwd) */
+  /** Path to handler module (workspace-relative) */
   module: string;
   /** Export name from module (default: 'default') */
   export?: string;
@@ -117,6 +117,21 @@ export type HooksConfig = {
   enabled?: boolean;
   path?: string;
   token?: string;
+  /**
+   * Default session key used for hook agent runs when no request/mapping session key is used.
+   * If omitted, OpenClaw generates `hook:<uuid>` per request.
+   */
+  defaultSessionKey?: string;
+  /**
+   * Allow `sessionKey` from external `/hooks/agent` request payloads.
+   * Default: false.
+   */
+  allowRequestSessionKey?: boolean;
+  /**
+   * Optional allowlist for explicit session keys (request + mapping). Example: ["hook:"].
+   * Empty/omitted means no prefix restriction.
+   */
+  allowedSessionKeyPrefixes?: string[];
   /**
    * Restrict explicit hook `agentId` routing to these agent ids.
    * Omit or include `*` to allow any agent. Set `[]` to deny all explicit `agentId` routing.

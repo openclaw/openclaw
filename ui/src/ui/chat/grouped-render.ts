@@ -1,8 +1,9 @@
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { AssistantIdentity } from "../assistant-identity.ts";
-import type { MessageGroup } from "../types/chat-types.ts";
 import { toSanitizedMarkdownHtml } from "../markdown.ts";
+import { detectTextDirection } from "../text-direction.ts";
+import type { MessageGroup } from "../types/chat-types.ts";
 import { renderCopyAsMarkdownButton } from "./copy-as-markdown.ts";
 import {
   extractTextCached,
@@ -272,7 +273,7 @@ function renderGroupedMessage(
       }
       ${
         markdown
-          ? html`<div class="chat-text">${unsafeHTML(toSanitizedMarkdownHtml(markdown))}</div>`
+          ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">${unsafeHTML(toSanitizedMarkdownHtml(markdown))}</div>`
           : nothing
       }
       ${toolCards.map((card) => renderToolCardSidebar(card, onOpenSidebar))}

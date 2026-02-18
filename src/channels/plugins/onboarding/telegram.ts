@@ -1,8 +1,6 @@
+import { formatCliCommand } from "../../../cli/command-format.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { DmPolicy } from "../../../config/types.js";
-import type { WizardPrompter } from "../../../wizard/prompts.js";
-import type { ChannelOnboardingAdapter, ChannelOnboardingDmPolicy } from "../onboarding-types.js";
-import { formatCliCommand } from "../../../cli/command-format.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../routing/session-key.js";
 import {
   listTelegramAccountIds,
@@ -10,7 +8,9 @@ import {
   resolveTelegramAccount,
 } from "../../../telegram/accounts.js";
 import { formatDocsLink } from "../../../terminal/links.js";
-import { addWildcardAllowFrom, promptAccountId } from "./helpers.js";
+import type { WizardPrompter } from "../../../wizard/prompts.js";
+import type { ChannelOnboardingAdapter, ChannelOnboardingDmPolicy } from "../onboarding-types.js";
+import { addWildcardAllowFrom, mergeAllowFromEntries, promptAccountId } from "./helpers.js";
 
 const channel = "telegram" as const;
 
@@ -115,7 +115,7 @@ async function promptTelegramAllowFrom(params: {
   let resolvedIds: string[] = [];
   while (resolvedIds.length === 0) {
     const entry = await prompter.text({
-      message: "Telegram allowFrom (username or user id)",
+      message: "Telegram allowFrom (numeric sender id; @username resolves to id)",
       placeholder: "@username",
       initialValue: existingAllowFrom[0] ? String(existingAllowFrom[0]) : undefined,
       validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
@@ -133,11 +133,7 @@ async function promptTelegramAllowFrom(params: {
     resolvedIds = results.filter(Boolean) as string[];
   }
 
-  const merged = [
-    ...existingAllowFrom.map((item) => String(item).trim()).filter(Boolean),
-    ...resolvedIds,
-  ];
-  const unique = [...new Set(merged)];
+  const unique = mergeAllowFromEntries(existingAllowFrom, resolvedIds);
 
   if (accountId === DEFAULT_ACCOUNT_ID) {
     return {

@@ -21,8 +21,9 @@ import {
 } from "../../browser/client.js";
 import { resolveBrowserConfig } from "../../browser/config.js";
 import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "../../browser/constants.js";
+import { DEFAULT_UPLOAD_DIR, resolvePathsWithinRoot } from "../../browser/paths.js";
+import { applyBrowserProxyPaths, persistBrowserProxyFiles } from "../../browser/proxy-files.js";
 import { loadConfig } from "../../config/config.js";
-import { saveMediaBuffer } from "../../media/store.js";
 import { wrapExternalContent } from "../../security/external-content.js";
 import { BrowserToolSchema } from "./browser-tool.schema.js";
 import { type AnyAgentTool, imageResultFromFile, jsonResult, readStringParam } from "./common.js";
@@ -180,36 +181,11 @@ async function callBrowserProxy(params: {
 }
 
 async function persistProxyFiles(files: BrowserProxyFile[] | undefined) {
-  if (!files || files.length === 0) {
-    return new Map<string, string>();
-  }
-  const mapping = new Map<string, string>();
-  for (const file of files) {
-    const buffer = Buffer.from(file.base64, "base64");
-    const saved = await saveMediaBuffer(buffer, file.mimeType, "browser", buffer.byteLength);
-    mapping.set(file.path, saved.path);
-  }
-  return mapping;
+  return await persistBrowserProxyFiles(files);
 }
 
 function applyProxyPaths(result: unknown, mapping: Map<string, string>) {
-  if (!result || typeof result !== "object") {
-    return;
-  }
-  const obj = result as Record<string, unknown>;
-  if (typeof obj.path === "string" && mapping.has(obj.path)) {
-    obj.path = mapping.get(obj.path);
-  }
-  if (typeof obj.imagePath === "string" && mapping.has(obj.imagePath)) {
-    obj.imagePath = mapping.get(obj.imagePath);
-  }
-  const download = obj.download;
-  if (download && typeof download === "object") {
-    const d = download as Record<string, unknown>;
-    if (typeof d.path === "string" && mapping.has(d.path)) {
-      d.path = mapping.get(d.path);
-    }
-  }
+  applyBrowserProxyPaths(result, mapping);
 }
 
 function resolveBrowserBaseUrl(params: {
@@ -724,6 +700,15 @@ export function createBrowserTool(opts?: {
           if (paths.length === 0) {
             throw new Error("paths required");
           }
+          const uploadPathsResult = resolvePathsWithinRoot({
+            rootDir: DEFAULT_UPLOAD_DIR,
+            requestedPaths: paths,
+            scopeLabel: `uploads directory (${DEFAULT_UPLOAD_DIR})`,
+          });
+          if (!uploadPathsResult.ok) {
+            throw new Error(uploadPathsResult.error);
+          }
+          const normalizedPaths = uploadPathsResult.paths;
           const ref = readStringParam(params, "ref");
           const inputRef = readStringParam(params, "inputRef");
           const element = readStringParam(params, "element");
@@ -738,7 +723,7 @@ export function createBrowserTool(opts?: {
               path: "/hooks/file-chooser",
               profile,
               body: {
-                paths,
+                paths: normalizedPaths,
                 ref,
                 inputRef,
                 element,
@@ -750,7 +735,7 @@ export function createBrowserTool(opts?: {
           }
           return jsonResult(
             await browserArmFileChooser(baseUrl, {
-              paths,
+              paths: normalizedPaths,
               ref,
               inputRef,
               element,

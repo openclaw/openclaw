@@ -1,4 +1,3 @@
-import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { DEFAULT_CHAT_CHANNEL } from "../../channels/registry.js";
@@ -20,6 +19,7 @@ import {
   validateSendParams,
 } from "../protocol/index.js";
 import { formatForLog } from "../ws-log.js";
+import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 
 type InflightResult = {
   ok: boolean;
@@ -64,6 +64,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       gifPlayback?: boolean;
       channel?: string;
       accountId?: string;
+      threadId?: string;
       sessionKey?: string;
       idempotencyKey: string;
     };
@@ -106,6 +107,18 @@ export const sendHandlers: GatewayRequestHandlers = {
     const channelInput = typeof request.channel === "string" ? request.channel : undefined;
     const normalizedChannel = channelInput ? normalizeChannelId(channelInput) : null;
     if (channelInput && !normalizedChannel) {
+      const normalizedInput = channelInput.trim().toLowerCase();
+      if (normalizedInput === "webchat") {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "unsupported channel: webchat (internal-only). Use `chat.send` for WebChat UI messages or choose a deliverable channel.",
+          ),
+        );
+        return;
+      }
       respond(
         false,
         undefined,
@@ -117,6 +130,10 @@ export const sendHandlers: GatewayRequestHandlers = {
     const accountId =
       typeof request.accountId === "string" && request.accountId.trim().length
         ? request.accountId.trim()
+        : undefined;
+    const threadId =
+      typeof request.threadId === "string" && request.threadId.trim().length
+        ? request.threadId.trim()
         : undefined;
     const outboundChannel = channel;
     const plugin = getChannelPlugin(channel);
@@ -170,6 +187,7 @@ export const sendHandlers: GatewayRequestHandlers = {
               agentId: derivedAgentId,
               accountId,
               target: resolved.to,
+              threadId,
             })
           : null;
         if (derivedRoute) {
@@ -187,7 +205,11 @@ export const sendHandlers: GatewayRequestHandlers = {
           to: resolved.to,
           accountId,
           payloads: [{ text: message, mediaUrl, mediaUrls }],
+          agentId: providedSessionKey
+            ? resolveSessionAgentId({ sessionKey: providedSessionKey, config: cfg })
+            : derivedAgentId,
           gifPlayback: request.gifPlayback,
+          threadId: threadId ?? null,
           deps: outboundDeps,
           mirror: providedSessionKey
             ? {
@@ -274,7 +296,11 @@ export const sendHandlers: GatewayRequestHandlers = {
       question: string;
       options: string[];
       maxSelections?: number;
+      durationSeconds?: number;
       durationHours?: number;
+      silent?: boolean;
+      isAnonymous?: boolean;
+      threadId?: string;
       channel?: string;
       accountId?: string;
       idempotencyKey: string;
@@ -299,12 +325,36 @@ export const sendHandlers: GatewayRequestHandlers = {
       return;
     }
     const channel = normalizedChannel ?? DEFAULT_CHAT_CHANNEL;
+    if (typeof request.durationSeconds === "number" && channel !== "telegram") {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "durationSeconds is only supported for Telegram polls",
+        ),
+      );
+      return;
+    }
+    if (typeof request.isAnonymous === "boolean" && channel !== "telegram") {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "isAnonymous is only supported for Telegram polls"),
+      );
+      return;
+    }
     const poll = {
       question: request.question,
       options: request.options,
       maxSelections: request.maxSelections,
+      durationSeconds: request.durationSeconds,
       durationHours: request.durationHours,
     };
+    const threadId =
+      typeof request.threadId === "string" && request.threadId.trim().length
+        ? request.threadId.trim()
+        : undefined;
     const accountId =
       typeof request.accountId === "string" && request.accountId.trim().length
         ? request.accountId.trim()
@@ -340,6 +390,9 @@ export const sendHandlers: GatewayRequestHandlers = {
         to: resolved.to,
         poll: normalized,
         accountId,
+        threadId,
+        silent: request.silent,
+        isAnonymous: request.isAnonymous,
       });
       const payload: Record<string, unknown> = {
         runId: idem,
