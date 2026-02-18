@@ -1,8 +1,9 @@
 import { vi } from "vitest";
+import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 
 export type LoadedConfig = ReturnType<(typeof import("../config/config.js"))["loadConfig"]>;
 
-export const callGatewayMock = vi.fn();
+export const callGatewayMock: MockFn = vi.fn();
 
 const defaultConfig: LoadedConfig = {
   session: {

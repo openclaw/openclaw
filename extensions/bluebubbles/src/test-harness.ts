@@ -1,3 +1,4 @@
+import type { Mock } from "vitest";
 import { afterEach, beforeEach, vi } from "vitest";
 
 export function resolveBlueBubblesAccountFromConfig(params: {
@@ -19,7 +20,11 @@ export function createBlueBubblesAccountsMockModule() {
   };
 }
 
-export function createBlueBubblesProbeMockModule() {
+type BlueBubblesProbeMockModule = {
+  getCachedBlueBubblesPrivateApiStatus: Mock<() => boolean | null>;
+};
+
+export function createBlueBubblesProbeMockModule(): BlueBubblesProbeMockModule {
   return {
     getCachedBlueBubblesPrivateApiStatus: vi.fn().mockReturnValue(null),
   };

@@ -91,7 +91,12 @@ export function createFinishedBarrier() {
 export function createStartedCronServiceWithFinishedBarrier(params: {
   storePath: string;
   logger: ReturnType<typeof createNoopLogger>;
-}) {
+}): {
+  cron: CronService;
+  enqueueSystemEvent: MockFn;
+  requestHeartbeatNow: MockFn;
+  finished: ReturnType<typeof createFinishedBarrier>;
+} {
   const enqueueSystemEvent = vi.fn();
   const requestHeartbeatNow = vi.fn();
   const finished = createFinishedBarrier();
