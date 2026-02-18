@@ -68,6 +68,7 @@ import {
 import {
   DevicePairApproveParamsSchema,
   DevicePairListParamsSchema,
+  DevicePairRemoveParamsSchema,
   DevicePairRejectParamsSchema,
   DevicePairRequestedEventSchema,
   DevicePairResolvedEventSchema,
@@ -245,6 +246,7 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   DevicePairListParams: DevicePairListParamsSchema,
   DevicePairApproveParams: DevicePairApproveParamsSchema,
   DevicePairRejectParams: DevicePairRejectParamsSchema,
+  DevicePairRemoveParams: DevicePairRemoveParamsSchema,
   DeviceTokenRotateParams: DeviceTokenRotateParamsSchema,
   DeviceTokenRevokeParams: DeviceTokenRevokeParamsSchema,
   DevicePairRequestedEvent: DevicePairRequestedEventSchema,
