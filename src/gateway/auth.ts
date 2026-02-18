@@ -1,9 +1,11 @@
 import type { IncomingMessage } from "node:http";
 import type {
   GatewayAuthConfig,
+  GatewayCloudflareMode,
   GatewayTailscaleMode,
   GatewayTrustedProxyConfig,
 } from "../config/config.js";
+import type { CloudflareAccessUser } from "../infra/cloudflare-access.js";
 import { readTailscaleWhoisIdentity, type TailscaleWhoisIdentity } from "../infra/tailscale.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import {
@@ -33,12 +35,20 @@ export type ResolvedGatewayAuth = {
   token?: string;
   password?: string;
   allowTailscale: boolean;
+  allowCloudflareAccess: boolean;
   trustedProxy?: GatewayTrustedProxyConfig;
 };
 
 export type GatewayAuthResult = {
   ok: boolean;
-  method?: "none" | "token" | "password" | "tailscale" | "device-token" | "trusted-proxy";
+  method?:
+    | "none"
+    | "token"
+    | "password"
+    | "tailscale"
+    | "cloudflare-access"
+    | "device-token"
+    | "trusted-proxy";
   user?: string;
   reason?: string;
   /** Present when the request was blocked by the rate limiter. */
@@ -188,6 +198,7 @@ export function resolveGatewayAuth(params: {
   authOverride?: GatewayAuthConfig | null;
   env?: NodeJS.ProcessEnv;
   tailscaleMode?: GatewayTailscaleMode;
+  cloudflareMode?: GatewayCloudflareMode;
 }): ResolvedGatewayAuth {
   const baseAuthConfig = params.authConfig ?? {};
   const authOverride = params.authOverride ?? undefined;
@@ -240,19 +251,28 @@ export function resolveGatewayAuth(params: {
     authConfig.allowTailscale ??
     (params.tailscaleMode === "serve" && mode !== "password" && mode !== "trusted-proxy");
 
+  const cloudflareActive =
+    params.cloudflareMode === "managed" || params.cloudflareMode === "access-only";
+  // Unlike Tailscale, Cloudflare Access is allowed in password mode by default:
+  // a verified Cloudflare Access JWT is a stronger identity signal than a shared password,
+  // so it's reasonable to accept it as an alternative authentication method.
+  const allowCloudflareAccess =
+    authConfig.allowCloudflareAccess ?? (cloudflareActive && mode !== "trusted-proxy");
+
   return {
     mode,
     modeSource,
     token,
     password,
     allowTailscale,
+    allowCloudflareAccess,
     trustedProxy,
   };
 }
 
 export function assertGatewayAuthConfigured(auth: ResolvedGatewayAuth): void {
   if (auth.mode === "token" && !auth.token) {
-    if (auth.allowTailscale) {
+    if (auth.allowTailscale || auth.allowCloudflareAccess) {
       return;
     }
     throw new Error(
@@ -319,12 +339,26 @@ function authorizeTrustedProxy(params: {
   return { user };
 }
 
+export type CloudflareAccessVerify = (token: string) => Promise<CloudflareAccessUser | null>;
+
+let _defaultCloudflareAccessVerify: CloudflareAccessVerify | null = null;
+
+/**
+ * Set the global Cloudflare Access JWT verifier used by authorizeGatewayConnect.
+ * Called once during server startup when cloudflare mode is active.
+ */
+export function setCloudflareAccessVerifier(verify: CloudflareAccessVerify | null): void {
+  _defaultCloudflareAccessVerify = verify;
+}
+
 export async function authorizeGatewayConnect(params: {
   auth: ResolvedGatewayAuth;
   connectAuth?: ConnectAuth | null;
   req?: IncomingMessage;
   trustedProxies?: string[];
   tailscaleWhois?: TailscaleWhoisLookup;
+  /** Optional Cloudflare Access JWT verifier function. */
+  cloudflareAccessVerify?: CloudflareAccessVerify;
   /** Optional rate limiter instance; when provided, failed attempts are tracked per IP. */
   rateLimiter?: AuthRateLimiter;
   /** Client IP used for rate-limit tracking. Falls back to proxy-aware request IP resolution. */
@@ -388,6 +422,22 @@ export async function authorizeGatewayConnect(params: {
         method: "tailscale",
         user: tailscaleCheck.user.login,
       };
+    }
+  }
+
+  const cfVerify = params.cloudflareAccessVerify ?? _defaultCloudflareAccessVerify;
+  if (auth.allowCloudflareAccess && cfVerify) {
+    const jwtHeader = headerValue(req?.headers?.["cf-access-jwt-assertion"]);
+    if (jwtHeader) {
+      const cfUser = await cfVerify(jwtHeader);
+      if (cfUser) {
+        limiter?.reset(ip, rateLimitScope);
+        return {
+          ok: true,
+          method: "cloudflare-access",
+          user: cfUser.email,
+        };
+      }
     }
   }
 

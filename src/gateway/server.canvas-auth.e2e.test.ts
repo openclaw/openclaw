@@ -160,6 +160,7 @@ describe("gateway canvas host auth", () => {
       token: "test-token",
       password: undefined,
       allowTailscale: false,
+      allowCloudflareAccess: false,
     };
 
     await withTempConfig({
@@ -274,6 +275,7 @@ describe("gateway canvas host auth", () => {
       token: "test-token",
       password: undefined,
       allowTailscale: false,
+      allowCloudflareAccess: false,
     };
 
     await withTempConfig({
@@ -314,6 +316,7 @@ describe("gateway canvas host auth", () => {
       token: "test-token",
       password: undefined,
       allowTailscale: false,
+      allowCloudflareAccess: false,
     };
 
     await withTempConfig({
@@ -391,6 +394,7 @@ describe("gateway canvas host auth", () => {
       token: "test-token",
       password: undefined,
       allowTailscale: false,
+      allowCloudflareAccess: false,
     };
 
     await withTempConfig({

@@ -19,6 +19,7 @@ import {
 } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
+import { createCloudflareAccessVerifier } from "../infra/cloudflare-access.js";
 import {
   ensureControlUiAssetsBuilt,
   resolveControlUiRootOverrideSync,
@@ -47,6 +48,7 @@ import { getTotalQueueSize } from "../process/command-queue.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { runOnboardingWizard } from "../wizard/onboarding.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
+import { setCloudflareAccessVerifier } from "./auth.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
 import { startGatewayConfigReloader } from "./config-reload.js";
 import type { ControlUiRootState } from "./control-ui.js";
@@ -60,6 +62,7 @@ import type { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import { createChannelManager } from "./server-channels.js";
 import { createAgentEventHandler } from "./server-chat.js";
 import { createGatewayCloseHandler } from "./server-close.js";
+import { startGatewayCloudflareExposure } from "./server-cloudflare.js";
 import { buildGatewayCronService } from "./server-cron.js";
 import { startGatewayDiscovery } from "./server-discovery-runtime.js";
 import { applyGatewayLaneConcurrency } from "./server-lanes.js";
@@ -99,6 +102,7 @@ const log = createSubsystemLogger("gateway");
 const logCanvas = log.child("canvas");
 const logDiscovery = log.child("discovery");
 const logTailscale = log.child("tailscale");
+const logCloudflare = log.child("cloudflare");
 const logChannels = log.child("channels");
 const logBrowser = log.child("browser");
 const logHealth = log.child("health");
@@ -151,6 +155,10 @@ export type GatewayServerOptions = {
    * Override gateway Tailscale exposure configuration (merges with config).
    */
   tailscale?: import("../config/config.js").GatewayTailscaleConfig;
+  /**
+   * Override gateway Cloudflare tunnel/access configuration (merges with config).
+   */
+  cloudflare?: import("../config/config.js").GatewayCloudflareConfig;
   /**
    * Test-only: allow canvas host startup even when NODE_ENV/VITEST would disable it.
    */
@@ -294,6 +302,7 @@ export async function startGatewayServer(
     openResponsesEnabled: opts.openResponsesEnabled,
     auth: opts.auth,
     tailscale: opts.tailscale,
+    cloudflare: opts.cloudflare,
   });
   const {
     bindHost,
@@ -306,6 +315,8 @@ export async function startGatewayServer(
     resolvedAuth,
     tailscaleConfig,
     tailscaleMode,
+    cloudflareConfig,
+    cloudflareMode,
   } = runtimeConfig;
   let hooksConfig = runtimeConfig.hooksConfig;
   const canvasHostEnabled = runtimeConfig.canvasHostEnabled;
@@ -653,6 +664,27 @@ export async function startGatewayServer(
         logTailscale,
       });
 
+  // Cloudflare Access JWT verifier — created when cloudflare mode is active.
+  const cloudflareAccessVerifier =
+    cloudflareMode !== "off" && cloudflareConfig.teamDomain
+      ? createCloudflareAccessVerifier({
+          teamDomain: cloudflareConfig.teamDomain,
+          audience: cloudflareConfig.audience,
+        })
+      : null;
+  if (cloudflareAccessVerifier) {
+    setCloudflareAccessVerifier(cloudflareAccessVerifier.verify.bind(cloudflareAccessVerifier));
+  }
+
+  const cloudflareCleanup = minimalTestGateway
+    ? null
+    : await startGatewayCloudflareExposure({
+        cloudflareMode,
+        tunnelToken: cloudflareConfig.tunnelToken ?? process.env.OPENCLAW_CLOUDFLARE_TUNNEL_TOKEN,
+        controlUiBasePath,
+        logCloudflare,
+      });
+
   let browserControl: Awaited<ReturnType<typeof startBrowserControlServerIfEnabled>> = null;
   if (!minimalTestGateway) {
     ({ browserControl, pluginServices } = await startGatewaySidecars({
@@ -724,6 +756,7 @@ export async function startGatewayServer(
   const close = createGatewayCloseHandler({
     bonjourStop,
     tailscaleCleanup,
+    cloudflareCleanup,
     canvasHost,
     canvasHostServer,
     stopChannel,
