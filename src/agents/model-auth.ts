@@ -5,6 +5,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   normalizeOptionalSecretInput,
   normalizeSecretInput,
@@ -20,6 +21,8 @@ import {
 import { normalizeProviderId } from "./model-selection.js";
 
 export { ensureAuthProfileStore, resolveAuthProfileOrder } from "./auth-profiles.js";
+
+const log = createSubsystemLogger("agents/model-auth");
 
 const AWS_BEARER_ENV = "AWS_BEARER_TOKEN_BEDROCK";
 const AWS_ACCESS_KEY_ENV = "AWS_ACCESS_KEY_ID";
@@ -48,10 +51,15 @@ function resolveProviderConfig(
   );
 }
 
-function readApiKeyFile(filePath: string): string | undefined {
+export function readApiKeyFile(filePath: string): string | undefined {
+  if (!fs.existsSync(filePath)) {
+    log.warn(`apiKeyFile not found: ${filePath}`);
+    return undefined;
+  }
   try {
     return fs.readFileSync(filePath, "utf-8").trim() || undefined;
-  } catch {
+  } catch (err) {
+    log.warn(`apiKeyFile read failed: ${filePath}: ${String(err)}`);
     return undefined;
   }
 }
