@@ -170,30 +170,41 @@ Verify:
 
 ## How to Use
 
-### 방법 1: 원라인
+### Phase 1: 지니님 수동 (MAIBOT 없이 — 약 10분)
+
+새 PC에서 MAIBOT이 아직 없으므로 직접 실행:
 
 ```powershell
-# Windows PowerShell
-Invoke-WebRequest -Uri "https://raw.githubusercontent.com/jini92/MAIBOT/main/skills/maibot-migration/scripts/migrate.py" -OutFile migrate.py
-python migrate.py full
-```
+# 1. Node.js 22+ 설치 (https://nodejs.org)
+# 2. Git 설치 (https://git-scm.com)
 
-### 방법 2: 레포 먼저 클론
+# 3. OpenClaw + pnpm 설치
+npm i -g openclaw pnpm@10
 
-```powershell
+# 4. MAIBOT 클론
 git clone https://github.com/jini92/MAIBOT.git C:\MAIBOT
-python C:\MAIBOT\skills\maibot-migration\scripts\migrate.py full
-```
 
-### 방법 3: Quick Migration
-
-```powershell
-npm i -g openclaw pnpm@10 eas-cli
-git clone https://github.com/jini92/MAIBOT.git C:\MAIBOT
+# 5. OpenClaw 설정 (API 키, Discord 토큰 입력)
 openclaw setup
+
+# 6. Gateway 시작
 openclaw gateway start
-# Then tell MAIBOT: "나머지 세팅해줘"
 ```
+
+✅ 여기서 MAIBOT이 살아납니다! Discord에서 대화 가능.
+
+### Phase 2: MAIBOT 자동 (Discord에서 "나머지 세팅해줘")
+
+MAIBOT이 자동으로 처리:
+
+- MAI 프로젝트 7개 클론 (`C:\TEST\*`)
+- gsudo 설치 (Admin 원격 실행)
+- Chrome 디버그 모드 설정
+- EAS CLI 설치
+- Obsidian 심볼릭 링크 연결
+- Cron jobs 4개 복원
+- Exec 자동승인 설정
+- 전체 검증
 
 ## Cloud Deployment Notes
 
