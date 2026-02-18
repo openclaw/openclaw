@@ -287,7 +287,9 @@ JINI_SYNC/
 │   ├── 06.MAITHINK
 │   ├── 07.MAIBEAUTY
 │   ├── 08.MAISTAR7
-│   └── 09.MAICON     ← docs/ 심볼릭 링크 → C:\TEST\MAICON\docs
+│   ├── 09.MAICON     ← docs/ 심볼릭 링크 → C:\TEST\MAICON\docs
+│   ├── 10.MAITUTOR
+│   └── 11.MAIBOTALKS
 ├── 02.AREA/           ← 영역별 (지속적 관심사)
 ├── 03.RESOURCES/      ← 리소스/참고자료
 ├── 04.ARCHIVE/        ← 아카이브
