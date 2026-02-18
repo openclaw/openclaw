@@ -22,6 +22,7 @@ import {
   stripToolResultDetails,
   sanitizeToolUseResultPairing,
 } from "../session-transcript-repair.js";
+import { isThinkingBlock } from "../thinking-block-guard.js";
 import type { TranscriptPolicy } from "../transcript-policy.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import { log } from "./logger.js";
@@ -85,11 +86,7 @@ export function sanitizeAntigravityThinkingBlocks(messages: AgentMessage[]): Age
     let contentChanged = false;
     let hasNonThinkingContent = false;
     for (const block of assistant.content) {
-      if (
-        !block ||
-        typeof block !== "object" ||
-        (block as { type?: unknown }).type !== "thinking"
-      ) {
+      if (!isThinkingBlock(block)) {
         nextContent.push(block);
         hasNonThinkingContent = true;
         continue;
