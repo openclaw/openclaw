@@ -49,6 +49,8 @@ type TestNodeSession = {
   commands: string[];
 };
 
+const WAKE_WAIT_TIMEOUT_MS = 3_001;
+
 function makeNodeInvokeParams(overrides?: Partial<Record<string, unknown>>) {
   return {
     nodeId: "ios-node-1",
@@ -180,7 +182,7 @@ describe("node.invoke APNs wake path", () => {
       connected = true;
     }, 300);
 
-    await vi.advanceTimersByTimeAsync(4_000);
+    await vi.advanceTimersByTimeAsync(WAKE_WAIT_TIMEOUT_MS);
     const respond = await invokePromise;
 
     expect(mocks.sendApnsBackgroundWake).toHaveBeenCalledTimes(1);
@@ -230,14 +232,14 @@ describe("node.invoke APNs wake path", () => {
       nodeRegistry,
       requestParams: { nodeId: "ios-node-throttle", idempotencyKey: "idem-throttle-1" },
     });
-    await vi.advanceTimersByTimeAsync(4_000);
+    await vi.advanceTimersByTimeAsync(WAKE_WAIT_TIMEOUT_MS);
     await first;
 
     const second = invokeNode({
       nodeRegistry,
       requestParams: { nodeId: "ios-node-throttle", idempotencyKey: "idem-throttle-2" },
     });
-    await vi.advanceTimersByTimeAsync(4_000);
+    await vi.advanceTimersByTimeAsync(WAKE_WAIT_TIMEOUT_MS);
     await second;
 
     expect(mocks.sendApnsBackgroundWake).toHaveBeenCalledTimes(1);
