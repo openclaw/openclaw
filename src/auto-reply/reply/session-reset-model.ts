@@ -1,4 +1,4 @@
-import { loadModelCatalog } from "../../agents/model-catalog.js";
+// loadModelCatalog imported dynamically.
 import {
   buildAllowedModelSet,
   modelKey,
@@ -112,6 +112,7 @@ export async function applyResetModelOverride(params: {
     return {};
   }
 
+  const { loadModelCatalog } = await import("../../agents/model-catalog.js");
   const catalog = await loadModelCatalog({ config: params.cfg });
   const allowed = buildAllowedModelSet({
     cfg: params.cfg,
