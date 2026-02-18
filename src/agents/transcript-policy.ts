@@ -101,7 +101,9 @@ export function resolveTranscriptPolicy(params: {
     : sanitizeToolCallIds
       ? "strict"
       : undefined;
-  const repairToolUseResultPairing = isGoogle || isAnthropic;
+  // OpenAI Responses also enforces function_call_output pairing with prior function_call.
+  // Repairing pairing here drops orphan tool results that can otherwise hard-fail requests.
+  const repairToolUseResultPairing = isGoogle || isAnthropic || isOpenAi;
   const sanitizeThoughtSignatures = isOpenRouterGemini
     ? { allowBase64Only: true, includeCamelCase: true }
     : undefined;
@@ -111,7 +113,7 @@ export function resolveTranscriptPolicy(params: {
     sanitizeMode: isOpenAi ? "images-only" : needsNonImageSanitize ? "full" : "images-only",
     sanitizeToolCallIds: !isOpenAi && sanitizeToolCallIds,
     toolCallIdMode,
-    repairToolUseResultPairing: !isOpenAi && repairToolUseResultPairing,
+    repairToolUseResultPairing,
     preserveSignatures: isAntigravityClaudeModel,
     sanitizeThoughtSignatures: isOpenAi ? undefined : sanitizeThoughtSignatures,
     normalizeAntigravityThinkingBlocks,
