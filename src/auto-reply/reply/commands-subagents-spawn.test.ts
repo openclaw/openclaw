@@ -94,6 +94,7 @@ describe("/subagents spawn command", () => {
     expect(spawnParams.task).toBe("do the thing");
     expect(spawnParams.agentId).toBe("beta");
     expect(spawnParams.cleanup).toBe("keep");
+    expect(spawnParams.expectsCompletionMessage).toBe(true);
     expect(spawnCtx.agentSessionKey).toBeDefined();
   });
 

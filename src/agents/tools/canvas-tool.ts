@@ -3,7 +3,9 @@ import fs from "node:fs/promises";
 import { Type } from "@sinclair/typebox";
 import { writeBase64ToFile } from "../../cli/nodes-camera.js";
 import { canvasSnapshotTempPath, parseCanvasSnapshotPayload } from "../../cli/nodes-canvas.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { imageMimeFromFormat } from "../../media/mime.js";
+import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
 import { type AnyAgentTool, imageResult, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
@@ -48,7 +50,8 @@ const CanvasToolSchema = Type.Object({
   jsonlPath: Type.Optional(Type.String()),
 });
 
-export function createCanvasTool(): AnyAgentTool {
+export function createCanvasTool(options?: { config?: OpenClawConfig }): AnyAgentTool {
+  const imageSanitization = resolveImageSanitizationLimits(options?.config);
   return {
     label: "Canvas",
     name: "canvas",
@@ -158,6 +161,7 @@ export function createCanvasTool(): AnyAgentTool {
             base64: payload.base64,
             mimeType,
             details: { format: payload.format },
+            imageSanitization,
           });
         }
         case "a2ui_push": {

@@ -545,6 +545,8 @@ describe("cron cli", () => {
         }
         if (method === "cron.list") {
           return {
+            ok: true,
+            params: {},
             jobs: [
               {
                 id: "job-1",
@@ -581,6 +583,8 @@ describe("cron cli", () => {
         }
         if (method === "cron.list") {
           return {
+            ok: true,
+            params: {},
             jobs: [{ id: "job-1", schedule: { kind: "every", everyMs: 60_000 } }],
           };
         }
