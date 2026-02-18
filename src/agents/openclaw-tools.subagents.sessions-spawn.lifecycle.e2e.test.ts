@@ -135,6 +135,21 @@ const waitFor = async (predicate: () => boolean, timeoutMs = 2000) => {
   }
 };
 
+function expectSingleCompletionSend(
+  calls: GatewayRequest[],
+  expected: { sessionKey: string; channel: string; to: string; message: string },
+) {
+  const sendCalls = calls.filter((call) => call.method === "send");
+  expect(sendCalls).toHaveLength(1);
+  const send = sendCalls[0]?.params as
+    | { sessionKey?: string; channel?: string; to?: string; message?: string }
+    | undefined;
+  expect(send?.sessionKey).toBe(expected.sessionKey);
+  expect(send?.channel).toBe(expected.channel);
+  expect(send?.to).toBe(expected.to);
+  expect(send?.message).toBe(expected.message);
+}
+
 describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
   beforeEach(() => {
     resetSessionsSpawnConfigOverride();
@@ -204,15 +219,12 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     expect(first?.lane).toBe("subagent");
 
     // Direct send should route completion to the requester channel/session.
-    const sendCalls = ctx.calls.filter((c) => c.method === "send");
-    expect(sendCalls).toHaveLength(1);
-    const send = sendCalls[0]?.params as
-      | { sessionKey?: string; channel?: string; to?: string; message?: string }
-      | undefined;
-    expect(send?.sessionKey).toBe("agent:main:main");
-    expect(send?.channel).toBe("whatsapp");
-    expect(send?.to).toBe("+123");
-    expect(send?.message).toBe("✅ Subagent main finished\n\ndone");
+    expectSingleCompletionSend(ctx.calls, {
+      sessionKey: "agent:main:main",
+      channel: "whatsapp",
+      to: "+123",
+      message: "✅ Subagent main finished\n\ndone",
+    });
     expect(child.sessionKey?.startsWith("agent:main:subagent:")).toBe(true);
   });
 
@@ -289,15 +301,12 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     expect(first?.sessionKey?.startsWith("agent:main:subagent:")).toBe(true);
     expect(child.sessionKey?.startsWith("agent:main:subagent:")).toBe(true);
 
-    const sendCalls = ctx.calls.filter((c) => c.method === "send");
-    expect(sendCalls).toHaveLength(1);
-    const send = sendCalls[0]?.params as
-      | { sessionKey?: string; channel?: string; to?: string; message?: string }
-      | undefined;
-    expect(send?.sessionKey).toBe("agent:main:discord:group:req");
-    expect(send?.channel).toBe("discord");
-    expect(send?.to).toBe("discord:dm:u123");
-    expect(send?.message).toBe("✅ Subagent main finished");
+    expectSingleCompletionSend(ctx.calls, {
+      sessionKey: "agent:main:discord:group:req",
+      channel: "discord",
+      to: "discord:dm:u123",
+      message: "✅ Subagent main finished",
+    });
 
     expect(deletedKey?.startsWith("agent:main:subagent:")).toBe(true);
   });
@@ -356,15 +365,12 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     const first = agentCalls[0]?.params as { lane?: string } | undefined;
     expect(first?.lane).toBe("subagent");
 
-    const sendCalls = ctx.calls.filter((c) => c.method === "send");
-    expect(sendCalls).toHaveLength(1);
-    const send = sendCalls[0]?.params as
-      | { sessionKey?: string; channel?: string; to?: string; message?: string }
-      | undefined;
-    expect(send?.sessionKey).toBe("agent:main:discord:group:req");
-    expect(send?.channel).toBe("discord");
-    expect(send?.to).toBe("discord:dm:u123");
-    expect(send?.message).toBe("✅ Subagent main finished\n\ndone");
+    expectSingleCompletionSend(ctx.calls, {
+      sessionKey: "agent:main:discord:group:req",
+      channel: "discord",
+      to: "discord:dm:u123",
+      message: "✅ Subagent main finished\n\ndone",
+    });
 
     // Session should be deleted
     expect(deletedKey?.startsWith("agent:main:subagent:")).toBe(true);
