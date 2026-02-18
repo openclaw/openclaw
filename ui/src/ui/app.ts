@@ -319,6 +319,7 @@ export class OpenClawApp extends LitElement {
   @state() debugCallError: string | null = null;
 
   @state() logsLoading = false;
+  @state() logsInFlight = false;
   @state() logsError: string | null = null;
   @state() logsFile: string | null = null;
   @state() logsEntries: LogEntry[] = [];
