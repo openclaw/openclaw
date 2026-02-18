@@ -19,10 +19,11 @@ function parsePossiblyNoisyJsonObject(stdout: string): Record<string, unknown> {
 
 /**
  * Locate Tailscale binary using multiple strategies:
- * 1. PATH lookup (via which command)
+ * 1. PATH lookup (via which/where command)
  * 2. Known macOS app path
- * 3. find /Applications for Tailscale.app
- * 4. locate database (if available)
+ * 3. Known Windows paths
+ * 4. find /Applications for Tailscale.app (macOS)
+ * 5. locate database (if available)
  *
  * @returns Path to Tailscale binary or null if not found
  */
@@ -44,21 +45,46 @@ export async function findTailscaleBinary(): Promise<string | null> {
     }
   };
 
-  // Strategy 1: which command
+  // Strategy 1: which/where command (cross-platform)
   try {
-    const { stdout } = await runExec("which", ["tailscale"]);
-    const fromPath = stdout.trim();
+    const whichCmd = process.platform === "win32" ? "where" : "which";
+    const { stdout } = await runExec(whichCmd, ["tailscale"]);
+    const fromPath = stdout.trim().split("\n")[0]; // where returns multiple lines on Windows
     if (fromPath && (await checkBinary(fromPath))) {
       return fromPath;
     }
   } catch {
-    // which failed, continue
+    // which/where failed, continue
+  }
+
+  // Strategy 1b: Try "tailscale" directly in PATH
+  try {
+    if (await checkBinary("tailscale")) {
+      return "tailscale";
+    }
+  } catch {
+    // Direct PATH lookup failed, continue
   }
 
   // Strategy 2: Known macOS app path
   const macAppPath = "/Applications/Tailscale.app/Contents/MacOS/Tailscale";
   if (await checkBinary(macAppPath)) {
     return macAppPath;
+  }
+
+  // Strategy 2b: Known Windows paths
+  if (process.platform === "win32") {
+    const windowsPaths = [
+      "C:\\Program Files\\Tailscale\\tailscale.exe",
+      "C:\\Program Files (x86)\\Tailscale\\tailscale.exe",
+      process.env.LOCALAPPDATA ? `${process.env.LOCALAPPDATA}\\Tailscale\\tailscale.exe` : null,
+    ].filter((p): p is string => p !== null);
+
+    for (const winPath of windowsPaths) {
+      if (await checkBinary(winPath)) {
+        return winPath;
+      }
+    }
   }
 
   // Strategy 3: find command in /Applications

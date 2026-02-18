@@ -131,11 +131,21 @@ export async function configureGatewayForOnboarding(
   if (tailscaleMode !== "off") {
     const tailscaleBin = await findTailscaleBinary();
     if (!tailscaleBin) {
+      const downloadUrl =
+        process.platform === "win32"
+          ? "https://tailscale.com/download/windows"
+          : process.platform === "darwin"
+            ? "https://tailscale.com/download/mac"
+            : "https://tailscale.com/download/linux";
+      const locations =
+        process.platform === "win32"
+          ? "PATH or Program Files"
+          : "PATH or /Applications";
       await prompter.note(
         [
-          "Tailscale binary not found in PATH or /Applications.",
+          `Tailscale binary not found in ${locations}.`,
           "Ensure Tailscale is installed from:",
-          "  https://tailscale.com/download/mac",
+          `  ${downloadUrl}`,
           "",
           "You can continue setup, but serve/funnel will fail at runtime.",
         ].join("\n"),
