@@ -108,6 +108,23 @@ agents:
       every: "55m"
 ```
 
+### Example: enable Anthropic 1M context beta header
+
+Anthropic's 1M context window is currently beta-gated. OpenClaw can inject the
+required `anthropic-beta` value when you enable `context1m` on supported Opus
+or Sonnet models.
+
+```yaml
+agents:
+  defaults:
+    models:
+      "anthropic/claude-opus-4-6":
+        params:
+          context1m: true
+```
+
+This maps to Anthropic's `context-1m-2025-08-07` beta header.
+
 ## Tips for reducing token pressure
 
 - Use `/compact` to summarize long sessions.
