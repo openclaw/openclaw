@@ -39,6 +39,24 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate {
     func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: any Error) {
         self.logger.error("APNs registration failed: \(error.localizedDescription, privacy: .public)")
     }
+
+    func application(
+        _ application: UIApplication,
+        didReceiveRemoteNotification userInfo: [AnyHashable: Any],
+        fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void)
+    {
+        self.logger.info("APNs remote notification received keys=\(userInfo.keys.count, privacy: .public)")
+        Task { @MainActor in
+            guard let appModel = self.appModel else {
+                self.logger.info("APNs wake skipped: appModel unavailable")
+                completionHandler(.noData)
+                return
+            }
+            let handled = await appModel.handleSilentPushWake(userInfo)
+            self.logger.info("APNs wake handled=\(handled, privacy: .public)")
+            completionHandler(handled ? .newData : .noData)
+        }
+    }
 }
 
 @main
