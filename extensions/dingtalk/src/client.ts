@@ -1,8 +1,8 @@
 import dingtalk from "@alicloud/dingtalk";
 import * as $OpenApi from "@alicloud/openapi-client";
 import * as $Util from "@alicloud/tea-util";
-import type { ResolvedDingTalkAccount, WebhookResponse, MarkdownReplyBody } from "./types.js";
 import { logger } from "./logger.js";
+import type { ResolvedDingTalkAccount, WebhookResponse, MarkdownReplyBody } from "./types.js";
 
 const { oauth2_1_0, robot_1_0 } = dingtalk;
 

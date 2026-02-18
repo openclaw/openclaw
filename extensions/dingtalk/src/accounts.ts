@@ -1,6 +1,6 @@
 import { DEFAULT_ACCOUNT_ID, type OpenClawConfig } from "openclaw/plugin-sdk";
-import type { DingTalkConfig, ResolvedDingTalkAccount } from "./types.js";
 import { PLUGIN_ID } from "./constants.js";
+import type { DingTalkConfig, ResolvedDingTalkAccount } from "./types.js";
 
 /**
  * 规范化账户 ID（始终返回默认账户 ID）

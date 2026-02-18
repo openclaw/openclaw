@@ -1,3 +1,4 @@
+import path from "path";
 import {
   buildChannelConfigSchema,
   DEFAULT_ACCOUNT_ID,
@@ -9,7 +10,6 @@ import {
   type ChannelAccountSnapshot,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk";
-import path from "path";
 import {
   listDingTalkAccountIds,
   normalizeAccountId,

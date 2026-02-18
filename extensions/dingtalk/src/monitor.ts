@@ -1,14 +1,14 @@
-import type { OpenClawConfig, RuntimeEnv } from "openclaw/plugin-sdk";
 import { DWClient, TOPIC_ROBOT, type DWClientDownStream } from "dingtalk-stream";
-import type { InboundMediaContext } from "./media.js";
-import type { DingTalkMessageData } from "./types.js";
+import type { OpenClawConfig, RuntimeEnv } from "openclaw/plugin-sdk";
 import { resolveDingTalkAccount } from "./accounts.js";
 import { replyViaWebhook } from "./client.js";
 import { PLUGIN_ID } from "./constants.js";
 import { getMessageHandler } from "./handlers.js";
 import { logger } from "./logger.js";
+import type { InboundMediaContext } from "./media.js";
 import { generateMediaPlaceholder, buildMediaContextFields, getErrorMessage } from "./media.js";
 import { getDingTalkRuntime } from "./runtime.js";
+import type { DingTalkMessageData } from "./types.js";
 
 export interface MonitorOptions {
   clientId: string;

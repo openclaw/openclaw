@@ -1,4 +1,6 @@
+import { logger } from "./logger.js";
 import type { MediaItem, InboundMediaContext } from "./media.js";
+import { downloadAndSaveMedia, getErrorMessage } from "./media.js";
 import type {
   DingTalkMessageData,
   ResolvedDingTalkAccount,
@@ -10,8 +12,6 @@ import type {
   RichTextElement,
   RichTextPictureElement,
 } from "./types.js";
-import { logger } from "./logger.js";
-import { downloadAndSaveMedia, getErrorMessage } from "./media.js";
 
 // ============================================================================
 // 消息处理器类型定义

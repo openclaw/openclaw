@@ -1,7 +1,7 @@
-import type { ResolvedDingTalkAccount } from "./types.js";
 import { getFileDownloadUrl, downloadFromUrl } from "./client.js";
 import { logger } from "./logger.js";
 import { getDingTalkRuntime } from "./runtime.js";
+import type { ResolvedDingTalkAccount } from "./types.js";
 
 // ============================================================================
 // 媒体信息类型定义

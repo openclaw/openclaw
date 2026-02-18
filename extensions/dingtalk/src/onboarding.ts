@@ -1,9 +1,9 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import type { ChannelOnboardingAdapter } from "openclaw/plugin-sdk";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk";
-import type { DingTalkConfig } from "./types.js";
 import { listDingTalkAccountIds, resolveDingTalkAccount } from "./accounts.js";
 import { PLUGIN_ID } from "./constants.js";
+import type { DingTalkConfig } from "./types.js";
 
 const channel = PLUGIN_ID;
 
