@@ -3,15 +3,10 @@ import * as authModule from "../agents/model-auth.js";
 import { DEFAULT_GEMINI_EMBEDDING_MODEL } from "./embeddings-gemini.js";
 import { createEmbeddingProvider, DEFAULT_LOCAL_MODEL } from "./embeddings.js";
 
-vi.mock("../agents/model-auth.js", () => ({
-  resolveApiKeyForProvider: vi.fn(),
-  requireApiKey: (auth: { apiKey?: string; mode?: string }, provider: string) => {
-    if (auth?.apiKey) {
-      return auth.apiKey;
-    }
-    throw new Error(`No API key resolved for provider "${provider}" (auth mode: ${auth?.mode}).`);
-  },
-}));
+vi.mock("../agents/model-auth.js", async () => {
+  const { createModelAuthMockModule } = await import("../test-utils/model-auth-mock.js");
+  return createModelAuthMockModule();
+});
 
 const importNodeLlamaCppMock = vi.fn();
 vi.mock("./node-llama.js", () => ({
