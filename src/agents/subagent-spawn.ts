@@ -6,7 +6,7 @@ import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.j
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
-import { resolveDefaultModelForAgent } from "./model-selection.js";
+import { resolveSubagentSpawnModelSelection } from "./model-selection.js";
 import { buildSubagentSystemPrompt } from "./subagent-announce.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { countActiveRunsForSession, registerSubagentRun } from "./subagent-registry.js";
@@ -25,6 +25,7 @@ export type SpawnSubagentParams = {
   thinking?: string;
   runTimeoutSeconds?: number;
   cleanup?: "delete" | "keep";
+  expectsCompletionMessage?: boolean;
 };
 
 export type SpawnSubagentContext = {
@@ -39,12 +40,15 @@ export type SpawnSubagentContext = {
   requesterAgentIdOverride?: string;
 };
 
+export const SUBAGENT_SPAWN_ACCEPTED_NOTE =
+  "auto-announces on completion, do not poll/sleep. The response will be sent back as an agent message.";
+
 export type SpawnSubagentResult = {
   status: "accepted" | "forbidden" | "error";
   childSessionKey?: string;
   runId?: string;
+  note?: string;
   modelApplied?: boolean;
-  warning?: string;
   error?: string;
 };
 
@@ -61,21 +65,6 @@ export function splitModelRef(ref?: string) {
     return { provider, model };
   }
   return { provider: undefined, model: trimmed };
-}
-
-export function normalizeModelSelection(value: unknown): string | undefined {
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    return trimmed || undefined;
-  }
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const primary = (value as { primary?: unknown }).primary;
-  if (typeof primary === "string" && primary.trim()) {
-    return primary.trim();
-  }
-  return undefined;
 }
 
 export async function spawnSubagentDirect(
@@ -99,7 +88,6 @@ export async function spawnSubagentDirect(
     typeof params.runTimeoutSeconds === "number" && Number.isFinite(params.runTimeoutSeconds)
       ? Math.max(0, Math.floor(params.runTimeoutSeconds))
       : 0;
-  let modelWarning: string | undefined;
   let modelApplied = false;
 
   const cfg = loadConfig();
@@ -161,16 +149,11 @@ export async function spawnSubagentDirect(
   const childDepth = callerDepth + 1;
   const spawnedByKey = requesterInternalKey;
   const targetAgentConfig = resolveAgentConfig(cfg, targetAgentId);
-  const runtimeDefaultModel = resolveDefaultModelForAgent({
+  const resolvedModel = resolveSubagentSpawnModelSelection({
     cfg,
     agentId: targetAgentId,
+    modelOverride,
   });
-  const resolvedModel =
-    normalizeModelSelection(modelOverride) ??
-    normalizeModelSelection(targetAgentConfig?.subagents?.model) ??
-    normalizeModelSelection(cfg.agents?.defaults?.subagents?.model) ??
-    normalizeModelSelection(cfg.agents?.defaults?.model?.primary) ??
-    normalizeModelSelection(`${runtimeDefaultModel.provider}/${runtimeDefaultModel.model}`);
 
   const resolvedThinkingDefaultRaw =
     readStringParam(targetAgentConfig?.subagents ?? {}, "thinking") ??
@@ -217,16 +200,11 @@ export async function spawnSubagentDirect(
     } catch (err) {
       const messageText =
         err instanceof Error ? err.message : typeof err === "string" ? err : "error";
-      const recoverable =
-        messageText.includes("invalid model") || messageText.includes("model not allowed");
-      if (!recoverable) {
-        return {
-          status: "error",
-          error: messageText,
-          childSessionKey,
-        };
-      }
-      modelWarning = messageText;
+      return {
+        status: "error",
+        error: messageText,
+        childSessionKey,
+      };
     }
   }
   if (thinkingOverride !== undefined) {
@@ -258,6 +236,10 @@ export async function spawnSubagentDirect(
     childDepth,
     maxSpawnDepth,
   });
+  const childTaskMessage = [
+    `[Subagent Context] You are running as a subagent (depth ${childDepth}/${maxSpawnDepth}). Results auto-announce to your requester; do not busy-poll for status.`,
+    `[Subagent Task]: ${task}`,
+  ].join("\n\n");
 
   const childIdem = crypto.randomUUID();
   let childRunId: string = childIdem;
@@ -265,7 +247,7 @@ export async function spawnSubagentDirect(
     const response = await callGateway<{ runId: string }>({
       method: "agent",
       params: {
-        message: task,
+        message: childTaskMessage,
         sessionKey: childSessionKey,
         channel: requesterOrigin?.channel,
         to: requesterOrigin?.to ?? undefined,
@@ -310,13 +292,14 @@ export async function spawnSubagentDirect(
     label: label || undefined,
     model: resolvedModel,
     runTimeoutSeconds,
+    expectsCompletionMessage: params.expectsCompletionMessage === true,
   });
 
   return {
     status: "accepted",
     childSessionKey,
     runId: childRunId,
+    note: SUBAGENT_SPAWN_ACCEPTED_NOTE,
     modelApplied: resolvedModel ? modelApplied : undefined,
-    warning: modelWarning,
   };
 }

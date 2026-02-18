@@ -52,7 +52,7 @@ describe("command queue", () => {
       active += 1;
       maxActive = Math.max(maxActive, active);
       calls.push(id);
-      await new Promise((resolve) => setTimeout(resolve, 15));
+      await Promise.resolve();
       active -= 1;
       return id;
     };
@@ -82,24 +82,30 @@ describe("command queue", () => {
     let waited: number | null = null;
     let queuedAhead: number | null = null;
 
-    // First task holds the queue long enough to trigger wait notice.
-    const first = enqueueCommand(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 30));
-    });
+    vi.useFakeTimers();
+    try {
+      // First task holds the queue long enough to trigger wait notice.
+      const first = enqueueCommand(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 8));
+      });
 
-    const second = enqueueCommand(async () => {}, {
-      warnAfterMs: 5,
-      onWait: (ms, ahead) => {
-        waited = ms;
-        queuedAhead = ahead;
-      },
-    });
+      const second = enqueueCommand(async () => {}, {
+        warnAfterMs: 5,
+        onWait: (ms, ahead) => {
+          waited = ms;
+          queuedAhead = ahead;
+        },
+      });
 
-    await Promise.all([first, second]);
+      await vi.advanceTimersByTimeAsync(30);
+      await Promise.all([first, second]);
 
-    expect(waited).not.toBeNull();
-    expect(waited as unknown as number).toBeGreaterThanOrEqual(5);
-    expect(queuedAhead).toBe(0);
+      expect(waited).not.toBeNull();
+      expect(waited as unknown as number).toBeGreaterThanOrEqual(5);
+      expect(queuedAhead).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("getActiveTaskCount returns count of currently executing tasks", async () => {
