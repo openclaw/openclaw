@@ -188,6 +188,25 @@ describe("gateway auth", () => {
     expect(res.method).toBe("token");
   });
 
+  it("treats tailscale serve with x-forwarded-for as direct (regression #20401)", async () => {
+    // Tailscale Serve adds X-Forwarded-For with the real client IP.
+    // Before the fix, this caused the loopback check to fail and reject the request.
+    const res = await authorizeGatewayConnect({
+      auth: { mode: "token", token: "secret", allowTailscale: true },
+      connectAuth: { token: "secret" },
+      req: {
+        socket: { remoteAddress: "127.0.0.1" },
+        headers: {
+          host: "gateway.tailnet-1234.ts.net:443",
+          "x-forwarded-for": "100.117.106.91",
+        },
+      } as never,
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.method).toBe("token");
+  });
+
   it("allows tailscale identity to satisfy token mode auth", async () => {
     const res = await authorizeGatewayConnect({
       auth: { mode: "token", token: "secret", allowTailscale: true },
