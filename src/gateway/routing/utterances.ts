@@ -690,87 +690,9 @@ export const ROUTE_UTTERANCES: Map<TaskType, string[]> = new Map([
       "parse the data from this chart",
     ],
   ],
-
-  [
-    // FALLBACK utterances — casual messages, confirmations, greetings, and
-    // adversarial boundary samples that should NOT trigger any task-specific route.
-    // Training the semantic router on these helps it confidently classify
-    // non-technical messages as FALLBACK rather than misfiring on a task route.
-    TaskType.FALLBACK,
-    [
-      // 原有基础词
-      "你好",
-      "谢谢",
-      "ok",
-      "嗯",
-      "明白了",
-      "好的",
-      "了解",
-      "没问题",
-      "收到",
-      "知道了",
-      // 确认类
-      "好",
-      "行",
-      "可以",
-      "对",
-      "是的",
-      "没错",
-      "同意",
-      "赞",
-      "确认",
-      "通过",
-      // 感谢类
-      "谢了",
-      "多谢",
-      "感谢",
-      "thanks",
-      "thx",
-      "ty",
-      // 闲聊类
-      "早上好",
-      "晚安",
-      "今天怎么样",
-      "辛苦了",
-      "nice",
-      "cool",
-      "不错",
-      // 否定/暂停类
-      "先不急",
-      "等一下",
-      "不用了",
-      "算了",
-      "取消",
-      "暂停",
-      "回头再说",
-      // 简短回应/感叹
-      "?",
-      "啊",
-      "哦",
-      "emmm",
-      "hmm",
-      "哈哈",
-      "lol",
-      "666",
-      "👍",
-      // 英文闲聊
-      "hi",
-      "hello",
-      "hey",
-      "sure",
-      "got it",
-      "understood",
-      "no worries",
-      "sounds good",
-      "yeah",
-      "nope",
-      // 边界/对抗样本 — 防止被 CODE_EDIT 误抢走
-      "改天聊",
-      "改变主意了",
-      "改不了了",
-      // 边界/对抗样本 — 防止被 CODE_DEBUG 误抢走
-      "没问题，不是 bug",
-      "那个错误已经修了",
-    ],
-  ],
 ]);
+// NOTE: TaskType.FALLBACK is intentionally excluded from ROUTE_UTTERANCES.
+// The semantic router should only match positive task routes; FALLBACK is
+// returned by task-resolver.ts when no route score exceeds the threshold.
+// Casual/adversarial samples are handled implicitly by the low-similarity
+// nature of non-technical messages against all task route embeddings.
