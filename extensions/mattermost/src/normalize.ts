@@ -42,5 +42,7 @@ export function looksLikeMattermostTargetId(raw: string): boolean {
   if (/^[@#]/.test(trimmed)) {
     return true;
   }
-  return /^[a-z0-9]{8,}$/i.test(trimmed);
+  // Match Mattermost IDs (26-char alphanumeric) or channel names (lowercase, digits, hyphens, underscores).
+  // Minimum 3 chars to avoid false-positive matches on short words like "hi" or "ok".
+  return /^[a-z0-9_-]{3,}$/i.test(trimmed);
 }

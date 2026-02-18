@@ -138,6 +138,22 @@ export async function fetchMattermostChannel(
   return await client.request<MattermostChannel>(`/channels/${channelId}`);
 }
 
+export async function fetchMattermostChannelByName(
+  client: MattermostClient,
+  teamId: string,
+  channelName: string,
+): Promise<MattermostChannel> {
+  return await client.request<MattermostChannel>(
+    `/teams/${teamId}/channels/name/${encodeURIComponent(channelName)}`,
+  );
+}
+
+export async function fetchMattermostUserTeams(
+  client: MattermostClient,
+): Promise<Array<{ id: string; name?: string }>> {
+  return await client.request<Array<{ id: string; name?: string }>>("/users/me/teams");
+}
+
 export async function sendMattermostTyping(
   client: MattermostClient,
   params: { channelId: string; parentId?: string },
@@ -172,9 +188,10 @@ export async function createMattermostPost(
     message: string;
     rootId?: string;
     fileIds?: string[];
+    props?: Record<string, unknown>;
   },
 ): Promise<MattermostPost> {
-  const payload: Record<string, string> = {
+  const payload: Record<string, unknown> = {
     channel_id: params.channelId,
     message: params.message,
   };
@@ -182,10 +199,34 @@ export async function createMattermostPost(
     payload.root_id = params.rootId;
   }
   if (params.fileIds?.length) {
-    (payload as Record<string, unknown>).file_ids = params.fileIds;
+    payload.file_ids = params.fileIds;
+  }
+  if (params.props) {
+    payload.props = params.props;
   }
   return await client.request<MattermostPost>("/posts", {
     method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateMattermostPost(
+  client: MattermostClient,
+  postId: string,
+  params: {
+    message?: string;
+    props?: Record<string, unknown>;
+  },
+): Promise<MattermostPost> {
+  const payload: Record<string, unknown> = { id: postId };
+  if (params.message !== undefined) {
+    payload.message = params.message;
+  }
+  if (params.props !== undefined) {
+    payload.props = params.props;
+  }
+  return await client.request<MattermostPost>(`/posts/${postId}`, {
+    method: "PUT",
     body: JSON.stringify(payload),
   });
 }

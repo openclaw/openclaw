@@ -15,6 +15,7 @@ import {
   clearHistoryEntriesIfEnabled,
   DEFAULT_GROUP_HISTORY_LIMIT,
   recordPendingHistoryEntryIfEnabled,
+  registerPluginHttpRoute,
   resolveControlCommandGate,
   resolveChannelMediaMaxBytes,
   type HistoryEntry,
@@ -32,6 +33,11 @@ import {
   type MattermostPost,
   type MattermostUser,
 } from "./client.js";
+import {
+  createMattermostInteractionHandler,
+  setInteractionCallbackUrl,
+  setInteractionSecret,
+} from "./interactions.js";
 import {
   createDedupeCache,
   formatInboundFromLabel,
@@ -221,6 +227,47 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
   const botUserId = botUser.id;
   const botUsername = botUser.username?.trim() || undefined;
   runtime.log?.(`mattermost connected as ${botUsername ? `@${botUsername}` : botUserId}`);
+
+  // Derive a stable HMAC secret from the bot token so CLI and gateway share it.
+  setInteractionSecret(botToken);
+
+  // Register HTTP callback endpoint for interactive button clicks.
+  // Mattermost POSTs to this URL when a user clicks a button action.
+  const gatewayPort = typeof cfg.gateway?.port === "number" ? cfg.gateway.port : 18789;
+  const interactionPath = `/mattermost/interactions/${account.accountId}`;
+  const callbackUrl = `http://localhost:${gatewayPort}${interactionPath}`;
+  setInteractionCallbackUrl(account.accountId, callbackUrl);
+  const unregisterInteractions = registerPluginHttpRoute({
+    path: interactionPath,
+    fallbackPath: "/mattermost/interactions/default",
+    handler: createMattermostInteractionHandler({
+      client,
+      botUserId,
+      accountId: account.accountId,
+      callbackUrl,
+      resolveSessionKey: async (channelId: string) => {
+        const channelInfo = await resolveChannelInfo(channelId);
+        const kind = channelKind(channelInfo?.type);
+        const teamId = channelInfo?.team_id ?? undefined;
+        const route = core.channel.routing.resolveAgentRoute({
+          cfg,
+          channel: "mattermost",
+          accountId: account.accountId,
+          teamId,
+          peer: {
+            kind,
+            id: kind === "direct" ? botUserId : channelId,
+          },
+        });
+        return route.sessionKey;
+      },
+      log: (msg) => runtime.log?.(msg),
+    }),
+    pluginId: "mattermost",
+    source: "mattermost-interactions",
+    accountId: account.accountId,
+    log: (msg) => runtime.log?.(msg),
+  });
 
   const channelCache = new Map<string, { value: MattermostChannel | null; expiresAt: number }>();
   const userCache = new Map<string, { value: MattermostUser | null; expiresAt: number }>();
@@ -882,7 +929,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           return;
         }
       }
-    } else if (kind) {
+    } else {
       const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
       const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
       if (groupPolicy === "disabled") {
@@ -1016,15 +1063,19 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     },
   });
 
-  await runWithReconnect(connectOnce, {
-    abortSignal: opts.abortSignal,
-    jitterRatio: 0.2,
-    onError: (err) => {
-      runtime.error?.(`mattermost connection failed: ${String(err)}`);
-      opts.statusSink?.({ lastError: String(err), connected: false });
-    },
-    onReconnect: (delayMs) => {
-      runtime.log?.(`mattermost reconnecting in ${Math.round(delayMs / 1000)}s`);
-    },
-  });
+  try {
+    await runWithReconnect(connectOnce, {
+      abortSignal: opts.abortSignal,
+      jitterRatio: 0.2,
+      onError: (err) => {
+        runtime.error?.(`mattermost connection failed: ${String(err)}`);
+        opts.statusSink?.({ lastError: String(err), connected: false });
+      },
+      onReconnect: (delayMs) => {
+        runtime.log?.(`mattermost reconnecting in ${Math.round(delayMs / 1000)}s`);
+      },
+    });
+  } finally {
+    unregisterInteractions?.();
+  }
 }
