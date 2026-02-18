@@ -84,6 +84,13 @@ function isExpiredCredential(expires: number | undefined): boolean {
   );
 }
 
+type ResolveApiKeyForProfileParams = {
+  cfg?: OpenClawConfig;
+  store: AuthProfileStore;
+  profileId: string;
+  agentDir?: string;
+};
+
 async function refreshOAuthTokenWithLock(params: {
   profileId: string;
   agentDir?: string;
@@ -143,12 +150,9 @@ async function refreshOAuthTokenWithLock(params: {
   });
 }
 
-async function tryResolveOAuthProfile(params: {
-  cfg?: OpenClawConfig;
-  store: AuthProfileStore;
-  profileId: string;
-  agentDir?: string;
-}): Promise<{ apiKey: string; provider: string; email?: string } | null> {
+async function tryResolveOAuthProfile(
+  params: ResolveApiKeyForProfileParams,
+): Promise<{ apiKey: string; provider: string; email?: string } | null> {
   const { cfg, store, profileId } = params;
   const cred = store.profiles[profileId];
   if (!cred || cred.type !== "oauth") {
@@ -187,12 +191,9 @@ async function tryResolveOAuthProfile(params: {
   });
 }
 
-export async function resolveApiKeyForProfile(params: {
-  cfg?: OpenClawConfig;
-  store: AuthProfileStore;
-  profileId: string;
-  agentDir?: string;
-}): Promise<{ apiKey: string; provider: string; email?: string } | null> {
+export async function resolveApiKeyForProfile(
+  params: ResolveApiKeyForProfileParams,
+): Promise<{ apiKey: string; provider: string; email?: string } | null> {
   const { cfg, store, profileId } = params;
   const cred = store.profiles[profileId];
   if (!cred) {
