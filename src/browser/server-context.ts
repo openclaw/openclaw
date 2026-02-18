@@ -1,6 +1,25 @@
 import fs from "node:fs";
+import { fetchJson, fetchOk } from "./cdp.helpers.js";
+import { appendCdpPath, createTargetViaCdp, normalizeCdpWsUrl } from "./cdp.js";
+import {
+  isChromeCdpReady,
+  isChromeReachable,
+  launchOpenClawChrome,
+  resolveOpenClawUserDataDir,
+  stopOpenClawChrome,
+} from "./chrome.js";
 import type { ResolvedBrowserProfile } from "./config.js";
+import { resolveProfile } from "./config.js";
+import {
+  ensureChromeExtensionRelayServer,
+  stopChromeExtensionRelayServer,
+} from "./extension-relay.js";
 import type { PwAiModule } from "./pw-ai-module.js";
+import { getPwAiModule } from "./pw-ai-module.js";
+import {
+  refreshResolvedBrowserConfigFromDisk,
+  resolveBrowserProfileWithHotReload,
+} from "./resolved-config-refresh.js";
 import type {
   BrowserServerState,
   BrowserRouteContext,
@@ -10,24 +29,6 @@ import type {
   ProfileRuntimeState,
   ProfileStatus,
 } from "./server-context.types.js";
-import { appendCdpPath, createTargetViaCdp, getHeadersWithAuth, normalizeCdpWsUrl } from "./cdp.js";
-import {
-  isChromeCdpReady,
-  isChromeReachable,
-  launchOpenClawChrome,
-  resolveOpenClawUserDataDir,
-  stopOpenClawChrome,
-} from "./chrome.js";
-import { resolveProfile } from "./config.js";
-import {
-  ensureChromeExtensionRelayServer,
-  stopChromeExtensionRelayServer,
-} from "./extension-relay.js";
-import { getPwAiModule } from "./pw-ai-module.js";
-import {
-  refreshResolvedBrowserConfigFromDisk,
-  resolveBrowserProfileWithHotReload,
-} from "./resolved-config-refresh.js";
 import { resolveTargetIdFromTabs } from "./target-id.js";
 import { movePathToTrash } from "./trash.js";
 
@@ -59,35 +60,6 @@ function normalizeWsUrl(raw: string | undefined, cdpBaseUrl: string): string | u
     return normalizeCdpWsUrl(raw, cdpBaseUrl);
   } catch {
     return raw;
-  }
-}
-
-async function fetchJson<T>(url: string, timeoutMs = 1500, init?: RequestInit): Promise<T> {
-  const ctrl = new AbortController();
-  const t = setTimeout(ctrl.abort.bind(ctrl), timeoutMs);
-  try {
-    const headers = getHeadersWithAuth(url, (init?.headers as Record<string, string>) || {});
-    const res = await fetch(url, { ...init, headers, signal: ctrl.signal });
-    if (!res.ok) {
-      throw new Error(`HTTP ${res.status}`);
-    }
-    return (await res.json()) as T;
-  } finally {
-    clearTimeout(t);
-  }
-}
-
-async function fetchOk(url: string, timeoutMs = 1500, init?: RequestInit): Promise<void> {
-  const ctrl = new AbortController();
-  const t = setTimeout(ctrl.abort.bind(ctrl), timeoutMs);
-  try {
-    const headers = getHeadersWithAuth(url, (init?.headers as Record<string, string>) || {});
-    const res = await fetch(url, { ...init, headers, signal: ctrl.signal });
-    if (!res.ok) {
-      throw new Error(`HTTP ${res.status}`);
-    }
-  } finally {
-    clearTimeout(t);
   }
 }
 

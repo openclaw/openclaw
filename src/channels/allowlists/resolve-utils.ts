@@ -35,17 +35,25 @@ export function mergeAllowlist(params: {
 
 export function buildAllowlistResolutionSummary<T extends AllowlistUserResolutionLike>(
   resolvedUsers: T[],
+  opts?: { formatResolved?: (entry: T) => string },
 ): {
   resolvedMap: Map<string, T>;
   mapping: string[];
   unresolved: string[];
+  additions: string[];
 } {
   const resolvedMap = new Map(resolvedUsers.map((entry) => [entry.input, entry]));
-  const mapping = resolvedUsers
-    .filter((entry) => entry.resolved && entry.id)
-    .map((entry) => `${entry.input}→${entry.id}`);
-  const unresolved = resolvedUsers.filter((entry) => !entry.resolved).map((entry) => entry.input);
-  return { resolvedMap, mapping, unresolved };
+  const resolvedOk = (entry: T) => Boolean(entry.resolved && entry.id);
+  const formatResolved = opts?.formatResolved ?? ((entry: T) => `${entry.input}→${entry.id}`);
+  const mapping = resolvedUsers.filter(resolvedOk).map(formatResolved);
+  const additions = resolvedUsers
+    .filter(resolvedOk)
+    .map((entry) => entry.id)
+    .filter((entry): entry is string => Boolean(entry));
+  const unresolved = resolvedUsers
+    .filter((entry) => !resolvedOk(entry))
+    .map((entry) => entry.input);
+  return { resolvedMap, mapping, unresolved, additions };
 }
 
 export function resolveAllowlistIdAdditions<T extends AllowlistUserResolutionLike>(params: {
@@ -61,6 +69,47 @@ export function resolveAllowlistIdAdditions<T extends AllowlistUserResolutionLik
     }
   }
   return additions;
+}
+
+export function patchAllowlistUsersInConfigEntries<
+  T extends AllowlistUserResolutionLike,
+  TEntries extends Record<string, unknown>,
+>(params: { entries: TEntries; resolvedMap: Map<string, T> }): TEntries {
+  const nextEntries: Record<string, unknown> = { ...params.entries };
+  for (const [entryKey, entryConfig] of Object.entries(params.entries)) {
+    if (!entryConfig || typeof entryConfig !== "object") {
+      continue;
+    }
+    const users = (entryConfig as { users?: Array<string | number> }).users;
+    if (!Array.isArray(users) || users.length === 0) {
+      continue;
+    }
+    const additions = resolveAllowlistIdAdditions({
+      existing: users,
+      resolvedMap: params.resolvedMap,
+    });
+    nextEntries[entryKey] = {
+      ...entryConfig,
+      users: mergeAllowlist({ existing: users, additions }),
+    };
+  }
+  return nextEntries as TEntries;
+}
+
+export function addAllowlistUserEntriesFromConfigEntry(target: Set<string>, entry: unknown): void {
+  if (!entry || typeof entry !== "object") {
+    return;
+  }
+  const users = (entry as { users?: Array<string | number> }).users;
+  if (!Array.isArray(users)) {
+    return;
+  }
+  for (const value of users) {
+    const trimmed = String(value).trim();
+    if (trimmed && trimmed !== "*") {
+      target.add(trimmed);
+    }
+  }
 }
 
 export function summarizeMapping(
