@@ -297,6 +297,7 @@ export async function runPreparedReply(
             : {}),
         }
       : { ...sessionCtx, ThreadStarterBody: undefined },
+    { userTimezone: cfg.agents?.defaults?.userTimezone },
   );
   const baseBodyForPrompt = isBareSessionReset
     ? baseBodyFinal
