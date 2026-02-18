@@ -1,15 +1,24 @@
-import { stripEnvelope } from "../../../../src/shared/chat-envelope.js";
+import {
+  stripEnvelope,
+  stripUntrustedMetadataBlocks,
+} from "../../../../src/shared/chat-envelope.js";
 import { stripThinkingTags } from "../format.ts";
 
 const textCache = new WeakMap<object, string | null>();
 const thinkingCache = new WeakMap<object, string | null>();
+
+/** Strips envelope and untrusted metadata blocks from user messages */
+function stripUserMessageContent(text: string): string {
+  return stripUntrustedMetadataBlocks(stripEnvelope(text));
+}
 
 export function extractText(message: unknown): string | null {
   const m = message as Record<string, unknown>;
   const role = typeof m.role === "string" ? m.role : "";
   const content = m.content;
   if (typeof content === "string") {
-    const processed = role === "assistant" ? stripThinkingTags(content) : stripEnvelope(content);
+    const processed =
+      role === "assistant" ? stripThinkingTags(content) : stripUserMessageContent(content);
     return processed;
   }
   if (Array.isArray(content)) {
@@ -24,12 +33,14 @@ export function extractText(message: unknown): string | null {
       .filter((v): v is string => typeof v === "string");
     if (parts.length > 0) {
       const joined = parts.join("\n");
-      const processed = role === "assistant" ? stripThinkingTags(joined) : stripEnvelope(joined);
+      const processed =
+        role === "assistant" ? stripThinkingTags(joined) : stripUserMessageContent(joined);
       return processed;
     }
   }
   if (typeof m.text === "string") {
-    const processed = role === "assistant" ? stripThinkingTags(m.text) : stripEnvelope(m.text);
+    const processed =
+      role === "assistant" ? stripThinkingTags(m.text) : stripUserMessageContent(m.text);
     return processed;
   }
   return null;
