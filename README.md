@@ -1,4 +1,4 @@
-# 🤖 Mindbot — Personal AI with Narrative Identity
+# 🤖 Mindbot — Personal AI with Concious and sub-concious memory architecture
 
 <p align="center">
   <strong>IDENTITY. MEMORY. EVOLUTION.</strong>
@@ -150,26 +150,7 @@ Mindbot extends OpenClaw with a **Dual-Process Theory of Mind** architecture, cr
   - `pending-episodes.log` tracks messages awaiting narration
   - Metadata anchors (`<!-- LAST_PROCESSED: timestamp -->`) ensure integrity
 
-### 2. Technical Implementation
-
-**SubconsciousAgent Factory** (`subconscious-agent.ts`):
-- Streaming LLM client with automatic failover to `gpt-4o`
-- Error detection and graceful degradation
-- Comprehensive debug logging
-- Handles telephony audio formats (mu-law 8kHz)
-
-**Model Resolution Hierarchy**:
-1. `mindConfig.config.narrative.provider/model` - Primary narrative model configuration
-2. Chat model fallback - Uses main agent model if not configured
-3. Error handling - Graceful fallback with logging
-
-**Consolidation Service** (`ConsolidationService.ts`):
-- Strict type validation prevents corruption (e.g., `[object Object]` bug fix)
-- Two-phase processing: narrative generation + optional compression
-- Comprehensive error logging with timing and token estimates
-- Empty response protection returns current story unchanged
-
-### 3. Safety & Integrity
+### 2. Safety & Integrity
 
 **Memory Safety**:
 - **Type Validation**: Strict `typeof` checks prevent object/string confusion
