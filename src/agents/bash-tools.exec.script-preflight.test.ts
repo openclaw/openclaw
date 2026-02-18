@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { createExecTool } from "./bash-tools.exec.js";
 
 const isWin = process.platform === "win32";
 
@@ -25,7 +26,6 @@ describe("exec script preflight", () => {
       "utf-8",
     );
 
-    const { createExecTool } = await import("./bash-tools.exec.js");
     const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
 
     await expect(
@@ -50,7 +50,6 @@ describe("exec script preflight", () => {
       "utf-8",
     );
 
-    const { createExecTool } = await import("./bash-tools.exec.js");
     const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
 
     await expect(

@@ -10,6 +10,9 @@ const OPENAI_CODEX_TEMPLATE_MODEL_IDS = ["gpt-5.2-codex"] as const;
 const ANTHROPIC_OPUS_46_MODEL_ID = "claude-opus-4-6";
 const ANTHROPIC_OPUS_46_DOT_MODEL_ID = "claude-opus-4.6";
 const ANTHROPIC_OPUS_TEMPLATE_MODEL_IDS = ["claude-opus-4-5", "claude-opus-4.5"] as const;
+const ANTHROPIC_SONNET_46_MODEL_ID = "claude-sonnet-4-6";
+const ANTHROPIC_SONNET_46_DOT_MODEL_ID = "claude-sonnet-4.6";
+const ANTHROPIC_SONNET_TEMPLATE_MODEL_IDS = ["claude-sonnet-4-5", "claude-sonnet-4.5"] as const;
 
 const ZAI_GLM5_MODEL_ID = "glm-5";
 const ZAI_GLM5_TEMPLATE_MODEL_IDS = ["glm-4.7"] as const;
@@ -139,6 +142,44 @@ function resolveAnthropicOpus46ForwardCompatModel(
   });
 }
 
+function resolveAnthropicSonnet46ForwardCompatModel(
+  provider: string,
+  modelId: string,
+  modelRegistry: ModelRegistry,
+): Model<Api> | undefined {
+  const normalizedProvider = normalizeProviderId(provider);
+  if (normalizedProvider !== "anthropic") {
+    return undefined;
+  }
+
+  const trimmedModelId = modelId.trim();
+  const lower = trimmedModelId.toLowerCase();
+  const isSonnet46 =
+    lower === ANTHROPIC_SONNET_46_MODEL_ID ||
+    lower === ANTHROPIC_SONNET_46_DOT_MODEL_ID ||
+    lower.startsWith(`${ANTHROPIC_SONNET_46_MODEL_ID}-`) ||
+    lower.startsWith(`${ANTHROPIC_SONNET_46_DOT_MODEL_ID}-`);
+  if (!isSonnet46) {
+    return undefined;
+  }
+
+  const templateIds: string[] = [];
+  if (lower.startsWith(ANTHROPIC_SONNET_46_MODEL_ID)) {
+    templateIds.push(lower.replace(ANTHROPIC_SONNET_46_MODEL_ID, "claude-sonnet-4-5"));
+  }
+  if (lower.startsWith(ANTHROPIC_SONNET_46_DOT_MODEL_ID)) {
+    templateIds.push(lower.replace(ANTHROPIC_SONNET_46_DOT_MODEL_ID, "claude-sonnet-4.5"));
+  }
+  templateIds.push(...ANTHROPIC_SONNET_TEMPLATE_MODEL_IDS);
+
+  return cloneFirstTemplateModel({
+    normalizedProvider,
+    trimmedModelId,
+    templateIds,
+    modelRegistry,
+  });
+}
+
 // Z.ai's GLM-5 may not be present in pi-ai's built-in model catalog yet.
 // When a user configures zai/glm-5 without a models.json entry, clone glm-4.7 as a forward-compat fallback.
 function resolveZaiGlm5ForwardCompatModel(
@@ -243,6 +284,7 @@ export function resolveForwardCompatModel(
   return (
     resolveOpenAICodexGpt53FallbackModel(provider, modelId, modelRegistry) ??
     resolveAnthropicOpus46ForwardCompatModel(provider, modelId, modelRegistry) ??
+    resolveAnthropicSonnet46ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveZaiGlm5ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveAntigravityOpus46ForwardCompatModel(provider, modelId, modelRegistry)
   );
