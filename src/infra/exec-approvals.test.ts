@@ -34,26 +34,6 @@ function makeTempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-exec-approvals-"));
 }
 
-function createSafeBinJqCase(params: { command: string; seedFileName?: string }) {
-  const dir = makeTempDir();
-  const binDir = path.join(dir, "bin");
-  fs.mkdirSync(binDir, { recursive: true });
-  const exeName = process.platform === "win32" ? "jq.exe" : "jq";
-  const exe = path.join(binDir, exeName);
-  fs.writeFileSync(exe, "");
-  fs.chmodSync(exe, 0o755);
-  if (params.seedFileName) {
-    fs.writeFileSync(path.join(dir, params.seedFileName), "{}");
-  }
-  const res = analyzeShellCommand({
-    command: params.command,
-    cwd: dir,
-    env: makePathEnv(binDir),
-  });
-  expect(res.ok).toBe(true);
-  return { dir, segment: res.segments[0] };
-}
-
 describe("exec approvals allowlist matching", () => {
   it("ignores basename-only patterns", () => {
     const resolution = {
@@ -409,10 +389,14 @@ describe("exec approvals safe bins", () => {
     if (process.platform === "win32") {
       return;
     }
-    const { dir, segment } = createSafeBinJqCase({ command: "jq .foo" });
+    const dir = makeTempDir();
     const ok = isSafeBinUsage({
-      argv: segment.argv,
-      resolution: segment.resolution,
+      argv: ["jq", ".foo"],
+      resolution: {
+        rawExecutable: "jq",
+        resolvedPath: "/usr/bin/jq",
+        executableName: "jq",
+      },
       safeBins: normalizeSafeBins(["jq"]),
       cwd: dir,
     });
@@ -423,15 +407,34 @@ describe("exec approvals safe bins", () => {
     if (process.platform === "win32") {
       return;
     }
-    const { dir, segment } = createSafeBinJqCase({
-      command: "jq .foo secret.json",
-      seedFileName: "secret.json",
-    });
+    const dir = makeTempDir();
+    fs.writeFileSync(path.join(dir, "secret.json"), "{}");
     const ok = isSafeBinUsage({
-      argv: segment.argv,
-      resolution: segment.resolution,
+      argv: ["jq", ".foo", "secret.json"],
+      resolution: {
+        rawExecutable: "jq",
+        resolvedPath: "/usr/bin/jq",
+        executableName: "jq",
+      },
       safeBins: normalizeSafeBins(["jq"]),
       cwd: dir,
+    });
+    expect(ok).toBe(false);
+  });
+
+  it("blocks safe bins resolved from untrusted directories", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const ok = isSafeBinUsage({
+      argv: ["jq", ".foo"],
+      resolution: {
+        rawExecutable: "jq",
+        resolvedPath: "/tmp/evil-bin/jq",
+        executableName: "jq",
+      },
+      safeBins: normalizeSafeBins(["jq"]),
+      cwd: "/tmp",
     });
     expect(ok).toBe(false);
   });
