@@ -129,7 +129,7 @@ describe("memory search citations", () => {
       },
     ]);
 
-    const cfg = {
+    const cfg = asOpenClawConfig({
       memory: { citations: "off" },
       agents: {
         defaults: {
@@ -139,7 +139,7 @@ describe("memory search citations", () => {
         },
         list: [{ id: "main", default: true }],
       },
-    };
+    });
     const tool = createMemorySearchTool({ config: cfg });
     if (!tool) {
       throw new Error("tool missing");

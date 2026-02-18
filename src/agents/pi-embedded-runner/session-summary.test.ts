@@ -12,10 +12,17 @@ import {
 } from "./session-summary.js";
 
 function makeMessage(role: "user" | "assistant", text: string): AgentMessage {
+  if (role === "user") {
+    return {
+      role: "user",
+      content: [{ type: "text", text }],
+      timestamp: Date.now(),
+    } as AgentMessage;
+  }
   return {
-    role,
+    role: "assistant",
     content: [{ type: "text", text }],
-  };
+  } as AgentMessage;
 }
 
 describe("session summary state", () => {
@@ -37,6 +44,8 @@ describe("session summary state", () => {
         toolCallId: "call_1",
         toolName: "exec",
         content: [{ type: "text", text: "ignored" }],
+        isError: false,
+        timestamp: Date.now(),
       },
       makeMessage("assistant", "third"),
     ];

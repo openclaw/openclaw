@@ -3,10 +3,17 @@ import { describe, expect, it } from "vitest";
 import { computeStaticPromptTokens, planContextMessages } from "./context-planner.js";
 
 function makeTextMessage(role: "user" | "assistant", chars: number): AgentMessage {
+  if (role === "user") {
+    return {
+      role: "user",
+      content: [{ type: "text", text: "x".repeat(chars) }],
+      timestamp: Date.now(),
+    } as AgentMessage;
+  }
   return {
-    role,
+    role: "assistant",
     content: [{ type: "text", text: "x".repeat(chars) }],
-  };
+  } as AgentMessage;
 }
 
 describe("context planner", () => {
