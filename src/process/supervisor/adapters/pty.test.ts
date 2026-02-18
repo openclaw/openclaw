@@ -124,7 +124,7 @@ describe("createPtyAdapter", () => {
 
     await expect(waitPromise).resolves.toEqual({ code: 0, signal: 9 });
 
-    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.advanceTimersByTimeAsync(4_001);
     await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: 9 });
   });
 

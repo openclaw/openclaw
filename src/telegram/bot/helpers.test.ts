@@ -8,18 +8,13 @@ import {
 } from "./helpers.js";
 
 describe("resolveTelegramForumThreadId", () => {
-  it("returns undefined for non-forum groups even with messageThreadId", () => {
-    // Reply threads in regular groups should not create separate sessions
-    expect(resolveTelegramForumThreadId({ isForum: false, messageThreadId: 42 })).toBeUndefined();
-  });
-
-  it("returns undefined for non-forum groups without messageThreadId", () => {
-    expect(
-      resolveTelegramForumThreadId({ isForum: false, messageThreadId: undefined }),
-    ).toBeUndefined();
-    expect(
-      resolveTelegramForumThreadId({ isForum: undefined, messageThreadId: 99 }),
-    ).toBeUndefined();
+  it.each([
+    { isForum: false, messageThreadId: 42 },
+    { isForum: false, messageThreadId: undefined },
+    { isForum: undefined, messageThreadId: 99 },
+  ])("returns undefined for non-forum groups", (params) => {
+    // Reply threads in regular groups should not create separate sessions.
+    expect(resolveTelegramForumThreadId(params)).toBeUndefined();
   });
 
   it("returns General topic (1) for forum groups without messageThreadId", () => {
