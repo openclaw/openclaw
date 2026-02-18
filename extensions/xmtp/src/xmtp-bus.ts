@@ -15,7 +15,8 @@ export interface XmtpBusOptions {
   dbEncryptionKey: string;
   env: "local" | "dev" | "production";
   dbPath?: string;
-  shouldAutoConsent?: (senderAddress: string) => boolean;
+  // Default to auto-consenting DMs so pairing flows can proceed.
+  shouldConsentDm?: (senderAddress: string) => boolean;
   onMessage: (params: {
     senderAddress: string;
     senderInboxId: string;
@@ -156,7 +157,7 @@ export async function startXmtpBus(options: XmtpBusOptions): Promise<XmtpBusHand
     dbEncryptionKey,
     env,
     dbPath: configDbPath,
-    shouldAutoConsent,
+    shouldConsentDm = () => true,
     onMessage,
     onError,
     onConnect,
@@ -181,15 +182,15 @@ export async function startXmtpBus(options: XmtpBusOptions): Promise<XmtpBusHand
   agent.on("conversation", async (ctx) => {
     try {
       if (ctx.isDM(ctx.conversation)) {
-        if (!shouldAutoConsent) {
+        const senderAddress = await (
+          ctx as { getSenderAddress?: () => Promise<string | null> }
+        ).getSenderAddress?.();
+        if (!senderAddress) {
           ctx.conversation.updateConsentState("allowed");
-        } else {
-          const senderAddress = await (
-            ctx as { getSenderAddress?: () => Promise<string | null> }
-          ).getSenderAddress?.();
-          if (senderAddress && shouldAutoConsent(senderAddress.toLowerCase())) {
-            ctx.conversation.updateConsentState("allowed");
-          }
+          return;
+        }
+        if (shouldConsentDm(senderAddress.toLowerCase())) {
+          ctx.conversation.updateConsentState("allowed");
         }
       }
     } catch (err) {

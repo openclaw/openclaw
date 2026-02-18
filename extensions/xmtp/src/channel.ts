@@ -250,7 +250,7 @@ export const xmtpPlugin: ChannelPlugin<ResolvedXmtpAccount> = {
         dbEncryptionKey: account.dbEncryptionKey,
         env: account.env,
         dbPath: account.config.dbPath,
-        shouldAutoConsent: (senderAddress: string) => {
+        shouldConsentDm: (senderAddress: string) => {
           const cfg = runtime.config.loadConfig() as OpenClawConfig;
           const freshAccount = resolveXmtpAccount({
             cfg,
