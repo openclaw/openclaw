@@ -71,7 +71,7 @@ final class ReplyNotificationObserver {
 
         Task {
             let sent = await self.notificationManager.send(
-                title: AppStateStore.shared.assistantName,
+                title: "OpenClaw",
                 body: body,
                 sound: nil,
                 priority: .active)

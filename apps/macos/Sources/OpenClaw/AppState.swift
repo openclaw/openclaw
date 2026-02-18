@@ -172,8 +172,6 @@ final class AppState {
         }
     }
 
-    var assistantName: String = "OpenClaw"
-
     var connectionMode: ConnectionMode {
         didSet {
             self.ifNotPreview { UserDefaults.standard.set(self.connectionMode.rawValue, forKey: connectionModeKey) }

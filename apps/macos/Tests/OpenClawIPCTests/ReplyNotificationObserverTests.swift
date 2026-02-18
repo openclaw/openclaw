@@ -295,13 +295,6 @@ struct ReplyNotificationObserverTests {
         }
     }
 
-    @Test("AppState.assistantName defaults to OpenClaw")
-    @MainActor
-    func assistantNameDefault() {
-        let state = AppState(preview: true)
-        #expect(state.assistantName == "OpenClaw")
-    }
-
     @Test("replyNotificationsEnabledKey constant matches expected value")
     func constantKey() {
         #expect(replyNotificationsEnabledKey == "openclaw.replyNotificationsEnabled")
