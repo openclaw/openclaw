@@ -23,12 +23,12 @@ It works anywhere OpenClaw can send audio; Telegram gets a round voice-note bubb
 Edge TTS uses Microsoft Edge's online neural TTS service via the `node-edge-tts`
 library. It's a hosted service (not local), uses Microsoft’s endpoints, and does
 not require an API key. `node-edge-tts` exposes speech configuration options and
-output formats, but not all options are supported by the Edge service. citeturn2search0
+output formats, but not all options are supported by the Edge service.
 
 Because Edge TTS is a public web service without a published SLA or quota, treat it
 as best-effort. If you need guaranteed limits and support, use OpenAI or ElevenLabs.
 Microsoft's Speech REST API documents a 10‑minute audio limit per request; Edge TTS
-does not publish limits, so assume similar or lower limits. citeturn0search3
+does not publish limits, so assume similar or lower limits.
 
 ## Optional keys
 
@@ -314,10 +314,10 @@ These override `messages.tts.*` for that host.
   - 44.1kHz / 128kbps is the default balance for speech clarity.
 - **Edge TTS**: uses `edge.outputFormat` (default `audio-24khz-48kbitrate-mono-mp3`).
   - `node-edge-tts` accepts an `outputFormat`, but not all formats are available
-    from the Edge service. citeturn2search0
-  - Output format values follow Microsoft Speech output formats (including Ogg/WebM Opus). citeturn1search0
+    from the Edge service.
+  - Output format values follow Microsoft Speech output formats (including Ogg/WebM Opus).
   - Telegram `sendVoice` accepts OGG/MP3/M4A; use OpenAI/ElevenLabs if you need
-    guaranteed Opus voice notes. citeturn1search1
+    guaranteed Opus voice notes.
   - If the configured Edge output format fails, OpenClaw retries with MP3.
 
 OpenAI/ElevenLabs formats are fixed; Telegram expects Opus for voice-note UX.
