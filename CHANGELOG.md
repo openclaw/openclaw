@@ -10,6 +10,10 @@ Docs: https://docs.openclaw.ai
 - Gateway/CLI: add paired-device hygiene flows with `device.pair.remove`, plus `openclaw devices remove` and guarded `openclaw devices clear --yes [--pending]` commands for removing paired entries and optionally rejecting pending requests. (#20057) Thanks @mbelinky.
 - Skills: harden coding-agent skill guidance by removing shell-command examples that interpolate untrusted issue text directly into command strings.
 
+### Changes
+
+- Android: add timeout constant and exponential backoff to gateway discovery; prevents freezes when gateways are offline. (#9744) Thanks @hubertusgbecker.
+
 ### Fixes
 
 - iOS/Onboarding: stabilize pairing and reconnect behavior by resetting stale pairing request state on manual retry, disconnecting both operator and node gateways on operator failure, and avoiding duplicate pairing loops from operator transport identity attachment. (#20056) Thanks @mbelinky.
