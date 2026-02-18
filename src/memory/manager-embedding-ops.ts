@@ -17,13 +17,12 @@ import {
   type MemoryChunk,
   type MemoryFileEntry,
 } from "./internal.js";
-import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
+import { FTS_ONLY_MODEL, MemoryManagerSyncOps } from "./manager-sync-ops.js";
 import type { SessionFileEntry } from "./session-files.js";
 import type { MemorySource } from "./types.js";
 
 const VECTOR_TABLE = "chunks_vec";
 const FTS_TABLE = "chunks_fts";
-const FTS_ONLY_MODEL = "fts-only";
 const EMBEDDING_CACHE_TABLE = "embedding_cache";
 const EMBEDDING_BATCH_MAX_TOKENS = 8000;
 const EMBEDDING_INDEX_CONCURRENCY = 4;
@@ -208,7 +207,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   protected computeProviderKey(): string {
     // FTS-only mode: no provider, use a constant key
     if (!this.provider) {
-      return hashText(JSON.stringify({ provider: "none", model: "fts-only" }));
+      return hashText(JSON.stringify({ provider: "none", model: FTS_ONLY_MODEL }));
     }
     if (this.provider.id === "openai" && this.openAi) {
       const entries = Object.entries(this.openAi.headers)
