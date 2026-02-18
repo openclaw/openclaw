@@ -65,6 +65,7 @@ export async function maybeBroadcastMessage(params: {
         },
         dmScope: params.cfg.session?.dmScope,
         identityLinks: params.cfg.session?.identityLinks,
+        channelGroups: params.cfg.session?.channelGroups,
       }),
       mainSessionKey: buildAgentMainSessionKey({
         agentId: normalizedAgentId,

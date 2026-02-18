@@ -255,6 +255,7 @@ export function resolveDiscordAutoThreadContext(params: {
   channel: string;
   messageChannelId: string;
   createdThreadId?: string | null;
+  channelGroups?: Record<string, string[]>;
 }): DiscordAutoThreadContext | null {
   const createdThreadId = String(params.createdThreadId ?? "").trim();
   if (!createdThreadId) {
@@ -269,11 +270,13 @@ export function resolveDiscordAutoThreadContext(params: {
     agentId: params.agentId,
     channel: params.channel,
     peer: { kind: "channel", id: createdThreadId },
+    channelGroups: params.channelGroups,
   });
   const parentSessionKey = buildAgentSessionKey({
     agentId: params.agentId,
     channel: params.channel,
     peer: { kind: "channel", id: messageChannelId },
+    channelGroups: params.channelGroups,
   });
 
   return {
@@ -304,6 +307,7 @@ export async function resolveDiscordAutoThreadReplyPlan(params: {
   replyToMode: ReplyToMode;
   agentId: string;
   channel: string;
+  channelGroups?: Record<string, string[]>;
 }): Promise<DiscordAutoThreadReplyPlan> {
   const messageChannelId = (
     params.messageChannelId ||
@@ -338,6 +342,7 @@ export async function resolveDiscordAutoThreadReplyPlan(params: {
         channel: params.channel,
         messageChannelId,
         createdThreadId,
+        channelGroups: params.channelGroups,
       })
     : null;
   return { ...deliveryPlan, createdThreadId, autoThreadContext };

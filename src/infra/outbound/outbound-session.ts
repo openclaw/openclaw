@@ -126,6 +126,7 @@ function buildBaseSessionKey(params: {
     peer: params.peer,
     dmScope: params.cfg.session?.dmScope ?? "main",
     identityLinks: params.cfg.session?.identityLinks,
+    channelGroups: params.cfg.session?.channelGroups,
   });
 }
 

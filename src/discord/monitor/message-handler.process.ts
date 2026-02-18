@@ -466,6 +466,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         agentId: route.agentId,
         channel: route.channel,
         peer: { kind: "channel", id: threadParentId },
+        channelGroups: cfg.session?.channelGroups,
       });
     }
   }
@@ -489,6 +490,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     replyToMode,
     agentId: route.agentId,
     channel: route.channel,
+    channelGroups: cfg.session?.channelGroups,
   });
   const deliverTarget = replyPlan.deliverTarget;
   const replyTarget = replyPlan.replyTarget;
