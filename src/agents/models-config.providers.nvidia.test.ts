@@ -67,15 +67,15 @@ describe("NVIDIA provider", () => {
     expect(modelIds).toContain("google/gemma-3n-e4b-it");
   });
 
-  it("should have at least 35 models in the catalog", () => {
+  it("should have at least 50 models in the catalog", () => {
     const provider = buildNvidiaProvider();
-    expect(provider.models.length).toBeGreaterThanOrEqual(35);
+    expect(provider.models.length).toBeGreaterThanOrEqual(50);
   });
 
   it("should mark vision models with image input", () => {
     const provider = buildNvidiaProvider();
     const visionModels = provider.models.filter((m) => m.input.includes("image"));
-    expect(visionModels.length).toBeGreaterThanOrEqual(5);
+    expect(visionModels.length).toBeGreaterThanOrEqual(8);
     for (const model of visionModels) {
       expect(model.input).toContain("text");
       expect(model.input).toContain("image");
@@ -85,7 +85,7 @@ describe("NVIDIA provider", () => {
   it("should mark reasoning models correctly", () => {
     const provider = buildNvidiaProvider();
     const reasoningModels = provider.models.filter((m) => m.reasoning);
-    expect(reasoningModels.length).toBeGreaterThanOrEqual(3);
+    expect(reasoningModels.length).toBeGreaterThanOrEqual(10);
   });
 });
 
