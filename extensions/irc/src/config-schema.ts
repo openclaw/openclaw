@@ -69,6 +69,7 @@ export const IrcAccountSchemaBase = z
     chunkMode: z.enum(["length", "newline"]).optional(),
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
+    commandPrefix: z.string().min(1).max(3).optional(),
     responsePrefix: z.string().optional(),
     mediaMaxMb: z.number().positive().optional(),
   })

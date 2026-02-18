@@ -514,4 +514,16 @@ describe("control command parsing", () => {
       }),
     ).toBe(true);
   });
+
+  it("detects commands with custom commandPrefix", () => {
+    expect(hasControlCommand("!status", undefined, { commandPrefix: "!" })).toBe(true);
+    expect(hasControlCommand("!help", undefined, { commandPrefix: "!" })).toBe(true);
+    expect(hasControlCommand("!send on", undefined, { commandPrefix: "!" })).toBe(true);
+    expect(hasControlCommand("~status", undefined, { commandPrefix: "~" })).toBe(true);
+    expect(hasControlCommand(">>status", undefined, { commandPrefix: ">>" })).toBe(true);
+    // Does not match when prefix is different
+    expect(hasControlCommand("!status", undefined, { commandPrefix: "~" })).toBe(false);
+    // Plain text never matches
+    expect(hasControlCommand("hello", undefined, { commandPrefix: "!" })).toBe(false);
+  });
 });
