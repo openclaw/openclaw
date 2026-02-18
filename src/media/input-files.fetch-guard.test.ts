@@ -6,6 +6,10 @@ vi.mock("../infra/net/fetch-guard.js", () => ({
   fetchWithSsrFGuard: (...args: unknown[]) => fetchWithSsrFGuardMock(...args),
 }));
 
+async function waitForMicrotaskTurn(): Promise<void> {
+  await new Promise<void>((resolve) => queueMicrotask(resolve));
+}
+
 describe("fetchWithGuard", () => {
   it("rejects oversized streamed payloads and cancels the stream", async () => {
     let canceled = false;
@@ -47,7 +51,7 @@ describe("fetchWithGuard", () => {
     ).rejects.toThrow("Content too large");
 
     // Allow cancel() microtask to run.
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await waitForMicrotaskTurn();
 
     expect(canceled).toBe(true);
     expect(release).toHaveBeenCalledTimes(1);
