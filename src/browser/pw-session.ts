@@ -6,7 +6,6 @@ import type {
   Request,
   Response,
 } from "playwright-core";
-import { chromium } from "playwright-core";
 import { formatErrorMessage } from "../infra/errors.js";
 import { appendCdpPath, fetchJson, getHeadersWithAuth, withCdpSocket } from "./cdp.helpers.js";
 import { normalizeCdpWsUrl } from "./cdp.js";
@@ -330,6 +329,11 @@ async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
         const wsUrl = await getChromeWebSocketUrl(normalized, timeout).catch(() => null);
         const endpoint = wsUrl ?? normalized;
         const headers = getHeadersWithAuth(endpoint);
+        const { chromium } = await import("playwright-core").catch(() => {
+          throw new Error(
+            "Optional dependency playwright-core is not installed. Run: npm install playwright-core",
+          );
+        });
         const browser = await chromium.connectOverCDP(endpoint, { timeout, headers });
         const onDisconnected = () => {
           if (cached?.browser === browser) {

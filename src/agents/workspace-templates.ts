@@ -5,7 +5,7 @@ import { pathExists } from "../utils.js";
 
 const FALLBACK_TEMPLATE_DIR = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
-  "../../docs/reference/templates",
+  "../../assets/templates",
 );
 
 let cachedTemplateDir: string | undefined;
@@ -30,8 +30,8 @@ export async function resolveWorkspaceTemplateDir(opts?: {
 
     const packageRoot = await resolveOpenClawPackageRoot({ moduleUrl, argv1, cwd });
     const candidates = [
-      packageRoot ? path.join(packageRoot, "docs", "reference", "templates") : null,
-      cwd ? path.resolve(cwd, "docs", "reference", "templates") : null,
+      packageRoot ? path.join(packageRoot, "assets", "templates") : null,
+      cwd ? path.resolve(cwd, "assets", "templates") : null,
       FALLBACK_TEMPLATE_DIR,
     ].filter(Boolean) as string[];
 

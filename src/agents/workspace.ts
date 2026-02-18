@@ -64,7 +64,7 @@ async function loadTemplate(name: string): Promise<string> {
       return stripFrontMatter(content);
     } catch {
       throw new Error(
-        `Missing workspace template: ${name} (${templatePath}). Ensure docs/reference/templates are packaged.`,
+        `Missing workspace template: ${name} (${templatePath}). Ensure assets/templates are packaged.`,
       );
     }
   })();
