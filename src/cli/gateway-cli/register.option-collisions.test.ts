@@ -1,20 +1,13 @@
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 
 const callGatewayCli = vi.fn(async (_method: string, _opts: unknown, _params?: unknown) => ({
   ok: true,
 }));
 const gatewayStatusCommand = vi.fn(async (_opts: unknown, _runtime: unknown) => {});
 
-const runtimeLogs: string[] = [];
-const runtimeErrors: string[] = [];
-const defaultRuntime = {
-  log: (msg: string) => runtimeLogs.push(msg),
-  error: (msg: string) => runtimeErrors.push(msg),
-  exit: (code: number) => {
-    throw new Error(`__exit__:${code}`);
-  },
-};
+const { defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
 
 vi.mock("../cli-utils.js", () => ({
   runCommandWithRuntime: async (
@@ -119,8 +112,7 @@ vi.mock("./discover.js", () => ({
 
 describe("gateway register option collisions", () => {
   beforeEach(() => {
-    runtimeLogs.length = 0;
-    runtimeErrors.length = 0;
+    resetRuntimeCapture();
     callGatewayCli.mockClear();
     gatewayStatusCommand.mockClear();
   });
