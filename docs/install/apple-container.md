@@ -20,7 +20,7 @@ title: "Apple Container"
 **Official sources:**
 
 - GitHub: <https://github.com/apple/container>
-- Homebrew: `brew install container`
+- Install packages: <https://github.com/apple/container/releases>
 - Provides the `container` command for all container operations
 
 The setup script also supports **Docker** and **Podman** as fallbacks, making it flexible across different macOS setups.
@@ -54,7 +54,7 @@ Choose Apple Container if:
 Choose **one** container runtime:
 
 - **Apple Container** (recommended for macOS):
-  - Install with: `brew install container`
+  - Install with the signed `.pkg` from <https://github.com/apple/container/releases>
   - GitHub: <https://github.com/apple/container>
   - The `container` command is Apple's official tool
   - Lightweight, native to macOS, optimized for Apple Silicon
@@ -235,7 +235,7 @@ container run -d --name openclaw-gateway \
 The setup script automatically detects available container runtimes in this priority order:
 
 1. **Apple Container** (preferred) — `container` command
-   - Apple's official tool: `brew install container`
+   - Install via signed `.pkg`: <https://github.com/apple/container/releases>
    - GitHub: <https://github.com/apple/container>
    - If found: uses Apple Container for everything
    - Fast, lightweight, native to macOS
@@ -257,7 +257,9 @@ Error: No container runtime found. Install 'container', 'docker', or 'podman'
 **Recommendation:** Install Apple Container for the best experience on macOS:
 
 ```bash
-brew install container
+# Download and install the latest signed package from:
+# https://github.com/apple/container/releases
+container system start
 ```
 
 You don't need Docker or Podman unless you're already using them for other projects.
@@ -390,40 +392,13 @@ If you choose to run as root for convenience, you accept the security tradeoff.
 
 ## Faster rebuilds (recommended)
 
-To speed up rebuilds, ensure your Dockerfile layers are cached properly. The image should follow this pattern:
-
-```dockerfile
-FROM node:22-bookworm
-
-# Install Bun (required for build scripts)
-RUN curl -fsSL https://bun.sh/install | bash
-ENV PATH="/root/.bun/bin:${PATH}"
-
-RUN corepack enable
-
-WORKDIR /app
-
-# Cache dependencies unless package metadata changes
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
-COPY ui/package.json ./ui/package.json
-COPY scripts ./scripts
-
-RUN pnpm install --frozen-lockfile
-
-COPY . .
-RUN pnpm build
-RUN pnpm ui:install
-RUN pnpm ui:build
-
-ENV NODE_ENV=production
-
-CMD ["node","dist/index.js"]
-```
+Use the repository `Dockerfile` as the source of truth for build caching and runtime hardening. Avoid keeping a copy in docs, because the setup script depends on current build args like `OPENCLAW_DOCKER_APT_PACKAGES` and optional browser installs (`OPENCLAW_INSTALL_BROWSER`).
 
 **Tips:**
 
-- Dependency layers are cached unless lockfiles change
-- Avoids re-running `pnpm install` on code-only changes
+- Dependency layers stay cached unless lockfiles change
+- Rebuild with `OPENCLAW_DOCKER_APT_PACKAGES` when you need extra system tools
+- Set `OPENCLAW_INSTALL_BROWSER=1` only when you want Chromium baked into the image
 - First build is slower (downloads base image); subsequent builds are fast
 
 To force a full rebuild:
@@ -466,11 +441,9 @@ For configuration details, see [Agent Sandbox](/gateway/sandboxing).
 
 ### `container` command not found
 
-The `container` command is Apple's official tool. Install it with Homebrew:
+The `container` command is Apple's official tool. Install the latest signed `.pkg` from:
 
-```bash
-brew install container
-```
+<https://github.com/apple/container/releases>
 
 Then start the Apple Container service:
 
@@ -481,7 +454,7 @@ container system start
 **Official sources:**
 
 - GitHub: <https://github.com/apple/container>
-- Homebrew formula: <https://formulae.brew.sh/formula/container>
+- Releases: <https://github.com/apple/container/releases>
 
 **Alternative: Use Docker or Podman instead**
 

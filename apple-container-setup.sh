@@ -175,12 +175,23 @@ echo ""
 echo "==> Starting gateway"
 "$CONTAINER_CMD" rm -f openclaw-gateway >/dev/null 2>&1 || true
 
-"$CONTAINER_CMD" run -d --name openclaw-gateway \
-  --memory 2g \
-  "${COMMON_ARGS[@]}" \
-  -p "$OPENCLAW_GATEWAY_PORT:18789" \
-  -p "$OPENCLAW_BRIDGE_PORT:18790" \
-  "$IMAGE_NAME" node dist/index.js gateway --bind "$OPENCLAW_GATEWAY_BIND" --port 18789 --allow-unconfigured
+# Docker/Podman support --init; Apple container does not expose that flag.
+if "$CONTAINER_CMD" run --help 2>/dev/null | grep -Eq -- '(^|[[:space:]])--init([[:space:],]|$)'; then
+  "$CONTAINER_CMD" run -d --name openclaw-gateway \
+    --init \
+    --memory 2g \
+    "${COMMON_ARGS[@]}" \
+    -p "$OPENCLAW_GATEWAY_PORT:18789" \
+    -p "$OPENCLAW_BRIDGE_PORT:18790" \
+    "$IMAGE_NAME" node dist/index.js gateway --bind "$OPENCLAW_GATEWAY_BIND" --port 18789 --allow-unconfigured
+else
+  "$CONTAINER_CMD" run -d --name openclaw-gateway \
+    --memory 2g \
+    "${COMMON_ARGS[@]}" \
+    -p "$OPENCLAW_GATEWAY_PORT:18789" \
+    -p "$OPENCLAW_BRIDGE_PORT:18790" \
+    "$IMAGE_NAME" node dist/index.js gateway --bind "$OPENCLAW_GATEWAY_BIND" --port 18789 --allow-unconfigured
+fi
 
 echo ""
 echo "==> Provider setup (optional)"

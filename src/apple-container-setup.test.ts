@@ -58,15 +58,27 @@ function createEnv(
   sandbox: ContainerSetupSandbox,
   overrides: Record<string, string | undefined> = {},
 ): NodeJS.ProcessEnv {
-  return {
-    ...process.env,
+  const env: NodeJS.ProcessEnv = {
     PATH: `${sandbox.binDir}:${process.env.PATH ?? ""}`,
+    HOME: process.env.HOME ?? sandbox.rootDir,
+    LANG: process.env.LANG,
+    LC_ALL: process.env.LC_ALL,
+    TMPDIR: process.env.TMPDIR,
     CONTAINER_STUB_LOG: sandbox.logPath,
     OPENCLAW_GATEWAY_TOKEN: "test-token",
     OPENCLAW_CONFIG_DIR: join(sandbox.rootDir, "config"),
     OPENCLAW_WORKSPACE_DIR: join(sandbox.rootDir, "openclaw"),
-    ...overrides,
   };
+
+  for (const [key, value] of Object.entries(overrides)) {
+    if (value === undefined) {
+      delete env[key];
+    } else {
+      env[key] = value;
+    }
+  }
+
+  return env;
 }
 
 describe("apple-container-setup.sh", () => {
@@ -133,6 +145,30 @@ describe("apple-container-setup.sh", () => {
     const log = await readFile(sandbox.logPath, "utf8");
     expect(log).toContain("-v openclaw-home:/home/node");
     expect(log).toContain("-v /tmp/data:/data");
+  });
+
+  it("does not inherit host OPENCLAW_* env vars", async () => {
+    const sandbox = await createContainerSetupSandbox();
+    const original = process.env.OPENCLAW_IMAGE;
+    process.env.OPENCLAW_IMAGE = "host-image:override";
+
+    try {
+      const result = spawnSync("bash", [sandbox.scriptPath], {
+        cwd: sandbox.rootDir,
+        env: createEnv(sandbox),
+        encoding: "utf8",
+      });
+
+      expect(result.status).toBe(0);
+      const envFile = await readFile(join(sandbox.rootDir, ".env"), "utf8");
+      expect(envFile).toContain("OPENCLAW_IMAGE=openclaw:local");
+    } finally {
+      if (original === undefined) {
+        delete process.env.OPENCLAW_IMAGE;
+      } else {
+        process.env.OPENCLAW_IMAGE = original;
+      }
+    }
   });
 
   it("avoids associative arrays for Bash 3.2 compatibility", async () => {
