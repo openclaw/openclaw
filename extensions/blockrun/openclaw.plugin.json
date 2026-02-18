@@ -1,0 +1,9 @@
+{
+  "id": "blockrun",
+  "providers": ["blockrun"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

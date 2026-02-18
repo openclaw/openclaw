@@ -196,6 +196,10 @@
           - "docs/cli/security.md"
           - "docs/gateway/security.md"
 
+"extensions: blockrun":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/blockrun/**"
 "extensions: copilot-proxy":
   - changed-files:
       - any-glob-to-any-file:
