@@ -26,6 +26,13 @@ const childSessionToTab = new Map()
 /** @type {Map<number, {resolve:(v:any)=>void, reject:(e:Error)=>void}>} */
 const pending = new Map()
 
+/**
+ * Tracks tabs that are in the process of being re-attached after a debugger detach.
+ * Prevents race conditions between re-attach logic, user toggle, and relay disconnect.
+ * @type {Set<number>}
+ */
+const reattachPending = new Set()
+
 function nowStack() {
   try {
     return new Error().stack || ''
@@ -108,6 +115,9 @@ function onRelayClosed(reason) {
     pending.delete(id)
     p.reject(new Error(`Relay disconnected (${reason})`))
   }
+
+  // Cancel any pending re-attachments since relay is gone
+  reattachPending.clear()
 
   for (const tabId of tabs.keys()) {
     void chrome.debugger.detach({ tabId }).catch(() => {})
@@ -287,6 +297,17 @@ async function connectOrToggleForActiveTab() {
   const tabId = active?.id
   if (!tabId) return
 
+  // If a re-attach is in progress, cancel it and detach cleanly
+  if (reattachPending.has(tabId)) {
+    reattachPending.delete(tabId)
+    setBadge(tabId, 'off')
+    void chrome.action.setTitle({
+      tabId,
+      title: 'OpenClaw Browser Relay (click to attach/detach)',
+    })
+    return
+  }
+
   const existing = tabs.get(tabId)
   if (existing?.state === 'connected') {
     await detachTab(tabId, 'toggle')
@@ -423,12 +444,132 @@ function onDebuggerEvent(source, method, params) {
   }
 }
 
-function onDebuggerDetach(source, reason) {
+/**
+ * Called when Chrome's debugger detaches from a tab.
+ * This can happen due to:
+ *   - Page navigation (cross-origin, service worker, or full reload)
+ *   - Tab close
+ *   - User cancelling the debugger bar
+ *   - Chrome internal reasons
+ *
+ * For navigations where the tab still exists, we attempt to automatically
+ * re-attach the debugger with exponential backoff retries.
+ */
+async function onDebuggerDetach(source, reason) {
   const tabId = source.tabId
   if (!tabId) return
   if (!tabs.has(tabId)) return
-  void detachTab(tabId, reason)
+
+  // Check if tab still exists — distinguishes navigation from tab close
+  let tabInfo
+  try {
+    tabInfo = await chrome.tabs.get(tabId)
+  } catch {
+    // Tab is gone (closed) — normal cleanup
+    void detachTab(tabId, reason)
+    return
+  }
+
+  // Don't re-attach for chrome:// or extension pages
+  if (tabInfo.url?.startsWith('chrome://') || tabInfo.url?.startsWith('chrome-extension://')) {
+    void detachTab(tabId, reason)
+    return
+  }
+
+  // Guard: if already re-attaching this tab, skip (prevents concurrent re-attach races)
+  if (reattachPending.has(tabId)) return
+
+  // Tab still exists — likely a navigation. Attempt re-attach with retries.
+  const oldTab = tabs.get(tabId)
+  const oldSessionId = oldTab?.sessionId
+  const oldTargetId = oldTab?.targetId
+
+  // Clean up old state
+  if (oldSessionId) tabBySession.delete(oldSessionId)
+  tabs.delete(tabId)
+  for (const [childSessionId, parentTabId] of childSessionToTab.entries()) {
+    if (parentTabId === tabId) childSessionToTab.delete(childSessionId)
+  }
+
+  // Notify relay that old session is gone
+  if (oldSessionId && oldTargetId) {
+    try {
+      sendToRelay({
+        method: 'forwardCDPEvent',
+        params: {
+          method: 'Target.detachedFromTarget',
+          params: { sessionId: oldSessionId, targetId: oldTargetId, reason: 'navigation-reattach' },
+        },
+      })
+    } catch { /* relay might be gone — that's fine */ }
+  }
+
+  // Mark as pending re-attach
+  reattachPending.add(tabId)
+  setBadge(tabId, 'connecting')
+  void chrome.action.setTitle({
+    tabId,
+    title: 'OpenClaw Browser Relay: re-attaching after navigation…',
+  })
+
+  // Retry with exponential backoff: 300ms, 700ms, 1500ms
+  const delays = [300, 700, 1500]
+
+  for (let attempt = 0; attempt < delays.length; attempt++) {
+    await new Promise(r => setTimeout(r, delays[attempt]))
+
+    // Bail if re-attach was cancelled (user toggled off, relay closed, or tab removed)
+    if (!reattachPending.has(tabId)) return
+
+    // Verify tab still exists
+    try {
+      await chrome.tabs.get(tabId)
+    } catch {
+      // Tab was closed during retry
+      reattachPending.delete(tabId)
+      setBadge(tabId, 'off')
+      return
+    }
+
+    // Verify relay is still connected
+    if (!relayWs || relayWs.readyState !== WebSocket.OPEN) {
+      reattachPending.delete(tabId)
+      setBadge(tabId, 'error')
+      void chrome.action.setTitle({
+        tabId,
+        title: 'OpenClaw Browser Relay: relay disconnected during re-attach',
+      })
+      return
+    }
+
+    try {
+      await attachTab(tabId)
+      reattachPending.delete(tabId)
+      console.log(`[OpenClaw] Re-attached tab ${tabId} after navigation (attempt ${attempt + 1}/${delays.length}, reason: ${reason})`)
+      return // Success!
+    } catch (err) {
+      console.warn(`[OpenClaw] Re-attach attempt ${attempt + 1}/${delays.length} failed for tab ${tabId}:`, err)
+      // Continue to next retry
+    }
+  }
+
+  // All retries exhausted
+  reattachPending.delete(tabId)
+  setBadge(tabId, 'off')
+  void chrome.action.setTitle({
+    tabId,
+    title: 'OpenClaw Browser Relay: re-attach failed (click to retry)',
+  })
+  console.warn(`[OpenClaw] All re-attach attempts failed for tab ${tabId} (reason: ${reason})`)
 }
+
+// Clean up if a tab is closed while we're tracking it
+chrome.tabs.onRemoved.addListener((tabId) => {
+  reattachPending.delete(tabId)
+  if (tabs.has(tabId)) {
+    void detachTab(tabId, 'tab_closed')
+  }
+})
 
 chrome.action.onClicked.addListener(() => void connectOrToggleForActiveTab())
 
