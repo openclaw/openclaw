@@ -5,7 +5,29 @@ vi.mock("../../infra/channel-activity.js", () => ({
   recordChannelActivity: (...args: unknown[]) => recordChannelActivity(...args),
 }));
 
-import { createWebSendApi } from "./send-api.js";
+import { createWebSendApi, extractMentionJids } from "./send-api.js";
+
+describe("extractMentionJids", () => {
+  it("extracts and de-duplicates numeric mention handles", () => {
+    expect(
+      extractMentionJids("ping @141115495817291 and again @141115495817291 right now"),
+    ).toEqual(["141115495817291@lid"]);
+  });
+
+  it("supports explicit mention domains", () => {
+    expect(
+      extractMentionJids("ping @141115495817291@lid and @919953301972@s.whatsapp.net"),
+    ).toEqual(["141115495817291@lid", "919953301972@s.whatsapp.net"]);
+  });
+
+  it("infers @s.whatsapp.net for shorter numeric handles", () => {
+    expect(extractMentionJids("ping @919953301972 now")).toEqual(["919953301972@s.whatsapp.net"]);
+  });
+
+  it("ignores non-mention text like emails", () => {
+    expect(extractMentionJids("email me at test@example.com")).toEqual([]);
+  });
+});
 
 describe("createWebSendApi", () => {
   const sendMessage = vi.fn(async () => ({ key: { id: "msg-1" } }));
@@ -62,6 +84,17 @@ describe("createWebSendApi", () => {
     });
   });
 
+  it("adds WhatsApp mention JIDs for numeric @handles in text messages", async () => {
+    await api.sendMessage("120363425190157453@g.us", "ping @141115495817291 please");
+    expect(sendMessage).toHaveBeenCalledWith(
+      "120363425190157453@g.us",
+      expect.objectContaining({
+        text: "ping @141115495817291 please",
+        mentions: ["141115495817291@lid"],
+      }),
+    );
+  });
+
   it("supports image media with caption", async () => {
     const payload = Buffer.from("img");
     await api.sendMessage("+1555", "cap", payload, "image/jpeg");
@@ -71,6 +104,24 @@ describe("createWebSendApi", () => {
         image: payload,
         caption: "cap",
         mimetype: "image/jpeg",
+      }),
+    );
+  });
+
+  it("adds mention JIDs to media captions", async () => {
+    const payload = Buffer.from("img");
+    await api.sendMessage(
+      "120363425190157453@g.us",
+      "hello @141115495817291",
+      payload,
+      "image/jpeg",
+    );
+    expect(sendMessage).toHaveBeenCalledWith(
+      "120363425190157453@g.us",
+      expect.objectContaining({
+        image: payload,
+        caption: "hello @141115495817291",
+        mentions: ["141115495817291@lid"],
       }),
     );
   });
