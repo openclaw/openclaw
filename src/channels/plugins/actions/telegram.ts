@@ -169,40 +169,6 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
       );
     }
 
-    if (action === "poll") {
-      const to = readStringParam(params, "to", { required: true });
-      const question = readStringParam(params, "pollQuestion", { required: true });
-      const options = readStringArrayParam(params, "pollOption", { required: true }) ?? [];
-      const allowMultiselect = typeof params.pollMulti === "boolean" ? params.pollMulti : undefined;
-      const durationSeconds = readNumberParam(params, "pollDurationSeconds", {
-        integer: true,
-      });
-      const durationHours = readNumberParam(params, "pollDurationHours", {
-        integer: true,
-      });
-      const replyToMessageId = readNumberParam(params, "replyTo", { integer: true });
-      const messageThreadId = readNumberParam(params, "threadId", { integer: true });
-      const silent = typeof params.silent === "boolean" ? params.silent : undefined;
-      const isAnonymous = typeof params.isAnonymous === "boolean" ? params.isAnonymous : undefined;
-      return await handleTelegramAction(
-        {
-          action: "poll",
-          to,
-          question,
-          options,
-          allowMultiselect,
-          durationSeconds: durationSeconds ?? undefined,
-          durationHours: durationHours ?? undefined,
-          replyToMessageId: replyToMessageId ?? undefined,
-          messageThreadId: messageThreadId ?? undefined,
-          silent,
-          isAnonymous,
-          accountId: accountId ?? undefined,
-        },
-        cfg,
-      );
-    }
-
     if (action === "delete") {
       const chatId =
         readStringOrNumberParam(params, "chatId") ??

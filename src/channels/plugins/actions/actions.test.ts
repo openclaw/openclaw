@@ -198,7 +198,9 @@ describe("telegram message actions", () => {
   });
 
   it("routes poll with normalized params", async () => {
-    await telegramMessageActions.handleAction({
+    expect(telegramMessageActions.handleAction).toBeDefined();
+    await telegramMessageActions.handleAction!({
+      channel: "telegram",
       action: "poll",
       params: {
         to: "123",
@@ -213,11 +215,11 @@ describe("telegram message actions", () => {
 
     expect(handleTelegramAction).toHaveBeenCalledWith(
       expect.objectContaining({
-        action: "poll",
+        action: "sendPoll",
         to: "123",
         question: "Ready?",
         options: ["Yes", "No"],
-        allowMultiselect: true,
+        maxSelections: 2,
         durationSeconds: 60,
         accountId: "ops",
       }),

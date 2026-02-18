@@ -2,22 +2,25 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { telegramMessageActions } from "./telegram.js";
 
-const handleTelegramAction = vi.fn(async () => ({ ok: true }));
+const handleTelegramAction = vi.fn<
+  (params: Record<string, unknown>, cfg: OpenClawConfig) => Promise<{ ok: true }>
+>(async () => ({ ok: true }));
 
 vi.mock("../../../agents/tools/telegram-actions.js", () => ({
-  handleTelegramAction: (...args: unknown[]) => handleTelegramAction(...args),
+  handleTelegramAction: (...args: Parameters<typeof handleTelegramAction>) =>
+    handleTelegramAction(...args),
 }));
 
 describe("telegramMessageActions", () => {
   it("includes poll action when telegram account is configured", () => {
     const cfg = { channels: { telegram: { botToken: "tok" } } } as OpenClawConfig;
-    const actions = telegramMessageActions.listActions({ cfg });
+    const actions = telegramMessageActions.listActions?.({ cfg }) ?? [];
     expect(actions).toContain("poll");
   });
 
   it("excludes sticker actions when not enabled", () => {
     const cfg = { channels: { telegram: { botToken: "tok" } } } as OpenClawConfig;
-    const actions = telegramMessageActions.listActions({ cfg });
+    const actions = telegramMessageActions.listActions?.({ cfg }) ?? [];
     expect(actions).not.toContain("sticker");
     expect(actions).not.toContain("sticker-search");
   });
@@ -26,7 +29,9 @@ describe("telegramMessageActions", () => {
     handleTelegramAction.mockClear();
     const cfg = { channels: { telegram: { botToken: "tok" } } } as OpenClawConfig;
 
-    await telegramMessageActions.handleAction({
+    expect(telegramMessageActions.handleAction).toBeDefined();
+    await telegramMessageActions.handleAction!({
+      channel: "telegram",
       action: "send",
       params: {
         to: "123",
@@ -53,7 +58,9 @@ describe("telegramMessageActions", () => {
     handleTelegramAction.mockClear();
     const cfg = { channels: { telegram: { botToken: "tok" } } } as OpenClawConfig;
 
-    await telegramMessageActions.handleAction({
+    expect(telegramMessageActions.handleAction).toBeDefined();
+    await telegramMessageActions.handleAction!({
+      channel: "telegram",
       action: "poll",
       params: {
         to: "123",
@@ -87,7 +94,9 @@ describe("telegramMessageActions", () => {
     handleTelegramAction.mockClear();
     const cfg = { channels: { telegram: { botToken: "tok" } } } as OpenClawConfig;
 
-    await telegramMessageActions.handleAction({
+    expect(telegramMessageActions.handleAction).toBeDefined();
+    await telegramMessageActions.handleAction!({
+      channel: "telegram",
       action: "send",
       params: {
         to: "456",
@@ -113,7 +122,9 @@ describe("telegramMessageActions", () => {
     handleTelegramAction.mockClear();
     const cfg = { channels: { telegram: { botToken: "tok" } } } as OpenClawConfig;
 
-    await telegramMessageActions.handleAction({
+    expect(telegramMessageActions.handleAction).toBeDefined();
+    await telegramMessageActions.handleAction!({
+      channel: "telegram",
       action: "edit",
       params: {
         chatId: "123",
@@ -143,7 +154,8 @@ describe("telegramMessageActions", () => {
     const cfg = { channels: { telegram: { botToken: "tok" } } } as OpenClawConfig;
 
     await expect(
-      telegramMessageActions.handleAction({
+      telegramMessageActions.handleAction!({
+        channel: "telegram",
         action: "edit",
         params: {
           chatId: "123",
@@ -162,7 +174,9 @@ describe("telegramMessageActions", () => {
     handleTelegramAction.mockClear();
     const cfg = { channels: { telegram: { botToken: "tok" } } } as OpenClawConfig;
 
-    await telegramMessageActions.handleAction({
+    expect(telegramMessageActions.handleAction).toBeDefined();
+    await telegramMessageActions.handleAction!({
+      channel: "telegram",
       action: "react",
       params: {
         channelId: 123,
@@ -174,7 +188,13 @@ describe("telegramMessageActions", () => {
     });
 
     expect(handleTelegramAction).toHaveBeenCalledTimes(1);
-    const call = handleTelegramAction.mock.calls[0]?.[0] as Record<string, unknown>;
+    const firstCall = handleTelegramAction.mock.calls[0];
+    expect(firstCall).toBeDefined();
+    const call = firstCall?.[0];
+    expect(call).toBeDefined();
+    if (!call) {
+      return;
+    }
     expect(call.action).toBe("react");
     expect(String(call.chatId)).toBe("123");
     expect(String(call.messageId)).toBe("456");

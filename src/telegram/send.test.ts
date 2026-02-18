@@ -1405,7 +1405,8 @@ describe("sendPollTelegram", () => {
     );
 
     expect(api.sendPoll).toHaveBeenCalledTimes(1);
-    expect(api.sendPoll.mock.calls[0]?.[3]).toMatchObject({ is_anonymous: false });
+    const sendPollMock = api.sendPoll as ReturnType<typeof vi.fn>;
+    expect(sendPollMock.mock.calls[0]?.[3]).toMatchObject({ is_anonymous: false });
   });
 
   it("supports explicit anonymous polls", async () => {
@@ -1420,7 +1421,8 @@ describe("sendPollTelegram", () => {
     );
 
     expect(api.sendPoll).toHaveBeenCalledTimes(1);
-    expect(api.sendPoll.mock.calls[0]?.[3]).toMatchObject({ is_anonymous: true });
+    const sendPollMock = api.sendPoll as ReturnType<typeof vi.fn>;
+    expect(sendPollMock.mock.calls[0]?.[3]).toMatchObject({ is_anonymous: true });
   });
 
   it("retries without message_thread_id on thread-not-found", async () => {
