@@ -118,8 +118,15 @@ function formatTimestampWithAge(valueMs?: number) {
   return `${formatTimestamp(valueMs)} (${formatTimeAgo(Date.now() - valueMs, { fallback: "n/a" })})`;
 }
 
-function resolveRequesterSessionKey(params: Parameters<CommandHandler>[0]): string | undefined {
-  const raw = params.sessionKey?.trim() || params.ctx.CommandTargetSessionKey?.trim();
+function resolveRequesterSessionKey(
+  params: Parameters<CommandHandler>[0],
+  opts?: { preferCommandTarget?: boolean },
+): string | undefined {
+  const commandTarget = params.ctx.CommandTargetSessionKey?.trim();
+  const commandSession = params.sessionKey?.trim();
+  const raw = opts?.preferCommandTarget
+    ? commandTarget || commandSession
+    : commandSession || commandTarget;
   if (!raw) {
     return undefined;
   }
@@ -286,7 +293,9 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
     action = "steer";
   }
 
-  const requesterKey = resolveRequesterSessionKey(params);
+  const requesterKey = resolveRequesterSessionKey(params, {
+    preferCommandTarget: action === "spawn",
+  });
   if (!requesterKey) {
     return { shouldContinue: false, reply: { text: "⚠️ Missing session key." } };
   }
