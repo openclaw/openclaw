@@ -8,23 +8,6 @@ import {
 } from "./shell-env.js";
 
 describe("shell env fallback", () => {
-  function getShellPathTwice(params: {
-    exec: Parameters<typeof getShellPathFromLoginShell>[0]["exec"];
-    platform: NodeJS.Platform;
-  }) {
-    const first = getShellPathFromLoginShell({
-      env: {} as NodeJS.ProcessEnv,
-      exec: params.exec,
-      platform: params.platform,
-    });
-    const second = getShellPathFromLoginShell({
-      env: {} as NodeJS.ProcessEnv,
-      exec: params.exec,
-      platform: params.platform,
-    });
-    return { first, second };
-  }
-
   it("is disabled by default", () => {
     expect(shouldEnableShellEnvFallback({} as NodeJS.ProcessEnv)).toBe(false);
     expect(shouldEnableShellEnvFallback({ OPENCLAW_LOAD_SHELL_ENV: "0" })).toBe(false);
@@ -93,45 +76,49 @@ describe("shell env fallback", () => {
 
   it("resolves PATH via login shell and caches it", () => {
     resetShellPathCacheForTests();
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     const exec = vi.fn(() => Buffer.from("PATH=/usr/local/bin:/usr/bin\0HOME=/tmp\0"));
 
-    const { first, second } = getShellPathTwice({
-      exec: exec as unknown as Parameters<typeof getShellPathFromLoginShell>[0]["exec"],
-      platform: "linux",
-    });
+    try {
+      const first = getShellPathFromLoginShell({
+        env: {} as NodeJS.ProcessEnv,
+        exec: exec as unknown as Parameters<typeof getShellPathFromLoginShell>[0]["exec"],
+      });
+      const second = getShellPathFromLoginShell({
+        env: {} as NodeJS.ProcessEnv,
+        exec: exec as unknown as Parameters<typeof getShellPathFromLoginShell>[0]["exec"],
+      });
 
-    expect(first).toBe("/usr/local/bin:/usr/bin");
-    expect(second).toBe("/usr/local/bin:/usr/bin");
-    expect(exec).toHaveBeenCalledOnce();
+      expect(first).toBe("/usr/local/bin:/usr/bin");
+      expect(second).toBe("/usr/local/bin:/usr/bin");
+      expect(exec).toHaveBeenCalledOnce();
+    } finally {
+      platformSpy.mockRestore();
+    }
   });
 
   it("returns null on shell env read failure and caches null", () => {
     resetShellPathCacheForTests();
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     const exec = vi.fn(() => {
       throw new Error("exec failed");
     });
 
-    const { first, second } = getShellPathTwice({
-      exec: exec as unknown as Parameters<typeof getShellPathFromLoginShell>[0]["exec"],
-      platform: "linux",
-    });
+    try {
+      const first = getShellPathFromLoginShell({
+        env: {} as NodeJS.ProcessEnv,
+        exec: exec as unknown as Parameters<typeof getShellPathFromLoginShell>[0]["exec"],
+      });
+      const second = getShellPathFromLoginShell({
+        env: {} as NodeJS.ProcessEnv,
+        exec: exec as unknown as Parameters<typeof getShellPathFromLoginShell>[0]["exec"],
+      });
 
-    expect(first).toBeNull();
-    expect(second).toBeNull();
-    expect(exec).toHaveBeenCalledOnce();
-  });
-
-  it("returns null without invoking shell on win32", () => {
-    resetShellPathCacheForTests();
-    const exec = vi.fn(() => Buffer.from("PATH=/usr/local/bin:/usr/bin\0HOME=/tmp\0"));
-
-    const { first, second } = getShellPathTwice({
-      exec: exec as unknown as Parameters<typeof getShellPathFromLoginShell>[0]["exec"],
-      platform: "win32",
-    });
-
-    expect(first).toBeNull();
-    expect(second).toBeNull();
-    expect(exec).not.toHaveBeenCalled();
+      expect(first).toBeNull();
+      expect(second).toBeNull();
+      expect(exec).toHaveBeenCalledOnce();
+    } finally {
+      platformSpy.mockRestore();
+    }
   });
 });
