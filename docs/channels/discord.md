@@ -465,7 +465,9 @@ Use `bindings[].match.roles` to route Discord guild members to different agents 
     - Message Content Intent
     - Server Members Intent (recommended)
 
-    Presence intent is optional and only required if you want to receive presence updates. Setting bot presence (`setPresence`) does not require enabling presence updates for members.
+    Presence intent is optional and only required if you want OpenClaw to receive member presence updates (status + activities) and include them as untrusted context in replies.
+
+    Setting bot presence (`setPresence`) does not require enabling member presence updates.
 
   </Accordion>
 
@@ -706,6 +708,32 @@ See [Slash commands](/tools/slash-commands) for command catalog and behavior.
     - 3: Watching
     - 4: Custom (uses the activity text as the status state; emoji is optional)
     - 5: Competing
+
+  </Accordion>
+
+  <Accordion title="Sender presence context (opt-in)">
+    OpenClaw can attach Discord sender presence metadata (for example `idle`, `dnd`, `Playing`, `Listening`) to the inbound prompt context.
+
+    This is opt-in and only active when `channels.discord.intents.presence=true`.
+
+```json5
+{
+  channels: {
+    discord: {
+      intents: {
+        presence: true,
+      },
+    },
+  },
+}
+```
+
+    Notes:
+
+    - Presence updates come from Discord gateway `PRESENCE_UPDATE` events and may be stale or missing.
+    - Presence metadata is appended as **untrusted context** (never as system instructions).
+    - Discord only emits these updates when the privileged Presence intent is enabled in both OpenClaw config and the Discord Developer Portal.
+    - DM-only workflows may not have presence data unless the same user is observed in guild presence updates.
 
   </Accordion>
 
