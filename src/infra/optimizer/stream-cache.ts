@@ -91,18 +91,19 @@ function normalizeMessage(msg: Message): NormalizedMessage {
   };
 }
 
-function shouldSkipCache(context: Context, config: StreamCacheConfig): boolean {
-  if (!config.enabled) {
-    return true;
-  }
-  if (config.skipCacheForTools && context.tools && context.tools.length > 0) {
-    return true;
-  }
-  return false;
+function shouldSkipCache(config: StreamCacheConfig): boolean {
+  return !config.enabled;
 }
 
 async function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function hasToolCalls(message: AssistantMessage | null): boolean {
+  if (!message) {
+    return false;
+  }
+  return message.content.some((c) => c.type === "toolCall");
 }
 
 function createStreamFromCachedMessage(
@@ -192,10 +193,7 @@ export function createStreamCacheWrapper(config: StreamCacheConfig): StreamCache
 
   const wrapStreamFn: StreamCacheWrapper["wrapStreamFn"] = (streamFn) => {
     return (model, context, options) => {
-      if (shouldSkipCache(context, config)) {
-        if (config.skipCacheForTools && context.tools && context.tools.length > 0) {
-          skippedForTools++;
-        }
+      if (shouldSkipCache(config)) {
         return streamFn(model, context, options);
       }
 
@@ -237,8 +235,10 @@ export function createStreamCacheWrapper(config: StreamCacheConfig): StreamCache
             }
           }
 
-          if (finalMessage && finalMessage.stopReason === "stop") {
+          if (finalMessage && finalMessage.stopReason === "stop" && !hasToolCalls(finalMessage)) {
             cache.setCachedEntry(cacheKey, finalMessage);
+          } else if (hasToolCalls(finalMessage)) {
+            skippedForTools++;
           } else {
             cache.recordMiss();
           }
