@@ -101,6 +101,40 @@ const HttpUrlSchema = z
     return protocol === "http:" || protocol === "https:";
   }, "Expected http:// or https:// URL");
 
+const AuditModelTrafficRedactSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    keys: z.array(z.string()).optional(),
+    maskChar: z.string().optional(),
+    headVisible: z.number().int().nonnegative().optional(),
+    tailVisible: z.number().int().nonnegative().optional(),
+  })
+  .strict();
+
+const AuditModelTrafficGranularitySchema = z
+  .object({
+    headers: z.boolean().optional(),
+    body: z.boolean().optional(),
+    response: z.boolean().optional(),
+  })
+  .strict();
+
+const AuditModelTrafficSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    path: z.string().optional(),
+    redact: AuditModelTrafficRedactSchema.optional(),
+    granularity: AuditModelTrafficGranularitySchema.optional(),
+  })
+  .strict();
+
+const AuditSchema = z
+  .object({
+    modelTraffic: AuditModelTrafficSchema.optional(),
+  })
+  .strict()
+  .optional();
+
 export const OpenClawSchema = z
   .object({
     $schema: z.string().optional(),
@@ -382,6 +416,7 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
+    audit: AuditSchema,
     gateway: z
       .object({
         port: z.number().int().positive().optional(),

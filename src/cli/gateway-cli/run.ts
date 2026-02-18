@@ -1,7 +1,8 @@
+import type { Command } from "commander";
 import fs from "node:fs";
 import path from "node:path";
-import type { Command } from "commander";
 import type { GatewayAuthMode } from "../../config/config.js";
+import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import {
   CONFIG_PATH,
   loadConfig,
@@ -9,11 +10,12 @@ import {
   resolveStateDir,
   resolveGatewayPort,
 } from "../../config/config.js";
+import { setAuditConfig } from "../../gateway/audit-model-traffic.js";
 import { resolveGatewayAuth } from "../../gateway/auth.js";
 import { startGatewayServer } from "../../gateway/server.js";
-import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setGatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setVerbose } from "../../globals.js";
+import { patchGlobalFetchForEgressAudit } from "../../infra/fetch-global-egress-audit.js";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
 import { formatPortDiagnostics, inspectPortUsage } from "../../infra/ports.js";
 import { setConsoleSubsystemFilter, setConsoleTimestampPrefix } from "../../logging/console.js";
@@ -127,6 +129,10 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   }
   setGatewayWsLogStyle(wsLogStyle);
 
+  // Patch global fetch as early as possible so third-party provider SDKs that call
+  // globalThis.fetch directly are also captured.
+  patchGlobalFetchForEgressAudit();
+
   if (opts.rawStream) {
     process.env.OPENCLAW_RAW_STREAM = "1";
   }
@@ -140,6 +146,8 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   }
 
   const cfg = loadConfig();
+  // Inject audit config from config file
+  setAuditConfig(cfg.audit?.modelTraffic);
   const portOverride = parsePort(opts.port);
   if (opts.port !== undefined && portOverride === null) {
     defaultRuntime.error("Invalid port");

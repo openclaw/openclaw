@@ -6,13 +6,14 @@
  * @see https://www.open-responses.com/
  */
 
-import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { randomUUID } from "node:crypto";
 import type { ClientToolDefinition } from "../agents/pi-embedded-runner/run/params.js";
-import { createDefaultDeps } from "../cli/deps.js";
-import { agentCommand } from "../commands/agent.js";
 import type { ImageContent } from "../commands/agent/types.js";
 import type { GatewayHttpResponsesConfig } from "../config/types.gateway.js";
+import type { AuthRateLimiter } from "./auth-rate-limit.js";
+import { createDefaultDeps } from "../cli/deps.js";
+import { agentCommand } from "../commands/agent.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { logWarn } from "../logger.js";
 import {
@@ -34,8 +35,8 @@ import {
   buildAgentMessageFromConversationEntries,
   type ConversationEntry,
 } from "./agent-prompt.js";
-import type { AuthRateLimiter } from "./auth-rate-limit.js";
-import type { ResolvedGatewayAuth } from "./auth.js";
+import { auditModelTrafficWrite } from "./audit-model-traffic.js";
+import { type ResolvedGatewayAuth } from "./auth.js";
 import { sendJson, setSseHeaders, writeDone } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 import { resolveAgentIdForRequest, resolveSessionKey } from "./http-utils.js";
@@ -510,6 +511,20 @@ export async function handleOpenResponsesHttpRequest(
   const responseId = `resp_${randomUUID()}`;
   const outputItemId = `msg_${randomUUID()}`;
   const deps = createDefaultDeps();
+
+  auditModelTrafficWrite({
+    ts: Date.now(),
+    kind: "model_traffic",
+    source: "gateway/openresponses",
+    direction: "in",
+    id: responseId,
+    sessionKey,
+    provider: "openresponses",
+    model,
+    stream,
+    headers: req.headers as unknown as Record<string, unknown>,
+    body: payload,
+  });
   const streamParams =
     typeof payload.max_output_tokens === "number"
       ? { maxTokens: payload.max_output_tokens }
@@ -558,6 +573,21 @@ export async function handleOpenResponsesHttpRequest(
           ],
           usage,
         });
+        auditModelTrafficWrite({
+          ts: Date.now(),
+          kind: "model_traffic",
+          source: "gateway/openresponses",
+          direction: "out",
+          id: responseId,
+          sessionKey,
+          provider: "openresponses",
+          model,
+          stream,
+          status: 200,
+          headers: res.getHeaders() as unknown as Record<string, unknown>,
+          body: response,
+        });
+
         sendJson(res, 200, response);
         return true;
       }
@@ -580,6 +610,21 @@ export async function handleOpenResponsesHttpRequest(
         usage,
       });
 
+      auditModelTrafficWrite({
+        ts: Date.now(),
+        kind: "model_traffic",
+        source: "gateway/openresponses",
+        direction: "out",
+        id: responseId,
+        sessionKey,
+        provider: "openresponses",
+        model,
+        stream,
+        status: 200,
+        headers: res.getHeaders() as unknown as Record<string, unknown>,
+        body: response,
+      });
+
       sendJson(res, 200, response);
     } catch (err) {
       logWarn(`openresponses: non-stream response failed: ${String(err)}`);
@@ -590,6 +635,23 @@ export async function handleOpenResponsesHttpRequest(
         output: [],
         error: { code: "api_error", message: "internal error" },
       });
+
+      auditModelTrafficWrite({
+        ts: Date.now(),
+        kind: "model_traffic",
+        source: "gateway/openresponses",
+        direction: "out",
+        id: responseId,
+        sessionKey,
+        provider: "openresponses",
+        model,
+        stream,
+        status: 500,
+        headers: res.getHeaders() as unknown as Record<string, unknown>,
+        body: response,
+        note: String(err),
+      });
+
       sendJson(res, 500, response);
     }
     return true;
@@ -600,6 +662,22 @@ export async function handleOpenResponsesHttpRequest(
   // ─────────────────────────────────────────────────────────────────────────
 
   setSseHeaders(res);
+
+  auditModelTrafficWrite({
+    ts: Date.now(),
+    kind: "model_traffic",
+    source: "gateway/openresponses",
+    direction: "out",
+    id: responseId,
+    sessionKey,
+    provider: "openresponses",
+    model,
+    stream,
+    status: 200,
+    headers: res.getHeaders() as unknown as Record<string, unknown>,
+    body: { sse: true },
+    note: "sse_start",
+  });
 
   let accumulatedText = "";
   let sawAssistantDelta = false;
