@@ -2,6 +2,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { STATE_DIR } from "../config/paths.js";
+import { TELEGRAM_COMMAND_NAME_PATTERN } from "../config/telegram-custom-commands.js";
 import type { TelegramAccountConfig } from "../config/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
@@ -178,6 +179,53 @@ describe("registerTelegramNativeCommands", () => {
     const registeredHandlers = command.mock.calls.map(([name]) => name);
     expect(registeredHandlers).toContain("export_session");
     expect(registeredHandlers).not.toContain("export-session");
+  });
+
+  it("registers only Telegram-safe command names across native, custom, and plugin sources", async () => {
+    const setMyCommands = vi.fn().mockResolvedValue(undefined);
+
+    pluginCommandMocks.getPluginCommandSpecs.mockReturnValue([
+      { name: "plugin-status", description: "Plugin status" },
+      { name: "plugin@bad", description: "Bad plugin command" },
+    ] as never);
+
+    registerTelegramNativeCommands({
+      ...buildParams({}),
+      bot: {
+        api: {
+          setMyCommands,
+          sendMessage: vi.fn().mockResolvedValue(undefined),
+        },
+        command: vi.fn(),
+      } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
+      telegramCfg: {
+        customCommands: [
+          { command: "custom-backup", description: "Custom backup" },
+          { command: "custom!bad", description: "Bad custom command" },
+        ],
+      } as TelegramAccountConfig,
+    });
+
+    await vi.waitFor(() => {
+      expect(setMyCommands).toHaveBeenCalled();
+    });
+
+    const registeredCommands = setMyCommands.mock.calls[0]?.[0] as Array<{
+      command: string;
+      description: string;
+    }>;
+
+    expect(registeredCommands.length).toBeGreaterThan(0);
+    for (const entry of registeredCommands) {
+      expect(entry.command.includes("-")).toBe(false);
+      expect(TELEGRAM_COMMAND_NAME_PATTERN.test(entry.command)).toBe(true);
+    }
+
+    expect(registeredCommands.some((entry) => entry.command === "export_session")).toBe(true);
+    expect(registeredCommands.some((entry) => entry.command === "custom_backup")).toBe(true);
+    expect(registeredCommands.some((entry) => entry.command === "plugin_status")).toBe(true);
+    expect(registeredCommands.some((entry) => entry.command === "plugin-status")).toBe(false);
+    expect(registeredCommands.some((entry) => entry.command === "custom-bad")).toBe(false);
   });
 
   it("passes agent-scoped media roots for plugin command replies with media", async () => {
