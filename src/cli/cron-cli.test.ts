@@ -37,7 +37,7 @@ const { registerCronCli } = await import("./cron-cli.js");
 
 type CronUpdatePatch = {
   patch?: {
-    payload?: { message?: string };
+    payload?: { message?: string; model?: string; thinking?: string };
     delivery?: { mode?: string; channel?: string; to?: string; bestEffort?: boolean };
   };
 };
