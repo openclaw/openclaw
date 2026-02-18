@@ -67,15 +67,7 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
     });
   }
 
-  if (ctx.params.onBlockReply) {
-    if (ctx.blockChunker?.hasBuffered()) {
-      ctx.blockChunker.drain({ force: true, emit: ctx.emitBlockChunk });
-      ctx.blockChunker.reset();
-    } else if (ctx.state.blockBuffer.length > 0) {
-      ctx.emitBlockChunk(ctx.state.blockBuffer);
-      ctx.state.blockBuffer = "";
-    }
-  }
+  ctx.flushBlockReplyBuffer();
 
   ctx.state.blockState.thinking = false;
   ctx.state.blockState.final = false;
