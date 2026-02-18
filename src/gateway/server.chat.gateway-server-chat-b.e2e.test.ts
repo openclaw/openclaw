@@ -43,24 +43,49 @@ const sendReq = (
   );
 };
 
+async function withGatewayChatHarness(
+  run: (ctx: {
+    ws: Awaited<ReturnType<typeof startServerWithClient>>["ws"];
+    createSessionDir: () => Promise<string>;
+  }) => Promise<void>,
+) {
+  const tempDirs: string[] = [];
+  const { server, ws } = await startServerWithClient();
+  const createSessionDir = async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    tempDirs.push(sessionDir);
+    testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+    return sessionDir;
+  };
+
+  try {
+    await run({ ws, createSessionDir });
+  } finally {
+    __setMaxChatHistoryMessagesBytesForTest();
+    testState.sessionStorePath = undefined;
+    ws.close();
+    await server.close();
+    await Promise.all(tempDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
+  }
+}
+
+async function writeMainSessionStore() {
+  await writeSessionStore({
+    entries: {
+      main: { sessionId: "sess-main", updatedAt: Date.now() },
+    },
+  });
+}
+
 describe("gateway server chat", () => {
   test("smoke: caps history payload and preserves routing metadata", async () => {
-    const tempDirs: string[] = [];
-    const { server, ws } = await startServerWithClient();
-    try {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const historyMaxBytes = 192 * 1024;
       __setMaxChatHistoryMessagesBytesForTest(historyMaxBytes);
       await connectOk(ws);
 
-      const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
-      tempDirs.push(sessionDir);
-      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
-
-      await writeSessionStore({
-        entries: {
-          main: { sessionId: "sess-main", updatedAt: Date.now() },
-        },
-      });
+      const sessionDir = await createSessionDir();
+      await writeMainSessionStore();
 
       const bigText = "x".repeat(4_000);
       const historyLines: string[] = [];
@@ -109,38 +134,27 @@ describe("gateway server chat", () => {
       });
       expect(sendRes.ok).toBe(true);
 
-      const stored = JSON.parse(await fs.readFile(testState.sessionStorePath, "utf-8")) as Record<
+      const sessionStorePath = testState.sessionStorePath;
+      if (!sessionStorePath) {
+        throw new Error("expected session store path");
+      }
+      const stored = JSON.parse(await fs.readFile(sessionStorePath, "utf-8")) as Record<
         string,
         { lastChannel?: string; lastTo?: string } | undefined
       >;
       expect(stored["agent:main:main"]?.lastChannel).toBe("whatsapp");
       expect(stored["agent:main:main"]?.lastTo).toBe("+1555");
-    } finally {
-      __setMaxChatHistoryMessagesBytesForTest();
-      testState.sessionStorePath = undefined;
-      ws.close();
-      await server.close();
-      await Promise.all(tempDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
-    }
+    });
   });
 
   test("chat.history hard-caps single oversized nested payloads", async () => {
-    const tempDirs: string[] = [];
-    const { server, ws } = await startServerWithClient();
-    try {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const historyMaxBytes = 64 * 1024;
       __setMaxChatHistoryMessagesBytesForTest(historyMaxBytes);
       await connectOk(ws);
 
-      const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
-      tempDirs.push(sessionDir);
-      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
-
-      await writeSessionStore({
-        entries: {
-          main: { sessionId: "sess-main", updatedAt: Date.now() },
-        },
-      });
+      const sessionDir = await createSessionDir();
+      await writeMainSessionStore();
 
       const hugeNestedText = "n".repeat(450_000);
       const oversizedLine = JSON.stringify({
@@ -175,32 +189,17 @@ describe("gateway server chat", () => {
       expect(bytes).toBeLessThanOrEqual(historyMaxBytes);
       expect(serialized).toContain("[chat.history omitted: message too large]");
       expect(serialized.includes(hugeNestedText.slice(0, 256))).toBe(false);
-    } finally {
-      __setMaxChatHistoryMessagesBytesForTest();
-      testState.sessionStorePath = undefined;
-      ws.close();
-      await server.close();
-      await Promise.all(tempDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
-    }
+    });
   });
 
   test("chat.history keeps recent small messages when latest message is oversized", async () => {
-    const tempDirs: string[] = [];
-    const { server, ws } = await startServerWithClient();
-    try {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const historyMaxBytes = 64 * 1024;
       __setMaxChatHistoryMessagesBytesForTest(historyMaxBytes);
       await connectOk(ws);
 
-      const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
-      tempDirs.push(sessionDir);
-      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
-
-      await writeSessionStore({
-        entries: {
-          main: { sessionId: "sess-main", updatedAt: Date.now() },
-        },
-      });
+      const sessionDir = await createSessionDir();
+      await writeMainSessionStore();
 
       const baseText = "s".repeat(1_200);
       const lines: string[] = [];
@@ -258,33 +257,17 @@ describe("gateway server chat", () => {
       expect(serialized).toContain("small-29:");
       expect(serialized).toContain("[chat.history omitted: message too large]");
       expect(serialized.includes(hugeNestedText.slice(0, 256))).toBe(false);
-    } finally {
-      __setMaxChatHistoryMessagesBytesForTest();
-      testState.sessionStorePath = undefined;
-      ws.close();
-      await server.close();
-      await Promise.all(tempDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
-    }
+    });
   });
 
   test("smoke: supports abort and idempotent completion", async () => {
-    const tempDirs: string[] = [];
-    const { server, ws } = await startServerWithClient();
-    const spy = vi.mocked(getReplyFromConfig) as unknown as ReturnType<typeof vi.fn>;
-    let aborted = false;
-
-    try {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const spy = vi.mocked(getReplyFromConfig) as unknown as ReturnType<typeof vi.fn>;
+      let aborted = false;
       await connectOk(ws);
 
-      const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
-      tempDirs.push(sessionDir);
-      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
-
-      await writeSessionStore({
-        entries: {
-          main: { sessionId: "sess-main", updatedAt: Date.now() },
-        },
-      });
+      await createSessionDir();
+      await writeMainSessionStore();
 
       spy.mockReset();
       spy.mockImplementationOnce(async (_ctx, opts) => {
@@ -359,12 +342,6 @@ describe("gateway server chat", () => {
         await new Promise((resolve) => setTimeout(resolve, 10));
       }
       expect(completed).toBe(true);
-    } finally {
-      __setMaxChatHistoryMessagesBytesForTest();
-      testState.sessionStorePath = undefined;
-      ws.close();
-      await server.close();
-      await Promise.all(tempDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
-    }
+    });
   });
 });

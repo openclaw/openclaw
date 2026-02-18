@@ -5,9 +5,10 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { pathExists } from "../utils.js";
 import { runGatewayUpdate } from "./update-runner.js";
 
-type CommandResult = { stdout?: string; stderr?: string; code?: number };
+type CommandResponse = { stdout?: string; stderr?: string; code?: number | null };
+type CommandResult = { stdout: string; stderr: string; code: number | null };
 
-function createRunner(responses: Record<string, CommandResult>) {
+function createRunner(responses: Record<string, CommandResponse>) {
   const calls: string[] = [];
   const runner = async (argv: string[]) => {
     const key = argv.join(" ");
@@ -125,6 +126,32 @@ describe("runGatewayUpdate", () => {
     await fs.rm(path.join(tempDir, "dist", "control-ui"), { recursive: true, force: true });
   }
 
+  async function runWithRunner(
+    runner: (argv: string[]) => Promise<CommandResult>,
+    options?: { channel?: "stable" | "beta"; tag?: string; cwd?: string },
+  ) {
+    return runGatewayUpdate({
+      cwd: options?.cwd ?? tempDir,
+      runCommand: async (argv, _runOptions) => runner(argv),
+      timeoutMs: 5000,
+      ...(options?.channel ? { channel: options.channel } : {}),
+      ...(options?.tag ? { tag: options.tag } : {}),
+    });
+  }
+
+  async function runWithCommand(
+    runCommand: (argv: string[]) => Promise<CommandResult>,
+    options?: { channel?: "stable" | "beta"; tag?: string; cwd?: string },
+  ) {
+    return runGatewayUpdate({
+      cwd: options?.cwd ?? tempDir,
+      runCommand: async (argv, _runOptions) => runCommand(argv),
+      timeoutMs: 5000,
+      ...(options?.channel ? { channel: options.channel } : {}),
+      ...(options?.tag ? { tag: options.tag } : {}),
+    });
+  }
+
   it("skips git update when worktree is dirty", async () => {
     await setupGitCheckout();
     const { runner, calls } = createRunner({
@@ -134,11 +161,7 @@ describe("runGatewayUpdate", () => {
       [`git -C ${tempDir} status --porcelain -- :!dist/control-ui/`]: { stdout: " M README.md" },
     });
 
-    const result = await runGatewayUpdate({
-      cwd: tempDir,
-      runCommand: async (argv, _options) => runner(argv),
-      timeoutMs: 5000,
-    });
+    const result = await runWithRunner(runner);
 
     expect(result.status).toBe("skipped");
     expect(result.reason).toBe("dirty");
@@ -162,11 +185,7 @@ describe("runGatewayUpdate", () => {
       [`git -C ${tempDir} rebase --abort`]: { stdout: "" },
     });
 
-    const result = await runGatewayUpdate({
-      cwd: tempDir,
-      runCommand: async (argv, _options) => runner(argv),
-      timeoutMs: 5000,
-    });
+    const result = await runWithRunner(runner);
 
     expect(result.status).toBe("error");
     expect(result.reason).toBe("rebase-failed");
@@ -174,12 +193,7 @@ describe("runGatewayUpdate", () => {
   });
 
   it("returns error and stops early when deps install fails", async () => {
-    await fs.mkdir(path.join(tempDir, ".git"));
-    await fs.writeFile(
-      path.join(tempDir, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "1.0.0", packageManager: "pnpm@8.0.0" }),
-      "utf-8",
-    );
+    await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
     const stableTag = "v1.0.1-1";
     const { runner, calls } = createRunner({
       [`git -C ${tempDir} rev-parse --show-toplevel`]: { stdout: tempDir },
@@ -191,12 +205,7 @@ describe("runGatewayUpdate", () => {
       "pnpm install": { code: 1, stderr: "ERR_PNPM_NETWORK" },
     });
 
-    const result = await runGatewayUpdate({
-      cwd: tempDir,
-      runCommand: async (argv, _options) => runner(argv),
-      timeoutMs: 5000,
-      channel: "stable",
-    });
+    const result = await runWithRunner(runner, { channel: "stable" });
 
     expect(result.status).toBe("error");
     expect(result.reason).toBe("deps-install-failed");
@@ -205,12 +214,7 @@ describe("runGatewayUpdate", () => {
   });
 
   it("returns error and stops early when build fails", async () => {
-    await fs.mkdir(path.join(tempDir, ".git"));
-    await fs.writeFile(
-      path.join(tempDir, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "1.0.0", packageManager: "pnpm@8.0.0" }),
-      "utf-8",
-    );
+    await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
     const stableTag = "v1.0.1-1";
     const { runner, calls } = createRunner({
       [`git -C ${tempDir} rev-parse --show-toplevel`]: { stdout: tempDir },
@@ -223,12 +227,7 @@ describe("runGatewayUpdate", () => {
       "pnpm build": { code: 1, stderr: "tsc: error TS2345" },
     });
 
-    const result = await runGatewayUpdate({
-      cwd: tempDir,
-      runCommand: async (argv, _options) => runner(argv),
-      timeoutMs: 5000,
-      channel: "stable",
-    });
+    const result = await runWithRunner(runner, { channel: "stable" });
 
     expect(result.status).toBe("error");
     expect(result.reason).toBe("build-failed");
@@ -259,12 +258,7 @@ describe("runGatewayUpdate", () => {
         },
     });
 
-    const result = await runGatewayUpdate({
-      cwd: tempDir,
-      runCommand: async (argv, _options) => runner(argv),
-      timeoutMs: 5000,
-      channel: "beta",
-    });
+    const result = await runWithRunner(runner, { channel: "beta" });
 
     expect(result.status).toBe("ok");
     expect(calls).toContain(`git -C ${tempDir} checkout --detach ${stableTag}`);
@@ -284,11 +278,7 @@ describe("runGatewayUpdate", () => {
       "pnpm root -g": { code: 1 },
     });
 
-    const result = await runGatewayUpdate({
-      cwd: tempDir,
-      runCommand: async (argv, _options) => runner(argv),
-      timeoutMs: 5000,
-    });
+    const result = await runWithRunner(runner);
 
     expect(result.status).toBe("skipped");
     expect(result.reason).toBe("not-git-install");
@@ -323,10 +313,8 @@ describe("runGatewayUpdate", () => {
       },
     });
 
-    const result = await runGatewayUpdate({
+    const result = await runWithCommand(runCommand, {
       cwd: pkgRoot,
-      runCommand: async (argv, _options) => runCommand(argv),
-      timeoutMs: 5000,
       channel: params.channel,
       tag: params.tag,
     });
@@ -425,11 +413,7 @@ describe("runGatewayUpdate", () => {
       return { stdout: "", stderr: "", code: 0 };
     };
 
-    const result = await runGatewayUpdate({
-      cwd: pkgRoot,
-      runCommand: async (argv, _options) => runCommand(argv),
-      timeoutMs: 5000,
-    });
+    const result = await runWithCommand(runCommand, { cwd: pkgRoot });
 
     expect(result.status).toBe("ok");
     expect(stalePresentAtInstall).toBe(false);
@@ -463,11 +447,7 @@ describe("runGatewayUpdate", () => {
         },
       });
 
-      const result = await runGatewayUpdate({
-        cwd: pkgRoot,
-        runCommand: async (argv, _options) => runCommand(argv),
-        timeoutMs: 5000,
-      });
+      const result = await runWithCommand(runCommand, { cwd: pkgRoot });
 
       expect(result.status).toBe("ok");
       expect(result.mode).toBe("bun");
@@ -490,11 +470,7 @@ describe("runGatewayUpdate", () => {
       [`git -C ${tempDir} rev-parse --show-toplevel`]: { stdout: tempDir },
     });
 
-    const result = await runGatewayUpdate({
-      cwd: tempDir,
-      runCommand: async (argv, _options) => runner(argv),
-      timeoutMs: 5000,
-    });
+    const result = await runWithRunner(runner);
 
     cwdSpy.mockRestore();
 
@@ -520,12 +496,7 @@ describe("runGatewayUpdate", () => {
       "pnpm ui:build": { stdout: "" },
     });
 
-    const result = await runGatewayUpdate({
-      cwd: tempDir,
-      runCommand: async (argv, _options) => runner(argv),
-      timeoutMs: 5000,
-      channel: "stable",
-    });
+    const result = await runWithRunner(runner, { channel: "stable" });
 
     expect(result.status).toBe("error");
     expect(result.reason).toBe("doctor-entry-missing");
@@ -547,12 +518,7 @@ describe("runGatewayUpdate", () => {
       onDoctor: removeControlUiAssets,
     });
 
-    const result = await runGatewayUpdate({
-      cwd: tempDir,
-      runCommand: async (argv, _options) => runCommand(argv),
-      timeoutMs: 5000,
-      channel: "stable",
-    });
+    const result = await runWithCommand(runCommand, { channel: "stable" });
 
     expect(result.status).toBe("ok");
     expect(getUiBuildCount()).toBe(2);
@@ -577,12 +543,7 @@ describe("runGatewayUpdate", () => {
       onDoctor: removeControlUiAssets,
     });
 
-    const result = await runGatewayUpdate({
-      cwd: tempDir,
-      runCommand: async (argv, _options) => runCommand(argv),
-      timeoutMs: 5000,
-      channel: "stable",
-    });
+    const result = await runWithCommand(runCommand, { channel: "stable" });
 
     expect(result.status).toBe("error");
     expect(result.reason).toBe("ui-assets-missing");
