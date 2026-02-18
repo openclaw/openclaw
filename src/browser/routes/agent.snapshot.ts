@@ -187,7 +187,8 @@ export function registerBrowserAgentSnapshotRoutes(
     const compactRaw = toBoolean(req.query.compact);
     const depthRaw = toNumber(req.query.depth);
     const refsModeRaw = toStringOrEmpty(req.query.refs).trim();
-    const refsMode = refsModeRaw === "aria" ? "aria" : refsModeRaw === "role" ? "role" : undefined;
+    const refsMode: "aria" | "role" | undefined =
+      refsModeRaw === "aria" ? "aria" : refsModeRaw === "role" ? "role" : undefined;
     const interactive = interactiveRaw ?? (mode === "efficient" ? true : undefined);
     const compact = compactRaw ?? (mode === "efficient" ? true : undefined);
     const depth =
