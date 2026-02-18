@@ -1,12 +1,15 @@
+import fs from "node:fs";
+import path from "node:path";
+import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
+import type { ReplyPayload } from "../types.js";
+import type { HandleCommandsParams } from "./commands-types.js";
 import {
   resolveBootstrapMaxChars,
   resolveBootstrapTotalMaxChars,
 } from "../../agents/pi-embedded-helpers.js";
 import { buildSystemPromptReport } from "../../agents/system-prompt-report.js";
-import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
-import type { ReplyPayload } from "../types.js";
+import { resolveSessionFilePath } from "../../config/sessions/paths.js";
 import { resolveCommandsSystemPromptBundle } from "./commands-system-prompt.js";
-import type { HandleCommandsParams } from "./commands-types.js";
 
 function estimateTokensFromChars(chars: number): number {
   return Math.ceil(Math.max(0, chars) / 4);
@@ -39,6 +42,150 @@ function formatListTop(
   const omitted = Math.max(0, sorted.length - top.length);
   const lines = top.map((e) => `- ${e.name}: ${formatCharsAndTokens(e.value)}`);
   return { lines, omitted };
+}
+
+type ConversationRoleStats = { count: number; chars: number };
+
+type ConversationStats = {
+  available: boolean;
+  messageCount: number;
+  byRole: Record<string, ConversationRoleStats>;
+  totalChars: number;
+  totalEstimatedTokens: number;
+  compactionCount: number;
+};
+
+function getEntryContentChars(content: unknown): number {
+  if (typeof content === "string") {
+    return content.length;
+  }
+  if (!Array.isArray(content)) {
+    return 0;
+  }
+  let total = 0;
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const b = block as Record<string, unknown>;
+    if (typeof b.text === "string") {
+      total += b.text.length;
+    }
+    if (typeof b.thinking === "string") {
+      total += b.thinking.length;
+    }
+    if (b.type === "tool_use" || b.type === "toolCall") {
+      const args = b.arguments ?? b.input;
+      if (args && typeof args === "object") {
+        try {
+          total += JSON.stringify(args).length;
+        } catch {
+          total += 128;
+        }
+      }
+    }
+  }
+  return total;
+}
+
+function readConversationStats(params: {
+  sessionId?: string;
+  sessionFile?: string;
+  storePath?: string;
+  agentId?: string;
+}): ConversationStats {
+  const empty: ConversationStats = {
+    available: false,
+    messageCount: 0,
+    byRole: {},
+    totalChars: 0,
+    totalEstimatedTokens: 0,
+    compactionCount: 0,
+  };
+
+  if (!params.sessionId) {
+    return empty;
+  }
+
+  let filePath: string;
+  try {
+    filePath = resolveSessionFilePath(
+      params.sessionId,
+      params.sessionFile ? { sessionFile: params.sessionFile } : undefined,
+      {
+        agentId: params.agentId,
+        sessionsDir: params.storePath ? path.dirname(params.storePath) : undefined,
+      },
+    );
+  } catch {
+    return empty;
+  }
+
+  if (!fs.existsSync(filePath)) {
+    return empty;
+  }
+
+  try {
+    const raw = fs.readFileSync(filePath, "utf-8");
+    const lines = raw.split(/\r?\n/);
+
+    let messageCount = 0;
+    let totalChars = 0;
+    let byRole: Record<string, ConversationRoleStats> = {};
+    let compactionCount = 0;
+
+    for (const line of lines) {
+      if (!line.trim()) {
+        continue;
+      }
+      try {
+        const parsed = JSON.parse(line) as Record<string, unknown>;
+
+        // Compaction boundary — reset accumulators so we only count post-compaction messages
+        if (parsed.type === "compaction") {
+          messageCount = 0;
+          totalChars = 0;
+          byRole = {};
+          compactionCount++;
+          continue;
+        }
+
+        // Message entry: { message: { role, content, ... } }
+        const msg = parsed.message as Record<string, unknown> | undefined;
+        if (!msg || typeof msg !== "object") {
+          continue;
+        }
+
+        const role = msg.role;
+        if (typeof role !== "string") {
+          continue;
+        }
+
+        messageCount++;
+        const chars = getEntryContentChars(msg.content);
+        totalChars += chars;
+
+        if (!byRole[role]) {
+          byRole[role] = { count: 0, chars: 0 };
+        }
+        byRole[role].count++;
+        byRole[role].chars += chars;
+      } catch {
+        // skip malformed lines
+      }
+    }
+
+    return {
+      available: true,
+      messageCount,
+      byRole,
+      totalChars,
+      totalEstimatedTokens: Math.ceil(totalChars / 4),
+      compactionCount,
+    };
+  } catch {
+    return empty;
+  }
 }
 
 async function resolveContextReport(
@@ -102,8 +249,15 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     contextTokens: params.contextTokens ?? null,
   } as const;
 
+  const conversation = readConversationStats({
+    sessionId: params.sessionEntry?.sessionId,
+    sessionFile: params.sessionEntry?.sessionFile,
+    storePath: params.storePath,
+    agentId: params.agentId,
+  });
+
   if (sub === "json") {
-    return { text: JSON.stringify({ report, session }, null, 2) };
+    return { text: JSON.stringify({ report, session, conversation }, null, 2) };
   }
 
   if (sub !== "list" && sub !== "show" && sub !== "detail" && sub !== "deep") {
@@ -182,6 +336,27 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
       ? `Session tokens (cached): ${formatInt(session.totalTokens)} total / ctx=${session.contextTokens ?? "?"}`
       : `Session tokens (cached): unknown / ctx=${session.contextTokens ?? "?"}`;
 
+  const conversationLine = conversation.available
+    ? `Conversation (post-compaction): ${formatInt(conversation.messageCount)} messages, ${formatCharsAndTokens(conversation.totalChars)}`
+    : "Conversation: unavailable (no session transcript)";
+  const compactionLine =
+    conversation.compactionCount > 0 ? `Compactions: ${conversation.compactionCount}` : null;
+  const roleLines = conversation.available
+    ? Object.entries(conversation.byRole)
+        .toSorted(([, a], [, b]) => b.chars - a.chars)
+        .map(
+          ([role, stats]) => `- ${role}: ${stats.count} msgs, ${formatCharsAndTokens(stats.chars)}`,
+        )
+    : [];
+  const systemPromptTokens = estimateTokensFromChars(report.systemPrompt.chars);
+  const toolSchemaTokens = estimateTokensFromChars(report.tools.schemaChars);
+  const conversationTokens = conversation.totalEstimatedTokens;
+  const combinedTokens = systemPromptTokens + toolSchemaTokens + conversationTokens;
+  const windowTokens = session.contextTokens;
+  const windowLabel = windowTokens ? formatInt(windowTokens) : "?";
+  const usagePct = windowTokens ? `${Math.round((combinedTokens / windowTokens) * 100)}%` : "?%";
+  const combinedLine = `Context estimate: ~${formatInt(combinedTokens)} tok (system ~${formatInt(systemPromptTokens)} + tools ~${formatInt(toolSchemaTokens)} + conversation ~${formatInt(conversationTokens)}) / window=${windowLabel} (${usagePct})`;
+
   if (sub === "detail" || sub === "deep") {
     const perSkill = formatListTop(
       report.skills.entries.map((s) => ({ name: s.name, value: s.blockChars })),
@@ -231,9 +406,12 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
         ...(perToolSummary.omitted ? [`… (+${perToolSummary.omitted} more tools)`] : []),
         ...(toolPropsLines.length ? ["", "Tools (param count):", ...toolPropsLines] : []),
         "",
-        totalsLine,
+        conversationLine,
+        ...(compactionLine ? [compactionLine] : []),
+        ...roleLines,
         "",
-        "Inline shortcut: a command token inside normal text (e.g. “hey /status”) that runs immediately (allowlisted senders only) and is stripped before the model sees the remaining message.",
+        combinedLine,
+        totalsLine,
       ]
         .filter(Boolean)
         .join("\n"),
@@ -259,9 +437,11 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
       toolSchemaLine,
       toolsNamesLine,
       "",
-      totalsLine,
+      conversationLine,
+      ...(compactionLine ? [compactionLine] : []),
       "",
-      "Inline shortcut: a command token inside normal text (e.g. “hey /status”) that runs immediately (allowlisted senders only) and is stripped before the model sees the remaining message.",
+      combinedLine,
+      totalsLine,
     ].join("\n"),
   };
 }
