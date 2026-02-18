@@ -89,10 +89,14 @@ export class ReplyChainEnforcer {
 
     if (evt.phase === "start") {
       // Do nothing on start. Wait for first token.
-    } else if (evt.phase === "error") {
-      // Only disarm on error. Normal "end" keeps it armed until explicit NO_REPLY token.
+    } else if (evt.phase === "error" || evt.phase === "end") {
+      // Disarm on error OR normal end.
+      // Normal conversational turns (e.g. asking a question) end with "end" lifecycle,
+      // and we shouldn't force the user to reply within 30s.
       this.setState(evt.sessionKey, "disarmed", `Lifecycle ${evt.phase}`);
-      this.logger.debug("Chain DISARMED by lifecycle error", { key: evt.sessionKey });
+      if (evt.phase === "error") {
+        this.logger.debug("Chain DISARMED by lifecycle error", { key: evt.sessionKey });
+      }
     }
   }
 
