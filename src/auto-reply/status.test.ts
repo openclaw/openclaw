@@ -214,6 +214,28 @@ describe("buildStatusMessage", () => {
     expect(normalizeTestText(text)).toContain("Model: openai/gpt-4.1-mini");
   });
 
+  it("shows last-run model from fallback when no user override is set", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "openai-codex/gpt-5.2",
+        contextTokens: 32_000,
+      },
+      sessionEntry: {
+        sessionId: "fallback-1",
+        updatedAt: 0,
+        modelProvider: "anthropic",
+        model: "claude-opus-4-6",
+        contextTokens: 32_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+    });
+
+    expect(normalizeTestText(text)).toContain("Model: anthropic/claude-opus-4-6");
+  });
+
   it("keeps provider prefix from configured model", () => {
     const text = buildStatusMessage({
       agent: {

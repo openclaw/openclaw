@@ -295,7 +295,10 @@ export function createSessionStatusTool(opts?: {
       }
 
       const agentDir = resolveAgentDir(cfg, agentId);
-      const providerForCard = resolved.entry.providerOverride?.trim() || configured.provider;
+      const providerForCard =
+        resolved.entry.providerOverride?.trim() ||
+        resolved.entry.modelProvider?.trim() ||
+        configured.provider;
       const usageProvider = resolveUsageProviderId(providerForCard);
       let usageLine: string | undefined;
       if (usageProvider) {
