@@ -90,6 +90,8 @@ function resolveMattermostSlashCallbackPaths(
   configSnapshot: ReturnType<typeof loadConfig>,
 ): Set<string> {
   const callbackPaths = new Set<string>([MATTERMOST_SLASH_CALLBACK_PATH]);
+  const isMattermostCommandCallbackPath = (path: string): boolean =>
+    path === MATTERMOST_SLASH_CALLBACK_PATH || path.startsWith("/api/channels/mattermost/");
 
   const normalizeCallbackPath = (value: unknown): string => {
     const trimmed = typeof value === "string" ? value.trim() : "";
@@ -109,7 +111,7 @@ function resolveMattermostSlashCallbackPaths(
     }
     try {
       const pathname = new URL(trimmed).pathname;
-      if (pathname) {
+      if (pathname && isMattermostCommandCallbackPath(pathname)) {
         callbackPaths.add(pathname);
       }
     } catch {
@@ -123,7 +125,10 @@ function resolveMattermostSlashCallbackPaths(
       return;
     }
     const commands = raw as Record<string, unknown>;
-    callbackPaths.add(normalizeCallbackPath(commands.callbackPath));
+    const callbackPath = normalizeCallbackPath(commands.callbackPath);
+    if (isMattermostCommandCallbackPath(callbackPath)) {
+      callbackPaths.add(callbackPath);
+    }
     tryAddCallbackUrlPath(commands.callbackUrl);
   };
 
