@@ -245,9 +245,6 @@ export async function parseAndDispatchInfoflowRequest(
           signature.length === expectedSig.length &&
           timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSig))
         ) {
-          if (verbose) {
-            getInfoflowParseLog().debug?.(`[infoflow] echostr verified successfully`);
-          }
           return { handled: true, statusCode: 200, body: echostr };
         }
       }
@@ -305,12 +302,6 @@ function tryDecryptAndDispatch(params: DecryptDispatchParams): ParseResult {
   if (!encryptedContent.trim()) {
     getInfoflowParseLog().error(`[infoflow] ${chatType}: empty encrypted content`);
     return { handled: true, statusCode: 400, body: "empty content" };
-  }
-
-  if (verbose) {
-    getInfoflowParseLog().debug?.(
-      `[infoflow] ${chatType}: trying ${targets.length} account(s) for decryption`,
-    );
   }
 
   for (const target of targets) {
