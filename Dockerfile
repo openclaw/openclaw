@@ -44,8 +44,9 @@ RUN pnpm ui:build
 
 ENV NODE_ENV=production
 
-# Allow non-root user to write temp files during runtime/tests.
-RUN chown -R node:node /app
+# Avoid expensive recursive ownership rewrite on large node_modules trees.
+# Node only needs write access to the app root for runtime state/temp files.
+RUN chown node:node /app
 
 # Security hardening: Run as non-root user
 # The node:22-bookworm image includes a 'node' user (uid 1000)
