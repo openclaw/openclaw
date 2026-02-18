@@ -57,6 +57,7 @@ import {
   buildTelegramParentPeer,
   resolveTelegramGroupAllowFromContext,
   resolveTelegramThreadSpec,
+  withTelegramThreadFallback,
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import {
@@ -527,15 +528,21 @@ export const registerTelegramNativeCommands = ({
               );
             }
             const replyMarkup = buildInlineKeyboard(rows);
-            await withTelegramApiErrorLogging({
-              operation: "sendMessage",
-              runtime,
-              fn: () =>
-                bot.api.sendMessage(chatId, title, {
-                  ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
-                  ...threadParams,
+            await withTelegramThreadFallback(
+              threadParams,
+              "sendMessage",
+              (p) =>
+                withTelegramApiErrorLogging({
+                  operation: "sendMessage",
+                  runtime,
+                  fn: () =>
+                    bot.api.sendMessage(chatId, title, {
+                      ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+                      ...p,
+                    }),
                 }),
-            });
+              { warn: runtime.warn },
+            );
             return;
           }
           const baseSessionKey = route.sessionKey;

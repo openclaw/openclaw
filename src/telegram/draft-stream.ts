@@ -1,6 +1,11 @@
 import type { Bot } from "grammy";
 import { createDraftStreamLoop } from "../channels/draft-stream-loop.js";
-import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import {
+  buildTelegramThreadParams,
+  withTelegramThreadFallback,
+  type TelegramThreadSpec,
+} from "./bot/helpers.js";
 
 const TELEGRAM_STREAM_MAX_CHARS = 4096;
 const DEFAULT_THROTTLE_MS = 1000;
@@ -80,7 +85,12 @@ export function createTelegramDraftStream(params: {
         await params.api.editMessageText(chatId, streamMessageId, trimmed);
         return true;
       }
-      const sent = await params.api.sendMessage(chatId, trimmed, replyParams);
+      const sent = await withTelegramThreadFallback(
+        replyParams,
+        "stream-message",
+        (p) => params.api.sendMessage(chatId, trimmed, p),
+        { warn: params.warn },
+      );
       const sentMessageId = sent?.message_id;
       if (typeof sentMessageId !== "number" || !Number.isFinite(sentMessageId)) {
         stopped = true;
