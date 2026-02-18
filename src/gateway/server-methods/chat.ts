@@ -764,9 +764,9 @@ export const chatHandlers: GatewayRequestHandlers = {
             if (combinedReply) {
               const { storePath: latestStorePath, entry: latestEntry } =
                 loadSessionEntry(sessionKey);
-              // Use stable sessionId - prefer existing sessionId or generate new one,
+              // Use stable sessionId - prefer existing sessionId or resolvedSessionId,
               // don't use clientRunId as it changes per message.
-              const sessionId = latestEntry?.sessionId ?? entry?.sessionId ?? randomUUID();
+              const sessionId = latestEntry?.sessionId ?? entry?.sessionId ?? resolvedSessionId;
               const appended = appendAssistantTranscriptMessage({
                 message: combinedReply,
                 sessionId,
