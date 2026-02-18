@@ -29,24 +29,25 @@ jobs:
           
       - name: Overlay our source code
         run: |
-          # Copy our Dart source
+          # Copy our Dart source (replace scaffold's lib/ and remove test/)
           rm -rf /tmp/build/lib
           rm -rf /tmp/build/test
           cp -r android/lib /tmp/build/
           cp android/pubspec.yaml /tmp/build/
           
-          # Copy our Android-specific config
-          cp android/android/app/build.gradle /tmp/build/android/app/
+          # Merge our AndroidManifest permissions into scaffold's manifest
           cp android/android/app/src/main/AndroidManifest.xml /tmp/build/android/app/src/main/
           
-          # Create package dir and copy MainActivity
-          mkdir -p /tmp/build/android/app/src/main/kotlin/com/openclaw/node
-          cp android/android/app/src/main/kotlin/com/openclaw/node/MainActivity.kt \
-             /tmp/build/android/app/src/main/kotlin/com/openclaw/node/
+          # Bump minSdk to 21 in scaffold's build.gradle (BLE requires it)
+          sed -i 's/minSdk =.*/minSdk = 21/' /tmp/build/android/app/build.gradle
+          sed -i 's/minSdkVersion.*/minSdkVersion 21/' /tmp/build/android/app/build.gradle
           
-          # Copy styles and gradle props
-          cp android/android/app/src/main/res/values/styles.xml /tmp/build/android/app/src/main/res/values/
-          cp android/android/gradle.properties /tmp/build/android/
+          # Set namespace
+          sed -i 's/namespace =.*/namespace = "com.openclaw.node"/' /tmp/build/android/app/build.gradle
+          sed -i 's/applicationId =.*/applicationId = "com.openclaw.node"/' /tmp/build/android/app/build.gradle
+          
+          # Ensure AndroidX + no Jetifier
+          echo "android.enableJetifier=false" >> /tmp/build/android/gradle.properties
 
       - name: Install dependencies
         working-directory: /tmp/build
