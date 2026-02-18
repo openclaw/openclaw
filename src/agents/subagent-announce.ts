@@ -463,12 +463,17 @@ async function sendSubagentAnnounceDirectly(params: {
       hasCompletionDirectTarget &&
       params.completionMessage?.trim()
     ) {
+      const completionThreadId =
+        completionDirectOrigin?.threadId != null && completionDirectOrigin.threadId !== ""
+          ? String(completionDirectOrigin.threadId)
+          : undefined;
       await callGateway({
         method: "send",
         params: {
           channel: completionChannel,
           to: completionTo,
           accountId: completionDirectOrigin?.accountId,
+          threadId: completionThreadId,
           sessionKey: canonicalRequesterSessionKey,
           message: params.completionMessage,
           idempotencyKey: params.directIdempotencyKey,

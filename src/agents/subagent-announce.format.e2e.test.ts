@@ -372,11 +372,8 @@ describe("subagent announce formatting", () => {
     expect(call?.params?.channel).toBe("discord");
     expect(call?.params?.to).toBe("channel:12345");
     expect(call?.params?.sessionKey).toBe("agent:main:main");
-    expect(msg).toContain("[System Message]");
-    expect(msg).toContain('subagent task "do thing"');
-    expect(msg).toContain("Result:");
+    expect(msg).toContain("✅ Subagent main finished");
     expect(msg).toContain("final answer: 2");
-    expect(msg).toContain("Stats:");
     expect(msg).not.toContain("Convert the result above into your normal assistant voice");
   });
 
@@ -413,6 +410,45 @@ describe("subagent announce formatting", () => {
     const call = sendSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
     expect(call?.params?.channel).toBe("discord");
     expect(call?.params?.to).toBe("channel:12345");
+    expect(call?.params?.threadId).toBeUndefined();
+  });
+
+  it("passes requesterOrigin.threadId for manual completion direct-send", async () => {
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+    sessionStore = {
+      "agent:main:subagent:test": {
+        sessionId: "child-session-direct-thread-pass",
+      },
+      "agent:main:main": {
+        sessionId: "requester-session-thread-pass",
+      },
+    };
+    chatHistoryMock.mockResolvedValueOnce({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "done" }] }],
+    });
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-direct-thread-pass",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: {
+        channel: "discord",
+        to: "channel:12345",
+        accountId: "acct-1",
+        threadId: 99,
+      },
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    expect(agentSpy).not.toHaveBeenCalled();
+    const call = sendSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    expect(call?.params?.channel).toBe("discord");
+    expect(call?.params?.to).toBe("channel:12345");
+    expect(call?.params?.threadId).toBe("99");
   });
 
   it("steers announcements into an active run when queue mode is steer", async () => {
