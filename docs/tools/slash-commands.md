@@ -15,19 +15,19 @@ The host-only bash chat command uses `! <cmd>` (with `/bash <cmd>` as an alias).
 
 Access to commands is controlled by three independent layers, applied in order:
 
-| Layer              | Config                                                 | Controls                                                                   |
-| ------------------ | ------------------------------------------------------ | -------------------------------------------------------------------------- |
-| **Channel access** | `channels.<provider>.allowFrom` / `dmPolicy` / pairing | Who can send messages to the agent at all                                  |
-| **Command access** | `commands.allowFrom`                                   | Who can use slash commands and directives                                  |
-| **Owner access**   | `commands.ownerAllowFrom`                              | Who is the privileged owner (owner-only commands + system prompt identity) |
+| Layer              | Config                                                 | Controls                                                                 |
+| ------------------ | ------------------------------------------------------ | ------------------------------------------------------------------------ |
+| **Channel access** | `channels.<provider>.allowFrom` / `dmPolicy` / pairing | Who can send messages to the agent at all                                |
+| **Command access** | `commands.allowFrom`                                   | Who can use slash commands and directives                                |
+| **Owner access**   | `commands.ownerAllowFrom`                              | Who is the privileged owner (system prompt identity + owner-gated tools) |
 
 **Channel access** is the outer gate — if someone can't chat with the agent, they can't use commands either.
 
 **Command access** (`commands.allowFrom`) controls slash commands and directives independently of channel access. Useful when you have multiple chatters but only want some to run commands. When not set, command access falls back to `commands.useAccessGroups` (uses channel allowlists).
 
-**Owner access** (`commands.ownerAllowFrom`) designates the privileged owner. Owners can use all commands including owner-only ones (e.g. `/config`, `/debug`, `/send`). The owner's identity is also injected into the agent's system prompt as `Owner numbers: ...`. When not set, ownership is derived from `commands.allowFrom` or channel allowlists — so in single-user setups you usually don't need to set this explicitly.
+**Owner access** (`commands.ownerAllowFrom`) designates the privileged owner. The owner's identity is injected into the agent's system prompt as `Owner numbers: ...`, and owner-gated agent tools (e.g. `whatsapp_login`) are restricted to owners only. Owner status does not gate any slash commands — all slash commands use the same command access check. When not set, ownership is derived from channel allowlists (`channels.<provider>.allowFrom` / pairing) — so in single-user setups you usually don't need to set this explicitly.
 
-> **Common setup:** Lock `commands.allowFrom` to yourself across each channel. Leave `commands.ownerAllowFrom` unset — the gateway will derive ownership from your `commands.allowFrom`. Only configure `ownerAllowFrom` explicitly if you want a different person to have owner-level command access than general command access.
+> **Common setup:** Lock `commands.allowFrom` to yourself across each channel. Leave `commands.ownerAllowFrom` unset — the gateway will derive ownership from your channel allowlists. Only configure `ownerAllowFrom` explicitly if you want a different person to have owner-level command access than general command access.
 
 There are two related systems:
 
@@ -83,11 +83,11 @@ They run immediately, are stripped before the model sees the message, and the re
   only authorization source for commands and directives — channel allowlists/pairing and `commands.useAccessGroups`
   are ignored. Use `"*"` for a global default; provider-specific keys override it.
 - `commands.useAccessGroups` (default `true`) enforces allowlists/policies for commands when `commands.allowFrom` is not set.
-- `commands.ownerAllowFrom` (optional) sets the explicit owner allowlist. Owners can use all commands including
-  owner-only ones (marked † in the command list below). The owner's ID is also injected into the agent's system
-  prompt. Accepts plain channel-native IDs or provider-prefixed IDs (e.g. `"whatsapp:+15551234567"`). `"*"` is
-  ignored. When not set, the owner is derived from `commands.allowFrom` or channel allowlists — sufficient for
-  single-user setups where command access and owner access are the same person.
+- `commands.ownerAllowFrom` (optional) sets the explicit owner allowlist. The owner's ID is injected into the
+  agent's system prompt as `Owner numbers: ...` and gates owner-only agent tools (e.g. `whatsapp_login`). Accepts
+  plain channel-native IDs or provider-prefixed IDs (e.g. `"whatsapp:+15551234567"`). Do not use `"*"` — it
+  results in no owner being designated. When not set, ownership is derived from channel allowlists — sufficient
+  for single-user setups.
 
 ## Command list
 
@@ -112,8 +112,8 @@ Text + native (when enabled):
 - `/kill <id|#|all>` (immediately abort one or all running sub-agents for this session; no confirmation message)
 - `/steer <id|#> <message>` (steer a running sub-agent immediately: in-run when possible, otherwise abort current work and restart on the steer message)
 - `/tell <id|#> <message>` (alias for `/steer`)
-- `/config show|get|set|unset` (persist config to disk; requires `commands.config: true`) †
-- `/debug show|set|unset|reset` (runtime overrides; requires `commands.debug: true`) †
+- `/config show|get|set|unset` (persist config to disk; requires `commands.config: true`)
+- `/debug show|set|unset|reset` (runtime overrides; requires `commands.debug: true`)
 - `/usage off|tokens|full|cost` (per-response usage footer or local cost summary)
 - `/tts off|always|inbound|tagged|status|provider|limit|summary|audio` (control TTS; see [/tts](/tts))
   - Discord: native command is `/voice` (Discord reserves `/tts`); text `/tts` still works.
@@ -123,7 +123,7 @@ Text + native (when enabled):
 - `/dock-discord` (alias: `/dock_discord`) (switch replies to Discord)
 - `/dock-slack` (alias: `/dock_slack`) (switch replies to Slack)
 - `/activation mention|always` (groups only)
-- `/send on|off|inherit` †
+- `/send on|off|inherit`
 - `/reset` or `/new [model]` (optional model hint; remainder is passed through)
 - `/think <off|minimal|low|medium|high|xhigh>` (dynamic choices by model/provider; aliases: `/thinking`, `/t`)
 - `/verbose on|full|off` (alias: `/v`)
@@ -133,8 +133,6 @@ Text + native (when enabled):
 - `/model <name>` (alias: `/models`; or `/<alias>` from `agents.defaults.models.*.alias`)
 - `/queue <mode>` (plus options like `debounce:2s cap:25 drop:summarize`; send `/queue` to see current settings)
 - `/bash <command>` (host-only; alias for `! <command>`; requires `commands.bash: true` + `tools.elevated` allowlists)
-
-† **Owner-only** — requires the sender to match `commands.ownerAllowFrom`. If not configured, ownership is derived from `commands.allowFrom` or channel allowlists. See [Authorization model](#authorization-model) above.
 
 Text-only:
 
