@@ -40,7 +40,15 @@ vi.mock("../agents/model-auth.js", () => ({
   requireApiKey: vi.fn((auth: { apiKey?: string }) => auth.apiKey ?? ""),
 }));
 
-const { _test, resolveTtsConfig, maybeApplyTtsToPayload, getTtsProvider } = tts;
+const {
+  _test,
+  resolveTtsConfig,
+  resolveTtsApiKey,
+  maybeApplyTtsToPayload,
+  getTtsProvider,
+  TTS_PROVIDERS,
+  resolveTtsProviderOrder,
+} = tts;
 
 const {
   isValidVoiceId,
@@ -237,6 +245,14 @@ describe("tts", () => {
       expect(result.overrides.provider).toBe("edge");
     });
 
+    it("accepts minimax as provider override", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true });
+      const input = "Hello [[tts:provider=minimax]] world";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.overrides.provider).toBe("minimax");
+    });
+
     it("keeps text intact when overrides are disabled", () => {
       const policy = resolveModelOverridePolicy({ enabled: false });
       const input = "Hello [[tts:voice=alloy]] world";
@@ -421,12 +437,29 @@ describe("tts", () => {
       );
     });
 
+    it("prefers MiniMax when OpenAI and ElevenLabs keys are missing and MiniMax key exists", () => {
+      withEnv(
+        {
+          OPENAI_API_KEY: undefined,
+          ELEVENLABS_API_KEY: undefined,
+          XI_API_KEY: undefined,
+          MINIMAX_API_KEY: "test-minimax-key",
+        },
+        () => {
+          const config = resolveTtsConfig(baseCfg);
+          const provider = getTtsProvider(config, "/tmp/tts-prefs-minimax.json");
+          expect(provider).toBe("minimax");
+        },
+      );
+    });
+
     it("falls back to Edge when no API keys are present", () => {
       withEnv(
         {
           OPENAI_API_KEY: undefined,
           ELEVENLABS_API_KEY: undefined,
           XI_API_KEY: undefined,
+          MINIMAX_API_KEY: undefined,
         },
         () => {
           const config = resolveTtsConfig(baseCfg);
@@ -434,6 +467,111 @@ describe("tts", () => {
           expect(provider).toBe("edge");
         },
       );
+    });
+  });
+
+  describe("resolveTtsConfig minimax defaults", () => {
+    const baseCfg: OpenClawConfig = {
+      agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+      messages: { tts: {} },
+    };
+
+    it("uses default minimax settings when not configured", () => {
+      const config = resolveTtsConfig(baseCfg);
+      expect(config.minimax.model).toBe("speech-2.8-hd");
+      expect(config.minimax.voiceId).toBe("English_expressive_narrator");
+      expect(config.minimax.speed).toBe(1);
+      expect(config.minimax.vol).toBe(1);
+      expect(config.minimax.pitch).toBe(0);
+      expect(config.minimax.audioFormat).toBe("mp3");
+      expect(config.minimax.sampleRate).toBe(32000);
+      expect(config.minimax.bitrate).toBe(128000);
+    });
+
+    it("respects user-configured minimax settings", () => {
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+        messages: {
+          tts: {
+            minimax: {
+              apiKey: "test-key",
+              model: "speech-2.8-turbo",
+              voiceId: "Chinese_female_narrator",
+              speed: 1.5,
+              vol: 2,
+              pitch: 3,
+              languageBoost: "Chinese",
+              audioFormat: "wav",
+              sampleRate: 48000,
+              bitrate: 256000,
+            },
+          },
+        },
+      };
+      const config = resolveTtsConfig(cfg);
+      expect(config.minimax.apiKey).toBe("test-key");
+      expect(config.minimax.model).toBe("speech-2.8-turbo");
+      expect(config.minimax.voiceId).toBe("Chinese_female_narrator");
+      expect(config.minimax.speed).toBe(1.5);
+      expect(config.minimax.vol).toBe(2);
+      expect(config.minimax.pitch).toBe(3);
+      expect(config.minimax.languageBoost).toBe("Chinese");
+      expect(config.minimax.audioFormat).toBe("wav");
+      expect(config.minimax.sampleRate).toBe(48000);
+      expect(config.minimax.bitrate).toBe(256000);
+    });
+  });
+
+  describe("resolveTtsApiKey minimax", () => {
+    const baseCfg: OpenClawConfig = {
+      agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+      messages: { tts: {} },
+    };
+
+    it("resolves minimax API key from config", () => {
+      const cfg: OpenClawConfig = {
+        ...baseCfg,
+        messages: { tts: { minimax: { apiKey: "cfg-minimax-key" } } },
+      };
+      const config = resolveTtsConfig(cfg);
+      expect(resolveTtsApiKey(config, "minimax")).toBe("cfg-minimax-key");
+    });
+
+    it("resolves minimax API key from environment", () => {
+      withEnv({ MINIMAX_API_KEY: "env-minimax-key" }, () => {
+        const config = resolveTtsConfig(baseCfg);
+        expect(resolveTtsApiKey(config, "minimax")).toBe("env-minimax-key");
+      });
+    });
+
+    it("returns undefined when no minimax key is available", () => {
+      withEnv({ MINIMAX_API_KEY: undefined }, () => {
+        const config = resolveTtsConfig(baseCfg);
+        expect(resolveTtsApiKey(config, "minimax")).toBeUndefined();
+      });
+    });
+  });
+
+  describe("TTS_PROVIDERS", () => {
+    it("includes minimax", () => {
+      expect(TTS_PROVIDERS).toContain("minimax");
+    });
+
+    it("contains all four providers", () => {
+      expect(TTS_PROVIDERS).toContain("openai");
+      expect(TTS_PROVIDERS).toContain("elevenlabs");
+      expect(TTS_PROVIDERS).toContain("minimax");
+      expect(TTS_PROVIDERS).toContain("edge");
+    });
+  });
+
+  describe("resolveTtsProviderOrder", () => {
+    it("puts minimax first when selected as primary", () => {
+      const order = resolveTtsProviderOrder("minimax");
+      expect(order[0]).toBe("minimax");
+      expect(order).toContain("openai");
+      expect(order).toContain("elevenlabs");
+      expect(order).toContain("edge");
     });
   });
 

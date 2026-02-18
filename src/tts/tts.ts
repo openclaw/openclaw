@@ -32,6 +32,7 @@ import {
   isValidOpenAIModel,
   isValidOpenAIVoice,
   isValidVoiceId,
+  minimaxTTS,
   OPENAI_TTS_MODELS,
   OPENAI_TTS_VOICES,
   openaiTTS,
@@ -54,6 +55,15 @@ const DEFAULT_OPENAI_VOICE = "alloy";
 const DEFAULT_EDGE_VOICE = "en-US-MichelleNeural";
 const DEFAULT_EDGE_LANG = "en-US";
 const DEFAULT_EDGE_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
+
+const DEFAULT_MINIMAX_MODEL = "speech-2.8-hd";
+const DEFAULT_MINIMAX_VOICE_ID = "English_expressive_narrator";
+const DEFAULT_MINIMAX_SPEED = 1;
+const DEFAULT_MINIMAX_VOL = 1;
+const DEFAULT_MINIMAX_PITCH = 0;
+const DEFAULT_MINIMAX_AUDIO_FORMAT = "mp3" as const;
+const DEFAULT_MINIMAX_SAMPLE_RATE = 32000;
+const DEFAULT_MINIMAX_BITRATE = 128000;
 
 const DEFAULT_ELEVENLABS_VOICE_SETTINGS = {
   stability: 0.5,
@@ -113,6 +123,18 @@ export type ResolvedTtsConfig = {
     apiKey?: string;
     model: string;
     voice: string;
+  };
+  minimax: {
+    apiKey?: string;
+    model: string;
+    voiceId: string;
+    speed: number;
+    vol: number;
+    pitch: number;
+    languageBoost?: string;
+    audioFormat: "mp3" | "wav" | "flac";
+    sampleRate: number;
+    bitrate: number;
   };
   edge: {
     enabled: boolean;
@@ -288,6 +310,18 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
       model: raw.openai?.model ?? DEFAULT_OPENAI_MODEL,
       voice: raw.openai?.voice ?? DEFAULT_OPENAI_VOICE,
     },
+    minimax: {
+      apiKey: raw.minimax?.apiKey,
+      model: raw.minimax?.model ?? DEFAULT_MINIMAX_MODEL,
+      voiceId: raw.minimax?.voiceId ?? DEFAULT_MINIMAX_VOICE_ID,
+      speed: raw.minimax?.speed ?? DEFAULT_MINIMAX_SPEED,
+      vol: raw.minimax?.vol ?? DEFAULT_MINIMAX_VOL,
+      pitch: raw.minimax?.pitch ?? DEFAULT_MINIMAX_PITCH,
+      languageBoost: raw.minimax?.languageBoost,
+      audioFormat: raw.minimax?.audioFormat ?? DEFAULT_MINIMAX_AUDIO_FORMAT,
+      sampleRate: raw.minimax?.sampleRate ?? DEFAULT_MINIMAX_SAMPLE_RATE,
+      bitrate: raw.minimax?.bitrate ?? DEFAULT_MINIMAX_BITRATE,
+    },
     edge: {
       enabled: raw.edge?.enabled ?? true,
       voice: raw.edge?.voice?.trim() || DEFAULT_EDGE_VOICE,
@@ -439,6 +473,9 @@ export function getTtsProvider(config: ResolvedTtsConfig, prefsPath: string): Tt
   if (resolveTtsApiKey(config, "elevenlabs")) {
     return "elevenlabs";
   }
+  if (resolveTtsApiKey(config, "minimax")) {
+    return "minimax";
+  }
   return "edge";
 }
 
@@ -503,10 +540,13 @@ export function resolveTtsApiKey(
   if (provider === "openai") {
     return config.openai.apiKey || process.env.OPENAI_API_KEY;
   }
+  if (provider === "minimax") {
+    return config.minimax.apiKey || process.env.MINIMAX_API_KEY;
+  }
   return undefined;
 }
 
-export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge"] as const;
+export const TTS_PROVIDERS = ["openai", "elevenlabs", "minimax", "edge"] as const;
 
 export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
   return [primary, ...TTS_PROVIDERS.filter((provider) => provider !== primary)];
@@ -631,7 +671,22 @@ export async function textToSpeech(params: {
       }
 
       let audioBuffer: Buffer;
-      if (provider === "elevenlabs") {
+      if (provider === "minimax") {
+        audioBuffer = await minimaxTTS({
+          text: params.text,
+          apiKey,
+          model: config.minimax.model,
+          voiceId: config.minimax.voiceId,
+          speed: config.minimax.speed,
+          vol: config.minimax.vol,
+          pitch: config.minimax.pitch,
+          languageBoost: config.minimax.languageBoost,
+          audioFormat: config.minimax.audioFormat,
+          sampleRate: config.minimax.sampleRate,
+          bitrate: config.minimax.bitrate,
+          timeoutMs: config.timeoutMs,
+        });
+      } else if (provider === "elevenlabs") {
         const voiceIdOverride = params.overrides?.elevenlabs?.voiceId;
         const modelIdOverride = params.overrides?.elevenlabs?.modelId;
         const voiceSettings = {
@@ -725,6 +780,32 @@ export async function textToSpeechTelephony(params: {
       if (!apiKey) {
         errors.push(`${provider}: no API key`);
         continue;
+      }
+
+      if (provider === "minimax") {
+        const audioBuffer = await minimaxTTS({
+          text: params.text,
+          apiKey,
+          model: config.minimax.model,
+          voiceId: config.minimax.voiceId,
+          speed: config.minimax.speed,
+          vol: config.minimax.vol,
+          pitch: config.minimax.pitch,
+          languageBoost: config.minimax.languageBoost,
+          audioFormat: "mp3",
+          sampleRate: 24000,
+          bitrate: 128000,
+          timeoutMs: config.timeoutMs,
+        });
+
+        return {
+          success: true,
+          audioBuffer,
+          latencyMs: Date.now() - providerStart,
+          provider,
+          outputFormat: "mp3",
+          sampleRate: 24000,
+        };
       }
 
       if (provider === "elevenlabs") {

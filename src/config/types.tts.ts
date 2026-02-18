@@ -1,4 +1,4 @@
-export type TtsProvider = "elevenlabs" | "openai" | "edge";
+export type TtsProvider = "elevenlabs" | "openai" | "edge" | "minimax";
 
 export type TtsMode = "final" | "all";
 
@@ -58,6 +58,19 @@ export type TtsConfig = {
     apiKey?: string;
     model?: string;
     voice?: string;
+  };
+  /** MiniMax TTS configuration. */
+  minimax?: {
+    apiKey?: string;
+    model?: string;
+    voiceId?: string;
+    speed?: number;
+    vol?: number;
+    pitch?: number;
+    languageBoost?: string;
+    audioFormat?: "mp3" | "wav" | "flac";
+    sampleRate?: number;
+    bitrate?: number;
   };
   /** Microsoft Edge (node-edge-tts) configuration. */
   edge?: {
