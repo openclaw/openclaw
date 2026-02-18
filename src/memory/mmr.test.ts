@@ -108,12 +108,15 @@ describe("computeMMRScore", () => {
   });
 });
 
+describe("empty input behavior", () => {
+  it("returns empty array for empty input", () => {
+    expect(mmrRerank([])).toEqual([]);
+    expect(applyMMRToHybridResults([])).toEqual([]);
+  });
+});
+
 describe("mmrRerank", () => {
   describe("edge cases", () => {
-    it("returns empty array for empty input", () => {
-      expect(mmrRerank([])).toEqual([]);
-    });
-
     it("returns single item unchanged", () => {
       const items: MMRItem[] = [{ id: "1", score: 0.9, content: "hello" }];
       expect(mmrRerank(items)).toEqual(items);
@@ -270,10 +273,6 @@ describe("applyMMRToHybridResults", () => {
     snippet: string;
     source: string;
   };
-
-  it("returns empty array for empty input", () => {
-    expect(applyMMRToHybridResults([])).toEqual([]);
-  });
 
   it("preserves all original fields", () => {
     const results: HybridResult[] = [
