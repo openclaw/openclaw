@@ -26,6 +26,19 @@ export type StreamCacheConfig = {
   streamingDelayMs?: number;
 };
 
+export type StreamCacheStats = {
+  hits: number;
+  misses: number;
+  evictions: number;
+  stampedePrevented: number;
+  skippedForTools: number;
+  hitRate: string;
+  size: number;
+  maxSize: number;
+  byteSize: number;
+  maxByteSize: number;
+};
+
 export type StreamCacheWrapper = {
   wrapStreamFn: <TApi extends string>(
     streamFn: (
@@ -38,7 +51,7 @@ export type StreamCacheWrapper = {
     context: Context,
     options?: StreamOptions,
   ) => AssistantMessageEventStream | Promise<AssistantMessageEventStream>;
-  getStats: () => ReturnType<ReturnType<typeof getLLMCache>["getStats"]>;
+  getStats: () => StreamCacheStats;
   clear: () => void;
 };
 
@@ -175,10 +188,14 @@ export function createStreamCacheWrapper(config: StreamCacheConfig): StreamCache
   });
 
   const streamingDelay = config.streamingDelayMs ?? 0;
+  let skippedForTools = 0;
 
   const wrapStreamFn: StreamCacheWrapper["wrapStreamFn"] = (streamFn) => {
     return (model, context, options) => {
       if (shouldSkipCache(context, config)) {
+        if (config.skipCacheForTools && context.tools && context.tools.length > 0) {
+          skippedForTools++;
+        }
         return streamFn(model, context, options);
       }
 
@@ -239,7 +256,13 @@ export function createStreamCacheWrapper(config: StreamCacheConfig): StreamCache
 
   return {
     wrapStreamFn,
-    getStats: () => cache.getStats(),
+    getStats: () => {
+      const baseStats = cache.getStats();
+      return {
+        ...baseStats,
+        skippedForTools,
+      };
+    },
     clear: () => cache.clear(),
   };
 }

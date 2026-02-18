@@ -37,6 +37,7 @@ export type OptimizerStats = {
     misses: number;
     evictions: number;
     stampedePrevented: number;
+    skippedForTools: number;
     hitRate: string;
     size: number;
     maxSize: number;

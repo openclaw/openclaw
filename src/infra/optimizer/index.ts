@@ -55,7 +55,11 @@ import { ConnectionPoolManager, getConnectionPool } from "./connection-pool.js";
 import { LLMResponseCache, getLLMCache } from "./llm-cache.js";
 import { MessageQueue, getMessageQueue } from "./message-queue.js";
 import { PerformanceMonitor, startPerformanceMonitor } from "./performance-monitor.js";
-import { getStreamCacheWrapper, type StreamCacheWrapper } from "./stream-cache.js";
+import {
+  getStreamCacheWrapper,
+  type StreamCacheStats,
+  type StreamCacheWrapper,
+} from "./stream-cache.js";
 
 export interface OptimizerConfig {
   cache?: {
@@ -85,7 +89,7 @@ export interface OptimizerInstance {
   monitor: PerformanceMonitor;
   streamCache: StreamCacheWrapper;
   getStats: () => {
-    cache: ReturnType<LLMResponseCache["getStats"]>;
+    cache: StreamCacheStats;
     pool: ReturnType<ConnectionPoolManager["getMetrics"]>;
     queue: ReturnType<MessageQueue["getStats"]>;
     monitor: ReturnType<PerformanceMonitor["getStats"]>;
@@ -131,7 +135,7 @@ export function initializeOptimizer(config: OptimizerConfig = {}): OptimizerInst
     streamCache,
     getStats() {
       return {
-        cache: cache.getStats(),
+        cache: streamCache.getStats(),
         pool: pool.getMetrics(),
         queue: queue.getStats(),
         monitor: monitor.getStats(),
