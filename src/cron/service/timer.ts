@@ -29,7 +29,7 @@ const MIN_REFIRE_GAP_MS = 2_000;
  * on top of the per-provider / per-agent timeouts to prevent one stuck job
  * from wedging the entire cron lane.
  */
-const DEFAULT_JOB_TIMEOUT_MS = 10 * 60_000; // 10 minutes
+export const DEFAULT_JOB_TIMEOUT_MS = 10 * 60_000; // 10 minutes
 
 type TimedCronRunOutcome = CronRunOutcome &
   CronRunTelemetry & {
@@ -60,7 +60,7 @@ function errorBackoffMs(consecutiveErrors: number): number {
  * Handles consecutive error tracking, exponential backoff, one-shot disable,
  * and nextRunAtMs computation. Returns `true` if the job should be deleted.
  */
-function applyJobResult(
+export function applyJobResult(
   state: CronServiceState,
   job: CronJob,
   result: {
@@ -419,40 +419,7 @@ function collectRunnableJobs(
   );
 }
 
-export async function runMissedJobs(
-  state: CronServiceState,
-  opts?: { skipJobIds?: ReadonlySet<string> },
-) {
-  if (!state.store) {
-    return;
-  }
-  const now = state.deps.nowMs();
-  const skipJobIds = opts?.skipJobIds;
-  const missed = collectRunnableJobs(state, now, { skipJobIds, skipAtIfAlreadyRan: true });
-
-  if (missed.length > 0) {
-    state.deps.log.info(
-      { count: missed.length, jobIds: missed.map((j) => j.id) },
-      "cron: running missed jobs after restart",
-    );
-    for (const job of missed) {
-      await executeJob(state, job, now, { forced: false });
-    }
-  }
-}
-
-export async function runDueJobs(state: CronServiceState) {
-  if (!state.store) {
-    return;
-  }
-  const now = state.deps.nowMs();
-  const due = collectRunnableJobs(state, now);
-  for (const job of due) {
-    await executeJob(state, job, now, { forced: false });
-  }
-}
-
-async function executeJobCore(
+export async function executeJobCore(
   state: CronServiceState,
   job: CronJob,
 ): Promise<CronRunOutcome & CronRunTelemetry> {

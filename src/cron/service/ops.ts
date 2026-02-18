@@ -12,7 +12,16 @@ import {
 import { locked } from "./locked.js";
 import type { CronServiceState } from "./state.js";
 import { ensureLoaded, persist, warnIfDisabled } from "./store.js";
-import { armTimer, emit, executeJob, runMissedJobs, stopTimer, wake } from "./timer.js";
+import {
+  applyJobResult,
+  armTimer,
+  DEFAULT_JOB_TIMEOUT_MS,
+  emit,
+  executeJob,
+  executeJobCore,
+  stopTimer,
+  wake,
+} from "./timer.js";
 
 async function ensureLoadedForRead(state: CronServiceState) {
   await ensureLoaded(state, { skipRecompute: true });
@@ -28,10 +37,15 @@ async function ensureLoadedForRead(state: CronServiceState) {
 }
 
 export async function start(state: CronServiceState) {
-  await locked(state, async () => {
+  // Phase 1: Acquire the lock briefly to load state, identify missed jobs,
+  // and mark them as running.  Missed jobs are collected but NOT executed
+  // while holding the lock — this mirrors the pattern used by `onTimer()`
+  // so that read-only queries (`list`, `status`) are never blocked by
+  // long-running job execution.
+  const missedJobs = await locked(state, async () => {
     if (!state.deps.cronEnabled) {
       state.deps.log.info({ enabled: false }, "cron: disabled");
-      return;
+      return [];
     }
     await ensureLoaded(state, { skipRecompute: true });
     const jobs = state.store?.jobs ?? [];
@@ -46,7 +60,41 @@ export async function start(state: CronServiceState) {
         startupInterruptedJobIds.add(job.id);
       }
     }
-    await runMissedJobs(state, { skipJobIds: startupInterruptedJobIds });
+
+    // Find missed jobs (same logic as runMissedJobs) but do NOT execute
+    // them while holding the lock.
+    const now = state.deps.nowMs();
+    const missed = (state.store?.jobs ?? []).filter((j) => {
+      if (!j.state) {
+        j.state = {};
+      }
+      if (!j.enabled) {
+        return false;
+      }
+      if (startupInterruptedJobIds.has(j.id)) {
+        return false;
+      }
+      if (typeof j.state.runningAtMs === "number") {
+        return false;
+      }
+      const next = j.state.nextRunAtMs;
+      if (j.schedule.kind === "at" && j.state.lastStatus) {
+        return false;
+      }
+      return typeof next === "number" && now >= next;
+    });
+
+    if (missed.length > 0) {
+      state.deps.log.info(
+        { count: missed.length, jobIds: missed.map((j) => j.id) },
+        "cron: running missed jobs after restart",
+      );
+      for (const job of missed) {
+        job.state.runningAtMs = now;
+        job.state.lastError = undefined;
+      }
+    }
+
     recomputeNextRuns(state);
     await persist(state);
     armTimer(state);
@@ -58,6 +106,102 @@ export async function start(state: CronServiceState) {
       },
       "cron: started",
     );
+
+    return missed.map((j) => ({ id: j.id, job: j }));
+  });
+
+  // Phase 2: Execute missed jobs outside the lock (same pattern as onTimer).
+  if (missedJobs.length === 0) {
+    return;
+  }
+
+  const results: Array<{
+    jobId: string;
+    status: "ok" | "error" | "skipped";
+    error?: string;
+    summary?: string;
+    sessionId?: string;
+    sessionKey?: string;
+    startedAt: number;
+    endedAt: number;
+  }> = [];
+
+  for (const { id, job } of missedJobs) {
+    const startedAt = state.deps.nowMs();
+    job.state.runningAtMs = startedAt;
+    emit(state, { jobId: job.id, action: "started", runAtMs: startedAt });
+
+    const jobTimeoutMs =
+      job.payload.kind === "agentTurn" && typeof job.payload.timeoutSeconds === "number"
+        ? job.payload.timeoutSeconds * 1_000
+        : DEFAULT_JOB_TIMEOUT_MS;
+
+    try {
+      let timeoutId: NodeJS.Timeout;
+      const result = await Promise.race([
+        executeJobCore(state, job),
+        new Promise<never>((_, reject) => {
+          timeoutId = setTimeout(
+            () => reject(new Error("cron: job execution timed out")),
+            jobTimeoutMs,
+          );
+        }),
+      ]).finally(() => clearTimeout(timeoutId!));
+      results.push({ jobId: id, ...result, startedAt, endedAt: state.deps.nowMs() });
+    } catch (err) {
+      state.deps.log.warn(
+        { jobId: id, jobName: job.name, timeoutMs: jobTimeoutMs },
+        `cron: missed job failed: ${String(err)}`,
+      );
+      results.push({
+        jobId: id,
+        status: "error",
+        error: String(err),
+        startedAt,
+        endedAt: state.deps.nowMs(),
+      });
+    }
+  }
+
+  // Phase 3: Briefly re-acquire the lock to persist results.
+  await locked(state, async () => {
+    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+
+    for (const result of results) {
+      const job = state.store?.jobs.find((j) => j.id === result.jobId);
+      if (!job) {
+        continue;
+      }
+
+      const shouldDelete = applyJobResult(state, job, {
+        status: result.status,
+        error: result.error,
+        startedAt: result.startedAt,
+        endedAt: result.endedAt,
+      });
+
+      emit(state, {
+        jobId: job.id,
+        action: "finished",
+        status: result.status,
+        error: result.error,
+        summary: result.summary,
+        sessionId: result.sessionId,
+        sessionKey: result.sessionKey,
+        runAtMs: result.startedAt,
+        durationMs: job.state.lastDurationMs,
+        nextRunAtMs: job.state.nextRunAtMs,
+      });
+
+      if (shouldDelete && state.store) {
+        state.store.jobs = state.store.jobs.filter((j) => j.id !== job.id);
+        emit(state, { jobId: job.id, action: "removed" });
+      }
+    }
+
+    recomputeNextRuns(state);
+    await persist(state);
+    armTimer(state);
   });
 }
 
