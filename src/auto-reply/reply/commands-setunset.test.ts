@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { parseSetUnsetCommand, parseSetUnsetCommandAction } from "./commands-setunset.js";
+import {
+  parseSetUnsetCommand,
+  parseSetUnsetCommandAction,
+  parseSlashCommandWithSetUnset,
+} from "./commands-setunset.js";
 
 type ParsedSetUnsetAction =
   | { action: "set"; path: string; value: unknown }
@@ -51,5 +55,62 @@ describe("parseSetUnsetCommandAction", () => {
       onError: (message) => ({ action: "error", message }),
     });
     expect(result).toEqual({ action: "error", message: "Usage: /config set path=value" });
+  });
+});
+
+describe("parseSlashCommandWithSetUnset", () => {
+  it("returns null when the input does not match the slash command", () => {
+    const result = parseSlashCommandWithSetUnset<ParsedSetUnsetAction>({
+      raw: "/debug show",
+      slash: "/config",
+      invalidMessage: "Invalid /config syntax.",
+      usageMessage: "Usage: /config show|set|unset",
+      onKnownAction: () => undefined,
+      onSet: (path, value) => ({ action: "set", path, value }),
+      onUnset: (path) => ({ action: "unset", path }),
+      onError: (message) => ({ action: "error", message }),
+    });
+    expect(result).toBeNull();
+  });
+
+  it("prefers set/unset mapping and falls back to known actions", () => {
+    const setResult = parseSlashCommandWithSetUnset<ParsedSetUnsetAction>({
+      raw: '/config set a.b={"ok":true}',
+      slash: "/config",
+      invalidMessage: "Invalid /config syntax.",
+      usageMessage: "Usage: /config show|set|unset",
+      onKnownAction: () => undefined,
+      onSet: (path, value) => ({ action: "set", path, value }),
+      onUnset: (path) => ({ action: "unset", path }),
+      onError: (message) => ({ action: "error", message }),
+    });
+    expect(setResult).toEqual({ action: "set", path: "a.b", value: { ok: true } });
+
+    const showResult = parseSlashCommandWithSetUnset<ParsedSetUnsetAction>({
+      raw: "/config show",
+      slash: "/config",
+      invalidMessage: "Invalid /config syntax.",
+      usageMessage: "Usage: /config show|set|unset",
+      onKnownAction: (action) =>
+        action === "show" ? { action: "unset", path: "dummy" } : undefined,
+      onSet: (path, value) => ({ action: "set", path, value }),
+      onUnset: (path) => ({ action: "unset", path }),
+      onError: (message) => ({ action: "error", message }),
+    });
+    expect(showResult).toEqual({ action: "unset", path: "dummy" });
+  });
+
+  it("returns onError for unknown actions", () => {
+    const unknownAction = parseSlashCommandWithSetUnset<ParsedSetUnsetAction>({
+      raw: "/config whoami",
+      slash: "/config",
+      invalidMessage: "Invalid /config syntax.",
+      usageMessage: "Usage: /config show|set|unset",
+      onKnownAction: () => undefined,
+      onSet: (path, value) => ({ action: "set", path, value }),
+      onUnset: (path) => ({ action: "unset", path }),
+      onError: (message) => ({ action: "error", message }),
+    });
+    expect(unknownAction).toEqual({ action: "error", message: "Usage: /config show|set|unset" });
   });
 });
