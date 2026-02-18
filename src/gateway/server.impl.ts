@@ -504,7 +504,11 @@ export async function startGatewayServer(
         source = "agent";
       }
 
-      if (source && sessionKey) {
+      // Only feed user messages to the watchdog from the transcript path.
+      // Agent messages are handled by the lifecycle-end path (line ~548)
+      // which has direct access to the in-memory response buffer.
+      // Feeding agent messages from both paths creates race conditions.
+      if (source === "user" && sessionKey) {
         replyEnforcer.onTranscriptUpdate({
           sessionKey,
           source,
