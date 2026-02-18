@@ -75,8 +75,9 @@ export function registerNodesPushCommand(nodes: Command) {
             typeof parsed.environment === "string" && parsed.environment.trim().length > 0
               ? parsed.environment.trim()
               : "unknown";
-          const { ok: okLabel } = getNodesTheme();
-          defaultRuntime.log(okLabel(`push.test status=${status} ok=${ok} env=${env}`));
+          const { ok: okLabel, error: errorLabel } = getNodesTheme();
+          const label = ok ? okLabel : errorLabel;
+          defaultRuntime.log(label(`push.test status=${status} ok=${ok} env=${env}`));
           if (reason) {
             defaultRuntime.log(`reason: ${reason}`);
           }
