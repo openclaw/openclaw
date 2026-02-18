@@ -154,6 +154,19 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18800");
   });
 
+  it("uses custom bind host when bind is custom", async () => {
+    loadConfig.mockReturnValue({
+      gateway: { mode: "local", bind: "custom", customBindHost: "172.18.0.4" },
+    });
+    resolveGatewayPort.mockReturnValue(18800);
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+    pickPrimaryLanIPv4.mockReturnValue(undefined);
+
+    await callGateway({ method: "health" });
+
+    expect(lastClientOptions?.url).toBe("ws://172.18.0.4:18800");
+  });
+
   it("uses url override in remote mode even when remote url is missing", async () => {
     loadConfig.mockReturnValue({
       gateway: { mode: "remote", bind: "loopback", remote: {} },
@@ -227,6 +240,21 @@ describe("buildGatewayConnectionDetails", () => {
     expect(details.url).toBe("ws://10.0.0.5:18800");
     expect(details.urlSource).toBe("local lan 10.0.0.5");
     expect(details.bindDetail).toBe("Bind: lan");
+  });
+
+  it("uses custom bind host and reports custom source when bind is custom", () => {
+    loadConfig.mockReturnValue({
+      gateway: { mode: "local", bind: "custom", customBindHost: "172.18.0.4" },
+    });
+    resolveGatewayPort.mockReturnValue(18800);
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+    pickPrimaryLanIPv4.mockReturnValue(undefined);
+
+    const details = buildGatewayConnectionDetails();
+
+    expect(details.url).toBe("ws://172.18.0.4:18800");
+    expect(details.urlSource).toBe("local custom 172.18.0.4");
+    expect(details.bindDetail).toBe("Bind: custom");
   });
 
   it("prefers remote url when configured", () => {
