@@ -35,6 +35,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["token", "apiKey"],
   },
   {
+    value: "bedrock",
+    label: "Amazon Bedrock",
+    hint: "API key",
+    choices: ["bedrock-api-key"],
+  },
+  {
     value: "chutes",
     label: "Chutes",
     hint: "OAuth",
@@ -129,12 +135,6 @@ const AUTH_CHOICE_GROUP_DEFS: {
     label: "Together AI",
     hint: "API key",
     choices: ["together-api-key"],
-  },
-  {
-    value: "bedrock",
-    label: "Amazon Bedrock",
-    hint: "API key",
-    choices: ["bedrock-api-key"],
   },
   {
     value: "huggingface",
