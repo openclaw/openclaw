@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { computeJobNextRunAtMs } from "./jobs.js";
-import type { CronJob } from "./types.js";
+import type { CronJob } from "../types.js";
 
 function makeAtJob(overrides: Partial<CronJob> = {}): CronJob {
   return {
