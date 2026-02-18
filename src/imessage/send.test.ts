@@ -78,4 +78,60 @@ describe("sendMessageIMessage", () => {
     });
     expect(result.messageId).toBe("123");
   });
+
+  it("prepends reply tag as the first token when replyToId is provided", async () => {
+    await sendMessageIMessage("chat_id:123", "  hello\nworld", {
+      replyToId: "abc-123",
+      account: defaultAccount,
+      config: {},
+      client: {
+        request: (...args: unknown[]) => requestMock(...args),
+        stop: (...args: unknown[]) => stopMock(...args),
+      } as unknown as import("./client.js").IMessageRpcClient,
+    });
+    const params = requestMock.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(params.text).toBe("[[reply_to:abc-123]] hello\nworld");
+  });
+
+  it("rewrites an existing leading reply tag to keep the requested id first", async () => {
+    await sendMessageIMessage("chat_id:123", " [[reply_to:old-id]] hello", {
+      replyToId: "new-id",
+      account: defaultAccount,
+      config: {},
+      client: {
+        request: (...args: unknown[]) => requestMock(...args),
+        stop: (...args: unknown[]) => stopMock(...args),
+      } as unknown as import("./client.js").IMessageRpcClient,
+    });
+    const params = requestMock.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(params.text).toBe("[[reply_to:new-id]] hello");
+  });
+
+  it("sanitizes replyToId before writing the leading reply tag", async () => {
+    await sendMessageIMessage("chat_id:123", "hello", {
+      replyToId: " [ab]\n\u0000c\td ] ",
+      account: defaultAccount,
+      config: {},
+      client: {
+        request: (...args: unknown[]) => requestMock(...args),
+        stop: (...args: unknown[]) => stopMock(...args),
+      } as unknown as import("./client.js").IMessageRpcClient,
+    });
+    const params = requestMock.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(params.text).toBe("[[reply_to:abcd]] hello");
+  });
+
+  it("skips reply tagging when sanitized replyToId is empty", async () => {
+    await sendMessageIMessage("chat_id:123", "hello", {
+      replyToId: "[]\u0000\n\r",
+      account: defaultAccount,
+      config: {},
+      client: {
+        request: (...args: unknown[]) => requestMock(...args),
+        stop: (...args: unknown[]) => stopMock(...args),
+      } as unknown as import("./client.js").IMessageRpcClient,
+    });
+    const params = requestMock.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(params.text).toBe("hello");
+  });
 });

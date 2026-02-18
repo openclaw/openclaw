@@ -597,6 +597,20 @@ Max total characters injected across all workspace bootstrap files. Default: `15
 }
 ```
 
+### `agents.defaults.imageMaxDimensionPx`
+
+Max pixel size for the longest image side in transcript/tool image blocks before provider calls.
+Default: `1200`.
+
+Lower values usually reduce vision-token usage and request payload size for screenshot-heavy runs.
+Higher values preserve more visual detail.
+
+```json5
+{
+  agents: { defaults: { imageMaxDimensionPx: 1200 } },
+}
+```
+
 ### `agents.defaults.userTimezone`
 
 Timezone for system prompt context (not message timestamps). Falls back to host timezone.

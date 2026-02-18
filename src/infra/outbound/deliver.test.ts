@@ -19,6 +19,19 @@ const hookMocks = vi.hoisted(() => ({
     runMessageSent: vi.fn(async () => {}),
   },
 }));
+const internalHookMocks = vi.hoisted(() => ({
+  createInternalHookEvent: vi.fn(
+    (type: string, action: string, sessionKey: string, context: Record<string, unknown>) => ({
+      type,
+      action,
+      sessionKey,
+      context,
+      timestamp: new Date(),
+      messages: [],
+    }),
+  ),
+  triggerInternalHook: vi.fn(async () => {}),
+}));
 const queueMocks = vi.hoisted(() => ({
   enqueueDelivery: vi.fn(async () => "mock-queue-id"),
   ackDelivery: vi.fn(async () => {}),
@@ -36,6 +49,10 @@ vi.mock("../../config/sessions.js", async () => {
 });
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => hookMocks.runner,
+}));
+vi.mock("../../hooks/internal-hooks.js", () => ({
+  createInternalHookEvent: internalHookMocks.createInternalHookEvent,
+  triggerInternalHook: internalHookMocks.triggerInternalHook,
 }));
 vi.mock("./delivery-queue.js", () => ({
   enqueueDelivery: queueMocks.enqueueDelivery,
@@ -76,6 +93,8 @@ describe("deliverOutboundPayloads", () => {
     hookMocks.runner.hasHooks.mockReturnValue(false);
     hookMocks.runner.runMessageSent.mockReset();
     hookMocks.runner.runMessageSent.mockResolvedValue(undefined);
+    internalHookMocks.createInternalHookEvent.mockClear();
+    internalHookMocks.triggerInternalHook.mockClear();
     queueMocks.enqueueDelivery.mockReset();
     queueMocks.enqueueDelivery.mockResolvedValue("mock-queue-id");
     queueMocks.ackDelivery.mockReset();
@@ -108,6 +127,32 @@ describe("deliverOutboundPayloads", () => {
       }
       expect(results).toHaveLength(2);
       expect(results[0]).toMatchObject({ channel: "telegram", chatId: "c1" });
+    } finally {
+      if (prevTelegramToken === undefined) {
+        delete process.env.TELEGRAM_BOT_TOKEN;
+      } else {
+        process.env.TELEGRAM_BOT_TOKEN = prevTelegramToken;
+      }
+    }
+  });
+
+  it("keeps payload replyToId across all chunked telegram sends", async () => {
+    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
+    const prevTelegramToken = process.env.TELEGRAM_BOT_TOKEN;
+    process.env.TELEGRAM_BOT_TOKEN = "";
+    try {
+      await deliverOutboundPayloads({
+        cfg: telegramChunkConfig,
+        channel: "telegram",
+        to: "123",
+        payloads: [{ text: "abcd", replyToId: "777" }],
+        deps: { sendTelegram },
+      });
+
+      expect(sendTelegram).toHaveBeenCalledTimes(2);
+      for (const call of sendTelegram.mock.calls) {
+        expect(call[2]).toEqual(expect.objectContaining({ replyToMessageId: 777 }));
+      }
     } finally {
       if (prevTelegramToken === undefined) {
         delete process.env.TELEGRAM_BOT_TOKEN;
@@ -423,6 +468,58 @@ describe("deliverOutboundPayloads", () => {
     expect(results).toEqual([{ channel: "whatsapp", messageId: "w2", toJid: "jid" }]);
   });
 
+  it("emits internal message:sent hook with success=true for chunked payload delivery", async () => {
+    const sendWhatsApp = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "w1", toJid: "jid" })
+      .mockResolvedValueOnce({ messageId: "w2", toJid: "jid" });
+    const cfg: OpenClawConfig = {
+      channels: { whatsapp: { textChunkLimit: 2 } },
+    };
+
+    await deliverOutboundPayloads({
+      cfg,
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "abcd" }],
+      deps: { sendWhatsApp },
+      mirror: {
+        sessionKey: "agent:main:main",
+      },
+    });
+
+    expect(internalHookMocks.createInternalHookEvent).toHaveBeenCalledTimes(1);
+    expect(internalHookMocks.createInternalHookEvent).toHaveBeenCalledWith(
+      "message",
+      "sent",
+      "agent:main:main",
+      expect.objectContaining({
+        to: "+1555",
+        content: "abcd",
+        success: true,
+        channelId: "whatsapp",
+        conversationId: "+1555",
+        messageId: "w2",
+      }),
+    );
+    expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not emit internal message:sent hook when mirror sessionKey is missing", async () => {
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
+
+    await deliverOutboundPayloads({
+      cfg: whatsappChunkConfig,
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "hello" }],
+      deps: { sendWhatsApp },
+    });
+
+    expect(internalHookMocks.createInternalHookEvent).not.toHaveBeenCalled();
+    expect(internalHookMocks.triggerInternalHook).not.toHaveBeenCalled();
+  });
+
   it("calls failDelivery instead of ackDelivery on bestEffort partial failure", async () => {
     const sendWhatsApp = vi
       .fn()
@@ -530,12 +627,10 @@ describe("deliverOutboundPayloads", () => {
       deps: { sendWhatsApp },
     });
 
-    await vi.waitFor(() => {
-      expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
-        expect.objectContaining({ to: "+1555", content: "hello", success: true }),
-        expect.objectContaining({ channelId: "whatsapp" }),
-      );
-    });
+    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
+      expect.objectContaining({ to: "+1555", content: "hello", success: true }),
+      expect.objectContaining({ channelId: "whatsapp" }),
+    );
   });
 
   it("emits message_sent success for sendPayload deliveries", async () => {
@@ -563,12 +658,10 @@ describe("deliverOutboundPayloads", () => {
       payloads: [{ text: "payload text", channelData: { mode: "custom" } }],
     });
 
-    await vi.waitFor(() => {
-      expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
-        expect.objectContaining({ to: "!room:1", content: "payload text", success: true }),
-        expect.objectContaining({ channelId: "matrix" }),
-      );
-    });
+    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
+      expect.objectContaining({ to: "!room:1", content: "payload text", success: true }),
+      expect.objectContaining({ channelId: "matrix" }),
+    );
   });
 
   it("emits message_sent failure when delivery errors", async () => {
@@ -585,17 +678,15 @@ describe("deliverOutboundPayloads", () => {
       }),
     ).rejects.toThrow("downstream failed");
 
-    await vi.waitFor(() => {
-      expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
-        expect.objectContaining({
-          to: "+1555",
-          content: "hi",
-          success: false,
-          error: "downstream failed",
-        }),
-        expect.objectContaining({ channelId: "whatsapp" }),
-      );
-    });
+    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "+1555",
+        content: "hi",
+        success: false,
+        error: "downstream failed",
+      }),
+      expect.objectContaining({ channelId: "whatsapp" }),
+    );
   });
 });
 

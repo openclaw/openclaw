@@ -321,6 +321,43 @@ describe("channel-health-monitor", () => {
     monitor.stop();
   });
 
+  it("runs checks single-flight when restart work is still in progress", async () => {
+    let releaseStart: (() => void) | null = null;
+    const startGate = new Promise<void>((resolve) => {
+      releaseStart = resolve;
+    });
+    const manager = createMockChannelManager({
+      getRuntimeSnapshot: vi.fn(() =>
+        snapshotWith({
+          telegram: {
+            default: {
+              running: false,
+              enabled: true,
+              configured: true,
+              lastError: "stopped",
+            },
+          },
+        }),
+      ),
+      startChannel: vi.fn(async () => {
+        await startGate;
+      }),
+    });
+    const monitor = startChannelHealthMonitor({
+      channelManager: manager,
+      checkIntervalMs: 100,
+      startupGraceMs: 0,
+      cooldownCycles: 0,
+    });
+    await vi.advanceTimersByTimeAsync(120);
+    expect(manager.startChannel).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(manager.startChannel).toHaveBeenCalledTimes(1);
+    releaseStart?.();
+    await Promise.resolve();
+    monitor.stop();
+  });
+
   it("stops cleanly", async () => {
     const manager = createMockChannelManager();
     const monitor = startChannelHealthMonitor({

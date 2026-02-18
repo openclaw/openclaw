@@ -498,6 +498,33 @@ describe("telegramMessageActions", () => {
     expect(String(callPayload.messageId)).toBe("456");
     expect(callPayload.emoji).toBe("ok");
   });
+
+  it("maps topic-create params into createForumTopic", async () => {
+    const cfg = { channels: { telegram: { botToken: "tok" } } } as OpenClawConfig;
+
+    await telegramMessageActions.handleAction?.({
+      channel: "telegram",
+      action: "topic-create",
+      params: {
+        to: "telegram:group:-1001234567890:topic:271",
+        name: "Build Updates",
+      },
+      cfg,
+      accountId: undefined,
+    });
+
+    expect(handleTelegramAction).toHaveBeenCalledWith(
+      {
+        action: "createForumTopic",
+        chatId: "telegram:group:-1001234567890:topic:271",
+        name: "Build Updates",
+        iconColor: undefined,
+        iconCustomEmojiId: undefined,
+        accountId: undefined,
+      },
+      cfg,
+    );
+  });
 });
 
 describe("signalMessageActions", () => {
