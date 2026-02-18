@@ -4,7 +4,7 @@ import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import type { SkillCommandSpec } from "../../agents/skills.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";
-import { ModelSelector } from "../../gateway/routing/model-selector.js";
+import { getRoutingInstance } from "../../gateway/routing/routing-instance.js";
 import { checkSafety } from "../../gateway/routing/safety-gate.js";
 import { resolveTaskType } from "../../gateway/routing/task-resolver.js";
 import type { RoutingConfig } from "../../gateway/routing/types.js";
@@ -209,7 +209,12 @@ export async function resolveReplyDirectives(params: {
       model = resolved.model;
     } else {
       const taskType = resolveTaskType(commandText);
-      const selector = new ModelSelector();
+      const routingInstance = getRoutingInstance(routingConfig);
+      const { selector, reviewGate } = routingInstance;
+      // ReviewGate hook — flag high-risk tasks in auto mode (non-blocking for now)
+      if (reviewGate.shouldReview(taskType) && reviewGate.isAutoMode()) {
+        console.info(`[routing] review-gate: task ${taskType} flagged for review`);
+      }
       const models = selector.resolveModels(taskType, routingConfig);
       if (models.length > 0) {
         const resolved = resolveRoutedModelLabel(models[0]);
