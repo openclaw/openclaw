@@ -1,14 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { discordPlugin } from "../../extensions/discord/src/channel.js";
-import { imessagePlugin } from "../../extensions/imessage/src/channel.js";
-import { signalPlugin } from "../../extensions/signal/src/channel.js";
-import { slackPlugin } from "../../extensions/slack/src/channel.js";
-import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
-import { whatsappPlugin } from "../../extensions/whatsapp/src/channel.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { setDefaultChannelPluginRegistryForTests } from "./channel-test-helpers.js";
 import { setupChannels } from "./onboard-channels.js";
 import { createExitThrowingRuntime, createWizardPrompter } from "./test-wizard-helpers.js";
 
@@ -20,6 +13,17 @@ function createPrompter(overrides: Partial<WizardPrompter>): WizardPrompter {
     },
     { defaultSelect: "__done__" },
   );
+}
+
+function createUnexpectedPromptGuards() {
+  return {
+    multiselect: vi.fn(async () => {
+      throw new Error("unexpected multiselect");
+    }),
+    text: vi.fn(async ({ message }: { message: string }) => {
+      throw new Error(`unexpected text prompt: ${message}`);
+    }) as unknown as WizardPrompter["text"],
+  };
 }
 
 vi.mock("node:fs/promises", () => ({
@@ -40,16 +44,7 @@ vi.mock("./onboard-helpers.js", () => ({
 
 describe("setupChannels", () => {
   beforeEach(() => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        { pluginId: "discord", plugin: discordPlugin, source: "test" },
-        { pluginId: "slack", plugin: slackPlugin, source: "test" },
-        { pluginId: "telegram", plugin: telegramPlugin, source: "test" },
-        { pluginId: "whatsapp", plugin: whatsappPlugin, source: "test" },
-        { pluginId: "signal", plugin: signalPlugin, source: "test" },
-        { pluginId: "imessage", plugin: imessagePlugin, source: "test" },
-      ]),
-    );
+    setDefaultChannelPluginRegistryForTests();
   });
   it("QuickStart uses single-select (no multiselect) and doesn't prompt for Telegram token when WhatsApp is chosen", async () => {
     const select = vi.fn(async () => "whatsapp");
@@ -67,7 +62,7 @@ describe("setupChannels", () => {
     });
 
     const prompter = createPrompter({
-      select,
+      select: select as unknown as WizardPrompter["select"],
       multiselect,
       text: text as unknown as WizardPrompter["text"],
     });
@@ -87,20 +82,15 @@ describe("setupChannels", () => {
   });
 
   it("shows explicit dmScope config command in channel primer", async () => {
-    const note = vi.fn(async () => {});
+    const note = vi.fn(async (_message?: string, _title?: string) => {});
     const select = vi.fn(async () => "__done__");
-    const multiselect = vi.fn(async () => {
-      throw new Error("unexpected multiselect");
-    });
-    const text = vi.fn(async ({ message }: { message: string }) => {
-      throw new Error(`unexpected text prompt: ${message}`);
-    });
+    const { multiselect, text } = createUnexpectedPromptGuards();
 
     const prompter = createPrompter({
       note,
-      select,
+      select: select as unknown as WizardPrompter["select"],
       multiselect,
-      text: text as unknown as WizardPrompter["text"],
+      text,
     });
 
     const runtime = createExitThrowingRuntime();
@@ -128,17 +118,12 @@ describe("setupChannels", () => {
       }
       throw new Error(`unexpected select prompt: ${message}`);
     });
-    const multiselect = vi.fn(async () => {
-      throw new Error("unexpected multiselect");
-    });
-    const text = vi.fn(async ({ message }: { message: string }) => {
-      throw new Error(`unexpected text prompt: ${message}`);
-    });
+    const { multiselect, text } = createUnexpectedPromptGuards();
 
     const prompter = createPrompter({
-      select,
+      select: select as unknown as WizardPrompter["select"],
       multiselect,
-      text: text as unknown as WizardPrompter["text"],
+      text,
     });
 
     const runtime = createExitThrowingRuntime();
@@ -188,7 +173,7 @@ describe("setupChannels", () => {
       throw new Error("unexpected multiselect");
     });
     const prompter = createPrompter({
-      select,
+      select: select as unknown as WizardPrompter["select"],
       multiselect,
       text: vi.fn(async () => "") as unknown as WizardPrompter["text"],
     });

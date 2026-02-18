@@ -1,4 +1,3 @@
-import type { CronJobCreate, CronJobPatch } from "./types.js";
 import { sanitizeAgentId } from "../routing/session-key.js";
 import { isRecord } from "../utils.js";
 import {
@@ -9,6 +8,8 @@ import {
 import { parseAbsoluteTimeMs } from "./parse.js";
 import { migrateLegacyCronPayload } from "./payload-migration.js";
 import { inferLegacyName } from "./service/normalize.js";
+import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "./stagger.js";
+import type { CronJobCreate, CronJobPatch } from "./types.js";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -59,6 +60,13 @@ function coerceSchedule(schedule: UnknownRecord) {
   }
   if ("atMs" in next) {
     delete next.atMs;
+  }
+
+  const staggerMs = normalizeCronStaggerMs(schedule.staggerMs);
+  if (staggerMs !== undefined) {
+    next.staggerMs = staggerMs;
+  } else if ("staggerMs" in next) {
+    delete next.staggerMs;
   }
 
   return next;
@@ -131,7 +139,7 @@ function coercePayload(payload: UnknownRecord) {
   }
   if ("timeoutSeconds" in next) {
     if (typeof next.timeoutSeconds === "number" && Number.isFinite(next.timeoutSeconds)) {
-      next.timeoutSeconds = Math.max(1, Math.floor(next.timeoutSeconds));
+      next.timeoutSeconds = Math.max(0, Math.floor(next.timeoutSeconds));
     } else {
       delete next.timeoutSeconds;
     }
@@ -301,6 +309,20 @@ export function normalizeCronJobInput(
     }
   }
 
+  if ("sessionKey" in base) {
+    const sessionKey = base.sessionKey;
+    if (sessionKey === null) {
+      next.sessionKey = null;
+    } else if (typeof sessionKey === "string") {
+      const trimmed = sessionKey.trim();
+      if (trimmed) {
+        next.sessionKey = trimmed;
+      } else {
+        delete next.sessionKey;
+      }
+    }
+  }
+
   if ("enabled" in base) {
     const enabled = base.enabled;
     if (typeof enabled === "boolean") {
@@ -405,6 +427,19 @@ export function normalizeCronJobInput(
       !("deleteAfterRun" in next)
     ) {
       next.deleteAfterRun = true;
+    }
+    if ("schedule" in next && isRecord(next.schedule) && next.schedule.kind === "cron") {
+      const schedule = next.schedule as UnknownRecord;
+      const explicit = normalizeCronStaggerMs(schedule.staggerMs);
+      if (explicit !== undefined) {
+        schedule.staggerMs = explicit;
+      } else {
+        const expr = typeof schedule.expr === "string" ? schedule.expr : "";
+        const defaultStaggerMs = resolveDefaultCronStaggerMs(expr);
+        if (defaultStaggerMs !== undefined) {
+          schedule.staggerMs = defaultStaggerMs;
+        }
+      }
     }
     const payload = isRecord(next.payload) ? next.payload : null;
     const payloadKind = payload && typeof payload.kind === "string" ? payload.kind : "";

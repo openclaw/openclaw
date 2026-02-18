@@ -1,10 +1,11 @@
-import type { GatewayRequestHandlers } from "./types.js";
 import { resolveMainSessionKeyFromConfig } from "../../config/sessions.js";
 import { getLastHeartbeatEvent } from "../../infra/heartbeat-events.js";
 import { setHeartbeatsEnabled } from "../../infra/heartbeat-runner.js";
 import { enqueueSystemEvent, isSystemEventContextChanged } from "../../infra/system-events.js";
 import { listSystemPresence, updateSystemPresence } from "../../infra/system-presence.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
+import { broadcastPresenceSnapshot } from "../server/presence-events.js";
+import type { GatewayRequestHandlers } from "./types.js";
 
 export const systemHandlers: GatewayRequestHandlers = {
   "last-heartbeat": ({ respond }) => {
@@ -123,18 +124,11 @@ export const systemHandlers: GatewayRequestHandlers = {
     } else {
       enqueueSystemEvent(text, { sessionKey });
     }
-    const nextPresenceVersion = context.incrementPresenceVersion();
-    context.broadcast(
-      "presence",
-      { presence: listSystemPresence() },
-      {
-        dropIfSlow: true,
-        stateVersion: {
-          presence: nextPresenceVersion,
-          health: context.getHealthVersion(),
-        },
-      },
-    );
+    broadcastPresenceSnapshot({
+      broadcast: context.broadcast,
+      incrementPresenceVersion: context.incrementPresenceVersion,
+      getHealthVersion: context.getHealthVersion,
+    });
     respond(true, { ok: true }, undefined);
   },
 };

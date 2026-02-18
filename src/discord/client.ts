@@ -1,7 +1,7 @@
 import { RequestClient } from "@buape/carbon";
-import type { RetryConfig } from "../infra/retry.js";
 import { loadConfig } from "../config/config.js";
 import { createDiscordRetryRunner, type RetryRunner } from "../infra/retry-policy.js";
+import type { RetryConfig } from "../infra/retry.js";
 import { resolveDiscordAccount } from "./accounts.js";
 import { normalizeDiscordToken } from "./token.js";
 

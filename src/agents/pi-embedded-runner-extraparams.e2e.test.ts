@@ -1,6 +1,5 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Context, Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
-import { AssistantMessageEventStream } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import { applyExtraParamsToAgent, resolveExtraParams } from "./pi-embedded-runner.js";
 
@@ -77,7 +76,7 @@ describe("applyExtraParamsToAgent", () => {
     const payload = { store: false };
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       options?.onPayload?.(payload);
-      return new AssistantMessageEventStream();
+      return {} as ReturnType<StreamFn>;
     };
     const agent = { streamFn: baseStreamFn };
     applyExtraParamsToAgent(agent, undefined, params.applyProvider, params.applyModelId);
@@ -90,7 +89,7 @@ describe("applyExtraParamsToAgent", () => {
     const calls: Array<SimpleStreamOptions | undefined> = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       calls.push(options);
-      return new AssistantMessageEventStream();
+      return {} as ReturnType<StreamFn>;
     };
     const agent = { streamFn: baseStreamFn };
 
@@ -111,6 +110,122 @@ describe("applyExtraParamsToAgent", () => {
       "X-Title": "OpenClaw",
       "X-Custom": "1",
     });
+  });
+
+  it("adds Anthropic 1M beta header when context1m is enabled for Opus/Sonnet", () => {
+    const calls: Array<SimpleStreamOptions | undefined> = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      calls.push(options);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/claude-opus-4-6": {
+              params: {
+                context1m: true,
+              },
+            },
+          },
+        },
+      },
+    };
+
+    applyExtraParamsToAgent(agent, cfg, "anthropic", "claude-opus-4-6");
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-opus-4-6",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, { headers: { "X-Custom": "1" } });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.headers).toEqual({
+      "X-Custom": "1",
+      "anthropic-beta": "context-1m-2025-08-07",
+    });
+  });
+
+  it("merges existing anthropic-beta headers with configured betas", () => {
+    const calls: Array<SimpleStreamOptions | undefined> = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      calls.push(options);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/claude-sonnet-4-5": {
+              params: {
+                context1m: true,
+                anthropicBeta: ["files-api-2025-04-14"],
+              },
+            },
+          },
+        },
+      },
+    };
+
+    applyExtraParamsToAgent(agent, cfg, "anthropic", "claude-sonnet-4-5");
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-sonnet-4-5",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, {
+      headers: { "anthropic-beta": "prompt-caching-2024-07-31" },
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.headers).toEqual({
+      "anthropic-beta": "prompt-caching-2024-07-31,files-api-2025-04-14,context-1m-2025-08-07",
+    });
+  });
+
+  it("ignores context1m for non-Opus/Sonnet Anthropic models", () => {
+    const calls: Array<SimpleStreamOptions | undefined> = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      calls.push(options);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/claude-haiku-3-5": {
+              params: {
+                context1m: true,
+              },
+            },
+          },
+        },
+      },
+    };
+
+    applyExtraParamsToAgent(agent, cfg, "anthropic", "claude-haiku-3-5");
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-haiku-3-5",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, { headers: { "X-Custom": "1" } });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.headers).toEqual({ "X-Custom": "1" });
   });
 
   it("forces store=true for direct OpenAI Responses payloads", () => {
@@ -152,6 +267,29 @@ describe("applyExtraParamsToAgent", () => {
         baseUrl: "https://chatgpt.com/backend-api/codex/responses",
       } as Model<"openai-codex-responses">,
     });
+    expect(payload.store).toBe(false);
+  });
+
+  it("does not force store=true for Codex responses (Codex requires store=false)", () => {
+    const payload = { store: false };
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      options?.onPayload?.(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "openai-codex", "codex-mini-latest");
+
+    const model = {
+      api: "openai-codex-responses",
+      provider: "openai-codex",
+      id: "codex-mini-latest",
+      baseUrl: "https://chatgpt.com/backend-api/codex/responses",
+    } as Model<"openai-codex-responses">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, {});
+
     expect(payload.store).toBe(false);
   });
 });

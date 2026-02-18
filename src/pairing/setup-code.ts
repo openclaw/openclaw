@@ -152,8 +152,9 @@ function isTailnetIPv4(address: string): boolean {
   return a === 100 && b >= 64 && b <= 127;
 }
 
-function pickLanIPv4(
+function pickIPv4Matching(
   networkInterfaces: () => ReturnType<typeof os.networkInterfaces>,
+  matches: (address: string) => boolean,
 ): string | null {
   const nets = networkInterfaces();
   for (const entries of Object.values(nets)) {
@@ -170,7 +171,7 @@ function pickLanIPv4(
       if (!address) {
         continue;
       }
-      if (isPrivateIPv4(address)) {
+      if (matches(address)) {
         return address;
       }
     }
@@ -178,30 +179,16 @@ function pickLanIPv4(
   return null;
 }
 
+function pickLanIPv4(
+  networkInterfaces: () => ReturnType<typeof os.networkInterfaces>,
+): string | null {
+  return pickIPv4Matching(networkInterfaces, isPrivateIPv4);
+}
+
 function pickTailnetIPv4(
   networkInterfaces: () => ReturnType<typeof os.networkInterfaces>,
 ): string | null {
-  const nets = networkInterfaces();
-  for (const entries of Object.values(nets)) {
-    if (!entries) {
-      continue;
-    }
-    for (const entry of entries) {
-      const family = entry?.family;
-      const isIpv4 = family === "IPv4";
-      if (!entry || entry.internal || !isIpv4) {
-        continue;
-      }
-      const address = entry.address?.trim() ?? "";
-      if (!address) {
-        continue;
-      }
-      if (isTailnetIPv4(address)) {
-        return address;
-      }
-    }
-  }
-  return null;
+  return pickIPv4Matching(networkInterfaces, isTailnetIPv4);
 }
 
 function parsePossiblyNoisyJsonObject(raw: string): Record<string, unknown> {

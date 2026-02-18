@@ -1,12 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { discordPlugin } from "../../extensions/discord/src/channel.js";
-import { imessagePlugin } from "../../extensions/imessage/src/channel.js";
-import { signalPlugin } from "../../extensions/signal/src/channel.js";
-import { slackPlugin } from "../../extensions/slack/src/channel.js";
-import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
-import { whatsappPlugin } from "../../extensions/whatsapp/src/channel.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { setDefaultChannelPluginRegistryForTests } from "./channel-test-helpers.js";
 import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const configMocks = vi.hoisted(() => ({
@@ -16,6 +9,10 @@ const configMocks = vi.hoisted(() => ({
 
 const authMocks = vi.hoisted(() => ({
   loadAuthProfileStore: vi.fn(),
+}));
+
+const offsetMocks = vi.hoisted(() => ({
+  deleteTelegramUpdateOffset: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("../config/config.js", async (importOriginal) => {
@@ -35,6 +32,14 @@ vi.mock("../agents/auth-profiles.js", async (importOriginal) => {
   };
 });
 
+vi.mock("../telegram/update-offset-store.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../telegram/update-offset-store.js")>();
+  return {
+    ...actual,
+    deleteTelegramUpdateOffset: offsetMocks.deleteTelegramUpdateOffset,
+  };
+});
+
 import {
   channelsAddCommand,
   channelsListCommand,
@@ -49,6 +54,7 @@ describe("channels command", () => {
     configMocks.readConfigFileSnapshot.mockReset();
     configMocks.writeConfigFile.mockClear();
     authMocks.loadAuthProfileStore.mockReset();
+    offsetMocks.deleteTelegramUpdateOffset.mockClear();
     runtime.log.mockClear();
     runtime.error.mockClear();
     runtime.exit.mockClear();
@@ -56,16 +62,7 @@ describe("channels command", () => {
       version: 1,
       profiles: {},
     });
-    setActivePluginRegistry(
-      createTestRegistry([
-        { pluginId: "discord", plugin: discordPlugin, source: "test" },
-        { pluginId: "slack", plugin: slackPlugin, source: "test" },
-        { pluginId: "telegram", plugin: telegramPlugin, source: "test" },
-        { pluginId: "whatsapp", plugin: whatsappPlugin, source: "test" },
-        { pluginId: "signal", plugin: signalPlugin, source: "test" },
-        { pluginId: "imessage", plugin: imessagePlugin, source: "test" },
-      ]),
-    );
+    setDefaultChannelPluginRegistryForTests();
   });
 
   it("adds a non-default telegram account", async () => {
@@ -248,7 +245,7 @@ describe("channels command", () => {
     });
 
     await channelsListCommand({ json: true, usage: false }, runtime);
-    const payload = JSON.parse(String(runtime.log.mock.calls[0]?.[0] ?? "{}")) as {
+    const payload = JSON.parse(runtime.log.mock.calls[0]?.[0] as string) as {
       auth?: Array<{ id: string }>;
     };
     const ids = payload.auth?.map((entry) => entry.id) ?? [];
@@ -471,5 +468,71 @@ describe("channels command", () => {
       },
     });
     expect(disconnected.join("\n")).toMatch(/disconnected/i);
+  });
+
+  it("cleans up telegram update offset when deleting a telegram account", async () => {
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: {
+        channels: {
+          telegram: { botToken: "123:abc", enabled: true },
+        },
+      },
+    });
+
+    await channelsRemoveCommand(
+      { channel: "telegram", account: "default", delete: true },
+      runtime,
+      {
+        hasFlags: true,
+      },
+    );
+
+    expect(offsetMocks.deleteTelegramUpdateOffset).toHaveBeenCalledWith({ accountId: "default" });
+  });
+
+  it("does not clean up offset when deleting a non-telegram channel", async () => {
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: {
+        channels: {
+          discord: {
+            accounts: {
+              default: { token: "d0" },
+            },
+          },
+        },
+      },
+    });
+
+    await channelsRemoveCommand({ channel: "discord", account: "default", delete: true }, runtime, {
+      hasFlags: true,
+    });
+
+    expect(offsetMocks.deleteTelegramUpdateOffset).not.toHaveBeenCalled();
+  });
+
+  it("does not clean up offset when disabling (not deleting) a telegram account", async () => {
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: {
+        channels: {
+          telegram: { botToken: "123:abc", enabled: true },
+        },
+      },
+    });
+
+    const prompt = { confirm: vi.fn().mockResolvedValue(true) };
+    const prompterModule = await import("../wizard/clack-prompter.js");
+    const promptSpy = vi
+      .spyOn(prompterModule, "createClackPrompter")
+      .mockReturnValue(prompt as never);
+
+    await channelsRemoveCommand({ channel: "telegram", account: "default" }, runtime, {
+      hasFlags: true,
+    });
+
+    expect(offsetMocks.deleteTelegramUpdateOffset).not.toHaveBeenCalled();
+    promptSpy.mockRestore();
   });
 });

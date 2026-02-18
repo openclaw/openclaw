@@ -32,6 +32,17 @@ function getWrittenConfig() {
   return writeConfigFile.mock.calls[0]?.[0] as Record<string, unknown>;
 }
 
+function expectWrittenPrimaryModel(model: string) {
+  expect(writeConfigFile).toHaveBeenCalledTimes(1);
+  const written = getWrittenConfig();
+  expect(written.agents).toEqual({
+    defaults: {
+      model: { primary: model },
+      models: { [model]: {} },
+    },
+  });
+}
+
 describe("models set + fallbacks", () => {
   beforeEach(() => {
     readConfigFileSnapshot.mockReset();
@@ -45,14 +56,7 @@ describe("models set + fallbacks", () => {
 
     await modelsSetCommand("z.ai/glm-4.7", runtime);
 
-    expect(writeConfigFile).toHaveBeenCalledTimes(1);
-    const written = getWrittenConfig();
-    expect(written.agents).toEqual({
-      defaults: {
-        model: { primary: "zai/glm-4.7" },
-        models: { "zai/glm-4.7": {} },
-      },
-    });
+    expectWrittenPrimaryModel("zai/glm-4.7");
   });
 
   it("normalizes z-ai provider in models fallbacks add", async () => {
@@ -79,13 +83,6 @@ describe("models set + fallbacks", () => {
 
     await modelsSetCommand("Z.AI/glm-4.7", runtime);
 
-    expect(writeConfigFile).toHaveBeenCalledTimes(1);
-    const written = getWrittenConfig();
-    expect(written.agents).toEqual({
-      defaults: {
-        model: { primary: "zai/glm-4.7" },
-        models: { "zai/glm-4.7": {} },
-      },
-    });
+    expectWrittenPrimaryModel("zai/glm-4.7");
   });
 });

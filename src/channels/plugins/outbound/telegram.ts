@@ -1,10 +1,11 @@
-import type { ChannelOutboundAdapter } from "../types.js";
+import type { TelegramInlineButtons } from "../../../telegram/button-types.js";
 import { markdownToTelegramHtmlChunks } from "../../../telegram/format.js";
 import {
   parseTelegramReplyToMessageId,
   parseTelegramThreadId,
 } from "../../../telegram/outbound-params.js";
 import { sendMessageTelegram, sendPollTelegram } from "../../../telegram/send.js";
+import type { ChannelOutboundAdapter } from "../types.js";
 
 export const telegramOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
@@ -61,7 +62,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
     const replyToMessageId = parseTelegramReplyToMessageId(replyToId);
     const messageThreadId = parseTelegramThreadId(threadId);
     const telegramData = payload.channelData?.telegram as
-      | { buttons?: Array<Array<{ text: string; callback_data: string }>>; quoteText?: string }
+      | { buttons?: TelegramInlineButtons; quoteText?: string }
       | undefined;
     const quoteText =
       typeof telegramData?.quoteText === "string" ? telegramData.quoteText : undefined;

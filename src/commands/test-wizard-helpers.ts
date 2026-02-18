@@ -2,8 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
-import type { WizardPrompter } from "../wizard/prompts.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
+import { captureEnv } from "../test-utils/env.js";
+import type { WizardPrompter } from "../wizard/prompts.js";
 
 export const noopAsync = async () => {};
 export const noop = () => {};
@@ -49,6 +50,28 @@ export async function setupAuthTestEnv(
   process.env.PI_CODING_AGENT_DIR = agentDir;
   await fs.mkdir(agentDir, { recursive: true });
   return { stateDir, agentDir };
+}
+
+export type AuthTestLifecycle = {
+  setStateDir: (stateDir: string) => void;
+  cleanup: () => Promise<void>;
+};
+
+export function createAuthTestLifecycle(envKeys: string[]): AuthTestLifecycle {
+  const envSnapshot = captureEnv(envKeys);
+  let stateDir: string | null = null;
+  return {
+    setStateDir(nextStateDir: string) {
+      stateDir = nextStateDir;
+    },
+    async cleanup() {
+      if (stateDir) {
+        await fs.rm(stateDir, { recursive: true, force: true });
+        stateDir = null;
+      }
+      envSnapshot.restore();
+    },
+  };
 }
 
 export function requireOpenClawAgentDir(): string {

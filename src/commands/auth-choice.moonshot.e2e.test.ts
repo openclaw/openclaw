@@ -1,9 +1,8 @@
-import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { captureEnv } from "../test-utils/env.js";
 import { applyAuthChoice } from "./auth-choice.js";
 import {
+  createAuthTestLifecycle,
   createExitThrowingRuntime,
   createWizardPrompter,
   readAuthProfilesForAgent,
@@ -16,17 +15,16 @@ function createPrompter(overrides: Partial<WizardPrompter>): WizardPrompter {
 }
 
 describe("applyAuthChoice (moonshot)", () => {
-  const envSnapshot = captureEnv([
+  const lifecycle = createAuthTestLifecycle([
     "OPENCLAW_STATE_DIR",
     "OPENCLAW_AGENT_DIR",
     "PI_CODING_AGENT_DIR",
     "MOONSHOT_API_KEY",
   ]);
-  let tempStateDir: string | null = null;
 
   async function setupTempState() {
     const env = await setupAuthTestEnv("openclaw-auth-");
-    tempStateDir = env.stateDir;
+    lifecycle.setStateDir(env.stateDir);
     delete process.env.MOONSHOT_API_KEY;
   }
 
@@ -36,23 +34,31 @@ describe("applyAuthChoice (moonshot)", () => {
     }>(requireOpenClawAgentDir());
   }
 
+  async function runMoonshotCnFlow(params: {
+    config: Record<string, unknown>;
+    setDefaultModel: boolean;
+  }) {
+    const text = vi.fn().mockResolvedValue("sk-moonshot-cn-test");
+    const prompter = createPrompter({ text: text as unknown as WizardPrompter["text"] });
+    const runtime = createExitThrowingRuntime();
+    const result = await applyAuthChoice({
+      authChoice: "moonshot-api-key-cn",
+      config: params.config,
+      prompter,
+      runtime,
+      setDefaultModel: params.setDefaultModel,
+    });
+    return { result, text };
+  }
+
   afterEach(async () => {
-    if (tempStateDir) {
-      await fs.rm(tempStateDir, { recursive: true, force: true });
-      tempStateDir = null;
-    }
-    envSnapshot.restore();
+    await lifecycle.cleanup();
   });
 
   it("keeps the .cn baseUrl when setDefaultModel is false", async () => {
     await setupTempState();
 
-    const text = vi.fn().mockResolvedValue("sk-moonshot-cn-test");
-    const prompter = createPrompter({ text: text as unknown as WizardPrompter["text"] });
-    const runtime = createExitThrowingRuntime();
-
-    const result = await applyAuthChoice({
-      authChoice: "moonshot-api-key-cn",
+    const { result, text } = await runMoonshotCnFlow({
       config: {
         agents: {
           defaults: {
@@ -60,8 +66,6 @@ describe("applyAuthChoice (moonshot)", () => {
           },
         },
       },
-      prompter,
-      runtime,
       setDefaultModel: false,
     });
 
@@ -79,15 +83,8 @@ describe("applyAuthChoice (moonshot)", () => {
   it("sets the default model when setDefaultModel is true", async () => {
     await setupTempState();
 
-    const text = vi.fn().mockResolvedValue("sk-moonshot-cn-test");
-    const prompter = createPrompter({ text: text as unknown as WizardPrompter["text"] });
-    const runtime = createExitThrowingRuntime();
-
-    const result = await applyAuthChoice({
-      authChoice: "moonshot-api-key-cn",
+    const { result } = await runMoonshotCnFlow({
       config: {},
-      prompter,
-      runtime,
       setDefaultModel: true,
     });
 

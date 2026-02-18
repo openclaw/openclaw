@@ -2,9 +2,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { fetchRemoteMedia } from "../media/fetch.js";
 
 vi.mock("../agents/model-auth.js", () => ({
@@ -154,7 +154,7 @@ describe("applyMediaUnderstanding", () => {
       body: "[Audio]\nTranscript:\ntranscribed text",
       commandBody: "transcribed text",
     });
-    expect(ctx.BodyForAgent).toBe(ctx.Body);
+    expect((ctx as unknown as { BodyForAgent?: string }).BodyForAgent).toBe(ctx.Body);
   });
 
   it("skips file blocks for text-like audio when transcription succeeds", async () => {
@@ -308,7 +308,7 @@ describe("applyMediaUnderstanding", () => {
     });
 
     expect(result.appliedAudio).toBe(true);
-    expect(ctx.Transcript).toBe("cli transcript");
+    expect((ctx as unknown as { Transcript?: string }).Transcript).toBe("cli transcript");
     expect(ctx.Body).toBe("[Audio]\nTranscript:\ncli transcript");
   });
 

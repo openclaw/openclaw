@@ -8,11 +8,25 @@ import {
   resetLoadConfigMock,
   setLoadConfigMock,
 } from "./auto-reply.test-harness.js";
+import type { WebInboundMessage } from "./inbound.js";
 
 installWebAutoReplyTestHomeHooks();
 
 describe("web auto-reply", () => {
   installWebAutoReplyUnitTestHooks({ pinDns: true });
+  type ListenerFactory = NonNullable<Parameters<typeof monitorWebChannel>[1]>;
+
+  function createMockListener() {
+    return {
+      close: vi.fn(async () => undefined),
+      onClose: new Promise<import("./inbound.js").WebListenerCloseReason>(() => {}),
+      signalClose: vi.fn(),
+      sendMessage: vi.fn(async () => ({ messageId: "msg-1" })),
+      sendPoll: vi.fn(async () => ({ messageId: "poll-1" })),
+      sendReaction: vi.fn(async () => undefined),
+      sendComposingTo: vi.fn(async () => undefined),
+    };
+  }
 
   async function setupSingleInboundMessage(params: {
     resolverValue: { text: string; mediaUrl: string };
@@ -20,17 +34,13 @@ describe("web auto-reply", () => {
     reply?: ReturnType<typeof vi.fn>;
   }) {
     const reply = params.reply ?? vi.fn().mockResolvedValue(undefined);
-    const sendComposing = vi.fn();
+    const sendComposing = vi.fn(async () => undefined);
     const resolver = vi.fn().mockResolvedValue(params.resolverValue);
 
-    let capturedOnMessage:
-      | ((msg: import("./inbound.js").WebInboundMessage) => Promise<void>)
-      | undefined;
-    const listenerFactory = async (opts: {
-      onMessage: (msg: import("./inbound.js").WebInboundMessage) => Promise<void>;
-    }) => {
-      capturedOnMessage = opts.onMessage;
-      return { close: vi.fn() };
+    let capturedOnMessage: ((msg: WebInboundMessage) => Promise<void>) | undefined;
+    const listenerFactory: ListenerFactory = async ({ onMessage }) => {
+      capturedOnMessage = onMessage;
+      return createMockListener();
     };
 
     await monitorWebChannel(false, listenerFactory, false, resolver);
@@ -42,12 +52,16 @@ describe("web auto-reply", () => {
         await capturedOnMessage?.({
           body: "hello",
           from: "+1",
+          conversationId: "+1",
           to: "+2",
+          accountId: "default",
+          chatType: "direct",
+          chatId: "+1",
           id,
           sendComposing,
           reply,
           sendMedia: params.sendMedia,
-        });
+        } as WebInboundMessage);
       },
     };
   }
@@ -104,20 +118,16 @@ describe("web auto-reply", () => {
       setLoadConfigMock(() => ({ agents: { defaults: { mediaMaxMb: 1 } } }));
       const sendMedia = vi.fn();
       const reply = vi.fn().mockResolvedValue(undefined);
-      const sendComposing = vi.fn();
+      const sendComposing = vi.fn(async () => undefined);
       const resolver = vi.fn().mockResolvedValue({
         text: "hi",
         mediaUrl: `https://example.com/big.${fmt.name}`,
       });
 
-      let capturedOnMessage:
-        | ((msg: import("./inbound.js").WebInboundMessage) => Promise<void>)
-        | undefined;
-      const listenerFactory = async (opts: {
-        onMessage: (msg: import("./inbound.js").WebInboundMessage) => Promise<void>;
-      }) => {
-        capturedOnMessage = opts.onMessage;
-        return { close: vi.fn() };
+      let capturedOnMessage: ((msg: WebInboundMessage) => Promise<void>) | undefined;
+      const listenerFactory: ListenerFactory = async ({ onMessage }) => {
+        capturedOnMessage = onMessage;
+        return createMockListener();
       };
 
       const big = await fmt.make(sharedRaw, { width, height });
@@ -129,7 +139,7 @@ describe("web auto-reply", () => {
         arrayBuffer: async () => big.buffer.slice(big.byteOffset, big.byteOffset + big.byteLength),
         headers: { get: () => fmt.mime },
         status: 200,
-      } as Response);
+      } as unknown as Response);
 
       await monitorWebChannel(false, listenerFactory, false, resolver);
       expect(capturedOnMessage).toBeDefined();
@@ -137,12 +147,16 @@ describe("web auto-reply", () => {
       await capturedOnMessage?.({
         body: "hello",
         from: "+1",
+        conversationId: "+1",
         to: "+2",
+        accountId: "default",
+        chatType: "direct",
+        chatId: "+1",
         id: `msg-${fmt.name}`,
         sendComposing,
         reply,
         sendMedia,
-      });
+      } as WebInboundMessage);
 
       expect(sendMedia).toHaveBeenCalledTimes(1);
       const payload = sendMedia.mock.calls[0][0] as {
@@ -162,20 +176,16 @@ describe("web auto-reply", () => {
     setLoadConfigMock(() => ({ agents: { defaults: { mediaMaxMb: 1 } } }));
     const sendMedia = vi.fn();
     const reply = vi.fn().mockResolvedValue(undefined);
-    const sendComposing = vi.fn();
+    const sendComposing = vi.fn(async () => undefined);
     const resolver = vi.fn().mockResolvedValue({
       text: "hi",
       mediaUrl: "https://example.com/big.png",
     });
 
-    let capturedOnMessage:
-      | ((msg: import("./inbound.js").WebInboundMessage) => Promise<void>)
-      | undefined;
-    const listenerFactory = async (opts: {
-      onMessage: (msg: import("./inbound.js").WebInboundMessage) => Promise<void>;
-    }) => {
-      capturedOnMessage = opts.onMessage;
-      return { close: vi.fn() };
+    let capturedOnMessage: ((msg: WebInboundMessage) => Promise<void>) | undefined;
+    const listenerFactory: ListenerFactory = async ({ onMessage }) => {
+      capturedOnMessage = onMessage;
+      return createMockListener();
     };
 
     const bigPng = await sharp({
@@ -197,7 +207,7 @@ describe("web auto-reply", () => {
         bigPng.buffer.slice(bigPng.byteOffset, bigPng.byteOffset + bigPng.byteLength),
       headers: { get: () => "image/png" },
       status: 200,
-    } as Response);
+    } as unknown as Response);
 
     await monitorWebChannel(false, listenerFactory, false, resolver);
     expect(capturedOnMessage).toBeDefined();
@@ -205,12 +215,16 @@ describe("web auto-reply", () => {
     await capturedOnMessage?.({
       body: "hello",
       from: "+1",
+      conversationId: "+1",
       to: "+2",
+      accountId: "default",
+      chatType: "direct",
+      chatId: "+1",
       id: "msg1",
       sendComposing,
       reply,
       sendMedia,
-    });
+    } as WebInboundMessage);
 
     expect(sendMedia).toHaveBeenCalledTimes(1);
     const payload = sendMedia.mock.calls[0][0] as {
@@ -237,7 +251,7 @@ describe("web auto-reply", () => {
       arrayBuffer: async () => Buffer.from("%PDF-1.4").buffer,
       headers: { get: () => "application/pdf" },
       status: 200,
-    } as Response);
+    } as unknown as Response);
 
     await dispatch("msg-pdf");
 
@@ -282,7 +296,7 @@ describe("web auto-reply", () => {
         smallPng.buffer.slice(smallPng.byteOffset, smallPng.byteOffset + smallPng.byteLength),
       headers: { get: () => "image/png" },
       status: 200,
-    } as Response);
+    } as unknown as Response);
 
     await dispatch("msg1");
 
@@ -347,7 +361,7 @@ describe("web auto-reply", () => {
       arrayBuffer: async () => png.buffer.slice(png.byteOffset, png.byteOffset + png.byteLength),
       headers: { get: () => "image/png" },
       status: 200,
-    } as Response);
+    } as unknown as Response);
 
     await dispatch("msg1");
 
