@@ -3710,6 +3710,16 @@ impl RpcDispatcher {
         if message.is_none() && command.is_none() {
             return RpcDispatchOutcome::bad_request("message or command is required");
         }
+        let channel = normalize_optional_text(params.channel, 128);
+        if channel
+            .as_deref()
+            .map(|value| value.eq_ignore_ascii_case("webchat"))
+            .unwrap_or(false)
+        {
+            return RpcDispatchOutcome::bad_request(
+                "unsupported channel: webchat (internal-only). Use `chat.send` for WebChat UI messages or choose a deliverable channel.",
+            );
+        }
 
         let (session, recorded) = self
             .sessions
@@ -3720,7 +3730,7 @@ impl RpcDispatcher {
                 command,
                 source: normalize_optional_text(params.source, 128)
                     .unwrap_or_else(|| "rpc".to_owned()),
-                channel: normalize_optional_text(params.channel, 128),
+                channel,
                 to: normalize_optional_text(params.to, 256),
                 account_id: normalize_optional_text(params.account_id, 128),
             })
@@ -11748,6 +11758,27 @@ mod tests {
                 );
             }
             _ => panic!("expected handled history"),
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatcher_rejects_sessions_send_webchat_channel() {
+        let dispatcher = RpcDispatcher::new();
+        let send = RpcRequestFrame {
+            id: "req-send-webchat".to_owned(),
+            method: "sessions.send".to_owned(),
+            params: serde_json::json!({
+                "sessionKey": "agent:main:main",
+                "message": "hello webchat",
+                "channel": "webchat"
+            }),
+        };
+        match dispatcher.handle_request(&send).await {
+            RpcDispatchOutcome::Error { code, message, .. } => {
+                assert_eq!(code, 400);
+                assert!(message.contains("Use `chat.send`"));
+            }
+            _ => panic!("expected sessions.send webchat channel rejection"),
         }
     }
 
