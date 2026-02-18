@@ -20,6 +20,26 @@ const {
   sendStickerTelegram,
 } = await importTelegramSendModule();
 
+async function expectChatNotFoundWithChatId(
+  action: Promise<unknown>,
+  expectedChatId: string,
+): Promise<void> {
+  try {
+    await action;
+    throw new Error("Expected action to reject with chat-not-found context");
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message === "Expected action to reject with chat-not-found context"
+    ) {
+      throw error;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    expect(message).toMatch(/chat not found/i);
+    expect(message).toMatch(new RegExp(`chat_id=${expectedChatId}`));
+  }
+}
+
 describe("sent-message-cache", () => {
   afterEach(() => {
     clearSentMessageCache();
@@ -285,11 +305,9 @@ describe("sendMessageTelegram", () => {
       sendMessage: typeof sendMessage;
     };
 
-    await expect(sendMessageTelegram(chatId, "hi", { token: "tok", api })).rejects.toThrow(
-      /chat not found/i,
-    );
-    await expect(sendMessageTelegram(chatId, "hi", { token: "tok", api })).rejects.toThrow(
-      /chat_id=123/,
+    await expectChatNotFoundWithChatId(
+      sendMessageTelegram(chatId, "hi", { token: "tok", api }),
+      chatId,
     );
   });
 
@@ -1236,11 +1254,9 @@ describe("sendStickerTelegram", () => {
       sendSticker: typeof sendSticker;
     };
 
-    await expect(sendStickerTelegram(chatId, "fileId123", { token: "tok", api })).rejects.toThrow(
-      /chat not found/i,
-    );
-    await expect(sendStickerTelegram(chatId, "fileId123", { token: "tok", api })).rejects.toThrow(
-      /chat_id=123/,
+    await expectChatNotFoundWithChatId(
+      sendStickerTelegram(chatId, "fileId123", { token: "tok", api }),
+      chatId,
     );
   });
 
