@@ -23,7 +23,10 @@ import { normalizeMessageChannel } from "../../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../../agent-paths.js";
 import { resolveSessionAgentIds } from "../../agent-scope.js";
-import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
+import {
+  createAnthropicPayloadLogger,
+  createRatelimitStreamWrapper,
+} from "../../anthropic-payload-log.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../../bootstrap-files.js";
 import { createCacheTrace } from "../../cache-trace.js";
 import {
@@ -659,6 +662,18 @@ export async function runEmbeddedAttempt(
         activeSession.agent.streamFn = anthropicPayloadLogger.wrapStreamFn(
           activeSession.agent.streamFn,
         );
+      }
+
+      // Always capture Anthropic rate-limit headers, regardless of payload
+      // logging.  This writes to <stateDir>/anthropic-ratelimit.json so
+      // external tools (dashboards, CLI) can read the current quota state.
+      {
+        const wrapRatelimit = createRatelimitStreamWrapper({
+          env: process.env,
+          sessionKey: params.sessionKey,
+          modelId: params.modelId,
+        });
+        activeSession.agent.streamFn = wrapRatelimit(activeSession.agent.streamFn);
       }
 
       try {
