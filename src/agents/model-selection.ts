@@ -198,12 +198,26 @@ export function buildModelAliasIndex(params: {
 
   const rawModels = params.cfg.agents?.defaults?.models ?? {};
   for (const [keyRaw, entryRaw] of Object.entries(rawModels)) {
-    const parsed = parseModelRef(String(keyRaw ?? ""), params.defaultProvider);
-    if (!parsed) {
-      continue;
-    }
     const alias = String((entryRaw as { alias?: string } | undefined)?.alias ?? "").trim();
     if (!alias) {
+      continue;
+    }
+
+    if (alias.includes("/")) {
+      const parsed = parseModelRef(alias, params.defaultProvider);
+      if (parsed) {
+        const aliasKey = normalizeAliasKey(String(keyRaw ?? ""));
+        byAlias.set(aliasKey, { alias, ref: parsed });
+        const key = modelKey(parsed.provider, parsed.model);
+        const existing = byKey.get(key) ?? [];
+        existing.push(String(keyRaw ?? ""));
+        byKey.set(key, existing);
+        continue;
+      }
+    }
+
+    const parsed = parseModelRef(String(keyRaw ?? ""), params.defaultProvider);
+    if (!parsed) {
       continue;
     }
     const aliasKey = normalizeAliasKey(alias);
