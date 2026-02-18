@@ -195,6 +195,11 @@
   height: 6px;
 }
 
+a.topbar-config-error {
+  text-decoration: none;
+  cursor: pointer;
+}
+
 .topbar-status .theme-orb__trigger {
   width: 26px;
   height: 26px;

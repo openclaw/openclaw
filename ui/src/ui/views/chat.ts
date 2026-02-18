@@ -73,6 +73,7 @@ export type ChatProps = {
   canSend: boolean;
   disabledReason: string | null;
   error: string | null;
+  configValid: boolean | null;
   sessions: SessionsListResult | null;
   focusMode: boolean;
   sidebarOpen?: boolean;
@@ -1076,6 +1077,16 @@ export function renderChat(props: ChatProps) {
     >
       ${props.disabledReason ? html`<div class="callout">${props.disabledReason}</div>` : nothing}
       ${props.error ? html`<div class="callout danger">${props.error}</div>` : nothing}
+
+      ${
+        props.configValid === false
+          ? html`
+              <div class="callout danger">
+                Configuration is invalid — the agent may not respond. Check the Config tab for details.
+              </div>
+            `
+          : nothing
+      }
 
       ${
         props.focusMode

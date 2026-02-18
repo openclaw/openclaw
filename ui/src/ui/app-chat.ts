@@ -6,6 +6,7 @@ import type { OpenClawApp } from "./app.ts";
 import { executeSlashCommand } from "./chat/slash-command-executor.ts";
 import { parseSlashCommand } from "./chat/slash-commands.ts";
 import { abortChatRun, loadChatHistory, sendChatMessage } from "./controllers/chat.ts";
+import { loadConfig } from "./controllers/config.ts";
 import { loadModels } from "./controllers/models.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
@@ -36,6 +37,10 @@ export type ChatHost = {
   refreshSessionsAfterChat: Set<string>;
   /** Callback for slash-command side effects that need app-level access. */
   onSlashAction?: (action: string) => void;
+  // Config validity (used for pre-send check)
+  configValid: boolean | null;
+  configIssues: unknown[];
+  configLoading: boolean;
 };
 
 export const CHAT_SESSIONS_ACTIVE_MINUTES = 120;
@@ -206,6 +211,13 @@ export async function handleSendChat(
 
   if (isChatStopCommand(message)) {
     await handleAbortChat(host);
+    return;
+  }
+
+  // Re-check config validity before sending so the user gets immediate
+  // feedback if the config became invalid while they were on the chat page.
+  await loadConfig(host as unknown as OpenClawApp);
+  if (host.configValid === false) {
     return;
   }
 

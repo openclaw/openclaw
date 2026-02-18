@@ -140,6 +140,7 @@ function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
     canSend: true,
     disabledReason: null,
     error: null,
+    configValid: null,
     sessions: createSessions(),
     focusMode: false,
     assistantName: "OpenClaw",

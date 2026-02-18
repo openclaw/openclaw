@@ -10,6 +10,7 @@ import {
   renderChatControls,
   renderChatSessionSelect,
   renderTab,
+  renderThemeToggle,
   renderTopbarThemeModeToggle,
 } from "./app-render.helpers.ts";
 import type { AppViewState } from "./app-view-state.ts";
@@ -77,15 +78,23 @@ import {
 import "./components/dashboard-header.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "./external-link.ts";
 import { icons } from "./icons.ts";
-import { normalizeBasePath, TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
-import { agentLogoUrl } from "./views/agents-utils.ts";
 import {
+  normalizeBasePath,
+  pathForTab,
+  TAB_GROUPS,
+  subtitleForTab,
+  titleForTab,
+} from "./navigation.ts";
+import {
+  agentLogoUrl,
   resolveAgentConfig,
   resolveConfiguredCronModelSuggestions,
   resolveEffectiveModelFallbacks,
   resolveModelPrimary,
   sortLocaleStrings,
 } from "./views/agents-utils.ts";
+import { renderAgents } from "./views/agents.ts";
+import { renderChannels } from "./views/channels.ts";
 import { renderChat } from "./views/chat.ts";
 import { renderCommandPalette } from "./views/command-palette.ts";
 import { renderConfig } from "./views/config.ts";
@@ -441,6 +450,37 @@ export function renderApp(state: AppViewState) {
               ${renderTopbarThemeModeToggle(state)}
             </div>
           </div>
+        </div>
+        <div class="topbar-status">
+          <div class="pill">
+            <span class="statusDot ${state.connected ? "ok" : ""}"></span>
+            <span>${t("common.health")}</span>
+            <span class="mono">${state.connected ? t("common.ok") : t("common.offline")}</span>
+          </div>
+          ${
+            state.configValid === false
+              ? html`<a
+            class="pill danger topbar-config-error"
+            href=${pathForTab("config", state.basePath)}
+            @click=${(event: MouseEvent) => {
+              if (
+                event.defaultPrevented ||
+                event.button !== 0 ||
+                event.metaKey ||
+                event.ctrlKey ||
+                event.shiftKey ||
+                event.altKey
+              ) {
+                return;
+              }
+              event.preventDefault();
+              state.setTab("config");
+            }}
+            title="Configuration has validation errors — click to view"
+          ><span class="statusDot"></span><span>Config Invalid</span></a>`
+              : nothing
+          }
+          ${renderThemeToggle(state)}
         </div>
       </header>
       <div class="shell-nav">
@@ -1350,6 +1390,7 @@ export function renderApp(state: AppViewState) {
                 canSend: state.connected,
                 disabledReason: chatDisabledReason,
                 error: state.lastError,
+                configValid: state.configValid,
                 sessions: state.sessionsResult,
                 focusMode: chatFocus,
                 onRefresh: () => {
