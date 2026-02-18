@@ -58,14 +58,14 @@ export async function checkInboundAccessControl(params: {
   const allowChats = account.allowChats;
   const isSamePhone = params.from === params.selfE164;
   const isSelfChat = isSelfChatMode(params.selfE164, configuredAllowFrom);
-  
+
   // Check chat-level allowlist first (applies to both DMs and groups)
   if (allowChats && allowChats.length > 0) {
     const chatAllowed = allowChats.includes(params.remoteJid);
     if (!chatAllowed) {
       logVerbose(
         `Blocked message from ${params.remoteJid} (not in allowChats). ` +
-        `Allowed chats: ${allowChats.join(", ")}`,
+          `Allowed chats: ${allowChats.join(", ")}`,
       );
       return {
         allowed: false,
@@ -77,7 +77,7 @@ export async function checkInboundAccessControl(params: {
       logVerbose(`Message from ${params.remoteJid} allowed (in allowChats)`);
     }
   }
-  
+
   const pairingGraceMs =
     typeof params.pairingGraceMs === "number" && params.pairingGraceMs > 0
       ? params.pairingGraceMs

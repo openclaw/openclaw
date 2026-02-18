@@ -11,6 +11,7 @@ import { jidToE164, resolveJidToE164 } from "../../utils.js";
 import { createWaSocket, getStatusCode, waitForWaConnection } from "../session.js";
 import { checkInboundAccessControl } from "./access-control.js";
 import { isRecentInboundMessage } from "./dedupe.js";
+import { downloadMediaById } from "./download-media-by-id.js";
 import {
   describeReplyContext,
   extractLocationData,
@@ -19,7 +20,6 @@ import {
   extractText,
 } from "./extract.js";
 import { downloadInboundMedia } from "./media.js";
-import { downloadMediaById } from "./download-media-by-id.js";
 import { clearMessageStore, getMessageStore } from "./message-store.js";
 import { createWebSendApi } from "./send-api.js";
 import type { WebInboundMessage, WebListenerCloseReason } from "./types.js";
@@ -47,10 +47,12 @@ export async function monitorWebInbox(options: {
   });
   await waitForWaConnection(sock);
   const connectedAtMs = Date.now();
-  
+
   // Log syncFullHistory status and message store state after connection
   if (options.syncFullHistory) {
-    inboundConsoleLog.info("WhatsApp connected with syncFullHistory=true - history sync in progress");
+    inboundConsoleLog.info(
+      "WhatsApp connected with syncFullHistory=true - history sync in progress",
+    );
     // Give Baileys a moment to start syncing, then log store state
     setTimeout(() => {
       const store = getMessageStore(options.accountId);
@@ -61,7 +63,9 @@ export async function monitorWebInbox(options: {
       );
     }, 5000);
   } else {
-    inboundConsoleLog.info("WhatsApp connected with syncFullHistory=false - only new messages will be stored");
+    inboundConsoleLog.info(
+      "WhatsApp connected with syncFullHistory=false - only new messages will be stored",
+    );
   }
 
   let onCloseResolve: ((reason: WebListenerCloseReason) => void) | null = null;
@@ -174,29 +178,35 @@ export async function monitorWebInbox(options: {
 
   const handleMessagesUpsert = async (upsert: { type?: string; messages?: Array<WAMessage> }) => {
     const messageCount = upsert.messages?.length ?? 0;
-    
+
     if (shouldLogVerbose()) {
-      logVerbose(`[messages.upsert] Received event: type=${upsert.type}, messageCount=${messageCount}`);
+      logVerbose(
+        `[messages.upsert] Received event: type=${upsert.type}, messageCount=${messageCount}`,
+      );
       if (messageCount > 0) {
         const sample = upsert.messages![0];
-        logVerbose(`[messages.upsert] Sample message: id=${sample.key?.id}, remoteJid=${sample.key?.remoteJid}, fromMe=${sample.key?.fromMe}, hasMessage=${Boolean(sample.message)}`);
+        logVerbose(
+          `[messages.upsert] Sample message: id=${sample.key?.id}, remoteJid=${sample.key?.remoteJid}, fromMe=${sample.key?.fromMe}, hasMessage=${Boolean(sample.message)}`,
+        );
       }
     }
-    
+
     if (upsert.type !== "notify" && upsert.type !== "append") {
       if (shouldLogVerbose()) {
-        logVerbose(`[messages.upsert] FILTERED OUT: type=${upsert.type} (only 'notify' and 'append' are processed)`);
+        logVerbose(
+          `[messages.upsert] FILTERED OUT: type=${upsert.type} (only 'notify' and 'append' are processed)`,
+        );
       }
       return;
     }
-    
+
     inboundConsoleLog.info(`Processing ${messageCount} messages from upsert type=${upsert.type}`);
-    
+
     const messageStore = getMessageStore(options.accountId);
     let storedCount = 0;
     let skippedCount = 0;
     let filteredReasons: Record<string, number> = {};
-    
+
     for (const msg of upsert.messages ?? []) {
       recordChannelActivity({
         channel: "whatsapp",
@@ -227,7 +237,9 @@ export async function monitorWebInbox(options: {
         messageStore.store(remoteJid, id, msg as proto.IWebMessageInfo);
         storedCount++;
         if (shouldLogVerbose()) {
-          logVerbose(`[messages.upsert] STORED: id=${id} from ${remoteJid} (total stored: ${storedCount})`);
+          logVerbose(
+            `[messages.upsert] STORED: id=${id} from ${remoteJid} (total stored: ${storedCount})`,
+          );
         }
       } else {
         if (shouldLogVerbose()) {
@@ -407,7 +419,7 @@ export async function monitorWebInbox(options: {
         inboundConsoleLog.error(`Failed handling inbound web message: ${String(err)}`);
       }
     }
-    
+
     // Log summary of what was processed
     if (messageCount > 0) {
       const stats = messageStore.getStats();

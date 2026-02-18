@@ -105,13 +105,17 @@ export async function createWaSocket(
   maybeRestoreCredsFromBackup(authDir);
   const { state, saveCreds } = await useMultiFileAuthState(authDir);
   const { version } = await fetchLatestBaileysVersion();
-  
+
   const syncFullHistory = opts.syncFullHistory ?? false;
   if (syncFullHistory) {
-    sessionLogger.info("WhatsApp syncFullHistory enabled - will sync full message history on connection");
-    sessionLogger.info("Note: History messages will arrive via messages.upsert events with type='append'");
+    sessionLogger.info(
+      "WhatsApp syncFullHistory enabled - will sync full message history on connection",
+    );
+    sessionLogger.info(
+      "Note: History messages will arrive via messages.upsert events with type='append'",
+    );
   }
-  
+
   const sock = makeWASocket({
     auth: {
       creds: state.creds,
@@ -124,7 +128,7 @@ export async function createWaSocket(
     syncFullHistory,
     markOnlineOnConnect: false,
   });
-  
+
   if (syncFullHistory) {
     sessionLogger.info("Baileys socket created with syncFullHistory=true");
   }

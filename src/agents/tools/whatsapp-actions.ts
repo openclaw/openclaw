@@ -1,11 +1,11 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { OpenClawConfig } from "../../config/config.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { saveMediaBuffer } from "../../media/store.js";
 import { sendReactionWhatsApp } from "../../web/outbound.js";
 import { readFileWhatsApp } from "../../web/outbound.js";
 import { readWhatsAppMessages } from "../../web/read-messages.js";
-import { saveMediaBuffer } from "../../media/store.js";
 import { createActionGate, jsonResult, readReactionParams, readStringParam } from "./common.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
 
 const log = createSubsystemLogger("gateway/channels/whatsapp").child("actions");
 
@@ -88,16 +88,14 @@ export async function handleWhatsAppAction(
     const accountId = readStringParam(params, "accountId");
     const limit = typeof params.limit === "number" ? params.limit : undefined;
 
-    log.info(
-      `Reading messages from WhatsApp: chatJid=${chatJid}, limit=${limit ?? "default"}`,
-    );
+    log.info(`Reading messages from WhatsApp: chatJid=${chatJid}, limit=${limit ?? "default"}`);
 
     // Check access control for the chat
     const { loadConfig } = await import("../../config/config.js");
     const { resolveWhatsAppAccount } = await import("../../web/accounts.js");
     const config = loadConfig();
     const account = resolveWhatsAppAccount({ cfg: config, accountId });
-    
+
     // Check if chat is in allowChats list
     if (account.allowChats && account.allowChats.length > 0) {
       const chatAllowed = account.allowChats.includes(chatJid);
@@ -123,12 +121,14 @@ export async function handleWhatsAppAction(
     });
 
     log.info(`Retrieved ${result.messages.length} messages from WhatsApp message store`);
-    
+
     // If no messages found, provide helpful guidance
     if (result.messages.length === 0) {
-      log.info(`No messages found in store for ${chatJid}. Enable syncFullHistory in config to sync history on startup.`);
+      log.info(
+        `No messages found in store for ${chatJid}. Enable syncFullHistory in config to sync history on startup.`,
+      );
     }
-    
+
     return jsonResult({
       ok: true,
       messages: result.messages,

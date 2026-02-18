@@ -17,10 +17,10 @@ function hasMedia(message: proto.IMessage | undefined): boolean {
   if (!message) return false;
   return Boolean(
     message.imageMessage ||
-      message.videoMessage ||
-      message.documentMessage ||
-      message.audioMessage ||
-      message.stickerMessage,
+    message.videoMessage ||
+    message.documentMessage ||
+    message.audioMessage ||
+    message.stickerMessage,
   );
 }
 

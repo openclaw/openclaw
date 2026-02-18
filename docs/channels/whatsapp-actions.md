@@ -9,6 +9,7 @@ WhatsApp supports additional message actions beyond basic sending:
 Retrieve recent messages from a WhatsApp chat or group.
 
 **Parameters:**
+
 - `action`: `"read"`
 - `channel`: `"whatsapp"`
 - `target`: Chat JID (e.g., `"1234567890@s.whatsapp.net"` for DM, `"1234567890-1234567890@g.us"` for group)
@@ -16,6 +17,7 @@ Retrieve recent messages from a WhatsApp chat or group.
 - `accountId`: (optional) WhatsApp account ID for multi-account setups
 
 **Example:**
+
 ```typescript
 {
   action: "read",
@@ -26,6 +28,7 @@ Retrieve recent messages from a WhatsApp chat or group.
 ```
 
 **Returns:**
+
 ```typescript
 {
   ok: true,
@@ -47,22 +50,24 @@ Retrieve recent messages from a WhatsApp chat or group.
 ```
 
 **Configuration:**
+
 ```yaml
 channels:
   whatsapp:
     actions:
-      messages: true  # Enable read action (default: true)
+      messages: true # Enable read action (default: true)
     # Sync full message history on connection (recommended for read action)
-    syncFullHistory: true  # Default: false
+    syncFullHistory: true # Default: false
     # Optional: Restrict bot to specific chats/groups
     allowChats:
-      - "120363425273773444@g.us"  # Group JID
-      - "1234567890@s.whatsapp.net"  # DM JID
+      - "120363425273773444@g.us" # Group JID
+      - "1234567890@s.whatsapp.net" # DM JID
 ```
 
 **Access Control:**
 
 The `read` action respects WhatsApp access control settings:
+
 - `allowChats`: If set, only chats in this list can be read
 - `dmPolicy`: Controls direct message access
 - `groupPolicy`: Controls group message access
@@ -74,6 +79,7 @@ Attempting to read from a chat not in `allowChats` will result in an access deni
 Download media (images, videos, documents, audio) from a WhatsApp message.
 
 **Parameters:**
+
 - `action`: `"readFile"`
 - `channel`: `"whatsapp"`
 - `chatJid`: Chat JID where the message was sent
@@ -81,6 +87,7 @@ Download media (images, videos, documents, audio) from a WhatsApp message.
 - `accountId`: (optional) WhatsApp account ID
 
 **Example:**
+
 ```typescript
 {
   action: "readFile",
@@ -91,6 +98,7 @@ Download media (images, videos, documents, audio) from a WhatsApp message.
 ```
 
 **Returns:**
+
 ```typescript
 {
   ok: true,
@@ -102,11 +110,12 @@ Download media (images, videos, documents, audio) from a WhatsApp message.
 ```
 
 **Configuration:**
+
 ```yaml
 channels:
   whatsapp:
     actions:
-      readFile: true  # Enable readFile action (default: true)
+      readFile: true # Enable readFile action (default: true)
 ```
 
 ## How Actions Are Exposed to Agents
@@ -114,12 +123,14 @@ channels:
 ### 1. Action Registration (Build Time)
 
 Actions are registered in the master list:
+
 - **File**: `src/channels/plugins/message-action-names.ts`
 - **List**: `CHANNEL_MESSAGE_ACTION_NAMES` array includes `"read"` and `"readFile"`
 
 ### 2. Channel Plugin Declaration (Runtime)
 
 The WhatsApp plugin declares which actions it supports:
+
 - **File**: `extensions/whatsapp/src/channel.ts`
 - **Method**: `actions.listActions({ cfg })`
 - **Logic**: Checks config gates and returns enabled actions
@@ -134,13 +145,14 @@ actions: {
     if (gate("readFile")) actions.add("readFile");
     if (gate("messages")) actions.add("read");
     return Array.from(actions);
-  }
+  };
 }
 ```
 
 ### 3. Tool Schema Generation (Agent Session Start)
 
 When an agent session starts, the `message` tool schema is built:
+
 - **File**: `src/agents/tools/message-tool.ts`
 - **Function**: `buildMessageToolSchema(cfg)`
 - **Process**:
@@ -151,6 +163,7 @@ When an agent session starts, the `message` tool schema is built:
 ### 4. Tool Description (Agent Prompt)
 
 The tool description is included in the agent's system prompt:
+
 - **Function**: `buildMessageToolDescription(options)`
 - **Content**: Lists all available actions with descriptions
 - **Example**: `"Supports actions: send (send messages), read (read message history), readFile (download media from messages), ..."`
@@ -158,21 +171,23 @@ The tool description is included in the agent's system prompt:
 ### 5. Channel-Specific Hints (Agent Prompt)
 
 Additional usage hints are injected into the system prompt:
+
 - **File**: `extensions/whatsapp/src/channel.ts`
 - **Section**: `agentPrompt.messageToolHints`
 - **Content**:
   ```
-  - WhatsApp message history: use `action=read` with `channel=whatsapp`, 
-    `target=<chat_jid>`, and optional `limit=<number>` to retrieve recent 
+  - WhatsApp message history: use `action=read` with `channel=whatsapp`,
+    `target=<chat_jid>`, and optional `limit=<number>` to retrieve recent
     messages from a chat or group.
-  - WhatsApp media download: use `action=readFile` with `channel=whatsapp`, 
-    `chatJid=<chat_jid>`, and `messageId=<message_id>` to download media 
+  - WhatsApp media download: use `action=readFile` with `channel=whatsapp`,
+    `chatJid=<chat_jid>`, and `messageId=<message_id>` to download media
     from a message.
   ```
 
 ### 6. Action Execution (Tool Call)
 
 When the agent calls the message tool:
+
 1. **Message Tool** (`src/agents/tools/message-tool.ts`) receives the call
 2. **Action Runner** (`src/infra/outbound/message-action-runner.ts`) routes to channel
 3. **Channel Dispatcher** (`src/channels/plugins/message-actions.ts`) finds WhatsApp plugin
@@ -184,6 +199,7 @@ When the agent calls the message tool:
 The `read` action relies on an in-memory message store that retains messages as they arrive.
 
 **Characteristics:**
+
 - Stores last 1000 messages across all chats
 - 24-hour retention window
 - Messages stored as they arrive
@@ -205,6 +221,7 @@ This syncs all message history once at connection time, making it available to t
 **Location**: `src/web/inbound/message-store.ts`
 
 **Storage Trigger**: Messages are stored in `src/web/inbound/monitor.ts` when received:
+
 ```typescript
 messageStore.store(remoteJid, id, msg as proto.IWebMessageInfo);
 ```
@@ -218,6 +235,7 @@ OPENCLAW_VERBOSE=1 openclaw gateway run
 ```
 
 **Log Output:**
+
 ```
 [message-tool] Building schema with actions: send, broadcast, react, poll, read, readFile
 [message-tool] Channel-specific description: ... supports: read (read message history), readFile (download media from messages)
@@ -242,6 +260,7 @@ OPENCLAW_VERBOSE=1 openclaw gateway run
 ## Future Enhancements
 
 Potential improvements:
+
 - Persistent message storage (database)
 - Historical message backfill on startup
 - Configurable retention limits

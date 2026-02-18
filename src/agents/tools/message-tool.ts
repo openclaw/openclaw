@@ -468,7 +468,9 @@ function resolveMessageToolSchemaActions(params: {
       currentChannelId: params.currentChannelId,
     });
     const withSend = new Set<string>(["send", ...scopedActions]);
-    console.log(`[message-tool] Channel-specific actions for ${currentChannel}: ${Array.from(withSend).join(", ")}`);
+    console.log(
+      `[message-tool] Channel-specific actions for ${currentChannel}: ${Array.from(withSend).join(", ")}`,
+    );
     return Array.from(withSend);
   }
   const actions = listChannelMessageActions(params.cfg);

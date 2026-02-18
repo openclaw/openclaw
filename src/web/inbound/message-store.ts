@@ -41,7 +41,7 @@ class MessageStore {
   get(chatJid: string, messageId: string): proto.IWebMessageInfo | null {
     const key = this.makeKey(chatJid, messageId);
     const stored = this.messages.get(key);
-    
+
     if (!stored) {
       return null;
     }
@@ -93,7 +93,7 @@ class MessageStore {
   private cleanup(): void {
     const now = Date.now();
     const entries = Array.from(this.messages.entries());
-    
+
     // Sort by timestamp (oldest first)
     entries.sort((a, b) => a[1].timestamp - b[1].timestamp);
 
@@ -142,11 +142,16 @@ class MessageStore {
   }
 
   // Debug helper: get message count per chat
-  getStats(): { totalMessages: number; chatCount: number; oldestTimestamp: number | null; newestTimestamp: number | null } {
+  getStats(): {
+    totalMessages: number;
+    chatCount: number;
+    oldestTimestamp: number | null;
+    newestTimestamp: number | null;
+  } {
     const now = Date.now();
     let oldest: number | null = null;
     let newest: number | null = null;
-    
+
     for (const stored of this.messages.values()) {
       if (now - stored.timestamp <= this.maxAgeMs) {
         if (oldest === null || stored.timestamp < oldest) {
@@ -157,7 +162,7 @@ class MessageStore {
         }
       }
     }
-    
+
     return {
       totalMessages: this.messages.size,
       chatCount: this.messagesByChat.size,

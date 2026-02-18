@@ -67,9 +67,7 @@ export async function dispatchChannelMessageAction(
     return null;
   }
   if (plugin.actions.supportsAction && !plugin.actions.supportsAction({ action: ctx.action })) {
-    console.log(
-      `[message-actions] Action ${ctx.action} not supported by channel: ${ctx.channel}`,
-    );
+    console.log(`[message-actions] Action ${ctx.action} not supported by channel: ${ctx.channel}`);
     return null;
   }
   console.log(`[message-actions] Executing action ${ctx.action} via plugin handler`);

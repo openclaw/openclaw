@@ -216,19 +216,19 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
     messageToolHints: ({ cfg }) => {
       const gate = createActionGate(cfg.channels?.whatsapp?.actions);
       const hints: string[] = [];
-      
+
       if (gate("messages")) {
         hints.push(
           "- WhatsApp message history: use `action=read` with `channel=whatsapp`, `target=<chat_jid>`, and optional `limit=<number>` to retrieve recent messages from a chat or group.",
         );
       }
-      
+
       if (gate("readFile")) {
         hints.push(
           "- WhatsApp media download: use `action=readFile` with `channel=whatsapp`, `chatJid=<chat_jid>`, and `messageId=<message_id>` to download media from a message.",
         );
       }
-      
+
       return hints;
     },
   },
@@ -286,7 +286,8 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
       }
       return actionList;
     },
-    supportsAction: ({ action }) => action === "react" || action === "readFile" || action === "read",
+    supportsAction: ({ action }) =>
+      action === "react" || action === "readFile" || action === "read",
     handleAction: async ({ action, params, cfg, accountId }) => {
       if (action === "react") {
         const messageId = readStringParam(params, "messageId", {
@@ -298,7 +299,8 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
           {
             action: "react",
             chatJid:
-              readStringParam(params, "chatJid") ?? readStringParam(params, "to", { required: true }),
+              readStringParam(params, "chatJid") ??
+              readStringParam(params, "to", { required: true }),
             messageId,
             emoji,
             remove,
@@ -317,7 +319,8 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
           {
             action: "readFile",
             chatJid:
-              readStringParam(params, "chatJid") ?? readStringParam(params, "to", { required: true }),
+              readStringParam(params, "chatJid") ??
+              readStringParam(params, "to", { required: true }),
             messageId,
             accountId: accountId ?? undefined,
           },
@@ -325,7 +328,8 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
         );
       }
       if (action === "read") {
-        const chatJid = readStringParam(params, "chatJid") ?? readStringParam(params, "to", { required: true });
+        const chatJid =
+          readStringParam(params, "chatJid") ?? readStringParam(params, "to", { required: true });
         const limit = typeof params.limit === "number" ? params.limit : undefined;
         return await getWhatsAppRuntime().channel.whatsapp.handleWhatsAppAction(
           {

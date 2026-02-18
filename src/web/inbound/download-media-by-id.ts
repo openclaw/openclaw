@@ -1,7 +1,7 @@
 import type { proto, WAMessage } from "@whiskeysockets/baileys";
 import { downloadMediaMessage, normalizeMessageContent } from "@whiskeysockets/baileys";
-import type { createWaSocket } from "../session.js";
 import { logVerbose } from "../../globals.js";
+import type { createWaSocket } from "../session.js";
 import { getMessageStore } from "./message-store.js";
 
 function unwrapMessage(message: proto.IMessage | undefined): proto.IMessage | undefined {
@@ -48,7 +48,7 @@ export async function downloadMediaById(
     // Get the message from the store
     const messageStore = getMessageStore(accountId);
     const targetMessage = messageStore.get(chatJid, messageId);
-    
+
     if (!targetMessage) {
       logVerbose(`Message ${messageId} not found in store for chat ${chatJid}`);
       return null;

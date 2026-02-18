@@ -18,7 +18,7 @@ describe("WhatsApp actions listing", () => {
     };
 
     const actions = listChannelSupportedActions({ cfg, channel: "whatsapp" });
-    
+
     expect(actions).toContain("read");
     expect(actions).toContain("readFile");
     expect(actions).toContain("react");
@@ -38,7 +38,7 @@ describe("WhatsApp actions listing", () => {
     };
 
     const actions = listChannelSupportedActions({ cfg, channel: "whatsapp" });
-    
+
     expect(actions).not.toContain("read");
     expect(actions).toContain("readFile");
   });
@@ -56,7 +56,7 @@ describe("WhatsApp actions listing", () => {
     };
 
     const actions = listChannelSupportedActions({ cfg, channel: "whatsapp" });
-    
+
     expect(actions).toContain("read");
     expect(actions).not.toContain("readFile");
   });
@@ -69,7 +69,7 @@ describe("WhatsApp actions listing", () => {
     };
 
     const actions = listChannelSupportedActions({ cfg, channel: "whatsapp" });
-    
+
     // Actions default to enabled
     expect(actions).toContain("read");
     expect(actions).toContain("readFile");
