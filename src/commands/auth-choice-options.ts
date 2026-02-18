@@ -131,6 +131,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["together-api-key"],
   },
   {
+    value: "bedrock",
+    label: "Amazon Bedrock",
+    hint: "API key",
+    choices: ["bedrock-api-key"],
+  },
+  {
     value: "huggingface",
     label: "Hugging Face",
     hint: "Inference API (HF token)",
@@ -221,6 +227,11 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
     value: "together-api-key",
     label: "Together AI API key",
     hint: "Access to Llama, DeepSeek, Qwen, and more open models",
+  },
+  {
+    value: "bedrock-api-key",
+    label: "Amazon Bedrock API key",
+    hint: "API key (bearer token)",
   },
   {
     value: "huggingface-api-key",

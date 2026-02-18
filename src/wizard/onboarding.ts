@@ -377,7 +377,7 @@ export async function runOnboardingWizard(
     nextConfig = authResult.config;
   }
 
-  if (authChoiceFromPrompt && authChoice !== "custom-api-key") {
+  if (authChoiceFromPrompt && authChoice !== "custom-api-key" && authChoice !== "bedrock-api-key") {
     const modelSelection = await promptDefaultModel({
       config: nextConfig,
       prompter,
