@@ -753,6 +753,101 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rpc_sessions_patch_supports_null_clear_roundtrip() -> Result<()> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await?;
+            let ws = accept_async(stream).await?;
+            let (mut write, mut read) = ws.split();
+
+            let _connect = read
+                .next()
+                .await
+                .ok_or_else(|| anyhow::anyhow!("missing connect frame"))??;
+
+            write
+                .send(Message::Text(
+                    json!({
+                        "type": "req",
+                        "id": "req-patch-set",
+                        "method": "sessions.patch",
+                        "params": {
+                            "key": "agent:main:discord:group:g-patch-clear",
+                            "sendPolicy": "deny",
+                            "verboseLevel": "off",
+                            "model": "openai/gpt-4o-mini"
+                        }
+                    })
+                    .to_string(),
+                ))
+                .await?;
+            let set_response = timeout(Duration::from_secs(2), read.next())
+                .await
+                .map_err(|_| anyhow::anyhow!("timed out waiting for set patch response"))?
+                .ok_or_else(|| anyhow::anyhow!("set patch response stream ended"))??;
+            let set_json: Value = serde_json::from_str(set_response.to_text()?)?;
+            assert_eq!(
+                set_json
+                    .pointer("/result/entry/sendPolicy")
+                    .and_then(Value::as_str),
+                Some("deny")
+            );
+            assert_eq!(
+                set_json
+                    .pointer("/result/entry/modelOverride")
+                    .and_then(Value::as_str),
+                Some("gpt-4o-mini")
+            );
+
+            write
+                .send(Message::Text(
+                    json!({
+                        "type": "req",
+                        "id": "req-patch-clear",
+                        "method": "sessions.patch",
+                        "params": {
+                            "key": "agent:main:discord:group:g-patch-clear",
+                            "sendPolicy": null,
+                            "verboseLevel": null,
+                            "model": null
+                        }
+                    })
+                    .to_string(),
+                ))
+                .await?;
+            let clear_response = timeout(Duration::from_secs(2), read.next())
+                .await
+                .map_err(|_| anyhow::anyhow!("timed out waiting for clear patch response"))?
+                .ok_or_else(|| anyhow::anyhow!("clear patch response stream ended"))??;
+            let clear_json: Value = serde_json::from_str(clear_response.to_text()?)?;
+            assert!(clear_json.pointer("/result/entry/sendPolicy").is_none());
+            assert!(clear_json.pointer("/result/entry/verboseLevel").is_none());
+            assert!(clear_json.pointer("/result/entry/modelOverride").is_none());
+            assert!(clear_json.pointer("/result/entry/providerOverride").is_none());
+
+            write.send(Message::Close(None)).await?;
+            Ok::<(), anyhow::Error>(())
+        });
+
+        let bridge = GatewayBridge::new(
+            GatewayConfig {
+                url: format!("ws://{addr}"),
+                token: None,
+            },
+            "security.decision".to_owned(),
+            16,
+            SessionQueueMode::Followup,
+            GroupActivationMode::Always,
+        );
+        let evaluator: Arc<dyn ActionEvaluator> = Arc::new(StubEvaluator);
+        bridge.run_once(evaluator).await?;
+        server.await??;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn rpc_sessions_list_reflects_recorded_decisions() -> Result<()> {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let addr = listener.local_addr()?;

@@ -425,36 +425,121 @@ impl RpcDispatcher {
             return RpcDispatchOutcome::bad_request("sessionKey|key is required");
         };
 
-        let send_policy = match params.send_policy {
-            Some(v) => match parse_send_policy(&v) {
-                Some(x) => Some(x),
-                None => {
-                    return RpcDispatchOutcome::bad_request("sendPolicy must be allow|deny|inherit")
-                }
-            },
-            None => None,
+        let send_policy = match parse_patch_send_policy(param_patch_value(
+            &req.params,
+            &["sendPolicy", "send_policy"],
+        )) {
+            Ok(v) => v,
+            Err(err) => return RpcDispatchOutcome::bad_request(err),
         };
-        let group_activation = match params.group_activation {
-            Some(v) => match parse_group_activation_mode(&v) {
-                Some(x) => Some(x),
-                None => {
-                    return RpcDispatchOutcome::bad_request(
-                        "groupActivation must be mention|always",
-                    )
-                }
-            },
-            None => None,
+        let group_activation = match parse_patch_group_activation(param_patch_value(
+            &req.params,
+            &["groupActivation", "group_activation"],
+        )) {
+            Ok(v) => v,
+            Err(err) => return RpcDispatchOutcome::bad_request(err),
         };
-        let queue_mode = match params.queue_mode {
-            Some(v) => match parse_queue_mode(&v) {
-                Some(x) => Some(x),
-                None => {
-                    return RpcDispatchOutcome::bad_request(
-                        "queueMode must be followup|steer|collect",
-                    )
-                }
-            },
-            None => None,
+        let queue_mode = match parse_patch_queue_mode(param_patch_value(
+            &req.params,
+            &["queueMode", "queue_mode"],
+        )) {
+            Ok(v) => v,
+            Err(err) => return RpcDispatchOutcome::bad_request(err),
+        };
+        let label = match parse_patch_text(param_patch_value(&req.params, &["label"]), "label", 128)
+        {
+            Ok(v) => v,
+            Err(err) => return RpcDispatchOutcome::bad_request(err),
+        };
+        let spawned_by = match parse_patch_text(
+            param_patch_value(&req.params, &["spawnedBy", "spawned_by"]),
+            "spawnedBy",
+            128,
+        ) {
+            Ok(v) => v,
+            Err(err) => return RpcDispatchOutcome::bad_request(err),
+        };
+        let spawn_depth = match parse_patch_u32(param_patch_value(
+            &req.params,
+            &["spawnDepth", "spawn_depth"],
+        )) {
+            Ok(v) => v,
+            Err(err) => return RpcDispatchOutcome::bad_request(err),
+        };
+        let thinking_level = match parse_patch_text(
+            param_patch_value(&req.params, &["thinkingLevel", "thinking_level"]),
+            "thinkingLevel",
+            64,
+        ) {
+            Ok(v) => v,
+            Err(err) => return RpcDispatchOutcome::bad_request(err),
+        };
+        let verbose_level = match parse_patch_text(
+            param_patch_value(&req.params, &["verboseLevel", "verbose_level"]),
+            "verboseLevel",
+            64,
+        ) {
+            Ok(v) => v,
+            Err(err) => return RpcDispatchOutcome::bad_request(err),
+        };
+        let reasoning_level = match parse_patch_text(
+            param_patch_value(&req.params, &["reasoningLevel", "reasoning_level"]),
+            "reasoningLevel",
+            64,
+        ) {
+            Ok(v) => v,
+            Err(err) => return RpcDispatchOutcome::bad_request(err),
+        };
+        let response_usage = match parse_patch_response_usage(param_patch_value(
+            &req.params,
+            &["responseUsage", "response_usage"],
+        )) {
+            Ok(v) => v,
+            Err(err) => return RpcDispatchOutcome::bad_request(err),
+        };
+        let elevated_level = match parse_patch_text(
+            param_patch_value(&req.params, &["elevatedLevel", "elevated_level"]),
+            "elevatedLevel",
+            64,
+        ) {
+            Ok(v) => v,
+            Err(err) => return RpcDispatchOutcome::bad_request(err),
+        };
+        let exec_host = match parse_patch_text(
+            param_patch_value(&req.params, &["execHost", "exec_host"]),
+            "execHost",
+            64,
+        ) {
+            Ok(v) => v,
+            Err(err) => return RpcDispatchOutcome::bad_request(err),
+        };
+        let exec_security = match parse_patch_text(
+            param_patch_value(&req.params, &["execSecurity", "exec_security"]),
+            "execSecurity",
+            64,
+        ) {
+            Ok(v) => v,
+            Err(err) => return RpcDispatchOutcome::bad_request(err),
+        };
+        let exec_ask = match parse_patch_text(
+            param_patch_value(&req.params, &["execAsk", "exec_ask"]),
+            "execAsk",
+            64,
+        ) {
+            Ok(v) => v,
+            Err(err) => return RpcDispatchOutcome::bad_request(err),
+        };
+        let exec_node = match parse_patch_text(
+            param_patch_value(&req.params, &["execNode", "exec_node"]),
+            "execNode",
+            64,
+        ) {
+            Ok(v) => v,
+            Err(err) => return RpcDispatchOutcome::bad_request(err),
+        };
+        let model_override = match parse_patch_model(param_patch_value(&req.params, &["model"])) {
+            Ok(v) => v,
+            Err(err) => return RpcDispatchOutcome::bad_request(err),
         };
 
         let patched = self
@@ -464,10 +549,23 @@ impl RpcDispatcher {
                 send_policy,
                 group_activation,
                 queue_mode,
-                label: normalize_optional_text(params.label, 128),
-                spawned_by: normalize_optional_text(params.spawned_by, 128),
+                label,
+                spawned_by,
+                spawn_depth,
+                thinking_level,
+                verbose_level,
+                reasoning_level,
+                response_usage,
+                elevated_level,
+                exec_host,
+                exec_security,
+                exec_ask,
+                exec_node,
+                model_override,
             })
             .await;
+        let resolved_model_provider = patched.provider_override.clone();
+        let resolved_model = patched.model_override.clone();
         let entry = patched.clone();
         RpcDispatchOutcome::Handled(json!({
             "ok": true,
@@ -475,8 +573,8 @@ impl RpcDispatcher {
             "key": session_key,
             "entry": entry,
             "resolved": {
-                "modelProvider": Value::Null,
-                "model": Value::Null
+                "modelProvider": resolved_model_provider,
+                "model": resolved_model
             },
             "session": patched
         }))
@@ -918,20 +1016,31 @@ impl SessionRegistry {
             .entry(patch.session_key.clone())
             .or_insert_with(|| SessionEntry::new(&patch.session_key));
         entry.updated_at_ms = now;
-        if let Some(send_policy) = patch.send_policy {
-            entry.send_policy = Some(send_policy);
-        }
-        if let Some(group_activation) = patch.group_activation {
-            entry.group_activation = Some(group_activation);
-        }
-        if let Some(queue_mode) = patch.queue_mode {
-            entry.queue_mode = Some(queue_mode);
-        }
-        if let Some(label) = patch.label {
-            entry.label = Some(label);
-        }
-        if let Some(spawned_by) = patch.spawned_by {
-            entry.spawned_by = Some(spawned_by);
+        apply_patch_value(&mut entry.send_policy, patch.send_policy);
+        apply_patch_value(&mut entry.group_activation, patch.group_activation);
+        apply_patch_value(&mut entry.queue_mode, patch.queue_mode);
+        apply_patch_value(&mut entry.label, patch.label);
+        apply_patch_value(&mut entry.spawned_by, patch.spawned_by);
+        apply_patch_value(&mut entry.spawn_depth, patch.spawn_depth);
+        apply_patch_value(&mut entry.thinking_level, patch.thinking_level);
+        apply_patch_value(&mut entry.verbose_level, patch.verbose_level);
+        apply_patch_value(&mut entry.reasoning_level, patch.reasoning_level);
+        apply_patch_value(&mut entry.response_usage, patch.response_usage);
+        apply_patch_value(&mut entry.elevated_level, patch.elevated_level);
+        apply_patch_value(&mut entry.exec_host, patch.exec_host);
+        apply_patch_value(&mut entry.exec_security, patch.exec_security);
+        apply_patch_value(&mut entry.exec_ask, patch.exec_ask);
+        apply_patch_value(&mut entry.exec_node, patch.exec_node);
+        match patch.model_override {
+            PatchValue::Keep => {}
+            PatchValue::Clear => {
+                entry.model_override = None;
+                entry.provider_override = None;
+            }
+            PatchValue::Set(model) => {
+                entry.model_override = Some(model.model_override);
+                entry.provider_override = model.provider_override;
+            }
         }
         entry.to_view(false, false)
     }
@@ -1419,6 +1528,7 @@ struct SessionEntry {
     channel: Option<String>,
     label: Option<String>,
     spawned_by: Option<String>,
+    spawn_depth: Option<u32>,
     updated_at_ms: u64,
     total_requests: u64,
     allowed_count: u64,
@@ -1429,6 +1539,17 @@ struct SessionEntry {
     send_policy: Option<SendPolicyOverride>,
     group_activation: Option<GroupActivationMode>,
     queue_mode: Option<SessionQueueMode>,
+    thinking_level: Option<String>,
+    verbose_level: Option<String>,
+    reasoning_level: Option<String>,
+    response_usage: Option<ResponseUsageMode>,
+    elevated_level: Option<String>,
+    exec_host: Option<String>,
+    exec_security: Option<String>,
+    exec_ask: Option<String>,
+    exec_node: Option<String>,
+    model_override: Option<String>,
+    provider_override: Option<String>,
     history: VecDeque<SessionHistoryEvent>,
 }
 
@@ -1442,6 +1563,7 @@ impl SessionEntry {
             channel: parsed.channel,
             label: None,
             spawned_by: None,
+            spawn_depth: None,
             updated_at_ms: now_ms(),
             total_requests: 0,
             allowed_count: 0,
@@ -1452,6 +1574,17 @@ impl SessionEntry {
             send_policy: None,
             group_activation: None,
             queue_mode: None,
+            thinking_level: None,
+            verbose_level: None,
+            reasoning_level: None,
+            response_usage: None,
+            elevated_level: None,
+            exec_host: None,
+            exec_security: None,
+            exec_ask: None,
+            exec_node: None,
+            model_override: None,
+            provider_override: None,
             history: VecDeque::new(),
         }
     }
@@ -1482,6 +1615,7 @@ impl SessionEntry {
             channel: self.channel.clone(),
             label: self.label.clone(),
             spawned_by: self.spawned_by.clone(),
+            spawn_depth: self.spawn_depth,
             updated_at_ms: self.updated_at_ms,
             total_requests: self.total_requests,
             allowed_count: self.allowed_count,
@@ -1492,6 +1626,17 @@ impl SessionEntry {
             send_policy: self.send_policy,
             group_activation: self.group_activation,
             queue_mode: self.queue_mode,
+            thinking_level: self.thinking_level.clone(),
+            verbose_level: self.verbose_level.clone(),
+            reasoning_level: self.reasoning_level.clone(),
+            response_usage: self.response_usage,
+            elevated_level: self.elevated_level.clone(),
+            exec_host: self.exec_host.clone(),
+            exec_security: self.exec_security.clone(),
+            exec_ask: self.exec_ask.clone(),
+            exec_node: self.exec_node.clone(),
+            model_override: self.model_override.clone(),
+            provider_override: self.provider_override.clone(),
         }
     }
 
@@ -1522,11 +1667,22 @@ impl SessionEntry {
 #[derive(Debug, Clone)]
 struct SessionPatch {
     session_key: String,
-    send_policy: Option<SendPolicyOverride>,
-    group_activation: Option<GroupActivationMode>,
-    queue_mode: Option<SessionQueueMode>,
-    label: Option<String>,
-    spawned_by: Option<String>,
+    send_policy: PatchValue<SendPolicyOverride>,
+    group_activation: PatchValue<GroupActivationMode>,
+    queue_mode: PatchValue<SessionQueueMode>,
+    label: PatchValue<String>,
+    spawned_by: PatchValue<String>,
+    spawn_depth: PatchValue<u32>,
+    thinking_level: PatchValue<String>,
+    verbose_level: PatchValue<String>,
+    reasoning_level: PatchValue<String>,
+    response_usage: PatchValue<ResponseUsageMode>,
+    elevated_level: PatchValue<String>,
+    exec_host: PatchValue<String>,
+    exec_security: PatchValue<String>,
+    exec_ask: PatchValue<String>,
+    exec_node: PatchValue<String>,
+    model_override: PatchValue<ModelOverridePatch>,
 }
 
 #[derive(Debug, Clone)]
@@ -1706,6 +1862,27 @@ pub enum SendPolicyOverride {
     Inherit,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ResponseUsageMode {
+    Off,
+    Tokens,
+    Full,
+}
+
+#[derive(Debug, Clone)]
+enum PatchValue<T> {
+    Keep,
+    Clear,
+    Set(T),
+}
+
+#[derive(Debug, Clone)]
+struct ModelOverridePatch {
+    provider_override: Option<String>,
+    model_override: String,
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 struct SessionView {
     key: String,
@@ -1723,6 +1900,8 @@ struct SessionView {
     label: Option<String>,
     #[serde(rename = "spawnedBy", skip_serializing_if = "Option::is_none")]
     spawned_by: Option<String>,
+    #[serde(rename = "spawnDepth", skip_serializing_if = "Option::is_none")]
+    spawn_depth: Option<u32>,
     #[serde(rename = "updatedAtMs")]
     updated_at_ms: u64,
     #[serde(rename = "totalRequests")]
@@ -1743,6 +1922,28 @@ struct SessionView {
     group_activation: Option<GroupActivationMode>,
     #[serde(rename = "queueMode", skip_serializing_if = "Option::is_none")]
     queue_mode: Option<SessionQueueMode>,
+    #[serde(rename = "thinkingLevel", skip_serializing_if = "Option::is_none")]
+    thinking_level: Option<String>,
+    #[serde(rename = "verboseLevel", skip_serializing_if = "Option::is_none")]
+    verbose_level: Option<String>,
+    #[serde(rename = "reasoningLevel", skip_serializing_if = "Option::is_none")]
+    reasoning_level: Option<String>,
+    #[serde(rename = "responseUsage", skip_serializing_if = "Option::is_none")]
+    response_usage: Option<ResponseUsageMode>,
+    #[serde(rename = "elevatedLevel", skip_serializing_if = "Option::is_none")]
+    elevated_level: Option<String>,
+    #[serde(rename = "execHost", skip_serializing_if = "Option::is_none")]
+    exec_host: Option<String>,
+    #[serde(rename = "execSecurity", skip_serializing_if = "Option::is_none")]
+    exec_security: Option<String>,
+    #[serde(rename = "execAsk", skip_serializing_if = "Option::is_none")]
+    exec_ask: Option<String>,
+    #[serde(rename = "execNode", skip_serializing_if = "Option::is_none")]
+    exec_node: Option<String>,
+    #[serde(rename = "modelOverride", skip_serializing_if = "Option::is_none")]
+    model_override: Option<String>,
+    #[serde(rename = "providerOverride", skip_serializing_if = "Option::is_none")]
+    provider_override: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -1802,15 +2003,6 @@ struct SessionsPatchParams {
     #[serde(rename = "sessionKey", alias = "session_key")]
     session_key: Option<String>,
     key: Option<String>,
-    #[serde(rename = "sendPolicy", alias = "send_policy")]
-    send_policy: Option<String>,
-    #[serde(rename = "groupActivation", alias = "group_activation")]
-    group_activation: Option<String>,
-    #[serde(rename = "queueMode", alias = "queue_mode")]
-    queue_mode: Option<String>,
-    label: Option<String>,
-    #[serde(rename = "spawnedBy", alias = "spawned_by")]
-    spawned_by: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -1932,6 +2124,19 @@ where
     }
 }
 
+fn param_patch_value(params: &Value, keys: &[&str]) -> Option<Option<Value>> {
+    let map = params.as_object()?;
+    for key in keys {
+        if let Some(value) = map.get(*key) {
+            if value.is_null() {
+                return Some(None);
+            }
+            return Some(Some(value.clone()));
+        }
+    }
+    None
+}
+
 fn parse_send_policy(value: &str) -> Option<SendPolicyOverride> {
     match normalize(value).as_str() {
         "allow" => Some(SendPolicyOverride::Allow),
@@ -1958,6 +2163,139 @@ fn parse_queue_mode(value: &str) -> Option<SessionQueueMode> {
     }
 }
 
+fn parse_patch_text(
+    value: Option<Option<Value>>,
+    field_name: &str,
+    max_len: usize,
+) -> Result<PatchValue<String>, String> {
+    match value {
+        None => Ok(PatchValue::Keep),
+        Some(None) => Ok(PatchValue::Clear),
+        Some(Some(Value::Null)) => Ok(PatchValue::Clear),
+        Some(Some(Value::String(raw))) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                return Err(format!("{field_name} cannot be empty"));
+            }
+            let normalized = normalize_optional_text(Some(raw), max_len)
+                .ok_or_else(|| format!("{field_name} cannot be empty"))?;
+            Ok(PatchValue::Set(normalized))
+        }
+        Some(_) => Err(format!("{field_name} must be string or null")),
+    }
+}
+
+fn parse_patch_u32(value: Option<Option<Value>>) -> Result<PatchValue<u32>, String> {
+    match value {
+        None => Ok(PatchValue::Keep),
+        Some(None) => Ok(PatchValue::Clear),
+        Some(Some(Value::Null)) => Ok(PatchValue::Clear),
+        Some(Some(Value::Number(raw))) => raw
+            .as_u64()
+            .and_then(|v| u32::try_from(v).ok())
+            .map(PatchValue::Set)
+            .ok_or_else(|| "spawnDepth must be a non-negative integer or null".to_owned()),
+        Some(_) => Err("spawnDepth must be a non-negative integer or null".to_owned()),
+    }
+}
+
+fn parse_patch_send_policy(
+    value: Option<Option<Value>>,
+) -> Result<PatchValue<SendPolicyOverride>, String> {
+    match value {
+        None => Ok(PatchValue::Keep),
+        Some(None) => Ok(PatchValue::Clear),
+        Some(Some(Value::Null)) => Ok(PatchValue::Clear),
+        Some(Some(Value::String(v))) => parse_send_policy(&v)
+            .map(PatchValue::Set)
+            .ok_or_else(|| "sendPolicy must be allow|deny|inherit|null".to_owned()),
+        Some(_) => Err("sendPolicy must be string or null".to_owned()),
+    }
+}
+
+fn parse_patch_group_activation(
+    value: Option<Option<Value>>,
+) -> Result<PatchValue<GroupActivationMode>, String> {
+    match value {
+        None => Ok(PatchValue::Keep),
+        Some(None) => Ok(PatchValue::Clear),
+        Some(Some(Value::Null)) => Ok(PatchValue::Clear),
+        Some(Some(Value::String(v))) => parse_group_activation_mode(&v)
+            .map(PatchValue::Set)
+            .ok_or_else(|| "groupActivation must be mention|always|null".to_owned()),
+        Some(_) => Err("groupActivation must be string or null".to_owned()),
+    }
+}
+
+fn parse_patch_queue_mode(
+    value: Option<Option<Value>>,
+) -> Result<PatchValue<SessionQueueMode>, String> {
+    match value {
+        None => Ok(PatchValue::Keep),
+        Some(None) => Ok(PatchValue::Clear),
+        Some(Some(Value::Null)) => Ok(PatchValue::Clear),
+        Some(Some(Value::String(v))) => parse_queue_mode(&v)
+            .map(PatchValue::Set)
+            .ok_or_else(|| "queueMode must be followup|steer|collect|null".to_owned()),
+        Some(_) => Err("queueMode must be string or null".to_owned()),
+    }
+}
+
+fn parse_response_usage_mode(value: &str) -> Option<ResponseUsageMode> {
+    match normalize(value).as_str() {
+        "off" => Some(ResponseUsageMode::Off),
+        "tokens" => Some(ResponseUsageMode::Tokens),
+        "full" | "on" => Some(ResponseUsageMode::Full),
+        _ => None,
+    }
+}
+
+fn parse_patch_response_usage(
+    value: Option<Option<Value>>,
+) -> Result<PatchValue<ResponseUsageMode>, String> {
+    match value {
+        None => Ok(PatchValue::Keep),
+        Some(None) => Ok(PatchValue::Clear),
+        Some(Some(Value::Null)) => Ok(PatchValue::Clear),
+        Some(Some(Value::String(v))) => parse_response_usage_mode(&v)
+            .map(PatchValue::Set)
+            .ok_or_else(|| "responseUsage must be off|tokens|full|on|null".to_owned()),
+        Some(_) => Err("responseUsage must be string or null".to_owned()),
+    }
+}
+
+fn parse_patch_model(
+    value: Option<Option<Value>>,
+) -> Result<PatchValue<ModelOverridePatch>, String> {
+    match value {
+        None => Ok(PatchValue::Keep),
+        Some(None) => Ok(PatchValue::Clear),
+        Some(Some(Value::Null)) => Ok(PatchValue::Clear),
+        Some(Some(Value::String(raw))) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                return Err("model cannot be empty".to_owned());
+            }
+            if let Some((provider, model)) = trimmed.split_once('/') {
+                let provider = provider.trim();
+                let model = model.trim();
+                if provider.is_empty() || model.is_empty() {
+                    return Err("model must be 'provider/model' or 'model'".to_owned());
+                }
+                return Ok(PatchValue::Set(ModelOverridePatch {
+                    provider_override: Some(provider.to_owned()),
+                    model_override: model.to_owned(),
+                }));
+            }
+            Ok(PatchValue::Set(ModelOverridePatch {
+                provider_override: None,
+                model_override: trimmed.to_owned(),
+            }))
+        }
+        Some(_) => Err("model must be string or null".to_owned()),
+    }
+}
+
 fn is_global_session(entry: &SessionEntry) -> bool {
     entry.key.eq_ignore_ascii_case("global") || entry.kind == SessionKind::Main
 }
@@ -1978,6 +2316,14 @@ fn normalize_optional_text(value: Option<String>, max_len: usize) -> Option<Stri
     let mut out = trimmed[..end].to_owned();
     out.push_str("...");
     Some(out)
+}
+
+fn apply_patch_value<T>(target: &mut Option<T>, patch: PatchValue<T>) {
+    match patch {
+        PatchValue::Keep => {}
+        PatchValue::Clear => *target = None,
+        PatchValue::Set(value) => *target = Some(value),
+    }
 }
 
 fn truncate_text(value: &str, max_len: usize) -> String {
@@ -2248,6 +2594,99 @@ mod tests {
         };
         let out = dispatcher.handle_request(&patch).await;
         assert!(matches!(out, RpcDispatchOutcome::Error { code: 400, .. }));
+    }
+
+    #[tokio::test]
+    async fn dispatcher_patch_supports_extended_fields_and_null_clear() {
+        let dispatcher = RpcDispatcher::new();
+        let key = "agent:main:discord:group:g-extended";
+
+        let patch_set = RpcRequestFrame {
+            id: "req-patch-extended-set".to_owned(),
+            method: "sessions.patch".to_owned(),
+            params: serde_json::json!({
+                "key": key,
+                "sendPolicy": "deny",
+                "groupActivation": "mention",
+                "queueMode": "steer",
+                "thinkingLevel": "medium",
+                "verboseLevel": "off",
+                "reasoningLevel": "high",
+                "responseUsage": "tokens",
+                "elevatedLevel": "ops",
+                "execHost": "local",
+                "execSecurity": "strict",
+                "execAsk": "auto",
+                "execNode": "node-a",
+                "model": "openai/gpt-4o-mini",
+                "spawnDepth": 2
+            }),
+        };
+        let out = dispatcher.handle_request(&patch_set).await;
+        match out {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload
+                        .pointer("/entry/thinkingLevel")
+                        .and_then(serde_json::Value::as_str),
+                    Some("medium")
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/entry/modelOverride")
+                        .and_then(serde_json::Value::as_str),
+                    Some("gpt-4o-mini")
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/entry/providerOverride")
+                        .and_then(serde_json::Value::as_str),
+                    Some("openai")
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/resolved/model")
+                        .and_then(serde_json::Value::as_str),
+                    Some("gpt-4o-mini")
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/entry/spawnDepth")
+                        .and_then(serde_json::Value::as_u64),
+                    Some(2)
+                );
+            }
+            _ => panic!("expected extended patch handled"),
+        }
+
+        let patch_clear = RpcRequestFrame {
+            id: "req-patch-extended-clear".to_owned(),
+            method: "sessions.patch".to_owned(),
+            params: serde_json::json!({
+                "key": key,
+                "sendPolicy": null,
+                "groupActivation": null,
+                "queueMode": null,
+                "verboseLevel": null,
+                "responseUsage": null,
+                "spawnDepth": null,
+                "model": null
+            }),
+        };
+        let out = dispatcher.handle_request(&patch_clear).await;
+        match out {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert!(payload.pointer("/entry/sendPolicy").is_none());
+                assert!(payload.pointer("/entry/groupActivation").is_none());
+                assert!(payload.pointer("/entry/queueMode").is_none());
+                assert!(payload.pointer("/entry/verboseLevel").is_none());
+                assert!(payload.pointer("/entry/responseUsage").is_none());
+                assert!(payload.pointer("/entry/spawnDepth").is_none());
+                assert!(payload.pointer("/entry/modelOverride").is_none());
+                assert!(payload.pointer("/entry/providerOverride").is_none());
+            }
+            _ => panic!("expected clear patch handled"),
+        }
     }
 
     #[tokio::test]
