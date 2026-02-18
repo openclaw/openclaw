@@ -60,7 +60,8 @@ vi.mock("./delivery-queue.js", () => ({
   failDelivery: queueMocks.failDelivery,
 }));
 
-const { deliverOutboundPayloads, normalizeOutboundPayloads } = await import("./deliver.js");
+let deliverOutboundPayloads: typeof import("./deliver.js").deliverOutboundPayloads;
+let normalizeOutboundPayloads: typeof import("./deliver.js").normalizeOutboundPayloads;
 
 const telegramChunkConfig: OpenClawConfig = {
   channels: { telegram: { botToken: "tok-1", textChunkLimit: 2 } },
@@ -87,7 +88,9 @@ async function deliverWhatsAppPayload(params: {
 }
 
 describe("deliverOutboundPayloads", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ deliverOutboundPayloads, normalizeOutboundPayloads } = await import("./deliver.js"));
     setActivePluginRegistry(defaultRegistry);
     hookMocks.runner.hasHooks.mockReset();
     hookMocks.runner.hasHooks.mockReturnValue(false);
