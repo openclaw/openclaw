@@ -15,6 +15,14 @@ const SessionsSpawnToolSchema = Type.Object({
   // Back-compat: older callers used timeoutSeconds for this tool.
   timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
   cleanup: optionalStringEnum(["delete", "keep"] as const),
+  sessionKey: Type.Optional(
+    Type.String({
+      description:
+        "Reuse an existing sub-agent session instead of creating a new one. " +
+        "When provided, the sub-agent runs in the session keyed by this value, " +
+        "preserving conversation history across spawns.",
+    }),
+  ),
 });
 
 export function createSessionsSpawnTool(opts?: {
@@ -57,6 +65,7 @@ export function createSessionsSpawnTool(opts?: {
           ? Math.max(0, Math.floor(timeoutSecondsCandidate))
           : undefined;
 
+      const sessionKey = readStringParam(params, "sessionKey");
       const result = await spawnSubagentDirect(
         {
           task,
@@ -67,6 +76,7 @@ export function createSessionsSpawnTool(opts?: {
           runTimeoutSeconds,
           cleanup,
           expectsCompletionMessage: true,
+          sessionKey: sessionKey || undefined,
         },
         {
           agentSessionKey: opts?.agentSessionKey,

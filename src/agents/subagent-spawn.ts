@@ -26,6 +26,15 @@ export type SpawnSubagentParams = {
   runTimeoutSeconds?: number;
   cleanup?: "delete" | "keep";
   expectsCompletionMessage?: boolean;
+  /**
+   * Reuse an existing sub-agent session instead of creating a new one.
+   * When provided, the sub-agent runs in the session keyed by this value,
+   * preserving conversation history across spawns.
+   * Short keys are namespaced to `agent:{agentId}:subagent:{sessionKey}`.
+   * Fully-qualified keys (containing ":subagent:") are validated to ensure
+   * the embedded agentId matches targetAgentId before use.
+   */
+  sessionKey?: string;
 };
 
 export type SpawnSubagentContext = {
@@ -145,7 +154,27 @@ export async function spawnSubagentDirect(
       };
     }
   }
-  const childSessionKey = `agent:${targetAgentId}:subagent:${crypto.randomUUID()}`;
+  const childSessionKey = (() => {
+    const requestedKey = params.sessionKey;
+    if (requestedKey) {
+      // If the key is fully-qualified (contains ":subagent:"), validate that
+      // the embedded agentId matches targetAgentId to prevent cross-agent
+      // session injection.
+      if (requestedKey.includes(":subagent:")) {
+        const embeddedAgentId = requestedKey.split(":subagent:")[0].replace(/^agent:/, "");
+        if (embeddedAgentId !== targetAgentId) {
+          return {
+            status: "error" as const,
+            error: `sessionKey agentId mismatch: key targets agent "${embeddedAgentId}" but spawn targets "${targetAgentId}"`,
+          };
+        }
+        return requestedKey;
+      }
+      return `agent:${targetAgentId}:subagent:${requestedKey}`;
+    }
+    return `agent:${targetAgentId}:subagent:${crypto.randomUUID()}`;
+  })();
+  if (typeof childSessionKey === "object") return childSessionKey;
   const childDepth = callerDepth + 1;
   const spawnedByKey = requesterInternalKey;
   const targetAgentConfig = resolveAgentConfig(cfg, targetAgentId);
