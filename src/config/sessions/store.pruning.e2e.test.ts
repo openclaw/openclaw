@@ -3,8 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SessionEntry } from "./types.js";
 import { clearSessionStoreCacheForTest, loadSessionStore, saveSessionStore } from "./store.js";
+import type { SessionEntry } from "./types.js";
 
 // Keep integration tests deterministic: never read a real openclaw.json.
 vi.mock("../config.js", () => ({
@@ -20,6 +20,19 @@ let fixtureCount = 0;
 
 function makeEntry(updatedAt: number): SessionEntry {
   return { sessionId: crypto.randomUUID(), updatedAt };
+}
+
+function applyEnforcedMaintenanceConfig(mockLoadConfig: ReturnType<typeof vi.fn>) {
+  mockLoadConfig.mockReturnValue({
+    session: {
+      maintenance: {
+        mode: "enforce",
+        pruneAfter: "7d",
+        maxEntries: 500,
+        rotateBytes: 10_485_760,
+      },
+    },
+  });
 }
 
 async function createCaseDir(prefix: string): Promise<string> {
@@ -64,16 +77,7 @@ describe("Integration: saveSessionStore with pruning", () => {
   });
 
   it("saveSessionStore prunes stale entries on write", async () => {
-    mockLoadConfig.mockReturnValue({
-      session: {
-        maintenance: {
-          mode: "enforce",
-          pruneAfter: "7d",
-          maxEntries: 500,
-          rotateBytes: 10_485_760,
-        },
-      },
-    });
+    applyEnforcedMaintenanceConfig(mockLoadConfig);
 
     const now = Date.now();
     const store: Record<string, SessionEntry> = {
@@ -89,16 +93,7 @@ describe("Integration: saveSessionStore with pruning", () => {
   });
 
   it("archives transcript files for stale sessions pruned on write", async () => {
-    mockLoadConfig.mockReturnValue({
-      session: {
-        maintenance: {
-          mode: "enforce",
-          pruneAfter: "7d",
-          maxEntries: 500,
-          rotateBytes: 10_485_760,
-        },
-      },
-    });
+    applyEnforcedMaintenanceConfig(mockLoadConfig);
 
     const now = Date.now();
     const staleSessionId = "stale-session";
@@ -127,16 +122,7 @@ describe("Integration: saveSessionStore with pruning", () => {
   });
 
   it("cleans up archived transcripts older than the prune window", async () => {
-    mockLoadConfig.mockReturnValue({
-      session: {
-        maintenance: {
-          mode: "enforce",
-          pruneAfter: "7d",
-          maxEntries: 500,
-          rotateBytes: 10_485_760,
-        },
-      },
-    });
+    applyEnforcedMaintenanceConfig(mockLoadConfig);
 
     const now = Date.now();
     const staleSessionId = "stale-session";

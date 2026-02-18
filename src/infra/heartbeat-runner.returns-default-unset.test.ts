@@ -2,10 +2,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import * as replyModule from "../auto-reply/reply.js";
 import { whatsappOutbound } from "../channels/plugins/outbound/whatsapp.js";
+import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveAgentIdFromSessionKey,
   resolveAgentMainSessionKey,
@@ -303,6 +303,46 @@ describe("resolveHeartbeatDeliveryTarget", () => {
       lastChannel: "whatsapp",
       lastAccountId: undefined,
     });
+  });
+
+  it("keeps explicit telegram targets", () => {
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { heartbeat: { target: "telegram", to: "123" } } },
+    };
+    expect(resolveHeartbeatDeliveryTarget({ cfg, entry: baseEntry })).toEqual({
+      channel: "telegram",
+      to: "123",
+      accountId: undefined,
+      lastChannel: undefined,
+      lastAccountId: undefined,
+    });
+  });
+
+  it("parses threadId from :topic: suffix in heartbeat to", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          heartbeat: { target: "telegram", to: "-100111:topic:42" },
+        },
+      },
+    };
+    const result = resolveHeartbeatDeliveryTarget({ cfg, entry: baseEntry });
+    expect(result.channel).toBe("telegram");
+    expect(result.to).toBe("-100111");
+    expect(result.threadId).toBe(42);
+  });
+
+  it("heartbeat to without :topic: has no threadId", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          heartbeat: { target: "telegram", to: "-100111" },
+        },
+      },
+    };
+    const result = resolveHeartbeatDeliveryTarget({ cfg, entry: baseEntry });
+    expect(result.to).toBe("-100111");
+    expect(result.threadId).toBeUndefined();
   });
 
   it("uses explicit heartbeat accountId when provided", () => {

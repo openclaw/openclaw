@@ -1,17 +1,15 @@
-import type { GatewayPlugin } from "@buape/carbon/gateway";
+import { inspect } from "node:util";
 import {
   Client,
   ReadyListener,
   type BaseMessageInteractiveComponent,
   type Modal,
 } from "@buape/carbon";
+import type { GatewayPlugin } from "@buape/carbon/gateway";
 import { Routes } from "discord-api-types/v10";
-import { inspect } from "node:util";
-import { ProxyAgent, fetch as undiciFetch } from "undici";
-import type { HistoryEntry } from "../../auto-reply/reply/history.js";
-import type { OpenClawConfig, ReplyToMode } from "../../config/config.js";
 import { resolveTextChunkLimit } from "../../auto-reply/chunk.js";
 import { listNativeCommandSpecsForConfig } from "../../auto-reply/commands-registry.js";
+import type { HistoryEntry } from "../../auto-reply/reply/history.js";
 import { listSkillCommandsForAgents } from "../../auto-reply/skill-commands.js";
 import {
   addAllowlistUserEntriesFromConfigEntry,
@@ -26,10 +24,10 @@ import {
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
 } from "../../config/commands.js";
+import type { OpenClawConfig, ReplyToMode } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import { danger, logVerbose, shouldLogVerbose, warn } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { wrapFetchWithAbortSignal } from "../../infra/fetch.js";
 import { createDiscordRetryRunner } from "../../infra/retry-policy.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createNonExitingRuntime, type RuntimeEnv } from "../../runtime.js";
@@ -67,6 +65,7 @@ import {
   createDiscordNativeCommand,
 } from "./native-command.js";
 import { resolveDiscordPresenceUpdate } from "./presence.js";
+import { resolveDiscordRestFetch } from "./rest-fetch.js";
 
 export type MonitorDiscordOpts = {
   token?: string;
@@ -118,26 +117,6 @@ function dedupeSkillCommandsForDiscord(
   return deduped;
 }
 
-function resolveDiscordRestFetch(proxyUrl: string | undefined, runtime: RuntimeEnv): typeof fetch {
-  const proxy = proxyUrl?.trim();
-  if (!proxy) {
-    return fetch;
-  }
-  try {
-    const agent = new ProxyAgent(proxy);
-    const fetcher = ((input: RequestInfo | URL, init?: RequestInit) =>
-      undiciFetch(input as string | URL, {
-        ...(init as Record<string, unknown>),
-        dispatcher: agent,
-      }) as unknown as Promise<Response>) as typeof fetch;
-    runtime.log?.("discord: rest proxy enabled");
-    return wrapFetchWithAbortSignal(fetcher);
-  } catch (err) {
-    runtime.error?.(danger(`discord: invalid rest proxy: ${String(err)}`));
-    return fetch;
-  }
-}
-
 async function deployDiscordCommands(params: {
   client: Client;
   runtime: RuntimeEnv;
@@ -186,11 +165,6 @@ function formatDiscordDeployErrorDetails(err: unknown): string {
     }
   }
   return details.length > 0 ? ` (${details.join(", ")})` : "";
-}
-
-function isDiscordGatewayFatalError(err: unknown): boolean {
-  const message = String(err);
-  return message.includes("Max reconnect attempts") || message.includes("Fatal Gateway error");
 }
 
 export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
@@ -628,28 +602,6 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     emitter: gatewayEmitter,
     runtime,
   });
-  // Track gateway heartbeat health based on metrics events.
-  const HEARTBEAT_STALE_WARN_MS = 5 * 60 * 1000;
-  const HEARTBEAT_CHECK_INTERVAL_MS = 2 * 60 * 1000;
-  let lastSuccessfulHeartbeat = Date.now();
-  const onGatewayMetricsHeartbeat = () => {
-    lastSuccessfulHeartbeat = Date.now();
-  };
-  gatewayEmitter?.on("metrics", onGatewayMetricsHeartbeat);
-  const heartbeatIntervalId =
-    gatewayEmitter && typeof setInterval === "function"
-      ? setInterval(() => {
-          const now = Date.now();
-          const staleMs = now - lastSuccessfulHeartbeat;
-          if (staleMs > HEARTBEAT_STALE_WARN_MS) {
-            runtime.log?.(
-              warn(
-                `discord: gateway heartbeat stale for ${Math.round(staleMs / 1000)}s (no metrics events)`,
-              ),
-            );
-          }
-        }, HEARTBEAT_CHECK_INTERVAL_MS)
-      : undefined;
   const abortSignal = opts.abortSignal;
   const onAbort = () => {
     if (!gateway) {
@@ -713,10 +665,6 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   } finally {
     unregisterGateway(account.accountId);
     stopGatewayLogging();
-    if (heartbeatIntervalId) {
-      clearInterval(heartbeatIntervalId);
-    }
-    gatewayEmitter?.removeListener("metrics", onGatewayMetricsHeartbeat);
     if (helloTimeoutId) {
       clearTimeout(helloTimeoutId);
     }
@@ -724,72 +672,6 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     abortSignal?.removeEventListener("abort", onAbort);
     if (execApprovalsHandler) {
       await execApprovalsHandler.stop();
-    }
-  }
-}
-
-export async function monitorDiscordProviderWithSupervisor(
-  opts: MonitorDiscordOpts = {},
-): Promise<void> {
-  const supervisorLogger = createSubsystemLogger("discord/supervisor");
-  const abortSignal = opts.abortSignal;
-
-  const baseDelayMs = 30_000;
-  const maxDelayMs = 5 * 60_000;
-  let backoffMs = baseDelayMs;
-  let attempt = 0;
-
-  const waitWithAbort = (ms: number): Promise<void> =>
-    new Promise((resolve) => {
-      if (abortSignal?.aborted) {
-        resolve();
-        return;
-      }
-      const timeoutId = setTimeout(() => {
-        resolve();
-      }, ms);
-      if (!abortSignal) {
-        return;
-      }
-      const onAbort = () => {
-        clearTimeout(timeoutId);
-        abortSignal.removeEventListener("abort", onAbort);
-        resolve();
-      };
-      abortSignal.addEventListener("abort", onAbort, { once: true });
-    });
-
-  // Initial run (no delay).
-  // Loop while we see fatal gateway errors that should trigger a supervised restart.
-  // Respect the abort signal at each iteration and during backoff.
-  // eslint-disable-next-line no-constant-condition
-  while (true) {
-    if (abortSignal?.aborted) {
-      supervisorLogger.info("discord: supervisor abort signal received, stopping monitor");
-      return;
-    }
-    try {
-      await monitorDiscordProvider(opts);
-      // Normal completion; do not restart.
-      return;
-    } catch (err) {
-      if (!isDiscordGatewayFatalError(err)) {
-        // Bubble non-gateway-fatal errors to callers.
-        throw err;
-      }
-      attempt += 1;
-      const delayMs = Math.min(backoffMs, maxDelayMs);
-      supervisorLogger.warn(
-        `discord: gateway monitor exited with fatal error; restarting after backoff (attempt=${attempt}, delayMs=${delayMs})`,
-      );
-      await waitWithAbort(delayMs);
-      if (abortSignal?.aborted) {
-        supervisorLogger.info(
-          "discord: supervisor abort signal received during backoff, stopping monitor",
-        );
-        return;
-      }
-      backoffMs = Math.min(backoffMs * 2, maxDelayMs);
     }
   }
 }

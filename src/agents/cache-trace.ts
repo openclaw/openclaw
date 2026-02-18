@@ -1,6 +1,6 @@
-import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
 import crypto from "node:crypto";
 import path from "node:path";
+import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveUserPath } from "../utils.js";
@@ -129,12 +129,18 @@ function stableStringify(value: unknown): string {
     });
   }
   if (Array.isArray(value)) {
-    return `[${value.map((entry) => stableStringify(entry)).join(",")}]`;
+    const serializedEntries: string[] = [];
+    for (const entry of value) {
+      serializedEntries.push(stableStringify(entry));
+    }
+    return `[${serializedEntries.join(",")}]`;
   }
   const record = value as Record<string, unknown>;
-  const keys = Object.keys(record).toSorted();
-  const entries = keys.map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`);
-  return `{${entries.join(",")}}`;
+  const serializedFields: string[] = [];
+  for (const key of Object.keys(record).toSorted()) {
+    serializedFields.push(`${JSON.stringify(key)}:${stableStringify(record[key])}`);
+  }
+  return `{${serializedFields.join(",")}}`;
 }
 
 function digest(value: unknown): string {
