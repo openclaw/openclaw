@@ -21,8 +21,19 @@ function resolveDefaultIdentityPath(): string {
   return path.join(resolveStateDir(), "identity", "device.json");
 }
 
-function ensureDir(filePath: string) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+/**
+ * Ensure directory exists with secure permissions (0o700).
+ * The identity directory contains private keys and should not be world-readable.
+ */
+function ensureSecureDir(filePath: string) {
+  const dir = path.dirname(filePath);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  // Also fix permissions if directory already existed with wrong mode
+  try {
+    fs.chmodSync(dir, 0o700);
+  } catch {
+    // best-effort: may fail on some filesystems
+  }
 }
 
 const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
@@ -105,7 +116,7 @@ export function loadOrCreateDeviceIdentity(
   }
 
   const identity = generateIdentity();
-  ensureDir(filePath);
+  ensureSecureDir(filePath);
   const stored: StoredIdentity = {
     version: 1,
     deviceId: identity.deviceId,
