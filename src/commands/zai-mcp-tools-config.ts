@@ -17,10 +17,7 @@ export interface ZaiMcpToolsConfig {
  * @param apiKey - Z.AI API key
  * @param workspaceDir - Workspace directory path
  */
-export async function configureZaiMcpTools(
-  apiKey: string,
-  workspaceDir: string,
-): Promise<void> {
+export async function configureZaiMcpTools(apiKey: string, workspaceDir: string): Promise<void> {
   const configDir = path.join(workspaceDir, "config");
   const configPath = path.join(configDir, "mcporter.json");
 
