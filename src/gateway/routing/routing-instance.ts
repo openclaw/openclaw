@@ -12,17 +12,26 @@
  * instance will be created.
  */
 
+import type { EmbeddingProvider } from "../memory/embeddings.js";
 import { BudgetTracker } from "./budget-tracker.js";
 import { HealthTracker } from "./health-tracker.js";
 import { ModelSelector } from "./model-selector.js";
 import { ReviewGate } from "./review-gate.js";
+import { SemanticRouter } from "./semantic-router.js";
 import type { RoutingConfig } from "./types.js";
+import { ROUTE_UTTERANCES } from "./utterances.js";
 
 export interface RoutingInstance {
   healthTracker: HealthTracker;
   budgetTracker: BudgetTracker;
   reviewGate: ReviewGate;
   selector: ModelSelector;
+
+  /**
+   * L1.5 Semantic Router — available after setEmbeddingProvider() is called
+   * and the background init completes.
+   */
+  semanticRouter?: SemanticRouter;
 
   /** Serialize health + budget state for persistence */
   serialize(): { health: string; budget: string };
@@ -32,11 +41,22 @@ export interface RoutingInstance {
    * Silently ignores malformed input.
    */
   deserialize(data: { health: string; budget: string }): void;
+
+  /**
+   * Provide an EmbeddingProvider to enable the L1.5 Semantic Router.
+   * Triggers background init (non-blocking). Safe to call multiple times;
+   * subsequent calls are no-ops if a router is already initializing/initialized.
+   *
+   * @param provider - EmbeddingProvider from the memory manager
+   * @param threshold - Optional cosine similarity threshold (overrides config)
+   */
+  setEmbeddingProvider(provider: EmbeddingProvider, threshold?: number): void;
 }
 
 // Singleton storage — one instance per RoutingConfig reference.
 let _currentConfig: RoutingConfig | undefined;
 let _instance: RoutingInstance | undefined;
+let _routerInitializing = false;
 
 /**
  * Return (or lazily create) the routing singleton for a given config.
@@ -48,6 +68,10 @@ export function getRoutingInstance(config: RoutingConfig): RoutingInstance {
   if (_instance && _currentConfig === config) {
     return _instance;
   }
+
+  // Config changed — reset the initializing flag so the new instance
+  // isn't blocked by a stale flag from the previous instance.
+  _routerInitializing = false;
 
   // Build sub-components from config
   const healthTracker = new HealthTracker(config.health?.window_size ?? 20);
@@ -81,6 +105,7 @@ export function getRoutingInstance(config: RoutingConfig): RoutingInstance {
     budgetTracker,
     reviewGate,
     selector,
+    semanticRouter: undefined,
 
     serialize() {
       return {
@@ -105,6 +130,42 @@ export function getRoutingInstance(config: RoutingConfig): RoutingInstance {
         // ignore malformed budget data
       }
     },
+
+    setEmbeddingProvider(provider: EmbeddingProvider, threshold?: number) {
+      // No-op if semantic router config is disabled
+      if (config.semantic_router?.enabled === false) {
+        return;
+      }
+      // No-op if already initialized or initializing
+      if (this.semanticRouter?.isInitialized || _routerInitializing) {
+        return;
+      }
+
+      _routerInitializing = true;
+      const effectiveThreshold = threshold ?? config.semantic_router?.threshold;
+      const router = new SemanticRouter(
+        provider,
+        effectiveThreshold,
+        config.semantic_router?.min_gap,
+      );
+
+      // Assign immediately so resolve() can be called (it guards on isInitialized)
+      this.semanticRouter = router;
+
+      // Background init — non-blocking
+      router
+        .init(ROUTE_UTTERANCES)
+        .then(() => {
+          _routerInitializing = false;
+          console.info(`[routing] semantic-router initialized: ${router.routeCount} route entries`);
+        })
+        .catch((err: unknown) => {
+          _routerInitializing = false;
+          console.warn("[routing] semantic-router init failed:", err);
+          // Remove the router so resolve() falls through to FALLBACK
+          this.semanticRouter = undefined;
+        });
+    },
   };
 
   _currentConfig = config;
@@ -118,4 +179,5 @@ export function getRoutingInstance(config: RoutingConfig): RoutingInstance {
 export function resetRoutingInstance(): void {
   _currentConfig = undefined;
   _instance = undefined;
+  _routerInitializing = false;
 }
