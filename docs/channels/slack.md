@@ -499,7 +499,7 @@ Primary reference:
   - channel access: `groupPolicy`, `channels.*`, `channels.*.users`, `channels.*.requireMention`
   - threading/history: `replyToMode`, `replyToModeByChatType`, `thread.*`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
   - delivery: `textChunkLimit`, `chunkMode`, `mediaMaxMb`
-  - ops/features: `configWrites`, `commands.native`, `slashCommand.*`, `actions.*`, `userToken`, `userTokenReadOnly`
+  - ops/features: `configWrites`, `commands.native`, `slashCommand.*`, `actions.*`, `userToken`, `userTokenReadOnly`, `rateLimitPolicy`
 
 ## Related
 
