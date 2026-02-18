@@ -40,6 +40,7 @@
   - Added `thinkingLevel`, `verboseLevel`, `reasoningLevel`, `responseUsage`, `elevatedLevel`, `execHost`, `execSecurity`, `execAsk`, `execNode`, `model`, and `spawnDepth`.
   - Explicit `null` values now clear prior overrides for patchable session fields.
   - Added parity guardrails for patch mutations: unique labels plus subagent-only immutable `spawnedBy`/`spawnDepth`.
+  - Added canonical normalization/validation for tuning knobs (thinking/reasoning/verbose/elevated/exec).
 - Rust defender policy engine with bounded worker concurrency.
 - Prompt injection scoring + command risk scoring.
 - Host integrity baseline checks.

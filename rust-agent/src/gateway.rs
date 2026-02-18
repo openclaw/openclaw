@@ -466,26 +466,20 @@ impl RpcDispatcher {
             Ok(v) => v,
             Err(err) => return RpcDispatchOutcome::bad_request(err),
         };
-        let thinking_level = match parse_patch_text(
+        let thinking_level = match parse_patch_thinking_level(
             param_patch_value(&req.params, &["thinkingLevel", "thinking_level"]),
-            "thinkingLevel",
-            64,
         ) {
             Ok(v) => v,
             Err(err) => return RpcDispatchOutcome::bad_request(err),
         };
-        let verbose_level = match parse_patch_text(
+        let verbose_level = match parse_patch_verbose_level(
             param_patch_value(&req.params, &["verboseLevel", "verbose_level"]),
-            "verboseLevel",
-            64,
         ) {
             Ok(v) => v,
             Err(err) => return RpcDispatchOutcome::bad_request(err),
         };
-        let reasoning_level = match parse_patch_text(
+        let reasoning_level = match parse_patch_reasoning_level(
             param_patch_value(&req.params, &["reasoningLevel", "reasoning_level"]),
-            "reasoningLevel",
-            64,
         ) {
             Ok(v) => v,
             Err(err) => return RpcDispatchOutcome::bad_request(err),
@@ -497,35 +491,30 @@ impl RpcDispatcher {
             Ok(v) => v,
             Err(err) => return RpcDispatchOutcome::bad_request(err),
         };
-        let elevated_level = match parse_patch_text(
+        let elevated_level = match parse_patch_elevated_level(
             param_patch_value(&req.params, &["elevatedLevel", "elevated_level"]),
-            "elevatedLevel",
-            64,
         ) {
             Ok(v) => v,
             Err(err) => return RpcDispatchOutcome::bad_request(err),
         };
-        let exec_host = match parse_patch_text(
-            param_patch_value(&req.params, &["execHost", "exec_host"]),
-            "execHost",
-            64,
-        ) {
+        let exec_host = match parse_patch_exec_host(param_patch_value(
+            &req.params,
+            &["execHost", "exec_host"],
+        )) {
             Ok(v) => v,
             Err(err) => return RpcDispatchOutcome::bad_request(err),
         };
-        let exec_security = match parse_patch_text(
-            param_patch_value(&req.params, &["execSecurity", "exec_security"]),
-            "execSecurity",
-            64,
-        ) {
+        let exec_security = match parse_patch_exec_security(param_patch_value(
+            &req.params,
+            &["execSecurity", "exec_security"],
+        )) {
             Ok(v) => v,
             Err(err) => return RpcDispatchOutcome::bad_request(err),
         };
-        let exec_ask = match parse_patch_text(
-            param_patch_value(&req.params, &["execAsk", "exec_ask"]),
-            "execAsk",
-            64,
-        ) {
+        let exec_ask = match parse_patch_exec_ask(param_patch_value(
+            &req.params,
+            &["execAsk", "exec_ask"],
+        )) {
             Ok(v) => v,
             Err(err) => return RpcDispatchOutcome::bad_request(err),
         };
@@ -2288,11 +2277,82 @@ fn parse_patch_queue_mode(
     }
 }
 
+fn normalize_thinking_level(value: &str) -> Option<&'static str> {
+    let key = normalize(value);
+    let collapsed = key.replace([' ', '_', '-'], "");
+    if collapsed == "xhigh" || collapsed == "extrahigh" {
+        return Some("xhigh");
+    }
+    match key.as_str() {
+        "off" => Some("off"),
+        "on" | "enable" | "enabled" => Some("low"),
+        "min" | "minimal" | "think" => Some("minimal"),
+        "low" | "thinkhard" | "think-hard" | "think_hard" => Some("low"),
+        "mid" | "med" | "medium" | "thinkharder" | "think-harder" | "harder" => Some("medium"),
+        "high" | "ultra" | "ultrathink" | "thinkhardest" | "highest" | "max" => Some("high"),
+        _ => None,
+    }
+}
+
+fn parse_patch_thinking_level(value: Option<Option<Value>>) -> Result<PatchValue<String>, String> {
+    match value {
+        None => Ok(PatchValue::Keep),
+        Some(None) | Some(Some(Value::Null)) => Ok(PatchValue::Clear),
+        Some(Some(Value::String(raw))) => normalize_thinking_level(&raw)
+            .map(|v| PatchValue::Set(v.to_owned()))
+            .ok_or_else(|| "thinkingLevel must be off|minimal|low|medium|high|xhigh|null".to_owned()),
+        Some(_) => Err("thinkingLevel must be string or null".to_owned()),
+    }
+}
+
+fn normalize_verbose_level(value: &str) -> Option<&'static str> {
+    match normalize(value).as_str() {
+        "off" | "false" | "no" | "0" => Some("off"),
+        "full" | "all" | "everything" => Some("full"),
+        "on" | "minimal" | "true" | "yes" | "1" => Some("on"),
+        _ => None,
+    }
+}
+
+fn parse_patch_verbose_level(value: Option<Option<Value>>) -> Result<PatchValue<String>, String> {
+    match value {
+        None => Ok(PatchValue::Keep),
+        Some(None) | Some(Some(Value::Null)) => Ok(PatchValue::Clear),
+        Some(Some(Value::String(raw))) => normalize_verbose_level(&raw)
+            .map(|v| PatchValue::Set(v.to_owned()))
+            .ok_or_else(|| "verboseLevel must be on|off|full|null".to_owned()),
+        Some(_) => Err("verboseLevel must be string or null".to_owned()),
+    }
+}
+
+fn normalize_reasoning_level(value: &str) -> Option<&'static str> {
+    match normalize(value).as_str() {
+        "off" | "false" | "no" | "0" | "hide" | "hidden" | "disable" | "disabled" => Some("off"),
+        "on" | "true" | "yes" | "1" | "show" | "visible" | "enable" | "enabled" => Some("on"),
+        "stream" | "streaming" | "draft" | "live" => Some("stream"),
+        _ => None,
+    }
+}
+
+fn parse_patch_reasoning_level(
+    value: Option<Option<Value>>,
+) -> Result<PatchValue<String>, String> {
+    match value {
+        None => Ok(PatchValue::Keep),
+        Some(None) | Some(Some(Value::Null)) => Ok(PatchValue::Clear),
+        Some(Some(Value::String(raw))) => normalize_reasoning_level(&raw)
+            .map(|v| PatchValue::Set(v.to_owned()))
+            .ok_or_else(|| "reasoningLevel must be on|off|stream|null".to_owned()),
+        Some(_) => Err("reasoningLevel must be string or null".to_owned()),
+    }
+}
+
 fn parse_response_usage_mode(value: &str) -> Option<ResponseUsageMode> {
     match normalize(value).as_str() {
         "off" => Some(ResponseUsageMode::Off),
-        "tokens" => Some(ResponseUsageMode::Tokens),
-        "full" | "on" => Some(ResponseUsageMode::Full),
+        "tokens" | "token" | "tok" | "minimal" | "min" | "on" | "true" | "yes" | "1"
+        | "enable" | "enabled" => Some(ResponseUsageMode::Tokens),
+        "full" | "session" => Some(ResponseUsageMode::Full),
         _ => None,
     }
 }
@@ -2308,6 +2368,69 @@ fn parse_patch_response_usage(
             .map(PatchValue::Set)
             .ok_or_else(|| "responseUsage must be off|tokens|full|on|null".to_owned()),
         Some(_) => Err("responseUsage must be string or null".to_owned()),
+    }
+}
+
+fn normalize_elevated_level(value: &str) -> Option<&'static str> {
+    match normalize(value).as_str() {
+        "off" | "false" | "no" | "0" => Some("off"),
+        "full" | "auto" | "autoapprove" | "auto-approve" => Some("full"),
+        "ask" | "prompt" | "approval" | "approve" => Some("ask"),
+        "on" | "true" | "yes" | "1" => Some("on"),
+        _ => None,
+    }
+}
+
+fn parse_patch_elevated_level(value: Option<Option<Value>>) -> Result<PatchValue<String>, String> {
+    match value {
+        None => Ok(PatchValue::Keep),
+        Some(None) | Some(Some(Value::Null)) => Ok(PatchValue::Clear),
+        Some(Some(Value::String(raw))) => normalize_elevated_level(&raw)
+            .map(|v| PatchValue::Set(v.to_owned()))
+            .ok_or_else(|| "elevatedLevel must be on|off|ask|full|null".to_owned()),
+        Some(_) => Err("elevatedLevel must be string or null".to_owned()),
+    }
+}
+
+fn parse_patch_exec_host(value: Option<Option<Value>>) -> Result<PatchValue<String>, String> {
+    match value {
+        None => Ok(PatchValue::Keep),
+        Some(None) | Some(Some(Value::Null)) => Ok(PatchValue::Clear),
+        Some(Some(Value::String(raw))) => match normalize(raw.as_str()).as_str() {
+            "sandbox" => Ok(PatchValue::Set("sandbox".to_owned())),
+            "gateway" => Ok(PatchValue::Set("gateway".to_owned())),
+            "node" => Ok(PatchValue::Set("node".to_owned())),
+            _ => Err("execHost must be sandbox|gateway|node|null".to_owned()),
+        },
+        Some(_) => Err("execHost must be string or null".to_owned()),
+    }
+}
+
+fn parse_patch_exec_security(value: Option<Option<Value>>) -> Result<PatchValue<String>, String> {
+    match value {
+        None => Ok(PatchValue::Keep),
+        Some(None) | Some(Some(Value::Null)) => Ok(PatchValue::Clear),
+        Some(Some(Value::String(raw))) => match normalize(raw.as_str()).as_str() {
+            "deny" => Ok(PatchValue::Set("deny".to_owned())),
+            "allowlist" => Ok(PatchValue::Set("allowlist".to_owned())),
+            "full" => Ok(PatchValue::Set("full".to_owned())),
+            _ => Err("execSecurity must be deny|allowlist|full|null".to_owned()),
+        },
+        Some(_) => Err("execSecurity must be string or null".to_owned()),
+    }
+}
+
+fn parse_patch_exec_ask(value: Option<Option<Value>>) -> Result<PatchValue<String>, String> {
+    match value {
+        None => Ok(PatchValue::Keep),
+        Some(None) | Some(Some(Value::Null)) => Ok(PatchValue::Clear),
+        Some(Some(Value::String(raw))) => match normalize(raw.as_str()).as_str() {
+            "off" => Ok(PatchValue::Set("off".to_owned())),
+            "on-miss" => Ok(PatchValue::Set("on-miss".to_owned())),
+            "always" => Ok(PatchValue::Set("always".to_owned())),
+            _ => Err("execAsk must be off|on-miss|always|null".to_owned()),
+        },
+        Some(_) => Err("execAsk must be string or null".to_owned()),
     }
 }
 
@@ -2635,16 +2758,35 @@ mod tests {
     #[tokio::test]
     async fn dispatcher_rejects_invalid_patch_params() {
         let dispatcher = RpcDispatcher::new();
-        let patch = RpcRequestFrame {
-            id: "req-1".to_owned(),
-            method: "sessions.patch".to_owned(),
-            params: serde_json::json!({
+        for (idx, params) in [
+            serde_json::json!({
                 "sessionKey": "agent:main:discord:group:g1",
                 "queueMode": "invalid"
             }),
-        };
-        let out = dispatcher.handle_request(&patch).await;
-        assert!(matches!(out, RpcDispatchOutcome::Error { code: 400, .. }));
+            serde_json::json!({
+                "key": "agent:main:discord:group:g1",
+                "thinkingLevel": "banana"
+            }),
+            serde_json::json!({
+                "key": "agent:main:discord:group:g1",
+                "reasoningLevel": "mystery"
+            }),
+            serde_json::json!({
+                "key": "agent:main:discord:group:g1",
+                "execHost": "remote"
+            }),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let patch = RpcRequestFrame {
+                id: format!("req-invalid-{idx}"),
+                method: "sessions.patch".to_owned(),
+                params,
+            };
+            let out = dispatcher.handle_request(&patch).await;
+            assert!(matches!(out, RpcDispatchOutcome::Error { code: 400, .. }));
+        }
     }
 
     #[tokio::test]
@@ -2662,12 +2804,12 @@ mod tests {
                 "queueMode": "steer",
                 "thinkingLevel": "medium",
                 "verboseLevel": "off",
-                "reasoningLevel": "high",
+                "reasoningLevel": "stream",
                 "responseUsage": "tokens",
-                "elevatedLevel": "ops",
-                "execHost": "local",
-                "execSecurity": "strict",
-                "execAsk": "auto",
+                "elevatedLevel": "ask",
+                "execHost": "sandbox",
+                "execSecurity": "allowlist",
+                "execAsk": "on-miss",
                 "execNode": "node-a",
                 "model": "openai/gpt-4o-mini",
                 "spawnDepth": 2
