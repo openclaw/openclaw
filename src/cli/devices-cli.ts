@@ -14,6 +14,8 @@ type DevicesRpcOpts = {
   timeout?: string;
   json?: boolean;
   latest?: boolean;
+  yes?: boolean;
+  pending?: boolean;
   device?: string;
   role?: string;
   scope?: string[];
@@ -176,6 +178,86 @@ export function registerDevicesCli(program: Command) {
         }
         if (!list.pending?.length && !list.paired?.length) {
           defaultRuntime.log(theme.muted("No device pairing entries."));
+        }
+      }),
+  );
+
+  devicesCallOpts(
+    devices
+      .command("remove")
+      .description("Remove a paired device entry")
+      .argument("<deviceId>", "Paired device id")
+      .action(async (deviceId: string, opts: DevicesRpcOpts) => {
+        const trimmed = deviceId.trim();
+        if (!trimmed) {
+          defaultRuntime.error("deviceId is required");
+          defaultRuntime.exit(1);
+          return;
+        }
+        const result = await callGatewayCli("device.pair.remove", opts, { deviceId: trimmed });
+        if (opts.json) {
+          defaultRuntime.log(JSON.stringify(result, null, 2));
+          return;
+        }
+        defaultRuntime.log(`${theme.warn("Removed")} ${theme.command(trimmed)}`);
+      }),
+  );
+
+  devicesCallOpts(
+    devices
+      .command("clear")
+      .description("Clear paired devices from the gateway table")
+      .option("--pending", "Also reject all pending pairing requests", false)
+      .option("--yes", "Confirm destructive clear", false)
+      .action(async (opts: DevicesRpcOpts) => {
+        if (!opts.yes) {
+          defaultRuntime.error("Refusing to clear pairing table without --yes");
+          defaultRuntime.exit(1);
+          return;
+        }
+        const list = parseDevicePairingList(await callGatewayCli("device.pair.list", opts, {}));
+        const removedDeviceIds: string[] = [];
+        const rejectedRequestIds: string[] = [];
+        const paired = Array.isArray(list.paired) ? list.paired : [];
+        for (const device of paired) {
+          const deviceId = typeof device.deviceId === "string" ? device.deviceId.trim() : "";
+          if (!deviceId) {
+            continue;
+          }
+          await callGatewayCli("device.pair.remove", opts, { deviceId });
+          removedDeviceIds.push(deviceId);
+        }
+        if (opts.pending) {
+          const pending = Array.isArray(list.pending) ? list.pending : [];
+          for (const req of pending) {
+            const requestId = typeof req.requestId === "string" ? req.requestId.trim() : "";
+            if (!requestId) {
+              continue;
+            }
+            await callGatewayCli("device.pair.reject", opts, { requestId });
+            rejectedRequestIds.push(requestId);
+          }
+        }
+        if (opts.json) {
+          defaultRuntime.log(
+            JSON.stringify(
+              {
+                removedDevices: removedDeviceIds,
+                rejectedPending: rejectedRequestIds,
+              },
+              null,
+              2,
+            ),
+          );
+          return;
+        }
+        defaultRuntime.log(
+          `${theme.warn("Cleared")} ${removedDeviceIds.length} paired device${removedDeviceIds.length === 1 ? "" : "s"}`,
+        );
+        if (opts.pending) {
+          defaultRuntime.log(
+            `${theme.warn("Rejected")} ${rejectedRequestIds.length} pending request${rejectedRequestIds.length === 1 ? "" : "s"}`,
+          );
         }
       }),
   );
