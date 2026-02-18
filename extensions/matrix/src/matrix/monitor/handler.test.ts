@@ -69,17 +69,9 @@ describe("createMatrixRoomMessageHandler", () => {
     });
 
     it("accepts messages within the grace period", async () => {
-      const inbound = vi.fn().mockResolvedValue(undefined);
-      const { params } = buildMinimalParams({
+      const { params, logVerboseMessage } = buildMinimalParams({
         startupMs: 1_000_000,
         startupGraceMs: 30_000,
-        core: {
-          channel: {
-            text: { resolveTextChunkLimit: () => 4000 },
-            mentions: { buildMentionRegexes: () => [] },
-            inbound: { handleInbound: inbound },
-          },
-        },
       });
       const handler = createMatrixRoomMessageHandler(params);
       // Event timestamp is 10s before startup — within 30s grace
@@ -87,8 +79,11 @@ describe("createMatrixRoomMessageHandler", () => {
 
       await handler("!room:server", event);
 
-      // Should NOT have been dropped (no "dropping message" log)
-      // The message proceeds past the timestamp check
+      // Should NOT have been dropped — no "dropping message" log
+      const dropCalls = logVerboseMessage.mock.calls.filter(
+        ([msg]: [string]) => typeof msg === "string" && msg.includes("dropping message"),
+      );
+      expect(dropCalls).toHaveLength(0);
     });
 
     it("drops messages by age when timestamp is missing", async () => {
