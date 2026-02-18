@@ -1,0 +1,42 @@
+name: Workflow Sanity
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: workflow-sanity-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  no-tabs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Fail on tabs in workflow files
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          import pathlib
+          import sys
+
+          root = pathlib.Path(".github/workflows")
+          bad: list[str] = []
+          for path in sorted(root.rglob("*.yml")):
+            if b"\t" in path.read_bytes():
+              bad.append(str(path))
+
+          for path in sorted(root.rglob("*.yaml")):
+            if b"\t" in path.read_bytes():
+              bad.append(str(path))
+
+          if bad:
+            print("Tabs found in workflow file(s):")
+            for path in bad:
+              print(f"- {path}")
+            sys.exit(1)
+          PY

@@ -1,0 +1,37 @@
+{
+  "name": "@openclaw/msteams",
+  "version": "2026.2.18",
+  "description": "OpenClaw Microsoft Teams channel plugin",
+  "type": "module",
+  "dependencies": {
+    "@microsoft/agents-hosting": "^1.2.3",
+    "@microsoft/agents-hosting-express": "^1.2.3",
+    "@microsoft/agents-hosting-extensions-teams": "^1.2.3",
+    "express": "^5.2.1"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "msteams",
+      "label": "Microsoft Teams",
+      "selectionLabel": "Microsoft Teams (Bot Framework)",
+      "docsPath": "/channels/msteams",
+      "docsLabel": "msteams",
+      "blurb": "Bot Framework; enterprise support.",
+      "aliases": [
+        "teams"
+      ],
+      "order": 60
+    },
+    "install": {
+      "npmSpec": "@openclaw/msteams",
+      "localPath": "extensions/msteams",
+      "defaultChoice": "npm"
+    }
+  }
+}
