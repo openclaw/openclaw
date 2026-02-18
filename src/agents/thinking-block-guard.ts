@@ -99,7 +99,7 @@ export function safeFilterAssistantContent(
  */
 export function containsThinkingBlocks(messages: AgentMessage[]): boolean {
   for (const msg of messages) {
-    if (msg?.role === "assistant" && hasThinkingBlocks(msg as AssistantMessage)) {
+    if (msg?.role === "assistant" && hasThinkingBlocks(msg)) {
       return true;
     }
   }
