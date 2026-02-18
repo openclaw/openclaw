@@ -1,4 +1,5 @@
 import fs from "fs";
+import { parseBuffer, type IFileInfo } from "music-metadata";
 import path from "path";
 import { Readable } from "stream";
 import { withTempDownloadPath, type ClawdbotConfig } from "openclaw/plugin-sdk";
@@ -359,16 +360,93 @@ export async function sendFileFeishu(params: {
 }
 
 /**
- * Helper to detect file type from extension
+ * Send an audio message using a file_key.
+ * Displays as a playable audio bar in Feishu (not a file attachment).
+ */
+export async function sendAudioFeishu(params: {
+  cfg: ClawdbotConfig;
+  to: string;
+  fileKey: string;
+  /** Audio duration in milliseconds — required for Feishu to show playback time */
+  duration?: number;
+  replyToMessageId?: string;
+  accountId?: string;
+}): Promise<SendMediaResult> {
+  const { cfg, to, fileKey, duration, replyToMessageId, accountId } = params;
+  const account = resolveFeishuAccount({ cfg, accountId });
+  if (!account.configured) {
+    throw new Error(`Feishu account "${account.accountId}" not configured`);
+  }
+
+  const client = createFeishuClient(account);
+  const receiveId = normalizeFeishuTarget(to);
+  if (!receiveId) {
+    throw new Error(`Invalid Feishu target: ${to}`);
+  }
+
+  const receiveIdType = resolveReceiveIdType(receiveId);
+  const contentObj: Record<string, unknown> = { file_key: fileKey };
+  if (typeof duration === "number" && duration > 0) {
+    contentObj.duration = String(duration);
+  }
+  const content = JSON.stringify(contentObj);
+
+  if (replyToMessageId) {
+    const response = await client.im.message.reply({
+      path: { message_id: replyToMessageId },
+      data: {
+        content,
+        msg_type: "audio",
+      },
+    });
+
+    if (response.code !== 0) {
+      throw new Error(`Feishu audio reply failed: ${response.msg || `code ${response.code}`}`);
+    }
+
+    return {
+      messageId: response.data?.message_id ?? "unknown",
+      chatId: receiveId,
+    };
+  }
+
+  const response = await client.im.message.create({
+    params: { receive_id_type: receiveIdType },
+    data: {
+      receive_id: receiveId,
+      content,
+      msg_type: "audio",
+    },
+  });
+
+  if (response.code !== 0) {
+    throw new Error(`Feishu audio send failed: ${response.msg || `code ${response.code}`}`);
+  }
+
+  return {
+    messageId: response.data?.message_id ?? "unknown",
+    chatId: receiveId,
+  };
+}
+
+/** Audio extensions that Feishu can handle as playable audio messages. */
+const AUDIO_EXTENSIONS = new Set([".opus", ".ogg", ".mp3", ".wav", ".m4a", ".aac", ".flac"]);
+
+/**
+ * Helper to detect file type from extension.
+ *
+ * NOTE: All audio formats map to "opus" because the Feishu file-upload API
+ * accepts only a fixed set of `file_type` values and "opus" is the designated
+ * type for any audio upload (regardless of the actual codec).
  */
 export function detectFileType(
   fileName: string,
 ): "opus" | "mp4" | "pdf" | "doc" | "xls" | "ppt" | "stream" {
   const ext = path.extname(fileName).toLowerCase();
+  if (AUDIO_EXTENSIONS.has(ext)) {
+    return "opus";
+  }
   switch (ext) {
-    case ".opus":
-    case ".ogg":
-      return "opus";
     case ".mp4":
     case ".mov":
     case ".avi":
@@ -386,6 +464,50 @@ export function detectFileType(
       return "ppt";
     default:
       return "stream";
+  }
+}
+
+function isAudioFile(fileName: string): boolean {
+  return AUDIO_EXTENSIONS.has(path.extname(fileName).toLowerCase());
+}
+
+/**
+ * Get audio duration in milliseconds from a buffer.
+ * Returns undefined if parsing fails (duration is best-effort).
+ */
+async function getAudioDurationMs(buffer: Buffer, fileName?: string): Promise<number | undefined> {
+  try {
+    const fileInfo: IFileInfo | undefined = fileName
+      ? { mimeType: undefined, size: buffer.byteLength, path: fileName }
+      : undefined;
+    const metadata = await parseBuffer(buffer, fileInfo, {
+      duration: true,
+      skipCovers: true,
+    });
+    const durationSeconds = metadata.format.duration;
+    if (typeof durationSeconds === "number" && Number.isFinite(durationSeconds)) {
+      return Math.max(0, Math.round(durationSeconds * 1000));
+    }
+  } catch {
+    // Duration is optional; ignore parse failures.
+  }
+  return undefined;
+}
+
+/**
+ * Check if a string is a local file path (not a URL)
+ */
+function isLocalPath(urlOrPath: string): boolean {
+  // Starts with / or ~ or drive letter (Windows)
+  if (urlOrPath.startsWith("/") || urlOrPath.startsWith("~") || /^[a-zA-Z]:/.test(urlOrPath)) {
+    return true;
+  }
+  // Try to parse as URL - if it fails or has no protocol, it's likely a local path
+  try {
+    const url = new URL(urlOrPath);
+    return url.protocol === "file:";
+  } catch {
+    return true; // Not a valid URL, treat as local path
   }
 }
 
@@ -425,13 +547,26 @@ export async function sendMediaFeishu(params: {
     throw new Error("Either mediaUrl or mediaBuffer must be provided");
   }
 
-  // Determine if it's an image based on extension
+  // Determine media type based on extension
   const ext = path.extname(name).toLowerCase();
   const isImage = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".ico", ".tiff"].includes(ext);
 
   if (isImage) {
     const { imageKey } = await uploadImageFeishu({ cfg, image: buffer, accountId });
     return sendImageFeishu({ cfg, to, imageKey, replyToMessageId, accountId });
+  } else if (isAudioFile(name)) {
+    // Audio files: upload as opus and send as playable audio message
+    const fileType = detectFileType(name);
+    const durationMs = await getAudioDurationMs(buffer, name);
+    const { fileKey } = await uploadFileFeishu({
+      cfg,
+      file: buffer,
+      fileName: name,
+      fileType,
+      duration: durationMs,
+      accountId,
+    });
+    return sendAudioFeishu({ cfg, to, fileKey, duration: durationMs, replyToMessageId, accountId });
   } else {
     const fileType = detectFileType(name);
     const { fileKey } = await uploadFileFeishu({
