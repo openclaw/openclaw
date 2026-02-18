@@ -90,6 +90,20 @@ export type SessionEntry = {
     timestamp: number;
     senderId?: string;
   }>;
+  /**
+   * When true, stage-1 ack received and we are awaiting the user's per-message
+   * triage decision (approve / skip individual held messages).
+   */
+  compactionTriagePending?: boolean;
+  /**
+   * Held messages that were explicitly approved by the user during stage-2 triage.
+   * Injected into the agent freeze context once the gate fully clears.
+   */
+  compactionApprovedMessages?: Array<{
+    body: string;
+    timestamp: number;
+    senderId?: string;
+  }>;
   memoryFlushAt?: number;
   memoryFlushCompactionCount?: number;
   cliSessionIds?: Record<string, string>;

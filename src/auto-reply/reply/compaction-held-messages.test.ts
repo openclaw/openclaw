@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   buildAgentFreezeContext,
+  buildTriagePrompt,
   buildUserVerificationText,
+  parseTriageResponse,
   type HeldMessage,
 } from "./compaction-held-messages.js";
 
@@ -173,7 +175,7 @@ describe("buildAgentFreezeContext", () => {
       contextData: null,
       heldMessages: [held("deploy now"), held("what about Q2 plans?")],
     });
-    expect(result).toContain("Queued messages (awaiting user triage):");
+    expect(result).toContain("Queued messages (approved by user):");
     expect(result).toContain("[Q1] deploy now");
     expect(result).toContain("[Q2] what about Q2 plans?");
   });
@@ -226,5 +228,137 @@ describe("buildAgentFreezeContext", () => {
     expect(result).toContain("[Q2] ETA?");
     expect(result).not.toContain("pendingDecisions");
     expect(result).not.toContain("pick a model");
+  });
+
+  it("injects only approvedMessages when provided", () => {
+    const result = buildAgentFreezeContext({
+      contextData: null,
+      heldMessages: [held("Q1 body"), held("Q2 body"), held("Q3 body")],
+      approvedMessages: [held("Q1 body"), held("Q3 body")],
+    });
+    expect(result).toContain("[Q1] Q1 body");
+    expect(result).toContain("[Q2] Q3 body");
+    expect(result).not.toContain("Q2 body");
+  });
+
+  it("injects freeform instruction with all messages when trageInstruction provided", () => {
+    const result = buildAgentFreezeContext({
+      contextData: null,
+      heldMessages: [held("ping"), held("status?")],
+      trageInstruction: "summarize Q1 and ignore Q2",
+    });
+    expect(result).toContain("freeform instruction");
+    expect(result).toContain("User instruction: summarize Q1 and ignore Q2");
+    expect(result).toContain("[Q1] ping");
+    expect(result).toContain("[Q2] status?");
+  });
+
+  it("returns empty string when approvedMessages is empty and no contextData", () => {
+    const result = buildAgentFreezeContext({
+      contextData: null,
+      heldMessages: [held("ping")],
+      approvedMessages: [],
+    });
+    expect(result).toBe("");
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// buildTriagePrompt
+// ────────────────────────────────────────────────────────────────────────────
+
+describe("buildTriagePrompt", () => {
+  it("returns empty string for no held messages", () => {
+    expect(buildTriagePrompt([])).toBe("");
+  });
+
+  it("lists messages with Q-labels", () => {
+    const text = buildTriagePrompt([held("ping"), held("status?")]);
+    expect(text).toContain("[Q1] ping");
+    expect(text).toContain("[Q2] status?");
+  });
+
+  it("includes resuming header and CTA", () => {
+    const text = buildTriagePrompt([held("test")]);
+    expect(text).toContain("✅ Resuming");
+    expect(text).toContain("do all");
+    expect(text).toContain("skip all");
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// parseTriageResponse
+// ────────────────────────────────────────────────────────────────────────────
+
+describe("parseTriageResponse", () => {
+  it("returns all for 'do all'", () => {
+    expect(parseTriageResponse("do all", 3)).toEqual({ kind: "all" });
+  });
+
+  it("returns all for 'handle all'", () => {
+    expect(parseTriageResponse("handle all", 3)).toEqual({ kind: "all" });
+  });
+
+  it("returns all for 'yes all'", () => {
+    expect(parseTriageResponse("yes all", 3)).toEqual({ kind: "all" });
+  });
+
+  it("returns all for 'all'", () => {
+    expect(parseTriageResponse("all", 3)).toEqual({ kind: "all" });
+  });
+
+  it("returns all for 'everything'", () => {
+    expect(parseTriageResponse("everything", 3)).toEqual({ kind: "all" });
+  });
+
+  it("returns none for 'skip all'", () => {
+    expect(parseTriageResponse("skip all", 3)).toEqual({ kind: "none" });
+  });
+
+  it("returns none for 'ignore all'", () => {
+    expect(parseTriageResponse("ignore all", 3)).toEqual({ kind: "none" });
+  });
+
+  it("returns none for 'none'", () => {
+    expect(parseTriageResponse("none", 3)).toEqual({ kind: "none" });
+  });
+
+  it("parses 'do Q1' → indices [0]", () => {
+    expect(parseTriageResponse("do Q1", 3)).toEqual({ kind: "indices", approved: [0] });
+  });
+
+  it("parses 'do Q1, Q3' → indices [0, 2]", () => {
+    expect(parseTriageResponse("do Q1, Q3", 3)).toEqual({ kind: "indices", approved: [0, 2] });
+  });
+
+  it("parses 'Q1 and Q2' → indices [0, 1]", () => {
+    expect(parseTriageResponse("Q1 and Q2", 3)).toEqual({ kind: "indices", approved: [0, 1] });
+  });
+
+  it("parses 'skip Q2' → all except Q2 (indices [0, 2])", () => {
+    expect(parseTriageResponse("skip Q2", 3)).toEqual({ kind: "indices", approved: [0, 2] });
+  });
+
+  it("parses 'skip Q1, Q3' → only Q2 approved (index [1])", () => {
+    expect(parseTriageResponse("skip Q1, Q3", 3)).toEqual({ kind: "indices", approved: [1] });
+  });
+
+  it("returns none when 'skip' causes all to be skipped", () => {
+    expect(parseTriageResponse("skip Q1", 1)).toEqual({ kind: "none" });
+  });
+
+  it("ignores out-of-range Q numbers", () => {
+    // Q5 doesn't exist in a 3-message list
+    expect(parseTriageResponse("do Q1, Q5", 3)).toEqual({ kind: "indices", approved: [0] });
+  });
+
+  it("returns freeform for arbitrary instruction", () => {
+    const result = parseTriageResponse("summarize Q1 and ignore Q2", 3);
+    expect(result).toEqual({ kind: "freeform", instruction: "summarize Q1 and ignore Q2" });
+  });
+
+  it("returns freeform for completely unrecognized text", () => {
+    const result = parseTriageResponse("what was I doing?", 3);
+    expect(result.kind).toBe("freeform");
   });
 });
