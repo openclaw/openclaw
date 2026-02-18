@@ -397,8 +397,10 @@ export type PluginHookAgentEndEvent = {
   error?: string;
   durationMs?: number;
   tokenUsage?: {
-    input: number;
-    output: number;
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
     total?: number;
   };
 };
