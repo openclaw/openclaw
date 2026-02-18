@@ -1,4 +1,8 @@
 import { ChannelType, MessageType, type User } from "@buape/carbon";
+import type {
+  DiscordMessagePreflightContext,
+  DiscordMessagePreflightParams,
+} from "./message-handler.preflight.types.js";
 import { hasControlCommand } from "../../auto-reply/command-detection.js";
 import { shouldHandleTextCommands } from "../../auto-reply/commands-registry.js";
 import {
@@ -45,10 +49,6 @@ import {
   resolveDiscordSystemLocation,
   resolveTimestampMs,
 } from "./format.js";
-import type {
-  DiscordMessagePreflightContext,
-  DiscordMessagePreflightParams,
-} from "./message-handler.preflight.types.js";
 import {
   resolveDiscordChannelInfo,
   resolveDiscordMessageChannelId,
@@ -245,6 +245,14 @@ export async function preflightDiscordMessage(
   const messageText = resolveDiscordMessageText(message, {
     includeForwarded: true,
   });
+
+  // Intercept text-only slash commands (e.g. user typing "/reset" instead of using Discord's slash command picker)
+  // These should not be forwarded to the agent; proper slash command interactions are handled elsewhere
+  if (!isDirectMessage && baseText && hasControlCommand(baseText, params.cfg)) {
+    logVerbose(`discord: drop text-based slash command ${message.id} (intercepted at gateway)`);
+    return null;
+  }
+
   recordChannelActivity({
     channel: "discord",
     accountId: params.accountId,
