@@ -1,5 +1,5 @@
-/// WebSocket connection to OpenClaw gateway.
-/// Handles auto-reconnect, message routing, and audio streaming.
+/// OpenClaw Gateway client — connects as an Android node.
+/// Speaks the OpenClaw WebSocket JSON-RPC protocol.
 
 import 'dart:async';
 import 'dart:convert';
@@ -13,49 +13,106 @@ class GatewayService {
   WebSocketChannel? _channel;
   GatewayState _state = GatewayState.disconnected;
   Timer? _reconnectTimer;
+  Timer? _tickTimer;
   int _reconnectAttempts = 0;
+  int _rpcId = 0;
 
   final _messageController = StreamController<Map<String, dynamic>>.broadcast();
   final _stateController = StreamController<GatewayState>.broadcast();
+  final Map<int, Completer<Map<String, dynamic>>> _pending = {};
 
   Stream<Map<String, dynamic>> get messages => _messageController.stream;
   Stream<GatewayState> get stateChanges => _stateController.stream;
   GatewayState get state => _state;
 
-  /// Connect to ZEKE's OpenClaw gateway.
-  Future<void> connect({String? pairingToken}) async {
+  /// Connect to ZEKE's OpenClaw gateway as an Android node.
+  Future<void> connect() async {
     if (_state == GatewayState.connecting) return;
     _setState(GatewayState.connecting);
 
     try {
-      final uri = Uri.parse('${ZekeConfig.gatewayWss}${ZekeConfig.nodeEndpoint}');
+      final uri = Uri.parse('ws://${ZekeConfig.gatewayHost}:${ZekeConfig.gatewayPort}');
       _channel = WebSocketChannel.connect(uri);
-
       await _channel!.ready;
-      _setState(GatewayState.connected);
-      _reconnectAttempts = 0;
-
-      // Send handshake
-      _send({
-        'type': 'node.hello',
-        'name': 'ZEKE-Android',
-        'version': ZekeConfig.appVersion,
-        if (pairingToken != null) 'token': pairingToken,
-      });
 
       _channel!.stream.listen(
-        _onMessage,
-        onDone: () => _onDisconnect('Connection closed'),
-        onError: (e) => _onDisconnect('Error: $e'),
+        _onRawMessage,
+        onDone: () => _onDisconnect('closed'),
+        onError: (e) => _onDisconnect('error: $e'),
       );
+
+      // Send OpenClaw connect handshake
+      await _sendConnect();
     } catch (e) {
-      _onDisconnect('Connect failed: $e');
+      _onDisconnect('connect failed: $e');
     }
   }
 
-  /// Send a text message to ZEKE.
+  /// OpenClaw JSON-RPC "connect" handshake.
+  Future<void> _sendConnect() async {
+    final result = await _rpc('connect', {
+      'minProtocol': 1,
+      'maxProtocol': 1,
+      'client': {
+        'id': 'openclaw-android',
+        'displayName': 'ZEKE-Android',
+        'version': ZekeConfig.appVersion,
+        'platform': 'android',
+        'mode': 'node',
+      },
+      'caps': ['system'],
+      'commands': ['system.run'],
+      'auth': {
+        'token': ZekeConfig.gatewayToken,
+      },
+      'role': 'node',
+      'scopes': [],
+    });
+
+    if (result.containsKey('error')) {
+      _onDisconnect('auth failed');
+      return;
+    }
+
+    _setState(GatewayState.connected);
+    _reconnectAttempts = 0;
+
+    // Start tick keepalive (every 30s)
+    _tickTimer?.cancel();
+    _tickTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      _send({'jsonrpc': '2.0', 'method': 'tick'});
+    });
+  }
+
+  /// Send a JSON-RPC request and await response.
+  Future<Map<String, dynamic>> _rpc(String method, Map<String, dynamic> params) {
+    final id = ++_rpcId;
+    final completer = Completer<Map<String, dynamic>>();
+    _pending[id] = completer;
+
+    _send({
+      'jsonrpc': '2.0',
+      'id': id,
+      'method': method,
+      'params': params,
+    });
+
+    // Timeout after 10s
+    Future.delayed(const Duration(seconds: 10), () {
+      if (_pending.containsKey(id)) {
+        _pending.remove(id)?.complete({'error': 'timeout'});
+      }
+    });
+
+    return completer.future;
+  }
+
+  /// Send a chat message to ZEKE via the gateway.
   void sendMessage(String text) {
-    _send({'type': 'chat.message', 'text': text, 'timestamp': DateTime.now().toIso8601String()});
+    _rpc('chat.send', {
+      'text': text,
+      'timestamp': DateTime.now().toIso8601String(),
+    });
   }
 
   /// Stream an Opus audio frame to the gateway.
@@ -64,33 +121,55 @@ class GatewayService {
     _channel?.sink.add(opusFrame);
   }
 
-  /// Send audio metadata (start/stop streaming signals).
+  /// Send audio control signals.
   void sendAudioControl(String action) {
-    _send({'type': 'audio.$action', 'timestamp': DateTime.now().toIso8601String()});
+    _rpc('audio.$action', {
+      'timestamp': DateTime.now().toIso8601String(),
+    });
   }
 
-  /// Send device context (location, activity, etc).
+  /// Send device context (location, activity).
   void sendContext(Map<String, dynamic> context) {
-    _send({'type': 'node.context', ...context});
+    _rpc('node.context', context);
   }
 
   void _send(Map<String, dynamic> data) {
-    if (_state != GatewayState.connected) return;
     _channel?.sink.add(jsonEncode(data));
   }
 
-  void _onMessage(dynamic raw) {
+  void _onRawMessage(dynamic raw) {
     try {
       if (raw is String) {
         final data = jsonDecode(raw) as Map<String, dynamic>;
+
+        // Handle JSON-RPC response
+        if (data.containsKey('id') && _pending.containsKey(data['id'])) {
+          _pending.remove(data['id'])?.complete(data);
+          return;
+        }
+
+        // Handle events from gateway
+        final method = data['method'] as String?;
+        if (method == 'node.invoke.request') {
+          // Handle invoke requests from ZEKE
+          _messageController.add(data);
+        } else if (method == 'chat.reply' || method == 'chat.message') {
+          _messageController.add({
+            'type': 'chat.reply',
+            'text': data['params']?['text'] ?? data['text'] ?? '',
+          });
+        }
+
         _messageController.add(data);
       }
     } catch (_) {}
   }
 
   void _onDisconnect(String reason) {
+    _tickTimer?.cancel();
     _setState(GatewayState.disconnected);
     _channel = null;
+    _pending.clear();
     _scheduleReconnect();
   }
 
@@ -101,7 +180,6 @@ class GatewayService {
         .clamp(ZekeConfig.wsReconnectBaseMs, ZekeConfig.wsReconnectMaxMs)
         .toInt();
     _reconnectAttempts++;
-
     _reconnectTimer = Timer(Duration(milliseconds: delayMs), () => connect());
   }
 
@@ -112,14 +190,13 @@ class GatewayService {
 
   double _pow(double base, int exp) {
     double result = 1.0;
-    for (var i = 0; i < exp; i++) {
-      result *= base;
-    }
+    for (var i = 0; i < exp; i++) result *= base;
     return result;
   }
 
   void disconnect() {
     _reconnectTimer?.cancel();
+    _tickTimer?.cancel();
     _channel?.sink.close();
     _channel = null;
     _setState(GatewayState.disconnected);
