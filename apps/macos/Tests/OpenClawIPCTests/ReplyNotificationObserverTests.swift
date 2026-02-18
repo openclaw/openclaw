@@ -299,4 +299,49 @@ struct ReplyNotificationObserverTests {
     func constantKey() {
         #expect(replyNotificationsEnabledKey == "openclaw.replyNotificationsEnabled")
     }
+
+    // MARK: - cleanPreviewForNotification (markdown stripping for notification body)
+
+    @Test("cleanPreviewForNotification strips trailing double asterisks")
+    @MainActor
+    func cleanPreviewTrailingDoubleAsterisks() {
+        let result = ReplyNotificationObserver.cleanPreviewForNotification("Interesting. The observer **")
+        #expect(result == "Interesting. The observer")
+    }
+
+    @Test("cleanPreviewForNotification strips leading and trailing double asterisks")
+    @MainActor
+    func cleanPreviewLeadingTrailingBold() {
+        let result = ReplyNotificationObserver.cleanPreviewForNotification("**bold**")
+        #expect(result == "bold")
+    }
+
+    @Test("cleanPreviewForNotification strips single asterisks")
+    @MainActor
+    func cleanPreviewSingleAsterisks() {
+        let result = ReplyNotificationObserver.cleanPreviewForNotification("*italic*")
+        #expect(result == "italic")
+    }
+
+    @Test("cleanPreviewForNotification strips double underscores")
+    @MainActor
+    func cleanPreviewDoubleUnderscores() {
+        let result = ReplyNotificationObserver.cleanPreviewForNotification("__bold__")
+        #expect(result == "bold")
+    }
+
+    @Test("cleanPreviewForNotification leaves text without markdown unchanged")
+    @MainActor
+    func cleanPreviewNoMarkdown() {
+        let text = "Dismiss the panel — notification incoming in 3"
+        let result = ReplyNotificationObserver.cleanPreviewForNotification(text)
+        #expect(result == text)
+    }
+
+    @Test("cleanPreviewForNotification trims whitespace")
+    @MainActor
+    func cleanPreviewTrimsWhitespace() {
+        let result = ReplyNotificationObserver.cleanPreviewForNotification("  hello **  ")
+        #expect(result == "hello")
+    }
 }
