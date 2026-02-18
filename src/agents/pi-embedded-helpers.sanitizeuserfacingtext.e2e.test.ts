@@ -120,6 +120,25 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText("\n\n")).toBe("");
     expect(sanitizeUserFacingText("  \n  ")).toBe("");
   });
+
+  it("strips untrusted metadata blocks from user-facing text", () => {
+    const text = [
+      "Summary line",
+      "",
+      "Conversation info (untrusted metadata):",
+      "```json",
+      '{"message_id":"abc","sender":"+15550001111"}',
+      "```",
+      "",
+      "Sender (untrusted metadata):",
+      "```json",
+      '{"name":"Alice","e164":"+15550001111"}',
+      "```",
+      "",
+      "Visible body",
+    ].join("\n");
+    expect(sanitizeUserFacingText(text)).toBe("Summary line\n\nVisible body");
+  });
 });
 
 describe("stripThoughtSignatures", () => {
