@@ -1,3 +1,4 @@
+import type { AgentCommandOpts } from "./agent/types.js";
 import {
   listAgentIds,
   resolveAgentDir,
@@ -50,6 +51,10 @@ import {
   emitAgentEvent,
   registerAgentRunContext,
 } from "../infra/agent-events.js";
+import {
+  withProviderConcurrency,
+  normalizeProviderId,
+} from "../infra/provider-concurrency-limiter.js";
 import { getRemoteSkillEligibility } from "../infra/skills-remote.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
@@ -61,7 +66,6 @@ import { deliverAgentCommandResult } from "./agent/delivery.js";
 import { resolveAgentRunContext } from "./agent/run-context.js";
 import { updateSessionStoreAfterAgentRun } from "./agent/session-store.js";
 import { resolveSession } from "./agent/session.js";
-import type { AgentCommandOpts } from "./agent/types.js";
 
 type PersistSessionEntryParams = {
   sessionStore: Record<string, SessionEntry>;
@@ -113,71 +117,86 @@ function runAgentAttempt(params: {
     body: params.body,
     isFallbackRetry: params.isFallbackRetry,
   });
-  if (isCliProvider(params.providerOverride, params.cfg)) {
-    const cliSessionId = getCliSessionId(params.sessionEntry, params.providerOverride);
-    return runCliAgent({
+
+  // Resolve provider ID for concurrency limiting
+  // Try to get baseUrl from provider config
+  let baseUrl: string | undefined;
+  const providerConfig = params.cfg.models?.providers?.[params.providerOverride];
+  if (providerConfig?.baseUrl) {
+    baseUrl = providerConfig.baseUrl;
+  }
+  const providerId = normalizeProviderId(params.modelOverride, baseUrl);
+
+  // Wrap execution with concurrency limiting
+  return withProviderConcurrency(providerId, async () => {
+    if (isCliProvider(params.providerOverride, params.cfg)) {
+      const cliSessionId = getCliSessionId(params.sessionEntry, params.providerOverride);
+      return runCliAgent({
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        agentId: params.sessionAgentId,
+        sessionFile: params.sessionFile,
+        workspaceDir: params.workspaceDir,
+        config: params.cfg,
+        prompt: effectivePrompt,
+        provider: params.providerOverride,
+        model: params.modelOverride,
+        thinkLevel: params.resolvedThinkLevel,
+        timeoutMs: params.timeoutMs,
+        runId: params.runId,
+        extraSystemPrompt: params.opts.extraSystemPrompt,
+        cliSessionId,
+        images: params.isFallbackRetry ? undefined : params.opts.images,
+        streamParams: params.opts.streamParams,
+      });
+    }
+
+    const authProfileId =
+      params.providerOverride === params.primaryProvider
+        ? params.sessionEntry?.authProfileOverride
+        : undefined;
+    return runEmbeddedPiAgent({
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
       agentId: params.sessionAgentId,
+      messageChannel: params.messageChannel,
+      agentAccountId: params.runContext.accountId,
+      messageTo: params.opts.replyTo ?? params.opts.to,
+      messageThreadId: params.opts.threadId,
+      groupId: params.runContext.groupId,
+      groupChannel: params.runContext.groupChannel,
+      groupSpace: params.runContext.groupSpace,
+      spawnedBy: params.spawnedBy,
+      currentChannelId: params.runContext.currentChannelId,
+      currentThreadTs: params.runContext.currentThreadTs,
+      replyToMode: params.runContext.replyToMode,
+      hasRepliedRef: params.runContext.hasRepliedRef,
+      senderIsOwner: true,
       sessionFile: params.sessionFile,
       workspaceDir: params.workspaceDir,
       config: params.cfg,
+      skillsSnapshot: params.skillsSnapshot,
       prompt: effectivePrompt,
+      images: params.isFallbackRetry ? undefined : params.opts.images,
+      clientTools: params.opts.clientTools,
       provider: params.providerOverride,
       model: params.modelOverride,
+      authProfileId,
+      authProfileIdSource: authProfileId
+        ? params.sessionEntry?.authProfileOverrideSource
+        : undefined,
       thinkLevel: params.resolvedThinkLevel,
+      verboseLevel: params.resolvedVerboseLevel,
       timeoutMs: params.timeoutMs,
       runId: params.runId,
+      lane: params.opts.lane,
+      abortSignal: params.opts.abortSignal,
       extraSystemPrompt: params.opts.extraSystemPrompt,
-      cliSessionId,
-      images: params.isFallbackRetry ? undefined : params.opts.images,
+      inputProvenance: params.opts.inputProvenance,
       streamParams: params.opts.streamParams,
+      agentDir: params.agentDir,
+      onAgentEvent: params.onAgentEvent,
     });
-  }
-
-  const authProfileId =
-    params.providerOverride === params.primaryProvider
-      ? params.sessionEntry?.authProfileOverride
-      : undefined;
-  return runEmbeddedPiAgent({
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    agentId: params.sessionAgentId,
-    messageChannel: params.messageChannel,
-    agentAccountId: params.runContext.accountId,
-    messageTo: params.opts.replyTo ?? params.opts.to,
-    messageThreadId: params.opts.threadId,
-    groupId: params.runContext.groupId,
-    groupChannel: params.runContext.groupChannel,
-    groupSpace: params.runContext.groupSpace,
-    spawnedBy: params.spawnedBy,
-    currentChannelId: params.runContext.currentChannelId,
-    currentThreadTs: params.runContext.currentThreadTs,
-    replyToMode: params.runContext.replyToMode,
-    hasRepliedRef: params.runContext.hasRepliedRef,
-    senderIsOwner: true,
-    sessionFile: params.sessionFile,
-    workspaceDir: params.workspaceDir,
-    config: params.cfg,
-    skillsSnapshot: params.skillsSnapshot,
-    prompt: effectivePrompt,
-    images: params.isFallbackRetry ? undefined : params.opts.images,
-    clientTools: params.opts.clientTools,
-    provider: params.providerOverride,
-    model: params.modelOverride,
-    authProfileId,
-    authProfileIdSource: authProfileId ? params.sessionEntry?.authProfileOverrideSource : undefined,
-    thinkLevel: params.resolvedThinkLevel,
-    verboseLevel: params.resolvedVerboseLevel,
-    timeoutMs: params.timeoutMs,
-    runId: params.runId,
-    lane: params.opts.lane,
-    abortSignal: params.opts.abortSignal,
-    extraSystemPrompt: params.opts.extraSystemPrompt,
-    inputProvenance: params.opts.inputProvenance,
-    streamParams: params.opts.streamParams,
-    agentDir: params.agentDir,
-    onAgentEvent: params.onAgentEvent,
   });
 }
 
