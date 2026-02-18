@@ -1,6 +1,6 @@
 ---
 name: maibot-migration
-description: Migrate MAIBOT (OpenClaw AI Assistant) to a new PC or cloud environment. Use when moving the entire MAIBOT setup — including OpenClaw gateway, workspace (memory/skills/config), MAIBEAUTY project, GPU pipeline, and credentials — to a different machine. Handles environment detection, dependency installation, repo cloning, credential setup, and validation.
+description: Migrate MAIBOT (OpenClaw AI Assistant) to a new PC or cloud environment. Use when moving the entire MAIBOT setup — including OpenClaw gateway, workspace (memory/skills/config), MAIBEAUTY project, GPU pipeline, and credentials — to a different machine. Also use for environment recovery (Chrome debug reconnection, gsudo reinstall, dev tool repair). Handles environment detection, dependency installation, repo cloning, credential setup, productivity tools, and validation.
 ---
 
 # MAIBOT Migration Skill
@@ -83,7 +83,37 @@ Only if the target has an NVIDIA GPU and video generation is needed:
 
 See `references/gpu-setup.md` for detailed instructions.
 
-### Step 7: Validate
+### Step 7: Productivity Tools
+
+#### gsudo (UAC-free Admin)
+
+```powershell
+winget install gerardog.gsudo --accept-package-agreements --accept-source-agreements
+# PATH 반영
+$env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+gsudo --version
+```
+
+Enables MAIBOT to run Admin commands remotely (via Discord) without UAC popup.
+
+#### Chrome Remote Debugging (Browser Relay)
+
+```powershell
+# System Chrome shortcut에 디버그 플래그 추가
+$p = "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Google Chrome.lnk"
+$ws = New-Object -ComObject WScript.Shell
+$sc = $ws.CreateShortcut($p)
+$sc.Arguments = "--remote-debugging-port=18792"
+$sc.Save()
+```
+
+Enables MAIBOT `browser` tool to access logged-in Chrome sessions without password sharing. Chrome must be restarted once after setup.
+
+- Port `18792` matches OpenClaw's default `cdpPort`
+- Works with `profile="chrome"` in browser tool
+- Survives Chrome updates (shortcut-based, not registry)
+
+### Step 8: Validate
 
 Run `scripts/migrate.py validate` to verify:
 
