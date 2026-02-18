@@ -8,7 +8,7 @@ import {
 } from "../config/sessions.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
-import { extractToolCallNames, hasToolCall } from "../utils/transcript-tools.js";
+import { hasToolCall } from "../utils/transcript-tools.js";
 import { stripEnvelope } from "./chat-sanitize.js";
 import type { SessionPreviewItem } from "./session-utils.types.js";
 
@@ -589,10 +589,6 @@ function isToolCall(message: TranscriptPreviewMessage): boolean {
   return hasToolCall(message as Record<string, unknown>);
 }
 
-function extractToolNames(message: TranscriptPreviewMessage): string[] {
-  return extractToolCallNames(message as Record<string, unknown>);
-}
-
 function extractMediaSummary(message: TranscriptPreviewMessage): string | null {
   if (!Array.isArray(message.content)) {
     return null;
@@ -607,6 +603,70 @@ function extractMediaSummary(message: TranscriptPreviewMessage): string | null {
   return null;
 }
 
+function extractToolSummaries(message: TranscriptPreviewMessage): string[] {
+  const summaries: string[] = [];
+
+  const pushSummary = (name: string, input: unknown) => {
+    const cleanName = typeof name === "string" ? name.trim() : "";
+    if (!cleanName) {
+      return;
+    }
+    const obj = input && typeof input === "object" ? (input as Record<string, unknown>) : undefined;
+    const pickPath = obj?.path ?? obj?.file_path ?? obj?.filePath ?? obj?.filename;
+    if (typeof pickPath === "string" && pickPath.trim()) {
+      summaries.push(`${cleanName}: ${pickPath.trim()}`);
+      return;
+    }
+    const pickTarget = obj?.target ?? obj?.url ?? obj?.query ?? obj?.command;
+    if (typeof pickTarget === "string" && pickTarget.trim()) {
+      summaries.push(`${cleanName}: ${pickTarget.trim()}`);
+      return;
+    }
+    summaries.push(cleanName);
+  };
+
+  const content = message.content;
+  if (Array.isArray(content)) {
+    for (const entry of content) {
+      if (!entry || typeof entry !== "object") {
+        continue;
+      }
+      const block = entry as Record<string, unknown>;
+      const type = typeof block.type === "string" ? block.type.trim().toLowerCase() : "";
+      if (type === "tool_use" || type === "toolcall" || type === "tool_call") {
+        const name = (block.name ?? block.tool) as string | undefined;
+        const input = block.input ?? block.arguments ?? block.args;
+        pushSummary(name ?? "", input);
+      }
+    }
+  }
+
+  const rawToolCalls =
+    (message as Record<string, unknown>).tool_calls ??
+    (message as Record<string, unknown>).toolCalls ??
+    (message as Record<string, unknown>).function_call ??
+    (message as Record<string, unknown>).functionCall;
+  const toolCalls = Array.isArray(rawToolCalls) ? rawToolCalls : rawToolCalls ? [rawToolCalls] : [];
+  for (const call of toolCalls) {
+    const callObj = call as Record<string, unknown>;
+    const directName = typeof callObj.name === "string" ? callObj.name : undefined;
+    const fn = callObj.function as Record<string, unknown> | undefined;
+    const fnName = typeof fn?.name === "string" ? fn.name : undefined;
+    const name = directName ?? fnName ?? "";
+    let argsObj: unknown = callObj.arguments ?? fn?.arguments;
+    if (typeof argsObj === "string") {
+      try {
+        argsObj = JSON.parse(argsObj);
+      } catch {
+        // leave as string
+      }
+    }
+    pushSummary(name, argsObj);
+  }
+
+  return summaries;
+}
+
 function buildPreviewItems(
   messages: TranscriptPreviewMessage[],
   maxItems: number,
@@ -618,11 +678,16 @@ function buildPreviewItems(
     const role = normalizeRole(message.role, toolCall);
     let text = extractPreviewText(message);
     if (!text) {
-      const toolNames = extractToolNames(message);
-      if (toolNames.length > 0) {
-        const shown = toolNames.slice(0, 2);
-        const overflow = toolNames.length - shown.length;
-        text = `call ${shown.join(", ")}`;
+      const toolSummaries = extractToolSummaries(message);
+      if (toolSummaries.length > 0) {
+        const shown = toolSummaries.slice(0, 2);
+        const overflow = toolSummaries.length - shown.length;
+        const toolName =
+          typeof (message as Record<string, unknown>).toolName === "string"
+            ? String((message as Record<string, unknown>).toolName).trim()
+            : "";
+        const prefix = toolName ? `${toolName}: ` : "";
+        text = `call ${prefix}${shown.join(", ")}`;
         if (overflow > 0) {
           text += ` +${overflow}`;
         }

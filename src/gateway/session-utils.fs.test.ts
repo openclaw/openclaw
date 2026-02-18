@@ -567,6 +567,32 @@ describe("readSessionPreviewItemsFromTranscript", () => {
     expect(result[1]?.text).toContain("call weather");
   });
 
+  test("includes tool path in preview summary when available", () => {
+    const sessionId = "preview-session-path";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const lines = [
+      JSON.stringify({ type: "session", version: 1, id: sessionId }),
+      JSON.stringify({
+        message: {
+          role: "assistant",
+          content: [{ type: "tool_use", name: "read", input: { path: "src/app.ts" } }],
+        },
+      }),
+    ];
+    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
+
+    const result = readSessionPreviewItemsFromTranscript(
+      sessionId,
+      storePath,
+      undefined,
+      undefined,
+      3,
+      120,
+    );
+
+    expect(result[0]?.text).toContain("read: src/app.ts");
+  });
+
   test("detects tool calls from tool_use/tool_call blocks and toolName field", () => {
     const sessionId = "preview-session-tools";
     const lines = [
@@ -592,7 +618,7 @@ describe("readSessionPreviewItemsFromTranscript", () => {
     expect(result[1]?.text).toContain("camera");
     expect(result[1]?.text).toContain("read");
     // Preview text may not list every tool name; it should at least hint there were multiple calls.
-    expect(result[1]?.text).toMatch(/\+\d+/);
+    expect(result[1]?.text).toContain("write");
   });
 
   test("truncates preview text to max chars", () => {
