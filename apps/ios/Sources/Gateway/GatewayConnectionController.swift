@@ -729,6 +729,9 @@ final class GatewayConnectionController {
         if locationMode != .off { caps.append(OpenClawCapability.location.rawValue) }
 
         caps.append(OpenClawCapability.device.rawValue)
+        if WatchMessagingService.isSupportedOnDevice() {
+            caps.append(OpenClawCapability.watch.rawValue)
+        }
         caps.append(OpenClawCapability.photos.rawValue)
         caps.append(OpenClawCapability.contacts.rawValue)
         caps.append(OpenClawCapability.calendar.rawValue)
@@ -771,6 +774,10 @@ final class GatewayConnectionController {
         if caps.contains(OpenClawCapability.device.rawValue) {
             commands.append(OpenClawDeviceCommand.status.rawValue)
             commands.append(OpenClawDeviceCommand.info.rawValue)
+        }
+        if caps.contains(OpenClawCapability.watch.rawValue) {
+            commands.append(OpenClawWatchCommand.status.rawValue)
+            commands.append(OpenClawWatchCommand.notify.rawValue)
         }
         if caps.contains(OpenClawCapability.photos.rawValue) {
             commands.append(OpenClawPhotosCommand.latest.rawValue)
@@ -821,6 +828,12 @@ final class GatewayConnectionController {
         let pedometerStatus = CMPedometer.authorizationStatus()
         permissions["motion"] =
             motionStatus == .authorized || pedometerStatus == .authorized
+
+        let watchStatus = WatchMessagingService.currentStatusSnapshot()
+        permissions["watchSupported"] = watchStatus.supported
+        permissions["watchPaired"] = watchStatus.paired
+        permissions["watchAppInstalled"] = watchStatus.appInstalled
+        permissions["watchReachable"] = watchStatus.reachable
 
         return permissions
     }
