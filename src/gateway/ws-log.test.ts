@@ -19,7 +19,7 @@ describe("gateway ws log helpers", () => {
   });
 
   test("formatForLog redacts obvious secrets", () => {
-    const token = "sk-abcdefghijklmnopqrstuvwxyz123456";
+    const token = "sk-" + "x".repeat(48);
     const out = formatForLog({ token });
     expect(out).toContain("token");
     expect(out).not.toContain(token);

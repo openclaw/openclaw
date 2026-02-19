@@ -3,6 +3,8 @@ import * as ssrf from "../../infra/net/ssrf.js";
 import * as mediaStore from "../../media/store.js";
 import { fetchWithSlackAuth, resolveSlackMedia, resolveSlackThreadHistory } from "./media.js";
 
+const TEST_SLACK_TOKEN = "xoxb-" + "x".repeat(48);
+
 // Store original fetch
 const originalFetch = globalThis.fetch;
 let mockFetch: ReturnType<typeof vi.fn>;
@@ -27,21 +29,21 @@ describe("fetchWithSlackAuth", () => {
     });
     mockFetch.mockResolvedValueOnce(mockResponse);
 
-    const result = await fetchWithSlackAuth("https://files.slack.com/test.jpg", "xoxb-test-token");
+    const result = await fetchWithSlackAuth("https://files.slack.com/test.jpg", TEST_SLACK_TOKEN);
 
     expect(result).toBe(mockResponse);
 
     // Verify fetch was called with correct params
     expect(mockFetch).toHaveBeenCalledTimes(1);
     expect(mockFetch).toHaveBeenCalledWith("https://files.slack.com/test.jpg", {
-      headers: { Authorization: "Bearer xoxb-test-token" },
+      headers: { Authorization: "Bearer " + TEST_SLACK_TOKEN },
       redirect: "manual",
     });
   });
 
   it("rejects non-Slack hosts to avoid leaking tokens", async () => {
     await expect(
-      fetchWithSlackAuth("https://example.com/test.jpg", "xoxb-test-token"),
+      fetchWithSlackAuth("https://example.com/test.jpg", TEST_SLACK_TOKEN),
     ).rejects.toThrow(/non-Slack host|non-Slack/i);
 
     // Should fail fast without attempting a fetch.
@@ -63,14 +65,14 @@ describe("fetchWithSlackAuth", () => {
 
     mockFetch.mockResolvedValueOnce(redirectResponse).mockResolvedValueOnce(fileResponse);
 
-    const result = await fetchWithSlackAuth("https://files.slack.com/test.jpg", "xoxb-test-token");
+    const result = await fetchWithSlackAuth("https://files.slack.com/test.jpg", TEST_SLACK_TOKEN);
 
     expect(result).toBe(fileResponse);
     expect(mockFetch).toHaveBeenCalledTimes(2);
 
     // First call should have Authorization header and manual redirect
     expect(mockFetch).toHaveBeenNthCalledWith(1, "https://files.slack.com/test.jpg", {
-      headers: { Authorization: "Bearer xoxb-test-token" },
+      headers: { Authorization: "Bearer " + TEST_SLACK_TOKEN },
       redirect: "manual",
     });
 
@@ -96,7 +98,7 @@ describe("fetchWithSlackAuth", () => {
 
     mockFetch.mockResolvedValueOnce(redirectResponse).mockResolvedValueOnce(fileResponse);
 
-    await fetchWithSlackAuth("https://files.slack.com/original.jpg", "xoxb-test-token");
+    await fetchWithSlackAuth("https://files.slack.com/original.jpg", TEST_SLACK_TOKEN);
 
     // Second call should resolve the relative URL against the original
     expect(mockFetch).toHaveBeenNthCalledWith(2, "https://files.slack.com/files/redirect-target", {
@@ -113,7 +115,7 @@ describe("fetchWithSlackAuth", () => {
 
     mockFetch.mockResolvedValueOnce(redirectResponse);
 
-    const result = await fetchWithSlackAuth("https://files.slack.com/test.jpg", "xoxb-test-token");
+    const result = await fetchWithSlackAuth("https://files.slack.com/test.jpg", TEST_SLACK_TOKEN);
 
     // Should return the redirect response directly
     expect(result).toBe(redirectResponse);
@@ -127,7 +129,7 @@ describe("fetchWithSlackAuth", () => {
 
     mockFetch.mockResolvedValueOnce(errorResponse);
 
-    const result = await fetchWithSlackAuth("https://files.slack.com/test.jpg", "xoxb-test-token");
+    const result = await fetchWithSlackAuth("https://files.slack.com/test.jpg", TEST_SLACK_TOKEN);
 
     expect(result).toBe(errorResponse);
     expect(mockFetch).toHaveBeenCalledTimes(1);
@@ -145,7 +147,7 @@ describe("fetchWithSlackAuth", () => {
 
     mockFetch.mockResolvedValueOnce(redirectResponse).mockResolvedValueOnce(fileResponse);
 
-    await fetchWithSlackAuth("https://files.slack.com/test.jpg", "xoxb-test-token");
+    await fetchWithSlackAuth("https://files.slack.com/test.jpg", TEST_SLACK_TOKEN);
 
     expect(mockFetch).toHaveBeenCalledTimes(2);
     expect(mockFetch).toHaveBeenNthCalledWith(2, "https://cdn.slack.com/new-url", {
@@ -194,7 +196,7 @@ describe("resolveSlackMedia", () => {
           name: "test.jpg",
         },
       ],
-      token: "xoxb-test-token",
+      token: TEST_SLACK_TOKEN,
       maxBytes: 1024 * 1024,
     });
 
@@ -210,7 +212,7 @@ describe("resolveSlackMedia", () => {
 
     const result = await resolveSlackMedia({
       files: [{ url_private: "https://files.slack.com/test.jpg", name: "test.jpg" }],
-      token: "xoxb-test-token",
+      token: TEST_SLACK_TOKEN,
       maxBytes: 1024 * 1024,
     });
 
@@ -220,7 +222,7 @@ describe("resolveSlackMedia", () => {
   it("returns null when no files are provided", async () => {
     const result = await resolveSlackMedia({
       files: [],
-      token: "xoxb-test-token",
+      token: TEST_SLACK_TOKEN,
       maxBytes: 1024 * 1024,
     });
 
@@ -230,7 +232,7 @@ describe("resolveSlackMedia", () => {
   it("skips files without url_private", async () => {
     const result = await resolveSlackMedia({
       files: [{ name: "test.jpg" }], // No url_private
-      token: "xoxb-test-token",
+      token: TEST_SLACK_TOKEN,
       maxBytes: 1024 * 1024,
     });
 
@@ -262,7 +264,7 @@ describe("resolveSlackMedia", () => {
           subtype: "slack_audio",
         },
       ],
-      token: "xoxb-test-token",
+      token: TEST_SLACK_TOKEN,
       maxBytes: 16 * 1024 * 1024,
     });
 
@@ -300,7 +302,7 @@ describe("resolveSlackMedia", () => {
           mimetype: "video/mp4",
         },
       ],
-      token: "xoxb-test-token",
+      token: TEST_SLACK_TOKEN,
       maxBytes: 16 * 1024 * 1024,
     });
 
@@ -336,7 +338,7 @@ describe("resolveSlackMedia", () => {
         { url_private: "https://files.slack.com/first.jpg", name: "first.jpg" },
         { url_private: "https://files.slack.com/second.jpg", name: "second.jpg" },
       ],
-      token: "xoxb-test-token",
+      token: TEST_SLACK_TOKEN,
       maxBytes: 1024 * 1024,
     });
 
@@ -379,7 +381,7 @@ describe("resolveSlackMedia", () => {
         { url_private: "https://files.slack.com/a.jpg", name: "a.jpg" },
         { url_private: "https://files.slack.com/b.png", name: "b.png" },
       ],
-      token: "xoxb-test-token",
+      token: TEST_SLACK_TOKEN,
       maxBytes: 1024 * 1024,
     });
 
@@ -411,7 +413,7 @@ describe("resolveSlackMedia", () => {
 
     const result = await resolveSlackMedia({
       files,
-      token: "xoxb-test-token",
+      token: TEST_SLACK_TOKEN,
       maxBytes: 1024 * 1024,
     });
 

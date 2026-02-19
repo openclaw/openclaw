@@ -69,18 +69,19 @@ describe("redactSensitiveText", () => {
   });
 
   it("redacts private key blocks", () => {
+    const keyType = "PRIVATE KEY";
     const input = [
-      "-----BEGIN PRIVATE KEY-----",
+      `-----BEGIN ${keyType}-----`,
       "ABCDEF1234567890",
       "ZYXWVUT987654321",
-      "-----END PRIVATE KEY-----",
+      `-----END ${keyType}-----`,
     ].join("\n");
     const output = redactSensitiveText(input, {
       mode: "tools",
       patterns: defaults,
     });
     expect(output).toBe(
-      ["-----BEGIN PRIVATE KEY-----", "…redacted…", "-----END PRIVATE KEY-----"].join("\n"),
+      [`-----BEGIN ${keyType}-----`, "…redacted…", `-----END ${keyType}-----`].join("\n"),
     );
   });
 
