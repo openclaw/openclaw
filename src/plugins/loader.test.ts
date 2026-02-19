@@ -489,7 +489,6 @@ describe("loadOpenClawPlugins", () => {
     expect(loaded?.origin).toBe("config");
     expect(overridden?.origin).toBe("bundled");
   });
-
   it("warns when plugins.allow is empty and non-bundled plugins are discoverable", () => {
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
     const plugin = writePlugin({
@@ -560,5 +559,49 @@ describe("loadOpenClawPlugins", () => {
         process.env.OPENCLAW_STATE_DIR = prevStateDir;
       }
     }
+  });
+
+  it("rejects plugin entry files that escape plugin root via symlink", () => {
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+    const pluginDir = makeTempDir();
+    const outsideDir = makeTempDir();
+    const outsideEntry = path.join(outsideDir, "outside.js");
+    const linkedEntry = path.join(pluginDir, "entry.js");
+    fs.writeFileSync(
+      outsideEntry,
+      'export default { id: "symlinked", register() { throw new Error("should not run"); } };',
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "symlinked",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    try {
+      fs.symlinkSync(outsideEntry, linkedEntry);
+    } catch {
+      return;
+    }
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [linkedEntry] },
+          allow: ["symlinked"],
+        },
+      },
+    });
+
+    const record = registry.plugins.find((entry) => entry.id === "symlinked");
+    expect(record?.status).not.toBe("loaded");
+    expect(registry.diagnostics.some((entry) => entry.message.includes("escapes"))).toBe(true);
   });
 });

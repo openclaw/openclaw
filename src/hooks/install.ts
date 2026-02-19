@@ -18,6 +18,7 @@ import {
   withTempDir,
 } from "../infra/install-source-utils.js";
 import { validateRegistryNpmSpec } from "../infra/npm-registry-spec.js";
+import { isPathInside, isPathInsideWithRealpath } from "../security/scan-paths.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import { parseFrontmatter } from "./frontmatter.js";
 
@@ -218,7 +219,23 @@ async function installHookPackageFromDir(params: {
   const resolvedHooks = [] as string[];
   for (const entry of hookEntries) {
     const hookDir = path.resolve(params.packageDir, entry);
+    if (!isPathInside(params.packageDir, hookDir)) {
+      return {
+        ok: false,
+        error: `openclaw.hooks entry escapes package directory: ${entry}`,
+      };
+    }
     await validateHookDir(hookDir);
+    if (
+      !isPathInsideWithRealpath(params.packageDir, hookDir, {
+        requireRealpath: true,
+      })
+    ) {
+      return {
+        ok: false,
+        error: `openclaw.hooks entry resolves outside package directory: ${entry}`,
+      };
+    }
     const hookName = await resolveHookNameFromDir(hookDir);
     resolvedHooks.push(hookName);
   }

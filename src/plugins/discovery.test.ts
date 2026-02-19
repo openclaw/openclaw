@@ -149,8 +149,7 @@ describe("discoverOpenClawPlugins", () => {
     const ids = candidates.map((c) => c.idHint);
     expect(ids).toContain("demo-plugin-dir");
   });
-
-  it("blocks extension entries that escape plugin root", async () => {
+  it("blocks extension entries that escape package directory", async () => {
     const stateDir = makeTempDir();
     const globalExt = path.join(stateDir, "extensions", "escape-pack");
     const outside = path.join(stateDir, "outside.js");
@@ -172,8 +171,41 @@ describe("discoverOpenClawPlugins", () => {
 
     expect(result.candidates).toHaveLength(0);
     expect(
-      result.diagnostics.some((diag) => diag.message.includes("source escapes plugin root")),
+      result.diagnostics.some((diag) => diag.message.includes("escapes package directory")),
     ).toBe(true);
+  });
+
+  it("rejects package extension entries that escape via symlink", async () => {
+    const stateDir = makeTempDir();
+    const globalExt = path.join(stateDir, "extensions", "pack");
+    const outsideDir = path.join(stateDir, "outside");
+    const linkedDir = path.join(globalExt, "linked");
+    fs.mkdirSync(globalExt, { recursive: true });
+    fs.mkdirSync(outsideDir, { recursive: true });
+    fs.writeFileSync(path.join(outsideDir, "escape.ts"), "export default {}", "utf-8");
+    try {
+      fs.symlinkSync(outsideDir, linkedDir, process.platform === "win32" ? "junction" : "dir");
+    } catch {
+      return;
+    }
+
+    fs.writeFileSync(
+      path.join(globalExt, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/pack",
+        openclaw: { extensions: ["./linked/escape.ts"] },
+      }),
+      "utf-8",
+    );
+
+    const { candidates, diagnostics } = await withStateDir(stateDir, async () => {
+      return discoverOpenClawPlugins({});
+    });
+
+    expect(candidates.some((candidate) => candidate.idHint === "pack")).toBe(false);
+    expect(diagnostics.some((entry) => entry.message.includes("escapes package directory"))).toBe(
+      true,
+    );
   });
 
   it.runIf(process.platform !== "win32")("blocks world-writable plugin paths", async () => {
