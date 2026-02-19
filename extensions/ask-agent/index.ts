@@ -158,9 +158,9 @@ export default function register(api: OpenClawPluginApi) {
       const target = resolved.target;
       const endpoint = computeEndpoint(target);
 
-      // Send message via A2A
+      // Send message via A2A (120s timeout for agent systems with cold start)
       try {
-        const a2aClient = new CloudruA2AClient({ auth: authParams });
+        const a2aClient = new CloudruA2AClient({ auth: authParams, timeoutMs: 120_000 });
         const result = await a2aClient.sendMessage({
           endpoint,
           message: userMessage,
