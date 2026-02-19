@@ -322,8 +322,18 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   async function runBeforeReset(
     event: PluginHookBeforeResetEvent,
     ctx: PluginHookAgentContext,
-  ): Promise<void> {
-    return runVoidHook("before_reset", event, ctx);
+  ): Promise<PluginHookBeforeResetEvent | undefined> {
+    return runModifyingHook<"before_reset", PluginHookBeforeResetEvent>(
+      "before_reset",
+      event,
+      ctx,
+      (acc, next) => ({
+        ...acc,
+        ...next,
+        cancel: next.cancel ?? acc?.cancel,
+        message: next.message ?? acc?.message,
+      }),
+    );
   }
 
   // =========================================================================

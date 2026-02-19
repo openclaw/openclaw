@@ -141,6 +141,14 @@ export type MsgContext = {
    * Used for hook confirmation messages like "Session context saved to memory".
    */
   HookMessages?: string[];
+  /**
+   * Session reset trigger was blocked by a guard hook (e.g. before_reset).
+   */
+  ResetBlocked?: boolean;
+  /**
+   * Human-readable reason shown when reset is blocked.
+   */
+  ResetBlockMessage?: string;
 };
 
 export type FinalizedMsgContext = Omit<MsgContext, "CommandAuthorized"> & {

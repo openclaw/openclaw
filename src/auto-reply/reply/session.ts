@@ -26,6 +26,7 @@ import {
 } from "../../config/sessions.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { archiveSessionTranscripts } from "../../gateway/session-utils.fs.js";
+import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
@@ -44,6 +45,8 @@ export type SessionInitResult = {
   sessionId: string;
   isNewSession: boolean;
   resetTriggered: boolean;
+  resetBlocked: boolean;
+  resetBlockMessage?: string;
   systemSent: boolean;
   abortedLastRun: boolean;
   storePath: string;
@@ -139,6 +142,8 @@ export async function initSessionState(params: {
   let systemSent = false;
   let abortedLastRun = false;
   let resetTriggered = false;
+  let resetBlocked = false;
+  let resetBlockMessage: string | undefined;
 
   let persistedThinking: string | undefined;
   let persistedVerbose: string | undefined;
@@ -178,6 +183,10 @@ export async function initSessionState(params: {
   const trimmedBodyLower = trimmedBody.toLowerCase();
   const strippedForResetLower = strippedForReset.toLowerCase();
 
+  sessionKey = resolveSessionKey(sessionScope, sessionCtxForState, mainKey);
+  const entry = sessionStore[sessionKey];
+  let previousSessionEntry: SessionEntry | undefined;
+
   for (const trigger of resetTriggers) {
     if (!trigger) {
       continue;
@@ -186,27 +195,53 @@ export async function initSessionState(params: {
       break;
     }
     const triggerLower = trigger.toLowerCase();
-    if (trimmedBodyLower === triggerLower || strippedForResetLower === triggerLower) {
-      isNewSession = true;
-      bodyStripped = "";
-      resetTriggered = true;
-      break;
-    }
     const triggerPrefixLower = `${triggerLower} `;
-    if (
+    const exactMatch = trimmedBodyLower === triggerLower || strippedForResetLower === triggerLower;
+    const prefixMatch =
       trimmedBodyLower.startsWith(triggerPrefixLower) ||
-      strippedForResetLower.startsWith(triggerPrefixLower)
-    ) {
-      isNewSession = true;
-      bodyStripped = strippedForReset.slice(trigger.length).trimStart();
-      resetTriggered = true;
+      strippedForResetLower.startsWith(triggerPrefixLower);
+    if (!exactMatch && !prefixMatch) {
+      continue;
+    }
+
+    const nextBodyStripped = prefixMatch ? strippedForReset.slice(trigger.length).trimStart() : "";
+    const actionMatch =
+      strippedForReset.match(/^\/(new|reset)(?:\s|$)/i) ??
+      trimmedBody.match(/^\/(new|reset)(?:\s|$)/i);
+    const commandAction = actionMatch?.[1]?.toLowerCase() === "new" ? "new" : "reset";
+    previousSessionEntry = entry ? { ...entry } : undefined;
+
+    const hookEvent = createInternalHookEvent("command", "before_reset", sessionKey ?? "", {
+      sessionEntry: entry,
+      previousSessionEntry,
+      commandSource: ctx.Surface ?? ctx.Provider,
+      senderId: ctx.SenderId,
+      cfg,
+      reason: commandAction,
+      trigger,
+      bodyStripped: nextBodyStripped,
+    });
+    await triggerInternalHook(hookEvent);
+
+    if (hookEvent.context?.blockReset === true) {
+      resetBlocked = true;
+      resetTriggered = false;
+      isNewSession = false;
+      bodyStripped = undefined;
+      const hookMessage = hookEvent.messages.join("\n\n").trim();
+      resetBlockMessage = hookMessage || "已阻断 /new，请先保存收尾";
       break;
     }
+
+    isNewSession = true;
+    bodyStripped = nextBodyStripped;
+    resetTriggered = true;
+    break;
   }
 
-  sessionKey = resolveSessionKey(sessionScope, sessionCtxForState, mainKey);
-  const entry = sessionStore[sessionKey];
-  const previousSessionEntry = resetTriggered && entry ? { ...entry } : undefined;
+  if (!previousSessionEntry && resetTriggered && entry) {
+    previousSessionEntry = { ...entry };
+  }
   const now = Date.now();
   const isThread = resolveThreadFlag({
     sessionKey,
@@ -232,17 +267,21 @@ export async function initSessionState(params: {
   const freshEntry = entry
     ? evaluateSessionFreshness({ updatedAt: entry.updatedAt, now, policy: resetPolicy }).fresh
     : false;
+  const preserveBlockedResetSession = resetBlocked && Boolean(entry);
 
-  if (!isNewSession && freshEntry) {
-    sessionId = entry.sessionId;
-    systemSent = entry.systemSent ?? false;
-    abortedLastRun = entry.abortedLastRun ?? false;
-    persistedThinking = entry.thinkingLevel;
-    persistedVerbose = entry.verboseLevel;
-    persistedReasoning = entry.reasoningLevel;
-    persistedTtsAuto = entry.ttsAuto;
-    persistedModelOverride = entry.modelOverride;
-    persistedProviderOverride = entry.providerOverride;
+  if (preserveBlockedResetSession || (!isNewSession && freshEntry)) {
+    const activeEntry = entry;
+    if (activeEntry) {
+      sessionId = activeEntry.sessionId;
+      systemSent = activeEntry.systemSent ?? false;
+      abortedLastRun = activeEntry.abortedLastRun ?? false;
+      persistedThinking = activeEntry.thinkingLevel;
+      persistedVerbose = activeEntry.verboseLevel;
+      persistedReasoning = activeEntry.reasoningLevel;
+      persistedTtsAuto = activeEntry.ttsAuto;
+      persistedModelOverride = activeEntry.modelOverride;
+      persistedProviderOverride = activeEntry.providerOverride;
+    }
   } else {
     sessionId = crypto.randomUUID();
     isNewSession = true;
@@ -259,7 +298,8 @@ export async function initSessionState(params: {
     }
   }
 
-  const baseEntry = !isNewSession && freshEntry ? entry : undefined;
+  const baseEntry =
+    !isNewSession && (freshEntry || preserveBlockedResetSession) ? entry : undefined;
   // Track the originating channel/to for announce routing (subagent announce-back).
   const lastChannelRaw = (ctx.OriginatingChannel as string | undefined) || baseEntry?.lastChannel;
   const lastToRaw = ctx.OriginatingTo || ctx.To || baseEntry?.lastTo;
@@ -282,7 +322,7 @@ export async function initSessionState(params: {
   const lastThreadId = deliveryFields.lastThreadId ?? lastThreadIdRaw;
   sessionEntry = {
     ...baseEntry,
-    sessionId,
+    sessionId: sessionId ?? crypto.randomUUID(),
     updatedAt: Date.now(),
     systemSent,
     abortedLastRun,
@@ -416,6 +456,8 @@ export async function initSessionState(params: {
     ),
     SessionId: sessionId,
     IsNewSession: isNewSession ? "true" : "false",
+    ResetBlocked: resetBlocked,
+    ResetBlockMessage: resetBlockMessage,
   };
 
   // Run session plugin hooks (fire-and-forget)
@@ -467,6 +509,8 @@ export async function initSessionState(params: {
     sessionId: sessionId ?? crypto.randomUUID(),
     isNewSession,
     resetTriggered,
+    resetBlocked,
+    resetBlockMessage,
     systemSent,
     abortedLastRun,
     storePath,

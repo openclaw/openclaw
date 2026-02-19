@@ -417,6 +417,16 @@ export type PluginHookBeforeResetEvent = {
   sessionFile?: string;
   messages?: unknown[];
   reason?: string;
+  /**
+   * Reserved for future plugin-level reset cancellation.
+   * Current hard guard path uses internal hook: event.context.blockReset.
+   */
+  cancel?: boolean;
+  /**
+   * Reserved for future plugin-level block message.
+   * Current hard guard path uses internal hook messages.
+   */
+  message?: string;
 };
 
 export type PluginHookAfterCompactionEvent = {

@@ -145,6 +145,7 @@ function baseParams(
     timeoutMs: 30_000,
     isNewSession: true,
     resetTriggered: false,
+    resetBlocked: false,
     systemSent: true,
     sessionKey: "session-key",
     workspaceDir: "/tmp/workspace",

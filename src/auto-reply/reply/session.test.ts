@@ -6,6 +6,7 @@ import { buildModelAliasIndex } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { saveSessionStore } from "../../config/sessions.js";
+import { clearInternalHooks, registerInternalHook } from "../../hooks/internal-hooks.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.ts";
 import { enqueueSystemEvent, resetSystemEventsForTest } from "../../infra/system-events.js";
 import { applyResetModelOverride } from "./session-reset-model.js";
@@ -30,6 +31,10 @@ let suiteCase = 0;
 
 beforeAll(async () => {
   suiteRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-suite-"));
+});
+
+afterEach(() => {
+  clearInternalHooks();
 });
 
 afterAll(async () => {
@@ -1054,9 +1059,21 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     expect(result.sessionEntry.reasoningLevel).toBe("low");
   });
 
-  it("/new in a new session does not preserve overrides", async () => {
-    const storePath = await createStorePath("openclaw-new-no-preserve-");
-    const sessionKey = "agent:main:telegram:dm:user3";
+  it("blocks /new when before_reset hook sets blockReset", async () => {
+    const storePath = await createStorePath("openclaw-reset-blocked-");
+    const sessionKey = "agent:main:telegram:dm:block-user";
+    const existingSessionId = "existing-session-blocked";
+    await seedSessionStoreWithOverrides({
+      storePath,
+      sessionKey,
+      sessionId: existingSessionId,
+      overrides: { verboseLevel: "on" },
+    });
+
+    registerInternalHook("command:before_reset", (event) => {
+      event.context.blockReset = true;
+      event.messages.push("已阻断 /new，请先保存收尾");
+    });
 
     const cfg = {
       session: { store: storePath, idleMinutes: 999 },
@@ -1067,7 +1084,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
         Body: "/new",
         RawBody: "/new",
         CommandBody: "/new",
-        From: "user3",
+        From: "block-user",
         To: "bot",
         ChatType: "direct",
         SessionKey: sessionKey,
@@ -1078,10 +1095,54 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       commandAuthorized: true,
     });
 
-    expect(result.isNewSession).toBe(true);
-    expect(result.resetTriggered).toBe(true);
-    expect(result.sessionEntry.verboseLevel).toBeUndefined();
-    expect(result.sessionEntry.thinkingLevel).toBeUndefined();
+    expect(result.resetBlocked).toBe(true);
+    expect(result.resetTriggered).toBe(false);
+    expect(result.isNewSession).toBe(false);
+    expect(result.sessionId).toBe(existingSessionId);
+    expect(result.resetBlockMessage).toContain("已阻断 /new");
+  });
+
+  it("blocks /reset when before_reset hook sets blockReset", async () => {
+    const storePath = await createStorePath("openclaw-reset-blocked-reset-");
+    const sessionKey = "agent:main:telegram:dm:block-user-2";
+    const existingSessionId = "existing-session-blocked-reset";
+    await seedSessionStoreWithOverrides({
+      storePath,
+      sessionKey,
+      sessionId: existingSessionId,
+      overrides: {},
+    });
+
+    registerInternalHook("command:before_reset", (event) => {
+      event.context.blockReset = true;
+      event.messages.push("已阻断 /reset，请先保存收尾");
+    });
+
+    const cfg = {
+      session: { store: storePath, idleMinutes: 999 },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "/reset",
+        RawBody: "/reset",
+        CommandBody: "/reset",
+        From: "block-user-2",
+        To: "bot",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        Provider: "telegram",
+        Surface: "telegram",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.resetBlocked).toBe(true);
+    expect(result.resetTriggered).toBe(false);
+    expect(result.isNewSession).toBe(false);
+    expect(result.sessionId).toBe(existingSessionId);
+    expect(result.resetBlockMessage).toContain("已阻断 /reset");
   });
 
   it("archives the old session store entry on /new", async () => {

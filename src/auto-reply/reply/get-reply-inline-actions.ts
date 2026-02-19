@@ -241,6 +241,14 @@ export async function handleInlineActions(params: {
     cleanedBody = rewrittenBody;
   }
 
+  if (sessionCtx.ResetBlocked) {
+    return {
+      kind: "continue",
+      directives,
+      abortedLastRun: initialAbortedLastRun,
+    };
+  }
+
   const sendInlineReply = async (reply?: ReplyPayload) => {
     if (!reply) {
       return;

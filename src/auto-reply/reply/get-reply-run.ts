@@ -96,6 +96,8 @@ type RunPreparedReplyParams = {
   timeoutMs: number;
   isNewSession: boolean;
   resetTriggered: boolean;
+  resetBlocked?: boolean;
+  resetBlockMessage?: string;
   systemSent: boolean;
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
@@ -140,6 +142,8 @@ export async function runPreparedReply(
     timeoutMs,
     isNewSession,
     resetTriggered,
+    resetBlocked,
+    resetBlockMessage,
     systemSent,
     sessionKey,
     sessionId,
@@ -157,6 +161,14 @@ export async function runPreparedReply(
     abortedLastRun,
   } = params;
   let currentSystemSent = systemSent;
+
+  if (resetBlocked) {
+    await typing.onReplyStart();
+    typing.cleanup();
+    return {
+      text: resetBlockMessage?.trim() || "已阻断 /new，请先保存收尾",
+    };
+  }
 
   const isFirstTurnInSession = isNewSession || !currentSystemSent;
   const isGroupChat = sessionCtx.ChatType === "group";
