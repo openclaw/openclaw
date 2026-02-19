@@ -48,6 +48,9 @@ describe("anthropic-ratelimit", () => {
     await globalThis.fetch("https://api.anthropic.com/v1/messages", { method: "POST" });
     hook.uninstall();
 
+    // Wait for async write to complete
+    await new Promise((r) => setTimeout(r, 50));
+
     const snapshot = readRatelimitSnapshot(env);
     expect(snapshot).not.toBeNull();
     expect(snapshot!.headers["anthropic-ratelimit-unified-limit"]).toBe("1000");
@@ -73,6 +76,31 @@ describe("anthropic-ratelimit", () => {
     await globalThis.fetch("https://api.openai.com/v1/chat/completions");
     hook.uninstall();
 
+    await new Promise((r) => setTimeout(r, 50));
+
+    const snapshot = readRatelimitSnapshot(env);
+    expect(snapshot).toBeNull();
+  });
+
+  it("ignores URLs with 'anthropic' that are not api.anthropic.com", async () => {
+    const mockFetch = async () => {
+      return new Response("{}", {
+        status: 200,
+        headers: {
+          "anthropic-ratelimit-unified-limit": "500",
+        },
+      });
+    };
+    globalThis.fetch = mockFetch as typeof globalThis.fetch;
+
+    const hook = createRatelimitFetchHook({ env, sessionKey: "test" });
+    hook.install();
+    // Third-party proxy or Cloudflare AI Gateway with 'anthropic' in URL
+    await globalThis.fetch("https://my-proxy.example.com/anthropic/v1/messages");
+    hook.uninstall();
+
+    await new Promise((r) => setTimeout(r, 50));
+
     const snapshot = readRatelimitSnapshot(env);
     expect(snapshot).toBeNull();
   });
@@ -84,6 +112,44 @@ describe("anthropic-ratelimit", () => {
     expect(globalThis.fetch).not.toBe(beforeInstall);
     hook.uninstall();
     expect(globalThis.fetch).toBe(beforeInstall);
+  });
+
+  it("handles concurrent hooks without breaking the fetch chain", async () => {
+    const callLog: string[] = [];
+    const mockFetch = async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      callLog.push(url);
+      return new Response("{}", {
+        status: 200,
+        headers: {
+          "anthropic-ratelimit-unified-remaining": "100",
+        },
+      });
+    };
+    globalThis.fetch = mockFetch as typeof globalThis.fetch;
+
+    const hook1 = createRatelimitFetchHook({ env, sessionKey: "session-1" });
+    const hook2 = createRatelimitFetchHook({ env, sessionKey: "session-2" });
+
+    // Both install
+    hook1.install();
+    hook2.install();
+
+    // Both make calls
+    await globalThis.fetch("https://api.anthropic.com/v1/messages");
+
+    // hook1 finishes first
+    hook1.uninstall();
+
+    // hook2 still works (fetch not broken)
+    await globalThis.fetch("https://api.anthropic.com/v1/messages");
+
+    // hook2 finishes
+    hook2.uninstall();
+
+    // Original fetch restored
+    expect(globalThis.fetch).toBe(mockFetch);
+    expect(callLog).toHaveLength(2);
   });
 
   it("handles responses without ratelimit headers gracefully", async () => {
@@ -99,6 +165,8 @@ describe("anthropic-ratelimit", () => {
     hook.install();
     await globalThis.fetch("https://api.anthropic.com/v1/messages");
     hook.uninstall();
+
+    await new Promise((r) => setTimeout(r, 50));
 
     // No snapshot written when no ratelimit headers present
     const snapshot = readRatelimitSnapshot(env);
