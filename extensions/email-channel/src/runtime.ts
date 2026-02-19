@@ -34,6 +34,7 @@ const STATE_FILE_PATH = path.join(os.homedir(), ".openclaw", "extensions", "emai
 let imapConnection: Imap | null = null;
 let smtpTransporter: nodemailer.Transporter | null = null;
 let checkTimer: NodeJS.Timeout | null = null;
+let isInboxOpen = false;  // Track if inbox is open to prevent race conditions
 let messageHandler: ((from: string, fromEmail: string, subject: string, body: string, messageId: string, uid: number) => Promise<void>) | null = null;
 let allowedSenders: string[] = [];
 let currentState: EmailProcessorState = {
@@ -121,6 +122,7 @@ function createImapConnection(config: EmailConfig): Imap {
     host: config.imap.host,
     port: config.imap.port,
     tls: config.imap.secure,
+    tlsOptions: { rejectUnauthorized: false }
   });
 }
 
@@ -155,6 +157,10 @@ function formatDateForImap(date: Date): string {
 
 function checkEmail(): void {
   if (!imapConnection) return;
+  if (!isInboxOpen) {
+    console.log("[EMAIL PLUGIN] Inbox not ready, skipping check");
+    return;
+  }
 
   // Search for emails SINCE the last processed timestamp
   // Add a small buffer (1 minute) to catch any edge cases
@@ -297,7 +303,7 @@ export function startEmail(config: EmailConfig, handler: (from: string, fromEmai
         return;
       }
 
-      // Initial check
+      isInboxOpen = true;  // Mark inbox as open
       checkEmail();
 
       // Set up interval to check for new emails
@@ -341,6 +347,8 @@ export async function sendEmail(to: string, subject: string, body: string, inRep
 }
 
 export function stopEmail(): void {
+  isInboxOpen = false;  // Reset inbox state
+
   if (checkTimer) {
     clearInterval(checkTimer);
     checkTimer = null;
