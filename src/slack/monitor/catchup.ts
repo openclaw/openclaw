@@ -77,14 +77,102 @@ const watermarkBuffers = new Map<string, Record<string, string>>();
 /** Active flush interval timers per account. */
 const flushTimers = new Map<string, ReturnType<typeof setInterval>>();
 
+// ---------------------------------------------------------------------------
+// In-flight message tracking (at-least-once watermark safety)
+// ---------------------------------------------------------------------------
+//
+// When multiple messages in the same channel are dispatched concurrently
+// (e.g. different senders), a later message (ts=101) may complete before an
+// earlier one (ts=100).  Without tracking, the watermark would advance to 101
+// and if the earlier message then fails, catch-up would skip it on restart.
+//
+// The in-flight tracker prevents this by deferring watermark advances when
+// unresolved (in-flight or failed) messages exist with lower timestamps.
+// On process restart all in-memory state is cleared and catch-up replays
+// from the last safely flushed watermark — guaranteeing at-least-once.
+// ---------------------------------------------------------------------------
+
+/** Messages currently being processed, keyed by `accountId:channelId`. */
+const inflightMessages = new Map<string, Set<string>>();
+
+/** Messages whose processing failed — blocks watermark advancement. */
+const failedMessages = new Map<string, Set<string>>();
+
+/** Completed watermarks deferred due to lower-ts unresolved messages. */
+const deferredWatermarks = new Map<string, string[]>();
+
+function watermarkTrackingKey(channelId: string, accountId: string): string {
+  return `${accountId}:${channelId}`;
+}
+
 /**
- * Update the in-memory watermark for a channel.
- * Only advances the watermark (never goes backwards).
+ * Register a message as in-flight **before** processing begins.
+ * Prevents the watermark from advancing past this ts until
+ * {@link completeInflightMessage} is called.
  */
-export function updateCatchupWatermark(channelId: string, ts: string, accountId: string): void {
-  if (!channelId || !ts) {
-    return;
+export function registerInflightMessage(channelId: string, ts: string, accountId: string): void {
+  const key = watermarkTrackingKey(channelId, accountId);
+  let set = inflightMessages.get(key);
+  if (!set) {
+    set = new Set();
+    inflightMessages.set(key, set);
   }
+  set.add(ts);
+}
+
+/**
+ * Mark a message as no longer in-flight.
+ * On failure the ts is added to the failed set so the watermark cannot
+ * advance past it until process restart (catch-up replay).
+ */
+export function completeInflightMessage(
+  channelId: string,
+  ts: string,
+  accountId: string,
+  success: boolean,
+): void {
+  const key = watermarkTrackingKey(channelId, accountId);
+
+  const inflight = inflightMessages.get(key);
+  if (inflight) {
+    inflight.delete(ts);
+    if (inflight.size === 0) {
+      inflightMessages.delete(key);
+    }
+  }
+
+  if (!success) {
+    let failed = failedMessages.get(key);
+    if (!failed) {
+      failed = new Set();
+      failedMessages.set(key, failed);
+    }
+    failed.add(ts);
+  }
+
+  drainDeferredWatermarks(channelId, accountId);
+}
+
+/** Minimum ts among in-flight + failed messages, or `null`. */
+function getMinUnresolvedTs(channelId: string, accountId: string): string | null {
+  const key = watermarkTrackingKey(channelId, accountId);
+  let min: string | null = null;
+
+  for (const set of [inflightMessages.get(key), failedMessages.get(key)]) {
+    if (set) {
+      for (const ts of set) {
+        if (!min || ts < min) min = ts;
+      }
+    }
+  }
+  return min;
+}
+
+/**
+ * Internal: unconditionally advance the in-memory watermark buffer.
+ * Only moves the watermark forward (never backwards).
+ */
+function advanceWatermarkBuffer(channelId: string, ts: string, accountId: string): void {
   let buffer = watermarkBuffers.get(accountId);
   if (!buffer) {
     buffer = {};
@@ -94,6 +182,68 @@ export function updateCatchupWatermark(channelId: string, ts: string, accountId:
   if (!existing || ts > existing) {
     buffer[channelId] = ts;
   }
+}
+
+/**
+ * Flush deferred watermarks that are now safe to apply.
+ * A deferred ts is safe when no in-flight or failed message has
+ * an equal-or-lower timestamp in the same channel.
+ */
+function drainDeferredWatermarks(channelId: string, accountId: string): void {
+  const key = watermarkTrackingKey(channelId, accountId);
+  const deferred = deferredWatermarks.get(key);
+  if (!deferred || deferred.length === 0) return;
+
+  const minUnresolved = getMinUnresolvedTs(channelId, accountId);
+
+  let bestSafeTs: string | null = null;
+  const stillBlocked: string[] = [];
+
+  for (const ts of deferred) {
+    if (minUnresolved && ts >= minUnresolved) {
+      stillBlocked.push(ts);
+    } else if (!bestSafeTs || ts > bestSafeTs) {
+      bestSafeTs = ts;
+    }
+  }
+
+  if (stillBlocked.length > 0) {
+    deferredWatermarks.set(key, stillBlocked);
+  } else {
+    deferredWatermarks.delete(key);
+  }
+
+  if (bestSafeTs) {
+    advanceWatermarkBuffer(channelId, bestSafeTs, accountId);
+  }
+}
+
+/**
+ * Update the in-memory watermark for a channel.
+ * Only advances the watermark (never goes backwards).
+ * Respects in-flight tracking: defers the update when unresolved messages
+ * (in-flight or failed) exist with lower timestamps, maintaining
+ * at-least-once semantics for catch-up replay.
+ */
+export function updateCatchupWatermark(channelId: string, ts: string, accountId: string): void {
+  if (!channelId || !ts) {
+    return;
+  }
+
+  const minUnresolved = getMinUnresolvedTs(channelId, accountId);
+  if (minUnresolved && ts >= minUnresolved) {
+    // Defer — advancing here would skip an unresolved message.
+    const key = watermarkTrackingKey(channelId, accountId);
+    let deferred = deferredWatermarks.get(key);
+    if (!deferred) {
+      deferred = [];
+      deferredWatermarks.set(key, deferred);
+    }
+    deferred.push(ts);
+    return;
+  }
+
+  advanceWatermarkBuffer(channelId, ts, accountId);
 }
 
 /**
