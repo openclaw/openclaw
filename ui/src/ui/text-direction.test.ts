@@ -21,4 +21,14 @@ describe("detectTextDirection", () => {
     expect(detectTextDirection("# مرحبا")).toBe("rtl");
     expect(detectTextDirection("- hello")).toBe("ltr");
   });
+
+  it("prefers dominant script in mixed-language text", () => {
+    expect(detectTextDirection("Hello שלום עולם")).toBe("rtl");
+    expect(detectTextDirection("שלום hello world test")).toBe("ltr");
+  });
+
+  it("ignores OpenClaw reply tags at the start", () => {
+    expect(detectTextDirection("[[reply_to_current]] שלום עם Web UI")).toBe("rtl");
+    expect(detectTextDirection("[[reply_to: 123]] hello עם קצת עברית")).toBe("ltr");
+  });
 });
