@@ -14,8 +14,8 @@ import {
   resolveExecApprovals,
 } from "../infra/exec-approvals.js";
 import { markBackgrounded, tail } from "./bash-process-registry.js";
+import { requestExecApprovalDecision } from "./bash-tools.exec-approval-request.js";
 import {
-  DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS,
   DEFAULT_APPROVAL_TIMEOUT_MS,
   DEFAULT_NOTIFY_TAIL_CHARS,
   createApprovalSlug,
@@ -24,7 +24,6 @@ import {
   runExecProcess,
 } from "./bash-tools.exec-runtime.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
-import { callGatewayTool } from "./tools/gateway.js";
 
 export type ProcessGatewayAllowlistParams = {
   command: string;
@@ -99,27 +98,17 @@ export async function processGatewayAllowlist(
     void (async () => {
       let decision: string | null = null;
       try {
-        const decisionResult = await callGatewayTool<{ decision: string }>(
-          "exec.approval.request",
-          { timeoutMs: DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS },
-          {
-            id: approvalId,
-            command: params.command,
-            cwd: params.workdir,
-            host: "gateway",
-            security: hostSecurity,
-            ask: hostAsk,
-            agentId: params.agentId,
-            resolvedPath,
-            sessionKey: params.sessionKey,
-            timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
-          },
-        );
-        const decisionValue =
-          decisionResult && typeof decisionResult === "object"
-            ? (decisionResult as { decision?: unknown }).decision
-            : undefined;
-        decision = typeof decisionValue === "string" ? decisionValue : null;
+        decision = await requestExecApprovalDecision({
+          id: approvalId,
+          command: params.command,
+          cwd: params.workdir,
+          host: "gateway",
+          security: hostSecurity,
+          ask: hostAsk,
+          agentId: params.agentId,
+          resolvedPath,
+          sessionKey: params.sessionKey,
+        });
       } catch {
         emitExecSystemEvent(
           `Exec denied (gateway id=${approvalId}, approval-request-failed): ${params.command}`,
