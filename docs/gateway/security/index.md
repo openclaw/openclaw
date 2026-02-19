@@ -114,6 +114,7 @@ High-signal `checkId` values you will most likely see in real deployments (not e
 | `fs.config.perms_world_readable`             | critical      | Config can expose tokens/settings                        | filesystem perms on config file                  | yes      |
 | `gateway.bind_no_auth`                       | critical      | Remote bind without shared secret                        | `gateway.bind`, `gateway.auth.*`                 | no       |
 | `gateway.loopback_no_auth`                   | critical      | Reverse-proxied loopback may become unauthenticated      | `gateway.auth.*`, proxy setup                    | no       |
+| `gateway.http.no_auth`                       | warn/critical | Gateway HTTP APIs reachable with `auth.mode="none"`      | `gateway.auth.mode`, `gateway.http.endpoints.*`  | no       |
 | `gateway.tools_invoke_http.dangerous_allow`  | warn/critical | Re-enables dangerous tools over HTTP API                 | `gateway.tools.allow`                            | no       |
 | `gateway.tailscale_funnel`                   | critical      | Public internet exposure                                 | `gateway.tailscale.mode`                         | no       |
 | `gateway.control_ui.insecure_auth`           | critical      | Token-only over HTTP, no device identity                 | `gateway.controlUi.allowInsecureAuth`            | no       |
