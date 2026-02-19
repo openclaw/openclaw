@@ -771,6 +771,38 @@ describe("startNostrBus NIP-63 protocol flow", () => {
     bus.close();
   });
 
+  it("sendDm accepts and normalizes tool update phase payloads", async () => {
+    const bus = await startNostrBus({
+      privateKey: TEST_HEX_KEY,
+      relays: [TEST_RELAY],
+      onMessage: vi.fn(),
+      onError: vi.fn(),
+    });
+
+    await bus.sendDm(
+      "deadbeef",
+      {
+        ver: 1,
+        name: "exec",
+        phase: "UPDATE",
+        call_id: "call-1",
+        summary: "running command",
+      },
+      undefined,
+      25804,
+    );
+
+    expect(mocks.publishMock).toHaveBeenCalledWith(
+      [TEST_RELAY],
+      expect.objectContaining({
+        kind: 25804,
+        content: expect.stringContaining(`\"phase\":\"update\"`),
+      }),
+    );
+
+    bus.close();
+  });
+
   it("sendDm falls back to final response kind for unsupported response kinds", async () => {
     const bus = await startNostrBus({
       privateKey: TEST_HEX_KEY,

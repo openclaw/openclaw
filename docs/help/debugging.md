@@ -65,6 +65,26 @@ OPENCLAW_PROFILE=dev openclaw tui
 
 If you don’t have a global install yet, run the CLI via `pnpm openclaw ...`.
 
+If you’re iterating on onboarding for dev and want a consistent reset cycle:
+
+```bash
+pnpm dev:onboard:retry
+```
+
+That command:
+
+1. Kills any previous gateway started by this script.
+2. Runs `onboard --reset` in local mode.
+3. Starts gateway with `--dev --force --allow-unconfigured`.
+
+You can customize behavior:
+
+```bash
+pnpm dev:onboard:retry --no-gateway      # rerun onboarding only
+pnpm dev:onboard:retry --foreground       # run gateway in foreground
+pnpm dev:onboard:retry --no-reset         # keep current workspace and sessions
+```
+
 What this does:
 
 1. **Profile isolation** (global `--dev`)

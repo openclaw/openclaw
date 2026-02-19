@@ -18,6 +18,16 @@ export type ClientToolDefinition = {
   };
 };
 
+export type CommandLaneWaitEvent = {
+  lane: string;
+  scope: "session" | "global";
+  waitMs: number;
+  queuedAhead: number;
+  runId: string;
+  sessionId: string;
+  tsMs: number;
+};
+
 export type RunEmbeddedPiAgentParams = {
   sessionId: string;
   sessionKey?: string;
@@ -100,6 +110,7 @@ export type RunEmbeddedPiAgentParams = {
   onReasoningEnd?: () => void | Promise<void>;
   onToolResult?: (payload: { text?: string; mediaUrls?: string[] }) => void | Promise<void>;
   onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void;
+  onCommandLaneWait?: (event: CommandLaneWaitEvent) => void | Promise<void>;
   lane?: string;
   enqueue?: typeof enqueueCommand;
   extraSystemPrompt?: string;

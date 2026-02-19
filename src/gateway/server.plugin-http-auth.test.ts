@@ -66,7 +66,7 @@ async function dispatchRequest(
 }
 
 describe("gateway plugin HTTP auth boundary", () => {
-  test("requires gateway auth for /api/channels/* plugin routes and allows authenticated pass-through", async () => {
+  test("requires gateway auth for protected /api/channels/* routes and allows unauthenticated nostr personas discovery", async () => {
     const resolvedAuth: ResolvedGatewayAuth = {
       mode: "token",
       token: "test-token",
@@ -84,6 +84,12 @@ describe("gateway plugin HTTP auth boundary", () => {
             res.statusCode = 200;
             res.setHeader("Content-Type", "application/json; charset=utf-8");
             res.end(JSON.stringify({ ok: true, route: "channel" }));
+            return true;
+          }
+          if (pathname === "/api/channels/nostr/personas") {
+            res.statusCode = 200;
+            res.setHeader("Content-Type", "application/json; charset=utf-8");
+            res.end(JSON.stringify({ ok: true, route: "personas" }));
             return true;
           }
           if (pathname === "/plugin/public") {
@@ -129,6 +135,15 @@ describe("gateway plugin HTTP auth boundary", () => {
         expect(authenticated.res.statusCode).toBe(200);
         expect(authenticated.getBody()).toContain('"route":"channel"');
 
+        const unauthenticatedPersonas = createResponse();
+        await dispatchRequest(
+          server,
+          createRequest({ path: "/api/channels/nostr/personas" }),
+          unauthenticatedPersonas.res,
+        );
+        expect(unauthenticatedPersonas.res.statusCode).toBe(200);
+        expect(unauthenticatedPersonas.getBody()).toContain('"route":"personas"');
+
         const unauthenticatedPublic = createResponse();
         await dispatchRequest(
           server,
@@ -138,7 +153,7 @@ describe("gateway plugin HTTP auth boundary", () => {
         expect(unauthenticatedPublic.res.statusCode).toBe(200);
         expect(unauthenticatedPublic.getBody()).toContain('"route":"public"');
 
-        expect(handlePluginRequest).toHaveBeenCalledTimes(2);
+        expect(handlePluginRequest).toHaveBeenCalledTimes(3);
       },
     });
   });

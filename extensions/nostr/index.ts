@@ -1,10 +1,11 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { nostrPlugin } from "./src/channel.js";
 import type { NostrProfile } from "./src/config-schema.js";
 import { createNostrProfileHttpHandler } from "./src/nostr-profile-http.js";
 import { setNostrRuntime, getNostrRuntime } from "./src/runtime.js";
-import { resolveNostrAccount } from "./src/types.js";
+import { listNostrAccountIds, resolveNostrAccount } from "./src/types.js";
 
 const plugin = {
   id: "nostr",
@@ -26,14 +27,32 @@ const plugin = {
       updateConfigProfile: async (accountId: string, profile: NostrProfile) => {
         const runtime = getNostrRuntime();
         const cfg = runtime.config.loadConfig();
+        const normalizedAccountId = normalizeAccountId(accountId);
 
-        // Build the config patch for channels.nostr.profile
+        // Persist profile under channels.nostr.accounts.<accountId>.profile.
+        // For default account we also mirror to channels.nostr.profile.
         const channels = (cfg.channels ?? {}) as Record<string, unknown>;
         const nostrConfig = (channels.nostr ?? {}) as Record<string, unknown>;
+        const existingAccounts =
+          nostrConfig.accounts && typeof nostrConfig.accounts === "object"
+            ? (nostrConfig.accounts as Record<string, unknown>)
+            : {};
+        const existingAccountEntry =
+          existingAccounts[normalizedAccountId] &&
+          typeof existingAccounts[normalizedAccountId] === "object"
+            ? (existingAccounts[normalizedAccountId] as Record<string, unknown>)
+            : {};
 
         const updatedNostrConfig = {
           ...nostrConfig,
-          profile,
+          ...(normalizedAccountId === DEFAULT_ACCOUNT_ID ? { profile } : {}),
+          accounts: {
+            ...existingAccounts,
+            [normalizedAccountId]: {
+              ...existingAccountEntry,
+              profile,
+            },
+          },
         };
 
         const updatedChannels = {
@@ -50,13 +69,22 @@ const plugin = {
         const runtime = getNostrRuntime();
         const cfg = runtime.config.loadConfig();
         const account = resolveNostrAccount({ cfg, accountId });
-        if (!account.configured || !account.publicKey) {
+        if (!account.publicKey) {
           return null;
         }
         return {
           pubkey: account.publicKey,
           relays: account.relays,
+          configured: account.configured,
+          enabled: account.enabled,
+          name: account.name,
+          profile: account.profile,
         };
+      },
+      listAccountIds: () => {
+        const runtime = getNostrRuntime();
+        const cfg = runtime.config.loadConfig();
+        return listNostrAccountIds(cfg);
       },
       log: api.logger,
     });

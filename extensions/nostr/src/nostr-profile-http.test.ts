@@ -103,6 +103,7 @@ function createMockContext(overrides?: Partial<NostrProfileHttpContext>): NostrP
       pubkey: "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234",
       relays: ["wss://relay.damus.io"],
     }),
+    listAccountIds: vi.fn().mockReturnValue(["default"]),
     log: {
       info: vi.fn(),
       warn: vi.fn(),
@@ -172,6 +173,114 @@ describe("nostr-profile-http", () => {
       const result = await handler(req, res);
 
       expect(result).toBe(true);
+    });
+
+    it("handles /api/channels/nostr/personas", async () => {
+      const ctx = createMockContext();
+      const handler = createNostrProfileHttpHandler(ctx);
+      const req = createMockRequest("GET", "/api/channels/nostr/personas");
+      const res = createMockResponse();
+
+      const result = await handler(req, res);
+
+      expect(result).toBe(true);
+      expect(res._getStatusCode()).toBe(200);
+    });
+  });
+
+  describe("GET /api/channels/nostr/personas", () => {
+    it("returns configured persona records", async () => {
+      const ctx = createMockContext({
+        listAccountIds: vi.fn().mockReturnValue(["default"]),
+      });
+      const handler = createNostrProfileHttpHandler(ctx);
+      const req = createMockRequest("GET", "/api/channels/nostr/personas");
+      const res = createMockResponse();
+
+      await handler(req, res);
+
+      expect(res._getStatusCode()).toBe(200);
+      const data = JSON.parse(res._getData());
+      expect(data.ok).toBe(true);
+      expect(data.personas).toHaveLength(1);
+      expect(data.personas[0].accountId).toBe("default");
+      expect(data.personas[0].pubkey).toContain("abcd1234");
+      expect(data.personas[0].relays).toContain("wss://relay.damus.io");
+      expect(data.personas[0].profile).toBeUndefined();
+    });
+
+    it("returns multiple personas and skips entries without pubkeys", async () => {
+      const ctx = createMockContext({
+        listAccountIds: vi.fn().mockReturnValue(["default", "haunk", "broken"]),
+        getAccountInfo: vi.fn((accountId: string) => {
+          if (accountId === "default") {
+            return {
+              pubkey: "a".repeat(64),
+              relays: ["wss://relay.a"],
+              configured: true,
+              enabled: true,
+            };
+          }
+          if (accountId === "haunk") {
+            return {
+              pubkey: "b".repeat(64),
+              relays: ["wss://relay.b"],
+              configured: true,
+              enabled: false,
+              name: "Haunk",
+              profile: {
+                displayName: "Haunk Persona",
+                picture: "https://example.com/haunk.png",
+              },
+            };
+          }
+          return null;
+        }),
+      });
+      const handler = createNostrProfileHttpHandler(ctx);
+      const req = createMockRequest("GET", "/api/channels/nostr/personas");
+      const res = createMockResponse();
+
+      await handler(req, res);
+
+      expect(res._getStatusCode()).toBe(200);
+      const data = JSON.parse(res._getData());
+      expect(data.ok).toBe(true);
+      expect(data.personas).toHaveLength(2);
+      expect(data.personas).toEqual([
+        {
+          accountId: "default",
+          pubkey: "a".repeat(64),
+          relays: ["wss://relay.a"],
+          configured: true,
+          enabled: true,
+        },
+        {
+          accountId: "haunk",
+          pubkey: "b".repeat(64),
+          relays: ["wss://relay.b"],
+          configured: true,
+          enabled: false,
+          name: "Haunk",
+          profile: {
+            display_name: "Haunk Persona",
+            picture: "https://example.com/haunk.png",
+          },
+        },
+      ]);
+    });
+
+    it("rejects non-GET methods for personas route", async () => {
+      const ctx = createMockContext();
+      const handler = createNostrProfileHttpHandler(ctx);
+      const req = createMockRequest("POST", "/api/channels/nostr/personas", {});
+      const res = createMockResponse();
+
+      await handler(req, res);
+
+      expect(res._getStatusCode()).toBe(405);
+      const data = JSON.parse(res._getData());
+      expect(data.ok).toBe(false);
     });
   });
 

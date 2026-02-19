@@ -522,6 +522,8 @@ export async function startGatewayServer(
       const { recoverPendingDeliveries } = await import("../infra/outbound/delivery-queue.js");
       const { deliverOutboundPayloads } = await import("../infra/outbound/deliver.js");
       const logRecovery = log.child("delivery-recovery");
+      // Give channel runtimes (notably Nostr) a moment to initialize before replaying queue.
+      await new Promise<void>((resolve) => setTimeout(resolve, 2_000));
       await recoverPendingDeliveries({
         deliver: deliverOutboundPayloads,
         log: logRecovery,

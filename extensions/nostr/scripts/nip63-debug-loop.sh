@@ -49,14 +49,47 @@ require_command() {
 require_command jq
 require_command nak
 
-if ! command -v timeout >/dev/null 2>&1; then
-  echo "Missing required command: timeout" >&2
-  exit 1
-fi
+has_command() {
+  command -v "$1" >/dev/null 2>&1
+}
 
+run_with_timeout() {
+  local timeout_seconds=$1
+  local output_file=$2
+  shift 2
+
+  if has_command timeout; then
+    timeout "$timeout_seconds" "$@" >"$output_file"
+    return $?
+  fi
+
+  if has_command gtimeout; then
+    gtimeout "$timeout_seconds" "$@" >"$output_file"
+    return $?
+  fi
+
+  "$@" >"$output_file" &
+  local command_pid=$!
+  local waited=0
+  while kill -0 "$command_pid" >/dev/null 2>&1; do
+    if (( waited >= timeout_seconds )); then
+      kill "$command_pid" >/dev/null 2>&1 || true
+      wait "$command_pid" >/dev/null 2>&1 || true
+      return 124
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+
+  wait "$command_pid"
+  return $?
+}
+
+DEFAULT_RELAYS=("ws://localhost:7777")
 BOT_SECRET="${NOSTR_BOT_SECRET:-}"
 SENDER_SECRET="${NOSTR_SENDER_SECRET:-}"
-RELAYS=("ws://localhost:7777")
+RELAYS=()
+RELAYS_FROM_ARGS=0
 ITERATIONS=5
 MESSAGE_TEMPLATE="Nostr NIP-63 debug {{i}}"
 WAIT_SECONDS=30
@@ -82,6 +115,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --relay)
       RELAYS+=("${2:?}")
+      RELAYS_FROM_ARGS=1
       shift 2
       ;;
     --iterations)
@@ -158,9 +192,13 @@ while [[ $# -gt 0 ]]; do
       echo "Unknown option: $1" >&2
       usage
       exit 2
-      ;;
+    ;;
   esac
 done
+
+if (( RELAYS_FROM_ARGS == 0 )); then
+  RELAYS=("${DEFAULT_RELAYS[@]}")
+fi
 
 if [[ -z "$BOT_SECRET" ]]; then
   echo "Missing --bot-secret (or NOSTR_BOT_SECRET)." >&2
@@ -456,22 +494,22 @@ for ((iteration = 1; iteration <= ITERATIONS; iteration++)); do
 
   tmp_events="$(mktemp)"
   if (( CAPTURE_TOOL_EVENTS == 1 )); then
-    if ! timeout "$WAIT_SECONDS" nak req -q --stream \
+    if ! run_with_timeout "$WAIT_SECONDS" "$tmp_events" nak req -q --stream \
       -k 25800 -k 25801 -k 25803 -k 25804 -k 25805 -k 25806 \
-      -p "$SENDER_PUBLIC_KEY" -t "s=$session_id" -s "$since_filter" "${RELAYS[@]}" >"$tmp_events"; then
-      if ! timeout "$WAIT_SECONDS" nak req -q --stream \
+      -p "$SENDER_PUBLIC_KEY" -t "s=$session_id" -s "$since_filter" "${RELAYS[@]}"; then
+      if ! run_with_timeout "$WAIT_SECONDS" "$tmp_events" nak req -q --stream \
         -k 25800 -k 25801 -k 25803 -k 25804 -k 25805 -k 25806 \
-        -t "s=$session_id" -s "$since_filter" "${RELAYS[@]}" >"$tmp_events"; then
+        -t "s=$session_id" -s "$since_filter" "${RELAYS[@]}"; then
         true
       fi
     fi
   else
-    if ! timeout "$WAIT_SECONDS" nak req -q --stream \
+    if ! run_with_timeout "$WAIT_SECONDS" "$tmp_events" nak req -q --stream \
       -k 25803 \
-      -p "$SENDER_PUBLIC_KEY" -t "s=$session_id" -s "$since_filter" "${RELAYS[@]}" >"$tmp_events"; then
-      if ! timeout "$WAIT_SECONDS" nak req -q --stream \
+      -p "$SENDER_PUBLIC_KEY" -t "s=$session_id" -s "$since_filter" "${RELAYS[@]}"; then
+      if ! run_with_timeout "$WAIT_SECONDS" "$tmp_events" nak req -q --stream \
         -k 25803 \
-        -t "s=$session_id" -s "$since_filter" "${RELAYS[@]}" >"$tmp_events"; then
+        -t "s=$session_id" -s "$since_filter" "${RELAYS[@]}"; then
         true
       fi
     fi

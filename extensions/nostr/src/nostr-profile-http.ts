@@ -5,6 +5,7 @@
  * - PUT /api/channels/nostr/:accountId/profile - Update and publish profile
  * - POST /api/channels/nostr/:accountId/profile/import - Import from relays
  * - GET /api/channels/nostr/:accountId/profile - Get current profile state
+ * - GET /api/channels/nostr/personas - List configured personas/pubkeys
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -18,13 +19,24 @@ import { importProfileFromRelays, mergeProfiles } from "./nostr-profile-import.j
 // Types
 // ============================================================================
 
+interface NostrAccountInfo {
+  pubkey: string;
+  relays: string[];
+  configured?: boolean;
+  enabled?: boolean;
+  name?: string;
+  profile?: NostrProfile;
+}
+
 export interface NostrProfileHttpContext {
   /** Get current profile from config */
   getConfigProfile: (accountId: string) => NostrProfile | undefined;
   /** Update profile in config (after successful publish) */
   updateConfigProfile: (accountId: string, profile: NostrProfile) => Promise<void>;
   /** Get account's public key and relays */
-  getAccountInfo: (accountId: string) => { pubkey: string; relays: string[] } | null;
+  getAccountInfo: (accountId: string) => NostrAccountInfo | null;
+  /** List configured account IDs */
+  listAccountIds: () => string[];
   /** Logger */
   log?: {
     info: (msg: string) => void;
@@ -337,19 +349,28 @@ export function createNostrProfileHttpHandler(
 ): (req: IncomingMessage, res: ServerResponse) => Promise<boolean> {
   return async (req, res) => {
     const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+    const pathname = url.pathname.replace(/\/+$/u, "") || "/";
+
+    if (pathname === "/api/channels/nostr/personas") {
+      if (req.method !== "GET") {
+        sendJson(res, 405, { ok: false, error: "Method not allowed" });
+        return true;
+      }
+      return await handleGetPersonas(ctx, res);
+    }
 
     // Only handle /api/channels/nostr/:accountId/profile paths
-    if (!url.pathname.startsWith("/api/channels/nostr/")) {
+    if (!pathname.startsWith("/api/channels/nostr/")) {
       return false;
     }
 
-    const accountId = parseAccountIdFromPath(url.pathname);
+    const accountId = parseAccountIdFromPath(pathname);
     if (!accountId) {
       return false;
     }
 
-    const isImport = url.pathname.endsWith("/profile/import");
-    const isProfilePath = url.pathname.endsWith("/profile") || isImport;
+    const isImport = pathname.endsWith("/profile/import");
+    const isProfilePath = pathname.endsWith("/profile") || isImport;
 
     if (!isProfilePath) {
       return false;
@@ -378,6 +399,58 @@ export function createNostrProfileHttpHandler(
       return true;
     }
   };
+}
+
+async function handleGetPersonas(ctx: NostrProfileHttpContext, res: ServerResponse): Promise<true> {
+  const rawAccountIds = ctx.listAccountIds();
+  const accountIds = Array.from(
+    new Set(
+      rawAccountIds.map((entry) => `${entry ?? ""}`.trim()).filter((entry) => entry.length > 0),
+    ),
+  );
+
+  const personas = accountIds
+    .map((accountId) => {
+      const accountInfo = ctx.getAccountInfo(accountId);
+      if (!accountInfo?.pubkey?.trim()) {
+        return null;
+      }
+      const relays = Array.isArray(accountInfo.relays)
+        ? accountInfo.relays.filter((entry) => typeof entry === "string" && entry.trim().length > 0)
+        : [];
+      const profile = accountInfo.profile
+        ? {
+            ...(accountInfo.profile.name ? { name: accountInfo.profile.name } : {}),
+            ...(accountInfo.profile.displayName
+              ? { display_name: accountInfo.profile.displayName }
+              : {}),
+            ...(accountInfo.profile.picture ? { picture: accountInfo.profile.picture } : {}),
+            ...(accountInfo.profile.about ? { about: accountInfo.profile.about } : {}),
+          }
+        : undefined;
+      const personaName =
+        accountInfo.name?.trim() ||
+        profile?.display_name?.trim() ||
+        profile?.name?.trim() ||
+        undefined;
+
+      return {
+        accountId,
+        pubkey: accountInfo.pubkey.trim(),
+        relays,
+        configured: accountInfo.configured ?? true,
+        enabled: accountInfo.enabled ?? true,
+        ...(personaName ? { name: personaName } : {}),
+        ...(profile && Object.keys(profile).length > 0 ? { profile } : {}),
+      };
+    })
+    .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
+
+  sendJson(res, 200, {
+    ok: true,
+    personas,
+  });
+  return true;
 }
 
 // ============================================================================

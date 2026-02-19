@@ -1,4 +1,5 @@
 import type { ImageContent } from "@mariozechner/pi-ai";
+import type { CommandLaneWaitEvent } from "../agents/pi-embedded-runner/run/params.js";
 import type { TypingController } from "./reply/typing.js";
 
 export type BlockReplyContext = {
@@ -39,8 +40,19 @@ export type GetReplyOptions = {
   onAssistantMessageStart?: () => Promise<void> | void;
   onBlockReply?: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
   onToolResult?: (payload: ReplyPayload) => Promise<void> | void;
-  /** Called when a tool phase starts/updates, before summary payloads are emitted. */
-  onToolStart?: (payload: { name?: string; phase?: string }) => Promise<void> | void;
+  /** Called when a tool phase changes, before summary payloads are emitted. */
+  onToolStart?: (payload: {
+    name?: string;
+    phase?: string;
+    toolCallId?: string;
+    args?: Record<string, unknown>;
+    partialResult?: unknown;
+    result?: unknown;
+    meta?: Record<string, unknown>;
+    isError?: boolean;
+  }) => Promise<void> | void;
+  /** Called when agent run queue lanes exceed wait thresholds before execution starts. */
+  onCommandLaneWait?: (event: CommandLaneWaitEvent) => Promise<void> | void;
   /** Called when the actual model is selected (including after fallback).
    * Use this to get model/provider/thinkLevel for responsePrefix template interpolation. */
   onModelSelected?: (ctx: ModelSelectedContext) => void;

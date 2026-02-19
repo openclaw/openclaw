@@ -12,6 +12,8 @@ title: "Nostr"
 
 Nostr is a decentralized protocol for social networking. This channel enables OpenClaw to receive and respond to encrypted NIP-63 agent messages via NIP-44.
 
+OpenClaw can also interoperate with optional NIP-59 gift wrapping for metadata privacy when both sides support it, while keeping NIP-44 as the required inner payload encryption.
+
 ## Install (on demand)
 
 ### Onboarding (recommended)
@@ -153,6 +155,9 @@ What you send to relays is not equally private across all event types:
 - `kind:25802` (NIP-63 prompt) and `kind:25803/25804/25805` (NIP-63 responses):
   - **Encrypted with `nip44`** by default (`encryption=nip44` tag is required).
   - Only peers with the correct private keys can decrypt message content.
+- Optional privacy profile:
+  - Implementations may wrap encrypted NIP-63 events with **NIP-59 gift wrap** to hide additional metadata.
+  - `nip44` remains the required inner encryption scheme for protocol payloads.
 - `kind:4` (legacy NIP-04 DMs):
   - **Encrypted with NIP-04** and also not readable without the matching key pair.
 
@@ -222,6 +227,7 @@ Tips:
 | NIP-01 | Supported   | Basic event format + profile metadata                           |
 | NIP-04 | Unsupported | Replaced by NIP-44 + NIP-63 in this release                     |
 | NIP-44 | Supported   | Encrypted content and key exchange                              |
+| NIP-59 | Optional    | Gift-wrapped transport for metadata privacy                     |
 | NIP-63 | Supported   | AI agent prompts and responses (`kind:25802/25803/25804/25805`) |
 | NIP-17 | Planned     | Gift-wrapped DMs                                                |
 

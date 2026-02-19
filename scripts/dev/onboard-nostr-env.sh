@@ -33,7 +33,7 @@ if [[ -z "${OPENCLAW_ONBOARD_HOME}" ]]; then
 fi
 
 : "${OPENCLAW_NOSTR_PLUGIN_PATH:=extensions/nostr}"
-: "${OPENCLAW_NOSTR_RELAYS:=[\"wss://relay.damus.io\",\"wss://relay.primal.net\",\"wss://relay.wine\"]}"
+: "${OPENCLAW_NOSTR_RELAYS:=[\"wss://relay.damus.io\",\"wss://relay.primal.net\",\"wss://nostr.wine\"]}"
 
 generate_random_nostr_private_key() {
   local generated=""

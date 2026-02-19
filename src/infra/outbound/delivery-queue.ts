@@ -259,16 +259,18 @@ export async function recoverPendingDeliveries(opts: {
     }
 
     const backoff = computeBackoffMs(entry.retryCount + 1);
-    if (backoff > 0) {
-      if (now + backoff >= deadline) {
+    const elapsedSinceEnqueue = Math.max(0, now - entry.enqueuedAt);
+    const remainingBackoff = Math.max(0, backoff - elapsedSinceEnqueue);
+    if (remainingBackoff > 0) {
+      if (now + remainingBackoff >= deadline) {
         const deferred = pending.length - recovered - failed - skipped;
         opts.log.warn(
           `Recovery time budget exceeded — ${deferred} entries deferred to next restart`,
         );
         break;
       }
-      opts.log.info(`Waiting ${backoff}ms before retrying delivery ${entry.id}`);
-      await delayFn(backoff);
+      opts.log.info(`Waiting ${remainingBackoff}ms before retrying delivery ${entry.id}`);
+      await delayFn(remainingBackoff);
     }
 
     try {

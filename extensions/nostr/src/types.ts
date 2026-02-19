@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import type { NostrProfile } from "./config-schema.js";
 import { getPublicKeyFromPrivate } from "./nostr-bus.js";
 import { DEFAULT_RELAYS } from "./nostr-bus.js";
@@ -13,6 +14,11 @@ export interface NostrAccountConfig {
   profile?: NostrProfile;
 }
 
+interface NostrChannelConfig extends NostrAccountConfig {
+  defaultAccount?: string;
+  accounts?: Record<string, NostrAccountConfig>;
+}
+
 export interface ResolvedNostrAccount {
   accountId: string;
   name?: string;
@@ -25,22 +31,86 @@ export interface ResolvedNostrAccount {
   config: NostrAccountConfig;
 }
 
-const DEFAULT_ACCOUNT_ID = "default";
+function isValidNostrPrivateKey(privateKey: string): boolean {
+  try {
+    getPublicKeyFromPrivate(privateKey);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function getNostrChannelConfig(cfg: OpenClawConfig): NostrChannelConfig | undefined {
+  const channel = (cfg.channels as Record<string, unknown> | undefined)?.nostr;
+  if (!channel || typeof channel !== "object" || Array.isArray(channel)) {
+    return undefined;
+  }
+  return channel as NostrChannelConfig;
+}
+
+function resolveAccountConfig(
+  channelCfg: NostrChannelConfig | undefined,
+  accountId: string,
+): NostrAccountConfig | undefined {
+  const accounts = channelCfg?.accounts;
+  if (!accounts || typeof accounts !== "object") {
+    return undefined;
+  }
+  const direct = accounts[accountId];
+  if (direct) {
+    return direct;
+  }
+  const normalized = normalizeAccountId(accountId);
+  const matchKey = Object.keys(accounts).find((key) => normalizeAccountId(key) === normalized);
+  return matchKey ? accounts[matchKey] : undefined;
+}
+
+function mergeNostrAccountConfig(
+  channelCfg: NostrChannelConfig | undefined,
+  accountId: string,
+): NostrAccountConfig {
+  const { accounts: _ignored, defaultAccount: _ignored2, ...base } = channelCfg ?? {};
+  const account = resolveAccountConfig(channelCfg, accountId) ?? {};
+  return { ...base, ...account };
+}
+
+function sortAccountIds(ids: Set<string>): string[] {
+  const sorted = [...ids].sort((left, right) => left.localeCompare(right));
+  if (!sorted.includes(DEFAULT_ACCOUNT_ID)) {
+    return sorted;
+  }
+  return [DEFAULT_ACCOUNT_ID, ...sorted.filter((entry) => entry !== DEFAULT_ACCOUNT_ID)];
+}
 
 /**
  * List all configured Nostr account IDs
  */
 export function listNostrAccountIds(cfg: OpenClawConfig): string[] {
-  const nostrCfg = (cfg.channels as Record<string, unknown> | undefined)?.nostr as
-    | NostrAccountConfig
-    | undefined;
+  const channelCfg = getNostrChannelConfig(cfg);
+  const ids = new Set<string>();
 
-  // If privateKey is configured at top level, we have a default account
-  if (nostrCfg?.privateKey) {
-    return [DEFAULT_ACCOUNT_ID];
+  if (channelCfg?.privateKey && isValidNostrPrivateKey(channelCfg.privateKey)) {
+    ids.add(DEFAULT_ACCOUNT_ID);
   }
 
-  return [];
+  const configuredAccounts = channelCfg?.accounts;
+  if (!configuredAccounts || typeof configuredAccounts !== "object") {
+    return sortAccountIds(ids);
+  }
+
+  for (const key of Object.keys(configuredAccounts)) {
+    if (!key.trim()) {
+      continue;
+    }
+    const accountId = normalizeAccountId(key);
+    const merged = mergeNostrAccountConfig(channelCfg, accountId);
+    if (!merged.privateKey || !isValidNostrPrivateKey(merged.privateKey)) {
+      continue;
+    }
+    ids.add(accountId);
+  }
+
+  return sortAccountIds(ids);
 }
 
 /**
@@ -48,6 +118,14 @@ export function listNostrAccountIds(cfg: OpenClawConfig): string[] {
  */
 export function resolveDefaultNostrAccountId(cfg: OpenClawConfig): string {
   const ids = listNostrAccountIds(cfg);
+  const channelCfg = getNostrChannelConfig(cfg);
+  const configuredDefault = channelCfg?.defaultAccount?.trim();
+  if (configuredDefault) {
+    const normalized = normalizeAccountId(configuredDefault);
+    if (ids.includes(normalized)) {
+      return normalized;
+    }
+  }
   if (ids.includes(DEFAULT_ACCOUNT_ID)) {
     return DEFAULT_ACCOUNT_ID;
   }
@@ -61,14 +139,14 @@ export function resolveNostrAccount(opts: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): ResolvedNostrAccount {
-  const accountId = opts.accountId ?? DEFAULT_ACCOUNT_ID;
-  const nostrCfg = (opts.cfg.channels as Record<string, unknown> | undefined)?.nostr as
-    | NostrAccountConfig
-    | undefined;
+  const accountId = normalizeAccountId(opts.accountId);
+  const channelCfg = getNostrChannelConfig(opts.cfg);
+  const mergedCfg = mergeNostrAccountConfig(channelCfg, accountId);
 
-  const baseEnabled = nostrCfg?.enabled !== false;
-  const privateKey = nostrCfg?.privateKey ?? "";
-  const configured = Boolean(privateKey.trim());
+  const baseEnabled = channelCfg?.enabled !== false;
+  const accountEnabled = mergedCfg.enabled !== false;
+  const privateKey = mergedCfg.privateKey ?? "";
+  const configured = privateKey.trim() !== "" && isValidNostrPrivateKey(privateKey);
 
   let publicKey = "";
   if (configured) {
@@ -81,21 +159,21 @@ export function resolveNostrAccount(opts: {
 
   return {
     accountId,
-    name: nostrCfg?.name?.trim() || undefined,
-    enabled: baseEnabled,
+    name: mergedCfg.name?.trim() || undefined,
+    enabled: baseEnabled && accountEnabled,
     configured,
     privateKey,
     publicKey,
-    relays: nostrCfg?.relays ?? DEFAULT_RELAYS,
-    profile: nostrCfg?.profile,
+    relays: mergedCfg.relays ?? DEFAULT_RELAYS,
+    profile: mergedCfg.profile,
     config: {
-      enabled: nostrCfg?.enabled,
-      name: nostrCfg?.name,
-      privateKey: nostrCfg?.privateKey,
-      relays: nostrCfg?.relays,
-      dmPolicy: nostrCfg?.dmPolicy,
-      allowFrom: nostrCfg?.allowFrom,
-      profile: nostrCfg?.profile,
+      enabled: mergedCfg.enabled,
+      name: mergedCfg.name,
+      privateKey: mergedCfg.privateKey,
+      relays: mergedCfg.relays,
+      dmPolicy: mergedCfg.dmPolicy,
+      allowFrom: mergedCfg.allowFrom,
+      profile: mergedCfg.profile,
     },
   };
 }

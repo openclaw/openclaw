@@ -118,6 +118,8 @@ export type ChannelAccountSnapshot = {
   lastStopAt?: number | null;
   lastInboundAt?: number | null;
   lastOutboundAt?: number | null;
+  activeRuns?: number | null;
+  pendingCancels?: number | null;
   mode?: string;
   dmPolicy?: string;
   allowFrom?: string[];

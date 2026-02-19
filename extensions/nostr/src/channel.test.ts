@@ -57,6 +57,23 @@ describe("nostrPlugin", () => {
       const ids = nostrPlugin.config.listAccountIds(cfg);
       expect(ids).toContain("default");
     });
+
+    it("listAccountIds includes configured personas from channels.nostr.accounts", () => {
+      const cfg = {
+        channels: {
+          nostr: {
+            privateKey: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            accounts: {
+              helper: {
+                privateKey: "1111111111111111111111111111111111111111111111111111111111111111",
+              },
+            },
+          },
+        },
+      };
+      const ids = nostrPlugin.config.listAccountIds(cfg);
+      expect(ids).toEqual(["default", "helper"]);
+    });
   });
 
   describe("onboarding", () => {
@@ -258,7 +275,13 @@ describe("nostrPlugin", () => {
 
     it("falls back to generic tool result when no start metadata exists", () => {
       const tracker = createToolCallTelemetryTracker("c".repeat(64));
-      expect(tracker.consumeResult(3_000)).toEqual({ name: "tool" });
+      expect(tracker.consumeResult(3_000)).toEqual(
+        expect.objectContaining({
+          name: "tool",
+          durationMs: 0,
+          orphaned: true,
+        }),
+      );
       expect(tracker.pendingCount()).toBe(0);
     });
 

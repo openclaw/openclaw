@@ -80,6 +80,21 @@ function hasProfileData(profile: NostrProfile | undefined | null): boolean {
   );
 }
 
+function copyToClipboard(text: string): void {
+  void navigator.clipboard?.writeText?.(text).catch(() => {
+    const fallback = document.createElement("input");
+    fallback.value = text;
+    fallback.setAttribute("readonly", "");
+    fallback.style.position = "absolute";
+    fallback.style.left = "-10000px";
+    fallback.style.top = "-10000px";
+    document.body.appendChild(fallback);
+    fallback.select();
+    document.execCommand("copy");
+    document.body.removeChild(fallback);
+  });
+}
+
 function renderChecklistItem(params: { label: string; done: boolean }) {
   return html`
     <div style="display: flex; gap: 8px; align-items: center;">
@@ -120,7 +135,7 @@ function renderNostrSetupCard(params: {
   }
 
   const configDraft = readNostrConfig(props.configForm);
-  const privateKeyValue = hasConfiguredKey && !configDraft.privateKey ? "" : configDraft.privateKey;
+  const privateKeyValue = configDraft.privateKey;
   const canSave =
     props.connected && !props.configSaving && !props.configSchemaLoading && props.configFormDirty;
 
@@ -156,17 +171,31 @@ function renderNostrSetupCard(params: {
       <div style="display: grid; gap: 12px;">
         <label style="display: grid; gap: 6px;">
           <span style="font-size: 13px; font-weight: 500;">Private key (nsec or hex)</span>
-          <input
-            type="password"
-            autocomplete="off"
-            inputmode="text"
-            placeholder=${hasConfiguredKey ? "Configured — paste to replace" : "nsec1..."}
-            .value=${privateKeyValue}
-            @input=${(e: InputEvent) => {
-              const target = e.target as HTMLInputElement;
-              props.onConfigPatch(["channels", "nostr", "privateKey"], target.value.trim());
-            }}
-          />
+          <div style="display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: start;">
+            <input
+              type="password"
+              autocomplete="off"
+              inputmode="text"
+              placeholder=${hasConfiguredKey ? "Configured — paste to replace" : "nsec1..."}
+              .value=${privateKeyValue}
+              @input=${(e: InputEvent) => {
+                const target = e.target as HTMLInputElement;
+                props.onConfigPatch(["channels", "nostr", "privateKey"], target.value.trim());
+              }}
+            />
+            <button
+              type="button"
+              class="btn btn-sm"
+              title="Copy configured secret key"
+              @click=${() => copyToClipboard(privateKeyValue)}
+              ?disabled=${!privateKeyValue}
+            >
+              Copy
+            </button>
+          </div>
+          <div style="font-size: 12px; color: var(--text-muted);">
+            Secret key stays hidden; paste it here to replace, or use the generated key path output.
+          </div>
           ${
             configDraft.dmPolicy
               ? html`<div style="font-size: 12px; color: var(--text-muted);">
@@ -228,7 +257,16 @@ function renderNostrSetupCard(params: {
         publicKey
           ? html`
           <div style="margin-top: 8px; font-size: 12px;">
-            Public key: <span class="monospace">${publicKey}</span>
+            <span>Public key:</span>
+            <span class="monospace">${publicKey}</span>
+            <button
+              class="btn btn-sm"
+              type="button"
+              style="margin-left: 8px;"
+              @click=${() => copyToClipboard(publicKey)}
+            >
+              Copy
+            </button>
           </div>
         `
           : nothing
@@ -445,6 +483,20 @@ export function renderNostrCard(params: {
                 <span class="monospace" title="${summaryPublicKey ?? ""}"
                   >${truncatePubkey(summaryPublicKey)}</span
                 >
+                ${
+                  summaryPublicKey
+                    ? html`
+                      <button
+                        class="btn btn-sm"
+                        type="button"
+                        title="Copy public key"
+                        @click=${() => copyToClipboard(summaryPublicKey)}
+                      >
+                        Copy
+                      </button>
+                    `
+                    : nothing
+                }
               </div>
               <div>
                 <span class="label">Last start</span>

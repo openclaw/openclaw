@@ -22,6 +22,119 @@ afterEach(() => {
 });
 
 describe("nostrPlugin gateway.startAccount", () => {
+  it("publishes configured profile metadata on startup", async () => {
+    const publishProfile = vi.fn(async () => ({
+      eventId: "profile-event",
+      createdAt: 1_700_000_000,
+      successes: ["ws://localhost:7777"],
+      failures: [],
+    }));
+    const publishAiInfo = vi.fn(async () => ({
+      eventId: "ai-info-event",
+      createdAt: 1_700_000_000,
+      successes: ["ws://localhost:7777"],
+      failures: [],
+    }));
+
+    vi.mocked(startNostrBus).mockImplementation(async () => {
+      return {
+        close: vi.fn(),
+        publicKey: "bot-pubkey",
+        sendDm: vi.fn(),
+        getMetrics: vi.fn(() => ({})),
+        publishProfile,
+        publishAiInfo,
+        getProfileState: vi.fn(),
+      } as never;
+    });
+
+    const runtime = {
+      channel: {
+        routing: {
+          resolveAgentRoute: vi.fn(() => ({
+            agentId: "default-agent",
+            accountId: "default",
+            sessionKey: "session:user",
+            mainSessionKey: "session",
+          })),
+        },
+        session: {
+          resolveStorePath: vi.fn(() => "/tmp/nostr-session-store.json"),
+          readSessionUpdatedAt: vi.fn(() => 1_700_000_500_000),
+          recordInboundSession: vi.fn(async () => undefined),
+        },
+        reply: {
+          resolveEnvelopeFormatOptions: vi.fn(() => ({ template: "channel+name+time" })),
+          formatAgentEnvelope: vi.fn(),
+          finalizeInboundContext: vi.fn((ctx) => ctx),
+          dispatchReplyWithBufferedBlockDispatcher: vi.fn(async () => undefined),
+        },
+        text: {
+          resolveMarkdownTableMode: vi.fn(() => "code"),
+          convertMarkdownTables: vi.fn((text: string) => text),
+        },
+        pairing: {
+          readAllowFromStore: vi.fn(async () => []),
+          upsertPairingRequest: vi.fn(),
+          buildPairingReply: vi.fn(),
+        },
+        commands: {
+          shouldComputeCommandAuthorized: vi.fn(() => false),
+          resolveCommandAuthorizedFromAuthorizers: vi.fn(() => true),
+        },
+      },
+      config: {
+        loadConfig: vi.fn(() => ({})),
+      },
+      logging: {
+        shouldLogVerbose: () => false,
+      },
+    } as unknown as PluginRuntime;
+
+    setNostrRuntime(runtime);
+
+    const startAccount = nostrPlugin.gateway?.startAccount;
+    if (!startAccount) {
+      throw new Error("nostr plugin startAccount is not defined");
+    }
+
+    const profile = {
+      name: "OpenClaw",
+      displayName: "OpenClaw Bot",
+      picture: "https://example.com/avatar.png",
+      about: "Nostr runtime profile",
+    };
+
+    const abort = new AbortController();
+    abort.abort();
+    await startAccount({
+      account: {
+        accountId: "default",
+        configured: true,
+        privateKey: "a".repeat(64),
+        relays: ["ws://localhost:7777"],
+        publicKey: "b".repeat(64),
+        enabled: true,
+        name: "default",
+        config: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+        },
+        lastError: null,
+        profile,
+      },
+      cfg: {},
+      runtime,
+      abortSignal: abort.signal,
+      log: { info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      setStatus: vi.fn(),
+    } as never);
+
+    expect(publishProfile).toHaveBeenCalledTimes(1);
+    expect(publishProfile).toHaveBeenCalledWith(profile);
+    expect(publishAiInfo).toHaveBeenCalledTimes(1);
+  });
+
   it("normalizes inbound created_at to milliseconds in reply context", async () => {
     const formatAgentEnvelope = vi.fn();
     const finalizeInboundContext = vi.fn((ctx) => ctx);
@@ -341,8 +454,11 @@ describe("nostrPlugin gateway.startAccount", () => {
     expect(replySpy).toHaveBeenCalledWith(
       expect.objectContaining({
         ver: 1,
-        name: "tool",
+        name: "web_search",
         phase: "result",
+        call_id: expect.any(String),
+        duration_ms: expect.any(Number),
+        success: true,
         output: expect.objectContaining({
           text: "thinking",
         }),

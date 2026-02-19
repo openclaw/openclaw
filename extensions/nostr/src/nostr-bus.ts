@@ -1161,10 +1161,11 @@ function normalizeNip63Payload(
   } else if (kind === NIP63_RESPONSE_KIND_TOOL) {
     ensureStringField(payload, "name", kind);
     ensureStringField(payload, "phase", kind);
-    const phase = String(payload.phase).trim();
-    if (phase !== "start" && phase !== "result") {
+    const phase = String(payload.phase).trim().toLowerCase();
+    if (phase !== "start" && phase !== "update" && phase !== "result") {
       throw new Error(`Invalid NIP-63 tool phase: ${phase}`);
     }
+    payload.phase = phase;
   } else if (kind === NIP63_RESPONSE_KIND_ERROR) {
     ensureStringField(payload, "code", kind);
     ensureStringField(payload, "message", kind);

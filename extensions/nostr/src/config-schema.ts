@@ -53,34 +53,65 @@ export const NostrProfileSchema = z.object({
 
 export type NostrProfile = z.infer<typeof NostrProfileSchema>;
 
+const NostrDmPolicySchema = z.enum(["pairing", "allowlist", "open", "disabled"]);
+
+function validateOpenPolicyAllowFrom(
+  cfg: { dmPolicy?: z.infer<typeof NostrDmPolicySchema>; allowFrom?: Array<string | number> },
+  ctx: z.RefinementCtx,
+) {
+  if (cfg.dmPolicy !== "open") {
+    return;
+  }
+
+  const hasWildcard = (cfg.allowFrom ?? []).some((entry) => String(entry).trim() === "*");
+  if (hasWildcard) {
+    return;
+  }
+
+  ctx.addIssue({
+    code: z.ZodIssueCode.custom,
+    path: ["allowFrom"],
+    message: 'channels.nostr.dmPolicy="open" requires channels.nostr.allowFrom to include "*".',
+  });
+}
+
+const NostrAccountConfigSchema = z
+  .object({
+    /** Account name (optional display name) */
+    name: z.string().optional(),
+
+    /** Whether this channel/account is enabled */
+    enabled: z.boolean().optional(),
+
+    /** Markdown formatting overrides (tables). */
+    markdown: MarkdownConfigSchema,
+
+    /** Private key in hex or nsec bech32 format */
+    privateKey: z.string().optional(),
+
+    /** WebSocket relay URLs to connect to */
+    relays: z.array(z.string()).optional(),
+
+    /** Inbound message access policy: pairing, allowlist, open, or disabled */
+    dmPolicy: NostrDmPolicySchema.optional(),
+
+    /** Allowed sender pubkeys (npub or hex format) */
+    allowFrom: z.array(allowFromEntry).optional(),
+
+    /** Profile metadata (NIP-01 kind:0 content) */
+    profile: NostrProfileSchema.optional(),
+  })
+  .superRefine(validateOpenPolicyAllowFrom);
+
 /**
  * Zod schema for channels.nostr.* configuration
  */
-export const NostrConfigSchema = z.object({
-  /** Account name (optional display name) */
-  name: z.string().optional(),
-
-  /** Whether this channel is enabled */
-  enabled: z.boolean().optional(),
-
-  /** Markdown formatting overrides (tables). */
-  markdown: MarkdownConfigSchema,
-
-  /** Private key in hex or nsec bech32 format */
-  privateKey: z.string().optional(),
-
-  /** WebSocket relay URLs to connect to */
-  relays: z.array(z.string()).optional(),
-
-  /** Inbound message access policy: pairing, allowlist, open, or disabled */
-  dmPolicy: z.enum(["pairing", "allowlist", "open", "disabled"]).optional(),
-
-  /** Allowed sender pubkeys (npub or hex format) */
-  allowFrom: z.array(allowFromEntry).optional(),
-
-  /** Profile metadata (NIP-01 kind:0 content) */
-  profile: NostrProfileSchema.optional(),
-});
+export const NostrConfigSchema = NostrAccountConfigSchema.extend({
+  /** Explicit default account id for runtime resolution */
+  defaultAccount: z.string().optional(),
+  /** Optional multi-persona account map */
+  accounts: z.record(z.string(), NostrAccountConfigSchema).optional(),
+}).superRefine(validateOpenPolicyAllowFrom);
 
 export type NostrConfig = z.infer<typeof NostrConfigSchema>;
 

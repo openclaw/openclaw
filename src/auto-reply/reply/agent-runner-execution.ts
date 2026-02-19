@@ -337,15 +337,42 @@ export async function runAgentTurnWithFallback(params: {
                   }
                 : undefined,
             onReasoningEnd: params.opts?.onReasoningEnd,
+            onCommandLaneWait: params.opts?.onCommandLaneWait,
             onAgentEvent: async (evt) => {
               // Trigger typing when tools start executing.
               // Must await to ensure typing indicator starts before tool summaries are emitted.
               if (evt.stream === "tool") {
-                const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
-                const name = typeof evt.data.name === "string" ? evt.data.name : undefined;
+                const data =
+                  evt.data && typeof evt.data === "object" && !Array.isArray(evt.data)
+                    ? evt.data
+                    : {};
+                const phase = typeof data.phase === "string" ? data.phase : "";
+                const name = typeof data.name === "string" ? data.name : undefined;
+                const toolCallId =
+                  typeof data.toolCallId === "string" ? data.toolCallId : undefined;
+                const args =
+                  data.args && typeof data.args === "object" && !Array.isArray(data.args)
+                    ? (data.args as Record<string, unknown>)
+                    : undefined;
+                const meta =
+                  data.meta && typeof data.meta === "object" && !Array.isArray(data.meta)
+                    ? (data.meta as Record<string, unknown>)
+                    : undefined;
+                const isError = data.isError === true;
                 if (phase === "start" || phase === "update") {
                   await params.typingSignals.signalToolStart();
-                  await params.opts?.onToolStart?.({ name, phase });
+                }
+                if (phase === "start" || phase === "update" || phase === "result") {
+                  await params.opts?.onToolStart?.({
+                    name,
+                    phase,
+                    toolCallId,
+                    args,
+                    partialResult: data.partialResult,
+                    result: data.result,
+                    meta,
+                    isError,
+                  });
                 }
               }
               // Track auto-compaction completion
