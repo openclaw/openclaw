@@ -213,8 +213,7 @@ async function validateScriptFileForShellBleed(params: {
 
 export function createExecTool(
   defaults?: ExecToolDefaults,
-  // oxlint-disable-next-line typescript/no-explicit-any
-): AgentTool<any, ExecToolDetails> {
+): AgentTool<typeof execSchema, ExecToolDetails> {
   const defaultBackgroundMs = clampWithDefault(
     defaults?.backgroundMs ?? readEnvInt("PI_BASH_YIELD_MS"),
     10_000,

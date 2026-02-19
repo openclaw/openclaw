@@ -118,8 +118,7 @@ function resetPollRetrySuggestion(sessionId: string): void {
 
 export function createProcessTool(
   defaults?: ProcessToolDefaults,
-  // oxlint-disable-next-line typescript/no-explicit-any
-): AgentTool<any, unknown> {
+): AgentTool<typeof processSchema, unknown> {
   if (defaults?.cleanupMs !== undefined) {
     setJobTtlMs(defaults.cleanupMs);
   }
