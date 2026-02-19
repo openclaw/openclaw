@@ -5,24 +5,23 @@
  */
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { SandboxToolPolicy } from "../agents/sandbox/types.js";
-import type { OpenClawConfig, ConfigFileSnapshot } from "../config/config.js";
-import type { AgentToolsConfig } from "../config/types.tools.js";
-import type { SkillScanFinding } from "./skill-scanner.js";
-import type { ExecFn } from "./windows-acl.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { isToolAllowedByPolicies } from "../agents/pi-tools.policy.js";
 import {
   resolveSandboxConfigForAgent,
   resolveSandboxToolPolicyForAgent,
 } from "../agents/sandbox.js";
+import type { SandboxToolPolicy } from "../agents/sandbox/types.js";
 import { loadWorkspaceSkillEntries } from "../agents/skills.js";
 import { resolveToolProfilePolicy } from "../agents/tool-policy.js";
+import { listAgentWorkspaceDirs } from "../agents/workspace-dirs.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { resolveNativeSkillsEnabled } from "../config/commands.js";
+import type { OpenClawConfig, ConfigFileSnapshot } from "../config/config.js";
 import { createConfigIO } from "../config/config.js";
 import { collectIncludePathsRecursive } from "../config/includes-scan.js";
 import { resolveOAuthDir } from "../config/paths.js";
+import type { AgentToolsConfig } from "../config/types.tools.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
@@ -31,8 +30,11 @@ import {
   inspectPathPermissions,
   safeStat,
 } from "./audit-fs.js";
+import { pickSandboxToolPolicy } from "./audit-tool-policy.js";
 import { extensionUsesSkippedScannerPath, isPathInside } from "./scan-paths.js";
+import type { SkillScanFinding } from "./skill-scanner.js";
 import * as skillScanner from "./skill-scanner.js";
+import type { ExecFn } from "./windows-acl.js";
 
 export type SecurityAuditFinding = {
   checkId: string;
@@ -80,20 +82,6 @@ async function readPluginManifestExtensions(pluginPath: string): Promise<string[
   return extensions.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean);
 }
 
-function listWorkspaceDirs(cfg: OpenClawConfig): string[] {
-  const dirs = new Set<string>();
-  const list = cfg.agents?.list;
-  if (Array.isArray(list)) {
-    for (const entry of list) {
-      if (entry && typeof entry === "object" && typeof entry.id === "string") {
-        dirs.add(resolveAgentWorkspaceDir(cfg, entry.id));
-      }
-    }
-  }
-  dirs.add(resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)));
-  return [...dirs];
-}
-
 function formatCodeSafetyDetails(findings: SkillScanFinding[], rootDir: string): string {
   return findings
     .map((finding) => {
@@ -108,34 +96,24 @@ function formatCodeSafetyDetails(findings: SkillScanFinding[], rootDir: string):
     .join("\n");
 }
 
-function unionAllow(base?: string[], extra?: string[]): string[] | undefined {
-  if (!Array.isArray(extra) || extra.length === 0) {
-    return base;
+async function listInstalledPluginDirs(params: {
+  stateDir: string;
+  onReadError?: (error: unknown) => void;
+}): Promise<{ extensionsDir: string; pluginDirs: string[] }> {
+  const extensionsDir = path.join(params.stateDir, "extensions");
+  const st = await safeStat(extensionsDir);
+  if (!st.ok || !st.isDir) {
+    return { extensionsDir, pluginDirs: [] };
   }
-  if (!Array.isArray(base) || base.length === 0) {
-    return Array.from(new Set(["*", ...extra]));
-  }
-  return Array.from(new Set([...base, ...extra]));
-}
-
-function pickToolPolicy(config?: {
-  allow?: string[];
-  alsoAllow?: string[];
-  deny?: string[];
-}): SandboxToolPolicy | undefined {
-  if (!config) {
-    return undefined;
-  }
-  const allow = Array.isArray(config.allow)
-    ? unionAllow(config.allow, config.alsoAllow)
-    : Array.isArray(config.alsoAllow) && config.alsoAllow.length > 0
-      ? unionAllow(undefined, config.alsoAllow)
-      : undefined;
-  const deny = Array.isArray(config.deny) ? config.deny : undefined;
-  if (!allow && !deny) {
-    return undefined;
-  }
-  return { allow, deny };
+  const entries = await fs.readdir(extensionsDir, { withFileTypes: true }).catch((err) => {
+    params.onReadError?.(err);
+    return [];
+  });
+  const pluginDirs = entries
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .filter(Boolean);
+  return { extensionsDir, pluginDirs };
 }
 
 function resolveToolPolicies(params: {
@@ -148,8 +126,8 @@ function resolveToolPolicies(params: {
   const profilePolicy = resolveToolProfilePolicy(profile);
   const policies: Array<SandboxToolPolicy | undefined> = [
     profilePolicy,
-    pickToolPolicy(params.cfg.tools ?? undefined),
-    pickToolPolicy(params.agentTools),
+    pickSandboxToolPolicy(params.cfg.tools ?? undefined),
+    pickSandboxToolPolicy(params.agentTools),
   ];
   if (params.sandboxMode === "all") {
     policies.push(resolveSandboxToolPolicyForAgent(params.cfg, params.agentId ?? undefined));
@@ -246,17 +224,9 @@ export async function collectPluginsTrustFindings(params: {
   stateDir: string;
 }): Promise<SecurityAuditFinding[]> {
   const findings: SecurityAuditFinding[] = [];
-  const extensionsDir = path.join(params.stateDir, "extensions");
-  const st = await safeStat(extensionsDir);
-  if (!st.ok || !st.isDir) {
-    return findings;
-  }
-
-  const entries = await fs.readdir(extensionsDir, { withFileTypes: true }).catch(() => []);
-  const pluginDirs = entries
-    .filter((e) => e.isDirectory())
-    .map((e) => e.name)
-    .filter(Boolean);
+  const { extensionsDir, pluginDirs } = await listInstalledPluginDirs({
+    stateDir: params.stateDir,
+  });
   if (pluginDirs.length === 0) {
     return findings;
   }
@@ -661,24 +631,19 @@ export async function collectPluginsCodeSafetyFindings(params: {
   stateDir: string;
 }): Promise<SecurityAuditFinding[]> {
   const findings: SecurityAuditFinding[] = [];
-  const extensionsDir = path.join(params.stateDir, "extensions");
-  const st = await safeStat(extensionsDir);
-  if (!st.ok || !st.isDir) {
-    return findings;
-  }
-
-  const entries = await fs.readdir(extensionsDir, { withFileTypes: true }).catch((err) => {
-    findings.push({
-      checkId: "plugins.code_safety.scan_failed",
-      severity: "warn",
-      title: "Plugin extensions directory scan failed",
-      detail: `Static code scan could not list extensions directory: ${String(err)}`,
-      remediation:
-        "Check file permissions and plugin layout, then rerun `openclaw security audit --deep`.",
-    });
-    return [];
+  const { extensionsDir, pluginDirs } = await listInstalledPluginDirs({
+    stateDir: params.stateDir,
+    onReadError: (err) => {
+      findings.push({
+        checkId: "plugins.code_safety.scan_failed",
+        severity: "warn",
+        title: "Plugin extensions directory scan failed",
+        detail: `Static code scan could not list extensions directory: ${String(err)}`,
+        remediation:
+          "Check file permissions and plugin layout, then rerun `openclaw security audit --deep`.",
+      });
+    },
   });
-  const pluginDirs = entries.filter((e) => e.isDirectory()).map((e) => e.name);
 
   for (const pluginName of pluginDirs) {
     const pluginPath = path.join(extensionsDir, pluginName);
@@ -770,7 +735,7 @@ export async function collectInstalledSkillsCodeSafetyFindings(params: {
   const findings: SecurityAuditFinding[] = [];
   const pluginExtensionsDir = path.join(params.stateDir, "extensions");
   const scannedSkillDirs = new Set<string>();
-  const workspaceDirs = listWorkspaceDirs(params.cfg);
+  const workspaceDirs = listAgentWorkspaceDirs(params.cfg);
 
   for (const workspaceDir of workspaceDirs) {
     const entries = loadWorkspaceSkillEntries(workspaceDir, { config: params.cfg });

@@ -1,15 +1,13 @@
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
-import type { HookEligibilityContext, HookEntry, HookInstallSpec } from "./types.js";
-import { evaluateRequirementsFromMetadata } from "../shared/requirements.js";
+import { evaluateEntryMetadataRequirementsForCurrentPlatform } from "../shared/entry-status.js";
+import type { RequirementConfigCheck, Requirements } from "../shared/requirements.js";
 import { CONFIG_DIR } from "../utils.js";
 import { hasBinary, isConfigPathTruthy, resolveHookConfig } from "./config.js";
+import type { HookEligibilityContext, HookEntry, HookInstallSpec } from "./types.js";
 import { loadWorkspaceHookEntries } from "./workspace.js";
 
-export type HookStatusConfigCheck = {
-  path: string;
-  satisfied: boolean;
-};
+export type HookStatusConfigCheck = RequirementConfigCheck;
 
 export type HookInstallOption = {
   id: string;
@@ -34,20 +32,8 @@ export type HookStatusEntry = {
   disabled: boolean;
   eligible: boolean;
   managedByPlugin: boolean;
-  requirements: {
-    bins: string[];
-    anyBins: string[];
-    env: string[];
-    config: string[];
-    os: string[];
-  };
-  missing: {
-    bins: string[];
-    anyBins: string[];
-    env: string[];
-    config: string[];
-    os: string[];
-  };
+  requirements: Requirements;
+  missing: Requirements;
   configChecks: HookStatusConfigCheck[];
   install: HookInstallOption[];
 };
@@ -100,31 +86,22 @@ function buildHookStatus(
   const managedByPlugin = entry.hook.source === "openclaw-plugin";
   const disabled = managedByPlugin ? false : hookConfig?.enabled === false;
   const always = entry.metadata?.always === true;
-  const emoji = entry.metadata?.emoji ?? entry.frontmatter.emoji;
-  const homepageRaw =
-    entry.metadata?.homepage ??
-    entry.frontmatter.homepage ??
-    entry.frontmatter.website ??
-    entry.frontmatter.url;
-  const homepage = homepageRaw?.trim() ? homepageRaw.trim() : undefined;
   const events = entry.metadata?.events ?? [];
+  const isEnvSatisfied = (envName: string) =>
+    Boolean(process.env[envName] || hookConfig?.env?.[envName]);
+  const isConfigSatisfied = (pathStr: string) => isConfigPathTruthy(config, pathStr);
 
-  const {
-    required,
-    missing,
-    eligible: requirementsSatisfied,
-    configChecks,
-  } = evaluateRequirementsFromMetadata({
+  const requirementStatus = evaluateEntryMetadataRequirementsForCurrentPlatform({
     always,
     metadata: entry.metadata,
+    frontmatter: entry.frontmatter,
     hasLocalBin: hasBinary,
-    hasRemoteBin: eligibility?.remote?.hasBin,
-    hasRemoteAnyBin: eligibility?.remote?.hasAnyBin,
-    localPlatform: process.platform,
-    remotePlatforms: eligibility?.remote?.platforms,
-    isEnvSatisfied: (envName) => Boolean(process.env[envName] || hookConfig?.env?.[envName]),
-    isConfigSatisfied: (pathStr) => isConfigPathTruthy(config, pathStr),
+    remote: eligibility?.remote,
+    isEnvSatisfied,
+    isConfigSatisfied,
   });
+  const { emoji, homepage, required, missing, requirementsSatisfied, configChecks } =
+    requirementStatus;
 
   const eligible = !disabled && requirementsSatisfied;
 

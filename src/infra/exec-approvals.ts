@@ -1,9 +1,9 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
-import net from "node:net";
-import os from "node:os";
 import path from "node:path";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
+import { expandHomePrefix } from "./home-dir.js";
+import { requestJsonlSocket } from "./jsonl-socket.js";
 export * from "./exec-approvals-analysis.js";
 export * from "./exec-approvals-allowlist.js";
 
@@ -98,25 +98,12 @@ function hashExecApprovalsRaw(raw: string | null): string {
     .digest("hex");
 }
 
-function expandHome(value: string): string {
-  if (!value) {
-    return value;
-  }
-  if (value === "~") {
-    return os.homedir();
-  }
-  if (value.startsWith("~/")) {
-    return path.join(os.homedir(), value.slice(2));
-  }
-  return value;
-}
-
 export function resolveExecApprovalsPath(): string {
-  return expandHome(DEFAULT_FILE);
+  return expandHomePrefix(DEFAULT_FILE);
 }
 
 export function resolveExecApprovalsSocketPath(): string {
-  return expandHome(DEFAULT_SOCKET);
+  return expandHomePrefix(DEFAULT_SOCKET);
 }
 
 function normalizeAllowlistPattern(value: string | undefined): string | null {
@@ -241,6 +228,24 @@ export function normalizeExecApprovals(file: ExecApprovalsFile): ExecApprovalsFi
   return normalized;
 }
 
+export function mergeExecApprovalsSocketDefaults(params: {
+  normalized: ExecApprovalsFile;
+  current?: ExecApprovalsFile;
+}): ExecApprovalsFile {
+  const currentSocketPath = params.current?.socket?.path?.trim();
+  const currentToken = params.current?.socket?.token?.trim();
+  const socketPath =
+    params.normalized.socket?.path?.trim() ?? currentSocketPath ?? resolveExecApprovalsSocketPath();
+  const token = params.normalized.socket?.token?.trim() ?? currentToken ?? "";
+  return {
+    ...params.normalized,
+    socket: {
+      path: socketPath,
+      token,
+    },
+  };
+}
+
 function generateToken(): string {
   return crypto.randomBytes(24).toString("base64url");
 }
@@ -352,7 +357,7 @@ export function resolveExecApprovals(
     agentId,
     overrides,
     path: resolveExecApprovalsPath(),
-    socketPath: expandHome(file.socket?.path ?? resolveExecApprovalsSocketPath()),
+    socketPath: expandHomePrefix(file.socket?.path ?? resolveExecApprovalsSocketPath()),
     token: file.socket?.token ?? "",
   });
 }
@@ -403,7 +408,7 @@ export function resolveExecApprovalsFromFile(params: {
   ];
   return {
     path: params.path ?? resolveExecApprovalsPath(),
-    socketPath: expandHome(
+    socketPath: expandHomePrefix(
       params.socketPath ?? file.socket?.path ?? resolveExecApprovalsSocketPath(),
     ),
     token: params.token ?? file.socket?.token ?? "",
@@ -500,56 +505,23 @@ export async function requestExecApprovalViaSocket(params: {
     return null;
   }
   const timeoutMs = params.timeoutMs ?? 15_000;
-  return await new Promise((resolve) => {
-    const client = new net.Socket();
-    let settled = false;
-    let buffer = "";
-    const finish = (value: ExecApprovalDecision | null) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      try {
-        client.destroy();
-      } catch {
-        // ignore
-      }
-      resolve(value);
-    };
+  const payload = JSON.stringify({
+    type: "request",
+    token,
+    id: crypto.randomUUID(),
+    request,
+  });
 
-    const timer = setTimeout(() => finish(null), timeoutMs);
-    const payload = JSON.stringify({
-      type: "request",
-      token,
-      id: crypto.randomUUID(),
-      request,
-    });
-
-    client.on("error", () => finish(null));
-    client.connect(socketPath, () => {
-      client.write(`${payload}\n`);
-    });
-    client.on("data", (data) => {
-      buffer += data.toString("utf8");
-      let idx = buffer.indexOf("\n");
-      while (idx !== -1) {
-        const line = buffer.slice(0, idx).trim();
-        buffer = buffer.slice(idx + 1);
-        idx = buffer.indexOf("\n");
-        if (!line) {
-          continue;
-        }
-        try {
-          const msg = JSON.parse(line) as { type?: string; decision?: ExecApprovalDecision };
-          if (msg?.type === "decision" && msg.decision) {
-            clearTimeout(timer);
-            finish(msg.decision);
-            return;
-          }
-        } catch {
-          // ignore
-        }
+  return await requestJsonlSocket({
+    socketPath,
+    payload,
+    timeoutMs,
+    accept: (value) => {
+      const msg = value as { type?: string; decision?: ExecApprovalDecision };
+      if (msg?.type === "decision" && msg.decision) {
+        return msg.decision;
       }
-    });
+      return undefined;
+    },
   });
 }

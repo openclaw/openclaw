@@ -1,11 +1,15 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CronJob } from "./types.js";
+import * as schedule from "./schedule.js";
 import { CronService } from "./service.js";
+import { createRunningCronServiceState } from "./service.test-harness.js";
+import { computeJobNextRunAtMs } from "./service/jobs.js";
 import { createCronServiceState, type CronEvent } from "./service/state.js";
 import { onTimer } from "./service/timer.js";
+import type { CronJob, CronJobState } from "./types.js";
 
 const noopLogger = {
   info: vi.fn(),
@@ -14,6 +18,13 @@ const noopLogger = {
   debug: vi.fn(),
   trace: vi.fn(),
 };
+const TOP_OF_HOUR_STAGGER_MS = 5 * 60 * 1_000;
+type CronServiceOptions = ConstructorParameters<typeof CronService>[0];
+
+function topOfHourOffsetMs(jobId: string) {
+  const digest = crypto.createHash("sha256").update(jobId).digest();
+  return digest.readUInt32BE(0) % TOP_OF_HOUR_STAGGER_MS;
+}
 
 let fixtureRoot = "";
 let fixtureCount = 0;
@@ -24,9 +35,6 @@ async function makeStorePath() {
   const storePath = path.join(dir, "jobs.json");
   return {
     storePath,
-    cleanup: async () => {
-      await fs.rm(dir, { recursive: true, force: true });
-    },
   };
 }
 
@@ -62,6 +70,67 @@ function createDueIsolatedJob(params: {
   };
 }
 
+function createDefaultIsolatedRunner(): CronServiceOptions["runIsolatedAgentJob"] {
+  return vi.fn().mockResolvedValue({
+    status: "ok",
+    summary: "ok",
+  }) as CronServiceOptions["runIsolatedAgentJob"];
+}
+
+function createIsolatedRegressionJob(params: {
+  id: string;
+  name: string;
+  scheduledAt: number;
+  schedule: CronJob["schedule"];
+  payload: CronJob["payload"];
+  state?: CronJobState;
+}): CronJob {
+  return {
+    id: params.id,
+    name: params.name,
+    enabled: true,
+    createdAtMs: params.scheduledAt - 86_400_000,
+    updatedAtMs: params.scheduledAt - 86_400_000,
+    schedule: params.schedule,
+    sessionTarget: "isolated",
+    wakeMode: "next-heartbeat",
+    payload: params.payload,
+    delivery: { mode: "announce" },
+    state: params.state ?? {},
+  };
+}
+
+async function writeCronJobs(storePath: string, jobs: CronJob[]) {
+  await fs.writeFile(storePath, JSON.stringify({ version: 1, jobs }, null, 2), "utf-8");
+}
+
+async function startCronForStore(params: {
+  storePath: string;
+  cronEnabled?: boolean;
+  enqueueSystemEvent?: CronServiceOptions["enqueueSystemEvent"];
+  requestHeartbeatNow?: CronServiceOptions["requestHeartbeatNow"];
+  runIsolatedAgentJob?: CronServiceOptions["runIsolatedAgentJob"];
+  onEvent?: CronServiceOptions["onEvent"];
+}) {
+  const enqueueSystemEvent =
+    params.enqueueSystemEvent ?? (vi.fn() as unknown as CronServiceOptions["enqueueSystemEvent"]);
+  const requestHeartbeatNow =
+    params.requestHeartbeatNow ?? (vi.fn() as unknown as CronServiceOptions["requestHeartbeatNow"]);
+  const runIsolatedAgentJob = params.runIsolatedAgentJob ?? createDefaultIsolatedRunner();
+
+  const cron = new CronService({
+    cronEnabled: params.cronEnabled ?? true,
+    storePath: params.storePath,
+    log: noopLogger,
+    enqueueSystemEvent,
+    requestHeartbeatNow,
+    runIsolatedAgentJob,
+    ...(params.onEvent ? { onEvent: params.onEvent } : {}),
+  });
+  await cron.start();
+  return cron;
+}
+
 describe("Cron issue regressions", () => {
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cron-issues-"));
@@ -84,34 +153,34 @@ describe("Cron issue regressions", () => {
   it("covers schedule updates, force runs, isolated wake scheduling, and payload patching", async () => {
     const store = await makeStorePath();
     const enqueueSystemEvent = vi.fn();
-    const cron = new CronService({
-      cronEnabled: true,
+    const cron = await startCronForStore({
       storePath: store.storePath,
-      log: noopLogger,
       enqueueSystemEvent,
-      requestHeartbeatNow: vi.fn(),
-      runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
     });
-    await cron.start();
 
     const created = await cron.add({
       name: "hourly",
+      enabled: true,
       schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
       sessionTarget: "main",
+      wakeMode: "next-heartbeat",
       payload: { kind: "systemEvent", text: "tick" },
     });
-    expect(created.state.nextRunAtMs).toBe(Date.parse("2026-02-06T11:00:00.000Z"));
+    const offsetMs = topOfHourOffsetMs(created.id);
+    expect(created.state.nextRunAtMs).toBe(Date.parse("2026-02-06T11:00:00.000Z") + offsetMs);
 
     const updated = await cron.update(created.id, {
       schedule: { kind: "cron", expr: "0 */2 * * *", tz: "UTC" },
     });
 
-    expect(updated.state.nextRunAtMs).toBe(Date.parse("2026-02-06T12:00:00.000Z"));
+    expect(updated.state.nextRunAtMs).toBe(Date.parse("2026-02-06T12:00:00.000Z") + offsetMs);
 
     const forceNow = await cron.add({
       name: "force-now",
+      enabled: true,
       schedule: { kind: "every", everyMs: 60_000, anchorMs: Date.now() },
       sessionTarget: "main",
+      wakeMode: "next-heartbeat",
       payload: { kind: "systemEvent", text: "force" },
     });
 
@@ -125,8 +194,10 @@ describe("Cron issue regressions", () => {
 
     const job = await cron.add({
       name: "isolated",
+      enabled: true,
       schedule: { kind: "every", everyMs: 60_000, anchorMs: Date.now() },
       sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
       payload: { kind: "agentTurn", message: "hi" },
     });
     const status = await cron.status();
@@ -136,8 +207,10 @@ describe("Cron issue regressions", () => {
 
     const unsafeToggle = await cron.add({
       name: "unsafe toggle",
+      enabled: true,
       schedule: { kind: "every", everyMs: 60_000, anchorMs: Date.now() },
       sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
       payload: { kind: "agentTurn", message: "hi" },
     });
 
@@ -152,25 +225,18 @@ describe("Cron issue regressions", () => {
     }
 
     cron.stop();
-    await store.cleanup();
   });
 
   it("repairs missing nextRunAtMs on non-schedule updates without touching other jobs", async () => {
     const store = await makeStorePath();
-    const cron = new CronService({
-      cronEnabled: true,
-      storePath: store.storePath,
-      log: noopLogger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeatNow: vi.fn(),
-      runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
-    });
-    await cron.start();
+    const cron = await startCronForStore({ storePath: store.storePath });
 
     const created = await cron.add({
       name: "repair-target",
+      enabled: true,
       schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
       sessionTarget: "main",
+      wakeMode: "next-heartbeat",
       payload: { kind: "systemEvent", text: "tick" },
     });
     const updated = await cron.update(created.id, {
@@ -183,33 +249,28 @@ describe("Cron issue regressions", () => {
     expect(updated.state.nextRunAtMs).toBe(created.state.nextRunAtMs);
 
     cron.stop();
-    await store.cleanup();
   });
 
   it("does not advance unrelated due jobs when updating another job", async () => {
     const store = await makeStorePath();
     const now = Date.parse("2026-02-06T10:05:00.000Z");
     vi.setSystemTime(now);
-    const cron = new CronService({
-      cronEnabled: false,
-      storePath: store.storePath,
-      log: noopLogger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeatNow: vi.fn(),
-      runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
-    });
-    await cron.start();
+    const cron = await startCronForStore({ storePath: store.storePath, cronEnabled: false });
 
     const dueJob = await cron.add({
       name: "due-preserved",
+      enabled: true,
       schedule: { kind: "every", everyMs: 60_000, anchorMs: now },
       sessionTarget: "main",
+      wakeMode: "next-heartbeat",
       payload: { kind: "systemEvent", text: "due-preserved" },
     });
     const otherJob = await cron.add({
       name: "other-job",
+      enabled: true,
       schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
       sessionTarget: "main",
+      wakeMode: "next-heartbeat",
       payload: { kind: "systemEvent", text: "other" },
     });
 
@@ -230,25 +291,106 @@ describe("Cron issue regressions", () => {
     expect(persistedDueJob?.state?.nextRunAtMs).toBe(originalDueNextRunAtMs);
 
     cron.stop();
-    await store.cleanup();
+  });
+
+  it("treats persisted jobs with missing enabled as enabled during update()", async () => {
+    const store = await makeStorePath();
+    const now = Date.parse("2026-02-06T10:05:00.000Z");
+    await fs.writeFile(
+      store.storePath,
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: [
+            {
+              id: "missing-enabled-update",
+              name: "legacy missing enabled",
+              createdAtMs: now - 60_000,
+              updatedAtMs: now - 60_000,
+              schedule: { kind: "cron", expr: "0 */2 * * *", tz: "UTC" },
+              sessionTarget: "main",
+              wakeMode: "next-heartbeat",
+              payload: { kind: "systemEvent", text: "legacy" },
+              state: {},
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const cron = await startCronForStore({ storePath: store.storePath });
+
+    const listed = await cron.list();
+    expect(listed.some((job) => job.id === "missing-enabled-update")).toBe(true);
+
+    const updated = await cron.update("missing-enabled-update", {
+      schedule: { kind: "cron", expr: "0 */3 * * *", tz: "UTC" },
+    });
+
+    expect(updated.state.nextRunAtMs).toBeTypeOf("number");
+    expect(updated.state.nextRunAtMs).toBeGreaterThan(now);
+
+    cron.stop();
+  });
+
+  it("treats persisted due jobs with missing enabled as runnable", async () => {
+    const store = await makeStorePath();
+    const now = Date.parse("2026-02-06T10:05:00.000Z");
+    const dueAt = now - 30_000;
+    await fs.writeFile(
+      store.storePath,
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: [
+            {
+              id: "missing-enabled-due",
+              name: "legacy due job",
+              createdAtMs: dueAt - 60_000,
+              updatedAtMs: dueAt,
+              schedule: { kind: "at", at: new Date(dueAt).toISOString() },
+              sessionTarget: "main",
+              wakeMode: "now",
+              payload: { kind: "systemEvent", text: "missing-enabled-due" },
+              state: { nextRunAtMs: dueAt },
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const enqueueSystemEvent = vi.fn();
+    const cron = await startCronForStore({
+      storePath: store.storePath,
+      cronEnabled: false,
+      enqueueSystemEvent,
+    });
+
+    const result = await cron.run("missing-enabled-due", "due");
+    expect(result).toEqual({ ok: true, ran: true });
+    expect(enqueueSystemEvent).toHaveBeenCalledWith(
+      "missing-enabled-due",
+      expect.objectContaining({ agentId: undefined }),
+    );
+
+    cron.stop();
   });
 
   it("caps timer delay to 60s for far-future schedules", async () => {
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const store = await makeStorePath();
-    const cron = new CronService({
-      cronEnabled: true,
-      storePath: store.storePath,
-      log: noopLogger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeatNow: vi.fn(),
-      runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
-    });
-    await cron.start();
+    const cron = await startCronForStore({ storePath: store.storePath });
 
     const callsBeforeAdd = timeoutSpy.mock.calls.length;
     await cron.add({
       name: "far-future",
+      enabled: true,
       schedule: { kind: "at", at: "2035-01-01T00:00:00.000Z" },
       sessionTarget: "main",
       wakeMode: "next-heartbeat",
@@ -263,27 +405,18 @@ describe("Cron issue regressions", () => {
 
     cron.stop();
     timeoutSpy.mockRestore();
-    await store.cleanup();
   });
 
   it("re-arms timer without hot-looping when a run is already in progress", async () => {
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const store = await makeStorePath();
     const now = Date.parse("2026-02-06T10:05:00.000Z");
-    const state = createCronServiceState({
-      cronEnabled: true,
+    const state = createRunningCronServiceState({
       storePath: store.storePath,
       log: noopLogger,
       nowMs: () => now,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeatNow: vi.fn(),
-      runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
-    });
-    state.running = true;
-    state.store = {
-      version: 1,
       jobs: [createDueIsolatedJob({ id: "due", nowMs: now, nextRunAtMs: now - 1 })],
-    };
+    });
 
     await onTimer(state);
 
@@ -297,7 +430,6 @@ describe("Cron issue regressions", () => {
       .filter((d): d is number => typeof d === "number");
     expect(delays).toContain(60_000);
     timeoutSpy.mockRestore();
-    await store.cleanup();
   });
 
   it("skips forced manual runs while a timer-triggered run is in progress", async () => {
@@ -318,12 +450,8 @@ describe("Cron issue regressions", () => {
     const finished = createDeferred<void>();
     let targetJobId = "";
 
-    const cron = new CronService({
-      cronEnabled: true,
+    const cron = await startCronForStore({
       storePath: store.storePath,
-      log: noopLogger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeatNow: vi.fn(),
       runIsolatedAgentJob,
       onEvent: (evt: CronEvent) => {
         if (evt.jobId !== targetJobId) {
@@ -336,7 +464,6 @@ describe("Cron issue regressions", () => {
         }
       },
     });
-    await cron.start();
 
     const runAt = Date.now() + 1;
     const job = await cron.add({
@@ -364,7 +491,6 @@ describe("Cron issue regressions", () => {
     await cron.list({ includeDisabled: true });
 
     cron.stop();
-    await store.cleanup();
   });
 
   it("#13845: one-shot jobs with terminal statuses do not re-fire on restart", async () => {
@@ -381,25 +507,26 @@ describe("Cron issue regressions", () => {
       wakeMode: "now",
       payload: { kind: "systemEvent", text: "⏰ Reminder" },
     } as const;
-    for (const [id, state] of [
-      [
-        "oneshot-skipped",
-        {
+    const terminalStates: Array<{ id: string; state: CronJobState }> = [
+      {
+        id: "oneshot-skipped",
+        state: {
           nextRunAtMs: pastAt,
-          lastStatus: "skipped" as const,
+          lastStatus: "skipped",
           lastRunAtMs: pastAt,
         },
-      ],
-      [
-        "oneshot-errored",
-        {
+      },
+      {
+        id: "oneshot-errored",
+        state: {
           nextRunAtMs: pastAt,
-          lastStatus: "error" as const,
+          lastStatus: "error",
           lastRunAtMs: pastAt,
           lastError: "heartbeat failed",
         },
-      ],
-    ]) {
+      },
+    ];
+    for (const { id, state } of terminalStates) {
       const job: CronJob = { id, ...baseJob, state };
       await fs.writeFile(
         store.storePath,
@@ -407,20 +534,181 @@ describe("Cron issue regressions", () => {
         "utf-8",
       );
       const enqueueSystemEvent = vi.fn();
-      const cron = new CronService({
-        cronEnabled: true,
+      const cron = await startCronForStore({
         storePath: store.storePath,
-        log: noopLogger,
         enqueueSystemEvent,
-        requestHeartbeatNow: vi.fn(),
         runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok" }),
       });
-
-      await cron.start();
       expect(enqueueSystemEvent).not.toHaveBeenCalled();
       cron.stop();
     }
-    await store.cleanup();
+  });
+
+  it("prevents spin loop when cron job completes within the scheduled second (#17821)", async () => {
+    const store = await makeStorePath();
+    // Simulate a cron job "0 13 * * *" (daily 13:00 UTC) that fires exactly
+    // at 13:00:00.000 and completes 7ms later (still in the same second).
+    const scheduledAt = Date.parse("2026-02-15T13:00:00.000Z");
+    const nextDay = scheduledAt + 86_400_000;
+
+    const cronJob = createIsolatedRegressionJob({
+      id: "spin-loop-17821",
+      name: "daily noon",
+      scheduledAt,
+      schedule: { kind: "cron", expr: "0 13 * * *", tz: "UTC" },
+      payload: { kind: "agentTurn", message: "briefing" },
+      state: { nextRunAtMs: scheduledAt },
+    });
+    await writeCronJobs(store.storePath, [cronJob]);
+
+    let now = scheduledAt;
+    let fireCount = 0;
+    const events: CronEvent[] = [];
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      onEvent: (evt) => {
+        events.push(evt);
+      },
+      runIsolatedAgentJob: vi.fn(async () => {
+        // Job completes very quickly (7ms) — still within the same second
+        now += 7;
+        fireCount++;
+        return { status: "ok" as const, summary: "done" };
+      }),
+    });
+
+    // First timer tick — should fire the job exactly once
+    await onTimer(state);
+
+    expect(fireCount).toBe(1);
+
+    const job = state.store?.jobs.find((j) => j.id === "spin-loop-17821");
+    expect(job).toBeDefined();
+    // nextRunAtMs MUST be in the future (next day), not the same second
+    expect(job!.state.nextRunAtMs).toBeDefined();
+    expect(job!.state.nextRunAtMs).toBeGreaterThanOrEqual(nextDay);
+
+    // Second timer tick (simulating the timer re-arm) — should NOT fire again
+    await onTimer(state);
+    expect(fireCount).toBe(1);
+  });
+
+  it("enforces a minimum refire gap for second-granularity cron schedules (#17821)", async () => {
+    const store = await makeStorePath();
+    const scheduledAt = Date.parse("2026-02-15T13:00:00.000Z");
+
+    const cronJob = createIsolatedRegressionJob({
+      id: "spin-gap-17821",
+      name: "second-granularity",
+      scheduledAt,
+      schedule: { kind: "cron", expr: "* * * * * *", tz: "UTC" },
+      payload: { kind: "agentTurn", message: "pulse" },
+      state: { nextRunAtMs: scheduledAt },
+    });
+    await writeCronJobs(store.storePath, [cronJob]);
+
+    let now = scheduledAt;
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => {
+        now += 100;
+        return { status: "ok" as const, summary: "done" };
+      }),
+    });
+
+    await onTimer(state);
+
+    const job = state.store?.jobs.find((j) => j.id === "spin-gap-17821");
+    expect(job).toBeDefined();
+    const endedAt = now;
+    const minNext = endedAt + 2_000;
+    expect(job!.state.nextRunAtMs).toBeDefined();
+    expect(job!.state.nextRunAtMs).toBeGreaterThanOrEqual(minNext);
+  });
+
+  it("treats timeoutSeconds=0 as no timeout for isolated agentTurn jobs", async () => {
+    const store = await makeStorePath();
+    const scheduledAt = Date.parse("2026-02-15T13:00:00.000Z");
+
+    const cronJob = createIsolatedRegressionJob({
+      id: "no-timeout-0",
+      name: "no-timeout",
+      scheduledAt,
+      schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
+      payload: { kind: "agentTurn", message: "work", timeoutSeconds: 0 },
+      state: { nextRunAtMs: scheduledAt },
+    });
+    await writeCronJobs(store.storePath, [cronJob]);
+
+    let now = scheduledAt;
+    const deferredRun = createDeferred<{ status: "ok"; summary: string }>();
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => {
+        const result = await deferredRun.promise;
+        now += 5;
+        return result;
+      }),
+    });
+
+    const timerPromise = onTimer(state);
+    let settled = false;
+    void timerPromise.finally(() => {
+      settled = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    deferredRun.resolve({ status: "ok", summary: "done" });
+    await timerPromise;
+
+    const job = state.store?.jobs.find((j) => j.id === "no-timeout-0");
+    expect(job?.state.lastStatus).toBe("ok");
+  });
+
+  it("retries cron schedule computation from the next second when the first attempt returns undefined (#17821)", () => {
+    const scheduledAt = Date.parse("2026-02-15T13:00:00.000Z");
+    const cronJob = createIsolatedRegressionJob({
+      id: "retry-next-second-17821",
+      name: "retry",
+      scheduledAt,
+      schedule: { kind: "cron", expr: "0 13 * * *", tz: "UTC" },
+      payload: { kind: "agentTurn", message: "briefing" },
+    });
+
+    const original = schedule.computeNextRunAtMs;
+    const spy = vi.spyOn(schedule, "computeNextRunAtMs");
+    try {
+      spy
+        .mockImplementationOnce(() => undefined)
+        .mockImplementation((sched, nowMs) => original(sched, nowMs));
+
+      const expected = original(cronJob.schedule, scheduledAt + 1_000);
+      expect(expected).toBeDefined();
+
+      const next = computeJobNextRunAtMs(cronJob, scheduledAt);
+      expect(next).toBe(expected);
+      expect(spy).toHaveBeenCalledTimes(2);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("records per-job start time and duration for batched due jobs", async () => {
@@ -466,7 +754,5 @@ describe("Cron issue regressions", () => {
     expect(secondDone?.state.lastRunAtMs).toBe(dueAt + 50);
     expect(secondDone?.state.lastDurationMs).toBe(20);
     expect(startedAtEvents).toEqual([dueAt, dueAt + 50]);
-
-    await store.cleanup();
   });
 });

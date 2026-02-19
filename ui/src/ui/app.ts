@@ -1,34 +1,6 @@
 import { LitElement } from "lit";
 import { customElement, state } from "lit/decorators.js";
-import type { EventLogEntry } from "./app-events.ts";
-import type { AppViewState } from "./app-view-state.ts";
-import type { DevicePairingList } from "./controllers/devices.ts";
-import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
-import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
-import type { SkillMessage } from "./controllers/skills.ts";
-import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
-import type { Tab } from "./navigation.ts";
-import type { ResolvedTheme, ThemeMode } from "./theme.ts";
-import type {
-  AgentsListResult,
-  AgentsFilesListResult,
-  AgentIdentityResult,
-  ConfigSnapshot,
-  ConfigUiHints,
-  CronJob,
-  CronRunLogEntry,
-  CronStatus,
-  HealthSnapshot,
-  LogEntry,
-  LogLevel,
-  PresenceEntry,
-  ChannelsStatusSnapshot,
-  SessionsListResult,
-  SkillStatusReport,
-  StatusSummary,
-  NostrProfile,
-} from "./types.ts";
-import type { NostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
+import { i18n, I18nController, isSupportedLocale } from "../i18n/index.ts";
 import {
   handleChannelConfigReload as handleChannelConfigReloadInternal,
   handleChannelConfigSave as handleChannelConfigSaveInternal,
@@ -48,6 +20,7 @@ import {
   removeQueuedMessage as removeQueuedMessageInternal,
 } from "./app-chat.ts";
 import { DEFAULT_CRON_FORM, DEFAULT_LOG_LEVEL_FILTERS } from "./app-defaults.ts";
+import type { EventLogEntry } from "./app-events.ts";
 import { connectGateway as connectGatewayInternal } from "./app-gateway.ts";
 import {
   handleConnected,
@@ -76,10 +49,38 @@ import {
   type ToolStreamEntry,
   type CompactionStatus,
 } from "./app-tool-stream.ts";
-import { resolveInjectedAssistantIdentity } from "./assistant-identity.ts";
+import type { AppViewState } from "./app-view-state.ts";
+import { normalizeAssistantIdentity } from "./assistant-identity.ts";
 import { loadAssistantIdentity as loadAssistantIdentityInternal } from "./controllers/assistant-identity.ts";
+import type { DevicePairingList } from "./controllers/devices.ts";
+import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
+import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
+import type { SkillMessage } from "./controllers/skills.ts";
+import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
+import type { Tab } from "./navigation.ts";
 import { loadSettings, type UiSettings } from "./storage.ts";
+import type { ResolvedTheme, ThemeMode } from "./theme.ts";
+import type {
+  AgentsListResult,
+  AgentsFilesListResult,
+  AgentIdentityResult,
+  ConfigSnapshot,
+  ConfigUiHints,
+  CronJob,
+  CronRunLogEntry,
+  CronStatus,
+  HealthSnapshot,
+  LogEntry,
+  LogLevel,
+  PresenceEntry,
+  ChannelsStatusSnapshot,
+  SessionsListResult,
+  SkillStatusReport,
+  StatusSummary,
+  NostrProfile,
+} from "./types.ts";
 import { type ChatAttachment, type ChatQueueItem, type CronFormState } from "./ui-types.ts";
+import type { NostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
 
 declare global {
   interface Window {
@@ -87,7 +88,7 @@ declare global {
   }
 }
 
-const injectedAssistantIdentity = resolveInjectedAssistantIdentity();
+const bootAssistantIdentity = normalizeAssistantIdentity({});
 
 function resolveOnboardingMode(): boolean {
   if (!window.location.search) {
@@ -104,7 +105,14 @@ function resolveOnboardingMode(): boolean {
 
 @customElement("openclaw-app")
 export class OpenClawApp extends LitElement {
+  private i18nController = new I18nController(this);
   @state() settings: UiSettings = loadSettings();
+  constructor() {
+    super();
+    if (isSupportedLocale(this.settings.locale)) {
+      void i18n.setLocale(this.settings.locale);
+    }
+  }
   @state() password = "";
   @state() tab: Tab = "chat";
   @state() onboarding = resolveOnboardingMode();
@@ -118,9 +126,9 @@ export class OpenClawApp extends LitElement {
   private toolStreamSyncTimer: number | null = null;
   private sidebarCloseTimer: number | null = null;
 
-  @state() assistantName = injectedAssistantIdentity.name;
-  @state() assistantAvatar = injectedAssistantIdentity.avatar;
-  @state() assistantAgentId = injectedAssistantIdentity.agentId ?? null;
+  @state() assistantName = bootAssistantIdentity.name;
+  @state() assistantAvatar = bootAssistantIdentity.avatar;
+  @state() assistantAgentId = bootAssistantIdentity.agentId ?? null;
 
   @state() sessionKey = this.settings.sessionKey;
   @state() chatLoading = false;
@@ -249,6 +257,8 @@ export class OpenClawApp extends LitElement {
   @state() usageTimeSeriesBreakdownMode: "total" | "by-type" = "by-type";
   @state() usageTimeSeries: import("./types.js").SessionUsageTimeSeries | null = null;
   @state() usageTimeSeriesLoading = false;
+  @state() usageTimeSeriesCursorStart: number | null = null;
+  @state() usageTimeSeriesCursorEnd: number | null = null;
   @state() usageSessionLogs: import("./views/usage.js").SessionLogEntry[] | null = null;
   @state() usageSessionLogsLoading = false;
   @state() usageSessionLogsExpanded = false;
@@ -289,6 +299,8 @@ export class OpenClawApp extends LitElement {
   @state() cronRunsJobId: string | null = null;
   @state() cronRuns: CronRunLogEntry[] = [];
   @state() cronBusy = false;
+
+  @state() updateAvailable: import("./types.js").UpdateAvailable | null = null;
 
   @state() skillsLoading = false;
   @state() skillsReport: SkillStatusReport | null = null;

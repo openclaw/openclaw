@@ -1,10 +1,9 @@
-import type { Command } from "commander";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawConfig } from "../config/config.js";
-import type { HookEntry } from "../hooks/types.js";
+import type { Command } from "commander";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig, writeConfigFile } from "../config/io.js";
 import {
   buildWorkspaceHookStatus,
@@ -17,6 +16,7 @@ import {
   resolveHookInstallDir,
 } from "../hooks/install.js";
 import { recordHookInstall } from "../hooks/installs.js";
+import type { HookEntry } from "../hooks/types.js";
 import { loadWorkspaceHookEntries } from "../hooks/workspace.js";
 import { resolveArchiveKind } from "../infra/archive.js";
 import { buildPluginStatusReport } from "../plugins/status.js";
@@ -66,6 +66,50 @@ function buildHooksReport(config: OpenClawConfig): HookStatusReport {
   return buildWorkspaceHookStatus(workspaceDir, { config, entries });
 }
 
+function resolveHookForToggle(
+  report: HookStatusReport,
+  hookName: string,
+  opts?: { requireEligible?: boolean },
+): HookStatusEntry {
+  const hook = report.hooks.find((h) => h.name === hookName);
+  if (!hook) {
+    throw new Error(`Hook "${hookName}" not found`);
+  }
+  if (hook.managedByPlugin) {
+    throw new Error(
+      `Hook "${hookName}" is managed by plugin "${hook.pluginId ?? "unknown"}" and cannot be enabled/disabled.`,
+    );
+  }
+  if (opts?.requireEligible && !hook.eligible) {
+    throw new Error(`Hook "${hookName}" is not eligible (missing requirements)`);
+  }
+  return hook;
+}
+
+function buildConfigWithHookEnabled(params: {
+  config: OpenClawConfig;
+  hookName: string;
+  enabled: boolean;
+  ensureHooksEnabled?: boolean;
+}): OpenClawConfig {
+  const entries = { ...params.config.hooks?.internal?.entries };
+  entries[params.hookName] = { ...entries[params.hookName], enabled: params.enabled };
+
+  const internal = {
+    ...params.config.hooks?.internal,
+    ...(params.ensureHooksEnabled ? { enabled: true } : {}),
+    entries,
+  };
+
+  return {
+    ...params.config,
+    hooks: {
+      ...params.config.hooks,
+      internal,
+    },
+  };
+}
+
 function formatHookStatus(hook: HookStatusEntry): string {
   if (hook.eligible) {
     return theme.success("✓ ready");
@@ -106,6 +150,32 @@ function formatHookMissingSummary(hook: HookStatusEntry): string {
     missing.push(`os: ${hook.missing.os.join(", ")}`);
   }
   return missing.join("; ");
+}
+
+function exitHooksCliWithError(err: unknown): never {
+  defaultRuntime.error(
+    `${theme.error("Error:")} ${err instanceof Error ? err.message : String(err)}`,
+  );
+  process.exit(1);
+}
+
+async function runHooksCliAction(action: () => Promise<void> | void): Promise<void> {
+  try {
+    await action();
+  } catch (err) {
+    exitHooksCliWithError(err);
+  }
+}
+
+function createInstallLogger() {
+  return {
+    info: (msg: string) => defaultRuntime.log(msg),
+    warn: (msg: string) => defaultRuntime.log(theme.warn(msg)),
+  };
+}
+
+function logGatewayRestartHint() {
+  defaultRuntime.log("Restart the gateway to load hooks.");
 }
 
 async function readInstalledPackageVersion(dir: string): Promise<string | undefined> {
@@ -384,38 +454,13 @@ export function formatHooksCheck(report: HookStatusReport, opts: HooksCheckOptio
 
 export async function enableHook(hookName: string): Promise<void> {
   const config = loadConfig();
-  const report = buildHooksReport(config);
-  const hook = report.hooks.find((h) => h.name === hookName);
-
-  if (!hook) {
-    throw new Error(`Hook "${hookName}" not found`);
-  }
-
-  if (hook.managedByPlugin) {
-    throw new Error(
-      `Hook "${hookName}" is managed by plugin "${hook.pluginId ?? "unknown"}" and cannot be enabled/disabled.`,
-    );
-  }
-
-  if (!hook.eligible) {
-    throw new Error(`Hook "${hookName}" is not eligible (missing requirements)`);
-  }
-
-  // Update config
-  const entries = { ...config.hooks?.internal?.entries };
-  entries[hookName] = { ...entries[hookName], enabled: true };
-
-  const nextConfig = {
-    ...config,
-    hooks: {
-      ...config.hooks,
-      internal: {
-        ...config.hooks?.internal,
-        enabled: true,
-        entries,
-      },
-    },
-  };
+  const hook = resolveHookForToggle(buildHooksReport(config), hookName, { requireEligible: true });
+  const nextConfig = buildConfigWithHookEnabled({
+    config,
+    hookName,
+    enabled: true,
+    ensureHooksEnabled: true,
+  });
 
   await writeConfigFile(nextConfig);
   defaultRuntime.log(
@@ -425,33 +470,8 @@ export async function enableHook(hookName: string): Promise<void> {
 
 export async function disableHook(hookName: string): Promise<void> {
   const config = loadConfig();
-  const report = buildHooksReport(config);
-  const hook = report.hooks.find((h) => h.name === hookName);
-
-  if (!hook) {
-    throw new Error(`Hook "${hookName}" not found`);
-  }
-
-  if (hook.managedByPlugin) {
-    throw new Error(
-      `Hook "${hookName}" is managed by plugin "${hook.pluginId ?? "unknown"}" and cannot be enabled/disabled.`,
-    );
-  }
-
-  // Update config
-  const entries = { ...config.hooks?.internal?.entries };
-  entries[hookName] = { ...entries[hookName], enabled: false };
-
-  const nextConfig = {
-    ...config,
-    hooks: {
-      ...config.hooks,
-      internal: {
-        ...config.hooks?.internal,
-        entries,
-      },
-    },
-  };
+  const hook = resolveHookForToggle(buildHooksReport(config), hookName);
+  const nextConfig = buildConfigWithHookEnabled({ config, hookName, enabled: false });
 
   await writeConfigFile(nextConfig);
   defaultRuntime.log(
@@ -475,80 +495,55 @@ export function registerHooksCli(program: Command): void {
     .option("--eligible", "Show only eligible hooks", false)
     .option("--json", "Output as JSON", false)
     .option("-v, --verbose", "Show more details including missing requirements", false)
-    .action(async (opts) => {
-      try {
+    .action(async (opts) =>
+      runHooksCliAction(async () => {
         const config = loadConfig();
         const report = buildHooksReport(config);
         defaultRuntime.log(formatHooksList(report, opts));
-      } catch (err) {
-        defaultRuntime.error(
-          `${theme.error("Error:")} ${err instanceof Error ? err.message : String(err)}`,
-        );
-        process.exit(1);
-      }
-    });
+      }),
+    );
 
   hooks
     .command("info <name>")
     .description("Show detailed information about a hook")
     .option("--json", "Output as JSON", false)
-    .action(async (name, opts) => {
-      try {
+    .action(async (name, opts) =>
+      runHooksCliAction(async () => {
         const config = loadConfig();
         const report = buildHooksReport(config);
         defaultRuntime.log(formatHookInfo(report, name, opts));
-      } catch (err) {
-        defaultRuntime.error(
-          `${theme.error("Error:")} ${err instanceof Error ? err.message : String(err)}`,
-        );
-        process.exit(1);
-      }
-    });
+      }),
+    );
 
   hooks
     .command("check")
     .description("Check hooks eligibility status")
     .option("--json", "Output as JSON", false)
-    .action(async (opts) => {
-      try {
+    .action(async (opts) =>
+      runHooksCliAction(async () => {
         const config = loadConfig();
         const report = buildHooksReport(config);
         defaultRuntime.log(formatHooksCheck(report, opts));
-      } catch (err) {
-        defaultRuntime.error(
-          `${theme.error("Error:")} ${err instanceof Error ? err.message : String(err)}`,
-        );
-        process.exit(1);
-      }
-    });
+      }),
+    );
 
   hooks
     .command("enable <name>")
     .description("Enable a hook")
-    .action(async (name) => {
-      try {
+    .action(async (name) =>
+      runHooksCliAction(async () => {
         await enableHook(name);
-      } catch (err) {
-        defaultRuntime.error(
-          `${theme.error("Error:")} ${err instanceof Error ? err.message : String(err)}`,
-        );
-        process.exit(1);
-      }
-    });
+      }),
+    );
 
   hooks
     .command("disable <name>")
     .description("Disable a hook")
-    .action(async (name) => {
-      try {
+    .action(async (name) =>
+      runHooksCliAction(async () => {
         await disableHook(name);
-      } catch (err) {
-        defaultRuntime.error(
-          `${theme.error("Error:")} ${err instanceof Error ? err.message : String(err)}`,
-        );
-        process.exit(1);
-      }
-    });
+      }),
+    );
 
   hooks
     .command("install")
@@ -603,16 +598,13 @@ export function registerHooksCli(program: Command): void {
 
           await writeConfigFile(next);
           defaultRuntime.log(`Linked hook path: ${shortenHomePath(resolved)}`);
-          defaultRuntime.log(`Restart the gateway to load hooks.`);
+          logGatewayRestartHint();
           return;
         }
 
         const result = await installHooksFromPath({
           path: resolved,
-          logger: {
-            info: (msg) => defaultRuntime.log(msg),
-            warn: (msg) => defaultRuntime.log(theme.warn(msg)),
-          },
+          logger: createInstallLogger(),
         });
         if (!result.ok) {
           defaultRuntime.error(result.error);
@@ -634,7 +626,7 @@ export function registerHooksCli(program: Command): void {
 
         await writeConfigFile(next);
         defaultRuntime.log(`Installed hooks: ${result.hooks.join(", ")}`);
-        defaultRuntime.log(`Restart the gateway to load hooks.`);
+        logGatewayRestartHint();
         return;
       }
 
@@ -658,10 +650,7 @@ export function registerHooksCli(program: Command): void {
 
       const result = await installHooksFromNpmSpec({
         spec: raw,
-        logger: {
-          info: (msg) => defaultRuntime.log(msg),
-          warn: (msg) => defaultRuntime.log(theme.warn(msg)),
-        },
+        logger: createInstallLogger(),
       });
       if (!result.ok) {
         defaultRuntime.error(result.error);
@@ -680,7 +669,7 @@ export function registerHooksCli(program: Command): void {
       });
       await writeConfigFile(next);
       defaultRuntime.log(`Installed hooks: ${result.hooks.join(", ")}`);
-      defaultRuntime.log(`Restart the gateway to load hooks.`);
+      logGatewayRestartHint();
     });
 
   hooks
@@ -732,10 +721,7 @@ export function registerHooksCli(program: Command): void {
             mode: "update",
             dryRun: true,
             expectedHookPackId: hookId,
-            logger: {
-              info: (msg) => defaultRuntime.log(msg),
-              warn: (msg) => defaultRuntime.log(theme.warn(msg)),
-            },
+            logger: createInstallLogger(),
           });
           if (!probe.ok) {
             defaultRuntime.log(theme.error(`Failed to check ${hookId}: ${probe.error}`));
@@ -756,10 +742,7 @@ export function registerHooksCli(program: Command): void {
           spec: record.spec,
           mode: "update",
           expectedHookPackId: hookId,
-          logger: {
-            info: (msg) => defaultRuntime.log(msg),
-            warn: (msg) => defaultRuntime.log(theme.warn(msg)),
-          },
+          logger: createInstallLogger(),
         });
         if (!result.ok) {
           defaultRuntime.log(theme.error(`Failed to update ${hookId}: ${result.error}`));
@@ -788,20 +771,15 @@ export function registerHooksCli(program: Command): void {
 
       if (updatedCount > 0) {
         await writeConfigFile(nextCfg);
-        defaultRuntime.log("Restart the gateway to load hooks.");
+        logGatewayRestartHint();
       }
     });
 
-  hooks.action(async () => {
-    try {
+  hooks.action(async () =>
+    runHooksCliAction(async () => {
       const config = loadConfig();
       const report = buildHooksReport(config);
       defaultRuntime.log(formatHooksList(report, {}));
-    } catch (err) {
-      defaultRuntime.error(
-        `${theme.error("Error:")} ${err instanceof Error ? err.message : String(err)}`,
-      );
-      process.exit(1);
-    }
-  });
+    }),
+  );
 }

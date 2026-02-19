@@ -1,11 +1,11 @@
 import type { OpenClawConfig } from "../../config/types.js";
-import type { ChannelDirectoryEntry } from "./types.js";
 import { resolveDiscordAccount } from "../../discord/accounts.js";
 import { resolveSlackAccount } from "../../slack/accounts.js";
 import { resolveTelegramAccount } from "../../telegram/accounts.js";
 import { resolveWhatsAppAccount } from "../../web/accounts.js";
 import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "../../whatsapp/normalize.js";
 import { normalizeSlackMessagingTarget } from "./normalize/slack.js";
+import type { ChannelDirectoryEntry } from "./types.js";
 
 export type DirectoryConfigParams = {
   cfg: OpenClawConfig;
@@ -14,26 +14,52 @@ export type DirectoryConfigParams = {
   limit?: number | null;
 };
 
-export async function listSlackDirectoryPeersFromConfig(
-  params: DirectoryConfigParams,
-): Promise<ChannelDirectoryEntry[]> {
-  const account = resolveSlackAccount({ cfg: params.cfg, accountId: params.accountId });
-  const q = params.query?.trim().toLowerCase() || "";
-  const ids = new Set<string>();
-
-  for (const entry of account.config.allowFrom ?? account.dm?.allowFrom ?? []) {
+function addAllowFromAndDmsIds(
+  ids: Set<string>,
+  allowFrom: readonly unknown[] | undefined,
+  dms: Record<string, unknown> | undefined,
+) {
+  for (const entry of allowFrom ?? []) {
     const raw = String(entry).trim();
     if (!raw || raw === "*") {
       continue;
     }
     ids.add(raw);
   }
-  for (const id of Object.keys(account.config.dms ?? {})) {
+  for (const id of Object.keys(dms ?? {})) {
     const trimmed = id.trim();
     if (trimmed) {
       ids.add(trimmed);
     }
   }
+}
+
+function resolveDirectoryQuery(query?: string | null): string {
+  return query?.trim().toLowerCase() || "";
+}
+
+function resolveDirectoryLimit(limit?: number | null): number | undefined {
+  return typeof limit === "number" && limit > 0 ? limit : undefined;
+}
+
+function applyDirectoryQueryAndLimit(ids: string[], params: DirectoryConfigParams): string[] {
+  const q = resolveDirectoryQuery(params.query);
+  const limit = resolveDirectoryLimit(params.limit);
+  const filtered = ids.filter((id) => (q ? id.toLowerCase().includes(q) : true));
+  return typeof limit === "number" ? filtered.slice(0, limit) : filtered;
+}
+
+function toDirectoryEntries(kind: "user" | "group", ids: string[]): ChannelDirectoryEntry[] {
+  return ids.map((id) => ({ kind, id }) as const);
+}
+
+export async function listSlackDirectoryPeersFromConfig(
+  params: DirectoryConfigParams,
+): Promise<ChannelDirectoryEntry[]> {
+  const account = resolveSlackAccount({ cfg: params.cfg, accountId: params.accountId });
+  const ids = new Set<string>();
+
+  addAllowFromAndDmsIds(ids, account.config.allowFrom ?? account.dm?.allowFrom, account.config.dms);
   for (const channel of Object.values(account.config.channels ?? {})) {
     for (const user of channel.users ?? []) {
       const raw = String(user).trim();
@@ -43,7 +69,7 @@ export async function listSlackDirectoryPeersFromConfig(
     }
   }
 
-  return Array.from(ids)
+  const normalizedIds = Array.from(ids)
     .map((raw) => raw.trim())
     .filter(Boolean)
     .map((raw) => {
@@ -56,47 +82,33 @@ export async function listSlackDirectoryPeersFromConfig(
       return normalizeSlackMessagingTarget(target) ?? target.toLowerCase();
     })
     .filter((id): id is string => Boolean(id))
-    .filter((id) => id.startsWith("user:"))
-    .filter((id) => (q ? id.toLowerCase().includes(q) : true))
-    .slice(0, params.limit && params.limit > 0 ? params.limit : undefined)
-    .map((id) => ({ kind: "user", id }) as const);
+    .filter((id) => id.startsWith("user:"));
+  return toDirectoryEntries("user", applyDirectoryQueryAndLimit(normalizedIds, params));
 }
 
 export async function listSlackDirectoryGroupsFromConfig(
   params: DirectoryConfigParams,
 ): Promise<ChannelDirectoryEntry[]> {
   const account = resolveSlackAccount({ cfg: params.cfg, accountId: params.accountId });
-  const q = params.query?.trim().toLowerCase() || "";
-  return Object.keys(account.config.channels ?? {})
+  const ids = Object.keys(account.config.channels ?? {})
     .map((raw) => raw.trim())
     .filter(Boolean)
     .map((raw) => normalizeSlackMessagingTarget(raw) ?? raw.toLowerCase())
-    .filter((id) => id.startsWith("channel:"))
-    .filter((id) => (q ? id.toLowerCase().includes(q) : true))
-    .slice(0, params.limit && params.limit > 0 ? params.limit : undefined)
-    .map((id) => ({ kind: "group", id }) as const);
+    .filter((id) => id.startsWith("channel:"));
+  return toDirectoryEntries("group", applyDirectoryQueryAndLimit(ids, params));
 }
 
 export async function listDiscordDirectoryPeersFromConfig(
   params: DirectoryConfigParams,
 ): Promise<ChannelDirectoryEntry[]> {
   const account = resolveDiscordAccount({ cfg: params.cfg, accountId: params.accountId });
-  const q = params.query?.trim().toLowerCase() || "";
   const ids = new Set<string>();
 
-  for (const entry of account.config.allowFrom ?? account.config.dm?.allowFrom ?? []) {
-    const raw = String(entry).trim();
-    if (!raw || raw === "*") {
-      continue;
-    }
-    ids.add(raw);
-  }
-  for (const id of Object.keys(account.config.dms ?? {})) {
-    const trimmed = id.trim();
-    if (trimmed) {
-      ids.add(trimmed);
-    }
-  }
+  addAllowFromAndDmsIds(
+    ids,
+    account.config.allowFrom ?? account.config.dm?.allowFrom,
+    account.config.dms,
+  );
   for (const guild of Object.values(account.config.guilds ?? {})) {
     for (const entry of guild.users ?? []) {
       const raw = String(entry).trim();
@@ -114,7 +126,7 @@ export async function listDiscordDirectoryPeersFromConfig(
     }
   }
 
-  return Array.from(ids)
+  const normalizedIds = Array.from(ids)
     .map((raw) => raw.trim())
     .filter(Boolean)
     .map((raw) => {
@@ -125,17 +137,14 @@ export async function listDiscordDirectoryPeersFromConfig(
       }
       return `user:${cleaned}`;
     })
-    .filter((id): id is string => Boolean(id))
-    .filter((id) => (q ? id.toLowerCase().includes(q) : true))
-    .slice(0, params.limit && params.limit > 0 ? params.limit : undefined)
-    .map((id) => ({ kind: "user", id }) as const);
+    .filter((id): id is string => Boolean(id));
+  return toDirectoryEntries("user", applyDirectoryQueryAndLimit(normalizedIds, params));
 }
 
 export async function listDiscordDirectoryGroupsFromConfig(
   params: DirectoryConfigParams,
 ): Promise<ChannelDirectoryEntry[]> {
   const account = resolveDiscordAccount({ cfg: params.cfg, accountId: params.accountId });
-  const q = params.query?.trim().toLowerCase() || "";
   const ids = new Set<string>();
   for (const guild of Object.values(account.config.guilds ?? {})) {
     for (const channelId of Object.keys(guild.channels ?? {})) {
@@ -146,7 +155,7 @@ export async function listDiscordDirectoryGroupsFromConfig(
     }
   }
 
-  return Array.from(ids)
+  const normalizedIds = Array.from(ids)
     .map((raw) => raw.trim())
     .filter(Boolean)
     .map((raw) => {
@@ -157,22 +166,19 @@ export async function listDiscordDirectoryGroupsFromConfig(
       }
       return `channel:${cleaned}`;
     })
-    .filter((id): id is string => Boolean(id))
-    .filter((id) => (q ? id.toLowerCase().includes(q) : true))
-    .slice(0, params.limit && params.limit > 0 ? params.limit : undefined)
-    .map((id) => ({ kind: "group", id }) as const);
+    .filter((id): id is string => Boolean(id));
+  return toDirectoryEntries("group", applyDirectoryQueryAndLimit(normalizedIds, params));
 }
 
 export async function listTelegramDirectoryPeersFromConfig(
   params: DirectoryConfigParams,
 ): Promise<ChannelDirectoryEntry[]> {
   const account = resolveTelegramAccount({ cfg: params.cfg, accountId: params.accountId });
-  const q = params.query?.trim().toLowerCase() || "";
   const raw = [
     ...(account.config.allowFrom ?? []).map((entry) => String(entry)),
     ...Object.keys(account.config.dms ?? {}),
   ];
-  return Array.from(
+  const ids = Array.from(
     new Set(
       raw
         .map((entry) => entry.trim())
@@ -191,50 +197,39 @@ export async function listTelegramDirectoryPeersFromConfig(
       const withAt = trimmed.startsWith("@") ? trimmed : `@${trimmed}`;
       return withAt;
     })
-    .filter((id): id is string => Boolean(id))
-    .filter((id) => (q ? id.toLowerCase().includes(q) : true))
-    .slice(0, params.limit && params.limit > 0 ? params.limit : undefined)
-    .map((id) => ({ kind: "user", id }) as const);
+    .filter((id): id is string => Boolean(id));
+  return toDirectoryEntries("user", applyDirectoryQueryAndLimit(ids, params));
 }
 
 export async function listTelegramDirectoryGroupsFromConfig(
   params: DirectoryConfigParams,
 ): Promise<ChannelDirectoryEntry[]> {
   const account = resolveTelegramAccount({ cfg: params.cfg, accountId: params.accountId });
-  const q = params.query?.trim().toLowerCase() || "";
-  return Object.keys(account.config.groups ?? {})
+  const ids = Object.keys(account.config.groups ?? {})
     .map((id) => id.trim())
-    .filter((id) => Boolean(id) && id !== "*")
-    .filter((id) => (q ? id.toLowerCase().includes(q) : true))
-    .slice(0, params.limit && params.limit > 0 ? params.limit : undefined)
-    .map((id) => ({ kind: "group", id }) as const);
+    .filter((id) => Boolean(id) && id !== "*");
+  return toDirectoryEntries("group", applyDirectoryQueryAndLimit(ids, params));
 }
 
 export async function listWhatsAppDirectoryPeersFromConfig(
   params: DirectoryConfigParams,
 ): Promise<ChannelDirectoryEntry[]> {
   const account = resolveWhatsAppAccount({ cfg: params.cfg, accountId: params.accountId });
-  const q = params.query?.trim().toLowerCase() || "";
-  return (account.allowFrom ?? [])
+  const ids = (account.allowFrom ?? [])
     .map((entry) => String(entry).trim())
     .filter((entry) => Boolean(entry) && entry !== "*")
     .map((entry) => normalizeWhatsAppTarget(entry) ?? "")
     .filter(Boolean)
-    .filter((id) => !isWhatsAppGroupJid(id))
-    .filter((id) => (q ? id.toLowerCase().includes(q) : true))
-    .slice(0, params.limit && params.limit > 0 ? params.limit : undefined)
-    .map((id) => ({ kind: "user", id }) as const);
+    .filter((id) => !isWhatsAppGroupJid(id));
+  return toDirectoryEntries("user", applyDirectoryQueryAndLimit(ids, params));
 }
 
 export async function listWhatsAppDirectoryGroupsFromConfig(
   params: DirectoryConfigParams,
 ): Promise<ChannelDirectoryEntry[]> {
   const account = resolveWhatsAppAccount({ cfg: params.cfg, accountId: params.accountId });
-  const q = params.query?.trim().toLowerCase() || "";
-  return Object.keys(account.groups ?? {})
+  const ids = Object.keys(account.groups ?? {})
     .map((id) => id.trim())
-    .filter((id) => Boolean(id) && id !== "*")
-    .filter((id) => (q ? id.toLowerCase().includes(q) : true))
-    .slice(0, params.limit && params.limit > 0 ? params.limit : undefined)
-    .map((id) => ({ kind: "group", id }) as const);
+    .filter((id) => Boolean(id) && id !== "*");
+  return toDirectoryEntries("group", applyDirectoryQueryAndLimit(ids, params));
 }

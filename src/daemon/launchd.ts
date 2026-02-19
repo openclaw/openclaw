@@ -1,9 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { GatewayServiceRuntime } from "./service-runtime.js";
 import {
-  formatGatewayServiceDescription,
   GATEWAY_LAUNCH_AGENT_LABEL,
+  resolveGatewayServiceDescription,
   resolveGatewayLaunchAgentLabel,
   resolveLegacyGatewayLaunchAgentLabels,
 } from "./constants.js";
@@ -12,9 +11,10 @@ import {
   buildLaunchAgentPlist as buildLaunchAgentPlistImpl,
   readLaunchAgentProgramArgumentsFromFile,
 } from "./launchd-plist.js";
-import { formatLine, toPosixPath } from "./output.js";
+import { formatLine, toPosixPath, writeFormattedLines } from "./output.js";
 import { resolveGatewayStateDir, resolveHomeDir } from "./paths.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
+import type { GatewayServiceRuntime } from "./service-runtime.js";
 
 function resolveLaunchAgentLabel(args?: { env?: Record<string, string | undefined> }): string {
   const envLabel = args?.env?.OPENCLAW_LAUNCHD_LABEL?.trim();
@@ -384,12 +384,7 @@ export async function installLaunchAgent({
   const plistPath = resolveLaunchAgentPlistPathForLabel(env, label);
   await fs.mkdir(path.dirname(plistPath), { recursive: true });
 
-  const serviceDescription =
-    description ??
-    formatGatewayServiceDescription({
-      profile: env.OPENCLAW_PROFILE,
-      version: environment?.OPENCLAW_SERVICE_VERSION ?? env.OPENCLAW_SERVICE_VERSION,
-    });
+  const serviceDescription = resolveGatewayServiceDescription({ env, environment, description });
   const plist = buildLaunchAgentPlist({
     label,
     comment: serviceDescription,
@@ -412,9 +407,14 @@ export async function installLaunchAgent({
   await execLaunchctl(["kickstart", "-k", `${domain}/${label}`]);
 
   // Ensure we don't end up writing to a clack spinner line (wizards show progress without a newline).
-  stdout.write("\n");
-  stdout.write(`${formatLine("Installed LaunchAgent", plistPath)}\n`);
-  stdout.write(`${formatLine("Logs", stdoutPath)}\n`);
+  writeFormattedLines(
+    stdout,
+    [
+      { label: "Installed LaunchAgent", value: plistPath },
+      { label: "Logs", value: stdoutPath },
+    ],
+    { leadingBlankLine: true },
+  );
   return { plistPath };
 }
 

@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
-import type { FailoverReason } from "./pi-embedded-helpers.js";
 import {
   ensureAuthProfileStore,
+  getSoonestCooldownExpiry,
   isProfileInCooldown,
   resolveAuthProfileOrder,
 } from "./auth-profiles.js";
@@ -20,6 +20,7 @@ import {
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "./model-selection.js";
+import type { FailoverReason } from "./pi-embedded-helpers.js";
 import { isLikelyContextOverflowError } from "./pi-embedded-helpers.js";
 
 type ModelCandidate = {
@@ -94,6 +95,26 @@ type ModelFallbackRunResult<T> = {
   model: string;
   attempts: FallbackAttempt[];
 };
+
+function throwFallbackFailureSummary(params: {
+  attempts: FallbackAttempt[];
+  candidates: ModelCandidate[];
+  lastError: unknown;
+  label: string;
+  formatAttempt: (attempt: FallbackAttempt) => string;
+}): never {
+  if (params.attempts.length <= 1 && params.lastError) {
+    throw params.lastError;
+  }
+  const summary =
+    params.attempts.length > 0 ? params.attempts.map(params.formatAttempt).join(" | ") : "unknown";
+  throw new Error(
+    `All ${params.label} failed (${params.attempts.length || params.candidates.length}): ${summary}`,
+    {
+      cause: params.lastError instanceof Error ? params.lastError : undefined,
+    },
+  );
+}
 
 function resolveImageFallbackCandidates(params: {
   cfg: OpenClawConfig | undefined;
@@ -217,6 +238,50 @@ function resolveFallbackCandidates(params: {
   return candidates;
 }
 
+const lastProbeAttempt = new Map<string, number>();
+const MIN_PROBE_INTERVAL_MS = 30_000; // 30 seconds between probes per key
+const PROBE_MARGIN_MS = 2 * 60 * 1000;
+const PROBE_SCOPE_DELIMITER = "::";
+
+function resolveProbeThrottleKey(provider: string, agentDir?: string): string {
+  const scope = String(agentDir ?? "").trim();
+  return scope ? `${scope}${PROBE_SCOPE_DELIMITER}${provider}` : provider;
+}
+
+function shouldProbePrimaryDuringCooldown(params: {
+  isPrimary: boolean;
+  hasFallbackCandidates: boolean;
+  now: number;
+  throttleKey: string;
+  authStore: ReturnType<typeof ensureAuthProfileStore>;
+  profileIds: string[];
+}): boolean {
+  if (!params.isPrimary || !params.hasFallbackCandidates) {
+    return false;
+  }
+
+  const lastProbe = lastProbeAttempt.get(params.throttleKey) ?? 0;
+  if (params.now - lastProbe < MIN_PROBE_INTERVAL_MS) {
+    return false;
+  }
+
+  const soonest = getSoonestCooldownExpiry(params.authStore, params.profileIds);
+  if (soonest === null || !Number.isFinite(soonest)) {
+    return true;
+  }
+
+  // Probe when cooldown already expired or within the configured margin.
+  return params.now >= soonest - PROBE_MARGIN_MS;
+}
+
+/** @internal – exposed for unit tests only */
+export const _probeThrottleInternals = {
+  lastProbeAttempt,
+  MIN_PROBE_INTERVAL_MS,
+  PROBE_MARGIN_MS,
+  resolveProbeThrottleKey,
+} as const;
+
 export async function runWithModelFallback<T>(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
@@ -239,6 +304,8 @@ export async function runWithModelFallback<T>(params: {
   const attempts: FallbackAttempt[] = [];
   let lastError: unknown;
 
+  const hasFallbackCandidates = candidates.length > 1;
+
   for (let i = 0; i < candidates.length; i += 1) {
     const candidate = candidates[i];
     if (authStore) {
@@ -250,14 +317,34 @@ export async function runWithModelFallback<T>(params: {
       const isAnyProfileAvailable = profileIds.some((id) => !isProfileInCooldown(authStore, id));
 
       if (profileIds.length > 0 && !isAnyProfileAvailable) {
-        // All profiles for this provider are in cooldown; skip without attempting
-        attempts.push({
-          provider: candidate.provider,
-          model: candidate.model,
-          error: `Provider ${candidate.provider} is in cooldown (all profiles unavailable)`,
-          reason: "rate_limit",
+        // All profiles for this provider are in cooldown.
+        // For the primary model (i === 0), probe it if the soonest cooldown
+        // expiry is close or already past. This avoids staying on a fallback
+        // model long after the real rate-limit window clears.
+        const now = Date.now();
+        const probeThrottleKey = resolveProbeThrottleKey(candidate.provider, params.agentDir);
+        const shouldProbe = shouldProbePrimaryDuringCooldown({
+          isPrimary: i === 0,
+          hasFallbackCandidates,
+          now,
+          throttleKey: probeThrottleKey,
+          authStore,
+          profileIds,
         });
-        continue;
+        if (!shouldProbe) {
+          // Skip without attempting
+          attempts.push({
+            provider: candidate.provider,
+            model: candidate.model,
+            error: `Provider ${candidate.provider} is in cooldown (all profiles unavailable)`,
+            reason: "rate_limit",
+          });
+          continue;
+        }
+        // Primary model probe: attempt it despite cooldown to detect recovery.
+        // If it fails, the error is caught below and we fall through to the
+        // next candidate as usual.
+        lastProbeAttempt.set(probeThrottleKey, now);
       }
     }
     try {
@@ -309,22 +396,15 @@ export async function runWithModelFallback<T>(params: {
     }
   }
 
-  if (attempts.length <= 1 && lastError) {
-    throw lastError;
-  }
-  const summary =
-    attempts.length > 0
-      ? attempts
-          .map(
-            (attempt) =>
-              `${attempt.provider}/${attempt.model}: ${attempt.error}${
-                attempt.reason ? ` (${attempt.reason})` : ""
-              }`,
-          )
-          .join(" | ")
-      : "unknown";
-  throw new Error(`All models failed (${attempts.length || candidates.length}): ${summary}`, {
-    cause: lastError instanceof Error ? lastError : undefined,
+  throwFallbackFailureSummary({
+    attempts,
+    candidates,
+    lastError,
+    label: "models",
+    formatAttempt: (attempt) =>
+      `${attempt.provider}/${attempt.model}: ${attempt.error}${
+        attempt.reason ? ` (${attempt.reason})` : ""
+      }`,
   });
 }
 
@@ -378,16 +458,11 @@ export async function runWithImageModelFallback<T>(params: {
     }
   }
 
-  if (attempts.length <= 1 && lastError) {
-    throw lastError;
-  }
-  const summary =
-    attempts.length > 0
-      ? attempts
-          .map((attempt) => `${attempt.provider}/${attempt.model}: ${attempt.error}`)
-          .join(" | ")
-      : "unknown";
-  throw new Error(`All image models failed (${attempts.length || candidates.length}): ${summary}`, {
-    cause: lastError instanceof Error ? lastError : undefined,
+  throwFallbackFailureSummary({
+    attempts,
+    candidates,
+    lastError,
+    label: "image models",
+    formatAttempt: (attempt) => `${attempt.provider}/${attempt.model}: ${attempt.error}`,
   });
 }

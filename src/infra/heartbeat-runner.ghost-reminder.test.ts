@@ -2,10 +2,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
 import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
 import { setTelegramRuntime } from "../../extensions/telegram/src/runtime.js";
 import * as replyModule from "../auto-reply/reply.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
@@ -70,6 +70,56 @@ describe("Ghost reminder bug (issue #13317)", () => {
     return { cfg, sessionKey };
   };
 
+  const expectCronEventPrompt = (
+    getReplySpy: { mock: { calls: unknown[][] } },
+    reminderText: string,
+  ) => {
+    expect(getReplySpy).toHaveBeenCalledTimes(1);
+    const calledCtx = (getReplySpy.mock.calls[0]?.[0] ?? null) as {
+      Provider?: string;
+      Body?: string;
+    } | null;
+    expect(calledCtx?.Provider).toBe("cron-event");
+    expect(calledCtx?.Body).toContain("scheduled reminder has been triggered");
+    expect(calledCtx?.Body).toContain(reminderText);
+    expect(calledCtx?.Body).not.toContain("HEARTBEAT_OK");
+    expect(calledCtx?.Body).not.toContain("heartbeat poll");
+  };
+
+  const runCronReminderCase = async (
+    tmpPrefix: string,
+    enqueue: (sessionKey: string) => void,
+  ): Promise<{
+    result: Awaited<ReturnType<typeof runHeartbeatOnce>>;
+    sendTelegram: ReturnType<typeof vi.fn>;
+    getReplySpy: ReturnType<typeof vi.fn>;
+  }> => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), tmpPrefix));
+    const sendTelegram = vi.fn().mockResolvedValue({
+      messageId: "m1",
+      chatId: "155462274",
+    });
+    const getReplySpy = vi
+      .spyOn(replyModule, "getReplyFromConfig")
+      .mockResolvedValue({ text: "Relay this reminder now" });
+
+    try {
+      const { cfg, sessionKey } = await createConfig(tmpDir);
+      enqueue(sessionKey);
+      const result = await runHeartbeatOnce({
+        cfg,
+        agentId: "main",
+        reason: "cron:reminder-job",
+        deps: {
+          sendTelegram,
+        },
+      });
+      return { result, sendTelegram, getReplySpy };
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  };
+
   it("does not use CRON_EVENT_PROMPT when only a HEARTBEAT_OK event is present", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ghost-"));
     const sendTelegram = vi.fn().mockResolvedValue({
@@ -106,84 +156,33 @@ describe("Ghost reminder bug (issue #13317)", () => {
   });
 
   it("uses CRON_EVENT_PROMPT when an actionable cron event exists", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-"));
-    const sendTelegram = vi.fn().mockResolvedValue({
-      messageId: "m1",
-      chatId: "155462274",
-    });
-    const getReplySpy = vi
-      .spyOn(replyModule, "getReplyFromConfig")
-      .mockResolvedValue({ text: "Relay this reminder now" });
-
-    try {
-      const { cfg } = await createConfig(tmpDir);
-      enqueueSystemEvent("Reminder: Check Base Scout results", {
-        sessionKey: resolveMainSessionKey(cfg),
-      });
-
-      const result = await runHeartbeatOnce({
-        cfg,
-        agentId: "main",
-        reason: "cron:reminder-job",
-        deps: {
-          sendTelegram,
-        },
-      });
-
-      expect(result.status).toBe("ran");
-      expect(getReplySpy).toHaveBeenCalledTimes(1);
-      const calledCtx = getReplySpy.mock.calls[0]?.[0];
-      expect(calledCtx?.Provider).toBe("cron-event");
-      expect(calledCtx?.Body).toContain("scheduled reminder has been triggered");
-      expect(calledCtx?.Body).toContain("Reminder: Check Base Scout results");
-      expect(calledCtx?.Body).not.toContain("HEARTBEAT_OK");
-      expect(calledCtx?.Body).not.toContain("heartbeat poll");
-      expect(sendTelegram).toHaveBeenCalled();
-    } finally {
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    }
+    const { result, sendTelegram, getReplySpy } = await runCronReminderCase(
+      "openclaw-cron-",
+      (sessionKey) => {
+        enqueueSystemEvent("Reminder: Check Base Scout results", { sessionKey });
+      },
+    );
+    expect(result.status).toBe("ran");
+    expectCronEventPrompt(getReplySpy, "Reminder: Check Base Scout results");
+    expect(sendTelegram).toHaveBeenCalled();
   });
 
   it("uses CRON_EVENT_PROMPT when cron events are mixed with heartbeat noise", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-mixed-"));
-    const sendTelegram = vi.fn().mockResolvedValue({
-      messageId: "m1",
-      chatId: "155462274",
-    });
-    const getReplySpy = vi
-      .spyOn(replyModule, "getReplyFromConfig")
-      .mockResolvedValue({ text: "Relay this reminder now" });
-
-    try {
-      const { cfg, sessionKey } = await createConfig(tmpDir);
-      enqueueSystemEvent("HEARTBEAT_OK", { sessionKey });
-      enqueueSystemEvent("Reminder: Check Base Scout results", { sessionKey });
-
-      const result = await runHeartbeatOnce({
-        cfg,
-        agentId: "main",
-        reason: "cron:reminder-job",
-        deps: {
-          sendTelegram,
-        },
-      });
-
-      expect(result.status).toBe("ran");
-      expect(getReplySpy).toHaveBeenCalledTimes(1);
-      const calledCtx = getReplySpy.mock.calls[0]?.[0];
-      expect(calledCtx?.Provider).toBe("cron-event");
-      expect(calledCtx?.Body).toContain("scheduled reminder has been triggered");
-      expect(calledCtx?.Body).toContain("Reminder: Check Base Scout results");
-      expect(calledCtx?.Body).not.toContain("HEARTBEAT_OK");
-      expect(calledCtx?.Body).not.toContain("heartbeat poll");
-      expect(sendTelegram).toHaveBeenCalled();
-    } finally {
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    }
+    const { result, sendTelegram, getReplySpy } = await runCronReminderCase(
+      "openclaw-cron-mixed-",
+      (sessionKey) => {
+        enqueueSystemEvent("HEARTBEAT_OK", { sessionKey });
+        enqueueSystemEvent("Reminder: Check Base Scout results", { sessionKey });
+      },
+    );
+    expect(result.status).toBe("ran");
+    expectCronEventPrompt(getReplySpy, "Reminder: Check Base Scout results");
+    expect(sendTelegram).toHaveBeenCalled();
   });
 
   it("uses CRON_EVENT_PROMPT for tagged cron events on interval wake", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-interval-"));
+    await fs.writeFile(path.join(tmpDir, "HEARTBEAT.md"), "- Check status\n", "utf-8");
     const sendTelegram = vi.fn().mockResolvedValue({
       messageId: "m1",
       chatId: "155462274",

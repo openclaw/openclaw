@@ -1,23 +1,10 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import type { ExecAllowlistEntry } from "./exec-approvals.js";
 import { splitShellArgs } from "../utils/shell-argv.js";
+import type { ExecAllowlistEntry } from "./exec-approvals.js";
+import { expandHomePrefix } from "./home-dir.js";
 
 export const DEFAULT_SAFE_BINS = ["jq", "grep", "cut", "sort", "uniq", "head", "tail", "tr", "wc"];
-
-function expandHome(value: string): string {
-  if (!value) {
-    return value;
-  }
-  if (value === "~") {
-    return os.homedir();
-  }
-  if (value.startsWith("~/")) {
-    return path.join(os.homedir(), value.slice(2));
-  }
-  return value;
-}
 
 export type CommandResolution = {
   rawExecutable: string;
@@ -58,7 +45,7 @@ function parseFirstToken(command: string): string | null {
 }
 
 function resolveExecutablePath(rawExecutable: string, cwd?: string, env?: NodeJS.ProcessEnv) {
-  const expanded = rawExecutable.startsWith("~") ? expandHome(rawExecutable) : rawExecutable;
+  const expanded = rawExecutable.startsWith("~") ? expandHomePrefix(rawExecutable) : rawExecutable;
   if (expanded.includes("/") || expanded.includes("\\")) {
     if (path.isAbsolute(expanded)) {
       return isExecutableFile(expanded) ? expanded : undefined;
@@ -172,7 +159,7 @@ function matchesPattern(pattern: string, target: string): boolean {
   if (!trimmed) {
     return false;
   }
-  const expanded = trimmed.startsWith("~") ? expandHome(trimmed) : trimmed;
+  const expanded = trimmed.startsWith("~") ? expandHomePrefix(trimmed) : trimmed;
   const hasWildcard = /[*?]/.test(expanded);
   let normalizedPattern = expanded;
   let normalizedTarget = target;
@@ -200,7 +187,7 @@ export function resolveAllowlistCandidatePath(
   if (!raw) {
     return undefined;
   }
-  const expanded = raw.startsWith("~") ? expandHome(raw) : raw;
+  const expanded = raw.startsWith("~") ? expandHomePrefix(raw) : raw;
   if (!expanded.includes("/") && !expanded.includes("\\")) {
     return undefined;
   }

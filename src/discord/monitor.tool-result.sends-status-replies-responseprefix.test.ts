@@ -1,49 +1,20 @@
 import type { Client } from "@buape/carbon";
 import { ChannelType, MessageType } from "@buape/carbon";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createDiscordMessageHandler } from "./monitor.js";
+import {
+  dispatchMock,
+  readAllowFromStoreMock,
+  sendMock,
+  updateLastRouteMock,
+  upsertPairingRequestMock,
+} from "./monitor.tool-result.test-harness.js";
+import { createDiscordMessageHandler } from "./monitor/message-handler.js";
 import { __resetDiscordChannelInfoCacheForTest } from "./monitor/message-utils.js";
-import { __resetDiscordThreadStarterCacheForTest } from "./monitor/threading.js";
 
 type Config = ReturnType<typeof import("../config/config.js").loadConfig>;
 
-const sendMock = vi.fn();
-const reactMock = vi.fn();
-const updateLastRouteMock = vi.fn();
-const dispatchMock = vi.fn();
-const readAllowFromStoreMock = vi.fn();
-const upsertPairingRequestMock = vi.fn();
-
-vi.mock("./send.js", () => ({
-  sendMessageDiscord: (...args: unknown[]) => sendMock(...args),
-  reactMessageDiscord: async (...args: unknown[]) => {
-    reactMock(...args);
-  },
-}));
-vi.mock("../auto-reply/dispatch.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../auto-reply/dispatch.js")>();
-  return {
-    ...actual,
-    dispatchInboundMessage: (...args: unknown[]) => dispatchMock(...args),
-    dispatchInboundMessageWithDispatcher: (...args: unknown[]) => dispatchMock(...args),
-    dispatchInboundMessageWithBufferedDispatcher: (...args: unknown[]) => dispatchMock(...args),
-  };
-});
-vi.mock("../pairing/pairing-store.js", () => ({
-  readChannelAllowFromStore: (...args: unknown[]) => readAllowFromStoreMock(...args),
-  upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
-}));
-vi.mock("../config/sessions.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/sessions.js")>();
-  return {
-    ...actual,
-    resolveStorePath: vi.fn(() => "/tmp/openclaw-sessions.json"),
-    updateLastRoute: (...args: unknown[]) => updateLastRouteMock(...args),
-    resolveSessionKey: vi.fn(),
-  };
-});
-
 beforeEach(() => {
+  __resetDiscordChannelInfoCacheForTest();
   sendMock.mockReset().mockResolvedValue(undefined);
   updateLastRouteMock.mockReset();
   dispatchMock.mockReset().mockImplementation(async ({ dispatcher }) => {
@@ -52,19 +23,17 @@ beforeEach(() => {
   });
   readAllowFromStoreMock.mockReset().mockResolvedValue([]);
   upsertPairingRequestMock.mockReset().mockResolvedValue({ code: "PAIRCODE", created: true });
-  __resetDiscordChannelInfoCacheForTest();
-  __resetDiscordThreadStarterCacheForTest();
 });
 
-const BASE_CFG = {
+const BASE_CFG: Config = {
   agents: {
     defaults: {
-      model: "anthropic/claude-opus-4-5",
+      model: { primary: "anthropic/claude-opus-4-5" },
       workspace: "/tmp/openclaw",
     },
   },
   session: { store: "/tmp/openclaw-sessions.json" },
-} as const;
+};
 
 const CATEGORY_GUILD_CFG = {
   ...BASE_CFG,
@@ -79,13 +48,12 @@ const CATEGORY_GUILD_CFG = {
       },
     },
   },
-  routing: { allowFrom: [] },
-} as Config;
+} satisfies Config;
 
-function createDmHandler(opts: { cfg: Config; runtimeError?: (err: unknown) => void }) {
+async function createDmHandler(opts: { cfg: Config; runtimeError?: (err: unknown) => void }) {
   return createDiscordMessageHandler({
     cfg: opts.cfg,
-    discordConfig: opts.cfg.channels.discord,
+    discordConfig: opts.cfg.channels?.discord,
     accountId: "default",
     token: "token",
     runtime: {
@@ -106,21 +74,19 @@ function createDmHandler(opts: { cfg: Config; runtimeError?: (err: unknown) => v
   });
 }
 
-function createDmClient(fetchChannel?: ReturnType<typeof vi.fn>) {
-  const resolvedFetchChannel =
-    fetchChannel ??
-    vi.fn().mockResolvedValue({
+function createDmClient() {
+  return {
+    fetchChannel: vi.fn().mockResolvedValue({
       type: ChannelType.DM,
       name: "dm",
-    });
-
-  return { fetchChannel: resolvedFetchChannel } as unknown as Client;
+    }),
+  } as unknown as Client;
 }
 
-function createCategoryGuildHandler() {
+async function createCategoryGuildHandler() {
   return createDiscordMessageHandler({
     cfg: CATEGORY_GUILD_CFG,
-    discordConfig: CATEGORY_GUILD_CFG.channels.discord,
+    discordConfig: CATEGORY_GUILD_CFG.channels?.discord,
     accountId: "default",
     token: "token",
     runtime: {
@@ -156,145 +122,6 @@ function createCategoryGuildClient() {
 }
 
 describe("discord tool result dispatch", () => {
-  it("sends status replies with responsePrefix", async () => {
-    const cfg = {
-      ...BASE_CFG,
-      messages: { responsePrefix: "PFX" },
-      channels: { discord: { dmPolicy: "open", allowFrom: ["*"], dm: { enabled: true } } },
-    } as ReturnType<typeof import("../config/config.js").loadConfig>;
-
-    const runtimeError = vi.fn();
-    const handler = createDmHandler({ cfg, runtimeError });
-    const client = createDmClient();
-
-    await handler(
-      {
-        message: {
-          id: "m1",
-          content: "/status",
-          channelId: "c1",
-          timestamp: new Date().toISOString(),
-          type: MessageType.Default,
-          attachments: [],
-          embeds: [],
-          mentionedEveryone: false,
-          mentionedUsers: [],
-          mentionedRoles: [],
-          author: { id: "u1", bot: false, username: "Ada" },
-        },
-        author: { id: "u1", bot: false, username: "Ada" },
-        guild_id: null,
-      },
-      client,
-    );
-
-    expect(runtimeError).not.toHaveBeenCalled();
-    expect(sendMock).toHaveBeenCalledTimes(1);
-    expect(sendMock.mock.calls[0]?.[1]).toMatch(/^PFX /);
-  }, 30_000);
-
-  it("caches channel info lookups between messages", async () => {
-    const cfg = {
-      ...BASE_CFG,
-      channels: { discord: { dm: { enabled: true, policy: "open" } } },
-    } as ReturnType<typeof import("../config/config.js").loadConfig>;
-
-    const handler = createDmHandler({ cfg });
-    const fetchChannel = vi.fn().mockResolvedValue({
-      type: ChannelType.DM,
-      name: "dm",
-    });
-    const client = createDmClient(fetchChannel);
-    const baseMessage = {
-      content: "hello",
-      channelId: "cache-channel-1",
-      timestamp: new Date().toISOString(),
-      type: MessageType.Default,
-      attachments: [],
-      embeds: [],
-      mentionedEveryone: false,
-      mentionedUsers: [],
-      mentionedRoles: [],
-      author: { id: "u-cache", bot: false, username: "Ada" },
-    };
-
-    await handler(
-      {
-        message: { ...baseMessage, id: "m-cache-1" },
-        author: baseMessage.author,
-        guild_id: null,
-      },
-      client,
-    );
-    await handler(
-      {
-        message: { ...baseMessage, id: "m-cache-2" },
-        author: baseMessage.author,
-        guild_id: null,
-      },
-      client,
-    );
-
-    expect(fetchChannel).toHaveBeenCalledTimes(1);
-  });
-
-  it("includes forwarded message snapshots in body", async () => {
-    let capturedBody = "";
-    dispatchMock.mockImplementationOnce(async ({ ctx, dispatcher }) => {
-      capturedBody = ctx.Body ?? "";
-      dispatcher.sendFinalReply({ text: "ok" });
-      return { queuedFinal: true, counts: { final: 1 } };
-    });
-
-    const cfg = {
-      ...BASE_CFG,
-      channels: { discord: { dm: { enabled: true, policy: "open" } } },
-    } as ReturnType<typeof import("../config/config.js").loadConfig>;
-
-    const handler = createDmHandler({ cfg });
-    const client = createDmClient();
-
-    await handler(
-      {
-        message: {
-          id: "m-forward-1",
-          content: "",
-          channelId: "c-forward-1",
-          timestamp: new Date().toISOString(),
-          type: MessageType.Default,
-          attachments: [],
-          embeds: [],
-          mentionedEveryone: false,
-          mentionedUsers: [],
-          mentionedRoles: [],
-          author: { id: "u1", bot: false, username: "Ada" },
-          rawData: {
-            message_snapshots: [
-              {
-                message: {
-                  content: "forwarded hello",
-                  embeds: [],
-                  attachments: [],
-                  author: {
-                    id: "u2",
-                    username: "Bob",
-                    discriminator: "0",
-                  },
-                },
-              },
-            ],
-          },
-        },
-        author: { id: "u1", bot: false, username: "Ada" },
-        guild_id: null,
-      },
-      client,
-    );
-
-    expect(capturedBody).toContain("[Forwarded message from @Bob]");
-    expect(capturedBody).toContain("forwarded hello");
-  });
-
   it("uses channel id allowlists for non-thread channels with categories", async () => {
     let capturedCtx: { SessionKey?: string } | undefined;
     dispatchMock.mockImplementationOnce(async ({ ctx, dispatcher }) => {
@@ -303,7 +130,7 @@ describe("discord tool result dispatch", () => {
       return { queuedFinal: true, counts: { final: 1 } };
     });
 
-    const handler = createCategoryGuildHandler();
+    const handler = await createCategoryGuildHandler();
     const client = createCategoryGuildClient();
 
     await handler(
@@ -340,7 +167,7 @@ describe("discord tool result dispatch", () => {
       return { queuedFinal: true, counts: { final: 1 } };
     });
 
-    const handler = createCategoryGuildHandler();
+    const handler = await createCategoryGuildHandler();
     const client = createCategoryGuildClient();
 
     await handler(
@@ -377,7 +204,7 @@ describe("discord tool result dispatch", () => {
       },
     } as Config;
 
-    const handler = createDmHandler({ cfg });
+    const handler = await createDmHandler({ cfg });
     const client = createDmClient();
 
     await handler(

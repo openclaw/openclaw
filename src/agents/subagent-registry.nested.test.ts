@@ -1,17 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import "./subagent-registry.mocks.shared.js";
 
-const noop = () => {};
-
-vi.mock("../gateway/call.js", () => ({
-  callGateway: vi.fn(async () => ({
-    status: "ok",
-    startedAt: 111,
-    endedAt: 222,
+vi.mock("../config/config.js", () => ({
+  loadConfig: vi.fn(() => ({
+    agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
   })),
-}));
-
-vi.mock("../infra/agent-events.js", () => ({
-  onAgentEvent: vi.fn(() => noop),
 }));
 
 vi.mock("./subagent-announce.js", () => ({
@@ -19,10 +12,15 @@ vi.mock("./subagent-announce.js", () => ({
   buildSubagentSystemPrompt: vi.fn(() => "test prompt"),
 }));
 
+vi.mock("./subagent-registry.store.js", () => ({
+  loadSubagentRegistryFromDisk: vi.fn(() => new Map()),
+  saveSubagentRegistryToDisk: vi.fn(() => {}),
+}));
+
 describe("subagent registry nested agent tracking", () => {
   afterEach(async () => {
     const mod = await import("./subagent-registry.js");
-    mod.resetSubagentRegistryForTests();
+    mod.resetSubagentRegistryForTests({ persist: false });
   });
 
   it("listSubagentRunsForRequester returns children of the requesting session", async () => {
