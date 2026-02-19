@@ -10,6 +10,7 @@ import {
   applyQueueDropPolicy,
   buildCollectPrompt,
   clearQueueSummaryState,
+  drainCollectItemIfNeeded,
   drainNextQueueItem,
   hasCrossChannelItems,
   previewQueueSummaryPrompt,
@@ -108,12 +109,6 @@ function scheduleAnnounceDrain(key: string) {
       while (queue.items.length > 0 || queue.droppedCount > 0) {
         await waitForQueueDebounce(queue);
         if (queue.mode === "collect") {
-          if (forceIndividualCollect) {
-            if (!(await drainNextQueueItem(queue.items, async (item) => await queue.send(item)))) {
-              break;
-            }
-            continue;
-          }
           const isCrossChannel = hasCrossChannelItems(queue.items, (item) => {
             if (!item.origin) {
               return {};
@@ -123,11 +118,19 @@ function scheduleAnnounceDrain(key: string) {
             }
             return { key: item.originKey };
           });
-          if (isCrossChannel) {
-            forceIndividualCollect = true;
-            if (!(await drainNextQueueItem(queue.items, async (item) => await queue.send(item)))) {
-              break;
-            }
+          const collectDrainResult = await drainCollectItemIfNeeded({
+            forceIndividualCollect,
+            isCrossChannel,
+            setForceIndividualCollect: (next) => {
+              forceIndividualCollect = next;
+            },
+            items: queue.items,
+            run: async (item) => await queue.send(item),
+          });
+          if (collectDrainResult === "empty") {
+            break;
+          }
+          if (collectDrainResult === "drained") {
             continue;
           }
           const items = queue.items.slice();
