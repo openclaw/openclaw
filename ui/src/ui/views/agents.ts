@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { live } from "lit/directives/live.js";
 import type {
   AgentIdentityResult,
   AgentsFilesListResult,
@@ -440,7 +441,7 @@ function renderAgentOverview(params: {
           <label class="field" style="min-width: 260px; flex: 1;">
             <span>Primary model${isDefault ? " (default)" : ""}</span>
             <select
-              .value=${effectivePrimary ?? ""}
+              .value=${live(effectivePrimary ?? "")}
               ?disabled=${!configForm || configLoading || configSaving}
               @change=${(e: Event) =>
                 onModelChange(agent.id, (e.target as HTMLSelectElement).value || null)}
