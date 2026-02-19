@@ -18,6 +18,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Android/Security: require TLS for non-loopback gateway connections, block manual non-loopback plaintext attempts with a clear status error, and keep plaintext WS limited to loopback-only development flows.
+- Android/Security: exclude `openclaw/identity` from Android cloud backup/device-transfer rules so device private identity material is not exported.
 - Agents/Streaming: keep assistant partial streaming active during reasoning streams, handle native `thinking_*` stream events consistently, dedupe mixed reasoning-end signals, and clear stale mutating tool errors after same-target retry success. (#20635) Thanks @obviyus.
 - iOS/Screen: move `WKWebView` lifecycle ownership into `ScreenWebView` coordinator and explicit attach/detach flow to reduce gesture/lifecycle crash risk (`__NSArrayM insertObject:atIndex:` paths) during screen tab updates. (#20366) Thanks @ngutman.
 - iOS/Onboarding: prevent pairing-status flicker during auto-resume by keeping resumed state transitions stable. (#20310) Thanks @mbelinky.
