@@ -1,12 +1,12 @@
+import crypto from "node:crypto";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
-import crypto from "node:crypto";
-import type { OpenClawConfig } from "../../config/config.js";
 import {
   type CameraFacing,
   cameraTempPath,
   parseCameraClipPayload,
   parseCameraSnapPayload,
+  writeCameraClipPayloadToFile,
   writeBase64ToFile,
   writeUrlToFile,
 } from "../../cli/nodes-camera.js";
@@ -17,6 +17,7 @@ import {
   writeScreenRecordToFile,
 } from "../../cli/nodes-screen.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { imageMimeFromFormat } from "../../media/mime.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
@@ -300,16 +301,10 @@ export function createNodesTool(options?: {
               idempotencyKey: crypto.randomUUID(),
             });
             const payload = parseCameraClipPayload(raw?.payload);
-            const filePath = cameraTempPath({
-              kind: "clip",
+            const filePath = await writeCameraClipPayloadToFile({
+              payload,
               facing,
-              ext: payload.format,
             });
-            if (payload.url) {
-              await writeUrlToFile(filePath, payload.url);
-            } else if (payload.base64) {
-              await writeBase64ToFile(filePath, payload.base64);
-            }
             return {
               content: [{ type: "text", text: `FILE:${filePath}` }],
               details: {

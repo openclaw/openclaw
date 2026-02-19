@@ -1,10 +1,8 @@
-import type { ReplyPayload } from "../../../auto-reply/types.js";
-import type { SlackStreamSession } from "../../streaming.js";
-import type { PreparedSlackMessage } from "./types.js";
 import { resolveHumanDelayConfig } from "../../../agents/identity.js";
 import { dispatchInboundMessage } from "../../../auto-reply/dispatch.js";
 import { clearHistoryEntriesIfEnabled } from "../../../auto-reply/reply/history.js";
 import { createReplyDispatcherWithTyping } from "../../../auto-reply/reply/reply-dispatcher.js";
+import type { ReplyPayload } from "../../../auto-reply/types.js";
 import { removeAckReactionAfterReply } from "../../../channels/ack-reactions.js";
 import { logAckFailure, logTypingFailure } from "../../../channels/logging.js";
 import { createReplyPrefixOptions } from "../../../channels/reply-prefix.js";
@@ -18,9 +16,11 @@ import {
   buildStatusFinalPreviewText,
   resolveSlackStreamMode,
 } from "../../stream-mode.js";
+import type { SlackStreamSession } from "../../streaming.js";
 import { appendSlackStream, startSlackStream, stopSlackStream } from "../../streaming.js";
 import { resolveSlackThreadTargets } from "../../threading.js";
 import { createSlackReplyDeliveryPlan, deliverReplies, resolveSlackThreadTs } from "../replies.js";
+import type { PreparedSlackMessage } from "./types.js";
 
 function hasMedia(payload: ReplyPayload): boolean {
   return Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
@@ -180,9 +180,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     }
 
     const text = payload.text.trim();
+    let plannedThreadTs: string | undefined;
     try {
       if (!streamSession) {
         const streamThreadTs = replyPlan.nextThreadTs();
+        plannedThreadTs = streamThreadTs;
         if (!streamThreadTs) {
           logVerbose(
             "slack-stream: no reply thread target for stream start, falling back to normal delivery",
@@ -211,7 +213,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         danger(`slack-stream: streaming API call failed: ${String(err)}, falling back`),
       );
       streamFailed = true;
-      await deliverNormally(payload, streamSession?.threadTs);
+      await deliverNormally(payload, streamSession?.threadTs ?? plannedThreadTs);
     }
   };
 

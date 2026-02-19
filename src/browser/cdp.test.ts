@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
-import { WebSocketServer } from "ws";
+import { type WebSocket, WebSocketServer } from "ws";
 import { rawDataToString } from "../infra/ws.js";
 import { createTargetViaCdp, evaluateJavaScript, normalizeCdpWsUrl, snapshotAria } from "./cdp.js";
 
@@ -12,6 +12,29 @@ describe("cdp", () => {
     wsServer = new WebSocketServer({ port: 0, host: "127.0.0.1" });
     await new Promise<void>((resolve) => wsServer?.once("listening", resolve));
     return (wsServer.address() as { port: number }).port;
+  };
+
+  const startWsServerWithMessages = async (
+    onMessage: (
+      msg: { id?: number; method?: string; params?: Record<string, unknown> },
+      socket: WebSocket,
+    ) => void,
+  ) => {
+    const wsPort = await startWsServer();
+    if (!wsServer) {
+      throw new Error("ws server not initialized");
+    }
+    wsServer.on("connection", (socket) => {
+      socket.on("message", (data) => {
+        const msg = JSON.parse(rawDataToString(data)) as {
+          id?: number;
+          method?: string;
+          params?: Record<string, unknown>;
+        };
+        onMessage(msg, socket);
+      });
+    });
+    return wsPort;
   };
 
   afterEach(async () => {
@@ -32,28 +55,16 @@ describe("cdp", () => {
   });
 
   it("creates a target via the browser websocket", async () => {
-    const wsPort = await startWsServer();
-    if (!wsServer) {
-      throw new Error("ws server not initialized");
-    }
-
-    wsServer.on("connection", (socket) => {
-      socket.on("message", (data) => {
-        const msg = JSON.parse(rawDataToString(data)) as {
-          id?: number;
-          method?: string;
-          params?: { url?: string };
-        };
-        if (msg.method !== "Target.createTarget") {
-          return;
-        }
-        socket.send(
-          JSON.stringify({
-            id: msg.id,
-            result: { targetId: "TARGET_123" },
-          }),
-        );
-      });
+    const wsPort = await startWsServerWithMessages((msg, socket) => {
+      if (msg.method !== "Target.createTarget") {
+        return;
+      }
+      socket.send(
+        JSON.stringify({
+          id: msg.id,
+          result: { targetId: "TARGET_123" },
+        }),
+      );
     });
 
     httpServer = createServer((req, res) => {
@@ -82,32 +93,20 @@ describe("cdp", () => {
   });
 
   it("evaluates javascript via CDP", async () => {
-    const wsPort = await startWsServer();
-    if (!wsServer) {
-      throw new Error("ws server not initialized");
-    }
-
-    wsServer.on("connection", (socket) => {
-      socket.on("message", (data) => {
-        const msg = JSON.parse(rawDataToString(data)) as {
-          id?: number;
-          method?: string;
-          params?: { expression?: string };
-        };
-        if (msg.method === "Runtime.enable") {
-          socket.send(JSON.stringify({ id: msg.id, result: {} }));
-          return;
-        }
-        if (msg.method === "Runtime.evaluate") {
-          expect(msg.params?.expression).toBe("1+1");
-          socket.send(
-            JSON.stringify({
-              id: msg.id,
-              result: { result: { type: "number", value: 2 } },
-            }),
-          );
-        }
-      });
+    const wsPort = await startWsServerWithMessages((msg, socket) => {
+      if (msg.method === "Runtime.enable") {
+        socket.send(JSON.stringify({ id: msg.id, result: {} }));
+        return;
+      }
+      if (msg.method === "Runtime.evaluate") {
+        expect(msg.params?.expression).toBe("1+1");
+        socket.send(
+          JSON.stringify({
+            id: msg.id,
+            result: { result: { type: "number", value: 2 } },
+          }),
+        );
+      }
     });
 
     const res = await evaluateJavaScript({
@@ -120,47 +119,35 @@ describe("cdp", () => {
   });
 
   it("captures an aria snapshot via CDP", async () => {
-    const wsPort = await startWsServer();
-    if (!wsServer) {
-      throw new Error("ws server not initialized");
-    }
-
-    wsServer.on("connection", (socket) => {
-      socket.on("message", (data) => {
-        const msg = JSON.parse(rawDataToString(data)) as {
-          id?: number;
-          method?: string;
-        };
-        if (msg.method === "Accessibility.enable") {
-          socket.send(JSON.stringify({ id: msg.id, result: {} }));
-          return;
-        }
-        if (msg.method === "Accessibility.getFullAXTree") {
-          socket.send(
-            JSON.stringify({
-              id: msg.id,
-              result: {
-                nodes: [
-                  {
-                    nodeId: "1",
-                    role: { value: "RootWebArea" },
-                    name: { value: "" },
-                    childIds: ["2"],
-                  },
-                  {
-                    nodeId: "2",
-                    role: { value: "button" },
-                    name: { value: "OK" },
-                    backendDOMNodeId: 42,
-                    childIds: [],
-                  },
-                ],
-              },
-            }),
-          );
-          return;
-        }
-      });
+    const wsPort = await startWsServerWithMessages((msg, socket) => {
+      if (msg.method === "Accessibility.enable") {
+        socket.send(JSON.stringify({ id: msg.id, result: {} }));
+        return;
+      }
+      if (msg.method === "Accessibility.getFullAXTree") {
+        socket.send(
+          JSON.stringify({
+            id: msg.id,
+            result: {
+              nodes: [
+                {
+                  nodeId: "1",
+                  role: { value: "RootWebArea" },
+                  name: { value: "" },
+                  childIds: ["2"],
+                },
+                {
+                  nodeId: "2",
+                  role: { value: "button" },
+                  name: { value: "OK" },
+                  backendDOMNodeId: 42,
+                  childIds: [],
+                },
+              ],
+            },
+          }),
+        );
+      }
     });
 
     const snap = await snapshotAria({ wsUrl: `ws://127.0.0.1:${wsPort}` });

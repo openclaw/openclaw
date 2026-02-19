@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
@@ -9,11 +8,13 @@ import { updateSessionStore } from "../config/sessions.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
 import { resolveOutboundTarget } from "../infra/outbound/targets.js";
+import { registerApnsToken } from "../infra/push-apns.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { parseMessageWithAttachments } from "./chat-attachments.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./server-methods/attachment-normalize.js";
+import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
 import {
   loadSessionEntry,
   pruneLegacyStoreKeys,
@@ -506,6 +507,33 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
 
       enqueueSystemEvent(text, { sessionKey, contextKey: runId ? `exec:${runId}` : "exec" });
       requestHeartbeatNow({ reason: "exec-event" });
+      return;
+    }
+    case "push.apns.register": {
+      if (!evt.payloadJSON) {
+        return;
+      }
+      let payload: unknown;
+      try {
+        payload = JSON.parse(evt.payloadJSON) as unknown;
+      } catch {
+        return;
+      }
+      const obj =
+        typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>) : {};
+      const token = typeof obj.token === "string" ? obj.token : "";
+      const topic = typeof obj.topic === "string" ? obj.topic : "";
+      const environment = obj.environment;
+      try {
+        await registerApnsToken({
+          nodeId,
+          token,
+          topic,
+          environment,
+        });
+      } catch (err) {
+        ctx.logGateway.warn(`push apns register failed node=${nodeId}: ${formatForLog(err)}`);
+      }
       return;
     }
     default:
