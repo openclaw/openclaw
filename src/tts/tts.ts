@@ -13,6 +13,7 @@ import path from "node:path";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.js";
+import { normalizeChatChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type {
   TtsConfig,
@@ -486,7 +487,12 @@ function resolveOutputFormat(channelId?: string | null) {
 }
 
 function resolveChannelId(channel: string | undefined): ChannelId | null {
-  return channel ? normalizeChannelId(channel) : null;
+  if (!channel) {
+    return null;
+  }
+  // Try plugin registry first, fall back to static channel list.
+  // Plugin registry may not be initialized when TTS runs from tool context.
+  return normalizeChannelId(channel) ?? (normalizeChatChannelId(channel) as ChannelId | null);
 }
 
 function resolveEdgeOutputFormat(config: ResolvedTtsConfig): string {

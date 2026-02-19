@@ -70,6 +70,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
       messageThreadId,
       replyToMessageId,
       quoteText,
+      asVoice: payload.audioAsVoice === true,
       accountId: accountId ?? undefined,
       mediaLocalRoots,
     };
