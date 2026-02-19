@@ -667,7 +667,6 @@ export async function runEmbeddedAttempt(
         const originalStreamFn = activeSession.agent.streamFn;
         const modelProvider = params.provider;
         const modelId = params.modelId;
-        const wrappedStreamFn = originalStreamFn;
         activeSession.agent.streamFn = async function (model, context, options) {
           if (policy.beforeModelCall) {
             try {
@@ -680,7 +679,7 @@ export async function runEmbeddedAttempt(
               log.warn("Runtime policy beforeModelCall error", { error: String(err) });
             }
           }
-          const result = await wrappedStreamFn(model, context, options);
+          const result = await originalStreamFn(model, context, options);
           if (policy.afterModelCall) {
             policy
               .afterModelCall({
