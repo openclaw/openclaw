@@ -33,6 +33,19 @@ describe("$schema key in config (#14998)", () => {
   });
 });
 
+describe("plugins.slots.contextEngine", () => {
+  it("accepts a contextEngine slot id", () => {
+    const result = OpenClawSchema.safeParse({
+      plugins: {
+        slots: {
+          contextEngine: "lcm",
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+});
+
 describe("ui.seamColor", () => {
   it("accepts hex colors", () => {
     const res = validateConfigObject({ ui: { seamColor: "#FF4500" } });
