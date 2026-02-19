@@ -31,6 +31,7 @@ import type { ModelApi } from "../config/types.models.js";
 import {
   HUGGINGFACE_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
+  TETRATE_DEFAULT_MODEL_REF,
   TOGETHER_DEFAULT_MODEL_REF,
   XIAOMI_DEFAULT_MODEL_REF,
   ZAI_DEFAULT_MODEL_REF,
@@ -59,6 +60,7 @@ import {
   buildZaiModelDefinition,
   buildMoonshotModelDefinition,
   buildXaiModelDefinition,
+  buildTetrateModelDefinition,
   QIANFAN_BASE_URL,
   QIANFAN_DEFAULT_MODEL_REF,
   KIMI_CODING_MODEL_REF,
@@ -70,6 +72,8 @@ import {
   resolveZaiBaseUrl,
   XAI_BASE_URL,
   XAI_DEFAULT_MODEL_ID,
+  TETRATE_BASE_URL,
+  TETRATE_DEFAULT_MODEL_ID,
 } from "./onboard-auth.models.js";
 
 export function applyZaiProviderConfig(
@@ -483,4 +487,35 @@ export function applyQianfanProviderConfig(cfg: OpenClawConfig): OpenClawConfig 
 export function applyQianfanConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyQianfanProviderConfig(cfg);
   return applyAgentDefaultModelPrimary(next, QIANFAN_DEFAULT_MODEL_REF);
+}
+
+export function applyTetrateProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[TETRATE_DEFAULT_MODEL_REF] = {
+    ...models[TETRATE_DEFAULT_MODEL_REF],
+    alias: models[TETRATE_DEFAULT_MODEL_REF]?.alias ?? "Tetrate",
+  };
+
+  const defaultModels = [
+    buildTetrateModelDefinition("claude-sonnet-4-6"),
+    buildTetrateModelDefinition("claude-haiku-4-5"),
+    buildTetrateModelDefinition("claude-opus-4-6"),
+    buildTetrateModelDefinition("gpt-5.2"),
+    buildTetrateModelDefinition("gemini-3-pro-preview"),
+    buildTetrateModelDefinition("xai/grok-4"),
+  ];
+
+  return applyProviderConfigWithDefaultModels(cfg, {
+    agentModels: models,
+    providerId: "tetrate",
+    api: "openai-completions",
+    baseUrl: TETRATE_BASE_URL,
+    defaultModels,
+    defaultModelId: TETRATE_DEFAULT_MODEL_ID,
+  });
+}
+
+export function applyTetrateConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyTetrateProviderConfig(cfg);
+  return applyAgentDefaultModelPrimary(next, TETRATE_DEFAULT_MODEL_REF);
 }

@@ -46,6 +46,7 @@ export type AuthChoice =
   | "qwen-portal"
   | "xai-api-key"
   | "qianfan-api-key"
+  | "tetrate-api-key"
   | "custom-api-key"
   | "skip";
 export type AuthChoiceGroupId =
@@ -71,6 +72,7 @@ export type AuthChoiceGroupId =
   | "huggingface"
   | "qianfan"
   | "xai"
+  | "tetrate"
   | "custom";
 export type GatewayAuthChoice = "token" | "password";
 export type ResetScope = "config" | "config+creds+sessions" | "full";
@@ -120,6 +122,7 @@ export type OnboardOptions = {
   opencodeZenApiKey?: string;
   xaiApiKey?: string;
   qianfanApiKey?: string;
+  tetrateApiKey?: string;
   customBaseUrl?: string;
   customApiKey?: string;
   customModelId?: string;

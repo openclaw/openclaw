@@ -120,6 +120,7 @@ export async function setVeniceApiKey(key: string, agentDir?: string) {
   });
 }
 
+export const TETRATE_DEFAULT_MODEL_REF = "tetrate/claude-sonnet-4-6";
 export const ZAI_DEFAULT_MODEL_REF = "zai/glm-5";
 export const XIAOMI_DEFAULT_MODEL_REF = "xiaomi/mimo-v2-flash";
 export const OPENROUTER_DEFAULT_MODEL_REF = "openrouter/auto";
@@ -257,6 +258,18 @@ export function setQianfanApiKey(key: string, agentDir?: string) {
     credential: {
       type: "api_key",
       provider: "qianfan",
+      key,
+    },
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
+
+export function setTetrateApiKey(key: string, agentDir?: string) {
+  upsertAuthProfile({
+    profileId: "tetrate:default",
+    credential: {
+      type: "api_key",
+      provider: "tetrate",
       key,
     },
     agentDir: resolveAuthAgentDir(agentDir),

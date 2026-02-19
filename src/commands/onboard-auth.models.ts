@@ -157,6 +157,79 @@ export function buildZaiModelDefinition(params: {
   };
 }
 
+export const TETRATE_BASE_URL = "https://api.router.tetrate.ai/v1";
+export const TETRATE_DEFAULT_MODEL_ID = "claude-sonnet-4-6";
+
+const TETRATE_MODEL_CATALOG = {
+  // Anthropic Claude
+  "claude-sonnet-4-6": {
+    name: "Claude Sonnet 4.6",
+    reasoning: true,
+    vision: true,
+    contextWindow: 200000,
+    maxTokens: 64000,
+    cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+  },
+  "claude-haiku-4-5": {
+    name: "Claude Haiku 4.5",
+    reasoning: true,
+    vision: true,
+    contextWindow: 200000,
+    maxTokens: 64000,
+    cost: { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 },
+  },
+  "claude-opus-4-6": {
+    name: "Claude Opus 4.6",
+    reasoning: true,
+    vision: true,
+    contextWindow: 1000000,
+    maxTokens: 128000,
+    cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+  },
+  // OpenAI GPT
+  "gpt-5.2": {
+    name: "GPT-5.2",
+    reasoning: true,
+    vision: true,
+    contextWindow: 400000,
+    maxTokens: 128000,
+    cost: { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
+  },
+  // Google Gemini
+  "gemini-3-pro-preview": {
+    name: "Gemini 3 Pro Preview",
+    reasoning: true,
+    vision: true,
+    contextWindow: 1048576,
+    maxTokens: 65536,
+    cost: { input: 2, output: 12, cacheRead: 0.2, cacheWrite: 0.2 },
+  },
+  // xAI Grok
+  "xai/grok-4": {
+    name: "Grok 4",
+    reasoning: true,
+    vision: true,
+    contextWindow: 256000,
+    maxTokens: 0,
+    cost: { input: 3, output: 15, cacheRead: 0.75, cacheWrite: 0 },
+  },
+} as const;
+
+type TetrateCatalogId = keyof typeof TETRATE_MODEL_CATALOG;
+
+export function buildTetrateModelDefinition(id: string): ModelDefinitionConfig {
+  const catalog = TETRATE_MODEL_CATALOG[id as TetrateCatalogId];
+  return {
+    id,
+    name: catalog?.name ?? id,
+    reasoning: catalog?.reasoning ?? false,
+    input: catalog?.vision ? ["text", "image"] : ["text"],
+    cost: catalog?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: catalog?.contextWindow ?? 200000,
+    maxTokens: catalog?.maxTokens ?? 64000,
+  };
+}
+
 export const XAI_BASE_URL = "https://api.x.ai/v1";
 export const XAI_DEFAULT_MODEL_ID = "grok-4";
 export const XAI_DEFAULT_MODEL_REF = `xai/${XAI_DEFAULT_MODEL_ID}`;

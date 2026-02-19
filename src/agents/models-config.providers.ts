@@ -171,6 +171,18 @@ type VllmModelsResponse = {
   }>;
 };
 
+type TetrateModelsResponse = {
+  data?: Array<{
+    id?: string;
+    context_window?: number;
+    max_output_tokens?: number;
+    supports_vision?: boolean;
+    supports_caching?: boolean;
+    input_price_per_million?: number;
+    output_price_per_million?: number;
+  }>;
+};
+
 /**
  * Derive the Ollama native API base URL from a configured base URL.
  *
@@ -278,6 +290,130 @@ async function discoverVllmModels(
     console.warn(`Failed to discover vLLM models: ${String(error)}`);
     return [];
   }
+}
+
+const TETRATE_BASE_URL = "https://api.router.tetrate.ai/v1";
+
+async function discoverTetrateModels(
+  baseUrl: string,
+  apiKey?: string,
+): Promise<ModelDefinitionConfig[]> {
+  if (process.env.VITEST || process.env.NODE_ENV === "test") {
+    return [];
+  }
+
+  const trimmedBaseUrl = baseUrl.trim().replace(/\/+$/, "");
+  const url = `${trimmedBaseUrl}/models`;
+
+  try {
+    const trimmedApiKey = apiKey?.trim();
+    const response = await fetch(url, {
+      headers: trimmedApiKey ? { Authorization: `Bearer ${trimmedApiKey}` } : undefined,
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) {
+      return [];
+    }
+    const data = (await response.json()) as TetrateModelsResponse;
+    const models = data.data ?? [];
+    if (models.length === 0) {
+      return [];
+    }
+
+    return models
+      .filter((m) => typeof m.id === "string" && m.id.trim() !== "")
+      .filter((m) => (m.max_output_tokens ?? 0) > 0)
+      .map((m) => {
+        const modelId = m.id!.trim();
+        const lower = modelId.toLowerCase();
+        const isReasoning =
+          lower.includes("opus") || lower.includes("sonnet") || lower.includes("r1");
+        return {
+          id: modelId,
+          name: modelId,
+          reasoning: isReasoning,
+          input: m.supports_vision ? ["text", "image"] : ["text"],
+          cost: {
+            input: m.input_price_per_million ?? 0,
+            output: m.output_price_per_million ?? 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+          },
+          contextWindow: m.context_window ?? 200000,
+          maxTokens: m.max_output_tokens ?? 64000,
+        } satisfies ModelDefinitionConfig;
+      });
+  } catch {
+    return [];
+  }
+}
+
+function buildTetrateProvider(apiKey?: string): ProviderConfig {
+  return {
+    baseUrl: TETRATE_BASE_URL,
+    api: "openai-completions",
+    ...(apiKey ? { apiKey } : {}),
+    models: [
+      // Anthropic Claude
+      {
+        id: "claude-sonnet-4-6",
+        name: "Claude Sonnet 4.6",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+        contextWindow: 200000,
+        maxTokens: 64000,
+      },
+      {
+        id: "claude-haiku-4-5",
+        name: "Claude Haiku 4.5",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 },
+        contextWindow: 200000,
+        maxTokens: 64000,
+      },
+      {
+        id: "claude-opus-4-6",
+        name: "Claude Opus 4.6",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+        contextWindow: 1000000,
+        maxTokens: 128000,
+      },
+      // OpenAI GPT
+      {
+        id: "gpt-5.2",
+        name: "GPT-5.2",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
+        contextWindow: 400000,
+        maxTokens: 128000,
+      },
+      // Google Gemini
+      {
+        id: "gemini-3-pro-preview",
+        name: "Gemini 3 Pro Preview",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 2, output: 12, cacheRead: 0.2, cacheWrite: 0.2 },
+        contextWindow: 1048576,
+        maxTokens: 65536,
+      },
+      // xAI Grok
+      {
+        id: "xai/grok-4",
+        name: "Grok 4",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 3, output: 15, cacheRead: 0.75, cacheWrite: 0 },
+        contextWindow: 256000,
+        maxTokens: 0,
+      },
+    ],
+  };
 }
 
 function normalizeApiKeyConfig(value: string): string {
@@ -805,6 +941,29 @@ export async function resolveImplicitProviders(params: {
     resolveApiKeyFromProfiles({ provider: "nvidia", store: authStore });
   if (nvidiaKey) {
     providers.nvidia = { ...buildNvidiaProvider(), apiKey: nvidiaKey };
+  }
+
+  const tetrateKey =
+    resolveEnvApiKeyVarName("tetrate") ??
+    resolveApiKeyFromProfiles({ provider: "tetrate", store: authStore });
+  if (tetrateKey) {
+    const discoveryApiKey = resolveEnvApiKeyVarName("tetrate")
+      ? (process.env[resolveEnvApiKeyVarName("tetrate")!]?.trim() ?? "")
+      : (tetrateKey ?? "");
+    const discoveredModels = await discoverTetrateModels(
+      TETRATE_BASE_URL,
+      discoveryApiKey || undefined,
+    );
+    if (discoveredModels.length > 0) {
+      providers.tetrate = {
+        baseUrl: TETRATE_BASE_URL,
+        api: "openai-completions",
+        apiKey: tetrateKey,
+        models: discoveredModels,
+      };
+    } else {
+      providers.tetrate = { ...buildTetrateProvider(), apiKey: tetrateKey };
+    }
   }
 
   return providers;

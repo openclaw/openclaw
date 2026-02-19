@@ -26,6 +26,7 @@ import {
   applyHuggingfaceConfig,
   applyVercelAiGatewayConfig,
   applyLitellmConfig,
+  applyTetrateConfig,
   applyXaiConfig,
   applyXiaomiConfig,
   applyZaiConfig,
@@ -40,6 +41,7 @@ import {
   setOpencodeZenApiKey,
   setOpenrouterApiKey,
   setSyntheticApiKey,
+  setTetrateApiKey,
   setXaiApiKey,
   setVeniceApiKey,
   setTogetherApiKey,
@@ -324,6 +326,29 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applyQianfanConfig(nextConfig);
+  }
+
+  if (authChoice === "tetrate-api-key") {
+    const resolved = await resolveNonInteractiveApiKey({
+      provider: "tetrate",
+      cfg: baseConfig,
+      flagValue: opts.tetrateApiKey,
+      flagName: "--tetrate-api-key",
+      envVar: "TETRATE_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (resolved.source !== "profile") {
+      setTetrateApiKey(resolved.key);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "tetrate:default",
+      provider: "tetrate",
+      mode: "api_key",
+    });
+    return applyTetrateConfig(nextConfig);
   }
 
   if (authChoice === "openai-api-key") {

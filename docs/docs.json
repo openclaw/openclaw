@@ -1062,7 +1062,8 @@
                   "providers/glm",
                   "providers/zai",
                   "providers/synthetic",
-                  "providers/qianfan"
+                  "providers/qianfan",
+                  "providers/tetrate"
                 ]
               }
             ]

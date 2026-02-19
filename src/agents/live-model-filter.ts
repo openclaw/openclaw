@@ -83,7 +83,7 @@ export function isModernModelRef(ref: ModelRef): boolean {
     return false;
   }
 
-  if (provider === "openrouter" || provider === "opencode") {
+  if (provider === "openrouter" || provider === "opencode" || provider === "tetrate") {
     return matchesAny(id, [
       ...ANTHROPIC_PREFIXES,
       ...OPENAI_MODELS,

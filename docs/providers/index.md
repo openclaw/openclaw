@@ -55,6 +55,7 @@ See [Venice AI](/providers/venice).
 - [Ollama (local models)](/providers/ollama)
 - [vLLM (local models)](/providers/vllm)
 - [Qianfan](/providers/qianfan)
+- [Tetrate Agent Router Service](/providers/tetrate)
 - [NVIDIA](/providers/nvidia)
 
 ## Transcription providers

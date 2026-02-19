@@ -95,6 +95,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["qianfan-api-key"],
   },
   {
+    value: "tetrate",
+    label: "Tetrate Agent Router Service",
+    hint: "API key",
+    choices: ["tetrate-api-key"],
+  },
+  {
     value: "copilot",
     label: "Copilot",
     hint: "GitHub + local proxy",
@@ -183,6 +189,11 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
   {
     value: "qianfan-api-key",
     label: "Qianfan API key",
+  },
+  {
+    value: "tetrate-api-key",
+    label: "Tetrate API key",
+    hint: "OpenAI-compatible (api.router.tetrate.ai)",
   },
   { value: "openrouter-api-key", label: "OpenRouter API key" },
   {

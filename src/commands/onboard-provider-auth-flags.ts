@@ -21,6 +21,7 @@ type OnboardProviderAuthOptionKey = keyof Pick<
   | "xaiApiKey"
   | "litellmApiKey"
   | "qianfanApiKey"
+  | "tetrateApiKey"
 >;
 
 export type OnboardProviderAuthFlag = {
@@ -165,5 +166,12 @@ export const ONBOARD_PROVIDER_AUTH_FLAGS: ReadonlyArray<OnboardProviderAuthFlag>
     cliFlag: "--qianfan-api-key",
     cliOption: "--qianfan-api-key <key>",
     description: "QIANFAN API key",
+  },
+  {
+    optionKey: "tetrateApiKey",
+    authChoice: "tetrate-api-key",
+    cliFlag: "--tetrate-api-key",
+    cliOption: "--tetrate-api-key <key>",
+    description: "Tetrate Agent Router Service API key",
   },
 ];
