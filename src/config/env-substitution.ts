@@ -97,7 +97,7 @@ function substituteString(value: string, env: NodeJS.ProcessEnv, configPath: str
     }
     if (token?.kind === "substitution") {
       const envValue = env[token.name];
-      if (envValue === undefined || envValue === "") {
+      if (envValue === undefined) {
         throw new MissingEnvVarError(token.name, configPath);
       }
       chunks.push(envValue);
