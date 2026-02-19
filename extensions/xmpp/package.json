@@ -1,0 +1,31 @@
+{
+  "name": "@openclaw/xmpp",
+  "version": "2026.2.19",
+  "description": "OpenClaw XMPP channel plugin",
+  "type": "module",
+  "dependencies": {
+    "@xmpp/client": "0.13.1",
+    "ws": "^7.5.9",
+    "zod": "4.3.6"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "xmpp",
+      "label": "XMPP",
+      "selectionLabel": "XMPP (plugin)",
+      "docsPath": "/channels/xmpp",
+      "docsLabel": "xmpp",
+      "blurb": "XMPP channel; install the plugin to enable.",
+      "order": 80,
+      "quickstartAllowFrom": true
+    },
+    "install": {
+      "npmSpec": "@openclaw/xmpp",
+      "localPath": "extensions/xmpp",
+      "defaultChoice": "local"
+    }
+  }
+}
