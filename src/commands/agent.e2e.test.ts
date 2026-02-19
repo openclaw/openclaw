@@ -11,6 +11,12 @@ vi.mock("../agents/pi-embedded.js", () => ({
 vi.mock("../agents/model-catalog.js", () => ({
   loadModelCatalog: vi.fn(),
 }));
+vi.mock("../infra/diagnostic-events.js", () => ({
+  emitDiagnosticEvent: vi.fn(),
+  isDiagnosticsEnabled: vi.fn((cfg?: { diagnostics?: { enabled?: boolean } }) => {
+    return cfg?.diagnostics?.enabled === true;
+  }),
+}));
 
 import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
 import { setTelegramRuntime } from "../../extensions/telegram/src/runtime.js";
@@ -19,6 +25,7 @@ import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import type { OpenClawConfig } from "../config/config.js";
 import * as configModule from "../config/config.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
+import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -45,6 +52,7 @@ function mockConfig(
   agentOverrides?: Partial<NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>>,
   telegramOverrides?: Partial<NonNullable<NonNullable<OpenClawConfig["channels"]>["telegram"]>>,
   agentsList?: Array<{ id: string; default?: boolean }>,
+  diagnosticsOverrides?: Partial<NonNullable<OpenClawConfig["diagnostics"]>>,
 ) {
   configSpy.mockReturnValue({
     agents: {
@@ -60,6 +68,7 @@ function mockConfig(
     channels: {
       telegram: telegramOverrides ? { ...telegramOverrides } : undefined,
     },
+    diagnostics: diagnosticsOverrides ? { ...diagnosticsOverrides } : undefined,
   });
 }
 
@@ -455,6 +464,64 @@ describe("agentCommand", () => {
 
       const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
       expect(callArgs?.agentAccountId).toBe("kev");
+    });
+  });
+
+  it("emits model usage diagnostics for embedded Slack-context runs", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store, undefined, undefined, undefined, { enabled: true });
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValueOnce({
+        payloads: [{ text: "ok" }],
+        meta: {
+          durationMs: 5,
+          agentMeta: {
+            sessionId: "s",
+            provider: "anthropic",
+            model: "claude-opus-4-5",
+            usage: {
+              input: 120,
+              output: 80,
+              cacheRead: 15,
+              cacheWrite: 5,
+              total: 220,
+            },
+            lastCallUsage: {
+              input: 120,
+              output: 80,
+              cacheRead: 15,
+              cacheWrite: 5,
+              total: 220,
+            },
+          },
+        },
+      });
+
+      await agentCommand(
+        {
+          message: "hi",
+          to: "+1555",
+          runContext: { messageChannel: "slack" },
+        },
+        runtime,
+      );
+
+      expect(emitDiagnosticEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "model.usage",
+          channel: "slack",
+          provider: "anthropic",
+          model: "claude-opus-4-5",
+          usage: expect.objectContaining({
+            input: 120,
+            output: 80,
+            cacheRead: 15,
+            cacheWrite: 5,
+            promptTokens: 140,
+            total: 220,
+          }),
+        }),
+      );
     });
   });
 

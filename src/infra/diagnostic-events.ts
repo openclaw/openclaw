@@ -167,20 +167,41 @@ export type DiagnosticEventInput = DiagnosticEventPayload extends infer Event
     ? Omit<Event, "seq" | "ts">
     : never
   : never;
-let seq = 0;
-const listeners = new Set<(evt: DiagnosticEventPayload) => void>();
+type DiagnosticListener = (evt: DiagnosticEventPayload) => void;
+
+type DiagnosticEventBusState = {
+  seq: number;
+  listeners: Set<DiagnosticListener>;
+};
+
+const DIAGNOSTIC_EVENT_BUS_KEY = Symbol.for("openclaw.diagnostic-events.bus");
+
+function getDiagnosticEventBusState(): DiagnosticEventBusState {
+  const globalScope = globalThis as typeof globalThis & {
+    [DIAGNOSTIC_EVENT_BUS_KEY]?: DiagnosticEventBusState;
+  };
+  // Keep one shared bus across bundled entrypoints (core + plugin-sdk bundles).
+  if (!globalScope[DIAGNOSTIC_EVENT_BUS_KEY]) {
+    globalScope[DIAGNOSTIC_EVENT_BUS_KEY] = {
+      seq: 0,
+      listeners: new Set<DiagnosticListener>(),
+    };
+  }
+  return globalScope[DIAGNOSTIC_EVENT_BUS_KEY];
+}
 
 export function isDiagnosticsEnabled(config?: OpenClawConfig): boolean {
   return config?.diagnostics?.enabled === true;
 }
 
 export function emitDiagnosticEvent(event: DiagnosticEventInput) {
+  const bus = getDiagnosticEventBusState();
   const enriched = {
     ...event,
-    seq: (seq += 1),
+    seq: (bus.seq += 1),
     ts: Date.now(),
   } satisfies DiagnosticEventPayload;
-  for (const listener of listeners) {
+  for (const listener of bus.listeners) {
     try {
       listener(enriched);
     } catch {
@@ -190,11 +211,13 @@ export function emitDiagnosticEvent(event: DiagnosticEventInput) {
 }
 
 export function onDiagnosticEvent(listener: (evt: DiagnosticEventPayload) => void): () => void {
-  listeners.add(listener);
-  return () => listeners.delete(listener);
+  const bus = getDiagnosticEventBusState();
+  bus.listeners.add(listener);
+  return () => bus.listeners.delete(listener);
 }
 
 export function resetDiagnosticEventsForTest(): void {
-  seq = 0;
-  listeners.clear();
+  const bus = getDiagnosticEventBusState();
+  bus.seq = 0;
+  bus.listeners.clear();
 }
