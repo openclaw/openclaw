@@ -3,9 +3,9 @@ import { loadConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
 import { capArrayByJsonBytes } from "../../gateway/session-utils.fs.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { resolveUserTimezone } from "../date-time.js";
+import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam } from "./common.js";
 import {
   createSessionVisibilityGuard,
