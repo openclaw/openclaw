@@ -32,6 +32,7 @@ import { ackDelivery, enqueueDelivery, failDelivery } from "./delivery-queue.js"
 import type { OutboundIdentity } from "./identity.js";
 import type { NormalizedOutboundPayload } from "./payloads.js";
 import { normalizeReplyPayloadsForDelivery } from "./payloads.js";
+import { sanitizeOutboundText } from "./sanitize-outbound.js";
 import type { OutboundChannel } from "./targets.js";
 
 export type { NormalizedOutboundPayload } from "./payloads.js";
@@ -518,6 +519,17 @@ async function deliverOutboundPayloadsCore(
         } catch {
           // Don't block delivery on hook failure
         }
+      }
+
+      // ── Centralized outbound sanitization gate ──────────────────────
+      // Every payload.text passes through this single checkpoint before
+      // hitting any channel send function.  This catches leaked API
+      // errors, raw JSON payloads, and internal metadata regardless of
+      // where the text originated (tool error, LLM error, system event).
+      const sanitizedText = sanitizeOutboundText(payloadSummary.text);
+      if (sanitizedText !== payloadSummary.text) {
+        payloadSummary.text = sanitizedText;
+        effectivePayload = { ...effectivePayload, text: sanitizedText };
       }
 
       params.onPayload?.(payloadSummary);
