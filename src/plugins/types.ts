@@ -417,9 +417,15 @@ export type PluginHookBeforeResetEvent = {
   sessionFile?: string;
   messages?: unknown[];
   reason?: string;
-  /** Set true to cancel /new|/reset and keep current session. */
+  /**
+   * Reserved for future plugin-level reset cancellation.
+   * Current hard guard path uses internal hook: event.context.blockReset.
+   */
   cancel?: boolean;
-  /** Optional message shown to the user when reset is cancelled. */
+  /**
+   * Reserved for future plugin-level block message.
+   * Current hard guard path uses internal hook messages.
+   */
   message?: string;
 };
 
