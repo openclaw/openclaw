@@ -95,6 +95,31 @@ async function invokeNode(params: {
   return respond;
 }
 
+function mockSuccessfulWakeConfig(nodeId: string) {
+  mocks.loadApnsRegistration.mockResolvedValue({
+    nodeId,
+    token: "abcd1234abcd1234abcd1234abcd1234",
+    topic: "ai.openclaw.ios",
+    environment: "sandbox",
+    updatedAtMs: 1,
+  });
+  mocks.resolveApnsAuthConfigFromEnv.mockResolvedValue({
+    ok: true,
+    value: {
+      teamId: "TEAM123",
+      keyId: "KEY123",
+      privateKey: "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----",
+    },
+  });
+  mocks.sendApnsBackgroundWake.mockResolvedValue({
+    ok: true,
+    status: 200,
+    tokenSuffix: "1234abcd",
+    topic: "ai.openclaw.ios",
+    environment: "sandbox",
+  });
+}
+
 describe("node.invoke APNs wake path", () => {
   beforeEach(() => {
     mocks.loadConfig.mockReset();
@@ -135,28 +160,7 @@ describe("node.invoke APNs wake path", () => {
 
   it("wakes and retries invoke after the node reconnects", async () => {
     vi.useFakeTimers();
-    mocks.loadApnsRegistration.mockResolvedValue({
-      nodeId: "ios-node-reconnect",
-      token: "abcd1234abcd1234abcd1234abcd1234",
-      topic: "ai.openclaw.ios",
-      environment: "sandbox",
-      updatedAtMs: 1,
-    });
-    mocks.resolveApnsAuthConfigFromEnv.mockResolvedValue({
-      ok: true,
-      value: {
-        teamId: "TEAM123",
-        keyId: "KEY123",
-        privateKey: "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----",
-      },
-    });
-    mocks.sendApnsBackgroundWake.mockResolvedValue({
-      ok: true,
-      status: 200,
-      tokenSuffix: "1234abcd",
-      topic: "ai.openclaw.ios",
-      environment: "sandbox",
-    });
+    mockSuccessfulWakeConfig("ios-node-reconnect");
 
     let connected = false;
     const session: TestNodeSession = { nodeId: "ios-node-reconnect", commands: ["camera.capture"] };
@@ -200,28 +204,7 @@ describe("node.invoke APNs wake path", () => {
 
   it("throttles repeated wake attempts for the same disconnected node", async () => {
     vi.useFakeTimers();
-    mocks.loadApnsRegistration.mockResolvedValue({
-      nodeId: "ios-node-throttle",
-      token: "abcd1234abcd1234abcd1234abcd1234",
-      topic: "ai.openclaw.ios",
-      environment: "sandbox",
-      updatedAtMs: 1,
-    });
-    mocks.resolveApnsAuthConfigFromEnv.mockResolvedValue({
-      ok: true,
-      value: {
-        teamId: "TEAM123",
-        keyId: "KEY123",
-        privateKey: "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----",
-      },
-    });
-    mocks.sendApnsBackgroundWake.mockResolvedValue({
-      ok: true,
-      status: 200,
-      tokenSuffix: "1234abcd",
-      topic: "ai.openclaw.ios",
-      environment: "sandbox",
-    });
+    mockSuccessfulWakeConfig("ios-node-throttle");
 
     const nodeRegistry = {
       get: vi.fn(() => undefined),

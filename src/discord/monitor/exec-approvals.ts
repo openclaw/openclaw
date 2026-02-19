@@ -230,8 +230,8 @@ function createExecApprovalRequestContainer(params: {
   actionRow?: Row<Button>;
 }): ExecApprovalContainer {
   const commandText = params.request.request.command;
-  const commandPreview =
-    commandText.length > 1000 ? `${commandText.slice(0, 1000)}...` : commandText;
+  const commandRaw = commandText.length > 1000 ? `${commandText.slice(0, 1000)}...` : commandText;
+  const commandPreview = commandRaw.replace(/`/g, "\u200b`");
   const expiresAtSeconds = Math.max(0, Math.floor(params.request.expiresAtMs / 1000));
 
   return new ExecApprovalContainer({
@@ -255,7 +255,8 @@ function createResolvedContainer(params: {
   accountId: string;
 }): ExecApprovalContainer {
   const commandText = params.request.request.command;
-  const commandPreview = commandText.length > 500 ? `${commandText.slice(0, 500)}...` : commandText;
+  const commandRaw = commandText.length > 500 ? `${commandText.slice(0, 500)}...` : commandText;
+  const commandPreview = commandRaw.replace(/`/g, "\u200b`");
 
   const decisionLabel =
     params.decision === "allow-once"
@@ -288,7 +289,8 @@ function createExpiredContainer(params: {
   accountId: string;
 }): ExecApprovalContainer {
   const commandText = params.request.request.command;
-  const commandPreview = commandText.length > 500 ? `${commandText.slice(0, 500)}...` : commandText;
+  const commandRaw = commandText.length > 500 ? `${commandText.slice(0, 500)}...` : commandText;
+  const commandPreview = commandRaw.replace(/`/g, "\u200b`");
 
   return new ExecApprovalContainer({
     cfg: params.cfg,

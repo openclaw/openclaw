@@ -65,8 +65,10 @@
     "format": "oxfmt --write",
     "format:all": "pnpm format && pnpm format:swift",
     "format:check": "oxfmt --check",
+    "format:diff": "oxfmt --write && git --no-pager diff",
     "format:docs": "git ls-files 'docs/**/*.md' 'docs/**/*.mdx' 'README.md' | xargs oxfmt --write",
     "format:docs:check": "git ls-files 'docs/**/*.md' 'docs/**/*.mdx' 'README.md' | xargs oxfmt --check",
+    "format:fix": "oxfmt --write",
     "format:swift": "swiftformat --lint --config .swiftformat apps/macos/Sources apps/ios/Sources apps/shared/OpenClawKit/Sources",
     "gateway:dev": "OPENCLAW_SKIP_CHANNELS=1 CLAWDBOT_SKIP_CHANNELS=1 node scripts/run-node.mjs --dev gateway",
     "gateway:dev:reset": "OPENCLAW_SKIP_CHANNELS=1 CLAWDBOT_SKIP_CHANNELS=1 node scripts/run-node.mjs --dev gateway --reset",
@@ -213,8 +215,11 @@
   "pnpm": {
     "minimumReleaseAge": 2880,
     "overrides": {
-      "fast-xml-parser": "5.3.4",
+      "fast-xml-parser": "5.3.6",
+      "request": "npm:@cypress/request@3.0.10",
+      "request-promise": "npm:@cypress/request-promise@5.0.0",
       "form-data": "2.5.4",
+      "minimatch": "10.2.1",
       "qs": "6.14.2",
       "@sinclair/typebox": "0.34.48",
       "tar": "7.5.9",
