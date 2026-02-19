@@ -75,6 +75,18 @@ export type {
   AgentStatusErrorType,
 } from "./agent-status.js";
 
+// MCP server status monitoring
+export { getMcpServerStatus, mapMcpServerHealth } from "./mcp-status.js";
+export type {
+  McpServerHealth,
+  McpStatusParams,
+  McpStatusEntry,
+  McpStatusSummary,
+  McpStatusResult,
+  McpStatusError,
+  McpStatusErrorType,
+} from "./mcp-status.js";
+
 // A2A client
 export { CloudruA2AClient, A2AError } from "./cloudru-a2a-client.js";
 export type {
