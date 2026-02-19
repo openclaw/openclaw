@@ -1,6 +1,6 @@
-import { vi } from "vitest";
+import { vi, type Mock } from "vitest";
 
-export const callGatewayMock = vi.fn();
+export const callGatewayMock: Mock = vi.fn();
 
 vi.mock("../../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
