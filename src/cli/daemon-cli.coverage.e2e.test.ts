@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 
 const callGateway = vi.fn(async (..._args: unknown[]) => ({ ok: true }));
 const resolveGatewayProgramArguments = vi.fn(async (_opts?: unknown) => ({
@@ -20,15 +21,7 @@ const inspectPortUsage = vi.fn(async (port: number) => ({
   hints: [],
 }));
 
-const runtimeLogs: string[] = [];
-const runtimeErrors: string[] = [];
-const defaultRuntime = {
-  log: (msg: string) => runtimeLogs.push(msg),
-  error: (msg: string) => runtimeErrors.push(msg),
-  exit: (code: number) => {
-    throw new Error(`__exit__:${code}`);
-  },
-};
+const { runtimeLogs, defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGateway(opts),
@@ -122,8 +115,7 @@ describe("daemon-cli coverage", () => {
   });
 
   it("probes gateway status by default", async () => {
-    runtimeLogs.length = 0;
-    runtimeErrors.length = 0;
+    resetRuntimeCapture();
     callGateway.mockClear();
 
     const { registerDaemonCli } = await import("./daemon-cli.js");
@@ -140,8 +132,7 @@ describe("daemon-cli coverage", () => {
   }, 20_000);
 
   it("derives probe URL from service args + env (json)", async () => {
-    runtimeLogs.length = 0;
-    runtimeErrors.length = 0;
+    resetRuntimeCapture();
     callGateway.mockClear();
     inspectPortUsage.mockClear();
 
@@ -218,8 +209,7 @@ describe("daemon-cli coverage", () => {
   });
 
   it("installs the daemon with json output", async () => {
-    runtimeLogs.length = 0;
-    runtimeErrors.length = 0;
+    resetRuntimeCapture();
     serviceIsLoaded.mockResolvedValueOnce(false);
     serviceInstall.mockClear();
 
@@ -261,8 +251,7 @@ describe("daemon-cli coverage", () => {
   });
 
   it("emits json for daemon start/stop", async () => {
-    runtimeLogs.length = 0;
-    runtimeErrors.length = 0;
+    resetRuntimeCapture();
     serviceRestart.mockClear();
     serviceStop.mockClear();
     serviceIsLoaded.mockResolvedValue(true);
