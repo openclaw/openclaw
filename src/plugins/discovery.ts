@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { isPathInsideWithRealpath } from "../security/scan-paths.js";
 import { resolveConfigDir, resolveUserPath } from "../utils.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import {
@@ -294,6 +295,28 @@ function addCandidate(params: {
   });
 }
 
+function resolvePackageEntrySource(params: {
+  packageDir: string;
+  entryPath: string;
+  sourceLabel: string;
+  diagnostics: PluginDiagnostic[];
+}): string | null {
+  const source = path.resolve(params.packageDir, params.entryPath);
+  if (
+    !isPathInsideWithRealpath(params.packageDir, source, {
+      requireRealpath: true,
+    })
+  ) {
+    params.diagnostics.push({
+      level: "error",
+      message: `extension entry escapes package directory: ${params.entryPath}`,
+      source: params.sourceLabel,
+    });
+    return null;
+  }
+  return source;
+}
+
 function discoverInDirectory(params: {
   dir: string;
   origin: PluginOrigin;
@@ -345,7 +368,15 @@ function discoverInDirectory(params: {
 
     if (extensions.length > 0) {
       for (const extPath of extensions) {
-        const resolved = path.resolve(fullPath, extPath);
+        const resolved = resolvePackageEntrySource({
+          packageDir: fullPath,
+          entryPath: extPath,
+          sourceLabel: fullPath,
+          diagnostics: params.diagnostics,
+        });
+        if (!resolved) {
+          continue;
+        }
         addCandidate({
           candidates: params.candidates,
           diagnostics: params.diagnostics,
@@ -438,7 +469,15 @@ function discoverFromPath(params: {
 
     if (extensions.length > 0) {
       for (const extPath of extensions) {
-        const source = path.resolve(resolved, extPath);
+        const source = resolvePackageEntrySource({
+          packageDir: resolved,
+          entryPath: extPath,
+          sourceLabel: resolved,
+          diagnostics: params.diagnostics,
+        });
+        if (!source) {
+          continue;
+        }
         addCandidate({
           candidates: params.candidates,
           diagnostics: params.diagnostics,
