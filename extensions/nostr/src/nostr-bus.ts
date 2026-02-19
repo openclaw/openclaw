@@ -431,7 +431,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
         }
       }
       if (!targetsUs) {
-        metrics.emit("event.rejected.wrong_kind");
+        metrics.emit("event.rejected.not_targeted");
         return;
       }
 
