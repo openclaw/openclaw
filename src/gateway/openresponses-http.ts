@@ -328,6 +328,47 @@ async function runResponsesAgentCommand(params: {
   );
 }
 
+/**
+ * Normalize the raw request body before Zod validation so that clients which
+ * omit the `type` discriminator (e.g. n8n) still pass schema validation.
+ *
+ * Rules:
+ *  - Items with `role` but no `type` get `type: "message"` (OpenAI infers this).
+ *  - Content parts with `type: "text"` are rewritten to `type: "input_text"`.
+ */
+function normalizeResponseInput(body: unknown): unknown {
+  if (typeof body !== "object" || body === null) {
+    return body;
+  }
+  const obj = body as Record<string, unknown>;
+  if (!Array.isArray(obj.input)) {
+    return body;
+  }
+  obj.input = obj.input.map((item: unknown) => {
+    if (typeof item !== "object" || item === null) {
+      return item;
+    }
+    const it = item as Record<string, unknown>;
+    if (it.role && !it.type) {
+      it.type = "message";
+    }
+    if (it.type === "message" && Array.isArray(it.content)) {
+      it.content = (it.content as unknown[]).map((part: unknown) => {
+        if (typeof part !== "object" || part === null) {
+          return part;
+        }
+        const p = part as Record<string, unknown>;
+        if (p.type === "text") {
+          p.type = "input_text";
+        }
+        return p;
+      });
+    }
+    return it;
+  });
+  return body;
+}
+
 export async function handleOpenResponsesHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -353,8 +394,9 @@ export async function handleOpenResponsesHttpRequest(
     return true;
   }
 
-  // Validate request body with Zod
-  const parseResult = CreateResponseBodySchema.safeParse(handled.body);
+  // Normalize input for clients that omit `type` on message items (e.g. n8n)
+  // then validate with Zod.
+  const parseResult = CreateResponseBodySchema.safeParse(normalizeResponseInput(handled.body));
   if (!parseResult.success) {
     const issue = parseResult.error.issues[0];
     const message = issue ? `${issue.path.join(".")}: ${issue.message}` : "Invalid request body";
