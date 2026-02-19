@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
-import type { OpenClawConfig } from "./config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import type { OpenClawConfig } from "./config.js";
 import { resolveMarkdownTableMode } from "./markdown-tables.js";
 
 const stubPlugin = (id: string): ChannelPlugin => ({
