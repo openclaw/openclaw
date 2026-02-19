@@ -6,6 +6,7 @@ import {
   DEFAULT_BROWSER_CONTROL_PORT,
 } from "../config/port-defaults.js";
 import { isLoopbackHost } from "../gateway/net.js";
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import {
   DEFAULT_OPENCLAW_BROWSER_COLOR,
   DEFAULT_OPENCLAW_BROWSER_ENABLED,
@@ -31,6 +32,7 @@ export type ResolvedBrowserConfig = {
   attachOnly: boolean;
   defaultProfile: string;
   profiles: Record<string, BrowserProfileConfig>;
+  ssrfPolicy?: SsrFPolicy;
   extraArgs: string[];
 };
 
@@ -59,6 +61,36 @@ function normalizeHexColor(raw: string | undefined) {
 function normalizeTimeoutMs(raw: number | undefined, fallback: number) {
   const value = typeof raw === "number" && Number.isFinite(raw) ? Math.floor(raw) : fallback;
   return value < 0 ? fallback : value;
+}
+
+function normalizeStringList(raw: string[] | undefined): string[] | undefined {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return undefined;
+  }
+  const values = raw
+    .map((value) => value.trim())
+    .filter((value): value is string => value.length > 0);
+  return values.length > 0 ? values : undefined;
+}
+
+function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | undefined {
+  const allowPrivateNetwork = cfg?.ssrfPolicy?.allowPrivateNetwork;
+  const allowedHostnames = normalizeStringList(cfg?.ssrfPolicy?.allowedHostnames);
+  const hostnameAllowlist = normalizeStringList(cfg?.ssrfPolicy?.hostnameAllowlist);
+
+  if (
+    allowPrivateNetwork === undefined &&
+    allowedHostnames === undefined &&
+    hostnameAllowlist === undefined
+  ) {
+    return undefined;
+  }
+
+  return {
+    ...(allowPrivateNetwork === true ? { allowPrivateNetwork: true } : {}),
+    ...(allowedHostnames ? { allowedHostnames } : {}),
+    ...(hostnameAllowlist ? { hostnameAllowlist } : {}),
+  };
 }
 
 export function parseHttpUrl(raw: string, label: string) {
@@ -200,6 +232,7 @@ export function resolveBrowserConfig(
   const extraArgs = Array.isArray(cfg?.extraArgs)
     ? cfg.extraArgs.filter((a): a is string => typeof a === "string" && a.trim().length > 0)
     : [];
+  const ssrfPolicy = resolveBrowserSsrFPolicy(cfg);
 
   return {
     enabled,
@@ -217,6 +250,7 @@ export function resolveBrowserConfig(
     attachOnly,
     defaultProfile,
     profiles,
+    ssrfPolicy,
     extraArgs,
   };
 }

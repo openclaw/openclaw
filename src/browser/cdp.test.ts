@@ -1,6 +1,7 @@
 import { createServer } from "node:http";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { type WebSocket, WebSocketServer } from "ws";
+import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { rawDataToString } from "../infra/ws.js";
 import { createTargetViaCdp, evaluateJavaScript, normalizeCdpWsUrl, snapshotAria } from "./cdp.js";
 
@@ -90,6 +91,61 @@ describe("cdp", () => {
     });
 
     expect(created.targetId).toBe("TARGET_123");
+  });
+
+  it("blocks private navigation targets by default", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    try {
+      await expect(
+        createTargetViaCdp({
+          cdpUrl: "http://127.0.0.1:9222",
+          url: "http://127.0.0.1:8080",
+        }),
+      ).rejects.toBeInstanceOf(SsrFBlockedError);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it("allows private navigation targets when explicitly configured", async () => {
+    const wsPort = await startWsServerWithMessages((msg, socket) => {
+      if (msg.method !== "Target.createTarget") {
+        return;
+      }
+      expect(msg.params?.url).toBe("http://127.0.0.1:8080");
+      socket.send(
+        JSON.stringify({
+          id: msg.id,
+          result: { targetId: "TARGET_LOCAL" },
+        }),
+      );
+    });
+
+    httpServer = createServer((req, res) => {
+      if (req.url === "/json/version") {
+        res.setHeader("content-type", "application/json");
+        res.end(
+          JSON.stringify({
+            webSocketDebuggerUrl: `ws://127.0.0.1:${wsPort}/devtools/browser/TEST`,
+          }),
+        );
+        return;
+      }
+      res.statusCode = 404;
+      res.end("not found");
+    });
+
+    await new Promise<void>((resolve) => httpServer?.listen(0, "127.0.0.1", resolve));
+    const httpPort = (httpServer.address() as { port: number }).port;
+
+    const created = await createTargetViaCdp({
+      cdpUrl: `http://127.0.0.1:${httpPort}`,
+      url: "http://127.0.0.1:8080",
+      ssrfPolicy: { allowPrivateNetwork: true },
+    });
+
+    expect(created.targetId).toBe("TARGET_LOCAL");
   });
 
   it("evaluates javascript via CDP", async () => {
