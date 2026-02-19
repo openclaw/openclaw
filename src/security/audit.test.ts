@@ -1356,7 +1356,7 @@ describe("security audit", () => {
     );
   });
 
-  it("warns when hooks token reuses the gateway env token", async () => {
+  it("flags hooks token reuse of the gateway env token as critical", async () => {
     const prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
     process.env.OPENCLAW_GATEWAY_TOKEN = "shared-gateway-token-1234567890";
     const cfg: OpenClawConfig = {
@@ -1372,7 +1372,10 @@ describe("security audit", () => {
 
       expect(res.findings).toEqual(
         expect.arrayContaining([
-          expect.objectContaining({ checkId: "hooks.token_reuse_gateway_token", severity: "warn" }),
+          expect.objectContaining({
+            checkId: "hooks.token_reuse_gateway_token",
+            severity: "critical",
+          }),
         ]),
       );
     } finally {
@@ -2015,7 +2018,7 @@ description: test skill
           mode: "remote",
           auth: { token: "local-token-should-not-use" },
           remote: {
-            url: "ws://remote.example.com:18789",
+            url: "wss://remote.example.com:18789",
             token: "remote-token-xyz789",
           },
         },
@@ -2054,7 +2057,7 @@ description: test skill
           mode: "remote",
           auth: { token: "local-token-should-not-use" },
           remote: {
-            url: "ws://remote.example.com:18789",
+            url: "wss://remote.example.com:18789",
             token: "remote-token",
           },
         },
@@ -2091,7 +2094,7 @@ description: test skill
         gateway: {
           mode: "remote",
           remote: {
-            url: "ws://remote.example.com:18789",
+            url: "wss://remote.example.com:18789",
             password: "remote-pass",
           },
         },
@@ -2129,7 +2132,7 @@ description: test skill
         gateway: {
           mode: "remote",
           remote: {
-            url: "ws://remote.example.com:18789",
+            url: "wss://remote.example.com:18789",
             password: "remote-pass",
           },
         },

@@ -1,6 +1,5 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
-import { resolveAgentModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionId } from "../../agents/cli-session.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
@@ -14,7 +13,6 @@ import {
 } from "../../agents/pi-embedded-helpers.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import {
-  resolveAgentIdFromSessionKey,
   resolveGroupSessionKey,
   resolveSessionTranscriptPath,
   type SessionEntry,
@@ -33,11 +31,10 @@ import type { VerboseLevel } from "../thinking.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
-  buildEmbeddedContextFromTemplate,
-  buildTemplateSenderContext,
-  resolveRunAuthProfile,
+  buildEmbeddedRunBaseParams,
+  buildEmbeddedRunContexts,
+  resolveModelFallbackOptions,
 } from "./agent-runner-utils.js";
-import { resolveEnforceFinalTag } from "./agent-runner-utils.js";
 import { type BlockReplyPipeline } from "./block-reply-pipeline.js";
 import type { FollowupRun } from "./queue.js";
 import { createBlockReplyDeliveryHandler } from "./reply-delivery.js";
@@ -107,13 +104,7 @@ export async function runAgentTurnWithFallback(params: {
 
   while (true) {
     try {
-      const allowPartialStream = !(
-        params.followupRun.run.reasoningLevel === "stream" && params.opts?.onReasoningStream
-      );
       const normalizeStreamingText = (payload: ReplyPayload): { text?: string; skip: boolean } => {
-        if (!allowPartialStream) {
-          return { skip: true };
-        }
         let text = payload.text;
         if (!params.isHeartbeat && text?.includes("HEARTBEAT_OK")) {
           const stripped = stripHeartbeatToken(text, {
@@ -157,14 +148,7 @@ export async function runAgentTurnWithFallback(params: {
       const blockReplyPipeline = params.blockReplyPipeline;
       const onToolResult = params.opts?.onToolResult;
       const fallbackResult = await runWithModelFallback({
-        cfg: params.followupRun.run.config,
-        provider: params.followupRun.run.provider,
-        model: params.followupRun.run.model,
-        agentDir: params.followupRun.run.agentDir,
-        fallbacksOverride: resolveAgentModelFallbacksOverride(
-          params.followupRun.run.config,
-          resolveAgentIdFromSessionKey(params.followupRun.run.sessionKey),
-        ),
+        ...resolveModelFallbackOptions(params.followupRun.run),
         run: (provider, model) => {
           // Notify that model selection is complete (including after fallback).
           // This allows responsePrefix template interpolation with the actual model.
@@ -262,13 +246,19 @@ export async function runAgentTurnWithFallback(params: {
               }
             })();
           }
-          const authProfile = resolveRunAuthProfile(params.followupRun.run, provider);
-          const embeddedContext = buildEmbeddedContextFromTemplate({
+          const { authProfile, embeddedContext, senderContext } = buildEmbeddedRunContexts({
             run: params.followupRun.run,
             sessionCtx: params.sessionCtx,
             hasRepliedRef: params.opts?.hasRepliedRef,
+            provider,
           });
-          const senderContext = buildTemplateSenderContext(params.sessionCtx);
+          const runBaseParams = buildEmbeddedRunBaseParams({
+            run: params.followupRun.run,
+            provider,
+            model,
+            runId,
+            authProfile,
+          });
           return runEmbeddedPiAgent({
             ...embeddedContext,
             groupId: resolveGroupSessionKey(params.sessionCtx)?.id,
@@ -276,22 +266,9 @@ export async function runAgentTurnWithFallback(params: {
               params.sessionCtx.GroupChannel?.trim() ?? params.sessionCtx.GroupSubject?.trim(),
             groupSpace: params.sessionCtx.GroupSpace?.trim() ?? undefined,
             ...senderContext,
-            sessionFile: params.followupRun.run.sessionFile,
-            workspaceDir: params.followupRun.run.workspaceDir,
-            agentDir: params.followupRun.run.agentDir,
-            config: params.followupRun.run.config,
-            skillsSnapshot: params.followupRun.run.skillsSnapshot,
+            ...runBaseParams,
             prompt: params.commandBody,
             extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
-            ownerNumbers: params.followupRun.run.ownerNumbers,
-            enforceFinalTag: resolveEnforceFinalTag(params.followupRun.run, provider),
-            provider,
-            model,
-            ...authProfile,
-            thinkLevel: params.followupRun.run.thinkLevel,
-            verboseLevel: params.followupRun.run.verboseLevel,
-            reasoningLevel: params.followupRun.run.reasoningLevel,
-            execOverrides: params.followupRun.run.execOverrides,
             toolResultFormat: (() => {
               const channel = resolveMessageChannel(
                 params.sessionCtx.Surface,
@@ -303,25 +280,20 @@ export async function runAgentTurnWithFallback(params: {
               return isMarkdownCapableMessageChannel(channel) ? "markdown" : "plain";
             })(),
             suppressToolErrorWarnings: params.opts?.suppressToolErrorWarnings,
-            bashElevated: params.followupRun.run.bashElevated,
-            timeoutMs: params.followupRun.run.timeoutMs,
-            runId,
             images: params.opts?.images,
             abortSignal: params.opts?.abortSignal,
             blockReplyBreak: params.resolvedBlockStreamingBreak,
             blockReplyChunking: params.blockReplyChunking,
-            onPartialReply: allowPartialStream
-              ? async (payload) => {
-                  const textForTyping = await handlePartialForTyping(payload);
-                  if (!params.opts?.onPartialReply || textForTyping === undefined) {
-                    return;
-                  }
-                  await params.opts.onPartialReply({
-                    text: textForTyping,
-                    mediaUrls: payload.mediaUrls,
-                  });
-                }
-              : undefined,
+            onPartialReply: async (payload) => {
+              const textForTyping = await handlePartialForTyping(payload);
+              if (!params.opts?.onPartialReply || textForTyping === undefined) {
+                return;
+              }
+              await params.opts.onPartialReply({
+                text: textForTyping,
+                mediaUrls: payload.mediaUrls,
+              });
+            },
             onAssistantMessageStart: async () => {
               await params.typingSignals.signalMessageStart();
               await params.opts?.onAssistantMessageStart?.();

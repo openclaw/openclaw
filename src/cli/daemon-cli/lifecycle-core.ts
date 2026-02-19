@@ -84,6 +84,19 @@ async function handleServiceNotLoaded(params: {
   }
 }
 
+async function resolveServiceLoadedOrFail(params: {
+  serviceNoun: string;
+  service: GatewayService;
+  fail: ReturnType<typeof createActionIO>["fail"];
+}): Promise<boolean | null> {
+  try {
+    return await params.service.isLoaded({ env: process.env });
+  } catch (err) {
+    params.fail(`${params.serviceNoun} service check failed: ${String(err)}`);
+    return null;
+  }
+}
+
 export async function runServiceUninstall(params: {
   serviceNoun: string;
   service: GatewayService;
@@ -145,11 +158,12 @@ export async function runServiceStart(params: {
   const json = Boolean(params.opts?.json);
   const { stdout, emit, fail } = createActionIO({ action: "start", json });
 
-  let loaded = false;
-  try {
-    loaded = await params.service.isLoaded({ env: process.env });
-  } catch (err) {
-    fail(`${params.serviceNoun} service check failed: ${String(err)}`);
+  const loaded = await resolveServiceLoadedOrFail({
+    serviceNoun: params.serviceNoun,
+    service: params.service,
+    fail,
+  });
+  if (loaded === null) {
     return;
   }
   if (!loaded) {
@@ -192,11 +206,12 @@ export async function runServiceStop(params: {
   const json = Boolean(params.opts?.json);
   const { stdout, emit, fail } = createActionIO({ action: "stop", json });
 
-  let loaded = false;
-  try {
-    loaded = await params.service.isLoaded({ env: process.env });
-  } catch (err) {
-    fail(`${params.serviceNoun} service check failed: ${String(err)}`);
+  const loaded = await resolveServiceLoadedOrFail({
+    serviceNoun: params.serviceNoun,
+    service: params.service,
+    fail,
+  });
+  if (loaded === null) {
     return;
   }
   if (!loaded) {
@@ -241,11 +256,12 @@ export async function runServiceRestart(params: {
   const json = Boolean(params.opts?.json);
   const { stdout, emit, fail } = createActionIO({ action: "restart", json });
 
-  let loaded = false;
-  try {
-    loaded = await params.service.isLoaded({ env: process.env });
-  } catch (err) {
-    fail(`${params.serviceNoun} service check failed: ${String(err)}`);
+  const loaded = await resolveServiceLoadedOrFail({
+    serviceNoun: params.serviceNoun,
+    service: params.service,
+    fail,
+  });
+  if (loaded === null) {
     return false;
   }
   if (!loaded) {

@@ -217,7 +217,7 @@ export type AgentDefaultsConfig = {
     session?: string;
     /** Delivery target ("last", "none", or a channel id). */
     target?: "last" | "none" | ChannelId;
-    /** Optional delivery override (E.164 for WhatsApp, chat id for Telegram). */
+    /** Optional delivery override (E.164 for WhatsApp, chat id for Telegram). Supports :topic:NNN suffix for Telegram topics. */
     to?: string;
     /** Optional account id for multi-account channels. */
     accountId?: string;

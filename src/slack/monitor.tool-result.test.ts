@@ -84,6 +84,22 @@ describe("monitorSlackProvider tool results", () => {
     });
   }
 
+  function setPairingOnlyDirectMessages() {
+    const currentConfig = slackTestState.config as {
+      channels?: { slack?: Record<string, unknown> };
+    };
+    slackTestState.config = {
+      ...currentConfig,
+      channels: {
+        ...currentConfig.channels,
+        slack: {
+          ...currentConfig.channels?.slack,
+          dm: { enabled: true, policy: "pairing", allowFrom: [] },
+        },
+      },
+    };
+  }
+
   it("skips tool summaries with responsePrefix", async () => {
     replyMock.mockResolvedValue({ text: "final reply" });
 
@@ -483,19 +499,7 @@ describe("monitorSlackProvider tool results", () => {
   });
 
   it("replies with pairing code when dmPolicy is pairing and no allowFrom is set", async () => {
-    const currentConfig = slackTestState.config as {
-      channels?: { slack?: Record<string, unknown> };
-    };
-    slackTestState.config = {
-      ...currentConfig,
-      channels: {
-        ...currentConfig.channels,
-        slack: {
-          ...currentConfig.channels?.slack,
-          dm: { enabled: true, policy: "pairing", allowFrom: [] },
-        },
-      },
-    };
+    setPairingOnlyDirectMessages();
 
     await runSlackMessageOnce(monitorSlackProvider, {
       event: makeSlackMessageEvent(),
@@ -509,19 +513,7 @@ describe("monitorSlackProvider tool results", () => {
   });
 
   it("does not resend pairing code when a request is already pending", async () => {
-    const currentConfig = slackTestState.config as {
-      channels?: { slack?: Record<string, unknown> };
-    };
-    slackTestState.config = {
-      ...currentConfig,
-      channels: {
-        ...currentConfig.channels,
-        slack: {
-          ...currentConfig.channels?.slack,
-          dm: { enabled: true, policy: "pairing", allowFrom: [] },
-        },
-      },
-    };
+    setPairingOnlyDirectMessages();
     upsertPairingRequestMock
       .mockResolvedValueOnce({ code: "PAIRCODE", created: true })
       .mockResolvedValueOnce({ code: "PAIRCODE", created: false });

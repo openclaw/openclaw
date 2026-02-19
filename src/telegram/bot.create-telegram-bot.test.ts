@@ -153,6 +153,18 @@ describe("createTelegramBot", () => {
     ).toBe("telegram:555");
     expect(
       getTelegramSequentialKey({
+        channelPost: mockMessage({ chat: mockChat({ id: -100777111222, type: "channel" }) }),
+      }),
+    ).toBe("telegram:-100777111222");
+    expect(
+      getTelegramSequentialKey({
+        update: {
+          channel_post: mockMessage({ chat: mockChat({ id: -100777111223, type: "channel" }) }),
+        },
+      }),
+    ).toBe("telegram:-100777111223");
+    expect(
+      getTelegramSequentialKey({
         message: mockMessage({ chat: mockChat({ id: 123 }), text: "/stop" }),
       }),
     ).toBe("telegram:123:control");
@@ -1508,35 +1520,6 @@ describe("createTelegramBot", () => {
       ).toBeUndefined();
     }
   });
-  it("honors replyToMode=first for threaded replies across all chunks of the first reply", async () => {
-    onSpy.mockReset();
-    sendMessageSpy.mockReset();
-    replySpy.mockReset();
-    replySpy.mockResolvedValue({
-      text: "a".repeat(4500),
-      replyToId: "101",
-    });
-
-    createTelegramBot({ token: "tok", replyToMode: "first" });
-    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
-    await handler({
-      message: {
-        chat: { id: 5, type: "private" },
-        text: "hi",
-        date: 1736380800,
-        message_id: 101,
-      },
-      me: { username: "openclaw_bot" },
-      getFile: async () => ({ download: async () => new Uint8Array() }),
-    });
-
-    expect(sendMessageSpy.mock.calls.length).toBeGreaterThan(1);
-    for (const call of sendMessageSpy.mock.calls) {
-      expect((call[2] as { reply_to_message_id?: number } | undefined)?.reply_to_message_id).toBe(
-        101,
-      );
-    }
-  });
   it("prefixes final replies with responsePrefix", async () => {
     onSpy.mockReset();
     sendMessageSpy.mockReset();
@@ -1564,33 +1547,38 @@ describe("createTelegramBot", () => {
     expect(sendMessageSpy).toHaveBeenCalledTimes(1);
     expect(sendMessageSpy.mock.calls[0][1]).toBe("PFX final reply");
   });
-  it("honors replyToMode=all for threaded replies", async () => {
-    onSpy.mockReset();
-    sendMessageSpy.mockReset();
-    replySpy.mockReset();
-    replySpy.mockResolvedValue({
-      text: "a".repeat(4500),
-      replyToId: "101",
-    });
+  it("honors threaded replies for replyToMode=first/all", async () => {
+    for (const [mode, messageId] of [
+      ["first", 101],
+      ["all", 102],
+    ] as const) {
+      onSpy.mockReset();
+      sendMessageSpy.mockReset();
+      replySpy.mockReset();
+      replySpy.mockResolvedValue({
+        text: "a".repeat(4500),
+        replyToId: String(messageId),
+      });
 
-    createTelegramBot({ token: "tok", replyToMode: "all" });
-    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
-    await handler({
-      message: {
-        chat: { id: 5, type: "private" },
-        text: "hi",
-        date: 1736380800,
-        message_id: 101,
-      },
-      me: { username: "openclaw_bot" },
-      getFile: async () => ({ download: async () => new Uint8Array() }),
-    });
+      createTelegramBot({ token: "tok", replyToMode: mode });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+      await handler({
+        message: {
+          chat: { id: 5, type: "private" },
+          text: "hi",
+          date: 1736380800,
+          message_id: messageId,
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      });
 
-    expect(sendMessageSpy.mock.calls.length).toBeGreaterThan(1);
-    for (const call of sendMessageSpy.mock.calls) {
-      expect((call[2] as { reply_to_message_id?: number } | undefined)?.reply_to_message_id).toBe(
-        101,
-      );
+      expect(sendMessageSpy.mock.calls.length).toBeGreaterThan(1);
+      for (const call of sendMessageSpy.mock.calls) {
+        expect((call[2] as { reply_to_message_id?: number } | undefined)?.reply_to_message_id).toBe(
+          messageId,
+        );
+      }
     }
   });
   it("blocks group messages when telegram.groups is set without a wildcard", async () => {
@@ -2011,6 +1999,44 @@ describe("createTelegramBot", () => {
       },
       me: { username: "openclaw_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
+    };
+
+    await handler(ctx);
+    await handler(ctx);
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+  });
+  it("dedupes duplicate channel_post updates by chat/message key", async () => {
+    onSpy.mockReset();
+    replySpy.mockReset();
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groups: {
+            "-100777111222": {
+              enabled: true,
+              requireMention: false,
+            },
+          },
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("channel_post") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    const ctx = {
+      channelPost: {
+        chat: { id: -100777111222, type: "channel", title: "Wake Channel" },
+        from: { id: 98765, is_bot: true, first_name: "wakebot", username: "wake_bot" },
+        message_id: 777,
+        text: "wake check",
+        date: 1736380800,
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({}),
     };
 
     await handler(ctx);
