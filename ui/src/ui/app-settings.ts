@@ -1,16 +1,20 @@
+import type { OpenClawApp } from "./app.ts";
+import type { AgentsListResult } from "./types.ts";
 import { refreshChat } from "./app-chat.ts";
 import {
   startLogsPolling,
   stopLogsPolling,
   startDebugPolling,
   stopDebugPolling,
+  startClarityPolling,
+  stopClarityPolling,
 } from "./app-polling.ts";
 import { scheduleChatScroll, scheduleLogsScroll } from "./app-scroll.ts";
-import type { OpenClawApp } from "./app.ts";
 import { loadAgentIdentities, loadAgentIdentity } from "./controllers/agent-identity.ts";
 import { loadAgentSkills } from "./controllers/agent-skills.ts";
 import { loadAgents } from "./controllers/agents.ts";
 import { loadChannels } from "./controllers/channels.ts";
+import { loadClarityOS } from "./controllers/clarityos.ts";
 import { loadConfig, loadConfigSchema } from "./controllers/config.ts";
 import { loadCronJobs, loadCronStatus } from "./controllers/cron.ts";
 import { loadDebug } from "./controllers/debug.ts";
@@ -32,7 +36,6 @@ import {
 import { saveSettings, type UiSettings } from "./storage.ts";
 import { startThemeTransition, type ThemeTransitionContext } from "./theme-transition.ts";
 import { resolveTheme, type ResolvedTheme, type ThemeMode } from "./theme.ts";
-import type { AgentsListResult } from "./types.ts";
 
 type SettingsHost = {
   settings: UiSettings;
@@ -106,7 +109,10 @@ export function applySettingsFromUrl(host: SettingsHost) {
   }
 
   if (passwordRaw != null) {
-    // Never hydrate password from URL params; strip only.
+    const password = passwordRaw.trim();
+    if (password) {
+      (host as { password: string }).password = password;
+    }
     params.delete("password");
     hashParams.delete("password");
     shouldCleanUrl = true;
@@ -160,6 +166,11 @@ export function setTab(host: SettingsHost, next: Tab) {
   } else {
     stopDebugPolling(host as unknown as Parameters<typeof stopDebugPolling>[0]);
   }
+  if (next === "clarityos") {
+    startClarityPolling(host as unknown as Parameters<typeof startClarityPolling>[0]);
+  } else {
+    stopClarityPolling(host as unknown as Parameters<typeof stopClarityPolling>[0]);
+  }
   void refreshActiveTab(host);
   syncUrlWithTab(host, next, false);
 }
@@ -190,6 +201,9 @@ export async function refreshActiveTab(host: SettingsHost) {
   }
   if (host.tab === "sessions") {
     await loadSessions(host as unknown as OpenClawApp);
+  }
+  if (host.tab === "clarityos") {
+    await loadClarityOS(host as unknown as OpenClawApp);
   }
   if (host.tab === "cron") {
     await loadCron(host);
@@ -358,6 +372,11 @@ export function setTabFromRoute(host: SettingsHost, next: Tab) {
     startDebugPolling(host as unknown as Parameters<typeof startDebugPolling>[0]);
   } else {
     stopDebugPolling(host as unknown as Parameters<typeof stopDebugPolling>[0]);
+  }
+  if (next === "clarityos") {
+    startClarityPolling(host as unknown as Parameters<typeof startClarityPolling>[0]);
+  } else {
+    stopClarityPolling(host as unknown as Parameters<typeof stopClarityPolling>[0]);
   }
   if (host.connected) {
     void refreshActiveTab(host);

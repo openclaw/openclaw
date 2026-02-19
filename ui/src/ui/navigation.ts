@@ -1,19 +1,19 @@
-import { t } from "../i18n/index.ts";
 import type { IconName } from "./icons.js";
 
 export const TAB_GROUPS = [
-  { label: "chat", tabs: ["chat"] },
+  { label: "Chat", tabs: ["chat"] },
   {
-    label: "control",
-    tabs: ["overview", "channels", "instances", "sessions", "usage", "cron"],
+    label: "Control",
+    tabs: ["overview", "clarityos", "channels", "instances", "sessions", "usage", "cron"],
   },
-  { label: "agent", tabs: ["agents", "skills", "nodes"] },
-  { label: "settings", tabs: ["config", "debug", "logs"] },
+  { label: "Agent", tabs: ["agents", "skills", "nodes"] },
+  { label: "Settings", tabs: ["config", "debug", "logs"] },
 ] as const;
 
 export type Tab =
   | "agents"
   | "overview"
+  | "clarityos"
   | "channels"
   | "instances"
   | "sessions"
@@ -29,6 +29,7 @@ export type Tab =
 const TAB_PATHS: Record<Tab, string> = {
   agents: "/agents",
   overview: "/overview",
+  clarityos: "/clarityos",
   channels: "/channels",
   instances: "/instances",
   sessions: "/sessions",
@@ -131,6 +132,8 @@ export function iconForTab(tab: Tab): IconName {
       return "messageSquare";
     case "overview":
       return "barChart";
+    case "clarityos":
+      return "barChart";
     case "channels":
       return "link";
     case "instances":
@@ -157,9 +160,71 @@ export function iconForTab(tab: Tab): IconName {
 }
 
 export function titleForTab(tab: Tab) {
-  return t(`tabs.${tab}`);
+  switch (tab) {
+    case "agents":
+      return "Agents";
+    case "overview":
+      return "Overview";
+    case "clarityos":
+      return "ClarityOS";
+    case "channels":
+      return "Channels";
+    case "instances":
+      return "Instances";
+    case "sessions":
+      return "Sessions";
+    case "usage":
+      return "Usage";
+    case "cron":
+      return "Cron Jobs";
+    case "skills":
+      return "Skills";
+    case "nodes":
+      return "Nodes";
+    case "chat":
+      return "Chat";
+    case "config":
+      return "Config";
+    case "debug":
+      return "Debug";
+    case "logs":
+      return "Logs";
+    default:
+      return "Control";
+  }
 }
 
 export function subtitleForTab(tab: Tab) {
-  return t(`subtitles.${tab}`);
+  switch (tab) {
+    case "agents":
+      return "Manage agent workspaces, tools, and identities.";
+    case "overview":
+      return "Gateway status, entry points, and a fast health read.";
+    case "clarityos":
+      return "Transparency timeline, proposal board, and nightly improvements.";
+    case "channels":
+      return "Manage channels and settings.";
+    case "instances":
+      return "Presence beacons from connected clients and nodes.";
+    case "sessions":
+      return "Inspect active sessions and adjust per-session defaults.";
+    case "usage":
+      return "";
+    case "cron":
+      return "Schedule wakeups and recurring agent runs.";
+    case "skills":
+      return "Manage skill availability and API key injection.";
+    case "nodes":
+      return "Paired devices, capabilities, and command exposure.";
+    case "chat":
+      return "Direct gateway chat session for quick interventions.";
+    case "config":
+      return "Edit ~/.openclaw/openclaw.json safely.";
+    case "debug":
+      return "Gateway snapshots, events, and manual RPC calls.";
+    case "logs":
+      return "Live tail of the gateway file logs.";
+    default:
+      return "";
+  }
 }

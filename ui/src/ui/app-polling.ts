@@ -1,5 +1,6 @@
 import type { OpenClawApp } from "./app.ts";
 import { loadDebug } from "./controllers/debug.ts";
+import { loadClarityOS } from "./controllers/clarityos.ts";
 import { loadLogs } from "./controllers/logs.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 
@@ -7,6 +8,7 @@ type PollingHost = {
   nodesPollInterval: number | null;
   logsPollInterval: number | null;
   debugPollInterval: number | null;
+  clarityPollInterval: number | null;
   tab: string;
 };
 
@@ -66,4 +68,25 @@ export function stopDebugPolling(host: PollingHost) {
   }
   clearInterval(host.debugPollInterval);
   host.debugPollInterval = null;
+}
+
+
+export function startClarityPolling(host: PollingHost) {
+  if (host.clarityPollInterval != null) {
+    return;
+  }
+  host.clarityPollInterval = window.setInterval(() => {
+    if (host.tab !== "clarityos") {
+      return;
+    }
+    void loadClarityOS(host as unknown as OpenClawApp);
+  }, 5000);
+}
+
+export function stopClarityPolling(host: PollingHost) {
+  if (host.clarityPollInterval == null) {
+    return;
+  }
+  clearInterval(host.clarityPollInterval);
+  host.clarityPollInterval = null;
 }

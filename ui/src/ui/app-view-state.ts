@@ -30,6 +30,11 @@ import type {
   SessionsListResult,
   SkillStatusReport,
   StatusSummary,
+  ClarityStatusResult,
+  ClaritySummaryResult,
+  ClarityTimelineResult,
+  ClarityProposalsResult,
+  ClarityNightlyResult,
 } from "./types.ts";
 import type { ChatAttachment, ChatQueueItem, CronFormState } from "./ui-types.ts";
 import type { NostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
@@ -165,8 +170,6 @@ export type AppViewState = {
   usageTimeSeriesBreakdownMode: "total" | "by-type";
   usageTimeSeries: SessionUsageTimeSeries | null;
   usageTimeSeriesLoading: boolean;
-  usageTimeSeriesCursorStart: number | null;
-  usageTimeSeriesCursorEnd: number | null;
   usageSessionLogs: SessionLogEntry[] | null;
   usageSessionLogsLoading: boolean;
   usageSessionLogsExpanded: boolean;
@@ -185,6 +188,17 @@ export type AppViewState = {
   usageLogFilterTools: string[];
   usageLogFilterHasTools: boolean;
   usageLogFilterQuery: string;
+
+  clarityLoading: boolean;
+  clarityError: string | null;
+  clarityStatus: ClarityStatusResult | null;
+  claritySummaryPeriod: "daily" | "weekly" | "monthly" | "custom";
+  claritySummary: ClaritySummaryResult | null;
+  clarityTimeline: ClarityTimelineResult | null;
+  clarityTimelineLimit: number;
+  clarityTimelineFilters: { q: string; source: string; eventType: string; status: string; since: string; until: string };
+  clarityProposals: ClarityProposalsResult | null;
+  clarityNightly: ClarityNightlyResult | null;
   cronLoading: boolean;
   cronJobs: CronJob[];
   cronStatus: CronStatus | null;
@@ -232,6 +246,7 @@ export type AppViewState = {
   loadOverview: () => Promise<void>;
   loadAssistantIdentity: () => Promise<void>;
   loadCron: () => Promise<void>;
+  loadClarityOS: () => Promise<void>;
   handleWhatsAppStart: (force: boolean) => Promise<void>;
   handleWhatsAppWait: () => Promise<void>;
   handleWhatsAppLogout: () => Promise<void>;
