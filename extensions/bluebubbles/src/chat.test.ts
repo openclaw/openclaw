@@ -325,13 +325,10 @@ describe("chat", () => {
       ).rejects.toThrow("image buffer");
     });
 
-    it("throws when serverUrl is missing", async () => {
+    it("throws when required credentials are missing", async () => {
       await expect(
         setGroupIconBlueBubbles("chat-guid", new Uint8Array([1, 2, 3]), "icon.png", {}),
       ).rejects.toThrow("serverUrl is required");
-    });
-
-    it("throws when password is missing", async () => {
       await expect(
         setGroupIconBlueBubbles("chat-guid", new Uint8Array([1, 2, 3]), "icon.png", {
           serverUrl: "http://localhost:1234",
