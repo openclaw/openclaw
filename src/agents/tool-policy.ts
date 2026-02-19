@@ -298,9 +298,13 @@ export function resolveToolPresetPolicy(
     | Record<string, ToolPolicyLike & { sandbox?: { mode?: string; scope?: string } }>
     | undefined,
 ): ToolPolicyLike | undefined {
-  if (!presetName || !presets) return undefined;
+  if (!presetName || !presets) {
+    return undefined;
+  }
   const preset = presets[presetName];
-  if (!preset) return undefined;
+  if (!preset) {
+    return undefined;
+  }
   return {
     allow: preset.allow ? [...preset.allow] : undefined,
     deny: preset.deny ? [...preset.deny] : undefined,

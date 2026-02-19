@@ -1,4 +1,3 @@
-import path from "node:path";
 import { loadConfig } from "../../config/config.js";
 
 export type VisibilityCheckResult = {
@@ -66,14 +65,18 @@ export function checkCrossWorkspaceVisibility(
   const matchesReaderScope =
     readerScope.length === 0 ||
     readerScope.some((pattern) => {
-      if (pattern.startsWith("!")) return false;
+      if (pattern.startsWith("!")) {
+        return false;
+      }
       return simpleGlobMatch(pattern, relativePath);
     });
 
   const matchesWriterScope =
     writerScope.length === 0 ||
     writerScope.some((pattern) => {
-      if (pattern.startsWith("!")) return false;
+      if (pattern.startsWith("!")) {
+        return false;
+      }
       return simpleGlobMatch(pattern, relativePath);
     });
 
