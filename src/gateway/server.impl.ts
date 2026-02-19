@@ -89,10 +89,7 @@ import {
   refreshGatewayHealthSnapshot,
 } from "./server/health-state.js";
 import { loadGatewayTlsRuntime } from "./server/tls.js";
-import {
-  assertHooksTokenSeparateFromGatewayAuth,
-  ensureGatewayStartupAuth,
-} from "./startup-auth.js";
+import { ensureGatewayStartupAuth } from "./startup-auth.js";
 
 export { __resetModelCatalogCacheForTest } from "./server-model-catalog.js";
 
@@ -245,7 +242,6 @@ export async function startGatewayServer(
     persist: true,
   });
   cfgAtStart = authBootstrap.cfg;
-  assertHooksTokenSeparateFromGatewayAuth({ cfg: cfgAtStart, auth: authBootstrap.auth });
   if (authBootstrap.generatedToken) {
     if (authBootstrap.persistedGeneratedToken) {
       log.info(
