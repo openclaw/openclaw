@@ -1,21 +1,24 @@
 package ai.openclaw.android.node
 
+import ai.openclaw.android.PermissionRequester
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.provider.Telephony
 import android.telephony.SmsManager as AndroidSmsManager
 import androidx.core.content.ContextCompat
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.encodeToString
-import ai.openclaw.android.PermissionRequester
 
 /**
- * Sends SMS messages via the Android SMS API.
- * Requires SEND_SMS permission to be granted.
+ * Sends and reads SMS messages via Android APIs.
+ * Requires SEND_SMS permission for send, READ_SMS permission for read.
  */
 class SmsManager(private val context: Context) {
 
@@ -30,9 +33,30 @@ class SmsManager(private val context: Context) {
         val payloadJson: String,
     )
 
+    data class ReadResult(
+        val ok: Boolean,
+        val error: String? = null,
+        val payloadJson: String,
+    )
+
     internal data class ParsedParams(
         val to: String,
         val message: String,
+    )
+
+    internal data class ReadParams(
+        val limit: Int,
+        val sinceMs: Long?,
+    )
+
+    internal data class SmsItem(
+        val id: Long,
+        val threadId: Long,
+        val address: String?,
+        val body: String?,
+        val dateMs: Long,
+        val read: Boolean,
+        val type: Int,
     )
 
     internal sealed class ParseResult {
@@ -88,6 +112,20 @@ class SmsManager(private val context: Context) {
             return ParseResult.Ok(ParsedParams(to = to, message = message))
         }
 
+        internal fun parseReadParams(paramsJson: String?, json: Json = JsonConfig): ReadParams {
+            val obj =
+                try {
+                    paramsJson?.trim()?.takeIf { it.isNotEmpty() }?.let { json.parseToJsonElement(it).jsonObject }
+                } catch (_: Throwable) {
+                    null
+                }
+
+            val rawLimit = (obj?.get("limit") as? JsonPrimitive)?.content?.toIntOrNull() ?: 20
+            val limit = rawLimit.coerceIn(1, 200)
+            val sinceMs = (obj?.get("sinceMs") as? JsonPrimitive)?.content?.toLongOrNull()
+            return ReadParams(limit = limit, sinceMs = sinceMs)
+        }
+
         internal fun buildSendPlan(
             message: String,
             divider: (String) -> List<String>,
@@ -96,7 +134,7 @@ class SmsManager(private val context: Context) {
             return SendPlan(parts = parts, useMultipart = parts.size > 1)
         }
 
-        internal fun buildPayloadJson(
+        internal fun buildSendPayloadJson(
             json: Json = JsonConfig,
             ok: Boolean,
             to: String,
@@ -112,12 +150,56 @@ class SmsManager(private val context: Context) {
             }
             return json.encodeToString(JsonObject.serializer(), JsonObject(payload))
         }
+
+        internal fun buildReadPayloadJson(
+            json: Json = JsonConfig,
+            messages: List<SmsItem>,
+        ): String {
+            val payload =
+                buildJsonObject {
+                    put("ok", JsonPrimitive(true))
+                    put("count", JsonPrimitive(messages.size))
+                    put(
+                        "messages",
+                        JsonArray(
+                            messages.map { msg ->
+                                buildJsonObject {
+                                    put("id", JsonPrimitive(msg.id))
+                                    put("threadId", JsonPrimitive(msg.threadId))
+                                    msg.address?.let { put("address", JsonPrimitive(it)) }
+                                    msg.body?.let { put("body", JsonPrimitive(it)) }
+                                    put("dateMs", JsonPrimitive(msg.dateMs))
+                                    put("read", JsonPrimitive(msg.read))
+                                    put("type", JsonPrimitive(msg.type))
+                                }
+                            },
+                        ),
+                    )
+                }
+            return json.encodeToString(JsonObject.serializer(), payload)
+        }
+
+        internal fun buildReadErrorPayloadJson(json: Json = JsonConfig, error: String): String {
+            val payload =
+                buildJsonObject {
+                    put("ok", JsonPrimitive(false))
+                    put("error", JsonPrimitive(error))
+                }
+            return json.encodeToString(JsonObject.serializer(), payload)
+        }
     }
 
     fun hasSmsPermission(): Boolean {
         return ContextCompat.checkSelfPermission(
             context,
-            Manifest.permission.SEND_SMS
+            Manifest.permission.SEND_SMS,
+        ) == PackageManager.PERMISSION_GRANTED
+    }
+
+    fun hasSmsReadPermission(): Boolean {
+        return ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.READ_SMS,
         ) == PackageManager.PERMISSION_GRANTED
     }
 
@@ -169,19 +251,19 @@ class SmsManager(private val context: Context) {
             val plan = buildSendPlan(params.message) { smsManager.divideMessage(it) }
             if (plan.useMultipart) {
                 smsManager.sendMultipartTextMessage(
-                    params.to,     // destination
-                    null,          // service center (null = default)
-                    ArrayList(plan.parts),    // message parts
-                    null,          // sent intents
-                    null,          // delivery intents
+                    params.to,
+                    null,
+                    ArrayList(plan.parts),
+                    null,
+                    null,
                 )
             } else {
                 smsManager.sendTextMessage(
-                    params.to,     // destination
-                    null,          // service center (null = default)
-                    params.message,// message
-                    null,          // sent intent
-                    null,          // delivery intent
+                    params.to,
+                    null,
+                    params.message,
+                    null,
+                    null,
                 )
             }
 
@@ -201,11 +283,77 @@ class SmsManager(private val context: Context) {
         }
     }
 
+    /**
+     * Read recent SMS messages.
+     * paramsJson optional: {"limit":20, "sinceMs":1739870000000}
+     */
+    suspend fun read(paramsJson: String?): ReadResult {
+        if (!hasTelephonyFeature()) {
+            return readErrorResult("SMS_UNAVAILABLE: telephony not available")
+        }
+        if (!ensureSmsReadPermission()) {
+            return readErrorResult("SMS_READ_PERMISSION_REQUIRED: grant SMS read permission")
+        }
+
+        val params = parseReadParams(paramsJson, json)
+        return try {
+            val uri = Telephony.Sms.CONTENT_URI
+            val projection = arrayOf(
+                Telephony.Sms._ID,
+                Telephony.Sms.THREAD_ID,
+                Telephony.Sms.ADDRESS,
+                Telephony.Sms.BODY,
+                Telephony.Sms.DATE,
+                Telephony.Sms.READ,
+                Telephony.Sms.TYPE,
+            )
+            val selection = if (params.sinceMs != null) "${Telephony.Sms.DATE} >= ?" else null
+            val selectionArgs = if (params.sinceMs != null) arrayOf(params.sinceMs.toString()) else null
+            val sortOrder = "${Telephony.Sms.DATE} DESC LIMIT ${params.limit}"
+
+            val messages = mutableListOf<SmsItem>()
+            context.contentResolver.query(uri, projection, selection, selectionArgs, sortOrder)?.use { c ->
+                val idIdx = c.getColumnIndexOrThrow(Telephony.Sms._ID)
+                val threadIdx = c.getColumnIndexOrThrow(Telephony.Sms.THREAD_ID)
+                val addrIdx = c.getColumnIndexOrThrow(Telephony.Sms.ADDRESS)
+                val bodyIdx = c.getColumnIndexOrThrow(Telephony.Sms.BODY)
+                val dateIdx = c.getColumnIndexOrThrow(Telephony.Sms.DATE)
+                val readIdx = c.getColumnIndexOrThrow(Telephony.Sms.READ)
+                val typeIdx = c.getColumnIndexOrThrow(Telephony.Sms.TYPE)
+
+                while (c.moveToNext()) {
+                    messages += SmsItem(
+                        id = c.getLong(idIdx),
+                        threadId = c.getLong(threadIdx),
+                        address = c.getString(addrIdx),
+                        body = c.getString(bodyIdx),
+                        dateMs = c.getLong(dateIdx),
+                        read = c.getInt(readIdx) != 0,
+                        type = c.getInt(typeIdx),
+                    )
+                }
+            }
+
+            ReadResult(ok = true, error = null, payloadJson = buildReadPayloadJson(json, messages))
+        } catch (e: SecurityException) {
+            readErrorResult("SMS_READ_PERMISSION_REQUIRED: ${e.message}")
+        } catch (e: Throwable) {
+            readErrorResult("SMS_READ_FAILED: ${e.message ?: "unknown error"}")
+        }
+    }
+
     private suspend fun ensureSmsPermission(): Boolean {
         if (hasSmsPermission()) return true
         val requester = permissionRequester ?: return false
         val results = requester.requestIfMissing(listOf(Manifest.permission.SEND_SMS))
         return results[Manifest.permission.SEND_SMS] == true
+    }
+
+    private suspend fun ensureSmsReadPermission(): Boolean {
+        if (hasSmsReadPermission()) return true
+        val requester = permissionRequester ?: return false
+        val results = requester.requestIfMissing(listOf(Manifest.permission.READ_SMS))
+        return results[Manifest.permission.READ_SMS] == true
     }
 
     private fun okResult(to: String, message: String): SendResult {
@@ -214,7 +362,7 @@ class SmsManager(private val context: Context) {
             to = to,
             message = message,
             error = null,
-            payloadJson = buildPayloadJson(json = json, ok = true, to = to, error = null),
+            payloadJson = buildSendPayloadJson(json = json, ok = true, to = to, error = null),
         )
     }
 
@@ -224,7 +372,15 @@ class SmsManager(private val context: Context) {
             to = to,
             message = message,
             error = error,
-            payloadJson = buildPayloadJson(json = json, ok = false, to = to, error = error),
+            payloadJson = buildSendPayloadJson(json = json, ok = false, to = to, error = error),
+        )
+    }
+
+    private fun readErrorResult(error: String): ReadResult {
+        return ReadResult(
+            ok = false,
+            error = error,
+            payloadJson = buildReadErrorPayloadJson(json = json, error = error),
         )
     }
 }

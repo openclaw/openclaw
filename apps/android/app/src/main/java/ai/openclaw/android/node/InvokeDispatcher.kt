@@ -156,8 +156,9 @@ class InvokeDispatcher(
       // Screen command
       OpenClawScreenCommand.Record.rawValue -> screenHandler.handleScreenRecord(paramsJson)
 
-      // SMS command
+      // SMS commands
       OpenClawSmsCommand.Send.rawValue -> smsHandler.handleSmsSend(paramsJson)
+      OpenClawSmsCommand.Read.rawValue -> smsHandler.handleSmsRead(paramsJson)
 
       // Debug commands
       "debug.ed25519" -> debugHandler.handleEd25519()

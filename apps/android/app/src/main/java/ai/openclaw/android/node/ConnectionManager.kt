@@ -89,16 +89,17 @@ class ConnectionManager(
       add(OpenClawCanvasA2UICommand.Push.rawValue)
       add(OpenClawCanvasA2UICommand.PushJSONL.rawValue)
       add(OpenClawCanvasA2UICommand.Reset.rawValue)
+
+      // Always advertise supported command namespaces.
+      // Runtime guards in InvokeDispatcher enforce background/permission/setting checks.
       add(OpenClawScreenCommand.Record.rawValue)
-      if (cameraEnabled()) {
-        add(OpenClawCameraCommand.Snap.rawValue)
-        add(OpenClawCameraCommand.Clip.rawValue)
-      }
+      add(OpenClawCameraCommand.Snap.rawValue)
+      add(OpenClawCameraCommand.Clip.rawValue)
+      add(OpenClawSmsCommand.Send.rawValue)
+      add(OpenClawSmsCommand.Read.rawValue)
+
       if (locationMode() != LocationMode.Off) {
         add(OpenClawLocationCommand.Get.rawValue)
-      }
-      if (smsAvailable()) {
-        add(OpenClawSmsCommand.Send.rawValue)
       }
       if (BuildConfig.DEBUG) {
         add("debug.logs")

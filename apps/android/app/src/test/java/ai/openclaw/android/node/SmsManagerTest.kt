@@ -62,8 +62,8 @@ class SmsManagerTest {
   }
 
   @Test
-  fun buildPayloadJsonEscapesFields() {
-    val payload = SmsManager.buildPayloadJson(
+  fun buildSendPayloadJsonEscapesFields() {
+    val payload = SmsManager.buildSendPayloadJson(
       json = json,
       ok = false,
       to = "+1\"23",
