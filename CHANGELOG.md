@@ -24,6 +24,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents: always strip orphaned OpenAI reasoning items from session history, not only on model changes — prevents persistent 400 errors after a gateway restart or interrupted call when using reasoning models (e.g. gpt-5.2).
 - Cron: scheduler reliability (timer drift, restart catch-up, lock contention, stale running markers). (#10776) Thanks @tyler6204.
 - Cron: store migration hardening (legacy field migration, parse error handling, explicit delivery mode persistence). (#10776) Thanks @tyler6204.
 - Memory: set Voyage embeddings `input_type` for improved retrieval. (#10818) Thanks @mcinteerj.
