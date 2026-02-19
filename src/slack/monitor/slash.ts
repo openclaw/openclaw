@@ -645,7 +645,7 @@ export async function registerSlackMonitorSlashCommands(params: {
           onModelSelected,
         },
       });
-      if ((counts.final ?? 0) + (counts.tool ?? 0) + (counts.block ?? 0) === 0) {
+      if (counts.final + counts.tool + counts.block === 0) {
         await deliverSlashPayloads([]);
       }
     } catch (err) {
