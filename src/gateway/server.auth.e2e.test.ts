@@ -991,9 +991,10 @@ describe("gateway server auth/connect", () => {
       await writeJsonAtomic(pairedPath, paired);
       ws.close();
 
-      ws2 = new WebSocket(`ws://127.0.0.1:${port}`);
-      await new Promise<void>((resolve) => ws2.once("open", resolve));
-      const reconnect = await connectReq(ws2, {
+      const wsReconnect = new WebSocket(`ws://127.0.0.1:${port}`);
+      ws2 = wsReconnect;
+      await new Promise<void>((resolve) => wsReconnect.once("open", resolve));
+      const reconnect = await connectReq(wsReconnect, {
         token: "secret",
         scopes: ["operator.read"],
         client: TEST_OPERATOR_CLIENT,
