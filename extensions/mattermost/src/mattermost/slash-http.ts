@@ -140,11 +140,28 @@ async function authorizeSlashInvocation(params: {
   let channelInfo: MattermostChannel | null = null;
   try {
     channelInfo = await fetchMattermostChannel(client, channelId);
-  } catch {
-    // continue without channel info
+  } catch (err) {
+    log?.(`mattermost: slash channel lookup failed for ${channelId}: ${String(err)}`);
   }
 
-  const channelType = channelInfo?.type ?? undefined;
+  if (!channelInfo) {
+    return {
+      ok: false,
+      denyResponse: {
+        response_type: "ephemeral",
+        text: "Temporary error: unable to determine channel type. Please try again.",
+      },
+      commandAuthorized: false,
+      channelInfo: null,
+      kind: "channel",
+      chatType: "channel",
+      channelName: "",
+      channelDisplay: "",
+      roomLabel: `#${channelId}`,
+    };
+  }
+
+  const channelType = channelInfo.type ?? undefined;
   const isDirectMessage = channelType?.toUpperCase() === "D";
   const kind: SlashInvocationAuth["kind"] = isDirectMessage
     ? "direct"
