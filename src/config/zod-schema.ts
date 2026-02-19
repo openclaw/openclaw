@@ -623,6 +623,12 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        runtime: z
+          .object({
+            allowLegacyExec: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
         slots: z
           .object({
             memory: z.string().optional(),

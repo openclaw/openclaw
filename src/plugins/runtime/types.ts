@@ -184,7 +184,10 @@ export type PluginRuntime = {
   };
   system: {
     enqueueSystemEvent: EnqueueSystemEvent;
-    /** @deprecated Runtime command execution is disabled at runtime for security hardening. */
+    /**
+     * @deprecated Disabled by default for security hardening.
+     * Set `plugins.runtime.allowLegacyExec: true` to opt in for legacy compatibility.
+     */
     runCommandWithTimeout: RunCommandWithTimeout;
     formatNativeDependencyHint: FormatNativeDependencyHint;
   };
