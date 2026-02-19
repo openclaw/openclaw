@@ -76,3 +76,23 @@ test("process submit sends Enter for pty sessions", async () => {
 
   await waitForSessionCompletion({ processTool, sessionId, expectedText: "submitted" });
 });
+
+test("process send-keys delayMs paces key token writes", async () => {
+  const { processTool, sessionId } = await startPtySession(
+    'node -e "const dataEvent=String.fromCharCode(100,97,116,97);process.stdin.on(dataEvent,d=>{process.stdout.write(d);if(d.includes(10)||d.includes(13))process.exit(0);});"',
+  );
+
+  const start = Date.now();
+  await processTool.execute("toolcall", {
+    action: "send-keys",
+    sessionId,
+    keys: ["a", "b", "c", "Enter"],
+    delayMs: 60,
+  });
+  const elapsedMs = Date.now() - start;
+
+  // 4 tokens => 3 inter-key waits; allow for timer jitter on slower runners.
+  expect(elapsedMs).toBeGreaterThanOrEqual(130);
+
+  await waitForSessionCompletion({ processTool, sessionId, expectedText: "abc" });
+});
