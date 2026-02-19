@@ -30,7 +30,7 @@ export function initializeGlobalHookRunner(registry: PluginRegistry): void {
     catchErrors: true,
   });
 
-  const hookCount = registry.hooks.length;
+  const hookCount = registry.typedHooks.length;
   if (hookCount > 0) {
     log.info(`hook runner initialized with ${hookCount} registered hooks`);
   }
