@@ -390,31 +390,13 @@ export function extractThinkingFromTaggedText(text: string): string {
   return result.trim();
 }
 
-export function stripTrailingPartialThinkingTagFragment(text: string): string {
-  if (!text) {
-    return text;
-  }
-  const match = text.match(/<\s*\/?\s*([a-z]*)\s*$/i);
-  if (!match || typeof match.index !== "number") {
-    return text;
-  }
-  const prefix = (match[1] ?? "").toLowerCase();
-  const targets = ["think", "thinking", "thought", "antthinking"];
-  const isThinkingPrefix =
-    prefix.length === 0 || targets.some((target) => target.startsWith(prefix));
-  if (!isThinkingPrefix) {
-    return text;
-  }
-  return text.slice(0, match.index).trimEnd();
-}
-
 export function extractThinkingFromTaggedStream(text: string): string {
   if (!text) {
     return "";
   }
   const closed = extractThinkingFromTaggedText(text);
   if (closed) {
-    return stripTrailingPartialThinkingTagFragment(closed);
+    return closed;
   }
 
   const openRe = /<\s*(?:think(?:ing)?|thought|antthinking)\s*>/gi;
@@ -427,10 +409,10 @@ export function extractThinkingFromTaggedStream(text: string): string {
   const lastOpen = openMatches[openMatches.length - 1];
   const lastClose = closeMatches[closeMatches.length - 1];
   if (lastClose && (lastClose.index ?? -1) > (lastOpen.index ?? -1)) {
-    return stripTrailingPartialThinkingTagFragment(closed);
+    return closed;
   }
   const start = (lastOpen.index ?? 0) + lastOpen[0].length;
-  return stripTrailingPartialThinkingTagFragment(text.slice(start).trim());
+  return text.slice(start).trim();
 }
 
 export function inferToolMetaFromArgs(toolName: string, args: unknown): string | undefined {

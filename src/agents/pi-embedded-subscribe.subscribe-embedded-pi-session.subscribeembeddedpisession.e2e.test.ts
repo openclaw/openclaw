@@ -298,61 +298,6 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(onReasoningEnd).toHaveBeenCalledTimes(1);
   });
 
-  it("does not leak partial think tag fragments into reasoning or assistant streams", () => {
-    let handler: ((evt: unknown) => void) | undefined;
-    const session: StubSession = {
-      subscribe: (fn) => {
-        handler = fn;
-        return () => {};
-      },
-    };
-
-    const onReasoningStream = vi.fn();
-    const onPartialReply = vi.fn();
-
-    subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
-      runId: "run",
-      reasoningMode: "stream",
-      onReasoningStream,
-      onPartialReply,
-    });
-
-    handler?.({ type: "message_start", message: { role: "assistant" } });
-    handler?.({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: { type: "text_delta", delta: "<think>step one" },
-    });
-    handler?.({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: { type: "text_delta", delta: " and two</think" },
-    });
-    handler?.({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: { type: "text_delta", delta: ">\nfinal answer" },
-    });
-
-    const reasoningTexts = onReasoningStream.mock.calls
-      .map((call) => call[0]?.text)
-      .filter((value): value is string => typeof value === "string");
-    const partialTexts = onPartialReply.mock.calls
-      .map((call) => call[0]?.text)
-      .filter((value): value is string => typeof value === "string");
-
-    expect(reasoningTexts.at(-1)).toContain("Reasoning:\n_step one and two_");
-    for (const text of reasoningTexts) {
-      expect(text).not.toContain("</think");
-      expect(text).not.toContain("<think");
-    }
-    for (const text of partialTexts) {
-      expect(text).not.toContain("</think");
-      expect(text).not.toContain("<think");
-    }
-  });
-
   it("emits delta chunks in agent events for streaming assistant text", () => {
     const { emit, onAgentEvent } = createAgentEventHarness();
 

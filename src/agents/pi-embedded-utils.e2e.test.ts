@@ -2,9 +2,7 @@ import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
   extractAssistantText,
-  extractThinkingFromTaggedStream,
   formatReasoningMessage,
-  stripTrailingPartialThinkingTagFragment,
   stripDowngradedToolCallText,
 } from "./pi-embedded-utils.js";
 
@@ -602,19 +600,6 @@ describe("formatReasoningMessage", () => {
     expect(formatReasoningMessage("  \n  Reasoning here  \n  ")).toBe(
       "Reasoning:\n_Reasoning here_",
     );
-  });
-});
-
-describe("thinking tag fragment handling", () => {
-  it("strips dangling closing tag fragments from tagged stream extraction", () => {
-    expect(extractThinkingFromTaggedStream("<think>step one and two</")).toBe("step one and two");
-    expect(extractThinkingFromTaggedStream("<think>step one and two</th")).toBe("step one and two");
-  });
-
-  it("strips dangling opening/closing think fragments while preserving plain text", () => {
-    expect(stripTrailingPartialThinkingTagFragment("Reasoning line <th")).toBe("Reasoning line");
-    expect(stripTrailingPartialThinkingTagFragment("Reasoning line </")).toBe("Reasoning line");
-    expect(stripTrailingPartialThinkingTagFragment("2 < 3")).toBe("2 < 3");
   });
 });
 
