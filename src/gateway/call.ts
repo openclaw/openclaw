@@ -16,6 +16,7 @@ import {
   type GatewayClientName,
 } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
+import type { OperatorScope } from "./method-scopes.js";
 import { isSecureWebSocketUrl, pickPrimaryLanIPv4 } from "./net.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
 
@@ -37,6 +38,7 @@ export type CallGatewayOptions = {
   instanceId?: string;
   minProtocol?: number;
   maxProtocol?: number;
+  scopes?: OperatorScope[];
   /**
    * Overrides the config path shown in connection error details.
    * Does not affect config loading; callers still control auth via opts.token/password/env/config.
@@ -257,6 +259,9 @@ export async function callGateway<T = Record<string, unknown>>(
   };
   const formatTimeoutError = () =>
     `gateway timeout after ${timeoutMs}ms\n${connectionDetails.message}`;
+  const scopes = Array.isArray(opts.scopes)
+    ? opts.scopes
+    : ["operator.admin", "operator.approvals", "operator.pairing"];
   return await new Promise<T>((resolve, reject) => {
     let settled = false;
     let ignoreClose = false;
@@ -285,7 +290,7 @@ export async function callGateway<T = Record<string, unknown>>(
       platform: opts.platform,
       mode: opts.mode ?? GATEWAY_CLIENT_MODES.CLI,
       role: "operator",
-      scopes: ["operator.admin", "operator.approvals", "operator.pairing"],
+      scopes,
       deviceIdentity: loadOrCreateDeviceIdentity(),
       minProtocol: opts.minProtocol ?? PROTOCOL_VERSION,
       maxProtocol: opts.maxProtocol ?? PROTOCOL_VERSION,

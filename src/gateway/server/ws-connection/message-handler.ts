@@ -616,7 +616,34 @@ export function attachGatewayWsMessageHandler(params: {
 
         const skipPairing = allowControlUiBypass && sharedAuthOk;
         if (device && devicePublicKey && !skipPairing) {
-          const requirePairing = async (reason: string, _paired?: { deviceId: string }) => {
+          const formatAuditList = (items: string[] | undefined): string => {
+            if (!items || items.length === 0) {
+              return "<none>";
+            }
+            const out = new Set<string>();
+            for (const item of items) {
+              const trimmed = item.trim();
+              if (trimmed) {
+                out.add(trimmed);
+              }
+            }
+            if (out.size === 0) {
+              return "<none>";
+            }
+            return [...out].toSorted().join(",");
+          };
+          const logUpgradeAudit = (
+            reason: "role-upgrade" | "scope-upgrade",
+            currentRoles: string[] | undefined,
+            currentScopes: string[] | undefined,
+          ) => {
+            logGateway.warn(
+              `security audit: device access upgrade requested reason=${reason} device=${device.id} ip=${reportedClientIp ?? "unknown-ip"} auth=${authMethod} roleFrom=${formatAuditList(currentRoles)} roleTo=${role} scopesFrom=${formatAuditList(currentScopes)} scopesTo=${formatAuditList(scopes)} client=${connectParams.client.id} conn=${connId}`,
+            );
+          };
+          const requirePairing = async (
+            reason: "not-paired" | "role-upgrade" | "scope-upgrade",
+          ) => {
             const pairing = await requestDevicePairing({
               deviceId: device.id,
               publicKey: devicePublicKey,
@@ -627,7 +654,7 @@ export function attachGatewayWsMessageHandler(params: {
               role,
               scopes,
               remoteIp: reportedClientIp,
-              silent: isLocalClient,
+              silent: isLocalClient && reason === "not-paired",
             });
             const context = buildRequestContext();
             if (pairing.request.silent === true) {
@@ -679,16 +706,21 @@ export function attachGatewayWsMessageHandler(params: {
               return;
             }
           } else {
-            const allowedRoles = new Set(
-              Array.isArray(paired.roles) ? paired.roles : paired.role ? [paired.role] : [],
-            );
+            const pairedRoles = Array.isArray(paired.roles)
+              ? paired.roles
+              : paired.role
+                ? [paired.role]
+                : [];
+            const allowedRoles = new Set(pairedRoles);
             if (allowedRoles.size === 0) {
-              const ok = await requirePairing("role-upgrade", paired);
+              logUpgradeAudit("role-upgrade", pairedRoles, paired.scopes);
+              const ok = await requirePairing("role-upgrade");
               if (!ok) {
                 return;
               }
             } else if (!allowedRoles.has(role)) {
-              const ok = await requirePairing("role-upgrade", paired);
+              logUpgradeAudit("role-upgrade", pairedRoles, paired.scopes);
+              const ok = await requirePairing("role-upgrade");
               if (!ok) {
                 return;
               }
@@ -697,7 +729,8 @@ export function attachGatewayWsMessageHandler(params: {
             const pairedScopes = Array.isArray(paired.scopes) ? paired.scopes : [];
             if (scopes.length > 0) {
               if (pairedScopes.length === 0) {
-                const ok = await requirePairing("scope-upgrade", paired);
+                logUpgradeAudit("scope-upgrade", pairedRoles, pairedScopes);
+                const ok = await requirePairing("scope-upgrade");
                 if (!ok) {
                   return;
                 }
@@ -705,7 +738,8 @@ export function attachGatewayWsMessageHandler(params: {
                 const allowedScopes = new Set(pairedScopes);
                 const missingScope = scopes.find((scope) => !allowedScopes.has(scope));
                 if (missingScope) {
-                  const ok = await requirePairing("scope-upgrade", paired);
+                  logUpgradeAudit("scope-upgrade", pairedRoles, pairedScopes);
+                  const ok = await requirePairing("scope-upgrade");
                   if (!ok) {
                     return;
                   }

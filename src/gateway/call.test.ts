@@ -10,6 +10,7 @@ let lastClientOptions: {
   url?: string;
   token?: string;
   password?: string;
+  scopes?: string[];
   onHelloOk?: () => void | Promise<void>;
   onClose?: (code: number, reason: string) => void;
 } | null = null;
@@ -54,6 +55,7 @@ vi.mock("./client.js", () => ({
       url?: string;
       token?: string;
       password?: string;
+      scopes?: string[];
       onHelloOk?: () => void | Promise<void>;
       onClose?: (code: number, reason: string) => void;
     }) {
@@ -194,6 +196,32 @@ describe("callGateway url resolution", () => {
 
     expect(lastClientOptions?.url).toBe("wss://override.example/ws");
     expect(lastClientOptions?.token).toBe("explicit-token");
+  });
+
+  it("keeps legacy admin scopes when call scopes are omitted", async () => {
+    loadConfig.mockReturnValue({ gateway: { mode: "local", bind: "loopback" } });
+    resolveGatewayPort.mockReturnValue(18789);
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+
+    await callGateway({ method: "health" });
+
+    expect(lastClientOptions?.scopes).toEqual([
+      "operator.admin",
+      "operator.approvals",
+      "operator.pairing",
+    ]);
+  });
+
+  it("passes explicit scopes through, including empty arrays", async () => {
+    loadConfig.mockReturnValue({ gateway: { mode: "local", bind: "loopback" } });
+    resolveGatewayPort.mockReturnValue(18789);
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+
+    await callGateway({ method: "health", scopes: ["operator.read"] });
+    expect(lastClientOptions?.scopes).toEqual(["operator.read"]);
+
+    await callGateway({ method: "health", scopes: [] });
+    expect(lastClientOptions?.scopes).toEqual([]);
   });
 });
 
