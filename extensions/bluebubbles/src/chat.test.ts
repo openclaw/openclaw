@@ -13,29 +13,20 @@ installBlueBubblesFetchTestHooks({
 
 describe("chat", () => {
   describe("markBlueBubblesChatRead", () => {
-    it("does nothing when chatGuid is empty", async () => {
-      await markBlueBubblesChatRead("", {
-        serverUrl: "http://localhost:1234",
-        password: "test",
-      });
+    it("does nothing when chatGuid is empty or whitespace", async () => {
+      for (const chatGuid of ["", "   "]) {
+        await markBlueBubblesChatRead(chatGuid, {
+          serverUrl: "http://localhost:1234",
+          password: "test",
+        });
+      }
       expect(mockFetch).not.toHaveBeenCalled();
     });
 
-    it("does nothing when chatGuid is whitespace", async () => {
-      await markBlueBubblesChatRead("   ", {
-        serverUrl: "http://localhost:1234",
-        password: "test",
-      });
-      expect(mockFetch).not.toHaveBeenCalled();
-    });
-
-    it("throws when serverUrl is missing", async () => {
+    it("throws when required credentials are missing", async () => {
       await expect(markBlueBubblesChatRead("chat-guid", {})).rejects.toThrow(
         "serverUrl is required",
       );
-    });
-
-    it("throws when password is missing", async () => {
       await expect(
         markBlueBubblesChatRead("chat-guid", {
           serverUrl: "http://localhost:1234",
@@ -141,29 +132,20 @@ describe("chat", () => {
   });
 
   describe("sendBlueBubblesTyping", () => {
-    it("does nothing when chatGuid is empty", async () => {
-      await sendBlueBubblesTyping("", true, {
-        serverUrl: "http://localhost:1234",
-        password: "test",
-      });
+    it("does nothing when chatGuid is empty or whitespace", async () => {
+      for (const chatGuid of ["", "   "]) {
+        await sendBlueBubblesTyping(chatGuid, true, {
+          serverUrl: "http://localhost:1234",
+          password: "test",
+        });
+      }
       expect(mockFetch).not.toHaveBeenCalled();
     });
 
-    it("does nothing when chatGuid is whitespace", async () => {
-      await sendBlueBubblesTyping("   ", false, {
-        serverUrl: "http://localhost:1234",
-        password: "test",
-      });
-      expect(mockFetch).not.toHaveBeenCalled();
-    });
-
-    it("throws when serverUrl is missing", async () => {
+    it("throws when required credentials are missing", async () => {
       await expect(sendBlueBubblesTyping("chat-guid", true, {})).rejects.toThrow(
         "serverUrl is required",
       );
-    });
-
-    it("throws when password is missing", async () => {
       await expect(
         sendBlueBubblesTyping("chat-guid", true, {
           serverUrl: "http://localhost:1234",
