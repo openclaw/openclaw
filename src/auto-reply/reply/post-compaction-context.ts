@@ -1,46 +1,61 @@
 import fs from "node:fs";
 import path from "node:path";
+import { getBootstrapFileContent, resolveBootstrapCacheKey } from "../../agents/bootstrap-cache.js";
 
 const MAX_CONTEXT_CHARS = 3000;
 
 /**
  * Read critical sections from workspace AGENTS.md for post-compaction injection.
+ * Uses the bootstrap cache when a sessionKey/sessionId is provided so AGENTS.md content
+ * is consistent with what was loaded at session start. Falls back to a direct disk read
+ * when no cache key is available.
  * Returns formatted system event text, or null if no AGENTS.md or no relevant sections.
  */
-export async function readPostCompactionContext(workspaceDir: string): Promise<string | null> {
-  const agentsPath = path.join(workspaceDir, "AGENTS.md");
+export async function readPostCompactionContext(
+  workspaceDir: string,
+  opts?: { sessionKey?: string; sessionId?: string },
+): Promise<string | null> {
+  const cacheKey = opts ? resolveBootstrapCacheKey(opts) : undefined;
 
-  try {
-    if (!fs.existsSync(agentsPath)) {
+  let content: string | undefined;
+
+  if (cacheKey) {
+    content = getBootstrapFileContent(cacheKey, "AGENTS.md");
+  }
+
+  if (content === undefined) {
+    const agentsPath = path.join(workspaceDir, "AGENTS.md");
+    try {
+      if (!fs.existsSync(agentsPath)) {
+        return null;
+      }
+      content = await fs.promises.readFile(agentsPath, "utf-8");
+    } catch {
       return null;
     }
+  }
 
-    const content = await fs.promises.readFile(agentsPath, "utf-8");
+  // Extract "## Session Startup" and "## Red Lines" sections
+  // Each section ends at the next "## " heading or end of file
+  const sections = extractSections(content, ["Session Startup", "Red Lines"]);
 
-    // Extract "## Session Startup" and "## Red Lines" sections
-    // Each section ends at the next "## " heading or end of file
-    const sections = extractSections(content, ["Session Startup", "Red Lines"]);
-
-    if (sections.length === 0) {
-      return null;
-    }
-
-    const combined = sections.join("\n\n");
-    const safeContent =
-      combined.length > MAX_CONTEXT_CHARS
-        ? combined.slice(0, MAX_CONTEXT_CHARS) + "\n...[truncated]..."
-        : combined;
-
-    return (
-      "[Post-compaction context refresh]\n\n" +
-      "Session was just compacted. The conversation summary above is a hint, NOT a substitute for your startup sequence. " +
-      "Execute your Session Startup sequence now — read the required files before responding to the user.\n\n" +
-      "Critical rules from AGENTS.md:\n\n" +
-      safeContent
-    );
-  } catch {
+  if (sections.length === 0) {
     return null;
   }
+
+  const combined = sections.join("\n\n");
+  const safeContent =
+    combined.length > MAX_CONTEXT_CHARS
+      ? combined.slice(0, MAX_CONTEXT_CHARS) + "\n...[truncated]..."
+      : combined;
+
+  return (
+    "[Post-compaction context refresh]\n\n" +
+    "Session was just compacted. The conversation summary above is a hint, NOT a substitute for your startup sequence. " +
+    "Execute your Session Startup sequence now — read the required files before responding to the user.\n\n" +
+    "Critical rules from AGENTS.md:\n\n" +
+    safeContent
+  );
 }
 
 /**

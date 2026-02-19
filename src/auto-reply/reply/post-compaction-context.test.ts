@@ -1,17 +1,32 @@
 import fs from "node:fs";
 import path from "node:path";
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import {
+  clearAllBootstrapSnapshots,
+  getOrLoadBootstrapFiles,
+} from "../../agents/bootstrap-cache.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
+
+vi.mock("../../agents/workspace.js", () => ({
+  loadWorkspaceBootstrapFiles: vi.fn(),
+}));
+
+import { loadWorkspaceBootstrapFiles } from "../../agents/workspace.js";
+
+const mockLoad = vi.mocked(loadWorkspaceBootstrapFiles);
 
 describe("readPostCompactionContext", () => {
   const tmpDir = path.join("/tmp", "test-post-compaction-" + Date.now());
 
   beforeEach(() => {
     fs.mkdirSync(tmpDir, { recursive: true });
+    clearAllBootstrapSnapshots();
   });
 
   afterEach(() => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
+    clearAllBootstrapSnapshots();
+    vi.clearAllMocks();
   });
 
   it("returns null when no AGENTS.md exists", async () => {
@@ -165,5 +180,79 @@ Never do Y.
     expect(result).toContain("Rule 1");
     expect(result).toContain("Rule 2");
     expect(result).not.toContain("Other Section");
+  });
+});
+
+describe("readPostCompactionContext — cache integration", () => {
+  const tmpDir = path.join("/tmp", "test-post-compaction-cache-" + Date.now());
+
+  beforeEach(() => {
+    fs.mkdirSync(tmpDir, { recursive: true });
+    clearAllBootstrapSnapshots();
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    clearAllBootstrapSnapshots();
+    vi.clearAllMocks();
+  });
+
+  it("uses cached AGENTS.md content when session key matches", async () => {
+    const cachedContent = `## Session Startup\n\nFrom cache.\n\n## Other\n\nIgnored.`;
+    mockLoad.mockResolvedValue([
+      {
+        name: "AGENTS.md",
+        path: path.join(tmpDir, "AGENTS.md"),
+        content: cachedContent,
+        missing: false,
+      },
+    ]);
+
+    // Populate cache
+    await getOrLoadBootstrapFiles({ workspaceDir: tmpDir, sessionKey: "sk-cache-test" });
+
+    // Write different content to disk — cache should win
+    fs.writeFileSync(
+      path.join(tmpDir, "AGENTS.md"),
+      "## Session Startup\n\nFrom disk (should be ignored).\n",
+    );
+
+    const result = await readPostCompactionContext(tmpDir, { sessionKey: "sk-cache-test" });
+    expect(result).not.toBeNull();
+    expect(result).toContain("From cache");
+    expect(result).not.toContain("From disk");
+  });
+
+  it("falls back to disk when no cache entry for session key", async () => {
+    fs.writeFileSync(
+      path.join(tmpDir, "AGENTS.md"),
+      "## Session Startup\n\nFrom disk.\n\n## Other\n\nStuff.\n",
+    );
+
+    const result = await readPostCompactionContext(tmpDir, { sessionKey: "no-cache-for-this" });
+    expect(result).not.toBeNull();
+    expect(result).toContain("From disk");
+  });
+
+  it("falls back to disk when no opts provided", async () => {
+    fs.writeFileSync(
+      path.join(tmpDir, "AGENTS.md"),
+      "## Red Lines\n\nNever break things.\n\n## Other\n\nStuff.\n",
+    );
+
+    const result = await readPostCompactionContext(tmpDir);
+    expect(result).not.toBeNull();
+    expect(result).toContain("Never break things");
+  });
+
+  it("returns null when cache has no AGENTS.md and no disk file", async () => {
+    mockLoad.mockResolvedValue([
+      { name: "SOUL.md", path: path.join(tmpDir, "SOUL.md"), content: "# Soul", missing: false },
+    ]);
+
+    await getOrLoadBootstrapFiles({ workspaceDir: tmpDir, sessionKey: "sk-no-agents" });
+
+    const result = await readPostCompactionContext(tmpDir, { sessionKey: "sk-no-agents" });
+    expect(result).toBeNull();
   });
 });
