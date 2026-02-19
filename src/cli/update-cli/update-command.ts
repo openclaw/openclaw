@@ -33,7 +33,7 @@ import { pathExists } from "../../utils.js";
 import { replaceCliName, resolveCliName } from "../cli-name.js";
 import { formatCliCommand } from "../command-format.js";
 import { installCompletion } from "../completion-cli.js";
-import { runDaemonRestart } from "../daemon-cli.js";
+import { runDaemonInstall, runDaemonRestart } from "../daemon-cli.js";
 import { createUpdateProgress, printResult } from "./progress.js";
 import { prepareRestartScript, runRestartScript } from "./restart-helper.js";
 import {
@@ -391,6 +391,7 @@ async function maybeRestartService(params: {
   shouldRestart: boolean;
   result: UpdateRunResult;
   opts: UpdateCommandOptions;
+  refreshServiceEnv: boolean;
   restartScriptPath?: string | null;
 }): Promise<void> {
   if (params.shouldRestart) {
@@ -402,11 +403,29 @@ async function maybeRestartService(params: {
     try {
       let restarted = false;
       let restartInitiated = false;
-      if (params.restartScriptPath) {
+      let serviceRefreshed = false;
+      if (params.refreshServiceEnv) {
+        try {
+          await runDaemonInstall({ force: true, json: params.opts.json });
+          serviceRefreshed = true;
+          restarted = true;
+        } catch (err) {
+          if (!params.opts.json) {
+            defaultRuntime.log(
+              theme.warn(
+                `Failed to refresh gateway service environment from updated install: ${String(err)}`,
+              ),
+            );
+          }
+        }
+      }
+      if (!serviceRefreshed && params.restartScriptPath) {
         await runRestartScript(params.restartScriptPath);
         restartInitiated = true;
       } else {
-        restarted = await runDaemonRestart();
+        if (!serviceRefreshed) {
+          restarted = await runDaemonRestart();
+        }
       }
 
       if (!params.opts.json && restarted) {
@@ -586,11 +605,13 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   const startedAt = Date.now();
 
   let restartScriptPath: string | null = null;
+  let refreshGatewayServiceEnv = false;
   if (shouldRestart) {
     try {
       const loaded = await resolveGatewayService().isLoaded({ env: process.env });
       if (loaded) {
         restartScriptPath = await prepareRestartScript(process.env);
+        refreshGatewayServiceEnv = true;
       }
     } catch {
       // Ignore errors during pre-check; fallback to standard restart
@@ -669,6 +690,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     shouldRestart,
     result,
     opts,
+    refreshServiceEnv: refreshGatewayServiceEnv,
     restartScriptPath,
   });
 
