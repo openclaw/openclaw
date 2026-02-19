@@ -67,6 +67,14 @@ export const SnapshotSchema = Type.Object(
         channel: NonEmptyString,
       }),
     ),
+    pluginCommands: Type.Optional(
+      Type.Array(
+        Type.Object({
+          name: Type.String(),
+          description: Type.String(),
+        }),
+      ),
+    ),
   },
   { additionalProperties: false },
 );

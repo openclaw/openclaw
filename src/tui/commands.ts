@@ -18,6 +18,7 @@ export type SlashCommandOptions = {
   cfg?: OpenClawConfig;
   provider?: string;
   model?: string;
+  pluginCommands?: Array<{ name: string; description: string }>;
 };
 
 const COMMAND_ALIASES: Record<string, string> = {
@@ -132,6 +133,13 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
       }
       seen.add(name);
       commands.push({ name, description: command.description });
+    }
+  }
+
+  for (const cmd of options.pluginCommands ?? []) {
+    if (!seen.has(cmd.name)) {
+      seen.add(cmd.name);
+      commands.push({ name: cmd.name, description: cmd.description });
     }
   }
 

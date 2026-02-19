@@ -4,6 +4,7 @@ import { CONFIG_PATH, STATE_DIR, loadConfig } from "../../config/config.js";
 import { resolveMainSessionKey } from "../../config/sessions.js";
 import { listSystemPresence } from "../../infra/system-presence.js";
 import { getUpdateAvailable } from "../../infra/update-startup.js";
+import { listPluginCommands } from "../../plugins/commands.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { resolveGatewayAuth } from "../auth.js";
 import type { Snapshot } from "../protocol/index.js";
@@ -42,6 +43,7 @@ export function buildGatewaySnapshot(): Snapshot {
     },
     authMode: auth.mode,
     updateAvailable,
+    pluginCommands: listPluginCommands().map((c) => ({ name: c.name, description: c.description })),
   };
 }
 

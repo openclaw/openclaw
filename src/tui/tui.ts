@@ -393,6 +393,7 @@ export async function runTui(opts: TuiOptions) {
           cfg: config,
           provider: sessionInfo.modelProvider,
           model: sessionInfo.model,
+          pluginCommands: client.hello?.snapshot?.pluginCommands,
         }),
         process.cwd(),
       ),
@@ -778,6 +779,7 @@ export async function runTui(opts: TuiOptions) {
     void (async () => {
       await refreshAgents();
       updateHeader();
+      updateAutocompleteProvider();
       await loadHistory();
       setConnectionStatus(reconnected ? "gateway reconnected" : "gateway connected", 4000);
       tui.requestRender();
