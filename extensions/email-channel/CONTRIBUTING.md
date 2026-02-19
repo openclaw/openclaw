@@ -1,13 +1,13 @@
 # Contributing to Email Channel
 
-Thank you for your interest in contributing to the Email Channel plugin for Clawdbot!
+Thank you for your interest in contributing to the Email Channel plugin for OpenClaw!
 
 ## Development Setup
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/openclaw/clawdbot.git
-   cd clawdbot/packages/email-channel
+   git clone https://github.com/openclaw/openclaw.git
+   cd openclaw/packages/email-channel
    ```
 
 2. **Install dependencies**
@@ -24,10 +24,10 @@ Thank you for your interest in contributing to the Email Channel plugin for Claw
 
 ### Manual Testing
 
-1. Create a test configuration in `~/.clawdbot/clawdbot.json`
+1. Create a test configuration in `~/.openclaw/openclaw.json`
 2. Use a test email account (not your personal email)
 3. Configure the email channel with your test account
-4. Start Clawdbot Gateway: `clawdbot gateway`
+4. Start OpenClaw Gateway: `openclaw gateway`
 5. Send test emails and verify:
    - Email reception
    - AI response delivery
@@ -83,11 +83,11 @@ feat: Add support for OAuth2 authentication
 
 When reporting issues, please include:
 
-1. **Clawdbot version**: `clawdbot --version`
+1. **OpenClaw version**: `openclaw --version`
 2. **Node.js version**: `node --version`
 3. **Operating system**: macOS, Linux, Windows
 4. **Email provider**: Gmail, QQ, 163, Outlook, etc.
-5. **Error messages**: Complete error logs from `/tmp/clawdbot/`
+5. **Error messages**: Complete error logs from `/tmp/openclaw/`
 6. **Steps to reproduce**: Detailed reproduction steps
 7. **Expected behavior**: What you expected to happen
 8. **Actual behavior**: What actually happened

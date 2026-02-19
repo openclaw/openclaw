@@ -1,23 +1,24 @@
 {
-  "name": "@openclaw/email-channel",
+  "name": "@openclaw/email",
   "version": "1.0.0",
-  "description": "Email channel for Clawdbot - Send and receive commands via IMAP/SMTP",
+  "private": true,
+  "description": "OpenClaw Email channel plugin - Send and receive messages via IMAP/SMTP",
   "type": "module",
   "main": "index.ts",
   "keywords": [
-    "clawdbot",
+    "openclaw",
     "plugin",
     "channel",
     "email",
     "imap",
     "smtp"
   ],
-  "author": "Clawdbot Contributors",
+  "author": "OpenClaw Contributors",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/openclaw/openclaw",
-    "directory": "packages/email-channel"
+    "directory": "extensions/email-channel"
   },
   "bugs": {
     "url": "https://github.com/openclaw/openclaw/issues"
@@ -46,6 +47,7 @@
   },
   "devDependencies": {
     "@types/node": "^25.2.1",
+    "openclaw": "workspace:*",
     "typescript": "^5.9.3"
   },
   "engines": {
