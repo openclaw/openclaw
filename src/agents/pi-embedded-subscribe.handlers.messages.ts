@@ -30,6 +30,14 @@ const stripTrailingDirective = (text: string): string => {
   return text.slice(0, openIndex);
 };
 
+function emitReasoningEnd(ctx: EmbeddedPiSubscribeContext) {
+  if (!ctx.state.reasoningStreamOpen) {
+    return;
+  }
+  ctx.state.reasoningStreamOpen = false;
+  void ctx.params.onReasoningEnd?.();
+}
+
 export function resolveSilentReplyFallbackText(params: {
   text: string;
   messagingToolSentTexts: string[];
@@ -83,6 +91,9 @@ export function handleMessageUpdate(
   const evtType = typeof assistantRecord?.type === "string" ? assistantRecord.type : "";
 
   if (evtType === "thinking_start" || evtType === "thinking_delta" || evtType === "thinking_end") {
+    if (evtType === "thinking_start" || evtType === "thinking_delta") {
+      ctx.state.reasoningStreamOpen = true;
+    }
     const thinkingDelta = typeof assistantRecord?.delta === "string" ? assistantRecord.delta : "";
     const thinkingContent =
       typeof assistantRecord?.content === "string" ? assistantRecord.content : "";
@@ -101,7 +112,10 @@ export function handleMessageUpdate(
       ctx.emitReasoningStream(partialThinking || thinkingContent || thinkingDelta);
     }
     if (evtType === "thinking_end") {
-      void ctx.params.onReasoningEnd?.();
+      if (!ctx.state.reasoningStreamOpen) {
+        ctx.state.reasoningStreamOpen = true;
+      }
+      emitReasoningEnd(ctx);
     }
     return;
   }
@@ -166,9 +180,12 @@ export function handleMessageUpdate(
   if (next) {
     const wasThinking = ctx.state.partialBlockState.thinking;
     const visibleDelta = chunk ? ctx.stripBlockTags(chunk, ctx.state.partialBlockState) : "";
+    if (!wasThinking && ctx.state.partialBlockState.thinking) {
+      ctx.state.reasoningStreamOpen = true;
+    }
     // Detect when thinking block ends (</think> tag processed)
     if (wasThinking && !ctx.state.partialBlockState.thinking) {
-      void ctx.params.onReasoningEnd?.();
+      emitReasoningEnd(ctx);
     }
     const parsedDelta = visibleDelta ? ctx.consumePartialReplyDirectives(visibleDelta) : null;
     const parsedFull = parseReplyDirectives(stripTrailingDirective(next));
@@ -414,4 +431,5 @@ export function handleMessageEnd(
   ctx.state.blockState.inlineCode = createInlineCodeState();
   ctx.state.lastStreamedAssistant = undefined;
   ctx.state.lastStreamedAssistantCleaned = undefined;
+  ctx.state.reasoningStreamOpen = false;
 }

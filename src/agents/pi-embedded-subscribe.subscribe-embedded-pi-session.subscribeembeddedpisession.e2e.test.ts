@@ -251,6 +251,59 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(onReasoningEnd).toHaveBeenCalledTimes(1);
   });
 
+  it("emits reasoning end once when native and tagged reasoning end overlap", () => {
+    let handler: ((evt: unknown) => void) | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
+
+    const onReasoningEnd = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
+      runId: "run",
+      reasoningMode: "stream",
+      onReasoningStream: vi.fn(),
+      onReasoningEnd,
+    });
+
+    handler?.({ type: "message_start", message: { role: "assistant" } });
+
+    handler?.({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: {
+        type: "text_delta",
+        delta: "<think>Checking",
+      },
+    });
+
+    handler?.({
+      type: "message_update",
+      message: {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "Checking" }],
+      },
+      assistantMessageEvent: {
+        type: "thinking_end",
+      },
+    });
+
+    handler?.({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: {
+        type: "text_delta",
+        delta: " files</think>\nFinal answer",
+      },
+    });
+
+    expect(onReasoningEnd).toHaveBeenCalledTimes(1);
+  });
+
   it("emits delta chunks in agent events for streaming assistant text", () => {
     const { emit, onAgentEvent } = createAgentEventHarness();
 
