@@ -1,0 +1,127 @@
+define
+
+customer sub entity,
+  owns customer-id @key, owns name, owns email, owns segment,
+  owns lifecycle-stage, owns lifetime-value;
+
+product sub entity,
+  owns product-id @key, owns sku, owns name, owns category, owns price;
+
+supplier sub entity,
+  owns supplier-id @key, owns name, owns rating, owns category;
+
+campaign sub entity,
+  owns campaign-id @key, owns name, owns status, owns channel;
+
+project sub entity,
+  owns project-id @key, owns name, owns status, owns priority;
+
+goal sub entity,
+  owns goal-id @key, owns description, owns target-value,
+  owns current-value, owns domain;
+
+agent sub entity,
+  owns agent-id @key, owns name, owns role;
+
+supply-node sub entity,
+  owns node-id @key, owns name, owns node-type, owns location;
+
+compliance-rule sub entity,
+  owns rule-id @key, owns name, owns severity, owns domain;
+
+contract sub entity,
+  owns contract-id @key, owns title, owns status, owns party;
+
+department sub entity,
+  owns dept-id @key, owns name;
+
+purchased sub relation,
+  relates buyer, relates item, owns quantity, owns purchased-at;
+customer plays purchased:buyer;
+product plays purchased:item;
+
+supplies sub relation,
+  relates vendor, relates item, owns lead-time, owns unit-cost;
+supplier plays supplies:vendor;
+product plays supplies:item;
+
+targets sub relation,
+  relates campaign-source, relates audience;
+campaign plays targets:campaign-source;
+customer plays targets:audience;
+
+advances sub relation,
+  relates campaign-driver, relates goal-target, owns contribution;
+campaign plays advances:campaign-driver;
+project plays advances:campaign-driver;
+goal plays advances:goal-target;
+
+depends-on sub relation,
+  relates dependent, relates dependency;
+project plays depends-on:dependent;
+project plays depends-on:dependency;
+campaign plays depends-on:dependent;
+
+assigned-to sub relation,
+  relates assignee, relates work-item;
+agent plays assigned-to:assignee;
+project plays assigned-to:work-item;
+campaign plays assigned-to:work-item;
+
+governed-by sub relation,
+  relates governed-entity, relates rule;
+product plays governed-by:governed-entity;
+contract plays governed-by:governed-entity;
+supplier plays governed-by:governed-entity;
+compliance-rule plays governed-by:rule;
+
+supply-route sub relation,
+  relates origin, relates destination, owns transit-time, owns cost;
+supply-node plays supply-route:origin;
+supply-node plays supply-route:destination;
+
+belongs-to sub relation,
+  relates member, relates group;
+agent plays belongs-to:member;
+department plays belongs-to:group;
+
+customer-id sub attribute, value string;
+product-id sub attribute, value string;
+supplier-id sub attribute, value string;
+campaign-id sub attribute, value string;
+project-id sub attribute, value string;
+goal-id sub attribute, value string;
+agent-id sub attribute, value string;
+node-id sub attribute, value string;
+rule-id sub attribute, value string;
+contract-id sub attribute, value string;
+dept-id sub attribute, value string;
+name sub attribute, value string;
+email sub attribute, value string;
+sku sub attribute, value string;
+category sub attribute, value string;
+segment sub attribute, value string;
+lifecycle-stage sub attribute, value string;
+lifetime-value sub attribute, value double;
+price sub attribute, value double;
+rating sub attribute, value double;
+status sub attribute, value string;
+channel sub attribute, value string;
+priority sub attribute, value long;
+description sub attribute, value string;
+target-value sub attribute, value double;
+current-value sub attribute, value double;
+domain sub attribute, value string;
+role sub attribute, value string;
+node-type sub attribute, value string;
+location sub attribute, value string;
+severity sub attribute, value string;
+title sub attribute, value string;
+party sub attribute, value string;
+quantity sub attribute, value long;
+purchased-at sub attribute, value datetime;
+lead-time sub attribute, value long;
+unit-cost sub attribute, value double;
+contribution sub attribute, value double;
+transit-time sub attribute, value long;
+cost sub attribute, value double;
