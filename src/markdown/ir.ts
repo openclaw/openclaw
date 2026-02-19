@@ -14,6 +14,7 @@ type LinkState = {
 
 type RenderEnv = {
   listStack: ListState[];
+  blockquoteDepth: number;
 };
 
 type MarkdownToken = {
@@ -595,9 +596,19 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
           state.text += state.blockquotePrefix;
         }
         openStyle(state, "blockquote");
+        state.env.blockquoteDepth += 1;
         break;
       case "blockquote_close":
         closeStyle(state, "blockquote");
+        state.env.blockquoteDepth -= 1;
+        // When exiting the outermost blockquote, normalize trailing newlines.
+        // The inner paragraph_close adds \n\n for block separation.
+        // Trim excess newlines to prevent triple-newline accumulation.
+        if (state.env.blockquoteDepth === 0) {
+          while (state.text.endsWith("\n\n\n")) {
+            state.text = state.text.slice(0, -1);
+          }
+        }
         break;
       case "bullet_list_open":
         // Add newline before nested list starts (so nested items appear on new line)
@@ -835,7 +846,7 @@ export function markdownToIRWithMeta(
   markdown: string,
   options: MarkdownParseOptions = {},
 ): { ir: MarkdownIR; hasTables: boolean } {
-  const env: RenderEnv = { listStack: [] };
+  const env: RenderEnv = { listStack: [], blockquoteDepth: 0 };
   const md = createMarkdownIt(options);
   const tokens = md.parse(markdown ?? "", env as unknown as object);
   if (options.enableSpoilers) {
