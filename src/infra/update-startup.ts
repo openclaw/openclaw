@@ -14,6 +14,18 @@ type UpdateCheckState = {
   lastNotifiedTag?: string;
 };
 
+type UpdateAvailable = {
+  currentVersion: string;
+  latestVersion: string;
+  channel: string;
+};
+
+let updateAvailableCache: UpdateAvailable | null = null;
+
+export function getUpdateAvailable(): UpdateAvailable | null {
+  return updateAvailableCache;
+}
+
 const UPDATE_CHECK_FILENAME = "update-check.json";
 const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
@@ -100,6 +112,11 @@ export async function runGatewayUpdateCheck(params: {
 
   const cmp = compareSemverStrings(VERSION, resolved.version);
   if (cmp != null && cmp < 0) {
+    updateAvailableCache = {
+      currentVersion: VERSION,
+      latestVersion: resolved.version,
+      channel: tag,
+    };
     const shouldNotify =
       state.lastNotifiedVersion !== resolved.version || state.lastNotifiedTag !== tag;
     if (shouldNotify) {
