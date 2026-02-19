@@ -287,8 +287,11 @@ Optional trace hook:
   Nostr channel events as JSONL for cross-client latency and ordering diagnostics.
 - Trace entries now include `direction:"inbound_bus"` with `stage` transitions (`received`,
   `accepted`, `decrypt_failed`, `unsupported_encryption`, etc.) to pinpoint drop/reject causes.
-- Runtime includes a replay poll fallback (5s cadence) that re-queries recent prompts and feeds
-  normal validation/dedupe to recover from missed live-delivery windows.
+- Runtime includes a replay poll fallback (default 1500ms cadence) that re-queries recent prompts
+  and feeds normal validation/dedupe to recover from missed live-delivery windows.
+- Replay poll tuning:
+  - `OPENCLAW_NOSTR_REPLAY_POLL_INTERVAL_MS` (default `1500`, clamped `300..10000`)
+  - `OPENCLAW_NOSTR_REPLAY_POLL_MAX_WAIT_MS` (default `1200`, clamped `250..interval`)
 
 ### Manual test
 

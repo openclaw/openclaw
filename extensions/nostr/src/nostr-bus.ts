@@ -41,8 +41,8 @@ export const DEFAULT_RELAYS = ["wss://relay.damus.io", "wss://nos.lol"];
 const DEFAULT_STARTUP_LOOKBACK_SEC = 5; // keep startup replay narrow for low-latency operation
 const MAX_PERSISTED_EVENT_IDS = 5000;
 const STATE_PERSIST_DEBOUNCE_MS = 5000; // Debounce state writes
-const REPLAY_POLL_INTERVAL_MS = 5000;
-const REPLAY_POLL_MAX_WAIT_MS = 3000;
+const DEFAULT_REPLAY_POLL_INTERVAL_MS = 1500;
+const DEFAULT_REPLAY_POLL_MAX_WAIT_MS = 1200;
 const REPLAY_POLL_OVERLAP_SEC = 30;
 const REPLAY_STRICT_FLOOR_BACKFILL_SEC = 2;
 
@@ -88,6 +88,30 @@ function resolveStartupLookbackSec(env: NodeJS.ProcessEnv = process.env): number
     return DEFAULT_STARTUP_LOOKBACK_SEC;
   }
   return Math.max(0, Math.min(3600, parsed));
+}
+
+function resolveReplayPollIntervalMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw =
+    env.OPENCLAW_NOSTR_REPLAY_POLL_INTERVAL_MS ?? env.CLAWDBOT_NOSTR_REPLAY_POLL_INTERVAL_MS ?? "";
+  const parsed = Number.parseInt(`${raw}`, 10);
+  if (!Number.isFinite(parsed)) {
+    return DEFAULT_REPLAY_POLL_INTERVAL_MS;
+  }
+  return Math.max(300, Math.min(10000, parsed));
+}
+
+function resolveReplayPollMaxWaitMs(
+  pollIntervalMs: number,
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  const raw =
+    env.OPENCLAW_NOSTR_REPLAY_POLL_MAX_WAIT_MS ?? env.CLAWDBOT_NOSTR_REPLAY_POLL_MAX_WAIT_MS ?? "";
+  const parsed = Number.parseInt(`${raw}`, 10);
+  const fallback = Math.min(DEFAULT_REPLAY_POLL_MAX_WAIT_MS, pollIntervalMs);
+  if (!Number.isFinite(parsed)) {
+    return Math.max(250, fallback);
+  }
+  return Math.max(250, Math.min(pollIntervalMs, parsed));
 }
 
 export interface NostrBusOptions {
@@ -563,6 +587,8 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
   const state = await readNostrBusState({ accountId });
   const baseSince = computeSinceTimestamp(state, gatewayStartedAt);
   const startupLookbackSec = resolveStartupLookbackSec();
+  const replayPollIntervalMs = resolveReplayPollIntervalMs();
+  const replayPollMaxWaitMs = resolveReplayPollMaxWaitMs(replayPollIntervalMs);
   const since = Math.max(0, baseSince - startupLookbackSec);
   const strictReplayFloor =
     typeof state?.lastProcessedAt === "number"
@@ -892,7 +918,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
         },
         {
           label: "nostr-replay",
-          maxWait: REPLAY_POLL_MAX_WAIT_MS,
+          maxWait: replayPollMaxWaitMs,
         },
       );
 
@@ -913,7 +939,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
   };
   const replayPollTimer = setInterval(() => {
     void runReplayPoll();
-  }, REPLAY_POLL_INTERVAL_MS);
+  }, replayPollIntervalMs);
   if (typeof replayPollTimer.unref === "function") {
     replayPollTimer.unref();
   }
