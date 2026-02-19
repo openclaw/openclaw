@@ -1,7 +1,7 @@
+import JSZip from "jszip";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import JSZip from "jszip";
 import sharp from "sharp";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { isPathWithinBase } from "../../test/helpers/paths.js";
@@ -99,6 +99,17 @@ describe("media store", () => {
       await fs.utimes(saved.path, past / 1000, past / 1000);
       await store.cleanOldMedia(1);
       await expect(fs.stat(saved.path)).rejects.toThrow();
+    });
+  });
+
+  it.runIf(process.platform !== "win32")("rejects symlink sources", async () => {
+    await withTempStore(async (store, home) => {
+      const target = path.join(home, "sensitive.txt");
+      const source = path.join(home, "source.txt");
+      await fs.writeFile(target, "sensitive");
+      await fs.symlink(target, source);
+
+      await expect(store.saveMediaSource(source)).rejects.toThrow("symlink");
     });
   });
 
