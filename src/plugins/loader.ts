@@ -5,6 +5,7 @@ import { createJiti } from "jiti";
 import type { OpenClawConfig } from "../config/config.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { isPathInsideWithRealpath } from "../security/scan-paths.js";
 import { resolveUserPath } from "../utils.js";
 import { clearPluginCommands } from "./commands.js";
 import {
@@ -474,6 +475,24 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     if (!manifestRecord.configSchema) {
       record.status = "error";
       record.error = "missing config schema";
+      registry.plugins.push(record);
+      seenIds.set(pluginId, candidate.origin);
+      registry.diagnostics.push({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: record.error,
+      });
+      continue;
+    }
+
+    if (
+      !isPathInsideWithRealpath(candidate.rootDir, candidate.source, {
+        requireRealpath: true,
+      })
+    ) {
+      record.status = "error";
+      record.error = "plugin entry path escapes plugin root";
       registry.plugins.push(record);
       seenIds.set(pluginId, candidate.origin);
       registry.diagnostics.push({

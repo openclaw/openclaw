@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { isPathInsideWithRealpath } from "../security/scan-paths.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import { resolveBundledHooksDir } from "./bundled-dir.js";
 import { shouldIncludeHook } from "./config.js";
@@ -55,8 +56,11 @@ function resolvePackageHooks(manifest: HookPackageManifest): string[] {
 function resolveContainedDir(baseDir: string, targetDir: string): string | null {
   const base = path.resolve(baseDir);
   const resolved = path.resolve(baseDir, targetDir);
-  const relative = path.relative(base, resolved);
-  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+  if (
+    !isPathInsideWithRealpath(base, resolved, {
+      requireRealpath: true,
+    })
+  ) {
     return null;
   }
   return resolved;
