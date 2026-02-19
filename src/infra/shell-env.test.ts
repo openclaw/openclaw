@@ -81,18 +81,13 @@ describe("shell env fallback", () => {
     const first = getShellPathFromLoginShell({
       env: {} as NodeJS.ProcessEnv,
       exec: exec as unknown as Parameters<typeof getShellPathFromLoginShell>[0]["exec"],
+      platform: "linux",
     });
     const second = getShellPathFromLoginShell({
       env: {} as NodeJS.ProcessEnv,
       exec: exec as unknown as Parameters<typeof getShellPathFromLoginShell>[0]["exec"],
+      platform: "linux",
     });
-
-    if (process.platform === "win32") {
-      expect(first).toBeNull();
-      expect(second).toBeNull();
-      expect(exec).not.toHaveBeenCalled();
-      return;
-    }
 
     expect(first).toBe("/usr/local/bin:/usr/bin");
     expect(second).toBe("/usr/local/bin:/usr/bin");
@@ -108,18 +103,36 @@ describe("shell env fallback", () => {
     const first = getShellPathFromLoginShell({
       env: {} as NodeJS.ProcessEnv,
       exec: exec as unknown as Parameters<typeof getShellPathFromLoginShell>[0]["exec"],
+      platform: "linux",
     });
     const second = getShellPathFromLoginShell({
       env: {} as NodeJS.ProcessEnv,
       exec: exec as unknown as Parameters<typeof getShellPathFromLoginShell>[0]["exec"],
+      platform: "linux",
     });
 
     expect(first).toBeNull();
     expect(second).toBeNull();
-    if (process.platform === "win32") {
-      expect(exec).not.toHaveBeenCalled();
-      return;
-    }
     expect(exec).toHaveBeenCalledOnce();
+  });
+
+  it("returns null without invoking shell on win32", () => {
+    resetShellPathCacheForTests();
+    const exec = vi.fn(() => Buffer.from("PATH=/usr/local/bin:/usr/bin\0HOME=/tmp\0"));
+
+    const first = getShellPathFromLoginShell({
+      env: {} as NodeJS.ProcessEnv,
+      exec: exec as unknown as Parameters<typeof getShellPathFromLoginShell>[0]["exec"],
+      platform: "win32",
+    });
+    const second = getShellPathFromLoginShell({
+      env: {} as NodeJS.ProcessEnv,
+      exec: exec as unknown as Parameters<typeof getShellPathFromLoginShell>[0]["exec"],
+      platform: "win32",
+    });
+
+    expect(first).toBeNull();
+    expect(second).toBeNull();
+    expect(exec).not.toHaveBeenCalled();
   });
 });
