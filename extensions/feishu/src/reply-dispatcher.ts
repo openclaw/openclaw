@@ -245,8 +245,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               });
             } catch (err) {
               params.runtime.error?.(
-                `feishu[${account.accountId}] sendCaptionCard failed: ${String(err)}`,
+                `feishu[${account.accountId}] sendCaptionCard failed, falling back to text: ${String(err)}`,
               );
+              await sendTextPayload(text, info);
             }
           }
           return;
