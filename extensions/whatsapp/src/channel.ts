@@ -61,7 +61,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
     resolveAccount: (cfg, accountId) => resolveWhatsAppAccount({ cfg, accountId }),
     defaultAccountId: (cfg) => resolveDefaultWhatsAppAccountId(cfg),
     setAccountEnabled: ({ cfg, accountId, enabled }) => {
-      const accountKey = accountId || DEFAULT_ACCOUNT_ID;
+      const accountKey = accountId ?? DEFAULT_ACCOUNT_ID;
       const accounts = { ...cfg.channels?.whatsapp?.accounts };
       const existing = accounts[accountKey] ?? {};
       return {
