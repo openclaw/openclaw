@@ -139,9 +139,9 @@ export async function runCommandWithTimeout(
     cwd,
     env: resolvedEnv,
     windowsVerbatimArguments,
-    ...(shouldSpawnWithShell({ resolvedCommand, platform: process.platform })
-      ? { shell: true }
-      : {}),
+    // SECURITY: shell is always false — never pass user-controlled argv through cmd.exe.
+    // See shouldSpawnWithShell() for rationale.
+    shell: false,
   });
   // Spawn with inherited stdin (TTY) so tools like `pi` stay interactive when needed.
   return await new Promise((resolve, reject) => {
