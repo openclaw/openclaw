@@ -319,7 +319,7 @@ export const registerTelegramNativeCommands = ({
     listNativeCommandSpecs().map((command) => normalizeTelegramCommandName(command.name)),
   );
   for (const command of skillCommands) {
-    reservedCommands.add(command.name.toLowerCase());
+    reservedCommands.add(normalizeTelegramCommandName(command.name));
   }
   const customResolution = resolveTelegramCustomCommands({
     commands: telegramCfg.customCommands,
