@@ -270,7 +270,7 @@ export async function handleDirectiveOnly(
   const prevElevatedLevel =
     currentElevatedLevel ??
     (sessionEntry.elevatedLevel as ElevatedLevel | undefined) ??
-    (elevatedAllowed ? ("on" as ElevatedLevel) : ("off" as ElevatedLevel));
+    ("off" as ElevatedLevel);
   const prevReasoningLevel =
     currentReasoningLevel ?? (sessionEntry.reasoningLevel as ReasoningLevel | undefined) ?? "off";
   let elevatedChanged =

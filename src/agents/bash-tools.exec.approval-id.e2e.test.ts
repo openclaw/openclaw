@@ -147,6 +147,28 @@ describe("exec approvals", () => {
     expect(calls).not.toContain("exec.approval.request");
   });
 
+  it("does not trigger elevated approvals when default level is off", async () => {
+    const { callGatewayTool } = await import("./tools/gateway.js");
+    const calls: string[] = [];
+    vi.mocked(callGatewayTool).mockImplementation(async (method) => {
+      calls.push(method);
+      return { ok: true };
+    });
+
+    const { createExecTool } = await import("./bash-tools.exec.js");
+    const tool = createExecTool({
+      ask: "on-miss",
+      security: "allowlist",
+      approvalRunningNoticeMs: 0,
+      elevated: { enabled: true, allowed: true, defaultLevel: "off" },
+    });
+
+    const result = await tool.execute("call-default-off", { command: "echo ok" });
+    expect(result.details.status).toBe("completed");
+    expect(calls).not.toContain("exec.approval.request");
+    expect(calls).not.toContain("exec.approval.waitDecision");
+  });
+
   it("requires approval for elevated ask when allowlist misses", async () => {
     const { callGatewayTool } = await import("./tools/gateway.js");
     const calls: string[] = [];

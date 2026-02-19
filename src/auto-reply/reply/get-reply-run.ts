@@ -425,7 +425,7 @@ export async function runPreparedReply(
       bashElevated: {
         enabled: elevatedEnabled,
         allowed: elevatedAllowed,
-        defaultLevel: resolvedElevatedLevel ?? "off",
+        defaultLevel: (agentCfg?.elevatedDefault as ElevatedLevel | undefined) ?? "off",
       },
       timeoutMs,
       blockReplyBreak: resolvedBlockStreamingBreak,

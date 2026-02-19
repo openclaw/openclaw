@@ -73,7 +73,7 @@ describe("directive behavior", () => {
       expect(call?.thinkLevel).toBe("low");
     });
   });
-  it("passes elevated defaults when sender is approved", async () => {
+  it("defaults elevated mode to off when enabled and sender is approved", async () => {
     await withTempHome(async (home) => {
       mockEmbeddedTextResult("done");
 
@@ -88,10 +88,48 @@ describe("directive behavior", () => {
         {},
         makeWhatsAppDirectiveConfig(
           home,
-          { model: { primary: "anthropic/claude-opus-4-5" } },
+          { model: "anthropic/claude-opus-4-5" },
           {
             tools: {
               elevated: {
+                enabled: true,
+                allowFrom: { whatsapp: ["+1004"] },
+              },
+            },
+          },
+        ),
+      );
+
+      expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
+      const call = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0];
+      expect(call?.bashElevated).toEqual({
+        enabled: true,
+        allowed: true,
+        defaultLevel: "off",
+      });
+    });
+  });
+
+  it("respects explicit elevatedDefault=on when enabled and sender is approved", async () => {
+    await withTempHome(async (home) => {
+      mockEmbeddedTextResult("done");
+
+      await getReplyFromConfig(
+        {
+          Body: "hello",
+          From: "+1004",
+          To: "+2000",
+          Provider: "whatsapp",
+          SenderE164: "+1004",
+        },
+        {},
+        makeWhatsAppDirectiveConfig(
+          home,
+          { model: "anthropic/claude-opus-4-5", elevatedDefault: "on" },
+          {
+            tools: {
+              elevated: {
+                enabled: true,
                 allowFrom: { whatsapp: ["+1004"] },
               },
             },
