@@ -52,22 +52,29 @@ export async function maybeBroadcastDiscordMessage(params: {
 
   // If this message came from one of our own broadcast webhooks, identify the
   // sending agent so we can exclude it from the fan-out (prevent self-loop).
+  //
+  // Discord strips Unicode Variation Selectors (VS16 U+FE0F) and Zero-Width
+  // Joiners (U+200D) from webhook usernames, so we must normalize both sides
+  // before comparing to avoid identity mismatches that cause infinite loops.
+  const stripEmojiModifiers = (s: string) =>
+    s.replace(/[\uFE0F\u200D]/g, "").trim().toLowerCase();
+
   let excludeAgentId: string | undefined;
   if (params.ctx.ownWebhookUsername) {
-    const webhookName = params.ctx.ownWebhookUsername.trim().toLowerCase();
+    const webhookName = stripEmojiModifiers(params.ctx.ownWebhookUsername);
     for (const [id, agent] of agentConfigById) {
       const displayName = [agent.identity?.name?.trim(), agent.identity?.emoji?.trim()]
         .filter(Boolean)
-        .join(" ")
-        .trim()
-        .toLowerCase();
-      if (displayName && webhookName === displayName) {
+        .join(" ");
+      const normalizedDisplay = stripEmojiModifiers(displayName);
+      if (normalizedDisplay && webhookName === normalizedDisplay) {
         excludeAgentId = id;
         break;
       }
       // Also match name-only (without emoji)
-      const nameOnly = (agent.identity?.name ?? agent.name ?? "").trim().toLowerCase();
-      if (nameOnly && webhookName.startsWith(nameOnly)) {
+      const nameOnly = (agent.identity?.name ?? agent.name ?? "").trim();
+      const normalizedName = stripEmojiModifiers(nameOnly);
+      if (normalizedName && webhookName.startsWith(normalizedName)) {
         excludeAgentId = id;
         break;
       }
