@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -2804,12 +2804,13 @@ impl RpcDispatcher {
                 })),
             };
         };
-        if !node_command_allowed(&node, &command) {
+        let node_command_policy = self.config.node_command_policy().await;
+        if let Err(reason) = node_command_allowed(&node, &command, &node_command_policy) {
             return RpcDispatchOutcome::Error {
                 code: 400,
                 message: "node command not allowed".to_owned(),
                 details: Some(json!({
-                    "reason": "command-not-declared",
+                    "reason": reason,
                     "command": command
                 })),
             };
@@ -6925,20 +6926,172 @@ fn next_node_pair_token(node_id: &str) -> String {
     format!("ntk_{}", &digest[..48])
 }
 
-fn node_command_allowed(node: &PairedNodeEntry, command: &str) -> bool {
+const NODE_CANVAS_COMMANDS: &[&str] = &[
+    "canvas.present",
+    "canvas.hide",
+    "canvas.navigate",
+    "canvas.eval",
+    "canvas.snapshot",
+    "canvas.a2ui.push",
+    "canvas.a2ui.pushJSONL",
+    "canvas.a2ui.reset",
+];
+const NODE_CAMERA_COMMANDS: &[&str] = &["camera.list"];
+const NODE_LOCATION_COMMANDS: &[&str] = &["location.get"];
+const NODE_DEVICE_COMMANDS: &[&str] = &["device.info", "device.status"];
+const NODE_CONTACTS_COMMANDS: &[&str] = &["contacts.search"];
+const NODE_CALENDAR_COMMANDS: &[&str] = &["calendar.events"];
+const NODE_REMINDERS_COMMANDS: &[&str] = &["reminders.list"];
+const NODE_PHOTOS_COMMANDS: &[&str] = &["photos.latest"];
+const NODE_MOTION_COMMANDS: &[&str] = &["motion.activity", "motion.pedometer"];
+const NODE_IOS_SYSTEM_COMMANDS: &[&str] = &["system.notify"];
+const NODE_SYSTEM_COMMANDS: &[&str] = &[
+    "system.run",
+    "system.which",
+    "system.notify",
+    "browser.proxy",
+];
+
+fn extend_node_command_allowlist(allow: &mut HashSet<String>, commands: &[&str]) {
+    for command in commands {
+        allow.insert((*command).to_owned());
+    }
+}
+
+fn normalize_node_platform_id(platform: Option<&str>, device_family: Option<&str>) -> &'static str {
+    let raw = platform.unwrap_or_default().trim().to_ascii_lowercase();
+    if raw.starts_with("ios") {
+        return "ios";
+    }
+    if raw.starts_with("android") {
+        return "android";
+    }
+    if raw.starts_with("mac") || raw.starts_with("darwin") {
+        return "macos";
+    }
+    if raw.starts_with("win") {
+        return "windows";
+    }
+    if raw.starts_with("linux") {
+        return "linux";
+    }
+
+    let family = device_family
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    if family.contains("iphone") || family.contains("ipad") || family.contains("ios") {
+        return "ios";
+    }
+    if family.contains("android") {
+        return "android";
+    }
+    if family.contains("mac") {
+        return "macos";
+    }
+    if family.contains("windows") {
+        return "windows";
+    }
+    if family.contains("linux") {
+        return "linux";
+    }
+    "unknown"
+}
+
+fn resolve_node_command_allowlist(
+    node: &PairedNodeEntry,
+    policy: &NodeCommandPolicy,
+) -> HashSet<String> {
+    let mut allow = HashSet::new();
+    match normalize_node_platform_id(node.platform.as_deref(), node.device_family.as_deref()) {
+        "ios" => {
+            extend_node_command_allowlist(&mut allow, NODE_CANVAS_COMMANDS);
+            extend_node_command_allowlist(&mut allow, NODE_CAMERA_COMMANDS);
+            extend_node_command_allowlist(&mut allow, NODE_LOCATION_COMMANDS);
+            extend_node_command_allowlist(&mut allow, NODE_DEVICE_COMMANDS);
+            extend_node_command_allowlist(&mut allow, NODE_CONTACTS_COMMANDS);
+            extend_node_command_allowlist(&mut allow, NODE_CALENDAR_COMMANDS);
+            extend_node_command_allowlist(&mut allow, NODE_REMINDERS_COMMANDS);
+            extend_node_command_allowlist(&mut allow, NODE_PHOTOS_COMMANDS);
+            extend_node_command_allowlist(&mut allow, NODE_MOTION_COMMANDS);
+            extend_node_command_allowlist(&mut allow, NODE_IOS_SYSTEM_COMMANDS);
+        }
+        "android" => {
+            extend_node_command_allowlist(&mut allow, NODE_CANVAS_COMMANDS);
+            extend_node_command_allowlist(&mut allow, NODE_CAMERA_COMMANDS);
+            extend_node_command_allowlist(&mut allow, NODE_LOCATION_COMMANDS);
+            extend_node_command_allowlist(&mut allow, NODE_DEVICE_COMMANDS);
+            extend_node_command_allowlist(&mut allow, NODE_CONTACTS_COMMANDS);
+            extend_node_command_allowlist(&mut allow, NODE_CALENDAR_COMMANDS);
+            extend_node_command_allowlist(&mut allow, NODE_REMINDERS_COMMANDS);
+            extend_node_command_allowlist(&mut allow, NODE_PHOTOS_COMMANDS);
+            extend_node_command_allowlist(&mut allow, NODE_MOTION_COMMANDS);
+        }
+        "macos" => {
+            extend_node_command_allowlist(&mut allow, NODE_CANVAS_COMMANDS);
+            extend_node_command_allowlist(&mut allow, NODE_CAMERA_COMMANDS);
+            extend_node_command_allowlist(&mut allow, NODE_LOCATION_COMMANDS);
+            extend_node_command_allowlist(&mut allow, NODE_DEVICE_COMMANDS);
+            extend_node_command_allowlist(&mut allow, NODE_CONTACTS_COMMANDS);
+            extend_node_command_allowlist(&mut allow, NODE_CALENDAR_COMMANDS);
+            extend_node_command_allowlist(&mut allow, NODE_REMINDERS_COMMANDS);
+            extend_node_command_allowlist(&mut allow, NODE_PHOTOS_COMMANDS);
+            extend_node_command_allowlist(&mut allow, NODE_MOTION_COMMANDS);
+            extend_node_command_allowlist(&mut allow, NODE_SYSTEM_COMMANDS);
+        }
+        "linux" | "windows" => {
+            extend_node_command_allowlist(&mut allow, NODE_SYSTEM_COMMANDS);
+        }
+        _ => {
+            extend_node_command_allowlist(&mut allow, NODE_CANVAS_COMMANDS);
+            extend_node_command_allowlist(&mut allow, NODE_CAMERA_COMMANDS);
+            extend_node_command_allowlist(&mut allow, NODE_LOCATION_COMMANDS);
+            extend_node_command_allowlist(&mut allow, NODE_SYSTEM_COMMANDS);
+        }
+    }
+
+    for command in &policy.allow_commands {
+        let normalized = command.trim();
+        if !normalized.is_empty() {
+            allow.insert(normalized.to_owned());
+        }
+    }
+    for blocked in &policy.deny_commands {
+        let normalized = blocked.trim();
+        if !normalized.is_empty() {
+            allow.remove(normalized);
+        }
+    }
+    allow
+}
+
+fn node_command_allowed(
+    node: &PairedNodeEntry,
+    command: &str,
+    policy: &NodeCommandPolicy,
+) -> Result<(), &'static str> {
     let normalized = command.trim();
     if normalized.is_empty() {
-        return false;
+        return Err("command required");
+    }
+    let allowlist = resolve_node_command_allowlist(node, policy);
+    if !allowlist.contains(normalized) {
+        return Err("command not allowlisted");
     }
     let Some(commands) = &node.commands else {
-        return true;
+        return Err("node did not declare commands");
     };
     if commands.is_empty() {
-        return true;
+        return Err("node did not declare commands");
     }
-    commands
+    if !commands
         .iter()
-        .any(|allowed| allowed.eq_ignore_ascii_case(normalized))
+        .map(|entry| entry.trim())
+        .any(|entry| entry == normalized)
+    {
+        return Err("command not declared by node");
+    }
+    Ok(())
 }
 
 struct NodeRuntimeRegistry {
@@ -9269,6 +9422,12 @@ struct ConfigUpdateResult {
     hash: String,
 }
 
+#[derive(Debug, Clone, Default)]
+struct NodeCommandPolicy {
+    allow_commands: Vec<String>,
+    deny_commands: Vec<String>,
+}
+
 impl ConfigRegistry {
     fn new() -> Self {
         let config = json!({
@@ -9347,6 +9506,26 @@ impl ConfigRegistry {
             hash: guard.hash.clone(),
         })
     }
+
+    async fn node_command_policy(&self) -> NodeCommandPolicy {
+        let guard = self.state.lock().await;
+        let allow_commands = extract_config_command_list(
+            guard
+                .config
+                .pointer("/gateway/nodes/allowCommands")
+                .or_else(|| guard.config.pointer("/gateway/nodes/allow_commands")),
+        );
+        let deny_commands = extract_config_command_list(
+            guard
+                .config
+                .pointer("/gateway/nodes/denyCommands")
+                .or_else(|| guard.config.pointer("/gateway/nodes/deny_commands")),
+        );
+        NodeCommandPolicy {
+            allow_commands,
+            deny_commands,
+        }
+    }
 }
 
 fn parse_config_raw(raw: String, method: &str) -> Result<Value, String> {
@@ -9368,6 +9547,24 @@ fn parse_config_patch_raw(raw: String) -> Result<Value, String> {
         return Err("config.patch raw must be an object".to_owned());
     }
     Ok(patch)
+}
+
+fn extract_config_command_list(value: Option<&Value>) -> Vec<String> {
+    let Some(entries) = value.and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    let mut commands = Vec::new();
+    for entry in entries {
+        let Some(command) = entry.as_str() else {
+            continue;
+        };
+        let trimmed = command.trim();
+        if !trimmed.is_empty() {
+            commands.push(trimmed.to_owned());
+        }
+    }
+    sort_and_dedup_strings(&mut commands);
+    commands
 }
 
 fn require_base_hash(base_hash: Option<String>, state: &ConfigState) -> Result<(), String> {
@@ -17768,6 +17965,202 @@ mod tests {
                 );
             }
             _ => panic!("expected node.event handled"),
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatcher_node_invoke_enforces_allowlist_and_config_overrides() {
+        let dispatcher = RpcDispatcher::new();
+
+        let pair_request = RpcRequestFrame {
+            id: "req-node-policy-pair-request".to_owned(),
+            method: "node.pair.request".to_owned(),
+            params: serde_json::json!({
+                "nodeId": "node-policy-1",
+                "platform": "linux",
+                "commands": ["system.run", "camera.snap"]
+            }),
+        };
+        let request_id = match dispatcher.handle_request(&pair_request).await {
+            RpcDispatchOutcome::Handled(payload) => payload
+                .pointer("/request/requestId")
+                .and_then(serde_json::Value::as_str)
+                .map(ToOwned::to_owned)
+                .expect("node pair request id"),
+            _ => panic!("expected node.pair.request handled"),
+        };
+        let pair_approve = RpcRequestFrame {
+            id: "req-node-policy-pair-approve".to_owned(),
+            method: "node.pair.approve".to_owned(),
+            params: serde_json::json!({
+                "requestId": request_id
+            }),
+        };
+        let out = dispatcher.handle_request(&pair_approve).await;
+        assert!(matches!(out, RpcDispatchOutcome::Handled(_)));
+
+        let invoke_disallowed = RpcRequestFrame {
+            id: "req-node-policy-disallowed".to_owned(),
+            method: "node.invoke".to_owned(),
+            params: serde_json::json!({
+                "nodeId": "node-policy-1",
+                "command": "camera.snap",
+                "idempotencyKey": "idem-policy-1"
+            }),
+        };
+        match dispatcher.handle_request(&invoke_disallowed).await {
+            RpcDispatchOutcome::Error { code, details, .. } => {
+                assert_eq!(code, 400);
+                assert_eq!(
+                    details
+                        .as_ref()
+                        .and_then(|value| value.pointer("/reason"))
+                        .and_then(serde_json::Value::as_str),
+                    Some("command not allowlisted")
+                );
+            }
+            _ => panic!("expected node.invoke allowlist rejection"),
+        }
+
+        let invoke_allowed = RpcRequestFrame {
+            id: "req-node-policy-allowed".to_owned(),
+            method: "node.invoke".to_owned(),
+            params: serde_json::json!({
+                "nodeId": "node-policy-1",
+                "command": "system.run",
+                "idempotencyKey": "idem-policy-2"
+            }),
+        };
+        let out = dispatcher.handle_request(&invoke_allowed).await;
+        assert!(matches!(out, RpcDispatchOutcome::Handled(_)));
+
+        let get_config = RpcRequestFrame {
+            id: "req-node-policy-config-get".to_owned(),
+            method: "config.get".to_owned(),
+            params: serde_json::json!({}),
+        };
+        let initial_hash = match dispatcher.handle_request(&get_config).await {
+            RpcDispatchOutcome::Handled(payload) => payload
+                .pointer("/hash")
+                .and_then(serde_json::Value::as_str)
+                .map(ToOwned::to_owned)
+                .expect("config hash"),
+            _ => panic!("expected config.get handled"),
+        };
+
+        let patch_allow = RpcRequestFrame {
+            id: "req-node-policy-config-patch-allow".to_owned(),
+            method: "config.patch".to_owned(),
+            params: serde_json::json!({
+                "baseHash": initial_hash,
+                "raw": serde_json::json!({
+                    "gateway": {
+                        "nodes": {
+                            "allowCommands": ["camera.snap"]
+                        }
+                    }
+                }).to_string()
+            }),
+        };
+        let patch_hash = match dispatcher.handle_request(&patch_allow).await {
+            RpcDispatchOutcome::Handled(payload) => payload
+                .pointer("/hash")
+                .and_then(serde_json::Value::as_str)
+                .map(ToOwned::to_owned)
+                .expect("patched hash"),
+            _ => panic!("expected config.patch allow handled"),
+        };
+
+        let invoke_allowed_via_config = RpcRequestFrame {
+            id: "req-node-policy-allowed-config".to_owned(),
+            method: "node.invoke".to_owned(),
+            params: serde_json::json!({
+                "nodeId": "node-policy-1",
+                "command": "camera.snap",
+                "idempotencyKey": "idem-policy-3"
+            }),
+        };
+        let out = dispatcher.handle_request(&invoke_allowed_via_config).await;
+        assert!(matches!(out, RpcDispatchOutcome::Handled(_)));
+
+        let patch_deny = RpcRequestFrame {
+            id: "req-node-policy-config-patch-deny".to_owned(),
+            method: "config.patch".to_owned(),
+            params: serde_json::json!({
+                "baseHash": patch_hash,
+                "raw": serde_json::json!({
+                    "gateway": {
+                        "nodes": {
+                            "denyCommands": ["camera.snap"]
+                        }
+                    }
+                }).to_string()
+            }),
+        };
+        let out = dispatcher.handle_request(&patch_deny).await;
+        assert!(matches!(out, RpcDispatchOutcome::Handled(_)));
+
+        match dispatcher.handle_request(&invoke_allowed_via_config).await {
+            RpcDispatchOutcome::Error { code, details, .. } => {
+                assert_eq!(code, 400);
+                assert_eq!(
+                    details
+                        .as_ref()
+                        .and_then(|value| value.pointer("/reason"))
+                        .and_then(serde_json::Value::as_str),
+                    Some("command not allowlisted")
+                );
+            }
+            _ => panic!("expected node.invoke denyCommands rejection"),
+        }
+
+        let pair_no_commands = RpcRequestFrame {
+            id: "req-node-policy-no-commands-request".to_owned(),
+            method: "node.pair.request".to_owned(),
+            params: serde_json::json!({
+                "nodeId": "node-policy-2",
+                "platform": "linux"
+            }),
+        };
+        let request_id = match dispatcher.handle_request(&pair_no_commands).await {
+            RpcDispatchOutcome::Handled(payload) => payload
+                .pointer("/request/requestId")
+                .and_then(serde_json::Value::as_str)
+                .map(ToOwned::to_owned)
+                .expect("node pair request id"),
+            _ => panic!("expected node.pair.request handled"),
+        };
+        let pair_no_commands_approve = RpcRequestFrame {
+            id: "req-node-policy-no-commands-approve".to_owned(),
+            method: "node.pair.approve".to_owned(),
+            params: serde_json::json!({
+                "requestId": request_id
+            }),
+        };
+        let out = dispatcher.handle_request(&pair_no_commands_approve).await;
+        assert!(matches!(out, RpcDispatchOutcome::Handled(_)));
+
+        let invoke_missing_declared = RpcRequestFrame {
+            id: "req-node-policy-missing-declared".to_owned(),
+            method: "node.invoke".to_owned(),
+            params: serde_json::json!({
+                "nodeId": "node-policy-2",
+                "command": "system.run",
+                "idempotencyKey": "idem-policy-4"
+            }),
+        };
+        match dispatcher.handle_request(&invoke_missing_declared).await {
+            RpcDispatchOutcome::Error { code, details, .. } => {
+                assert_eq!(code, 400);
+                assert_eq!(
+                    details
+                        .as_ref()
+                        .and_then(|value| value.pointer("/reason"))
+                        .and_then(serde_json::Value::as_str),
+                    Some("node did not declare commands")
+                );
+            }
+            _ => panic!("expected node.invoke declared-command rejection"),
         }
     }
 
