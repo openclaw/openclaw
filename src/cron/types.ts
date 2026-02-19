@@ -23,6 +23,8 @@ export type CronDelivery = {
   channel?: CronMessageChannel;
   to?: string;
   bestEffort?: boolean;
+  /** When true, deliver text payloads directly (skip announce conversion). */
+  directText?: boolean;
 };
 
 export type CronDeliveryPatch = Partial<CronDelivery>;

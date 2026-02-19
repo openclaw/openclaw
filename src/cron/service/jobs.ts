@@ -561,6 +561,7 @@ function mergeCronDelivery(
     channel: existing?.channel,
     to: existing?.to,
     bestEffort: existing?.bestEffort,
+    directText: existing?.directText,
   };
 
   if (typeof patch.mode === "string") {
@@ -576,6 +577,9 @@ function mergeCronDelivery(
   }
   if (typeof patch.bestEffort === "boolean") {
     next.bestEffort = patch.bestEffort;
+  }
+  if (typeof patch.directText === "boolean") {
+    next.directText = patch.directText;
   }
 
   return next;

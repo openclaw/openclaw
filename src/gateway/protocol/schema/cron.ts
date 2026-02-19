@@ -100,6 +100,8 @@ export const CronPayloadPatchSchema = Type.Union([
 const CronDeliverySharedProperties = {
   channel: Type.Optional(Type.Union([Type.Literal("last"), NonEmptyString])),
   bestEffort: Type.Optional(Type.Boolean()),
+  /** When true, deliver text payloads directly (skip announce conversion). */
+  directText: Type.Optional(Type.Boolean()),
 };
 
 const CronDeliveryNoopSchema = Type.Object(
