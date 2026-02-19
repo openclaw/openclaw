@@ -16,6 +16,25 @@ vi.mock("./tools/gateway.js", () => ({
 }));
 
 describe("gateway tool", () => {
+  it("rejects non-owner callers explicitly", async () => {
+    const { callGatewayTool } = await import("./tools/gateway.js");
+    const tool = createOpenClawTools({
+      senderIsOwner: false,
+      config: { commands: { restart: true } },
+    }).find((candidate) => candidate.name === "gateway");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing gateway tool");
+    }
+
+    await expect(
+      tool.execute("call-owner-check", {
+        action: "config.get",
+      }),
+    ).rejects.toThrow("Tool restricted to owner senders.");
+    expect(callGatewayTool).not.toHaveBeenCalled();
+  });
+
   it("schedules SIGUSR1 restart", async () => {
     vi.useFakeTimers();
     const kill = vi.spyOn(process, "kill").mockImplementation(() => true);

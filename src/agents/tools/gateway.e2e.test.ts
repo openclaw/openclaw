@@ -32,6 +32,40 @@ describe("gateway tool defaults", () => {
         url: "ws://127.0.0.1:18789",
         token: "t",
         timeoutMs: 5000,
+        scopes: ["operator.read"],
+      }),
+    );
+  });
+
+  it("uses least-privilege write scope for write methods", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+    await callGatewayTool("wake", {}, { mode: "now", text: "hi" });
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "wake",
+        scopes: ["operator.write"],
+      }),
+    );
+  });
+
+  it("uses admin scope only for admin methods", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+    await callGatewayTool("cron.add", {}, { id: "job-1" });
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "cron.add",
+        scopes: ["operator.admin"],
+      }),
+    );
+  });
+
+  it("default-denies unknown methods by sending no scopes", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+    await callGatewayTool("nonexistent.method", {}, {});
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "nonexistent.method",
+        scopes: [],
       }),
     );
   });

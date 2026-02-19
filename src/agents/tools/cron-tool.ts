@@ -48,6 +48,7 @@ const CronToolSchema = Type.Object({
 
 type CronToolOptions = {
   agentSessionKey?: string;
+  senderIsOwner?: boolean;
 };
 
 type ChatMessage = {
@@ -259,6 +260,9 @@ WAKE MODES (for wake action):
 Use jobId as the canonical identifier; id is accepted for compatibility. Use contextMessages (0-10) to add previous messages as context to the job text.`,
     parameters: CronToolSchema,
     execute: async (_toolCallId, args) => {
+      if (opts?.senderIsOwner === false) {
+        throw new Error("Tool restricted to owner senders.");
+      }
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
       const gatewayOpts: GatewayCallOptions = {
