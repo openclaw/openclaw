@@ -278,11 +278,14 @@ openclaw logs --follow
 What to check:
 
 - Non-loopback binds (`lan`, `tailnet`, `custom`) need auth configured.
+- Plain `ws://` to non-loopback hosts is blocked by design. For direct LAN/tailnet/custom access, use `wss://` and enable Gateway TLS (`gateway.tls.enabled=true`) or terminate TLS upstream.
+- For local operator checks (`openclaw gateway status`, `openclaw doctor`), prefer loopback or an SSH tunnel target.
 - Old keys like `gateway.token` do not replace `gateway.auth.token`.
 
 Common signatures:
 
 - `refusing to bind gateway ... without auth` → bind+auth mismatch.
+- `SECURITY ERROR: Gateway URL "... uses plaintext ws:// to a non-loopback address."` → switch to `wss://`, or tunnel to `ws://127.0.0.1:<port>`.
 - `RPC probe: failed` while runtime is running → gateway alive but inaccessible with current auth/url.
 
 ### 3) Pairing and device identity state changed

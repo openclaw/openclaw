@@ -80,6 +80,7 @@ Shared options (where supported):
 
 Note: when you set `--url`, the CLI does not fall back to config or environment credentials.
 Pass `--token` or `--password` explicitly. Missing explicit credentials is an error.
+For non-loopback direct targets (`lan`/`tailnet`/`custom`), use `wss://` (or SSH tunnel to loopback). Plain `ws://<non-loopback>` is blocked by security checks.
 
 ### `gateway health`
 
