@@ -7,6 +7,8 @@ const createTelegramDraftStream = vi.hoisted(() => vi.fn());
 const dispatchReplyWithBufferedBlockDispatcher = vi.hoisted(() => vi.fn());
 const deliverReplies = vi.hoisted(() => vi.fn());
 const editMessageTelegram = vi.hoisted(() => vi.fn());
+const loadSessionStore = vi.hoisted(() => vi.fn());
+const resolveStorePath = vi.hoisted(() => vi.fn(() => "/tmp/sessions.json"));
 
 vi.mock("./draft-stream.js", () => ({
   createTelegramDraftStream,
@@ -24,6 +26,11 @@ vi.mock("./send.js", () => ({
   editMessageTelegram,
 }));
 
+vi.mock("../config/sessions.js", async () => ({
+  loadSessionStore,
+  resolveStorePath,
+}));
+
 vi.mock("./sticker-cache.js", () => ({
   cacheSticker: vi.fn(),
   describeStickerImage: vi.fn(),
@@ -39,6 +46,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
     dispatchReplyWithBufferedBlockDispatcher.mockReset();
     deliverReplies.mockReset();
     editMessageTelegram.mockReset();
+    loadSessionStore.mockReset();
+    resolveStorePath.mockReset();
+    resolveStorePath.mockReturnValue("/tmp/sessions.json");
+    loadSessionStore.mockReturnValue({});
   });
 
   function createDraftStream(messageId?: number) {
@@ -224,6 +235,66 @@ describe("dispatchTelegramMessage draft streaming", () => {
         }),
       }),
     );
+  });
+
+  it("keeps block streaming enabled when session reasoning level is on", async () => {
+    loadSessionStore.mockReturnValue({
+      s1: { reasoningLevel: "on" },
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Reasoning:\n_step_" }, { kind: "block" });
+      await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: { SessionKey: "s1" } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+    });
+
+    expect(createTelegramDraftStream).not.toHaveBeenCalled();
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyOptions: expect.objectContaining({
+          disableBlockStreaming: false,
+        }),
+      }),
+    );
+    expect(loadSessionStore).toHaveBeenCalledWith("/tmp/sessions.json", { skipCache: true });
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [expect.objectContaining({ text: "Reasoning:\n_step_" })],
+      }),
+    );
+  });
+
+  it("streams reasoning draft updates even when answer stream mode is off", async () => {
+    loadSessionStore.mockReturnValue({
+      s1: { reasoningLevel: "stream" },
+    });
+    const reasoningDraftStream = createDraftStream(111);
+    createTelegramDraftStream.mockImplementationOnce(() => reasoningDraftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onReasoningStream?.({ text: "Reasoning:\n_step_" });
+        await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: { SessionKey: "s1" } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      streamMode: "off",
+    });
+
+    expect(createTelegramDraftStream).toHaveBeenCalledTimes(1);
+    expect(reasoningDraftStream.update).toHaveBeenCalledWith("Reasoning:\n_step_");
+    expect(loadSessionStore).toHaveBeenCalledWith("/tmp/sessions.json", { skipCache: true });
   });
 
   it("finalizes text-only replies by editing the preview message in place", async () => {
@@ -728,6 +799,141 @@ describe("dispatchTelegramMessage draft streaming", () => {
         ],
       }),
     );
+  });
+
+  it("routes think-tag partials to reasoning lane and keeps answer lane clean", async () => {
+    const { answerDraftStream, reasoningDraftStream } = setupDraftStreams({
+      answerMessageId: 999,
+      reasoningMessageId: 111,
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({
+          text: "<think>Counting letters in strawberry</think>3",
+        });
+        await dispatcherOptions.deliver({ text: "3" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "999" });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(reasoningDraftStream.update).toHaveBeenCalledWith(
+      "Reasoning:\n_Counting letters in strawberry_",
+    );
+    expect(answerDraftStream.update).toHaveBeenCalledWith("3");
+    expect(
+      answerDraftStream.update.mock.calls.some((call) => String(call[0] ?? "").includes("<think>")),
+    ).toBe(false);
+    expect(editMessageTelegram).toHaveBeenCalledWith(123, 999, "3", expect.any(Object));
+  });
+
+  it("routes unmatched think partials to reasoning lane without leaking answer lane", async () => {
+    const { answerDraftStream, reasoningDraftStream } = setupDraftStreams({
+      answerMessageId: 999,
+      reasoningMessageId: 111,
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({
+          text: "<think>Counting letters in strawberry",
+        });
+        await dispatcherOptions.deliver(
+          { text: "There are 3 r's in strawberry." },
+          { kind: "final" },
+        );
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "999" });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(reasoningDraftStream.update).toHaveBeenCalledWith(
+      "Reasoning:\n_Counting letters in strawberry_",
+    );
+    expect(
+      answerDraftStream.update.mock.calls.some((call) => String(call[0] ?? "").includes("<")),
+    ).toBe(false);
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      999,
+      "There are 3 r's in strawberry.",
+      expect.any(Object),
+    );
+  });
+
+  it("keeps reasoning preview message when reasoning is streamed but final is answer-only", async () => {
+    const { reasoningDraftStream } = setupDraftStreams({
+      answerMessageId: 999,
+      reasoningMessageId: 111,
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({
+          text: "<think>Word: strawberry. r appears at 3, 8, 9.</think>",
+        });
+        await dispatcherOptions.deliver(
+          { text: "There are 3 r's in strawberry." },
+          { kind: "final" },
+        );
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "999" });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(reasoningDraftStream.update).toHaveBeenCalledWith(
+      "Reasoning:\n_Word: strawberry. r appears at 3, 8, 9._",
+    );
+    expect(reasoningDraftStream.clear).not.toHaveBeenCalled();
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      999,
+      "There are 3 r's in strawberry.",
+      expect.any(Object),
+    );
+  });
+
+  it("splits think-tag final payload into reasoning and answer lanes", async () => {
+    setupDraftStreams({
+      answerMessageId: 999,
+      reasoningMessageId: 111,
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        {
+          text: "<think>Word: strawberry. r appears at 3, 8, 9.</think>There are 3 r's in strawberry.",
+        },
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "999" });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(editMessageTelegram).toHaveBeenNthCalledWith(
+      1,
+      123,
+      111,
+      "Reasoning:\n_Word: strawberry. r appears at 3, 8, 9._",
+      expect.any(Object),
+    );
+    expect(editMessageTelegram).toHaveBeenNthCalledWith(
+      2,
+      123,
+      999,
+      "There are 3 r's in strawberry.",
+      expect.any(Object),
+    );
+    expect(deliverReplies).not.toHaveBeenCalled();
   });
 
   it("splits reasoning preview only when next reasoning block starts in partial mode", async () => {

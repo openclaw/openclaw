@@ -68,4 +68,36 @@ describe("subscribeEmbeddedPiSession", () => {
       ]);
     },
   );
+
+  it.each(THINKING_TAG_CASES)(
+    "falls back to streamed <%s> reasoning when message_end has no thinking block",
+    ({ open, close }) => {
+      const { emit, onBlockReply } = createReasoningBlockReplyHarness();
+
+      emit({ type: "message_start", message: { role: "assistant" } });
+      emit({
+        type: "message_update",
+        message: { role: "assistant" },
+        assistantMessageEvent: { type: "text_delta", delta: `${open}Because` },
+      });
+      emit({
+        type: "message_update",
+        message: { role: "assistant" },
+        assistantMessageEvent: {
+          type: "text_delta",
+          delta: ` it helps${close}\n\nFinal answer`,
+        },
+      });
+
+      emit({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Final answer" }],
+        } as AssistantMessage,
+      });
+
+      expectReasoningAndAnswerCalls(onBlockReply);
+    },
+  );
 });
