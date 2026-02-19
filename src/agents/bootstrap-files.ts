@@ -8,6 +8,7 @@ import {
 } from "./pi-embedded-helpers.js";
 import {
   filterBootstrapFilesForSession,
+  loadExtraBootstrapFiles,
   loadWorkspaceBootstrapFiles,
   type WorkspaceBootstrapFile,
 } from "./workspace.js";
@@ -30,8 +31,20 @@ export async function resolveBootstrapFilesForRun(params: {
   agentId?: string;
 }): Promise<WorkspaceBootstrapFile[]> {
   const sessionKey = params.sessionKey ?? params.sessionId;
+  const configuredExtraPatterns = ((): string[] => {
+    const raw = (params.config?.agents?.defaults as { bootstrapFiles?: unknown } | undefined)
+      ?.bootstrapFiles;
+    if (!Array.isArray(raw)) {
+      return [];
+    }
+    return raw.map((v) => (typeof v === "string" ? v.trim() : "")).filter(Boolean);
+  })();
+  const extraBootstrapFiles =
+    configuredExtraPatterns.length > 0
+      ? await loadExtraBootstrapFiles(params.workspaceDir, configuredExtraPatterns)
+      : [];
   const bootstrapFiles = filterBootstrapFilesForSession(
-    await loadWorkspaceBootstrapFiles(params.workspaceDir),
+    [...(await loadWorkspaceBootstrapFiles(params.workspaceDir)), ...extraBootstrapFiles],
     sessionKey,
   );
 

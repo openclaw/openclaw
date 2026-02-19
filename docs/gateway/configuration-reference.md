@@ -577,6 +577,21 @@ Disables automatic creation of workspace bootstrap files (`AGENTS.md`, `SOUL.md`
 }
 ```
 
+### `agents.defaults.bootstrapFiles`
+
+Extra workspace paths or glob patterns to include in bootstrap context injection.
+Only recognized bootstrap filenames are loaded (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`, `MEMORY.md`, `memory.md`).
+
+```json5
+{
+  agents: {
+    defaults: {
+      bootstrapFiles: ["packages/*/AGENTS.md", "profiles/default/TOOLS.md"],
+    },
+  },
+}
+```
+
 ### `agents.defaults.bootstrapMaxChars`
 
 Max characters per workspace bootstrap file before truncation. Default: `20000`.

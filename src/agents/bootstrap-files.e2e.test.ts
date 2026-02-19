@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
@@ -35,6 +36,33 @@ describe("resolveBootstrapFilesForRun", () => {
     const files = await resolveBootstrapFilesForRun({ workspaceDir });
 
     expect(files.some((file) => file.path === path.join(workspaceDir, "EXTRA.md"))).toBe(true);
+  });
+
+  it("loads extra files from agents.defaults.bootstrapFiles", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    const packageDir = path.join(workspaceDir, "packages", "core");
+    await fs.mkdir(packageDir, { recursive: true });
+    await fs.writeFile(path.join(packageDir, "TOOLS.md"), "team tools", "utf-8");
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      config: {
+        agents: {
+          defaults: {
+            bootstrapFiles: ["packages/*/*"],
+          },
+        },
+      } as never,
+    });
+
+    expect(
+      files.some(
+        (file) =>
+          file.name === "TOOLS.md" &&
+          file.path.endsWith(path.join("packages", "core", "TOOLS.md")) &&
+          file.content === "team tools",
+      ),
+    ).toBe(true);
   });
 });
 
