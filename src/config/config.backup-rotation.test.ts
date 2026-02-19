@@ -50,7 +50,7 @@ describe("config backup rotation", () => {
 
       // Backup directory should exist with datetime-named files
       const entries = await fs.readdir(backupDir);
-      const backups = entries.filter((e) => e.startsWith("openclaw.json.bak.")).sort();
+      const backups = entries.filter((e) => e.startsWith("openclaw.json.bak.")).toSorted();
 
       // Should have at most CONFIG_BACKUP_COUNT (5) backups
       expect(backups.length).toBeLessThanOrEqual(5);

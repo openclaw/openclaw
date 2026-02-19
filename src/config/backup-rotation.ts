@@ -44,7 +44,7 @@ export async function rotateConfigBackups(
   if (ioFs.readdir && CONFIG_BACKUP_COUNT > 1) {
     try {
       const entries = await ioFs.readdir(backupDir);
-      const backups = entries.filter((e) => e.startsWith(prefix)).sort();
+      const backups = entries.filter((e) => e.startsWith(prefix)).toSorted();
       const maxExisting = CONFIG_BACKUP_COUNT - 1; // leave room for the upcoming backup
       if (backups.length >= maxExisting) {
         const toRemove = backups.slice(0, backups.length - maxExisting + 1);
