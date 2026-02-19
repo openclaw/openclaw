@@ -5,6 +5,7 @@ import {
   pruneExpiredPending,
   readJsonFile,
   resolvePairingPaths,
+  upsertPendingPairingRequest,
   writeJsonAtomic,
 } from "./pairing-files.js";
 import { generatePairingToken, verifyPairingToken } from "./pairing-token.js";
@@ -226,30 +227,29 @@ export async function requestDevicePairing(
     if (!deviceId) {
       throw new Error("deviceId required");
     }
-    const existing = Object.values(state.pendingById).find((p) => p.deviceId === deviceId);
-    if (existing) {
-      return { status: "pending", request: existing, created: false };
-    }
-    const isRepair = Boolean(state.pairedByDeviceId[deviceId]);
-    const request: DevicePairingPendingRequest = {
-      requestId: randomUUID(),
-      deviceId,
-      publicKey: req.publicKey,
-      displayName: req.displayName,
-      platform: req.platform,
-      clientId: req.clientId,
-      clientMode: req.clientMode,
-      role: req.role,
-      roles: req.role ? [req.role] : undefined,
-      scopes: req.scopes,
-      remoteIp: req.remoteIp,
-      silent: req.silent,
-      isRepair,
-      ts: Date.now(),
-    };
-    state.pendingById[request.requestId] = request;
-    await persistState(state, baseDir);
-    return { status: "pending", request, created: true };
+
+    return await upsertPendingPairingRequest({
+      pendingById: state.pendingById,
+      isExisting: (pending) => pending.deviceId === deviceId,
+      isRepair: Boolean(state.pairedByDeviceId[deviceId]),
+      createRequest: (isRepair) => ({
+        requestId: randomUUID(),
+        deviceId,
+        publicKey: req.publicKey,
+        displayName: req.displayName,
+        platform: req.platform,
+        clientId: req.clientId,
+        clientMode: req.clientMode,
+        role: req.role,
+        roles: req.role ? [req.role] : undefined,
+        scopes: req.scopes,
+        remoteIp: req.remoteIp,
+        silent: req.silent,
+        isRepair,
+        ts: Date.now(),
+      }),
+      persist: async () => await persistState(state, baseDir),
+    });
   });
 }
 
