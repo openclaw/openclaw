@@ -1,4 +1,3 @@
-import { formatCliCommand } from "../cli/command-format.js";
 import { loadConfig } from "../config/config.js";
 import { getBridgeAuthForPort } from "./bridge-auth-registry.js";
 import { resolveBrowserControlAuth } from "./control-auth.js";
@@ -94,32 +93,32 @@ function withLoopbackBrowserAuth(
 }
 
 function enhanceBrowserFetchError(url: string, err: unknown, timeoutMs: number): Error {
-  const isLocal = !isAbsoluteHttp(url);
-  // Human-facing hint for logs/diagnostics.
-  const operatorHint = isLocal
-    ? `Restart the OpenClaw gateway (OpenClaw.app menubar, or \`${formatCliCommand("openclaw gateway")}\`).`
-    : "If this is a sandboxed session, ensure the sandbox browser is running.";
-  // Model-facing suffix: explicitly tell the LLM NOT to retry.
-  // Without this, models see "try again" and enter an infinite tool-call loop.
-  const modelHint =
-    "Do NOT retry the browser tool — it will keep failing. " +
-    "Use an alternative approach or inform the user that the browser is currently unavailable.";
   const msg = String(err);
   const msgLower = msg.toLowerCase();
-  const looksLikeTimeout =
-    msgLower.includes("timed out") ||
-    msgLower.includes("timeout") ||
-    msgLower.includes("aborted") ||
-    msgLower.includes("abort") ||
-    msgLower.includes("aborterror");
-  if (looksLikeTimeout) {
+
+  // Transform abort errors to timeout errors for clarity
+  const looksLikeAbort =
+    msgLower.includes("aborted") || msgLower.includes("abort") || msgLower.includes("aborterror");
+
+  if (looksLikeAbort) {
+    return new Error(`Request timed out after ${timeoutMs}ms`);
+  }
+
+  // For connection failures to absolute HTTP URLs, add sandbox hint
+  const isLocal = !isAbsoluteHttp(url);
+  const looksLikeConnectionFailure =
+    msgLower.includes("econnrefused") ||
+    msgLower.includes("fetch failed") ||
+    (msgLower.includes("connect") && msgLower.includes("refused"));
+
+  if (!isLocal && looksLikeConnectionFailure) {
     return new Error(
-      `Can't reach the OpenClaw browser control service (timed out after ${timeoutMs}ms). ${operatorHint} ${modelHint}`,
+      `${msg}. If this is a sandboxed session, ensure the sandbox browser is running.`,
     );
   }
-  return new Error(
-    `Can't reach the OpenClaw browser control service. ${operatorHint} ${modelHint} (${msg})`,
-  );
+
+  // Pass through other errors unchanged (element not found, tab not found, etc.)
+  return err instanceof Error ? err : new Error(msg);
 }
 
 async function fetchHttpJson<T>(
