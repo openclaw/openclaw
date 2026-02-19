@@ -454,7 +454,7 @@ export const dispatchTelegramMessage = async ({
       },
     }));
   } finally {
-            // Must stop() first to flush debounced content before clear() wipes state
+    // Must stop() first to flush debounced content before clear() wipes state
     await draftStream?.stop();
     if (!finalizedViaPreviewMessage) {
       await draftStream?.clear();
