@@ -234,6 +234,43 @@ const routeModelsStatus: RouteSpec = {
   },
 };
 
+const routeSecurity: RouteSpec = {
+  match: (path) => path[0] === "security",
+  run: async (argv) => {
+    const sub = argv.find((a, i) => i > argv.indexOf("security") && !a.startsWith("-"));
+    const json = hasFlag(argv, "--json");
+    const {
+      securityInitCommand,
+      securityStatusCommand,
+      securityChangePasswordCommand,
+      securityDisableCommand,
+    } = await import("../../commands/security.js");
+
+    switch (sub) {
+      case "init":
+        await securityInitCommand();
+        return true;
+      case "status":
+        await securityStatusCommand({ json });
+        return true;
+      case "change-password":
+        await securityChangePasswordCommand();
+        return true;
+      case "disable":
+        await securityDisableCommand();
+        return true;
+      default:
+        console.log("Usage: openclaw security <init|status|change-password|disable>");
+        console.log("");
+        console.log("  init              Set up workspace encryption");
+        console.log("  status            Show encryption status");
+        console.log("  change-password   Change master password");
+        console.log("  disable           Remove encryption and decrypt files");
+        return true;
+    }
+  },
+};
+
 const routes: RouteSpec[] = [
   routeHealth,
   routeStatus,
@@ -244,6 +281,7 @@ const routes: RouteSpec[] = [
   routeConfigUnset,
   routeModelsList,
   routeModelsStatus,
+  routeSecurity,
 ];
 
 export function findRoutedCommand(path: string[]): RouteSpec | null {
