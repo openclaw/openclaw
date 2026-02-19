@@ -1,4 +1,5 @@
 import type { CronJobCreate, CronJobPatch } from "../types.js";
+import type { CronServiceState } from "./state.js";
 import {
   applyJobPatch,
   computeJobNextRunAtMs,
@@ -10,7 +11,6 @@ import {
   recomputeNextRunsForMaintenance,
 } from "./jobs.js";
 import { locked } from "./locked.js";
-import type { CronServiceState } from "./state.js";
 import { ensureLoaded, persist, warnIfDisabled } from "./store.js";
 import { armTimer, emit, executeJob, runMissedJobs, stopTimer, wake } from "./timer.js";
 
@@ -77,11 +77,17 @@ export async function status(state: CronServiceState) {
   });
 }
 
-export async function list(state: CronServiceState, opts?: { includeDisabled?: boolean }) {
+export async function list(
+  state: CronServiceState,
+  opts?: { includeDisabled?: boolean; agentId?: string },
+) {
   return await locked(state, async () => {
     await ensureLoadedForRead(state);
     const includeDisabled = opts?.includeDisabled === true;
-    const jobs = (state.store?.jobs ?? []).filter((j) => includeDisabled || j.enabled);
+    let jobs = (state.store?.jobs ?? []).filter((j) => includeDisabled || j.enabled);
+    if (opts?.agentId) {
+      jobs = jobs.filter((j) => j.agentId === opts.agentId);
+    }
     return jobs.toSorted((a, b) => (a.state.nextRunAtMs ?? 0) - (b.state.nextRunAtMs ?? 0));
   });
 }

@@ -13,6 +13,7 @@ import type {
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
@@ -214,6 +215,88 @@ async function maybeApplyCrossContextMarker(params: {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Per-agent message send scope enforcement (#20305)
+// ---------------------------------------------------------------------------
+
+/**
+ * Extract the bound direct-message peer id from a session key's "rest" segment.
+ *
+ * Session keys that encode a per-peer DM scope look like:
+ *   agent:<agentId>:<channel>:direct:<peerId>          (per-channel-peer)
+ *   agent:<agentId>:direct:<peerId>                    (per-peer)
+ *   agent:<agentId>:<channel>:<accountId>:direct:<peerId> (per-account-channel-peer)
+ *
+ * Returns null when the session key does not encode a specific peer (e.g.
+ * dmScope "main" → rest is just "main").
+ */
+function extractBoundPeerFromSessionRest(rest: string): { peerId: string } | null {
+  const parts = rest.split(":");
+  const directIdx = parts.indexOf("direct");
+  if (directIdx < 0 || directIdx >= parts.length - 1) {
+    return null;
+  }
+  const peerId = parts[directIdx + 1]?.trim();
+  return peerId ? { peerId } : null;
+}
+
+/**
+ * When `tools.message.scope` is `"own-session"`, verify that the outbound
+ * target matches the peer bound to the agent's session key.
+ *
+ * This runs BEFORE target resolution so that clearly-invalid cross-user
+ * sends are rejected early without hitting provider-specific resolvers.
+ *
+ * Throws when the send is directed at a different user.
+ */
+function enforceMessageSendScope(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string | undefined;
+  args: Record<string, unknown>;
+}): void {
+  const scope = params.cfg.tools?.message?.scope;
+  if (!scope || scope === "unrestricted") {
+    return;
+  }
+
+  // scope === "own-session"
+  if (!params.sessionKey) {
+    return; // no session context — cannot enforce (e.g. CLI invoke)
+  }
+
+  const parsed = parseAgentSessionKey(params.sessionKey);
+  if (!parsed) {
+    return; // legacy / non-agent session key — cannot enforce
+  }
+
+  const boundPeer = extractBoundPeerFromSessionRest(parsed.rest);
+  if (!boundPeer) {
+    return; // "main" dmScope — no bound peer encoded; can't enforce
+  }
+
+  // Collect the raw outbound target from the params the agent provided.
+  const rawTarget =
+    (typeof params.args.target === "string" ? params.args.target.trim() : "") ||
+    (typeof params.args.to === "string" ? params.args.to.trim() : "") ||
+    (typeof params.args.channelId === "string" ? params.args.channelId.trim() : "");
+
+  if (!rawTarget) {
+    return; // no explicit target — falls back to current context (safe)
+  }
+
+  // Strip any leading kind prefix (e.g. "user:12345" → "12345").
+  const normalizedTarget = rawTarget.replace(/^(user|group|channel):/i, "").toLowerCase();
+  const normalizedBound = boundPeer.peerId.toLowerCase();
+
+  if (normalizedTarget !== normalizedBound) {
+    throw new Error(
+      `Message scope is restricted to own session. ` +
+        `Agent session is bound to peer "${boundPeer.peerId}" but the send targets "${rawTarget}". ` +
+        `Set tools.message.scope to "unrestricted" to allow cross-user sends.`,
+    );
+  }
+}
+
 async function resolveChannel(cfg: OpenClawConfig, params: Record<string, unknown>) {
   const channelHint = readStringParam(params, "channel");
   const selection = await resolveMessageChannelSelection({
@@ -302,6 +385,12 @@ async function handleBroadcastAction(
   const broadcastEnabled = input.cfg.tools?.message?.broadcast?.enabled !== false;
   if (!broadcastEnabled) {
     throw new Error("Broadcast is disabled. Set tools.message.broadcast.enabled to true.");
+  }
+  if (input.cfg.tools?.message?.scope === "own-session") {
+    throw new Error(
+      'Broadcast is not allowed when tools.message.scope is "own-session". ' +
+        'Set tools.message.scope to "unrestricted" to allow broadcast.',
+    );
   }
   const rawTargets = readStringArrayParam(params, "targets", { required: true }) ?? [];
   if (rawTargets.length === 0) {
@@ -779,6 +868,14 @@ export async function runMessageAction(
     args: params,
     action,
     dryRun,
+  });
+
+  // Enforce per-agent send scope BEFORE target resolution so that
+  // cross-user sends are rejected early without hitting provider resolvers.
+  enforceMessageSendScope({
+    cfg,
+    sessionKey: input.sessionKey,
+    args: params,
   });
 
   const resolvedTarget = await resolveActionTarget({

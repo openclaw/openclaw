@@ -900,3 +900,141 @@ describe("runMessageAction accountId defaults", () => {
     expect(ctx.params.accountId).toBe("ops");
   });
 });
+
+// ---------------------------------------------------------------------------
+// tools.message.scope: "own-session" enforcement (#20305)
+// ---------------------------------------------------------------------------
+
+describe("message send scope enforcement", () => {
+  const testOutbound = {
+    send: vi.fn(async () => ({ ok: true })),
+    resolveTarget: vi.fn(async (_cfg: unknown, input: string) => ({
+      ok: true as const,
+      target: { to: input, kind: "user" as const, displayLabel: input },
+    })),
+  };
+
+  beforeEach(() => {
+    testOutbound.send.mockClear();
+    testOutbound.resolveTarget.mockClear();
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "testch",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "testch" as never,
+            outbound: testOutbound as never,
+          }),
+        },
+      ]),
+    );
+  });
+
+  afterEach(() => {
+    setActivePluginRegistry(createTestRegistry([]));
+  });
+
+  const scopedConfig = {
+    channels: { testch: {} },
+    tools: { message: { scope: "own-session" as const } },
+  } as unknown as OpenClawConfig;
+
+  const unrestrictedConfig = {
+    channels: { testch: {} },
+    tools: { message: { scope: "unrestricted" as const } },
+  } as unknown as OpenClawConfig;
+
+  it("blocks cross-user send when scope is own-session", async () => {
+    await expect(
+      runMessageAction({
+        cfg: scopedConfig,
+        action: "send",
+        params: { channel: "testch", to: "user:other-user", message: "hi" },
+        sessionKey: "agent:alice:testch:direct:my-peer",
+        dryRun: true,
+      }),
+    ).rejects.toThrow(/Message scope is restricted to own session/);
+  });
+
+  it("allows send to own peer when scope is own-session", async () => {
+    const result = await runMessageAction({
+      cfg: scopedConfig,
+      action: "send",
+      params: { channel: "testch", to: "user:my-peer", message: "hi" },
+      sessionKey: "agent:alice:testch:direct:my-peer",
+      dryRun: true,
+    });
+    expect(result.kind).toBe("send");
+  });
+
+  it("allows cross-user send when scope is unrestricted", async () => {
+    const result = await runMessageAction({
+      cfg: unrestrictedConfig,
+      action: "send",
+      params: { channel: "testch", to: "user:other-user", message: "hi" },
+      sessionKey: "agent:alice:testch:direct:my-peer",
+      dryRun: true,
+    });
+    expect(result.kind).toBe("send");
+  });
+
+  it("allows cross-user send when scope is not configured (default)", async () => {
+    const cfg = { channels: { testch: {} } } as unknown as OpenClawConfig;
+    const result = await runMessageAction({
+      cfg,
+      action: "send",
+      params: { channel: "testch", to: "user:other-user", message: "hi" },
+      sessionKey: "agent:alice:testch:direct:my-peer",
+      dryRun: true,
+    });
+    expect(result.kind).toBe("send");
+  });
+
+  it("does not enforce scope when session key uses main dmScope (no bound peer)", async () => {
+    const result = await runMessageAction({
+      cfg: scopedConfig,
+      action: "send",
+      params: { channel: "testch", to: "user:any-user", message: "hi" },
+      sessionKey: "agent:alice:main",
+      dryRun: true,
+    });
+    expect(result.kind).toBe("send");
+  });
+
+  it("blocks broadcast when scope is own-session", async () => {
+    await expect(
+      runMessageAction({
+        cfg: scopedConfig,
+        action: "broadcast",
+        params: { channel: "testch", targets: ["user:u1", "user:u2"], message: "hi" },
+        sessionKey: "agent:alice:testch:direct:my-peer",
+        dryRun: true,
+      }),
+    ).rejects.toThrow(/Broadcast is not allowed when tools\.message\.scope is "own-session"/);
+  });
+
+  it("handles per-peer dmScope session keys", async () => {
+    await expect(
+      runMessageAction({
+        cfg: scopedConfig,
+        action: "send",
+        params: { channel: "testch", to: "user:other-user", message: "hi" },
+        sessionKey: "agent:bob:direct:my-peer",
+        dryRun: true,
+      }),
+    ).rejects.toThrow(/Message scope is restricted to own session/);
+  });
+
+  it("handles per-account-channel-peer dmScope session keys", async () => {
+    await expect(
+      runMessageAction({
+        cfg: scopedConfig,
+        action: "send",
+        params: { channel: "testch", to: "user:other-user", message: "hi" },
+        sessionKey: "agent:bob:testch:default:direct:my-peer",
+        dryRun: true,
+      }),
+    ).rejects.toThrow(/Message scope is restricted to own session/);
+  });
+});

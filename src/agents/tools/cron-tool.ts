@@ -1,7 +1,7 @@
 import { Type } from "@sinclair/typebox";
+import type { CronDelivery, CronMessageChannel } from "../../cron/types.js";
 import { loadConfig } from "../../config/config.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
-import type { CronDelivery, CronMessageChannel } from "../../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
@@ -280,6 +280,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
 
       switch (action) {
         case "status":
+<<<<<<< HEAD
           return jsonResult(await callGateway("cron.status", gatewayOpts, {}));
         case "list":
           return jsonResult(
@@ -287,6 +288,25 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
               includeDisabled: Boolean(params.includeDisabled),
             }),
           );
+=======
+          return jsonResult(await callGatewayTool("cron.status", gatewayOpts, {}));
+        case "list": {
+          const listOpts: Record<string, unknown> = {
+            includeDisabled: Boolean(params.includeDisabled),
+          };
+          if (opts?.agentSessionKey) {
+            const cfg = loadConfig();
+            const scopeAgentId = resolveSessionAgentId({
+              sessionKey: opts.agentSessionKey,
+              config: cfg,
+            });
+            if (scopeAgentId) {
+              listOpts.agentId = scopeAgentId;
+            }
+          }
+          return jsonResult(await callGatewayTool("cron.list", gatewayOpts, listOpts));
+        }
+>>>>>>> d18f10ff7d (fix(security): enforce per-agent message send scope in multi-tenant deployments)
         case "add": {
           // Flat-params recovery: non-frontier models (e.g. Grok) sometimes flatten
           // job properties to the top level alongside `action` instead of nesting

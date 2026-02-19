@@ -456,6 +456,16 @@ export type ToolsConfig = {
   /** Message tool configuration. */
   message?: {
     /**
+     * Outbound send scope for the message tool.
+     *
+     * - "unrestricted" (default): any target is allowed.
+     * - "own-session": restrict sends to the peer bound to the agent's current session
+     *   (requires a per-peer dmScope such as "per-peer", "per-channel-peer", or
+     *   "per-account-channel-peer"). Prevents cross-user message sends in multi-tenant
+     *   deployments.
+     */
+    scope?: "unrestricted" | "own-session";
+    /**
      * @deprecated Use tools.message.crossContext settings.
      * Allows cross-context sends across providers.
      */

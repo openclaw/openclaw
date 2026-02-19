@@ -636,6 +636,7 @@ export const ToolsSchema = z
     loopDetection: ToolLoopDetectionSchema,
     message: z
       .object({
+        scope: z.union([z.literal("unrestricted"), z.literal("own-session")]).optional(),
         allowCrossContextSend: z.boolean().optional(),
         crossContext: z
           .object({

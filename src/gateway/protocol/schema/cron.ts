@@ -185,6 +185,7 @@ export const CronJobSchema = Type.Object(
 export const CronListParamsSchema = Type.Object(
   {
     includeDisabled: Type.Optional(Type.Boolean()),
+    agentId: Type.Optional(NonEmptyString),
   },
   { additionalProperties: false },
 );
