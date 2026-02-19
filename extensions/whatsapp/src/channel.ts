@@ -390,7 +390,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
         connected: snapshot.connected ?? false,
         lastConnectedAt: snapshot.lastConnectedAt ?? null,
         lastDisconnect: snapshot.lastDisconnect ?? null,
-        reconnectAttempts: snapshot.reconnectAttempts,
+        reconnectAttempts: snapshot.reconnectAttempts ?? 0,
         lastMessageAt: snapshot.lastMessageAt ?? null,
         lastEventAt: snapshot.lastEventAt ?? null,
         lastError: snapshot.lastError ?? null,
