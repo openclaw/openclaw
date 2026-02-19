@@ -26,35 +26,35 @@ function readPackageNameSync(dir: string): string | null {
 }
 
 async function findPackageRoot(startDir: string, maxDepth = 12): Promise<string | null> {
-  let current = path.resolve(startDir);
-  for (let i = 0; i < maxDepth; i += 1) {
+  for (const current of iterAncestorDirs(startDir, maxDepth)) {
     const name = await readPackageName(current);
     if (name && CORE_PACKAGE_NAMES.has(name)) {
       return current;
     }
-    const parent = path.dirname(current);
-    if (parent === current) {
-      break;
-    }
-    current = parent;
   }
   return null;
 }
 
 function findPackageRootSync(startDir: string, maxDepth = 12): string | null {
-  let current = path.resolve(startDir);
-  for (let i = 0; i < maxDepth; i += 1) {
+  for (const current of iterAncestorDirs(startDir, maxDepth)) {
     const name = readPackageNameSync(current);
     if (name && CORE_PACKAGE_NAMES.has(name)) {
       return current;
     }
+  }
+  return null;
+}
+
+function* iterAncestorDirs(startDir: string, maxDepth: number): Generator<string> {
+  let current = path.resolve(startDir);
+  for (let i = 0; i < maxDepth; i += 1) {
+    yield current;
     const parent = path.dirname(current);
     if (parent === current) {
       break;
     }
     current = parent;
   }
-  return null;
 }
 
 function candidateDirsFromArgv1(argv1: string): string[] {

@@ -24,7 +24,7 @@ describe("process supervisor", () => {
       sessionId: "s1",
       backendId: "test",
       mode: "child",
-      argv: [process.execPath, "-e", "setTimeout(() => {}, 1_000)"],
+      argv: [process.execPath, "-e", "setTimeout(() => {}, 120)"],
       timeoutMs: 1_000,
       noOutputTimeoutMs: 20,
       stdinMode: "pipe-closed",
@@ -42,7 +42,7 @@ describe("process supervisor", () => {
       backendId: "test",
       scopeKey: "scope:a",
       mode: "child",
-      argv: [process.execPath, "-e", "setTimeout(() => {}, 1_000)"],
+      argv: [process.execPath, "-e", "setTimeout(() => {}, 120)"],
       timeoutMs: 1_000,
       stdinMode: "pipe-open",
     });
@@ -71,7 +71,7 @@ describe("process supervisor", () => {
       sessionId: "s-timeout",
       backendId: "test",
       mode: "child",
-      argv: [process.execPath, "-e", "setTimeout(() => {}, 1_000)"],
+      argv: [process.execPath, "-e", "setTimeout(() => {}, 120)"],
       timeoutMs: 1,
       stdinMode: "pipe-closed",
     });

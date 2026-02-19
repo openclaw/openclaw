@@ -616,6 +616,36 @@ describe("gateway server auth/connect", () => {
     });
   });
 
+  describe("explicit none auth", () => {
+    let server: Awaited<ReturnType<typeof startGatewayServer>>;
+    let port: number;
+    let prevToken: string | undefined;
+
+    beforeAll(async () => {
+      prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+      delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      testState.gatewayAuth = { mode: "none" };
+      port = await getFreePort();
+      server = await startGatewayServer(port);
+    });
+
+    afterAll(async () => {
+      await server.close();
+      if (prevToken === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      } else {
+        process.env.OPENCLAW_GATEWAY_TOKEN = prevToken;
+      }
+    });
+
+    test("allows loopback connect without shared secret when mode is none", async () => {
+      const ws = await openWs(port);
+      const res = await connectReq(ws, { skipDefaultAuth: true });
+      expect(res.ok).toBe(true);
+      ws.close();
+    });
+  });
+
   describe("tailscale auth", () => {
     let server: Awaited<ReturnType<typeof startGatewayServer>>;
     let port: number;
@@ -895,11 +925,25 @@ describe("gateway server auth/connect", () => {
       client,
       device: buildDevice(["operator.admin"]),
     });
-    expect(res.ok).toBe(true);
+    expect(res.ok).toBe(false);
+    expect(res.error?.message ?? "").toContain("pairing required");
+
+    await approvePendingPairingIfNeeded();
+    ws2.close();
+
+    const ws3 = new WebSocket(`ws://127.0.0.1:${port}`);
+    await new Promise<void>((resolve) => ws3.once("open", resolve));
+    const approved = await connectReq(ws3, {
+      token: "secret",
+      scopes: ["operator.admin"],
+      client,
+      device: buildDevice(["operator.admin"]),
+    });
+    expect(approved.ok).toBe(true);
     paired = await getPairedDevice(identity.deviceId);
     expect(paired?.scopes).toContain("operator.admin");
 
-    ws2.close();
+    ws3.close();
     await server.close();
     restoreGatewayToken(prevToken);
   });

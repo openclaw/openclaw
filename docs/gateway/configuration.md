@@ -370,6 +370,10 @@ Most fields hot-apply without downtime. In `hybrid` mode, restart-required chang
 
 ## Config RPC (programmatic updates)
 
+<Note>
+Control-plane write RPCs (`config.apply`, `config.patch`, `update.run`) are rate-limited to **3 requests per 60 seconds** per `deviceId+clientIp`. When limited, the RPC returns `UNAVAILABLE` with `retryAfterMs`.
+</Note>
+
 <AccordionGroup>
   <Accordion title="config.apply (full replace)">
     Validates + writes the full config and restarts the Gateway in one step.
@@ -385,6 +389,8 @@ Most fields hot-apply without downtime. In `hybrid` mode, restart-required chang
     - `sessionKey` (optional) — session key for the post-restart wake-up ping
     - `note` (optional) — note for the restart sentinel
     - `restartDelayMs` (optional) — delay before restart (default 2000)
+
+    Restart requests are coalesced while one is already pending/in-flight, and a 30-second cooldown applies between restart cycles.
 
     ```bash
     openclaw gateway call config.get --params '{}'  # capture payload.hash
@@ -409,6 +415,8 @@ Most fields hot-apply without downtime. In `hybrid` mode, restart-required chang
     - `raw` (string) — JSON5 with just the keys to change
     - `baseHash` (required) — config hash from `config.get`
     - `sessionKey`, `note`, `restartDelayMs` — same as `config.apply`
+
+    Restart behavior matches `config.apply`: coalesced pending restarts plus a 30-second cooldown between restart cycles.
 
     ```bash
     openclaw gateway call config.patch --params '{
