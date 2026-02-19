@@ -472,6 +472,17 @@ export function formatAssistantErrorText(
     );
   }
 
+  // Catch orphaned tool_result errors — when compaction or a crash leaves a
+  // tool_result block without its matching tool_use, Anthropic rejects every
+  // subsequent request with "unexpected tool_use_id found in tool_result
+  // blocks".  This error would otherwise spam the chat on every message.
+  if (isOrphanedToolResultError(raw)) {
+    return (
+      "Session history is corrupted (orphaned tool result without matching tool call). " +
+      "Use /new to start a fresh session."
+    );
+  }
+
   const invalidRequest = raw.match(/"type":"invalid_request_error".*?"message":"([^"]+)"/);
   if (invalidRequest?.[1]) {
     return `LLM request rejected: ${invalidRequest[1]}`;
@@ -677,6 +688,16 @@ export function isMissingToolCallInputError(raw: string): boolean {
     return false;
   }
   return TOOL_CALL_INPUT_MISSING_RE.test(raw) || TOOL_CALL_INPUT_PATH_RE.test(raw);
+}
+
+const ORPHANED_TOOL_RESULT_RE =
+  /unexpected tool_use_id found in tool_result|tool_result.*without.*(?:matching|corresponding).*tool_use|each tool_result.*must have a corresponding tool_use/i;
+
+export function isOrphanedToolResultError(raw: string): boolean {
+  if (!raw) {
+    return false;
+  }
+  return ORPHANED_TOOL_RESULT_RE.test(raw);
 }
 
 export function isBillingAssistantError(msg: AssistantMessage | undefined): boolean {
