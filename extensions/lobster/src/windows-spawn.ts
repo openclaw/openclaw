@@ -121,13 +121,30 @@ function resolveLobsterScriptFromCmdShim(wrapperPath: string): string | null {
   try {
     const content = fs.readFileSync(wrapperPath, "utf8");
     const candidates: string[] = [];
-    const matches = content.matchAll(/"%~?dp0%\\([^"\r\n]+)"/gi);
-    for (const match of matches) {
+    const extractRelativeFromToken = (token: string): string | null => {
+      const match = token.match(/%~?dp0%\s*[\\/]*(.*)$/i);
+      if (!match) {
+        return null;
+      }
       const relative = match[1];
+      if (!relative) {
+        return null;
+      }
+      return relative;
+    };
+
+    const matches = content.matchAll(/"([^"\r\n]*)"/g);
+    for (const match of matches) {
+      const token = match[1] ?? "";
+      const relative = extractRelativeFromToken(token);
       if (!relative) {
         continue;
       }
-      const normalizedRelative = relative.replace(/[\\/]+/g, path.sep);
+
+      const normalizedRelative = relative
+        .trim()
+        .replace(/[\\/]+/g, path.sep)
+        .replace(/^[\\/]+/, "");
       const candidate = path.resolve(path.dirname(wrapperPath), normalizedRelative);
       if (isFilePath(candidate)) {
         candidates.push(candidate);
