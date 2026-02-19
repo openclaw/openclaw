@@ -287,6 +287,7 @@ export const OpenClawSchema = z
         executablePath: z.string().optional(),
         headless: z.boolean().optional(),
         noSandbox: z.boolean().optional(),
+        gpuEnabled: z.boolean().optional(),
         attachOnly: z.boolean().optional(),
         cdpPortRangeStart: z.number().int().min(1).max(65535).optional(),
         defaultProfile: z.string().optional(),
