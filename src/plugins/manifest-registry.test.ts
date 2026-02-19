@@ -2,9 +2,26 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginCandidate } from "./discovery.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
+
+vi.mock("./manifest.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./manifest.js")>();
+  return {
+    ...actual,
+    loadPluginManifest: (rootDir: string) => {
+      if (rootDir === "/virtual/feishu") {
+        return {
+          ok: true,
+          manifestPath: "/virtual/feishu/package.json",
+          manifest: { id: "feishu", configSchema: { type: "object" } },
+        };
+      }
+      return actual.loadPluginManifest(rootDir);
+    },
+  };
+});
 
 const tempDirs: string[] = [];
 
@@ -166,5 +183,50 @@ describe("loadPluginManifestRegistry", () => {
     expect(countDuplicateWarnings(registry)).toBe(0);
     expect(registry.plugins.length).toBe(1);
     expect(registry.plugins[0]?.origin).toBe("config");
+  });
+
+  it("suppresses duplicate warning when one candidate is a virtual config entry", () => {
+    const dirA = makeTempDir();
+    const dirB = makeTempDir();
+    const manifest = { id: "feishu", configSchema: { type: "object" } };
+    writeManifest(dirA, manifest);
+    writeManifest(dirB, manifest);
+
+    const candidates: PluginCandidate[] = [
+      {
+        idHint: "feishu",
+        rootDir: "/virtual/feishu",
+        source: "plugins.entries.feishu",
+        origin: "config",
+      },
+    ];
+
+    const registry = loadRegistry(candidates);
+    expect(countDuplicateWarnings(registry)).toBe(0);
+    expect(registry.plugins.length).toBe(1);
+    expect(registry.plugins[0]?.origin).toBe("config");
+  });
+
+  it("emits duplicate warning when config entry points to a different physical path", () => {
+    const dirA = makeTempDir();
+    const dirB = makeTempDir();
+    const manifest = { id: "feishu", configSchema: { type: "object" } };
+    writeManifest(dirA, manifest);
+    writeManifest(dirB, manifest);
+
+    const candidates: PluginCandidate[] = [
+      createPluginCandidate({
+        idHint: "feishu",
+        rootDir: dirA,
+        origin: "bundled",
+      }),
+      createPluginCandidate({
+        idHint: "feishu",
+        rootDir: dirB,
+        origin: "config",
+      }),
+    ];
+
+    expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(1);
   });
 });

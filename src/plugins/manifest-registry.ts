@@ -1,10 +1,10 @@
 import fs from "node:fs";
 import type { OpenClawConfig } from "../config/config.js";
+import type { PluginConfigUiHint, PluginDiagnostic, PluginKind, PluginOrigin } from "./types.js";
 import { resolveUserPath } from "../utils.js";
 import { normalizePluginsConfig, type NormalizedPluginsConfig } from "./config-state.js";
 import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
 import { loadPluginManifest, type PluginManifest } from "./manifest.js";
-import type { PluginConfigUiHint, PluginDiagnostic, PluginKind, PluginOrigin } from "./types.js";
 
 type SeenIdEntry = {
   candidate: PluginCandidate;
@@ -213,7 +213,17 @@ export function loadPluginManifestRegistry(params: {
       // is a false-positive duplicate and can be silently skipped.
       const existingReal = safeRealpathSync(existing.candidate.rootDir, realpathCache);
       const candidateReal = safeRealpathSync(candidate.rootDir, realpathCache);
-      const samePlugin = Boolean(existingReal && candidateReal && existingReal === candidateReal);
+      let samePlugin = Boolean(existingReal && candidateReal && existingReal === candidateReal);
+
+      if (!samePlugin) {
+        const isVirtual = (c: PluginCandidate, realPath: string | null) =>
+          c.origin === "config" && c.source.startsWith("plugins.entries.") && !realPath;
+
+        if (isVirtual(existing.candidate, existingReal) || isVirtual(candidate, candidateReal)) {
+          samePlugin = true;
+        }
+      }
+
       if (samePlugin) {
         // Prefer higher-precedence origins even if candidates are passed in
         // an unexpected order (config > workspace > global > bundled).
