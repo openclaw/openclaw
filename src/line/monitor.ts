@@ -58,7 +58,7 @@ const runtimeState = new Map<
   }
 >();
 
-function recordChannelRuntimeState(params: {
+function recordLineRuntimeState(params: {
   channel: string;
   accountId: string;
   state: Partial<{
@@ -140,7 +140,7 @@ export async function monitorLineProvider(
   }
 
   // Record starting state
-  recordChannelRuntimeState({
+  recordLineRuntimeState({
     channel: "line",
     accountId: resolvedAccountId,
     state: {
@@ -164,7 +164,7 @@ export async function monitorLineProvider(
       const { ctxPayload, replyToken, route } = ctx;
 
       // Record inbound activity
-      recordChannelRuntimeState({
+      recordLineRuntimeState({
         channel: "line",
         accountId: resolvedAccountId,
         state: {
@@ -242,7 +242,7 @@ export async function monitorLineProvider(
               });
               replyTokenUsed = nextReplyTokenUsed;
 
-              recordChannelRuntimeState({
+              recordLineRuntimeState({
                 channel: "line",
                 accountId: resolvedAccountId,
                 state: {
@@ -299,7 +299,7 @@ export async function monitorLineProvider(
   const stopHandler = () => {
     logVerbose(`line: stopping provider for account ${resolvedAccountId}`);
     unregisterHttp();
-    recordChannelRuntimeState({
+    recordLineRuntimeState({
       channel: "line",
       accountId: resolvedAccountId,
       state: {

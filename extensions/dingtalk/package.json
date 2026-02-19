@@ -1,0 +1,35 @@
+{
+  "name": "@openclaw/dingtalk",
+  "version": "2026.2.9",
+  "description": "OpenClaw DingTalk (钉钉) channel plugin (community maintained by @largezhou)",
+  "type": "module",
+  "dependencies": {
+    "@alicloud/dingtalk": "^2.2.38",
+    "@alicloud/openapi-client": "^0.4.15",
+    "@alicloud/tea-util": "^1.4.11",
+    "dingtalk-stream": "^2.1.4"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "dingtalk",
+      "label": "DingTalk",
+      "selectionLabel": "DingTalk (钉钉)",
+      "docsPath": "/channels/dingtalk",
+      "docsLabel": "dingtalk",
+      "blurb": "DingTalk enterprise robot with Stream mode for Chinese market.",
+      "order": 80,
+      "quickstartAllowFrom": true
+    },
+    "install": {
+      "npmSpec": "@openclaw/dingtalk",
+      "localPath": "extensions/dingtalk",
+      "defaultChoice": "npm"
+    }
+  }
+}
