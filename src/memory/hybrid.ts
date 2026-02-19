@@ -18,6 +18,7 @@ export type HybridVectorResult = {
   source: HybridSource;
   snippet: string;
   vectorScore: number;
+  accessCount?: number;
 };
 
 export type HybridKeywordResult = {
@@ -28,6 +29,7 @@ export type HybridKeywordResult = {
   source: HybridSource;
   snippet: string;
   textScore: number;
+  accessCount?: number;
 };
 
 export function buildFtsQuery(raw: string): string | null {
@@ -68,6 +70,7 @@ export async function mergeHybridResults(params: {
     score: number;
     snippet: string;
     source: HybridSource;
+    accessCount?: number;
   }>
 > {
   const byId = new Map<
@@ -81,6 +84,7 @@ export async function mergeHybridResults(params: {
       snippet: string;
       vectorScore: number;
       textScore: number;
+      accessCount?: number;
     }
   >();
 
@@ -94,6 +98,7 @@ export async function mergeHybridResults(params: {
       snippet: r.snippet,
       vectorScore: r.vectorScore,
       textScore: 0,
+      accessCount: r.accessCount,
     });
   }
 
@@ -103,6 +108,9 @@ export async function mergeHybridResults(params: {
       existing.textScore = r.textScore;
       if (r.snippet && r.snippet.length > 0) {
         existing.snippet = r.snippet;
+      }
+      if (r.accessCount !== undefined) {
+        existing.accessCount = r.accessCount;
       }
     } else {
       byId.set(r.id, {
@@ -114,6 +122,7 @@ export async function mergeHybridResults(params: {
         snippet: r.snippet,
         vectorScore: 0,
         textScore: r.textScore,
+        accessCount: r.accessCount,
       });
     }
   }
@@ -127,6 +136,7 @@ export async function mergeHybridResults(params: {
       score,
       snippet: entry.snippet,
       source: entry.source,
+      accessCount: entry.accessCount ?? 0,
     };
   });
 

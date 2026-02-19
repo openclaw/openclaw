@@ -18,7 +18,7 @@ import {
 import { bm25RankToScore, buildFtsQuery, mergeHybridResults } from "./hybrid.js";
 import { isMemoryPath, normalizeExtraMemoryPaths } from "./internal.js";
 import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
-import { searchKeyword, searchVector } from "./manager-search.js";
+import { searchKeyword, searchVector, incrementAccessCount } from "./manager-search.js";
 import { extractKeywords } from "./query-expansion.js";
 import type {
   MemoryEmbeddingProbeResult,
@@ -285,7 +285,18 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       temporalDecay: hybrid.temporalDecay,
     });
 
-    return merged.filter((entry) => entry.score >= minScore).slice(0, maxResults);
+    const filtered = merged.filter((entry) => entry.score >= minScore).slice(0, maxResults);
+
+    const chunkIds = filtered
+      .filter((r): r is MemorySearchResult & { id: string } => "id" in r && typeof r.id === "string")
+      .map((r) => r.id);
+
+    incrementAccessCount({
+      db: this.db,
+      chunkIds,
+    });
+
+    return filtered;
   }
 
   private async searchVector(

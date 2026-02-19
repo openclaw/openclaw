@@ -32,7 +32,8 @@ export function ensureMemoryIndexSchema(params: {
       model TEXT NOT NULL,
       text TEXT NOT NULL,
       embedding TEXT NOT NULL,
-      updated_at INTEGER NOT NULL
+      updated_at INTEGER NOT NULL,
+      access_count INTEGER NOT NULL DEFAULT 0
     );
   `);
   params.db.exec(`
@@ -76,8 +77,50 @@ export function ensureMemoryIndexSchema(params: {
 
   ensureColumn(params.db, "files", "source", "TEXT NOT NULL DEFAULT 'memory'");
   ensureColumn(params.db, "chunks", "source", "TEXT NOT NULL DEFAULT 'memory'");
+  ensureColumn(params.db, "chunks", "access_count", "INTEGER NOT NULL DEFAULT 0");
   params.db.exec(`CREATE INDEX IF NOT EXISTS idx_chunks_path ON chunks(path);`);
   params.db.exec(`CREATE INDEX IF NOT EXISTS idx_chunks_source ON chunks(source);`);
+
+  params.db.exec(`
+    CREATE TABLE IF NOT EXISTS entities (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      type TEXT NOT NULL,
+      mentions INTEGER NOT NULL DEFAULT 1,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+  `);
+  params.db.exec(`
+    CREATE TABLE IF NOT EXISTS entity_mentions (
+      entity_id TEXT NOT NULL,
+      chunk_id TEXT NOT NULL,
+      context TEXT,
+      offset INTEGER,
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (entity_id, chunk_id),
+      FOREIGN KEY (entity_id) REFERENCES entities(id),
+      FOREIGN KEY (chunk_id) REFERENCES chunks(id)
+    );
+  `);
+  params.db.exec(`
+    CREATE TABLE IF NOT EXISTS relationships (
+      id TEXT PRIMARY KEY,
+      subject_id TEXT NOT NULL,
+      predicate TEXT NOT NULL,
+      object_id TEXT NOT NULL,
+      confidence REAL NOT NULL DEFAULT 1.0,
+      created_at INTEGER NOT NULL,
+      FOREIGN KEY (subject_id) REFERENCES entities(id),
+      FOREIGN KEY (object_id) REFERENCES entities(id)
+    );
+  `);
+
+  params.db.exec(`CREATE INDEX IF NOT EXISTS idx_entities_name ON entities(name);`);
+  params.db.exec(`CREATE INDEX IF NOT EXISTS idx_entities_type ON entities(type);`);
+  params.db.exec(`CREATE INDEX IF NOT EXISTS idx_entity_mentions_chunk ON entity_mentions(chunk_id);`);
+  params.db.exec(`CREATE INDEX IF NOT EXISTS idx_relationships_subject ON relationships(subject_id);`);
+  params.db.exec(`CREATE INDEX IF NOT EXISTS idx_relationships_object ON relationships(object_id);`);
 
   return { ftsAvailable, ...(ftsError ? { ftsError } : {}) };
 }

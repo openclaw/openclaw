@@ -3,19 +3,91 @@
    ============================================= */
 
 .chat-thinking {
-  margin-bottom: 10px;
-  padding: 10px 12px;
-  border-radius: 10px;
-  border: 1px dashed rgba(255, 255, 255, 0.18);
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--muted);
+  margin-bottom: 12px;
+  padding: 0;
+  border-radius: 8px;
+  border: 1px solid rgba(139, 92, 246, 0.3);
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.08) 0%, rgba(139, 92, 246, 0.04) 100%);
   font-size: 12px;
-  line-height: 1.4;
+  line-height: 1.5;
+  overflow: hidden;
+}
+
+.chat-thinking__header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: rgba(139, 92, 246, 0.12);
+  border-bottom: 1px solid rgba(139, 92, 246, 0.2);
+  font-size: 11px;
+  font-weight: 600;
+  color: rgba(139, 92, 246, 0.9);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.chat-thinking__header::before {
+  content: "💭";
+  font-size: 12px;
+  filter: grayscale(0.2);
+}
+
+.chat-thinking__content {
+  padding: 10px 12px 12px;
+  color: var(--muted);
+}
+
+.chat-thinking__content :where(p) {
+  margin: 0 0 8px;
+}
+
+.chat-thinking__content :where(p:last-child) {
+  margin-bottom: 0;
+}
+
+.chat-thinking__content :where(code) {
+  font-family: var(--mono);
+  font-size: 11px;
+  background: rgba(139, 92, 246, 0.1);
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+.chat-thinking__content :where(pre) {
+  background: rgba(0, 0, 0, 0.2);
+  padding: 8px 10px;
+  border-radius: 6px;
+  overflow-x: auto;
+  margin: 8px 0;
+}
+
+.chat-thinking__content :where(pre code) {
+  background: none;
+  padding: 0;
 }
 
 :root[data-theme="light"] .chat-thinking {
-  border-color: rgba(16, 24, 40, 0.25);
-  background: rgba(16, 24, 40, 0.04);
+  border-color: rgba(139, 92, 246, 0.35);
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.06) 0%, rgba(139, 92, 246, 0.03) 100%);
+}
+
+:root[data-theme="light"] .chat-thinking__header {
+  background: rgba(139, 92, 246, 0.08);
+  border-bottom-color: rgba(139, 92, 246, 0.25);
+  color: rgba(139, 92, 246, 0.95);
+}
+
+:root[data-theme="light"] .chat-thinking__content {
+  color: rgba(100, 116, 139, 0.9);
+}
+
+:root[data-theme="light"] .chat-thinking__content :where(code) {
+  background: rgba(139, 92, 246, 0.08);
+}
+
+:root[data-theme="light"] .chat-thinking__content :where(pre) {
+  background: rgba(0, 0, 0, 0.04);
 }
 
 .chat-text {

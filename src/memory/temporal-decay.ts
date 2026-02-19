@@ -119,7 +119,7 @@ function ageInDaysFromTimestamp(timestamp: Date, nowMs: number): number {
 }
 
 export async function applyTemporalDecayToHybridResults<
-  T extends { path: string; score: number; source: string },
+  T extends { path: string; score: number; source: string; accessCount?: number },
 >(params: {
   results: T[];
   temporalDecay?: Partial<TemporalDecayConfig>;
@@ -152,11 +152,15 @@ export async function applyTemporalDecayToHybridResults<
         return entry;
       }
 
-      const decayedScore = applyTemporalDecayToScore({
-        score: entry.score,
+      const temporalMultiplier = calculateTemporalDecayMultiplier({
         ageInDays: ageInDaysFromTimestamp(timestamp, nowMs),
         halfLifeDays: config.halfLifeDays,
       });
+
+      const accessCount = entry.accessCount ?? 0;
+      const importanceWeight = 1 + Math.log1p(accessCount);
+
+      const decayedScore = entry.score * importanceWeight * temporalMultiplier;
 
       return {
         ...entry,

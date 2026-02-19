@@ -266,9 +266,10 @@ function renderGroupedMessage(
       ${renderMessageImages(images)}
       ${
         reasoningMarkdown
-          ? html`<div class="chat-thinking">${unsafeHTML(
-              toSanitizedMarkdownHtml(reasoningMarkdown),
-            )}</div>`
+          ? html`<div class="chat-thinking">
+              <div class="chat-thinking__header">Thinking Process</div>
+              <div class="chat-thinking__content">${unsafeHTML(toSanitizedMarkdownHtml(reasoningMarkdown))}</div>
+            </div>`
           : nothing
       }
       ${

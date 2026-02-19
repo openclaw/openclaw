@@ -15,6 +15,7 @@ export type SearchRowResult = {
   score: number;
   snippet: string;
   source: SearchSource;
+  accessCount?: number;
 };
 
 export async function searchVector(params: {
@@ -35,7 +36,7 @@ export async function searchVector(params: {
     const rows = params.db
       .prepare(
         `SELECT c.id, c.path, c.start_line, c.end_line, c.text,\n` +
-          `       c.source,\n` +
+          `       c.source, c.access_count,\n` +
           `       vec_distance_cosine(v.embedding, ?) AS dist\n` +
           `  FROM ${params.vectorTable} v\n` +
           `  JOIN chunks c ON c.id = v.id\n` +
@@ -55,6 +56,7 @@ export async function searchVector(params: {
       end_line: number;
       text: string;
       source: SearchSource;
+      access_count: number;
       dist: number;
     }>;
     return rows.map((row) => ({
@@ -65,6 +67,7 @@ export async function searchVector(params: {
       score: 1 - row.dist,
       snippet: truncateUtf16Safe(row.text, params.snippetMaxChars),
       source: row.source,
+      accessCount: row.access_count,
     }));
   }
 
@@ -158,7 +161,7 @@ export async function searchKeyword(params: {
 
   const rows = params.db
     .prepare(
-      `SELECT id, path, source, start_line, end_line, text,\n` +
+      `SELECT c.id, c.path, c.source, c.start_line, c.end_line, c.text, c.access_count,\n` +
         `       bm25(${params.ftsTable}) AS rank\n` +
         `  FROM ${params.ftsTable}\n` +
         ` WHERE ${params.ftsTable} MATCH ?${modelClause}${params.sourceFilter.sql}\n` +
@@ -172,6 +175,7 @@ export async function searchKeyword(params: {
     start_line: number;
     end_line: number;
     text: string;
+    access_count: number;
     rank: number;
   }>;
 
@@ -186,6 +190,21 @@ export async function searchKeyword(params: {
       textScore,
       snippet: truncateUtf16Safe(row.text, params.snippetMaxChars),
       source: row.source,
+      accessCount: row.access_count,
     };
   });
+}
+
+export function incrementAccessCount(params: {
+  db: DatabaseSync;
+  chunkIds: string[];
+}): void {
+  if (params.chunkIds.length === 0) {
+    return;
+  }
+
+  const placeholders = params.chunkIds.map(() => "?").join(",");
+  const sql = `UPDATE chunks SET access_count = access_count + 1 WHERE id IN (${placeholders})`;
+  const stmt = params.db.prepare(sql);
+  stmt.run(...params.chunkIds);
 }
