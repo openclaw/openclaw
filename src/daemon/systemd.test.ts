@@ -155,40 +155,40 @@ describe("systemd service control", () => {
   });
 
   it("stops the resolved user unit", async () => {
-    execFileMock
-      .mockImplementationOnce((_cmd, _args, _opts, cb) => cb(null, "", ""))
-      .mockImplementationOnce((_cmd, args, _opts, cb) => {
-        expect(args).toEqual(["--user", "stop", "openclaw-gateway.service"]);
-        cb(null, "", "");
-      });
+    execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
+      expect(args).toEqual(["--user", "stop", "openclaw-gateway.service"]);
+      cb(null, "", "");
+    });
     const write = vi.fn();
     const stdout = { write } as unknown as NodeJS.WritableStream;
 
     await stopSystemdService({ stdout, env: {} });
 
     expect(write).toHaveBeenCalledTimes(1);
-    expect(String(write.mock.calls[0]?.[0])).toContain("Stopped systemd service");
+    expect(String(write.mock.calls[0]?.[0])).toContain("Stopped systemd user service");
   });
 
   it("restarts a profile-specific user unit", async () => {
-    execFileMock
-      .mockImplementationOnce((_cmd, _args, _opts, cb) => cb(null, "", ""))
-      .mockImplementationOnce((_cmd, args, _opts, cb) => {
-        expect(args).toEqual(["--user", "restart", "openclaw-gateway-work.service"]);
-        cb(null, "", "");
-      });
+    execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
+      expect(args).toEqual(["--user", "restart", "openclaw-gateway-work.service"]);
+      cb(null, "", "");
+    });
     const write = vi.fn();
     const stdout = { write } as unknown as NodeJS.WritableStream;
 
     await restartSystemdService({ stdout, env: { OPENCLAW_PROFILE: "work" } });
 
     expect(write).toHaveBeenCalledTimes(1);
-    expect(String(write.mock.calls[0]?.[0])).toContain("Restarted systemd service");
+    expect(String(write.mock.calls[0]?.[0])).toContain("Restarted systemd user service");
   });
 
   it("surfaces stop failures with systemctl detail", async () => {
     execFileMock
-      .mockImplementationOnce((_cmd, _args, _opts, cb) => cb(null, "", ""))
+      .mockImplementationOnce((_cmd, _args, _opts, cb) => {
+        const err = new Error("stop failed") as Error & { code?: number };
+        err.code = 1;
+        cb(err, "", "permission denied");
+      })
       .mockImplementationOnce((_cmd, _args, _opts, cb) => {
         const err = new Error("stop failed") as Error & { code?: number };
         err.code = 1;
