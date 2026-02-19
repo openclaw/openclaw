@@ -135,11 +135,13 @@ export function createAnthropicPayloadLogger(params: {
         return streamFn(model, context, options);
       }
       const nextOnPayload = (payload: unknown) => {
+        // SECURITY: Log only the digest and metadata, not the full payload.
+        // Full payloads contain complete conversation context, system prompts,
+        // and user messages that should not accumulate on disk in plaintext.
         record({
           ...base,
           ts: new Date().toISOString(),
           stage: "request",
-          payload,
           payloadDigest: digest(payload),
         });
         options?.onPayload?.(payload);
