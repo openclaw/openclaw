@@ -43,6 +43,23 @@ export type TelegramCustomCommand = {
   description: string;
 };
 
+/** Configuration for Telegram command behavior */
+export type TelegramCommandConfig = {
+  /**
+   * Command aliases. Key is the alias (e.g., "c"), value is the target command (e.g., "compact").
+   * Aliases work in text input but don't appear in the command menu.
+   */
+  aliases?: Record<string, string>;
+  /**
+   * Commands to hide from the Telegram bot menu. Commands still work via text input.
+   */
+  hidden?: string[];
+  /**
+   * Commands to pin to the top of the menu. Pinned commands appear first, in the order specified.
+   */
+  pinned?: string[];
+};
+
 export type TelegramAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
@@ -54,6 +71,8 @@ export type TelegramAccountConfig = {
   commands?: ProviderCommandsConfig;
   /** Custom commands to register in Telegram's command menu (merged with native). */
   customCommands?: TelegramCustomCommand[];
+  /** Configuration for command aliases, hidden commands, and menu ordering. */
+  commandConfig?: TelegramCommandConfig;
   /** Allow channel-initiated config writes (default: true). */
   configWrites?: boolean;
   /**

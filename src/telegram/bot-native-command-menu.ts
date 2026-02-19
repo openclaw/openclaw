@@ -3,6 +3,7 @@ import {
   normalizeTelegramCommandName,
   TELEGRAM_COMMAND_NAME_PATTERN,
 } from "../config/telegram-custom-commands.js";
+import type { TelegramCommandConfig } from "../config/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 
@@ -54,6 +55,53 @@ export function buildPluginTelegramMenuCommands(params: {
   }
 
   return { commands, issues };
+}
+
+/**
+ * Filter and order commands based on commandConfig.
+ * - Hidden commands are removed from the menu (but still callable)
+ * - Pinned commands are moved to the top in the specified order
+ * - Remaining commands are sorted alphabetically
+ */
+export function filterAndOrderTelegramMenuCommands(params: {
+  commands: TelegramMenuCommand[];
+  commandConfig?: TelegramCommandConfig;
+}): TelegramMenuCommand[] {
+  const { commands, commandConfig } = params;
+  if (!commandConfig) {
+    return commands;
+  }
+
+  const hiddenSet = new Set((commandConfig.hidden ?? []).map((c) => c.toLowerCase()));
+  const pinnedOrder = commandConfig.pinned ?? [];
+  const pinnedSet = new Set(pinnedOrder.map((c) => c.toLowerCase()));
+
+  // Filter out hidden commands
+  const visibleCommands = commands.filter((cmd) => !hiddenSet.has(cmd.command.toLowerCase()));
+
+  // Separate pinned and unpinned
+  const pinnedCommands: TelegramMenuCommand[] = [];
+  const unpinnedCommands: TelegramMenuCommand[] = [];
+
+  for (const cmd of visibleCommands) {
+    if (pinnedSet.has(cmd.command.toLowerCase())) {
+      pinnedCommands.push(cmd);
+    } else {
+      unpinnedCommands.push(cmd);
+    }
+  }
+
+  // Sort pinned commands by the order specified in config
+  pinnedCommands.sort((a, b) => {
+    const aIndex = pinnedOrder.findIndex((c) => c.toLowerCase() === a.command.toLowerCase());
+    const bIndex = pinnedOrder.findIndex((c) => c.toLowerCase() === b.command.toLowerCase());
+    return aIndex - bIndex;
+  });
+
+  // Sort unpinned commands alphabetically
+  unpinnedCommands.sort((a, b) => a.command.localeCompare(b.command));
+
+  return [...pinnedCommands, ...unpinnedCommands];
 }
 
 export function buildCappedTelegramMenuCommands(params: {
