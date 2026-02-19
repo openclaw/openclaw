@@ -90,3 +90,75 @@ export async function resolveMessageChannelSelection(params: {
     `Channel is required when multiple channels are configured: ${configured.join(", ")}`,
   );
 }
+
+/**
+ * List enabled account IDs for a channel.
+ * An account is considered enabled if it exists and has `enabled !== false`.
+ */
+export function listEnabledAccountIds(params: {
+  cfg: OpenClawConfig;
+  channel: MessageChannelId;
+}): string[] {
+  const plugin = listChannelPlugins().find((p) => p.id === params.channel);
+  if (!plugin) {
+    return [];
+  }
+
+  const accountIds = plugin.config.listAccountIds(params.cfg);
+  return accountIds.filter((accountId) => {
+    const account = plugin.config.resolveAccount(params.cfg, accountId);
+    return plugin.config.isEnabled
+      ? plugin.config.isEnabled(account, params.cfg)
+      : isAccountEnabled(account);
+  });
+}
+
+/**
+ * Resolve account ID for a channel, auto-selecting if only one is enabled.
+ *
+ * Behavior:
+ * 1. If accountId is provided, use it as-is
+ * 2. If "default" account is enabled, use "default"
+ * 3. If exactly one account is enabled, use that account
+ * 4. If multiple accounts are enabled, require explicit accountId
+ * 5. If no accounts are enabled, throw an error
+ */
+export function resolveMessageAccountSelection(params: {
+  cfg: OpenClawConfig;
+  channel: MessageChannelId;
+  accountId?: string | null;
+  defaultAccountId?: string;
+}): string {
+  // If explicit accountId provided, use it
+  if (params.accountId) {
+    return params.accountId;
+  }
+
+  const enabledAccounts = listEnabledAccountIds({
+    cfg: params.cfg,
+    channel: params.channel,
+  });
+
+  if (enabledAccounts.length === 0) {
+    throw new Error(
+      `No enabled accounts for channel ${params.channel}. Check your channel configuration.`,
+    );
+  }
+
+  // If default account is enabled, prefer it
+  const defaultId = params.defaultAccountId ?? "default";
+  if (enabledAccounts.includes(defaultId)) {
+    return defaultId;
+  }
+
+  // If exactly one account is enabled, use it
+  if (enabledAccounts.length === 1) {
+    return enabledAccounts[0];
+  }
+
+  // Multiple enabled accounts, require explicit selection
+  throw new Error(
+    `Multiple accounts enabled for ${params.channel}: ${enabledAccounts.join(", ")}. ` +
+      `Please specify accountId explicitly.`,
+  );
+}
