@@ -2,7 +2,16 @@
 
 Docs: https://docs.openclaw.ai
 
-## 2026.2.19 (Unreleased)
+## 2026.2.20 (Unreleased)
+
+### Changes
+
+### Fixes
+
+- Auto-reply/Runner: emit `onAgentRunStart` only after agent lifecycle or tool activity begins (and only once per run), so fallback preflight errors no longer mark runs as started. (#21165) Thanks @shakkernerd.
+- Auto-reply/Prompt caching: restore prefix-cache stability by keeping inbound system metadata session-stable and moving per-message IDs (`message_id`, `message_id_full`, `reply_to_id`, `sender_id`) into untrusted conversation context. (#20597) Thanks @anisoptera.
+
+## 2026.2.19
 
 ### Changes
 
