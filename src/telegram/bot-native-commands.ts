@@ -63,6 +63,60 @@ import { buildInlineKeyboard } from "./send.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 
+function sanitizeTelegramMenuCommands(params: {
+  runtime: RuntimeEnv;
+  commands: Array<{ command: string; description: string }>;
+}): Array<{ command: string; description: string }> {
+  const out: Array<{ command: string; description: string }> = [];
+  const seen = new Set<string>();
+  let dropped = 0;
+
+  for (const cmd of params.commands) {
+    const commandRaw = typeof cmd.command === "string" ? cmd.command.trim() : "";
+    const descriptionRaw = typeof cmd.description === "string" ? cmd.description.trim() : "";
+
+    // Telegram Bot API constraints:
+    // - command: 1-32 chars, [a-z0-9_]+ (no leading slash)
+    // - description: 3-256 chars
+    const commandNoSlash = commandRaw.startsWith("/") ? commandRaw.slice(1) : commandRaw;
+    const command = commandNoSlash.toLowerCase();
+
+    if (!/^[a-z0-9_]{1,32}$/.test(command)) {
+      dropped += 1;
+      params.runtime.error?.(
+        danger(`Telegram menu command "/${commandRaw}" is invalid; skipping.`),
+      );
+      continue;
+    }
+
+    if (seen.has(command)) {
+      continue;
+    }
+
+    if (descriptionRaw.length < 3) {
+      dropped += 1;
+      params.runtime.error?.(
+        danger(`Telegram menu command "/${command}" has missing/short description; skipping.`),
+      );
+      continue;
+    }
+
+    const description =
+      descriptionRaw.length > 256 ? descriptionRaw.substring(0, 253) + "..." : descriptionRaw;
+
+    out.push({ command, description });
+    seen.add(command);
+  }
+
+  if (dropped > 0) {
+    params.runtime.log?.(
+      `Telegram menu command sanitization: dropped ${dropped}/${params.commands.length} invalid entries.`,
+    );
+  }
+
+  return out;
+}
+
 type TelegramNativeCommandContext = Context & { match?: string };
 
 type TelegramCommandAuthResult = {
@@ -345,9 +399,15 @@ export const registerTelegramNativeCommands = ({
     ...(nativeEnabled ? pluginCatalog.commands : []),
     ...customCommands,
   ];
+
+  const allCommandsSanitized = sanitizeTelegramMenuCommands({
+    runtime,
+    commands: allCommandsFull,
+  });
+
   const { commandsToRegister, totalCommands, maxCommands, overflowCount } =
     buildCappedTelegramMenuCommands({
-      allCommands: allCommandsFull,
+      allCommands: allCommandsSanitized,
     });
   if (overflowCount > 0) {
     runtime.log?.(
