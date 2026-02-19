@@ -443,6 +443,7 @@ jobs:
       - name: TS tests (macOS)
         env:
           NODE_OPTIONS: --max-old-space-size=4096
+          OPENCLAW_TEST_VM_FORKS: "0"
         run: pnpm test
 
       # --- Xcode/Swift setup ---
