@@ -91,6 +91,7 @@ function createMinimalRun(params?: {
   storePath?: string;
   typingMode?: TypingMode;
   blockStreamingEnabled?: boolean;
+  runOverrides?: Partial<FollowupRun["run"]>;
 }) {
   const typing = createMockTypingController();
   const opts = params?.opts;
@@ -124,6 +125,7 @@ function createMinimalRun(params?: {
       },
       timeoutMs: 1_000,
       blockReplyBreak: "message_end",
+      ...params?.runOverrides,
     },
   } as unknown as FollowupRun;
 
@@ -233,7 +235,7 @@ async function runReplyAgentWithBase(params: {
   baseRun: ReturnType<typeof createBaseRun>;
   storePath: string;
   sessionKey: string;
-  sessionEntry: Record<string, unknown>;
+  sessionEntry: SessionEntry;
   commandBody: string;
   typingMode?: "instant";
 }): Promise<void> {
@@ -303,7 +305,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     persistStore: boolean;
   }) {
     const storePath = path.join(params.stateDir, "sessions", "sessions.json");
-    const sessionEntry = { sessionId: params.sessionId, updatedAt: Date.now() };
+    const sessionEntry: SessionEntry = { sessionId: params.sessionId, updatedAt: Date.now() };
     const sessionStore = { main: sessionEntry };
 
     await fs.mkdir(path.dirname(storePath), { recursive: true });
@@ -411,6 +413,25 @@ describe("runReplyAgent typing (heartbeat)", () => {
     expect(typing.startTypingOnText).not.toHaveBeenCalled();
   });
 
+  it("keeps assistant partial streaming enabled when reasoning mode is stream", async () => {
+    const onPartialReply = vi.fn();
+    const onReasoningStream = vi.fn();
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      await params.onReasoningStream?.({ text: "Reasoning:\n_step_" });
+      await params.onPartialReply?.({ text: "answer chunk" });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const { run } = createMinimalRun({
+      opts: { onPartialReply, onReasoningStream },
+      runOverrides: { reasoningLevel: "stream" },
+    });
+    await run();
+
+    expect(onReasoningStream).toHaveBeenCalled();
+    expect(onPartialReply).toHaveBeenCalledWith({ text: "answer chunk", mediaUrls: undefined });
+  });
+
   it("suppresses typing in never mode", async () => {
     state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
       await params.onPartialReply?.({ text: "hi" });
@@ -490,7 +511,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
   it("announces auto-compaction in verbose mode and tracks count", async () => {
     await withTempStateDir(async (stateDir) => {
       const storePath = path.join(stateDir, "sessions", "sessions.json");
-      const sessionEntry = { sessionId: "session", updatedAt: Date.now() };
+      const sessionEntry: SessionEntry = { sessionId: "session", updatedAt: Date.now() };
       const sessionStore = { main: sessionEntry };
 
       state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
@@ -549,6 +570,9 @@ describe("runReplyAgent typing (heartbeat)", () => {
       expect(payload).toMatchObject({
         text: expect.stringContaining("Context limit exceeded during compaction"),
       });
+      if (!payload) {
+        throw new Error("expected payload");
+      }
       expect(payload.text?.toLowerCase()).toContain("reset");
       expect(sessionStore.main.sessionId).not.toBe(sessionId);
 
@@ -594,6 +618,9 @@ describe("runReplyAgent typing (heartbeat)", () => {
       expect(payload).toMatchObject({
         text: expect.stringContaining("Context limit exceeded"),
       });
+      if (!payload) {
+        throw new Error("expected payload");
+      }
       expect(payload.text?.toLowerCase()).toContain("reset");
       expect(sessionStore.main.sessionId).not.toBe(sessionId);
 
@@ -638,6 +665,9 @@ describe("runReplyAgent typing (heartbeat)", () => {
       expect(payload).toMatchObject({
         text: expect.stringContaining("Message ordering conflict"),
       });
+      if (!payload) {
+        throw new Error("expected payload");
+      }
       expect(payload.text?.toLowerCase()).toContain("reset");
       expect(sessionStore.main.sessionId).not.toBe(sessionId);
       await expect(fs.access(transcriptPath)).rejects.toBeDefined();

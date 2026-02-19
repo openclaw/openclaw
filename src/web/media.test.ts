@@ -7,7 +7,12 @@ import { sendVoiceMessageDiscord } from "../discord/send.js";
 import * as ssrf from "../infra/net/ssrf.js";
 import { optimizeImageToPng } from "../media/image-ops.js";
 import { captureEnv } from "../test-utils/env.js";
-import { loadWebMedia, loadWebMediaRaw, optimizeImageToJpeg } from "./media.js";
+import {
+  LocalMediaAccessError,
+  loadWebMedia,
+  loadWebMediaRaw,
+  optimizeImageToJpeg,
+} from "./media.js";
 
 let fixtureRoot = "";
 let fixtureFileCount = 0;
@@ -187,7 +192,7 @@ describe("web media loading", () => {
       status: 404,
       statusText: "Not Found",
       url: "https://example.com/missing.jpg",
-    } as Response);
+    } as unknown as Response);
 
     await expect(loadWebMedia("https://example.com/missing.jpg", 1024 * 1024)).rejects.toThrow(
       /Failed to fetch media from https:\/\/example\.com\/missing\.jpg.*HTTP 404/i,
@@ -225,7 +230,7 @@ describe("web media loading", () => {
       arrayBuffer: async () => Buffer.alloc(2048).buffer,
       headers: { get: () => "image/png" },
       status: 200,
-    } as Response);
+    } as unknown as Response);
 
     await expect(loadWebMediaRaw("https://example.com/too-big.png", 1024)).rejects.toThrow(
       /exceeds maxBytes 1024/i,
@@ -251,7 +256,7 @@ describe("web media loading", () => {
         },
       },
       status: 200,
-    } as Response);
+    } as unknown as Response);
 
     const result = await loadWebMedia("https://example.com/download?id=1", 1024 * 1024);
 
@@ -274,7 +279,7 @@ describe("web media loading", () => {
         gifBytes.buffer.slice(gifBytes.byteOffset, gifBytes.byteOffset + gifBytes.byteLength),
       headers: { get: () => "image/gif" },
       status: 200,
-    } as Response);
+    } as unknown as Response);
 
     const result = await loadWebMedia("https://example.com/animation.gif", 1024 * 1024);
 
@@ -329,12 +334,27 @@ describe("local media root guard", () => {
     // Explicit roots that don't contain the temp file.
     await expect(
       loadWebMedia(tinyPngFile, 1024 * 1024, { localRoots: ["/nonexistent-root"] }),
-    ).rejects.toThrow(/not under an allowed directory/i);
+    ).rejects.toMatchObject({ code: "path-not-allowed" });
   });
 
   it("allows local paths under an explicit root", async () => {
     const result = await loadWebMedia(tinyPngFile, 1024 * 1024, { localRoots: [os.tmpdir()] });
     expect(result.kind).toBe("image");
+  });
+
+  it("requires readFile override for localRoots bypass", async () => {
+    await expect(
+      loadWebMedia(tinyPngFile, {
+        maxBytes: 1024 * 1024,
+        localRoots: "any",
+      }),
+    ).rejects.toBeInstanceOf(LocalMediaAccessError);
+    await expect(
+      loadWebMedia(tinyPngFile, {
+        maxBytes: 1024 * 1024,
+        localRoots: "any",
+      }),
+    ).rejects.toMatchObject({ code: "unsafe-bypass" });
   });
 
   it("allows any path when localRoots is 'any'", async () => {
@@ -351,7 +371,7 @@ describe("local media root guard", () => {
       loadWebMedia(tinyPngFile, 1024 * 1024, {
         localRoots: [path.parse(tinyPngFile).root],
       }),
-    ).rejects.toThrow(/refuses filesystem root/i);
+    ).rejects.toMatchObject({ code: "invalid-root" });
   });
 
   it("allows default OpenClaw state workspace and sandbox roots", async () => {
@@ -392,7 +412,7 @@ describe("local media root guard", () => {
         maxBytes: 1024 * 1024,
         readFile,
       }),
-    ).rejects.toThrow(/not under an allowed directory/i);
+    ).rejects.toMatchObject({ code: "path-not-allowed" });
   });
 
   it("allows per-agent workspace-* paths with explicit local roots", async () => {

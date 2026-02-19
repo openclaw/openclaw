@@ -3,7 +3,7 @@ import { Type } from "@sinclair/typebox";
 import path from "node:path";
 import type { ExecAsk, ExecHost, ExecSecurity } from "../infra/exec-approvals.js";
 import type { ProcessSession } from "./bash-process-registry.js";
-import type { ExecToolDetails } from "./bash-tools.exec.js";
+import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { mergePathPrepend } from "../infra/path-prepend.js";
@@ -507,8 +507,9 @@ export async function runExecProcess(opts: {
     .wait()
     .then((exit): ExecProcessOutcome => {
       const durationMs = Date.now() - startedAt;
-      const status: "completed" | "failed" =
-        exit.exitCode === 0 && exit.reason === "exit" ? "completed" : "failed";
+      const isNormalExit = exit.reason === "exit";
+      const status: "completed" | "failed" = isNormalExit ? "completed" : "failed";
+
       markExited(session, exit.exitCode, exit.exitSignal, status);
       maybeNotifyOnExit(session, status);
       if (!session.child && session.stdin) {
@@ -516,12 +517,14 @@ export async function runExecProcess(opts: {
       }
       const aggregated = session.aggregated.trim();
       if (status === "completed") {
+        const exitCode = exit.exitCode ?? 0;
+        const exitMsg = exitCode !== 0 ? `\n\n(Command exited with code ${exitCode})` : "";
         return {
           status: "completed",
-          exitCode: exit.exitCode ?? 0,
+          exitCode,
           exitSignal: exit.exitSignal,
           durationMs,
-          aggregated,
+          aggregated: aggregated + exitMsg,
           timedOut: false,
         };
       }
@@ -532,9 +535,7 @@ export async function runExecProcess(opts: {
             ? "Command timed out waiting for output"
             : exit.exitSignal != null
               ? `Command aborted by signal ${exit.exitSignal}`
-              : exit.exitCode == null
-                ? "Command aborted before exit code was captured"
-                : `Command exited with code ${exit.exitCode}`;
+              : "Command aborted before exit code was captured";
       return {
         status: "failed",
         exitCode: exit.exitCode,

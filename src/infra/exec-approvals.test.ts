@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   analyzeArgvCommand,
   analyzeShellCommand,
@@ -19,6 +19,9 @@ import {
   resolveCommandResolution,
   resolveExecApprovals,
   resolveExecApprovalsFromFile,
+  resolveExecApprovalsPath,
+  resolveExecApprovalsSocketPath,
+  resolveSafeBins,
   type ExecAllowlistEntry,
   type ExecApprovalsFile,
 } from "./exec-approvals.js";
@@ -107,6 +110,28 @@ describe("mergeExecApprovalsSocketDefaults", () => {
     const merged = mergeExecApprovalsSocketDefaults({ normalized, current });
     expect(merged.socket?.path).toBeTruthy();
     expect(merged.socket?.token).toBe("b");
+  });
+});
+
+describe("resolve exec approvals defaults", () => {
+  it("expands home-prefixed default file and socket paths", () => {
+    const dir = makeTempDir();
+    const prevOpenClawHome = process.env.OPENCLAW_HOME;
+    try {
+      process.env.OPENCLAW_HOME = dir;
+      expect(path.normalize(resolveExecApprovalsPath())).toBe(
+        path.normalize(path.join(dir, ".openclaw", "exec-approvals.json")),
+      );
+      expect(path.normalize(resolveExecApprovalsSocketPath())).toBe(
+        path.normalize(path.join(dir, ".openclaw", "exec-approvals.sock")),
+      );
+    } finally {
+      if (prevOpenClawHome === undefined) {
+        delete process.env.OPENCLAW_HOME;
+      } else {
+        process.env.OPENCLAW_HOME = prevOpenClawHome;
+      }
+    }
   });
 });
 
@@ -385,60 +410,185 @@ describe("exec approvals shell allowlist (chained commands)", () => {
 });
 
 describe("exec approvals safe bins", () => {
-  it("allows safe bins with non-path args", () => {
+  type SafeBinCase = {
+    name: string;
+    argv: string[];
+    resolvedPath: string;
+    expected: boolean;
+    safeBins?: string[];
+    executableName?: string;
+    rawExecutable?: string;
+    cwd?: string;
+    setup?: (cwd: string) => void;
+  };
+
+  const cases: SafeBinCase[] = [
+    {
+      name: "allows safe bins with non-path args",
+      argv: ["jq", ".foo"],
+      resolvedPath: "/usr/bin/jq",
+      expected: true,
+    },
+    {
+      name: "blocks safe bins with file args",
+      argv: ["jq", ".foo", "secret.json"],
+      resolvedPath: "/usr/bin/jq",
+      expected: false,
+      setup: (cwd) => fs.writeFileSync(path.join(cwd, "secret.json"), "{}"),
+    },
+    {
+      name: "blocks safe bins resolved from untrusted directories",
+      argv: ["jq", ".foo"],
+      resolvedPath: "/tmp/evil-bin/jq",
+      expected: false,
+      cwd: "/tmp",
+    },
+    {
+      name: "blocks sort output path via -o <file>",
+      argv: ["sort", "-o", "malicious.sh"],
+      resolvedPath: "/usr/bin/sort",
+      expected: false,
+      safeBins: ["sort"],
+      executableName: "sort",
+    },
+    {
+      name: "blocks sort output path via attached short option (-ofile)",
+      argv: ["sort", "-omalicious.sh"],
+      resolvedPath: "/usr/bin/sort",
+      expected: false,
+      safeBins: ["sort"],
+      executableName: "sort",
+    },
+    {
+      name: "blocks sort output path via --output=file",
+      argv: ["sort", "--output=malicious.sh"],
+      resolvedPath: "/usr/bin/sort",
+      expected: false,
+      safeBins: ["sort"],
+      executableName: "sort",
+    },
+    {
+      name: "blocks grep recursive flags that read cwd",
+      argv: ["grep", "-R", "needle"],
+      resolvedPath: "/usr/bin/grep",
+      expected: false,
+      safeBins: ["grep"],
+      executableName: "grep",
+    },
+  ];
+
+  for (const testCase of cases) {
+    it(testCase.name, () => {
+      if (process.platform === "win32") {
+        return;
+      }
+      const cwd = testCase.cwd ?? makeTempDir();
+      testCase.setup?.(cwd);
+      const executableName = testCase.executableName ?? "jq";
+      const rawExecutable = testCase.rawExecutable ?? executableName;
+      const ok = isSafeBinUsage({
+        argv: testCase.argv,
+        resolution: {
+          rawExecutable,
+          resolvedPath: testCase.resolvedPath,
+          executableName,
+        },
+        safeBins: normalizeSafeBins(testCase.safeBins ?? [executableName]),
+      });
+      expect(ok).toBe(testCase.expected);
+    });
+  }
+
+  it("supports injected trusted safe-bin dirs for tests/callers", () => {
     if (process.platform === "win32") {
       return;
     }
-    const dir = makeTempDir();
-    const binDir = path.join(dir, "bin");
-    fs.mkdirSync(binDir, { recursive: true });
-    const exeName = process.platform === "win32" ? "jq.exe" : "jq";
-    const exe = path.join(binDir, exeName);
-    fs.writeFileSync(exe, "");
-    fs.chmodSync(exe, 0o755);
-    const res = analyzeShellCommand({
-      command: "jq .foo",
-      cwd: dir,
-      env: makePathEnv(binDir),
-    });
-    expect(res.ok).toBe(true);
-    const segment = res.segments[0];
     const ok = isSafeBinUsage({
-      argv: segment.argv,
-      resolution: segment.resolution,
+      argv: ["jq", ".foo"],
+      resolution: {
+        rawExecutable: "jq",
+        resolvedPath: "/custom/bin/jq",
+        executableName: "jq",
+      },
       safeBins: normalizeSafeBins(["jq"]),
-      cwd: dir,
+      trustedSafeBinDirs: new Set(["/custom/bin"]),
     });
     expect(ok).toBe(true);
   });
+  it("does not include sort/grep in default safeBins", () => {
+    const defaults = resolveSafeBins(undefined);
+    expect(defaults.has("jq")).toBe(true);
+    expect(defaults.has("sort")).toBe(false);
+    expect(defaults.has("grep")).toBe(false);
+  });
 
-  it("blocks safe bins with file args", () => {
+  it("blocks sort output flags independent of file existence", () => {
     if (process.platform === "win32") {
       return;
     }
-    const dir = makeTempDir();
-    const binDir = path.join(dir, "bin");
-    fs.mkdirSync(binDir, { recursive: true });
-    const exeName = process.platform === "win32" ? "jq.exe" : "jq";
-    const exe = path.join(binDir, exeName);
-    fs.writeFileSync(exe, "");
-    fs.chmodSync(exe, 0o755);
-    const file = path.join(dir, "secret.json");
-    fs.writeFileSync(file, "{}");
-    const res = analyzeShellCommand({
-      command: "jq .foo secret.json",
-      cwd: dir,
-      env: makePathEnv(binDir),
+    const cwd = makeTempDir();
+    fs.writeFileSync(path.join(cwd, "existing.txt"), "x");
+    const resolution = {
+      rawExecutable: "sort",
+      resolvedPath: "/usr/bin/sort",
+      executableName: "sort",
+    };
+    const safeBins = normalizeSafeBins(["sort"]);
+    const existing = isSafeBinUsage({
+      argv: ["sort", "-o", "existing.txt"],
+      resolution,
+      safeBins,
     });
-    expect(res.ok).toBe(true);
-    const segment = res.segments[0];
-    const ok = isSafeBinUsage({
-      argv: segment.argv,
-      resolution: segment.resolution,
+    const missing = isSafeBinUsage({
+      argv: ["sort", "-o", "missing.txt"],
+      resolution,
+      safeBins,
+    });
+    const longFlag = isSafeBinUsage({
+      argv: ["sort", "--output=missing.txt"],
+      resolution,
+      safeBins,
+    });
+    expect(existing).toBe(false);
+    expect(missing).toBe(false);
+    expect(longFlag).toBe(false);
+  });
+
+  it("threads trusted safe-bin dirs through allowlist evaluation", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const analysis = {
+      ok: true as const,
+      segments: [
+        {
+          raw: "jq .foo",
+          argv: ["jq", ".foo"],
+          resolution: {
+            rawExecutable: "jq",
+            resolvedPath: "/custom/bin/jq",
+            executableName: "jq",
+          },
+        },
+      ],
+    };
+    const denied = evaluateExecAllowlist({
+      analysis,
+      allowlist: [],
       safeBins: normalizeSafeBins(["jq"]),
-      cwd: dir,
+      trustedSafeBinDirs: new Set(["/usr/bin"]),
+      cwd: "/tmp",
     });
-    expect(ok).toBe(false);
+    expect(denied.allowlistSatisfied).toBe(false);
+
+    const allowed = evaluateExecAllowlist({
+      analysis,
+      allowlist: [],
+      safeBins: normalizeSafeBins(["jq"]),
+      trustedSafeBinDirs: new Set(["/custom/bin"]),
+      cwd: "/tmp",
+    });
+    expect(allowed.allowlistSatisfied).toBe(true);
   });
 });
 
@@ -584,9 +734,10 @@ describe("exec approvals policy helpers", () => {
 describe("exec approvals wildcard agent", () => {
   it("merges wildcard allowlist entries with agent entries", () => {
     const dir = makeTempDir();
-    const homedirSpy = vi.spyOn(os, "homedir").mockReturnValue(dir);
+    const prevOpenClawHome = process.env.OPENCLAW_HOME;
 
     try {
+      process.env.OPENCLAW_HOME = dir;
       const approvalsPath = path.join(dir, ".openclaw", "exec-approvals.json");
       fs.mkdirSync(path.dirname(approvalsPath), { recursive: true });
       fs.writeFileSync(
@@ -610,7 +761,11 @@ describe("exec approvals wildcard agent", () => {
         "/usr/bin/uname",
       ]);
     } finally {
-      homedirSpy.mockRestore();
+      if (prevOpenClawHome === undefined) {
+        delete process.env.OPENCLAW_HOME;
+      } else {
+        process.env.OPENCLAW_HOME = prevOpenClawHome;
+      }
     }
   });
 });
@@ -664,7 +819,6 @@ describe("exec approvals node host allowlist check", () => {
       argv: ["unknown-tool", "--help"],
       resolution,
       safeBins: normalizeSafeBins(["jq", "curl"]),
-      cwd: "/tmp",
     });
     expect(safe).toBe(false);
   });
@@ -685,7 +839,6 @@ describe("exec approvals node host allowlist check", () => {
       argv: ["jq", ".foo"],
       resolution,
       safeBins: normalizeSafeBins(["jq"]),
-      cwd: "/tmp",
     });
     // Safe bins are disabled on Windows (PowerShell parsing/expansion differences).
     if (process.platform === "win32") {
@@ -698,7 +851,7 @@ describe("exec approvals node host allowlist check", () => {
 
 describe("exec approvals default agent migration", () => {
   it("migrates legacy default agent entries to main", () => {
-    const file = {
+    const file: ExecApprovalsFile = {
       version: 1,
       agents: {
         default: { allowlist: [{ pattern: "/bin/legacy" }] },
@@ -711,7 +864,7 @@ describe("exec approvals default agent migration", () => {
   });
 
   it("prefers main agent settings when both main and default exist", () => {
-    const file = {
+    const file: ExecApprovalsFile = {
       version: 1,
       agents: {
         main: { ask: "always", allowlist: [{ pattern: "/bin/main" }] },

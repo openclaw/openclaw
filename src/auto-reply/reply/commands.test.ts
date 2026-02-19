@@ -102,6 +102,7 @@ vi.mock("../../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
 
+import type { HandleCommandsParams } from "./commands-types.js";
 import { buildCommandContext, handleCommands } from "./commands.js";
 
 // Avoid expensive workspace scans during /context tests.
@@ -356,6 +357,7 @@ describe("/compact command", () => {
         ...params,
         sessionEntry: {
           sessionId: "session-1",
+          updatedAt: Date.now(),
           groupId: "group-1",
           groupChannel: "#general",
           space: "workspace-1",
@@ -503,7 +505,7 @@ function buildPolicyParams(
   commandBody: string,
   cfg: OpenClawConfig,
   ctxOverrides?: Partial<MsgContext>,
-) {
+): HandleCommandsParams {
   const ctx = {
     Body: commandBody,
     CommandBody: commandBody,
@@ -522,7 +524,7 @@ function buildPolicyParams(
     commandAuthorized: true,
   });
 
-  return {
+  const params: HandleCommandsParams = {
     ctx,
     cfg,
     command,
@@ -531,14 +533,15 @@ function buildPolicyParams(
     sessionKey: "agent:main:main",
     workspaceDir: "/tmp",
     defaultGroupActivation: () => "mention",
-    resolvedVerboseLevel: "off" as const,
-    resolvedReasoningLevel: "off" as const,
+    resolvedVerboseLevel: "off",
+    resolvedReasoningLevel: "off",
     resolveDefaultThinkingLevel: async () => undefined,
     provider: "telegram",
     model: "test-model",
     contextTokens: 0,
     isGroup: false,
   };
+  return params;
 }
 
 describe("handleCommands /allowlist", () => {

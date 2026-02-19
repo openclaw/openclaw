@@ -1,5 +1,5 @@
 import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
-import { fetchJson } from "./provider-usage.fetch.shared.js";
+import { buildUsageHttpErrorSnapshot, fetchJson } from "./provider-usage.fetch.shared.js";
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
 
 type ClaudeUsageResponse = {
@@ -159,13 +159,11 @@ export async function fetchClaudeUsage(
       }
     }
 
-    const suffix = message ? `: ${message}` : "";
-    return {
+    return buildUsageHttpErrorSnapshot({
       provider: "anthropic",
-      displayName: PROVIDER_LABELS.anthropic,
-      windows: [],
-      error: `HTTP ${res.status}${suffix}`,
-    };
+      status: res.status,
+      message,
+    });
   }
 
   const data = (await res.json()) as ClaudeUsageResponse;

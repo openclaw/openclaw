@@ -44,4 +44,41 @@ describe("buildSystemPromptReport", () => {
 
     expect(report.injectedWorkspaceFiles[0]?.injectedChars).toBe("trimmed".length);
   });
+
+  it("marks workspace files truncated when injected chars are smaller than raw chars", () => {
+    const file = makeBootstrapFile({
+      path: "/tmp/workspace/policies/AGENTS.md",
+      content: "abcdefghijklmnopqrstuvwxyz",
+    });
+    const report = buildSystemPromptReport({
+      source: "run",
+      generatedAt: 0,
+      bootstrapMaxChars: 20_000,
+      systemPrompt: "system",
+      bootstrapFiles: [file],
+      injectedFiles: [{ path: "/tmp/workspace/policies/AGENTS.md", content: "trimmed" }],
+      skillsPrompt: "",
+      tools: [],
+    });
+
+    expect(report.injectedWorkspaceFiles[0]?.truncated).toBe(true);
+  });
+
+  it("includes both bootstrap caps in the report payload", () => {
+    const file = makeBootstrapFile({ path: "/tmp/workspace/policies/AGENTS.md" });
+    const report = buildSystemPromptReport({
+      source: "run",
+      generatedAt: 0,
+      bootstrapMaxChars: 11_111,
+      bootstrapTotalMaxChars: 22_222,
+      systemPrompt: "system",
+      bootstrapFiles: [file],
+      injectedFiles: [{ path: "AGENTS.md", content: "trimmed" }],
+      skillsPrompt: "",
+      tools: [],
+    });
+
+    expect(report.bootstrapMaxChars).toBe(11_111);
+    expect(report.bootstrapTotalMaxChars).toBe(22_222);
+  });
 });

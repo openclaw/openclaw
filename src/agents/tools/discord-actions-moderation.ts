@@ -1,7 +1,34 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import { PermissionFlagsBits } from "discord-api-types/v10";
 import type { DiscordActionConfig } from "../../config/config.js";
-import { banMemberDiscord, kickMemberDiscord, timeoutMemberDiscord } from "../../discord/send.js";
+import {
+  banMemberDiscord,
+  hasGuildPermissionDiscord,
+  kickMemberDiscord,
+  timeoutMemberDiscord,
+} from "../../discord/send.js";
 import { type ActionGate, jsonResult, readStringParam } from "./common.js";
+
+async function verifySenderModerationPermission(params: {
+  guildId: string;
+  senderUserId?: string;
+  requiredPermissions: bigint[];
+  accountId?: string;
+}) {
+  // CLI/manual flows may not have sender context; enforce only when present.
+  if (!params.senderUserId) {
+    return;
+  }
+  const hasPermission = await hasGuildPermissionDiscord(
+    params.guildId,
+    params.senderUserId,
+    params.requiredPermissions,
+    params.accountId ? { accountId: params.accountId } : undefined,
+  );
+  if (!hasPermission) {
+    throw new Error("Sender does not have required permissions for this moderation action.");
+  }
+}
 
 export async function handleDiscordModerationAction(
   action: string,
@@ -9,6 +36,7 @@ export async function handleDiscordModerationAction(
   isActionEnabled: ActionGate<DiscordActionConfig>,
 ): Promise<AgentToolResult<unknown>> {
   const accountId = readStringParam(params, "accountId");
+  const senderUserId = readStringParam(params, "senderUserId");
   switch (action) {
     case "timeout": {
       if (!isActionEnabled("moderation", false)) {
@@ -26,6 +54,12 @@ export async function handleDiscordModerationAction(
           : undefined;
       const until = readStringParam(params, "until");
       const reason = readStringParam(params, "reason");
+      await verifySenderModerationPermission({
+        guildId,
+        senderUserId,
+        requiredPermissions: [PermissionFlagsBits.ModerateMembers],
+        accountId,
+      });
       const member = accountId
         ? await timeoutMemberDiscord(
             {
@@ -57,6 +91,12 @@ export async function handleDiscordModerationAction(
         required: true,
       });
       const reason = readStringParam(params, "reason");
+      await verifySenderModerationPermission({
+        guildId,
+        senderUserId,
+        requiredPermissions: [PermissionFlagsBits.KickMembers],
+        accountId,
+      });
       if (accountId) {
         await kickMemberDiscord({ guildId, userId, reason }, { accountId });
       } else {
@@ -79,6 +119,12 @@ export async function handleDiscordModerationAction(
         typeof params.deleteMessageDays === "number" && Number.isFinite(params.deleteMessageDays)
           ? params.deleteMessageDays
           : undefined;
+      await verifySenderModerationPermission({
+        guildId,
+        senderUserId,
+        requiredPermissions: [PermissionFlagsBits.BanMembers],
+        accountId,
+      });
       if (accountId) {
         await banMemberDiscord(
           {

@@ -1,3 +1,4 @@
+import type { GatewayServiceRenderArgs } from "./service-types.js";
 import { splitArgsPreservingQuotes } from "./arg-split.js";
 
 function systemdEscapeArg(value: string): string {
@@ -27,12 +28,7 @@ export function buildSystemdUnit({
   programArguments,
   workingDirectory,
   environment,
-}: {
-  description?: string;
-  programArguments: string[];
-  workingDirectory?: string;
-  environment?: Record<string, string | undefined>;
-}): string {
+}: GatewayServiceRenderArgs): string {
   const execStart = programArguments.map(systemdEscapeArg).join(" ");
   const descriptionLine = `Description=${description?.trim() || "OpenClaw Gateway"}`;
   const workingDirLine = workingDirectory

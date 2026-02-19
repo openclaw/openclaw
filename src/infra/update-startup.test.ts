@@ -49,6 +49,8 @@ describe("update-startup", () => {
   let checkUpdateStatus: (typeof import("./update-check.js"))["checkUpdateStatus"];
   let resolveNpmChannelTag: (typeof import("./update-check.js"))["resolveNpmChannelTag"];
   let runGatewayUpdateCheck: (typeof import("./update-startup.js"))["runGatewayUpdateCheck"];
+  let getUpdateAvailable: (typeof import("./update-startup.js"))["getUpdateAvailable"];
+  let resetUpdateAvailableStateForTest: (typeof import("./update-startup.js"))["resetUpdateAvailableStateForTest"];
   let loaded = false;
 
   beforeAll(async () => {
@@ -77,9 +79,14 @@ describe("update-startup", () => {
     if (!loaded) {
       ({ resolveOpenClawPackageRoot } = await import("./openclaw-root.js"));
       ({ checkUpdateStatus, resolveNpmChannelTag } = await import("./update-check.js"));
-      ({ runGatewayUpdateCheck } = await import("./update-startup.js"));
+      ({ runGatewayUpdateCheck, getUpdateAvailable, resetUpdateAvailableStateForTest } =
+        await import("./update-startup.js"));
       loaded = true;
     }
+    vi.mocked(resolveOpenClawPackageRoot).mockReset();
+    vi.mocked(checkUpdateStatus).mockReset();
+    vi.mocked(resolveNpmChannelTag).mockReset();
+    resetUpdateAvailableStateForTest();
   });
 
   afterEach(async () => {
@@ -99,6 +106,7 @@ describe("update-startup", () => {
     } else {
       delete process.env.VITEST;
     }
+    resetUpdateAvailableStateForTest();
   });
 
   afterAll(async () => {
@@ -109,7 +117,7 @@ describe("update-startup", () => {
     suiteCase = 0;
   });
 
-  it("logs update hint for npm installs when newer tag exists", async () => {
+  async function runUpdateCheckAndReadState(channel: "stable" | "beta") {
     vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue("/opt/openclaw");
     vi.mocked(checkUpdateStatus).mockResolvedValue({
       root: "/opt/openclaw",
@@ -123,50 +131,120 @@ describe("update-startup", () => {
 
     const log = { info: vi.fn() };
     await runGatewayUpdateCheck({
-      cfg: { update: { channel: "stable" } },
+      cfg: { update: { channel } },
       log,
       isNixMode: false,
       allowInTests: true,
     });
 
+    const statePath = path.join(tempDir, "update-check.json");
+    const parsed = JSON.parse(await fs.readFile(statePath, "utf-8")) as {
+      lastNotifiedVersion?: string;
+      lastNotifiedTag?: string;
+      lastAvailableVersion?: string;
+      lastAvailableTag?: string;
+    };
+    return { log, parsed };
+  }
+
+  it("logs update hint for npm installs when newer tag exists", async () => {
+    const { log, parsed } = await runUpdateCheckAndReadState("stable");
+
     expect(log.info).toHaveBeenCalledWith(
       expect.stringContaining("update available (latest): v2.0.0"),
     );
-
-    const statePath = path.join(tempDir, "update-check.json");
-    const raw = await fs.readFile(statePath, "utf-8");
-    const parsed = JSON.parse(raw) as { lastNotifiedVersion?: string };
     expect(parsed.lastNotifiedVersion).toBe("2.0.0");
+    expect(parsed.lastAvailableVersion).toBe("2.0.0");
   });
 
   it("uses latest when beta tag is older than release", async () => {
+    const { log, parsed } = await runUpdateCheckAndReadState("beta");
+
+    expect(log.info).toHaveBeenCalledWith(
+      expect.stringContaining("update available (latest): v2.0.0"),
+    );
+    expect(parsed.lastNotifiedTag).toBe("latest");
+  });
+
+  it("hydrates cached update from persisted state during throttle window", async () => {
+    const statePath = path.join(tempDir, "update-check.json");
+    await fs.writeFile(
+      statePath,
+      JSON.stringify(
+        {
+          lastCheckedAt: new Date(Date.now()).toISOString(),
+          lastAvailableVersion: "2.0.0",
+          lastAvailableTag: "latest",
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const onUpdateAvailableChange = vi.fn();
+    await runGatewayUpdateCheck({
+      cfg: { update: { channel: "stable" } },
+      log: { info: vi.fn() },
+      isNixMode: false,
+      allowInTests: true,
+      onUpdateAvailableChange,
+    });
+
+    expect(vi.mocked(checkUpdateStatus)).not.toHaveBeenCalled();
+    expect(onUpdateAvailableChange).toHaveBeenCalledWith({
+      currentVersion: "1.0.0",
+      latestVersion: "2.0.0",
+      channel: "latest",
+    });
+    expect(getUpdateAvailable()).toEqual({
+      currentVersion: "1.0.0",
+      latestVersion: "2.0.0",
+      channel: "latest",
+    });
+  });
+
+  it("emits update change callback when update state clears", async () => {
     vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue("/opt/openclaw");
     vi.mocked(checkUpdateStatus).mockResolvedValue({
       root: "/opt/openclaw",
       installKind: "package",
       packageManager: "npm",
     } satisfies UpdateCheckResult);
-    vi.mocked(resolveNpmChannelTag).mockResolvedValue({
-      tag: "latest",
-      version: "2.0.0",
-    });
+    vi.mocked(resolveNpmChannelTag)
+      .mockResolvedValueOnce({
+        tag: "latest",
+        version: "2.0.0",
+      })
+      .mockResolvedValueOnce({
+        tag: "latest",
+        version: "1.0.0",
+      });
 
-    const log = { info: vi.fn() };
+    const onUpdateAvailableChange = vi.fn();
     await runGatewayUpdateCheck({
-      cfg: { update: { channel: "beta" } },
-      log,
+      cfg: { update: { channel: "stable" } },
+      log: { info: vi.fn() },
       isNixMode: false,
       allowInTests: true,
+      onUpdateAvailableChange,
+    });
+    vi.setSystemTime(new Date("2026-01-18T11:00:00Z"));
+    await runGatewayUpdateCheck({
+      cfg: { update: { channel: "stable" } },
+      log: { info: vi.fn() },
+      isNixMode: false,
+      allowInTests: true,
+      onUpdateAvailableChange,
     });
 
-    expect(log.info).toHaveBeenCalledWith(
-      expect.stringContaining("update available (latest): v2.0.0"),
-    );
-
-    const statePath = path.join(tempDir, "update-check.json");
-    const raw = await fs.readFile(statePath, "utf-8");
-    const parsed = JSON.parse(raw) as { lastNotifiedTag?: string };
-    expect(parsed.lastNotifiedTag).toBe("latest");
+    expect(onUpdateAvailableChange).toHaveBeenNthCalledWith(1, {
+      currentVersion: "1.0.0",
+      latestVersion: "2.0.0",
+      channel: "latest",
+    });
+    expect(onUpdateAvailableChange).toHaveBeenNthCalledWith(2, null);
+    expect(getUpdateAvailable()).toBeNull();
   });
 
   it("skips update check when disabled in config", async () => {
