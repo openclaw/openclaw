@@ -26,6 +26,7 @@ import { resolveSessionAgentIds } from "../agent-scope.js";
 import type { ExecElevatedDefaults } from "../bash-tools.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../bootstrap-files.js";
 import { listChannelSupportedActions, resolveChannelMessageToolHints } from "../channel-tools.js";
+import { clearAllDecayStores } from "../context-decay/clear-stores.js";
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { resolveOpenClawDocsPath } from "../docs-path.js";
@@ -700,6 +701,13 @@ export async function compactEmbeddedPiSessionDirect(
               `delta.estTokens=${typeof preMetrics.estTokens === "number" && typeof postMetrics.estTokens === "number" ? postMetrics.estTokens - preMetrics.estTokens : "unknown"}`,
           );
         }
+        // Clear stale decay stores — indices are positional and become invalid after compaction.
+        try {
+          await clearAllDecayStores(params.sessionFile);
+        } catch (clearErr) {
+          log.warn(`failed to clear decay stores after compaction: ${String(clearErr)}`);
+        }
+
         if (lifecycleEmitter) {
           try {
             const beforeTokens = result.tokensBefore;

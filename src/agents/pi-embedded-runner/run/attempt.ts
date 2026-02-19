@@ -813,6 +813,7 @@ export async function runEmbeddedAttempt(
         config: params.config,
         sessionKey: params.sessionKey ?? params.sessionId,
         lifecycleEmitter: extensionResult.lifecycleEmitter,
+        sessionFile: params.sessionFile,
       });
 
       const {

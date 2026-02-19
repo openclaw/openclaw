@@ -1,6 +1,7 @@
 import type { AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { clearAllDecayStores } from "./context-decay/clear-stores.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 
 // Rough heuristic: average English text runs ~4 characters per token.
@@ -131,6 +132,13 @@ export function handleAutoCompactionEnd(
         // Instrumentation must never block the agent pipeline
       }
       ctx.state.compactionPreEstTokens = undefined;
+    }
+
+    // Clear stale decay stores — indices are positional and become invalid after compaction.
+    if (ctx.params.sessionFile) {
+      void clearAllDecayStores(ctx.params.sessionFile).catch((err) => {
+        ctx.log.warn(`failed to clear decay stores after auto-compaction: ${String(err)}`);
+      });
     }
   }
 }

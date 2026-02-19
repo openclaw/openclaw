@@ -39,6 +39,7 @@ export type SubscribeEmbeddedPiSessionParams = {
   config?: OpenClawConfig;
   sessionKey?: string;
   lifecycleEmitter?: ContextLifecycleEmitter;
+  sessionFile?: string;
 };
 
 export type { BlockReplyChunking } from "./pi-embedded-block-chunker.js";

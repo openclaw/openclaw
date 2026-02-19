@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
-import { clearSwappedFileStore } from "../context-decay/file-store.js";
-import { clearGroupSummaryStore, clearSummaryStore } from "../context-decay/summary-store.js";
+import { clearAllDecayStores } from "../context-decay/clear-stores.js";
 
 type SessionHeaderEntry = { type: "session"; id?: string; cwd?: string };
 type SessionMessageEntry = { type: "message"; message?: { role?: string } };
@@ -46,10 +45,8 @@ export async function prepareSessionManagerForRun(params: {
   if (params.hadSessionFile && header && !hasAssistant) {
     // Reset file so the first assistant flush includes header+user+assistant in order.
     await fs.writeFile(params.sessionFile, "", "utf-8");
-    // Clear stale summary stores — indices are positional and become invalid on reset.
-    await clearSummaryStore(params.sessionFile);
-    await clearGroupSummaryStore(params.sessionFile);
-    await clearSwappedFileStore(params.sessionFile);
+    // Clear stale decay stores — indices are positional and become invalid on reset.
+    await clearAllDecayStores(params.sessionFile);
     sm.fileEntries = [header];
     sm.byId?.clear?.();
     sm.labelsById?.clear?.();
