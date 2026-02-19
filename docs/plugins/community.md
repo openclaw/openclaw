@@ -42,3 +42,10 @@ Use this format when adding entries:
   npm: `@scope/package`
   repo: `https://github.com/org/repo`
   install: `openclaw plugins install @scope/package`
+
+## Plugins
+
+- **linear** — Linear integration with webhook routing, issue management, and project tools via the Linear GraphQL API
+  npm: `openclaw-linear`
+  repo: `https://github.com/stepandel/openclaw-linear`
+  install: `openclaw plugins install openclaw-linear`
