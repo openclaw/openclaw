@@ -341,10 +341,15 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
       probe: snapshot.probe,
       lastProbeAt: snapshot.lastProbeAt ?? null,
     }),
-    probeAccount: async ({ account, timeoutMs }) =>
-      getDiscordRuntime().channel.discord.probeDiscord(account.token, timeoutMs, {
+    probeAccount: async ({ account, timeoutMs }) => {
+      const token = account.token?.trim();
+      if (!token) {
+        return { ok: false, error: "No token configured" };
+      }
+      return getDiscordRuntime().channel.discord.probeDiscord(token, timeoutMs, {
         includeApplication: true,
-      }),
+      });
+    },
     auditAccount: async ({ account, timeoutMs, cfg }) => {
       const { channelIds, unresolvedChannels } = collectDiscordAuditChannelIds({
         cfg,
