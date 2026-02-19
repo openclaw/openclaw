@@ -25,6 +25,8 @@ export const BLOCKED_HOST_PATHS = [
   "/var/run/docker.sock",
   "/private/var/run/docker.sock",
   "/run/docker.sock",
+  // Windows named pipe for Docker Engine
+  "//./pipe/docker_engine",
 ];
 
 const BLOCKED_NETWORK_MODES = new Set(["host"]);
