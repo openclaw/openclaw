@@ -476,7 +476,7 @@ export function collectHooksHardeningFindings(
       severity: "warn",
       title: "hooks.defaultSessionKey is not configured",
       detail:
-        "Hook agent runs without explicit sessionKey use generated per-request keys. Set hooks.defaultSessionKey to keep hook ingress scoped to a known session.",
+        "Hook agents run without an explicit sessionKey; they use generated per-request keys. Set hooks.defaultSessionKey to keep hook ingress scoped to a known session.",
       remediation: 'Set hooks.defaultSessionKey (for example, "hook:ingress").',
     });
   }
