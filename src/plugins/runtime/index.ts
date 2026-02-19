@@ -1,4 +1,5 @@
 import { createRequire } from "node:module";
+import type { PluginRuntime } from "./types.js";
 import { resolveEffectiveMessagesConfig, resolveHumanDelayConfig } from "../../agents/identity.js";
 import { createMemoryGetTool, createMemorySearchTool } from "../../agents/tools/memory-tool.js";
 import { handleSlackAction } from "../../agents/tools/slack-actions.js";
@@ -138,7 +139,6 @@ import {
 } from "../../web/auth-store.js";
 import { loadWebMedia } from "../../web/media.js";
 import { formatNativeDependencyHint } from "./native-deps.js";
-import type { PluginRuntime } from "./types.js";
 
 let cachedVersion: string | null = null;
 
@@ -236,13 +236,30 @@ function loadWhatsAppActions() {
   return whatsappActionsPromise;
 }
 
-export function createPluginRuntime(): PluginRuntime {
+function createUnavailableSubagentRuntime(): PluginRuntime["subagent"] {
+  const unavailable = () => {
+    throw new Error("Plugin runtime subagent methods are only available during a gateway request.");
+  };
+  return {
+    run: unavailable,
+    waitForRun: unavailable,
+    getSession: unavailable,
+    deleteSession: unavailable,
+  };
+}
+
+export type CreatePluginRuntimeOptions = {
+  subagent?: PluginRuntime["subagent"];
+};
+
+export function createPluginRuntime(options: CreatePluginRuntimeOptions = {}): PluginRuntime {
   return {
     version: resolveVersion(),
     config: {
       loadConfig,
       writeConfigFile,
     },
+    subagent: options.subagent ?? createUnavailableSubagentRuntime(),
     system: {
       enqueueSystemEvent,
       runCommandWithTimeout,

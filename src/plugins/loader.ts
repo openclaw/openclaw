@@ -1,9 +1,15 @@
+import { createJiti } from "jiti";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createJiti } from "jiti";
 import type { OpenClawConfig } from "../config/config.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
+import type {
+  OpenClawPluginDefinition,
+  OpenClawPluginModule,
+  PluginDiagnostic,
+  PluginLogger,
+} from "./types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveUserPath } from "../utils.js";
 import { clearPluginCommands } from "./commands.js";
@@ -19,14 +25,8 @@ import { initializeGlobalHookRunner } from "./hook-runner-global.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
 import { setActivePluginRegistry } from "./runtime.js";
-import { createPluginRuntime } from "./runtime/index.js";
+import { createPluginRuntime, type CreatePluginRuntimeOptions } from "./runtime/index.js";
 import { validateJsonSchemaValue } from "./schema-validator.js";
-import type {
-  OpenClawPluginDefinition,
-  OpenClawPluginModule,
-  PluginDiagnostic,
-  PluginLogger,
-} from "./types.js";
 
 export type PluginLoadResult = PluginRegistry;
 
@@ -35,6 +35,7 @@ export type PluginLoadOptions = {
   workspaceDir?: string;
   logger?: PluginLogger;
   coreGatewayHandlers?: Record<string, GatewayRequestHandler>;
+  runtimeOptions?: CreatePluginRuntimeOptions;
   cache?: boolean;
   mode?: "full" | "validate";
 };
@@ -200,7 +201,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   // Clear previously registered plugin commands before reloading
   clearPluginCommands();
 
-  const runtime = createPluginRuntime();
+  const runtime = createPluginRuntime(options.runtimeOptions);
   const { registry, createApi } = createPluginRegistry({
     logger,
     runtime,

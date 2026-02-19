@@ -1,3 +1,5 @@
+import type { GatewayRequestHandlers, GatewayRequestOptions } from "./server-methods/types.js";
+import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { ErrorCodes, errorShape } from "./protocol/index.js";
 import { agentHandlers } from "./server-methods/agent.js";
 import { agentsHandlers } from "./server-methods/agents.js";
@@ -20,7 +22,6 @@ import { skillsHandlers } from "./server-methods/skills.js";
 import { systemHandlers } from "./server-methods/system.js";
 import { talkHandlers } from "./server-methods/talk.js";
 import { ttsHandlers } from "./server-methods/tts.js";
-import type { GatewayRequestHandlers, GatewayRequestOptions } from "./server-methods/types.js";
 import { updateHandlers } from "./server-methods/update.js";
 import { usageHandlers } from "./server-methods/usage.js";
 import { voicewakeHandlers } from "./server-methods/voicewake.js";
@@ -209,7 +210,8 @@ export async function handleGatewayRequest(
     respond(false, undefined, authError);
     return;
   }
-  const handler = opts.extraHandlers?.[req.method] ?? coreGatewayHandlers[req.method];
+  const extraHandler = opts.extraHandlers?.[req.method];
+  const handler = extraHandler ?? coreGatewayHandlers[req.method];
   if (!handler) {
     respond(
       false,
@@ -218,12 +220,20 @@ export async function handleGatewayRequest(
     );
     return;
   }
-  await handler({
-    req,
-    params: (req.params ?? {}) as Record<string, unknown>,
-    client,
-    isWebchatConnect,
-    respond,
-    context,
-  });
+  const invokeHandler = () =>
+    handler({
+      req,
+      params: (req.params ?? {}) as Record<string, unknown>,
+      client,
+      isWebchatConnect,
+      respond,
+      context,
+    });
+  // Plugin-provided handlers run inside a request scope so that
+  // runtime.subagent methods can dispatch back into the gateway.
+  if (extraHandler) {
+    await withPluginRuntimeGatewayRequestScope({ context, isWebchatConnect }, invokeHandler);
+  } else {
+    await invokeHandler();
+  }
 }
