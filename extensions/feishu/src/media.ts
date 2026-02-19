@@ -1,9 +1,7 @@
 import fs from "fs";
-import crypto from "node:crypto";
-import os from "os";
 import path from "path";
 import { Readable } from "stream";
-import type { ClawdbotConfig } from "openclaw/plugin-sdk";
+import { buildRandomTempFilePath, type ClawdbotConfig } from "openclaw/plugin-sdk";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { getFeishuRuntime } from "./runtime.js";
@@ -100,7 +98,7 @@ export async function downloadImageFeishu(params: {
     path: { image_key: imageKey },
   });
 
-  const tmpPath = path.join(os.tmpdir(), `feishu_img_${Date.now()}_${crypto.randomUUID()}`);
+  const tmpPath = buildRandomTempFilePath({ prefix: "feishu_img" });
   const buffer = await readFeishuResponseBuffer({
     response,
     tmpPath,
@@ -133,7 +131,7 @@ export async function downloadMessageResourceFeishu(params: {
     params: { type },
   });
 
-  const tmpPath = path.join(os.tmpdir(), `feishu_${Date.now()}_${crypto.randomUUID()}`);
+  const tmpPath = buildRandomTempFilePath({ prefix: "feishu" });
   const buffer = await readFeishuResponseBuffer({
     response,
     tmpPath,
