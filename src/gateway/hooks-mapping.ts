@@ -150,6 +150,11 @@ export async function applyHookMappings(
   if (mappings.length === 0) {
     return null;
   }
+
+  if (isEmptyGmailEvent(ctx)) {
+    return { ok: true, action: null, skipped: true };
+  }
+  
   for (const mapping of mappings) {
     if (!mappingMatches(mapping, ctx)) {
       continue;
@@ -179,6 +184,14 @@ export async function applyHookMappings(
     return merged;
   }
   return null;
+}
+
+function isEmptyGmailEvent(ctx: HookMappingContext): boolean {
+  if (ctx.path !== "gmail") {
+    return false;
+  }
+  const messages = (ctx.payload as Record<string, unknown>).messages;
+  return !Array.isArray(messages) || messages.length === 0;
 }
 
 function normalizeHookMapping(
