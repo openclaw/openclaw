@@ -90,6 +90,7 @@ Common signatures:
 - `heartbeat skipped` with `reason=quiet-hours` → outside `activeHours`.
 - `requests-in-flight` → main lane busy; heartbeat deferred.
 - `empty-heartbeat-file` → `HEARTBEAT.md` exists but has no actionable content.
+- `no-heartbeat-file` → interval heartbeat skipped because `HEARTBEAT.md` is missing and no tagged cron event is queued.
 - `alerts-disabled` → visibility settings suppress outbound heartbeat messages.
 
 ## Timezone and activeHours gotchas

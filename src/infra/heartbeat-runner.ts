@@ -512,6 +512,16 @@ export async function runHeartbeatOnce(opts: {
   const isExecEventReason = opts.reason === "exec-event";
   const isCronEventReason = Boolean(opts.reason?.startsWith("cron:"));
   const isWakeReason = opts.reason === "wake" || Boolean(opts.reason?.startsWith("hook:"));
+  const { entry, sessionKey, storePath } = resolveHeartbeatSession(
+    cfg,
+    agentId,
+    heartbeat,
+    opts.sessionKey,
+  );
+  const pendingEventEntries = peekSystemEventEntries(sessionKey);
+  const hasTaggedCronEvents = pendingEventEntries.some((event) =>
+    event.contextKey?.startsWith("cron:"),
+  );
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
   const heartbeatFilePath = path.join(workspaceDir, DEFAULT_HEARTBEAT_FILENAME);
   try {
@@ -530,7 +540,7 @@ export async function runHeartbeatOnce(opts: {
       return { status: "skipped", reason: "empty-heartbeat-file" };
     }
   } catch (err: unknown) {
-    // If HEARTBEAT.md doesn't exist and there are no pending events to process,
+    // If HEARTBEAT.md doesn't exist and there are no tagged cron events waiting,
     // skip the heartbeat entirely to avoid unnecessary API calls/costs.
     // The default prompt says "Read HEARTBEAT.md if it exists" — when it doesn't,
     // there's nothing actionable for the LLM to do.
@@ -538,7 +548,8 @@ export async function runHeartbeatOnce(opts: {
       (err as NodeJS.ErrnoException)?.code === "ENOENT" &&
       !isExecEventReason &&
       !isCronEventReason &&
-      !isWakeReason
+      !isWakeReason &&
+      !hasTaggedCronEvents
     ) {
       emitHeartbeatEvent({
         status: "skipped",
@@ -549,13 +560,6 @@ export async function runHeartbeatOnce(opts: {
     }
     // For other read errors, proceed with heartbeat as before.
   }
-
-  const { entry, sessionKey, storePath } = resolveHeartbeatSession(
-    cfg,
-    agentId,
-    heartbeat,
-    opts.sessionKey,
-  );
   const previousUpdatedAt = entry?.updatedAt;
   const delivery = resolveHeartbeatDeliveryTarget({ cfg, entry, heartbeat });
   const heartbeatAccountId = heartbeat?.accountId?.trim();
@@ -589,10 +593,6 @@ export async function runHeartbeatOnce(opts: {
   // If so, use a specialized prompt that instructs the model to relay the result
   // instead of the standard heartbeat prompt with "reply HEARTBEAT_OK".
   const isExecEvent = opts.reason === "exec-event";
-  const pendingEventEntries = peekSystemEventEntries(sessionKey);
-  const hasTaggedCronEvents = pendingEventEntries.some((event) =>
-    event.contextKey?.startsWith("cron:"),
-  );
   const shouldInspectPendingEvents = isExecEvent || isCronEventReason || hasTaggedCronEvents;
   const pendingEvents = shouldInspectPendingEvents
     ? pendingEventEntries.map((event) => event.text)
