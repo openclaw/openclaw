@@ -23,7 +23,7 @@ misconfiguration safety), under explicit assumptions.
 
 ## Where the models live
 
-Models are maintained in a separate repo: [vignesh07/openclaw-formal-models](https://github.com/vignesh07/openclaw-formal-models).
+Models are maintained in a separate repo (not yet publicly available — see [#20871](https://github.com/openclaw/openclaw/issues/20871)).
 
 ## Important caveats
 
@@ -41,7 +41,8 @@ Today, results are reproduced by cloning the models repo locally and running TLC
 Getting started:
 
 ```bash
-git clone https://github.com/vignesh07/openclaw-formal-models
+# Once the models repo is publicly available:
+# git clone https://github.com/openclaw/openclaw-formal-models
 cd openclaw-formal-models
 
 # Java 11+ required (TLC runs on the JVM).
