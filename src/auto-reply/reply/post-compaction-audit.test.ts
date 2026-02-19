@@ -6,50 +6,62 @@ import {
 } from "./post-compaction-audit.js";
 
 describe("extractReadPaths", () => {
-  it("extracts file paths from Read tool calls", () => {
-    const messages = [
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "tool_use",
-            name: "read",
-            input: { file_path: "WORKFLOW_AUTO.md" },
-          },
-        ],
-      },
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "tool_use",
-            name: "read",
-            input: { file_path: "memory/2026-02-16.md" },
-          },
-        ],
-      },
-    ];
-
+  it.each([
+    {
+      label: "legacy tool_use with input.file_path",
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "tool_use", name: "read", input: { file_path: "WORKFLOW_AUTO.md" } }],
+        },
+      ],
+      expected: ["WORKFLOW_AUTO.md"],
+    },
+    {
+      label: "legacy tool_use with input.path",
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "tool_use", name: "read", input: { path: "AGENTS.md" } }],
+        },
+      ],
+      expected: ["AGENTS.md"],
+    },
+    {
+      label: "toolCall with arguments.path",
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", name: "read", arguments: { path: "WORKFLOW_AUTO.md" } }],
+        },
+      ],
+      expected: ["WORKFLOW_AUTO.md"],
+    },
+    {
+      label: "toolCall with arguments.file_path",
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            { type: "toolCall", name: "read", arguments: { file_path: "memory/2026-02-16.md" } },
+          ],
+        },
+      ],
+      expected: ["memory/2026-02-16.md"],
+    },
+    {
+      label: "toolCall fallback with input.path",
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", name: "read", input: { path: "WORKFLOW_AUTO.md" } }],
+        },
+      ],
+      expected: ["WORKFLOW_AUTO.md"],
+    },
+  ])("extracts read paths from $label", ({ messages, expected }) => {
     const paths = extractReadPaths(messages);
-    expect(paths).toEqual(["WORKFLOW_AUTO.md", "memory/2026-02-16.md"]);
-  });
-
-  it("handles path parameter (alternative to file_path)", () => {
-    const messages = [
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "tool_use",
-            name: "read",
-            input: { path: "AGENTS.md" },
-          },
-        ],
-      },
-    ];
-
-    const paths = extractReadPaths(messages);
-    expect(paths).toEqual(["AGENTS.md"]);
+    expect(paths).toEqual(expected);
   });
 
   it("ignores non-assistant messages", () => {
@@ -86,6 +98,45 @@ describe("extractReadPaths", () => {
 
     const paths = extractReadPaths(messages);
     expect(paths).toEqual([]);
+  });
+
+  it("handles mixed content and deduplicates paths in first-seen order", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "thinking..." },
+          { type: "toolCall", name: "read", arguments: { path: "WORKFLOW_AUTO.md" } },
+          { type: "toolCall", name: "read", arguments: { path: "WORKFLOW_AUTO.md" } },
+          { type: "tool_use", name: "read", input: { file_path: "memory/2026-02-16.md" } },
+        ],
+      },
+    ];
+
+    const paths = extractReadPaths(messages);
+    expect(paths).toEqual(["WORKFLOW_AUTO.md", "memory/2026-02-16.md"]);
+  });
+
+  it("ignores malformed blocks and invalid path values", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          null,
+          42,
+          "bad",
+          {},
+          { type: "toolCall", name: "read", arguments: null },
+          { type: "toolCall", name: "read", arguments: { path: "   " } },
+          { type: "toolCall", name: "read", arguments: { path: 123 } },
+          { type: "toolCall", name: "exec", arguments: { path: "ignored.md" } },
+          { type: "tool_use", name: "read", input: { file_path: "AGENTS.md" } },
+        ],
+      },
+    ];
+
+    const paths = extractReadPaths(messages);
+    expect(paths).toEqual(["AGENTS.md"]);
   });
 
   it("handles empty messages array", () => {

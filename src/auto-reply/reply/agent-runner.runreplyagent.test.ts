@@ -28,6 +28,7 @@ type EmbeddedRunParams = {
 const state = vi.hoisted(() => ({
   runEmbeddedPiAgentMock: vi.fn(),
   runCliAgentMock: vi.fn(),
+  enqueueSystemEventMock: vi.fn(),
 }));
 
 let runReplyAgentPromise:
@@ -71,6 +72,10 @@ vi.mock("./queue.js", () => ({
   scheduleFollowupDrain: vi.fn(),
 }));
 
+vi.mock("../../infra/system-events.js", () => ({
+  enqueueSystemEvent: (...args: unknown[]) => state.enqueueSystemEventMock(...args),
+}));
+
 beforeAll(async () => {
   // Avoid attributing the initial agent-runner import cost to the first test case.
   await getRunReplyAgent();
@@ -79,6 +84,7 @@ beforeAll(async () => {
 beforeEach(() => {
   state.runEmbeddedPiAgentMock.mockReset();
   state.runCliAgentMock.mockReset();
+  state.enqueueSystemEventMock.mockReset();
   vi.stubEnv("OPENCLAW_TEST_FAST", "1");
 });
 
@@ -535,6 +541,110 @@ describe("runReplyAgent typing (heartbeat)", () => {
       expect(payloads[0]?.text).toContain("Auto-compaction complete");
       expect(payloads[0]?.text).toContain("count 1");
       expect(sessionStore.main.compactionCount).toBe(1);
+    });
+  });
+
+  it("does not enqueue audit warning when toolCall read paths satisfy requirements", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const sessionId = "session-toolcall-pass";
+      const storePath = path.join(stateDir, "sessions", "sessions.json");
+      const transcriptPath = sessions.resolveSessionTranscriptPath(sessionId);
+      const sessionEntry = { sessionId, updatedAt: Date.now(), sessionFile: transcriptPath };
+      const sessionStore = { main: sessionEntry };
+
+      await fs.mkdir(path.dirname(storePath), { recursive: true });
+      await fs.writeFile(storePath, JSON.stringify(sessionStore), "utf-8");
+      await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
+      await fs.writeFile(
+        transcriptPath,
+        `${JSON.stringify({
+          type: "message",
+          message: {
+            role: "assistant",
+            content: [
+              { type: "toolCall", name: "read", arguments: { path: "WORKFLOW_AUTO.md" } },
+              {
+                type: "toolCall",
+                name: "read",
+                arguments: { file_path: "memory/2026-02-16.md" },
+              },
+            ],
+          },
+        })}\n`,
+        "utf-8",
+      );
+
+      state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+        params.onAgentEvent?.({
+          stream: "compaction",
+          data: { phase: "end", willRetry: false },
+        });
+        return { payloads: [{ text: "final" }], meta: {} };
+      });
+
+      const { run } = createMinimalRun({
+        sessionEntry,
+        sessionStore,
+        sessionKey: "main",
+        storePath,
+      });
+      await run();
+
+      const auditWarnings = state.enqueueSystemEventMock.mock.calls.filter(
+        (call) => typeof call[0] === "string" && call[0].includes("Post-Compaction Audit"),
+      );
+      expect(auditWarnings).toHaveLength(0);
+    });
+  });
+
+  it("enqueues audit warning when required reads are missing after compaction", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const sessionId = "session-toolcall-fail";
+      const storePath = path.join(stateDir, "sessions", "sessions.json");
+      const transcriptPath = sessions.resolveSessionTranscriptPath(sessionId);
+      const sessionEntry = { sessionId, updatedAt: Date.now(), sessionFile: transcriptPath };
+      const sessionStore = { main: sessionEntry };
+
+      await fs.mkdir(path.dirname(storePath), { recursive: true });
+      await fs.writeFile(storePath, JSON.stringify(sessionStore), "utf-8");
+      await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
+      await fs.writeFile(
+        transcriptPath,
+        `${JSON.stringify({
+          type: "message",
+          message: {
+            role: "assistant",
+            content: [{ type: "toolCall", name: "read", arguments: { path: "WORKFLOW_AUTO.md" } }],
+          },
+        })}\n`,
+        "utf-8",
+      );
+
+      state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+        params.onAgentEvent?.({
+          stream: "compaction",
+          data: { phase: "end", willRetry: false },
+        });
+        return { payloads: [{ text: "final" }], meta: {} };
+      });
+
+      const { run } = createMinimalRun({
+        sessionEntry,
+        sessionStore,
+        sessionKey: "main",
+        storePath,
+      });
+      await run();
+
+      const auditWarnings = state.enqueueSystemEventMock.mock.calls.filter(
+        (call) => typeof call[0] === "string" && call[0].includes("Post-Compaction Audit"),
+      );
+      expect(auditWarnings).toHaveLength(1);
+      const warningText = auditWarnings[0]?.[0];
+      expect(typeof warningText).toBe("string");
+      if (typeof warningText === "string") {
+        expect(warningText).toContain("memory");
+      }
     });
   });
 

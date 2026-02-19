@@ -77,25 +77,59 @@ export function readSessionMessages(
   }
 }
 
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function extractPathArg(args: unknown): string | null {
+  if (!isObjectRecord(args)) {
+    return null;
+  }
+  const value = args.file_path ?? args.path;
+  if (typeof value !== "string") {
+    return null;
+  }
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function extractReadPathFromContentBlock(block: unknown): string | null {
+  if (!isObjectRecord(block) || block.name !== "read") {
+    return null;
+  }
+
+  // BUG-045: session transcripts can contain legacy tool_use and newer toolCall shapes.
+  if (block.type === "tool_use") {
+    return extractPathArg(block.input);
+  }
+  if (block.type === "toolCall") {
+    return extractPathArg(block.arguments) ?? extractPathArg(block.input);
+  }
+  return null;
+}
+
 /**
  * Extract file paths from Read tool calls in agent messages.
- * Looks for tool_use blocks with name="read" and extracts path/file_path args.
+ * Supports both legacy tool_use blocks and OpenAI/Codex toolCall blocks.
  */
 export function extractReadPaths(messages: Array<{ role?: string; content?: unknown }>): string[] {
   const paths: string[] = [];
+  const seen = new Set<string>();
+
   for (const msg of messages) {
     if (msg.role !== "assistant" || !Array.isArray(msg.content)) {
       continue;
     }
+
     for (const block of msg.content) {
-      if (block.type === "tool_use" && block.name === "read") {
-        const filePath = block.input?.file_path ?? block.input?.path;
-        if (typeof filePath === "string") {
-          paths.push(filePath);
-        }
+      const filePath = extractReadPathFromContentBlock(block);
+      if (filePath && !seen.has(filePath)) {
+        seen.add(filePath);
+        paths.push(filePath);
       }
     }
   }
+
   return paths;
 }
 
