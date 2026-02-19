@@ -424,9 +424,9 @@ export const FIELD_HELP: Record<string, string> = {
   "channels.telegram.streamMode":
     "Live stream preview mode for Telegram replies (off | partial | block). Legacy alias; prefer channels.telegram.streaming.",
   "channels.telegram.draftChunk.minChars":
-    'Minimum chars before emitting a Telegram stream preview update (default: 200).',
+    "Minimum chars before emitting a Telegram stream preview update (default: 200).",
   "channels.telegram.draftChunk.maxChars":
-    'Target max size for a Telegram stream preview chunk (default: 800; clamped to channels.telegram.textChunkLimit).',
+    "Target max size for a Telegram stream preview chunk (default: 800; clamped to channels.telegram.textChunkLimit).",
   "channels.telegram.draftChunk.breakPreference":
     "Preferred breakpoints for Telegram draft chunks (paragraph | newline | sentence). Default: paragraph.",
   "channels.discord.streamMode":
