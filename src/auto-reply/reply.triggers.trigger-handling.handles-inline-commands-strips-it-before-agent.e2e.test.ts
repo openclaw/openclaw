@@ -67,26 +67,6 @@ describe("trigger handling", () => {
     });
   });
 
-  it("treats 'slash command list now' as /commands and replies", async () => {
-    await withTempHome(async (home) => {
-      const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
-      const res = await getReplyFromConfig(
-        {
-          Body: "slash command list now",
-          From: "+1002",
-          To: "+2000",
-          CommandAuthorized: true,
-        },
-        {},
-        makeCfg(home),
-      );
-
-      const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toContain("Slash commands");
-      expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
-    });
-  });
-
   it("drops /status for unauthorized senders", async () => {
     await withTempHome(async (home) => {
       const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();

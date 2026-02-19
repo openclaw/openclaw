@@ -8,25 +8,12 @@ const INLINE_SIMPLE_COMMAND_RE = /(?:^|\s)\/(help|commands|whoami|id)(?=$|\s|:)/
 
 const INLINE_STATUS_RE = /(?:^|\s)\/status(?=$|\s|:)(?:\s*:\s*)?/gi;
 
-function resolveNaturalInlineSimpleCommand(body: string): string | null {
-  const normalized = body.trim().toLowerCase().replace(/[.!?]+$/g, "");
-  if (normalized === "slash command list now" || normalized === "slash commands list now") {
-    return "/commands";
-  }
-  return null;
-}
-
 export function extractInlineSimpleCommand(body?: string): {
   command: string;
   cleaned: string;
 } | null {
   if (!body) {
     return null;
-  }
-
-  const naturalCommand = resolveNaturalInlineSimpleCommand(body);
-  if (naturalCommand) {
-    return { command: naturalCommand, cleaned: "" };
   }
 
   const match = body.match(INLINE_SIMPLE_COMMAND_RE);
