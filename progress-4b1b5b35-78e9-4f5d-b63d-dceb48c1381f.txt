@@ -112,3 +112,66 @@ Verifier feedback indicated the validator tool (expanso_validate) was missing fr
   - `readStringParam(params, "yaml", { required: true })` handles missing/empty/non-string yaml uniformly, making input validation tests straightforward
   - Dynamic imports for node builtins in `defaultValidateYaml` prevent eager evaluation during test module import
 
+
+---
+
+## 2026-02-19 - US-006: Integrate Expanso System Prompt and Personas
+
+- Created `src/agents/expanso-expert.ts`:
+  - `EXPANSO_EXPERT_AGENT_ID = "expanso-expert"` — canonical agent ID constant
+  - `EXPANSO_EXPERT_LABEL = "Expanso Expert"` — human-readable label
+  - `EXPANSO_EXPERT_TAGLINE` — one-sentence description for listings/introductions
+  - `EXPANSO_EXPERT_SYSTEM_PROMPT` — multi-section Markdown system prompt that:
+    - Explains what Expanso is (stream-processing framework based on Benthos)
+    - Documents all three capabilities: build, validate, fix (AC1)
+    - Specifies when to auto-invoke the `expanso` tool: "create a pipeline", "build a pipeline", "generate a pipeline" → `action: "build"` (AC2)
+    - Documents the tool parameter table (`action`, `description`, `yaml`, `apiKey`)
+    - Includes concrete examples for each action
+    - Covers Expanso pipeline concepts (inputs, transforms, outputs, metadata)
+  - `ExpansoExpertPersona` TypeScript type: `{ agentId, label, tagline, systemPrompt, requiredTools }`
+  - `EXPANSO_EXPERT_PERSONA` — singleton persona object (all fields above bundled together)
+- Created `src/agents/expanso-expert.test.ts`:
+  - 29 tests, all passing (vitest)
+  - Constants: agentId is kebab-case, label contains "Expanso", tagline is non-empty
+  - System prompt: mentions build/validate/fix (AC1), instructs auto-use on "create a pipeline" (AC2), contains `action: "build"/"validate"/"fix"`, describes description/yaml params, covers pipeline concepts, reasonable length
+  - Persona object: all fields match exported constants, requiredTools includes "expanso", satisfies `ExpansoExpertPersona` type
+  - Consistency: every requiredTool mentioned in systemPrompt, agentId domain matches prompt content
+- **Learnings:**
+  - For agent persona/system-prompt definitions, a dedicated module (e.g. `expanso-expert.ts`) is cleaner than adding to `defaults.ts` — avoids bloating the defaults file and makes it easier to tree-shake.
+  - Export both individual constants (`EXPANSO_EXPERT_AGENT_ID`, `EXPANSO_EXPERT_SYSTEM_PROMPT`) and a bundled object (`EXPANSO_EXPERT_PERSONA`) — the constants are useful for standalone string comparisons, the object for registration/config.
+  - The system prompt should explicitly list trigger phrases (e.g. "create a pipeline", "build a pipeline") so the LLM knows exactly when to auto-invoke a tool. This maps directly to AC2.
+  - oxlint + pre-commit hook ran clean (0 warnings, 0 errors) on the new files.
+  - Pre-existing type errors in `src/config/atomic-config.ts`, `src/config/safe-mode.ts`, etc. are unrelated to the Expanso work and are known in this branch.
+
+---
+
+## 2026-02-19 - US-007: Implement Crusty Bot Command Handlers
+
+- Modified `src/auto-reply/commands-registry.data.ts`:
+  - Added `expanso` native command definition in `buildChatCommands()` (category: `tools`)
+  - `nativeName: "expanso"`, `textAlias: "/expanso"`, `scope: "both"` (native + text)
+  - `args`:
+    - `action` (string, choices: `build` / `validate` / `fix` with descriptive labels)
+    - `input` (string, `captureRemaining: true` — captures description or YAML)
+  - `argsMenu` with a custom title that lists all three actions and their purpose
+  - The command now appears in `listNativeCommandSpecs()` and `listNativeCommandSpecsForConfig()`, so it is automatically picked up by both Discord (`createDiscordNativeCommand`) and Telegram (`registerTelegramNativeCommands`) without any additional wiring in those files
+- Created `src/discord/monitor/native-command.expanso.test.ts` (10 tests):
+  - Verifies `expanso` appears in the native command spec list with the right description
+  - Verifies `findCommandByNativeName("expanso", "discord")` returns the command
+  - Verifies all three action choices (build / validate / fix) are present
+  - Verifies `input` arg has `captureRemaining: true`
+  - Verifies the action menu appears when no action is supplied, and is hidden when action is given
+  - Verifies `buildCommandTextFromArgs` produces correct prompts for build / validate / fix
+  - Verifies the argsMenu title mentions both build and validate
+- Created `src/telegram/bot-native-commands.expanso.test.ts` (4 tests):
+  - Verifies `setMyCommands` call includes an `expanso` entry with "Expanso" in the description
+  - Verifies `bot.command("expanso", ...)` is registered in the for-loop
+  - Verifies the command is absent when `nativeEnabled: false`
+  - Verifies the description references pipelines
+- All 14 new tests pass; all 402 tests in the targeted suite pass
+- Commit: `feat: US-007 - Implement Crusty Bot Command Handlers` (4835c7a5e)
+- **Learnings:**
+  - Adding a native command to `commands-registry.data.ts` is the *only* change needed for it to appear in both Discord slash commands and Telegram bot commands — the handlers in `native-command.ts` and `bot-native-commands.ts` iterate over `listNativeCommandSpecsForConfig()` automatically.
+  - To test Telegram `setMyCommands` synchronously, omit `deleteMyCommands` from the bot API mock. The implementation checks `typeof bot.api.deleteMyCommands === "function"` and takes an async chain only if it exists; without it, `setMyCommands` is called synchronously via `registerCommands()`.
+  - `argsMenu: { arg: "action", title: "..." }` (not `"auto"`) is needed when you want a custom menu title that explains what each choice does — `"auto"` mode does not display a title.
+  - Pre-existing type errors in `src/config/safe-mode.ts` etc. remain unrelated to Expanso work.
