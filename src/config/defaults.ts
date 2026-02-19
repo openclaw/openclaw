@@ -10,6 +10,7 @@ type WarnState = { warned: boolean };
 let defaultWarnState: WarnState = { warned: false };
 
 type AnthropicAuthDefaultsMode = "api_key" | "oauth";
+const OPENAI_CODEX_DEFAULT_MODEL = "openai-codex/gpt-5.3-codex";
 
 const DEFAULT_MODEL_ALIASES: Readonly<Record<string, string>> = {
   // Anthropic (pi-ai catalog uses "latest" ids without date suffix)
@@ -19,6 +20,7 @@ const DEFAULT_MODEL_ALIASES: Readonly<Record<string, string>> = {
   // OpenAI
   gpt: "openai/gpt-5.2",
   "gpt-mini": "openai/gpt-5-mini",
+  codex: OPENAI_CODEX_DEFAULT_MODEL,
 
   // Google Gemini (3.x are preview ids in the catalog)
   gemini: "google/gemini-3-pro-preview",
@@ -91,6 +93,16 @@ function resolveAnthropicDefaultAuthMode(cfg: OpenClawConfig): AnthropicAuthDefa
     return "api_key";
   }
   return null;
+}
+
+function hasOpenAICodexAuthProfile(cfg: OpenClawConfig): boolean {
+  const profiles = cfg.auth?.profiles ?? {};
+  return Object.values(profiles).some((profile) => {
+    if (!profile || profile.provider !== "openai-codex") {
+      return false;
+    }
+    return profile.mode === "oauth" || profile.mode === "token";
+  });
 }
 
 function resolvePrimaryModelRef(raw?: string): string | null {
@@ -258,8 +270,31 @@ export function applyModelDefaults(cfg: OpenClawConfig): OpenClawConfig {
     return mutated ? nextCfg : cfg;
   }
   const existingModels = existingAgent.models ?? {};
+  let agentMutated = false;
+
+  const hasExplicitPrimaryModel =
+    typeof existingAgent.model === "string"
+      ? Boolean(existingAgent.model.trim())
+      : Boolean(existingAgent.model?.primary?.trim());
+  if (!hasExplicitPrimaryModel && hasOpenAICodexAuthProfile(nextCfg)) {
+    nextCfg = {
+      ...nextCfg,
+      agents: {
+        ...nextCfg.agents,
+        defaults: {
+          ...existingAgent,
+          model:
+            existingAgent.model && typeof existingAgent.model === "object"
+              ? { ...existingAgent.model, primary: OPENAI_CODEX_DEFAULT_MODEL }
+              : { primary: OPENAI_CODEX_DEFAULT_MODEL },
+        },
+      },
+    };
+    agentMutated = true;
+  }
+
   if (Object.keys(existingModels).length === 0) {
-    return mutated ? nextCfg : cfg;
+    return mutated || agentMutated ? nextCfg : cfg;
   }
 
   const nextModels: Record<string, { alias?: string }> = {
@@ -276,9 +311,10 @@ export function applyModelDefaults(cfg: OpenClawConfig): OpenClawConfig {
     }
     nextModels[target] = { ...entry, alias };
     mutated = true;
+    agentMutated = true;
   }
 
-  if (!mutated) {
+  if (!mutated && !agentMutated) {
     return cfg;
   }
 
@@ -286,7 +322,7 @@ export function applyModelDefaults(cfg: OpenClawConfig): OpenClawConfig {
     ...nextCfg,
     agents: {
       ...nextCfg.agents,
-      defaults: { ...existingAgent, models: nextModels },
+      defaults: { ...(nextCfg.agents?.defaults ?? existingAgent), models: nextModels },
     },
   };
 }

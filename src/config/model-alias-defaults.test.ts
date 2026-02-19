@@ -121,4 +121,44 @@ describe("applyModelDefaults", () => {
     expect(model?.contextWindow).toBe(32768);
     expect(model?.maxTokens).toBe(32768);
   });
+
+  it("defaults primary model to Codex when openai-codex auth exists", () => {
+    const cfg = {
+      auth: {
+        profiles: {
+          "openai-codex:default": {
+            provider: "openai-codex",
+            mode: "oauth",
+          },
+        },
+      },
+      agents: {
+        defaults: {},
+      },
+    } satisfies OpenClawConfig;
+
+    const next = applyModelDefaults(cfg);
+    expect(next.agents?.defaults?.model).toEqual({ primary: "openai-codex/gpt-5.3-codex" });
+  });
+
+  it("does not override explicit primary model when codex auth exists", () => {
+    const cfg = {
+      auth: {
+        profiles: {
+          "openai-codex:default": {
+            provider: "openai-codex",
+            mode: "oauth",
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-6" },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const next = applyModelDefaults(cfg);
+    expect(next.agents?.defaults?.model).toEqual({ primary: "anthropic/claude-opus-4-6" });
+  });
 });
