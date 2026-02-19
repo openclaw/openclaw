@@ -1,0 +1,26 @@
+# Agent backup gitignore
+# Only commit safe, non-sensitive markdown/yaml files.
+
+# Exclude session transcripts (can be large and contain private conversation content)
+*.jsonl
+*.json
+
+# Exclude binary / lock files
+*.bin
+*.lock
+node_modules/
+
+# Exclude environment and credential files
+*.env
+.env*
+credentials/
+sessions/
+
+# --- Everything below is INCLUDED (safe to commit) ---
+# The following patterns are NOT listed here because git ignores don't have
+# an "include-only" mode at the file-extension level without negation.
+# Instead we explicitly allow *.md and *.yaml via negation:
+!*.md
+!*.yaml
+!*.yml
+!.gitkeep

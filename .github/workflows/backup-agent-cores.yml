@@ -1,0 +1,92 @@
+name: Backup Agent Core Files
+
+on:
+  # 手動觸發（在 GitHub Actions 頁面按 "Run workflow"）
+  workflow_dispatch:
+    inputs:
+      agent_id:
+        description: "Agent ID to back up (leave empty to back up all agents)"
+        required: false
+        default: ""
+      days:
+        description: "Number of days of memory notes to include"
+        required: false
+        default: "30"
+
+  # 每週自動備份（週日 03:00 UTC）
+  schedule:
+    - cron: "0 3 * * 0"
+
+permissions:
+  contents: write
+
+jobs:
+  backup:
+    name: Backup agent core files
+    runs-on: self-hosted  # 需要能存取 ~/.openclaw/ 的 self-hosted runner
+    # 若無 self-hosted runner，請改為 ubuntu-latest 並透過 SSH 拉取備份
+    # runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # 使用可寫入的 token 以便後續 push
+          token: ${{ secrets.GITHUB_TOKEN }}
+          # 拉取完整歷史以避免 shallow clone 造成 push 問題
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Run backup script
+        env:
+          OPENCLAW_DIR: ${{ runner.tool_cache }}/openclaw  # 調整為實際路徑
+        run: |
+          ARGS="--days ${{ inputs.days || 30 }}"
+          if [[ -n "${{ inputs.agent_id }}" ]]; then
+            ARGS="$ARGS --agent ${{ inputs.agent_id }}"
+          fi
+          bash scripts/backup-agent-cores.sh $ARGS
+
+      - name: Check for changes
+        id: changes
+        run: |
+          git add agent-backups/
+          if git diff --cached --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true"  >> "$GITHUB_OUTPUT"
+            echo "count=$(git diff --cached --name-only | wc -l)" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Commit backup
+        if: steps.changes.outputs.changed == 'true'
+        run: |
+          TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          COUNT="${{ steps.changes.outputs.count }}"
+          git commit -m "chore(backup): agent core files snapshot ${TIMESTAMP}
+
+Automated backup via GitHub Actions.
+Files updated: ${COUNT}
+Trigger: ${{ github.event_name }}
+
+https://claude.ai/code/session_01USg9NmxVF4tcQnBdCBYgUt"
+
+      - name: Push backup
+        if: steps.changes.outputs.changed == 'true'
+        run: git push origin HEAD
+
+      - name: No changes
+        if: steps.changes.outputs.changed == 'false'
+        run: echo "✅ Agent core files are already up to date. No commit needed."
+
+      - name: Upload backup as artifact
+        if: steps.changes.outputs.changed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-core-backup-${{ github.run_id }}
+          path: agent-backups/
+          retention-days: 90  # 保留 90 天的 artifact 備份
