@@ -1,0 +1,125 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 90" width="860" height="90"
+     role="img" aria-labelledby="footer-title">
+  <title id="footer-title">OpenClaw — Built with love by the community</title>
+
+  <style>
+    @media (prefers-reduced-motion: reduce) {
+      * { animation: none !important; }
+    }
+    @keyframes waveMove {
+      0% { transform: translateX(0); }
+      100% { transform: translateX(-50%); }
+    }
+    @keyframes pulseRed {
+      0%,100% { opacity: 0.7; r: 3; }
+      50% { opacity: 1; r: 4.5; }
+    }
+    @keyframes orbit1 {
+      from { transform: rotate(0deg) translateX(18px) rotate(0deg); }
+      to { transform: rotate(360deg) translateX(18px) rotate(-360deg); }
+    }
+    @keyframes orbit2 {
+      from { transform: rotate(120deg) translateX(18px) rotate(-120deg); }
+      to { transform: rotate(480deg) translateX(18px) rotate(-480deg); }
+    }
+    @keyframes orbit3 {
+      from { transform: rotate(240deg) translateX(18px) rotate(-240deg); }
+      to { transform: rotate(600deg) translateX(18px) rotate(-600deg); }
+    }
+    @keyframes shimmer {
+      0% { stop-color: #e63946; }
+      50% { stop-color: #ff8a80; }
+      100% { stop-color: #e63946; }
+    }
+  </style>
+
+  <defs>
+    <linearGradient id="footer-bg" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#0d1117"/>
+      <stop offset="50%" stop-color="#161b22"/>
+      <stop offset="100%" stop-color="#0d1117"/>
+    </linearGradient>
+    <linearGradient id="wave-grad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#e63946" stop-opacity="0">
+        <animate attributeName="stop-opacity" values="0;0.15;0" dur="4s" repeatCount="indefinite"/>
+      </stop>
+      <stop offset="50%" stop-color="#e63946" stop-opacity="0.15">
+        <animate attributeName="stop-opacity" values="0.15;0.3;0.15" dur="4s" repeatCount="indefinite"/>
+      </stop>
+      <stop offset="100%" stop-color="#e63946" stop-opacity="0">
+        <animate attributeName="stop-opacity" values="0;0.15;0" dur="4s" repeatCount="indefinite"/>
+      </stop>
+    </linearGradient>
+    <filter id="footer-glow">
+      <feGaussianBlur stdDeviation="2" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="860" height="90" fill="url(#footer-bg)" rx="0"/>
+
+  <!-- Top border line animated -->
+  <rect x="0" y="0" width="860" height="1" fill="url(#wave-grad)"/>
+
+  <!-- Animated wave line -->
+  <g style="animation: waveMove 12s linear infinite;">
+    <path d="M0,20 Q43,10 86,20 Q129,30 172,20 Q215,10 258,20 Q301,30 344,20 Q387,10 430,20 Q473,30 516,20 Q559,10 602,20 Q645,30 688,20 Q731,10 774,20 Q817,30 860,20 Q903,10 946,20 Q989,30 1032,20 Q1075,10 1118,20 Q1161,30 1204,20 Q1247,10 1290,20 Q1333,30 1376,20 Q1419,10 1462,20 Q1505,30 1548,20 Q1591,10 1634,20 Q1677,30 1720,20"
+          fill="none" stroke="#e63946" stroke-width="1" stroke-opacity="0.2"/>
+  </g>
+
+  <!-- Spinning orbit logo (left) -->
+  <g transform="translate(55, 48)">
+    <!-- Core -->
+    <circle r="7" fill="#e63946" opacity="0.9" filter="url(#footer-glow)">
+      <animate attributeName="r" values="7;8.5;7" dur="2s" repeatCount="indefinite"/>
+    </circle>
+    <!-- Lobster emoji stand-in: mini claw icon -->
+    <text x="0" y="3" text-anchor="middle" font-size="9" fill="white">🦞</text>
+    <!-- Orbiting dots -->
+    <g style="animation: orbit1 3s linear infinite;">
+      <circle r="2.5" fill="#e63946" opacity="0.8"/>
+    </g>
+    <g style="animation: orbit2 3s linear infinite;">
+      <circle r="2" fill="#ff8a80" opacity="0.7"/>
+    </g>
+    <g style="animation: orbit3 3s linear infinite;">
+      <circle r="1.5" fill="#ffffff" opacity="0.5"/>
+    </g>
+  </g>
+
+  <!-- Center text -->
+  <text x="430" y="38" text-anchor="middle"
+        font-family="'Courier New', monospace" font-size="11" fill="#8b949e" letter-spacing="2">
+    BUILT WITH ❤️ BY THE OPENCLAW COMMUNITY
+  </text>
+  <text x="430" y="58" text-anchor="middle"
+        font-family="'Courier New', monospace" font-size="10" fill="#e63946" letter-spacing="1" opacity="0.8">
+    openclaw.ai · discord.gg/clawd · github.com/openclaw/openclaw
+    <animate attributeName="opacity" values="0.8;1;0.8" dur="3s" repeatCount="indefinite"/>
+  </text>
+  <text x="430" y="76" text-anchor="middle"
+        font-family="'Courier New', monospace" font-size="9" fill="#484f58" letter-spacing="3">
+    MIT LICENSE · NODE ≥22 · EXFOLIATE!
+  </text>
+
+  <!-- Pulsing dots decoration (right) -->
+  <g transform="translate(805, 48)">
+    <circle r="3" fill="#e63946">
+      <animate attributeName="r" values="3;4.5;3" dur="2s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0.7;1;0.7" dur="2s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="14" r="3" fill="#e63946" opacity="0.5">
+      <animate attributeName="r" values="3;4.5;3" dur="2s" begin="0.66s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0.5;0.8;0.5" dur="2s" begin="0.66s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="28" r="3" fill="#e63946" opacity="0.3">
+      <animate attributeName="r" values="3;4.5;3" dur="2s" begin="1.33s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0.3;0.6;0.3" dur="2s" begin="1.33s" repeatCount="indefinite"/>
+    </circle>
+  </g>
+
+  <!-- Bottom border -->
+  <rect x="0" y="89" width="860" height="1" fill="url(#wave-grad)"/>
+</svg>

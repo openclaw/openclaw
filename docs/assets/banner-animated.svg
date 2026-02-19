@@ -1,0 +1,224 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 200" width="860" height="200"
+     role="img" aria-labelledby="banner-title">
+  <title id="banner-title">OpenClaw — Personal AI Assistant</title>
+
+  <style>
+    @media (prefers-reduced-motion: reduce) {
+      * { animation: none !important; transition: none !important; }
+      .reveal { opacity: 1 !important; }
+    }
+
+    /* OPEN text — slides in from left */
+    .text-open {
+      font-family: 'Arial Black', 'Helvetica Neue', sans-serif;
+      font-size: 88px;
+      font-weight: 900;
+      fill: #ffffff;
+      letter-spacing: -2px;
+    }
+    /* CLAW text — slides in with red glow */
+    .text-claw {
+      font-family: 'Arial Black', 'Helvetica Neue', sans-serif;
+      font-size: 88px;
+      font-weight: 900;
+      fill: #e63946;
+      letter-spacing: -2px;
+      filter: url(#glow-red);
+    }
+
+    .tagline {
+      font-family: 'Courier New', monospace;
+      font-size: 13px;
+      fill: #aaaaaa;
+      letter-spacing: 4px;
+    }
+
+    /* Clip animations for text reveal */
+    @keyframes revealOpen {
+      0% { clip-path: inset(0 100% 0 0); }
+      100% { clip-path: inset(0 0% 0 0); }
+    }
+    @keyframes revealClaw {
+      0% { clip-path: inset(0 100% 0 0); opacity: 0; }
+      10% { opacity: 1; }
+      100% { clip-path: inset(0 0% 0 0); opacity: 1; }
+    }
+    @keyframes fadeInTag {
+      0%,70% { opacity: 0; transform: translateY(6px); }
+      100% { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes clawPulse {
+      0%,100% { filter: url(#glow-red); }
+      50% { filter: url(#glow-red-bright); }
+    }
+    @keyframes antennaBob {
+      0%,100% { transform: rotate(0deg); }
+      50% { transform: rotate(8deg); }
+    }
+    @keyframes clawSnap {
+      0%,85%,100% { transform: rotate(0deg); }
+      90% { transform: rotate(-18deg); }
+      95% { transform: rotate(5deg); }
+    }
+    @keyframes eyeBlink {
+      0%,88%,92%,100% { transform: scaleY(1); }
+      90% { transform: scaleY(0.1); }
+    }
+    @keyframes tailWiggle {
+      0%,100% { transform: rotate(0deg); }
+      33% { transform: rotate(-5deg); }
+      66% { transform: rotate(5deg); }
+    }
+
+    .text-open-g {
+      animation: revealOpen 0.7s cubic-bezier(0.25,0,0.25,1) 0.4s both;
+    }
+    .text-claw-g {
+      animation: revealClaw 0.7s cubic-bezier(0.25,0,0.25,1) 1.2s both;
+    }
+    .text-claw { animation: clawPulse 4s ease-in-out 2.5s infinite; }
+    .tagline-g { animation: fadeInTag 0.8s ease 2.2s both; }
+    .antenna { animation: antennaBob 2.8s ease-in-out infinite; transform-origin: 52px 28px; }
+    .claw-right { animation: clawSnap 5s ease-in-out 1s infinite; transform-origin: 102px 78px; }
+    .claw-left { animation: clawSnap 5s ease-in-out 2.5s infinite; transform-origin: 10px 78px; }
+    .eye { animation: eyeBlink 4s ease-in-out infinite; transform-origin: 55px 60px; }
+    .tail-group { animation: tailWiggle 3.5s ease-in-out infinite; transform-origin: 55px 120px; }
+  </style>
+
+  <defs>
+    <filter id="glow-red" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="glow-red-bright" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="glow-white" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="1.5" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+
+    <!-- Lobster body gradient -->
+    <radialGradient id="body-grad" cx="40%" cy="30%" r="65%">
+      <stop offset="0%" stop-color="#ff8a80"/>
+      <stop offset="55%" stop-color="#e63946"/>
+      <stop offset="100%" stop-color="#8b0000"/>
+    </radialGradient>
+    <radialGradient id="claw-grad" cx="35%" cy="25%" r="70%">
+      <stop offset="0%" stop-color="#ff8a80"/>
+      <stop offset="100%" stop-color="#c1121f"/>
+    </radialGradient>
+    <linearGradient id="shell-seg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#e63946" stop-opacity="0.6"/>
+      <stop offset="100%" stop-color="#000000" stop-opacity="0.2"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Dark background -->
+  <rect width="860" height="200" fill="#0d1117" rx="12"/>
+
+  <!-- Subtle grid lines -->
+  <line x1="0" y1="100" x2="860" y2="100" stroke="#ffffff" stroke-opacity="0.03" stroke-width="1"/>
+  <line x1="430" y1="0" x2="430" y2="200" stroke="#ffffff" stroke-opacity="0.03" stroke-width="1"/>
+
+  <!-- ═══════════════════ LOBSTER ═══════════════════ -->
+  <g transform="translate(32, 18) scale(1.35)">
+
+    <!-- TAIL segments -->
+    <g class="tail-group">
+      <ellipse cx="55" cy="128" rx="18" ry="10" fill="url(#body-grad)" opacity="0.9"/>
+      <ellipse cx="55" cy="141" rx="15" ry="9" fill="url(#body-grad)" opacity="0.85"/>
+      <ellipse cx="55" cy="153" rx="12" ry="8" fill="url(#body-grad)" opacity="0.8"/>
+      <!-- Tail fan -->
+      <path d="M43,161 Q35,175 30,165 Q38,158 43,161Z" fill="#c1121f"/>
+      <path d="M55,163 Q55,178 48,172 Q50,162 55,163Z" fill="#c1121f"/>
+      <path d="M67,161 Q75,175 80,165 Q72,158 67,161Z" fill="#c1121f"/>
+      <!-- Segment lines -->
+      <line x1="37" y1="128" x2="73" y2="128" stroke="#8b0000" stroke-width="1" opacity="0.5"/>
+      <line x1="40" y1="141" x2="70" y2="141" stroke="#8b0000" stroke-width="1" opacity="0.5"/>
+      <line x1="43" y1="153" x2="67" y2="153" stroke="#8b0000" stroke-width="1" opacity="0.5"/>
+    </g>
+
+    <!-- BODY / CARAPACE -->
+    <ellipse cx="55" cy="90" rx="26" ry="38" fill="url(#body-grad)"/>
+    <!-- Shell segments overlay -->
+    <ellipse cx="55" cy="78" rx="24" ry="14" fill="url(#shell-seg)"/>
+    <ellipse cx="55" cy="94" rx="24" ry="14" fill="url(#shell-seg)"/>
+    <ellipse cx="55" cy="110" rx="24" ry="14" fill="url(#shell-seg)"/>
+
+    <!-- LEFT CLAW (big) -->
+    <g class="claw-left">
+      <path d="M29,80 Q8,65 5,50 Q18,42 28,55 Q22,68 29,80Z" fill="url(#claw-grad)"/>
+      <path d="M29,80 Q12,78 8,68 Q16,60 25,68 Q27,74 29,80Z" fill="#c1121f" opacity="0.7"/>
+      <!-- Claw pincers -->
+      <path d="M5,50 Q-2,40 2,32 Q12,36 10,46Z" fill="url(#claw-grad)"/>
+      <path d="M8,68 Q0,62 1,52 Q10,54 10,62Z" fill="url(#claw-grad)"/>
+    </g>
+
+    <!-- RIGHT CLAW (big) -->
+    <g class="claw-right">
+      <path d="M81,80 Q102,65 105,50 Q92,42 82,55 Q88,68 81,80Z" fill="url(#claw-grad)"/>
+      <path d="M81,80 Q98,78 102,68 Q94,60 85,68 Q83,74 81,80Z" fill="#c1121f" opacity="0.7"/>
+      <!-- Claw pincers -->
+      <path d="M105,50 Q112,40 108,32 Q98,36 100,46Z" fill="url(#claw-grad)"/>
+      <path d="M102,68 Q110,62 109,52 Q100,54 100,62Z" fill="url(#claw-grad)"/>
+    </g>
+
+    <!-- Small walking legs -->
+    <line x1="30" y1="95" x2="14" y2="110" stroke="#c1121f" stroke-width="3" stroke-linecap="round"/>
+    <line x1="32" y1="103" x2="16" y2="120" stroke="#c1121f" stroke-width="2.5" stroke-linecap="round"/>
+    <line x1="35" y1="112" x2="20" y2="128" stroke="#c1121f" stroke-width="2" stroke-linecap="round"/>
+    <line x1="80" y1="95" x2="96" y2="110" stroke="#c1121f" stroke-width="3" stroke-linecap="round"/>
+    <line x1="78" y1="103" x2="94" y2="120" stroke="#c1121f" stroke-width="2.5" stroke-linecap="round"/>
+    <line x1="75" y1="112" x2="90" y2="128" stroke="#c1121f" stroke-width="2" stroke-linecap="round"/>
+
+    <!-- HEAD -->
+    <ellipse cx="55" cy="58" rx="22" ry="20" fill="url(#body-grad)"/>
+
+    <!-- EYES -->
+    <g class="eye">
+      <circle cx="46" cy="52" r="5" fill="#1a1a2e"/>
+      <circle cx="64" cy="52" r="5" fill="#1a1a2e"/>
+      <circle cx="46" cy="52" r="3.5" fill="#ff4444"/>
+      <circle cx="64" cy="52" r="3.5" fill="#ff4444"/>
+      <circle cx="47" cy="51" r="1.2" fill="white" opacity="0.8"/>
+      <circle cx="65" cy="51" r="1.2" fill="white" opacity="0.8"/>
+    </g>
+
+    <!-- ANTENNAE -->
+    <g class="antenna">
+      <line x1="49" y1="40" x2="28" y2="14" stroke="#e63946" stroke-width="1.5" stroke-linecap="round"/>
+      <line x1="61" y1="40" x2="82" y2="14" stroke="#e63946" stroke-width="1.5" stroke-linecap="round"/>
+      <!-- Short antennulae -->
+      <line x1="49" y1="40" x2="36" y2="28" stroke="#e63946" stroke-width="1" stroke-linecap="round" opacity="0.7"/>
+      <line x1="61" y1="40" x2="74" y2="28" stroke="#e63946" stroke-width="1" stroke-linecap="round" opacity="0.7"/>
+    </g>
+
+    <!-- Rostrum (spike on head) -->
+    <path d="M55,38 Q53,28 55,22 Q57,28 55,38Z" fill="#c1121f"/>
+
+  </g>
+  <!-- ═══════════════════ END LOBSTER ═══════════════════ -->
+
+  <!-- OPEN text reveal -->
+  <g class="text-open-g" transform="translate(205, 0)">
+    <text class="text-open" x="0" y="143" filter="url(#glow-white)">OPEN</text>
+  </g>
+
+  <!-- CLAW text reveal -->
+  <g class="text-claw-g" transform="translate(488, 0)">
+    <text class="text-claw" x="0" y="143">CLAW</text>
+  </g>
+
+  <!-- Tagline -->
+  <g class="tagline-g">
+    <text class="tagline" x="207" y="172">PERSONAL AI ASSISTANT · EXFOLIATE! EXFOLIATE!</text>
+  </g>
+
+  <!-- Cursor blink after CLAW -->
+  <rect x="820" y="68" width="3" height="72" fill="#e63946" rx="1">
+    <animate attributeName="opacity" values="1;0;1" dur="1s" repeatCount="indefinite" begin="2s"/>
+  </rect>
+</svg>

@@ -1,0 +1,101 @@
+name: Update Contributors SVG
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  update-contributors:
+    name: Refresh contributors in README
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Fetch contributors and update README
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          cat > /tmp/update_contributors.js << 'JSEOF'
+          const https = require('https');
+          const fs = require('fs');
+          const [owner, repo] = process.env.REPO.split('/');
+          const token = process.env.GH_TOKEN;
+
+          function ghGet(path) {
+            return new Promise((resolve, reject) => {
+              const opts = {
+                hostname: 'api.github.com',
+                path,
+                headers: {
+                  Authorization: 'token ' + token,
+                  'User-Agent': 'openclaw-bot',
+                  Accept: 'application/vnd.github+json',
+                },
+              };
+              let data = '';
+              https.get(opts, res => {
+                res.on('data', d => { data += d; });
+                res.on('end', () => resolve(JSON.parse(data)));
+              }).on('error', reject);
+            });
+          }
+
+          async function main() {
+            let all = [];
+            for (let page = 1; page <= 5; page++) {
+              const batch = await ghGet(
+                '/repos/' + owner + '/' + repo + '/contributors?per_page=100&page=' + page
+              );
+              if (!Array.isArray(batch) || batch.length === 0) break;
+              all = all.concat(batch);
+            }
+            console.log('Contributors found: ' + all.length);
+            const PER_ROW = 10;
+            const rows = [];
+            for (let i = 0; i < all.length; i += PER_ROW) {
+              const imgs = all.slice(i, i + PER_ROW).map(c => {
+                return '  <a href="' + c.html_url + '"><img src="' + c.avatar_url +
+                  '&s=48" width="48" height="48" alt="' + c.login + '" title="' + c.login + '"/></a>';
+              }).join(' ');
+              rows.push(imgs);
+            }
+            const block = '<p align="left">\n' + rows.join('\n  ') + '\n</p>';
+            let readme = fs.readFileSync('README.md', 'utf8');
+            const S = '<!-- CONTRIBUTORS:START -->';
+            const E = '<!-- CONTRIBUTORS:END -->';
+            const si = readme.indexOf(S);
+            const ei = readme.indexOf(E);
+            if (si === -1 || ei === -1) { console.log('Markers not found'); process.exit(0); }
+            readme = readme.slice(0, si + S.length) + '\n' + block + '\n' + readme.slice(ei);
+            fs.writeFileSync('README.md', readme);
+            console.log('README.md updated');
+          }
+
+          main().catch(e => { console.error(e); process.exit(1); });
+          JSEOF
+          node /tmp/update_contributors.js
+
+      - name: Commit
+        run: |
+          git config user.name  'clawdinator[bot]'
+          git config user.email 'clawdinator[bot]@users.noreply.github.com'
+          git diff --quiet README.md || (
+            git add README.md &&
+            git commit -m 'chore: refresh contributors [skip ci]' &&
+            git push
+          )
