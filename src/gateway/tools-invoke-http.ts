@@ -344,7 +344,7 @@ export async function handleToolsInvokeHttpRequest(
       if (observeOnly) {
         await consentApi.evaluate(consumeInput);
       } else {
-          const result = await consentApi.consume(consumeInput);
+        const result = await consentApi.consume(consumeInput);
           if (!result.allowed) {
             const deny = buildConsentDenyPayload({
               reasonCode: result.reasonCode,
