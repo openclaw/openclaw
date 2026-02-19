@@ -153,6 +153,18 @@ describe("createTelegramBot", () => {
     ).toBe("telegram:555");
     expect(
       getTelegramSequentialKey({
+        channelPost: mockMessage({ chat: mockChat({ id: -100777111222, type: "channel" }) }),
+      }),
+    ).toBe("telegram:-100777111222");
+    expect(
+      getTelegramSequentialKey({
+        update: {
+          channel_post: mockMessage({ chat: mockChat({ id: -100777111223, type: "channel" }) }),
+        },
+      }),
+    ).toBe("telegram:-100777111223");
+    expect(
+      getTelegramSequentialKey({
         message: mockMessage({ chat: mockChat({ id: 123 }), text: "/stop" }),
       }),
     ).toBe("telegram:123:control");
@@ -1987,6 +1999,44 @@ describe("createTelegramBot", () => {
       },
       me: { username: "openclaw_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
+    };
+
+    await handler(ctx);
+    await handler(ctx);
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+  });
+  it("dedupes duplicate channel_post updates by chat/message key", async () => {
+    onSpy.mockReset();
+    replySpy.mockReset();
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groups: {
+            "-100777111222": {
+              enabled: true,
+              requireMention: false,
+            },
+          },
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("channel_post") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    const ctx = {
+      channelPost: {
+        chat: { id: -100777111222, type: "channel", title: "Wake Channel" },
+        from: { id: 98765, is_bot: true, first_name: "wakebot", username: "wake_bot" },
+        message_id: 777,
+        text: "wake check",
+        date: 1736380800,
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({}),
     };
 
     await handler(ctx);
