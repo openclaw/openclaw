@@ -15,18 +15,20 @@ import { resolveUserPath } from "../utils.js";
 export async function noteMemorySearchHealth(cfg: OpenClawConfig): Promise<void> {
   const agentId = resolveDefaultAgentId(cfg);
   const agentDir = resolveAgentDir(cfg, agentId);
+
+  // QMD backend handles embeddings internally (e.g. embeddinggemma) — no
+  // separate embedding provider is needed. Skip the provider check entirely.
+  // Check this FIRST, before resolving memorySearch config, as QMD is independent.
+  const backendConfig = resolveMemoryBackendConfig({ cfg, agentId });
+  if (backendConfig.backend === "qmd") {
+    return;
+  }
+
   const resolved = resolveMemorySearchConfig(cfg, agentId);
   const hasRemoteApiKey = Boolean(resolved?.remote?.apiKey?.trim());
 
   if (!resolved) {
     note("Memory search is explicitly disabled (enabled: false).", "Memory search");
-    return;
-  }
-
-  // QMD backend handles embeddings internally (e.g. embeddinggemma) — no
-  // separate embedding provider is needed. Skip the provider check entirely.
-  const backendConfig = resolveMemoryBackendConfig({ cfg, agentId });
-  if (backendConfig.backend === "qmd") {
     return;
   }
 
