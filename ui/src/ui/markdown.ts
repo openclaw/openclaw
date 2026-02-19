@@ -245,13 +245,7 @@ export function toSanitizedMarkdownHtml(
 // Security is handled by DOMPurify, but rendering pasted HTML (e.g. error
 // pages) as formatted output is confusing UX (#13937).
 const htmlEscapeRenderer = new marked.Renderer();
-htmlEscapeRenderer.html = ({ text }: { text: string }) => {
-  // Preserve KaTeX-rendered HTML (spans with class="katex")
-  if (text.includes('class="katex"') || text.includes('class="katex-display"')) {
-    return text;
-  }
-  return escapeHtml(text);
-};
+htmlEscapeRenderer.html = ({ text }: { text: string }) => escapeHtml(text);
 
 function escapeHtml(value: string): string {
   return value

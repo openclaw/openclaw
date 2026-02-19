@@ -256,7 +256,7 @@ function handleImagePick(e: Event, props: ChatProps) {
       const att = { id, dataUrl, mimeType: file.type, name: file.name };
       current.push(att);
       props.onAttachmentsChange!([...current]);
-    };
+    });
     reader.readAsDataURL(file);
   }
   input.value = "";
