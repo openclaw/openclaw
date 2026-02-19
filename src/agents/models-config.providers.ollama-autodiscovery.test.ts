@@ -67,9 +67,9 @@ describe("Ollama auto-discovery", () => {
   it("does not warn when Ollama is unreachable and no API key is configured", async () => {
     setupDiscoveryEnv();
     const warnSpy = vi.spyOn(console, "warn");
-    globalThis.fetch = vi.fn().mockRejectedValue(
-      new Error("connect ECONNREFUSED 127.0.0.1:11434"),
-    ) as typeof fetch;
+    globalThis.fetch = vi
+      .fn()
+      .mockRejectedValue(new Error("connect ECONNREFUSED 127.0.0.1:11434")) as typeof fetch;
 
     const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
     const providers = await resolveImplicitProviders({ agentDir });
@@ -87,9 +87,9 @@ describe("Ollama auto-discovery", () => {
     setupDiscoveryEnv();
     process.env.OLLAMA_API_KEY = "test-key";
     const warnSpy = vi.spyOn(console, "warn");
-    globalThis.fetch = vi.fn().mockRejectedValue(
-      new Error("connect ECONNREFUSED 127.0.0.1:11434"),
-    ) as typeof fetch;
+    globalThis.fetch = vi
+      .fn()
+      .mockRejectedValue(new Error("connect ECONNREFUSED 127.0.0.1:11434")) as typeof fetch;
 
     const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
     const providers = await resolveImplicitProviders({ agentDir });
