@@ -210,6 +210,16 @@ export async function prepareSlackMessage(params: {
   const sessionKey = threadKeys.sessionKey;
   const historyKey =
     isThreadReply && ctx.threadHistoryScope === "thread" ? sessionKey : message.channel;
+  const storePath = resolveStorePath(ctx.cfg.session?.store, {
+    agentId: route.agentId,
+  });
+  const existingThreadSessionUpdatedAt =
+    isThreadReply && threadTs
+      ? readSessionUpdatedAt({
+          storePath,
+          sessionKey,
+        })
+      : undefined;
 
   const mentionRegexes = buildMentionRegexes(cfg, route.agentId);
   const hasAnyMention = /<@[^>]+>/.test(message.text ?? "");
@@ -228,11 +238,13 @@ export async function prepareSlackMessage(params: {
           canResolveExplicit: Boolean(ctx.botUserId),
         },
       }));
+  const threadSessionHasHistory = Boolean(
+    isThreadReply && threadTs && existingThreadSessionUpdatedAt,
+  );
   const implicitMention = Boolean(
     !isDirectMessage &&
-    ctx.botUserId &&
     message.thread_ts &&
-    message.parent_user_id === ctx.botUserId,
+    (message.parent_user_id === ctx.botUserId || threadSessionHasHistory),
   );
 
   const sender = message.user ? await ctx.resolveUserName(message.user) : null;
@@ -430,9 +442,6 @@ export async function prepareSlackMessage(params: {
       ? ` thread_ts: ${threadTs}${message.parent_user_id ? ` parent_user_id: ${message.parent_user_id}` : ""}`
       : "";
   const textWithId = `${rawBody}\n[slack message id: ${message.ts} channel: ${message.channel}${threadInfo}]`;
-  const storePath = resolveStorePath(ctx.cfg.session?.store, {
-    agentId: route.agentId,
-  });
   const envelopeOptions = resolveEnvelopeFormatOptions(ctx.cfg);
   const previousTimestamp = readSessionUpdatedAt({
     storePath,
@@ -481,7 +490,7 @@ export async function prepareSlackMessage(params: {
 
   let threadStarterBody: string | undefined;
   let threadHistoryBody: string | undefined;
-  let threadSessionPreviousTimestamp: number | undefined;
+  const threadSessionPreviousTimestamp = existingThreadSessionUpdatedAt;
   let threadLabel: string | undefined;
   let threadStarterMedia: Awaited<ReturnType<typeof resolveSlackMedia>> = null;
   if (isThreadReply && threadTs) {
@@ -517,10 +526,6 @@ export async function prepareSlackMessage(params: {
     // This provides context of previous messages (including bot replies) in the thread
     // Use the thread session key (not base session key) to determine if this is a new session
     const threadInitialHistoryLimit = account.config?.thread?.initialHistoryLimit ?? 20;
-    threadSessionPreviousTimestamp = readSessionUpdatedAt({
-      storePath,
-      sessionKey, // Thread-specific session key
-    });
     if (threadInitialHistoryLimit > 0 && !threadSessionPreviousTimestamp) {
       const threadHistory = await resolveSlackThreadHistory({
         channelId: message.channel,

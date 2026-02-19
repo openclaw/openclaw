@@ -43,7 +43,14 @@ describe("slack prepareSlackMessage inbound contract", () => {
     appClient?: App["client"];
     defaultRequireMention?: boolean;
     replyToMode?: "off" | "all";
-    channelsConfig?: Record<string, { systemPrompt: string }>;
+    channelsConfig?: Record<
+      string,
+      {
+        systemPrompt?: string;
+        allow?: boolean;
+        requireMention?: boolean;
+      }
+    >;
   }) {
     return createSlackMonitorContext({
       cfg: params.cfg,
@@ -362,6 +369,59 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared).toBeTruthy();
     expect(prepared!.ctxPayload.IsFirstThreadTurn).toBeUndefined();
     expect(prepared!.ctxPayload.ThreadHistoryBody).toBeUndefined();
+  });
+
+  it("treats unmentioned thread follow-ups as implicit mentions when thread session exists", async () => {
+    const { storePath } = makeTmpStorePath();
+    const cfg = {
+      session: { store: storePath },
+      channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
+    } as OpenClawConfig;
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "slack",
+      accountId: "default",
+      teamId: "T1",
+      peer: { kind: "channel", id: "C123" },
+    });
+    const threadKeys = resolveThreadSessionKeys({
+      baseSessionKey: route.sessionKey,
+      threadId: "300.000",
+    });
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({ [threadKeys.sessionKey]: { updatedAt: Date.now() } }, null, 2),
+    );
+
+    const replies = vi.fn().mockResolvedValue({
+      messages: [{ text: "starter", user: "U2", ts: "300.000" }],
+    });
+    const slackCtx = createInboundSlackCtx({
+      cfg,
+      appClient: { conversations: { replies } } as App["client"],
+      defaultRequireMention: true,
+      replyToMode: "all",
+      channelsConfig: {
+        C123: { allow: true, requireMention: true },
+      },
+    });
+    slackCtx.resolveUserName = async () => ({ name: "Alice" });
+    slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      createThreadAccount(),
+      createSlackMessage({
+        channel: "C123",
+        channel_type: "channel",
+        text: "follow-up without mention",
+        ts: "301.000",
+        thread_ts: "300.000",
+      }),
+    );
+
+    expect(prepared).toBeTruthy();
+    expect(prepared!.ctxPayload.WasMentioned).toBe(true);
   });
 
   it("includes thread_ts and parent_user_id metadata in thread replies", async () => {
