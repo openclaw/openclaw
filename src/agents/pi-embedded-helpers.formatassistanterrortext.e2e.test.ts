@@ -1,6 +1,7 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
+  AUTH_CONFIG_ERROR_MESSAGE,
   BILLING_ERROR_USER_MESSAGE,
   formatBillingErrorMessage,
   formatAssistantErrorText,
@@ -53,11 +54,54 @@ describe("formatAssistantErrorText", () => {
     expect(result).toContain("Message ordering conflict");
     expect(result).not.toContain("400");
   });
-  it("suppresses raw error JSON payloads that are not otherwise classified", () => {
+  it("suppresses raw transient server error JSON payloads with a friendly message", () => {
     const msg = makeAssistantError(
       '{"type":"error","error":{"message":"Something exploded","type":"server_error"}}',
     );
-    expect(formatAssistantErrorText(msg)).toBe("LLM error server_error: Something exploded");
+    expect(formatAssistantErrorText(msg)).toBe(
+      "The AI service encountered a temporary error. Please try again in a moment.",
+    );
+  });
+  it("suppresses Anthropic api_error with Internal server error (the original leak bug)", () => {
+    const msg = makeAssistantError(
+      '{"type":"error","error":{"type":"api_error","message":"Internal server error"},"request_id":"req_011CYFmpt8r8CFFmnpgGL5cQ"}',
+    );
+    expect(formatAssistantErrorText(msg)).toBe(
+      "The AI service encountered a temporary error. Please try again in a moment.",
+    );
+  });
+  it("suppresses 'service temporarily unavailable' messages as transient errors", () => {
+    const msg = makeAssistantError(
+      '{"type":"error","error":{"type":"api_error","message":"Service temporarily unavailable"}}',
+    );
+    expect(formatAssistantErrorText(msg)).toBe(
+      "The AI service encountered a temporary error. Please try again in a moment.",
+    );
+  });
+  it("suppresses exact 'an error occurred' messages as transient errors", () => {
+    const msg = makeAssistantError(
+      '{"type":"error","error":{"type":"api_error","message":"An error occurred"}}',
+    );
+    expect(formatAssistantErrorText(msg)).toBe(
+      "The AI service encountered a temporary error. Please try again in a moment.",
+    );
+  });
+  it("does NOT suppress 'an error occurred' when part of a longer actionable message", () => {
+    const msg = makeAssistantError(
+      '{"type":"error","error":{"type":"invalid_request_error","message":"An error occurred while validating: missing field \'model\'"}}',
+    );
+    const result = formatAssistantErrorText(msg);
+    expect(result).not.toBe(
+      "The AI service encountered a temporary error. Please try again in a moment.",
+    );
+  });
+  it("uses httpCode fallback to treat 5xx API errors as transient", () => {
+    const msg = makeAssistantError(
+      '503 {"type":"error","error":{"type":"unknown_type","message":"Upstream failure"}}',
+    );
+    expect(formatAssistantErrorText(msg)).toBe(
+      "The AI service encountered a temporary error. Please try again in a moment.",
+    );
   });
   it("returns a friendly billing message for credit balance errors", () => {
     const msg = makeAssistantError("Your credit balance is too low to access the Anthropic API.");
@@ -102,6 +146,36 @@ describe("formatAssistantErrorText", () => {
     const msg = makeAssistantError("request ended without sending any chunks");
     expect(formatAssistantErrorText(msg)).toBe("LLM request timed out.");
   });
+
+  // --- Auth / permission error suppression ---
+  it("suppresses 401 authentication_error JSON payloads", () => {
+    const msg = makeAssistantError(
+      '{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"},"request_id":"req_abc"}',
+    );
+    expect(formatAssistantErrorText(msg)).toBe(AUTH_CONFIG_ERROR_MESSAGE);
+  });
+  it("suppresses permission_error JSON payloads", () => {
+    const msg = makeAssistantError(
+      '{"type":"error","error":{"type":"permission_error","message":"Your API key does not have permission"},"request_id":"req_xyz"}',
+    );
+    expect(formatAssistantErrorText(msg)).toBe(AUTH_CONFIG_ERROR_MESSAGE);
+  });
+  it("suppresses plain auth error messages (unauthorized, invalid api key)", () => {
+    const msg = makeAssistantError("unauthorized");
+    expect(formatAssistantErrorText(msg)).toBe(AUTH_CONFIG_ERROR_MESSAGE);
+  });
+
+  // --- Failover wrapper suppression ---
+  it("suppresses FailoverError wrapper messages", () => {
+    const msg = makeAssistantError("FailoverError: HTTP 401 authentication_error");
+    expect(formatAssistantErrorText(msg)).toBe(AUTH_CONFIG_ERROR_MESSAGE);
+  });
+  it("suppresses 'All models failed' wrapper messages", () => {
+    const msg = makeAssistantError(
+      "All models failed (3): anthropic/claude-opus-4-5: rate limit | openai/gpt-4.1: timeout | google/gemini-2.5-pro: auth",
+    );
+    expect(formatAssistantErrorText(msg)).toBe(AUTH_CONFIG_ERROR_MESSAGE);
+  });
 });
 
 describe("formatRawAssistantErrorForUi", () => {
@@ -120,10 +194,13 @@ describe("formatRawAssistantErrorForUi", () => {
     expect(formatRawAssistantErrorForUi("")).toContain("unknown error");
   });
 
-  it("formats plain HTTP status lines", () => {
+  it("suppresses plain transient HTTP 500 status lines", () => {
     expect(formatRawAssistantErrorForUi("500 Internal Server Error")).toBe(
-      "HTTP 500: Internal Server Error",
+      "The AI service encountered a temporary error. Please try again in a moment.",
     );
+  });
+  it("formats plain non-transient HTTP status lines", () => {
+    expect(formatRawAssistantErrorForUi("400 Bad Request")).toBe("HTTP 400: Bad Request");
   });
 
   it("sanitizes HTML error pages into a clean unavailable message", () => {
@@ -136,5 +213,35 @@ describe("formatRawAssistantErrorForUi", () => {
     expect(formatRawAssistantErrorForUi(htmlError)).toBe(
       "The AI service is temporarily unavailable (HTTP 521). Please try again in a moment.",
     );
+  });
+
+  it("suppresses authentication_error JSON payloads", () => {
+    expect(
+      formatRawAssistantErrorForUi(
+        '{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}',
+      ),
+    ).toBe(AUTH_CONFIG_ERROR_MESSAGE);
+  });
+
+  it("suppresses plain HTTP 401 status lines", () => {
+    expect(formatRawAssistantErrorForUi("401 Unauthorized")).toBe(AUTH_CONFIG_ERROR_MESSAGE);
+  });
+
+  it("suppresses plain HTTP 403 status lines", () => {
+    expect(formatRawAssistantErrorForUi("403 Forbidden")).toBe(AUTH_CONFIG_ERROR_MESSAGE);
+  });
+
+  it("strips FailoverError wrapper and sanitizes inner error", () => {
+    expect(formatRawAssistantErrorForUi("FailoverError: HTTP 401 authentication_error")).toBe(
+      AUTH_CONFIG_ERROR_MESSAGE,
+    );
+  });
+
+  it("strips 'All models failed' wrapper and returns safe message", () => {
+    expect(
+      formatRawAssistantErrorForUi(
+        "All models failed (2): anthropic/claude-opus-4-5: 401 | openai/gpt-4.1: 429",
+      ),
+    ).toBe(AUTH_CONFIG_ERROR_MESSAGE);
   });
 });

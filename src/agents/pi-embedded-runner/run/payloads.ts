@@ -272,7 +272,17 @@ export function buildEmbeddedRunPayloads(params: {
         params.lastToolError.meta ? [params.lastToolError.meta] : undefined,
         { markdown: useMarkdown },
       );
-      const errorSuffix = params.lastToolError.error ? `: ${params.lastToolError.error}` : "";
+      // Sanitize tool error text — raw errors can contain stack traces, paths, and internal details.
+      // Only show a short, safe summary; the full error is already in the agent's context.
+      const rawToolError = params.lastToolError.error ?? "";
+      const safeToolError =
+        rawToolError.length > 120 ||
+        /\n|stack|trace|at\s+\S+\(|(?:^|[\s(])\/(?:usr|home|opt|var|tmp|etc|proc|mnt|srv|root)\//i.test(
+          rawToolError,
+        )
+          ? ""
+          : rawToolError;
+      const errorSuffix = safeToolError ? `: ${safeToolError}` : "";
       const warningText = `⚠️ ${toolSummary} failed${errorSuffix}`;
       const normalizedWarning = normalizeTextForComparison(warningText);
       const duplicateWarning = normalizedWarning

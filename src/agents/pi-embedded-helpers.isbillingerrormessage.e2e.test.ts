@@ -8,6 +8,7 @@ import {
   isCompactionFailureError,
   isContextOverflowError,
   isFailoverErrorMessage,
+  isFailoverWrapperMessage,
   isImageDimensionErrorMessage,
   isLikelyContextOverflowError,
   isTimeoutErrorMessage,
@@ -347,5 +348,34 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("You have hit your ChatGPT usage limit (plus plan)")).toBe(
       "rate_limit",
     );
+  });
+  it("classifies transient API error JSON payloads as timeout (retryable)", () => {
+    expect(
+      classifyFailoverReason(
+        '{"type":"error","error":{"type":"api_error","message":"Internal server error"}}',
+      ),
+    ).toBe("timeout");
+    expect(
+      classifyFailoverReason(
+        '{"type":"error","error":{"type":"server_error","message":"Something went wrong"}}',
+      ),
+    ).toBe("timeout");
+  });
+});
+
+describe("isFailoverWrapperMessage", () => {
+  it("detects FailoverError: prefix", () => {
+    expect(isFailoverWrapperMessage("FailoverError: HTTP 401 authentication_error")).toBe(true);
+  });
+  it("detects All models failed (N): prefix", () => {
+    expect(
+      isFailoverWrapperMessage(
+        "All models failed (3): anthropic/claude-opus-4-5: rate limit | openai/gpt-4.1: timeout",
+      ),
+    ).toBe(true);
+  });
+  it("does not match normal error messages", () => {
+    expect(isFailoverWrapperMessage("rate limit reached")).toBe(false);
+    expect(isFailoverWrapperMessage("Internal server error")).toBe(false);
   });
 });
