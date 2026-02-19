@@ -59,7 +59,7 @@ function killProcessTreeUnix(pid: number, graceMs: number): void {
 
   // Step 2: Wait grace period, then SIGKILL if still alive
   setTimeout(() => {
-    if (isProcessAlive(-pid)) {
+    if (isProcessAlive(pid)) {
       try {
         process.kill(-pid, "SIGKILL");
         return;
