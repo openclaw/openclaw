@@ -479,4 +479,78 @@ describe("dispatchTelegramMessage draft streaming", () => {
       }),
     );
   });
+
+  it("applies reaction status transitions for queued, thinking, tool, and done", async () => {
+    const reactionApi = vi.fn().mockResolvedValue(undefined);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await dispatcherOptions.onReplyStart?.();
+        await replyOptions?.onReasoningStream?.({ text: "thinking" });
+        await replyOptions?.onToolStart?.({ name: "web_search" });
+        await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        msg: { message_id: 456 } as TelegramMessageContext["msg"],
+        ackReactionPromise: Promise.resolve(true),
+        reactionApi: reactionApi as unknown as TelegramMessageContext["reactionApi"],
+      }),
+      streamMode: "off",
+    });
+
+    expect(reactionApi).toHaveBeenNthCalledWith(1, 123, 456, [{ type: "emoji", emoji: "👀" }]);
+    expect(reactionApi).toHaveBeenNthCalledWith(2, 123, 456, [{ type: "emoji", emoji: "⏳" }]);
+    expect(reactionApi).toHaveBeenNthCalledWith(3, 123, 456, [{ type: "emoji", emoji: "🤔" }]);
+    expect(reactionApi).toHaveBeenNthCalledWith(4, 123, 456, [{ type: "emoji", emoji: "🌐" }]);
+    expect(reactionApi).toHaveBeenNthCalledWith(5, 123, 456, [{ type: "emoji", emoji: "✅" }]);
+    expect(reactionApi).toHaveBeenNthCalledWith(6, 123, 456, []);
+  });
+
+  it("sets error reaction when dispatch fails", async () => {
+    const reactionApi = vi.fn().mockResolvedValue(undefined);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.onReplyStart?.();
+      throw new Error("dispatch failed");
+    });
+
+    await expect(
+      dispatchWithContext({
+        context: createContext({
+          msg: { message_id: 456 } as TelegramMessageContext["msg"],
+          ackReactionPromise: Promise.resolve(true),
+          reactionApi: reactionApi as unknown as TelegramMessageContext["reactionApi"],
+        }),
+        streamMode: "off",
+      }),
+    ).rejects.toThrow("dispatch failed");
+
+    expect(reactionApi).toHaveBeenNthCalledWith(1, 123, 456, [{ type: "emoji", emoji: "👀" }]);
+    expect(reactionApi).toHaveBeenNthCalledWith(2, 123, 456, [{ type: "emoji", emoji: "⏳" }]);
+    expect(reactionApi).toHaveBeenNthCalledWith(3, 123, 456, [{ type: "emoji", emoji: "❌" }]);
+    expect(reactionApi).toHaveBeenNthCalledWith(4, 123, 456, []);
+  });
+
+  it("skips reaction status transitions when ack reactions are disabled", async () => {
+    const reactionApi = vi.fn().mockResolvedValue(undefined);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        msg: { message_id: 456 } as TelegramMessageContext["msg"],
+        ackReactionPromise: null,
+        reactionApi: reactionApi as unknown as TelegramMessageContext["reactionApi"],
+      }),
+      streamMode: "off",
+    });
+
+    expect(reactionApi).not.toHaveBeenCalled();
+  });
 });
