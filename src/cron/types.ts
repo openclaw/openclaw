@@ -3,7 +3,13 @@ import type { ChannelId } from "../channels/plugins/types.js";
 export type CronSchedule =
   | { kind: "at"; at: string }
   | { kind: "every"; everyMs: number; anchorMs?: number }
-  | { kind: "cron"; expr: string; tz?: string };
+  | {
+      kind: "cron";
+      expr: string;
+      tz?: string;
+      /** Optional deterministic stagger window in milliseconds (0 keeps exact schedule). */
+      staggerMs?: number;
+    };
 
 export type CronSessionTarget = "main" | "isolated";
 export type CronWakeMode = "next-heartbeat" | "now";

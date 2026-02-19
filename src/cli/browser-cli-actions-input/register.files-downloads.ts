@@ -22,6 +22,13 @@ export function registerBrowserFilesAndDownloadsCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
 ) {
+  const resolveTimeoutAndTarget = (opts: { timeoutMs?: unknown; targetId?: unknown }) => {
+    const timeoutMs = Number.isFinite(opts.timeoutMs) ? Number(opts.timeoutMs) : undefined;
+    const targetId =
+      typeof opts.targetId === "string" ? opts.targetId.trim() || undefined : undefined;
+    return { timeoutMs, targetId };
+  };
+
   const runDownloadCommand = async (
     cmd: Command,
     opts: { timeoutMs?: unknown; targetId?: unknown },
@@ -29,7 +36,7 @@ export function registerBrowserFilesAndDownloadsCommands(
   ) => {
     const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
     try {
-      const timeoutMs = Number.isFinite(opts.timeoutMs) ? Number(opts.timeoutMs) : undefined;
+      const { timeoutMs, targetId } = resolveTimeoutAndTarget(opts);
       const result = await callBrowserRequest<{ download: { path: string } }>(
         parent,
         {
@@ -38,8 +45,7 @@ export function registerBrowserFilesAndDownloadsCommands(
           query: profile ? { profile } : undefined,
           body: {
             ...request.body,
-            targetId:
-              typeof opts.targetId === "string" ? opts.targetId.trim() || undefined : undefined,
+            targetId,
             timeoutMs,
           },
         },
@@ -76,7 +82,7 @@ export function registerBrowserFilesAndDownloadsCommands(
       const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
       try {
         const normalizedPaths = normalizeUploadPaths(paths);
-        const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : undefined;
+        const { timeoutMs, targetId } = resolveTimeoutAndTarget(opts);
         const result = await callBrowserRequest<{ download: { path: string } }>(
           parent,
           {
@@ -88,7 +94,7 @@ export function registerBrowserFilesAndDownloadsCommands(
               ref: opts.ref?.trim() || undefined,
               inputRef: opts.inputRef?.trim() || undefined,
               element: opts.element?.trim() || undefined,
-              targetId: opts.targetId?.trim() || undefined,
+              targetId,
               timeoutMs,
             },
           },
@@ -172,7 +178,7 @@ export function registerBrowserFilesAndDownloadsCommands(
         return;
       }
       try {
-        const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : undefined;
+        const { timeoutMs, targetId } = resolveTimeoutAndTarget(opts);
         const result = await callBrowserRequest(
           parent,
           {
@@ -182,7 +188,7 @@ export function registerBrowserFilesAndDownloadsCommands(
             body: {
               accept,
               promptText: opts.prompt?.trim() || undefined,
-              targetId: opts.targetId?.trim() || undefined,
+              targetId,
               timeoutMs,
             },
           },
