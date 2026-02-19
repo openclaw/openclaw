@@ -162,7 +162,7 @@ final class GatewayConnectionController {
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let token = GatewaySettingsStore.loadGatewayToken(instanceId: instanceId)
         let password = GatewaySettingsStore.loadGatewayPassword(instanceId: instanceId)
-        let resolvedUseTLS = useTLS
+        let resolvedUseTLS = self.resolveManualUseTLS(host: host, useTLS: useTLS)
         guard let resolvedPort = self.resolveManualPort(host: host, port: port, useTLS: resolvedUseTLS)
         else { return }
         let stableID = self.manualStableID(host: host, port: resolvedPort)
@@ -309,7 +309,7 @@ final class GatewayConnectionController {
 
             let manualPort = defaults.integer(forKey: "gateway.manual.port")
             let manualTLS = defaults.bool(forKey: "gateway.manual.tls")
-            let resolvedUseTLS = manualTLS || self.shouldForceTLS(host: manualHost)
+            let resolvedUseTLS = self.resolveManualUseTLS(host: manualHost, useTLS: manualTLS)
             guard let resolvedPort = self.resolveManualPort(
                 host: manualHost,
                 port: manualPort,
@@ -320,7 +320,7 @@ final class GatewayConnectionController {
             let tlsParams = self.resolveManualTLSParams(
                 stableID: stableID,
                 tlsEnabled: resolvedUseTLS,
-                allowTOFUReset: self.shouldForceTLS(host: manualHost))
+                allowTOFUReset: self.shouldRequireTLS(host: manualHost))
 
             guard let url = self.buildGatewayURL(
                 host: manualHost,
@@ -340,7 +340,7 @@ final class GatewayConnectionController {
 
         if let lastKnown = GatewaySettingsStore.loadLastGatewayConnection() {
             if case let .manual(host, port, useTLS, stableID) = lastKnown {
-                let resolvedUseTLS = useTLS || self.shouldForceTLS(host: host)
+                let resolvedUseTLS = self.resolveManualUseTLS(host: host, useTLS: useTLS)
                 let stored = GatewayTLSStore.loadFingerprint(stableID: stableID)
                 let tlsParams = stored.map { fp in
                     GatewayTLSParams(required: true, expectedFingerprint: fp, allowTOFU: false, storeKey: stableID)
@@ -646,10 +646,39 @@ final class GatewayConnectionController {
         return components.url
     }
 
-    private func shouldForceTLS(host: String) -> Bool {
+    private func resolveManualUseTLS(host: String, useTLS: Bool) -> Bool {
+        useTLS || self.shouldRequireTLS(host: host)
+    }
+
+    private func shouldRequireTLS(host: String) -> Bool {
+        !Self.isLoopbackHost(host)
+    }
+
+    private func shouldUseTLSDefaultPort443(host: String) -> Bool {
         let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if trimmed.isEmpty { return false }
         return trimmed.hasSuffix(".ts.net") || trimmed.hasSuffix(".ts.net.")
+    }
+
+    private static func isLoopbackHost(_ rawHost: String) -> Bool {
+        var host = rawHost.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !host.isEmpty else { return false }
+
+        if host.hasPrefix("[") && host.hasSuffix("]") {
+            host.removeFirst()
+            host.removeLast()
+        }
+        if host.hasSuffix(".") {
+            host.removeLast()
+        }
+        if let zoneIndex = host.firstIndex(of: "%") {
+            host = String(host[..<zoneIndex])
+        }
+
+        if host == "localhost" || host == "::1" || host == "0.0.0.0" || host == "::" {
+            return true
+        }
+        return host.hasPrefix("127.")
     }
 
     private func manualStableID(host: String, port: Int) -> String {
@@ -691,7 +720,7 @@ final class GatewayConnectionController {
         }
         let trimmedHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedHost.isEmpty else { return nil }
-        if useTLS && self.shouldForceTLS(host: trimmedHost) {
+        if useTLS && self.shouldUseTLSDefaultPort443(host: trimmedHost) {
             return 443
         }
         return 18789
@@ -941,6 +970,14 @@ extension GatewayConnectionController {
         allowTOFU: Bool) -> GatewayTLSParams?
     {
         self.resolveDiscoveredTLSParams(gateway: gateway, allowTOFU: allowTOFU)
+    }
+
+    func _test_resolveManualUseTLS(host: String, useTLS: Bool) -> Bool {
+        self.resolveManualUseTLS(host: host, useTLS: useTLS)
+    }
+
+    func _test_resolveManualPort(host: String, port: Int, useTLS: Bool) -> Int? {
+        self.resolveManualPort(host: host, port: port, useTLS: useTLS)
     }
 }
 #endif
