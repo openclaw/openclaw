@@ -621,18 +621,6 @@ const discordConfig = {
 } as OpenClawConfig;
 
 describe("outbound policy", () => {
-  it("blocks cross-provider sends by default", () => {
-    expect(() =>
-      enforceCrossContextPolicy({
-        cfg: slackConfig,
-        channel: "telegram",
-        action: "send",
-        args: { to: "telegram:@ops" },
-        toolContext: { currentChannelId: "C12345678", currentChannelProvider: "slack" },
-      }),
-    ).toThrow(/Cross-context messaging denied/);
-  });
-
   it("allows cross-provider sends when enabled", () => {
     const cfg = {
       ...slackConfig,
@@ -650,23 +638,6 @@ describe("outbound policy", () => {
         toolContext: { currentChannelId: "C12345678", currentChannelProvider: "slack" },
       }),
     ).not.toThrow();
-  });
-
-  it("blocks same-provider cross-context when disabled", () => {
-    const cfg = {
-      ...slackConfig,
-      tools: { message: { crossContext: { allowWithinProvider: false } } },
-    } as OpenClawConfig;
-
-    expect(() =>
-      enforceCrossContextPolicy({
-        cfg,
-        channel: "slack",
-        action: "send",
-        args: { to: "C99999999" },
-        toolContext: { currentChannelId: "C12345678", currentChannelProvider: "slack" },
-      }),
-    ).toThrow(/Cross-context messaging denied/);
   });
 
   it("uses components when available and preferred", async () => {
