@@ -57,7 +57,7 @@ export class UrbitSSEClient {
   // Event ack tracking - must ack every ~50 events to keep channel healthy
   private lastHeardEventId = -1;
   private lastAcknowledgedEventId = -1;
-  private readonly ackThreshold = 5; // Lowered for testing
+  private readonly ackThreshold = 20;
 
   constructor(url: string, cookie: string, options: UrbitSseOptions = {}) {
     const ctx = getUrbitContext(url, options.ship);
