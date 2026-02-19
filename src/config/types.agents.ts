@@ -63,6 +63,19 @@ export type AgentConfig = {
     prune?: SandboxPruneSettings;
   };
   tools?: AgentToolsConfig;
+  /** Remote agent protocol config. When set, OpenClaw forwards messages to an external service via HTTP SSE. */
+  remote?: {
+    /** URL to POST messages to (e.g. http://localhost:8000/api/v1/agent/run). */
+    url: string;
+    /** Transport protocol. Only "sse" is supported. */
+    transport?: "sse";
+    /** Shared secret sent as Authorization: Bearer <secret>. */
+    secret?: string;
+    /** Request timeout in milliseconds (default: 120000). */
+    timeoutMs?: number;
+    /** Health check URL for the remote service. */
+    healthUrl?: string;
+  };
 };
 
 export type AgentsConfig = {

@@ -614,6 +614,16 @@ export const AgentEntrySchema = z
       .optional(),
     sandbox: AgentSandboxSchema,
     tools: AgentToolsSchema,
+    remote: z
+      .object({
+        url: z.string(),
+        transport: z.literal("sse").optional(),
+        secret: z.string().optional().register(sensitive),
+        timeoutMs: z.number().int().positive().optional(),
+        healthUrl: z.string().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 

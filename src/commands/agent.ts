@@ -5,7 +5,9 @@ import {
   resolveAgentModelPrimary,
   resolveAgentSkillsFilter,
   resolveAgentWorkspaceDir,
+  resolveRemoteConfig,
 } from "../agents/agent-scope.js";
+import { runRemoteAgent } from "../agents/remote-runner.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { clearSessionAuthProfileOverride } from "../agents/auth-profiles/session-override.js";
 import { runCliAgent } from "../agents/cli-runner.js";
@@ -113,6 +115,20 @@ function runAgentAttempt(params: {
     body: params.body,
     isFallbackRetry: params.isFallbackRetry,
   });
+
+  // Remote agent: forward to external HTTP SSE service (e.g. knowledge-agent).
+  const remoteConfig = resolveRemoteConfig(params.cfg, params.sessionAgentId);
+  if (remoteConfig) {
+    return runRemoteAgent({
+      runId: params.runId,
+      sessionKey: params.sessionKey,
+      sessionAgentId: params.sessionAgentId,
+      body: effectivePrompt,
+      remote: remoteConfig,
+      onAgentEvent: params.onAgentEvent,
+    });
+  }
+
   if (isCliProvider(params.providerOverride, params.cfg)) {
     const cliSessionId = getCliSessionId(params.sessionEntry, params.providerOverride);
     return runCliAgent({

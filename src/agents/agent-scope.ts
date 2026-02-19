@@ -202,3 +202,18 @@ export function resolveAgentDir(cfg: OpenClawConfig, agentId: string) {
   const root = resolveStateDir(process.env);
   return path.join(root, "agents", id, "agent");
 }
+
+export function resolveRemoteConfig(
+  cfg: OpenClawConfig,
+  agentId: string,
+): AgentEntry["remote"] | undefined {
+  const entry = resolveAgentEntry(cfg, normalizeAgentId(agentId));
+  if (!entry?.remote?.url) {
+    return undefined;
+  }
+  return entry.remote;
+}
+
+export function isRemoteAgent(cfg: OpenClawConfig, agentId: string): boolean {
+  return Boolean(resolveRemoteConfig(cfg, agentId));
+}
