@@ -116,6 +116,15 @@ Bundled plugins must be enabled explicitly via `plugins.entries.<id>.enabled`
 or `openclaw plugins enable <id>`. Installed plugins are enabled by default,
 but can be disabled the same way.
 
+Hardening notes:
+
+- If `plugins.allow` is empty and non-bundled plugins are discoverable, OpenClaw logs a startup warning with plugin ids and sources.
+- Candidate paths are safety-checked before discovery admission. OpenClaw blocks candidates when:
+  - extension entry resolves outside plugin root (including symlink/path traversal escapes),
+  - plugin root/source path is world-writable,
+  - path ownership is suspicious for non-bundled plugins (POSIX owner is neither current uid nor root).
+- Loaded non-bundled plugins without install/load-path provenance emit a warning so you can pin trust (`plugins.allow`) or install tracking (`plugins.installs`).
+
 Each plugin must include a `openclaw.plugin.json` file in its root. If a path
 points at a file, the plugin root is the file's directory and must contain the
 manifest.

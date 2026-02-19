@@ -29,6 +29,111 @@ export type PluginDiscoveryResult = {
   diagnostics: PluginDiagnostic[];
 };
 
+function isPathInside(baseDir: string, targetPath: string): boolean {
+  const rel = path.relative(baseDir, targetPath);
+  if (!rel) {
+    return true;
+  }
+  return !rel.startsWith("..") && !path.isAbsolute(rel);
+}
+
+function safeRealpathSync(targetPath: string): string | null {
+  try {
+    return fs.realpathSync(targetPath);
+  } catch {
+    return null;
+  }
+}
+
+function safeStatSync(targetPath: string): fs.Stats | null {
+  try {
+    return fs.statSync(targetPath);
+  } catch {
+    return null;
+  }
+}
+
+function formatMode(mode: number): string {
+  return (mode & 0o777).toString(8).padStart(3, "0");
+}
+
+function currentUid(): number | null {
+  if (process.platform === "win32") {
+    return null;
+  }
+  if (typeof process.getuid !== "function") {
+    return null;
+  }
+  return process.getuid();
+}
+
+function isUnsafePluginCandidate(params: {
+  source: string;
+  rootDir: string;
+  origin: PluginOrigin;
+  diagnostics: PluginDiagnostic[];
+}): boolean {
+  const sourceReal = safeRealpathSync(params.source);
+  const rootReal = safeRealpathSync(params.rootDir);
+  if (sourceReal && rootReal && !isPathInside(rootReal, sourceReal)) {
+    params.diagnostics.push({
+      level: "warn",
+      source: params.source,
+      message: `blocked plugin candidate: source escapes plugin root (${params.source} -> ${sourceReal}; root=${rootReal})`,
+    });
+    return true;
+  }
+
+  if (process.platform === "win32") {
+    return false;
+  }
+
+  const uid = currentUid();
+  const pathsToCheck = [params.rootDir, params.source];
+  const seen = new Set<string>();
+  for (const targetPath of pathsToCheck) {
+    const normalized = path.resolve(targetPath);
+    if (seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    const stat = safeStatSync(targetPath);
+    if (!stat) {
+      params.diagnostics.push({
+        level: "warn",
+        source: targetPath,
+        message: `blocked plugin candidate: cannot stat path (${targetPath})`,
+      });
+      return true;
+    }
+    const modeBits = stat.mode & 0o777;
+    if ((modeBits & 0o002) !== 0) {
+      params.diagnostics.push({
+        level: "warn",
+        source: targetPath,
+        message: `blocked plugin candidate: world-writable path (${targetPath}, mode=${formatMode(modeBits)})`,
+      });
+      return true;
+    }
+    if (
+      params.origin !== "bundled" &&
+      uid !== null &&
+      typeof stat.uid === "number" &&
+      stat.uid !== uid &&
+      stat.uid !== 0
+    ) {
+      params.diagnostics.push({
+        level: "warn",
+        source: targetPath,
+        message: `blocked plugin candidate: suspicious ownership (${targetPath}, uid=${stat.uid}, expected uid=${uid} or root)`,
+      });
+      return true;
+    }
+  }
+
+  return false;
+}
+
 function isExtensionFile(filePath: string): boolean {
   const ext = path.extname(filePath);
   if (!EXTENSION_EXTS.has(ext)) {
@@ -83,6 +188,7 @@ function deriveIdHint(params: {
 
 function addCandidate(params: {
   candidates: PluginCandidate[];
+  diagnostics: PluginDiagnostic[];
   seen: Set<string>;
   idHint: string;
   source: string;
@@ -96,12 +202,23 @@ function addCandidate(params: {
   if (params.seen.has(resolved)) {
     return;
   }
+  const resolvedRoot = path.resolve(params.rootDir);
+  if (
+    isUnsafePluginCandidate({
+      source: resolved,
+      rootDir: resolvedRoot,
+      origin: params.origin,
+      diagnostics: params.diagnostics,
+    })
+  ) {
+    return;
+  }
   params.seen.add(resolved);
   const manifest = params.manifest ?? null;
   params.candidates.push({
     idHint: params.idHint,
     source: resolved,
-    rootDir: path.resolve(params.rootDir),
+    rootDir: resolvedRoot,
     origin: params.origin,
     workspaceDir: params.workspaceDir,
     packageName: manifest?.name?.trim() || undefined,
@@ -143,6 +260,7 @@ function discoverInDirectory(params: {
       }
       addCandidate({
         candidates: params.candidates,
+        diagnostics: params.diagnostics,
         seen: params.seen,
         idHint: path.basename(entry.name, path.extname(entry.name)),
         source: fullPath,
@@ -163,6 +281,7 @@ function discoverInDirectory(params: {
         const resolved = path.resolve(fullPath, extPath);
         addCandidate({
           candidates: params.candidates,
+          diagnostics: params.diagnostics,
           seen: params.seen,
           idHint: deriveIdHint({
             filePath: resolved,
@@ -187,6 +306,7 @@ function discoverInDirectory(params: {
     if (indexFile && isExtensionFile(indexFile)) {
       addCandidate({
         candidates: params.candidates,
+        diagnostics: params.diagnostics,
         seen: params.seen,
         idHint: entry.name,
         source: indexFile,
@@ -230,6 +350,7 @@ function discoverFromPath(params: {
     }
     addCandidate({
       candidates: params.candidates,
+      diagnostics: params.diagnostics,
       seen: params.seen,
       idHint: path.basename(resolved, path.extname(resolved)),
       source: resolved,
@@ -249,6 +370,7 @@ function discoverFromPath(params: {
         const source = path.resolve(resolved, extPath);
         addCandidate({
           candidates: params.candidates,
+          diagnostics: params.diagnostics,
           seen: params.seen,
           idHint: deriveIdHint({
             filePath: source,
@@ -274,6 +396,7 @@ function discoverFromPath(params: {
     if (indexFile && isExtensionFile(indexFile)) {
       addCandidate({
         candidates: params.candidates,
+        diagnostics: params.diagnostics,
         seen: params.seen,
         idHint: path.basename(resolved),
         source: indexFile,

@@ -177,6 +177,128 @@ function pushDiagnostics(diagnostics: PluginDiagnostic[], append: PluginDiagnost
   diagnostics.push(...append);
 }
 
+function isPathInside(baseDir: string, targetPath: string): boolean {
+  const rel = path.relative(baseDir, targetPath);
+  if (!rel) {
+    return true;
+  }
+  return !rel.startsWith("..") && !path.isAbsolute(rel);
+}
+
+function pathMatchesBaseOrFile(params: { baseOrFile: string; targetFile: string }): boolean {
+  const baseResolved = resolveUserPath(params.baseOrFile);
+  const targetResolved = resolveUserPath(params.targetFile);
+  if (baseResolved === targetResolved) {
+    return true;
+  }
+  try {
+    const stat = fs.statSync(baseResolved);
+    if (!stat.isDirectory()) {
+      return false;
+    }
+  } catch {
+    return false;
+  }
+  return isPathInside(baseResolved, targetResolved);
+}
+
+function isTrackedByInstallRecord(params: {
+  pluginId: string;
+  source: string;
+  config: OpenClawConfig;
+}): boolean {
+  const install = params.config.plugins?.installs?.[params.pluginId];
+  if (!install) {
+    return false;
+  }
+  const trackedPaths = [install.installPath, install.sourcePath]
+    .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+    .filter(Boolean);
+  if (trackedPaths.length === 0) {
+    return true;
+  }
+  return trackedPaths.some((trackedPath) =>
+    pathMatchesBaseOrFile({
+      baseOrFile: trackedPath,
+      targetFile: params.source,
+    }),
+  );
+}
+
+function isTrackedByLoadPath(params: { source: string; loadPaths: string[] }): boolean {
+  return params.loadPaths.some((loadPath) =>
+    pathMatchesBaseOrFile({
+      baseOrFile: loadPath,
+      targetFile: params.source,
+    }),
+  );
+}
+
+function warnWhenAllowlistIsOpen(params: {
+  logger: PluginLogger;
+  pluginsEnabled: boolean;
+  allow: string[];
+  discoverablePlugins: Array<{ id: string; source: string; origin: PluginRecord["origin"] }>;
+}) {
+  if (!params.pluginsEnabled) {
+    return;
+  }
+  if (params.allow.length > 0) {
+    return;
+  }
+  const nonBundled = params.discoverablePlugins.filter((entry) => entry.origin !== "bundled");
+  if (nonBundled.length === 0) {
+    return;
+  }
+  const preview = nonBundled
+    .slice(0, 6)
+    .map((entry) => `${entry.id} (${entry.source})`)
+    .join(", ");
+  const extra = nonBundled.length > 6 ? ` (+${nonBundled.length - 6} more)` : "";
+  params.logger.warn(
+    `[plugins] plugins.allow is empty; discovered non-bundled plugins may auto-load: ${preview}${extra}. Set plugins.allow to explicit trusted ids.`,
+  );
+}
+
+function warnAboutUntrackedLoadedPlugins(params: {
+  registry: PluginRegistry;
+  config: OpenClawConfig;
+  normalizedLoadPaths: string[];
+  logger: PluginLogger;
+}) {
+  for (const plugin of params.registry.plugins) {
+    if (plugin.status !== "loaded" || plugin.origin === "bundled") {
+      continue;
+    }
+    if (
+      isTrackedByInstallRecord({
+        pluginId: plugin.id,
+        source: plugin.source,
+        config: params.config,
+      })
+    ) {
+      continue;
+    }
+    if (
+      isTrackedByLoadPath({
+        source: plugin.source,
+        loadPaths: params.normalizedLoadPaths,
+      })
+    ) {
+      continue;
+    }
+    const message =
+      "loaded without install/load-path provenance; treat as untracked local code and pin trust via plugins.allow or install records";
+    params.registry.diagnostics.push({
+      level: "warn",
+      pluginId: plugin.id,
+      source: plugin.source,
+      message,
+    });
+    params.logger.warn(`[plugins] ${plugin.id}: ${message} (${plugin.source})`);
+  }
+}
+
 export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegistry {
   // Test env: default-disable plugins unless explicitly configured.
   // This keeps unit/gateway suites fast and avoids loading heavyweight plugin deps by accident.
@@ -219,6 +341,16 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     diagnostics: discovery.diagnostics,
   });
   pushDiagnostics(registry.diagnostics, manifestRegistry.diagnostics);
+  warnWhenAllowlistIsOpen({
+    logger,
+    pluginsEnabled: normalized.enabled,
+    allow: normalized.allow,
+    discoverablePlugins: manifestRegistry.plugins.map((plugin) => ({
+      id: plugin.id,
+      source: plugin.source,
+      origin: plugin.origin,
+    })),
+  });
 
   // Lazy: avoid creating the Jiti loader when all plugins are disabled (common in unit tests).
   let jitiLoader: ReturnType<typeof createJiti> | null = null;
@@ -470,6 +602,13 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       message: `memory slot plugin not found or not marked as memory: ${memorySlot}`,
     });
   }
+
+  warnAboutUntrackedLoadedPlugins({
+    registry,
+    config: cfg,
+    normalizedLoadPaths: normalized.loadPaths,
+    logger,
+  });
 
   if (cacheEnabled) {
     registryCache.set(cacheKey, registry);
