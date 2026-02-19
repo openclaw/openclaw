@@ -4,7 +4,7 @@ import { splitShellArgs } from "../utils/shell-argv.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.js";
 import { expandHomePrefix } from "./home-dir.js";
 
-export const DEFAULT_SAFE_BINS = ["jq", "grep", "cut", "sort", "uniq", "head", "tail", "tr", "wc"];
+export const DEFAULT_SAFE_BINS = ["jq", "cut", "uniq", "head", "tail", "tr", "wc"];
 
 export type CommandResolution = {
   rawExecutable: string;

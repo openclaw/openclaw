@@ -11,7 +11,8 @@ import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { tryRecordMessage } from "./dedup.js";
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
-import { downloadImageFeishu, downloadMessageResourceFeishu } from "./media.js";
+import { normalizeFeishuExternalKey } from "./external-keys.js";
+import { downloadMessageResourceFeishu } from "./media.js";
 import { extractMentionTargets, extractMessageBody, isMentionForwardRequest } from "./mention.js";
 import {
   resolveFeishuGroupConfig,
@@ -224,18 +225,20 @@ function parseMediaKeys(
 } {
   try {
     const parsed = JSON.parse(content);
+    const imageKey = normalizeFeishuExternalKey(parsed.image_key);
+    const fileKey = normalizeFeishuExternalKey(parsed.file_key);
     switch (messageType) {
       case "image":
-        return { imageKey: parsed.image_key };
+        return { imageKey };
       case "file":
-        return { fileKey: parsed.file_key, fileName: parsed.file_name };
+        return { fileKey, fileName: parsed.file_name };
       case "audio":
-        return { fileKey: parsed.file_key };
+        return { fileKey };
       case "video":
         // Video has both file_key (video) and image_key (thumbnail)
-        return { fileKey: parsed.file_key, imageKey: parsed.image_key };
+        return { fileKey, imageKey };
       case "sticker":
-        return { fileKey: parsed.file_key };
+        return { fileKey };
       default:
         return {};
     }
@@ -277,7 +280,10 @@ function parsePostContent(content: string): {
             }
           } else if (element.tag === "img" && element.image_key) {
             // Embedded image
-            imageKeys.push(element.image_key);
+            const imageKey = normalizeFeishuExternalKey(element.image_key);
+            if (imageKey) {
+              imageKeys.push(imageKey);
+            }
           }
         }
         textContent += "\n";
