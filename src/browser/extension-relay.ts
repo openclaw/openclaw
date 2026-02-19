@@ -143,8 +143,34 @@ function rejectUpgrade(socket: Duplex, status: number, bodyText: string) {
   }
 }
 
-const serversByPort = new Map<number, ChromeExtensionRelayServer>();
-const relayAuthByPort = new Map<number, string>();
+const RELAY_KEY = Symbol.for("openclaw.browser.relayAuth");
+const SERVER_KEY = Symbol.for("openclaw.browser.relayServers");
+
+// Use globalThis with Symbol.for to share state across bundler chunks.
+// Rolldown may emit multiple chunks from this module, each with its own module-scoped Map.
+// By storing on globalThis, all chunks share the same Map instance.
+// Use a unique object as a key to avoid conflicts with other Map uses of Symbol.for on globalThis.
+const relayAuthByPort: Map<number, string> = (() => {
+  const key = RELAY_KEY;
+  const existing = (globalThis as Record<symbol | string, unknown>)[key];
+  if (existing instanceof Map) {
+    return existing as Map<number, string>;
+  }
+  const map = new Map<number, string>();
+  (globalThis as Record<symbol, Map<number, string>>)[key] = map;
+  return map;
+})();
+
+const serversByPort: Map<number, ChromeExtensionRelayServer> = (() => {
+  const key = SERVER_KEY;
+  const existing = (globalThis as Record<symbol | string, unknown>)[key];
+  if (existing instanceof Map) {
+    return existing as Map<number, ChromeExtensionRelayServer>;
+  }
+  const map = new Map<number, ChromeExtensionRelayServer>();
+  (globalThis as Record<symbol, Map<number, ChromeExtensionRelayServer>>)[key] = map;
+  return map;
+})();
 
 function resolveGatewayAuthToken(): string | null {
   const envToken =
