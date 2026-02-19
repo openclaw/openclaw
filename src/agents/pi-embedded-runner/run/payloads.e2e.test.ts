@@ -1,6 +1,7 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import { formatBillingErrorMessage } from "../../pi-embedded-helpers.js";
+import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
 import { buildEmbeddedRunPayloads } from "./payloads.js";
 
 describe("buildEmbeddedRunPayloads", () => {
@@ -15,31 +16,12 @@ describe("buildEmbeddedRunPayloads", () => {
   },
   "request_id": "req_011CX7DwS7tSvggaNHmefwWg"
 }`;
-  const makeAssistant = (overrides: Partial<AssistantMessage>): AssistantMessage => ({
-    role: "assistant",
-    api: "openai-responses",
-    provider: "openai",
-    model: "test-model",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        total: 0,
-      },
-    },
-    timestamp: 0,
-    stopReason: "error",
-    errorMessage: errorJson,
-    content: [{ type: "text", text: errorJson }],
-    ...overrides,
-  });
+  const makeAssistant = (overrides: Partial<AssistantMessage>): AssistantMessage =>
+    makeAssistantMessageFixture({
+      errorMessage: errorJson,
+      content: [{ type: "text", text: errorJson }],
+      ...overrides,
+    });
 
   type BuildPayloadParams = Parameters<typeof buildEmbeddedRunPayloads>[0];
   const buildPayloads = (overrides: Partial<BuildPayloadParams> = {}) =>
