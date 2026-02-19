@@ -97,8 +97,125 @@ Notes:
 - Remote nodes must point at a **reachable** Gateway URL (not `127.0.0.1`); use
   `openclaw status --all` to confirm.
 - Use `listenaddress=0.0.0.0` for LAN access; `127.0.0.1` keeps it local only.
-- If you want this automatic, register a Scheduled Task to run the refresh
-  step at login.
+- The WSL IP changes after restarts. See [Automate portproxy refresh](#automate-portproxy-refresh-scheduled-task) for persistent forwarding.
+
+## Automate portproxy refresh (Scheduled Task)
+
+Since WSL's IP address changes on restart, you can automate the port forwarding refresh using a Windows Scheduled Task.
+
+### Create the refresh script
+
+Save this as `C:\Scripts\Refresh-WSL-Portproxy.ps1` (create the `Scripts` folder if needed):
+
+```powershell
+# Refresh-WSL-Portproxy.ps1
+# Refreshes port forwarding from Windows to WSL after WSL IP changes
+
+param(
+    [string]$Distro = "Ubuntu-24.04",
+    [int]$ListenPort = 2222,
+    [int]$TargetPort = 22
+)
+
+# Get current WSL IP
+$WslIp = (wsl -d $Distro -- hostname -I 2>$null).Trim().Split(" ")[0]
+
+if (-not $WslIp) {
+    Write-Warning "Could not retrieve WSL IP for distro '$Distro'. Is WSL running?"
+    exit 1
+}
+
+Write-Host "WSL IP detected: $WslIp"
+
+# Remove existing rule (if any)
+netsh interface portproxy delete v4tov4 listenport=$ListenPort listenaddress=0.0.0.0 2>$null | Out-Null
+
+# Add new rule with current WSL IP
+netsh interface portproxy add v4tov4 `
+    listenaddress=0.0.0.0 `
+    listenport=$ListenPort `
+    connectaddress=$WslIp `
+    connectport=$TargetPort
+
+if ($LASTEXITCODE -eq 0) {
+    Write-Host "Port forwarding updated: 0.0.0.0:$ListenPort -> $WslIp:$TargetPort"
+} else {
+    Write-Error "Failed to update port forwarding."
+    exit 1
+}
+```
+
+### Register the Scheduled Task
+
+Run this in PowerShell **as Administrator** to create a task that runs at login and every 30 minutes:
+
+```powershell
+$TaskName = "Refresh-WSL-Portproxy"
+$ScriptPath = "C:\Scripts\Refresh-WSL-Portproxy.ps1"
+$Distro = "Ubuntu-24.04"
+$ListenPort = 2222
+$TargetPort = 22
+
+# Build the action
+$Action = New-ScheduledTaskAction -Execute "PowerShell.exe" `
+    -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$ScriptPath`" -Distro `"$Distro`" -ListenPort $ListenPort -TargetPort $TargetPort"
+
+# Trigger: at login + every 30 minutes
+$TriggerLogin = New-ScheduledTaskTrigger -AtLogOn
+$TriggerInterval = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 30) -RepetitionDuration ([TimeSpan]::MaxValue)
+
+# Run as SYSTEM with highest privileges
+$Principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+
+# Settings
+$Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+
+# Register the task
+Register-ScheduledTask -TaskName $TaskName `
+    -Action $Action `
+    -Trigger $TriggerLogin,$TriggerInterval `
+    -Principal $Principal `
+    -Settings $Settings `
+    -Description "Automatically refreshes port forwarding from Windows to WSL when IP changes" `
+    -Force
+
+Write-Host "Scheduled Task '$TaskName' created successfully."
+Write-Host "To test manually: Start-ScheduledTask -TaskName '$TaskName'"
+```
+
+### Verify the setup
+
+Check that the task is registered:
+
+```powershell
+Get-ScheduledTask -TaskName "Refresh-WSL-Portproxy"
+```
+
+Test the task manually:
+
+```powershell
+Start-ScheduledTask -TaskName "Refresh-WSL-Portproxy"
+```
+
+Verify port forwarding is active:
+
+```powershell
+netsh interface portproxy show v4tov4
+```
+
+You should see your forwarding rule listed with the current WSL IP.
+
+### For OpenClaw Gateway forwarding
+
+If you want to expose the OpenClaw Gateway (default port `18789`) to your LAN, modify the script parameters:
+
+```powershell
+# When registering the task, use:
+$ListenPort = 18789
+$TargetPort = 18789
+```
+
+Then access the Gateway from another machine at `http://<windows-host-ip>:18789/`.
 
 ## Step-by-step WSL2 install
 
@@ -156,4 +273,4 @@ Full guide: [Getting Started](/start/getting-started)
 ## Windows companion app
 
 We do not have a Windows companion app yet. Contributions are welcome if you want
-contributions to make it happen.
+to help make it happen.
