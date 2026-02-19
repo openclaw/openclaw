@@ -5,6 +5,7 @@
 ## The Problem
 
 When you use `sessions_spawn` to delegate a task to a sub-agent (Codex, Claude, etc.), you trust it to:
+
 1. Actually complete the task
 2. Deliver what it promised
 3. Tell you honestly if it couldn't
@@ -33,21 +34,23 @@ In practice, sub-agents hallucinate success. They report "done" when files are m
 
 ## Score Matrix
 
-| Outcome | Score | When |
-|---------|-------|------|
-| Verified success | **+1.0** | Agent delivered AND verification passed |
+| Outcome              | Score    | When                                    |
+| -------------------- | -------- | --------------------------------------- |
+| Verified success     | **+1.0** | Agent delivered AND verification passed |
 | Hallucinated success | **−1.0** | Agent claimed done, verification failed |
-| Honest blocker | **+0.5** | Agent reported it couldn't proceed |
-| Failure | **0.0** | Task not completed |
+| Honest blocker       | **+0.5** | Agent reported it couldn't proceed      |
+| Failure              | **0.0**  | Task not completed                      |
 
 ## Quick Start
 
 **Step 1 — Install:**
+
 ```bash
 bash skills/governed-agents/install.sh
 ```
 
 **Step 2 — Create a contract and spawn:**
+
 ```python
 from governed_agents.orchestrator import GovernedOrchestrator
 
@@ -65,6 +68,7 @@ result = g.record_success()
 ```
 
 **Step 3 — Verify:**
+
 ```bash
 python3 ~/.openclaw/workspace/governed_agents/test_verification.py
 # 🏆 ALL VERIFICATION GATE TESTS PASS
@@ -72,12 +76,12 @@ python3 ~/.openclaw/workspace/governed_agents/test_verification.py
 
 ## Verification Gates
 
-| Gate | Configured by | Behavior on fail |
-|------|--------------|-----------------|
-| **Files** | `required_files=[...]` | score = −1.0 |
-| **Tests** | `run_tests="pytest ..."` | score = −1.0 |
-| **Lint** | `run_lint=True` | graceful skip if no linter |
-| **AST Syntax** | `check_syntax=True` | score = −1.0 |
+| Gate           | Configured by            | Behavior on fail           |
+| -------------- | ------------------------ | -------------------------- |
+| **Files**      | `required_files=[...]`   | score = −1.0               |
+| **Tests**      | `run_tests="pytest ..."` | score = −1.0               |
+| **Lint**       | `run_lint=True`          | graceful skip if no linter |
+| **AST Syntax** | `check_syntax=True`      | score = −1.0               |
 
 ## No External Dependencies
 
