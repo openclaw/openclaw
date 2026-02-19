@@ -178,7 +178,9 @@ async function downloadToFile(
               sniffLen += chunk.length;
             }
             if (total > MAX_BYTES) {
-              req.destroy(new Error("Media exceeds 5MB limit"));
+              req.destroy(
+                new Error(`Media exceeds ${Math.round(MAX_BYTES / (1024 * 1024))}MB limit`),
+              );
             }
           });
           pipeline(res, out)
