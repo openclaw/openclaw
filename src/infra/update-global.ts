@@ -87,6 +87,22 @@ export async function detectGlobalInstallManagerForRoot(
         return manager;
       }
     }
+    // pnpm stores packages in a content-addressable store under the global root's
+    // parent directory (e.g. `<store>/.pnpm/pkg@version.../node_modules/pkg`).
+    // The direct path comparison above fails for pnpm because pkgReal is inside
+    // `.pnpm/…` rather than directly under `node_modules`. Fall back to checking
+    // whether pkgReal is a descendant of the store root (parent of globalRoot).
+    // (#20745)
+    if (manager === "pnpm") {
+      // pnpm content-addressable store: <storeRoot>/.pnpm/<pkg@ver>/node_modules/<pkg>
+      // pkgReal is under storeRoot (parent of globalRoot) inside a .pnpm subdirectory.
+      const storeRoot = path.dirname(globalReal);
+      const pnpmSubstore = path.join(path.resolve(storeRoot), ".pnpm") + path.sep;
+      const normalizedPkg = path.resolve(pkgReal) + path.sep;
+      if (normalizedPkg.startsWith(pnpmSubstore)) {
+        return manager;
+      }
+    }
   }
 
   const bunGlobalRoot = resolveBunGlobalRoot();
