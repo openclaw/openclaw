@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { splitArgsPreservingQuotes } from "./arg-split.js";
-import { parseCmdSetAssignment, renderCmdSetAssignment } from "./cmd-set.js";
+import { parseCmdScriptCommandLine, quoteCmdScriptArg } from "./cmd-argv.js";
+import { assertNoCmdLineBreak, parseCmdSetAssignment, renderCmdSetAssignment } from "./cmd-set.js";
 import { resolveGatewayServiceDescription, resolveGatewayWindowsTaskName } from "./constants.js";
 import { formatLine, writeFormattedLines } from "./output.js";
 import { resolveGatewayStateDir } from "./paths.js";
@@ -36,33 +36,13 @@ export function resolveTaskScriptPath(env: GatewayServiceEnv): string {
   return path.join(stateDir, scriptName);
 }
 
-function assertNoCmdLineBreak(value: string, field: string): void {
-  if (/[\r\n]/.test(value)) {
-    throw new Error(`${field} cannot contain CR or LF in Windows task scripts.`);
-  }
-}
-
+// `/TR` is parsed by schtasks itself, while the generated `gateway.cmd` line is parsed by cmd.exe.
+// Keep their quoting strategies separate so each parser gets the encoding it expects.
 function quoteSchtasksArg(value: string): string {
   if (!/[ \t"]/g.test(value)) {
     return value;
   }
   return `"${value.replace(/"/g, '\\"')}"`;
-}
-
-function quoteCmdScriptArg(value: string): string {
-  assertNoCmdLineBreak(value, "Command argument");
-  if (!value) {
-    return '""';
-  }
-  const escaped = value.replace(/"/g, '\\"').replace(/%/g, "%%").replace(/!/g, "^!");
-  if (!/[ \t"&|<>^()%!]/g.test(value)) {
-    return escaped;
-  }
-  return `"${escaped}"`;
-}
-
-function unescapeCmdScriptArg(value: string): string {
-  return value.replace(/\^!/g, "!").replace(/%%/g, "%");
 }
 
 function resolveTaskUser(env: GatewayServiceEnv): string | null {
@@ -78,14 +58,6 @@ function resolveTaskUser(env: GatewayServiceEnv): string | null {
     return `${domain}\\${username}`;
   }
   return username;
-}
-
-function parseCommandLine(value: string): string[] {
-  // `buildTaskScript` escapes quotes (`\"`) and cmd expansions (`%%`, `^!`).
-  // Keep all other backslashes literal so drive and UNC paths are preserved.
-  return splitArgsPreservingQuotes(value, { escapeMode: "backslash-quote-only" }).map(
-    unescapeCmdScriptArg,
-  );
 }
 
 export async function readScheduledTaskCommand(
@@ -127,7 +99,7 @@ export async function readScheduledTaskCommand(
       return null;
     }
     return {
-      programArguments: parseCommandLine(commandLine),
+      programArguments: parseCmdScriptCommandLine(commandLine),
       ...(workingDirectory ? { workingDirectory } : {}),
       ...(Object.keys(environment).length > 0 ? { environment } : {}),
     };
@@ -180,8 +152,6 @@ function buildTaskScript({
       if (!value) {
         continue;
       }
-      assertNoCmdLineBreak(key, "Environment variable name");
-      assertNoCmdLineBreak(value, "Environment variable value");
       lines.push(renderCmdSetAssignment(key, value));
     }
   }
