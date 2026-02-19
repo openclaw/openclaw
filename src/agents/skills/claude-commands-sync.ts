@@ -141,6 +141,22 @@ export async function syncMcpToClaudeSettings(params: {
 
     settings.mcpServers = { ...existingMcp, ...params.mcpServers };
 
+    // Grant permissions for MCP tools so Claude CLI can call them without prompting
+    const serverNames = Object.keys(params.mcpServers);
+    if (serverNames.length > 0) {
+      const permissions =
+        settings.permissions && typeof settings.permissions === "object"
+          ? (settings.permissions as Record<string, unknown>)
+          : {};
+      const existingAllow = Array.isArray(permissions.allow) ? (permissions.allow as string[]) : [];
+      const allowSet = new Set(existingAllow);
+      for (const name of serverNames) {
+        allowSet.add(`mcp__${name}`);
+      }
+      permissions.allow = [...allowSet];
+      settings.permissions = permissions;
+    }
+
     await fsp.writeFile(settingsPath, JSON.stringify(settings, null, 2) + "\n", "utf-8");
     log.debug(`merged ${Object.keys(params.mcpServers).length} MCP servers into ${settingsPath}`);
   });
@@ -193,6 +209,21 @@ export async function removeFabricMcpFromClaudeSettings(params: {
 
     if (removed > 0) {
       settings.mcpServers = existingMcp;
+
+      // Remove corresponding MCP permissions
+      const permissions =
+        settings.permissions && typeof settings.permissions === "object"
+          ? (settings.permissions as Record<string, unknown>)
+          : {};
+      if (Array.isArray(permissions.allow)) {
+        const removePrefixes = params.serverNames.map((n) => `mcp__${n}`);
+        permissions.allow = (permissions.allow as string[]).filter(
+          (rule) =>
+            !removePrefixes.some((prefix) => rule === prefix || rule.startsWith(prefix + "__")),
+        );
+        settings.permissions = permissions;
+      }
+
       await fsp.writeFile(settingsPath, JSON.stringify(settings, null, 2) + "\n", "utf-8");
       log.debug(`removed ${removed} MCP servers from ${settingsPath}`);
     }
