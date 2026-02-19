@@ -105,7 +105,6 @@ import {
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
 } from "../../pairing/pairing-store.js";
-import { runCommandWithTimeout } from "../../process/exec.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import { monitorSignalProvider } from "../../signal/index.js";
 import { probeSignal } from "../../signal/probe.js";
@@ -236,6 +235,13 @@ function loadWhatsAppActions() {
   return whatsappActionsPromise;
 }
 
+const runtimeCommandExecutionDisabled: PluginRuntime["system"]["runCommandWithTimeout"] =
+  async () => {
+    throw new Error(
+      "runtime.system.runCommandWithTimeout is disabled for security hardening. Use fixed-purpose runtime APIs instead.",
+    );
+  };
+
 export function createPluginRuntime(): PluginRuntime {
   return {
     version: resolveVersion(),
@@ -245,7 +251,7 @@ export function createPluginRuntime(): PluginRuntime {
     },
     system: {
       enqueueSystemEvent,
-      runCommandWithTimeout,
+      runCommandWithTimeout: runtimeCommandExecutionDisabled,
       formatNativeDependencyHint,
     },
     media: {
