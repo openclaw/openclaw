@@ -415,10 +415,7 @@ export function attachGatewayWsMessageHandler(params: {
         };
         if (!device) {
           const allowControlUiScopesWithoutDevice =
-            isControlUi &&
-            sharedAuthOk &&
-            (configSnapshot.gateway?.controlUi?.dangerouslyDisableDeviceAuth === true ||
-              configSnapshot.gateway?.controlUi?.allowInsecureAuth === true);
+            allowControlUiBypass && sharedAuthOk;
           if (scopes.length > 0 && !allowControlUiScopesWithoutDevice) {
             scopes = [];
             connectParams.scopes = scopes;
