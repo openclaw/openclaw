@@ -53,7 +53,7 @@ function parseTarget(raw: string): SignalTarget {
     };
   }
   if (normalized.startsWith("u:")) {
-    return { type: "username", username: value.trim() };
+    return { type: "username", username: value.slice("u:".length).trim() };
   }
   return { type: "recipient", recipient: value };
 }
