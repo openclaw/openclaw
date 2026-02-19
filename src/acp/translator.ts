@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import type {
   Agent,
   AgentSideConnection,
@@ -20,6 +19,7 @@ import type {
   StopReason,
 } from "@agentclientprotocol/sdk";
 import { PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
+import { randomUUID } from "node:crypto";
 import type { GatewayClient } from "../gateway/client.js";
 import type { EventFrame } from "../gateway/protocol/index.js";
 import type { SessionsListResult } from "../gateway/session-utils.js";
@@ -27,6 +27,7 @@ import {
   createFixedWindowRateLimiter,
   type FixedWindowRateLimiter,
 } from "../infra/fixed-window-rate-limit.js";
+import { shortenHomePath } from "../utils.js";
 import { getAvailableCommands } from "./commands.js";
 import {
   extractAttachmentsFromPrompt,
@@ -263,7 +264,8 @@ export class AcpGatewayAgent implements Agent {
     const userText = extractTextFromPrompt(params.prompt);
     const attachments = extractAttachmentsFromPrompt(params.prompt);
     const prefixCwd = meta.prefixCwd ?? this.opts.prefixCwd ?? true;
-    const message = prefixCwd ? `[Working directory: ${session.cwd}]\n\n${userText}` : userText;
+    const displayCwd = shortenHomePath(session.cwd);
+    const message = prefixCwd ? `[Working directory: ${displayCwd}]\n\n${userText}` : userText;
 
     return new Promise<PromptResponse>((resolve, reject) => {
       this.pendingPrompts.set(params.sessionId, {

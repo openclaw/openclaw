@@ -7,6 +7,7 @@ import {
   type OpenClawPackageManifest,
   type PackageManifest,
 } from "./manifest.js";
+import { formatPosixMode, isPathInside, safeRealpathSync, safeStatSync } from "./path-safety.js";
 import type { PluginDiagnostic, PluginOrigin } from "./types.js";
 
 const EXTENSION_EXTS = new Set([".ts", ".js", ".mts", ".cts", ".mjs", ".cjs"]);
@@ -28,6 +29,173 @@ export type PluginDiscoveryResult = {
   candidates: PluginCandidate[];
   diagnostics: PluginDiagnostic[];
 };
+
+function currentUid(overrideUid?: number | null): number | null {
+  if (overrideUid !== undefined) {
+    return overrideUid;
+  }
+  if (process.platform === "win32") {
+    return null;
+  }
+  if (typeof process.getuid !== "function") {
+    return null;
+  }
+  return process.getuid();
+}
+
+export type CandidateBlockReason =
+  | "source_escapes_root"
+  | "path_stat_failed"
+  | "path_world_writable"
+  | "path_suspicious_ownership";
+
+type CandidateBlockIssue = {
+  reason: CandidateBlockReason;
+  sourcePath: string;
+  rootPath: string;
+  targetPath: string;
+  sourceRealPath?: string;
+  rootRealPath?: string;
+  modeBits?: number;
+  foundUid?: number;
+  expectedUid?: number;
+};
+
+function checkSourceEscapesRoot(params: {
+  source: string;
+  rootDir: string;
+}): CandidateBlockIssue | null {
+  const sourceRealPath = safeRealpathSync(params.source);
+  const rootRealPath = safeRealpathSync(params.rootDir);
+  if (!sourceRealPath || !rootRealPath) {
+    return null;
+  }
+  if (isPathInside(rootRealPath, sourceRealPath)) {
+    return null;
+  }
+  return {
+    reason: "source_escapes_root",
+    sourcePath: params.source,
+    rootPath: params.rootDir,
+    targetPath: params.source,
+    sourceRealPath,
+    rootRealPath,
+  };
+}
+
+function checkPathStatAndPermissions(params: {
+  source: string;
+  rootDir: string;
+  origin: PluginOrigin;
+  uid: number | null;
+}): CandidateBlockIssue | null {
+  if (process.platform === "win32") {
+    return null;
+  }
+  const pathsToCheck = [params.rootDir, params.source];
+  const seen = new Set<string>();
+  for (const targetPath of pathsToCheck) {
+    const normalized = path.resolve(targetPath);
+    if (seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    const stat = safeStatSync(targetPath);
+    if (!stat) {
+      return {
+        reason: "path_stat_failed",
+        sourcePath: params.source,
+        rootPath: params.rootDir,
+        targetPath,
+      };
+    }
+    const modeBits = stat.mode & 0o777;
+    if ((modeBits & 0o002) !== 0) {
+      return {
+        reason: "path_world_writable",
+        sourcePath: params.source,
+        rootPath: params.rootDir,
+        targetPath,
+        modeBits,
+      };
+    }
+    if (
+      params.origin !== "bundled" &&
+      params.uid !== null &&
+      typeof stat.uid === "number" &&
+      stat.uid !== params.uid &&
+      stat.uid !== 0
+    ) {
+      return {
+        reason: "path_suspicious_ownership",
+        sourcePath: params.source,
+        rootPath: params.rootDir,
+        targetPath,
+        foundUid: stat.uid,
+        expectedUid: params.uid,
+      };
+    }
+  }
+  return null;
+}
+
+function findCandidateBlockIssue(params: {
+  source: string;
+  rootDir: string;
+  origin: PluginOrigin;
+  ownershipUid?: number | null;
+}): CandidateBlockIssue | null {
+  const escaped = checkSourceEscapesRoot({
+    source: params.source,
+    rootDir: params.rootDir,
+  });
+  if (escaped) {
+    return escaped;
+  }
+  return checkPathStatAndPermissions({
+    source: params.source,
+    rootDir: params.rootDir,
+    origin: params.origin,
+    uid: currentUid(params.ownershipUid),
+  });
+}
+
+function formatCandidateBlockMessage(issue: CandidateBlockIssue): string {
+  if (issue.reason === "source_escapes_root") {
+    return `blocked plugin candidate: source escapes plugin root (${issue.sourcePath} -> ${issue.sourceRealPath}; root=${issue.rootRealPath})`;
+  }
+  if (issue.reason === "path_stat_failed") {
+    return `blocked plugin candidate: cannot stat path (${issue.targetPath})`;
+  }
+  if (issue.reason === "path_world_writable") {
+    return `blocked plugin candidate: world-writable path (${issue.targetPath}, mode=${formatPosixMode(issue.modeBits ?? 0)})`;
+  }
+  return `blocked plugin candidate: suspicious ownership (${issue.targetPath}, uid=${issue.foundUid}, expected uid=${issue.expectedUid} or root)`;
+}
+
+function isUnsafePluginCandidate(params: {
+  source: string;
+  rootDir: string;
+  origin: PluginOrigin;
+  diagnostics: PluginDiagnostic[];
+  ownershipUid?: number | null;
+}): boolean {
+  const issue = findCandidateBlockIssue({
+    source: params.source,
+    rootDir: params.rootDir,
+    origin: params.origin,
+    ownershipUid: params.ownershipUid,
+  });
+  if (!issue) {
+    return false;
+  }
+  params.diagnostics.push({
+    level: "warn",
+    source: issue.targetPath,
+    message: formatCandidateBlockMessage(issue),
+  });
+  return true;
+}
 
 function isExtensionFile(filePath: string): boolean {
   const ext = path.extname(filePath);
@@ -83,11 +251,13 @@ function deriveIdHint(params: {
 
 function addCandidate(params: {
   candidates: PluginCandidate[];
+  diagnostics: PluginDiagnostic[];
   seen: Set<string>;
   idHint: string;
   source: string;
   rootDir: string;
   origin: PluginOrigin;
+  ownershipUid?: number | null;
   workspaceDir?: string;
   manifest?: PackageManifest | null;
   packageDir?: string;
@@ -96,12 +266,24 @@ function addCandidate(params: {
   if (params.seen.has(resolved)) {
     return;
   }
+  const resolvedRoot = path.resolve(params.rootDir);
+  if (
+    isUnsafePluginCandidate({
+      source: resolved,
+      rootDir: resolvedRoot,
+      origin: params.origin,
+      diagnostics: params.diagnostics,
+      ownershipUid: params.ownershipUid,
+    })
+  ) {
+    return;
+  }
   params.seen.add(resolved);
   const manifest = params.manifest ?? null;
   params.candidates.push({
     idHint: params.idHint,
     source: resolved,
-    rootDir: path.resolve(params.rootDir),
+    rootDir: resolvedRoot,
     origin: params.origin,
     workspaceDir: params.workspaceDir,
     packageName: manifest?.name?.trim() || undefined,
@@ -115,6 +297,7 @@ function addCandidate(params: {
 function discoverInDirectory(params: {
   dir: string;
   origin: PluginOrigin;
+  ownershipUid?: number | null;
   workspaceDir?: string;
   candidates: PluginCandidate[];
   diagnostics: PluginDiagnostic[];
@@ -143,11 +326,13 @@ function discoverInDirectory(params: {
       }
       addCandidate({
         candidates: params.candidates,
+        diagnostics: params.diagnostics,
         seen: params.seen,
         idHint: path.basename(entry.name, path.extname(entry.name)),
         source: fullPath,
         rootDir: path.dirname(fullPath),
         origin: params.origin,
+        ownershipUid: params.ownershipUid,
         workspaceDir: params.workspaceDir,
       });
     }
@@ -163,6 +348,7 @@ function discoverInDirectory(params: {
         const resolved = path.resolve(fullPath, extPath);
         addCandidate({
           candidates: params.candidates,
+          diagnostics: params.diagnostics,
           seen: params.seen,
           idHint: deriveIdHint({
             filePath: resolved,
@@ -172,6 +358,7 @@ function discoverInDirectory(params: {
           source: resolved,
           rootDir: fullPath,
           origin: params.origin,
+          ownershipUid: params.ownershipUid,
           workspaceDir: params.workspaceDir,
           manifest,
           packageDir: fullPath,
@@ -187,11 +374,13 @@ function discoverInDirectory(params: {
     if (indexFile && isExtensionFile(indexFile)) {
       addCandidate({
         candidates: params.candidates,
+        diagnostics: params.diagnostics,
         seen: params.seen,
         idHint: entry.name,
         source: indexFile,
         rootDir: fullPath,
         origin: params.origin,
+        ownershipUid: params.ownershipUid,
         workspaceDir: params.workspaceDir,
         manifest,
         packageDir: fullPath,
@@ -203,6 +392,7 @@ function discoverInDirectory(params: {
 function discoverFromPath(params: {
   rawPath: string;
   origin: PluginOrigin;
+  ownershipUid?: number | null;
   workspaceDir?: string;
   candidates: PluginCandidate[];
   diagnostics: PluginDiagnostic[];
@@ -230,11 +420,13 @@ function discoverFromPath(params: {
     }
     addCandidate({
       candidates: params.candidates,
+      diagnostics: params.diagnostics,
       seen: params.seen,
       idHint: path.basename(resolved, path.extname(resolved)),
       source: resolved,
       rootDir: path.dirname(resolved),
       origin: params.origin,
+      ownershipUid: params.ownershipUid,
       workspaceDir: params.workspaceDir,
     });
     return;
@@ -249,6 +441,7 @@ function discoverFromPath(params: {
         const source = path.resolve(resolved, extPath);
         addCandidate({
           candidates: params.candidates,
+          diagnostics: params.diagnostics,
           seen: params.seen,
           idHint: deriveIdHint({
             filePath: source,
@@ -258,6 +451,7 @@ function discoverFromPath(params: {
           source,
           rootDir: resolved,
           origin: params.origin,
+          ownershipUid: params.ownershipUid,
           workspaceDir: params.workspaceDir,
           manifest,
           packageDir: resolved,
@@ -274,11 +468,13 @@ function discoverFromPath(params: {
     if (indexFile && isExtensionFile(indexFile)) {
       addCandidate({
         candidates: params.candidates,
+        diagnostics: params.diagnostics,
         seen: params.seen,
         idHint: path.basename(resolved),
         source: indexFile,
         rootDir: resolved,
         origin: params.origin,
+        ownershipUid: params.ownershipUid,
         workspaceDir: params.workspaceDir,
         manifest,
         packageDir: resolved,
@@ -289,6 +485,7 @@ function discoverFromPath(params: {
     discoverInDirectory({
       dir: resolved,
       origin: params.origin,
+      ownershipUid: params.ownershipUid,
       workspaceDir: params.workspaceDir,
       candidates: params.candidates,
       diagnostics: params.diagnostics,
@@ -301,6 +498,7 @@ function discoverFromPath(params: {
 export function discoverOpenClawPlugins(params: {
   workspaceDir?: string;
   extraPaths?: string[];
+  ownershipUid?: number | null;
 }): PluginDiscoveryResult {
   const candidates: PluginCandidate[] = [];
   const diagnostics: PluginDiagnostic[] = [];
@@ -319,6 +517,7 @@ export function discoverOpenClawPlugins(params: {
     discoverFromPath({
       rawPath: trimmed,
       origin: "config",
+      ownershipUid: params.ownershipUid,
       workspaceDir: workspaceDir?.trim() || undefined,
       candidates,
       diagnostics,
@@ -332,6 +531,7 @@ export function discoverOpenClawPlugins(params: {
       discoverInDirectory({
         dir,
         origin: "workspace",
+        ownershipUid: params.ownershipUid,
         workspaceDir: workspaceRoot,
         candidates,
         diagnostics,
@@ -344,6 +544,7 @@ export function discoverOpenClawPlugins(params: {
   discoverInDirectory({
     dir: globalDir,
     origin: "global",
+    ownershipUid: params.ownershipUid,
     candidates,
     diagnostics,
     seen,
@@ -354,6 +555,7 @@ export function discoverOpenClawPlugins(params: {
     discoverInDirectory({
       dir: bundledDir,
       origin: "bundled",
+      ownershipUid: params.ownershipUid,
       candidates,
       diagnostics,
       seen,
