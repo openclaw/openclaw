@@ -42,14 +42,15 @@ type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
  *
  * Mapping: "5m" → "short", "1h" → "long"
  *
- * Only applies to Anthropic provider (OpenRouter uses openai-completions API
- * with hardcoded cache_control, not the cacheRetention stream option).
+ * Only applies to providers that use the Anthropic Messages API natively
+ * (direct Anthropic and Google Vertex AI). OpenRouter uses openai-completions
+ * API with hardcoded cache_control, not the cacheRetention stream option.
  */
 function resolveCacheRetention(
   extraParams: Record<string, unknown> | undefined,
   provider: string,
 ): CacheRetention | undefined {
-  if (provider !== "anthropic") {
+  if (provider !== "anthropic" && provider !== "google-vertex") {
     return undefined;
   }
 

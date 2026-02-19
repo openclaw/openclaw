@@ -2,6 +2,7 @@ import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Context, Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import { applyExtraParamsToAgent, resolveExtraParams } from "./pi-embedded-runner.js";
+import { isCacheTtlEligibleProvider } from "./pi-embedded-runner/cache-ttl.js";
 
 describe("resolveExtraParams", () => {
   it("returns undefined with no model config", () => {
@@ -261,5 +262,111 @@ describe("applyExtraParamsToAgent", () => {
     void agent.streamFn?.(model, context, {});
 
     expect(payload.store).toBe(false);
+  });
+
+  it("applies cacheRetention for google-vertex provider", () => {
+    const calls: Array<SimpleStreamOptions | undefined> = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      calls.push(options);
+      return new AssistantMessageEventStream();
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(
+      agent,
+      {
+        agents: {
+          defaults: {
+            models: {
+              "google-vertex/claude-opus-4-6": {
+                params: { cacheRetention: "short" },
+              },
+            },
+          },
+        },
+      },
+      "google-vertex",
+      "claude-opus-4-6",
+    );
+
+    const model = {
+      api: "anthropic",
+      provider: "google-vertex",
+      id: "claude-opus-4-6",
+    } as Model<"anthropic">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, {});
+
+    expect(calls).toHaveLength(1);
+    expect((calls[0] as Record<string, unknown>).cacheRetention).toBe("short");
+  });
+
+  it("does not apply cacheRetention for non-anthropic/non-vertex providers", () => {
+    const calls: Array<SimpleStreamOptions | undefined> = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      calls.push(options);
+      return new AssistantMessageEventStream();
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(
+      agent,
+      {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5": {
+                params: { cacheRetention: "short" },
+              },
+            },
+          },
+        },
+      },
+      "openai",
+      "gpt-5",
+    );
+
+    const model = {
+      api: "openai-completions",
+      provider: "openai",
+      id: "gpt-5",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, {});
+
+    // streamFn should not have been wrapped with cacheRetention since
+    // the underlying createStreamFnWithExtraParams strips non-applicable params.
+    // The call goes through the OpenAI store wrapper which doesn't add cacheRetention.
+    expect(calls).toHaveLength(1);
+    expect((calls[0] as Record<string, unknown>).cacheRetention).toBeUndefined();
+  });
+});
+
+describe("isCacheTtlEligibleProvider", () => {
+  it("returns true for anthropic provider", () => {
+    expect(isCacheTtlEligibleProvider("anthropic", "claude-opus-4-6")).toBe(true);
+  });
+
+  it("returns true for google-vertex provider", () => {
+    expect(isCacheTtlEligibleProvider("google-vertex", "claude-opus-4-6")).toBe(true);
+  });
+
+  it("returns true for openrouter with anthropic model", () => {
+    expect(isCacheTtlEligibleProvider("openrouter", "anthropic/claude-opus-4-6")).toBe(true);
+  });
+
+  it("returns false for openrouter with non-anthropic model", () => {
+    expect(isCacheTtlEligibleProvider("openrouter", "google/gemini-3-pro")).toBe(false);
+  });
+
+  it("returns false for other providers", () => {
+    expect(isCacheTtlEligibleProvider("openai", "gpt-5")).toBe(false);
+  });
+
+  it("is case-insensitive for provider", () => {
+    expect(isCacheTtlEligibleProvider("Google-Vertex", "claude-opus-4-6")).toBe(true);
+    expect(isCacheTtlEligibleProvider("ANTHROPIC", "claude-opus-4-6")).toBe(true);
   });
 });
