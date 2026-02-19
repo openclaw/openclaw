@@ -424,7 +424,7 @@ Actions:
 State:
 
 - `openclaw browser cookies`
-- `openclaw browser cookies set session abc123 --url "https://example.com"`
+- `openclaw browser cookies set session abc123 --cookie-url "https://example.com"`
 - `openclaw browser cookies clear`
 - `openclaw browser storage local get`
 - `openclaw browser storage local set theme dark`
