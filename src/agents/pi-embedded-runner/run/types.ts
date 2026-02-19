@@ -1,5 +1,6 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { Api, AssistantMessage, ImageContent, Model } from "@mariozechner/pi-ai";
+import type { RuntimeAttributionV1 } from "../../../auto-reply/reply/get-reply-run.js";
 import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
 import type { AgentStreamParams } from "../../../commands/agent/types.js";
 import type { OpenClawConfig } from "../../../config/config.js";
@@ -88,6 +89,7 @@ export type EmbeddedRunAttemptParams = {
   extraSystemPrompt?: string;
   streamParams?: AgentStreamParams;
   ownerNumbers?: string[];
+  attribution?: RuntimeAttributionV1;
   enforceFinalTag?: boolean;
 };
 

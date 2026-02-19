@@ -2,6 +2,14 @@ import type { SessionManager } from "@mariozechner/pi-coding-agent";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 
+type SessionAttribution = {
+  initiative: string;
+  activity: "spec" | "dev" | "test" | "incident" | "ops";
+  source: "message_tag" | "default" | "packet_field";
+  schemaVersion: "v1";
+  updatedAt?: number;
+};
+
 export type GuardedSessionManager = SessionManager & {
   /** Flush any synthetic tool results for pending tool calls. Idempotent. */
   flushPendingToolResults?: () => void;
@@ -17,6 +25,7 @@ export function guardSessionManager(
     agentId?: string;
     sessionKey?: string;
     allowSyntheticToolResults?: boolean;
+    attribution?: SessionAttribution;
   },
 ): GuardedSessionManager {
   if (typeof (sessionManager as GuardedSessionManager).flushPendingToolResults === "function") {
@@ -47,6 +56,25 @@ export function guardSessionManager(
 
   const guard = installSessionToolResultGuard(sessionManager, {
     transformToolResultForPersistence: transform,
+    transformAssistantForPersistence: (message) => {
+      if (!opts?.attribution) {
+        return message;
+      }
+      const next = message as Record<string, unknown>;
+      if (next.attribution && typeof next.attribution === "object") {
+        return message;
+      }
+      return {
+        ...next,
+        attribution: {
+          initiative: opts.attribution.initiative,
+          activity: opts.attribution.activity,
+          source: opts.attribution.source,
+          schema_version: opts.attribution.schemaVersion,
+          updated_at: opts.attribution.updatedAt,
+        },
+      };
+    },
     allowSyntheticToolResults: opts?.allowSyntheticToolResults,
   });
   (sessionManager as GuardedSessionManager).flushPendingToolResults = guard.flushPendingToolResults;

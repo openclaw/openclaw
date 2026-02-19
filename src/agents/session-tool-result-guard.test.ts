@@ -1,5 +1,8 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 
@@ -205,5 +208,39 @@ describe("installSessionToolResultGuard", () => {
       .map((e) => (e as { message: AgentMessage }).message);
 
     expect(messages.map((m) => m.role)).toEqual(["assistant", "toolResult"]);
+  });
+
+  it("persists assistant attribution alongside non-zero usage in jsonl", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "session-attrib-"));
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const sm = SessionManager.open(sessionFile);
+    installSessionToolResultGuard(sm, {
+      transformAssistantForPersistence: (message) => ({
+        ...(message as Record<string, unknown>),
+        attribution: {
+          initiative: "CTX-010",
+          activity: "ops",
+          source: "message_tag",
+          schema_version: "v1",
+          updated_at: 123456,
+        },
+      }),
+    });
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "ok" }],
+        usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 15 },
+      }),
+    );
+
+    const lines = fs.readFileSync(sessionFile, "utf-8").trim().split("\n");
+    const last = JSON.parse(lines[lines.length - 1] ?? "{}");
+    expect(last.type).toBe("message");
+    expect(last.message?.role).toBe("assistant");
+    expect(last.message?.usage?.totalTokens).toBeGreaterThan(0);
+    expect(last.message?.attribution?.initiative).toBe("CTX-010");
+    expect(last.message?.attribution?.activity).toBe("ops");
   });
 });
