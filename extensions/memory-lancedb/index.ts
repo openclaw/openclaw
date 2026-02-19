@@ -90,7 +90,7 @@ class MemoryDB {
         {
           id: "__schema__",
           text: "",
-          vector: Array.from({ length: this.vectorDim }).fill(0),
+          vector: Array.from({ length: this.vectorDim }, () => 0),
           importance: 0,
           category: "other",
           createdAt: 0,
@@ -406,7 +406,12 @@ const memoryPlugin = {
           });
 
           return {
-            content: [{ type: "text", text: `Stored: "${text.slice(0, 100)}..."` }],
+            content: [
+              {
+                type: "text",
+                text: `Stored: "${text.length > 100 ? text.slice(0, 100) + "..." : text}"`,
+              },
+            ],
             details: { action: "created", id: entry.id },
           };
         },
