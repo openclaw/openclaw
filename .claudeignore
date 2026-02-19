@@ -1,0 +1,45 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+coverage/
+*.bun-build
+
+# Lock files (large, not useful for context)
+pnpm-lock.yaml
+bun.lock
+bun.lockb
+
+# Vendor (third-party code)
+vendor/
+
+# Native app build artifacts
+apps/android/.gradle/
+apps/android/app/build/
+apps/android/.cxx/
+apps/macos/.build/
+apps/macos/.build-local/
+apps/ios/*.xcodeproj/
+apps/ios/*.xcworkspace/
+
+# UI test artifacts
+ui/src/ui/__screenshots__/
+ui/playwright-report/
+ui/test-results/
+
+# Secrets
+.env
+.agent/*.json
+local/
+.local/
+
+# IDE / OS
+.idea/
+.DS_Store
+.tsbuildinfo
+
+# Bundle artifacts
+src/canvas-host/a2ui/*.bundle.js
+src/canvas-host/a2ui/*.map
+.bundle.hash

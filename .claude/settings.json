@@ -1,0 +1,30 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pnpm test)",
+      "Bash(pnpm test:fast)",
+      "Bash(pnpm test:e2e)",
+      "Bash(pnpm check)",
+      "Bash(pnpm lint)",
+      "Bash(pnpm lint:fix)",
+      "Bash(pnpm format)",
+      "Bash(pnpm tsgo)",
+      "Bash(pnpm build)",
+      "Bash(pnpm dev)",
+      "Bash(pnpm openclaw*)",
+      "Bash(pnpm install)",
+      "Bash(git status*)",
+      "Bash(git log*)",
+      "Bash(git diff*)",
+      "Bash(git branch*)",
+      "Bash(git fetch*)",
+      "Bash(git add*)",
+      "Bash(docker ps*)",
+      "Bash(docker logs*)",
+      "Bash(docker stats*)",
+      "Bash(docker compose*-f docker-compose.cloudru-proxy.yml*)",
+      "Bash(curl*localhost:8082*)"
+    ],
+    "deny": []
+  }
+}

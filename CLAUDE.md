@@ -58,13 +58,13 @@ apps/                   # Native apps (macOS, iOS, Android)
 
 ### Source of Truth Locations
 
-| Module | Location | Exports |
-|--------|----------|---------|
-| Time formatting | `src/infra/format-time` | `formatAge`, `formatDuration`, ... |
-| Table rendering | `src/terminal/table.ts` | `renderTable` |
-| Theme/colors | `src/terminal/theme.ts` | `theme.success`, `theme.muted`, ... |
-| Progress/spinners | `src/cli/progress.ts` | spinners, progress bars |
-| Dependency injection | `src/cli/` | `createDefaultDeps` |
+| Module               | Location                | Exports                             |
+| -------------------- | ----------------------- | ----------------------------------- |
+| Time formatting      | `src/infra/format-time` | `formatAge`, `formatDuration`, ...  |
+| Table rendering      | `src/terminal/table.ts` | `renderTable`                       |
+| Theme/colors         | `src/terminal/theme.ts` | `theme.success`, `theme.muted`, ... |
+| Progress/spinners    | `src/cli/progress.ts`   | spinners, progress bars             |
+| Dependency injection | `src/cli/`              | `createDefaultDeps`                 |
 
 ### TypeScript Style
 
@@ -89,6 +89,7 @@ This fork includes three Cloud.ru-related features:
 3. **Cloud.ru FM Proxy** — Docker proxy (`claude-code-proxy`) to route Claude Code requests through Cloud.ru Foundation Models (GLM-4.7, Qwen3-Coder)
 
 Key files for Cloud.ru FM:
+
 - `src/config/cloudru-fm.constants.ts` — Single Source of Truth for model IDs, presets, proxy config
 - `src/commands/auth-choice.apply.cloudru-fm.ts` — Wizard handler
 - `src/commands/onboard-cloudru-fm.ts` — Onboarding utilities
