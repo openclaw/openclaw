@@ -279,7 +279,7 @@ export async function monitorMSTeamsProvider(
   });
 
   httpServer.on("error", (err) => {
-    log.error("msteams server error", { error: String(err) });
+    log.error(`msteams server error: ${String(err)} code=${(err as any).code ?? "?"}`);
   });
 
   const shutdown = async () => {
@@ -294,12 +294,20 @@ export async function monitorMSTeamsProvider(
     });
   };
 
-  // Handle abort signal
-  if (opts.abortSignal) {
-    opts.abortSignal.addEventListener("abort", () => {
-      void shutdown();
-    });
-  }
+  // Keep the promise pending until abort signal fires (or server errors out).
+  // The subsystem manager treats promise resolution as "provider exited" and
+  // triggers auto-restart, so we must not resolve until we actually want to stop.
+  return new Promise<MonitorMSTeamsResult>((resolve) => {
+    const finish = () => {
+      void shutdown().then(() => resolve({ app: expressApp, shutdown }));
+    };
 
-  return { app: expressApp, shutdown };
+    if (opts.abortSignal) {
+      if (opts.abortSignal.aborted) {
+        finish();
+        return;
+      }
+      opts.abortSignal.addEventListener("abort", finish);
+    }
+  });
 }
