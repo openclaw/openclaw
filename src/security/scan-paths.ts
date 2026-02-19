@@ -27,7 +27,9 @@ export function isPathInsideWithRealpath(
   const baseReal = safeRealpathSync(basePath);
   const candidateReal = safeRealpathSync(candidatePath);
   if (!baseReal || !candidateReal) {
-    return opts?.requireRealpath !== true;
+    // SECURITY: Default to failing closed when realpath cannot be resolved.
+    // Callers can opt out with requireRealpath: false for non-security contexts.
+    return opts?.requireRealpath === false;
   }
   return isPathInside(baseReal, candidateReal);
 }
