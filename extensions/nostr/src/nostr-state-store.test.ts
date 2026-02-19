@@ -6,6 +6,9 @@ import { describe, expect, it } from "vitest";
 import {
   readNostrBusState,
   writeNostrBusState,
+  writeNostrBusStateSync,
+  readNostrProfileState,
+  writeNostrProfileState,
   computeSinceTimestamp,
 } from "./nostr-state-store.js";
 import { setNostrRuntime } from "./runtime.js";
@@ -81,6 +84,75 @@ describe("nostr bus state store", () => {
 
       expect(stateA?.lastProcessedAt).toBe(1000);
       expect(stateB?.lastProcessedAt).toBe(2000);
+    });
+  });
+
+  it("writes state synchronously for shutdown-safe persistence", async () => {
+    await withTempStateDir(async () => {
+      writeNostrBusStateSync({
+        accountId: "sync-bot",
+        lastProcessedAt: 1700001111,
+        gatewayStartedAt: 1700002222,
+        recentEventIds: ["evt-a", "evt-b"],
+      });
+
+      const state = await readNostrBusState({ accountId: "sync-bot" });
+      expect(state).toEqual({
+        version: 2,
+        lastProcessedAt: 1700001111,
+        gatewayStartedAt: 1700002222,
+        recentEventIds: ["evt-a", "evt-b"],
+      });
+    });
+  });
+});
+
+describe("nostr profile state store", () => {
+  it("persists and reloads profile state with fingerprint", async () => {
+    await withTempStateDir(async () => {
+      expect(await readNostrProfileState({ accountId: "profile-bot" })).toBeNull();
+
+      await writeNostrProfileState({
+        accountId: "profile-bot",
+        lastPublishedProfileFingerprint: "abc123def",
+        lastPublishedAt: 1700000000,
+        lastPublishedEventId: "event-id-1",
+        lastPublishResults: { "wss://relay.damus.io": "ok" },
+      });
+
+      const state = await readNostrProfileState({ accountId: "profile-bot" });
+      expect(state).toEqual({
+        version: 1,
+        lastPublishedProfileFingerprint: "abc123def",
+        lastPublishedAt: 1700000000,
+        lastPublishedEventId: "event-id-1",
+        lastPublishResults: { "wss://relay.damus.io": "ok" },
+      });
+    });
+  });
+
+  it("accepts legacy profile state missing fingerprint", async () => {
+    await withTempStateDir(async (dir) => {
+      const legacyPath = path.join(dir, "nostr", "profile-state-profile-bot.json");
+      await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+      await fs.writeFile(
+        legacyPath,
+        JSON.stringify({
+          version: 1,
+          lastPublishedAt: 1700000000,
+          lastPublishedEventId: "event-id-legacy",
+          lastPublishResults: { "wss://relay.damus.io": "ok" },
+        }),
+      );
+
+      const state = await readNostrProfileState({ accountId: "profile-bot" });
+      expect(state).toEqual({
+        version: 1,
+        lastPublishedProfileFingerprint: null,
+        lastPublishedAt: 1700000000,
+        lastPublishedEventId: "event-id-legacy",
+        lastPublishResults: { "wss://relay.damus.io": "ok" },
+      });
     });
   });
 });

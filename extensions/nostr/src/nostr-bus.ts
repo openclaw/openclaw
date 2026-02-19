@@ -25,6 +25,7 @@ import { publishProfile as publishProfileFn, type ProfilePublishResult } from ".
 import {
   readNostrBusState,
   writeNostrBusState,
+  writeNostrBusStateSync,
   computeSinceTimestamp,
   readNostrProfileState,
   writeNostrProfileState,
@@ -966,13 +967,35 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
       // Flush pending state write synchronously on close
       if (pendingWrite) {
         clearTimeout(pendingWrite);
-        writeNostrBusState({
-          accountId,
-          lastProcessedAt,
-          gatewayStartedAt,
-          recentEventIds,
-        }).catch((err) => onError?.(err as Error, "persist state on close"));
+        try {
+          writeNostrBusStateSync({
+            accountId,
+            lastProcessedAt,
+            gatewayStartedAt,
+            recentEventIds,
+          });
+        } catch (err) {
+          onError?.(err as Error, "persist state on close");
+        }
+      } else {
+        // Ensure startup timestamp is flushed even when no events were debounced.
+        try {
+          writeNostrBusStateSync({
+            accountId,
+            lastProcessedAt,
+            gatewayStartedAt,
+            recentEventIds,
+          });
+        } catch (err) {
+          onError?.(err as Error, "persist state on close");
+        }
       }
+      void writeNostrBusState({
+        accountId,
+        lastProcessedAt,
+        gatewayStartedAt,
+        recentEventIds,
+      }).catch((err) => onError?.(err as Error, "persist state on close async"));
     },
     publicKey: pk,
     sendDm,

@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -20,6 +21,8 @@ type NostrBusState = {
 /** Profile publish state (separate from bus state) */
 export type NostrProfileState = {
   version: 1;
+  /** SHA-256 hex digest of the canonicalized profile content */
+  lastPublishedProfileFingerprint: string | null;
   /** Unix timestamp (seconds) of last successful profile publish */
   lastPublishedAt: number | null;
   /** Event ID of the last published profile */
@@ -114,6 +117,30 @@ export async function writeNostrBusState(params: {
   await fs.rename(tmp, filePath);
 }
 
+export function writeNostrBusStateSync(params: {
+  accountId?: string;
+  lastProcessedAt: number;
+  gatewayStartedAt: number;
+  recentEventIds?: string[];
+  env?: NodeJS.ProcessEnv;
+}): void {
+  const filePath = resolveNostrStatePath(params.accountId, params.env);
+  const dir = path.dirname(filePath);
+  fsSync.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const tmp = path.join(dir, `${path.basename(filePath)}.${crypto.randomUUID()}.tmp`);
+  const payload: NostrBusState = {
+    version: STORE_VERSION,
+    lastProcessedAt: params.lastProcessedAt,
+    gatewayStartedAt: params.gatewayStartedAt,
+    recentEventIds: (params.recentEventIds ?? []).filter((x): x is string => typeof x === "string"),
+  };
+  fsSync.writeFileSync(tmp, `${JSON.stringify(payload, null, 2)}\n`, {
+    encoding: "utf-8",
+  });
+  fsSync.chmodSync(tmp, 0o600);
+  fsSync.renameSync(tmp, filePath);
+}
+
 /**
  * Determine the `since` timestamp for subscription.
  * Returns the later of: lastProcessedAt or gatewayStartedAt (both from disk),
@@ -149,6 +176,11 @@ function safeParseProfileState(raw: string): NostrProfileState | null {
     if (parsed?.version === 1) {
       return {
         version: 1,
+        lastPublishedProfileFingerprint:
+          typeof parsed.lastPublishedProfileFingerprint === "string" &&
+          parsed.lastPublishedProfileFingerprint.length > 0
+            ? parsed.lastPublishedProfileFingerprint
+            : null,
         lastPublishedAt: typeof parsed.lastPublishedAt === "number" ? parsed.lastPublishedAt : null,
         lastPublishedEventId:
           typeof parsed.lastPublishedEventId === "string" ? parsed.lastPublishedEventId : null,
@@ -184,6 +216,7 @@ export async function readNostrProfileState(params: {
 
 export async function writeNostrProfileState(params: {
   accountId?: string;
+  lastPublishedProfileFingerprint: string | null;
   lastPublishedAt: number;
   lastPublishedEventId: string;
   lastPublishResults: Record<string, "ok" | "failed" | "timeout">;
@@ -195,6 +228,7 @@ export async function writeNostrProfileState(params: {
   const tmp = path.join(dir, `${path.basename(filePath)}.${crypto.randomUUID()}.tmp`);
   const payload: NostrProfileState = {
     version: PROFILE_STATE_VERSION,
+    lastPublishedProfileFingerprint: params.lastPublishedProfileFingerprint,
     lastPublishedAt: params.lastPublishedAt,
     lastPublishedEventId: params.lastPublishedEventId,
     lastPublishResults: params.lastPublishResults,
