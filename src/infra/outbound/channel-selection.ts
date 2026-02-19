@@ -94,14 +94,16 @@ export async function resolveMessageChannelSelection(params: {
 /**
  * List enabled account IDs for a channel.
  * An account is considered enabled if it exists and has `enabled !== false`.
+ * Returns null if the plugin is not found (can't determine enabled accounts).
  */
 export function listEnabledAccountIds(params: {
   cfg: OpenClawConfig;
   channel: MessageChannelId;
-}): string[] {
+}): string[] | null {
   const plugin = listChannelPlugins().find((p) => p.id === params.channel);
   if (!plugin) {
-    return [];
+    // Plugin not found, can't determine enabled accounts
+    return null;
   }
 
   const accountIds = plugin.config.listAccountIds(params.cfg);
@@ -118,10 +120,11 @@ export function listEnabledAccountIds(params: {
  *
  * Behavior:
  * 1. If accountId is provided, use it as-is
- * 2. If "default" account is enabled, use "default"
- * 3. If exactly one account is enabled, use that account
- * 4. If multiple accounts are enabled, require explicit accountId
- * 5. If no accounts are enabled, throw an error
+ * 2. If plugin not found, fall back to defaultAccountId or "default" (backwards compat)
+ * 3. If "default" account is enabled, use "default"
+ * 4. If exactly one account is enabled, use that account
+ * 5. If multiple accounts are enabled, require explicit accountId
+ * 6. If no accounts are enabled, throw an error
  */
 export function resolveMessageAccountSelection(params: {
   cfg: OpenClawConfig;
@@ -134,10 +137,17 @@ export function resolveMessageAccountSelection(params: {
     return params.accountId;
   }
 
+  const defaultId = params.defaultAccountId ?? "default";
+
   const enabledAccounts = listEnabledAccountIds({
     cfg: params.cfg,
     channel: params.channel,
   });
+
+  // If plugin not found (null), fall back to old behavior
+  if (enabledAccounts === null) {
+    return defaultId;
+  }
 
   if (enabledAccounts.length === 0) {
     throw new Error(
@@ -146,7 +156,6 @@ export function resolveMessageAccountSelection(params: {
   }
 
   // If default account is enabled, prefer it
-  const defaultId = params.defaultAccountId ?? "default";
   if (enabledAccounts.includes(defaultId)) {
     return defaultId;
   }

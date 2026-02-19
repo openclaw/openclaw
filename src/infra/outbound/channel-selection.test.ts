@@ -60,6 +60,12 @@ describe("listEnabledAccountIds", () => {
     const result = listEnabledAccountIds({ cfg, channel: "whatsapp" });
     expect(result).toEqual(["default", "other"]);
   });
+
+  it("returns null for unknown channels", () => {
+    const cfg = {} as OpenClawConfig;
+    const result = listEnabledAccountIds({ cfg, channel: "unknown" as never });
+    expect(result).toBeNull();
+  });
 });
 
 describe("resolveMessageAccountSelection", () => {
@@ -160,5 +166,24 @@ describe("resolveMessageAccountSelection", () => {
         channel: "whatsapp",
       }),
     ).toThrow(/No enabled accounts/);
+  });
+
+  it("falls back to default when plugin not found", () => {
+    const cfg = {} as OpenClawConfig;
+    const result = resolveMessageAccountSelection({
+      cfg,
+      channel: "unknown" as never,
+    });
+    expect(result).toBe("default");
+  });
+
+  it("falls back to defaultAccountId when plugin not found", () => {
+    const cfg = {} as OpenClawConfig;
+    const result = resolveMessageAccountSelection({
+      cfg,
+      channel: "unknown" as never,
+      defaultAccountId: "custom",
+    });
+    expect(result).toBe("custom");
   });
 });
