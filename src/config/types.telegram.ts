@@ -136,6 +136,16 @@ export type TelegramAccountConfig = {
   /** Controls whether link previews are shown in outbound messages. Default: true. */
   linkPreview?: boolean;
   /**
+   * Set to `true` when this bot has forum topic mode enabled
+   * (`has_topics_enabled: true`).  When enabled, OpenClaw will use Bot API 9.3's
+   * native `sendMessageDraft` for streaming previews instead of the legacy
+   * sendMessage + editMessageText approach.  This gives smoother, animated
+   * streaming without leaving "edited" markers or consuming extra message IDs.
+   *
+   * Default: `false` (safe default; falls back to the existing edit-based preview).
+   */
+  forumTopicsEnabled?: boolean;
+  /**
    * Per-channel outbound response prefix override.
    *
    * When set, this takes precedence over the global `messages.responsePrefix`.

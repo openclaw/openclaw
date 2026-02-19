@@ -5,6 +5,23 @@ import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helper
 const TELEGRAM_STREAM_MAX_CHARS = 4096;
 const DEFAULT_THROTTLE_MS = 1000;
 
+/**
+ * Two streaming modes are supported:
+ *
+ * 1. **Native draft mode** (`useNativeDraft: true`):
+ *    Uses Bot API 9.3's `sendMessageDraft` method to push animated streaming
+ *    previews to the client without sending/editing a real message. This is
+ *    only available for bots that have forum topic mode enabled
+ *    (`has_topics_enabled: true`). The method returns `true` instead of a
+ *    `Message`, so `messageId()` returns `undefined` in this mode. On any
+ *    API failure the stream automatically falls back to the legacy path.
+ *
+ * 2. **Legacy edit mode** (`useNativeDraft: false`, the default):
+ *    Sends an initial message via `sendMessage`, then repeatedly edits it via
+ *    `editMessageText` as new content arrives. Compatible with all bots and
+ *    chat types, but produces visible "edited" markers and consumes message IDs.
+ */
+
 export type TelegramDraftStream = {
   update: (text: string) => void;
   flush: () => Promise<void>;
@@ -26,6 +43,19 @@ export function createTelegramDraftStream(params: {
   minInitialChars?: number;
   log?: (message: string) => void;
   warn?: (message: string) => void;
+  /**
+   * When true, use Bot API 9.3 `sendMessageDraft` for animated streaming previews.
+   * Requires the bot to have forum topic mode enabled. Falls back to the legacy
+   * editMessageText path on any API failure.
+   * Default: false.
+   */
+  useNativeDraft?: boolean;
+  /**
+   * Stable non-zero draft identifier for this streaming session.
+   * The same `draft_id` animates updates to the same draft bubble.
+   * Must be a non-zero int32. Defaults to `Date.now() % 2147483647`.
+   */
+  draftId?: number;
 }): TelegramDraftStream {
   const maxChars = Math.min(
     params.maxChars ?? TELEGRAM_STREAM_MAX_CHARS,
@@ -39,6 +69,15 @@ export function createTelegramDraftStream(params: {
     params.replyToMessageId != null
       ? { ...threadParams, reply_to_message_id: params.replyToMessageId }
       : threadParams;
+
+  // Native draft state
+  let useNativeDraft = params.useNativeDraft === true;
+  const draftId =
+    params.draftId != null && params.draftId !== 0
+      ? params.draftId
+      : Math.max(1, Date.now() % 2147483647);
+  // message_thread_id is required when forum topic mode is enabled
+  const messageThreadId = threadParams?.message_thread_id;
 
   let streamMessageId: number | undefined;
   let lastSentText = "";
@@ -68,13 +107,38 @@ export function createTelegramDraftStream(params: {
     }
 
     // Debounce first preview send for better push notification quality.
-    if (typeof streamMessageId !== "number" && minInitialChars != null && !isFinal) {
+    // In legacy mode, gate on streamMessageId not yet being set.
+    // In native draft mode, gate on lastSentText still being empty (first send).
+    const isFirstSend = useNativeDraft ? lastSentText === "" : typeof streamMessageId !== "number";
+    if (isFirstSend && minInitialChars != null && !isFinal) {
       if (trimmed.length < minInitialChars) {
         return false;
       }
     }
 
     lastSentText = trimmed;
+
+    // --- Native draft path (Bot API 9.3) ---
+    if (useNativeDraft) {
+      try {
+        await params.api.sendMessageDraft(
+          chatId,
+          draftId,
+          trimmed,
+          messageThreadId != null ? { message_thread_id: messageThreadId } : undefined,
+        );
+        return true;
+      } catch (err) {
+        // Fall back to the legacy editMessageText path on any failure.
+        params.warn?.(
+          `telegram native draft failed, falling back to editMessageText: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        useNativeDraft = false;
+        // Fall through to the legacy path below.
+      }
+    }
+
+    // --- Legacy path: sendMessage + editMessageText ---
     try {
       if (typeof streamMessageId === "number") {
         await params.api.editMessageText(chatId, streamMessageId, trimmed);
@@ -123,6 +187,7 @@ export function createTelegramDraftStream(params: {
     const messageId = streamMessageId;
     streamMessageId = undefined;
     if (typeof messageId !== "number") {
+      // In native draft mode there is no real message to delete.
       return;
     }
     try {
@@ -140,11 +205,18 @@ export function createTelegramDraftStream(params: {
     loop.resetPending();
   };
 
-  params.log?.(`telegram stream preview ready (maxChars=${maxChars}, throttleMs=${throttleMs})`);
+  params.log?.(
+    `telegram stream preview ready (maxChars=${maxChars}, throttleMs=${throttleMs}, nativeDraft=${useNativeDraft})`,
+  );
 
   return {
     update,
     flush: loop.flush,
+    /**
+     * Returns the Telegram message ID of the in-progress preview message.
+     * In native draft mode this is always `undefined` because `sendMessageDraft`
+     * does not create a regular message.
+     */
     messageId: () => streamMessageId,
     clear,
     stop,

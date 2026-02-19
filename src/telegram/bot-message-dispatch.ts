@@ -97,6 +97,21 @@ export const dispatchTelegramMessage = async ({
   const canStreamDraft = streamMode !== "off" && !accountBlockStreamingEnabled;
   const draftReplyToMessageId =
     replyToMode !== "off" && typeof msg.message_id === "number" ? msg.message_id : undefined;
+  // Use Bot API 9.3 native sendMessageDraft when the bot has forum topic mode
+  // enabled.  We prefer a static config flag to avoid an extra getMe() API call
+  // on every message.  Falls back automatically on any API error.
+  const useNativeDraft = telegramCfg.forumTopicsEnabled === true;
+  // Derive a stable non-zero draft_id for this streaming session.  We use the
+  // incoming update_id (when available) so that retried updates reuse the same
+  // draft slot.  Falls back to chatId XOR current timestamp within int32 range.
+  const nativeDraftId = useNativeDraft
+    ? Math.max(
+        1,
+        (typeof msg.message_id === "number"
+          ? (chatId ^ msg.message_id) >>> 0
+          : Date.now()) % 2147483647,
+      )
+    : undefined;
   const draftStream = canStreamDraft
     ? createTelegramDraftStream({
         api: bot.api,
@@ -107,6 +122,8 @@ export const dispatchTelegramMessage = async ({
         minInitialChars: DRAFT_MIN_INITIAL_CHARS,
         log: logVerbose,
         warn: logVerbose,
+        useNativeDraft,
+        draftId: nativeDraftId,
       })
     : undefined;
   const draftChunking =
