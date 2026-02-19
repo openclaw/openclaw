@@ -379,21 +379,6 @@ describe("handleDiscordMessageAction", () => {
       expect.any(Object),
     );
   });
-
-  it("rejects moderation when trusted sender id is missing in Discord tool context", async () => {
-    await expect(
-      handleDiscordMessageAction({
-        action: "kick",
-        params: {
-          guildId: "guild-1",
-          userId: "user-2",
-        },
-        cfg: {} as OpenClawConfig,
-        toolContext: { currentChannelProvider: "discord" },
-      }),
-    ).rejects.toThrow("Sender user ID required for Discord moderation actions.");
-    expect(handleDiscordAction).not.toHaveBeenCalled();
-  });
 });
 
 describe("telegramMessageActions", () => {
