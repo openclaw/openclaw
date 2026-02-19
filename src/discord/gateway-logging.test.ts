@@ -66,6 +66,50 @@ describe("attachDiscordGatewayLogging", () => {
     cleanup();
   });
 
+  it("formats various metrics types via verbose logging", () => {
+    const emitter = new EventEmitter();
+    const runtime = makeRuntime();
+
+    const cleanup = attachDiscordGatewayLogging({ emitter, runtime });
+    const logVerboseMock = vi.mocked(logVerbose);
+
+    emitter.emit("metrics", null);
+    expect(logVerboseMock).toHaveBeenLastCalledWith("discord gateway metrics: null");
+
+    emitter.emit("metrics", undefined);
+    expect(logVerboseMock).toHaveBeenLastCalledWith("discord gateway metrics: undefined");
+
+    emitter.emit("metrics", "plain string");
+    expect(logVerboseMock).toHaveBeenLastCalledWith("discord gateway metrics: plain string");
+
+    emitter.emit("metrics", 42);
+    expect(logVerboseMock).toHaveBeenLastCalledWith("discord gateway metrics: 42");
+
+    emitter.emit("metrics", true);
+    expect(logVerboseMock).toHaveBeenLastCalledWith("discord gateway metrics: true");
+
+    emitter.emit("metrics", BigInt(99));
+    expect(logVerboseMock).toHaveBeenLastCalledWith("discord gateway metrics: 99");
+
+    // Unserializable object (circular reference)
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    emitter.emit("metrics", circular);
+    expect(logVerboseMock).toHaveBeenLastCalledWith(
+      "discord gateway metrics: [unserializable metrics]",
+    );
+
+    cleanup();
+  });
+
+  it("returns no-op cleanup when emitter is undefined", () => {
+    const runtime = makeRuntime();
+    const cleanup = attachDiscordGatewayLogging({ emitter: undefined, runtime });
+    expect(cleanup).toBeTypeOf("function");
+    // Should not throw
+    cleanup();
+  });
+
   it("removes listeners on cleanup", () => {
     const emitter = new EventEmitter();
     const runtime = makeRuntime();
