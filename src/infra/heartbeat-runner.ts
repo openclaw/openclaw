@@ -70,13 +70,6 @@ const CIRCUIT_BREAKER_THRESHOLD = 5;
 const CIRCUIT_BREAKER_RESET_MS = 5 * 60 * 1000; // 5 minutes
 const CIRCUIT_BREAKER_BACKOFF_MAX_MS = 30 * 60 * 1000; // 30 minutes max backoff
 
-// Extended wake params type for internal use (extends the base HeartbeatWakeHandler params)
-type ExtendedHeartbeatWakeParams = {
-  reason?: string;
-  agentId?: string;
-  sessionKey?: string;
-};
-
 export type HeartbeatDeps = OutboundSendDeps &
   ChannelHeartbeatDeps & {
     runtime?: RuntimeEnv;
@@ -745,22 +738,21 @@ export async function runHeartbeatOnce(opts: {
     // Explicitly map auth failures and other model provider errors to status: "failed"
     // so the circuit breaker can detect silent failures (e.g. expired tokens).
     if (replyResult && typeof replyResult === "object") {
-      const res = replyResult as any;
-      if (
+      const res = replyResult as Record<string, unknown>;
+      const resText = typeof res.text === "string" ? res.text : "";
+      const isFailed =
         res.status === "failed" ||
-        res.error ||
-        (typeof res.text === "string" &&
-          res.text.length < 500 &&
-          (res.text.includes("401") ||
-            res.text.toLowerCase().includes("unauthorized") ||
-            res.text.toLowerCase().includes("auth failure") ||
-            res.text.toLowerCase().includes("invalid api key") ||
-            res.text.toLowerCase().includes("token expired")))
-      ) {
+        Boolean(res.error) ||
+        (resText.length < 500 &&
+          (resText.includes("401") ||
+            resText.toLowerCase().includes("unauthorized") ||
+            resText.toLowerCase().includes("auth failure") ||
+            resText.toLowerCase().includes("invalid api key") ||
+            resText.toLowerCase().includes("token expired")));
+
+      if (isFailed) {
         const errorMsg =
-          res.error ||
-          res.message ||
-          (typeof res.text === "string" ? res.text : "Model provider error");
+          (res.error as string) || (res.message as string) || resText || "Model provider error";
         throw new Error(`Heartbeat reply failed: ${errorMsg}`);
       }
     }
