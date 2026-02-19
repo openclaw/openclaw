@@ -12,8 +12,8 @@ import {
   resolveExecApprovalsFromFile,
 } from "../infra/exec-approvals.js";
 import { buildNodeShellCommand } from "../infra/node-shell.js";
+import { requestExecApprovalDecision } from "./bash-tools.exec-approval-request.js";
 import {
-  DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS,
   DEFAULT_APPROVAL_TIMEOUT_MS,
   createApprovalSlug,
   emitExecSystemEvent,
@@ -178,27 +178,16 @@ export async function executeNodeHostCommand(
     void (async () => {
       let decision: string | null = null;
       try {
-        const decisionResult = await callGatewayTool<{ decision: string }>(
-          "exec.approval.request",
-          { timeoutMs: DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS },
-          {
-            id: approvalId,
-            command: params.command,
-            cwd: params.workdir,
-            host: "node",
-            security: hostSecurity,
-            ask: hostAsk,
-            agentId: params.agentId,
-            resolvedPath: undefined,
-            sessionKey: params.sessionKey,
-            timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
-          },
-        );
-        const decisionValue =
-          decisionResult && typeof decisionResult === "object"
-            ? (decisionResult as { decision?: unknown }).decision
-            : undefined;
-        decision = typeof decisionValue === "string" ? decisionValue : null;
+        decision = await requestExecApprovalDecision({
+          id: approvalId,
+          command: params.command,
+          cwd: params.workdir,
+          host: "node",
+          security: hostSecurity,
+          ask: hostAsk,
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+        });
       } catch {
         emitExecSystemEvent(
           `Exec denied (node=${nodeId} id=${approvalId}, approval-request-failed): ${params.command}`,
