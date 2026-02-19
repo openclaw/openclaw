@@ -1,4 +1,5 @@
 import Foundation
+import MoltbotKit
 import Network
 import Observation
 import OpenClawKit
@@ -124,9 +125,11 @@ public final class GatewayDiscoveryModel {
 
     public func refreshWideAreaFallbackNow(timeoutSeconds: TimeInterval = 5.0) {
         guard let domain = OpenClawBonjour.wideAreaGatewayServiceDomain else { return }
-        Task.detached(priority: .utility) { [weak self] in
+        Task(priority: .utility) { [weak self] in
             guard let self else { return }
+
             let beacons = WideAreaGatewayDiscovery.discover(timeoutSeconds: timeoutSeconds)
+
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 self.wideAreaFallbackGateways = self.mapWideAreaBeacons(beacons, domain: domain)
@@ -264,7 +267,7 @@ public final class GatewayDiscoveryModel {
         guard let domain = OpenClawBonjour.wideAreaGatewayServiceDomain else { return }
         if Self.isRunningTests { return }
         guard self.wideAreaFallbackTask == nil else { return }
-        self.wideAreaFallbackTask = Task.detached(priority: .utility) { [weak self] in
+        self.wideAreaFallbackTask = Task(priority: .utility) { [weak self] in
             guard let self else { return }
             var attempt = 0
             let startedAt = Date()
@@ -497,7 +500,7 @@ public final class GatewayDiscoveryModel {
     private func refreshLocalIdentity() {
         let fastIdentity = self.localIdentity
         let displayName = self.localDisplayName
-        Task.detached(priority: .utility) {
+        Task(priority: .utility) {
             let slowIdentity = Self.buildLocalIdentitySlow(displayName: displayName)
             let merged = Self.mergeLocalIdentity(fast: fastIdentity, slow: slowIdentity)
             await MainActor.run { [weak self] in
