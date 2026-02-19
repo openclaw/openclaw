@@ -102,6 +102,16 @@ export function repairToolCallInputs(messages: AgentMessage[]): ToolCallInputRep
       continue;
     }
 
+    // Drop assistant messages that already have empty content arrays.
+    // These are always error artifacts (failed/interrupted API calls with no output).
+    // Keeping them creates consecutive assistant turns that strict providers (MiniMax, etc.)
+    // reject via Jinja template validation.
+    if (msg.content.length === 0) {
+      droppedAssistantMessages += 1;
+      changed = true;
+      continue;
+    }
+
     const nextContent = [];
     let droppedInMessage = 0;
 
@@ -125,6 +135,18 @@ export function repairToolCallInputs(messages: AgentMessage[]): ToolCallInputRep
         continue;
       }
       out.push({ ...msg, content: nextContent });
+      continue;
+    }
+
+    // Drop assistant messages claiming stopReason=toolUse but containing no tool call blocks.
+    // These are malformed provider responses (the provider signalled tool use but emitted no
+    // function calls). Keeping them creates consecutive assistant turns and causes strict providers
+    // (MiniMax) to misattribute subsequent tool results to the wrong turn.
+    const stopReason = (msg as { stopReason?: string }).stopReason;
+    const hasToolCalls = msg.content.some((b) => isToolCallBlock(b));
+    if (stopReason === "toolUse" && !hasToolCalls) {
+      droppedAssistantMessages += 1;
+      changed = true;
       continue;
     }
 
