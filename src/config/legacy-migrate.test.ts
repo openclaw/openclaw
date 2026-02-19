@@ -64,3 +64,43 @@ describe("legacy migrate audio transcription", () => {
     expect(res.config?.tools?.media?.audio).toBeUndefined();
   });
 });
+
+describe("legacy migrate mention routing", () => {
+  it("moves routing.groupChat.requireMention into channel group defaults", () => {
+    const res = migrateLegacyConfig({
+      routing: {
+        groupChat: {
+          requireMention: true,
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      'Moved routing.groupChat.requireMention → channels.telegram.groups."*".requireMention.',
+    );
+    expect(res.changes).toContain(
+      'Moved routing.groupChat.requireMention → channels.imessage.groups."*".requireMention.',
+    );
+    expect(res.config?.channels?.telegram?.groups?.["*"]?.requireMention).toBe(true);
+    expect(res.config?.channels?.imessage?.groups?.["*"]?.requireMention).toBe(true);
+    expect((res.config as { routing?: unknown } | null)?.routing).toBeUndefined();
+  });
+
+  it("moves channels.telegram.requireMention into groups.*.requireMention", () => {
+    const res = migrateLegacyConfig({
+      channels: {
+        telegram: {
+          requireMention: false,
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      'Moved telegram.requireMention → channels.telegram.groups."*".requireMention.',
+    );
+    expect(res.config?.channels?.telegram?.groups?.["*"]?.requireMention).toBe(false);
+    expect(
+      (res.config?.channels?.telegram as { requireMention?: unknown } | undefined)?.requireMention,
+    ).toBeUndefined();
+  });
+});
