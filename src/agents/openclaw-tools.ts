@@ -114,7 +114,6 @@ export function createOpenClawTools(options?: {
     }),
     createCronTool({
       agentSessionKey: options?.agentSessionKey,
-      senderIsOwner: options?.senderIsOwner,
     }),
     ...(messageTool ? [messageTool] : []),
     createTtsTool({
@@ -124,7 +123,6 @@ export function createOpenClawTools(options?: {
     createGatewayTool({
       agentSessionKey: options?.agentSessionKey,
       config: options?.config,
-      senderIsOwner: options?.senderIsOwner,
     }),
     createAgentsListTool({
       agentSessionKey: options?.agentSessionKey,
