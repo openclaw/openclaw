@@ -872,8 +872,7 @@ export abstract class MemoryManagerSyncOps {
         return;
       }
 
-      const shouldSyncMemory =
-        this.sources.has("memory") && (params?.force || needsFullReindex || this.dirty);
+      const shouldSyncMemory = this.sources.has("memory") && (params?.force || this.dirty);
       const shouldSyncSessions = this.shouldSyncSessions(params, needsFullReindex);
 
       if (shouldSyncMemory) {
