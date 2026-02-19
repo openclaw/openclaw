@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { createStubSessionHarness } from "./pi-embedded-subscribe.e2e-harness.js";
+import {
+  createStubSessionHarness,
+  emitAssistantTextDelta,
+} from "./pi-embedded-subscribe.e2e-harness.js";
 import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
 
 describe("subscribeEmbeddedPiSession thinking tag code span awareness", () => {
@@ -19,13 +22,9 @@ describe("subscribeEmbeddedPiSession thinking tag code span awareness", () => {
   it("does not strip thinking tags inside inline code backticks", () => {
     const { emit, onPartialReply } = createPartialReplyHarness();
 
-    emit({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: {
-        type: "text_delta",
-        delta: "The fix strips leaked `<thinking>` tags from messages.",
-      },
+    emitAssistantTextDelta({
+      emit,
+      delta: "The fix strips leaked `<thinking>` tags from messages.",
     });
 
     expect(onPartialReply).toHaveBeenCalled();
@@ -36,13 +35,9 @@ describe("subscribeEmbeddedPiSession thinking tag code span awareness", () => {
   it("does not strip thinking tags inside fenced code blocks", () => {
     const { emit, onPartialReply } = createPartialReplyHarness();
 
-    emit({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: {
-        type: "text_delta",
-        delta: "Example:\n  ````\n<thinking>code example</thinking>\n  ````\nDone.",
-      },
+    emitAssistantTextDelta({
+      emit,
+      delta: "Example:\n  ````\n<thinking>code example</thinking>\n  ````\nDone.",
     });
 
     expect(onPartialReply).toHaveBeenCalled();
@@ -53,13 +48,9 @@ describe("subscribeEmbeddedPiSession thinking tag code span awareness", () => {
   it("still strips actual thinking tags outside code spans", () => {
     const { emit, onPartialReply } = createPartialReplyHarness();
 
-    emit({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: {
-        type: "text_delta",
-        delta: "Hello <thinking>internal thought</thinking> world",
-      },
+    emitAssistantTextDelta({
+      emit,
+      delta: "Hello <thinking>internal thought</thinking> world",
     });
 
     expect(onPartialReply).toHaveBeenCalled();

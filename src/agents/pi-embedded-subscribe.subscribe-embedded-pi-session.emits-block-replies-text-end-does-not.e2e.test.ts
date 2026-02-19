@@ -1,42 +1,18 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
-import { createStubSessionHarness } from "./pi-embedded-subscribe.e2e-harness.js";
-import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
+import {
+  createTextEndBlockReplyHarness,
+  emitAssistantTextDelta,
+  emitAssistantTextEnd,
+} from "./pi-embedded-subscribe.e2e-harness.js";
 
 describe("subscribeEmbeddedPiSession", () => {
-  function createTextEndBlockReplyHarness() {
-    const { session, emit } = createStubSessionHarness();
-    const onBlockReply = vi.fn();
-
-    const subscription = subscribeEmbeddedPiSession({
-      session,
-      runId: "run",
-      onBlockReply,
-      blockReplyBreak: "text_end",
-    });
-
-    return { emit, onBlockReply, subscription };
-  }
-
   it("emits block replies on text_end and does not duplicate on message_end", () => {
-    const { emit, onBlockReply, subscription } = createTextEndBlockReplyHarness();
+    const onBlockReply = vi.fn();
+    const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
 
-    emit({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: {
-        type: "text_delta",
-        delta: "Hello block",
-      },
-    });
-
-    emit({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: {
-        type: "text_end",
-      },
-    });
+    emitAssistantTextDelta({ emit, delta: "Hello block" });
+    emitAssistantTextEnd({ emit });
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
     const payload = onBlockReply.mock.calls[0][0];
@@ -54,18 +30,12 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(subscription.assistantTexts).toEqual(["Hello block"]);
   });
   it("does not duplicate when message_end flushes and a late text_end arrives", () => {
-    const { emit, onBlockReply, subscription } = createTextEndBlockReplyHarness();
+    const onBlockReply = vi.fn();
+    const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
 
     emit({ type: "message_start", message: { role: "assistant" } });
 
-    emit({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: {
-        type: "text_delta",
-        delta: "Hello block",
-      },
-    });
+    emitAssistantTextDelta({ emit, delta: "Hello block" });
 
     const assistantMessage = {
       role: "assistant",
@@ -79,14 +49,7 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(subscription.assistantTexts).toEqual(["Hello block"]);
 
     // Some providers can still emit a late text_end; this must not re-emit.
-    emit({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: {
-        type: "text_end",
-        content: "Hello block",
-      },
-    });
+    emitAssistantTextEnd({ emit, content: "Hello block" });
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
     expect(subscription.assistantTexts).toEqual(["Hello block"]);
