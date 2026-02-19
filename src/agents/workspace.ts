@@ -311,7 +311,12 @@ export async function ensureAgentWorkspace(params?: {
   await writeFileIfMissing(toolsPath, toolsTemplate);
   await writeFileIfMissing(identityPath, identityTemplate);
   await writeFileIfMissing(userPath, userTemplate);
-  await writeFileIfMissing(heartbeatPath, heartbeatTemplate);
+  // Only seed HEARTBEAT.md on brand-new workspaces so the empty template acts
+  // as a heartbeat blocker until the user customises it.  Existing workspaces
+  // that deliberately removed the file should not have it recreated (#16065).
+  if (isBrandNewWorkspace) {
+    await writeFileIfMissing(heartbeatPath, heartbeatTemplate);
+  }
 
   let state = await readWorkspaceOnboardingState(statePath);
   let stateDirty = false;
