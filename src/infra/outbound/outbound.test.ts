@@ -848,6 +848,26 @@ describe("resolveOutboundTarget", () => {
       expected: { ok: true as const, to: "+5551234567" },
     },
     {
+      name: "enforces whatsapp allowFrom in explicit mode",
+      input: {
+        channel: "whatsapp" as const,
+        to: "+15551234567",
+        allowFrom: ["+15550000000"],
+        mode: "explicit" as const,
+      },
+      expectedErrorIncludes: "WhatsApp",
+    },
+    {
+      name: "allows whatsapp explicit target when allowFrom includes it",
+      input: {
+        channel: "whatsapp" as const,
+        to: "+15551234567",
+        allowFrom: ["+15551234567"],
+        mode: "explicit" as const,
+      },
+      expected: { ok: true as const, to: "+15551234567" },
+    },
+    {
       name: "keeps whatsapp group targets",
       input: { channel: "whatsapp" as const, to: "120363401234567890@g.us" },
       expected: { ok: true as const, to: "120363401234567890@g.us" },
