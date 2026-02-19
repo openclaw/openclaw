@@ -11,22 +11,29 @@ export function getProfileContext(
   ctx: BrowserRouteContext,
 ): ProfileContext | { error: string; status: number } {
   let profileName: string | undefined;
+  let relayName: string | undefined;
 
   // Check query string first (works for GET and POST)
   if (typeof req.query.profile === "string") {
     profileName = req.query.profile.trim() || undefined;
   }
+  if (typeof req.query.relay === "string") {
+    relayName = req.query.relay.trim() || undefined;
+  }
 
   // Fall back to body for POST requests
-  if (!profileName && req.body && typeof req.body === "object") {
+  if (req.body && typeof req.body === "object") {
     const body = req.body as Record<string, unknown>;
-    if (typeof body.profile === "string") {
+    if (!profileName && typeof body.profile === "string") {
       profileName = body.profile.trim() || undefined;
+    }
+    if (!relayName && typeof body.relay === "string") {
+      relayName = body.relay.trim() || undefined;
     }
   }
 
   try {
-    return ctx.forProfile(profileName);
+    return ctx.forProfile(profileName, relayName);
   } catch (err) {
     return { error: String(err), status: 404 };
   }
