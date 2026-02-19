@@ -47,6 +47,27 @@ const telegramMessageActions: ChannelMessageActionAdapter = {
   },
 };
 
+const hasUnmentionedGroupsEnabled = (groups: Record<string, unknown> | undefined): boolean => {
+  if (!groups || typeof groups !== "object") {
+    return false;
+  }
+  const wildcardConfig = groups["*"];
+  if (
+    wildcardConfig &&
+    typeof wildcardConfig === "object" &&
+    (wildcardConfig as { requireMention?: unknown }).requireMention === false
+  ) {
+    return true;
+  }
+  return Object.entries(groups).some(
+    ([chatId, groupConfig]) =>
+      chatId !== "*" &&
+      groupConfig !== null &&
+      typeof groupConfig === "object" &&
+      (groupConfig as { requireMention?: unknown }).requireMention === false,
+  );
+};
+
 export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProbe> = {
   id: "telegram",
   meta: {
@@ -137,21 +158,30 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
       };
     },
     collectWarnings: ({ account, cfg }) => {
+      const warnings: string[] = [];
       const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
       const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
+      const allowUnmentionedGroups = hasUnmentionedGroupsEnabled(account.config.groups);
+      if (allowUnmentionedGroups) {
+        warnings.push(
+          `- Telegram Bot API privacy mode can block normal group messages in your current setup. Disable it in BotFather: /setprivacy → Disable, then restart the gateway.`,
+        );
+      }
       if (groupPolicy !== "open") {
-        return [];
+        return warnings;
       }
       const groupAllowlistConfigured =
         account.config.groups && Object.keys(account.config.groups).length > 0;
       if (groupAllowlistConfigured) {
-        return [
+        warnings.push(
           `- Telegram groups: groupPolicy="open" allows any member in allowed groups to trigger (mention-gated). Set channels.telegram.groupPolicy="allowlist" + channels.telegram.groupAllowFrom to restrict senders.`,
-        ];
+        );
+        return warnings;
       }
-      return [
+      warnings.push(
         `- Telegram groups: groupPolicy="open" with no channels.telegram.groups allowlist; any group can add + ping (mention-gated). Set channels.telegram.groupPolicy="allowlist" + channels.telegram.groupAllowFrom or configure channels.telegram.groups.`,
-      ];
+      );
+      return warnings;
     },
   },
   groups: {
@@ -350,11 +380,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
       const groups =
         cfg.channels?.telegram?.accounts?.[account.accountId]?.groups ??
         cfg.channels?.telegram?.groups;
-      const allowUnmentionedGroups =
-        groups?.["*"]?.requireMention === false ||
-        Object.entries(groups ?? {}).some(
-          ([key, value]) => key !== "*" && value?.requireMention === false,
-        );
+      const allowUnmentionedGroups = hasUnmentionedGroupsEnabled(groups);
       return {
         accountId: account.accountId,
         name: account.name,
@@ -379,6 +405,12 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
       const account = ctx.account;
       const token = account.token.trim();
       let telegramBotLabel = "";
+      const allowUnmentionedGroups = hasUnmentionedGroupsEnabled(account.config.groups);
+      if (allowUnmentionedGroups) {
+        ctx.log?.warn(
+          `[${account.accountId}] Telegram Bot API privacy mode can block plain group messages unless it is disabled in BotFather (/setprivacy -> Disable).`,
+        );
+      }
       try {
         const probe = await getTelegramRuntime().channel.telegram.probeTelegram(
           token,

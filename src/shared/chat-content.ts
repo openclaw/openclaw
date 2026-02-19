@@ -24,14 +24,30 @@ export function extractTextFromChatContent(
     if (!block || typeof block !== "object") {
       continue;
     }
-    if ((block as { type?: unknown }).type !== "text") {
+    const record = block as {
+      type?: unknown;
+      text?: unknown;
+      refusal?: unknown;
+      content?: unknown;
+    };
+    const blockType = typeof record.type === "string" ? record.type : "";
+    const isTextLikeBlock =
+      blockType === "text" || blockType === "output_text" || blockType === "refusal";
+    if (!isTextLikeBlock) {
       continue;
     }
-    const text = (block as { text?: unknown }).text;
-    if (typeof text !== "string") {
+    const textValue =
+      typeof record.text === "string"
+        ? record.text
+        : typeof record.refusal === "string"
+          ? record.refusal
+          : typeof record.content === "string"
+            ? record.content
+            : undefined;
+    if (typeof textValue !== "string") {
       continue;
     }
-    const value = opts?.sanitizeText ? opts.sanitizeText(text) : text;
+    const value = opts?.sanitizeText ? opts.sanitizeText(textValue) : textValue;
     if (value.trim()) {
       chunks.push(value);
     }

@@ -24,9 +24,18 @@ export async function runGatewayLoop(params: {
   runtime: typeof defaultRuntime;
 }) {
   const lock = await acquireGatewayLock();
+  let lockReleased = false;
   let server: Awaited<ReturnType<typeof startGatewayServer>> | null = null;
   let shuttingDown = false;
   let restartResolver: (() => void) | null = null;
+
+  const releaseLock = async () => {
+    if (lockReleased) {
+      return;
+    }
+    lockReleased = true;
+    await lock?.release();
+  };
 
   const cleanupSignals = () => {
     process.removeListener("SIGTERM", onSigterm);
@@ -50,8 +59,10 @@ export async function runGatewayLoop(params: {
     const forceExitMs = isRestart ? DRAIN_TIMEOUT_MS + SHUTDOWN_TIMEOUT_MS : SHUTDOWN_TIMEOUT_MS;
     const forceExitTimer = setTimeout(() => {
       gatewayLog.error("shutdown timed out; exiting without full cleanup");
-      cleanupSignals();
-      params.runtime.exit(0);
+      void releaseLock().finally(() => {
+        cleanupSignals();
+        params.runtime.exit(0);
+      });
     }, forceExitMs);
 
     void (async () => {
@@ -90,6 +101,7 @@ export async function runGatewayLoop(params: {
                 ? `spawned pid ${respawn.pid ?? "unknown"}`
                 : "supervisor restart";
             gatewayLog.info(`restart mode: full process restart (${modeLabel})`);
+            await releaseLock();
             cleanupSignals();
             params.runtime.exit(0);
           } else {
@@ -104,6 +116,7 @@ export async function runGatewayLoop(params: {
             restartResolver?.();
           }
         } else {
+          await releaseLock();
           cleanupSignals();
           params.runtime.exit(0);
         }
@@ -158,7 +171,7 @@ export async function runGatewayLoop(params: {
       });
     }
   } finally {
-    await lock?.release();
+    await releaseLock();
     cleanupSignals();
   }
 }

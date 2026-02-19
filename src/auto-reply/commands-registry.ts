@@ -122,6 +122,10 @@ const NATIVE_NAME_OVERRIDES: Record<string, Record<string, string>> = {
   discord: {
     tts: "voice",
   },
+  telegram: {
+    // Telegram only allows a-z, 0-9, and underscores in command names.
+    "export-session": "export_session",
+  },
 };
 
 function resolveNativeName(command: ChatCommandDefinition, provider?: string): string | undefined {

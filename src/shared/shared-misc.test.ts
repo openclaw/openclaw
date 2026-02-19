@@ -23,6 +23,15 @@ describe("extractTextFromChatContent", () => {
     ).toBe("hello world");
   });
 
+  it("extracts text from OpenAI-style output_text and refusal blocks", () => {
+    expect(
+      extractTextFromChatContent([
+        { type: "output_text", text: " hello " },
+        { type: "refusal", refusal: "no thanks" },
+      ]),
+    ).toBe("hello no thanks");
+  });
+
   it("applies sanitizer when provided", () => {
     expect(
       extractTextFromChatContent("Here [Tool Call: foo (ID: 1)] ok", {

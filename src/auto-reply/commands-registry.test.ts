@@ -86,13 +86,21 @@ describe("commands registry", () => {
   });
 
   it("applies provider-specific native names", () => {
-    const native = listNativeCommandSpecsForConfig(
+    const discordNative = listNativeCommandSpecsForConfig(
       { commands: { native: true } },
       { provider: "discord" },
     );
-    expect(native.find((spec) => spec.name === "voice")).toBeTruthy();
+    expect(discordNative.find((spec) => spec.name === "voice")).toBeTruthy();
     expect(findCommandByNativeName("voice", "discord")?.key).toBe("tts");
     expect(findCommandByNativeName("tts", "discord")).toBeUndefined();
+
+    const telegramNative = listNativeCommandSpecsForConfig(
+      { commands: { native: true } },
+      { provider: "telegram" },
+    );
+    expect(telegramNative.find((spec) => spec.name === "export_session")).toBeTruthy();
+    expect(findCommandByNativeName("export_session", "telegram")?.key).toBe("export-session");
+    expect(findCommandByNativeName("export-session", "telegram")).toBeUndefined();
   });
 
   it("detects known text commands", () => {

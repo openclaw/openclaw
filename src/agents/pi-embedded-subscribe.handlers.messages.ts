@@ -30,13 +30,51 @@ const stripTrailingDirective = (text: string): string => {
   return text.slice(0, openIndex);
 };
 
-function emitReasoningEnd(ctx: EmbeddedPiSubscribeContext) {
-  if (!ctx.state.reasoningStreamOpen) {
-    return;
+const RAW_STREAM_MAX_JSON_CHARS = 12_000;
+
+const serializeRawStreamValue = (value: unknown): string | undefined => {
+  const seen = new WeakSet<object>();
+  try {
+    const serialized = JSON.stringify(value, (_key, nextValue) => {
+      if (typeof nextValue === "bigint") {
+        return nextValue.toString();
+      }
+      if (nextValue && typeof nextValue === "object") {
+        if (seen.has(nextValue)) {
+          return "[Circular]";
+        }
+        seen.add(nextValue);
+      }
+      return nextValue;
+    });
+    if (typeof serialized !== "string") {
+      return undefined;
+    }
+    if (serialized.length <= RAW_STREAM_MAX_JSON_CHARS) {
+      return serialized;
+    }
+    return `${serialized.slice(0, RAW_STREAM_MAX_JSON_CHARS)}...[truncated]`;
+  } catch {
+    return undefined;
   }
-  ctx.state.reasoningStreamOpen = false;
-  void ctx.params.onReasoningEnd?.();
-}
+};
+
+const extractEventTextField = (
+  assistantRecord: Record<string, unknown> | undefined,
+  key: "delta" | "content" | "text",
+): string => {
+  const value = assistantRecord?.[key];
+  if (typeof value === "string") {
+    return value;
+  }
+  if (value && typeof value === "object") {
+    const nestedText = (value as Record<string, unknown>).text;
+    if (typeof nestedText === "string") {
+      return nestedText;
+    }
+  }
+  return "";
+};
 
 export function resolveSilentReplyFallbackText(params: {
   text: string;
@@ -89,69 +127,81 @@ export function handleMessageUpdate(
       ? (assistantEvent as Record<string, unknown>)
       : undefined;
   const evtType = typeof assistantRecord?.type === "string" ? assistantRecord.type : "";
+  const evtTypeLower = evtType.toLowerCase();
+  const isTextDeltaEvent = evtType === "text_delta";
+  const isTextBoundaryEvent = evtType === "text_start" || evtType === "text_end";
+  const delta = extractEventTextField(assistantRecord, "delta");
+  const content = extractEventTextField(assistantRecord, "content");
+  const text = extractEventTextField(assistantRecord, "text");
 
-  if (evtType === "thinking_start" || evtType === "thinking_delta" || evtType === "thinking_end") {
-    if (evtType === "thinking_start" || evtType === "thinking_delta") {
-      ctx.state.reasoningStreamOpen = true;
-    }
-    const thinkingDelta = typeof assistantRecord?.delta === "string" ? assistantRecord.delta : "";
-    const thinkingContent =
-      typeof assistantRecord?.content === "string" ? assistantRecord.content : "";
+  // Compatibility: custom providers sometimes forward raw OpenAI-style event names
+  // (for example, response.output_text.delta) or omit `type` but still include delta/content.
+  const isReasoningEvent = evtTypeLower.includes("thinking") || evtTypeLower.includes("reasoning");
+  const isToolEvent = evtTypeLower.includes("tool");
+  const isCompatTextEvent =
+    !isTextDeltaEvent &&
+    !isTextBoundaryEvent &&
+    !isReasoningEvent &&
+    !isToolEvent &&
+    Boolean(delta || content || text) &&
+    (evtTypeLower.length === 0 ||
+      evtTypeLower.includes("text") ||
+      evtTypeLower.includes("message") ||
+      evtTypeLower.includes("delta"));
+  const isCompatTextEndLikeEvent =
+    isCompatTextEvent &&
+    (evtTypeLower.endsWith(".done") ||
+      evtTypeLower.endsWith("_done") ||
+      evtTypeLower.endsWith(".end") ||
+      evtTypeLower.endsWith("_end"));
+  const assistantEventRaw = serializeRawStreamValue(assistantEvent);
+  const assistantMessageRaw = serializeRawStreamValue((msg as { content?: unknown }).content);
+
+  if (isTextDeltaEvent || isTextBoundaryEvent || isCompatTextEvent) {
     appendRawStream({
       ts: Date.now(),
-      event: "assistant_thinking_stream",
+      event: "assistant_text_stream",
       runId: ctx.params.runId,
       sessionId: (ctx.params.session as { id?: string }).id,
       evtType,
-      delta: thinkingDelta,
-      content: thinkingContent,
+      delta,
+      content,
+      text,
+      assistantEventRaw,
+      assistantMessageRaw,
     });
-    if (ctx.state.streamReasoning) {
-      // Prefer full partial-message thinking when available; fall back to event payloads.
-      const partialThinking = extractAssistantThinking(msg);
-      ctx.emitReasoningStream(partialThinking || thinkingContent || thinkingDelta);
-    }
-    if (evtType === "thinking_end") {
-      if (!ctx.state.reasoningStreamOpen) {
-        ctx.state.reasoningStreamOpen = true;
-      }
-      emitReasoningEnd(ctx);
-    }
-    return;
   }
-
-  if (evtType !== "text_delta" && evtType !== "text_start" && evtType !== "text_end") {
-    return;
-  }
-
-  const delta = typeof assistantRecord?.delta === "string" ? assistantRecord.delta : "";
-  const content = typeof assistantRecord?.content === "string" ? assistantRecord.content : "";
-
-  appendRawStream({
-    ts: Date.now(),
-    event: "assistant_text_stream",
-    runId: ctx.params.runId,
-    sessionId: (ctx.params.session as { id?: string }).id,
-    evtType,
-    delta,
-    content,
-  });
 
   let chunk = "";
-  if (evtType === "text_delta") {
+  const textContent = content || text;
+  if (isTextDeltaEvent || (isCompatTextEvent && delta)) {
     chunk = delta;
-  } else if (evtType === "text_start" || evtType === "text_end") {
-    if (delta) {
-      chunk = delta;
-    } else if (content) {
-      // KNOWN: Some providers resend full content on `text_end`.
+  } else if (isTextBoundaryEvent || isCompatTextEvent) {
+    const boundaryText = delta || textContent;
+    if (boundaryText) {
+      // KNOWN: Some providers resend full content on end/done events.
       // We only append a suffix (or nothing) to keep output monotonic.
-      if (content.startsWith(ctx.state.deltaBuffer)) {
-        chunk = content.slice(ctx.state.deltaBuffer.length);
-      } else if (ctx.state.deltaBuffer.startsWith(content)) {
+      if (boundaryText.startsWith(ctx.state.deltaBuffer)) {
+        chunk = boundaryText.slice(ctx.state.deltaBuffer.length);
+      } else if (ctx.state.deltaBuffer.startsWith(boundaryText)) {
         chunk = "";
-      } else if (!ctx.state.deltaBuffer.includes(content)) {
-        chunk = content;
+      } else if (!ctx.state.deltaBuffer.includes(boundaryText)) {
+        chunk = boundaryText;
+      }
+    }
+  }
+
+  if (!chunk) {
+    const fallbackText = extractAssistantText(msg as Parameters<typeof extractAssistantText>[0]);
+    if (fallbackText) {
+      if (fallbackText.startsWith(ctx.state.deltaBuffer)) {
+        chunk = fallbackText.slice(ctx.state.deltaBuffer.length);
+      } else if (!ctx.state.deltaBuffer.startsWith(fallbackText)) {
+        // Reset and resync when provider sends full text snapshots in message_update.
+        ctx.state.deltaBuffer = "";
+        ctx.state.blockBuffer = "";
+        ctx.blockChunker?.reset();
+        chunk = fallbackText;
       }
     }
   }
@@ -180,12 +230,9 @@ export function handleMessageUpdate(
   if (next) {
     const wasThinking = ctx.state.partialBlockState.thinking;
     const visibleDelta = chunk ? ctx.stripBlockTags(chunk, ctx.state.partialBlockState) : "";
-    if (!wasThinking && ctx.state.partialBlockState.thinking) {
-      ctx.state.reasoningStreamOpen = true;
-    }
     // Detect when thinking block ends (</think> tag processed)
     if (wasThinking && !ctx.state.partialBlockState.thinking) {
-      emitReasoningEnd(ctx);
+      void ctx.params.onReasoningEnd?.();
     }
     const parsedDelta = visibleDelta ? ctx.consumePartialReplyDirectives(visibleDelta) : null;
     const parsedFull = parseReplyDirectives(stripTrailingDirective(next));
@@ -241,8 +288,17 @@ export function handleMessageUpdate(
     ctx.blockChunker?.drain({ force: false, emit: ctx.emitBlockChunk });
   }
 
-  if (evtType === "text_end" && ctx.state.blockReplyBreak === "text_end") {
-    ctx.flushBlockReplyBuffer();
+  if (
+    (evtType === "text_end" || isCompatTextEndLikeEvent) &&
+    ctx.state.blockReplyBreak === "text_end"
+  ) {
+    if (ctx.blockChunker?.hasBuffered()) {
+      ctx.blockChunker.drain({ force: true, emit: ctx.emitBlockChunk });
+      ctx.blockChunker.reset();
+    } else if (ctx.state.blockBuffer.length > 0) {
+      ctx.emitBlockChunk(ctx.state.blockBuffer);
+      ctx.state.blockBuffer = "";
+    }
   }
 }
 
@@ -268,6 +324,7 @@ export function handleMessageEnd(
     sessionId: (ctx.params.session as { id?: string }).id,
     rawText,
     rawThinking: extractAssistantThinking(assistantMessage),
+    assistantMessageRaw: serializeRawStreamValue(assistantMessage),
   });
 
   const text = resolveSilentReplyFallbackText({
@@ -431,5 +488,4 @@ export function handleMessageEnd(
   ctx.state.blockState.inlineCode = createInlineCodeState();
   ctx.state.lastStreamedAssistant = undefined;
   ctx.state.lastStreamedAssistantCleaned = undefined;
-  ctx.state.reasoningStreamOpen = false;
 }
