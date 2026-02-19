@@ -391,4 +391,38 @@ describe("resolveModel", () => {
     expect(result.model).toBeUndefined();
     expect(result.error).toBe("Unknown model: google-antigravity/some-model");
   });
+  it("inherits provider api when registry model has no api (issue #1695)", () => {
+    const mockModel = {
+      id: "test-model",
+      name: "test-model",
+      provider: "lmstudio",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 4096,
+      maxTokens: 4096,
+      // No api field set
+    };
+
+    vi.mocked(discoverModels).mockReturnValue({
+      find: vi.fn(() => mockModel),
+    } as unknown as ReturnType<typeof discoverModels>);
+
+    const cfg = {
+      models: {
+        providers: {
+          lmstudio: {
+            api: "openai-responses",
+            baseUrl: "http://localhost:1234",
+          },
+        },
+      },
+    } as MoltbotConfig;
+
+    const result = resolveModel("lmstudio", "test-model", "/tmp/agent", cfg);
+
+    expect(result.model?.api).toBe("openai-responses");
+    expect(result.model?.id).toBe("test-model");
+    expect(result.model?.provider).toBe("lmstudio");
+  });
 });
