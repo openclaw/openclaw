@@ -113,7 +113,10 @@ describe("loadChatHistory", () => {
       { role: "assistant", content: [{ type: "text", text: "Hi!" }], timestamp: 2000 },
     ];
     const client = createMockClient({ messages: serverMessages });
-    const state = createState({ client: client as unknown as ChatState["client"], connected: true });
+    const state = createState({
+      client: client as unknown as ChatState["client"],
+      connected: true,
+    });
 
     await loadChatHistory(state);
 
