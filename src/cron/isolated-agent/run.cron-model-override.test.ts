@@ -217,7 +217,10 @@ function makeFreshSessionEntry() {
 
 describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
   let previousFastTestEnv: string | undefined;
-  let sessionEntry: ReturnType<typeof makeFreshSessionEntry>;
+  // Hold onto the cron session *object* — the code may reassign its
+  // `sessionEntry` property (e.g. during skills snapshot refresh), so
+  // checking a stale reference would give a false negative.
+  let cronSession: { sessionEntry: ReturnType<typeof makeFreshSessionEntry>; [k: string]: unknown };
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -237,14 +240,14 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
 
     resolveAgentConfigMock.mockReturnValue(undefined);
 
-    sessionEntry = makeFreshSessionEntry();
-    resolveCronSessionMock.mockReturnValue({
+    cronSession = {
       storePath: "/tmp/store.json",
       store: {},
-      sessionEntry,
+      sessionEntry: makeFreshSessionEntry(),
       systemSent: false,
       isNewSession: true,
-    });
+    };
+    resolveCronSessionMock.mockReturnValue(cronSession);
   });
 
   afterEach(() => {
@@ -268,8 +271,8 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
     //
     // BUG (#21057): the model is only written AFTER a successful run (line 520),
     // so it remains undefined when the run throws at the catch on line 502.
-    expect(sessionEntry.model).toBe("claude-sonnet-4-6");
-    expect(sessionEntry.modelProvider).toBe("anthropic");
+    expect(cronSession.sessionEntry.model).toBe("claude-sonnet-4-6");
+    expect(cronSession.sessionEntry.modelProvider).toBe("anthropic");
   });
 
   it("persists cron payload model before the run starts (pre-run persist)", async () => {

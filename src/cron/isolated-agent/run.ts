@@ -382,7 +382,11 @@ export async function runCronIsolatedAgentTurn(params: {
     await persistSessionEntry();
   }
 
-  // Persist systemSent before the run, mirroring the inbound auto-reply behavior.
+  // Persist the intended model and systemSent before the run so that
+  // sessions_list reflects the cron override even if the run fails or is
+  // still in progress (#21057).
+  cronSession.sessionEntry.modelProvider = provider;
+  cronSession.sessionEntry.model = model;
   cronSession.sessionEntry.systemSent = true;
   await persistSessionEntry();
 
