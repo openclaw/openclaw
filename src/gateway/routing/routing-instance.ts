@@ -18,7 +18,7 @@ import { HealthTracker } from "./health-tracker.js";
 import { ModelSelector } from "./model-selector.js";
 import { ReviewGate } from "./review-gate.js";
 import { SemanticRouter } from "./semantic-router.js";
-import type { RoutingConfig } from "./types.js";
+import type { RoutingConfig, TaskType } from "./types.js";
 import { ROUTE_UTTERANCES } from "./utterances.js";
 
 export interface RoutingInstance {
@@ -132,8 +132,8 @@ export function getRoutingInstance(config: RoutingConfig): RoutingInstance {
     },
 
     setEmbeddingProvider(provider: EmbeddingProvider, threshold?: number) {
-      // No-op if semantic router config is disabled
-      if (config.semantic_router?.enabled === false) {
+      // No-op if semantic router config is not explicitly enabled
+      if (config.semantic_router?.enabled !== true) {
         return;
       }
       // No-op if already initialized or initializing
@@ -152,9 +152,22 @@ export function getRoutingInstance(config: RoutingConfig): RoutingInstance {
       // Assign immediately so resolve() can be called (it guards on isInitialized)
       this.semanticRouter = router;
 
+      // 合并 default utterances + custom utterances
+      const mergedRoutes = new Map(ROUTE_UTTERANCES);
+      const custom = config.semantic_router?.custom_utterances;
+      if (custom) {
+        for (const [key, extras] of Object.entries(custom)) {
+          if (!extras) {
+            continue;
+          }
+          const existing = mergedRoutes.get(key as TaskType) ?? [];
+          mergedRoutes.set(key as TaskType, [...existing, ...extras]);
+        }
+      }
+
       // Background init — non-blocking
       router
-        .init(ROUTE_UTTERANCES)
+        .init(mergedRoutes)
         .then(() => {
           _routerInitializing = false;
           console.info(`[routing] semantic-router initialized: ${router.routeCount} route entries`);
