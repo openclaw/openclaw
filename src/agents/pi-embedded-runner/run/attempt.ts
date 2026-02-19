@@ -670,19 +670,27 @@ export async function runEmbeddedAttempt(
         const wrappedStreamFn = originalStreamFn;
         activeSession.agent.streamFn = async function (model, context, options) {
           if (policy.beforeModelCall) {
-            await policy.beforeModelCall({
-              provider: modelProvider,
-              model: modelId,
-              request: { model, context, options },
-            });
+            try {
+              await policy.beforeModelCall({
+                provider: modelProvider,
+                model: modelId,
+                request: { model, context, options },
+              });
+            } catch (err) {
+              log.warn("Runtime policy beforeModelCall error", { error: String(err) });
+            }
           }
           const result = await wrappedStreamFn(model, context, options);
           if (policy.afterModelCall) {
-            void policy.afterModelCall({
-              provider: modelProvider,
-              model: modelId,
-              response: result,
-            });
+            policy
+              .afterModelCall({
+                provider: modelProvider,
+                model: modelId,
+                response: result,
+              })
+              .catch((err) => {
+                log.warn("Runtime policy afterModelCall error", { error: String(err) });
+              });
           }
           return result;
         };

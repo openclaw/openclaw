@@ -306,25 +306,33 @@ export async function handleToolsInvokeHttpRequest(
 
     const policy = getRuntimePolicy();
     if (policy?.beforeToolInvoke) {
-      await policy.beforeToolInvoke({
-        toolName,
-        args: toolArgs,
-        sessionKey,
-        source: "http",
-      });
+      try {
+        await policy.beforeToolInvoke({
+          toolName,
+          args: toolArgs,
+          sessionKey,
+          source: "http",
+        });
+      } catch (err) {
+        logWarn(`tools-invoke: beforeToolInvoke policy error: ${getErrorMessage(err)}`);
+      }
     }
 
     // oxlint-disable-next-line typescript/no-explicit-any
     const result = await (tool as any).execute?.(`http-${Date.now()}`, toolArgs);
 
     if (policy?.afterToolInvoke) {
-      await policy.afterToolInvoke({
-        toolName,
-        args: toolArgs,
-        result,
-        sessionKey,
-        source: "http",
-      });
+      try {
+        await policy.afterToolInvoke({
+          toolName,
+          args: toolArgs,
+          result,
+          sessionKey,
+          source: "http",
+        });
+      } catch (err) {
+        logWarn(`tools-invoke: afterToolInvoke policy error: ${getErrorMessage(err)}`);
+      }
     }
 
     sendJson(res, 200, { ok: true, result });
