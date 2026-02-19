@@ -1,3 +1,4 @@
+import os from "node:os";
 import path from "node:path";
 import { VERSION } from "../version.js";
 import {
@@ -212,8 +213,8 @@ export function buildServiceEnvironment(params: {
   const systemdUnit = `${resolveGatewaySystemdServiceName(profile)}.service`;
   const stateDir = env.OPENCLAW_STATE_DIR;
   const configPath = env.OPENCLAW_CONFIG_PATH;
-  // launchd on macOS does not inherit shell TMPDIR by default; forward it explicitly there.
-  const tmpDir = process.platform === "darwin" ? env.TMPDIR : undefined;
+  // Keep a usable temp directory for supervised services even when the host env omits TMPDIR.
+  const tmpDir = env.TMPDIR?.trim() || os.tmpdir();
   return {
     HOME: env.HOME,
     TMPDIR: tmpDir,
@@ -237,8 +238,7 @@ export function buildNodeServiceEnvironment(params: {
   const { env } = params;
   const stateDir = env.OPENCLAW_STATE_DIR;
   const configPath = env.OPENCLAW_CONFIG_PATH;
-  // Keep TMPDIR propagation scoped to macOS launchd installs.
-  const tmpDir = process.platform === "darwin" ? env.TMPDIR : undefined;
+  const tmpDir = env.TMPDIR?.trim() || os.tmpdir();
   return {
     HOME: env.HOME,
     TMPDIR: tmpDir,
