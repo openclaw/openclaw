@@ -1,6 +1,6 @@
-# Email Channel for Clawdbot
+# Email Channel for OpenClaw
 
-A powerful email channel plugin for Clawdbot that enables bidirectional communication via IMAP/SMTP servers.
+A powerful email channel plugin for OpenClaw that enables bidirectional communication via IMAP/SMTP servers.
 
 ## Features
 
@@ -9,7 +9,7 @@ A powerful email channel plugin for Clawdbot that enables bidirectional communic
 - **IMAP Email Receiving**: Connects to any standard IMAP server to receive emails
 - **SMTP Email Sending**: Sends AI responses directly to the sender's email
 - **Sender Whitelist**: Optional security feature to restrict which email addresses can send commands
-- **Session History**: Maintains conversation history per sender, viewable in Clawdbot Dashboard
+- **Session History**: Maintains conversation history per sender, viewable in OpenClaw Dashboard
 - **Duplicate Prevention**: Uses Message-ID tracking to prevent processing the same email multiple times
 - **Persistent State**: Robust state management survives Gateway restarts
 
@@ -19,7 +19,7 @@ The email channel uses intelligent state tracking:
 
 - **Time-based Search**: Searches for emails since the last processed timestamp (not reliant on UNSEEN flags)
 - **Message-ID Deduplication**: Tracks processed emails to prevent duplicates
-- **Persistent Storage**: State saved to `~/.clawdbot/extensions/email/state.json`
+- **Persistent Storage**: State saved to `~/.openclaw/extensions/email/state.json`
 - **Auto Cleanup**: Maintains only the last 1000 Message-IDs to prevent file bloat
 
 ### 📅 Persistent State File
@@ -44,7 +44,7 @@ The email channel uses intelligent state tracking:
 
 ### Prerequisites
 
-- Clawdbot installed and running
+- OpenClaw installed and running
 - Node.js >= 18.0.0
 - An email account with IMAP/SMTP access
 
@@ -52,11 +52,11 @@ The email channel uses intelligent state tracking:
 
 1. **Install the Plugin**
 
-The email channel is included in Clawdbot. Ensure it's enabled in your configuration.
+The email channel is included in OpenClaw. Ensure it's enabled in your configuration.
 
 2. **Configure Email Settings**
 
-Edit `~/.clawdbot/clawdbot.json`:
+Edit `~/.openclaw/openclaw.json`:
 
 ```json
 {
@@ -94,7 +94,7 @@ Edit `~/.clawdbot/clawdbot.json`:
 3. **Restart Gateway**
 
 ```bash
-clawdbot gateway restart
+openclaw gateway restart
 ```
 
 ## Configuration
@@ -236,7 +236,7 @@ AI responses are always sent to the original sender, regardless of whitelist set
 ## Usage
 
 1. **Configure your email server** and optional sender whitelist
-2. **Restart the Gateway**: `clawdbot gateway restart`
+2. **Restart the Gateway**: `openclaw gateway restart`
 3. **Send an email** from a whitelisted address to your configured email account
 4. **Receive AI response** directly in your inbox
 
@@ -256,7 +256,7 @@ AI responses are always sent to the original sender, regardless of whitelist set
 ### Start Dashboard
 
 ```bash
-clawdbot dashboard
+openclaw dashboard
 ```
 
 ### View Sessions
@@ -274,7 +274,7 @@ Click any email session to see:
 - Timestamps and metadata
 - Thread history
 
-**Session Storage**: `~/.clawdbot/agents/main/sessions/{sessionId}.jsonl`
+**Session Storage**: `~/.openclaw/agents/main/sessions/{sessionId}.jsonl`
 
 ## Log Output
 
@@ -320,8 +320,8 @@ Email sent to trusted@example.com
 
 **Solutions**:
 1. Verify whitelist configuration
-2. Check logs: `tail -f /tmp/clawdbot/clawdbot-*.log | grep EMAIL`
-3. Check state file: `cat ~/.clawdbot/extensions/email/state.json`
+2. Check logs: `tail -f /tmp/openclaw/openclaw-*.log | grep EMAIL`
+3. Check state file: `cat ~/.openclaw/extensions/email/state.json`
 
 ### Read Emails Not Processed
 
@@ -342,7 +342,7 @@ The email channel now:
 **Solutions**:
 1. Verify at least one email was processed (check logs)
 2. Refresh Dashboard page
-3. Check session files exist: `ls ~/.clawdbot/agents/main/sessions/`
+3. Check session files exist: `ls ~/.openclaw/agents/main/sessions/`
 
 ### Reprocess an Email
 
@@ -350,11 +350,11 @@ The email channel now:
 
 ```bash
 # Edit state file
-vim ~/.clawdbot/extensions/email/state.json
+vim ~/.openclaw/extensions/email/state.json
 # Remove the Message-ID from processedMessageIds array
 
 # Restart Gateway
-clawdbot gateway restart
+openclaw gateway restart
 ```
 
 **Method 2: Reset timestamp**
@@ -367,10 +367,10 @@ To completely start fresh:
 
 ```bash
 # Remove state file
-rm ~/.clawdbot/extensions/email/state.json
+rm ~/.openclaw/extensions/email/state.json
 
 # Restart Gateway
-clawdbot gateway restart
+openclaw gateway restart
 ```
 
 ## Security Best Practices
@@ -446,14 +446,14 @@ The email channel consists of three main components:
 - Duplicate detection
 
 ### `src/channel.ts`
-- Clawdbot ChannelPlugin interface implementation
-- Dynamic import of Clawdbot core functions
+- OpenClaw ChannelPlugin interface implementation
+- Dynamic import of OpenClaw core functions
 - Message dispatching to AI agent
 - Session history integration
 
 ### `index.ts`
 - Plugin entry point
-- Plugin registration with Clawdbot
+- Plugin registration with OpenClaw
 
 ## Development
 
@@ -469,7 +469,7 @@ npm run build
 Create a test configuration with your email credentials and run:
 
 ```bash
-clawdbot gateway
+openclaw gateway
 ```
 
 ## Contributing
@@ -482,5 +482,5 @@ MIT License - see LICENSE file for details
 
 ## Support
 
-- **Issues**: https://github.com/openclaw/clawdbot/issues
-- **Documentation**: https://github.com/openclaw/clawdbot/wiki
+- **Issues**: https://github.com/openclaw/openclaw/issues
+- **Documentation**: https://github.com/openclaw/openclaw/wiki

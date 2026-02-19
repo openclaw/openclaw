@@ -184,9 +184,6 @@ const emailPlugin: ChannelPlugin<EmailAccount> = {
           }
           ctx.log?.error?.(`[${account.accountId}] Full error: ${errorDetails}`);
 
-          console.error(`[EMAIL CHANNEL ERROR] From: ${fromEmail}, Subject: ${subject}`);
-          console.error(`[EMAIL CHANNEL ERROR] Error:`, error);
-
           // Send error notification to sender
           const errorMessage = "Sorry, there was an error processing your request. Please try again later.";
           await sendEmail(fromEmail, subject, errorMessage, messageId);
