@@ -194,6 +194,10 @@ describe("message tool schema scoping", () => {
 });
 
 describe("message tool description", () => {
+  afterEach(() => {
+    setActivePluginRegistry(createTestRegistry([]));
+  });
+
   const bluebubblesPlugin: ChannelPlugin = {
     id: "bluebubbles",
     meta: {
@@ -244,8 +248,6 @@ describe("message tool description", () => {
     expect(tool.description).not.toContain("addParticipant");
     expect(tool.description).not.toContain("removeParticipant");
     expect(tool.description).not.toContain("leaveGroup");
-
-    setActivePluginRegistry(createTestRegistry([]));
   });
 
   it("includes other configured channels when currentChannel is set", () => {
@@ -304,6 +306,20 @@ describe("message tool description", () => {
     // Other configured channels are also listed
     expect(tool.description).toContain("Other configured channels:");
     expect(tool.description).toContain("telegram (delete, edit, react, send, topic-create)");
+  });
+
+  it("does not include 'Other configured channels' when only one channel is configured", () => {
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "bluebubbles", source: "test", plugin: bluebubblesPlugin }]),
+    );
+
+    const tool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "bluebubbles",
+    });
+
+    expect(tool.description).toContain("Current channel (bluebubbles) supports:");
+    expect(tool.description).not.toContain("Other configured channels");
   });
 });
 
