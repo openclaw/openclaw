@@ -14,6 +14,7 @@ import {
   mergeExecApprovalsSocketDefaults,
   minSecurity,
   normalizeExecApprovals,
+  parseExecArgvToken,
   normalizeSafeBins,
   requiresExecApproval,
   resolveCommandResolution,
@@ -25,6 +26,7 @@ import {
   type ExecAllowlistEntry,
   type ExecApprovalsFile,
 } from "./exec-approvals.js";
+import { SAFE_BIN_PROFILE_FIXTURES, SAFE_BIN_PROFILES } from "./exec-safe-bin-policy.js";
 
 function makePathEnv(binDir: string): NodeJS.ProcessEnv {
   if (process.platform !== "win32") {
@@ -328,6 +330,26 @@ describe("exec approvals shell parsing", () => {
     expect(res.ok).toBe(true);
     expect(res.segments[0]?.argv).toEqual(["C:\\Program Files\\Tool\\tool.exe", "--version"]);
   });
+
+  it("normalizes short option clusters with attached payloads", () => {
+    const parsed = parseExecArgvToken("-oblocked.txt");
+    expect(parsed.kind).toBe("option");
+    if (parsed.kind !== "option" || parsed.style !== "short-cluster") {
+      throw new Error("expected short-cluster option");
+    }
+    expect(parsed.flags[0]).toBe("-o");
+    expect(parsed.cluster).toBe("oblocked.txt");
+  });
+
+  it("normalizes long options with inline payloads", () => {
+    const parsed = parseExecArgvToken("--output=blocked.txt");
+    expect(parsed.kind).toBe("option");
+    if (parsed.kind !== "option" || parsed.style !== "long") {
+      throw new Error("expected long option");
+    }
+    expect(parsed.flag).toBe("--output");
+    expect(parsed.inlineValue).toBe("blocked.txt");
+  });
 });
 
 describe("exec approvals shell allowlist (chained commands)", () => {
@@ -515,6 +537,63 @@ describe("exec approvals safe bins", () => {
     });
     expect(ok).toBe(true);
   });
+
+  it("supports injected platform for deterministic safe-bin checks", () => {
+    const ok = isSafeBinUsage({
+      argv: ["jq", ".foo"],
+      resolution: {
+        rawExecutable: "jq",
+        resolvedPath: "/usr/bin/jq",
+        executableName: "jq",
+      },
+      safeBins: normalizeSafeBins(["jq"]),
+      platform: "win32",
+    });
+    expect(ok).toBe(false);
+  });
+
+  it("supports injected trusted path checker for deterministic callers", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const baseParams = {
+      argv: ["jq", ".foo"],
+      resolution: {
+        rawExecutable: "jq",
+        resolvedPath: "/tmp/custom/jq",
+        executableName: "jq",
+      },
+      safeBins: normalizeSafeBins(["jq"]),
+    };
+    expect(
+      isSafeBinUsage({
+        ...baseParams,
+        isTrustedSafeBinPathFn: () => true,
+      }),
+    ).toBe(true);
+    expect(
+      isSafeBinUsage({
+        ...baseParams,
+        isTrustedSafeBinPathFn: () => false,
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps safe-bin profile fixtures aligned with compiled profiles", () => {
+    for (const [name, fixture] of Object.entries(SAFE_BIN_PROFILE_FIXTURES)) {
+      const profile = SAFE_BIN_PROFILES[name];
+      expect(profile).toBeDefined();
+      const fixtureBlockedFlags = fixture.blockedFlags ?? [];
+      const compiledBlockedFlags = profile?.blockedFlags ?? new Set<string>();
+      for (const blockedFlag of fixtureBlockedFlags) {
+        expect(compiledBlockedFlags.has(blockedFlag)).toBe(true);
+      }
+      expect(Array.from(compiledBlockedFlags).toSorted()).toEqual(
+        [...fixtureBlockedFlags].toSorted(),
+      );
+    }
+  });
+
   it("does not include sort/grep in default safeBins", () => {
     const defaults = resolveSafeBins(undefined);
     expect(defaults.has("jq")).toBe(true);

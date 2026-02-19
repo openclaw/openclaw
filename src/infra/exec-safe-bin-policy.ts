@@ -1,3 +1,5 @@
+import { parseExecArgvToken } from "./exec-approvals-analysis.js";
+
 function isPathLikeToken(value: string): boolean {
   const trimmed = value.trim();
   if (!trimmed) {
@@ -28,15 +30,45 @@ export type SafeBinProfile = {
   blockedFlags?: ReadonlySet<string>;
 };
 
-const NO_FLAGS = new Set<string>();
-const asFlagSet = (flags: string[]): ReadonlySet<string> => new Set(flags);
+export type SafeBinProfileFixture = {
+  minPositional?: number;
+  maxPositional?: number;
+  valueFlags?: readonly string[];
+  blockedFlags?: readonly string[];
+};
 
-export const SAFE_BIN_GENERIC_PROFILE: SafeBinProfile = {};
+const NO_FLAGS: ReadonlySet<string> = new Set();
 
-export const SAFE_BIN_PROFILES: Record<string, SafeBinProfile> = {
+const toFlagSet = (flags?: readonly string[]): ReadonlySet<string> => {
+  if (!flags || flags.length === 0) {
+    return NO_FLAGS;
+  }
+  return new Set(flags);
+};
+
+function compileSafeBinProfile(fixture: SafeBinProfileFixture): SafeBinProfile {
+  return {
+    minPositional: fixture.minPositional,
+    maxPositional: fixture.maxPositional,
+    valueFlags: toFlagSet(fixture.valueFlags),
+    blockedFlags: toFlagSet(fixture.blockedFlags),
+  };
+}
+
+function compileSafeBinProfiles(
+  fixtures: Record<string, SafeBinProfileFixture>,
+): Record<string, SafeBinProfile> {
+  return Object.fromEntries(
+    Object.entries(fixtures).map(([name, fixture]) => [name, compileSafeBinProfile(fixture)]),
+  ) as Record<string, SafeBinProfile>;
+}
+
+export const SAFE_BIN_GENERIC_PROFILE_FIXTURE: SafeBinProfileFixture = {};
+
+export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> = {
   jq: {
     maxPositional: 1,
-    valueFlags: asFlagSet([
+    valueFlags: [
       "--arg",
       "--argjson",
       "--argstr",
@@ -47,8 +79,8 @@ export const SAFE_BIN_PROFILES: Record<string, SafeBinProfile> = {
       "--library-path",
       "-L",
       "-f",
-    ]),
-    blockedFlags: asFlagSet([
+    ],
+    blockedFlags: [
       "--argfile",
       "--rawfile",
       "--slurpfile",
@@ -56,11 +88,11 @@ export const SAFE_BIN_PROFILES: Record<string, SafeBinProfile> = {
       "--library-path",
       "-L",
       "-f",
-    ]),
+    ],
   },
   grep: {
     maxPositional: 1,
-    valueFlags: asFlagSet([
+    valueFlags: [
       "--regexp",
       "--file",
       "--max-count",
@@ -82,8 +114,8 @@ export const SAFE_BIN_PROFILES: Record<string, SafeBinProfile> = {
       "-C",
       "-D",
       "-d",
-    ]),
-    blockedFlags: asFlagSet([
+    ],
+    blockedFlags: [
       "--file",
       "--exclude-from",
       "--dereference-recursive",
@@ -93,11 +125,11 @@ export const SAFE_BIN_PROFILES: Record<string, SafeBinProfile> = {
       "-d",
       "-r",
       "-R",
-    ]),
+    ],
   },
   cut: {
     maxPositional: 0,
-    valueFlags: asFlagSet([
+    valueFlags: [
       "--bytes",
       "--characters",
       "--fields",
@@ -107,11 +139,11 @@ export const SAFE_BIN_PROFILES: Record<string, SafeBinProfile> = {
       "-c",
       "-f",
       "-d",
-    ]),
+    ],
   },
   sort: {
     maxPositional: 0,
-    valueFlags: asFlagSet([
+    valueFlags: [
       "--key",
       "--field-separator",
       "--buffer-size",
@@ -127,28 +159,20 @@ export const SAFE_BIN_PROFILES: Record<string, SafeBinProfile> = {
       "-S",
       "-T",
       "-o",
-    ]),
-    blockedFlags: asFlagSet(["--files0-from", "--output", "-o"]),
+    ],
+    blockedFlags: ["--files0-from", "--output", "-o"],
   },
   uniq: {
     maxPositional: 0,
-    valueFlags: asFlagSet([
-      "--skip-fields",
-      "--skip-chars",
-      "--check-chars",
-      "--group",
-      "-f",
-      "-s",
-      "-w",
-    ]),
+    valueFlags: ["--skip-fields", "--skip-chars", "--check-chars", "--group", "-f", "-s", "-w"],
   },
   head: {
     maxPositional: 0,
-    valueFlags: asFlagSet(["--lines", "--bytes", "-n", "-c"]),
+    valueFlags: ["--lines", "--bytes", "-n", "-c"],
   },
   tail: {
     maxPositional: 0,
-    valueFlags: asFlagSet([
+    valueFlags: [
       "--lines",
       "--bytes",
       "--sleep-interval",
@@ -156,7 +180,7 @@ export const SAFE_BIN_PROFILES: Record<string, SafeBinProfile> = {
       "--pid",
       "-n",
       "-c",
-    ]),
+    ],
   },
   tr: {
     minPositional: 1,
@@ -164,10 +188,15 @@ export const SAFE_BIN_PROFILES: Record<string, SafeBinProfile> = {
   },
   wc: {
     maxPositional: 0,
-    valueFlags: asFlagSet(["--files0-from"]),
-    blockedFlags: asFlagSet(["--files0-from"]),
+    valueFlags: ["--files0-from"],
+    blockedFlags: ["--files0-from"],
   },
 };
+
+export const SAFE_BIN_GENERIC_PROFILE = compileSafeBinProfile(SAFE_BIN_GENERIC_PROFILE_FIXTURE);
+
+export const SAFE_BIN_PROFILES: Record<string, SafeBinProfile> =
+  compileSafeBinProfiles(SAFE_BIN_PROFILE_FIXTURES);
 
 function isSafeLiteralToken(value: string): boolean {
   if (!value || value === "-") {
@@ -180,23 +209,19 @@ function isInvalidValueToken(value: string | undefined): boolean {
   return !value || !isSafeLiteralToken(value);
 }
 
-function consumeLongFlagToken(
+function consumeLongOptionToken(
   args: string[],
   index: number,
+  flag: string,
+  inlineValue: string | undefined,
   valueFlags: ReadonlySet<string>,
   blockedFlags: ReadonlySet<string>,
 ): number {
-  const token = args[index];
-  if (!token) {
-    return -1;
-  }
-  const eqIndex = token.indexOf("=");
-  const flag = eqIndex > 0 ? token.slice(0, eqIndex) : token;
   if (blockedFlags.has(flag)) {
     return -1;
   }
-  if (eqIndex > 0) {
-    return isSafeLiteralToken(token.slice(eqIndex + 1)) ? index + 1 : -1;
+  if (inlineValue !== undefined) {
+    return isSafeLiteralToken(inlineValue) ? index + 1 : -1;
   }
   if (!valueFlags.has(flag)) {
     return index + 1;
@@ -204,31 +229,30 @@ function consumeLongFlagToken(
   return isInvalidValueToken(args[index + 1]) ? -1 : index + 2;
 }
 
-function consumeShortFlagClusterToken(
+function consumeShortOptionClusterToken(
   args: string[],
   index: number,
+  raw: string,
+  cluster: string,
+  flags: string[],
   valueFlags: ReadonlySet<string>,
   blockedFlags: ReadonlySet<string>,
 ): number {
-  const token = args[index];
-  if (!token) {
-    return -1;
-  }
-  for (let j = 1; j < token.length; j += 1) {
-    const flag = `-${token[j]}`;
+  for (let j = 0; j < flags.length; j += 1) {
+    const flag = flags[j];
     if (blockedFlags.has(flag)) {
       return -1;
     }
     if (!valueFlags.has(flag)) {
       continue;
     }
-    const inlineValue = token.slice(j + 1);
+    const inlineValue = cluster.slice(j + 1);
     if (inlineValue) {
       return isSafeLiteralToken(inlineValue) ? index + 1 : -1;
     }
     return isInvalidValueToken(args[index + 1]) ? -1 : index + 2;
   }
-  return hasGlobToken(token) ? -1 : index + 1;
+  return hasGlobToken(raw) ? -1 : index + 1;
 }
 
 function consumePositionalToken(token: string, positional: string[]): boolean {
@@ -253,12 +277,15 @@ export function validateSafeBinArgv(args: string[], profile: SafeBinProfile): bo
   const positional: string[] = [];
   let i = 0;
   while (i < args.length) {
-    const token = args[i];
-    if (!token) {
+    const rawToken = args[i] ?? "";
+    const token = parseExecArgvToken(rawToken);
+
+    if (token.kind === "empty" || token.kind === "stdin") {
       i += 1;
       continue;
     }
-    if (token === "--") {
+
+    if (token.kind === "terminator") {
       for (let j = i + 1; j < args.length; j += 1) {
         const rest = args[j];
         if (!rest || rest === "-") {
@@ -270,20 +297,24 @@ export function validateSafeBinArgv(args: string[], profile: SafeBinProfile): bo
       }
       break;
     }
-    if (token === "-") {
-      i += 1;
-      continue;
-    }
-    if (!token.startsWith("-")) {
-      if (!consumePositionalToken(token, positional)) {
+
+    if (token.kind === "positional") {
+      if (!consumePositionalToken(token.raw, positional)) {
         return false;
       }
       i += 1;
       continue;
     }
 
-    if (token.startsWith("--")) {
-      const nextIndex = consumeLongFlagToken(args, i, valueFlags, blockedFlags);
+    if (token.style === "long") {
+      const nextIndex = consumeLongOptionToken(
+        args,
+        i,
+        token.flag,
+        token.inlineValue,
+        valueFlags,
+        blockedFlags,
+      );
       if (nextIndex < 0) {
         return false;
       }
@@ -291,7 +322,15 @@ export function validateSafeBinArgv(args: string[], profile: SafeBinProfile): bo
       continue;
     }
 
-    const nextIndex = consumeShortFlagClusterToken(args, i, valueFlags, blockedFlags);
+    const nextIndex = consumeShortOptionClusterToken(
+      args,
+      i,
+      token.raw,
+      token.cluster,
+      token.flags,
+      valueFlags,
+      blockedFlags,
+    );
     if (nextIndex < 0) {
       return false;
     }
