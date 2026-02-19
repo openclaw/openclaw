@@ -1,6 +1,7 @@
 package ai.openclaw.android.gateway
 
 import android.util.Log
+import ai.openclaw.android.node.ConnectionManager
 import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -658,14 +659,7 @@ class GatewaySession(
     return "$fallbackScheme://$formattedHost$portSuffix"
   }
 
-  private fun isLoopbackHost(raw: String?): Boolean {
-    val host = raw?.trim()?.lowercase().orEmpty()
-    if (host.isEmpty()) return false
-    if (host == "localhost") return true
-    if (host == "::1") return true
-    if (host == "0.0.0.0" || host == "::") return true
-    return host.startsWith("127.")
-  }
+  private fun isLoopbackHost(raw: String?): Boolean = ConnectionManager.isLoopbackHost(raw)
 }
 
 private fun JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject
