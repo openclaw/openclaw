@@ -8,5 +8,10 @@
  * @see DESIGN.md for architecture details
  */
 
-// Re-export public API (filled in during later phases)
+// Config
 export type { McpConfig, McpServerConfig, McpTransport } from "./config.js";
+export { validateMcpConfig } from "./config.js";
+
+// Manager
+export { McpManager } from "./manager.js";
+export type { McpManagerOptions, McpServerStatus } from "./manager.js";
