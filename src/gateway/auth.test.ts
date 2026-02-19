@@ -34,6 +34,7 @@ describe("gateway auth", () => {
       }),
     ).toMatchObject({
       mode: "password",
+      modeSource: "password",
       token: "env-token",
       password: "env-password",
     });
@@ -50,6 +51,7 @@ describe("gateway auth", () => {
       }),
     ).toMatchObject({
       mode: "token",
+      modeSource: "default",
       token: undefined,
       password: undefined,
     });
@@ -63,8 +65,24 @@ describe("gateway auth", () => {
       }),
     ).toMatchObject({
       mode: "none",
+      modeSource: "config",
       token: undefined,
       password: undefined,
+    });
+  });
+
+  it("marks mode source as override when runtime mode override is provided", () => {
+    expect(
+      resolveGatewayAuth({
+        authConfig: { mode: "password", password: "config-password" },
+        authOverride: { mode: "token" },
+        env: {} as NodeJS.ProcessEnv,
+      }),
+    ).toMatchObject({
+      mode: "token",
+      modeSource: "override",
+      token: undefined,
+      password: "config-password",
     });
   });
 

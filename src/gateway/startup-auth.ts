@@ -1,12 +1,11 @@
 import crypto from "node:crypto";
 import type {
   GatewayAuthConfig,
-  GatewayAuthMode,
   GatewayTailscaleConfig,
   OpenClawConfig,
 } from "../config/config.js";
 import { writeConfigFile } from "../config/config.js";
-import { resolveGatewayAuth } from "./auth.js";
+import { resolveGatewayAuth, type ResolvedGatewayAuth } from "./auth.js";
 
 export function mergeGatewayAuthConfig(
   base?: GatewayAuthConfig,
@@ -60,13 +59,13 @@ function resolveGatewayAuthFromConfig(params: {
   authOverride?: GatewayAuthConfig;
   tailscaleOverride?: GatewayTailscaleConfig;
 }) {
-  const authConfig = mergeGatewayAuthConfig(params.cfg.gateway?.auth, params.authOverride);
   const tailscaleConfig = mergeGatewayTailscaleConfig(
     params.cfg.gateway?.tailscale,
     params.tailscaleOverride,
   );
   return resolveGatewayAuth({
-    authConfig,
+    authConfig: params.cfg.gateway?.auth,
+    authOverride: params.authOverride,
     env: params.env,
     tailscaleMode: tailscaleConfig.mode ?? "off",
   });
@@ -74,16 +73,15 @@ function resolveGatewayAuthFromConfig(params: {
 
 function shouldPersistGeneratedToken(params: {
   persistRequested: boolean;
-  baselineMode: GatewayAuthMode;
-  overrideMode?: GatewayAuthMode;
+  resolvedAuth: ResolvedGatewayAuth;
 }): boolean {
   if (!params.persistRequested) {
     return false;
   }
 
-  // Keep CLI/runtime auth mode overrides ephemeral when they switch from an
-  // explicit non-token config mode to token mode.
-  if (params.overrideMode === "token" && params.baselineMode !== "token") {
+  // Keep CLI/runtime mode overrides ephemeral: startup should not silently
+  // mutate durable auth policy when mode was chosen by an override flag.
+  if (params.resolvedAuth.modeSource === "override") {
     return false;
   }
 
@@ -104,11 +102,6 @@ export async function ensureGatewayStartupAuth(params: {
 }> {
   const env = params.env ?? process.env;
   const persistRequested = params.persist === true;
-  const baselineResolved = resolveGatewayAuthFromConfig({
-    cfg: params.cfg,
-    env,
-    tailscaleOverride: params.tailscaleOverride,
-  });
   const resolved = resolveGatewayAuthFromConfig({
     cfg: params.cfg,
     env,
@@ -133,8 +126,7 @@ export async function ensureGatewayStartupAuth(params: {
   };
   const persist = shouldPersistGeneratedToken({
     persistRequested,
-    baselineMode: baselineResolved.mode,
-    overrideMode: params.authOverride?.mode,
+    resolvedAuth: resolved,
   });
   if (persist) {
     await writeConfigFile(nextCfg);

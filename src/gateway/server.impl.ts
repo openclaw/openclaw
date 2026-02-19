@@ -243,8 +243,8 @@ export async function startGatewayServer(
         "Gateway auth token was missing. Generated a new token and saved it to config (gateway.auth.token).",
       );
     } else {
-      log.info(
-        "Gateway auth token was missing. Generated a runtime token for this startup without changing config.",
+      log.warn(
+        "Gateway auth token was missing. Generated a runtime token for this startup without changing config; restart will generate a different token. Persist one with `openclaw config set gateway.auth.mode token` and `openclaw config set gateway.auth.token <token>`.",
       );
     }
   }

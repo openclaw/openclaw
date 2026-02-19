@@ -239,14 +239,17 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   }
 
   const miskeys = extractGatewayMiskeys(snapshot?.parsed);
-  const authConfig = {
-    ...cfg.gateway?.auth,
-    ...(authMode ? { mode: authMode } : {}),
-    ...(passwordRaw ? { password: passwordRaw } : {}),
-    ...(tokenRaw ? { token: tokenRaw } : {}),
-  };
+  const authOverride =
+    authMode || passwordRaw || tokenRaw || authModeRaw
+      ? {
+          ...(authMode ? { mode: authMode } : {}),
+          ...(tokenRaw ? { token: tokenRaw } : {}),
+          ...(passwordRaw ? { password: passwordRaw } : {}),
+        }
+      : undefined;
   const resolvedAuth = resolveGatewayAuth({
-    authConfig,
+    authConfig: cfg.gateway?.auth,
+    authOverride,
     env: process.env,
     tailscaleMode: tailscaleMode ?? cfg.gateway?.tailscale?.mode ?? "off",
   });
@@ -303,14 +306,6 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     defaultRuntime.exit(1);
     return;
   }
-  const authOverride =
-    authMode || passwordRaw || tokenRaw || authModeRaw
-      ? {
-          ...(authMode ? { mode: authMode } : {}),
-          ...(tokenRaw ? { token: tokenRaw } : {}),
-          ...(passwordRaw ? { password: passwordRaw } : {}),
-        }
-      : undefined;
   const tailscaleOverride =
     tailscaleMode || opts.tailscaleResetOnExit
       ? {
