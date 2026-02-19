@@ -109,6 +109,7 @@ export async function ensureGatewayStartupAuth(params: {
     tailscaleOverride: params.tailscaleOverride,
   });
   if (resolved.mode !== "token" || (resolved.token?.trim().length ?? 0) > 0) {
+    assertHooksTokenSeparateFromGatewayAuth({ cfg: params.cfg, auth: resolved });
     return { cfg: params.cfg, auth: resolved, persistedGeneratedToken: false };
   }
 
@@ -138,10 +139,38 @@ export async function ensureGatewayStartupAuth(params: {
     authOverride: params.authOverride,
     tailscaleOverride: params.tailscaleOverride,
   });
+  assertHooksTokenSeparateFromGatewayAuth({ cfg: nextCfg, auth: nextAuth });
   return {
     cfg: nextCfg,
     auth: nextAuth,
     generatedToken,
     persistedGeneratedToken: persist,
   };
+}
+
+export function assertHooksTokenSeparateFromGatewayAuth(params: {
+  cfg: OpenClawConfig;
+  auth: ResolvedGatewayAuth;
+}): void {
+  if (params.cfg.hooks?.enabled !== true) {
+    return;
+  }
+  const hooksToken =
+    typeof params.cfg.hooks.token === "string" ? params.cfg.hooks.token.trim() : "";
+  if (!hooksToken) {
+    return;
+  }
+  const gatewayToken =
+    params.auth.mode === "token" && typeof params.auth.token === "string"
+      ? params.auth.token.trim()
+      : "";
+  if (!gatewayToken) {
+    return;
+  }
+  if (hooksToken !== gatewayToken) {
+    return;
+  }
+  throw new Error(
+    "Invalid config: hooks.token must not match gateway auth token. Set a distinct hooks.token for hook ingress.",
+  );
 }
