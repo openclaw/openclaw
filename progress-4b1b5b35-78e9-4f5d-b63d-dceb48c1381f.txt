@@ -1,0 +1,114 @@
+
+---
+
+## 2026-02-18 - US-003: Create Cloud Validation Sandbox Infrastructure
+
+- Created `Dockerfile.expanso-sandbox`:
+  - Based on `debian:bookworm-slim`; installs `expanso` binary from GitHub releases (ARG EXPANSO_VERSION + ARG TARGETARCH support)
+  - Creates `sandboxuser` non-root user; drops build-time tools (curl) after download
+  - Sets ENTRYPOINT to `expanso validate` with default CMD `/workspace/pipeline.yaml`
+  - Compatible with `--read-only --network none --cap-drop ALL --tmpfs /tmp` runtime flags
+- Updated `src/agents/sandbox/constants.ts`:
+  - `EXPANSO_SANDBOX_IMAGE = "openclaw-expanso-sandbox:latest"`
+  - `EXPANSO_SANDBOX_CONTAINER_PREFIX = "openclaw-sbx-expanso-"`
+  - `EXPANSO_SANDBOX_WORKDIR = "/workspace"`
+  - `EXPANSO_SANDBOX_PIPELINE_PATH = "/workspace/pipeline.yaml"`
+- Updated `src/agents/sandbox/config.ts`:
+  - Added `ExpansoValidationSandboxParams` type (optional `hostWorkspacePath`)
+  - Added `resolveExpansoValidationSandboxDockerConfig(params?)` returning `SandboxDockerConfig`:
+    - Uses the expanso-sandbox image + prefix + workdir
+    - `readOnlyRoot: true`, `network: "none"`, `capDrop: ["ALL"]`
+    - When `hostWorkspacePath` provided: bind-mounts it `:ro` at `/workspace`, omits `/workspace` from tmpfs
+    - When no path: adds `/workspace` to tmpfs for in-container file writes
+    - Tight resource limits: `pidsLimit: 64`, `memory: "256m"`, `memorySwap: "256m"`, `cpus: 0.5`
+- Updated `src/agents/sandbox.ts` barrel: exports new function, type, and all 4 new constants
+- Created `src/agents/sandbox/expanso-sandbox-config.test.ts`:
+  - 24 tests, all passing (vitest)
+  - Covers: constant values, no-host-path mode (tmpfs workspace, no binds), host-path mode (bind mount :ro, no workspace tmpfs), security properties (readOnlyRoot, network, capDrop), resource limits, type-level param variants
+
+- **Learnings:**
+  - Sandbox config is always a `SandboxDockerConfig`; the caller decides how to run it (bind vs tmpfs for workspace)
+  - The `binds` array uses `host:container[:mode]` strings — use `:ro` suffix for read-only mounts
+  - `tmpfs` and `binds` are mutually exclusive for the same path: if a bind covers `/workspace`, remove it from `tmpfs`
+  - oxlint runs on pre-commit via git hooks and validates staged TS files (passed 0 warnings/errors)
+  - Expanso binary is a rebranded Benthos binary — downloadable from `github.com/benthosdev/benthos/releases`
+  - Use `ARG TARGETARCH=amd64` in Dockerfiles to support multi-arch builds
+
+
+---
+
+## 2026-02-18 - US-003 (retry): Add Expanso Validation Tool
+
+Verifier feedback indicated the validator tool (expanso_validate) was missing from the story. Added it in this session.
+
+- Created `src/agents/tools/expanso-validator.ts`:
+  - `ExpansoValidatorToolOptions`: optional `validateYaml` DI override (avoids Docker calls in tests)
+  - `defaultValidateYaml(yaml)`: production implementation — writes yaml to tmpdir, invokes `expanso validate`, parses exit code, cleans up
+  - `parseBinaryOutput(rawText, isError)`: parses stderr/stdout into `ExpansoValidationDiagnostic[]`
+    - Skips INFO/DEBUG log lines
+    - Strips ERROR:/WARN:/WARNING: prefixes from messages
+    - Extracts line numbers as location hints
+    - Extracts error codes like `E001` or `W003`
+    - Deduplicates consecutive identical messages
+    - Falls back to a single catch-all diagnostic for unstructured output
+  - `createExpansoValidatorTool(opts?)`: returns `AnyAgentTool` with name `expanso_validate`, label "Expanso Pipeline Validator"
+- Created `src/agents/tools/expanso-validator.test.ts`:
+  - 36 tests, all passing
+  - Covers: tool metadata (name, label, description, parameters, execute), valid pipeline (success=true, empty errors, exitCode=0, rawOutput surfaced), invalid pipeline (success=false, error messages, multiple errors, error location, rawError, non-zero exitCode), warnings (present + don't affect success), input validation (missing yaml, empty yaml, non-string yaml), error propagation (re-throws, call count), parseBinaryOutput (empty input, simple line, ERROR:/WARN:/WARNING: stripping, INFO/DEBUG skipping, line location, multiple lines, dedup, fallback, E001 code extraction)
+- **Learnings:**
+  - `jsonResult` wraps data in `toolResult.content[0].text` as JSON — access via `toolResult.content[0].text`, not `result.content` directly
+  - Always create a `runXxx(opts, args)` helper in tests that unpacks `content[0].text` — makes tests readable
+  - `defaultValidateYaml` uses dynamic imports for node builtins (`child_process`, `fs/promises`, `os`, `path`) so tests can import the module without them running eagerly
+
+
+---
+
+## 2026-02-19 - US-005: Unify Builder and Validator into a Single Agent Tool
+
+- Created `src/agents/tools/expanso-tool.ts`:
+  - `ExpansoToolInputSchema`: flat TypeBox object with `action` (required), `description` (optional), `yaml` (optional), `apiKey` (optional) — avoids top-level Type.Union/anyOf
+  - `ExpansoToolOptions`: optional `apiKey`, `generatePipeline` DI override, `validateYaml` DI override, `maxFixAttempts`
+  - Exported result types: `ExpansoBuildResult`, `ExpansoValidateResult`, `ExpansoFixResult`, `ExpansoToolResult`
+  - `handleBuild(description, apiKey, generatePipeline)`: generates pipeline via DI-injectable function, validates against schema, returns `{action, pipeline, yaml}`
+  - `handleValidate(yaml, validateYaml)`: passes yaml to DI-injectable validator, returns `{action, validation}`
+  - `handleFix(description, startingYaml, apiKey, generatePipeline, validateYaml, maxAttempts)`:
+    - Iterative loop: generate → validate → if failure, build enriched re-prompt with previous YAML + error list → regenerate
+    - Stops early on success, gives up after `maxAttempts` (default 3)
+    - `buildFixPrompt(description, yaml, validation)`: appends previous YAML and error list to description for LLM re-prompting
+  - `createExpansoTool(opts?)`: returns `AnyAgentTool` with name `"expanso"`, label "Expanso Pipeline Builder & Validator"
+  - Imports `defaultGeneratePipeline` from `expanso-generator.ts` and `defaultValidateYaml` from `expanso-validator.ts` as production defaults
+- Registered `createExpansoTool()` in `src/agents/openclaw-tools.ts`
+- Created `src/agents/tools/expanso-tool.test.ts`:
+  - 38 tests, all passing; no real LLM or Docker calls (DI mocks)
+  - Tool metadata: name, label, description mentions build/validate/fix, has execute and parameters
+  - build action: result shape, pipeline object, YAML string, description forwarding, apiKey forwarding, default apiKey, throws on missing/empty description, re-throws generator errors
+  - validate action: result shape, validation result, yaml forwarding to validator, failure result surfaces, throws on missing/empty yaml, re-throws validator errors
+  - fix action (success first attempt): action field, fixed=true, attempts=1, pipeline, yaml, validation returned
+  - fix action (retry loop): succeeds on 2nd attempt, fix prompt includes validation errors, fix prompt includes previous YAML, stops after maxFixAttempts, returns fixed=false after exhausting attempts, accepts starting yaml
+  - fix action (input validation): throws when neither description nor yaml provided, allows yaml-only with fallback description
+  - unknown action: throws for unrecognised action, throws when action missing
+
+- **Learnings:**
+  - **Flat discriminator pattern is preferred for LLM tool schemas**: use `action: Type.String(...)` + switch statement in `execute()`, not `Type.Union`. OpenAI/Vertex reject nested `anyOf`.
+  - **readStringParam trims strings by default** (including trailing newlines from multi-line YAML fixtures in tests). Use `allowEmpty: false` default. Test fixtures should not rely on trailing whitespace.
+  - **Fix loop pattern**: collect enriched description with previous YAML + errors, pass to next generator call. This is the canonical "generate → validate → fix" pattern for agentic pipelines.
+  - **DI injection order in createXxxTool**: `const fn = opts?.fn ?? defaultFn` at the top of the factory — this is the cleanest pattern for swapping real vs mock implementations.
+  - **Lint (oxlint) catches unused loop variables**: even variables incremented in a `mockImplementation` closure count as "assigned but never used" if not read. Remove or prefix with `_`.
+
+---
+
+## 2026-02-19 - US-004: Implement Expanso Validation Tool
+
+- `src/agents/tools/expanso-validator.ts` already fully implemented in the US-003 retry session; no additional files needed.
+- Reviewed implementation and confirmed all US-004 acceptance criteria are met:
+  1. **Correctly identifies valid and invalid YAML** — `createExpansoValidatorTool` returns `success: true/false` with structured errors/warnings
+  2. **Error messages from binary are surfaced** — `parseBinaryOutput` parses stderr/stdout into `ExpansoValidationDiagnostic[]`, stripping prefixes (ERROR:/WARN:/WARNING:), extracting line locations and error codes (E001 etc), deduplicating consecutive identical messages, and falling back to a catch-all diagnostic for unstructured output
+  3. **Tests pass** — `expanso-validator.test.ts` has 36 tests (all passing): tool metadata, valid pipeline, invalid pipeline, warnings, input validation, error propagation, and parseBinaryOutput unit tests
+  4. **Typecheck passes** — no errors in expanso-validator.ts or any expanso-* file; pre-existing config errors are unrelated
+
+- **Learnings (confirmed/reinforced):**
+  - `parseBinaryOutput` helper is the right abstraction boundary — separates raw text parsing from tool orchestration
+  - `jsonResult(validationResult)` wraps the result in `content[0].text` as JSON; tests need to `JSON.parse(content.text)` to get the structured result back
+  - `readStringParam(params, "yaml", { required: true })` handles missing/empty/non-string yaml uniformly, making input validation tests straightforward
+  - Dynamic imports for node builtins in `defaultValidateYaml` prevent eager evaluation during test module import
+
