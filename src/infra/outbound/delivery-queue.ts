@@ -16,6 +16,7 @@ const BACKOFF_MS: readonly number[] = [
   25_000, // retry 2: 25s
   120_000, // retry 3: 2m
   600_000, // retry 4: 10m
+  1_800_000, // retry 5: 30m
 ];
 
 type DeliveryMirrorPayload = {
