@@ -100,6 +100,13 @@ export type WhatsAppConfig = {
   debounceMs?: number;
   /** Heartbeat visibility settings for this channel. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /**
+   * Link preview policy for outbound messages.
+   * - "allow": Send messages as-is, link previews may be generated (default)
+   * - "warn": Log a security warning when URLs are detected in outbound messages
+   * - "mangle": Wrap URLs in angle brackets to suppress link previews
+   */
+  linkPreviewPolicy?: "allow" | "warn" | "mangle";
 };
 
 export type WhatsAppAccountConfig = {
@@ -168,4 +175,11 @@ export type WhatsAppAccountConfig = {
   debounceMs?: number;
   /** Heartbeat visibility settings for this account. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /**
+   * Link preview policy for outbound messages.
+   * - "allow": Send messages as-is, link previews may be generated (default)
+   * - "warn": Log a security warning when URLs are detected in outbound messages
+   * - "mangle": Wrap URLs in angle brackets to suppress link previews
+   */
+  linkPreviewPolicy?: "allow" | "warn" | "mangle";
 };

@@ -5,8 +5,9 @@ import { getChildLogger } from "../logging/logger.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { convertMarkdownTables } from "../markdown/tables.js";
 import { normalizePollInput, type PollInput } from "../polls.js";
-import { toWhatsappJid } from "../utils.js";
+import { containsUrls, mangleUrlsForPreview, toWhatsappJid } from "../utils.js";
 import { type ActiveWebSendOptions, requireActiveWebListener } from "./active-listener.js";
+import { resolveWhatsAppAccount } from "./accounts.js";
 import { loadWebMedia } from "./media.js";
 
 const outboundLog = createSubsystemLogger("gateway/channels/whatsapp").child("outbound");
@@ -34,6 +35,21 @@ export async function sendMessageWhatsApp(
     accountId: resolvedAccountId ?? options.accountId,
   });
   text = convertMarkdownTables(text ?? "", tableMode);
+
+  // Apply link preview policy
+  const account = resolveWhatsAppAccount({ cfg, accountId: resolvedAccountId ?? options.accountId });
+  const linkPreviewPolicy = account.linkPreviewPolicy ?? cfg.channels?.whatsapp?.linkPreviewPolicy ?? "allow";
+  if (linkPreviewPolicy !== "allow" && containsUrls(text)) {
+    if (linkPreviewPolicy === "warn") {
+      outboundLog.warn(
+        `[security] Outbound message contains URLs (link previews may expose data). ` +
+          `Set channels.whatsapp.linkPreviewPolicy="mangle" to suppress previews.`,
+      );
+    } else if (linkPreviewPolicy === "mangle") {
+      text = mangleUrlsForPreview(text);
+    }
+  }
+
   const logger = getChildLogger({
     module: "web-outbound",
     correlationId,

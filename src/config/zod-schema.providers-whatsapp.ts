@@ -11,6 +11,18 @@ import {
 
 const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional();
 
+/**
+ * Link preview policy for outbound messages.
+ * - "allow": Send messages as-is, link previews may be generated (default)
+ * - "warn": Log a security warning when URLs are detected in outbound messages
+ * - "mangle": Wrap URLs in angle brackets to suppress link previews
+ *
+ * Security context: Link previews can potentially be exploited for data exfiltration
+ * if an attacker can influence the agent to include a URL pointing to their server.
+ * The preview fetch would include the URL path, which could encode sensitive data.
+ */
+export const LinkPreviewPolicySchema = z.enum(["allow", "warn", "mangle"]).optional();
+
 export const WhatsAppAccountSchema = z
   .object({
     name: z.string().optional(),
@@ -59,6 +71,8 @@ export const WhatsAppAccountSchema = z
       .optional(),
     debounceMs: z.number().int().nonnegative().optional().default(0),
     heartbeat: ChannelHeartbeatVisibilitySchema,
+    /** Link preview policy for outbound messages. See LinkPreviewPolicySchema for details. */
+    linkPreviewPolicy: LinkPreviewPolicySchema,
   })
   .strict()
   .superRefine((value, ctx) => {
@@ -129,6 +143,8 @@ export const WhatsAppConfigSchema = z
       .optional(),
     debounceMs: z.number().int().nonnegative().optional().default(0),
     heartbeat: ChannelHeartbeatVisibilitySchema,
+    /** Link preview policy for outbound messages. See LinkPreviewPolicySchema for details. */
+    linkPreviewPolicy: LinkPreviewPolicySchema,
   })
   .strict()
   .superRefine((value, ctx) => {

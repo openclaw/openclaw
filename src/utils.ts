@@ -398,4 +398,49 @@ export function formatTerminalLink(
 }
 
 // Configuration root; can be overridden via OPENCLAW_STATE_DIR.
+/**
+ * Creates a fresh URL regex instance to avoid global regex lastIndex state bugs.
+ * The pattern matches http/https URLs while handling edge cases.
+ */
+function createUrlRegex(global = false): RegExp {
+  // Match http/https URLs, stopping at whitespace or common punctuation that ends URLs
+  // Note: < is included to stop at angle bracket wrappers
+  const pattern = /https?:\/\/[^\s<>\[\](){}'"`,;!]+/;
+  return global ? new RegExp(pattern.source, "gi") : new RegExp(pattern.source, "i");
+}
+
+/**
+ * Detect all URLs in the given text.
+ * @returns Array of URL strings found in the text.
+ */
+export function detectUrls(text: string): string[] {
+  const regex = createUrlRegex(true);
+  return text.match(regex) ?? [];
+}
+
+/**
+ * Check if the text contains any URLs.
+ */
+export function containsUrls(text: string): boolean {
+  return createUrlRegex(false).test(text);
+}
+
+/**
+ * Wrap URLs in angle brackets to suppress link previews.
+ * Already-wrapped URLs (e.g., <https://example.com>) are left unchanged.
+ *
+ * @example
+ * mangleUrlsForPreview("Check https://example.com") // "Check <https://example.com>"
+ * mangleUrlsForPreview("Already <https://example.com>") // "Already <https://example.com>"
+ */
+export function mangleUrlsForPreview(text: string): string {
+  return text.replace(createUrlRegex(true), (url, offset) => {
+    // Don't double-wrap if already wrapped (check character before match)
+    if (offset > 0 && text[offset - 1] === "<") {
+      return url;
+    }
+    return `<${url}>`;
+  });
+}
+
 export const CONFIG_DIR = resolveConfigDir();

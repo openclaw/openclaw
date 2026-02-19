@@ -5,8 +5,11 @@ import { describe, expect, it, vi } from "vitest";
 import {
   assertWebChannel,
   CONFIG_DIR,
+  containsUrls,
+  detectUrls,
   ensureDir,
   jidToE164,
+  mangleUrlsForPreview,
   normalizeE164,
   normalizePath,
   resolveConfigDir,
@@ -217,5 +220,96 @@ describe("resolveUserPath", () => {
   it("keeps blank paths blank", () => {
     expect(resolveUserPath("")).toBe("");
     expect(resolveUserPath("   ")).toBe("");
+  });
+});
+
+describe("URL detection utilities", () => {
+  describe("detectUrls", () => {
+    it("detects http URLs", () => {
+      expect(detectUrls("Visit http://example.com today")).toEqual(["http://example.com"]);
+    });
+
+    it("detects https URLs", () => {
+      expect(detectUrls("Check https://example.com/path?q=1")).toEqual([
+        "https://example.com/path?q=1",
+      ]);
+    });
+
+    it("detects multiple URLs", () => {
+      expect(detectUrls("See https://a.com and https://b.com")).toEqual([
+        "https://a.com",
+        "https://b.com",
+      ]);
+    });
+
+    it("returns empty array when no URLs", () => {
+      expect(detectUrls("No URLs here")).toEqual([]);
+    });
+
+    it("stops at angle brackets", () => {
+      expect(detectUrls("Already <https://example.com>")).toEqual(["https://example.com"]);
+    });
+  });
+
+  describe("containsUrls", () => {
+    it("returns true when URL present", () => {
+      expect(containsUrls("Visit https://example.com")).toBe(true);
+    });
+
+    it("returns false when no URL", () => {
+      expect(containsUrls("No URLs here")).toBe(false);
+    });
+
+    it("works correctly with repeated calls (no global regex state bug)", () => {
+      // This test verifies the fix for global regex lastIndex mutation
+      const text = "https://example.com";
+      expect(containsUrls(text)).toBe(true);
+      expect(containsUrls(text)).toBe(true);
+      expect(containsUrls(text)).toBe(true);
+    });
+
+    it("works after interleaving with detectUrls", () => {
+      const text = "Check https://example.com";
+      detectUrls(text);
+      expect(containsUrls(text)).toBe(true);
+      detectUrls(text);
+      expect(containsUrls(text)).toBe(true);
+    });
+  });
+
+  describe("mangleUrlsForPreview", () => {
+    it("wraps URLs in angle brackets", () => {
+      expect(mangleUrlsForPreview("Visit https://example.com")).toBe(
+        "Visit <https://example.com>",
+      );
+    });
+
+    it("handles multiple URLs", () => {
+      expect(mangleUrlsForPreview("See https://a.com and https://b.com")).toBe(
+        "See <https://a.com> and <https://b.com>",
+      );
+    });
+
+    it("does not double-wrap already wrapped URLs", () => {
+      expect(mangleUrlsForPreview("Already <https://example.com>")).toBe(
+        "Already <https://example.com>",
+      );
+    });
+
+    it("handles duplicate URLs correctly", () => {
+      expect(mangleUrlsForPreview("See https://example.com and https://example.com")).toBe(
+        "See <https://example.com> and <https://example.com>",
+      );
+    });
+
+    it("handles mixed wrapped and unwrapped URLs", () => {
+      expect(mangleUrlsForPreview("<https://wrapped.com> and https://unwrapped.com")).toBe(
+        "<https://wrapped.com> and <https://unwrapped.com>",
+      );
+    });
+
+    it("returns text unchanged when no URLs", () => {
+      expect(mangleUrlsForPreview("No URLs here")).toBe("No URLs here");
+    });
   });
 });
