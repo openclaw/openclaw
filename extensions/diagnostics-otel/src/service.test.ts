@@ -141,7 +141,6 @@ function createTraceOnlyContext(endpoint: string): OpenClawPluginServiceContext 
     stateDir: "/tmp/openclaw-diagnostics-otel-test",
   };
 }
-
 describe("diagnostics-otel service", () => {
   beforeEach(() => {
     telemetryState.counters.clear();
