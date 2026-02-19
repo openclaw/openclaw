@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -139,6 +142,69 @@ describe("voice-call plugin", () => {
       details: { error?: unknown };
     };
     expect(String(result.details.error)).toContain("sid required");
+  });
+
+  it("CLI latency summarizes turn metrics from JSONL", async () => {
+    const { register } = plugin as unknown as {
+      register: (api: Record<string, unknown>) => void | Promise<void>;
+    };
+    const program = new Command();
+    const tmpFile = path.join(os.tmpdir(), `voicecall-latency-${Date.now()}.jsonl`);
+    fs.writeFileSync(
+      tmpFile,
+      [
+        JSON.stringify({ metadata: { lastTurnLatencyMs: 100, lastTurnListenWaitMs: 70 } }),
+        JSON.stringify({ metadata: { lastTurnLatencyMs: 200, lastTurnListenWaitMs: 110 } }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    try {
+      await register({
+        id: "voice-call",
+        name: "Voice Call",
+        description: "test",
+        version: "0",
+        source: "test",
+        config: {},
+        pluginConfig: { provider: "mock" },
+        runtime: { tts: { textToSpeechTelephony: vi.fn() } },
+        logger: noopLogger,
+        registerGatewayMethod: () => {},
+        registerTool: () => {},
+        registerCli: (
+          fn: (ctx: {
+            program: Command;
+            config: Record<string, unknown>;
+            workspaceDir?: string;
+            logger: typeof noopLogger;
+          }) => void,
+        ) =>
+          fn({
+            program,
+            config: {},
+            workspaceDir: undefined,
+            logger: noopLogger,
+          }),
+        registerService: () => {},
+        resolvePath: (p: string) => p,
+      });
+
+      await program.parseAsync(["voicecall", "latency", "--file", tmpFile, "--last", "10"], {
+        from: "user",
+      });
+
+      expect(logSpy).toHaveBeenCalled();
+      const printed = String(logSpy.mock.calls.at(-1)?.[0] ?? "");
+      expect(printed).toContain('"recordsScanned": 2');
+      expect(printed).toContain('"p50Ms": 100');
+      expect(printed).toContain('"p95Ms": 200');
+    } finally {
+      logSpy.mockRestore();
+      fs.unlinkSync(tmpFile);
+    }
   });
 
   it("CLI start prints JSON", async () => {

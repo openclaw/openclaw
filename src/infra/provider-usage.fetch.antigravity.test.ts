@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { fetchAntigravityUsage } from "./provider-usage.fetch.antigravity.js";
 
 const makeResponse = (status: number, body: unknown): Response => {
@@ -12,10 +13,12 @@ const toRequestUrl = (input: Parameters<typeof fetch>[0]): string =>
 
 const createAntigravityFetch = (
   handler: (url: string, init?: Parameters<typeof fetch>[1]) => Promise<Response> | Response,
-) =>
-  vi.fn(async (input: string | Request | URL, init?: RequestInit) =>
+) => {
+  const mockFetch = vi.fn(async (input: string | Request | URL, init?: RequestInit) =>
     handler(toRequestUrl(input), init),
   );
+  return withFetchPreconnect(mockFetch) as typeof fetch & typeof mockFetch;
+};
 
 const getRequestBody = (init?: Parameters<typeof fetch>[1]) =>
   typeof init?.body === "string" ? init.body : undefined;

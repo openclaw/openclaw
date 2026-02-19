@@ -838,4 +838,48 @@ describe("subagent announce formatting", () => {
     expect(call?.params?.deliver).toBe(true);
     expect(call?.params?.channel).toBe("discord");
   });
+
+  it("falls back when parent session is missing a sessionId (#18037)", async () => {
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(false);
+    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
+
+    subagentRegistryMock.isSubagentSessionRunActive.mockReturnValue(false);
+    sessionStore = {
+      "agent:main:subagent:newton": {
+        sessionId: " ",
+        inputTokens: 100,
+        outputTokens: 50,
+      },
+      "agent:main:subagent:newton:subagent:birdie": {
+        sessionId: "birdie-session-id",
+        inputTokens: 20,
+        outputTokens: 10,
+      },
+    };
+    subagentRegistryMock.resolveRequesterForChildSession.mockReturnValue({
+      requesterSessionKey: "agent:main:main",
+      requesterOrigin: { channel: "discord" },
+    });
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:newton:subagent:birdie",
+      childRunId: "run-birdie-empty-parent",
+      requesterSessionKey: "agent:main:subagent:newton",
+      requesterDisplayKey: "subagent:newton",
+      task: "QA task",
+      timeoutMs: 1000,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+    });
+
+    expect(didAnnounce).toBe(true);
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    expect(call?.params?.sessionKey).toBe("agent:main:main");
+    expect(call?.params?.deliver).toBe(true);
+    expect(call?.params?.channel).toBe("discord");
+  });
 });

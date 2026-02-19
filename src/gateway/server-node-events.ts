@@ -16,6 +16,92 @@ import {
 import { formatForLog } from "./ws-log.js";
 
 const MAX_EXEC_EVENT_OUTPUT_CHARS = 180;
+const VOICE_TRANSCRIPT_DEDUPE_WINDOW_MS = 1500;
+const MAX_RECENT_VOICE_TRANSCRIPTS = 200;
+
+const recentVoiceTranscripts = new Map<string, { fingerprint: string; ts: number }>();
+
+function normalizeNonEmptyString(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function normalizeFiniteInteger(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? Math.trunc(value) : null;
+}
+
+function resolveVoiceTranscriptFingerprint(obj: Record<string, unknown>, text: string): string {
+  const eventId =
+    normalizeNonEmptyString(obj.eventId) ??
+    normalizeNonEmptyString(obj.providerEventId) ??
+    normalizeNonEmptyString(obj.transcriptId);
+  if (eventId) {
+    return `event:${eventId}`;
+  }
+
+  const callId = normalizeNonEmptyString(obj.providerCallId) ?? normalizeNonEmptyString(obj.callId);
+  const sequence = normalizeFiniteInteger(obj.sequence) ?? normalizeFiniteInteger(obj.seq);
+  if (callId && sequence !== null) {
+    return `call-seq:${callId}:${sequence}`;
+  }
+
+  const eventTimestamp =
+    normalizeFiniteInteger(obj.timestamp) ??
+    normalizeFiniteInteger(obj.ts) ??
+    normalizeFiniteInteger(obj.eventTimestamp);
+  if (callId && eventTimestamp !== null) {
+    return `call-ts:${callId}:${eventTimestamp}`;
+  }
+
+  if (eventTimestamp !== null) {
+    return `timestamp:${eventTimestamp}|text:${text}`;
+  }
+
+  return `text:${text}`;
+}
+
+function shouldDropDuplicateVoiceTranscript(params: {
+  sessionKey: string;
+  fingerprint: string;
+  now: number;
+}): boolean {
+  const previous = recentVoiceTranscripts.get(params.sessionKey);
+  if (
+    previous &&
+    previous.fingerprint === params.fingerprint &&
+    params.now - previous.ts <= VOICE_TRANSCRIPT_DEDUPE_WINDOW_MS
+  ) {
+    return true;
+  }
+  recentVoiceTranscripts.set(params.sessionKey, {
+    fingerprint: params.fingerprint,
+    ts: params.now,
+  });
+
+  if (recentVoiceTranscripts.size > MAX_RECENT_VOICE_TRANSCRIPTS) {
+    const cutoff = params.now - VOICE_TRANSCRIPT_DEDUPE_WINDOW_MS * 2;
+    for (const [key, value] of recentVoiceTranscripts) {
+      if (value.ts < cutoff) {
+        recentVoiceTranscripts.delete(key);
+      }
+      if (recentVoiceTranscripts.size <= MAX_RECENT_VOICE_TRANSCRIPTS) {
+        break;
+      }
+    }
+    while (recentVoiceTranscripts.size > MAX_RECENT_VOICE_TRANSCRIPTS) {
+      const oldestKey = recentVoiceTranscripts.keys().next().value;
+      if (oldestKey === undefined) {
+        break;
+      }
+      recentVoiceTranscripts.delete(oldestKey);
+    }
+  }
+
+  return false;
+}
 
 function compactExecEventOutput(raw: string) {
   const normalized = raw.replace(/\s+/g, " ").trim();
@@ -69,6 +155,29 @@ async function touchSessionStore(params: {
   });
 }
 
+function queueSessionStoreTouch(params: {
+  ctx: NodeEventContext;
+  cfg: ReturnType<typeof loadConfig>;
+  sessionKey: string;
+  storePath: LoadedSessionEntry["storePath"];
+  canonicalKey: LoadedSessionEntry["canonicalKey"];
+  entry: LoadedSessionEntry["entry"];
+  sessionId: string;
+  now: number;
+}) {
+  void touchSessionStore({
+    cfg: params.cfg,
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+    canonicalKey: params.canonicalKey,
+    entry: params.entry,
+    sessionId: params.sessionId,
+    now: params.now,
+  }).catch((err) => {
+    params.ctx.logGateway.warn("voice session-store update failed: " + formatForLog(err));
+  });
+}
+
 function parseSessionKeyFromPayloadJSON(payloadJSON: string): string | null {
   let payload: unknown;
   try {
@@ -111,8 +220,21 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       const sessionKey = sessionKeyRaw.length > 0 ? sessionKeyRaw : rawMainKey;
       const { storePath, entry, canonicalKey } = loadSessionEntry(sessionKey);
       const now = Date.now();
+      const fingerprint = resolveVoiceTranscriptFingerprint(obj, text);
+      if (shouldDropDuplicateVoiceTranscript({ sessionKey: canonicalKey, fingerprint, now })) {
+        return;
+      }
       const sessionId = entry?.sessionId ?? randomUUID();
-      await touchSessionStore({ cfg, sessionKey, storePath, canonicalKey, entry, sessionId, now });
+      queueSessionStoreTouch({
+        ctx,
+        cfg,
+        sessionKey,
+        storePath,
+        canonicalKey,
+        entry,
+        sessionId,
+        now,
+      });
 
       // Ensure chat UI clients refresh when this run completes (even though it wasn't started via chat.send).
       // This maps agent bus events (keyed by sessionId) to chat events (keyed by clientRunId).
@@ -129,6 +251,11 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
           thinking: "low",
           deliver: false,
           messageChannel: "node",
+          inputProvenance: {
+            kind: "external_user",
+            sourceChannel: "voice",
+            sourceTool: "gateway.voice.transcript",
+          },
         },
         defaultRuntime,
         ctx.deps,
