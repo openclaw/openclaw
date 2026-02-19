@@ -133,6 +133,8 @@ export async function handleToolExecutionStart(
   evt: AgentEvent & { toolName: string; toolCallId: string; args: unknown },
 ) {
   // Flush pending block replies to preserve message boundaries before tool execution.
+  // Clear any previous tool errors to avoid stale warnings on new executions.
+  ctx.state.lastToolError = undefined;
   ctx.flushBlockReplyBuffer();
   if (ctx.params.onBlockReplyFlush) {
     void ctx.params.onBlockReplyFlush();

@@ -61,7 +61,7 @@ function shouldShowToolErrorWarning(params: {
   }
   const isMutatingToolError =
     params.lastToolError.mutatingAction ?? isLikelyMutatingToolName(params.lastToolError.toolName);
-  if (isMutatingToolError) {
+  if (isMutatingToolError && !params.hasUserFacingReply) {
     return true;
   }
   if (params.suppressToolErrors) {

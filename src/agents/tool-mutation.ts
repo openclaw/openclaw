@@ -105,7 +105,69 @@ export function isMutatingToolCall(toolName: string, args: unknown): boolean {
     case "edit":
     case "apply_patch":
     case "exec":
-    case "bash":
+    case "bash": {
+      const rawCmd = record?.command;
+      const cmd = (typeof rawCmd === "string" ? rawCmd : "")
+        .trim()
+        .split(/\s+/)[0]
+        .replace(/^.*\//, "");
+      // Only truly read-only commands that cannot mutate state regardless of
+      // flags. Commands like sed (-i), git (commit/push), python/node
+      // (arbitrary code), docker/kubectl (infra), npm/pip (packages),
+      // sqlite3/redis-cli (DB writes), etc. are intentionally excluded.
+      const readOnlyCmds = new Set([
+        "ls",
+        "cat",
+        "grep",
+        "find",
+        "head",
+        "tail",
+        "wc",
+        "stat",
+        "file",
+        "which",
+        "echo",
+        "date",
+        "whoami",
+        "hostname",
+        "uname",
+        "env",
+        "printenv",
+        "pwd",
+        "id",
+        "df",
+        "du",
+        "diff",
+        "test",
+        "true",
+        "false",
+        "sort",
+        "uniq",
+        "tr",
+        "cut",
+        "less",
+        "more",
+        "strings",
+        "hexdump",
+        "xxd",
+        "base64",
+        "sha256sum",
+        "md5sum",
+        "ps",
+        "top",
+        "htop",
+        "free",
+        "uptime",
+        "ss",
+        "ping",
+        "dig",
+        "nslookup",
+      ]);
+      if (readOnlyCmds.has(cmd)) {
+        return false;
+      }
+      return true;
+    }
     case "sessions_send":
       return true;
     case "process":
