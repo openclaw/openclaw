@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/exec-passthrough",
+  "version": "2026.2.18",
+  "private": true,
+  "description": "OpenClaw plugin to send exec output directly to the user, bypassing LLM",
+  "type": "module",
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

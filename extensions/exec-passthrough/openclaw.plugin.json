@@ -1,0 +1,16 @@
+{
+  "id": "exec-passthrough",
+  "name": "Exec Passthrough",
+  "description": "Intercept __PASSTHROUGH__ markers in exec tool results and send content directly to the user, bypassing LLM re-summarization.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "channel": {
+        "type": "string",
+        "description": "Channel to send passthrough content to. Currently supports: telegram.",
+        "enum": ["telegram"]
+      }
+    }
+  }
+}
