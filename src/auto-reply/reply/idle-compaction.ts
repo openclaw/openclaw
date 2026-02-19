@@ -1,3 +1,5 @@
+import type { CompactEmbeddedPiSessionParams } from "../../agents/pi-embedded-runner/compact.js";
+import { compactEmbeddedPiSession } from "../../agents/pi-embedded.js";
 /**
  * Idle-triggered proactive compaction.
  *
@@ -9,8 +11,6 @@
  * The timer is cancelled whenever a new inbound message is received.
  */
 import type { OpenClawConfig } from "../../config/config.js";
-import type { CompactEmbeddedPiSessionParams } from "../../agents/pi-embedded-runner/compact.js";
-import { compactEmbeddedPiSession } from "../../agents/pi-embedded.js";
 import { defaultRuntime } from "../../runtime.js";
 
 /** Map<sessionKey, NodeJS.Timeout> */
@@ -101,9 +101,7 @@ export function scheduleIdleCompaction(params: ScheduleIdleCompactionParams): vo
         ownerNumbers: params.ownerNumbers,
         trigger: "manual",
       });
-      defaultRuntime.log(
-        `[idle-compaction] Idle compaction completed for session ${sessionKey}`,
-      );
+      defaultRuntime.log(`[idle-compaction] Idle compaction completed for session ${sessionKey}`);
     } catch (err) {
       // Best-effort: errors must not affect the main reply flow.
       defaultRuntime.error(
