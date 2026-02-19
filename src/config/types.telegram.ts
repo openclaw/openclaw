@@ -66,8 +66,27 @@ export type TelegramAccountConfig = {
   dmPolicy?: DmPolicy;
   /** If false, do not start this Telegram account. Default: true. */
   enabled?: boolean;
+  /**
+   * @deprecated Use `tokenFile` instead for secure token storage.
+   * Plaintext tokens in config files risk exposure via process inspection
+   * and exec commands. `tokenFile` reads from a secret-managed file path
+   * (e.g., agenix, sops, HashiCorp Vault).
+   * Will be removed in a future major version.
+   *
+   * Security Issue: OC-17 (HIGH severity)
+   * Implemented by: Aether AI Agent
+   */
   botToken?: string;
-  /** Path to file containing bot token (for secret managers like agenix). */
+  /**
+   * Path to file containing bot token (RECOMMENDED for production).
+   * Supports secret managers like agenix, sops, HashiCorp Vault-written files.
+   *
+   * Example:
+   *   tokenFile: "/run/secrets/telegram-bot-token"
+   *
+   * Token is read from file at runtime and never stored in config.
+   * See: OC-17 remediation documentation
+   */
   tokenFile?: string;
   /** Control reply threading when reply tags are present (off|first|all). */
   replyToMode?: ReplyToMode;
