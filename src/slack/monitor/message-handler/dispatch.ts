@@ -423,7 +423,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   if (shouldLogVerbose()) {
     const finalCount = counts.final;
     logVerbose(
-      `slack: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${prepared.replyTarget}`,
+      `slack: delivered ${finalCount} repl${finalCount === 1 ? "y" : "ies"} to ${prepared.replyTarget}`,
     );
   }
 
