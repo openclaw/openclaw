@@ -20,6 +20,23 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
         self.password = password
     }
 
+    fileprivate static func isLoopbackHost(_ raw: String) -> Bool {
+        let host = raw
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+        if host.isEmpty {
+            return false
+        }
+        if host == "localhost" || host == "::1" || host == "127.0.0.1" {
+            return true
+        }
+        if host.hasPrefix("127.") || host.hasPrefix("::ffff:127.") {
+            return true
+        }
+        return false
+    }
+
     public var websocketURL: URL? {
         let scheme = self.tls ? "wss" : "ws"
         return URL(string: "\(scheme)://\(self.host):\(self.port)")
@@ -35,7 +52,11 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
         else { return nil }
 
         let scheme = (parsed.scheme ?? "ws").lowercased()
+        guard scheme == "ws" || scheme == "wss" else { return nil }
         let tls = scheme == "wss"
+        if !tls, !Self.isLoopbackHost(hostname) {
+            return nil
+        }
         let port = parsed.port ?? (tls ? 443 : 18789)
         let token = json["token"] as? String
         let password = json["password"] as? String
@@ -128,6 +149,9 @@ public enum DeepLinkParser {
             }
             let port = query["port"].flatMap { Int($0) } ?? 18789
             let tls = (query["tls"] as NSString?)?.boolValue ?? false
+            if !tls, !GatewayConnectDeepLink.isLoopbackHost(hostParam) {
+                return nil
+            }
             return .gateway(
                 .init(
                     host: hostParam,

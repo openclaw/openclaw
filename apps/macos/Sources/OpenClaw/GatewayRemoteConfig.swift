@@ -1,6 +1,23 @@
 import Foundation
 
 enum GatewayRemoteConfig {
+    private static func isLoopbackHost(_ rawHost: String) -> Bool {
+        let host = rawHost
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+        if host.isEmpty {
+            return false
+        }
+        if host == "localhost" || host == "::1" || host == "127.0.0.1" {
+            return true
+        }
+        if host.hasPrefix("127.") || host.hasPrefix("::ffff:127.") {
+            return true
+        }
+        return false
+    }
+
     static func resolveTransport(root: [String: Any]) -> AppState.RemoteTransport {
         guard let gateway = root["gateway"] as? [String: Any],
               let remote = gateway["remote"] as? [String: Any],
@@ -39,6 +56,9 @@ enum GatewayRemoteConfig {
         guard scheme == "ws" || scheme == "wss" else { return nil }
         let host = url.host?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !host.isEmpty else { return nil }
+        if scheme == "ws", !self.isLoopbackHost(host) {
+            return nil
+        }
         if scheme == "ws", url.port == nil {
             guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
                 return url
