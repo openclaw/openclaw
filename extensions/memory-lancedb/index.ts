@@ -152,7 +152,7 @@ class MemoryDB {
 
   async count(): Promise<number> {
     await this.ensureInitialized();
-    return this.table!.countRows();
+    return await this.table!.countRows();
   }
 }
 
