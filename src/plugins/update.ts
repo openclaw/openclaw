@@ -29,6 +29,16 @@ export type PluginUpdateSummary = {
   outcomes: PluginUpdateOutcome[];
 };
 
+export type PluginUpdateIntegrityDriftParams = {
+  pluginId: string;
+  spec: string;
+  expectedIntegrity: string;
+  actualIntegrity: string;
+  resolvedSpec?: string;
+  resolvedVersion?: string;
+  dryRun: boolean;
+};
+
 export type PluginChannelSyncSummary = {
   switchedToBundled: string[];
   switchedToNpm: string[];
@@ -46,6 +56,16 @@ type BundledPluginSource = {
   pluginId: string;
   localPath: string;
   npmSpec?: string;
+};
+
+type InstallIntegrityDrift = {
+  spec: string;
+  expectedIntegrity: string;
+  actualIntegrity: string;
+  resolution: {
+    resolvedSpec?: string;
+    version?: string;
+  };
 };
 
 async function readInstalledPackageVersion(dir: string): Promise<string | undefined> {
@@ -137,12 +157,39 @@ function buildLoadPathHelpers(existing: string[]) {
   };
 }
 
+function createPluginUpdateIntegrityDriftHandler(params: {
+  pluginId: string;
+  dryRun: boolean;
+  logger: PluginUpdateLogger;
+  onIntegrityDrift?: (params: PluginUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
+}) {
+  return async (drift: InstallIntegrityDrift) => {
+    const payload: PluginUpdateIntegrityDriftParams = {
+      pluginId: params.pluginId,
+      spec: drift.spec,
+      expectedIntegrity: drift.expectedIntegrity,
+      actualIntegrity: drift.actualIntegrity,
+      resolvedSpec: drift.resolution.resolvedSpec,
+      resolvedVersion: drift.resolution.version,
+      dryRun: params.dryRun,
+    };
+    if (params.onIntegrityDrift) {
+      return await params.onIntegrityDrift(payload);
+    }
+    params.logger.warn?.(
+      `Integrity drift for "${params.pluginId}" (${payload.resolvedSpec ?? payload.spec}): expected ${payload.expectedIntegrity}, got ${payload.actualIntegrity}`,
+    );
+    return true;
+  };
+}
+
 export async function updateNpmInstalledPlugins(params: {
   config: OpenClawConfig;
   logger?: PluginUpdateLogger;
   pluginIds?: string[];
   skipIds?: Set<string>;
   dryRun?: boolean;
+  onIntegrityDrift?: (params: PluginUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
 }): Promise<PluginUpdateSummary> {
   const logger = params.logger ?? {};
   const installs = params.config.plugins?.installs ?? {};
@@ -210,6 +257,13 @@ export async function updateNpmInstalledPlugins(params: {
           mode: "update",
           dryRun: true,
           expectedPluginId: pluginId,
+          expectedIntegrity: record.integrity,
+          onIntegrityDrift: createPluginUpdateIntegrityDriftHandler({
+            pluginId,
+            dryRun: true,
+            logger,
+            onIntegrityDrift: params.onIntegrityDrift,
+          }),
           logger,
         });
       } catch (err) {
@@ -257,6 +311,13 @@ export async function updateNpmInstalledPlugins(params: {
         spec: record.spec,
         mode: "update",
         expectedPluginId: pluginId,
+        expectedIntegrity: record.integrity,
+        onIntegrityDrift: createPluginUpdateIntegrityDriftHandler({
+          pluginId,
+          dryRun: false,
+          logger,
+          onIntegrityDrift: params.onIntegrityDrift,
+        }),
         logger,
       });
     } catch (err) {
@@ -283,6 +344,12 @@ export async function updateNpmInstalledPlugins(params: {
       spec: record.spec,
       installPath: result.targetDir,
       version: nextVersion,
+      resolvedName: result.npmResolution?.name,
+      resolvedVersion: result.npmResolution?.version,
+      resolvedSpec: result.npmResolution?.resolvedSpec,
+      integrity: result.npmResolution?.integrity,
+      shasum: result.npmResolution?.shasum,
+      resolvedAt: result.npmResolution?.resolvedAt,
     });
     changed = true;
 
@@ -406,6 +473,12 @@ export async function syncPluginsForUpdateChannel(params: {
         spec,
         installPath: result.targetDir,
         version: result.version,
+        resolvedName: result.npmResolution?.name,
+        resolvedVersion: result.npmResolution?.version,
+        resolvedSpec: result.npmResolution?.resolvedSpec,
+        integrity: result.npmResolution?.integrity,
+        shasum: result.npmResolution?.shasum,
+        resolvedAt: result.npmResolution?.resolvedAt,
         sourcePath: undefined,
       });
       summary.switchedToNpm.push(pluginId);

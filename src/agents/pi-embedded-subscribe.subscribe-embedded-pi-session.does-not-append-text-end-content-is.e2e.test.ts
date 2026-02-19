@@ -1,51 +1,21 @@
 import { describe, expect, it, vi } from "vitest";
-import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
-
-type StubSession = {
-  subscribe: (fn: (evt: unknown) => void) => () => void;
-};
+import {
+  createTextEndBlockReplyHarness,
+  emitAssistantTextDelta,
+  emitAssistantTextEnd,
+} from "./pi-embedded-subscribe.e2e-harness.js";
 
 describe("subscribeEmbeddedPiSession", () => {
   function setupTextEndSubscription() {
-    let handler: ((evt: unknown) => void) | undefined;
-    const session: StubSession = {
-      subscribe: (fn) => {
-        handler = fn;
-        return () => {};
-      },
-    };
-
     const onBlockReply = vi.fn();
-
-    const subscription = subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
-      runId: "run",
-      onBlockReply,
-      blockReplyBreak: "text_end",
-    });
-
-    const emit = (evt: unknown) => handler?.(evt);
+    const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
 
     const emitDelta = (delta: string) => {
-      emit({
-        type: "message_update",
-        message: { role: "assistant" },
-        assistantMessageEvent: {
-          type: "text_delta",
-          delta,
-        },
-      });
+      emitAssistantTextDelta({ emit, delta });
     };
 
     const emitTextEnd = (content: string) => {
-      emit({
-        type: "message_update",
-        message: { role: "assistant" },
-        assistantMessageEvent: {
-          type: "text_end",
-          content,
-        },
-      });
+      emitAssistantTextEnd({ emit, content });
     };
 
     return { onBlockReply, subscription, emitDelta, emitTextEnd };

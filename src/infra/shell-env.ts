@@ -140,11 +140,13 @@ export function getShellPathFromLoginShell(opts: {
   env: NodeJS.ProcessEnv;
   timeoutMs?: number;
   exec?: typeof execFileSync;
+  platform?: NodeJS.Platform;
 }): string | null {
   if (cachedShellPath !== undefined) {
     return cachedShellPath;
   }
-  if (process.platform === "win32") {
+  const platform = opts.platform ?? process.platform;
+  if (platform === "win32") {
     cachedShellPath = null;
     return cachedShellPath;
   }
