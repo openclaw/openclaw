@@ -40,7 +40,7 @@ describe("chat.send command transcript – user message persistence", () => {
 
     // Mock loadSessionEntry to point at our temp transcript.
     vi.doMock("../session-utils.js", async (importOriginal) => {
-      const original = await importOriginal();
+      const original = await importOriginal<Record<string, unknown>>();
       return {
         ...original,
         loadSessionEntry: () => ({
@@ -144,7 +144,7 @@ describe("chat.send command transcript – user message persistence", () => {
         idempotencyKey: "run-1",
       },
       respond,
-      context,
+      context: context as never,
       // Provide a minimal stub matching GatewayClient so the handler exercises
       // the optional-chaining paths (connect, connId, caps) under realistic conditions.
       client: {

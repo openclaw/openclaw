@@ -537,12 +537,14 @@ function appendCommandTranscriptMessages(params: {
   sessionId: string;
   storePath: string | undefined;
   sessionFile?: string;
+  agentId?: string;
   createIfMissing?: boolean;
 }): TranscriptAppendResult {
   const transcriptPath = resolveTranscriptPath({
     sessionId: params.sessionId,
     storePath: params.storePath,
     sessionFile: params.sessionFile,
+    agentId: params.agentId,
   });
   if (!transcriptPath) {
     return { ok: false, error: "transcript path not resolved" };
