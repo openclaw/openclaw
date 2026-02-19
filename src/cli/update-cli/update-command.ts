@@ -403,12 +403,9 @@ async function maybeRestartService(params: {
     try {
       let restarted = false;
       let restartInitiated = false;
-      let serviceRefreshed = false;
       if (params.refreshServiceEnv) {
         try {
           await runDaemonInstall({ force: true, json: params.opts.json });
-          serviceRefreshed = true;
-          restarted = true;
         } catch (err) {
           if (!params.opts.json) {
             defaultRuntime.log(
@@ -419,13 +416,11 @@ async function maybeRestartService(params: {
           }
         }
       }
-      if (!serviceRefreshed && params.restartScriptPath) {
+      if (params.restartScriptPath) {
         await runRestartScript(params.restartScriptPath);
         restartInitiated = true;
       } else {
-        if (!serviceRefreshed) {
-          restarted = await runDaemonRestart();
-        }
+        restarted = await runDaemonRestart();
       }
 
       if (!params.opts.json && restarted) {
