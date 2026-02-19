@@ -176,7 +176,7 @@ jobs:
 
   checks:
     needs: [docs-scope, changed-scope, check]
-    if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true')
+    if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true') && (github.event_name != 'push' || matrix.runtime != 'bun')
     runs-on: blacksmith-4vcpu-ubuntu-2404
     strategy:
       fail-fast: false
