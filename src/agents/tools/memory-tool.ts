@@ -3,6 +3,7 @@ import path from "node:path";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { MemoryCitationsMode } from "../../config/types.memory.js";
+import { type FileLockOptions, withFileLock } from "../../infra/file-lock.js";
 import { resolveMemoryBackendConfig } from "../../memory/backend-config.js";
 import { getMemorySearchManager } from "../../memory/index.js";
 import type { MemorySearchResult } from "../../memory/types.js";
@@ -44,26 +45,19 @@ const MemoryUpsertSchema = Type.Object({
   confidence: Type.Optional(Type.Number()),
 });
 
-const memoryFileLocks = new Map<string, Promise<void>>();
+const MEMORY_TOOL_FILE_LOCK_OPTIONS: FileLockOptions = {
+  retries: {
+    retries: 40,
+    factor: 1.25,
+    minTimeout: 25,
+    maxTimeout: 250,
+    randomize: true,
+  },
+  stale: 30_000,
+};
 
 async function withMemoryFileLock<T>(absPath: string, action: () => Promise<T>): Promise<T> {
-  const lockKey = path.resolve(absPath);
-  const previous = memoryFileLocks.get(lockKey) ?? Promise.resolve();
-  let releaseCurrent: (() => void) | undefined;
-  const current = new Promise<void>((resolve) => {
-    releaseCurrent = resolve;
-  });
-  const queued = previous.then(() => current);
-  memoryFileLocks.set(lockKey, queued);
-  await previous;
-  try {
-    return await action();
-  } finally {
-    releaseCurrent?.();
-    if (memoryFileLocks.get(lockKey) === queued) {
-      memoryFileLocks.delete(lockKey);
-    }
-  }
+  return await withFileLock(absPath, MEMORY_TOOL_FILE_LOCK_OPTIONS, action);
 }
 
 function resolveMemoryToolContext(options: { config?: OpenClawConfig; agentSessionKey?: string }) {
