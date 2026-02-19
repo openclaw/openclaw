@@ -215,6 +215,7 @@
   "pnpm": {
     "minimumReleaseAge": 2880,
     "overrides": {
+      "hono": "4.11.10",
       "fast-xml-parser": "5.3.6",
       "request": "npm:@cypress/request@3.0.10",
       "request-promise": "npm:@cypress/request-promise@5.0.0",

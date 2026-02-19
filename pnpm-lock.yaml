@@ -5,6 +5,7 @@ settings:
   excludeLinksFromLockfile: false
 
 overrides:
+  hono: 4.11.10
   request: npm:@cypress/request@3.0.10
   request-promise: npm:@cypress/request-promise@5.0.0
   fast-xml-parser: 5.3.6
@@ -27,7 +28,7 @@ importers:
         version: 3.993.0
       '@buape/carbon':
         specifier: 0.14.0
-        version: 0.14.0(hono@4.11.9)
+        version: 0.14.0(hono@4.11.10)
       '@clack/prompts':
         specifier: ^1.0.1
         version: 1.0.1
@@ -4119,8 +4120,8 @@ packages:
   highlight.js@10.7.3:
     resolution: {integrity: sha512-tzcUFauisWKNHaRkN4Wjl/ZA07gENAjFl3J/c480dprkGTg5EQstgaNFqBfUqCq54kZRIEcreTsAgF/m2quD7A==}
 
-  hono@4.11.9:
-    resolution: {integrity: sha512-Eaw2YTGM6WOxA6CXbckaEvslr2Ne4NFsKrvc0v97JD5awbmeBLO5w9Ho9L9kmKonrwF9RJlW6BxT1PVv/agBHQ==}
+  hono@4.11.10:
+    resolution: {integrity: sha512-kyWP5PAiMooEvGrA9jcD3IXF7ATu8+o7B3KCbPXid5se52NPqnOpM/r9qeW2heMnOekF4kqR1fXJqCYeCLKrZg==}
     engines: {node: '>=16.9.0'}
 
   hookable@6.0.1:
@@ -6748,14 +6749,14 @@ snapshots:
 
   '@borewit/text-codec@0.2.1': {}
 
-  '@buape/carbon@0.14.0(hono@4.11.9)':
+  '@buape/carbon@0.14.0(hono@4.11.10)':
     dependencies:
       '@types/node': 25.3.0
       discord-api-types: 0.38.37
     optionalDependencies:
       '@cloudflare/workers-types': 4.20260120.0
       '@discordjs/voice': 0.19.0
-      '@hono/node-server': 1.19.9(hono@4.11.9)
+      '@hono/node-server': 1.19.9(hono@4.11.10)
       '@types/bun': 1.3.6
       '@types/ws': 8.18.1
       ws: 8.19.0
@@ -7042,9 +7043,9 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@hono/node-server@1.19.9(hono@4.11.9)':
+  '@hono/node-server@1.19.9(hono@4.11.10)':
     dependencies:
-      hono: 4.11.9
+      hono: 4.11.10
     optional: true
 
   '@huggingface/jinja@0.5.5': {}
@@ -10093,7 +10094,7 @@ snapshots:
 
   highlight.js@10.7.3: {}
 
-  hono@4.11.9:
+  hono@4.11.10:
     optional: true
 
   hookable@6.0.1: {}
