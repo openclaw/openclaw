@@ -56,6 +56,7 @@ See [Venice AI](/providers/venice).
 - [vLLM (local models)](/providers/vllm)
 - [Qianfan](/providers/qianfan)
 - [NVIDIA](/providers/nvidia)
+- [Astrai (intelligent inference router)](/providers/astrai)
 
 ## Transcription providers
 
