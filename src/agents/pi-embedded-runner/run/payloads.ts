@@ -1,9 +1,10 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
-import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives.js";
 import type { ReasoningLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
+import type { OpenClawConfig } from "../../../config/config.js";
+import type { ToolResultFormat } from "../../pi-embedded-subscribe.js";
+import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { formatToolAggregate } from "../../../auto-reply/tool-meta.js";
-import type { OpenClawConfig } from "../../../config/config.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
   formatAssistantErrorText,
@@ -12,7 +13,6 @@ import {
   isRawApiErrorPayload,
   normalizeTextForComparison,
 } from "../../pi-embedded-helpers.js";
-import type { ToolResultFormat } from "../../pi-embedded-subscribe.js";
 import {
   extractAssistantText,
   extractAssistantThinking,
@@ -263,7 +263,14 @@ export function buildEmbeddedRunPayloads(params: {
         params.lastToolError.meta ? [params.lastToolError.meta] : undefined,
         { markdown: useMarkdown },
       );
-      const errorSuffix = params.lastToolError.error ? `: ${params.lastToolError.error}` : "";
+      // Sanitize tool error text — raw errors can contain stack traces, paths, and internal details.
+      // Only show a short, safe summary; the full error is already in the agent's context.
+      const rawToolError = params.lastToolError.error ?? "";
+      const safeToolError =
+        rawToolError.length > 120 || /\n|stack|trace|at\s+\S+\(|\/[a-z]/i.test(rawToolError)
+          ? ""
+          : rawToolError;
+      const errorSuffix = safeToolError ? `: ${safeToolError}` : "";
       const warningText = `⚠️ ${toolSummary} failed${errorSuffix}`;
       const normalizedWarning = normalizeTextForComparison(warningText);
       const duplicateWarning = normalizedWarning

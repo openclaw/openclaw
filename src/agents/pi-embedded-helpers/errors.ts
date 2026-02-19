@@ -1,8 +1,8 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { FailoverReason } from "./types.js";
 import { formatSandboxToolPolicyBlockedMessage } from "../sandbox.js";
 import { stableStringify } from "../stable-stringify.js";
-import type { FailoverReason } from "./types.js";
 
 export function formatBillingErrorMessage(provider?: string): string {
   const providerName = provider?.trim();
@@ -520,13 +520,23 @@ export function formatRawAssistantErrorForUi(raw?: string): string {
     if (info.type && AUTH_API_ERROR_TYPES.has(info.type)) {
       return AUTH_CONFIG_ERROR_MESSAGE;
     }
-    const prefix = info.httpCode ? `HTTP ${info.httpCode}` : "LLM error";
-    const type = info.type ? ` ${info.type}` : "";
-    const requestId = info.requestId ? ` (request_id: ${info.requestId})` : "";
-    return `${prefix}${type}: ${info.message}${requestId}`;
+    // Never expose request_id or raw error type to end users — these are internal details.
+    const safeMessage = info.message.length > 200 ? `${info.message.slice(0, 200)}…` : info.message;
+    return `LLM error: ${safeMessage}`;
   }
 
-  return trimmed.length > 600 ? `${trimmed.slice(0, 600)}…` : trimmed;
+  // Final fallback: if the raw text looks like a structured error payload or contains
+  // internal details (JSON, stack traces, paths), return a generic message.
+  if (
+    trimmed.startsWith("{") ||
+    trimmed.startsWith("<") ||
+    /stack|trace|at\s+\S+\(|\/[a-z].*\.[a-z]/i.test(trimmed) ||
+    trimmed.length > 300
+  ) {
+    return TRANSIENT_API_ERROR_MESSAGE;
+  }
+
+  return trimmed;
 }
 
 export function formatAssistantErrorText(
@@ -585,7 +595,13 @@ export function formatAssistantErrorText(
 
   const invalidRequest = raw.match(/"type":"invalid_request_error".*?"message":"([^"]+)"/);
   if (invalidRequest?.[1]) {
-    return `LLM request rejected: ${invalidRequest[1]}`;
+    const invalidMsg = invalidRequest[1];
+    // Suppress internal message structure details (thinking.signature, content indices, etc.)
+    // These leak session internals and are meaningless to end users.
+    if (/messages\.\d+\.content\.\d+\.|thinking\.signature|field required/i.test(invalidMsg)) {
+      return "⚠️ Message format error — please try again. If this persists, use /new to start a fresh session.";
+    }
+    return `LLM request rejected: ${invalidMsg}`;
   }
 
   // Suppress failover wrapper messages FIRST — these contain provider/model names
@@ -622,11 +638,18 @@ export function formatAssistantErrorText(
     return formatRawAssistantErrorForUi(raw);
   }
 
-  // Never return raw unhandled errors - log for debugging but return safe message
-  if (raw.length > 600) {
-    console.warn("[formatAssistantErrorText] Long error truncated:", raw.slice(0, 200));
+  // Never return raw unhandled errors — they can contain provider details, request IDs,
+  // JSON payloads, stack traces, or other internal info that should not reach end users.
+  if (
+    raw.length > 300 ||
+    raw.startsWith("{") ||
+    raw.startsWith("<") ||
+    /stack|trace|at\s+\S+\(|\/[a-z].*\.[a-z]|request_id|req_\w+/i.test(raw)
+  ) {
+    console.warn("[formatAssistantErrorText] Suppressed raw error:", raw.slice(0, 200));
+    return TRANSIENT_API_ERROR_MESSAGE;
   }
-  return raw.length > 600 ? `${raw.slice(0, 600)}…` : raw;
+  return raw;
 }
 
 export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boolean }): string {

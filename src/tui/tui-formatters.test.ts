@@ -17,9 +17,9 @@ describe("extractTextFromMessage", () => {
         '429 {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account\\u0027s rate limit. Please try again later."},"request_id":"req_123"}',
     });
 
-    expect(text).toContain("HTTP 429");
-    expect(text).toContain("rate_limit_error");
-    expect(text).toContain("req_123");
+    // Sanitized: raw HTTP code, error type, and request_id are stripped from user-facing output
+    expect(text).toContain("rate limit");
+    expect(text).not.toContain("req_123");
   });
 
   it("falls back to a generic message when errorMessage is missing", () => {
@@ -132,7 +132,8 @@ describe("extractContentFromMessage", () => {
       errorMessage: '429 {"error":{"message":"rate limit"}}',
     });
 
-    expect(text).toContain("HTTP 429");
+    // Sanitized: raw HTTP code stripped, shows safe error message
+    expect(text).toContain("rate limit");
   });
 });
 
