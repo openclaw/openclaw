@@ -1,3 +1,7 @@
+import type { MessagingToolSend } from "../../agents/pi-embedded-messaging.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import type { AgentDefaultsConfig } from "../../config/types.js";
+import type { CronJob, CronRunOutcome, CronRunTelemetry } from "../types.js";
 import {
   resolveAgentConfig,
   resolveAgentDir,
@@ -20,7 +24,6 @@ import {
   resolveHooksGmailModel,
   resolveThinkingDefault,
 } from "../../agents/model-selection.js";
-import type { MessagingToolSend } from "../../agents/pi-embedded-messaging.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { runSubagentAnnounceFlow } from "../../agents/subagent-announce.js";
 import { countActiveDescendantRuns } from "../../agents/subagent-registry.js";
@@ -34,13 +37,11 @@ import {
 } from "../../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveAgentMainSessionKey,
   resolveSessionTranscriptPath,
   updateSessionStore,
 } from "../../config/sessions.js";
-import type { AgentDefaultsConfig } from "../../config/types.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { resolveAgentOutboundIdentity } from "../../infra/outbound/identity.js";
@@ -53,8 +54,8 @@ import {
   getHookType,
   isExternalHookSession,
 } from "../../security/external-content.js";
+import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { resolveCronDeliveryPlan } from "../delivery.js";
-import type { CronJob, CronRunOutcome, CronRunTelemetry } from "../types.js";
 import { resolveDeliveryTarget } from "./delivery-target.js";
 import {
   isHeartbeatOnlyResponse,
@@ -269,6 +270,16 @@ export async function runCronIsolatedAgentTurn(params: {
     agentId,
     nowMs: now,
   });
+  // Apply payload.model override to the session entry so session_status and
+  // auth profile resolution see the requested model, matching sub-agent behavior.
+  if (provider !== resolvedDefault.provider || model !== resolvedDefault.model) {
+    applyModelOverrideToSessionEntry({
+      entry: cronSession.sessionEntry,
+      selection: { provider, model },
+      profileOverride: cronSession.sessionEntry.authProfileOverride,
+      profileOverrideSource: cronSession.sessionEntry.authProfileOverrideSource,
+    });
+  }
   const runSessionId = cronSession.sessionEntry.sessionId;
   const runSessionKey = baseSessionKey.startsWith("cron:")
     ? `${agentSessionKey}:run:${runSessionId}`
@@ -472,6 +483,8 @@ export async function runCronIsolatedAgentTurn(params: {
             cliSessionId,
           });
         }
+        const cronAuthProfileId =
+          providerOverride === provider ? cronSession.sessionEntry.authProfileOverride : undefined;
         return runEmbeddedPiAgent({
           sessionId: cronSession.sessionEntry.sessionId,
           sessionKey: agentSessionKey,
@@ -486,6 +499,10 @@ export async function runCronIsolatedAgentTurn(params: {
           lane: params.lane ?? "cron",
           provider: providerOverride,
           model: modelOverride,
+          authProfileId: cronAuthProfileId,
+          authProfileIdSource: cronAuthProfileId
+            ? cronSession.sessionEntry.authProfileOverrideSource
+            : undefined,
           thinkLevel,
           verboseLevel: resolvedVerboseLevel,
           timeoutMs,
