@@ -2,10 +2,61 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveStateDir, resolveLegacyStateDirs } from "../config/paths.js";
 
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
 const HTTP_URL_RE = /^https?:\/\//i;
 const DATA_URL_RE = /^data:/i;
+
+/**
+ * Well-known directories that contain secrets (API keys, tokens, credentials)
+ * and must never be accessible from within the sandbox, even when they fall
+ * inside the sandbox root.
+ *
+ * Paths are resolved at call time so environment overrides are respected.
+ */
+let _sensitivePaths: string[] | null = null;
+
+/** @internal Reset the cached sensitive paths (for testing only). */
+export function _resetSensitivePathsCache(): void {
+  _sensitivePaths = null;
+}
+
+function resolveSensitivePaths(): string[] {
+  if (_sensitivePaths) return _sensitivePaths;
+  const home = os.homedir();
+  _sensitivePaths = [
+    // OpenClaw state dir (contains openclaw.json with API keys, credentials/, sessions/)
+    resolveStateDir(),
+    // Legacy state dirs (.clawdbot, .moldbot, .moltbot)
+    ...resolveLegacyStateDirs(),
+    // SSH keys
+    path.join(home, ".ssh"),
+    // GPG keys
+    path.join(home, ".gnupg"),
+    // AWS credentials
+    path.join(home, ".aws"),
+    // Google Cloud credentials
+    path.join(home, ".config", "gcloud"),
+  ].map((p) => path.resolve(p));
+  return _sensitivePaths;
+}
+
+/**
+ * Check whether a resolved path falls inside any sensitive directory.
+ * Uses the same `expandPath` normalizer as the sandbox resolver to prevent
+ * normalization mismatches (e.g. Unicode space tricks).
+ */
+export function isSensitivePath(resolvedPath: string): { sensitive: boolean; directory?: string } {
+  const normalized = path.resolve(resolvedPath);
+  for (const dir of resolveSensitivePaths()) {
+    const relative = path.relative(dir, normalized);
+    if (relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative))) {
+      return { sensitive: true, directory: shortPath(dir) };
+    }
+  }
+  return { sensitive: false };
+}
 
 function normalizeUnicodeSpaces(str: string): string {
   return str.replace(UNICODE_SPACES, " ");
@@ -34,7 +85,13 @@ export function resolveSandboxInputPath(filePath: string, cwd: string): string {
   return resolveToCwd(filePath, cwd);
 }
 
-export function resolveSandboxPath(params: { filePath: string; cwd: string; root: string }): {
+export function resolveSandboxPath(params: {
+  filePath: string;
+  cwd: string;
+  root: string;
+  /** Skip the sensitive-path check (e.g. for internal/elevated operations). */
+  skipSensitiveCheck?: boolean;
+}): {
   resolved: string;
   relative: string;
 } {
@@ -47,6 +104,18 @@ export function resolveSandboxPath(params: { filePath: string; cwd: string; root
   if (relative.startsWith("..") || path.isAbsolute(relative)) {
     throw new Error(`Path escapes sandbox root (${shortPath(rootResolved)}): ${params.filePath}`);
   }
+
+  // Block access to sensitive directories (API keys, credentials, SSH keys)
+  // even when they fall within the sandbox root.
+  if (!params.skipSensitiveCheck) {
+    const check = isSensitivePath(resolved);
+    if (check.sensitive) {
+      throw new Error(
+        `Access denied: path targets a sensitive directory (${check.directory}): ${params.filePath}`,
+      );
+    }
+  }
+
   return { resolved, relative };
 }
 
@@ -55,11 +124,27 @@ export async function assertSandboxPath(params: {
   cwd: string;
   root: string;
   allowFinalSymlink?: boolean;
+  skipSensitiveCheck?: boolean;
 }) {
   const resolved = resolveSandboxPath(params);
   await assertNoSymlinkEscape(resolved.relative, path.resolve(params.root), {
     allowFinalSymlink: params.allowFinalSymlink,
   });
+
+  // Post-symlink sensitive-path check: resolve the real path (following symlinks)
+  // and verify the *target* isn't sensitive. This closes the symlink bypass where
+  // ~/workspace/link -> ~/.openclaw/ would pass the sync check on the link path
+  // but actually access credentials via the symlink target.
+  if (!params.skipSensitiveCheck) {
+    const realPath = await tryRealpath(resolved.resolved);
+    const check = isSensitivePath(realPath);
+    if (check.sensitive) {
+      throw new Error(
+        `Access denied: path resolves to a sensitive directory (${check.directory}): ${params.filePath}`,
+      );
+    }
+  }
+
   return resolved;
 }
 
