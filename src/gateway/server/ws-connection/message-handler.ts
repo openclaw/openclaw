@@ -711,42 +711,46 @@ export function attachGatewayWsMessageHandler(params: {
               return;
             }
           } else {
+            const hasLegacyPairedMetadata =
+              paired.roles === undefined && paired.scopes === undefined;
             const pairedRoles = Array.isArray(paired.roles)
               ? paired.roles
               : paired.role
                 ? [paired.role]
                 : [];
-            const allowedRoles = new Set(pairedRoles);
-            if (allowedRoles.size === 0) {
-              logUpgradeAudit("role-upgrade", pairedRoles, paired.scopes);
-              const ok = await requirePairing("role-upgrade");
-              if (!ok) {
-                return;
-              }
-            } else if (!allowedRoles.has(role)) {
-              logUpgradeAudit("role-upgrade", pairedRoles, paired.scopes);
-              const ok = await requirePairing("role-upgrade");
-              if (!ok) {
-                return;
-              }
-            }
-
-            const pairedScopes = Array.isArray(paired.scopes) ? paired.scopes : [];
-            if (scopes.length > 0) {
-              if (pairedScopes.length === 0) {
-                logUpgradeAudit("scope-upgrade", pairedRoles, pairedScopes);
-                const ok = await requirePairing("scope-upgrade");
+            if (!hasLegacyPairedMetadata) {
+              const allowedRoles = new Set(pairedRoles);
+              if (allowedRoles.size === 0) {
+                logUpgradeAudit("role-upgrade", pairedRoles, paired.scopes);
+                const ok = await requirePairing("role-upgrade");
                 if (!ok) {
                   return;
                 }
-              } else {
-                const allowedScopes = new Set(pairedScopes);
-                const missingScope = scopes.find((scope) => !allowedScopes.has(scope));
-                if (missingScope) {
+              } else if (!allowedRoles.has(role)) {
+                logUpgradeAudit("role-upgrade", pairedRoles, paired.scopes);
+                const ok = await requirePairing("role-upgrade");
+                if (!ok) {
+                  return;
+                }
+              }
+
+              const pairedScopes = Array.isArray(paired.scopes) ? paired.scopes : [];
+              if (scopes.length > 0) {
+                if (pairedScopes.length === 0) {
                   logUpgradeAudit("scope-upgrade", pairedRoles, pairedScopes);
                   const ok = await requirePairing("scope-upgrade");
                   if (!ok) {
                     return;
+                  }
+                } else {
+                  const allowedScopes = new Set(pairedScopes);
+                  const missingScope = scopes.find((scope) => !allowedScopes.has(scope));
+                  if (missingScope) {
+                    logUpgradeAudit("scope-upgrade", pairedRoles, pairedScopes);
+                    const ok = await requirePairing("scope-upgrade");
+                    if (!ok) {
+                      return;
+                    }
                   }
                 }
               }
