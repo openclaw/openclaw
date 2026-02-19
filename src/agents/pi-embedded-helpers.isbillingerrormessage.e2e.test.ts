@@ -348,4 +348,22 @@ describe("classifyFailoverReason", () => {
       "rate_limit",
     );
   });
+
+  it("classifies connection errors as timeout for failover", () => {
+    const connectionErrors = [
+      "Connection error.",
+      "connect error",
+      "ECONNREFUSED",
+      "ECONNRESET",
+      "ENOTFOUND",
+      "ECONNABORTED",
+      "socket hang up",
+      "fetch failed",
+    ];
+    for (const sample of connectionErrors) {
+      expect(classifyFailoverReason(sample)).toBe("timeout");
+      expect(isTimeoutErrorMessage(sample)).toBe(true);
+      expect(isFailoverErrorMessage(sample)).toBe(true);
+    }
+  });
 });
