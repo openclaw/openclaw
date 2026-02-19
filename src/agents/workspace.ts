@@ -5,7 +5,7 @@ import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
-import { resolveWorkspaceTemplateDir } from "./workspace-templates.js";
+import { resolveSegmentTemplateDir, resolveWorkspaceTemplateDir } from "./workspace-templates.js";
 
 export function resolveDefaultAgentWorkspaceDir(
   env: NodeJS.ProcessEnv = process.env,
@@ -76,6 +76,104 @@ async function loadTemplate(name: string): Promise<string> {
     workspaceTemplateCache.delete(name);
     throw error;
   }
+}
+
+/**
+ * Load a template for a specific segment. Resolution order:
+ * 1. templates/{segment}/{name} (overlay)
+ * 2. templates/base/{name} (base)
+ * 3. docs/reference/templates/{name} (original fallback)
+ */
+async function loadSegmentTemplate(segment: string, name: string): Promise<string> {
+  // Try overlay first
+  const overlayDir = await resolveSegmentTemplateDir(segment);
+  if (overlayDir) {
+    const overlayPath = path.join(overlayDir, name);
+    try {
+      const content = await fs.readFile(overlayPath, "utf-8");
+      return stripFrontMatter(content);
+    } catch {
+      // Overlay doesn't have this file, fall through to base
+    }
+  }
+
+  // Try base
+  const baseDir = await resolveSegmentTemplateDir("base");
+  if (baseDir) {
+    const basePath = path.join(baseDir, name);
+    try {
+      const content = await fs.readFile(basePath, "utf-8");
+      return stripFrontMatter(content);
+    } catch {
+      // Base doesn't have this file, fall through to original
+    }
+  }
+
+  // Fall back to original template
+  return loadTemplate(name);
+}
+
+const DEFAULT_SECURITY_FILENAME = "SECURITY.md";
+const DEFAULT_CONTATOS_FILENAME = "CONTATOS.md";
+
+/**
+ * Copy segment guide files (from templates/base/docs/guides/) into the workspace.
+ */
+async function copySegmentGuides(dir: string): Promise<void> {
+  const baseDir = await resolveSegmentTemplateDir("base");
+  if (!baseDir) {
+    return;
+  }
+
+  const guidesSourceDir = path.join(baseDir, "docs", "guides");
+  const guidesDestDir = path.join(dir, "docs", "guides");
+
+  try {
+    await fs.access(guidesSourceDir);
+  } catch {
+    return; // No guides to copy
+  }
+
+  await fs.mkdir(guidesDestDir, { recursive: true });
+
+  try {
+    const files = await fs.readdir(guidesSourceDir);
+    for (const file of files) {
+      if (!file.endsWith(".md")) {
+        continue;
+      }
+      const srcPath = path.join(guidesSourceDir, file);
+      const destPath = path.join(guidesDestDir, file);
+      const content = await fs.readFile(srcPath, "utf-8");
+      await writeFileIfMissing(destPath, stripFrontMatter(content));
+    }
+  } catch {
+    // Ignore errors reading guide files
+  }
+}
+
+/**
+ * Copy people template from templates/base/memory/people/ into the workspace.
+ */
+async function copyPeopleTemplate(dir: string): Promise<void> {
+  const baseDir = await resolveSegmentTemplateDir("base");
+  if (!baseDir) {
+    return;
+  }
+
+  const srcPath = path.join(baseDir, "memory", "people", "_TEMPLATE.md");
+  const destDir = path.join(dir, "memory", "people");
+  const destPath = path.join(destDir, "_TEMPLATE.md");
+
+  try {
+    await fs.access(srcPath);
+  } catch {
+    return;
+  }
+
+  await fs.mkdir(destDir, { recursive: true });
+  const content = await fs.readFile(srcPath, "utf-8");
+  await writeFileIfMissing(destPath, content);
 }
 
 export type WorkspaceBootstrapFileName =
@@ -258,6 +356,7 @@ async function ensureGitRepo(dir: string, isBrandNewWorkspace: boolean) {
 export async function ensureAgentWorkspace(params?: {
   dir?: string;
   ensureBootstrapFiles?: boolean;
+  segment?: string;
 }): Promise<{
   dir: string;
   agentsPath?: string;
@@ -275,6 +374,10 @@ export async function ensureAgentWorkspace(params?: {
   if (!params?.ensureBootstrapFiles) {
     return { dir };
   }
+
+  const segment = params?.segment;
+  const useSegment = segment && segment !== "default";
+  const load = useSegment ? (name: string) => loadSegmentTemplate(segment, name) : loadTemplate;
 
   const agentsPath = path.join(dir, DEFAULT_AGENTS_FILENAME);
   const soulPath = path.join(dir, DEFAULT_SOUL_FILENAME);
@@ -300,12 +403,13 @@ export async function ensureAgentWorkspace(params?: {
     return existing.every((v) => !v);
   })();
 
-  const agentsTemplate = await loadTemplate(DEFAULT_AGENTS_FILENAME);
-  const soulTemplate = await loadTemplate(DEFAULT_SOUL_FILENAME);
-  const toolsTemplate = await loadTemplate(DEFAULT_TOOLS_FILENAME);
-  const identityTemplate = await loadTemplate(DEFAULT_IDENTITY_FILENAME);
-  const userTemplate = await loadTemplate(DEFAULT_USER_FILENAME);
-  const heartbeatTemplate = await loadTemplate(DEFAULT_HEARTBEAT_FILENAME);
+  const agentsTemplate = await load(DEFAULT_AGENTS_FILENAME);
+  const soulTemplate = await load(DEFAULT_SOUL_FILENAME);
+  const toolsTemplate = await load(DEFAULT_TOOLS_FILENAME);
+  const identityTemplate = await load(DEFAULT_IDENTITY_FILENAME);
+  const userTemplate = await load(DEFAULT_USER_FILENAME);
+  const heartbeatTemplate = await load(DEFAULT_HEARTBEAT_FILENAME);
+  const bootstrapTemplate = await load(DEFAULT_BOOTSTRAP_FILENAME);
   await writeFileIfMissing(agentsPath, agentsTemplate);
   await writeFileIfMissing(soulPath, soulTemplate);
   await writeFileIfMissing(toolsPath, toolsTemplate);
@@ -342,7 +446,6 @@ export async function ensureAgentWorkspace(params?: {
     if (legacyOnboardingCompleted) {
       markState({ onboardingCompletedAt: nowIso() });
     } else {
-      const bootstrapTemplate = await loadTemplate(DEFAULT_BOOTSTRAP_FILENAME);
       const wroteBootstrap = await writeFileIfMissing(bootstrapPath, bootstrapTemplate);
       if (!wroteBootstrap) {
         bootstrapExists = await fileExists(bootstrapPath);
@@ -358,6 +461,46 @@ export async function ensureAgentWorkspace(params?: {
   if (stateDirty) {
     await writeWorkspaceOnboardingState(statePath, state);
   }
+
+  // Segment templates: extra files (SECURITY, CONTATOS, MEMORY) + folder structure
+  if (useSegment && isBrandNewWorkspace) {
+    // Write additional segment files
+    try {
+      const securityTemplate = await load(DEFAULT_SECURITY_FILENAME);
+      await writeFileIfMissing(path.join(dir, DEFAULT_SECURITY_FILENAME), securityTemplate);
+    } catch {
+      /* optional */
+    }
+
+    try {
+      const contatosTemplate = await load(DEFAULT_CONTATOS_FILENAME);
+      await writeFileIfMissing(path.join(dir, DEFAULT_CONTATOS_FILENAME), contatosTemplate);
+    } catch {
+      /* optional */
+    }
+
+    try {
+      const memoryTemplate = await load(DEFAULT_MEMORY_FILENAME);
+      await writeFileIfMissing(path.join(dir, DEFAULT_MEMORY_FILENAME), memoryTemplate);
+    } catch {
+      /* optional */
+    }
+
+    // Create folder structure
+    await fs.mkdir(path.join(dir, "memory"), { recursive: true });
+    await fs.mkdir(path.join(dir, "memory", "people"), { recursive: true });
+    await fs.mkdir(path.join(dir, "memory", "sessions"), { recursive: true });
+    await fs.mkdir(path.join(dir, "docs"), { recursive: true });
+    await fs.mkdir(path.join(dir, "docs", "guides"), { recursive: true });
+    await fs.mkdir(path.join(dir, "docs", "plans"), { recursive: true });
+    await fs.mkdir(path.join(dir, "reports"), { recursive: true });
+    await fs.mkdir(path.join(dir, "assets"), { recursive: true });
+
+    // Copy universal guides and people template
+    await copySegmentGuides(dir);
+    await copyPeopleTemplate(dir);
+  }
+
   await ensureGitRepo(dir, isBrandNewWorkspace);
 
   return {

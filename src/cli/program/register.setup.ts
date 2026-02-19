@@ -20,6 +20,10 @@ export function registerSetupCommand(program: Command) {
       "--workspace <dir>",
       "Agent workspace directory (default: ~/.openclaw/workspace; stored as agents.defaults.workspace)",
     )
+    .option(
+      "--template <segment>",
+      "Template segment: clinic, personal, construction, law-firm, default",
+    )
     .option("--wizard", "Run the interactive onboarding wizard", false)
     .option("--non-interactive", "Run the wizard without prompts", false)
     .option("--mode <mode>", "Wizard mode: local|remote")
@@ -47,7 +51,13 @@ export function registerSetupCommand(program: Command) {
           );
           return;
         }
-        await setupCommand({ workspace: opts.workspace as string | undefined }, defaultRuntime);
+        await setupCommand(
+          {
+            workspace: opts.workspace as string | undefined,
+            template: opts.template as string | undefined,
+          },
+          defaultRuntime,
+        );
       });
     });
 }
