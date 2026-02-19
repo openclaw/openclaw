@@ -74,7 +74,7 @@ function resolveGatewayAuthFromConfig(params: {
 
 function shouldPersistGeneratedToken(params: {
   persistRequested: boolean;
-  baseMode?: GatewayAuthMode;
+  baselineMode: GatewayAuthMode;
   overrideMode?: GatewayAuthMode;
 }): boolean {
   if (!params.persistRequested) {
@@ -83,11 +83,7 @@ function shouldPersistGeneratedToken(params: {
 
   // Keep CLI/runtime auth mode overrides ephemeral when they switch from an
   // explicit non-token config mode to token mode.
-  if (
-    params.overrideMode === "token" &&
-    params.baseMode !== undefined &&
-    params.baseMode !== "token"
-  ) {
+  if (params.overrideMode === "token" && params.baselineMode !== "token") {
     return false;
   }
 
@@ -108,6 +104,11 @@ export async function ensureGatewayStartupAuth(params: {
 }> {
   const env = params.env ?? process.env;
   const persistRequested = params.persist === true;
+  const baselineResolved = resolveGatewayAuthFromConfig({
+    cfg: params.cfg,
+    env,
+    tailscaleOverride: params.tailscaleOverride,
+  });
   const resolved = resolveGatewayAuthFromConfig({
     cfg: params.cfg,
     env,
@@ -132,7 +133,7 @@ export async function ensureGatewayStartupAuth(params: {
   };
   const persist = shouldPersistGeneratedToken({
     persistRequested,
-    baseMode: params.cfg.gateway?.auth?.mode,
+    baselineMode: baselineResolved.mode,
     overrideMode: params.authOverride?.mode,
   });
   if (persist) {
