@@ -3,13 +3,16 @@
  * Returns no-op when consentGate is disabled or not configured.
  */
 
+import path from "node:path";
 import type { OpenClawConfig } from "../config/types.js";
 import type { ConsentGateApi } from "./api.js";
 import { createNoOpConsentGateApi } from "./api.js";
 import { createConsentEngine } from "./engine.js";
 import { createConsentMetrics } from "./metrics.js";
+import type { TokenStore } from "./store.js";
 import { createFileBackedTokenStore } from "./store-file.js";
 import { createInMemoryTokenStore } from "./store.js";
+import type { WalWriter } from "./wal.js";
 import { createFileBackedWal } from "./wal-file.js";
 import { createInMemoryWal } from "./wal.js";
 
@@ -30,6 +33,15 @@ const POLICY_VERSION = "1";
 /** Lazy singleton per process (gateway typically has one config). */
 let cachedApi: ConsentGateApi | null = null;
 let cachedConfigKey: string | null = null;
+let cachedRuntime:
+  | {
+      key: string;
+      store: TokenStore;
+      wal: WalWriter;
+      metrics: ReturnType<typeof createConsentMetrics>;
+      quarantine: Set<string>;
+    }
+  | null = null;
 
 function configKey(cfg: OpenClawConfig): string {
   const cg = cfg.gateway?.consentGate;
@@ -40,6 +52,39 @@ function configKey(cfg: OpenClawConfig): string {
     (cg.gatedTools ?? []).join(","),
     cg.storagePath ?? "",
   ].join("|");
+}
+
+function runtimeStateKey(storagePath: string | undefined): string {
+  const trimmed = storagePath?.trim();
+  if (!trimmed) return "memory";
+  return `file:${path.resolve(trimmed)}`;
+}
+
+function resolveRuntimeState(storagePath: string | undefined): {
+  store: TokenStore;
+  wal: WalWriter;
+  metrics: ReturnType<typeof createConsentMetrics>;
+  quarantine: Set<string>;
+} {
+  const key = runtimeStateKey(storagePath);
+  if (cachedRuntime && cachedRuntime.key === key) {
+    return cachedRuntime;
+  }
+  const trimmed = storagePath?.trim();
+  const store = trimmed
+    ? createFileBackedTokenStore(trimmed)
+    : createInMemoryTokenStore();
+  const wal = trimmed ? createFileBackedWal(trimmed) : createInMemoryWal();
+  const metrics = createConsentMetrics();
+  const quarantine = new Set<string>();
+  cachedRuntime = {
+    key,
+    store,
+    wal,
+    metrics,
+    quarantine,
+  };
+  return cachedRuntime;
 }
 
 /**
@@ -57,13 +102,7 @@ export function resolveConsentGateApi(cfg: OpenClawConfig): ConsentGateApi {
     cachedConfigKey = key;
     return cachedApi;
   }
-  const storagePath = cg.storagePath?.trim();
-  const store = storagePath
-    ? createFileBackedTokenStore(storagePath)
-    : createInMemoryTokenStore();
-  const wal = storagePath ? createFileBackedWal(storagePath) : createInMemoryWal();
-  const metrics = createConsentMetrics();
-  const quarantine = new Set<string>();
+  const runtime = resolveRuntimeState(cg.storagePath);
   const tierToolMatrix = cg.tierToolMatrix && typeof cg.tierToolMatrix === "object" ? cg.tierToolMatrix : undefined;
   const rateLimit =
     cg.rateLimit &&
@@ -74,20 +113,29 @@ export function resolveConsentGateApi(cfg: OpenClawConfig): ConsentGateApi {
       ? { maxOpsPerWindow: cg.rateLimit.maxOpsPerWindow, windowMs: cg.rateLimit.windowMs }
       : undefined;
   const engine = createConsentEngine({
-    store,
-    wal,
+    store: runtime.store,
+    wal: runtime.wal,
     policyVersion: POLICY_VERSION,
-    metrics,
-    quarantine,
+    metrics: runtime.metrics,
+    quarantine: runtime.quarantine,
     tierToolMatrix,
     rateLimit,
   });
   cachedApi = Object.assign(engine, {
-    getMetrics: () => metrics.getSnapshot(),
-    liftQuarantine: (sessionKey: string) => quarantine.delete(sessionKey),
+    getMetrics: () => runtime.metrics.getSnapshot(),
+    liftQuarantine: (sessionKey: string) => runtime.quarantine.delete(sessionKey),
   });
   cachedConfigKey = key;
   return cachedApi;
+}
+
+/**
+ * Test-only cache reset so unit tests can isolate module-level runtime state.
+ */
+export function resetConsentGateResolverForTests(): void {
+  cachedApi = null;
+  cachedConfigKey = null;
+  cachedRuntime = null;
 }
 
 /**
