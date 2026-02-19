@@ -218,6 +218,7 @@ export const OpenClawSchema = z
         executablePath: z.string().optional(),
         headless: z.boolean().optional(),
         noSandbox: z.boolean().optional(),
+        gpuEnabled: z.boolean().optional(),
         attachOnly: z.boolean().optional(),
         defaultProfile: z.string().optional(),
         snapshotDefaults: BrowserSnapshotDefaultsSchema,

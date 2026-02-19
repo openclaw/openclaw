@@ -30,6 +30,12 @@ export type BrowserConfig = {
   headless?: boolean;
   /** Pass --no-sandbox to Chrome (Linux containers). Default: false */
   noSandbox?: boolean;
+  /**
+   * Enable GPU hardware acceleration in headless mode. Default: false
+   * When true, prevents --disable-gpu and optionally adds GPU flags like --enable-gpu, --use-angle=vulkan.
+   * Requires GPU devices (e.g., /dev/dri/*) to be available in the container.
+   */
+  gpuEnabled?: boolean;
   /** If true: never launch; only attach to an existing browser. Default: false */
   attachOnly?: boolean;
   /** Default profile to use when profile param is omitted. Default: "chrome" */
