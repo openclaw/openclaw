@@ -341,7 +341,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
         };
       }
       const audit = await getTelegramRuntime().channel.telegram.auditGroupMembership({
-        token: account.token,
+        token: account.token.trim(),
         botId,
         groupIds,
         proxyUrl: account.config.proxy,
