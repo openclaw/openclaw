@@ -319,6 +319,10 @@ export async function resolveMedia(
       url,
       fetchImpl,
       filePathHint: filePath,
+      // api.telegram.org is a known external domain; allowlisting it in the SSRF guard
+      // prevents false-positive rejections when DNS resolves to an unexpected address
+      // (e.g. via a proxy or split-horizon DNS in regions where Telegram is blocked). (#20891)
+      ssrfPolicy: { allowedHostnames: ["api.telegram.org"] },
     });
     const originalName = fetched.fileName ?? filePath;
     return saveMediaBuffer(fetched.buffer, fetched.contentType, "inbound", maxBytes, originalName);
