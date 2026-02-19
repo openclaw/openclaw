@@ -76,7 +76,9 @@ describe("trigger handling", () => {
   it("returns friendly message for rate limit errors", async () => {
     await withTempHome(async (home) => {
       const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
-      runEmbeddedPiAgentMock.mockRejectedValue(new Error("rate_limit_exceeded: API rate limit exceeded"));
+      runEmbeddedPiAgentMock.mockRejectedValue(
+        new Error("rate_limit_exceeded: API rate limit exceeded"),
+      );
 
       const res = await getReplyFromConfig(BASE_MESSAGE, {}, makeCfg(home));
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
@@ -91,29 +93,39 @@ describe("trigger handling", () => {
 
       const res = await getReplyFromConfig(BASE_MESSAGE, {}, makeCfg(home));
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toBe("I couldn't connect to the AI service. Please verify your API key is configured correctly.");
+      expect(text).toBe(
+        "I couldn't connect to the AI service. Please verify your API key is configured correctly.",
+      );
     });
   });
 
   it("returns friendly message for billing errors", async () => {
     await withTempHome(async (home) => {
       const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
-      runEmbeddedPiAgentMock.mockRejectedValue(new Error("402 Payment Required: billing limit exceeded"));
+      runEmbeddedPiAgentMock.mockRejectedValue(
+        new Error("402 Payment Required: billing limit exceeded"),
+      );
 
       const res = await getReplyFromConfig(BASE_MESSAGE, {}, makeCfg(home));
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toBe("I've reached my limit with the AI service. Please check your account balance and try again.");
+      expect(text).toBe(
+        "I've reached my limit with the AI service. Please check your account balance and try again.",
+      );
     });
   });
 
   it("returns friendly message for timeout errors", async () => {
     await withTempHome(async (home) => {
       const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
-      runEmbeddedPiAgentMock.mockRejectedValue(new Error("408 Request Timeout: connection timed out"));
+      runEmbeddedPiAgentMock.mockRejectedValue(
+        new Error("408 Request Timeout: connection timed out"),
+      );
 
       const res = await getReplyFromConfig(BASE_MESSAGE, {}, makeCfg(home));
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toBe("The request timed out. Please try again, or start a fresh session with /new.");
+      expect(text).toBe(
+        "The request timed out. Please try again, or start a fresh session with /new.",
+      );
     });
   });
 
