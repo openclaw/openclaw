@@ -438,13 +438,16 @@ export async function sanitizeSessionHistory(params: {
       modelId: params.modelId,
     });
   const withInterSessionMarkers = annotateInterSessionUserMessages(params.messages);
+  const forceToolIdSanitizeForOpenAiCompletions =
+    params.modelApi === "openai-completions" && !policy.sanitizeToolCallIds;
   const sanitizedImages = await sanitizeSessionMessagesImages(
     withInterSessionMarkers,
     "session:history",
     {
       sanitizeMode: policy.sanitizeMode,
-      sanitizeToolCallIds: policy.sanitizeToolCallIds,
-      toolCallIdMode: policy.toolCallIdMode,
+      sanitizeToolCallIds: policy.sanitizeToolCallIds || forceToolIdSanitizeForOpenAiCompletions,
+      toolCallIdMode:
+        policy.toolCallIdMode ?? (forceToolIdSanitizeForOpenAiCompletions ? "strict" : undefined),
       preserveSignatures: policy.preserveSignatures,
       sanitizeThoughtSignatures: policy.sanitizeThoughtSignatures,
       ...resolveImageSanitizationLimits(params.config),

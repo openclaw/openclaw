@@ -79,9 +79,28 @@ export function findNormalizedProviderKey(
 export function isCliProvider(provider: string, cfg?: OpenClawConfig): boolean {
   const normalized = normalizeProviderId(provider);
   if (normalized === "claude-cli") {
+    // When claude-cli is configured with a baseUrl (e.g. CLIProxyAPI at 8317), use the embedded
+    // path (runEmbeddedPiAgent + openai-completions) so requests go to the proxy instead of
+    // the claude CLI subprocess. Same idea as codex-cli and antigravity-cli.
+    const providers = cfg?.models?.providers ?? {};
+    const claudeCliKey = Object.keys(providers).find(
+      (k) => normalizeProviderId(k) === "claude-cli",
+    );
+    if (claudeCliKey && providers[claudeCliKey]?.baseUrl) {
+      return false;
+    }
     return true;
   }
   if (normalized === "codex-cli") {
+    // When codex-cli is configured with a baseUrl (e.g. CLIProxyAPI at 8317), use the embedded
+    // path (runEmbeddedPiAgent + openai-completions) so requests go to the proxy instead of
+    // the codex CLI subprocess (which uses Codex cloud thread API and causes "state db missing rollout path").
+    // Same idea as antigravity-cli: no CLI path, use config + HTTP.
+    const providers = cfg?.models?.providers ?? {};
+    const codexCliKey = Object.keys(providers).find((k) => normalizeProviderId(k) === "codex-cli");
+    if (codexCliKey && providers[codexCliKey]?.baseUrl) {
+      return false;
+    }
     return true;
   }
   const backends = cfg?.agents?.defaults?.cliBackends ?? {};

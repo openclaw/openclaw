@@ -161,11 +161,20 @@ function rewriteAssistantToolCallIds(params: {
     const rec = block as { type?: unknown; id?: unknown };
     const type = rec.type;
     const id = rec.id;
-    if (
-      (type !== "functionCall" && type !== "toolUse" && type !== "toolCall") ||
-      typeof id !== "string" ||
-      !id
-    ) {
+    if (typeof id !== "string" || !id) {
+      return block;
+    }
+    const typeStr = typeof type === "string" ? type.toLowerCase() : "";
+    const isToolCallBlock =
+      type === "functionCall" ||
+      type === "function_call" ||
+      type === "toolUse" ||
+      type === "tool_use" ||
+      type === "toolCall" ||
+      typeStr === "tool_call" ||
+      typeStr.includes("tool_use") ||
+      typeStr.includes("function_call");
+    if (!isToolCallBlock) {
       return block;
     }
     const nextId = params.resolve(id);

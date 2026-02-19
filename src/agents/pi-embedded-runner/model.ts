@@ -54,11 +54,90 @@ export function resolveModel(
   const resolvedAgentDir = agentDir ?? resolveOpenClawAgentDir();
   const authStorage = discoverAuthStorage(resolvedAgentDir);
   const modelRegistry = discoverModels(authStorage, resolvedAgentDir);
+  const providers = cfg?.models?.providers ?? {};
+  const inlineModels = buildInlineProviderModels(providers);
+  const normalizedProvider = normalizeProviderId(provider);
+  // When catalog/auth-choice maps codex-cli -> openai-codex, the run may pass provider "openai-codex".
+  // Prefer config-defined codex-cli (8317 + openai-completions) over registry's openai-codex-responses,
+  // so we do not send thread and hit Codex "state db missing rollout path". Same idea as antigravity-cli (no mapping).
+  const codexCliConfigKey = Object.keys(providers).find(
+    (k) => normalizeProviderId(k) === "codex-cli",
+  );
+  const claudeCliConfigKey = Object.keys(providers).find(
+    (k) => normalizeProviderId(k) === "claude-cli",
+  );
+  if (normalizedProvider === "openai-codex" && codexCliConfigKey !== undefined) {
+    const codexCliMatch = inlineModels.find(
+      (entry) => normalizeProviderId(entry.provider) === "codex-cli" && entry.id === modelId,
+    );
+    if (codexCliMatch) {
+      const normalized = normalizeModelCompat(codexCliMatch as Model<Api>);
+      return { model: normalized, authStorage, modelRegistry };
+    }
+  }
+  // When catalog/auth maps claude-cli -> anthropic, prefer config-defined claude-cli (8317 + openai-completions).
+  if (normalizedProvider === "anthropic" && claudeCliConfigKey !== undefined) {
+    const claudeCliMatch = inlineModels.find(
+      (entry) => normalizeProviderId(entry.provider) === "claude-cli" && entry.id === modelId,
+    );
+    if (claudeCliMatch) {
+      const normalized = normalizeModelCompat(claudeCliMatch as Model<Api>);
+      return { model: normalized, authStorage, modelRegistry };
+    }
+  }
+  // Prefer config-defined provider (e.g. codex-cli -> 8317 + openai-completions) over registry.
+  // Use normalized lookup so provider key casing/spacing in config still matches.
+  const configProviderKey = Object.keys(providers).find(
+    (k) => normalizeProviderId(k) === normalizedProvider,
+  );
+  if (configProviderKey !== undefined && inlineModels.length > 0) {
+    const inlineMatch = inlineModels.find(
+      (entry) => normalizeProviderId(entry.provider) === normalizedProvider && entry.id === modelId,
+    );
+    if (inlineMatch) {
+      const normalized = normalizeModelCompat(inlineMatch as Model<Api>);
+      return {
+        model: normalized,
+        authStorage,
+        modelRegistry,
+      };
+    }
+  }
   const model = modelRegistry.find(provider, modelId) as Model<Api> | null;
+  // If registry returned openai-codex-responses (e.g. built-in) but config defines codex-cli
+  // with this model, use config so we do not send thread and hit Codex rollout error (same as antigravity-cli path).
+  if (model?.api === "openai-codex-responses" && codexCliConfigKey !== undefined) {
+    const overrideMatch = inlineModels.find(
+      (entry) => normalizeProviderId(entry.provider) === "codex-cli" && entry.id === modelId,
+    );
+    if (overrideMatch) {
+      const normalized = normalizeModelCompat(overrideMatch as Model<Api>);
+      return { model: normalized, authStorage, modelRegistry };
+    }
+  }
+  // If registry returned anthropic API but config defines claude-cli with this model, use config (8317).
+  if (
+    (model?.api === "anthropic" || model?.api === "anthropic-messages") &&
+    claudeCliConfigKey !== undefined
+  ) {
+    const overrideMatch = inlineModels.find(
+      (entry) => normalizeProviderId(entry.provider) === "claude-cli" && entry.id === modelId,
+    );
+    if (overrideMatch) {
+      const normalized = normalizeModelCompat(overrideMatch as Model<Api>);
+      return { model: normalized, authStorage, modelRegistry };
+    }
+  }
+  if (model?.api === "openai-codex-responses" && configProviderKey !== undefined) {
+    const overrideMatch = inlineModels.find(
+      (entry) => normalizeProviderId(entry.provider) === normalizedProvider && entry.id === modelId,
+    );
+    if (overrideMatch) {
+      const normalized = normalizeModelCompat(overrideMatch as Model<Api>);
+      return { model: normalized, authStorage, modelRegistry };
+    }
+  }
   if (!model) {
-    const providers = cfg?.models?.providers ?? {};
-    const inlineModels = buildInlineProviderModels(providers);
-    const normalizedProvider = normalizeProviderId(provider);
     const inlineMatch = inlineModels.find(
       (entry) => normalizeProviderId(entry.provider) === normalizedProvider && entry.id === modelId,
     );
@@ -78,9 +157,16 @@ export function resolveModel(
     }
     const providerCfg = providers[provider];
     if (providerCfg || modelId.startsWith("mock-")) {
+      // When modelId equals provider name, upstream APIs (e.g. CLIProxyAPI) expect a real model id.
+      const normalizedProv = normalizeProviderId(provider);
+      const effectiveModelId =
+        providerCfg?.models?.length &&
+        (modelId === provider || normalizeProviderId(modelId) === normalizedProv)
+          ? providerCfg.models[0].id
+          : modelId;
       const fallbackModel: Model<Api> = normalizeModelCompat({
-        id: modelId,
-        name: modelId,
+        id: effectiveModelId,
+        name: effectiveModelId,
         api: providerCfg?.api ?? "openai-responses",
         provider,
         baseUrl: providerCfg?.baseUrl,
