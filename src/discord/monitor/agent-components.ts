@@ -62,7 +62,11 @@ import {
 } from "./allow-list.js";
 import { formatDiscordUserTag } from "./format.js";
 import { buildDirectLabel, buildGuildLabel } from "./reply-context.js";
-import { deliverDiscordReply } from "./reply-delivery.js";
+import {
+  deliverDiscordReply,
+  filterBufferedRepliesByTextPolicy,
+  type BufferedDiscordReplyEntry,
+} from "./reply-delivery.js";
 import { sendTyping } from "./typing.js";
 
 const AGENT_BUTTON_KEY = "agent";
@@ -870,6 +874,25 @@ async function dispatchDiscordComponentEvent(params: {
     startId: params.replyToId,
   });
 
+  const textPolicy = channelConfig?.textPolicy;
+  const useBufferedDelivery =
+    textPolicy &&
+    (textPolicy === "suppress-with-tools" ||
+      textPolicy === "suppress-all" ||
+      textPolicy === "tool-only");
+  const replyBuffer: BufferedDiscordReplyEntry[] = [];
+  const deliverParams = {
+    target: deliverTarget,
+    token,
+    accountId,
+    rest: interaction.client.rest,
+    runtime,
+    textLimit,
+    maxLinesPerMessage: ctx.discordConfig?.maxLinesPerMessage,
+    tableMode,
+    chunkMode: resolveChunkMode(ctx.cfg, "discord", accountId),
+  };
+
   await dispatchReplyWithBufferedBlockDispatcher({
     ctx: ctxPayload,
     cfg: ctx.cfg,
@@ -877,20 +900,19 @@ async function dispatchDiscordComponentEvent(params: {
     dispatcherOptions: {
       ...prefixOptions,
       humanDelay: resolveHumanDelayConfig(ctx.cfg, agentId),
-      deliver: async (payload) => {
+      deliver: async (
+        payload,
+        info?: { kind: "tool" | "block" | "final" },
+      ) => {
+        if (useBufferedDelivery) {
+          replyBuffer.push({ payload, kind: info?.kind ?? "final" });
+          return;
+        }
         const replyToId = replyReference.use();
         await deliverDiscordReply({
           replies: [payload],
-          target: deliverTarget,
-          token,
-          accountId,
-          rest: interaction.client.rest,
-          runtime,
+          ...deliverParams,
           replyToId,
-          textLimit,
-          maxLinesPerMessage: ctx.discordConfig?.maxLinesPerMessage,
-          tableMode,
-          chunkMode: resolveChunkMode(ctx.cfg, "discord", accountId),
         });
         replyReference.markSent();
       },
@@ -904,6 +926,20 @@ async function dispatchDiscordComponentEvent(params: {
       onError: (err) => {
         logError(`discord component dispatch failed: ${String(err)}`);
       },
+      onIdle: useBufferedDelivery
+        ? async () => {
+            const payloads = filterBufferedRepliesByTextPolicy(replyBuffer, textPolicy);
+            for (const p of payloads) {
+              const replyToId = replyReference.use();
+              await deliverDiscordReply({
+                replies: [p],
+                ...deliverParams,
+                replyToId,
+              });
+              replyReference.markSent();
+            }
+          }
+        : undefined,
     },
   });
 }

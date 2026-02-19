@@ -42,7 +42,20 @@ export type DiscordGuildChannelConfig = {
   systemPrompt?: string;
   /** If false, omit thread starter context for this channel (default: true). */
   includeThreadStarter?: boolean;
+  /**
+   * When to post model text to the channel. Default: "normal".
+   * - "normal": post all text.
+   * - "suppress-with-tools": if the response includes tool calls, do not post accompanying text.
+   * - "suppress-all" | "tool-only": do not post inline text (bot communicates only via message tool / media).
+   */
+  textPolicy?: "normal" | "suppress-with-tools" | "suppress-all" | "tool-only";
 };
+
+export type DiscordTextPolicy =
+  | "normal"
+  | "suppress-with-tools"
+  | "suppress-all"
+  | "tool-only";
 
 export type DiscordReactionNotificationMode = "off" | "own" | "all" | "allowlist";
 

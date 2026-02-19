@@ -33,7 +33,11 @@ import {
   resolveMediaList,
 } from "./message-utils.js";
 import { buildDirectLabel, buildGuildLabel, resolveReplyContext } from "./reply-context.js";
-import { deliverDiscordReply } from "./reply-delivery.js";
+import {
+  deliverDiscordReply,
+  filterBufferedRepliesByTextPolicy,
+  type BufferedDiscordReplyEntry,
+} from "./reply-delivery.js";
 import { resolveDiscordAutoThreadReplyPlan, resolveDiscordThreadStarter } from "./threading.js";
 import { sendTyping } from "./typing.js";
 
@@ -607,23 +611,41 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     },
   });
 
+  const textPolicy = channelConfig?.textPolicy;
+  const useBufferedDelivery =
+    textPolicy &&
+    (textPolicy === "suppress-with-tools" ||
+      textPolicy === "suppress-all" ||
+      textPolicy === "tool-only");
+  const replyBuffer: BufferedDiscordReplyEntry[] = [];
+  const deliverParams = {
+    target: deliverTarget,
+    token,
+    accountId,
+    rest: client.rest,
+    runtime,
+    textLimit,
+    maxLinesPerMessage: discordConfig?.maxLinesPerMessage,
+    tableMode,
+    chunkMode: resolveChunkMode(cfg, "discord", accountId),
+  };
+
   const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
     ...prefixOptions,
     humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
-    deliver: async (payload: ReplyPayload) => {
+    deliver: async (
+        payload: ReplyPayload,
+        info?: { kind: "tool" | "block" | "final" },
+      ) => {
+      if (useBufferedDelivery) {
+        replyBuffer.push({ payload, kind: info?.kind ?? "final" });
+        return;
+      }
       const replyToId = replyReference.use();
       await deliverDiscordReply({
         replies: [payload],
-        target: deliverTarget,
-        token,
-        accountId,
-        rest: client.rest,
-        runtime,
+        ...deliverParams,
         replyToId,
-        textLimit,
-        maxLinesPerMessage: discordConfig?.maxLinesPerMessage,
-        tableMode,
-        chunkMode: resolveChunkMode(cfg, "discord", accountId),
       });
       replyReference.markSent();
     },
@@ -634,6 +656,20 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       await typingCallbacks.onReplyStart();
       await statusReactions.setThinking();
     },
+    onIdle: useBufferedDelivery
+      ? async () => {
+          const payloads = filterBufferedRepliesByTextPolicy(replyBuffer, textPolicy);
+          for (const p of payloads) {
+            const replyToId = replyReference.use();
+            await deliverDiscordReply({
+              replies: [p],
+              ...deliverParams,
+              replyToId,
+            });
+            replyReference.markSent();
+          }
+        }
+      : undefined,
   });
 
   let dispatchResult: Awaited<ReturnType<typeof dispatchInboundMessage>> | null = null;

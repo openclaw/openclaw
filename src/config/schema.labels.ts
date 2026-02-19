@@ -284,6 +284,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "channels.discord.status": "Discord Presence Status",
   "channels.discord.activityType": "Discord Presence Activity Type",
   "channels.discord.activityUrl": "Discord Presence Activity URL",
+  "channels.discord.guilds.*.channels.*.textPolicy": "Discord Channel Text Policy",
   "channels.slack.dm.policy": "Slack DM Policy",
   "channels.slack.dmPolicy": "Slack DM Policy",
   "channels.slack.allowBots": "Slack Allow Bot Messages",

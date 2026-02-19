@@ -2,10 +2,47 @@ import type { RequestClient } from "@buape/carbon";
 import type { ChunkMode } from "../../auto-reply/chunk.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";
+import type { DiscordTextPolicy } from "../../config/types.js";
 import { convertMarkdownTables } from "../../markdown/tables.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import { sendMessageDiscord, sendVoiceMessageDiscord } from "../send.js";
+
+export type ReplyDispatchKind = "tool" | "block" | "final";
+
+export type BufferedDiscordReplyEntry = {
+  payload: ReplyPayload;
+  kind: ReplyDispatchKind;
+};
+
+/**
+ * Filters buffered reply entries by per-channel textPolicy. Returns payloads in order with text
+ * stripped when the policy requires it (suppress-with-tools when the turn had tool calls, or
+ * suppress-all / tool-only for all inline text).
+ */
+export function filterBufferedRepliesByTextPolicy(
+  entries: BufferedDiscordReplyEntry[],
+  textPolicy: DiscordTextPolicy | undefined,
+): ReplyPayload[] {
+  if (!textPolicy || textPolicy === "normal") {
+    return entries.map((e) => e.payload);
+  }
+  const hadToolCall = entries.some((e) => e.kind === "tool");
+  const suppressText =
+    textPolicy === "suppress-all" ||
+    textPolicy === "tool-only" ||
+    (textPolicy === "suppress-with-tools" && hadToolCall);
+  if (!suppressText) {
+    return entries.map((e) => e.payload);
+  }
+  return entries.map((e) => {
+    const p = e.payload;
+    if (!p.text?.trim()) {
+      return p;
+    }
+    return { ...p, text: "" };
+  });
+}
 
 export async function deliverDiscordReply(params: {
   replies: ReplyPayload[];
