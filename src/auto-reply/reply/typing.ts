@@ -1,4 +1,4 @@
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
+import { isSilentReplyPrefix, isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 
 export type TypingController = {
   onReplyStart: () => Promise<void>;
@@ -166,7 +166,10 @@ export function createTypingController(params: {
     if (!trimmed) {
       return;
     }
-    if (silentToken && isSilentReplyText(trimmed, silentToken)) {
+    if (
+      silentToken &&
+      (isSilentReplyText(trimmed, silentToken) || isSilentReplyPrefix(trimmed, silentToken))
+    ) {
       return;
     }
     refreshTypingTtl();
