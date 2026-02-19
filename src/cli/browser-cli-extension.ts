@@ -10,6 +10,8 @@ import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 import { shortenHomePath } from "../utils.js";
+import type { BrowserParentOpts } from "./browser-cli-shared.js";
+import { callBrowserRequest } from "./browser-cli-shared.js";
 import { formatCliCommand } from "./command-format.js";
 
 export function resolveBundledExtensionRootDir(
@@ -69,7 +71,7 @@ export async function installChromeExtension(opts?: {
 
 export function registerBrowserExtensionCommands(
   browser: Command,
-  parentOpts: (cmd: Command) => { json?: boolean },
+  parentOpts: (cmd: Command) => BrowserParentOpts,
 ) {
   const ext = browser.command("extension").description("Chrome extension helpers");
 
@@ -107,6 +109,57 @@ export function registerBrowserExtensionCommands(
           ].join("\n"),
         ),
       );
+    });
+
+  ext
+    .command("check")
+    .description("Check browser relay connectivity and connected extensions")
+    .action(async (_opts, cmd) => {
+      const parent = parentOpts(cmd);
+      let status: { connected: boolean; connections: { id: string; name: string }[] };
+      try {
+        status = await callBrowserRequest(parent, {
+          method: "GET",
+          path: "/extension/status",
+          query: parent.browserProfile ? { profile: parent.browserProfile } : undefined,
+        });
+      } catch (err) {
+        if (parent?.json) {
+          defaultRuntime.log(JSON.stringify({ ok: false, error: String(err) }, null, 2));
+        } else {
+          defaultRuntime.error(danger(`Failed to reach relay: ${String(err)}`));
+          defaultRuntime.error(
+            info(
+              `Hint: Ensure the SSH tunnel is open (port 18792) and the OpenClaw gateway is running.`,
+            ),
+          );
+        }
+        defaultRuntime.exit(1);
+        return;
+      }
+
+      if (parent?.json) {
+        defaultRuntime.log(JSON.stringify({ ok: true, ...status }, null, 2));
+        return;
+      }
+
+      if (!status.connected) {
+        defaultRuntime.log(
+          theme.warn("Relay server is OK, but no Chrome extensions are connected."),
+        );
+        defaultRuntime.log(
+          info("Action: Go to Chrome, click the OpenClaw extension icon (badge should show ON)."),
+        );
+        return;
+      }
+
+      defaultRuntime.log(theme.success("Relay server is connected."));
+      defaultRuntime.log(`${theme.heading("Connected devices:")} ${status.connections.length}`);
+      for (const conn of status.connections) {
+        defaultRuntime.log(
+          `${theme.muted("-")} ${conn.name} ${theme.muted(`(${conn.id.slice(0, 8)})`)}`,
+        );
+      }
     });
 
   ext

@@ -30,7 +30,7 @@ describe("resolveTranscriptPolicy", () => {
     expect(policy.toolCallIdMode).toBe("strict9");
   });
 
-  it("disables sanitizeToolCallIds for OpenAI provider", () => {
+  it("disables sanitizeToolCallIds but repairs tool pairing for OpenAI provider", () => {
     const policy = resolveTranscriptPolicy({
       provider: "openai",
       modelId: "gpt-4o",
@@ -38,5 +38,6 @@ describe("resolveTranscriptPolicy", () => {
     });
     expect(policy.sanitizeToolCallIds).toBe(false);
     expect(policy.toolCallIdMode).toBeUndefined();
+    expect(policy.repairToolUseResultPairing).toBe(true);
   });
 });
