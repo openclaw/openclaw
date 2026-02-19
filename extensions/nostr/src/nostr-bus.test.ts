@@ -488,6 +488,87 @@ describe("startNostrBus NIP-63 protocol flow", () => {
     bus.close();
   });
 
+  it("processes NIP-63 cancel events with inReplyTo root linkage", async () => {
+    const inbound = {
+      kind: 25806,
+      content: "cipher-cancel",
+      pubkey: SENDER_PUBLIC_KEY,
+      created_at: Math.floor(Date.now() / 1000) + 10,
+      id: "inbound-cancel-evt",
+      sig: "sig",
+      tags: [
+        ["p", BOT_PUBLIC_KEY],
+        ["encryption", "nip44"],
+        ["s", "session-alpha"],
+        ["e", "prompt-evt-1", "", "root"],
+      ],
+    };
+    mocks.decryptMock.mockReturnValueOnce(`{"ver":1,"reason":"user_cancel"}`);
+
+    const onMessage = vi.fn(async () => undefined);
+    const bus = await startNostrBus({
+      privateKey: TEST_HEX_KEY,
+      relays: [TEST_RELAY],
+      onMessage,
+      onError: vi.fn(),
+    });
+
+    await mocks.subscriptions[0]!.handlers.onevent(inbound);
+
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    expect(onMessage.mock.calls[0]?.[0]).toEqual({
+      senderPubkey: SENDER_PUBLIC_KEY,
+      text: "user_cancel",
+      createdAt: inbound.created_at,
+      eventId: inbound.id,
+      kind: 25806,
+      sessionId: "session-alpha",
+      inReplyTo: "prompt-evt-1",
+      cancelReason: "user_cancel",
+    });
+    expect(mocks.publishMock).not.toHaveBeenCalled();
+
+    bus.close();
+  });
+
+  it("rejects malformed NIP-63 cancel payloads", async () => {
+    const inbound = {
+      kind: 25806,
+      content: "cipher-cancel-invalid",
+      pubkey: SENDER_PUBLIC_KEY,
+      created_at: Math.floor(Date.now() / 1000) + 10,
+      id: "inbound-cancel-invalid",
+      sig: "sig",
+      tags: [
+        ["p", BOT_PUBLIC_KEY],
+        ["encryption", "nip44"],
+        ["e", "prompt-evt-2", "", "root"],
+      ],
+    };
+    mocks.decryptMock.mockReturnValueOnce(`{"ver":1,"reason":"oops"}`);
+
+    const onMessage = vi.fn(async () => undefined);
+    const onError = vi.fn();
+    const bus = await startNostrBus({
+      privateKey: TEST_HEX_KEY,
+      relays: [TEST_RELAY],
+      onMessage,
+      onError,
+    });
+
+    await mocks.subscriptions[0]!.handlers.onevent(inbound);
+
+    expect(onMessage).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("Invalid cancel reason"),
+      }),
+      "parse cancel inbound-cancel-invalid",
+    );
+
+    bus.close();
+  });
+
   it("ignores malformed tags and still processes valid prompt content", async () => {
     const inbound = {
       kind: 25802,
@@ -594,9 +675,7 @@ describe("startNostrBus NIP-63 protocol flow", () => {
       return [Promise.resolve(), rejected] as unknown as Promise<void>;
     });
 
-    await expect(bus.sendDm("deadbeef", "hello")).rejects.toThrow(
-      "Failed to publish to any relay (1 configured)",
-    );
+    await expect(bus.sendDm("deadbeef", "hello")).rejects.toThrow("Failed to publish to any relay");
     expect(onError).toHaveBeenCalledWith(expect.any(Error), "sendEncryptedDm");
 
     bus.close();

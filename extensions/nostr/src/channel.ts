@@ -47,6 +47,19 @@ type ModelSelectionSnapshot = {
   thinkLevel: string | undefined;
 };
 
+type CancelReason = "user_cancel" | "timeout" | "policy";
+
+type ActiveRunControl = {
+  promptEventId: string;
+  senderPubkey: string;
+  sessionId: string;
+  traceId: string;
+  abortController: AbortController;
+  cancelled: boolean;
+  cancelReason: CancelReason;
+  terminalEmitted: boolean;
+};
+
 export function resolveNostrSessionId(
   senderPubkey: string,
   explicitSessionId: string | undefined,
@@ -83,6 +96,29 @@ function createRunTraceId(runId: string): string {
 function normalizeToolPhase(raw: string | undefined): "start" | "result" {
   const phase = raw?.trim().toLowerCase();
   return phase === "start" ? "start" : "result";
+}
+
+function resolveActiveRunKey(senderPubkey: string, promptEventId: string): string {
+  return `${senderPubkey.toLowerCase()}:${promptEventId.toLowerCase()}`;
+}
+
+function isAbortLikeError(error: unknown): boolean {
+  if (!error) {
+    return false;
+  }
+  if (typeof error === "object") {
+    const candidate = error as { name?: unknown; message?: unknown };
+    if (typeof candidate.name === "string" && candidate.name.toLowerCase() === "aborterror") {
+      return true;
+    }
+    if (typeof candidate.message === "string") {
+      const lowered = candidate.message.toLowerCase();
+      if (lowered.includes("aborted") || lowered.includes("abort")) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 type TraceLoggerLike = {
@@ -473,9 +509,52 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
       const traceRecorder = createNostrTraceRecorder(account.accountId, ctx.log);
       let lastAiInfoFingerprint: string | null = null;
       let lastSelectedModel: ModelSelectionSnapshot | undefined;
+      const activeRuns = new Map<string, ActiveRunControl>();
 
       // Track bus handle for metrics callback
       let busHandle: NostrBusHandle | null = null;
+      const emitCancelledTerminal = async (
+        run: ActiveRunControl,
+        reply: (
+          content: Record<string, unknown>,
+          options: { sessionId?: string; inReplyTo?: string },
+          responseKind: number,
+        ) => Promise<void>,
+        details?: Record<string, unknown>,
+      ): Promise<void> => {
+        if (run.terminalEmitted) {
+          return;
+        }
+        run.terminalEmitted = true;
+        const timestampMs = Date.now();
+        try {
+          await reply(
+            {
+              ver: 1,
+              code: "CANCELLED",
+              message: "Run cancelled",
+              timestamp: Math.floor(timestampMs / 1000),
+              timestamp_ms: timestampMs,
+              run_id: run.promptEventId,
+              session_id: run.sessionId,
+              trace_id: run.traceId,
+              details: {
+                reason: run.cancelReason,
+                cancelled_at_ms: timestampMs,
+                ...(details ?? {}),
+              },
+            },
+            {
+              sessionId: run.sessionId,
+              inReplyTo: run.promptEventId,
+            },
+            NIP63_RESPONSE_KIND_ERROR,
+          );
+        } catch (error) {
+          run.terminalEmitted = false;
+          throw error;
+        }
+      };
       const publishAiInfoIfNeeded = async (cfg: unknown, reason: string): Promise<void> => {
         if (!busHandle) {
           return;
@@ -648,6 +727,78 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
             return;
           }
 
+          if (payload.kind === 25806) {
+            const targetRunId = payload.inReplyTo?.trim().toLowerCase();
+            if (!targetRunId) {
+              ctx.log?.debug?.(
+                `[${account.accountId}] ignoring cancel without target prompt id from ${senderPubkey}`,
+              );
+              traceRecorder.record({
+                direction: "cancel",
+                event_id: payload.eventId,
+                sender_pubkey: senderPubkey,
+                accepted: false,
+                reason: "missing_target_run",
+              });
+              return;
+            }
+
+            const runKey = resolveActiveRunKey(senderPubkey, targetRunId);
+            const activeRun = activeRuns.get(runKey);
+            if (!activeRun) {
+              ctx.log?.debug?.(
+                `[${account.accountId}] ignoring cancel for inactive run ${targetRunId} from ${senderPubkey}`,
+              );
+              traceRecorder.record({
+                direction: "cancel",
+                event_id: payload.eventId,
+                sender_pubkey: senderPubkey,
+                run_id: targetRunId,
+                accepted: false,
+                reason: "inactive_run",
+              });
+              return;
+            }
+
+            if (activeRun.cancelled || activeRun.terminalEmitted) {
+              traceRecorder.record({
+                direction: "cancel",
+                event_id: payload.eventId,
+                sender_pubkey: senderPubkey,
+                run_id: activeRun.promptEventId,
+                trace_id: activeRun.traceId,
+                accepted: false,
+                reason: activeRun.terminalEmitted ? "already_terminal" : "already_cancelled",
+              });
+              return;
+            }
+
+            activeRun.cancelled = true;
+            activeRun.cancelReason = payload.cancelReason ?? "user_cancel";
+            activeRun.abortController.abort();
+            traceRecorder.record({
+              direction: "cancel",
+              event_id: payload.eventId,
+              sender_pubkey: senderPubkey,
+              run_id: activeRun.promptEventId,
+              session_id: activeRun.sessionId,
+              trace_id: activeRun.traceId,
+              accepted: true,
+              reason: activeRun.cancelReason,
+            });
+
+            try {
+              await emitCancelledTerminal(activeRun, reply, {
+                cancel_event_id: payload.eventId,
+              });
+            } catch (error) {
+              ctx.log?.warn?.(
+                `[${account.accountId}] failed to emit CANCELLED for run ${activeRun.promptEventId}: ${String(error)}`,
+              );
+            }
+            return;
+          }
+
           const route = runtime.channel.routing.resolveAgentRoute({
             cfg: config,
             channel: CHANNEL_ID,
@@ -733,15 +884,33 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
             onModelSelected(selection);
           };
           const traceId = createRunTraceId(payload.eventId);
+          const runKey = resolveActiveRunKey(senderPubkey, payload.eventId);
+          const runControl: ActiveRunControl = {
+            promptEventId: payload.eventId,
+            senderPubkey,
+            sessionId,
+            traceId,
+            abortController: new AbortController(),
+            cancelled: false,
+            cancelReason: "user_cancel",
+            terminalEmitted: false,
+          };
+          activeRuns.set(runKey, runControl);
+          traceRecorder.record({
+            direction: "run_register",
+            run_id: payload.eventId,
+            session_id: sessionId,
+            trace_id: traceId,
+            sender_pubkey: senderPubkey,
+          });
           let blockSeq = 0;
-          let terminalEmitted = false;
           let streamedTextBuffer = "";
           const emitStatus = payload.kind === 25802;
           const safeSendStatus = async (
             state: "thinking" | "tool_use" | "done",
             options?: { info?: string; progress?: number },
           ): Promise<void> => {
-            if (!emitStatus) {
+            if (!emitStatus || runControl.cancelled) {
               return;
             }
             try {
@@ -780,6 +949,9 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                 dispatcherOptions: {
                   ...prefixOptions,
                   deliver: async (outbound, info: { kind: "tool" | "block" | "final" }) => {
+                    if (runControl.cancelled) {
+                      return;
+                    }
                     const responseText = (outbound as { text?: string } | undefined)?.text ?? "";
                     const hasContent = responseText.length > 0;
                     if (info.kind === "block" && hasContent) {
@@ -788,7 +960,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                         : responseText;
                     }
                     if (info.kind === "final") {
-                      terminalEmitted = true;
+                      runControl.terminalEmitted = true;
                     }
                     if (!hasContent && info.kind !== "final") {
                       return;
@@ -859,10 +1031,14 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                   },
                 },
                 replyOptions: {
+                  abortSignal: runControl.abortController.signal,
                   onModelSelected: onModelSelectedWithAiInfo,
                   // NIP-63 clients expect streamed progress events.
                   disableBlockStreaming: false,
                   onReasoningStream: async (reasoningPayload) => {
+                    if (runControl.cancelled) {
+                      return;
+                    }
                     const reasoningText = reasoningPayload.text ?? "";
                     if (!reasoningText.length) {
                       return;
@@ -888,6 +1064,9 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                     );
                   },
                   onToolStart: async ({ name, phase }) => {
+                    if (runControl.cancelled) {
+                      return;
+                    }
                     const normalizedName = typeof name === "string" ? name.trim() : "";
                     if (!normalizedName) {
                       return;
@@ -950,15 +1129,21 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
               trace_id: traceId,
               queued_final: dispatchResult.queuedFinal,
               counts: dispatchResult.counts,
-              terminal_emitted: terminalEmitted,
+              terminal_emitted: runControl.terminalEmitted,
+              cancelled: runControl.cancelled,
               streamed_text_length: streamedTextBuffer.length,
               dispatch_duration_ms: dispatchDurationMs,
             });
             ctx.log?.debug?.(
-              `[${account.accountId}] Nostr dispatch settled for run ${payload.eventId}: queuedFinal=${dispatchResult.queuedFinal ? "yes" : "no"} counts=${JSON.stringify(dispatchResult.counts)} terminalEmitted=${terminalEmitted ? "yes" : "no"} streamedTextLength=${streamedTextBuffer.length} durationMs=${dispatchDurationMs}`,
+              `[${account.accountId}] Nostr dispatch settled for run ${payload.eventId}: queuedFinal=${dispatchResult.queuedFinal ? "yes" : "no"} counts=${JSON.stringify(dispatchResult.counts)} terminalEmitted=${runControl.terminalEmitted ? "yes" : "no"} cancelled=${runControl.cancelled ? "yes" : "no"} streamedTextLength=${streamedTextBuffer.length} durationMs=${dispatchDurationMs}`,
             );
 
-            if (!terminalEmitted) {
+            if (runControl.cancelled) {
+              await emitCancelledTerminal(runControl, reply, {
+                dispatch_counts: dispatchResult.counts,
+                dispatch_duration_ms: dispatchDurationMs,
+              });
+            } else if (!runControl.terminalEmitted) {
               const fallbackText = streamedTextBuffer.trim();
               if (fallbackText.length > 0) {
                 await safeSendStatus("done", {
@@ -981,7 +1166,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                   },
                   NIP63_RESPONSE_KIND_FINAL,
                 );
-                terminalEmitted = true;
+                runControl.terminalEmitted = true;
                 ctx.log?.debug?.(
                   `[${account.accountId}] Nostr emitted fallback final for run ${payload.eventId}`,
                 );
@@ -1009,7 +1194,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                   },
                   NIP63_RESPONSE_KIND_ERROR,
                 );
-                terminalEmitted = true;
+                runControl.terminalEmitted = true;
                 ctx.log?.warn?.(
                   `[${account.accountId}] Nostr emitted EMPTY_RESPONSE for run ${payload.eventId}`,
                 );
@@ -1017,37 +1202,54 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
             }
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
-            ctx.log?.error?.(`[${account.accountId}] Nostr run failed: ${message}`);
+            const aborted = runControl.cancelled || isAbortLikeError(err);
+            if (aborted) {
+              runControl.cancelled = true;
+              ctx.log?.debug?.(
+                `[${account.accountId}] Nostr run aborted for ${payload.eventId}: ${message}`,
+              );
+            } else {
+              ctx.log?.error?.(`[${account.accountId}] Nostr run failed: ${message}`);
+            }
             traceRecorder.record({
               direction: "run_error",
               event_id: payload.eventId,
               session_id: sessionId,
               trace_id: traceId,
               error: message,
+              aborted,
             });
-            await reply(
-              {
-                ver: 1,
-                code: "INTERNAL_ERROR",
-                message,
-                timestamp: Math.floor(Date.now() / 1000),
-                timestamp_ms: Date.now(),
-                run_id: payload.eventId,
-                session_id: sessionId,
-                trace_id: traceId,
-                details: {
+            if (aborted) {
+              await emitCancelledTerminal(runControl, reply, {
+                dispatch_aborted: true,
+              });
+            } else {
+              await reply(
+                {
+                  ver: 1,
+                  code: "INTERNAL_ERROR",
+                  message,
+                  timestamp: Math.floor(Date.now() / 1000),
+                  timestamp_ms: Date.now(),
                   run_id: payload.eventId,
                   session_id: sessionId,
                   trace_id: traceId,
+                  details: {
+                    run_id: payload.eventId,
+                    session_id: sessionId,
+                    trace_id: traceId,
+                  },
                 },
-              },
-              {
-                sessionId,
-                inReplyTo: payload.eventId,
-              },
-              NIP63_RESPONSE_KIND_ERROR,
-            );
+                {
+                  sessionId,
+                  inReplyTo: payload.eventId,
+                },
+                NIP63_RESPONSE_KIND_ERROR,
+              );
+              runControl.terminalEmitted = true;
+            }
           } finally {
+            activeRuns.delete(runKey);
             if (runModelSelection) {
               lastSelectedModel = runModelSelection;
             }

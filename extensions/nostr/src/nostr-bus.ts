@@ -59,11 +59,13 @@ const NIP63_PROTOCOL_VERSION = 1;
 const NIP63_ENCRYPTION_SCHEME = "nip44";
 const NIP04_DM_KIND = 4;
 const NIP63_PROMPT_KIND = 25802;
+const NIP63_CANCEL_KIND = 25806;
 const NIP63_RESPONSE_KIND_STATUS = 25800;
 const NIP63_RESPONSE_KIND_FINAL = 25803;
 const NIP63_RESPONSE_KIND_TOOL = 25804;
 const NIP63_RESPONSE_KIND_BLOCK = 25801;
 const NIP63_RESPONSE_KIND_ERROR = 25805;
+const RELAY_PUBLISH_TIMEOUT_MS = 3500;
 const NIP63_SUBSCRIBE_KINDS = [
   NIP04_DM_KIND,
   25800,
@@ -157,6 +159,7 @@ export interface NostrInboundMessage {
   kind: number;
   sessionId?: string;
   inReplyTo?: string;
+  cancelReason?: "user_cancel" | "timeout" | "policy";
 }
 
 export interface NostrOutboundMessageOptions {
@@ -169,6 +172,11 @@ type NostrOutboundContent = string | Record<string, unknown>;
 interface NostrPromptPayload {
   ver: number;
   message: string;
+}
+
+interface NostrCancelPayload {
+  ver: number;
+  reason: "user_cancel" | "timeout" | "policy";
 }
 
 export interface NostrInboundTraceEvent {
@@ -629,17 +637,21 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
         return;
       }
 
-      // Process only supported inbound prompt kinds.
-      if (event.kind !== NIP63_PROMPT_KIND && event.kind !== NIP04_DM_KIND) {
+      // Process only supported inbound kinds.
+      if (
+        event.kind !== NIP63_PROMPT_KIND &&
+        event.kind !== NIP63_CANCEL_KIND &&
+        event.kind !== NIP04_DM_KIND
+      ) {
         metrics.emit("event.rejected.wrong_kind");
         traceInbound("unsupported_kind", event, {
           source,
-          expectedKinds: [NIP63_PROMPT_KIND, NIP04_DM_KIND],
+          expectedKinds: [NIP63_PROMPT_KIND, NIP63_CANCEL_KIND, NIP04_DM_KIND],
         });
         return;
       }
 
-      if (event.kind === NIP63_PROMPT_KIND) {
+      if (event.kind === NIP63_PROMPT_KIND || event.kind === NIP63_CANCEL_KIND) {
         // Validate required encryption scheme tag for NIP-63.
         const encryptionScheme = resolveNip63EncryptionScheme(event.tags);
         if (encryptionScheme !== NIP63_ENCRYPTION_SCHEME) {
@@ -690,24 +702,42 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
         return;
       }
 
+      let cancelReason: NostrInboundMessage["cancelReason"];
       const inboundText =
         event.kind === NIP04_DM_KIND
           ? plaintext
           : (() => {
-              // Parse NIP-63 prompt content from encrypted JSON payload.
-              let parsed: NostrPromptPayload;
+              if (event.kind === NIP63_PROMPT_KIND) {
+                // Parse NIP-63 prompt content from encrypted JSON payload.
+                let parsed: NostrPromptPayload;
+                try {
+                  parsed = parseNip63PromptPayload(plaintext, event.id);
+                } catch (err) {
+                  metrics.emit("event.rejected.invalid_shape");
+                  traceInbound("invalid_prompt", event, {
+                    source,
+                    reason: err instanceof Error ? err.message : String(err),
+                  });
+                  onError?.(err as Error, `parse prompt ${event.id}`);
+                  return undefined;
+                }
+                return parsed.message;
+              }
+
+              let parsed: NostrCancelPayload;
               try {
-                parsed = parseNip63PromptPayload(plaintext, event.id);
+                parsed = parseNip63CancelPayload(plaintext, event.id);
               } catch (err) {
                 metrics.emit("event.rejected.invalid_shape");
                 traceInbound("invalid_prompt", event, {
                   source,
                   reason: err instanceof Error ? err.message : String(err),
                 });
-                onError?.(err as Error, `parse prompt ${event.id}`);
+                onError?.(err as Error, `parse cancel ${event.id}`);
                 return undefined;
               }
-              return parsed.message;
+              cancelReason = parsed.reason;
+              return parsed.reason;
             })();
       if (inboundText === undefined) {
         return;
@@ -744,6 +774,8 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
         source,
         sessionId,
         inReplyTo,
+        kind: event.kind,
+        ...(cancelReason ? { cancelReason } : {}),
       });
 
       // Call the message handler
@@ -756,6 +788,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
           kind: event.kind,
           sessionId,
           inReplyTo,
+          cancelReason,
         },
         replyTo,
       );
@@ -1129,29 +1162,52 @@ async function sendEncryptedDm(
     sk,
   );
 
-  // Sort relays by health score (best first)
+  // Sort relays by health score (best first) and fan out in parallel.
   const sortedRelays = healthTracker.getSortedRelays(relayList);
-
-  // Try relays in order of health, respecting circuit breakers
-  let lastError: Error | undefined;
-  for (const relay of sortedRelays) {
+  const eligibleRelays = sortedRelays.filter((relay) => {
     const cb = circuitBreakers.get(relay);
-
-    // Skip if circuit breaker is open
     if (cb && !cb.canAttempt()) {
       onError?.(new Error("Nostr relay skipped by circuit breaker"), `relay ${relay}`);
-      continue;
+      return false;
     }
+    return true;
+  });
+  if (!eligibleRelays.length) {
+    const error = new Error(
+      `Nostr send failed: no eligible relays (${relayList.length} configured)`,
+    );
+    onError?.(error, "sendEncryptedDm");
+    throw error;
+  }
 
+  const withPublishTimeout = async (publishResult: unknown): Promise<void> => {
+    await Promise.race([
+      Promise.all(Array.isArray(publishResult) ? publishResult : [publishResult]),
+      new Promise<never>((_, reject) => {
+        setTimeout(
+          () => reject(new Error(`publish timeout after ${RELAY_PUBLISH_TIMEOUT_MS}ms`)),
+          RELAY_PUBLISH_TIMEOUT_MS,
+        );
+      }),
+    ]);
+  };
+
+  type RelayOutcome = {
+    relay: string;
+    ok: boolean;
+    latencyMs: number;
+    error?: Error;
+  };
+
+  const publishRelay = async (relay: string): Promise<RelayOutcome> => {
     const startTime = Date.now();
+    const cb = circuitBreakers.get(relay);
     try {
       const publishResult = await pool.publish([relay], reply);
-      await Promise.all(Array.isArray(publishResult) ? publishResult : [publishResult]);
-      const latency = Date.now() - startTime;
-
-      // Record success
+      await withPublishTimeout(publishResult);
+      const latencyMs = Date.now() - startTime;
       cb?.recordSuccess();
-      healthTracker.recordSuccess(relay, latency);
+      healthTracker.recordSuccess(relay, latencyMs);
       try {
         onSend?.({
           senderPubkey,
@@ -1166,28 +1222,46 @@ async function sendEncryptedDm(
       } catch (sendError) {
         onError?.(sendError as Error, "sendEncryptedDm.onSend");
       }
-
-      return; // Success - exit early
+      return { relay, ok: true, latencyMs };
     } catch (err) {
-      lastError = err as Error;
-      const latency = Date.now() - startTime;
-      onError?.(
-        lastError,
-        `publish failed relay=${relay} latencyMs=${latency} relays=${relayList.length}`,
-      );
-
-      // Record failure
+      const error = err as Error;
+      const latencyMs = Date.now() - startTime;
       cb?.recordFailure();
       healthTracker.recordFailure(relay);
-      metrics.emit("relay.error", 1, { relay, latency });
+      metrics.emit("relay.error", 1, { relay, latency: latencyMs });
+      onError?.(
+        error,
+        `publish failed relay=${relay} latencyMs=${latencyMs} relays=${relayList.length}`,
+      );
+      return { relay, ok: false, latencyMs, error };
     }
-  }
+  };
 
-  const aggregateError = new Error(
-    `Failed to publish to any relay (${relayList.length} configured): ${lastError?.message}`,
-  );
-  onError?.(aggregateError, "sendEncryptedDm");
-  throw aggregateError;
+  // Run all publish attempts concurrently. Return as soon as we get first success
+  // to avoid blocking stream latency on slower relays, while still letting fanout
+  // complete in the background.
+  const attempts = eligibleRelays.map((relay) => publishRelay(relay));
+  try {
+    await Promise.any(
+      attempts.map((promise) =>
+        promise.then((outcome) => {
+          if (!outcome.ok) {
+            throw outcome.error ?? new Error(`publish failed relay=${outcome.relay}`);
+          }
+          return outcome;
+        }),
+      ),
+    );
+    return;
+  } catch {
+    const settled = await Promise.all(attempts);
+    const lastFailure = [...settled].reverse().find((entry) => !entry.ok && entry.error)?.error;
+    const aggregateError = new Error(
+      `Failed to publish to any relay (${eligibleRelays.length} eligible/${relayList.length} configured): ${lastFailure?.message ?? "unknown error"}`,
+    );
+    onError?.(aggregateError, "sendEncryptedDm");
+    throw aggregateError;
+  }
 }
 
 /**
@@ -1236,6 +1310,39 @@ function parseNip63PromptPayload(plaintext: string, eventId: string): NostrPromp
   return {
     ver: candidate.ver,
     message: candidate.message,
+  };
+}
+
+function parseNip63CancelPayload(plaintext: string, eventId: string): NostrCancelPayload {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(plaintext);
+  } catch {
+    throw new Error(`Invalid JSON cancel payload for ${eventId}`);
+  }
+
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`Cancel payload must be an object for ${eventId}`);
+  }
+
+  const candidate = parsed as Partial<NostrCancelPayload> & {
+    ver?: unknown;
+    reason?: unknown;
+  };
+  if (typeof candidate.ver !== "number" || candidate.ver !== NIP63_PROTOCOL_VERSION) {
+    throw new Error(`Unsupported payload version for ${eventId}`);
+  }
+  if (
+    candidate.reason !== "user_cancel" &&
+    candidate.reason !== "timeout" &&
+    candidate.reason !== "policy"
+  ) {
+    throw new Error(`Invalid cancel reason for ${eventId}`);
+  }
+
+  return {
+    ver: candidate.ver,
+    reason: candidate.reason,
   };
 }
 
