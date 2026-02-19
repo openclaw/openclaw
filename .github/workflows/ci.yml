@@ -275,6 +275,22 @@ jobs:
             src/plugins/runtime/index.ts || true
           echo "=== END oxfmt linux diff ==="
 
+      - name: Write Linux-formatted files for download (only if pnpm check fails)
+        if: failure()
+        run: |
+          set -euo pipefail
+          pnpm -s exec -- oxfmt \
+            src/daemon/schtasks.ts \
+            src/plugins/runtime/index.ts
+      - name: Upload Linux-formatted files artifact
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-oxfmt-files
+          path: |
+            src/daemon/schtasks.ts
+            src/plugins/runtime/index.ts
+
   # Validate docs (format, lint, broken links) only when docs files changed.
   check-docs:
     needs: [docs-scope]
