@@ -1,4 +1,4 @@
-import { formatRelativeTimestamp, formatDurationHuman, formatMs } from "./format.ts";
+import { formatRelativeTimestamp, formatDurationHuman, formatTimestamp } from "./format.ts";
 import type { CronJob, GatewaySessionRow, PresenceEntry } from "./types.ts";
 
 export function formatPresenceSummary(entry: PresenceEntry): string {
@@ -18,7 +18,7 @@ export function formatNextRun(ms?: number | null) {
   if (!ms) {
     return "n/a";
   }
-  return `${formatMs(ms)} (${formatRelativeTimestamp(ms)})`;
+  return `${formatTimestamp(ms)} (${formatRelativeTimestamp(ms)})`;
 }
 
 export function formatSessionTokens(row: GatewaySessionRow) {
@@ -44,8 +44,8 @@ export function formatEventPayload(payload: unknown): string {
 
 export function formatCronState(job: CronJob) {
   const state = job.state ?? {};
-  const next = state.nextRunAtMs ? formatMs(state.nextRunAtMs) : "n/a";
-  const last = state.lastRunAtMs ? formatMs(state.lastRunAtMs) : "n/a";
+  const next = state.nextRunAtMs ? formatTimestamp(state.nextRunAtMs) : "n/a";
+  const last = state.lastRunAtMs ? formatTimestamp(state.lastRunAtMs) : "n/a";
   const status = state.lastStatus ?? "n/a";
   return `${status} · next ${next} · last ${last}`;
 }
@@ -54,7 +54,7 @@ export function formatCronSchedule(job: CronJob) {
   const s = job.schedule;
   if (s.kind === "at") {
     const atMs = Date.parse(s.at);
-    return Number.isFinite(atMs) ? `At ${formatMs(atMs)}` : `At ${s.at}`;
+    return Number.isFinite(atMs) ? `At ${formatTimestamp(atMs)}` : `At ${s.at}`;
   }
   if (s.kind === "every") {
     return `Every ${formatDurationHuman(s.everyMs)}`;

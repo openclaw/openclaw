@@ -1,5 +1,5 @@
 import { html, nothing } from "lit";
-import { formatRelativeTimestamp, formatMs } from "../format.ts";
+import { formatRelativeTimestamp, formatTimestamp } from "../format.ts";
 import { pathForTab } from "../navigation.ts";
 import { formatCronSchedule, formatNextRun } from "../presenter.ts";
 import type { ChannelUiMetaEntry, CronJob, CronRunLogEntry, CronStatus } from "../types.ts";
@@ -542,13 +542,13 @@ function renderJobState(job: CronJob) {
       </div>
       <div class="cron-job-state-row">
         <span class="cron-job-state-key">Next</span>
-        <span class="cron-job-state-value" title=${formatMs(nextRunAtMs)}>
+        <span class="cron-job-state-value" title=${formatTimestamp(nextRunAtMs)}>
           ${formatStateRelative(nextRunAtMs)}
         </span>
       </div>
       <div class="cron-job-state-row">
         <span class="cron-job-state-key">Last</span>
-        <span class="cron-job-state-value" title=${formatMs(lastRunAtMs)}>
+        <span class="cron-job-state-value" title=${formatTimestamp(lastRunAtMs)}>
           ${formatStateRelative(lastRunAtMs)}
         </span>
       </div>
@@ -568,7 +568,7 @@ function renderRun(entry: CronRunLogEntry, basePath: string) {
         <div class="list-sub">${entry.summary ?? ""}</div>
       </div>
       <div class="list-meta">
-        <div>${formatMs(entry.ts)}</div>
+        <div>${formatTimestamp(entry.ts)}</div>
         <div class="muted">${entry.durationMs ?? 0}ms</div>
         ${
           chatUrl
