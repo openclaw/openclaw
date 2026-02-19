@@ -69,6 +69,17 @@ async function runSendAction(opts: Record<string, unknown> = {}) {
   await expect(runMessageAction("send", { ...baseSendOptions, ...opts })).rejects.toThrow("exit");
 }
 
+function expectNoAccountFieldInPassedOptions() {
+  const passedOpts = (
+    messageCommandMock.mock.calls as unknown as Array<[Record<string, unknown>]>
+  )?.[0]?.[0];
+  expect(passedOpts).toBeTruthy();
+  if (!passedOpts) {
+    throw new Error("expected message command call");
+  }
+  expect(passedOpts).not.toHaveProperty("account");
+}
+
 describe("runMessageAction", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -180,14 +191,7 @@ describe("runMessageAction", () => {
       expect.anything(),
     );
     // account key should be stripped in favor of accountId
-    const passedOpts = (
-      messageCommandMock.mock.calls as unknown as Array<[Record<string, unknown>]>
-    )?.[0]?.[0];
-    expect(passedOpts).toBeTruthy();
-    if (!passedOpts) {
-      throw new Error("expected message command call");
-    }
-    expect(passedOpts).not.toHaveProperty("account");
+    expectNoAccountFieldInPassedOptions();
   });
 
   it("strips non-string account values instead of passing accountId", async () => {
@@ -212,13 +216,6 @@ describe("runMessageAction", () => {
       expect.anything(),
       expect.anything(),
     );
-    const passedOpts = (
-      messageCommandMock.mock.calls as unknown as Array<[Record<string, unknown>]>
-    )?.[0]?.[0];
-    expect(passedOpts).toBeTruthy();
-    if (!passedOpts) {
-      throw new Error("expected message command call");
-    }
-    expect(passedOpts).not.toHaveProperty("account");
+    expectNoAccountFieldInPassedOptions();
   });
 });
