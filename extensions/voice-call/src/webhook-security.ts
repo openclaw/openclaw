@@ -489,12 +489,21 @@ export function verifyTwilioWebhook(
 
   const isLoopback = isLoopbackAddress(options?.remoteIP ?? ctx.remoteAddress);
   const allowLoopbackForwarding = options?.allowNgrokFreeTierLoopbackBypass && isLoopback;
+  const trustedProxyIPs = options?.trustedProxyIPs?.filter(Boolean);
+  // Keep ngrok loopback compatibility mode functional without opening non-loopback trust.
+  // In this explicit mode, only loopback proxy sources are trusted for forwarding headers.
+  const effectiveTrustedProxyIPs =
+    trustedProxyIPs && trustedProxyIPs.length > 0
+      ? trustedProxyIPs
+      : allowLoopbackForwarding
+        ? ["127.0.0.1", "::1", "::ffff:127.0.0.1"]
+        : undefined;
 
   // Reconstruct the URL Twilio used
   const verificationUrl = buildTwilioVerificationUrl(ctx, options?.publicUrl, {
     allowedHosts: options?.allowedHosts,
     trustForwardingHeaders: options?.trustForwardingHeaders || allowLoopbackForwarding,
-    trustedProxyIPs: options?.trustedProxyIPs,
+    trustedProxyIPs: effectiveTrustedProxyIPs,
     remoteIP: options?.remoteIP,
   });
 

@@ -280,6 +280,39 @@ describe("verifyTwilioWebhook", () => {
     expect(result.isNgrokFreeTier).toBe(true);
   });
 
+  it("does not trust ngrok compatibility forwarding for non-loopback remote IPs", () => {
+    const authToken = "test-auth-token";
+    const postBody = "CallSid=CS123&CallStatus=completed&From=%2B15550000000";
+    const ngrokUrl = "https://local.ngrok-free.app/voice/webhook";
+
+    const signature = twilioSignature({
+      authToken,
+      url: ngrokUrl,
+      postBody,
+    });
+
+    const result = verifyTwilioWebhook(
+      {
+        headers: {
+          host: "internal.example.com",
+          "x-forwarded-proto": "https",
+          "x-forwarded-host": "local.ngrok-free.app",
+          "x-twilio-signature": signature,
+        },
+        rawBody: postBody,
+        url: "http://internal.example.com/voice/webhook",
+        method: "POST",
+        remoteAddress: "203.0.113.10",
+      },
+      authToken,
+      { allowNgrokFreeTierLoopbackBypass: true },
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.verificationUrl).toBe("https://internal.example.com/voice/webhook");
+    expect(result.isNgrokFreeTier).toBe(false);
+  });
+
   it("ignores attacker X-Forwarded-Host without allowedHosts or trustForwardingHeaders", () => {
     const authToken = "test-auth-token";
     const postBody = "CallSid=CS123&CallStatus=completed&From=%2B15550000000";
