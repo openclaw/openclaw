@@ -144,6 +144,6 @@ export function hasBinary(bin: string): boolean {
       }
     }
   }
-  hasBinaryCache.set(bin, false);
+  // Don't cache negative results - they become stale after brew install
   return false;
 }
