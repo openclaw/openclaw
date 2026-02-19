@@ -38,7 +38,7 @@ export const DEFAULT_RELAYS = ["wss://relay.damus.io", "wss://nos.lol"];
 // Constants
 // ============================================================================
 
-const STARTUP_LOOKBACK_SEC = 120; // tolerate relay lag / clock skew
+const DEFAULT_STARTUP_LOOKBACK_SEC = 120; // tolerate relay lag / clock skew
 const MAX_PERSISTED_EVENT_IDS = 5000;
 const STATE_PERSIST_DEBOUNCE_MS = 5000; // Debounce state writes
 const REPLAY_POLL_INTERVAL_MS = 5000;
@@ -78,6 +78,16 @@ const NIP63_SUBSCRIBE_KINDS = [
   25806,
   31340,
 ] as const;
+
+function resolveStartupLookbackSec(env: NodeJS.ProcessEnv = process.env): number {
+  const raw =
+    env.OPENCLAW_NOSTR_STARTUP_LOOKBACK_SEC ?? env.CLAWDBOT_NOSTR_STARTUP_LOOKBACK_SEC ?? "";
+  const parsed = Number.parseInt(`${raw}`, 10);
+  if (!Number.isFinite(parsed)) {
+    return DEFAULT_STARTUP_LOOKBACK_SEC;
+  }
+  return Math.max(0, Math.min(3600, parsed));
+}
 
 export interface NostrBusOptions {
   /** Private key in hex or nsec format */
@@ -533,7 +543,8 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
   // Read persisted state and compute `since` timestamp (with small overlap)
   const state = await readNostrBusState({ accountId });
   const baseSince = computeSinceTimestamp(state, gatewayStartedAt);
-  const since = Math.max(0, baseSince - STARTUP_LOOKBACK_SEC);
+  const startupLookbackSec = resolveStartupLookbackSec();
+  const since = Math.max(0, baseSince - startupLookbackSec);
 
   // Seed in-memory dedupe with recent IDs from disk (prevents restart replay)
   if (state?.recentEventIds?.length) {
