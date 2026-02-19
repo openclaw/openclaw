@@ -461,4 +461,69 @@ describe("gateway server hooks", () => {
       expect(failAfterSuccess.status).toBe(401);
     });
   });
+
+  test("allows skipAuth mappings to bypass token authentication", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: "hook-secret",
+      mappings: [
+        {
+          match: { path: "github" },
+          skipAuth: true,
+          action: "agent",
+          messageTemplate: "GitHub event: {{payload.action}}",
+        },
+        {
+          match: { path: "protected" },
+          action: "agent",
+          messageTemplate: "Protected: {{payload.data}}",
+        },
+      ],
+    };
+    await withGatewayServer(async ({ port }) => {
+      cronIsolatedRun.mockReset();
+      cronIsolatedRun.mockResolvedValue({ status: "ok", summary: "done" });
+
+      // skipAuth mapping works without token
+      const resNoAuth = await fetch(`http://127.0.0.1:${port}/hooks/github`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "push" }),
+      });
+      expect(resNoAuth.status).toBe(202);
+      await waitForSystemEvent();
+      drainSystemEvents(resolveMainKey());
+
+      // Non-skipAuth mapping still requires token
+      const resProtectedNoAuth = await fetch(`http://127.0.0.1:${port}/hooks/protected`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ data: "secret" }),
+      });
+      expect(resProtectedNoAuth.status).toBe(401);
+
+      // Non-skipAuth mapping works with token
+      cronIsolatedRun.mockReset();
+      cronIsolatedRun.mockResolvedValue({ status: "ok", summary: "done" });
+      const resProtectedAuth = await fetch(`http://127.0.0.1:${port}/hooks/protected`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer hook-secret",
+        },
+        body: JSON.stringify({ data: "secret" }),
+      });
+      expect(resProtectedAuth.status).toBe(202);
+      await waitForSystemEvent();
+      drainSystemEvents(resolveMainKey());
+
+      // Built-in /hooks/wake still requires auth
+      const resWakeNoAuth = await fetch(`http://127.0.0.1:${port}/hooks/wake`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: "ping" }),
+      });
+      expect(resWakeNoAuth.status).toBe(401);
+    });
+  });
 });

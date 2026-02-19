@@ -31,7 +31,7 @@ import {
   handleControlUiHttpRequest,
   type ControlUiRootState,
 } from "./control-ui.js";
-import { applyHookMappings } from "./hooks-mapping.js";
+import { applyHookMappings, hasSkipAuthMapping } from "./hooks-mapping.js";
 import {
   extractHookToken,
   getHookAgentPolicyError,
@@ -261,34 +261,42 @@ export function createHooksRequestHandler(
       return false;
     }
 
-    if (url.searchParams.has("token")) {
-      res.statusCode = 400;
-      res.setHeader("Content-Type", "text/plain; charset=utf-8");
-      res.end(
-        "Hook token must be provided via Authorization: Bearer <token> or X-OpenClaw-Token header (query parameters are not allowed).",
-      );
-      return true;
-    }
+    // Extract subPath early to check for skipAuth mappings
+    const subPath = url.pathname.slice(basePath.length).replace(/^\/+/, "");
 
-    const token = extractHookToken(req);
-    const clientKey = resolveHookClientKey(req);
-    if (!safeEqualSecret(token, hooksConfig.token)) {
-      const throttle = recordHookAuthFailure(clientKey, Date.now());
-      if (throttle.throttled) {
-        const retryAfter = throttle.retryAfterSeconds ?? 1;
-        res.statusCode = 429;
-        res.setHeader("Retry-After", String(retryAfter));
+    // Check if this path matches a mapping with skipAuth enabled
+    const skipAuth = hasSkipAuthMapping(hooksConfig.mappings, subPath);
+
+    if (!skipAuth) {
+      if (url.searchParams.has("token")) {
+        res.statusCode = 400;
         res.setHeader("Content-Type", "text/plain; charset=utf-8");
-        res.end("Too Many Requests");
-        logHooks.warn(`hook auth throttled for ${clientKey}; retry-after=${retryAfter}s`);
+        res.end(
+          "Hook token must be provided via Authorization: Bearer <token> or X-OpenClaw-Token header (query parameters are not allowed).",
+        );
         return true;
       }
-      res.statusCode = 401;
-      res.setHeader("Content-Type", "text/plain; charset=utf-8");
-      res.end("Unauthorized");
-      return true;
+
+      const token = extractHookToken(req);
+      const clientKey = resolveHookClientKey(req);
+      if (!safeEqualSecret(token, hooksConfig.token)) {
+        const throttle = recordHookAuthFailure(clientKey, Date.now());
+        if (throttle.throttled) {
+          const retryAfter = throttle.retryAfterSeconds ?? 1;
+          res.statusCode = 429;
+          res.setHeader("Retry-After", String(retryAfter));
+          res.setHeader("Content-Type", "text/plain; charset=utf-8");
+          res.end("Too Many Requests");
+          logHooks.warn(`hook auth throttled for ${clientKey}; retry-after=${retryAfter}s`);
+          return true;
+        }
+        res.statusCode = 401;
+        res.setHeader("Content-Type", "text/plain; charset=utf-8");
+        res.end("Unauthorized");
+        return true;
+      }
+      clearHookAuthFailure(clientKey);
     }
-    clearHookAuthFailure(clientKey);
 
     if (req.method !== "POST") {
       res.statusCode = 405;
@@ -298,7 +306,6 @@ export function createHooksRequestHandler(
       return true;
     }
 
-    const subPath = url.pathname.slice(basePath.length).replace(/^\/+/, "");
     if (!subPath) {
       res.statusCode = 404;
       res.setHeader("Content-Type", "text/plain; charset=utf-8");

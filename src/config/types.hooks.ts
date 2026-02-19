@@ -22,6 +22,8 @@ export type HookMappingConfig = {
   deliver?: boolean;
   /** DANGEROUS: Disable external content safety wrapping for this hook. */
   allowUnsafeExternalContent?: boolean;
+  /** Skip token authentication for this mapping (for external webhooks like GitHub). */
+  skipAuth?: boolean;
   channel?:
     | "last"
     | "whatsapp"

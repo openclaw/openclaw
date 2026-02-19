@@ -16,6 +16,7 @@ export type HookMappingResolved = {
   textTemplate?: string;
   deliver?: boolean;
   allowUnsafeExternalContent?: boolean;
+  skipAuth?: boolean;
   channel?: HookMessageChannel;
   to?: string;
   model?: string;
@@ -211,6 +212,7 @@ function normalizeHookMapping(
     textTemplate: mapping.textTemplate,
     deliver: mapping.deliver,
     allowUnsafeExternalContent: mapping.allowUnsafeExternalContent,
+    skipAuth: mapping.skipAuth,
     channel: mapping.channel,
     to: mapping.to,
     model: mapping.model,
@@ -233,6 +235,28 @@ function mappingMatches(mapping: HookMappingResolved, ctx: HookMappingContext) {
     }
   }
   return true;
+}
+
+/**
+ * Check if a path matches any mapping with skipAuth enabled.
+ * This is used before reading the body to determine if auth should be skipped.
+ * Only checks path matching (not source matching which requires body).
+ */
+export function hasSkipAuthMapping(mappings: HookMappingResolved[], path: string): boolean {
+  const normalizedPath = normalizeMatchPath(path);
+  for (const mapping of mappings) {
+    if (!mapping.skipAuth) {
+      continue;
+    }
+    // If no matchPath specified, it matches all paths
+    if (!mapping.matchPath) {
+      return true;
+    }
+    if (mapping.matchPath === normalizedPath) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function buildActionFromMapping(
