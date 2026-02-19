@@ -105,6 +105,7 @@ import {
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
 } from "../../pairing/pairing-store.js";
+import { runCommandWithTimeout } from "../../process/exec.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import { monitorSignalProvider } from "../../signal/index.js";
 import { probeSignal } from "../../signal/probe.js";
@@ -235,12 +236,26 @@ function loadWhatsAppActions() {
   return whatsappActionsPromise;
 }
 
-const runtimeCommandExecutionDisabled: PluginRuntime["system"]["runCommandWithTimeout"] =
-  async () => {
-    throw new Error(
-      "runtime.system.runCommandWithTimeout is disabled for security hardening. Use fixed-purpose runtime APIs instead.",
-    );
-  };
+const RUNTIME_LEGACY_EXEC_DISABLED_ERROR =
+  "runtime.system.runCommandWithTimeout is disabled for security hardening. Use fixed-purpose runtime APIs instead.";
+
+function isLegacyPluginRuntimeExecEnabled(): boolean {
+  try {
+    return loadConfig().plugins?.runtime?.allowLegacyExec === true;
+  } catch {
+    // Fail closed if config is unreadable/invalid.
+    return false;
+  }
+}
+
+const runtimeCommandExecutionGuarded: PluginRuntime["system"]["runCommandWithTimeout"] = async (
+  ...args
+) => {
+  if (!isLegacyPluginRuntimeExecEnabled()) {
+    throw new Error(RUNTIME_LEGACY_EXEC_DISABLED_ERROR);
+  }
+  return await runCommandWithTimeout(...args);
+};
 
 export function createPluginRuntime(): PluginRuntime {
   return {
@@ -251,7 +266,7 @@ export function createPluginRuntime(): PluginRuntime {
     },
     system: {
       enqueueSystemEvent,
-      runCommandWithTimeout: runtimeCommandExecutionDisabled,
+      runCommandWithTimeout: runtimeCommandExecutionGuarded,
       formatNativeDependencyHint,
     },
     media: {
