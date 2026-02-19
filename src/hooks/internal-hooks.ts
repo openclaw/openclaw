@@ -110,6 +110,10 @@ export type SessionPreSpawnHookContext = {
   task?: string;
   /** Session key of the requester/parent agent */
   requesterSessionKey?: string;
+  /** Set to true to block the spawn (defaults to false) */
+  blocked?: boolean;
+  /** Reason for blocking (used in error response if blocked) */
+  blockReason?: string;
 };
 
 export type SessionPreSpawnHookEvent = InternalHookEvent & {
@@ -131,6 +135,10 @@ export type AgentPreRunHookContext = {
   model?: string;
   /** Thinking level (can be mutated by hooks) */
   thinking?: string;
+  /** Set to true to block the agent run (defaults to false) */
+  blocked?: boolean;
+  /** Reason for blocking (used in error response if blocked) */
+  blockReason?: string;
 };
 
 export type AgentPreRunHookEvent = InternalHookEvent & {
