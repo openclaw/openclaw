@@ -32,7 +32,6 @@ export async function deliverDiscordReply(params: {
     const replyTo = params.replyToId?.trim() || undefined;
 
     if (mediaList.length === 0) {
-      let isFirstChunk = true;
       const mode = params.chunkMode ?? "length";
       const chunks = chunkDiscordTextWithMode(text, {
         maxChars: chunkLimit,
@@ -51,9 +50,8 @@ export async function deliverDiscordReply(params: {
           token: params.token,
           rest: params.rest,
           accountId: params.accountId,
-          replyTo: isFirstChunk ? replyTo : undefined,
+          replyTo,
         });
-        isFirstChunk = false;
       }
       continue;
     }
@@ -77,6 +75,7 @@ export async function deliverDiscordReply(params: {
           token: params.token,
           rest: params.rest,
           accountId: params.accountId,
+          replyTo,
         });
       }
       // Additional media items are sent as regular attachments (voice is single-file only)
@@ -86,6 +85,7 @@ export async function deliverDiscordReply(params: {
           rest: params.rest,
           mediaUrl: extra,
           accountId: params.accountId,
+          replyTo,
         });
       }
       continue;
@@ -104,6 +104,7 @@ export async function deliverDiscordReply(params: {
         rest: params.rest,
         mediaUrl: extra,
         accountId: params.accountId,
+        replyTo,
       });
     }
   }

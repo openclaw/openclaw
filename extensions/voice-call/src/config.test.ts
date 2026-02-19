@@ -62,26 +62,15 @@ describe("validateProviderConfig", () => {
   });
 
   describe("twilio provider", () => {
-    it("passes validation when credentials are in config", () => {
-      const config = createBaseConfig("twilio");
-      config.twilio = { accountSid: "AC123", authToken: "secret" };
+    it("passes validation when credentials come from config or environment", () => {
+      const fromConfig = createBaseConfig("twilio");
+      fromConfig.twilio = { accountSid: "AC123", authToken: "secret" };
+      expect(validateProviderConfig(fromConfig)).toMatchObject({ valid: true, errors: [] });
 
-      const result = validateProviderConfig(config);
-
-      expect(result.valid).toBe(true);
-      expect(result.errors).toEqual([]);
-    });
-
-    it("passes validation when credentials are in environment variables", () => {
       process.env.TWILIO_ACCOUNT_SID = "AC123";
       process.env.TWILIO_AUTH_TOKEN = "secret";
-      let config = createBaseConfig("twilio");
-      config = resolveVoiceCallConfig(config);
-
-      const result = validateProviderConfig(config);
-
-      expect(result.valid).toBe(true);
-      expect(result.errors).toEqual([]);
+      const fromEnv = resolveVoiceCallConfig(createBaseConfig("twilio"));
+      expect(validateProviderConfig(fromEnv)).toMatchObject({ valid: true, errors: [] });
     });
 
     it("passes validation with mixed config and env vars", () => {
@@ -96,55 +85,37 @@ describe("validateProviderConfig", () => {
       expect(result.errors).toEqual([]);
     });
 
-    it("fails validation when accountSid is missing everywhere", () => {
+    it("fails validation when required twilio credentials are missing", () => {
       process.env.TWILIO_AUTH_TOKEN = "secret";
-      let config = createBaseConfig("twilio");
-      config = resolveVoiceCallConfig(config);
-
-      const result = validateProviderConfig(config);
-
-      expect(result.valid).toBe(false);
-      expect(result.errors).toContain(
+      const missingSid = validateProviderConfig(resolveVoiceCallConfig(createBaseConfig("twilio")));
+      expect(missingSid.valid).toBe(false);
+      expect(missingSid.errors).toContain(
         "plugins.entries.voice-call.config.twilio.accountSid is required (or set TWILIO_ACCOUNT_SID env)",
       );
-    });
 
-    it("fails validation when authToken is missing everywhere", () => {
+      delete process.env.TWILIO_AUTH_TOKEN;
       process.env.TWILIO_ACCOUNT_SID = "AC123";
-      let config = createBaseConfig("twilio");
-      config = resolveVoiceCallConfig(config);
-
-      const result = validateProviderConfig(config);
-
-      expect(result.valid).toBe(false);
-      expect(result.errors).toContain(
+      const missingToken = validateProviderConfig(
+        resolveVoiceCallConfig(createBaseConfig("twilio")),
+      );
+      expect(missingToken.valid).toBe(false);
+      expect(missingToken.errors).toContain(
         "plugins.entries.voice-call.config.twilio.authToken is required (or set TWILIO_AUTH_TOKEN env)",
       );
     });
   });
 
   describe("telnyx provider", () => {
-    it("passes validation when credentials are in config", () => {
-      const config = createBaseConfig("telnyx");
-      config.telnyx = { apiKey: "KEY123", connectionId: "CONN456", publicKey: "public-key" };
+    it("passes validation when credentials come from config or environment", () => {
+      const fromConfig = createBaseConfig("telnyx");
+      fromConfig.telnyx = { apiKey: "KEY123", connectionId: "CONN456", publicKey: "public-key" };
+      expect(validateProviderConfig(fromConfig)).toMatchObject({ valid: true, errors: [] });
 
-      const result = validateProviderConfig(config);
-
-      expect(result.valid).toBe(true);
-      expect(result.errors).toEqual([]);
-    });
-
-    it("passes validation when credentials are in environment variables", () => {
       process.env.TELNYX_API_KEY = "KEY123";
       process.env.TELNYX_CONNECTION_ID = "CONN456";
       process.env.TELNYX_PUBLIC_KEY = "public-key";
-      let config = createBaseConfig("telnyx");
-      config = resolveVoiceCallConfig(config);
-
-      const result = validateProviderConfig(config);
-
-      expect(result.valid).toBe(true);
-      expect(result.errors).toEqual([]);
+      const fromEnv = resolveVoiceCallConfig(createBaseConfig("telnyx"));
+      expect(validateProviderConfig(fromEnv)).toMatchObject({ valid: true, errors: [] });
     });
 
     it("fails validation when apiKey is missing everywhere", () => {
@@ -160,67 +131,45 @@ describe("validateProviderConfig", () => {
       );
     });
 
-    it("fails validation when allowlist inbound policy lacks public key", () => {
-      const config = createBaseConfig("telnyx");
-      config.inboundPolicy = "allowlist";
-      config.telnyx = { apiKey: "KEY123", connectionId: "CONN456" };
-
-      const result = validateProviderConfig(config);
-
-      expect(result.valid).toBe(false);
-      expect(result.errors).toContain(
+    it("requires a public key unless signature verification is skipped", () => {
+      const missingPublicKey = createBaseConfig("telnyx");
+      missingPublicKey.inboundPolicy = "allowlist";
+      missingPublicKey.telnyx = { apiKey: "KEY123", connectionId: "CONN456" };
+      const missingPublicKeyResult = validateProviderConfig(missingPublicKey);
+      expect(missingPublicKeyResult.valid).toBe(false);
+      expect(missingPublicKeyResult.errors).toContain(
         "plugins.entries.voice-call.config.telnyx.publicKey is required (or set TELNYX_PUBLIC_KEY env)",
       );
-    });
 
-    it("passes validation when allowlist inbound policy has public key", () => {
-      const config = createBaseConfig("telnyx");
-      config.inboundPolicy = "allowlist";
-      config.telnyx = {
+      const withPublicKey = createBaseConfig("telnyx");
+      withPublicKey.inboundPolicy = "allowlist";
+      withPublicKey.telnyx = {
         apiKey: "KEY123",
         connectionId: "CONN456",
         publicKey: "public-key",
       };
+      expect(validateProviderConfig(withPublicKey)).toMatchObject({ valid: true, errors: [] });
 
-      const result = validateProviderConfig(config);
-
-      expect(result.valid).toBe(true);
-      expect(result.errors).toEqual([]);
-    });
-
-    it("passes validation when skipSignatureVerification is true (even without public key)", () => {
-      const config = createBaseConfig("telnyx");
-      config.skipSignatureVerification = true;
-      config.telnyx = { apiKey: "KEY123", connectionId: "CONN456" };
-
-      const result = validateProviderConfig(config);
-
-      expect(result.valid).toBe(true);
-      expect(result.errors).toEqual([]);
+      const skippedVerification = createBaseConfig("telnyx");
+      skippedVerification.skipSignatureVerification = true;
+      skippedVerification.telnyx = { apiKey: "KEY123", connectionId: "CONN456" };
+      expect(validateProviderConfig(skippedVerification)).toMatchObject({
+        valid: true,
+        errors: [],
+      });
     });
   });
 
   describe("plivo provider", () => {
-    it("passes validation when credentials are in config", () => {
-      const config = createBaseConfig("plivo");
-      config.plivo = { authId: "MA123", authToken: "secret" };
+    it("passes validation when credentials come from config or environment", () => {
+      const fromConfig = createBaseConfig("plivo");
+      fromConfig.plivo = { authId: "MA123", authToken: "secret" };
+      expect(validateProviderConfig(fromConfig)).toMatchObject({ valid: true, errors: [] });
 
-      const result = validateProviderConfig(config);
-
-      expect(result.valid).toBe(true);
-      expect(result.errors).toEqual([]);
-    });
-
-    it("passes validation when credentials are in environment variables", () => {
       process.env.PLIVO_AUTH_ID = "MA123";
       process.env.PLIVO_AUTH_TOKEN = "secret";
-      let config = createBaseConfig("plivo");
-      config = resolveVoiceCallConfig(config);
-
-      const result = validateProviderConfig(config);
-
-      expect(result.valid).toBe(true);
-      expect(result.errors).toEqual([]);
+      const fromEnv = resolveVoiceCallConfig(createBaseConfig("plivo"));
+      expect(validateProviderConfig(fromEnv)).toMatchObject({ valid: true, errors: [] });
     });
 
     it("fails validation when authId is missing everywhere", () => {

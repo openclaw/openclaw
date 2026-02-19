@@ -597,6 +597,20 @@ Max total characters injected across all workspace bootstrap files. Default: `15
 }
 ```
 
+### `agents.defaults.imageMaxDimensionPx`
+
+Max pixel size for the longest image side in transcript/tool image blocks before provider calls.
+Default: `1200`.
+
+Lower values usually reduce vision-token usage and request payload size for screenshot-heavy runs.
+Higher values preserve more visual detail.
+
+```json5
+{
+  agents: { defaults: { imageMaxDimensionPx: 1200 } },
+}
+```
+
 ### `agents.defaults.userTimezone`
 
 Timezone for system prompt context (not message timestamps). Falls back to host timezone.
@@ -1962,7 +1976,7 @@ See [Plugins](/tools/plugin).
     port: 18789,
     bind: "loopback",
     auth: {
-      mode: "token", // token | password | trusted-proxy
+      mode: "token", // none | token | password | trusted-proxy
       token: "your-token",
       // password: "your-password", // or OPENCLAW_GATEWAY_PASSWORD
       // trustedProxy: { userHeader: "x-forwarded-user" }, // for mode=trusted-proxy; see /gateway/trusted-proxy-auth
@@ -2008,6 +2022,7 @@ See [Plugins](/tools/plugin).
 - `port`: single multiplexed port for WS + HTTP. Precedence: `--port` > `OPENCLAW_GATEWAY_PORT` > `gateway.port` > `18789`.
 - `bind`: `auto`, `loopback` (default), `lan` (`0.0.0.0`), `tailnet` (Tailscale IP only), or `custom`.
 - **Auth**: required by default. Non-loopback binds require a shared token/password. Onboarding wizard generates a token by default.
+- `auth.mode: "none"`: explicit no-auth mode. Use only for trusted local loopback setups; this is intentionally not offered by onboarding prompts.
 - `auth.mode: "trusted-proxy"`: delegate auth to an identity-aware reverse proxy and trust identity headers from `gateway.trustedProxies` (see [Trusted Proxy Auth](/gateway/trusted-proxy-auth)).
 - `auth.allowTailscale`: when `true`, Tailscale Serve identity headers satisfy auth (verified via `tailscale whois`). Defaults to `true` when `tailscale.mode = "serve"`.
 - `auth.rateLimit`: optional failed-auth limiter. Applies per client IP and per auth scope (shared-secret and device-token are tracked independently). Blocked attempts return `429` + `Retry-After`.
@@ -2421,7 +2436,7 @@ Split config into multiple files:
 - Array of files: deep-merged in order (later overrides earlier).
 - Sibling keys: merged after includes (override included values).
 - Nested includes: up to 10 levels deep.
-- Paths: relative (to the including file), absolute, or `../` parent references.
+- Paths: resolved relative to the including file, but must stay inside the top-level config directory (`dirname` of the main config file). Absolute/`../` forms are allowed only when they still resolve inside that boundary.
 - Errors: clear messages for missing files, parse errors, and circular includes.
 
 ---

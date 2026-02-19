@@ -7,6 +7,7 @@ import { agentCommand } from "../commands/agent.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveAgentIdFromSessionKey,
+  resolveAgentMainSessionKey,
   resolveMainSessionKey,
 } from "../config/sessions/main-session.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
@@ -138,6 +139,7 @@ export async function runBootOnce(params: {
   cfg: OpenClawConfig;
   deps: CliDeps;
   workspaceDir: string;
+  agentId?: string;
 }): Promise<BootRunResult> {
   const bootRuntime: RuntimeEnv = {
     log: () => {},
@@ -157,7 +159,9 @@ export async function runBootOnce(params: {
     return { status: "skipped", reason: result.status };
   }
 
-  const sessionKey = resolveMainSessionKey(params.cfg);
+  const sessionKey = params.agentId
+    ? resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.agentId })
+    : resolveMainSessionKey(params.cfg);
   const message = buildBootPrompt(result.content ?? "");
   const sessionId = generateBootSessionId();
   const mappingSnapshot = snapshotMainSessionMapping({
