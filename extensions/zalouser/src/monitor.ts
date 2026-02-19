@@ -277,7 +277,7 @@ async function processMessage(
 
   const peer = isGroup
     ? { kind: "group" as const, id: chatId }
-    : { kind: "group" as const, id: senderId };
+    : { kind: "direct" as const, id: senderId };
 
   const route = core.channel.routing.resolveAgentRoute({
     cfg: config,
