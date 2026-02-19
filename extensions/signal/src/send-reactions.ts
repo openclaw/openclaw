@@ -5,7 +5,7 @@
 import { loadConfig } from "../../../src/config/config.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import { resolveSignalAccount } from "./accounts.js";
-import { signalRpcRequest } from "./client.js";
+import { signalRpcRequest } from "./client-adapter.js";
 import { resolveSignalRpcContext } from "./rpc-context.js";
 
 export type SignalReactionOpts = {
