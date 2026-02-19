@@ -65,23 +65,11 @@ describe("buildGatewayAuthConfig", () => {
     expect(result).toEqual({ mode: "password", password: "undefined" });
   });
 
-  it("generates random token when token param is undefined", () => {
+  it("generates random token for missing, empty, and coerced-literal token inputs", () => {
     expectGeneratedTokenFromInput(undefined);
-  });
-
-  it("generates random token when token param is empty string", () => {
     expectGeneratedTokenFromInput("");
-  });
-
-  it("generates random token when token param is whitespace only", () => {
     expectGeneratedTokenFromInput("   ");
-  });
-
-  it('generates random token when token param is the literal string "undefined"', () => {
     expectGeneratedTokenFromInput("undefined");
-  });
-
-  it('generates random token when token param is the literal string "null"', () => {
     expectGeneratedTokenFromInput("null", "null");
   });
 

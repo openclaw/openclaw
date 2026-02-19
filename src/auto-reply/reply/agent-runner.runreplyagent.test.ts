@@ -91,6 +91,7 @@ function createMinimalRun(params?: {
   storePath?: string;
   typingMode?: TypingMode;
   blockStreamingEnabled?: boolean;
+  runOverrides?: Partial<FollowupRun["run"]>;
 }) {
   const typing = createMockTypingController();
   const opts = params?.opts;
@@ -124,6 +125,7 @@ function createMinimalRun(params?: {
       },
       timeoutMs: 1_000,
       blockReplyBreak: "message_end",
+      ...params?.runOverrides,
     },
   } as unknown as FollowupRun;
 
@@ -409,6 +411,25 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
     expect(typing.startTypingLoop).toHaveBeenCalled();
     expect(typing.startTypingOnText).not.toHaveBeenCalled();
+  });
+
+  it("keeps assistant partial streaming enabled when reasoning mode is stream", async () => {
+    const onPartialReply = vi.fn();
+    const onReasoningStream = vi.fn();
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      await params.onReasoningStream?.({ text: "Reasoning:\n_step_" });
+      await params.onPartialReply?.({ text: "answer chunk" });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const { run } = createMinimalRun({
+      opts: { onPartialReply, onReasoningStream },
+      runOverrides: { reasoningLevel: "stream" },
+    });
+    await run();
+
+    expect(onReasoningStream).toHaveBeenCalled();
+    expect(onPartialReply).toHaveBeenCalledWith({ text: "answer chunk", mediaUrls: undefined });
   });
 
   it("suppresses typing in never mode", async () => {
