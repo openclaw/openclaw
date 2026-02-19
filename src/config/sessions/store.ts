@@ -40,7 +40,7 @@ export function resolveSessionStoreDir(storePath: string): string {
 
 /**
  * Sanitize a session key for safe use as a filesystem directory name.
- * Colons are replaced with `--`, and other unsafe chars are percent-encoded.
+ * Colons are replaced with `--` for reversible filesystem-safe encoding.
  */
 export function sanitizeSessionKey(key: string): string {
   // Replace colons with double-dash (reversible, filesystem-safe)
