@@ -37,6 +37,7 @@ describe("resolveSkillsPromptForRun", () => {
         filePath: "/app/skills/alpha/SKILL.md",
         baseDir: "/app/skills/alpha",
         source: "openclaw-bundled",
+        disableModelInvocation: false,
       },
       frontmatter: {},
     };
@@ -47,6 +48,7 @@ describe("resolveSkillsPromptForRun", () => {
         filePath: "/app/skills/beta/SKILL.md",
         baseDir: "/app/skills/beta",
         source: "openclaw-bundled",
+        disableModelInvocation: false,
       },
       frontmatter: {},
     };
@@ -66,6 +68,7 @@ describe("resolveSkillsPromptForRun", () => {
         filePath: "/app/skills/demo-skill/SKILL.md",
         baseDir: "/app/skills/demo-skill",
         source: "openclaw-bundled",
+        disableModelInvocation: false,
       },
       frontmatter: {},
     };
