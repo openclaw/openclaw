@@ -1,11 +1,11 @@
 import crypto from "node:crypto";
-import { constants as fsConstants } from "node:fs";
 import { createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
+import { SafeOpenError, readLocalFileSafely } from "../infra/fs-safe.js";
 import { resolvePinnedHostname } from "../infra/net/ssrf.js";
 import { resolveConfigDir } from "../utils.js";
 import { detectMime, extensionForMime } from "./mime.js";
@@ -20,12 +20,6 @@ type ResolvePinnedHostnameImpl = typeof resolvePinnedHostname;
 const defaultHttpRequestImpl: RequestImpl = httpRequest;
 const defaultHttpsRequestImpl: RequestImpl = httpsRequest;
 const defaultResolvePinnedHostnameImpl: ResolvePinnedHostnameImpl = resolvePinnedHostname;
-
-const isNodeError = (err: unknown): err is NodeJS.ErrnoException =>
-  Boolean(err && typeof err === "object" && "code" in (err as Record<string, unknown>));
-
-const isSymlinkOpenError = (err: unknown) =>
-  isNodeError(err) && (err.code === "ELOOP" || err.code === "EINVAL" || err.code === "ENOTSUP");
 
 let httpRequestImpl: RequestImpl = defaultHttpRequestImpl;
 let httpsRequestImpl: RequestImpl = defaultHttpsRequestImpl;
@@ -214,6 +208,47 @@ export type SavedMedia = {
   contentType?: string;
 };
 
+export type SaveMediaSourceErrorCode =
+  | "invalid-path"
+  | "not-found"
+  | "not-file"
+  | "path-mismatch"
+  | "too-large";
+
+export class SaveMediaSourceError extends Error {
+  code: SaveMediaSourceErrorCode;
+
+  constructor(code: SaveMediaSourceErrorCode, message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.code = code;
+    this.name = "SaveMediaSourceError";
+  }
+}
+
+function toSaveMediaSourceError(err: SafeOpenError): SaveMediaSourceError {
+  switch (err.code) {
+    case "symlink":
+      return new SaveMediaSourceError("invalid-path", "Media path must not be a symlink", {
+        cause: err,
+      });
+    case "not-file":
+      return new SaveMediaSourceError("not-file", "Media path is not a file", { cause: err });
+    case "path-mismatch":
+      return new SaveMediaSourceError("path-mismatch", "Media path changed during read", {
+        cause: err,
+      });
+    case "too-large":
+      return new SaveMediaSourceError("too-large", "Media exceeds 5MB limit", { cause: err });
+    case "not-found":
+      return new SaveMediaSourceError("not-found", "Media path does not exist", { cause: err });
+    case "invalid-path":
+    default:
+      return new SaveMediaSourceError("invalid-path", "Media path is not safe to read", {
+        cause: err,
+      });
+  }
+}
+
 export async function saveMediaSource(
   source: string,
   headers?: Record<string, string>,
@@ -239,40 +274,19 @@ export async function saveMediaSource(
     return { id, path: finalDest, size, contentType: mime };
   }
   // local path
-  const supportsNoFollow = process.platform !== "win32" && "O_NOFOLLOW" in fsConstants;
-  const flags = fsConstants.O_RDONLY | (supportsNoFollow ? fsConstants.O_NOFOLLOW : 0);
-  let handle: Awaited<ReturnType<typeof fs.open>>;
   try {
-    handle = await fs.open(source, flags);
-  } catch (err) {
-    if (isSymlinkOpenError(err)) {
-      throw new Error("Media path must not be a symlink", { cause: err });
-    }
-    throw err;
-  }
-  try {
-    const [stat, lstat] = await Promise.all([handle.stat(), fs.lstat(source)]);
-    if (lstat.isSymbolicLink()) {
-      throw new Error("Media path must not be a symlink");
-    }
-    if (!stat.isFile()) {
-      throw new Error("Media path is not a file");
-    }
-    if (stat.ino !== lstat.ino || stat.dev !== lstat.dev) {
-      throw new Error("Media path changed during read");
-    }
-    if (stat.size > MAX_BYTES) {
-      throw new Error("Media exceeds 5MB limit");
-    }
-    const buffer = await handle.readFile();
+    const { buffer, stat } = await readLocalFileSafely({ filePath: source, maxBytes: MAX_BYTES });
     const mime = await detectMime({ buffer, filePath: source });
     const ext = extensionForMime(mime) ?? path.extname(source);
     const id = ext ? `${baseId}${ext}` : baseId;
     const dest = path.join(dir, id);
     await fs.writeFile(dest, buffer, { mode: 0o600 });
     return { id, path: dest, size: stat.size, contentType: mime };
-  } finally {
-    await handle.close().catch(() => {});
+  } catch (err) {
+    if (err instanceof SafeOpenError) {
+      throw toSaveMediaSourceError(err);
+    }
+    throw err;
   }
 }
 
