@@ -22,12 +22,12 @@ vi.mock("../infra/agent-events.js", () => ({
 
 const announceSpy = vi.fn(async () => true);
 vi.mock("./subagent-announce.js", () => ({
-  runSubagentAnnounceFlow: (...args: unknown[]) => announceSpy(...args),
+  runSubagentAnnounceFlow: (...args: Parameters<typeof announceSpy>) => announceSpy(...args),
 }));
 
 const triggerSpy = vi.fn(async () => {});
 vi.mock("../hooks/internal-hooks.js", () => ({
-  triggerInternalHook: (...args: unknown[]) => triggerSpy(...args),
+  triggerInternalHook: (...args: Parameters<typeof triggerSpy>) => triggerSpy(...args),
   createInternalHookEvent: vi.fn(
     (type: string, action: string, sessionKey: string, context: Record<string, unknown>) => ({
       type,
@@ -93,7 +93,7 @@ describe("subagent:complete hook event", () => {
     await new Promise((r) => setTimeout(r, 0));
 
     expect(triggerSpy).toHaveBeenCalledTimes(1);
-    const event = triggerSpy.mock.calls[0]![0] as {
+    const event = (triggerSpy.mock.calls[0] as unknown[])[0] as {
       type: string;
       action: string;
       sessionKey: string;
@@ -117,7 +117,7 @@ describe("subagent:complete hook event", () => {
     await new Promise((r) => setTimeout(r, 0));
 
     expect(triggerSpy).toHaveBeenCalled();
-    const event = triggerSpy.mock.calls[0]![0] as {
+    const event = (triggerSpy.mock.calls[0] as unknown[])[0] as {
       type: string;
       action: string;
       context: Record<string, unknown>;
@@ -171,7 +171,7 @@ describe("subagent:complete hook event", () => {
     await new Promise((r) => setTimeout(r, 0));
 
     expect(triggerSpy).toHaveBeenCalled();
-    const event = triggerSpy.mock.calls[0]![0] as {
+    const event = (triggerSpy.mock.calls[0] as unknown[])[0] as {
       context: Record<string, unknown>;
     };
     const outcome = event.context.outcome as { status: string; error?: string };
@@ -211,7 +211,7 @@ describe("subagent:complete hook event", () => {
     await new Promise((r) => setTimeout(r, 0));
 
     expect(triggerSpy).toHaveBeenCalledTimes(1);
-    const event = triggerSpy.mock.calls[0]![0] as {
+    const event = (triggerSpy.mock.calls[0] as unknown[])[0] as {
       context: Record<string, unknown>;
     };
     const outcome = event.context.outcome as { status: string; error?: string };
@@ -226,7 +226,7 @@ describe("subagent:complete hook event", () => {
     await new Promise((r) => setTimeout(r, 0));
 
     expect(triggerSpy).toHaveBeenCalled();
-    const event = triggerSpy.mock.calls[0]![0] as {
+    const event = (triggerSpy.mock.calls[0] as unknown[])[0] as {
       type: string;
       action: string;
       sessionKey: string;
