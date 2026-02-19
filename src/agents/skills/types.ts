@@ -54,6 +54,10 @@ export type SkillCommandSpec = {
   description: string;
   /** Optional deterministic dispatch behavior for this command. */
   dispatch?: SkillCommandDispatchSpec;
+  /** If true, execute exec-command directly without AI model invocation. */
+  bypassModel?: boolean;
+  /** Shell command to execute when bypassModel is true. */
+  execCommand?: string;
 };
 
 export type SkillsInstallPreferences = {

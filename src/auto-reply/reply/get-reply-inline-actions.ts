@@ -184,10 +184,7 @@ export async function handleInlineActions(params: {
     }
 
     // Handle bypass-model: execute command directly without AI
-    const { bypassModel, execCommand } = skillInvocation.command as {
-      bypassModel?: boolean;
-      execCommand?: string;
-    };
+    const { bypassModel, execCommand } = skillInvocation.command;
     if (bypassModel && execCommand) {
       try {
         const { execSync } = await import("node:child_process");
