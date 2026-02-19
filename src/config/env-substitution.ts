@@ -4,7 +4,11 @@
  * Supports `${VAR_NAME}` syntax in string values, substituted at config load time.
  * - Only uppercase env vars are matched: `[A-Z_][A-Z0-9_]*`
  * - Escape with `$${}` to output literal `${}`
- * - Missing env vars throw `MissingEnvVarError` with context
+ * - Missing env vars throw `MissingEnvVarError` with context, unless `lenient`
+ *   mode is enabled — in which case the original `${VAR_NAME}` token is preserved
+ *   as a literal string. Lenient mode is useful when reading config in a context
+ *   where not all env vars are expected to be present (e.g. the CLI reading config
+ *   that references vars only injected into the gateway systemd service).
  *
  * @example
  * ```json5
@@ -75,7 +79,26 @@ function parseEnvTokenAt(value: string, index: number): EnvToken | null {
   return null;
 }
 
-function substituteString(value: string, env: NodeJS.ProcessEnv, configPath: string): string {
+export type ResolveEnvVarsOptions = {
+  /**
+   * When `true`, unresolvable `${VAR_NAME}` references are preserved as the
+   * literal string `${VAR_NAME}` instead of throwing `MissingEnvVarError`.
+   *
+   * Use this when reading config in a context where some env vars may only be
+   * available in another process environment (e.g. vars injected via a systemd
+   * `EnvironmentFile=` that only applies to the gateway service, not the CLI).
+   *
+   * @default false
+   */
+  lenient?: boolean;
+};
+
+function substituteString(
+  value: string,
+  env: NodeJS.ProcessEnv,
+  configPath: string,
+  options: ResolveEnvVarsOptions,
+): string {
   if (!value.includes("$")) {
     return value;
   }
@@ -98,6 +121,13 @@ function substituteString(value: string, env: NodeJS.ProcessEnv, configPath: str
     if (token?.kind === "substitution") {
       const envValue = env[token.name];
       if (envValue === undefined || envValue === "") {
+        if (options.lenient) {
+          // Preserve the original reference as a literal string so callers can
+          // inspect or display the config without needing every gateway-only var.
+          chunks.push(`\${${token.name}}`);
+          i = token.end;
+          continue;
+        }
         throw new MissingEnvVarError(token.name, configPath);
       }
       chunks.push(envValue);
@@ -136,20 +166,25 @@ export function containsEnvVarReference(value: string): boolean {
   return false;
 }
 
-function substituteAny(value: unknown, env: NodeJS.ProcessEnv, path: string): unknown {
+function substituteAny(
+  value: unknown,
+  env: NodeJS.ProcessEnv,
+  path: string,
+  options: ResolveEnvVarsOptions,
+): unknown {
   if (typeof value === "string") {
-    return substituteString(value, env, path);
+    return substituteString(value, env, path, options);
   }
 
   if (Array.isArray(value)) {
-    return value.map((item, index) => substituteAny(item, env, `${path}[${index}]`));
+    return value.map((item, index) => substituteAny(item, env, `${path}[${index}]`, options));
   }
 
   if (isPlainObject(value)) {
     const result: Record<string, unknown> = {};
     for (const [key, val] of Object.entries(value)) {
       const childPath = path ? `${path}.${key}` : key;
-      result[key] = substituteAny(val, env, childPath);
+      result[key] = substituteAny(val, env, childPath, options);
     }
     return result;
   }
@@ -163,9 +198,14 @@ function substituteAny(value: unknown, env: NodeJS.ProcessEnv, path: string): un
  *
  * @param obj - The parsed config object (after JSON5 parse and $include resolution)
  * @param env - Environment variables to use for substitution (defaults to process.env)
+ * @param options - Optional behaviour flags (e.g. `lenient` mode)
  * @returns The config object with env vars substituted
- * @throws {MissingEnvVarError} If a referenced env var is not set or empty
+ * @throws {MissingEnvVarError} If a referenced env var is not set or empty (unless lenient)
  */
-export function resolveConfigEnvVars(obj: unknown, env: NodeJS.ProcessEnv = process.env): unknown {
-  return substituteAny(obj, env, "");
+export function resolveConfigEnvVars(
+  obj: unknown,
+  env: NodeJS.ProcessEnv = process.env,
+  options: ResolveEnvVarsOptions = {},
+): unknown {
+  return substituteAny(obj, env, "", options);
 }
