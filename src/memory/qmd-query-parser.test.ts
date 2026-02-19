@@ -24,6 +24,15 @@ complete`,
     expect(results).toEqual([{ docid: "abc", score: 0.5 }]);
   });
 
+  it("normalizes doc_id/docId keys to docid", () => {
+    expect(parseQmdQueryJson('[{"doc_id":"abc","score":1}]', "")).toEqual([
+      { docid: "abc", score: 1 },
+    ]);
+    expect(parseQmdQueryJson('[{"docId":"def","score":0.2}]', "")).toEqual([
+      { docid: "def", score: 0.2 },
+    ]);
+  });
+
   it("treats plain-text no-results from stderr as an empty result set", () => {
     const results = parseQmdQueryJson("", "No results found\n");
     expect(results).toEqual([]);

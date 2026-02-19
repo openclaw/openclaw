@@ -72,7 +72,38 @@ function parseQmdQueryResultArray(raw: string): QmdQueryResult[] | null {
     if (!Array.isArray(parsed)) {
       return null;
     }
-    return parsed as QmdQueryResult[];
+
+    // QMD output keys have changed across versions/builds.
+    // Normalize common alternatives so downstream code can rely on `docid`.
+    return parsed.map((entry) => {
+      if (!entry || typeof entry !== "object") {
+        return {} as QmdQueryResult;
+      }
+      const e = entry as Record<string, unknown>;
+      const docid =
+        (e.docid as string | undefined) ??
+        (e.doc_id as string | undefined) ??
+        (e.docId as string | undefined) ??
+        (e.document_id as string | undefined) ??
+        (e.documentId as string | undefined) ??
+        (e.hash as string | undefined) ??
+        (e.id as string | undefined);
+
+      const out: QmdQueryResult = {};
+      if (docid) out.docid = docid;
+      if (typeof e.score === "number") out.score = e.score;
+
+      const file = (e.file as string | undefined) ?? (e.path as string | undefined);
+      if (typeof file === "string" && file.length) out.file = file;
+
+      const snippet = (e.snippet as string | undefined) ?? (e.text as string | undefined);
+      if (typeof snippet === "string" && snippet.length) out.snippet = snippet;
+
+      const body = e.body as string | undefined;
+      if (typeof body === "string" && body.length) out.body = body;
+
+      return out;
+    });
   } catch {
     return null;
   }
