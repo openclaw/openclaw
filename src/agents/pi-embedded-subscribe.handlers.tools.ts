@@ -381,7 +381,9 @@ export async function handleToolExecutionEnd(
   // When shouldEmitToolOutput() is true, emitToolOutput already delivers media
   // via parseReplyDirectives (MEDIA: text extraction), so skip to avoid duplicates.
   if (ctx.params.onToolResult && !isToolError && !ctx.shouldEmitToolOutput()) {
-    const mediaPaths = extractToolResultMediaPaths(result);
+    const mediaPaths = extractToolResultMediaPaths(result).filter(
+      (p) => !ctx.state.messagingToolSentMediaUrls.includes(p),
+    );
     if (mediaPaths.length > 0) {
       try {
         void ctx.params.onToolResult({ mediaUrls: mediaPaths });
