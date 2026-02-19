@@ -704,7 +704,7 @@ describe("nostrPlugin gateway.startAccount", () => {
 
     const cancelledCalls = replySpy.mock.calls.filter(
       (call) =>
-        call[2] === 25805 &&
+        (call as unknown[])[2] === 25805 &&
         typeof call[0] === "object" &&
         call[0] &&
         (call[0] as { code?: string }).code === "CANCELLED",
@@ -714,7 +714,165 @@ describe("nostrPlugin gateway.startAccount", () => {
       sessionId,
       inReplyTo: promptEventId,
     });
-    expect(replySpy.mock.calls.some((call) => call[2] === 25803)).toBe(false);
+    expect(replySpy.mock.calls.some((call) => (call as unknown[])[2] === 25803)).toBe(false);
     expect(mockReplyDispatcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("applies queued cancel when 25806 arrives before run registration", async () => {
+    const formatAgentEnvelope = vi.fn();
+    const finalizeInboundContext = vi.fn((ctx) => ctx);
+    const resolveAgentRoute = vi.fn(() => ({
+      agentId: "default-agent",
+      accountId: "default",
+      sessionKey: "session:user",
+      mainSessionKey: "session",
+    }));
+    let releaseRecordInboundSession: (() => void) | undefined;
+    const recordInboundSessionGate = new Promise<void>((resolve) => {
+      releaseRecordInboundSession = resolve;
+    });
+    const recordInboundSession = vi.fn(async () => {
+      await recordInboundSessionGate;
+    });
+    const mockReplyDispatcher = vi.fn(async () => undefined);
+
+    const senderPubkey = "d".repeat(64);
+    const promptEventId = "event-pending-cancel-source";
+    const sessionId = resolveNostrSessionId(senderPubkey, undefined);
+    const replySpy = vi.fn(async (_content: unknown, _options?: NostrOutboundMessageOptions) => {});
+    type OnMessage = NostrBusOptions["onMessage"];
+    let capturedOnMessage: OnMessage | null = null;
+
+    vi.mocked(startNostrBus).mockImplementation(async (options: NostrBusOptions) => {
+      capturedOnMessage = options.onMessage;
+      return {
+        close: vi.fn(),
+        publicKey: "bot-pubkey",
+        sendDm: vi.fn(),
+        getMetrics: vi.fn(() => ({})),
+        publishProfile: vi.fn(),
+        publishAiInfo: vi.fn(),
+        getProfileState: vi.fn(),
+      } as never;
+    });
+
+    const runtime = {
+      channel: {
+        routing: {
+          resolveAgentRoute,
+        },
+        session: {
+          resolveStorePath: vi.fn(() => "/tmp/nostr-session-store.json"),
+          readSessionUpdatedAt: vi.fn(() => 1_700_000_500_000),
+          recordInboundSession,
+        },
+        reply: {
+          resolveEnvelopeFormatOptions: vi.fn(() => ({ template: "channel+name+time" })),
+          formatAgentEnvelope,
+          finalizeInboundContext,
+          dispatchReplyWithBufferedBlockDispatcher: mockReplyDispatcher,
+        },
+        text: {
+          resolveMarkdownTableMode: vi.fn(() => "code"),
+          convertMarkdownTables: vi.fn((text: string) => text),
+        },
+        pairing: {
+          readAllowFromStore: vi.fn(async () => []),
+          upsertPairingRequest: vi.fn(),
+          buildPairingReply: vi.fn(),
+        },
+        commands: {
+          shouldComputeCommandAuthorized: vi.fn(() => false),
+          resolveCommandAuthorizedFromAuthorizers: vi.fn(() => true),
+        },
+      },
+      config: {
+        loadConfig: vi.fn(() => ({})),
+      },
+      logging: {
+        shouldLogVerbose: () => false,
+      },
+    } as unknown as PluginRuntime;
+
+    setNostrRuntime(runtime);
+
+    const startAccount = nostrPlugin.gateway?.startAccount;
+    if (!startAccount) {
+      throw new Error("nostr plugin startAccount is not defined");
+    }
+    const abort = new AbortController();
+    abort.abort();
+    await startAccount({
+      account: {
+        accountId: "default",
+        configured: true,
+        privateKey: "a".repeat(64),
+        relays: ["ws://localhost:7777"],
+        publicKey: "b".repeat(64),
+        enabled: true,
+        name: "default",
+        config: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+        },
+        lastError: null,
+        profile: null,
+      },
+      cfg: {},
+      runtime,
+      abortSignal: abort.signal,
+      log: { info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      setStatus: vi.fn(),
+    } as never);
+
+    if (!capturedOnMessage) {
+      throw new Error("inbound handler was not registered");
+    }
+    const onMessageHandler = capturedOnMessage as OnMessage;
+
+    const promptPromise = onMessageHandler(
+      {
+        senderPubkey,
+        text: "please stream",
+        createdAt: 1_700_000_000,
+        eventId: promptEventId,
+        kind: 25802,
+      },
+      replySpy,
+    );
+    await vi.waitFor(() => {
+      expect(recordInboundSession).toHaveBeenCalledTimes(1);
+    });
+
+    await onMessageHandler(
+      {
+        senderPubkey,
+        text: "user_cancel",
+        createdAt: 1_700_000_001,
+        eventId: "event-pending-cancel-request",
+        kind: 25806,
+        inReplyTo: promptEventId,
+        cancelReason: "user_cancel",
+      },
+      replySpy,
+    );
+
+    releaseRecordInboundSession?.();
+    await promptPromise;
+
+    const cancelledCalls = replySpy.mock.calls.filter(
+      (call) =>
+        (call as unknown[])[2] === 25805 &&
+        typeof call[0] === "object" &&
+        call[0] &&
+        (call[0] as { code?: string }).code === "CANCELLED",
+    );
+    expect(cancelledCalls).toHaveLength(1);
+    expect(cancelledCalls[0]?.[1]).toMatchObject({
+      sessionId,
+      inReplyTo: promptEventId,
+    });
+    expect(replySpy.mock.calls.some((call) => (call as unknown[])[2] === 25803)).toBe(false);
+    expect(mockReplyDispatcher).not.toHaveBeenCalled();
   });
 });

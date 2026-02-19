@@ -40,6 +40,7 @@ const AI_INFO_DEFAULT_PROVIDER = "anthropic";
 const AI_INFO_DEFAULT_MODEL = "claude-opus-4-6";
 const AI_INFO_ENCRYPTION_SCHEME = "nip44";
 const NOSTR_TRACE_JSONL_ENV = "OPENCLAW_NOSTR_TRACE_JSONL";
+const PENDING_CANCEL_TTL_MS = 5 * 60 * 1000;
 
 type ModelSelectionSnapshot = {
   provider: string;
@@ -58,6 +59,12 @@ type ActiveRunControl = {
   cancelled: boolean;
   cancelReason: CancelReason;
   terminalEmitted: boolean;
+};
+
+type PendingCancel = {
+  reason: CancelReason;
+  cancelEventId: string;
+  receivedAtMs: number;
 };
 
 export function resolveNostrSessionId(
@@ -510,6 +517,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
       let lastAiInfoFingerprint: string | null = null;
       let lastSelectedModel: ModelSelectionSnapshot | undefined;
       const activeRuns = new Map<string, ActiveRunControl>();
+      const pendingCancels = new Map<string, PendingCancel>();
 
       // Track bus handle for metrics callback
       let busHandle: NostrBusHandle | null = null;
@@ -554,6 +562,22 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
           run.terminalEmitted = false;
           throw error;
         }
+      };
+      const prunePendingCancels = (nowMs: number): void => {
+        for (const [key, pending] of pendingCancels.entries()) {
+          if (nowMs - pending.receivedAtMs > PENDING_CANCEL_TTL_MS) {
+            pendingCancels.delete(key);
+          }
+        }
+      };
+      const popPendingCancel = (runKey: string, nowMs: number): PendingCancel | undefined => {
+        prunePendingCancels(nowMs);
+        const pending = pendingCancels.get(runKey);
+        if (!pending) {
+          return undefined;
+        }
+        pendingCancels.delete(runKey);
+        return pending;
       };
       const publishAiInfoIfNeeded = async (cfg: unknown, reason: string): Promise<void> => {
         if (!busHandle) {
@@ -746,16 +770,24 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
             const runKey = resolveActiveRunKey(senderPubkey, targetRunId);
             const activeRun = activeRuns.get(runKey);
             if (!activeRun) {
+              const nowMs = Date.now();
+              prunePendingCancels(nowMs);
+              pendingCancels.set(runKey, {
+                reason: payload.cancelReason ?? "user_cancel",
+                cancelEventId: payload.eventId,
+                receivedAtMs: nowMs,
+              });
               ctx.log?.debug?.(
-                `[${account.accountId}] ignoring cancel for inactive run ${targetRunId} from ${senderPubkey}`,
+                `[${account.accountId}] queued pending cancel for run ${targetRunId} from ${senderPubkey}`,
               );
               traceRecorder.record({
                 direction: "cancel",
                 event_id: payload.eventId,
                 sender_pubkey: senderPubkey,
                 run_id: targetRunId,
-                accepted: false,
-                reason: "inactive_run",
+                accepted: true,
+                reason: "queued_pending",
+                pending_ttl_ms: PENDING_CANCEL_TTL_MS,
               });
               return;
             }
@@ -937,6 +969,30 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
           };
 
           try {
+            const pendingCancel = popPendingCancel(runKey, Date.now());
+            if (pendingCancel) {
+              runControl.cancelled = true;
+              runControl.cancelReason = pendingCancel.reason;
+              runControl.abortController.abort();
+              traceRecorder.record({
+                direction: "cancel",
+                event_id: pendingCancel.cancelEventId,
+                sender_pubkey: senderPubkey,
+                run_id: runControl.promptEventId,
+                session_id: runControl.sessionId,
+                trace_id: runControl.traceId,
+                accepted: true,
+                reason: runControl.cancelReason,
+                source: "pending_queue",
+              });
+              await emitCancelledTerminal(runControl, reply, {
+                cancel_event_id: pendingCancel.cancelEventId,
+                pending_cancel_age_ms: Math.max(0, Date.now() - pendingCancel.receivedAtMs),
+                cancel_delivery: "pre_dispatch",
+              });
+              return;
+            }
+
             await safeSendStatus("thinking", {
               info: "run_started",
               progress: 0,
