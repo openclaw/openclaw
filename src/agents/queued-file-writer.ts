@@ -37,7 +37,7 @@ export function getQueuedFileWriter(
     write: (line: string) => {
       queue = queue
         .then(() => ensurePermissions)
-        .then(() => fs.appendFile(filePath, line, { encoding: "utf8", mode: 0o600 }))
+        .then(() => fs.appendFile(filePath, line, { encoding: "utf8" }))
         .catch(() => undefined);
     },
   };
