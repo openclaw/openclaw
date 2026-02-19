@@ -25,6 +25,8 @@ const mocks = vi.hoisted(() => ({
   fsAccess: vi.fn(async () => {}),
   fsMkdir: vi.fn(async () => undefined),
   fsAppendFile: vi.fn(async () => {}),
+  fsReadFile: vi.fn(async () => ""),
+  fsStat: vi.fn(async () => null),
 }));
 
 vi.mock("../../config/config.js", () => ({
@@ -81,6 +83,8 @@ vi.mock("node:fs/promises", async () => {
     access: mocks.fsAccess,
     mkdir: mocks.fsMkdir,
     appendFile: mocks.fsAppendFile,
+    readFile: mocks.fsReadFile,
+    stat: mocks.fsStat,
   };
   return { ...patched, default: patched };
 });
@@ -108,6 +112,58 @@ function makeCall(method: keyof typeof agentsHandlers, params: Record<string, un
   });
   return { respond, promise };
 }
+
+function createEnoentError() {
+  const err = new Error("ENOENT") as NodeJS.ErrnoException;
+  err.code = "ENOENT";
+  return err;
+}
+
+function createErrnoError(code: string) {
+  const err = new Error(code) as NodeJS.ErrnoException;
+  err.code = code;
+  return err;
+}
+
+function mockWorkspaceStateRead(params: {
+  onboardingCompletedAt?: string;
+  errorCode?: string;
+  rawContent?: string;
+}) {
+  mocks.fsReadFile.mockImplementation(async (...args: unknown[]) => {
+    const filePath = args[0];
+    if (String(filePath).endsWith("workspace-state.json")) {
+      if (params.errorCode) {
+        throw createErrnoError(params.errorCode);
+      }
+      if (typeof params.rawContent === "string") {
+        return params.rawContent;
+      }
+      return JSON.stringify({
+        onboardingCompletedAt: params.onboardingCompletedAt ?? "2026-02-15T14:00:00.000Z",
+      });
+    }
+    throw createEnoentError();
+  });
+}
+
+async function listAgentFileNames(agentId = "main") {
+  const { respond, promise } = makeCall("agents.files.list", { agentId });
+  await promise;
+
+  const [, result] = respond.mock.calls[0] ?? [];
+  const files = (result as { files: Array<{ name: string }> }).files;
+  return files.map((file) => file.name);
+}
+
+beforeEach(() => {
+  mocks.fsReadFile.mockImplementation(async () => {
+    throw createEnoentError();
+  });
+  mocks.fsStat.mockImplementation(async () => {
+    throw createEnoentError();
+  });
+});
 
 /* ------------------------------------------------------------------ */
 /* Tests                                                              */
@@ -369,5 +425,38 @@ describe("agents.delete", () => {
       undefined,
       expect.objectContaining({ message: expect.stringContaining("invalid") }),
     );
+  });
+});
+
+describe("agents.files.list", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.loadConfigReturn = {};
+  });
+
+  it("includes BOOTSTRAP.md when onboarding has not completed", async () => {
+    const names = await listAgentFileNames();
+    expect(names).toContain("BOOTSTRAP.md");
+  });
+
+  it("hides BOOTSTRAP.md when workspace onboarding is complete", async () => {
+    mockWorkspaceStateRead({ onboardingCompletedAt: "2026-02-15T14:00:00.000Z" });
+
+    const names = await listAgentFileNames();
+    expect(names).not.toContain("BOOTSTRAP.md");
+  });
+
+  it("falls back to showing BOOTSTRAP.md when workspace state cannot be read", async () => {
+    mockWorkspaceStateRead({ errorCode: "EACCES" });
+
+    const names = await listAgentFileNames();
+    expect(names).toContain("BOOTSTRAP.md");
+  });
+
+  it("falls back to showing BOOTSTRAP.md when workspace state is malformed JSON", async () => {
+    mockWorkspaceStateRead({ rawContent: "{" });
+
+    const names = await listAgentFileNames();
+    expect(names).toContain("BOOTSTRAP.md");
   });
 });

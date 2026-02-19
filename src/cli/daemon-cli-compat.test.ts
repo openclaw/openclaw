@@ -25,6 +25,18 @@ describe("resolveLegacyDaemonCliAccessors", () => {
       export { runDaemonRestart as r, daemon_cli_exports as t };
     `;
 
+    expect(resolveLegacyDaemonCliAccessors(bundle)).toEqual({
+      registerDaemonCli: "t.registerDaemonCli",
+      runDaemonRestart: "r",
+    });
+  });
+
+  it("returns null when the required restart alias is missing", () => {
+    const bundle = `
+      var daemon_cli_exports = /* @__PURE__ */ __exportAll({ registerDaemonCli: () => registerDaemonCli });
+      export { daemon_cli_exports as t };
+    `;
+
     expect(resolveLegacyDaemonCliAccessors(bundle)).toBeNull();
   });
 });

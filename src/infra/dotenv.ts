@@ -1,6 +1,6 @@
-import dotenv from "dotenv";
 import fs from "node:fs";
 import path from "node:path";
+import dotenv from "dotenv";
 import { resolveConfigDir } from "../utils.js";
 
 export function loadDotEnv(opts?: { quiet?: boolean }) {

@@ -31,6 +31,12 @@
       "help": "Minimum message length eligible for auto-capture",
       "advanced": true,
       "placeholder": "10"
+    },
+    "captureMaxChars": {
+      "label": "Capture Max Chars",
+      "help": "Maximum message length eligible for auto-capture",
+      "advanced": true,
+      "placeholder": "500"
     }
   },
   "configSchema": {
@@ -64,6 +70,11 @@
         "type": "number",
         "minimum": 1,
         "maximum": 1000
+      },
+      "captureMaxChars": {
+        "type": "number",
+        "minimum": 100,
+        "maximum": 10000
       }
     },
     "required": ["embedding"]

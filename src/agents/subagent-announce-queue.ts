@@ -6,14 +6,19 @@ import {
   normalizeDeliveryContext,
 } from "../utils/delivery-context.js";
 import {
+  applyQueueRuntimeSettings,
   applyQueueDropPolicy,
   buildCollectPrompt,
-  buildQueueSummaryPrompt,
+  clearQueueSummaryState,
   hasCrossChannelItems,
+  previewQueueSummaryPrompt,
   waitForQueueDebounce,
 } from "../utils/queue-helpers.js";
 
 export type AnnounceQueueItem = {
+  // Stable announce identity shared by direct + queued delivery paths.
+  // Optional for backward compatibility with previously queued items.
+  announceId?: string;
   prompt: string;
   summaryLine?: string;
   enqueuedAt: number;
@@ -63,16 +68,10 @@ function getAnnounceQueue(
 ) {
   const existing = ANNOUNCE_QUEUES.get(key);
   if (existing) {
-    existing.mode = settings.mode;
-    existing.debounceMs =
-      typeof settings.debounceMs === "number"
-        ? Math.max(0, settings.debounceMs)
-        : existing.debounceMs;
-    existing.cap =
-      typeof settings.cap === "number" && settings.cap > 0
-        ? Math.floor(settings.cap)
-        : existing.cap;
-    existing.dropPolicy = settings.dropPolicy ?? existing.dropPolicy;
+    applyQueueRuntimeSettings({
+      target: existing,
+      settings,
+    });
     existing.send = send;
     return existing;
   }
@@ -88,6 +87,10 @@ function getAnnounceQueue(
     summaryLines: [],
     send,
   };
+  applyQueueRuntimeSettings({
+    target: created,
+    settings,
+  });
   ANNOUNCE_QUEUES.set(key, created);
   return created;
 }
@@ -105,11 +108,12 @@ function scheduleAnnounceDrain(key: string) {
         await waitForQueueDebounce(queue);
         if (queue.mode === "collect") {
           if (forceIndividualCollect) {
-            const next = queue.items.shift();
+            const next = queue.items[0];
             if (!next) {
               break;
             }
             await queue.send(next);
+            queue.items.shift();
             continue;
           }
           const isCrossChannel = hasCrossChannelItems(queue.items, (item) => {
@@ -123,15 +127,16 @@ function scheduleAnnounceDrain(key: string) {
           });
           if (isCrossChannel) {
             forceIndividualCollect = true;
-            const next = queue.items.shift();
+            const next = queue.items[0];
             if (!next) {
               break;
             }
             await queue.send(next);
+            queue.items.shift();
             continue;
           }
-          const items = queue.items.splice(0, queue.items.length);
-          const summary = buildQueueSummaryPrompt({ state: queue, noun: "announce" });
+          const items = queue.items.slice();
+          const summary = previewQueueSummaryPrompt({ state: queue, noun: "announce" });
           const prompt = buildCollectPrompt({
             title: "[Queued announce messages while agent was busy]",
             items,
@@ -143,26 +148,35 @@ function scheduleAnnounceDrain(key: string) {
             break;
           }
           await queue.send({ ...last, prompt });
+          queue.items.splice(0, items.length);
+          if (summary) {
+            clearQueueSummaryState(queue);
+          }
           continue;
         }
 
-        const summaryPrompt = buildQueueSummaryPrompt({ state: queue, noun: "announce" });
+        const summaryPrompt = previewQueueSummaryPrompt({ state: queue, noun: "announce" });
         if (summaryPrompt) {
-          const next = queue.items.shift();
+          const next = queue.items[0];
           if (!next) {
             break;
           }
           await queue.send({ ...next, prompt: summaryPrompt });
+          queue.items.shift();
+          clearQueueSummaryState(queue);
           continue;
         }
 
-        const next = queue.items.shift();
+        const next = queue.items[0];
         if (!next) {
           break;
         }
         await queue.send(next);
+        queue.items.shift();
       }
     } catch (err) {
+      // Keep items in queue and retry after debounce; avoid hot-loop retries.
+      queue.lastEnqueuedAt = Date.now();
       defaultRuntime.error?.(`announce queue drain failed for ${key}: ${String(err)}`);
     } finally {
       queue.draining = false;
