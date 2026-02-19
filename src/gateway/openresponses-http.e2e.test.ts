@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
 import { agentCommand, getFreePort, installGatewayTestHooks } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
@@ -433,12 +434,13 @@ describe("OpenResponses HTTP API (e2e)", () => {
     const port = enabledPort;
     try {
       agentCommand.mockReset();
-      agentCommand.mockImplementationOnce((async (opts: unknown) => {
-        const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
-        emitAgentEvent({ runId, stream: "assistant", data: { delta: "he" } });
-        emitAgentEvent({ runId, stream: "assistant", data: { delta: "llo" } });
-        return { payloads: [{ text: "hello" }] } as never;
-      }) as never);
+      agentCommand.mockImplementationOnce((async (opts: unknown) =>
+        buildAssistantDeltaResult({
+          opts,
+          emit: emitAgentEvent,
+          deltas: ["he", "llo"],
+          text: "hello",
+        })) as never);
 
       const resDelta = await postResponses(port, {
         stream: true,

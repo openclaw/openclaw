@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import "./test-helpers/fast-coding-tools.js";
 import { createOpenClawCodingTools } from "./pi-tools.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
+import { createPiToolsSandboxContext } from "./test-helpers/pi-tools-sandbox-context.js";
 
 const defaultTools = createOpenClawCodingTools();
 
@@ -74,32 +75,16 @@ describe("createOpenClawCodingTools", () => {
   });
   it("filters tools by sandbox policy", () => {
     const sandboxDir = path.join(os.tmpdir(), "moltbot-sandbox");
-    const sandbox = {
-      enabled: true,
-      sessionKey: "sandbox:test",
+    const sandbox = createPiToolsSandboxContext({
       workspaceDir: sandboxDir,
       agentWorkspaceDir: path.join(os.tmpdir(), "moltbot-workspace"),
       workspaceAccess: "none" as const,
-      containerName: "openclaw-sbx-test",
-      containerWorkdir: "/workspace",
       fsBridge: createHostSandboxFsBridge(sandboxDir),
-      docker: {
-        image: "openclaw-sandbox:bookworm-slim",
-        containerPrefix: "openclaw-sbx-",
-        workdir: "/workspace",
-        readOnlyRoot: true,
-        tmpfs: [],
-        network: "none",
-        user: "1000:1000",
-        capDrop: ["ALL"],
-        env: { LANG: "C.UTF-8" },
-      },
       tools: {
         allow: ["bash"],
         deny: ["browser"],
       },
-      browserAllowHostControl: false,
-    };
+    });
     const tools = createOpenClawCodingTools({ sandbox });
     expect(tools.some((tool) => tool.name === "exec")).toBe(true);
     expect(tools.some((tool) => tool.name === "read")).toBe(false);
@@ -107,32 +92,16 @@ describe("createOpenClawCodingTools", () => {
   });
   it("hard-disables write/edit when sandbox workspaceAccess is ro", () => {
     const sandboxDir = path.join(os.tmpdir(), "moltbot-sandbox");
-    const sandbox = {
-      enabled: true,
-      sessionKey: "sandbox:test",
+    const sandbox = createPiToolsSandboxContext({
       workspaceDir: sandboxDir,
       agentWorkspaceDir: path.join(os.tmpdir(), "moltbot-workspace"),
       workspaceAccess: "ro" as const,
-      containerName: "openclaw-sbx-test",
-      containerWorkdir: "/workspace",
       fsBridge: createHostSandboxFsBridge(sandboxDir),
-      docker: {
-        image: "openclaw-sandbox:bookworm-slim",
-        containerPrefix: "openclaw-sbx-",
-        workdir: "/workspace",
-        readOnlyRoot: true,
-        tmpfs: [],
-        network: "none",
-        user: "1000:1000",
-        capDrop: ["ALL"],
-        env: { LANG: "C.UTF-8" },
-      },
       tools: {
         allow: ["read", "write", "edit"],
         deny: [],
       },
-      browserAllowHostControl: false,
-    };
+    });
     const tools = createOpenClawCodingTools({ sandbox });
     expect(tools.some((tool) => tool.name === "read")).toBe(true);
     expect(tools.some((tool) => tool.name === "write")).toBe(false);

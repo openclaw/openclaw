@@ -300,6 +300,18 @@ async function runCommandHandler(handler: (args: unknown) => Promise<void>) {
   return { respond, ack };
 }
 
+function expectArgMenuLayout(respond: ReturnType<typeof vi.fn>): {
+  type: string;
+  elements?: Array<{ type?: string; action_id?: string; confirm?: unknown }>;
+} {
+  expect(respond).toHaveBeenCalledTimes(1);
+  const payload = respond.mock.calls[0]?.[0] as { blocks?: Array<{ type: string }> };
+  expect(payload.blocks?.[0]?.type).toBe("header");
+  expect(payload.blocks?.[1]?.type).toBe("section");
+  expect(payload.blocks?.[2]?.type).toBe("context");
+  return findFirstActionsBlock(payload) ?? { type: "actions", elements: [] };
+}
+
 async function runArgMenuAction(
   handler: (args: unknown) => Promise<void>,
   params: {
@@ -360,13 +372,7 @@ describe("Slack native command argument menus", () => {
 
   it("shows a button menu when required args are omitted", async () => {
     const { respond } = await runCommandHandler(usageHandler);
-
-    expect(respond).toHaveBeenCalledTimes(1);
-    const payload = respond.mock.calls[0]?.[0] as { blocks?: Array<{ type: string }> };
-    expect(payload.blocks?.[0]?.type).toBe("header");
-    expect(payload.blocks?.[1]?.type).toBe("section");
-    expect(payload.blocks?.[2]?.type).toBe("context");
-    const actions = findFirstActionsBlock(payload);
+    const actions = expectArgMenuLayout(respond);
     const elementType = actions?.elements?.[0]?.type;
     expect(elementType).toBe("button");
     expect(actions?.elements?.[0]?.confirm).toBeTruthy();
@@ -374,13 +380,7 @@ describe("Slack native command argument menus", () => {
 
   it("shows a static_select menu when choices exceed button row size", async () => {
     const { respond } = await runCommandHandler(reportHandler);
-
-    expect(respond).toHaveBeenCalledTimes(1);
-    const payload = respond.mock.calls[0]?.[0] as { blocks?: Array<{ type: string }> };
-    expect(payload.blocks?.[0]?.type).toBe("header");
-    expect(payload.blocks?.[1]?.type).toBe("section");
-    expect(payload.blocks?.[2]?.type).toBe("context");
-    const actions = findFirstActionsBlock(payload);
+    const actions = expectArgMenuLayout(respond);
     const element = actions?.elements?.[0];
     expect(element?.type).toBe("static_select");
     expect(element?.action_id).toBe("openclaw_cmdarg");

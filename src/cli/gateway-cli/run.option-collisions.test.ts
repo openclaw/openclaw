@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 
 const startGatewayServer = vi.fn(async (_port: number, _opts?: unknown) => ({
   close: vi.fn(async () => {}),
@@ -16,15 +17,7 @@ const runGatewayLoop = vi.fn(async ({ start }: { start: () => Promise<unknown> }
   await start();
 });
 
-const runtimeLogs: string[] = [];
-const runtimeErrors: string[] = [];
-const defaultRuntime = {
-  log: (msg: string) => runtimeLogs.push(msg),
-  error: (msg: string) => runtimeErrors.push(msg),
-  exit: (code: number) => {
-    throw new Error(`__exit__:${code}`);
-  },
-};
+const { defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
 
 vi.mock("../../config/config.js", () => ({
   getConfigPath: () => "/tmp/openclaw-test-missing-config.json",
@@ -99,8 +92,7 @@ vi.mock("./run-loop.js", () => ({
 
 describe("gateway run option collisions", () => {
   beforeEach(() => {
-    runtimeLogs.length = 0;
-    runtimeErrors.length = 0;
+    resetRuntimeCapture();
     startGatewayServer.mockClear();
     setGatewayWsLogStyle.mockClear();
     setVerbose.mockClear();
@@ -137,6 +129,24 @@ describe("gateway run option collisions", () => {
         auth: expect.objectContaining({
           token: "tok_run",
         }),
+      }),
+    );
+  });
+
+  it("starts gateway when token mode has no configured token (startup bootstrap path)", async () => {
+    const { addGatewayRunCommand } = await import("./run.js");
+    const program = new Command();
+    const gateway = addGatewayRunCommand(program.command("gateway"));
+    addGatewayRunCommand(gateway.command("run"));
+
+    await program.parseAsync(["gateway", "run", "--allow-unconfigured"], {
+      from: "user",
+    });
+
+    expect(startGatewayServer).toHaveBeenCalledWith(
+      18789,
+      expect.objectContaining({
+        bind: "loopback",
       }),
     );
   });

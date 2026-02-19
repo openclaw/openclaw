@@ -441,7 +441,7 @@ export function collectHooksHardeningFindings(
   if (token && gatewayToken && token === gatewayToken) {
     findings.push({
       checkId: "hooks.token_reuse_gateway_token",
-      severity: "warn",
+      severity: "critical",
       title: "Hooks token reuses the Gateway token",
       detail:
         "hooks.token matches gateway.auth token; compromise of hooks expands blast radius to the Gateway API.",
