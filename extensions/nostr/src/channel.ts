@@ -41,8 +41,18 @@ const AI_INFO_DEFAULT_MODEL = "claude-opus-4-6";
 const AI_INFO_ENCRYPTION_SCHEME = "nip44";
 const RUN_START_THINKING_DELTA_TEXT = "run_started";
 const RUN_HEARTBEAT_THINKING_DELTA_TEXT = "run_progress";
-const RUN_HEARTBEAT_INTERVAL_MS = 3500;
-const RUN_HEARTBEAT_CHECK_INTERVAL_MS = 500;
+const RUN_HEARTBEAT_INTERVAL_MS = resolveDurationEnvMs(
+  "OPENCLAW_NOSTR_HEARTBEAT_INTERVAL_MS",
+  3500,
+  250,
+  60_000,
+);
+const RUN_HEARTBEAT_CHECK_INTERVAL_MS = resolveDurationEnvMs(
+  "OPENCLAW_NOSTR_HEARTBEAT_CHECK_INTERVAL_MS",
+  Math.max(150, Math.min(500, Math.trunc(RUN_HEARTBEAT_INTERVAL_MS / 3))),
+  50,
+  5_000,
+);
 const RUN_LANE_WAIT_TELEMETRY_MIN_MS = 1500;
 const NOSTR_TRACE_JSONL_ENV = "OPENCLAW_NOSTR_TRACE_JSONL";
 const NOSTR_TRACE_JSONL_FALLBACK_ENV = "NOSTR_TRACE_JSONL";
@@ -125,6 +135,23 @@ export function resolveNostrSessionId(
 
 export function resolveNostrTimestampMs(createdAtSeconds: number): number {
   return createdAtSeconds * 1000;
+}
+
+function resolveDurationEnvMs(
+  envKey: string,
+  fallback: number,
+  minValue: number,
+  maxValue: number,
+): number {
+  const raw = process.env[envKey];
+  if (!raw) {
+    return fallback;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.max(minValue, Math.min(maxValue, Math.trunc(parsed)));
 }
 
 function resolveResponseKindFromDispatcherKind(kind: "tool" | "block" | "final"): number {
@@ -1361,22 +1388,32 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
           };
           activeRuns.set(runKey, runControl);
           updateRunPressureStatus();
+          const runRegisteredAtMs = Date.now();
           traceRecorder.record({
             direction: "run_register",
             run_id: payload.eventId,
             session_id: sessionId,
             trace_id: traceId,
             sender_pubkey: senderPubkey,
+            heartbeat_interval_ms: RUN_HEARTBEAT_INTERVAL_MS,
+            heartbeat_check_interval_ms: RUN_HEARTBEAT_CHECK_INTERVAL_MS,
           });
           let blockSeq = 0;
           let streamedTextBuffer = "";
-          let lastRunOutboundAtMs = Date.now();
+          let lastRunOutboundAtMs = runRegisteredAtMs;
+          let firstOutboundAtMs: number | null = null;
+          let firstContentAtMs: number | null = null;
+          let heartbeatSentCount = 0;
           let laneWaitNoticeSent = false;
           let heartbeatInFlight = false;
           let heartbeatTimer: NodeJS.Timeout | null = null;
           const emitStatus = payload.kind === 25802;
           const markRunOutbound = (): void => {
-            lastRunOutboundAtMs = Date.now();
+            const nowMs = Date.now();
+            if (firstOutboundAtMs === null) {
+              firstOutboundAtMs = nowMs;
+            }
+            lastRunOutboundAtMs = nowMs;
           };
           const safeSendStatus = async (
             state: "thinking" | "tool_use" | "done",
@@ -1412,6 +1449,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
           const safeSendThinkingDelta = async (
             phase: "start" | "update",
             text: string,
+            source?: string,
           ): Promise<void> => {
             if (runControl.cancelled || runControl.terminalEmitted) {
               return;
@@ -1420,6 +1458,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
             if (!normalizedText) {
               return;
             }
+            const normalizedSource = source?.trim().toLowerCase();
             const timestampMs = Date.now();
             try {
               await reply(
@@ -1428,8 +1467,10 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                   event: "thinking",
                   phase,
                   text: normalizedText,
+                  ...(normalizedSource ? { source: normalizedSource } : {}),
                   timestamp: Math.floor(timestampMs / 1000),
                   timestamp_ms: timestampMs,
+                  elapsed_ms: Math.max(0, timestampMs - runRegisteredAtMs),
                   run_id: payload.eventId,
                   session_id: sessionId,
                   trace_id: traceId,
@@ -1442,6 +1483,9 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                 NIP63_RESPONSE_KIND_DELTA,
               );
               markRunOutbound();
+              if (normalizedSource === "heartbeat") {
+                heartbeatSentCount += 1;
+              }
             } catch (error) {
               ctx.log?.debug?.(
                 `[${account.accountId}] Nostr thinking delta publish failed (${phase}) for ${payload.eventId}: ${String(error)}`,
@@ -1468,11 +1512,13 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                 return;
               }
               heartbeatInFlight = true;
-              void safeSendThinkingDelta("update", RUN_HEARTBEAT_THINKING_DELTA_TEXT).finally(
-                () => {
-                  heartbeatInFlight = false;
-                },
-              );
+              void safeSendThinkingDelta(
+                "update",
+                RUN_HEARTBEAT_THINKING_DELTA_TEXT,
+                "heartbeat",
+              ).finally(() => {
+                heartbeatInFlight = false;
+              });
             }, RUN_HEARTBEAT_CHECK_INTERVAL_MS);
           };
 
@@ -1505,7 +1551,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
               info: "run_started",
               progress: 0,
             });
-            await safeSendThinkingDelta("start", RUN_START_THINKING_DELTA_TEXT);
+            await safeSendThinkingDelta("start", RUN_START_THINKING_DELTA_TEXT, "run_start");
             startHeartbeat();
             const normalizeDispatchResult = (
               rawDispatchResult: unknown,
@@ -1564,6 +1610,9 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                     }
                     if (!shouldEmitTelemetry) {
                       return;
+                    }
+                    if (firstContentAtMs === null) {
+                      firstContentAtMs = Date.now();
                     }
                     if (info.kind === "final") {
                       try {
@@ -1663,7 +1712,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                     if (!reasoningText.length) {
                       return;
                     }
-                    await safeSendThinkingDelta("update", reasoningText);
+                    await safeSendThinkingDelta("update", reasoningText, "reasoning");
                   },
                   onCommandLaneWait: async (event) => {
                     traceRecorder.record({
@@ -1743,7 +1792,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
               );
             };
             if (!runControl.cancelled && !hasDispatchOutput()) {
-              await safeSendThinkingDelta("update", "retrying_response");
+              await safeSendThinkingDelta("update", "retrying_response", "retry");
               const retryDispatchStartedAt = Date.now();
               const retryRawDispatchResult = await dispatchReply();
               const retryDispatchResult = normalizeDispatchResult(retryRawDispatchResult);
@@ -1772,6 +1821,22 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
               pending_tool_calls: pendingToolCalls,
               dispatch_duration_ms: dispatchDurationMs,
               dispatch_attempts: dispatchAttempts,
+              register_to_first_outbound_ms:
+                firstOutboundAtMs === null
+                  ? null
+                  : Math.max(0, firstOutboundAtMs - runRegisteredAtMs),
+              register_to_first_content_ms:
+                firstContentAtMs === null
+                  ? null
+                  : Math.max(0, firstContentAtMs - runRegisteredAtMs),
+              register_to_terminal_ms: runControl.terminalEmitted
+                ? Math.max(0, Date.now() - runRegisteredAtMs)
+                : null,
+              heartbeat_sent_count: heartbeatSentCount,
+              heartbeat_interval_ms: RUN_HEARTBEAT_INTERVAL_MS,
+              model_provider: runModelSelection?.provider ?? null,
+              model_name: runModelSelection?.model ?? null,
+              model_think_level: runModelSelection?.thinkLevel ?? null,
             });
             ctx.log?.debug?.(
               `[${account.accountId}] Nostr dispatch settled for run ${payload.eventId}: queuedFinal=${dispatchResult.queuedFinal ? "yes" : "no"} counts=${JSON.stringify(dispatchResult.counts)} terminalEmitted=${runControl.terminalEmitted ? "yes" : "no"} cancelled=${runControl.cancelled ? "yes" : "no"} streamedTextLength=${streamedTextBuffer.length} pendingToolCalls=${pendingToolCalls} attempts=${dispatchAttempts} durationMs=${dispatchDurationMs}`,
