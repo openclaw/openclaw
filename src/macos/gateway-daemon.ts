@@ -147,7 +147,7 @@ async function main() {
     forceExitTimer = setTimeout(() => {
       defaultRuntime.error("gateway: shutdown timed out; exiting without full cleanup");
       cleanupSignals();
-      process.exit(0);
+      process.exit(1);
     }, forceExitMs);
 
     void (async () => {
