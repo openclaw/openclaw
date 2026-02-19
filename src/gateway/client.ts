@@ -21,6 +21,7 @@ import {
   type GatewayClientName,
 } from "../utils/message-channel.js";
 import { buildDeviceAuthPayload } from "./device-auth.js";
+import { isSecureWebSocketUrl } from "./net.js";
 import {
   type ConnectParams,
   type EventFrame,
@@ -107,6 +108,26 @@ export class GatewayClient {
     const url = this.opts.url ?? "ws://127.0.0.1:18789";
     if (this.opts.tlsFingerprint && !url.startsWith("wss://")) {
       this.opts.onConnectError?.(new Error("gateway tls fingerprint requires wss:// gateway url"));
+      return;
+    }
+
+    // Security check: block ALL plaintext ws:// to non-loopback addresses (CWE-319, CVSS 9.8)
+    // This protects both credentials AND chat/conversation data from MITM attacks.
+    // Device tokens may be loaded later in sendConnect(), so we block regardless of hasCredentials.
+    if (!isSecureWebSocketUrl(url)) {
+      // Safe hostname extraction - avoid throwing on malformed URLs in error path
+      let displayHost = url;
+      try {
+        displayHost = new URL(url).hostname || url;
+      } catch {
+        // Use raw URL if parsing fails
+      }
+      const error = new Error(
+        `SECURITY ERROR: Cannot connect to "${displayHost}" over plaintext ws://. ` +
+          "Both credentials and chat data would be exposed to network interception. " +
+          "Use wss:// for the gateway URL, or connect via SSH tunnel to localhost.",
+      );
+      this.opts.onConnectError?.(error);
       return;
     }
     // Allow node screen snapshots and other large responses.

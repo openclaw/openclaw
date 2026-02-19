@@ -86,6 +86,77 @@ function getLatestWs(): MockWebSocket {
   return ws;
 }
 
+describe("GatewayClient security checks", () => {
+  beforeEach(() => {
+    wsInstances.length = 0;
+  });
+
+  it("blocks ws:// to non-loopback addresses (CWE-319)", () => {
+    const onConnectError = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://remote.example.com:18789",
+      onConnectError,
+    });
+
+    client.start();
+
+    expect(onConnectError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("SECURITY ERROR"),
+      }),
+    );
+    expect(wsInstances.length).toBe(0); // No WebSocket created
+    client.stop();
+  });
+
+  it("handles malformed URLs gracefully without crashing", () => {
+    const onConnectError = vi.fn();
+    const client = new GatewayClient({
+      url: "not-a-valid-url",
+      onConnectError,
+    });
+
+    // Should not throw
+    expect(() => client.start()).not.toThrow();
+
+    expect(onConnectError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("SECURITY ERROR"),
+      }),
+    );
+    expect(wsInstances.length).toBe(0); // No WebSocket created
+    client.stop();
+  });
+
+  it("allows ws:// to loopback addresses", () => {
+    const onConnectError = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      onConnectError,
+    });
+
+    client.start();
+
+    expect(onConnectError).not.toHaveBeenCalled();
+    expect(wsInstances.length).toBe(1); // WebSocket created
+    client.stop();
+  });
+
+  it("allows wss:// to any address", () => {
+    const onConnectError = vi.fn();
+    const client = new GatewayClient({
+      url: "wss://remote.example.com:18789",
+      onConnectError,
+    });
+
+    client.start();
+
+    expect(onConnectError).not.toHaveBeenCalled();
+    expect(wsInstances.length).toBe(1); // WebSocket created
+    client.stop();
+  });
+});
+
 describe("GatewayClient close handling", () => {
   beforeEach(() => {
     wsInstances.length = 0;
