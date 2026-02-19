@@ -9,6 +9,7 @@ vi.mock("node:os", () => ({
 }));
 
 const {
+  classifyFromSddl,
   createIcaclsResetCommand,
   formatIcaclsResetCommand,
   formatWindowsAclSummary,
@@ -288,6 +289,128 @@ Successfully processed 1 files`;
       };
       const result = formatWindowsAclSummary(summary);
       expect(result).toBe("Everyone:(R), DOMAIN\\OtherUser:(M)");
+    });
+  });
+
+  describe("classifyFromSddl", () => {
+    it("classifies SDDL with trusted-only ACEs (SY + BA + user SID)", () => {
+      // Typical SDDL for a file restricted to SYSTEM + Administrators + current user
+      const sddl = "O:SYG:SYD:(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;S-1-5-21-123-456-789-1001)";
+      const result = classifyFromSddl(sddl);
+      expect(result).not.toBeNull();
+      expect(result!.untrustedWorld).toHaveLength(0);
+      expect(result!.untrustedGroup).toHaveLength(0);
+      expect(result!.trusted.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it("detects world-readable ACEs (WD = Everyone)", () => {
+      const sddl = "O:SYG:SYD:(A;;FA;;;SY)(A;;FR;;;WD)";
+      const result = classifyFromSddl(sddl);
+      expect(result).not.toBeNull();
+      expect(result!.untrustedWorld).toHaveLength(1);
+      expect(result!.untrustedWorld[0].principal).toBe("WD");
+    });
+
+    it("detects BUILTIN\\Users via SDDL abbreviation BU", () => {
+      const sddl = "O:SYG:SYD:(A;;FA;;;SY)(A;;FR;;;BU)";
+      const result = classifyFromSddl(sddl);
+      expect(result).not.toBeNull();
+      expect(result!.untrustedWorld).toHaveLength(1);
+    });
+
+    it("skips deny ACEs", () => {
+      const sddl = "O:SYG:SYD:(D;;FA;;;WD)(A;;FA;;;SY)";
+      const result = classifyFromSddl(sddl);
+      expect(result).not.toBeNull();
+      // Deny WD should be skipped, only SY remain
+      expect(result!.untrustedWorld).toHaveLength(0);
+      expect(result!.trusted).toHaveLength(1);
+    });
+
+    it("returns null for malformed SDDL without DACL", () => {
+      const result = classifyFromSddl("O:SYG:SY");
+      expect(result).toBeNull();
+    });
+
+    it("handles Creator Owner (CO) as trusted", () => {
+      const sddl = "O:SYG:SYD:(A;;FA;;;CO)";
+      const result = classifyFromSddl(sddl);
+      expect(result).not.toBeNull();
+      expect(result!.trusted).toHaveLength(1);
+    });
+  });
+
+  describe("SID-based principal classification", () => {
+    it("classifies raw SID S-1-5-18 (SYSTEM) as trusted", () => {
+      const entries: WindowsAclEntry[] = [
+        {
+          principal: "*S-1-5-18",
+          rights: ["F"],
+          rawRights: "(F)",
+          canRead: true,
+          canWrite: true,
+        },
+      ];
+      const summary = summarizeWindowsAcl(entries);
+      expect(summary.trusted).toHaveLength(1);
+    });
+
+    it("classifies raw SID S-1-5-32-544 (Administrators) as trusted", () => {
+      const entries: WindowsAclEntry[] = [
+        {
+          principal: "S-1-5-32-544",
+          rights: ["F"],
+          rawRights: "(F)",
+          canRead: true,
+          canWrite: true,
+        },
+      ];
+      const summary = summarizeWindowsAcl(entries);
+      expect(summary.trusted).toHaveLength(1);
+    });
+  });
+
+  describe("localized principal names (ru-RU regression)", () => {
+    it("SDDL fast path correctly identifies localized SYSTEM as trusted", async () => {
+      // Simulate ru-RU Windows: icacls shows "NT AUTHORITY\\СИСТЕМА" (Cyrillic)
+      // but SDDL always shows "SY" regardless of locale
+      const mockExec = vi.fn().mockImplementation((cmd: string) => {
+        if (cmd === "powershell") {
+          return Promise.resolve({
+            stdout: "O:SYG:SYD:(A;;FA;;;SY)(A;;FA;;;S-1-5-21-123-456-789-1001)",
+            stderr: "",
+          });
+        }
+        // icacls returns localized names
+        return Promise.resolve({
+          stdout: `C:\\test\\file.txt NT AUTHORITY\\СИСТЕМА:(F)\n                     BARSY\\karte:(F)`,
+          stderr: "",
+        });
+      });
+
+      const env = { USERNAME: "karte", USERDOMAIN: "BARSY" };
+      const result = await inspectWindowsAcl("C:\\test\\file.txt", { exec: mockExec, env });
+
+      expect(result.ok).toBe(true);
+      // SDDL-based classification should mark everything as trusted
+      expect(result.untrustedWorld).toHaveLength(0);
+      expect(result.untrustedGroup).toHaveLength(0);
+    });
+
+    it("falls back to icacls when PowerShell unavailable", async () => {
+      const mockExec = vi.fn().mockImplementation((cmd: string) => {
+        if (cmd === "powershell") {
+          return Promise.reject(new Error("powershell not found"));
+        }
+        return Promise.resolve({
+          stdout: `C:\\test\\file.txt BUILTIN\\Administrators:(F)`,
+          stderr: "",
+        });
+      });
+
+      const result = await inspectWindowsAcl("C:\\test\\file.txt", { exec: mockExec });
+      expect(result.ok).toBe(true);
+      expect(result.entries).toHaveLength(1);
     });
   });
 
