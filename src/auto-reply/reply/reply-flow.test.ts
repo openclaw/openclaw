@@ -8,7 +8,11 @@ import { finalizeInboundContext } from "./inbound-context.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { parseLineDirectives, hasLineDirectives } from "./line-directives.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
-import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
+import {
+  enqueueFollowupRun,
+  getFollowupQueueDepthByPrefix,
+  scheduleFollowupDrain,
+} from "./queue.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { createReplyToModeFilter, resolveReplyToMode } from "./reply-threading.js";
 
@@ -808,6 +812,35 @@ describe("followup queue deduplication", () => {
 });
 
 describe("followup queue collect routing", () => {
+  it("reports depth across route-partitioned queue keys", async () => {
+    const baseKey = `test-depth-route-prefix-${Date.now()}`;
+    const keyA = `${baseKey}::route:whatsapp|+1234567890||`;
+    const keyB = `${baseKey}::route:whatsapp|+1987654321||`;
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+    const done = createDeferred<void>();
+    let delivered = 0;
+    const runFollowup = async () => {
+      delivered += 1;
+      if (delivered >= 2) {
+        done.resolve();
+      }
+    };
+
+    enqueueFollowupRun(keyA, createRun({ prompt: "one", messageProvider: "whatsapp" }), settings);
+    enqueueFollowupRun(keyB, createRun({ prompt: "two", messageProvider: "whatsapp" }), settings);
+
+    expect(getFollowupQueueDepthByPrefix(baseKey)).toBe(2);
+
+    scheduleFollowupDrain(keyA, runFollowup);
+    scheduleFollowupDrain(keyB, runFollowup);
+    await done.promise;
+  });
+
   it("does not collect when routing metadata is missing for routable providers", async () => {
     const key = `test-collect-missing-routing-meta-${Date.now()}`;
     const calls: FollowupRun[] = [];

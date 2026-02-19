@@ -67,3 +67,18 @@ export function getFollowupQueueDepth(key: string): number {
   }
   return queue.items.length;
 }
+
+export function getFollowupQueueDepthByPrefix(baseKey: string): number {
+  const cleaned = baseKey.trim();
+  if (!cleaned) {
+    return 0;
+  }
+  let depth = 0;
+  const routePrefix = `${cleaned}::route:`;
+  for (const [key, queue] of FOLLOWUP_QUEUES) {
+    if (key === cleaned || key.startsWith(routePrefix)) {
+      depth += queue.items.length;
+    }
+  }
+  return depth;
+}
