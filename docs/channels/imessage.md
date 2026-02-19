@@ -103,6 +103,8 @@ exec ssh -T gateway-host imsg "$@"
 ```
 
     If `remoteHost` is not set, OpenClaw attempts to auto-detect it by parsing the SSH wrapper script.
+    `remoteHost` must be `host` or `user@host` (no spaces or SSH options).
+    OpenClaw uses strict host-key checking for SCP, so the relay host key must already exist in `~/.ssh/known_hosts`.
 
   </Tab>
 </Tabs>
@@ -224,6 +226,7 @@ exec ssh -T bot@mac-mini.tailnet-1234.ts.net imsg "$@"
 ```
 
     Use SSH keys so both SSH and SCP are non-interactive.
+    Ensure the host key is trusted first (for example `ssh bot@mac-mini.tailnet-1234.ts.net`) so `known_hosts` is populated.
 
   </Accordion>
 
@@ -241,6 +244,7 @@ exec ssh -T bot@mac-mini.tailnet-1234.ts.net imsg "$@"
   <Accordion title="Attachments and media">
     - inbound attachment ingestion is optional: `channels.imessage.includeAttachments`
     - remote attachment paths can be fetched via SCP when `remoteHost` is set
+    - SCP uses strict host-key checking (`StrictHostKeyChecking=yes`)
     - outbound media size uses `channels.imessage.mediaMaxMb` (default 16 MB)
   </Accordion>
 
@@ -326,6 +330,7 @@ openclaw channels status --probe
 
     - `channels.imessage.remoteHost`
     - SSH/SCP key auth from the gateway host
+    - host key exists in `~/.ssh/known_hosts` on the gateway host
     - remote path readability on the Mac running Messages
 
   </Accordion>
