@@ -216,10 +216,15 @@ export async function runOpenAiEmbeddingBatches(params: {
 
       const completed =
         batchInfo.status === "completed"
-          ? {
-              outputFileId: batchInfo.output_file_id ?? "",
-              errorFileId: batchInfo.error_file_id ?? undefined,
-            }
+          ? (() => {
+              if (!batchInfo.output_file_id) {
+                throw new Error(`openai batch ${batchInfo.id} completed without output file id`);
+              }
+              return {
+                outputFileId: batchInfo.output_file_id,
+                errorFileId: batchInfo.error_file_id ?? undefined,
+              };
+            })()
           : await waitForOpenAiBatch({
               openAi: params.openAi,
               batchId: batchInfo.id,
