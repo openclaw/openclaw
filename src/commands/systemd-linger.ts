@@ -1,6 +1,7 @@
 import {
   enableSystemdUserLinger,
   isSystemdUserServiceAvailable,
+  isSystemLevelService,
   readSystemdUserLingerStatus,
 } from "../daemon/systemd.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -24,6 +25,10 @@ export async function ensureSystemdUserLingerInteractive(params: {
     return;
   }
   if (params.prompt === false) {
+    return;
+  }
+  // System-level services don't need linger (managed by systemd directly)
+  if (isSystemLevelService()) {
     return;
   }
   const env = params.env ?? process.env;
@@ -94,6 +99,10 @@ export async function ensureSystemdUserLingerNonInteractive(params: {
   env?: NodeJS.ProcessEnv;
 }): Promise<void> {
   if (process.platform !== "linux") {
+    return;
+  }
+  // System-level services don't need linger (managed by systemd directly)
+  if (isSystemLevelService()) {
     return;
   }
   const env = params.env ?? process.env;

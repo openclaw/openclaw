@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const execFileMock = vi.hoisted(() => vi.fn());
 
@@ -10,6 +10,7 @@ import { splitArgsPreservingQuotes } from "./arg-split.js";
 import { parseSystemdExecStart } from "./systemd-unit.js";
 import {
   isSystemdUserServiceAvailable,
+  isSystemLevelService,
   parseSystemdShow,
   restartSystemdService,
   resolveSystemdUserUnitPath,
@@ -19,6 +20,10 @@ import {
 describe("systemd availability", () => {
   beforeEach(() => {
     execFileMock.mockReset();
+  });
+
+  afterEach(() => {
+    delete process.env.OPENCLAW_SYSTEMD_SYSTEM;
   });
 
   it("returns true when systemctl --user succeeds", async () => {
@@ -39,6 +44,46 @@ describe("systemd availability", () => {
       cb(err, "", "");
     });
     await expect(isSystemdUserServiceAvailable()).resolves.toBe(false);
+  });
+
+  it("returns true for system-level service even when user bus fails", async () => {
+    process.env.OPENCLAW_SYSTEMD_SYSTEM = "1";
+    execFileMock.mockImplementation((_cmd, _args, _opts, cb) => {
+      // System-level: systemctl status (no --user) exits 3 when no units loaded
+      const err = new Error("exit code 3") as Error & {
+        stderr?: string;
+        code?: number;
+      };
+      err.code = 3;
+      err.stderr = "";
+      cb(err, "", "");
+    });
+    await expect(isSystemdUserServiceAvailable()).resolves.toBe(true);
+  });
+});
+
+describe("isSystemLevelService", () => {
+  afterEach(() => {
+    delete process.env.OPENCLAW_SYSTEMD_SYSTEM;
+  });
+
+  it("returns false by default", () => {
+    expect(isSystemLevelService()).toBe(false);
+  });
+
+  it("returns true when OPENCLAW_SYSTEMD_SYSTEM=1", () => {
+    process.env.OPENCLAW_SYSTEMD_SYSTEM = "1";
+    expect(isSystemLevelService()).toBe(true);
+  });
+
+  it("returns true when OPENCLAW_SYSTEMD_SYSTEM=true", () => {
+    process.env.OPENCLAW_SYSTEMD_SYSTEM = "true";
+    expect(isSystemLevelService()).toBe(true);
+  });
+
+  it("returns false when OPENCLAW_SYSTEMD_SYSTEM=0", () => {
+    process.env.OPENCLAW_SYSTEMD_SYSTEM = "0";
+    expect(isSystemLevelService()).toBe(false);
   });
 });
 
@@ -84,6 +129,16 @@ describe("resolveSystemdUserUnitPath", () => {
     expect(resolveSystemdUserUnitPath(env)).toBe(
       "/home/test/.config/systemd/user/custom-unit.service",
     );
+  });
+
+  it("resolves to /etc/systemd/system/ for system-level services", () => {
+    process.env.OPENCLAW_SYSTEMD_SYSTEM = "1";
+    const env = {
+      HOME: "/home/test",
+      OPENCLAW_SYSTEMD_UNIT: "openclaw",
+    };
+    expect(resolveSystemdUserUnitPath(env)).toBe("/etc/systemd/system/openclaw.service");
+    delete process.env.OPENCLAW_SYSTEMD_SYSTEM; // also cleaned by describe-level afterEach if added
   });
 
   it("handles OPENCLAW_SYSTEMD_UNIT with .service suffix", () => {
