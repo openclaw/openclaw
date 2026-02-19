@@ -3,6 +3,7 @@ import type { SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../config/config.js";
 import { log } from "./logger.js";
+import { createToolArgsNormalizerWrapper } from "./stream-tool-args-normalizer.js";
 
 const OPENROUTER_APP_HEADERS: Record<string, string> = {
   "HTTP-Referer": "https://openclaw.ai",
@@ -338,4 +339,9 @@ export function applyExtraParamsToAgent(
   // Force `store=true` for direct OpenAI/OpenAI Codex providers so multi-turn
   // server-side conversation state is preserved.
   agent.streamFn = createOpenAIResponsesStoreWrapper(agent.streamFn);
+
+  // Normalize tool call arguments for providers that return objects instead of JSON strings.
+  // Applied universally as a safety net — no-op when arguments are already correct.
+  // See: https://github.com/openclaw/openclaw/issues/19261
+  agent.streamFn = createToolArgsNormalizerWrapper(agent.streamFn);
 }

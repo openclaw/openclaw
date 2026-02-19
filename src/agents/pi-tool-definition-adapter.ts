@@ -4,7 +4,7 @@ import type {
   AgentToolUpdateCallback,
 } from "@mariozechner/pi-agent-core";
 import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
-import { logDebug, logError } from "../logger.js";
+import { logDebug, logError, logWarn } from "../logger.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { isPlainObject } from "../utils.js";
 import type { ClientToolDefinition } from "./pi-embedded-runner/run/params.js";
@@ -99,6 +99,21 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
         const { toolCallId, params, onUpdate, signal } = splitToolExecuteArgs(args);
         let executeParams = params;
+        // Warn if params are empty but tool has required properties — likely a streaming parse bug.
+        // See: https://github.com/openclaw/openclaw/issues/19261
+        if (
+          executeParams != null &&
+          typeof executeParams === "object" &&
+          !Array.isArray(executeParams) &&
+          Object.keys(executeParams as Record<string, unknown>).length === 0 &&
+          tool.parameters?.required &&
+          (tool.parameters.required as unknown[]).length > 0
+        ) {
+          logWarn(
+            `[tools] ${normalizedName}: received empty params {} but tool has required properties. ` +
+              `This may indicate a provider streaming bug. See: https://github.com/openclaw/openclaw/issues/19261`,
+          );
+        }
         try {
           if (!beforeHookWrapped) {
             const hookOutcome = await runBeforeToolCallHook({
