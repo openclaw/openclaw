@@ -345,7 +345,10 @@ export const agentHandlers: GatewayRequestHandlers = {
       }
     }
 
-    const deliver = request.deliver === true && resolvedChannel !== INTERNAL_MESSAGE_CHANNEL;
+    const deliver =
+      (request.deliver === true ||
+        !!(resolvedTo && isDeliverableMessageChannel(resolvedChannel))) &&
+      resolvedChannel !== INTERNAL_MESSAGE_CHANNEL;
 
     const accepted = {
       runId,
