@@ -145,3 +145,29 @@ export async function ensureGatewayStartupAuth(params: {
     persistedGeneratedToken: persist,
   };
 }
+
+export function assertHooksTokenSeparateFromGatewayAuth(params: {
+  cfg: OpenClawConfig;
+  auth: ResolvedGatewayAuth;
+}): void {
+  if (params.cfg.hooks?.enabled !== true) {
+    return;
+  }
+  const hooksToken = typeof params.cfg.hooks.token === "string" ? params.cfg.hooks.token.trim() : "";
+  if (!hooksToken) {
+    return;
+  }
+  const gatewayToken =
+    params.auth.mode === "token" && typeof params.auth.token === "string"
+      ? params.auth.token.trim()
+      : "";
+  if (!gatewayToken) {
+    return;
+  }
+  if (hooksToken !== gatewayToken) {
+    return;
+  }
+  throw new Error(
+    "Invalid config: hooks.token must not match gateway auth token. Set a distinct hooks.token for hook ingress.",
+  );
+}
