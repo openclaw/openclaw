@@ -234,12 +234,17 @@ function buildTelegramThreadReplyParams(params: {
   replyToMessageId?: number;
   quoteText?: string;
 }): Record<string, unknown> {
-  const messageThreadId =
-    params.messageThreadId != null ? params.messageThreadId : params.targetMessageThreadId;
-  const threadScope = params.chatType === "direct" ? ("dm" as const) : ("forum" as const);
-  // Never blanket-strip DM message_thread_id by chat-id sign.
-  // Telegram supports DM topics; stripping silently misroutes topic replies.
-  // Keep thread id and rely on thread-not-found retry fallback for plain DMs.
+  // For private chats, only honour the thread ID embedded in the target address
+  // (e.g., "123456789:topic:42" for DM topics).  The opts-level messageThreadId
+  // often originates from reply-context that plain private chats don't support,
+  // causing "400: Bad Request: message thread not found" and silent message
+  // drops (#17242).  Target-embedded IDs are kept so DM topic routing (Bot API
+  // 9.3, #18974) continues to work.
+  const isPrivateChat = params.chatType === "direct";
+  const messageThreadId = isPrivateChat
+    ? params.targetMessageThreadId
+    : (params.messageThreadId ?? params.targetMessageThreadId);
+  const threadScope = isPrivateChat ? ("dm" as const) : ("forum" as const);
   const threadSpec =
     messageThreadId != null ? { id: messageThreadId, scope: threadScope } : undefined;
   const threadIdParams = buildTelegramThreadParams(threadSpec);

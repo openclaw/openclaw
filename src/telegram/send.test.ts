@@ -869,7 +869,7 @@ describe("sendMessageTelegram", () => {
     });
   });
 
-  it("keeps message_thread_id for private chat topic sends (#18974)", async () => {
+  it("skips opts-level message_thread_id for private chats (#17242)", async () => {
     const chatId = "123456789";
     const sendMessage = vi.fn().mockResolvedValue({
       message_id: 56,
@@ -885,7 +885,30 @@ describe("sendMessageTelegram", () => {
       messageThreadId: 271,
     });
 
+    // opts.messageThreadId is skipped for private chats — it comes from
+    // reply context that plain DMs don't support.
     expect(sendMessage).toHaveBeenCalledWith(chatId, "hello private", {
+      parse_mode: "HTML",
+    });
+  });
+
+  it("preserves target-embedded message_thread_id for DM topics (#18974)", async () => {
+    const chatId = "123456789";
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 57,
+      chat: { id: chatId },
+    });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    // Topic embedded in target address — used for DM topic routing (Bot API 9.3)
+    await sendMessageTelegram(`${chatId}:topic:271`, "hello topic", {
+      token: "tok",
+      api,
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(chatId, "hello topic", {
       parse_mode: "HTML",
       message_thread_id: 271,
     });
@@ -944,16 +967,12 @@ describe("sendMessageTelegram", () => {
     expect(res.messageId).toBe("58");
   });
 
-  it("retries private chat sends without message_thread_id on thread-not-found", async () => {
+  it("private chat sends skip opts message_thread_id so thread-not-found retry is unnecessary (#17242)", async () => {
     const chatId = "123456789";
-    const threadErr = new Error("400: Bad Request: message thread not found");
-    const sendMessage = vi
-      .fn()
-      .mockRejectedValueOnce(threadErr)
-      .mockResolvedValueOnce({
-        message_id: 59,
-        chat: { id: chatId },
-      });
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 59,
+      chat: { id: chatId },
+    });
     const api = { sendMessage } as unknown as {
       sendMessage: typeof sendMessage;
     };
@@ -964,11 +983,10 @@ describe("sendMessageTelegram", () => {
       messageThreadId: 271,
     });
 
-    expect(sendMessage).toHaveBeenNthCalledWith(1, chatId, "hello private", {
-      parse_mode: "HTML",
-      message_thread_id: 271,
-    });
-    expect(sendMessage).toHaveBeenNthCalledWith(2, chatId, "hello private", {
+    // Private chat sends skip opts-level message_thread_id entirely,
+    // so the thread-not-found fallback is never needed.
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledWith(chatId, "hello private", {
       parse_mode: "HTML",
     });
     expect(res.messageId).toBe("59");
@@ -992,7 +1010,7 @@ describe("sendMessageTelegram", () => {
   });
 
   it("does not retry without message_thread_id on chat-not-found", async () => {
-    const chatId = "123456789";
+    const chatId = "-1001234567890";
     const chatErr = new Error("400: Bad Request: chat not found");
     const sendMessage = vi.fn().mockRejectedValueOnce(chatErr);
     const api = { sendMessage } as unknown as {
@@ -1000,7 +1018,7 @@ describe("sendMessageTelegram", () => {
     };
 
     await expect(
-      sendMessageTelegram(chatId, "hello private", {
+      sendMessageTelegram(chatId, "hello group", {
         token: "tok",
         api,
         messageThreadId: 271,
@@ -1008,7 +1026,7 @@ describe("sendMessageTelegram", () => {
     ).rejects.toThrow(/chat not found/i);
 
     expect(sendMessage).toHaveBeenCalledTimes(1);
-    expect(sendMessage).toHaveBeenCalledWith(chatId, "hello private", {
+    expect(sendMessage).toHaveBeenCalledWith(chatId, "hello group", {
       parse_mode: "HTML",
       message_thread_id: 271,
     });
@@ -1276,6 +1294,27 @@ describe("sendStickerTelegram", () => {
     });
 
     expect(sendSticker).toHaveBeenCalledWith(chatId, "fileId123", undefined);
+  });
+
+  it("skips opts-level message_thread_id for sticker sends to private chats (#17242)", async () => {
+    const chatId = "123456789";
+    const sendSticker = vi.fn().mockResolvedValue({
+      message_id: 110,
+      chat: { id: chatId },
+    });
+    const api = { sendSticker } as unknown as {
+      sendSticker: typeof sendSticker;
+    };
+
+    const res = await sendStickerTelegram(chatId, "fileId123", {
+      token: "tok",
+      api,
+      messageThreadId: 271,
+    });
+
+    // opts.messageThreadId is skipped for private chats.
+    expect(sendSticker).toHaveBeenCalledWith(chatId, "fileId123", undefined);
+    expect(res.messageId).toBe("110");
   });
 });
 
