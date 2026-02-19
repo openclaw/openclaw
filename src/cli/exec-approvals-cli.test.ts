@@ -24,6 +24,10 @@ const localSnapshot = {
   file: { version: 1, agents: {} },
 };
 
+function resetLocalSnapshot() {
+  localSnapshot.file = { version: 1, agents: {} };
+}
+
 vi.mock("./gateway-rpc.js", () => ({
   callGatewayFromCli: (method: string, opts: unknown, params?: unknown) =>
     callGatewayFromCli(method, opts, params),
@@ -64,6 +68,7 @@ describe("exec approvals CLI", () => {
   };
 
   it("routes get command to local, gateway, and node modes", async () => {
+    resetLocalSnapshot();
     resetRuntimeCapture();
     callGatewayFromCli.mockClear();
 
@@ -91,6 +96,7 @@ describe("exec approvals CLI", () => {
   });
 
   it("defaults allowlist add to wildcard agent", async () => {
+    resetLocalSnapshot();
     resetRuntimeCapture();
     callGatewayFromCli.mockClear();
 
@@ -115,5 +121,35 @@ describe("exec approvals CLI", () => {
         }),
       }),
     );
+  });
+
+  it("removes wildcard allowlist entry and prunes empty agent", async () => {
+    resetLocalSnapshot();
+    localSnapshot.file = {
+      version: 1,
+      agents: {
+        "*": {
+          allowlist: [{ pattern: "/usr/bin/uname", lastUsedAt: Date.now() }],
+        },
+      },
+    };
+    resetRuntimeCapture();
+    callGatewayFromCli.mockClear();
+
+    const saveExecApprovals = vi.mocked(execApprovals.saveExecApprovals);
+    saveExecApprovals.mockClear();
+
+    const program = createProgram();
+    await program.parseAsync(["approvals", "allowlist", "remove", "/usr/bin/uname"], {
+      from: "user",
+    });
+
+    expect(saveExecApprovals).toHaveBeenCalledWith(
+      expect.objectContaining({
+        version: 1,
+        agents: undefined,
+      }),
+    );
+    expect(runtimeErrors).toHaveLength(0);
   });
 });
