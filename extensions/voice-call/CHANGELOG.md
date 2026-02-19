@@ -82,7 +82,7 @@
 
 ### Changes
 
-- Breaking: voice-call TTS now uses core `messages.tts` (plugin TTS config deep‑merges with core).
+- Breaking: voice-call TTS now uses only `plugins.entries.voice-call.config.tts` (it no longer reads or merges core `messages.tts`).
 - Telephony TTS supports OpenAI + ElevenLabs; Edge TTS is ignored for calls.
 - Removed legacy `tts.model`/`tts.voice`/`tts.instructions` plugin fields.
 - Ngrok free-tier bypass renamed to `tunnel.allowNgrokFreeTierLoopbackBypass` and gated to loopback + `tunnel.provider="ngrok"`.

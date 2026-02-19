@@ -208,9 +208,13 @@ export const VoiceCallStreamingConfigSchema = z
     /** Enable real-time audio streaming (requires WebSocket support) */
     enabled: z.boolean().default(false),
     /** STT provider for real-time transcription */
-    sttProvider: z.enum(["openai-realtime"]).default("openai-realtime"),
+    sttProvider: z.enum(["openai-realtime", "elevenlabs-scribe"]).default("openai-realtime"),
     /** OpenAI API key for Realtime API (uses OPENAI_API_KEY env if not set) */
     openaiApiKey: z.string().min(1).optional(),
+    /** ElevenLabs API key for Scribe STT (uses ELEVENLABS_API_KEY env if not set) */
+    elevenlabsApiKey: z.string().min(1).optional(),
+    /** ElevenLabs Scribe language code (default: auto-detect) */
+    elevenlabsLanguageCode: z.string().min(1).optional(),
     /** OpenAI transcription model (default: gpt-4o-transcribe) */
     sttModel: z.string().min(1).default("gpt-4o-transcribe"),
     /** VAD silence duration in ms before considering speech ended */
@@ -317,20 +321,36 @@ export const VoiceCallConfigSchema = z
     /** STT configuration */
     stt: SttConfigSchema,
 
-    /** TTS override (deep-merges with core messages.tts) */
+    /** TTS config for voice calls (does NOT read or merge core messages.tts) */
     tts: TtsConfigSchema,
 
     /** Store path for call logs */
     store: z.string().optional(),
 
+    /** Agent ID for voice responses (default: "main"). Use a different agent for custom personality/skills. */
+    responseAgent: z.string().optional(),
+
     /** Model for generating voice responses (e.g., "anthropic/claude-sonnet-4", "openai/gpt-4o") */
-    responseModel: z.string().default("openai/gpt-4o-mini"),
+    responseModel: z.string().optional(),
 
     /** System prompt for voice responses */
     responseSystemPrompt: z.string().optional(),
 
     /** Timeout for response generation in ms (default 30s) */
     responseTimeoutMs: z.number().int().positive().default(30000),
+
+    /** Silence filler — plays ambient SFX while agent is working */
+    silenceFiller: z
+      .object({
+        /** Enable/disable silence filler (default: true when streaming enabled) */
+        enabled: z.boolean().optional(),
+        /** Milliseconds of silence before filler starts (default: 3500) */
+        thresholdMs: z.number().int().positive().optional(),
+        /** SFX set: "typing" (keyboard sounds) or "processing" (digital hum) */
+        sfxSet: z.enum(["typing", "processing"]).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 

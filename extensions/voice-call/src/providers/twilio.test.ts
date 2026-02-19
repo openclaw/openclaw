@@ -30,9 +30,9 @@ describe("TwilioProvider", () => {
 
     const result = provider.parseWebhookEvent(ctx);
 
-    expect(result.providerResponseBody).toContain(STREAM_URL);
-    expect(result.providerResponseBody).toContain('<Parameter name="token" value="');
+    expect(result.providerResponseBody).toContain(`url="${STREAM_URL}"`);
     expect(result.providerResponseBody).toContain("<Connect>");
+    expect(result.providerResponseBody).toContain('<Parameter name="token"');
   });
 
   it("returns empty TwiML for status callbacks", () => {
@@ -55,8 +55,8 @@ describe("TwilioProvider", () => {
 
     const result = provider.parseWebhookEvent(ctx);
 
-    expect(result.providerResponseBody).toContain(STREAM_URL);
-    expect(result.providerResponseBody).toContain('<Parameter name="token" value="');
+    expect(result.providerResponseBody).toContain(`url="${STREAM_URL}"`);
     expect(result.providerResponseBody).toContain("<Connect>");
+    expect(result.providerResponseBody).toContain('<Parameter name="token"');
   });
 });

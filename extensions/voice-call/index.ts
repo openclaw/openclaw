@@ -77,7 +77,7 @@ const voiceCallConfigSchema = {
     "streaming.streamPath": { label: "Media Stream Path", advanced: true },
     "tts.provider": {
       label: "TTS Provider Override",
-      help: "Deep-merges with messages.tts (Edge is ignored for calls).",
+      help: "Used for voice-call TTS only (does not read or merge messages.tts). Edge is ignored for calls.",
       advanced: true,
     },
     "tts.openai.model": { label: "OpenAI TTS Model", advanced: true },

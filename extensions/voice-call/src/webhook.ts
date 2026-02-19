@@ -12,8 +12,10 @@ import type { CallManager } from "./manager.js";
 import type { MediaStreamConfig } from "./media-stream.js";
 import { MediaStreamHandler } from "./media-stream.js";
 import type { VoiceCallProvider } from "./providers/base.js";
+import { ElevenLabsScribeSTTProvider } from "./providers/stt-elevenlabs-scribe.js";
 import { OpenAIRealtimeSTTProvider } from "./providers/stt-openai-realtime.js";
 import type { TwilioProvider } from "./providers/twilio.js";
+import { SilenceFiller } from "./silence-filler.js";
 import type { NormalizedEvent, WebhookContext } from "./types.js";
 
 const MAX_WEBHOOK_BODY_BYTES = 1024 * 1024;
@@ -32,6 +34,12 @@ export class VoiceCallWebhookServer {
 
   /** Media stream handler for bidirectional audio (when streaming enabled) */
   private mediaStreamHandler: MediaStreamHandler | null = null;
+
+  /** Silence filler — plays ambient SFX while agent is working */
+  private silenceFiller: SilenceFiller | null = null;
+
+  /** Maps callSid → streamSid for silence filler routing */
+  private callStreamSids = new Map<string, string>();
 
   constructor(
     config: VoiceCallConfig,
@@ -58,22 +66,53 @@ export class VoiceCallWebhookServer {
   }
 
   /**
-   * Initialize media streaming with OpenAI Realtime STT.
+   * Initialize media streaming with configurable STT provider.
    */
   private initializeMediaStreaming(): void {
-    const apiKey = this.config.streaming?.openaiApiKey || process.env.OPENAI_API_KEY;
+    const sttProviderType = this.config.streaming?.sttProvider ?? "openai-realtime";
 
-    if (!apiKey) {
-      console.warn("[voice-call] Streaming enabled but no OpenAI API key found");
-      return;
+    let sttProvider: OpenAIRealtimeSTTProvider | ElevenLabsScribeSTTProvider;
+
+    if (sttProviderType === "elevenlabs-scribe") {
+      const apiKey =
+        this.config.streaming?.elevenlabsApiKey ||
+        this.config.tts?.elevenlabs?.apiKey ||
+        process.env.ELEVENLABS_API_KEY;
+
+      if (!apiKey) {
+        console.warn(
+          "[voice-call] Streaming enabled but no ElevenLabs API key found for Scribe STT",
+        );
+        return;
+      }
+
+      sttProvider = new ElevenLabsScribeSTTProvider({
+        apiKey,
+        languageCode: this.config.streaming?.elevenlabsLanguageCode,
+        vadSilenceThresholdSecs: this.config.streaming?.silenceDurationMs
+          ? this.config.streaming.silenceDurationMs / 1000
+          : undefined,
+        vadThreshold: this.config.streaming?.vadThreshold,
+      });
+
+      console.log("[voice-call] Using ElevenLabs Scribe v2 for STT");
+    } else {
+      const apiKey = this.config.streaming?.openaiApiKey || process.env.OPENAI_API_KEY;
+
+      if (!apiKey) {
+        console.warn("[voice-call] Streaming enabled but no OpenAI API key found");
+        return;
+      }
+
+      sttProvider = new OpenAIRealtimeSTTProvider({
+        apiKey,
+        model: this.config.streaming?.sttModel,
+        silenceDurationMs: this.config.streaming?.silenceDurationMs,
+        vadThreshold: this.config.streaming?.vadThreshold,
+      });
+
+      console.log("[voice-call] Using OpenAI Realtime for STT");
     }
-
-    const sttProvider = new OpenAIRealtimeSTTProvider({
-      apiKey,
-      model: this.config.streaming?.sttModel,
-      silenceDurationMs: this.config.streaming?.silenceDurationMs,
-      vadThreshold: this.config.streaming?.vadThreshold,
-    });
 
     const streamConfig: MediaStreamConfig = {
       sttProvider,
@@ -128,12 +167,23 @@ export class VoiceCallWebhookServer {
         }
       },
       onSpeechStart: (providerCallId) => {
-        if (this.provider.name === "twilio") {
-          (this.provider as TwilioProvider).clearTtsQueue(providerCallId);
+        // Only stop silence filler on VAD speech start (not TTS — too noise-sensitive)
+        const streamSid = this.callStreamSids.get(providerCallId);
+        if (streamSid) {
+          this.silenceFiller?.stop(streamSid);
         }
       },
       onPartialTranscript: (callId, partial) => {
         console.log(`[voice-call] Partial for ${callId}: ${partial}`);
+        // Barge-in: clear TTS when actual speech is recognized (not just VAD noise)
+        if (this.provider.name === "twilio") {
+          (this.provider as TwilioProvider).clearTtsQueue(callId);
+        }
+        // Also stop silence filler on partial transcript
+        const streamSid = this.callStreamSids.get(callId);
+        if (streamSid) {
+          this.silenceFiller?.stop(streamSid);
+        }
       },
       onConnect: (callId, streamSid) => {
         console.log(`[voice-call] Media stream connected: ${callId} -> ${streamSid}`);
@@ -141,6 +191,8 @@ export class VoiceCallWebhookServer {
         if (this.provider.name === "twilio") {
           (this.provider as TwilioProvider).registerCallStream(callId, streamSid);
         }
+        // Track for silence filler
+        this.callStreamSids.set(callId, streamSid);
 
         // Speak initial message if one was provided when call was initiated
         // Use setTimeout to allow stream setup to complete
@@ -148,7 +200,7 @@ export class VoiceCallWebhookServer {
           this.manager.speakInitialMessage(callId).catch((err) => {
             console.warn(`[voice-call] Failed to speak initial message:`, err);
           });
-        }, 500);
+        }, 100);
       },
       onDisconnect: (callId) => {
         console.log(`[voice-call] Media stream disconnected: ${callId}`);
@@ -166,10 +218,21 @@ export class VoiceCallWebhookServer {
         if (this.provider.name === "twilio") {
           (this.provider as TwilioProvider).unregisterCallStream(callId);
         }
+        // Clean up silence filler
+        const streamSid = this.callStreamSids.get(callId);
+        if (streamSid) {
+          this.silenceFiller?.stop(streamSid);
+        }
+        this.callStreamSids.delete(callId);
       },
     };
 
     this.mediaStreamHandler = new MediaStreamHandler(streamConfig);
+    this.silenceFiller = new SilenceFiller(this.mediaStreamHandler, {
+      thresholdMs: this.config.silenceFiller?.thresholdMs,
+      sfxSet: this.config.silenceFiller?.sfxSet,
+      enabled: this.config.silenceFiller?.enabled,
+    });
     console.log("[voice-call] Media streaming initialized");
   }
 
@@ -384,6 +447,14 @@ export class VoiceCallWebhookServer {
       return;
     }
 
+    // Start silence filler while waiting for the LLM / tool calls
+    const streamSid = call.providerCallId
+      ? this.callStreamSids.get(call.providerCallId)
+      : undefined;
+    if (streamSid) {
+      this.silenceFiller?.start(streamSid);
+    }
+
     try {
       const { generateVoiceResponse } = await import("./response-generator.js");
 
@@ -396,6 +467,11 @@ export class VoiceCallWebhookServer {
         userMessage,
       });
 
+      // Stop filler before speaking the response
+      if (streamSid) {
+        this.silenceFiller?.stop(streamSid);
+      }
+
       if (result.error) {
         console.error(`[voice-call] Response generation error: ${result.error}`);
         return;
@@ -404,8 +480,28 @@ export class VoiceCallWebhookServer {
       if (result.text) {
         console.log(`[voice-call] AI response: "${result.text}"`);
         await this.manager.speak(callId, result.text);
+
+        if (result.endCall) {
+          // Agent requested hangup — give TTS a moment to finish, then hang up
+          console.log(`[voice-call] Agent requested end_call for ${callId}`);
+          setTimeout(() => {
+            this.manager.endCall(callId).catch((err: unknown) => {
+              console.warn(`[voice-call] Hangup failed:`, err);
+            });
+          }, 1000);
+          return;
+        }
+
+        // Restart filler after speaking (in case next turn also needs tools)
+        if (streamSid) {
+          this.silenceFiller?.start(streamSid);
+        }
       }
     } catch (err) {
+      // Stop filler on error too
+      if (streamSid) {
+        this.silenceFiller?.stop(streamSid);
+      }
       console.error(`[voice-call] Auto-response error:`, err);
     }
   }
