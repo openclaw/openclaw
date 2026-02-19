@@ -668,7 +668,7 @@ export async function runHeartbeatOnce(opts: {
     To: sender,
     Provider: hasExecCompletion ? "exec-event" : hasCronEvents ? "cron-event" : "heartbeat",
     SessionKey: sessionKey,
-    AccountId: delivery.accountId,
+    AccountId: delivery.reason !== "unknown-account" ? delivery.accountId : undefined,
   };
   if (!visibility.showAlerts && !visibility.showOk && !visibility.useIndicator) {
     emitHeartbeatEvent({
