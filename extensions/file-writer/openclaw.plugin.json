@@ -1,0 +1,16 @@
+{
+  "id": "file-writer",
+  "name": "File Writer",
+  "description": "Write text content to temporary files, bypassing shell escaping issues when passing long text to CLI tools.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "allowedDirs": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Additional directories to allow writes to (beyond /tmp and ~/.cache)."
+      }
+    }
+  }
+}
