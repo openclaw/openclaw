@@ -1,5 +1,11 @@
 export type CmdSetAssignment = { key: string; value: string };
 
+export function assertNoCmdLineBreak(value: string, field: string): void {
+  if (/[\r\n]/.test(value)) {
+    throw new Error(`${field} cannot contain CR or LF in Windows task scripts.`);
+  }
+}
+
 function escapeCmdSetAssignmentComponent(value: string): string {
   return value.replace(/\^/g, "^^").replace(/%/g, "%%").replace(/!/g, "^!").replace(/"/g, '^"');
 }
@@ -50,6 +56,8 @@ export function parseCmdSetAssignment(line: string): CmdSetAssignment | null {
 }
 
 export function renderCmdSetAssignment(key: string, value: string): string {
+  assertNoCmdLineBreak(key, "Environment variable name");
+  assertNoCmdLineBreak(value, "Environment variable value");
   const escapedKey = escapeCmdSetAssignmentComponent(key);
   const escapedValue = escapeCmdSetAssignmentComponent(value);
   return `set "${escapedKey}=${escapedValue}"`;
