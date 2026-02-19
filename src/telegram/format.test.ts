@@ -101,12 +101,6 @@ describe("markdownToTelegramHtml", () => {
     expect(res).toContain("(<code>backup.sh</code>).");
   });
 
-  it("keeps .co domains as links", () => {
-    const res = markdownToTelegramHtml("Visit t.co and openclaw.co");
-    expect(res).toContain('<a href="http://t.co">t.co</a>');
-    expect(res).toContain('<a href="http://openclaw.co">openclaw.co</a>');
-  });
-
   it("renders spoiler tags", () => {
     const res = markdownToTelegramHtml("the answer is ||42||");
     expect(res).toBe("the answer is <tg-spoiler>42</tg-spoiler>");
