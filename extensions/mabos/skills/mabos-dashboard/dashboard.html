@@ -352,7 +352,175 @@
 
 <script src="mock-data.js"></script>
 <script>
-const D = window.MABOS_DATA || window.MABOS_MOCK;
+// ── Live Data Loader ──
+// Fetches from MABOS API endpoints and assembles window.MABOS_DATA.
+// Falls back silently to window.MABOS_MOCK when the API is unavailable.
+async function fetchLiveData() {
+  if (window.MABOS_DATA) return; // Already injected (e.g. via canvas eval)
+  if (location.protocol === 'file:') return; // Cannot fetch over file://
+
+  async function fj(path) {
+    const r = await fetch(path);
+    if (!r.ok) throw new Error(`${r.status}`);
+    return r.json();
+  }
+
+  const [statusData, bizData, decisionsData, contractorsData] = await Promise.all([
+    fj('/mabos/api/status'),
+    fj('/mabos/api/businesses'),
+    fj('/mabos/api/decisions'),
+    fj('/mabos/api/contractors'),
+  ]);
+
+  const bizList = bizData.businesses || [];
+  const rawDecisions = decisionsData.decisions || [];
+  const rawContractors = contractorsData.contractors || [];
+
+  // Fetch per-business detail in parallel
+  const bizDetails = await Promise.all(bizList.map(async (b) => {
+    const [ag, gl, tk, mt] = await Promise.all([
+      fj(`/mabos/api/businesses/${b.id}/agents`).catch(() => ({})),
+      fj(`/mabos/api/businesses/${b.id}/goals`).catch(() => ({})),
+      fj(`/mabos/api/businesses/${b.id}/tasks`).catch(() => ({ tasks: [] })),
+      fj(`/mabos/api/metrics/${b.id}`).catch(() => ({ metrics: {} })),
+    ]);
+    return { biz: b, agents: ag.agents || ag || [], goals: gl.goals || [], tasks: tk.tasks || [], metrics: mt.metrics || mt || {} };
+  }));
+
+  // ── Urgency string → 0-1 number ──
+  const urgNum = u => typeof u === 'number' ? u : ({ critical: 0.95, high: 0.85, medium: 0.65, low: 0.4 }[u] ?? 0.5);
+
+  // ── Map industry → display type ──
+  const typeOf = ind => ({ technology:'saas', software:'saas', saas:'saas', retail:'ecommerce', ecommerce:'ecommerce', consulting:'consulting', marketplace:'ecommerce' }[(ind||'').toLowerCase()] || ind || 'saas');
+
+  // ── Build decisions ──
+  const decisions = rawDecisions.map((d, i) => {
+    const b = bizList.find(x => x.id === d.business_id);
+    return {
+      id: d.id || `dec-live-${i}`,
+      businessId: d.business_id || '',
+      businessName: b?.name || d.business_id || '',
+      title: d.title || (d.summary || '').slice(0, 60) || 'Decision',
+      urgency: urgNum(d.urgency),
+      agent: d.agent || 'System',
+      raisedAt: d.raised_at || d.timestamp || new Date().toISOString(),
+      summary: d.summary || d.description || '',
+      options: Array.isArray(d.options) ? d.options : [
+        { label: 'Approve', impact: 'Proceed as recommended', recommended: true },
+        { label: 'Reject', impact: 'Decline this action' },
+        { label: 'Defer', impact: 'Revisit later' },
+      ],
+      recommendation: d.recommendation || d.analysis || '',
+      category: d.category || 'general',
+    };
+  });
+
+  // ── Build businesses ──
+  const businesses = bizDetails.map(({ biz: b, agents: rawAg, goals: rawG, tasks: rawT, metrics: m }) => {
+    const agents = (Array.isArray(rawAg) ? rawAg : []).map(a => ({
+      role: (a.role || a.id || 'Agent').replace(/^([a-z])/, (_, c) => c.toUpperCase()),
+      status: a.status || 'idle',
+      pendingTasks: a.pendingTasks ?? a.pending_tasks ?? 0,
+      lastAction: a.lastAction || a.last_action || '',
+    }));
+    const revenue = m.revenue ?? m.totalRevenue ?? 0;
+    const goals = rawG.slice(0, 10).map(g => ({
+      name: g.text || g.name || g.id || '',
+      progress: g.progress ?? 0.5,
+      priority: g.priority ?? 0.5,
+      deadline: g.deadline || g.target_date || '2026-06-30',
+    }));
+    const kpis = [];
+    if (m.mrr != null) kpis.push({ name: 'MRR', value: m.mrr, target: m.mrrTarget || Math.round(m.mrr * 1.1), unit: '$' });
+    if (m.revenue != null) kpis.push({ name: 'Revenue', value: m.revenue, target: m.revenueTarget || Math.round(m.revenue * 1.2), unit: '$' });
+    if (m.churn != null) kpis.push({ name: 'Churn', value: m.churn, target: m.churnTarget || 3, unit: '%', inverse: true });
+    if (m.nps != null) kpis.push({ name: 'NPS', value: m.nps, target: m.npsTarget || 70, unit: '' });
+    if (kpis.length === 0 && revenue > 0) kpis.push({ name: 'Revenue', value: revenue, target: Math.round(revenue * 1.2), unit: '$' });
+    const done = rawT.filter(t => /^(done|completed)$/i.test(t.status)).length;
+    const health = rawT.length > 0 ? Math.max(0.3, Math.min(0.98, 0.5 + (done / rawT.length) * 0.5)) : 0.75;
+    return {
+      id: b.id, name: b.name || b.id, type: typeOf(b.industry), status: b.status || 'active',
+      health, revenue, agentCount: b.agentCount || agents.length,
+      activeGoals: goals.filter(g => g.progress < 1).length,
+      kpis, agents, goals, recentActivity: [],
+    };
+  });
+
+  // ── Build workforce ──
+  const workforce = rawContractors.map(c => ({
+    name: c.name || 'Contractor',
+    specialty: c.specialty || c.role || 'General',
+    trust: c.trust ?? c.trust_score ?? 0.8,
+    activePackages: c.activePackages ?? c.active_packages ?? 0,
+    completedPackages: c.completedPackages ?? c.completed_packages ?? 0,
+    business: c.business || c.assigned_to || (businesses[0]?.name || ''),
+  }));
+
+  // ── Build kanban ──
+  const colMap = { proposed:'Backlog', backlog:'Backlog', 'in-progress':'In Progress', active:'In Progress', review:'Review', done:'Done', completed:'Done' };
+  const kanban = {
+    columns: ['Backlog', 'In Progress', 'Review', 'Done'],
+    tasks: bizDetails.flatMap(({ biz: b, tasks: ts }) =>
+      ts.map(t => ({
+        id: t.id, title: t.description || t.plan_name || '',
+        business: b.name || b.id,
+        agent: (t.agent_id || t.assigned_to || '').toUpperCase(),
+        column: colMap[(t.status||'').toLowerCase()] || 'Backlog',
+        priority: t.priority || 'medium', goalId: t.plan_id || '',
+        dueDate: t.due_date || '2026-06-30',
+      }))
+    ),
+  };
+
+  // ── Build gantt ──
+  const gantt = {
+    timelineStart: '2026-02-01', timelineEnd: '2026-06-30',
+    items: bizDetails.flatMap(({ biz: b, goals: gs }) =>
+      gs.map((g, i) => ({
+        id: g.id || `g-${b.id}-${i}`, name: g.text || g.name || '',
+        business: b.name || b.id,
+        start: g.start_date || '2026-02-01', end: g.deadline || g.target_date || '2026-06-30',
+        progress: g.progress ?? 0.5, type: g.type || 'strategic',
+        level: g.level || (g.priority > 0.8 ? 'strategic' : g.priority > 0.5 ? 'tactical' : 'operational'),
+        deps: g.dependencies || [],
+        color: g.priority > 0.8 ? '#00ff41' : g.priority > 0.5 ? '#4488ff' : '#bb88ff',
+      }))
+    ),
+  };
+
+  // ── Build business model ──
+  const modelGoals = bizDetails.flatMap(({ biz: b, goals: gs }) =>
+    gs.map(g => ({
+      id: g.id || '', business: b.name || b.id,
+      name: g.text || g.name || '', type: g.type || 'strategic',
+      level: g.level || 'strategic', priority: g.priority ?? 0.5,
+      description: g.description || g.text || '',
+      desires: g.desires || [], workflows: g.workflows || [],
+    }))
+  );
+  const businessModel = {
+    goalTypes: [...new Set(modelGoals.map(g => g.type).filter(Boolean))].length ? [...new Set(modelGoals.map(g => g.type))] : ['strategic'],
+    operationalLevels: ['strategic', 'tactical', 'operational'],
+    goals: modelGoals,
+  };
+
+  // ── Portfolio summary ──
+  const portfolio = {
+    name: 'MABOS Portfolio',
+    totalRevenue: businesses.reduce((s, b) => s + (b.revenue || 0), 0),
+    totalBusinesses: businesses.length,
+    activeAgents: businesses.reduce((s, b) => s + (b.agentCount || 0), 0),
+    openDecisions: decisions.length,
+    workforceUtilization: workforce.length > 0
+      ? workforce.filter(w => w.activePackages > 0).length / workforce.length
+      : 0.75,
+  };
+
+  window.MABOS_DATA = { portfolio, businesses, decisions, workforce, kanban, gantt, businessModel };
+}
+</script>
+<script>
+let D = window.MABOS_DATA || window.MABOS_MOCK;
 
 // ── SVG Icon helpers ──
 const icons = {
@@ -664,6 +832,16 @@ function openDecision(id) {
 }
 function closeModal() { $('#modal').classList.remove('active'); }
 function resolveDecision(id, action) {
+  const dec = D.decisions.find(d => d.id === id);
+  // Call live API if available
+  if (dec && location.protocol !== 'file:') {
+    const notes = $('#modal .notes-field')?.value || '';
+    fetch('/mabos/api/decisions/' + id + '/resolve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ decision_id: id, business_id: dec.businessId, resolution: action, feedback: notes }),
+    }).catch(() => {});
+  }
   D.decisions = D.decisions.filter(d => d.id !== id);
   D.portfolio.openDecisions = D.decisions.length;
   closeModal(); renderPortfolio();
@@ -671,7 +849,11 @@ function resolveDecision(id, action) {
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
 
 // ── Init ──
-renderPortfolio();
+(async () => {
+  try { await fetchLiveData(); } catch (_) { /* mock fallback */ }
+  D = window.MABOS_DATA || window.MABOS_MOCK;
+  renderPortfolio();
+})();
 </script>
 </body>
 </html>

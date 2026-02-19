@@ -1,0 +1,12 @@
+{
+  "id": "strategy",
+  "name": "Chief Strategy Officer",
+  "bdi": {
+    "commitmentStrategy": "open-minded",
+    "cycleFrequency": {
+      "fullCycleMinutes": 240,
+      "quickCheckMinutes": 60
+    },
+    "reasoningMethods": ["game-theory", "counterfactual", "bayesian", "analogical"]
+  }
+}

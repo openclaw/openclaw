@@ -17,7 +17,7 @@ import { existsSync } from "node:fs";
 import { mkdtemp, rm, readdir, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, it, before, after } from "node:test";
+import { describe, it, beforeAll, afterAll } from "vitest";
 import register from "../index.js";
 
 // ── Test fixtures ──
@@ -78,7 +78,7 @@ function extractText(result: any): string {
 
 // ── Lifecycle ──
 
-before(async () => {
+beforeAll(async () => {
   tmpWorkspace = await mkdtemp(join(tmpdir(), "mabos-e2e-"));
   tools = [];
   toolMap = new Map();
@@ -119,7 +119,7 @@ before(async () => {
   console.log(`  Registered ${tools.length} tools, workspace: ${tmpWorkspace}`);
 });
 
-after(async () => {
+afterAll(async () => {
   await rm(tmpWorkspace, { recursive: true, force: true });
 });
 

@@ -1,0 +1,12 @@
+{
+  "id": "hr",
+  "name": "Head of People & Resources",
+  "bdi": {
+    "commitmentStrategy": "cautious",
+    "cycleFrequency": {
+      "fullCycleMinutes": 240,
+      "quickCheckMinutes": 60
+    },
+    "reasoningMethods": ["stakeholder-analysis", "ethical", "heuristic"]
+  }
+}

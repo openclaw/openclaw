@@ -21,11 +21,24 @@ Or serve via the Canvas mount point if configured:
 canvas(action="present", url="/__openclaw__/canvas/mabos-dashboard/dashboard.html")
 ```
 
-## Injecting Real Data
+## Live Data
 
-The dashboard checks `window.MABOS_DATA` first, falling back to `window.MABOS_MOCK`.
+When served via the OpenClaw gateway (e.g. `/__openclaw__/canvas/mabos-dashboard/dashboard.html`),
+the dashboard automatically fetches from the MABOS API endpoints:
 
-To inject real data, use canvas eval before presenting:
+- `/mabos/api/status` — portfolio summary
+- `/mabos/api/businesses` + `/mabos/api/businesses/:id/agents|goals|tasks` — per-business detail
+- `/mabos/api/decisions` — pending decisions
+- `/mabos/api/contractors` — workforce
+- `/mabos/api/metrics/:business` — KPIs
+
+If the API is unavailable (e.g. opened via `file://`), it falls back to `mock-data.js`.
+
+Decision resolutions are also posted back to `/mabos/api/decisions/:id/resolve`.
+
+## Injecting Data via Canvas Eval
+
+You can also inject data manually before presenting:
 
 ```
 canvas(action="eval", javaScript="window.MABOS_DATA = { portfolio: {...}, businesses: [...], decisions: [...], workforce: [...] }; renderPortfolio();")

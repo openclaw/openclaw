@@ -8,7 +8,7 @@ import { existsSync } from "node:fs";
 import { mkdtemp, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, it, before, after } from "node:test";
+import { describe, it, beforeAll, afterAll } from "vitest";
 import register from "../index.js";
 
 // ── Mock setup (matches onboarding-e2e pattern) ──
@@ -36,7 +36,7 @@ async function callTool(name: string, params: any) {
   return findTool(name).execute("test-run", params);
 }
 
-before(async () => {
+beforeAll(async () => {
   tmpWorkspace = await mkdtemp(join(tmpdir(), "mabos-bridge-"));
   tools = [];
   toolMap = new Map();
@@ -76,7 +76,7 @@ before(async () => {
   register(api as any);
 });
 
-after(async () => {
+afterAll(async () => {
   await rm(tmpWorkspace, { recursive: true, force: true });
 });
 

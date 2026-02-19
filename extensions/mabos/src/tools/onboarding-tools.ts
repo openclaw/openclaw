@@ -591,6 +591,15 @@ All C-suite agents receive delegated goals from the stakeholder via the CEO.
           }
           await writeJson(join(agentPath, "inbox.json"), []);
           await writeJson(join(agentPath, "cases.json"), []);
+          await writeJson(join(agentPath, "agent.json"), {
+            id: agent.id,
+            name: agent.name,
+            bdi: {
+              commitmentStrategy: "open-minded",
+              cycleFrequency: { fullCycleMinutes: 120, quickCheckMinutes: 30 },
+              reasoningMethods: ["means-ends", "heuristic"],
+            },
+          });
           created++;
         }
 
@@ -660,6 +669,13 @@ ${agents.map((a) => `- **${a.id}:** ${a.name} — ${a.role}`).join("\n")}`);
               join(agentPath, "Capabilities.md"),
               await readFile(join(templatePath, "Capabilities.md"), "utf-8"),
             );
+            filesCreated++;
+          }
+
+          // Copy agent.json (BDI schema) from template if exists
+          if (existsSync(join(templatePath, "agent.json"))) {
+            const agentJson = await readFile(join(templatePath, "agent.json"), "utf-8");
+            await writeJson(join(agentPath, "agent.json"), JSON.parse(agentJson));
             filesCreated++;
           }
 

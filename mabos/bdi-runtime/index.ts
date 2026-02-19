@@ -10,7 +10,7 @@
  *  1. Scans workspace for active agents
  *  2. For each agent, reads cognitive state (beliefs, desires, goals, intentions)
  *  3. Evaluates desire priority changes based on new beliefs
- *  4. Prunes stale intentions
+ *  4. Prunes stale intentions (respecting commitment strategy)
  *  5. Writes updated cognitive state back
  */
 
@@ -31,6 +31,23 @@ const COGNITIVE_FILES = {
   learnings: "Learnings.md",
 } as const;
 
+/** BDI configuration from agent.json. */
+export interface AgentBdiConfig {
+  commitmentStrategy?: "single-minded" | "open-minded" | "cautious";
+  cycleFrequency?: {
+    fullCycleMinutes?: number;
+    quickCheckMinutes?: number;
+  };
+  reasoningMethods?: string[];
+}
+
+/** Parsed contents of an agent's agent.json file. */
+export interface AgentManifest {
+  id: string;
+  name?: string;
+  bdi?: AgentBdiConfig;
+}
+
 export interface BdiAgentState {
   agentId: string;
   agentDir: string;
@@ -39,6 +56,8 @@ export interface BdiAgentState {
   goals: string;
   intentions: string;
   lastCycleAt: string | null;
+  /** Parsed BDI config from agent.json (undefined if no agent.json). */
+  bdiConfig?: AgentBdiConfig;
 }
 
 export interface BdiCycleResult {
@@ -46,6 +65,18 @@ export interface BdiCycleResult {
   staleIntentionsPruned: number;
   desiresPrioritized: number;
   timestamp: string;
+}
+
+/**
+ * Read agent.json from an agent directory. Returns undefined if missing or invalid.
+ */
+async function readAgentManifest(agentDir: string): Promise<AgentManifest | undefined> {
+  try {
+    const raw = await readFile(join(agentDir, "agent.json"), "utf-8");
+    return JSON.parse(raw) as AgentManifest;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -63,6 +94,8 @@ export async function readAgentCognitiveState(
     }
   };
 
+  const manifest = await readAgentManifest(agentDir);
+
   return {
     agentId,
     agentDir,
@@ -71,6 +104,7 @@ export async function readAgentCognitiveState(
     goals: await read(COGNITIVE_FILES.goals),
     intentions: await read(COGNITIVE_FILES.intentions),
     lastCycleAt: null,
+    bdiConfig: manifest?.bdi,
   };
 }
 
@@ -78,10 +112,19 @@ export async function readAgentCognitiveState(
  * Run a lightweight BDI maintenance cycle on an agent's cognitive state.
  * This is the background "heartbeat" — it doesn't make decisions, it
  * maintains cognitive hygiene (prune stale intentions, re-sort desires).
+ *
+ * Commitment strategy affects intention pruning aggressiveness:
+ *  - single-minded: only expire intentions past deadline
+ *  - open-minded (default): expire past deadline + stalled >7 days
+ *  - cautious: expire past deadline + stalled >3 days
  */
 export async function runMaintenanceCycle(state: BdiAgentState): Promise<BdiCycleResult> {
   let staleIntentionsPruned = 0;
   let desiresPrioritized = 0;
+
+  const strategy = state.bdiConfig?.commitmentStrategy ?? "open-minded";
+  // Stall threshold: how many days without progress before marking stale
+  const stallDays = strategy === "single-minded" ? Infinity : strategy === "cautious" ? 3 : 7;
 
   // --- Prune stale intentions ---
   if (state.intentions) {
@@ -101,6 +144,21 @@ export async function runMaintenanceCycle(state: BdiAgentState): Promise<BdiCycl
           continue;
         }
       }
+
+      // Check for stalled intentions (last-updated older than threshold)
+      if (stallDays < Infinity && line.includes("status: active")) {
+        const updatedMatch = line.match(/\[updated:\s*(\d{4}-\d{2}-\d{2})\]/);
+        if (updatedMatch) {
+          const updated = new Date(updatedMatch[1]);
+          const daysSinceUpdate = (now.getTime() - updated.getTime()) / (1000 * 60 * 60 * 24);
+          if (daysSinceUpdate > stallDays) {
+            filteredLines.push(line.replace("status: active", "status: stalled"));
+            staleIntentionsPruned++;
+            continue;
+          }
+        }
+      }
+
       filteredLines.push(line);
     }
 
@@ -169,15 +227,14 @@ export async function discoverAgents(workspaceDir: string): Promise<string[]> {
 /**
  * Get a summary of all agents' cognitive state (for CLI display).
  */
-export async function getAgentsSummary(
-  workspaceDir: string,
-): Promise<
+export async function getAgentsSummary(workspaceDir: string): Promise<
   Array<{
     agentId: string;
     beliefCount: number;
     goalCount: number;
     intentionCount: number;
     desireCount: number;
+    commitmentStrategy?: string;
   }>
 > {
   const agents = await discoverAgents(workspaceDir);
@@ -187,6 +244,7 @@ export async function getAgentsSummary(
     goalCount: number;
     intentionCount: number;
     desireCount: number;
+    commitmentStrategy?: string;
   }> = [];
 
   for (const agentId of agents) {
@@ -201,6 +259,7 @@ export async function getAgentsSummary(
       goalCount: countHeadings(state.goals),
       intentionCount: countHeadings(state.intentions),
       desireCount: countHeadings(state.desires),
+      commitmentStrategy: state.bdiConfig?.commitmentStrategy,
     });
   }
 

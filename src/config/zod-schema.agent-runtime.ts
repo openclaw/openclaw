@@ -614,6 +614,20 @@ export const AgentEntrySchema = z
       .optional(),
     sandbox: AgentSandboxSchema,
     tools: AgentToolsSchema,
+    bdi: z
+      .object({
+        commitmentStrategy: z.enum(["single-minded", "open-minded", "cautious"]).optional(),
+        cycleFrequency: z
+          .object({
+            fullCycleMinutes: z.number().positive().optional(),
+            quickCheckMinutes: z.number().positive().optional(),
+          })
+          .strict()
+          .optional(),
+        reasoningMethods: z.array(z.string()).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 

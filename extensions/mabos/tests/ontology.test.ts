@@ -7,10 +7,10 @@
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { describe, it } from "node:test";
+import { describe, it } from "vitest";
 
 // Resolve to source ontology dir (jsonld files aren't compiled to dist/)
-const ONTOLOGY_DIR = join(import.meta.dirname, "..", "..", "src", "ontology");
+const ONTOLOGY_DIR = join(import.meta.dirname, "..", "src", "ontology");
 
 function loadOntology(filename: string) {
   return JSON.parse(readFileSync(join(ONTOLOGY_DIR, filename), "utf-8"));

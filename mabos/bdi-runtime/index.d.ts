@@ -10,9 +10,24 @@
  *  1. Scans workspace for active agents
  *  2. For each agent, reads cognitive state (beliefs, desires, goals, intentions)
  *  3. Evaluates desire priority changes based on new beliefs
- *  4. Prunes stale intentions
+ *  4. Prunes stale intentions (respecting commitment strategy)
  *  5. Writes updated cognitive state back
  */
+/** BDI configuration from agent.json. */
+export interface AgentBdiConfig {
+  commitmentStrategy?: "single-minded" | "open-minded" | "cautious";
+  cycleFrequency?: {
+    fullCycleMinutes?: number;
+    quickCheckMinutes?: number;
+  };
+  reasoningMethods?: string[];
+}
+/** Parsed contents of an agent's agent.json file. */
+export interface AgentManifest {
+  id: string;
+  name?: string;
+  bdi?: AgentBdiConfig;
+}
 export interface BdiAgentState {
   agentId: string;
   agentDir: string;
@@ -21,6 +36,8 @@ export interface BdiAgentState {
   goals: string;
   intentions: string;
   lastCycleAt: string | null;
+  /** Parsed BDI config from agent.json (undefined if no agent.json). */
+  bdiConfig?: AgentBdiConfig;
 }
 export interface BdiCycleResult {
   agentId: string;
@@ -39,6 +56,11 @@ export declare function readAgentCognitiveState(
  * Run a lightweight BDI maintenance cycle on an agent's cognitive state.
  * This is the background "heartbeat" — it doesn't make decisions, it
  * maintains cognitive hygiene (prune stale intentions, re-sort desires).
+ *
+ * Commitment strategy affects intention pruning aggressiveness:
+ *  - single-minded: only expire intentions past deadline
+ *  - open-minded (default): expire past deadline + stalled >7 days
+ *  - cautious: expire past deadline + stalled >3 days
  */
 export declare function runMaintenanceCycle(state: BdiAgentState): Promise<BdiCycleResult>;
 /**
@@ -55,6 +77,7 @@ export declare function getAgentsSummary(workspaceDir: string): Promise<
     goalCount: number;
     intentionCount: number;
     desireCount: number;
+    commitmentStrategy?: string;
   }>
 >;
 /**

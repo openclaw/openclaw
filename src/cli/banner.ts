@@ -1,3 +1,4 @@
+import { isMabosProduct } from "../config/paths.js";
 import { resolveCommitHash } from "../infra/git-commit.js";
 import { visibleWidth } from "../terminal/ansi.js";
 import { isRich, theme } from "../terminal/theme.js";
@@ -39,28 +40,30 @@ export function formatCliBannerLine(version: string, options: BannerOptions = {}
   const commitLabel = commit ?? "unknown";
   const tagline = pickTagline(options);
   const rich = options.richTty ?? isRich();
-  const title = "🦞 OpenClaw";
-  const prefix = "🦞 ";
+  const mabos = isMabosProduct();
+  const title = mabos ? "MABOS" : "🦞 OpenClaw";
+  const prefix = mabos ? "  " : "🦞 ";
+  const subtitle = mabos ? "Your AI workforce, orchestrated." : tagline;
   const columns = options.columns ?? process.stdout.columns ?? 120;
-  const plainFullLine = `${title} ${version} (${commitLabel}) — ${tagline}`;
+  const plainFullLine = `${title} ${version} (${commitLabel}) — ${subtitle}`;
   const fitsOnOneLine = visibleWidth(plainFullLine) <= columns;
   if (rich) {
     if (fitsOnOneLine) {
       return `${theme.heading(title)} ${theme.info(version)} ${theme.muted(
         `(${commitLabel})`,
-      )} ${theme.muted("—")} ${theme.accentDim(tagline)}`;
+      )} ${theme.muted("—")} ${theme.accentDim(subtitle)}`;
     }
     const line1 = `${theme.heading(title)} ${theme.info(version)} ${theme.muted(
       `(${commitLabel})`,
     )}`;
-    const line2 = `${" ".repeat(prefix.length)}${theme.accentDim(tagline)}`;
+    const line2 = `${" ".repeat(prefix.length)}${theme.accentDim(subtitle)}`;
     return `${line1}\n${line2}`;
   }
   if (fitsOnOneLine) {
     return plainFullLine;
   }
   const line1 = `${title} ${version} (${commitLabel})`;
-  const line2 = `${" ".repeat(prefix.length)}${tagline}`;
+  const line2 = `${" ".repeat(prefix.length)}${subtitle}`;
   return `${line1}\n${line2}`;
 }
 
@@ -74,10 +77,49 @@ const LOBSTER_ASCII = [
   " ",
 ];
 
+const MABOS_ASCII = [
+  "",
+  "  ██╗   ██╗ █████╗ ██████╗  ██████╗ ███████╗",
+  "  ███╗ ███║██╔══██╗██╔══██╗██╔═══██╗██╔════╝",
+  "  ████████║███████║██████╔╝██║   ██║███████╗",
+  "  ██╔██╔██║██╔══██║██╔══██╗██║   ██║╚════██║",
+  "  ██║╚═╝██║██║  ██║██████╔╝╚██████╔╝███████║",
+  "  ╚═╝   ╚═╝╚═╝  ╚═╝╚═════╝  ╚═════╝ ╚══════╝",
+  "",
+  "  Your AI workforce, orchestrated.",
+  "",
+];
+
+const MABOS_SUBTITLE = "Your AI workforce, orchestrated.";
+
 export function formatCliBannerArt(options: BannerOptions = {}): string {
   const rich = options.richTty ?? isRich();
+  const mabos = isMabosProduct();
+  const ascii = mabos ? MABOS_ASCII : LOBSTER_ASCII;
+
   if (!rich) {
-    return LOBSTER_ASCII.join("\n");
+    return ascii.join("\n");
+  }
+
+  if (mabos) {
+    const colorMabosChar = (ch: string) => {
+      if (ch === "█" || ch === "╗" || ch === "╔" || ch === "║" || ch === "╝" || ch === "╚") {
+        return theme.accentBright(ch);
+      }
+      if (ch === "═") {
+        return theme.accent(ch);
+      }
+      return theme.muted(ch);
+    };
+
+    const colored = ascii.map((line) => {
+      if (line.includes(MABOS_SUBTITLE)) {
+        return `  ${theme.accentDim(MABOS_SUBTITLE)}`;
+      }
+      return splitGraphemes(line).map(colorMabosChar).join("");
+    });
+
+    return colored.join("\n");
   }
 
   const colorChar = (ch: string) => {

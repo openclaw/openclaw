@@ -23,6 +23,6 @@
       "openclaw/plugin-sdk/account-id": ["./src/plugin-sdk/account-id.ts"]
     }
   },
-  "include": ["src/**/*", "ui/**/*", "extensions/**/*"],
+  "include": ["src/**/*", "ui/**/*", "extensions/**/*", "mabos/**/*"],
   "exclude": ["node_modules", "dist"]
 }
