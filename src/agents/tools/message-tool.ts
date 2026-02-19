@@ -246,6 +246,7 @@ function buildReactionSchema() {
     ),
     message_id: Type.Optional(
       Type.String({
+        // Intentional duplicate alias for tool-schema discoverability in LLMs.
         description:
           "snake_case alias of messageId. For Telegram, if omitted, defaults to the current inbound message id when available.",
       }),

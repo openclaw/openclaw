@@ -44,7 +44,7 @@ function safeParseTelegramReplyToMessageId(
     return undefined;
   }
   const parsed = Number.parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 const telegramMessageActions: ChannelMessageActionAdapter = {
