@@ -4,12 +4,27 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 export type ToolCallIdMode = "strict" | "strict9";
 
 const STRICT9_LEN = 9;
-const TOOL_CALL_TYPES = new Set(["toolCall", "toolUse", "functionCall"]);
+const TOOL_CALL_TYPES = new Set([
+  "toolCall",
+  "toolUse",
+  "functionCall",
+  "tool_call",
+  "tool_use",
+  "function_call",
+]);
 
 export type ToolCallLike = {
   id: string;
   name?: string;
 };
+
+function asNonEmptyString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
 
 /**
  * Sanitize a tool call ID to be compatible with various providers.
@@ -55,13 +70,14 @@ export function extractToolCallsFromAssistant(
       continue;
     }
     const rec = block as { type?: unknown; id?: unknown; name?: unknown };
-    if (typeof rec.id !== "string" || !rec.id) {
+    const id = asNonEmptyString(rec.id);
+    if (!id) {
       continue;
     }
     if (typeof rec.type === "string" && TOOL_CALL_TYPES.has(rec.type)) {
       toolCalls.push({
-        id: rec.id,
-        name: typeof rec.name === "string" ? rec.name : undefined,
+        id,
+        name: asNonEmptyString(rec.name),
       });
     }
   }
@@ -71,12 +87,12 @@ export function extractToolCallsFromAssistant(
 export function extractToolResultId(
   msg: Extract<AgentMessage, { role: "toolResult" }>,
 ): string | null {
-  const toolCallId = (msg as { toolCallId?: unknown }).toolCallId;
-  if (typeof toolCallId === "string" && toolCallId) {
+  const toolCallId = asNonEmptyString((msg as { toolCallId?: unknown }).toolCallId);
+  if (toolCallId) {
     return toolCallId;
   }
-  const toolUseId = (msg as { toolUseId?: unknown }).toolUseId;
-  if (typeof toolUseId === "string" && toolUseId) {
+  const toolUseId = asNonEmptyString((msg as { toolUseId?: unknown }).toolUseId);
+  if (toolUseId) {
     return toolUseId;
   }
   return null;
@@ -160,10 +176,14 @@ function rewriteAssistantToolCallIds(params: {
     }
     const rec = block as { type?: unknown; id?: unknown };
     const type = rec.type;
-    const id = rec.id;
+    const id = asNonEmptyString(rec.id);
     if (
-      (type !== "functionCall" && type !== "toolUse" && type !== "toolCall") ||
-      typeof id !== "string" ||
+      (type !== "functionCall" &&
+        type !== "toolUse" &&
+        type !== "toolCall" &&
+        type !== "function_call" &&
+        type !== "tool_use" &&
+        type !== "tool_call") ||
       !id
     ) {
       return block;
@@ -186,12 +206,8 @@ function rewriteToolResultIds(params: {
   message: Extract<AgentMessage, { role: "toolResult" }>;
   resolve: (id: string) => string;
 }): Extract<AgentMessage, { role: "toolResult" }> {
-  const toolCallId =
-    typeof params.message.toolCallId === "string" && params.message.toolCallId
-      ? params.message.toolCallId
-      : undefined;
-  const toolUseId = (params.message as { toolUseId?: unknown }).toolUseId;
-  const toolUseIdStr = typeof toolUseId === "string" && toolUseId ? toolUseId : undefined;
+  const toolCallId = asNonEmptyString(params.message.toolCallId);
+  const toolUseIdStr = asNonEmptyString((params.message as { toolUseId?: unknown }).toolUseId);
 
   const nextToolCallId = toolCallId ? params.resolve(toolCallId) : undefined;
   const nextToolUseId = toolUseIdStr ? params.resolve(toolUseIdStr) : undefined;

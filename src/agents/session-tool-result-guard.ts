@@ -184,16 +184,19 @@ export function installSessionToolResultGuard(
 
     if (nextRole === "toolResult") {
       const id = extractToolResultId(nextMessage as Extract<AgentMessage, { role: "toolResult" }>);
-      const toolName = id ? pending.get(id) : undefined;
-      if (id) {
-        pending.delete(id);
+      if (!id) {
+        // Ignore malformed tool results (missing/blank id) so they do not poison
+        // persisted transcript history for subsequent model requests.
+        return undefined;
       }
+      const toolName = pending.get(id);
+      pending.delete(id);
       // Apply hard size cap before persistence to prevent oversized tool results
       // from consuming the entire context window on subsequent LLM calls.
       const capped = capToolResultSize(persistMessage(nextMessage));
       const persisted = applyBeforeWriteHook(
         persistToolResult(capped, {
-          toolCallId: id ?? undefined,
+          toolCallId: id,
           toolName,
           isSynthetic: false,
         }),

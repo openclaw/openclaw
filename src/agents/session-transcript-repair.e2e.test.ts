@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { describe, expect, it } from "vitest";
 import {
+  repairMalformedToolEntries,
   sanitizeToolCallInputs,
   sanitizeToolUseResultPairing,
   repairToolUseResultPairing,
@@ -259,5 +260,87 @@ describe("sanitizeToolCallInputs", () => {
       ? assistant.content.map((block) => (block as { type?: unknown }).type)
       : [];
     expect(types).toEqual(["text", "toolUse"]);
+  });
+});
+
+describe("repairMalformedToolEntries", () => {
+  it("drops toolResult messages with missing or blank tool ids", () => {
+    const input: AgentMessage[] = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_valid", name: "read", arguments: {} }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "   ",
+        toolName: "read",
+        content: [{ type: "text", text: "invalid blank id" }],
+      },
+      {
+        role: "toolResult",
+        toolName: "read",
+        content: [{ type: "text", text: "missing id" }],
+      } as unknown as AgentMessage,
+      {
+        role: "toolResult",
+        toolCallId: "call_valid",
+        toolName: "read",
+        content: [{ type: "text", text: "ok" }],
+      },
+    ];
+
+    const report = repairMalformedToolEntries(input);
+    expect(report.droppedToolResults).toBe(2);
+    expect(report.messages.map((msg) => msg.role)).toEqual(["assistant", "toolResult"]);
+    expect((report.messages[1] as { toolCallId?: string }).toolCallId).toBe("call_valid");
+  });
+
+  it("drops legacy alias tool calls when function name is blank", () => {
+    const input: AgentMessage[] = [
+      {
+        role: "assistant",
+        content: [
+          { type: "tool_call", id: "call_alias_bad", name: "   ", arguments: {} },
+          { type: "function_call", id: "call_alias_good", name: "exec", arguments: {} },
+        ],
+      },
+    ];
+
+    const report = repairMalformedToolEntries(input);
+    expect(report.droppedToolCalls).toBe(1);
+    const assistant = report.messages[0] as Extract<AgentMessage, { role: "assistant" }>;
+    const toolBlocks = Array.isArray(assistant.content)
+      ? assistant.content.filter((block) => {
+          const type = (block as { type?: unknown }).type;
+          return typeof type === "string" && ["tool_call", "function_call"].includes(type);
+        })
+      : [];
+    expect(toolBlocks).toHaveLength(1);
+    expect((toolBlocks[0] as { id?: unknown }).id).toBe("call_alias_good");
+  });
+
+  it("preserves canonical openai call_id|fc_id ids", () => {
+    const canonicalId = "call_123|fc_123";
+    const input: AgentMessage[] = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: canonicalId, name: "noop", arguments: {} }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: canonicalId,
+        toolName: "noop",
+        content: [{ type: "text", text: "ok" }],
+      },
+    ];
+
+    const report = repairMalformedToolEntries(input);
+    expect(report.droppedToolCalls).toBe(0);
+    expect(report.droppedToolResults).toBe(0);
+    const assistant = report.messages[0] as Extract<AgentMessage, { role: "assistant" }>;
+    const toolCall = (assistant.content?.[0] ?? {}) as { id?: string };
+    expect(toolCall.id).toBe(canonicalId);
+    const toolResult = report.messages[1] as { toolCallId?: string };
+    expect(toolResult.toolCallId).toBe(canonicalId);
   });
 });

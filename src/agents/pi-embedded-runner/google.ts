@@ -18,7 +18,7 @@ import {
 } from "../pi-embedded-helpers.js";
 import { cleanToolSchemaForGemini } from "../pi-tools.schema.js";
 import {
-  sanitizeToolCallInputs,
+  repairMalformedToolEntries,
   stripToolResultDetails,
   sanitizeToolUseResultPairing,
 } from "../session-transcript-repair.js";
@@ -447,10 +447,25 @@ export async function sanitizeSessionHistory(params: {
   const sanitizedThinking = policy.normalizeAntigravityThinkingBlocks
     ? sanitizeAntigravityThinkingBlocks(sanitizedImages)
     : sanitizedImages;
-  const sanitizedToolCalls = sanitizeToolCallInputs(sanitizedThinking);
+  const malformedToolReport = repairMalformedToolEntries(sanitizedThinking);
+  if (
+    malformedToolReport.droppedToolCalls > 0 ||
+    malformedToolReport.droppedAssistantMessages > 0 ||
+    malformedToolReport.droppedToolResults > 0
+  ) {
+    log.warn("session history dropped malformed tool entries", {
+      sessionId: params.sessionId,
+      provider: params.provider ?? "unknown",
+      modelApi: params.modelApi ?? "unknown",
+      modelId: params.modelId ?? "unknown",
+      droppedToolCalls: malformedToolReport.droppedToolCalls,
+      droppedAssistantMessages: malformedToolReport.droppedAssistantMessages,
+      droppedToolResults: malformedToolReport.droppedToolResults,
+    });
+  }
   const repairedTools = policy.repairToolUseResultPairing
-    ? sanitizeToolUseResultPairing(sanitizedToolCalls)
-    : sanitizedToolCalls;
+    ? sanitizeToolUseResultPairing(malformedToolReport.messages)
+    : malformedToolReport.messages;
   const sanitizedToolResults = stripToolResultDetails(repairedTools);
 
   const isOpenAIResponsesApi =

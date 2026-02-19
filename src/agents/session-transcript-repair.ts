@@ -16,7 +16,12 @@ function isToolCallBlock(block: unknown): block is ToolCallBlock {
   const type = (block as { type?: unknown }).type;
   return (
     typeof type === "string" &&
-    (type === "toolCall" || type === "toolUse" || type === "functionCall")
+    (type === "toolCall" ||
+      type === "toolUse" ||
+      type === "functionCall" ||
+      type === "tool_call" ||
+      type === "tool_use" ||
+      type === "function_call")
   );
 }
 
@@ -64,6 +69,13 @@ export type ToolCallInputRepairReport = {
   messages: AgentMessage[];
   droppedToolCalls: number;
   droppedAssistantMessages: number;
+};
+
+export type MalformedToolEntryRepairReport = {
+  messages: AgentMessage[];
+  droppedToolCalls: number;
+  droppedAssistantMessages: number;
+  droppedToolResults: number;
 };
 
 export function stripToolResultDetails(messages: AgentMessage[]): AgentMessage[] {
@@ -140,6 +152,40 @@ export function repairToolCallInputs(messages: AgentMessage[]): ToolCallInputRep
 
 export function sanitizeToolCallInputs(messages: AgentMessage[]): AgentMessage[] {
   return repairToolCallInputs(messages).messages;
+}
+
+export function repairMalformedToolEntries(
+  messages: AgentMessage[],
+): MalformedToolEntryRepairReport {
+  const callReport = repairToolCallInputs(messages);
+  let droppedToolResults = 0;
+  const nextMessages: AgentMessage[] = [];
+
+  for (const msg of callReport.messages) {
+    if (!msg || typeof msg !== "object" || (msg as { role?: unknown }).role !== "toolResult") {
+      nextMessages.push(msg);
+      continue;
+    }
+
+    const toolResult = msg as Extract<AgentMessage, { role: "toolResult" }>;
+    if (!extractToolResultId(toolResult)) {
+      droppedToolResults += 1;
+      continue;
+    }
+    nextMessages.push(msg);
+  }
+
+  const changed = callReport.messages !== messages || droppedToolResults > 0;
+  return {
+    messages: changed ? nextMessages : messages,
+    droppedToolCalls: callReport.droppedToolCalls,
+    droppedAssistantMessages: callReport.droppedAssistantMessages,
+    droppedToolResults,
+  };
+}
+
+export function sanitizeMalformedToolEntries(messages: AgentMessage[]): AgentMessage[] {
+  return repairMalformedToolEntries(messages).messages;
 }
 
 export function sanitizeToolUseResultPairing(messages: AgentMessage[]): AgentMessage[] {

@@ -77,6 +77,20 @@ Implementation:
 
 ---
 
+## Global rule: malformed tool results
+
+Tool-result messages are dropped when both `toolCallId` and `toolUseId` are missing
+or blank (including whitespace-only values). This prevents strict providers from
+rejecting replayed history with invalid tool result references.
+
+Implementation:
+
+- `repairMalformedToolEntries` in `src/agents/session-transcript-repair.ts`
+- Applied in `sanitizeSessionHistory` in `src/agents/pi-embedded-runner/google.ts`
+- Persistence-time guard in `installSessionToolResultGuard` (`src/agents/session-tool-result-guard.ts`)
+
+---
+
 ## Global rule: inter-session input provenance
 
 When an agent sends a prompt into another session via `sessions_send` (including
