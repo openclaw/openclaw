@@ -60,10 +60,7 @@ function createEnv(
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
     PATH: `${sandbox.binDir}:${process.env.PATH ?? ""}`,
-    HOME: process.env.HOME ?? sandbox.rootDir,
-    LANG: process.env.LANG,
-    LC_ALL: process.env.LC_ALL,
-    TMPDIR: process.env.TMPDIR,
+    HOME: sandbox.rootDir,
     CONTAINER_STUB_LOG: sandbox.logPath,
     OPENCLAW_GATEWAY_TOKEN: "test-token",
     OPENCLAW_CONFIG_DIR: join(sandbox.rootDir, "config"),

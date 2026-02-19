@@ -140,23 +140,32 @@ echo "  - Tailscale exposure: Off"
 echo "  - Install Gateway daemon: No"
 echo ""
 
+# Prepare init flag if supported
+INIT_FLAG=()
+if "$CONTAINER_CMD" run --help 2>/dev/null | grep -Eq -- '(^|[[:space:]])--init([[:space:],]|$)'; then
+  INIT_FLAG=(--init)
+fi
+
 if [[ -t 0 ]]; then
   # Running in terminal - use interactive mode
   # Try to use timeout with 5-minute limit, but don't fail if timeout command doesn't exist
   if command -v timeout >/dev/null 2>&1; then
     timeout 300 "$CONTAINER_CMD" run --rm -it \
+      "${INIT_FLAG[@]}" \
       --memory 2g \
       "${COMMON_ARGS[@]}" \
       -e BROWSER=echo \
       "$IMAGE_NAME" node dist/index.js onboard --no-install-daemon || true
   elif command -v gtimeout >/dev/null 2>&1; then
     gtimeout 300 "$CONTAINER_CMD" run --rm -it \
+      "${INIT_FLAG[@]}" \
       --memory 2g \
       "${COMMON_ARGS[@]}" \
       -e BROWSER=echo \
       "$IMAGE_NAME" node dist/index.js onboard --no-install-daemon || true
   else
     "$CONTAINER_CMD" run --rm -it \
+      "${INIT_FLAG[@]}" \
       --memory 2g \
       "${COMMON_ARGS[@]}" \
       -e BROWSER=echo \
@@ -165,6 +174,7 @@ if [[ -t 0 ]]; then
 else
   # Not in terminal - use non-interactive mode
   "$CONTAINER_CMD" run --rm \
+    "${INIT_FLAG[@]}" \
     --memory 2g \
     "${COMMON_ARGS[@]}" \
     -e BROWSER=echo \
