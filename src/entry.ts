@@ -90,10 +90,17 @@ if (!ensureExperimentalWarningSuppressed()) {
     process.exit(2);
   }
 
-  if (parsed.profile) {
-    applyCliProfileEnv({ profile: parsed.profile });
-    // Keep Commander and ad-hoc argv checks consistent.
-    process.argv = parsed.argv;
+  // Prefer --profile flag; fall back to OPENCLAW_PROFILE env var so that
+  // `OPENCLAW_PROFILE=morebetter openclaw gateway run` correctly derives
+  // state/config paths (not just profile name) without requiring the flag.
+  const effectiveProfile = parsed.profile || process.env.OPENCLAW_PROFILE?.trim() || null;
+  if (effectiveProfile) {
+    applyCliProfileEnv({ profile: effectiveProfile });
+    // Only strip --profile from argv when it was actually in argv (not env-sourced).
+    if (parsed.profile) {
+      // Keep Commander and ad-hoc argv checks consistent.
+      process.argv = parsed.argv;
+    }
   }
 
   import("./cli/run-main.js")

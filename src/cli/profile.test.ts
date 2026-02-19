@@ -68,7 +68,7 @@ describe("applyCliProfileEnv", () => {
     expect(env.OPENCLAW_GATEWAY_PORT).toBe("19001");
   });
 
-  it("does not override explicit env values", () => {
+  it("does not override explicit OPENCLAW_STATE_DIR env value", () => {
     const env: Record<string, string | undefined> = {
       OPENCLAW_STATE_DIR: "/custom",
       OPENCLAW_GATEWAY_PORT: "19099",
@@ -79,8 +79,24 @@ describe("applyCliProfileEnv", () => {
       homedir: () => "/home/peter",
     });
     expect(env.OPENCLAW_STATE_DIR).toBe("/custom");
-    expect(env.OPENCLAW_GATEWAY_PORT).toBe("19099");
+    // OPENCLAW_GATEWAY_PORT is intentionally cleared for profile isolation:
+    // inherited port env from a parent gateway must not override the profile's
+    // own config. For the dev profile, it is then reset to the dev default.
+    expect(env.OPENCLAW_GATEWAY_PORT).toBe("19001");
     expect(env.OPENCLAW_CONFIG_PATH).toBe(path.join("/custom", "openclaw.json"));
+  });
+
+  it("clears inherited OPENCLAW_GATEWAY_PORT for non-dev profile isolation", () => {
+    const env: Record<string, string | undefined> = {
+      OPENCLAW_GATEWAY_PORT: "18789",
+    };
+    applyCliProfileEnv({
+      profile: "morebetter",
+      env,
+      homedir: () => "/home/peter",
+    });
+    // Port env cleared so profile's own config (or DEFAULT_GATEWAY_PORT) takes precedence.
+    expect(env.OPENCLAW_GATEWAY_PORT).toBeUndefined();
   });
 
   it("uses OPENCLAW_HOME when deriving profile state dir", () => {

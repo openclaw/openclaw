@@ -110,7 +110,16 @@ export function applyCliProfileEnv(params: {
   }
 
   // Convenience only: fill defaults, never override explicit env values.
+  // Exception: OPENCLAW_GATEWAY_PORT is intentionally cleared for profile isolation.
+  // A parent process (e.g. an existing gateway) sets OPENCLAW_GATEWAY_PORT in the
+  // environment so its own port is discoverable by child processes. If a child then
+  // starts a second gateway under a *different* profile, that inherited port env var
+  // would cause resolveGatewayPort() to return the parent's port before it ever reads
+  // the profile's own config. Clearing it here ensures the profile-specific config (or
+  // DEFAULT_GATEWAY_PORT) takes precedence. The --port CLI flag is unaffected because
+  // it is passed as a portOverride that bypasses resolveGatewayPort entirely.
   env.OPENCLAW_PROFILE = profile;
+  delete env.OPENCLAW_GATEWAY_PORT;
 
   const stateDir = env.OPENCLAW_STATE_DIR?.trim() || resolveProfileStateDir(profile, env, homedir);
   if (!env.OPENCLAW_STATE_DIR?.trim()) {
@@ -121,7 +130,7 @@ export function applyCliProfileEnv(params: {
     env.OPENCLAW_CONFIG_PATH = path.join(stateDir, "openclaw.json");
   }
 
-  if (profile === "dev" && !env.OPENCLAW_GATEWAY_PORT?.trim()) {
+  if (profile === "dev") {
     env.OPENCLAW_GATEWAY_PORT = "19001";
   }
 }
