@@ -265,8 +265,6 @@ export async function launchOpenClawChrome(
       } else {
         args.push("--disable-gpu");
       }
-    } else if (resolved.gpuEnabled) {
-      log.warn("gpuEnabled is set but headless mode is disabled — GPU flags will not be applied");
     }
     if (resolved.noSandbox) {
       args.push("--no-sandbox");
