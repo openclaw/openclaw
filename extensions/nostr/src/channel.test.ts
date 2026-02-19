@@ -136,6 +136,55 @@ describe("nostrPlugin", () => {
     it("has resolveDmPolicy function", () => {
       expect(nostrPlugin.security?.resolveDmPolicy).toBeTypeOf("function");
     });
+
+    it("infers allowlist policy when allowFrom is set", () => {
+      const account = {
+        accountId: "default",
+        name: "bot",
+        enabled: true,
+        configured: true,
+        privateKey: "key",
+        publicKey: "abcdef",
+        relays: ["wss://relay.damus.io"],
+        config: {
+          allowFrom: ["npub1abc"],
+        },
+      };
+      const policy = nostrPlugin.security?.resolveDmPolicy?.({ account } as never);
+      expect(policy?.policy).toBe("allowlist");
+    });
+
+    it("infers open policy when allowFrom includes *", () => {
+      const account = {
+        accountId: "default",
+        name: "bot",
+        enabled: true,
+        configured: true,
+        privateKey: "key",
+        publicKey: "abcdef",
+        relays: ["wss://relay.damus.io"],
+        config: {
+          allowFrom: ["*"],
+        },
+      };
+      const policy = nostrPlugin.security?.resolveDmPolicy?.({ account } as never);
+      expect(policy?.policy).toBe("open");
+    });
+
+    it("defaults pairing when no explicit allowlist exists", () => {
+      const account = {
+        accountId: "default",
+        name: "bot",
+        enabled: true,
+        configured: true,
+        privateKey: "key",
+        publicKey: "abcdef",
+        relays: ["wss://relay.damus.io"],
+        config: {},
+      };
+      const policy = nostrPlugin.security?.resolveDmPolicy?.({ account } as never);
+      expect(policy?.policy).toBe("pairing");
+    });
   });
 
   describe("session helpers", () => {
@@ -183,6 +232,40 @@ describe("nostrPlugin", () => {
 
     it("has buildAccountSnapshot function", () => {
       expect(nostrPlugin.status?.buildAccountSnapshot).toBeTypeOf("function");
+    });
+
+    it("includes diagnostics fields in account snapshot", () => {
+      const buildSnapshot = nostrPlugin.status?.buildAccountSnapshot;
+      if (!buildSnapshot) {
+        return;
+      }
+      const snapshot = buildSnapshot({
+        account: {
+          accountId: "default",
+          name: "bot",
+          enabled: true,
+          configured: true,
+          privateKey: "key",
+          publicKey: "abcdef",
+          relays: ["wss://relay.klabo.world"],
+          config: {},
+        },
+        runtime: {
+          running: true,
+          lastStartAt: 1,
+          lastStopAt: null,
+          lastError: null,
+          lastInboundAt: 2,
+          lastOutboundAt: 3,
+        },
+      } as never);
+      const diagnostics = snapshot as Record<string, unknown>;
+
+      expect(diagnostics.relays).toEqual(["wss://relay.klabo.world"]);
+      expect(typeof diagnostics.channelsDisabledByEnv).toBe("boolean");
+      expect(diagnostics).toHaveProperty("traceJsonlPath");
+      expect(diagnostics).toHaveProperty("aiInfo");
+      expect(diagnostics).toHaveProperty("metrics");
     });
   });
 });

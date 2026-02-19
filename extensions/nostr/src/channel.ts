@@ -40,6 +40,7 @@ const AI_INFO_DEFAULT_PROVIDER = "anthropic";
 const AI_INFO_DEFAULT_MODEL = "claude-opus-4-6";
 const AI_INFO_ENCRYPTION_SCHEME = "nip44";
 const NOSTR_TRACE_JSONL_ENV = "OPENCLAW_NOSTR_TRACE_JSONL";
+const NOSTR_TRACE_JSONL_FALLBACK_ENV = "NOSTR_TRACE_JSONL";
 const PENDING_CANCEL_TTL_MS = 5 * 60 * 1000;
 
 type ModelSelectionSnapshot = {
@@ -65,6 +66,19 @@ type PendingCancel = {
   reason: CancelReason;
   cancelEventId: string;
   receivedAtMs: number;
+};
+
+type NostrAiInfoState = {
+  lastAttemptAtMs: number | null;
+  lastReason: string | null;
+  lastFingerprint: string | null;
+  lastPublishedAtSec: number | null;
+  lastPublishedEventId: string | null;
+  lastPublishSuccesses: number;
+  lastPublishFailures: number;
+  lastError: string | null;
+  lastSkippedAtMs: number | null;
+  lastSkippedReason: string | null;
 };
 
 export function resolveNostrSessionId(
@@ -126,6 +140,136 @@ function isAbortLikeError(error: unknown): boolean {
     }
   }
   return false;
+}
+
+function createInitialAiInfoState(): NostrAiInfoState {
+  return {
+    lastAttemptAtMs: null,
+    lastReason: null,
+    lastFingerprint: null,
+    lastPublishedAtSec: null,
+    lastPublishedEventId: null,
+    lastPublishSuccesses: 0,
+    lastPublishFailures: 0,
+    lastError: null,
+    lastSkippedAtMs: null,
+    lastSkippedReason: null,
+  };
+}
+
+function isTruthyEnvValue(value: unknown): boolean {
+  if (typeof value !== "string") {
+    return false;
+  }
+  const normalized = value.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+}
+
+function channelsDisabledByEnv(): boolean {
+  return (
+    isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
+    isTruthyEnvValue(process.env.CLAWDBOT_SKIP_CHANNELS) ||
+    isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS) ||
+    isTruthyEnvValue(process.env.CLAWDBOT_SKIP_PROVIDERS)
+  );
+}
+
+function resolveTraceJsonlPath(): string | null {
+  const fromPrimary = process.env[NOSTR_TRACE_JSONL_ENV]?.trim();
+  if (fromPrimary) {
+    return fromPrimary;
+  }
+  const fromFallback = process.env[NOSTR_TRACE_JSONL_FALLBACK_ENV]?.trim();
+  return fromFallback || null;
+}
+
+function normalizeRelayKey(value: string): string {
+  return value.trim().replace(/\/+$/u, "").toLowerCase();
+}
+
+function mergeCircuitBreakerState(
+  current: "closed" | "open" | "half_open" | "unknown",
+  incoming: "closed" | "open" | "half_open",
+): "closed" | "open" | "half_open" | "unknown" {
+  const score = {
+    unknown: -1,
+    closed: 0,
+    half_open: 1,
+    open: 2,
+  } as const;
+  return score[incoming] > score[current] ? incoming : current;
+}
+
+function summarizeNostrMetrics(metrics: MetricsSnapshot | undefined, expectedRelays: string[]) {
+  if (!metrics) {
+    return null;
+  }
+  const relaySummaryByKey = new Map<
+    string,
+    {
+      relay: string;
+      connectedEvents: number;
+      disconnectEvents: number;
+      errors: number;
+      circuitBreakerState: "closed" | "open" | "half_open" | "unknown";
+      eventMessages: number;
+    }
+  >();
+
+  const ensureRelaySummary = (relay: string) => {
+    const normalizedRelay = normalizeRelayKey(relay);
+    if (!normalizedRelay) {
+      return null;
+    }
+    const existing = relaySummaryByKey.get(normalizedRelay);
+    if (existing) {
+      return existing;
+    }
+    const created = {
+      relay: normalizedRelay,
+      connectedEvents: 0,
+      disconnectEvents: 0,
+      errors: 0,
+      circuitBreakerState: "unknown" as const,
+      eventMessages: 0,
+    };
+    relaySummaryByKey.set(normalizedRelay, created);
+    return created;
+  };
+
+  for (const relay of expectedRelays) {
+    ensureRelaySummary(relay);
+  }
+
+  for (const [relay, stats] of Object.entries(metrics.relays)) {
+    const summary = ensureRelaySummary(relay);
+    if (!summary) {
+      continue;
+    }
+    summary.connectedEvents += stats.connects;
+    summary.disconnectEvents += stats.disconnects;
+    summary.errors += stats.errors;
+    summary.eventMessages += stats.messagesReceived.event;
+    summary.circuitBreakerState = mergeCircuitBreakerState(
+      summary.circuitBreakerState,
+      stats.circuitBreakerState,
+    );
+  }
+
+  const relaySummary = [...relaySummaryByKey.values()].sort((left, right) =>
+    left.relay.localeCompare(right.relay),
+  );
+  return {
+    eventsReceived: metrics.eventsReceived,
+    eventsProcessed: metrics.eventsProcessed,
+    eventsDuplicate: metrics.eventsDuplicate,
+    rejected: metrics.eventsRejected,
+    decrypt: metrics.decrypt,
+    rateLimiting: metrics.rateLimiting,
+    memory: metrics.memory,
+    relaySummary,
+    snapshotAt: metrics.snapshotAt,
+  };
 }
 
 type TraceLoggerLike = {
@@ -328,6 +472,7 @@ const activeBuses = new Map<string, NostrBusHandle>();
 
 // Store metrics snapshots per account (for status reporting)
 const metricsSnapshots = new Map<string, MetricsSnapshot>();
+const aiInfoStates = new Map<string, NostrAiInfoState>();
 
 export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
   id: "nostr",
@@ -480,21 +625,31 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
       lastStartAt: snapshot.lastStartAt ?? null,
       lastStopAt: snapshot.lastStopAt ?? null,
       lastError: snapshot.lastError ?? null,
+      channelsDisabledByEnv: channelsDisabledByEnv(),
+      traceJsonlPath: resolveTraceJsonlPath(),
     }),
-    buildAccountSnapshot: ({ account, runtime }) => ({
-      accountId: account.accountId,
-      name: account.name,
-      enabled: account.enabled,
-      configured: account.configured,
-      publicKey: account.publicKey,
-      profile: account.profile,
-      running: runtime?.running ?? false,
-      lastStartAt: runtime?.lastStartAt ?? null,
-      lastStopAt: runtime?.lastStopAt ?? null,
-      lastError: runtime?.lastError ?? null,
-      lastInboundAt: runtime?.lastInboundAt ?? null,
-      lastOutboundAt: runtime?.lastOutboundAt ?? null,
-    }),
+    buildAccountSnapshot: ({ account, runtime }) => {
+      const metrics = getNostrMetrics(account.accountId);
+      return {
+        accountId: account.accountId,
+        name: account.name,
+        enabled: account.enabled,
+        configured: account.configured,
+        publicKey: account.publicKey,
+        profile: account.profile,
+        relays: account.relays,
+        running: runtime?.running ?? false,
+        lastStartAt: runtime?.lastStartAt ?? null,
+        lastStopAt: runtime?.lastStopAt ?? null,
+        lastError: runtime?.lastError ?? null,
+        lastInboundAt: runtime?.lastInboundAt ?? null,
+        lastOutboundAt: runtime?.lastOutboundAt ?? null,
+        channelsDisabledByEnv: channelsDisabledByEnv(),
+        traceJsonlPath: resolveTraceJsonlPath(),
+        aiInfo: aiInfoStates.get(account.accountId) ?? createInitialAiInfoState(),
+        metrics: summarizeNostrMetrics(metrics, account.relays),
+      };
+    },
   },
 
   gateway: {
@@ -518,6 +673,14 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
       let lastSelectedModel: ModelSelectionSnapshot | undefined;
       const activeRuns = new Map<string, ActiveRunControl>();
       const pendingCancels = new Map<string, PendingCancel>();
+      aiInfoStates.set(account.accountId, createInitialAiInfoState());
+      const updateAiInfoState = (patch: Partial<NostrAiInfoState>): void => {
+        const previous = aiInfoStates.get(account.accountId) ?? createInitialAiInfoState();
+        aiInfoStates.set(account.accountId, {
+          ...previous,
+          ...patch,
+        });
+      };
 
       // Track bus handle for metrics callback
       let busHandle: NostrBusHandle | null = null;
@@ -590,6 +753,13 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
         });
         const fingerprint = buildAiInfoFingerprint(payload);
         if (fingerprint === lastAiInfoFingerprint) {
+          updateAiInfoState({
+            lastAttemptAtMs: Date.now(),
+            lastReason: reason,
+            lastFingerprint: fingerprint,
+            lastSkippedAtMs: Date.now(),
+            lastSkippedReason: "unchanged_fingerprint",
+          });
           ctx.log?.debug?.(`[${account.accountId}] 31340 unchanged, skipping (${reason})`);
           return;
         }
@@ -599,6 +769,21 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
           if (result.successes.length > 0) {
             lastAiInfoFingerprint = fingerprint;
           }
+          updateAiInfoState({
+            lastAttemptAtMs: Date.now(),
+            lastReason: reason,
+            lastFingerprint: fingerprint,
+            lastPublishedAtSec: result.successes.length > 0 ? result.createdAt : null,
+            lastPublishedEventId: result.successes.length > 0 ? result.eventId : null,
+            lastPublishSuccesses: result.successes.length,
+            lastPublishFailures: result.failures.length,
+            lastError:
+              result.failures.length > 0
+                ? result.failures.map((entry) => `${entry.relay}:${entry.error}`).join(", ")
+                : null,
+            lastSkippedAtMs: null,
+            lastSkippedReason: null,
+          });
           traceRecorder.record({
             direction: "ai_info",
             reason,
@@ -616,6 +801,13 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
             `[${account.accountId}] 31340 published (${reason}) event=${result.eventId}`,
           );
         } catch (err) {
+          updateAiInfoState({
+            lastAttemptAtMs: Date.now(),
+            lastReason: reason,
+            lastPublishSuccesses: 0,
+            lastPublishFailures: account.relays.length,
+            lastError: String(err),
+          });
           traceRecorder.record({
             direction: "ai_info",
             reason,
@@ -639,6 +831,8 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
           responseKind,
           relays,
           eventId,
+          encryptionScheme,
+          tags,
           decryptedPayload,
         }) => {
           const payloadSuffix = decryptedPayload ? ` payload=${decryptedPayload}` : "";
@@ -653,6 +847,8 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
             sender_pubkey: senderPubkey,
             recipient_pubkey: recipientPubkey,
             relays,
+            encryption_scheme: encryptionScheme,
+            tags,
             run_id: typeof parsedPayload?.run_id === "string" ? parsedPayload.run_id : undefined,
             session_id:
               typeof parsedPayload?.session_id === "string" ? parsedPayload.session_id : undefined,

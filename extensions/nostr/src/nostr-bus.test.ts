@@ -396,11 +396,13 @@ describe("startNostrBus NIP-63 protocol flow", () => {
         inReplyTo: payload.eventId,
       });
     });
+    const onSend = vi.fn();
 
     const bus = await startNostrBus({
       privateKey: TEST_HEX_KEY,
       relays: [TEST_RELAY],
       onMessage,
+      onSend,
       onError: vi.fn(),
     });
 
@@ -435,6 +437,18 @@ describe("startNostrBus NIP-63 protocol flow", () => {
       SENDER_PUBLIC_KEY,
     );
     expect(mocks.decryptMock).toHaveBeenCalledWith(inbound.content, `shared-${SENDER_PUBLIC_KEY}`);
+    expect(onSend).toHaveBeenCalledWith(
+      expect.objectContaining({
+        responseKind: 25803,
+        encryptionScheme: "nip44",
+        tags: [
+          ["p", SENDER_PUBLIC_KEY],
+          ["encryption", "nip44"],
+          ["s", "session-alpha"],
+          ["e", "inbound-evt-1", "", "root"],
+        ],
+      }),
+    );
 
     bus.close();
   });
@@ -505,7 +519,7 @@ describe("startNostrBus NIP-63 protocol flow", () => {
     };
     mocks.decryptMock.mockReturnValueOnce(`{"ver":1,"reason":"user_cancel"}`);
 
-    const onMessage = vi.fn(async () => undefined);
+    const onMessage = vi.fn(async (_payload, _reply) => undefined);
     const bus = await startNostrBus({
       privateKey: TEST_HEX_KEY,
       relays: [TEST_RELAY],

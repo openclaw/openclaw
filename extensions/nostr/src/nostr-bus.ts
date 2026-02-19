@@ -107,6 +107,8 @@ export interface NostrBusOptions {
     responseKind: number;
     relays: string[];
     eventId: string;
+    encryptionScheme: string;
+    tags: string[][];
     decryptedPayload?: string;
   }) => void;
   /** Called on connection status changes (optional) */
@@ -1112,6 +1114,8 @@ async function sendEncryptedDm(
     responseKind: number;
     relays: string[];
     eventId: string;
+    encryptionScheme: string;
+    tags: string[][];
     decryptedPayload?: string;
   }) => void,
   onError?: (error: Error, context: string) => void,
@@ -1217,6 +1221,8 @@ async function sendEncryptedDm(
           responseKind: normalizedResponseKind,
           relays: [relay],
           eventId: reply.id,
+          encryptionScheme: isNip04Response ? "nip04" : NIP63_ENCRYPTION_SCHEME,
+          tags,
           decryptedPayload,
         });
       } catch (sendError) {
