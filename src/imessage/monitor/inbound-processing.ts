@@ -127,6 +127,17 @@ export function resolveIMessageInboundDecision(params: {
         defaultConfig: undefined,
       };
 
+  // Guard: if the chatId resolves to a blocked group in the allowlist, reject before
+  // deriving isGroup. iMessage can deliver group messages with is_group=false (e.g.
+  // 2-person threads), which would otherwise bypass group allowlist enforcement and
+  // fall into the DM authorization path. (#20618)
+  if (groupIdCandidate && groupListPolicy.allowlistEnabled && !groupListPolicy.allowed) {
+    params.logVerbose?.(
+      `imessage: blocking message from chatId=${groupIdCandidate} — not in group allowlist (pre-isGroup enforcement)`,
+    );
+    return { kind: "drop", reason: "group id not in allowlist (pre-isGroup)" };
+  }
+
   // If the owner explicitly configures a chat_id under imessage.groups, treat that thread as a
   // "group" for permission gating + session isolation, even when is_group=false.
   const treatAsGroupByConfig = Boolean(

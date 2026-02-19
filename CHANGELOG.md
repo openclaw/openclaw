@@ -15,7 +15,11 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+<<<<<<< HEAD
 - Gateway/WebChat: block `sessions.patch` and `sessions.delete` for WebChat clients so session-store mutations stay restricted to non-WebChat operator flows. Thanks @allsmog for reporting.
+=======
+- iMessage/Groups: fix group allowlist bypass when iMessage delivers a group message with `is_group=false` (e.g. 2-person threads) — add a pre-isGroup guard so blocked groups are rejected before falling into the DM authorization path. (#20618) Thanks @arosstale.
+>>>>>>> c0fb4e03ec (fix(imessage): block group allowlist bypass when is_group is false/null)
 - Security/Feishu: prevent path traversal in Feishu inbound media temp-file writes by replacing key-derived temp filenames with UUID-based names. Thanks @allsmog for reporting.
 - LINE/Security: harden inbound media temp-file naming by using UUID-based temp paths for downloaded media instead of external message IDs. (#20792) Thanks @mbelinky.
 - Security/Media: harden local media ingestion against TOCTOU/symlink swap attacks by pinning reads to a single file descriptor with symlink rejection and inode/device verification in `saveMediaSource`. Thanks @dorjoos for reporting.
