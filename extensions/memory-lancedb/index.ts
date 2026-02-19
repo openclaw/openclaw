@@ -279,12 +279,6 @@ export function detectCategory(text: string): MemoryCategory {
   return "other";
 }
 
-export function formatForgetCandidates(candidates: Array<{ id: string; text: string }>): string {
-  return candidates
-    .map((candidate) => `- [${candidate.id}] ${candidate.text.slice(0, 60)}...`)
-    .join("\n");
-}
-
 // ============================================================================
 // Plugin Definition
 // ============================================================================
@@ -459,9 +453,9 @@ const memoryPlugin = {
               };
             }
 
-            const list = formatForgetCandidates(
-              results.map((r) => ({ id: r.entry.id, text: r.entry.text })),
-            );
+            const list = results
+              .map((r) => `- [${r.entry.id}] ${r.entry.text.slice(0, 60)}...`)
+              .join("\n");
 
             // Strip vector data for serialization
             const sanitizedCandidates = results.map((r) => ({

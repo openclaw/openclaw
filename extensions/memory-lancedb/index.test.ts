@@ -192,28 +192,6 @@ describe("memory plugin e2e", () => {
     expect(detectCategory("The server is running on port 3000")).toBe("fact");
     expect(detectCategory("Random note")).toBe("other");
   });
-
-  test("formatForgetCandidates keeps full memory IDs in candidate list", async () => {
-    const { formatForgetCandidates } = await import("./index.js");
-
-    const candidates = [
-      {
-        id: "12345678-1234-1234-1234-123456789abc",
-        text: "The user prefers dark mode for all applications",
-      },
-      {
-        id: "abcdef12-abcd-abcd-abcd-abcdef123456",
-        text: "Use pnpm for TypeScript package management",
-      },
-    ];
-
-    const output = formatForgetCandidates(candidates);
-
-    expect(output).toContain("[12345678-1234-1234-1234-123456789abc]");
-    expect(output).toContain("[abcdef12-abcd-abcd-abcd-abcdef123456]");
-    expect(output).not.toContain("[12345678]");
-    expect(output).not.toContain("[abcdef12]");
-  });
 });
 
 // Live tests that require OpenAI API key and actually use LanceDB
