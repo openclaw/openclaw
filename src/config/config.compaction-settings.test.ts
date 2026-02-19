@@ -1,6 +1,8 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { loadConfig } from "./config.js";
-import { withTempHomeConfig } from "./test-helpers.js";
+import { loadConfig, validateConfigObject } from "./config.js";
+import { withTempHome, withTempHomeConfig } from "./test-helpers.js";
 
 describe("config compaction settings", () => {
   it("preserves memory flush config values", async () => {
@@ -127,5 +129,89 @@ describe("config compaction settings", () => {
         expect(cfg.agents?.defaults?.compaction?.qualityGuard?.maxRetries).toBe(99);
       },
     );
+  });
+
+  it("preserves notifyOnStart and notifyOnStartText config values", async () => {
+    await withTempHome(async (home) => {
+      const configDir = path.join(home, ".openclaw");
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(
+        path.join(configDir, "openclaw.json"),
+        JSON.stringify(
+          {
+            agents: {
+              defaults: {
+                compaction: {
+                  notifyOnStart: true,
+                  notifyOnStartText: "⏳ Compacting context…",
+                },
+              },
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+
+      const cfg = loadConfig();
+
+      expect(cfg.agents?.defaults?.compaction?.notifyOnStart).toBe(true);
+      expect(cfg.agents?.defaults?.compaction?.notifyOnStartText).toBe("⏳ Compacting context…");
+    });
+  });
+
+  it("accepts notifyOnStart: false without errors", async () => {
+    await withTempHome(async (home) => {
+      const configDir = path.join(home, ".openclaw");
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(
+        path.join(configDir, "openclaw.json"),
+        JSON.stringify(
+          {
+            agents: {
+              defaults: {
+                compaction: {
+                  notifyOnStart: false,
+                },
+              },
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+
+      const cfg = loadConfig();
+
+      expect(cfg.agents?.defaults?.compaction?.notifyOnStart).toBe(false);
+    });
+  });
+
+  it("rejects non-boolean notifyOnStart", () => {
+    const result = validateConfigObject({
+      agents: {
+        defaults: {
+          compaction: {
+            notifyOnStart: "yes",
+          },
+        },
+      },
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it("rejects non-string notifyOnStartText", () => {
+    const result = validateConfigObject({
+      agents: {
+        defaults: {
+          compaction: {
+            notifyOnStartText: 42,
+          },
+        },
+      },
+    });
+    expect(result.ok).toBe(false);
   });
 });

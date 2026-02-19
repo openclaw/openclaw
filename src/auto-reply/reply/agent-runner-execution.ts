@@ -95,6 +95,7 @@ export async function runAgentTurnWithFallback(params: {
   pendingToolTasks: Set<Promise<void>>;
   resetSessionAfterCompactionFailure: (reason: string) => Promise<boolean>;
   resetSessionAfterRoleOrderingConflict: (reason: string) => Promise<boolean>;
+  onCompactionStart?: () => Promise<void> | void;
   isHeartbeat: boolean;
   sessionKey?: string;
   getActiveSessionEntry: () => SessionEntry | undefined;

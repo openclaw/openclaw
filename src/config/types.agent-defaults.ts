@@ -329,6 +329,10 @@ export type AgentCompactionConfig = {
    * When set, compaction uses this model instead of the agent's primary model.
    * Falls back to the primary model when unset. */
   model?: string;
+  /** Send a notification message to the user when compaction starts. Default: false. */
+  notifyOnStart?: boolean;
+  /** Notification text sent when compaction starts. Default: "🧹 Context compacting, back in a moment…" */
+  notifyOnStartText?: string;
 };
 
 export type AgentCompactionMemoryFlushConfig = {

@@ -123,6 +123,8 @@ export const AgentDefaultsSchema = z
           })
           .strict()
           .optional(),
+        notifyOnStart: z.boolean().optional(),
+        notifyOnStartText: z.string().optional(),
       })
       .strict()
       .optional(),
