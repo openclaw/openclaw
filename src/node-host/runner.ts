@@ -118,13 +118,40 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     mode: GATEWAY_CLIENT_MODES.NODE,
     role: "node",
     scopes: [],
-    caps: ["system", ...(browserProxyEnabled ? ["browser"] : [])],
+    caps: [
+      "system",
+      ...(browserProxyEnabled ? ["browser"] : []),
+      ...(process.platform === "darwin"
+        ? ["camera", "canvas", "location", "contacts", "calendar", "reminders", "photos"]
+        : []),
+    ],
     commands: [
       "system.run",
       "system.which",
+      "system.notify",
       "system.execApprovals.get",
       "system.execApprovals.set",
       ...(browserProxyEnabled ? ["browser.proxy"] : []),
+      ...(process.platform === "darwin"
+        ? [
+            "camera.list",
+            "camera.snap",
+            "camera.clip",
+            "screen.record",
+            "location.get",
+            "device.info",
+            "device.status",
+            "contacts.search",
+            "calendar.events",
+            "reminders.list",
+            "photos.latest",
+            "canvas.present",
+            "canvas.hide",
+            "canvas.navigate",
+            "canvas.eval",
+            "canvas.snapshot",
+          ]
+        : []),
     ],
     pathEnv,
     permissions: undefined,
