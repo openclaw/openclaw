@@ -363,10 +363,22 @@ export async function runAgentTurnWithFallback(params: {
                       return;
                     }
                     await params.typingSignals.signalTextDelta(text);
-                    await onToolResult({
+
+                    // Route tool result deliveries through the block reply pipeline to maintain ordering.
+                    // Without this, tool result summaries can arrive after longer block replies that are
+                    // still buffering in the pipeline, causing out-of-order message delivery.
+                    const toolResultPayload: ReplyPayload = {
                       text,
                       mediaUrls: payload.mediaUrls,
-                    });
+                    };
+
+                    if (blockReplyPipeline && params.blockStreamingEnabled) {
+                      // Use the pipeline to ensure proper message ordering
+                      blockReplyPipeline.enqueue(toolResultPayload);
+                    } else {
+                      // Fallback to direct delivery when pipeline is unavailable
+                      await onToolResult(toolResultPayload);
+                    }
                   })()
                     .catch((err) => {
                       logVerbose(`tool result delivery failed: ${String(err)}`);
