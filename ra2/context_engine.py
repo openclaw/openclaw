@@ -115,7 +115,7 @@ def _run_compression(messages: list, stream_id: str) -> None:
     if latest:
         updates["latest"] = latest
     if blockers:
-        updates["blockers"] = blockers[-token_gate.MAX_TOKENS:]  # bounded
+        updates["blockers"] = blockers[-ledger.MAX_BLOCKERS:]  # bounded
     if open_questions:
         updates["open"] = open_questions[-10:]
 
