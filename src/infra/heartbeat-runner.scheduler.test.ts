@@ -283,4 +283,31 @@ describe("startHeartbeatRunner", () => {
 
     runner.stop();
   });
+
+  it('allows event-driven heartbeats with exec:* prefix through when requests-in-flight', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+
+    const runSpy = vi.fn().mockResolvedValue({ status: 'ran', durationMs: 1 });
+
+    const runner = startHeartbeatRunner({
+      cfg: {
+        agents: { defaults: { heartbeat: { every: '30m' } } },
+      } as OpenClawConfig,
+      runOnce: runSpy,
+    });
+
+    // exec:* prefix patterns should be classified as exec-event and allowed
+    // through even when the command lane has requests in flight
+    requestHeartbeatNow({ reason: 'exec:abc123:exit', coalesceMs: 0 });
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(runSpy).toHaveBeenCalledTimes(1);
+    expect(runSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'exec:abc123:exit' }),
+    );
+
+    runner.stop();
+  });
+
 });
