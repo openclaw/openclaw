@@ -117,7 +117,7 @@ async function pollForAccessToken(params: {
 export async function githubCopilotLoginCommand(
   opts: { profileId?: string; yes?: boolean },
   runtime: RuntimeEnv,
-) {
+): Promise<string> {
   if (!process.stdin.isTTY) {
     throw new Error("github-copilot login requires an interactive TTY.");
   }
@@ -181,4 +181,5 @@ export async function githubCopilotLoginCommand(
   runtime.log(`Auth profile: ${profileId} (github-copilot/token)`);
 
   outro("Done");
+  return accessToken;
 }
