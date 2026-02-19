@@ -98,6 +98,25 @@ describe("ensureBrowserControlAuth", () => {
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
   });
 
+  it("respects explicit none mode", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        auth: {
+          mode: "none",
+        },
+      },
+      browser: {
+        enabled: true,
+      },
+    };
+
+    const result = await ensureBrowserControlAuth({ cfg, env: {} as NodeJS.ProcessEnv });
+
+    expect(result).toEqual({ auth: {} });
+    expect(mocks.loadConfig).not.toHaveBeenCalled();
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+  });
+
   it("reuses auth from latest config snapshot", async () => {
     const cfg: OpenClawConfig = {
       browser: {
