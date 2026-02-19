@@ -136,7 +136,9 @@ export async function appendStatusAllDiagnosis(params: {
     const hasDns = Boolean(params.tailscale.dnsName);
     const label =
       params.tailscaleMode === "off"
-        ? `Tailscale: off · ${backend}${params.tailscale.dnsName ? ` · ${params.tailscale.dnsName}` : ""}`
+        ? params.tailscale.backendState === "Running"
+          ? `Tailscale: active (not configured for OpenClaw)${params.tailscale.dnsName ? ` · ${params.tailscale.dnsName}` : ""}`
+          : `Tailscale: off · ${backend}${params.tailscale.dnsName ? ` · ${params.tailscale.dnsName}` : ""}`
         : `Tailscale: ${params.tailscaleMode} · ${backend}${params.tailscale.dnsName ? ` · ${params.tailscale.dnsName}` : ""}`;
     emitCheck(label, okBackend && (params.tailscaleMode === "off" || hasDns) ? "ok" : "warn");
     if (params.tailscale.error) {

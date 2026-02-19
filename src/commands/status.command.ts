@@ -359,7 +359,9 @@ export async function statusCommand(
       Item: "Tailscale",
       Value:
         tailscaleMode === "off"
-          ? muted("off")
+          ? tailscaleDns
+            ? muted(`active (not configured) · ${tailscaleDns}`)
+            : muted("off")
           : tailscaleDns && tailscaleHttpsUrl
             ? `${tailscaleMode} · ${tailscaleDns} · ${tailscaleHttpsUrl}`
             : warn(`${tailscaleMode} · magicdns unknown`),

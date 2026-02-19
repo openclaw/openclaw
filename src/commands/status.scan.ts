@@ -81,12 +81,11 @@ export async function scanStatus(
 
       progress.setLabel("Checking Tailscale…");
       const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
-      const tailscaleDns =
-        tailscaleMode === "off"
-          ? null
-          : await getTailnetHostname((cmd, args) =>
-              runExec(cmd, args, { timeoutMs: 1200, maxBuffer: 200_000 }),
-            ).catch(() => null);
+      // Always probe Tailscale state, even when mode="off", so we can surface
+      // that Tailscale is running but not yet configured for OpenClaw.
+      const tailscaleDns = await getTailnetHostname((cmd, args) =>
+        runExec(cmd, args, { timeoutMs: 1500, maxBuffer: 200_000 }),
+      ).catch(() => null);
       const tailscaleHttpsUrl =
         tailscaleMode !== "off" && tailscaleDns
           ? `https://${tailscaleDns}${normalizeControlUiBasePath(cfg.gateway?.controlUi?.basePath)}`

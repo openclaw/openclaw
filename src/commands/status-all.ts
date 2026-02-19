@@ -46,7 +46,7 @@ export async function statusAllCommand(
     const tailscale = await (async () => {
       try {
         const parsed = await readTailscaleStatusJson(runExec, {
-          timeoutMs: 1200,
+          timeoutMs: 3000,
         });
         const backendState = typeof parsed.BackendState === "string" ? parsed.BackendState : null;
         const self =
@@ -273,7 +273,9 @@ export async function statusAllCommand(
         Item: "Tailscale",
         Value:
           tailscaleMode === "off"
-            ? `off${tailscale.backendState ? ` · ${tailscale.backendState}` : ""}${tailscale.dnsName ? ` · ${tailscale.dnsName}` : ""}`
+            ? tailscale.backendState === "Running"
+              ? `active (not configured)${tailscale.dnsName ? ` · ${tailscale.dnsName}` : ""}`
+              : `off${tailscale.backendState ? ` · ${tailscale.backendState}` : ""}`
             : tailscale.dnsName && tailscaleHttpsUrl
               ? `${tailscaleMode} · ${tailscale.backendState ?? "unknown"} · ${tailscale.dnsName} · ${tailscaleHttpsUrl}`
               : `${tailscaleMode} · ${tailscale.backendState ?? "unknown"} · magicdns unknown`,
