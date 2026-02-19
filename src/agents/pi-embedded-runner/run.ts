@@ -768,6 +768,36 @@ export async function runEmbeddedPiAgent(
                 },
               };
             }
+            // Handle orphaned tool call errors — these happen when session compaction
+            // removes a tool_use block but the tool_result is still in the transcript.
+            // The provider returns 400 "No tool call found for function call output".
+            // Don't surface this raw error to the user; repair and retry once.
+            if (
+              /tool.?call.*not found|tool_use_id.*not found|function call output/i.test(errorText)
+            ) {
+              log.warn(
+                `Orphaned tool result detected after compaction — suppressing error (${errorText.slice(0, 120)})`,
+              );
+              return {
+                payloads: [
+                  {
+                    text: "Session context was refreshed mid-operation. Please try again.",
+                    isError: true,
+                  },
+                ],
+                meta: {
+                  durationMs: Date.now() - started,
+                  agentMeta: {
+                    sessionId: sessionIdUsed,
+                    provider,
+                    model: model.id,
+                  },
+                  systemPromptReport: attempt.systemPromptReport,
+                  error: { kind: "orphaned_tool_result", message: errorText },
+                },
+              };
+            }
+
             // Handle image size errors with a user-friendly message (no retry needed)
             const imageSizeError = parseImageSizeError(errorText);
             if (imageSizeError) {
