@@ -84,6 +84,38 @@ function isInternalAnnounceRequesterSession(sessionKey: string | undefined): boo
   return getSubagentDepthFromSessionStore(sessionKey) >= 1 || isCronSessionKey(sessionKey);
 }
 
+function buildCompletionDeliveryMessage(params: {
+  findings: string;
+  subagentName: string;
+  spawnMode?: SpawnSubagentMode;
+  outcome?: SubagentRunOutcome;
+  model?: string;
+}): string {
+  const findingsText = params.findings.trim();
+  const hasFindings = findingsText.length > 0 && findingsText !== "(no output)";
+  const modelShort = params.model ? params.model.split("/").pop() : undefined;
+  const modelSuffix = modelShort ? ` (${modelShort})` : "";
+  const header = (() => {
+    if (params.outcome?.status === "error") {
+      return params.spawnMode === "session"
+        ? `❌ Subagent ${params.subagentName}${modelSuffix} failed this task (session remains active)`
+        : `❌ Subagent ${params.subagentName}${modelSuffix} failed`;
+    }
+    if (params.outcome?.status === "timeout") {
+      return params.spawnMode === "session"
+        ? `⏱️ Subagent ${params.subagentName}${modelSuffix} timed out on this task (session remains active)`
+        : `⏱️ Subagent ${params.subagentName}${modelSuffix} timed out`;
+    }
+    return params.spawnMode === "session"
+      ? `✅ Subagent ${params.subagentName}${modelSuffix} completed this task (session remains active)`
+      : `✅ Subagent ${params.subagentName}${modelSuffix} finished`;
+  })();
+  if (!hasFindings) {
+    return header;
+  }
+  return `${header}\n\n${findingsText}`;
+}
+
 function summarizeDeliveryError(error: unknown): string {
   if (error instanceof Error) {
     return error.message || "error";
@@ -1163,6 +1195,7 @@ export async function runSubagentAnnounceFlow(params: {
   startedAt?: number;
   endedAt?: number;
   label?: string;
+  model?: string;
   outcome?: SubagentRunOutcome;
   announceType?: SubagentAnnounceType;
   expectsCompletionMessage?: boolean;
@@ -1353,6 +1386,7 @@ export async function runSubagentAnnounceFlow(params: {
             : "finished with unknown status";
 
     const taskLabel = params.label || params.task || "task";
+    const subagentName = params.label || resolveAgentIdFromSessionKey(params.childSessionKey);
     const announceSessionId = childSessionId || "unknown";
     const findings = childCompletionFindings || reply || "(no output)";
 
@@ -1395,22 +1429,22 @@ export async function runSubagentAnnounceFlow(params: {
       startedAt: params.startedAt,
       endedAt: params.endedAt,
     });
-    const internalEvents: AgentInternalEvent[] = [
-      {
-        type: "task_completion",
-        source: announceType === "cron job" ? "cron" : "subagent",
-        childSessionKey: params.childSessionKey,
-        childSessionId: announceSessionId,
-        announceType,
-        taskLabel,
-        status: outcome.status,
-        statusLabel,
-        result: findings,
-        statsLine,
-        replyInstruction,
-      },
-    ];
-    const triggerMessage = buildAnnounceSteerMessage(internalEvents);
+    completionMessage = buildCompletionDeliveryMessage({
+      findings,
+      subagentName,
+      spawnMode: params.spawnMode,
+      outcome,
+      model: params.model,
+    });
+    const internalSummaryMessage = [
+      `[System Message] [sessionId: ${announceSessionId}] A ${announceType} "${taskLabel}" just ${statusLabel}.`,
+      "",
+      "Result:",
+      findings,
+      "",
+      statsLine,
+    ].join("\n");
+    triggerMessage = [internalSummaryMessage, "", replyInstruction].join("\n");
 
     // Send to the requester session. For nested subagents this is an internal
     // follow-up injection (deliver=false) so the orchestrator receives it.

@@ -7,7 +7,7 @@ import type { TemplateContext } from "../templating.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 const taskResolverMock = vi.hoisted(() => ({
-  resolveTaskType: vi.fn(() => TaskType.CODE_EDIT),
+  resolveTaskType: vi.fn(async () => TaskType.CODE_EDIT),
 }));
 
 const applyDirectivesMock = vi.hoisted(() => ({
@@ -135,7 +135,7 @@ function buildParams(params: {
     sessionKey: params.sessionKey,
     storePath: params.storePath,
     sessionScope: "per-sender" as const,
-    groupResolution: null,
+    groupResolution: undefined,
     isGroup: false,
     triggerBodyNormalized: "",
     commandAuthorized: true,
@@ -145,7 +145,7 @@ function buildParams(params: {
     provider: "anthropic",
     model: "claude-opus-4-5",
     hasResolvedHeartbeatModelOverride: false,
-    typing: { cleanup: vi.fn() },
+    typing: { cleanup: vi.fn() } as unknown as import("./typing.js").TypingController,
     opts: undefined,
     skillFilter: undefined,
   };
