@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import { callGateway } from "../gateway/call.js";
+import { storeDeviceAuthToken } from "../infra/device-auth-store.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../runtime.js";
 import { renderTable } from "../terminal/table.js";
@@ -340,6 +341,24 @@ export function registerDevicesCli(program: Command) {
           role: required.role,
           scopes: Array.isArray(opts.scope) ? opts.scope : undefined,
         });
+        // Persist the new token locally so subsequent CLI commands authenticate
+        // without requiring --password. Without this, rotate only updates the
+        // server-side token and the local device-auth.json stays stale. (#20679)
+        const rotated = result?.result as
+          | { deviceId?: string; role?: string; token?: string; scopes?: string[] }
+          | undefined;
+        if (
+          typeof rotated?.deviceId === "string" &&
+          typeof rotated?.role === "string" &&
+          typeof rotated?.token === "string"
+        ) {
+          storeDeviceAuthToken({
+            deviceId: rotated.deviceId,
+            role: rotated.role,
+            token: rotated.token,
+            scopes: Array.isArray(rotated.scopes) ? rotated.scopes : undefined,
+          });
+        }
         defaultRuntime.log(JSON.stringify(result, null, 2));
       }),
   );
