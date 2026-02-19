@@ -1,60 +1,66 @@
-@import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap");
 
 :root {
-  /* Background - Warmer dark with depth */
-  --bg: #12141a;
-  --bg-accent: #14161d;
-  --bg-elevated: #1a1d25;
-  --bg-hover: #262a35;
-  --bg-muted: #262a35;
+  /* Sonance Brand Constants */
+  --sonance-charcoal: #333F48;
+  --sonance-blue: #00A3E1;
+  --sonance-light-gray: #D9D9D6;
+  --iport-orange: #FC4C02;
 
-  /* Card / Surface - More contrast between levels */
-  --card: #181b22;
-  --card-foreground: #f4f4f5;
-  --card-highlight: rgba(255, 255, 255, 0.05);
-  --popover: #181b22;
-  --popover-foreground: #f4f4f5;
+  /* Background - Sonance dark palette */
+  --bg: #1a1f24;
+  --bg-accent: #242a31;
+  --bg-elevated: #2d343c;
+  --bg-hover: #3a444c;
+  --bg-muted: #3a444c;
+
+  /* Card / Surface */
+  --card: #242a31;
+  --card-foreground: #FFFFFF;
+  --card-highlight: rgba(255, 255, 255, 0.06);
+  --popover: #242a31;
+  --popover-foreground: #FFFFFF;
 
   /* Panel */
-  --panel: #12141a;
-  --panel-strong: #1a1d25;
-  --panel-hover: #262a35;
-  --chrome: rgba(18, 20, 26, 0.95);
-  --chrome-strong: rgba(18, 20, 26, 0.98);
+  --panel: #1a1f24;
+  --panel-strong: #2d343c;
+  --panel-hover: #3a444c;
+  --chrome: rgba(26, 31, 36, 0.95);
+  --chrome-strong: rgba(26, 31, 36, 0.98);
 
-  /* Text - Slightly warmer */
-  --text: #e4e4e7;
-  --text-strong: #fafafa;
-  --chat-text: #e4e4e7;
-  --muted: #71717a;
-  --muted-strong: #52525b;
-  --muted-foreground: #71717a;
+  /* Text */
+  --text: #FFFFFF;
+  --text-strong: #FFFFFF;
+  --chat-text: #FFFFFF;
+  --muted: #8f999f;
+  --muted-strong: #6b7780;
+  --muted-foreground: #8f999f;
 
-  /* Border - Subtle but defined */
-  --border: #27272a;
-  --border-strong: #3f3f46;
-  --border-hover: #52525b;
-  --input: #27272a;
-  --ring: #ff5c5c;
+  /* Border */
+  --border: #3a444c;
+  --border-strong: #424c54;
+  --border-hover: #515c64;
+  --input: #3a444c;
+  --ring: #00A3E1;
 
-  /* Accent - Punchy signature red */
-  --accent: #ff5c5c;
-  --accent-hover: #ff7070;
-  --accent-muted: #ff5c5c;
-  --accent-subtle: rgba(255, 92, 92, 0.15);
-  --accent-foreground: #fafafa;
-  --accent-glow: rgba(255, 92, 92, 0.25);
-  --primary: #ff5c5c;
+  /* Accent - Sonance Blue "The Beam" */
+  --accent: #00A3E1;
+  --accent-hover: #33b5e7;
+  --accent-muted: #00A3E1;
+  --accent-subtle: rgba(0, 163, 225, 0.15);
+  --accent-foreground: #FFFFFF;
+  --accent-glow: rgba(0, 163, 225, 0.35);
+  --primary: #00A3E1;
   --primary-foreground: #ffffff;
 
-  /* Secondary - Teal accent for variety */
-  --secondary: #1e2028;
-  --secondary-foreground: #f4f4f5;
-  --accent-2: #14b8a6;
-  --accent-2-muted: rgba(20, 184, 166, 0.7);
-  --accent-2-subtle: rgba(20, 184, 166, 0.15);
+  /* Secondary - IPORT Orange */
+  --secondary: #2d343c;
+  --secondary-foreground: #FFFFFF;
+  --accent-2: #FC4C02;
+  --accent-2-muted: rgba(252, 76, 2, 0.7);
+  --accent-2-subtle: rgba(252, 76, 2, 0.15);
 
-  /* Semantic - More saturated */
+  /* Semantic */
   --ok: #22c55e;
   --ok-muted: rgba(34, 197, 94, 0.75);
   --ok-subtle: rgba(34, 197, 94, 0.12);
@@ -66,43 +72,57 @@
   --danger: #ef4444;
   --danger-muted: rgba(239, 68, 68, 0.75);
   --danger-subtle: rgba(239, 68, 68, 0.12);
-  --info: #3b82f6;
+  --info: #42A5F5;
 
-  /* Focus - With glow */
-  --focus: rgba(255, 92, 92, 0.25);
+  /* Focus */
+  --focus: rgba(0, 163, 225, 0.25);
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--ring);
   --focus-glow: 0 0 0 2px var(--bg), 0 0 0 4px var(--ring), 0 0 20px var(--accent-glow);
 
   /* Grid */
-  --grid-line: rgba(255, 255, 255, 0.04);
+  --grid-line: rgba(255, 255, 255, 0.05);
 
   /* Theme transition */
   --theme-switch-x: 50%;
   --theme-switch-y: 50%;
 
-  /* Typography - Space Grotesk for personality */
+  /* Typography - Montserrat (Sonance brand) */
   --mono:
     "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
-  --font-body: "Space Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-body: "Montserrat", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-display:
-    "Space Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    "Montserrat", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 
-  /* Shadows - Richer with subtle color */
+  /* Shadows */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.25), 0 0 0 1px rgba(255, 255, 255, 0.03);
   --shadow-lg: 0 12px 28px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(255, 255, 255, 0.03);
   --shadow-xl: 0 24px 48px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.03);
   --shadow-glow: 0 0 30px var(--accent-glow);
 
-  /* Radii - Slightly larger for friendlier feel */
-  --radius-sm: 6px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
-  --radius-xl: 16px;
+  /* Radii - Liquid Glass system */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+  --radius-2xl: 24px;
   --radius-full: 9999px;
-  --radius: 8px;
+  --radius: 12px;
 
-  /* Transitions - Snappy but smooth */
+  /* Liquid Glass System */
+  --glass-bg: rgba(255, 255, 255, 0.03);
+  --glass-bg-hover: rgba(255, 255, 255, 0.06);
+  --glass-bg-active: rgba(255, 255, 255, 0.1);
+  --glass-border: rgba(255, 255, 255, 0.08);
+  --glass-border-hover: rgba(255, 255, 255, 0.12);
+  --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+  --glass-shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
+  --glass-glow: 0 0 30px rgba(0, 163, 225, 0.35);
+  --glass-inner-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  --glow-primary: rgba(0, 163, 225, 0.35);
+  --glow-primary-subtle: rgba(0, 163, 225, 0.2);
+
+  /* Transitions */
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
   --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
@@ -113,53 +133,53 @@
   color-scheme: dark;
 }
 
-/* Light theme - Clean with subtle warmth */
+/* Light theme - Sonance clean */
 :root[data-theme="light"] {
-  --bg: #fafafa;
-  --bg-accent: #f5f5f5;
-  --bg-elevated: #ffffff;
-  --bg-hover: #f0f0f0;
-  --bg-muted: #f0f0f0;
-  --bg-content: #f5f5f5;
+  --bg: #FFFFFF;
+  --bg-accent: #f8f9fa;
+  --bg-elevated: #FFFFFF;
+  --bg-hover: #f0f2f3;
+  --bg-muted: #f0f2f3;
+  --bg-content: #f8f9fa;
 
-  --card: #ffffff;
-  --card-foreground: #18181b;
+  --card: #FFFFFF;
+  --card-foreground: #333F48;
   --card-highlight: rgba(0, 0, 0, 0.03);
-  --popover: #ffffff;
-  --popover-foreground: #18181b;
+  --popover: #FFFFFF;
+  --popover-foreground: #333F48;
 
-  --panel: #fafafa;
-  --panel-strong: #f5f5f5;
-  --panel-hover: #ebebeb;
-  --chrome: rgba(250, 250, 250, 0.95);
-  --chrome-strong: rgba(250, 250, 250, 0.98);
+  --panel: #FFFFFF;
+  --panel-strong: #f8f9fa;
+  --panel-hover: #f0f2f3;
+  --chrome: rgba(255, 255, 255, 0.95);
+  --chrome-strong: rgba(255, 255, 255, 0.98);
 
-  --text: #3f3f46;
-  --text-strong: #18181b;
-  --chat-text: #3f3f46;
-  --muted: #71717a;
-  --muted-strong: #52525b;
-  --muted-foreground: #71717a;
+  --text: #333F48;
+  --text-strong: #333F48;
+  --chat-text: #333F48;
+  --muted: #6b7780;
+  --muted-strong: #515c64;
+  --muted-foreground: #6b7780;
 
-  --border: #e4e4e7;
-  --border-strong: #d4d4d8;
-  --border-hover: #a1a1aa;
-  --input: #e4e4e7;
+  --border: #D9D9D6;
+  --border-strong: #b8bfc4;
+  --border-hover: #8f999f;
+  --input: #D9D9D6;
 
-  --accent: #dc2626;
-  --accent-hover: #ef4444;
-  --accent-muted: #dc2626;
-  --accent-subtle: rgba(220, 38, 38, 0.12);
+  --accent: #333F48;
+  --accent-hover: #2a343c;
+  --accent-muted: #333F48;
+  --accent-subtle: rgba(51, 63, 72, 0.12);
   --accent-foreground: #ffffff;
-  --accent-glow: rgba(220, 38, 38, 0.15);
-  --primary: #dc2626;
+  --accent-glow: rgba(51, 63, 72, 0.15);
+  --primary: #333F48;
   --primary-foreground: #ffffff;
 
-  --secondary: #f4f4f5;
-  --secondary-foreground: #3f3f46;
-  --accent-2: #0d9488;
-  --accent-2-muted: rgba(13, 148, 136, 0.75);
-  --accent-2-subtle: rgba(13, 148, 136, 0.12);
+  --secondary: #f0f2f3;
+  --secondary-foreground: #333F48;
+  --accent-2: #00A3E1;
+  --accent-2-muted: rgba(0, 163, 225, 0.75);
+  --accent-2-subtle: rgba(0, 163, 225, 0.12);
 
   --ok: #16a34a;
   --ok-muted: rgba(22, 163, 74, 0.75);
@@ -172,9 +192,9 @@
   --danger: #dc2626;
   --danger-muted: rgba(220, 38, 38, 0.75);
   --danger-subtle: rgba(220, 38, 38, 0.1);
-  --info: #2563eb;
+  --info: #1565C0;
 
-  --focus: rgba(220, 38, 38, 0.2);
+  --focus: rgba(51, 63, 72, 0.2);
   --focus-glow: 0 0 0 2px var(--bg), 0 0 0 4px var(--ring), 0 0 16px var(--accent-glow);
 
   --grid-line: rgba(0, 0, 0, 0.05);
@@ -185,6 +205,19 @@
   --shadow-lg: 0 12px 28px rgba(0, 0, 0, 0.12), 0 0 0 1px rgba(0, 0, 0, 0.04);
   --shadow-xl: 0 24px 48px rgba(0, 0, 0, 0.15), 0 0 0 1px rgba(0, 0, 0, 0.04);
   --shadow-glow: 0 0 24px var(--accent-glow);
+
+  /* Liquid Glass System - Light */
+  --glass-bg: rgba(255, 255, 255, 0.7);
+  --glass-bg-hover: rgba(255, 255, 255, 0.8);
+  --glass-bg-active: rgba(255, 255, 255, 0.9);
+  --glass-border: rgba(0, 0, 0, 0.08);
+  --glass-border-hover: rgba(0, 0, 0, 0.12);
+  --glass-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+  --glass-shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.06);
+  --glass-glow: 0 0 20px rgba(0, 163, 225, 0.2);
+  --glass-inner-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  --glow-primary: rgba(0, 163, 225, 0.2);
+  --glow-primary-subtle: rgba(0, 163, 225, 0.1);
 
   color-scheme: light;
 }
@@ -266,14 +299,19 @@ select {
 }
 
 ::selection {
-  background: var(--accent-subtle);
-  color: var(--text-strong);
+  background: var(--sonance-charcoal);
+  color: var(--sonance-white, #FFFFFF);
+}
+
+:root:not([data-theme="light"]) ::selection {
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--sonance-charcoal);
 }
 
 /* Scrollbar styling */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
 }
 
 ::-webkit-scrollbar-track {
@@ -282,14 +320,14 @@ select {
 
 ::-webkit-scrollbar-thumb {
   background: var(--border);
-  border-radius: var(--radius-full);
+  border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
   background: var(--border-strong);
 }
 
-/* Animations - Polished with spring feel */
+/* Animations */
 @keyframes rise {
   from {
     opacity: 0;
@@ -354,7 +392,7 @@ select {
 @keyframes glow-pulse {
   0%,
   100% {
-    box-shadow: 0 0 0 rgba(255, 92, 92, 0);
+    box-shadow: 0 0 0 rgba(0, 163, 225, 0);
   }
   50% {
     box-shadow: 0 0 20px var(--accent-glow);

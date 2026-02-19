@@ -12,16 +12,21 @@ import type { OpenClawConfig } from "./types.js";
  * - Config is managed externally (read-only from Nix perspective)
  */
 export function resolveIsNixMode(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env.OPENCLAW_NIX_MODE === "1";
+  return env.ATHENA_NIX_MODE === "1" || env.OPENCLAW_NIX_MODE === "1";
 }
 
 export const isNixMode = resolveIsNixMode();
 
 // Support historical (and occasionally misspelled) legacy state dirs.
-const LEGACY_STATE_DIRNAMES = [".clawdbot", ".moldbot", ".moltbot"] as const;
-const NEW_STATE_DIRNAME = ".openclaw";
-const CONFIG_FILENAME = "openclaw.json";
-const LEGACY_CONFIG_FILENAMES = ["clawdbot.json", "moldbot.json", "moltbot.json"] as const;
+const LEGACY_STATE_DIRNAMES = [".openclaw", ".clawdbot", ".moldbot", ".moltbot"] as const;
+const NEW_STATE_DIRNAME = ".athena";
+const CONFIG_FILENAME = "athena.json";
+const LEGACY_CONFIG_FILENAMES = [
+  "openclaw.json",
+  "clawdbot.json",
+  "moldbot.json",
+  "moltbot.json",
+] as const;
 
 function resolveDefaultHomeDir(): string {
   return resolveRequiredHomeDir(process.env, os.homedir);
@@ -62,7 +67,10 @@ export function resolveStateDir(
   homedir: () => string = envHomedir(env),
 ): string {
   const effectiveHomedir = () => resolveRequiredHomeDir(env, homedir);
-  const override = env.OPENCLAW_STATE_DIR?.trim() || env.CLAWDBOT_STATE_DIR?.trim();
+  const override =
+    env.ATHENA_STATE_DIR?.trim() ||
+    env.OPENCLAW_STATE_DIR?.trim() ||
+    env.CLAWDBOT_STATE_DIR?.trim();
   if (override) {
     return resolveUserPath(override, env, effectiveHomedir);
   }
@@ -116,7 +124,10 @@ export function resolveCanonicalConfigPath(
   env: NodeJS.ProcessEnv = process.env,
   stateDir: string = resolveStateDir(env, envHomedir(env)),
 ): string {
-  const override = env.OPENCLAW_CONFIG_PATH?.trim() || env.CLAWDBOT_CONFIG_PATH?.trim();
+  const override =
+    env.ATHENA_CONFIG_PATH?.trim() ||
+    env.OPENCLAW_CONFIG_PATH?.trim() ||
+    env.CLAWDBOT_CONFIG_PATH?.trim();
   if (override) {
     return resolveUserPath(override, env, envHomedir(env));
   }
@@ -153,11 +164,11 @@ export function resolveConfigPath(
   stateDir: string = resolveStateDir(env, envHomedir(env)),
   homedir: () => string = envHomedir(env),
 ): string {
-  const override = env.OPENCLAW_CONFIG_PATH?.trim();
+  const override = env.ATHENA_CONFIG_PATH?.trim() || env.OPENCLAW_CONFIG_PATH?.trim();
   if (override) {
     return resolveUserPath(override, env, homedir);
   }
-  const stateOverride = env.OPENCLAW_STATE_DIR?.trim();
+  const stateOverride = env.ATHENA_STATE_DIR?.trim() || env.OPENCLAW_STATE_DIR?.trim();
   const candidates = [
     path.join(stateDir, CONFIG_FILENAME),
     ...LEGACY_CONFIG_FILENAMES.map((name) => path.join(stateDir, name)),
@@ -193,13 +204,19 @@ export function resolveDefaultConfigCandidates(
   homedir: () => string = envHomedir(env),
 ): string[] {
   const effectiveHomedir = () => resolveRequiredHomeDir(env, homedir);
-  const explicit = env.OPENCLAW_CONFIG_PATH?.trim() || env.CLAWDBOT_CONFIG_PATH?.trim();
+  const explicit =
+    env.ATHENA_CONFIG_PATH?.trim() ||
+    env.OPENCLAW_CONFIG_PATH?.trim() ||
+    env.CLAWDBOT_CONFIG_PATH?.trim();
   if (explicit) {
     return [resolveUserPath(explicit, env, effectiveHomedir)];
   }
 
   const candidates: string[] = [];
-  const openclawStateDir = env.OPENCLAW_STATE_DIR?.trim() || env.CLAWDBOT_STATE_DIR?.trim();
+  const openclawStateDir =
+    env.ATHENA_STATE_DIR?.trim() ||
+    env.OPENCLAW_STATE_DIR?.trim() ||
+    env.CLAWDBOT_STATE_DIR?.trim();
   if (openclawStateDir) {
     const resolved = resolveUserPath(openclawStateDir, env, effectiveHomedir);
     candidates.push(path.join(resolved, CONFIG_FILENAME));
@@ -223,7 +240,7 @@ export const DEFAULT_GATEWAY_PORT = 18789;
 export function resolveGatewayLockDir(tmpdir: () => string = os.tmpdir): string {
   const base = tmpdir();
   const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
-  const suffix = uid != null ? `openclaw-${uid}` : "openclaw";
+  const suffix = uid != null ? `athena-${uid}` : "athena";
   return path.join(base, suffix);
 }
 
@@ -240,7 +257,7 @@ export function resolveOAuthDir(
   env: NodeJS.ProcessEnv = process.env,
   stateDir: string = resolveStateDir(env, envHomedir(env)),
 ): string {
-  const override = env.OPENCLAW_OAUTH_DIR?.trim();
+  const override = env.ATHENA_OAUTH_DIR?.trim() || env.OPENCLAW_OAUTH_DIR?.trim();
   if (override) {
     return resolveUserPath(override, env, envHomedir(env));
   }
@@ -258,7 +275,10 @@ export function resolveGatewayPort(
   cfg?: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): number {
-  const envRaw = env.OPENCLAW_GATEWAY_PORT?.trim() || env.CLAWDBOT_GATEWAY_PORT?.trim();
+  const envRaw =
+    env.ATHENA_GATEWAY_PORT?.trim() ||
+    env.OPENCLAW_GATEWAY_PORT?.trim() ||
+    env.CLAWDBOT_GATEWAY_PORT?.trim();
   if (envRaw) {
     const parsed = Number.parseInt(envRaw, 10);
     if (Number.isFinite(parsed) && parsed > 0) {

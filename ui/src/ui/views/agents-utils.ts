@@ -90,6 +90,56 @@ export const TOOL_SECTIONS = [
   },
 ];
 
+export type PluginToolGroup = {
+  mcpName: string;
+  displayName: string;
+  tools: { name: string; shortName: string }[];
+};
+
+const MCP_DISPLAY_NAMES: Record<string, string> = {
+  github: "GitHub",
+  supabase: "Supabase",
+  vercel: "Vercel",
+  bestbuy: "Best Buy",
+  filesystem: "FileSystem",
+  devserver: "DevServer",
+  sonance_brand: "Sonance Brand",
+  bash: "Bash",
+};
+
+export function extractPluginToolGroups(allowList?: string[]): PluginToolGroup[] {
+  if (!Array.isArray(allowList) || allowList.length === 0) {
+    return [];
+  }
+  const map = new Map<string, { name: string; shortName: string }[]>();
+  for (const name of allowList) {
+    const match = name.match(/^cortex_(.+?)__(.+)$/);
+    if (!match) {
+      continue;
+    }
+    const mcpName = match[1];
+    const shortName = match[2];
+    let list = map.get(mcpName);
+    if (!list) {
+      list = [];
+      map.set(mcpName, list);
+    }
+    list.push({ name, shortName });
+  }
+  return Array.from(map.entries())
+    .toSorted(([a], [b]) => a.localeCompare(b))
+    .map(([mcpName, tools]) => ({
+      mcpName,
+      displayName:
+        MCP_DISPLAY_NAMES[mcpName] ??
+        mcpName
+          .split(/[-_]/)
+          .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+          .join(" "),
+      tools,
+    }));
+}
+
 export const PROFILE_OPTIONS = [
   { id: "minimal", label: "Minimal" },
   { id: "coding", label: "Coding" },

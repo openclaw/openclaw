@@ -78,7 +78,7 @@
   padding: 2px 10px;
   border: 1px solid var(--border);
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--glass-bg);
 }
 
 /* Avatar Styles */
@@ -260,12 +260,12 @@ img.chat-avatar {
 }
 
 :root[data-theme="light"] .chat-group.user .chat-bubble {
-  border-color: rgba(234, 88, 12, 0.2);
-  background: rgba(251, 146, 60, 0.12);
+  border-color: rgba(0, 163, 225, 0.2);
+  background: rgba(0, 163, 225, 0.1);
 }
 
 .chat-group.user .chat-bubble:hover {
-  background: rgba(255, 77, 77, 0.15);
+  background: rgba(0, 163, 225, 0.15);
 }
 
 /* Streaming animation */

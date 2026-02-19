@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import { normalizeToolName } from "../../../../src/agents/tool-policy.js";
 import type { SkillStatusEntry, SkillStatusReport } from "../types.ts";
 import {
+  extractPluginToolGroups,
   isAllowedByPolicy,
   matchesList,
   PROFILE_OPTIONS,
@@ -64,6 +65,8 @@ export function renderAgentTools(params: {
     };
   };
   const enabledCount = toolIds.filter((toolId) => resolveAllowed(toolId).allowed).length;
+  const pluginGroups = extractPluginToolGroups(agentTools.allow);
+  const pluginToolCount = pluginGroups.reduce((sum, g) => sum + g.tools.length, 0);
 
   const updateTool = (toolId: string, nextEnabled: boolean) => {
     const nextAllow = new Set(
@@ -116,7 +119,11 @@ export function renderAgentTools(params: {
           <div class="card-title">Tool Access</div>
           <div class="card-sub">
             Profile + per-tool overrides for this agent.
-            <span class="mono">${enabledCount}/${toolIds.length}</span> enabled.
+            <span class="mono">${enabledCount}/${toolIds.length}</span> built-in${
+              pluginToolCount > 0
+                ? html`, <span class="mono">${pluginToolCount}</span> integration`
+                : nothing
+            } enabled.
           </div>
         </div>
         <div class="row" style="gap: 8px;">
@@ -245,6 +252,42 @@ export function renderAgentTools(params: {
             `,
         )}
       </div>
+
+      ${
+        pluginGroups.length > 0
+          ? html`
+            <div style="margin-top: 28px; border-top: 1px solid var(--border, #e2e8f0); padding-top: 20px;">
+              <div class="card-title" style="margin-bottom: 4px;">Cortex Integrations</div>
+              <div class="card-sub" style="margin-bottom: 16px;">
+                MCP tools auto-synced from Cortex. Managed by the cortex-tools plugin.
+              </div>
+              ${pluginGroups.map(
+                (group) => html`
+                  <details class="agent-tools-section" open style="margin-bottom: 12px;">
+                    <summary class="agent-tools-header" style="cursor: pointer; user-select: none;">
+                      <span>${group.displayName}</span>
+                      <span class="muted" style="margin-left: 8px;">${group.tools.length} tool${group.tools.length === 1 ? "" : "s"}</span>
+                    </summary>
+                    <div class="agent-tools-list" style="margin-top: 8px;">
+                      ${group.tools.map(
+                        (tool) => html`
+                          <div class="agent-tool-row">
+                            <div>
+                              <div class="agent-tool-title mono">${tool.shortName}</div>
+                              <div class="agent-tool-sub">${tool.name}</div>
+                            </div>
+                            <span class="muted" style="font-size: 12px;">auto</span>
+                          </div>
+                        `,
+                      )}
+                    </div>
+                  </details>
+                `,
+              )}
+            </div>
+          `
+          : nothing
+      }
     </section>
   `;
 }

@@ -1,0 +1,17 @@
+{
+  "id": "cortex-tools",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "url": {
+        "type": "string",
+        "description": "Cortex API base URL (e.g., https://cortex.example.com)"
+      },
+      "apiKey": {
+        "type": "string",
+        "description": "Cortex API key (ctx_...)"
+      }
+    }
+  }
+}
