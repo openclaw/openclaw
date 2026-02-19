@@ -70,6 +70,7 @@ export async function createGeminiEmbeddingProvider(
   const fetchWithGeminiAuth = async (apiKey: string, endpoint: string, body: unknown) => {
     const authHeaders = parseGeminiAuth(apiKey);
     const headers = {
+      "Content-Type": "application/json",
       ...authHeaders.headers,
       ...client.headers,
     };
