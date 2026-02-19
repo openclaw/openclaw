@@ -3,7 +3,7 @@ import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.js";
 import { resetLogger, setLoggerOverride } from "../../logging.js";
@@ -462,15 +462,20 @@ describe("exec approval handlers", () => {
 });
 
 describe("gateway healthHandlers.status scope handling", () => {
-  beforeEach(async () => {
-    const status = await import("../../commands/status.js");
-    vi.mocked(status.getStatusSummary).mockClear();
+  let statusModule: typeof import("../../commands/status.js");
+  let healthHandlers: typeof import("./health.js").healthHandlers;
+
+  beforeAll(async () => {
+    statusModule = await import("../../commands/status.js");
+    ({ healthHandlers } = await import("./health.js"));
+  });
+
+  beforeEach(() => {
+    vi.mocked(statusModule.getStatusSummary).mockClear();
   });
 
   async function runHealthStatus(scopes: string[]) {
     const respond = vi.fn();
-    const status = await import("../../commands/status.js");
-    const { healthHandlers } = await import("./health.js");
 
     await healthHandlers.status({
       req: {} as never,
@@ -481,22 +486,21 @@ describe("gateway healthHandlers.status scope handling", () => {
       isWebchatConnect: () => false,
     });
 
-    return { respond, status };
+    return respond;
   }
 
-  it("requests redacted status for non-admin clients", async () => {
-    const { respond, status } = await runHealthStatus(["operator.read"]);
+  it.each([
+    { scopes: ["operator.read"], includeSensitive: false },
+    { scopes: ["operator.admin"], includeSensitive: true },
+  ])(
+    "requests includeSensitive=$includeSensitive for scopes $scopes",
+    async ({ scopes, includeSensitive }) => {
+      const respond = await runHealthStatus(scopes);
 
-    expect(vi.mocked(status.getStatusSummary)).toHaveBeenCalledWith({ includeSensitive: false });
-    expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
-  });
-
-  it("requests full status for admin clients", async () => {
-    const { respond, status } = await runHealthStatus(["operator.admin"]);
-
-    expect(vi.mocked(status.getStatusSummary)).toHaveBeenCalledWith({ includeSensitive: true });
-    expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
-  });
+      expect(vi.mocked(statusModule.getStatusSummary)).toHaveBeenCalledWith({ includeSensitive });
+      expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    },
+  );
 });
 
 describe("logs.tail", () => {

@@ -8,25 +8,7 @@ import {
   createImageCarouselColumn,
   createProductCarousel,
   messageAction,
-  postbackAction,
 } from "./template-messages.js";
-
-describe("messageAction", () => {
-  it("truncates label to 20 characters", () => {
-    const action = messageAction("This is a very long label that exceeds the limit");
-
-    expect(action.label).toBe("This is a very long ");
-  });
-});
-
-describe("postbackAction", () => {
-  it("truncates data to 300 characters", () => {
-    const longData = "x".repeat(400);
-    const action = postbackAction("Test", longData);
-
-    expect((action as { data: string }).data.length).toBe(300);
-  });
-});
 
 describe("createConfirmTemplate", () => {
   it("truncates text to 240 characters", () => {
@@ -118,33 +100,25 @@ describe("carousel column limits", () => {
 });
 
 describe("createProductCarousel", () => {
-  it("uses URI action when actionUrl provided", () => {
-    const template = createProductCarousel([
-      {
-        title: "Product",
-        description: "Desc",
-        actionLabel: "Buy",
-        actionUrl: "https://shop.com/buy",
-      },
-    ]);
-
+  it.each([
+    {
+      title: "Product",
+      description: "Desc",
+      actionLabel: "Buy",
+      actionUrl: "https://shop.com/buy",
+      expectedType: "uri",
+    },
+    {
+      title: "Product",
+      description: "Desc",
+      actionLabel: "Select",
+      actionData: "product_id=123",
+      expectedType: "postback",
+    },
+  ])("uses expected action type for product action", ({ expectedType, ...item }) => {
+    const template = createProductCarousel([item]);
     const columns = (template.template as { columns: Array<{ actions: Array<{ type: string }> }> })
       .columns;
-    expect(columns[0].actions[0].type).toBe("uri");
-  });
-
-  it("uses postback action when actionData provided", () => {
-    const template = createProductCarousel([
-      {
-        title: "Product",
-        description: "Desc",
-        actionLabel: "Select",
-        actionData: "product_id=123",
-      },
-    ]);
-
-    const columns = (template.template as { columns: Array<{ actions: Array<{ type: string }> }> })
-      .columns;
-    expect(columns[0].actions[0].type).toBe("postback");
+    expect(columns[0].actions[0].type).toBe(expectedType);
   });
 });

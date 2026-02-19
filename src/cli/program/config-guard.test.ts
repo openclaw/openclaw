@@ -29,22 +29,30 @@ function makeRuntime() {
 }
 
 describe("ensureConfigReady", () => {
+  async function runEnsureConfigReady(commandPath: string[]) {
+    vi.resetModules();
+    const { ensureConfigReady } = await import("./config-guard.js");
+    await ensureConfigReady({ runtime: makeRuntime() as never, commandPath });
+  }
+
   beforeEach(() => {
     vi.clearAllMocks();
     readConfigFileSnapshotMock.mockResolvedValue(makeSnapshot());
   });
 
-  it("skips doctor flow for read-only fast path commands", async () => {
-    vi.resetModules();
-    const { ensureConfigReady } = await import("./config-guard.js");
-    await ensureConfigReady({ runtime: makeRuntime() as never, commandPath: ["status"] });
-    expect(loadAndMaybeMigrateDoctorConfigMock).not.toHaveBeenCalled();
-  });
-
-  it("runs doctor flow for commands that may mutate state", async () => {
-    vi.resetModules();
-    const { ensureConfigReady } = await import("./config-guard.js");
-    await ensureConfigReady({ runtime: makeRuntime() as never, commandPath: ["message"] });
-    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledTimes(1);
+  it.each([
+    {
+      name: "skips doctor flow for read-only fast path commands",
+      commandPath: ["status"],
+      expectedDoctorCalls: 0,
+    },
+    {
+      name: "runs doctor flow for commands that may mutate state",
+      commandPath: ["message"],
+      expectedDoctorCalls: 1,
+    },
+  ])("$name", async ({ commandPath, expectedDoctorCalls }) => {
+    await runEnsureConfigReady(commandPath);
+    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledTimes(expectedDoctorCalls);
   });
 });

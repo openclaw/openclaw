@@ -2,7 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { runRegisteredCli } from "../test-utils/command-runner.js";
 
 const runAcpClientInteractive = vi.fn(async (_opts: unknown) => {});
 const serveAcpGateway = vi.fn(async (_opts: unknown) => {});
@@ -25,6 +26,12 @@ vi.mock("../runtime.js", () => ({
 }));
 
 describe("acp cli option collisions", () => {
+  let registerAcpCli: typeof import("./acp-cli.js").registerAcpCli;
+
+  beforeAll(async () => {
+    ({ registerAcpCli } = await import("./acp-cli.js"));
+  });
+
   beforeEach(() => {
     runAcpClientInteractive.mockClear();
     serveAcpGateway.mockClear();
@@ -33,11 +40,10 @@ describe("acp cli option collisions", () => {
   });
 
   it("forwards --verbose to `acp client` when parent and child option names collide", async () => {
-    const { registerAcpCli } = await import("./acp-cli.js");
-    const program = new Command();
-    registerAcpCli(program);
-
-    await program.parseAsync(["acp", "client", "--verbose"], { from: "user" });
+    await runRegisteredCli({
+      register: registerAcpCli as (program: Command) => void,
+      argv: ["acp", "client", "--verbose"],
+    });
 
     expect(runAcpClientInteractive).toHaveBeenCalledWith(
       expect.objectContaining({
