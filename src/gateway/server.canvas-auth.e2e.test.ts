@@ -83,6 +83,16 @@ function scopedCanvasPath(capability: string, path: string): string {
   return `${CANVAS_CAPABILITY_PATH_PREFIX}/${encodeURIComponent(capability)}${path}`;
 }
 
+const allowCanvasHostHttp: CanvasHostHandler["handleHttpRequest"] = async (req, res) => {
+  const url = new URL(req.url ?? "/", "http://localhost");
+  if (url.pathname !== CANVAS_HOST_PATH && !url.pathname.startsWith(`${CANVAS_HOST_PATH}/`)) {
+    return false;
+  }
+  res.statusCode = 200;
+  res.setHeader("Content-Type", "text/plain; charset=utf-8");
+  res.end("ok");
+  return true;
+};
 async function withCanvasGatewayHarness(params: {
   resolvedAuth: ResolvedGatewayAuth;
   listenHost?: string;
@@ -162,19 +172,7 @@ describe("gateway canvas host auth", () => {
       run: async () => {
         await withCanvasGatewayHarness({
           resolvedAuth,
-          handleHttpRequest: async (req, res) => {
-            const url = new URL(req.url ?? "/", "http://localhost");
-            if (
-              url.pathname !== CANVAS_HOST_PATH &&
-              !url.pathname.startsWith(`${CANVAS_HOST_PATH}/`)
-            ) {
-              return false;
-            }
-            res.statusCode = 200;
-            res.setHeader("Content-Type", "text/plain; charset=utf-8");
-            res.end("ok");
-            return true;
-          },
+          handleHttpRequest: allowCanvasHostHttp,
           run: async ({ listener, clients }) => {
             const host = "127.0.0.1";
             const operatorOnlyCapability = "operator-only";
@@ -287,19 +285,7 @@ describe("gateway canvas host auth", () => {
       run: async () => {
         await withCanvasGatewayHarness({
           resolvedAuth,
-          handleHttpRequest: async (req, res) => {
-            const url = new URL(req.url ?? "/", "http://localhost");
-            if (
-              url.pathname !== CANVAS_HOST_PATH &&
-              !url.pathname.startsWith(`${CANVAS_HOST_PATH}/`)
-            ) {
-              return false;
-            }
-            res.statusCode = 200;
-            res.setHeader("Content-Type", "text/plain; charset=utf-8");
-            res.end("ok");
-            return true;
-          },
+          handleHttpRequest: allowCanvasHostHttp,
           run: async ({ listener, clients }) => {
             clients.add(
               makeWsClient({

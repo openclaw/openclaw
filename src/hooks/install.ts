@@ -13,11 +13,10 @@ import { resolveSafeInstallDir, unscopedPackageName } from "../infra/install-saf
 import {
   type NpmIntegrityDrift,
   type NpmSpecResolution,
-  packNpmSpecToArchive,
   resolveArchiveSourcePath,
   withTempDir,
 } from "../infra/install-source-utils.js";
-import { resolveNpmIntegrityDriftWithDefaultMessage } from "../infra/npm-integrity.js";
+import { installFromNpmSpecArchive } from "../infra/npm-pack-install.js";
 import { validateRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { isPathInside, isPathInsideWithRealpath } from "../security/scan-paths.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
@@ -415,58 +414,38 @@ export async function installHooksFromNpmSpec(params: {
     return { ok: false, error: specError };
   }
 
-  return await withTempDir("openclaw-hook-pack-", async (tmpDir) => {
-    logger.info?.(`Downloading ${spec}…`);
-    const packedResult = await packNpmSpecToArchive({
-      spec,
-      timeoutMs,
-      cwd: tmpDir,
-    });
-    if (!packedResult.ok) {
-      return packedResult;
-    }
-
-    const npmResolution: NpmSpecResolution = {
-      ...packedResult.metadata,
-      resolvedAt: new Date().toISOString(),
-    };
-
-    const driftResult = await resolveNpmIntegrityDriftWithDefaultMessage({
-      spec,
-      expectedIntegrity: params.expectedIntegrity,
-      resolution: npmResolution,
-      onIntegrityDrift: params.onIntegrityDrift,
-      warn: (message) => {
-        logger.warn?.(message);
-      },
-    });
-    const integrityDrift = driftResult.integrityDrift;
-    if (driftResult.error) {
-      return {
-        ok: false,
-        error: driftResult.error,
-      };
-    }
-
-    const installResult = await installHooksFromArchive({
-      archivePath: packedResult.archivePath,
-      hooksDir: params.hooksDir,
-      timeoutMs,
-      logger,
-      mode,
-      dryRun,
-      expectedHookPackId,
-    });
-    if (!installResult.ok) {
-      return installResult;
-    }
-
-    return {
-      ...installResult,
-      npmResolution,
-      integrityDrift,
-    };
+  logger.info?.(`Downloading ${spec}…`);
+  const flowResult = await installFromNpmSpecArchive({
+    tempDirPrefix: "openclaw-hook-pack-",
+    spec,
+    timeoutMs,
+    expectedIntegrity: params.expectedIntegrity,
+    onIntegrityDrift: params.onIntegrityDrift,
+    warn: (message) => {
+      logger.warn?.(message);
+    },
+    installFromArchive: async ({ archivePath }) =>
+      await installHooksFromArchive({
+        archivePath,
+        hooksDir: params.hooksDir,
+        timeoutMs,
+        logger,
+        mode,
+        dryRun,
+        expectedHookPackId,
+      }),
   });
+  if (!flowResult.ok) {
+    return flowResult;
+  }
+  if (!flowResult.installResult.ok) {
+    return flowResult.installResult;
+  }
+  return {
+    ...flowResult.installResult,
+    npmResolution: flowResult.npmResolution,
+    integrityDrift: flowResult.integrityDrift,
+  };
 }
 
 export async function installHooksFromPath(params: {

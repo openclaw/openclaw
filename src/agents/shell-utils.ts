@@ -49,7 +49,7 @@ export function getShellConfig(): { shell: string; args: string[] } {
   return { shell, args: ["-c"] };
 }
 
-function resolveShellFromPath(name: string): string | undefined {
+export function resolveShellFromPath(name: string): string | undefined {
   const envPath = process.env.PATH ?? "";
   if (!envPath) {
     return undefined;
