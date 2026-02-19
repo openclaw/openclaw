@@ -140,17 +140,50 @@ describe("resolveHeartbeatIntervalMs", () => {
     return sendTelegram;
   }
 
+  function createWhatsAppHeartbeatConfig(params: {
+    tmpDir: string;
+    storePath: string;
+    heartbeat?: Record<string, unknown>;
+    visibility?: Record<string, unknown>;
+  }): OpenClawConfig {
+    return createHeartbeatConfig({
+      tmpDir: params.tmpDir,
+      storePath: params.storePath,
+      heartbeat: {
+        every: "5m",
+        target: "whatsapp",
+        ...params.heartbeat,
+      },
+      channels: {
+        whatsapp: {
+          allowFrom: ["*"],
+          ...(params.visibility ? { heartbeat: params.visibility } : {}),
+        },
+      },
+    });
+  }
+
+  async function createSeededWhatsAppHeartbeatConfig(params: {
+    tmpDir: string;
+    storePath: string;
+    heartbeat?: Record<string, unknown>;
+    visibility?: Record<string, unknown>;
+  }): Promise<OpenClawConfig> {
+    const cfg = createWhatsAppHeartbeatConfig(params);
+    await seedMainSession(params.storePath, cfg, {
+      lastChannel: "whatsapp",
+      lastProvider: "whatsapp",
+      lastTo: "+1555",
+    });
+    return cfg;
+  }
+
   it("respects ackMaxChars for heartbeat acks", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-      const cfg = createHeartbeatConfig({
+      const cfg = createWhatsAppHeartbeatConfig({
         tmpDir,
         storePath,
-        heartbeat: {
-          every: "5m",
-          target: "whatsapp",
-          ackMaxChars: 0,
-        },
-        channels: { whatsapp: { allowFrom: ["*"] } },
+        heartbeat: { ackMaxChars: 0 },
       });
 
       await seedMainSession(storePath, cfg, {
@@ -173,14 +206,10 @@ describe("resolveHeartbeatIntervalMs", () => {
 
   it("sends HEARTBEAT_OK when visibility.showOk is true", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-      const cfg = createHeartbeatConfig({
+      const cfg = createWhatsAppHeartbeatConfig({
         tmpDir,
         storePath,
-        heartbeat: {
-          every: "5m",
-          target: "whatsapp",
-        },
-        channels: { whatsapp: { allowFrom: ["*"], heartbeat: { showOk: true } } },
+        visibility: { showOk: true },
       });
 
       await seedMainSession(storePath, cfg, {
@@ -250,19 +279,10 @@ describe("resolveHeartbeatIntervalMs", () => {
 
   it("skips heartbeat LLM calls when visibility disables all output", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-      const cfg = createHeartbeatConfig({
+      const cfg = createWhatsAppHeartbeatConfig({
         tmpDir,
         storePath,
-        heartbeat: {
-          every: "5m",
-          target: "whatsapp",
-        },
-        channels: {
-          whatsapp: {
-            allowFrom: ["*"],
-            heartbeat: { showOk: false, showAlerts: false, useIndicator: false },
-          },
-        },
+        visibility: { showOk: false, showAlerts: false, useIndicator: false },
       });
 
       await seedMainSession(storePath, cfg, {
@@ -286,20 +306,9 @@ describe("resolveHeartbeatIntervalMs", () => {
 
   it("skips delivery for markup-wrapped HEARTBEAT_OK", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-      const cfg = createHeartbeatConfig({
+      const cfg = await createSeededWhatsAppHeartbeatConfig({
         tmpDir,
         storePath,
-        heartbeat: {
-          every: "5m",
-          target: "whatsapp",
-        },
-        channels: { whatsapp: { allowFrom: ["*"] } },
-      });
-
-      await seedMainSession(storePath, cfg, {
-        lastChannel: "whatsapp",
-        lastProvider: "whatsapp",
-        lastTo: "+1555",
       });
 
       replySpy.mockResolvedValue({ text: "<b>HEARTBEAT_OK</b>" });
@@ -318,14 +327,9 @@ describe("resolveHeartbeatIntervalMs", () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const originalUpdatedAt = 1000;
       const bumpedUpdatedAt = 2000;
-      const cfg = createHeartbeatConfig({
+      const cfg = createWhatsAppHeartbeatConfig({
         tmpDir,
         storePath,
-        heartbeat: {
-          every: "5m",
-          target: "whatsapp",
-        },
-        channels: { whatsapp: { allowFrom: ["*"] } },
       });
 
       const sessionKey = await seedMainSession(storePath, cfg, {
@@ -363,16 +367,9 @@ describe("resolveHeartbeatIntervalMs", () => {
 
   it("skips WhatsApp delivery when not linked or running", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-      const cfg = createHeartbeatConfig({
+      const cfg = await createSeededWhatsAppHeartbeatConfig({
         tmpDir,
         storePath,
-        heartbeat: { every: "5m", target: "whatsapp" },
-        channels: { whatsapp: { allowFrom: ["*"] } },
-      });
-      await seedMainSession(storePath, cfg, {
-        lastChannel: "whatsapp",
-        lastProvider: "whatsapp",
-        lastTo: "+1555",
       });
 
       replySpy.mockResolvedValue({ text: "Heartbeat alert" });
