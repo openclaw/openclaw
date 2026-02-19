@@ -7,7 +7,9 @@ import {
 import type { SessionEntry, SessionSystemPromptReport } from "../../config/sessions/types.js";
 import { loadProviderUsageSummary } from "../../infra/provider-usage.js";
 import type {
+  CostUsageDailyEntry,
   CostUsageSummary,
+  CostUsageTotals,
   SessionCostSummary,
   SessionDailyLatency,
   SessionDailyModelUsage,
@@ -185,6 +187,81 @@ async function discoverAllSessionsForUsage(params: {
   return results.flat().toSorted((a, b) => b.mtime - a.mtime);
 }
 
+/**
+ * Load cost/usage summary across ALL agents (not just the default "main" agent).
+ * Iterates every known agent and merges their daily + totals into a single summary.
+ */
+async function loadCostUsageSummaryAllAgents(params: {
+  startMs: number;
+  endMs: number;
+  config: ReturnType<typeof loadConfig>;
+}): Promise<CostUsageSummary> {
+  const agents = listAgentsForGateway(params.config).agents;
+  const perAgent = await Promise.all(
+    agents.map((agent) =>
+      loadCostUsageSummary({
+        startMs: params.startMs,
+        endMs: params.endMs,
+        config: params.config,
+        agentId: agent.id,
+      }),
+    ),
+  );
+
+  // Merge daily entries by date and accumulate totals.
+  const dailyMap = new Map<string, CostUsageDailyEntry>();
+  const totals: CostUsageTotals = {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 0,
+    totalCost: 0,
+    inputCost: 0,
+    outputCost: 0,
+    cacheReadCost: 0,
+    cacheWriteCost: 0,
+    missingCostEntries: 0,
+  };
+
+  for (const summary of perAgent) {
+    for (const day of summary.daily) {
+      const existing = dailyMap.get(day.date);
+      if (existing) {
+        existing.input += day.input;
+        existing.output += day.output;
+        existing.cacheRead += day.cacheRead;
+        existing.cacheWrite += day.cacheWrite;
+        existing.totalTokens += day.totalTokens;
+        existing.totalCost += day.totalCost;
+        existing.inputCost += day.inputCost;
+        existing.outputCost += day.outputCost;
+        existing.cacheReadCost += day.cacheReadCost;
+        existing.cacheWriteCost += day.cacheWriteCost;
+        existing.missingCostEntries += day.missingCostEntries;
+      } else {
+        dailyMap.set(day.date, { ...day });
+      }
+    }
+    totals.input += summary.totals.input;
+    totals.output += summary.totals.output;
+    totals.cacheRead += summary.totals.cacheRead;
+    totals.cacheWrite += summary.totals.cacheWrite;
+    totals.totalTokens += summary.totals.totalTokens;
+    totals.totalCost += summary.totals.totalCost;
+    totals.inputCost += summary.totals.inputCost;
+    totals.outputCost += summary.totals.outputCost;
+    totals.cacheReadCost += summary.totals.cacheReadCost;
+    totals.cacheWriteCost += summary.totals.cacheWriteCost;
+    totals.missingCostEntries += summary.totals.missingCostEntries;
+  }
+
+  const daily = Array.from(dailyMap.values()).toSorted((a, b) => a.date.localeCompare(b.date));
+  const days = perAgent[0]?.days ?? Math.ceil((params.endMs - params.startMs) / (24 * 60 * 60 * 1000)) + 1;
+
+  return { updatedAt: Date.now(), days, daily, totals };
+}
+
 async function loadCostUsageSummaryCached(params: {
   startMs: number;
   endMs: number;
@@ -205,11 +282,7 @@ async function loadCostUsageSummaryCached(params: {
   }
 
   const entry: CostUsageCacheEntry = cached ?? {};
-  const inFlight = loadCostUsageSummary({
-    startMs: params.startMs,
-    endMs: params.endMs,
-    config: params.config,
-  })
+  const inFlight = loadCostUsageSummaryAllAgents(params)
     .then((summary) => {
       costUsageCache.set(cacheKey, { summary, updatedAt: Date.now() });
       return summary;
