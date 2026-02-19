@@ -59,6 +59,49 @@ type WebhookTarget = {
 };
 
 const webhookTargets = new Map<string, WebhookTarget[]>();
+const GOOGLE_CHAT_WEBHOOK_REPLAY_WINDOW_MS = 5 * 60_000;
+const GOOGLE_CHAT_WEBHOOK_REPLAY_MAX_KEYS = 5_000;
+const recentGoogleChatReplayKeys = new Map<string, number>();
+
+function shouldDropReplayWebhookEvent(replayKey: string, nowMs: number): boolean {
+  const seenAt = recentGoogleChatReplayKeys.get(replayKey);
+  recentGoogleChatReplayKeys.set(replayKey, nowMs);
+
+  if (typeof seenAt === "number" && nowMs - seenAt < GOOGLE_CHAT_WEBHOOK_REPLAY_WINDOW_MS) {
+    return true;
+  }
+
+  if (recentGoogleChatReplayKeys.size > GOOGLE_CHAT_WEBHOOK_REPLAY_MAX_KEYS) {
+    for (const [key, timestamp] of recentGoogleChatReplayKeys) {
+      if (nowMs - timestamp >= GOOGLE_CHAT_WEBHOOK_REPLAY_WINDOW_MS) {
+        recentGoogleChatReplayKeys.delete(key);
+      }
+    }
+  }
+
+  return false;
+}
+
+function buildGoogleChatReplayKey(event: GoogleChatEvent): string | null {
+  const eventType = event.type ?? (event as { eventType?: string }).eventType;
+  if (!eventType) {
+    return null;
+  }
+
+  const messageName = event.message?.name?.trim();
+  if (messageName) {
+    return `${eventType}:message:${messageName}`;
+  }
+
+  const spaceName = event.space?.name?.trim();
+  const actorName = event.user?.name?.trim();
+  const eventTime = event.eventTime?.trim();
+  if (!spaceName || !eventTime) {
+    return null;
+  }
+
+  return `${eventType}:space:${spaceName}:actor:${actorName ?? "unknown"}:at:${eventTime}`;
+}
 
 function logVerbose(core: GoogleChatCoreRuntime, runtime: GoogleChatRuntimeEnv, message: string) {
   if (core.logging.shouldLogVerbose()) {
@@ -233,6 +276,16 @@ export async function handleGoogleChatWebhookRequest(
   }
 
   const selected = matchedTarget.target;
+  const replayKey = buildGoogleChatReplayKey(event);
+  if (
+    replayKey &&
+    shouldDropReplayWebhookEvent(`${selected.account.accountId}:${replayKey}`, Date.now())
+  ) {
+    res.statusCode = 200;
+    res.setHeader("Content-Type", "application/json");
+    res.end("{}");
+    return true;
+  }
   selected.statusSink?.({ lastInboundAt: Date.now() });
   processGoogleChatEvent(event, selected).catch((err) => {
     selected?.runtime.error?.(

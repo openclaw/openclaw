@@ -191,6 +191,7 @@ Docs: https://docs.openclaw.ai
 
 - Security/Gateway Control UI: block absolute-path escape requests under `gateway.controlUi.basePath` and enforce robust root containment checks when serving static Control UI assets.
 - Security/Nextcloud Talk: block signed webhook replay by deduplicating recent `x-nextcloud-talk-random` + signature pairs before inbound processing.
+- Security/Google Chat: block replayed webhook events by deduplicating recent per-account event keys before inbound processing.
 - Agents/Streaming: keep assistant partial streaming active during reasoning streams, handle native `thinking_*` stream events consistently, dedupe mixed reasoning-end signals, and clear stale mutating tool errors after same-target retry success. (#20635) Thanks @obviyus.
 - iOS/Chat: use a dedicated iOS chat session key for ChatSheet routing to avoid cross-client session collisions with main-session traffic. (#21139) thanks @mbelinky.
 - iOS/Chat: auto-resync chat history after reconnect sequence gaps, clear stale pending runs, and avoid dead-end manual refresh errors after transient disconnects. (#21135) thanks @mbelinky.
