@@ -17,110 +17,137 @@ export const CLI_DEFAULT_OPERATOR_SCOPES: OperatorScope[] = [
   PAIRING_SCOPE,
 ];
 
-const APPROVAL_METHODS = new Set([
-  "exec.approval.request",
-  "exec.approval.waitDecision",
-  "exec.approval.resolve",
-]);
-
 const NODE_ROLE_METHODS = new Set(["node.invoke.result", "node.event", "skills.bins"]);
 
-const PAIRING_METHODS = new Set([
-  "node.pair.request",
-  "node.pair.list",
-  "node.pair.approve",
-  "node.pair.reject",
-  "node.pair.verify",
-  "device.pair.list",
-  "device.pair.approve",
-  "device.pair.reject",
-  "device.pair.remove",
-  "device.token.rotate",
-  "device.token.revoke",
-  "node.rename",
-]);
+const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
+  [APPROVALS_SCOPE]: [
+    "exec.approval.request",
+    "exec.approval.waitDecision",
+    "exec.approval.resolve",
+  ],
+  [PAIRING_SCOPE]: [
+    "node.pair.request",
+    "node.pair.list",
+    "node.pair.approve",
+    "node.pair.reject",
+    "node.pair.verify",
+    "device.pair.list",
+    "device.pair.approve",
+    "device.pair.reject",
+    "device.pair.remove",
+    "device.token.rotate",
+    "device.token.revoke",
+    "node.rename",
+  ],
+  [READ_SCOPE]: [
+    "health",
+    "logs.tail",
+    "channels.status",
+    "status",
+    "usage.status",
+    "usage.cost",
+    "tts.status",
+    "tts.providers",
+    "models.list",
+    "agents.list",
+    "agent.identity.get",
+    "skills.status",
+    "voicewake.get",
+    "sessions.list",
+    "sessions.preview",
+    "sessions.resolve",
+    "sessions.usage",
+    "sessions.usage.timeseries",
+    "sessions.usage.logs",
+    "cron.list",
+    "cron.status",
+    "cron.runs",
+    "system-presence",
+    "last-heartbeat",
+    "node.list",
+    "node.describe",
+    "chat.history",
+    "config.get",
+    "talk.config",
+    "agents.files.list",
+    "agents.files.get",
+  ],
+  [WRITE_SCOPE]: [
+    "send",
+    "poll",
+    "agent",
+    "agent.wait",
+    "wake",
+    "talk.mode",
+    "tts.enable",
+    "tts.disable",
+    "tts.convert",
+    "tts.setProvider",
+    "voicewake.set",
+    "node.invoke",
+    "chat.send",
+    "chat.abort",
+    "browser.request",
+    "push.test",
+  ],
+  [ADMIN_SCOPE]: [
+    "channels.logout",
+    "agents.create",
+    "agents.update",
+    "agents.delete",
+    "skills.install",
+    "skills.update",
+    "cron.add",
+    "cron.update",
+    "cron.remove",
+    "cron.run",
+    "sessions.patch",
+    "sessions.reset",
+    "sessions.delete",
+    "sessions.compact",
+    "connect",
+    "chat.inject",
+    "web.login.start",
+    "web.login.wait",
+    "set-heartbeats",
+    "system-event",
+    "agents.files.set",
+  ],
+};
 
-const ADMIN_METHOD_PREFIXES = ["exec.approvals."];
+const ADMIN_METHOD_PREFIXES = ["exec.approvals.", "config.", "wizard.", "update."] as const;
 
-const READ_METHODS = new Set([
-  "health",
-  "logs.tail",
-  "channels.status",
-  "status",
-  "usage.status",
-  "usage.cost",
-  "tts.status",
-  "tts.providers",
-  "models.list",
-  "agents.list",
-  "agent.identity.get",
-  "skills.status",
-  "voicewake.get",
-  "sessions.list",
-  "sessions.preview",
-  "sessions.resolve",
-  "cron.list",
-  "cron.status",
-  "cron.runs",
-  "system-presence",
-  "last-heartbeat",
-  "node.list",
-  "node.describe",
-  "chat.history",
-  "config.get",
-  "talk.config",
-]);
+const METHOD_SCOPE_BY_NAME = new Map<string, OperatorScope>(
+  Object.entries(METHOD_SCOPE_GROUPS).flatMap(([scope, methods]) =>
+    methods.map((method) => [method, scope as OperatorScope]),
+  ),
+);
 
-const WRITE_METHODS = new Set([
-  "send",
-  "poll",
-  "agent",
-  "agent.wait",
-  "wake",
-  "talk.mode",
-  "tts.enable",
-  "tts.disable",
-  "tts.convert",
-  "tts.setProvider",
-  "voicewake.set",
-  "node.invoke",
-  "chat.send",
-  "chat.abort",
-  "browser.request",
-  "push.test",
-]);
-
-const ADMIN_METHODS = new Set([
-  "channels.logout",
-  "agents.create",
-  "agents.update",
-  "agents.delete",
-  "skills.install",
-  "skills.update",
-  "cron.add",
-  "cron.update",
-  "cron.remove",
-  "cron.run",
-  "sessions.patch",
-  "sessions.reset",
-  "sessions.delete",
-  "sessions.compact",
-]);
+function resolveScopedMethod(method: string): OperatorScope | undefined {
+  const explicitScope = METHOD_SCOPE_BY_NAME.get(method);
+  if (explicitScope) {
+    return explicitScope;
+  }
+  if (ADMIN_METHOD_PREFIXES.some((prefix) => method.startsWith(prefix))) {
+    return ADMIN_SCOPE;
+  }
+  return undefined;
+}
 
 export function isApprovalMethod(method: string): boolean {
-  return APPROVAL_METHODS.has(method);
+  return resolveScopedMethod(method) === APPROVALS_SCOPE;
 }
 
 export function isPairingMethod(method: string): boolean {
-  return PAIRING_METHODS.has(method);
+  return resolveScopedMethod(method) === PAIRING_SCOPE;
 }
 
 export function isReadMethod(method: string): boolean {
-  return READ_METHODS.has(method);
+  return resolveScopedMethod(method) === READ_SCOPE;
 }
 
 export function isWriteMethod(method: string): boolean {
-  return WRITE_METHODS.has(method);
+  return resolveScopedMethod(method) === WRITE_SCOPE;
 }
 
 export function isNodeRoleMethod(method: string): boolean {
@@ -128,36 +155,11 @@ export function isNodeRoleMethod(method: string): boolean {
 }
 
 export function isAdminOnlyMethod(method: string): boolean {
-  if (ADMIN_METHOD_PREFIXES.some((prefix) => method.startsWith(prefix))) {
-    return true;
-  }
-  if (
-    method.startsWith("config.") ||
-    method.startsWith("wizard.") ||
-    method.startsWith("update.")
-  ) {
-    return true;
-  }
-  return ADMIN_METHODS.has(method);
+  return resolveScopedMethod(method) === ADMIN_SCOPE;
 }
 
 export function resolveRequiredOperatorScopeForMethod(method: string): OperatorScope | undefined {
-  if (isApprovalMethod(method)) {
-    return APPROVALS_SCOPE;
-  }
-  if (isPairingMethod(method)) {
-    return PAIRING_SCOPE;
-  }
-  if (isReadMethod(method)) {
-    return READ_SCOPE;
-  }
-  if (isWriteMethod(method)) {
-    return WRITE_SCOPE;
-  }
-  if (isAdminOnlyMethod(method)) {
-    return ADMIN_SCOPE;
-  }
-  return undefined;
+  return resolveScopedMethod(method);
 }
 
 export function resolveLeastPrivilegeOperatorScopesForMethod(method: string): OperatorScope[] {
@@ -187,4 +189,11 @@ export function authorizeOperatorScopesForMethod(
     return { allowed: true };
   }
   return { allowed: false, missingScope: requiredScope };
+}
+
+export function isGatewayMethodClassified(method: string): boolean {
+  if (isNodeRoleMethod(method)) {
+    return true;
+  }
+  return resolveRequiredOperatorScopeForMethod(method) !== undefined;
 }

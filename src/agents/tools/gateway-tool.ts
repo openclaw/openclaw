@@ -10,7 +10,7 @@ import {
 } from "../../infra/restart-sentinel.js";
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { stringEnum } from "../schema/typebox.js";
-import { assertOwnerSender, type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
+import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
 
 const DEFAULT_UPDATE_TIMEOUT_MS = 20 * 60_000;
@@ -65,16 +65,15 @@ const GatewayToolSchema = Type.Object({
 export function createGatewayTool(opts?: {
   agentSessionKey?: string;
   config?: OpenClawConfig;
-  senderIsOwner?: boolean;
 }): AnyAgentTool {
   return {
     label: "Gateway",
     name: "gateway",
+    ownerOnly: true,
     description:
       "Restart, apply config, or update the gateway in-place (SIGUSR1). Use config.patch for safe partial config updates (merges with existing). Use config.apply only when replacing entire config. Both trigger restart after writing. Always pass a human-readable completion message via the `note` parameter so the system can deliver it to the user after restart.",
     parameters: GatewayToolSchema,
     execute: async (_toolCallId, args) => {
-      assertOwnerSender(opts?.senderIsOwner);
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
       if (action === "restart") {
