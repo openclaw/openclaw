@@ -208,7 +208,8 @@ export async function handleGoogleChatWebhookRequest(
     ? authHeaderNow.slice("bearer ".length)
     : bearer;
 
-  const matchedTargets: WebhookTarget[] = [];
+const matchedTargets: WebhookTarget[] = [];
+  let lastVerifyReason: string | undefined;
   for (const target of targets) {
     const audienceType = target.audienceType;
     const audience = target.audience;
@@ -222,16 +223,19 @@ export async function handleGoogleChatWebhookRequest(
       if (matchedTargets.length > 1) {
         break;
       }
+    } else {
+      lastVerifyReason = verification.reason;
     }
   }
-
   if (matchedTargets.length === 0) {
+    console.error("[googlechat] JWT verification failed:", lastVerifyReason);
     res.statusCode = 401;
     res.end("unauthorized");
     return true;
   }
 
   if (matchedTargets.length > 1) {
+    console.error("[googlechat] JWT verification failed:", verification.reason);
     res.statusCode = 401;
     res.end("ambiguous webhook target");
     return true;
