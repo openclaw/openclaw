@@ -13,6 +13,10 @@ export type AgentStreamParams = {
   /** Provider stream params override (best-effort). */
   temperature?: number;
   maxTokens?: number;
+  /** Internal retry hint: disable Anthropic context-1m beta on subsequent attempts. */
+  disableAnthropicContext1mBeta?: boolean;
+  /** Internal retry hint for Anthropic extra params override. */
+  context1m?: boolean;
 };
 
 export type AgentRunContext = {

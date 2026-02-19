@@ -173,6 +173,10 @@ function parseHeaderList(value: unknown): string[] {
     .filter(Boolean);
 }
 
+function isAnthropicContext1mBeta(beta: string): boolean {
+  return beta.trim().toLowerCase().startsWith("context-1m-");
+}
+
 function resolveAnthropicBetas(
   extraParams: Record<string, unknown> | undefined,
   provider: string,
@@ -182,19 +186,28 @@ function resolveAnthropicBetas(
     return undefined;
   }
 
+  const disableContext1mBeta =
+    extraParams?.disableAnthropicContext1mBeta === true || extraParams?.context1m === false;
   const betas = new Set<string>();
   const configured = extraParams?.anthropicBeta;
   if (typeof configured === "string" && configured.trim()) {
-    betas.add(configured.trim());
+    const beta = configured.trim();
+    if (!(disableContext1mBeta && isAnthropicContext1mBeta(beta))) {
+      betas.add(beta);
+    }
   } else if (Array.isArray(configured)) {
     for (const beta of configured) {
       if (typeof beta === "string" && beta.trim()) {
-        betas.add(beta.trim());
+        const normalized = beta.trim();
+        if (disableContext1mBeta && isAnthropicContext1mBeta(normalized)) {
+          continue;
+        }
+        betas.add(normalized);
       }
     }
   }
 
-  if (extraParams?.context1m === true) {
+  if (extraParams?.context1m === true && !disableContext1mBeta) {
     if (isAnthropic1MModel(modelId)) {
       betas.add(ANTHROPIC_CONTEXT_1M_BETA);
     } else {
@@ -208,11 +221,18 @@ function resolveAnthropicBetas(
 function mergeAnthropicBetaHeader(
   headers: Record<string, string> | undefined,
   betas: string[],
+  disableContext1mBeta = false,
 ): Record<string, string> {
   const merged = { ...headers };
   const existingKey = Object.keys(merged).find((key) => key.toLowerCase() === "anthropic-beta");
   const existing = existingKey ? parseHeaderList(merged[existingKey]) : [];
-  const values = Array.from(new Set([...existing, ...betas]));
+  const filteredExisting = disableContext1mBeta
+    ? existing.filter((beta) => !isAnthropicContext1mBeta(beta))
+    : existing;
+  const filteredBetas = disableContext1mBeta
+    ? betas.filter((beta) => !isAnthropicContext1mBeta(beta))
+    : betas;
+  const values = Array.from(new Set([...filteredExisting, ...filteredBetas]));
   const key = existingKey ?? "anthropic-beta";
   merged[key] = values.join(",");
   return merged;
@@ -221,12 +241,13 @@ function mergeAnthropicBetaHeader(
 function createAnthropicBetaHeadersWrapper(
   baseStreamFn: StreamFn | undefined,
   betas: string[],
+  disableContext1mBeta = false,
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) =>
     underlying(model, context, {
       ...options,
-      headers: mergeAnthropicBetaHeader(options?.headers, betas),
+      headers: mergeAnthropicBetaHeader(options?.headers, betas, disableContext1mBeta),
     });
 }
 
@@ -313,10 +334,16 @@ export function applyExtraParamsToAgent(
 
   const anthropicBetas = resolveAnthropicBetas(merged, provider, modelId);
   if (anthropicBetas?.length) {
+    const disableContext1mBeta =
+      merged?.disableAnthropicContext1mBeta === true || merged?.context1m === false;
     log.debug(
       `applying Anthropic beta header for ${provider}/${modelId}: ${anthropicBetas.join(",")}`,
     );
-    agent.streamFn = createAnthropicBetaHeadersWrapper(agent.streamFn, anthropicBetas);
+    agent.streamFn = createAnthropicBetaHeadersWrapper(
+      agent.streamFn,
+      anthropicBetas,
+      disableContext1mBeta,
+    );
   }
 
   if (provider === "openrouter") {

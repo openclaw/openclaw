@@ -198,6 +198,38 @@ describe("applyExtraParamsToAgent", () => {
     expect(calls[0]?.headers).toEqual({ "X-Custom": "1" });
   });
 
+  it("removes context-1m beta when downgrade flag disables long context", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    const cfg = buildAnthropicModelConfig("anthropic/claude-sonnet-4-6", {
+      context1m: true,
+      anthropicBeta: ["files-api-2025-04-14", "context-1m-2025-08-07"],
+    });
+
+    applyExtraParamsToAgent(
+      agent,
+      cfg,
+      "anthropic",
+      "claude-sonnet-4-6",
+      { context1m: false, disableAnthropicContext1mBeta: true },
+    );
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, {
+      headers: { "anthropic-beta": "prompt-caching-2024-07-31,context-1m-2025-08-07" },
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.headers).toEqual({
+      "anthropic-beta": "prompt-caching-2024-07-31,files-api-2025-04-14",
+    });
+  });
+
   it("forces store=true for direct OpenAI Responses payloads", () => {
     const payload = runStoreMutationCase({
       applyProvider: "openai",

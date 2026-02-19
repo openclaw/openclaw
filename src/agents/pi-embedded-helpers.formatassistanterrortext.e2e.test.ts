@@ -95,7 +95,14 @@ describe("formatAssistantErrorText", () => {
   });
   it("returns a friendly message for rate limit errors", () => {
     const msg = makeAssistantError("429 rate limit reached");
-    expect(formatAssistantErrorText(msg)).toContain("rate limit reached");
+    expect(formatAssistantErrorText(msg)).toContain("Failed to parse Retry-After");
+    expect(formatAssistantErrorText(msg)).toContain("failover is engaged");
+  });
+
+  it("shows retry-after when available for rate limit errors", () => {
+    const msg = makeAssistantError('429 {"error":{"message":"rate limited"},"retry_after":12}');
+    expect(formatAssistantErrorText(msg)).toContain("Retry after about 12s");
+    expect(formatAssistantErrorText(msg)).toContain("failover is engaged");
   });
 
   it("returns a friendly message for empty stream chunk errors", () => {

@@ -64,6 +64,8 @@ type ApiKeyInfo = ResolvedProviderAuth;
 // Avoid Anthropic's refusal test token poisoning session transcripts.
 const ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
 const ANTHROPIC_MAGIC_STRING_REPLACEMENT = "ANTHROPIC MAGIC STRING TRIGGER REFUSAL (redacted)";
+const ANTHROPIC_CONTEXT_1M_UNAVAILABLE_RE =
+  /long context beta is not yet available for this subscription/i;
 
 function scrubAnthropicRefusalMagic(prompt: string): string {
   if (!prompt.includes(ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL)) {
@@ -73,6 +75,10 @@ function scrubAnthropicRefusalMagic(prompt: string): string {
     ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL,
     ANTHROPIC_MAGIC_STRING_REPLACEMENT,
   );
+}
+
+function isAnthropicContext1mUnavailableError(provider: string, message: string): boolean {
+  return normalizeProviderId(provider) === "anthropic" && ANTHROPIC_CONTEXT_1M_UNAVAILABLE_RE.test(message);
 }
 
 type UsageAccumulator = {
@@ -476,6 +482,7 @@ export async function runEmbeddedPiAgent(
       const usageAccumulator = createUsageAccumulator();
       let lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
       let autoCompactionCount = 0;
+      let disableAnthropicContext1mBeta = false;
       try {
         while (true) {
           attemptedThinking.add(thinkLevel);
@@ -538,7 +545,13 @@ export async function runEmbeddedPiAgent(
             onAgentEvent: params.onAgentEvent,
             extraSystemPrompt: params.extraSystemPrompt,
             inputProvenance: params.inputProvenance,
-            streamParams: params.streamParams,
+            streamParams: disableAnthropicContext1mBeta
+              ? {
+                  ...(params.streamParams ?? {}),
+                  context1m: false,
+                  disableAnthropicContext1mBeta: true,
+                }
+              : params.streamParams,
             ownerNumbers: params.ownerNumbers,
             enforceFinalTag: params.enforceFinalTag,
           });
@@ -762,6 +775,16 @@ export async function runEmbeddedPiAgent(
 
           if (promptError && !aborted) {
             const errorText = describeUnknownError(promptError);
+            if (
+              !disableAnthropicContext1mBeta &&
+              isAnthropicContext1mUnavailableError(provider, errorText)
+            ) {
+              disableAnthropicContext1mBeta = true;
+              log.warn(
+                `Anthropic long-context beta unavailable for subscription; retrying ${provider}/${modelId} without context-1m beta.`,
+              );
+              continue;
+            }
             // Handle role ordering errors with a user-friendly message
             if (/incorrect role information|roles must alternate/i.test(errorText)) {
               return {
@@ -872,8 +895,22 @@ export async function runEmbeddedPiAgent(
           const billingFailure = isBillingAssistantError(lastAssistant);
           const failoverFailure = isFailoverAssistantError(lastAssistant);
           const assistantFailoverReason = classifyFailoverReason(lastAssistant?.errorMessage ?? "");
+          const assistantStopErrorText = lastAssistant?.errorMessage?.trim() ?? "";
           const cloudCodeAssistFormatError = attempt.cloudCodeAssistFormatError;
           const imageDimensionError = parseImageDimensionError(lastAssistant?.errorMessage ?? "");
+
+          if (
+            !aborted &&
+            !disableAnthropicContext1mBeta &&
+            assistantStopErrorText &&
+            isAnthropicContext1mUnavailableError(provider, assistantStopErrorText)
+          ) {
+            disableAnthropicContext1mBeta = true;
+            log.warn(
+              `Anthropic long-context beta unavailable for subscription; retrying ${provider}/${modelId} without context-1m beta.`,
+            );
+            continue;
+          }
 
           if (imageDimensionError && lastProfileId) {
             const details = [
