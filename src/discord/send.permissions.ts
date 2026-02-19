@@ -90,7 +90,7 @@ export async function fetchMemberGuildPermissionsDiscord(
 /**
  * Returns true when the user has ADMINISTRATOR or any required permission bit.
  */
-export async function hasGuildPermissionDiscord(
+export async function hasAnyGuildPermissionDiscord(
   guildId: string,
   userId: string,
   requiredPermissions: bigint[],
@@ -105,6 +105,30 @@ export async function hasGuildPermissionDiscord(
   }
   return requiredPermissions.some((permission) => hasPermissionBit(permissions, permission));
 }
+
+/**
+ * Returns true when the user has ADMINISTRATOR or all required permission bits.
+ */
+export async function hasAllGuildPermissionsDiscord(
+  guildId: string,
+  userId: string,
+  requiredPermissions: bigint[],
+  opts: DiscordReactOpts = {},
+): Promise<boolean> {
+  const permissions = await fetchMemberGuildPermissionsDiscord(guildId, userId, opts);
+  if (permissions === null) {
+    return false;
+  }
+  if (hasAdministrator(permissions)) {
+    return true;
+  }
+  return requiredPermissions.every((permission) => hasPermissionBit(permissions, permission));
+}
+
+/**
+ * @deprecated Prefer hasAnyGuildPermissionDiscord or hasAllGuildPermissionsDiscord for clarity.
+ */
+export const hasGuildPermissionDiscord = hasAnyGuildPermissionDiscord;
 
 export async function fetchChannelPermissionsDiscord(
   channelId: string,
