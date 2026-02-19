@@ -162,6 +162,12 @@ function checkEmail(): void {
     return;
   }
 
+  // Check IMAP connection state
+  if (imapConnection.state !== 'authenticated') {
+    console.log(`[EMAIL PLUGIN] IMAP connection not authenticated (state: ${imapConnection.state}), skipping check`);
+    return;
+  }
+
   // Search for emails SINCE the last processed timestamp
   // Add a small buffer (1 minute) to catch any edge cases
   const lastProcessedDate = new Date(currentState.lastProcessedTimestamp);
@@ -173,6 +179,11 @@ function checkEmail(): void {
   imapConnection.search([["SINCE", dateStr]], (err, results) => {
     if (err) {
       console.error("[EMAIL PLUGIN] Email search error:", err);
+      // Reset inbox state on error - might need to reopen
+      if (err.message && err.message.includes('No mailbox')) {
+        console.error("[EMAIL PLUGIN] Mailbox not selected, will attempt to reopen on next start");
+        isInboxOpen = false;
+      }
       return;
     }
 
