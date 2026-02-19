@@ -1933,10 +1933,19 @@ describe("createTelegramBot", () => {
       await Promise.all([first, second]);
       expect(replySpy).not.toHaveBeenCalled();
 
-      const flushTimerCall = [...setTimeoutSpy.mock.calls]
-        .toReversed()
-        .find((call) => call[1] === TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs);
-      const flushTimer = flushTimerCall?.[0] as (() => unknown) | undefined;
+      const flushTimerCallIndex = setTimeoutSpy.mock.calls.findLastIndex(
+        (call) => call[1] === TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs,
+      );
+      const flushTimer =
+        flushTimerCallIndex >= 0
+          ? (setTimeoutSpy.mock.calls[flushTimerCallIndex]?.[0] as (() => unknown) | undefined)
+          : undefined;
+      // Cancel the real timer so it cannot fire a second time after we manually invoke it.
+      if (flushTimerCallIndex >= 0) {
+        clearTimeout(
+          setTimeoutSpy.mock.results[flushTimerCallIndex]?.value as ReturnType<typeof setTimeout>,
+        );
+      }
       expect(flushTimer).toBeTypeOf("function");
       await flushTimer?.();
 
@@ -2118,10 +2127,19 @@ describe("createTelegramBot", () => {
       await Promise.all([first, second]);
       expect(replySpy).not.toHaveBeenCalled();
 
-      const flushTimerCall = [...setTimeoutSpy.mock.calls]
-        .toReversed()
-        .find((call) => call[1] === TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs);
-      const flushTimer = flushTimerCall?.[0] as (() => unknown) | undefined;
+      const flushTimerCallIndex = setTimeoutSpy.mock.calls.findLastIndex(
+        (call) => call[1] === TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs,
+      );
+      const flushTimer =
+        flushTimerCallIndex >= 0
+          ? (setTimeoutSpy.mock.calls[flushTimerCallIndex]?.[0] as (() => unknown) | undefined)
+          : undefined;
+      // Cancel the real timer so it cannot fire a second time after we manually invoke it.
+      if (flushTimerCallIndex >= 0) {
+        clearTimeout(
+          setTimeoutSpy.mock.results[flushTimerCallIndex]?.value as ReturnType<typeof setTimeout>,
+        );
+      }
       expect(flushTimer).toBeTypeOf("function");
       await flushTimer?.();
 
