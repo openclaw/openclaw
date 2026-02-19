@@ -127,6 +127,7 @@
     "@mariozechner/pi-ai": "0.52.12",
     "@mariozechner/pi-coding-agent": "0.52.12",
     "@mariozechner/pi-tui": "0.52.12",
+    "@modelcontextprotocol/sdk": "^1.26.0",
     "@mozilla/readability": "^0.6.0",
     "@sinclair/typebox": "0.34.48",
     "@slack/bolt": "^4.6.0",
