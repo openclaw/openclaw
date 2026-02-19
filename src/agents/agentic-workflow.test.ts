@@ -211,14 +211,14 @@ describe("Agentic Workflow", () => {
   });
 
   describe("Solution Evaluation", () => {
-    it("should handle empty evaluation", async () => {
-      const workflow = new AgenticWorkflow();
+    it("should handle low score evaluation", async () => {
+      const workflow = new AgenticWorkflow({ maxIterations: 2 });
 
       const mockGenerate = async () => "Solution";
       const mockEvaluate = async (): Promise<SolutionEvaluation> => ({
-        score: 0,
-        feedback: "",
-        issues: [],
+        score: 0.3, // Low but not zero
+        feedback: "Low score",
+        issues: ["Issue"],
         strengths: [],
       });
 
@@ -228,7 +228,8 @@ describe("Agentic Workflow", () => {
         "Test task",
       );
 
-      expect(result.finalScore).toBe(0);
+      expect(result.finalScore).toBe(0.3);
+      expect(result.iterations).toBe(2); // Should iterate max times
     });
 
     it("should handle perfect evaluation", async () => {
