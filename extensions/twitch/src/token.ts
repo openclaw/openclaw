@@ -66,7 +66,7 @@ export function resolveTwitchToken(
   if (accountId === DEFAULT_ACCOUNT_ID) {
     // Base-level config takes precedence
     token = normalizeTwitchToken(
-      (typeof twitchCfg?.accessToken === "string" ? twitchCfg.accessToken : undefined) ||
+      (typeof twitchCfg?.accessToken === "string" ? twitchCfg.accessToken : undefined) ??
         (accountCfg?.accessToken as string | undefined),
     );
   } else {
