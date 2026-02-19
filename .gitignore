@@ -38,6 +38,9 @@ apps/macos/.swiftpm/
 apps/shared/MoltbotKit/.swiftpm/
 apps/shared/OpenClawKit/.swiftpm/
 Core/
+# Keep Control UI source modules trackable on case-insensitive filesystems.
+!ui/src/ui/core/
+!ui/src/ui/core/**
 apps/ios/*.xcodeproj/
 apps/ios/*.xcworkspace/
 apps/ios/.swiftpm/

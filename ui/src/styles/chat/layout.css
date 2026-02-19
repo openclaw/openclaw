@@ -21,18 +21,18 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-12);
   flex-wrap: nowrap;
   flex-shrink: 0;
-  padding-bottom: 12px;
-  margin-bottom: 12px;
+  padding-bottom: var(--space-12);
+  margin-bottom: var(--space-12);
   background: transparent;
 }
 
 .chat-header__left {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-12);
   flex-wrap: wrap;
   min-width: 0;
 }
@@ -40,7 +40,7 @@
 .chat-header__right {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-8);
 }
 
 .chat-session {
@@ -52,7 +52,7 @@
   flex: 1 1 0; /* Grow, shrink, and use 0 base for proper scrolling */
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 12px 4px;
+  padding: var(--space-12) var(--space-4);
   margin: 0 -4px;
   min-height: 0; /* Allow shrinking for flex scroll behavior */
   border-radius: 12px;
@@ -105,9 +105,9 @@
   align-self: center;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 14px;
-  margin: 8px auto;
+  gap: var(--space-6);
+  padding: var(--space-6) var(--space-14);
+  margin: var(--space-8) auto;
   font-size: 13px;
   font-family: var(--font-body);
   color: var(--text);
@@ -145,9 +145,9 @@
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--space-12);
   margin-top: auto; /* Push to bottom of flex container */
-  padding: 12px 4px 4px;
+  padding: var(--space-12) var(--space-4) var(--space-4);
   background: linear-gradient(to bottom, transparent, var(--bg) 20%);
   z-index: 10;
 }
@@ -156,8 +156,8 @@
 .chat-attachments {
   display: inline-flex;
   flex-wrap: wrap;
-  gap: 8px;
-  padding: 8px;
+  gap: var(--space-8);
+  padding: var(--space-8);
   background: var(--panel);
   border-radius: 8px;
   border: 1px solid var(--border);
@@ -237,8 +237,8 @@
 .chat-message-images {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 8px;
+  gap: var(--space-8);
+  margin-bottom: var(--space-8);
 }
 
 .chat-message-image {
@@ -263,7 +263,7 @@
 .chat-compose__row {
   display: flex;
   align-items: stretch;
-  gap: 12px;
+  gap: var(--space-12);
   flex: 1;
 }
 
@@ -289,7 +289,7 @@
   height: 40px;
   min-height: 40px;
   max-height: 150px;
-  padding: 9px 12px;
+  padding: 9px var(--space-12);
   border-radius: 8px;
   overflow-y: auto;
   resize: none;
@@ -308,11 +308,11 @@
   flex-shrink: 0;
   display: flex;
   align-items: stretch;
-  gap: 8px;
+  gap: var(--space-8);
 }
 
 .chat-compose .chat-compose__actions .btn {
-  padding: 0 16px;
+  padding: 0 var(--space-16);
   font-size: 13px;
   height: 40px;
   min-height: 40px;
@@ -327,7 +327,7 @@
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  gap: 12px;
+  gap: var(--space-12);
   flex-wrap: wrap;
 }
 
@@ -339,13 +339,13 @@
 .chat-controls__thinking {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-6);
   font-size: 13px;
 }
 
 /* Icon button style */
 .btn--icon {
-  padding: 8px !important;
+  padding: var(--space-8) !important;
   min-width: 36px;
   height: 36px;
   display: inline-flex;
@@ -359,7 +359,7 @@
 .chat-controls__separator {
   color: rgba(255, 255, 255, 0.4);
   font-size: 18px;
-  margin: 0 8px;
+  margin: 0 var(--space-8);
   font-weight: 300;
 }
 
@@ -398,7 +398,7 @@
 }
 
 .chat-controls__session select {
-  padding: 6px 10px;
+  padding: var(--space-6) var(--space-10);
   font-size: 13px;
   max-width: 300px;
   overflow: hidden;
@@ -408,9 +408,9 @@
 .chat-controls__thinking {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-4);
   font-size: 12px;
-  padding: 4px 10px;
+  padding: var(--space-4) var(--space-10);
   background: rgba(255, 255, 255, 0.04);
   border-radius: 6px;
   border: 1px solid var(--border);
@@ -433,7 +433,7 @@
 
   .chat-controls {
     flex-wrap: wrap;
-    gap: 8px;
+    gap: var(--space-8);
   }
 
   .chat-controls__session {

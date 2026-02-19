@@ -1,5 +1,5 @@
 import { html, nothing } from "lit";
-import type { SkillStatusEntry } from "../types.ts";
+import type { SkillStatusEntry } from "../models/types.ts";
 
 export function computeSkillMissing(skill: SkillStatusEntry): string[] {
   return [

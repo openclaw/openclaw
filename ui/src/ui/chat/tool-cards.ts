@@ -1,6 +1,6 @@
 import { html, nothing } from "lit";
-import { icons } from "../icons.ts";
-import { formatToolDetail, resolveToolDisplay } from "../tool-display.ts";
+import { icons } from "../lib/icons.ts";
+import { formatToolDetail, resolveToolDisplay } from "../tools/tool-display.ts";
 import type { ToolCard } from "../types/chat-types.ts";
 import { TOOL_INLINE_THRESHOLD } from "./constants.ts";
 import { extractTextCached } from "./message-extract.ts";

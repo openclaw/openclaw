@@ -8,8 +8,8 @@
     display: flex;
     flex-direction: row;
     flex-wrap: nowrap;
-    gap: 4px;
-    padding: 10px 14px;
+    gap: var(--space-4);
+    padding: var(--space-10) var(--space-14);
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
     scrollbar-width: none;
@@ -36,7 +36,7 @@
   }
 
   .nav-item {
-    padding: 8px 14px;
+    padding: var(--space-8) var(--space-14);
     font-size: 13px;
     border-radius: var(--radius-md);
     white-space: nowrap;
@@ -53,8 +53,8 @@
 
   /* Topbar */
   .topbar {
-    padding: 10px 12px;
-    gap: 8px;
+    padding: var(--space-10) var(--space-12);
+    gap: var(--space-8);
     flex-direction: row;
     flex-wrap: wrap;
     justify-content: space-between;
@@ -75,15 +75,15 @@
   }
 
   .topbar-status {
-    gap: 6px;
+    gap: var(--space-6);
     width: auto;
     flex-wrap: nowrap;
   }
 
   .topbar-status .pill {
-    padding: 4px 8px;
+    padding: var(--space-4) var(--space-8);
     font-size: 11px;
-    gap: 4px;
+    gap: var(--space-4);
   }
 
   .topbar-status .pill .mono {
@@ -96,8 +96,8 @@
 
   /* Nav */
   .nav {
-    padding: 8px 10px;
-    gap: 4px;
+    padding: var(--space-8) var(--space-10);
+    gap: var(--space-4);
     -webkit-overflow-scrolling: touch;
     scrollbar-width: none;
   }
@@ -115,7 +115,7 @@
   }
 
   .nav-item {
-    padding: 6px 10px;
+    padding: var(--space-6) var(--space-10);
     font-size: 12px;
     border-radius: var(--radius-md);
     white-space: nowrap;
@@ -128,13 +128,13 @@
   }
 
   .content {
-    padding: 4px 4px 16px;
-    gap: 12px;
+    padding: var(--space-4) var(--space-4) var(--space-16);
+    gap: var(--space-12);
   }
 
   /* Cards */
   .card {
-    padding: 12px;
+    padding: var(--space-12);
     border-radius: var(--radius-md);
   }
 
@@ -144,12 +144,12 @@
 
   /* Stats */
   .stat-grid {
-    gap: 8px;
+    gap: var(--space-8);
     grid-template-columns: repeat(2, 1fr);
   }
 
   .stat {
-    padding: 10px;
+    padding: var(--space-10);
     border-radius: var(--radius-md);
   }
 
@@ -164,32 +164,32 @@
   /* Notes */
   .note-grid {
     grid-template-columns: 1fr;
-    gap: 8px;
+    gap: var(--space-8);
   }
 
   /* Forms */
   .form-grid {
     grid-template-columns: 1fr;
-    gap: 10px;
+    gap: var(--space-10);
   }
 
   .field input,
   .field textarea,
   .field select {
-    padding: 8px 10px;
+    padding: var(--space-8) var(--space-10);
     border-radius: var(--radius-md);
     font-size: 14px;
   }
 
   /* Buttons */
   .btn {
-    padding: 8px 12px;
+    padding: var(--space-8) var(--space-12);
     font-size: 12px;
   }
 
   /* Pills */
   .pill {
-    padding: 4px 10px;
+    padding: var(--space-4) var(--space-10);
     font-size: 12px;
   }
 
@@ -197,7 +197,7 @@
   .chat-header {
     flex-direction: column;
     align-items: stretch;
-    gap: 8px;
+    gap: var(--space-8);
   }
 
   .chat-header__left {
@@ -215,8 +215,8 @@
   }
 
   .chat-thread {
-    margin-top: 8px;
-    padding: 12px 8px;
+    margin-top: var(--space-8);
+    padding: var(--space-12) var(--space-8);
   }
 
   .chat-msg {
@@ -224,17 +224,17 @@
   }
 
   .chat-bubble {
-    padding: 8px 12px;
+    padding: var(--space-8) var(--space-12);
     border-radius: var(--radius-md);
   }
 
   .chat-compose {
-    gap: 8px;
+    gap: var(--space-8);
   }
 
   .chat-compose__field textarea {
     min-height: 60px;
-    padding: 8px 10px;
+    padding: var(--space-8) var(--space-10);
     border-radius: var(--radius-md);
     font-size: 14px;
   }
@@ -247,8 +247,8 @@
 
   .log-row {
     grid-template-columns: 1fr;
-    gap: 4px;
-    padding: 8px;
+    gap: var(--space-4);
+    padding: var(--space-8);
   }
 
   .log-time {
@@ -269,7 +269,7 @@
 
   /* Lists */
   .list-item {
-    padding: 10px;
+    padding: var(--space-10);
     border-radius: var(--radius-md);
   }
 
@@ -283,7 +283,7 @@
 
   /* Code blocks */
   .code-block {
-    padding: 8px;
+    padding: var(--space-8);
     border-radius: var(--radius-md);
     font-size: 11px;
   }
@@ -308,7 +308,7 @@
   }
 
   .topbar {
-    padding: 8px 10px;
+    padding: var(--space-8) var(--space-10);
   }
 
   .brand-title {
@@ -316,25 +316,25 @@
   }
 
   .nav {
-    padding: 6px 8px;
+    padding: var(--space-6) var(--space-8);
   }
 
   .nav-item {
-    padding: 6px 8px;
+    padding: var(--space-6) var(--space-8);
     font-size: 11px;
   }
 
   .content {
-    padding: 4px 4px 12px;
-    gap: 10px;
+    padding: var(--space-4) var(--space-4) var(--space-12);
+    gap: var(--space-10);
   }
 
   .card {
-    padding: 10px;
+    padding: var(--space-10);
   }
 
   .stat {
-    padding: 8px;
+    padding: var(--space-8);
   }
 
   .stat-value {
@@ -342,22 +342,22 @@
   }
 
   .chat-bubble {
-    padding: 8px 10px;
+    padding: var(--space-8) var(--space-10);
   }
 
   .chat-compose__field textarea {
     min-height: 52px;
-    padding: 8px 10px;
+    padding: var(--space-8) var(--space-10);
     font-size: 13px;
   }
 
   .btn {
-    padding: 6px 10px;
+    padding: var(--space-6) var(--space-10);
     font-size: 11px;
   }
 
   .topbar-status .pill {
-    padding: 3px 6px;
+    padding: 3px var(--space-6);
     font-size: 10px;
   }
 

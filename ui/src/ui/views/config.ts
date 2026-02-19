@@ -1,5 +1,5 @@
 import { html, nothing } from "lit";
-import type { ConfigUiHints } from "../types.ts";
+import type { ConfigUiHints } from "../models/types.ts";
 import { hintForPath, humanize, schemaType, type JsonSchema } from "./config-form.shared.ts";
 import { analyzeConfigSchema, renderConfigForm, SECTION_META } from "./config-form.ts";
 

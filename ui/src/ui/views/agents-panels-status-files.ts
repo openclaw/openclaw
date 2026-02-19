@@ -1,11 +1,11 @@
 import { html, nothing } from "lit";
-import { formatRelativeTimestamp } from "../format.ts";
+import { formatRelativeTimestamp } from "../lib/format.ts";
 import {
   formatCronPayload,
   formatCronSchedule,
   formatCronState,
   formatNextRun,
-} from "../presenter.ts";
+} from "../lib/presenter.ts";
 import type {
   AgentFileEntry,
   AgentsFilesListResult,
@@ -13,7 +13,7 @@ import type {
   ChannelsStatusSnapshot,
   CronJob,
   CronStatus,
-} from "../types.ts";
+} from "../models/types.ts";
 import { formatBytes, type AgentContext } from "./agents-utils.ts";
 
 function renderAgentContextCard(context: AgentContext, subtitle: string) {

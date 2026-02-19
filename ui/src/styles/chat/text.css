@@ -3,8 +3,8 @@
    ============================================= */
 
 .chat-thinking {
-  margin-bottom: 10px;
-  padding: 10px 12px;
+  margin-bottom: var(--space-10);
+  padding: var(--space-10) var(--space-12);
   border-radius: 10px;
   border: 1px dashed rgba(255, 255, 255, 0.18);
   background: rgba(255, 255, 255, 0.04);
@@ -65,7 +65,7 @@
 .chat-text :where(pre) {
   background: rgba(0, 0, 0, 0.15);
   border-radius: 6px;
-  padding: 10px 12px;
+  padding: var(--space-10) var(--space-12);
   overflow-x: auto;
 }
 
@@ -76,16 +76,16 @@
 
 .chat-text :where(blockquote) {
   border-left: 3px solid var(--border-strong);
-  padding-left: 12px;
+  padding-left: var(--space-12);
   margin-left: 0;
   color: var(--muted);
   background: rgba(255, 255, 255, 0.02);
-  padding: 8px 12px;
+  padding: var(--space-8) var(--space-12);
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
 }
 
 .chat-text :where(blockquote blockquote) {
-  margin-top: 8px;
+  margin-top: var(--space-8);
   border-left-color: var(--border-hover);
   background: rgba(255, 255, 255, 0.03);
 }

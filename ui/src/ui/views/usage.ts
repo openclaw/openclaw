@@ -1,5 +1,5 @@
 import { html, nothing } from "lit";
-import { extractQueryTerms, filterSessionsByQuery } from "../usage-helpers.ts";
+import { extractQueryTerms, filterSessionsByQuery } from "../usage/usage-helpers.ts";
 import {
   buildAggregatesFromSessions,
   buildPeakErrorHours,

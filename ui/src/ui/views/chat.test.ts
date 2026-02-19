@@ -1,6 +1,6 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import type { SessionsListResult } from "../types.ts";
+import type { SessionsListResult } from "../models/types.ts";
 import { renderChat, type ChatProps } from "./chat.ts";
 
 function createSessions(): SessionsListResult {

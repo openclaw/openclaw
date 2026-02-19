@@ -1,7 +1,7 @@
 import { html, nothing } from "lit";
 import type { SkillMessageMap } from "../controllers/skills.ts";
-import { clampText } from "../format.ts";
-import type { SkillStatusEntry, SkillStatusReport } from "../types.ts";
+import { clampText } from "../lib/format.ts";
+import type { SkillStatusEntry, SkillStatusReport } from "../models/types.ts";
 import { groupSkills } from "./skills-grouping.ts";
 import {
   computeSkillMissing,

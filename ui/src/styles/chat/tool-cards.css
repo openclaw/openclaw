@@ -2,8 +2,8 @@
 .chat-tool-card {
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 12px;
-  margin-top: 8px;
+  padding: var(--space-12);
+  margin-top: var(--space-8);
   background: var(--card);
   box-shadow: inset 0 1px 0 var(--card-highlight);
   transition:
@@ -38,13 +38,13 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-8);
 }
 
 .chat-tool-card__title {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-6);
   font-weight: 600;
   font-size: 13px;
   line-height: 1.2;
@@ -73,7 +73,7 @@
 .chat-tool-card__action {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-4);
   font-size: 12px;
   color: var(--accent);
   opacity: 0.8;
@@ -113,21 +113,21 @@
 
 .chat-tool-card__status-text {
   font-size: 11px;
-  margin-top: 4px;
+  margin-top: var(--space-4);
 }
 
 .chat-tool-card__detail {
   font-size: 12px;
   color: var(--muted);
-  margin-top: 4px;
+  margin-top: var(--space-4);
 }
 
 /* Collapsed preview - fixed height with truncation */
 .chat-tool-card__preview {
   font-size: 11px;
   color: var(--muted);
-  margin-top: 8px;
-  padding: 8px 10px;
+  margin-top: var(--space-8);
+  padding: var(--space-8) var(--space-10);
   background: var(--secondary);
   border-radius: var(--radius-md);
   white-space: pre-wrap;
@@ -146,8 +146,8 @@
 .chat-tool-card__inline {
   font-size: 11px;
   color: var(--text);
-  margin-top: 6px;
-  padding: 6px 8px;
+  margin-top: var(--space-6);
+  padding: var(--space-6) var(--space-8);
   background: var(--secondary);
   border-radius: var(--radius-sm);
   white-space: pre-wrap;
@@ -158,13 +158,13 @@
 .chat-reading-indicator {
   background: transparent;
   border: 1px solid var(--border);
-  padding: 12px;
+  padding: var(--space-12);
   display: inline-flex;
 }
 
 .chat-reading-indicator__dots {
   display: flex;
-  gap: 6px;
+  gap: var(--space-6);
   align-items: center;
 }
 

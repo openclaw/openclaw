@@ -1,5 +1,5 @@
 import { html } from "lit";
-import type { ConfigUiHints } from "../types.ts";
+import type { ConfigUiHints } from "../models/types.ts";
 import type { ChannelsProps } from "./channels.types.ts";
 import { analyzeConfigSchema, renderNode, schemaType, type JsonSchema } from "./config-form.ts";
 

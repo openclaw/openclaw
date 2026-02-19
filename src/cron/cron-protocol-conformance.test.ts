@@ -29,7 +29,9 @@ function extractDeliveryModes(schema: SchemaLike): string[] {
   return Array.from(new Set(unionModes));
 }
 
-const UI_FILES = ["ui/src/ui/types.ts", "ui/src/ui/ui-types.ts", "ui/src/ui/views/cron.ts"];
+const UI_TYPES_CANDIDATES = ["ui/src/ui/models/types.ts", "ui/src/ui/types.ts"];
+const UI_UI_TYPES_CANDIDATES = ["ui/src/ui/models/ui-types.ts", "ui/src/ui/ui-types.ts"];
+const UI_CRON_VIEW_CANDIDATES = ["ui/src/ui/views/cron.ts"];
 
 const SWIFT_MODEL_CANDIDATES = [`${MACOS_APP_SOURCES_DIR}/CronModels.swift`];
 const SWIFT_STATUS_CANDIDATES = [`${MACOS_APP_SOURCES_DIR}/GatewayConnection.swift`];
@@ -50,13 +52,30 @@ async function resolveSwiftFiles(cwd: string, candidates: string[]): Promise<str
   return matches;
 }
 
+async function resolveFirstExistingFile(cwd: string, candidates: string[]): Promise<string> {
+  for (const relPath of candidates) {
+    try {
+      await fs.access(path.join(cwd, relPath));
+      return relPath;
+    } catch {
+      // ignore missing path
+    }
+  }
+  throw new Error(`Missing file. Tried: ${candidates.join(", ")}`);
+}
+
 describe("cron protocol conformance", () => {
   it("ui + swift include all cron delivery modes from gateway schema", async () => {
     const modes = extractDeliveryModes(CronDeliverySchema as SchemaLike);
     expect(modes.length).toBeGreaterThan(0);
 
     const cwd = process.cwd();
-    for (const relPath of UI_FILES) {
+    const uiFiles = [
+      await resolveFirstExistingFile(cwd, UI_TYPES_CANDIDATES),
+      await resolveFirstExistingFile(cwd, UI_UI_TYPES_CANDIDATES),
+      await resolveFirstExistingFile(cwd, UI_CRON_VIEW_CANDIDATES),
+    ];
+    for (const relPath of uiFiles) {
       const content = await fs.readFile(path.join(cwd, relPath), "utf-8");
       for (const mode of modes) {
         expect(content.includes(`"${mode}"`), `${relPath} missing delivery mode ${mode}`).toBe(
@@ -77,7 +96,8 @@ describe("cron protocol conformance", () => {
 
   it("cron status shape matches gateway fields in UI + Swift", async () => {
     const cwd = process.cwd();
-    const uiTypes = await fs.readFile(path.join(cwd, "ui/src/ui/types.ts"), "utf-8");
+    const uiTypesPath = await resolveFirstExistingFile(cwd, UI_TYPES_CANDIDATES);
+    const uiTypes = await fs.readFile(path.join(cwd, uiTypesPath), "utf-8");
     expect(uiTypes.includes("export type CronStatus")).toBe(true);
     expect(uiTypes.includes("jobs:")).toBe(true);
     expect(uiTypes.includes("jobCount")).toBe(false);

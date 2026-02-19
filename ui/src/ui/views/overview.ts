@@ -1,9 +1,9 @@
 import { html } from "lit";
 import { t, i18n, type Locale } from "../../i18n/index.ts";
-import { formatRelativeTimestamp, formatDurationHuman } from "../format.ts";
-import type { GatewayHelloOk } from "../gateway.ts";
-import { formatNextRun } from "../presenter.ts";
-import type { UiSettings } from "../storage.ts";
+import type { GatewayHelloOk } from "../core/gateway.ts";
+import type { UiSettings } from "../core/storage.ts";
+import { formatRelativeTimestamp, formatDurationHuman } from "../lib/format.ts";
+import { formatNextRun } from "../lib/presenter.ts";
 
 export type OverviewProps = {
   connected: boolean;

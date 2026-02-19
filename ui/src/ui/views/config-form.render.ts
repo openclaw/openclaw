@@ -1,6 +1,6 @@
 import { html, nothing } from "lit";
-import { icons } from "../icons.ts";
-import type { ConfigUiHints } from "../types.ts";
+import { icons } from "../lib/icons.ts";
+import type { ConfigUiHints } from "../models/types.ts";
 import { renderNode } from "./config-form.node.ts";
 import { hintForPath, humanize, schemaType, type JsonSchema } from "./config-form.shared.ts";
 
