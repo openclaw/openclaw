@@ -4,6 +4,7 @@ import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveMemoryBackendConfig } from "../memory/backend-config.js";
 import { note } from "../terminal/note.js";
 import { resolveUserPath } from "../utils.js";
 
@@ -19,6 +20,13 @@ export async function noteMemorySearchHealth(cfg: OpenClawConfig): Promise<void>
 
   if (!resolved) {
     note("Memory search is explicitly disabled (enabled: false).", "Memory search");
+    return;
+  }
+
+  // QMD backend handles embeddings internally (e.g. embeddinggemma) — no
+  // separate embedding provider is needed. Skip the provider check entirely.
+  const backendConfig = resolveMemoryBackendConfig({ cfg, agentId });
+  if (backendConfig.backend === "qmd") {
     return;
   }
 
