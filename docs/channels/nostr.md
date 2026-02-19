@@ -285,6 +285,10 @@ Optional trace hook:
 
 - Set `OPENCLAW_NOSTR_TRACE_JSONL=/absolute/path/nostr-trace.jsonl` to capture inbound/outbound
   Nostr channel events as JSONL for cross-client latency and ordering diagnostics.
+- Trace entries now include `direction:"inbound_bus"` with `stage` transitions (`received`,
+  `accepted`, `decrypt_failed`, `unsupported_encryption`, etc.) to pinpoint drop/reject causes.
+- Runtime includes a replay poll fallback (5s cadence) that re-queries recent prompts and feeds
+  normal validation/dedupe to recover from missed live-delivery windows.
 
 ### Manual test
 

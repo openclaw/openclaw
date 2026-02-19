@@ -40,6 +40,8 @@ export const DEFAULT_RELAYS = ["wss://relay.damus.io", "wss://nos.lol"];
 const STARTUP_LOOKBACK_SEC = 120; // tolerate relay lag / clock skew
 const MAX_PERSISTED_EVENT_IDS = 5000;
 const STATE_PERSIST_DEBOUNCE_MS = 5000; // Debounce state writes
+const REPLAY_POLL_INTERVAL_MS = 5000;
+const REPLAY_POLL_MAX_WAIT_MS = 3000;
 
 // Circuit breaker configuration
 const CIRCUIT_BREAKER_THRESHOLD = 5; // failures before opening
@@ -112,6 +114,8 @@ export interface NostrBusOptions {
   onEose?: (relay: string) => void;
   /** Called on each metric event (optional) */
   onMetric?: (event: MetricEvent) => void;
+  /** Called with inbound event lifecycle/rejection details for diagnostics (optional) */
+  onInboundTrace?: (event: NostrInboundTraceEvent) => void;
   /** Maximum entries in seen tracker (default: 100,000) */
   maxSeenEntries?: number;
   /** Seen tracker TTL in ms (default: 1 hour) */
@@ -164,6 +168,27 @@ type NostrOutboundContent = string | Record<string, unknown>;
 interface NostrPromptPayload {
   ver: number;
   message: string;
+}
+
+export interface NostrInboundTraceEvent {
+  stage:
+    | "received"
+    | "duplicate"
+    | "self_message"
+    | "stale"
+    | "missing_target"
+    | "unsupported_kind"
+    | "unsupported_encryption"
+    | "invalid_signature"
+    | "decrypt_failed"
+    | "invalid_prompt"
+    | "accepted";
+  eventId: string;
+  kind: number;
+  senderPubkey: string;
+  createdAt: number;
+  reason?: string;
+  details?: Record<string, unknown>;
 }
 
 export function normalizeRelayUrls(rawRelays: unknown): string[] {
@@ -445,8 +470,11 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
     onMessage,
     onError,
     onSend,
+    onConnect,
+    onDisconnect,
     onEose,
     onMetric,
+    onInboundTrace,
     maxSeenEntries = 100_000,
     seenTtlMs = 60 * 60 * 1000,
   } = options;
@@ -457,13 +485,24 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
   if (normalizedRelays.length === 0) {
     throw new Error("At least one Nostr relay is required");
   }
-  const pool = new SimplePool();
-  const accountId = options.accountId ?? pk.slice(0, 16);
-  const gatewayStartedAt = Math.floor(Date.now() / 1000);
-  let lastAiInfoPublishedAt: number | undefined;
 
   // Initialize metrics
   const metrics = onMetric ? createMetrics(onMetric) : createNoopMetrics();
+  const pool = new SimplePool({
+    enableReconnect: true,
+    enablePing: true,
+    onRelayConnectionSuccess: (relay: string) => {
+      metrics.emit("relay.connect", 1, { relay });
+      onConnect?.(relay);
+    },
+    onRelayConnectionFailure: (relay: string) => {
+      metrics.emit("relay.connect.failure", 1, { relay });
+      onDisconnect?.(relay);
+    },
+  } as ConstructorParameters<typeof SimplePool>[0]);
+  const accountId = options.accountId ?? pk.slice(0, 16);
+  const gatewayStartedAt = Math.floor(Date.now() / 1000);
+  let lastAiInfoPublishedAt: number | undefined;
 
   // Initialize seen tracker with LRU
   const seen: SeenTracker = createSeenTracker({
@@ -524,27 +563,54 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
 
   const inflight = new Set<string>();
 
+  const traceInbound = (
+    stage: NostrInboundTraceEvent["stage"],
+    event: Event,
+    details?: Record<string, unknown>,
+  ): void => {
+    if (!onInboundTrace) {
+      return;
+    }
+    try {
+      onInboundTrace({
+        stage,
+        eventId: event.id,
+        kind: event.kind,
+        senderPubkey: event.pubkey,
+        createdAt: event.created_at,
+        ...(details?.reason ? { reason: String(details.reason) } : {}),
+        ...(details ? { details } : {}),
+      });
+    } catch {
+      // Keep diagnostics side-effects from impacting protocol flow.
+    }
+  };
+
   // Event handler
-  async function handleEvent(event: Event): Promise<void> {
+  async function handleEvent(event: Event, source: "live" | "poll" = "live"): Promise<void> {
     try {
       metrics.emit("event.received");
-
-      // Fast dedupe check (handles relay reconnections)
-      if (seen.peek(event.id) || inflight.has(event.id)) {
+      const alreadySeen = seen.peek(event.id) || inflight.has(event.id);
+      if (alreadySeen) {
+        // Fast dedupe check (handles relay reconnections)
         metrics.emit("event.duplicate");
+        traceInbound("duplicate", event, { source });
         return;
       }
+      traceInbound("received", event, { source });
       inflight.add(event.id);
 
       // Self-message loop prevention: skip our own messages
       if (event.pubkey === pk) {
         metrics.emit("event.rejected.self_message");
+        traceInbound("self_message", event, { source });
         return;
       }
 
       // Skip events older than our `since` (relay may ignore filter)
       if (event.created_at < since) {
         metrics.emit("event.rejected.stale");
+        traceInbound("stale", event, { source, since });
         return;
       }
 
@@ -558,12 +624,17 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
       }
       if (!targetsUs) {
         metrics.emit("event.rejected.wrong_kind");
+        traceInbound("missing_target", event, { source, targetPubkey: pk });
         return;
       }
 
       // Process only supported inbound prompt kinds.
       if (event.kind !== NIP63_PROMPT_KIND && event.kind !== NIP04_DM_KIND) {
         metrics.emit("event.rejected.wrong_kind");
+        traceInbound("unsupported_kind", event, {
+          source,
+          expectedKinds: [NIP63_PROMPT_KIND, NIP04_DM_KIND],
+        });
         return;
       }
 
@@ -572,6 +643,11 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
         const encryptionScheme = resolveNip63EncryptionScheme(event.tags);
         if (encryptionScheme !== NIP63_ENCRYPTION_SCHEME) {
           metrics.emit("event.rejected.invalid_shape");
+          traceInbound("unsupported_encryption", event, {
+            source,
+            encryptionScheme: encryptionScheme ?? "missing",
+            expected: NIP63_ENCRYPTION_SCHEME,
+          });
           onError?.(
             new Error(`Unsupported encryption scheme ${encryptionScheme ?? "missing"}`),
             `event ${event.id}`,
@@ -583,6 +659,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
       // Verify signature (must pass before we trust the event)
       if (!verifyEvent(event)) {
         metrics.emit("event.rejected.invalid_signature");
+        traceInbound("invalid_signature", event, { source });
         onError?.(new Error("Invalid signature"), `event ${event.id}`);
         return;
       }
@@ -604,6 +681,10 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
       } catch (err) {
         metrics.emit("decrypt.failure");
         metrics.emit("event.rejected.decrypt_failed");
+        traceInbound("decrypt_failed", event, {
+          source,
+          reason: err instanceof Error ? err.message : String(err),
+        });
         onError?.(err as Error, `decrypt from ${event.pubkey}`);
         return;
       }
@@ -618,6 +699,10 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
                 parsed = parseNip63PromptPayload(plaintext, event.id);
               } catch (err) {
                 metrics.emit("event.rejected.invalid_shape");
+                traceInbound("invalid_prompt", event, {
+                  source,
+                  reason: err instanceof Error ? err.message : String(err),
+                });
                 onError?.(err as Error, `parse prompt ${event.id}`);
                 return undefined;
               }
@@ -653,6 +738,12 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
 
       const sessionId = getTagValue(event.tags, "s");
       const inReplyTo = getTagValue(event.tags, "e");
+
+      traceInbound("accepted", event, {
+        source,
+        sessionId,
+        inReplyTo,
+      });
 
       // Call the message handler
       await onMessage(
@@ -700,7 +791,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
         // Handle subscription close
         for (const relay of normalizedRelays) {
           metrics.emit("relay.message.closed", 1, { relay });
-          options.onDisconnect?.(relay);
+          onDisconnect?.(relay);
         }
         const reasonText = reason.join(", ");
         if (reasonText.toLowerCase().includes("closed by caller")) {
@@ -710,6 +801,50 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
       },
     },
   );
+
+  let replayPollInFlight = false;
+  const runReplayPoll = async (): Promise<void> => {
+    if (replayPollInFlight) {
+      return;
+    }
+    replayPollInFlight = true;
+    try {
+      const replaySince = Math.max(0, lastProcessedAt - STARTUP_LOOKBACK_SEC);
+      const replayEvents = await pool.querySync(
+        normalizedRelays,
+        {
+          kinds: [NIP63_PROMPT_KIND, NIP04_DM_KIND],
+          "#p": [pk],
+          since: replaySince,
+        },
+        {
+          label: "nostr-replay",
+          maxWait: REPLAY_POLL_MAX_WAIT_MS,
+        },
+      );
+
+      const ordered = [...replayEvents].sort((left, right) => {
+        if (left.created_at === right.created_at) {
+          return left.id.localeCompare(right.id);
+        }
+        return left.created_at - right.created_at;
+      });
+      for (const event of ordered) {
+        await handleEvent(event as Event, "poll");
+      }
+    } catch (error) {
+      onError?.(error as Error, "replay-poll");
+    } finally {
+      replayPollInFlight = false;
+    }
+  };
+  const replayPollTimer = setInterval(() => {
+    void runReplayPoll();
+  }, REPLAY_POLL_INTERVAL_MS);
+  if (typeof replayPollTimer.unref === "function") {
+    replayPollTimer.unref();
+  }
+  void runReplayPoll();
 
   // Public sendDm function
   const sendDm = async (
@@ -791,6 +926,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
     close: () => {
       sub.close();
       seen.stop();
+      clearInterval(replayPollTimer);
       // Flush pending state write synchronously on close
       if (pendingWrite) {
         clearTimeout(pendingWrite);

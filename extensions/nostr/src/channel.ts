@@ -779,16 +779,16 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                 ...prefixOptions,
                 deliver: async (outbound, info: { kind: "tool" | "block" | "final" }) => {
                   const responseText = (outbound as { text?: string } | undefined)?.text ?? "";
-                  const trimmedResponse = responseText.trim();
-                  if (info.kind === "block" && trimmedResponse) {
+                  const hasContent = responseText.length > 0;
+                  if (info.kind === "block" && hasContent) {
                     streamedTextBuffer = streamedTextBuffer
-                      ? `${streamedTextBuffer}${trimmedResponse}`
-                      : trimmedResponse;
+                      ? `${streamedTextBuffer}${responseText}`
+                      : responseText;
                   }
                   if (info.kind === "final") {
                     terminalEmitted = true;
                   }
-                  if (!trimmedResponse && info.kind !== "final") {
+                  if (!hasContent && info.kind !== "final") {
                     return;
                   }
                   if (info.kind === "final") {
@@ -806,7 +806,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                           ver: 1,
                           event: "block",
                           phase: "update",
-                          text: trimmedResponse,
+                          text: responseText,
                           seq: blockSeq++,
                           timestamp,
                           timestamp_ms: timestampMs,
@@ -819,7 +819,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                             ver: 1,
                             name: "tool",
                             phase: "result",
-                            output: { text: trimmedResponse },
+                            output: { text: responseText },
                             success: true,
                             timestamp,
                             timestamp_ms: timestampMs,
@@ -829,7 +829,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                           }
                         : {
                             ver: 1,
-                            text: trimmedResponse || streamedTextBuffer || "Done.",
+                            text: responseText || streamedTextBuffer || "Done.",
                             timestamp,
                             timestamp_ms: timestampMs,
                             run_id: payload.eventId,
@@ -861,18 +861,19 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                 // NIP-63 clients expect streamed progress events.
                 disableBlockStreaming: false,
                 onReasoningStream: async (reasoningPayload) => {
-                  const reasoningText = (reasoningPayload.text ?? "").trim();
-                  if (!reasoningText) {
+                  const reasoningText = reasoningPayload.text ?? "";
+                  if (!reasoningText.length) {
                     return;
                   }
+                  const timestampMs = Date.now();
                   await reply(
                     {
                       ver: 1,
                       event: "thinking",
                       phase: "update",
                       text: reasoningText,
-                      timestamp: Math.floor(Date.now() / 1000),
-                      timestamp_ms: Date.now(),
+                      timestamp: Math.floor(timestampMs / 1000),
+                      timestamp_ms: timestampMs,
                       run_id: payload.eventId,
                       session_id: sessionId,
                       trace_id: traceId,
@@ -889,6 +890,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                   if (!normalizedName) {
                     return;
                   }
+                  const timestampMs = Date.now();
                   await safeSendStatus("tool_use", {
                     info: normalizedName,
                   });
@@ -897,8 +899,8 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                       ver: 1,
                       name: normalizedName,
                       phase: normalizeToolPhase(phase),
-                      timestamp: Math.floor(Date.now() / 1000),
-                      timestamp_ms: Date.now(),
+                      timestamp: Math.floor(timestampMs / 1000),
+                      timestamp_ms: timestampMs,
                       run_id: payload.eventId,
                       session_id: sessionId,
                       trace_id: traceId,
@@ -1002,6 +1004,26 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
             }
             await publishAiInfoIfNeeded(config, "post-message");
           }
+        },
+        onInboundTrace: (event) => {
+          if (
+            event.stage === "duplicate" &&
+            event.details &&
+            typeof event.details.source === "string" &&
+            event.details.source === "poll"
+          ) {
+            return;
+          }
+          traceRecorder.record({
+            direction: "inbound_bus",
+            stage: event.stage,
+            event_id: event.eventId,
+            kind: event.kind,
+            sender_pubkey: event.senderPubkey,
+            created_at: event.createdAt,
+            reason: event.reason,
+            details: event.details,
+          });
         },
         onError: (error, context) => {
           ctx.log?.error?.(`[${account.accountId}] Nostr error (${context}): ${error.message}`);
