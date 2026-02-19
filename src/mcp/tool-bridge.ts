@@ -9,16 +9,15 @@
  * - Graceful error handling (no crashes)
  */
 
-import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type, type TSchema } from "@sinclair/typebox";
+import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { McpClientBase, McpToolInfo } from "./client-base.js";
 import { logWarn } from "../logger.js";
 import { wrapExternalContent, detectSuspiciousPatterns } from "../security/external-content.js";
 
 // Re-export for convenience
 export type { McpToolInfo } from "./client-base.js";
-
-type AnyAgentTool = AgentTool<any, unknown>;
 
 /**
  * Convert an MCP tool's JSON Schema (inputSchema) to a TypeBox TSchema
@@ -29,6 +28,7 @@ export function convertMcpSchema(jsonSchema: Record<string, unknown>): TSchema {
     return Type.Object({});
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- JSON Schema properties are untyped
   const properties = (jsonSchema.properties ?? {}) as Record<string, any>;
   const required = new Set((jsonSchema.required ?? []) as string[]);
   const tbProperties: Record<string, TSchema> = {};
@@ -40,6 +40,7 @@ export function convertMcpSchema(jsonSchema: Record<string, unknown>): TSchema {
   return Type.Object(tbProperties);
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- JSON Schema property is untyped
 function convertPropertySchema(prop: any, isRequired: boolean): TSchema {
   const desc = prop.description as string | undefined;
 
@@ -61,6 +62,7 @@ function convertPropertySchema(prop: any, isRequired: boolean): TSchema {
         if (prop.properties) {
           const nested: Record<string, TSchema> = {};
           const nestedRequired = new Set((prop.required ?? []) as string[]);
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any -- JSON Schema nested props
           for (const [k, v] of Object.entries(prop.properties as Record<string, any>)) {
             nested[k] = convertPropertySchema(v, nestedRequired.has(k));
           }
