@@ -189,6 +189,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Security/Gateway: fail startup when `gateway.tools.allow` re-enables dangerous HTTP `/tools/invoke` tools (`sessions_spawn`, `sessions_send`, `gateway`, `whatsapp_login`) unless `OPENCLAW_UNSAFE_ALLOW_GATEWAY_HTTP_DANGEROUS_TOOLS=1` is explicitly set for short-lived break-glass use.
 - Agents/Streaming: keep assistant partial streaming active during reasoning streams, handle native `thinking_*` stream events consistently, dedupe mixed reasoning-end signals, and clear stale mutating tool errors after same-target retry success. (#20635) Thanks @obviyus.
 - iOS/Chat: use a dedicated iOS chat session key for ChatSheet routing to avoid cross-client session collisions with main-session traffic. (#21139) thanks @mbelinky.
 - iOS/Chat: auto-resync chat history after reconnect sequence gaps, clear stale pending runs, and avoid dead-end manual refresh errors after transient disconnects. (#21135) thanks @mbelinky.
