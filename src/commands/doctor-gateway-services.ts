@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { OpenClawConfig } from "../config/config.js";
+import type { RuntimeEnv } from "../runtime.js";
+import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
 import { resolveGatewayPort, resolveIsNixMode } from "../config/paths.js";
 import { findExtraGatewayServices, renderGatewayServiceCleanupHints } from "../daemon/inspect.js";
 import { renderSystemNodeWarning, resolveSystemNodeInfo } from "../daemon/runtime-paths.js";
@@ -13,11 +15,10 @@ import {
   SERVICE_AUDIT_CODES,
 } from "../daemon/service-audit.js";
 import { resolveGatewayService } from "../daemon/service.js";
-import type { RuntimeEnv } from "../runtime.js";
+import { uninstallLegacySystemdUnits } from "../daemon/systemd.js";
 import { note } from "../terminal/note.js";
 import { buildGatewayInstallPlan } from "./daemon-install-helpers.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME, type GatewayDaemonRuntime } from "./daemon-runtime.js";
-import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -247,25 +248,61 @@ export async function maybeScanExtraGatewayServices(
     if (shouldRemove) {
       const removed: string[] = [];
       const failed: string[] = [];
+      const legacyLinuxUserServices: typeof legacyServices = [];
       for (const svc of legacyServices) {
-        if (svc.platform !== "darwin") {
-          failed.push(`${svc.label} (${svc.platform})`);
+        if (svc.platform === "darwin") {
+          if (svc.scope !== "user") {
+            failed.push(`${svc.label} (${svc.scope})`);
+            continue;
+          }
+          const plistPath = extractDetailPath(svc.detail, "plist:");
+          if (!plistPath) {
+            failed.push(`${svc.label} (missing plist path)`);
+            continue;
+          }
+          const dest = await cleanupLegacyLaunchdService({
+            label: svc.label,
+            plistPath,
+          });
+          removed.push(dest ? `${svc.label} -> ${dest}` : svc.label);
           continue;
         }
-        if (svc.scope !== "user") {
-          failed.push(`${svc.label} (${svc.scope})`);
+
+        if (svc.platform === "linux") {
+          if (svc.scope === "user") {
+            legacyLinuxUserServices.push(svc);
+          } else {
+            failed.push(`${svc.label} (${svc.scope})`);
+          }
           continue;
         }
-        const plistPath = extractDetailPath(svc.detail, "plist:");
-        if (!plistPath) {
-          failed.push(`${svc.label} (missing plist path)`);
-          continue;
+
+        failed.push(`${svc.label} (${svc.platform})`);
+      }
+
+      if (legacyLinuxUserServices.length > 0) {
+        try {
+          const removedUnits = await uninstallLegacySystemdUnits({
+            env: process.env,
+            stdout: process.stdout,
+          });
+          const removedByLabel = new Map(
+            removedUnits.map((unit) => [`${unit.name}.service`, unit] as const),
+          );
+          for (const svc of legacyLinuxUserServices) {
+            const removedUnit = removedByLabel.get(svc.label);
+            if (!removedUnit) {
+              failed.push(`${svc.label} (legacy unit name not recognized)`);
+              continue;
+            }
+            removed.push(`${svc.label} -> ${removedUnit.unitPath}`);
+          }
+        } catch (err) {
+          runtime.error(`Legacy Linux gateway cleanup failed: ${String(err)}`);
+          for (const svc of legacyLinuxUserServices) {
+            failed.push(`${svc.label} (linux cleanup failed)`);
+          }
         }
-        const dest = await cleanupLegacyLaunchdService({
-          label: svc.label,
-          plistPath,
-        });
-        removed.push(dest ? `${svc.label} -> ${dest}` : svc.label);
       }
       if (removed.length > 0) {
         note(removed.map((line) => `- ${line}`).join("\n"), "Legacy gateway removed");

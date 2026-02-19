@@ -8,6 +8,9 @@ const mocks = vi.hoisted(() => ({
   buildGatewayInstallPlan: vi.fn(),
   resolveGatewayPort: vi.fn(() => 18789),
   resolveIsNixMode: vi.fn(() => false),
+  findExtraGatewayServices: vi.fn().mockResolvedValue([]),
+  renderGatewayServiceCleanupHints: vi.fn().mockReturnValue([]),
+  uninstallLegacySystemdUnits: vi.fn().mockResolvedValue([]),
   note: vi.fn(),
 }));
 
@@ -17,8 +20,8 @@ vi.mock("../config/paths.js", () => ({
 }));
 
 vi.mock("../daemon/inspect.js", () => ({
-  findExtraGatewayServices: vi.fn().mockResolvedValue([]),
-  renderGatewayServiceCleanupHints: vi.fn().mockReturnValue([]),
+  findExtraGatewayServices: mocks.findExtraGatewayServices,
+  renderGatewayServiceCleanupHints: mocks.renderGatewayServiceCleanupHints,
 }));
 
 vi.mock("../daemon/runtime-paths.js", () => ({
@@ -41,6 +44,10 @@ vi.mock("../daemon/service.js", () => ({
   }),
 }));
 
+vi.mock("../daemon/systemd.js", () => ({
+  uninstallLegacySystemdUnits: mocks.uninstallLegacySystemdUnits,
+}));
+
 vi.mock("../terminal/note.js", () => ({
   note: mocks.note,
 }));
@@ -49,7 +56,10 @@ vi.mock("./daemon-install-helpers.js", () => ({
   buildGatewayInstallPlan: mocks.buildGatewayInstallPlan,
 }));
 
-import { maybeRepairGatewayServiceConfig } from "./doctor-gateway-services.js";
+import {
+  maybeRepairGatewayServiceConfig,
+  maybeScanExtraGatewayServices,
+} from "./doctor-gateway-services.js";
 
 function makeDoctorIo() {
   return { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
@@ -168,5 +178,60 @@ describe("maybeRepairGatewayServiceConfig", () => {
         process.env.OPENCLAW_GATEWAY_TOKEN = previousToken;
       }
     }
+  });
+});
+
+describe("maybeScanExtraGatewayServices", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.findExtraGatewayServices.mockResolvedValue([]);
+    mocks.renderGatewayServiceCleanupHints.mockReturnValue([]);
+    mocks.uninstallLegacySystemdUnits.mockResolvedValue([]);
+  });
+
+  it("removes legacy Linux user systemd services", async () => {
+    mocks.findExtraGatewayServices.mockResolvedValue([
+      {
+        platform: "linux",
+        label: "moltbot-gateway.service",
+        detail: "unit: /home/test/.config/systemd/user/moltbot-gateway.service",
+        scope: "user",
+        legacy: true,
+      },
+    ]);
+    mocks.uninstallLegacySystemdUnits.mockResolvedValue([
+      {
+        name: "moltbot-gateway",
+        unitPath: "/home/test/.config/systemd/user/moltbot-gateway.service",
+        enabled: true,
+        exists: true,
+      },
+    ]);
+
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const prompter = {
+      confirm: vi.fn(),
+      confirmRepair: vi.fn(),
+      confirmAggressive: vi.fn(),
+      confirmSkipInNonInteractive: vi.fn().mockResolvedValue(true),
+      select: vi.fn(),
+      shouldRepair: false,
+      shouldForce: false,
+    };
+
+    await maybeScanExtraGatewayServices({ deep: false }, runtime, prompter);
+
+    expect(mocks.uninstallLegacySystemdUnits).toHaveBeenCalledTimes(1);
+    expect(mocks.uninstallLegacySystemdUnits).toHaveBeenCalledWith({
+      env: process.env,
+      stdout: process.stdout,
+    });
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("moltbot-gateway.service"),
+      "Legacy gateway removed",
+    );
+    expect(runtime.log).toHaveBeenCalledWith(
+      "Legacy gateway services removed. Installing OpenClaw gateway next.",
+    );
   });
 });
