@@ -36,11 +36,33 @@ export function resolveTaskScriptPath(env: GatewayServiceEnv): string {
   return path.join(stateDir, scriptName);
 }
 
-function quoteCmdArg(value: string): string {
+function assertNoCmdLineBreak(value: string, field: string): void {
+  if (/[\r\n]/.test(value)) {
+    throw new Error(`${field} cannot contain CR or LF in Windows task scripts.`);
+  }
+}
+
+function quoteSchtasksArg(value: string): string {
   if (!/[ \t"]/g.test(value)) {
     return value;
   }
   return `"${value.replace(/"/g, '\\"')}"`;
+}
+
+function quoteCmdScriptArg(value: string): string {
+  assertNoCmdLineBreak(value, "Command argument");
+  if (!value) {
+    return '""';
+  }
+  const escaped = value.replace(/"/g, '\\"').replace(/%/g, "%%").replace(/!/g, "^!");
+  if (!/[ \t"&|<>^()%!]/g.test(value)) {
+    return escaped;
+  }
+  return `"${escaped}"`;
+}
+
+function unescapeCmdScriptArg(value: string): string {
+  return value.replace(/\^!/g, "!").replace(/%%/g, "%");
 }
 
 function resolveTaskUser(env: GatewayServiceEnv): string | null {
@@ -59,9 +81,11 @@ function resolveTaskUser(env: GatewayServiceEnv): string | null {
 }
 
 function parseCommandLine(value: string): string[] {
-  // `buildTaskScript` only escapes quotes (`\"`).
+  // `buildTaskScript` escapes quotes (`\"`) and cmd expansions (`%%`, `^!`).
   // Keep all other backslashes literal so drive and UNC paths are preserved.
-  return splitArgsPreservingQuotes(value, { escapeMode: "backslash-quote-only" });
+  return splitArgsPreservingQuotes(value, { escapeMode: "backslash-quote-only" }).map(
+    unescapeCmdScriptArg,
+  );
 }
 
 export async function readScheduledTaskCommand(
@@ -143,21 +167,25 @@ function buildTaskScript({
   environment,
 }: GatewayServiceRenderArgs): string {
   const lines: string[] = ["@echo off"];
-  if (description?.trim()) {
-    lines.push(`rem ${description.trim()}`);
+  const trimmedDescription = description?.trim();
+  if (trimmedDescription) {
+    assertNoCmdLineBreak(trimmedDescription, "Task description");
+    lines.push(`rem ${trimmedDescription}`);
   }
   if (workingDirectory) {
-    lines.push(`cd /d ${quoteCmdArg(workingDirectory)}`);
+    lines.push(`cd /d ${quoteCmdScriptArg(workingDirectory)}`);
   }
   if (environment) {
     for (const [key, value] of Object.entries(environment)) {
       if (!value) {
         continue;
       }
+      assertNoCmdLineBreak(key, "Environment variable name");
+      assertNoCmdLineBreak(value, "Environment variable value");
       lines.push(renderCmdSetAssignment(key, value));
     }
   }
-  const command = programArguments.map(quoteCmdArg).join(" ");
+  const command = programArguments.map(quoteCmdScriptArg).join(" ");
   lines.push(command);
   return `${lines.join("\r\n")}\r\n`;
 }
@@ -192,7 +220,7 @@ export async function installScheduledTask({
   await fs.writeFile(scriptPath, script, "utf8");
 
   const taskName = resolveTaskName(env);
-  const quotedScript = quoteCmdArg(scriptPath);
+  const quotedScript = quoteSchtasksArg(scriptPath);
   const baseArgs = [
     "/Create",
     "/F",
