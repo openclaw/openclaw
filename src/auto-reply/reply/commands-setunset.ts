@@ -90,7 +90,7 @@ export function parseSlashCommandWithSetUnset<T>(params: {
     onUnset: params.onUnset,
     onError: params.onError,
   });
-  if (setUnset) {
+  if (setUnset !== null && setUnset !== undefined) {
     return setUnset;
   }
   const knownAction = params.onKnownAction(action, args);
