@@ -142,7 +142,7 @@ export function formatStatusOutput(
 
 export default function register(api: OpenClawPluginApi) {
   api.registerCommand({
-    name: "status-agents",
+    name: "status_agents",
     description: "Check the live status of Cloud.ru AI Fabric agents and MCP servers.",
     acceptsArgs: true,
     handler: async (ctx) => {

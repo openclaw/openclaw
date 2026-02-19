@@ -1,5 +1,10 @@
 {
   "id": "status-agents",
   "name": "AI Fabric Status",
-  "description": "Check the live status of Cloud.ru AI Fabric agents and MCP servers."
+  "description": "Check the live status of Cloud.ru AI Fabric agents and MCP servers.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
 }
