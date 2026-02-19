@@ -1,0 +1,58 @@
+services:
+  producer:
+    image: python:3.12-slim
+    volumes:
+      - ./parity-compose:/app:ro
+      - parity-artifacts:/parity
+    working_dir: /app
+    command: ["python", "/app/producer.py"]
+
+  gateway:
+    build:
+      context: ./parity-compose
+      dockerfile: Dockerfile.gateway
+    environment:
+      PARITY_DIR: /parity
+      DECISION_EVENT: security.decision
+    volumes:
+      - parity-artifacts:/parity
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /parity/gateway-ready"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+
+  rust-agent:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.runtime
+    depends_on:
+      gateway:
+        condition: service_healthy
+      producer:
+        condition: service_completed_successfully
+    command:
+      - --config
+      - /workspace/deploy/parity-compose/openclaw-rs.compose.toml
+      - --log
+      - info
+    volumes:
+      - parity-artifacts:/parity
+
+  assertor:
+    image: python:3.12-slim
+    depends_on:
+      producer:
+        condition: service_completed_successfully
+      gateway:
+        condition: service_started
+      rust-agent:
+        condition: service_started
+    volumes:
+      - ./parity-compose:/app:ro
+      - parity-artifacts:/parity
+    working_dir: /app
+    command: ["python", "/app/assert_decision.py"]
+
+volumes:
+  parity-artifacts:

@@ -163,3 +163,16 @@ bash ./scripts/run-docker-parity-smoke.sh
 ```powershell
 .\scripts\run-docker-parity-smoke.ps1
 ```
+
+## Docker compose parity harness
+
+Runs a multi-container parity flow (`gateway` stub + `producer` + Rust runtime + `assertor`)
+and validates that a blocked shell action emits a `security.decision` event end-to-end.
+
+```bash
+bash ./scripts/run-docker-parity-compose.sh
+```
+
+```powershell
+.\scripts\run-docker-parity-compose.ps1
+```
