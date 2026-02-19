@@ -32,16 +32,17 @@ export function createReplyPrefixContext(params: {
   // Pre-populate model from the configured primary model so that {model} resolves
   // in code paths (heartbeat, cron, message tool) that never fire onModelSelected. (#20826)
   const configuredModel = resolveAgentModelPrimary(cfg, agentId);
-  const parsedModel = configuredModel
-    ? resolveModelRefFromString({ modelRef: configuredModel, defaultProvider: undefined })
-    : undefined;
+  const parsedModel =
+    configuredModel && configuredModel.includes("/")
+      ? resolveModelRefFromString({ raw: configuredModel, defaultProvider: "anthropic" })
+      : undefined;
   const prefixContext: ResponsePrefixContext = {
     identityName: resolveIdentityName(cfg, agentId),
     ...(parsedModel
       ? {
-          provider: parsedModel.provider,
-          model: extractShortModelName(parsedModel.model),
-          modelFull: `${parsedModel.provider}/${parsedModel.model}`,
+          provider: parsedModel.ref.provider,
+          model: extractShortModelName(parsedModel.ref.model),
+          modelFull: `${parsedModel.ref.provider}/${parsedModel.ref.model}`,
         }
       : {}),
   };
