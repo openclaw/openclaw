@@ -223,7 +223,7 @@ function copyTopLevelAgentTurnFields(next: UnknownRecord, payload: UnknownRecord
     if (typeof next[field] !== "string" || !next[field].trim()) {
       return;
     }
-    payload[field] = (next[field] as string).trim();
+    payload[field] = next[field].trim();
   };
   copyString("model");
   copyString("thinking");
