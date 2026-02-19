@@ -197,6 +197,7 @@ export function resolveEffectiveToolPolicy(params: {
   const agentTools = agentConfig?.tools;
   const globalTools = params.config?.tools;
 
+  const preset = agentTools?.preset;
   const profile = agentTools?.profile ?? globalTools?.profile;
   const providerPolicy = resolveProviderToolPolicy({
     byProvider: globalTools?.byProvider,
@@ -214,6 +215,8 @@ export function resolveEffectiveToolPolicy(params: {
     globalProviderPolicy: pickSandboxToolPolicy(providerPolicy),
     agentPolicy: pickSandboxToolPolicy(agentTools),
     agentProviderPolicy: pickSandboxToolPolicy(agentProviderPolicy),
+    preset,
+    presets: globalTools?.presets,
     profile,
     providerProfile: agentProviderPolicy?.profile ?? providerPolicy?.profile,
     // alsoAllow is applied at the profile stage (to avoid being filtered out early).

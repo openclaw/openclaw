@@ -28,6 +28,7 @@ const SessionsSendToolSchema = Type.Object({
   sessionKey: Type.Optional(Type.String()),
   label: Type.Optional(Type.String({ minLength: 1, maxLength: SESSION_LABEL_MAX_LENGTH })),
   agentId: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
+  targetAgent: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
   message: Type.String(),
   timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
 });
@@ -150,11 +151,38 @@ export function createSessionsSendTool(opts?: {
         sessionKey = resolvedKey;
       }
 
-      if (!sessionKey) {
+      const targetAgentParam = readStringParam(params, "targetAgent")?.trim() || undefined;
+
+      if (targetAgentParam && !sessionKey && !labelParam) {
+        // Resolve targetAgent to main session key
+        const agentMainKey = mainKey || "main";
+        sessionKey = `agent:${normalizeAgentId(targetAgentParam)}:${agentMainKey}`;
+        
+        // Check agent-to-agent policy
+        const requesterAgentId = resolveAgentIdFromSessionKey(effectiveRequesterKey);
+        if (requesterAgentId && targetAgentParam !== requesterAgentId) {
+          if (!a2aPolicy.enabled) {
+            return jsonResult({
+              runId: crypto.randomUUID(),
+              status: "forbidden",
+              error: "Agent-to-agent messaging is disabled. Set tools.agentToAgent.enabled=true.",
+            });
+          }
+          if (!a2aPolicy.isAllowed(requesterAgentId, normalizeAgentId(targetAgentParam))) {
+            return jsonResult({
+              runId: crypto.randomUUID(),
+              status: "forbidden",
+              error: "Agent-to-agent messaging denied by tools.agentToAgent.allow.",
+            });
+          }
+        }
+      }
+
+      if (!sessionKey && !labelParam && !targetAgentParam) {
         return jsonResult({
           runId: crypto.randomUUID(),
           status: "error",
-          error: "Either sessionKey or label is required",
+          error: "Either sessionKey, label, or targetAgent is required",
         });
       }
       const resolvedSession = await resolveSessionReference({

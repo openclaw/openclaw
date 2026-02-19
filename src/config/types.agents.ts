@@ -9,6 +9,26 @@ import type {
 } from "./types.sandbox.js";
 import type { AgentToolsConfig, MemorySearchConfig } from "./types.tools.js";
 
+export type AgentParentConfig = {
+  /** Agent IDs of creating agents. */
+  createdBy: string[];
+  /** ISO 8601 timestamp of creation. */
+  createdAt: string;
+  /** Free-form lifecycle stage (skills interpret semantics). */
+  stage?: string;
+  /** Agent ID of the hosting parent. */
+  hostedBy?: string;
+};
+
+export type AgentVisibilityConfig = {
+  /** Agent IDs this agent can read from (requires mutual consent). */
+  readFrom?: string[];
+  /** Agent IDs allowed to read this agent's workspace. */
+  readableTo?: string[];
+  /** Glob patterns for accessible paths. */
+  scope?: string[];
+};
+
 export type AgentModelConfig =
   | string
   | {
@@ -34,6 +54,8 @@ export type AgentConfig = {
   heartbeat?: AgentDefaultsConfig["heartbeat"];
   identity?: IdentityConfig;
   groupChat?: GroupChatConfig;
+  parent?: AgentParentConfig;
+  visibility?: AgentVisibilityConfig;
   subagents?: {
     /** Allow spawning sub-agents under other agent ids. Use "*" to allow any. */
     allowAgents?: string[];

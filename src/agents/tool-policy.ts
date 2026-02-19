@@ -292,6 +292,19 @@ export function resolveToolProfilePolicy(profile?: string): ToolProfilePolicy | 
   };
 }
 
+export function resolveToolPresetPolicy(
+  presetName: string | undefined,
+  presets: Record<string, ToolPolicyLike & { sandbox?: { mode?: string; scope?: string } }> | undefined,
+): ToolPolicyLike | undefined {
+  if (!presetName || !presets) return undefined;
+  const preset = presets[presetName];
+  if (!preset) return undefined;
+  return {
+    allow: preset.allow ? [...preset.allow] : undefined,
+    deny: preset.deny ? [...preset.deny] : undefined,
+  };
+}
+
 export function mergeAlsoAllowPolicy<TPolicy extends { allow?: string[] }>(
   policy: TPolicy | undefined,
   alsoAllow?: string[],

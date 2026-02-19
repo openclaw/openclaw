@@ -15,6 +15,8 @@ export type ToolPolicyPipelineStep = {
 };
 
 export function buildDefaultToolPolicyPipelineSteps(params: {
+  presetPolicy?: ToolPolicyLike;
+  preset?: string;
   profilePolicy?: ToolPolicyLike;
   profile?: string;
   providerProfilePolicy?: ToolPolicyLike;
@@ -27,9 +29,15 @@ export function buildDefaultToolPolicyPipelineSteps(params: {
   agentId?: string;
 }): ToolPolicyPipelineStep[] {
   const agentId = params.agentId?.trim();
+  const preset = params.preset?.trim();
   const profile = params.profile?.trim();
   const providerProfile = params.providerProfile?.trim();
   return [
+    {
+      policy: params.presetPolicy,
+      label: preset ? `tools.preset (${preset})` : "tools.preset",
+      stripPluginOnlyAllowlist: true,
+    },
     {
       policy: params.profilePolicy,
       label: profile ? `tools.profile (${profile})` : "tools.profile",

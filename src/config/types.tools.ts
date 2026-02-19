@@ -231,6 +231,8 @@ export type FsToolsConfig = {
 };
 
 export type AgentToolsConfig = {
+  /** Named preset from tools.presets to apply as base policy. */
+  preset?: string;
   /** Base tool profile applied before allow/deny lists. */
   profile?: ToolProfileId;
   allow?: string[];
@@ -377,6 +379,8 @@ export type MemorySearchConfig = {
 };
 
 export type ToolsConfig = {
+  /** Named tool permission presets (referenced by agents via tools.preset). */
+  presets?: Record<string, ToolPolicyConfig & { sandbox?: { mode?: string; scope?: string } }>;
   /** Base tool profile applied before allow/deny lists. */
   profile?: ToolProfileId;
   allow?: string[];

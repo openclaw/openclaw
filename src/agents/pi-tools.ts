@@ -55,6 +55,7 @@ import {
   applyOwnerOnlyToolPolicy,
   collectExplicitAllowlist,
   mergeAlsoAllowPolicy,
+  resolveToolPresetPolicy,
   resolveToolProfilePolicy,
 } from "./tool-policy.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
@@ -224,6 +225,8 @@ export function createOpenClawCodingTools(options?: {
     globalProviderPolicy,
     agentPolicy,
     agentProviderPolicy,
+    preset,
+    presets,
     profile,
     providerProfile,
     profileAlsoAllow,
@@ -248,6 +251,7 @@ export function createOpenClawCodingTools(options?: {
     senderUsername: options?.senderUsername,
     senderE164: options?.senderE164,
   });
+  const presetPolicy = resolveToolPresetPolicy(preset, presets);
   const profilePolicy = resolveToolProfilePolicy(profile);
   const providerProfilePolicy = resolveToolProfilePolicy(providerProfile);
 
@@ -268,6 +272,7 @@ export function createOpenClawCodingTools(options?: {
         )
       : undefined;
   const allowBackground = isToolAllowedByPolicies("process", [
+    presetPolicy,
     profilePolicyWithAlsoAllow,
     providerProfilePolicyWithAlsoAllow,
     globalPolicy,
@@ -437,6 +442,7 @@ export function createOpenClawCodingTools(options?: {
       sandboxed: !!sandbox,
       config: options?.config,
       pluginToolAllowlist: collectExplicitAllowlist([
+        presetPolicy,
         profilePolicy,
         providerProfilePolicy,
         globalPolicy,
@@ -466,6 +472,8 @@ export function createOpenClawCodingTools(options?: {
     warn: logWarn,
     steps: [
       ...buildDefaultToolPolicyPipelineSteps({
+        presetPolicy,
+        preset,
         profilePolicy: profilePolicyWithAlsoAllow,
         profile,
         providerProfilePolicy: providerProfilePolicyWithAlsoAllow,
