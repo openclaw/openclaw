@@ -270,7 +270,15 @@ export const registerTelegramHandlers = ({
 
       const allMedia: TelegramMediaRef[] = [];
       for (const { ctx } of entry.messages) {
-        const media = await resolveMedia(ctx, mediaMaxBytes, opts.token, opts.proxyFetch);
+        let media;
+        try {
+          media = await resolveMedia(ctx, mediaMaxBytes, opts.token, opts.proxyFetch);
+        } catch (mediaErr) {
+          runtime.log?.(
+            warn(`media group: skipping photo that failed to fetch: ${String(mediaErr)}`),
+          );
+          continue;
+        }
         if (media) {
           allMedia.push({
             path: media.path,
