@@ -24,7 +24,11 @@ export type SsrFPolicy = {
   hostnameAllowlist?: string[];
 };
 
-const BLOCKED_HOSTNAMES = new Set(["localhost", "metadata.google.internal"]);
+const BLOCKED_HOSTNAMES = new Set([
+  "localhost",
+  "localhost.localdomain",
+  "metadata.google.internal",
+]);
 
 function normalizeHostnameSet(values?: string[]): Set<string> {
   if (!values || values.length === 0) {
@@ -195,6 +199,12 @@ const EMBEDDED_IPV4_RULES: EmbeddedIpv4Rule[] = [
     matches: (hextets) => hextets[0] === 0x2001 && hextets[1] === 0x0000,
     extract: (hextets) => [hextets[6] ^ 0xffff, hextets[7] ^ 0xffff],
   },
+  {
+    // ISATAP IID format: 000000ug00000000:5efe:w.x.y.z (RFC 5214 section 6.1).
+    // Match only the IID marker bits to avoid over-broad :5efe: detection.
+    matches: (hextets) => (hextets[4] & 0xfcff) === 0 && hextets[5] === 0x5efe,
+    extract: (hextets) => [hextets[6], hextets[7]],
+  },
 ];
 
 function extractIpv4FromEmbeddedIpv6(hextets: number[]): number[] | null {
@@ -314,6 +324,14 @@ export function isBlockedHostname(hostname: string): boolean {
     normalized.endsWith(".local") ||
     normalized.endsWith(".internal")
   );
+}
+
+export function isBlockedHostnameOrIp(hostname: string): boolean {
+  const normalized = normalizeHostname(hostname);
+  if (!normalized) {
+    return false;
+  }
+  return isBlockedHostname(normalized) || isPrivateIpAddress(normalized);
 }
 
 export function createPinnedLookup(params: {
