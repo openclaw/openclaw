@@ -34,6 +34,15 @@ spec:
           command: ["sh", "-c"]
           args:
             - |
+              # Copy workspace defaults if they exist.
+              # This is necessary because the PVC mount at /home/node/.openclaw hides 
+              # any files that were baked into that location in the image.
+              # We copy them from /openclaw-defaults/workspace (where they are safe)
+              # into the volume at runtime.
+              mkdir -p /home/node/.openclaw/workspace
+              if [ -d "/openclaw-defaults/workspace" ]; then
+                cp -f /openclaw-defaults/workspace/* /home/node/.openclaw/workspace/
+              fi
               cp /config-ro/openclaw.json /home/node/.openclaw/openclaw.json
               echo "Config initialized"
           volumeMounts:
