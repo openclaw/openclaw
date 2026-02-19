@@ -17,6 +17,35 @@ import type { TwilioProvider } from "./providers/twilio.js";
 import type { NormalizedEvent, WebhookContext } from "./types.js";
 
 const MAX_WEBHOOK_BODY_BYTES = 1024 * 1024;
+const BAD_REQUEST_UPGRADE_RESPONSE = "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n";
+
+function firstHeaderValue(value: string | string[] | undefined): string | undefined {
+  if (Array.isArray(value)) {
+    return value[0];
+  }
+  return value;
+}
+
+function parseHttpRequestUrl(params: {
+  requestUrl: string | undefined;
+  hostHeader: string | string[] | undefined;
+}): URL | null {
+  const hostHeader = firstHeaderValue(params.hostHeader)?.trim();
+  const host = hostHeader || "localhost";
+  try {
+    return new URL(params.requestUrl || "/", `http://${host}`);
+  } catch {
+    // Malformed explicit Host headers should be rejected.
+    if (hostHeader) {
+      return null;
+    }
+    try {
+      return new URL(params.requestUrl || "/", "http://localhost");
+    } catch {
+      return null;
+    }
+  }
+}
 
 /**
  * HTTP server for receiving voice call webhooks from providers.
@@ -192,7 +221,16 @@ export class VoiceCallWebhookServer {
       // Handle WebSocket upgrades for media streams
       if (this.mediaStreamHandler) {
         this.server.on("upgrade", (request, socket, head) => {
-          const url = new URL(request.url || "/", `http://${request.headers.host}`);
+          const url = parseHttpRequestUrl({
+            requestUrl: request.url,
+            hostHeader: request.headers.host,
+          });
+
+          if (!url) {
+            socket.write(BAD_REQUEST_UPGRADE_RESPONSE);
+            socket.destroy();
+            return;
+          }
 
           if (url.pathname === streamPath) {
             console.log("[voice-call] WebSocket upgrade for media stream");
@@ -277,7 +315,15 @@ export class VoiceCallWebhookServer {
     res: http.ServerResponse,
     webhookPath: string,
   ): Promise<void> {
-    const url = new URL(req.url || "/", `http://${req.headers.host}`);
+    const url = parseHttpRequestUrl({
+      requestUrl: req.url,
+      hostHeader: req.headers.host,
+    });
+    if (!url) {
+      res.statusCode = 400;
+      res.end("Bad Request");
+      return;
+    }
 
     // Check path
     if (!url.pathname.startsWith(webhookPath)) {
@@ -312,10 +358,11 @@ export class VoiceCallWebhookServer {
     }
 
     // Build webhook context
+    const safeHost = firstHeaderValue(req.headers.host)?.trim() || url.host || "localhost";
     const ctx: WebhookContext = {
       headers: req.headers as Record<string, string | string[] | undefined>,
       rawBody: body,
-      url: `http://${req.headers.host}${req.url}`,
+      url: `http://${safeHost}${url.pathname}${url.search}`,
       method: "POST",
       query: Object.fromEntries(url.searchParams),
       remoteAddress: req.socket.remoteAddress ?? undefined,
