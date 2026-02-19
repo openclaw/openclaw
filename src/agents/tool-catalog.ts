@@ -114,6 +114,22 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "memory_write",
+    label: "memory_write",
+    description: "Append durable notes",
+    sectionId: "memory",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "memory_upsert",
+    label: "memory_upsert",
+    description: "Update keyed memory",
+    sectionId: "memory",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "sessions_list",
     label: "sessions_list",
     description: "List sessions",

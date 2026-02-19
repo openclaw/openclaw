@@ -82,6 +82,16 @@
       "title": "Memory Get",
       "detailKeys": ["path", "from", "lines"]
     },
+    "memory_write": {
+      "emoji": "📝",
+      "title": "Memory Write",
+      "detailKeys": ["target", "date", "kind"]
+    },
+    "memory_upsert": {
+      "emoji": "🧷",
+      "title": "Memory Upsert",
+      "detailKeys": ["key", "target", "date", "kind"]
+    },
     "web_search": {
       "emoji": "🔎",
       "title": "Web Search",

@@ -18,12 +18,20 @@ const memoryCorePlugin = {
           config: ctx.config,
           agentSessionKey: ctx.sessionKey,
         });
-        if (!memorySearchTool || !memoryGetTool) {
-          return null;
-        }
-        return [memorySearchTool, memoryGetTool];
+        const memoryWriteTool = api.runtime.tools.createMemoryWriteTool({
+          config: ctx.config,
+          agentSessionKey: ctx.sessionKey,
+        });
+        const memoryUpsertTool = api.runtime.tools.createMemoryUpsertTool({
+          config: ctx.config,
+          agentSessionKey: ctx.sessionKey,
+        });
+        const tools = [memorySearchTool, memoryGetTool, memoryWriteTool, memoryUpsertTool].filter(
+          (tool): tool is NonNullable<typeof tool> => Boolean(tool),
+        );
+        return tools.length > 0 ? tools : null;
       },
-      { names: ["memory_search", "memory_get"] },
+      { names: ["memory_search", "memory_get", "memory_write", "memory_upsert"] },
     );
 
     api.registerCli(
