@@ -35,7 +35,7 @@ Traditional multi-agent setups treat all agents as equals with static configs. L
 
 ## 1. Parent Metadata
 
-### Schema
+### Parent Metadata Schema
 
 ```json5
 {
@@ -68,7 +68,7 @@ Traditional multi-agent setups treat all agents as equals with static configs. L
 
 **This is pure metadata.** OpenClaw reads and stores it, but doesn't enforce lifecycle logic. Skills use `parent` to implement their own semantics.
 
-### Example Use Cases
+### Parent Metadata Use Cases
 
 ```typescript
 // Check if agent is a child
@@ -93,7 +93,7 @@ if (agent.parent.stage === "newborn") {
 
 ## 2. Tool Presets
 
-### Schema
+### Tool Presets Schema
 
 Define presets globally, reference them per-agent:
 
@@ -205,7 +205,7 @@ Mature agents get full access.
 
 All tools available, no sandbox (unless globally configured).
 
-### How It Works
+### How Tool Presets Work
 
 1. Agent config sets `tools.preset: "restricted"`
 2. At tool call time, OpenClaw resolves the preset from `tools.presets`
@@ -363,7 +363,7 @@ Make your own templates:
 
 Agents can **read specific paths** from other agents' workspaces (read-only, same-instance only).
 
-### Schema
+### Visibility Schema
 
 ```json5
 {
@@ -390,7 +390,7 @@ Agents can **read specific paths** from other agents' workspaces (read-only, sam
 }
 ```
 
-### How It Works
+### How Visibility Works
 
 When an agent calls `read(path)`:
 
@@ -436,7 +436,7 @@ scope: [
 
 **Privacy by default:** Agents without `visibility` config can't read from others, and others can't read from them.
 
-### Example Use Cases
+### Visibility Use Cases
 
 **Parent-child memory sharing:**
 
@@ -528,7 +528,7 @@ sessions_send({
 
 **No breaking changes:** Existing code using `targetSession` continues to work.
 
-### Example Use Cases
+### AgentId Targeting Use Cases
 
 **Parent checking in on child:**
 

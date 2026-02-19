@@ -186,7 +186,7 @@ export function createSessionsSendTool(opts?: {
         });
       }
       const resolvedSession = await resolveSessionReference({
-        sessionKey,
+        sessionKey: sessionKey ?? "",
         alias,
         mainKey,
         requesterInternalKey: effectiveRequesterKey,
