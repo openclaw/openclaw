@@ -47,6 +47,7 @@ import {
 import { appendUsageLine, formatResponseUsageLine } from "./agent-runner-utils.js";
 import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
+import { cancelIdleCompaction, scheduleIdleCompaction } from "./idle-compaction.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
@@ -223,6 +224,11 @@ export async function runReplyAgent(params: {
   }
 
   await typingSignals.signalRunStart();
+
+  // A new inbound turn has started — cancel any pending idle compaction timer.
+  if (sessionKey) {
+    cancelIdleCompaction(sessionKey);
+  }
 
   activeSessionEntry = await runMemoryFlushIfNeeded({
     cfg,
@@ -488,6 +494,31 @@ export async function runReplyAgent(params: {
       systemPromptReport: runResult.meta?.systemPromptReport,
       cliSessionId,
     });
+
+    // Schedule proactive idle compaction if the context is above threshold and
+    // the user goes quiet for `idleTriggerMinutes`.
+    if (sessionKey && followupRun.run.sessionFile && followupRun.run.workspaceDir) {
+      const actualTokensUsed =
+        promptTokens ??
+        (usage
+          ? (usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0)
+          : 0);
+      scheduleIdleCompaction({
+        sessionKey,
+        sessionId: followupRun.run.sessionId,
+        contextTokensUsed: actualTokensUsed,
+        contextTokensMax: contextTokensUsed,
+        cfg,
+        sessionFile: followupRun.run.sessionFile,
+        workspaceDir: followupRun.run.workspaceDir,
+        provider: followupRun.run.provider,
+        model: modelUsed,
+        thinkLevel: followupRun.run.thinkLevel,
+        bashElevated: followupRun.run.bashElevated,
+        skillsSnapshot: followupRun.run.skillsSnapshot,
+        ownerNumbers: followupRun.run.ownerNumbers,
+      });
+    }
 
     // Drain any late tool/block deliveries before deciding there's "nothing to send".
     // Otherwise, a late typing trigger (e.g. from a tool callback) can outlive the run and
