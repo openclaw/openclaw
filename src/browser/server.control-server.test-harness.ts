@@ -1,17 +1,22 @@
 import fs from "node:fs/promises";
-import { type AddressInfo, createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
+import { getFreePort } from "./test-port.js";
+
+export { getFreePort } from "./test-port.js";
 
 type HarnessState = {
   testPort: number;
   cdpBaseUrl: string;
   reachable: boolean;
   cfgAttachOnly: boolean;
+  cfgEvaluateEnabled: boolean;
   createTargetId: string | null;
   prevGatewayPort: string | undefined;
+  prevGatewayToken: string | undefined;
+  prevGatewayPassword: string | undefined;
 };
 
 const state: HarnessState = {
@@ -19,8 +24,11 @@ const state: HarnessState = {
   cdpBaseUrl: "",
   reachable: false,
   cfgAttachOnly: false,
+  cfgEvaluateEnabled: true,
   createTargetId: null,
   prevGatewayPort: undefined,
+  prevGatewayToken: undefined,
+  prevGatewayPassword: undefined,
 };
 
 export function getBrowserControlServerTestState(): HarnessState {
@@ -37,6 +45,10 @@ export function setBrowserControlServerCreateTargetId(targetId: string | null): 
 
 export function setBrowserControlServerAttachOnly(attachOnly: boolean): void {
   state.cfgAttachOnly = attachOnly;
+}
+
+export function setBrowserControlServerEvaluateEnabled(enabled: boolean): void {
+  state.cfgEvaluateEnabled = enabled;
 }
 
 export function setBrowserControlServerReachable(reachable: boolean): void {
@@ -86,6 +98,7 @@ const pwMocks = vi.hoisted(() => ({
   selectOptionViaPlaywright: vi.fn(async () => {}),
   setInputFilesViaPlaywright: vi.fn(async () => {}),
   snapshotAiViaPlaywright: vi.fn(async () => ({ snapshot: "ok" })),
+  traceStopViaPlaywright: vi.fn(async () => {}),
   takeScreenshotViaPlaywright: vi.fn(async () => ({
     buffer: Buffer.from("png"),
   })),
@@ -142,6 +155,7 @@ vi.mock("../config/config.js", async (importOriginal) => {
     loadConfig: () => ({
       browser: {
         enabled: true,
+        evaluateEnabled: state.cfgEvaluateEnabled,
         color: "#FF4500",
         attachOnly: state.cfgAttachOnly,
         headless: true,
@@ -214,22 +228,6 @@ const server = await import("./server.js");
 export const startBrowserControlServerFromConfig = server.startBrowserControlServerFromConfig;
 export const stopBrowserControlServer = server.stopBrowserControlServer;
 
-export async function getFreePort(): Promise<number> {
-  while (true) {
-    const port = await new Promise<number>((resolve, reject) => {
-      const s = createServer();
-      s.once("error", reject);
-      s.listen(0, "127.0.0.1", () => {
-        const assigned = (s.address() as AddressInfo).port;
-        s.close((err) => (err ? reject(err) : resolve(assigned)));
-      });
-    });
-    if (port < 65535) {
-      return port;
-    }
-  }
-}
-
 export function makeResponse(
   body: unknown,
   init?: { ok?: boolean; status?: number; text?: string },
@@ -271,6 +269,12 @@ export function installBrowserControlServerHooks() {
     state.cdpBaseUrl = `http://127.0.0.1:${state.testPort + 1}`;
     state.prevGatewayPort = process.env.OPENCLAW_GATEWAY_PORT;
     process.env.OPENCLAW_GATEWAY_PORT = String(state.testPort - 2);
+    // Avoid flaky auth coupling: some suites temporarily set gateway env auth
+    // which would make the browser control server require auth.
+    state.prevGatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+    state.prevGatewayPassword = process.env.OPENCLAW_GATEWAY_PASSWORD;
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.OPENCLAW_GATEWAY_PASSWORD;
 
     // Minimal CDP JSON endpoints used by the server.
     let putNewCalls = 0;
@@ -332,6 +336,16 @@ export function installBrowserControlServerHooks() {
       delete process.env.OPENCLAW_GATEWAY_PORT;
     } else {
       process.env.OPENCLAW_GATEWAY_PORT = state.prevGatewayPort;
+    }
+    if (state.prevGatewayToken === undefined) {
+      delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    } else {
+      process.env.OPENCLAW_GATEWAY_TOKEN = state.prevGatewayToken;
+    }
+    if (state.prevGatewayPassword === undefined) {
+      delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+    } else {
+      process.env.OPENCLAW_GATEWAY_PASSWORD = state.prevGatewayPassword;
     }
     await stopBrowserControlServer();
   });

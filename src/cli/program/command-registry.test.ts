@@ -1,11 +1,35 @@
 import { Command } from "commander";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ProgramContext } from "./context.js";
-import {
-  getCoreCliCommandNames,
-  registerCoreCliByName,
-  registerCoreCliCommands,
-} from "./command-registry.js";
+
+// Perf: `registerCoreCliByName(...)` dynamically imports registrar modules.
+// Mock the heavy registrars so this suite stays focused on command-registry wiring.
+vi.mock("./register.agent.js", () => ({
+  registerAgentCommands: (program: Command) => {
+    program.command("agent");
+    program.command("agents");
+  },
+}));
+
+vi.mock("./register.maintenance.js", () => ({
+  registerMaintenanceCommands: (program: Command) => {
+    program.command("doctor");
+    program.command("dashboard");
+    program.command("reset");
+    program.command("uninstall");
+  },
+}));
+
+const { getCoreCliCommandNames, registerCoreCliByName, registerCoreCliCommands } =
+  await import("./command-registry.js");
+
+vi.mock("./register.status-health-sessions.js", () => ({
+  registerStatusHealthSessionsCommands: (program: Command) => {
+    program.command("status");
+    program.command("health");
+    program.command("sessions");
+  },
+}));
 
 const testProgramContext: ProgramContext = {
   programVersion: "0.0.0-test",
@@ -56,5 +80,24 @@ describe("command-registry", () => {
     expect(names).toContain("reset");
     expect(names).toContain("uninstall");
     expect(names).not.toContain("maintenance");
+  });
+
+  it("registers grouped core entry placeholders without duplicate command errors", async () => {
+    const program = new Command();
+    registerCoreCliCommands(program, testProgramContext, ["node", "openclaw", "vitest"]);
+
+    const prevArgv = process.argv;
+    process.argv = ["node", "openclaw", "status"];
+    try {
+      program.exitOverride();
+      await program.parseAsync(["node", "openclaw", "status"]);
+    } finally {
+      process.argv = prevArgv;
+    }
+
+    const names = program.commands.map((command) => command.name());
+    expect(names).toContain("status");
+    expect(names).toContain("health");
+    expect(names).toContain("sessions");
   });
 });

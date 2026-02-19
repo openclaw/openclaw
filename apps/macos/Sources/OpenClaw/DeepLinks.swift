@@ -1,13 +1,13 @@
 import AppKit
-import OpenClawKit
 import Foundation
+import OpenClawKit
 import OSLog
 import Security
 
 private let deepLinkLogger = Logger(subsystem: "ai.openclaw", category: "DeepLink")
 
 enum DeepLinkAgentPolicy {
-    static let maxMessageChars = 20_000
+    static let maxMessageChars = 20000
     static let maxUnkeyedConfirmChars = 240
 
     enum ValidationError: Error, Equatable, LocalizedError {
@@ -16,7 +16,7 @@ enum DeepLinkAgentPolicy {
         var errorDescription: String? {
             switch self {
             case let .messageTooLongForConfirmation(max, actual):
-                return "Message is too long to confirm safely (\(actual) chars; max \(max) without key)."
+                "Message is too long to confirm safely (\(actual) chars; max \(max) without key)."
             }
         }
     }
@@ -49,9 +49,9 @@ final class DeepLinkHandler {
 
     private var lastPromptAt: Date = .distantPast
 
-    // Ephemeral, in-memory key used for unattended deep links originating from the in-app Canvas.
-    // This avoids blocking Canvas init on UserDefaults and doesn't weaken the external deep-link prompt:
-    // outside callers can't know this randomly generated key.
+    /// Ephemeral, in-memory key used for unattended deep links originating from the in-app Canvas.
+    /// This avoids blocking Canvas init on UserDefaults and doesn't weaken the external deep-link prompt:
+    /// outside callers can't know this randomly generated key.
     private nonisolated static let canvasUnattendedKey: String = DeepLinkHandler.generateRandomKey()
 
     func handle(url: URL) async {
@@ -67,6 +67,8 @@ final class DeepLinkHandler {
         switch route {
         case let .agent(link):
             await self.handleAgent(link: link, originalURL: url)
+        case .gateway:
+            break
         }
     }
 

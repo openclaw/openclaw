@@ -10,6 +10,7 @@ function createBaseConfig(provider: "telnyx" | "twilio" | "plivo" | "mock"): Voi
     allowFrom: [],
     outbound: { defaultMode: "notify", notifyHangupDelaySec: 3 },
     maxDurationSeconds: 300,
+    staleCallReaperSeconds: 600,
     silenceTimeoutMs: 800,
     transcriptTimeoutMs: 180000,
     ringTimeoutMs: 30000,
@@ -32,7 +33,10 @@ function createBaseConfig(provider: "telnyx" | "twilio" | "plivo" | "mock"): Voi
     },
     skipSignatureVerification: false,
     stt: { provider: "openai", model: "whisper-1" },
-    tts: { provider: "openai", model: "gpt-4o-mini-tts", voice: "coral" },
+    tts: {
+      provider: "openai",
+      openai: { model: "gpt-4o-mini-tts", voice: "coral" },
+    },
     responseModel: "openai/gpt-4o-mini",
     responseTimeoutMs: 30000,
   };

@@ -1,8 +1,7 @@
 import fs from "node:fs/promises";
-import type { OpenClawConfig } from "../../config/config.js";
-import type { SandboxContext, SandboxWorkspaceInfo } from "./types.js";
 import { DEFAULT_BROWSER_EVALUATE_ENABLED } from "../../browser/constants.js";
 import { ensureBrowserControlAuth, resolveBrowserControlAuth } from "../../browser/control-auth.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveUserPath } from "../../utils.js";
@@ -15,29 +14,21 @@ import { createSandboxFsBridge } from "./fs-bridge.js";
 import { maybePruneSandboxes } from "./prune.js";
 import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
 import { resolveSandboxScopeKey, resolveSandboxWorkspaceDir } from "./shared.js";
+import type { SandboxContext, SandboxWorkspaceInfo } from "./types.js";
 import { ensureSandboxWorkspace } from "./workspace.js";
 
-export async function resolveSandboxContext(params: {
+async function ensureSandboxWorkspaceLayout(params: {
+  cfg: ReturnType<typeof resolveSandboxConfigForAgent>;
+  rawSessionKey: string;
   config?: OpenClawConfig;
-  sessionKey?: string;
   workspaceDir?: string;
-}): Promise<SandboxContext | null> {
-  const rawSessionKey = params.sessionKey?.trim();
-  if (!rawSessionKey) {
-    return null;
-  }
-
-  const runtime = resolveSandboxRuntimeStatus({
-    cfg: params.config,
-    sessionKey: rawSessionKey,
-  });
-  if (!runtime.sandboxed) {
-    return null;
-  }
-
-  const cfg = resolveSandboxConfigForAgent(params.config, runtime.agentId);
-
-  await maybePruneSandboxes(cfg);
+}): Promise<{
+  agentWorkspaceDir: string;
+  scopeKey: string;
+  sandboxWorkspaceDir: string;
+  workspaceDir: string;
+}> {
+  const { cfg, rawSessionKey } = params;
 
   const agentWorkspaceDir = resolveUserPath(
     params.workspaceDir?.trim() || DEFAULT_AGENT_WORKSPACE_DIR,
@@ -47,6 +38,7 @@ export async function resolveSandboxContext(params: {
   const sandboxWorkspaceDir =
     cfg.scope === "shared" ? workspaceRoot : resolveSandboxWorkspaceDir(workspaceRoot, scopeKey);
   const workspaceDir = cfg.workspaceAccess === "rw" ? agentWorkspaceDir : sandboxWorkspaceDir;
+
   if (workspaceDir === sandboxWorkspaceDir) {
     await ensureSandboxWorkspace(
       sandboxWorkspaceDir,
@@ -68,6 +60,47 @@ export async function resolveSandboxContext(params: {
   } else {
     await fs.mkdir(workspaceDir, { recursive: true });
   }
+
+  return { agentWorkspaceDir, scopeKey, sandboxWorkspaceDir, workspaceDir };
+}
+
+function resolveSandboxSession(params: { config?: OpenClawConfig; sessionKey?: string }) {
+  const rawSessionKey = params.sessionKey?.trim();
+  if (!rawSessionKey) {
+    return null;
+  }
+
+  const runtime = resolveSandboxRuntimeStatus({
+    cfg: params.config,
+    sessionKey: rawSessionKey,
+  });
+  if (!runtime.sandboxed) {
+    return null;
+  }
+
+  const cfg = resolveSandboxConfigForAgent(params.config, runtime.agentId);
+  return { rawSessionKey, runtime, cfg };
+}
+
+export async function resolveSandboxContext(params: {
+  config?: OpenClawConfig;
+  sessionKey?: string;
+  workspaceDir?: string;
+}): Promise<SandboxContext | null> {
+  const resolved = resolveSandboxSession(params);
+  if (!resolved) {
+    return null;
+  }
+  const { rawSessionKey, cfg } = resolved;
+
+  await maybePruneSandboxes(cfg);
+
+  const { agentWorkspaceDir, scopeKey, workspaceDir } = await ensureSandboxWorkspaceLayout({
+    cfg,
+    rawSessionKey,
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+  });
 
   const containerName = await ensureSandboxContainer({
     sessionKey: rawSessionKey,
@@ -128,50 +161,18 @@ export async function ensureSandboxWorkspaceForSession(params: {
   sessionKey?: string;
   workspaceDir?: string;
 }): Promise<SandboxWorkspaceInfo | null> {
-  const rawSessionKey = params.sessionKey?.trim();
-  if (!rawSessionKey) {
+  const resolved = resolveSandboxSession(params);
+  if (!resolved) {
     return null;
   }
+  const { rawSessionKey, cfg } = resolved;
 
-  const runtime = resolveSandboxRuntimeStatus({
-    cfg: params.config,
-    sessionKey: rawSessionKey,
+  const { workspaceDir } = await ensureSandboxWorkspaceLayout({
+    cfg,
+    rawSessionKey,
+    config: params.config,
+    workspaceDir: params.workspaceDir,
   });
-  if (!runtime.sandboxed) {
-    return null;
-  }
-
-  const cfg = resolveSandboxConfigForAgent(params.config, runtime.agentId);
-
-  const agentWorkspaceDir = resolveUserPath(
-    params.workspaceDir?.trim() || DEFAULT_AGENT_WORKSPACE_DIR,
-  );
-  const workspaceRoot = resolveUserPath(cfg.workspaceRoot);
-  const scopeKey = resolveSandboxScopeKey(cfg.scope, rawSessionKey);
-  const sandboxWorkspaceDir =
-    cfg.scope === "shared" ? workspaceRoot : resolveSandboxWorkspaceDir(workspaceRoot, scopeKey);
-  const workspaceDir = cfg.workspaceAccess === "rw" ? agentWorkspaceDir : sandboxWorkspaceDir;
-  if (workspaceDir === sandboxWorkspaceDir) {
-    await ensureSandboxWorkspace(
-      sandboxWorkspaceDir,
-      agentWorkspaceDir,
-      params.config?.agents?.defaults?.skipBootstrap,
-    );
-    if (cfg.workspaceAccess !== "rw") {
-      try {
-        await syncSkillsToWorkspace({
-          sourceWorkspaceDir: agentWorkspaceDir,
-          targetWorkspaceDir: sandboxWorkspaceDir,
-          config: params.config,
-        });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : JSON.stringify(error);
-        defaultRuntime.error?.(`Sandbox skill sync failed: ${message}`);
-      }
-    }
-  } else {
-    await fs.mkdir(workspaceDir, { recursive: true });
-  }
 
   return {
     workspaceDir,

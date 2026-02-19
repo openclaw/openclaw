@@ -23,7 +23,99 @@ function makeCfg(overrides: Partial<OpenClawConfig> = {}): OpenClawConfig {
   } as OpenClawConfig;
 }
 
+function makeFallbacksOnlyCfg(): OpenClawConfig {
+  return {
+    agents: {
+      defaults: {
+        model: {
+          fallbacks: ["openai/gpt-5.2"],
+        },
+      },
+    },
+  } as OpenClawConfig;
+}
+
+function makeProviderFallbackCfg(provider: string): OpenClawConfig {
+  return makeCfg({
+    agents: {
+      defaults: {
+        model: {
+          primary: `${provider}/m1`,
+          fallbacks: ["fallback/ok-model"],
+        },
+      },
+    },
+  });
+}
+
+async function withTempAuthStore<T>(
+  store: AuthProfileStore,
+  run: (tempDir: string) => Promise<T>,
+): Promise<T> {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-"));
+  saveAuthProfileStore(store, tempDir);
+  try {
+    return await run(tempDir);
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+async function runWithStoredAuth(params: {
+  cfg: OpenClawConfig;
+  store: AuthProfileStore;
+  provider: string;
+  run: (provider: string, model: string) => Promise<string>;
+}) {
+  return withTempAuthStore(params.store, async (tempDir) =>
+    runWithModelFallback({
+      cfg: params.cfg,
+      provider: params.provider,
+      model: "m1",
+      agentDir: tempDir,
+      run: params.run,
+    }),
+  );
+}
+
+async function expectFallsBackToHaiku(params: {
+  provider: string;
+  model: string;
+  firstError: Error;
+}) {
+  const cfg = makeCfg();
+  const run = vi.fn().mockRejectedValueOnce(params.firstError).mockResolvedValueOnce("ok");
+
+  const result = await runWithModelFallback({
+    cfg,
+    provider: params.provider,
+    model: params.model,
+    run,
+  });
+
+  expect(result.result).toBe("ok");
+  expect(run).toHaveBeenCalledTimes(2);
+  expect(run.mock.calls[1]?.[0]).toBe("anthropic");
+  expect(run.mock.calls[1]?.[1]).toBe("claude-haiku-3-5");
+}
+
 describe("runWithModelFallback", () => {
+  it("normalizes openai gpt-5.3 codex to openai-codex before running", async () => {
+    const cfg = makeCfg();
+    const run = vi.fn().mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-5.3-codex",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run).toHaveBeenCalledWith("openai-codex", "gpt-5.3-codex");
+  });
+
   it("does not fall back on non-auth errors", async () => {
     const cfg = makeCfg();
     const run = vi.fn().mockRejectedValueOnce(new Error("bad request")).mockResolvedValueOnce("ok");
@@ -40,115 +132,50 @@ describe("runWithModelFallback", () => {
   });
 
   it("falls back on auth errors", async () => {
-    const cfg = makeCfg();
-    const run = vi
-      .fn()
-      .mockRejectedValueOnce(Object.assign(new Error("nope"), { status: 401 }))
-      .mockResolvedValueOnce("ok");
-
-    const result = await runWithModelFallback({
-      cfg,
+    await expectFallsBackToHaiku({
       provider: "openai",
       model: "gpt-4.1-mini",
-      run,
+      firstError: Object.assign(new Error("nope"), { status: 401 }),
     });
-
-    expect(result.result).toBe("ok");
-    expect(run).toHaveBeenCalledTimes(2);
-    expect(run.mock.calls[1]?.[0]).toBe("anthropic");
-    expect(run.mock.calls[1]?.[1]).toBe("claude-haiku-3-5");
   });
 
   it("falls back on transient HTTP 5xx errors", async () => {
-    const cfg = makeCfg();
-    const run = vi
-      .fn()
-      .mockRejectedValueOnce(
-        new Error(
-          "521 <!DOCTYPE html><html><head><title>Web server is down</title></head><body>Cloudflare</body></html>",
-        ),
-      )
-      .mockResolvedValueOnce("ok");
-
-    const result = await runWithModelFallback({
-      cfg,
+    await expectFallsBackToHaiku({
       provider: "openai",
       model: "gpt-4.1-mini",
-      run,
+      firstError: new Error(
+        "521 <!DOCTYPE html><html><head><title>Web server is down</title></head><body>Cloudflare</body></html>",
+      ),
     });
-
-    expect(result.result).toBe("ok");
-    expect(run).toHaveBeenCalledTimes(2);
-    expect(run.mock.calls[1]?.[0]).toBe("anthropic");
-    expect(run.mock.calls[1]?.[1]).toBe("claude-haiku-3-5");
   });
 
   it("falls back on 402 payment required", async () => {
-    const cfg = makeCfg();
-    const run = vi
-      .fn()
-      .mockRejectedValueOnce(Object.assign(new Error("payment required"), { status: 402 }))
-      .mockResolvedValueOnce("ok");
-
-    const result = await runWithModelFallback({
-      cfg,
+    await expectFallsBackToHaiku({
       provider: "openai",
       model: "gpt-4.1-mini",
-      run,
+      firstError: Object.assign(new Error("payment required"), { status: 402 }),
     });
-
-    expect(result.result).toBe("ok");
-    expect(run).toHaveBeenCalledTimes(2);
-    expect(run.mock.calls[1]?.[0]).toBe("anthropic");
-    expect(run.mock.calls[1]?.[1]).toBe("claude-haiku-3-5");
   });
 
   it("falls back on billing errors", async () => {
-    const cfg = makeCfg();
-    const run = vi
-      .fn()
-      .mockRejectedValueOnce(
-        new Error(
-          "LLM request rejected: Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.",
-        ),
-      )
-      .mockResolvedValueOnce("ok");
-
-    const result = await runWithModelFallback({
-      cfg,
+    await expectFallsBackToHaiku({
       provider: "openai",
       model: "gpt-4.1-mini",
-      run,
+      firstError: new Error(
+        "LLM request rejected: Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.",
+      ),
     });
-
-    expect(result.result).toBe("ok");
-    expect(run).toHaveBeenCalledTimes(2);
-    expect(run.mock.calls[1]?.[0]).toBe("anthropic");
-    expect(run.mock.calls[1]?.[1]).toBe("claude-haiku-3-5");
   });
 
   it("falls back on credential validation errors", async () => {
-    const cfg = makeCfg();
-    const run = vi
-      .fn()
-      .mockRejectedValueOnce(new Error('No credentials found for profile "anthropic:default".'))
-      .mockResolvedValueOnce("ok");
-
-    const result = await runWithModelFallback({
-      cfg,
+    await expectFallsBackToHaiku({
       provider: "anthropic",
       model: "claude-opus-4",
-      run,
+      firstError: new Error('No credentials found for profile "anthropic:default".'),
     });
-
-    expect(result.result).toBe("ok");
-    expect(run).toHaveBeenCalledTimes(2);
-    expect(run.mock.calls[1]?.[0]).toBe("anthropic");
-    expect(run.mock.calls[1]?.[1]).toBe("claude-haiku-3-5");
   });
 
   it("skips providers when all profiles are in cooldown", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-"));
     const provider = `cooldown-test-${crypto.randomUUID()}`;
     const profileId = `${provider}:default`;
 
@@ -163,23 +190,12 @@ describe("runWithModelFallback", () => {
       },
       usageStats: {
         [profileId]: {
-          cooldownUntil: Date.now() + 60_000,
+          cooldownUntil: Date.now() + 5 * 60_000,
         },
       },
     };
 
-    saveAuthProfileStore(store, tempDir);
-
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: `${provider}/m1`,
-            fallbacks: ["fallback/ok-model"],
-          },
-        },
-      },
-    });
+    const cfg = makeProviderFallbackCfg(provider);
     const run = vi.fn().mockImplementation(async (providerId, modelId) => {
       if (providerId === "fallback") {
         return "ok";
@@ -187,25 +203,19 @@ describe("runWithModelFallback", () => {
       throw new Error(`unexpected provider: ${providerId}/${modelId}`);
     });
 
-    try {
-      const result = await runWithModelFallback({
-        cfg,
-        provider,
-        model: "m1",
-        agentDir: tempDir,
-        run,
-      });
+    const result = await runWithStoredAuth({
+      cfg,
+      store,
+      provider,
+      run,
+    });
 
-      expect(result.result).toBe("ok");
-      expect(run.mock.calls).toEqual([["fallback", "ok-model"]]);
-      expect(result.attempts[0]?.reason).toBe("rate_limit");
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
+    expect(result.result).toBe("ok");
+    expect(run.mock.calls).toEqual([["fallback", "ok-model"]]);
+    expect(result.attempts[0]?.reason).toBe("rate_limit");
   });
 
   it("does not skip when any profile is available", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-"));
     const provider = `cooldown-mixed-${crypto.randomUUID()}`;
     const profileA = `${provider}:a`;
     const profileB = `${provider}:b`;
@@ -231,18 +241,7 @@ describe("runWithModelFallback", () => {
       },
     };
 
-    saveAuthProfileStore(store, tempDir);
-
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: `${provider}/m1`,
-            fallbacks: ["fallback/ok-model"],
-          },
-        },
-      },
-    });
+    const cfg = makeProviderFallbackCfg(provider);
     const run = vi.fn().mockImplementation(async (providerId) => {
       if (providerId === provider) {
         return "ok";
@@ -250,21 +249,16 @@ describe("runWithModelFallback", () => {
       return "unexpected";
     });
 
-    try {
-      const result = await runWithModelFallback({
-        cfg,
-        provider,
-        model: "m1",
-        agentDir: tempDir,
-        run,
-      });
+    const result = await runWithStoredAuth({
+      cfg,
+      store,
+      provider,
+      run,
+    });
 
-      expect(result.result).toBe("ok");
-      expect(run.mock.calls).toEqual([[provider, "m1"]]);
-      expect(result.attempts).toEqual([]);
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
+    expect(result.result).toBe("ok");
+    expect(run.mock.calls).toEqual([[provider, "m1"]]);
+    expect(result.attempts).toEqual([]);
   });
 
   it("does not append configured primary when fallbacksOverride is set", async () => {
@@ -298,15 +292,7 @@ describe("runWithModelFallback", () => {
   });
 
   it("uses fallbacksOverride instead of agents.defaults.model.fallbacks", async () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          model: {
-            fallbacks: ["openai/gpt-5.2"],
-          },
-        },
-      },
-    } as OpenClawConfig;
+    const cfg = makeFallbacksOnlyCfg();
 
     const calls: Array<{ provider: string; model: string }> = [];
 
@@ -335,15 +321,7 @@ describe("runWithModelFallback", () => {
   });
 
   it("treats an empty fallbacksOverride as disabling global fallbacks", async () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          model: {
-            fallbacks: ["openai/gpt-5.2"],
-          },
-        },
-      },
-    } as OpenClawConfig;
+    const cfg = makeFallbacksOnlyCfg();
 
     const calls: Array<{ provider: string; model: string }> = [];
 
@@ -392,130 +370,66 @@ describe("runWithModelFallback", () => {
   });
 
   it("falls back on missing API key errors", async () => {
-    const cfg = makeCfg();
-    const run = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("No API key found for profile openai."))
-      .mockResolvedValueOnce("ok");
-
-    const result = await runWithModelFallback({
-      cfg,
+    await expectFallsBackToHaiku({
       provider: "openai",
       model: "gpt-4.1-mini",
-      run,
+      firstError: new Error("No API key found for profile openai."),
     });
-
-    expect(result.result).toBe("ok");
-    expect(run).toHaveBeenCalledTimes(2);
-    expect(run.mock.calls[1]?.[0]).toBe("anthropic");
-    expect(run.mock.calls[1]?.[1]).toBe("claude-haiku-3-5");
   });
 
   it("falls back on lowercase credential errors", async () => {
-    const cfg = makeCfg();
-    const run = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("no api key found for profile openai"))
-      .mockResolvedValueOnce("ok");
-
-    const result = await runWithModelFallback({
-      cfg,
+    await expectFallsBackToHaiku({
       provider: "openai",
       model: "gpt-4.1-mini",
-      run,
+      firstError: new Error("no api key found for profile openai"),
     });
-
-    expect(result.result).toBe("ok");
-    expect(run).toHaveBeenCalledTimes(2);
-    expect(run.mock.calls[1]?.[0]).toBe("anthropic");
-    expect(run.mock.calls[1]?.[1]).toBe("claude-haiku-3-5");
   });
 
   it("falls back on timeout abort errors", async () => {
-    const cfg = makeCfg();
     const timeoutCause = Object.assign(new Error("request timed out"), { name: "TimeoutError" });
-    const run = vi
-      .fn()
-      .mockRejectedValueOnce(
-        Object.assign(new Error("aborted"), { name: "AbortError", cause: timeoutCause }),
-      )
-      .mockResolvedValueOnce("ok");
-
-    const result = await runWithModelFallback({
-      cfg,
+    await expectFallsBackToHaiku({
       provider: "openai",
       model: "gpt-4.1-mini",
-      run,
+      firstError: Object.assign(new Error("aborted"), { name: "AbortError", cause: timeoutCause }),
     });
-
-    expect(result.result).toBe("ok");
-    expect(run).toHaveBeenCalledTimes(2);
-    expect(run.mock.calls[1]?.[0]).toBe("anthropic");
-    expect(run.mock.calls[1]?.[1]).toBe("claude-haiku-3-5");
   });
 
   it("falls back on abort errors with timeout reasons", async () => {
-    const cfg = makeCfg();
-    const run = vi
-      .fn()
-      .mockRejectedValueOnce(
-        Object.assign(new Error("aborted"), { name: "AbortError", reason: "deadline exceeded" }),
-      )
-      .mockResolvedValueOnce("ok");
-
-    const result = await runWithModelFallback({
-      cfg,
+    await expectFallsBackToHaiku({
       provider: "openai",
       model: "gpt-4.1-mini",
-      run,
+      firstError: Object.assign(new Error("aborted"), {
+        name: "AbortError",
+        reason: "deadline exceeded",
+      }),
     });
+  });
 
-    expect(result.result).toBe("ok");
-    expect(run).toHaveBeenCalledTimes(2);
-    expect(run.mock.calls[1]?.[0]).toBe("anthropic");
-    expect(run.mock.calls[1]?.[1]).toBe("claude-haiku-3-5");
+  it("falls back on abort errors with reason: abort", async () => {
+    await expectFallsBackToHaiku({
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      firstError: Object.assign(new Error("aborted"), {
+        name: "AbortError",
+        reason: "reason: abort",
+      }),
+    });
   });
 
   it("falls back when message says aborted but error is a timeout", async () => {
-    const cfg = makeCfg();
-    const run = vi
-      .fn()
-      .mockRejectedValueOnce(Object.assign(new Error("request aborted"), { code: "ETIMEDOUT" }))
-      .mockResolvedValueOnce("ok");
-
-    const result = await runWithModelFallback({
-      cfg,
+    await expectFallsBackToHaiku({
       provider: "openai",
       model: "gpt-4.1-mini",
-      run,
+      firstError: Object.assign(new Error("request aborted"), { code: "ETIMEDOUT" }),
     });
-
-    expect(result.result).toBe("ok");
-    expect(run).toHaveBeenCalledTimes(2);
-    expect(run.mock.calls[1]?.[0]).toBe("anthropic");
-    expect(run.mock.calls[1]?.[1]).toBe("claude-haiku-3-5");
   });
 
   it("falls back on provider abort errors with request-aborted messages", async () => {
-    const cfg = makeCfg();
-    const run = vi
-      .fn()
-      .mockRejectedValueOnce(
-        Object.assign(new Error("Request was aborted"), { name: "AbortError" }),
-      )
-      .mockResolvedValueOnce("ok");
-
-    const result = await runWithModelFallback({
-      cfg,
+    await expectFallsBackToHaiku({
       provider: "openai",
       model: "gpt-4.1-mini",
-      run,
+      firstError: Object.assign(new Error("Request was aborted"), { name: "AbortError" }),
     });
-
-    expect(result.result).toBe("ok");
-    expect(run).toHaveBeenCalledTimes(2);
-    expect(run.mock.calls[1]?.[0]).toBe("anthropic");
-    expect(run.mock.calls[1]?.[1]).toBe("claude-haiku-3-5");
   });
 
   it("does not fall back on user aborts", async () => {
