@@ -482,6 +482,7 @@ describe("update-cli", () => {
       force: true,
       json: undefined,
     });
+    expect(runRestartScript).toHaveBeenCalled();
     expect(runDaemonRestart).not.toHaveBeenCalled();
   });
 
@@ -495,6 +496,29 @@ describe("update-cli", () => {
 
     vi.mocked(runGatewayUpdate).mockResolvedValue(mockResult);
     vi.mocked(runDaemonInstall).mockRejectedValueOnce(new Error("refresh failed"));
+    prepareRestartScript.mockResolvedValue(null);
+    serviceLoaded.mockResolvedValue(true);
+    vi.mocked(runDaemonRestart).mockResolvedValue(true);
+
+    await updateCommand({});
+
+    expect(runDaemonInstall).toHaveBeenCalledWith({
+      force: true,
+      json: undefined,
+    });
+    expect(runDaemonRestart).toHaveBeenCalled();
+  });
+
+  it("updateCommand falls back to restart when no detached restart script is available", async () => {
+    const mockResult: UpdateRunResult = {
+      status: "ok",
+      mode: "git",
+      steps: [],
+      durationMs: 100,
+    };
+
+    vi.mocked(runGatewayUpdate).mockResolvedValue(mockResult);
+    vi.mocked(runDaemonInstall).mockResolvedValue(undefined);
     prepareRestartScript.mockResolvedValue(null);
     serviceLoaded.mockResolvedValue(true);
     vi.mocked(runDaemonRestart).mockResolvedValue(true);
