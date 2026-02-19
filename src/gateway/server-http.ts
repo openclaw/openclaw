@@ -26,6 +26,7 @@ import {
   type GatewayAuthResult,
   type ResolvedGatewayAuth,
 } from "./auth.js";
+import { CANVAS_CAPABILITY_TTL_MS, normalizeCanvasScopedUrl } from "./canvas-capability.js";
 import {
   handleControlUiAvatarRequest,
   handleControlUiHttpRequest,
@@ -49,12 +50,7 @@ import {
   resolveHookDeliver,
 } from "./hooks.js";
 import { sendGatewayAuthFailure, setDefaultSecurityHeaders } from "./http-common.js";
-import { getBearerToken, getHeader } from "./http-utils.js";
-import {
-  isPrivateOrLoopbackAddress,
-  isTrustedProxyAddress,
-  resolveGatewayClientIp,
-} from "./net.js";
+import { getBearerToken } from "./http-utils.js";
 import { handleOpenAiHttpRequest } from "./openai-http.js";
 import { handleOpenResponsesHttpRequest } from "./openresponses-http.js";
 import { GATEWAY_CLIENT_MODES, normalizeGatewayClientMode } from "./protocol/client-info.js";
@@ -109,9 +105,24 @@ function isNodeWsClient(client: GatewayWsClient): boolean {
   return normalizeGatewayClientMode(client.connect.client.mode) === GATEWAY_CLIENT_MODES.NODE;
 }
 
-function hasAuthorizedNodeWsClientForIp(clients: Set<GatewayWsClient>, clientIp: string): boolean {
+function hasAuthorizedNodeWsClientForCanvasCapability(
+  clients: Set<GatewayWsClient>,
+  capability: string,
+): boolean {
+  const nowMs = Date.now();
   for (const client of clients) {
-    if (client.clientIp && client.clientIp === clientIp && isNodeWsClient(client)) {
+    if (!isNodeWsClient(client)) {
+      continue;
+    }
+    if (!client.canvasCapability || !client.canvasCapabilityExpiresAtMs) {
+      continue;
+    }
+    if (client.canvasCapabilityExpiresAtMs <= nowMs) {
+      continue;
+    }
+    if (safeEqualSecret(client.canvasCapability, capability)) {
+      // Sliding expiration while the connected node keeps using canvas.
+      client.canvasCapabilityExpiresAtMs = nowMs + CANVAS_CAPABILITY_TTL_MS;
       return true;
     }
   }
@@ -123,15 +134,18 @@ async function authorizeCanvasRequest(params: {
   auth: ResolvedGatewayAuth;
   trustedProxies: string[];
   clients: Set<GatewayWsClient>;
+  canvasCapability?: string;
+  malformedScopedPath?: boolean;
   rateLimiter?: AuthRateLimiter;
 }): Promise<GatewayAuthResult> {
-  const { req, auth, trustedProxies, clients, rateLimiter } = params;
+  const { req, auth, trustedProxies, clients, canvasCapability, malformedScopedPath, rateLimiter } =
+    params;
+  if (malformedScopedPath) {
+    return { ok: false, reason: "unauthorized" };
+  }
   if (isLocalDirectRequest(req, trustedProxies)) {
     return { ok: true };
   }
-
-  const hasProxyHeaders = Boolean(getHeader(req, "x-forwarded-for") || getHeader(req, "x-real-ip"));
-  const remoteIsTrustedProxy = isTrustedProxyAddress(req.socket?.remoteAddress, trustedProxies);
 
   let lastAuthFailure: GatewayAuthResult | null = null;
   const token = getBearerToken(req);
@@ -149,27 +163,7 @@ async function authorizeCanvasRequest(params: {
     lastAuthFailure = authResult;
   }
 
-  const clientIp = resolveGatewayClientIp({
-    remoteAddr: req.socket?.remoteAddress ?? "",
-    forwardedFor: getHeader(req, "x-forwarded-for"),
-    realIp: getHeader(req, "x-real-ip"),
-    trustedProxies,
-  });
-  if (!clientIp) {
-    return lastAuthFailure ?? { ok: false, reason: "unauthorized" };
-  }
-
-  // IP-based fallback is only safe for machine-scoped addresses.
-  // Only allow IP-based fallback for private/loopback addresses to prevent
-  // cross-session access in shared-IP environments (corporate NAT, cloud).
-  if (!isPrivateOrLoopbackAddress(clientIp)) {
-    return lastAuthFailure ?? { ok: false, reason: "unauthorized" };
-  }
-  // Ignore IP fallback when proxy headers come from an untrusted source.
-  if (hasProxyHeaders && !remoteIsTrustedProxy) {
-    return lastAuthFailure ?? { ok: false, reason: "unauthorized" };
-  }
-  if (hasAuthorizedNodeWsClientForIp(clients, clientIp)) {
+  if (canvasCapability && hasAuthorizedNodeWsClientForCanvasCapability(clients, canvasCapability)) {
     return { ok: true };
   }
   return lastAuthFailure ?? { ok: false, reason: "unauthorized" };
@@ -503,6 +497,14 @@ export function createGatewayHttpServer(opts: {
     try {
       const configSnapshot = loadConfig();
       const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
+      const scopedCanvas = normalizeCanvasScopedUrl(req.url ?? "/");
+      if (scopedCanvas.malformedScopedPath) {
+        sendGatewayAuthFailure(res, { ok: false, reason: "unauthorized" });
+        return;
+      }
+      if (scopedCanvas.rewrittenUrl) {
+        req.url = scopedCanvas.rewrittenUrl;
+      }
       const requestPath = new URL(req.url ?? "/", "http://localhost").pathname;
       if (await handleHooksRequest(req, res)) {
         return;
@@ -571,6 +573,8 @@ export function createGatewayHttpServer(opts: {
             auth: resolvedAuth,
             trustedProxies,
             clients,
+            canvasCapability: scopedCanvas.capability,
+            malformedScopedPath: scopedCanvas.malformedScopedPath,
             rateLimiter,
           });
           if (!ok.ok) {
@@ -630,6 +634,15 @@ export function attachGatewayUpgradeHandler(opts: {
   const { httpServer, wss, canvasHost, clients, resolvedAuth, rateLimiter } = opts;
   httpServer.on("upgrade", (req, socket, head) => {
     void (async () => {
+      const scopedCanvas = normalizeCanvasScopedUrl(req.url ?? "/");
+      if (scopedCanvas.malformedScopedPath) {
+        writeUpgradeAuthFailure(socket, { ok: false, reason: "unauthorized" });
+        socket.destroy();
+        return;
+      }
+      if (scopedCanvas.rewrittenUrl) {
+        req.url = scopedCanvas.rewrittenUrl;
+      }
       if (canvasHost) {
         const url = new URL(req.url ?? "/", "http://localhost");
         if (url.pathname === CANVAS_WS_PATH) {
@@ -640,6 +653,8 @@ export function attachGatewayUpgradeHandler(opts: {
             auth: resolvedAuth,
             trustedProxies,
             clients,
+            canvasCapability: scopedCanvas.capability,
+            malformedScopedPath: scopedCanvas.malformedScopedPath,
             rateLimiter,
           });
           if (!ok.ok) {

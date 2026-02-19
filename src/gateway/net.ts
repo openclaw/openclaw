@@ -240,7 +240,10 @@ export function resolveGatewayClientIp(params: {
   if (!isTrustedProxyAddress(remote, params.trustedProxies)) {
     return remote;
   }
-  return parseForwardedForClientIp(params.forwardedFor) ?? parseRealIp(params.realIp) ?? remote;
+  // Fail closed when traffic comes from a trusted proxy but client-origin headers
+  // are missing or invalid. Falling back to the proxy's own IP can accidentally
+  // treat unrelated requests as local/trusted.
+  return parseForwardedForClientIp(params.forwardedFor) ?? parseRealIp(params.realIp);
 }
 
 export function isLocalGatewayAddress(ip: string | undefined): boolean {
