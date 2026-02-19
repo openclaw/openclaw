@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  isRestartEnabled,
   isNativeCommandsExplicitlyDisabled,
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
@@ -95,5 +96,15 @@ describe("isNativeCommandsExplicitlyDisabled", () => {
     expect(
       isNativeCommandsExplicitlyDisabled({ providerSetting: "auto", globalSetting: false }),
     ).toBe(false);
+  });
+});
+
+describe("isRestartEnabled", () => {
+  it("defaults to enabled unless explicitly false", () => {
+    expect(isRestartEnabled(undefined)).toBe(true);
+    expect(isRestartEnabled({})).toBe(true);
+    expect(isRestartEnabled({ commands: {} })).toBe(true);
+    expect(isRestartEnabled({ commands: { restart: true } })).toBe(true);
+    expect(isRestartEnabled({ commands: { restart: false } })).toBe(false);
   });
 });
