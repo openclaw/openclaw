@@ -39,6 +39,42 @@ export async function resolveArchiveSourcePath(archivePath: string): Promise<
   return { ok: true, path: resolved };
 }
 
+function parsePackedArchiveFromStdout(stdout: string): string | undefined {
+  const lines = stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index];
+    const match = line?.match(/([^\s"']+\.tgz)/);
+    if (match?.[1]) {
+      return match[1];
+    }
+  }
+  return undefined;
+}
+
+async function findPackedArchiveInDir(cwd: string): Promise<string | undefined> {
+  const entries = await fs.readdir(cwd, { withFileTypes: true }).catch(() => []);
+  const archives = entries.filter((entry) => entry.isFile() && entry.name.endsWith(".tgz"));
+  if (archives.length === 0) {
+    return undefined;
+  }
+  if (archives.length === 1) {
+    return archives[0]?.name;
+  }
+
+  const sortedByMtime = await Promise.all(
+    archives.map(async (entry) => ({
+      name: entry.name,
+      mtimeMs: (await fs.stat(path.join(cwd, entry.name))).mtimeMs,
+    })),
+  );
+  sortedByMtime.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  return sortedByMtime[0]?.name;
+}
+
 export async function packNpmSpecToArchive(params: {
   spec: string;
   timeoutMs: number;
@@ -65,14 +101,22 @@ export async function packNpmSpecToArchive(params: {
     return { ok: false, error: `npm pack failed: ${res.stderr.trim() || res.stdout.trim()}` };
   }
 
-  const packed = (res.stdout || "")
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .pop();
+  let packed = parsePackedArchiveFromStdout(res.stdout || "");
+  if (!packed) {
+    packed = await findPackedArchiveInDir(params.cwd);
+  }
   if (!packed) {
     return { ok: false, error: "npm pack produced no archive" };
   }
 
-  return { ok: true, archivePath: path.join(params.cwd, packed) };
+  const archivePath = path.isAbsolute(packed) ? packed : path.join(params.cwd, packed);
+  if (await fileExists(archivePath)) {
+    return { ok: true, archivePath };
+  }
+
+  const fallbackPacked = await findPackedArchiveInDir(params.cwd);
+  if (!fallbackPacked) {
+    return { ok: false, error: "npm pack produced no archive" };
+  }
+  return { ok: true, archivePath: path.join(params.cwd, fallbackPacked) };
 }
