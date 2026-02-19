@@ -12,6 +12,7 @@ import {
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import { resolveHooksConfig } from "./hooks.js";
 import { isLoopbackHost, resolveGatewayBindHost } from "./net.js";
+import { mergeGatewayTailscaleConfig } from "./startup-auth.js";
 
 export type GatewayRuntimeConfig = {
   bindHost: string;
@@ -57,21 +58,13 @@ export async function resolveGatewayRuntimeConfig(params: {
     typeof controlUiRootRaw === "string" && controlUiRootRaw.trim().length > 0
       ? controlUiRootRaw.trim()
       : undefined;
-  const authBase = params.cfg.gateway?.auth ?? {};
-  const authOverrides = params.auth ?? {};
-  const authConfig = {
-    ...authBase,
-    ...authOverrides,
-  };
   const tailscaleBase = params.cfg.gateway?.tailscale ?? {};
   const tailscaleOverrides = params.tailscale ?? {};
-  const tailscaleConfig = {
-    ...tailscaleBase,
-    ...tailscaleOverrides,
-  };
+  const tailscaleConfig = mergeGatewayTailscaleConfig(tailscaleBase, tailscaleOverrides);
   const tailscaleMode = tailscaleConfig.mode ?? "off";
   const resolvedAuth = resolveGatewayAuth({
-    authConfig,
+    authConfig: params.cfg.gateway?.auth,
+    authOverride: params.auth,
     env: process.env,
     tailscaleMode,
   });

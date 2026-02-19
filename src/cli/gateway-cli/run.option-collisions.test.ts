@@ -132,4 +132,22 @@ describe("gateway run option collisions", () => {
       }),
     );
   });
+
+  it("starts gateway when token mode has no configured token (startup bootstrap path)", async () => {
+    const { addGatewayRunCommand } = await import("./run.js");
+    const program = new Command();
+    const gateway = addGatewayRunCommand(program.command("gateway"));
+    addGatewayRunCommand(gateway.command("run"));
+
+    await program.parseAsync(["gateway", "run", "--allow-unconfigured"], {
+      from: "user",
+    });
+
+    expect(startGatewayServer).toHaveBeenCalledWith(
+      18789,
+      expect.objectContaining({
+        bind: "loopback",
+      }),
+    );
+  });
 });
