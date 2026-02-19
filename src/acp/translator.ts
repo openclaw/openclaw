@@ -59,7 +59,7 @@ type AcpGatewayAgentOptions = AcpServerOptions & {
 };
 
 const SESSION_CREATE_RATE_LIMIT_DEFAULT_MAX_REQUESTS = 120;
-const SESSION_CREATE_RATE_LIMIT_DEFAULT_WINDOW_MS = 10_000;
+const SESSION_CREATE_RATE_LIMIT_DEFAULT_WINDOW_MS = 60_000;
 
 export class AcpGatewayAgent implements Agent {
   private connection: AgentSideConnection;
