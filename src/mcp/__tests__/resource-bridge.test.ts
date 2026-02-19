@@ -75,7 +75,8 @@ describe("discoverResources", () => {
     const resources = await discoverResources(client);
     expect(resources).toHaveLength(0);
     // listResources should not have been called
-    expect(vi.mocked(client.listResources)).not.toHaveBeenCalled();
+    const listFn = client.listResources;
+    expect(listFn).not.toHaveBeenCalled();
   });
 });
 
