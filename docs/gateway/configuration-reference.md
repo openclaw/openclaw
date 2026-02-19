@@ -753,6 +753,7 @@ Periodic heartbeat runs.
     defaults: {
       compaction: {
         mode: "safeguard", // default | safeguard
+        model: "anthropic/claude-sonnet-4-6",
         reserveTokensFloor: 24000,
         memoryFlush: {
           enabled: true,
@@ -767,6 +768,7 @@ Periodic heartbeat runs.
 ```
 
 - `mode`: `default` or `safeguard` (chunked summarization for long histories). See [Compaction](/concepts/compaction).
+- `model`: optional compaction model override (`provider/model` or a configured alias from `agents.defaults.models`).
 - `memoryFlush`: silent agentic turn before auto-compaction to store durable memories. Skipped when workspace is read-only.
 
 ### `agents.defaults.contextPruning`
