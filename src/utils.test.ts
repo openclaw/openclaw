@@ -4,8 +4,14 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   assertWebChannel,
+  clamp,
+  clampInt,
   CONFIG_DIR,
   ensureDir,
+  escapeRegExp,
+  formatTerminalLink,
+  isPlainObject,
+  isRecord,
   jidToE164,
   normalizeE164,
   normalizePath,
@@ -13,10 +19,13 @@ import {
   resolveHomeDir,
   resolveJidToE164,
   resolveUserPath,
+  safeParseJson,
   shortenHomeInString,
   shortenHomePath,
+  sliceUtf16Safe,
   sleep,
   toWhatsappJid,
+  truncateUtf16Safe,
   withWhatsAppPrefix,
 } from "./utils.js";
 
@@ -221,5 +230,114 @@ describe("resolveUserPath", () => {
   it("keeps blank paths blank", () => {
     expect(resolveUserPath("")).toBe("");
     expect(resolveUserPath("   ")).toBe("");
+  });
+});
+
+describe("clamp", () => {
+  it("clamps value within range", () => {
+    expect(clamp(5, 0, 10)).toBe(5);
+    expect(clamp(-5, 0, 10)).toBe(0);
+    expect(clamp(15, 0, 10)).toBe(10);
+  });
+});
+
+describe("clampInt", () => {
+  it("clamps and floors value", () => {
+    expect(clampInt(5.9, 0, 10)).toBe(5);
+    expect(clampInt(-0.1, 0, 10)).toBe(0);
+    expect(clampInt(10.1, 0, 10)).toBe(10);
+  });
+});
+
+describe("escapeRegExp", () => {
+  it("escapes special regex characters", () => {
+    expect(escapeRegExp(".*+?^${}()|[]\\")).toBe("\\.\\*\\+\\?\\^\\$\\{\\}\\(\\)\\|\\[\\]\\\\");
+  });
+
+  it("leaves normal characters alone", () => {
+    expect(escapeRegExp("hello world")).toBe("hello world");
+  });
+});
+
+describe("safeParseJson", () => {
+  it("parses valid JSON", () => {
+    expect(safeParseJson('{"a":1}')).toEqual({ a: 1 });
+  });
+
+  it("returns null for invalid JSON", () => {
+    expect(safeParseJson("{ invalid }")).toBeNull();
+  });
+});
+
+describe("isPlainObject", () => {
+  it("identifies plain objects", () => {
+    expect(isPlainObject({})).toBe(true);
+    expect(isPlainObject({ a: 1 })).toBe(true);
+  });
+
+  it("rejects non-plain objects", () => {
+    expect(isPlainObject(null)).toBe(false);
+    expect(isPlainObject([])).toBe(false);
+    expect(isPlainObject(new Date())).toBe(false);
+    expect(isPlainObject(/regex/)).toBe(false);
+  });
+});
+
+describe("isRecord", () => {
+  it("identifies records (objects)", () => {
+    expect(isRecord({})).toBe(true);
+    expect(isRecord({ a: 1 })).toBe(true);
+    expect(isRecord(new Date())).toBe(true); // Date constitutes an object (Record<string, unknown>)
+  });
+
+  it("rejects non-records", () => {
+    expect(isRecord(null)).toBe(false);
+    expect(isRecord([])).toBe(false);
+    expect(isRecord("string")).toBe(false);
+  });
+});
+
+describe("sliceUtf16Safe", () => {
+  it("slices normal strings correctly", () => {
+    expect(sliceUtf16Safe("hello", 0, 2)).toBe("he");
+  });
+
+  it("avoids splitting surrogate pairs", () => {
+    const emoji = "🦞"; // 2 code units: \uD83E\uDD9E
+    expect(sliceUtf16Safe(emoji, 0, 1)).toBe(""); // Should return empty string instead of half a surrogate
+    expect(sliceUtf16Safe(emoji, 0, 2)).toBe(emoji);
+    expect(sliceUtf16Safe(`a${emoji}b`, 0, 2)).toBe("a"); // Should stop before splitting emoji
+    expect(sliceUtf16Safe(`a${emoji}b`, 0, 3)).toBe(`a${emoji}`);
+  });
+});
+
+describe("truncateUtf16Safe", () => {
+  it("truncates normal strings", () => {
+    expect(truncateUtf16Safe("hello", 3)).toBe("hel");
+  });
+
+  it("truncates safely around surrogate pairs", () => {
+    const emoji = "🦞";
+    expect(truncateUtf16Safe(emoji, 1)).toBe(""); // Would be broken if naive slice used
+    expect(truncateUtf16Safe(`a${emoji}`, 2)).toBe("a");
+    expect(truncateUtf16Safe(`a${emoji}`, 3)).toBe(`a${emoji}`);
+  });
+});
+
+describe("formatTerminalLink", () => {
+  it("formats link for TTY", () => {
+    // Mock TTY
+    const originalIsTTY = process.stdout.isTTY;
+    process.stdout.isTTY = true;
+    expect(formatTerminalLink("label", "url")).toContain(
+      "\u001b]8;;url\u0007label\u001b]8;;\u0007",
+    );
+    process.stdout.isTTY = originalIsTTY;
+  });
+
+  it("formats fallback for non-TTY", () => {
+    const originalIsTTY = process.stdout.isTTY;
+    expect(formatTerminalLink("label", "url")).toBe("label (url)");
+    process.stdout.isTTY = originalIsTTY;
   });
 });
