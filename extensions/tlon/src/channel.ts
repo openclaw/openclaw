@@ -1,11 +1,10 @@
+import { configureClient } from "@tloncorp/api";
 import type {
   ChannelOutboundAdapter,
   ChannelPlugin,
   ChannelSetupInput,
   OpenClawConfig,
 } from "openclaw/plugin-sdk";
-// NOTE: configureClient not available in current @tloncorp/api-beta version
-// import { configureClient } from "@tloncorp/api";
 import {
   applyAccountNameToChannelSection,
   DEFAULT_ACCOUNT_ID,
@@ -213,13 +212,13 @@ const tlonOutbound: ChannelOutboundAdapter = {
       throw new Error(`Invalid Tlon target. Use ${formatTargetHint()}`);
     }
 
-    // NOTE: configureClient not available in current @tloncorp/api-beta version
-    // configureClient({
-    //   shipUrl: account.url,
-    //   shipName: account.ship.replace(/^~/, ""),
-    //   verbose: false,
-    //   getCode: async () => account.code!,
-    // });
+    // Configure the API client for uploads
+    configureClient({
+      shipUrl: account.url,
+      shipName: account.ship.replace(/^~/, ""),
+      verbose: false,
+      getCode: async () => account.code!,
+    });
 
     const uploadedUrl = mediaUrl ? await uploadImageFromUrl(mediaUrl) : undefined;
 
