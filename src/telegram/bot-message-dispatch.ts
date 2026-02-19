@@ -1,4 +1,10 @@
 import type { Bot } from "grammy";
+import type { OpenClawConfig, ReplyToMode, TelegramAccountConfig } from "../config/types.js";
+import type { RuntimeEnv } from "../runtime.js";
+import type { TelegramMessageContext } from "./bot-message-context.js";
+import type { TelegramBotOptions } from "./bot.js";
+import type { TelegramStreamMode } from "./bot/types.js";
+import type { TelegramInlineButtons } from "./button-types.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import {
   findModelInCatalog,
@@ -15,15 +21,9 @@ import { logAckFailure, logTypingFailure } from "../channels/logging.js";
 import { createReplyPrefixOptions } from "../channels/reply-prefix.js";
 import { createTypingCallbacks } from "../channels/typing.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
-import type { OpenClawConfig, ReplyToMode, TelegramAccountConfig } from "../config/types.js";
 import { danger, logVerbose } from "../globals.js";
 import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
-import type { RuntimeEnv } from "../runtime.js";
-import type { TelegramMessageContext } from "./bot-message-context.js";
-import type { TelegramBotOptions } from "./bot.js";
 import { deliverReplies } from "./bot/delivery.js";
-import type { TelegramStreamMode } from "./bot/types.js";
-import type { TelegramInlineButtons } from "./button-types.js";
 import { resolveTelegramDraftStreamingChunking } from "./draft-chunking.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
 import { editMessageTelegram } from "./send.js";
@@ -87,6 +87,7 @@ export const dispatchTelegramMessage = async ({
     ackReactionPromise,
     reactionApi,
     removeAckAfterReply,
+    statusReactionController,
   } = context;
 
   const draftMaxChars = Math.min(textLimit, 4096);
@@ -292,6 +293,11 @@ export const dispatchTelegramMessage = async ({
   };
 
   let queuedFinal = false;
+
+  if (statusReactionController) {
+    void statusReactionController.setThinking();
+  }
+
   try {
     ({ queuedFinal } = await dispatchReplyWithBufferedBlockDispatcher({
       ctx: ctxPayload,
@@ -450,6 +456,11 @@ export const dispatchTelegramMessage = async ({
               draftChunker?.reset();
             }
           : undefined,
+        onToolStart: statusReactionController
+          ? async (payload) => {
+              await statusReactionController.setTool(payload.name);
+            }
+          : undefined,
         onModelSelected,
       },
     }));
@@ -470,26 +481,40 @@ export const dispatchTelegramMessage = async ({
   }
 
   const hasFinalResponse = queuedFinal || sentFallback;
+
+  if (statusReactionController && !hasFinalResponse) {
+    void statusReactionController.setError().catch((err) => {
+      logVerbose(`telegram: status reaction error finalize failed: ${String(err)}`);
+    });
+  }
+
   if (!hasFinalResponse) {
     clearGroupHistory();
     return;
   }
-  removeAckReactionAfterReply({
-    removeAfterReply: removeAckAfterReply,
-    ackReactionPromise,
-    ackReactionValue: ackReactionPromise ? "ack" : null,
-    remove: () => reactionApi?.(chatId, msg.message_id ?? 0, []) ?? Promise.resolve(),
-    onError: (err) => {
-      if (!msg.message_id) {
-        return;
-      }
-      logAckFailure({
-        log: logVerbose,
-        channel: "telegram",
-        target: `${chatId}/${msg.message_id}`,
-        error: err,
-      });
-    },
-  });
+
+  if (statusReactionController) {
+    void statusReactionController.setDone().catch((err) => {
+      logVerbose(`telegram: status reaction finalize failed: ${String(err)}`);
+    });
+  } else {
+    removeAckReactionAfterReply({
+      removeAfterReply: removeAckAfterReply,
+      ackReactionPromise,
+      ackReactionValue: ackReactionPromise ? "ack" : null,
+      remove: () => reactionApi?.(chatId, msg.message_id ?? 0, []) ?? Promise.resolve(),
+      onError: (err) => {
+        if (!msg.message_id) {
+          return;
+        }
+        logAckFailure({
+          log: logVerbose,
+          channel: "telegram",
+          target: `${chatId}/${msg.message_id}`,
+          error: err,
+        });
+      },
+    });
+  }
   clearGroupHistory();
 };
