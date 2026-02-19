@@ -124,6 +124,10 @@ are treated as allowlisted on nodes (macOS node or headless node host). This use
 `tools.exec.safeBins` defines a small list of **stdin-only** binaries (for example `jq`)
 that can run in allowlist mode **without** explicit allowlist entries. Safe bins reject
 positional file args and path-like tokens, so they can only operate on the incoming stream.
+Validation is deterministic from argv shape only (no host filesystem existence checks), which
+prevents file-existence oracle behavior from allow/deny differences.
+File-oriented options are denied for default safe bins (for example `sort -o`, `sort --output`,
+`sort --files0-from`, `wc --files0-from`, `jq -f/--from-file`, `grep -f/--file`).
 Safe bins also enforce explicit per-binary flag policy for options that break stdin-only
 behavior (for example `sort -o/--output` and grep recursive flags).
 Safe bins also force argv tokens to be treated as **literal text** at execution time (no globbing
