@@ -26,6 +26,8 @@ export const CONSENT_REASON = {
   BUNDLE_MISMATCH: "CONSENT_BUNDLE_MISMATCH",
   /** Principal/session in quarantine. */
   CONTAINMENT_QUARANTINE: "CONSENT_CONTAINMENT_QUARANTINE",
+  /** Sliding-window op cap exceeded for session. */
+  RATE_LIMIT: "CONSENT_RATE_LIMIT",
   /** ConsentGate unavailable (fail closed). */
   UNAVAILABLE: "CONSENT_UNAVAILABLE",
   /** Policy version mismatch. */
@@ -57,6 +59,8 @@ export const CONSENT_REASON_MESSAGE: Record<ConsentReasonCode, string> = {
   [CONSENT_REASON.BUNDLE_MISMATCH]: "Consent bundle hash mismatch.",
   [CONSENT_REASON.CONTAINMENT_QUARANTINE]:
     "Operation blocked while containment quarantine is active.",
+  [CONSENT_REASON.RATE_LIMIT]:
+    "Consent rate limit exceeded for this session (too many issues/consumes in window).",
   [CONSENT_REASON.UNAVAILABLE]: "Consent service is unavailable (fail closed).",
   [CONSENT_REASON.POLICY_VERSION_MISMATCH]:
     "Consent token policy version does not match active policy version.",

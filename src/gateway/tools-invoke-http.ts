@@ -38,6 +38,7 @@ import {
   isConsentGateObserveOnly,
   resolveConsentGateApi,
   resolveConsentGatedTools,
+  resolveTrustTier,
 } from "../consent/resolve.js";
 import { CONSENT_REASON } from "../consent/reason-codes.js";
 import { buildConsentDenyPayload } from "../consent/deny-payload.js";
@@ -331,10 +332,11 @@ export async function handleToolsInvokeHttpRequest(
     const correlationId = `http-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
     try {
       const consentApi = resolveConsentGateApi(cfg);
+      const trustTier = resolveTrustTier(cfg, sessionKey);
       const consumeInput = {
         jti: consentTokenJti ?? "",
         tool: toolName,
-        trustTier: "T0",
+        trustTier,
         sessionKey,
         contextHash,
         correlationId,
@@ -372,7 +374,7 @@ export async function handleToolsInvokeHttpRequest(
           correlationId,
           tool: toolName,
           sessionKey,
-          trustTier: "T0",
+          trustTier: resolveTrustTier(cfg, sessionKey),
           jti: consentTokenJti ?? null,
         });
         sendJson(res, 503, {

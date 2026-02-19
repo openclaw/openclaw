@@ -563,6 +563,24 @@ export const OpenClawSchema = z
             gatedTools: z.array(z.string()).optional(),
             observeOnly: z.boolean().optional(),
             storagePath: z.string().optional(),
+            trustTierDefault: z.string().optional(),
+            trustTierMapping: z.record(z.string(), z.string()).optional(),
+            tierToolMatrix: z.record(z.string(), z.array(z.string())).optional(),
+            rateLimit: z
+              .object({
+                maxOpsPerWindow: z.number().int().min(1),
+                windowMs: z.number().int().min(1),
+              })
+              .strict()
+              .optional(),
+            anomaly: z
+              .object({
+                weightsByReason: z.record(z.string(), z.number()).optional(),
+                quarantineThreshold: z.number().min(0).optional(),
+                cascadeRevokeOnQuarantine: z.boolean().optional(),
+              })
+              .strict()
+              .optional(),
           })
           .strict()
           .optional(),

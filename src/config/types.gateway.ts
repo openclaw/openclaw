@@ -289,6 +289,23 @@ export type ConsentGateConfig = {
   observeOnly?: boolean;
   /** Directory for token state and WAL (default: ~/.openclaw/consentgate or under state dir). */
   storagePath?: string;
+  /** Default trust tier when no mapping matches (default: T0). */
+  trustTierDefault?: string;
+  /** Map session key prefix or exact key to trust tier (e.g. { "telegram:": "T0", "discord:": "T1" }). Longest prefix match. */
+  trustTierMapping?: Record<string, string>;
+  /** Tier–tool matrix: tier -> list of allowed tool names. If set, issue/consume denied when tool not in list for tier. */
+  tierToolMatrix?: Record<string, string[]>;
+  /** Sliding-window rate limit: max (issue+consume) ops per session per window. */
+  rateLimit?: { maxOpsPerWindow: number; windowMs: number };
+  /** Anomaly-based quarantine: weights per reason code, threshold, and optional cascade revoke. */
+  anomaly?: {
+    /** Reason code -> weight (e.g. { "CONSENT_CONTEXT_MISMATCH": 0.2 }). */
+    weightsByReason?: Record<string, number>;
+    /** Auto-quarantine when session anomaly score >= this (default: 1). */
+    quarantineThreshold?: number;
+    /** When auto-quarantining, revoke all issued tokens for that session (default: true). */
+    cascadeRevokeOnQuarantine?: boolean;
+  };
 };
 
 export type GatewayConfig = {

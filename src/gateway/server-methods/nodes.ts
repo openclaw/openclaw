@@ -4,6 +4,7 @@ import {
   isConsentGateObserveOnly,
   resolveConsentGateApi,
   resolveConsentGatedTools,
+  resolveTrustTier,
 } from "../../consent/resolve.js";
 import { CONSENT_REASON } from "../../consent/reason-codes.js";
 import { buildConsentDenyPayload } from "../../consent/deny-payload.js";
@@ -525,7 +526,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
         const trustTier =
           typeof rawParams.consentTrustTier === "string" && rawParams.consentTrustTier.trim()
             ? rawParams.consentTrustTier.trim()
-            : "T0";
+            : resolveTrustTier(cfg, sessionKey);
         const consentTokenJti =
           typeof rawParams.consentToken === "string" && rawParams.consentToken.trim()
             ? rawParams.consentToken.trim()
