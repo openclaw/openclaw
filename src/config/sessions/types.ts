@@ -30,6 +30,8 @@ export type SessionEntry = {
   lastHeartbeatText?: string;
   /** Timestamp (ms) when lastHeartbeatText was delivered. */
   lastHeartbeatSentAt?: number;
+  /** Per-trigger timestamps (ms) for onIdle triggers. Key is trigger name or index. */
+  lastIdleTriggeredAt?: Record<string, number>;
   sessionId: string;
   updatedAt: number;
   sessionFile?: string;
