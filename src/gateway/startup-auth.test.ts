@@ -13,7 +13,10 @@ vi.mock("../config/config.js", async (importOriginal) => {
   };
 });
 
-import { ensureGatewayStartupAuth } from "./startup-auth.js";
+import {
+  assertHooksTokenSeparateFromGatewayAuth,
+  ensureGatewayStartupAuth,
+} from "./startup-auth.js";
 
 describe("ensureGatewayStartupAuth", () => {
   async function expectEphemeralGeneratedTokenWhenOverridden(cfg: OpenClawConfig) {
@@ -187,5 +190,80 @@ describe("ensureGatewayStartupAuth", () => {
         },
       },
     });
+  });
+
+  it("throws when hooks token reuses gateway token resolved from env", async () => {
+    await expect(
+      ensureGatewayStartupAuth({
+        cfg: {
+          hooks: {
+            enabled: true,
+            token: "shared-gateway-token-1234567890",
+          },
+        },
+        env: {
+          OPENCLAW_GATEWAY_TOKEN: "shared-gateway-token-1234567890",
+        } as NodeJS.ProcessEnv,
+      }),
+    ).rejects.toThrow(/hooks\.token must not match gateway auth token/i);
+  });
+});
+
+describe("assertHooksTokenSeparateFromGatewayAuth", () => {
+  it("throws when hooks token reuses gateway token auth", () => {
+    expect(() =>
+      assertHooksTokenSeparateFromGatewayAuth({
+        cfg: {
+          hooks: {
+            enabled: true,
+            token: "shared-gateway-token-1234567890",
+          },
+        },
+        auth: {
+          mode: "token",
+          modeSource: "config",
+          token: "shared-gateway-token-1234567890",
+          allowTailscale: false,
+        },
+      }),
+    ).toThrow(/hooks\.token must not match gateway auth token/i);
+  });
+
+  it("allows hooks token when gateway auth is not token mode", () => {
+    expect(() =>
+      assertHooksTokenSeparateFromGatewayAuth({
+        cfg: {
+          hooks: {
+            enabled: true,
+            token: "shared-gateway-token-1234567890",
+          },
+        },
+        auth: {
+          mode: "password",
+          modeSource: "config",
+          password: "pw",
+          allowTailscale: false,
+        },
+      }),
+    ).not.toThrow();
+  });
+
+  it("allows matching values when hooks are disabled", () => {
+    expect(() =>
+      assertHooksTokenSeparateFromGatewayAuth({
+        cfg: {
+          hooks: {
+            enabled: false,
+            token: "shared-gateway-token-1234567890",
+          },
+        },
+        auth: {
+          mode: "token",
+          modeSource: "config",
+          token: "shared-gateway-token-1234567890",
+          allowTailscale: false,
+        },
+      }),
+    ).not.toThrow();
   });
 });
