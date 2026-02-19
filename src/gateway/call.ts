@@ -310,7 +310,32 @@ function formatGatewayCloseError(
   const hint =
     code === 1006 ? "abnormal closure (no close frame)" : code === 1000 ? "normal closure" : "";
   const suffix = hint ? ` ${hint}` : "";
-  return `gateway closed (${code}${suffix}): ${reasonText}\n${connectionDetails.message}`;
+  const pairingHint = formatPairingRepairHint(reasonText);
+  const help = pairingHint ? `\n${pairingHint}` : "";
+  return `gateway closed (${code}${suffix}): ${reasonText}${help}\n${connectionDetails.message}`;
+}
+
+function extractPairingRequestId(reasonText: string): string | undefined {
+  const requestIdMatch = reasonText.match(/requestid\s*[:=]\s*([a-z0-9-]+)/i);
+  if (!requestIdMatch) {
+    return undefined;
+  }
+  const requestId = requestIdMatch[1]?.trim();
+  return requestId || undefined;
+}
+
+function formatPairingRepairHint(reasonText: string): string | undefined {
+  if (!reasonText.toLowerCase().includes("pairing required")) {
+    return undefined;
+  }
+  const requestId = extractPairingRequestId(reasonText);
+  const approveCommand = requestId
+    ? `openclaw devices approve ${requestId}`
+    : "openclaw devices approve --latest";
+  return [
+    `Fix: approve device pairing with ${approveCommand}`,
+    "Check pending requests with: openclaw devices list",
+  ].join("\n");
 }
 
 function formatGatewayTimeoutError(

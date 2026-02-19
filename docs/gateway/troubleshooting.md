@@ -304,6 +304,82 @@ Common signatures:
 - `device identity required` → device auth not satisfied.
 - `pairing required` → sender/device must be approved.
 
+#### Pairing required loop (scope upgrade / repair flow)
+
+If you repeatedly see:
+
+- `gateway connect failed: Error: pairing required`
+- `security audit: device access upgrade requested reason=scope-upgrade ...`
+
+then your client is asking for scopes that the currently paired device does not
+yet have.
+
+Run this in order:
+
+```bash
+openclaw devices list
+openclaw devices approve --latest
+openclaw devices list
+openclaw status
+openclaw gateway health
+```
+
+What to verify:
+
+- `Pending` list is empty after approval.
+- Paired device scopes now include the requested scope (commonly `operator.read`
+  or `operator.write`).
+- `openclaw status` no longer prints the pairing error prelude.
+
+If pending requests keep reappearing for the same `deviceId`, inspect current
+device auth state and service auth state together:
+
+```bash
+cat ~/.openclaw/identity/device-auth.json
+openclaw config get gateway.auth.token
+openclaw gateway status
+```
+
+#### Device token mismatch after auth/config changes
+
+If you see:
+
+- `unauthorized: device token mismatch (rotate/reissue device token)`
+
+run:
+
+```bash
+openclaw devices list
+openclaw devices approve --latest
+openclaw status
+```
+
+If it persists, force token/auth reconciliation:
+
+```bash
+openclaw doctor --generate-gateway-token --repair --non-interactive
+openclaw gateway install --force
+openclaw gateway restart
+openclaw status
+```
+
+#### Service token drift (config token != service token)
+
+If `openclaw gateway restart` warns that config token differs from service
+token, reinstall the service so LaunchAgent/systemd env is synchronized:
+
+```bash
+openclaw gateway install --force
+openclaw gateway restart
+openclaw gateway status
+```
+
+You should see:
+
+- `Config (cli): ~/.openclaw/openclaw.json`
+- `Config (service): ~/.openclaw/openclaw.json`
+- `RPC probe: ok`
+
 If the service config and runtime still disagree after checks, reinstall service metadata from the same profile/state directory:
 
 ```bash

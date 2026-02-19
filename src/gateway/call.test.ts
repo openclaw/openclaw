@@ -384,6 +384,50 @@ describe("callGateway error details", () => {
     expect(err?.message).toContain("Bind: loopback");
   });
 
+  it("prints pairing repair command with request id from close reason", async () => {
+    startMode = "close";
+    closeCode = 1008;
+    closeReason = "pairing required (requestId: abc123)";
+    loadConfig.mockReturnValue({
+      gateway: { mode: "local", bind: "loopback" },
+    });
+    resolveGatewayPort.mockReturnValue(18789);
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+
+    let errMessage = "";
+    try {
+      await callGateway({ method: "health" });
+    } catch (caught) {
+      errMessage = caught instanceof Error ? caught.message : String(caught);
+    }
+
+    expect(errMessage).toContain("gateway closed (1008)");
+    expect(errMessage).toContain("pairing required");
+    expect(errMessage).toContain("openclaw devices approve abc123");
+    expect(errMessage).toContain("openclaw devices list");
+  });
+
+  it("prints pairing repair fallback when close reason has no request id", async () => {
+    startMode = "close";
+    closeCode = 1008;
+    closeReason = "pairing required";
+    loadConfig.mockReturnValue({
+      gateway: { mode: "local", bind: "loopback" },
+    });
+    resolveGatewayPort.mockReturnValue(18789);
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+
+    let errMessage = "";
+    try {
+      await callGateway({ method: "health" });
+    } catch (caught) {
+      errMessage = caught instanceof Error ? caught.message : String(caught);
+    }
+
+    expect(errMessage).toContain("gateway closed (1008)");
+    expect(errMessage).toContain("openclaw devices approve --latest");
+  });
+
   it("includes connection details on timeout", async () => {
     startMode = "silent";
     loadConfig.mockReturnValue({
