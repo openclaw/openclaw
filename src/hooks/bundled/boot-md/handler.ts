@@ -1,9 +1,9 @@
 import type { CliDeps } from "../../../cli/deps.js";
+import type { OpenClawConfig } from "../../../config/config.js";
+import type { HookHandler } from "../../hooks.js";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../../../agents/agent-scope.js";
 import { createDefaultDeps } from "../../../cli/deps.js";
-import type { OpenClawConfig } from "../../../config/config.js";
 import { runBootOnce } from "../../../gateway/boot.js";
-import type { HookHandler } from "../../hooks.js";
 
 type BootHookContext = {
   cfg?: OpenClawConfig;
