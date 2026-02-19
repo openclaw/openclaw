@@ -142,7 +142,7 @@ export async function mergeHybridResults(params: {
   // Deduplicate by id before returning
   const seen = new Set<string>();
   const deduped = sorted.filter((r) => {
-    const id = `${r.path}:${r.startLine}:${r.endLine}`;
+    const id = `${r.source}:${r.path}:${r.startLine}:${r.endLine}`;
     if (seen.has(id)) {
       return false;
     }
