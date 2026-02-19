@@ -138,12 +138,14 @@ describe("chat.send command transcript – user message persistence", () => {
     };
 
     await chatHandlers["chat.send"]({
+      req: {} as never,
       params: {
         sessionKey: "test-session",
         message: "/status",
         idempotencyKey: "run-1",
       },
       respond,
+      isWebchatConnect: () => false,
       context: context as never,
       // Provide a minimal stub matching GatewayClient so the handler exercises
       // the optional-chaining paths (connect, connId, caps) under realistic conditions.
@@ -155,7 +157,7 @@ describe("chat.send command transcript – user message persistence", () => {
         },
         connId: "test-conn",
       },
-    });
+    } as never);
 
     // Wait for broadcastChatFinal to fire — this happens after transcript writes complete.
     // Bounded timeout ensures failures surface as assertions instead of suite-level hangs.
