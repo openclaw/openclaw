@@ -1,5 +1,9 @@
 import { isRecord } from "../utils.js";
-import { buildUsageHttpErrorSnapshot, fetchJson } from "./provider-usage.fetch.shared.js";
+import {
+  buildUsageHttpErrorSnapshot,
+  fetchJson,
+  parseFiniteNumber,
+} from "./provider-usage.fetch.shared.js";
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
 import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
 
@@ -151,15 +155,9 @@ const WINDOW_MINUTE_KEYS = [
 
 function pickNumber(record: Record<string, unknown>, keys: readonly string[]): number | undefined {
   for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "number" && Number.isFinite(value)) {
-      return value;
-    }
-    if (typeof value === "string") {
-      const parsed = Number.parseFloat(value);
-      if (Number.isFinite(parsed)) {
-        return parsed;
-      }
+    const parsed = parseFiniteNumber(record[key]);
+    if (parsed !== undefined) {
+      return parsed;
     }
   }
   return undefined;
