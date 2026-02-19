@@ -4,6 +4,7 @@ import {
   evaluateSessionFreshness,
   loadSessionStore,
   resolveSessionResetPolicy,
+  resolveSessionTranscriptPath,
   resolveStorePath,
   type SessionEntry,
 } from "../../config/sessions.js";
@@ -65,6 +66,10 @@ export function resolveCronSession(params: {
     sessionId,
     updatedAt: params.nowMs,
     systemSent,
+    // Update sessionFile path when creating a new session
+    ...(isNewSession && {
+      sessionFile: resolveSessionTranscriptPath(sessionId, params.agentId),
+    }),
   };
   return { storePath, store, sessionEntry, systemSent, isNewSession };
 }
