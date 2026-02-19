@@ -48,7 +48,7 @@ describe("acp prompt cwd prefix", () => {
     expect(requestSpy).toHaveBeenCalledWith(
       "chat.send",
       expect.objectContaining({
-        message: expect.stringContaining("[Working directory: ~/openclaw-test]"),
+        message: expect.stringMatching(/\[Working directory: ~[\\/]openclaw-test\]/),
       }),
       { expectFinal: true },
     );
