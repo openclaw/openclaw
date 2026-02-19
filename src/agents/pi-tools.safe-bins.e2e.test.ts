@@ -187,7 +187,8 @@ describe("createOpenClawCodingTools safeBins", () => {
       try {
         const result = await execTool!.execute("call-oracle", { command, workdir: tmpDir });
         const text = result.content.find((content) => content.type === "text")?.text ?? "";
-        return { kind: "result" as const, status: result.details.status, text };
+        const resultDetails = result.details as { status?: string };
+        return { kind: "result" as const, status: resultDetails.status, text };
       } catch (err) {
         return { kind: "error" as const, message: String(err) };
       }
