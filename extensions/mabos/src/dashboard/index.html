@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MABOS Dashboard</title>
+  <link rel="stylesheet" href="/mabos/dashboard/styles.css">
+</head>
+<body>
+  <div class="app">
+    <nav class="sidebar">
+      <div class="sidebar-header">
+        <h1>MABOS</h1>
+        <div class="subtitle">Multi-Agent Business OS</div>
+      </div>
+      <div id="business-switcher"></div>
+      <a class="nav-item active" data-view="overview">Overview</a>
+      <a class="nav-item" data-view="onboard">Onboard Business</a>
+      <a class="nav-item" data-view="decisions">Decision Queue</a>
+      <a class="nav-item" data-view="goals">Goals</a>
+      <a class="nav-item" data-view="workflows">Workflows</a>
+      <a class="nav-item" data-view="agents-mgmt">Agents</a>
+      <a class="nav-item" data-view="performance">Performance</a>
+      <a class="nav-item" data-view="businesses">Businesses</a>
+      <a class="nav-item" data-view="contractors">Contractors</a>
+    </nav>
+    <main class="main" id="main-content">
+      <div class="loading">Loading...</div>
+    </main>
+  </div>
+  <script src="/mabos/dashboard/data.js"></script>
+  <script src="/mabos/dashboard/wizard.js"></script>
+  <script src="/mabos/dashboard/goals.js"></script>
+  <script src="/mabos/dashboard/gantt.js"></script>
+  <script src="/mabos/dashboard/kanban.js"></script>
+  <script src="/mabos/dashboard/agents.js"></script>
+  <script src="/mabos/dashboard/performance.js"></script>
+  <script src="/mabos/dashboard/app.js"></script>
+</body>
+</html>

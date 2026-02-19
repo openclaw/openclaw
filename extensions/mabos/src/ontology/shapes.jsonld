@@ -1,0 +1,140 @@
+{
+  "@context": {
+    "mabos": "https://mabos.io/ontology/",
+    "sh": "http://www.w3.org/ns/shacl#",
+    "xsd": "http://www.w3.org/2001/XMLSchema#",
+    "rdfs": "http://www.w3.org/2000/01/rdf-schema#"
+  },
+  "@id": "https://mabos.io/ontology/shapes",
+  "rdfs:label": "MABOS Validation Shapes",
+  "rdfs:comment": "SHACL-inspired validation constraints for MABOS ontology instances",
+  "@graph": [
+    {
+      "@id": "mabos:AgentShape",
+      "@type": "sh:NodeShape",
+      "sh:targetClass": "mabos:Agent",
+      "rdfs:comment": "An agent must have at least one belief, one desire, and a role",
+      "sh:property": [
+        { "sh:path": "mabos:hasBelief", "sh:minCount": 1, "sh:message": "Agent must have at least one belief" },
+        { "sh:path": "mabos:hasDesire", "sh:minCount": 1, "sh:message": "Agent must have at least one desire" },
+        { "sh:path": "mabos:hasRole", "sh:minCount": 1, "sh:maxCount": 1, "sh:message": "Agent must have exactly one role" },
+        { "sh:path": "mabos:belongsTo", "sh:minCount": 1, "sh:maxCount": 1, "sh:message": "Agent must belong to exactly one organization" }
+      ]
+    },
+    {
+      "@id": "mabos:BeliefShape",
+      "@type": "sh:NodeShape",
+      "sh:targetClass": "mabos:Belief",
+      "rdfs:comment": "A belief must have a certainty value between 0 and 1",
+      "sh:property": [
+        { "sh:path": "mabos:certainty", "sh:minCount": 1, "sh:maxCount": 1, "sh:datatype": "xsd:float", "sh:minInclusive": 0.0, "sh:maxInclusive": 1.0, "sh:message": "Belief certainty must be 0.0-1.0" }
+      ]
+    },
+    {
+      "@id": "mabos:GoalShape",
+      "@type": "sh:NodeShape",
+      "sh:targetClass": "mabos:Goal",
+      "rdfs:comment": "A goal must have a priority and at least one measurement metric",
+      "sh:property": [
+        { "sh:path": "mabos:priority", "sh:minCount": 1, "sh:maxCount": 1, "sh:datatype": "xsd:float", "sh:minInclusive": 0.0, "sh:maxInclusive": 1.0, "sh:message": "Goal priority must be 0.0-1.0" },
+        { "sh:path": "mabos:measuredBy", "sh:minCount": 1, "sh:message": "Goal must have at least one measurement metric" }
+      ]
+    },
+    {
+      "@id": "mabos:IntentionShape",
+      "@type": "sh:NodeShape",
+      "sh:targetClass": "mabos:Intention",
+      "rdfs:comment": "An intention must reference the plan it executes",
+      "sh:property": [
+        { "sh:path": "mabos:executesPlan", "sh:minCount": 1, "sh:maxCount": 1, "sh:message": "Intention must execute exactly one plan" }
+      ]
+    },
+    {
+      "@id": "mabos:PlanShape",
+      "@type": "sh:NodeShape",
+      "sh:targetClass": "mabos:Plan",
+      "rdfs:comment": "A plan must serve a goal and have at least one step",
+      "sh:property": [
+        { "sh:path": "mabos:servesGoal", "sh:minCount": 1, "sh:maxCount": 1, "sh:message": "Plan must serve exactly one goal" },
+        { "sh:path": "mabos:hasStep", "sh:minCount": 1, "sh:message": "Plan must have at least one step" }
+      ]
+    },
+    {
+      "@id": "mabos:FactShape",
+      "@type": "sh:NodeShape",
+      "sh:targetClass": "mabos:Fact",
+      "rdfs:comment": "A fact must have a confidence value between 0 and 1",
+      "sh:property": [
+        { "sh:path": "mabos:confidence", "sh:minCount": 1, "sh:maxCount": 1, "sh:datatype": "xsd:float", "sh:minInclusive": 0.0, "sh:maxInclusive": 1.0, "sh:message": "Fact confidence must be 0.0-1.0" }
+      ]
+    },
+    {
+      "@id": "mabos:DecisionShape",
+      "@type": "sh:NodeShape",
+      "sh:targetClass": "mabos:Decision",
+      "rdfs:comment": "A decision must have urgency and be raised by an agent",
+      "sh:property": [
+        { "sh:path": "mabos:urgency", "sh:minCount": 1, "sh:maxCount": 1, "sh:datatype": "xsd:float", "sh:minInclusive": 0.0, "sh:maxInclusive": 1.0, "sh:message": "Decision urgency must be 0.0-1.0" },
+        { "sh:path": "mabos:raisedBy", "sh:minCount": 1, "sh:maxCount": 1, "sh:message": "Decision must be raised by exactly one agent" }
+      ]
+    },
+    {
+      "@id": "mabos:BusinessShape",
+      "@type": "sh:NodeShape",
+      "sh:targetClass": "mabos:Business",
+      "rdfs:comment": "A business must have a legal entity, a type, and be governed by a stakeholder",
+      "sh:property": [
+        { "sh:path": "mabos:hasLegalEntity", "sh:minCount": 1, "sh:message": "Business must have at least one legal entity" },
+        { "sh:path": "mabos:businessType", "sh:minCount": 1, "sh:maxCount": 1, "sh:message": "Business must have a type (ecommerce, saas, consulting, marketplace, retail)" },
+        { "sh:path": "mabos:hasArchitecture", "sh:maxCount": 1, "sh:message": "Business can have at most one enterprise architecture" }
+      ]
+    },
+    {
+      "@id": "mabos:OrganizationShape",
+      "@type": "sh:NodeShape",
+      "sh:targetClass": "mabos:Organization",
+      "rdfs:comment": "An organization must be governed by at least one stakeholder",
+      "sh:property": [
+        { "sh:path": "mabos:governedBy", "sh:minCount": 1, "sh:message": "Organization must have at least one governing stakeholder" }
+      ]
+    },
+    {
+      "@id": "mabos:ContractorShape",
+      "@type": "sh:NodeShape",
+      "sh:targetClass": "mabos:Contractor",
+      "rdfs:comment": "A contractor must have a trust score",
+      "sh:property": [
+        { "sh:path": "mabos:trustScore", "sh:minCount": 1, "sh:maxCount": 1, "sh:datatype": "xsd:float", "sh:minInclusive": 0.0, "sh:maxInclusive": 1.0, "sh:message": "Contractor trust score must be 0.0-1.0" }
+      ]
+    },
+    {
+      "@id": "mabos:MessageShape",
+      "@type": "sh:NodeShape",
+      "sh:targetClass": "mabos:Message",
+      "rdfs:comment": "A message must have a performative and conversation ID",
+      "sh:property": [
+        { "sh:path": "mabos:hasPerformative", "sh:minCount": 1, "sh:maxCount": 1, "sh:message": "Message must have exactly one performative" },
+        { "sh:path": "mabos:conversationId", "sh:minCount": 1, "sh:maxCount": 1, "sh:message": "Message must have a conversation ID" }
+      ]
+    },
+    {
+      "@id": "mabos:WorkPackageShape",
+      "@type": "sh:NodeShape",
+      "sh:targetClass": "mabos:WorkPackage",
+      "rdfs:comment": "A work package must be assigned to a contractor",
+      "sh:property": [
+        { "sh:path": "mabos:assignedTo", "sh:minCount": 1, "sh:maxCount": 1, "sh:message": "Work package must be assigned to exactly one contractor" }
+      ]
+    },
+    {
+      "@id": "mabos:KPIShape",
+      "@type": "sh:NodeShape",
+      "sh:targetClass": "mabos:KPI",
+      "rdfs:comment": "A KPI must have target and actual values",
+      "sh:property": [
+        { "sh:path": "mabos:kpiTarget", "sh:minCount": 1, "sh:maxCount": 1, "sh:message": "KPI must have a target value" },
+        { "sh:path": "mabos:kpiActual", "sh:minCount": 1, "sh:maxCount": 1, "sh:message": "KPI must have an actual value" }
+      ]
+    }
+  ]
+}

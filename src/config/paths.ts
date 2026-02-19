@@ -20,8 +20,15 @@ export const isNixMode = resolveIsNixMode();
 // Support historical (and occasionally misspelled) legacy state dirs.
 const LEGACY_STATE_DIRNAMES = [".clawdbot", ".moldbot", ".moltbot"] as const;
 const NEW_STATE_DIRNAME = ".openclaw";
+const MABOS_STATE_DIRNAME = ".mabos";
 const CONFIG_FILENAME = "openclaw.json";
+const MABOS_CONFIG_FILENAME = "mabos.json";
 const LEGACY_CONFIG_FILENAMES = ["clawdbot.json", "moldbot.json", "moltbot.json"] as const;
+
+/** Returns true when launched via `mabos` CLI (MABOS_PRODUCT=1). */
+export function isMabosProduct(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.MABOS_PRODUCT === "1";
+}
 
 function resolveDefaultHomeDir(): string {
   return resolveRequiredHomeDir(process.env, os.homedir);
@@ -54,18 +61,36 @@ export function resolveNewStateDir(homedir: () => string = resolveDefaultHomeDir
 
 /**
  * State directory for mutable data (sessions, logs, caches).
- * Can be overridden via OPENCLAW_STATE_DIR.
- * Default: ~/.openclaw
+ * Can be overridden via MABOS_STATE_DIR / OPENCLAW_STATE_DIR.
+ * When running as MABOS: default ~/.mabos, fallback ~/.openclaw
+ * When running as OpenClaw: default ~/.openclaw (unchanged)
  */
 export function resolveStateDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = envHomedir(env),
 ): string {
   const effectiveHomedir = () => resolveRequiredHomeDir(env, homedir);
+
+  // MABOS-specific override takes precedence
+  const mabosOverride = env.MABOS_STATE_DIR?.trim();
+  if (mabosOverride) {
+    return resolveUserPath(mabosOverride, env, effectiveHomedir);
+  }
+
   const override = env.OPENCLAW_STATE_DIR?.trim() || env.CLAWDBOT_STATE_DIR?.trim();
   if (override) {
     return resolveUserPath(override, env, effectiveHomedir);
   }
+
+  // When running as MABOS product, prefer ~/.mabos
+  if (isMabosProduct(env)) {
+    const mabosDir = path.join(effectiveHomedir(), MABOS_STATE_DIRNAME);
+    if (fs.existsSync(mabosDir)) {
+      return mabosDir;
+    }
+    // Fall through to check ~/.openclaw for migration compatibility
+  }
+
   const newDir = newStateDir(effectiveHomedir);
   const legacyDirs = legacyStateDirs(effectiveHomedir);
   const hasNew = fs.existsSync(newDir);
@@ -81,6 +106,11 @@ export function resolveStateDir(
   });
   if (existingLegacy) {
     return existingLegacy;
+  }
+
+  // Default: ~/.mabos for MABOS product, ~/.openclaw otherwise
+  if (isMabosProduct(env)) {
+    return path.join(effectiveHomedir(), MABOS_STATE_DIRNAME);
   }
   return newDir;
 }
@@ -116,9 +146,19 @@ export function resolveCanonicalConfigPath(
   env: NodeJS.ProcessEnv = process.env,
   stateDir: string = resolveStateDir(env, envHomedir(env)),
 ): string {
-  const override = env.OPENCLAW_CONFIG_PATH?.trim() || env.CLAWDBOT_CONFIG_PATH?.trim();
+  const override =
+    env.MABOS_CONFIG_PATH?.trim() ||
+    env.OPENCLAW_CONFIG_PATH?.trim() ||
+    env.CLAWDBOT_CONFIG_PATH?.trim();
   if (override) {
     return resolveUserPath(override, env, envHomedir(env));
+  }
+  // When running as MABOS, prefer mabos.json if it exists
+  if (isMabosProduct(env)) {
+    const mabosConfig = path.join(stateDir, MABOS_CONFIG_FILENAME);
+    if (fs.existsSync(mabosConfig)) {
+      return mabosConfig;
+    }
   }
   return path.join(stateDir, CONFIG_FILENAME);
 }

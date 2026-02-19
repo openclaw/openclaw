@@ -1,0 +1,428 @@
+{
+  "@context": {
+    "mabos": "https://mabos.io/ontology/",
+    "consult": "https://mabos.io/ontology/consulting/",
+    "owl": "http://www.w3.org/2002/07/owl#",
+    "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
+    "xsd": "http://www.w3.org/2001/XMLSchema#",
+    "sbvr": "https://mabos.io/ontology/sbvr/"
+  },
+  "@id": "https://mabos.io/ontology/consulting",
+  "@type": "owl:Ontology",
+  "owl:imports": "https://mabos.io/ontology/business-core",
+  "rdfs:label": "Consulting Domain Ontology",
+  "rdfs:comment": "Domain concepts for professional services, consulting engagements, and knowledge-based businesses",
+  "@graph": [
+    {
+      "@id": "consult:Engagement",
+      "@type": "owl:Class",
+      "rdfs:label": "Client Engagement",
+      "rdfs:comment": "A contracted consulting project with scope, timeline, deliverables, and billing arrangement",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "client engagement",
+      "sbvr:definition": "Client Engagement is a contracted consulting project that has scope, timeline, deliverables, and billing arrangement",
+      "sbvr:vocabulary": "consulting"
+    },
+    {
+      "@id": "consult:Client",
+      "@type": "owl:Class",
+      "rdfs:subClassOf": "mabos:Customer",
+      "rdfs:label": "Client",
+      "rdfs:comment": "An organization or individual retaining consulting services",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "client",
+      "sbvr:definition": "Client is an organization or individual that retains consulting services",
+      "sbvr:vocabulary": "consulting"
+    },
+    {
+      "@id": "consult:Proposal",
+      "@type": "owl:Class",
+      "rdfs:label": "Proposal",
+      "rdfs:comment": "A formal offer of services with scope, approach, timeline, team, and pricing",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "proposal",
+      "sbvr:definition": "Proposal is a formal offer that describes services with scope, approach, timeline, team, and pricing",
+      "sbvr:vocabulary": "consulting"
+    },
+    {
+      "@id": "consult:SOW",
+      "@type": "owl:Class",
+      "rdfs:label": "Statement of Work",
+      "rdfs:comment": "A detailed scope document defining deliverables, milestones, acceptance criteria, and payment terms",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "statement of work",
+      "sbvr:definition": "Statement of Work is a detailed scope document that defines deliverables, milestones, acceptance criteria, and payment terms",
+      "sbvr:vocabulary": "consulting"
+    },
+    {
+      "@id": "consult:Deliverable",
+      "@type": "owl:Class",
+      "rdfs:label": "Deliverable",
+      "rdfs:comment": "A tangible work product produced during an engagement (report, model, system, etc.)",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "deliverable",
+      "sbvr:definition": "Deliverable is a tangible work product that is produced during an engagement",
+      "sbvr:vocabulary": "consulting"
+    },
+    {
+      "@id": "consult:Milestone",
+      "@type": "owl:Class",
+      "rdfs:label": "Milestone",
+      "rdfs:comment": "A significant checkpoint in the engagement with review, approval, and billing trigger",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "milestone",
+      "sbvr:definition": "Milestone is a significant checkpoint that marks progress in an engagement with review, approval, and billing trigger",
+      "sbvr:vocabulary": "consulting"
+    },
+    {
+      "@id": "consult:ServiceLine",
+      "@type": "owl:Class",
+      "rdfs:subClassOf": "mabos:Service",
+      "rdfs:label": "Service Line",
+      "rdfs:comment": "A category of consulting services offered (strategy, tech, operations, etc.)",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "service line",
+      "sbvr:definition": "Service Line is a category of consulting services that is offered by the firm",
+      "sbvr:vocabulary": "consulting"
+    },
+    {
+      "@id": "consult:Expert",
+      "@type": "owl:Class",
+      "rdfs:subClassOf": "mabos:Contractor",
+      "rdfs:label": "Subject Matter Expert",
+      "rdfs:comment": "A consultant or contractor with specialized domain expertise",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "subject matter expert",
+      "sbvr:definition": "Subject Matter Expert is a consultant or contractor that has specialized domain expertise",
+      "sbvr:vocabulary": "consulting"
+    },
+    {
+      "@id": "consult:TimeEntry",
+      "@type": "owl:Class",
+      "rdfs:label": "Time Entry",
+      "rdfs:comment": "A record of billable or non-billable hours worked by a consultant",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "time entry",
+      "sbvr:definition": "Time Entry is a record that tracks billable or non-billable hours worked by a consultant",
+      "sbvr:vocabulary": "consulting"
+    },
+    {
+      "@id": "consult:ConsultingInvoice",
+      "@type": "owl:Class",
+      "rdfs:subClassOf": "mabos:Invoice",
+      "rdfs:label": "Invoice",
+      "rdfs:comment": "A billing document for consulting services with time, expenses, and milestone charges",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "invoice",
+      "sbvr:definition": "Invoice is a billing document that itemizes consulting services with time, expenses, and milestone charges",
+      "sbvr:vocabulary": "consulting"
+    },
+    {
+      "@id": "consult:RiskRegister",
+      "@type": "owl:Class",
+      "rdfs:label": "Risk Register",
+      "rdfs:comment": "A log of identified risks with probability, impact, mitigation strategies, and ownership",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "risk register",
+      "sbvr:definition": "Risk Register is a log that tracks identified risks with probability, impact, mitigation strategies, and ownership",
+      "sbvr:vocabulary": "consulting"
+    },
+    {
+      "@id": "consult:Risk",
+      "@type": "owl:Class",
+      "rdfs:label": "Risk",
+      "rdfs:comment": "A specific risk entry with category, likelihood, impact score, and response plan",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "risk",
+      "sbvr:definition": "Risk is a specific risk entry that has category, likelihood, impact score, and response plan",
+      "sbvr:vocabulary": "consulting"
+    },
+    {
+      "@id": "consult:KnowledgeBase",
+      "@type": "owl:Class",
+      "rdfs:label": "Knowledge Base",
+      "rdfs:comment": "A repository of reusable frameworks, templates, case studies, and best practices",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "knowledge base",
+      "sbvr:definition": "Knowledge Base is a repository that contains reusable frameworks, templates, case studies, and best practices",
+      "sbvr:vocabulary": "consulting"
+    },
+    {
+      "@id": "consult:Template",
+      "@type": "owl:Class",
+      "rdfs:label": "Template",
+      "rdfs:comment": "A reusable document template for proposals, reports, or deliverables",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "template",
+      "sbvr:definition": "Template is a reusable document that serves as a starting point for proposals, reports, or deliverables",
+      "sbvr:vocabulary": "consulting"
+    },
+    {
+      "@id": "consult:Framework",
+      "@type": "owl:Class",
+      "rdfs:label": "Framework",
+      "rdfs:comment": "A structured methodology or analytical framework (SWOT, Porter's, BCG, etc.)",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "framework",
+      "sbvr:definition": "Framework is a structured methodology that provides an analytical approach for consulting engagements",
+      "sbvr:vocabulary": "consulting"
+    },
+    {
+      "@id": "consult:Workshop",
+      "@type": "owl:Class",
+      "rdfs:label": "Workshop",
+      "rdfs:comment": "A facilitated working session with the client (discovery, design thinking, strategy)",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "workshop",
+      "sbvr:definition": "Workshop is a facilitated working session that is conducted with the client for discovery, design thinking, or strategy",
+      "sbvr:vocabulary": "consulting"
+    },
+    {
+      "@id": "consult:Stakeholder",
+      "@type": "owl:Class",
+      "rdfs:label": "Client Stakeholder",
+      "rdfs:comment": "A key person at the client organization influencing the engagement",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "client stakeholder",
+      "sbvr:definition": "Client Stakeholder is a key person that is at the client organization and influences the engagement",
+      "sbvr:vocabulary": "consulting"
+    },
+    {
+      "@id": "consult:ChangeRequest",
+      "@type": "owl:Class",
+      "rdfs:label": "Change Request",
+      "rdfs:comment": "A formal request to modify scope, timeline, or budget of an engagement",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "change request",
+      "sbvr:definition": "Change Request is a formal request that seeks to modify the scope, timeline, or budget of an engagement",
+      "sbvr:vocabulary": "consulting"
+    },
+
+    { "@id": "consult:billableRate", "@type": "owl:DatatypeProperty", "rdfs:domain": "consult:Expert", "rdfs:range": "xsd:decimal", "rdfs:comment": "Hourly billable rate in base currency" },
+    { "@id": "consult:costRate", "@type": "owl:DatatypeProperty", "rdfs:domain": "consult:Expert", "rdfs:range": "xsd:decimal", "rdfs:comment": "Internal cost rate per hour" },
+    { "@id": "consult:utilizationRate", "@type": "owl:DatatypeProperty", "rdfs:domain": "consult:Expert", "rdfs:range": "xsd:float", "rdfs:comment": "Percentage of available hours that are billable 0.0-1.0" },
+    { "@id": "consult:engagementValue", "@type": "owl:DatatypeProperty", "rdfs:domain": "consult:Engagement", "rdfs:range": "xsd:decimal", "rdfs:comment": "Total contracted value of the engagement" },
+    { "@id": "consult:revenueRecognized", "@type": "owl:DatatypeProperty", "rdfs:domain": "consult:Engagement", "rdfs:range": "xsd:decimal", "rdfs:comment": "Revenue recognized to date" },
+    { "@id": "consult:satisfactionScore", "@type": "owl:DatatypeProperty", "rdfs:domain": "consult:Engagement", "rdfs:range": "xsd:float", "rdfs:comment": "Client satisfaction score 0.0-10.0" },
+    { "@id": "consult:hoursLogged", "@type": "owl:DatatypeProperty", "rdfs:domain": "consult:TimeEntry", "rdfs:range": "xsd:decimal", "rdfs:comment": "Hours logged in this time entry" },
+    { "@id": "consult:isBillable", "@type": "owl:DatatypeProperty", "rdfs:domain": "consult:TimeEntry", "rdfs:range": "xsd:boolean", "rdfs:comment": "Whether this time is billable to the client" },
+    { "@id": "consult:riskProbability", "@type": "owl:DatatypeProperty", "rdfs:domain": "consult:Risk", "rdfs:range": "xsd:float", "rdfs:comment": "Probability of occurrence 0.0-1.0" },
+    { "@id": "consult:riskImpact", "@type": "owl:DatatypeProperty", "rdfs:domain": "consult:Risk", "rdfs:range": "xsd:float", "rdfs:comment": "Impact severity 0.0-1.0" },
+    { "@id": "consult:marginPercent", "@type": "owl:DatatypeProperty", "rdfs:domain": "consult:Engagement", "rdfs:range": "xsd:float", "rdfs:comment": "Profit margin percentage on this engagement" },
+    { "@id": "consult:scopeCreep", "@type": "owl:DatatypeProperty", "rdfs:domain": "consult:Engagement", "rdfs:range": "xsd:float", "rdfs:comment": "Percentage of additional work beyond original scope 0.0+" },
+    { "@id": "consult:repeatRate", "@type": "owl:DatatypeProperty", "rdfs:domain": "consult:Client", "rdfs:range": "xsd:float", "rdfs:comment": "Rate of returning for additional engagements 0.0-1.0" },
+    { "@id": "consult:pipelineValue", "@type": "owl:DatatypeProperty", "rdfs:domain": "consult:Proposal", "rdfs:range": "xsd:decimal", "rdfs:comment": "Potential revenue value of this proposal" },
+    { "@id": "consult:winProbability", "@type": "owl:DatatypeProperty", "rdfs:domain": "consult:Proposal", "rdfs:range": "xsd:float", "rdfs:comment": "Estimated probability of winning this proposal 0.0-1.0" },
+
+    {
+      "@id": "consult:hasClient",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "consult:Engagement",
+      "rdfs:range": "consult:Client",
+      "rdfs:comment": "The client this engagement serves",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Engagement has Client",
+      "sbvr:roles": [
+        { "sbvr:roleName": "serving engagement", "sbvr:rolePlayer": "consult:Engagement" },
+        { "sbvr:roleName": "served client", "sbvr:rolePlayer": "consult:Client" }
+      ]
+    },
+    {
+      "@id": "consult:hasDeliverable",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "consult:Engagement",
+      "rdfs:range": "consult:Deliverable",
+      "rdfs:comment": "Deliverables produced in this engagement",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Engagement has Deliverable",
+      "sbvr:roles": [
+        { "sbvr:roleName": "producing engagement", "sbvr:rolePlayer": "consult:Engagement" },
+        { "sbvr:roleName": "produced deliverable", "sbvr:rolePlayer": "consult:Deliverable" }
+      ]
+    },
+    {
+      "@id": "consult:hasMilestone",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "consult:Engagement",
+      "rdfs:range": "consult:Milestone",
+      "rdfs:comment": "Milestones within this engagement",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Engagement has Milestone",
+      "sbvr:roles": [
+        { "sbvr:roleName": "milestone engagement", "sbvr:rolePlayer": "consult:Engagement" },
+        { "sbvr:roleName": "engagement milestone", "sbvr:rolePlayer": "consult:Milestone" }
+      ]
+    },
+    {
+      "@id": "consult:assignedExpert",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "consult:Engagement",
+      "rdfs:range": "consult:Expert",
+      "rdfs:comment": "Consultants assigned to this engagement",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Engagement has assigned Expert",
+      "sbvr:roles": [
+        { "sbvr:roleName": "staffed engagement", "sbvr:rolePlayer": "consult:Engagement" },
+        { "sbvr:roleName": "assigned expert", "sbvr:rolePlayer": "consult:Expert" }
+      ]
+    },
+    {
+      "@id": "consult:partOfServiceLine",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "consult:Engagement",
+      "rdfs:range": "consult:ServiceLine",
+      "rdfs:comment": "The service line this engagement falls under",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Engagement is part of ServiceLine",
+      "sbvr:roles": [
+        { "sbvr:roleName": "categorized engagement", "sbvr:rolePlayer": "consult:Engagement" },
+        { "sbvr:roleName": "service line", "sbvr:rolePlayer": "consult:ServiceLine" }
+      ]
+    },
+    {
+      "@id": "consult:governedBySOW",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "consult:Engagement",
+      "rdfs:range": "consult:SOW",
+      "rdfs:comment": "The statement of work governing this engagement",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Engagement is governed by SOW",
+      "sbvr:roles": [
+        { "sbvr:roleName": "governed engagement", "sbvr:rolePlayer": "consult:Engagement" },
+        { "sbvr:roleName": "governing sow", "sbvr:rolePlayer": "consult:SOW" }
+      ]
+    },
+    {
+      "@id": "consult:hasRiskRegister",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "consult:Engagement",
+      "rdfs:range": "consult:RiskRegister",
+      "rdfs:comment": "The risk register tracking this engagement's risks",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Engagement has RiskRegister",
+      "sbvr:roles": [
+        { "sbvr:roleName": "risk-tracked engagement", "sbvr:rolePlayer": "consult:Engagement" },
+        { "sbvr:roleName": "risk register", "sbvr:rolePlayer": "consult:RiskRegister" }
+      ]
+    },
+    {
+      "@id": "consult:containsRisk",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "consult:RiskRegister",
+      "rdfs:range": "consult:Risk",
+      "rdfs:comment": "Risks tracked in this register",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "RiskRegister contains Risk",
+      "sbvr:roles": [
+        { "sbvr:roleName": "containing register", "sbvr:rolePlayer": "consult:RiskRegister" },
+        { "sbvr:roleName": "contained risk", "sbvr:rolePlayer": "consult:Risk" }
+      ]
+    },
+    {
+      "@id": "consult:usesFramework",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "consult:Engagement",
+      "rdfs:range": "consult:Framework",
+      "rdfs:comment": "Analytical frameworks applied in this engagement",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Engagement uses Framework",
+      "sbvr:roles": [
+        { "sbvr:roleName": "framework-using engagement", "sbvr:rolePlayer": "consult:Engagement" },
+        { "sbvr:roleName": "applied framework", "sbvr:rolePlayer": "consult:Framework" }
+      ]
+    },
+    {
+      "@id": "consult:usesTemplate",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "consult:Deliverable",
+      "rdfs:range": "consult:Template",
+      "rdfs:comment": "The template used to produce this deliverable",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Deliverable uses Template",
+      "sbvr:roles": [
+        { "sbvr:roleName": "templated deliverable", "sbvr:rolePlayer": "consult:Deliverable" },
+        { "sbvr:roleName": "used template", "sbvr:rolePlayer": "consult:Template" }
+      ]
+    },
+    {
+      "@id": "consult:loggedFor",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "consult:TimeEntry",
+      "rdfs:range": "consult:Engagement",
+      "rdfs:comment": "The engagement this time was logged against",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "TimeEntry is logged for Engagement",
+      "sbvr:roles": [
+        { "sbvr:roleName": "time entry", "sbvr:rolePlayer": "consult:TimeEntry" },
+        { "sbvr:roleName": "billed engagement", "sbvr:rolePlayer": "consult:Engagement" }
+      ]
+    },
+    {
+      "@id": "consult:loggedBy",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "consult:TimeEntry",
+      "rdfs:range": "consult:Expert",
+      "rdfs:comment": "The consultant who logged this time",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "TimeEntry is logged by Expert",
+      "sbvr:roles": [
+        { "sbvr:roleName": "logged time entry", "sbvr:rolePlayer": "consult:TimeEntry" },
+        { "sbvr:roleName": "logging expert", "sbvr:rolePlayer": "consult:Expert" }
+      ]
+    },
+    {
+      "@id": "consult:resultedInProposal",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "consult:Workshop",
+      "rdfs:range": "consult:Proposal",
+      "rdfs:comment": "A proposal that originated from this workshop",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Workshop resulted in Proposal",
+      "sbvr:roles": [
+        { "sbvr:roleName": "originating workshop", "sbvr:rolePlayer": "consult:Workshop" },
+        { "sbvr:roleName": "resulting proposal", "sbvr:rolePlayer": "consult:Proposal" }
+      ]
+    },
+    {
+      "@id": "consult:hasChangeRequest",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "consult:Engagement",
+      "rdfs:range": "consult:ChangeRequest",
+      "rdfs:comment": "Change requests on this engagement",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Engagement has ChangeRequest",
+      "sbvr:roles": [
+        { "sbvr:roleName": "changed engagement", "sbvr:rolePlayer": "consult:Engagement" },
+        { "sbvr:roleName": "change request", "sbvr:rolePlayer": "consult:ChangeRequest" }
+      ]
+    },
+    {
+      "@id": "consult:clientStakeholder",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "consult:Engagement",
+      "rdfs:range": "consult:Stakeholder",
+      "rdfs:comment": "Key stakeholders at the client for this engagement",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Engagement has client Stakeholder",
+      "sbvr:roles": [
+        { "sbvr:roleName": "stakeholder engagement", "sbvr:rolePlayer": "consult:Engagement" },
+        { "sbvr:roleName": "client stakeholder", "sbvr:rolePlayer": "consult:Stakeholder" }
+      ]
+    }
+  ]
+}

@@ -18,6 +18,21 @@ export type AgentModelConfig =
       fallbacks?: string[];
     };
 
+/** BDI (Belief-Desire-Intention) cognitive configuration for MABOS agents. */
+export type BdiConfig = {
+  /** How tenaciously the agent pursues committed intentions. */
+  commitmentStrategy?: "single-minded" | "open-minded" | "cautious";
+  /** BDI maintenance cycle timing. */
+  cycleFrequency?: {
+    /** Minutes between full BDI deliberation cycles. */
+    fullCycleMinutes?: number;
+    /** Minutes between lightweight belief-check cycles. */
+    quickCheckMinutes?: number;
+  };
+  /** Ordered list of preferred reasoning methods for this agent. */
+  reasoningMethods?: string[];
+};
+
 export type AgentConfig = {
   id: string;
   default?: boolean;
@@ -63,6 +78,8 @@ export type AgentConfig = {
     prune?: SandboxPruneSettings;
   };
   tools?: AgentToolsConfig;
+  /** BDI cognitive configuration (used by MABOS extension). */
+  bdi?: BdiConfig;
 };
 
 export type AgentsConfig = {

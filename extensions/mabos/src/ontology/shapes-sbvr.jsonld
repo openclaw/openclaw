@@ -1,0 +1,76 @@
+{
+  "@context": {
+    "mabos": "https://mabos.io/ontology/",
+    "sbvr": "https://mabos.io/ontology/sbvr/",
+    "sh": "http://www.w3.org/ns/shacl#",
+    "xsd": "http://www.w3.org/2001/XMLSchema#",
+    "rdfs": "http://www.w3.org/2000/01/rdf-schema#"
+  },
+  "@id": "https://mabos.io/ontology/shapes-sbvr",
+  "rdfs:label": "MABOS SBVR Validation Shapes",
+  "rdfs:comment": "SHACL shapes enforcing SBVR structural requirements on noun concepts, fact types, business rules, and proof tables",
+  "@graph": [
+    {
+      "@id": "sbvr:NounConceptShape",
+      "@type": "sh:NodeShape",
+      "sh:targetClass": "sbvr:NounConcept",
+      "rdfs:comment": "Every SBVR noun concept must have a designation, definition, and vocabulary",
+      "sh:property": [
+        { "sh:path": "sbvr:designation", "sh:minCount": 1, "sh:maxCount": 1, "sh:datatype": "xsd:string", "sh:message": "Noun concept must have exactly one designation" },
+        { "sh:path": "sbvr:definition", "sh:minCount": 1, "sh:maxCount": 1, "sh:datatype": "xsd:string", "sh:message": "Noun concept must have exactly one definition" },
+        { "sh:path": "sbvr:vocabulary", "sh:minCount": 1, "sh:maxCount": 1, "sh:datatype": "xsd:string", "sh:message": "Noun concept must belong to exactly one vocabulary" }
+      ]
+    },
+    {
+      "@id": "sbvr:FactTypeShape",
+      "@type": "sh:NodeShape",
+      "sh:targetClass": "sbvr:FactType",
+      "rdfs:comment": "Every SBVR fact type must have an arity (integer >= 1), a natural language reading, and roles matching the arity",
+      "sh:property": [
+        { "sh:path": "sbvr:arity", "sh:minCount": 1, "sh:maxCount": 1, "sh:datatype": "xsd:integer", "sh:minInclusive": 1, "sh:message": "Fact type must have an arity >= 1" },
+        { "sh:path": "sbvr:reading", "sh:minCount": 1, "sh:maxCount": 1, "sh:datatype": "xsd:string", "sh:message": "Fact type must have exactly one natural language reading" },
+        { "sh:path": "sbvr:roles", "sh:minCount": 1, "sh:message": "Fact type must have at least one role (count should match arity)" }
+      ]
+    },
+    {
+      "@id": "sbvr:FactTypeRoleShape",
+      "@type": "sh:NodeShape",
+      "sh:targetClass": "sbvr:FactTypeRole",
+      "rdfs:comment": "Every fact type role must have a role name and a role player",
+      "sh:property": [
+        { "sh:path": "sbvr:roleName", "sh:minCount": 1, "sh:maxCount": 1, "sh:datatype": "xsd:string", "sh:message": "Fact type role must have a role name" },
+        { "sh:path": "sbvr:rolePlayer", "sh:minCount": 1, "sh:maxCount": 1, "sh:message": "Fact type role must reference a role player (noun concept)" }
+      ]
+    },
+    {
+      "@id": "sbvr:BusinessRuleShape",
+      "@type": "sh:NodeShape",
+      "sh:targetClass": "sbvr:BusinessRule",
+      "rdfs:comment": "Every SBVR business rule must have a rule type, modality, and the fact type it constrains",
+      "sh:property": [
+        { "sh:path": "sbvr:ruleType", "sh:minCount": 1, "sh:maxCount": 1, "sh:datatype": "xsd:string", "sh:message": "Business rule must have a rule type (definitional or behavioral)" },
+        { "sh:path": "sbvr:ruleModality", "sh:minCount": 1, "sh:maxCount": 1, "sh:datatype": "xsd:string", "sh:message": "Business rule must have a modality (alethic or deontic)" },
+        { "sh:path": "sbvr:constrainsFact", "sh:minCount": 1, "sh:message": "Business rule must constrain at least one fact type" }
+      ]
+    },
+    {
+      "@id": "sbvr:ProofTableShape",
+      "@type": "sh:NodeShape",
+      "sh:targetClass": "sbvr:ProofTable",
+      "rdfs:comment": "Every proof table must have at least one proof entry",
+      "sh:property": [
+        { "sh:path": "sbvr:hasProofEntry", "sh:minCount": 1, "sh:message": "Proof table must have at least one proof entry" }
+      ]
+    },
+    {
+      "@id": "sbvr:ProofEntryShape",
+      "@type": "sh:NodeShape",
+      "sh:targetClass": "sbvr:ProofEntry",
+      "rdfs:comment": "Every proof entry must have a truth value and confidence level",
+      "sh:property": [
+        { "sh:path": "sbvr:truthValue", "sh:minCount": 1, "sh:maxCount": 1, "sh:datatype": "xsd:boolean", "sh:message": "Proof entry must have a truth value" },
+        { "sh:path": "sbvr:entryConfidence", "sh:minCount": 1, "sh:maxCount": 1, "sh:datatype": "xsd:float", "sh:minInclusive": 0.0, "sh:maxInclusive": 1.0, "sh:message": "Proof entry confidence must be 0.0-1.0" }
+      ]
+    }
+  ]
+}

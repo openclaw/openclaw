@@ -1,0 +1,32 @@
+{
+  "name": "@openclaw/mabos",
+  "version": "2026.2.17",
+  "private": true,
+  "description": "MABOS - Multi-Agent Business Operating System",
+  "license": "MIT",
+  "author": "Kingler Bercy <kingler@me.com>",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "check": "tsc --noEmit",
+    "clean": "rm -rf dist",
+    "test": "node --test dist/tests/*.test.js"
+  },
+  "dependencies": {
+    "@sinclair/typebox": "^0.34.0",
+    "typedb-driver-http": "^3.0.0"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*",
+    "typescript": "^5.4.0"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.1.26"
+  },
+  "openclaw": {
+    "id": "mabos",
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

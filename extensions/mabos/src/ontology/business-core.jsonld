@@ -1,0 +1,916 @@
+{
+  "@context": {
+    "mabos": "https://mabos.io/ontology/",
+    "sbvr": "https://mabos.io/ontology/sbvr/",
+    "schema": "https://schema.org/",
+    "owl": "http://www.w3.org/2002/07/owl#",
+    "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
+    "xsd": "http://www.w3.org/2001/XMLSchema#"
+  },
+  "@id": "https://mabos.io/ontology/business-core",
+  "@type": "owl:Ontology",
+  "owl:imports": "https://mabos.io/ontology/upper",
+  "rdfs:label": "MABOS Business Core Ontology",
+  "rdfs:comment": "Universal business concepts applicable to all venture types — financial, operational, marketing, and compliance",
+  "@graph": [
+    {
+      "@id": "mabos:Business",
+      "@type": "owl:Class",
+      "rdfs:subClassOf": "schema:Organization",
+      "rdfs:label": "Business Venture",
+      "rdfs:comment": "A distinct business entity managed by MABOS with its own agent team, workspace, and data stores",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "business",
+      "sbvr:definition": "A business is a distinct business entity that is managed by MABOS and has its own agent team, workspace, and data stores",
+      "sbvr:vocabulary": "business-core"
+    },
+    {
+      "@id": "mabos:LegalEntity",
+      "@type": "owl:Class",
+      "rdfs:label": "Legal Entity",
+      "rdfs:comment": "The legal structure of a business: LLC, C-Corp, S-Corp, sole proprietorship, partnership, etc.",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "legal entity",
+      "sbvr:definition": "A legal entity is the legal structure of a business that is one of LLC, C-Corp, S-Corp, sole proprietorship, or partnership",
+      "sbvr:vocabulary": "business-core"
+    },
+    {
+      "@id": "mabos:FinancialMetric",
+      "@type": "owl:Class",
+      "rdfs:subClassOf": "mabos:Metric",
+      "rdfs:label": "Financial Metric",
+      "rdfs:comment": "A quantitative financial measurement tracked over time",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "financial metric",
+      "sbvr:definition": "A financial metric is a metric that is a quantitative financial measurement tracked over time",
+      "sbvr:vocabulary": "business-core"
+    },
+    {
+      "@id": "mabos:Revenue",
+      "@type": "owl:Class",
+      "rdfs:subClassOf": "mabos:FinancialMetric",
+      "rdfs:label": "Revenue",
+      "rdfs:comment": "Income generated from business operations",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "revenue",
+      "sbvr:definition": "Revenue is a financial metric that represents income generated from business operations",
+      "sbvr:vocabulary": "business-core"
+    },
+    {
+      "@id": "mabos:Expense",
+      "@type": "owl:Class",
+      "rdfs:subClassOf": "mabos:FinancialMetric",
+      "rdfs:label": "Expense",
+      "rdfs:comment": "Costs incurred in business operations, categorized by chart of accounts",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "expense",
+      "sbvr:definition": "An expense is a financial metric that represents costs incurred in business operations",
+      "sbvr:vocabulary": "business-core"
+    },
+    {
+      "@id": "mabos:CashFlow",
+      "@type": "owl:Class",
+      "rdfs:subClassOf": "mabos:FinancialMetric",
+      "rdfs:label": "Cash Flow",
+      "rdfs:comment": "Net movement of money in and out of the business over a period",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "cash flow",
+      "sbvr:definition": "Cash flow is a financial metric that represents the net movement of money in and out of the business",
+      "sbvr:vocabulary": "business-core"
+    },
+    {
+      "@id": "mabos:Budget",
+      "@type": "owl:Class",
+      "rdfs:label": "Budget",
+      "rdfs:comment": "A financial plan allocating resources across departments and time periods",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "budget",
+      "sbvr:definition": "A budget is a financial plan that allocates resources across departments and time periods",
+      "sbvr:vocabulary": "business-core"
+    },
+    {
+      "@id": "mabos:ForecastPeriod",
+      "@type": "owl:Class",
+      "rdfs:label": "Forecast Period",
+      "rdfs:comment": "A future time window with projected financial metrics",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "forecast period",
+      "sbvr:definition": "A forecast period is a future time window that has projected financial metrics",
+      "sbvr:vocabulary": "business-core"
+    },
+    {
+      "@id": "mabos:FinancialReport",
+      "@type": "owl:Class",
+      "rdfs:label": "Financial Report",
+      "rdfs:comment": "A structured financial document: P&L, balance sheet, cash flow statement, tax summary",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "financial report",
+      "sbvr:definition": "A financial report is a structured financial document such as a P&L, balance sheet, or cash flow statement",
+      "sbvr:vocabulary": "business-core"
+    },
+    {
+      "@id": "mabos:Transaction",
+      "@type": "owl:Class",
+      "rdfs:label": "Transaction",
+      "rdfs:comment": "A financial transaction with debit/credit entries, reconciliation status",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "transaction",
+      "sbvr:definition": "A transaction is a financial transaction that has debit and credit entries and a reconciliation status",
+      "sbvr:vocabulary": "business-core"
+    },
+    {
+      "@id": "mabos:ChartOfAccounts",
+      "@type": "owl:Class",
+      "rdfs:label": "Chart of Accounts",
+      "rdfs:comment": "The hierarchical account structure for financial categorization",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "chart of accounts",
+      "sbvr:definition": "A chart of accounts is a hierarchical account structure that is used for financial categorization",
+      "sbvr:vocabulary": "business-core"
+    },
+    {
+      "@id": "mabos:Customer",
+      "@type": "owl:Class",
+      "rdfs:subClassOf": "schema:Person",
+      "rdfs:label": "Customer",
+      "rdfs:comment": "A person or entity that purchases products or services from the business",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "customer",
+      "sbvr:definition": "A customer is a person or entity that purchases products or services from the business",
+      "sbvr:vocabulary": "business-core"
+    },
+    {
+      "@id": "mabos:Product",
+      "@type": "owl:Class",
+      "rdfs:subClassOf": "schema:Product",
+      "rdfs:label": "Product",
+      "rdfs:comment": "A tangible or digital good offered by the business",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "product",
+      "sbvr:definition": "A product is a tangible or digital good that is offered by the business",
+      "sbvr:vocabulary": "business-core"
+    },
+    {
+      "@id": "mabos:Service",
+      "@type": "owl:Class",
+      "rdfs:subClassOf": "schema:Service",
+      "rdfs:label": "Service",
+      "rdfs:comment": "An intangible offering provided by the business",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "service",
+      "sbvr:definition": "A service is an intangible offering that is provided by the business",
+      "sbvr:vocabulary": "business-core"
+    },
+    {
+      "@id": "mabos:BusinessProcess",
+      "@type": "owl:Class",
+      "rdfs:subClassOf": "mabos:Workflow",
+      "rdfs:label": "Business Process",
+      "rdfs:comment": "A repeatable operational process within the business",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "business process",
+      "sbvr:definition": "A business process is a workflow that is a repeatable operational process within the business",
+      "sbvr:vocabulary": "business-core"
+    },
+    {
+      "@id": "mabos:Pipeline",
+      "@type": "owl:Class",
+      "rdfs:label": "Pipeline",
+      "rdfs:comment": "A sequential flow of stages for sales, onboarding, or fulfillment",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "pipeline",
+      "sbvr:definition": "A pipeline is a sequential flow of stages for sales, onboarding, or fulfillment",
+      "sbvr:vocabulary": "business-core"
+    },
+    {
+      "@id": "mabos:Stage",
+      "@type": "owl:Class",
+      "rdfs:label": "Stage",
+      "rdfs:comment": "A discrete phase within a pipeline with entry/exit criteria",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "stage",
+      "sbvr:definition": "A stage is a discrete phase within a pipeline that has entry and exit criteria",
+      "sbvr:vocabulary": "business-core"
+    },
+    {
+      "@id": "mabos:Department",
+      "@type": "owl:Class",
+      "rdfs:label": "Department",
+      "rdfs:comment": "A functional division within the business (finance, operations, marketing, engineering, etc.)",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "department",
+      "sbvr:definition": "A department is a functional division within the business",
+      "sbvr:vocabulary": "business-core"
+    },
+    {
+      "@id": "mabos:Contract",
+      "@type": "owl:Class",
+      "rdfs:label": "Contract",
+      "rdfs:comment": "A legally binding agreement between parties with terms, obligations, and expiration",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "contract",
+      "sbvr:definition": "A contract is a legally binding agreement between parties that has terms, obligations, and expiration",
+      "sbvr:vocabulary": "business-core"
+    },
+    {
+      "@id": "mabos:Invoice",
+      "@type": "owl:Class",
+      "rdfs:label": "Invoice",
+      "rdfs:comment": "A billing document for goods or services rendered",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "invoice",
+      "sbvr:definition": "An invoice is a billing document for goods or services that have been rendered",
+      "sbvr:vocabulary": "business-core"
+    },
+    {
+      "@id": "mabos:TaxObligation",
+      "@type": "owl:Class",
+      "rdfs:label": "Tax Obligation",
+      "rdfs:comment": "A tax filing or payment requirement with jurisdiction, type, and deadline",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "tax obligation",
+      "sbvr:definition": "A tax obligation is a tax filing or payment requirement that has a jurisdiction, type, and deadline",
+      "sbvr:vocabulary": "business-core"
+    },
+    {
+      "@id": "mabos:ComplianceRequirement",
+      "@type": "owl:Class",
+      "rdfs:label": "Compliance Requirement",
+      "rdfs:comment": "A regulatory or legal requirement the business must satisfy",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "compliance requirement",
+      "sbvr:definition": "A compliance requirement is a regulatory or legal requirement that the business must satisfy",
+      "sbvr:vocabulary": "business-core"
+    },
+    {
+      "@id": "mabos:BusinessLicense",
+      "@type": "owl:Class",
+      "rdfs:label": "Business License",
+      "rdfs:comment": "A government-issued permit or license required to operate",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "business license",
+      "sbvr:definition": "A business license is a government-issued permit or license that is required to operate",
+      "sbvr:vocabulary": "business-core"
+    },
+    {
+      "@id": "mabos:BusinessModelCanvas",
+      "@type": "owl:Class",
+      "rdfs:label": "Business Model Canvas",
+      "rdfs:comment": "9-block business model representation: value prop, segments, channels, relationships, revenue, resources, activities, partners, costs",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "business model canvas",
+      "sbvr:definition": "A business model canvas is a 9-block business model representation that includes value propositions, segments, channels, and revenue streams",
+      "sbvr:vocabulary": "business-core"
+    },
+    {
+      "@id": "mabos:KPI",
+      "@type": "owl:Class",
+      "rdfs:subClassOf": "mabos:Metric",
+      "rdfs:label": "Key Performance Indicator",
+      "rdfs:comment": "A critical business metric with target value, current value, and trend",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "key performance indicator",
+      "sbvr:definition": "A KPI is a metric that is a critical business measurement and has a target value, current value, and trend",
+      "sbvr:vocabulary": "business-core"
+    },
+    {
+      "@id": "mabos:MarketingCampaign",
+      "@type": "owl:Class",
+      "rdfs:label": "Marketing Campaign",
+      "rdfs:comment": "A coordinated marketing effort across channels with budget, targeting, and performance tracking",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "marketing campaign",
+      "sbvr:definition": "A marketing campaign is a coordinated marketing effort that has a budget, targeting, and performance tracking",
+      "sbvr:vocabulary": "business-core"
+    },
+    {
+      "@id": "mabos:AdCampaign",
+      "@type": "owl:Class",
+      "rdfs:subClassOf": "mabos:MarketingCampaign",
+      "rdfs:label": "Ad Campaign",
+      "rdfs:comment": "A paid advertising campaign on Meta, Google, LinkedIn, TikTok, etc. with funnel structure",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "ad campaign",
+      "sbvr:definition": "An ad campaign is a marketing campaign that is a paid advertising campaign with a funnel structure",
+      "sbvr:vocabulary": "business-core"
+    },
+    {
+      "@id": "mabos:SalesChannel",
+      "@type": "owl:Class",
+      "rdfs:label": "Sales Channel",
+      "rdfs:comment": "A distribution channel through which products/services reach customers (direct, marketplace, retail, etc.)",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "sales channel",
+      "sbvr:definition": "A sales channel is a distribution channel through which products or services reach customers",
+      "sbvr:vocabulary": "business-core"
+    },
+    {
+      "@id": "mabos:MarketingChannel",
+      "@type": "owl:Class",
+      "rdfs:label": "Marketing Channel",
+      "rdfs:comment": "A platform for marketing communication: Meta, Instagram, WhatsApp, Pinterest, LinkedIn, TikTok, email",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "marketing channel",
+      "sbvr:definition": "A marketing channel is a platform that is used for marketing communication",
+      "sbvr:vocabulary": "business-core"
+    },
+    {
+      "@id": "mabos:ContentAsset",
+      "@type": "owl:Class",
+      "rdfs:label": "Content Asset",
+      "rdfs:comment": "A piece of marketing content: blog post, social media post, ad creative, video, email template",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "content asset",
+      "sbvr:definition": "A content asset is a piece of marketing content such as a blog post, social media post, or video",
+      "sbvr:vocabulary": "business-core"
+    },
+    {
+      "@id": "mabos:Audience",
+      "@type": "owl:Class",
+      "rdfs:label": "Audience",
+      "rdfs:comment": "A defined target audience segment with demographics, interests, and behaviors",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "audience",
+      "sbvr:definition": "An audience is a defined target audience segment that has demographics, interests, and behaviors",
+      "sbvr:vocabulary": "business-core"
+    },
+    {
+      "@id": "mabos:ContentCalendar",
+      "@type": "owl:Class",
+      "rdfs:label": "Content Calendar",
+      "rdfs:comment": "A scheduled plan of content publication across channels",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "content calendar",
+      "sbvr:definition": "A content calendar is a scheduled plan of content publication across channels",
+      "sbvr:vocabulary": "business-core"
+    },
+    {
+      "@id": "mabos:Integration",
+      "@type": "owl:Class",
+      "rdfs:label": "Integration",
+      "rdfs:comment": "A connection to an external service: Stripe, QuickBooks, Salesforce, Shopify, GitHub, HubSpot, Xero",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "integration",
+      "sbvr:definition": "An integration is a connection to an external service such as Stripe, QuickBooks, or Salesforce",
+      "sbvr:vocabulary": "business-core"
+    },
+    {
+      "@id": "mabos:Webhook",
+      "@type": "owl:Class",
+      "rdfs:label": "Webhook",
+      "rdfs:comment": "An event-driven HTTP callback that routes external events to the appropriate agent",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "webhook",
+      "sbvr:definition": "A webhook is an event-driven HTTP callback that routes external events to the appropriate agent",
+      "sbvr:vocabulary": "business-core"
+    },
+    {
+      "@id": "mabos:EnterpriseArchitecture",
+      "@type": "owl:Class",
+      "rdfs:label": "Enterprise Architecture",
+      "rdfs:comment": "TOGAF-inspired 3-layer architecture: business, application, technology",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "enterprise architecture",
+      "sbvr:definition": "An enterprise architecture is a TOGAF-inspired 3-layer architecture covering business, application, and technology",
+      "sbvr:vocabulary": "business-core"
+    },
+    {
+      "@id": "mabos:BMC",
+      "@type": "owl:Class",
+      "rdfs:subClassOf": "mabos:BusinessModelCanvas",
+      "rdfs:label": "BMC (Business Model Canvas)",
+      "rdfs:comment": "A generated 9-block BMC instance with value propositions, customer segments, channels, revenue streams, cost structure, key resources, activities, partners, and relationships",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "BMC instance",
+      "sbvr:definition": "A BMC instance is a business model canvas that has been generated with value propositions, customer segments, and revenue streams",
+      "sbvr:vocabulary": "business-core"
+    },
+    {
+      "@id": "mabos:TroposModel",
+      "@type": "owl:Class",
+      "rdfs:label": "Tropos Model",
+      "rdfs:comment": "A goal-oriented requirements model mapping stakeholder goals to agent responsibilities via heuristic routing (i*, Tropos methodology)",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "tropos model",
+      "sbvr:definition": "A tropos model is a goal-oriented requirements model that maps stakeholder goals to agent responsibilities",
+      "sbvr:vocabulary": "business-core"
+    },
+
+    {
+      "@id": "mabos:hasRevenue",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mabos:Business",
+      "rdfs:range": "mabos:Revenue",
+      "rdfs:comment": "Revenue streams of this business",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "business has revenue",
+      "sbvr:roles": [
+        {"sbvr:roleName": "revenueOwner", "sbvr:rolePlayer": "mabos:Business"},
+        {"sbvr:roleName": "ownedRevenue", "sbvr:rolePlayer": "mabos:Revenue"}
+      ]
+    },
+    {
+      "@id": "mabos:hasExpense",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mabos:Business",
+      "rdfs:range": "mabos:Expense",
+      "rdfs:comment": "Expense categories of this business",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "business has expense",
+      "sbvr:roles": [
+        {"sbvr:roleName": "expenseOwner", "sbvr:rolePlayer": "mabos:Business"},
+        {"sbvr:roleName": "ownedExpense", "sbvr:rolePlayer": "mabos:Expense"}
+      ]
+    },
+    {
+      "@id": "mabos:hasCustomer",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mabos:Business",
+      "rdfs:range": "mabos:Customer",
+      "rdfs:comment": "Customers of this business",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "business has customer",
+      "sbvr:roles": [
+        {"sbvr:roleName": "servingBusiness", "sbvr:rolePlayer": "mabos:Business"},
+        {"sbvr:roleName": "servedCustomer", "sbvr:rolePlayer": "mabos:Customer"}
+      ]
+    },
+    {
+      "@id": "mabos:hasProduct",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mabos:Business",
+      "rdfs:range": "mabos:Product",
+      "rdfs:comment": "Products offered by this business",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "business has product",
+      "sbvr:roles": [
+        {"sbvr:roleName": "productOwner", "sbvr:rolePlayer": "mabos:Business"},
+        {"sbvr:roleName": "ownedProduct", "sbvr:rolePlayer": "mabos:Product"}
+      ]
+    },
+    {
+      "@id": "mabos:hasService",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mabos:Business",
+      "rdfs:range": "mabos:Service",
+      "rdfs:comment": "Services offered by this business",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "business has service",
+      "sbvr:roles": [
+        {"sbvr:roleName": "serviceProvider", "sbvr:rolePlayer": "mabos:Business"},
+        {"sbvr:roleName": "providedService", "sbvr:rolePlayer": "mabos:Service"}
+      ]
+    },
+    {
+      "@id": "mabos:hasProcess",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mabos:Business",
+      "rdfs:range": "mabos:BusinessProcess",
+      "rdfs:comment": "Operational processes of this business",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "business has process",
+      "sbvr:roles": [
+        {"sbvr:roleName": "processOwner", "sbvr:rolePlayer": "mabos:Business"},
+        {"sbvr:roleName": "ownedProcess", "sbvr:rolePlayer": "mabos:BusinessProcess"}
+      ]
+    },
+    {
+      "@id": "mabos:hasLegalEntity",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mabos:Business",
+      "rdfs:range": "mabos:LegalEntity",
+      "rdfs:comment": "The legal entity structure of this business",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "business has legal entity",
+      "sbvr:roles": [
+        {"sbvr:roleName": "structuredBusiness", "sbvr:rolePlayer": "mabos:Business"},
+        {"sbvr:roleName": "legalStructure", "sbvr:rolePlayer": "mabos:LegalEntity"}
+      ]
+    },
+    {
+      "@id": "mabos:tracksKPI",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mabos:Business",
+      "rdfs:range": "mabos:KPI",
+      "rdfs:comment": "Key performance indicators tracked by this business",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "business tracks KPI",
+      "sbvr:roles": [
+        {"sbvr:roleName": "trackingBusiness", "sbvr:rolePlayer": "mabos:Business"},
+        {"sbvr:roleName": "trackedKPI", "sbvr:rolePlayer": "mabos:KPI"}
+      ]
+    },
+    {
+      "@id": "mabos:hasBudget",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mabos:Business",
+      "rdfs:range": "mabos:Budget",
+      "rdfs:comment": "Budget allocations for this business",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "business has budget",
+      "sbvr:roles": [
+        {"sbvr:roleName": "budgetOwner", "sbvr:rolePlayer": "mabos:Business"},
+        {"sbvr:roleName": "ownedBudget", "sbvr:rolePlayer": "mabos:Budget"}
+      ]
+    },
+    {
+      "@id": "mabos:hasPipeline",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mabos:Business",
+      "rdfs:range": "mabos:Pipeline",
+      "rdfs:comment": "Sales/operations pipelines of this business",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "business has pipeline",
+      "sbvr:roles": [
+        {"sbvr:roleName": "pipelineOwner", "sbvr:rolePlayer": "mabos:Business"},
+        {"sbvr:roleName": "ownedPipeline", "sbvr:rolePlayer": "mabos:Pipeline"}
+      ]
+    },
+    {
+      "@id": "mabos:hasStage",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mabos:Pipeline",
+      "rdfs:range": "mabos:Stage",
+      "rdfs:comment": "Stages within this pipeline",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "pipeline has stage",
+      "sbvr:roles": [
+        {"sbvr:roleName": "parentPipeline", "sbvr:rolePlayer": "mabos:Pipeline"},
+        {"sbvr:roleName": "containedStage", "sbvr:rolePlayer": "mabos:Stage"}
+      ]
+    },
+    {
+      "@id": "mabos:hasDepartment",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mabos:Business",
+      "rdfs:range": "mabos:Department",
+      "rdfs:comment": "Functional departments of this business",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "business has department",
+      "sbvr:roles": [
+        {"sbvr:roleName": "departmentOwner", "sbvr:rolePlayer": "mabos:Business"},
+        {"sbvr:roleName": "ownedDepartment", "sbvr:rolePlayer": "mabos:Department"}
+      ]
+    },
+    {
+      "@id": "mabos:hasIntegration",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mabos:Business",
+      "rdfs:range": "mabos:Integration",
+      "rdfs:comment": "External service integrations connected to this business",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "business has integration",
+      "sbvr:roles": [
+        {"sbvr:roleName": "integratedBusiness", "sbvr:rolePlayer": "mabos:Business"},
+        {"sbvr:roleName": "connectedIntegration", "sbvr:rolePlayer": "mabos:Integration"}
+      ]
+    },
+    {
+      "@id": "mabos:runsCampaign",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mabos:Business",
+      "rdfs:range": "mabos:MarketingCampaign",
+      "rdfs:comment": "Marketing campaigns run by this business",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "business runs marketing campaign",
+      "sbvr:roles": [
+        {"sbvr:roleName": "campaignRunner", "sbvr:rolePlayer": "mabos:Business"},
+        {"sbvr:roleName": "runCampaign", "sbvr:rolePlayer": "mabos:MarketingCampaign"}
+      ]
+    },
+    {
+      "@id": "mabos:targetsAudience",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mabos:MarketingCampaign",
+      "rdfs:range": "mabos:Audience",
+      "rdfs:comment": "The target audience for this campaign",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "marketing campaign targets audience",
+      "sbvr:roles": [
+        {"sbvr:roleName": "targetingCampaign", "sbvr:rolePlayer": "mabos:MarketingCampaign"},
+        {"sbvr:roleName": "targetedAudience", "sbvr:rolePlayer": "mabos:Audience"}
+      ]
+    },
+    {
+      "@id": "mabos:publishedOn",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mabos:ContentAsset",
+      "rdfs:range": "mabos:MarketingChannel",
+      "rdfs:comment": "The channel where this content is published",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "content asset is published on marketing channel",
+      "sbvr:roles": [
+        {"sbvr:roleName": "publishedContent", "sbvr:rolePlayer": "mabos:ContentAsset"},
+        {"sbvr:roleName": "publicationChannel", "sbvr:rolePlayer": "mabos:MarketingChannel"}
+      ]
+    },
+    {
+      "@id": "mabos:soldThrough",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mabos:Product",
+      "rdfs:range": "mabos:SalesChannel",
+      "rdfs:comment": "Sales channels distributing this product",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "product is sold through sales channel",
+      "sbvr:roles": [
+        {"sbvr:roleName": "distributedProduct", "sbvr:rolePlayer": "mabos:Product"},
+        {"sbvr:roleName": "distributionChannel", "sbvr:rolePlayer": "mabos:SalesChannel"}
+      ]
+    },
+    {
+      "@id": "mabos:triggeredByWebhook",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mabos:Event",
+      "rdfs:range": "mabos:Webhook",
+      "rdfs:comment": "The webhook that triggered this event",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "event is triggered by webhook",
+      "sbvr:roles": [
+        {"sbvr:roleName": "triggeredEvent", "sbvr:rolePlayer": "mabos:Event"},
+        {"sbvr:roleName": "triggeringWebhook", "sbvr:rolePlayer": "mabos:Webhook"}
+      ]
+    },
+    {
+      "@id": "mabos:requiresCompliance",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mabos:Business",
+      "rdfs:range": "mabos:ComplianceRequirement",
+      "rdfs:comment": "Compliance requirements this business must satisfy",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "business requires compliance requirement",
+      "sbvr:roles": [
+        {"sbvr:roleName": "regulatedBusiness", "sbvr:rolePlayer": "mabos:Business"},
+        {"sbvr:roleName": "requiredCompliance", "sbvr:rolePlayer": "mabos:ComplianceRequirement"}
+      ]
+    },
+    {
+      "@id": "mabos:requiresLicense",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mabos:Business",
+      "rdfs:range": "mabos:BusinessLicense",
+      "rdfs:comment": "Licenses required to operate this business",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "business requires license",
+      "sbvr:roles": [
+        {"sbvr:roleName": "licensedBusiness", "sbvr:rolePlayer": "mabos:Business"},
+        {"sbvr:roleName": "requiredLicense", "sbvr:rolePlayer": "mabos:BusinessLicense"}
+      ]
+    },
+    {
+      "@id": "mabos:hasTaxObligation",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mabos:LegalEntity",
+      "rdfs:range": "mabos:TaxObligation",
+      "rdfs:comment": "Tax obligations of this legal entity",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "legal entity has tax obligation",
+      "sbvr:roles": [
+        {"sbvr:roleName": "taxedEntity", "sbvr:rolePlayer": "mabos:LegalEntity"},
+        {"sbvr:roleName": "entityTaxObligation", "sbvr:rolePlayer": "mabos:TaxObligation"}
+      ]
+    },
+    {
+      "@id": "mabos:hasArchitecture",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mabos:Business",
+      "rdfs:range": "mabos:EnterpriseArchitecture",
+      "rdfs:comment": "The TOGAF enterprise architecture for this business",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "business has enterprise architecture",
+      "sbvr:roles": [
+        {"sbvr:roleName": "architectedBusiness", "sbvr:rolePlayer": "mabos:Business"},
+        {"sbvr:roleName": "businessArchitecture", "sbvr:rolePlayer": "mabos:EnterpriseArchitecture"}
+      ]
+    },
+    {
+      "@id": "mabos:hasBMC",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mabos:Business",
+      "rdfs:range": "mabos:BMC",
+      "rdfs:comment": "The Business Model Canvas for this business",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "business has BMC",
+      "sbvr:roles": [
+        {"sbvr:roleName": "modeledBusiness", "sbvr:rolePlayer": "mabos:Business"},
+        {"sbvr:roleName": "businessBMC", "sbvr:rolePlayer": "mabos:BMC"}
+      ]
+    },
+    {
+      "@id": "mabos:hasTroposModel",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mabos:Business",
+      "rdfs:range": "mabos:TroposModel",
+      "rdfs:comment": "The Tropos goal-responsibility model for this business",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "business has tropos model",
+      "sbvr:roles": [
+        {"sbvr:roleName": "modeledBusiness", "sbvr:rolePlayer": "mabos:Business"},
+        {"sbvr:roleName": "businessTroposModel", "sbvr:rolePlayer": "mabos:TroposModel"}
+      ]
+    },
+
+    {
+      "@id": "mabos:rule_businessHasLegalEntity",
+      "@type": ["sbvr:DefinitionalRule", "mabos:Rule"],
+      "rdfs:label": "Business Must Have Legal Entity",
+      "sbvr:designation": "business legal entity rule",
+      "sbvr:definition": "It is necessary that each business has at least one legal entity",
+      "sbvr:ruleType": "definitional",
+      "sbvr:ruleModality": "alethic",
+      "sbvr:constrainsFact": "mabos:hasLegalEntity",
+      "sbvr:hasProofTable": "mabos:pt_businessHasLegalEntity",
+      "sbvr:vocabulary": "business-core"
+    },
+    {
+      "@id": "mabos:pt_businessHasLegalEntity",
+      "@type": "sbvr:ProofTable",
+      "rdfs:label": "Proof Table: Business Legal Entity",
+      "sbvr:hasProofEntry": [
+        {
+          "@type": "sbvr:ProofEntry",
+          "rdfs:label": "Business with legal entity",
+          "sbvr:truthValue": true,
+          "sbvr:entryConfidence": 1.0
+        },
+        {
+          "@type": "sbvr:ProofEntry",
+          "rdfs:label": "Business without legal entity",
+          "sbvr:truthValue": false,
+          "sbvr:entryConfidence": 1.0
+        }
+      ]
+    },
+    {
+      "@id": "mabos:rule_customerHasIdentifier",
+      "@type": ["sbvr:BehavioralRule", "mabos:Rule"],
+      "rdfs:label": "Customer Must Have Unique Identifier",
+      "sbvr:designation": "customer identifier rule",
+      "sbvr:definition": "It is obligatory that each customer has a unique identifier",
+      "sbvr:ruleType": "behavioral",
+      "sbvr:ruleModality": "deontic",
+      "sbvr:constrainsFact": "mabos:hasCustomer",
+      "sbvr:vocabulary": "business-core"
+    },
+    {
+      "@id": "mabos:rule_orderHasOneCustomer",
+      "@type": ["sbvr:DefinitionalRule", "mabos:Rule"],
+      "rdfs:label": "Order Has Exactly One Customer",
+      "sbvr:designation": "order customer cardinality rule",
+      "sbvr:definition": "It is necessary that each order is placed by exactly one customer",
+      "sbvr:ruleType": "definitional",
+      "sbvr:ruleModality": "alethic",
+      "sbvr:constrainsFact": "mabos:hasCustomer",
+      "sbvr:vocabulary": "business-core"
+    },
+    {
+      "@id": "mabos:rule_revenueNotNegative",
+      "@type": ["sbvr:BehavioralRule", "mabos:Rule"],
+      "rdfs:label": "Revenue Cannot Be Negative",
+      "sbvr:designation": "revenue non-negative rule",
+      "sbvr:definition": "It is prohibited that a revenue amount is negative",
+      "sbvr:ruleType": "behavioral",
+      "sbvr:ruleModality": "deontic",
+      "sbvr:constrainsFact": "mabos:hasRevenue",
+      "sbvr:vocabulary": "business-core"
+    },
+    {
+      "@id": "mabos:rule_kpiHasTargetAndActual",
+      "@type": ["sbvr:DefinitionalRule", "mabos:Rule"],
+      "rdfs:label": "KPI Must Have Target and Actual",
+      "sbvr:designation": "KPI completeness rule",
+      "sbvr:definition": "It is necessary that each key performance indicator has a target value and an actual value",
+      "sbvr:ruleType": "definitional",
+      "sbvr:ruleModality": "alethic",
+      "sbvr:constrainsFact": "mabos:tracksKPI",
+      "sbvr:vocabulary": "business-core"
+    },
+    {
+      "@id": "mabos:rule_businessHasType",
+      "@type": ["sbvr:DefinitionalRule", "mabos:Rule"],
+      "rdfs:label": "Business Must Have Type",
+      "sbvr:designation": "business type rule",
+      "sbvr:definition": "It is necessary that each business has exactly one business type",
+      "sbvr:ruleType": "definitional",
+      "sbvr:ruleModality": "alethic",
+      "sbvr:constrainsFact": "mabos:hasProduct",
+      "sbvr:vocabulary": "business-core"
+    },
+    {
+      "@id": "mabos:rule_budgetNotExceedable",
+      "@type": ["sbvr:BehavioralRule", "mabos:Rule"],
+      "rdfs:label": "Budget Spent Cannot Exceed Allocation",
+      "sbvr:designation": "budget overspend rule",
+      "sbvr:definition": "It is prohibited that budget spent exceeds the total budget allocation",
+      "sbvr:ruleType": "behavioral",
+      "sbvr:ruleModality": "deontic",
+      "sbvr:constrainsFact": "mabos:hasBudget",
+      "sbvr:vocabulary": "business-core"
+    },
+    {
+      "@id": "mabos:rule_pipelineHasStages",
+      "@type": ["sbvr:DefinitionalRule", "mabos:Rule"],
+      "rdfs:label": "Pipeline Must Have At Least One Stage",
+      "sbvr:designation": "pipeline stage rule",
+      "sbvr:definition": "It is necessary that each pipeline has at least one stage",
+      "sbvr:ruleType": "definitional",
+      "sbvr:ruleModality": "alethic",
+      "sbvr:constrainsFact": "mabos:hasStage",
+      "sbvr:vocabulary": "business-core"
+    },
+
+    {
+      "@id": "mabos:revenueAmount",
+      "@type": "owl:DatatypeProperty",
+      "rdfs:domain": "mabos:Revenue",
+      "rdfs:range": "xsd:decimal",
+      "rdfs:comment": "Revenue amount in base currency"
+    },
+    {
+      "@id": "mabos:expenseAmount",
+      "@type": "owl:DatatypeProperty",
+      "rdfs:domain": "mabos:Expense",
+      "rdfs:range": "xsd:decimal",
+      "rdfs:comment": "Expense amount in base currency"
+    },
+    {
+      "@id": "mabos:budgetAmount",
+      "@type": "owl:DatatypeProperty",
+      "rdfs:domain": "mabos:Budget",
+      "rdfs:range": "xsd:decimal",
+      "rdfs:comment": "Total budget allocation"
+    },
+    {
+      "@id": "mabos:budgetSpent",
+      "@type": "owl:DatatypeProperty",
+      "rdfs:domain": "mabos:Budget",
+      "rdfs:range": "xsd:decimal",
+      "rdfs:comment": "Amount spent from the budget"
+    },
+    {
+      "@id": "mabos:kpiTarget",
+      "@type": "owl:DatatypeProperty",
+      "rdfs:domain": "mabos:KPI",
+      "rdfs:range": "xsd:decimal",
+      "rdfs:comment": "Target value for this KPI"
+    },
+    {
+      "@id": "mabos:kpiActual",
+      "@type": "owl:DatatypeProperty",
+      "rdfs:domain": "mabos:KPI",
+      "rdfs:range": "xsd:decimal",
+      "rdfs:comment": "Current actual value of this KPI"
+    },
+    {
+      "@id": "mabos:businessType",
+      "@type": "owl:DatatypeProperty",
+      "rdfs:domain": "mabos:Business",
+      "rdfs:range": "xsd:string",
+      "rdfs:comment": "Business domain type: ecommerce, saas, consulting, marketplace, retail"
+    },
+    {
+      "@id": "mabos:businessStatus",
+      "@type": "owl:DatatypeProperty",
+      "rdfs:domain": "mabos:Business",
+      "rdfs:range": "xsd:string",
+      "rdfs:comment": "Current status: active, paused, onboarding, archived"
+    },
+    {
+      "@id": "mabos:campaignBudget",
+      "@type": "owl:DatatypeProperty",
+      "rdfs:domain": "mabos:MarketingCampaign",
+      "rdfs:range": "xsd:decimal",
+      "rdfs:comment": "Total budget allocated to this campaign"
+    },
+    {
+      "@id": "mabos:campaignROAS",
+      "@type": "owl:DatatypeProperty",
+      "rdfs:domain": "mabos:MarketingCampaign",
+      "rdfs:range": "xsd:float",
+      "rdfs:comment": "Return on ad spend ratio"
+    }
+  ]
+}

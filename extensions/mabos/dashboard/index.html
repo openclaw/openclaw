@@ -1,0 +1,2284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MABOS - Multi-Agent Business Operations System</title>
+    <style>
+        :root {
+            --bg-primary: #0a0a0b;
+            --bg-secondary: #1a1a1b;
+            --bg-tertiary: #252528;
+            --bg-card: #161618;
+            --bg-hover: #1f1f21;
+            --text-primary: #ffffff;
+            --text-secondary: #a8a8a8;
+            --text-muted: #666666;
+            --accent-green: #00d084;
+            --accent-purple: #8b5cf6;
+            --accent-blue: #3b82f6;
+            --accent-orange: #f59e0b;
+            --accent-red: #ef4444;
+            --border: #2a2a2d;
+            --border-hover: #3a3a3d;
+            --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5);
+            --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.7);
+            --radius: 8px;
+            --radius-lg: 12px;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            overflow-x: hidden;
+        }
+
+        .app {
+            display: grid;
+            grid-template-columns: 280px 1fr;
+            min-height: 100vh;
+        }
+
+        /* Sidebar */
+        .sidebar {
+            background: var(--bg-secondary);
+            border-right: 1px solid var(--border);
+            padding: 24px 16px;
+            position: fixed;
+            width: 280px;
+            height: 100vh;
+            z-index: 100;
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 32px;
+            font-size: 20px;
+            font-weight: 700;
+        }
+
+        .nav-section {
+            margin-bottom: 32px;
+        }
+
+        .nav-title {
+            color: var(--text-muted);
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 12px;
+            padding: 0 12px;
+        }
+
+        .nav-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 8px 12px;
+            margin-bottom: 4px;
+            border-radius: var(--radius);
+            cursor: pointer;
+            transition: all 0.2s ease;
+            font-size: 14px;
+        }
+
+        .nav-item:hover {
+            background: var(--bg-hover);
+        }
+
+        .nav-item.active {
+            background: var(--accent-green);
+            color: var(--bg-primary);
+        }
+
+        .nav-item .icon {
+            font-size: 16px;
+            width: 20px;
+            text-align: center;
+        }
+
+        /* Main Content */
+        .main {
+            padding: 24px;
+            overflow-y: auto;
+        }
+
+        .top-bar {
+            display: flex;
+            justify-content: between;
+            align-items: center;
+            margin-bottom: 32px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .business-switcher {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            background: var(--bg-secondary);
+            padding: 8px 16px;
+            border-radius: var(--radius-lg);
+            border: 1px solid var(--border);
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .business-switcher:hover {
+            border-color: var(--border-hover);
+            background: var(--bg-hover);
+        }
+
+        .section {
+            display: none;
+            animation: fadeIn 0.3s ease;
+        }
+
+        .section.active {
+            display: block;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(16px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Cards */
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            padding: 24px;
+            box-shadow: var(--shadow);
+            transition: all 0.2s ease;
+        }
+
+        .card:hover {
+            border-color: var(--border-hover);
+        }
+
+        .card-header {
+            margin-bottom: 20px;
+        }
+
+        .card-title {
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .card-subtitle {
+            color: var(--text-secondary);
+            font-size: 14px;
+        }
+
+        /* Grid Layouts */
+        .grid {
+            display: grid;
+            gap: 24px;
+        }
+
+        .grid-2 { grid-template-columns: repeat(2, 1fr); }
+        .grid-3 { grid-template-columns: repeat(3, 1fr); }
+        .grid-4 { grid-template-columns: repeat(4, 1fr); }
+
+        /* Business Dashboard */
+        .business-overview {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 24px;
+            margin-bottom: 32px;
+        }
+
+        .business-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            padding: 24px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .business-card:hover {
+            border-color: var(--accent-green);
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-lg);
+        }
+
+        .business-status {
+            position: absolute;
+            top: 16px;
+            right: 16px;
+            padding: 4px 8px;
+            border-radius: var(--radius);
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .status-active {
+            background: rgba(0, 208, 132, 0.2);
+            color: var(--accent-green);
+        }
+
+        .business-name {
+            font-size: 24px;
+            font-weight: 700;
+            margin-bottom: 8px;
+        }
+
+        .business-description {
+            color: var(--text-secondary);
+            margin-bottom: 16px;
+            line-height: 1.5;
+        }
+
+        .business-stats {
+            display: flex;
+            gap: 16px;
+        }
+
+        .stat {
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--accent-green);
+        }
+
+        .stat-label {
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-top: 4px;
+        }
+
+        /* Wizard */
+        .wizard {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+
+        .wizard-steps {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 48px;
+            position: relative;
+        }
+
+        .wizard-steps::before {
+            content: '';
+            position: absolute;
+            top: 16px;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: var(--border);
+            z-index: 1;
+        }
+
+        .wizard-step {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+            background: var(--bg-primary);
+            padding: 0 16px;
+            z-index: 2;
+            position: relative;
+        }
+
+        .step-circle {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: var(--bg-tertiary);
+            border: 2px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.2s ease;
+        }
+
+        .wizard-step.active .step-circle {
+            background: var(--accent-green);
+            border-color: var(--accent-green);
+            color: var(--bg-primary);
+        }
+
+        .wizard-step.completed .step-circle {
+            background: var(--accent-blue);
+            border-color: var(--accent-blue);
+            color: white;
+        }
+
+        .step-label {
+            font-size: 12px;
+            color: var(--text-secondary);
+            text-align: center;
+            max-width: 120px;
+        }
+
+        .wizard-content {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            padding: 32px;
+            margin-bottom: 32px;
+        }
+
+        .form-group {
+            margin-bottom: 24px;
+        }
+
+        .form-label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 500;
+            font-size: 14px;
+        }
+
+        .form-input, .form-select, .form-textarea {
+            width: 100%;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 12px 16px;
+            color: var(--text-primary);
+            font-size: 14px;
+            transition: all 0.2s ease;
+        }
+
+        .form-input:focus, .form-select:focus, .form-textarea:focus {
+            outline: none;
+            border-color: var(--accent-green);
+            box-shadow: 0 0 0 2px rgba(0, 208, 132, 0.1);
+        }
+
+        .form-textarea {
+            resize: vertical;
+            min-height: 80px;
+        }
+
+        .form-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 16px;
+        }
+
+        .wizard-actions {
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .btn {
+            padding: 12px 24px;
+            border-radius: var(--radius);
+            border: none;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .btn-primary {
+            background: var(--accent-green);
+            color: var(--bg-primary);
+        }
+
+        .btn-primary:hover {
+            background: #00b871;
+        }
+
+        .btn-secondary {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            border: 1px solid var(--border);
+        }
+
+        .btn-secondary:hover {
+            background: var(--bg-hover);
+        }
+
+        /* Gantt Chart */
+        .gantt-container {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            padding: 24px;
+            overflow-x: auto;
+        }
+
+        .gantt-header {
+            display: grid;
+            grid-template-columns: 200px 1fr;
+            margin-bottom: 16px;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 16px;
+        }
+
+        .gantt-timeline {
+            display: grid;
+            grid-template-columns: repeat(12, 1fr);
+            gap: 8px;
+            min-width: 800px;
+        }
+
+        .timeline-month {
+            text-align: center;
+            font-size: 12px;
+            color: var(--text-secondary);
+            padding: 8px;
+        }
+
+        .gantt-row {
+            display: grid;
+            grid-template-columns: 200px 1fr;
+            align-items: center;
+            padding: 8px 0;
+            border-bottom: 1px solid rgba(42, 42, 45, 0.5);
+        }
+
+        .gantt-task {
+            font-size: 14px;
+            color: var(--text-primary);
+        }
+
+        .gantt-department {
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        .gantt-bars {
+            display: grid;
+            grid-template-columns: repeat(12, 1fr);
+            gap: 8px;
+            min-width: 800px;
+        }
+
+        .gantt-bar {
+            height: 20px;
+            border-radius: 4px;
+            position: relative;
+            display: flex;
+            align-items: center;
+            padding: 0 8px;
+            font-size: 11px;
+            font-weight: 500;
+        }
+
+        .status-proposed { background: var(--accent-purple); }
+        .status-active { background: var(--accent-blue); }
+        .status-in-progress { background: var(--accent-orange); }
+        .status-completed { background: var(--accent-green); }
+
+        .phase-label {
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--accent-green);
+            margin: 24px 0 16px 0;
+            padding-bottom: 8px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        /* Kanban Board */
+        .kanban {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 24px;
+            overflow-x: auto;
+            padding-bottom: 16px;
+        }
+
+        .kanban-column {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            padding: 16px;
+            min-height: 500px;
+        }
+
+        .column-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 16px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .column-title {
+            font-weight: 600;
+            font-size: 14px;
+        }
+
+        .column-count {
+            background: var(--bg-tertiary);
+            color: var(--text-secondary);
+            padding: 2px 6px;
+            border-radius: 10px;
+            font-size: 12px;
+        }
+
+        .kanban-card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 16px;
+            margin-bottom: 12px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .kanban-card:hover {
+            border-color: var(--accent-green);
+            transform: translateY(-2px);
+        }
+
+        .card-priority {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+
+        .priority-high { background: var(--accent-red); }
+        .priority-medium { background: var(--accent-orange); }
+        .priority-low { background: var(--accent-blue); }
+
+        .card-task-title {
+            font-weight: 500;
+            margin-bottom: 8px;
+            line-height: 1.4;
+        }
+
+        .card-meta {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-top: 12px;
+        }
+
+        .card-agents {
+            display: flex;
+            gap: 4px;
+        }
+
+        .agent-avatar {
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            background: var(--bg-tertiary);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            border: 1px solid var(--border);
+        }
+
+        .card-department {
+            background: var(--accent-purple);
+            color: white;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 10px;
+            text-transform: uppercase;
+        }
+
+        /* Agent Management */
+        .agents-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 20px;
+        }
+
+        .agent-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            padding: 20px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            position: relative;
+        }
+
+        .agent-card:hover {
+            border-color: var(--accent-green);
+            transform: translateY(-2px);
+        }
+
+        .agent-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+
+        .agent-emoji {
+            font-size: 24px;
+        }
+
+        .agent-info h3 {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+
+        .agent-role {
+            color: var(--text-secondary);
+            font-size: 12px;
+        }
+
+        .agent-status {
+            position: absolute;
+            top: 16px;
+            right: 16px;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+        }
+
+        .status-dot-active { background: var(--accent-green); }
+        .status-dot-idle { background: var(--accent-orange); }
+        .status-dot-disabled { background: var(--text-muted); }
+
+        .agent-details {
+            font-size: 14px;
+            color: var(--text-secondary);
+        }
+
+        .agent-department {
+            background: var(--accent-blue);
+            color: white;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            display: inline-block;
+            margin-top: 8px;
+        }
+
+        /* Performance Dashboard */
+        .kpi-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 32px;
+        }
+
+        .kpi-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            padding: 20px;
+        }
+
+        .kpi-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 16px;
+        }
+
+        .kpi-title {
+            font-size: 14px;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+        }
+
+        .kpi-trend {
+            font-size: 12px;
+            padding: 2px 6px;
+            border-radius: 4px;
+        }
+
+        .trend-up {
+            background: rgba(0, 208, 132, 0.2);
+            color: var(--accent-green);
+        }
+
+        .kpi-value {
+            font-size: 28px;
+            font-weight: 700;
+            margin-bottom: 8px;
+        }
+
+        .kpi-progress {
+            background: var(--bg-tertiary);
+            border-radius: 4px;
+            height: 6px;
+            overflow: hidden;
+        }
+
+        .kpi-progress-bar {
+            height: 100%;
+            background: var(--accent-green);
+            transition: width 0.3s ease;
+        }
+
+        .campaigns-table {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            overflow: hidden;
+        }
+
+        .table-header {
+            background: var(--bg-secondary);
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .table-title {
+            font-size: 18px;
+            font-weight: 600;
+        }
+
+        .table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .table th,
+        .table td {
+            padding: 12px 20px;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .table th {
+            background: var(--bg-secondary);
+            font-size: 12px;
+            text-transform: uppercase;
+            color: var(--text-secondary);
+            font-weight: 600;
+        }
+
+        .campaign-status {
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        .status-live { background: rgba(0, 208, 132, 0.2); color: var(--accent-green); }
+        .status-paused { background: rgba(245, 158, 11, 0.2); color: var(--accent-orange); }
+        .status-proposed { background: rgba(139, 92, 246, 0.2); color: var(--accent-purple); }
+
+        .confidence-score {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .confidence-bar {
+            width: 40px;
+            height: 4px;
+            background: var(--bg-tertiary);
+            border-radius: 2px;
+            overflow: hidden;
+        }
+
+        .confidence-fill {
+            height: 100%;
+            background: var(--accent-green);
+        }
+
+        /* Modal */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            backdrop-filter: blur(4px);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal.active {
+            display: flex;
+        }
+
+        .modal-content {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            padding: 32px;
+            max-width: 600px;
+            width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+            position: relative;
+        }
+
+        .modal-close {
+            position: absolute;
+            top: 16px;
+            right: 16px;
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 24px;
+            cursor: pointer;
+        }
+
+        .modal-header {
+            margin-bottom: 24px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .modal-title {
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .progress-section {
+            margin: 20px 0;
+        }
+
+        .progress-label {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            font-size: 14px;
+        }
+
+        .progress-bar {
+            background: var(--bg-tertiary);
+            border-radius: 4px;
+            height: 8px;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: var(--accent-green);
+            transition: width 0.3s ease;
+        }
+
+        .token-usage {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 16px;
+            margin: 16px 0;
+        }
+
+        .token-stat {
+            background: var(--bg-secondary);
+            padding: 12px;
+            border-radius: var(--radius);
+            text-align: center;
+        }
+
+        .token-value {
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--accent-blue);
+        }
+
+        .token-label {
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-top: 4px;
+        }
+
+        /* Responsive */
+        @media (max-width: 1024px) {
+            .app {
+                grid-template-columns: 1fr;
+            }
+            
+            .sidebar {
+                position: relative;
+                width: 100%;
+            }
+            
+            .grid-4 { grid-template-columns: repeat(2, 1fr); }
+            .grid-3 { grid-template-columns: repeat(2, 1fr); }
+            
+            .kanban {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .grid-2 { grid-template-columns: 1fr; }
+            
+            .form-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .wizard-steps {
+                flex-wrap: wrap;
+                gap: 16px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="app">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="logo">
+                🤖 <span>MABOS</span>
+            </div>
+            
+            <nav>
+                <div class="nav-section">
+                    <div class="nav-title">Dashboard</div>
+                    <div class="nav-item active" data-section="dashboard">
+                        <span class="icon">🏠</span>
+                        <span>Overview</span>
+                    </div>
+                    <div class="nav-item" data-section="performance">
+                        <span class="icon">📊</span>
+                        <span>Performance</span>
+                    </div>
+                </div>
+                
+                <div class="nav-section">
+                    <div class="nav-title">Operations</div>
+                    <div class="nav-item" data-section="agents">
+                        <span class="icon">👥</span>
+                        <span>Agents</span>
+                    </div>
+                    <div class="nav-item" data-section="kanban">
+                        <span class="icon">📋</span>
+                        <span>Tasks</span>
+                    </div>
+                    <div class="nav-item" data-section="gantt">
+                        <span class="icon">📅</span>
+                        <span>Timeline</span>
+                    </div>
+                </div>
+                
+                <div class="nav-section">
+                    <div class="nav-title">Setup</div>
+                    <div class="nav-item" data-section="wizard">
+                        <span class="icon">🚀</span>
+                        <span>Onboarding</span>
+                    </div>
+                </div>
+            </nav>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main">
+            <div class="top-bar">
+                <div class="business-switcher" onclick="showBusinessSelector()">
+                    <span>🎨</span>
+                    <span>VividWalls</span>
+                    <span>▼</span>
+                </div>
+            </div>
+
+            <!-- Dashboard Section -->
+            <section id="dashboard" class="section active">
+                <div class="business-overview">
+                    <div class="business-card" onclick="viewBusinessDetails('vividwalls')">
+                        <div class="business-status status-active">Active</div>
+                        <div class="business-name">VividWalls</div>
+                        <div class="business-description">Premium wall art e-commerce platform with AI-powered multi-agent system for autonomous business operations.</div>
+                        <div class="business-stats">
+                            <div class="stat">
+                                <div class="stat-value">17</div>
+                                <div class="stat-label">Agents</div>
+                            </div>
+                            <div class="stat">
+                                <div class="stat-value">95%</div>
+                                <div class="stat-label">Health</div>
+                            </div>
+                            <div class="stat">
+                                <div class="stat-value">MVP</div>
+                                <div class="stat-label">Stage</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Performance Section -->
+            <section id="performance" class="section">
+                <div class="kpi-grid">
+                    <div class="kpi-card">
+                        <div class="kpi-header">
+                            <div class="kpi-title">Monthly Revenue</div>
+                            <div class="kpi-trend trend-up">↗ +15%</div>
+                        </div>
+                        <div class="kpi-value">$24,500</div>
+                        <div class="kpi-progress">
+                            <div class="kpi-progress-bar" style="width: 82%;"></div>
+                        </div>
+                    </div>
+                    
+                    <div class="kpi-card">
+                        <div class="kpi-header">
+                            <div class="kpi-title">Automation Rate</div>
+                            <div class="kpi-trend trend-up">↗ +5%</div>
+                        </div>
+                        <div class="kpi-value">89%</div>
+                        <div class="kpi-progress">
+                            <div class="kpi-progress-bar" style="width: 89%;"></div>
+                        </div>
+                    </div>
+                    
+                    <div class="kpi-card">
+                        <div class="kpi-header">
+                            <div class="kpi-title">Conversion Rate</div>
+                            <div class="kpi-trend trend-up">↗ +0.3%</div>
+                        </div>
+                        <div class="kpi-value">3.2%</div>
+                        <div class="kpi-progress">
+                            <div class="kpi-progress-bar" style="width: 91%;"></div>
+                        </div>
+                    </div>
+                    
+                    <div class="kpi-card">
+                        <div class="kpi-header">
+                            <div class="kpi-title">System Uptime</div>
+                            <div class="kpi-trend trend-up">↗ 0.1%</div>
+                        </div>
+                        <div class="kpi-value">99.7%</div>
+                        <div class="kpi-progress">
+                            <div class="kpi-progress-bar" style="width: 99.7%;"></div>
+                        </div>
+                    </div>
+                    
+                    <div class="kpi-card">
+                        <div class="kpi-header">
+                            <div class="kpi-title">Customer Satisfaction</div>
+                            <div class="kpi-trend trend-up">↗ +2%</div>
+                        </div>
+                        <div class="kpi-value">87%</div>
+                        <div class="kpi-progress">
+                            <div class="kpi-progress-bar" style="width: 87%;"></div>
+                        </div>
+                    </div>
+                    
+                    <div class="kpi-card">
+                        <div class="kpi-header">
+                            <div class="kpi-title">Marketing ROI</div>
+                            <div class="kpi-trend trend-up">↗ +1x</div>
+                        </div>
+                        <div class="kpi-value">12.3x</div>
+                        <div class="kpi-progress">
+                            <div class="kpi-progress-bar" style="width: 82%;"></div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="campaigns-table">
+                    <div class="table-header">
+                        <div class="table-title">Marketing Campaigns</div>
+                    </div>
+                    <table class="table">
+                        <thead>
+                            <tr>
+                                <th>Campaign</th>
+                                <th>Platform</th>
+                                <th>Status</th>
+                                <th>Budget</th>
+                                <th>Spend</th>
+                                <th>ROI</th>
+                                <th>Confidence</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>Premium Art Collection</td>
+                                <td>Meta Ads</td>
+                                <td><span class="campaign-status status-live">Live</span></td>
+                                <td>$1,200</td>
+                                <td>$890</td>
+                                <td>15.2x</td>
+                                <td>
+                                    <div class="confidence-score">
+                                        92%
+                                        <div class="confidence-bar">
+                                            <div class="confidence-fill" style="width: 92%;"></div>
+                                        </div>
+                                    </div>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>Home Decorator Targeting</td>
+                                <td>Pinterest</td>
+                                <td><span class="campaign-status status-live">Live</span></td>
+                                <td>$800</td>
+                                <td>$634</td>
+                                <td>11.8x</td>
+                                <td>
+                                    <div class="confidence-score">
+                                        88%
+                                        <div class="confidence-bar">
+                                            <div class="confidence-fill" style="width: 88%;"></div>
+                                        </div>
+                                    </div>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>Email Nurture Sequence</td>
+                                <td>SendGrid</td>
+                                <td><span class="campaign-status status-live">Live</span></td>
+                                <td>$200</td>
+                                <td>$156</td>
+                                <td>18.4x</td>
+                                <td>
+                                    <div class="confidence-score">
+                                        95%
+                                        <div class="confidence-bar">
+                                            <div class="confidence-fill" style="width: 95%;"></div>
+                                        </div>
+                                    </div>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>Corporate Art Solutions</td>
+                                <td>LinkedIn</td>
+                                <td><span class="campaign-status status-paused">Paused</span></td>
+                                <td>$600</td>
+                                <td>$245</td>
+                                <td>8.2x</td>
+                                <td>
+                                    <div class="confidence-score">
+                                        76%
+                                        <div class="confidence-bar">
+                                            <div class="confidence-fill" style="width: 76%;"></div>
+                                        </div>
+                                    </div>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>TikTok Creative Showcase</td>
+                                <td>TikTok</td>
+                                <td><span class="campaign-status status-proposed">Proposed</span></td>
+                                <td>$500</td>
+                                <td>$0</td>
+                                <td>-</td>
+                                <td>
+                                    <div class="confidence-score">
+                                        84%
+                                        <div class="confidence-bar">
+                                            <div class="confidence-fill" style="width: 84%;"></div>
+                                        </div>
+                                    </div>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>Google Search Premium</td>
+                                <td>Google Ads</td>
+                                <td><span class="campaign-status status-live">Live</span></td>
+                                <td>$1,000</td>
+                                <td>$789</td>
+                                <td>13.6x</td>
+                                <td>
+                                    <div class="confidence-score">
+                                        91%
+                                        <div class="confidence-bar">
+                                            <div class="confidence-fill" style="width: 91%;"></div>
+                                        </div>
+                                    </div>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- Agents Section -->
+            <section id="agents" class="section">
+                <div class="card-header">
+                    <h2 class="card-title">Agent Management</h2>
+                    <p class="card-subtitle">17 agents across 12 departments ensuring autonomous operations</p>
+                </div>
+                
+                <div class="agents-grid">
+                    <!-- C-Suite Agents -->
+                    <div class="agent-card">
+                        <div class="agent-status status-dot-active"></div>
+                        <div class="agent-header">
+                            <div class="agent-emoji">👔</div>
+                            <div class="agent-info">
+                                <h3>Atlas CEO</h3>
+                                <div class="agent-role">Chief Executive Officer</div>
+                            </div>
+                        </div>
+                        <div class="agent-details">
+                            Strategic leadership, vision setting, stakeholder management
+                        </div>
+                        <div class="agent-department">Executive</div>
+                    </div>
+
+                    <div class="agent-card">
+                        <div class="agent-status status-dot-active"></div>
+                        <div class="agent-header">
+                            <div class="agent-emoji">💰</div>
+                            <div class="agent-info">
+                                <h3>Ledger CFO</h3>
+                                <div class="agent-role">Chief Financial Officer</div>
+                            </div>
+                        </div>
+                        <div class="agent-details">
+                            Financial planning, budgeting, revenue optimization
+                        </div>
+                        <div class="agent-department">Finance</div>
+                    </div>
+
+                    <div class="agent-card">
+                        <div class="agent-status status-dot-active"></div>
+                        <div class="agent-header">
+                            <div class="agent-emoji">📢</div>
+                            <div class="agent-info">
+                                <h3>Spark CMO</h3>
+                                <div class="agent-role">Chief Marketing Officer</div>
+                            </div>
+                        </div>
+                        <div class="agent-details">
+                            Brand management, customer acquisition, campaign optimization
+                        </div>
+                        <div class="agent-department">Marketing</div>
+                    </div>
+
+                    <div class="agent-card">
+                        <div class="agent-status status-dot-active"></div>
+                        <div class="agent-header">
+                            <div class="agent-emoji">⚙️</div>
+                            <div class="agent-info">
+                                <h3>Ops COO</h3>
+                                <div class="agent-role">Chief Operating Officer</div>
+                            </div>
+                        </div>
+                        <div class="agent-details">
+                            Operations management, process optimization, efficiency
+                        </div>
+                        <div class="agent-department">Operations</div>
+                    </div>
+
+                    <div class="agent-card">
+                        <div class="agent-status status-dot-active"></div>
+                        <div class="agent-header">
+                            <div class="agent-emoji">🔧</div>
+                            <div class="agent-info">
+                                <h3>Circuit CTO</h3>
+                                <div class="agent-role">Chief Technology Officer</div>
+                            </div>
+                        </div>
+                        <div class="agent-details">
+                            Platform development, technical architecture, integration
+                        </div>
+                        <div class="agent-department">Technology</div>
+                    </div>
+
+                    <div class="agent-card">
+                        <div class="agent-status status-dot-active"></div>
+                        <div class="agent-header">
+                            <div class="agent-emoji">🤝</div>
+                            <div class="agent-info">
+                                <h3>Harbor HR</h3>
+                                <div class="agent-role">Human Resources</div>
+                            </div>
+                        </div>
+                        <div class="agent-details">
+                            Workforce management, contractor relations, performance
+                        </div>
+                        <div class="agent-department">HR</div>
+                    </div>
+
+                    <div class="agent-card">
+                        <div class="agent-status status-dot-idle"></div>
+                        <div class="agent-header">
+                            <div class="agent-emoji">📚</div>
+                            <div class="agent-info">
+                                <h3>Oracle Knowledge</h3>
+                                <div class="agent-role">Knowledge Management</div>
+                            </div>
+                        </div>
+                        <div class="agent-details">
+                            Information curation, insight generation, learning systems
+                        </div>
+                        <div class="agent-department">Strategy</div>
+                    </div>
+
+                    <div class="agent-card">
+                        <div class="agent-status status-dot-active"></div>
+                        <div class="agent-header">
+                            <div class="agent-emoji">⚖️</div>
+                            <div class="agent-info">
+                                <h3>Shield Legal</h3>
+                                <div class="agent-role">Legal Affairs</div>
+                            </div>
+                        </div>
+                        <div class="agent-details">
+                            Contract management, compliance, risk assessment
+                        </div>
+                        <div class="agent-department">Legal</div>
+                    </div>
+
+                    <div class="agent-card">
+                        <div class="agent-status status-dot-active"></div>
+                        <div class="agent-header">
+                            <div class="agent-emoji">🧭</div>
+                            <div class="agent-info">
+                                <h3>Compass Strategy</h3>
+                                <div class="agent-role">Strategic Planning</div>
+                            </div>
+                        </div>
+                        <div class="agent-details">
+                            Long-term planning, competitive analysis, market positioning
+                        </div>
+                        <div class="agent-department">Strategy</div>
+                    </div>
+
+                    <!-- Domain Agents -->
+                    <div class="agent-card">
+                        <div class="agent-status status-dot-active"></div>
+                        <div class="agent-header">
+                            <div class="agent-emoji">📦</div>
+                            <div class="agent-info">
+                                <h3>Inventory Manager</h3>
+                                <div class="agent-role">Inventory Management</div>
+                            </div>
+                        </div>
+                        <div class="agent-details">
+                            Stock management, demand forecasting, supplier coordination
+                        </div>
+                        <div class="agent-department">Operations</div>
+                    </div>
+
+                    <div class="agent-card">
+                        <div class="agent-status status-dot-active"></div>
+                        <div class="agent-header">
+                            <div class="agent-emoji">🚚</div>
+                            <div class="agent-info">
+                                <h3>Fulfillment Manager</h3>
+                                <div class="agent-role">Order Fulfillment</div>
+                            </div>
+                        </div>
+                        <div class="agent-details">
+                            Order processing, shipping optimization, delivery tracking
+                        </div>
+                        <div class="agent-department">Operations</div>
+                    </div>
+
+                    <div class="agent-card">
+                        <div class="agent-status status-dot-active"></div>
+                        <div class="agent-header">
+                            <div class="agent-emoji">🎨</div>
+                            <div class="agent-info">
+                                <h3>Product Manager</h3>
+                                <div class="agent-role">Product Management</div>
+                            </div>
+                        </div>
+                        <div class="agent-details">
+                            Product catalog, pricing strategy, quality assurance
+                        </div>
+                        <div class="agent-department">Operations</div>
+                    </div>
+
+                    <div class="agent-card">
+                        <div class="agent-status status-dot-active"></div>
+                        <div class="agent-header">
+                            <div class="agent-emoji">🎯</div>
+                            <div class="agent-info">
+                                <h3>Marketing Director</h3>
+                                <div class="agent-role">Marketing Operations</div>
+                            </div>
+                        </div>
+                        <div class="agent-details">
+                            Campaign execution, content creation, audience targeting
+                        </div>
+                        <div class="agent-department">Marketing</div>
+                    </div>
+
+                    <div class="agent-card">
+                        <div class="agent-status status-dot-active"></div>
+                        <div class="agent-header">
+                            <div class="agent-emoji">💼</div>
+                            <div class="agent-info">
+                                <h3>Sales Director</h3>
+                                <div class="agent-role">Sales Operations</div>
+                            </div>
+                        </div>
+                        <div class="agent-details">
+                            Lead conversion, customer engagement, revenue optimization
+                        </div>
+                        <div class="agent-department">Sales</div>
+                    </div>
+
+                    <div class="agent-card">
+                        <div class="agent-status status-dot-active"></div>
+                        <div class="agent-header">
+                            <div class="agent-emoji">🛡️</div>
+                            <div class="agent-info">
+                                <h3>Compliance Director</h3>
+                                <div class="agent-role">Compliance & Risk</div>
+                            </div>
+                        </div>
+                        <div class="agent-details">
+                            Regulatory compliance, risk management, quality control
+                        </div>
+                        <div class="agent-department">Compliance</div>
+                    </div>
+
+                    <div class="agent-card">
+                        <div class="agent-status status-dot-active"></div>
+                        <div class="agent-header">
+                            <div class="agent-emoji">🎭</div>
+                            <div class="agent-info">
+                                <h3>Creative Director</h3>
+                                <div class="agent-role">Creative Operations</div>
+                            </div>
+                        </div>
+                        <div class="agent-details">
+                            Brand design, visual content, creative asset management
+                        </div>
+                        <div class="agent-department">Creative</div>
+                    </div>
+
+                    <div class="agent-card">
+                        <div class="agent-status status-dot-active"></div>
+                        <div class="agent-header">
+                            <div class="agent-emoji">💬</div>
+                            <div class="agent-info">
+                                <h3>CS Director</h3>
+                                <div class="agent-role">Customer Service</div>
+                            </div>
+                        </div>
+                        <div class="agent-details">
+                            Customer support, satisfaction management, service optimization
+                        </div>
+                        <div class="agent-department">Customer Service</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Kanban Section -->
+            <section id="kanban" class="section">
+                <div class="card-header">
+                    <h2 class="card-title">Task Management</h2>
+                    <p class="card-subtitle">Agent tasks across all departments</p>
+                </div>
+                
+                <div class="kanban">
+                    <!-- Backlog -->
+                    <div class="kanban-column">
+                        <div class="column-header">
+                            <div class="column-title">Backlog</div>
+                            <div class="column-count">4</div>
+                        </div>
+                        
+                        <div class="kanban-card" onclick="openTaskModal('task1')">
+                            <div class="card-priority priority-medium"></div>
+                            <div class="card-task-title">Implement TikTok marketing campaign</div>
+                            <div class="card-meta">
+                                <div class="card-agents">
+                                    <div class="agent-avatar">📢</div>
+                                    <div class="agent-avatar">🎯</div>
+                                </div>
+                                <div class="card-department">Marketing</div>
+                            </div>
+                        </div>
+
+                        <div class="kanban-card" onclick="openTaskModal('task2')">
+                            <div class="card-priority priority-low"></div>
+                            <div class="card-task-title">Optimize inventory forecasting algorithm</div>
+                            <div class="card-meta">
+                                <div class="card-agents">
+                                    <div class="agent-avatar">📦</div>
+                                    <div class="agent-avatar">🔧</div>
+                                </div>
+                                <div class="card-department">Operations</div>
+                            </div>
+                        </div>
+
+                        <div class="kanban-card" onclick="openTaskModal('task3')">
+                            <div class="card-priority priority-high"></div>
+                            <div class="card-task-title">Review quarterly financial projections</div>
+                            <div class="card-meta">
+                                <div class="card-agents">
+                                    <div class="agent-avatar">💰</div>
+                                    <div class="agent-avatar">👔</div>
+                                </div>
+                                <div class="card-department">Finance</div>
+                            </div>
+                        </div>
+
+                        <div class="kanban-card" onclick="openTaskModal('task4')">
+                            <div class="card-priority priority-medium"></div>
+                            <div class="card-task-title">Update compliance documentation</div>
+                            <div class="card-meta">
+                                <div class="card-agents">
+                                    <div class="agent-avatar">🛡️</div>
+                                    <div class="agent-avatar">⚖️</div>
+                                </div>
+                                <div class="card-department">Compliance</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- To Do -->
+                    <div class="kanban-column">
+                        <div class="column-header">
+                            <div class="column-title">To Do</div>
+                            <div class="column-count">5</div>
+                        </div>
+                        
+                        <div class="kanban-card" onclick="openTaskModal('task5')">
+                            <div class="card-priority priority-high"></div>
+                            <div class="card-task-title">Launch Pinterest advertising campaign</div>
+                            <div class="card-meta">
+                                <div class="card-agents">
+                                    <div class="agent-avatar">🎯</div>
+                                </div>
+                                <div class="card-department">Marketing</div>
+                            </div>
+                        </div>
+
+                        <div class="kanban-card" onclick="openTaskModal('task6')">
+                            <div class="card-priority priority-medium"></div>
+                            <div class="card-task-title">Analyze customer satisfaction metrics</div>
+                            <div class="card-meta">
+                                <div class="card-agents">
+                                    <div class="agent-avatar">💬</div>
+                                </div>
+                                <div class="card-department">Customer Service</div>
+                            </div>
+                        </div>
+
+                        <div class="kanban-card" onclick="openTaskModal('task7')">
+                            <div class="card-priority priority-low"></div>
+                            <div class="card-task-title">Design new product catalog layout</div>
+                            <div class="card-meta">
+                                <div class="card-agents">
+                                    <div class="agent-avatar">🎭</div>
+                                </div>
+                                <div class="card-department">Creative</div>
+                            </div>
+                        </div>
+
+                        <div class="kanban-card" onclick="openTaskModal('task8')">
+                            <div class="card-priority priority-medium"></div>
+                            <div class="card-task-title">Implement automated shipping notifications</div>
+                            <div class="card-meta">
+                                <div class="card-agents">
+                                    <div class="agent-avatar">🚚</div>
+                                </div>
+                                <div class="card-department">Operations</div>
+                            </div>
+                        </div>
+
+                        <div class="kanban-card" onclick="openTaskModal('task9')">
+                            <div class="card-priority priority-high"></div>
+                            <div class="card-task-title">Strategic partnership evaluation</div>
+                            <div class="card-meta">
+                                <div class="card-agents">
+                                    <div class="agent-avatar">🧭</div>
+                                    <div class="agent-avatar">👔</div>
+                                </div>
+                                <div class="card-department">Strategy</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- In Progress -->
+                    <div class="kanban-column">
+                        <div class="column-header">
+                            <div class="column-title">In Progress</div>
+                            <div class="column-count">4</div>
+                        </div>
+                        
+                        <div class="kanban-card" onclick="openTaskModal('task10')">
+                            <div class="card-priority priority-high"></div>
+                            <div class="card-task-title">Optimize Meta Ads performance</div>
+                            <div class="card-meta">
+                                <div class="card-agents">
+                                    <div class="agent-avatar">🎯</div>
+                                </div>
+                                <div class="card-department">Marketing</div>
+                            </div>
+                        </div>
+
+                        <div class="kanban-card" onclick="openTaskModal('task11')">
+                            <div class="card-priority priority-medium"></div>
+                            <div class="card-task-title">Process bulk inventory update</div>
+                            <div class="card-meta">
+                                <div class="card-agents">
+                                    <div class="agent-avatar">📦</div>
+                                </div>
+                                <div class="card-department">Operations</div>
+                            </div>
+                        </div>
+
+                        <div class="kanban-card" onclick="openTaskModal('task12')">
+                            <div class="card-priority priority-low"></div>
+                            <div class="card-task-title">Update employee handbook</div>
+                            <div class="card-meta">
+                                <div class="card-agents">
+                                    <div class="agent-avatar">🤝</div>
+                                </div>
+                                <div class="card-department">HR</div>
+                            </div>
+                        </div>
+
+                        <div class="kanban-card" onclick="openTaskModal('task13')">
+                            <div class="card-priority priority-medium"></div>
+                            <div class="card-task-title">Implement payment gateway improvements</div>
+                            <div class="card-meta">
+                                <div class="card-agents">
+                                    <div class="agent-avatar">🔧</div>
+                                </div>
+                                <div class="card-department">Technology</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Review -->
+                    <div class="kanban-column">
+                        <div class="column-header">
+                            <div class="column-title">Review</div>
+                            <div class="column-count">2</div>
+                        </div>
+                        
+                        <div class="kanban-card" onclick="openTaskModal('task14')">
+                            <div class="card-priority priority-high"></div>
+                            <div class="card-task-title">Email nurture campaign analysis</div>
+                            <div class="card-meta">
+                                <div class="card-agents">
+                                    <div class="agent-avatar">🎯</div>
+                                    <div class="agent-avatar">💼</div>
+                                </div>
+                                <div class="card-department">Marketing</div>
+                            </div>
+                        </div>
+
+                        <div class="kanban-card" onclick="openTaskModal('task15')">
+                            <div class="card-priority priority-medium"></div>
+                            <div class="card-task-title">Monthly sales report generation</div>
+                            <div class="card-meta">
+                                <div class="card-agents">
+                                    <div class="agent-avatar">💼</div>
+                                    <div class="agent-avatar">💰</div>
+                                </div>
+                                <div class="card-department">Sales</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Done -->
+                    <div class="kanban-column">
+                        <div class="column-header">
+                            <div class="column-title">Done</div>
+                            <div class="column-count">3</div>
+                        </div>
+                        
+                        <div class="kanban-card" onclick="openTaskModal('task16')">
+                            <div class="card-priority priority-high"></div>
+                            <div class="card-task-title">Q1 business strategy finalization</div>
+                            <div class="card-meta">
+                                <div class="card-agents">
+                                    <div class="agent-avatar">🧭</div>
+                                    <div class="agent-avatar">👔</div>
+                                </div>
+                                <div class="card-department">Strategy</div>
+                            </div>
+                        </div>
+
+                        <div class="kanban-card" onclick="openTaskModal('task17')">
+                            <div class="card-priority priority-medium"></div>
+                            <div class="card-task-title">Customer service automation setup</div>
+                            <div class="card-meta">
+                                <div class="card-agents">
+                                    <div class="agent-avatar">💬</div>
+                                    <div class="agent-avatar">🔧</div>
+                                </div>
+                                <div class="card-department">Customer Service</div>
+                            </div>
+                        </div>
+
+                        <div class="kanban-card" onclick="openTaskModal('task18')">
+                            <div class="card-priority priority-low"></div>
+                            <div class="card-task-title">Brand guidelines documentation</div>
+                            <div class="card-meta">
+                                <div class="card-agents">
+                                    <div class="agent-avatar">🎭</div>
+                                </div>
+                                <div class="card-department">Creative</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Gantt Section -->
+            <section id="gantt" class="section">
+                <div class="card-header">
+                    <h2 class="card-title">Project Timeline</h2>
+                    <p class="card-subtitle">2026 roadmap with phases and milestones</p>
+                </div>
+                
+                <div class="gantt-container">
+                    <div class="gantt-header">
+                        <div style="font-weight: 600;">Tasks</div>
+                        <div class="gantt-timeline">
+                            <div class="timeline-month">Jan</div>
+                            <div class="timeline-month">Feb</div>
+                            <div class="timeline-month">Mar</div>
+                            <div class="timeline-month">Apr</div>
+                            <div class="timeline-month">May</div>
+                            <div class="timeline-month">Jun</div>
+                            <div class="timeline-month">Jul</div>
+                            <div class="timeline-month">Aug</div>
+                            <div class="timeline-month">Sep</div>
+                            <div class="timeline-month">Oct</div>
+                            <div class="timeline-month">Nov</div>
+                            <div class="timeline-month">Dec</div>
+                        </div>
+                    </div>
+
+                    <div class="phase-label">Foundation Phase</div>
+                    
+                    <div class="gantt-row">
+                        <div>
+                            <div class="gantt-task">Platform Architecture</div>
+                            <div class="gantt-department">Technology - Circuit CTO</div>
+                        </div>
+                        <div class="gantt-bars">
+                            <div class="gantt-bar status-completed" style="grid-column: 1 / 3;">Foundation</div>
+                        </div>
+                    </div>
+
+                    <div class="gantt-row">
+                        <div>
+                            <div class="gantt-task">Agent System Setup</div>
+                            <div class="gantt-department">Technology - Circuit CTO</div>
+                        </div>
+                        <div class="gantt-bars">
+                            <div class="gantt-bar status-completed" style="grid-column: 1 / 3;">Setup</div>
+                        </div>
+                    </div>
+
+                    <div class="gantt-row">
+                        <div>
+                            <div class="gantt-task">Business Model Definition</div>
+                            <div class="gantt-department">Strategy - Compass Strategy</div>
+                        </div>
+                        <div class="gantt-bars">
+                            <div class="gantt-bar status-completed" style="grid-column: 1 / 2;">Complete</div>
+                        </div>
+                    </div>
+
+                    <div class="phase-label">Integration Phase</div>
+                    
+                    <div class="gantt-row">
+                        <div>
+                            <div class="gantt-task">Shopify Integration</div>
+                            <div class="gantt-department">Technology - Circuit CTO</div>
+                        </div>
+                        <div class="gantt-bars">
+                            <div class="gantt-bar status-in-progress" style="grid-column: 3 / 5;">Integration</div>
+                        </div>
+                    </div>
+
+                    <div class="gantt-row">
+                        <div>
+                            <div class="gantt-task">Marketing Automation</div>
+                            <div class="gantt-department">Marketing - Spark CMO</div>
+                        </div>
+                        <div class="gantt-bars">
+                            <div class="gantt-bar status-active" style="grid-column: 3 / 4;">Setup</div>
+                        </div>
+                    </div>
+
+                    <div class="gantt-row">
+                        <div>
+                            <div class="gantt-task">Payment Processing</div>
+                            <div class="gantt-department">Finance - Ledger CFO</div>
+                        </div>
+                        <div class="gantt-bars">
+                            <div class="gantt-bar status-active" style="grid-column: 3 / 4;">Stripe</div>
+                        </div>
+                    </div>
+
+                    <div class="phase-label">Launch Phase</div>
+                    
+                    <div class="gantt-row">
+                        <div>
+                            <div class="gantt-task">Campaign Optimization</div>
+                            <div class="gantt-department">Marketing - Marketing Director</div>
+                        </div>
+                        <div class="gantt-bars">
+                            <div class="gantt-bar status-proposed" style="grid-column: 5 / 7;">Launch</div>
+                        </div>
+                    </div>
+
+                    <div class="gantt-row">
+                        <div>
+                            <div class="gantt-task">Customer Onboarding</div>
+                            <div class="gantt-department">Sales - Sales Director</div>
+                        </div>
+                        <div class="gantt-bars">
+                            <div class="gantt-bar status-proposed" style="grid-column: 5 / 6;">Setup</div>
+                        </div>
+                    </div>
+
+                    <div class="gantt-row">
+                        <div>
+                            <div class="gantt-task">Quality Assurance</div>
+                            <div class="gantt-department">Compliance - Compliance Director</div>
+                        </div>
+                        <div class="gantt-bars">
+                            <div class="gantt-bar status-proposed" style="grid-column: 5 / 7;">QA Testing</div>
+                        </div>
+                    </div>
+
+                    <div class="phase-label">Scale Phase</div>
+                    
+                    <div class="gantt-row">
+                        <div>
+                            <div class="gantt-task">International Expansion</div>
+                            <div class="gantt-department">Strategy - Atlas CEO</div>
+                        </div>
+                        <div class="gantt-bars">
+                            <div class="gantt-bar status-proposed" style="grid-column: 7 / 13;">Scale</div>
+                        </div>
+                    </div>
+
+                    <div class="gantt-row">
+                        <div>
+                            <div class="gantt-task">Advanced Analytics</div>
+                            <div class="gantt-department">Technology - Oracle Knowledge</div>
+                        </div>
+                        <div class="gantt-bars">
+                            <div class="gantt-bar status-proposed" style="grid-column: 8 / 12;">Analytics</div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Wizard Section -->
+            <section id="wizard" class="section">
+                <div class="wizard">
+                    <div class="wizard-steps">
+                        <div class="wizard-step active">
+                            <div class="step-circle">1</div>
+                            <div class="step-label">Business Info</div>
+                        </div>
+                        <div class="wizard-step">
+                            <div class="step-circle">2</div>
+                            <div class="step-label">Industry & Description</div>
+                        </div>
+                        <div class="wizard-step">
+                            <div class="step-circle">3</div>
+                            <div class="step-label">Goals & Objectives</div>
+                        </div>
+                        <div class="wizard-step">
+                            <div class="step-circle">4</div>
+                            <div class="step-label">Organizational Structure</div>
+                        </div>
+                        <div class="wizard-step">
+                            <div class="step-circle">5</div>
+                            <div class="step-label">Target Market</div>
+                        </div>
+                        <div class="wizard-step">
+                            <div class="step-circle">6</div>
+                            <div class="step-label">Products & Services</div>
+                        </div>
+                        <div class="wizard-step">
+                            <div class="step-circle">7</div>
+                            <div class="step-label">Review & Generate</div>
+                        </div>
+                    </div>
+
+                    <div class="wizard-content">
+                        <div id="wizard-step-1">
+                            <h3 style="margin-bottom: 24px;">Business Information</h3>
+                            
+                            <div class="form-grid">
+                                <div class="form-group">
+                                    <label class="form-label">Business Name</label>
+                                    <input type="text" class="form-input" id="businessName" placeholder="Enter business name">
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label">Legal Name</label>
+                                    <input type="text" class="form-input" id="legalName" placeholder="Enter legal entity name">
+                                </div>
+                            </div>
+
+                            <div class="form-group">
+                                <label class="form-label">Industry Type</label>
+                                <select class="form-select" id="industryType" onchange="prefillIndustryData()">
+                                    <option value="">Select Industry</option>
+                                    <option value="ecommerce">E-commerce</option>
+                                    <option value="saas">Software as a Service (SaaS)</option>
+                                    <option value="consulting">Consulting</option>
+                                    <option value="marketplace">Marketplace</option>
+                                    <option value="retail">Retail</option>
+                                    <option value="healthcare">Healthcare</option>
+                                    <option value="fintech">Financial Technology</option>
+                                    <option value="edtech">Education Technology</option>
+                                    <option value="manufacturing">Manufacturing</option>
+                                    <option value="hospitality">Hospitality</option>
+                                    <option value="real-estate">Real Estate</option>
+                                    <option value="media">Media & Entertainment</option>
+                                    <option value="logistics">Logistics & Transportation</option>
+                                    <option value="legal-services">Legal Services</option>
+                                    <option value="professional-services">Professional Services</option>
+                                    <option value="food-beverage">Food & Beverage</option>
+                                    <option value="fitness-wellness">Fitness & Wellness</option>
+                                    <option value="automotive">Automotive</option>
+                                    <option value="agriculture">Agriculture</option>
+                                    <option value="energy">Energy</option>
+                                    <option value="non-profit">Non-Profit</option>
+                                    <option value="other">Other</option>
+                                </select>
+                            </div>
+
+                            <div class="form-group">
+                                <label class="form-label">Business Stage</label>
+                                <select class="form-select" id="businessStage">
+                                    <option value="idea">Idea</option>
+                                    <option value="mvp">MVP</option>
+                                    <option value="growth">Growth</option>
+                                    <option value="scale">Scale</option>
+                                    <option value="mature">Mature</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="wizard-actions">
+                        <button class="btn btn-secondary" onclick="previousStep()" style="display: none;">Previous</button>
+                        <button class="btn btn-primary" onclick="nextStep()">Next</button>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Task Detail Modal -->
+    <div id="taskModal" class="modal">
+        <div class="modal-content">
+            <button class="modal-close" onclick="closeModal()">&times;</button>
+            <div class="modal-header">
+                <h3 class="modal-title" id="modalTaskTitle">Task Details</h3>
+                <div id="modalTaskMeta"></div>
+            </div>
+            
+            <div id="modalTaskDescription"></div>
+            
+            <div class="progress-section">
+                <div class="progress-label">
+                    <span>Completion Progress</span>
+                    <span id="modalProgress">0%</span>
+                </div>
+                <div class="progress-bar">
+                    <div class="progress-fill" id="modalProgressBar" style="width: 0%;"></div>
+                </div>
+            </div>
+
+            <div class="token-usage">
+                <div class="token-stat">
+                    <div class="token-value" id="modalInputTokens">0</div>
+                    <div class="token-label">Input Tokens</div>
+                </div>
+                <div class="token-stat">
+                    <div class="token-value" id="modalOutputTokens">0</div>
+                    <div class="token-label">Output Tokens</div>
+                </div>
+                <div class="token-stat">
+                    <div class="token-value" id="modalCacheRead">0</div>
+                    <div class="token-label">Cache Read</div>
+                </div>
+                <div class="token-stat">
+                    <div class="token-value" id="modalEstimatedCost">$0.00</div>
+                    <div class="token-label">Estimated Cost</div>
+                </div>
+            </div>
+
+            <div id="modalStatusHistory"></div>
+        </div>
+    </div>
+
+    <script>
+        // Navigation
+        function switchSection(sectionName) {
+            // Hide all sections
+            document.querySelectorAll('.section').forEach(section => {
+                section.classList.remove('active');
+            });
+            
+            // Show selected section
+            document.getElementById(sectionName).classList.add('active');
+            
+            // Update navigation
+            document.querySelectorAll('.nav-item').forEach(item => {
+                item.classList.remove('active');
+            });
+            document.querySelector(`[data-section="${sectionName}"]`).classList.add('active');
+        }
+
+        // Navigation event listeners
+        document.querySelectorAll('.nav-item').forEach(item => {
+            item.addEventListener('click', () => {
+                const section = item.getAttribute('data-section');
+                switchSection(section);
+            });
+        });
+
+        // Wizard functionality
+        let currentWizardStep = 1;
+        const maxWizardSteps = 7;
+
+        const industryDefaults = {
+            ecommerce: {
+                description: "Online retail business selling products directly to consumers",
+                goals: "Increase online sales, expand product catalog, improve customer experience",
+                targetMarket: "Online shoppers, retail consumers, B2C customers",
+                products: "Physical products sold online, digital services, marketplace offerings"
+            },
+            saas: {
+                description: "Software as a Service platform providing cloud-based solutions",
+                goals: "Grow subscriber base, reduce churn, expand feature set, increase MRR",
+                targetMarket: "Businesses needing software solutions, remote teams, SMBs to enterprise",
+                products: "Cloud software, API services, integrations, premium support"
+            },
+            consulting: {
+                description: "Professional consulting services providing expertise and strategic guidance",
+                goals: "Expand client base, increase project value, build thought leadership",
+                targetMarket: "Businesses needing specialized expertise, executives, project managers",
+                products: "Consulting services, strategic planning, implementation support, training"
+            }
+            // Add more industry defaults as needed
+        };
+
+        function prefillIndustryData() {
+            const industry = document.getElementById('industryType').value;
+            const defaults = industryDefaults[industry];
+            
+            if (defaults) {
+                // Will prefill other steps when they're implemented
+                console.log('Prefilling industry data for:', industry);
+            }
+        }
+
+        function nextStep() {
+            if (currentWizardStep < maxWizardSteps) {
+                // Save current step data
+                saveWizardData();
+                
+                currentWizardStep++;
+                updateWizardStep();
+            }
+        }
+
+        function previousStep() {
+            if (currentWizardStep > 1) {
+                currentWizardStep--;
+                updateWizardStep();
+            }
+        }
+
+        function updateWizardStep() {
+            // Update step indicators
+            document.querySelectorAll('.wizard-step').forEach((step, index) => {
+                step.classList.remove('active', 'completed');
+                if (index + 1 === currentWizardStep) {
+                    step.classList.add('active');
+                } else if (index + 1 < currentWizardStep) {
+                    step.classList.add('completed');
+                }
+            });
+
+            // Update navigation buttons
+            const prevBtn = document.querySelector('.wizard-actions .btn-secondary');
+            const nextBtn = document.querySelector('.wizard-actions .btn-primary');
+            
+            prevBtn.style.display = currentWizardStep > 1 ? 'block' : 'none';
+            nextBtn.textContent = currentWizardStep === maxWizardSteps ? 'Generate Ontology' : 'Next';
+
+            // For now, only step 1 is implemented
+            // In a full implementation, you'd show/hide different step content
+        }
+
+        function saveWizardData() {
+            const wizardData = {
+                businessName: document.getElementById('businessName').value,
+                legalName: document.getElementById('legalName').value,
+                industryType: document.getElementById('industryType').value,
+                businessStage: document.getElementById('businessStage').value,
+                currentStep: currentWizardStep
+            };
+            
+            localStorage.setItem('mabosWizardData', JSON.stringify(wizardData));
+        }
+
+        function loadWizardData() {
+            const saved = localStorage.getItem('mabosWizardData');
+            if (saved) {
+                const data = JSON.parse(saved);
+                document.getElementById('businessName').value = data.businessName || '';
+                document.getElementById('legalName').value = data.legalName || '';
+                document.getElementById('industryType').value = data.industryType || '';
+                document.getElementById('businessStage').value = data.businessStage || '';
+                currentWizardStep = data.currentStep || 1;
+                updateWizardStep();
+            }
+        }
+
+        // Task Modal functionality
+        const taskDetails = {
+            task1: {
+                title: "Implement TikTok marketing campaign",
+                description: "Research TikTok advertising platform, create campaign targeting strategy for wall art products, design creative content, and launch initial test campaign with $500 budget.",
+                agents: [{ name: "Spark CMO", role: "Campaign Strategy" }, { name: "Marketing Director", role: "Execution" }],
+                department: "Marketing",
+                businessGoal: "Expand social media reach and attract younger demographics",
+                progress: 15,
+                inputTokens: 2450,
+                outputTokens: 1890,
+                cacheRead: 340,
+                estimatedCost: 4.23,
+                statusHistory: [
+                    { date: "2026-02-17", status: "Created", note: "Task assigned to marketing team" },
+                    { date: "2026-02-16", status: "Research Started", note: "TikTok platform analysis in progress" }
+                ]
+            },
+            task10: {
+                title: "Optimize Meta Ads performance",
+                description: "Analyze current Meta advertising campaigns, identify underperforming audiences, adjust targeting parameters, optimize ad creative rotation, and implement A/B tests for improved ROI.",
+                agents: [{ name: "Marketing Director", role: "Campaign Optimization" }],
+                department: "Marketing",
+                businessGoal: "Improve marketing ROI from current 12.3x to 15x target",
+                progress: 65,
+                inputTokens: 5120,
+                outputTokens: 3890,
+                cacheRead: 1240,
+                estimatedCost: 12.45,
+                statusHistory: [
+                    { date: "2026-02-18", status: "Optimization Tests Running", note: "A/B testing new creative variants" },
+                    { date: "2026-02-17", status: "Analysis Complete", note: "Identified 3 underperforming audience segments" },
+                    { date: "2026-02-16", status: "In Progress", note: "Campaign performance analysis started" }
+                ]
+            },
+            task16: {
+                title: "Q1 business strategy finalization",
+                description: "Complete comprehensive Q1 2026 business strategy including market analysis, competitive positioning, resource allocation, and quarterly OKRs across all departments.",
+                agents: [{ name: "Compass Strategy", role: "Strategic Planning" }, { name: "Atlas CEO", role: "Executive Review" }],
+                department: "Strategy",
+                businessGoal: "Establish clear strategic direction for first quarter growth initiatives",
+                progress: 100,
+                inputTokens: 8940,
+                outputTokens: 6720,
+                cacheRead: 2150,
+                estimatedCost: 28.90,
+                statusHistory: [
+                    { date: "2026-02-18", status: "Completed", note: "Strategy approved by executive team" },
+                    { date: "2026-02-17", status: "Final Review", note: "CEO approval and stakeholder sign-off" },
+                    { date: "2026-02-15", status: "Draft Complete", note: "Strategy document finalized" },
+                    { date: "2026-02-14", status: "In Progress", note: "Competitive analysis and market research" }
+                ]
+            }
+            // Add more task details as needed
+        };
+
+        function openTaskModal(taskId) {
+            const task = taskDetails[taskId] || {
+                title: "Task Details",
+                description: "Task description not available.",
+                agents: [],
+                department: "Unknown",
+                businessGoal: "Not specified",
+                progress: 0,
+                inputTokens: 0,
+                outputTokens: 0,
+                cacheRead: 0,
+                estimatedCost: 0,
+                statusHistory: []
+            };
+
+            document.getElementById('modalTaskTitle').textContent = task.title;
+            document.getElementById('modalTaskDescription').innerHTML = `
+                <p style="margin-bottom: 16px;">${task.description}</p>
+                <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-bottom: 16px;">
+                    <div>
+                        <strong>Assigned Agents:</strong><br>
+                        ${task.agents.map(agent => `${agent.name} (${agent.role})`).join('<br>')}
+                    </div>
+                    <div>
+                        <strong>Department:</strong> ${task.department}<br>
+                        <strong>Business Goal:</strong> ${task.businessGoal}
+                    </div>
+                </div>
+            `;
+            
+            document.getElementById('modalProgress').textContent = `${task.progress}%`;
+            document.getElementById('modalProgressBar').style.width = `${task.progress}%`;
+            
+            document.getElementById('modalInputTokens').textContent = task.inputTokens.toLocaleString();
+            document.getElementById('modalOutputTokens').textContent = task.outputTokens.toLocaleString();
+            document.getElementById('modalCacheRead').textContent = task.cacheRead.toLocaleString();
+            document.getElementById('modalEstimatedCost').textContent = `$${task.estimatedCost.toFixed(2)}`;
+            
+            document.getElementById('modalStatusHistory').innerHTML = `
+                <h4 style="margin-bottom: 12px;">Status History</h4>
+                <div style="space-y: 8px;">
+                    ${task.statusHistory.map(entry => `
+                        <div style="padding: 8px; background: var(--bg-secondary); border-radius: var(--radius); margin-bottom: 8px;">
+                            <strong>${entry.date}</strong> - ${entry.status}<br>
+                            <small style="color: var(--text-secondary);">${entry.note}</small>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+            
+            document.getElementById('taskModal').classList.add('active');
+        }
+
+        function closeModal() {
+            document.getElementById('taskModal').classList.remove('active');
+        }
+
+        // Close modal when clicking outside
+        document.getElementById('taskModal').addEventListener('click', (e) => {
+            if (e.target.id === 'taskModal') {
+                closeModal();
+            }
+        });
+
+        // Business functions
+        function showBusinessSelector() {
+            alert('Business switcher - In production, this would show a dropdown of all managed businesses');
+        }
+
+        function viewBusinessDetails(businessId) {
+            // In production, this would navigate to detailed business view
+            console.log('Viewing business details for:', businessId);
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            loadWizardData();
+        });
+    </script>
+</body>
+</html>

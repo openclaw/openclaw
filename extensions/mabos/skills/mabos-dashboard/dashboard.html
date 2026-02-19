@@ -1,0 +1,859 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MABOS — Stakeholder Dashboard</title>
+<style>
+  /* ── Icons (inline SVG via CSS) ── */
+  .icon { width:16px; height:16px; display:inline-block; vertical-align:middle; flex-shrink:0; }
+  .icon-lg { width:20px; height:20px; }
+  .icon svg { width:100%; height:100%; }
+
+  /* ── Theme Variables ── */
+  :root, [data-theme="dark"] {
+    --bg: #0f1117; --bg-elevated: #161922; --card: #1a1e2a; --card-hover: #1f2436;
+    --border: #262d3d; --border-hover: #3a4560;
+    --accent: #6366f1; --accent-hover: #818cf8; --accent-subtle: rgba(99,102,241,0.12); --accent-text: #a5b4fc;
+    --text: #c9cdd6; --text-dim: #6b7280; --text-bright: #f1f3f5; --text-muted: #4b5563;
+    --success: #22c55e; --success-bg: rgba(34,197,94,0.12);
+    --warning: #f59e0b; --warning-bg: rgba(245,158,11,0.12);
+    --danger: #ef4444; --danger-bg: rgba(239,68,68,0.12);
+    --info: #3b82f6; --info-bg: rgba(59,130,246,0.12);
+    --purple: #a78bfa; --purple-bg: rgba(167,139,250,0.12);
+    --strategic: #6366f1; --tactical: #3b82f6; --operational: #a78bfa;
+    --radius: 8px; --radius-lg: 12px; --gap: 16px;
+    --shadow-sm: 0 1px 2px rgba(0,0,0,0.3); --shadow-md: 0 4px 12px rgba(0,0,0,0.4);
+    --transition: 0.15s ease;
+  }
+  [data-theme="light"] {
+    --bg: #f8f9fb; --bg-elevated: #ffffff; --card: #ffffff; --card-hover: #f3f4f6;
+    --border: #e5e7eb; --border-hover: #d1d5db;
+    --accent: #4f46e5; --accent-hover: #6366f1; --accent-subtle: rgba(79,70,229,0.08); --accent-text: #4338ca;
+    --text: #374151; --text-dim: #9ca3af; --text-bright: #111827; --text-muted: #d1d5db;
+    --success: #16a34a; --success-bg: rgba(22,163,74,0.08);
+    --warning: #d97706; --warning-bg: rgba(217,119,6,0.08);
+    --danger: #dc2626; --danger-bg: rgba(220,38,38,0.08);
+    --info: #2563eb; --info-bg: rgba(37,99,235,0.08);
+    --purple: #7c3aed; --purple-bg: rgba(124,58,237,0.08);
+    --strategic: #4f46e5; --tactical: #2563eb; --operational: #7c3aed;
+    --shadow-sm: 0 1px 2px rgba(0,0,0,0.05); --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+  }
+
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:var(--bg); color:var(--text); font-family:'Inter',system-ui,-apple-system,sans-serif; line-height:1.5; transition:background var(--transition), color var(--transition); }
+  .mono { font-family:'JetBrains Mono','SF Mono',Consolas,monospace; }
+
+  /* ── Layout ── */
+  .container { max-width:1440px; margin:0 auto; padding:var(--gap) 24px; }
+  header { display:flex; justify-content:space-between; align-items:center; padding:16px 0 20px; border-bottom:1px solid var(--border); margin-bottom:20px; flex-wrap:wrap; gap:12px; }
+  .header-left { display:flex; align-items:center; gap:12px; }
+  .logo { width:32px; height:32px; background:var(--accent); border-radius:8px; display:flex; align-items:center; justify-content:center; }
+  .logo svg { width:18px; height:18px; fill:white; }
+  header h1 { font-size:1.25rem; color:var(--text-bright); font-weight:600; letter-spacing:-0.02em; }
+  header h1 span { color:var(--text-dim); font-weight:400; font-size:0.8rem; margin-left:10px; }
+  .header-right { display:flex; align-items:center; gap:8px; }
+
+  /* Theme toggle */
+  .theme-toggle { background:var(--card); border:1px solid var(--border); border-radius:8px; padding:6px; cursor:pointer; display:flex; align-items:center; justify-content:center; transition:all var(--transition); width:36px; height:36px; }
+  .theme-toggle:hover { border-color:var(--border-hover); background:var(--card-hover); }
+  .theme-toggle svg { width:18px; height:18px; stroke:var(--text-dim); fill:none; stroke-width:1.5; stroke-linecap:round; stroke-linejoin:round; }
+  [data-theme="dark"] .theme-toggle .icon-sun { display:block; }
+  [data-theme="dark"] .theme-toggle .icon-moon { display:none; }
+  [data-theme="light"] .theme-toggle .icon-sun { display:none; }
+  [data-theme="light"] .theme-toggle .icon-moon { display:block; }
+
+  .breadcrumb { font-size:0.8rem; color:var(--text-dim); margin-bottom:var(--gap); }
+  .breadcrumb a { color:var(--accent); text-decoration:none; cursor:pointer; }
+  .breadcrumb a:hover { text-decoration:underline; }
+  .section-title { font-size:0.85rem; font-weight:600; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.05em; margin:28px 0 12px; display:flex; align-items:center; gap:8px; }
+  .section-title svg { width:16px; height:16px; stroke:var(--text-dim); fill:none; stroke-width:1.5; }
+
+  /* ── Nav tabs ── */
+  .nav-tabs { display:flex; gap:2px; background:var(--card); border:1px solid var(--border); border-radius:var(--radius); padding:3px; }
+  .nav-tab { padding:7px 16px; border-radius:6px; border:none; background:none; color:var(--text-dim); font-size:0.8rem; font-weight:500; cursor:pointer; transition:all var(--transition); white-space:nowrap; display:flex; align-items:center; gap:6px; }
+  .nav-tab:hover { color:var(--text); background:var(--accent-subtle); }
+  .nav-tab.active { color:white; background:var(--accent); font-weight:600; box-shadow:var(--shadow-sm); }
+  .nav-tab svg { width:14px; height:14px; stroke:currentColor; fill:none; stroke-width:1.5; }
+
+  /* ── Summary bar ── */
+  .summary-bar { display:grid; grid-template-columns:repeat(auto-fit, minmax(150px,1fr)); gap:12px; margin-bottom:24px; }
+  .summary-item { background:var(--card); border:1px solid var(--border); border-radius:var(--radius-lg); padding:18px; text-align:center; transition:all var(--transition); box-shadow:var(--shadow-sm); }
+  .summary-item:hover { border-color:var(--border-hover); box-shadow:var(--shadow-md); }
+  .summary-item .value { font-size:1.75rem; font-weight:700; color:var(--text-bright); letter-spacing:-0.02em; }
+  .summary-item .label { font-size:0.7rem; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.05em; margin-top:4px; }
+
+  /* ── Cards grid ── */
+  .cards { display:grid; grid-template-columns:repeat(auto-fill, minmax(340px,1fr)); gap:12px; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:var(--radius-lg); padding:20px; cursor:pointer; transition:all var(--transition); box-shadow:var(--shadow-sm); }
+  .card:hover { border-color:var(--border-hover); box-shadow:var(--shadow-md); transform:translateY(-1px); }
+
+  /* ── Decision cards ── */
+  .decision-card { border-left:3px solid var(--accent); }
+  .decision-card.urgent { border-left-color:var(--danger); }
+  .decision-card.warning { border-left-color:var(--warning); }
+  .decision-header { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:8px; gap:8px; }
+  .decision-title { font-weight:600; color:var(--text-bright); font-size:0.9rem; }
+  .decision-meta { font-size:0.75rem; color:var(--text-dim); margin-bottom:8px; display:flex; align-items:center; gap:6px; }
+  .urgency-badge { font-size:0.65rem; padding:3px 8px; border-radius:20px; font-weight:600; white-space:nowrap; display:flex; align-items:center; gap:4px; }
+  .urgency-high { background:var(--danger-bg); color:var(--danger); }
+  .urgency-med { background:var(--warning-bg); color:var(--warning); }
+  .urgency-low { background:var(--success-bg); color:var(--success); }
+
+  /* ── Business cards ── */
+  .biz-card .biz-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; }
+  .biz-card .biz-name { font-weight:600; font-size:1rem; color:var(--text-bright); }
+  .type-badge { font-size:0.6rem; padding:3px 8px; border-radius:20px; text-transform:uppercase; letter-spacing:0.05em; font-weight:600; }
+  .type-saas { background:var(--info-bg); color:var(--info); }
+  .type-ecommerce { background:var(--warning-bg); color:var(--warning); }
+  .type-consulting { background:var(--purple-bg); color:var(--purple); }
+  .health-bar { height:4px; background:var(--border); border-radius:2px; margin:10px 0; overflow:hidden; }
+  .health-fill { height:100%; border-radius:2px; transition:width 0.5s; }
+  .biz-stats { display:flex; gap:16px; font-size:0.75rem; color:var(--text-dim); }
+  .biz-stats span .mono { color:var(--text-bright); }
+
+  /* ── Workforce ── */
+  .workforce-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(280px,1fr)); gap:12px; }
+  .workforce-card { background:var(--card); border:1px solid var(--border); border-radius:var(--radius-lg); padding:16px; box-shadow:var(--shadow-sm); }
+  .workforce-card .name { font-weight:600; color:var(--text-bright); font-size:0.9rem; }
+  .workforce-card .specialty { font-size:0.75rem; color:var(--text-dim); display:flex; align-items:center; gap:4px; }
+  .trust-bar { display:flex; align-items:center; gap:8px; margin-top:10px; }
+  .trust-track { flex:1; height:5px; background:var(--border); border-radius:3px; overflow:hidden; }
+  .trust-fill { height:100%; border-radius:3px; }
+
+  /* ── Business detail ── */
+  .agent-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(140px,1fr)); gap:8px; }
+  .agent-chip { background:var(--card); border:1px solid var(--border); border-radius:var(--radius); padding:12px; text-align:center; box-shadow:var(--shadow-sm); }
+  .agent-chip .role { font-weight:600; font-size:0.8rem; color:var(--text-bright); }
+  .agent-chip .status { font-size:0.7rem; margin-top:4px; display:flex; align-items:center; justify-content:center; gap:4px; }
+  .status-active { color:var(--success); }
+  .status-idle { color:var(--text-dim); }
+  .status-alert { color:var(--danger); }
+  .kpi-row { display:flex; align-items:center; gap:12px; padding:10px 0; border-bottom:1px solid var(--border); }
+  .kpi-row:last-child { border:none; }
+  .kpi-name { width:120px; font-size:0.8rem; color:var(--text-dim); }
+  .kpi-bar-wrap { flex:1; height:6px; background:var(--border); border-radius:3px; overflow:hidden; }
+  .kpi-bar { height:100%; border-radius:3px; transition:width 0.5s; }
+  .kpi-value { width:100px; text-align:right; font-size:0.8rem; }
+  .goal-item { padding:12px 0; border-bottom:1px solid var(--border); }
+  .goal-item:last-child { border:none; }
+  .goal-header { display:flex; justify-content:space-between; font-size:0.8rem; margin-bottom:6px; }
+  .goal-name { color:var(--text-bright); font-weight:500; }
+  .goal-pct { color:var(--accent); }
+  .progress-track { height:5px; background:var(--border); border-radius:3px; overflow:hidden; }
+  .progress-fill { height:100%; border-radius:3px; background:var(--accent); transition:width 0.5s; }
+  .activity-item { padding:10px 0; border-bottom:1px solid var(--border); font-size:0.8rem; display:flex; gap:12px; }
+  .activity-item:last-child { border:none; }
+  .activity-time { color:var(--text-dim); white-space:nowrap; min-width:60px; }
+  .activity-agent { color:var(--accent); font-weight:600; min-width:50px; }
+  .detail-grid { display:grid; grid-template-columns:1fr 1fr; gap:var(--gap); }
+
+  /* ── Kanban ── */
+  .kanban-filters { display:flex; gap:6px; margin-bottom:var(--gap); flex-wrap:wrap; }
+  .filter-btn { padding:6px 14px; border-radius:6px; border:1px solid var(--border); background:var(--card); color:var(--text-dim); font-size:0.75rem; cursor:pointer; transition:all var(--transition); font-weight:500; }
+  .filter-btn:hover { border-color:var(--border-hover); color:var(--text); }
+  .filter-btn.active { background:var(--accent); color:white; border-color:var(--accent); font-weight:600; }
+  .kanban-board { display:grid; grid-template-columns:repeat(4, 1fr); gap:12px; min-height:400px; }
+  .kanban-col { background:var(--bg-elevated); border:1px solid var(--border); border-radius:var(--radius-lg); padding:12px; min-height:300px; }
+  .kanban-col-header { font-size:0.8rem; font-weight:600; color:var(--text-bright); padding-bottom:10px; border-bottom:1px solid var(--border); margin-bottom:10px; display:flex; justify-content:space-between; }
+  .kanban-col-count { background:var(--accent-subtle); color:var(--accent); font-size:0.65rem; padding:2px 7px; border-radius:10px; font-weight:600; }
+  .kanban-card { background:var(--card); border:1px solid var(--border); border-radius:var(--radius); padding:12px; margin-bottom:8px; cursor:pointer; transition:all var(--transition); border-left:3px solid var(--border); box-shadow:var(--shadow-sm); }
+  .kanban-card:hover { border-color:var(--border-hover); box-shadow:var(--shadow-md); }
+  .kanban-card.p-critical { border-left-color:var(--danger); }
+  .kanban-card.p-high { border-left-color:var(--warning); }
+  .kanban-card.p-medium { border-left-color:var(--info); }
+  .kanban-card.p-low { border-left-color:var(--success); }
+  .kanban-card .kc-title { font-size:0.8rem; font-weight:600; color:var(--text-bright); margin-bottom:6px; }
+  .kanban-card .kc-meta { font-size:0.65rem; color:var(--text-dim); display:flex; justify-content:space-between; }
+  .kanban-card .kc-biz { font-size:0.6rem; padding:2px 6px; border-radius:8px; display:inline-block; margin-bottom:4px; font-weight:500; }
+
+  /* ── Gantt ── */
+  .gantt-filters { display:flex; gap:8px; margin-bottom:var(--gap); flex-wrap:wrap; align-items:center; }
+  .gantt-container { overflow-x:auto; background:var(--card); border:1px solid var(--border); border-radius:var(--radius-lg); box-shadow:var(--shadow-sm); }
+  .gantt-header { display:flex; border-bottom:1px solid var(--border); position:sticky; top:0; background:var(--card); z-index:2; }
+  .gantt-label-col { min-width:220px; max-width:220px; padding:10px 12px; font-size:0.7rem; font-weight:600; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.05em; border-right:1px solid var(--border); }
+  .gantt-timeline { flex:1; display:flex; min-width:600px; }
+  .gantt-month { flex:1; text-align:center; padding:10px 0; font-size:0.7rem; color:var(--text-dim); border-right:1px solid var(--border); }
+  .gantt-month:last-child { border:none; }
+  .gantt-row { display:flex; border-bottom:1px solid var(--border); min-height:40px; align-items:center; transition:background var(--transition); }
+  .gantt-row:last-child { border:none; }
+  .gantt-row:hover { background:var(--accent-subtle); }
+  .gantt-row-label { min-width:220px; max-width:220px; padding:6px 12px; font-size:0.75rem; border-right:1px solid var(--border); display:flex; align-items:center; gap:8px; }
+  .gantt-row-label .grn { color:var(--text-bright); font-weight:500; }
+  .gantt-row-label .grb { font-size:0.6rem; }
+  .gantt-row-timeline { flex:1; position:relative; min-width:600px; height:40px; }
+  .gantt-bar { position:absolute; height:20px; top:10px; border-radius:4px; display:flex; align-items:center; justify-content:flex-end; padding-right:6px; font-size:0.6rem; color:rgba(255,255,255,0.8); font-weight:600; transition:all 0.3s; cursor:pointer; }
+  .gantt-bar:hover { filter:brightness(1.1); transform:scaleY(1.15); }
+  .gantt-bar-progress { height:100%; border-radius:4px 0 0 4px; opacity:0.9; }
+  .gantt-today { position:absolute; top:0; bottom:0; width:2px; background:var(--danger); z-index:1; opacity:0.4; }
+
+  /* ── Business Model ── */
+  .model-filters { display:flex; gap:8px; margin-bottom:var(--gap); flex-wrap:wrap; align-items:center; }
+  .model-filter-group { display:flex; gap:4px; align-items:center; }
+  .model-filter-label { font-size:0.7rem; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.05em; margin-right:4px; font-weight:600; }
+  .level-dot { width:8px; height:8px; border-radius:50%; display:inline-block; }
+  .level-strategic { background:var(--strategic); }
+  .level-tactical { background:var(--tactical); }
+  .level-operational { background:var(--operational); }
+  .model-goal-card { background:var(--card); border:1px solid var(--border); border-radius:var(--radius-lg); padding:20px; margin-bottom:12px; border-left:3px solid var(--accent); transition:all var(--transition); box-shadow:var(--shadow-sm); }
+  .model-goal-card:hover { border-color:var(--border-hover); box-shadow:var(--shadow-md); }
+  .model-goal-card.level-strategic-card { border-left-color:var(--strategic); }
+  .model-goal-card.level-tactical-card { border-left-color:var(--tactical); }
+  .model-goal-card.level-operational-card { border-left-color:var(--operational); }
+  .mg-header { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:8px; }
+  .mg-title { font-weight:600; font-size:0.95rem; color:var(--text-bright); }
+  .mg-badges { display:flex; gap:6px; flex-wrap:wrap; }
+  .mg-description { font-size:0.8rem; color:var(--text-dim); margin-bottom:12px; line-height:1.6; }
+  .mg-desires { margin-bottom:12px; }
+  .mg-desires-title { font-size:0.7rem; text-transform:uppercase; color:var(--text-dim); margin-bottom:6px; font-weight:600; letter-spacing:0.05em; display:flex; align-items:center; gap:6px; }
+  .mg-desire { font-size:0.75rem; color:var(--accent-text); display:inline-block; background:var(--accent-subtle); padding:3px 10px; border-radius:6px; margin:2px 4px 2px 0; font-weight:500; }
+  .mg-workflows { margin-top:14px; }
+  .mg-wf-title { font-size:0.7rem; text-transform:uppercase; color:var(--text-dim); margin-bottom:8px; font-weight:600; letter-spacing:0.05em; display:flex; align-items:center; gap:6px; }
+  .workflow-card { background:var(--bg-elevated); border:1px solid var(--border); border-radius:var(--radius); padding:14px; margin-bottom:8px; }
+  .wf-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; }
+  .wf-name { font-weight:600; font-size:0.8rem; color:var(--text-bright); }
+  .wf-status { font-size:0.6rem; padding:3px 8px; border-radius:20px; font-weight:600; }
+  .wf-status-active { background:var(--success-bg); color:var(--success); }
+  .wf-status-designing { background:var(--warning-bg); color:var(--warning); }
+  .wf-agents { font-size:0.7rem; color:var(--text-dim); margin-bottom:8px; }
+  .wf-steps { display:flex; flex-wrap:wrap; gap:0; align-items:center; }
+  .wf-step { font-size:0.65rem; padding:4px 8px; background:var(--card); border:1px solid var(--border); border-radius:4px; color:var(--text); white-space:nowrap; }
+  .wf-arrow { color:var(--text-muted); font-size:0.65rem; margin:0 2px; }
+  .model-biz-group { margin-bottom:28px; }
+  .model-biz-header { font-size:0.95rem; font-weight:600; color:var(--text-bright); margin-bottom:12px; display:flex; align-items:center; gap:8px; }
+
+  /* ── Modal ── */
+  .modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,0.6); backdrop-filter:blur(4px); display:none; align-items:center; justify-content:center; z-index:100; padding:var(--gap); }
+  .modal-overlay.active { display:flex; }
+  .modal { background:var(--card); border:1px solid var(--border); border-radius:var(--radius-lg); max-width:640px; width:100%; max-height:90vh; overflow-y:auto; padding:28px; box-shadow:0 24px 48px rgba(0,0,0,0.3); }
+  .modal h2 { color:var(--text-bright); font-size:1.1rem; margin-bottom:4px; letter-spacing:-0.01em; }
+  .modal .meta { color:var(--text-dim); font-size:0.75rem; margin-bottom:16px; display:flex; align-items:center; gap:6px; }
+  .modal .summary { margin-bottom:20px; line-height:1.7; font-size:0.85rem; }
+  .option { background:var(--bg-elevated); border:1px solid var(--border); border-radius:var(--radius); padding:14px; margin-bottom:8px; cursor:pointer; transition:all var(--transition); }
+  .option:hover { border-color:var(--border-hover); }
+  .option.recommended { border-color:var(--accent); background:var(--accent-subtle); }
+  .option .option-label { font-weight:600; color:var(--text-bright); margin-bottom:4px; font-size:0.85rem; display:flex; align-items:center; gap:6px; }
+  .option .option-impact { font-size:0.8rem; color:var(--text-dim); }
+  .option .rec-tag { font-size:0.6rem; color:var(--accent); background:var(--accent-subtle); padding:2px 8px; border-radius:20px; font-weight:600; }
+  .rec-box { background:var(--accent-subtle); border:1px solid rgba(99,102,241,0.2); border-radius:var(--radius); padding:14px; margin:16px 0; font-size:0.85rem; line-height:1.6; }
+  .rec-box strong { color:var(--accent); }
+  .modal-actions { display:flex; gap:8px; margin-top:20px; }
+  .btn { padding:10px 20px; border-radius:var(--radius); border:none; font-weight:600; cursor:pointer; font-size:0.8rem; transition:all var(--transition); }
+  .btn-approve { background:var(--accent); color:white; }
+  .btn-approve:hover { background:var(--accent-hover); }
+  .btn-reject { background:var(--danger-bg); color:var(--danger); border:1px solid var(--danger); }
+  .btn-reject:hover { opacity:0.8; }
+  .btn-defer { background:var(--border); color:var(--text-dim); }
+  .btn-defer:hover { color:var(--text); }
+  .notes-field { width:100%; background:var(--bg-elevated); border:1px solid var(--border); border-radius:var(--radius); color:var(--text); padding:10px; font-family:system-ui; font-size:0.8rem; resize:vertical; min-height:60px; margin-top:12px; }
+  .notes-field:focus { outline:none; border-color:var(--accent); }
+
+  /* ── Status indicators ── */
+  .status-dot { width:6px; height:6px; border-radius:50%; display:inline-block; }
+  .dot-active { background:var(--success); }
+  .dot-idle { background:var(--text-dim); }
+  .dot-alert { background:var(--danger); animation:pulse 2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:0.4;} }
+
+  @keyframes fadeIn { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:translateY(0); } }
+  .fade-in { animation:fadeIn 0.2s ease-out; }
+  .hidden { display:none !important; }
+  @media (max-width:900px) { .detail-grid { grid-template-columns:1fr; } .cards { grid-template-columns:1fr; } .kanban-board { grid-template-columns:1fr 1fr; } }
+  @media (max-width:600px) { .kanban-board { grid-template-columns:1fr; } .container { padding:var(--gap) 12px; } }
+</style>
+</head>
+<body>
+<div class="container" id="app">
+  <header>
+    <div class="header-left">
+      <div class="logo">
+        <svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+      </div>
+      <h1>MABOS <span id="datetime"></span></h1>
+    </div>
+    <div class="header-right">
+      <nav class="nav-tabs" id="main-nav">
+        <button class="nav-tab active" data-view="portfolio">
+          <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+          Portfolio
+        </button>
+        <button class="nav-tab" data-view="kanban">
+          <svg viewBox="0 0 24 24"><rect x="4" y="4" width="4" height="16" rx="1"/><rect x="10" y="4" width="4" height="10" rx="1"/><rect x="16" y="4" width="4" height="13" rx="1"/></svg>
+          Kanban
+        </button>
+        <button class="nav-tab" data-view="gantt">
+          <svg viewBox="0 0 24 24"><line x1="4" y1="7" x2="16" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="12" y2="17"/></svg>
+          Gantt
+        </button>
+        <button class="nav-tab" data-view="model">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg>
+          Business Model
+        </button>
+      </nav>
+      <button class="theme-toggle" onclick="toggleTheme()" title="Toggle theme">
+        <svg class="icon-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+        <svg class="icon-moon" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- ═══ PORTFOLIO VIEW ═══ -->
+  <div id="portfolio-view" class="view-panel">
+    <div class="summary-bar" id="summary-bar"></div>
+    <div class="section-title"><svg viewBox="0 0 24 24"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg> Pending Decisions</div>
+    <div class="cards" id="decisions-list"></div>
+    <div class="section-title"><svg viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg> Business Health</div>
+    <div class="cards" id="business-list"></div>
+    <div class="section-title"><svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg> Workforce</div>
+    <div class="workforce-grid" id="workforce-list"></div>
+  </div>
+
+  <!-- ═══ BUSINESS DETAIL VIEW ═══ -->
+  <div id="detail-view" class="view-panel hidden">
+    <div class="breadcrumb"><a onclick="showView('portfolio')">&#8592; Portfolio</a> / <span id="detail-breadcrumb"></span></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <div><span id="detail-name" style="font-size:1.2rem;font-weight:600;color:var(--text-bright);letter-spacing:-0.01em"></span> <span id="detail-type-badge"></span></div>
+    </div>
+    <div class="section-title"><svg viewBox="0 0 24 24"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg> Decisions</div>
+    <div class="cards" id="detail-decisions"></div>
+    <div class="section-title"><svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg> Agent Status</div>
+    <div class="agent-grid" id="detail-agents"></div>
+    <div class="detail-grid">
+      <div><div class="section-title"><svg viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg> KPIs</div><div id="detail-kpis"></div></div>
+      <div><div class="section-title"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> Active Goals</div><div id="detail-goals"></div></div>
+    </div>
+    <div class="section-title"><svg viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg> Recent Activity</div>
+    <div id="detail-activity"></div>
+  </div>
+
+  <!-- ═══ KANBAN VIEW ═══ -->
+  <div id="kanban-view" class="view-panel hidden">
+    <div class="kanban-filters" id="kanban-filters"></div>
+    <div class="kanban-board" id="kanban-board"></div>
+  </div>
+
+  <!-- ═══ GANTT VIEW ═══ -->
+  <div id="gantt-view" class="view-panel hidden">
+    <div class="gantt-filters" id="gantt-filters"></div>
+    <div class="gantt-container" id="gantt-container"></div>
+  </div>
+
+  <!-- ═══ BUSINESS MODEL VIEW ═══ -->
+  <div id="model-view" class="view-panel hidden">
+    <div class="model-filters" id="model-filters"></div>
+    <div id="model-content"></div>
+  </div>
+</div>
+
+<!-- Decision Modal -->
+<div class="modal-overlay" id="modal" onclick="if(event.target===this)closeModal()">
+  <div class="modal fade-in" id="modal-content"></div>
+</div>
+
+<script src="mock-data.js"></script>
+<script>
+// ── Live Data Loader ──
+// Fetches from MABOS API endpoints and assembles window.MABOS_DATA.
+// Falls back silently to window.MABOS_MOCK when the API is unavailable.
+async function fetchLiveData() {
+  if (window.MABOS_DATA) return; // Already injected (e.g. via canvas eval)
+  if (location.protocol === 'file:') return; // Cannot fetch over file://
+
+  async function fj(path) {
+    const r = await fetch(path);
+    if (!r.ok) throw new Error(`${r.status}`);
+    return r.json();
+  }
+
+  const [statusData, bizData, decisionsData, contractorsData] = await Promise.all([
+    fj('/mabos/api/status'),
+    fj('/mabos/api/businesses'),
+    fj('/mabos/api/decisions'),
+    fj('/mabos/api/contractors'),
+  ]);
+
+  const bizList = bizData.businesses || [];
+  const rawDecisions = decisionsData.decisions || [];
+  const rawContractors = contractorsData.contractors || [];
+
+  // Fetch per-business detail in parallel
+  const bizDetails = await Promise.all(bizList.map(async (b) => {
+    const [ag, gl, tk, mt] = await Promise.all([
+      fj(`/mabos/api/businesses/${b.id}/agents`).catch(() => ({})),
+      fj(`/mabos/api/businesses/${b.id}/goals`).catch(() => ({})),
+      fj(`/mabos/api/businesses/${b.id}/tasks`).catch(() => ({ tasks: [] })),
+      fj(`/mabos/api/metrics/${b.id}`).catch(() => ({ metrics: {} })),
+    ]);
+    return { biz: b, agents: ag.agents || ag || [], goals: gl.goals || [], tasks: tk.tasks || [], metrics: mt.metrics || mt || {} };
+  }));
+
+  // ── Urgency string → 0-1 number ──
+  const urgNum = u => typeof u === 'number' ? u : ({ critical: 0.95, high: 0.85, medium: 0.65, low: 0.4 }[u] ?? 0.5);
+
+  // ── Map industry → display type ──
+  const typeOf = ind => ({ technology:'saas', software:'saas', saas:'saas', retail:'ecommerce', ecommerce:'ecommerce', consulting:'consulting', marketplace:'ecommerce' }[(ind||'').toLowerCase()] || ind || 'saas');
+
+  // ── Build decisions ──
+  const decisions = rawDecisions.map((d, i) => {
+    const b = bizList.find(x => x.id === d.business_id);
+    return {
+      id: d.id || `dec-live-${i}`,
+      businessId: d.business_id || '',
+      businessName: b?.name || d.business_id || '',
+      title: d.title || (d.summary || '').slice(0, 60) || 'Decision',
+      urgency: urgNum(d.urgency),
+      agent: d.agent || 'System',
+      raisedAt: d.raised_at || d.timestamp || new Date().toISOString(),
+      summary: d.summary || d.description || '',
+      options: Array.isArray(d.options) ? d.options : [
+        { label: 'Approve', impact: 'Proceed as recommended', recommended: true },
+        { label: 'Reject', impact: 'Decline this action' },
+        { label: 'Defer', impact: 'Revisit later' },
+      ],
+      recommendation: d.recommendation || d.analysis || '',
+      category: d.category || 'general',
+    };
+  });
+
+  // ── Build businesses ──
+  const businesses = bizDetails.map(({ biz: b, agents: rawAg, goals: rawG, tasks: rawT, metrics: m }) => {
+    const agents = (Array.isArray(rawAg) ? rawAg : []).map(a => ({
+      role: (a.role || a.id || 'Agent').replace(/^([a-z])/, (_, c) => c.toUpperCase()),
+      status: a.status || 'idle',
+      pendingTasks: a.pendingTasks ?? a.pending_tasks ?? 0,
+      lastAction: a.lastAction || a.last_action || '',
+    }));
+    const revenue = m.revenue ?? m.totalRevenue ?? 0;
+    const goals = rawG.slice(0, 10).map(g => ({
+      name: g.text || g.name || g.id || '',
+      progress: g.progress ?? 0.5,
+      priority: g.priority ?? 0.5,
+      deadline: g.deadline || g.target_date || '2026-06-30',
+    }));
+    const kpis = [];
+    if (m.mrr != null) kpis.push({ name: 'MRR', value: m.mrr, target: m.mrrTarget || Math.round(m.mrr * 1.1), unit: '$' });
+    if (m.revenue != null) kpis.push({ name: 'Revenue', value: m.revenue, target: m.revenueTarget || Math.round(m.revenue * 1.2), unit: '$' });
+    if (m.churn != null) kpis.push({ name: 'Churn', value: m.churn, target: m.churnTarget || 3, unit: '%', inverse: true });
+    if (m.nps != null) kpis.push({ name: 'NPS', value: m.nps, target: m.npsTarget || 70, unit: '' });
+    if (kpis.length === 0 && revenue > 0) kpis.push({ name: 'Revenue', value: revenue, target: Math.round(revenue * 1.2), unit: '$' });
+    const done = rawT.filter(t => /^(done|completed)$/i.test(t.status)).length;
+    const health = rawT.length > 0 ? Math.max(0.3, Math.min(0.98, 0.5 + (done / rawT.length) * 0.5)) : 0.75;
+    return {
+      id: b.id, name: b.name || b.id, type: typeOf(b.industry), status: b.status || 'active',
+      health, revenue, agentCount: b.agentCount || agents.length,
+      activeGoals: goals.filter(g => g.progress < 1).length,
+      kpis, agents, goals, recentActivity: [],
+    };
+  });
+
+  // ── Build workforce ──
+  const workforce = rawContractors.map(c => ({
+    name: c.name || 'Contractor',
+    specialty: c.specialty || c.role || 'General',
+    trust: c.trust ?? c.trust_score ?? 0.8,
+    activePackages: c.activePackages ?? c.active_packages ?? 0,
+    completedPackages: c.completedPackages ?? c.completed_packages ?? 0,
+    business: c.business || c.assigned_to || (businesses[0]?.name || ''),
+  }));
+
+  // ── Build kanban ──
+  const colMap = { proposed:'Backlog', backlog:'Backlog', 'in-progress':'In Progress', active:'In Progress', review:'Review', done:'Done', completed:'Done' };
+  const kanban = {
+    columns: ['Backlog', 'In Progress', 'Review', 'Done'],
+    tasks: bizDetails.flatMap(({ biz: b, tasks: ts }) =>
+      ts.map(t => ({
+        id: t.id, title: t.description || t.plan_name || '',
+        business: b.name || b.id,
+        agent: (t.agent_id || t.assigned_to || '').toUpperCase(),
+        column: colMap[(t.status||'').toLowerCase()] || 'Backlog',
+        priority: t.priority || 'medium', goalId: t.plan_id || '',
+        dueDate: t.due_date || '2026-06-30',
+      }))
+    ),
+  };
+
+  // ── Build gantt ──
+  const gantt = {
+    timelineStart: '2026-02-01', timelineEnd: '2026-06-30',
+    items: bizDetails.flatMap(({ biz: b, goals: gs }) =>
+      gs.map((g, i) => ({
+        id: g.id || `g-${b.id}-${i}`, name: g.text || g.name || '',
+        business: b.name || b.id,
+        start: g.start_date || '2026-02-01', end: g.deadline || g.target_date || '2026-06-30',
+        progress: g.progress ?? 0.5, type: g.type || 'strategic',
+        level: g.level || (g.priority > 0.8 ? 'strategic' : g.priority > 0.5 ? 'tactical' : 'operational'),
+        deps: g.dependencies || [],
+        color: g.priority > 0.8 ? '#00ff41' : g.priority > 0.5 ? '#4488ff' : '#bb88ff',
+      }))
+    ),
+  };
+
+  // ── Build business model ──
+  const modelGoals = bizDetails.flatMap(({ biz: b, goals: gs }) =>
+    gs.map(g => ({
+      id: g.id || '', business: b.name || b.id,
+      name: g.text || g.name || '', type: g.type || 'strategic',
+      level: g.level || 'strategic', priority: g.priority ?? 0.5,
+      description: g.description || g.text || '',
+      desires: g.desires || [], workflows: g.workflows || [],
+    }))
+  );
+  const businessModel = {
+    goalTypes: [...new Set(modelGoals.map(g => g.type).filter(Boolean))].length ? [...new Set(modelGoals.map(g => g.type))] : ['strategic'],
+    operationalLevels: ['strategic', 'tactical', 'operational'],
+    goals: modelGoals,
+  };
+
+  // ── Portfolio summary ──
+  const portfolio = {
+    name: 'MABOS Portfolio',
+    totalRevenue: businesses.reduce((s, b) => s + (b.revenue || 0), 0),
+    totalBusinesses: businesses.length,
+    activeAgents: businesses.reduce((s, b) => s + (b.agentCount || 0), 0),
+    openDecisions: decisions.length,
+    workforceUtilization: workforce.length > 0
+      ? workforce.filter(w => w.activePackages > 0).length / workforce.length
+      : 0.75,
+  };
+
+  window.MABOS_DATA = { portfolio, businesses, decisions, workforce, kanban, gantt, businessModel };
+}
+</script>
+<script>
+let D = window.MABOS_DATA || window.MABOS_MOCK;
+
+// ── SVG Icon helpers ──
+const icons = {
+  bell: '<svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" fill="none" stroke-width="1.5"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>',
+  building: '<svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" fill="none" stroke-width="1.5"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>',
+  users: '<svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" fill="none" stroke-width="1.5"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>',
+  target: '<svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" fill="none" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>',
+  check: '<svg viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" fill="none" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>',
+  x: '<svg viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" fill="none" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
+  clock: '<svg viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" fill="none" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>',
+  star: '<svg viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" fill="none" stroke-width="1.5"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>',
+  arrowUp: '<svg viewBox="0 0 24 24" width="10" height="10" stroke="currentColor" fill="none" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="16 12 12 8 8 12"/></svg>',
+  arrowDown: '<svg viewBox="0 0 24 24" width="10" height="10" stroke="currentColor" fill="none" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="8 12 12 16 16 12"/></svg>',
+  minus: '<svg viewBox="0 0 24 24" width="10" height="10" stroke="currentColor" fill="none" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="8" y1="12" x2="16" y2="12"/></svg>',
+  gear: '<svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" fill="none" stroke-width="1.5"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>',
+};
+
+// ── Helpers ──
+const $ = s => document.querySelector(s);
+const $$ = s => document.querySelectorAll(s);
+const fmt = (n, pre='', suf='') => `${pre}${typeof n==='number'? n.toLocaleString():n}${suf}`;
+const pct = n => Math.round(n * 100);
+const urgClass = u => u >= 0.85 ? 'urgent' : u >= 0.6 ? 'warning' : '';
+const urgBadge = u => u >= 0.85 ? 'urgency-high' : u >= 0.6 ? 'urgency-med' : 'urgency-low';
+const urgLabel = u => u >= 0.85 ? `${icons.arrowUp} Critical` : u >= 0.6 ? `${icons.minus} Medium` : `${icons.arrowDown} Low`;
+const healthColor = h => h >= 0.85 ? 'var(--success)' : h >= 0.65 ? 'var(--warning)' : 'var(--danger)';
+const trustColor = t => t >= 0.9 ? 'var(--success)' : t >= 0.75 ? 'var(--warning)' : 'var(--danger)';
+const kpiColor = (v, t, inv) => inv ? (v <= t ? 'var(--success)' : 'var(--danger)') : (v >= t ? 'var(--success)' : v >= t*0.8 ? 'var(--warning)' : 'var(--danger)');
+const levelColor = l => l === 'strategic' ? 'var(--strategic)' : l === 'tactical' ? 'var(--tactical)' : 'var(--operational)';
+const bizColor = b => b === 'TechFlow' ? 'var(--info)' : b === 'UrbanMarket' ? 'var(--warning)' : 'var(--purple)';
+const bizBg = b => b === 'TechFlow' ? 'var(--info-bg)' : b === 'UrbanMarket' ? 'var(--warning-bg)' : 'var(--purple-bg)';
+
+// ── Theme ──
+function toggleTheme() {
+  const html = document.documentElement;
+  const next = html.dataset.theme === 'dark' ? 'light' : 'dark';
+  html.dataset.theme = next;
+  localStorage.setItem('mabos-theme', next);
+}
+(function initTheme() {
+  const saved = localStorage.getItem('mabos-theme');
+  if (saved) document.documentElement.dataset.theme = saved;
+})();
+
+// ── DateTime ──
+function updateTime() {
+  const now = new Date();
+  $('#datetime').textContent = now.toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric', year:'numeric' }) + ' \u00b7 ' + now.toLocaleTimeString('en-US', { hour:'2-digit', minute:'2-digit' });
+}
+updateTime(); setInterval(updateTime, 60000);
+
+// ── Navigation ──
+let currentView = 'portfolio';
+document.querySelectorAll('.nav-tab').forEach(tab => {
+  tab.addEventListener('click', () => showView(tab.dataset.view));
+});
+
+function showView(view) {
+  currentView = view;
+  document.querySelectorAll('.view-panel').forEach(p => p.classList.add('hidden'));
+  document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+  const panel = $(`#${view}-view`);
+  if (panel) { panel.classList.remove('hidden'); panel.classList.add('fade-in'); }
+  const tab = document.querySelector(`.nav-tab[data-view="${view}"]`);
+  if (tab) tab.classList.add('active');
+  if (view === 'kanban') renderKanban();
+  if (view === 'gantt') renderGantt();
+  if (view === 'model') renderModel();
+}
+
+// ══════════════════════════════════════════════════
+// ═══ PORTFOLIO VIEW ═══
+// ══════════════════════════════════════════════════
+function renderPortfolio() {
+  const p = D.portfolio;
+  $('#summary-bar').innerHTML = [
+    { v: fmt(p.totalRevenue,'$'), l: 'Total Revenue' },
+    { v: p.totalBusinesses, l: 'Businesses' },
+    { v: p.activeAgents, l: 'Active Agents' },
+    { v: p.openDecisions, l: 'Open Decisions' },
+    { v: fmt(pct(p.workforceUtilization),'','%'), l: 'Workforce Util' }
+  ].map(i => `<div class="summary-item"><div class="value mono">${i.v}</div><div class="label">${i.l}</div></div>`).join('');
+
+  const sorted = [...D.decisions].sort((a,b) => b.urgency - a.urgency);
+  $('#decisions-list').innerHTML = sorted.map(d => `
+    <div class="card decision-card ${urgClass(d.urgency)}" onclick="openDecision('${d.id}')">
+      <div class="decision-header"><div class="decision-title">${d.title}</div><span class="urgency-badge ${urgBadge(d.urgency)}">${urgLabel(d.urgency)}</span></div>
+      <div class="decision-meta">${d.businessName} &middot; ${d.agent} &middot; ${d.category}</div>
+      <div style="font-size:0.8rem;color:var(--text-dim);line-height:1.6">${d.summary.slice(0,120)}${d.summary.length>120?'...':''}</div>
+    </div>`).join('');
+
+  $('#business-list').innerHTML = D.businesses.map(b => `
+    <div class="card biz-card" onclick="showBusiness('${b.id}')">
+      <div class="biz-header"><span class="biz-name">${b.name}</span><span class="type-badge type-${b.type}">${b.type}</span></div>
+      <div class="health-bar"><div class="health-fill" style="width:${pct(b.health)}%;background:${healthColor(b.health)}"></div></div>
+      <div class="biz-stats"><span><span class="mono">${fmt(b.revenue,'$')}</span> rev</span><span><span class="mono">${b.agentCount}</span> agents</span><span><span class="mono">${b.activeGoals}</span> goals</span></div>
+    </div>`).join('');
+
+  $('#workforce-list').innerHTML = D.workforce.map(w => `
+    <div class="workforce-card"><div class="name">${w.name}</div><div class="specialty">${w.specialty} &middot; ${w.business}</div>
+      <div class="trust-bar"><span style="font-size:0.7rem;color:var(--text-dim)">Trust</span><div class="trust-track"><div class="trust-fill" style="width:${pct(w.trust)}%;background:${trustColor(w.trust)}"></div></div><span class="mono" style="font-size:0.75rem;color:${trustColor(w.trust)}">${pct(w.trust)}%</span></div>
+      <div style="font-size:0.7rem;color:var(--text-dim);margin-top:6px">${w.activePackages} active &middot; ${w.completedPackages} completed</div>
+    </div>`).join('');
+}
+
+// ═══ BUSINESS DETAIL ═══
+function showBusiness(id) {
+  const b = D.businesses.find(x => x.id === id); if (!b) return;
+  document.querySelectorAll('.view-panel').forEach(p => p.classList.add('hidden'));
+  $('#detail-view').classList.remove('hidden'); $('#detail-view').classList.add('fade-in');
+  document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+  document.querySelector('.nav-tab[data-view="portfolio"]').classList.add('active');
+  $('#detail-name').textContent = b.name;
+  $('#detail-type-badge').innerHTML = `<span class="type-badge type-${b.type}">${b.type}</span>`;
+  $('#detail-breadcrumb').textContent = b.name;
+  const bDec = D.decisions.filter(d => d.businessId === id).sort((a,b) => b.urgency - a.urgency);
+  $('#detail-decisions').innerHTML = bDec.length ? bDec.map(d => `<div class="card decision-card ${urgClass(d.urgency)}" onclick="openDecision('${d.id}')"><div class="decision-header"><div class="decision-title">${d.title}</div><span class="urgency-badge ${urgBadge(d.urgency)}">${urgLabel(d.urgency)}</span></div><div class="decision-meta">${d.agent} &middot; ${d.category}</div></div>`).join('') : '<div style="color:var(--text-dim);padding:12px 0;font-size:0.85rem">No pending decisions</div>';
+  $('#detail-agents').innerHTML = b.agents.map(a => `<div class="agent-chip"><div class="role">${a.role}</div><div class="status status-${a.status}"><span class="status-dot dot-${a.status}"></span> ${a.status.charAt(0).toUpperCase()+a.status.slice(1)}</div><div style="font-size:0.65rem;color:var(--text-dim);margin-top:4px">${a.pendingTasks} tasks</div></div>`).join('');
+  $('#detail-kpis').innerHTML = b.kpis.map(k => { const r=Math.min((k.value/k.target)*100,100); const c=kpiColor(k.value,k.target,k.inverse); return `<div class="kpi-row"><div class="kpi-name">${k.name}</div><div class="kpi-bar-wrap"><div class="kpi-bar" style="width:${r}%;background:${c}"></div></div><div class="kpi-value mono" style="color:${c}">${k.unit==='$'?'$':''}${k.value.toLocaleString()}${k.unit&&k.unit!=='$'?k.unit:''}</div></div>`; }).join('');
+  $('#detail-goals').innerHTML = b.goals.map(g => `<div class="goal-item"><div class="goal-header"><span class="goal-name">${g.name}</span><span class="goal-pct mono">${pct(g.progress)}%</span></div><div class="progress-track"><div class="progress-fill" style="width:${pct(g.progress)}%"></div></div><div style="font-size:0.65rem;color:var(--text-dim);margin-top:2px">Priority: ${g.priority.toFixed(2)} &middot; Due: ${g.deadline}</div></div>`).join('');
+  $('#detail-activity').innerHTML = b.recentActivity.map(a => `<div class="activity-item"><span class="activity-time">${a.time}</span><span class="activity-agent">${a.agent}</span><span>${a.action}</span></div>`).join('');
+}
+
+// ══════════════════════════════════════════════════
+// ═══ KANBAN VIEW ═══
+// ══════════════════════════════════════════════════
+let kanbanFilter = 'all';
+function renderKanban() {
+  const businesses = ['all', ...new Set(D.kanban.tasks.map(t => t.business))];
+  $('#kanban-filters').innerHTML = businesses.map(b =>
+    `<button class="filter-btn ${kanbanFilter===b?'active':''}" onclick="setKanbanFilter('${b}')">${b === 'all' ? 'All Businesses' : b}</button>`
+  ).join('');
+
+  const tasks = kanbanFilter === 'all' ? D.kanban.tasks : D.kanban.tasks.filter(t => t.business === kanbanFilter);
+  $('#kanban-board').innerHTML = D.kanban.columns.map(col => {
+    const colTasks = tasks.filter(t => t.column === col);
+    return `<div class="kanban-col">
+      <div class="kanban-col-header">${col} <span class="kanban-col-count">${colTasks.length}</span></div>
+      ${colTasks.map(t => `<div class="kanban-card p-${t.priority}">
+        <div class="kc-biz" style="background:${bizBg(t.business)};color:${bizColor(t.business)}">${t.business}</div>
+        <div class="kc-title">${t.title}</div>
+        <div class="kc-meta"><span>${t.agent}</span><span>${t.dueDate.slice(5)}</span></div>
+      </div>`).join('')}
+    </div>`;
+  }).join('');
+}
+function setKanbanFilter(f) { kanbanFilter = f; renderKanban(); }
+
+// ══════════════════════════════════════════════════
+// ═══ GANTT VIEW ═══
+// ══════════════════════════════════════════════════
+let ganttBizFilter = 'all';
+let ganttLevelFilter = 'all';
+function renderGantt() {
+  const businesses = ['all', ...new Set(D.gantt.items.map(i => i.business))];
+  const levels = ['all', 'strategic', 'tactical', 'operational'];
+  $('#gantt-filters').innerHTML =
+    `<span class="model-filter-label">Business:</span>` +
+    businesses.map(b => `<button class="filter-btn ${ganttBizFilter===b?'active':''}" onclick="setGanttFilter('biz','${b}')">${b==='all'?'All':b}</button>`).join('') +
+    `<span class="model-filter-label" style="margin-left:12px">Level:</span>` +
+    levels.map(l => `<button class="filter-btn ${ganttLevelFilter===l?'active':''}" onclick="setGanttFilter('level','${l}')">${l==='all'?'All':l.charAt(0).toUpperCase()+l.slice(1)}</button>`).join('');
+
+  let items = D.gantt.items;
+  if (ganttBizFilter !== 'all') items = items.filter(i => i.business === ganttBizFilter);
+  if (ganttLevelFilter !== 'all') items = items.filter(i => i.level === ganttLevelFilter);
+
+  const start = new Date(D.gantt.timelineStart);
+  const end = new Date(D.gantt.timelineEnd);
+  const totalDays = (end - start) / 86400000;
+  const months = [];
+  let cur = new Date(start);
+  while (cur < end) { months.push(cur.toLocaleDateString('en-US',{month:'short',year:'2-digit'})); cur = new Date(cur.getFullYear(), cur.getMonth()+1, 1); }
+
+  const toX = d => { const dd = (new Date(d) - start) / 86400000; return Math.max(0, Math.min(100, (dd / totalDays) * 100)); };
+  const todayX = toX(new Date().toISOString().slice(0,10));
+
+  const barColor = item => item.level === 'strategic' ? 'var(--strategic)' : item.level === 'tactical' ? 'var(--tactical)' : 'var(--operational)';
+
+  $('#gantt-container').innerHTML =
+    `<div class="gantt-header"><div class="gantt-label-col">Goal</div><div class="gantt-timeline">${months.map(m => `<div class="gantt-month">${m}</div>`).join('')}</div></div>` +
+    items.map(item => {
+      const x1 = toX(item.start), x2 = toX(item.end), w = x2 - x1;
+      const bc = barColor(item);
+      return `<div class="gantt-row">
+        <div class="gantt-row-label"><span class="level-dot level-${item.level}"></span><div><div class="grn">${item.name}</div><div class="grb type-badge type-${D.businesses.find(b=>b.name===item.business)?.type||'saas'}">${item.business}</div></div></div>
+        <div class="gantt-row-timeline">
+          <div class="gantt-today" style="left:${todayX}%"></div>
+          <div class="gantt-bar" style="left:${x1}%;width:${w}%;background:color-mix(in srgb, ${bc} 20%, transparent)" title="${item.name}: ${pct(item.progress)}%">
+            <div class="gantt-bar-progress" style="width:${pct(item.progress)}%;background:${bc}"></div>
+            <span style="position:absolute;right:4px;color:var(--text-bright);font-size:0.6rem">${pct(item.progress)}%</span>
+          </div>
+        </div>
+      </div>`;
+    }).join('');
+}
+function setGanttFilter(type, val) {
+  if (type==='biz') ganttBizFilter = val;
+  if (type==='level') ganttLevelFilter = val;
+  renderGantt();
+}
+
+// ══════════════════════════════════════════════════
+// ═══ BUSINESS MODEL VIEW ═══
+// ══════════════════════════════════════════════════
+let modelBizFilter = 'all';
+let modelTypeFilter = 'all';
+let modelLevelFilter = 'all';
+function renderModel() {
+  const bm = D.businessModel;
+  const businesses = ['all', ...new Set(bm.goals.map(g => g.business))];
+  const types = ['all', ...bm.goalTypes];
+  const levels = ['all', ...bm.operationalLevels];
+
+  $('#model-filters').innerHTML =
+    `<div class="model-filter-group"><span class="model-filter-label">Business:</span>${businesses.map(b => `<button class="filter-btn ${modelBizFilter===b?'active':''}" onclick="setModelFilter('biz','${b}')">${b==='all'?'All':b}</button>`).join('')}</div>` +
+    `<div class="model-filter-group"><span class="model-filter-label">Goal Type:</span>${types.map(t => `<button class="filter-btn ${modelTypeFilter===t?'active':''}" onclick="setModelFilter('type','${t}')">${t==='all'?'All':t.charAt(0).toUpperCase()+t.slice(1)}</button>`).join('')}</div>` +
+    `<div class="model-filter-group"><span class="model-filter-label">Level:</span>${levels.map(l => `<button class="filter-btn ${modelLevelFilter===l?'active':''}" onclick="setModelFilter('level','${l}')">${l==='all'?'All':l.charAt(0).toUpperCase()+l.slice(1)} ${l!=='all'?`<span class="level-dot level-${l}" style="margin-left:4px"></span>`:''}</button>`).join('')}</div>`;
+
+  let goals = bm.goals;
+  if (modelBizFilter !== 'all') goals = goals.filter(g => g.business === modelBizFilter);
+  if (modelTypeFilter !== 'all') goals = goals.filter(g => g.type === modelTypeFilter);
+  if (modelLevelFilter !== 'all') goals = goals.filter(g => g.level === modelLevelFilter);
+
+  if (modelLevelFilter !== 'all') {
+    goals = goals.map(g => ({ ...g, workflows: g.workflows.filter(w => w.level === modelLevelFilter) }));
+  }
+
+  const grouped = {};
+  for (const g of goals) { if (!grouped[g.business]) grouped[g.business] = []; grouped[g.business].push(g); }
+
+  let html = '';
+  html += `<div style="display:flex;gap:16px;margin-bottom:20px;font-size:0.75rem;align-items:center">
+    <span style="display:flex;align-items:center;gap:4px"><span class="level-dot level-strategic"></span> Strategic</span>
+    <span style="display:flex;align-items:center;gap:4px"><span class="level-dot level-tactical"></span> Tactical</span>
+    <span style="display:flex;align-items:center;gap:4px"><span class="level-dot level-operational"></span> Operational</span>
+    <span style="color:var(--text-muted)">&vert;</span>
+    <span style="color:var(--text-dim)">${goals.length} goals &middot; ${goals.reduce((s,g)=>s+g.workflows.length,0)} workflows</span>
+  </div>`;
+
+  for (const [biz, bizGoals] of Object.entries(grouped)) {
+    const b = D.businesses.find(x => x.name === biz);
+    html += `<div class="model-biz-group">
+      <div class="model-biz-header">${icons.building} ${biz} ${b ? `<span class="type-badge type-${b.type}">${b.type}</span>` : ''}</div>`;
+
+    bizGoals.sort((a,b) => b.priority - a.priority);
+
+    for (const g of bizGoals) {
+      html += `<div class="model-goal-card level-${g.level}-card">
+        <div class="mg-header">
+          <div class="mg-title">${g.name}</div>
+          <div class="mg-badges">
+            <span class="type-badge" style="background:color-mix(in srgb, ${levelColor(g.level)} 15%, transparent);color:${levelColor(g.level)}">${g.level}</span>
+            <span class="type-badge" style="background:rgba(255,255,255,0.05);color:var(--text-dim)">${g.type}</span>
+            <span class="mono" style="font-size:0.7rem;color:var(--text-dim)">P: ${g.priority.toFixed(2)}</span>
+          </div>
+        </div>
+        <div class="mg-description">${g.description}</div>
+        <div class="mg-desires"><div class="mg-desires-title">${icons.target} Desires (BDI)</div>${g.desires.map(d => `<span class="mg-desire">${d}</span>`).join('')}</div>`;
+
+      if (g.workflows.length) {
+        html += `<div class="mg-workflows"><div class="mg-wf-title">${icons.gear} BPMN Workflows (${g.workflows.length})</div>`;
+        for (const w of g.workflows) {
+          const steps = w.steps[0].split(' \u2192 ');
+          html += `<div class="workflow-card">
+            <div class="wf-header">
+              <div class="wf-name">${w.name}</div>
+              <div style="display:flex;gap:6px;align-items:center">
+                <span class="type-badge" style="background:color-mix(in srgb, ${levelColor(w.level)} 15%, transparent);color:${levelColor(w.level)}">${w.level}</span>
+                <span class="wf-status wf-status-${w.status}"><span class="status-dot dot-${w.status==='active'?'active':'idle'}" style="margin-right:4px"></span>${w.status === 'active' ? 'Active' : 'Designing'}</span>
+              </div>
+            </div>
+            <div class="wf-agents">Agents: ${w.agents.join(', ')}</div>
+            <div class="wf-steps">${steps.map((s,i) => `${i>0?'<span class="wf-arrow">\u2192</span>':''}<span class="wf-step">${s}</span>`).join('')}</div>
+          </div>`;
+        }
+        html += `</div>`;
+      }
+      html += `</div>`;
+    }
+    html += `</div>`;
+  }
+
+  if (goals.length === 0) {
+    html += '<div style="text-align:center;padding:40px;color:var(--text-dim);font-size:0.85rem">No goals match the current filters.</div>';
+  }
+
+  $('#model-content').innerHTML = html;
+}
+function setModelFilter(type, val) {
+  if (type==='biz') modelBizFilter = val;
+  if (type==='type') modelTypeFilter = val;
+  if (type==='level') modelLevelFilter = val;
+  renderModel();
+}
+
+// ═══ DECISION MODAL ═══
+function openDecision(id) {
+  const d = D.decisions.find(x => x.id === id); if (!d) return;
+  $('#modal-content').innerHTML = `
+    <h2>${d.title}</h2>
+    <div class="meta">${d.businessName} &middot; Raised by ${d.agent} &middot; ${new Date(d.raisedAt).toLocaleDateString()}</div>
+    <div class="summary">${d.summary}</div>
+    <div style="font-weight:600;margin-bottom:10px;font-size:0.85rem;color:var(--text-bright)">Options</div>
+    ${d.options.map(o => `<div class="option ${o.recommended?'recommended':''}"><div class="option-label">${o.label}${o.recommended?`<span class="rec-tag">${icons.star} Recommended</span>`:''}</div><div class="option-impact">${o.impact}</div></div>`).join('')}
+    <div class="rec-box"><strong>Agent Recommendation:</strong> ${d.recommendation}</div>
+    <textarea class="notes-field" placeholder="Add notes (optional)..."></textarea>
+    <div class="modal-actions"><button class="btn btn-approve" onclick="resolveDecision('${d.id}','approved')">${icons.check} Approve</button><button class="btn btn-reject" onclick="resolveDecision('${d.id}','rejected')">${icons.x} Reject</button><button class="btn btn-defer" onclick="resolveDecision('${d.id}','deferred')">${icons.clock} Defer</button></div>`;
+  $('#modal').classList.add('active');
+}
+function closeModal() { $('#modal').classList.remove('active'); }
+function resolveDecision(id, action) {
+  const dec = D.decisions.find(d => d.id === id);
+  // Call live API if available
+  if (dec && location.protocol !== 'file:') {
+    const notes = $('#modal .notes-field')?.value || '';
+    fetch('/mabos/api/decisions/' + id + '/resolve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ decision_id: id, business_id: dec.businessId, resolution: action, feedback: notes }),
+    }).catch(() => {});
+  }
+  D.decisions = D.decisions.filter(d => d.id !== id);
+  D.portfolio.openDecisions = D.decisions.length;
+  closeModal(); renderPortfolio();
+}
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+
+// ── Init ──
+(async () => {
+  try { await fetchLiveData(); } catch (_) { /* mock fallback */ }
+  D = window.MABOS_DATA || window.MABOS_MOCK;
+  renderPortfolio();
+})();
+</script>
+</body>
+</html>

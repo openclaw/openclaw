@@ -1,0 +1,12 @@
+{
+  "id": "cfo",
+  "name": "Chief Financial Officer",
+  "bdi": {
+    "commitmentStrategy": "single-minded",
+    "cycleFrequency": {
+      "fullCycleMinutes": 120,
+      "quickCheckMinutes": 15
+    },
+    "reasoningMethods": ["bayesian", "causal", "decision-theory"]
+  }
+}

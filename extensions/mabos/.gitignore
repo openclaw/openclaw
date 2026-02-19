@@ -1,0 +1,2 @@
+dist/
+node_modules/

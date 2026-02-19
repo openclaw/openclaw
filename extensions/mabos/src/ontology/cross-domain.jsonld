@@ -1,0 +1,290 @@
+{
+  "@context": {
+    "mabos": "https://mabos.io/ontology/",
+    "ecom": "https://mabos.io/ontology/ecommerce/",
+    "saas": "https://mabos.io/ontology/saas/",
+    "consult": "https://mabos.io/ontology/consulting/",
+    "mkt": "https://mabos.io/ontology/marketplace/",
+    "retail": "https://mabos.io/ontology/retail/",
+    "owl": "http://www.w3.org/2002/07/owl#",
+    "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
+    "xsd": "http://www.w3.org/2001/XMLSchema#",
+    "sbvr": "https://mabos.io/ontology/sbvr/"
+  },
+  "@id": "https://mabos.io/ontology/cross-domain",
+  "@type": "owl:Ontology",
+  "owl:imports": [
+    "https://mabos.io/ontology/business-core",
+    "https://mabos.io/ontology/ecommerce",
+    "https://mabos.io/ontology/saas",
+    "https://mabos.io/ontology/consulting",
+    "https://mabos.io/ontology/marketplace",
+    "https://mabos.io/ontology/retail"
+  ],
+  "rdfs:label": "MABOS Cross-Domain Ontology",
+  "rdfs:comment": "Inter-domain relationships, equivalences, and mappings that connect domain ontologies to each other and to the core. Enables portfolio-level reasoning across business types.",
+  "@graph": [
+    {
+      "@id": "mabos:crossDomain_ecomCustomerIsCustomer",
+      "@type": "owl:ObjectProperty",
+      "rdfs:label": "E-commerce customer overlaps marketplace buyer",
+      "rdfs:comment": "Maps ecommerce customers who also purchase on the marketplace side — enables cross-selling analysis",
+      "rdfs:domain": "ecom:Customer",
+      "rdfs:range": "mkt:Buyer",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "ecommerce Customer is also marketplace Buyer",
+      "sbvr:roles": [
+        { "sbvr:roleName": "ecommerce customer", "sbvr:rolePlayer": "ecom:Customer" },
+        { "sbvr:roleName": "marketplace buyer", "sbvr:rolePlayer": "mkt:Buyer" }
+      ]
+    },
+    {
+      "@id": "mabos:crossDomain_retailVendorIsEcomSupplier",
+      "@type": "owl:ObjectProperty",
+      "rdfs:label": "Retail vendor is ecommerce supplier",
+      "rdfs:comment": "When the same vendor supplies both retail stores and the ecommerce channel",
+      "rdfs:domain": "retail:Vendor",
+      "rdfs:range": "ecom:Supplier",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "retail Vendor is ecommerce Supplier",
+      "sbvr:roles": [
+        { "sbvr:roleName": "retail vendor", "sbvr:rolePlayer": "retail:Vendor" },
+        { "sbvr:roleName": "ecommerce supplier", "sbvr:rolePlayer": "ecom:Supplier" }
+      ]
+    },
+    {
+      "@id": "mabos:crossDomain_consultingClientIsSaaSTenant",
+      "@type": "owl:ObjectProperty",
+      "rdfs:label": "Consulting client becomes SaaS tenant",
+      "rdfs:comment": "Tracks consulting clients who convert to SaaS product users — common in productized consulting",
+      "rdfs:domain": "consult:Client",
+      "rdfs:range": "saas:Tenant",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "consulting Client is SaaS Tenant",
+      "sbvr:roles": [
+        { "sbvr:roleName": "consulting client", "sbvr:rolePlayer": "consult:Client" },
+        { "sbvr:roleName": "saas tenant", "sbvr:rolePlayer": "saas:Tenant" }
+      ]
+    },
+    {
+      "@id": "mabos:crossDomain_mktSellerIsRetailVendor",
+      "@type": "owl:ObjectProperty",
+      "rdfs:label": "Marketplace seller is retail vendor",
+      "rdfs:comment": "When a marketplace seller also supplies retail locations directly",
+      "rdfs:domain": "mkt:Seller",
+      "rdfs:range": "retail:Vendor",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "marketplace Seller is retail Vendor",
+      "sbvr:roles": [
+        { "sbvr:roleName": "marketplace seller", "sbvr:rolePlayer": "mkt:Seller" },
+        { "sbvr:roleName": "retail vendor", "sbvr:rolePlayer": "retail:Vendor" }
+      ]
+    },
+    {
+      "@id": "mabos:crossDomain_ecomProductOnMarketplace",
+      "@type": "owl:ObjectProperty",
+      "rdfs:label": "Ecommerce product listed on marketplace",
+      "rdfs:comment": "An ecommerce product also listed as a marketplace listing — multi-channel distribution",
+      "rdfs:domain": "ecom:Product",
+      "rdfs:range": "mkt:Listing",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "ecommerce Product is listed on marketplace as Listing",
+      "sbvr:roles": [
+        { "sbvr:roleName": "ecommerce product", "sbvr:rolePlayer": "ecom:Product" },
+        { "sbvr:roleName": "marketplace listing", "sbvr:rolePlayer": "mkt:Listing" }
+      ]
+    },
+    {
+      "@id": "mabos:crossDomain_retailProductOnEcom",
+      "@type": "owl:ObjectProperty",
+      "rdfs:label": "Retail product also sold online",
+      "rdfs:comment": "A retail product with an ecommerce counterpart — enables omnichannel inventory management",
+      "rdfs:domain": "retail:Product",
+      "rdfs:range": "ecom:Product",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "retail Product is also sold as ecommerce Product",
+      "sbvr:roles": [
+        { "sbvr:roleName": "retail product", "sbvr:rolePlayer": "retail:Product" },
+        { "sbvr:roleName": "ecommerce product", "sbvr:rolePlayer": "ecom:Product" }
+      ]
+    },
+    {
+      "@id": "mabos:crossDomain_saasUsedByConsultant",
+      "@type": "owl:ObjectProperty",
+      "rdfs:label": "SaaS product used by consulting expert",
+      "rdfs:comment": "When consultants use the SaaS product as a tool in their engagements",
+      "rdfs:domain": "consult:Expert",
+      "rdfs:range": "saas:Tenant",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "consulting Expert uses SaaS as Tenant",
+      "sbvr:roles": [
+        { "sbvr:roleName": "consulting expert", "sbvr:rolePlayer": "consult:Expert" },
+        { "sbvr:roleName": "saas tenant", "sbvr:rolePlayer": "saas:Tenant" }
+      ]
+    },
+    {
+      "@id": "mabos:crossDomain_ecomFulfillsMarketplace",
+      "@type": "owl:ObjectProperty",
+      "rdfs:label": "Ecommerce fulfillment serves marketplace orders",
+      "rdfs:comment": "When ecommerce warehouses fulfill marketplace orders — shared logistics",
+      "rdfs:domain": "ecom:Warehouse",
+      "rdfs:range": "mkt:Transaction",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "ecommerce Warehouse fulfills marketplace Transaction",
+      "sbvr:roles": [
+        { "sbvr:roleName": "fulfilling warehouse", "sbvr:rolePlayer": "ecom:Warehouse" },
+        { "sbvr:roleName": "marketplace transaction", "sbvr:rolePlayer": "mkt:Transaction" }
+      ]
+    },
+    {
+      "@id": "mabos:crossDomain_retailStoreIsPickupPoint",
+      "@type": "owl:ObjectProperty",
+      "rdfs:label": "Retail store serves as ecommerce pickup point",
+      "rdfs:comment": "BOPIS (buy online, pick up in store) — connects ecommerce orders to retail locations",
+      "rdfs:domain": "retail:Store",
+      "rdfs:range": "ecom:Fulfillment",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "retail Store serves as pickup point for ecommerce Fulfillment",
+      "sbvr:roles": [
+        { "sbvr:roleName": "pickup store", "sbvr:rolePlayer": "retail:Store" },
+        { "sbvr:roleName": "ecommerce fulfillment", "sbvr:rolePlayer": "ecom:Fulfillment" }
+      ]
+    },
+
+    {
+      "@id": "mabos:PortfolioMetric",
+      "@type": "owl:Class",
+      "rdfs:subClassOf": "mabos:Metric",
+      "rdfs:label": "Portfolio Metric",
+      "rdfs:comment": "An aggregate metric computed across multiple businesses in the portfolio",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "portfolio metric",
+      "sbvr:definition": "Portfolio Metric is an aggregate metric that is computed across multiple businesses in the portfolio",
+      "sbvr:vocabulary": "cross-domain"
+    },
+    {
+      "@id": "mabos:CrossSellOpportunity",
+      "@type": "owl:Class",
+      "rdfs:label": "Cross-Sell Opportunity",
+      "rdfs:comment": "An identified opportunity to sell products/services from one business to customers of another",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "cross-sell opportunity",
+      "sbvr:definition": "Cross-Sell Opportunity is an identified opportunity that enables selling products or services from one business to customers of another",
+      "sbvr:vocabulary": "cross-domain"
+    },
+    {
+      "@id": "mabos:SharedResource",
+      "@type": "owl:Class",
+      "rdfs:label": "Shared Resource",
+      "rdfs:comment": "A resource (contractor, tool, infrastructure) shared across multiple businesses in the portfolio",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "shared resource",
+      "sbvr:definition": "Shared Resource is a resource that is shared across multiple businesses in the portfolio",
+      "sbvr:vocabulary": "cross-domain"
+    },
+    {
+      "@id": "mabos:Synergy",
+      "@type": "owl:Class",
+      "rdfs:label": "Synergy",
+      "rdfs:comment": "An identified synergy between businesses — cost savings, revenue uplift, or capability sharing",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "synergy",
+      "sbvr:definition": "Synergy is an identified benefit that arises between businesses through cost savings, revenue uplift, or capability sharing",
+      "sbvr:vocabulary": "cross-domain"
+    },
+
+    {
+      "@id": "mabos:aggregatesFrom",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mabos:PortfolioMetric",
+      "rdfs:range": "mabos:Business",
+      "rdfs:comment": "Businesses contributing to this portfolio-level metric",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "PortfolioMetric aggregates from Business",
+      "sbvr:roles": [
+        { "sbvr:roleName": "aggregating metric", "sbvr:rolePlayer": "mabos:PortfolioMetric" },
+        { "sbvr:roleName": "contributing business", "sbvr:rolePlayer": "mabos:Business" }
+      ]
+    },
+    {
+      "@id": "mabos:hasCrossSell",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mabos:Business",
+      "rdfs:range": "mabos:CrossSellOpportunity",
+      "rdfs:comment": "Cross-sell opportunities identified for this business",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Business has CrossSellOpportunity",
+      "sbvr:roles": [
+        { "sbvr:roleName": "cross-selling business", "sbvr:rolePlayer": "mabos:Business" },
+        { "sbvr:roleName": "cross-sell opportunity", "sbvr:rolePlayer": "mabos:CrossSellOpportunity" }
+      ]
+    },
+    {
+      "@id": "mabos:sharedAcross",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mabos:SharedResource",
+      "rdfs:range": "mabos:Business",
+      "rdfs:comment": "Businesses sharing this resource",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "SharedResource is shared across Business",
+      "sbvr:roles": [
+        { "sbvr:roleName": "shared resource", "sbvr:rolePlayer": "mabos:SharedResource" },
+        { "sbvr:roleName": "sharing business", "sbvr:rolePlayer": "mabos:Business" }
+      ]
+    },
+    {
+      "@id": "mabos:hasSynergy",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mabos:Business",
+      "rdfs:range": "mabos:Synergy",
+      "rdfs:comment": "Synergies identified between this business and others in the portfolio",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Business has Synergy",
+      "sbvr:roles": [
+        { "sbvr:roleName": "synergistic business", "sbvr:rolePlayer": "mabos:Business" },
+        { "sbvr:roleName": "identified synergy", "sbvr:rolePlayer": "mabos:Synergy" }
+      ]
+    },
+    {
+      "@id": "mabos:synergyWith",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mabos:Synergy",
+      "rdfs:range": "mabos:Business",
+      "rdfs:comment": "The other business involved in this synergy",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Synergy is with Business",
+      "sbvr:roles": [
+        { "sbvr:roleName": "synergy", "sbvr:rolePlayer": "mabos:Synergy" },
+        { "sbvr:roleName": "partner business", "sbvr:rolePlayer": "mabos:Business" }
+      ]
+    },
+    {
+      "@id": "mabos:portfolioWeight",
+      "@type": "owl:DatatypeProperty",
+      "rdfs:domain": "mabos:Business",
+      "rdfs:range": "xsd:float",
+      "rdfs:comment": "This business's weight in the portfolio 0.0-1.0 (revenue share or strategic importance)"
+    },
+    {
+      "@id": "mabos:synergyValue",
+      "@type": "owl:DatatypeProperty",
+      "rdfs:domain": "mabos:Synergy",
+      "rdfs:range": "xsd:decimal",
+      "rdfs:comment": "Estimated dollar value of this synergy"
+    }
+  ]
+}

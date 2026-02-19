@@ -1,0 +1,12 @@
+{
+  "id": "knowledge",
+  "name": "Knowledge Manager",
+  "bdi": {
+    "commitmentStrategy": "cautious",
+    "cycleFrequency": {
+      "fullCycleMinutes": 240,
+      "quickCheckMinutes": 60
+    },
+    "reasoningMethods": ["inductive", "abductive", "cbr"]
+  }
+}

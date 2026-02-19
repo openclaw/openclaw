@@ -1,0 +1,54 @@
+{
+  "id": "mabos",
+  "name": "MABOS - Multi-Agent Business Operating System",
+  "version": "0.1.0",
+  "description": "BDI cognitive architecture with ontology-based reasoning, case-based learning, and multi-business management for OpenClaw",
+  "author": "Kingler Bercy",
+  "license": "MIT",
+  "skills": ["skills"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "ontologyDir": {
+        "type": "string",
+        "description": "Path to shared ontology templates"
+      },
+      "cbrEnabled": {
+        "type": "boolean",
+        "default": true,
+        "description": "Enable case-based reasoning"
+      },
+      "cbrMaxCases": {
+        "type": "number",
+        "default": 10000,
+        "description": "Maximum cases per business before pruning"
+      },
+      "bdiCycleIntervalMinutes": {
+        "type": "number",
+        "default": 30,
+        "description": "Interval between full BDI cycles"
+      },
+      "reasoningMethods": {
+        "type": "array",
+        "items": { "type": "string" },
+        "default": [
+          "deductive",
+          "inductive",
+          "abductive",
+          "bayesian",
+          "cbr",
+          "causal",
+          "heuristic",
+          "htn"
+        ],
+        "description": "Enabled reasoning methods"
+      },
+      "stakeholderApprovalThresholdUsd": {
+        "type": "number",
+        "default": 5000,
+        "description": "Expenditure threshold requiring stakeholder approval"
+      }
+    }
+  }
+}

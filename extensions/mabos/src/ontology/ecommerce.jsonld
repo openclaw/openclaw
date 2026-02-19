@@ -1,0 +1,432 @@
+{
+  "@context": {
+    "mabos": "https://mabos.io/ontology/",
+    "ecom": "https://mabos.io/ontology/ecommerce/",
+    "owl": "http://www.w3.org/2002/07/owl#",
+    "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
+    "xsd": "http://www.w3.org/2001/XMLSchema#",
+    "sbvr": "https://mabos.io/ontology/sbvr/"
+  },
+  "@id": "https://mabos.io/ontology/ecommerce",
+  "@type": "owl:Ontology",
+  "owl:imports": "https://mabos.io/ontology/business-core",
+  "rdfs:label": "E-Commerce Domain Ontology",
+  "rdfs:comment": "Domain concepts for online retail, DTC, and omnichannel commerce businesses",
+  "@graph": [
+    {
+      "@id": "ecom:Product",
+      "@type": "owl:Class",
+      "rdfs:subClassOf": "mabos:Product",
+      "rdfs:label": "Product",
+      "rdfs:comment": "A purchasable item in the catalog with variants, pricing, and media",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "product",
+      "sbvr:definition": "Product is a purchasable item that is listed in the catalog with variants, pricing, and media",
+      "sbvr:vocabulary": "ecommerce"
+    },
+    {
+      "@id": "ecom:SKU",
+      "@type": "owl:Class",
+      "rdfs:subClassOf": "ecom:Product",
+      "rdfs:label": "SKU",
+      "rdfs:comment": "A specific variant of a product with unique stock-keeping unit identifier",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "sku",
+      "sbvr:definition": "SKU is a product variant that has a unique stock-keeping unit identifier",
+      "sbvr:vocabulary": "ecommerce"
+    },
+    {
+      "@id": "ecom:Category",
+      "@type": "owl:Class",
+      "rdfs:label": "Product Category",
+      "rdfs:comment": "A hierarchical grouping of products for navigation and filtering",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "product category",
+      "sbvr:definition": "Product Category is a hierarchical grouping that organizes products for navigation and filtering",
+      "sbvr:vocabulary": "ecommerce"
+    },
+    {
+      "@id": "ecom:Order",
+      "@type": "owl:Class",
+      "rdfs:label": "Order",
+      "rdfs:comment": "A customer purchase containing one or more line items with payment and fulfillment status",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "order",
+      "sbvr:definition": "Order is a customer purchase that contains one or more line items with payment and fulfillment status",
+      "sbvr:vocabulary": "ecommerce"
+    },
+    {
+      "@id": "ecom:OrderItem",
+      "@type": "owl:Class",
+      "rdfs:label": "Order Item",
+      "rdfs:comment": "A single line item within an order linking to a SKU with quantity and price",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "order item",
+      "sbvr:definition": "Order Item is a line item that links to a SKU within an order with quantity and price",
+      "sbvr:vocabulary": "ecommerce"
+    },
+    {
+      "@id": "ecom:Customer",
+      "@type": "owl:Class",
+      "rdfs:subClassOf": "mabos:Customer",
+      "rdfs:label": "Customer",
+      "rdfs:comment": "A registered or guest buyer with purchase history and lifetime value",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "customer",
+      "sbvr:definition": "Customer is a buyer that is registered or guest and has purchase history and lifetime value",
+      "sbvr:vocabulary": "ecommerce"
+    },
+    {
+      "@id": "ecom:Cart",
+      "@type": "owl:Class",
+      "rdfs:label": "Shopping Cart",
+      "rdfs:comment": "A temporary collection of items a customer intends to purchase",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "shopping cart",
+      "sbvr:definition": "Shopping Cart is a temporary collection that holds items a customer intends to purchase",
+      "sbvr:vocabulary": "ecommerce"
+    },
+    {
+      "@id": "ecom:Inventory",
+      "@type": "owl:Class",
+      "rdfs:label": "Inventory",
+      "rdfs:comment": "Stock levels for a SKU at a specific warehouse or location",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "inventory",
+      "sbvr:definition": "Inventory is a stock record that tracks levels for a SKU at a specific warehouse or location",
+      "sbvr:vocabulary": "ecommerce"
+    },
+    {
+      "@id": "ecom:Warehouse",
+      "@type": "owl:Class",
+      "rdfs:label": "Warehouse",
+      "rdfs:comment": "A physical or 3PL fulfillment location holding inventory",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "warehouse",
+      "sbvr:definition": "Warehouse is a fulfillment location that is physical or 3PL and holds inventory",
+      "sbvr:vocabulary": "ecommerce"
+    },
+    {
+      "@id": "ecom:Fulfillment",
+      "@type": "owl:Class",
+      "rdfs:label": "Fulfillment",
+      "rdfs:comment": "The process of picking, packing, and shipping an order",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "fulfillment",
+      "sbvr:definition": "Fulfillment is a process that involves picking, packing, and shipping an order",
+      "sbvr:vocabulary": "ecommerce"
+    },
+    {
+      "@id": "ecom:Shipping",
+      "@type": "owl:Class",
+      "rdfs:label": "Shipping",
+      "rdfs:comment": "Delivery method with carrier, rate, tracking, and estimated delivery",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "shipping",
+      "sbvr:definition": "Shipping is a delivery method that has a carrier, rate, tracking, and estimated delivery",
+      "sbvr:vocabulary": "ecommerce"
+    },
+    {
+      "@id": "ecom:Return",
+      "@type": "owl:Class",
+      "rdfs:label": "Return/Refund",
+      "rdfs:comment": "A customer-initiated return or refund with reason and resolution",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "return/refund",
+      "sbvr:definition": "Return is a customer-initiated action that requests a return or refund with reason and resolution",
+      "sbvr:vocabulary": "ecommerce"
+    },
+    {
+      "@id": "ecom:Supplier",
+      "@type": "owl:Class",
+      "rdfs:label": "Supplier",
+      "rdfs:comment": "A vendor or manufacturer providing products for resale",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "supplier",
+      "sbvr:definition": "Supplier is a vendor or manufacturer that provides products for resale",
+      "sbvr:vocabulary": "ecommerce"
+    },
+    {
+      "@id": "ecom:Campaign",
+      "@type": "owl:Class",
+      "rdfs:subClassOf": "mabos:MarketingCampaign",
+      "rdfs:label": "Marketing Campaign",
+      "rdfs:comment": "An ecommerce-specific marketing campaign with discount codes and attribution",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "marketing campaign",
+      "sbvr:definition": "Marketing Campaign is a campaign that is ecommerce-specific and has discount codes and attribution",
+      "sbvr:vocabulary": "ecommerce"
+    },
+    {
+      "@id": "ecom:Channel",
+      "@type": "owl:Class",
+      "rdfs:subClassOf": "mabos:SalesChannel",
+      "rdfs:label": "Sales Channel",
+      "rdfs:comment": "A storefront or marketplace where products are sold (Shopify, Amazon, eBay, etc.)",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "sales channel",
+      "sbvr:definition": "Sales Channel is a storefront or marketplace that sells products",
+      "sbvr:vocabulary": "ecommerce"
+    },
+    {
+      "@id": "ecom:PaymentMethod",
+      "@type": "owl:Class",
+      "rdfs:label": "Payment Method",
+      "rdfs:comment": "A payment option: credit card, PayPal, Apple Pay, BNPL, crypto, etc.",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "payment method",
+      "sbvr:definition": "Payment Method is a payment option that is used by a customer to pay for an order",
+      "sbvr:vocabulary": "ecommerce"
+    },
+    {
+      "@id": "ecom:Coupon",
+      "@type": "owl:Class",
+      "rdfs:label": "Coupon/Discount",
+      "rdfs:comment": "A promotional discount code with rules, limits, and expiration",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "coupon/discount",
+      "sbvr:definition": "Coupon is a promotional discount code that has rules, limits, and expiration",
+      "sbvr:vocabulary": "ecommerce"
+    },
+    {
+      "@id": "ecom:Wishlist",
+      "@type": "owl:Class",
+      "rdfs:label": "Wishlist",
+      "rdfs:comment": "A customer's saved list of products for future purchase",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "wishlist",
+      "sbvr:definition": "Wishlist is a saved list that contains products a customer intends to purchase in the future",
+      "sbvr:vocabulary": "ecommerce"
+    },
+    {
+      "@id": "ecom:ProductReview",
+      "@type": "owl:Class",
+      "rdfs:label": "Product Review",
+      "rdfs:comment": "A customer rating and review of a purchased product",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "product review",
+      "sbvr:definition": "Product Review is a rating and review that is submitted by a customer for a purchased product",
+      "sbvr:vocabulary": "ecommerce"
+    },
+    {
+      "@id": "ecom:Collection",
+      "@type": "owl:Class",
+      "rdfs:label": "Collection",
+      "rdfs:comment": "A curated grouping of products for merchandising (seasonal, themed, etc.)",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "collection",
+      "sbvr:definition": "Collection is a curated grouping that organizes products for merchandising purposes",
+      "sbvr:vocabulary": "ecommerce"
+    },
+    {
+      "@id": "ecom:Subscription",
+      "@type": "owl:Class",
+      "rdfs:label": "Subscription",
+      "rdfs:comment": "A recurring purchase arrangement (subscribe-and-save, box subscriptions)",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "subscription",
+      "sbvr:definition": "Subscription is a recurring purchase arrangement that enables subscribe-and-save or box subscriptions",
+      "sbvr:vocabulary": "ecommerce"
+    },
+
+    { "@id": "ecom:hasPrice", "@type": "owl:DatatypeProperty", "rdfs:domain": "ecom:SKU", "rdfs:range": "xsd:decimal", "rdfs:comment": "Current selling price" },
+    { "@id": "ecom:hasCost", "@type": "owl:DatatypeProperty", "rdfs:domain": "ecom:SKU", "rdfs:range": "xsd:decimal", "rdfs:comment": "Cost of goods sold (COGS)" },
+    { "@id": "ecom:compareAtPrice", "@type": "owl:DatatypeProperty", "rdfs:domain": "ecom:SKU", "rdfs:range": "xsd:decimal", "rdfs:comment": "Original price before discount (strike-through price)" },
+    { "@id": "ecom:stockLevel", "@type": "owl:DatatypeProperty", "rdfs:domain": "ecom:Inventory", "rdfs:range": "xsd:integer", "rdfs:comment": "Current quantity in stock" },
+    { "@id": "ecom:reorderPoint", "@type": "owl:DatatypeProperty", "rdfs:domain": "ecom:Inventory", "rdfs:range": "xsd:integer", "rdfs:comment": "Stock level that triggers a reorder" },
+    { "@id": "ecom:safetyStock", "@type": "owl:DatatypeProperty", "rdfs:domain": "ecom:Inventory", "rdfs:range": "xsd:integer", "rdfs:comment": "Minimum buffer stock to prevent stockouts" },
+    { "@id": "ecom:leadTimeDays", "@type": "owl:DatatypeProperty", "rdfs:domain": "ecom:Supplier", "rdfs:range": "xsd:integer", "rdfs:comment": "Average supplier lead time in days" },
+    { "@id": "ecom:conversionRate", "@type": "owl:DatatypeProperty", "rdfs:domain": "ecom:Channel", "rdfs:range": "xsd:float", "rdfs:comment": "Visitor-to-purchase conversion rate 0.0-1.0" },
+    { "@id": "ecom:cartAbandonmentRate", "@type": "owl:DatatypeProperty", "rdfs:domain": "ecom:Channel", "rdfs:range": "xsd:float", "rdfs:comment": "Rate of carts abandoned before checkout 0.0-1.0" },
+    { "@id": "ecom:customerLifetimeValue", "@type": "owl:DatatypeProperty", "rdfs:domain": "ecom:Customer", "rdfs:range": "xsd:decimal", "rdfs:comment": "Predicted total revenue from this customer over their lifetime" },
+    { "@id": "ecom:acquisitionCost", "@type": "owl:DatatypeProperty", "rdfs:domain": "ecom:Customer", "rdfs:range": "xsd:decimal", "rdfs:comment": "Cost to acquire this customer (CAC)" },
+    { "@id": "ecom:averageOrderValue", "@type": "owl:DatatypeProperty", "rdfs:domain": "ecom:Customer", "rdfs:range": "xsd:decimal", "rdfs:comment": "Average order value (AOV)" },
+    { "@id": "ecom:purchaseFrequency", "@type": "owl:DatatypeProperty", "rdfs:domain": "ecom:Customer", "rdfs:range": "xsd:float", "rdfs:comment": "Average purchases per year" },
+    { "@id": "ecom:rating", "@type": "owl:DatatypeProperty", "rdfs:domain": "ecom:ProductReview", "rdfs:range": "xsd:float", "rdfs:comment": "Star rating 1.0-5.0" },
+    { "@id": "ecom:grossMargin", "@type": "owl:DatatypeProperty", "rdfs:domain": "ecom:Product", "rdfs:range": "xsd:float", "rdfs:comment": "Gross margin percentage 0.0-1.0" },
+    { "@id": "ecom:returnRate", "@type": "owl:DatatypeProperty", "rdfs:domain": "ecom:Product", "rdfs:range": "xsd:float", "rdfs:comment": "Percentage of units returned 0.0-1.0" },
+
+    {
+      "@id": "ecom:belongsToCategory",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "ecom:Product",
+      "rdfs:range": "ecom:Category",
+      "rdfs:comment": "The category this product is listed under",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Product belongs to Category",
+      "sbvr:roles": [
+        { "sbvr:roleName": "categorized product", "sbvr:rolePlayer": "ecom:Product" },
+        { "sbvr:roleName": "assigned category", "sbvr:rolePlayer": "ecom:Category" }
+      ]
+    },
+    {
+      "@id": "ecom:hasParentCategory",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "ecom:Category",
+      "rdfs:range": "ecom:Category",
+      "rdfs:comment": "Parent in the category hierarchy",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Category has parent Category",
+      "sbvr:roles": [
+        { "sbvr:roleName": "child category", "sbvr:rolePlayer": "ecom:Category" },
+        { "sbvr:roleName": "parent category", "sbvr:rolePlayer": "ecom:Category" }
+      ]
+    },
+    {
+      "@id": "ecom:suppliedBy",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "ecom:Product",
+      "rdfs:range": "ecom:Supplier",
+      "rdfs:comment": "The supplier providing this product",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Product is supplied by Supplier",
+      "sbvr:roles": [
+        { "sbvr:roleName": "supplied product", "sbvr:rolePlayer": "ecom:Product" },
+        { "sbvr:roleName": "supplier", "sbvr:rolePlayer": "ecom:Supplier" }
+      ]
+    },
+    {
+      "@id": "ecom:fulfilledVia",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "ecom:Order",
+      "rdfs:range": "ecom:Fulfillment",
+      "rdfs:comment": "The fulfillment process handling this order",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Order is fulfilled via Fulfillment",
+      "sbvr:roles": [
+        { "sbvr:roleName": "fulfilled order", "sbvr:rolePlayer": "ecom:Order" },
+        { "sbvr:roleName": "fulfillment process", "sbvr:rolePlayer": "ecom:Fulfillment" }
+      ]
+    },
+    {
+      "@id": "ecom:fulfilledFrom",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "ecom:Fulfillment",
+      "rdfs:range": "ecom:Warehouse",
+      "rdfs:comment": "The warehouse fulfilling this order",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Fulfillment is fulfilled from Warehouse",
+      "sbvr:roles": [
+        { "sbvr:roleName": "fulfillment", "sbvr:rolePlayer": "ecom:Fulfillment" },
+        { "sbvr:roleName": "source warehouse", "sbvr:rolePlayer": "ecom:Warehouse" }
+      ]
+    },
+    {
+      "@id": "ecom:shippedVia",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "ecom:Fulfillment",
+      "rdfs:range": "ecom:Shipping",
+      "rdfs:comment": "The shipping method used",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Fulfillment is shipped via Shipping",
+      "sbvr:roles": [
+        { "sbvr:roleName": "shipped fulfillment", "sbvr:rolePlayer": "ecom:Fulfillment" },
+        { "sbvr:roleName": "shipping method", "sbvr:rolePlayer": "ecom:Shipping" }
+      ]
+    },
+    {
+      "@id": "ecom:soldOn",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "ecom:Product",
+      "rdfs:range": "ecom:Channel",
+      "rdfs:comment": "Sales channels where this product is listed",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Product is sold on Channel",
+      "sbvr:roles": [
+        { "sbvr:roleName": "listed product", "sbvr:rolePlayer": "ecom:Product" },
+        { "sbvr:roleName": "sales channel", "sbvr:rolePlayer": "ecom:Channel" }
+      ]
+    },
+    {
+      "@id": "ecom:paidWith",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "ecom:Order",
+      "rdfs:range": "ecom:PaymentMethod",
+      "rdfs:comment": "Payment method used for this order",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Order is paid with PaymentMethod",
+      "sbvr:roles": [
+        { "sbvr:roleName": "paid order", "sbvr:rolePlayer": "ecom:Order" },
+        { "sbvr:roleName": "payment method", "sbvr:rolePlayer": "ecom:PaymentMethod" }
+      ]
+    },
+    {
+      "@id": "ecom:appliedCoupon",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "ecom:Order",
+      "rdfs:range": "ecom:Coupon",
+      "rdfs:comment": "Discount coupon applied to this order",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Order has applied Coupon",
+      "sbvr:roles": [
+        { "sbvr:roleName": "discounted order", "sbvr:rolePlayer": "ecom:Order" },
+        { "sbvr:roleName": "applied coupon", "sbvr:rolePlayer": "ecom:Coupon" }
+      ]
+    },
+    {
+      "@id": "ecom:reviewedProduct",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "ecom:ProductReview",
+      "rdfs:range": "ecom:Product",
+      "rdfs:comment": "The product being reviewed",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "ProductReview reviews Product",
+      "sbvr:roles": [
+        { "sbvr:roleName": "review", "sbvr:rolePlayer": "ecom:ProductReview" },
+        { "sbvr:roleName": "reviewed product", "sbvr:rolePlayer": "ecom:Product" }
+      ]
+    },
+    {
+      "@id": "ecom:placedBy",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "ecom:Order",
+      "rdfs:range": "ecom:Customer",
+      "rdfs:comment": "The customer who placed this order",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Order is placed by Customer",
+      "sbvr:roles": [
+        { "sbvr:roleName": "placed order", "sbvr:rolePlayer": "ecom:Order" },
+        { "sbvr:roleName": "ordering customer", "sbvr:rolePlayer": "ecom:Customer" }
+      ]
+    },
+    {
+      "@id": "ecom:inCollection",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "ecom:Product",
+      "rdfs:range": "ecom:Collection",
+      "rdfs:comment": "Collections this product belongs to",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Product is in Collection",
+      "sbvr:roles": [
+        { "sbvr:roleName": "collected product", "sbvr:rolePlayer": "ecom:Product" },
+        { "sbvr:roleName": "collection", "sbvr:rolePlayer": "ecom:Collection" }
+      ]
+    },
+    {
+      "@id": "ecom:storedAt",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "ecom:Inventory",
+      "rdfs:range": "ecom:Warehouse",
+      "rdfs:comment": "The warehouse holding this inventory",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Inventory is stored at Warehouse",
+      "sbvr:roles": [
+        { "sbvr:roleName": "stored inventory", "sbvr:rolePlayer": "ecom:Inventory" },
+        { "sbvr:roleName": "storage warehouse", "sbvr:rolePlayer": "ecom:Warehouse" }
+      ]
+    }
+  ]
+}

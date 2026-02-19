@@ -27,6 +27,7 @@
     "dist/",
     "docs/_layouts/",
     "extensions/",
+    "mabos/",
     "node_modules/",
     "patches/",
     "pnpm-lock.yaml",

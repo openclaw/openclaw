@@ -1,0 +1,100 @@
+name: Upstream Sync
+
+on:
+  schedule:
+    # Every Monday at 06:00 UTC
+    - cron: '0 6 * * 1'
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Add upstream remote
+        run: git remote add upstream https://github.com/openclaw/openclaw.git || true
+
+      - name: Fetch upstream
+        run: git fetch upstream
+
+      - name: Check if sync needed
+        id: check
+        run: |
+          UPSTREAM_HEAD=$(git rev-parse upstream/main)
+          MERGE_BASE=$(git merge-base HEAD upstream/main)
+          if [ "$UPSTREAM_HEAD" = "$MERGE_BASE" ]; then
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+            echo "Already up to date with upstream."
+          else
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+            echo "Upstream has new commits."
+          fi
+
+      - name: Create sync branch
+        if: steps.check.outputs.needed == 'true'
+        run: |
+          BRANCH="sync/upstream-$(date +%Y%m%d)"
+          git checkout -b "$BRANCH"
+          echo "branch=$BRANCH" >> "$GITHUB_ENV"
+
+      - name: Merge upstream
+        if: steps.check.outputs.needed == 'true'
+        run: |
+          git config user.name "MABOS Bot"
+          git config user.email "mabos-bot@users.noreply.github.com"
+          git merge upstream/main --no-edit
+
+      - name: Re-apply branding
+        if: steps.check.outputs.needed == 'true'
+        run: bash mabos/scripts/rebrand.sh
+
+      - name: Install dependencies
+        if: steps.check.outputs.needed == 'true'
+        run: pnpm install --frozen-lockfile || pnpm install
+
+      - name: Build
+        if: steps.check.outputs.needed == 'true'
+        run: pnpm build
+
+      - name: Run upstream tests
+        if: steps.check.outputs.needed == 'true'
+        run: pnpm test:fast
+
+      - name: Build MABOS extension
+        if: steps.check.outputs.needed == 'true'
+        run: cd extensions/mabos && pnpm build
+
+      - name: Run MABOS tests
+        if: steps.check.outputs.needed == 'true'
+        run: cd extensions/mabos && pnpm test
+
+      - name: Push and create PR
+        if: steps.check.outputs.needed == 'true'
+        run: |
+          git push origin "$branch"
+          gh pr create \
+            --title "Sync upstream OpenClaw $(date +%Y-%m-%d)" \
+            --body "Automated upstream sync. All tests pass." \
+            --base main \
+            --head "$branch"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          branch: ${{ env.branch }}
