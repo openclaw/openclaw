@@ -9,6 +9,7 @@ import {
   resolveUpdateChannelDisplay,
 } from "../../infra/update-channels.js";
 import { checkUpdateStatus } from "../../infra/update-check.js";
+import { resolveStateDir } from "../../config/paths.js";
 import { defaultRuntime } from "../../runtime.js";
 import { renderTable } from "../../terminal/table.js";
 import { theme } from "../../terminal/theme.js";
@@ -99,6 +100,7 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
 
   const rows = [
     { Item: "Install", Value: installLabel },
+    { Item: "Data", Value: resolveStateDir() },
     { Item: "Channel", Value: channelLabel },
     ...(gitLabel ? [{ Item: "Git", Value: gitLabel }] : []),
     {

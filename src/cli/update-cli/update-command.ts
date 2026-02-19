@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { confirm, isCancel } from "@clack/prompts";
 import {
@@ -30,6 +31,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { stylePromptMessage } from "../../terminal/prompt-style.js";
 import { theme } from "../../terminal/theme.js";
 import { pathExists } from "../../utils.js";
+import { resolveConfigPath } from "../../config/paths.js";
 import { replaceCliName, resolveCliName } from "../cli-name.js";
 import { formatCliCommand } from "../command-format.js";
 import { installCompletion } from "../completion-cli.js";
@@ -55,6 +57,51 @@ import {
 import { suppressDeprecations } from "./suppress-deprecations.js";
 
 const CLI_NAME = resolveCliName();
+
+const CONFIG_BACKUP_PREFIX = "openclaw.backup-";
+const CONFIG_BACKUP_MAX_KEEP = 3;
+
+async function backupConfigBeforeUpdate(): Promise<string | null> {
+  const configPath = resolveConfigPath();
+  if (!configPath) {
+    return null;
+  }
+  try {
+    await fs.access(configPath);
+  } catch {
+    return null;
+  }
+  const dir = path.dirname(configPath);
+  const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const backupPath = path.join(dir, `${CONFIG_BACKUP_PREFIX}${ts}.json`);
+  try {
+    await fs.copyFile(configPath, backupPath);
+    return backupPath;
+  } catch {
+    return null;
+  }
+}
+
+async function pruneConfigBackups(): Promise<void> {
+  const configPath = resolveConfigPath();
+  if (!configPath) {
+    return;
+  }
+  const dir = path.dirname(configPath);
+  let entries: string[];
+  try {
+    entries = await fs.readdir(dir);
+  } catch {
+    return;
+  }
+  const backups = entries
+    .filter((e) => e.startsWith(CONFIG_BACKUP_PREFIX) && e.endsWith(".json"))
+    .sort()
+    .reverse();
+  for (const old of backups.slice(CONFIG_BACKUP_MAX_KEEP)) {
+    await fs.unlink(path.join(dir, old)).catch(() => {});
+  }
+}
 
 const UPDATE_QUIPS = [
   "Leveled up! New skills unlocked. You're welcome.",
@@ -582,6 +629,11 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     defaultRuntime.log("");
   }
 
+  const backupPath = await backupConfigBeforeUpdate();
+  if (backupPath && !opts.json) {
+    defaultRuntime.log(theme.muted(`Config backed up → ${path.basename(backupPath)}`));
+  }
+
   const { progress, stop } = createUpdateProgress(showProgress);
   const startedAt = Date.now();
 
@@ -651,6 +703,8 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     defaultRuntime.exit(0);
     return;
   }
+
+  await pruneConfigBackups();
 
   await updatePluginsAfterCoreUpdate({
     root,

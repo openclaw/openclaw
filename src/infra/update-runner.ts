@@ -412,7 +412,16 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     const statusCheck = await runStep(
       step(
         "clean check",
-        ["git", "-C", gitRoot, "status", "--porcelain", "--", ":!dist/control-ui/"],
+        [
+          "git",
+          "-C",
+          gitRoot,
+          "status",
+          "--porcelain",
+          "--untracked-files=no",
+          "--",
+          ":!dist/control-ui/",
+        ],
         gitRoot,
       ),
     );
