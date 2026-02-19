@@ -12,9 +12,11 @@ const SUPERVISOR_HINT_ENV_VARS = [
   "LAUNCH_JOB_LABEL",
   "LAUNCH_JOB_NAME",
   "XPC_SERVICE_NAME",
+  "OPENCLAW_LAUNCHD_LABEL",
   "INVOCATION_ID",
   "SYSTEMD_EXEC_PID",
   "JOURNAL_STREAM",
+  "OPENCLAW_SYSTEMD_UNIT",
 ];
 
 function isTruthy(value: string | undefined): boolean {

@@ -24,9 +24,11 @@ function clearSupervisorHints() {
   delete process.env.LAUNCH_JOB_LABEL;
   delete process.env.LAUNCH_JOB_NAME;
   delete process.env.XPC_SERVICE_NAME;
+  delete process.env.OPENCLAW_LAUNCHD_LABEL;
   delete process.env.INVOCATION_ID;
   delete process.env.SYSTEMD_EXEC_PID;
   delete process.env.JOURNAL_STREAM;
+  delete process.env.OPENCLAW_SYSTEMD_UNIT;
 }
 
 describe("restartGatewayProcessWithFreshPid", () => {
@@ -47,6 +49,22 @@ describe("restartGatewayProcessWithFreshPid", () => {
   it("returns supervised when XPC_SERVICE_NAME is set by launchd", () => {
     clearSupervisorHints();
     process.env.XPC_SERVICE_NAME = "ai.openclaw.gateway";
+    const result = restartGatewayProcessWithFreshPid();
+    expect(result.mode).toBe("supervised");
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("returns supervised when OPENCLAW_LAUNCHD_LABEL is set", () => {
+    clearSupervisorHints();
+    process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
+    const result = restartGatewayProcessWithFreshPid();
+    expect(result.mode).toBe("supervised");
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("returns supervised when OPENCLAW_SYSTEMD_UNIT is set", () => {
+    clearSupervisorHints();
+    process.env.OPENCLAW_SYSTEMD_UNIT = "openclaw-gateway.service";
     const result = restartGatewayProcessWithFreshPid();
     expect(result.mode).toBe("supervised");
     expect(spawnMock).not.toHaveBeenCalled();
