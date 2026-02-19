@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { ExecAllowlistEntry } from "./exec-approvals.js";
 import {
   DEFAULT_SAFE_BINS,
   analyzeShellCommand,
@@ -11,7 +12,6 @@ import {
   type CommandResolution,
   type ExecCommandSegment,
 } from "./exec-approvals-analysis.js";
-import type { ExecAllowlistEntry } from "./exec-approvals.js";
 import { isTrustedSafeBinPath } from "./exec-safe-bin-trust.js";
 
 function isPathLikeToken(value: string): boolean {
@@ -60,6 +60,57 @@ function hasGlobToken(value: string): boolean {
   // Safe bins are stdin-only; globbing is both surprising and a historical bypass vector.
   // Note: we still harden execution-time expansion separately.
   return /[*?[\]]/.test(value);
+}
+
+type SafeBinOptionPolicy = {
+  blockedShort?: ReadonlySet<string>;
+  blockedLong?: ReadonlySet<string>;
+};
+
+const SAFE_BIN_OPTION_POLICIES: Readonly<Record<string, SafeBinOptionPolicy>> = {
+  // sort can write arbitrary output paths via -o/--output, which breaks stdin-only guarantees.
+  sort: {
+    blockedShort: new Set(["o"]),
+    blockedLong: new Set(["output"]),
+  },
+  // grep recursion flags read from cwd (or provided roots), so they are not stdin-only.
+  grep: {
+    blockedShort: new Set(["d", "r"]),
+    blockedLong: new Set(["dereference-recursive", "directories", "recursive"]),
+  },
+};
+
+function parseLongOptionName(token: string): string | null {
+  if (!token.startsWith("--") || token === "--") {
+    return null;
+  }
+  const body = token.slice(2);
+  if (!body) {
+    return null;
+  }
+  const eqIndex = body.indexOf("=");
+  const name = (eqIndex >= 0 ? body.slice(0, eqIndex) : body).trim().toLowerCase();
+  return name.length > 0 ? name : null;
+}
+
+function hasBlockedSafeBinOption(execName: string, token: string): boolean {
+  const policy = SAFE_BIN_OPTION_POLICIES[execName];
+  if (!policy || !token.startsWith("-")) {
+    return false;
+  }
+  const longName = parseLongOptionName(token);
+  if (longName) {
+    return policy.blockedLong?.has(longName) ?? false;
+  }
+  if (token === "-" || token === "--") {
+    return false;
+  }
+  for (const ch of token.slice(1)) {
+    if (policy.blockedShort?.has(ch.toLowerCase())) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function isSafeBinUsage(params: {
@@ -112,6 +163,9 @@ export function isSafeBinUsage(params: {
       continue;
     }
     if (token.startsWith("-")) {
+      if (hasBlockedSafeBinOption(execName, token)) {
+        return false;
+      }
       const eqIndex = token.indexOf("=");
       if (eqIndex > 0) {
         const value = token.slice(eqIndex + 1);
