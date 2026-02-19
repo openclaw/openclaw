@@ -4,6 +4,8 @@ import {
   checkShellCompletionStatus,
   ensureCompletionCacheExists,
 } from "../../commands/doctor-completion.js";
+// Keep eager: npm global updates replace hashed dist chunks.
+// Lazy loading here can resolve stale filenames at runtime.
 import { doctorCommand } from "../../commands/doctor.js";
 import { readConfigFileSnapshot, writeConfigFile } from "../../config/config.js";
 import { resolveGatewayService } from "../../daemon/service.js";
@@ -33,6 +35,8 @@ import { pathExists } from "../../utils.js";
 import { replaceCliName, resolveCliName } from "../cli-name.js";
 import { formatCliCommand } from "../command-format.js";
 import { installCompletion } from "../completion-cli.js";
+// Keep eager: npm global updates replace hashed dist chunks.
+// Lazy loading here can resolve stale filenames at runtime.
 import { runDaemonRestart } from "../daemon-cli.js";
 import { createUpdateProgress, printResult } from "./progress.js";
 import { prepareRestartScript, runRestartScript } from "./restart-helper.js";

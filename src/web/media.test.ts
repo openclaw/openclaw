@@ -99,19 +99,18 @@ afterEach(() => {
 });
 
 describe("web media loading", () => {
-  beforeAll(() => {
+  let tempStateDir: string;
+  beforeAll(async () => {
     // Ensure state dir is stable and not influenced by other tests that stub OPENCLAW_STATE_DIR.
-    // Also keep it outside os.tmpdir() so tmpdir localRoots doesn't accidentally make all state readable.
     stateDirSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
-    process.env.OPENCLAW_STATE_DIR = path.join(
-      path.parse(os.tmpdir()).root,
-      "var",
-      "lib",
-      "openclaw-media-state-test",
-    );
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-state-test-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
   });
 
-  afterAll(() => {
+  afterAll(async () => {
+    if (tempStateDir) {
+      await fs.rm(tempStateDir, { recursive: true, force: true }).catch(() => {});
+    }
     stateDirSnapshot.restore();
   });
 
