@@ -8,6 +8,7 @@ vi.mock("./auth-profiles.js", () => ({
   getSoonestCooldownExpiry: vi.fn(),
   isProfileInCooldown: vi.fn(),
   resolveAuthProfileOrder: vi.fn(),
+  resolveDominantCooldownReason: vi.fn().mockReturnValue("rate_limit"),
 }));
 
 import {
