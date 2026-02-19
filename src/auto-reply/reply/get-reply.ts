@@ -112,8 +112,12 @@ export async function getReplyFromConfig(
     typeof configuredTypingSeconds === "number" ? configuredTypingSeconds : 6;
   const configuredTtlSeconds =
     agentCfg?.typingTtlSeconds ?? sessionCfg?.typingTtlSeconds;
+  // Clamp to Node.js setTimeout max (~24.8 days) to prevent 32-bit overflow
+  const MAX_TTL_SECONDS = 2_147_483;
   const typingTtlMs =
-    typeof configuredTtlSeconds === "number" ? configuredTtlSeconds * 1000 : undefined;
+    typeof configuredTtlSeconds === "number"
+      ? Math.min(configuredTtlSeconds, MAX_TTL_SECONDS) * 1000
+      : undefined;
   const typing = createTypingController({
     onReplyStart: opts?.onReplyStart,
     onCleanup: opts?.onTypingCleanup,
