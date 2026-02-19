@@ -7,13 +7,22 @@ const DEFAULT_MAX_TOKENS = 8192;
 // We keep this list intentionally broad; if a model isn't available Copilot will
 // return an error and users can remove it from their config.
 const DEFAULT_MODEL_IDS = [
-  "gpt-4o",
-  "gpt-4.1",
-  "gpt-4.1-mini",
-  "gpt-4.1-nano",
-  "o1",
-  "o1-mini",
-  "o3-mini",
+  "gpt-5.3-codex",
+  "gpt-5.2",
+  "gpt-5.2-codex",
+  "gpt-5.1",
+  "gpt-5.1-codex",
+  "gpt-5.1-codex-max",
+  "gpt-5-mini",
+  "claude-opus-4.6",
+  "claude-opus-4-6-fast",
+  "claude-opus-4.5",
+  "claude-sonnet-4.6",
+  "claude-sonnet-4.5",
+  "claude-haiku-4.5",
+  "gemini-3-pro",
+  "gemini-3-flash",
+  "grok-code-fast-1",
 ] as const;
 
 export function getDefaultCopilotModelIds(): string[] {
