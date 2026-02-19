@@ -11,26 +11,11 @@ export type ResolvedCliBackend = {
   config: CliBackendConfig;
 };
 
+/** Bare family names only — version-specific patterns handled dynamically in normalizeCliModel */
 const CLAUDE_MODEL_ALIASES: Record<string, string> = {
   opus: "opus",
-  "opus-4.6": "opus",
-  "opus-4.5": "opus",
-  "opus-4": "opus",
-  "claude-opus-4-6": "opus",
-  "claude-opus-4-5": "opus",
-  "claude-opus-4": "opus",
   sonnet: "sonnet",
-  "sonnet-4.6": "sonnet",
-  "sonnet-4.5": "sonnet",
-  "sonnet-4.1": "sonnet",
-  "sonnet-4.0": "sonnet",
-  "claude-sonnet-4-6": "sonnet",
-  "claude-sonnet-4-5": "sonnet",
-  "claude-sonnet-4-1": "sonnet",
-  "claude-sonnet-4-0": "sonnet",
   haiku: "haiku",
-  "haiku-3.5": "haiku",
-  "claude-haiku-3-5": "haiku",
 };
 
 const DEFAULT_CLAUDE_BACKEND: CliBackendConfig = {
