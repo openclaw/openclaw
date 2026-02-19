@@ -474,15 +474,17 @@ describe("cron cli", () => {
       "tick",
     ]);
   });
-
   it("sets explicit stagger for cron edit", async () => {
+    // Run the cron edit command
     await runCronCommand(["cron", "edit", "job-1", "--cron", "0 * * * *", "--stagger", "30s"]);
 
-    const patch = getGatewayCallParams<{
+    // Get the gateway call params with explicit type for schedule
+    const params = getGatewayCallParams<{
       patch?: { schedule?: { kind?: string; staggerMs?: number } };
     }>("cron.update");
-    expect(patch?.patch?.schedule?.kind).toBe("cron");
-    expect(patch?.patch?.schedule?.staggerMs).toBe(30_000);
+
+    expect(params?.patch?.schedule?.kind).toBe("cron");
+    expect(params?.patch?.schedule?.staggerMs).toBe(30_000);
   });
 
   it("applies --exact to existing cron job without requiring --cron on edit", async () => {
