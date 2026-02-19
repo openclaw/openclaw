@@ -242,7 +242,10 @@ describe("lobster plugin tool", () => {
       }),
     });
 
-    const tool = createLobsterTool(fakeApi({ pluginConfig: { lobsterPath: lobsterBinPath } }));
+    const configuredLobsterPath = process.platform === "win32" ? lobsterExePath : lobsterBinPath;
+    const tool = createLobsterTool(
+      fakeApi({ pluginConfig: { lobsterPath: configuredLobsterPath } }),
+    );
     const res = await tool.execute("call-plugin-config", {
       action: "run",
       pipeline: "noop",
@@ -251,7 +254,7 @@ describe("lobster plugin tool", () => {
 
     expect(spawnState.spawn).toHaveBeenCalled();
     const [execPath] = spawnState.spawn.mock.calls[0] ?? [];
-    expect(execPath).toBe(lobsterBinPath);
+    expect(execPath).toBe(configuredLobsterPath);
     expect(res.details).toMatchObject({ ok: true, status: "ok" });
   });
 
