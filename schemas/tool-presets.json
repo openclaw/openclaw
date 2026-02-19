@@ -1,0 +1,221 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://openclaw.com/schemas/tool-presets.json",
+  "title": "Tool Presets",
+  "description": "Named tool permission sets for stage-based agent access control",
+  "type": "object",
+  "properties": {
+    "restricted": {
+      "type": "object",
+      "description": "Read-only access. Safe for new agents. Can observe but not modify.",
+      "properties": {
+        "allow": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "read",
+            "memory_search",
+            "memory_get"
+          ]
+        },
+        "deny": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "exec",
+            "write",
+            "edit",
+            "apply_patch",
+            "browser",
+            "canvas",
+            "nodes",
+            "gateway",
+            "cron"
+          ]
+        }
+      },
+      "required": [
+        "allow",
+        "deny"
+      ]
+    },
+    "supervised": {
+      "type": "object",
+      "description": "Sandboxed execution. Can do work but isolated from host. Suitable for agents learning to build.",
+      "properties": {
+        "allow": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "read",
+            "write",
+            "edit",
+            "memory_search",
+            "memory_get",
+            "web_search",
+            "web_fetch",
+            "exec"
+          ]
+        },
+        "deny": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "gateway",
+            "cron",
+            "nodes"
+          ]
+        },
+        "sandbox": {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "const": "all"
+            },
+            "scope": {
+              "type": "string",
+              "const": "agent"
+            }
+          },
+          "required": [
+            "mode",
+            "scope"
+          ]
+        }
+      },
+      "required": [
+        "allow",
+        "deny",
+        "sandbox"
+      ]
+    },
+    "full": {
+      "type": "object",
+      "description": "No restrictions. All tools available. For mature, trusted agents.",
+      "properties": {},
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "restricted",
+    "supervised",
+    "full"
+  ],
+  "additionalProperties": true,
+  "examples": [
+    {
+      "restricted": {
+        "allow": [
+          "read",
+          "memory_search",
+          "memory_get"
+        ],
+        "deny": [
+          "exec",
+          "write",
+          "edit",
+          "apply_patch",
+          "browser",
+          "canvas",
+          "nodes",
+          "gateway",
+          "cron"
+        ]
+      },
+      "supervised": {
+        "allow": [
+          "read",
+          "write",
+          "edit",
+          "memory_search",
+          "memory_get",
+          "web_search",
+          "web_fetch",
+          "exec"
+        ],
+        "deny": [
+          "gateway",
+          "cron",
+          "nodes"
+        ],
+        "sandbox": {
+          "mode": "all",
+          "scope": "agent"
+        }
+      },
+      "full": {}
+    }
+  ],
+  "definitions": {
+    "toolName": {
+      "type": "string",
+      "description": "OpenClaw tool name",
+      "examples": [
+        "read",
+        "write",
+        "edit",
+        "exec",
+        "browser",
+        "web_search",
+        "sessions_send",
+        "cron",
+        "nodes",
+        "gateway"
+      ]
+    },
+    "preset": {
+      "type": "object",
+      "description": "Tool policy preset definition",
+      "properties": {
+        "allow": {
+          "type": "array",
+          "description": "Tools explicitly allowed (whitelist)",
+          "items": {
+            "$ref": "#/definitions/toolName"
+          }
+        },
+        "deny": {
+          "type": "array",
+          "description": "Tools explicitly denied (blacklist, evaluated after allow)",
+          "items": {
+            "$ref": "#/definitions/toolName"
+          }
+        },
+        "sandbox": {
+          "type": "object",
+          "description": "Sandbox configuration (applied to allowed exec tools)",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": [
+                "off",
+                "exec",
+                "all"
+              ],
+              "description": "Sandbox enforcement level"
+            },
+            "scope": {
+              "type": "string",
+              "enum": [
+                "agent",
+                "session",
+                "shared"
+              ],
+              "description": "Sandbox isolation scope"
+            }
+          }
+        }
+      }
+    }
+  },
+  "$comment": "Tool presets are evaluated at tool call time. Evaluation order: preset \u2192 allow \u2192 deny. Custom presets can extend the three defaults. Presets are referenced in agent config via tools.preset: 'preset-name'."
+}

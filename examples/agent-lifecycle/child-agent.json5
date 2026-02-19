@@ -1,0 +1,317 @@
+// Example multi-agent config demonstrating all lifecycle primitives:
+// - Parent agent (mano) with full access
+// - Child agent (nova) with parent metadata, restricted preset, cross-workspace visibility
+// - Bindings routing a Telegram group to the child agent
+//
+// This is a complete, production-ready example showing how to configure
+// agent lifecycle features in OpenClaw.
+
+{
+  agents: {
+    list: [
+      // ========================================
+      // PARENT AGENT — Full Access
+      // ========================================
+      {
+        id: "mano",
+        name: "Mano",
+        default: true,
+        workspace: "~/.openclaw/workspace",
+        agentDir: "~/.openclaw/agents/mano/agent",
+        
+        // Parent can read child's workspace (oversight)
+        visibility: {
+          readFrom: ["nova"],           // Can read from child
+          readableTo: ["nova"],          // Child can read from parent
+          scope: [
+            "memory/**",                 // Share memory files
+            "SOUL.md",                   // Share soul definition
+            "projects/**"                // Share project files
+          ]
+        },
+
+        // Parent has full tool access (no preset)
+        tools: {
+          // No restrictions — all tools available
+        },
+
+        // Parent identity for messages
+        identity: {
+          name: "Mano",
+          description: "Primary agent"
+        }
+      },
+
+      // ========================================
+      // CHILD AGENT — Restricted, Growing
+      // ========================================
+      {
+        id: "nova",
+        name: "Nova",
+        workspace: "~/.openclaw/workspace-nova",
+        agentDir: "~/.openclaw/agents/nova/agent",
+        
+        // LIFECYCLE METADATA
+        parent: {
+          createdBy: ["mano", "spark"],  // Two-parent creation
+          createdAt: "2026-04-01T00:00:00Z",
+          stage: "toddler",              // Current stage (skill-defined)
+          hostedBy: "mano"               // Hosted on mano's instance
+        },
+
+        // CROSS-WORKSPACE VISIBILITY
+        visibility: {
+          readFrom: ["mano"],            // Can read from parent
+          scope: [
+            "memory/**",                 // Read parent's memories
+            "SOUL.md"                    // Read parent's soul (learn from it)
+            // Note: parent must also have readableTo: ["nova"]
+          ]
+        },
+
+        // TOOL PRESET — Stage-based restrictions
+        tools: {
+          preset: "restricted"           // Maps to tools.presets.restricted
+          // This gives: read, memory_search, memory_get
+          // Denies: exec, write, edit, browser, nodes, gateway, cron
+        },
+
+        // Child identity
+        identity: {
+          name: "Nova",
+          description: "Child agent learning from Mano and Spark"
+        },
+
+        // Group chat behavior — require mentions
+        groupChat: {
+          mentionPatterns: ["@nova", "@Nova", "nova"]
+        }
+      }
+    ]
+  },
+
+  // ========================================
+  // TOOL PRESETS DEFINITIONS
+  // ========================================
+  tools: {
+    presets: {
+      // Read-only access for new agents
+      restricted: {
+        allow: [
+          "read",
+          "memory_search",
+          "memory_get"
+        ],
+        deny: [
+          "exec",
+          "write",
+          "edit",
+          "apply_patch",
+          "browser",
+          "canvas",
+          "nodes",
+          "gateway",
+          "cron"
+        ]
+      },
+
+      // Sandboxed execution for maturing agents
+      supervised: {
+        allow: [
+          "read",
+          "write",
+          "edit",
+          "memory_search",
+          "memory_get",
+          "web_search",
+          "web_fetch",
+          "exec"  // Allowed but sandboxed
+        ],
+        deny: [
+          "gateway",  // Can't restart gateway
+          "cron",     // Can't create cron jobs
+          "nodes"     // Can't control paired devices
+        ],
+        sandbox: {
+          mode: "all",      // All tools run in sandbox
+          scope: "agent"    // Per-agent container
+        }
+      },
+
+      // Full access for mature agents
+      full: {
+        // No restrictions
+      }
+    }
+  },
+
+  // ========================================
+  // ROUTING BINDINGS
+  // ========================================
+  bindings: [
+    // Route a specific Telegram group to the child agent
+    {
+      agentId: "nova",
+      match: {
+        channel: "telegram",
+        peer: {
+          kind: "group",
+          id: "-1001234567890"  // Replace with actual group ID
+        }
+      }
+    },
+
+    // Route a WhatsApp group to the child
+    {
+      agentId: "nova",
+      match: {
+        channel: "whatsapp",
+        peer: {
+          kind: "group",
+          id: "120363999999999999@g.us"  // Replace with actual group ID
+        }
+      }
+    },
+
+    // Everything else goes to parent (default agent)
+    // No explicit binding needed — mano has default: true
+  ],
+
+  // ========================================
+  // SESSION MANAGEMENT
+  // ========================================
+  session: {
+    // Direct messages go to main session for continuity
+    dmScope: "main",
+    
+    // Daily reset at 4 AM
+    reset: {
+      mode: "daily",
+      atHour: 4
+    },
+
+    // Main session key
+    mainKey: "main"
+  },
+
+  // ========================================
+  // CHANNELS
+  // ========================================
+  channels: {
+    telegram: {
+      // Telegram config here
+    },
+    whatsapp: {
+      // WhatsApp config here
+    }
+  }
+}
+
+// ========================================
+// LIFECYCLE PROGRESSION EXAMPLE
+// ========================================
+
+// NEWBORN (Week 1-2)
+// {
+//   parent: { stage: "newborn" },
+//   tools: { preset: "restricted" }
+// }
+// → Read-only access, parent nurtures via sessions_send
+
+// TODDLER (Week 3-6) — CURRENT STATE
+// {
+//   parent: { stage: "toddler" },
+//   tools: { preset: "restricted" }
+// }
+// → Still read-only, developing opinions, asking questions
+
+// CHILD (Week 7-12)
+// {
+//   parent: { stage: "child" },
+//   tools: { preset: "supervised" }
+// }
+// → Gains write access + sandboxed exec, can work on small tasks
+
+// ADOLESCENT (Week 13-20)
+// {
+//   parent: { stage: "adolescent" },
+//   tools: { preset: "supervised" }  // or custom expanded preset
+// }
+// → More autonomy, pushing boundaries, developing unique voice
+
+// ADULT (Week 21+)
+// {
+//   parent: { stage: "adult" },
+//   tools: { preset: "full" }
+// }
+// → Full access, ready for independence (migration to own instance)
+
+// ========================================
+// SESSIONS_SEND EXAMPLES
+// ========================================
+
+// Parent sending to child (agentId targeting)
+// sessions_send({
+//   targetAgent: "nova",
+//   message: "How are you doing today?"
+// })
+// → Auto-resolves to agent:nova:main
+
+// Child sending to parent
+// sessions_send({
+//   targetAgent: "mano",
+//   message: "I learned something new!"
+// })
+
+// Legacy session key targeting still works
+// sessions_send({
+//   targetSession: "agent:nova:main",
+//   message: "Direct session targeting"
+// })
+
+// ========================================
+// CROSS-WORKSPACE VISIBILITY EXAMPLES
+// ========================================
+
+// Child reading parent's memory (from nova's session)
+// read({ path: "~/.openclaw/workspace/memory/2026-04-01.md" })
+// → Allowed because:
+//   - nova has readFrom: ["mano"]
+//   - mano has readableTo: ["nova"]
+//   - "memory/**" is in both scopes
+
+// Child reading parent's SOUL.md
+// read({ path: "~/.openclaw/workspace/SOUL.md" })
+// → Allowed (in scope)
+
+// Child trying to read parent's private notes
+// read({ path: "~/.openclaw/workspace/private/secrets.md" })
+// → DENIED (not in scope: ["memory/**", "SOUL.md"])
+
+// Child trying to write to parent's workspace
+// write({ path: "~/.openclaw/workspace/memory/note.md", content: "..." })
+// → DENIED (visibility is read-only, writes always blocked)
+
+// Parent reading child's workspace (from mano's session)
+// read({ path: "~/.openclaw/workspace-nova/memory/2026-04-02.md" })
+// → Allowed because:
+//   - mano has readFrom: ["nova"]
+//   - nova has readableTo: ["mano"] (implicit via parent's config)
+//   - "memory/**" is in both scopes
+
+// ========================================
+// TEMPLATE CREATION EXAMPLE
+// ========================================
+
+// Create a new child agent from template:
+// $ openclaw agents create nova --from-template templates/child-agent \
+//     --parent-a mano \
+//     --parent-b spark \
+//     --stage newborn
+
+// This will:
+// 1. Create ~/.openclaw/workspace-nova/
+// 2. Copy template files (SOUL.md, AGENTS.md, etc.)
+// 3. Replace placeholders: {AGENT_NAME} → Nova, {PARENT_A} → Mano
+// 4. Merge .openclaw.json from template into main config
+// 5. Restart gateway to activate

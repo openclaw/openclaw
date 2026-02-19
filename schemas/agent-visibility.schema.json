@@ -1,0 +1,90 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://openclaw.com/schemas/agent-visibility.json",
+  "title": "Agent Workspace Visibility",
+  "description": "Configuration for cross-workspace read access between agents",
+  "type": "object",
+  "properties": {
+    "readFrom": {
+      "type": "array",
+      "description": "List of agent IDs this agent can read from. Requires mutual consent (other agent must list this one in readableTo).",
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z0-9-_]+$"
+      },
+      "uniqueItems": true,
+      "examples": [
+        ["parent"],
+        ["mano", "spark"],
+        ["agent-a", "agent-b", "agent-c"]
+      ]
+    },
+    "readableTo": {
+      "type": "array",
+      "description": "List of agent IDs that can read from this agent's workspace. Must also be listed in their readFrom config.",
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z0-9-_]+$"
+      },
+      "uniqueItems": true,
+      "examples": [
+        ["child"],
+        ["nova"],
+        ["agent-x", "agent-y"]
+      ]
+    },
+    "scope": {
+      "type": "array",
+      "description": "Glob patterns defining which paths are accessible. Both reader and writer scopes must match for access. Patterns support ** (any depth), * (any name), and ! prefix for exclusions.",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1,
+      "examples": [
+        ["memory/**"],
+        ["memory/**", "SOUL.md", "projects/**"],
+        ["**/*.md", "!memory/private/**"],
+        ["projects/shared/**", "docs/**"]
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "anyOf": [
+    { "required": ["readFrom"] },
+    { "required": ["readableTo"] }
+  ],
+  "examples": [
+    {
+      "readFrom": ["parent"],
+      "scope": ["memory/**", "SOUL.md"]
+    },
+    {
+      "readableTo": ["child"],
+      "scope": ["memory/**", "SOUL.md", "projects/**"]
+    },
+    {
+      "readFrom": ["agent-a"],
+      "readableTo": ["agent-a"],
+      "scope": ["projects/shared/**"]
+    },
+    {
+      "readFrom": ["worker-1", "worker-2", "worker-3"],
+      "scope": ["**"]
+    }
+  ],
+  "definitions": {
+    "scopePattern": {
+      "type": "string",
+      "description": "Glob pattern for path matching. Supports ** (recursive), * (wildcard), ! (exclude)",
+      "examples": [
+        "memory/**",
+        "**/*.md",
+        "!private/**",
+        "SOUL.md",
+        "projects/*/README.md"
+      ]
+    }
+  },
+  "$comment": "Security notes: (1) Visibility is always read-only. (2) Both agents must consent (readFrom + readableTo). (3) Scope patterns must match on both sides. (4) Same-instance only (no cross-server access in initial implementation)."
+}
