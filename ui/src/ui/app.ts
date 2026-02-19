@@ -456,11 +456,46 @@ export class OpenClawApp extends LitElement {
     messageOverride?: string,
     opts?: Parameters<typeof handleSendChatInternal>[2],
   ) {
+    this.clearChatAutoSendTimer();
     await handleSendChatInternal(
       this as unknown as Parameters<typeof handleSendChatInternal>[0],
       messageOverride,
       opts,
     );
+  }
+
+  handleChatDraftInput(next: string) {
+    this.chatMessage = next;
+    this.checkAutoSendTrigger(next);
+  }
+
+  clearChatAutoSendTimer() {
+    // kept for external callers (config toggle-off)
+  }
+
+  private checkAutoSendTrigger(next: string) {
+    if (!this.connected || !this.settings.chatAutoSendEnabled) {
+      return;
+    }
+    const trimmed = next.trim();
+    if (!trimmed) {
+      return;
+    }
+
+    const triggers = this.settings.chatAutoSendTriggers ?? [];
+    const matchedTrigger = triggers.find((t) => t && trimmed.endsWith(t));
+
+    if (!matchedTrigger) {
+      return;
+    }
+
+    // Strip the trigger from the message before sending
+    const stripped = trimmed.slice(0, -matchedTrigger.length).trimEnd();
+    if (!stripped) {
+      return;
+    }
+    this.chatMessage = "";
+    void this.handleSendChat(stripped);
   }
 
   async handleWhatsAppStart(force: boolean) {

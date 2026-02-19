@@ -5,6 +5,7 @@ import { refreshChatAvatar } from "./app-chat.ts";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
 import { renderChatControls, renderTab, renderThemeToggle } from "./app-render.helpers.ts";
 import type { AppViewState } from "./app-view-state.ts";
+import type { OpenClawApp } from "./app.ts";
 import { loadAgentFileContent, loadAgentFiles, saveAgentFile } from "./controllers/agent-files.ts";
 import { loadAgentIdentities, loadAgentIdentity } from "./controllers/agent-identity.ts";
 import { loadAgentSkills } from "./controllers/agent-skills.ts";
@@ -852,6 +853,8 @@ export function renderApp(state: AppViewState) {
                 },
                 onChatScroll: (event) => state.handleChatScroll(event),
                 onDraftChange: (next) => (state.chatMessage = next),
+                onDraftInput: (next) =>
+                  (state as unknown as OpenClawApp).handleChatDraftInput(next),
                 attachments: state.chatAttachments,
                 onAttachmentsChange: (next) => (state.chatAttachments = next),
                 onSend: () => state.handleSendChat(),
@@ -911,6 +914,18 @@ export function renderApp(state: AppViewState) {
                 onSave: () => saveConfig(state),
                 onApply: () => applyConfig(state),
                 onUpdate: () => runUpdate(state),
+                autoSendEnabled: state.settings.chatAutoSendEnabled,
+                autoSendTriggers: state.settings.chatAutoSendTriggers,
+                onAutoSendEnabledChange: (next) =>
+                  state.applySettings({
+                    ...state.settings,
+                    chatAutoSendEnabled: next,
+                  }),
+                onAutoSendTriggersChange: (next) =>
+                  state.applySettings({
+                    ...state.settings,
+                    chatAutoSendTriggers: next,
+                  }),
               })
             : nothing
         }

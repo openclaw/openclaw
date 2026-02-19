@@ -11,6 +11,8 @@ export type UiSettings = {
   theme: ThemeMode;
   chatFocusMode: boolean;
   chatShowThinking: boolean;
+  chatAutoSendEnabled: boolean;
+  chatAutoSendTriggers: string[];
   splitRatio: number; // Sidebar split ratio (0.4 to 0.7, default 0.6)
   navCollapsed: boolean; // Collapsible sidebar state
   navGroupsCollapsed: Record<string, boolean>; // Which nav groups are collapsed
@@ -31,6 +33,8 @@ export function loadSettings(): UiSettings {
     theme: "system",
     chatFocusMode: false,
     chatShowThinking: true,
+    chatAutoSendEnabled: false,
+    chatAutoSendTriggers: ["?"],
     splitRatio: 0.6,
     navCollapsed: false,
     navGroupsCollapsed: {},
@@ -67,6 +71,20 @@ export function loadSettings(): UiSettings {
         typeof parsed.chatShowThinking === "boolean"
           ? parsed.chatShowThinking
           : defaults.chatShowThinking,
+      chatAutoSendEnabled:
+        typeof parsed.chatAutoSendEnabled === "boolean"
+          ? parsed.chatAutoSendEnabled
+          : (parsed as Record<string, unknown>).chatAutoSendQuestionMark === true
+            ? true
+            : defaults.chatAutoSendEnabled,
+      chatAutoSendTriggers: Array.isArray(parsed.chatAutoSendTriggers)
+        ? parsed.chatAutoSendTriggers.filter((t): t is string => typeof t === "string")
+        : // migrate old boolean setting
+          typeof (parsed as Record<string, unknown>).chatAutoSendQuestionMark === "boolean"
+          ? (parsed as Record<string, unknown>).chatAutoSendQuestionMark
+            ? ["?"]
+            : []
+          : defaults.chatAutoSendTriggers,
       splitRatio:
         typeof parsed.splitRatio === "number" &&
         parsed.splitRatio >= 0.4 &&

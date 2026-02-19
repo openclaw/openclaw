@@ -16,6 +16,8 @@ const createHost = (tab: Tab): SettingsHost => ({
     theme: "system",
     chatFocusMode: false,
     chatShowThinking: true,
+    chatAutoSendEnabled: false,
+    chatAutoSendTriggers: ["?"],
     splitRatio: 0.6,
     navCollapsed: false,
     navGroupsCollapsed: {},

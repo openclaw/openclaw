@@ -35,6 +35,10 @@ describe("config view", () => {
     onApply: vi.fn(),
     onUpdate: vi.fn(),
     onSubsectionChange: vi.fn(),
+    autoSendEnabled: false,
+    autoSendTriggers: ["?"],
+    onAutoSendEnabledChange: vi.fn(),
+    onAutoSendTriggersChange: vi.fn(),
   });
 
   it("allows save when form is unsafe", () => {
