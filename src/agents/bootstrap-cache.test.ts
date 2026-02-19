@@ -114,14 +114,15 @@ describe("clearBootstrapSnapshot", () => {
   });
 
   it("does not affect other sessions", async () => {
+    mockLoad.mockResolvedValue([makeFile("AGENTS.md", "content")]);
     await getOrLoadBootstrapFiles({ workspaceDir: "/ws", sessionKey: "sk1" });
     await getOrLoadBootstrapFiles({ workspaceDir: "/ws", sessionKey: "sk2" });
 
     clearBootstrapSnapshot("sk1");
 
-    // sk2's cache entry survives clearing sk1 — third call hits cache, not disk
+    // sk2 should still be cached
     await getOrLoadBootstrapFiles({ workspaceDir: "/ws", sessionKey: "sk2" });
-    expect(mockLoad).toHaveBeenCalledTimes(2); // sk1 initial load + sk2 initial load; sk2 re-read hit cache
+    expect(mockLoad).toHaveBeenCalledTimes(2); // sk1 x1, sk2 x1 — sk2 second call hit cache
   });
 });
 
