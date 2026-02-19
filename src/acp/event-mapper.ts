@@ -27,7 +27,8 @@ export function extractTextFromPrompt(prompt: ContentBlock[], maxBytes?: number)
     if (blockText !== undefined) {
       // Guard: reject before allocating the full concatenated string
       if (maxBytes !== undefined) {
-        totalBytes += Buffer.byteLength(blockText, "utf-8");
+        const separatorBytes = parts.length > 0 ? 1 : 0; // "\n" added by join() between blocks
+        totalBytes += separatorBytes + Buffer.byteLength(blockText, "utf-8");
         if (totalBytes > maxBytes) {
           throw new Error(`Prompt exceeds maximum allowed size of ${maxBytes} bytes`);
         }
