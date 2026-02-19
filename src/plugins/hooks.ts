@@ -9,6 +9,7 @@ import type { PluginRegistry } from "./registry.js";
 import type {
   PluginHookAfterCompactionEvent,
   PluginHookAfterToolCallEvent,
+  PluginHookAfterToolCallResult,
   PluginHookAgentContext,
   PluginHookAgentEndEvent,
   PluginHookBeforeAgentStartEvent,
@@ -19,6 +20,7 @@ import type {
   PluginHookBeforePromptBuildResult,
   PluginHookBeforeCompactionEvent,
   PluginHookLlmInputEvent,
+  PluginHookLlmInputResult,
   PluginHookLlmOutputEvent,
   PluginHookBeforeResetEvent,
   PluginHookBeforeToolCallEvent,
@@ -61,6 +63,7 @@ export type {
   PluginHookBeforePromptBuildEvent,
   PluginHookBeforePromptBuildResult,
   PluginHookLlmInputEvent,
+  PluginHookLlmInputResult,
   PluginHookLlmOutputEvent,
   PluginHookAgentEndEvent,
   PluginHookBeforeCompactionEvent,
@@ -75,6 +78,7 @@ export type {
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
   PluginHookAfterToolCallEvent,
+  PluginHookAfterToolCallResult,
   PluginHookToolResultPersistContext,
   PluginHookToolResultPersistEvent,
   PluginHookToolResultPersistResult,
@@ -323,11 +327,24 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
 
   /**
    * Run llm_input hook.
-   * Allows plugins to observe the exact input payload sent to the LLM.
-   * Runs in parallel (fire-and-forget).
+   * Allows plugins to observe, modify, or block the LLM input payload.
+   * Runs sequentially so plugins can modify prompt content or block the call.
    */
-  async function runLlmInput(event: PluginHookLlmInputEvent, ctx: PluginHookAgentContext) {
-    return runVoidHook("llm_input", event, ctx);
+  async function runLlmInput(
+    event: PluginHookLlmInputEvent,
+    ctx: PluginHookAgentContext,
+  ): Promise<PluginHookLlmInputResult | undefined> {
+    return runModifyingHook<"llm_input", PluginHookLlmInputResult>(
+      "llm_input",
+      event,
+      ctx,
+      (acc, next) => ({
+        prompt: next.prompt ?? acc?.prompt,
+        systemPrompt: next.systemPrompt ?? acc?.systemPrompt,
+        block: next.block ?? acc?.block,
+        blockReason: next.blockReason ?? acc?.blockReason,
+      }),
+    );
   }
 
   /**
@@ -444,13 +461,21 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
 
   /**
    * Run after_tool_call hook.
-   * Runs in parallel (fire-and-forget).
+   * Allows plugins to observe or modify tool results before they reach the LLM.
+   * Runs sequentially so plugins can redact or transform results.
    */
   async function runAfterToolCall(
     event: PluginHookAfterToolCallEvent,
     ctx: PluginHookToolContext,
-  ): Promise<void> {
-    return runVoidHook("after_tool_call", event, ctx);
+  ): Promise<PluginHookAfterToolCallResult | undefined> {
+    return runModifyingHook<"after_tool_call", PluginHookAfterToolCallResult>(
+      "after_tool_call",
+      event,
+      ctx,
+      (acc, next) => ({
+        result: next.result !== undefined ? next.result : acc?.result,
+      }),
+    );
   }
 
   /**
