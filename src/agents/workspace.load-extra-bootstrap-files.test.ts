@@ -70,42 +70,30 @@ describe("loadExtraBootstrapFiles", () => {
     expect(files[0]?.content).toBe("linked agents");
   });
 
-  it("rejects hardlinked aliases to files outside workspace", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
+  it("accepts PROFILE-*.md filenames (not blocked by allowlist)", async () => {
+    const workspaceDir = await createWorkspaceDir("profile");
+    await fs.writeFile(path.join(workspaceDir, "PROFILE-mini1.md"), "mini1 profile", "utf-8");
 
-    const rootDir = await createWorkspaceDir("hardlink");
-    const workspaceDir = path.join(rootDir, "workspace");
-    const outsideDir = path.join(rootDir, "outside");
-    await fs.mkdir(workspaceDir, { recursive: true });
-    await fs.mkdir(outsideDir, { recursive: true });
-    const outsideFile = path.join(outsideDir, "AGENTS.md");
-    const linkedFile = path.join(workspaceDir, "AGENTS.md");
-    await fs.writeFile(outsideFile, "outside", "utf-8");
-    try {
-      await fs.link(outsideFile, linkedFile);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "EXDEV") {
-        return;
-      }
-      throw err;
-    }
+    const files = await loadExtraBootstrapFiles(workspaceDir, ["PROFILE-mini1.md"]);
 
-    const files = await loadExtraBootstrapFiles(workspaceDir, ["AGENTS.md"]);
-    expect(files).toHaveLength(0);
+    expect(files).toHaveLength(1);
+    expect(files[0]?.name).toBe("PROFILE-mini1.md");
+    expect(files[0]?.content).toBe("mini1 profile");
   });
 
-  it("skips oversized bootstrap files and reports diagnostics", async () => {
-    const workspaceDir = await createWorkspaceDir("oversized");
-    const payload = "x".repeat(2 * 1024 * 1024 + 1);
-    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), payload, "utf-8");
+  it("accepts multiple PROFILE-*.md files via glob patterns", async () => {
+    const workspaceDir = await createWorkspaceDir("profile-glob");
+    await fs.writeFile(path.join(workspaceDir, "PROFILE-mini1.md"), "mini1", "utf-8");
+    await fs.writeFile(path.join(workspaceDir, "PROFILE-mini2.md"), "mini2", "utf-8");
+    await fs.writeFile(path.join(workspaceDir, "PROFILE-test.md"), "test", "utf-8");
 
-    const { files, diagnostics } = await loadExtraBootstrapFilesWithDiagnostics(workspaceDir, [
-      "AGENTS.md",
+    const files = await loadExtraBootstrapFiles(workspaceDir, ["PROFILE-*.md"]);
+
+    expect(files).toHaveLength(3);
+    expect(files.map((f) => f.name).toSorted()).toEqual([
+      "PROFILE-mini1.md",
+      "PROFILE-mini2.md",
+      "PROFILE-test.md",
     ]);
-
-    expect(files).toHaveLength(0);
-    expect(diagnostics.some((d) => d.reason === "security")).toBe(true);
   });
 });

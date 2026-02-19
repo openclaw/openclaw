@@ -129,6 +129,11 @@ async function loadTemplate(name: string): Promise<string> {
   }
 }
 
+/**
+ * Bootstrap filenames recognized by the workspace loader.
+ * Note: PROFILE-<name>.md files are also accepted but not included in this union type.
+ * Use isProfileBootstrapName() to check for profile filenames.
+ */
 export type WorkspaceBootstrapFileName =
   | typeof DEFAULT_AGENTS_FILENAME
   | typeof DEFAULT_SOUL_FILENAME
@@ -138,7 +143,8 @@ export type WorkspaceBootstrapFileName =
   | typeof DEFAULT_HEARTBEAT_FILENAME
   | typeof DEFAULT_BOOTSTRAP_FILENAME
   | typeof DEFAULT_MEMORY_FILENAME
-  | typeof DEFAULT_MEMORY_ALT_FILENAME;
+  | typeof DEFAULT_MEMORY_ALT_FILENAME
+  | (string & {});
 
 export type WorkspaceBootstrapFile = {
   name: WorkspaceBootstrapFileName;
@@ -177,6 +183,11 @@ const VALID_BOOTSTRAP_NAMES: ReadonlySet<string> = new Set([
   DEFAULT_MEMORY_FILENAME,
   DEFAULT_MEMORY_ALT_FILENAME,
 ]);
+
+/** Check if a filename matches the PROFILE-<name>.md pattern */
+function isProfileBootstrapName(name: string): boolean {
+  return /^PROFILE-.+\.md$/.test(name);
+}
 
 async function writeFileIfMissing(filePath: string, content: string): Promise<boolean> {
   try {
@@ -495,7 +506,10 @@ async function resolveMemoryBootstrapEntries(
   return deduped;
 }
 
-export async function loadWorkspaceBootstrapFiles(dir: string): Promise<WorkspaceBootstrapFile[]> {
+export async function loadWorkspaceBootstrapFiles(
+  dir: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<WorkspaceBootstrapFile[]> {
   const resolvedDir = resolveUserPath(dir);
 
   const entries: Array<{
@@ -522,6 +536,23 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
       name: DEFAULT_USER_FILENAME,
       filePath: path.join(resolvedDir, DEFAULT_USER_FILENAME),
     },
+  ];
+
+  // Add PROFILE-<name>.md if OPENCLAW_PROFILE is set and not "default"
+  const profileName = env.OPENCLAW_PROFILE?.trim();
+  if (profileName && profileName.toLowerCase() !== "default") {
+    const profileFilename = `PROFILE-${profileName}.md` as WorkspaceBootstrapFileName;
+    const profilePath = path.join(resolvedDir, profileFilename);
+    // Only add if file exists (no [MISSING] marker for optional files)
+    try {
+      await fs.access(profilePath);
+      entries.push({ name: profileFilename, filePath: profilePath });
+    } catch {
+      // Profile file is optional — skip silently
+    }
+  }
+
+  entries.push(
     {
       name: DEFAULT_HEARTBEAT_FILENAME,
       filePath: path.join(resolvedDir, DEFAULT_HEARTBEAT_FILENAME),
@@ -530,7 +561,7 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
       name: DEFAULT_BOOTSTRAP_FILENAME,
       filePath: path.join(resolvedDir, DEFAULT_BOOTSTRAP_FILENAME),
     },
-  ];
+  );
 
   entries.push(...(await resolveMemoryBootstrapEntries(resolvedDir)));
 
@@ -569,7 +600,9 @@ export function filterBootstrapFilesForSession(
   if (!sessionKey || (!isSubagentSessionKey(sessionKey) && !isCronSessionKey(sessionKey))) {
     return files;
   }
-  return files.filter((file) => MINIMAL_BOOTSTRAP_ALLOWLIST.has(file.name));
+  return files.filter(
+    (file) => MINIMAL_BOOTSTRAP_ALLOWLIST.has(file.name) || isProfileBootstrapName(file.name),
+  );
 }
 
 export async function loadExtraBootstrapFiles(
