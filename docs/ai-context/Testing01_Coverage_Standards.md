@@ -1,4 +1,4 @@
-﻿# Testing Coverage Standards
+# Testing Coverage Standards
 
 ## Coverage Thresholds
 

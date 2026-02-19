@@ -1,4 +1,4 @@
-﻿# Agent Architecture Guide
+# Agent Architecture Guide
 
 ## Overview
 

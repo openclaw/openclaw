@@ -1,4 +1,4 @@
-﻿# Channel Integration Patterns
+# Channel Integration Patterns
 
 ## Overview
 

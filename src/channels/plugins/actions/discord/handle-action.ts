@@ -34,8 +34,9 @@ export async function handleDiscordMessageAction(
 
   if (action === "send") {
     const to = readStringParam(params, "to", { required: true });
+    const asVoiceEarly = params.asVoice === true;
     const content = readStringParam(params, "message", {
-      required: true,
+      required: !asVoiceEarly,
       allowEmpty: true,
     });
     // Support media, path, and filePath for media URL
