@@ -12,6 +12,7 @@ import { applyPrimaryModel } from "../../model-picker.js";
 import {
   applyAuthProfileConfig,
   applyCloudflareAiGatewayConfig,
+  applyEdgeeConfig,
   applyQianfanConfig,
   applyKimiCodeConfig,
   applyMinimaxApiConfig,
@@ -32,6 +33,7 @@ import {
   applyZaiConfig,
   setAnthropicApiKey,
   setCloudflareAiGatewayConfig,
+  setEdgeeApiKey,
   setQianfanApiKey,
   setGeminiApiKey,
   setKimiCodingApiKey,
@@ -302,6 +304,29 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applyXaiConfig(nextConfig);
+  }
+
+  if (authChoice === "edgee-api-key") {
+    const resolved = await resolveNonInteractiveApiKey({
+      provider: "edgee",
+      cfg: baseConfig,
+      flagValue: opts.edgeeApiKey,
+      flagName: "--edgee-api-key",
+      envVar: "EDGEE_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (resolved.source !== "profile") {
+      await setEdgeeApiKey(resolved.key);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "edgee:default",
+      provider: "edgee",
+      mode: "api_key",
+    });
+    return applyEdgeeConfig(nextConfig);
   }
 
   if (authChoice === "volcengine-api-key") {

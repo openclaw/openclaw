@@ -100,6 +100,17 @@ const XIAOMI_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+const EDGEE_BASE_URL = "https://api.edgee.ai/v1";
+const EDGEE_DEFAULT_MODEL_ID = "openai/gpt-4o";
+const EDGEE_DEFAULT_CONTEXT_WINDOW = 128000;
+const EDGEE_DEFAULT_MAX_TOKENS = 16384;
+const EDGEE_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
 const MOONSHOT_BASE_URL = "https://api.moonshot.ai/v1";
 const MOONSHOT_DEFAULT_MODEL_ID = "kimi-k2.5";
 const MOONSHOT_DEFAULT_CONTEXT_WINDOW = 256000;
@@ -493,6 +504,42 @@ function buildMinimaxPortalProvider(): ProviderConfig {
   };
 }
 
+export function buildEdgeeProvider(): ProviderConfig {
+  return {
+    baseUrl: EDGEE_BASE_URL,
+    api: "openai-completions",
+    models: [
+      {
+        id: EDGEE_DEFAULT_MODEL_ID,
+        name: "GPT-4o (via Edgee)",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: EDGEE_DEFAULT_COST,
+        contextWindow: EDGEE_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: EDGEE_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "anthropic/claude-sonnet-4-20250514",
+        name: "Claude Sonnet 4 (via Edgee)",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: EDGEE_DEFAULT_COST,
+        contextWindow: 200000,
+        maxTokens: 16384,
+      },
+      {
+        id: "google/gemini-2.5-flash",
+        name: "Gemini 2.5 Flash (via Edgee)",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: EDGEE_DEFAULT_COST,
+        contextWindow: 1048576,
+        maxTokens: 65536,
+      },
+    ],
+  };
+}
+
 function buildMoonshotProvider(): ProviderConfig {
   return {
     baseUrl: MOONSHOT_BASE_URL,
@@ -756,6 +803,13 @@ export async function resolveImplicitProviders(params: {
       ...buildMinimaxPortalProvider(),
       apiKey: MINIMAX_OAUTH_PLACEHOLDER,
     };
+  }
+
+  const edgeeKey =
+    resolveEnvApiKeyVarName("edgee") ??
+    resolveApiKeyFromProfiles({ provider: "edgee", store: authStore });
+  if (edgeeKey) {
+    providers.edgee = { ...buildEdgeeProvider(), apiKey: edgeeKey };
   }
 
   const moonshotKey =

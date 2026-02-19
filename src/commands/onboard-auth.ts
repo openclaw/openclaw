@@ -7,6 +7,8 @@ export {
   applyAuthProfileConfig,
   applyCloudflareAiGatewayConfig,
   applyCloudflareAiGatewayProviderConfig,
+  applyEdgeeConfig,
+  applyEdgeeProviderConfig,
   applyHuggingfaceConfig,
   applyHuggingfaceProviderConfig,
   applyQianfanConfig,
@@ -53,9 +55,11 @@ export {
 } from "./onboard-auth.config-opencode.js";
 export {
   CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
+  EDGEE_DEFAULT_MODEL_REF,
   LITELLM_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
   setAnthropicApiKey,
+  setEdgeeApiKey,
   setCloudflareAiGatewayConfig,
   setQianfanApiKey,
   setGeminiApiKey,

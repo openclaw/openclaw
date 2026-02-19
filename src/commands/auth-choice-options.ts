@@ -161,6 +161,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["litellm-api-key"],
   },
   {
+    value: "edgee",
+    label: "Edgee",
+    hint: "AI Gateway with 200+ models and token compression",
+    choices: ["edgee-api-key"],
+  },
+  {
     value: "cloudflare-ai-gateway",
     label: "Cloudflare AI Gateway",
     hint: "Account ID + Gateway ID + API key",
@@ -197,6 +203,11 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
   {
     value: "qianfan-api-key",
     label: "Qianfan API key",
+  },
+  {
+    value: "edgee-api-key",
+    label: "Edgee API key",
+    hint: "AI Gateway with 200+ models and token compression",
   },
   { value: "openrouter-api-key", label: "OpenRouter API key" },
   {

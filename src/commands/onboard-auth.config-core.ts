@@ -30,6 +30,7 @@ import {
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelApi } from "../config/types.models.js";
 import {
+  EDGEE_DEFAULT_MODEL_REF,
   HUGGINGFACE_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
   TOGETHER_DEFAULT_MODEL_REF,
@@ -138,6 +139,47 @@ export function applyZaiConfig(
   const modelRef = modelId === ZAI_DEFAULT_MODEL_ID ? ZAI_DEFAULT_MODEL_REF : `zai/${modelId}`;
   const next = applyZaiProviderConfig(cfg, params);
   return applyAgentDefaultModelPrimary(next, modelRef);
+}
+
+export function applyEdgeeProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[EDGEE_DEFAULT_MODEL_REF] = {
+    ...models[EDGEE_DEFAULT_MODEL_REF],
+    alias: models[EDGEE_DEFAULT_MODEL_REF]?.alias ?? "Edgee",
+  };
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models,
+      },
+    },
+  };
+}
+
+export function applyEdgeeConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyEdgeeProviderConfig(cfg);
+  const existingModel = next.agents?.defaults?.model;
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
+            ? {
+                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
+              }
+            : undefined),
+          primary: EDGEE_DEFAULT_MODEL_REF,
+        },
+      },
+    },
+  };
 }
 
 export function applyOpenrouterProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
