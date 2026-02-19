@@ -27,13 +27,19 @@ class TokenBudgetExceeded(Exception):
 def estimate_tokens(text: str) -> int:
     """Fast deterministic token estimate.
 
-    Uses the ~4 chars per token heuristic which is a reasonable average
-    across GPT/Claude tokenizers for English text.  No external dependency.
+    Base ratio: ~3.3 chars/token (conservative vs the common ~4 estimate).
+    Applies a penalty when non-ASCII density is high, since code symbols
+    and multilingual characters tend to produce shorter tokens.
+    No external dependency.
     """
     if not text:
         return 0
-    # Rough estimate: 1 token per 4 characters, minimum 1
-    return max(1, len(text) // 4)
+    length = len(text)
+    non_ascii = sum(1 for ch in text if ord(ch) > 127)
+    ratio = non_ascii / length if length else 0
+    # Shift from 3.3 toward 2.5 chars/token as non-ASCII density rises
+    chars_per_token = 3.3 - (0.8 * ratio)
+    return max(1, int(length / chars_per_token))
 
 
 def check_budget(estimated: int, limit: int | None = None) -> bool:

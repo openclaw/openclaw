@@ -15,18 +15,29 @@ class TestEstimateTokens:
         assert estimate_tokens("") == 0
 
     def test_short_string(self):
-        # "ab" = 2 chars, 2//4 = 0 → clamped to 1
         assert estimate_tokens("ab") == 1
 
-    def test_known_length(self):
+    def test_known_length_ascii(self):
         text = "a" * 400
-        # 400 / 4 = 100
-        assert estimate_tokens(text) == 100
+        # 400 / 3.3 ≈ 121
+        assert estimate_tokens(text) == int(400 / 3.3)
 
     def test_proportional(self):
         short = estimate_tokens("hello world")
         long = estimate_tokens("hello world " * 100)
         assert long > short
+
+    def test_non_ascii_increases_estimate(self):
+        ascii_text = "a" * 100
+        # Mix in non-ASCII to trigger the penalty
+        non_ascii_text = "\u4e00" * 100  # CJK characters
+        assert estimate_tokens(non_ascii_text) > estimate_tokens(ascii_text)
+
+    def test_code_heavy_reasonable(self):
+        code = 'def foo(x: int) -> bool:\n    return x > 0\n' * 10
+        tokens = estimate_tokens(code)
+        # Should be more conservative than len//4
+        assert tokens > len(code) // 4
 
 
 class TestCheckBudget:
