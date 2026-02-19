@@ -42,3 +42,10 @@ Use this format when adding entries:
   npm: `@scope/package`
   repo: `https://github.com/org/repo`
   install: `openclaw plugins install @scope/package`
+
+## Listed plugins
+
+- **Smart Spawn** — Intelligent model routing for sub-agents. Picks the best AI model for any task using benchmark data from 5 sources (OpenRouter, Artificial Analysis, HuggingFace, LMArena, LiveBench).
+  npm: `@deeflectcom/smart-spawn`
+  repo: `https://github.com/deeflect/smart-spawn`
+  install: `openclaw plugins install @deeflectcom/smart-spawn`
