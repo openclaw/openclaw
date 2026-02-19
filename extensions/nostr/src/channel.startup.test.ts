@@ -304,6 +304,19 @@ describe("nostrPlugin gateway.startAccount", () => {
     expect(replySpy).toHaveBeenCalledWith(
       expect.objectContaining({
         ver: 1,
+        event: "thinking",
+        phase: "start",
+        text: "run_started",
+      }),
+      expect.objectContaining({
+        sessionId,
+        inReplyTo: eventId,
+      }),
+      25801,
+    );
+    expect(replySpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ver: 1,
         state: "tool_use",
         info: "web_search",
       }),
@@ -514,6 +527,19 @@ describe("nostrPlugin gateway.startAccount", () => {
       replySpy,
     );
 
+    expect(replySpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ver: 1,
+        event: "thinking",
+        phase: "start",
+        text: "run_started",
+      }),
+      expect.objectContaining({
+        sessionId,
+        inReplyTo: eventId,
+      }),
+      25801,
+    );
     expect(replySpy).toHaveBeenCalledWith(
       expect.objectContaining({
         ver: 1,

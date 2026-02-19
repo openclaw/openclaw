@@ -39,6 +39,7 @@ const NIP63_RESPONSE_KIND_ERROR = 25805;
 const AI_INFO_DEFAULT_PROVIDER = "anthropic";
 const AI_INFO_DEFAULT_MODEL = "claude-opus-4-6";
 const AI_INFO_ENCRYPTION_SCHEME = "nip44";
+const RUN_START_THINKING_DELTA_TEXT = "run_started";
 const NOSTR_TRACE_JSONL_ENV = "OPENCLAW_NOSTR_TRACE_JSONL";
 const NOSTR_TRACE_JSONL_FALLBACK_ENV = "NOSTR_TRACE_JSONL";
 const PENDING_CANCEL_TTL_MS = 5 * 60 * 1000;
@@ -644,6 +645,8 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
         lastError: runtime?.lastError ?? null,
         lastInboundAt: runtime?.lastInboundAt ?? null,
         lastOutboundAt: runtime?.lastOutboundAt ?? null,
+        activeRuns: runtime?.activeRuns ?? null,
+        pendingCancels: runtime?.pendingCancels ?? null,
         channelsDisabledByEnv: channelsDisabledByEnv(),
         traceJsonlPath: resolveTraceJsonlPath(),
         aiInfo: aiInfoStates.get(account.accountId) ?? createInitialAiInfoState(),
@@ -683,6 +686,15 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
       let lastSelectedModel: ModelSelectionSnapshot | undefined;
       const activeRuns = new Map<string, ActiveRunControl>();
       const pendingCancels = new Map<string, PendingCancel>();
+      const updateRunPressureStatus = (): void => {
+        ctx.setStatus({
+          accountId: account.accountId,
+          publicKey: account.publicKey,
+          activeRuns: activeRuns.size,
+          pendingCancels: pendingCancels.size,
+        });
+      };
+      updateRunPressureStatus();
       aiInfoStates.set(account.accountId, createInitialAiInfoState());
       const updateAiInfoState = (patch: Partial<NostrAiInfoState>): void => {
         const previous = aiInfoStates.get(account.accountId) ?? createInitialAiInfoState();
@@ -737,10 +749,15 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
         }
       };
       const prunePendingCancels = (nowMs: number): void => {
+        let changed = false;
         for (const [key, pending] of pendingCancels.entries()) {
           if (nowMs - pending.receivedAtMs > PENDING_CANCEL_TTL_MS) {
             pendingCancels.delete(key);
+            changed = true;
           }
+        }
+        if (changed) {
+          updateRunPressureStatus();
         }
       };
       const popPendingCancel = (runKey: string, nowMs: number): PendingCancel | undefined => {
@@ -750,6 +767,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
           return undefined;
         }
         pendingCancels.delete(runKey);
+        updateRunPressureStatus();
         return pending;
       };
       const publishAiInfoIfNeeded = async (cfg: unknown, reason: string): Promise<void> => {
@@ -989,6 +1007,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                 cancelEventId: payload.eventId,
                 receivedAtMs: nowMs,
               });
+              updateRunPressureStatus();
               ctx.log?.debug?.(
                 `[${account.accountId}] queued pending cancel for run ${targetRunId} from ${senderPubkey}`,
               );
@@ -1140,6 +1159,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
             terminalEmitted: false,
           };
           activeRuns.set(runKey, runControl);
+          updateRunPressureStatus();
           traceRecorder.record({
             direction: "run_register",
             run_id: payload.eventId,
@@ -1179,6 +1199,43 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
               );
             }
           };
+          const safeSendThinkingDelta = async (
+            phase: "start" | "update",
+            text: string,
+          ): Promise<void> => {
+            if (runControl.cancelled) {
+              return;
+            }
+            const normalizedText = text.trim();
+            if (!normalizedText) {
+              return;
+            }
+            const timestampMs = Date.now();
+            try {
+              await reply(
+                {
+                  ver: 1,
+                  event: "thinking",
+                  phase,
+                  text: normalizedText,
+                  timestamp: Math.floor(timestampMs / 1000),
+                  timestamp_ms: timestampMs,
+                  run_id: payload.eventId,
+                  session_id: sessionId,
+                  trace_id: traceId,
+                },
+                {
+                  sessionId,
+                  inReplyTo: payload.eventId,
+                },
+                NIP63_RESPONSE_KIND_DELTA,
+              );
+            } catch (error) {
+              ctx.log?.debug?.(
+                `[${account.accountId}] Nostr thinking delta publish failed (${phase}) for ${payload.eventId}: ${String(error)}`,
+              );
+            }
+          };
 
           try {
             const pendingCancel = popPendingCancel(runKey, Date.now());
@@ -1209,6 +1266,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
               info: "run_started",
               progress: 0,
             });
+            await safeSendThinkingDelta("start", RUN_START_THINKING_DELTA_TEXT);
             const dispatchStartedAt = Date.now();
             const rawDispatchResult =
               await runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
@@ -1311,25 +1369,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                     if (!reasoningText.length) {
                       return;
                     }
-                    const timestampMs = Date.now();
-                    await reply(
-                      {
-                        ver: 1,
-                        event: "thinking",
-                        phase: "update",
-                        text: reasoningText,
-                        timestamp: Math.floor(timestampMs / 1000),
-                        timestamp_ms: timestampMs,
-                        run_id: payload.eventId,
-                        session_id: sessionId,
-                        trace_id: traceId,
-                      },
-                      {
-                        sessionId,
-                        inReplyTo: payload.eventId,
-                      },
-                      NIP63_RESPONSE_KIND_DELTA,
-                    );
+                    await safeSendThinkingDelta("update", reasoningText);
                   },
                   onToolStart: async ({ name, phase }) => {
                     if (runControl.cancelled) {
@@ -1518,6 +1558,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
             }
           } finally {
             activeRuns.delete(runKey);
+            updateRunPressureStatus();
             if (runModelSelection) {
               lastSelectedModel = runModelSelection;
             }
@@ -1595,6 +1636,9 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
           return;
         }
         stopped = true;
+        activeRuns.clear();
+        pendingCancels.clear();
+        updateRunPressureStatus();
         bus.close();
         activeBuses.delete(account.accountId);
         metricsSnapshots.delete(account.accountId);
