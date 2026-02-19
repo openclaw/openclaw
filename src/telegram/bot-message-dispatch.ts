@@ -33,6 +33,119 @@ const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 
 /** Minimum chars before sending first streaming message (improves push notification UX) */
 const DRAFT_MIN_INITIAL_CHARS = 30;
+const TELEGRAM_STATUS_QUEUED_EMOJIS = ["👀"] as const;
+const TELEGRAM_STATUS_THINKING_EMOJIS = ["⏳", "🤔", "👀"] as const;
+const TELEGRAM_STATUS_TOOL_EMOJIS = ["🛠️", "⚙️", "⏳", "👀"] as const;
+const TELEGRAM_STATUS_CODING_EMOJIS = ["💻", "🛠️", "⚙️", "👀"] as const;
+const TELEGRAM_STATUS_WEB_EMOJIS = ["🌐", "🔎", "🛠️", "👀"] as const;
+const TELEGRAM_STATUS_DONE_EMOJIS = ["✅", "👍", "👀"] as const;
+const TELEGRAM_STATUS_ERROR_EMOJIS = ["❌", "⚠️", "👀"] as const;
+const TELEGRAM_STATUS_DONE_HOLD_MS = 1200;
+const TELEGRAM_STATUS_ERROR_HOLD_MS = 1800;
+
+const CODING_STATUS_TOOL_TOKENS = [
+  "exec",
+  "process",
+  "read",
+  "write",
+  "edit",
+  "session_status",
+  "bash",
+];
+
+const WEB_STATUS_TOOL_TOKENS = ["web_search", "web-search", "web_fetch", "web-fetch", "browser"];
+
+function resolveToolStatusEmojis(toolName?: string): readonly string[] {
+  const normalized = toolName?.trim().toLowerCase() ?? "";
+  if (!normalized) {
+    return TELEGRAM_STATUS_TOOL_EMOJIS;
+  }
+  if (WEB_STATUS_TOOL_TOKENS.some((token) => normalized.includes(token))) {
+    return TELEGRAM_STATUS_WEB_EMOJIS;
+  }
+  if (CODING_STATUS_TOOL_TOKENS.some((token) => normalized.includes(token))) {
+    return TELEGRAM_STATUS_CODING_EMOJIS;
+  }
+  return TELEGRAM_STATUS_TOOL_EMOJIS;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function createTelegramStatusReactionController(params: {
+  enabled: boolean;
+  chatId: number;
+  messageId: number;
+  initialReactionPending?: Promise<boolean> | null;
+  reactionApi?: (
+    chatId: number | string,
+    messageId: number,
+    reactions: Array<{ type: "emoji"; emoji: string }>,
+  ) => Promise<void>;
+}) {
+  let chain: Promise<void> = Promise.resolve();
+  let activeEmoji: string | null = null;
+
+  const enqueue = (work: () => Promise<void>) => {
+    chain = chain.then(work).catch((err) => {
+      logAckFailure({
+        log: logVerbose,
+        channel: "telegram",
+        target: `${params.chatId}/${params.messageId}`,
+        error: err,
+      });
+    });
+    return chain;
+  };
+
+  if (params.initialReactionPending) {
+    chain = chain.then(async () => {
+      await params.initialReactionPending;
+    });
+  }
+
+  const setEmoji = (emojiCandidates: readonly string[]) =>
+    enqueue(async () => {
+      if (!params.enabled || !params.reactionApi || emojiCandidates.length === 0) {
+        return;
+      }
+      let lastError: unknown = null;
+      for (const emoji of emojiCandidates) {
+        if (!emoji || activeEmoji === emoji) {
+          return;
+        }
+        try {
+          await params.reactionApi(params.chatId, params.messageId, [{ type: "emoji", emoji }]);
+          activeEmoji = emoji;
+          return;
+        } catch (err) {
+          lastError = err;
+        }
+      }
+      if (lastError) {
+        throw lastError;
+      }
+    });
+
+  return {
+    setQueued: () => setEmoji(TELEGRAM_STATUS_QUEUED_EMOJIS),
+    setThinking: () => setEmoji(TELEGRAM_STATUS_THINKING_EMOJIS),
+    setTool: (toolName?: string) => setEmoji(resolveToolStatusEmojis(toolName)),
+    setDone: () => setEmoji(TELEGRAM_STATUS_DONE_EMOJIS),
+    setError: () => setEmoji(TELEGRAM_STATUS_ERROR_EMOJIS),
+    clear: () =>
+      enqueue(async () => {
+        if (!params.enabled || !params.reactionApi) {
+          return;
+        }
+        await params.reactionApi(params.chatId, params.messageId, []);
+        activeEmoji = null;
+      }),
+  };
+}
 
 async function resolveStickerVisionSupport(cfg: OpenClawConfig, agentId: string) {
   try {
@@ -291,7 +404,32 @@ export const dispatchTelegramMessage = async ({
     replyQuoteText,
   };
 
+  const statusReactionsEnabled =
+    typeof msg.message_id === "number" && Boolean(reactionApi) && Boolean(ackReactionPromise);
+  const statusReactions = createTelegramStatusReactionController({
+    enabled: statusReactionsEnabled,
+    chatId,
+    messageId: msg.message_id ?? 0,
+    initialReactionPending: ackReactionPromise,
+    reactionApi: reactionApi ?? undefined,
+  });
+  if (statusReactionsEnabled) {
+    void statusReactions.setQueued();
+  }
+  const typingCallbacks = createTypingCallbacks({
+    start: sendTyping,
+    onStartError: (err) => {
+      logTypingFailure({
+        log: logVerbose,
+        channel: "telegram",
+        target: String(chatId),
+        error: err,
+      });
+    },
+  });
+
   let queuedFinal = false;
+  let dispatchError = false;
   try {
     ({ queuedFinal } = await dispatchReplyWithBufferedBlockDispatcher({
       ctx: ctxPayload,
@@ -407,22 +545,21 @@ export const dispatchTelegramMessage = async ({
         onError: (err, info) => {
           runtime.error?.(danger(`telegram ${info.kind} reply failed: ${String(err)}`));
         },
-        onReplyStart: createTypingCallbacks({
-          start: sendTyping,
-          onStartError: (err) => {
-            logTypingFailure({
-              log: logVerbose,
-              channel: "telegram",
-              target: String(chatId),
-              error: err,
-            });
-          },
-        }).onReplyStart,
+        onReplyStart: async () => {
+          await typingCallbacks.onReplyStart();
+          await statusReactions.setThinking();
+        },
       },
       replyOptions: {
         skillFilter,
         disableBlockStreaming,
         onPartialReply: draftStream ? (payload) => updateDraftFromPartial(payload.text) : undefined,
+        onReasoningStream: async () => {
+          await statusReactions.setThinking();
+        },
+        onToolStart: async (payload) => {
+          await statusReactions.setTool(payload.name);
+        },
         onAssistantMessageStart: draftStream
           ? () => {
               // Only split preview bubbles in block mode. In partial mode, keep
@@ -453,12 +590,23 @@ export const dispatchTelegramMessage = async ({
         onModelSelected,
       },
     }));
+  } catch (err) {
+    dispatchError = true;
+    throw err;
   } finally {
     // Must stop() first to flush debounced content before clear() wipes state
     await draftStream?.stop();
     if (!finalizedViaPreviewMessage) {
       await draftStream?.clear();
     }
+    if (dispatchError) {
+      await statusReactions.setError();
+      await sleep(TELEGRAM_STATUS_ERROR_HOLD_MS);
+    } else {
+      await statusReactions.setDone();
+      await sleep(TELEGRAM_STATUS_DONE_HOLD_MS);
+    }
+    await statusReactions.clear();
   }
   let sentFallback = false;
   if (!deliveryState.delivered && deliveryState.skippedNonSilent > 0) {
