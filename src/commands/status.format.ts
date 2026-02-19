@@ -41,14 +41,11 @@ export const formatTokensCompact = (
     result = `${formatKTokens(used)}/${formatKTokens(ctx)} (${pctLabel})`;
   }
 
-  // Add cache info if available
-  if (
-    (typeof cacheRead === "number" && cacheRead > 0) ||
-    (typeof cacheWrite === "number" && cacheWrite > 0)
-  ) {
-    const cacheReadLabel = typeof cacheRead === "number" ? formatKTokens(cacheRead) : "0";
-    const cacheWriteLabel = typeof cacheWrite === "number" ? formatKTokens(cacheWrite) : "0";
-    result += ` · 🗄️ ${cacheReadLabel}r/${cacheWriteLabel}w`;
+  // Add cache hit rate if there are cached reads
+  if (typeof cacheRead === "number" && cacheRead > 0) {
+    const total = cacheRead + (typeof cacheWrite === "number" ? cacheWrite : 0);
+    const hitRate = Math.round((cacheRead / total) * 100);
+    result += ` · 🗄️ ${hitRate}% cached`;
   }
 
   return result;

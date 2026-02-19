@@ -255,30 +255,13 @@ const readUsageFromSessionLog = (
   }
 };
 
-const formatUsagePair = (
-  input?: number | null,
-  output?: number | null,
-  cacheRead?: number | null,
-  cacheWrite?: number | null,
-) => {
+const formatUsagePair = (input?: number | null, output?: number | null) => {
   if (input == null && output == null) {
     return null;
   }
   const inputLabel = typeof input === "number" ? formatTokenCount(input) : "?";
   const outputLabel = typeof output === "number" ? formatTokenCount(output) : "?";
-  let result = `🧮 Tokens: ${inputLabel} in / ${outputLabel} out`;
-
-  // Append cache info if available
-  if (
-    (typeof cacheRead === "number" && cacheRead > 0) ||
-    (typeof cacheWrite === "number" && cacheWrite > 0)
-  ) {
-    const cacheReadLabel = typeof cacheRead === "number" ? formatTokenCount(cacheRead) : "0";
-    const cacheWriteLabel = typeof cacheWrite === "number" ? formatTokenCount(cacheWrite) : "0";
-    result += ` · 🗄️ Cache: ${cacheReadLabel} read / ${cacheWriteLabel} write`;
-  }
-
-  return result;
+  return `🧮 Tokens: ${inputLabel} in / ${outputLabel} out`;
 };
 
 const formatCacheLine = (
@@ -296,23 +279,19 @@ const formatCacheLine = (
     return null;
   }
 
-  const cacheReadLabel = typeof cacheRead === "number" ? formatTokenCount(cacheRead) : "0";
-  const cacheWriteLabel = typeof cacheWrite === "number" ? formatTokenCount(cacheWrite) : "0";
+  const cachedLabel = typeof cacheRead === "number" ? formatTokenCount(cacheRead) : "0";
+  const newLabel = typeof cacheWrite === "number" ? formatTokenCount(cacheWrite) : "0";
 
-  // Calculate hit rate: cacheRead / (cacheRead + cacheWrite + input) * 100
-  let hitRateText = "";
-  if (typeof cacheRead === "number" && cacheRead > 0) {
-    const totalInput =
-      (typeof cacheRead === "number" ? cacheRead : 0) +
-      (typeof cacheWrite === "number" ? cacheWrite : 0) +
-      (typeof input === "number" ? input : 0);
-    if (totalInput > 0) {
-      const hitRate = (cacheRead / totalInput) * 100;
-      hitRateText = ` (${Math.round(hitRate)}% hit)`;
-    }
-  }
+  const totalInput =
+    (typeof cacheRead === "number" ? cacheRead : 0) +
+    (typeof cacheWrite === "number" ? cacheWrite : 0) +
+    (typeof input === "number" ? input : 0);
+  const hitRate =
+    totalInput > 0 && typeof cacheRead === "number"
+      ? Math.round((cacheRead / totalInput) * 100)
+      : 0;
 
-  return `🗄️ Cache: ${cacheReadLabel} read / ${cacheWriteLabel} write${hitRateText}`;
+  return `🗄️ Cache: ${hitRate}% hit · ${cachedLabel} cached, ${newLabel} new`;
 };
 
 const formatMediaUnderstandingLine = (decisions?: ReadonlyArray<MediaUnderstandingDecision>) => {
@@ -561,7 +540,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     : null;
   const commit = resolveCommitHash();
   const versionLine = `🦞 OpenClaw ${VERSION}${commit ? ` (${commit})` : ""}`;
-  const usagePair = formatUsagePair(inputTokens, outputTokens, cacheRead, cacheWrite);
+  const usagePair = formatUsagePair(inputTokens, outputTokens);
   const cacheLine = formatCacheLine(inputTokens, cacheRead, cacheWrite);
   const costLine = costLabel ? `💵 Cost: ${costLabel}` : null;
   const usageCostLine =
