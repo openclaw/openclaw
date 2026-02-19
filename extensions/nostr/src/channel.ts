@@ -66,6 +66,7 @@ type ActiveRunControl = {
   cancelled: boolean;
   cancelReason: CancelReason;
   terminalEmitted: boolean;
+  toolCallTelemetry?: ToolCallTelemetryTracker;
 };
 
 type PendingCancel = {
@@ -89,6 +90,13 @@ type ToolCallTelemetryResult = {
   name: string;
   callId?: string;
   durationMs?: number;
+};
+
+type ToolCallTelemetryTracker = {
+  registerStart: (name: string, startedAtMs: number) => ToolCallTelemetryStart;
+  consumeResult: (finishedAtMs: number) => ToolCallTelemetryResult;
+  drainPendingResults: (finishedAtMs: number) => ToolCallTelemetryResult[];
+  pendingCount: () => number;
 };
 
 type NostrAiInfoState = {
@@ -148,11 +156,7 @@ function normalizeToolPhase(raw: string | undefined): "start" | "result" {
   return phase === "start" ? "start" : "result";
 }
 
-export function createToolCallTelemetryTracker(runId: string): {
-  registerStart: (name: string, startedAtMs: number) => ToolCallTelemetryStart;
-  consumeResult: (finishedAtMs: number) => ToolCallTelemetryResult;
-  pendingCount: () => number;
-} {
+export function createToolCallTelemetryTracker(runId: string): ToolCallTelemetryTracker {
   let ordinal = 0;
   const pending: PendingToolCallTelemetry[] = [];
 
@@ -187,6 +191,22 @@ export function createToolCallTelemetryTracker(runId: string): {
         callId: call.callId,
         durationMs,
       };
+    },
+    drainPendingResults: (finishedAtMs) => {
+      const results: ToolCallTelemetryResult[] = [];
+      while (pending.length > 0) {
+        const call = pending.shift();
+        if (!call) {
+          continue;
+        }
+        const durationMs = Math.max(0, Math.trunc(finishedAtMs) - call.startedAtMs);
+        results.push({
+          name: call.name,
+          callId: call.callId,
+          durationMs,
+        });
+      }
+      return results;
     },
     pendingCount: () => pending.length,
   };
@@ -780,6 +800,58 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
 
       // Track bus handle for metrics callback
       let busHandle: NostrBusHandle | null = null;
+      const emitPendingToolResults = async (
+        run: ActiveRunControl,
+        reply: (
+          content: Record<string, unknown>,
+          options: { sessionId?: string; inReplyTo?: string },
+          responseKind: number,
+        ) => Promise<void>,
+        options: { success: boolean; reason: string },
+      ): Promise<number> => {
+        const tracker = run.toolCallTelemetry;
+        if (!tracker) {
+          return 0;
+        }
+        const timestampMs = Date.now();
+        const pending = tracker.drainPendingResults(timestampMs);
+        if (pending.length === 0) {
+          return 0;
+        }
+        let emitted = 0;
+        for (const pendingTool of pending) {
+          const emittedAtMs = Date.now();
+          await reply(
+            {
+              ver: 1,
+              name: pendingTool.name || "tool",
+              phase: "result",
+              output: {
+                auto_closed: true,
+                reason: options.reason,
+              },
+              success: options.success,
+              ...(typeof pendingTool.durationMs === "number"
+                ? { duration_ms: pendingTool.durationMs }
+                : {}),
+              ...(pendingTool.callId ? { call_id: pendingTool.callId } : {}),
+              timestamp: Math.floor(emittedAtMs / 1000),
+              timestamp_ms: emittedAtMs,
+              run_id: run.promptEventId,
+              session_id: run.sessionId,
+              trace_id: run.traceId,
+              run_seq: nextRunSequence(run),
+            },
+            {
+              sessionId: run.sessionId,
+              inReplyTo: run.promptEventId,
+            },
+            NIP63_RESPONSE_KIND_TOOL,
+          );
+          emitted += 1;
+        }
+        return emitted;
+      };
       const emitCancelledTerminal = async (
         run: ActiveRunControl,
         reply: (
@@ -791,6 +863,17 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
       ): Promise<void> => {
         if (run.terminalEmitted) {
           return;
+        }
+        let pendingToolCloseCount = 0;
+        try {
+          pendingToolCloseCount = await emitPendingToolResults(run, reply, {
+            success: false,
+            reason: "cancelled",
+          });
+        } catch (error) {
+          ctx.log?.debug?.(
+            `[${account.accountId}] failed to emit pending tool closeout for cancelled run ${run.promptEventId}: ${String(error)}`,
+          );
         }
         run.terminalEmitted = true;
         const timestampMs = Date.now();
@@ -809,6 +892,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
               details: {
                 reason: run.cancelReason,
                 cancelled_at_ms: timestampMs,
+                pending_tool_close_count: pendingToolCloseCount,
                 ...(details ?? {}),
               },
             },
@@ -1262,6 +1346,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
           };
           const traceId = createRunTraceId(payload.eventId);
           const runKey = resolveActiveRunKey(senderPubkey, payload.eventId);
+          const toolCallTelemetry = createToolCallTelemetryTracker(payload.eventId);
           const runControl: ActiveRunControl = {
             promptEventId: payload.eventId,
             senderPubkey,
@@ -1272,6 +1357,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
             cancelled: false,
             cancelReason: "user_cancel",
             terminalEmitted: false,
+            toolCallTelemetry,
           };
           activeRuns.set(runKey, runControl);
           updateRunPressureStatus();
@@ -1285,7 +1371,6 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
           let blockSeq = 0;
           let streamedTextBuffer = "";
           let lastRunOutboundAtMs = Date.now();
-          const toolCallTelemetry = createToolCallTelemetryTracker(payload.eventId);
           let laneWaitNoticeSent = false;
           let heartbeatInFlight = false;
           let heartbeatTimer: NodeJS.Timeout | null = null;
@@ -1449,6 +1534,16 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                       return;
                     }
                     if (info.kind === "final") {
+                      try {
+                        await emitPendingToolResults(runControl, reply, {
+                          success: true,
+                          reason: "completed",
+                        });
+                      } catch (error) {
+                        ctx.log?.debug?.(
+                          `[${account.accountId}] pending tool closeout failed before terminal for ${payload.eventId}: ${String(error)}`,
+                        );
+                      }
                       await safeSendStatus("done", {
                         info: "run_completed",
                         progress: 100,
@@ -1650,6 +1745,16 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
             } else if (!runControl.terminalEmitted) {
               const fallbackText = streamedTextBuffer.trim();
               if (fallbackText.length > 0) {
+                try {
+                  await emitPendingToolResults(runControl, reply, {
+                    success: true,
+                    reason: "completed",
+                  });
+                } catch (error) {
+                  ctx.log?.debug?.(
+                    `[${account.accountId}] pending tool closeout failed before fallback final for ${payload.eventId}: ${String(error)}`,
+                  );
+                }
                 await safeSendStatus("done", {
                   info: "run_completed_fallback",
                   progress: 100,
@@ -1677,6 +1782,16 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                   `[${account.accountId}] Nostr emitted fallback final for run ${payload.eventId}`,
                 );
               } else {
+                try {
+                  await emitPendingToolResults(runControl, reply, {
+                    success: false,
+                    reason: "empty_response",
+                  });
+                } catch (error) {
+                  ctx.log?.debug?.(
+                    `[${account.accountId}] pending tool closeout failed before EMPTY_RESPONSE for ${payload.eventId}: ${String(error)}`,
+                  );
+                }
                 await reply(
                   {
                     ver: 1,
@@ -1732,6 +1847,16 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                 dispatch_aborted: true,
               });
             } else {
+              try {
+                await emitPendingToolResults(runControl, reply, {
+                  success: false,
+                  reason: "internal_error",
+                });
+              } catch (error) {
+                ctx.log?.debug?.(
+                  `[${account.accountId}] pending tool closeout failed before INTERNAL_ERROR for ${payload.eventId}: ${String(error)}`,
+                );
+              }
               await reply(
                 {
                   ver: 1,

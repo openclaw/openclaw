@@ -271,6 +271,31 @@ describe("nostrPlugin", () => {
         durationMs: 0,
       });
     });
+
+    it("drains unresolved tool starts into result metadata", () => {
+      const tracker = createToolCallTelemetryTracker("e".repeat(64));
+      tracker.registerStart("web_fetch", 1_000);
+      tracker.registerStart("calculator", 1_500);
+
+      expect(tracker.drainPendingResults(2_000)).toEqual([
+        {
+          name: "web_fetch",
+          callId: "call_eeeeeeeeeeee_0",
+          durationMs: 1_000,
+        },
+        {
+          name: "calculator",
+          callId: "call_eeeeeeeeeeee_1",
+          durationMs: 500,
+        },
+      ]);
+      expect(tracker.pendingCount()).toBe(0);
+    });
+
+    it("returns an empty drain result when no tools are pending", () => {
+      const tracker = createToolCallTelemetryTracker("f".repeat(64));
+      expect(tracker.drainPendingResults(1_234)).toEqual([]);
+    });
   });
 
   describe("gateway", () => {
