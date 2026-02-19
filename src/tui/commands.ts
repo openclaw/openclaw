@@ -2,6 +2,7 @@ import type { SlashCommand } from "@mariozechner/pi-tui";
 import { listChatCommands, listChatCommandsForConfig } from "../auto-reply/commands-registry.js";
 import { formatThinkingLevels, listThinkingLevelLabels } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { listPluginCommands } from "../plugins/commands.js";
 
 const VERBOSE_LEVELS = ["on", "off"];
 const REASONING_LEVELS = ["on", "off"];
@@ -132,6 +133,13 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
       }
       seen.add(name);
       commands.push({ name, description: command.description });
+    }
+  }
+
+  for (const cmd of listPluginCommands()) {
+    if (!seen.has(cmd.name)) {
+      seen.add(cmd.name);
+      commands.push({ name: cmd.name, description: cmd.description });
     }
   }
 
