@@ -22,6 +22,19 @@ function makeEntry(updatedAt: number): SessionEntry {
   return { sessionId: crypto.randomUUID(), updatedAt };
 }
 
+function applyEnforcedMaintenanceConfig(mockLoadConfig: ReturnType<typeof vi.fn>) {
+  mockLoadConfig.mockReturnValue({
+    session: {
+      maintenance: {
+        mode: "enforce",
+        pruneAfter: "7d",
+        maxEntries: 500,
+        rotateBytes: 10_485_760,
+      },
+    },
+  });
+}
+
 async function createCaseDir(prefix: string): Promise<string> {
   const dir = path.join(fixtureRoot, `${prefix}-${fixtureCount++}`);
   await fs.mkdir(dir, { recursive: true });
@@ -64,16 +77,7 @@ describe("Integration: saveSessionStore with pruning", () => {
   });
 
   it("saveSessionStore prunes stale entries on write", async () => {
-    mockLoadConfig.mockReturnValue({
-      session: {
-        maintenance: {
-          mode: "enforce",
-          pruneAfter: "7d",
-          maxEntries: 500,
-          rotateBytes: 10_485_760,
-        },
-      },
-    });
+    applyEnforcedMaintenanceConfig(mockLoadConfig);
 
     const now = Date.now();
     const store: Record<string, SessionEntry> = {
@@ -89,16 +93,7 @@ describe("Integration: saveSessionStore with pruning", () => {
   });
 
   it("archives transcript files for stale sessions pruned on write", async () => {
-    mockLoadConfig.mockReturnValue({
-      session: {
-        maintenance: {
-          mode: "enforce",
-          pruneAfter: "7d",
-          maxEntries: 500,
-          rotateBytes: 10_485_760,
-        },
-      },
-    });
+    applyEnforcedMaintenanceConfig(mockLoadConfig);
 
     const now = Date.now();
     const staleSessionId = "stale-session";
@@ -127,16 +122,7 @@ describe("Integration: saveSessionStore with pruning", () => {
   });
 
   it("cleans up archived transcripts older than the prune window", async () => {
-    mockLoadConfig.mockReturnValue({
-      session: {
-        maintenance: {
-          mode: "enforce",
-          pruneAfter: "7d",
-          maxEntries: 500,
-          rotateBytes: 10_485_760,
-        },
-      },
-    });
+    applyEnforcedMaintenanceConfig(mockLoadConfig);
 
     const now = Date.now();
     const staleSessionId = "stale-session";

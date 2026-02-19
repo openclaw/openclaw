@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import {
@@ -11,8 +10,15 @@ import {
 } from "../infra/archive.js";
 import { installPackageDir } from "../infra/install-package-dir.js";
 import { resolveSafeInstallDir, unscopedPackageName } from "../infra/install-safe-path.js";
+import {
+  type NpmIntegrityDrift,
+  type NpmSpecResolution,
+  packNpmSpecToArchive,
+  resolveArchiveSourcePath,
+  withTempDir,
+} from "../infra/install-source-utils.js";
 import { validateRegistryNpmSpec } from "../infra/npm-registry-spec.js";
-import { runCommandWithTimeout } from "../process/exec.js";
+import { isPathInside, isPathInsideWithRealpath } from "../security/scan-paths.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import { parseFrontmatter } from "./frontmatter.js";
 
@@ -34,8 +40,17 @@ export type InstallHooksResult =
       hooks: string[];
       targetDir: string;
       version?: string;
+      npmResolution?: NpmSpecResolution;
+      integrityDrift?: NpmIntegrityDrift;
     }
   | { ok: false; error: string };
+
+export type HookNpmIntegrityDriftParams = {
+  spec: string;
+  expectedIntegrity: string;
+  actualIntegrity: string;
+  resolution: NpmSpecResolution;
+};
 
 const defaultLogger: HookInstallLogger = {};
 
@@ -103,15 +118,6 @@ function resolveTimedHookInstallModeOptions(params: {
     ...resolveHookInstallModeOptions(params),
     timeoutMs: params.timeoutMs ?? 120_000,
   };
-}
-
-async function withTempDir<T>(prefix: string, fn: (tmpDir: string) => Promise<T>): Promise<T> {
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-  try {
-    return await fn(tmpDir);
-  } finally {
-    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
-  }
 }
 
 async function resolveInstallTargetDir(
@@ -213,7 +219,23 @@ async function installHookPackageFromDir(params: {
   const resolvedHooks = [] as string[];
   for (const entry of hookEntries) {
     const hookDir = path.resolve(params.packageDir, entry);
+    if (!isPathInside(params.packageDir, hookDir)) {
+      return {
+        ok: false,
+        error: `openclaw.hooks entry escapes package directory: ${entry}`,
+      };
+    }
     await validateHookDir(hookDir);
+    if (
+      !isPathInsideWithRealpath(params.packageDir, hookDir, {
+        requireRealpath: true,
+      })
+    ) {
+      return {
+        ok: false,
+        error: `openclaw.hooks entry resolves outside package directory: ${entry}`,
+      };
+    }
     const hookName = await resolveHookNameFromDir(hookDir);
     resolvedHooks.push(hookName);
   }
@@ -325,15 +347,11 @@ export async function installHooksFromArchive(params: {
 }): Promise<InstallHooksResult> {
   const logger = params.logger ?? defaultLogger;
   const timeoutMs = params.timeoutMs ?? 120_000;
-
-  const archivePath = resolveUserPath(params.archivePath);
-  if (!(await fileExists(archivePath))) {
-    return { ok: false, error: `archive not found: ${archivePath}` };
+  const archivePathResult = await resolveArchiveSourcePath(params.archivePath);
+  if (!archivePathResult.ok) {
+    return archivePathResult;
   }
-
-  if (!resolveArchiveKind(archivePath)) {
-    return { ok: false, error: `unsupported archive: ${archivePath}` };
-  }
+  const archivePath = archivePathResult.path;
 
   return await withTempDir("openclaw-hook-", async (tmpDir) => {
     const extractDir = path.join(tmpDir, "extract");
@@ -385,6 +403,8 @@ export async function installHooksFromNpmSpec(params: {
   mode?: "install" | "update";
   dryRun?: boolean;
   expectedHookPackId?: string;
+  expectedIntegrity?: string;
+  onIntegrityDrift?: (params: HookNpmIntegrityDriftParams) => boolean | Promise<boolean>;
 }): Promise<InstallHooksResult> {
   const { logger, timeoutMs, mode, dryRun } = resolveTimedHookInstallModeOptions(params);
   const expectedHookPackId = params.expectedHookPackId;
@@ -396,30 +416,54 @@ export async function installHooksFromNpmSpec(params: {
 
   return await withTempDir("openclaw-hook-pack-", async (tmpDir) => {
     logger.info?.(`Downloading ${spec}…`);
-    const res = await runCommandWithTimeout(["npm", "pack", spec, "--ignore-scripts"], {
-      timeoutMs: Math.max(timeoutMs, 300_000),
+    const packedResult = await packNpmSpecToArchive({
+      spec,
+      timeoutMs,
       cwd: tmpDir,
-      env: {
-        COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
-        NPM_CONFIG_IGNORE_SCRIPTS: "true",
-      },
     });
-    if (res.code !== 0) {
-      return { ok: false, error: `npm pack failed: ${res.stderr.trim() || res.stdout.trim()}` };
+    if (!packedResult.ok) {
+      return packedResult;
     }
 
-    const packed = (res.stdout || "")
-      .split("\n")
-      .map((l) => l.trim())
-      .filter(Boolean)
-      .pop();
-    if (!packed) {
-      return { ok: false, error: "npm pack produced no archive" };
+    const npmResolution: NpmSpecResolution = {
+      ...packedResult.metadata,
+      resolvedAt: new Date().toISOString(),
+    };
+
+    let integrityDrift: NpmIntegrityDrift | undefined;
+    if (
+      params.expectedIntegrity &&
+      npmResolution.integrity &&
+      params.expectedIntegrity !== npmResolution.integrity
+    ) {
+      integrityDrift = {
+        expectedIntegrity: params.expectedIntegrity,
+        actualIntegrity: npmResolution.integrity,
+      };
+      const driftPayload: HookNpmIntegrityDriftParams = {
+        spec,
+        expectedIntegrity: integrityDrift.expectedIntegrity,
+        actualIntegrity: integrityDrift.actualIntegrity,
+        resolution: npmResolution,
+      };
+      let proceed = true;
+      if (params.onIntegrityDrift) {
+        proceed = await params.onIntegrityDrift(driftPayload);
+      } else {
+        logger.warn?.(
+          `Integrity drift detected for ${driftPayload.resolution.resolvedSpec ?? driftPayload.spec}: expected ${driftPayload.expectedIntegrity}, got ${driftPayload.actualIntegrity}`,
+        );
+      }
+      if (!proceed) {
+        return {
+          ok: false,
+          error: `aborted: npm package integrity drift detected for ${driftPayload.resolution.resolvedSpec ?? driftPayload.spec}`,
+        };
+      }
     }
 
-    const archivePath = path.join(tmpDir, packed);
-    return await installHooksFromArchive({
-      archivePath,
+    const installResult = await installHooksFromArchive({
+      archivePath: packedResult.archivePath,
       hooksDir: params.hooksDir,
       timeoutMs,
       logger,
@@ -427,6 +471,15 @@ export async function installHooksFromNpmSpec(params: {
       dryRun,
       expectedHookPackId,
     });
+    if (!installResult.ok) {
+      return installResult;
+    }
+
+    return {
+      ...installResult,
+      npmResolution,
+      integrityDrift,
+    };
   });
 }
 

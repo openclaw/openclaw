@@ -192,20 +192,28 @@ jobs:
             task: test
             command: pnpm canvas:a2ui:bundle && bunx vitest run --config vitest.unit.config.ts
     steps:
+      - name: Skip bun lane on push
+        if: github.event_name == 'push' && matrix.runtime == 'bun'
+        run: echo "Skipping bun test lane on push events."
+
       - name: Checkout
+        if: github.event_name != 'push' || matrix.runtime != 'bun'
         uses: actions/checkout@v4
         with:
           submodules: false
 
       - name: Setup Node environment
+        if: matrix.runtime != 'bun' || github.event_name != 'push'
         uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "${{ matrix.runtime == 'bun' }}"
 
       - name: Configure vitest JSON reports
-        if: matrix.task == 'test' && matrix.runtime == 'node'
+        if: (github.event_name != 'push' || matrix.runtime != 'bun') && matrix.task == 'test' && matrix.runtime == 'node'
         run: echo "OPENCLAW_VITEST_REPORT_DIR=$RUNNER_TEMP/vitest-reports" >> "$GITHUB_ENV"
 
       - name: Configure Node test resources
-        if: matrix.task == 'test' && matrix.runtime == 'node'
+        if: (github.event_name != 'push' || matrix.runtime != 'bun') && matrix.task == 'test' && matrix.runtime == 'node'
         run: |
           # `pnpm test` runs `scripts/test-parallel.mjs`, which spawns multiple Node processes.
           # Default heap limits have been too low on Linux CI (V8 OOM near 4GB).
@@ -213,16 +221,17 @@ jobs:
           echo "OPENCLAW_TEST_MAX_OLD_SPACE_SIZE_MB=6144" >> "$GITHUB_ENV"
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
+        if: matrix.runtime != 'bun' || github.event_name != 'push'
         run: ${{ matrix.command }}
 
       - name: Summarize slowest tests
-        if: matrix.task == 'test' && matrix.runtime == 'node'
+        if: (github.event_name != 'push' || matrix.runtime != 'bun') && matrix.task == 'test' && matrix.runtime == 'node'
         run: |
           node scripts/vitest-slowest.mjs --dir "$OPENCLAW_VITEST_REPORT_DIR" --top 50 --out "$RUNNER_TEMP/vitest-slowest.md" > /dev/null
           echo "Slowest test summary written to $RUNNER_TEMP/vitest-slowest.md"
 
       - name: Upload vitest reports
-        if: matrix.task == 'test' && matrix.runtime == 'node'
+        if: (github.event_name != 'push' || matrix.runtime != 'bun') && matrix.task == 'test' && matrix.runtime == 'node'
         uses: actions/upload-artifact@v4
         with:
           name: vitest-reports-${{ runner.os }}-${{ matrix.runtime }}
@@ -244,6 +253,8 @@ jobs:
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
 
       - name: Check types and lint and oxfmt
         run: pnpm check
@@ -261,6 +272,8 @@ jobs:
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
 
       - name: Check docs
         run: pnpm check:docs
@@ -355,7 +368,7 @@ jobs:
           test -s dist/plugin-sdk/index.js
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22.x
           check-latest: true
@@ -366,16 +379,10 @@ jobs:
           pnpm-version: "10.23.0"
           cache-key-suffix: "node22"
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
       - name: Runtime versions
         run: |
           node -v
           npm -v
-          bun -v
           pnpm -v
 
       - name: Capture node path

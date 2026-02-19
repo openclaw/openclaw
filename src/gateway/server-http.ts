@@ -48,11 +48,16 @@ import {
   resolveHookChannel,
   resolveHookDeliver,
 } from "./hooks.js";
-import { sendGatewayAuthFailure } from "./http-common.js";
+import { sendGatewayAuthFailure, setDefaultSecurityHeaders } from "./http-common.js";
 import { getBearerToken, getHeader } from "./http-utils.js";
-import { isPrivateOrLoopbackAddress, resolveGatewayClientIp } from "./net.js";
+import {
+  isPrivateOrLoopbackAddress,
+  isTrustedProxyAddress,
+  resolveGatewayClientIp,
+} from "./net.js";
 import { handleOpenAiHttpRequest } from "./openai-http.js";
 import { handleOpenResponsesHttpRequest } from "./openresponses-http.js";
+import { GATEWAY_CLIENT_MODES, normalizeGatewayClientMode } from "./protocol/client-info.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { handleToolsInvokeHttpRequest } from "./tools-invoke-http.js";
 
@@ -97,9 +102,16 @@ function isCanvasPath(pathname: string): boolean {
   );
 }
 
-function hasAuthorizedWsClientForIp(clients: Set<GatewayWsClient>, clientIp: string): boolean {
+function isNodeWsClient(client: GatewayWsClient): boolean {
+  if (client.connect.role === "node") {
+    return true;
+  }
+  return normalizeGatewayClientMode(client.connect.client.mode) === GATEWAY_CLIENT_MODES.NODE;
+}
+
+function hasAuthorizedNodeWsClientForIp(clients: Set<GatewayWsClient>, clientIp: string): boolean {
   for (const client of clients) {
-    if (client.clientIp && client.clientIp === clientIp) {
+    if (client.clientIp && client.clientIp === clientIp && isNodeWsClient(client)) {
       return true;
     }
   }
@@ -117,6 +129,9 @@ async function authorizeCanvasRequest(params: {
   if (isLocalDirectRequest(req, trustedProxies)) {
     return { ok: true };
   }
+
+  const hasProxyHeaders = Boolean(getHeader(req, "x-forwarded-for") || getHeader(req, "x-real-ip"));
+  const remoteIsTrustedProxy = isTrustedProxyAddress(req.socket?.remoteAddress, trustedProxies);
 
   let lastAuthFailure: GatewayAuthResult | null = null;
   const token = getBearerToken(req);
@@ -150,7 +165,11 @@ async function authorizeCanvasRequest(params: {
   if (!isPrivateOrLoopbackAddress(clientIp)) {
     return lastAuthFailure ?? { ok: false, reason: "unauthorized" };
   }
-  if (hasAuthorizedWsClientForIp(clients, clientIp)) {
+  // Ignore IP fallback when proxy headers come from an untrusted source.
+  if (hasProxyHeaders && !remoteIsTrustedProxy) {
+    return lastAuthFailure ?? { ok: false, reason: "unauthorized" };
+  }
+  if (hasAuthorizedNodeWsClientForIp(clients, clientIp)) {
     return { ok: true };
   }
   return lastAuthFailure ?? { ok: false, reason: "unauthorized" };
@@ -474,6 +493,8 @@ export function createGatewayHttpServer(opts: {
       });
 
   async function handleRequest(req: IncomingMessage, res: ServerResponse) {
+    setDefaultSecurityHeaders(res);
+
     // Don't interfere with WebSocket upgrades; ws handles the 'upgrade' event.
     if (String(req.headers.upgrade ?? "").toLowerCase() === "websocket") {
       return;

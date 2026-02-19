@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { AuthProfileStore } from "./types.js";
-import { clearExpiredCooldowns, isProfileInCooldown } from "./usage.js";
+import {
+  clearExpiredCooldowns,
+  isProfileInCooldown,
+  resolveProfileUnusableUntil,
+} from "./usage.js";
 
 function makeStore(usageStats: AuthProfileStore["usageStats"]): AuthProfileStore {
   return {
@@ -12,6 +16,18 @@ function makeStore(usageStats: AuthProfileStore["usageStats"]): AuthProfileStore
     usageStats,
   };
 }
+
+describe("resolveProfileUnusableUntil", () => {
+  it("returns null when both values are missing or invalid", () => {
+    expect(resolveProfileUnusableUntil({})).toBeNull();
+    expect(resolveProfileUnusableUntil({ cooldownUntil: 0, disabledUntil: Number.NaN })).toBeNull();
+  });
+
+  it("returns the latest active timestamp", () => {
+    expect(resolveProfileUnusableUntil({ cooldownUntil: 100, disabledUntil: 200 })).toBe(200);
+    expect(resolveProfileUnusableUntil({ cooldownUntil: 300 })).toBe(300);
+  });
+});
 
 // ---------------------------------------------------------------------------
 // isProfileInCooldown
