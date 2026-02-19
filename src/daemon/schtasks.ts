@@ -1,5 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { splitArgsPreservingQuotes } from "./arg-split.js";
+import { resolveGatewayServiceDescription, resolveGatewayWindowsTaskName } from "./constants.js";
+import { formatLine, writeFormattedLines } from "./output.js";
+import { resolveGatewayStateDir } from "./paths.js";
+import { parseKeyValueOutput } from "./runtime-parse.js";
+import { execSchtasks } from "./schtasks-exec.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import type {
   GatewayServiceCommandConfig,
@@ -10,12 +16,6 @@ import type {
   GatewayServiceManageArgs,
   GatewayServiceRenderArgs,
 } from "./service-types.js";
-import { splitArgsPreservingQuotes } from "./arg-split.js";
-import { resolveGatewayServiceDescription, resolveGatewayWindowsTaskName } from "./constants.js";
-import { formatLine, writeFormattedLines } from "./output.js";
-import { resolveGatewayStateDir } from "./paths.js";
-import { parseKeyValueOutput } from "./runtime-parse.js";
-import { execSchtasks } from "./schtasks-exec.js";
 
 function resolveTaskName(env: GatewayServiceEnv): string {
   const override = env.OPENCLAW_WINDOWS_TASK_NAME?.trim();
