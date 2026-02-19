@@ -2,51 +2,30 @@ import type { AllowlistMatch } from "../channels/allowlist-match.js";
 
 export type NormalizedAllowFrom = {
   entries: string[];
+  usernames: string[];
   hasWildcard: boolean;
   hasEntries: boolean;
   invalidEntries: string[];
 };
 
-export type AllowFromMatch = AllowlistMatch<"wildcard" | "id">;
-
-const warnedInvalidEntries = new Set<string>();
-
-function warnInvalidAllowFromEntries(entries: string[]) {
-  if (process.env.VITEST || process.env.NODE_ENV === "test") {
-    return;
-  }
-  for (const entry of entries) {
-    if (warnedInvalidEntries.has(entry)) {
-      continue;
-    }
-    warnedInvalidEntries.add(entry);
-    console.warn(
-      [
-        "[telegram] Invalid allowFrom entry:",
-        JSON.stringify(entry),
-        "- allowFrom/groupAllowFrom authorization requires numeric Telegram sender IDs only.",
-        'If you had "@username" entries, re-run onboarding (it resolves @username to IDs) or replace them manually.',
-      ].join(" "),
-    );
-  }
-}
+export type AllowFromMatch = AllowlistMatch<"wildcard" | "id" | "username">;
 
 export const normalizeAllowFrom = (list?: Array<string | number>): NormalizedAllowFrom => {
   const entries = (list ?? []).map((value) => String(value).trim()).filter(Boolean);
   const hasWildcard = entries.includes("*");
   const normalized = entries
     .filter((value) => value !== "*")
-    .map((value) => value.replace(/^(telegram|tg):/i, ""));
-  const invalidEntries = normalized.filter((value) => !/^\d+$/.test(value));
-  if (invalidEntries.length > 0) {
-    warnInvalidAllowFromEntries([...new Set(invalidEntries)]);
-  }
+    .map((value) => value.replace(/^(telegram|tg):/i, "").replace(/^@/, ""));
   const ids = normalized.filter((value) => /^\d+$/.test(value));
+  const usernames = normalized
+    .filter((value) => !/^\d+$/.test(value) && value.length > 0)
+    .map((value) => value.toLowerCase());
   return {
     entries: ids,
+    usernames,
     hasWildcard,
     hasEntries: entries.length > 0,
-    invalidEntries,
+    invalidEntries: [],
   };
 };
 
@@ -74,7 +53,7 @@ export const isSenderAllowed = (params: {
   senderId?: string;
   senderUsername?: string;
 }) => {
-  const { allow, senderId } = params;
+  const { allow, senderId, senderUsername } = params;
   if (!allow.hasEntries) {
     return true;
   }
@@ -82,6 +61,9 @@ export const isSenderAllowed = (params: {
     return true;
   }
   if (senderId && allow.entries.includes(senderId)) {
+    return true;
+  }
+  if (senderUsername && allow.usernames.includes(senderUsername.toLowerCase())) {
     return true;
   }
   return false;
@@ -92,7 +74,7 @@ export const resolveSenderAllowMatch = (params: {
   senderId?: string;
   senderUsername?: string;
 }): AllowFromMatch => {
-  const { allow, senderId } = params;
+  const { allow, senderId, senderUsername } = params;
   if (allow.hasWildcard) {
     return { allowed: true, matchKey: "*", matchSource: "wildcard" };
   }
@@ -101,6 +83,9 @@ export const resolveSenderAllowMatch = (params: {
   }
   if (senderId && allow.entries.includes(senderId)) {
     return { allowed: true, matchKey: senderId, matchSource: "id" };
+  }
+  if (senderUsername && allow.usernames.includes(senderUsername.toLowerCase())) {
+    return { allowed: true, matchKey: senderUsername, matchSource: "username" };
   }
   return { allowed: false };
 };
