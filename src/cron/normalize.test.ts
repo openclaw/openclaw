@@ -246,6 +246,22 @@ describe("normalizeCronJobCreate", () => {
     expect(delivery.mode).toBe("announce");
   });
 
+  it("defaults isolated directCommand delivery to announce", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "default-direct-command-announce",
+      enabled: true,
+      schedule: { kind: "cron", expr: "* * * * *" },
+      payload: {
+        kind: "directCommand",
+        command: "echo",
+        args: ["hi"],
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const delivery = normalized.delivery as Record<string, unknown>;
+    expect(delivery.mode).toBe("announce");
+  });
+
   it("migrates legacy delivery fields to delivery", () => {
     const normalized = normalizeCronJobCreate({
       name: "legacy deliver",

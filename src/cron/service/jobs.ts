@@ -78,8 +78,12 @@ export function assertSupportedJobSpec(job: Pick<CronJob, "sessionTarget" | "pay
   if (job.sessionTarget === "main" && job.payload.kind !== "systemEvent") {
     throw new Error('main cron jobs require payload.kind="systemEvent"');
   }
-  if (job.sessionTarget === "isolated" && job.payload.kind !== "agentTurn") {
-    throw new Error('isolated cron jobs require payload.kind="agentTurn"');
+  if (
+    job.sessionTarget === "isolated" &&
+    job.payload.kind !== "agentTurn" &&
+    job.payload.kind !== "directCommand"
+  ) {
+    throw new Error('isolated cron jobs require payload.kind="agentTurn" or "directCommand"');
   }
 }
 
@@ -450,6 +454,24 @@ function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronP
     return { kind: "systemEvent", text };
   }
 
+  if (patch.kind === "directCommand") {
+    if (existing.kind !== "directCommand") {
+      return buildPayloadFromPatch(patch);
+    }
+    const command = typeof patch.command === "string" ? patch.command : existing.command;
+    return {
+      kind: "directCommand",
+      command,
+      args: Array.isArray(patch.args) ? patch.args : existing.args,
+      cwd: typeof patch.cwd === "string" ? patch.cwd : existing.cwd,
+      env: "env" in patch ? (patch.env ? { ...patch.env } : patch.env) : existing.env,
+      timeoutSeconds:
+        typeof patch.timeoutSeconds === "number" ? patch.timeoutSeconds : existing.timeoutSeconds,
+      maxOutputBytes:
+        typeof patch.maxOutputBytes === "number" ? patch.maxOutputBytes : existing.maxOutputBytes,
+    };
+  }
+
   if (existing.kind !== "agentTurn") {
     return buildPayloadFromPatch(patch);
   }
@@ -532,6 +554,21 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
       throw new Error('cron.update payload.kind="systemEvent" requires text');
     }
     return { kind: "systemEvent", text: patch.text };
+  }
+
+  if (patch.kind === "directCommand") {
+    if (typeof patch.command !== "string" || patch.command.length === 0) {
+      throw new Error('cron.update payload.kind="directCommand" requires command');
+    }
+    return {
+      kind: "directCommand",
+      command: patch.command,
+      args: patch.args,
+      cwd: patch.cwd,
+      env: patch.env,
+      timeoutSeconds: patch.timeoutSeconds,
+      maxOutputBytes: patch.maxOutputBytes,
+    };
   }
 
   if (typeof patch.message !== "string" || patch.message.length === 0) {

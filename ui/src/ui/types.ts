@@ -449,6 +449,16 @@ export type CronPayload =
       message: string;
       thinking?: string;
       timeoutSeconds?: number;
+      model?: string;
+    }
+  | {
+      kind: "directCommand";
+      command: string;
+      args?: string[];
+      cwd?: string;
+      env?: Record<string, string>;
+      timeoutSeconds?: number;
+      maxOutputBytes?: number;
     };
 
 export type CronDelivery = {

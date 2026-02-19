@@ -25,8 +25,13 @@ export const DEFAULT_CRON_FORM: CronFormState = {
   wakeMode: "now",
   payloadKind: "agentTurn",
   payloadText: "",
+  payloadCommand: "",
+  payloadArgs: "",
+  payloadCwd: "",
+  payloadEnv: "",
   deliveryMode: "announce",
   deliveryChannel: "last",
   deliveryTo: "",
   timeoutSeconds: "",
+  maxOutputBytes: "",
 };

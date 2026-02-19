@@ -19,7 +19,10 @@ export type CronState = {
 export function supportsAnnounceDelivery(
   form: Pick<CronFormState, "sessionTarget" | "payloadKind">,
 ) {
-  return form.sessionTarget === "isolated" && form.payloadKind === "agentTurn";
+  return (
+    form.sessionTarget === "isolated" &&
+    (form.payloadKind === "agentTurn" || form.payloadKind === "directCommand")
+  );
 }
 
 export function normalizeCronFormState(form: CronFormState): CronFormState {
@@ -100,18 +103,73 @@ export function buildCronPayload(form: CronFormState) {
     }
     return { kind: "systemEvent" as const, text };
   }
-  const message = form.payloadText.trim();
-  if (!message) {
-    throw new Error("Agent message required.");
+  if (form.payloadKind === "agentTurn") {
+    const message = form.payloadText.trim();
+    if (!message) {
+      throw new Error("Agent message required.");
+    }
+    const payload: {
+      kind: "agentTurn";
+      message: string;
+      timeoutSeconds?: number;
+    } = { kind: "agentTurn", message };
+    const timeoutSeconds = toNumber(form.timeoutSeconds, 0);
+    if (timeoutSeconds > 0) {
+      payload.timeoutSeconds = timeoutSeconds;
+    }
+    return payload;
+  }
+  const command = form.payloadCommand.trim();
+  if (!command) {
+    throw new Error("Command is required.");
+  }
+  const args = form.payloadArgs
+    .split(/\r?\n/)
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const envLines = form.payloadEnv
+    .split(/\r?\n/)
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const envEntries: Array<[string, string]> = [];
+  for (const line of envLines) {
+    const separator = line.indexOf("=");
+    if (separator <= 0) {
+      throw new Error(`Invalid env entry: ${line}`);
+    }
+    const key = line.slice(0, separator).trim();
+    const value = line.slice(separator + 1);
+    if (!key) {
+      throw new Error(`Invalid env entry: ${line}`);
+    }
+    envEntries.push([key, value]);
   }
   const payload: {
-    kind: "agentTurn";
-    message: string;
+    kind: "directCommand";
+    command: string;
+    args?: string[];
+    cwd?: string;
+    env?: Record<string, string>;
     timeoutSeconds?: number;
-  } = { kind: "agentTurn", message };
+    maxOutputBytes?: number;
+  } = { kind: "directCommand", command };
+  if (args.length > 0) {
+    payload.args = args;
+  }
+  const cwd = form.payloadCwd.trim();
+  if (cwd) {
+    payload.cwd = cwd;
+  }
+  if (envEntries.length > 0) {
+    payload.env = Object.fromEntries(envEntries);
+  }
   const timeoutSeconds = toNumber(form.timeoutSeconds, 0);
   if (timeoutSeconds > 0) {
     payload.timeoutSeconds = timeoutSeconds;
+  }
+  const maxOutputBytes = toNumber(form.maxOutputBytes, 0);
+  if (maxOutputBytes > 0) {
+    payload.maxOutputBytes = maxOutputBytes;
   }
   return payload;
 }
@@ -163,6 +221,11 @@ export async function addCronJob(state: CronState) {
       name: "",
       description: "",
       payloadText: "",
+      payloadCommand: "",
+      payloadArgs: "",
+      payloadCwd: "",
+      payloadEnv: "",
+      maxOutputBytes: "",
     };
     await loadCronJobs(state);
     await loadCronStatus(state);

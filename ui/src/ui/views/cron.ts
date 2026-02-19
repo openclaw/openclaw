@@ -61,7 +61,8 @@ export function renderCron(props: CronProps) {
   const selectedRunTitle = selectedJob?.name ?? props.runsJobId ?? "(select a job)";
   const orderedRuns = props.runs.toSorted((a, b) => b.ts - a.ts);
   const supportsAnnounce =
-    props.form.sessionTarget === "isolated" && props.form.payloadKind === "agentTurn";
+    props.form.sessionTarget === "isolated" &&
+    (props.form.payloadKind === "agentTurn" || props.form.payloadKind === "directCommand");
   const selectedDeliveryMode =
     props.form.deliveryMode === "announce" && !supportsAnnounce ? "none" : props.form.deliveryMode;
   return html`
@@ -188,20 +189,74 @@ export function renderCron(props: CronProps) {
             >
               <option value="systemEvent">System event</option>
               <option value="agentTurn">Agent turn</option>
+              <option value="directCommand">Direct command</option>
             </select>
           </label>
         </div>
-        <label class="field" style="margin-top: 12px;">
-          <span>${props.form.payloadKind === "systemEvent" ? "System text" : "Agent message"}</span>
-          <textarea
-            .value=${props.form.payloadText}
-            @input=${(e: Event) =>
-              props.onFormChange({
-                payloadText: (e.target as HTMLTextAreaElement).value,
-              })}
-            rows="4"
-          ></textarea>
-        </label>
+        ${
+          props.form.payloadKind === "directCommand"
+            ? html`
+                <div class="form-grid" style="margin-top: 12px;">
+                  <label class="field">
+                    <span>Command</span>
+                    <input
+                      .value=${props.form.payloadCommand}
+                      @input=${(e: Event) =>
+                        props.onFormChange({
+                          payloadCommand: (e.target as HTMLInputElement).value,
+                        })}
+                      placeholder="python3"
+                    />
+                  </label>
+                  <label class="field">
+                    <span>Working directory (optional)</span>
+                    <input
+                      .value=${props.form.payloadCwd}
+                      @input=${(e: Event) =>
+                        props.onFormChange({
+                          payloadCwd: (e.target as HTMLInputElement).value,
+                        })}
+                      placeholder="/workspace"
+                    />
+                  </label>
+                </div>
+                <label class="field" style="margin-top: 12px;">
+                  <span>Args (one per line)</span>
+                  <textarea
+                    .value=${props.form.payloadArgs}
+                    @input=${(e: Event) =>
+                      props.onFormChange({
+                        payloadArgs: (e.target as HTMLTextAreaElement).value,
+                      })}
+                    rows="3"
+                  ></textarea>
+                </label>
+                <label class="field" style="margin-top: 12px;">
+                  <span>Env (KEY=VALUE, one per line)</span>
+                  <textarea
+                    .value=${props.form.payloadEnv}
+                    @input=${(e: Event) =>
+                      props.onFormChange({
+                        payloadEnv: (e.target as HTMLTextAreaElement).value,
+                      })}
+                    rows="3"
+                  ></textarea>
+                </label>
+              `
+            : html`
+                <label class="field" style="margin-top: 12px;">
+                  <span>${props.form.payloadKind === "systemEvent" ? "System text" : "Agent message"}</span>
+                  <textarea
+                    .value=${props.form.payloadText}
+                    @input=${(e: Event) =>
+                      props.onFormChange({
+                        payloadText: (e.target as HTMLTextAreaElement).value,
+                      })}
+                    rows="4"
+                  ></textarea>
+                </label>
+              `
+        }
         <div class="form-grid" style="margin-top: 12px;">
           <label class="field">
             <span>Delivery</span>
@@ -225,7 +280,7 @@ export function renderCron(props: CronProps) {
             </select>
           </label>
           ${
-            props.form.payloadKind === "agentTurn"
+            props.form.payloadKind === "agentTurn" || props.form.payloadKind === "directCommand"
               ? html`
                   <label class="field">
                     <span>Timeout (seconds)</span>
@@ -234,6 +289,22 @@ export function renderCron(props: CronProps) {
                       @input=${(e: Event) =>
                         props.onFormChange({
                           timeoutSeconds: (e.target as HTMLInputElement).value,
+                        })}
+                    />
+                  </label>
+                `
+              : nothing
+          }
+          ${
+            props.form.payloadKind === "directCommand"
+              ? html`
+                  <label class="field">
+                    <span>Max output bytes (optional)</span>
+                    <input
+                      .value=${props.form.maxOutputBytes}
+                      @input=${(e: Event) =>
+                        props.onFormChange({
+                          maxOutputBytes: (e.target as HTMLInputElement).value,
                         })}
                     />
                   </label>
@@ -481,13 +552,6 @@ function renderJob(job: CronJob, props: CronProps) {
 }
 
 function renderJobPayload(job: CronJob) {
-  if (job.payload.kind === "systemEvent") {
-    return html`<div class="cron-job-detail">
-      <span class="cron-job-detail-label">System</span>
-      <span class="muted cron-job-detail-value">${job.payload.text}</span>
-    </div>`;
-  }
-
   const delivery = job.delivery;
   const deliveryTarget =
     delivery?.mode === "webhook"
@@ -497,6 +561,33 @@ function renderJobPayload(job: CronJob) {
       : delivery?.channel || delivery?.to
         ? ` (${delivery.channel ?? "last"}${delivery.to ? ` -> ${delivery.to}` : ""})`
         : "";
+
+  if (job.payload.kind === "systemEvent") {
+    return html`<div class="cron-job-detail">
+      <span class="cron-job-detail-label">System</span>
+      <span class="muted cron-job-detail-value">${job.payload.text}</span>
+    </div>`;
+  }
+  if (job.payload.kind === "directCommand") {
+    const argsLabel =
+      Array.isArray(job.payload.args) && job.payload.args.length > 0
+        ? ` ${job.payload.args.join(" ")}`
+        : "";
+    return html`
+      <div class="cron-job-detail">
+        <span class="cron-job-detail-label">Command</span>
+        <span class="muted cron-job-detail-value">${job.payload.command}${argsLabel}</span>
+      </div>
+      ${
+        delivery
+          ? html`<div class="cron-job-detail">
+              <span class="cron-job-detail-label">Delivery</span>
+              <span class="muted cron-job-detail-value">${delivery.mode}${deliveryTarget}</span>
+            </div>`
+          : nothing
+      }
+    `;
+  }
 
   return html`
     <div class="cron-job-detail">

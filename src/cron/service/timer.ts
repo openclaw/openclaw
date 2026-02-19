@@ -244,7 +244,8 @@ export async function onTimer(state: CronServiceState) {
       emit(state, { jobId: job.id, action: "started", runAtMs: startedAt });
 
       const configuredTimeoutMs =
-        job.payload.kind === "agentTurn" && typeof job.payload.timeoutSeconds === "number"
+        (job.payload.kind === "agentTurn" || job.payload.kind === "directCommand") &&
+        typeof job.payload.timeoutSeconds === "number"
           ? Math.floor(job.payload.timeoutSeconds * 1_000)
           : undefined;
       const jobTimeoutMs =
@@ -456,6 +457,21 @@ async function executeJobCore(
   state: CronServiceState,
   job: CronJob,
 ): Promise<CronRunOutcome & CronRunTelemetry> {
+  if (job.payload.kind === "directCommand") {
+    if (!state.deps.runDirectCommandJob) {
+      return { status: "skipped", error: "directCommand executor is not configured" };
+    }
+    return await state.deps.runDirectCommandJob({
+      job,
+      command: job.payload.command,
+      args: job.payload.args,
+      cwd: job.payload.cwd,
+      env: job.payload.env,
+      timeoutSeconds: job.payload.timeoutSeconds,
+      maxOutputBytes: job.payload.maxOutputBytes,
+    });
+  }
+
   if (job.sessionTarget === "main") {
     const text = resolveJobPayloadTextForMain(job);
     if (!text) {
@@ -522,7 +538,10 @@ async function executeJobCore(
   }
 
   if (job.payload.kind !== "agentTurn") {
-    return { status: "skipped", error: "isolated job requires payload.kind=agentTurn" };
+    return {
+      status: "skipped",
+      error: "isolated job requires payload.kind=agentTurn or payload.kind=directCommand",
+    };
   }
 
   const res = await state.deps.runIsolatedAgentJob({

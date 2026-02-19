@@ -91,12 +91,11 @@ describe("shell env fallback", () => {
       expect(first).toBeNull();
       expect(second).toBeNull();
       expect(exec).not.toHaveBeenCalled();
-      return;
+    } else {
+      expect(first).toBe("/usr/local/bin:/usr/bin");
+      expect(second).toBe("/usr/local/bin:/usr/bin");
+      expect(exec).toHaveBeenCalledOnce();
     }
-
-    expect(first).toBe("/usr/local/bin:/usr/bin");
-    expect(second).toBe("/usr/local/bin:/usr/bin");
-    expect(exec).toHaveBeenCalledOnce();
   });
 
   it("returns null on shell env read failure and caches null", () => {
@@ -118,8 +117,8 @@ describe("shell env fallback", () => {
     expect(second).toBeNull();
     if (process.platform === "win32") {
       expect(exec).not.toHaveBeenCalled();
-      return;
+    } else {
+      expect(exec).toHaveBeenCalledOnce();
     }
-    expect(exec).toHaveBeenCalledOnce();
   });
 });

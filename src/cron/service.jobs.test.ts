@@ -180,6 +180,59 @@ describe("applyJobPatch", () => {
     ).not.toThrow();
     expect(job.delivery).toEqual({ mode: "webhook", to: "https://example.invalid/trim" });
   });
+
+  it("accepts isolated directCommand payloads", () => {
+    const now = Date.now();
+    const job: CronJob = {
+      id: "job-direct",
+      name: "job-direct",
+      enabled: true,
+      createdAtMs: now,
+      updatedAtMs: now,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "directCommand", command: "echo", args: ["hello"] },
+      state: {},
+    };
+
+    expect(() => applyJobPatch(job, { enabled: true })).not.toThrow();
+  });
+
+  it("merges directCommand payload patches", () => {
+    const now = Date.now();
+    const job: CronJob = {
+      id: "job-direct-patch",
+      name: "job-direct-patch",
+      enabled: true,
+      createdAtMs: now,
+      updatedAtMs: now,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "directCommand", command: "echo", args: ["hello"], cwd: "/tmp" },
+      state: {},
+    };
+
+    expect(() =>
+      applyJobPatch(job, {
+        payload: {
+          kind: "directCommand",
+          command: "printf",
+          args: ["done"],
+          maxOutputBytes: 2048,
+        },
+      }),
+    ).not.toThrow();
+
+    expect(job.payload).toEqual({
+      kind: "directCommand",
+      command: "printf",
+      args: ["done"],
+      cwd: "/tmp",
+      maxOutputBytes: 2048,
+    });
+  });
 });
 
 function createMockState(now: number): CronServiceState {

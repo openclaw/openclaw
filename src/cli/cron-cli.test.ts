@@ -153,6 +153,65 @@ describe("cron cli", () => {
     expect(params?.delivery?.mode).toBe("announce");
   });
 
+  it("supports directCommand payload on cron add", async () => {
+    callGatewayFromCli.mockClear();
+
+    const program = buildProgram();
+
+    await program.parseAsync(
+      [
+        "cron",
+        "add",
+        "--name",
+        "Direct",
+        "--cron",
+        "* * * * *",
+        "--command",
+        "node",
+        "--arg",
+        "-e",
+        "--arg",
+        "console.log('hi')",
+        "--cwd",
+        "/tmp",
+        "--env",
+        "FOO=bar",
+        "--timeout-seconds",
+        "11",
+        "--max-output-bytes",
+        "2048",
+      ],
+      { from: "user" },
+    );
+
+    const addCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.add");
+    const params = addCall?.[2] as {
+      sessionTarget?: string;
+      payload?: {
+        kind?: string;
+        command?: string;
+        args?: string[];
+        cwd?: string;
+        env?: Record<string, string>;
+        timeoutSeconds?: number;
+        maxOutputBytes?: number;
+      };
+      delivery?: { mode?: string };
+    };
+
+    expect(params?.sessionTarget).toBe("isolated");
+    expect(params?.payload).toMatchObject({
+      kind: "directCommand",
+      command: "node",
+      args: ["-e", "console.log('hi')"],
+      cwd: "/tmp",
+      env: { FOO: "bar" },
+      timeoutSeconds: 11,
+      maxOutputBytes: 2048,
+    });
+    expect(params?.delivery?.mode).toBe("announce");
+  });
+
   it("infers sessionTarget from payload when --session is omitted", async () => {
     resetGatewayMock();
 
@@ -338,6 +397,43 @@ describe("cron cli", () => {
     expect(patch?.patch?.delivery?.channel).toBe("telegram");
     expect(patch?.patch?.delivery?.to).toBe("19098680");
     expect(patch?.patch?.payload?.message).toBeUndefined();
+  });
+
+  it("supports directCommand payload updates on cron edit", async () => {
+    const patch = await runCronEditAndGetPatch([
+      "--command",
+      "node",
+      "--arg",
+      "-e",
+      "--arg",
+      "console.log('hi')",
+      "--cwd",
+      "/tmp",
+      "--env",
+      "FOO=bar",
+      "--timeout-seconds",
+      "17",
+      "--max-output-bytes",
+      "4096",
+      "--deliver",
+      "--channel",
+      "telegram",
+      "--to",
+      "19098680",
+    ]);
+
+    expect(patch?.patch?.payload).toMatchObject({
+      kind: "directCommand",
+      command: "node",
+      args: ["-e", "console.log('hi')"],
+      cwd: "/tmp",
+      env: { FOO: "bar" },
+      timeoutSeconds: 17,
+      maxOutputBytes: 4096,
+    });
+    expect(patch?.patch?.delivery?.mode).toBe("announce");
+    expect(patch?.patch?.delivery?.channel).toBe("telegram");
+    expect(patch?.patch?.delivery?.to).toBe("19098680");
   });
 
   it("supports --no-deliver on cron edit", async () => {

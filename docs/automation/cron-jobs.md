@@ -166,16 +166,42 @@ your main chat history.
 
 ### Payload shapes (what runs)
 
-Two payload kinds are supported:
+Three payload kinds are supported:
 
 - `systemEvent`: main-session only, routed through the heartbeat prompt.
 - `agentTurn`: isolated-session only, runs a dedicated agent turn.
+- `directCommand`: isolated-session only, runs a direct process command without an LLM turn.
 
 Common `agentTurn` fields:
 
 - `message`: required text prompt.
 - `model` / `thinking`: optional overrides (see below).
 - `timeoutSeconds`: optional timeout override.
+
+Common `directCommand` fields:
+
+- `command`: required executable path or command name.
+- `args`: optional argv list.
+- `cwd`: optional working directory override.
+- `env`: optional environment map (`{ "NAME": "value" }`).
+- `timeoutSeconds`: optional timeout override.
+- `maxOutputBytes`: optional output cap for captured stdout/stderr.
+
+Execution details:
+
+- Direct command jobs run through a dedicated spawn-based executor.
+- Commands are executed with `shell: false` (argv only), so shell interpolation is not used unless your command explicitly invokes a shell.
+- These jobs bypass heartbeat and LLM turn execution flows entirely.
+
+`directCommand` runs produce a deterministic result object with:
+
+- `status`: `ok` / `error` / `skipped`
+- `summary`: compact merged output text
+- `captured.stdout` / `captured.stderr`: bounded captured streams
+
+The finished cron event summary stores this result object as JSON, so webhook consumers and run logs can parse a stable shape.
+
+`directCommand` still uses `sessionTarget: "isolated"`; no separate session target is required.
 
 Delivery config:
 
@@ -186,6 +212,9 @@ Delivery config:
 
 Announce delivery suppresses messaging tool sends for the run; use `delivery.channel`/`delivery.to`
 to target the chat instead. When `delivery.mode = "none"`, no summary is posted to the main session.
+
+For `directCommand` jobs, `delivery.mode = "announce"` sends a compact command-result message directly with
+`delivery.channel` + `delivery.to` (respecting `delivery.bestEffort`) without running an isolated LLM turn.
 
 If `delivery` is omitted for isolated jobs, OpenClaw defaults to `announce`.
 
@@ -215,6 +244,7 @@ Behavior details:
 - The endpoint must be a valid HTTP(S) URL.
 - No channel delivery is attempted in webhook mode.
 - No main-session summary is posted in webhook mode.
+- For `directCommand` jobs, the webhook summary is the deterministic command result object JSON.
 - If `cron.webhookToken` is set, auth header is `Authorization: Bearer <cron.webhookToken>`.
 - Deprecated fallback: stored legacy jobs with `notify: true` still post to `cron.webhook` (if configured), with a warning so you can migrate to `delivery.mode = "webhook"`.
 

@@ -27,10 +27,15 @@ export type CronFormState = {
   cronTz: string;
   sessionTarget: "main" | "isolated";
   wakeMode: "next-heartbeat" | "now";
-  payloadKind: "systemEvent" | "agentTurn";
+  payloadKind: "systemEvent" | "agentTurn" | "directCommand";
   payloadText: string;
+  payloadCommand: string;
+  payloadArgs: string;
+  payloadCwd: string;
+  payloadEnv: string;
   deliveryMode: "none" | "announce" | "webhook";
   deliveryChannel: string;
   deliveryTo: string;
   timeoutSeconds: string;
+  maxOutputBytes: string;
 };

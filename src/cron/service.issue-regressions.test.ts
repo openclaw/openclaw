@@ -683,6 +683,54 @@ describe("Cron issue regressions", () => {
     expect(job?.state.lastStatus).toBe("ok");
   });
 
+  it("respects directCommand timeoutSeconds above default outer timeout", async () => {
+    const store = await makeStorePath();
+    const scheduledAt = Date.parse("2026-02-15T13:00:00.000Z");
+
+    const cronJob = createIsolatedRegressionJob({
+      id: "direct-command-timeout-override",
+      name: "direct-timeout",
+      scheduledAt,
+      schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
+      payload: {
+        kind: "directCommand",
+        command: "echo",
+        args: ["work"],
+        timeoutSeconds: 700,
+      },
+      state: { nextRunAtMs: scheduledAt },
+    });
+    await writeCronJobs(store.storePath, [cronJob]);
+
+    const deferredRun = createDeferred<{ status: "ok"; summary: string }>();
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => scheduledAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const, summary: "unused" })),
+      runDirectCommandJob: vi.fn(async () => deferredRun.promise),
+    });
+
+    const timerPromise = onTimer(state);
+    let settled = false;
+    void timerPromise.finally(() => {
+      settled = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(600_000);
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    deferredRun.resolve({ status: "ok", summary: "done" });
+    await timerPromise;
+
+    const job = state.store?.jobs.find((j) => j.id === "direct-command-timeout-override");
+    expect(job?.state.lastStatus).toBe("ok");
+  });
+
   it("retries cron schedule computation from the next second when the first attempt returns undefined (#17821)", () => {
     const scheduledAt = Date.parse("2026-02-15T13:00:00.000Z");
     const cronJob = createIsolatedRegressionJob({

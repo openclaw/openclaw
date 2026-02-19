@@ -41,6 +41,17 @@ describe("cron controller", () => {
     expect(normalized.deliveryMode).toBe("announce");
   });
 
+  it("keeps announce mode when isolated directCommand supports announce", () => {
+    const normalized = normalizeCronFormState({
+      ...DEFAULT_CRON_FORM,
+      sessionTarget: "isolated",
+      payloadKind: "directCommand",
+      deliveryMode: "announce",
+    });
+
+    expect(normalized.deliveryMode).toBe("announce");
+  });
+
   it("forwards webhook delivery in cron.add payload", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "cron.add") {
@@ -126,5 +137,59 @@ describe("cron controller", () => {
     });
     expect((addCall?.[1] as { delivery?: unknown } | undefined)?.delivery).toBeUndefined();
     expect(state.cronForm.deliveryMode).toBe("none");
+  });
+
+  it("forwards directCommand payload fields in cron.add", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "cron.add") {
+        return { id: "job-3" };
+      }
+      if (method === "cron.list") {
+        return { jobs: [] };
+      }
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 0, nextWakeAtMs: null };
+      }
+      return {};
+    });
+
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+      cronForm: {
+        ...DEFAULT_CRON_FORM,
+        name: "direct command job",
+        scheduleKind: "every",
+        everyAmount: "1",
+        everyUnit: "minutes",
+        sessionTarget: "isolated",
+        payloadKind: "directCommand",
+        payloadCommand: "node",
+        payloadArgs: "-e\nconsole.log('hi')",
+        payloadCwd: "/tmp",
+        payloadEnv: "FOO=bar\nBAZ=qux",
+        timeoutSeconds: "12",
+        maxOutputBytes: "2048",
+        deliveryMode: "announce",
+        deliveryChannel: "telegram",
+        deliveryTo: "123",
+      },
+    });
+
+    await addCronJob(state);
+
+    const addCall = request.mock.calls.find(([method]) => method === "cron.add");
+    expect(addCall?.[1]).toMatchObject({
+      name: "direct command job",
+      payload: {
+        kind: "directCommand",
+        command: "node",
+        args: ["-e", "console.log('hi')"],
+        cwd: "/tmp",
+        env: { FOO: "bar", BAZ: "qux" },
+        timeoutSeconds: 12,
+        maxOutputBytes: 2048,
+      },
+      delivery: { mode: "announce", channel: "telegram", to: "123" },
+    });
   });
 });

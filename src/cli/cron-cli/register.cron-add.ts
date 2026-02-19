@@ -80,9 +80,14 @@ export function registerCronAddCommand(cron: Command) {
       .option("--exact", "Disable cron staggering (set stagger to 0)", false)
       .option("--system-event <text>", "System event payload (main session)")
       .option("--message <text>", "Agent message payload")
+      .option("--command <cmd>", "Direct command executable path/name")
+      .option("--arg <value>", "Direct command arg (repeatable)", collectCliList, [])
+      .option("--cwd <path>", "Direct command working directory")
+      .option("--env <name=value>", "Direct command env var (repeatable)", collectCliList, [])
       .option("--thinking <level>", "Thinking level for agent jobs (off|minimal|low|medium|high)")
       .option("--model <model>", "Model override for agent jobs (provider/model or alias)")
-      .option("--timeout-seconds <n>", "Timeout seconds for agent jobs")
+      .option("--timeout-seconds <n>", "Timeout seconds for agent/direct-command jobs")
+      .option("--max-output-bytes <n>", "Max captured stdout/stderr bytes for direct-command jobs")
       .option("--announce", "Announce summary to a chat (subagent-style)", false)
       .option("--deliver", "Deprecated (use --announce). Announces a summary to a chat.")
       .option("--no-deliver", "Disable announce delivery and skip main-session summary")
@@ -168,14 +173,37 @@ export function registerCronAddCommand(cron: Command) {
           const payload = (() => {
             const systemEvent = typeof opts.systemEvent === "string" ? opts.systemEvent.trim() : "";
             const message = typeof opts.message === "string" ? opts.message.trim() : "";
-            const chosen = [Boolean(systemEvent), Boolean(message)].filter(Boolean).length;
+            const command = typeof opts.command === "string" ? opts.command.trim() : "";
+            const chosen = [Boolean(systemEvent), Boolean(message), Boolean(command)].filter(
+              Boolean,
+            ).length;
             if (chosen !== 1) {
-              throw new Error("Choose exactly one payload: --system-event or --message");
+              throw new Error(
+                "Choose exactly one payload: --system-event, --message, or --command",
+              );
             }
             if (systemEvent) {
               return { kind: "systemEvent" as const, text: systemEvent };
             }
             const timeoutSeconds = parsePositiveIntOrUndefined(opts.timeoutSeconds);
+            if (command) {
+              const args = normalizeCliList(opts.arg);
+              const cwd =
+                typeof opts.cwd === "string" && opts.cwd.trim() ? opts.cwd.trim() : undefined;
+              const env = parseEnvAssignments(normalizeCliList(opts.env));
+              const maxOutputBytes = parsePositiveIntOrUndefined(opts.maxOutputBytes);
+              return {
+                kind: "directCommand" as const,
+                command,
+                args: args.length > 0 ? args : undefined,
+                cwd,
+                env: Object.keys(env).length > 0 ? env : undefined,
+                timeoutSeconds:
+                  timeoutSeconds && Number.isFinite(timeoutSeconds) ? timeoutSeconds : undefined,
+                maxOutputBytes:
+                  maxOutputBytes && Number.isFinite(maxOutputBytes) ? maxOutputBytes : undefined,
+              };
+            }
             return {
               kind: "agentTurn" as const,
               message,
@@ -196,7 +224,8 @@ export function registerCronAddCommand(cron: Command) {
               : () => undefined;
           const sessionSource = optionSource("session");
           const sessionTargetRaw = typeof opts.session === "string" ? opts.session.trim() : "";
-          const inferredSessionTarget = payload.kind === "agentTurn" ? "isolated" : "main";
+          const inferredSessionTarget =
+            payload.kind === "agentTurn" || payload.kind === "directCommand" ? "isolated" : "main";
           const sessionTarget =
             sessionSource === "cli" ? sessionTargetRaw || "" : inferredSessionTarget;
           if (sessionTarget !== "main" && sessionTarget !== "isolated") {
@@ -210,18 +239,26 @@ export function registerCronAddCommand(cron: Command) {
           if (sessionTarget === "main" && payload.kind !== "systemEvent") {
             throw new Error("Main jobs require --system-event (systemEvent).");
           }
-          if (sessionTarget === "isolated" && payload.kind !== "agentTurn") {
-            throw new Error("Isolated jobs require --message (agentTurn).");
+          if (
+            sessionTarget === "isolated" &&
+            payload.kind !== "agentTurn" &&
+            payload.kind !== "directCommand"
+          ) {
+            throw new Error(
+              "Isolated jobs require --message (agentTurn) or --command (directCommand).",
+            );
           }
           if (
             (opts.announce || typeof opts.deliver === "boolean") &&
-            (sessionTarget !== "isolated" || payload.kind !== "agentTurn")
+            (sessionTarget !== "isolated" ||
+              (payload.kind !== "agentTurn" && payload.kind !== "directCommand"))
           ) {
             throw new Error("--announce/--no-deliver require --session isolated.");
           }
 
           const deliveryMode =
-            sessionTarget === "isolated" && payload.kind === "agentTurn"
+            sessionTarget === "isolated" &&
+            (payload.kind === "agentTurn" || payload.kind === "directCommand")
               ? hasAnnounce
                 ? "announce"
                 : hasNoDeliver
@@ -272,4 +309,33 @@ export function registerCronAddCommand(cron: Command) {
         }
       }),
   );
+}
+
+function normalizeCliList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value
+        .filter((entry): entry is string => typeof entry === "string")
+        .map((entry) => entry.trim())
+        .filter(Boolean)
+    : [];
+}
+
+function collectCliList(value: string, previous: string[]): string[] {
+  return [...previous, value];
+}
+
+function parseEnvAssignments(entries: string[]): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const entry of entries) {
+    const separator = entry.indexOf("=");
+    if (separator <= 0) {
+      throw new Error(`Invalid --env entry: ${entry}. Expected NAME=value.`);
+    }
+    const key = entry.slice(0, separator).trim();
+    if (!key) {
+      throw new Error(`Invalid --env entry: ${entry}. Expected NAME=value.`);
+    }
+    env[key] = entry.slice(separator + 1);
+  }
+  return env;
 }
