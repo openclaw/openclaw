@@ -4,10 +4,13 @@ export type ChatAttachment = {
   mimeType: string;
 };
 
+export type ChatQueueItemKind = "message" | "addendum";
+
 export type ChatQueueItem = {
   id: string;
   text: string;
   createdAt: number;
+  kind?: ChatQueueItemKind;
   attachments?: ChatAttachment[];
   refreshSessions?: boolean;
 };

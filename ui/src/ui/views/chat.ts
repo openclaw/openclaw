@@ -381,10 +381,15 @@ export function renderChat(props: ChatProps) {
                   (item) => html`
                     <div class="chat-queue__item">
                       <div class="chat-queue__text">
-                        ${
-                          item.text ||
-                          (item.attachments?.length ? `Image (${item.attachments.length})` : "")
-                        }
+                        ${(() => {
+                          const label =
+                            item.text ||
+                            (item.attachments?.length ? `Image (${item.attachments.length})` : "");
+                          if (!label) {
+                            return "";
+                          }
+                          return item.kind === "addendum" ? `Addendum: ${label}` : label;
+                        })()}
                       </div>
                       <button
                         class="btn chat-queue__remove"
