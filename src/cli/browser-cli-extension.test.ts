@@ -1,4 +1,5 @@
 import path from "node:path";
+import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const copyToClipboard = vi.fn();
@@ -117,7 +118,6 @@ beforeEach(() => {
   runtime.log.mockReset();
   runtime.error.mockReset();
   runtime.exit.mockReset();
-  vi.clearAllMocks();
 });
 
 function writeManifest(dir: string) {
@@ -176,8 +176,6 @@ describe("browser extension install (fs-mocked)", () => {
 
       const dir = path.join(tmp, "browser", "chrome-extension");
       writeManifest(dir);
-
-      const { Command } = await import("commander");
 
       const program = new Command();
       const browser = program.command("browser").option("--json", "JSON output", false);

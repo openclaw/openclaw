@@ -1,6 +1,6 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 type FakeFsEntry = { kind: "file"; content: string } | { kind: "dir" };
 
@@ -90,6 +90,14 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 });
 
 describe("resolveOpenClawPackageRoot", () => {
+  let resolveOpenClawPackageRoot: typeof import("./openclaw-root.js").resolveOpenClawPackageRoot;
+  let resolveOpenClawPackageRootSync: typeof import("./openclaw-root.js").resolveOpenClawPackageRootSync;
+
+  beforeAll(async () => {
+    ({ resolveOpenClawPackageRoot, resolveOpenClawPackageRootSync } =
+      await import("./openclaw-root.js"));
+  });
+
   beforeEach(() => {
     state.entries.clear();
     state.realpaths.clear();
@@ -97,8 +105,6 @@ describe("resolveOpenClawPackageRoot", () => {
   });
 
   it("resolves package root from .bin argv1", async () => {
-    const { resolveOpenClawPackageRootSync } = await import("./openclaw-root.js");
-
     const project = fx("bin-scenario");
     const argv1 = path.join(project, "node_modules", ".bin", "openclaw");
     const pkgRoot = path.join(project, "node_modules", "openclaw");
@@ -108,8 +114,6 @@ describe("resolveOpenClawPackageRoot", () => {
   });
 
   it("resolves package root via symlinked argv1", async () => {
-    const { resolveOpenClawPackageRootSync } = await import("./openclaw-root.js");
-
     const project = fx("symlink-scenario");
     const bin = path.join(project, "bin", "openclaw");
     const realPkg = path.join(project, "real-pkg");
@@ -132,8 +136,6 @@ describe("resolveOpenClawPackageRoot", () => {
   });
 
   it("prefers moduleUrl candidates", async () => {
-    const { resolveOpenClawPackageRootSync } = await import("./openclaw-root.js");
-
     const pkgRoot = fx("moduleurl");
     setFile(path.join(pkgRoot, "package.json"), JSON.stringify({ name: "openclaw" }));
     const moduleUrl = pathToFileURL(path.join(pkgRoot, "dist", "index.js")).toString();
@@ -142,8 +144,6 @@ describe("resolveOpenClawPackageRoot", () => {
   });
 
   it("returns null for non-openclaw package roots", async () => {
-    const { resolveOpenClawPackageRootSync } = await import("./openclaw-root.js");
-
     const pkgRoot = fx("not-openclaw");
     setFile(path.join(pkgRoot, "package.json"), JSON.stringify({ name: "not-openclaw" }));
 
@@ -151,8 +151,6 @@ describe("resolveOpenClawPackageRoot", () => {
   });
 
   it("async resolver matches sync behavior", async () => {
-    const { resolveOpenClawPackageRoot } = await import("./openclaw-root.js");
-
     const pkgRoot = fx("async");
     setFile(path.join(pkgRoot, "package.json"), JSON.stringify({ name: "openclaw" }));
 
