@@ -503,10 +503,10 @@ type HeartbeatReasonFlags = {
   isWakeReason: boolean;
 };
 
-type HeartbeatSkipReason = "empty-heartbeat-file" | "no-heartbeat-file";
+type HeartbeatSkipReason = "empty-heartbeat-file" | "no-heartbeat-file" | "session-not-found";
 
 type HeartbeatPreflight = HeartbeatReasonFlags & {
-  session: ReturnType<typeof resolveHeartbeatSession>;
+  session: ReturnType<typeof resolveHeartbeatSession> | null;
   pendingEventEntries: ReturnType<typeof peekSystemEventEntries>;
   hasTaggedCronEvents: boolean;
   shouldInspectPendingEvents: boolean;
@@ -535,7 +535,23 @@ async function resolveHeartbeatPreflight(params: {
     params.agentId,
     params.heartbeat,
     params.forcedSessionKey,
+    // Pass noFallback=true if reason is watchdog-stall so we don't spam main session
+    params.reason === "watchdog-stall",
   );
+
+  // If session is null (forced session not found + noFallback), we can't inspect events.
+  // Return early with skipReason.
+  if (!session) {
+    return {
+      ...reasonFlags,
+      session: null,
+      pendingEventEntries: [],
+      hasTaggedCronEvents: false,
+      shouldInspectPendingEvents: false,
+      skipReason: "session-not-found",
+    };
+  }
+
   const pendingEventEntries = peekSystemEventEntries(session.sessionKey);
   const hasTaggedCronEvents = pendingEventEntries.some((event) =>
     event.contextKey?.startsWith("cron:"),
@@ -645,11 +661,11 @@ export async function runHeartbeatOnce(opts: {
   // Let's trust preflight mostly but double check.
   // Actually, resolveHeartbeatPreflight does NOT know about "watchdog-stall" in its
   // shouldBypassFileGates logic unless we add it.
-  
+
   // Wait, I can't easily modify resolveHeartbeatPreflight here without changing the function definition above.
   // But wait, the upstream code uses preflight completely.
   // My local code had custom logic for watchdog skipping.
-  
+
   if (preflight.skipReason) {
     // Override skip for watchdog or explicit prompt which might not be covered by standard preflight
     if (!isWatchdogReason && !hasExplicitPrompt) {
@@ -662,7 +678,7 @@ export async function runHeartbeatOnce(opts: {
     }
   }
 
-  const { entry, sessionKey, storePath } = preflight.session;
+  const { entry, sessionKey, storePath } = preflight.session!; // We know it won't be null here because preflight handles failures
   const { isCronEventReason, pendingEventEntries } = preflight;
   const previousUpdatedAt = entry?.updatedAt;
   const delivery = resolveHeartbeatDeliveryTarget({ cfg, entry, heartbeat });
