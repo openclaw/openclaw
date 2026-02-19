@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveAgentWorkspaceDir } from "../../../agents/agent-scope.js";
 import type { CliDeps } from "../../../cli/deps.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 
@@ -43,14 +44,17 @@ describe("boot-md startup hook integration", () => {
     const event = createInternalHookEvent("gateway", "startup", "gateway:startup", { cfg, deps });
     await triggerInternalHook(event);
 
+    const mainWorkspaceDir = resolveAgentWorkspaceDir(cfg, "main");
+    const opsWorkspaceDir = resolveAgentWorkspaceDir(cfg, "ops");
+
     expect(runBootOnce).toHaveBeenCalledTimes(2);
     expect(runBootOnce).toHaveBeenNthCalledWith(
       1,
-      expect.objectContaining({ cfg, deps, workspaceDir: "/ws/main", agentId: "main" }),
+      expect.objectContaining({ cfg, deps, workspaceDir: mainWorkspaceDir, agentId: "main" }),
     );
     expect(runBootOnce).toHaveBeenNthCalledWith(
       2,
-      expect.objectContaining({ cfg, deps, workspaceDir: "/ws/ops", agentId: "ops" }),
+      expect.objectContaining({ cfg, deps, workspaceDir: opsWorkspaceDir, agentId: "ops" }),
     );
   });
 });
