@@ -320,6 +320,10 @@ export type AgentCompactionConfig = {
    * Set to [] to disable post-compaction context injection entirely.
    */
   postCompactionSections?: string[];
+  /** Send a notification message to the user when compaction starts. Default: false. */
+  notifyOnStart?: boolean;
+  /** Notification text sent when compaction starts. Default: "🧹 Context compacting, back in a moment…" */
+  notifyOnStartText?: string;
 };
 
 export type AgentCompactionMemoryFlushConfig = {

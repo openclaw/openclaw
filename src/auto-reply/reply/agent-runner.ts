@@ -340,6 +340,16 @@ export async function runReplyAgent(params: {
     });
   try {
     const runStartedAt = Date.now();
+    const compactionCfg = cfg?.agents?.defaults?.compaction;
+    const onCompactionStart =
+      compactionCfg?.notifyOnStart === true
+        ? async () => {
+            const text =
+              compactionCfg.notifyOnStartText ?? "🧹 Context compacting, back in a moment…";
+            await opts?.onBlockReply?.({ text });
+          }
+        : undefined;
+
     const runOutcome = await runAgentTurnWithFallback({
       commandBody,
       followupRun,
@@ -356,6 +366,7 @@ export async function runReplyAgent(params: {
       pendingToolTasks,
       resetSessionAfterCompactionFailure,
       resetSessionAfterRoleOrderingConflict,
+      onCompactionStart,
       isHeartbeat,
       sessionKey,
       getActiveSessionEntry: () => activeSessionEntry,
