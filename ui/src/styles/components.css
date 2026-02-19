@@ -17,13 +17,6 @@
   padding: 10px 16px;
 }
 
-.update-banner code {
-  background: rgba(239, 68, 68, 0.15);
-  padding: 2px 6px;
-  border-radius: 4px;
-  font-size: 12px;
-}
-
 .update-banner__btn {
   margin-left: 8px;
   border-color: var(--danger);

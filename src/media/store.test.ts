@@ -102,6 +102,17 @@ describe("media store", () => {
     });
   });
 
+  it.runIf(process.platform !== "win32")("rejects symlink sources", async () => {
+    await withTempStore(async (store, home) => {
+      const target = path.join(home, "sensitive.txt");
+      const source = path.join(home, "source.txt");
+      await fs.writeFile(target, "sensitive");
+      await fs.symlink(target, source);
+
+      await expect(store.saveMediaSource(source)).rejects.toThrow("symlink");
+    });
+  });
+
   it("cleans old media files in first-level subdirectories", async () => {
     await withTempStore(async (store) => {
       const saved = await store.saveMediaBuffer(Buffer.from("nested"), "text/plain", "inbound");

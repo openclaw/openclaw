@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { constants as fsConstants } from "node:fs";
 import { createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
 import { request as httpRequest } from "node:http";
@@ -19,6 +20,12 @@ type ResolvePinnedHostnameImpl = typeof resolvePinnedHostname;
 const defaultHttpRequestImpl: RequestImpl = httpRequest;
 const defaultHttpsRequestImpl: RequestImpl = httpsRequest;
 const defaultResolvePinnedHostnameImpl: ResolvePinnedHostnameImpl = resolvePinnedHostname;
+
+const isNodeError = (err: unknown): err is NodeJS.ErrnoException =>
+  Boolean(err && typeof err === "object" && "code" in (err as Record<string, unknown>));
+
+const isSymlinkOpenError = (err: unknown) =>
+  isNodeError(err) && (err.code === "ELOOP" || err.code === "EINVAL" || err.code === "ENOTSUP");
 
 let httpRequestImpl: RequestImpl = defaultHttpRequestImpl;
 let httpsRequestImpl: RequestImpl = defaultHttpsRequestImpl;
@@ -232,20 +239,41 @@ export async function saveMediaSource(
     return { id, path: finalDest, size, contentType: mime };
   }
   // local path
-  const stat = await fs.stat(source);
-  if (!stat.isFile()) {
-    throw new Error("Media path is not a file");
+  const supportsNoFollow = process.platform !== "win32" && "O_NOFOLLOW" in fsConstants;
+  const flags = fsConstants.O_RDONLY | (supportsNoFollow ? fsConstants.O_NOFOLLOW : 0);
+  let handle: Awaited<ReturnType<typeof fs.open>>;
+  try {
+    handle = await fs.open(source, flags);
+  } catch (err) {
+    if (isSymlinkOpenError(err)) {
+      throw new Error("Media path must not be a symlink", { cause: err });
+    }
+    throw err;
   }
-  if (stat.size > MAX_BYTES) {
-    throw new Error("Media exceeds 5MB limit");
+  try {
+    const [stat, lstat] = await Promise.all([handle.stat(), fs.lstat(source)]);
+    if (lstat.isSymbolicLink()) {
+      throw new Error("Media path must not be a symlink");
+    }
+    if (!stat.isFile()) {
+      throw new Error("Media path is not a file");
+    }
+    if (stat.ino !== lstat.ino || stat.dev !== lstat.dev) {
+      throw new Error("Media path changed during read");
+    }
+    if (stat.size > MAX_BYTES) {
+      throw new Error("Media exceeds 5MB limit");
+    }
+    const buffer = await handle.readFile();
+    const mime = await detectMime({ buffer, filePath: source });
+    const ext = extensionForMime(mime) ?? path.extname(source);
+    const id = ext ? `${baseId}${ext}` : baseId;
+    const dest = path.join(dir, id);
+    await fs.writeFile(dest, buffer, { mode: 0o600 });
+    return { id, path: dest, size: stat.size, contentType: mime };
+  } finally {
+    await handle.close().catch(() => {});
   }
-  const buffer = await fs.readFile(source);
-  const mime = await detectMime({ buffer, filePath: source });
-  const ext = extensionForMime(mime) ?? path.extname(source);
-  const id = ext ? `${baseId}${ext}` : baseId;
-  const dest = path.join(dir, id);
-  await fs.writeFile(dest, buffer, { mode: 0o600 });
-  return { id, path: dest, size: stat.size, contentType: mime };
 }
 
 export async function saveMediaBuffer(
