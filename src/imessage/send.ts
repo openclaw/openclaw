@@ -130,7 +130,7 @@ export async function sendMessageIMessage(
     filePath = resolved.path;
     if (!message.trim()) {
       const kind = mediaKindFromMime(resolved.contentType ?? undefined);
-      if (kind) {
+      if (kind && kind !== "unknown") {
         message = kind === "image" ? "<media:image>" : `<media:${kind}>`;
       }
     }
