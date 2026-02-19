@@ -89,7 +89,10 @@ import {
   refreshGatewayHealthSnapshot,
 } from "./server/health-state.js";
 import { loadGatewayTlsRuntime } from "./server/tls.js";
-import { assertHooksTokenSeparateFromGatewayAuth, ensureGatewayStartupAuth } from "./startup-auth.js";
+import {
+  assertHooksTokenSeparateFromGatewayAuth,
+  ensureGatewayStartupAuth,
+} from "./startup-auth.js";
 
 export { __resetModelCatalogCacheForTest } from "./server-model-catalog.js";
 

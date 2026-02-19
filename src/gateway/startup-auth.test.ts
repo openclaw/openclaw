@@ -13,7 +13,10 @@ vi.mock("../config/config.js", async (importOriginal) => {
   };
 });
 
-import { assertHooksTokenSeparateFromGatewayAuth, ensureGatewayStartupAuth } from "./startup-auth.js";
+import {
+  assertHooksTokenSeparateFromGatewayAuth,
+  ensureGatewayStartupAuth,
+} from "./startup-auth.js";
 
 describe("ensureGatewayStartupAuth", () => {
   async function expectEphemeralGeneratedTokenWhenOverridden(cfg: OpenClawConfig) {
@@ -187,6 +190,22 @@ describe("ensureGatewayStartupAuth", () => {
         },
       },
     });
+  });
+
+  it("throws when hooks token reuses gateway token resolved from env", async () => {
+    await expect(
+      ensureGatewayStartupAuth({
+        cfg: {
+          hooks: {
+            enabled: true,
+            token: "shared-gateway-token-1234567890",
+          },
+        },
+        env: {
+          OPENCLAW_GATEWAY_TOKEN: "shared-gateway-token-1234567890",
+        } as NodeJS.ProcessEnv,
+      }),
+    ).rejects.toThrow(/hooks\.token must not match gateway auth token/i);
   });
 });
 
