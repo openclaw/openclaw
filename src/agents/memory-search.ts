@@ -62,6 +62,8 @@ export type ResolvedMemorySearchConfig = {
       vectorWeight: number;
       textWeight: number;
       candidateMultiplier: number;
+      fusion: "weighted" | "rrf";
+      rrfK: number;
       mmr: {
         enabled: boolean;
         lambda: number;
@@ -92,6 +94,8 @@ const DEFAULT_HYBRID_ENABLED = true;
 const DEFAULT_HYBRID_VECTOR_WEIGHT = 0.7;
 const DEFAULT_HYBRID_TEXT_WEIGHT = 0.3;
 const DEFAULT_HYBRID_CANDIDATE_MULTIPLIER = 4;
+const DEFAULT_HYBRID_FUSION: "weighted" | "rrf" = "weighted";
+const DEFAULT_HYBRID_RRF_K = 60;
 const DEFAULT_MMR_ENABLED = false;
 const DEFAULT_MMR_LAMBDA = 0.7;
 const DEFAULT_TEMPORAL_DECAY_ENABLED = false;
@@ -248,6 +252,14 @@ function mergeConfig(
       overrides?.query?.hybrid?.candidateMultiplier ??
       defaults?.query?.hybrid?.candidateMultiplier ??
       DEFAULT_HYBRID_CANDIDATE_MULTIPLIER,
+    fusion:
+      overrides?.query?.hybrid?.fusion ??
+      defaults?.query?.hybrid?.fusion ??
+      DEFAULT_HYBRID_FUSION,
+    rrfK:
+      overrides?.query?.hybrid?.rrfK ??
+      defaults?.query?.hybrid?.rrfK ??
+      DEFAULT_HYBRID_RRF_K,
     mmr: {
       enabled:
         overrides?.query?.hybrid?.mmr?.enabled ??
@@ -321,6 +333,8 @@ function mergeConfig(
         vectorWeight: normalizedVectorWeight,
         textWeight: normalizedTextWeight,
         candidateMultiplier,
+        fusion: hybrid.fusion,
+        rrfK: Math.max(1, Math.floor(hybrid.rrfK)),
         mmr: {
           enabled: Boolean(hybrid.mmr.enabled),
           lambda: Number.isFinite(hybrid.mmr.lambda)
