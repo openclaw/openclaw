@@ -160,17 +160,26 @@ class KeychainStore implements SecretStore {
 // ---------------------------------------------------------------------------
 // Encrypted file backend (AES-256-GCM)
 //
-// Security note: The encryption key is derived from machine attributes
-// (hostname, username, home directory) + a random salt. This protects secrets
-// against off-machine theft (e.g., stolen backups, cloud sync exposure) but
-// does NOT protect against other local users who know these attributes.
-// For stronger protection on macOS, use the "keychain" backend instead.
+// Key derivation uses a randomly generated master secret stored in the macOS
+// Keychain (protected by the user's login password). On non-macOS platforms,
+// the master secret is stored in a file-system key file with restrictive
+// permissions (0o600). This provides meaningful protection beyond plaintext.
 // ---------------------------------------------------------------------------
+
+const MASTER_KEY_PATH = path.join(ENCRYPTED_FILE_DIR, "vault.key");
+const KEYCHAIN_VAULT_ACCOUNT = "com.openclaw.vault-master-key";
 
 class EncryptedFileStore implements SecretStore {
   readonly backend = "encrypted-file" as const;
   private derivedKey: Buffer | null = null;
 
+  /**
+   * Retrieve or generate a random master secret, then derive the encryption key.
+   *
+   * On macOS the master secret is stored in the Keychain (protected by the
+   * user's login password). On other platforms it falls back to a key file
+   * with 0o600 permissions.
+   */
   private getDerivedKey(): Buffer {
     if (this.derivedKey) {
       return this.derivedKey;
@@ -188,10 +197,62 @@ class EncryptedFileStore implements SecretStore {
       fs.writeFileSync(SALT_PATH, salt, { mode: 0o600 });
     }
 
-    // Derive key from machine fingerprint + salt
-    const fingerprint = `${os.hostname()}:${os.userInfo().username}:${os.homedir()}`;
-    this.derivedKey = crypto.pbkdf2Sync(fingerprint, salt, 100_000, 32, "sha512");
+    const masterSecret = this.getOrCreateMasterSecret();
+    this.derivedKey = crypto.pbkdf2Sync(masterSecret, salt, 100_000, 32, "sha512");
     return this.derivedKey;
+  }
+
+  /**
+   * Get or create a random master secret.
+   * macOS: stored in Keychain. Other platforms: stored in a key file.
+   */
+  private getOrCreateMasterSecret(): string {
+    if (process.platform === "darwin") {
+      return this.getOrCreateKeychainMasterSecret();
+    }
+    return this.getOrCreateFileMasterSecret();
+  }
+
+  private getOrCreateKeychainMasterSecret(): string {
+    // Try to read existing master secret from Keychain
+    try {
+      const result = execFileSync(
+        "security",
+        ["find-generic-password", "-s", KEYCHAIN_VAULT_ACCOUNT, "-a", "master", "-w"],
+        { encoding: "utf-8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"] },
+      );
+      return result.trim();
+    } catch {
+      // Not found — generate and store a new one
+    }
+
+    const secret = crypto.randomBytes(64).toString("base64");
+    try {
+      execFileSync(
+        "security",
+        ["add-generic-password", "-s", KEYCHAIN_VAULT_ACCOUNT, "-a", "master", "-w", secret, "-U"],
+        { timeout: 5000, stdio: ["pipe", "pipe", "pipe"] },
+      );
+    } catch {
+      // If Keychain fails, fall back to file-based storage
+      return this.getOrCreateFileMasterSecret();
+    }
+
+    return secret;
+  }
+
+  private getOrCreateFileMasterSecret(): string {
+    if (fs.existsSync(MASTER_KEY_PATH)) {
+      return fs.readFileSync(MASTER_KEY_PATH, "utf-8").trim();
+    }
+
+    if (!fs.existsSync(ENCRYPTED_FILE_DIR)) {
+      fs.mkdirSync(ENCRYPTED_FILE_DIR, { recursive: true, mode: 0o700 });
+    }
+
+    const secret = crypto.randomBytes(64).toString("base64");
+    fs.writeFileSync(MASTER_KEY_PATH, secret, { mode: 0o600 });
+    return secret;
   }
 
   private readVault(): Record<string, string> {
