@@ -1,23 +1,26 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  buildWebchatUrl,
   normalizeGatewayTokenInput,
   openUrl,
   resolveBrowserOpenCommand,
   resolveControlUiLinks,
-  resolveLocalBrowserControlUiLinks,
   validateGatewayPasswordInput,
 } from "./onboard-helpers.js";
 
 const mocks = vi.hoisted(() => ({
-  runCommandWithTimeout: vi.fn(async () => ({
+  runCommandWithTimeout: vi.fn<
+    (
+      argv: string[],
+      options?: { timeoutMs?: number; windowsVerbatimArguments?: boolean },
+    ) => Promise<{ stdout: string; stderr: string; code: number; signal: null; killed: boolean }>
+  >(async () => ({
     stdout: "",
     stderr: "",
     code: 0,
     signal: null,
     killed: false,
   })),
-  pickPrimaryTailnetIPv4: vi.fn(() => undefined),
+  pickPrimaryTailnetIPv4: vi.fn<() => string | undefined>(() => undefined),
 }));
 
 vi.mock("../process/exec.js", () => ({
@@ -109,35 +112,6 @@ describe("resolveControlUiLinks", () => {
     expect(links.httpUrl).toBe("http://127.0.0.1:18789/");
     expect(links.wsUrl).toBe("ws://127.0.0.1:18789");
   });
-
-  it("coerces lan bind to loopback for local browser links", () => {
-    const links = resolveLocalBrowserControlUiLinks({
-      port: 18789,
-      bind: "lan",
-    });
-    expect(links.httpUrl).toBe("http://127.0.0.1:18789/");
-    expect(links.wsUrl).toBe("ws://127.0.0.1:18789");
-  });
-});
-
-describe("buildWebchatUrl", () => {
-  it("encodes canonical session key exactly once", () => {
-    const url = buildWebchatUrl({
-      httpUrl: "http://127.0.0.1:18789/",
-      sessionKey: "agent:main:main",
-    });
-    expect(url).toBe("http://127.0.0.1:18789/chat?session=agent%3Amain%3Amain");
-  });
-
-  it("preserves base path and appends token in fragment", () => {
-    const url = buildWebchatUrl({
-      httpUrl: "http://127.0.0.1:18789/ui/",
-      sessionKey: "agent:main:main",
-      token: "abc 123",
-    });
-    expect(url).toBe("http://127.0.0.1:18789/ui/chat?session=agent%3Amain%3Amain#token=abc%20123");
-    expect(url).not.toContain("%2520");
-  });
 });
 
 describe("normalizeGatewayTokenInput", () => {
@@ -154,11 +128,8 @@ describe("normalizeGatewayTokenInput", () => {
     expect(normalizeGatewayTokenInput(123)).toBe("");
   });
 
-  it('rejects the literal string "undefined"', () => {
+  it('rejects literal string coercion artifacts ("undefined"/"null")', () => {
     expect(normalizeGatewayTokenInput("undefined")).toBe("");
-  });
-
-  it('rejects the literal string "null"', () => {
     expect(normalizeGatewayTokenInput("null")).toBe("");
   });
 });

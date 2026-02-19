@@ -1,14 +1,14 @@
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
 import { describe, expect, it, vi } from "vitest";
 import type { MessagingToolSend } from "./pi-embedded-messaging.js";
-import type {
-  ToolCallSummary,
-  ToolHandlerContext,
-} from "./pi-embedded-subscribe.handlers.types.js";
 import {
   handleToolExecutionEnd,
   handleToolExecutionStart,
 } from "./pi-embedded-subscribe.handlers.tools.js";
+import type {
+  ToolCallSummary,
+  ToolHandlerContext,
+} from "./pi-embedded-subscribe.handlers.types.js";
 
 type ToolExecutionStartEvent = Extract<AgentEvent, { type: "tool_execution_start" }>;
 type ToolExecutionEndEvent = Extract<AgentEvent, { type: "tool_execution_end" }>;
@@ -39,7 +39,7 @@ function createTestContext(): {
       toolSummaryById: new Set<string>(),
       pendingMessagingTargets: new Map<string, MessagingToolSend>(),
       pendingMessagingTexts: new Map<string, string>(),
-      pendingMessagingMediaUrls: new Map<string, string>(),
+      pendingMessagingMediaUrls: new Map<string, string[]>(),
       messagingToolSentTexts: [],
       messagingToolSentTextsNormalized: [],
       messagingToolSentMediaUrls: [],
@@ -145,19 +145,19 @@ describe("handleToolExecutionEnd cron.add commitment tracking", () => {
 });
 
 describe("messaging tool media URL tracking", () => {
-  it("tracks mediaUrl arg from messaging tool as pending", async () => {
+  it("tracks media arg from messaging tool as pending", async () => {
     const { ctx } = createTestContext();
 
     const evt: ToolExecutionStartEvent = {
       type: "tool_execution_start",
       toolName: "message",
       toolCallId: "tool-m1",
-      args: { action: "send", to: "channel:123", content: "hi", mediaUrl: "file:///img.jpg" },
+      args: { action: "send", to: "channel:123", content: "hi", media: "file:///img.jpg" },
     };
 
     await handleToolExecutionStart(ctx, evt);
 
-    expect(ctx.state.pendingMessagingMediaUrls.get("tool-m1")).toBe("file:///img.jpg");
+    expect(ctx.state.pendingMessagingMediaUrls.get("tool-m1")).toEqual(["file:///img.jpg"]);
   });
 
   it("commits pending media URL on tool success", async () => {
@@ -168,7 +168,7 @@ describe("messaging tool media URL tracking", () => {
       type: "tool_execution_start",
       toolName: "message",
       toolCallId: "tool-m2",
-      args: { action: "send", to: "channel:123", content: "hi", mediaUrl: "file:///img.jpg" },
+      args: { action: "send", to: "channel:123", content: "hi", media: "file:///img.jpg" },
     };
 
     await handleToolExecutionStart(ctx, startEvt);
@@ -186,6 +186,41 @@ describe("messaging tool media URL tracking", () => {
 
     expect(ctx.state.messagingToolSentMediaUrls).toContain("file:///img.jpg");
     expect(ctx.state.pendingMessagingMediaUrls.has("tool-m2")).toBe(false);
+  });
+
+  it("commits mediaUrls from tool result payload", async () => {
+    const { ctx } = createTestContext();
+
+    const startEvt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-m2b",
+      args: { action: "send", to: "channel:123", content: "hi" },
+    };
+    await handleToolExecutionStart(ctx, startEvt);
+
+    const endEvt: ToolExecutionEndEvent = {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-m2b",
+      isError: false,
+      result: {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              mediaUrls: ["file:///img-a.jpg", "file:///img-b.jpg"],
+            }),
+          },
+        ],
+      },
+    };
+    await handleToolExecutionEnd(ctx, endEvt);
+
+    expect(ctx.state.messagingToolSentMediaUrls).toEqual([
+      "file:///img-a.jpg",
+      "file:///img-b.jpg",
+    ]);
   });
 
   it("trims messagingToolSentMediaUrls to 200 on commit (FIFO)", async () => {
@@ -220,7 +255,7 @@ describe("messaging tool media URL tracking", () => {
       type: "tool_execution_start",
       toolName: "message",
       toolCallId: "tool-cap",
-      args: { action: "send", to: "channel:123", content: "hi", mediaUrl: "file:///img-new.jpg" },
+      args: { action: "send", to: "channel:123", content: "hi", media: "file:///img-new.jpg" },
     };
     await handleToolExecutionStart(ctx, startEvt);
 
@@ -247,7 +282,7 @@ describe("messaging tool media URL tracking", () => {
       type: "tool_execution_start",
       toolName: "message",
       toolCallId: "tool-m3",
-      args: { action: "send", to: "channel:123", content: "hi", mediaUrl: "file:///img.jpg" },
+      args: { action: "send", to: "channel:123", content: "hi", media: "file:///img.jpg" },
     };
 
     await handleToolExecutionStart(ctx, startEvt);

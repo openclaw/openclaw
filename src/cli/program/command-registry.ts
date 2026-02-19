@@ -1,7 +1,7 @@
 import type { Command } from "commander";
-import type { ProgramContext } from "./context.js";
 import { getPrimaryCommand, hasHelpOrVersion } from "../argv.js";
 import { reparseProgramFromActionArgs } from "./action-reparse.js";
+import type { ProgramContext } from "./context.js";
 import { registerSubCliCommands } from "./register.subclis.js";
 
 type CommandRegisterParams = {
@@ -237,6 +237,17 @@ function removeCommand(program: Command, command: Command) {
   }
 }
 
+function removeEntryCommands(program: Command, entry: CoreCliEntry) {
+  // Some registrars install multiple top-level commands (e.g. status/health/sessions).
+  // Remove placeholders/old registrations for all names in the entry before re-registering.
+  for (const cmd of entry.commands) {
+    const existing = program.commands.find((c) => c.name() === cmd.name);
+    if (existing) {
+      removeCommand(program, existing);
+    }
+  }
+}
+
 function registerLazyCoreCommand(
   program: Command,
   ctx: ProgramContext,
@@ -247,14 +258,7 @@ function registerLazyCoreCommand(
   placeholder.allowUnknownOption(true);
   placeholder.allowExcessArguments(true);
   placeholder.action(async (...actionArgs) => {
-    // Some registrars install multiple top-level commands (e.g. status/health/sessions).
-    // Remove placeholders/old registrations for all names in the entry before re-registering.
-    for (const cmd of entry.commands) {
-      const existing = program.commands.find((c) => c.name() === cmd.name);
-      if (existing) {
-        removeCommand(program, existing);
-      }
-    }
+    removeEntryCommands(program, entry);
     await entry.register({ program, ctx, argv: process.argv });
     await reparseProgramFromActionArgs(program, actionArgs);
   });
@@ -273,14 +277,7 @@ export async function registerCoreCliByName(
     return false;
   }
 
-  // Some registrars install multiple top-level commands (e.g. status/health/sessions).
-  // Remove placeholders/old registrations for all names in the entry before re-registering.
-  for (const cmd of entry.commands) {
-    const existing = program.commands.find((c) => c.name() === cmd.name);
-    if (existing) {
-      removeCommand(program, existing);
-    }
-  }
+  removeEntryCommands(program, entry);
   await entry.register({ program, ctx, argv });
   return true;
 }

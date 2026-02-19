@@ -1,21 +1,12 @@
 import type { OpenClawConfig } from "../../config/config.js";
-import type { AuthProfileStore } from "./types.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
 import { dedupeProfileIds, listProfilesForProvider } from "./profiles.js";
-import { clearExpiredCooldowns, isProfileInCooldown } from "./usage.js";
-
-function resolveProfileUnusableUntil(stats: {
-  cooldownUntil?: number;
-  disabledUntil?: number;
-}): number | null {
-  const values = [stats.cooldownUntil, stats.disabledUntil]
-    .filter((value): value is number => typeof value === "number")
-    .filter((value) => Number.isFinite(value) && value > 0);
-  if (values.length === 0) {
-    return null;
-  }
-  return Math.max(...values);
-}
+import type { AuthProfileStore } from "./types.js";
+import {
+  clearExpiredCooldowns,
+  isProfileInCooldown,
+  resolveProfileUnusableUntil,
+} from "./usage.js";
 
 export function resolveAuthProfileOrder(params: {
   cfg?: OpenClawConfig;

@@ -1,26 +1,18 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { CliDeps } from "../cli/deps.js";
-import type { CronJob } from "./types.js";
-import { makeCfg, makeJob, withTempCronHome } from "./isolated-agent.test-harness.js";
-
-vi.mock("../agents/pi-embedded.js", () => ({
-  abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
-  runEmbeddedPiAgent: vi.fn(),
-  resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
-}));
-vi.mock("../agents/model-catalog.js", () => ({
-  loadModelCatalog: vi.fn(),
-}));
-
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
+import type { CliDeps } from "../cli/deps.js";
+import "./isolated-agent.mocks.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
+import { makeCfg, makeJob, withTempCronHome } from "./isolated-agent.test-harness.js";
+import type { CronJob } from "./types.js";
 const withTempHome = withTempCronHome;
 
 function makeDeps(): CliDeps {
   return {
+    sendMessageSlack: vi.fn(),
     sendMessageWhatsApp: vi.fn(),
     sendMessageTelegram: vi.fn(),
     sendMessageDiscord: vi.fn(),
@@ -383,7 +375,7 @@ describe("runCronIsolatedAgentTurn", () => {
         cfgOverrides: {
           agents: {
             defaults: {
-              model: "anthropic/claude-opus-4-5",
+              model: { primary: "anthropic/claude-opus-4-5" },
               models: {
                 "anthropic/claude-opus-4-5": { alias: "Opus" },
               },

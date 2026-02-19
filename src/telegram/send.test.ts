@@ -12,12 +12,33 @@ installTelegramSendTestHooks();
 const { botApi, botCtorSpy, loadConfig, loadWebMedia } = getTelegramSendTestMocks();
 const {
   buildInlineKeyboard,
+  createForumTopicTelegram,
   editMessageTelegram,
   reactMessageTelegram,
   sendMessageTelegram,
   sendPollTelegram,
   sendStickerTelegram,
 } = await importTelegramSendModule();
+
+async function expectChatNotFoundWithChatId(
+  action: Promise<unknown>,
+  expectedChatId: string,
+): Promise<void> {
+  try {
+    await action;
+    throw new Error("Expected action to reject with chat-not-found context");
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message === "Expected action to reject with chat-not-found context"
+    ) {
+      throw error;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    expect(message).toMatch(/chat not found/i);
+    expect(message).toMatch(new RegExp(`chat_id=${expectedChatId}`));
+  }
+}
 
 describe("sent-message-cache", () => {
   afterEach(() => {
@@ -284,11 +305,9 @@ describe("sendMessageTelegram", () => {
       sendMessage: typeof sendMessage;
     };
 
-    await expect(sendMessageTelegram(chatId, "hi", { token: "tok", api })).rejects.toThrow(
-      /chat not found/i,
-    );
-    await expect(sendMessageTelegram(chatId, "hi", { token: "tok", api })).rejects.toThrow(
-      /chat_id=123/,
+    await expectChatNotFoundWithChatId(
+      sendMessageTelegram(chatId, "hi", { token: "tok", api }),
+      chatId,
     );
   });
 
@@ -850,8 +869,7 @@ describe("sendMessageTelegram", () => {
     });
   });
 
-  it("suppresses message_thread_id for private chat sends (#17242)", async () => {
-    // Private chats have positive numeric IDs; they never support forum topics.
+  it("keeps message_thread_id for private chat topic sends (#18974)", async () => {
     const chatId = "123456789";
     const sendMessage = vi.fn().mockResolvedValue({
       message_id: 56,
@@ -867,10 +885,9 @@ describe("sendMessageTelegram", () => {
       messageThreadId: 271,
     });
 
-    // message_thread_id must NOT appear in private chats -- Telegram rejects it
-    // with "400: Bad Request: message thread not found".
     expect(sendMessage).toHaveBeenCalledWith(chatId, "hello private", {
       parse_mode: "HTML",
+      message_thread_id: 271,
     });
   });
 
@@ -927,6 +944,36 @@ describe("sendMessageTelegram", () => {
     expect(res.messageId).toBe("58");
   });
 
+  it("retries private chat sends without message_thread_id on thread-not-found", async () => {
+    const chatId = "123456789";
+    const threadErr = new Error("400: Bad Request: message thread not found");
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(threadErr)
+      .mockResolvedValueOnce({
+        message_id: 59,
+        chat: { id: chatId },
+      });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    const res = await sendMessageTelegram(chatId, "hello private", {
+      token: "tok",
+      api,
+      messageThreadId: 271,
+    });
+
+    expect(sendMessage).toHaveBeenNthCalledWith(1, chatId, "hello private", {
+      parse_mode: "HTML",
+      message_thread_id: 271,
+    });
+    expect(sendMessage).toHaveBeenNthCalledWith(2, chatId, "hello private", {
+      parse_mode: "HTML",
+    });
+    expect(res.messageId).toBe("59");
+  });
+
   it("does not retry thread-not-found when no message_thread_id was provided", async () => {
     const chatId = "123";
     const threadErr = new Error("400: Bad Request: message thread not found");
@@ -942,6 +989,29 @@ describe("sendMessageTelegram", () => {
       }),
     ).rejects.toThrow("message thread not found");
     expect(sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry without message_thread_id on chat-not-found", async () => {
+    const chatId = "123456789";
+    const chatErr = new Error("400: Bad Request: chat not found");
+    const sendMessage = vi.fn().mockRejectedValueOnce(chatErr);
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    await expect(
+      sendMessageTelegram(chatId, "hello private", {
+        token: "tok",
+        api,
+        messageThreadId: 271,
+      }),
+    ).rejects.toThrow(/chat not found/i);
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledWith(chatId, "hello private", {
+      parse_mode: "HTML",
+      message_thread_id: 271,
+    });
   });
 
   it("sets disable_notification when silent is true", async () => {
@@ -1050,47 +1120,44 @@ describe("sendMessageTelegram", () => {
 });
 
 describe("reactMessageTelegram", () => {
-  it("sends emoji reactions", async () => {
-    const setMessageReaction = vi.fn().mockResolvedValue(undefined);
-    const api = { setMessageReaction } as unknown as {
-      setMessageReaction: typeof setMessageReaction;
-    };
-
-    await reactMessageTelegram("telegram:123", "456", "✅", {
-      token: "tok",
-      api,
-    });
-
-    expect(setMessageReaction).toHaveBeenCalledWith("123", 456, [{ type: "emoji", emoji: "✅" }]);
-  });
-
-  it("removes reactions when emoji is empty", async () => {
-    const setMessageReaction = vi.fn().mockResolvedValue(undefined);
-    const api = { setMessageReaction } as unknown as {
-      setMessageReaction: typeof setMessageReaction;
-    };
-
-    await reactMessageTelegram("123", 456, "", {
-      token: "tok",
-      api,
-    });
-
-    expect(setMessageReaction).toHaveBeenCalledWith("123", 456, []);
-  });
-
-  it("removes reactions when remove flag is set", async () => {
-    const setMessageReaction = vi.fn().mockResolvedValue(undefined);
-    const api = { setMessageReaction } as unknown as {
-      setMessageReaction: typeof setMessageReaction;
-    };
-
-    await reactMessageTelegram("123", 456, "✅", {
-      token: "tok",
-      api,
+  it.each([
+    {
+      testName: "sends emoji reactions",
+      target: "telegram:123",
+      messageId: "456",
+      emoji: "✅",
+      remove: false,
+      expected: [{ type: "emoji", emoji: "✅" }],
+    },
+    {
+      testName: "removes reactions when emoji is empty",
+      target: "123",
+      messageId: 456,
+      emoji: "",
+      remove: false,
+      expected: [],
+    },
+    {
+      testName: "removes reactions when remove flag is set",
+      target: "123",
+      messageId: 456,
+      emoji: "✅",
       remove: true,
+      expected: [],
+    },
+  ] as const)("$testName", async (testCase) => {
+    const setMessageReaction = vi.fn().mockResolvedValue(undefined);
+    const api = { setMessageReaction } as unknown as {
+      setMessageReaction: typeof setMessageReaction;
+    };
+
+    await reactMessageTelegram(testCase.target, testCase.messageId, testCase.emoji, {
+      token: "tok",
+      api,
+      ...(testCase.remove ? { remove: true } : {}),
     });
 
-    expect(setMessageReaction).toHaveBeenCalledWith("123", 456, []);
+    expect(setMessageReaction).toHaveBeenCalledWith("123", 456, testCase.expected);
   });
 });
 
@@ -1187,11 +1254,9 @@ describe("sendStickerTelegram", () => {
       sendSticker: typeof sendSticker;
     };
 
-    await expect(sendStickerTelegram(chatId, "fileId123", { token: "tok", api })).rejects.toThrow(
-      /chat not found/i,
-    );
-    await expect(sendStickerTelegram(chatId, "fileId123", { token: "tok", api })).rejects.toThrow(
-      /chat_id=123/,
+    await expectChatNotFoundWithChatId(
+      sendStickerTelegram(chatId, "fileId123", { token: "tok", api }),
+      chatId,
     );
   });
 
@@ -1334,40 +1399,11 @@ describe("sendPollTelegram", () => {
 
     expect(res).toEqual({ messageId: "123", chatId: "555", pollId: "p1" });
     expect(api.sendPoll).toHaveBeenCalledTimes(1);
-    expect(api.sendPoll.mock.calls[0]?.[0]).toBe("123");
-    expect(api.sendPoll.mock.calls[0]?.[1]).toBe("Q");
-    expect(api.sendPoll.mock.calls[0]?.[2]).toEqual(["A", "B"]);
-    expect(api.sendPoll.mock.calls[0]?.[3]).toMatchObject({ open_period: 60 });
-  });
-
-  it("defaults polls to public (is_anonymous=false)", async () => {
-    const api = {
-      sendPoll: vi.fn(async () => ({ message_id: 123, chat: { id: 555 }, poll: { id: "p1" } })),
-    };
-
-    await sendPollTelegram(
-      "123",
-      { question: "Q", options: ["A", "B"] },
-      { token: "t", api: api as unknown as Bot["api"] },
-    );
-
-    expect(api.sendPoll).toHaveBeenCalledTimes(1);
-    expect(api.sendPoll.mock.calls[0]?.[3]).toMatchObject({ is_anonymous: false });
-  });
-
-  it("supports explicit anonymous polls", async () => {
-    const api = {
-      sendPoll: vi.fn(async () => ({ message_id: 123, chat: { id: 555 }, poll: { id: "p1" } })),
-    };
-
-    await sendPollTelegram(
-      "123",
-      { question: "Q", options: ["A", "B"] },
-      { token: "t", api: api as unknown as Bot["api"], isAnonymous: true },
-    );
-
-    expect(api.sendPoll).toHaveBeenCalledTimes(1);
-    expect(api.sendPoll.mock.calls[0]?.[3]).toMatchObject({ is_anonymous: true });
+    const sendPollMock = api.sendPoll as ReturnType<typeof vi.fn>;
+    expect(sendPollMock.mock.calls[0]?.[0]).toBe("123");
+    expect(sendPollMock.mock.calls[0]?.[1]).toBe("Q");
+    expect(sendPollMock.mock.calls[0]?.[2]).toEqual(["A", "B"]);
+    expect(sendPollMock.mock.calls[0]?.[3]).toMatchObject({ open_period: 60 });
   });
 
   it("retries without message_thread_id on thread-not-found", async () => {
@@ -1410,5 +1446,47 @@ describe("sendPollTelegram", () => {
     ).rejects.toThrow(/durationHours is not supported/i);
 
     expect(api.sendPoll).not.toHaveBeenCalled();
+  });
+});
+
+describe("createForumTopicTelegram", () => {
+  it("uses base chat id when target includes topic suffix", async () => {
+    const createForumTopic = vi.fn().mockResolvedValue({
+      message_thread_id: 272,
+      name: "Build Updates",
+    });
+    const api = { createForumTopic } as unknown as Bot["api"];
+
+    const result = await createForumTopicTelegram("telegram:group:-1001234567890:topic:271", "x", {
+      token: "tok",
+      api,
+    });
+
+    expect(createForumTopic).toHaveBeenCalledWith("-1001234567890", "x", undefined);
+    expect(result).toEqual({
+      topicId: 272,
+      name: "Build Updates",
+      chatId: "-1001234567890",
+    });
+  });
+
+  it("forwards optional icon fields", async () => {
+    const createForumTopic = vi.fn().mockResolvedValue({
+      message_thread_id: 300,
+      name: "Roadmap",
+    });
+    const api = { createForumTopic } as unknown as Bot["api"];
+
+    await createForumTopicTelegram("-1001234567890", "Roadmap", {
+      token: "tok",
+      api,
+      iconColor: 0x6fb9f0,
+      iconCustomEmojiId: "  1234567890  ",
+    });
+
+    expect(createForumTopic).toHaveBeenCalledWith("-1001234567890", "Roadmap", {
+      icon_color: 0x6fb9f0,
+      icon_custom_emoji_id: "1234567890",
+    });
   });
 });

@@ -10,6 +10,7 @@ import {
   isFailoverErrorMessage,
   isImageDimensionErrorMessage,
   isLikelyContextOverflowError,
+  isTimeoutErrorMessage,
   isTransientHttpError,
   parseImageDimensionError,
   parseImageSizeError,
@@ -180,19 +181,10 @@ describe("isContextOverflowError", () => {
     }
   });
 
-  it("matches Anthropic 'Request size exceeds model context window' error", () => {
-    // Anthropic returns this error format when the prompt exceeds the context window.
-    // Without this fix, auto-compaction is NOT triggered because neither
-    // isContextOverflowError nor pi-ai's isContextOverflow recognizes this pattern.
-    // The user sees: "LLM request rejected: Request size exceeds model context window"
-    // instead of automatic compaction + retry.
-    const anthropicRawError =
-      '{"type":"error","error":{"type":"invalid_request_error","message":"Request size exceeds model context window"}}';
-    expect(isContextOverflowError(anthropicRawError)).toBe(true);
-  });
-
   it("matches 'exceeds model context window' in various formats", () => {
     const samples = [
+      // Anthropic returns this JSON payload when prompt exceeds model context window.
+      '{"type":"error","error":{"type":"invalid_request_error","message":"Request size exceeds model context window"}}',
       "Request size exceeds model context window",
       "request size exceeds model context window",
       '400 {"type":"error","error":{"type":"invalid_request_error","message":"Request size exceeds model context window"}}',
@@ -283,6 +275,15 @@ describe("isFailoverErrorMessage", () => {
       "invalid request format",
     ];
     for (const sample of samples) {
+      expect(isFailoverErrorMessage(sample)).toBe(true);
+    }
+  });
+
+  it("matches abort stop-reason timeout variants", () => {
+    const samples = ["Unhandled stop reason: abort", "stop reason: abort", "reason: abort"];
+    for (const sample of samples) {
+      expect(isTimeoutErrorMessage(sample)).toBe(true);
+      expect(classifyFailoverReason(sample)).toBe("timeout");
       expect(isFailoverErrorMessage(sample)).toBe(true);
     }
   });

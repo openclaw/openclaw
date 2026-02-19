@@ -23,6 +23,19 @@ async function runDoctorConfigWithInput(params: {
   });
 }
 
+function expectGoogleChatDmAllowFromRepaired(cfg: unknown) {
+  const typed = cfg as {
+    channels: {
+      googlechat: {
+        dm: { allowFrom: string[] };
+        allowFrom?: string[];
+      };
+    };
+  };
+  expect(typed.channels.googlechat.dm.allowFrom).toEqual(["*"]);
+  expect(typed.channels.googlechat.allowFrom).toBeUndefined();
+}
+
 describe("doctor config flow", () => {
   it("preserves invalid config for doctor repairs", async () => {
     const result = await runDoctorConfigWithInput({
@@ -345,5 +358,78 @@ describe("doctor config flow", () => {
       };
     };
     expect(cfg.channels.discord.accounts.work.allowFrom).toEqual(["*"]);
+  });
+
+  it("repairs googlechat dm.policy open by setting dm.allowFrom on repair", async () => {
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        channels: {
+          googlechat: {
+            dm: {
+              policy: "open",
+            },
+          },
+        },
+      },
+    });
+
+    expectGoogleChatDmAllowFromRepaired(result.cfg);
+  });
+
+  it("repairs googlechat account dm.policy open by setting dm.allowFrom on repair", async () => {
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        channels: {
+          googlechat: {
+            accounts: {
+              work: {
+                dm: {
+                  policy: "open",
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const cfg = result.cfg as unknown as {
+      channels: {
+        googlechat: {
+          accounts: {
+            work: {
+              dm: {
+                policy: string;
+                allowFrom: string[];
+              };
+              allowFrom?: string[];
+            };
+          };
+        };
+      };
+    };
+
+    expect(cfg.channels.googlechat.accounts.work.dm.allowFrom).toEqual(["*"]);
+    expect(cfg.channels.googlechat.accounts.work.allowFrom).toBeUndefined();
+  });
+
+  it("recovers from stale googlechat top-level allowFrom by repairing dm.allowFrom", async () => {
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        channels: {
+          googlechat: {
+            allowFrom: ["*"],
+            dm: {
+              policy: "open",
+            },
+          },
+        },
+      },
+    });
+
+    expectGoogleChatDmAllowFromRepaired(result.cfg);
   });
 });

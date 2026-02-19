@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, vi } from "vitest";
+import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
-import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 
 export async function withModelsTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   return withTempHomeBase(fn, { prefix: "openclaw-models-" });
@@ -69,6 +69,17 @@ export function mockCopilotTokenExchangeSuccess(): MockFn {
   });
   globalThis.fetch = fetchMock as unknown as typeof fetch;
   return fetchMock;
+}
+
+export async function withCopilotGithubToken<T>(
+  token: string,
+  fn: (fetchMock: MockFn) => Promise<T>,
+): Promise<T> {
+  return withTempEnv(["COPILOT_GITHUB_TOKEN"], async () => {
+    process.env.COPILOT_GITHUB_TOKEN = token;
+    const fetchMock = mockCopilotTokenExchangeSuccess();
+    return fn(fetchMock);
+  });
 }
 
 export const MODELS_CONFIG_IMPLICIT_ENV_VARS = [

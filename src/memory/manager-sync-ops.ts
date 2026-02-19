@@ -1,36 +1,44 @@
-// @ts-nocheck
-// oxlint-disable eslint/no-unused-vars, typescript/no-explicit-any
-import type { DatabaseSync } from "node:sqlite";
-import chokidar, { type FSWatcher } from "chokidar";
 import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { MemorySource, MemorySyncProgressUpdate } from "./types.js";
+import type { DatabaseSync } from "node:sqlite";
+import chokidar, { FSWatcher } from "chokidar";
+import { resolveAgentDir } from "../agents/agent-scope.js";
+import { ResolvedMemorySearchConfig } from "../agents/memory-search.js";
+import { type OpenClawConfig } from "../config/config.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { resolveUserPath } from "../utils.js";
+import { DEFAULT_GEMINI_EMBEDDING_MODEL } from "./embeddings-gemini.js";
+import { DEFAULT_OPENAI_EMBEDDING_MODEL } from "./embeddings-openai.js";
+import { DEFAULT_VOYAGE_EMBEDDING_MODEL } from "./embeddings-voyage.js";
+import {
+  createEmbeddingProvider,
+  type EmbeddingProvider,
+  type GeminiEmbeddingClient,
+  type OpenAiEmbeddingClient,
+  type VoyageEmbeddingClient,
+} from "./embeddings.js";
 import {
   buildFileEntry,
   ensureDir,
-  isMemoryPath,
   listMemoryFiles,
   normalizeExtraMemoryPaths,
-  parseEmbedding,
-  remapChunkLines,
   runWithConcurrency,
-  type MemoryFileEntry,
 } from "./internal.js";
+import { type MemoryFileEntry } from "./internal.js";
 import { ensureMemoryIndexSchema } from "./memory-schema.js";
+import type { SessionFileEntry } from "./session-files.js";
 import {
   buildSessionEntry,
   listSessionFilesForAgent,
   sessionPathForFile,
-  type SessionFileEntry,
 } from "./session-files.js";
 import { loadSqliteVecExtension } from "./sqlite-vec.js";
 import { requireNodeSqlite } from "./sqlite.js";
+import type { MemorySource, MemorySyncProgressUpdate } from "./types.js";
 
 type MemoryIndexMeta = {
   model: string;
@@ -73,9 +81,75 @@ function shouldIgnoreMemoryWatchPath(watchPath: string): boolean {
   return parts.some((segment) => IGNORED_MEMORY_WATCH_DIR_NAMES.has(segment));
 }
 
-class MemoryManagerSyncOps {
-  [key: string]: any;
-  private async ensureVectorReady(dimensions?: number): Promise<boolean> {
+export abstract class MemoryManagerSyncOps {
+  protected abstract readonly cfg: OpenClawConfig;
+  protected abstract readonly agentId: string;
+  protected abstract readonly workspaceDir: string;
+  protected abstract readonly settings: ResolvedMemorySearchConfig;
+  protected provider: EmbeddingProvider | null = null;
+  protected fallbackFrom?: "openai" | "local" | "gemini" | "voyage";
+  protected openAi?: OpenAiEmbeddingClient;
+  protected gemini?: GeminiEmbeddingClient;
+  protected voyage?: VoyageEmbeddingClient;
+  protected abstract batch: {
+    enabled: boolean;
+    wait: boolean;
+    concurrency: number;
+    pollIntervalMs: number;
+    timeoutMs: number;
+  };
+  protected readonly sources: Set<MemorySource> = new Set();
+  protected providerKey: string | null = null;
+  protected abstract readonly vector: {
+    enabled: boolean;
+    available: boolean | null;
+    extensionPath?: string;
+    loadError?: string;
+    dims?: number;
+  };
+  protected readonly fts: {
+    enabled: boolean;
+    available: boolean;
+    loadError?: string;
+  } = { enabled: false, available: false };
+  protected vectorReady: Promise<boolean> | null = null;
+  protected watcher: FSWatcher | null = null;
+  protected watchTimer: NodeJS.Timeout | null = null;
+  protected sessionWatchTimer: NodeJS.Timeout | null = null;
+  protected sessionUnsubscribe: (() => void) | null = null;
+  protected fallbackReason?: string;
+  protected intervalTimer: NodeJS.Timeout | null = null;
+  protected closed = false;
+  protected dirty = false;
+  protected sessionsDirty = false;
+  protected sessionsDirtyFiles = new Set<string>();
+  protected sessionPendingFiles = new Set<string>();
+  protected sessionDeltas = new Map<
+    string,
+    { lastSize: number; pendingBytes: number; pendingMessages: number }
+  >();
+
+  protected abstract readonly cache: { enabled: boolean; maxEntries?: number };
+  protected abstract db: DatabaseSync;
+  protected abstract computeProviderKey(): string;
+  protected abstract sync(params?: {
+    reason?: string;
+    force?: boolean;
+    progress?: (update: MemorySyncProgressUpdate) => void;
+  }): Promise<void>;
+  protected abstract withTimeout<T>(
+    promise: Promise<T>,
+    timeoutMs: number,
+    message: string,
+  ): Promise<T>;
+  protected abstract getIndexConcurrency(): number;
+  protected abstract pruneEmbeddingCacheIfNeeded(): void;
+  protected abstract indexFile(
+    entry: MemoryFileEntry | SessionFileEntry,
+    options: { source: MemorySource; content?: string },
+  ): Promise<void>;
+
+  protected async ensureVectorReady(dimensions?: number): Promise<boolean> {
     if (!this.vector.enabled) {
       return false;
     }
@@ -88,7 +162,7 @@ class MemoryManagerSyncOps {
     }
     let ready = false;
     try {
-      ready = await this.vectorReady;
+      ready = (await this.vectorReady) || false;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.vector.available = false;
@@ -156,7 +230,7 @@ class MemoryManagerSyncOps {
     }
   }
 
-  private buildSourceFilter(alias?: string): { sql: string; params: MemorySource[] } {
+  protected buildSourceFilter(alias?: string): { sql: string; params: MemorySource[] } {
     const sources = Array.from(this.sources);
     if (sources.length === 0) {
       return { sql: "", params: [] };
@@ -166,7 +240,7 @@ class MemoryManagerSyncOps {
     return { sql: ` AND ${column} IN (${placeholders})`, params: sources };
   }
 
-  private openDatabase(): DatabaseSync {
+  protected openDatabase(): DatabaseSync {
     const dbPath = resolveUserPath(this.settings.store.path);
     return this.openDatabaseAtPath(dbPath);
   }
@@ -260,7 +334,7 @@ class MemoryManagerSyncOps {
     await Promise.all(suffixes.map((suffix) => fs.rm(`${basePath}${suffix}`, { force: true })));
   }
 
-  private ensureSchema() {
+  protected ensureSchema() {
     const result = ensureMemoryIndexSchema({
       db: this.db,
       embeddingCacheTable: EMBEDDING_CACHE_TABLE,
@@ -274,7 +348,7 @@ class MemoryManagerSyncOps {
     }
   }
 
-  private ensureWatcher() {
+  protected ensureWatcher() {
     if (!this.sources.has("memory") || !this.settings.sync.watch || this.watcher) {
       return;
     }
@@ -318,7 +392,7 @@ class MemoryManagerSyncOps {
     this.watcher.on("unlink", markDirty);
   }
 
-  private ensureSessionListener() {
+  protected ensureSessionListener() {
     if (!this.sources.has("sessions") || this.sessionUnsubscribe) {
       return;
     }
@@ -492,7 +566,7 @@ class MemoryManagerSyncOps {
     return resolvedFile.startsWith(`${resolvedDir}${path.sep}`);
   }
 
-  private ensureIntervalSync() {
+  protected ensureIntervalSync() {
     const minutes = this.settings.sync.intervalMinutes;
     if (!minutes || minutes <= 0 || this.intervalTimer) {
       return;
@@ -753,7 +827,7 @@ class MemoryManagerSyncOps {
     return state;
   }
 
-  private async runSync(params?: {
+  protected async runSync(params?: {
     reason?: string;
     force?: boolean;
     progress?: (update: MemorySyncProgressUpdate) => void;
@@ -836,7 +910,7 @@ class MemoryManagerSyncOps {
     return /embedding|embeddings|batch/i.test(message);
   }
 
-  private resolveBatchConfig(): {
+  protected resolveBatchConfig(): {
     enabled: boolean;
     wait: boolean;
     concurrency: number;
@@ -972,16 +1046,20 @@ class MemoryManagerSyncOps {
       nextMeta = {
         model: this.provider?.model ?? "fts-only",
         provider: this.provider?.id ?? "none",
-        providerKey: this.providerKey,
+        providerKey: this.providerKey!,
         chunkTokens: this.settings.chunking.tokens,
         chunkOverlap: this.settings.chunking.overlap,
       };
+      if (!nextMeta) {
+        throw new Error("Failed to compute memory index metadata for reindexing.");
+      }
+
       if (this.vector.available && this.vector.dims) {
         nextMeta.vectorDims = this.vector.dims;
       }
 
       this.writeMeta(nextMeta);
-      this.pruneEmbeddingCacheIfNeeded();
+      this.pruneEmbeddingCacheIfNeeded?.();
 
       this.db.close();
       originalDb.close();
@@ -994,7 +1072,7 @@ class MemoryManagerSyncOps {
       this.vector.available = null;
       this.vector.loadError = undefined;
       this.ensureSchema();
-      this.vector.dims = nextMeta.vectorDims;
+      this.vector.dims = nextMeta?.vectorDims;
     } catch (err) {
       try {
         this.db.close();
@@ -1038,7 +1116,7 @@ class MemoryManagerSyncOps {
     const nextMeta: MemoryIndexMeta = {
       model: this.provider?.model ?? "fts-only",
       provider: this.provider?.id ?? "none",
-      providerKey: this.providerKey,
+      providerKey: this.providerKey!,
       chunkTokens: this.settings.chunking.tokens,
       chunkOverlap: this.settings.chunking.overlap,
     };
@@ -1047,7 +1125,7 @@ class MemoryManagerSyncOps {
     }
 
     this.writeMeta(nextMeta);
-    this.pruneEmbeddingCacheIfNeeded();
+    this.pruneEmbeddingCacheIfNeeded?.();
   }
 
   private resetIndex() {
@@ -1063,7 +1141,7 @@ class MemoryManagerSyncOps {
     this.sessionsDirtyFiles.clear();
   }
 
-  private readMeta(): MemoryIndexMeta | null {
+  protected readMeta(): MemoryIndexMeta | null {
     const row = this.db.prepare(`SELECT value FROM meta WHERE key = ?`).get(META_KEY) as
       | { value: string }
       | undefined;
@@ -1077,7 +1155,7 @@ class MemoryManagerSyncOps {
     }
   }
 
-  private writeMeta(meta: MemoryIndexMeta) {
+  protected writeMeta(meta: MemoryIndexMeta) {
     const value = JSON.stringify(meta);
     this.db
       .prepare(
@@ -1086,5 +1164,3 @@ class MemoryManagerSyncOps {
       .run(META_KEY, value);
   }
 }
-
-export const memoryManagerSyncOps = MemoryManagerSyncOps.prototype;

@@ -1,5 +1,5 @@
-import type { MediaUnderstandingScopeConfig } from "../config/types.tools.js";
 import { normalizeChatType } from "../channels/chat-type.js";
+import type { MediaUnderstandingScopeConfig } from "../config/types.tools.js";
 
 export type MediaUnderstandingScopeDecision = "allow" | "deny";
 

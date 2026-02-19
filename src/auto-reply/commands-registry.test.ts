@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { ChatCommandDefinition } from "./commands-registry.types.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
@@ -17,6 +16,7 @@ import {
   serializeCommandArgs,
   shouldHandleTextCommands,
 } from "./commands-registry.js";
+import type { ChatCommandDefinition } from "./commands-registry.types.js";
 
 beforeEach(() => {
   setActivePluginRegistry(createTestRegistry([]));
@@ -255,8 +255,12 @@ describe("commands registry args", () => {
   });
 
   it("resolves function-based choices with a default provider/model context", () => {
-    let seen: { provider: string; model: string; commandKey: string; argName: string } | null =
-      null;
+    let seen: {
+      provider?: string;
+      model?: string;
+      commandKey: string;
+      argName: string;
+    } | null = null;
 
     const command: ChatCommandDefinition = {
       key: "think",
@@ -284,10 +288,16 @@ describe("commands registry args", () => {
       { label: "low", value: "low" },
       { label: "high", value: "high" },
     ]);
-    expect(seen?.commandKey).toBe("think");
-    expect(seen?.argName).toBe("level");
-    expect(seen?.provider).toBeTruthy();
-    expect(seen?.model).toBeTruthy();
+    const seenChoice = seen as {
+      provider?: string;
+      model?: string;
+      commandKey: string;
+      argName: string;
+    } | null;
+    expect(seenChoice?.commandKey).toBe("think");
+    expect(seenChoice?.argName).toBe("level");
+    expect(seenChoice?.provider).toBeTruthy();
+    expect(seenChoice?.model).toBeTruthy();
   });
 
   it("does not show menus when args were provided as raw text only", () => {

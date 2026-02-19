@@ -2,12 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
 import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
 import { setTelegramRuntime } from "../../extensions/telegram/src/runtime.js";
 import { whatsappPlugin } from "../../extensions/whatsapp/src/channel.js";
 import { setWhatsAppRuntime } from "../../extensions/whatsapp/src/runtime.js";
 import * as replyModule from "../auto-reply/reply.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentMainSessionKey, resolveMainSessionKey } from "../config/sessions.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
@@ -51,6 +51,8 @@ async function withHeartbeatFixture(
     );
   };
 
+  await fs.writeFile(path.join(tmpDir, "HEARTBEAT.md"), "- Check status\n", "utf-8");
+
   try {
     return await run({ tmpDir, storePath, seedSession });
   } finally {
@@ -75,7 +77,10 @@ afterEach(() => {
 });
 
 describe("runHeartbeatOnce – heartbeat model override", () => {
-  async function runDefaultsHeartbeat(params: { model?: string }) {
+  async function runDefaultsHeartbeat(params: {
+    model?: string;
+    suppressToolErrorWarnings?: boolean;
+  }) {
     return withHeartbeatFixture(async ({ tmpDir, storePath, seedSession }) => {
       const cfg: OpenClawConfig = {
         agents: {
@@ -85,6 +90,7 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
               every: "5m",
               target: "whatsapp",
               model: params.model,
+              suppressToolErrorWarnings: params.suppressToolErrorWarnings,
             },
           },
         },
@@ -121,8 +127,18 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
     );
   });
 
+  it("passes suppressToolErrorWarnings when configured", async () => {
+    const replyOpts = await runDefaultsHeartbeat({ suppressToolErrorWarnings: true });
+    expect(replyOpts).toEqual(
+      expect.objectContaining({
+        isHeartbeat: true,
+        suppressToolErrorWarnings: true,
+      }),
+    );
+  });
+
   it("passes per-agent heartbeat model override (merged with defaults)", async () => {
-    await withHeartbeatFixture(async ({ storePath, seedSession }) => {
+    await withHeartbeatFixture(async ({ tmpDir, storePath, seedSession }) => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
@@ -135,6 +151,7 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
             { id: "main", default: true },
             {
               id: "ops",
+              workspace: tmpDir,
               heartbeat: {
                 every: "5m",
                 target: "whatsapp",

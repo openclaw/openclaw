@@ -2,8 +2,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import { WebSocket } from "ws";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
+import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
 import {
   connectOk,
   embeddedRunMock,
@@ -103,7 +106,9 @@ function expectActiveRunCleanup(
     requesterSessionKey,
   });
   expect(sessionCleanupMocks.clearSessionQueues).toHaveBeenCalledTimes(1);
-  const clearedKeys = sessionCleanupMocks.clearSessionQueues.mock.calls[0]?.[0] as string[];
+  const clearedKeys = (
+    sessionCleanupMocks.clearSessionQueues.mock.calls as unknown as Array<[string[]]>
+  )[0]?.[0];
   expect(clearedKeys).toEqual(expect.arrayContaining(expectedQueueKeys));
   expect(embeddedRunMock.abortCalls).toEqual([sessionId]);
   expect(embeddedRunMock.waitCalls).toEqual([sessionId]);
@@ -435,15 +440,7 @@ describe("gateway server sessions", () => {
     testState.sessionStorePath = storePath;
     const sessionId = "sess-preview";
     const transcriptPath = path.join(dir, `${sessionId}.jsonl`);
-    const lines = [
-      JSON.stringify({ type: "session", version: 1, id: sessionId }),
-      JSON.stringify({ message: { role: "user", content: "Hello" } }),
-      JSON.stringify({ message: { role: "assistant", content: "Hi" } }),
-      JSON.stringify({
-        message: { role: "assistant", content: [{ type: "toolcall", name: "weather" }] },
-      }),
-      JSON.stringify({ message: { role: "assistant", content: "Forecast ready" } }),
-    ];
+    const lines = createToolSummaryPreviewTranscriptLines(sessionId);
     await fs.writeFile(transcriptPath, lines.join("\n"), "utf-8");
 
     await writeSessionStore({
@@ -656,7 +653,12 @@ describe("gateway server sessions", () => {
     });
     expect(reset.ok).toBe(true);
     expect(sessionHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
-    const [event] = sessionHookMocks.triggerInternalHook.mock.calls[0] ?? [];
+    const event = (
+      sessionHookMocks.triggerInternalHook.mock.calls as unknown as Array<[unknown]>
+    )[0]?.[0] as { context?: { previousSessionEntry?: unknown } } | undefined;
+    if (!event) {
+      throw new Error("expected session hook event");
+    }
     expect(event).toMatchObject({
       type: "command",
       action: "new",
@@ -665,7 +667,7 @@ describe("gateway server sessions", () => {
         commandSource: "gateway:sessions.reset",
       },
     });
-    expect(event.context.previousSessionEntry).toMatchObject({ sessionId: "sess-main" });
+    expect(event.context?.previousSessionEntry).toMatchObject({ sessionId: "sess-main" });
     ws.close();
   });
 
@@ -739,6 +741,54 @@ describe("gateway server sessions", () => {
     expect(filesAfterDeleteAttempt.some((f) => f.startsWith("sess-active.jsonl.deleted."))).toBe(
       false,
     );
+
+    ws.close();
+  });
+
+  test("webchat clients cannot patch or delete sessions", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-webchat-"));
+    const storePath = path.join(dir, "sessions.json");
+    testState.sessionStorePath = storePath;
+
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+        },
+        "discord:group:dev": {
+          sessionId: "sess-group",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+
+    const ws = new WebSocket(`ws://127.0.0.1:${harness.port}`, {
+      headers: { origin: `http://127.0.0.1:${harness.port}` },
+    });
+    await new Promise<void>((resolve) => ws.once("open", resolve));
+    await connectOk(ws, {
+      client: {
+        id: GATEWAY_CLIENT_IDS.WEBCHAT_UI,
+        version: "1.0.0",
+        platform: "test",
+        mode: GATEWAY_CLIENT_MODES.UI,
+      },
+      scopes: ["operator.admin"],
+    });
+
+    const patched = await rpcReq(ws, "sessions.patch", {
+      key: "agent:main:discord:group:dev",
+      label: "should-fail",
+    });
+    expect(patched.ok).toBe(false);
+    expect(patched.error?.message ?? "").toMatch(/webchat clients cannot patch sessions/i);
+
+    const deleted = await rpcReq(ws, "sessions.delete", {
+      key: "agent:main:discord:group:dev",
+    });
+    expect(deleted.ok).toBe(false);
+    expect(deleted.error?.message ?? "").toMatch(/webchat clients cannot delete sessions/i);
 
     ws.close();
   });
