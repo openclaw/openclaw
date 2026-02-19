@@ -1387,7 +1387,7 @@ Notes:
 
 OpenClaw enforces token auth by default, including loopback. If no token is configured, gateway startup auto-generates one and saves it to `gateway.auth.token`, so **local WS clients must authenticate**. This blocks other local processes from calling the Gateway.
 
-Paste the token into the Control UI settings (or your client config) to connect. You can regenerate with `openclaw doctor --generate-gateway-token`.
+If you **really** want open loopback, set `gateway.auth.mode: "none"` explicitly in your config. Doctor can generate a token for you any time: `openclaw doctor --generate-gateway-token`.
 
 ### Do I have to restart after changing config
 

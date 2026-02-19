@@ -97,6 +97,25 @@ describe("ensureGatewayStartupAuth", () => {
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
   });
 
+  it("does not generate in explicit none mode", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        auth: {
+          mode: "none",
+        },
+      },
+    };
+    const result = await ensureGatewayStartupAuth({
+      cfg,
+      env: {} as NodeJS.ProcessEnv,
+      persist: true,
+    });
+
+    expect(result.generatedToken).toBeUndefined();
+    expect(result.auth.mode).toBe("none");
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+  });
+
   it("treats undefined token override as no override", async () => {
     const cfg: OpenClawConfig = {
       gateway: {
