@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   CircularIncludeError,
   ConfigIncludeError,
+  deepMerge,
   type IncludeResolver,
   resolveConfigIncludes,
 } from "./includes.js";
@@ -518,6 +519,31 @@ describe("security: path traversal protection (CWE-22)", () => {
       };
       const obj = { $include: ["./a.json", "./b.json"] };
       expect(resolve(obj, files)).toEqual({ a: 1, b: 2 });
+    });
+  });
+
+  describe("prototype pollution protection", () => {
+    it("blocks __proto__ keys from polluting Object.prototype", () => {
+      const result = deepMerge({}, JSON.parse('{"__proto__":{"polluted":true}}'));
+      expect((Object.prototype as Record<string, unknown>).polluted).toBeUndefined();
+      expect(result).toEqual({});
+    });
+
+    it("blocks prototype and constructor keys", () => {
+      const result = deepMerge(
+        { safe: 1 },
+        { prototype: { x: 1 }, constructor: { y: 2 }, normal: 3 },
+      );
+      expect(result).toEqual({ safe: 1, normal: 3 });
+    });
+
+    it("blocks __proto__ in nested merges", () => {
+      const result = deepMerge(
+        { nested: { a: 1 } },
+        { nested: JSON.parse('{"__proto__":{"polluted":true}}') },
+      );
+      expect((Object.prototype as Record<string, unknown>).polluted).toBeUndefined();
+      expect(result).toEqual({ nested: { a: 1 } });
     });
   });
 
