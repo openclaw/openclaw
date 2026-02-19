@@ -80,7 +80,7 @@ export class DirectoryCache<T> {
       return;
     }
     for (const [cacheKey, entry] of this.cache.entries()) {
-      if (now - entry.fetchedAt > this.ttlMs) {
+      if (now - entry.fetchedAt >= this.ttlMs) {
         this.cache.delete(cacheKey);
       }
     }
