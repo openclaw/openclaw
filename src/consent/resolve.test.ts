@@ -8,7 +8,9 @@ import { resetConsentGateResolverForTests, resolveConsentGateApi } from "./resol
 
 const POLICY_VERSION = "1";
 
-function consentConfig(overrides?: Partial<NonNullable<OpenClawConfig["gateway"]>["consentGate"]>): OpenClawConfig {
+function consentConfig(
+  overrides?: Partial<NonNullable<OpenClawConfig["gateway"]>["consentGate"]>,
+): OpenClawConfig {
   return {
     gateway: {
       consentGate: {
@@ -80,11 +82,12 @@ describe("resolveConsentGateApi", () => {
         contextHash: "ctx-a",
       });
       expect(consumed.allowed).toBe(false);
-      expect(consumed.reasonCode).toBe(CONSENT_REASON.TOKEN_NOT_FOUND);
+      if (!consumed.allowed) {
+        expect(consumed.reasonCode).toBe(CONSENT_REASON.TOKEN_NOT_FOUND);
+      }
     } finally {
       rmSync(dir1, { recursive: true, force: true });
       rmSync(dir2, { recursive: true, force: true });
     }
   });
 });
-

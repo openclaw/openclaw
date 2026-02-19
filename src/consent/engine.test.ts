@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { createConsentEngine } from "./engine.js";
+import { CONSENT_REASON } from "./reason-codes.js";
 import { buildToken, createInMemoryTokenStore } from "./store.js";
 import { createInMemoryWal } from "./wal.js";
-import { CONSENT_REASON } from "./reason-codes.js";
 
 describe("ConsentGate engine", () => {
   const policyVersion = "1";
@@ -47,7 +47,9 @@ describe("ConsentGate engine", () => {
       contextHash: "abc",
     });
     expect(consume2.allowed).toBe(false);
-    expect(consume2.reasonCode).toBe(CONSENT_REASON.TOKEN_ALREADY_CONSUMED);
+    if (!consume2.allowed) {
+      expect(consume2.reasonCode).toBe(CONSENT_REASON.TOKEN_ALREADY_CONSUMED);
+    }
   });
 
   it("denies consume when token not found", async () => {
@@ -60,7 +62,9 @@ describe("ConsentGate engine", () => {
       contextHash: "x",
     });
     expect(result.allowed).toBe(false);
-    expect(result.reasonCode).toBe(CONSENT_REASON.TOKEN_NOT_FOUND);
+    if (!result.allowed) {
+      expect(result.reasonCode).toBe(CONSENT_REASON.TOKEN_NOT_FOUND);
+    }
   });
 
   it("denies consume when jti is missing", async () => {
@@ -73,7 +77,9 @@ describe("ConsentGate engine", () => {
       contextHash: "x",
     });
     expect(result.allowed).toBe(false);
-    expect(result.reasonCode).toBe(CONSENT_REASON.NO_TOKEN);
+    if (!result.allowed) {
+      expect(result.reasonCode).toBe(CONSENT_REASON.NO_TOKEN);
+    }
   });
 
   it("denies consume when context hash mismatch", async () => {
@@ -97,7 +103,9 @@ describe("ConsentGate engine", () => {
       contextHash: "different",
     });
     expect(result.allowed).toBe(false);
-    expect(result.reasonCode).toBe(CONSENT_REASON.CONTEXT_MISMATCH);
+    if (!result.allowed) {
+      expect(result.reasonCode).toBe(CONSENT_REASON.CONTEXT_MISMATCH);
+    }
   });
 
   it("denies consume when trust tier mismatches token", async () => {
@@ -121,7 +129,9 @@ describe("ConsentGate engine", () => {
       contextHash: "abc",
     });
     expect(result.allowed).toBe(false);
-    expect(result.reasonCode).toBe(CONSENT_REASON.TIER_VIOLATION);
+    if (!result.allowed) {
+      expect(result.reasonCode).toBe(CONSENT_REASON.TIER_VIOLATION);
+    }
   });
 
   it("denies consume when token expired", async () => {
@@ -146,7 +156,9 @@ describe("ConsentGate engine", () => {
       contextHash: "abc",
     });
     expect(result.allowed).toBe(false);
-    expect(result.reasonCode).toBe(CONSENT_REASON.TOKEN_EXPIRED);
+    if (!result.allowed) {
+      expect(result.reasonCode).toBe(CONSENT_REASON.TOKEN_EXPIRED);
+    }
   });
 
   it("evaluate does not consume token", async () => {
@@ -214,7 +226,9 @@ describe("ConsentGate engine", () => {
       contextHash: "x",
     });
     expect(consume.allowed).toBe(false);
-    expect(consume.reasonCode).toBe(CONSENT_REASON.TOKEN_REVOKED);
+    if (!consume.allowed) {
+      expect(consume.reasonCode).toBe(CONSENT_REASON.TOKEN_REVOKED);
+    }
   });
 
   it("quarantine blocks issue and consume", async () => {
@@ -263,7 +277,9 @@ describe("ConsentGate engine", () => {
       contextHash: "h",
     });
     expect(consume.allowed).toBe(false);
-    expect(consume.reasonCode).toBe(CONSENT_REASON.CONTAINMENT_QUARANTINE);
+    if (!consume.allowed) {
+      expect(consume.reasonCode).toBe(CONSENT_REASON.CONTAINMENT_QUARANTINE);
+    }
   });
 
   it("status without sessionKey returns tokens globally and supports tenant filter", async () => {
@@ -348,7 +364,9 @@ describe("ConsentGate engine", () => {
       tenantId: "tenant-a",
     });
     expect(consumeA1.allowed).toBe(false);
-    expect(consumeA1.reasonCode).toBe(CONSENT_REASON.TOKEN_REVOKED);
+    if (!consumeA1.allowed) {
+      expect(consumeA1.reasonCode).toBe(CONSENT_REASON.TOKEN_REVOKED);
+    }
 
     const consumeA2 = await api.consume({
       jti: tokenTenantA2!.jti,
@@ -359,7 +377,9 @@ describe("ConsentGate engine", () => {
       tenantId: "tenant-a",
     });
     expect(consumeA2.allowed).toBe(false);
-    expect(consumeA2.reasonCode).toBe(CONSENT_REASON.TOKEN_REVOKED);
+    if (!consumeA2.allowed) {
+      expect(consumeA2.reasonCode).toBe(CONSENT_REASON.TOKEN_REVOKED);
+    }
 
     const consumeB = await api.consume({
       jti: tokenTenantB!.jti,

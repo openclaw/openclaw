@@ -1,13 +1,13 @@
 import { createHash } from "node:crypto";
 import { loadConfig } from "../../config/config.js";
+import { buildConsentDenyPayload } from "../../consent/deny-payload.js";
+import { CONSENT_REASON } from "../../consent/reason-codes.js";
 import {
   isConsentGateObserveOnly,
   resolveConsentGateApi,
   resolveConsentGatedTools,
   resolveTrustTier,
 } from "../../consent/resolve.js";
-import { CONSENT_REASON } from "../../consent/reason-codes.js";
-import { buildConsentDenyPayload } from "../../consent/deny-payload.js";
 import { listDevicePairing } from "../../infra/device-pairing.js";
 import {
   approveNodePairing,
@@ -515,7 +515,12 @@ export const nodeHandlers: GatewayRequestHandlers = {
         return;
       }
       const gatedTools = resolveConsentGatedTools(cfg);
-      let consentEnvelope: { jti: string; consumedAtMs: number; expiresAtMs: number; sessionKey: string } | null = null;
+      let consentEnvelope: {
+        jti: string;
+        consumedAtMs: number;
+        expiresAtMs: number;
+        sessionKey: string;
+      } | null = null;
       if (gatedTools.has(command)) {
         const rawParams =
           p.params && typeof p.params === "object" ? (p.params as Record<string, unknown>) : {};
@@ -625,10 +630,9 @@ export const nodeHandlers: GatewayRequestHandlers = {
         );
         return;
       }
+      const baseParams = forwardedParams.params as Record<string, unknown>;
       const invokeParams =
-        consentEnvelope != null
-          ? { ...forwardedParams.params, consentEnvelope }
-          : forwardedParams.params;
+        consentEnvelope != null ? { ...baseParams, consentEnvelope } : forwardedParams.params;
       const res = await context.nodeRegistry.invoke({
         nodeId,
         command,
