@@ -341,6 +341,7 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
       : schedule.kind === "at"
         ? true
         : undefined;
+
   const enabled = typeof input.enabled === "boolean" ? input.enabled : true;
   const job: CronJob = {
     id,

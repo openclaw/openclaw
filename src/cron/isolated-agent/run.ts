@@ -199,14 +199,8 @@ export async function runCronIsolatedAgentTurn(params: {
         ...cfgWithAgentDefaults,
         tools: {
           ...cfgWithAgentDefaults.tools,
-          allow: [
-            ...(cfgWithAgentDefaults.tools?.allow ?? []),
-            ...(params.job.tools.allow ?? []),
-          ],
-          deny: [
-            ...(cfgWithAgentDefaults.tools?.deny ?? []),
-            ...(params.job.tools.deny ?? []),
-          ],
+          allow: [...(cfgWithAgentDefaults.tools?.allow ?? []), ...(params.job.tools.allow ?? [])],
+          deny: [...(cfgWithAgentDefaults.tools?.deny ?? []), ...(params.job.tools.deny ?? [])],
         },
       }
     : cfgWithAgentDefaults;
