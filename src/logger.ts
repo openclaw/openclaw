@@ -5,8 +5,10 @@ import { defaultRuntime, type RuntimeEnv } from "./runtime.js";
 
 const subsystemPrefixRe = /^([a-z][a-z0-9-]{1,20}):\s+(.*)$/i;
 const terminalControlSequencePatterns = [
-  /\x1B\[[0-9;?]*[ -/]*[@-~]/g,
-  /\x1B\][^\x07]*(?:\x07|\x1B\\)/g,
+  // oxlint-disable-next-line eslint/no-control-regex
+  new RegExp("\\u001B\\[[0-9;?]*[ -/]*[@-~]", "g"),
+  // oxlint-disable-next-line eslint/no-control-regex
+  new RegExp("\\u001B\\][^\\u0007]*(?:\\u0007|\\u001B\\\\)", "g"),
   /\[\?[0-9;]*[hl]/g,
   /\]0;[^\r\n]*/g,
 ];
@@ -17,7 +19,7 @@ function sanitizeTerminalArtifacts(message: string) {
     text = text.replace(pattern, "");
   }
   text = text.replace(/\[(?:\?[\d;]+[hl]|(?:\d{1,3}(?:;\d{1,3})*)?[A-Za-z])/g, "");
-  text = text.replace(/\x1B/g, "").replace(/\x07/g, "");
+  text = text.replaceAll("\u001B", "").replaceAll("\u0007", "");
   return text.trim();
 }
 

@@ -64,11 +64,13 @@ function describeToolExecutionError(err: unknown): {
 
 function sanitizeToolErrorMessage(message: string): string {
   let text = typeof message === "string" ? message : String(message ?? "");
-  text = text.replace(/\x1B\[[0-9;?]*[ -/]*[@-~]/g, "");
-  text = text.replace(/\x1B\][^\x07]*(?:\x07|\x1B\\)/g, "");
+  // oxlint-disable-next-line eslint/no-control-regex
+  text = text.replace(new RegExp("\\u001B\\[[0-9;?]*[ -/]*[@-~]", "g"), "");
+  // oxlint-disable-next-line eslint/no-control-regex
+  text = text.replace(new RegExp("\\u001B\\][^\\u0007]*(?:\\u0007|\\u001B\\\\)", "g"), "");
   text = text.replace(/\]0;[^\r\n]*/g, "");
   text = text.replace(/\[(?:\?[\d;]+[hl]|(?:\d{1,3}(?:;\d{1,3})*)?[A-Za-z])/g, "");
-  text = text.replace(/\x1B/g, "").replace(/\x07/g, "");
+  text = text.replaceAll("\u001B", "").replaceAll("\u0007", "");
   return text.trim();
 }
 
