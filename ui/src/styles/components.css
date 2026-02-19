@@ -635,6 +635,16 @@
   border-color: rgba(34, 197, 94, 0.35);
 }
 
+.compaction-indicator--fallback {
+  color: #d97706;
+  border-color: rgba(217, 119, 6, 0.35);
+}
+
+.compaction-indicator--fallback-cleared {
+  color: var(--ok);
+  border-color: rgba(34, 197, 94, 0.35);
+}
+
 @keyframes compaction-spin {
   to {
     transform: rotate(360deg);

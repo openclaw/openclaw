@@ -106,6 +106,7 @@ export async function handleDirectiveOnly(
     allowedModelCatalog,
     resetModelOverride,
     surface: params.surface,
+    sessionEntry,
   });
   if (modelInfo) {
     return modelInfo;
