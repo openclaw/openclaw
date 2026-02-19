@@ -1,4 +1,6 @@
+import { resolveAgentModelPrimary } from "../agents/agent-scope.js";
 import { resolveEffectiveMessagesConfig, resolveIdentityName } from "../agents/identity.js";
+import { resolveModelRefFromString } from "../agents/model-selection.js";
 import {
   extractShortModelName,
   type ResponsePrefixContext,
@@ -27,8 +29,21 @@ export function createReplyPrefixContext(params: {
   accountId?: string;
 }): ReplyPrefixContextBundle {
   const { cfg, agentId } = params;
+  // Pre-populate model from the configured primary model so that {model} resolves
+  // in code paths (heartbeat, cron, message tool) that never fire onModelSelected. (#20826)
+  const configuredModel = resolveAgentModelPrimary(cfg, agentId);
+  const parsedModel = configuredModel
+    ? resolveModelRefFromString({ modelRef: configuredModel, defaultProvider: undefined })
+    : undefined;
   const prefixContext: ResponsePrefixContext = {
     identityName: resolveIdentityName(cfg, agentId),
+    ...(parsedModel
+      ? {
+          provider: parsedModel.provider,
+          model: extractShortModelName(parsedModel.model),
+          modelFull: `${parsedModel.provider}/${parsedModel.model}`,
+        }
+      : {}),
   };
 
   const onModelSelected = (ctx: ModelSelectionContext) => {
