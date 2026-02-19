@@ -15,8 +15,14 @@ export type CloudruAuthConfig = {
 };
 
 export type CloudruTokenResponse = {
-  token: string;
-  expiresAt: string; // ISO 8601
+  /** Legacy field name (some environments). */
+  token?: string;
+  /** Legacy field name (ISO 8601). */
+  expiresAt?: string;
+  /** OAuth2-standard field from Cloud.ru IAM. */
+  access_token?: string;
+  /** Token lifetime in seconds from Cloud.ru IAM. */
+  expires_in?: number;
 };
 
 export type ResolvedToken = {

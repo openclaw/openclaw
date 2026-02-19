@@ -105,14 +105,24 @@ export class CloudruTokenProvider {
       }
 
       const body = (await res.json()) as CloudruTokenResponse;
-      if (!body.token || !body.expiresAt) {
-        throw new CloudruAuthError("IAM token response missing token or expiresAt");
+
+      // Cloud.ru IAM returns { access_token, expires_in }; support legacy { token, expiresAt } too
+      const token = body.access_token ?? body.token;
+      if (!token) {
+        throw new CloudruAuthError("IAM token response missing access_token (or token)");
       }
 
-      const resolved: ResolvedToken = {
-        token: body.token,
-        expiresAt: new Date(body.expiresAt).getTime(),
-      };
+      let expiresAt: number;
+      if (typeof body.expires_in === "number" && body.expires_in > 0) {
+        expiresAt = Date.now() + body.expires_in * 1000;
+      } else if (body.expiresAt) {
+        expiresAt = new Date(body.expiresAt).getTime();
+      } else {
+        // Default to 1 hour if neither field is present
+        expiresAt = Date.now() + 3600_000;
+      }
+
+      const resolved: ResolvedToken = { token, expiresAt };
 
       this.cached = resolved;
       return resolved;
