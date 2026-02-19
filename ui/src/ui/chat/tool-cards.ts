@@ -1,11 +1,11 @@
 import { html, nothing } from "lit";
-import type { ToolCard } from "../types/chat-types.ts";
 import { icons } from "../icons.ts";
 import {
   formatToolDetail,
   resolveToolDisplay,
   shouldSuppressToolCardWhenNoOutput,
 } from "../tool-display.ts";
+import type { ToolCard } from "../types/chat-types.ts";
 import { TOOL_INLINE_THRESHOLD } from "./constants.ts";
 import { extractTextCached } from "./message-extract.ts";
 import { isToolResultMessage } from "./message-normalizer.ts";
