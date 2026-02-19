@@ -177,7 +177,11 @@
 
         <div class="card">
           <h2>Relay connection</h2>
-          <label for="port">Port</label>
+          <label for="relayName">Relay name</label>
+          <div class="row">
+            <input id="relayName" type="text" placeholder="e.g. MacBook" style="width: min(200px, 100%)" />
+          </div>
+          <label for="port" style="margin-top: 10px">Port</label>
           <div class="row">
             <input id="port" inputmode="numeric" pattern="[0-9]*" />
           </div>
