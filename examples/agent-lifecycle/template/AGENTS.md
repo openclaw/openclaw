@@ -25,6 +25,7 @@ This workspace belongs to **{AGENT_NAME}**.
 ## Parent Collaboration
 
 When visibility is enabled:
+
 - Read only approved paths from parent workspaces.
 - Treat parent files as reference, not source of absolute truth.
 - Never assume write access to parent workspaces.
@@ -32,6 +33,7 @@ When visibility is enabled:
 ## Escalation
 
 Escalate to parent agent(s) when:
+
 - A task exceeds your current permissions
 - There is ambiguity around policy or safety
 - Human intent is unclear or conflicting

@@ -14,11 +14,7 @@
           "items": {
             "type": "string"
           },
-          "default": [
-            "read",
-            "memory_search",
-            "memory_get"
-          ]
+          "default": ["read", "memory_search", "memory_get"]
         },
         "deny": {
           "type": "array",
@@ -38,10 +34,7 @@
           ]
         }
       },
-      "required": [
-        "allow",
-        "deny"
-      ]
+      "required": ["allow", "deny"]
     },
     "supervised": {
       "type": "object",
@@ -68,11 +61,7 @@
           "items": {
             "type": "string"
           },
-          "default": [
-            "gateway",
-            "cron",
-            "nodes"
-          ]
+          "default": ["gateway", "cron", "nodes"]
         },
         "sandbox": {
           "type": "object",
@@ -86,17 +75,10 @@
               "const": "agent"
             }
           },
-          "required": [
-            "mode",
-            "scope"
-          ]
+          "required": ["mode", "scope"]
         }
       },
-      "required": [
-        "allow",
-        "deny",
-        "sandbox"
-      ]
+      "required": ["allow", "deny", "sandbox"]
     },
     "full": {
       "type": "object",
@@ -105,20 +87,12 @@
       "additionalProperties": false
     }
   },
-  "required": [
-    "restricted",
-    "supervised",
-    "full"
-  ],
+  "required": ["restricted", "supervised", "full"],
   "additionalProperties": true,
   "examples": [
     {
       "restricted": {
-        "allow": [
-          "read",
-          "memory_search",
-          "memory_get"
-        ],
+        "allow": ["read", "memory_search", "memory_get"],
         "deny": [
           "exec",
           "write",
@@ -142,11 +116,7 @@
           "web_fetch",
           "exec"
         ],
-        "deny": [
-          "gateway",
-          "cron",
-          "nodes"
-        ],
+        "deny": ["gateway", "cron", "nodes"],
         "sandbox": {
           "mode": "all",
           "scope": "agent"
@@ -196,20 +166,12 @@
           "properties": {
             "mode": {
               "type": "string",
-              "enum": [
-                "off",
-                "exec",
-                "all"
-              ],
+              "enum": ["off", "exec", "all"],
               "description": "Sandbox enforcement level"
             },
             "scope": {
               "type": "string",
-              "enum": [
-                "agent",
-                "session",
-                "shared"
-              ],
+              "enum": ["agent", "session", "shared"],
               "description": "Sandbox isolation scope"
             }
           }

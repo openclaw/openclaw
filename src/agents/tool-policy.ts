@@ -294,7 +294,9 @@ export function resolveToolProfilePolicy(profile?: string): ToolProfilePolicy | 
 
 export function resolveToolPresetPolicy(
   presetName: string | undefined,
-  presets: Record<string, ToolPolicyLike & { sandbox?: { mode?: string; scope?: string } }> | undefined,
+  presets:
+    | Record<string, ToolPolicyLike & { sandbox?: { mode?: string; scope?: string } }>
+    | undefined,
 ): ToolPolicyLike | undefined {
   if (!presetName || !presets) return undefined;
   const preset = presets[presetName];

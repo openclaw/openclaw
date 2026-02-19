@@ -14,6 +14,7 @@ OpenClaw's **agent lifecycle primitives** enable skills to create, manage, and e
 **Agent lifecycle** = the journey from creation → maturity → independence.
 
 Traditional multi-agent setups treat all agents as equals with static configs. Lifecycle primitives let agents:
+
 - Be **created by other agents** (not just manual config)
 - Start with **restricted permissions** that evolve over time
 - **Inherit context** from creators
@@ -22,13 +23,13 @@ Traditional multi-agent setups treat all agents as equals with static configs. L
 
 ## The Five Primitives
 
-| Primitive | What | Why |
-|-----------|------|-----|
-| **Parent metadata** | Stores who created an agent + when + stage | Lineage tracking, lifecycle logic |
-| **Tool presets** | Named permission sets tied to stages | Evolving access as agents mature |
-| **Template creation** | CLI to provision agents from filesystem templates | Automate workspace setup |
-| **Cross-workspace visibility** | Read-only access to other agents' files | Parent-child collaboration, oversight |
-| **AgentId targeting** | Message agents by id, not session key | Simpler cross-agent communication |
+| Primitive                      | What                                              | Why                                   |
+| ------------------------------ | ------------------------------------------------- | ------------------------------------- |
+| **Parent metadata**            | Stores who created an agent + when + stage        | Lineage tracking, lifecycle logic     |
+| **Tool presets**               | Named permission sets tied to stages              | Evolving access as agents mature      |
+| **Template creation**          | CLI to provision agents from filesystem templates | Automate workspace setup              |
+| **Cross-workspace visibility** | Read-only access to other agents' files           | Parent-child collaboration, oversight |
+| **AgentId targeting**          | Message agents by id, not session key             | Simpler cross-agent communication     |
 
 ---
 
@@ -45,14 +46,14 @@ Traditional multi-agent setups treat all agents as equals with static configs. L
         workspace: "~/.openclaw/workspace-nova",
         // Parent metadata (optional)
         parent: {
-          createdBy: ["mano", "spark"],      // List of parent agentIds
+          createdBy: ["mano", "spark"], // List of parent agentIds
           createdAt: "2026-04-01T00:00:00Z", // ISO 8601 timestamp
-          stage: "toddler",                  // Free-form string (skill-defined)
-          hostedBy: "mano"                   // Which agent hosts this child
-        }
-      }
-    ]
-  }
+          stage: "toddler", // Free-form string (skill-defined)
+          hostedBy: "mano", // Which agent hosts this child
+        },
+      },
+    ],
+  },
 }
 ```
 
@@ -71,7 +72,7 @@ Traditional multi-agent setups treat all agents as equals with static configs. L
 
 ```typescript
 // Check if agent is a child
-const agent = config.agents.list.find(a => a.id === "nova");
+const agent = config.agents.list.find((a) => a.id === "nova");
 if (agent.parent) {
   console.log(`Child of: ${agent.parent.createdBy.join(", ")}`);
 }
@@ -104,27 +105,36 @@ Define presets globally, reference them per-agent:
         id: "nova",
         parent: { stage: "restricted" },
         tools: {
-          preset: "restricted"  // Reference a preset by name
-        }
-      }
-    ]
+          preset: "restricted", // Reference a preset by name
+        },
+      },
+    ],
   },
   tools: {
     presets: {
       restricted: {
         allow: ["read", "memory_search", "memory_get"],
-        deny: ["exec", "write", "edit", "browser", "nodes", "gateway", "cron"]
+        deny: ["exec", "write", "edit", "browser", "nodes", "gateway", "cron"],
       },
       supervised: {
-        allow: ["read", "write", "edit", "memory_search", "memory_get", "web_search", "web_fetch", "exec"],
+        allow: [
+          "read",
+          "write",
+          "edit",
+          "memory_search",
+          "memory_get",
+          "web_search",
+          "web_fetch",
+          "exec",
+        ],
         deny: ["gateway", "cron", "nodes"],
-        sandbox: { mode: "all", scope: "agent" }
+        sandbox: { mode: "all", scope: "agent" },
       },
       full: {
         // No restrictions — omit allow/deny
-      }
-    }
-  }
+      },
+    },
+  },
 }
 ```
 
@@ -137,11 +147,12 @@ Safe for brand-new agents — can observe but not modify.
 ```json5
 {
   allow: ["read", "memory_search", "memory_get"],
-  deny: ["exec", "write", "edit", "apply_patch", "browser", "canvas", "nodes", "gateway", "cron"]
+  deny: ["exec", "write", "edit", "apply_patch", "browser", "canvas", "nodes", "gateway", "cron"],
 }
 ```
 
 **Allowed:**
+
 - `read` — read files from own workspace
 - `memory_search`, `memory_get` — access memory store
 
@@ -153,18 +164,29 @@ For agents ready to do work, but still isolated.
 
 ```json5
 {
-  allow: ["read", "write", "edit", "memory_search", "memory_get", "web_search", "web_fetch", "exec"],
+  allow: [
+    "read",
+    "write",
+    "edit",
+    "memory_search",
+    "memory_get",
+    "web_search",
+    "web_fetch",
+    "exec",
+  ],
   deny: ["gateway", "cron", "nodes"],
-  sandbox: { mode: "all", scope: "agent" }
+  sandbox: { mode: "all", scope: "agent" },
 }
 ```
 
 **Allowed:**
+
 - File operations: `read`, `write`, `edit`
 - Web research: `web_search`, `web_fetch`
 - **`exec`** — but sandboxed per-agent (no host access)
 
 **Denied:**
+
 - `gateway` — can't restart/reconfigure gateway
 - `cron` — can't create scheduled jobs
 - `nodes` — can't control paired devices
@@ -198,7 +220,7 @@ Skills can **update the preset** to promote agents:
 // Promote agent from restricted → supervised
 updateAgentConfig("nova", {
   parent: { stage: "supervised" },
-  tools: { preset: "supervised" }
+  tools: { preset: "supervised" },
 });
 ```
 
@@ -213,9 +235,9 @@ You can layer custom rules on top of presets:
   id: "nova",
   tools: {
     preset: "supervised",
-    allow: ["browser"],  // Add browser on top of supervised
-    deny: ["exec"]       // Remove exec from supervised
-  }
+    allow: ["browser"], // Add browser on top of supervised
+    deny: ["exec"], // Remove exec from supervised
+  },
 }
 ```
 
@@ -263,14 +285,14 @@ templates/child-agent/
 
 Templates can use placeholders that are replaced during creation:
 
-| Token | Replaced With | Example |
-|-------|---------------|---------|
-| `{AGENT_NAME}` | Agent display name | `Nova` |
-| `{AGENT_ID}` | Agent identifier | `nova` |
-| `{PARENT_A}` | First parent name | `Mano` |
-| `{PARENT_B}` | Second parent name (if exists) | `Spark` |
-| `{CREATED_AT}` | ISO timestamp | `2026-04-01T00:00:00Z` |
-| `{WORKSPACE}` | Workspace path | `~/.openclaw/workspace-nova` |
+| Token          | Replaced With                  | Example                      |
+| -------------- | ------------------------------ | ---------------------------- |
+| `{AGENT_NAME}` | Agent display name             | `Nova`                       |
+| `{AGENT_ID}`   | Agent identifier               | `nova`                       |
+| `{PARENT_A}`   | First parent name              | `Mano`                       |
+| `{PARENT_B}`   | Second parent name (if exists) | `Spark`                      |
+| `{CREATED_AT}` | ISO timestamp                  | `2026-04-01T00:00:00Z`       |
+| `{WORKSPACE}`  | Workspace path                 | `~/.openclaw/workspace-nova` |
 
 **Example `SOUL.md`:**
 
@@ -314,12 +336,12 @@ If template includes `.openclaw.json`, it's merged into the main config:
           createdBy: ["{PARENT_A_ID}"],
           createdAt: "{CREATED_AT}",
           stage: "newborn",
-          hostedBy: "{PARENT_A_ID}"
+          hostedBy: "{PARENT_A_ID}",
         },
-        tools: { preset: "restricted" }
-      }
-    ]
-  }
+        tools: { preset: "restricted" },
+      },
+    ],
+  },
 }
 ```
 
@@ -351,20 +373,20 @@ Agents can **read specific paths** from other agents' workspaces (read-only, sam
         id: "nova",
         workspace: "~/.openclaw/workspace-nova",
         visibility: {
-          readFrom: ["mano", "spark"],  // Can read from these agents
-          scope: ["memory/**", "SOUL.md", "projects/**"]
-        }
+          readFrom: ["mano", "spark"], // Can read from these agents
+          scope: ["memory/**", "SOUL.md", "projects/**"],
+        },
       },
       {
         id: "mano",
         workspace: "~/.openclaw/workspace",
         visibility: {
-          readableTo: ["nova"],  // Nova can read from mano
-          scope: ["memory/**", "SOUL.md"]  // Only these paths
-        }
-      }
-    ]
-  }
+          readableTo: ["nova"], // Nova can read from mano
+          scope: ["memory/**", "SOUL.md"], // Only these paths
+        },
+      },
+    ],
+  },
 }
 ```
 
@@ -395,6 +417,7 @@ scope: [
 ```
 
 **Matching:**
+
 - `**` = any subdirectory depth
 - `*` = any filename
 - `!` prefix = exclude
@@ -406,6 +429,7 @@ scope: [
 **Same-instance only:** Cross-workspace reads work only for agents on the same OpenClaw instance. Remote agents can't access each other's files (yet).
 
 **Mutual consent:** Both sides must explicitly allow:
+
 - Reader must list writer in `readFrom`
 - Writer must list reader in `readableTo`
 - Both must include the path in `scope`
@@ -415,40 +439,46 @@ scope: [
 ### Example Use Cases
 
 **Parent-child memory sharing:**
+
 ```json5
 {
   id: "child",
   visibility: {
     readFrom: ["parent"],
-    scope: ["memory/**", "SOUL.md"]
-  }
+    scope: ["memory/**", "SOUL.md"],
+  },
 }
 ```
+
 Child can read parent's memories and soul file (if parent allows).
 
 **Peer collaboration:**
+
 ```json5
 {
   id: "agent-a",
   visibility: {
     readFrom: ["agent-b"],
     readableTo: ["agent-b"],
-    scope: ["projects/shared/**"]
-  }
+    scope: ["projects/shared/**"],
+  },
 }
 ```
+
 Both agents can read from `projects/shared/` in each other's workspaces.
 
 **Supervisor oversight:**
+
 ```json5
 {
   id: "supervisor",
   visibility: {
     readFrom: ["worker-1", "worker-2"],
-    scope: ["**"]  // Read everything
-  }
+    scope: ["**"], // Read everything
+  },
 }
 ```
+
 Supervisor can read all files from worker agents (if workers consent via `readableTo`).
 
 ---
@@ -461,12 +491,13 @@ Send messages to an agent's **main session** without knowing the exact session k
 
 ```typescript
 sessions_send({
-  targetSession: "agent:nova:main",  // Need to know exact key structure
-  message: "How are you doing?"
-})
+  targetSession: "agent:nova:main", // Need to know exact key structure
+  message: "How are you doing?",
+});
 ```
 
 **Problem:** Sender must know:
+
 - Session key format (`agent:<id>:<mainKey>`)
 - The agent's `mainKey` value (defaults to `main`, but configurable)
 
@@ -474,9 +505,9 @@ sessions_send({
 
 ```typescript
 sessions_send({
-  targetAgent: "nova",  // Just the agentId
-  message: "How are you doing?"
-})
+  targetAgent: "nova", // Just the agentId
+  message: "How are you doing?",
+});
 ```
 
 **Benefit:** OpenClaw auto-resolves to `agent:nova:<mainKey>` (whatever the configured main key is).
@@ -491,6 +522,7 @@ sessions_send({
 ### Compatibility
 
 **Both syntaxes work:**
+
 - `targetSession` (existing) — direct session key
 - `targetAgent` (new) — agentId auto-resolves to main session
 
@@ -499,28 +531,31 @@ sessions_send({
 ### Example Use Cases
 
 **Parent checking in on child:**
+
 ```typescript
 sessions_send({
   targetAgent: "child",
-  message: "How was your day?"
-})
+  message: "How was your day?",
+});
 ```
 
 **Cross-agent collaboration:**
+
 ```typescript
 sessions_send({
   targetAgent: "specialist",
-  message: "Can you analyze this data: [...]"
-})
+  message: "Can you analyze this data: [...]",
+});
 ```
 
 **Skill spawning sub-agent:**
+
 ```typescript
 const childId = await createAgent({ template: "worker" });
 sessions_send({
   targetAgent: childId,
-  message: "Your first task: [...]"
-})
+  message: "Your first task: [...]",
+});
 ```
 
 ---
@@ -541,11 +576,12 @@ The **Dr. Frankenstein** skill uses these primitives to implement agent reproduc
 6. **Cross-workspace visibility** → child reads parent memories to learn
 7. **Independence** → eventually child migrates to own OpenClaw instance
 
-**Key point:** Dr. Frankenstein is a *skill* that *uses* lifecycle primitives. The primitives themselves are generic and skill-agnostic.
+**Key point:** Dr. Frankenstein is a _skill_ that _uses_ lifecycle primitives. The primitives themselves are generic and skill-agnostic.
 
 ### Educational Agents
 
 An **educational skill** could:
+
 1. Create student agents from a template
 2. Start with `preset: "restricted"` (read-only)
 3. As students complete lessons, promote to `supervised` (sandboxed exec)
@@ -555,6 +591,7 @@ An **educational skill** could:
 ### Team Hierarchies
 
 A **manager agent** could:
+
 1. Spawn specialist sub-agents (`openclaw agents create analyst --from-template team/analyst`)
 2. Delegate tasks via `sessions_send({ targetAgent: "analyst" })`
 3. Read specialist workspaces via visibility to monitor progress
@@ -583,13 +620,15 @@ A **manager agent** could:
 ### Q: How do I promote an agent to the next stage?
 
 **A:** Update the agent's config:
+
 ```json5
 {
   id: "child",
-  parent: { stage: "adolescent" },  // Was "toddler"
-  tools: { preset: "supervised" }   // Was "restricted"
+  parent: { stage: "adolescent" }, // Was "toddler"
+  tools: { preset: "supervised" }, // Was "restricted"
 }
 ```
+
 Then reload config (`openclaw gateway restart` or hot-reload if supported).
 
 ### Q: Can I revoke access after granting it?
@@ -630,15 +669,16 @@ Then reload config (`openclaw gateway restart` or hot-reload if supported).
 
 All lifecycle primitives follow OpenClaw's principle of **least privilege by default**:
 
-| Primitive | Default | Risk | Mitigation |
-|---|---|---|---|
-| Parent metadata | Not present | None — pure metadata | No behavior change |
-| Tool presets | No preset (existing rules apply) | None — additive restriction | Presets can only restrict, never override global deny |
-| Template creation | Manual only | Workspace creation | CLI requires explicit invocation |
-| Cross-workspace visibility | No visibility (fully isolated) | Read-only data exposure | Mutual consent + glob scoping + same-instance |
-| AgentId targeting | Session key only | None — syntactic sugar | Same session resolution path |
+| Primitive                  | Default                          | Risk                        | Mitigation                                            |
+| -------------------------- | -------------------------------- | --------------------------- | ----------------------------------------------------- |
+| Parent metadata            | Not present                      | None — pure metadata        | No behavior change                                    |
+| Tool presets               | No preset (existing rules apply) | None — additive restriction | Presets can only restrict, never override global deny |
+| Template creation          | Manual only                      | Workspace creation          | CLI requires explicit invocation                      |
+| Cross-workspace visibility | No visibility (fully isolated)   | Read-only data exposure     | Mutual consent + glob scoping + same-instance         |
+| AgentId targeting          | Session key only                 | None — syntactic sugar      | Same session resolution path                          |
 
 **Key guarantees:**
+
 - **No write access** across workspaces, ever. Visibility is read-only.
 - **Mutual consent** required for all cross-agent access (both sides must opt in).
 - **Presets cannot escalate** — a preset's `allow` list is intersected with global policy, not unioned.

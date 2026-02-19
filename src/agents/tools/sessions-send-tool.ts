@@ -157,7 +157,7 @@ export function createSessionsSendTool(opts?: {
         // Resolve targetAgent to main session key
         const agentMainKey = mainKey || "main";
         sessionKey = `agent:${normalizeAgentId(targetAgentParam)}:${agentMainKey}`;
-        
+
         // Check agent-to-agent policy
         const requesterAgentId = resolveAgentIdFromSessionKey(effectiveRequesterKey);
         if (requesterAgentId && targetAgentParam !== requesterAgentId) {

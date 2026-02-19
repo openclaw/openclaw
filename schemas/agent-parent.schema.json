@@ -13,19 +13,13 @@
         "pattern": "^[a-z0-9-_]+$"
       },
       "minItems": 1,
-      "examples": [
-        ["mano"],
-        ["mano", "spark"]
-      ]
+      "examples": [["mano"], ["mano", "spark"]]
     },
     "createdAt": {
       "type": "string",
       "format": "date-time",
       "description": "ISO 8601 timestamp of agent creation",
-      "examples": [
-        "2026-04-01T00:00:00Z",
-        "2026-04-01T14:30:00-03:00"
-      ]
+      "examples": ["2026-04-01T00:00:00Z", "2026-04-01T14:30:00-03:00"]
     },
     "stage": {
       "type": "string",
@@ -46,16 +40,10 @@
       "type": "string",
       "description": "Agent ID of the parent hosting this child agent (for distributed setups where multiple OpenClaw instances exist)",
       "pattern": "^[a-z0-9-_]+$",
-      "examples": [
-        "mano",
-        "parent-agent"
-      ]
+      "examples": ["mano", "parent-agent"]
     }
   },
-  "required": [
-    "createdBy",
-    "createdAt"
-  ],
+  "required": ["createdBy", "createdAt"],
   "additionalProperties": false,
   "examples": [
     {
