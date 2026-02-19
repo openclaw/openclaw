@@ -4,7 +4,7 @@ import { t } from "../i18n/index.ts";
 import { refreshChat } from "./app-chat.ts";
 import { syncUrlWithSessionKey } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
-import { OpenClawApp } from "./app.ts";
+import type { OpenClawApp } from "./app.ts";
 import { ChatState, loadChatHistory } from "./controllers/chat.ts";
 import { icons } from "./icons.ts";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
@@ -289,7 +289,6 @@ export function parseSessionKey(key: string): SessionKeyInfo {
   // ── Subagent ─────────────────────────────────────
   if (key.includes(":subagent:")) {
     return { prefix: "Subagent:", fallbackName: "Subagent:" };
- ce845ecb1 (ui: show subagent labels in chat session dropdown)
   }
 
   // ── Cron job ─────────────────────────────────────

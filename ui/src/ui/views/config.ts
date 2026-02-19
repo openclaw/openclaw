@@ -32,6 +32,11 @@ export type ConfigProps = {
   onSave: () => void;
   onApply: () => void;
   onUpdate: () => void;
+  // Auto-send (UI-local settings)
+  autoSendEnabled: boolean;
+  autoSendTriggers: string[];
+  onAutoSendEnabledChange: (next: boolean) => void;
+  onAutoSendTriggersChange: (next: string[]) => void;
 };
 
 // SVG Icons for sidebar (Lucide-style)
@@ -407,6 +412,7 @@ export function renderConfig(props: ConfigProps) {
   const activeSectionMeta = props.activeSection
     ? resolveSectionMeta(props.activeSection, activeSectionSchema)
     : null;
+  const AUTO_SEND_SUBSECTION = "__webchat_auto_send__";
   const subsections = props.activeSection
     ? resolveSubsections({
         key: props.activeSection,
@@ -414,6 +420,14 @@ export function renderConfig(props: ConfigProps) {
         uiHints: props.uiHints,
       })
     : [];
+  if (props.activeSection === "talk") {
+    subsections.push({
+      key: AUTO_SEND_SUBSECTION,
+      label: "Auto-Send",
+      description: "Automatically send messages when a trigger is matched",
+      order: 999,
+    });
+  }
   const allowSubnav =
     props.formMode === "form" && Boolean(props.activeSection) && subsections.length > 0;
   const isAllSubsection = props.activeSubsection === ALL_SUBSECTION;
@@ -684,7 +698,99 @@ export function renderConfig(props: ConfigProps) {
         <!-- Form content -->
         <div class="config-content">
           ${
-            props.formMode === "form"
+            props.activeSection === "talk" &&
+            props.formMode === "form" &&
+            (effectiveSubsection === AUTO_SEND_SUBSECTION || effectiveSubsection === null)
+              ? html`
+                <label class="cfg-toggle-row">
+                  <div class="cfg-toggle-row__content">
+                    <span class="cfg-toggle-row__label">Automatically send messages after you stop typing</span>
+                  </div>
+                  <div class="cfg-toggle">
+                    <input
+                      type="checkbox"
+                      .checked=${props.autoSendEnabled}
+                      @change=${(e: Event) =>
+                        props.onAutoSendEnabledChange((e.target as HTMLInputElement).checked)}
+                    />
+                    <span class="cfg-toggle__track"></span>
+                  </div>
+                </label>
+                <div class="cfg-array">
+                  <div class="cfg-array__header">
+                    <span class="cfg-array__label">Instant Send Triggers</span>
+                    <span class="cfg-array__count">${props.autoSendTriggers.length} item${props.autoSendTriggers.length !== 1 ? "s" : ""}</span>
+                    <button
+                      type="button"
+                      class="cfg-array__add"
+                      ?disabled=${!props.autoSendEnabled}
+                      @click=${() => props.onAutoSendTriggersChange([...props.autoSendTriggers, ""])}
+                    >
+                      <span class="cfg-array__add-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                          <line x1="12" y1="5" x2="12" y2="19"></line>
+                          <line x1="5" y1="12" x2="19" y2="12"></line>
+                        </svg>
+                      </span>
+                      Add
+                    </button>
+                  </div>
+                  <div class="cfg-array__help">Send immediately (250ms) when a message ends with any of these strings</div>
+                  ${
+                    props.autoSendTriggers.length === 0
+                      ? html`
+                          <div class="cfg-array__empty">No triggers. Click "Add" to create one.</div>
+                        `
+                      : html`
+                        <div class="cfg-array__items">
+                          ${props.autoSendTriggers.map(
+                            (trigger, idx) => html`
+                              <div class="cfg-array__item">
+                                <div class="cfg-array__item-header">
+                                  <span class="cfg-array__item-index">#${idx + 1}</span>
+                                  <button
+                                    type="button"
+                                    class="cfg-array__item-remove"
+                                    title="Remove trigger"
+                                    ?disabled=${!props.autoSendEnabled}
+                                    @click=${() => {
+                                      const next = [...props.autoSendTriggers];
+                                      next.splice(idx, 1);
+                                      props.onAutoSendTriggersChange(next);
+                                    }}
+                                  >
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                      <polyline points="3 6 5 6 21 6"></polyline>
+                                      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                                    </svg>
+                                  </button>
+                                </div>
+                                <div class="cfg-array__item-content">
+                                  <input
+                                    class="cfg-input"
+                                    type="text"
+                                    .value=${trigger}
+                                    ?disabled=${!props.autoSendEnabled}
+                                    placeholder="e.g. ? or let's get it"
+                                    @change=${(e: Event) => {
+                                      const next = [...props.autoSendTriggers];
+                                      next[idx] = (e.target as HTMLInputElement).value;
+                                      props.onAutoSendTriggersChange(next.filter((t) => t));
+                                    }}
+                                  />
+                                </div>
+                              </div>
+                            `,
+                          )}
+                        </div>
+                      `
+                  }
+                </div>
+              `
+              : nothing
+          }
+          ${
+            effectiveSubsection !== AUTO_SEND_SUBSECTION && props.formMode === "form"
               ? html`
                 ${
                   props.schemaLoading
@@ -716,16 +822,7 @@ export function renderConfig(props: ConfigProps) {
                     : nothing
                 }
               `
-              : html`
-                <label class="field config-raw-field">
-                  <span>Raw JSON5</span>
-                  <textarea
-                    .value=${props.raw}
-                    @input=${(e: Event) =>
-                      props.onRawChange((e.target as HTMLTextAreaElement).value)}
-                  ></textarea>
-                </label>
-              `
+              : nothing
           }
         </div>
 

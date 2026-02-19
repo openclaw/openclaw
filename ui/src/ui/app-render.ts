@@ -5,6 +5,7 @@ import { refreshChatAvatar } from "./app-chat.ts";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
 import { renderChatControls, renderTab, renderThemeToggle } from "./app-render.helpers.ts";
 import type { AppViewState } from "./app-view-state.ts";
+import type { OpenClawApp } from "./app.ts";
 import { loadAgentFileContent, loadAgentFiles, saveAgentFile } from "./controllers/agent-files.ts";
 import { loadAgentIdentities, loadAgentIdentity } from "./controllers/agent-identity.ts";
 import { loadAgentSkills } from "./controllers/agent-skills.ts";
@@ -846,28 +847,6 @@ export function renderApp(state: AppViewState) {
                 onSend: () => state.handleSendChat(),
                 canAbort: Boolean(state.chatRunId),
                 onAbort: () => void state.handleAbortChat(),
-                autoSendEnabled: state.settings.chatAutoSendEnabled,
-                autoSendPauseMs: state.settings.chatAutoSendPauseMs,
-                autoSendQuestionMark: state.settings.chatAutoSendQuestionMark,
-                onAutoSendEnabledChange: (next) => {
-                  state.applySettings({
-                    ...state.settings,
-                    chatAutoSendEnabled: next,
-                  });
-                  if (!next) {
-                    (state as unknown as OpenClawApp).clearChatAutoSendTimer();
-                  }
-                },
-                onAutoSendPauseMsChange: (next) =>
-                  state.applySettings({
-                    ...state.settings,
-                    chatAutoSendPauseMs: Math.max(0, Math.floor(next)),
-                  }),
-                onAutoSendQuestionMarkChange: (next) =>
-                  state.applySettings({
-                    ...state.settings,
-                    chatAutoSendQuestionMark: next,
-                  }),
                 onQueueRemove: (id) => state.removeQueuedMessage(id),
                 onNewSession: () => state.handleSendChat("/new", { restoreDraft: true }),
                 showNewMessages: state.chatNewMessagesBelow && !state.chatManualRefreshInFlight,
@@ -922,6 +901,18 @@ export function renderApp(state: AppViewState) {
                 onSave: () => saveConfig(state),
                 onApply: () => applyConfig(state),
                 onUpdate: () => runUpdate(state),
+                autoSendEnabled: state.settings.chatAutoSendEnabled,
+                autoSendTriggers: state.settings.chatAutoSendTriggers,
+                onAutoSendEnabledChange: (next) =>
+                  state.applySettings({
+                    ...state.settings,
+                    chatAutoSendEnabled: next,
+                  }),
+                onAutoSendTriggersChange: (next) =>
+                  state.applySettings({
+                    ...state.settings,
+                    chatAutoSendTriggers: next,
+                  }),
               })
             : nothing
         }

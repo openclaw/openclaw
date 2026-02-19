@@ -63,12 +63,6 @@ export type ChatProps = {
   onDraftChange: (next: string) => void;
   onDraftInput?: (next: string) => void;
   onSend: () => void;
-  autoSendEnabled?: boolean;
-  autoSendPauseMs?: number;
-  autoSendQuestionMark?: boolean;
-  onAutoSendEnabledChange?: (next: boolean) => void;
-  onAutoSendPauseMsChange?: (next: number) => void;
-  onAutoSendQuestionMarkChange?: (next: boolean) => void;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
   onNewSession: () => void;
@@ -432,44 +426,6 @@ export function renderChat(props: ChatProps) {
               ${isBusy ? "Queue" : "Send"}<kbd class="btn-kbd">↵</kbd>
             </button>
           </div>
-        </div>
-        <div class="chat-compose__autosend">
-          <label class="field field--inline">
-            <input
-              type="checkbox"
-              .checked=${Boolean(props.autoSendEnabled)}
-              ?disabled=${!props.connected}
-              @change=${(e: Event) =>
-                props.onAutoSendEnabledChange?.((e.target as HTMLInputElement).checked)}
-            />
-            <span>Auto-send</span>
-          </label>
-          <label class="field field--inline">
-            <span>Pause (ms)</span>
-            <input
-              type="number"
-              min="0"
-              step="100"
-              .value=${String(props.autoSendPauseMs ?? 0)}
-              ?disabled=${!props.connected || !props.autoSendEnabled}
-              @input=${(e: Event) => {
-                const next = Number((e.target as HTMLInputElement).value);
-                if (!Number.isNaN(next)) {
-                  props.onAutoSendPauseMsChange?.(next);
-                }
-              }}
-            />
-          </label>
-          <label class="field field--inline">
-            <input
-              type="checkbox"
-              .checked=${Boolean(props.autoSendQuestionMark)}
-              ?disabled=${!props.connected || !props.autoSendEnabled}
-              @change=${(e: Event) =>
-                props.onAutoSendQuestionMarkChange?.((e.target as HTMLInputElement).checked)}
-            />
-            <span>Send on “?”</span>
-          </label>
         </div>
       </div>
     </section>

@@ -152,14 +152,6 @@
   z-index: 10;
 }
 
-.chat-compose__autosend {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-  padding: 6px 0 2px;
-}
-
 .field--inline {
   display: inline-flex;
   align-items: center;
