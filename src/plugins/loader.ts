@@ -1,9 +1,15 @@
+import { createJiti } from "jiti";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createJiti } from "jiti";
 import type { OpenClawConfig } from "../config/config.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
+import type {
+  OpenClawPluginDefinition,
+  OpenClawPluginModule,
+  PluginDiagnostic,
+  PluginLogger,
+} from "./types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveUserPath } from "../utils.js";
 import { clearPluginCommands } from "./commands.js";
@@ -21,12 +27,6 @@ import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./
 import { setActivePluginRegistry } from "./runtime.js";
 import { createPluginRuntime } from "./runtime/index.js";
 import { validateJsonSchemaValue } from "./schema-validator.js";
-import type {
-  OpenClawPluginDefinition,
-  OpenClawPluginModule,
-  PluginDiagnostic,
-  PluginLogger,
-} from "./types.js";
 
 export type PluginLoadResult = PluginRegistry;
 
@@ -37,6 +37,7 @@ export type PluginLoadOptions = {
   coreGatewayHandlers?: Record<string, GatewayRequestHandler>;
   cache?: boolean;
   mode?: "full" | "validate";
+  agentId?: string;
 };
 
 const registryCache = new Map<string, PluginRegistry>();
@@ -281,6 +282,15 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
 
     const enableState = resolveEnableState(pluginId, candidate.origin, normalized);
     const entry = normalized.entries[pluginId];
+    // Check agent-level allowlist for plugins
+    const allowedAgents = entry?.allowedAgents;
+    if (allowedAgents && allowedAgents.length > 0) {
+      const agentId = options.agentId;
+      if (!agentId || !allowedAgents.includes(agentId)) {
+        enableState.enabled = false;
+        enableState.reason = "not in allowedAgents list";
+      }
+    }
     const record = createPluginRecord({
       id: pluginId,
       name: manifestRecord.name ?? pluginId,
