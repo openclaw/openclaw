@@ -2,8 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
 import { createDefaultDeps } from "../cli/deps.js";
+import type { OpenClawConfig } from "../config/config.js";
 import {
   clearInternalHooks,
   createInternalHookEvent,
