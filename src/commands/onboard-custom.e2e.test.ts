@@ -296,6 +296,30 @@ describe("applyCustomApiConfig", () => {
       }),
     ).toThrow("Custom max tokens must be an integer >= 1000.");
   });
+
+  it("updates contextWindow and maxTokens when re-onboarding an existing model", () => {
+    const first = applyCustomApiConfig({
+      config: {},
+      baseUrl: "https://llm.example.com/v1",
+      modelId: "foo-large",
+      compatibility: "openai",
+      contextWindow: 16000,
+      maxTokens: 4096,
+    });
+    const second = applyCustomApiConfig({
+      config: first.config,
+      baseUrl: "https://llm.example.com/v1",
+      modelId: "foo-large",
+      compatibility: "openai",
+      contextWindow: 64000,
+      maxTokens: 16384,
+    });
+    const provider = second.config.models?.providers?.[second.providerId!];
+    const models = provider?.models?.filter((m: { id: string }) => m.id === "foo-large");
+    expect(models).toHaveLength(1);
+    expect(models![0].contextWindow).toBe(64000);
+    expect(models![0].maxTokens).toBe(16384);
+  });
 });
 
 describe("parseNonInteractiveCustomApiFlags", () => {

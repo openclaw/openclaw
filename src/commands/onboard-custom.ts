@@ -538,7 +538,9 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     reasoning: false,
   };
-  const mergedModels = hasModel ? existingModels : [...existingModels, nextModel];
+  const mergedModels = hasModel
+    ? existingModels.map((m) => (m.id === modelId ? nextModel : m))
+    : [...existingModels, nextModel];
   const { apiKey: existingApiKey, ...existingProviderRest } = existingProvider ?? {};
   const normalizedApiKey =
     params.apiKey?.trim() || (existingApiKey ? existingApiKey.trim() : undefined);
