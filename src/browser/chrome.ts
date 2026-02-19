@@ -160,6 +160,148 @@ export async function isChromeCdpReady(
   return await canOpenWebSocket(wsUrl, handshakeTimeoutMs);
 }
 
+/**
+ * Enable Fetch-based proxy auth on a single CDP session.
+ *
+ * Sends Fetch.enable with handleAuthRequests, then listens for authRequired
+ * events and responds with stored credentials. Also continues paused requests
+ * so normal traffic is not blocked.
+ */
+function enableFetchAuthOnSession(
+  ws: WebSocket,
+  sessionId: string,
+  idCounter: { value: number },
+): void {
+  const send = (method: string, params: Record<string, unknown> = {}) => {
+    const msg: Record<string, unknown> = {
+      id: ++idCounter.value,
+      method,
+      params,
+    };
+    if (sessionId) {
+      msg.sessionId = sessionId;
+    }
+    ws.send(JSON.stringify(msg));
+  };
+
+  send("Fetch.enable", {
+    handleAuthRequests: true,
+    patterns: [{ urlPattern: "*" }],
+  });
+}
+
+/**
+ * Set up CDP Fetch-based proxy authentication for all page targets.
+ *
+ * Chrome does not support proxy credentials via --proxy-server. When it hits a
+ * 407 Proxy Authentication Required, the Fetch domain fires authRequired and we
+ * respond with the configured credentials via Fetch.continueWithAuth.
+ *
+ * Fetch is a page-level CDP domain, so we connect to the browser WebSocket,
+ * use Target.setDiscoverTargets to watch for new pages, attach to each one,
+ * and enable Fetch on every page session. This ensures proxy auth works across
+ * all tabs, not just the initial about:blank.
+ */
+async function setupCdpProxyAuth(profile: ResolvedBrowserProfile): Promise<void> {
+  const { proxyCredentials, cdpPort } = profile;
+  if (!proxyCredentials) {
+    return;
+  }
+
+  const cdpBase = `http://127.0.0.1:${cdpPort}`;
+  const versionRes = await fetch(appendCdpPath(cdpBase, "/json/version"));
+  const version = (await versionRes.json()) as { webSocketDebuggerUrl?: string };
+  const browserWsUrl = version.webSocketDebuggerUrl?.trim();
+  if (!browserWsUrl) {
+    throw new Error("no browser WebSocket URL for proxy auth setup");
+  }
+
+  const ws = new WebSocket(browserWsUrl);
+  await new Promise<void>((resolve, reject) => {
+    ws.once("open", resolve);
+    ws.once("error", reject);
+  });
+
+  const idCounter = { value: 0 };
+  const enabledSessions = new Set<string>();
+
+  const sendBrowser = (method: string, params: Record<string, unknown> = {}) => {
+    ws.send(JSON.stringify({ id: ++idCounter.value, method, params }));
+  };
+
+  const sendSession = (sessionId: string, method: string, params: Record<string, unknown> = {}) => {
+    ws.send(JSON.stringify({ id: ++idCounter.value, sessionId, method, params }));
+  };
+
+  // Handle all CDP messages from browser + forwarded session events.
+  ws.on("message", (data: Buffer) => {
+    let msg: {
+      method?: string;
+      params?: Record<string, unknown>;
+      sessionId?: string;
+    };
+    try {
+      msg = JSON.parse(data.toString());
+    } catch {
+      return;
+    }
+
+    // New target discovered — attach to page targets.
+    if (msg.method === "Target.targetCreated") {
+      const info = msg.params?.targetInfo as { targetId?: string; type?: string } | undefined;
+      if (info?.type === "page" && info.targetId) {
+        sendBrowser("Target.attachToTarget", {
+          targetId: info.targetId,
+          flatten: true,
+        });
+      }
+      return;
+    }
+
+    // Attached to a target — enable Fetch on the new session.
+    if (msg.method === "Target.attachedToTarget") {
+      const sessionId = msg.params?.sessionId as string | undefined;
+      if (sessionId && !enabledSessions.has(sessionId)) {
+        enabledSessions.add(sessionId);
+        enableFetchAuthOnSession(ws, sessionId, idCounter);
+      }
+      return;
+    }
+
+    // Session-scoped events (Fetch.authRequired / Fetch.requestPaused).
+    const sessionId = msg.sessionId;
+    if (!sessionId) {
+      return;
+    }
+
+    if (msg.method === "Fetch.authRequired") {
+      const requestId = msg.params?.requestId as string;
+      sendSession(sessionId, "Fetch.continueWithAuth", {
+        requestId,
+        authChallengeResponse: {
+          response: "ProvideCredentials",
+          username: proxyCredentials.username,
+          password: proxyCredentials.password,
+        },
+      });
+    } else if (msg.method === "Fetch.requestPaused") {
+      const requestId = msg.params?.requestId as string;
+      sendSession(sessionId, "Fetch.continueRequest", { requestId });
+    }
+  });
+
+  // Auto-attach to existing and future targets.
+  sendBrowser("Target.setDiscoverTargets", { discover: true });
+  // Also attach to targets that already exist (the initial about:blank page).
+  sendBrowser("Target.setAutoAttach", {
+    autoAttach: true,
+    waitForDebuggerOnStart: false,
+    flatten: true,
+  });
+
+  log.info(`🔑 proxy auth handler installed for profile "${profile.name}"`);
+}
+
 export async function launchOpenClawChrome(
   resolved: ResolvedBrowserConfig,
   profile: ResolvedBrowserProfile,
@@ -220,6 +362,11 @@ export async function launchOpenClawChrome(
     // Append user-configured extra arguments (e.g., stealth flags, window size)
     if (resolved.extraArgs.length > 0) {
       args.push(...resolved.extraArgs);
+    }
+
+    // Proxy: use profile-level proxy (falls back to global in resolveProfile)
+    if (profile.proxy) {
+      args.push(`--proxy-server=${profile.proxy}`);
     }
 
     // Always open a blank tab to ensure a target exists.
@@ -303,6 +450,17 @@ export async function launchOpenClawChrome(
     throw new Error(
       `Failed to start Chrome CDP on port ${profile.cdpPort} for profile "${profile.name}".`,
     );
+  }
+
+  // Set up proxy authentication via CDP if credentials are configured.
+  // Chrome's --proxy-server does not support inline credentials, so we intercept
+  // the 407 auth challenge via the Fetch domain and respond programmatically.
+  if (profile.proxyCredentials) {
+    try {
+      await setupCdpProxyAuth(profile);
+    } catch (err) {
+      log.warn(`proxy auth setup failed for profile "${profile.name}": ${String(err)}`);
+    }
   }
 
   const pid = proc.pid ?? -1;

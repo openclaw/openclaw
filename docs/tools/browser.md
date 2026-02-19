@@ -92,6 +92,61 @@ Notes:
 - Auto-detect order: system default browser if Chromium-based; otherwise Chrome → Brave → Edge → Chromium → Chrome Canary.
 - Local `openclaw` profiles auto-assign `cdpPort`/`cdpUrl` — set those only for remote CDP.
 
+## Proxy
+
+Route all browser traffic through a proxy server:
+
+```json5
+{
+  browser: {
+    proxy: "http://127.0.0.1:7890",
+  },
+}
+```
+
+Supported schemes: `http://`, `https://`, `socks5://`.
+
+### Authenticated proxies
+
+Include credentials directly in the URL:
+
+```json5
+{
+  browser: {
+    proxy: "http://username:password@proxy.example.com:8080",
+  },
+}
+```
+
+Credentials are stripped from the URL before passing `--proxy-server` to Chrome
+(Chrome does not support inline proxy credentials). OpenClaw handles
+authentication automatically via CDP by intercepting the proxy's 407 challenge
+and responding with the configured credentials.
+
+### Per-profile proxy overrides
+
+```json5
+{
+  browser: {
+    proxy: "http://default-proxy:8080",
+    profiles: {
+      work: { cdpPort: 18801, color: "#0066CC", proxy: "socks5://work-proxy:1080" },
+    },
+  },
+}
+```
+
+Per-profile proxies inherit credentials from the global proxy unless the
+profile's own URL contains credentials.
+
+### Notes
+
+- The proxy is passed to Chrome as `--proxy-server`.
+- System-level `HTTP_PROXY` environment variables do not affect the
+  OpenClaw-managed browser.
+- Proxy credentials are sensitive; prefer environment variable substitution
+  or a secrets manager over committing them to config files.
+
 ## Use Brave (or another Chromium-based browser)
 
 If your **system default** browser is Chromium-based (Chrome/Brave/Edge/etc),

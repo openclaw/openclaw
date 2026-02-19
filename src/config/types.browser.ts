@@ -7,6 +7,8 @@ export type BrowserProfileConfig = {
   driver?: "openclaw" | "extension";
   /** Profile color (hex). Auto-assigned at creation. */
   color: string;
+  /** Per-profile proxy override. Same format as browser.proxy. */
+  proxy?: string;
 };
 export type BrowserSnapshotDefaults = {
   /** Default snapshot mode (applies when mode is not provided). */
@@ -44,4 +46,11 @@ export type BrowserConfig = {
    * Example: ["--window-size=1920,1080", "--disable-infobars"]
    */
   extraArgs?: string[];
+  /**
+   * Proxy server for browser traffic.
+   * Passed as Chrome's --proxy-server launch argument.
+   * Supports http, https, and socks5 schemes.
+   * Example: "http://127.0.0.1:7890" or "socks5://proxy.example.com:1080"
+   */
+  proxy?: string;
 };
