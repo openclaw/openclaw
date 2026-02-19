@@ -1,12 +1,12 @@
-import type { ModelApi, OpenClawConfig } from "../config/types.js";
-import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { ensureAuthProfileStore, resolveAuthProfileOrder } from "../agents/auth-profiles.js";
 import { resolveEnvApiKey } from "../agents/model-auth.js";
+import type { ModelApi, OpenClawConfig } from "../config/types.js";
 import {
   formatApiKeyPreview,
   normalizeApiKeyInput,
   validateApiKeyInput,
 } from "./auth-choice.api-key.js";
+import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { applyDefaultModelChoice } from "./auth-choice.default-model.js";
 import { applyAuthProfileConfig } from "./onboard-auth.config-core.js";
 import { setDigitalOceanGradientApiKey } from "./onboard-auth.credentials.js";
