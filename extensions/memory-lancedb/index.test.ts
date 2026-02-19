@@ -82,6 +82,47 @@ describe("memory plugin e2e", () => {
     delete process.env.TEST_MEMORY_API_KEY;
   });
 
+  test("config schema accepts custom baseUrl and dimensions", async () => {
+    const { default: memoryPlugin } = await import("./index.js");
+
+    const config = memoryPlugin.configSchema?.parse?.({
+      embedding: {
+        apiKey: "local",
+        model: "nomic-embed-text",
+        baseUrl: "http://localhost:11434/v1",
+        dimensions: 768,
+      },
+      dbPath,
+    });
+
+    expect(config).toBeDefined();
+    expect(config?.embedding?.baseUrl).toBe("http://localhost:11434/v1");
+    expect(config?.embedding?.dimensions).toBe(768);
+  });
+
+  test("config schema accepts known model without dimensions", async () => {
+    const { default: memoryPlugin } = await import("./index.js");
+
+    const config = memoryPlugin.configSchema?.parse?.({
+      embedding: { apiKey: OPENAI_API_KEY, model: "text-embedding-3-large" },
+      dbPath,
+    });
+
+    expect(config).toBeDefined();
+    expect(config?.embedding?.dimensions).toBeUndefined();
+  });
+
+  test("config schema rejects unknown model without dimensions", async () => {
+    const { default: memoryPlugin } = await import("./index.js");
+
+    expect(() => {
+      memoryPlugin.configSchema?.parse?.({
+        embedding: { apiKey: "test-key", model: "unknown-model" },
+        dbPath,
+      });
+    }).toThrow("Unknown embedding model");
+  });
+
   test("config schema rejects missing apiKey", async () => {
     const { default: memoryPlugin } = await import("./index.js");
 
