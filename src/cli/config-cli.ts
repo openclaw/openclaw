@@ -313,7 +313,7 @@ export function registerConfigCli(program: Command) {
     .description("Set a config value by dot path")
     .argument("<path>", "Config path (dot or bracket notation)")
     .argument("<value>", "Value (JSON5 or raw string)")
-    .option("--json", "Parse value as JSON5 (required)", false)
+    .option("--json", "Strict JSON5 parsing (error instead of raw string fallback)", false)
     .action(async (path: string, value: string, opts) => {
       try {
         const parsedPath = parsePath(path);
