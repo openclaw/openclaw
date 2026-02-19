@@ -89,6 +89,21 @@ describe("resolveSandboxFsPathWithMounts", () => {
     expect(resolved.writable).toBe(true);
   });
 
+  it("allows writes when workspaceAccess is none", () => {
+    const sandbox = createSandbox({
+      workspaceAccess: "none",
+    });
+    const mounts = buildSandboxFsMounts(sandbox);
+    const resolved = resolveSandboxFsPathWithMounts({
+      filePath: "output.txt",
+      cwd: sandbox.workspaceDir,
+      defaultWorkspaceRoot: sandbox.workspaceDir,
+      defaultContainerRoot: sandbox.containerWorkdir,
+      mounts,
+    });
+    expect(resolved.writable).toBe(true);
+  });
+
   it("preserves legacy sandbox-root error for outside paths", () => {
     const sandbox = createSandbox();
     const mounts = buildSandboxFsMounts(sandbox);

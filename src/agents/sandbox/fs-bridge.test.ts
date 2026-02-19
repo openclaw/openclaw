@@ -103,4 +103,17 @@ describe("sandbox fs bridge shell compatibility", () => {
     ).rejects.toThrow(/read-only/);
     expect(mockedExecDockerRaw).not.toHaveBeenCalled();
   });
+
+  it("allows writes when workspaceAccess is none", async () => {
+    const sandbox = createSandbox({
+      workspaceAccess: "none",
+      workspaceDir: "/tmp/sandbox-workspace",
+    });
+    const bridge = createSandboxFsBridge({ sandbox });
+
+    await expect(
+      bridge.writeFile({ filePath: "output.txt", data: "hello" }),
+    ).resolves.toBeUndefined();
+    expect(mockedExecDockerRaw).toHaveBeenCalled();
+  });
 });
