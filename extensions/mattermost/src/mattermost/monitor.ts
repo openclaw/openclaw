@@ -1153,19 +1153,25 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     },
   });
 
+  let slashShutdownCleanup: Promise<void> | null = null;
+
   // Clean up slash commands on shutdown
   if (slashEnabled) {
     const onAbortCleanup = () => {
-      // Snapshot registered commands before deactivating state
+      // Snapshot registered commands before deactivating state.
+      // This listener may run concurrently with startup in a new process, so we keep
+      // monitor shutdown alive until the remote cleanup completes.
       const commands = getSlashCommandState(account.accountId)?.registeredCommands ?? [];
-      // Deactivate state immediately to prevent race with re-activation
+      // Deactivate state immediately to prevent new local dispatches during teardown.
       deactivateSlashCommands(account.accountId);
-      // Then clean up remote registrations asynchronously
-      void cleanupSlashCommands({
+
+      slashShutdownCleanup = cleanupSlashCommands({
         client,
         commands,
         log: (msg) => runtime.log?.(msg),
-      }).catch((err) => runtime.error?.(`mattermost: slash cleanup failed: ${String(err)}`));
+      }).catch((err) => {
+        runtime.error?.(`mattermost: slash cleanup failed: ${String(err)}`);
+      });
     };
     opts.abortSignal?.addEventListener("abort", onAbortCleanup, { once: true });
   }
@@ -1181,4 +1187,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       runtime.log?.(`mattermost reconnecting in ${Math.round(delayMs / 1000)}s`);
     },
   });
+
+  if (slashShutdownCleanup) {
+    await slashShutdownCleanup;
+  }
 }
