@@ -340,7 +340,7 @@ async function discoverTetrateModels(
             cacheWrite: 0,
           },
           contextWindow: m.context_window ?? 200000,
-          maxTokens: m.max_output_tokens ?? 64000,
+          maxTokens: m.max_output_tokens || 64000,
         } satisfies ModelDefinitionConfig;
       });
   } catch {
@@ -410,7 +410,7 @@ function buildTetrateProvider(apiKey?: string): ProviderConfig {
         input: ["text", "image"],
         cost: { input: 3, output: 15, cacheRead: 0.75, cacheWrite: 0 },
         contextWindow: 256000,
-        maxTokens: 0,
+        maxTokens: 131072,
       },
     ],
   };

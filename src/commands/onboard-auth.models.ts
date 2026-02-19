@@ -210,7 +210,7 @@ const TETRATE_MODEL_CATALOG = {
     reasoning: true,
     vision: true,
     contextWindow: 256000,
-    maxTokens: 0,
+    maxTokens: 131072,
     cost: { input: 3, output: 15, cacheRead: 0.75, cacheWrite: 0 },
   },
 } as const;
