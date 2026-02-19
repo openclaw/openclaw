@@ -2,6 +2,15 @@ import { describe, expect, it } from "vitest";
 import { createProcessedMessageTracker } from "./processed-messages.js";
 
 describe("createProcessedMessageTracker", () => {
+  it("returns false for undefined, null, and empty message IDs", () => {
+    const tracker = createProcessedMessageTracker(10);
+    expect(tracker.mark(undefined)).toBe(false);
+    expect(tracker.mark(null)).toBe(false);
+    expect(tracker.mark("")).toBe(false);
+    expect(tracker.mark("   ")).toBe(false);
+    expect(tracker.size()).toBe(0);
+  });
+
   it("dedupes and evicts oldest entries", () => {
     const tracker = createProcessedMessageTracker(3);
 
