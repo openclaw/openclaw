@@ -129,6 +129,36 @@ export function waitForQueueDebounce(queue: {
   });
 }
 
+export async function drainNextQueueItem<T>(
+  items: T[],
+  run: (item: T) => Promise<void>,
+): Promise<boolean> {
+  const next = items[0];
+  if (!next) {
+    return false;
+  }
+  await run(next);
+  items.shift();
+  return true;
+}
+
+export async function drainCollectItemIfNeeded<T>(params: {
+  forceIndividualCollect: boolean;
+  isCrossChannel: boolean;
+  setForceIndividualCollect?: (next: boolean) => void;
+  items: T[];
+  run: (item: T) => Promise<void>;
+}): Promise<"skipped" | "drained" | "empty"> {
+  if (!params.forceIndividualCollect && !params.isCrossChannel) {
+    return "skipped";
+  }
+  if (params.isCrossChannel) {
+    params.setForceIndividualCollect?.(true);
+  }
+  const drained = await drainNextQueueItem(params.items, params.run);
+  return drained ? "drained" : "empty";
+}
+
 export function buildQueueSummaryPrompt(params: {
   state: QueueSummaryState;
   noun: string;
