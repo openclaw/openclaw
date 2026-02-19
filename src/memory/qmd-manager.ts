@@ -104,6 +104,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   private lastUpdateAt: number | null = null;
   private lastEmbedAt: number | null = null;
   private attemptedNullByteCollectionRepair = false;
+  private attemptedDimensionMismatchRepair = false;
 
   private constructor(params: {
     cfg: OpenClawConfig;
@@ -347,6 +348,38 @@ export class QmdMemoryManager implements MemorySearchManager {
       (lower.includes("enotdir") || lower.includes("not a directory")) &&
       NUL_MARKER_RE.test(message)
     );
+  }
+
+  private isDimensionMismatchError(err: unknown): boolean {
+    const message = err instanceof Error ? err.message : String(err);
+    const lower = message.toLowerCase();
+    return (
+      lower.includes("dimension mismatch") ||
+      lower.includes("embedding size mismatch") ||
+      lower.includes("vector dimension") ||
+      lower.includes("invalid vector size")
+    );
+  }
+
+  private async resetIndex(): Promise<void> {
+    // Close the read-only DB handle if open, but do NOT call this.close()
+    // which permanently disables the manager.
+    if (this.db) {
+      try {
+        this.db.close();
+      } catch {
+        // ignore
+      }
+      this.db = null;
+    }
+    try {
+      await fs.rm(this.indexPath, { force: true });
+      await fs.rm(`${this.indexPath}-wal`, { force: true });
+      await fs.rm(`${this.indexPath}-shm`, { force: true });
+    } catch (err) {
+      log.warn(`failed to delete qmd index files: ${String(err)}`);
+    }
+    await this.ensureCollections();
   }
 
   private async tryRepairNullByteCollections(err: unknown, reason: string): Promise<boolean> {
@@ -601,10 +634,22 @@ export class QmdMemoryManager implements MemorySearchManager {
       try {
         await this.runQmd(["update"], { timeoutMs: this.qmd.update.updateTimeoutMs });
       } catch (err) {
-        if (!(await this.tryRepairNullByteCollections(err, reason))) {
+        if (this.isDimensionMismatchError(err)) {
+          if (!this.attemptedDimensionMismatchRepair) {
+            this.attemptedDimensionMismatchRepair = true;
+            log.warn(
+              `qmd update failed with dimension mismatch (${reason}); resetting index and retrying`,
+            );
+            await this.resetIndex();
+            await this.runQmd(["update"], { timeoutMs: this.qmd.update.updateTimeoutMs });
+          } else {
+            throw err;
+          }
+        } else if (!(await this.tryRepairNullByteCollections(err, reason))) {
           throw err;
+        } else {
+          await this.runQmd(["update"], { timeoutMs: this.qmd.update.updateTimeoutMs });
         }
-        await this.runQmd(["update"], { timeoutMs: this.qmd.update.updateTimeoutMs });
       }
       const embedIntervalMs = this.qmd.update.embedIntervalMs;
       const shouldEmbed =
@@ -616,7 +661,21 @@ export class QmdMemoryManager implements MemorySearchManager {
           await this.runQmd(["embed"], { timeoutMs: this.qmd.update.embedTimeoutMs });
           this.lastEmbedAt = Date.now();
         } catch (err) {
-          log.warn(`qmd embed failed (${reason}): ${String(err)}`);
+          if (this.isDimensionMismatchError(err)) {
+            if (!this.attemptedDimensionMismatchRepair) {
+              this.attemptedDimensionMismatchRepair = true;
+              log.warn(
+                `qmd embed failed with dimension mismatch (${reason}); resetting index and retrying`,
+              );
+              await this.resetIndex();
+              await this.runQmd(["embed"], { timeoutMs: this.qmd.update.embedTimeoutMs });
+              this.lastEmbedAt = Date.now();
+            } else {
+              log.warn(`qmd embed failed (${reason}) even after reset: ${String(err)}`);
+            }
+          } else {
+            log.warn(`qmd embed failed (${reason}): ${String(err)}`);
+          }
         }
       }
       this.lastUpdateAt = Date.now();
