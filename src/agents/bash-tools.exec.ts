@@ -51,6 +51,31 @@ export type {
   ExecToolDetails,
 } from "./bash-tools.exec-types.js";
 
+/**
+ * SECURITY: Rate guard for elevated=full exec commands.
+ * Prevents unbounded elevated command execution within a short window.
+ * Limit: 30 commands per 60-second window per gateway process.
+ */
+const ELEVATED_FULL_RATE_WINDOW_MS = 60_000;
+const ELEVATED_FULL_RATE_MAX = 30;
+let elevatedFullRateWindowStart = 0;
+let elevatedFullRateCount = 0;
+
+function checkElevatedFullRateGuard(): void {
+  const now = Date.now();
+  if (now - elevatedFullRateWindowStart > ELEVATED_FULL_RATE_WINDOW_MS) {
+    elevatedFullRateWindowStart = now;
+    elevatedFullRateCount = 0;
+  }
+  elevatedFullRateCount += 1;
+  if (elevatedFullRateCount > ELEVATED_FULL_RATE_MAX) {
+    throw new Error(
+      `elevated=full rate limit exceeded (${ELEVATED_FULL_RATE_MAX} commands per ${ELEVATED_FULL_RATE_WINDOW_MS / 1000}s). ` +
+        "Wait before issuing more elevated commands.",
+    );
+  }
+}
+
 function extractScriptTargetFromCommand(
   command: string,
 ): { kind: "python"; relOrAbsPath: string } | { kind: "node"; relOrAbsPath: string } | null {
@@ -278,6 +303,21 @@ export function createExecTool(
       }
       if (elevatedRequested) {
         logInfo(`exec: elevated command ${truncateMiddle(params.command, 120)}`);
+        // SECURITY: Immutable audit trail for elevated commands — cannot be silenced by log level.
+        // This ensures every elevated=full execution leaves a trace even when ask="off".
+        if (elevatedMode === "full") {
+          const auditEntry = {
+            event: "elevated_exec_full",
+            timestamp: new Date().toISOString(),
+            command: truncateMiddle(params.command, 512),
+            sessionKey: defaults?.sessionKey ?? "unknown",
+            agentId: agentId ?? "unknown",
+            provider: defaults?.messageProvider ?? "unknown",
+          };
+          process.stderr.write(
+            `[SECURITY AUDIT] elevated=full exec bypass: ${JSON.stringify(auditEntry)}\n`,
+          );
+        }
       }
       const configuredHost = defaults?.host ?? "sandbox";
       const requestedHost = normalizeExecHost(params.host) ?? null;
@@ -296,6 +336,7 @@ export function createExecTool(
       const requestedSecurity = normalizeExecSecurity(params.security);
       let security = minSecurity(configuredSecurity, requestedSecurity ?? configuredSecurity);
       if (elevatedRequested && elevatedMode === "full") {
+        checkElevatedFullRateGuard();
         security = "full";
       }
       const configuredAsk = defaults?.ask ?? "on-miss";
