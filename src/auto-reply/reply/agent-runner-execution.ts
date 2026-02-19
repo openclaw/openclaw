@@ -104,13 +104,7 @@ export async function runAgentTurnWithFallback(params: {
 
   while (true) {
     try {
-      const allowPartialStream = !(
-        params.followupRun.run.reasoningLevel === "stream" && params.opts?.onReasoningStream
-      );
       const normalizeStreamingText = (payload: ReplyPayload): { text?: string; skip: boolean } => {
-        if (!allowPartialStream) {
-          return { skip: true };
-        }
         let text = payload.text;
         if (!params.isHeartbeat && text?.includes("HEARTBEAT_OK")) {
           const stripped = stripHeartbeatToken(text, {
@@ -290,18 +284,16 @@ export async function runAgentTurnWithFallback(params: {
             abortSignal: params.opts?.abortSignal,
             blockReplyBreak: params.resolvedBlockStreamingBreak,
             blockReplyChunking: params.blockReplyChunking,
-            onPartialReply: allowPartialStream
-              ? async (payload) => {
-                  const textForTyping = await handlePartialForTyping(payload);
-                  if (!params.opts?.onPartialReply || textForTyping === undefined) {
-                    return;
-                  }
-                  await params.opts.onPartialReply({
-                    text: textForTyping,
-                    mediaUrls: payload.mediaUrls,
-                  });
-                }
-              : undefined,
+            onPartialReply: async (payload) => {
+              const textForTyping = await handlePartialForTyping(payload);
+              if (!params.opts?.onPartialReply || textForTyping === undefined) {
+                return;
+              }
+              await params.opts.onPartialReply({
+                text: textForTyping,
+                mediaUrls: payload.mediaUrls,
+              });
+            },
             onAssistantMessageStart: async () => {
               await params.typingSignals.signalMessageStart();
               await params.opts?.onAssistantMessageStart?.();
