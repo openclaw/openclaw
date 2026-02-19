@@ -1,3 +1,4 @@
+import { dropSystemEventsByContextKey } from "../../infra/system-events.js";
 import type { CronJobCreate, CronJobPatch } from "../types.js";
 import {
   applyJobPatch,
@@ -184,6 +185,11 @@ export async function remove(state: CronServiceState, id: string) {
     }
     state.store.jobs = state.store.jobs.filter((j) => j.id !== id);
     const removed = (state.store.jobs.length ?? 0) !== before;
+    if (removed) {
+      // Drop any pending system-event notifications enqueued by this job
+      // so they are not delivered after the job has been deleted (#18880).
+      dropSystemEventsByContextKey(`cron:${id}`);
+    }
     await persist(state);
     armTimer(state);
     if (removed) {

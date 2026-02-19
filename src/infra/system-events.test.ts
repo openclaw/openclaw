@@ -3,7 +3,12 @@ import { prependSystemEvents } from "../auto-reply/reply/session-updates.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { isCronSystemEvent } from "./heartbeat-runner.js";
-import { enqueueSystemEvent, peekSystemEvents, resetSystemEventsForTest } from "./system-events.js";
+import {
+  dropSystemEventsByContextKey,
+  enqueueSystemEvent,
+  peekSystemEvents,
+  resetSystemEventsForTest,
+} from "./system-events.js";
 
 const cfg = {} as unknown as OpenClawConfig;
 const mainKey = resolveMainSessionKey(cfg);
@@ -45,6 +50,36 @@ describe("system events (session routing)", () => {
 
   it("requires an explicit session key", () => {
     expect(() => enqueueSystemEvent("Node: Mac Studio", { sessionKey: " " })).toThrow("sessionKey");
+  });
+});
+
+describe("dropSystemEventsByContextKey", () => {
+  beforeEach(() => resetSystemEventsForTest());
+
+  it("drops events matching the contextKey across all sessions", () => {
+    enqueueSystemEvent("job1 msg", { sessionKey: mainKey, contextKey: "cron:abc" });
+    enqueueSystemEvent("job2 msg", { sessionKey: mainKey, contextKey: "cron:def" });
+    enqueueSystemEvent("other msg", { sessionKey: mainKey });
+
+    const dropped = dropSystemEventsByContextKey("cron:abc");
+    expect(dropped).toBe(1);
+    expect(peekSystemEvents(mainKey)).toEqual(["job2 msg", "other msg"]);
+  });
+
+  it("drops from multiple session queues", () => {
+    enqueueSystemEvent("a", { sessionKey: "sess1", contextKey: "cron:x" });
+    enqueueSystemEvent("b", { sessionKey: "sess2", contextKey: "cron:x" });
+    enqueueSystemEvent("c", { sessionKey: "sess2", contextKey: "cron:y" });
+
+    const dropped = dropSystemEventsByContextKey("cron:x");
+    expect(dropped).toBe(2);
+    expect(peekSystemEvents("sess1")).toEqual([]);
+    expect(peekSystemEvents("sess2")).toEqual(["c"]);
+  });
+
+  it("returns 0 when no events match", () => {
+    enqueueSystemEvent("msg", { sessionKey: mainKey, contextKey: "cron:abc" });
+    expect(dropSystemEventsByContextKey("cron:zzz")).toBe(0);
   });
 });
 
