@@ -1,6 +1,6 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { flushPendingToolResultsAfterIdle } from "./pi-embedded-runner/wait-for-idle-before-flush.js";
 import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
 
@@ -37,8 +37,21 @@ function getMessages(sm: ReturnType<typeof guardSessionManager>): AgentMessage[]
 }
 
 describe("flushPendingToolResultsAfterIdle", () => {
+  let savedAbortMode: string | undefined;
+
+  beforeEach(() => {
+    savedAbortMode = process.env.OPENCLAW_TOOL_GUARD_ABORT_MODE;
+    // Default: discard mode (new default)
+    delete process.env.OPENCLAW_TOOL_GUARD_ABORT_MODE;
+  });
+
   afterEach(() => {
     vi.useRealTimers();
+    if (savedAbortMode === undefined) {
+      delete process.env.OPENCLAW_TOOL_GUARD_ABORT_MODE;
+    } else {
+      process.env.OPENCLAW_TOOL_GUARD_ABORT_MODE = savedAbortMode;
+    }
   });
 
   it("waits for idle so real tool results can land before flush", async () => {
@@ -54,9 +67,9 @@ describe("flushPendingToolResultsAfterIdle", () => {
       timeoutMs: 1_000,
     });
 
-    // Flush is waiting for idle; synthetic result must not appear yet.
+    // Flush is waiting for idle; the pair buffer is still in flight — nothing written yet.
     await Promise.resolve();
-    expect(getMessages(sm).map((m) => m.role)).toEqual(["assistant"]);
+    expect(getMessages(sm).map((m) => m.role)).toEqual([]);
 
     // Tool completes before idle wait finishes.
     appendMessage(toolResult("call_retry_1", "command output here"));
@@ -71,7 +84,7 @@ describe("flushPendingToolResultsAfterIdle", () => {
     );
   });
 
-  it("flushes pending tool call after timeout when idle never resolves", async () => {
+  it("discards incomplete pair on timeout when idle never resolves (discard mode)", async () => {
     const sm = guardSessionManager(SessionManager.inMemory());
     const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
     vi.useFakeTimers();
@@ -87,8 +100,30 @@ describe("flushPendingToolResultsAfterIdle", () => {
     await vi.advanceTimersByTimeAsync(30);
     await flushPromise;
 
+    // Discard mode (default): incomplete pair is dropped, nothing written to JSONL.
     const entries = getMessages(sm);
+    expect(entries.length).toBe(0);
+  });
 
+  it("synthesizes error result on timeout when idle never resolves (synthetic mode)", async () => {
+    process.env.OPENCLAW_TOOL_GUARD_ABORT_MODE = "synthetic";
+    const sm = guardSessionManager(SessionManager.inMemory());
+    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
+    vi.useFakeTimers();
+    const agent = { waitForIdle: () => new Promise<void>(() => {}) };
+
+    appendMessage(assistantToolCall("call_orphan_2"));
+
+    const flushPromise = flushPendingToolResultsAfterIdle({
+      agent,
+      sessionManager: sm,
+      timeoutMs: 30,
+    });
+    await vi.advanceTimersByTimeAsync(30);
+    await flushPromise;
+
+    // Synthetic mode: both the assistant message and a synthetic error toolResult are committed.
+    const entries = getMessages(sm);
     expect(entries.length).toBe(2);
     expect(entries[1].role).toBe("toolResult");
     expect((entries[1] as { isError?: boolean }).isError).toBe(true);
