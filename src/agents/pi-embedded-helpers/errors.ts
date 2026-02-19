@@ -472,6 +472,17 @@ export function formatAssistantErrorText(
     );
   }
 
+  // Catch malformed tool call JSON parse errors (e.g. concatenated JSON from
+  // misbehaving providers like Venice.ai).  These surface as raw SyntaxError
+  // messages such as "Unexpected non-whitespace character after JSON at
+  // position 2" and should never be shown verbatim to the user.
+  if (isMalformedToolCallError(raw)) {
+    return (
+      "The model produced a malformed tool call that couldn't be parsed. " +
+      "Please try again — if this persists, switch to a different model or use /new to start a fresh session."
+    );
+  }
+
   const invalidRequest = raw.match(/"type":"invalid_request_error".*?"message":"([^"]+)"/);
   if (invalidRequest?.[1]) {
     return `LLM request rejected: ${invalidRequest[1]}`;
@@ -677,6 +688,26 @@ export function isMissingToolCallInputError(raw: string): boolean {
     return false;
   }
   return TOOL_CALL_INPUT_MISSING_RE.test(raw) || TOOL_CALL_INPUT_PATH_RE.test(raw);
+}
+
+const MALFORMED_JSON_RE =
+  /(?:tool_use|tool.call|tool_input|input.*json|parse.*tool|tool.*parse).*(?:unexpected (?:token|non-whitespace|character|end of json|number)|unterminated string|bad control character|expected (?:property name|'[,}]'|double-quoted)|json (?:parse|syntax)|syntaxerror)|(?:unexpected (?:token|non-whitespace|character|end of json)|unterminated string|expected (?:property name|'[,}]'|double-quoted)|json (?:parse|syntax)|syntaxerror).*(?:tool_use|tool.call|tool_input)/i;
+
+export function isMalformedToolCallError(raw: string): boolean {
+  if (!raw) {
+    return false;
+  }
+  // Fast path: must mention both JSON-parse-like errors AND tool context
+  const lower = raw.toLowerCase();
+  const hasToolContext =
+    lower.includes("tool_use") ||
+    lower.includes("tool_call") ||
+    lower.includes("tool_input") ||
+    lower.includes("tool call");
+  if (!hasToolContext) {
+    return false;
+  }
+  return MALFORMED_JSON_RE.test(raw);
 }
 
 export function isBillingAssistantError(msg: AssistantMessage | undefined): boolean {

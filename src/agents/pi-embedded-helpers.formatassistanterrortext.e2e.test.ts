@@ -5,6 +5,7 @@ import {
   formatBillingErrorMessage,
   formatAssistantErrorText,
   formatRawAssistantErrorForUi,
+  isMalformedToolCallError,
 } from "./pi-embedded-helpers.js";
 
 describe("formatAssistantErrorText", () => {
@@ -148,5 +149,35 @@ describe("formatRawAssistantErrorForUi", () => {
     expect(formatRawAssistantErrorForUi(htmlError)).toBe(
       "The AI service is temporarily unavailable (HTTP 521). Please try again in a moment.",
     );
+  });
+});
+
+describe("isMalformedToolCallError", () => {
+  it("detects Anthropic tool_use JSON parse errors", () => {
+    expect(
+      isMalformedToolCallError(
+        "tool_use block had invalid JSON in \"input\": Unexpected token '}' at position 42",
+      ),
+    ).toBe(true);
+  });
+
+  it("detects tool_call with SyntaxError", () => {
+    expect(isMalformedToolCallError("SyntaxError: JSON parse error in tool_call input")).toBe(true);
+  });
+
+  it("detects tool_input with unterminated string", () => {
+    expect(isMalformedToolCallError("tool_input: unterminated string in JSON at position 15")).toBe(
+      true,
+    );
+  });
+
+  it("does NOT match generic JSON errors without tool context", () => {
+    expect(isMalformedToolCallError("Unexpected token in JSON")).toBe(false);
+    expect(isMalformedToolCallError("SyntaxError: JSON parse error")).toBe(false);
+    expect(isMalformedToolCallError("The user sent an unexpected token")).toBe(false);
+  });
+
+  it("returns false for empty/null input", () => {
+    expect(isMalformedToolCallError("")).toBe(false);
   });
 });
