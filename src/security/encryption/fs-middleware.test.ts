@@ -9,7 +9,9 @@ import {
   getActiveConfigKey,
   getActiveWorkspaceKey,
   readConfigAutoDecrypt,
+  readConfigSyncAutoDecrypt,
   readFileAutoDecrypt,
+  readFileSyncAutoDecrypt,
   setActiveKeys,
   writeConfigAutoEncrypt,
   writeFileAutoEncrypt,
@@ -104,5 +106,29 @@ describe("config key operations", () => {
     await writeConfigAutoEncrypt(fp, "config: encrypted");
     const raw = await fs.readFile(fp);
     expect(isEncrypted(raw)).toBe(true);
+  });
+});
+
+describe("readFileSyncAutoDecrypt", () => {
+  it("reads plaintext synchronously", async () => {
+    const fp = path.join(tmpDir, "sync.md");
+    await fs.writeFile(fp, "sync plaintext");
+    expect(readFileSyncAutoDecrypt(fp)).toBe("sync plaintext");
+  });
+
+  it("decrypts encrypted file synchronously", async () => {
+    setActiveKeys(WORKSPACE_KEY, CONFIG_KEY);
+    const fp = path.join(tmpDir, "sync-enc.md");
+    await fs.writeFile(fp, encryptString("sync secret", WORKSPACE_KEY));
+    expect(readFileSyncAutoDecrypt(fp)).toBe("sync secret");
+  });
+});
+
+describe("readConfigSyncAutoDecrypt", () => {
+  it("decrypts config with config key synchronously", async () => {
+    setActiveKeys(WORKSPACE_KEY, CONFIG_KEY);
+    const fp = path.join(tmpDir, "config-sync.yaml");
+    await fs.writeFile(fp, encryptString("sync config", CONFIG_KEY));
+    expect(readConfigSyncAutoDecrypt(fp)).toBe("sync config");
   });
 });

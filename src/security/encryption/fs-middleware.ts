@@ -7,6 +7,7 @@
  * This allows gradual integration: existing code can be updated
  * to use these wrappers without changing the call signature.
  */
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import { decrypt, encrypt, isEncrypted } from "./crypto.js";
 
@@ -98,4 +99,31 @@ export async function writeConfigAutoEncrypt(filePath: string, content: string):
   } else {
     await fs.writeFile(filePath, content, "utf-8");
   }
+}
+
+/**
+ * Synchronous version of readFileAutoDecrypt.
+ * Used for config.yaml loading which uses readFileSync.
+ */
+export function readFileSyncAutoDecrypt(filePath: string): string {
+  const raw = fsSync.readFileSync(filePath);
+
+  if (isEncrypted(raw) && _activeWorkspaceKey) {
+    return decrypt(raw, _activeWorkspaceKey).toString("utf-8");
+  }
+
+  return raw.toString("utf-8");
+}
+
+/**
+ * Synchronous config read with auto-decryption using the config key.
+ */
+export function readConfigSyncAutoDecrypt(filePath: string): string {
+  const raw = fsSync.readFileSync(filePath);
+
+  if (isEncrypted(raw) && _activeConfigKey) {
+    return decrypt(raw, _activeConfigKey).toString("utf-8");
+  }
+
+  return raw.toString("utf-8");
 }
