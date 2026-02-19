@@ -1,8 +1,16 @@
+import { builtinModules } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+
+// Server-side code (logging, media, plugins) is transitively imported by shared
+// modules used in the UI.  Vite externalises most `node:*` builtins automatically
+// but `node:module` (which exports `createRequire`) is not covered, causing a hard
+// build failure.  Explicitly external-ise every Node built-in so Rollup emits an
+// empty shim instead of erroring.
+const nodeExternals = [...builtinModules, ...builtinModules.map((m) => `node:${m}`)];
 
 function normalizeBase(input: string): string {
   const trimmed = input.trim();
@@ -31,6 +39,9 @@ export default defineConfig(() => {
       outDir: path.resolve(here, "../dist/control-ui"),
       emptyOutDir: true,
       sourcemap: true,
+      rollupOptions: {
+        external: nodeExternals,
+      },
     },
     server: {
       host: true,
