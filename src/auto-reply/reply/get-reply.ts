@@ -1,5 +1,3 @@
-import type { MsgContext } from "../templating.js";
-import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -14,7 +12,9 @@ import { applyLinkUnderstanding } from "../../link-understanding/apply.js";
 import { applyMediaUnderstanding } from "../../media-understanding/apply.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
+import type { MsgContext } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
+import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { resolveDefaultModel } from "./directive-handling.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
 import { handleInlineActions } from "./get-reply-inline-actions.js";
@@ -110,8 +110,7 @@ export async function getReplyFromConfig(
     agentCfg?.typingIntervalSeconds ?? sessionCfg?.typingIntervalSeconds;
   const typingIntervalSeconds =
     typeof configuredTypingSeconds === "number" ? configuredTypingSeconds : 6;
-  const configuredTtlSeconds =
-    agentCfg?.typingTtlSeconds ?? sessionCfg?.typingTtlSeconds;
+  const configuredTtlSeconds = agentCfg?.typingTtlSeconds ?? sessionCfg?.typingTtlSeconds;
   // Clamp to Node.js setTimeout max (~24.8 days) to prevent 32-bit overflow
   const MAX_TTL_SECONDS = 2_147_483;
   const typingTtlMs =
