@@ -1,4 +1,5 @@
 import { createRequire } from "node:module";
+import type { PluginRuntime } from "./types.js";
 import { resolveEffectiveMessagesConfig, resolveHumanDelayConfig } from "../../agents/identity.js";
 import { createMemoryGetTool, createMemorySearchTool } from "../../agents/tools/memory-tool.js";
 import { handleSlackAction } from "../../agents/tools/slack-actions.js";
@@ -105,6 +106,7 @@ import {
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
 } from "../../pairing/pairing-store.js";
+import { runCommandWithTimeout } from "../../process/exec.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import { monitorSignalProvider } from "../../signal/index.js";
 import { probeSignal } from "../../signal/probe.js";
@@ -137,7 +139,6 @@ import {
 } from "../../web/auth-store.js";
 import { loadWebMedia } from "../../web/media.js";
 import { formatNativeDependencyHint } from "./native-deps.js";
-import type { PluginRuntime } from "./types.js";
 
 let cachedVersion: string | null = null;
 
@@ -235,13 +236,6 @@ function loadWhatsAppActions() {
   return whatsappActionsPromise;
 }
 
-const runtimeCommandExecutionDisabled: PluginRuntime["system"]["runCommandWithTimeout"] =
-  async () => {
-    throw new Error(
-      "runtime.system.runCommandWithTimeout is disabled for security hardening. Use fixed-purpose runtime APIs instead.",
-    );
-  };
-
 export function createPluginRuntime(): PluginRuntime {
   return {
     version: resolveVersion(),
@@ -251,7 +245,7 @@ export function createPluginRuntime(): PluginRuntime {
     },
     system: {
       enqueueSystemEvent,
-      runCommandWithTimeout: runtimeCommandExecutionDisabled,
+      runCommandWithTimeout,
       formatNativeDependencyHint,
     },
     media: {

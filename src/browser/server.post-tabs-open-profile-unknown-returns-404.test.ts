@@ -32,6 +32,20 @@ describe("browser control server", () => {
     const body = (await result.json()) as { error: string };
     expect(body.error).toContain("not found");
   });
+
+  it("POST /tabs/open returns 400 for invalid URLs", async () => {
+    await startBrowserControlServerFromConfig();
+    const base = getBrowserControlServerBaseUrl();
+
+    const result = await realFetch(`${base}/tabs/open`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: "not a url" }),
+    });
+    expect(result.status).toBe(400);
+    const body = (await result.json()) as { error: string };
+    expect(body.error).toContain("Invalid URL:");
+  });
 });
 
 describe("profile CRUD endpoints", () => {

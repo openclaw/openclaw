@@ -70,7 +70,6 @@ vi.mock("@opentelemetry/exporter-logs-otlp-http", () => ({
 vi.mock("@opentelemetry/sdk-logs", () => ({
   BatchLogRecordProcessor: class {},
   LoggerProvider: class {
-    addLogRecordProcessor = vi.fn();
     getLogger = vi.fn(() => ({
       emit: logEmit,
     }));
@@ -96,9 +95,7 @@ vi.mock("@opentelemetry/resources", () => ({
 }));
 
 vi.mock("@opentelemetry/semantic-conventions", () => ({
-  SemanticResourceAttributes: {
-    SERVICE_NAME: "service.name",
-  },
+  ATTR_SERVICE_NAME: "service.name",
 }));
 
 vi.mock("openclaw/plugin-sdk", async () => {

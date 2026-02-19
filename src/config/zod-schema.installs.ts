@@ -12,5 +12,11 @@ export const InstallRecordShape = {
   sourcePath: z.string().optional(),
   installPath: z.string().optional(),
   version: z.string().optional(),
+  resolvedName: z.string().optional(),
+  resolvedVersion: z.string().optional(),
+  resolvedSpec: z.string().optional(),
+  integrity: z.string().optional(),
+  shasum: z.string().optional(),
+  resolvedAt: z.string().optional(),
   installedAt: z.string().optional(),
 } as const;

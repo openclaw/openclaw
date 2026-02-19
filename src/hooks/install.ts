@@ -11,11 +11,14 @@ import {
 import { installPackageDir } from "../infra/install-package-dir.js";
 import { resolveSafeInstallDir, unscopedPackageName } from "../infra/install-safe-path.js";
 import {
+  type NpmIntegrityDrift,
+  type NpmSpecResolution,
   packNpmSpecToArchive,
   resolveArchiveSourcePath,
   withTempDir,
 } from "../infra/install-source-utils.js";
 import { validateRegistryNpmSpec } from "../infra/npm-registry-spec.js";
+import { isPathInside, isPathInsideWithRealpath } from "../security/scan-paths.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import { parseFrontmatter } from "./frontmatter.js";
 
@@ -37,8 +40,17 @@ export type InstallHooksResult =
       hooks: string[];
       targetDir: string;
       version?: string;
+      npmResolution?: NpmSpecResolution;
+      integrityDrift?: NpmIntegrityDrift;
     }
   | { ok: false; error: string };
+
+export type HookNpmIntegrityDriftParams = {
+  spec: string;
+  expectedIntegrity: string;
+  actualIntegrity: string;
+  resolution: NpmSpecResolution;
+};
 
 const defaultLogger: HookInstallLogger = {};
 
@@ -207,7 +219,23 @@ async function installHookPackageFromDir(params: {
   const resolvedHooks = [] as string[];
   for (const entry of hookEntries) {
     const hookDir = path.resolve(params.packageDir, entry);
+    if (!isPathInside(params.packageDir, hookDir)) {
+      return {
+        ok: false,
+        error: `openclaw.hooks entry escapes package directory: ${entry}`,
+      };
+    }
     await validateHookDir(hookDir);
+    if (
+      !isPathInsideWithRealpath(params.packageDir, hookDir, {
+        requireRealpath: true,
+      })
+    ) {
+      return {
+        ok: false,
+        error: `openclaw.hooks entry resolves outside package directory: ${entry}`,
+      };
+    }
     const hookName = await resolveHookNameFromDir(hookDir);
     resolvedHooks.push(hookName);
   }
@@ -375,6 +403,8 @@ export async function installHooksFromNpmSpec(params: {
   mode?: "install" | "update";
   dryRun?: boolean;
   expectedHookPackId?: string;
+  expectedIntegrity?: string;
+  onIntegrityDrift?: (params: HookNpmIntegrityDriftParams) => boolean | Promise<boolean>;
 }): Promise<InstallHooksResult> {
   const { logger, timeoutMs, mode, dryRun } = resolveTimedHookInstallModeOptions(params);
   const expectedHookPackId = params.expectedHookPackId;
@@ -395,7 +425,44 @@ export async function installHooksFromNpmSpec(params: {
       return packedResult;
     }
 
-    return await installHooksFromArchive({
+    const npmResolution: NpmSpecResolution = {
+      ...packedResult.metadata,
+      resolvedAt: new Date().toISOString(),
+    };
+
+    let integrityDrift: NpmIntegrityDrift | undefined;
+    if (
+      params.expectedIntegrity &&
+      npmResolution.integrity &&
+      params.expectedIntegrity !== npmResolution.integrity
+    ) {
+      integrityDrift = {
+        expectedIntegrity: params.expectedIntegrity,
+        actualIntegrity: npmResolution.integrity,
+      };
+      const driftPayload: HookNpmIntegrityDriftParams = {
+        spec,
+        expectedIntegrity: integrityDrift.expectedIntegrity,
+        actualIntegrity: integrityDrift.actualIntegrity,
+        resolution: npmResolution,
+      };
+      let proceed = true;
+      if (params.onIntegrityDrift) {
+        proceed = await params.onIntegrityDrift(driftPayload);
+      } else {
+        logger.warn?.(
+          `Integrity drift detected for ${driftPayload.resolution.resolvedSpec ?? driftPayload.spec}: expected ${driftPayload.expectedIntegrity}, got ${driftPayload.actualIntegrity}`,
+        );
+      }
+      if (!proceed) {
+        return {
+          ok: false,
+          error: `aborted: npm package integrity drift detected for ${driftPayload.resolution.resolvedSpec ?? driftPayload.spec}`,
+        };
+      }
+    }
+
+    const installResult = await installHooksFromArchive({
       archivePath: packedResult.archivePath,
       hooksDir: params.hooksDir,
       timeoutMs,
@@ -404,6 +471,15 @@ export async function installHooksFromNpmSpec(params: {
       dryRun,
       expectedHookPackId,
     });
+    if (!installResult.ok) {
+      return installResult;
+    }
+
+    return {
+      ...installResult,
+      npmResolution,
+      integrityDrift,
+    };
   });
 }
 
