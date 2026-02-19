@@ -16,6 +16,8 @@ import type {
   ListMcpServersParams,
   Agent,
   ListAgentsParams,
+  AgentSystem,
+  ListAgentSystemsParams,
 } from "./types.js";
 import { isRetryableNetworkError } from "../infra/errors.js";
 import { resolveFetch } from "../infra/fetch.js";
@@ -150,6 +152,26 @@ export class CloudruSimpleClient {
       limit: params?.limit ?? CLOUDRU_DEFAULT_PAGE_SIZE,
       offset: params?.offset ?? 0,
     });
+  }
+
+  /** Get a single agent by ID. */
+  async getAgent(agentId: string): Promise<Agent> {
+    return this.get<Agent>(`/agents/${agentId}`);
+  }
+
+  /** List Agent Systems available in the project. */
+  async listAgentSystems(params?: ListAgentSystemsParams): Promise<PaginatedResult<AgentSystem>> {
+    return this.get<PaginatedResult<AgentSystem>>("/agentSystems", {
+      search: params?.search,
+      status: params?.status,
+      limit: params?.limit ?? CLOUDRU_DEFAULT_PAGE_SIZE,
+      offset: params?.offset ?? 0,
+    });
+  }
+
+  /** Get a single agent system by ID. */
+  async getAgentSystem(systemId: string): Promise<AgentSystem> {
+    return this.get<AgentSystem>(`/agentSystems/${systemId}`);
   }
 
   /** Clear the auth token cache (for tests or forced re-auth). */

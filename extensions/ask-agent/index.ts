@@ -1,57 +1,20 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import type { Agent } from "../../src/ai-fabric/types.js";
 import { normalizeAgentStatus } from "../../src/ai-fabric/agent-status.js";
+import { normalizeAgentSystemStatus } from "../../src/ai-fabric/agent-system-status.js";
 import { CloudruA2AClient, A2AError } from "../../src/ai-fabric/cloudru-a2a-client.js";
 import { CloudruAuthError } from "../../src/ai-fabric/cloudru-auth.js";
 import { CloudruSimpleClient } from "../../src/ai-fabric/cloudru-client-simple.js";
+import {
+  resolveAddressable,
+  agentToAddressable,
+  agentSystemToAddressable,
+  computeEndpoint,
+} from "../../src/ai-fabric/resolve-agent.js";
 import { resolveIamSecret } from "../../src/ai-fabric/resolve-iam-secret.js";
 
-// ---------------------------------------------------------------------------
-// Agent resolution — modular, reusable
-// ---------------------------------------------------------------------------
-
-export type ResolvedAgent = { ok: true; agent: Agent } | { ok: false; error: string };
-
-export function resolveAgent(agents: Agent[], query: string): ResolvedAgent {
-  // Exact ID match
-  const byId = agents.find((a) => a.id === query);
-  if (byId) {
-    return { ok: true, agent: byId };
-  }
-
-  // Exact name match (case-insensitive)
-  const lowerQuery = query.toLowerCase();
-  const byName = agents.find((a) => a.name.toLowerCase() === lowerQuery);
-  if (byName) {
-    return { ok: true, agent: byName };
-  }
-
-  // Substring match
-  const matches = agents.filter((a) => a.name.toLowerCase().includes(lowerQuery));
-  if (matches.length === 1) {
-    return { ok: true, agent: matches[0] };
-  }
-
-  if (matches.length > 1) {
-    const list = matches
-      .map((a) => `  - ${a.name} (${normalizeAgentStatus(a.status)}, ID: ${a.id.slice(0, 8)})`)
-      .join("\n");
-    return {
-      ok: false,
-      error: `Multiple agents match "${query}":\n${list}\n\nPlease specify the exact agent name or ID.`,
-    };
-  }
-
-  // No match — show available agents
-  const list = agents.map((a) => `  - ${a.name} (${normalizeAgentStatus(a.status)})`).join("\n");
-  return {
-    ok: false,
-    error:
-      agents.length > 0
-        ? `Agent "${query}" not found. Available agents:\n${list}`
-        : `No agents found in this project.`,
-  };
-}
+// Re-export shared utilities for backwards compatibility
+export { resolveAgent } from "../../src/ai-fabric/resolve-agent.js";
 
 // ---------------------------------------------------------------------------
 // Response formatting — modular, reusable
@@ -152,38 +115,48 @@ export default function register(api: OpenClawPluginApi) {
 
       const authParams = { keyId, secret };
 
-      // Discover agents from API
-      let agents: Agent[];
+      // Discover agents + agent systems from API
+      const client = new CloudruSimpleClient({ projectId, auth: authParams });
+      let addressables: import("../../src/ai-fabric/resolve-agent.js").Addressable[];
       try {
-        const client = new CloudruSimpleClient({
-          projectId,
-          auth: authParams,
-        });
-        const result = await client.listAgents({ limit: 100 });
-        // Filter deleted agents, normalize status
-        agents = result.data.filter((a) => {
-          const s = normalizeAgentStatus(a.status);
-          return s !== "DELETED" && s !== "ON_DELETION";
-        });
+        const [agentsResult, systemsResult] = await Promise.all([
+          client.listAgents({ limit: 100 }),
+          client.listAgentSystems({ limit: 100 }),
+        ]);
+
+        // Filter deleted, convert to addressables
+        const agents = agentsResult.data
+          .filter((a) => {
+            const s = normalizeAgentStatus(a.status);
+            return s !== "DELETED" && s !== "ON_DELETION";
+          })
+          .map(agentToAddressable);
+
+        const systems = systemsResult.data
+          .filter((s) => {
+            const st = normalizeAgentSystemStatus(s.status);
+            return st !== "DELETED" && st !== "ON_DELETION";
+          })
+          .map(agentSystemToAddressable);
+
+        addressables = [...agents, ...systems];
       } catch (err) {
         if (err instanceof CloudruAuthError) {
           return {
             text: `Could not authenticate with Cloud.ru IAM. Check your keyId and CLOUDRU_IAM_SECRET.`,
           };
         }
-        return { text: `Failed to list agents: ${(err as Error).message}` };
+        return { text: `Failed to list resources: ${(err as Error).message}` };
       }
 
-      // Resolve agent
-      const resolved = resolveAgent(agents, agentQuery);
+      // Resolve target (agent or agent system)
+      const resolved = resolveAddressable(addressables, agentQuery);
       if (!resolved.ok) {
         return { text: resolved.error };
       }
 
-      const agent = resolved.agent;
-      const endpoint =
-        (agent as Agent & { publicUrl?: string }).publicUrl ??
-        `https://${agent.id}-agent.ai-agent.inference.cloud.ru`;
+      const target = resolved.target;
+      const endpoint = computeEndpoint(target);
 
       // Send message via A2A
       try {
@@ -193,10 +166,10 @@ export default function register(api: OpenClawPluginApi) {
           message: userMessage,
         });
 
-        return { text: formatAgentResponse(agent.name, result) };
+        return { text: formatAgentResponse(target.name, result) };
       } catch (err) {
         if (err instanceof A2AError) {
-          return { text: formatA2AError(agent.name, endpoint, err) };
+          return { text: formatA2AError(target.name, endpoint, err) };
         }
         if (err instanceof CloudruAuthError) {
           return {

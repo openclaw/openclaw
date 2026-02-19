@@ -199,6 +199,7 @@ export type AgentSystem = {
   name: string;
   description?: string;
   status: AgentSystemStatus;
+  endpoint?: string;
   instanceTypeId?: string;
   orchestratorOptions?: OrchestratorOptions;
   options?: {

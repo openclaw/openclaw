@@ -87,6 +87,32 @@ export type {
   McpStatusErrorType,
 } from "./mcp-status.js";
 
+// Agent system status monitoring
+export {
+  getAgentSystemStatus,
+  mapAgentSystemHealth,
+  normalizeAgentSystemStatus,
+} from "./agent-system-status.js";
+export type {
+  AgentSystemHealth,
+  AgentSystemStatusParams,
+  AgentSystemStatusEntry,
+  AgentSystemStatusSummary,
+  AgentSystemStatusResult,
+  AgentSystemStatusError,
+  AgentSystemStatusErrorType,
+} from "./agent-system-status.js";
+
+// Agent / Agent System resolution
+export {
+  resolveAddressable,
+  resolveAgent,
+  agentToAddressable,
+  agentSystemToAddressable,
+  computeEndpoint,
+} from "./resolve-agent.js";
+export type { Addressable, AddressableKind, ResolvedAddressable } from "./resolve-agent.js";
+
 // IAM secret resolution
 export { resolveIamSecret } from "./resolve-iam-secret.js";
 
