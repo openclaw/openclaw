@@ -181,7 +181,7 @@ export function resolveWindowsLobsterSpawn(
     resolveLobsterScriptFromPackageJson(resolvedExecPath);
   if (!scriptPath) {
     throw new Error(
-      `lobsterPath resolved to ${path.basename(resolvedExecPath)} wrapper, but no Node entrypoint could be resolved without shell execution. Configure pluginConfig.lobsterPath to lobster.exe.`,
+      `${path.basename(resolvedExecPath)} wrapper resolved, but no Node entrypoint could be resolved without shell execution. Ensure Lobster is installed and runnable on PATH (prefer lobster.exe).`,
     );
   }
 
