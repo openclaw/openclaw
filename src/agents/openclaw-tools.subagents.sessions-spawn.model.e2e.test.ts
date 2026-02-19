@@ -236,7 +236,7 @@ describe("openclaw-tools: subagents (sessions_spawn model + thinking)", () => {
     });
   });
 
-  it("sessions_spawn prefers target agent primary model over global default", async () => {
+  it("sessions_spawn prefers target agent runtime default model over global defaults.model.primary", async () => {
     await expectSpawnUsesConfiguredModel({
       config: {
         session: { mainKey: "main", scope: "per-sender" },
