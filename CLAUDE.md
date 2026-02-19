@@ -97,3 +97,13 @@ Key files for Cloud.ru FM:
 - `src/agents/cloudru-proxy-health.ts` — Proxy health check
 
 Documentation (Russian): `docs/ru/`
+
+## Insights Knowledge Base
+
+When facing a difficult problem that search doesn't solve, check `docs/ccli-max-cloudru-fm/insights/` for previously documented solutions. Each insight file documents symptoms, root cause, and fix for problems encountered during development.
+
+After fixing a non-trivial bug, create a new insight file:
+
+- Path: `docs/ccli-max-cloudru-fm/insights/YYYY-MM-DD-<slug>.md`
+- Template: symptoms, root cause, solution, key files
+- Run `/myinsights` to create one interactively
