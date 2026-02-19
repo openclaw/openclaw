@@ -21,6 +21,11 @@ import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
 import { normalizeScpRemoteHost } from "../../infra/scp-host.js";
 import { waitForTransportReady } from "../../infra/transport-ready.js";
 import { mediaKindFromMime } from "../../media/constants.js";
+import {
+  isInboundPathAllowed,
+  resolveIMessageAttachmentRoots,
+  resolveIMessageRemoteAttachmentRoots,
+} from "../../media/inbound-path-policy.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
 import {
   readChannelAllowFromStore,
@@ -146,6 +151,14 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   const cliPath = opts.cliPath ?? imessageCfg.cliPath ?? "imsg";
   const dbPath = opts.dbPath ?? imessageCfg.dbPath;
   const probeTimeoutMs = imessageCfg.probeTimeoutMs ?? DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS;
+  const attachmentRoots = resolveIMessageAttachmentRoots({
+    cfg,
+    accountId: accountInfo.accountId,
+  });
+  const remoteAttachmentRoots = resolveIMessageRemoteAttachmentRoots({
+    cfg,
+    accountId: accountInfo.accountId,
+  });
 
   // Resolve remoteHost: explicit config, or auto-detect from SSH wrapper script.
   // Accept only a safe host token to avoid option/argument injection into SCP.
@@ -220,8 +233,18 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     const messageText = (message.text ?? "").trim();
 
     const attachments = includeAttachments ? (message.attachments ?? []) : [];
-    // Filter to valid attachments with paths
-    const validAttachments = attachments.filter((entry) => entry?.original_path && !entry?.missing);
+    const effectiveAttachmentRoots = remoteHost ? remoteAttachmentRoots : attachmentRoots;
+    const validAttachments = attachments.filter((entry) => {
+      const attachmentPath = entry?.original_path?.trim();
+      if (!attachmentPath || entry?.missing) {
+        return false;
+      }
+      if (isInboundPathAllowed({ filePath: attachmentPath, roots: effectiveAttachmentRoots })) {
+        return true;
+      }
+      logVerbose(`imessage: dropping inbound attachment outside allowed roots: ${attachmentPath}`);
+      return false;
+    });
     const firstAttachment = validAttachments[0];
     const mediaPath = firstAttachment?.original_path ?? undefined;
     const mediaType = firstAttachment?.mime_type ?? undefined;
@@ -229,7 +252,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     const mediaPaths = validAttachments.map((a) => a.original_path).filter(Boolean) as string[];
     const mediaTypes = validAttachments.map((a) => a.mime_type ?? undefined);
     const kind = mediaKindFromMime(mediaType ?? undefined);
-    const placeholder = kind ? `<media:${kind}>` : attachments?.length ? "<media:attachment>" : "";
+    const placeholder = kind
+      ? `<media:${kind}>`
+      : validAttachments.length
+        ? "<media:attachment>"
+        : "";
     const bodyText = messageText || placeholder;
 
     const storeAllowFrom = await readChannelAllowFromStore("imessage").catch(() => []);

@@ -42,7 +42,7 @@ import {
 } from "../session-utils.js";
 import { applySessionsPatchToStore } from "../sessions-patch.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
-import type { GatewayRequestHandlers, RespondFn } from "./types.js";
+import type { GatewayClient, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 function requireSessionKey(key: unknown, respond: RespondFn): string | null {
@@ -66,6 +66,26 @@ function resolveGatewaySessionTargetFromKey(key: string) {
   const cfg = loadConfig();
   const target = resolveGatewaySessionStoreTarget({ cfg, key });
   return { cfg, target, storePath: target.storePath };
+}
+
+function rejectWebchatSessionMutation(params: {
+  action: "patch" | "delete";
+  client: GatewayClient | null;
+  isWebchatConnect: (params: GatewayClient["connect"] | null | undefined) => boolean;
+  respond: RespondFn;
+}): boolean {
+  if (!params.client?.connect || !params.isWebchatConnect(params.client.connect)) {
+    return false;
+  }
+  params.respond(
+    false,
+    undefined,
+    errorShape(
+      ErrorCodes.INVALID_REQUEST,
+      `webchat clients cannot ${params.action} sessions; use chat.send for session-scoped updates`,
+    ),
+  );
+  return true;
 }
 
 function migrateAndPruneSessionStoreKey(params: {
@@ -240,15 +260,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     if (!key) {
       return;
     }
-    if (client?.connect && isWebchatConnect(client.connect)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "webchat clients cannot patch sessions; use chat.send for session-scoped updates",
-        ),
-      );
+    if (rejectWebchatSessionMutation({ action: "patch", client, isWebchatConnect, respond })) {
       return;
     }
 
@@ -366,15 +378,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     if (!key) {
       return;
     }
-    if (client?.connect && isWebchatConnect(client.connect)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "webchat clients cannot delete sessions; use chat.send for session-scoped updates",
-        ),
-      );
+    if (rejectWebchatSessionMutation({ action: "delete", client, isWebchatConnect, respond })) {
       return;
     }
 
