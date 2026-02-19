@@ -1,0 +1,22 @@
+Shared Memory System for OpenClaw
+Copyright (c) 2026 Constantine V (V 👾)
+
+This software includes code and concepts derived from third-party projects:
+
+epro-memory
+-----------
+Copyright (c) 2026 Toby Bridges
+Repository: https://github.com/toby-bridges/epro-memory
+License: Apache License 2.0
+
+This project uses the epro-memory database format for reading LLM agent memories.
+The integration allows seamless access to vector-based memory storage created by
+the epro-memory system.
+
+For the full Apache License 2.0 text, see:
+https://www.apache.org/licenses/LICENSE-2.0
+
+---
+
+This NOTICE file is provided in compliance with the Apache License 2.0
+attribution requirements for derivative works and integrated components.

@@ -1,0 +1,8 @@
+{
+  "DAYS_TO_READ": 3,
+  "MAX_FACTS": 10,
+  "INCLUDE_FINISHED": false,
+  "LOG_LEVEL": "INFO",
+  "ENABLE_EPRO_MEMORY": true,
+  "EPRO_MEMORY_LIMIT": 5
+}
