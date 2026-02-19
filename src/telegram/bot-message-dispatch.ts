@@ -328,6 +328,12 @@ export const dispatchTelegramMessage = async ({
               ) {
                 // Ignore regressive final edits (e.g., "Okay." -> "Ok"), which
                 // can appear transiently in some provider streams.
+                //
+                // Keep the streamed preview as the final visible message instead
+                // of clearing it later; otherwise a tool warning sent in the same
+                // turn can become the only visible Telegram output.
+                finalizedViaPreviewMessage = true;
+                deliveryState.delivered = true;
                 return;
               }
               try {
