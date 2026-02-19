@@ -394,13 +394,19 @@ export function dropOrphanedToolPairs(messages: AgentMessage[]): DropOrphanedToo
   // Pass 1: collect all tool_use IDs from assistant messages
   const useIds = new Set<string>();
   for (const msg of messages) {
-    if (!msg || typeof msg !== "object") continue;
+    if (!msg || typeof msg !== "object") {
+      continue;
+    }
     const role = (msg as { role?: unknown }).role;
-    if (role !== "assistant") continue;
+    if (role !== "assistant") {
+      continue;
+    }
     const assistant = msg as Extract<AgentMessage, { role: "assistant" }>;
     const stopReason = (assistant as { stopReason?: string }).stopReason;
     // Skip aborted/errored messages (same policy as repairToolUseResultPairing)
-    if (stopReason === "error" || stopReason === "aborted") continue;
+    if (stopReason === "error" || stopReason === "aborted") {
+      continue;
+    }
     const calls = extractToolCallsFromAssistant(assistant);
     for (const call of calls) {
       useIds.add(call.id);
@@ -410,11 +416,17 @@ export function dropOrphanedToolPairs(messages: AgentMessage[]): DropOrphanedToo
   // Pass 2: collect all tool_result IDs
   const resultIds = new Set<string>();
   for (const msg of messages) {
-    if (!msg || typeof msg !== "object") continue;
+    if (!msg || typeof msg !== "object") {
+      continue;
+    }
     const role = (msg as { role?: unknown }).role;
-    if (role !== "toolResult") continue;
+    if (role !== "toolResult") {
+      continue;
+    }
     const id = extractToolResultId(msg as Extract<AgentMessage, { role: "toolResult" }>);
-    if (id) resultIds.add(id);
+    if (id) {
+      resultIds.add(id);
+    }
   }
 
   // Pass 3: filter messages, removing orphans
@@ -467,9 +479,13 @@ export function dropOrphanedToolPairs(messages: AgentMessage[]): DropOrphanedToo
         // All tool_use blocks in content are orphaned
         // Keep non-tool-use content blocks, drop message if empty
         const filteredContent = (assistant.content as unknown[]).filter((block) => {
-          if (!block || typeof block !== "object") return true;
+          if (!block || typeof block !== "object") {
+            return true;
+          }
           const type = (block as { type?: unknown }).type;
-          if (type !== "toolCall" && type !== "toolUse" && type !== "functionCall") return true;
+          if (type !== "toolCall" && type !== "toolUse" && type !== "functionCall") {
+            return true;
+          }
           const id = (block as { id?: unknown }).id;
           return typeof id === "string" && resultIds.has(id);
         });
@@ -482,9 +498,13 @@ export function dropOrphanedToolPairs(messages: AgentMessage[]): DropOrphanedToo
       // Some tool_use blocks are orphaned: filter content
       if (Array.isArray(assistant.content)) {
         const filteredContent = (assistant.content as unknown[]).filter((block) => {
-          if (!block || typeof block !== "object") return true;
+          if (!block || typeof block !== "object") {
+            return true;
+          }
           const type = (block as { type?: unknown }).type;
-          if (type !== "toolCall" && type !== "toolUse" && type !== "functionCall") return true;
+          if (type !== "toolCall" && type !== "toolUse" && type !== "functionCall") {
+            return true;
+          }
           const id = (block as { id?: unknown }).id;
           return typeof id === "string" && resultIds.has(id);
         });

@@ -137,24 +137,34 @@ export function installSessionToolResultGuard(
         const calls = extractToolCallsFromAssistant(
           msg as Extract<AgentMessage, { role: "assistant" }>,
         );
-        for (const c of calls) usedIds.add(c.id);
+        for (const c of calls) {
+          usedIds.add(c.id);
+        }
       } else if (role === "toolResult") {
         const id = extractToolResultId(msg as Extract<AgentMessage, { role: "toolResult" }>);
-        if (id) resultIds.add(id);
+        if (id) {
+          resultIds.add(id);
+        }
       }
     }
     for (const id of usedIds) {
-      if (!resultIds.has(id)) return false;
+      if (!resultIds.has(id)) {
+        return false;
+      }
     }
     for (const id of resultIds) {
-      if (!usedIds.has(id)) return false;
+      if (!usedIds.has(id)) {
+        return false;
+      }
     }
     return true;
   };
 
   // Commit: write buffered messages atomically to JSONL
   const commitToolPairBuffer = () => {
-    if (toolPairBuffer.length === 0) return;
+    if (toolPairBuffer.length === 0) {
+      return;
+    }
     if (!validatePairIntegrity()) {
       log.warn("tool-pair integrity check failed at commit time, discarding buffer");
       toolPairBuffer.length = 0;
@@ -181,7 +191,9 @@ export function installSessionToolResultGuard(
     const discarded_tool_result_count = toolPairBuffer.filter(
       (m) => (m as { role?: unknown }).role === "toolResult",
     ).length;
-    if (discarded_tool_use_count === 0 && discarded_tool_result_count === 0) return;
+    if (discarded_tool_use_count === 0 && discarded_tool_result_count === 0) {
+      return;
+    }
     log.warn("discarding incomplete tool pair buffer", {
       discard_reason: reason,
       discarded_tool_use_count,
@@ -192,7 +204,9 @@ export function installSessionToolResultGuard(
   };
 
   const flushPendingToolResults = (reason = "flush") => {
-    if (pending.size === 0 && toolPairBuffer.length === 0) return; // idempotent
+    if (pending.size === 0 && toolPairBuffer.length === 0) {
+      return;
+    } // idempotent
 
     if (resolveAbortMode() === "synthetic" && allowSyntheticToolResults) {
       // Legacy: synthesize error results for pending tool calls

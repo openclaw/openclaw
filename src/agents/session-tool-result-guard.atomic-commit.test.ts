@@ -56,18 +56,24 @@ function hasOrphanToolUse(messages: AgentMessage[]): boolean {
     const role = (msg as { role?: unknown }).role;
     if (role === "toolResult") {
       const id = (msg as { toolCallId?: string }).toolCallId;
-      if (id) resultIds.add(id);
+      if (id) {
+        resultIds.add(id);
+      }
     }
   }
   for (const msg of messages) {
     const role = (msg as { role?: unknown }).role;
-    if (role !== "assistant") continue;
+    if (role !== "assistant") {
+      continue;
+    }
     const content = (msg as { content?: unknown[] }).content ?? [];
     for (const block of content) {
       const type = (block as { type?: string }).type;
       if (type === "toolCall" || type === "toolUse" || type === "functionCall") {
         const id = (block as { id?: string }).id;
-        if (id && !resultIds.has(id)) return true;
+        if (id && !resultIds.has(id)) {
+          return true;
+        }
       }
     }
   }
@@ -199,7 +205,9 @@ describe("pair-atomic tool_use/tool_result commit (discard mode)", () => {
 
       // Pair 2 must NOT be in JSONL
       const allToolUseIds = messages.flatMap((msg) => {
-        if ((msg as { role?: unknown }).role !== "assistant") return [];
+        if ((msg as { role?: unknown }).role !== "assistant") {
+          return [];
+        }
         const content = (msg as { content?: unknown[] }).content ?? [];
         return content
           .filter((b) => {
