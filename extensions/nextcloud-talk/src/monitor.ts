@@ -21,6 +21,8 @@ const DEFAULT_WEBHOOK_HOST = "0.0.0.0";
 const DEFAULT_WEBHOOK_PATH = "/nextcloud-talk-webhook";
 const DEFAULT_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const DEFAULT_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
+const DEFAULT_WEBHOOK_REPLAY_WINDOW_MS = 5 * 60_000;
+const MAX_RECENT_REPLAY_KEYS = 5_000;
 const HEALTH_PATH = "/healthz";
 
 function formatError(err: unknown): string {
@@ -69,6 +71,29 @@ function payloadToInboundMessage(
   };
 }
 
+function isReplayWebhookRequest(
+  recentWebhookRequests: Map<string, number>,
+  replayKey: string,
+  nowMs: number,
+): boolean {
+  const seenAt = recentWebhookRequests.get(replayKey);
+  recentWebhookRequests.set(replayKey, nowMs);
+
+  if (typeof seenAt === "number" && nowMs - seenAt < DEFAULT_WEBHOOK_REPLAY_WINDOW_MS) {
+    return true;
+  }
+
+  if (recentWebhookRequests.size > MAX_RECENT_REPLAY_KEYS) {
+    for (const [key, timestamp] of recentWebhookRequests) {
+      if (nowMs - timestamp >= DEFAULT_WEBHOOK_REPLAY_WINDOW_MS) {
+        recentWebhookRequests.delete(key);
+      }
+    }
+  }
+
+  return false;
+}
+
 export function readNextcloudTalkWebhookBody(
   req: IncomingMessage,
   maxBodyBytes: number,
@@ -85,6 +110,7 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
   stop: () => void;
 } {
   const { port, host, path, secret, onMessage, onError, abortSignal } = opts;
+  const recentWebhookRequests = new Map<string, number>();
   const maxBodyBytes =
     typeof opts.maxBodyBytes === "number" &&
     Number.isFinite(opts.maxBodyBytes) &&
@@ -127,6 +153,13 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
       if (!isValid) {
         res.writeHead(401, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: "Invalid signature" }));
+        return;
+      }
+
+      const replayKey = `${headers.random}:${headers.signature}`;
+      if (isReplayWebhookRequest(recentWebhookRequests, replayKey, Date.now())) {
+        res.writeHead(200);
+        res.end();
         return;
       }
 
