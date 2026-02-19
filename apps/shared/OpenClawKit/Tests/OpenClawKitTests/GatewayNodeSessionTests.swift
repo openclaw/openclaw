@@ -75,6 +75,10 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
         }
     }
 
+    func sendPing(pongReceiveHandler: @escaping @Sendable (Error?) -> Void) {
+        pongReceiveHandler(nil)
+    }
+
     func receive() async throws -> URLSessionWebSocketTask.Message {
         let phase = self.lock.withLock { () -> Int in
             let current = self.receivePhase
