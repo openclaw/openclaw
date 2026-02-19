@@ -35,6 +35,8 @@ import {
   type DiscordSendEmbeds,
 } from "./send.shared.js";
 import type { DiscordSendResult } from "./send.types.js";
+import { sendWebhookMessage } from "./send.webhook.js";
+import { getOrCreateWebhook } from "./webhook-cache.js";
 import {
   ensureOggOpus,
   getVoiceMessageMetadata,
@@ -53,6 +55,8 @@ type DiscordSendOpts = {
   components?: DiscordSendComponents;
   embeds?: DiscordSendEmbeds;
   silent?: boolean;
+  /** When set, send via webhook with this display identity instead of regular bot message. */
+  webhookIdentity?: { name: string; emoji?: string; avatar?: string };
 };
 
 type DiscordClientRequest = ReturnType<typeof createDiscordClient>["request"];
@@ -245,6 +249,43 @@ export async function sendMessageDiscord(
       },
       channelId,
     );
+  }
+
+  // Webhook delivery path: when webhookIdentity is set, send via webhook for
+  // distinct agent display name and to enable agent-to-agent message triggering.
+  if (opts.webhookIdentity) {
+    const webhookAuth = await getOrCreateWebhook(channelId, rest);
+    if (webhookAuth) {
+      const displayName = [opts.webhookIdentity.name, opts.webhookIdentity.emoji]
+        .filter(Boolean)
+        .join(" ")
+        .trim() || "OpenClaw Agent";
+      try {
+        await sendWebhookMessage(webhookAuth.id, webhookAuth.token, textWithTables, {
+          username: displayName,
+          avatarUrl: opts.webhookIdentity.avatar,
+          rest,
+          mediaUrl: opts.mediaUrl,
+          mediaLocalRoots: opts.mediaLocalRoots,
+          maxLinesPerMessage: accountInfo.config.maxLinesPerMessage,
+          chunkMode,
+        });
+      } catch (err) {
+        throw await buildDiscordSendError(err, {
+          channelId,
+          rest,
+          token,
+          hasMedia: Boolean(opts.mediaUrl),
+        });
+      }
+      recordChannelActivity({
+        channel: "discord",
+        accountId: accountInfo.accountId,
+        direction: "outbound",
+      });
+      return { messageId: "webhook", channelId };
+    }
+    // Fall through to regular send if webhook creation failed.
   }
 
   let result: { id: string; channel_id: string } | { id: string | null; channel_id: string };

@@ -54,6 +54,7 @@ import {
   resolveDiscordMessageText,
 } from "./message-utils.js";
 import { resolveDiscordSenderIdentity, resolveDiscordWebhookId } from "./sender-identity.js";
+import { isOwnWebhookId } from "../webhook-cache.js";
 import { resolveDiscordSystemEvent } from "./system-events.js";
 import { resolveDiscordThreadChannel, resolveDiscordThreadParentInfo } from "./threading.js";
 
@@ -88,6 +89,17 @@ export async function preflightDiscordMessage(
 
   const pluralkitConfig = params.discordConfig?.pluralkit;
   const webhookId = resolveDiscordWebhookId(message);
+
+  // Detect messages from our own broadcast webhooks — these should be processed
+  // by OTHER agents (not the sender) to enable agent-to-agent communication.
+  let ownWebhookUsername: string | undefined;
+  if (webhookId && isOwnWebhookId(webhookId)) {
+    if (!allowBots) {
+      return null; // own webhook but bots not allowed — skip
+    }
+    ownWebhookUsername = author.username ?? undefined;
+    logVerbose(`discord: own-webhook message from "${ownWebhookUsername}" (webhook ${webhookId})`);
+  }
   const shouldCheckPluralKit = Boolean(pluralkitConfig?.enabled) && !webhookId;
   let pluralkitInfo: Awaited<ReturnType<typeof fetchPluralKitMessageInfo>> = null;
   if (shouldCheckPluralKit) {
@@ -549,7 +561,7 @@ export async function preflightDiscordMessage(
   logDebug(
     `[discord-preflight] shouldRequireMention=${shouldRequireMention} mentionGate.shouldSkip=${mentionGate.shouldSkip} wasMentioned=${wasMentioned}`,
   );
-  if (isGuildMessage && shouldRequireMention) {
+  if (isGuildMessage && shouldRequireMention && !ownWebhookUsername) {
     if (botId && mentionGate.shouldSkip) {
       logDebug(`[discord-preflight] drop: no-mention`);
       logVerbose(`discord: drop guild message (mention required, botId=${botId})`);
@@ -570,7 +582,7 @@ export async function preflightDiscordMessage(
     }
   }
 
-  if (isGuildMessage && hasAccessRestrictions && !memberAllowed) {
+  if (isGuildMessage && hasAccessRestrictions && !memberAllowed && !ownWebhookUsername) {
     logDebug(`[discord-preflight] drop: member not allowed`);
     logVerbose(`Blocked discord guild sender ${sender.id} (not in users/roles allowlist)`);
     return null;
@@ -651,5 +663,6 @@ export async function preflightDiscordMessage(
     effectiveWasMentioned,
     canDetectMention,
     historyEntry,
+    ownWebhookUsername,
   };
 }

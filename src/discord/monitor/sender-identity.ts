@@ -19,10 +19,16 @@ export type DiscordSenderIdentity = {
 type DiscordWebhookMessageLike = {
   webhookId?: string | null;
   webhook_id?: string | null;
+  rawData?: { webhook_id?: string | null };
+  raw?: { webhook_id?: string | null };
 };
 
 export function resolveDiscordWebhookId(message: DiscordWebhookMessageLike): string | null {
-  const candidate = message.webhookId ?? message.webhook_id;
+  const candidate =
+    message.webhookId ??
+    message.webhook_id ??
+    message.rawData?.webhook_id ??
+    message.raw?.webhook_id;
   return typeof candidate === "string" && candidate.trim() ? candidate.trim() : null;
 }
 

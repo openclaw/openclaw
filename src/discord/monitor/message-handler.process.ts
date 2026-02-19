@@ -4,6 +4,7 @@ import { resolveChunkMode } from "../../auto-reply/chunk.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { formatInboundEnvelope, resolveEnvelopeFormatOptions } from "../../auto-reply/envelope.js";
 import {
+  type HistoryEntry,
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
 } from "../../auto-reply/reply/history.js";
@@ -18,11 +19,14 @@ import { createTypingCallbacks } from "../../channels/typing.js";
 import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
+import { convertMarkdownTables } from "../../markdown/tables.js";
 import { buildAgentSessionKey } from "../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../routing/session-key.js";
 import { buildUntrustedChannelMetadata } from "../../security/channel-metadata.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { reactMessageDiscord, removeReactionDiscord } from "../send.js";
+import { sendWebhookMessage } from "../send.webhook.js";
+import { getOrCreateWebhook } from "../webhook-cache.js";
 import { normalizeDiscordSlug, resolveDiscordOwnerAllowFrom } from "./allow-list.js";
 import { resolveTimestampMs } from "./format.js";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
@@ -271,7 +275,20 @@ function createDiscordStatusReactionController(params: {
   };
 }
 
-export async function processDiscordMessage(ctx: DiscordMessagePreflightContext) {
+export type DiscordBroadcastAgentIdentity = {
+  name?: string;
+  emoji?: string;
+  avatar?: string;
+};
+
+export async function processDiscordMessage(
+  ctx: DiscordMessagePreflightContext,
+  opts?: {
+    guildHistory?: HistoryEntry[];
+    suppressGuildHistoryClear?: boolean;
+    agentIdentity?: DiscordBroadcastAgentIdentity;
+  },
+) {
   const {
     cfg,
     discordConfig,
@@ -416,9 +433,10 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   });
   const shouldIncludeChannelHistory =
     !isDirectMessage && !(isGuildMessage && channelConfig?.autoThread && !threadChannel);
+  const guildHistoryEntries = opts?.guildHistory ?? guildHistories.get(messageChannelId) ?? [];
   if (shouldIncludeChannelHistory) {
     combinedBody = buildPendingHistoryContextFromMap({
-      historyMap: guildHistories,
+      historyMap: new Map([[messageChannelId, guildHistoryEntries]]),
       historyKey: messageChannelId,
       limit: historyLimit,
       currentMessage: combinedBody,
@@ -508,7 +526,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
 
   const inboundHistory =
     shouldIncludeChannelHistory && historyLimit > 0
-      ? (guildHistories.get(messageChannelId) ?? []).map((entry) => ({
+      ? guildHistoryEntries.map((entry) => ({
           sender: entry.sender,
           body: entry.body,
           timestamp: entry.timestamp,
@@ -583,17 +601,41 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     ? deliverTarget.slice("channel:".length)
     : messageChannelId;
 
-  const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
-    cfg,
-    agentId: route.agentId,
-    channel: "discord",
-    accountId: route.accountId,
-  });
+  const webhookAuth = opts?.agentIdentity
+    ? await getOrCreateWebhook(messageChannelId, client.rest)
+    : null;
+  const useWebhookDelivery = Boolean(webhookAuth && opts?.agentIdentity);
+  const prefixBundle = useWebhookDelivery
+    ? null
+    : createReplyPrefixOptions({
+        cfg,
+        agentId: route.agentId,
+        channel: "discord",
+        accountId: route.accountId,
+      });
+  const onModelSelected = prefixBundle?.onModelSelected;
+  const prefixOptions = useWebhookDelivery
+    ? {}
+    : {
+        responsePrefix: prefixBundle?.responsePrefix,
+        responsePrefixContextProvider: prefixBundle?.responsePrefixContextProvider,
+      };
   const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "discord",
     accountId,
   });
+  const chunkMode = resolveChunkMode(cfg, "discord", accountId);
+  const webhookDisplayName = useWebhookDelivery
+    ? [opts?.agentIdentity?.name?.trim(), opts?.agentIdentity?.emoji?.trim()]
+        .filter(Boolean)
+        .join(" ")
+        .trim() || "OpenClaw Agent"
+    : undefined;
+  const webhookAvatarUrl =
+    useWebhookDelivery && opts?.agentIdentity?.avatar?.trim()
+      ? opts.agentIdentity.avatar.trim()
+      : undefined;
 
   const typingCallbacks = createTypingCallbacks({
     start: () => sendTyping({ client, channelId: typingChannelId }),
@@ -612,19 +654,56 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
     deliver: async (payload: ReplyPayload) => {
       const replyToId = replyReference.use();
-      await deliverDiscordReply({
-        replies: [payload],
-        target: deliverTarget,
-        token,
-        accountId,
-        rest: client.rest,
-        runtime,
-        replyToId,
-        textLimit,
-        maxLinesPerMessage: discordConfig?.maxLinesPerMessage,
-        tableMode,
-        chunkMode: resolveChunkMode(cfg, "discord", accountId),
-      });
+      const rawText = payload.text ?? "";
+      const text = convertMarkdownTables(rawText, tableMode);
+      const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
+      if (useWebhookDelivery && webhookAuth) {
+        if (mediaList.length === 0) {
+          await sendWebhookMessage(webhookAuth.id, webhookAuth.token, text, {
+            username: webhookDisplayName,
+            avatarUrl: webhookAvatarUrl,
+            rest: client.rest,
+            maxLinesPerMessage: discordConfig?.maxLinesPerMessage,
+            chunkMode,
+          });
+        } else {
+          const firstMedia = mediaList[0];
+          if (firstMedia) {
+            await sendWebhookMessage(webhookAuth.id, webhookAuth.token, text, {
+              username: webhookDisplayName,
+              avatarUrl: webhookAvatarUrl,
+              rest: client.rest,
+              mediaUrl: firstMedia,
+              maxLinesPerMessage: discordConfig?.maxLinesPerMessage,
+              chunkMode,
+            });
+            for (const extra of mediaList.slice(1)) {
+              await sendWebhookMessage(webhookAuth.id, webhookAuth.token, "", {
+                username: webhookDisplayName,
+                avatarUrl: webhookAvatarUrl,
+                rest: client.rest,
+                mediaUrl: extra,
+                maxLinesPerMessage: discordConfig?.maxLinesPerMessage,
+                chunkMode,
+              });
+            }
+          }
+        }
+      } else {
+        await deliverDiscordReply({
+          replies: [payload],
+          target: deliverTarget,
+          token,
+          accountId,
+          rest: client.rest,
+          runtime,
+          replyToId,
+          textLimit,
+          maxLinesPerMessage: discordConfig?.maxLinesPerMessage,
+          tableMode,
+          chunkMode,
+        });
+      }
       replyReference.markSent();
     },
     onError: (err, info) => {
@@ -682,7 +761,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   }
 
   if (!dispatchResult?.queuedFinal) {
-    if (isGuildMessage) {
+    if (isGuildMessage && !(opts?.suppressGuildHistoryClear ?? false)) {
       clearHistoryEntriesIfEnabled({
         historyMap: guildHistories,
         historyKey: messageChannelId,
@@ -697,7 +776,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       `discord: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${replyTarget}`,
     );
   }
-  if (isGuildMessage) {
+  if (isGuildMessage && !(opts?.suppressGuildHistoryClear ?? false)) {
     clearHistoryEntriesIfEnabled({
       historyMap: guildHistories,
       historyKey: messageChannelId,

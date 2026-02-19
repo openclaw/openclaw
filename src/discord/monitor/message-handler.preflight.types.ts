@@ -79,6 +79,9 @@ export type DiscordMessagePreflightContext = {
   canDetectMention: boolean;
 
   historyEntry?: HistoryEntry;
+
+  /** If this message was sent by one of our own broadcast webhooks, the display name used (e.g. "Pronghorn 🦌"). */
+  ownWebhookUsername?: string;
 };
 
 export type DiscordMessagePreflightParams = {
