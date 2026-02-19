@@ -1,3 +1,4 @@
+import { inspect } from "util";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
@@ -14,6 +15,7 @@ import {
   type HeartbeatSummary,
   resolveHeartbeatSummaryForAgent,
 } from "../infra/heartbeat-runner.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { buildChannelAccountBindings, resolvePreferredAccountId } from "../routing/bindings.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -73,9 +75,16 @@ export type HealthSummary = {
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 
+const log = createSubsystemLogger("commands/health");
+
 const debugHealth = (...args: unknown[]) => {
   if (isTruthyEnvValue(process.env.OPENCLAW_DEBUG_HEALTH)) {
-    console.warn("[health:debug]", ...args);
+    log.warn(
+      "[health:debug] " +
+        args
+          .map((a) => (typeof a === "string" ? a : inspect(a, { breakLength: Infinity })))
+          .join(" "),
+    );
   }
 };
 
