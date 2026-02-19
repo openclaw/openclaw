@@ -120,19 +120,21 @@ describe("web_search country and language parameters", () => {
   });
 
   it("should enable Brave text_decorations by default", async () => {
-    const mockFetch = vi.fn(() =>
-      Promise.resolve({
-        ok: true,
-        json: () => Promise.resolve({ web: { results: [] } }),
-      } as Response),
-    );
-    // @ts-expect-error mock fetch
-    global.fetch = mockFetch;
+    const mockFetch = installMockFetch({ web: { results: [] } });
 
     const tool = createWebSearchTool({ config: undefined, sandboxed: true });
-    await tool?.execute?.(1, { query: "test-text-decorations" });
+    await tool?.execute?.("call-1", { query: "test-text-decorations" });
 
-    const url = new URL(mockFetch.mock.calls[0][0] as string);
+    const firstRequestInput = mockFetch.mock.calls[0]?.[0];
+    const firstRequestUrl =
+      typeof firstRequestInput === "string"
+        ? firstRequestInput
+        : firstRequestInput instanceof URL
+          ? firstRequestInput.toString()
+          : firstRequestInput instanceof Request
+            ? firstRequestInput.url
+            : "";
+    const url = new URL(firstRequestUrl);
     expect(url.searchParams.get("text_decorations")).toBe("1");
   });
 
