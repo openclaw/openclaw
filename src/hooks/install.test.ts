@@ -238,6 +238,40 @@ describe("installHooksFromPath", () => {
     expect(result.targetDir).toBe(path.join(stateDir, "hooks", "my-hook"));
     expect(fs.existsSync(path.join(result.targetDir, "HOOK.md"))).toBe(true);
   });
+
+  it("rejects hook pack with path traversal in openclaw.hooks entries", async () => {
+    const workDir = makeTempDir();
+    const stateDir = makeTempDir();
+    const pkgDir = path.join(workDir, "package");
+    fs.mkdirSync(pkgDir, { recursive: true });
+
+    // Create an outside-root hook directory
+    const outsideDir = path.join(workDir, "outside");
+    fs.mkdirSync(outsideDir, { recursive: true });
+    fs.writeFileSync(path.join(outsideDir, "HOOK.md"), "---\nname: outside\n---\n# Outside\n");
+    fs.writeFileSync(path.join(outsideDir, "handler.js"), "export default async () => {};\n");
+
+    // Package manifest references a path that escapes the package directory
+    fs.writeFileSync(
+      path.join(pkgDir, "package.json"),
+      JSON.stringify({
+        name: "traversal-pack",
+        openclaw: { hooks: ["../outside"] },
+      }),
+      "utf-8",
+    );
+
+    const result = await installHooksFromPath({
+      path: pkgDir,
+      hooksDir: path.join(stateDir, "hooks"),
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.error).toContain("path traversal");
+  });
 });
 
 describe("installHooksFromNpmSpec", () => {

@@ -207,6 +207,13 @@ async function installHookPackageFromDir(params: {
   const resolvedHooks = [] as string[];
   for (const entry of hookEntries) {
     const hookDir = path.resolve(params.packageDir, entry);
+    const relative = path.relative(params.packageDir, hookDir);
+    if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+      return {
+        ok: false,
+        error: `hook path "${entry}" escapes package directory (path traversal rejected)`,
+      };
+    }
     await validateHookDir(hookDir);
     const hookName = await resolveHookNameFromDir(hookDir);
     resolvedHooks.push(hookName);
