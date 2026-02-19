@@ -7,7 +7,29 @@ import {
 import { handleDiscordAction } from "../../../../agents/tools/discord-actions.js";
 import type { ChannelMessageActionContext } from "../../types.js";
 
-type Ctx = Pick<ChannelMessageActionContext, "action" | "params" | "cfg" | "accountId">;
+type Ctx = Pick<
+  ChannelMessageActionContext,
+  "action" | "params" | "cfg" | "accountId" | "senderIsOwner"
+>;
+
+/** Actions that require owner authorization due to their destructive or privileged nature. */
+const OWNER_ONLY_GUILD_ACTIONS = new Set([
+  "channel-create",
+  "channel-edit",
+  "channel-delete",
+  "channel-move",
+  "category-create",
+  "category-edit",
+  "category-delete",
+  "role-add",
+  "role-remove",
+  "emoji-upload",
+  "sticker-upload",
+  "event-create",
+  "timeout",
+  "kick",
+  "ban",
+]);
 
 export async function tryHandleDiscordMessageActionGuildAdmin(params: {
   ctx: Ctx;
@@ -17,6 +39,13 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
   const { ctx, resolveChannelId, readParentIdParam } = params;
   const { action, params: actionParams, cfg } = ctx;
   const accountId = ctx.accountId ?? readStringParam(actionParams, "accountId");
+
+  // Block non-owner senders from executing privileged guild-admin actions.
+  if (OWNER_ONLY_GUILD_ACTIONS.has(action) && ctx.senderIsOwner !== true) {
+    throw new Error(
+      `Discord action "${action}" requires owner authorization. Non-owner senders cannot perform guild administration actions.`,
+    );
+  }
 
   if (action === "member-info") {
     const userId = readStringParam(actionParams, "userId", { required: true });

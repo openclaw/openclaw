@@ -61,6 +61,8 @@ export function createOpenClawTools(options?: {
   requireExplicitMessageTarget?: boolean;
   /** If true, omit the message tool from the tool list. */
   disableMessageTool?: boolean;
+  /** Whether the sender is the bot owner (used for privileged action gating). */
+  senderIsOwner?: boolean;
 }): AnyAgentTool[] {
   const workspaceDir = resolveWorkspaceRoot(options?.workspaceDir);
   const imageTool = options?.agentDir?.trim()
@@ -96,6 +98,7 @@ export function createOpenClawTools(options?: {
         hasRepliedRef: options?.hasRepliedRef,
         sandboxRoot: options?.sandboxRoot,
         requireExplicitTarget: options?.requireExplicitMessageTarget,
+        senderIsOwner: options?.senderIsOwner,
       });
   const tools: AnyAgentTool[] = [
     createBrowserTool({

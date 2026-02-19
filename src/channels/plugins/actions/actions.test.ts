@@ -340,6 +340,7 @@ describe("handleDiscordMessageAction", () => {
         autoArchiveDuration: 1440,
       },
       cfg: {} as OpenClawConfig,
+      senderIsOwner: true,
     });
 
     expect(handleDiscordAction).toHaveBeenCalledWith(
@@ -353,6 +354,127 @@ describe("handleDiscordMessageAction", () => {
       expect.any(Object),
     );
   });
+});
+
+describe("discord guild-admin owner authorization", () => {
+  const privilegedActions = [
+    "channel-create",
+    "channel-edit",
+    "channel-delete",
+    "channel-move",
+    "category-create",
+    "category-edit",
+    "category-delete",
+    "role-add",
+    "role-remove",
+    "emoji-upload",
+    "sticker-upload",
+    "event-create",
+    "timeout",
+    "kick",
+    "ban",
+  ] as const;
+
+  const minimalParams: Record<string, Record<string, unknown>> = {
+    "channel-create": { guildId: "g1", name: "ch" },
+    "channel-edit": { channelId: "c1" },
+    "channel-delete": { channelId: "c1" },
+    "channel-move": { guildId: "g1", channelId: "c1" },
+    "category-create": { guildId: "g1", name: "cat" },
+    "category-edit": { categoryId: "cat1" },
+    "category-delete": { categoryId: "cat1" },
+    "role-add": { guildId: "g1", userId: "u1", roleId: "r1" },
+    "role-remove": { guildId: "g1", userId: "u1", roleId: "r1" },
+    "emoji-upload": { guildId: "g1", emojiName: "e", media: "https://example.com/e.png" },
+    "sticker-upload": {
+      guildId: "g1",
+      stickerName: "s",
+      stickerDesc: "d",
+      stickerTags: "t",
+      media: "https://example.com/s.png",
+    },
+    "event-create": { guildId: "g1", eventName: "ev", startTime: "2026-01-01T00:00:00Z" },
+    timeout: { guildId: "g1", userId: "u1" },
+    kick: { guildId: "g1", userId: "u1" },
+    ban: { guildId: "g1", userId: "u1" },
+  };
+
+  for (const action of privilegedActions) {
+    it(`rejects ${action} for non-owner senders`, async () => {
+      await expect(
+        handleDiscordMessageAction({
+          action,
+          params: minimalParams[action] ?? {},
+          cfg: {} as OpenClawConfig,
+          accountId: "ops",
+          senderIsOwner: false,
+        }),
+      ).rejects.toThrow(/owner authorization/);
+
+      expect(handleDiscordAction).not.toHaveBeenCalled();
+    });
+
+    it(`allows ${action} for owner senders`, async () => {
+      await handleDiscordMessageAction({
+        action,
+        params: minimalParams[action] ?? {},
+        cfg: {} as OpenClawConfig,
+        accountId: "ops",
+        senderIsOwner: true,
+      });
+
+      expect(handleDiscordAction).toHaveBeenCalled();
+    });
+  }
+
+  it("rejects privileged actions when senderIsOwner is undefined", async () => {
+    await expect(
+      handleDiscordMessageAction({
+        action: "ban",
+        params: { guildId: "g1", userId: "u1" },
+        cfg: {} as OpenClawConfig,
+        accountId: "ops",
+      }),
+    ).rejects.toThrow(/owner authorization/);
+
+    expect(handleDiscordAction).not.toHaveBeenCalled();
+  });
+
+  const readOnlyActions = [
+    "member-info",
+    "role-info",
+    "channel-info",
+    "channel-list",
+    "emoji-list",
+    "voice-status",
+    "event-list",
+    "search",
+  ] as const;
+
+  const readOnlyParams: Record<string, Record<string, unknown>> = {
+    "member-info": { userId: "u1", guildId: "g1" },
+    "role-info": { guildId: "g1" },
+    "channel-info": { channelId: "c1" },
+    "channel-list": { guildId: "g1" },
+    "emoji-list": { guildId: "g1" },
+    "voice-status": { guildId: "g1", userId: "u1" },
+    "event-list": { guildId: "g1" },
+    search: { guildId: "g1", query: "test" },
+  };
+
+  for (const action of readOnlyActions) {
+    it(`allows read-only action ${action} for non-owner senders`, async () => {
+      await handleDiscordMessageAction({
+        action,
+        params: readOnlyParams[action] ?? {},
+        cfg: {} as OpenClawConfig,
+        accountId: "ops",
+        senderIsOwner: false,
+      });
+
+      expect(handleDiscordAction).toHaveBeenCalled();
+    });
+  }
 });
 
 describe("telegramMessageActions", () => {
