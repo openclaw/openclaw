@@ -4,15 +4,15 @@
 
 ## Document Metadata
 
-| Field | Value |
-|-------|-------|
-| **Date** | 2026-02-13 |
-| **Status** | DRAFT |
-| **ADRs Implemented** | ADR-006 (Multi-Messenger Adapter Architecture), ADR-007 (Claude Code Tools & MCP Enablement) |
-| **Methodology** | SPARC-GOAP (Specification, Pseudocode, Architecture, Refinement, Completion) |
+| Field                           | Value                                                                                              |
+| ------------------------------- | -------------------------------------------------------------------------------------------------- |
+| **Date**                        | 2026-02-13                                                                                         |
+| **Status**                      | DRAFT                                                                                              |
+| **ADRs Implemented**            | ADR-006 (Multi-Messenger Adapter Architecture), ADR-007 (Claude Code Tools & MCP Enablement)       |
+| **Methodology**                 | SPARC-GOAP (Specification, Pseudocode, Architecture, Refinement, Completion)                       |
 | **Shift-Left Issues Addressed** | F006-01 through F006-10, F007-01 through F007-10, E006-01 through E006-10, E007-01 through E007-10 |
-| **QCSD Quality Gates** | Functionality, Reliability, Security (P0); Performance, Maintainability (P1) |
-| **Risk Register Coverage** | R006-1 through R006-7, R007-1 through R007-7, X-078-1 through X-078-5, X-068-1 through X-068-3 |
+| **QCSD Quality Gates**          | Functionality, Reliability, Security (P0); Performance, Maintainability (P1)                       |
+| **Risk Register Coverage**      | R006-1 through R006-7, R007-1 through R007-7, X-078-1 through X-078-5, X-068-1 through X-068-3     |
 
 ---
 
@@ -262,7 +262,7 @@ M10 + M11 ---> M12 (Cross-Bounded-Context Integration: Identity Resolution & E2E
 - **Dependencies**: M1 (Shared Kernel), M2 (Core Interfaces)
 - **Acceptance criteria**:
   - TelegramAdapter implements all `IMessengerAdapter` methods with zero type errors
-  - `normalizeTelegramMessage()` correctly normalizes plain text message (U006-01): platform=telegram, chatId=String(chat.id), userId=String(from.id), text, timestamp from date*1000
+  - `normalizeTelegramMessage()` correctly normalizes plain text message (U006-01): platform=telegram, chatId=String(chat.id), userId=String(from.id), text, timestamp from date\*1000
   - `normalizeTelegramMessage()` extracts photo attachment with fileId and size (U006-02): uses largest PhotoSize
   - `normalizeTelegramMessage()` returns `Result.error` for unknown attachment types (F006-02 mitigation: partial failure returns error, not throw)
   - `denormalizeTelegramKeyboard()` preserves both callback and URL buttons (U006-03)
@@ -312,7 +312,7 @@ M10 + M11 ---> M12 (Cross-Bounded-Context Integration: Identity Resolution & E2E
   - `normalizeMaxMessage()` maps `msg.link.type === 'reply'` to `replyTo: msg.link.mid`
   - `denormalizeMaxKeyboard()` strips URL buttons (U006-04): given 2 callback + 1 URL, result has 2 buttons
   - `denormalizeMaxKeyboard()` handles case where ALL buttons are URL buttons: returns `undefined` (no keyboard) instead of empty array (E006-05)
-  - `denormalizeMaxMessage()` strips markdown: `"**bold** and \`code\`"` becomes `"bold and code"` (U006-05)
+  - `denormalizeMaxMessage()` strips markdown: `"**bold** and \`code\`"`becomes`"bold and code"` (U006-05)
   - `denormalizeMaxMessage()` handles edge cases: nested markdown, unclosed markers, empty string
   - `denormalizeMaxMessage()` maps `callbackData` to MAX `payload` field (128-byte limit on MAX, but use 64-byte common limit)
   - Webhook auth verifies HMAC signature (F006-01 MAX equivalent)
@@ -529,9 +529,9 @@ M10 + M11 ---> M12 (Cross-Bounded-Context Integration: Identity Resolution & E2E
   - Total test count >= 40 (matching QCSD estimate of 40-50 unit tests)
   - Test execution time < 30s for unit tests, < 60s for integration tests
 - **Shift-left mitigations**:
-  - All F006-* failure modes have dedicated test cases
-  - All E006-* edge cases have dedicated test cases
-  - All L006-* load/timeout scenarios have dedicated test cases
+  - All F006-\* failure modes have dedicated test cases
+  - All E006-\* edge cases have dedicated test cases
+  - All L006-\* load/timeout scenarios have dedicated test cases
   - Cross-ADR contract test: adapter barrel export only exposes `IMessengerAdapter`, `IMessengerAdapterFactory`, `MessageRouter`, and value object types (section 6.5)
 - **QCSD quality gates**:
   - All HTSM Functionality criteria validated by tests
@@ -577,9 +577,9 @@ M10 + M11 ---> M12 (Cross-Bounded-Context Integration: Identity Resolution & E2E
   - `--allowed-tools` flag ALWAYS present for restricted and standard tiers (contract test per section 6.1)
   - Standard tier `mcp__*` wildcard scoped to registered MCP servers only, not user-registered ones (F007-10)
 - **Shift-left mitigations**:
-  - All F007-* failure modes have dedicated test cases
-  - All E007-* edge cases have dedicated test cases
-  - All L007-* load/timeout scenarios documented (Docker-dependent tests marked as infrastructure-level)
+  - All F007-\* failure modes have dedicated test cases
+  - All E007-\* edge cases have dedicated test cases
+  - All L007-\* load/timeout scenarios documented (Docker-dependent tests marked as infrastructure-level)
   - F007-10: Standard tier `--allowed-tools` value validated to not match unregistered MCP tools
   - F007-05: Kill switch does not terminate active sessions -- behavior documented and tested
 - **QCSD quality gates**:
@@ -665,6 +665,7 @@ M4 M5 M6 M7 M8 M9
 ```
 
 **Legend:**
+
 - **M1**: Shared Kernel (Types, Value Objects, Domain Events)
 - **M2**: Messenger Core (Port Interfaces, Factory, Router)
 - **M3**: Tool Sandbox Core (Tier Resolution, Directives, CLI Args)
@@ -682,13 +683,13 @@ M4 M5 M6 M7 M8 M9
 
 ## Parallel Execution Opportunities
 
-| Wave | Milestones | Rationale |
-|------|-----------|-----------|
-| **Wave 1** | M1 | Foundation; no dependencies |
-| **Wave 2** | M2, M3 | Independent bounded contexts; both depend only on M1 |
+| Wave       | Milestones             | Rationale                                                                                                      |
+| ---------- | ---------------------- | -------------------------------------------------------------------------------------------------------------- |
+| **Wave 1** | M1                     | Foundation; no dependencies                                                                                    |
+| **Wave 2** | M2, M3                 | Independent bounded contexts; both depend only on M1                                                           |
 | **Wave 3** | M4, M5, M6, M7, M8, M9 | M4/M5/M6 depend on M2; M7/M8/M9 depend on M3. All six can run in parallel since the two groups are independent |
-| **Wave 4** | M10, M11 | M10 integrates M4+M5+M6; M11 integrates M7+M8+M9. Both can run in parallel |
-| **Wave 5** | M12 | Depends on both M10 and M11 |
+| **Wave 4** | M10, M11               | M10 integrates M4+M5+M6; M11 integrates M7+M8+M9. Both can run in parallel                                     |
+| **Wave 5** | M12                    | Depends on both M10 and M11                                                                                    |
 
 **Maximum parallelism**: 6 milestones in Wave 3 (requires 6 agents or developers).
 
@@ -698,39 +699,39 @@ M4 M5 M6 M7 M8 M9
 
 ## Risk Register
 
-### Critical Risks (P*I >= 12)
+### Critical Risks (P\*I >= 12)
 
-| ID | Risk | Source | P | I | P*I | Mitigation |
-|----|------|--------|---|---|-----|------------|
-| R006-4 | Webhook endpoint exposed without authentication allows message spoofing | Shift-left F006-01, QCSD R006-4 | 3 | 5 | 15 | M4/M5: Webhook signature verification middleware (Telegram secret token, MAX HMAC). Reject unsigned requests with 403 before normalization. |
-| R006-1 | MAX SDK abandoned; API changes break adapter | QCSD R006-1 | 3 | 4 | 12 | M5: Pin SDK version. Record HTTP fixtures for integration tests (VCR pattern). Fork strategy documented. |
-| R006-2 | Rate limit storm: 30+ users simultaneously trigger Telegram 429 | QCSD R006-2 | 3 | 4 | 12 | M6: Token bucket rate limiter + bounded message queue. Load test in M10. |
-| R007-2 | MCP server returns malicious tool-calling directive in response | QCSD R007-2 | 3 | 4 | 12 | M7: Response size limit (100KB). M11: Output sanitization in audit middleware. |
-| X-078-1 | Tier name mismatch between ADR-007 (restricted/standard/full) and ADR-008 (free/standard/premium/admin) | QCSD X-078-1 | 4 | 4 | 16 | M12: `mapTenantTierToAccessTier()` function with explicit mapping and unit tests. |
+| ID      | Risk                                                                                                    | Source                          | P   | I   | P\*I | Mitigation                                                                                                                                  |
+| ------- | ------------------------------------------------------------------------------------------------------- | ------------------------------- | --- | --- | ---- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| R006-4  | Webhook endpoint exposed without authentication allows message spoofing                                 | Shift-left F006-01, QCSD R006-4 | 3   | 5   | 15   | M4/M5: Webhook signature verification middleware (Telegram secret token, MAX HMAC). Reject unsigned requests with 403 before normalization. |
+| R006-1  | MAX SDK abandoned; API changes break adapter                                                            | QCSD R006-1                     | 3   | 4   | 12   | M5: Pin SDK version. Record HTTP fixtures for integration tests (VCR pattern). Fork strategy documented.                                    |
+| R006-2  | Rate limit storm: 30+ users simultaneously trigger Telegram 429                                         | QCSD R006-2                     | 3   | 4   | 12   | M6: Token bucket rate limiter + bounded message queue. Load test in M10.                                                                    |
+| R007-2  | MCP server returns malicious tool-calling directive in response                                         | QCSD R007-2                     | 3   | 4   | 12   | M7: Response size limit (100KB). M11: Output sanitization in audit middleware.                                                              |
+| X-078-1 | Tier name mismatch between ADR-007 (restricted/standard/full) and ADR-008 (free/standard/premium/admin) | QCSD X-078-1                    | 4   | 4   | 16   | M12: `mapTenantTierToAccessTier()` function with explicit mapping and unit tests.                                                           |
 
-### High Risks (P*I 8-11)
+### High Risks (P\*I 8-11)
 
-| ID | Risk | Source | P | I | P*I | Mitigation |
-|----|------|--------|---|---|-----|------------|
-| R007-1 | Sandbox escape via symlink in writable workspace directory | QCSD R007-1 | 2 | 5 | 10 | M8: `validateWorkspacePath()` rejects symlinks and `..` traversal. Integration test with real filesystem. |
-| R007-3 | Tier misconfiguration grants excessive access | QCSD R007-3 | 2 | 5 | 10 | M3/M11: Unit tests for all 5 user contexts x 3 tiers. `defaultAuthenticatedTier` validated against safe values. |
-| X-078-2 | Workspace path templates diverge between sandbox and tenant isolation | QCSD X-078-2 | 3 | 5 | 15 | M8/M12: Single `WorkspaceManager` class as source of truth for paths. Contract test validates path consistency. |
-| F007-03 | Environment variable injection via tokenEnvVar | Shift-left F007-03 | 3 | 4 | 12 | M7: `SafeEnvResolver` allowlist. Only pre-approved env var names can be resolved. |
-| F007-10 | Standard tier `mcp__*` wildcard matches user-registered MCP tools | Shift-left F007-10 | 3 | 4 | 12 | M11: Replace `mcp__*` glob with explicit tool names from registered MCP servers for standard tier. |
-| R007-5 | MCP config temp files not cleaned up; disk fills over time | QCSD R007-5 | 3 | 3 | 9 | M8: Session cleanup + TTL-based orphan scanner. Integration test: create 100 sessions, verify 0 orphaned files. |
-| F006-03 | Message handler throws; error propagates to adapter | Shift-left F006-03 | 3 | 4 | 12 | M2: Router wraps handler calls in try/catch. Test with throwing handler. |
-| F006-04 | sendMessage fails after handler succeeds; user gets no response | Shift-left F006-04 | 3 | 4 | 12 | M2: Dead-letter logging + `MESSAGE_DELIVERY_FAILED` event emission. Future: retry queue. |
+| ID      | Risk                                                                  | Source             | P   | I   | P\*I | Mitigation                                                                                                      |
+| ------- | --------------------------------------------------------------------- | ------------------ | --- | --- | ---- | --------------------------------------------------------------------------------------------------------------- |
+| R007-1  | Sandbox escape via symlink in writable workspace directory            | QCSD R007-1        | 2   | 5   | 10   | M8: `validateWorkspacePath()` rejects symlinks and `..` traversal. Integration test with real filesystem.       |
+| R007-3  | Tier misconfiguration grants excessive access                         | QCSD R007-3        | 2   | 5   | 10   | M3/M11: Unit tests for all 5 user contexts x 3 tiers. `defaultAuthenticatedTier` validated against safe values. |
+| X-078-2 | Workspace path templates diverge between sandbox and tenant isolation | QCSD X-078-2       | 3   | 5   | 15   | M8/M12: Single `WorkspaceManager` class as source of truth for paths. Contract test validates path consistency. |
+| F007-03 | Environment variable injection via tokenEnvVar                        | Shift-left F007-03 | 3   | 4   | 12   | M7: `SafeEnvResolver` allowlist. Only pre-approved env var names can be resolved.                               |
+| F007-10 | Standard tier `mcp__*` wildcard matches user-registered MCP tools     | Shift-left F007-10 | 3   | 4   | 12   | M11: Replace `mcp__*` glob with explicit tool names from registered MCP servers for standard tier.              |
+| R007-5  | MCP config temp files not cleaned up; disk fills over time            | QCSD R007-5        | 3   | 3   | 9    | M8: Session cleanup + TTL-based orphan scanner. Integration test: create 100 sessions, verify 0 orphaned files. |
+| F006-03 | Message handler throws; error propagates to adapter                   | Shift-left F006-03 | 3   | 4   | 12   | M2: Router wraps handler calls in try/catch. Test with throwing handler.                                        |
+| F006-04 | sendMessage fails after handler succeeds; user gets no response       | Shift-left F006-04 | 3   | 4   | 12   | M2: Dead-letter logging + `MESSAGE_DELIVERY_FAILED` event emission. Future: retry queue.                        |
 
-### Medium Risks (P*I 4-7)
+### Medium Risks (P\*I 4-7)
 
-| ID | Risk | Source | P | I | P*I | Mitigation |
-|----|------|--------|---|---|-----|------------|
-| R006-5 | Circuit breaker opens prematurely during transient blip | QCSD R006-5 | 2 | 3 | 6 | M6: Threshold of 5 consecutive failures. Chaos test: 3 failures + 2 successes = stays closed. |
-| R006-6 | Adapter stop() during processing causes message loss | QCSD R006-6 | 3 | 3 | 9 | M4/M5: Drain logic in `stop()` with 10s timeout. Test: stop during 5 in-flight messages. |
-| F007-04 | Tier resolution race (role revoked during active session) | Shift-left F007-04 | 2 | 4 | 8 | M11: Document that tier is immutable per session (by design). Active session continues at original tier until completion. |
-| F007-05 | Kill switch does not terminate active sessions | Shift-left F007-05 | 2 | 4 | 8 | M9: Document as known limitation. New sessions immediately restricted. Future: graceful downgrade signal to active sessions. |
-| F006-06 | Long polling reconnection on network drop | Shift-left F006-06 | 3 | 3 | 9 | M4/M5: Reconnection loop with exponential backoff (5s, 10s, 30s, 60s max). |
-| F006-07 | Duplicate message delivery from webhook retries | Shift-left F006-07 | 3 | 3 | 9 | M4: `TelegramDeduplicator` with TTL cache on `update_id`. |
+| ID      | Risk                                                      | Source             | P   | I   | P\*I | Mitigation                                                                                                                   |
+| ------- | --------------------------------------------------------- | ------------------ | --- | --- | ---- | ---------------------------------------------------------------------------------------------------------------------------- |
+| R006-5  | Circuit breaker opens prematurely during transient blip   | QCSD R006-5        | 2   | 3   | 6    | M6: Threshold of 5 consecutive failures. Chaos test: 3 failures + 2 successes = stays closed.                                |
+| R006-6  | Adapter stop() during processing causes message loss      | QCSD R006-6        | 3   | 3   | 9    | M4/M5: Drain logic in `stop()` with 10s timeout. Test: stop during 5 in-flight messages.                                     |
+| F007-04 | Tier resolution race (role revoked during active session) | Shift-left F007-04 | 2   | 4   | 8    | M11: Document that tier is immutable per session (by design). Active session continues at original tier until completion.    |
+| F007-05 | Kill switch does not terminate active sessions            | Shift-left F007-05 | 2   | 4   | 8    | M9: Document as known limitation. New sessions immediately restricted. Future: graceful downgrade signal to active sessions. |
+| F006-06 | Long polling reconnection on network drop                 | Shift-left F006-06 | 3   | 3   | 9    | M4/M5: Reconnection loop with exponential backoff (5s, 10s, 30s, 60s max).                                                   |
+| F006-07 | Duplicate message delivery from webhook retries           | Shift-left F006-07 | 3   | 3   | 9    | M4: `TelegramDeduplicator` with TTL cache on `update_id`.                                                                    |
 
 ---
 
@@ -878,27 +879,27 @@ M4 M5 M6 M7 M8 M9
 
 ### Estimated test count: ~120 total
 
-| Category | Count | Source |
-|----------|-------|--------|
-| Unit tests (ADR-006) | ~45 | QCSD estimate: 40-50 |
-| Unit tests (ADR-007) | ~55 | QCSD estimate: 50-60 |
-| Integration tests (ADR-006) | ~18 | QCSD estimate: 15-20 |
-| Integration tests (ADR-007) | ~22 | QCSD estimate: 20-25 |
-| Cross-context contract tests | ~12 | Shift-left estimate: 12 |
-| **Total** | **~152** | |
+| Category                     | Count    | Source                  |
+| ---------------------------- | -------- | ----------------------- |
+| Unit tests (ADR-006)         | ~45      | QCSD estimate: 40-50    |
+| Unit tests (ADR-007)         | ~55      | QCSD estimate: 50-60    |
+| Integration tests (ADR-006)  | ~18      | QCSD estimate: 15-20    |
+| Integration tests (ADR-007)  | ~22      | QCSD estimate: 20-25    |
+| Cross-context contract tests | ~12      | Shift-left estimate: 12 |
+| **Total**                    | **~152** |                         |
 
 ---
 
 ## External Dependencies
 
-| Package | Version | Used By | Purpose |
-|---------|---------|---------|---------|
-| `grammy` | `^1.x` | M4 (Telegram Adapter) | Telegram Bot API SDK |
-| `@maxhub/max-bot-api` | `^1.x` | M5 (MAX Adapter) | MAX Messenger Bot API SDK |
-| `vitest` or `jest` | latest | All test files | Test runner |
-| `nock` or `msw` | latest | Integration tests | HTTP mocking for MAX SDK |
-| `sinon` | latest | Resilience tests | Fake timers for rate limiter / circuit breaker |
-| `typescript` | `^5.x` | All source | Language |
+| Package               | Version | Used By               | Purpose                                        |
+| --------------------- | ------- | --------------------- | ---------------------------------------------- |
+| `grammy`              | `^1.x`  | M4 (Telegram Adapter) | Telegram Bot API SDK                           |
+| `@maxhub/max-bot-api` | `^1.x`  | M5 (MAX Adapter)      | MAX Messenger Bot API SDK                      |
+| `vitest` or `jest`    | latest  | All test files        | Test runner                                    |
+| `nock` or `msw`       | latest  | Integration tests     | HTTP mocking for MAX SDK                       |
+| `sinon`               | latest  | Resilience tests      | Fake timers for rate limiter / circuit breaker |
+| `typescript`          | `^5.x`  | All source            | Language                                       |
 
 ---
 

@@ -1,6 +1,7 @@
 > **SUPERSEDED:** This document references ADR-006..013 which were deleted during the v2 ADR rewrite (commit e54143f). ADR-001..005 v2 now cover this scope. Retained for historical context only.
 
 # Shift-Left Testing Report: ADR-008 & ADR-009
+
 ## Level 4 -- Risk Analysis in Design Phase
 
 **Date**: 2026-02-13
@@ -18,11 +19,13 @@
 The ADR defines 6 clean interfaces (`TenantStore`, `TenantSessionStore`, `WorkspaceIsolation`, `ClaudeMdManager`, plus value object types). These are straightforward to mock in TypeScript.
 
 **Strengths:**
+
 - `TenantStore`, `TenantSessionStore`, `ClaudeMdManager`, `WorkspaceIsolation` are all interface-based, enabling dependency injection and mock-first TDD.
 - Value objects (`TenantId`, `SessionId`, `WorkspacePath`, `ToolAccessTier`) are string-typed and deterministically derivable, making them trivial to construct in tests.
 - Domain events have well-defined payloads in a table, enabling event-driven test assertions.
 
 **Weaknesses:**
+
 - `validateTenantPath()` depends on `fs.realpathSync`, which requires real filesystem state for symlink testing. A `PathResolver` interface is needed for proper mockability.
 - `WorkspaceIsolation.provision()` and `destroy()` are filesystem operations with no abstraction layer -- tests must either use a real filesystem or tempdir, or the interface needs a `FileSystem` abstraction injected.
 - No error types are defined for domain operations (e.g., `TenantNotFoundError`, `WorkspaceProvisioningError`, `QuotaExceededError`). Without these, tests cannot assert on specific failure modes.
@@ -30,11 +33,13 @@ The ADR defines 6 clean interfaces (`TenantStore`, `TenantSessionStore`, `Worksp
 ### Compile-Time Invariant Enforcement: 15/25
 
 **Enforceable at compile time:**
+
 - `ToolAccessTier` is a union type -- TypeScript prevents invalid tiers.
 - `TenantSession.state` is a string union (`"active" | "suspended" | "expired" | "purged"`) -- valid state transitions cannot be enforced by the type alone but invalid states are prevented.
 - `TOOL_ACCESS_POLICIES` is `Record<ToolAccessTier, ToolAccessPolicy>` -- guarantees every tier has a policy at compile time.
 
 **NOT enforceable at compile time:**
+
 - `TenantId` format (`"tg_{id}" | "max_{id}"`) is a plain `string`, not a branded/opaque type. Any arbitrary string passes type checking. A branded type pattern would prevent this.
 - `SessionId` format (`"{tenantId}:{conversationId}"`) is also a plain string with no structural enforcement.
 - `WorkspacePath` format (`"/var/openclaw/tenants/{tenantId}/workspace"`) is a plain string -- a malformed path passes type checking silently.
@@ -44,12 +49,14 @@ The ADR defines 6 clean interfaces (`TenantStore`, `TenantSessionStore`, `Worksp
 ### Acceptance Criteria Clarity: 20/25
 
 The ADR provides:
+
 - A clear threat model table (5 threats with vectors and impacts).
 - 5 explicit DDD invariants, each with an enforcement mechanism.
 - 9 domain events with triggers and payloads.
 - SQL schema with CHECK constraints and foreign keys.
 
 **Missing:**
+
 - No quantitative acceptance criteria (e.g., "tenant resolution must complete in <X ms").
 - No explicit error handling specification -- what happens when `getOrCreate()` fails due to database unavailability?
 - No GDPR compliance acceptance criteria (e.g., "purge() must delete all PII within 72 hours").
@@ -63,6 +70,7 @@ The ADR provides:
 - Integration points with existing modules are documented in a table.
 
 **Missing:**
+
 - No test fixtures or factory patterns defined for `UserTenant` construction.
 - No seed data strategy for integration tests.
 - No guidance on how to test the layered CLAUDE.md composition in isolation.
@@ -73,18 +81,18 @@ The ADR provides:
 
 ### Failure Modes NOT Addressed
 
-| # | Scenario | Consequence | Severity |
-|---|----------|-------------|----------|
-| E1 | PostgreSQL connection pool exhaustion during tenant resolution | All new users blocked; existing sessions unaffected if cached in Redis | High |
-| E2 | Redis unavailable during session resolution | Cannot determine if session is active; may create duplicate sessions or fail to enforce rate limits | High |
-| E3 | `fs.realpathSync` throws `ENOENT` for non-existent path in `validateTenantPath` | Unhandled exception crashes the request pipeline | Medium |
-| E4 | Workspace provisioning fails mid-creation (partial directory tree) | Tenant is in `TENANT_CREATED` state but `WORKSPACE_PROVISIONED` event never fires; tenant is stuck in limbo | High |
-| E5 | Disk quota exceeded during Claude Code execution (subprocess writes beyond quota) | No mechanism to enforce quota at the filesystem level in real-time; `diskUsageBytes` is "updated periodically" which is not a hard limit | Medium |
-| E6 | Concurrent `getOrCreate()` calls for the same new user from two simultaneous messages | Potential race condition: two `TenantCreated` events, two workspace provisions. The UNIQUE constraint catches the DB write, but the workspace may already be partially created. | Medium |
-| E7 | `ClaudeMdManager.compose()` encounters a tenant with corrupt/unparseable user-layer CLAUDE.md | No fallback or validation strategy defined; Claude Code receives malformed instructions | Medium |
-| E8 | `TenantSession.purgeSession()` called while session is still active | No precondition check defined; could delete data from a live conversation | High |
-| E9 | Symlink race condition (TOCTOU) in `validateTenantPath` -- symlink created between `path.resolve` and `fs.realpathSync` | Path validation passes, then symlink is resolved to an out-of-sandbox target | Medium |
-| E10 | `TenantDeactivated` event fires but `WorkspaceCleanedUp` never runs (cleanup cron fails) | Orphaned tenant workspaces accumulate indefinitely, consuming disk | Low |
+| #   | Scenario                                                                                                                | Consequence                                                                                                                                                                     | Severity |
+| --- | ----------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| E1  | PostgreSQL connection pool exhaustion during tenant resolution                                                          | All new users blocked; existing sessions unaffected if cached in Redis                                                                                                          | High     |
+| E2  | Redis unavailable during session resolution                                                                             | Cannot determine if session is active; may create duplicate sessions or fail to enforce rate limits                                                                             | High     |
+| E3  | `fs.realpathSync` throws `ENOENT` for non-existent path in `validateTenantPath`                                         | Unhandled exception crashes the request pipeline                                                                                                                                | Medium   |
+| E4  | Workspace provisioning fails mid-creation (partial directory tree)                                                      | Tenant is in `TENANT_CREATED` state but `WORKSPACE_PROVISIONED` event never fires; tenant is stuck in limbo                                                                     | High     |
+| E5  | Disk quota exceeded during Claude Code execution (subprocess writes beyond quota)                                       | No mechanism to enforce quota at the filesystem level in real-time; `diskUsageBytes` is "updated periodically" which is not a hard limit                                        | Medium   |
+| E6  | Concurrent `getOrCreate()` calls for the same new user from two simultaneous messages                                   | Potential race condition: two `TenantCreated` events, two workspace provisions. The UNIQUE constraint catches the DB write, but the workspace may already be partially created. | Medium   |
+| E7  | `ClaudeMdManager.compose()` encounters a tenant with corrupt/unparseable user-layer CLAUDE.md                           | No fallback or validation strategy defined; Claude Code receives malformed instructions                                                                                         | Medium   |
+| E8  | `TenantSession.purgeSession()` called while session is still active                                                     | No precondition check defined; could delete data from a live conversation                                                                                                       | High     |
+| E9  | Symlink race condition (TOCTOU) in `validateTenantPath` -- symlink created between `path.resolve` and `fs.realpathSync` | Path validation passes, then symlink is resolved to an out-of-sandbox target                                                                                                    | Medium   |
+| E10 | `TenantDeactivated` event fires but `WorkspaceCleanedUp` never runs (cleanup cron fails)                                | Orphaned tenant workspaces accumulate indefinitely, consuming disk                                                                                                              | Low      |
 
 ### Edge Cases Missing
 
@@ -107,13 +115,13 @@ The ADR provides:
 
 ### Aggregate Invariants vs TypeScript Types
 
-| Invariant | Type-Enforceable? | Recommendation |
-|-----------|:-----------------:|----------------|
-| Tenant Identity Uniqueness | Partially -- DB UNIQUE constraint enforces it, but the app-layer `getOrCreate` could race | Use `INSERT ... ON CONFLICT DO NOTHING RETURNING *` to make the upsert atomic. Add a branded type `TenantId = string & { __brand: 'TenantId' }` with a factory function that validates format. |
-| Workspace Containment | No -- runtime check only | Add an integration test that attempts 50+ path traversal patterns (null bytes, double encoding, symlinks, `..`, Windows-style `\`) against `validateTenantPath`. Consider using Linux namespaces (`unshare`) or `chroot` for hard enforcement beyond app-level validation. |
-| Session Ownership | Partially -- FK constraint in DB | The `SessionId` format `{tenantId}:{conversationId}` embeds the tenant, but the format is not validated at the type level. Create a `SessionId` factory that parses and validates the embedded tenant ID matches. |
-| Tool Access Monotonicity | Partially -- `TOOL_ACCESS_POLICIES` is exhaustive | The composition of user CLAUDE.md + tier policy happens at runtime. Add a `validateToolAccess(requested: ClaudeCodeTool[], tier: ToolAccessTier): ClaudeCodeTool[]` function that intersects requested with allowed, returning only permitted tools. |
-| Memory Namespace Isolation | No -- naming convention only | The namespace `tenant:{tenantId}` is a string convention. If any code path passes a raw namespace string, isolation is broken. Wrap AgentDB access in a `TenantScopedMemory` class that receives a `TenantId` and internally constructs the namespace, never accepting a raw namespace string. |
+| Invariant                  |                                     Type-Enforceable?                                     | Recommendation                                                                                                                                                                                                                                                                                 |
+| -------------------------- | :---------------------------------------------------------------------------------------: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Tenant Identity Uniqueness | Partially -- DB UNIQUE constraint enforces it, but the app-layer `getOrCreate` could race | Use `INSERT ... ON CONFLICT DO NOTHING RETURNING *` to make the upsert atomic. Add a branded type `TenantId = string & { __brand: 'TenantId' }` with a factory function that validates format.                                                                                                 |
+| Workspace Containment      |                                 No -- runtime check only                                  | Add an integration test that attempts 50+ path traversal patterns (null bytes, double encoding, symlinks, `..`, Windows-style `\`) against `validateTenantPath`. Consider using Linux namespaces (`unshare`) or `chroot` for hard enforcement beyond app-level validation.                     |
+| Session Ownership          |                             Partially -- FK constraint in DB                              | The `SessionId` format `{tenantId}:{conversationId}` embeds the tenant, but the format is not validated at the type level. Create a `SessionId` factory that parses and validates the embedded tenant ID matches.                                                                              |
+| Tool Access Monotonicity   |                     Partially -- `TOOL_ACCESS_POLICIES` is exhaustive                     | The composition of user CLAUDE.md + tier policy happens at runtime. Add a `validateToolAccess(requested: ClaudeCodeTool[], tier: ToolAccessTier): ClaudeCodeTool[]` function that intersects requested with allowed, returning only permitted tools.                                           |
+| Memory Namespace Isolation |                               No -- naming convention only                                | The namespace `tenant:{tenantId}` is a string convention. If any code path passes a raw namespace string, isolation is broken. Wrap AgentDB access in a `TenantScopedMemory` class that receives a `TenantId` and internally constructs the namespace, never accepting a raw namespace string. |
 
 ### Domain Events Testability
 
@@ -389,6 +397,7 @@ E2E-008-02: Multi-user concurrent isolation
 ### Architectural Patterns to Adopt
 
 1. **Branded/Opaque Types for Value Objects**: Replace plain `string` aliases with branded types to prevent accidental misuse at compile time.
+
    ```typescript
    type TenantId = string & { readonly __brand: unique symbol };
    function createTenantId(platform: MessengerPlatform, userId: string): TenantId;
@@ -406,18 +415,19 @@ E2E-008-02: Multi-user concurrent isolation
 
 ### Runtime Validations Needed
 
-| Validation | Where | What |
-|-----------|-------|------|
-| TenantId format | `createTenantId()` factory | Regex: `^(tg\|max)_[a-zA-Z0-9_-]{1,100}$` |
-| SessionId format | `resolveMultiTenantSessionId()` | Must contain exactly one `:` separator |
-| WorkspacePath format | `WorkspaceIsolation.setCwd()` | Must start with `/var/openclaw/tenants/` |
-| CLAUDE.md size limit | `ClaudeMdManager.updateUserLayer()` | Max 50KB per layer to prevent prompt injection bloat |
-| Display name sanitization | `TenantStore.getOrCreate()` | Strip control characters, limit to 255 UTF-8 chars |
-| Disk quota enforcement | Before Claude Code subprocess spawn | Check `diskUsageBytes < diskQuotaBytes * 0.95` |
-| Session count per tenant | `TenantSessionStore.resolveSession()` | Max 10 active/suspended sessions per tenant |
-| Audit log payload size | `tenant_audit_log` INSERT | Max 64KB per event_payload JSONB to prevent storage abuse |
+| Validation                | Where                                 | What                                                      |
+| ------------------------- | ------------------------------------- | --------------------------------------------------------- |
+| TenantId format           | `createTenantId()` factory            | Regex: `^(tg\|max)_[a-zA-Z0-9_-]{1,100}$`                 |
+| SessionId format          | `resolveMultiTenantSessionId()`       | Must contain exactly one `:` separator                    |
+| WorkspacePath format      | `WorkspaceIsolation.setCwd()`         | Must start with `/var/openclaw/tenants/`                  |
+| CLAUDE.md size limit      | `ClaudeMdManager.updateUserLayer()`   | Max 50KB per layer to prevent prompt injection bloat      |
+| Display name sanitization | `TenantStore.getOrCreate()`           | Strip control characters, limit to 255 UTF-8 chars        |
+| Disk quota enforcement    | Before Claude Code subprocess spawn   | Check `diskUsageBytes < diskQuotaBytes * 0.95`            |
+| Session count per tenant  | `TenantSessionStore.resolveSession()` | Max 10 active/suspended sessions per tenant               |
+| Audit log payload size    | `tenant_audit_log` INSERT             | Max 64KB per event_payload JSONB to prevent storage abuse |
 
 ---
+
 ---
 
 # ADR-009: Concurrent Request Processing
@@ -429,6 +439,7 @@ E2E-008-02: Multi-user concurrent isolation
 The ADR excels in interface definition. `WorkerPool`, `Scheduler`, `UpstreamRateLimiter` are clean interfaces with well-documented method signatures, error types, and return types.
 
 **Strengths:**
+
 - `WorkerPool` interface has 5 methods with clear contracts, typed error classes, and JSDoc documentation.
 - `Scheduler` interface is a pure function (`next()` and `admissionCheck()`) with no side effects, making it trivially testable.
 - `AdmissionResult` is a discriminated union with exhaustive cases -- TypeScript ensures switch statements cover all branches.
@@ -438,6 +449,7 @@ The ADR excels in interface definition. `WorkerPool`, `Scheduler`, `UpstreamRate
 - The module is a leaf dependency with no circular imports, simplifying test isolation.
 
 **Weaknesses:**
+
 - `Worker` interface exposes `pid: number | null`, which ties it to OS process semantics. A mock worker cannot provide a meaningful `pid`. Consider a `WorkerHandle` abstraction.
 - `WorkerPool.release(worker: Worker)` accepts the full `Worker` object, but release should only need the `workerId`. This makes mock construction unnecessarily verbose.
 - `UpstreamRateLimiter.acquire()` returns `Promise<void>` -- tests cannot inspect when a token was actually granted vs. when it was waiting. A `Promise<{ waitedMs: number }>` would be more testable.
@@ -445,6 +457,7 @@ The ADR excels in interface definition. `WorkerPool`, `Scheduler`, `UpstreamRate
 ### Compile-Time Invariant Enforcement: 20/25
 
 **Enforceable at compile time:**
+
 - `RequestPriority` is an enum with 4 values -- TypeScript prevents invalid priorities.
 - `WorkerState` is an enum with 6 values -- invalid states are prevented.
 - `AdmissionResult` discriminated union forces exhaustive handling.
@@ -452,6 +465,7 @@ The ADR excels in interface definition. `WorkerPool`, `Scheduler`, `UpstreamRate
 - `WorkerPoolEvent` discriminated union with `type` field enables exhaustive switch.
 
 **NOT enforceable at compile time:**
+
 - Worker count invariant (`activeWorkers.size <= config.maxWorkers`) is a runtime invariant. Could use a `BoundedMap<K, V>` type that errors on insertion beyond capacity, but this would require a custom collection.
 - Request FIFO ordering within a tenant is a behavioral invariant, not a type invariant.
 - Worker exclusivity (one request per worker) cannot be expressed in TypeScript's type system.
@@ -460,12 +474,14 @@ The ADR excels in interface definition. `WorkerPool`, `Scheduler`, `UpstreamRate
 ### Acceptance Criteria Clarity: 18/25
 
 The ADR provides:
+
 - A performance model table with concrete numbers (throughput, P95 queue wait, RAM per worker count).
 - 7 explicit DDD invariants with violation consequences.
 - VM sizing recommendations with cost estimates.
 - 14 typed domain events for observability.
 
 **Missing:**
+
 - No SLA-style acceptance criteria (e.g., "P99 queue wait must be <30s for NORMAL priority under 4 workers / 8 concurrent users").
 - No acceptance criteria for graceful shutdown (e.g., "shutdown must complete within 30s, all pending requests must receive a ShutdownError, no orphaned subprocesses").
 - No acceptance criteria for the scheduler's fairness guarantee (e.g., "no tenant shall wait more than 2x the average wait time").
@@ -480,6 +496,7 @@ The ADR provides:
 - Configuration is externalized to `openclaw.json`, enabling test configs.
 
 **Missing:**
+
 - No guidance on how to mock Claude Code subprocesses in tests. The worker spawns a real subprocess (`claude -p ...`). Tests need either a mock subprocess binary or a subprocess factory injection point.
 - No test clock abstraction. The scheduler uses `enqueuedAt: number` timestamps. Tests need deterministic time control.
 - No guidance on testing the interaction between `queueTimeoutMs` and `executionTimeoutMs` timers.
@@ -490,18 +507,18 @@ The ADR provides:
 
 ### Failure Modes NOT Addressed
 
-| # | Scenario | Consequence | Severity |
-|---|----------|-------------|----------|
-| E1 | Worker subprocess spawns but immediately exits with non-zero exit code (e.g., invalid `--session-id`, missing binary) | `WorkerCrashError` is defined but no retry strategy. The request fails permanently. Should there be a retry with exponential backoff? | Medium |
-| E2 | Worker subprocess writes to stderr but not stdout (partial error output) | No stderr handling defined in the response parsing step. The request may hang until `executionTimeoutMs`. | Medium |
-| E3 | `SIGTERM` sent to draining worker, but subprocess ignores it (zombie process) | `gracefulShutdownMs` triggers `SIGKILL`, but the process table entry persists. No `waitpid` or zombie reaping logic defined. | Medium |
-| E4 | All workers are STUCK simultaneously | The pool has no recovery mechanism. `getMetrics()` shows `workersStuck = maxWorkers` but no automatic remediation (e.g., kill all stuck workers, spawn fresh ones). | High |
-| E5 | `UpstreamRateLimiter.acquire()` blocks indefinitely because cloud.ru API rate limit is reduced below expected 15 req/s | No dynamic rate limit adjustment. If cloud.ru returns 429, the pool should reduce `maxTokensPerSecond` temporarily. | Medium |
-| E6 | Host runs out of file descriptors before running out of workers | Each subprocess uses multiple FDs (stdin, stdout, stderr, socket). With 16 workers and their dependencies, FD exhaustion is possible on systems with low ulimits. | Medium |
-| E7 | AbortController signal fires after worker is assigned but before subprocess starts | Race condition between queue timeout and worker assignment. The worker may spawn a subprocess for a request that was already timed out. | Medium |
-| E8 | `workerPool.shutdown()` called while `acquire()` promises are pending | The ADR says "pending requests are rejected with ShutdownError" but does not specify whether `acquire()` promises reject or resolve with an error. | Medium |
-| E9 | Config change to `maxWorkers` at runtime (e.g., via admin command) | Config is described as "immutable after init". If an admin needs to scale workers without restart, this is impossible. | Low |
-| E10 | Two requests from the same tenant with the same `sessionId` in the queue simultaneously | Claude Code sessions are file-based. Two workers processing the same session concurrently will corrupt session state. The ADR does not enforce session-level exclusivity (only tenant-level fairness). | Critical |
+| #   | Scenario                                                                                                               | Consequence                                                                                                                                                                                            | Severity |
+| --- | ---------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------- |
+| E1  | Worker subprocess spawns but immediately exits with non-zero exit code (e.g., invalid `--session-id`, missing binary)  | `WorkerCrashError` is defined but no retry strategy. The request fails permanently. Should there be a retry with exponential backoff?                                                                  | Medium   |
+| E2  | Worker subprocess writes to stderr but not stdout (partial error output)                                               | No stderr handling defined in the response parsing step. The request may hang until `executionTimeoutMs`.                                                                                              | Medium   |
+| E3  | `SIGTERM` sent to draining worker, but subprocess ignores it (zombie process)                                          | `gracefulShutdownMs` triggers `SIGKILL`, but the process table entry persists. No `waitpid` or zombie reaping logic defined.                                                                           | Medium   |
+| E4  | All workers are STUCK simultaneously                                                                                   | The pool has no recovery mechanism. `getMetrics()` shows `workersStuck = maxWorkers` but no automatic remediation (e.g., kill all stuck workers, spawn fresh ones).                                    | High     |
+| E5  | `UpstreamRateLimiter.acquire()` blocks indefinitely because cloud.ru API rate limit is reduced below expected 15 req/s | No dynamic rate limit adjustment. If cloud.ru returns 429, the pool should reduce `maxTokensPerSecond` temporarily.                                                                                    | Medium   |
+| E6  | Host runs out of file descriptors before running out of workers                                                        | Each subprocess uses multiple FDs (stdin, stdout, stderr, socket). With 16 workers and their dependencies, FD exhaustion is possible on systems with low ulimits.                                      | Medium   |
+| E7  | AbortController signal fires after worker is assigned but before subprocess starts                                     | Race condition between queue timeout and worker assignment. The worker may spawn a subprocess for a request that was already timed out.                                                                | Medium   |
+| E8  | `workerPool.shutdown()` called while `acquire()` promises are pending                                                  | The ADR says "pending requests are rejected with ShutdownError" but does not specify whether `acquire()` promises reject or resolve with an error.                                                     | Medium   |
+| E9  | Config change to `maxWorkers` at runtime (e.g., via admin command)                                                     | Config is described as "immutable after init". If an admin needs to scale workers without restart, this is impossible.                                                                                 | Low      |
+| E10 | Two requests from the same tenant with the same `sessionId` in the queue simultaneously                                | Claude Code sessions are file-based. Two workers processing the same session concurrently will corrupt session state. The ADR does not enforce session-level exclusivity (only tenant-level fairness). | Critical |
 
 ### Edge Cases Missing
 
@@ -524,21 +541,22 @@ The ADR provides:
 
 ### Aggregate Invariants vs TypeScript Types
 
-| Invariant | Type-Enforceable? | Recommendation |
-|-----------|:-----------------:|----------------|
-| Worker Count Bounded | No -- runtime invariant | Add an `assert(this.activeWorkers.size <= this.config.maxWorkers)` at the top of `acquire()` and `release()`. In tests, use a property-based test that fires 1000 random acquire/release sequences and verifies the invariant holds after each operation. |
-| Tenant Queue Bounded | Partially -- `admissionCheck()` returns a discriminated union | The check is in the `Scheduler` but must also be enforced in `WorkerPool.acquire()`. Add a test that calls `acquire()` with `maxQueueDepthPerTenant + 1` requests from the same tenant and verifies the last one throws `TenantQueueFullError`. |
-| Global Queue Bounded | Same as above | Test with `maxQueueDepthGlobal + 1` requests across different tenants. |
-| Request Monotonicity (FIFO per tenant) | No -- behavioral invariant | Implement as a test: enqueue 5 requests from the same tenant with labels [A, B, C, D, E], then drain the pool with 1 worker. Verify completion order is A, B, C, D, E. |
-| Worker Exclusivity | No -- implementation invariant | Test: assign a worker, then call `acquire()` again with the same worker pool. Verify the second request gets a DIFFERENT worker (or queues). Never should two requests share a worker. |
-| Upstream Rate Invariant | No -- runtime invariant | Test: configure rate limiter at 5 req/s, send 10 requests simultaneously, measure actual throughput. Verify <= 5 requests complete in the first second. |
-| Graceful Degradation | No -- behavioral invariant | Test: fill the queue to 90% capacity, verify new requests are still accepted. Fill to 100%, verify new requests are rejected with `GlobalQueueFullError`. Verify existing queued requests continue processing. |
+| Invariant                              |                       Type-Enforceable?                       | Recommendation                                                                                                                                                                                                                                            |
+| -------------------------------------- | :-----------------------------------------------------------: | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Worker Count Bounded                   |                    No -- runtime invariant                    | Add an `assert(this.activeWorkers.size <= this.config.maxWorkers)` at the top of `acquire()` and `release()`. In tests, use a property-based test that fires 1000 random acquire/release sequences and verifies the invariant holds after each operation. |
+| Tenant Queue Bounded                   | Partially -- `admissionCheck()` returns a discriminated union | The check is in the `Scheduler` but must also be enforced in `WorkerPool.acquire()`. Add a test that calls `acquire()` with `maxQueueDepthPerTenant + 1` requests from the same tenant and verifies the last one throws `TenantQueueFullError`.           |
+| Global Queue Bounded                   |                         Same as above                         | Test with `maxQueueDepthGlobal + 1` requests across different tenants.                                                                                                                                                                                    |
+| Request Monotonicity (FIFO per tenant) |                  No -- behavioral invariant                   | Implement as a test: enqueue 5 requests from the same tenant with labels [A, B, C, D, E], then drain the pool with 1 worker. Verify completion order is A, B, C, D, E.                                                                                    |
+| Worker Exclusivity                     |                No -- implementation invariant                 | Test: assign a worker, then call `acquire()` again with the same worker pool. Verify the second request gets a DIFFERENT worker (or queues). Never should two requests share a worker.                                                                    |
+| Upstream Rate Invariant                |                    No -- runtime invariant                    | Test: configure rate limiter at 5 req/s, send 10 requests simultaneously, measure actual throughput. Verify <= 5 requests complete in the first second.                                                                                                   |
+| Graceful Degradation                   |                  No -- behavioral invariant                   | Test: fill the queue to 90% capacity, verify new requests are still accepted. Fill to 100%, verify new requests are rejected with `GlobalQueueFullError`. Verify existing queued requests continue processing.                                            |
 
 ### Domain Events Testability
 
 The 14 `WorkerPoolEvent` types are well-defined as a discriminated union with timestamps. This is excellent for event-driven testing.
 
 **Gaps:**
+
 - No event for "worker became idle" (distinct from "worker released"). When a worker is released and there are no pending requests, it transitions to IDLE, but this state change is not observable via events.
 - No event for rate limiter wait (e.g., `ratelimiter.throttled` with `waitedMs`). If upstream throttling is a significant latency contributor, tests need to observe it.
 - No correlation ID across events. `request.enqueued` -> `request.dequeued` -> `request.completed` share `requestId`, but there is no parent trace ID for distributed tracing.
@@ -778,6 +796,7 @@ E2E-009-02: Backpressure and recovery
 **Risk 3 -- Session Exclusivity Gap**: ADR-008 manages sessions (`TenantSession`), but ADR-009's worker pool has no session-level locking. If tenant "tg_123" has 2 concurrent requests with the same `sessionId`, two workers will spawn Claude Code subprocesses with the same `--session-id`, corrupting the session state. ADR-009 must enforce **per-session exclusivity**, not just per-tenant fairness.
 
 **Contract tests needed:**
+
 - Verify `TenantId` serialization/deserialization is consistent across both modules.
 - Verify that a tenant at rate limit in ADR-008 is also blocked in ADR-009's admission check.
 - Verify that two requests with the same sessionId are serialized (never concurrent), even if the tenant has available concurrency quota.
@@ -830,6 +849,7 @@ E2E-009-02: Backpressure and recovery
 4. **Backpressure Signaling**: When the queue depth exceeds 70% of `maxQueueDepthGlobal`, emit a `pool.backpressure.warning` event. Platform adapters should respond by enabling typing indicators or "system is busy" messages before the hard rejection at 100%. This improves UX by setting user expectations before failure.
 
 5. **Session-Level Mutex**: Add a per-session lock (Redis-based or in-memory Map) that prevents two workers from processing requests with the same `sessionId` concurrently. This closes the critical session corruption gap identified in cross-ADR risk analysis.
+
    ```typescript
    interface SessionMutex {
      acquire(sessionId: string, timeoutMs: number): Promise<SessionLock>;
@@ -841,18 +861,19 @@ E2E-009-02: Backpressure and recovery
 
 ### Runtime Validations Needed
 
-| Validation | Where | What |
-|-----------|-------|------|
-| Config validation | `WorkerPool` constructor | Assert `maxWorkers > 0`, `minWorkers <= maxWorkers`, all timeouts > 0, `gracefulShutdownMs < executionTimeoutMs` |
-| Worker count assertion | After every `acquire()` and `release()` | Assert `activeWorkers.size <= config.maxWorkers` (fail-fast on invariant violation) |
-| Queue depth assertion | After every enqueue | Assert `queue.length <= config.maxQueueDepthGlobal` |
-| Request timeout validation | `PendingRequest` construction | Assert `timeoutMs > 0` and `timeoutMs <= config.queueTimeoutMs` |
-| Worker state transition validation | Every state change | Assert valid transitions: `IDLE->STARTING`, `STARTING->BUSY`, `BUSY->DRAINING`, `DRAINING->TERMINATED`, `BUSY->STUCK`, `STUCK->TERMINATED`. Reject invalid transitions with an error. |
-| PID validation | After subprocess spawn | Assert `pid !== null` and `pid > 0`. Verify PID is not already assigned to another worker. |
-| Memory monitoring | Periodic (every 30s) | Check `estimatedMemoryMB <= config.maxTotalMemoryMB`. If exceeded, prevent spawning new workers until memory decreases. |
-| Upstream rate limiter synchronization | On pool initialization | Verify rate limiter's `maxTokensPerSecond` matches `GlobalResourceLimits.upstreamRateLimitRps`. |
+| Validation                            | Where                                   | What                                                                                                                                                                                  |
+| ------------------------------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Config validation                     | `WorkerPool` constructor                | Assert `maxWorkers > 0`, `minWorkers <= maxWorkers`, all timeouts > 0, `gracefulShutdownMs < executionTimeoutMs`                                                                      |
+| Worker count assertion                | After every `acquire()` and `release()` | Assert `activeWorkers.size <= config.maxWorkers` (fail-fast on invariant violation)                                                                                                   |
+| Queue depth assertion                 | After every enqueue                     | Assert `queue.length <= config.maxQueueDepthGlobal`                                                                                                                                   |
+| Request timeout validation            | `PendingRequest` construction           | Assert `timeoutMs > 0` and `timeoutMs <= config.queueTimeoutMs`                                                                                                                       |
+| Worker state transition validation    | Every state change                      | Assert valid transitions: `IDLE->STARTING`, `STARTING->BUSY`, `BUSY->DRAINING`, `DRAINING->TERMINATED`, `BUSY->STUCK`, `STUCK->TERMINATED`. Reject invalid transitions with an error. |
+| PID validation                        | After subprocess spawn                  | Assert `pid !== null` and `pid > 0`. Verify PID is not already assigned to another worker.                                                                                            |
+| Memory monitoring                     | Periodic (every 30s)                    | Check `estimatedMemoryMB <= config.maxTotalMemoryMB`. If exceeded, prevent spawning new workers until memory decreases.                                                               |
+| Upstream rate limiter synchronization | On pool initialization                  | Verify rate limiter's `maxTokensPerSecond` matches `GlobalResourceLimits.upstreamRateLimitRps`.                                                                                       |
 
 ---
+
 ---
 
 # Cross-Cutting Findings
@@ -862,6 +883,7 @@ E2E-009-02: Backpressure and recovery
 ADR-008 and ADR-009 define incompatible `TenantId` types. This MUST be resolved before implementation begins, as it affects every integration point between the two modules.
 
 **Recommendation**: Create `@openclaw/tenant-types` shared package:
+
 ```typescript
 // Shared branded type
 export type TenantIdString = string & { readonly __brand: unique symbol };
@@ -892,9 +914,9 @@ Neither ADR enforces that two concurrent requests with the same Claude Code `--s
 
 ## Summary Scores
 
-| ADR | Testability | Missing Errors | DDD Enforcement | Missing Criteria | Risk Level |
-|-----|:-----------:|:--------------:|:---------------:|:----------------:|:----------:|
-| ADR-008 | 72/100 | 10 scenarios | 5 gaps | 8 BDD scenarios | HIGH |
-| ADR-009 | 78/100 | 10 scenarios | 7 gaps | 10 BDD scenarios | HIGH |
+| ADR     | Testability | Missing Errors | DDD Enforcement | Missing Criteria | Risk Level |
+| ------- | :---------: | :------------: | :-------------: | :--------------: | :--------: |
+| ADR-008 |   72/100    |  10 scenarios  |     5 gaps      | 8 BDD scenarios  |    HIGH    |
+| ADR-009 |   78/100    |  10 scenarios  |     7 gaps      | 10 BDD scenarios |    HIGH    |
 
 Both ADRs are well-structured with strong DDD foundations but require pre-implementation work on: type safety for value objects, error scenario specification, session-level concurrency control, and cross-ADR contract alignment before coding begins.

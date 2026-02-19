@@ -15,6 +15,7 @@
 ## Scope
 
 ### In Scope
+
 - Extension `@openclaw/max` в `extensions/max/`
 - ChannelPlugin адаптер для MAX Bot API (`platform-api.max.ru`)
 - Webhook + Long Polling поддержка
@@ -24,6 +25,7 @@
 - Интеграция с существующей платформой (IMessengerPort, Event Bus)
 
 ### Out of Scope (future)
+
 - Mini App интеграция (Phase 2)
 - VK Pay платежи (Phase 3)
 - Cloud.ru AI Agents A2A интеграция (отдельный ADR)
@@ -37,6 +39,7 @@
 **Deliverable:** `docs/ccli-max-cloudru-fm/adr/ADR-006-max-messenger-extension.md`
 
 **Content:**
+
 - **Context:** MAX — российский мессенджер, предустановлен на смартфонах с Sep 2025, Bot API на `platform-api.max.ru`, TypeScript SDK `@maxhub/max-bot-api`
 - **Bounded Context:** Messenger (existing) — расширение через `IMessengerPort`
 - **Decision:**
@@ -54,6 +57,7 @@
   - `MaxWebhookEvent` — событие от платформы MAX
 
 **Key Design Decisions:**
+
 1. SDK vs Raw API — использовать `@maxhub/max-bot-api` (85+ stars, MIT, official)
 2. Webhook secret — хранить в `channels.max.webhookSecret`, verify через HMAC
 3. Bot token — хранить в `channels.max.accounts[id].token`
@@ -67,6 +71,7 @@
 **Tool:** [shift-left-testing skill](https://github.com/proffesor-for-testing/agentic-qe/tree/main/v3/assets/skills/shift-left-testing)
 
 **What to validate:**
+
 - Requirements completeness — все ли API-endpoints MAX покрыты?
 - Testability — можно ли замокать MAX Bot API для unit-тестов?
 - Security — webhook verification, token storage, rate limiting
@@ -81,6 +86,7 @@
 **Tool:** [qcsd-ideation-swarm skill](https://github.com/proffesor-for-testing/agentic-qe/tree/main/v3/assets/skills/qcsd-ideation-swarm)
 
 **What to analyze:**
+
 - Quality criteria matrix (functionality, reliability, security, performance)
 - Edge cases: network failures, MAX API outages, rate limit bursts
 - Security threat model: token leakage, webhook spoofing, message injection
@@ -96,16 +102,16 @@
 
 **Expected milestones:**
 
-| # | Milestone | Files | Tests |
-|---|-----------|-------|-------|
-| M1 | Scaffold extension | `package.json`, `openclaw.plugin.json`, `index.ts`, `src/runtime.ts` | 0 |
-| M2 | Channel plugin skeleton | `src/channel.ts` с заглушками для всех секций | 5 |
-| M3 | Outbound messaging | `outbound.sendText`, `outbound.sendMedia`, chunker | 15 |
-| M4 | Gateway (webhook + polling) | `gateway.startAccount`, webhook handler | 20 |
-| M5 | Inline keyboards | Callback handling, keyboard builder | 10 |
-| M6 | Config & Setup | Wizard integration, account management | 10 |
-| M7 | Status & Probing | `status.probeAccount`, health checks | 5 |
-| M8 | Integration tests | End-to-end с mock MAX API | 15 |
+| #   | Milestone                   | Files                                                                | Tests |
+| --- | --------------------------- | -------------------------------------------------------------------- | ----- |
+| M1  | Scaffold extension          | `package.json`, `openclaw.plugin.json`, `index.ts`, `src/runtime.ts` | 0     |
+| M2  | Channel plugin skeleton     | `src/channel.ts` с заглушками для всех секций                        | 5     |
+| M3  | Outbound messaging          | `outbound.sendText`, `outbound.sendMedia`, chunker                   | 15    |
+| M4  | Gateway (webhook + polling) | `gateway.startAccount`, webhook handler                              | 20    |
+| M5  | Inline keyboards            | Callback handling, keyboard builder                                  | 10    |
+| M6  | Config & Setup              | Wizard integration, account management                               | 10    |
+| M7  | Status & Probing            | `status.probeAccount`, health checks                                 | 5     |
+| M8  | Integration tests           | End-to-end с mock MAX API                                            | 15    |
 
 **Expected output:** `planning/milestones-ADR-006.md`
 
@@ -118,6 +124,7 @@
 **Loop:** Validate implementation plan -> find gaps -> mitigate -> repeat until clean.
 
 **Likely gaps to check:**
+
 - [ ] Webhook signature format (MAX uses what algorithm? HMAC-SHA256?)
 - [ ] GROUP chat support (bot mentions, thread replies)
 - [ ] Media upload flow (photo, video, document via `POST /uploads`)
@@ -171,6 +178,7 @@ extensions/max/
 **Tool:** [brutal-honesty-review skill](https://github.com/proffesor-for-testing/agentic-qe/tree/main/v3/assets/skills)
 
 **What to evaluate:**
+
 - Does the extension follow the telegram pattern exactly?
 - Are all ChannelPlugin sections implemented (not just stubs)?
 - Is webhook verification cryptographically correct?
@@ -189,6 +197,7 @@ extensions/max/
 **Question:** Did we miss something?
 
 **Checklist:**
+
 - [ ] Extension loads via `openclaw.plugin.json`
 - [ ] Bot token storage is secure (not in git)
 - [ ] Webhook endpoint is documented
@@ -211,6 +220,7 @@ If gaps found -> formulate what's missing -> repeat from Step 1 (new ADR or ADR 
 **Tool:** QE Queen organized QE fleet
 
 **Full quality assessment:**
+
 - Unit test coverage >= 85%
 - Integration tests with mock MAX API
 - Security audit (webhook verification, token handling)
@@ -221,29 +231,29 @@ If gaps found -> formulate what's missing -> repeat from Step 1 (new ADR or ADR 
 
 ## Dependencies & Risks
 
-| Risk | Probability | Impact | Mitigation |
-|------|------------|--------|------------|
-| MAX Bot API undocumented behavior | Medium | High | Use official SDK, test against staging |
-| SDK `@maxhub/max-bot-api` instability | Low | Medium | Pin version, fallback to raw HTTP |
-| Webhook signature format unknown | High | High | Research in Step 1, test in Step 2 |
-| MAX platform rate limit changes | Low | Low | Configurable in `channels.max.rateLimit` |
-| Russian business entity required for publication | High | Low | Document as prerequisite, not blocker for development |
+| Risk                                             | Probability | Impact | Mitigation                                            |
+| ------------------------------------------------ | ----------- | ------ | ----------------------------------------------------- |
+| MAX Bot API undocumented behavior                | Medium      | High   | Use official SDK, test against staging                |
+| SDK `@maxhub/max-bot-api` instability            | Low         | Medium | Pin version, fallback to raw HTTP                     |
+| Webhook signature format unknown                 | High        | High   | Research in Step 1, test in Step 2                    |
+| MAX platform rate limit changes                  | Low         | Low    | Configurable in `channels.max.rateLimit`              |
+| Russian business entity required for publication | High        | Low    | Document as prerequisite, not blocker for development |
 
 ---
 
 ## Estimated Effort per Step
 
-| Step | Effort | Parallelizable |
-|------|--------|---------------|
-| 1. ADR | 1 session | No |
-| 2. Shift-Left | 1 session | No (needs ADR) |
-| 3. QCSD Ideation | 1 session | No (needs refined ADR) |
-| 4. Code Goal Planner | 1 session | No (needs validated ADR) |
-| 5. Requirements Validator | 1-2 sessions | No (needs plan) |
-| 6. Implementation | 2-3 sessions | Partially (M1-M3 independent of M4-M7) |
-| 7. Brutal Honesty | 1 session | No (needs implementation) |
-| 8. Gap Check | 0.5 session | No |
-| 9. QE Queen | 1 session | No |
+| Step                      | Effort       | Parallelizable                         |
+| ------------------------- | ------------ | -------------------------------------- |
+| 1. ADR                    | 1 session    | No                                     |
+| 2. Shift-Left             | 1 session    | No (needs ADR)                         |
+| 3. QCSD Ideation          | 1 session    | No (needs refined ADR)                 |
+| 4. Code Goal Planner      | 1 session    | No (needs validated ADR)               |
+| 5. Requirements Validator | 1-2 sessions | No (needs plan)                        |
+| 6. Implementation         | 2-3 sessions | Partially (M1-M3 independent of M4-M7) |
+| 7. Brutal Honesty         | 1 session    | No (needs implementation)              |
+| 8. Gap Check              | 0.5 session  | No                                     |
+| 9. QE Queen               | 1 session    | No                                     |
 
 **Total: ~9-11 sessions**
 

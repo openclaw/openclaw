@@ -10,13 +10,13 @@
 
 Поля: `tenantId`, `platform` (`telegram|max|web|api`), `tier` (`free|standard|premium|admin`), `createdAt`, `lastActiveAt`, `suspended`, `workspacePath`.
 
-| Функция | Описание |
-|---------|----------|
-| `createUserTenant(params)` | Создание тенанта (tier=`free`, workspace=`/workspaces/{id}`) |
-| `touchTenant(tenant)` | Обновление `lastActiveAt` |
-| `changeTenantTier(tenant, newTier)` | Смена уровня доступа |
-| `suspendTenant(tenant)` | Блокировка (`suspended=true`) |
-| `reinstateTenant(tenant)` | Восстановление доступа |
+| Функция                             | Описание                                                     |
+| ----------------------------------- | ------------------------------------------------------------ |
+| `createUserTenant(params)`          | Создание тенанта (tier=`free`, workspace=`/workspaces/{id}`) |
+| `touchTenant(tenant)`               | Обновление `lastActiveAt`                                    |
+| `changeTenantTier(tenant, newTier)` | Смена уровня доступа                                         |
+| `suspendTenant(tenant)`             | Блокировка (`suspended=true`)                                |
+| `reinstateTenant(tenant)`           | Восстановление доступа                                       |
 
 Все операции иммутабельны -- возвращают новый объект.
 
@@ -24,20 +24,20 @@
 
 Конечный автомат: `idle -> active -> processing -> active (цикл)`. Из любого состояния возможен переход в `suspended`. Из `active`/`processing` -- в `expired`.
 
-| Из | Допустимые переходы |
-|----|---------------------|
-| `idle` | `active`, `suspended` |
-| `active` | `processing`, `expired`, `suspended` |
-| `processing` | `active`, `expired`, `suspended` |
-| `expired` | `suspended` |
-| `suspended` | -- (терминальное) |
+| Из           | Допустимые переходы                  |
+| ------------ | ------------------------------------ |
+| `idle`       | `active`, `suspended`                |
+| `active`     | `processing`, `expired`, `suspended` |
+| `processing` | `active`, `expired`, `suspended`     |
+| `expired`    | `suspended`                          |
+| `suspended`  | -- (терминальное)                    |
 
-| Функция | Описание |
-|---------|----------|
-| `createTenantSession(sessionId, tenantId, ttlMs=3600000)` | Создание в состоянии `idle`, TTL 1 час |
-| `transitionSession(session, newState)` | Переход, возвращает `Result<TenantSession>` |
-| `isSessionExpired(session, now?)` | Проверка TTL |
-| `extendSession(session, extensionMs)` | Продление TTL |
+| Функция                                                   | Описание                                    |
+| --------------------------------------------------------- | ------------------------------------------- |
+| `createTenantSession(sessionId, tenantId, ttlMs=3600000)` | Создание в состоянии `idle`, TTL 1 час      |
+| `transitionSession(session, newState)`                    | Переход, возвращает `Result<TenantSession>` |
+| `isSessionExpired(session, now?)`                         | Проверка TTL                                |
+| `extendSession(session, extensionMs)`                     | Продление TTL                               |
 
 `SessionIdString` -- детерминистически из TenantId: `session:{tenantId}`.
 
@@ -45,12 +45,12 @@
 
 Иерархия: `free < standard < premium < admin`. Проверка: `isTierAtLeast(current, required)`.
 
-| AccessTier | SandboxTier | Инструменты | maxConcurrentTools | Одобрение |
-|-----------|-------------|-------------|:------------------:|:---------:|
-| `free` | `restricted` | Read, Glob, Grep, WebFetch | 1 | Да |
-| `standard` | `standard` | + Write, Edit, NotebookEdit | 2 | Нет |
-| `premium` | `full` | + Bash, WebSearch, Skill, TodoWrite | 4 | Нет |
-| `admin` | `full` | Все | Infinity | Нет |
+| AccessTier | SandboxTier  | Инструменты                         | maxConcurrentTools | Одобрение |
+| ---------- | ------------ | ----------------------------------- | :----------------: | :-------: |
+| `free`     | `restricted` | Read, Glob, Grep, WebFetch          |         1          |    Да     |
+| `standard` | `standard`   | + Write, Edit, NotebookEdit         |         2          |    Нет    |
+| `premium`  | `full`       | + Bash, WebSearch, Skill, TodoWrite |         4          |    Нет    |
+| `admin`    | `full`       | Все                                 |      Infinity      |    Нет    |
 
 Хранилища: `ITenantStore`/`InMemoryTenantStore`, `ISessionStore`/`InMemorySessionStore`.
 
@@ -60,13 +60,14 @@
 
 **WorkspaceManager** -- жизненный цикл workspace тенантов:
 
-| Метод | Описание |
-|-------|----------|
+| Метод                          | Описание                                                 |
+| ------------------------------ | -------------------------------------------------------- |
 | `provisionWorkspace(tenantId)` | Создает `/workspaces/{tenantId}`, генерирует `CLAUDE.md` |
-| `cleanWorkspace(tenantId)` | Удаляет workspace |
-| `validatePath(path, tenantId)` | Проверяет принадлежность пути к workspace |
+| `cleanWorkspace(tenantId)`     | Удаляет workspace                                        |
+| `validatePath(path, tenantId)` | Проверяет принадлежность пути к workspace                |
 
 **Защита от Directory Traversal** (`validateWorkspacePath`, `validateTenantPath`):
+
 - Путь абсолютный, начинается с `/workspaces/`
 - Запрещены `..`, нормализация лишних `/` и `.`
 - Проверка принадлежности к workspace тенанта
@@ -99,12 +100,12 @@
 
 Алгоритм Token Bucket, ключ `{platform}:{chatId}`:
 
-| Платформа | rps | burstSize |
-|-----------|:---:|:---------:|
-| `telegram` | 30 | 30 |
-| `max` | 20 | 20 |
-| `web` | 100 | 100 |
-| `api` | 100 | 100 |
+| Платформа  | rps | burstSize |
+| ---------- | :-: | :-------: |
+| `telegram` | 30  |    30     |
+| `max`      | 20  |    20     |
+| `web`      | 100 |    100    |
+| `api`      | 100 |    100    |
 
 ---
 
@@ -116,13 +117,13 @@
 
 ### 4.2 ToolRegistry
 
-| Метод | Описание |
-|-------|----------|
+| Метод                               | Описание                                  |
+| ----------------------------------- | ----------------------------------------- |
 | `register(server: McpServerConfig)` | Регистрация всех инструментов MCP-сервера |
-| `unregister(serverId)` | Удаление сервера и его инструментов |
-| `findTool(name)` | Поиск по имени |
-| `listTools(filter?)` | Фильтрация по `category`/`tier` |
-| `getServer(toolName)` | Конфигурация сервера инструмента |
+| `unregister(serverId)`              | Удаление сервера и его инструментов       |
+| `findTool(name)`                    | Поиск по имени                            |
+| `listTools(filter?)`                | Фильтрация по `category`/`tier`           |
+| `getServer(toolName)`               | Конфигурация сервера инструмента          |
 
 ### 4.3 ToolAccessGuard
 
@@ -164,12 +165,12 @@
 
 Defaults: `flushTokenThreshold=50`, `flushTimeoutMs=500`, `maxMessageLength=4096`, `typingIndicatorIntervalMs=4000`.
 
-| Платформа | maxMessageLength | flushTokenThreshold | flushTimeoutMs | typing |
-|-----------|:----------------:|:-------------------:|:--------------:|:------:|
-| `telegram` | 4096 | 50 | 500 | 4000ms |
-| `max` | 4096 | 50 | 500 | 4000ms |
-| `web` | MAX_SAFE_INTEGER | 20 | 200 | off |
-| `api` | MAX_SAFE_INTEGER | 50 | 500 | off |
+| Платформа  | maxMessageLength | flushTokenThreshold | flushTimeoutMs | typing |
+| ---------- | :--------------: | :-----------------: | :------------: | :----: |
+| `telegram` |       4096       |         50          |      500       | 4000ms |
+| `max`      |       4096       |         50          |      500       | 4000ms |
+| `web`      | MAX_SAFE_INTEGER |         20          |      200       |  off   |
+| `api`      | MAX_SAFE_INTEGER |         50          |      500       |  off   |
 
 **BatchFallbackAdapter** -- заглушка без стриминга, накапливает текст, отдает через `getAccumulatedText()`.
 
@@ -179,13 +180,13 @@ Defaults: `flushTokenThreshold=50`, `flushTimeoutMs=500`, `maxMessageLength=4096
 
 ### 6.1 WorkerPool и конфигурация
 
-| Параметр | Значение | Параметр | Значение |
-|----------|:--------:|----------|:--------:|
-| `maxWorkers` | 4 | `memoryLimitMb` | 512 |
-| `minWorkers` | 1 | `backpressureThreshold` | 0.7 |
-| `maxQueueSize` | 32 | `heartbeatIntervalMs` | 5000 |
-| `workerTimeoutMs` | 120000 | `stuckThresholdMs` | 60000 |
-| `maxRequestsPerWorker` | 100 | | |
+| Параметр               | Значение | Параметр                | Значение |
+| ---------------------- | :------: | ----------------------- | :------: |
+| `maxWorkers`           |    4     | `memoryLimitMb`         |   512    |
+| `minWorkers`           |    1     | `backpressureThreshold` |   0.7    |
+| `maxQueueSize`         |    32    | `heartbeatIntervalMs`   |   5000   |
+| `workerTimeoutMs`      |  120000  | `stuckThresholdMs`      |  60000   |
+| `maxRequestsPerWorker` |   100    |                         |          |
 
 Состояния воркера: `idle -> busy -> draining -> stuck -> dead`.
 
@@ -201,12 +202,12 @@ Per-session блокировки: `acquire(sessionId, timeoutMs)`, `release(hand
 
 Формула: `level = queuePressure * 0.7 + workerUtilization * 0.3`.
 
-| Уровень | Действие |
-|:-------:|----------|
-| < 0.5 | Минимум воркеров |
+| Уровень | Действие                         |
+| :-----: | -------------------------------- |
+|  < 0.5  | Минимум воркеров                 |
 | 0.5-0.8 | Пропорциональное масштабирование |
-| >= 0.8 | Максимум воркеров |
-| >= 0.7 | Отклонение новых запросов |
+| >= 0.8  | Максимум воркеров                |
+| >= 0.7  | Отклонение новых запросов        |
 
 ### 6.5 ConcurrencyMetrics
 
@@ -222,13 +223,13 @@ Per-session блокировки: `acquire(sessionId, timeoutMs)`, `release(hand
 
 ### 7.2 Конечный автомат
 
-| Из | Допустимые переходы |
-|----|---------------------|
+| Из           | Допустимые переходы  |
+| ------------ | -------------------- |
 | `registered` | `installed`, `error` |
-| `installed` | `active`, `error` |
-| `active` | `disabled`, `error` |
-| `disabled` | `active`, `error` |
-| `error` | `disabled` |
+| `installed`  | `active`, `error`    |
+| `active`     | `disabled`, `error`  |
+| `disabled`   | `active`, `error`    |
+| `error`      | `disabled`           |
 
 Функции: `transitionPlugin()`, `canTransition()`, `getValidTransitions()`.
 
@@ -238,15 +239,15 @@ Per-session блокировки: `acquire(sessionId, timeoutMs)`, `release(hand
 
 ### 7.4 Хуки (HookDispatcher, 7 типов)
 
-| Хук | Момент |
-|-----|--------|
-| `onMessageReceived` | Получение сообщения |
-| `onBeforeSend` | Перед отправкой |
-| `onAfterSend` | После отправки |
-| `onToolInvoked` | Вызов инструмента |
-| `onToolCompleted` | Завершение инструмента |
-| `onSessionStart` | Старт сессии |
-| `onSessionEnd` | Завершение сессии |
+| Хук                 | Момент                 |
+| ------------------- | ---------------------- |
+| `onMessageReceived` | Получение сообщения    |
+| `onBeforeSend`      | Перед отправкой        |
+| `onAfterSend`       | После отправки         |
+| `onToolInvoked`     | Вызов инструмента      |
+| `onToolCompleted`   | Завершение инструмента |
+| `onSessionStart`    | Старт сессии           |
+| `onSessionEnd`      | Завершение сессии      |
 
 Результат: `HookResult { modified, data?, cancel? }` -- модификация данных или отмена операции.
 
@@ -264,11 +265,11 @@ Per-session блокировки: `acquire(sessionId, timeoutMs)`, `release(hand
 
 ### 8.2 FeedbackProcessor
 
-| Рейтинг | Действие |
-|---------|----------|
+| Рейтинг    | Действие                                                                     |
+| ---------- | ---------------------------------------------------------------------------- |
 | `positive` | Авто-создание TrainingExample (quality=4, category=`custom`) из input/output |
-| `negative` | Флаг для проверки, событие `training.feedback.flagged_for_review` |
-| `neutral` | Только сохранение |
+| `negative` | Флаг для проверки, событие `training.feedback.flagged_for_review`            |
+| `neutral`  | Только сохранение                                                            |
 
 ### 8.3 ContextBuilder
 
@@ -302,12 +303,12 @@ Per-session блокировки: `acquire(sessionId, timeoutMs)`, `release(hand
 
 ### 9.4 TokenBudget (24-часовой сброс)
 
-| Tier | Лимит токенов |
-|------|:-------------:|
-| `free` | 10 000 |
-| `standard` | 100 000 |
-| `premium` | 1 000 000 |
-| `admin` | Infinity |
+| Tier       | Лимит токенов |
+| ---------- | :-----------: |
+| `free`     |    10 000     |
+| `standard` |    100 000    |
+| `premium`  |   1 000 000   |
+| `admin`    |   Infinity    |
 
 Методы: `checkBudget()`, `recordUsage()`, `getUsage()`.
 
@@ -361,11 +362,11 @@ Per-provider, окно 1 мин: `requestsPerMinute`, `tokensPerMinute`, `concur
 
 ### 11.2 Branded Types
 
-| Тип | Brand | Формат |
-|-----|-------|--------|
-| `TenantIdString` | `TenantId` | `{platform}:{userId}:{chatId}` |
-| `SessionIdString` | `SessionId` | `session:{tenantId}` |
-| `WorkspacePath` | `WorkspacePath` | `/workspaces/{tenantId}/...` |
+| Тип               | Brand           | Формат                         |
+| ----------------- | --------------- | ------------------------------ |
+| `TenantIdString`  | `TenantId`      | `{platform}:{userId}:{chatId}` |
+| `SessionIdString` | `SessionId`     | `session:{tenantId}`           |
+| `WorkspacePath`   | `WorkspacePath` | `/workspaces/{tenantId}/...`   |
 
 ### 11.3 Иерархия ошибок
 

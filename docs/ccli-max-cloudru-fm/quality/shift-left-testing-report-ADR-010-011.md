@@ -18,13 +18,13 @@
 
 ### 1. Testability Assessment: Score 72/100
 
-| Criterion | Score | Rationale |
-|-----------|:-----:|-----------|
-| Interface mockability | 18/20 | `StreamParser`, `TokenAccumulator`, and `MessengerStreamAdapter` are all interfaces with clear method signatures. `ChildProcess` from Node.js stdlib is mockable via `EventEmitter`. Strong. |
-| Compile-time invariant enforcement | 10/20 | The `StreamJsonEvent` discriminated union is well-typed and enables exhaustive switch/case. However, the state machine (`INITIATED -> TYPING_SENT -> STREAMING -> ...`) is described textually, not enforced via types. State transitions are runtime-only. |
-| Acceptance criteria clarity | 12/20 | The ADR states "typing indicator within 500ms" and "progressive text within 2-3 seconds" but these are prose, not formal acceptance criteria. There is no BDD-style Given/When/Then. The test plan table lists 10 tests but no expected values for timing assertions. |
-| Error path coverage | 14/20 | Four error codes are defined (`PARSE_ERROR`, `TIMEOUT`, `SUBPROCESS_CRASH`, `PROXY_ERROR`), plus a `recoverable` flag. Fallback to batch is specified. Missing: what happens when the messenger adapter itself fails (e.g., Telegram returns 429 during `editMessage`). |
-| Domain event testability | 18/20 | Seven domain events are clearly defined with triggers and consumers. These are testable via event spy/mock patterns. |
+| Criterion                          | Score | Rationale                                                                                                                                                                                                                                                               |
+| ---------------------------------- | :---: | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Interface mockability              | 18/20 | `StreamParser`, `TokenAccumulator`, and `MessengerStreamAdapter` are all interfaces with clear method signatures. `ChildProcess` from Node.js stdlib is mockable via `EventEmitter`. Strong.                                                                            |
+| Compile-time invariant enforcement | 10/20 | The `StreamJsonEvent` discriminated union is well-typed and enables exhaustive switch/case. However, the state machine (`INITIATED -> TYPING_SENT -> STREAMING -> ...`) is described textually, not enforced via types. State transitions are runtime-only.             |
+| Acceptance criteria clarity        | 12/20 | The ADR states "typing indicator within 500ms" and "progressive text within 2-3 seconds" but these are prose, not formal acceptance criteria. There is no BDD-style Given/When/Then. The test plan table lists 10 tests but no expected values for timing assertions.   |
+| Error path coverage                | 14/20 | Four error codes are defined (`PARSE_ERROR`, `TIMEOUT`, `SUBPROCESS_CRASH`, `PROXY_ERROR`), plus a `recoverable` flag. Fallback to batch is specified. Missing: what happens when the messenger adapter itself fails (e.g., Telegram returns 429 during `editMessage`). |
+| Domain event testability           | 18/20 | Seven domain events are clearly defined with triggers and consumers. These are testable via event spy/mock patterns.                                                                                                                                                    |
 
 **Key Testability Gaps:**
 
@@ -38,18 +38,18 @@
 
 ### 2. Missing Error Scenarios
 
-| # | Scenario | Current Coverage | Risk |
-|---|----------|:----------------:|:----:|
-| E1 | Messenger adapter `editMessage` returns HTTP 429 (rate limited) mid-stream | Not addressed | HIGH -- stream continues pushing tokens but adapter cannot deliver them; tokens accumulate unbounded |
-| E2 | Messenger adapter `sendInitialMessage` fails (network error, bot blocked by user) | Not addressed | HIGH -- `messageId` remains `null`, subsequent `editMessage` calls will fail with null reference |
-| E3 | Subprocess stdout emits partial JSON line (line split across OS pipe buffer boundaries) | Not addressed | MEDIUM -- `readline` handles this for newline-delimited data, but incomplete JSON within a line is not discussed |
-| E4 | Subprocess exits with signal (SIGKILL/SIGTERM from OOM killer) without emitting result event | Partially -- timeout handles it after 300s | HIGH -- 300s is too long to wait for a dead process; `child.on('exit')` should trigger immediate error |
-| E5 | Two concurrent messages from same user in same chat (race on session lock) | Invariant 2 mentions "session lock" but no interface for it | MEDIUM -- the ADR references `serialize: true` but ADR-009 supersedes this with a worker pool |
-| E6 | Accumulated text exceeds `maxMessageLength` exactly at a multi-byte UTF-8 character boundary | Not addressed | LOW -- `split()` at character count may split a multi-byte character if the platform counts bytes, not chars |
-| E7 | `editMessageText` succeeds but Telegram returns a different `message_id` (message was deleted and recreated by Telegram) | Not addressed | LOW -- unlikely but would cause all subsequent edits to target a nonexistent message |
-| E8 | `claude-code-proxy` returns HTTP 502/503 before any SSE events are emitted | Not addressed | MEDIUM -- no `onToken` fires, no `onComplete` fires; only timeout catches this after 300s |
-| E9 | Web platform SSE/WebSocket connection drops during streaming | Not addressed | MEDIUM -- `WebStreamAdapter` interface is defined but reconnection/resumption semantics are absent |
-| E10 | `onFlush` callback throws (adapter failure during flush) | Not addressed | HIGH -- `TokenAccumulator` calls `onFlush` from a timer; unhandled rejection could crash the process |
+| #   | Scenario                                                                                                                 |                      Current Coverage                       |                                                       Risk                                                       |
+| --- | ------------------------------------------------------------------------------------------------------------------------ | :---------------------------------------------------------: | :--------------------------------------------------------------------------------------------------------------: |
+| E1  | Messenger adapter `editMessage` returns HTTP 429 (rate limited) mid-stream                                               |                        Not addressed                        |       HIGH -- stream continues pushing tokens but adapter cannot deliver them; tokens accumulate unbounded       |
+| E2  | Messenger adapter `sendInitialMessage` fails (network error, bot blocked by user)                                        |                        Not addressed                        |         HIGH -- `messageId` remains `null`, subsequent `editMessage` calls will fail with null reference         |
+| E3  | Subprocess stdout emits partial JSON line (line split across OS pipe buffer boundaries)                                  |                        Not addressed                        | MEDIUM -- `readline` handles this for newline-delimited data, but incomplete JSON within a line is not discussed |
+| E4  | Subprocess exits with signal (SIGKILL/SIGTERM from OOM killer) without emitting result event                             |         Partially -- timeout handles it after 300s          |      HIGH -- 300s is too long to wait for a dead process; `child.on('exit')` should trigger immediate error      |
+| E5  | Two concurrent messages from same user in same chat (race on session lock)                                               | Invariant 2 mentions "session lock" but no interface for it |          MEDIUM -- the ADR references `serialize: true` but ADR-009 supersedes this with a worker pool           |
+| E6  | Accumulated text exceeds `maxMessageLength` exactly at a multi-byte UTF-8 character boundary                             |                        Not addressed                        |   LOW -- `split()` at character count may split a multi-byte character if the platform counts bytes, not chars   |
+| E7  | `editMessageText` succeeds but Telegram returns a different `message_id` (message was deleted and recreated by Telegram) |                        Not addressed                        |               LOW -- unlikely but would cause all subsequent edits to target a nonexistent message               |
+| E8  | `claude-code-proxy` returns HTTP 502/503 before any SSE events are emitted                                               |                        Not addressed                        |            MEDIUM -- no `onToken` fires, no `onComplete` fires; only timeout catches this after 300s             |
+| E9  | Web platform SSE/WebSocket connection drops during streaming                                                             |                        Not addressed                        |        MEDIUM -- `WebStreamAdapter` interface is defined but reconnection/resumption semantics are absent        |
+| E10 | `onFlush` callback throws (adapter failure during flush)                                                                 |                        Not addressed                        |       HIGH -- `TokenAccumulator` calls `onFlush` from a timer; unhandled rejection could crash the process       |
 
 ---
 
@@ -209,14 +209,14 @@ Scenario: MAX platform rate limit causes adaptive flush interval
 
 ### 6. Cross-ADR Integration Risks
 
-| ADR Pair | Integration Risk | Contract Test Needed |
-|----------|-----------------|---------------------|
-| **ADR-010 + ADR-006** (Messenger Adapters) | `MessengerStreamAdapter` is a new interface distinct from ADR-006's `MessengerAdapter`. There is no shared base type. Risk: two parallel adapter hierarchies with inconsistent platform behavior. | Contract test: every platform that has a `MessengerAdapter` (ADR-006) must also have a compatible `MessengerStreamAdapter` (ADR-010). Verify that `platform` identifiers match. |
-| **ADR-010 + ADR-009** (Concurrent Requests) | ADR-010 assumes "at most one active ResponseStream per conversation" enforced by a session lock. ADR-009 introduces a worker pool that replaces `serialize: true`. Risk: the worker pool may assign two workers to the same session if the session lock is not implemented. | Contract test: submit two requests for the same `sessionId` to the worker pool. Assert the second is queued, not executed concurrently. |
-| **ADR-010 + ADR-008** (Multi-Tenant Session Isolation) | ADR-010 uses `sessionId` but does not define how it maps to `TenantId`. ADR-008 defines `SessionId = "{tenantId}:{conversationId}"`. Risk: the streaming pipeline could accidentally cross tenant boundaries if sessionId parsing is inconsistent. | Contract test: a `ResponseStream` for tenant A cannot deliver messages to tenant B's chat. Verify `chatId` is always resolved from the tenant context, not from the session alone. |
-| **ADR-010 + ADR-007** (Tools & MCP) | ADR-010 defines `onToolUse` in the `StreamParser` as "informational -- tools are disabled." ADR-007 enables tools for Standard and Full tiers. Risk: when tools are enabled, `stream-json` will emit `tool_use` and `tool_result` events that interrupt the text stream. The `TokenAccumulator` has no concept of "pause during tool execution." | Contract test: emit a sequence of `text`, `tool_use`, `tool_result`, `text` events. Assert: (a) tool events do not corrupt the accumulated text, (b) token delivery pauses during tool execution, (c) the final text is the concatenation of all `text` events. |
-| **ADR-010 + ADR-012** (Plugin Architecture) | ADR-012 defines `@openclaw/stream-pipeline` as a Shared Kernel with the core. Risk: if the streaming protocol types (e.g., `StreamJsonEvent`) are defined inside the pipeline module, consumers in other modules must import from it, creating a coupling point. | Contract test: verify that `StreamJsonEvent` types are re-exported from `@openclaw/core` or a shared types package, not imported directly from `@openclaw/stream-pipeline`. |
-| **ADR-010 + ADR-013** (AI Fabric Agents) | ADR-013 introduces remote agents (Cloud.ru AI Fabric) that do not use Claude Code CLI. These agents will not emit `stream-json` events on stdout. Risk: the streaming pipeline is tightly coupled to Claude Code's `stream-json` format and will not work with remote agents. | Contract test: verify that `IAgentProvider.execute()` can return a generic `ReadableStream<AgentEvent>` that both local CLI and remote HTTP providers implement, and that `StreamParser` can adapt to both event formats. |
+| ADR Pair                                               | Integration Risk                                                                                                                                                                                                                                                                                                                                 | Contract Test Needed                                                                                                                                                                                                                                            |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **ADR-010 + ADR-006** (Messenger Adapters)             | `MessengerStreamAdapter` is a new interface distinct from ADR-006's `MessengerAdapter`. There is no shared base type. Risk: two parallel adapter hierarchies with inconsistent platform behavior.                                                                                                                                                | Contract test: every platform that has a `MessengerAdapter` (ADR-006) must also have a compatible `MessengerStreamAdapter` (ADR-010). Verify that `platform` identifiers match.                                                                                 |
+| **ADR-010 + ADR-009** (Concurrent Requests)            | ADR-010 assumes "at most one active ResponseStream per conversation" enforced by a session lock. ADR-009 introduces a worker pool that replaces `serialize: true`. Risk: the worker pool may assign two workers to the same session if the session lock is not implemented.                                                                      | Contract test: submit two requests for the same `sessionId` to the worker pool. Assert the second is queued, not executed concurrently.                                                                                                                         |
+| **ADR-010 + ADR-008** (Multi-Tenant Session Isolation) | ADR-010 uses `sessionId` but does not define how it maps to `TenantId`. ADR-008 defines `SessionId = "{tenantId}:{conversationId}"`. Risk: the streaming pipeline could accidentally cross tenant boundaries if sessionId parsing is inconsistent.                                                                                               | Contract test: a `ResponseStream` for tenant A cannot deliver messages to tenant B's chat. Verify `chatId` is always resolved from the tenant context, not from the session alone.                                                                              |
+| **ADR-010 + ADR-007** (Tools & MCP)                    | ADR-010 defines `onToolUse` in the `StreamParser` as "informational -- tools are disabled." ADR-007 enables tools for Standard and Full tiers. Risk: when tools are enabled, `stream-json` will emit `tool_use` and `tool_result` events that interrupt the text stream. The `TokenAccumulator` has no concept of "pause during tool execution." | Contract test: emit a sequence of `text`, `tool_use`, `tool_result`, `text` events. Assert: (a) tool events do not corrupt the accumulated text, (b) token delivery pauses during tool execution, (c) the final text is the concatenation of all `text` events. |
+| **ADR-010 + ADR-012** (Plugin Architecture)            | ADR-012 defines `@openclaw/stream-pipeline` as a Shared Kernel with the core. Risk: if the streaming protocol types (e.g., `StreamJsonEvent`) are defined inside the pipeline module, consumers in other modules must import from it, creating a coupling point.                                                                                 | Contract test: verify that `StreamJsonEvent` types are re-exported from `@openclaw/core` or a shared types package, not imported directly from `@openclaw/stream-pipeline`.                                                                                     |
+| **ADR-010 + ADR-013** (AI Fabric Agents)               | ADR-013 introduces remote agents (Cloud.ru AI Fabric) that do not use Claude Code CLI. These agents will not emit `stream-json` events on stdout. Risk: the streaming pipeline is tightly coupled to Claude Code's `stream-json` format and will not work with remote agents.                                                                    | Contract test: verify that `IAgentProvider.execute()` can return a generic `ReadableStream<AgentEvent>` that both local CLI and remote HTTP providers implement, and that `StreamParser` can adapt to both event formats.                                       |
 
 ---
 
@@ -228,18 +228,15 @@ Scenario: MAX platform rate limit causes adaptive flush interval
 
 ```typescript
 type ResponseStreamState =
-  | { status: 'INITIATED' }
-  | { status: 'TYPING_SENT'; sentAt: number }
-  | { status: 'STREAMING'; messageId: string; tokenCount: number }
-  | { status: 'FINALIZING'; messageId: string; totalText: string }
-  | { status: 'DELIVERED'; response: CompleteResponse }
-  | { status: 'ERRORED'; error: StreamError }
-  | { status: 'FALLBACK_BATCH'; partialText: string };
+  | { status: "INITIATED" }
+  | { status: "TYPING_SENT"; sentAt: number }
+  | { status: "STREAMING"; messageId: string; tokenCount: number }
+  | { status: "FINALIZING"; messageId: string; totalText: string }
+  | { status: "DELIVERED"; response: CompleteResponse }
+  | { status: "ERRORED"; error: StreamError }
+  | { status: "FALLBACK_BATCH"; partialText: string };
 
-function transition(
-  current: ResponseStreamState,
-  event: ResponseStreamEvent,
-): ResponseStreamState; // Exhaustive switch enforced by TypeScript
+function transition(current: ResponseStreamState, event: ResponseStreamEvent): ResponseStreamState; // Exhaustive switch enforced by TypeScript
 ```
 
 2. **Injectable Clock.** The `TokenAccumulator` should accept a `Clock` or `Timer` interface for testability:
@@ -265,6 +262,7 @@ interface Timer {
 6. **Process exit handler.** Register `process.on('exit', ...)` to kill any lingering subprocesses, preventing orphaned Claude Code processes consuming resources.
 
 ---
+
 ---
 
 ## ADR-011: User Training & Customization via Messenger
@@ -276,13 +274,13 @@ interface Timer {
 
 ### 1. Testability Assessment: Score 65/100
 
-| Criterion | Score | Rationale |
-|-----------|:-----:|-----------|
-| Interface mockability | 17/20 | All six manager interfaces (`ClaudeMdManager`, `KnowledgeManager`, `MemoryManager`, `ToolRegistry`, `PersonaManager`, `HookManager`) are clearly defined with typed methods. The `TrainingEngine` orchestrator delegates to them, making it trivially mockable. |
-| Compile-time invariant enforcement | 8/20 | `TrainingCommand` is a discriminated union (good), but critical constraints are only runtime: CLAUDE.md max size (32KB), max rules per section (50), max MCP servers (10). These limits are not expressible in TypeScript's type system and must be tested via runtime guards. The `ClaudeMdSection` type is defined twice with conflicting meanings (once as a string literal union, once as an interface name). |
-| Acceptance criteria clarity | 10/20 | No BDD scenarios. No latency or performance requirements. The command syntax is documented but there are no formal acceptance criteria for parsing edge cases (e.g., what if a user types `/train add rule:` with no text after the colon?). |
-| Error path coverage | 12/20 | Security constraints table lists 10 enforcement points. But error responses are generic (`TrainingResult.success: false` with a `message` string). No typed error codes for the training domain. No specification of what the user sees when a command fails. |
-| Domain event testability | 18/20 | Eleven domain events are defined with clear triggers and payloads. Testable via event mock. |
+| Criterion                          | Score | Rationale                                                                                                                                                                                                                                                                                                                                                                                                         |
+| ---------------------------------- | :---: | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Interface mockability              | 17/20 | All six manager interfaces (`ClaudeMdManager`, `KnowledgeManager`, `MemoryManager`, `ToolRegistry`, `PersonaManager`, `HookManager`) are clearly defined with typed methods. The `TrainingEngine` orchestrator delegates to them, making it trivially mockable.                                                                                                                                                   |
+| Compile-time invariant enforcement | 8/20  | `TrainingCommand` is a discriminated union (good), but critical constraints are only runtime: CLAUDE.md max size (32KB), max rules per section (50), max MCP servers (10). These limits are not expressible in TypeScript's type system and must be tested via runtime guards. The `ClaudeMdSection` type is defined twice with conflicting meanings (once as a string literal union, once as an interface name). |
+| Acceptance criteria clarity        | 10/20 | No BDD scenarios. No latency or performance requirements. The command syntax is documented but there are no formal acceptance criteria for parsing edge cases (e.g., what if a user types `/train add rule:` with no text after the colon?).                                                                                                                                                                      |
+| Error path coverage                | 12/20 | Security constraints table lists 10 enforcement points. But error responses are generic (`TrainingResult.success: false` with a `message` string). No typed error codes for the training domain. No specification of what the user sees when a command fails.                                                                                                                                                     |
+| Domain event testability           | 18/20 | Eleven domain events are defined with clear triggers and payloads. Testable via event mock.                                                                                                                                                                                                                                                                                                                       |
 
 **Key Testability Gaps:**
 
@@ -300,20 +298,20 @@ interface Timer {
 
 ### 2. Missing Error Scenarios
 
-| # | Scenario | Current Coverage | Risk |
-|---|----------|:----------------:|:----:|
-| E1 | Concurrent `/train add rule` commands from the same tenant (race condition on CLAUDE.md file write) | Not addressed | HIGH -- two writes interleave, one is lost. Version counter may skip or duplicate. |
-| E2 | User uploads a 50MB PDF that fails during RAG chunking (Cloud.ru service timeout) | Not addressed | MEDIUM -- partial chunks in the RAG collection; `DocumentRef` stored but unusable. |
-| E3 | `/import` command with a malformed JSON/YAML bundle | Only `ImportResult.conflicts` is defined | MEDIUM -- no `ParseError` for the bundle itself; schema validation not specified. |
-| E4 | CLAUDE.md file is manually edited or deleted on disk while the engine is running | Not addressed | MEDIUM -- in-memory version counter diverges from filesystem state. |
-| E5 | MCP server health check succeeds at registration but the server goes offline permanently afterward | Invariant 5 says "subsequent failures are logged but do not auto-remove" | LOW -- but accumulated dead servers pollute the tool registry and confuse users. |
-| E6 | `/config reset --confirm` is issued while another training command is in flight | Not addressed | MEDIUM -- reset and add interleave; the add may write to the reset file. |
-| E7 | User sends `/train add rule: <script>alert('xss')</script>` (markdown injection via rendered CLAUDE.md) | Security table mentions "Rule text sanitization" but no spec for what is sanitized | MEDIUM -- CLAUDE.md is markdown; injected HTML may execute in contexts where it is rendered (e.g., web dashboard). |
-| E8 | AgentDB memory namespace collision if `tenantId` contains special characters | Not addressed | LOW -- tenant IDs like `tg_123` are safe, but future platforms might introduce characters that conflict with namespace delimiters. |
-| E9 | `/knowledge search` with an empty query string | Not addressed | LOW -- should return an error or all documents? |
-| E10 | Export bundle references documents that have been deleted from RAG | `knowledgeRefs` are "references only; not file content" | MEDIUM -- importing this bundle creates dangling references. |
-| E11 | User registers an MCP server URL that redirects to an internal IP (SSRF via redirect) | Security table mentions "MCP URL allowlist, private IP block" but no mention of redirect following | HIGH -- the initial URL passes the allowlist, but the redirect targets `169.254.169.254` or `10.0.0.x`. |
-| E12 | Auto-learn stores incorrect corrections (user says "No, I don't want that" meaning rejection, not correction) | Not addressed | MEDIUM -- false positive corrections degrade agent behavior over time. |
+| #   | Scenario                                                                                                      |                                          Current Coverage                                          |                                                                Risk                                                                |
+| --- | ------------------------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------: | :--------------------------------------------------------------------------------------------------------------------------------: |
+| E1  | Concurrent `/train add rule` commands from the same tenant (race condition on CLAUDE.md file write)           |                                           Not addressed                                            |                         HIGH -- two writes interleave, one is lost. Version counter may skip or duplicate.                         |
+| E2  | User uploads a 50MB PDF that fails during RAG chunking (Cloud.ru service timeout)                             |                                           Not addressed                                            |                         MEDIUM -- partial chunks in the RAG collection; `DocumentRef` stored but unusable.                         |
+| E3  | `/import` command with a malformed JSON/YAML bundle                                                           |                              Only `ImportResult.conflicts` is defined                              |                         MEDIUM -- no `ParseError` for the bundle itself; schema validation not specified.                          |
+| E4  | CLAUDE.md file is manually edited or deleted on disk while the engine is running                              |                                           Not addressed                                            |                                MEDIUM -- in-memory version counter diverges from filesystem state.                                 |
+| E5  | MCP server health check succeeds at registration but the server goes offline permanently afterward            |              Invariant 5 says "subsequent failures are logged but do not auto-remove"              |                          LOW -- but accumulated dead servers pollute the tool registry and confuse users.                          |
+| E6  | `/config reset --confirm` is issued while another training command is in flight                               |                                           Not addressed                                            |                              MEDIUM -- reset and add interleave; the add may write to the reset file.                              |
+| E7  | User sends `/train add rule: <script>alert('xss')</script>` (markdown injection via rendered CLAUDE.md)       |         Security table mentions "Rule text sanitization" but no spec for what is sanitized         |         MEDIUM -- CLAUDE.md is markdown; injected HTML may execute in contexts where it is rendered (e.g., web dashboard).         |
+| E8  | AgentDB memory namespace collision if `tenantId` contains special characters                                  |                                           Not addressed                                            | LOW -- tenant IDs like `tg_123` are safe, but future platforms might introduce characters that conflict with namespace delimiters. |
+| E9  | `/knowledge search` with an empty query string                                                                |                                           Not addressed                                            |                                          LOW -- should return an error or all documents?                                           |
+| E10 | Export bundle references documents that have been deleted from RAG                                            |                      `knowledgeRefs` are "references only; not file content"                       |                                    MEDIUM -- importing this bundle creates dangling references.                                    |
+| E11 | User registers an MCP server URL that redirects to an internal IP (SSRF via redirect)                         | Security table mentions "MCP URL allowlist, private IP block" but no mention of redirect following |              HIGH -- the initial URL passes the allowlist, but the redirect targets `169.254.169.254` or `10.0.0.x`.               |
+| E12 | Auto-learn stores incorrect corrections (user says "No, I don't want that" meaning rejection, not correction) |                                           Not addressed                                            |                               MEDIUM -- false positive corrections degrade agent behavior over time.                               |
 
 ---
 
@@ -523,14 +521,14 @@ Scenario: SSRF prevention on MCP server registration
 
 ### 6. Cross-ADR Integration Risks
 
-| ADR Pair | Integration Risk | Contract Test Needed |
-|----------|-----------------|---------------------|
-| **ADR-011 + ADR-008** (Multi-Tenant Session Isolation) | ADR-008 defines `TenantId` as `"tg_{telegram_user_id}"` and workspace as `/var/openclaw/tenants/{tenantId}/workspace`. ADR-011 defines tenant workspace as `/data/tenants/{tenantId}/`. **Path disagreement.** Which is canonical? If both modules derive paths independently, files will be written to different directories. | Contract test: `TenantContext.claudeMdPath` resolves to the same path that `runCliAgent()` uses for `--cwd`. Assert paths match for 5 sample tenant IDs. |
-| **ADR-011 + ADR-007** (Tools & MCP) | ADR-011 lets users register MCP servers via `/tool add`. ADR-007 defines a three-tier tool access model (Restricted/Standard/Full). Risk: a Restricted-tier user can register an MCP server via training commands, bypassing ADR-007's tier enforcement. | Contract test: a user with `AccessTier = 'restricted'` sends `/tool add https://...`. Assert the command is rejected with "Tool registration requires Standard or Full access." |
-| **ADR-011 + ADR-013** (AI Fabric Agents) | ADR-011 defines `/agent create` for custom agents. ADR-013 defines `IAgentProvider` and `ExternalAgentRegistry` for Cloud.ru AI Fabric agents. Risk: two parallel agent registration systems with no unified registry. A user-created agent via ADR-011 and a Cloud.ru agent via ADR-013 could have the same name, causing routing conflicts. | Contract test: register an agent named "coder" via `/agent create` (ADR-011) and via AI Fabric (ADR-013). Assert a unique constraint violation or namespace separation. |
-| **ADR-011 + ADR-010** (Streaming Pipeline) | ADR-011's training commands produce immediate text responses (not streamed). Risk: the streaming pipeline (ADR-010) is applied to ALL responses including training confirmations, causing unnecessary message editing for a simple "Rule added" response. | Contract test: execute a `/train add rule` command. Assert the response is delivered as a single batch message, not via the streaming pipeline. |
-| **ADR-011 + ADR-006** (Messenger Adapters) | ADR-011 defines command syntax (`/train`, `/knowledge`, `/tool`, etc.) parsed from messenger text. ADR-006 defines `NormalizedMessage` as the platform-agnostic message format. Risk: attachment handling differs by platform (Telegram sends `document` objects; MAX sends `attachment` objects). The `CommandParser` must work with `NormalizedMessage`, not raw platform data. | Contract test: parse `/knowledge add <attachment>` from both a Telegram `NormalizedMessage` and a MAX `NormalizedMessage`. Assert both produce the same `TrainingCommand` with identical `Attachment` objects. |
-| **ADR-011 + ADR-012** (Plugin Architecture) | ADR-012 defines `@openclaw/training-engine` as a Customer-Supplier module. Risk: the training engine depends on `@openclaw/core` for tenant resolution, `@claude-flow/cli` for AgentDB, and Cloud.ru RAG API. If any dependency changes its interface, the training engine breaks silently. | Contract test: define interface contracts for `@openclaw/core.resolveTenant()` and `@claude-flow/cli.memory.store()`. Run contract tests on every CI build to detect breaking changes. |
+| ADR Pair                                               | Integration Risk                                                                                                                                                                                                                                                                                                                                                                  | Contract Test Needed                                                                                                                                                                                           |
+| ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **ADR-011 + ADR-008** (Multi-Tenant Session Isolation) | ADR-008 defines `TenantId` as `"tg_{telegram_user_id}"` and workspace as `/var/openclaw/tenants/{tenantId}/workspace`. ADR-011 defines tenant workspace as `/data/tenants/{tenantId}/`. **Path disagreement.** Which is canonical? If both modules derive paths independently, files will be written to different directories.                                                    | Contract test: `TenantContext.claudeMdPath` resolves to the same path that `runCliAgent()` uses for `--cwd`. Assert paths match for 5 sample tenant IDs.                                                       |
+| **ADR-011 + ADR-007** (Tools & MCP)                    | ADR-011 lets users register MCP servers via `/tool add`. ADR-007 defines a three-tier tool access model (Restricted/Standard/Full). Risk: a Restricted-tier user can register an MCP server via training commands, bypassing ADR-007's tier enforcement.                                                                                                                          | Contract test: a user with `AccessTier = 'restricted'` sends `/tool add https://...`. Assert the command is rejected with "Tool registration requires Standard or Full access."                                |
+| **ADR-011 + ADR-013** (AI Fabric Agents)               | ADR-011 defines `/agent create` for custom agents. ADR-013 defines `IAgentProvider` and `ExternalAgentRegistry` for Cloud.ru AI Fabric agents. Risk: two parallel agent registration systems with no unified registry. A user-created agent via ADR-011 and a Cloud.ru agent via ADR-013 could have the same name, causing routing conflicts.                                     | Contract test: register an agent named "coder" via `/agent create` (ADR-011) and via AI Fabric (ADR-013). Assert a unique constraint violation or namespace separation.                                        |
+| **ADR-011 + ADR-010** (Streaming Pipeline)             | ADR-011's training commands produce immediate text responses (not streamed). Risk: the streaming pipeline (ADR-010) is applied to ALL responses including training confirmations, causing unnecessary message editing for a simple "Rule added" response.                                                                                                                         | Contract test: execute a `/train add rule` command. Assert the response is delivered as a single batch message, not via the streaming pipeline.                                                                |
+| **ADR-011 + ADR-006** (Messenger Adapters)             | ADR-011 defines command syntax (`/train`, `/knowledge`, `/tool`, etc.) parsed from messenger text. ADR-006 defines `NormalizedMessage` as the platform-agnostic message format. Risk: attachment handling differs by platform (Telegram sends `document` objects; MAX sends `attachment` objects). The `CommandParser` must work with `NormalizedMessage`, not raw platform data. | Contract test: parse `/knowledge add <attachment>` from both a Telegram `NormalizedMessage` and a MAX `NormalizedMessage`. Assert both produce the same `TrainingCommand` with identical `Attachment` objects. |
+| **ADR-011 + ADR-012** (Plugin Architecture)            | ADR-012 defines `@openclaw/training-engine` as a Customer-Supplier module. Risk: the training engine depends on `@openclaw/core` for tenant resolution, `@claude-flow/cli` for AgentDB, and Cloud.ru RAG API. If any dependency changes its interface, the training engine breaks silently.                                                                                       | Contract test: define interface contracts for `@openclaw/core.resolveTenant()` and `@claude-flow/cli.memory.store()`. Run contract tests on every CI build to detect breaking changes.                         |
 
 ---
 
@@ -591,6 +589,7 @@ download -> validate -> chunk -> index -> storeRef -> updateClaudeMd
 7. **Monitor CLAUDE.md file integrity.** On load, compute a SHA-256 hash and compare against the stored hash (ADR-008 defines `ClaudeMdHash`). If they differ, the file was modified externally -- log a warning and reconcile.
 
 ---
+
 ---
 
 ## Cross-Cutting Findings (Both ADRs)
@@ -598,6 +597,7 @@ download -> validate -> chunk -> index -> storeRef -> updateClaudeMd
 ### Shared Type Namespace Collision
 
 Both ADRs define types that will coexist in the `@openclaw` namespace:
+
 - ADR-010: `MessengerStreamAdapter`, `MessengerStreamConfig`
 - ADR-011: `McpServerConfig`, `HookDefinition`, `AgentDefinition`
 - ADR-006: `MessengerAdapter`, `NormalizedMessage`
@@ -618,6 +618,7 @@ Neither ADR defines error codes that integrate with a system-wide error taxonomy
 ### Observability Gaps
 
 Both ADRs define domain events but neither specifies:
+
 - How events are transported (in-process EventEmitter? Message queue? Shared bus?)
 - Event schema versioning (what happens when a new field is added to `RuleAdded`?)
 - Correlation IDs linking a user request to all events it generates across ADR-010 and ADR-011
@@ -626,10 +627,10 @@ Both ADRs define domain events but neither specifies:
 
 ## Summary Scores
 
-| ADR | Testability Score | Critical Missing Error Scenarios | Missing Acceptance Criteria | Pre-Implementation Tests Identified |
-|-----|:-----------------:|:-------------------------------:|:--------------------------:|:-----------------------------------:|
-| ADR-010 (Streaming) | **72/100** | 10 | 7 BDD scenarios, 3 contracts | 10 unit, 5 integration, 2 E2E |
-| ADR-011 (Training) | **65/100** | 12 | 10 BDD scenarios, 4 contracts | 10 unit, 5 integration, 2 E2E |
+| ADR                 | Testability Score | Critical Missing Error Scenarios |  Missing Acceptance Criteria  | Pre-Implementation Tests Identified |
+| ------------------- | :---------------: | :------------------------------: | :---------------------------: | :---------------------------------: |
+| ADR-010 (Streaming) |    **72/100**     |                10                | 7 BDD scenarios, 3 contracts  |    10 unit, 5 integration, 2 E2E    |
+| ADR-011 (Training)  |    **65/100**     |                12                | 10 BDD scenarios, 4 contracts |    10 unit, 5 integration, 2 E2E    |
 
 **Overall assessment:** Both ADRs have well-defined interfaces that enable mock-first testing. The primary risks are (1) missing runtime error handling for adapter/API failures, (2) state machine and invariant logic that exists only in prose, not in types, (3) cross-ADR path and type inconsistencies that will surface during integration, and (4) security validations (SSRF, shell injection, markdown injection) that are mentioned but not specified precisely enough to implement and test against.
 

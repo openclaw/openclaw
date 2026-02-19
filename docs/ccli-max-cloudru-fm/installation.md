@@ -2,12 +2,12 @@
 
 ## 1. Системные требования
 
-| Компонент | Минимальная версия | Примечание |
-|-----------|-------------------|------------|
-| Node.js | >= 22.12.0 | ES2022, ESM-модули |
-| pnpm | >= 10.0.0 | Менеджер пакетов (corepack enable) |
-| TypeScript | ^5.5.0 | Устанавливается как devDependency |
-| Git | >= 2.30 | Для клонирования репозитория |
+| Компонент  | Минимальная версия | Примечание                         |
+| ---------- | ------------------ | ---------------------------------- |
+| Node.js    | >= 22.12.0         | ES2022, ESM-модули                 |
+| pnpm       | >= 10.0.0          | Менеджер пакетов (corepack enable) |
+| TypeScript | ^5.5.0             | Устанавливается как devDependency  |
+| Git        | >= 2.30            | Для клонирования репозитория       |
 
 Проверьте установленные версии:
 
@@ -46,22 +46,22 @@ pnpm test
 
 ### Runtime-зависимости
 
-| Пакет | Версия | Назначение |
-|-------|--------|------------|
+| Пакет  | Версия | Назначение                                  |
+| ------ | ------ | ------------------------------------------- |
 | `pino` | ^9.0.0 | Структурированное логирование (JSON-формат) |
 
 ### Dev-зависимости
 
-| Пакет | Версия | Назначение |
-|-------|--------|------------|
-| `typescript` | ^5.5.0 | Компилятор TypeScript |
-| `vitest` | ^2.0.0 | Фреймворк для тестирования |
-| `@vitest/coverage-v8` | ^2.0.0 | Отчёты о покрытии кода |
-| `eslint` | ^9.39.2 | Статический анализ кода |
-| `typescript-eslint` | ^8.55.0 | ESLint-интеграция с TypeScript |
+| Пакет                              | Версия  | Назначение                      |
+| ---------------------------------- | ------- | ------------------------------- |
+| `typescript`                       | ^5.5.0  | Компилятор TypeScript           |
+| `vitest`                           | ^2.0.0  | Фреймворк для тестирования      |
+| `@vitest/coverage-v8`              | ^2.0.0  | Отчёты о покрытии кода          |
+| `eslint`                           | ^9.39.2 | Статический анализ кода         |
+| `typescript-eslint`                | ^8.55.0 | ESLint-интеграция с TypeScript  |
 | `@typescript-eslint/eslint-plugin` | ^8.55.0 | Правила линтинга для TypeScript |
-| `@typescript-eslint/parser` | ^8.55.0 | Парсер TypeScript для ESLint |
-| `@types/node` | ^25.2.3 | Типы для Node.js API |
+| `@typescript-eslint/parser`        | ^8.55.0 | Парсер TypeScript для ESLint    |
+| `@types/node`                      | ^25.2.3 | Типы для Node.js API            |
 
 ---
 
@@ -69,18 +69,18 @@ pnpm test
 
 Полная конфигурация находится в `tsconfig.json`. Основные параметры:
 
-| Параметр | Значение | Описание |
-|----------|----------|----------|
-| `target` | ES2022 | Современный JS (top-level await, `Array.at()`) |
-| `module` | Node16 | Нативная ESM-поддержка |
-| `outDir` | `dist` | Каталог скомпилированного кода |
-| `strict` | true | Все strict-флаги включены |
-| `declaration` | true | Генерация `.d.ts` файлов |
-| `declarationMap` | true | Source map для деклараций |
-| `sourceMap` | true | Source map для отладки |
-| `noUncheckedIndexedAccess` | true | `obj[key]` возвращает `T \| undefined` |
-| `noUnusedLocals` | true | Запрет неиспользуемых переменных |
-| `noUnusedParameters` | true | Запрет неиспользуемых параметров |
+| Параметр                   | Значение | Описание                                       |
+| -------------------------- | -------- | ---------------------------------------------- |
+| `target`                   | ES2022   | Современный JS (top-level await, `Array.at()`) |
+| `module`                   | Node16   | Нативная ESM-поддержка                         |
+| `outDir`                   | `dist`   | Каталог скомпилированного кода                 |
+| `strict`                   | true     | Все strict-флаги включены                      |
+| `declaration`              | true     | Генерация `.d.ts` файлов                       |
+| `declarationMap`           | true     | Source map для деклараций                      |
+| `sourceMap`                | true     | Source map для отладки                         |
+| `noUncheckedIndexedAccess` | true     | `obj[key]` возвращает `T \| undefined`         |
+| `noUnusedLocals`           | true     | Запрет неиспользуемых переменных               |
+| `noUnusedParameters`       | true     | Запрет неиспользуемых параметров               |
 
 **`strict: true`** включает: `strictNullChecks`, `strictFunctionTypes`, `strictBindCallApply`, `strictPropertyInitialization`, `noImplicitAny`, `noImplicitThis`, `alwaysStrict`.
 
@@ -137,13 +137,13 @@ pnpm run lint
 
 Конфигурация ESLint (`eslint.config.js`) использует пресет **`strictTypeChecked`** из `typescript-eslint` -- наиболее строгий набор правил. Ключевые настройки:
 
-| Правило | Значение | Описание |
-|---------|----------|----------|
-| `@typescript-eslint/no-explicit-any` | `error` | Полный запрет `any` |
-| `@typescript-eslint/no-non-null-assertion` | `error` | Запрет оператора `!` |
-| `@typescript-eslint/no-unused-vars` | `error` | Неиспользуемые переменные (с исключением `_`-префикса) |
-| `@typescript-eslint/restrict-template-expressions` | `error` | В шаблонных строках допускаются `number` и `boolean` |
-| `@typescript-eslint/explicit-function-return-type` | `off` | Выведение типов разрешено |
+| Правило                                            | Значение | Описание                                               |
+| -------------------------------------------------- | -------- | ------------------------------------------------------ |
+| `@typescript-eslint/no-explicit-any`               | `error`  | Полный запрет `any`                                    |
+| `@typescript-eslint/no-non-null-assertion`         | `error`  | Запрет оператора `!`                                   |
+| `@typescript-eslint/no-unused-vars`                | `error`  | Неиспользуемые переменные (с исключением `_`-префикса) |
+| `@typescript-eslint/restrict-template-expressions` | `error`  | В шаблонных строках допускаются `number` и `boolean`   |
+| `@typescript-eslint/explicit-function-return-type` | `off`    | Выведение типов разрешено                              |
 
 Пресет `strictTypeChecked` дополнительно включает: `no-floating-promises`, `no-misused-promises`, `await-thenable`, `no-unsafe-assignment`, `no-unsafe-call`, `no-unsafe-return` и другие правила с поддержкой type-aware анализа.
 
@@ -154,8 +154,8 @@ pnpm run lint
 OpenClaw использует собственный DI-контейнер с ленивой инициализацией и заморозкой после конфигурации.
 
 ```typescript
-import { createContainer, TOKENS } from '@openclaw/platform';
-import type { IFileSystem, IHttpClient, ISubprocessFactory } from '@openclaw/platform';
+import { createContainer, TOKENS } from "@openclaw/platform";
+import type { IFileSystem, IHttpClient, ISubprocessFactory } from "@openclaw/platform";
 
 // Реализуйте три внешних зависимости
 const fileSystem: IFileSystem = { exists, readDir, mkdir, rmdir };
@@ -192,28 +192,25 @@ curl -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook" \
 4. Зарегистрируйте адаптер в приложении:
 
 ```typescript
-import { TelegramAdapter, TOKENS } from '@openclaw/platform';
+import { TelegramAdapter, TOKENS } from "@openclaw/platform";
 
 const httpClient = container.resolve(TOKENS.HTTP_CLIENT);
 const webhookRouter = container.resolve(TOKENS.WEBHOOK_ROUTER);
 
-const telegramAdapter = new TelegramAdapter(
-  httpClient,
-  process.env.TELEGRAM_BOT_TOKEN!
-);
+const telegramAdapter = new TelegramAdapter(httpClient, process.env.TELEGRAM_BOT_TOKEN!);
 
-webhookRouter.register('telegram', telegramAdapter, process.env.WEBHOOK_SECRET!);
+webhookRouter.register("telegram", telegramAdapter, process.env.WEBHOOK_SECRET!);
 ```
 
 ### Web (REST API)
 
 ```typescript
-import { TOKENS } from '@openclaw/platform';
+import { TOKENS } from "@openclaw/platform";
 
 const webAdapter = container.resolve(TOKENS.WEB_ADAPTER);
 const webhookRouter = container.resolve(TOKENS.WEBHOOK_ROUTER);
 
-webhookRouter.register('web', webAdapter, process.env.WEB_API_KEY!);
+webhookRouter.register("web", webAdapter, process.env.WEB_API_KEY!);
 ```
 
 Клиенты отправляют запросы с заголовком `X-API-Key` или `Authorization: Bearer <key>`. Адаптер использует `timingSafeEqual` для защиты от timing-атак.

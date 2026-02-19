@@ -6,6 +6,7 @@
 **Scope**: ADR-001 through ADR-005 (OpenClaw + Claude Code + cloud.ru FM proxy integration)
 **Assessor**: qe-requirements-validator (QCSD Ideation Phase)
 **Input artifacts**:
+
 - 5 ADRs (`/src/openclaw-extended/docs/adr/ADR-001` through `ADR-005`)
 - Requirements Validation Report (`/src/openclaw-extended/docs/shift-left-testing/01-requirements-validation.md`)
 - Acceptance Test Suite (`/tests/adr-acceptance.test.ts`)
@@ -14,19 +15,19 @@
 
 ## Overall Testability Scorecard
 
-| # | Principle | Score | Verdict |
-|---|-----------|:-----:|---------|
-| 1 | Controllability | 72 | ADEQUATE |
-| 2 | Observability | 45 | WEAK |
-| 3 | Isolability | 68 | ADEQUATE |
-| 4 | Separation of Concerns | 58 | MARGINAL |
-| 5 | Understandability | 65 | ADEQUATE |
-| 6 | Automatability | 60 | MARGINAL |
-| 7 | Heterogeneity | 74 | ADEQUATE |
-| 8 | Restorability | 52 | MARGINAL |
-| 9 | Simplicity | 55 | MARGINAL |
-| 10 | Communication | 62 | MARGINAL |
-| | **OVERALL** | **61** | **MARGINAL** |
+| #   | Principle              | Score  | Verdict      |
+| --- | ---------------------- | :----: | ------------ |
+| 1   | Controllability        |   72   | ADEQUATE     |
+| 2   | Observability          |   45   | WEAK         |
+| 3   | Isolability            |   68   | ADEQUATE     |
+| 4   | Separation of Concerns |   58   | MARGINAL     |
+| 5   | Understandability      |   65   | ADEQUATE     |
+| 6   | Automatability         |   60   | MARGINAL     |
+| 7   | Heterogeneity          |   74   | ADEQUATE     |
+| 8   | Restorability          |   52   | MARGINAL     |
+| 9   | Simplicity             |   55   | MARGINAL     |
+| 10  | Communication          |   62   | MARGINAL     |
+|     | **OVERALL**            | **61** | **MARGINAL** |
 
 **Verdict thresholds**: 0-39 = POOR, 40-59 = MARGINAL, 60-74 = ADEQUATE, 75-89 = GOOD, 90-100 = EXCELLENT
 
@@ -91,6 +92,7 @@ ADR-003 documents that Claude Code runs with `--output-format json`, producing p
 **No logging or tracing specification (Score: 25)**
 
 None of the 5 ADRs specify:
+
 - Structured log format for the proxy
 - Request/response logging for protocol translation
 - Trace IDs for correlating requests across OpenClaw -> Claude Code -> Proxy -> cloud.ru FM
@@ -105,6 +107,7 @@ ADR-005 defines model mapping (Claude tier names to cloud.ru model IDs) but does
 **No request flow tracing (Score: 30)**
 
 The 4-layer architecture (OpenClaw -> Claude Code subprocess -> Proxy -> cloud.ru FM API) has no correlation mechanism. If a user reports a slow response, there is no way to determine whether the latency came from:
+
 - OpenClaw message processing
 - Claude Code subprocess startup (~2-5s cold start per ADR-003)
 - Proxy protocol translation
@@ -199,6 +202,7 @@ The requirements validation report identifies this as CRITICAL-006 and X-003: AD
 **State machine spans wizard and runtime (Score: 50)**
 
 ADR-004's proxy state machine (`UNDEPLOYED -> DEPLOYING -> ... -> HEALTHY`) covers both wizard-time operations (initial deployment) and runtime operations (health monitoring, recovery). These are fundamentally different concerns:
+
 - Wizard-time: runs once during setup, user-interactive
 - Runtime: runs continuously, automated
 
@@ -236,9 +240,11 @@ ADR-003 defines 3 testable invariants (Session Identity, Backend Resolution, Env
 **Architecture diagram lacks detail (Score: 50)**
 
 ADR-001's architecture diagram is a simple text diagram:
+
 ```
 OpenClaw -> Claude Code -> proxy -> cloud.ru FM
 ```
+
 This does not show: network protocols, port bindings, authentication handshakes, error propagation paths, or timeout boundaries. A tester cannot derive a complete test plan from this diagram alone.
 
 **Contradictory claims reduce trust (Score: 40)**
@@ -282,6 +288,7 @@ The `verifyProxyHealth()` function accepts an injected `fetchFn` parameter (test
 ADR-004's proxy lifecycle tests require Docker. Many CI environments (GitHub Actions standard runners, GitLab CI without Docker-in-Docker) do not have Docker available by default. The ADRs do not specify a Docker-free testing alternative.
 
 Required CI infrastructure for Docker tests:
+
 - Docker daemon running in CI
 - Docker Compose installed
 - Network access to pull `legard/claude-code-proxy:latest` image
@@ -324,6 +331,7 @@ ADR-002 defines 3 auth choices (`cloudru-fm-glm47`, `cloudru-fm-flash`, `cloudru
 **Multiple failure modes are partially testable (Score: 65)**
 
 The test suite covers:
+
 - Health check success (200), degraded (503), and connection refused
 - State machine transitions including invalid transitions (test lines 1296-1306)
 - Fallback chain validation including circular detection
@@ -374,6 +382,7 @@ The `ProxyLifecycle` class in the test suite (test lines 205-246) models the ful
 **No session recovery after proxy crash (Score: 35)**
 
 ADR-003 documents session continuity via `--session-id` and `--resume`. However, if the proxy crashes mid-conversation:
+
 - Claude Code's subprocess may hang waiting for a response
 - The `runCommandWithTimeout` (per WARNING-007) may eventually time out
 - The session state in Claude Code may be corrupted (partial response stored)
@@ -421,6 +430,7 @@ ADR-005's "GLM-4.7-Flash (Free)" preset uses the same model for all 3 tiers. Thi
 **4-layer architecture has high setup complexity (Score: 35)**
 
 Testing the full architecture requires:
+
 1. OpenClaw running (Node.js process with config)
 2. Claude Code binary installed and configured
 3. Docker daemon running
@@ -433,6 +443,7 @@ This is 6 prerequisites for a single end-to-end test. Each adds a failure mode t
 **Configuration surface area is large (Score: 45)**
 
 Across the 5 ADRs, the total configuration surface includes:
+
 - 7 Docker environment variables (ADR-001)
 - 3 wizard auth choices (ADR-002)
 - 5 CLI backend config fields overridden (ADR-001/003)
@@ -450,6 +461,7 @@ None of the 5 ADRs define specific error messages for failure scenarios. When th
 **`serialize: true` makes concurrent testing impossible (Score: 30)**
 
 ADR-001 and ADR-003 both note that the default backend uses `serialize: true`, limiting to 1 concurrent request globally. This means:
+
 - Load tests are meaningless (only 1 request at a time)
 - Concurrent test execution will queue, making test suites slow
 - Realistic multi-user scenarios cannot be tested
@@ -472,6 +484,7 @@ ADR-001 and ADR-003 both note that the default backend uses `serialize: true`, l
 **DDD invariants serve as implicit acceptance criteria (Score: 72)**
 
 ADR-003 defines 3 invariants and ADR-005 defines 3 invariants. Each is a concrete, testable statement:
+
 - "Every OpenClaw conversation maps to exactly one Claude Code session ID" (ADR-003)
 - "SMALL_MODEL must always be GLM-4.7-Flash" (ADR-005)
 - "Model fallback list must terminate (no circular fallbacks)" (ADR-005)
@@ -481,6 +494,7 @@ The test suite translates these directly to assertions. These serve as de facto 
 **Test scenarios already documented in test suite (Score: 75)**
 
 The `/tests/adr-acceptance.test.ts` file contains 100+ test cases organized by ADR. This IS the test specification. It covers:
+
 - 7 merge semantics tests
 - 4 health check tests
 - 12 state machine transition tests
@@ -497,6 +511,7 @@ None of the 5 ADRs include an "Acceptance Criteria" or "Verification Criteria" s
 **Edge cases are not identified in ADRs (Score: 40)**
 
 The ADRs do not document edge cases such as:
+
 - What happens when `CLOUDRU_API_KEY` is empty?
 - What happens when the proxy port is already in use?
 - What happens when Docker is not installed?
@@ -508,6 +523,7 @@ Some of these are identified in the requirements validation report (WARNING-008,
 **No non-functional requirements specified (Score: 30)**
 
 None of the ADRs specify:
+
 - Performance targets (latency, throughput)
 - Reliability targets (uptime SLA, MTTR)
 - Scalability limits (max concurrent users, max sessions)
@@ -518,6 +534,7 @@ The requirements validation report notes this gap (WARNING-001, WARNING-002) and
 **Test data requirements not documented (Score: 45)**
 
 No ADR specifies what test data is needed:
+
 - Sample user messages for different scenarios
 - Expected cloud.ru FM response formats
 - Mock API key values for testing
@@ -536,14 +553,14 @@ No ADR specifies what test data is needed:
 
 Issues that **prevent** effective testing if not resolved:
 
-| ID | Blocker | ADR(s) | Impact | Resolution |
-|----|---------|--------|--------|------------|
-| TB-1 | No observability specification: no logging, no tracing, no error classification | All | Cannot diagnose test failures in the 4-layer architecture | Add structured logging and trace ID propagation spec |
-| TB-2 | Fallback chain documented with wrong abstraction level (cloud.ru model names vs. Claude tier names) | ADR-005 | Testers will write incorrect fallback tests based on ADR-005 | Rewrite fallback chains using Claude tier names (opus/sonnet/haiku) |
-| TB-3 | `serialize: true` prevents concurrent/load testing | ADR-001, ADR-003 | Cannot validate multi-user scenarios | Define test config with `serialize: false` and document expected behavior |
-| TB-4 | Tool calling contradiction between ADR-001 and ADR-003 | ADR-001, ADR-003 | Testers may write tool-calling tests that are guaranteed to fail | Resolve contradiction per CRITICAL-001 |
-| TB-5 | No mock cloud.ru FM server specification | All | End-to-end test automation requires real API credentials | Define and implement mock server |
-| TB-6 | GLM-4.7-FlashX not configurable in 3-tier proxy | ADR-005 | Fallback chain referencing FlashX is untestable | Remove FlashX from fallback chains or add 4th tier support |
+| ID   | Blocker                                                                                             | ADR(s)           | Impact                                                           | Resolution                                                                |
+| ---- | --------------------------------------------------------------------------------------------------- | ---------------- | ---------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| TB-1 | No observability specification: no logging, no tracing, no error classification                     | All              | Cannot diagnose test failures in the 4-layer architecture        | Add structured logging and trace ID propagation spec                      |
+| TB-2 | Fallback chain documented with wrong abstraction level (cloud.ru model names vs. Claude tier names) | ADR-005          | Testers will write incorrect fallback tests based on ADR-005     | Rewrite fallback chains using Claude tier names (opus/sonnet/haiku)       |
+| TB-3 | `serialize: true` prevents concurrent/load testing                                                  | ADR-001, ADR-003 | Cannot validate multi-user scenarios                             | Define test config with `serialize: false` and document expected behavior |
+| TB-4 | Tool calling contradiction between ADR-001 and ADR-003                                              | ADR-001, ADR-003 | Testers may write tool-calling tests that are guaranteed to fail | Resolve contradiction per CRITICAL-001                                    |
+| TB-5 | No mock cloud.ru FM server specification                                                            | All              | End-to-end test automation requires real API credentials         | Define and implement mock server                                          |
+| TB-6 | GLM-4.7-FlashX not configurable in 3-tier proxy                                                     | ADR-005          | Fallback chain referencing FlashX is untestable                  | Remove FlashX from fallback chains or add 4th tier support                |
 
 ---
 
@@ -551,35 +568,35 @@ Issues that **prevent** effective testing if not resolved:
 
 Architectural features that **help** testing:
 
-| ID | Enabler | ADR(s) | Benefit |
-|----|---------|--------|---------|
-| TE-1 | `mergeBackendConfig()` is a pure function with injectable overrides | ADR-001, ADR-003 | Enables isolated unit testing of backend config |
-| TE-2 | `verifyProxyHealth()` accepts injected `fetchFn` | ADR-004 | Enables mock-based health check testing without Docker |
-| TE-3 | Proxy configured entirely via environment variables | ADR-001, ADR-004 | Enables parameterized testing with different model mappings |
-| TE-4 | `OPENAI_BASE_URL` is configurable per proxy instance | ADR-001 | Enables pointing proxy at mock backend for isolated testing |
-| TE-5 | TypeScript type system enforces AuthChoice correctness at compile time | ADR-002 | Compiler catches invalid auth choice additions |
-| TE-6 | Docker health check endpoint defined at `/health` | ADR-001, ADR-004 | Standard health check is automatable |
-| TE-7 | DDD invariants provide concrete testable contracts | ADR-003, ADR-005 | Direct translation from invariant to test assertion |
-| TE-8 | Existing acceptance test suite with 100+ tests | Test file | Baseline test infrastructure already exists |
-| TE-9 | `generateDockerCompose()` is a pure template function | ADR-004 | Template output can be validated without Docker |
-| TE-10 | `resolveModelPreset()` is a pure lookup function | ADR-005 | Model preset logic is testable in complete isolation |
+| ID    | Enabler                                                                | ADR(s)           | Benefit                                                     |
+| ----- | ---------------------------------------------------------------------- | ---------------- | ----------------------------------------------------------- |
+| TE-1  | `mergeBackendConfig()` is a pure function with injectable overrides    | ADR-001, ADR-003 | Enables isolated unit testing of backend config             |
+| TE-2  | `verifyProxyHealth()` accepts injected `fetchFn`                       | ADR-004          | Enables mock-based health check testing without Docker      |
+| TE-3  | Proxy configured entirely via environment variables                    | ADR-001, ADR-004 | Enables parameterized testing with different model mappings |
+| TE-4  | `OPENAI_BASE_URL` is configurable per proxy instance                   | ADR-001          | Enables pointing proxy at mock backend for isolated testing |
+| TE-5  | TypeScript type system enforces AuthChoice correctness at compile time | ADR-002          | Compiler catches invalid auth choice additions              |
+| TE-6  | Docker health check endpoint defined at `/health`                      | ADR-001, ADR-004 | Standard health check is automatable                        |
+| TE-7  | DDD invariants provide concrete testable contracts                     | ADR-003, ADR-005 | Direct translation from invariant to test assertion         |
+| TE-8  | Existing acceptance test suite with 100+ tests                         | Test file        | Baseline test infrastructure already exists                 |
+| TE-9  | `generateDockerCompose()` is a pure template function                  | ADR-004          | Template output can be validated without Docker             |
+| TE-10 | `resolveModelPreset()` is a pure lookup function                       | ADR-005          | Model preset logic is testable in complete isolation        |
 
 ---
 
 ## Missing Test Infrastructure
 
-| Priority | Missing Component | Purpose | Effort |
-|:--------:|-------------------|---------|:------:|
-| P0 | Mock cloud.ru FM HTTP server | Enable proxy testing without real cloud.ru credentials | 1-2 days |
-| P0 | Structured logging specification | Enable failure diagnosis in multi-layer tests | 1 day |
-| P1 | Docker Compose test profile (`docker-compose.test.yml`) | One-command integration test environment | 0.5 day |
-| P1 | Failure fixture library (GLM-4.7 error responses) | Enable heterogeneous failure mode testing | 1 day |
-| P1 | CI pipeline definition with 4-tier test strategy | Automate all test levels appropriately | 1 day |
-| P2 | Proxy "test mode" admin endpoint (`POST /admin/state`) | Enable state injection for lifecycle tests | 2-3 days |
-| P2 | Configuration backup/rollback mechanism | Enable restore-after-failure testing | 1 day |
-| P2 | Test data catalog (sample messages, mock keys, session IDs) | Standardize test inputs across all test levels | 0.5 day |
-| P3 | Performance benchmark harness | Validate latency/throughput NFRs when defined | 2-3 days |
-| P3 | Proxy error response schema validation | Validate error format consistency | 0.5 day |
+| Priority | Missing Component                                           | Purpose                                                |  Effort  |
+| :------: | ----------------------------------------------------------- | ------------------------------------------------------ | :------: |
+|    P0    | Mock cloud.ru FM HTTP server                                | Enable proxy testing without real cloud.ru credentials | 1-2 days |
+|    P0    | Structured logging specification                            | Enable failure diagnosis in multi-layer tests          |  1 day   |
+|    P1    | Docker Compose test profile (`docker-compose.test.yml`)     | One-command integration test environment               | 0.5 day  |
+|    P1    | Failure fixture library (GLM-4.7 error responses)           | Enable heterogeneous failure mode testing              |  1 day   |
+|    P1    | CI pipeline definition with 4-tier test strategy            | Automate all test levels appropriately                 |  1 day   |
+|    P2    | Proxy "test mode" admin endpoint (`POST /admin/state`)      | Enable state injection for lifecycle tests             | 2-3 days |
+|    P2    | Configuration backup/rollback mechanism                     | Enable restore-after-failure testing                   |  1 day   |
+|    P2    | Test data catalog (sample messages, mock keys, session IDs) | Standardize test inputs across all test levels         | 0.5 day  |
+|    P3    | Performance benchmark harness                               | Validate latency/throughput NFRs when defined          | 2-3 days |
+|    P3    | Proxy error response schema validation                      | Validate error format consistency                      | 0.5 day  |
 
 ---
 

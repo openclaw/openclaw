@@ -166,34 +166,34 @@ Solid structural work that correctly follows the established channel plugin patt
 
 ### Telegram pattern adherence
 
-| Section | Telegram | MAX | Status |
-|---------|----------|-----|--------|
-| `meta` | `getChatChannelMeta("telegram")` | Hardcoded local object | DEVIATION (justified by comment, needs fix) |
-| `onboarding` | `telegramOnboardingAdapter` | Missing | MISSING |
-| `pairing` | Present | Present | OK |
-| `capabilities` | 5 capabilities | 4 capabilities (no threads) | OK (intentional) |
-| `streaming` | Not defined | Defined | ADDITION (ok, matches mattermost) |
-| `reload` | Present | Present | OK |
-| `configSchema` | Present | Present | OK |
-| `config` | Present | Present | OK |
-| `security` | Present | Present | OK |
-| `groups` | Present | Missing | MISSING |
-| `threading` | Present | Missing | OK (no thread support declared) |
-| `messaging` | Present | Present | OK |
-| `directory` | Present | Missing | MISSING |
-| `actions` | Present (with `extractToolSend`) | Present (without `extractToolSend`) | INCOMPLETE |
-| `outbound` | Present (with `deps`) | Present (without `deps`) | INCOMPLETE |
-| `status` | Present (with `auditAccount`) | Present (without `auditAccount`) | ACCEPTABLE (audit is Telegram-specific) |
-| `setup` | Present | Present | OK |
-| `gateway` | Present | Present | OK |
+| Section        | Telegram                         | MAX                                 | Status                                      |
+| -------------- | -------------------------------- | ----------------------------------- | ------------------------------------------- |
+| `meta`         | `getChatChannelMeta("telegram")` | Hardcoded local object              | DEVIATION (justified by comment, needs fix) |
+| `onboarding`   | `telegramOnboardingAdapter`      | Missing                             | MISSING                                     |
+| `pairing`      | Present                          | Present                             | OK                                          |
+| `capabilities` | 5 capabilities                   | 4 capabilities (no threads)         | OK (intentional)                            |
+| `streaming`    | Not defined                      | Defined                             | ADDITION (ok, matches mattermost)           |
+| `reload`       | Present                          | Present                             | OK                                          |
+| `configSchema` | Present                          | Present                             | OK                                          |
+| `config`       | Present                          | Present                             | OK                                          |
+| `security`     | Present                          | Present                             | OK                                          |
+| `groups`       | Present                          | Missing                             | MISSING                                     |
+| `threading`    | Present                          | Missing                             | OK (no thread support declared)             |
+| `messaging`    | Present                          | Present                             | OK                                          |
+| `directory`    | Present                          | Missing                             | MISSING                                     |
+| `actions`      | Present (with `extractToolSend`) | Present (without `extractToolSend`) | INCOMPLETE                                  |
+| `outbound`     | Present (with `deps`)            | Present (without `deps`)            | INCOMPLETE                                  |
+| `status`       | Present (with `auditAccount`)    | Present (without `auditAccount`)    | ACCEPTABLE (audit is Telegram-specific)     |
+| `setup`        | Present                          | Present                             | OK                                          |
+| `gateway`      | Present                          | Present                             | OK                                          |
 
 ### Mattermost pattern adherence
 
-| Aspect | Mattermost | MAX | Status |
-|--------|------------|-----|--------|
-| Local `meta` object | Yes | Yes | OK |
-| `streaming.blockStreamingCoalesceDefaults` | Yes | Yes | OK |
-| `groups.resolveRequireMention` | Yes | Missing | MISSING |
+| Aspect                                     | Mattermost | MAX     | Status  |
+| ------------------------------------------ | ---------- | ------- | ------- |
+| Local `meta` object                        | Yes        | Yes     | OK      |
+| `streaming.blockStreamingCoalesceDefaults` | Yes        | Yes     | OK      |
+| `groups.resolveRequireMention`             | Yes        | Missing | MISSING |
 
 ### Deviations requiring justification
 
@@ -281,65 +281,65 @@ There are **zero test files** in the MAX extension. For comparison, telegram als
 
 ### Detailed comparison of telegram `channel.ts` sections to MAX `channel.ts`
 
-| Telegram Section | MAX Equivalent | Analysis |
-|-----------------|----------------|----------|
-| `id: "telegram"` | `id: "max"` | Present |
-| `meta: { ...meta, quickstartAllowFrom: true }` | `meta: { ...meta }` | Present. Note: `quickstartAllowFrom` is inside the local meta object for MAX, not spread separately. Functionally equivalent. |
-| `onboarding: telegramOnboardingAdapter` | **MISSING** | No onboarding wizard for MAX |
-| `pairing.idLabel` | Present | OK |
-| `pairing.normalizeAllowEntry` | Present | OK |
-| `pairing.notifyApproval` | Present | OK, but uses different runtime delegation pattern (optional chaining with fallback throw) |
-| `capabilities.chatTypes` | `["direct", "group"]` vs `["direct", "group", "channel", "thread"]` | OK -- intentionally fewer (MAX has no channels/threads) |
-| `capabilities.reactions` | **MISSING** | Telegram has `reactions: true`. MAX does not declare it. If MAX supports reactions, this should be added. |
-| `capabilities.threads` | **MISSING** | OK -- MAX does not support threads |
-| `capabilities.media` | Present | OK |
-| `capabilities.nativeCommands` | Present | OK |
-| `capabilities.blockStreaming` | Present | OK |
-| `streaming` | Present (MAX adds it, telegram does not have it) | OK -- follows mattermost pattern |
-| `reload` | Present | OK |
-| `configSchema` | Present | OK |
-| `config.listAccountIds` | Present | OK |
-| `config.resolveAccount` | Present | OK |
-| `config.defaultAccountId` | Present | OK |
-| `config.setAccountEnabled` | Present | OK |
-| `config.deleteAccount` | Present | OK |
-| `config.isConfigured` | Present | OK |
-| `config.describeAccount` | Present | OK |
-| `config.resolveAllowFrom` | Present | OK |
-| `config.formatAllowFrom` | Present | OK |
-| `security.resolveDmPolicy` | Present | OK |
-| `security.collectWarnings` | Present | OK, but simpler (no group allowlist check like telegram) |
-| `groups.resolveRequireMention` | **MISSING** | Should be present given group support |
-| `groups.resolveToolPolicy` | **MISSING** | Telegram-specific, acceptable to omit |
-| `threading.resolveReplyToMode` | **MISSING** | OK -- MAX has no thread support |
-| `messaging.normalizeTarget` | Present | Has return type bug (C1) |
-| `messaging.targetResolver` | Present | OK |
-| `directory.self` | **MISSING** | No directory support |
-| `directory.listPeers` | **MISSING** | No directory support |
-| `directory.listGroups` | **MISSING** | No directory support |
-| `actions.listActions` | Present | OK |
-| `actions.extractToolSend` | **MISSING** | Should be present (C3) |
-| `actions.supportsAction` | Present (MAX adds it, telegram does not) | Questionable addition (C4) |
-| `actions.handleAction` | Present | OK |
-| `outbound.deliveryMode` | Present | OK |
-| `outbound.chunker` | Present | OK |
-| `outbound.chunkerMode` | Present | OK |
-| `outbound.textChunkLimit` | Present | OK |
-| `outbound.sendText` (with deps) | Present (WITHOUT deps) | Incomplete (M7) |
-| `outbound.sendMedia` (with deps) | Present (WITHOUT deps) | Incomplete (M7) |
-| `outbound.sendText` (with threadId) | **threadId ignored** | OK -- MAX has no threads |
-| `status.defaultRuntime` | Present | OK |
-| `status.collectStatusIssues` | Present (inline) | OK -- telegram uses `collectTelegramStatusIssues` from SDK |
-| `status.buildChannelSummary` | Present | OK |
-| `status.probeAccount` | Present | OK |
-| `status.auditAccount` | **MISSING** | Acceptable -- Telegram-specific feature for group membership audit |
-| `status.buildAccountSnapshot` | Present | OK |
-| `setup.resolveAccountId` | Present | OK |
-| `setup.applyAccountName` | Present | OK |
-| `setup.validateInput` | Present | OK |
-| `setup.applyAccountConfig` | Present | OK |
-| `gateway.startAccount` | Present | OK |
-| `gateway.logoutAccount` | Present | OK |
+| Telegram Section                               | MAX Equivalent                                                      | Analysis                                                                                                                      |
+| ---------------------------------------------- | ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `id: "telegram"`                               | `id: "max"`                                                         | Present                                                                                                                       |
+| `meta: { ...meta, quickstartAllowFrom: true }` | `meta: { ...meta }`                                                 | Present. Note: `quickstartAllowFrom` is inside the local meta object for MAX, not spread separately. Functionally equivalent. |
+| `onboarding: telegramOnboardingAdapter`        | **MISSING**                                                         | No onboarding wizard for MAX                                                                                                  |
+| `pairing.idLabel`                              | Present                                                             | OK                                                                                                                            |
+| `pairing.normalizeAllowEntry`                  | Present                                                             | OK                                                                                                                            |
+| `pairing.notifyApproval`                       | Present                                                             | OK, but uses different runtime delegation pattern (optional chaining with fallback throw)                                     |
+| `capabilities.chatTypes`                       | `["direct", "group"]` vs `["direct", "group", "channel", "thread"]` | OK -- intentionally fewer (MAX has no channels/threads)                                                                       |
+| `capabilities.reactions`                       | **MISSING**                                                         | Telegram has `reactions: true`. MAX does not declare it. If MAX supports reactions, this should be added.                     |
+| `capabilities.threads`                         | **MISSING**                                                         | OK -- MAX does not support threads                                                                                            |
+| `capabilities.media`                           | Present                                                             | OK                                                                                                                            |
+| `capabilities.nativeCommands`                  | Present                                                             | OK                                                                                                                            |
+| `capabilities.blockStreaming`                  | Present                                                             | OK                                                                                                                            |
+| `streaming`                                    | Present (MAX adds it, telegram does not have it)                    | OK -- follows mattermost pattern                                                                                              |
+| `reload`                                       | Present                                                             | OK                                                                                                                            |
+| `configSchema`                                 | Present                                                             | OK                                                                                                                            |
+| `config.listAccountIds`                        | Present                                                             | OK                                                                                                                            |
+| `config.resolveAccount`                        | Present                                                             | OK                                                                                                                            |
+| `config.defaultAccountId`                      | Present                                                             | OK                                                                                                                            |
+| `config.setAccountEnabled`                     | Present                                                             | OK                                                                                                                            |
+| `config.deleteAccount`                         | Present                                                             | OK                                                                                                                            |
+| `config.isConfigured`                          | Present                                                             | OK                                                                                                                            |
+| `config.describeAccount`                       | Present                                                             | OK                                                                                                                            |
+| `config.resolveAllowFrom`                      | Present                                                             | OK                                                                                                                            |
+| `config.formatAllowFrom`                       | Present                                                             | OK                                                                                                                            |
+| `security.resolveDmPolicy`                     | Present                                                             | OK                                                                                                                            |
+| `security.collectWarnings`                     | Present                                                             | OK, but simpler (no group allowlist check like telegram)                                                                      |
+| `groups.resolveRequireMention`                 | **MISSING**                                                         | Should be present given group support                                                                                         |
+| `groups.resolveToolPolicy`                     | **MISSING**                                                         | Telegram-specific, acceptable to omit                                                                                         |
+| `threading.resolveReplyToMode`                 | **MISSING**                                                         | OK -- MAX has no thread support                                                                                               |
+| `messaging.normalizeTarget`                    | Present                                                             | Has return type bug (C1)                                                                                                      |
+| `messaging.targetResolver`                     | Present                                                             | OK                                                                                                                            |
+| `directory.self`                               | **MISSING**                                                         | No directory support                                                                                                          |
+| `directory.listPeers`                          | **MISSING**                                                         | No directory support                                                                                                          |
+| `directory.listGroups`                         | **MISSING**                                                         | No directory support                                                                                                          |
+| `actions.listActions`                          | Present                                                             | OK                                                                                                                            |
+| `actions.extractToolSend`                      | **MISSING**                                                         | Should be present (C3)                                                                                                        |
+| `actions.supportsAction`                       | Present (MAX adds it, telegram does not)                            | Questionable addition (C4)                                                                                                    |
+| `actions.handleAction`                         | Present                                                             | OK                                                                                                                            |
+| `outbound.deliveryMode`                        | Present                                                             | OK                                                                                                                            |
+| `outbound.chunker`                             | Present                                                             | OK                                                                                                                            |
+| `outbound.chunkerMode`                         | Present                                                             | OK                                                                                                                            |
+| `outbound.textChunkLimit`                      | Present                                                             | OK                                                                                                                            |
+| `outbound.sendText` (with deps)                | Present (WITHOUT deps)                                              | Incomplete (M7)                                                                                                               |
+| `outbound.sendMedia` (with deps)               | Present (WITHOUT deps)                                              | Incomplete (M7)                                                                                                               |
+| `outbound.sendText` (with threadId)            | **threadId ignored**                                                | OK -- MAX has no threads                                                                                                      |
+| `status.defaultRuntime`                        | Present                                                             | OK                                                                                                                            |
+| `status.collectStatusIssues`                   | Present (inline)                                                    | OK -- telegram uses `collectTelegramStatusIssues` from SDK                                                                    |
+| `status.buildChannelSummary`                   | Present                                                             | OK                                                                                                                            |
+| `status.probeAccount`                          | Present                                                             | OK                                                                                                                            |
+| `status.auditAccount`                          | **MISSING**                                                         | Acceptable -- Telegram-specific feature for group membership audit                                                            |
+| `status.buildAccountSnapshot`                  | Present                                                             | OK                                                                                                                            |
+| `setup.resolveAccountId`                       | Present                                                             | OK                                                                                                                            |
+| `setup.applyAccountName`                       | Present                                                             | OK                                                                                                                            |
+| `setup.validateInput`                          | Present                                                             | OK                                                                                                                            |
+| `setup.applyAccountConfig`                     | Present                                                             | OK                                                                                                                            |
+| `gateway.startAccount`                         | Present                                                             | OK                                                                                                                            |
+| `gateway.logoutAccount`                        | Present                                                             | OK                                                                                                                            |
 
 **Summary:** 7 sections missing, 2 sections incomplete, 1 return type bug.
 
@@ -347,14 +347,14 @@ There are **zero test files** in the MAX extension. For comparison, telegram als
 
 ## ADR vs Implementation Gaps
 
-| ADR Claim | Implementation Reality |
-|-----------|----------------------|
-| "getChatChannelMeta('max')" | Hardcoded local meta object (MAX not in registry) |
-| "Add 'max' to CHAT_CHANNEL_ORDER" | Not done |
-| "tokenFile" as valid token source | Schema accepts it, resolution ignores it |
-| "Webhook events to handle" table | All delegation to runtime (correct, but runtime contract unverified) |
-| "runtime.channel.max interface" | Used via optional chaining with fallback throws (matches pattern) |
-| "probeMax(token, timeoutMs)" (2 args) | Called with 3 args including proxy |
+| ADR Claim                             | Implementation Reality                                               |
+| ------------------------------------- | -------------------------------------------------------------------- |
+| "getChatChannelMeta('max')"           | Hardcoded local meta object (MAX not in registry)                    |
+| "Add 'max' to CHAT_CHANNEL_ORDER"     | Not done                                                             |
+| "tokenFile" as valid token source     | Schema accepts it, resolution ignores it                             |
+| "Webhook events to handle" table      | All delegation to runtime (correct, but runtime contract unverified) |
+| "runtime.channel.max interface"       | Used via optional chaining with fallback throws (matches pattern)    |
+| "probeMax(token, timeoutMs)" (2 args) | Called with 3 args including proxy                                   |
 
 ---
 

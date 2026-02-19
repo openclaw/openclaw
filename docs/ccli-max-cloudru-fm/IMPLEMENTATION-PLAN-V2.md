@@ -2,18 +2,18 @@
 
 ## Document Metadata
 
-| Field | Value |
-|-------|-------|
-| **Date** | 2026-02-13 |
-| **Status** | DRAFT — CRITICAL gaps resolved |
-| **ADRs Implemented** | ADR-006 through ADR-013 |
-| **Predecessor** | IMPLEMENTATION-PLAN.md (ADR-001 through ADR-005) |
-| **Methodology** | SPARC-GOAP |
-| **Source Plans** | milestones-ADR-006-007, milestones-ADR-008-009, milestones-ADR-010-011, milestones-ADR-012-013 |
-| **Total Phases** | 5 (Phase 0-4) |
-| **Total Milestones** | 32 |
-| **Estimated Source Files** | ~170 |
-| **Estimated Test Files** | ~105 |
+| Field                      | Value                                                                                          |
+| -------------------------- | ---------------------------------------------------------------------------------------------- |
+| **Date**                   | 2026-02-13                                                                                     |
+| **Status**                 | DRAFT — CRITICAL gaps resolved                                                                 |
+| **ADRs Implemented**       | ADR-006 through ADR-013                                                                        |
+| **Predecessor**            | IMPLEMENTATION-PLAN.md (ADR-001 through ADR-005)                                               |
+| **Methodology**            | SPARC-GOAP                                                                                     |
+| **Source Plans**           | milestones-ADR-006-007, milestones-ADR-008-009, milestones-ADR-010-011, milestones-ADR-012-013 |
+| **Total Phases**           | 5 (Phase 0-4)                                                                                  |
+| **Total Milestones**       | 32                                                                                             |
+| **Estimated Source Files** | ~170                                                                                           |
+| **Estimated Test Files**   | ~105                                                                                           |
 
 ---
 
@@ -343,6 +343,7 @@ abstract class OpenClawError extends Error {
 ```
 
 **Rules:**
+
 - Every error extends `OpenClawError` with structured metadata
 - `toUserMessage()` maps errors to non-technical strings; never exposes internals
 - `Result<T, E>` for expected failures; exceptions for bugs only
@@ -350,14 +351,14 @@ abstract class OpenClawError extends Error {
 
 ### Logging and Observability
 
-| Layer | Key Metrics |
-|-------|-------------|
-| Messenger | Queue depth, tokens available, throttle count, adapter health |
-| Session | Tenant resolve latency, session transitions, workspace usage |
+| Layer       | Key Metrics                                                      |
+| ----------- | ---------------------------------------------------------------- |
+| Messenger   | Queue depth, tokens available, throttle count, adapter health    |
+| Session     | Tenant resolve latency, session transitions, workspace usage     |
 | Concurrency | Active workers, queue depth, P50/P95/P99, throughput, error rate |
-| Streaming | TTFT, flush count, edit count, fallback rate |
-| AI Fabric | Provider latency, circuit state, cold start frequency |
-| MCP/Audit | Tool name, duration, success/failure, tier, user |
+| Streaming   | TTFT, flush count, edit count, fallback rate                     |
+| AI Fabric   | Provider latency, circuit state, cold start frequency            |
+| MCP/Audit   | Tool name, duration, success/failure, tier, user                 |
 
 All domain events flow through `DomainEventBus` with error-isolated handlers, correlation IDs, and < 0.5ms dispatch.
 
@@ -372,14 +373,14 @@ All config validated at load time. No string-interpolated SQL or shell commands.
 
 ### Testing Strategy
 
-| Level | Target | Focus |
-|-------|--------|-------|
-| Unit | >= 80% | Pure functions, value objects, state machines, validators |
-| Integration | >= 70% | Store implementations, adapter wiring, pipeline composition |
-| Contract | Cross-ADR seams | Identity resolution, tier mapping, event format |
-| Performance | Threshold-based | DI < 1ms, event dispatch < 0.5ms, parser >= 10K tok/s |
-| Mutation | >= 65% | Container, circuit breaker, orchestrator, MCP federation |
-| Security | 50+ patterns | Path traversal, SSRF, shell injection, prompt injection |
+| Level       | Target          | Focus                                                       |
+| ----------- | --------------- | ----------------------------------------------------------- |
+| Unit        | >= 80%          | Pure functions, value objects, state machines, validators   |
+| Integration | >= 70%          | Store implementations, adapter wiring, pipeline composition |
+| Contract    | Cross-ADR seams | Identity resolution, tier mapping, event format             |
+| Performance | Threshold-based | DI < 1ms, event dispatch < 0.5ms, parser >= 10K tok/s       |
+| Mutation    | >= 65%          | Container, circuit breaker, orchestrator, MCP federation    |
+| Security    | 50+ patterns    | Path traversal, SSRF, shell injection, prompt injection     |
 
 TDD London School (mock-first). Injectable abstractions: `Clock`, `Timer`, `FileSystem`, `SubprocessFactory`, `PathResolver`.
 
@@ -399,9 +400,9 @@ declare const TenantIdBrand: unique symbol;
 export type TenantIdString = string & { readonly [TenantIdBrand]: true };
 
 export interface TenantIdComponents {
-  platform: MessengerPlatform;  // "telegram" | "max" | "web"
-  userId: string;               // Platform-specific user ID
-  chatId: string;               // Platform-specific chat ID
+  platform: MessengerPlatform; // "telegram" | "max" | "web"
+  userId: string; // Platform-specific user ID
+  chatId: string; // Platform-specific chat ID
 }
 
 /** Creates TenantId from components: "telegram:12345:67890" */
@@ -412,8 +413,8 @@ export function createTenantId(c: TenantIdComponents): TenantIdString {
 
 /** Parses TenantId back to components. Throws on invalid format. */
 export function parseTenantId(id: TenantIdString): TenantIdComponents {
-  const [platform, userId, chatId] = id.split(':');
-  if (!platform || !userId || !chatId) throw new ValidationError('INVALID_TENANT_ID');
+  const [platform, userId, chatId] = id.split(":");
+  if (!platform || !userId || !chatId) throw new ValidationError("INVALID_TENANT_ID");
   return { platform: platform as MessengerPlatform, userId, chatId };
 }
 
@@ -437,18 +438,22 @@ export function deriveSessionId(tenantId: TenantIdString): SessionIdString {
 // /src/core/types/access-tier.ts
 
 /** Canonical 4-tier (ADR-008 authority) */
-export type AccessTier = 'free' | 'standard' | 'premium' | 'admin';
+export type AccessTier = "free" | "standard" | "premium" | "admin";
 
 /** MCP sandbox 3-tier (ADR-007 authority) */
-export type SandboxTier = 'restricted' | 'standard' | 'full';
+export type SandboxTier = "restricted" | "standard" | "full";
 
 /** Maps domain tier to sandbox tier */
 export function mapToSandboxTier(tier: AccessTier): SandboxTier {
   switch (tier) {
-    case 'free': return 'restricted';
-    case 'standard': return 'standard';
-    case 'premium': return 'full';
-    case 'admin': return 'full';
+    case "free":
+      return "restricted";
+    case "standard":
+      return "standard";
+    case "premium":
+      return "full";
+    case "admin":
+      return "full";
   }
 }
 
@@ -530,21 +535,23 @@ export interface AdminApi {
 // /src/user-prefs/managers/config-porter.ts
 
 const SECRET_PATTERNS = [
-  /^sk-/,              // OpenAI-style keys
-  /^xai-/,             // xAI keys
-  /^cloudru_/,         // Cloud.ru keys
-  /KEY=.+/,            // Generic KEY= patterns
-  /Bearer .+/,         // Bearer tokens
-  /^eyJ/,              // JWT tokens (base64 JSON)
+  /^sk-/, // OpenAI-style keys
+  /^xai-/, // xAI keys
+  /^cloudru_/, // Cloud.ru keys
+  /KEY=.+/, // Generic KEY= patterns
+  /Bearer .+/, // Bearer tokens
+  /^eyJ/, // JWT tokens (base64 JSON)
 ];
 
 export function stripSecrets(config: Record<string, unknown>): Record<string, unknown> {
-  return JSON.parse(JSON.stringify(config, (key, value) => {
-    if (typeof value === 'string' && SECRET_PATTERNS.some(p => p.test(value))) {
-      return '[REDACTED]';
-    }
-    return value;
-  }));
+  return JSON.parse(
+    JSON.stringify(config, (key, value) => {
+      if (typeof value === "string" && SECRET_PATTERNS.some((p) => p.test(value))) {
+        return "[REDACTED]";
+      }
+      return value;
+    }),
+  );
 }
 
 /** Export always strips secrets. No opt-out. */
@@ -568,24 +575,24 @@ export async function exportConfig(tenantId: TenantIdString): Promise<ExportBund
 // /src/ai-fabric/config/config-validator.ts
 
 const CREDENTIAL_PATTERNS = [
-  /sk-[a-zA-Z0-9]{20,}/,          // OpenAI keys
-  /xai-[a-zA-Z0-9]{20,}/,         // xAI keys
-  /cloudru_[a-zA-Z0-9]{20,}/,     // Cloud.ru keys
-  /[A-Za-z0-9+/]{40,}={0,2}/,     // Base64 long strings (potential keys)
+  /sk-[a-zA-Z0-9]{20,}/, // OpenAI keys
+  /xai-[a-zA-Z0-9]{20,}/, // xAI keys
+  /cloudru_[a-zA-Z0-9]{20,}/, // Cloud.ru keys
+  /[A-Za-z0-9+/]{40,}={0,2}/, // Base64 long strings (potential keys)
 ];
 
 /** Scans config object for leaked credentials. Throws SecurityError if found. */
-export function assertNoCredentials(config: unknown, path = ''): void {
-  if (typeof config === 'string') {
+export function assertNoCredentials(config: unknown, path = ""): void {
+  if (typeof config === "string") {
     for (const pattern of CREDENTIAL_PATTERNS) {
       if (pattern.test(config)) {
         throw new SecurityError(
-          'CREDENTIAL_IN_CONFIG',
-          `Potential credential found at ${path}. Use environment variables instead.`
+          "CREDENTIAL_IN_CONFIG",
+          `Potential credential found at ${path}. Use environment variables instead.`,
         );
       }
     }
-  } else if (typeof config === 'object' && config !== null) {
+  } else if (typeof config === "object" && config !== null) {
     for (const [key, value] of Object.entries(config)) {
       assertNoCredentials(value, `${path}.${key}`);
     }
@@ -616,13 +623,13 @@ export function assertNoCredentials(config: unknown, path = ''): void {
 
 ## Updated Readiness Score
 
-| Category | Before | After | Delta |
-|----------|--------|-------|-------|
-| Coverage | 72 | 80 | +8 |
-| INVEST | 68 | 72 | +4 |
-| SMART | 55 | 63 | +8 |
-| Testability | 62 | 70 | +8 |
-| Security | 58 | 72 | +14 |
+| Category    | Before | After  | Delta   |
+| ----------- | ------ | ------ | ------- |
+| Coverage    | 72     | 80     | +8      |
+| INVEST      | 68     | 72     | +4      |
+| SMART       | 55     | 63     | +8      |
+| Testability | 62     | 70     | +8      |
+| Security    | 58     | 72     | +14     |
 | **Overall** | **63** | **76** | **+13** |
 
 **Score: 76/100 — PASSES 75 threshold. Ready for implementation.**

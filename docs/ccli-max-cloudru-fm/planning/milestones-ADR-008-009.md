@@ -22,6 +22,7 @@ Two independent, reusable bounded context modules:
 3. **`@mt-session/tenant-types`** (Shared Kernel) -- Shared value objects, branded types, and factory functions that both modules depend on. Resolves the TenantId type conflict between ADR-008 and ADR-009.
 
 **Target metrics upon completion:**
+
 - Concurrent users served: 8-16 (up from 1)
 - P95 response time (5 users, 4 workers): 15-35s (down from 75-150s)
 - Throughput: 16-32 req/min (up from 2-4)
@@ -478,40 +479,41 @@ Milestone 5 (Session Domain complete) + Milestone 9 (Concurrency Domain complete
 
 The Session Domain (Milestones 1-5) and Concurrency Domain (Milestones 6-9) are **independent bounded contexts** that can be developed in parallel once Milestone 0 (Shared Kernel) is complete.
 
-| Phase | Stream A (Session Domain) | Stream B (Concurrency Domain) | Parallel? |
-|-------|--------------------------|------------------------------|-----------|
-| 1     | Milestone 0: Shared Kernel | -- | No (blocking dependency) |
-| 2     | Milestone 1: Domain Model | Milestone 6: Core Types | Yes |
-| 3     | Milestone 2: Workspace Isolation | Milestone 7: Scheduler & Rate Limiter | Yes |
-| 4     | Milestone 3: CLAUDE.md Manager | Milestone 8: Worker Lifecycle | Yes |
-| 5     | Milestone 4: Tenant/Session Store | -- (wait for M7, M8) | Partial |
-| 6     | Milestone 5: Tenant Resolver | Milestone 9: Worker Pool | Yes |
-| 7     | Milestone 10: Cross-Domain Integration | -- | No (needs both domains) |
+| Phase | Stream A (Session Domain)              | Stream B (Concurrency Domain)         | Parallel?                |
+| ----- | -------------------------------------- | ------------------------------------- | ------------------------ |
+| 1     | Milestone 0: Shared Kernel             | --                                    | No (blocking dependency) |
+| 2     | Milestone 1: Domain Model              | Milestone 6: Core Types               | Yes                      |
+| 3     | Milestone 2: Workspace Isolation       | Milestone 7: Scheduler & Rate Limiter | Yes                      |
+| 4     | Milestone 3: CLAUDE.md Manager         | Milestone 8: Worker Lifecycle         | Yes                      |
+| 5     | Milestone 4: Tenant/Session Store      | -- (wait for M7, M8)                  | Partial                  |
+| 6     | Milestone 5: Tenant Resolver           | Milestone 9: Worker Pool              | Yes                      |
+| 7     | Milestone 10: Cross-Domain Integration | --                                    | No (needs both domains)  |
 
 **Maximum parallelism**: 2 developers can work simultaneously on phases 2-6, reducing critical path from ~11 sequential milestones to ~7 phases.
 
 Within individual milestones, further parallelism exists:
+
 - Milestone 4: `TenantStore` and `TenantSessionStore` implementations can be developed concurrently by separate developers
 - Milestone 7: `Scheduler` and `UpstreamRateLimiter` are independent modules (same milestone, parallel work)
 - Milestone 8: `WorkerLifecycle` and `SubprocessFactory` are independent
 
 ## Risk Register
 
-| ID | Risk | Probability | Impact | Mitigation | Milestone(s) |
-|----|------|:-----------:|:------:|-----------|:------------:|
-| R1 | TenantId type conflict causes integration failures late in development | High | High | **Milestone 0 resolves this first.** Both domains consume shared `TenantIdentity` from day one. Contract tests validate round-trip conversion. | 0, 10 |
-| R2 | Path traversal escape via symlink TOCTOU race | Low | Critical | App-level `PathResolver` with `O_NOFOLLOW` + documented requirement for OS-level namespace isolation in production. 50+ attack pattern test suite. | 2 |
-| R3 | Session corruption from concurrent same-session execution | Medium | Critical | `SessionMutex` in Milestone 7 serializes per-session (not just per-tenant). Contract test: two requests with same sessionId never execute in parallel. | 7, 9 |
-| R4 | Duplicate rate limiting causes inconsistent enforcement | High | Medium | `RateLimitProvider` in Milestone 10 makes Session Domain authoritative. Concurrency Domain reads limits, does not define them. | 4, 7, 10 |
-| R5 | OOM on small VMs (4GB) with 4 workers at peak | Medium | High | Default `maxWorkers=4` with memory monitoring. Backpressure at 70% memory. Worker recycling after `maxRequestsPerWorker`. VM sizing guide in config docs. | 8, 9 |
-| R6 | PostgreSQL/Redis unavailability blocks all tenant resolution | Medium | High | Circuit breaker on data stores. Fallback: Redis-unavailable mode uses PostgreSQL-only with degraded latency. PG-unavailable mode rejects with "service degraded" error (not silent failure). | 4 |
-| R7 | Workspace provisioning fails mid-creation, tenant stuck in limbo | Low | High | Saga pattern with compensating action: failed provisioning triggers tenant deactivation + cleanup of partial directory tree. | 2, 5 |
-| R8 | All workers STUCK simultaneously, pool at zero capacity | Low | High | Auto-recovery: when `workersStuck === maxWorkers`, kill all stuck workers, spawn fresh `minWorkers`, emit `pool.total_failure` alert event. | 9 |
-| R9 | Cloud.ru FM API rate limit lowered below 15 req/s without notice | Low | Medium | Token bucket dynamically adjustable. If upstream returns 429, reduce `maxTokensPerSecond` by 50% for 60s, then probe. Circuit breaker pattern for sustained 429s. | 7, 9 |
-| R10 | Disk exhaustion from uncleaned tenant workspaces | Medium | Medium | Per-tenant quotas enforced before subprocess spawn. Periodic usage scan (cron). `destroy()` in purge flow. Alert at 80% disk utilization. | 2, 4 |
-| R11 | ADR-007 tier taxonomy (3-tier) incompatible with ADR-008 (4-tier) | High | Medium | Mapping function in Milestone 0 `access-tier.ts`: `free->restricted, standard->standard, premium->full, admin->full`. Validated by contract tests. | 0 |
-| R12 | Streaming responses (ADR-010) invalidate worker pool timeout model | Medium | Medium | Worker pool `executionTimeoutMs` resets on each stream chunk (activity-based, not wall-clock). This is a future concern but the `Clock` abstraction and `SubprocessFactory` make it adaptable. | 8, 9 |
-| R13 | External agents (ADR-013) consume local worker slots unnecessarily | Medium | Medium | `SubprocessFactory` abstraction allows routing non-local requests to a different pool. Integration layer routes based on agent type. Future milestone (not in scope here). | 8, 10 |
+| ID  | Risk                                                                   | Probability |  Impact  | Mitigation                                                                                                                                                                                     | Milestone(s) |
+| --- | ---------------------------------------------------------------------- | :---------: | :------: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :----------: |
+| R1  | TenantId type conflict causes integration failures late in development |    High     |   High   | **Milestone 0 resolves this first.** Both domains consume shared `TenantIdentity` from day one. Contract tests validate round-trip conversion.                                                 |    0, 10     |
+| R2  | Path traversal escape via symlink TOCTOU race                          |     Low     | Critical | App-level `PathResolver` with `O_NOFOLLOW` + documented requirement for OS-level namespace isolation in production. 50+ attack pattern test suite.                                             |      2       |
+| R3  | Session corruption from concurrent same-session execution              |   Medium    | Critical | `SessionMutex` in Milestone 7 serializes per-session (not just per-tenant). Contract test: two requests with same sessionId never execute in parallel.                                         |     7, 9     |
+| R4  | Duplicate rate limiting causes inconsistent enforcement                |    High     |  Medium  | `RateLimitProvider` in Milestone 10 makes Session Domain authoritative. Concurrency Domain reads limits, does not define them.                                                                 |   4, 7, 10   |
+| R5  | OOM on small VMs (4GB) with 4 workers at peak                          |   Medium    |   High   | Default `maxWorkers=4` with memory monitoring. Backpressure at 70% memory. Worker recycling after `maxRequestsPerWorker`. VM sizing guide in config docs.                                      |     8, 9     |
+| R6  | PostgreSQL/Redis unavailability blocks all tenant resolution           |   Medium    |   High   | Circuit breaker on data stores. Fallback: Redis-unavailable mode uses PostgreSQL-only with degraded latency. PG-unavailable mode rejects with "service degraded" error (not silent failure).   |      4       |
+| R7  | Workspace provisioning fails mid-creation, tenant stuck in limbo       |     Low     |   High   | Saga pattern with compensating action: failed provisioning triggers tenant deactivation + cleanup of partial directory tree.                                                                   |     2, 5     |
+| R8  | All workers STUCK simultaneously, pool at zero capacity                |     Low     |   High   | Auto-recovery: when `workersStuck === maxWorkers`, kill all stuck workers, spawn fresh `minWorkers`, emit `pool.total_failure` alert event.                                                    |      9       |
+| R9  | Cloud.ru FM API rate limit lowered below 15 req/s without notice       |     Low     |  Medium  | Token bucket dynamically adjustable. If upstream returns 429, reduce `maxTokensPerSecond` by 50% for 60s, then probe. Circuit breaker pattern for sustained 429s.                              |     7, 9     |
+| R10 | Disk exhaustion from uncleaned tenant workspaces                       |   Medium    |  Medium  | Per-tenant quotas enforced before subprocess spawn. Periodic usage scan (cron). `destroy()` in purge flow. Alert at 80% disk utilization.                                                      |     2, 4     |
+| R11 | ADR-007 tier taxonomy (3-tier) incompatible with ADR-008 (4-tier)      |    High     |  Medium  | Mapping function in Milestone 0 `access-tier.ts`: `free->restricted, standard->standard, premium->full, admin->full`. Validated by contract tests.                                             |      0       |
+| R12 | Streaming responses (ADR-010) invalidate worker pool timeout model     |   Medium    |  Medium  | Worker pool `executionTimeoutMs` resets on each stream chunk (activity-based, not wall-clock). This is a future concern but the `Clock` abstraction and `SubprocessFactory` make it adaptable. |     8, 9     |
+| R13 | External agents (ADR-013) consume local worker slots unnecessarily     |   Medium    |  Medium  | `SubprocessFactory` abstraction allows routing non-local requests to a different pool. Integration layer routes based on agent type. Future milestone (not in scope here).                     |    8, 10     |
 
 ## File Structure Summary
 

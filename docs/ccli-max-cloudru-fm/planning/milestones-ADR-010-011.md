@@ -522,52 +522,57 @@ Milestone 0: Shared Kernel
 The following milestones can be developed in parallel by independent developers/agents:
 
 **Wave 1** (no dependencies beyond Milestone 0):
+
 - Milestone 1 (StreamParser) and Milestone 7 (CommandParser) -- different bounded contexts, no shared code
 - Milestone 3 (Long Message Splitter) and Milestone 4 (Adapter Interface) -- pure function and interface definition
 
 **Wave 2** (after Wave 1):
+
 - Milestone 2 (TokenAccumulator) and Milestone 5 (Telegram/MAX Adapters) -- both depend on Wave 1 outputs but not on each other
 - Milestone 8 (ClaudeMdManager) can start as soon as Milestone 7 is done
 
 **Wave 3** (after Wave 2):
+
 - Milestone 6 (StreamingResponseHandler) needs Milestones 1-5
 - Milestones 9, 10, 11 can all run in parallel once Milestone 8 is complete (they share ClaudeMdManager but do not depend on each other)
 
 **Wave 4** (after Wave 3):
+
 - Milestone 12 (ConfigPorter) needs Milestones 9-11
 - Milestone 13 (TrainingEngine) needs Milestone 12
 
 **Wave 5** (final):
+
 - Milestone 14 (Integration) needs Milestones 6 and 13
 
 **Optimal parallelism schedule:**
 
-| Week | Stream A (Streaming Pipeline) | Stream B (Training Engine) |
-|------|-------------------------------|----------------------------|
-| 1 | M0: Shared Kernel (collaborative) | M0: Shared Kernel (collaborative) |
-| 2 | M1: StreamParser + M3: Splitter + M4: Interface | M7: CommandParser + Validators |
-| 3 | M2: TokenAccumulator + M5: Adapters | M8: ClaudeMdManager |
-| 4 | M6: StreamingResponseHandler | M9: Persona + Memory, M10: Knowledge, M11: Tools/Hooks/Skills (3 sub-streams) |
-| 5 | (buffer / cross-ADR integration tests) | M12: ConfigPorter + M13: TrainingEngine |
-| 6 | M14: Integration with cli-runner.ts (collaborative) | M14: Integration with cli-runner.ts (collaborative) |
+| Week | Stream A (Streaming Pipeline)                       | Stream B (Training Engine)                                                    |
+| ---- | --------------------------------------------------- | ----------------------------------------------------------------------------- |
+| 1    | M0: Shared Kernel (collaborative)                   | M0: Shared Kernel (collaborative)                                             |
+| 2    | M1: StreamParser + M3: Splitter + M4: Interface     | M7: CommandParser + Validators                                                |
+| 3    | M2: TokenAccumulator + M5: Adapters                 | M8: ClaudeMdManager                                                           |
+| 4    | M6: StreamingResponseHandler                        | M9: Persona + Memory, M10: Knowledge, M11: Tools/Hooks/Skills (3 sub-streams) |
+| 5    | (buffer / cross-ADR integration tests)              | M12: ConfigPorter + M13: TrainingEngine                                       |
+| 6    | M14: Integration with cli-runner.ts (collaborative) | M14: Integration with cli-runner.ts (collaborative)                           |
 
 ## Risk Register
 
-| Risk ID | Risk | Probability | Impact | Milestone Affected | Mitigation |
-|---------|------|:-----------:|:------:|:------------------:|-----------|
-| R-001 | Workspace path disagreement (ADR-008 vs ADR-011) blocks all filesystem operations | High | Critical | M0 | **Must resolve before M0 starts.** Define canonical path in `TenantContext`. Get sign-off from both ADR authors. |
-| R-002 | `stream-json` format changes in Claude Code update break StreamParser | Low | High | M1 | Pin Claude Code version in CI. Parser validates event structure and emits `PARSE_ERROR` on unknown format. Maintain format version compatibility tests (R010-01). |
-| R-003 | Telegram `editMessageText` rate limit (429) under concurrent users | Medium | Medium | M5, M6 | Adaptive flush interval increases to 2s under load. Circuit breaker on adapter after 3 consecutive 429s. Monitor via `ProgressMessageSent` event count. (R010-02) |
-| R-004 | MAX shared 30 RPS limit exhausted by streaming edits | Medium | High | M5, M6 | Adaptive flush interval. Global rate limit tracker shared across all MAX streams. Prioritize new messages over edits. (R010-03) |
-| R-005 | CLAUDE.md prompt injection via `/train add rule` | Medium | High | M7, M8 | Rule text sanitization pipeline: strip control chars, block "ignore previous instructions" patterns, escape markdown injection. Allowlist approach for critical patterns. (R011-01) |
-| R-006 | MCP server SSRF via `/tool add` with redirect to internal IP | Medium | Critical | M11 | URL validation resolves hostname to IP, blocks private ranges. Follows redirects and validates each hop. Tests with `169.254.169.254` and `10.0.0.0/8`. (R011-02) |
-| R-007 | Shell injection via `/hook add` handler | Medium | Critical | M11 | Allowlist of safe commands. Reject semicolons, pipes, backticks, `$()` in handler strings. Restricted-tier users cannot add hooks. (R011-03) |
-| R-008 | Concurrent CLAUDE.md writes lose data | Low | Medium | M8 | Optimistic locking with version check. Retry with re-read on conflict. Atomic filesystem writes (temp + rename). (R011-04) |
-| R-009 | Subprocess exits with SIGKILL (OOM) and timeout waits 300s for dead process | Low | High | M6 | `child.on('exit')` triggers immediate `SUBPROCESS_CRASH` error, not waiting for timeout. Hard timeout is a safety net, not the primary detection mechanism. (shift-left E4) |
-| R-010 | `onFlush` callback rejection from adapter failure causes unhandled promise rejection | Medium | High | M2, M6 | Accumulator wraps `onFlush` in try/catch. Error propagated to configurable error handler. Accumulation continues. Process does not crash. (shift-left E10) |
-| R-011 | `ClaudeMdSection` type defined twice with conflicting meanings | High | Medium | M7 | Resolve in Milestone 0/7: define canonical `ClaudeMdSectionId` (string literal union) and `ClaudeMdSectionData` (interface with rules array) as distinct types. (shift-left type conflict) |
-| R-012 | Cross-ADR event format mismatch: Cloud.ru `AgentEvent` vs Claude Code `StreamJsonEvent` | High | High | M1, M6 (future ADR-013 integration) | Design `StreamParser` to accept a generic `StreamSource` interface, not just subprocess stdout. Defer `AgentEvent` mapper to ADR-013 milestone but ensure the parser interface supports it. (QCSD cross-ADR TC-CROSS-010) |
-| R-013 | Training changes not applied to Cloud.ru remote agents | Medium | Medium | M8, M13 (future ADR-013 integration) | Document limitation clearly. Add TODO for ADR-013 milestone to synchronize CLAUDE.md rules to remote agent `instructions` field. (QCSD TC-CROSS-014) |
-| R-014 | Auto-learn stores hallucinated corrections degrading agent behavior | Medium | Low | M9 | Pluggable `CorrectionAnalyzer` with configurable confidence threshold. Conservative default (high threshold). Per-tenant tuning. TTL on auto-learned entries (30 days). (R011-07) |
-| R-015 | RAG chunking failure leaves orphaned chunks in Cloud.ru collection | Low | Medium | M10 | Saga pattern with compensating actions: on `storeRef` failure, delete chunks from RAG. On CLAUDE.md update failure, remove `DocumentRef` and chunks. (shift-left E2) |
-| R-016 | Export bundle with dangling knowledge references imported by different tenant | Low | Medium | M12 | Import marks dangling refs as stale with warning. User informed that documents must be re-uploaded. (shift-left E10-import) |
+| Risk ID | Risk                                                                                    | Probability |  Impact  |          Milestone Affected          | Mitigation                                                                                                                                                                                                                |
+| ------- | --------------------------------------------------------------------------------------- | :---------: | :------: | :----------------------------------: | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| R-001   | Workspace path disagreement (ADR-008 vs ADR-011) blocks all filesystem operations       |    High     | Critical |                  M0                  | **Must resolve before M0 starts.** Define canonical path in `TenantContext`. Get sign-off from both ADR authors.                                                                                                          |
+| R-002   | `stream-json` format changes in Claude Code update break StreamParser                   |     Low     |   High   |                  M1                  | Pin Claude Code version in CI. Parser validates event structure and emits `PARSE_ERROR` on unknown format. Maintain format version compatibility tests (R010-01).                                                         |
+| R-003   | Telegram `editMessageText` rate limit (429) under concurrent users                      |   Medium    |  Medium  |                M5, M6                | Adaptive flush interval increases to 2s under load. Circuit breaker on adapter after 3 consecutive 429s. Monitor via `ProgressMessageSent` event count. (R010-02)                                                         |
+| R-004   | MAX shared 30 RPS limit exhausted by streaming edits                                    |   Medium    |   High   |                M5, M6                | Adaptive flush interval. Global rate limit tracker shared across all MAX streams. Prioritize new messages over edits. (R010-03)                                                                                           |
+| R-005   | CLAUDE.md prompt injection via `/train add rule`                                        |   Medium    |   High   |                M7, M8                | Rule text sanitization pipeline: strip control chars, block "ignore previous instructions" patterns, escape markdown injection. Allowlist approach for critical patterns. (R011-01)                                       |
+| R-006   | MCP server SSRF via `/tool add` with redirect to internal IP                            |   Medium    | Critical |                 M11                  | URL validation resolves hostname to IP, blocks private ranges. Follows redirects and validates each hop. Tests with `169.254.169.254` and `10.0.0.0/8`. (R011-02)                                                         |
+| R-007   | Shell injection via `/hook add` handler                                                 |   Medium    | Critical |                 M11                  | Allowlist of safe commands. Reject semicolons, pipes, backticks, `$()` in handler strings. Restricted-tier users cannot add hooks. (R011-03)                                                                              |
+| R-008   | Concurrent CLAUDE.md writes lose data                                                   |     Low     |  Medium  |                  M8                  | Optimistic locking with version check. Retry with re-read on conflict. Atomic filesystem writes (temp + rename). (R011-04)                                                                                                |
+| R-009   | Subprocess exits with SIGKILL (OOM) and timeout waits 300s for dead process             |     Low     |   High   |                  M6                  | `child.on('exit')` triggers immediate `SUBPROCESS_CRASH` error, not waiting for timeout. Hard timeout is a safety net, not the primary detection mechanism. (shift-left E4)                                               |
+| R-010   | `onFlush` callback rejection from adapter failure causes unhandled promise rejection    |   Medium    |   High   |                M2, M6                | Accumulator wraps `onFlush` in try/catch. Error propagated to configurable error handler. Accumulation continues. Process does not crash. (shift-left E10)                                                                |
+| R-011   | `ClaudeMdSection` type defined twice with conflicting meanings                          |    High     |  Medium  |                  M7                  | Resolve in Milestone 0/7: define canonical `ClaudeMdSectionId` (string literal union) and `ClaudeMdSectionData` (interface with rules array) as distinct types. (shift-left type conflict)                                |
+| R-012   | Cross-ADR event format mismatch: Cloud.ru `AgentEvent` vs Claude Code `StreamJsonEvent` |    High     |   High   | M1, M6 (future ADR-013 integration)  | Design `StreamParser` to accept a generic `StreamSource` interface, not just subprocess stdout. Defer `AgentEvent` mapper to ADR-013 milestone but ensure the parser interface supports it. (QCSD cross-ADR TC-CROSS-010) |
+| R-013   | Training changes not applied to Cloud.ru remote agents                                  |   Medium    |  Medium  | M8, M13 (future ADR-013 integration) | Document limitation clearly. Add TODO for ADR-013 milestone to synchronize CLAUDE.md rules to remote agent `instructions` field. (QCSD TC-CROSS-014)                                                                      |
+| R-014   | Auto-learn stores hallucinated corrections degrading agent behavior                     |   Medium    |   Low    |                  M9                  | Pluggable `CorrectionAnalyzer` with configurable confidence threshold. Conservative default (high threshold). Per-tenant tuning. TTL on auto-learned entries (30 days). (R011-07)                                         |
+| R-015   | RAG chunking failure leaves orphaned chunks in Cloud.ru collection                      |     Low     |  Medium  |                 M10                  | Saga pattern with compensating actions: on `storeRef` failure, delete chunks from RAG. On CLAUDE.md update failure, remove `DocumentRef` and chunks. (shift-left E2)                                                      |
+| R-016   | Export bundle with dangling knowledge references imported by different tenant           |     Low     |  Medium  |                 M12                  | Import marks dangling refs as stale with warning. User informed that documents must be re-uploaded. (shift-left E10-import)                                                                                               |

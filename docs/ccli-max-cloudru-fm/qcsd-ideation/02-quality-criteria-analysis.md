@@ -2,14 +2,14 @@
 
 ## Metadata
 
-| Field | Value |
-|-------|-------|
-| **Analysis Framework** | HTSM v6.3 (Heuristic Test Strategy Model) |
-| **Analyst** | qe-quality-criteria-recommender |
-| **Date** | 2026-02-12 |
-| **Scope** | ADR-001 through ADR-005, Shift-left reports (01, 03) |
-| **System Under Analysis** | OpenClaw + Claude Code + claude-code-proxy + cloud.ru FM |
-| **Overall Testability Score** | 64/100 (from requirements validation report) |
+| Field                         | Value                                                    |
+| ----------------------------- | -------------------------------------------------------- |
+| **Analysis Framework**        | HTSM v6.3 (Heuristic Test Strategy Model)                |
+| **Analyst**                   | qe-quality-criteria-recommender                          |
+| **Date**                      | 2026-02-12                                               |
+| **Scope**                     | ADR-001 through ADR-005, Shift-left reports (01, 03)     |
+| **System Under Analysis**     | OpenClaw + Claude Code + claude-code-proxy + cloud.ru FM |
+| **Overall Testability Score** | 64/100 (from requirements validation report)             |
 
 ---
 
@@ -18,6 +18,7 @@
 This analysis evaluates all 10 HTSM v6.3 quality criteria categories against 5 Architecture Decision Records that define the integration of OpenClaw (AI gateway) with cloud.ru Foundation Models via claude-code-proxy and Claude Code as the agentic execution engine.
 
 **Key findings**:
+
 - 3 categories at P0 (Capability, Reliability, Security) -- blocking concerns identified
 - 2 categories at P1 (Performance, Development) -- significant gaps to address
 - 3 categories at P2 (Usability, Compatibility, Installability) -- moderate concerns
@@ -31,37 +32,42 @@ This analysis evaluates all 10 HTSM v6.3 quality criteria categories against 5 A
 
 **HTSM Question**: Can the system perform its required functions?
 
-| Attribute | Value |
-|-----------|-------|
-| **Priority** | P0 -- System cannot deliver value without correct capability |
-| **Weight** | 25% |
-| **Testability Score** | 58/100 |
+| Attribute             | Value                                                        |
+| --------------------- | ------------------------------------------------------------ |
+| **Priority**          | P0 -- System cannot deliver value without correct capability |
+| **Weight**            | 25%                                                          |
+| **Testability Score** | 58/100                                                       |
 
 ### Evidence
 
 **Evidence 1: Proxy Protocol Translation (Direct)**
+
 - Source: ADR-001, lines 19-23, 27-29
 - Claude Code speaks Anthropic API protocol. Cloud.ru FM speaks OpenAI-compatible protocol. The proxy must translate between them including model names, auth headers, message formats, and tool calling formats.
 - Evidence Type: Direct (ADR-001, docker-compose config at lines 52-72)
 - The proxy's translation covers request headers (`x-api-key` to `Authorization: Bearer`), endpoints (`/messages` to `/v1/chat/completions`), and model mapping (`claude-opus-4-6` to `zai-org/GLM-4.7`).
 
 **Evidence 2: Tool Calling Contradiction (Direct)**
+
 - Source: ADR-001 line 103 vs ADR-003 lines 69-79
 - ADR-001 positive consequences claim: "Full multi-agent architecture available (tool calling, MCP, sessions)". ADR-003 explicitly states tools are disabled: `cli-runner.ts:82-83` injects "Tools are disabled in this session. Do not call tools."
 - Evidence Type: Direct (shift-left report CRITICAL-001, X-001)
 - These two ADRs directly contradict. Stakeholders reading ADR-001 would expect tool calling to work.
 
 **Evidence 3: Model Fallback Chain Implementation Gap (Direct)**
+
 - Source: ADR-005 lines 57-63, shift-left report CRITICAL-006, CRITICAL-007
 - The fallback chain references `GLM-4.7-FlashX` which is not configurable in the proxy's 3-tier mapping (BIG/MIDDLE/SMALL). Fallback operates at Claude Code tier level (opus/sonnet/haiku), not at cloud.ru model level, but this is not documented.
 - Evidence Type: Direct (ADR-005 fallback chain, ADR-001 docker-compose env)
 
 **Evidence 4: Wizard Configuration Flow (Direct)**
+
 - Source: ADR-002 lines 70-79
 - 5-step wizard flow: select provider, select model, enter API key, check proxy status, auto-configure. Creates both the cloud.ru provider config and the claude-cli backend override.
 - Evidence Type: Direct (ADR-002 wizard flow specification)
 
 **Evidence 5: Session Persistence (Direct)**
+
 - Source: ADR-003 lines 63-65
 - `sessionMode: "always"` with `--session-id` and `--resume` flags provide conversation continuity across messages.
 - Evidence Type: Direct (ADR-003, cli-backends.ts:30-53)
@@ -89,41 +95,47 @@ If the proxy translation is not fully faithful, every user request could fail or
 
 **HTSM Question**: Will the system resist failure under specified conditions?
 
-| Attribute | Value |
-|-----------|-------|
-| **Priority** | P0 -- Single point of failure architecture with no proven recovery |
-| **Weight** | 20% |
-| **Testability Score** | 52/100 |
+| Attribute             | Value                                                              |
+| --------------------- | ------------------------------------------------------------------ |
+| **Priority**          | P0 -- Single point of failure architecture with no proven recovery |
+| **Weight**            | 20%                                                                |
+| **Testability Score** | 52/100                                                             |
 
 ### Evidence
 
 **Evidence 1: Single Point of Failure (Direct)**
+
 - Source: ADR-001 line 110, Risk analysis R002 (score 16, CRITICAL)
 - "Single point of failure (proxy crash = no LLM)". All LLM requests flow through one Docker container. If it crashes, ALL users are affected simultaneously.
 - Evidence Type: Direct (ADR-001 negative consequences, risk register R002)
 
 **Evidence 2: Docker Restart Policy (Direct)**
+
 - Source: ADR-001 line 66
 - `restart: unless-stopped` in docker-compose. Docker health check configured with 30s interval, 10s timeout, 3 retries.
 - Evidence Type: Direct (ADR-001 docker-compose)
 - Limitation: Health check only verifies the process responds, not that protocol translation is functional.
 
 **Evidence 3: Health Check Implementation Gap (Direct)**
+
 - Source: ADR-004 lines 66-70, shift-left report CRITICAL-004
 - "OpenClaw should verify proxy health before routing to `claude-cli` backend" -- but no implementation location is specified. The guidance says "Add a pre-flight check in `runCliAgent()` or at the `agent-runner.ts` routing layer" which is ambiguous.
 - Evidence Type: Direct (ADR-004, shift-left CRITICAL-004)
 
 **Evidence 4: State Machine Without Implementation (Direct)**
+
 - Source: ADR-004 lines 18-25, shift-left report CRITICAL-005
 - State machine `UNDEPLOYED -> DEPLOYING -> RUNNING -> HEALTHY -> UNHEALTHY -> RECOVERING` is documented visually but has no TypeScript type, no transition guards, no error states (Docker not installed, port conflict), and no persistence mechanism.
 - Evidence Type: Direct (ADR-004, shift-left CRITICAL-005)
 
 **Evidence 5: GLM-4.7 Tool Calling Instability (Direct)**
+
 - Source: ADR-001 line 30, risk analysis R001 (score 20, CRITICAL)
 - GLM-4.7 has documented tool calling instabilities (sglang issue #15721). This is the highest-scored risk in the entire analysis. Claude Code's internal reasoning pipeline relies on tool_use format communication with the model.
 - Evidence Type: Direct (ADR-001, sglang #15721 reference)
 
 **Evidence 6: Subprocess Timeout (Inferred)**
+
 - Source: ADR-003, shift-left WARNING-007
 - `runCommandWithTimeout` is used but no invariant documents the default timeout or expected timeout behavior. A hung proxy or slow cloud.ru response could block the serialized queue indefinitely.
 - Evidence Type: Inferred (shift-left warning, no explicit ADR coverage)
@@ -151,40 +163,46 @@ The architecture has a single point of failure (proxy) with a health monitoring 
 
 **HTSM Question**: Is the system protected against unauthorized use and data exposure?
 
-| Attribute | Value |
-|-----------|-------|
-| **Priority** | P0 -- API key exposure rated CRITICAL (risk score 15) |
-| **Weight** | 20% |
-| **Testability Score** | 55/100 |
+| Attribute             | Value                                                 |
+| --------------------- | ----------------------------------------------------- |
+| **Priority**          | P0 -- API key exposure rated CRITICAL (risk score 15) |
+| **Weight**            | 20%                                                   |
+| **Testability Score** | 55/100                                                |
 
 ### Evidence
 
 **Evidence 1: API Key Exposure Chain (Direct)**
+
 - Source: ADR-001 lines 59, 84-85; risk analysis R003 (score 15, CRITICAL)
 - The cloud.ru API key flows through: (1) `.env` file on disk, (2) Docker compose environment variable `OPENAI_API_KEY`, (3) `ANTHROPIC_API_KEY` replacement value in openclaw.json, (4) process environment of Claude Code subprocess.
 - Evidence Type: Direct (ADR-001 config, risk register R003)
 
 **Evidence 2: `HOST: "0.0.0.0"` Defense-in-Depth Gap (Direct)**
+
 - Source: ADR-001 line 64; shift-left WARNING-003; risk analysis R008 (score 10, HIGH)
 - Docker compose sets `HOST: "0.0.0.0"` inside the container while port mapping is `127.0.0.1:8082:8082`. If Docker network mode changes (e.g., `network_mode: host`), the proxy becomes externally accessible with no authentication.
 - Evidence Type: Direct (ADR-001 docker-compose, risk analysis R008)
 
 **Evidence 3: `clearEnv` Incomplete Coverage (Direct)**
+
 - Source: ADR-003 line 107; risk analysis R007 (score 12, HIGH)
 - `clearEnv: ["ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY_OLD"]` only clears 2 variables. Host process may have `OPENAI_API_KEY`, `GOOGLE_API_KEY`, `AWS_SECRET_ACCESS_KEY` etc. that leak into every Claude Code subprocess environment.
 - Evidence Type: Direct (cli-backends.ts:51, risk register R007)
 
 **Evidence 4: `--dangerously-skip-permissions` Flag (Direct)**
+
 - Source: ADR-003 line 49; risk analysis R012 (score 10, HIGH)
 - Claude Code subprocess runs with `--dangerously-skip-permissions` which bypasses permission prompts for ALL tool execution. Tools are disabled via system prompt text injection ("Tools are disabled"), but this is a text-level control that the model could ignore. Combined with GLM-4.7 attention loss issues, the "tools disabled" instruction could be dropped.
 - Evidence Type: Direct (cli-backends.ts:32, risk register R012)
 
 **Evidence 5: `.env` File Git Exposure (Direct)**
+
 - Source: ADR-004 line 90
 - ".env file -- MUST be in .gitignore" -- documented as a security requirement but no enforcement mechanism (no pre-commit hook specified, no automated scanning).
 - Evidence Type: Direct (ADR-004 security considerations)
 
 **Evidence 6: Proxy Has No Authentication (Inferred)**
+
 - Source: Risk analysis R008
 - The proxy accepts any request on port 8082 without authentication. If the port is exposed (due to Docker networking misconfiguration), anyone can use the cloud.ru API key for unlimited LLM queries.
 - Evidence Type: Inferred (no ADR discusses proxy authentication)
@@ -213,35 +231,40 @@ The security model relies on multiple independent layers (localhost binding, .en
 
 **HTSM Question**: Are speed and responsiveness adequate for the use case?
 
-| Attribute | Value |
-|-----------|-------|
-| **Priority** | P1 -- serialize:true creates a fundamental bottleneck; no latency budget defined |
-| **Weight** | 12% |
-| **Testability Score** | 48/100 |
+| Attribute             | Value                                                                            |
+| --------------------- | -------------------------------------------------------------------------------- |
+| **Priority**          | P1 -- serialize:true creates a fundamental bottleneck; no latency budget defined |
+| **Weight**            | 12%                                                                              |
+| **Testability Score** | 48/100                                                                           |
 
 ### Evidence
 
 **Evidence 1: `serialize: true` Bottleneck (Direct)**
+
 - Source: ADR-001 line 113; ADR-003 line 95; risk analysis R004 (score 12, HIGH)
 - `cli-backends.ts:52` sets `serialize: true`. In `cli-runner.ts:177-178`, this means all requests queue behind a single key. With 10-30s per GLM-4.7 response, 5 concurrent users means the 5th user waits 50-150 seconds.
 - Evidence Type: Direct (cli-backends.ts:52, shift-left WARNING-002)
 
 **Evidence 2: Cold Start Latency (Direct)**
+
 - Source: ADR-003 line 94; risk analysis R015 (score 8, MEDIUM)
 - "~2-5s startup per cold call" for Claude Code subprocess. Combined with model response time (5-30s) and proxy latency, total end-to-end could reach 35+ seconds.
 - Evidence Type: Direct (ADR-003 negative consequences)
 
 **Evidence 3: No Streaming to End User (Direct)**
+
 - Source: ADR-003 line 97; risk analysis R020 (score 8, MEDIUM)
 - "No streaming to end user (batch response only)". `runCliAgent()` waits for complete subprocess output. User sees nothing until the entire response is generated.
 - Evidence Type: Direct (ADR-003 negative consequences)
 
 **Evidence 4: No Latency Budget or SLA (Inferred)**
+
 - Source: Shift-left report WARNING-001
 - No ADR defines target latency. No P50/P95/P99 response time goals. No throughput targets. The architecture adds two network hops (OpenClaw -> Claude Code -> Proxy -> cloud.ru) but does not quantify the expected overhead.
 - Evidence Type: Inferred (absence across all ADRs, shift-left WARNING-001)
 
 **Evidence 5: Rate Limit (Direct)**
+
 - Source: ADR-001 line 122; risk analysis R014 (score 6, MEDIUM)
 - Cloud.ru FM API has a 15 req/s rate limit. While `serialize: true` limits concurrency, burst scenarios or multiple instances could exhaust this limit.
 - Evidence Type: Direct (ADR-001 risk table)
@@ -270,40 +293,46 @@ The `serialize: true` setting is architecturally incompatible with multi-user de
 
 **HTSM Question**: Is the system testable and maintainable for ongoing development?
 
-| Attribute | Value |
-|-----------|-------|
-| **Priority** | P1 -- ADR-004 scored 50/100 testability; multiple code reference inaccuracies |
-| **Weight** | 8% |
-| **Testability Score** | 64/100 (aggregate from requirements validation) |
+| Attribute             | Value                                                                         |
+| --------------------- | ----------------------------------------------------------------------------- |
+| **Priority**          | P1 -- ADR-004 scored 50/100 testability; multiple code reference inaccuracies |
+| **Weight**            | 8%                                                                            |
+| **Testability Score** | 64/100 (aggregate from requirements validation)                               |
 
 ### Evidence
 
 **Evidence 1: Code Reference Accuracy Varies (Direct)**
+
 - Source: Shift-left report code reference tables
 - ADR-001 and ADR-003 have high code reference accuracy (all CORRECT or MINOR). ADR-002 has an INACCURATE reference (`configure.gateway-auth.ts:60` is the wrong integration point). ADR-004 has UNVERIFIABLE references.
 - Evidence Type: Direct (shift-left report code accuracy tables)
 
 **Evidence 2: ADR-004 Testability Score Lowest (Direct)**
+
 - Source: Shift-left report ADR-004 section, score 50/100
 - ADR-004 has the lowest testability: state machine has no implementation spec, health check location is ambiguous, Docker lifecycle is not test-automatable in CI.
 - Evidence Type: Direct (shift-left report testability scores)
 
 **Evidence 3: Existing Integration Test Confirmed (Direct)**
+
 - Source: ADR-003 line 115; shift-left report verified file references
 - `agent-runner.claude-cli.test.ts` exists and provides a test anchor for the CLI agent execution path.
 - Evidence Type: Direct (file existence verified in shift-left appendix)
 
 **Evidence 4: DDD Invariants as Test Anchors (Direct)**
+
 - Source: ADR-003 lines 100-107
 - Three invariants are well-defined: session identity mapping, backend resolution null-check, and environment isolation via clearEnv. These are directly testable.
 - Evidence Type: Direct (ADR-003 invariants section)
 
 **Evidence 5: Cross-ADR Inconsistencies (Direct)**
+
 - Source: Shift-left report X-001 through X-005
 - 5 cross-ADR issues identified: tool calling contradiction (X-001), wizard/lifecycle overlap (X-002), fallback model name mismatch (X-003), no end-to-end test spec (X-004), duplicate type definition (X-005).
 - Evidence Type: Direct (shift-left cross-ADR issues)
 
 **Evidence 6: Handler Naming Convention Broken (Direct)**
+
 - Source: Shift-left report CRITICAL-003
 - ADR-002 uses `applyCloudruFmChoice` instead of `applyAuthChoiceCloudruFm`, breaking the established `applyAuthChoice<Provider>` pattern used throughout the codebase.
 - Evidence Type: Direct (shift-left CRITICAL-003)
@@ -331,11 +360,11 @@ The development quality is uneven: ADR-001 and ADR-003 are well-referenced and t
 
 **HTSM Question**: Is the system easy to use for its intended audience?
 
-| Attribute | Value |
-|-----------|-------|
-| **Priority** | P2 -- Wizard is the primary user touchpoint for onboarding |
-| **Weight** | 5% |
-| **Testability Score** | 45/100 |
+| Attribute             | Value                                                      |
+| --------------------- | ---------------------------------------------------------- |
+| **Priority**          | P2 -- Wizard is the primary user touchpoint for onboarding |
+| **Weight**            | 5%                                                         |
+| **Testability Score** | 45/100                                                     |
 
 ### Justification for Inclusion
 
@@ -344,21 +373,25 @@ Included because the wizard (ADR-002) is the primary user-facing component and t
 ### Evidence
 
 **Evidence 1: 5-Step Wizard Flow (Direct)**
+
 - Source: ADR-002 lines 70-79
 - The wizard has a 5-step flow: select provider, select model, enter API key, check proxy, auto-configure. The GLM-4.7-Flash (Free) option is the default, which reduces friction.
 - Evidence Type: Direct (ADR-002 wizard flow)
 
 **Evidence 2: No Acceptance Criteria for Wizard UX (Direct)**
+
 - Source: Shift-left report ADR-002 testability, score 45 for "success criteria measurable"
 - "First-class wizard experience" has no metric. "Auto-configures both provider AND claude-cli backend in one flow" has no acceptance test.
 - Evidence Type: Direct (shift-left ADR-002 analysis)
 
 **Evidence 3: 20+ Auth Provider Groups (Direct)**
+
 - Source: ADR-002 line 12
 - The wizard already supports 18+ auth provider groups. Adding cloudru-fm increases cognitive load. The array position affects discoverability.
 - Evidence Type: Direct (ADR-002 context section)
 
 **Evidence 4: Proxy Deployment Adds Wizard Complexity (Direct)**
+
 - Source: ADR-002 line 109; ADR-004 lines 82-86
 - Step 4 (proxy deployment check) introduces Docker as a dependency within an otherwise config-only wizard flow. Users without Docker face a dead end.
 - Evidence Type: Direct (ADR-002 negative consequences, ADR-004 negative consequences)
@@ -384,11 +417,11 @@ The wizard flow is well-structured but adds Docker as a hidden dependency that o
 
 **HTSM Question**: Does the system make a good first impression and inspire confidence?
 
-| Attribute | Value |
-|-----------|-------|
-| **Priority** | P3 -- Important for developer adoption but secondary to functional correctness |
-| **Weight** | 2% |
-| **Testability Score** | 35/100 |
+| Attribute             | Value                                                                          |
+| --------------------- | ------------------------------------------------------------------------------ |
+| **Priority**          | P3 -- Important for developer adoption but secondary to functional correctness |
+| **Weight**            | 2%                                                                             |
+| **Testability Score** | 35/100                                                                         |
 
 ### Justification for Inclusion
 
@@ -397,16 +430,19 @@ Included because the system targets developers who will evaluate it against alte
 ### Evidence
 
 **Evidence 1: Default Free Tier (Direct)**
+
 - Source: ADR-005 line 83; ADR-002 line 102
 - GLM-4.7-Flash is the default model and is free tier. Zero cost barrier to entry is a strong charisma factor.
 - Evidence Type: Direct (ADR-005 positive consequences, ADR-002 positive consequences)
 
 **Evidence 2: No Streaming Creates Poor First Response (Direct)**
+
 - Source: ADR-003 line 97; risk analysis R020
 - First interaction has 35+ second wait with no feedback. Modern LLM interfaces stream tokens. The batch-response approach feels archaic.
 - Evidence Type: Direct (ADR-003 negative consequences)
 
 **Evidence 3: Sentinel Value Confusion (Direct)**
+
 - Source: Risk analysis R024 (score 4, LOW)
 - `ANTHROPIC_API_KEY: "cloudru-proxy-key"` in config looks like a real credential. New users may be confused about what this is and whether they need an Anthropic key.
 - Evidence Type: Direct (ADR-001 config, risk register R024)
@@ -432,11 +468,11 @@ The free tier default is an excellent charisma decision. However, the long respo
 
 **HTSM Question**: Can the system grow beyond the initial deployment constraints?
 
-| Attribute | Value |
-|-----------|-------|
-| **Priority** | P3 -- Not a concern for initial single-user deployment; critical for growth |
-| **Weight** | 3% |
-| **Testability Score** | 30/100 |
+| Attribute             | Value                                                                       |
+| --------------------- | --------------------------------------------------------------------------- |
+| **Priority**          | P3 -- Not a concern for initial single-user deployment; critical for growth |
+| **Weight**            | 3%                                                                          |
+| **Testability Score** | 30/100                                                                      |
 
 ### Justification for Inclusion
 
@@ -445,16 +481,19 @@ Included because `serialize: true` is an explicit scalability ceiling documented
 ### Evidence
 
 **Evidence 1: `serialize: true` is a Hard Ceiling (Direct)**
+
 - Source: ADR-001 line 113; ADR-003 line 95; risk analysis R004
 - Exactly 1 request can be processed at a time. Every additional concurrent user adds the full response time (10-30s) to queue wait.
 - Evidence Type: Direct (cli-backends.ts:52, risk register R004)
 
 **Evidence 2: Single Proxy Instance (Direct)**
+
 - Source: ADR-001 line 111
 - "Proxy does not support multi-provider routing". There is no discussion of running multiple proxy instances or load balancing between them.
 - Evidence Type: Direct (ADR-001 negative consequences)
 
 **Evidence 3: Cloud.ru Rate Limit (Direct)**
+
 - Source: ADR-001 line 122
 - 15 req/s rate limit. Even with `serialize: false`, the external API has a hard throughput cap.
 - Evidence Type: Direct (ADR-001 risk table)
@@ -480,11 +519,11 @@ The system is architecturally limited to 1 concurrent user. Scaling requires rem
 
 **HTSM Question**: Does the system work correctly with existing components?
 
-| Attribute | Value |
-|-----------|-------|
-| **Priority** | P2 -- Integration with existing OpenClaw plugin ecosystem and auth providers |
-| **Weight** | 3% |
-| **Testability Score** | 60/100 |
+| Attribute             | Value                                                                        |
+| --------------------- | ---------------------------------------------------------------------------- |
+| **Priority**          | P2 -- Integration with existing OpenClaw plugin ecosystem and auth providers |
+| **Weight**            | 3%                                                                           |
+| **Testability Score** | 60/100                                                                       |
 
 ### Justification for Inclusion
 
@@ -493,21 +532,25 @@ Included because the integration touches existing type systems (`AuthChoice`, `A
 ### Evidence
 
 **Evidence 1: AuthChoiceGroupId Duplicate Type (Direct)**
+
 - Source: Shift-left report WARNING-004, X-005
 - `AuthChoiceGroupId` is defined in both `onboard-types.ts` and `auth-choice-options.ts` with existing differences (`litellm`, `together` appear in one but not the other). Adding `cloudru-fm` to only one will cause type errors.
 - Evidence Type: Direct (shift-left WARNING-004, cross-ADR X-005)
 
 **Evidence 2: `mergeBackendConfig()` Shallow Merge (Direct)**
+
 - Source: Risk analysis R011 (score 8, MEDIUM)
 - `args` override replaces the entire array. If a cloudru-fm config override includes partial args, critical flags (`-p`, `--output-format json`) are lost.
 - Evidence Type: Direct (cli-backends.ts:95-110, risk register R011)
 
 **Evidence 3: Existing `claude-cli` Backend Used Unmodified (Direct)**
+
 - Source: ADR-001 line 102; ADR-003 line 86
 - "Zero changes to OpenClaw core -- uses existing `claude-cli` backend". The integration is env-override-only, preserving compatibility with all existing OpenClaw features.
 - Evidence Type: Direct (ADR-001 and ADR-003 positive consequences)
 
 **Evidence 4: Model Naming Inconsistency (Direct)**
+
 - Source: Shift-left WARNING-010
 - ADR-005 uses short names (`GLM-4.7`) while ADR-001 uses full IDs (`zai-org/GLM-4.7`). This inconsistency could cause confusion when values are compared across ADR boundaries.
 - Evidence Type: Direct (shift-left WARNING-010)
@@ -533,11 +576,11 @@ The env-override approach is minimally invasive and preserves existing OpenClaw 
 
 **HTSM Question**: Can the system be installed and configured correctly?
 
-| Attribute | Value |
-|-----------|-------|
-| **Priority** | P2 -- Docker dependency and proxy setup are the primary friction points |
-| **Weight** | 2% |
-| **Testability Score** | 42/100 |
+| Attribute             | Value                                                                   |
+| --------------------- | ----------------------------------------------------------------------- |
+| **Priority**          | P2 -- Docker dependency and proxy setup are the primary friction points |
+| **Weight**            | 2%                                                                      |
+| **Testability Score** | 42/100                                                                  |
 
 ### Justification for Inclusion
 
@@ -546,26 +589,31 @@ Included because the installation requires Docker (a non-trivial dependency), a 
 ### Evidence
 
 **Evidence 1: Docker Prerequisite (Direct)**
+
 - Source: ADR-004 line 84; risk analysis R017 (score 6, MEDIUM)
 - "Requires Docker installed on host". No check for Docker availability before starting the wizard. No graceful degradation path.
 - Evidence Type: Direct (ADR-004 negative consequences, risk register R017)
 
 **Evidence 2: Port Conflict (Direct)**
+
 - Source: Shift-left WARNING-009
 - Default port 8082 may conflict with other services. No port availability check in the wizard.
 - Evidence Type: Direct (shift-left WARNING-009)
 
 **Evidence 3: Docker Compose Generation (Direct)**
+
 - Source: ADR-004 lines 29-39
 - Wizard generates `docker-compose.cloudru-proxy.yml` with template variables. File is workspace-specific, not portable.
 - Evidence Type: Direct (ADR-004 section 1)
 
 **Evidence 4: Proxy Image `:latest` Tag (Direct)**
+
 - Source: ADR-001 line 55; risk analysis R013 (score 9, MEDIUM)
 - `image: legard/claude-code-proxy:latest` means any Docker pull gets an unpredictable version. No version pinning in the wizard output.
 - Evidence Type: Direct (ADR-001 docker-compose, risk register R013)
 
 **Evidence 5: No Rollback on Partial Failure (Inferred)**
+
 - Source: Risk analysis R017
 - If Docker deployment fails at step 4, the wizard has already written provider config (steps 1-3). No rollback mechanism exists. User is left with a broken partial configuration.
 - Evidence Type: Inferred (risk register R017, no ADR coverage of rollback)
@@ -591,18 +639,18 @@ The installation path has multiple failure points (Docker not installed, port co
 
 ## Cross-Category Summary Matrix
 
-| # | Category | Priority | Weight | Testability | Top Risk | Key Finding |
-|---|----------|----------|--------|-------------|----------|-------------|
-| 1 | **Capability** | P0 | 25% | 58/100 | Tool calling contradiction (CRITICAL-001) | ADR-001 overstates system capability; fallback chain not implementable as documented |
-| 2 | **Reliability** | P0 | 20% | 52/100 | Proxy SPOF (R002, score 16) | Single Docker container with no runtime health monitoring; GLM-4.7 instability (R001, score 20) |
-| 3 | **Security** | P0 | 20% | 55/100 | API key exposure chain (R003, score 15) | Multiple defense layers, each with gaps; no proxy authentication; dangerously-skip-permissions flag |
-| 4 | **Performance** | P1 | 12% | 48/100 | serialize:true bottleneck (R004, score 12) | 1 concurrent user ceiling; 35+ sec response time; no streaming; no latency budget |
-| 5 | **Development** | P1 | 8% | 64/100 | ADR-004 testability (50/100) | Uneven ADR quality; cross-ADR contradictions; wrong integration point in ADR-002 |
-| 6 | **Usability** | P2 | 5% | 45/100 | Docker dead-end in wizard | 5-step wizard well-designed but Docker dependency surfaces too late |
-| 7 | **Charisma** | P3 | 2% | 35/100 | 35+ sec first response | Free tier excellent; batch-response-only undermines first impression |
-| 8 | **Scalability** | P3 | 3% | 30/100 | serialize:true ceiling | Architecturally limited to 1 concurrent user; no documented scaling path |
-| 9 | **Compatibility** | P2 | 3% | 60/100 | Duplicate AuthChoiceGroupId | Env-override approach preserves existing compatibility; type system changes carry regression risk |
-| 10 | **Installability** | P2 | 2% | 42/100 | Docker prerequisite with no check | Multiple failure points with no rollback; non-reproducible due to :latest tag |
+| #   | Category           | Priority | Weight | Testability | Top Risk                                   | Key Finding                                                                                         |
+| --- | ------------------ | -------- | ------ | ----------- | ------------------------------------------ | --------------------------------------------------------------------------------------------------- |
+| 1   | **Capability**     | P0       | 25%    | 58/100      | Tool calling contradiction (CRITICAL-001)  | ADR-001 overstates system capability; fallback chain not implementable as documented                |
+| 2   | **Reliability**    | P0       | 20%    | 52/100      | Proxy SPOF (R002, score 16)                | Single Docker container with no runtime health monitoring; GLM-4.7 instability (R001, score 20)     |
+| 3   | **Security**       | P0       | 20%    | 55/100      | API key exposure chain (R003, score 15)    | Multiple defense layers, each with gaps; no proxy authentication; dangerously-skip-permissions flag |
+| 4   | **Performance**    | P1       | 12%    | 48/100      | serialize:true bottleneck (R004, score 12) | 1 concurrent user ceiling; 35+ sec response time; no streaming; no latency budget                   |
+| 5   | **Development**    | P1       | 8%     | 64/100      | ADR-004 testability (50/100)               | Uneven ADR quality; cross-ADR contradictions; wrong integration point in ADR-002                    |
+| 6   | **Usability**      | P2       | 5%     | 45/100      | Docker dead-end in wizard                  | 5-step wizard well-designed but Docker dependency surfaces too late                                 |
+| 7   | **Charisma**       | P3       | 2%     | 35/100      | 35+ sec first response                     | Free tier excellent; batch-response-only undermines first impression                                |
+| 8   | **Scalability**    | P3       | 3%     | 30/100      | serialize:true ceiling                     | Architecturally limited to 1 concurrent user; no documented scaling path                            |
+| 9   | **Compatibility**  | P2       | 3%     | 60/100      | Duplicate AuthChoiceGroupId                | Env-override approach preserves existing compatibility; type system changes carry regression risk   |
+| 10  | **Installability** | P2       | 2%     | 42/100      | Docker prerequisite with no check          | Multiple failure points with no rollback; non-reproducible due to :latest tag                       |
 
 ---
 
@@ -632,30 +680,32 @@ The installation path has multiple failure points (Docker not installed, port co
 
 ## Top 10 Test Recommendations (Priority Ordered)
 
-| # | Category | Test | Priority | Effort | Risks Addressed |
-|---|----------|------|----------|--------|-----------------|
-| 1 | Security | Network scan: verify proxy only accessible on 127.0.0.1 | P0 | 1h | R003, R008 |
-| 2 | Reliability | Chaos test: kill proxy during active request, verify recovery | P0 | 4h | R001, R002 |
-| 3 | Capability | End-to-end protocol translation conformance test | P0 | 8h | R006, CRITICAL-006 |
-| 4 | Security | Environment variable audit for subprocess | P0 | 2h | R007, R012 |
-| 5 | Performance | Baseline latency: P50/P95/P99 single-user with breakdown per hop | P1 | 4h | R015, WARNING-001 |
-| 6 | Capability | Fallback chain integration test using Claude Code tier names | P1 | 4h | CRITICAL-006, CRITICAL-007 |
-| 7 | Development | `tsc --noEmit` compilation after all type extensions | P1 | 1h | R005, X-005 |
-| 8 | Installability | Wizard with Docker absent: verify graceful handling | P2 | 2h | R017, WARNING-008 |
-| 9 | Performance | Concurrency test: serialize:false with 3 concurrent requests | P2 | 4h | R004 |
-| 10 | Usability | Wizard regression: all 18+ existing providers still work | P2 | 2h | R005, R021 |
+| #   | Category       | Test                                                             | Priority | Effort | Risks Addressed            |
+| --- | -------------- | ---------------------------------------------------------------- | -------- | ------ | -------------------------- |
+| 1   | Security       | Network scan: verify proxy only accessible on 127.0.0.1          | P0       | 1h     | R003, R008                 |
+| 2   | Reliability    | Chaos test: kill proxy during active request, verify recovery    | P0       | 4h     | R001, R002                 |
+| 3   | Capability     | End-to-end protocol translation conformance test                 | P0       | 8h     | R006, CRITICAL-006         |
+| 4   | Security       | Environment variable audit for subprocess                        | P0       | 2h     | R007, R012                 |
+| 5   | Performance    | Baseline latency: P50/P95/P99 single-user with breakdown per hop | P1       | 4h     | R015, WARNING-001          |
+| 6   | Capability     | Fallback chain integration test using Claude Code tier names     | P1       | 4h     | CRITICAL-006, CRITICAL-007 |
+| 7   | Development    | `tsc --noEmit` compilation after all type extensions             | P1       | 1h     | R005, X-005                |
+| 8   | Installability | Wizard with Docker absent: verify graceful handling              | P2       | 2h     | R017, WARNING-008          |
+| 9   | Performance    | Concurrency test: serialize:false with 3 concurrent requests     | P2       | 4h     | R004                       |
+| 10  | Usability      | Wizard regression: all 18+ existing providers still work         | P2       | 2h     | R005, R021                 |
 
 ---
 
 ## Quality Gates
 
 ### Gate 1: Pre-Implementation (P0 blockers)
+
 - [ ] ADR-001 tool calling claim corrected or qualified
 - [ ] ADR-005 fallback chain rewritten using Claude Code tier names
 - [ ] ADR-002 integration point corrected from line 60 to auth-choice.apply.ts:43-55
 - [ ] ADR-004 health check implementation location specified concretely
 
 ### Gate 2: Pre-Deployment (P1 should-fix)
+
 - [ ] Proxy health check implemented and tested
 - [ ] Docker image pinned to specific version (not `:latest`)
 - [ ] `clearEnv` extended to cover common sensitive variable patterns
@@ -663,6 +713,7 @@ The installation path has multiple failure points (Docker not installed, port co
 - [ ] `serialize: false` tested or concurrency limitation documented prominently
 
 ### Gate 3: Pre-Multi-User (P2 could-fix)
+
 - [ ] Docker prerequisite check in wizard
 - [ ] Port conflict detection
 - [ ] Wizard regression tests for all existing providers
@@ -673,79 +724,79 @@ The installation path has multiple failure points (Docker not installed, port co
 
 ## Evidence Traceability Matrix
 
-| Evidence ID | Source Document | Category Used In | Evidence Type |
-|-------------|----------------|------------------|---------------|
-| ADR-001:19-23 | ADR-001 | Capability | Direct |
-| ADR-001:55 | ADR-001 | Installability | Direct |
-| ADR-001:59 | ADR-001 | Security | Direct |
-| ADR-001:64 | ADR-001 | Security | Direct |
-| ADR-001:66 | ADR-001 | Reliability | Direct |
-| ADR-001:103 | ADR-001 | Capability | Direct |
-| ADR-001:110 | ADR-001 | Reliability | Direct |
-| ADR-001:111 | ADR-001 | Scalability | Direct |
-| ADR-001:113 | ADR-001 | Performance, Scalability | Direct |
-| ADR-001:122 | ADR-001 | Performance, Scalability | Direct |
-| ADR-002:12 | ADR-002 | Usability | Direct |
-| ADR-002:70-79 | ADR-002 | Capability, Usability | Direct |
-| ADR-002:102 | ADR-002 | Charisma | Direct |
-| ADR-002:109 | ADR-002 | Usability | Direct |
-| ADR-003:49 | ADR-003 | Security | Direct |
-| ADR-003:63-65 | ADR-003 | Capability | Direct |
-| ADR-003:69-79 | ADR-003 | Capability, Security | Direct |
-| ADR-003:94 | ADR-003 | Performance | Direct |
-| ADR-003:95 | ADR-003 | Performance, Scalability | Direct |
-| ADR-003:97 | ADR-003 | Performance, Charisma | Direct |
-| ADR-003:100-107 | ADR-003 | Development | Direct |
-| ADR-003:115 | ADR-003 | Development | Direct |
-| ADR-004:18-25 | ADR-004 | Reliability | Direct |
-| ADR-004:29-39 | ADR-004 | Installability | Direct |
-| ADR-004:66-70 | ADR-004 | Reliability | Direct |
-| ADR-004:84 | ADR-004 | Installability | Direct |
-| ADR-004:90 | ADR-004 | Security | Direct |
-| ADR-005:57-63 | ADR-005 | Capability | Direct |
-| ADR-005:83 | ADR-005 | Charisma | Direct |
-| SL-01:CRITICAL-001 | Shift-left 01 | Capability | Direct |
-| SL-01:CRITICAL-002 | Shift-left 01 | Development | Direct |
-| SL-01:CRITICAL-003 | Shift-left 01 | Development | Direct |
-| SL-01:CRITICAL-004 | Shift-left 01 | Reliability | Direct |
-| SL-01:CRITICAL-006 | Shift-left 01 | Capability | Direct |
-| SL-01:CRITICAL-007 | Shift-left 01 | Capability | Direct |
-| SL-01:WARNING-001 | Shift-left 01 | Performance | Direct |
-| SL-01:WARNING-002 | Shift-left 01 | Performance | Direct |
-| SL-01:WARNING-003 | Shift-left 01 | Security | Direct |
-| SL-01:WARNING-004 | Shift-left 01 | Compatibility | Direct |
-| SL-01:WARNING-009 | Shift-left 01 | Installability | Direct |
-| SL-01:WARNING-010 | Shift-left 01 | Compatibility | Direct |
-| SL-01:X-001 | Shift-left 01 | Capability | Direct |
-| SL-01:X-005 | Shift-left 01 | Compatibility | Direct |
-| RA:R001 | Risk Analysis 03 | Reliability | Direct |
-| RA:R002 | Risk Analysis 03 | Reliability | Direct |
-| RA:R003 | Risk Analysis 03 | Security | Direct |
-| RA:R004 | Risk Analysis 03 | Performance, Scalability | Direct |
-| RA:R007 | Risk Analysis 03 | Security | Direct |
-| RA:R008 | Risk Analysis 03 | Security | Direct |
-| RA:R011 | Risk Analysis 03 | Compatibility | Direct |
-| RA:R012 | Risk Analysis 03 | Security | Direct |
-| RA:R013 | Risk Analysis 03 | Installability | Direct |
-| RA:R015 | Risk Analysis 03 | Performance | Direct |
-| RA:R017 | Risk Analysis 03 | Installability | Direct |
-| RA:R020 | Risk Analysis 03 | Charisma, Performance | Direct |
-| RA:R024 | Risk Analysis 03 | Charisma | Direct |
+| Evidence ID        | Source Document  | Category Used In         | Evidence Type |
+| ------------------ | ---------------- | ------------------------ | ------------- |
+| ADR-001:19-23      | ADR-001          | Capability               | Direct        |
+| ADR-001:55         | ADR-001          | Installability           | Direct        |
+| ADR-001:59         | ADR-001          | Security                 | Direct        |
+| ADR-001:64         | ADR-001          | Security                 | Direct        |
+| ADR-001:66         | ADR-001          | Reliability              | Direct        |
+| ADR-001:103        | ADR-001          | Capability               | Direct        |
+| ADR-001:110        | ADR-001          | Reliability              | Direct        |
+| ADR-001:111        | ADR-001          | Scalability              | Direct        |
+| ADR-001:113        | ADR-001          | Performance, Scalability | Direct        |
+| ADR-001:122        | ADR-001          | Performance, Scalability | Direct        |
+| ADR-002:12         | ADR-002          | Usability                | Direct        |
+| ADR-002:70-79      | ADR-002          | Capability, Usability    | Direct        |
+| ADR-002:102        | ADR-002          | Charisma                 | Direct        |
+| ADR-002:109        | ADR-002          | Usability                | Direct        |
+| ADR-003:49         | ADR-003          | Security                 | Direct        |
+| ADR-003:63-65      | ADR-003          | Capability               | Direct        |
+| ADR-003:69-79      | ADR-003          | Capability, Security     | Direct        |
+| ADR-003:94         | ADR-003          | Performance              | Direct        |
+| ADR-003:95         | ADR-003          | Performance, Scalability | Direct        |
+| ADR-003:97         | ADR-003          | Performance, Charisma    | Direct        |
+| ADR-003:100-107    | ADR-003          | Development              | Direct        |
+| ADR-003:115        | ADR-003          | Development              | Direct        |
+| ADR-004:18-25      | ADR-004          | Reliability              | Direct        |
+| ADR-004:29-39      | ADR-004          | Installability           | Direct        |
+| ADR-004:66-70      | ADR-004          | Reliability              | Direct        |
+| ADR-004:84         | ADR-004          | Installability           | Direct        |
+| ADR-004:90         | ADR-004          | Security                 | Direct        |
+| ADR-005:57-63      | ADR-005          | Capability               | Direct        |
+| ADR-005:83         | ADR-005          | Charisma                 | Direct        |
+| SL-01:CRITICAL-001 | Shift-left 01    | Capability               | Direct        |
+| SL-01:CRITICAL-002 | Shift-left 01    | Development              | Direct        |
+| SL-01:CRITICAL-003 | Shift-left 01    | Development              | Direct        |
+| SL-01:CRITICAL-004 | Shift-left 01    | Reliability              | Direct        |
+| SL-01:CRITICAL-006 | Shift-left 01    | Capability               | Direct        |
+| SL-01:CRITICAL-007 | Shift-left 01    | Capability               | Direct        |
+| SL-01:WARNING-001  | Shift-left 01    | Performance              | Direct        |
+| SL-01:WARNING-002  | Shift-left 01    | Performance              | Direct        |
+| SL-01:WARNING-003  | Shift-left 01    | Security                 | Direct        |
+| SL-01:WARNING-004  | Shift-left 01    | Compatibility            | Direct        |
+| SL-01:WARNING-009  | Shift-left 01    | Installability           | Direct        |
+| SL-01:WARNING-010  | Shift-left 01    | Compatibility            | Direct        |
+| SL-01:X-001        | Shift-left 01    | Capability               | Direct        |
+| SL-01:X-005        | Shift-left 01    | Compatibility            | Direct        |
+| RA:R001            | Risk Analysis 03 | Reliability              | Direct        |
+| RA:R002            | Risk Analysis 03 | Reliability              | Direct        |
+| RA:R003            | Risk Analysis 03 | Security                 | Direct        |
+| RA:R004            | Risk Analysis 03 | Performance, Scalability | Direct        |
+| RA:R007            | Risk Analysis 03 | Security                 | Direct        |
+| RA:R008            | Risk Analysis 03 | Security                 | Direct        |
+| RA:R011            | Risk Analysis 03 | Compatibility            | Direct        |
+| RA:R012            | Risk Analysis 03 | Security                 | Direct        |
+| RA:R013            | Risk Analysis 03 | Installability           | Direct        |
+| RA:R015            | Risk Analysis 03 | Performance              | Direct        |
+| RA:R017            | Risk Analysis 03 | Installability           | Direct        |
+| RA:R020            | Risk Analysis 03 | Charisma, Performance    | Direct        |
+| RA:R024            | Risk Analysis 03 | Charisma                 | Direct        |
 
 ---
 
 ## Appendix: Source Documents Analyzed
 
-| # | Document | Path | Used For |
-|---|----------|------|----------|
-| 1 | ADR-001 | `/home/user/ceo-vibe-coding/src/openclaw-extended/docs/adr/ADR-001-cloudru-fm-proxy-integration.md` | All categories |
-| 2 | ADR-002 | `/home/user/ceo-vibe-coding/src/openclaw-extended/docs/adr/ADR-002-wizard-cloudru-auth-choice.md` | Capability, Usability, Compatibility, Development |
-| 3 | ADR-003 | `/home/user/ceo-vibe-coding/src/openclaw-extended/docs/adr/ADR-003-claude-code-agentic-engine.md` | Capability, Reliability, Security, Performance, Development |
-| 4 | ADR-004 | `/home/user/ceo-vibe-coding/src/openclaw-extended/docs/adr/ADR-004-proxy-lifecycle-management.md` | Reliability, Security, Installability |
-| 5 | ADR-005 | `/home/user/ceo-vibe-coding/src/openclaw-extended/docs/adr/ADR-005-model-mapping-fallback-strategy.md` | Capability, Charisma, Scalability |
-| 6 | Shift-left 01 | `/home/user/ceo-vibe-coding/src/openclaw-extended/docs/shift-left-testing/01-requirements-validation.md` | All categories |
-| 7 | Shift-left 03 | `/home/user/ceo-vibe-coding/src/openclaw-extended/docs/shift-left-testing/03-risk-analysis.md` | All categories |
+| #   | Document      | Path                                                                                                     | Used For                                                    |
+| --- | ------------- | -------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| 1   | ADR-001       | `/home/user/ceo-vibe-coding/src/openclaw-extended/docs/adr/ADR-001-cloudru-fm-proxy-integration.md`      | All categories                                              |
+| 2   | ADR-002       | `/home/user/ceo-vibe-coding/src/openclaw-extended/docs/adr/ADR-002-wizard-cloudru-auth-choice.md`        | Capability, Usability, Compatibility, Development           |
+| 3   | ADR-003       | `/home/user/ceo-vibe-coding/src/openclaw-extended/docs/adr/ADR-003-claude-code-agentic-engine.md`        | Capability, Reliability, Security, Performance, Development |
+| 4   | ADR-004       | `/home/user/ceo-vibe-coding/src/openclaw-extended/docs/adr/ADR-004-proxy-lifecycle-management.md`        | Reliability, Security, Installability                       |
+| 5   | ADR-005       | `/home/user/ceo-vibe-coding/src/openclaw-extended/docs/adr/ADR-005-model-mapping-fallback-strategy.md`   | Capability, Charisma, Scalability                           |
+| 6   | Shift-left 01 | `/home/user/ceo-vibe-coding/src/openclaw-extended/docs/shift-left-testing/01-requirements-validation.md` | All categories                                              |
+| 7   | Shift-left 03 | `/home/user/ceo-vibe-coding/src/openclaw-extended/docs/shift-left-testing/03-risk-analysis.md`           | All categories                                              |
 
 ---
 
-*Analysis generated by qe-quality-criteria-recommender using HTSM v6.3 framework. All evidence is traced to source documents with line-level references where available. Evidence types are classified as Direct (with file reference), Inferred (derived from absence or combination of sources), or Claimed (stated without verification).*
+_Analysis generated by qe-quality-criteria-recommender using HTSM v6.3 framework. All evidence is traced to source documents with line-level references where available. Evidence types are classified as Direct (with file reference), Inferred (derived from absence or combination of sources), or Claimed (stated without verification)._

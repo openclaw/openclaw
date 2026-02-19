@@ -1,11 +1,11 @@
 # Brutal-Honesty Code Review: Cloud.ru FM Integration
 
-| Field | Value |
-|-------|-------|
-| **Date** | 2026-02-13 |
-| **Reviewer** | Senior Code Review Agent |
-| **Scope** | 10 implementation files (7 new, 3 modified) |
-| **Context Files** | 4 existing files + 2 design docs |
+| Field             | Value                                       |
+| ----------------- | ------------------------------------------- |
+| **Date**          | 2026-02-13                                  |
+| **Reviewer**      | Senior Code Review Agent                    |
+| **Scope**         | 10 implementation files (7 new, 3 modified) |
+| **Context Files** | 4 existing files + 2 design docs            |
 
 ---
 
@@ -55,17 +55,17 @@ This file exports `generateProxyDockerCompose()` and `CLOUDRU_COMPOSE_FILENAME`.
 
 The two templates are contradictory:
 
-| Aspect | `cloudru-proxy-template.ts` | `onboard-cloudru-fm.ts` |
-|--------|---------------------------|------------------------|
-| Service name | `claude-code-proxy` | `cloudru-proxy` |
-| Container name | `claude-code-proxy` | `openclaw-cloudru-proxy` |
-| Docker image | `legard/claude-code-proxy:v1.0.0` | `ghcr.io/nicepkg/cloudru-fm-proxy:v1.0.0` |
-| Internal port | `8082` | `8080` |
-| API base URL env | `API_BASE_URL` | Not present |
-| API key env | `API_KEY: "${CLOUDRU_API_KEY}"` | `CLOUDRU_API_KEY: "${CLOUDRU_API_KEY}"` |
-| Health check | `curl -sf http://localhost:8082/health` | Not present |
-| User directive | `user: "1000:1000"` | Not present |
-| `version` key | Not present | `version: "3.8"` (deprecated) |
+| Aspect           | `cloudru-proxy-template.ts`             | `onboard-cloudru-fm.ts`                   |
+| ---------------- | --------------------------------------- | ----------------------------------------- |
+| Service name     | `claude-code-proxy`                     | `cloudru-proxy`                           |
+| Container name   | `claude-code-proxy`                     | `openclaw-cloudru-proxy`                  |
+| Docker image     | `legard/claude-code-proxy:v1.0.0`       | `ghcr.io/nicepkg/cloudru-fm-proxy:v1.0.0` |
+| Internal port    | `8082`                                  | `8080`                                    |
+| API base URL env | `API_BASE_URL`                          | Not present                               |
+| API key env      | `API_KEY: "${CLOUDRU_API_KEY}"`         | `CLOUDRU_API_KEY: "${CLOUDRU_API_KEY}"`   |
+| Health check     | `curl -sf http://localhost:8082/health` | Not present                               |
+| User directive   | `user: "1000:1000"`                     | Not present                               |
+| `version` key    | Not present                             | `version: "3.8"` (deprecated)             |
 
 **Impact:** Two completely different Docker Compose configurations, one of which is dead. The live one (`onboard-cloudru-fm.ts`) uses a different Docker image, a different internal port, no health check, no user directive, and the deprecated `version` key. The dead one (`cloudru-proxy-template.ts`) has better security posture but is never used.
 
@@ -94,6 +94,7 @@ const optsKey = (params.opts as Record<string, unknown> | undefined)?.cloudruApi
 ```
 
 The `ApplyAuthChoiceParams` type (in `auth-choice.apply.ts` lines 26-33) defines `opts` as:
+
 ```typescript
 opts?: {
   tokenProvider?: string;
@@ -161,10 +162,12 @@ The REQUIREMENTS-VALIDATION (GAP-02) specifically warned that modifying the glob
 ### CRIT-07: `ensureProxyHealthy` throws plain Error, but `FailoverReason` type does not include `"proxy-unhealthy"`
 
 **Files:**
+
 - `/home/user/ceo-vibe-coding/src/openclaw-extended/upstream/src/agents/cloudru-proxy-health.ts` (lines 87-97)
 - `/home/user/ceo-vibe-coding/src/openclaw-extended/upstream/src/agents/pi-embedded-helpers/types.ts`
 
 The `FailoverReason` union type is:
+
 ```typescript
 export type FailoverReason = "auth" | "format" | "rate_limit" | "billing" | "timeout" | "unknown";
 ```
@@ -184,6 +187,7 @@ The current implementation in `cloudru-proxy-health.ts` works around this by thr
 ### MAJ-01: Duplicate `CloudruModelPreset` type definition
 
 **Files:**
+
 - `/home/user/ceo-vibe-coding/src/openclaw-extended/upstream/src/config/cloudru-fm.constants.ts` (lines 23-34)
 - `/home/user/ceo-vibe-coding/src/openclaw-extended/upstream/src/commands/onboard-cloudru-fm.ts` (lines 8-19)
 
@@ -200,17 +204,18 @@ The Docker template file (`cloudru-proxy-template.ts`) imports `CloudruModelPres
 ### MAJ-02: Duplicate preset data -- three independent preset definitions
 
 **Files:**
+
 1. `/home/user/ceo-vibe-coding/src/openclaw-extended/upstream/src/config/cloudru-fm.constants.ts` -- `CLOUDRU_FM_PRESETS` (keys: `"cloudru-fm-glm47"`, `"cloudru-fm-flash"`, `"cloudru-fm-qwen"`)
 2. `/home/user/ceo-vibe-coding/src/openclaw-extended/upstream/src/commands/onboard-cloudru-fm.ts` -- `CLOUDRU_PRESETS` (keys: `"cloudru-fm-glm47"`, `"cloudru-fm-flash"`, `"cloudru-fm-qwen"`)
 3. `/home/user/ceo-vibe-coding/src/openclaw-extended/upstream/src/agents/cloudru-model-mapping.ts` -- `CLOUDRU_MODEL_PRESETS` (keys: `"glm47-full"`, `"glm47-flash-free"`, `"qwen3-coder"`)
 
 Three copies of essentially the same data with slightly different key names. The constants file labels are also different from the onboard file labels:
 
-| Preset | constants.ts label | onboard-cloudru-fm.ts label |
-|--------|-------------------|---------------------------|
-| glm47 | `"GLM-4.7 (Full)"` | `"GLM-4.7 (recommended)"` |
-| flash | `"GLM-4.7-Flash (Free)"` | `"GLM-4.7 Flash (free tier)"` |
-| qwen | `"Qwen3-Coder-480B"` | `"Qwen3-Coder (coding-optimized)"` |
+| Preset | constants.ts label       | onboard-cloudru-fm.ts label        |
+| ------ | ------------------------ | ---------------------------------- |
+| glm47  | `"GLM-4.7 (Full)"`       | `"GLM-4.7 (recommended)"`          |
+| flash  | `"GLM-4.7-Flash (Free)"` | `"GLM-4.7 Flash (free tier)"`      |
+| qwen   | `"Qwen3-Coder-480B"`     | `"Qwen3-Coder (coding-optimized)"` |
 
 **Impact:** Label inconsistency means the wizard displays different text depending on which code path resolves the preset. If the `auth-choice.apply.cloudru-fm.ts` handler calls `resolveCloudruModelPreset()` from `onboard-cloudru-fm.ts`, the user sees "GLM-4.7 (recommended)". If anything were to use the constants file, they'd see "GLM-4.7 (Full)".
 
@@ -288,6 +293,7 @@ await fs.promises.writeFile(configPath, json, { encoding: "utf-8", mode: 0o600 }
 **Impact:** The API key is readable by any user on the system. On shared development servers, this is a credential exposure risk.
 
 **Fix:** Change to:
+
 ```typescript
 await fs.writeFile(envPath, content, { encoding: "utf-8", mode: 0o600 });
 ```
@@ -347,7 +353,9 @@ export async function checkProxyHealth(proxyUrl: string, timeoutMs = DEFAULT_TIM
     return cachedResult.result;
   }
   if (!inflightPromise) {
-    inflightPromise = doCheck(proxyUrl, timeoutMs).finally(() => { inflightPromise = null; });
+    inflightPromise = doCheck(proxyUrl, timeoutMs).finally(() => {
+      inflightPromise = null;
+    });
   }
   return inflightPromise;
 }
@@ -368,6 +376,7 @@ The `as const` cast suggests the author was not sure this was a valid value for 
 ### MIN-02: `cloudru-proxy-health.ts` health check URL construction is fragile
 
 Line 53:
+
 ```typescript
 const healthUrl = proxyUrl.replace(/\/+$/, "") + "/health";
 ```
@@ -476,6 +485,7 @@ if (proxyBaseUrl && /^https?:\/\/(localhost|127\.0\.0\.1)/i.test(proxyBaseUrl)) 
 ### For CRIT-02, CRIT-03 (Dead files):
 
 Delete:
+
 - `/home/user/ceo-vibe-coding/src/openclaw-extended/upstream/src/agents/cloudru-model-mapping.ts`
 - `/home/user/ceo-vibe-coding/src/openclaw-extended/upstream/src/agents/cloudru-proxy-template.ts`
 
@@ -484,6 +494,7 @@ Or wire them in by having `onboard-cloudru-fm.ts` import from them instead of de
 ### For CRIT-04 (Rollback never called):
 
 Create a command entry point or add to an existing CLI command that calls:
+
 ```typescript
 import { rollbackCloudruFmConfig } from "./cloudru-rollback.js";
 await rollbackCloudruFmConfig(configPath);
@@ -506,6 +517,7 @@ opts?: {
 ```
 
 Then in `auth-choice.apply.cloudru-fm.ts`, line 46, remove the cast:
+
 ```typescript
 const optsKey = params.opts?.cloudruApiKey;
 ```
@@ -541,10 +553,13 @@ In `/home/user/ceo-vibe-coding/src/openclaw-extended/upstream/src/commands/onboa
 ### For MAJ-06 (.env permissions):
 
 In `/home/user/ceo-vibe-coding/src/openclaw-extended/upstream/src/commands/onboard-cloudru-fm.ts`, line 129, change:
+
 ```typescript
 await fs.writeFile(envPath, content, "utf-8");
 ```
+
 to:
+
 ```typescript
 await fs.writeFile(envPath, content, { encoding: "utf-8", mode: 0o600 });
 ```
@@ -555,35 +570,35 @@ await fs.writeFile(envPath, content, { encoding: "utf-8", mode: 0o600 });
 
 ### Milestones Implemented vs Planned
 
-| Milestone | Status | Notes |
-|-----------|--------|-------|
-| M1: Type Foundation | DONE | `onboard-types.ts` and `auth-choice-options.ts` correctly extended |
-| M2: Wizard Onboarding | MOSTLY DONE | Auth handler works; Docker template has defects (MAJ-03/04/05); `configure.gateway-auth.ts` NOT modified per plan |
-| M3: Constants/Model Mapping | DONE (with duplication) | Constants file is correct; model-mapping file is dead code |
-| M4: Proxy Lifecycle | PARTIALLY DONE | Health check module exists but is dead code; proxy-docker.ts was never created; Docker template is in wrong file with defects |
-| M5: Health/Fallback | NOT DONE | cli-runner.ts was not modified; clearEnv not extended; classifyFailoverReason not extended |
-| M6: Security Hardening | NOT DONE | proxy-security.ts was never created; URL validation not added to cli-backends.ts |
-| M7: Integration Testing | NOT DONE | No test files created |
+| Milestone                   | Status                  | Notes                                                                                                                         |
+| --------------------------- | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| M1: Type Foundation         | DONE                    | `onboard-types.ts` and `auth-choice-options.ts` correctly extended                                                            |
+| M2: Wizard Onboarding       | MOSTLY DONE             | Auth handler works; Docker template has defects (MAJ-03/04/05); `configure.gateway-auth.ts` NOT modified per plan             |
+| M3: Constants/Model Mapping | DONE (with duplication) | Constants file is correct; model-mapping file is dead code                                                                    |
+| M4: Proxy Lifecycle         | PARTIALLY DONE          | Health check module exists but is dead code; proxy-docker.ts was never created; Docker template is in wrong file with defects |
+| M5: Health/Fallback         | NOT DONE                | cli-runner.ts was not modified; clearEnv not extended; classifyFailoverReason not extended                                    |
+| M6: Security Hardening      | NOT DONE                | proxy-security.ts was never created; URL validation not added to cli-backends.ts                                              |
+| M7: Integration Testing     | NOT DONE                | No test files created                                                                                                         |
 
 ### BLOCKING GAPs from REQUIREMENTS-VALIDATION
 
-| Gap | Status | Notes |
-|-----|--------|-------|
-| GAP-01: Dual dispatch ambiguity | AVOIDED | Only the handler chain path was implemented; `configure.gateway-auth.ts` was not modified. This is actually the simpler and better approach. |
-| GAP-02: clearEnv global scope | UNRESOLVED | Neither the global nor the scoped approach was implemented |
-| GAP-03: No rollback procedure | PARTIALLY RESOLVED | Rollback function exists but is dead code (CRIT-04) |
-| GAP-04: FailoverError proxy-unhealthy contradiction | PARTIALLY RESOLVED | Plain Error approach taken (correct), but never wired in (CRIT-01) |
+| Gap                                                 | Status             | Notes                                                                                                                                        |
+| --------------------------------------------------- | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| GAP-01: Dual dispatch ambiguity                     | AVOIDED            | Only the handler chain path was implemented; `configure.gateway-auth.ts` was not modified. This is actually the simpler and better approach. |
+| GAP-02: clearEnv global scope                       | UNRESOLVED         | Neither the global nor the scoped approach was implemented                                                                                   |
+| GAP-03: No rollback procedure                       | PARTIALLY RESOLVED | Rollback function exists but is dead code (CRIT-04)                                                                                          |
+| GAP-04: FailoverError proxy-unhealthy contradiction | PARTIALLY RESOLVED | Plain Error approach taken (correct), but never wired in (CRIT-01)                                                                           |
 
 ---
 
 ## 9. Summary Table
 
-| Category | Count |
-|----------|:-----:|
-| Critical Issues | 7 |
-| Major Issues | 8 |
-| Minor Issues | 8 |
-| Strengths | 8 |
+| Category        | Count |
+| --------------- | :---: |
+| Critical Issues |   7   |
+| Major Issues    |   8   |
+| Minor Issues    |   8   |
+| Strengths       |   8   |
 
 The implementation has a solid foundation -- the type system changes, the auth handler, and the constants file are well-done. But roughly 50% of the new code (3 out of 7 new files) is completely dead, the live Docker template is missing security features that exist in the dead template, and the two most important M5 integration points (health check in cli-runner.ts, clearEnv extension) were never implemented. The code reads like milestones M1-M3 were completed, M4 was partially done, and M5-M7 were abandoned mid-flight.
 

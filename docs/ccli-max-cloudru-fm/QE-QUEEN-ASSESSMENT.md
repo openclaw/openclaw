@@ -1,13 +1,13 @@
 # QE Queen -- Final Quality Assessment: Cloud.ru FM Integration
 
-| Field | Value |
-|-------|-------|
-| **Date** | 2026-02-13 |
-| **Assessor** | QE Queen (Final Gate) |
-| **Scope** | 9 implementation files, 4 design documents |
-| **Prior Review** | BRUTAL-HONESTY-REVIEW.md (Senior Code Review Agent) |
-| **Verdict** | **CONDITIONAL SHIP** |
-| **Overall Score** | **74/100** |
+| Field             | Value                                               |
+| ----------------- | --------------------------------------------------- |
+| **Date**          | 2026-02-13                                          |
+| **Assessor**      | QE Queen (Final Gate)                               |
+| **Scope**         | 9 implementation files, 4 design documents          |
+| **Prior Review**  | BRUTAL-HONESTY-REVIEW.md (Senior Code Review Agent) |
+| **Verdict**       | **CONDITIONAL SHIP**                                |
+| **Overall Score** | **74/100**                                          |
 
 ---
 
@@ -157,15 +157,15 @@ However, **three structural issues remain** that prevent an unconditional ship: 
 
 ## Overall Score Calculation
 
-| Dimension | Weight | Score | Weighted |
-|-----------|:------:|:-----:|:--------:|
-| Code Quality | 20% | 78 | 15.6 |
-| Architecture | 25% | 80 | 20.0 |
-| Security | 20% | 76 | 15.2 |
-| Documentation | 10% | 82 | 8.2 |
-| Integration Quality | 10% | 79 | 7.9 |
-| Production Readiness | 15% | 62 | 9.3 |
-| **TOTAL** | **100%** | | **76.2** |
+| Dimension            |  Weight  | Score | Weighted |
+| -------------------- | :------: | :---: | :------: |
+| Code Quality         |   20%    |  78   |   15.6   |
+| Architecture         |   25%    |  80   |   20.0   |
+| Security             |   20%    |  76   |   15.2   |
+| Documentation        |   10%    |  82   |   8.2    |
+| Integration Quality  |   10%    |  79   |   7.9    |
+| Production Readiness |   15%    |  62   |   9.3    |
+| **TOTAL**            | **100%** |       | **76.2** |
 
 **Rounded overall score: 76/100**
 
@@ -180,6 +180,7 @@ Ship the PR with the following conditions:
 ### Must-Fix Before Merge (Blocking)
 
 None. The remaining issues are all acceptable post-merge follow-ups given that:
+
 - The integration is additive (no existing functionality is broken)
 - The wizard path works end-to-end for the primary use case
 - Security posture is adequate for single-developer localhost deployment
@@ -196,27 +197,27 @@ None. The remaining issues are all acceptable post-merge follow-ups given that:
 
 ### Accepted Risks
 
-| Risk | Severity | Justification for Acceptance |
-|------|----------|------------------------------|
-| Runtime health check not in cli-runner.ts | Medium | The wizard performs a pre-flight check. At runtime, proxy failures surface as subprocess errors that the user can diagnose from Docker logs. Full M5 integration is deferred to a follow-up PR. |
-| Rollback not wired into CLI | Low | Manual config editing is viable for the current single-developer target audience. A `cloudru-rollback` CLI command is tracked as a follow-up task. |
-| Negative health cache (30s blackout) | Low | Only affects the wizard pre-flight check in the current code. When runtime integration is added, the cache TTL for failures should be reduced to 5 seconds. |
-| contextWindow hardcoded to 128K | Low | Conservative value that works for all models. GLM-4.7's 200K context is not misrepresented since OpenClaw does not enforce context limits based on this field -- it is informational. |
-| Cost fields set to zero | Low | Acceptable for initial release. Cloud.ru FM pricing can be added when cost tracking features are used. |
-| ADR-001 examples stale | Low | ADRs are design-time documents. The implementation is correct; the ADR examples can be updated post-merge. |
+| Risk                                      | Severity | Justification for Acceptance                                                                                                                                                                    |
+| ----------------------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Runtime health check not in cli-runner.ts | Medium   | The wizard performs a pre-flight check. At runtime, proxy failures surface as subprocess errors that the user can diagnose from Docker logs. Full M5 integration is deferred to a follow-up PR. |
+| Rollback not wired into CLI               | Low      | Manual config editing is viable for the current single-developer target audience. A `cloudru-rollback` CLI command is tracked as a follow-up task.                                              |
+| Negative health cache (30s blackout)      | Low      | Only affects the wizard pre-flight check in the current code. When runtime integration is added, the cache TTL for failures should be reduced to 5 seconds.                                     |
+| contextWindow hardcoded to 128K           | Low      | Conservative value that works for all models. GLM-4.7's 200K context is not misrepresented since OpenClaw does not enforce context limits based on this field -- it is informational.           |
+| Cost fields set to zero                   | Low      | Acceptable for initial release. Cloud.ru FM pricing can be added when cost tracking features are used.                                                                                          |
+| ADR-001 examples stale                    | Low      | ADRs are design-time documents. The implementation is correct; the ADR examples can be updated post-merge.                                                                                      |
 
 ### Mitigated Risks (Resolved by Current Implementation)
 
-| Risk | Mitigation in Code |
-|------|-------------------|
-| API key in config file | Sentinel key approach -- real key in `.env`, not `openclaw.json` |
-| Credential leakage to subprocess | `clearEnv` array with 8 sensitive vars, scoped to cloudru-fm backend only |
-| Docker container escape | `no-new-privileges`, `cap_drop: ALL`, `read_only`, non-root user, resource limits |
-| Port exposure to network | `127.0.0.1` binding in Docker Compose template |
-| Accidental git commit of secrets | Auto-managed `.gitignore` entries for `.env` and Docker Compose file |
-| AuthChoiceGroupId dual-definition drift | Both `onboard-types.ts` and `auth-choice-options.ts` updated with `"cloudru-fm"` |
-| Preset data duplication | Single source of truth in `cloudru-fm.constants.ts`; dead duplicates deleted |
-| Docker image tag drift | Pinned to `legard/claude-code-proxy:v1.0.0` in constants |
+| Risk                                    | Mitigation in Code                                                                |
+| --------------------------------------- | --------------------------------------------------------------------------------- |
+| API key in config file                  | Sentinel key approach -- real key in `.env`, not `openclaw.json`                  |
+| Credential leakage to subprocess        | `clearEnv` array with 8 sensitive vars, scoped to cloudru-fm backend only         |
+| Docker container escape                 | `no-new-privileges`, `cap_drop: ALL`, `read_only`, non-root user, resource limits |
+| Port exposure to network                | `127.0.0.1` binding in Docker Compose template                                    |
+| Accidental git commit of secrets        | Auto-managed `.gitignore` entries for `.env` and Docker Compose file              |
+| AuthChoiceGroupId dual-definition drift | Both `onboard-types.ts` and `auth-choice-options.ts` updated with `"cloudru-fm"`  |
+| Preset data duplication                 | Single source of truth in `cloudru-fm.constants.ts`; dead duplicates deleted      |
+| Docker image tag drift                  | Pinned to `legard/claude-code-proxy:v1.0.0` in constants                          |
 
 ---
 
@@ -260,26 +261,26 @@ None. The remaining issues are all acceptable post-merge follow-ups given that:
 
 ### Implementation Files (9 files)
 
-| File | Lines | Status | Notes |
-|------|:-----:|:------:|-------|
-| `upstream/src/commands/auth-choice.apply.cloudru-fm.ts` | 197 | PASS | Auth handler, follows established pattern |
-| `upstream/src/commands/onboard-cloudru-fm.ts` | 107 | PASS with note | `.env` permissions should use 0o600 |
-| `upstream/src/commands/auth-choice.apply.ts` | 68 | PASS | Handler registration, opts type fixed |
-| `upstream/src/commands/cloudru-rollback.ts` | 95 | PASS with note | Well-designed but not wired into CLI |
-| `upstream/src/commands/onboard-types.ts` | 143 | PASS | Type extensions clean and complete |
-| `upstream/src/commands/auth-choice-options.ts` | 349 | PASS | Group and option definitions correct |
-| `upstream/src/config/cloudru-fm.constants.ts` | 96 | PASS | Single source of truth, well-organized |
-| `upstream/src/agents/cloudru-proxy-health.ts` | 102 | PASS with note | Good design, not integrated into runtime |
-| `upstream/src/agents/cloudru-proxy-template.ts` | 90 | PASS | Security-hardened Docker template |
+| File                                                    | Lines |     Status     | Notes                                     |
+| ------------------------------------------------------- | :---: | :------------: | ----------------------------------------- |
+| `upstream/src/commands/auth-choice.apply.cloudru-fm.ts` |  197  |      PASS      | Auth handler, follows established pattern |
+| `upstream/src/commands/onboard-cloudru-fm.ts`           |  107  | PASS with note | `.env` permissions should use 0o600       |
+| `upstream/src/commands/auth-choice.apply.ts`            |  68   |      PASS      | Handler registration, opts type fixed     |
+| `upstream/src/commands/cloudru-rollback.ts`             |  95   | PASS with note | Well-designed but not wired into CLI      |
+| `upstream/src/commands/onboard-types.ts`                |  143  |      PASS      | Type extensions clean and complete        |
+| `upstream/src/commands/auth-choice-options.ts`          |  349  |      PASS      | Group and option definitions correct      |
+| `upstream/src/config/cloudru-fm.constants.ts`           |  96   |      PASS      | Single source of truth, well-organized    |
+| `upstream/src/agents/cloudru-proxy-health.ts`           |  102  | PASS with note | Good design, not integrated into runtime  |
+| `upstream/src/agents/cloudru-proxy-template.ts`         |  90   |      PASS      | Security-hardened Docker template         |
 
 ### Design Documentation (4 files)
 
-| File | Status | Notes |
-|------|:------:|-------|
-| `docs/adr/ADR-001-cloudru-fm-proxy-integration.md` | PASS with note | Examples stale (env var names, image tag) |
-| `docs/adr/ADR-002-wizard-cloudru-auth-choice.md` | PASS | Accurate wizard architecture description |
-| `docs/IMPLEMENTATION-PLAN.md` | PASS with note | M5-M7 listed as resolved but not implemented |
-| `docs/BRUTAL-HONESTY-REVIEW.md` | PASS | Several findings now resolved in current code |
+| File                                               |     Status     | Notes                                         |
+| -------------------------------------------------- | :------------: | --------------------------------------------- |
+| `docs/adr/ADR-001-cloudru-fm-proxy-integration.md` | PASS with note | Examples stale (env var names, image tag)     |
+| `docs/adr/ADR-002-wizard-cloudru-auth-choice.md`   |      PASS      | Accurate wizard architecture description      |
+| `docs/IMPLEMENTATION-PLAN.md`                      | PASS with note | M5-M7 listed as resolved but not implemented  |
+| `docs/BRUTAL-HONESTY-REVIEW.md`                    |      PASS      | Several findings now resolved in current code |
 
 ---
 

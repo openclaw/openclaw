@@ -1,6 +1,7 @@
 # ADR-002: Wizard Extension — Cloud.ru FM Auth Choice
 
 ## Status: ACCEPTED
+
 ## Date: 2026-02-13 (v2 — updated with DDD analysis + research findings)
 
 ## Bounded Context: Wizard Configuration (Onboarding)
@@ -9,6 +10,7 @@
 
 OpenClaw's installation wizard (`configure.wizard.ts`) supports 18+ auth provider
 groups (OpenAI, Anthropic, Google, Z.AI, etc.) via a two-step selection flow:
+
 1. Select provider group (`promptAuthChoiceGrouped`)
 2. Select specific auth method within group
 
@@ -19,6 +21,7 @@ wizard experience that auto-configures both the cloud.ru provider AND the
 ### Why First-Class (Not "Custom Provider")
 
 From research:
+
 - Cloud.ru is the only platform providing GPT-class models legally in Russia
 - GLM-4.7-Flash is free — removes financial barrier completely
 - MAX Messenger integration makes Cloud.ru the primary backend for Russian users
@@ -36,6 +39,7 @@ auth-choice.apply.ts   -> Handler chain: Array<(p) => Promise<Result | null>>
 ### DDD: Handler Chain Pattern (CRITICAL)
 
 Every auth handler MUST follow the pattern established by `auth-choice.apply.xai.ts`:
+
 ```typescript
 1. Guard clause: if (authChoice !== "my-choice") return null;
 2. Credential resolution: opts -> env -> prompt
@@ -50,11 +54,11 @@ Every auth handler MUST follow the pattern established by `auth-choice.apply.xai
 
 Add a `"cloudru-fm"` auth choice group to the wizard with 3 sub-choices:
 
-| Choice ID | Label | Preset | Free |
-|-----------|-------|--------|------|
-| `cloudru-fm-glm47` | GLM-4.7 (Full) | BIG=GLM-4.7, MID=FlashX, SMALL=Flash | No |
-| `cloudru-fm-flash` | GLM-4.7-Flash (Free) | All tiers = GLM-4.7-Flash | Yes |
-| `cloudru-fm-qwen` | Qwen3-Coder-480B | BIG=Qwen3-Coder, MID=FlashX, SMALL=Flash | No |
+| Choice ID          | Label                | Preset                                   | Free |
+| ------------------ | -------------------- | ---------------------------------------- | ---- |
+| `cloudru-fm-glm47` | GLM-4.7 (Full)       | BIG=GLM-4.7, MID=FlashX, SMALL=Flash     | No   |
+| `cloudru-fm-flash` | GLM-4.7-Flash (Free) | All tiers = GLM-4.7-Flash                | Yes  |
+| `cloudru-fm-qwen`  | Qwen3-Coder-480B     | BIG=Qwen3-Coder, MID=FlashX, SMALL=Flash | No   |
 
 ### Type Extensions (Already Implemented)
 
@@ -112,22 +116,25 @@ cfg.agents.defaults.cliBackends["claude-cli"].env = {
 ## Consequences
 
 ### Positive
+
 - First-class Cloud.ru FM wizard experience (not hidden in "Custom Provider")
 - Auto-configures provider + backend + auth profile in one flow
 - Default (GLM-4.7-Flash) is free — zero barrier to entry
 - Follows handler chain pattern exactly (XAI reference)
 
 ### Negative
+
 - 4 files modified + 1 new file per integration
 - Maintenance burden if cloud.ru changes model IDs
 - Proxy deployment adds complexity to wizard
 
 ### Domain Events
-| Event | Trigger | Handler |
-|-------|---------|---------|
+
+| Event                         | Trigger               | Handler                |
+| ----------------------------- | --------------------- | ---------------------- |
 | `CloudruFmProviderConfigured` | User completes wizard | Write to openclaw.json |
-| `AuthProfileCreated` | Provider configured | Write auth.profiles |
-| `CliBackendConfigured` | Provider configured | Update cliBackends.env |
+| `AuthProfileCreated`          | Provider configured   | Write auth.profiles    |
+| `CliBackendConfigured`        | Provider configured   | Update cliBackends.env |
 
 ## References
 

@@ -18,13 +18,13 @@ Executable tests live in `/tests/adr-acceptance.test.ts`.
 
 ### Acceptance Criteria
 
-| # | Criterion | Verification |
-|---|-----------|--------------|
-| 1.1 | `ANTHROPIC_BASE_URL` and `ANTHROPIC_API_KEY` injected into subprocess env | Unit test on `mergeBackendConfig()` |
-| 1.2 | `mergeBackendConfig()` merges user-provided `env` over base defaults | Unit test with cloudru override |
-| 1.3 | Proxy health endpoint returns 200 on `/health` | Integration test (requires running proxy) |
-| 1.4 | CLAUDE_MODEL_ALIASES maps Anthropic names to tier names correctly | Unit test on alias map |
-| 1.5 | Proxy Docker binds to 127.0.0.1 only (not 0.0.0.0 externally) | Config validation test |
+| #   | Criterion                                                                 | Verification                              |
+| --- | ------------------------------------------------------------------------- | ----------------------------------------- |
+| 1.1 | `ANTHROPIC_BASE_URL` and `ANTHROPIC_API_KEY` injected into subprocess env | Unit test on `mergeBackendConfig()`       |
+| 1.2 | `mergeBackendConfig()` merges user-provided `env` over base defaults      | Unit test with cloudru override           |
+| 1.3 | Proxy health endpoint returns 200 on `/health`                            | Integration test (requires running proxy) |
+| 1.4 | CLAUDE_MODEL_ALIASES maps Anthropic names to tier names correctly         | Unit test on alias map                    |
+| 1.5 | Proxy Docker binds to 127.0.0.1 only (not 0.0.0.0 externally)             | Config validation test                    |
 
 ### Test Stubs
 
@@ -132,13 +132,13 @@ describe("ADR-001: Proxy Integration", () => {
 
 ### Acceptance Criteria
 
-| # | Criterion | Verification |
-|---|-----------|--------------|
-| 2.1 | `AuthChoice` type includes `cloudru-fm-glm47`, `cloudru-fm-flash`, `cloudru-fm-qwen` | Type-level test |
-| 2.2 | `AUTH_CHOICE_GROUP_DEFS` includes a `cloudru-fm` group entry | Unit test on group array |
-| 2.3 | Wizard dispatch routes `cloudru-fm-*` choices to correct handler | Unit test on dispatch logic |
-| 2.4 | `applyCloudruFmConfig()` produces correct `openclaw.json` structure | Unit test on pure function |
-| 2.5 | Docker compose template generation includes all required env vars | Unit test on template output |
+| #   | Criterion                                                                            | Verification                 |
+| --- | ------------------------------------------------------------------------------------ | ---------------------------- |
+| 2.1 | `AuthChoice` type includes `cloudru-fm-glm47`, `cloudru-fm-flash`, `cloudru-fm-qwen` | Type-level test              |
+| 2.2 | `AUTH_CHOICE_GROUP_DEFS` includes a `cloudru-fm` group entry                         | Unit test on group array     |
+| 2.3 | Wizard dispatch routes `cloudru-fm-*` choices to correct handler                     | Unit test on dispatch logic  |
+| 2.4 | `applyCloudruFmConfig()` produces correct `openclaw.json` structure                  | Unit test on pure function   |
+| 2.5 | Docker compose template generation includes all required env vars                    | Unit test on template output |
 
 ### Test Stubs
 
@@ -237,13 +237,13 @@ describe("ADR-002: Wizard Auth Choice", () => {
 
 ### Acceptance Criteria
 
-| # | Criterion | Verification |
-|---|-----------|--------------|
-| 3.1 | `isCliProvider("claude-cli")` returns true | Unit test |
-| 3.2 | `runCliAgent()` spawns subprocess with `claude -p --output-format json` | Unit test on args construction |
-| 3.3 | Session ID mapping is deterministic and consistent | Unit test on `resolveSessionIdToSend()` |
-| 3.4 | `clearEnv` removes `ANTHROPIC_API_KEY` before applying user env | Unit test on env construction |
-| 3.5 | "Tools are disabled" message is injected into system prompt | Unit test on `extraSystemPrompt` |
+| #   | Criterion                                                               | Verification                            |
+| --- | ----------------------------------------------------------------------- | --------------------------------------- |
+| 3.1 | `isCliProvider("claude-cli")` returns true                              | Unit test                               |
+| 3.2 | `runCliAgent()` spawns subprocess with `claude -p --output-format json` | Unit test on args construction          |
+| 3.3 | Session ID mapping is deterministic and consistent                      | Unit test on `resolveSessionIdToSend()` |
+| 3.4 | `clearEnv` removes `ANTHROPIC_API_KEY` before applying user env         | Unit test on env construction           |
+| 3.5 | "Tools are disabled" message is injected into system prompt             | Unit test on `extraSystemPrompt`        |
 
 ### Test Stubs
 
@@ -359,12 +359,12 @@ describe("ADR-003: Agentic Engine", () => {
 
 ### Acceptance Criteria
 
-| # | Criterion | Verification |
-|---|-----------|--------------|
-| 4.1 | Wizard generates `docker-compose.cloudru-proxy.yml` with correct template | Unit test |
-| 4.2 | Health check endpoint returns structured result | Unit test on `verifyProxyHealth()` |
-| 4.3 | State machine transitions follow: UNDEPLOYED -> DEPLOYING -> RUNNING -> HEALTHY | State test |
-| 4.4 | Proxy recovers after restart (Docker restart policy) | Integration test |
+| #   | Criterion                                                                       | Verification                       |
+| --- | ------------------------------------------------------------------------------- | ---------------------------------- |
+| 4.1 | Wizard generates `docker-compose.cloudru-proxy.yml` with correct template       | Unit test                          |
+| 4.2 | Health check endpoint returns structured result                                 | Unit test on `verifyProxyHealth()` |
+| 4.3 | State machine transitions follow: UNDEPLOYED -> DEPLOYING -> RUNNING -> HEALTHY | State test                         |
+| 4.4 | Proxy recovers after restart (Docker restart policy)                            | Integration test                   |
 
 ### Test Stubs
 
@@ -488,12 +488,12 @@ describe("ADR-004: Proxy Lifecycle", () => {
 
 ### Acceptance Criteria
 
-| # | Criterion | Verification |
-|---|-----------|--------------|
-| 5.1 | 3 wizard presets produce correct BIG_MODEL, MIDDLE_MODEL, SMALL_MODEL | Unit test per preset |
-| 5.2 | Fallback chain terminates (no circular references) | Graph cycle detection test |
-| 5.3 | SMALL_MODEL is always `zai-org/GLM-4.7-Flash` (invariant) | Unit test across all presets |
-| 5.4 | Proxy has all 3 MODEL envs set | Validation test |
+| #   | Criterion                                                             | Verification                 |
+| --- | --------------------------------------------------------------------- | ---------------------------- |
+| 5.1 | 3 wizard presets produce correct BIG_MODEL, MIDDLE_MODEL, SMALL_MODEL | Unit test per preset         |
+| 5.2 | Fallback chain terminates (no circular references)                    | Graph cycle detection test   |
+| 5.3 | SMALL_MODEL is always `zai-org/GLM-4.7-Flash` (invariant)             | Unit test across all presets |
+| 5.4 | Proxy has all 3 MODEL envs set                                        | Validation test              |
 
 ### Test Stubs
 
@@ -661,17 +661,17 @@ describe("Cross-ADR Integration", () => {
 
 ## Test Priority Matrix
 
-| Priority | Test | ADR | Risk |
-|----------|------|-----|------|
-| P0 | Env injection correctness | 001 | API calls go to wrong endpoint |
-| P0 | clearEnv isolation | 003 | API key leakage between backends |
-| P0 | SMALL_MODEL invariant | 005 | Free tier guarantee broken |
-| P1 | mergeBackendConfig merge logic | 001 | Config corruption |
-| P1 | Tools disabled injection | 003 | Unauthorized tool execution |
-| P1 | Fallback chain termination | 005 | Infinite retry loops |
-| P1 | Health check timeout | 004 | Request hangs indefinitely |
-| P2 | Wizard dispatch routing | 002 | Wrong handler called |
-| P2 | Docker compose template | 004 | Deployment failure |
-| P2 | Model alias completeness | 005 | Unrecognized model names |
-| P3 | State machine transitions | 004 | Incorrect lifecycle tracking |
-| P3 | Localhost-only binding | 001 | Security (external access) |
+| Priority | Test                           | ADR | Risk                             |
+| -------- | ------------------------------ | --- | -------------------------------- |
+| P0       | Env injection correctness      | 001 | API calls go to wrong endpoint   |
+| P0       | clearEnv isolation             | 003 | API key leakage between backends |
+| P0       | SMALL_MODEL invariant          | 005 | Free tier guarantee broken       |
+| P1       | mergeBackendConfig merge logic | 001 | Config corruption                |
+| P1       | Tools disabled injection       | 003 | Unauthorized tool execution      |
+| P1       | Fallback chain termination     | 005 | Infinite retry loops             |
+| P1       | Health check timeout           | 004 | Request hangs indefinitely       |
+| P2       | Wizard dispatch routing        | 002 | Wrong handler called             |
+| P2       | Docker compose template        | 004 | Deployment failure               |
+| P2       | Model alias completeness       | 005 | Unrecognized model names         |
+| P3       | State machine transitions      | 004 | Incorrect lifecycle tracking     |
+| P3       | Localhost-only binding         | 001 | Security (external access)       |

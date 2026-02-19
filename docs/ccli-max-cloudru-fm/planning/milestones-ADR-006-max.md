@@ -2,14 +2,14 @@
 
 ## Document Metadata
 
-| Field | Value |
-|-------|-------|
-| **Date** | 2026-02-16 |
-| **Status** | DRAFT |
-| **ADR** | ADR-006 (MAX Messenger Extension for OpenClaw) |
+| Field                 | Value                                                   |
+| --------------------- | ------------------------------------------------------- |
+| **Date**              | 2026-02-16                                              |
+| **Status**            | DRAFT                                                   |
+| **ADR**               | ADR-006 (MAX Messenger Extension for OpenClaw)          |
 | **Reference Pattern** | `extensions/telegram/` (5-file ChannelPlugin structure) |
-| **Target Directory** | `extensions/max/` |
-| **Estimated Tests** | 80 total |
+| **Target Directory**  | `extensions/max/`                                       |
+| **Estimated Tests**   | 80 total                                                |
 
 ---
 
@@ -37,6 +37,7 @@ M4: Gateway (Webhook + Polling)  |    |           |
 ```
 
 **Parallelization opportunities:**
+
 - M3, M5, and M6 can be developed in parallel after M2 is complete.
 - M4 depends on M3 (outbound send logic is used within gateway event handlers).
 - M7 can start any time after M2 but is typically done last before integration.
@@ -50,12 +51,12 @@ M4: Gateway (Webhook + Polling)  |    |           |
 
 ### Files to Create
 
-| File | Path |
-|------|------|
-| `package.json` | `extensions/max/package.json` |
+| File                   | Path                                  |
+| ---------------------- | ------------------------------------- |
+| `package.json`         | `extensions/max/package.json`         |
 | `openclaw.plugin.json` | `extensions/max/openclaw.plugin.json` |
-| `index.ts` | `extensions/max/index.ts` |
-| `src/runtime.ts` | `extensions/max/src/runtime.ts` |
+| `index.ts`             | `extensions/max/index.ts`             |
+| `src/runtime.ts`       | `extensions/max/src/runtime.ts`       |
 
 ### File Contents
 
@@ -72,9 +73,7 @@ M4: Gateway (Webhook + Polling)  |    |           |
     "openclaw": "workspace:*"
   },
   "openclaw": {
-    "extensions": [
-      "./index.ts"
-    ]
+    "extensions": ["./index.ts"]
   }
 }
 ```
@@ -156,10 +155,10 @@ export function getMaxRuntime(): PluginRuntime {
 
 ### Estimated Tests: 2
 
-| # | Test | Type |
-|---|------|------|
-| 1 | Plugin registration: `register()` calls `setMaxRuntime` and `registerChannel` | Unit |
-| 2 | Runtime singleton: `getMaxRuntime()` throws before init, returns runtime after `setMaxRuntime()` | Unit |
+| #   | Test                                                                                             | Type |
+| --- | ------------------------------------------------------------------------------------------------ | ---- |
+| 1   | Plugin registration: `register()` calls `setMaxRuntime` and `registerChannel`                    | Unit |
+| 2   | Runtime singleton: `getMaxRuntime()` throws before init, returns runtime after `setMaxRuntime()` | Unit |
 
 ---
 
@@ -169,8 +168,8 @@ export function getMaxRuntime(): PluginRuntime {
 
 ### Files to Create
 
-| File | Path |
-|------|------|
+| File             | Path                            |
+| ---------------- | ------------------------------- |
 | `src/channel.ts` | `extensions/max/src/channel.ts` |
 
 ### File Contents
@@ -249,8 +248,7 @@ const meta = getChatChannelMeta("max");
 // --- Message Actions Stub ---
 
 const maxMessageActions: ChannelMessageActionAdapter = {
-  listActions: (ctx) =>
-    getMaxRuntime().channel.max.messageActions?.listActions?.(ctx) ?? [],
+  listActions: (ctx) => getMaxRuntime().channel.max.messageActions?.listActions?.(ctx) ?? [],
   extractToolSend: (ctx) =>
     getMaxRuntime().channel.max.messageActions?.extractToolSend?.(ctx) ?? null,
   handleAction: async (ctx) => {
@@ -283,16 +281,12 @@ function resolveMaxAccount(_params: {
   };
 }
 
-function resolveDefaultMaxAccountId(
-  _cfg: OpenClawConfig,
-): string | undefined {
+function resolveDefaultMaxAccountId(_cfg: OpenClawConfig): string | undefined {
   // TODO: M5 — find first configured account
   return DEFAULT_ACCOUNT_ID;
 }
 
-function collectMaxStatusIssues(
-  _params: unknown,
-): { level: string; message: string }[] {
+function collectMaxStatusIssues(_params: unknown): { level: string; message: string }[] {
   // TODO: M6 — collect status issues
   return [];
 }
@@ -339,8 +333,7 @@ export const maxPlugin: ChannelPlugin<ResolvedMaxAccount, MaxProbe> = {
 
   config: {
     listAccountIds: (cfg) => listMaxAccountIds(cfg),
-    resolveAccount: (cfg, accountId) =>
-      resolveMaxAccount({ cfg, accountId }),
+    resolveAccount: (cfg, accountId) => resolveMaxAccount({ cfg, accountId }),
     defaultAccountId: (cfg) => resolveDefaultMaxAccountId(cfg),
     setAccountEnabled: ({ cfg, accountId, enabled }) =>
       setAccountEnabledInConfigSection({
@@ -366,9 +359,7 @@ export const maxPlugin: ChannelPlugin<ResolvedMaxAccount, MaxProbe> = {
       tokenSource: account.tokenSource,
     }),
     resolveAllowFrom: ({ cfg, accountId }) =>
-      (resolveMaxAccount({ cfg, accountId }).config.allowFrom ?? []).map(
-        (entry) => String(entry),
-      ),
+      (resolveMaxAccount({ cfg, accountId }).config.allowFrom ?? []).map((entry) => String(entry)),
     formatAllowFrom: ({ allowFrom }) =>
       allowFrom
         .map((entry) => String(entry).trim())
@@ -379,11 +370,8 @@ export const maxPlugin: ChannelPlugin<ResolvedMaxAccount, MaxProbe> = {
 
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
-      const resolvedAccountId =
-        accountId ?? account.accountId ?? DEFAULT_ACCOUNT_ID;
-      const useAccountPath = Boolean(
-        cfg.channels?.max?.accounts?.[resolvedAccountId],
-      );
+      const resolvedAccountId = accountId ?? account.accountId ?? DEFAULT_ACCOUNT_ID;
+      const useAccountPath = Boolean(cfg.channels?.max?.accounts?.[resolvedAccountId]);
       const basePath = useAccountPath
         ? `channels.max.accounts.${resolvedAccountId}.`
         : "channels.max.";
@@ -456,8 +444,7 @@ export const maxPlugin: ChannelPlugin<ResolvedMaxAccount, MaxProbe> = {
 
   outbound: {
     deliveryMode: "direct",
-    chunker: (text, limit) =>
-      getMaxRuntime().channel.text.chunkMarkdownText(text, limit),
+    chunker: (text, limit) => getMaxRuntime().channel.text.chunkMarkdownText(text, limit),
     chunkerMode: "markdown",
     textChunkLimit: 4000,
     sendText: async ({ to, text, accountId }) => {
@@ -506,9 +493,7 @@ export const maxPlugin: ChannelPlugin<ResolvedMaxAccount, MaxProbe> = {
         lastStartAt: runtime?.lastStartAt ?? null,
         lastStopAt: runtime?.lastStopAt ?? null,
         lastError: runtime?.lastError ?? null,
-        mode:
-          runtime?.mode ??
-          (account.config.webhookUrl ? "webhook" : "polling"),
+        mode: runtime?.mode ?? (account.config.webhookUrl ? "webhook" : "polling"),
         probe,
         lastInboundAt: runtime?.lastInboundAt ?? null,
         lastOutboundAt: runtime?.lastOutboundAt ?? null,
@@ -543,13 +528,13 @@ export const maxPlugin: ChannelPlugin<ResolvedMaxAccount, MaxProbe> = {
 
 ### Estimated Tests: 5
 
-| # | Test | Type |
-|---|------|------|
-| 1 | Plugin has correct `id: "max"` | Unit |
-| 2 | Capabilities: `chatTypes` includes "direct" and "group", excludes "channel" and "thread" | Unit |
-| 3 | `config.isConfigured` returns true when token is set, false when empty | Unit |
-| 4 | `pairing.idLabel === "maxUserId"` | Unit |
-| 5 | `outbound.textChunkLimit === 4000` and `chunkerMode === "markdown"` | Unit |
+| #   | Test                                                                                     | Type |
+| --- | ---------------------------------------------------------------------------------------- | ---- |
+| 1   | Plugin has correct `id: "max"`                                                           | Unit |
+| 2   | Capabilities: `chatTypes` includes "direct" and "group", excludes "channel" and "thread" | Unit |
+| 3   | `config.isConfigured` returns true when token is set, false when empty                   | Unit |
+| 4   | `pairing.idLabel === "maxUserId"`                                                        | Unit |
+| 5   | `outbound.textChunkLimit === 4000` and `chunkerMode === "markdown"`                      | Unit |
 
 ---
 
@@ -559,8 +544,8 @@ export const maxPlugin: ChannelPlugin<ResolvedMaxAccount, MaxProbe> = {
 
 ### Files to Modify
 
-| File | Path | Action |
-|------|------|--------|
+| File             | Path                            | Action                 |
+| ---------------- | ------------------------------- | ---------------------- |
 | `src/channel.ts` | `extensions/max/src/channel.ts` | Replace outbound stubs |
 
 ### Key Code
@@ -619,6 +604,7 @@ function parseReplyToMessageId(replyToId?: string | null) {
 ```
 
 **Key differences from Telegram:**
+
 - MAX uses string-based message IDs (e.g., `mid.xxxx`), not integer IDs like Telegram.
 - No `messageThreadId` parameter (MAX does not have forum thread support).
 - `format: "markdown"` is sent explicitly (Telegram defaults to markdown in runtime).
@@ -683,23 +669,23 @@ sendText: async ({ to, text, accountId, deps, replyToId, attachments }) => {
 
 ### Estimated Tests: 15
 
-| # | Test | Type |
-|---|------|------|
-| 1 | `sendText` calls runtime.sendMessageMax with correct `to` and `text` | Unit |
-| 2 | `sendText` passes `format: "markdown"` | Unit |
-| 3 | `sendText` passes `accountId` when provided | Unit |
-| 4 | `sendText` passes `replyToMessageId` when provided | Unit |
-| 5 | `sendText` returns `{ channel: "max", ...result }` | Unit |
-| 6 | `sendText` uses `deps.sendMax` when provided (dependency injection) | Unit |
-| 7 | `sendMedia` passes `mediaUrl` to runtime | Unit |
-| 8 | `sendMedia` sends text alongside media | Unit |
-| 9 | `sendMedia` handles missing mediaUrl gracefully | Unit |
-| 10 | `chunker` delegates to `runtime.channel.text.chunkMarkdownText` | Unit |
-| 11 | `parseReplyToMessageId` returns undefined for null | Unit |
-| 12 | `parseReplyToMessageId` returns undefined for empty string | Unit |
-| 13 | `parseReplyToMessageId` returns trimmed string for valid ID | Unit |
-| 14 | `pairing.notifyApproval` sends message via runtime | Unit |
-| 15 | `pairing.notifyApproval` throws when token is not configured | Unit |
+| #   | Test                                                                 | Type |
+| --- | -------------------------------------------------------------------- | ---- |
+| 1   | `sendText` calls runtime.sendMessageMax with correct `to` and `text` | Unit |
+| 2   | `sendText` passes `format: "markdown"`                               | Unit |
+| 3   | `sendText` passes `accountId` when provided                          | Unit |
+| 4   | `sendText` passes `replyToMessageId` when provided                   | Unit |
+| 5   | `sendText` returns `{ channel: "max", ...result }`                   | Unit |
+| 6   | `sendText` uses `deps.sendMax` when provided (dependency injection)  | Unit |
+| 7   | `sendMedia` passes `mediaUrl` to runtime                             | Unit |
+| 8   | `sendMedia` sends text alongside media                               | Unit |
+| 9   | `sendMedia` handles missing mediaUrl gracefully                      | Unit |
+| 10  | `chunker` delegates to `runtime.channel.text.chunkMarkdownText`      | Unit |
+| 11  | `parseReplyToMessageId` returns undefined for null                   | Unit |
+| 12  | `parseReplyToMessageId` returns undefined for empty string           | Unit |
+| 13  | `parseReplyToMessageId` returns trimmed string for valid ID          | Unit |
+| 14  | `pairing.notifyApproval` sends message via runtime                   | Unit |
+| 15  | `pairing.notifyApproval` throws when token is not configured         | Unit |
 
 ---
 
@@ -709,8 +695,8 @@ sendText: async ({ to, text, accountId, deps, replyToId, attachments }) => {
 
 ### Files to Modify
 
-| File | Path | Action |
-|------|------|--------|
+| File             | Path                            | Action                |
+| ---------------- | ------------------------------- | --------------------- |
 | `src/channel.ts` | `extensions/max/src/channel.ts` | Replace gateway stubs |
 
 ### Key Code
@@ -909,28 +895,28 @@ The runtime's `monitorMaxProvider` must handle these 9 event types. The extensio
 
 ### Estimated Tests: 20
 
-| # | Test | Type |
-|---|------|------|
-| 1 | `startAccount` calls `probeMax` with token and timeout | Unit |
-| 2 | `startAccount` logs bot username when probe succeeds | Unit |
-| 3 | `startAccount` continues when probe fails (non-fatal) | Unit |
-| 4 | `startAccount` calls `monitorMaxProvider` with correct token | Unit |
-| 5 | `startAccount` passes `useWebhook: true` when webhookUrl is set | Unit |
-| 6 | `startAccount` passes `useWebhook: false` when no webhookUrl | Unit |
-| 7 | `startAccount` forwards `abortSignal` to monitor | Unit |
-| 8 | `startAccount` passes `webhookSecret` from config | Unit |
-| 9 | `startAccount` passes `webhookPath` from config | Unit |
-| 10 | `startAccount` passes `accountId` to monitor | Unit |
-| 11 | `logoutAccount` clears base-level `botToken` for default account | Unit |
-| 12 | `logoutAccount` clears account-level `botToken` for named account | Unit |
-| 13 | `logoutAccount` removes empty account entry from accounts object | Unit |
-| 14 | `logoutAccount` removes empty accounts object | Unit |
-| 15 | `logoutAccount` removes empty max section from channels | Unit |
-| 16 | `logoutAccount` calls `writeConfigFile` when changes made | Unit |
-| 17 | `logoutAccount` does not call `writeConfigFile` when no changes | Unit |
-| 18 | `logoutAccount` returns `envToken: true` when `MAX_BOT_TOKEN` is set | Unit |
-| 19 | `logoutAccount` returns `loggedOut: true` when token is fully cleared | Unit |
-| 20 | `logoutAccount` returns `cleared: true` when token was present and removed | Unit |
+| #   | Test                                                                       | Type |
+| --- | -------------------------------------------------------------------------- | ---- |
+| 1   | `startAccount` calls `probeMax` with token and timeout                     | Unit |
+| 2   | `startAccount` logs bot username when probe succeeds                       | Unit |
+| 3   | `startAccount` continues when probe fails (non-fatal)                      | Unit |
+| 4   | `startAccount` calls `monitorMaxProvider` with correct token               | Unit |
+| 5   | `startAccount` passes `useWebhook: true` when webhookUrl is set            | Unit |
+| 6   | `startAccount` passes `useWebhook: false` when no webhookUrl               | Unit |
+| 7   | `startAccount` forwards `abortSignal` to monitor                           | Unit |
+| 8   | `startAccount` passes `webhookSecret` from config                          | Unit |
+| 9   | `startAccount` passes `webhookPath` from config                            | Unit |
+| 10  | `startAccount` passes `accountId` to monitor                               | Unit |
+| 11  | `logoutAccount` clears base-level `botToken` for default account           | Unit |
+| 12  | `logoutAccount` clears account-level `botToken` for named account          | Unit |
+| 13  | `logoutAccount` removes empty account entry from accounts object           | Unit |
+| 14  | `logoutAccount` removes empty accounts object                              | Unit |
+| 15  | `logoutAccount` removes empty max section from channels                    | Unit |
+| 16  | `logoutAccount` calls `writeConfigFile` when changes made                  | Unit |
+| 17  | `logoutAccount` does not call `writeConfigFile` when no changes            | Unit |
+| 18  | `logoutAccount` returns `envToken: true` when `MAX_BOT_TOKEN` is set       | Unit |
+| 19  | `logoutAccount` returns `loggedOut: true` when token is fully cleared      | Unit |
+| 20  | `logoutAccount` returns `cleared: true` when token was present and removed | Unit |
 
 ---
 
@@ -940,8 +926,8 @@ The runtime's `monitorMaxProvider` must handle these 9 event types. The extensio
 
 ### Files to Modify
 
-| File | Path | Action |
-|------|------|--------|
+| File             | Path                            | Action                              |
+| ---------------- | ------------------------------- | ----------------------------------- |
 | `src/channel.ts` | `extensions/max/src/channel.ts` | Replace config/setup/security stubs |
 
 ### Key Code
@@ -1004,10 +990,7 @@ function resolveMaxAccount(params: {
     }
   } else {
     // Default account: base-level token
-    if (
-      typeof maxConfig?.botToken === "string" &&
-      maxConfig.botToken.trim()
-    ) {
+    if (typeof maxConfig?.botToken === "string" && maxConfig.botToken.trim()) {
       token = maxConfig.botToken.trim();
       tokenSource = "config";
     }
@@ -1024,9 +1007,7 @@ function resolveMaxAccount(params: {
 
   // Resolve config fields
   const accountEntry =
-    accountId !== DEFAULT_ACCOUNT_ID
-      ? maxConfig?.accounts?.[accountId]
-      : maxConfig;
+    accountId !== DEFAULT_ACCOUNT_ID ? maxConfig?.accounts?.[accountId] : maxConfig;
   const configSource =
     accountEntry && typeof accountEntry === "object"
       ? (accountEntry as Record<string, unknown>)
@@ -1039,18 +1020,11 @@ function resolveMaxAccount(params: {
     token,
     tokenSource,
     config: {
-      webhookUrl:
-        typeof configSource.webhookUrl === "string"
-          ? configSource.webhookUrl
-          : undefined,
+      webhookUrl: typeof configSource.webhookUrl === "string" ? configSource.webhookUrl : undefined,
       webhookSecret:
-        typeof configSource.webhookSecret === "string"
-          ? configSource.webhookSecret
-          : undefined,
+        typeof configSource.webhookSecret === "string" ? configSource.webhookSecret : undefined,
       webhookPath:
-        typeof configSource.webhookPath === "string"
-          ? configSource.webhookPath
-          : undefined,
+        typeof configSource.webhookPath === "string" ? configSource.webhookPath : undefined,
       dmPolicy:
         typeof configSource.dmPolicy === "string"
           ? (configSource.dmPolicy as "open" | "pairing" | "closed")
@@ -1058,17 +1032,11 @@ function resolveMaxAccount(params: {
       allowFrom: Array.isArray(configSource.allowFrom)
         ? configSource.allowFrom.map(String)
         : undefined,
-      proxy:
-        typeof configSource.proxy === "string"
-          ? configSource.proxy
-          : undefined,
+      proxy: typeof configSource.proxy === "string" ? configSource.proxy : undefined,
       groupPolicy:
-        typeof configSource.groupPolicy === "string"
-          ? configSource.groupPolicy
-          : undefined,
+        typeof configSource.groupPolicy === "string" ? configSource.groupPolicy : undefined,
       groups:
-        configSource.groups &&
-        typeof configSource.groups === "object"
+        configSource.groups && typeof configSource.groups === "object"
           ? (configSource.groups as Record<string, unknown>)
           : undefined,
     },
@@ -1208,18 +1176,18 @@ security: {
 
 ### Estimated Tests: 10
 
-| # | Test | Type |
-|---|------|------|
-| 1 | `listMaxAccountIds` returns `["default"]` for base-level token config | Unit |
-| 2 | `listMaxAccountIds` returns named account IDs | Unit |
-| 3 | `resolveMaxAccount` resolves config token for default account | Unit |
-| 4 | `resolveMaxAccount` resolves env token fallback | Unit |
-| 5 | `resolveMaxAccount` resolves named account token | Unit |
-| 6 | `resolveMaxAccount` returns `tokenSource: "none"` when unconfigured | Unit |
-| 7 | `validateInput` rejects env for non-default account | Unit |
-| 8 | `validateInput` rejects empty input | Unit |
-| 9 | `applyAccountConfig` writes default account config correctly | Unit |
-| 10 | `security.collectWarnings` returns warning for open group policy | Unit |
+| #   | Test                                                                  | Type |
+| --- | --------------------------------------------------------------------- | ---- |
+| 1   | `listMaxAccountIds` returns `["default"]` for base-level token config | Unit |
+| 2   | `listMaxAccountIds` returns named account IDs                         | Unit |
+| 3   | `resolveMaxAccount` resolves config token for default account         | Unit |
+| 4   | `resolveMaxAccount` resolves env token fallback                       | Unit |
+| 5   | `resolveMaxAccount` resolves named account token                      | Unit |
+| 6   | `resolveMaxAccount` returns `tokenSource: "none"` when unconfigured   | Unit |
+| 7   | `validateInput` rejects env for non-default account                   | Unit |
+| 8   | `validateInput` rejects empty input                                   | Unit |
+| 9   | `applyAccountConfig` writes default account config correctly          | Unit |
+| 10  | `security.collectWarnings` returns warning for open group policy      | Unit |
 
 ---
 
@@ -1229,8 +1197,8 @@ security: {
 
 ### Files to Modify
 
-| File | Path | Action |
-|------|------|--------|
+| File             | Path                            | Action               |
+| ---------------- | ------------------------------- | -------------------- |
 | `src/channel.ts` | `extensions/max/src/channel.ts` | Replace status stubs |
 
 ### Key Code
@@ -1341,13 +1309,13 @@ buildAccountSnapshot: ({ account, cfg, runtime, probe }) => {
 
 ### Estimated Tests: 5
 
-| # | Test | Type |
-|---|------|------|
-| 1 | `probeAccount` delegates to runtime with correct params | Unit |
-| 2 | `collectMaxStatusIssues` reports error for missing token | Unit |
-| 3 | `collectMaxStatusIssues` reports error for failed probe | Unit |
-| 4 | `collectMaxStatusIssues` reports warning for stopped account | Unit |
-| 5 | `buildAccountSnapshot` builds correct snapshot with defaults | Unit |
+| #   | Test                                                         | Type |
+| --- | ------------------------------------------------------------ | ---- |
+| 1   | `probeAccount` delegates to runtime with correct params      | Unit |
+| 2   | `collectMaxStatusIssues` reports error for missing token     | Unit |
+| 3   | `collectMaxStatusIssues` reports error for failed probe      | Unit |
+| 4   | `collectMaxStatusIssues` reports warning for stopped account | Unit |
+| 5   | `buildAccountSnapshot` builds correct snapshot with defaults | Unit |
 
 ---
 
@@ -1357,8 +1325,8 @@ buildAccountSnapshot: ({ account, cfg, runtime, probe }) => {
 
 ### Files to Modify
 
-| File | Path | Action |
-|------|------|--------|
+| File                       | Path                       | Action                                                |
+| -------------------------- | -------------------------- | ----------------------------------------------------- |
 | `src/channels/registry.ts` | `src/channels/registry.ts` | Add "max" to CHAT_CHANNEL_ORDER and CHAT_CHANNEL_META |
 
 ### Key Code
@@ -1419,8 +1387,8 @@ export const CHAT_CHANNEL_ALIASES: Record<string, ChatChannelId> = {
   "internet-relay-chat": "irc",
   "google-chat": "googlechat",
   gchat: "googlechat",
-  vk: "max",         // Legacy VK association
-  "icq-new": "max",  // Historical name
+  vk: "max", // Legacy VK association
+  "icq-new": "max", // Historical name
 };
 ```
 
@@ -1442,11 +1410,11 @@ export const CHAT_CHANNEL_ALIASES: Record<string, ChatChannelId> = {
 
 ### Estimated Tests: 3
 
-| # | Test | Type |
-|---|------|------|
-| 1 | `CHAT_CHANNEL_ORDER` includes "max" at correct position | Unit |
-| 2 | `normalizeChatChannelId` resolves "max" and aliases ("vk", "icq-new") | Unit |
-| 3 | `getChatChannelMeta("max")` returns valid meta with id, label, blurb | Unit |
+| #   | Test                                                                  | Type |
+| --- | --------------------------------------------------------------------- | ---- |
+| 1   | `CHAT_CHANNEL_ORDER` includes "max" at correct position               | Unit |
+| 2   | `normalizeChatChannelId` resolves "max" and aliases ("vk", "icq-new") | Unit |
+| 3   | `getChatChannelMeta("max")` returns valid meta with id, label, blurb  | Unit |
 
 ---
 
@@ -1456,13 +1424,13 @@ export const CHAT_CHANNEL_ALIASES: Record<string, ChatChannelId> = {
 
 ### Files to Create
 
-| File | Path |
-|------|------|
-| Test suite | `extensions/max/src/__tests__/channel.test.ts` |
-| Test suite | `extensions/max/src/__tests__/gateway.test.ts` |
-| Test suite | `extensions/max/src/__tests__/config.test.ts` |
-| Test suite | `extensions/max/src/__tests__/status.test.ts` |
-| Mock server | `extensions/max/src/__tests__/helpers/mock-max-api.ts` |
+| File          | Path                                                      |
+| ------------- | --------------------------------------------------------- |
+| Test suite    | `extensions/max/src/__tests__/channel.test.ts`            |
+| Test suite    | `extensions/max/src/__tests__/gateway.test.ts`            |
+| Test suite    | `extensions/max/src/__tests__/config.test.ts`             |
+| Test suite    | `extensions/max/src/__tests__/status.test.ts`             |
+| Mock server   | `extensions/max/src/__tests__/helpers/mock-max-api.ts`    |
 | Test fixtures | `extensions/max/src/__tests__/fixtures/webhook-events.ts` |
 
 ### Mock MAX API Server
@@ -1668,29 +1636,29 @@ describe("MAX config and status", () => {
 
 ### Estimated Tests: 20
 
-| # | Test | Type |
-|---|------|------|
-| 1-5 | End-to-end message flow (5 tests) | Integration |
-| 6-10 | Webhook delivery (5 tests) | Integration |
-| 11-13 | Long polling (3 tests) | Integration |
-| 14-17 | Error handling (4 tests) | Integration |
+| #     | Test                                  | Type        |
+| ----- | ------------------------------------- | ----------- |
+| 1-5   | End-to-end message flow (5 tests)     | Integration |
+| 6-10  | Webhook delivery (5 tests)            | Integration |
+| 11-13 | Long polling (3 tests)                | Integration |
+| 14-17 | Error handling (4 tests)              | Integration |
 | 18-20 | Config & status integration (3 tests) | Integration |
 
 ---
 
 ## Summary
 
-| Milestone | Files | Tests | Depends On | Parallelizable With |
-|-----------|-------|-------|------------|-------------------|
-| M1: Extension Scaffold | 4 new | 2 | None | None |
-| M2: Channel Plugin Skeleton | 1 new | 5 | M1 | None |
-| M3: Outbound Messaging | 1 modify | 15 | M2 | M5, M6 |
-| M4: Gateway (Webhook + Polling) | 1 modify | 20 | M2, M3 | None |
-| M5: Config & Setup Wizard | 1 modify | 10 | M2 | M3, M6 |
-| M6: Status & Probing | 1 modify | 5 | M2 | M3, M5 |
-| M7: Platform Registration | 1 modify | 3 | M2 | M3, M5, M6 |
-| M8: Integration Tests | 6 new | 20 | M1-M7 | None |
-| **Total** | **5 new + 2 modified** | **80** | | |
+| Milestone                       | Files                  | Tests  | Depends On | Parallelizable With |
+| ------------------------------- | ---------------------- | ------ | ---------- | ------------------- |
+| M1: Extension Scaffold          | 4 new                  | 2      | None       | None                |
+| M2: Channel Plugin Skeleton     | 1 new                  | 5      | M1         | None                |
+| M3: Outbound Messaging          | 1 modify               | 15     | M2         | M5, M6              |
+| M4: Gateway (Webhook + Polling) | 1 modify               | 20     | M2, M3     | None                |
+| M5: Config & Setup Wizard       | 1 modify               | 10     | M2         | M3, M6              |
+| M6: Status & Probing            | 1 modify               | 5      | M2         | M3, M5              |
+| M7: Platform Registration       | 1 modify               | 3      | M2         | M3, M5, M6          |
+| M8: Integration Tests           | 6 new                  | 20     | M1-M7      | None                |
+| **Total**                       | **5 new + 2 modified** | **80** |            |                     |
 
 ### Critical Path
 
@@ -1705,48 +1673,48 @@ The critical path runs through M1 -> M2 -> M3 -> M4 -> M8, with M5, M6, and M7 a
 
 ### Files Created (New)
 
-| # | File | Milestone |
-|---|------|-----------|
-| 1 | `extensions/max/package.json` | M1 |
-| 2 | `extensions/max/openclaw.plugin.json` | M1 |
-| 3 | `extensions/max/index.ts` | M1 |
-| 4 | `extensions/max/src/runtime.ts` | M1 |
-| 5 | `extensions/max/src/channel.ts` | M2 |
+| #   | File                                  | Milestone |
+| --- | ------------------------------------- | --------- |
+| 1   | `extensions/max/package.json`         | M1        |
+| 2   | `extensions/max/openclaw.plugin.json` | M1        |
+| 3   | `extensions/max/index.ts`             | M1        |
+| 4   | `extensions/max/src/runtime.ts`       | M1        |
+| 5   | `extensions/max/src/channel.ts`       | M2        |
 
 ### Files Modified (Existing)
 
-| # | File | Milestone |
-|---|------|-----------|
-| 1 | `extensions/max/src/channel.ts` | M3, M4, M5, M6 |
-| 2 | `src/channels/registry.ts` | M7 |
+| #   | File                            | Milestone      |
+| --- | ------------------------------- | -------------- |
+| 1   | `extensions/max/src/channel.ts` | M3, M4, M5, M6 |
+| 2   | `src/channels/registry.ts`      | M7             |
 
 ### Test Files Created
 
-| # | File | Milestone |
-|---|------|-----------|
-| 1 | `extensions/max/src/__tests__/channel.test.ts` | M8 |
-| 2 | `extensions/max/src/__tests__/gateway.test.ts` | M8 |
-| 3 | `extensions/max/src/__tests__/config.test.ts` | M8 |
-| 4 | `extensions/max/src/__tests__/status.test.ts` | M8 |
-| 5 | `extensions/max/src/__tests__/helpers/mock-max-api.ts` | M8 |
-| 6 | `extensions/max/src/__tests__/fixtures/webhook-events.ts` | M8 |
+| #   | File                                                      | Milestone |
+| --- | --------------------------------------------------------- | --------- |
+| 1   | `extensions/max/src/__tests__/channel.test.ts`            | M8        |
+| 2   | `extensions/max/src/__tests__/gateway.test.ts`            | M8        |
+| 3   | `extensions/max/src/__tests__/config.test.ts`             | M8        |
+| 4   | `extensions/max/src/__tests__/status.test.ts`             | M8        |
+| 5   | `extensions/max/src/__tests__/helpers/mock-max-api.ts`    | M8        |
+| 6   | `extensions/max/src/__tests__/fixtures/webhook-events.ts` | M8        |
 
 ### Runtime API Surface Required
 
 The extension assumes the following runtime methods exist under `runtime.channel.max`:
 
-| Method | Used In | Purpose |
-|--------|---------|---------|
-| `sendMessageMax(chatId, text, opts)` | M3 (outbound) | Send text/media message |
-| `resolveMaxToken(cfg)` | M3 (pairing) | Get token from config |
-| `probeMax(token, timeoutMs, proxy?)` | M4, M6 (gateway, status) | GET /me health check |
-| `monitorMaxProvider(opts)` | M4 (gateway) | Start webhook/polling listener |
-| `messageActions` | M2 (actions) | Inline button action handling |
+| Method                               | Used In                  | Purpose                        |
+| ------------------------------------ | ------------------------ | ------------------------------ |
+| `sendMessageMax(chatId, text, opts)` | M3 (outbound)            | Send text/media message        |
+| `resolveMaxToken(cfg)`               | M3 (pairing)             | Get token from config          |
+| `probeMax(token, timeoutMs, proxy?)` | M4, M6 (gateway, status) | GET /me health check           |
+| `monitorMaxProvider(opts)`           | M4 (gateway)             | Start webhook/polling listener |
+| `messageActions`                     | M2 (actions)             | Inline button action handling  |
 
 And from shared runtime:
 
-| Method | Used In | Purpose |
-|--------|---------|---------|
+| Method                                                | Used In       | Purpose                 |
+| ----------------------------------------------------- | ------------- | ----------------------- |
 | `runtime.channel.text.chunkMarkdownText(text, limit)` | M3 (outbound) | Markdown-aware chunking |
-| `runtime.config.writeConfigFile(cfg)` | M4 (logout) | Persist config changes |
-| `runtime.logging.shouldLogVerbose()` | M4 (gateway) | Verbose logging check |
+| `runtime.config.writeConfigFile(cfg)`                 | M4 (logout)   | Persist config changes  |
+| `runtime.logging.shouldLogVerbose()`                  | M4 (gateway)  | Verbose logging check   |

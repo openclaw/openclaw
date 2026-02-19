@@ -1,6 +1,7 @@
 # ADR-003: Claude Code as Agentic Execution Engine
 
 ## Status: ACCEPTED
+
 ## Date: 2026-02-13 (v2 — updated with research findings)
 
 ## Bounded Context: Agent Execution
@@ -15,6 +16,7 @@ architecture — multi-step reasoning, tool calling, MCP servers, session persis
 ### Strategic Insight (from Research)
 
 Claude Code + proxy scored **8.0/10** vs OpenCode at **7.6/10** in the hybrid comparison:
+
 - Claude Code wins: MCP (10/10), agent capabilities (10/10), hooks (9/10), persistent context (10/10)
 - OpenCode wins: model flexibility (10/10), startup simplicity (9/10), open source
 - **Verdict**: Claude Code + proxy for agentic coding; OpenCode for model experimentation
@@ -22,6 +24,7 @@ Claude Code + proxy scored **8.0/10** vs OpenCode at **7.6/10** in the hybrid co
 ### Why Claude Code, Not Direct API
 
 Claude Code adds architectural value beyond the model:
+
 1. **Decomposes** complex tasks into sub-steps internally
 2. **Orchestrates** tools (file read/write, bash, search) autonomously
 3. **Maintains** session state across conversation turns
@@ -34,6 +37,7 @@ that exceed what the model alone would generate via direct API call.
 ### Cloud.ru AI Agents: Complementary, Not Competing
 
 From research on Cloud.ru Evolution AI Agents:
+
 - Cloud.ru supports up to 5 native agents per system with proprietary A2A protocol
 - External agent participation is via REST API (not native A2A)
 - OpenClaw uses Claude Code as its agent engine, calling Cloud.ru FM for model inference only
@@ -73,6 +77,7 @@ as the primary execution path for Cloud.ru FM conversations.
 ### Pre-Flight Health Check (CRIT-02 Fix)
 
 Before spawning Claude Code subprocess, verify proxy health:
+
 ```typescript
 // In runCliAgent() or agent-runner.ts routing layer
 import { ensureProxyHealthy } from "./cloudru-proxy-health.js";
@@ -94,6 +99,7 @@ on every call. When a session exists, `resumeArgs` are used with `--resume`.
 
 `cli-runner.ts:82-83` injects: "Tools are disabled in this session."
 This prevents Claude Code from using file operations in OpenClaw sessions because:
+
 - OpenClaw manages its own tool layer (skills, MCP, web search)
 - Enabling Claude Code tools would require workspace isolation per user
 - Security implications of arbitrary tool execution per user message
@@ -101,6 +107,7 @@ This prevents Claude Code from using file operations in OpenClaw sessions becaus
 ### Prompt Engineering for GLM (from Research)
 
 System prompts for Cloud.ru FM backend should:
+
 - Stay under 4000 characters (GLM attention drops beyond this)
 - Use dispatch tables instead of XML sections (GLM ignores XML)
 - Include anti-refusal instructions (RLHF residue from GLM-4.6)
@@ -109,18 +116,21 @@ System prompts for Cloud.ru FM backend should:
 ## Consequences
 
 ### Positive
+
 - Zero code changes to OpenClaw core — config-only integration
 - Full Claude Code reasoning pipeline enhances model output quality
 - Session persistence provides conversation continuity
 - Pre-flight health check prevents silent proxy failures
 
 ### Negative
+
 - Subprocess overhead: ~2-5s startup per cold call
 - `serialize: true` limits to 1 concurrent request globally
 - Tools disabled limits Claude Code to pure reasoning
 - Rate limit (15 req/s) constrains throughput
 
 ### Invariants (DDD)
+
 1. **Session Identity**: Every OpenClaw conversation maps to exactly one Claude Code session ID
 2. **Backend Resolution**: `resolveCliBackendConfig("claude-cli", cfg)` must always return valid config
 3. **Environment Isolation**: `clearEnv` removes leaked keys before applying user-configured env

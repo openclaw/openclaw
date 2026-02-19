@@ -44,11 +44,13 @@ docker compose -f docker-compose.cloudru-proxy.yml down -v
 ### Обновление Docker-образа прокси
 
 1. Обновите версию в `docker-compose.cloudru-proxy.yml`:
+
    ```yaml
-   image: legard/claude-code-proxy:v1.1.0   # новая версия
+   image: legard/claude-code-proxy:v1.1.0 # новая версия
    ```
 
 2. Обновите константу в `src/config/cloudru-fm.constants.ts`:
+
    ```typescript
    export const CLOUDRU_PROXY_IMAGE = "legard/claude-code-proxy:v1.1.0";
    ```
@@ -73,14 +75,16 @@ docker compose -f docker-compose.cloudru-proxy.yml restart
 ### Смена пресета моделей
 
 1. Запустите wizard заново:
+
    ```bash
    npx openclaw onboard
    ```
 
 2. Или отредактируйте `docker-compose.cloudru-proxy.yml` вручную:
+
    ```yaml
    environment:
-     BIG_MODEL: "Qwen/Qwen3-Coder-480B-A35B-Instruct"   # новая модель
+     BIG_MODEL: "Qwen/Qwen3-Coder-480B-A35B-Instruct" # новая модель
      MIDDLE_MODEL: "zai-org/GLM-4.7-FlashX"
      SMALL_MODEL: "zai-org/GLM-4.7-Flash"
    ```
@@ -104,6 +108,7 @@ await rollbackCloudruFmConfig("/path/to/openclaw.json");
 ### Ручной откат
 
 1. Удалите секцию `cloudru-fm` из `openclaw.json`:
+
    ```json
    {
      "models": {
@@ -116,6 +121,7 @@ await rollbackCloudruFmConfig("/path/to/openclaw.json");
    ```
 
 2. Удалите env override из CLI backend:
+
    ```json
    {
      "agents": {
@@ -139,14 +145,14 @@ await rollbackCloudruFmConfig("/path/to/openclaw.json");
 
 ### Метрики для отслеживания
 
-| Метрика | Как проверить | Норма |
-|---------|--------------|-------|
-| Proxy uptime | `docker ps` | Running |
-| Health check | `curl localhost:8082/health` | 200 OK |
-| Latency | Смотрите в логах OpenClaw | < 5s первый токен |
-| Error rate | `docker logs` grep для ошибок | < 5% |
-| Memory usage | `docker stats claude-code-proxy` | < 512 MB |
-| CPU usage | `docker stats claude-code-proxy` | < 100% |
+| Метрика      | Как проверить                    | Норма             |
+| ------------ | -------------------------------- | ----------------- |
+| Proxy uptime | `docker ps`                      | Running           |
+| Health check | `curl localhost:8082/health`     | 200 OK            |
+| Latency      | Смотрите в логах OpenClaw        | < 5s первый токен |
+| Error rate   | `docker logs` grep для ошибок    | < 5%              |
+| Memory usage | `docker stats claude-code-proxy` | < 512 MB          |
+| CPU usage    | `docker stats claude-code-proxy` | < 100%            |
 
 ### Мониторинг Docker
 
@@ -228,11 +234,11 @@ docker compose -f docker-compose.cloudru-proxy.yml up -d
 
 ### Что бэкапить
 
-| Файл | Важность | Содержимое |
-|------|----------|------------|
-| `openclaw.json` | Критическая | Конфигурация провайдера |
-| `.env` | Критическая | API-ключ |
-| `docker-compose.cloudru-proxy.yml` | Средняя | Docker конфигурация |
+| Файл                               | Важность    | Содержимое              |
+| ---------------------------------- | ----------- | ----------------------- |
+| `openclaw.json`                    | Критическая | Конфигурация провайдера |
+| `.env`                             | Критическая | API-ключ                |
+| `docker-compose.cloudru-proxy.yml` | Средняя     | Docker конфигурация     |
 
 ### Скрипт бэкапа
 
@@ -262,6 +268,7 @@ echo "Backup saved to $BACKUP_DIR"
 
 **Симптом:** Docker не может стартовать.
 **Решение:**
+
 ```bash
 # Найти, что занимает порт
 lsof -i :8082

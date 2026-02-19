@@ -29,11 +29,13 @@ Cloud.ru Evolution provides a comprehensive AI platform with Foundation Models, 
 ### What We Know
 
 **AI Agents MCP Support:**
+
 - Integration with MCP for flexible connection of AI agents to different data sources
 - Options to use custom MCP servers or ready-made MCP from the Marketplace
 - MCP mentioned as part of the Evolution AI Factory platform
 
 **Limitations:**
+
 - No specific documentation on Cloud.ru-managed MCP servers
 - Configuration details not publicly available
 - Protocol specifications not detailed in public docs
@@ -41,11 +43,13 @@ Cloud.ru Evolution provides a comprehensive AI platform with Foundation Models, 
 ### Recommendations
 
 For integrating with MCP:
+
 1. **Contact Cloud.ru Support** for detailed MCP server documentation
 2. **Use Standard MCP Clients** (like Claude Code) with custom MCP servers
 3. **Check the Marketplace** for ready-made MCP integrations mentioned in docs
 
 **References:**
+
 - [Создать AI-агента — Cloud.ru Documentation](https://cloud.ru/docs/ai-agents/ug/topics/guides__create-agent)
 - [Evolution AI Agents Overview](https://cloud.ru/products/evolution-ai-agents)
 
@@ -60,12 +64,14 @@ For integrating with MCP:
 ### Architecture
 
 **Multi-Agent Coordination:**
+
 - Combine up to **5 different AI agents** into a single system
 - Agent-to-Agent technology coordinates interaction for business tasks
 - Visual editor for creating and managing agent systems
 - Part of Evolution AI Factory platform
 
 **Agent Capabilities:**
+
 - Autonomous operation with information analysis
 - Learning from data and planning actions
 - Adapting to changing environmental conditions
@@ -74,6 +80,7 @@ For integrating with MCP:
 ### External Agent Participation
 
 **Current Limitations:**
+
 - No explicit documentation on external agent participation in Cloud.ru's A2A system
 - Focus appears to be on platform-native agents
 - API integration may allow external orchestration (see section 3)
@@ -81,17 +88,20 @@ For integrating with MCP:
 ### Standard A2A Protocol Context
 
 The industry-standard **Agent2Agent (A2A) Protocol** (Google/Linux Foundation) enables:
+
 - Communication between opaque agentic applications
 - Cross-platform agent collaboration
 - Enterprise-grade authentication
 - Real-time feedback and state updates
 
 **Cloud.ru's A2A vs Standard A2A:**
+
 - Cloud.ru's implementation appears to be platform-specific
 - No evidence of compatibility with standard A2A protocol
 - May be proprietary coordination mechanism
 
 **References:**
+
 - [AI-агенты: как они устроены — Cloud.ru Blog](https://cloud.ru/blog/kak-ustroyeny-i-chto-umeyut-ai-agenty)
 - [Evolution AI Agents Product Page](https://cloud.ru/products/evolution-ai-agents)
 - [A2A Protocol Official Site](https://a2a-protocol.org/latest/)
@@ -108,16 +118,19 @@ The industry-standard **Agent2Agent (A2A) Protocol** (Google/Linux Foundation) e
 ### Integration Methods
 
 **1. REST API Integration**
+
 - All Evolution AI Factory services accessible via REST API
 - Work through platform interface or embed via API
 - Flexible integration options for external systems
 
 **2. OpenAI-Compatible API**
+
 - Foundation Models accessible via OpenAI-compatible endpoints
 - Standard OpenAI SDK clients can be used with modified base_url
 - Enables integration with tools expecting OpenAI API format
 
 **3. Docker and Container Support**
+
 - ML Inference supports Docker RUN for custom models
 - Automatic container deployment and dynamic auto-scaling
 - Containerized environments for model execution
@@ -153,16 +166,19 @@ response = client.chat.completions.create(
 ### AI Agents as External Tools/Functions
 
 **Current Capabilities:**
+
 - REST API allows calling AI Agents from external systems
 - Integration with external services and automation
 - Function execution on request through API
 
 **MCP Integration Potential:**
+
 - AI Agents mention MCP support for data source connections
 - Could potentially be exposed as MCP tools
 - Requires access to MCP server configuration documentation
 
 **References:**
+
 - [Evolution AI Factory Platform](https://cloud.ru/products/evolution-ai-factory)
 - [Cloud.ru запускает Evolution AI Factory](https://cloud.ru/blog/stali-dostupny-instrumenty-cloud-ru-evolution-ai-factory)
 
@@ -234,18 +250,21 @@ response = client.chat.completions.create(
 ### Networking Considerations
 
 **1. Internal Network Communication**
+
 - VM and AI services in same cloud = low latency
 - Private network connectivity available via Magic Router
 - Direct Connect for external network integration
 - Load Balancer v2 for multi-zone traffic distribution
 
 **2. Network Topology**
+
 - Use **Magic Router** for resource connectivity
 - **Evolution Load Balancer v2** for traffic management
 - Multi-availability zone support
 - Private network recommended for AI service calls
 
 **3. Latency Optimization**
+
 - Same-region deployment: VM and AI services in same zone
 - Internal API calls over private network
 - Avoid external internet routing for AI calls
@@ -263,12 +282,14 @@ export CLOUD_RU_RAG_KEY="your-managed-rag-key"
 ```
 
 **2. Service Account Pattern**
+
 - Create service accounts for programmatic access
 - Use API keys with service scope restrictions
 - Store keys securely (cloud secrets manager or encrypted storage)
 - Never commit keys to version control
 
 **3. API Key Creation Process**
+
 1. Navigate to **Evolution → Foundation Models** (or relevant service)
 2. Go to **Учетные данные доступа** (Access Credentials)
 3. Click **Создать API-ключ** (Create API Key)
@@ -276,6 +297,7 @@ export CLOUD_RU_RAG_KEY="your-managed-rag-key"
 5. Save **Key Secret** (cannot retrieve after window closes)
 
 **4. Rate Limiting**
+
 - Foundation Models: **15 requests per second** per API key
 - Design bot to respect rate limits
 - Implement exponential backoff for retries
@@ -284,11 +306,13 @@ export CLOUD_RU_RAG_KEY="your-managed-rag-key"
 ### Cost Optimization
 
 **Free Tier Benefits:**
+
 - **Foundation Models**: Free access to 16 open-source models until October 31, 2025
 - **Object Storage**: 15 GB free storage
 - **Starting Grant**: Available for new users
 
 **Resource Efficiency:**
+
 - ML Inference uses shared GPU resources (cost-effective)
 - Managed RAG eliminates need for separate vector database
 - Auto-scaling for dynamic workloads
@@ -296,23 +320,27 @@ export CLOUD_RU_RAG_KEY="your-managed-rag-key"
 ### Security Considerations
 
 **1. API Key Security**
+
 - Store keys in environment variables or secrets manager
 - Use encrypted storage mechanisms (OS keychain, encrypted files)
 - Rotate keys periodically
 - Limit key scopes to required services only
 
 **2. Network Security**
+
 - Use private networks for internal communication
 - Implement firewall rules on VM
 - Restrict API access to VM IP addresses
 - Enable Cloud.ru security services (data protection)
 
 **3. Data Protection**
+
 - Cloud.ru offers commercial data protection services
 - Use Object Storage encryption for sensitive data
 - Implement application-level encryption for critical data
 
 **References:**
+
 - [Cloud.ru Evolution Platform](https://cloud.ru/evolution)
 - [Cloud.ru Documentation Portal](https://cloud.ru/docs)
 - [Cloud.ru put into commercial operation services](https://tadviser.com/index.php/Product:Cloud.ru_Evolution)
@@ -328,11 +356,13 @@ export CLOUD_RU_RAG_KEY="your-managed-rag-key"
 ### Technical Details
 
 **API Endpoint:**
+
 ```
 Base URL: https://foundation-models.api.cloud.ru/v1/
 ```
 
 **OpenAI Compatibility:**
+
 - Full OpenAI API specification compatibility
 - Standard endpoints: `/chat/completions`, `/completions`
 - Supports OpenAI SDK clients (Python, JavaScript, etc.)
@@ -341,6 +371,7 @@ Base URL: https://foundation-models.api.cloud.ru/v1/
 ### Available Models (20+ Models)
 
 **Popular Open Source LLMs (Free until Oct 31, 2025):**
+
 - OpenAI gpt-oss-120B
 - Qwen3-Coder-480B
 - DeepSeek R1 Distill Llama
@@ -350,10 +381,12 @@ Base URL: https://foundation-models.api.cloud.ru/v1/
 - T-Pro 2.0 (hybrid reasoning mode)
 
 **Russian Language Models:**
+
 - GigaChat/GigaChat-2-Max
 - T-lite (lightweight model)
 
 **Model Capabilities:**
+
 - **Reasoning**: Advanced logical reasoning
 - **Function Calling**: Tool/function execution
 - **Structured Output**: JSON and structured responses
@@ -429,18 +462,18 @@ print(response.choices[0].message.content)
 **JavaScript/TypeScript with OpenAI SDK:**
 
 ```javascript
-import OpenAI from 'openai';
+import OpenAI from "openai";
 
 const client = new OpenAI({
-  baseURL: 'https://foundation-models.api.cloud.ru/v1/',
+  baseURL: "https://foundation-models.api.cloud.ru/v1/",
   apiKey: process.env.OPENAI_API_KEY,
 });
 
 const response = await client.chat.completions.create({
-  model: 'GigaChat/GigaChat-2-Max',
+  model: "GigaChat/GigaChat-2-Max",
   messages: [
-    { role: 'system', content: 'You are a helpful assistant.' },
-    { role: 'user', content: 'Write a Python function for fibonacci' }
+    { role: "system", content: "You are a helpful assistant." },
+    { role: "user", content: "Write a Python function for fibonacci" },
   ],
   max_tokens: 500,
   temperature: 0.7,
@@ -494,6 +527,7 @@ print(response.choices[0].message.content)
 ### Supported API Parameters
 
 **Standard OpenAI Parameters:**
+
 - `model` - Model identifier (e.g., "GigaChat/GigaChat-2-Max")
 - `messages` - Array of message objects with role and content
 - `max_tokens` - Maximum tokens in response
@@ -504,6 +538,7 @@ print(response.choices[0].message.content)
 - `stream` - Enable streaming responses
 
 **Additional Features:**
+
 - **Function Calling**: Define tools/functions for model to call
 - **Structured Output**: Request JSON or specific formats
 - **System Prompts**: Set behavior via system role messages
@@ -511,11 +546,13 @@ print(response.choices[0].message.content)
 ### Rate Limits and Best Practices
 
 **Rate Limits:**
+
 - **15 requests per second** per API key
 - Implement rate limiting in application
 - Use exponential backoff for retry logic
 
 **Best Practices:**
+
 ```python
 import time
 from openai import OpenAI, RateLimitError
@@ -545,17 +582,21 @@ def make_request_with_retry(messages, max_retries=3):
 ### Model Selection Guide
 
 **For Code Generation:**
+
 - `Qwen3-Coder-480B` - Specialized for coding tasks
 - `Devstral` - Development-focused model
 
 **For General Tasks:**
+
 - `GigaChat/GigaChat-2-Max` - General purpose, Russian language
 - `gpt-oss-120B` - Open source alternative to GPT models
 
 **For Long Context:**
+
 - `GLM-4.5` - 131,000 token context window
 
 **For Reasoning:**
+
 - `T-Pro 2.0` - Hybrid reasoning mode
 - `DeepSeek R1 Distill Llama` - Reasoning capabilities
 
@@ -570,6 +611,7 @@ Cloud.ru provides VS Code extension/integration:
 ```
 
 **References:**
+
 - [Evolution Foundation Models Product Page](https://cloud.ru/products/evolution-foundation-models)
 - [Foundation Models Quick Start](https://cloud.ru/docs/foundation-models/ug/topics/quickstart)
 - [Foundation Models API Reference](https://cloud.ru/docs/foundation-models/ug/topics/api-ref)
@@ -585,17 +627,20 @@ Cloud.ru provides VS Code extension/integration:
 **Purpose:** Launch RAG systems based on user data without deploying infrastructure.
 
 **Key Features:**
+
 - Vector + full-text search capabilities
 - No need to select and deploy vector database
 - Integration with Foundation Models and ML Inference
 - S3-compatible Object Storage integration (15 GB free)
 
 **Use Cases:**
+
 - LLM-based customer support chatbots
 - Agent systems for generating topic-based reports
 - Semantic product catalog search
 
 **Architecture:**
+
 ```
 User Query → Managed RAG → Knowledge Base (S3) → Vector Search
                 ↓
@@ -603,11 +648,13 @@ User Query → Managed RAG → Knowledge Base (S3) → Vector Search
 ```
 
 **Integration:**
+
 - REST API for external systems
 - Pre-tested and optimized RAG pipeline
 - Support for HuggingFace models via ML Inference
 
 **References:**
+
 - [Managed RAG Overview](https://cloud.ru/docs/rag/ug/index)
 - [Creating Knowledge Base from MD Files](https://cloud.ru/docs/tutorials-evolution/list/topics/managed-rag__md-files)
 
@@ -616,6 +663,7 @@ User Query → Managed RAG → Knowledge Base (S3) → Vector Search
 **Purpose:** Deploy and run ML models on cloud GPU resources.
 
 **Key Features:**
+
 - **Shared GPU Resources**: Nvidia V100, A100, H100
 - **Multiple Models per GPU**: Run several models simultaneously
 - **Supported Frameworks**: vLLM, TGI, Ollama, Diffusers, Transformers
@@ -624,17 +672,20 @@ User Query → Managed RAG → Knowledge Base (S3) → Vector Search
 - **HuggingFace Integration**: Deploy any open-source model
 
 **Model Types:**
+
 - Large Language Models (LLM)
 - Transformer models
 - Diffusion models (image generation)
 - Custom ML/DL models
 
 **Integration Capabilities:**
+
 - REST API for external systems
 - OpenAI-compatible endpoints for some models
 - Docker-based deployment for flexibility
 
 **References:**
+
 - [Evolution ML Inference Product Page](https://cloud.ru/products/evolution-ml-inference)
 - [ML Inference Documentation](https://cloud.ru/docs/ml-inference/ug/index)
 - [Cloud.ru анонсировал ML Inference](https://cloud.ru/blog/anonsirovali-perviy-v-rossii-upravlyayemiy-servis-dlya-inferensa)
@@ -650,6 +701,7 @@ User Query → Managed RAG → Knowledge Base (S3) → Vector Search
 **Purpose:** Distributed training of ML models across multiple GPUs/nodes.
 
 **Features:**
+
 - API reference available
 - Scalable training infrastructure
 - Integration with other AI Factory services
@@ -737,12 +789,14 @@ User Query → Managed RAG → Knowledge Base (S3) → Vector Search
 ### Implementation Checklist
 
 **Phase 1: Infrastructure Setup**
+
 - [ ] Create Evolution Cloud VM
 - [ ] Configure private networking
 - [ ] Set up Magic Router for service connectivity
 - [ ] Configure security groups and firewall rules
 
 **Phase 2: AI Services Configuration**
+
 - [ ] Create Foundation Models API key
 - [ ] Create AI Agents API key (if using)
 - [ ] Create Managed RAG API key (if using)
@@ -750,6 +804,7 @@ User Query → Managed RAG → Knowledge Base (S3) → Vector Search
 - [ ] Configure knowledge bases in Managed RAG
 
 **Phase 3: Bot Development**
+
 - [ ] Install OpenClaw bot on VM
 - [ ] Configure environment variables for API keys
 - [ ] Implement Foundation Models client (OpenAI SDK)
@@ -759,6 +814,7 @@ User Query → Managed RAG → Knowledge Base (S3) → Vector Search
 - [ ] Implement rate limiting (15 req/sec)
 
 **Phase 4: Integration Testing**
+
 - [ ] Test Foundation Models API connectivity
 - [ ] Verify low latency on private network
 - [ ] Test RAG knowledge retrieval
@@ -767,6 +823,7 @@ User Query → Managed RAG → Knowledge Base (S3) → Vector Search
 - [ ] Monitor API costs and usage
 
 **Phase 5: Production Deployment**
+
 - [ ] Enable auto-scaling (if needed)
 - [ ] Set up monitoring and logging
 - [ ] Configure backup and disaster recovery
@@ -780,42 +837,50 @@ User Query → Managed RAG → Knowledge Base (S3) → Vector Search
 ### Identified Limitations
 
 **1. MCP Server Documentation**
+
 - ❌ No detailed technical documentation for Cloud.ru-managed MCP servers
 - ❌ Configuration and protocol specifications not publicly available
 - ⚠️ MCP support mentioned but details require contacting support
 
 **2. A2A Protocol Compatibility**
+
 - ❌ Cloud.ru's A2A appears to be proprietary, not standard Google A2A
 - ❌ No evidence of compatibility with Linux Foundation A2A protocol
 - ❌ External agent participation in Cloud.ru A2A system not documented
 
 **3. API Documentation Gaps**
+
 - ⚠️ Some services lack detailed API reference documentation
 - ⚠️ Example code primarily in Russian language
 - ⚠️ Model ID naming conventions not fully standardized
 
 **4. Rate Limits**
+
 - ⚠️ Foundation Models limited to 15 requests/second
 - ⚠️ May require multiple API keys for high-throughput applications
 
 ### Strengths
 
 **1. OpenAI Compatibility**
+
 - ✅ Full OpenAI API compatibility for Foundation Models
 - ✅ Easy integration with existing OpenAI SDK clients
 - ✅ Drop-in replacement for many use cases
 
 **2. Comprehensive AI Platform**
+
 - ✅ Complete AI Factory with all major services
 - ✅ Foundation Models, AI Agents, RAG, ML Inference
 - ✅ Integrated platform reduces complexity
 
 **3. Free Tier and Pricing**
+
 - ✅ Free access to 16 open-source models (until Oct 31, 2025)
 - ✅ 15 GB free S3-compatible storage
 - ✅ Shared GPU resources for cost efficiency
 
 **4. Russian Language Support**
+
 - ✅ Native Russian language models (GigaChat)
 - ✅ Russian documentation and interface
 - ✅ Localized support
@@ -826,16 +891,16 @@ User Query → Managed RAG → Knowledge Base (S3) → Vector Search
 
 ### Cloud.ru vs AWS/Azure/Google Cloud
 
-| Feature | Cloud.ru | AWS | Azure | Google Cloud |
-|---------|----------|-----|-------|--------------|
-| OpenAI-Compatible API | ✅ Yes | ⚠️ Via Bedrock | ⚠️ Via Azure OpenAI | ⚠️ Via Vertex AI |
-| Native Russian LLMs | ✅ GigaChat, T-Pro | ❌ No | ❌ No | ❌ No |
-| Free LLM Access | ✅ 16 models (2025) | ❌ Paid | ❌ Paid | ❌ Paid |
-| MCP Support | ⚠️ Mentioned, not detailed | ✅ Well documented | ✅ Well documented | ✅ Well documented |
-| A2A Protocol | ⚠️ Proprietary | ❌ No native | ❌ No native | ✅ Yes (Google) |
-| Managed RAG | ✅ Yes | ✅ Yes (Knowledge Bases) | ✅ Yes (AI Search) | ✅ Yes (RAG Engine) |
-| Multi-Agent Systems | ✅ AI Agents (5 max) | ⚠️ Via Bedrock Agents | ⚠️ Via AI Foundry | ⚠️ Via Vertex AI |
-| Russian Documentation | ✅ Native | ❌ Limited | ❌ Limited | ❌ Limited |
+| Feature               | Cloud.ru                   | AWS                      | Azure               | Google Cloud        |
+| --------------------- | -------------------------- | ------------------------ | ------------------- | ------------------- |
+| OpenAI-Compatible API | ✅ Yes                     | ⚠️ Via Bedrock           | ⚠️ Via Azure OpenAI | ⚠️ Via Vertex AI    |
+| Native Russian LLMs   | ✅ GigaChat, T-Pro         | ❌ No                    | ❌ No               | ❌ No               |
+| Free LLM Access       | ✅ 16 models (2025)        | ❌ Paid                  | ❌ Paid             | ❌ Paid             |
+| MCP Support           | ⚠️ Mentioned, not detailed | ✅ Well documented       | ✅ Well documented  | ✅ Well documented  |
+| A2A Protocol          | ⚠️ Proprietary             | ❌ No native             | ❌ No native        | ✅ Yes (Google)     |
+| Managed RAG           | ✅ Yes                     | ✅ Yes (Knowledge Bases) | ✅ Yes (AI Search)  | ✅ Yes (RAG Engine) |
+| Multi-Agent Systems   | ✅ AI Agents (5 max)       | ⚠️ Via Bedrock Agents    | ⚠️ Via AI Foundry   | ⚠️ Via Vertex AI    |
+| Russian Documentation | ✅ Native                  | ❌ Limited               | ❌ Limited          | ❌ Limited          |
 
 ### Cloud.ru Strengths for Russian Market
 
@@ -852,18 +917,21 @@ User Query → Managed RAG → Knowledge Base (S3) → Vector Search
 ### Recommended Approach
 
 **Option 1: Foundation Models Only (Simplest)**
+
 ```
 OpenClaw Bot (VM) → Cloud.ru Foundation Models API
                     (OpenAI-compatible)
 ```
 
 **Pros:**
+
 - Simplest integration (OpenAI SDK)
 - Well-documented API
 - Free tier available
 - Low latency on private network
 
 **Cons:**
+
 - No multi-agent orchestration
 - Manual RAG implementation if needed
 
@@ -872,6 +940,7 @@ OpenClaw Bot (VM) → Cloud.ru Foundation Models API
 ---
 
 **Option 2: Foundation Models + Managed RAG (Recommended)**
+
 ```
 OpenClaw Bot (VM) → Foundation Models (LLM reasoning)
                  ↘
@@ -879,12 +948,14 @@ OpenClaw Bot (VM) → Foundation Models (LLM reasoning)
 ```
 
 **Pros:**
+
 - No need to deploy vector database
 - Pre-optimized RAG pipeline
 - Knowledge base management included
 - S3 storage integration
 
 **Cons:**
+
 - Two API integrations needed
 - RAG API documentation may be limited
 
@@ -893,6 +964,7 @@ OpenClaw Bot (VM) → Foundation Models (LLM reasoning)
 ---
 
 **Option 3: Full AI Factory Integration (Most Advanced)**
+
 ```
 OpenClaw Bot (VM) → AI Agents (orchestration)
                     └→ Foundation Models
@@ -901,12 +973,14 @@ OpenClaw Bot (VM) → AI Agents (orchestration)
 ```
 
 **Pros:**
+
 - Multi-agent coordination (up to 5 agents)
 - Full platform capabilities
 - Visual editor for agent design
 - MCP integration potential
 
 **Cons:**
+
 - More complex architecture
 - Limited public documentation for AI Agents API
 - May require Cloud.ru support assistance
@@ -916,17 +990,20 @@ OpenClaw Bot (VM) → AI Agents (orchestration)
 ---
 
 **Option 4: Claude Code CLI + Cloud.ru Backend**
+
 ```
 Claude Code CLI (local/VM) → Cloud.ru Foundation Models
                               (as LLM backend via OpenAI API)
 ```
 
 **Pros:**
+
 - Use Claude Code's swarm orchestration
 - Cloud.ru as cost-effective LLM provider
 - Best of both worlds
 
 **Cons:**
+
 - Requires Claude Code CLI support for custom backends
 - May need configuration tweaks
 
@@ -937,24 +1014,28 @@ Claude Code CLI (local/VM) → Cloud.ru Foundation Models
 ### Implementation Timeline
 
 **Week 1-2: Foundation & Testing**
+
 - Set up Evolution VM
 - Configure Foundation Models API
 - Test connectivity and latency
 - Implement basic OpenAI client
 
 **Week 3-4: RAG Integration (if needed)**
+
 - Set up Managed RAG
 - Create knowledge base
 - Integrate RAG API calls
 - Test retrieval quality
 
 **Week 5-6: Advanced Features**
+
 - Explore AI Agents (if multi-agent needed)
 - Contact Cloud.ru support for MCP details
 - Implement error handling and monitoring
 - Load testing and optimization
 
 **Week 7-8: Production Deployment**
+
 - Security hardening
 - Monitoring setup
 - Documentation
@@ -987,24 +1068,28 @@ Claude Code CLI (local/VM) → Cloud.ru Foundation Models
 ### Technical Questions for Cloud.ru
 
 **MCP Integration:**
+
 1. Do you provide managed MCP servers? If yes, how to configure?
 2. Can custom MCP servers be deployed on Evolution Cloud?
 3. What MCP tools are available in the Marketplace?
 4. How do AI Agents integrate with MCP data sources?
 
 **AI Agents & A2A:**
+
 1. Is the A2A protocol compatible with Google's standard A2A?
 2. Can external agents participate in Cloud.ru A2A coordination?
 3. What APIs are available for programmatic AI Agent creation?
 4. Can AI Agents be called as functions from external systems?
 
 **Architecture & Networking:**
+
 1. What is the recommended network topology for VM + AI services?
 2. Is there private network connectivity between VM and AI services?
 3. What are the exact latency SLAs for in-cloud API calls?
 4. Are there dedicated API endpoints for high-throughput applications?
 
 **Authentication & Security:**
+
 1. Are service accounts with IAM roles available?
 2. Can API keys be scoped to specific IP addresses?
 3. What security certifications does Evolution Cloud have?
@@ -1019,6 +1104,7 @@ Claude Code CLI (local/VM) → Cloud.ru Foundation Models
 Cloud.ru Evolution provides a **comprehensive AI platform** with strong OpenAI compatibility, making it suitable for OpenClaw bot deployment. The **Foundation Models service** is production-ready with clear API documentation and free tier access.
 
 **Key Strengths:**
+
 - ✅ OpenAI-compatible API for easy integration
 - ✅ 20+ models including DeepSeek, Qwen, GigaChat
 - ✅ Free tier for development and testing
@@ -1027,6 +1113,7 @@ Cloud.ru Evolution provides a **comprehensive AI platform** with strong OpenAI c
 - ✅ VM + AI services in same cloud (low latency)
 
 **Areas Requiring Clarification:**
+
 - ⚠️ MCP server documentation and configuration
 - ⚠️ A2A protocol compatibility and external agent support
 - ⚠️ AI Agents API reference for programmatic access

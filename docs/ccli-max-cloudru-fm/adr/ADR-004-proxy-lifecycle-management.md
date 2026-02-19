@@ -1,6 +1,7 @@
 # ADR-004: Proxy Lifecycle Management
 
 ## Status: ACCEPTED
+
 ## Date: 2026-02-13 (v2 — updated with security hardening from research)
 
 ## Bounded Context: Infrastructure (Proxy Management)
@@ -14,6 +15,7 @@ The wizard handles initial deployment, and OpenClaw verifies proxy health before
 ### Research Findings
 
 From RESEARCH.md and community experience:
+
 - Proxy is the SINGLE point of failure — if proxy dies, ALL model tiers are unreachable
 - `curl` in Docker healthcheck conflicts with `read_only: true` (CRIT-03)
 - Port binding MUST include both `127.0.0.1` AND `[::1]` to prevent network exposure
@@ -23,6 +25,7 @@ From RESEARCH.md and community experience:
 ### DDD Aggregate: ProxyLifecycle
 
 Manages the proxy container state machine:
+
 ```
 UNDEPLOYED -> DEPLOYING -> RUNNING -> HEALTHY
                                      |
@@ -43,22 +46,22 @@ workspace directory. This file is NOT committed to git (added to .gitignore).
 ```yaml
 services:
   claude-code-proxy:
-    image: legard/claude-code-proxy:v1.0.0  # Pinned, not :latest
+    image: legard/claude-code-proxy:v1.0.0 # Pinned, not :latest
     container_name: claude-code-proxy
     ports:
-      - "127.0.0.1:8082:8082"    # IPv4 localhost ONLY
-      - "[::1]:8082:8082"          # IPv6 localhost ONLY
+      - "127.0.0.1:8082:8082" # IPv4 localhost ONLY
+      - "[::1]:8082:8082" # IPv6 localhost ONLY
     env_file:
       - .env
     environment:
       - HOST=0.0.0.0
       - PORT=8082
       - LOG_LEVEL=INFO
-      - MAX_TOKENS_LIMIT=16384     # Override default 4096
-      - REQUEST_TIMEOUT=300         # 5 min for long generations
+      - MAX_TOKENS_LIMIT=16384 # Override default 4096
+      - REQUEST_TIMEOUT=300 # 5 min for long generations
     restart: unless-stopped
-    read_only: true                 # No filesystem writes
-    user: "65534:65534"             # nobody:nogroup
+    read_only: true # No filesystem writes
+    user: "65534:65534" # nobody:nogroup
     cap_drop:
       - ALL
     deploy:
@@ -75,6 +78,7 @@ services:
 ```
 
 **Key fixes**:
+
 - `wget -q --spider` instead of `curl` — works with `read_only: true`
 - Image pinned to `v1.0.0` — no surprise updates
 - `cap_drop: ALL` + `user: nobody` + `read_only` — minimal attack surface
@@ -84,6 +88,7 @@ services:
 ### 3. .env File Management (CRIT-05 Fix)
 
 `.env` file must be managed with append semantics:
+
 ```typescript
 // CORRECT: read-merge-write (not overwrite)
 async function writeCloudruEnvFile(dir: string, apiKey: string, preset: CloudruModelPreset) {
@@ -107,6 +112,7 @@ async function writeCloudruEnvFile(dir: string, apiKey: string, preset: CloudruM
 Two levels of health checking:
 
 **Wizard-time** (during onboarding):
+
 ```
 If Docker running -> check /health -> show status
 If Docker not running -> offer to start with `docker compose up -d`
@@ -114,6 +120,7 @@ If Docker not installed -> show manual setup instructions
 ```
 
 **Runtime** (before each request):
+
 ```typescript
 // cloudru-proxy-health.ts — cached 30s on success, not cached on failure
 // Throws plain Error (not FailoverError) — all tiers share same proxy
@@ -123,6 +130,7 @@ await ensureProxyHealthy("http://localhost:8082");
 ### 5. Gitignore Entries
 
 Wizard ensures these entries exist in `.gitignore`:
+
 ```
 docker-compose.cloudru-proxy.yml
 .env
@@ -131,6 +139,7 @@ docker-compose.cloudru-proxy.yml
 ## Consequences
 
 ### Positive
+
 - Automated proxy deployment from wizard
 - Security-hardened container (read-only, non-root, capped resources)
 - Health monitoring prevents silent failures
@@ -138,6 +147,7 @@ docker-compose.cloudru-proxy.yml
 - .env append preserves existing environment
 
 ### Negative
+
 - Requires Docker installed on host
 - docker-compose file is workspace-specific
 - Health check adds latency to first request after cache expiry (30s TTL)

@@ -18,15 +18,16 @@ Cloud.ru Foundation Models added as a first-class provider in OpenClaw.
 Users can select Cloud.ru FM during `openclaw onboard` wizard and choose
 between three model presets:
 
-| Preset | Big Model | Middle Model | Small Model | Free? |
-|--------|-----------|-------------|-------------|-------|
-| GLM-4.7 (Full) | GLM-4.7 | GLM-4.7-FlashX | GLM-4.7-Flash | No |
-| GLM-4.7-Flash | GLM-4.7-Flash | GLM-4.7-Flash | GLM-4.7-Flash | Yes |
-| Qwen3-Coder-480B | Qwen3-Coder-480B | GLM-4.7-FlashX | GLM-4.7-Flash | No |
+| Preset           | Big Model        | Middle Model   | Small Model   | Free? |
+| ---------------- | ---------------- | -------------- | ------------- | ----- |
+| GLM-4.7 (Full)   | GLM-4.7          | GLM-4.7-FlashX | GLM-4.7-Flash | No    |
+| GLM-4.7-Flash    | GLM-4.7-Flash    | GLM-4.7-Flash  | GLM-4.7-Flash | Yes   |
+| Qwen3-Coder-480B | Qwen3-Coder-480B | GLM-4.7-FlashX | GLM-4.7-Flash | No    |
 
 ## Changed files (on `cloudru-fm` branch)
 
 ### New files
+
 - `src/config/cloudru-fm.constants.ts` — models, presets, proxy config (SoT)
 - `src/commands/auth-choice.apply.cloudru-fm.ts` — wizard handler
 - `src/commands/onboard-cloudru-fm.ts` — .env writer, gitignore, preset resolver
@@ -35,6 +36,7 @@ between three model presets:
 - `src/agents/cloudru-proxy-health.ts` — health check with 30s cache
 
 ### Modified files
+
 - `src/commands/onboard-types.ts` — 3 new AuthChoice values
 - `src/commands/auth-choice-options.ts` — cloudru-fm group
 - `src/commands/auth-choice.apply.ts` — handler registration

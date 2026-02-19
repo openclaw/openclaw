@@ -58,6 +58,7 @@ This creates `extensions/my-feature/` with all boilerplate files.
 Every extension needs 3 files:
 
 #### `package.json`
+
 ```json
 {
   "name": "@openclaw-extended/my-feature",
@@ -71,6 +72,7 @@ Every extension needs 3 files:
 ```
 
 #### `openclaw.plugin.json`
+
 ```json
 {
   "id": "my-feature",
@@ -79,6 +81,7 @@ Every extension needs 3 files:
 ```
 
 #### `index.ts`
+
 ```typescript
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
@@ -99,12 +102,12 @@ export default {
 
 The `OpenClawPluginApi` exposes these registration methods:
 
-| Method | Purpose | Example |
-|--------|---------|---------|
-| `api.registerTool()` | AI-usable tools | Custom search, API calls |
-| `api.registerChannel()` | Messaging channels | Custom chat platform |
-| `api.registerCli()` | CLI subcommands | `openclaw my-command` |
-| `api.runtime` | Access runtime services | Memory, config, tools |
+| Method                  | Purpose                 | Example                  |
+| ----------------------- | ----------------------- | ------------------------ |
+| `api.registerTool()`    | AI-usable tools         | Custom search, API calls |
+| `api.registerChannel()` | Messaging channels      | Custom chat platform     |
+| `api.registerCli()`     | CLI subcommands         | `openclaw my-command`    |
+| `api.runtime`           | Access runtime services | Memory, config, tools    |
 
 ### Examples from upstream
 
@@ -197,9 +200,9 @@ extensions/
 
 ## Troubleshooting
 
-| Issue | Fix |
-|-------|-----|
-| `Cannot find module 'openclaw/plugin-sdk'` | Run `pnpm upstream:build` then `pnpm install` |
-| Submodule empty after clone | Run `git submodule update --init --recursive` |
-| Extension not loading | Check `openclaw.extensions` in `package.json` points to `./index.ts` |
-| Type errors after upstream update | Check CHANGELOG, update imports if API changed |
+| Issue                                      | Fix                                                                  |
+| ------------------------------------------ | -------------------------------------------------------------------- |
+| `Cannot find module 'openclaw/plugin-sdk'` | Run `pnpm upstream:build` then `pnpm install`                        |
+| Submodule empty after clone                | Run `git submodule update --init --recursive`                        |
+| Extension not loading                      | Check `openclaw.extensions` in `package.json` points to `./index.ts` |
+| Type errors after upstream update          | Check CHANGELOG, update imports if API changed                       |

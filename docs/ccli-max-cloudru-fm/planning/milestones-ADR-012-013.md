@@ -375,7 +375,7 @@
   - Q-012-Functionality: "Scoped containers provide tenant isolation."
   - Q-012-Reliability: "Module disposal executes in reverse dependency order."
   - Q-012-Security: "No shared mutable state between modules."
-  - Q-012-Maintainability: "Each @openclaw/* package has zero required internal dependencies."
+  - Q-012-Maintainability: "Each @openclaw/\* package has zero required internal dependencies."
   - Q-012-Maintainability: "Package structure convention followed by all 8 modules."
   - TC-CROSS-007: Register 3 IAgentProvider implementations as plugins; orchestrator routes correctly.
   - TC-CROSS-009: Circuit breaker reset on provider re-registration.
@@ -491,25 +491,31 @@ Milestone 1: Shared Types (@openclaw/types)
 The following milestones can execute in parallel once their dependencies are met:
 
 ### Wave 1 (no dependencies)
+
 - **Milestone 1**: Shared Types -- standalone, blocks everything else
 
 ### Wave 2 (after Milestone 1)
+
 - **Milestone 2**: DI Container -- core infrastructure, independent of agent-fabric
 - **Milestone 4**: Agent Provider Interface -- domain types, independent of core
 
 ### Wave 3 (after Wave 2)
+
 - **Milestone 3**: Registry + Event Bus (after M2)
 - **Milestone 5**: Circuit Breaker + Orchestrator (after M4)
 - **Milestone 6**: Cloud.ru Providers (after M4)
 
 ### Wave 4 (after Wave 3)
+
 - **Milestone 7**: MCP Federation + RAG (after M6)
 - **Milestone 9**: Streaming Adapter Bridge (after M4, can start once `AgentEvent` types exist)
 
 ### Wave 5 (after Wave 4)
+
 - **Milestone 8**: Composition Root & Assembly (after M3, M5, M6, M7)
 
 ### Wave 6 (after Wave 5)
+
 - **Milestone 10**: CI/CD & Quality Gates (after all milestones)
 
 **Maximum parallelism**: 3 concurrent milestones in Waves 2 and 3.
@@ -520,18 +526,18 @@ The following milestones can execute in parallel once their dependencies are met
 
 ## Risk Register
 
-| Risk ID | Description | Probability | Impact | Affected Milestones | Mitigation |
-|---------|-------------|:-----------:|:------:|:-------------------:|------------|
-| R-IMPL-01 | Typed `InjectionToken<T>` adds complexity to DI container implementation beyond the simpler string-token approach | Medium | Medium | M2 | Start with string tokens internally, wrap in `InjectionToken<T>` facade. If TypeScript type inference proves insufficient, fall back to string tokens with a `TokenMap` type for compile-time checks. |
-| R-IMPL-02 | Plugin lifecycle (load/init/start/stop/unload) is over-engineered for initial delivery; most plugins need only init and dispose | Medium | Low | M3 | Implement full lifecycle but make all hooks optional. Start with `onInit` and `onDispose` as the minimum viable lifecycle. Add other hooks as needed. |
-| R-IMPL-03 | Cloud.ru AI Agents API documentation gaps (MCP server configuration, Agent System completions) delay provider implementation | High | Medium | M6, M7 | Build against mock API first. Use Pact contract tests to pin expected API behavior. Iterative discovery when real API access is available. |
-| R-IMPL-04 | Circular dependency between `@openclaw/agent-fabric` and `@openclaw/stream-pipeline` (streaming adapter needs both) | Medium | High | M9 | The streaming adapter lives in `agent-fabric` and depends on stream-pipeline types via peer dependency. No circular dep -- agent-fabric depends on stream-pipeline (peer), not vice versa. Validated by CI `madge` check. |
-| R-IMPL-05 | Performance thresholds (DI resolution < 1ms, event dispatch < 0.5ms) may not be achievable with full topological sort and health timeout wrapping | Low | Medium | M2, M3 | Topological sort runs once at `build()` time, not on every `get()`. Singletons are cached after first resolution. Benchmarks validate early in M2. |
-| R-IMPL-06 | Post-build plugin registration (for dynamic agent addition via `/agent create`) conflicts with container freeze semantics | Medium | High | M3, M8 | Implement a `DynamicPluginRegistry` layer on top of the frozen container. Dynamic plugins get a child scope, not root container mutation. The frozen container is for startup-time modules; the dynamic registry is for runtime extensions. |
-| R-IMPL-07 | Shared types package (`@openclaw/types`) becomes a "god package" accumulating unrelated types | Medium | Low | M1 | Keep types narrowly scoped to cross-module contracts only. Module-internal types stay in their own package's `types.ts`. Review M1 scope at each milestone. |
-| R-IMPL-08 | `AgentFabric` public API duplicates `IAgentProvider` methods, confusing consumers | Medium | Medium | M8 | Document clearly: `AgentFabric` = management + execution API for consumers. `IAgentProvider` = SPI for plugin developers adding new backends. Different audiences, different interfaces. |
-| R-IMPL-09 | MCP federation deterministic collision resolution (alphabetical) surprises users who expect registration-order semantics | Low | Low | M7 | Document the resolution strategy in JSDoc and README. Provide `listAllTools()` with server attribution so users can inspect which server owns the unnamespaced name. |
-| R-IMPL-10 | Test infrastructure setup (Stryker, Pact, fast-check) delays Milestone 10 significantly | Medium | Low | M10 | Start test infrastructure in M1 (basic Jest setup). Add Stryker and Pact incrementally. Pact tests can run against the mock APIs already built in M6-M7. |
+| Risk ID   | Description                                                                                                                                       | Probability | Impact | Affected Milestones | Mitigation                                                                                                                                                                                                                                  |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | :---------: | :----: | :-----------------: | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| R-IMPL-01 | Typed `InjectionToken<T>` adds complexity to DI container implementation beyond the simpler string-token approach                                 |   Medium    | Medium |         M2          | Start with string tokens internally, wrap in `InjectionToken<T>` facade. If TypeScript type inference proves insufficient, fall back to string tokens with a `TokenMap` type for compile-time checks.                                       |
+| R-IMPL-02 | Plugin lifecycle (load/init/start/stop/unload) is over-engineered for initial delivery; most plugins need only init and dispose                   |   Medium    |  Low   |         M3          | Implement full lifecycle but make all hooks optional. Start with `onInit` and `onDispose` as the minimum viable lifecycle. Add other hooks as needed.                                                                                       |
+| R-IMPL-03 | Cloud.ru AI Agents API documentation gaps (MCP server configuration, Agent System completions) delay provider implementation                      |    High     | Medium |       M6, M7        | Build against mock API first. Use Pact contract tests to pin expected API behavior. Iterative discovery when real API access is available.                                                                                                  |
+| R-IMPL-04 | Circular dependency between `@openclaw/agent-fabric` and `@openclaw/stream-pipeline` (streaming adapter needs both)                               |   Medium    |  High  |         M9          | The streaming adapter lives in `agent-fabric` and depends on stream-pipeline types via peer dependency. No circular dep -- agent-fabric depends on stream-pipeline (peer), not vice versa. Validated by CI `madge` check.                   |
+| R-IMPL-05 | Performance thresholds (DI resolution < 1ms, event dispatch < 0.5ms) may not be achievable with full topological sort and health timeout wrapping |     Low     | Medium |       M2, M3        | Topological sort runs once at `build()` time, not on every `get()`. Singletons are cached after first resolution. Benchmarks validate early in M2.                                                                                          |
+| R-IMPL-06 | Post-build plugin registration (for dynamic agent addition via `/agent create`) conflicts with container freeze semantics                         |   Medium    |  High  |       M3, M8        | Implement a `DynamicPluginRegistry` layer on top of the frozen container. Dynamic plugins get a child scope, not root container mutation. The frozen container is for startup-time modules; the dynamic registry is for runtime extensions. |
+| R-IMPL-07 | Shared types package (`@openclaw/types`) becomes a "god package" accumulating unrelated types                                                     |   Medium    |  Low   |         M1          | Keep types narrowly scoped to cross-module contracts only. Module-internal types stay in their own package's `types.ts`. Review M1 scope at each milestone.                                                                                 |
+| R-IMPL-08 | `AgentFabric` public API duplicates `IAgentProvider` methods, confusing consumers                                                                 |   Medium    | Medium |         M8          | Document clearly: `AgentFabric` = management + execution API for consumers. `IAgentProvider` = SPI for plugin developers adding new backends. Different audiences, different interfaces.                                                    |
+| R-IMPL-09 | MCP federation deterministic collision resolution (alphabetical) surprises users who expect registration-order semantics                          |     Low     |  Low   |         M7          | Document the resolution strategy in JSDoc and README. Provide `listAllTools()` with server attribution so users can inspect which server owns the unnamespaced name.                                                                        |
+| R-IMPL-10 | Test infrastructure setup (Stryker, Pact, fast-check) delays Milestone 10 significantly                                                           |   Medium    |  Low   |         M10         | Start test infrastructure in M1 (basic Jest setup). Add Stryker and Pact incrementally. Pact tests can run against the mock APIs already built in M6-M7.                                                                                    |
 
 ---
 

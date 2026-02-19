@@ -18,13 +18,13 @@
 
 ### 1. Testability Assessment: Score 70/100
 
-| Criterion | Score | Rationale |
-|-----------|:-----:|-----------|
-| Interface mockability | 19/20 | All eight module interfaces (`MessengerAdapter`, `LLMRouter`, `ToolSandbox`, `TenantManager`, `WorkerPool`, `StreamPipeline`, `TrainingEngine`, `AgentFabric`) are cleanly defined with typed methods. `PluginRegistry` and `DependencyContainer` are abstract interfaces. Excellent mockability. |
-| Compile-time invariant enforcement | 9/20 | `ServiceLifetime` is a string enum (good). `Plugin<T>` is generic with typed factory. However, the `DependencyContainer.get<T>(token: string)` uses runtime string tokens -- type safety depends entirely on the caller passing the correct generic parameter. No compile-time guarantee that `get<LLMRouter>("LLMRouter")` returns an `LLMRouter`. |
-| Acceptance criteria clarity | 11/20 | Module catalog and dependency graph are well-defined. However, no BDD scenarios, no performance requirements for container resolution, and no formal criteria for plugin lifecycle (what does "failed registration" look like to the caller?). |
-| Error path coverage | 13/20 | Risks table identifies 6 risks with mitigations. However, specific error scenarios are missing: what happens when `Plugin.factory()` throws? What if `healthCheck()` times out? What if `dispose()` throws during shutdown? |
-| Domain event testability | 18/20 | Twelve domain event types are defined in the `EventBus`. Clear `type` discriminants enable exhaustive testing via event spy patterns. |
+| Criterion                          | Score | Rationale                                                                                                                                                                                                                                                                                                                                           |
+| ---------------------------------- | :---: | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Interface mockability              | 19/20 | All eight module interfaces (`MessengerAdapter`, `LLMRouter`, `ToolSandbox`, `TenantManager`, `WorkerPool`, `StreamPipeline`, `TrainingEngine`, `AgentFabric`) are cleanly defined with typed methods. `PluginRegistry` and `DependencyContainer` are abstract interfaces. Excellent mockability.                                                   |
+| Compile-time invariant enforcement | 9/20  | `ServiceLifetime` is a string enum (good). `Plugin<T>` is generic with typed factory. However, the `DependencyContainer.get<T>(token: string)` uses runtime string tokens -- type safety depends entirely on the caller passing the correct generic parameter. No compile-time guarantee that `get<LLMRouter>("LLMRouter")` returns an `LLMRouter`. |
+| Acceptance criteria clarity        | 11/20 | Module catalog and dependency graph are well-defined. However, no BDD scenarios, no performance requirements for container resolution, and no formal criteria for plugin lifecycle (what does "failed registration" look like to the caller?).                                                                                                      |
+| Error path coverage                | 13/20 | Risks table identifies 6 risks with mitigations. However, specific error scenarios are missing: what happens when `Plugin.factory()` throws? What if `healthCheck()` times out? What if `dispose()` throws during shutdown?                                                                                                                         |
+| Domain event testability           | 18/20 | Twelve domain event types are defined in the `EventBus`. Clear `type` discriminants enable exhaustive testing via event spy patterns.                                                                                                                                                                                                               |
 
 **Key Testability Gaps:**
 
@@ -42,20 +42,20 @@
 
 ### 2. Missing Error Scenarios
 
-| # | Scenario | Current Coverage | Risk |
-|---|----------|:----------------:|:----:|
-| E1 | `Plugin.factory()` throws during container initialization | Not addressed | HIGH -- one failing plugin could prevent the entire application from starting. No partial-start or degraded mode is defined. |
-| E2 | Circular dependency between plugins at runtime (Plugin A's factory calls `container.get("B")`, Plugin B's factory calls `container.get("A")`) | "Detected and rejected" -- but detection mechanism is unspecified | HIGH -- if detection relies on `build()` which resolves lazily, circularity may not be caught until production request. |
-| E3 | `PluginRegistry.register()` called with duplicate `id` | "Throws if id already registered" -- but no typed error | MEDIUM -- `Error` vs typed `DuplicatePluginError`. Callers cannot distinguish registration errors from other runtime errors. |
-| E4 | `DependencyContainer.createScope()` called after `dispose()` on parent | Not addressed | MEDIUM -- creating a scope from a disposed container could reference stale singletons. |
-| E5 | `Plugin.dispose()` throws during shutdown | Not addressed | HIGH -- if dispose of plugin A throws, plugins B-H may not be disposed, leaking resources (DB connections, open sockets). |
-| E6 | `EventBus.emit()` with an event type that has no handlers | Not addressed | LOW -- but if event emission is expected to be fire-and-forget, callers need clarity that unhandled events are silently dropped. |
-| E7 | `EventBus` handler throws an unhandled exception | Not addressed | HIGH -- async handler rejection in `.on()` callback could crash the process if not caught within the EventBus. |
-| E8 | Module version skew: `@openclaw/core` expects `@openclaw/llm-router@2.x` but `1.x` is installed | Risks table mentions version skew | MEDIUM -- no runtime version validation. `PluginDescriptor.version` is available but never checked against required ranges. |
-| E9 | `ServiceLifetime.Scoped` service resolved outside of a scope | Not addressed | MEDIUM -- `container.get("ScopedService")` on the root container has undefined behavior. Should it throw? Return a singleton? |
-| E10 | Container memory leak from undisposed child scopes | Not addressed | MEDIUM -- per-request scopes that are not `dispose()`d accumulate scoped singletons. No automatic cleanup or scope timeout. |
-| E11 | Hot reload of a plugin at runtime (unregister + re-register) while requests are in-flight | Not addressed | HIGH -- in-flight requests holding references to old plugin instances will use stale state. |
-| E12 | `healthCheck()` aggregation timeout -- one plugin's health check hangs indefinitely | Not addressed | HIGH -- `PluginRegistry.healthCheck()` returns `Promise<Map<string, HealthStatus>>` but never resolves if one plugin is stuck. |
+| #   | Scenario                                                                                                                                      |                         Current Coverage                          |                                                               Risk                                                               |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------------- | :---------------------------------------------------------------: | :------------------------------------------------------------------------------------------------------------------------------: |
+| E1  | `Plugin.factory()` throws during container initialization                                                                                     |                           Not addressed                           |   HIGH -- one failing plugin could prevent the entire application from starting. No partial-start or degraded mode is defined.   |
+| E2  | Circular dependency between plugins at runtime (Plugin A's factory calls `container.get("B")`, Plugin B's factory calls `container.get("A")`) | "Detected and rejected" -- but detection mechanism is unspecified |     HIGH -- if detection relies on `build()` which resolves lazily, circularity may not be caught until production request.      |
+| E3  | `PluginRegistry.register()` called with duplicate `id`                                                                                        |      "Throws if id already registered" -- but no typed error      |   MEDIUM -- `Error` vs typed `DuplicatePluginError`. Callers cannot distinguish registration errors from other runtime errors.   |
+| E4  | `DependencyContainer.createScope()` called after `dispose()` on parent                                                                        |                           Not addressed                           |                      MEDIUM -- creating a scope from a disposed container could reference stale singletons.                      |
+| E5  | `Plugin.dispose()` throws during shutdown                                                                                                     |                           Not addressed                           |    HIGH -- if dispose of plugin A throws, plugins B-H may not be disposed, leaking resources (DB connections, open sockets).     |
+| E6  | `EventBus.emit()` with an event type that has no handlers                                                                                     |                           Not addressed                           | LOW -- but if event emission is expected to be fire-and-forget, callers need clarity that unhandled events are silently dropped. |
+| E7  | `EventBus` handler throws an unhandled exception                                                                                              |                           Not addressed                           |          HIGH -- async handler rejection in `.on()` callback could crash the process if not caught within the EventBus.          |
+| E8  | Module version skew: `@openclaw/core` expects `@openclaw/llm-router@2.x` but `1.x` is installed                                               |                 Risks table mentions version skew                 |   MEDIUM -- no runtime version validation. `PluginDescriptor.version` is available but never checked against required ranges.    |
+| E9  | `ServiceLifetime.Scoped` service resolved outside of a scope                                                                                  |                           Not addressed                           |  MEDIUM -- `container.get("ScopedService")` on the root container has undefined behavior. Should it throw? Return a singleton?   |
+| E10 | Container memory leak from undisposed child scopes                                                                                            |                           Not addressed                           |   MEDIUM -- per-request scopes that are not `dispose()`d accumulate scoped singletons. No automatic cleanup or scope timeout.    |
+| E11 | Hot reload of a plugin at runtime (unregister + re-register) while requests are in-flight                                                     |                           Not addressed                           |                   HIGH -- in-flight requests holding references to old plugin instances will use stale state.                    |
+| E12 | `healthCheck()` aggregation timeout -- one plugin's health check hangs indefinitely                                                           |                           Not addressed                           |  HIGH -- `PluginRegistry.healthCheck()` returns `Promise<Map<string, HealthStatus>>` but never resolves if one plugin is stuck.  |
 
 ---
 
@@ -71,7 +71,7 @@
 // Recommended CI check (pseudo-code)
 for (const pkg of openclawPackages) {
   const imports = scanImports(pkg.srcDir);
-  const internalImports = imports.filter(i => i.startsWith('@openclaw/'));
+  const internalImports = imports.filter((i) => i.startsWith("@openclaw/"));
   const declared = Object.keys(pkg.peerDependencies ?? {});
   for (const imp of internalImports) {
     assert(declared.includes(imp), `${pkg.name} imports ${imp} but it is not a peerDependency`);
@@ -105,11 +105,13 @@ for (const pkg of openclawPackages) {
 **Domain Events:**
 
 All twelve event types are well-defined. They can be tested by subscribing to a mock `EventBus` and asserting emission patterns:
+
 - `message.received` -> `llm.request` -> `llm.response` -> `message.sent` (happy path)
 - `llm.request` -> `llm.error` (provider failure)
 - `tenant.created` -> initial health check sequence
 
 **Missing domain events:**
+
 1. `plugin.registered` -- when a plugin is registered at runtime
 2. `plugin.disposed` -- when a plugin is unregistered
 3. `container.scope_created` / `container.scope_disposed` -- for scope lifecycle tracking
@@ -244,14 +246,14 @@ Scenario: Module version compatibility check
 
 ### 6. Cross-ADR Integration Risks
 
-| ADR Pair | Integration Risk | Contract Test Needed |
-|----------|-----------------|---------------------|
-| **ADR-012 + ADR-006** (Messenger Adapters) | ADR-006 defines `MessengerAdapter` as the primary adapter interface. ADR-012 creates `@openclaw/messenger-adapters` package containing `TelegramAdapter`, `MaxAdapter`, `WebAdapter`. Risk: if ADR-006's `MessengerAdapter` interface evolves independently of ADR-012's package, the two diverge. | Contract test: assert that every class in `@openclaw/messenger-adapters` implements the `MessengerAdapter` interface from ADR-006. Run this on every CI build. |
-| **ADR-012 + ADR-008** (Multi-Tenant) | ADR-012's `DependencyContainer.createScope(scopeId)` is the mechanism for tenant isolation per ADR-008. Risk: `scopeId` must equal `tenantId`, but nothing enforces this. A developer could pass `requestId` instead of `tenantId`, creating per-request scopes that share tenant state. | Contract test: all middleware that creates scopes uses `TenantContext.tenantId` as the `scopeId`. No other pattern is allowed. |
-| **ADR-012 + ADR-010** (Streaming Pipeline) | ADR-012 declares `@openclaw/stream-pipeline` as a Shared Kernel with the core. ADR-010's `StreamJsonEvent` types must be importable from the pipeline package. Risk: if types are defined inside the package but not re-exported from `@openclaw/core`, consumers import directly from the pipeline, creating hidden coupling. | Contract test: verify `StreamJsonEvent` is exported from `@openclaw/core/types`. Assert no consumer code imports directly from `@openclaw/stream-pipeline/types`. |
-| **ADR-012 + ADR-013** (AI Fabric Agent Integration) | ADR-012 defines `@openclaw/agent-fabric` as a module with the `AgentFabric` interface. ADR-013 defines `IAgentProvider` in the same package but with a different shape (`execute()` + `stream()` vs ADR-012's `chat()` + `chatStream()`). Risk: two competing interfaces for agent interaction in the same package. | Contract test: assert that `AgentFabric` (ADR-012) is an alias or wrapper around `IAgentProvider` (ADR-013). One interface must be canonical. |
-| **ADR-012 + ADR-005** (Model Routing & Fallback) | ADR-012's `@openclaw/llm-router` implements ADR-005's model mapping and fallback strategy. Risk: routing config in ADR-012 (`RoutingConfig.aliases`, `fallbacks`) may conflict with ADR-005's model mapping table if both are loaded. | Contract test: given the ADR-005 model mapping and the ADR-012 routing config, assert that `router.resolveModel("fast")` returns the correct provider and model ID per ADR-005's table. |
-| **ADR-012 + ADR-011** (Training Engine) | ADR-012 declares `@openclaw/training-engine` as a Customer-Supplier module. ADR-011 defines `TrainingEngine` with `execute(command)` method. Risk: the training engine's dependency on `TenantManager` is declared as optional (`peerDependency`), but ADR-011's implementation requires tenant context for every operation. Without `TenantManager`, the training engine cannot function. | Contract test: instantiate `TrainingEngine` without `TenantManager`. Assert it throws a clear `MissingDependencyError` rather than a null reference. |
+| ADR Pair                                            | Integration Risk                                                                                                                                                                                                                                                                                                                                                                           | Contract Test Needed                                                                                                                                                                    |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **ADR-012 + ADR-006** (Messenger Adapters)          | ADR-006 defines `MessengerAdapter` as the primary adapter interface. ADR-012 creates `@openclaw/messenger-adapters` package containing `TelegramAdapter`, `MaxAdapter`, `WebAdapter`. Risk: if ADR-006's `MessengerAdapter` interface evolves independently of ADR-012's package, the two diverge.                                                                                         | Contract test: assert that every class in `@openclaw/messenger-adapters` implements the `MessengerAdapter` interface from ADR-006. Run this on every CI build.                          |
+| **ADR-012 + ADR-008** (Multi-Tenant)                | ADR-012's `DependencyContainer.createScope(scopeId)` is the mechanism for tenant isolation per ADR-008. Risk: `scopeId` must equal `tenantId`, but nothing enforces this. A developer could pass `requestId` instead of `tenantId`, creating per-request scopes that share tenant state.                                                                                                   | Contract test: all middleware that creates scopes uses `TenantContext.tenantId` as the `scopeId`. No other pattern is allowed.                                                          |
+| **ADR-012 + ADR-010** (Streaming Pipeline)          | ADR-012 declares `@openclaw/stream-pipeline` as a Shared Kernel with the core. ADR-010's `StreamJsonEvent` types must be importable from the pipeline package. Risk: if types are defined inside the package but not re-exported from `@openclaw/core`, consumers import directly from the pipeline, creating hidden coupling.                                                             | Contract test: verify `StreamJsonEvent` is exported from `@openclaw/core/types`. Assert no consumer code imports directly from `@openclaw/stream-pipeline/types`.                       |
+| **ADR-012 + ADR-013** (AI Fabric Agent Integration) | ADR-012 defines `@openclaw/agent-fabric` as a module with the `AgentFabric` interface. ADR-013 defines `IAgentProvider` in the same package but with a different shape (`execute()` + `stream()` vs ADR-012's `chat()` + `chatStream()`). Risk: two competing interfaces for agent interaction in the same package.                                                                        | Contract test: assert that `AgentFabric` (ADR-012) is an alias or wrapper around `IAgentProvider` (ADR-013). One interface must be canonical.                                           |
+| **ADR-012 + ADR-005** (Model Routing & Fallback)    | ADR-012's `@openclaw/llm-router` implements ADR-005's model mapping and fallback strategy. Risk: routing config in ADR-012 (`RoutingConfig.aliases`, `fallbacks`) may conflict with ADR-005's model mapping table if both are loaded.                                                                                                                                                      | Contract test: given the ADR-005 model mapping and the ADR-012 routing config, assert that `router.resolveModel("fast")` returns the correct provider and model ID per ADR-005's table. |
+| **ADR-012 + ADR-011** (Training Engine)             | ADR-012 declares `@openclaw/training-engine` as a Customer-Supplier module. ADR-011 defines `TrainingEngine` with `execute(command)` method. Risk: the training engine's dependency on `TenantManager` is declared as optional (`peerDependency`), but ADR-011's implementation requires tenant context for every operation. Without `TenantManager`, the training engine cannot function. | Contract test: instantiate `TrainingEngine` without `TenantManager`. Assert it throws a clear `MissingDependencyError` rather than a null reference.                                    |
 
 ---
 
@@ -266,8 +268,8 @@ class InjectionToken<T> {
   constructor(readonly description: string) {}
 }
 
-const LLM_ROUTER = new InjectionToken<LLMRouter>('LLMRouter');
-const TENANT_MANAGER = new InjectionToken<TenantManager>('TenantManager');
+const LLM_ROUTER = new InjectionToken<LLMRouter>("LLMRouter");
+const TENANT_MANAGER = new InjectionToken<TenantManager>("TenantManager");
 
 // Usage: container.get(LLM_ROUTER) returns LLMRouter (type-safe)
 interface TypedContainer {
@@ -292,12 +294,12 @@ interface ServiceRegistration<T> {
 ```typescript
 async function timedHealthCheck(
   plugin: Plugin<unknown>,
-  timeoutMs: number = 5000
+  timeoutMs: number = 5000,
 ): Promise<HealthStatus> {
   return Promise.race([
-    plugin.healthCheck?.() ?? { status: 'healthy' },
+    plugin.healthCheck?.() ?? { status: "healthy" },
     new Promise<HealthStatus>((resolve) =>
-      setTimeout(() => resolve({ status: 'unhealthy', reason: 'Timed out' }), timeoutMs)
+      setTimeout(() => resolve({ status: "unhealthy", reason: "Timed out" }), timeoutMs),
     ),
   ]);
 }
@@ -309,8 +311,11 @@ async function timedHealthCheck(
 async function disposeAll(plugins: Plugin<unknown>[]): Promise<void> {
   const errors: Array<{ pluginId: string; error: Error }> = [];
   for (const plugin of plugins.reverse()) {
-    try { await plugin.dispose?.(); }
-    catch (e) { errors.push({ pluginId: plugin.id, error: e as Error }); }
+    try {
+      await plugin.dispose?.();
+    } catch (e) {
+      errors.push({ pluginId: plugin.id, error: e as Error });
+    }
   }
   if (errors.length > 0) {
     throw new AggregateShutdownError(errors);
@@ -328,6 +333,7 @@ async function disposeAll(plugins: Plugin<unknown>[]): Promise<void> {
 6. **Log plugin lifecycle events.** Every `register()`, `resolve()`, `healthCheck()`, `dispose()` call should emit structured log entries with correlation IDs.
 
 ---
+
 ---
 
 ## ADR-013: Cloud.ru AI Fabric Agent Integration
@@ -339,13 +345,13 @@ async function disposeAll(plugins: Plugin<unknown>[]): Promise<void> {
 
 ### 1. Testability Assessment: Score 68/100
 
-| Criterion | Score | Rationale |
-|-----------|:-----:|-----------|
-| Interface mockability | 19/20 | `IAgentProvider` is a clean interface with 5 methods. `HybridOrchestrator`, `McpFederation`, `ICloudRuRagClient` are all mockable. `CircuitBreaker` is a separate class. Strong separation of concerns. |
-| Compile-time invariant enforcement | 8/20 | `AgentLocality` and `CloudRuAgentStatus` are string literal unions (good). But `AgentCapability.inputSchema` and `outputSchema` are typed as `JsonSchema` (opaque). `AgentRequest.constraints` uses optional fields -- there's no way to enforce at compile time that `timeoutMs` must be positive. `AgentEvent` discriminated union is well-typed. |
-| Acceptance criteria clarity | 11/20 | The startup sequence is well-documented as a numbered tree. But no BDD scenarios, no latency requirements (what is acceptable cold start handling?), no SLA for circuit breaker recovery time. The routing rule `capabilityPattern` is described as "glob" but no glob library is specified. |
-| Error path coverage | 12/20 | Circuit breaker pattern is specified. Risks table has 6 entries. But specific HTTP error handling is missing: what does `CloudRuAgentProvider` do on 401 (expired key)? 429 (rate limit)? 500 (server error)? |
-| Domain event testability | 18/20 | Seven domain events are defined with clear triggers. `AgentProviderRegistered`, `AgentProviderHealthDegraded`, `McpServerDiscovered` etc. are testable via event spy patterns. |
+| Criterion                          | Score | Rationale                                                                                                                                                                                                                                                                                                                                           |
+| ---------------------------------- | :---: | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Interface mockability              | 19/20 | `IAgentProvider` is a clean interface with 5 methods. `HybridOrchestrator`, `McpFederation`, `ICloudRuRagClient` are all mockable. `CircuitBreaker` is a separate class. Strong separation of concerns.                                                                                                                                             |
+| Compile-time invariant enforcement | 8/20  | `AgentLocality` and `CloudRuAgentStatus` are string literal unions (good). But `AgentCapability.inputSchema` and `outputSchema` are typed as `JsonSchema` (opaque). `AgentRequest.constraints` uses optional fields -- there's no way to enforce at compile time that `timeoutMs` must be positive. `AgentEvent` discriminated union is well-typed. |
+| Acceptance criteria clarity        | 11/20 | The startup sequence is well-documented as a numbered tree. But no BDD scenarios, no latency requirements (what is acceptable cold start handling?), no SLA for circuit breaker recovery time. The routing rule `capabilityPattern` is described as "glob" but no glob library is specified.                                                        |
+| Error path coverage                | 12/20 | Circuit breaker pattern is specified. Risks table has 6 entries. But specific HTTP error handling is missing: what does `CloudRuAgentProvider` do on 401 (expired key)? 429 (rate limit)? 500 (server error)?                                                                                                                                       |
+| Domain event testability           | 18/20 | Seven domain events are defined with clear triggers. `AgentProviderRegistered`, `AgentProviderHealthDegraded`, `McpServerDiscovered` etc. are testable via event spy patterns.                                                                                                                                                                      |
 
 **Key Testability Gaps:**
 
@@ -365,20 +371,20 @@ async function disposeAll(plugins: Plugin<unknown>[]): Promise<void> {
 
 ### 2. Missing Error Scenarios
 
-| # | Scenario | Current Coverage | Risk |
-|---|----------|:----------------:|:----:|
-| E1 | Cloud.ru API returns 401 Unauthorized (expired or rotated API key) | Not addressed | CRITICAL -- all Cloud.ru providers become unusable until key is refreshed. No automatic key rotation or renewal mechanism. |
-| E2 | Cloud.ru API returns 429 Too Many Requests | Rate limits mentioned in risks | HIGH -- 15 req/s per API key. Agent Systems with 5 concurrent sub-tasks could exhaust this in 3 seconds. No per-provider rate limiter in the orchestrator. |
-| E3 | Cloud.ru agent status is `FAILED` or `LLM_UNAVAILABLE` during health check | Health check only checks for `RUNNING` or `COOLED` | MEDIUM -- provider is marked unhealthy but error reason is generic. Status `LLM_UNAVAILABLE` means the underlying FM model is down, which should trigger fallback to a different model, not just a different provider. |
-| E4 | `HybridOrchestrator.fanOut()` with one subtask that times out while others succeed | `Promise.allSettled()` handles this | MEDIUM -- the caller gets partial results. But there is no specification for: should the orchestrator retry the timed-out subtask? Return partial? Wait indefinitely? |
-| E5 | MCP server auto-discovery returns a server with zero tools | Not addressed | LOW -- a server with no tools is useless but not harmful. However, it clutters the tool index and confuses users. |
-| E6 | MCP SSE connection drops during `callTool()` execution | Not addressed | HIGH -- the tool call is in-flight, partial result. No retry or timeout. The async MCP JSON-RPC call hangs. |
-| E7 | `McpFederation.callTool()` with arguments that fail server-side validation | Not addressed | MEDIUM -- Cloud.ru MCP server returns a JSON-RPC error. The error format and mapping to OpenClaw error types is unspecified. |
-| E8 | Cloud.ru Agent System's planner/router decomposes a task into sub-tasks that exceed the system's 5-agent limit | Not addressed | LOW -- this is a Cloud.ru platform limitation. OpenClaw cannot control internal agent system behavior, but should handle the resulting error gracefully. |
-| E9 | `HybridOrchestrator.execute()` selects a provider, but the provider becomes unhealthy between selection and execution | Race condition | MEDIUM -- the circuit breaker may not have opened yet. First request to a degraded provider will fail. The orchestrator should retry with a fallback provider. |
-| E10 | Network partition: Cloud.ru API is reachable from health check but unreachable from the actual request path (asymmetric failure) | Not addressed | LOW -- health check gives false positive. The circuit breaker eventually opens after request failures, but first few requests fail. |
-| E11 | `CloudRuAgentProvider.stream()` SSE response includes events with unknown `type` field | Not addressed | LOW -- the `mapChunkToEvent()` function may throw on unexpected event types. Should be logged and skipped. |
-| E12 | Cloud.ru RAG knowledge base index status is `error` | `getIndexStatus()` returns it but no handling specified | MEDIUM -- queries against an errored KB return empty results silently. User expects documents but gets nothing. |
+| #   | Scenario                                                                                                                         |                    Current Coverage                     |                                                                                                          Risk                                                                                                          |
+| --- | -------------------------------------------------------------------------------------------------------------------------------- | :-----------------------------------------------------: | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------: |
+| E1  | Cloud.ru API returns 401 Unauthorized (expired or rotated API key)                                                               |                      Not addressed                      |                                               CRITICAL -- all Cloud.ru providers become unusable until key is refreshed. No automatic key rotation or renewal mechanism.                                               |
+| E2  | Cloud.ru API returns 429 Too Many Requests                                                                                       |             Rate limits mentioned in risks              |                               HIGH -- 15 req/s per API key. Agent Systems with 5 concurrent sub-tasks could exhaust this in 3 seconds. No per-provider rate limiter in the orchestrator.                               |
+| E3  | Cloud.ru agent status is `FAILED` or `LLM_UNAVAILABLE` during health check                                                       |   Health check only checks for `RUNNING` or `COOLED`    | MEDIUM -- provider is marked unhealthy but error reason is generic. Status `LLM_UNAVAILABLE` means the underlying FM model is down, which should trigger fallback to a different model, not just a different provider. |
+| E4  | `HybridOrchestrator.fanOut()` with one subtask that times out while others succeed                                               |           `Promise.allSettled()` handles this           |                         MEDIUM -- the caller gets partial results. But there is no specification for: should the orchestrator retry the timed-out subtask? Return partial? Wait indefinitely?                          |
+| E5  | MCP server auto-discovery returns a server with zero tools                                                                       |                      Not addressed                      |                                                   LOW -- a server with no tools is useless but not harmful. However, it clutters the tool index and confuses users.                                                    |
+| E6  | MCP SSE connection drops during `callTool()` execution                                                                           |                      Not addressed                      |                                                      HIGH -- the tool call is in-flight, partial result. No retry or timeout. The async MCP JSON-RPC call hangs.                                                       |
+| E7  | `McpFederation.callTool()` with arguments that fail server-side validation                                                       |                      Not addressed                      |                                              MEDIUM -- Cloud.ru MCP server returns a JSON-RPC error. The error format and mapping to OpenClaw error types is unspecified.                                              |
+| E8  | Cloud.ru Agent System's planner/router decomposes a task into sub-tasks that exceed the system's 5-agent limit                   |                      Not addressed                      |                                LOW -- this is a Cloud.ru platform limitation. OpenClaw cannot control internal agent system behavior, but should handle the resulting error gracefully.                                |
+| E9  | `HybridOrchestrator.execute()` selects a provider, but the provider becomes unhealthy between selection and execution            |                     Race condition                      |                             MEDIUM -- the circuit breaker may not have opened yet. First request to a degraded provider will fail. The orchestrator should retry with a fallback provider.                             |
+| E10 | Network partition: Cloud.ru API is reachable from health check but unreachable from the actual request path (asymmetric failure) |                      Not addressed                      |                                          LOW -- health check gives false positive. The circuit breaker eventually opens after request failures, but first few requests fail.                                           |
+| E11 | `CloudRuAgentProvider.stream()` SSE response includes events with unknown `type` field                                           |                      Not addressed                      |                                                       LOW -- the `mapChunkToEvent()` function may throw on unexpected event types. Should be logged and skipped.                                                       |
+| E12 | Cloud.ru RAG knowledge base index status is `error`                                                                              | `getIndexStatus()` returns it but no handling specified |                                                    MEDIUM -- queries against an errored KB return empty results silently. User expects documents but gets nothing.                                                     |
 
 ---
 
@@ -401,8 +407,8 @@ async function disposeAll(plugins: Plugin<unknown>[]): Promise<void> {
 interface CloudRuAgentConfig {
   readonly projectId: string;
   readonly baseUrl: string;
-  readonly apiKeyEnvVar: string;  // e.g., "CLOUDRU_AGENTS_API_KEY"
-  readonly authType: 'api_key' | 'access_key';
+  readonly apiKeyEnvVar: string; // e.g., "CLOUDRU_AGENTS_API_KEY"
+  readonly authType: "api_key" | "access_key";
 }
 // Constructor reads: process.env[config.apiKeyEnvVar]
 ```
@@ -429,12 +435,14 @@ interface CloudRuAgentConfig {
 **Domain Events:**
 
 All seven events are well-defined. The event lifecycle for a healthy provider registration:
+
 1. Boot -> `AgentProviderRegistered` (for each provider)
 2. `McpServerDiscovered` (for each auto-discovered MCP server)
 3. `KnowledgeBaseReady` (for each RAG KB that transitions to `ready`)
 4. Request -> `RoutingRuleMatched` (on every routing decision)
 
 Missing events:
+
 1. `AgentRequest.sent` -- logged when a request is dispatched to a provider (for latency tracking)
 2. `AgentRequest.completed` -- logged when response is received (for usage metrics)
 3. `CircuitBreaker.opened` / `CircuitBreaker.closed` -- for operational alerting
@@ -582,14 +590,14 @@ Scenario: Circuit breaker opens after consecutive failures
 
 ### 6. Cross-ADR Integration Risks
 
-| ADR Pair | Integration Risk | Contract Test Needed |
-|----------|-----------------|---------------------|
-| **ADR-013 + ADR-003** (Claude Code CLI as Agent) | ADR-003 defines `runCliAgent()` as the execution path. ADR-013 wraps it in `ClaudeCodeCliProvider`. Risk: the wrapper changes behavior (e.g., adds timeout that conflicts with ADR-003's existing timeout, or loses session ID propagation). | Contract test: `ClaudeCodeCliProvider.execute(request)` produces identical output to direct `runCliAgent(prompt, env)` for the same input. Session IDs, environment variables, and output format must match. |
-| **ADR-013 + ADR-004** (Proxy Lifecycle) | ADR-004 manages proxy startup and health. ADR-013's `ClaudeCodeCliProvider.healthCheck()` verifies proxy reachability. Risk: ADR-004's health check and ADR-013's health check may diverge -- ADR-004 checks the proxy process, ADR-013 checks the HTTP endpoint. If the proxy process is alive but the endpoint is unreachable (port conflict), the checks disagree. | Contract test: when ADR-004 reports proxy healthy, ADR-013's provider health check also returns true. When ADR-004 reports proxy unhealthy, ADR-013's provider health check returns false. |
-| **ADR-013 + ADR-005** (Model Mapping) | ADR-005 defines model aliases (`"fast"` -> `"cloudru-fm/GLM-4.7-Flash"`). ADR-013 defines `AgentRequest.constraints.temperature` but no `model` field -- the model is configured per-agent on Cloud.ru's side. Risk: a routing rule maps capability to Cloud.ru agent, but the agent's configured model may not match the user's model preference. | Contract test: when a user requests model `"fast"` and the routing rule points to Cloud.ru agent, assert the Cloud.ru agent is configured with the model that `"fast"` resolves to per ADR-005. |
-| **ADR-013 + ADR-010** (Streaming Pipeline) | ADR-013's `IAgentProvider.stream()` returns `AsyncIterable<AgentEvent>`. ADR-010's streaming pipeline expects `StreamJsonEvent` from Claude Code's stdout. Risk: the pipeline is tightly coupled to `stream-json` format and cannot consume `AgentEvent` from remote providers. A format adapter is needed. | Contract test: create a `StreamSource` adapter that converts `AsyncIterable<AgentEvent>` to `AsyncIterable<StreamEvent>` (ADR-010 format). Assert that both `ClaudeCodeCliProvider.stream()` and `CloudRuAgentProvider.stream()` can be piped through the same `StreamPipeline`. |
-| **ADR-013 + ADR-012** (Plugin Architecture) | ADR-013's `@openclaw/agent-fabric` package defines both the `AgentFabric` interface (ADR-012's module catalog) and `IAgentProvider` (ADR-013's provider contract). Risk: two conceptually different interfaces in the same package with overlapping method names (`chat()` vs `execute()`). Consumers may use the wrong interface. | Contract test: `AgentFabric.chat()` delegates to `HybridOrchestrator.execute()` which dispatches to `IAgentProvider.execute()`. Assert the full delegation chain works end-to-end. |
-| **ADR-013 + ADR-007** (Tools & MCP) | ADR-013 federates MCP tools from Cloud.ru managed servers. ADR-007 defines per-tier tool access (Restricted: no tools, Standard: curated, Full: all). Risk: MCP federation makes all Cloud.ru tools available regardless of tier. A Restricted-tier user could access `code-exec` MCP tool via an agent that has it configured. | Contract test: execute an `AgentRequest` from a Restricted-tier tenant. Assert the agent's `tools` parameter does not include any MCP tools. Assert the `ToolSandbox` filters out unauthorized tools before passing to the provider. |
+| ADR Pair                                         | Integration Risk                                                                                                                                                                                                                                                                                                                                                      | Contract Test Needed                                                                                                                                                                                                                                                             |
+| ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **ADR-013 + ADR-003** (Claude Code CLI as Agent) | ADR-003 defines `runCliAgent()` as the execution path. ADR-013 wraps it in `ClaudeCodeCliProvider`. Risk: the wrapper changes behavior (e.g., adds timeout that conflicts with ADR-003's existing timeout, or loses session ID propagation).                                                                                                                          | Contract test: `ClaudeCodeCliProvider.execute(request)` produces identical output to direct `runCliAgent(prompt, env)` for the same input. Session IDs, environment variables, and output format must match.                                                                     |
+| **ADR-013 + ADR-004** (Proxy Lifecycle)          | ADR-004 manages proxy startup and health. ADR-013's `ClaudeCodeCliProvider.healthCheck()` verifies proxy reachability. Risk: ADR-004's health check and ADR-013's health check may diverge -- ADR-004 checks the proxy process, ADR-013 checks the HTTP endpoint. If the proxy process is alive but the endpoint is unreachable (port conflict), the checks disagree. | Contract test: when ADR-004 reports proxy healthy, ADR-013's provider health check also returns true. When ADR-004 reports proxy unhealthy, ADR-013's provider health check returns false.                                                                                       |
+| **ADR-013 + ADR-005** (Model Mapping)            | ADR-005 defines model aliases (`"fast"` -> `"cloudru-fm/GLM-4.7-Flash"`). ADR-013 defines `AgentRequest.constraints.temperature` but no `model` field -- the model is configured per-agent on Cloud.ru's side. Risk: a routing rule maps capability to Cloud.ru agent, but the agent's configured model may not match the user's model preference.                    | Contract test: when a user requests model `"fast"` and the routing rule points to Cloud.ru agent, assert the Cloud.ru agent is configured with the model that `"fast"` resolves to per ADR-005.                                                                                  |
+| **ADR-013 + ADR-010** (Streaming Pipeline)       | ADR-013's `IAgentProvider.stream()` returns `AsyncIterable<AgentEvent>`. ADR-010's streaming pipeline expects `StreamJsonEvent` from Claude Code's stdout. Risk: the pipeline is tightly coupled to `stream-json` format and cannot consume `AgentEvent` from remote providers. A format adapter is needed.                                                           | Contract test: create a `StreamSource` adapter that converts `AsyncIterable<AgentEvent>` to `AsyncIterable<StreamEvent>` (ADR-010 format). Assert that both `ClaudeCodeCliProvider.stream()` and `CloudRuAgentProvider.stream()` can be piped through the same `StreamPipeline`. |
+| **ADR-013 + ADR-012** (Plugin Architecture)      | ADR-013's `@openclaw/agent-fabric` package defines both the `AgentFabric` interface (ADR-012's module catalog) and `IAgentProvider` (ADR-013's provider contract). Risk: two conceptually different interfaces in the same package with overlapping method names (`chat()` vs `execute()`). Consumers may use the wrong interface.                                    | Contract test: `AgentFabric.chat()` delegates to `HybridOrchestrator.execute()` which dispatches to `IAgentProvider.execute()`. Assert the full delegation chain works end-to-end.                                                                                               |
+| **ADR-013 + ADR-007** (Tools & MCP)              | ADR-013 federates MCP tools from Cloud.ru managed servers. ADR-007 defines per-tier tool access (Restricted: no tools, Standard: curated, Full: all). Risk: MCP federation makes all Cloud.ru tools available regardless of tier. A Restricted-tier user could access `code-exec` MCP tool via an agent that has it configured.                                       | Contract test: execute an `AgentRequest` from a Restricted-tier tenant. Assert the agent's `tools` parameter does not include any MCP tools. Assert the `ToolSandbox` filters out unauthorized tools before passing to the provider.                                             |
 
 ---
 
@@ -619,7 +627,7 @@ class RateLimitedProvider implements IAgentProvider {
   constructor(
     private readonly inner: IAgentProvider,
     private readonly limits: ProviderRateLimit,
-    private readonly limiter: RateLimiter
+    private readonly limiter: RateLimiter,
   ) {}
 
   async execute(request: AgentRequest): Promise<AgentResponse> {
@@ -633,7 +641,7 @@ class RateLimitedProvider implements IAgentProvider {
 
 ```typescript
 function resolveTimeout(provider: IAgentProvider, baseTimeout: number): number {
-  if (provider instanceof CloudRuAgentProvider && provider.lastKnownStatus === 'COOLED') {
+  if (provider instanceof CloudRuAgentProvider && provider.lastKnownStatus === "COOLED") {
     return baseTimeout + 30_000; // extra 30s for cold start
   }
   return baseTimeout;
@@ -664,7 +672,7 @@ const TRANSIENT_STATUS_CODES = new Set([429, 502, 503, 504]);
 async function withRetry<T>(
   fn: () => Promise<T>,
   maxAttempts: number = 3,
-  baseDelayMs: number = 1000
+  baseDelayMs: number = 1000,
 ): Promise<T> {
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
@@ -675,7 +683,7 @@ async function withRetry<T>(
       await sleep(baseDelayMs * Math.pow(2, attempt - 1));
     }
   }
-  throw new Error('Unreachable');
+  throw new Error("Unreachable");
 }
 ```
 
@@ -691,6 +699,7 @@ async function withRetry<T>(
 8. **Log all routing decisions** with structured data: `{ requestId, capability, selectedProvider, fallbackUsed, latencyMs }`. Enable debugging of routing issues without code changes.
 
 ---
+
 ---
 
 ## Cross-Cutting Findings (Both ADRs)
@@ -698,10 +707,12 @@ async function withRetry<T>(
 ### Interface Duplication Between ADR-012 and ADR-013
 
 ADR-012 defines `AgentFabric` interface (section "Module Interface Contracts", interface 8):
+
 - `listAgents()`, `getAgent()`, `createAgent()`, `updateAgent()`, `deleteAgent()`
 - `chat()`, `chatStream()`, `delegate()`, `healthCheck()`
 
 ADR-013 defines `IAgentProvider` interface (section 1):
+
 - `execute()`, `stream()`, `listCapabilities()`, `healthCheck()`, `dispose()`
 
 These are two interfaces for agent interaction in the same `@openclaw/agent-fabric` package. `AgentFabric.chat()` and `IAgentProvider.execute()` overlap in purpose. The relationship between them must be clarified:
@@ -725,21 +736,22 @@ ADR-013 mentions `CircuitBreakerConfig` as a parameter of `OrchestratorConfig` b
 ```typescript
 interface CircuitBreakerConfig {
   /** Number of consecutive failures before opening the breaker */
-  failureThreshold: number;       // default: 3
+  failureThreshold: number; // default: 3
   /** Duration in ms the breaker stays open before transitioning to half-open */
-  resetTimeoutMs: number;         // default: 30_000
+  resetTimeoutMs: number; // default: 30_000
   /** Number of successful requests in half-open state to close the breaker */
-  successThreshold: number;       // default: 1
+  successThreshold: number; // default: 1
   /** Sliding window size for failure counting (0 = count-based, no window) */
-  windowSizeMs: number;           // default: 60_000
+  windowSizeMs: number; // default: 60_000
   /** Maximum number of requests to let through in half-open state */
-  halfOpenMaxRequests: number;    // default: 1
+  halfOpenMaxRequests: number; // default: 1
 }
 ```
 
 ### Observability Gaps
 
 Both ADRs define domain events but neither specifies:
+
 - **Event transport:** In-process `EventEmitter`? A shared `EventBus` instance from `@openclaw/core`? Both ADRs should use the same `EventBus` defined in ADR-012.
 - **Event schema versioning:** What happens when a new field is added to `AgentProviderRegistered`? Older handlers may break.
 - **Distributed tracing:** Requests that traverse multiple providers (fan-out) need a correlation ID that propagates through all events. `AgentRequest.requestId` is a candidate but cross-ADR tracing (ADR-010 streaming events + ADR-013 agent events) requires a shared trace context.
@@ -755,27 +767,41 @@ abstract class OpenClawError extends Error {
 }
 
 class ProviderUnavailableError extends OpenClawError {
-  readonly code = 'PROVIDER_UNAVAILABLE';
+  readonly code = "PROVIDER_UNAVAILABLE";
   readonly recoverable = true;
-  constructor(readonly providerId: string, readonly cause: Error) { super(); }
+  constructor(
+    readonly providerId: string,
+    readonly cause: Error,
+  ) {
+    super();
+  }
 }
 
 class CircuitBreakerOpenError extends OpenClawError {
-  readonly code = 'CIRCUIT_BREAKER_OPEN';
+  readonly code = "CIRCUIT_BREAKER_OPEN";
   readonly recoverable = true;
-  constructor(readonly providerId: string) { super(); }
+  constructor(readonly providerId: string) {
+    super();
+  }
 }
 
 class ToolNotFoundError extends OpenClawError {
-  readonly code = 'TOOL_NOT_FOUND';
+  readonly code = "TOOL_NOT_FOUND";
   readonly recoverable = false;
-  constructor(readonly toolName: string, readonly availableTools: string[]) { super(); }
+  constructor(
+    readonly toolName: string,
+    readonly availableTools: string[],
+  ) {
+    super();
+  }
 }
 
 class CredentialMissingError extends OpenClawError {
-  readonly code = 'CREDENTIAL_MISSING';
+  readonly code = "CREDENTIAL_MISSING";
   readonly recoverable = false;
-  constructor(readonly envVarName: string) { super(); }
+  constructor(readonly envVarName: string) {
+    super();
+  }
 }
 ```
 
@@ -783,20 +809,20 @@ class CredentialMissingError extends OpenClawError {
 
 ## HTSM v6.3 Quality Characteristics Coverage
 
-| Quality Characteristic | ADR-012 Coverage | ADR-013 Coverage | Gap Analysis |
-|----------------------|:----------------:|:----------------:|-------------|
-| **Functionality / Correctness** | Typed interfaces ensure compile-time correctness. `build()` validates dependency graph. | `IAgentProvider` contract ensures functional correctness. OpenAI-compatible mapping is specified. | Gap: no runtime schema validation for external API responses. |
-| **Functionality / Completeness** | All 8 module interfaces defined. EventBus covers 12 event types. | Provider lifecycle (register, health, execute, stream, dispose) is complete. MCP federation covers 3 source types. | Gap: missing plugin hot-reload, version compatibility checks. |
-| **Reliability / Error Handling** | Plugin `dispose()` error handling unspecified. EventBus handler errors unspecified. | Circuit breaker for provider failures. `Promise.allSettled` for fan-out. | Gap: no error taxonomy. No retry strategy for transient HTTP errors. |
-| **Reliability / Recoverability** | Container scope `dispose()` enables cleanup. | Circuit breaker half-open state enables recovery. | Gap: no persistent state recovery. If the process restarts, all circuit breaker state is lost. |
-| **Performance / Latency** | DI resolution should be O(1) for singletons. No performance requirements stated. | Cold start 10-30s acknowledged but not mitigated. | Gap: no cache for `resolve()`. No warm-up mechanism for COOLED agents. |
-| **Performance / Throughput** | Event bus throughput not specified. | Rate limit of 15 req/s per Cloud.ru API key. | Gap: no per-provider rate limiter in orchestrator. |
-| **Security / Authentication** | API keys via environment variables only. | `apiKey` in config interface contradicts env-only invariant. | Gap: credential isolation not type-enforced. |
-| **Security / Authorization** | Tenant isolation via scoped DI. | Provider routing does not check user's access tier. | Gap: MCP tool access not filtered by ADR-007 tier. |
-| **Maintainability / Modularity** | 8 independent packages with zero required internal deps. | Clean separation: providers, orchestration, MCP, RAG, config. | Strong. |
-| **Maintainability / Testability** | All interfaces mockable. DI enables test composition. | All interfaces mockable. Providers are injectable. | Gap: string-based DI tokens reduce type safety. EventBus handler semantics undefined. |
-| **Portability** | npm packages work in any Node.js environment. | Cloud.ru-specific but behind anti-corruption layer. | Good. Non-Cloud.ru providers implement same `IAgentProvider`. |
-| **Operability / Monitoring** | 12 domain events for observability. `healthCheck()` aggregation. | 7 domain events. Health check per provider. | Gap: no structured logging spec. No metrics endpoint. No distributed tracing. |
+| Quality Characteristic            |                                    ADR-012 Coverage                                     |                                                  ADR-013 Coverage                                                  | Gap Analysis                                                                                   |
+| --------------------------------- | :-------------------------------------------------------------------------------------: | :----------------------------------------------------------------------------------------------------------------: | ---------------------------------------------------------------------------------------------- |
+| **Functionality / Correctness**   | Typed interfaces ensure compile-time correctness. `build()` validates dependency graph. |         `IAgentProvider` contract ensures functional correctness. OpenAI-compatible mapping is specified.          | Gap: no runtime schema validation for external API responses.                                  |
+| **Functionality / Completeness**  |            All 8 module interfaces defined. EventBus covers 12 event types.             | Provider lifecycle (register, health, execute, stream, dispose) is complete. MCP federation covers 3 source types. | Gap: missing plugin hot-reload, version compatibility checks.                                  |
+| **Reliability / Error Handling**  |   Plugin `dispose()` error handling unspecified. EventBus handler errors unspecified.   |                      Circuit breaker for provider failures. `Promise.allSettled` for fan-out.                      | Gap: no error taxonomy. No retry strategy for transient HTTP errors.                           |
+| **Reliability / Recoverability**  |                      Container scope `dispose()` enables cleanup.                       |                                 Circuit breaker half-open state enables recovery.                                  | Gap: no persistent state recovery. If the process restarts, all circuit breaker state is lost. |
+| **Performance / Latency**         |    DI resolution should be O(1) for singletons. No performance requirements stated.     |                                 Cold start 10-30s acknowledged but not mitigated.                                  | Gap: no cache for `resolve()`. No warm-up mechanism for COOLED agents.                         |
+| **Performance / Throughput**      |                           Event bus throughput not specified.                           |                                    Rate limit of 15 req/s per Cloud.ru API key.                                    | Gap: no per-provider rate limiter in orchestrator.                                             |
+| **Security / Authentication**     |                        API keys via environment variables only.                         |                            `apiKey` in config interface contradicts env-only invariant.                            | Gap: credential isolation not type-enforced.                                                   |
+| **Security / Authorization**      |                             Tenant isolation via scoped DI.                             |                                Provider routing does not check user's access tier.                                 | Gap: MCP tool access not filtered by ADR-007 tier.                                             |
+| **Maintainability / Modularity**  |                8 independent packages with zero required internal deps.                 |                           Clean separation: providers, orchestration, MCP, RAG, config.                            | Strong.                                                                                        |
+| **Maintainability / Testability** |                  All interfaces mockable. DI enables test composition.                  |                                 All interfaces mockable. Providers are injectable.                                 | Gap: string-based DI tokens reduce type safety. EventBus handler semantics undefined.          |
+| **Portability**                   |                      npm packages work in any Node.js environment.                      |                                Cloud.ru-specific but behind anti-corruption layer.                                 | Good. Non-Cloud.ru providers implement same `IAgentProvider`.                                  |
+| **Operability / Monitoring**      |            12 domain events for observability. `healthCheck()` aggregation.             |                                    7 domain events. Health check per provider.                                     | Gap: no structured logging spec. No metrics endpoint. No distributed tracing.                  |
 
 ---
 
@@ -859,14 +885,14 @@ Legend (top 6 risks):
 
 **Critical mutation targets:**
 
-| File | Mutation Type | Why Critical |
-|------|--------------|-------------|
-| `container.ts` → `get()` | Remove null check | Could return `undefined` instead of throwing |
-| `container.ts` → `build()` | Skip cycle detection | Circular deps reach production |
-| `circuit-breaker.ts` → threshold check | Change `>=` to `>` | Breaker never opens (off-by-one) |
-| `hybrid-orchestrator.ts` → `selectProvider()` | Skip breaker check | Routes to dead providers |
-| `mcp-federation.ts` → `callTool()` | Remove tool existence check | Null reference on missing tool |
-| `cloudru-agent-provider.ts` → `healthCheck()` | Return `true` always | Dead agent appears healthy |
+| File                                          | Mutation Type               | Why Critical                                 |
+| --------------------------------------------- | --------------------------- | -------------------------------------------- |
+| `container.ts` → `get()`                      | Remove null check           | Could return `undefined` instead of throwing |
+| `container.ts` → `build()`                    | Skip cycle detection        | Circular deps reach production               |
+| `circuit-breaker.ts` → threshold check        | Change `>=` to `>`          | Breaker never opens (off-by-one)             |
+| `hybrid-orchestrator.ts` → `selectProvider()` | Skip breaker check          | Routes to dead providers                     |
+| `mcp-federation.ts` → `callTool()`            | Remove tool existence check | Null reference on missing tool               |
+| `cloudru-agent-provider.ts` → `healthCheck()` | Return `true` always        | Dead agent appears healthy                   |
 
 ---
 
@@ -876,28 +902,28 @@ Legend (top 6 risks):
 
 ```typescript
 // pact/cloudru-agent-provider.pact.ts
-import { Pact } from '@pact-foundation/pact';
+import { Pact } from "@pact-foundation/pact";
 
 const provider = new Pact({
-  consumer: 'openclaw-agent-fabric',
-  provider: 'cloudru-ai-agents-api',
+  consumer: "openclaw-agent-fabric",
+  provider: "cloudru-ai-agents-api",
   port: 1234,
 });
 
-describe('CloudRuAgentProvider Pact', () => {
+describe("CloudRuAgentProvider Pact", () => {
   beforeAll(() => provider.setup());
   afterAll(() => provider.finalize());
 
-  it('sends a completions request and receives a response', async () => {
+  it("sends a completions request and receives a response", async () => {
     await provider.addInteraction({
-      state: 'agent agent-coder-001 is RUNNING',
-      uponReceiving: 'a completions request',
+      state: "agent agent-coder-001 is RUNNING",
+      uponReceiving: "a completions request",
       withRequest: {
-        method: 'POST',
-        path: '/proj-abc-123/agents/agent-coder-001/completions',
-        headers: { 'X-API-Key': 'test-api-key' },
+        method: "POST",
+        path: "/proj-abc-123/agents/agent-coder-001/completions",
+        headers: { "X-API-Key": "test-api-key" },
         body: {
-          messages: [{ role: 'user', content: 'Hello' }],
+          messages: [{ role: "user", content: "Hello" }],
           stream: false,
           temperature: 0.3,
           max_tokens: 4096,
@@ -905,14 +931,16 @@ describe('CloudRuAgentProvider Pact', () => {
       },
       willRespondWith: {
         status: 200,
-        headers: { 'Content-Type': 'application/json' },
+        headers: { "Content-Type": "application/json" },
         body: {
-          id: Matchers.like('chatcmpl-123'),
-          choices: [{
-            index: 0,
-            message: { role: 'assistant', content: Matchers.like('Hello!') },
-            finish_reason: 'stop',
-          }],
+          id: Matchers.like("chatcmpl-123"),
+          choices: [
+            {
+              index: 0,
+              message: { role: "assistant", content: Matchers.like("Hello!") },
+              finish_reason: "stop",
+            },
+          ],
           usage: {
             prompt_tokens: Matchers.integer(),
             completion_tokens: Matchers.integer(),
@@ -923,35 +951,35 @@ describe('CloudRuAgentProvider Pact', () => {
     });
 
     const agent = new CloudRuAgentProvider({
-      projectId: 'proj-abc-123',
-      agentId: 'agent-coder-001',
+      projectId: "proj-abc-123",
+      agentId: "agent-coder-001",
       baseUrl: `http://localhost:1234`,
-      apiKey: 'test-api-key',
-      authType: 'api_key',
+      apiKey: "test-api-key",
+      authType: "api_key",
     });
 
     const response = await agent.execute({
-      requestId: 'req-1',
-      sessionId: 'session-1',
-      message: 'Hello',
+      requestId: "req-1",
+      sessionId: "session-1",
+      message: "Hello",
     });
 
     expect(response.content).toBeTruthy();
     expect(response.usage?.totalTokens).toBeGreaterThan(0);
   });
 
-  it('returns agent health status', async () => {
+  it("returns agent health status", async () => {
     await provider.addInteraction({
-      state: 'agent agent-coder-001 is RUNNING',
-      uponReceiving: 'a health check request',
+      state: "agent agent-coder-001 is RUNNING",
+      uponReceiving: "a health check request",
       withRequest: {
-        method: 'GET',
-        path: '/proj-abc-123/agents/agent-coder-001',
-        headers: { 'X-API-Key': 'test-api-key' },
+        method: "GET",
+        path: "/proj-abc-123/agents/agent-coder-001",
+        headers: { "X-API-Key": "test-api-key" },
       },
       willRespondWith: {
         status: 200,
-        body: { status: 'RUNNING' },
+        body: { status: "RUNNING" },
       },
     });
 
@@ -965,23 +993,31 @@ describe('CloudRuAgentProvider Pact', () => {
 
 ```typescript
 // pact/mcp-federation.pact.ts
-it('discovers tools via MCP tools/list', async () => {
+it("discovers tools via MCP tools/list", async () => {
   await provider.addInteraction({
-    state: 'MCP server has 2 tools',
-    uponReceiving: 'a tools/list request',
+    state: "MCP server has 2 tools",
+    uponReceiving: "a tools/list request",
     withRequest: {
-      method: 'POST',
-      path: '/mcp/server-001',
-      body: { jsonrpc: '2.0', method: 'tools/list', params: {}, id: Matchers.integer() },
+      method: "POST",
+      path: "/mcp/server-001",
+      body: { jsonrpc: "2.0", method: "tools/list", params: {}, id: Matchers.integer() },
     },
     willRespondWith: {
       status: 200,
       body: {
-        jsonrpc: '2.0',
+        jsonrpc: "2.0",
         result: {
           tools: [
-            { name: 'search', description: Matchers.like('Search documents'), inputSchema: Matchers.like({}) },
-            { name: 'retrieve', description: Matchers.like('Retrieve document'), inputSchema: Matchers.like({}) },
+            {
+              name: "search",
+              description: Matchers.like("Search documents"),
+              inputSchema: Matchers.like({}),
+            },
+            {
+              name: "retrieve",
+              description: Matchers.like("Retrieve document"),
+              inputSchema: Matchers.like({}),
+            },
           ],
         },
         id: Matchers.integer(),
@@ -996,22 +1032,22 @@ it('discovers tools via MCP tools/list', async () => {
 ## Property-Based Testing (fast-check)
 
 ```typescript
-import * as fc from 'fast-check';
+import * as fc from "fast-check";
 
 // Property: Container always resolves registered services
 fc.assert(
   fc.property(
     fc.array(fc.tuple(fc.string(), fc.anything()), { minLength: 1, maxLength: 50 }),
     (registrations) => {
-      const container = new OpenClawContainer('test');
+      const container = new OpenClawContainer("test");
       for (const [token, value] of registrations) {
         container.set(token, value);
       }
       for (const [token, value] of registrations) {
         expect(container.get(token)).toBe(value);
       }
-    }
-  )
+    },
+  ),
 );
 
 // Property: Circuit breaker opens after exactly N failures
@@ -1022,31 +1058,37 @@ fc.assert(
       const breaker = new CircuitBreaker({ failureThreshold: threshold, resetTimeoutMs: 5000 });
       for (let i = 0; i < threshold - 1; i++) {
         breaker.recordFailure();
-        expect(breaker.state).toBe('closed');
+        expect(breaker.state).toBe("closed");
       }
       breaker.recordFailure();
-      expect(breaker.state).toBe('open');
-    }
-  )
+      expect(breaker.state).toBe("open");
+    },
+  ),
 );
 
 // Property: MCP tool name collision always has namespaced fallback
 fc.assert(
   fc.property(
-    fc.array(fc.record({ serverName: fc.string(), toolName: fc.string() }), { minLength: 2, maxLength: 20 }),
+    fc.array(fc.record({ serverName: fc.string(), toolName: fc.string() }), {
+      minLength: 2,
+      maxLength: 20,
+    }),
     (servers) => {
       const federation = new McpFederation();
       for (const { serverName, toolName } of servers) {
-        federation.registerCustomServer(serverName, serverName, { type: 'sse', url: 'http://test' }, [
-          { name: toolName, description: '', inputSchema: {} },
-        ]);
+        federation.registerCustomServer(
+          serverName,
+          serverName,
+          { type: "sse", url: "http://test" },
+          [{ name: toolName, description: "", inputSchema: {} }],
+        );
       }
       // Every tool must be accessible via namespaced name
       for (const { serverName, toolName } of servers) {
         expect(federation.hasNamespacedTool(`${serverName}:${toolName}`)).toBe(true);
       }
-    }
-  )
+    },
+  ),
 );
 
 // Property: Provider routing is deterministic for same input
@@ -1058,12 +1100,12 @@ fc.assert(
     }),
     ({ capability, providers }) => {
       const orchestrator = createOrchestrator(providers);
-      const request = { requestId: 'r1', sessionId: 's1', message: 'test' };
+      const request = { requestId: "r1", sessionId: "s1", message: "test" };
       const result1 = orchestrator.selectProviderSync(request, capability);
       const result2 = orchestrator.selectProviderSync(request, capability);
       expect(result1).toBe(result2); // Same input -> same provider
-    }
-  )
+    },
+  ),
 );
 ```
 
@@ -1078,9 +1120,9 @@ name: Shift-Left Quality Gate (ADR-012 + ADR-013)
 on:
   pull_request:
     paths:
-      - 'src/core/**'
-      - 'src/agent-fabric/**'
-      - 'packages/@openclaw/**'
+      - "src/core/**"
+      - "src/agent-fabric/**"
+      - "packages/@openclaw/**"
 
 jobs:
   dependency-check:
@@ -1149,29 +1191,29 @@ jobs:
 
 ## Quantified Metrics and KPIs
 
-| Metric | Target | Measurement Method |
-|--------|--------|-------------------|
-| Unit test coverage (lines) | >= 85% | Jest `--coverage` |
-| Unit test coverage (branches) | >= 80% | Jest `--coverage` |
-| Mutation score | >= 65% | Stryker |
-| Pact contract coverage | 100% of external API endpoints | Pact broker verification |
-| Property tests | >= 10 properties per module | fast-check test count |
-| DI resolution time (singleton) | < 1ms | Benchmark with `performance.now()` |
-| DI resolution time (scoped) | < 5ms | Benchmark with `performance.now()` |
-| Circuit breaker open time | < 1s after threshold failures | Integration test with timer assertions |
-| Health check aggregation time | < 10s for all 8 modules | Integration test with `Promise.race()` |
-| MCP tool resolution time | < 1ms for indexed lookup | Benchmark |
-| Zero required internal deps | 8/8 packages pass | CI `check-internal-deps.js` |
-| Circular dependency count | 0 | `madge --circular` |
+| Metric                         | Target                         | Measurement Method                     |
+| ------------------------------ | ------------------------------ | -------------------------------------- |
+| Unit test coverage (lines)     | >= 85%                         | Jest `--coverage`                      |
+| Unit test coverage (branches)  | >= 80%                         | Jest `--coverage`                      |
+| Mutation score                 | >= 65%                         | Stryker                                |
+| Pact contract coverage         | 100% of external API endpoints | Pact broker verification               |
+| Property tests                 | >= 10 properties per module    | fast-check test count                  |
+| DI resolution time (singleton) | < 1ms                          | Benchmark with `performance.now()`     |
+| DI resolution time (scoped)    | < 5ms                          | Benchmark with `performance.now()`     |
+| Circuit breaker open time      | < 1s after threshold failures  | Integration test with timer assertions |
+| Health check aggregation time  | < 10s for all 8 modules        | Integration test with `Promise.race()` |
+| MCP tool resolution time       | < 1ms for indexed lookup       | Benchmark                              |
+| Zero required internal deps    | 8/8 packages pass              | CI `check-internal-deps.js`            |
+| Circular dependency count      | 0                              | `madge --circular`                     |
 
 ---
 
 ## Summary Scores
 
-| ADR | Testability Score | Critical Missing Error Scenarios | Missing Acceptance Criteria | Pre-Implementation Tests Identified |
-|-----|:-----------------:|:-------------------------------:|:--------------------------:|:-----------------------------------:|
-| ADR-012 (Plugin Architecture) | **70/100** | 12 | 9 BDD scenarios, 4 contracts | 12 unit, 5 integration, 2 E2E |
-| ADR-013 (AI Fabric Integration) | **68/100** | 12 | 9 BDD scenarios, 4 contracts | 16 unit, 5 integration, 2 E2E |
+| ADR                             | Testability Score | Critical Missing Error Scenarios | Missing Acceptance Criteria  | Pre-Implementation Tests Identified |
+| ------------------------------- | :---------------: | :------------------------------: | :--------------------------: | :---------------------------------: |
+| ADR-012 (Plugin Architecture)   |    **70/100**     |                12                | 9 BDD scenarios, 4 contracts |    12 unit, 5 integration, 2 E2E    |
+| ADR-013 (AI Fabric Integration) |    **68/100**     |                12                | 9 BDD scenarios, 4 contracts |    16 unit, 5 integration, 2 E2E    |
 
 **Overall assessment:** Both ADRs define well-structured, mockable interfaces that enable test-driven development. The primary risks are:
 
@@ -1182,6 +1224,7 @@ jobs:
 5. **Operational gaps:** No rate limiting in orchestrator, no cold start mitigation, no circuit breaker config schema, no distributed tracing.
 
 **Recommended next steps:**
+
 1. Extract shared types into `@openclaw/types` package to prevent cross-module coupling.
 2. Clarify the `AgentFabric` / `IAgentProvider` relationship -- designate one as the public API, the other as the SPI.
 3. Define `CircuitBreakerConfig` schema with concrete defaults.

@@ -46,9 +46,9 @@ type Result<T, E extends OpenClawError> =
 ### 2.3 Branded Types
 
 ```typescript
-type TenantIdString  = Branded<string, 'TenantId'>;    // "telegram:123:456"
-type SessionIdString = Branded<string, 'SessionId'>;    // "sess_abc123"
-type WorkspacePath   = Branded<string, 'WorkspacePath'>; // "/workspaces/..."
+type TenantIdString = Branded<string, "TenantId">; // "telegram:123:456"
+type SessionIdString = Branded<string, "SessionId">; // "sess_abc123"
+type WorkspacePath = Branded<string, "WorkspacePath">; // "/workspaces/..."
 ```
 
 Компилятор запрещает подстановку обычного `string`, устраняя ошибки на этапе компиляции.
@@ -57,8 +57,10 @@ type WorkspacePath   = Branded<string, 'WorkspacePath'>; // "/workspaces/..."
 
 ```typescript
 interface DomainEvent<T = unknown> {
-  readonly type: string;           readonly payload: T;
-  readonly timestamp: Date;        readonly correlationId: string;
+  readonly type: string;
+  readonly payload: T;
+  readonly timestamp: Date;
+  readonly correlationId: string;
   readonly sourceContext: string;
 }
 ```
@@ -111,12 +113,12 @@ src/
 
 Общее ядро без бизнес-логики: базовые типы, DI-контейнер, шина событий, логгер.
 
-| Компонент | Описание |
-|-----------|----------|
-| `Result<T,E>` | Дискриминированное объединение для обработки ошибок |
-| `Branded<T,B>` | Номинальная типизация через phantom brand |
-| `OpenClawError` | Базовый класс: code, recoverable, toUserMessage() |
-| `DomainEventBus` | Интерфейс pub/sub с correlationId |
+| Компонент             | Описание                                               |
+| --------------------- | ------------------------------------------------------ |
+| `Result<T,E>`         | Дискриминированное объединение для обработки ошибок    |
+| `Branded<T,B>`        | Номинальная типизация через phantom brand              |
+| `OpenClawError`       | Базовый класс: code, recoverable, toUserMessage()      |
+| `DomainEventBus`      | Интерфейс pub/sub с correlationId                      |
 | `DependencyContainer` | Контейнер: register, resolve, createChildScope, freeze |
 
 ### 4.2 Session (session/) -- Тенанты и сессии
@@ -222,10 +224,10 @@ RateLimitHit, TokenBudgetWarning
 ```typescript
 class DependencyContainer {
   register<T>(token: InjectionToken<T>, factory: () => T, opts?): void;
-  resolve<T>(token: InjectionToken<T>): T;  // singleton по умолчанию
+  resolve<T>(token: InjectionToken<T>): T; // singleton по умолчанию
   has(token): boolean;
-  createChildScope(): DependencyContainer;   // наследует родителя
-  freeze(): void;                            // блокирует регистрации
+  createChildScope(): DependencyContainer; // наследует родителя
+  freeze(): void; // блокирует регистрации
 }
 ```
 
@@ -234,17 +236,17 @@ class DependencyContainer {
 
 ### 5.2 TOKENS (33 штуки)
 
-| Контекст | Токены |
-|----------|--------|
-| Core | EVENT_BUS |
-| Session | TENANT_STORE, SESSION_STORE, WORKSPACE_MANAGER, FILE_SYSTEM |
+| Контекст    | Токены                                                                                 |
+| ----------- | -------------------------------------------------------------------------------------- |
+| Core        | EVENT_BUS                                                                              |
+| Session     | TENANT_STORE, SESSION_STORE, WORKSPACE_MANAGER, FILE_SYSTEM                            |
 | Concurrency | WORKER_POOL, PRIORITY_SCHEDULER, SESSION_MUTEX, SUBPROCESS_FACTORY, CONCURRENCY_CONFIG |
-| Streaming | BATCH_ADAPTER |
-| Messenger | WEBHOOK_ROUTER, MESSAGE_DISPATCHER, MESSENGER_RATE_LIMITER, WEB_ADAPTER, HTTP_CLIENT |
-| MCP | TOOL_REGISTRY, TOOL_ACCESS_GUARD, TOOL_EXECUTOR |
-| Training | EXAMPLE_STORE, FEEDBACK_STORE, CONTEXT_BUILDER, FEEDBACK_PROCESSOR, EXAMPLE_VALIDATOR |
-| Plugins | PLUGIN_REGISTRY, PLUGIN_LIFECYCLE, PERMISSION_GUARD, HOOK_DISPATCHER, PLUGIN_SANDBOX |
-| AI Fabric | PROVIDER_REGISTRY, AI_RATE_LIMITER, TOKEN_BUDGET, MODEL_SELECTOR |
+| Streaming   | BATCH_ADAPTER                                                                          |
+| Messenger   | WEBHOOK_ROUTER, MESSAGE_DISPATCHER, MESSENGER_RATE_LIMITER, WEB_ADAPTER, HTTP_CLIENT   |
+| MCP         | TOOL_REGISTRY, TOOL_ACCESS_GUARD, TOOL_EXECUTOR                                        |
+| Training    | EXAMPLE_STORE, FEEDBACK_STORE, CONTEXT_BUILDER, FEEDBACK_PROCESSOR, EXAMPLE_VALIDATOR  |
+| Plugins     | PLUGIN_REGISTRY, PLUGIN_LIFECYCLE, PERMISSION_GUARD, HOOK_DISPATCHER, PLUGIN_SANDBOX   |
+| AI Fabric   | PROVIDER_REGISTRY, AI_RATE_LIMITER, TOKEN_BUDGET, MODEL_SELECTOR                       |
 
 Порты ILlmPort, IMcpServerPort, IModelPort регистрируются потребителем через child scope.
 
@@ -257,26 +259,26 @@ class DependencyContainer {
 
 ### 6.2 Реестр доменных событий (42 типа)
 
-| Контекст | События |
-|----------|---------|
-| Session | SessionCreated, SessionActivated, SessionExpired, SessionSuspended, TenantCreated, TenantTierChanged, WorkspaceProvisioned, WorkspaceCleaned, ToolPolicyApplied |
-| Concurrency | WorkerSpawned, WorkerRecycled, WorkerStuck, RequestQueued, RequestStarted, RequestCompleted, RequestTimedOut, BackpressureActivated |
-| Messenger | MessageReceived, MessageSent, MessageDeliveryFailed, WebhookReceived, WebhookValidationFailed |
-| MCP | ToolInvoked, ToolCompleted, ToolFailed, ToolTimedOut, ConversationStarted, ConversationCompleted |
-| Training | ExampleAdded, ExampleRemoved, ExampleRated, FeedbackReceived, ContextBuilt, ContextInvalidated, FeedbackFlaggedForReview |
-| Plugins | PluginRegistered, PluginInstalled, PluginActivated, PluginDisabled, PluginError, HookExecuted |
-| AI Fabric | ModelRequested, ModelResponded, ModelFailed, FallbackTriggered, RateLimitHit, TokenBudgetWarning |
+| Контекст    | События                                                                                                                                                         |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Session     | SessionCreated, SessionActivated, SessionExpired, SessionSuspended, TenantCreated, TenantTierChanged, WorkspaceProvisioned, WorkspaceCleaned, ToolPolicyApplied |
+| Concurrency | WorkerSpawned, WorkerRecycled, WorkerStuck, RequestQueued, RequestStarted, RequestCompleted, RequestTimedOut, BackpressureActivated                             |
+| Messenger   | MessageReceived, MessageSent, MessageDeliveryFailed, WebhookReceived, WebhookValidationFailed                                                                   |
+| MCP         | ToolInvoked, ToolCompleted, ToolFailed, ToolTimedOut, ConversationStarted, ConversationCompleted                                                                |
+| Training    | ExampleAdded, ExampleRemoved, ExampleRated, FeedbackReceived, ContextBuilt, ContextInvalidated, FeedbackFlaggedForReview                                        |
+| Plugins     | PluginRegistered, PluginInstalled, PluginActivated, PluginDisabled, PluginError, HookExecuted                                                                   |
+| AI Fabric   | ModelRequested, ModelResponded, ModelFailed, FallbackTriggered, RateLimitHit, TokenBudgetWarning                                                                |
 
 ## 7. Архитектура безопасности
 
 ### 7.1 Уровни доступа: `free < standard < premium < admin`
 
-| Уровень | Инструменты | Concurrent | Approval |
-|---------|-------------|-----------|----------|
-| free | Read, Glob, Grep, WebFetch | 1 | Да |
-| standard | + Write, Edit, NotebookEdit | 2 | Нет |
-| premium | + Bash, WebSearch, Skill, TodoWrite | 4 | Нет |
-| admin | Все | Без лимита | Нет |
+| Уровень  | Инструменты                         | Concurrent | Approval |
+| -------- | ----------------------------------- | ---------- | -------- |
+| free     | Read, Glob, Grep, WebFetch          | 1          | Да       |
+| standard | + Write, Edit, NotebookEdit         | 2          | Нет      |
+| premium  | + Bash, WebSearch, Skill, TodoWrite | 4          | Нет      |
+| admin    | Все                                 | Без лимита | Нет      |
 
 Маппинг SandboxTier: free->restricted, standard->standard, premium/admin->full.
 
@@ -290,9 +292,9 @@ class DependencyContainer {
 
 ```typescript
 // TelegramAdapter -- HMAC-SHA256 + timingSafeEqual (защита от timing attacks)
-const hmac = crypto.createHmac('sha256', secret);
+const hmac = crypto.createHmac("sha256", secret);
 hmac.update(payload.rawBody);
-crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(hmac.digest('hex')));
+crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(hmac.digest("hex")));
 ```
 
 ### 7.4 Прочие механизмы
@@ -399,14 +401,14 @@ active->{disabled, error}, disabled->{active, error}, error->{disabled}.
 
 ## 10. Технологический стек
 
-| Категория | Технология | Версия |
-|-----------|-----------|--------|
-| Язык | TypeScript (ES2022, strict) | ^5.5.0 |
-| Рантайм | Node.js | >=22.12.0 |
-| Логирование | Pino | ^9.0.0 |
-| Тестирование | Vitest | ^2.0.0 |
-| Покрытие | @vitest/coverage-v8 | ^2.0.0 |
-| Линтер | ESLint + typescript-eslint | ^9.39.2 / ^8.55.0 |
+| Категория         | Технология                              | Версия            |
+| ----------------- | --------------------------------------- | ----------------- |
+| Язык              | TypeScript (ES2022, strict)             | ^5.5.0            |
+| Рантайм           | Node.js                                 | >=22.12.0         |
+| Логирование       | Pino                                    | ^9.0.0            |
+| Тестирование      | Vitest                                  | ^2.0.0            |
+| Покрытие          | @vitest/coverage-v8                     | ^2.0.0            |
+| Линтер            | ESLint + typescript-eslint              | ^9.39.2 / ^8.55.0 |
 | Модульная система | ESM (type: "module"), Node16 resolution |
 
 **Строгие настройки TypeScript:** noUncheckedIndexedAccess, noUnusedLocals, noUnusedParameters,

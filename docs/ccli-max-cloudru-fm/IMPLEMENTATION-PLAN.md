@@ -2,15 +2,15 @@
 
 ## Document Metadata
 
-| Field | Value |
-|-------|-------|
-| **Date** | 2026-02-12 |
-| **Status** | DRAFT |
-| **ADRs Implemented** | ADR-001 through ADR-005 |
-| **Methodology** | SPARC-GOAP (Specification, Pseudocode, Architecture, Refinement, Completion) |
+| Field                           | Value                                                                                   |
+| ------------------------------- | --------------------------------------------------------------------------------------- |
+| **Date**                        | 2026-02-12                                                                              |
+| **Status**                      | DRAFT                                                                                   |
+| **ADRs Implemented**            | ADR-001 through ADR-005                                                                 |
+| **Methodology**                 | SPARC-GOAP (Specification, Pseudocode, Architecture, Refinement, Completion)            |
 | **Shift-Left Issues Addressed** | CRITICAL-001 through CRITICAL-007, WARNING-001 through WARNING-011, X-001 through X-005 |
-| **QCSD Quality Gates** | Capability, Reliability, Security (P0); Performance, Development (P1) |
-| **Risk Register Coverage** | R001-R025 from shift-left risk analysis |
+| **QCSD Quality Gates**          | Capability, Reliability, Security (P0); Performance, Development (P1)                   |
+| **Risk Register Coverage**      | R001-R025 from shift-left risk analysis                                                 |
 
 ---
 
@@ -48,13 +48,13 @@ current_state:
 ```yaml
 goal_state:
   proxy_integration: "claude-code-proxy via Docker, localhost:8082"
-  wizard_cloudru_support: true  # 3 model choices in wizard
+  wizard_cloudru_support: true # 3 model choices in wizard
   proxy_deployment_automation: "docker-compose generation + health check"
   model_mapping: "3 presets (GLM-4.7 Full, Flash Free, Qwen3 Code)"
   health_monitoring: "pre-flight health check with 30s cache"
   fallback_chain: "opus -> sonnet -> haiku (mapped via proxy tiers)"
-  security_hardened: true  # Docker security opts, pinned image, extended clearEnv
-  type_system_consistent: true  # Both AuthChoiceGroupId definitions aligned
+  security_hardened: true # Docker security opts, pinned image, extended clearEnv
+  type_system_consistent: true # Both AuthChoiceGroupId definitions aligned
   acceptance_tests: passing
 ```
 
@@ -79,6 +79,7 @@ M1 (Type Foundation)
 ```
 
 **Parallel opportunities:**
+
 - M2 and M3 can execute in parallel after M1 completes
 - M6 can start partially in parallel with M5 (Docker security is independent of health check code)
 
@@ -86,14 +87,14 @@ M1 (Type Foundation)
 
 ## Milestone 1: Type System Foundation
 
-| Field | Value |
-|-------|-------|
-| **ID** | M1 |
-| **Name** | Type System Foundation |
-| **SPARC Phase** | Specification |
-| **Estimated Effort** | S (Small) |
-| **Risk Level** | Medium |
-| **Dependencies** | None (starting point) |
+| Field                | Value                  |
+| -------------------- | ---------------------- |
+| **ID**               | M1                     |
+| **Name**             | Type System Foundation |
+| **SPARC Phase**      | Specification          |
+| **Estimated Effort** | S (Small)              |
+| **Risk Level**       | Medium                 |
+| **Dependencies**     | None (starting point)  |
 
 ### Preconditions
 
@@ -121,6 +122,7 @@ The `AuthChoiceGroupId` type is defined in TWO files with DIFFERENT members (shi
 ```
 
 Also add to `OnboardOptions`:
+
 ```typescript
 cloudruApiKey?: string;
 ```
@@ -161,11 +163,11 @@ options.push({
 
 ### Shift-Left Issues Addressed
 
-| Issue | Resolution |
-|-------|-----------|
-| X-005 | Both `AuthChoiceGroupId` definitions updated simultaneously |
-| WARNING-004 | `"cloudru-fm"` added to BOTH files |
-| WARNING-005 | Verified actual AuthChoice count (43, not 47) before extending |
+| Issue        | Resolution                                                                     |
+| ------------ | ------------------------------------------------------------------------------ |
+| X-005        | Both `AuthChoiceGroupId` definitions updated simultaneously                    |
+| WARNING-004  | `"cloudru-fm"` added to BOTH files                                             |
+| WARNING-005  | Verified actual AuthChoice count (43, not 47) before extending                 |
 | CRITICAL-003 | Handler naming convention `applyAuthChoice<Provider>` followed (set up for M2) |
 
 ### Acceptance Criteria
@@ -193,14 +195,14 @@ options.push({
 
 ## Milestone 2: Wizard Onboarding Flow
 
-| Field | Value |
-|-------|-------|
-| **ID** | M2 |
-| **Name** | Wizard Cloud.ru FM Onboarding Flow |
-| **SPARC Phase** | Architecture + Refinement |
-| **Estimated Effort** | M (Medium) |
-| **Risk Level** | Medium |
-| **Dependencies** | M1 (Type Foundation) |
+| Field                | Value                              |
+| -------------------- | ---------------------------------- |
+| **ID**               | M2                                 |
+| **Name**             | Wizard Cloud.ru FM Onboarding Flow |
+| **SPARC Phase**      | Architecture + Refinement          |
+| **Estimated Effort** | M (Medium)                         |
+| **Risk Level**       | Medium                             |
+| **Dependencies**     | M1 (Type Foundation)               |
 
 ### Preconditions
 
@@ -214,9 +216,11 @@ options.push({
 **Purpose:** Auth choice handler for `cloudru-fm-*` choices. Follows the established `applyAuthChoice<Provider>` pattern.
 
 **Functions:**
+
 - `applyAuthChoiceCloudruFm(params: ApplyAuthChoiceParams): Promise<ApplyAuthChoiceResult | null>` -- Main handler. Returns `null` if `params.authChoice` does not start with `"cloudru-fm-"`.
 
 **Flow:**
+
 ```
 1. Check authChoice starts with "cloudru-fm-" -> return null otherwise
 2. Prompt for cloud.ru API key (or detect from CLOUDRU_API_KEY env)
@@ -243,19 +247,21 @@ options.push({
 **Purpose:** Cloud.ru FM-specific onboarding utilities (Docker compose generation, model preset resolution).
 
 **Functions:**
+
 - `resolveCloudruModelPreset(choice: AuthChoice): CloudruModelPreset` -- Pure function mapping choice to BIG/MIDDLE/SMALL model IDs
 - `generateDockerComposeTemplate(params: { port: number; preset: CloudruModelPreset }): string` -- Returns docker-compose YAML string with template variables
 - `writeCloudruEnvFile(params: { apiKey: string; workspaceDir: string }): Promise<void>` -- Writes `.env` with CLOUDRU_API_KEY and adds to `.gitignore`
 - `ensureGitignoreEntries(params: { workspaceDir: string; entries: string[] }): Promise<void>` -- Idempotently adds entries to `.gitignore`
 
 **Types:**
+
 ```typescript
 type CloudruModelPreset = {
-  big: string;    // Full cloud.ru model ID for BIG_MODEL
+  big: string; // Full cloud.ru model ID for BIG_MODEL
   middle: string; // Full cloud.ru model ID for MIDDLE_MODEL
-  small: string;  // Full cloud.ru model ID for SMALL_MODEL
-  label: string;  // Human-readable label
-  free: boolean;  // Whether the default model is free tier
+  small: string; // Full cloud.ru model ID for SMALL_MODEL
+  label: string; // Human-readable label
+  free: boolean; // Whether the default model is free tier
 };
 ```
 
@@ -292,13 +298,13 @@ NOTE: The actual insertion point is at line 59-60 in `configure.gateway-auth.ts`
 
 ### Shift-Left Issues Addressed
 
-| Issue | Resolution |
-|-------|-----------|
+| Issue        | Resolution                                                                                                          |
+| ------------ | ------------------------------------------------------------------------------------------------------------------- |
 | CRITICAL-002 | Correct integration point: `auth-choice.apply.ts:43-55` handler chain + `configure.gateway-auth.ts:59-60` pre-check |
-| CRITICAL-003 | Function named `applyAuthChoiceCloudruFm` matching convention |
-| X-002 | Clear boundary: wizard handles UI + config; M4 handles Docker operations |
-| R024 | Sentinel value changed to `"not-a-real-key-proxy-only"` for clarity |
-| WARNING-010 | Full model IDs used consistently (`zai-org/GLM-4.7`, not `GLM-4.7`) |
+| CRITICAL-003 | Function named `applyAuthChoiceCloudruFm` matching convention                                                       |
+| X-002        | Clear boundary: wizard handles UI + config; M4 handles Docker operations                                            |
+| R024         | Sentinel value changed to `"not-a-real-key-proxy-only"` for clarity                                                 |
+| WARNING-010  | Full model IDs used consistently (`zai-org/GLM-4.7`, not `GLM-4.7`)                                                 |
 
 ### Acceptance Criteria
 
@@ -336,14 +342,14 @@ NOTE: The actual insertion point is at line 59-60 in `configure.gateway-auth.ts`
 
 ## Milestone 3: Backend Config and Model Mapping
 
-| Field | Value |
-|-------|-------|
-| **ID** | M3 |
-| **Name** | CLI Backend Configuration and Model Mapping |
-| **SPARC Phase** | Specification + Refinement |
-| **Estimated Effort** | S (Small) |
-| **Risk Level** | Low |
-| **Dependencies** | M1 (Type Foundation) |
+| Field                | Value                                       |
+| -------------------- | ------------------------------------------- |
+| **ID**               | M3                                          |
+| **Name**             | CLI Backend Configuration and Model Mapping |
+| **SPARC Phase**      | Specification + Refinement                  |
+| **Estimated Effort** | S (Small)                                   |
+| **Risk Level**       | Low                                         |
+| **Dependencies**     | M1 (Type Foundation)                        |
 
 ### Preconditions
 
@@ -362,6 +368,7 @@ ADR-001 defines the backend env override. ADR-005 defines model mapping. The fal
 **Purpose:** Centralized model ID definitions and preset configurations. Addresses risk R019 (model ID hardcoding) by having a single source of truth.
 
 **Exports:**
+
 ```typescript
 export const CLOUDRU_FM_MODELS = {
   "glm-4.7": "zai-org/GLM-4.7",
@@ -410,11 +417,11 @@ None in this milestone. The constants file is consumed by M2 and M4.
 
 The fallback chain MUST be expressed in Claude Code tier names. The mapping is:
 
-| OpenClaw Fallback Config | Claude Code CLI Flag | Proxy Env | Cloud.ru Model |
-|--------------------------|---------------------|-----------|---------------|
-| `claude-cli/opus` | `--model opus` | BIG_MODEL | Per preset |
-| `claude-cli/sonnet` | `--model sonnet` | MIDDLE_MODEL | Per preset |
-| `claude-cli/haiku` | `--model haiku` | SMALL_MODEL | Per preset |
+| OpenClaw Fallback Config | Claude Code CLI Flag | Proxy Env    | Cloud.ru Model |
+| ------------------------ | -------------------- | ------------ | -------------- |
+| `claude-cli/opus`        | `--model opus`       | BIG_MODEL    | Per preset     |
+| `claude-cli/sonnet`      | `--model sonnet`     | MIDDLE_MODEL | Per preset     |
+| `claude-cli/haiku`       | `--model haiku`      | SMALL_MODEL  | Per preset     |
 
 The `agents.defaults.model.fallbacks` config MUST use `["claude-cli/sonnet", "claude-cli/haiku"]` -- NOT `["zai-org/GLM-4.7-Flash"]`. The proxy handles the model-level mapping internally.
 
@@ -448,14 +455,14 @@ GLM-4.7-FlashX IS available -- it is assigned to the MIDDLE_MODEL proxy slot. It
 
 ## Milestone 4: Proxy Lifecycle Management
 
-| Field | Value |
-|-------|-------|
-| **ID** | M4 |
-| **Name** | Proxy Docker Deployment and Lifecycle |
-| **SPARC Phase** | Architecture + Refinement |
-| **Estimated Effort** | M (Medium) |
-| **Risk Level** | High |
-| **Dependencies** | M2 (Wizard Flow), M3 (Constants) |
+| Field                | Value                                 |
+| -------------------- | ------------------------------------- |
+| **ID**               | M4                                    |
+| **Name**             | Proxy Docker Deployment and Lifecycle |
+| **SPARC Phase**      | Architecture + Refinement             |
+| **Estimated Effort** | M (Medium)                            |
+| **Risk Level**       | High                                  |
+| **Dependencies**     | M2 (Wizard Flow), M3 (Constants)      |
 
 ### Preconditions
 
@@ -474,6 +481,7 @@ ADR-004 defines proxy lifecycle but has the lowest testability score (50/100). T
 **Purpose:** Proxy health checking with caching. Resolves CRITICAL-004 by specifying the exact location and mechanism.
 
 **Functions:**
+
 ```typescript
 type ProxyHealthResult = {
   ok: boolean;
@@ -493,6 +501,7 @@ export function resolveProxyUrl(config?: OpenClawConfig): string | null;
 ```
 
 **Implementation details:**
+
 - Uses `fetch` with 5-second timeout to `GET ${proxyUrl}/health`
 - Caches result in module-level variable for 30 seconds (configurable)
 - Returns `{ ok: false, error: "..." }` on any failure
@@ -503,6 +512,7 @@ export function resolveProxyUrl(config?: OpenClawConfig): string | null;
 **Purpose:** Docker compose generation and Docker prerequisite checks. Resolves WARNING-008, WARNING-009.
 
 **Functions:**
+
 ```typescript
 // Check if Docker and docker-compose are available
 export async function checkDockerAvailable(): Promise<{
@@ -529,6 +539,7 @@ export async function writeProxyDockerCompose(params: {
 ```
 
 **Docker compose template features (addressing security findings):**
+
 - Image pinned to specific version: `legard/claude-code-proxy:v1.0.0` (R013)
 - Localhost-only binding: `127.0.0.1:${port}:8082` (R008)
 - Security hardening (E-01, QCSD-05):
@@ -564,6 +575,7 @@ export async function writeProxyDockerCompose(params: {
 #### 3. Integration with wizard flow (from M2)
 
 The `onboard-cloudru-fm.ts` file created in M2 will import and use `proxy-docker.ts` functions:
+
 - Call `checkDockerAvailable()` at wizard step 4
 - Call `checkPortAvailable(port)` before Docker compose generation
 - Call `writeProxyDockerCompose()` to generate the file
@@ -571,19 +583,19 @@ The `onboard-cloudru-fm.ts` file created in M2 will import and use `proxy-docker
 
 ### Shift-Left Issues Addressed
 
-| Issue | Resolution |
-|-------|-----------|
+| Issue        | Resolution                                                                |
+| ------------ | ------------------------------------------------------------------------- |
 | CRITICAL-004 | Health check at `proxy-health.ts`, called from agent-runner routing layer |
 | CRITICAL-005 | State machine simplified to stateless health check with cache (pragmatic) |
-| WARNING-008 | `checkDockerAvailable()` before wizard step 4 |
-| WARNING-009 | `checkPortAvailable()` before Docker compose generation |
-| R002 | Pre-flight health check prevents requests to dead proxy |
-| R013 | Image pinned to specific version |
-| R008 | Localhost-only binding + security_opt documentation |
-| E-01 | Docker security hardening in compose template |
-| D-02 | Docker resource limits in compose template |
-| MQ-24 | `start_period: 10s` added to healthcheck |
-| MQ-26 | Health check interval reduced to 10s |
+| WARNING-008  | `checkDockerAvailable()` before wizard step 4                             |
+| WARNING-009  | `checkPortAvailable()` before Docker compose generation                   |
+| R002         | Pre-flight health check prevents requests to dead proxy                   |
+| R013         | Image pinned to specific version                                          |
+| R008         | Localhost-only binding + security_opt documentation                       |
+| E-01         | Docker security hardening in compose template                             |
+| D-02         | Docker resource limits in compose template                                |
+| MQ-24        | `start_period: 10s` added to healthcheck                                  |
+| MQ-26        | Health check interval reduced to 10s                                      |
 
 ### Acceptance Criteria
 
@@ -613,12 +625,12 @@ The `onboard-cloudru-fm.ts` file created in M2 will import and use `proxy-docker
 
 ### Risk Mitigations
 
-| Risk | Mitigation |
-|------|-----------|
-| Docker not installed | Wizard detects and shows manual setup instructions |
-| Port 8082 in use | Wizard prompts for alternative port |
-| Docker compose generation fails | Wizard outputs the YAML to console for manual use |
-| Health check false positive | Fresh health check available for forced re-check |
+| Risk                            | Mitigation                                         |
+| ------------------------------- | -------------------------------------------------- |
+| Docker not installed            | Wizard detects and shows manual setup instructions |
+| Port 8082 in use                | Wizard prompts for alternative port                |
+| Docker compose generation fails | Wizard outputs the YAML to console for manual use  |
+| Health check false positive     | Fresh health check available for forced re-check   |
 
 ### Quality Gate
 
@@ -631,14 +643,14 @@ The `onboard-cloudru-fm.ts` file created in M2 will import and use `proxy-docker
 
 ## Milestone 5: Health Monitoring and Fallback Integration
 
-| Field | Value |
-|-------|-------|
-| **ID** | M5 |
-| **Name** | Runtime Health Monitoring and Fallback Chain |
-| **SPARC Phase** | Refinement |
-| **Estimated Effort** | M (Medium) |
-| **Risk Level** | High |
-| **Dependencies** | M3 (Constants), M4 (Proxy Health) |
+| Field                | Value                                        |
+| -------------------- | -------------------------------------------- |
+| **ID**               | M5                                           |
+| **Name**             | Runtime Health Monitoring and Fallback Chain |
+| **SPARC Phase**      | Refinement                                   |
+| **Estimated Effort** | M (Medium)                                   |
+| **Risk Level**       | High                                         |
+| **Dependencies**     | M3 (Constants), M4 (Proxy Health)            |
 
 ### Preconditions
 
@@ -667,15 +679,12 @@ if (proxyUrl && proxyUrl.includes("localhost")) {
   const { checkProxyHealth } = await import("./proxy-health.js");
   const health = await checkProxyHealth(proxyUrl);
   if (!health.ok) {
-    throw new FailoverError(
-      `Proxy unhealthy: ${health.error ?? "unknown error"}`,
-      {
-        reason: "proxy-unhealthy",
-        provider: params.provider,
-        model: modelId,
-        status: 503,
-      },
-    );
+    throw new FailoverError(`Proxy unhealthy: ${health.error ?? "unknown error"}`, {
+      reason: "proxy-unhealthy",
+      provider: params.provider,
+      model: modelId,
+      status: 503,
+    });
   }
 }
 ```
@@ -717,6 +726,7 @@ clearEnv: [
 **Health check location (CRITICAL-004 resolution):**
 
 The health check is placed inside `runCliAgent()` (after backend resolution, before subprocess spawn) rather than in `agent-runner.ts` routing layer. Rationale:
+
 - The backend config (including `ANTHROPIC_BASE_URL`) is only fully resolved inside `runCliAgent()`
 - The check runs only for backends with a localhost proxy URL (not all CLI backends)
 - The 30-second cache means overhead is minimal (one HTTP call per 30 seconds max)
@@ -731,14 +741,14 @@ The clearEnv is extended from 2 entries to 8 entries. This is a blocklist approa
 
 ### Shift-Left Issues Addressed
 
-| Issue | Resolution |
-|-------|-----------|
-| R002 | Pre-flight health check prevents requests to dead proxy |
-| R007 | Extended clearEnv covers common sensitive variables |
-| CRITICAL-006 | Fallback uses Claude tier names; documented mapping |
-| MQ-14 | Cloud.ru-specific error patterns added to classifyFailoverReason |
-| MQ-15 | Health check prevents retry during proxy restart |
-| WARNING-001 | Latency budget documented: proxy health check < 1s, cached for 30s |
+| Issue        | Resolution                                                         |
+| ------------ | ------------------------------------------------------------------ |
+| R002         | Pre-flight health check prevents requests to dead proxy            |
+| R007         | Extended clearEnv covers common sensitive variables                |
+| CRITICAL-006 | Fallback uses Claude tier names; documented mapping                |
+| MQ-14        | Cloud.ru-specific error patterns added to classifyFailoverReason   |
+| MQ-15        | Health check prevents retry during proxy restart                   |
+| WARNING-001  | Latency budget documented: proxy health check < 1s, cached for 30s |
 
 ### Acceptance Criteria
 
@@ -775,14 +785,14 @@ The clearEnv is extended from 2 entries to 8 entries. This is a blocklist approa
 
 ## Milestone 6: Security Hardening
 
-| Field | Value |
-|-------|-------|
-| **ID** | M6 |
-| **Name** | Security Hardening and Defensive Measures |
-| **SPARC Phase** | Refinement |
-| **Estimated Effort** | S (Small) |
-| **Risk Level** | Medium |
-| **Dependencies** | M4 (Proxy Docker), M5 (Health Monitoring) |
+| Field                | Value                                     |
+| -------------------- | ----------------------------------------- |
+| **ID**               | M6                                        |
+| **Name**             | Security Hardening and Defensive Measures |
+| **SPARC Phase**      | Refinement                                |
+| **Estimated Effort** | S (Small)                                 |
+| **Risk Level**       | Medium                                    |
+| **Dependencies**     | M4 (Proxy Docker), M5 (Health Monitoring) |
 
 ### Preconditions
 
@@ -801,6 +811,7 @@ Multiple security gaps identified in the STRIDE analysis: no proxy authenticatio
 **Purpose:** Security validation utilities for proxy configuration.
 
 **Functions:**
+
 ```typescript
 // Validate that ANTHROPIC_BASE_URL points to localhost only (S-02)
 export function validateProxyUrl(url: string): { valid: boolean; error?: string };
@@ -834,6 +845,7 @@ Note: This is a WARNING, not a hard block, to maintain backward compatibility. F
 #### 3. Docker compose template (in M4's `proxy-docker.ts`)
 
 **Additional security directives already included in M4:**
+
 - `security_opt: [no-new-privileges:true]` (E-01)
 - `cap_drop: [ALL]` (E-01)
 - `read_only: true` (E-01)
@@ -843,23 +855,24 @@ Note: This is a WARNING, not a hard block, to maintain backward compatibility. F
 #### 4. Wizard flow (in M2's files)
 
 **Additional security measures in wizard:**
+
 - Auto-add `.env` and `docker-compose.cloudru-proxy.yml` to `.gitignore` (I-01)
 - Display warning about the sentinel key (R024)
 - Show security summary after setup
 
 ### Shift-Left Issues Addressed
 
-| Issue | Resolution |
-|-------|-----------|
-| S-01 | Proxy auth token generation (for future proxy versions that support it) |
-| S-02 | URL validation warns on non-localhost ANTHROPIC_BASE_URL |
-| S-03 | Docker image pinned (already in M4) |
-| E-01 | Docker security hardening (already in M4) |
-| E-02 | Documented: `--dangerously-skip-permissions` is required by OpenClaw; tools disabled via prompt |
-| E-04 | Backend command allowlist validation |
-| T-03 | URL validation on config overrides |
-| I-01 | `.env` and docker-compose auto-added to `.gitignore` |
-| R003 | Multiple defense layers documented and tested |
+| Issue | Resolution                                                                                      |
+| ----- | ----------------------------------------------------------------------------------------------- |
+| S-01  | Proxy auth token generation (for future proxy versions that support it)                         |
+| S-02  | URL validation warns on non-localhost ANTHROPIC_BASE_URL                                        |
+| S-03  | Docker image pinned (already in M4)                                                             |
+| E-01  | Docker security hardening (already in M4)                                                       |
+| E-02  | Documented: `--dangerously-skip-permissions` is required by OpenClaw; tools disabled via prompt |
+| E-04  | Backend command allowlist validation                                                            |
+| T-03  | URL validation on config overrides                                                              |
+| I-01  | `.env` and docker-compose auto-added to `.gitignore`                                            |
+| R003  | Multiple defense layers documented and tested                                                   |
 
 ### Acceptance Criteria
 
@@ -889,14 +902,14 @@ Note: This is a WARNING, not a hard block, to maintain backward compatibility. F
 
 ## Milestone 7: Integration Testing and Quality Gates
 
-| Field | Value |
-|-------|-------|
-| **ID** | M7 |
-| **Name** | End-to-End Integration Testing and Quality Gate Verification |
-| **SPARC Phase** | Completion |
-| **Estimated Effort** | L (Large) |
-| **Risk Level** | Low |
-| **Dependencies** | M1-M6 (all previous milestones) |
+| Field                | Value                                                        |
+| -------------------- | ------------------------------------------------------------ |
+| **ID**               | M7                                                           |
+| **Name**             | End-to-End Integration Testing and Quality Gate Verification |
+| **SPARC Phase**      | Completion                                                   |
+| **Estimated Effort** | L (Large)                                                    |
+| **Risk Level**       | Low                                                          |
+| **Dependencies**     | M1-M6 (all previous milestones)                              |
 
 ### Preconditions
 
@@ -921,6 +934,7 @@ Then: a response is returned within 60s with no proxy errors
 ```
 
 Test setup:
+
 - Spawn a mock HTTP server on port 8082 that emulates the proxy health endpoint and basic Anthropic API responses
 - Configure OpenClaw with cloudru-fm backend settings
 - Exercise the full chain: `resolveCliBackendConfig -> health check -> runCliAgent (mocked subprocess) -> parse response`
@@ -928,6 +942,7 @@ Test setup:
 #### 2. `tests/integration/cloudru-fm-wizard.test.ts` (~150 lines)
 
 **Wizard integration test:**
+
 - Select cloudru-fm-flash auth choice
 - Verify config output structure
 - Verify Docker compose generation
@@ -936,6 +951,7 @@ Test setup:
 #### 3. `tests/integration/cloudru-fm-fallback.test.ts` (~120 lines)
 
 **Fallback chain integration test (CRITICAL-006 resolution):**
+
 - Mock primary model (opus) returning 503
 - Verify fallback to sonnet (MIDDLE_MODEL)
 - Verify fallback to haiku (SMALL_MODEL)
@@ -945,6 +961,7 @@ Test setup:
 #### 4. `tests/integration/cloudru-fm-security.test.ts` (~80 lines)
 
 **Security integration test:**
+
 - Verify subprocess environment does not contain sensitive variables
 - Verify Docker compose port binding is localhost-only
 - Verify proxy URL validation catches external URLs
@@ -952,15 +969,15 @@ Test setup:
 
 ### Cross-ADR Verification Checklist
 
-| Verification | ADR | Test |
-|-------------|-----|------|
-| Proxy health check returns 200 within 1s | ADR-004 | `cloudru-fm-e2e.test.ts` |
-| TypeScript compiles with new AuthChoice values | ADR-002 | `tsc --noEmit` |
-| Wizard renders Cloud.ru FM group with 3 choices | ADR-002 | `cloudru-fm-wizard.test.ts` |
-| `runCliAgent()` returns JSON response when backed by proxy | ADR-003 | `cloudru-fm-e2e.test.ts` |
-| `verifyProxyHealth()` returns correct results | ADR-004 | `proxy-health.test.ts` |
-| Fallback opus->sonnet->haiku works through proxy tiers | ADR-005 | `cloudru-fm-fallback.test.ts` |
-| Tool calling claim qualified (not overstated) | ADR-001/003 | Documentation review (manual) |
+| Verification                                               | ADR         | Test                          |
+| ---------------------------------------------------------- | ----------- | ----------------------------- |
+| Proxy health check returns 200 within 1s                   | ADR-004     | `cloudru-fm-e2e.test.ts`      |
+| TypeScript compiles with new AuthChoice values             | ADR-002     | `tsc --noEmit`                |
+| Wizard renders Cloud.ru FM group with 3 choices            | ADR-002     | `cloudru-fm-wizard.test.ts`   |
+| `runCliAgent()` returns JSON response when backed by proxy | ADR-003     | `cloudru-fm-e2e.test.ts`      |
+| `verifyProxyHealth()` returns correct results              | ADR-004     | `proxy-health.test.ts`        |
+| Fallback opus->sonnet->haiku works through proxy tiers     | ADR-005     | `cloudru-fm-fallback.test.ts` |
+| Tool calling claim qualified (not overstated)              | ADR-001/003 | Documentation review (manual) |
 
 ### QCSD Quality Gates Verification
 
@@ -1011,38 +1028,38 @@ Test setup:
 
 ### Critical Risks from Shift-Left Analysis
 
-| Risk | Score | Milestone | Mitigation |
-|------|-------|-----------|-----------|
-| R001: GLM-4.7 tool calling instability | 20 | M5 | Health check + FailoverError classification + DISABLE_THINKING=true |
-| R002: Proxy SPOF | 16 | M4+M5 | Pre-flight health check with 30s cache + Docker restart policy |
-| R003: API key exposure | 15 | M6 | Extended clearEnv + .gitignore enforcement + Docker secrets recommendation |
-| R004: serialize:true bottleneck | 12 | M3 | Documented limitation; future ADR for `serialize: false` evaluation |
-| R005: AuthChoiceGroupId type mismatch | 12 | M1 | Both definitions updated simultaneously |
-| R006: Proxy protocol translation | 12 | M7 | Integration test with mock proxy |
-| R007: clearEnv incomplete | 12 | M5 | Extended from 2 to 8 sensitive variable patterns |
-| R012: dangerously-skip-permissions | 10 | M6 | Documented as required; tools disabled via prompt; future ADR for --allowedTools |
-| R013: Docker image :latest | 9 | M3+M4 | Pinned to specific version |
+| Risk                                   | Score | Milestone | Mitigation                                                                       |
+| -------------------------------------- | ----- | --------- | -------------------------------------------------------------------------------- |
+| R001: GLM-4.7 tool calling instability | 20    | M5        | Health check + FailoverError classification + DISABLE_THINKING=true              |
+| R002: Proxy SPOF                       | 16    | M4+M5     | Pre-flight health check with 30s cache + Docker restart policy                   |
+| R003: API key exposure                 | 15    | M6        | Extended clearEnv + .gitignore enforcement + Docker secrets recommendation       |
+| R004: serialize:true bottleneck        | 12    | M3        | Documented limitation; future ADR for `serialize: false` evaluation              |
+| R005: AuthChoiceGroupId type mismatch  | 12    | M1        | Both definitions updated simultaneously                                          |
+| R006: Proxy protocol translation       | 12    | M7        | Integration test with mock proxy                                                 |
+| R007: clearEnv incomplete              | 12    | M5        | Extended from 2 to 8 sensitive variable patterns                                 |
+| R012: dangerously-skip-permissions     | 10    | M6        | Documented as required; tools disabled via prompt; future ADR for --allowedTools |
+| R013: Docker image :latest             | 9     | M3+M4     | Pinned to specific version                                                       |
 
 ### Critical Findings from STRIDE Threat Model
 
-| Threat | Severity | Milestone | Mitigation |
-|--------|----------|-----------|-----------|
-| E-04: Backend command injection | Critical | M6 | Command allowlist validation |
-| E-02: Tool disablement bypass | Critical | M6 | Documented; prompt-based only; future hard flag |
-| E-01: Docker container escape | Critical | M4 | Security hardening directives in compose |
-| I-01: API key in docker inspect | Critical | M4+M6 | .env file, Docker secrets recommendation |
-| S-01: Port hijacking | Critical | M6 | Proxy auth token generation (future proxy support) |
+| Threat                          | Severity | Milestone | Mitigation                                         |
+| ------------------------------- | -------- | --------- | -------------------------------------------------- |
+| E-04: Backend command injection | Critical | M6        | Command allowlist validation                       |
+| E-02: Tool disablement bypass   | Critical | M6        | Documented; prompt-based only; future hard flag    |
+| E-01: Docker container escape   | Critical | M4        | Security hardening directives in compose           |
+| I-01: API key in docker inspect | Critical | M4+M6     | .env file, Docker secrets recommendation           |
+| S-01: Port hijacking            | Critical | M6        | Proxy auth token generation (future proxy support) |
 
 ### Deferred Items (Out of Scope for This Plan)
 
-| Item | Reason | Future ADR |
-|------|--------|-----------|
-| Enable selective Claude Code tools | Security implications require workspace isolation | Yes |
-| Streaming to end user | Requires CLI runner architecture change | Yes |
-| `serialize: false` evaluation | Requires load testing with proxy | Yes |
-| Multi-proxy load balancing | Not needed for single-user deployment | Yes |
-| Dynamic model routing by complexity | No proxy support for per-request model switching | Yes |
-| Prompt injection detection | Cross-cutting concern, not cloudru-specific | Yes |
+| Item                                | Reason                                            | Future ADR |
+| ----------------------------------- | ------------------------------------------------- | ---------- |
+| Enable selective Claude Code tools  | Security implications require workspace isolation | Yes        |
+| Streaming to end user               | Requires CLI runner architecture change           | Yes        |
+| `serialize: false` evaluation       | Requires load testing with proxy                  | Yes        |
+| Multi-proxy load balancing          | Not needed for single-user deployment             | Yes        |
+| Dynamic model routing by complexity | No proxy support for per-request model switching  | Yes        |
+| Prompt injection detection          | Cross-cutting concern, not cloudru-specific       | Yes        |
 
 ---
 
@@ -1073,38 +1090,38 @@ Week 3:
 
 ### Files to Create (6 new files)
 
-| File | Milestone | Lines | Purpose |
-|------|-----------|-------|---------|
-| `upstream/src/config/cloudru-fm.constants.ts` | M3 | ~60 | Centralized model IDs and presets |
-| `upstream/src/commands/auth-choice.apply.cloudru-fm.ts` | M2 | ~120 | Auth choice handler |
-| `upstream/src/commands/onboard-cloudru-fm.ts` | M2 | ~100 | Wizard utilities (Docker compose, .env) |
-| `upstream/src/agents/proxy-health.ts` | M4 | ~90 | Health check with caching |
-| `upstream/src/commands/proxy-docker.ts` | M4 | ~130 | Docker prerequisite checks + compose generation |
-| `upstream/src/agents/proxy-security.ts` | M6 | ~60 | Security validation utilities |
+| File                                                    | Milestone | Lines | Purpose                                         |
+| ------------------------------------------------------- | --------- | ----- | ----------------------------------------------- |
+| `upstream/src/config/cloudru-fm.constants.ts`           | M3        | ~60   | Centralized model IDs and presets               |
+| `upstream/src/commands/auth-choice.apply.cloudru-fm.ts` | M2        | ~120  | Auth choice handler                             |
+| `upstream/src/commands/onboard-cloudru-fm.ts`           | M2        | ~100  | Wizard utilities (Docker compose, .env)         |
+| `upstream/src/agents/proxy-health.ts`                   | M4        | ~90   | Health check with caching                       |
+| `upstream/src/commands/proxy-docker.ts`                 | M4        | ~130  | Docker prerequisite checks + compose generation |
+| `upstream/src/agents/proxy-security.ts`                 | M6        | ~60   | Security validation utilities                   |
 
 ### Files to Modify (5 existing files)
 
-| File | Milestone | Change |
-|------|-----------|--------|
-| `upstream/src/commands/onboard-types.ts` | M1 | Add 3 AuthChoice values + 1 AuthChoiceGroupId + OnboardOptions field |
-| `upstream/src/commands/auth-choice-options.ts` | M1 | Add 1 AuthChoiceGroupId + 1 group def + 3 choice options |
-| `upstream/src/commands/auth-choice.apply.ts` | M2 | Import + register cloudru-fm handler |
-| `upstream/src/commands/configure.gateway-auth.ts` | M2 | Add cloudru-fm dispatch before custom-api-key |
-| `upstream/src/agents/cli-backends.ts` | M5 | Extend clearEnv array |
-| `upstream/src/agents/cli-runner.ts` | M5 | Add pre-flight proxy health check |
+| File                                              | Milestone | Change                                                               |
+| ------------------------------------------------- | --------- | -------------------------------------------------------------------- |
+| `upstream/src/commands/onboard-types.ts`          | M1        | Add 3 AuthChoice values + 1 AuthChoiceGroupId + OnboardOptions field |
+| `upstream/src/commands/auth-choice-options.ts`    | M1        | Add 1 AuthChoiceGroupId + 1 group def + 3 choice options             |
+| `upstream/src/commands/auth-choice.apply.ts`      | M2        | Import + register cloudru-fm handler                                 |
+| `upstream/src/commands/configure.gateway-auth.ts` | M2        | Add cloudru-fm dispatch before custom-api-key                        |
+| `upstream/src/agents/cli-backends.ts`             | M5        | Extend clearEnv array                                                |
+| `upstream/src/agents/cli-runner.ts`               | M5        | Add pre-flight proxy health check                                    |
 
 ### Test Files to Create (8 new test files)
 
-| File | Milestone | Coverage |
-|------|-----------|---------|
-| `tests/commands/auth-choice-options.cloudru-fm.test.ts` | M1 | Type extensions, group definitions |
-| `tests/config/cloudru-fm.constants.test.ts` | M3 | Model IDs, presets, invariants |
-| `tests/commands/auth-choice.apply.cloudru-fm.test.ts` | M2 | Handler dispatch, config application |
-| `tests/commands/onboard-cloudru-fm.test.ts` | M2 | Docker compose generation, .env writing |
-| `tests/agents/proxy-health.test.ts` | M4 | Health check, caching, error handling |
-| `tests/commands/proxy-docker.test.ts` | M4 | Docker checks, port checks, YAML generation |
-| `tests/agents/proxy-security.test.ts` | M6 | URL validation, command allowlist |
-| `tests/integration/cloudru-fm-e2e.test.ts` | M7 | End-to-end integration |
+| File                                                    | Milestone | Coverage                                    |
+| ------------------------------------------------------- | --------- | ------------------------------------------- |
+| `tests/commands/auth-choice-options.cloudru-fm.test.ts` | M1        | Type extensions, group definitions          |
+| `tests/config/cloudru-fm.constants.test.ts`             | M3        | Model IDs, presets, invariants              |
+| `tests/commands/auth-choice.apply.cloudru-fm.test.ts`   | M2        | Handler dispatch, config application        |
+| `tests/commands/onboard-cloudru-fm.test.ts`             | M2        | Docker compose generation, .env writing     |
+| `tests/agents/proxy-health.test.ts`                     | M4        | Health check, caching, error handling       |
+| `tests/commands/proxy-docker.test.ts`                   | M4        | Docker checks, port checks, YAML generation |
+| `tests/agents/proxy-security.test.ts`                   | M6        | URL validation, command allowlist           |
+| `tests/integration/cloudru-fm-e2e.test.ts`              | M7        | End-to-end integration                      |
 
 ---
 
@@ -1115,21 +1132,26 @@ These amendments should be applied to the ADRs BEFORE implementation begins (as 
 ### ADR-001 Amendment
 
 Replace Positive Consequences line:
+
 > "Full multi-agent architecture available (tool calling, MCP, sessions)"
 
 With:
+
 > "Claude Code multi-step reasoning pipeline available (sessions, system prompts, JSON output). Note: Claude Code tool use (file ops, bash) is disabled per ADR-003."
 
 ### ADR-002 Amendment
 
 1. Replace integration point 3:
-   > ~~`configure.gateway-auth.ts:60` -- Add dispatch for cloudru-fm-* choices~~
+
+   > ~~`configure.gateway-auth.ts:60` -- Add dispatch for cloudru-fm-\* choices~~
 
    With:
+
    > `auth-choice.apply.ts:43-55` -- Add `applyAuthChoiceCloudruFm` to the handlers array
-   > `configure.gateway-auth.ts:59-60` -- Add pre-check for cloudru-fm-* choices before custom-api-key
+   > `configure.gateway-auth.ts:59-60` -- Add pre-check for cloudru-fm-\* choices before custom-api-key
 
 2. Rename function:
+
    > ~~`applyCloudruFmChoice`~~ -> `applyAuthChoiceCloudruFm`
 
 3. Add integration point:
@@ -1157,28 +1179,28 @@ Config: agents.defaults.model.fallbacks = ["claude-cli/sonnet", "claude-cli/haik
 
 ## Appendix B: Shift-Left Issue Cross-Reference
 
-| Issue ID | Severity | Resolution Milestone | Status |
-|----------|----------|---------------------|--------|
-| CRITICAL-001 | Critical | ADR Amendment (Appendix A) | Documented |
-| CRITICAL-002 | Critical | M2 | Resolved |
-| CRITICAL-003 | Critical | M2 | Resolved |
-| CRITICAL-004 | Critical | M4+M5 | Resolved |
-| CRITICAL-005 | Critical | M4 (simplified to stateless) | Resolved |
-| CRITICAL-006 | Critical | M3+M5 | Resolved |
-| CRITICAL-007 | Critical | M3 | Resolved |
-| WARNING-001 | Warning | M5 | Resolved |
-| WARNING-002 | Warning | M3 (documented) | Documented |
-| WARNING-003 | Warning | M4 (documented in compose) | Documented |
-| WARNING-004 | Warning | M1 | Resolved |
-| WARNING-005 | Warning | M1 (verified count) | Resolved |
-| WARNING-006 | Warning | ADR Amendment | Documented |
-| WARNING-007 | Warning | M5 (timeout in health check) | Resolved |
-| WARNING-008 | Warning | M4 | Resolved |
-| WARNING-009 | Warning | M4 | Resolved |
-| WARNING-010 | Warning | M3 (centralized constants) | Resolved |
-| WARNING-011 | Warning | M5 (logging in classifyFailoverReason) | Resolved |
-| X-001 | Critical | ADR Amendment | Documented |
-| X-002 | Warning | M2+M4 (clear boundary) | Resolved |
-| X-003 | Critical | M3+M5 | Resolved |
-| X-004 | Warning | M7 | Resolved |
-| X-005 | Warning | M1 | Resolved |
+| Issue ID     | Severity | Resolution Milestone                   | Status     |
+| ------------ | -------- | -------------------------------------- | ---------- |
+| CRITICAL-001 | Critical | ADR Amendment (Appendix A)             | Documented |
+| CRITICAL-002 | Critical | M2                                     | Resolved   |
+| CRITICAL-003 | Critical | M2                                     | Resolved   |
+| CRITICAL-004 | Critical | M4+M5                                  | Resolved   |
+| CRITICAL-005 | Critical | M4 (simplified to stateless)           | Resolved   |
+| CRITICAL-006 | Critical | M3+M5                                  | Resolved   |
+| CRITICAL-007 | Critical | M3                                     | Resolved   |
+| WARNING-001  | Warning  | M5                                     | Resolved   |
+| WARNING-002  | Warning  | M3 (documented)                        | Documented |
+| WARNING-003  | Warning  | M4 (documented in compose)             | Documented |
+| WARNING-004  | Warning  | M1                                     | Resolved   |
+| WARNING-005  | Warning  | M1 (verified count)                    | Resolved   |
+| WARNING-006  | Warning  | ADR Amendment                          | Documented |
+| WARNING-007  | Warning  | M5 (timeout in health check)           | Resolved   |
+| WARNING-008  | Warning  | M4                                     | Resolved   |
+| WARNING-009  | Warning  | M4                                     | Resolved   |
+| WARNING-010  | Warning  | M3 (centralized constants)             | Resolved   |
+| WARNING-011  | Warning  | M5 (logging in classifyFailoverReason) | Resolved   |
+| X-001        | Critical | ADR Amendment                          | Documented |
+| X-002        | Warning  | M2+M4 (clear boundary)                 | Resolved   |
+| X-003        | Critical | M3+M5                                  | Resolved   |
+| X-004        | Warning  | M7                                     | Resolved   |
+| X-005        | Warning  | M1                                     | Resolved   |

@@ -14,38 +14,38 @@
 
 ### 1.1 Functional Requirements Testability
 
-| # | Requirement (from ADR) | Testable? | Measurable Criteria? | Notes |
-|---|------------------------|-----------|---------------------|-------|
-| FR-01 | Create extension `@openclaw/max` with 5-file structure | YES | File existence, export shape matches pattern | Structurally verifiable |
-| FR-02 | `ChannelPlugin<ResolvedMaxAccount, MaxProbe>` adapter | YES | Type conformance at compile time | TypeScript enforces |
-| FR-03 | `outbound.sendText` via `runtime.channel.max.sendMessageMax()` | YES | Mock runtime, assert call with correct args | Delegated to runtime |
-| FR-04 | `outbound.sendMedia` with two-step upload | PARTIALLY | Upload step is internal to runtime; extension only passes `mediaUrl` | Cannot test upload flow without runtime implementation |
-| FR-05 | Webhook event handling (9 event types) | YES | Each event type mapped to OpenClaw action | Event-by-event testable |
-| FR-06 | Long polling as alternative gateway | YES | `useWebhook: false` triggers polling mode | Verifiable via config |
-| FR-07 | Inline keyboard support (210 buttons, 30 rows, 7/row) | PARTIALLY | Button limits documented but enforcement location unclear | Runtime or extension? |
-| FR-08 | Config CRUD (list, resolve, create, update, delete accounts) | YES | Standard CRUD assertions | Follows existing pattern |
-| FR-09 | Setup wizard for bot token | YES | Interactive flow testable with mock prompts | Follows Telegram pattern |
-| FR-10 | Platform registration in `CHAT_CHANNEL_ORDER` | YES | Array inclusion check | Compile-time or unit test |
-| FR-11 | Rate limit compliance (30 rps) | PARTIALLY | Rate limiter exists in `rate-limiter.ts` docs but "not yet in code" | Implementation gap |
-| FR-12 | Message format support (markdown, html) | YES | Format parameter passed to runtime | Verifiable |
-| FR-13 | `probeMax` via `GET /me` | YES | Mock HTTP, assert token validation | Standard probe pattern |
-| FR-14 | Graceful shutdown via `abortSignal` | YES | Signal abort, assert cleanup | Behavioral test |
-| FR-15 | DM policy enforcement (open, pairing, closed) | YES | Config-driven, testable per mode | Follows existing pattern |
+| #     | Requirement (from ADR)                                         | Testable? | Measurable Criteria?                                                 | Notes                                                  |
+| ----- | -------------------------------------------------------------- | --------- | -------------------------------------------------------------------- | ------------------------------------------------------ |
+| FR-01 | Create extension `@openclaw/max` with 5-file structure         | YES       | File existence, export shape matches pattern                         | Structurally verifiable                                |
+| FR-02 | `ChannelPlugin<ResolvedMaxAccount, MaxProbe>` adapter          | YES       | Type conformance at compile time                                     | TypeScript enforces                                    |
+| FR-03 | `outbound.sendText` via `runtime.channel.max.sendMessageMax()` | YES       | Mock runtime, assert call with correct args                          | Delegated to runtime                                   |
+| FR-04 | `outbound.sendMedia` with two-step upload                      | PARTIALLY | Upload step is internal to runtime; extension only passes `mediaUrl` | Cannot test upload flow without runtime implementation |
+| FR-05 | Webhook event handling (9 event types)                         | YES       | Each event type mapped to OpenClaw action                            | Event-by-event testable                                |
+| FR-06 | Long polling as alternative gateway                            | YES       | `useWebhook: false` triggers polling mode                            | Verifiable via config                                  |
+| FR-07 | Inline keyboard support (210 buttons, 30 rows, 7/row)          | PARTIALLY | Button limits documented but enforcement location unclear            | Runtime or extension?                                  |
+| FR-08 | Config CRUD (list, resolve, create, update, delete accounts)   | YES       | Standard CRUD assertions                                             | Follows existing pattern                               |
+| FR-09 | Setup wizard for bot token                                     | YES       | Interactive flow testable with mock prompts                          | Follows Telegram pattern                               |
+| FR-10 | Platform registration in `CHAT_CHANNEL_ORDER`                  | YES       | Array inclusion check                                                | Compile-time or unit test                              |
+| FR-11 | Rate limit compliance (30 rps)                                 | PARTIALLY | Rate limiter exists in `rate-limiter.ts` docs but "not yet in code"  | Implementation gap                                     |
+| FR-12 | Message format support (markdown, html)                        | YES       | Format parameter passed to runtime                                   | Verifiable                                             |
+| FR-13 | `probeMax` via `GET /me`                                       | YES       | Mock HTTP, assert token validation                                   | Standard probe pattern                                 |
+| FR-14 | Graceful shutdown via `abortSignal`                            | YES       | Signal abort, assert cleanup                                         | Behavioral test                                        |
+| FR-15 | DM policy enforcement (open, pairing, closed)                  | YES       | Config-driven, testable per mode                                     | Follows existing pattern                               |
 
 ### 1.2 Missing Requirements
 
-| # | Missing Requirement | Impact | Recommendation |
-|---|---------------------|--------|----------------|
-| MR-01 | **Webhook signature verification mechanism** | CRITICAL -- ADR says "TBD (research needed)" for webhook secret format | Block implementation until MAX webhook verification is documented. Create a spike task. |
-| MR-02 | **Error response mapping** | HIGH -- No mapping from MAX API HTTP errors (400, 401, 403, 429, 500, 503) to OpenClaw error types | Define `MaxApiError` taxonomy with retry/no-retry classification |
-| MR-03 | **File upload size limits** | MEDIUM -- MAX has 10 MB max request size but per-file-type limits are not specified | Research and document per-type limits (photo, video, audio, file) |
-| MR-04 | **Message deduplication** | MEDIUM -- Long polling and webhooks can deliver duplicate updates; no dedup strategy defined | Add `update_id` tracking with TTL cache |
-| MR-05 | **Reconnection strategy for long polling** | MEDIUM -- No behavior defined when polling connection drops | Define exponential backoff with jitter for reconnection |
-| MR-06 | **Group chat bot mention parsing** | MEDIUM -- How does the extension detect when the bot is mentioned in a group? | Research MAX group mention format (`@botname` or different?) |
-| MR-07 | **Max message length validation** | LOW -- "~4096 chars (assumed)" is not verified | Confirm exact limit from MAX API docs before implementation |
-| MR-08 | **Proxy support behavior** | LOW -- `proxy` field exists in config but no behavior is specified | Define proxy passthrough to runtime HTTP client |
-| MR-09 | **Bot command registration** | LOW -- Telegram has `setMyCommands`; MAX equivalent not researched | Research MAX command registration API |
-| MR-10 | **Typing indicator** | LOW -- No mention of typing/chat action indicator for MAX | Research if MAX supports `sendAction` or equivalent |
+| #     | Missing Requirement                          | Impact                                                                                             | Recommendation                                                                          |
+| ----- | -------------------------------------------- | -------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| MR-01 | **Webhook signature verification mechanism** | CRITICAL -- ADR says "TBD (research needed)" for webhook secret format                             | Block implementation until MAX webhook verification is documented. Create a spike task. |
+| MR-02 | **Error response mapping**                   | HIGH -- No mapping from MAX API HTTP errors (400, 401, 403, 429, 500, 503) to OpenClaw error types | Define `MaxApiError` taxonomy with retry/no-retry classification                        |
+| MR-03 | **File upload size limits**                  | MEDIUM -- MAX has 10 MB max request size but per-file-type limits are not specified                | Research and document per-type limits (photo, video, audio, file)                       |
+| MR-04 | **Message deduplication**                    | MEDIUM -- Long polling and webhooks can deliver duplicate updates; no dedup strategy defined       | Add `update_id` tracking with TTL cache                                                 |
+| MR-05 | **Reconnection strategy for long polling**   | MEDIUM -- No behavior defined when polling connection drops                                        | Define exponential backoff with jitter for reconnection                                 |
+| MR-06 | **Group chat bot mention parsing**           | MEDIUM -- How does the extension detect when the bot is mentioned in a group?                      | Research MAX group mention format (`@botname` or different?)                            |
+| MR-07 | **Max message length validation**            | LOW -- "~4096 chars (assumed)" is not verified                                                     | Confirm exact limit from MAX API docs before implementation                             |
+| MR-08 | **Proxy support behavior**                   | LOW -- `proxy` field exists in config but no behavior is specified                                 | Define proxy passthrough to runtime HTTP client                                         |
+| MR-09 | **Bot command registration**                 | LOW -- Telegram has `setMyCommands`; MAX equivalent not researched                                 | Research MAX command registration API                                                   |
+| MR-10 | **Typing indicator**                         | LOW -- No mention of typing/chat action indicator for MAX                                          | Research if MAX supports `sendAction` or equivalent                                     |
 
 ### 1.3 Acceptance Criteria Assessment
 
@@ -376,47 +376,47 @@ Feature: MAX Security
 
 ### 3.1 Technical Risk Matrix
 
-| ID | Risk | Probability | Impact | Severity | Category |
-|----|------|-------------|--------|----------|----------|
-| R-01 | **Webhook signature verification format unknown** -- ADR states "TBD (research needed)" | HIGH | CRITICAL | **P1** | Security |
-| R-02 | **`@maxhub/max-bot-api` SDK single-maintainer risk** -- 85+ stars, MIT, but bus factor = 1 | MEDIUM | HIGH | **P2** | Dependency |
-| R-03 | **Runtime `channel.max.*` API not yet implemented** -- Extension depends on runtime work | HIGH | HIGH | **P2** | Dependency |
-| R-04 | **Rate limiter not yet in code** -- `rate-limiter.ts` documents `max: 20 rps` but platform limit is 30 rps; neither is implemented | HIGH | MEDIUM | **P2** | Implementation |
-| R-05 | **MAX API behavior differences from documentation** -- API is relatively new, docs may be incomplete | MEDIUM | MEDIUM | **P3** | Technical |
-| R-06 | **Two-step file upload complexity** -- `POST /uploads` then `POST /messages` introduces failure window | MEDIUM | MEDIUM | **P3** | Technical |
-| R-07 | **Long polling connection instability** -- No reconnection strategy defined | MEDIUM | MEDIUM | **P3** | Reliability |
-| R-08 | **MAX message length limit unverified** -- "~4096 chars (assumed)" | LOW | MEDIUM | **P3** | Technical |
-| R-09 | **Russian legal entity requirement for bot publication** -- Business blocker, not technical | HIGH | LOW | **P4** | Business |
-| R-10 | **MAX API version pinning absent** -- No version specified, SDK upgrades may break | LOW | MEDIUM | **P4** | Maintenance |
-| R-11 | **Inline keyboard limit enforcement location unclear** -- 210 buttons, 30 rows, 7/row: extension or runtime? | MEDIUM | LOW | **P4** | Architecture |
-| R-12 | **Duplicate webhook delivery** -- No deduplication mechanism documented | MEDIUM | MEDIUM | **P3** | Reliability |
+| ID   | Risk                                                                                                                               | Probability | Impact   | Severity | Category       |
+| ---- | ---------------------------------------------------------------------------------------------------------------------------------- | ----------- | -------- | -------- | -------------- |
+| R-01 | **Webhook signature verification format unknown** -- ADR states "TBD (research needed)"                                            | HIGH        | CRITICAL | **P1**   | Security       |
+| R-02 | **`@maxhub/max-bot-api` SDK single-maintainer risk** -- 85+ stars, MIT, but bus factor = 1                                         | MEDIUM      | HIGH     | **P2**   | Dependency     |
+| R-03 | **Runtime `channel.max.*` API not yet implemented** -- Extension depends on runtime work                                           | HIGH        | HIGH     | **P2**   | Dependency     |
+| R-04 | **Rate limiter not yet in code** -- `rate-limiter.ts` documents `max: 20 rps` but platform limit is 30 rps; neither is implemented | HIGH        | MEDIUM   | **P2**   | Implementation |
+| R-05 | **MAX API behavior differences from documentation** -- API is relatively new, docs may be incomplete                               | MEDIUM      | MEDIUM   | **P3**   | Technical      |
+| R-06 | **Two-step file upload complexity** -- `POST /uploads` then `POST /messages` introduces failure window                             | MEDIUM      | MEDIUM   | **P3**   | Technical      |
+| R-07 | **Long polling connection instability** -- No reconnection strategy defined                                                        | MEDIUM      | MEDIUM   | **P3**   | Reliability    |
+| R-08 | **MAX message length limit unverified** -- "~4096 chars (assumed)"                                                                 | LOW         | MEDIUM   | **P3**   | Technical      |
+| R-09 | **Russian legal entity requirement for bot publication** -- Business blocker, not technical                                        | HIGH        | LOW      | **P4**   | Business       |
+| R-10 | **MAX API version pinning absent** -- No version specified, SDK upgrades may break                                                 | LOW         | MEDIUM   | **P4**   | Maintenance    |
+| R-11 | **Inline keyboard limit enforcement location unclear** -- 210 buttons, 30 rows, 7/row: extension or runtime?                       | MEDIUM      | LOW      | **P4**   | Architecture   |
+| R-12 | **Duplicate webhook delivery** -- No deduplication mechanism documented                                                            | MEDIUM      | MEDIUM   | **P3**   | Reliability    |
 
 ### 3.2 Mitigation Strategies
 
-| Risk ID | Mitigation Strategy | Owner | Priority |
-|---------|---------------------|-------|----------|
-| R-01 | **Spike task**: Dedicate 1-2 days to research MAX webhook verification. Contact MAX developer support. Review SDK source for signature verification utilities. If no verification exists, implement IP whitelist as fallback. | Security Lead | IMMEDIATE |
-| R-02 | **Vendor risk**: (a) Fork the SDK repository. (b) Pin to a specific version with lockfile. (c) Write an adapter interface around the SDK so it can be replaced with raw HTTP calls if abandoned. (d) Monitor GitHub activity monthly. | Tech Lead | Before implementation |
-| R-03 | **Parallel workstream**: Start runtime `channel.max.*` implementation as a parallel workstream. Define the interface contract (from ADR Section 4) as a TypeScript interface file first, allowing extension development against the interface with mocks. | Platform Team | Before implementation |
-| R-04 | **Reconcile rate limits**: The documented `20 rps` in `rate-limiter.ts` contradicts the MAX API's `30 rps`. Verify the actual limit via load testing against a staging bot. Implement token bucket with the confirmed value. | Backend Dev | During implementation |
-| R-05 | **API exploration tests**: Write a suite of exploratory integration tests against the real MAX API (staging bot) that exercise each endpoint and document actual behavior vs. documented behavior. | QA | During implementation |
-| R-06 | **Atomic upload pattern**: Implement upload-then-send as a single transactional operation in the runtime. If upload succeeds but send fails, retry send with the uploaded file token (not re-upload). Add cleanup for orphaned uploads. | Backend Dev | During implementation |
-| R-07 | **Reconnection with backoff**: Implement exponential backoff (1s, 2s, 4s, 8s, max 60s) with jitter for long polling reconnection. Add a health check that re-probes the bot token after 3 consecutive connection failures. | Backend Dev | During implementation |
-| R-08 | **Boundary testing**: Send messages of exactly 4096, 4097, and 4095 characters to the MAX API. Document the actual limit and update `textChunkLimit` accordingly. | QA | Before implementation |
-| R-10 | **Pin SDK version**: Pin `@maxhub/max-bot-api` to an exact version in `package.json`. Add a CI check that flags SDK version bumps for manual review. | DevOps | During implementation |
-| R-12 | **Dedup via update_id**: Track the last processed `update_id` per account. Skip updates with `update_id <= lastProcessedId`. Use a TTL map (5 min) as secondary dedup for webhook mode. | Backend Dev | During implementation |
+| Risk ID | Mitigation Strategy                                                                                                                                                                                                                                       | Owner         | Priority              |
+| ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- | --------------------- |
+| R-01    | **Spike task**: Dedicate 1-2 days to research MAX webhook verification. Contact MAX developer support. Review SDK source for signature verification utilities. If no verification exists, implement IP whitelist as fallback.                             | Security Lead | IMMEDIATE             |
+| R-02    | **Vendor risk**: (a) Fork the SDK repository. (b) Pin to a specific version with lockfile. (c) Write an adapter interface around the SDK so it can be replaced with raw HTTP calls if abandoned. (d) Monitor GitHub activity monthly.                     | Tech Lead     | Before implementation |
+| R-03    | **Parallel workstream**: Start runtime `channel.max.*` implementation as a parallel workstream. Define the interface contract (from ADR Section 4) as a TypeScript interface file first, allowing extension development against the interface with mocks. | Platform Team | Before implementation |
+| R-04    | **Reconcile rate limits**: The documented `20 rps` in `rate-limiter.ts` contradicts the MAX API's `30 rps`. Verify the actual limit via load testing against a staging bot. Implement token bucket with the confirmed value.                              | Backend Dev   | During implementation |
+| R-05    | **API exploration tests**: Write a suite of exploratory integration tests against the real MAX API (staging bot) that exercise each endpoint and document actual behavior vs. documented behavior.                                                        | QA            | During implementation |
+| R-06    | **Atomic upload pattern**: Implement upload-then-send as a single transactional operation in the runtime. If upload succeeds but send fails, retry send with the uploaded file token (not re-upload). Add cleanup for orphaned uploads.                   | Backend Dev   | During implementation |
+| R-07    | **Reconnection with backoff**: Implement exponential backoff (1s, 2s, 4s, 8s, max 60s) with jitter for long polling reconnection. Add a health check that re-probes the bot token after 3 consecutive connection failures.                                | Backend Dev   | During implementation |
+| R-08    | **Boundary testing**: Send messages of exactly 4096, 4097, and 4095 characters to the MAX API. Document the actual limit and update `textChunkLimit` accordingly.                                                                                         | QA            | Before implementation |
+| R-10    | **Pin SDK version**: Pin `@maxhub/max-bot-api` to an exact version in `package.json`. Add a CI check that flags SDK version bumps for manual review.                                                                                                      | DevOps        | During implementation |
+| R-12    | **Dedup via update_id**: Track the last processed `update_id` per account. Skip updates with `update_id <= lastProcessedId`. Use a TTL map (5 min) as secondary dedup for webhook mode.                                                                   | Backend Dev   | During implementation |
 
 ### 3.3 Dependency Risk: `@maxhub/max-bot-api` SDK
 
-| Dimension | Assessment |
-|-----------|------------|
-| **Maturity** | Low -- 85+ stars, relatively new SDK for a new platform |
-| **Maintenance** | Risk -- Single maintainer (bus factor = 1) |
-| **License** | MIT -- No legal risk |
-| **TypeScript support** | Native -- SDK is written in TypeScript |
-| **API coverage** | Unknown -- Need to verify all endpoints used by extension are covered |
-| **Bundle size** | Unknown -- Needs assessment for extension size impact |
-| **Test coverage** | Unknown -- SDK's own test suite quality not evaluated |
+| Dimension              | Assessment                                                            |
+| ---------------------- | --------------------------------------------------------------------- |
+| **Maturity**           | Low -- 85+ stars, relatively new SDK for a new platform               |
+| **Maintenance**        | Risk -- Single maintainer (bus factor = 1)                            |
+| **License**            | MIT -- No legal risk                                                  |
+| **TypeScript support** | Native -- SDK is written in TypeScript                                |
+| **API coverage**       | Unknown -- Need to verify all endpoints used by extension are covered |
+| **Bundle size**        | Unknown -- Needs assessment for extension size impact                 |
+| **Test coverage**      | Unknown -- SDK's own test suite quality not evaluated                 |
 
 **Recommendation**: Create a thin adapter layer (`MaxApiClient`) wrapping the SDK. This layer (a) isolates the extension from SDK API changes, (b) allows fallback to raw HTTP if SDK is abandoned, (c) provides a clean mock surface for testing.
 
@@ -426,86 +426,86 @@ Feature: MAX Security
 
 ### 4.1 Overall Score: 70/100
 
-| Dimension | Score | Rationale |
-|-----------|-------|-----------|
-| Interface mockability | 9/10 | All API calls delegated to `runtime.channel.max.*` -- trivially mockable |
-| Extension isolation | 9/10 | Extension contains zero direct HTTP calls; pure adapter layer |
-| Config testability | 8/10 | Standard CRUD pattern with JSON schema; easily assertable |
-| Event mapping testability | 7/10 | 9 event types clearly tabulated; each testable in isolation |
-| Acceptance criteria clarity | 4/10 | Invariants listed but no formal BDD scenarios in ADR |
-| Webhook verification | 2/10 | "TBD" -- cannot test what is not defined |
-| Rate limiter testability | 5/10 | Documented in code comments but not implemented; 20 vs 30 rps discrepancy |
-| Error handling | 5/10 | No error taxonomy or HTTP status mapping defined |
+| Dimension                   | Score | Rationale                                                                 |
+| --------------------------- | ----- | ------------------------------------------------------------------------- |
+| Interface mockability       | 9/10  | All API calls delegated to `runtime.channel.max.*` -- trivially mockable  |
+| Extension isolation         | 9/10  | Extension contains zero direct HTTP calls; pure adapter layer             |
+| Config testability          | 8/10  | Standard CRUD pattern with JSON schema; easily assertable                 |
+| Event mapping testability   | 7/10  | 9 event types clearly tabulated; each testable in isolation               |
+| Acceptance criteria clarity | 4/10  | Invariants listed but no formal BDD scenarios in ADR                      |
+| Webhook verification        | 2/10  | "TBD" -- cannot test what is not defined                                  |
+| Rate limiter testability    | 5/10  | Documented in code comments but not implemented; 20 vs 30 rps discrepancy |
+| Error handling              | 5/10  | No error taxonomy or HTTP status mapping defined                          |
 
 ### 4.2 Unit Tests (No MAX API Required)
 
 These tests can run entirely with mocked runtime, no network calls.
 
-| # | Test | What It Validates |
-|---|------|-------------------|
-| U-01 | `maxPlugin meta returns correct channel metadata` | `getChatChannelMeta("max")` returns correct display name, icon, capabilities |
-| U-02 | `maxPlugin capabilities declare correct chatTypes` | `chatTypes` includes `["direct", "group"]` but NOT `"thread"` or `"channel"` |
-| U-03 | `sendText delegates to runtime.channel.max.sendMessageMax` | Mock runtime, call `sendText`, assert `sendMessageMax` called with correct args |
-| U-04 | `sendMedia passes mediaUrl in opts` | Mock runtime, call `sendMedia`, assert `opts.mediaUrl` is passed through |
-| U-05 | `chunker uses platform markdown chunker with limit 4000` | Assert `chunkMarkdownText` called with limit `4000` |
-| U-06 | `text chunk limit is 4000` | Assert `outbound.textChunkLimit === 4000` |
-| U-07 | `config.listMaxAccountIds returns all account IDs` | Seed config, assert all IDs returned |
-| U-08 | `config.resolveMaxAccount returns full account config` | Seed config with all fields, assert resolved account matches |
-| U-09 | `config.resolveMaxAccount returns undefined for missing ID` | Empty config, assert `undefined` returned |
-| U-10 | `probeAccount delegates to runtime.channel.max.probeMax` | Mock runtime, assert `probeMax` called with token and timeout |
-| U-11 | `gateway.startAccount calls monitorMaxProvider with correct opts` | Mock runtime, assert all `MaxMonitorOpts` fields passed correctly |
-| U-12 | `gateway.startAccount passes abortSignal` | Assert `opts.abortSignal` is the provided signal |
-| U-13 | `pairing.idLabel is "maxUserId"` | Assert the pairing configuration is correct |
-| U-14 | `setMaxRuntime / getMaxRuntime singleton works correctly` | Set runtime, get runtime, assert same reference |
-| U-15 | `getMaxRuntime throws if runtime not set` | Do not set runtime, call get, assert throws |
-| U-16 | `register function calls setRuntime and registerChannel` | Mock API, call register, assert both methods called |
-| U-17 | `webhook event mapping: all 9 events have correct OpenClaw mapping` | For each event type in the mapping table, assert correct action |
-| U-18 | `config schema validates required fields (token, enabled)` | Schema validation rejects config missing `token` |
-| U-19 | `config schema rejects empty token string` | Schema validation rejects `token: ""` |
-| U-20 | `config schema validates webhookUrl is HTTPS when present` | Schema rejects `webhookUrl: "http://..."` |
+| #    | Test                                                                | What It Validates                                                               |
+| ---- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| U-01 | `maxPlugin meta returns correct channel metadata`                   | `getChatChannelMeta("max")` returns correct display name, icon, capabilities    |
+| U-02 | `maxPlugin capabilities declare correct chatTypes`                  | `chatTypes` includes `["direct", "group"]` but NOT `"thread"` or `"channel"`    |
+| U-03 | `sendText delegates to runtime.channel.max.sendMessageMax`          | Mock runtime, call `sendText`, assert `sendMessageMax` called with correct args |
+| U-04 | `sendMedia passes mediaUrl in opts`                                 | Mock runtime, call `sendMedia`, assert `opts.mediaUrl` is passed through        |
+| U-05 | `chunker uses platform markdown chunker with limit 4000`            | Assert `chunkMarkdownText` called with limit `4000`                             |
+| U-06 | `text chunk limit is 4000`                                          | Assert `outbound.textChunkLimit === 4000`                                       |
+| U-07 | `config.listMaxAccountIds returns all account IDs`                  | Seed config, assert all IDs returned                                            |
+| U-08 | `config.resolveMaxAccount returns full account config`              | Seed config with all fields, assert resolved account matches                    |
+| U-09 | `config.resolveMaxAccount returns undefined for missing ID`         | Empty config, assert `undefined` returned                                       |
+| U-10 | `probeAccount delegates to runtime.channel.max.probeMax`            | Mock runtime, assert `probeMax` called with token and timeout                   |
+| U-11 | `gateway.startAccount calls monitorMaxProvider with correct opts`   | Mock runtime, assert all `MaxMonitorOpts` fields passed correctly               |
+| U-12 | `gateway.startAccount passes abortSignal`                           | Assert `opts.abortSignal` is the provided signal                                |
+| U-13 | `pairing.idLabel is "maxUserId"`                                    | Assert the pairing configuration is correct                                     |
+| U-14 | `setMaxRuntime / getMaxRuntime singleton works correctly`           | Set runtime, get runtime, assert same reference                                 |
+| U-15 | `getMaxRuntime throws if runtime not set`                           | Do not set runtime, call get, assert throws                                     |
+| U-16 | `register function calls setRuntime and registerChannel`            | Mock API, call register, assert both methods called                             |
+| U-17 | `webhook event mapping: all 9 events have correct OpenClaw mapping` | For each event type in the mapping table, assert correct action                 |
+| U-18 | `config schema validates required fields (token, enabled)`          | Schema validation rejects config missing `token`                                |
+| U-19 | `config schema rejects empty token string`                          | Schema validation rejects `token: ""`                                           |
+| U-20 | `config schema validates webhookUrl is HTTPS when present`          | Schema rejects `webhookUrl: "http://..."`                                       |
 
 ### 4.3 Integration Tests (Mock Server Required)
 
 These tests require a mock MAX API HTTP server (e.g., using `msw` or `nock`).
 
-| # | Test | What It Validates |
-|---|------|-------------------|
-| I-01 | `probeMax against mock GET /me -- success path` | Full HTTP roundtrip: request with auth header, parse response |
-| I-02 | `probeMax against mock GET /me -- 401 error path` | Auth failure handling, error classification |
-| I-03 | `sendMessageMax against mock POST /messages -- success` | Message delivery, response parsing, delivery receipt generation |
-| I-04 | `sendMessageMax with media -- upload then send` | Two-step flow: `POST /uploads` -> `POST /messages` with attachment token |
-| I-05 | `monitorMaxProvider webhook mode -- receives and processes events` | Mock webhook POST to local server, verify event routing |
-| I-06 | `monitorMaxProvider polling mode -- GET /updates cycle` | Mock `GET /updates` with test events, verify processing loop |
-| I-07 | `Rate limiter integration -- 30+ rps triggers queuing` | Send 35 messages in 1 second, verify first 30 sent immediately, remaining queued |
-| I-08 | `HTTP 429 backoff -- respects Retry-After header` | Mock 429 response, verify pause duration matches header |
-| I-09 | `Full inbound/outbound cycle with mock MAX API` | Webhook event -> normalize -> route -> agent -> denormalize -> send response |
-| I-10 | `Graceful shutdown -- abort signal stops polling loop` | Start polling, trigger abort, verify loop exits cleanly |
+| #    | Test                                                               | What It Validates                                                                |
+| ---- | ------------------------------------------------------------------ | -------------------------------------------------------------------------------- |
+| I-01 | `probeMax against mock GET /me -- success path`                    | Full HTTP roundtrip: request with auth header, parse response                    |
+| I-02 | `probeMax against mock GET /me -- 401 error path`                  | Auth failure handling, error classification                                      |
+| I-03 | `sendMessageMax against mock POST /messages -- success`            | Message delivery, response parsing, delivery receipt generation                  |
+| I-04 | `sendMessageMax with media -- upload then send`                    | Two-step flow: `POST /uploads` -> `POST /messages` with attachment token         |
+| I-05 | `monitorMaxProvider webhook mode -- receives and processes events` | Mock webhook POST to local server, verify event routing                          |
+| I-06 | `monitorMaxProvider polling mode -- GET /updates cycle`            | Mock `GET /updates` with test events, verify processing loop                     |
+| I-07 | `Rate limiter integration -- 30+ rps triggers queuing`             | Send 35 messages in 1 second, verify first 30 sent immediately, remaining queued |
+| I-08 | `HTTP 429 backoff -- respects Retry-After header`                  | Mock 429 response, verify pause duration matches header                          |
+| I-09 | `Full inbound/outbound cycle with mock MAX API`                    | Webhook event -> normalize -> route -> agent -> denormalize -> send response     |
+| I-10 | `Graceful shutdown -- abort signal stops polling loop`             | Start polling, trigger abort, verify loop exits cleanly                          |
 
 ### 4.4 E2E Tests (Real MAX API Required)
 
 These tests require a staging MAX bot token and network access to `platform-api.max.ru`.
 
-| # | Test | What It Validates |
-|---|------|-------------------|
-| E2E-01 | `Bot probe against real MAX API` | Token is valid, `GET /me` returns expected bot info |
-| E2E-02 | `Send text message to a test chat` | Message appears in MAX chat, delivery receipt is returned |
-| E2E-03 | `Send message with inline keyboard, receive callback` | Keyboard renders, button press generates `message_callback` event |
-| E2E-04 | `Upload and send photo` | Two-step upload succeeds, photo appears in chat |
-| E2E-05 | `Webhook subscription lifecycle` | `POST /subscriptions` creates subscription, messages are received, cleanup on shutdown |
-| E2E-06 | `Long polling receives messages` | Start polling, send a test message, verify it is received within 30 seconds |
-| E2E-07 | `Rate limit boundary test` | Send 30 messages in 1 second, verify all succeed. Send 31st, observe behavior. |
+| #      | Test                                                  | What It Validates                                                                      |
+| ------ | ----------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| E2E-01 | `Bot probe against real MAX API`                      | Token is valid, `GET /me` returns expected bot info                                    |
+| E2E-02 | `Send text message to a test chat`                    | Message appears in MAX chat, delivery receipt is returned                              |
+| E2E-03 | `Send message with inline keyboard, receive callback` | Keyboard renders, button press generates `message_callback` event                      |
+| E2E-04 | `Upload and send photo`                               | Two-step upload succeeds, photo appears in chat                                        |
+| E2E-05 | `Webhook subscription lifecycle`                      | `POST /subscriptions` creates subscription, messages are received, cleanup on shutdown |
+| E2E-06 | `Long polling receives messages`                      | Start polling, send a test message, verify it is received within 30 seconds            |
+| E2E-07 | `Rate limit boundary test`                            | Send 30 messages in 1 second, verify all succeed. Send 31st, observe behavior.         |
 
 ### 4.5 Test Infrastructure Requirements
 
-| Requirement | Purpose | Tool/Library |
-|-------------|---------|-------------|
-| Mock HTTP server | Simulate MAX API responses for integration tests | `msw` (Mock Service Worker) or `nock` |
-| Fake timers | Test rate limiter timing, polling intervals, backoff | `@sinonjs/fake-timers` or Vitest fake timers |
-| Staging MAX bot | E2E testing against real API | Register bot at `dev.max.ru`, store token in CI secrets |
-| Test chat/group | E2E message delivery validation | Create dedicated test group on MAX |
-| AbortController polyfill | Test graceful shutdown in Node < 16 | `abort-controller` npm package (if needed) |
-| CI secret management | Store bot tokens for E2E tests | GitHub Actions secrets or Vault |
-| Webhook tunnel | Receive webhooks in CI environment | `ngrok` or `localtunnel` for E2E webhook tests |
+| Requirement              | Purpose                                              | Tool/Library                                            |
+| ------------------------ | ---------------------------------------------------- | ------------------------------------------------------- |
+| Mock HTTP server         | Simulate MAX API responses for integration tests     | `msw` (Mock Service Worker) or `nock`                   |
+| Fake timers              | Test rate limiter timing, polling intervals, backoff | `@sinonjs/fake-timers` or Vitest fake timers            |
+| Staging MAX bot          | E2E testing against real API                         | Register bot at `dev.max.ru`, store token in CI secrets |
+| Test chat/group          | E2E message delivery validation                      | Create dedicated test group on MAX                      |
+| AbortController polyfill | Test graceful shutdown in Node < 16                  | `abort-controller` npm package (if needed)              |
+| CI secret management     | Store bot tokens for E2E tests                       | GitHub Actions secrets or Vault                         |
+| Webhook tunnel           | Receive webhooks in CI environment                   | `ngrok` or `localtunnel` for E2E webhook tests          |
 
 ---
 
@@ -517,54 +517,54 @@ These tests require a staging MAX bot token and network access to `platform-api.
 
 Once the verification mechanism is researched, the following tests must be written:
 
-| # | Test | Type | Expected Result |
-|---|------|------|-----------------|
-| S-01 | Valid signature with correct secret | Unit | Payload accepted, processed normally |
-| S-02 | Invalid signature (tampered payload) | Unit | Payload rejected with 403, `validation_failed` event emitted |
-| S-03 | Missing signature header entirely | Unit | Payload rejected with 403 |
-| S-04 | Empty signature header | Unit | Payload rejected with 403 |
-| S-05 | Correct signature but replayed payload (timestamp > 5 min old) | Unit | Payload rejected (if timestamp verification is supported) |
-| S-06 | Signature computed with wrong secret | Unit | Payload rejected with 403 |
-| S-07 | Concurrent valid webhooks with same signature | Unit | Both processed (signatures are per-payload, not single-use) |
-| S-08 | Webhook flood without signatures (DDoS via forged payloads) | Integration | All rejected without heavy computation; rate limit on rejection path |
+| #    | Test                                                           | Type        | Expected Result                                                      |
+| ---- | -------------------------------------------------------------- | ----------- | -------------------------------------------------------------------- |
+| S-01 | Valid signature with correct secret                            | Unit        | Payload accepted, processed normally                                 |
+| S-02 | Invalid signature (tampered payload)                           | Unit        | Payload rejected with 403, `validation_failed` event emitted         |
+| S-03 | Missing signature header entirely                              | Unit        | Payload rejected with 403                                            |
+| S-04 | Empty signature header                                         | Unit        | Payload rejected with 403                                            |
+| S-05 | Correct signature but replayed payload (timestamp > 5 min old) | Unit        | Payload rejected (if timestamp verification is supported)            |
+| S-06 | Signature computed with wrong secret                           | Unit        | Payload rejected with 403                                            |
+| S-07 | Concurrent valid webhooks with same signature                  | Unit        | Both processed (signatures are per-payload, not single-use)          |
+| S-08 | Webhook flood without signatures (DDoS via forged payloads)    | Integration | All rejected without heavy computation; rate limit on rejection path |
 
 **Spike deliverable**: A `verifyMaxWebhookSignature(payload: string, signature: string, secret: string): boolean` pure function with 100% branch coverage.
 
 ### 5.2 Token Leakage Prevention
 
-| # | Test | Type | What It Validates |
-|---|------|------|-------------------|
-| S-09 | Token not in console.log output during probe | Unit | Mock logger, assert token string not present in any log call |
-| S-10 | Token not in console.log output during sendMessage | Unit | Same as above for send path |
-| S-11 | Token not in error stack traces | Unit | Trigger error with token in context, assert stack trace is sanitized |
-| S-12 | Token not in HTTP error response bodies logged | Unit | Mock 401 response that echoes token, assert it is redacted before logging |
-| S-13 | Token not committed in openclaw.json to git | Pre-commit hook | Regex scan: reject commits containing patterns matching MAX bot tokens |
-| S-14 | Token stored only in `channels.max.accounts[id].token` path | Unit | Assert no other config paths contain the token value |
-| S-15 | `resolveMaxAccount` does not include token in debug/toString output | Unit | Assert object stringification does not expose token |
+| #    | Test                                                                | Type            | What It Validates                                                         |
+| ---- | ------------------------------------------------------------------- | --------------- | ------------------------------------------------------------------------- |
+| S-09 | Token not in console.log output during probe                        | Unit            | Mock logger, assert token string not present in any log call              |
+| S-10 | Token not in console.log output during sendMessage                  | Unit            | Same as above for send path                                               |
+| S-11 | Token not in error stack traces                                     | Unit            | Trigger error with token in context, assert stack trace is sanitized      |
+| S-12 | Token not in HTTP error response bodies logged                      | Unit            | Mock 401 response that echoes token, assert it is redacted before logging |
+| S-13 | Token not committed in openclaw.json to git                         | Pre-commit hook | Regex scan: reject commits containing patterns matching MAX bot tokens    |
+| S-14 | Token stored only in `channels.max.accounts[id].token` path         | Unit            | Assert no other config paths contain the token value                      |
+| S-15 | `resolveMaxAccount` does not include token in debug/toString output | Unit            | Assert object stringification does not expose token                       |
 
 **CI Integration**: Add a pre-commit hook that scans for potential MAX bot token patterns in staged files. The exact token format should be researched as part of the webhook verification spike (R-01).
 
 ### 5.3 Input Sanitization (Message Injection)
 
-| # | Test | Type | What It Validates |
-|---|------|------|-------------------|
-| S-16 | Inbound message with markdown injection | Unit | `**bold**` in user message does not alter agent's markdown context |
-| S-17 | Inbound message with HTML injection (`<script>alert(1)</script>`) | Unit | HTML tags are escaped or stripped before agent processing |
-| S-18 | Inbound callback_data with oversized payload | Unit | Callback data exceeding expected size is truncated or rejected |
-| S-19 | Inbound message with null bytes | Unit | Null bytes (`\x00`) are stripped before processing |
-| S-20 | Inbound message with Unicode control characters | Unit | Control characters (U+200B zero-width space, etc.) are handled gracefully |
-| S-21 | Inbound webhook with extra/unexpected JSON fields | Unit | Unknown fields are ignored, not passed to agent |
-| S-22 | Inbound message with path traversal in attachment URL | Unit | Attachment URLs are validated, `file:///etc/passwd` patterns rejected |
+| #    | Test                                                              | Type | What It Validates                                                         |
+| ---- | ----------------------------------------------------------------- | ---- | ------------------------------------------------------------------------- |
+| S-16 | Inbound message with markdown injection                           | Unit | `**bold**` in user message does not alter agent's markdown context        |
+| S-17 | Inbound message with HTML injection (`<script>alert(1)</script>`) | Unit | HTML tags are escaped or stripped before agent processing                 |
+| S-18 | Inbound callback_data with oversized payload                      | Unit | Callback data exceeding expected size is truncated or rejected            |
+| S-19 | Inbound message with null bytes                                   | Unit | Null bytes (`\x00`) are stripped before processing                        |
+| S-20 | Inbound message with Unicode control characters                   | Unit | Control characters (U+200B zero-width space, etc.) are handled gracefully |
+| S-21 | Inbound webhook with extra/unexpected JSON fields                 | Unit | Unknown fields are ignored, not passed to agent                           |
+| S-22 | Inbound message with path traversal in attachment URL             | Unit | Attachment URLs are validated, `file:///etc/passwd` patterns rejected     |
 
 ### 5.4 Rate Limit Enforcement
 
-| # | Test | Type | What It Validates |
-|---|------|------|-------------------|
-| S-23 | Outbound rate limit enforced at 30 rps per token | Integration | Token bucket correctly limits to 30 requests/second |
-| S-24 | Inbound webhook rate limit (if implemented) | Integration | Excessive webhook calls from single IP are throttled |
-| S-25 | Rate limit per account, not global | Unit | Two accounts with separate tokens have independent rate limits |
-| S-26 | Rate limit state survives account restart | Integration | Rate limiter resets on restart (verify this is acceptable behavior) |
-| S-27 | Burst handling: 30 requests at t=0, then sustained 30 rps | Integration | Initial burst succeeds, sustained rate is maintained without drift |
+| #    | Test                                                      | Type        | What It Validates                                                   |
+| ---- | --------------------------------------------------------- | ----------- | ------------------------------------------------------------------- |
+| S-23 | Outbound rate limit enforced at 30 rps per token          | Integration | Token bucket correctly limits to 30 requests/second                 |
+| S-24 | Inbound webhook rate limit (if implemented)               | Integration | Excessive webhook calls from single IP are throttled                |
+| S-25 | Rate limit per account, not global                        | Unit        | Two accounts with separate tokens have independent rate limits      |
+| S-26 | Rate limit state survives account restart                 | Integration | Rate limiter resets on restart (verify this is acceptable behavior) |
+| S-27 | Burst handling: 30 requests at t=0, then sustained 30 rps | Integration | Initial burst succeeds, sustained rate is maintained without drift  |
 
 ---
 
@@ -592,11 +592,11 @@ Once the verification mechanism is researched, the following tests must be writt
                     +-----------+--------------+
 ```
 
-| Tier | Count | Runtime | CI Trigger | Dependencies |
-|------|-------|---------|------------|--------------|
-| Unit | 20+ | < 3 sec | Every commit | None (mocked runtime) |
-| Integration | 10 | < 30 sec | Every PR | Mock HTTP server (`msw`) |
-| E2E | 7 | < 5 min | Nightly / release | Real MAX API, staging bot token, network access |
+| Tier        | Count | Runtime  | CI Trigger        | Dependencies                                    |
+| ----------- | ----- | -------- | ----------------- | ----------------------------------------------- |
+| Unit        | 20+   | < 3 sec  | Every commit      | None (mocked runtime)                           |
+| Integration | 10    | < 30 sec | Every PR          | Mock HTTP server (`msw`)                        |
+| E2E         | 7     | < 5 min  | Nightly / release | Real MAX API, staging bot token, network access |
 
 ### 6.2 Mock Strategy
 
@@ -610,8 +610,8 @@ export function createMockMaxRuntime(): PluginRuntime {
   return {
     channel: {
       max: {
-        sendMessageMax: vi.fn().mockResolvedValue({ messageId: 'mock-msg-1', success: true }),
-        probeMax: vi.fn().mockResolvedValue({ userId: '1', name: 'TestBot', username: 'testbot' }),
+        sendMessageMax: vi.fn().mockResolvedValue({ messageId: "mock-msg-1", success: true }),
+        probeMax: vi.fn().mockResolvedValue({ userId: "1", name: "TestBot", username: "testbot" }),
         monitorMaxProvider: vi.fn().mockResolvedValue(undefined),
         messageActions: undefined,
       },
@@ -633,30 +633,30 @@ export function createMockMaxRuntime(): PluginRuntime {
 
 ```typescript
 // tests/mocks/max-api-handlers.ts (using msw)
-import { http, HttpResponse } from 'msw';
+import { http, HttpResponse } from "msw";
 
-const BASE_URL = 'https://platform-api.max.ru';
+const BASE_URL = "https://platform-api.max.ru";
 
 export const maxApiHandlers = [
   // GET /me -- Bot info
   http.get(`${BASE_URL}/me`, ({ request }) => {
-    const token = request.headers.get('Authorization');
-    if (token !== 'valid-test-token') {
-      return HttpResponse.json({ code: 'unauthorized' }, { status: 401 });
+    const token = request.headers.get("Authorization");
+    if (token !== "valid-test-token") {
+      return HttpResponse.json({ code: "unauthorized" }, { status: 401 });
     }
-    return HttpResponse.json({ user_id: 1, name: 'TestBot', username: 'testbot' });
+    return HttpResponse.json({ user_id: 1, name: "TestBot", username: "testbot" });
   }),
 
   // POST /messages -- Send message
   http.post(`${BASE_URL}/messages`, async ({ request }) => {
     const body = await request.json();
-    return HttpResponse.json({ message: { body: { mid: 'msg-123' } } });
+    return HttpResponse.json({ message: { body: { mid: "msg-123" } } });
   }),
 
   // POST /uploads -- File upload
   http.post(`${BASE_URL}/uploads`, ({ request }) => {
     const url = new URL(request.url);
-    const type = url.searchParams.get('type');
+    const type = url.searchParams.get("type");
     return HttpResponse.json({ token: `upload-token-${type}-1` });
   }),
 
@@ -684,79 +684,79 @@ export const maxApiHandlers = [
 // tests/fixtures/max-webhook-events.ts
 export const webhookFixtures = {
   bot_started: {
-    update_type: 'bot_started',
+    update_type: "bot_started",
     timestamp: 1708000000000,
-    user: { user_id: 100, name: 'TestUser' },
-    chat_id: 'chat-1',
+    user: { user_id: 100, name: "TestUser" },
+    chat_id: "chat-1",
   },
   message_created: {
-    update_type: 'message_created',
+    update_type: "message_created",
     timestamp: 1708000001000,
     message: {
-      sender: { user_id: 100, name: 'TestUser' },
-      recipient: { chat_id: 'chat-1' },
-      body: { mid: 'msg-1', text: 'Hello bot', seq: 1 },
+      sender: { user_id: 100, name: "TestUser" },
+      recipient: { chat_id: "chat-1" },
+      body: { mid: "msg-1", text: "Hello bot", seq: 1 },
     },
   },
   message_callback: {
-    update_type: 'message_callback',
+    update_type: "message_callback",
     timestamp: 1708000002000,
     callback: {
-      callback_id: 'cb-1',
-      payload: 'action:confirm',
+      callback_id: "cb-1",
+      payload: "action:confirm",
       user: { user_id: 100 },
     },
   },
   message_edited: {
-    update_type: 'message_edited',
+    update_type: "message_edited",
     timestamp: 1708000003000,
     message: {
-      body: { mid: 'msg-1', text: 'Edited text', seq: 2 },
+      body: { mid: "msg-1", text: "Edited text", seq: 2 },
     },
   },
   message_removed: {
-    update_type: 'message_removed',
+    update_type: "message_removed",
     timestamp: 1708000004000,
-    message_id: 'msg-2',
+    message_id: "msg-2",
   },
   bot_added: {
-    update_type: 'bot_added',
+    update_type: "bot_added",
     timestamp: 1708000005000,
-    chat_id: 'group-1',
-    user: { user_id: 0, name: 'System' },
+    chat_id: "group-1",
+    user: { user_id: 0, name: "System" },
   },
   bot_removed: {
-    update_type: 'bot_removed',
+    update_type: "bot_removed",
     timestamp: 1708000006000,
-    chat_id: 'group-1',
-    user: { user_id: 0, name: 'System' },
+    chat_id: "group-1",
+    user: { user_id: 0, name: "System" },
   },
   user_added: {
-    update_type: 'user_added',
+    update_type: "user_added",
     timestamp: 1708000007000,
-    chat_id: 'group-1',
-    user: { user_id: 200, name: 'NewUser' },
+    chat_id: "group-1",
+    user: { user_id: 200, name: "NewUser" },
   },
   user_removed: {
-    update_type: 'user_removed',
+    update_type: "user_removed",
     timestamp: 1708000008000,
-    chat_id: 'group-1',
-    user: { user_id: 200, name: 'OldUser' },
+    chat_id: "group-1",
+    user: { user_id: 200, name: "OldUser" },
   },
 };
 ```
 
 ### 6.3 Test Data Management
 
-| Data Type | Strategy | Lifecycle |
-|-----------|----------|-----------|
-| Bot tokens (unit/integration) | Hardcoded test values (`"test-token-123"`) | Stateless, per-test |
-| Bot tokens (E2E) | CI secrets (`MAX_STAGING_BOT_TOKEN`) | Persistent, managed in vault |
-| Config fixtures | Factory functions (`createTestMaxConfig(overrides)`) | Created per test, discarded after |
-| Webhook payloads | Static fixtures (see Section 6.2.3) | Version-controlled in `tests/fixtures/` |
-| Chat IDs / User IDs | Deterministic strings (`"test-chat-1"`, `"test-user-1"`) | Stateless, per-test |
-| Uploaded file tokens | Mock-generated (`"upload-token-photo-1"`) | Scoped to mock server session |
-| Rate limiter state | Reset before each test via `beforeEach` | No carryover between tests |
+| Data Type                     | Strategy                                                 | Lifecycle                               |
+| ----------------------------- | -------------------------------------------------------- | --------------------------------------- |
+| Bot tokens (unit/integration) | Hardcoded test values (`"test-token-123"`)               | Stateless, per-test                     |
+| Bot tokens (E2E)              | CI secrets (`MAX_STAGING_BOT_TOKEN`)                     | Persistent, managed in vault            |
+| Config fixtures               | Factory functions (`createTestMaxConfig(overrides)`)     | Created per test, discarded after       |
+| Webhook payloads              | Static fixtures (see Section 6.2.3)                      | Version-controlled in `tests/fixtures/` |
+| Chat IDs / User IDs           | Deterministic strings (`"test-chat-1"`, `"test-user-1"`) | Stateless, per-test                     |
+| Uploaded file tokens          | Mock-generated (`"upload-token-photo-1"`)                | Scoped to mock server session           |
+| Rate limiter state            | Reset before each test via `beforeEach`                  | No carryover between tests              |
 
 ### 6.4 CI/CD Integration
 
@@ -770,7 +770,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: "20"
       - run: npm ci
       - run: npx vitest run extensions/max/tests/unit --reporter=verbose
     # Trigger: every push, every PR
@@ -782,7 +782,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: "20"
       - run: npm ci
       - run: npx vitest run extensions/max/tests/integration --reporter=verbose
     # Trigger: PR to main, merge to main
@@ -798,7 +798,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: "20"
       - run: npm ci
       - run: npx vitest run extensions/max/tests/e2e --reporter=verbose --timeout=300000
     # Trigger: nightly schedule, manual dispatch
@@ -858,28 +858,28 @@ extensions/max/
 
 ### 7.1 Invariant Test Coverage
 
-| # | Invariant (from ADR) | Enforcement Mechanism | Test Strategy |
-|---|---------------------|----------------------|---------------|
-| INV-01 | Token stored only in `channels.max.accounts[id].token`, never logged | Runtime validation + logging interceptor | S-09 through S-15: Mock logger, assert token never appears in log output. Pre-commit hook scans for token patterns. |
-| INV-02 | Every incoming webhook MUST be verified before processing | Middleware function `verifyMaxWebhookSignature()` | S-01 through S-08: Test valid/invalid/missing signatures. **BLOCKED on R-01 research.** |
-| INV-03 | Outbound messages MUST respect 30 rps per token | Token bucket rate limiter per account | AT-17 through AT-19, S-23 through S-27: Boundary tests at 29, 30, 31 rps. |
-| INV-04 | Only one gateway mode (webhook OR polling) per account | Guard in `gateway.startAccount` | AT-22: Attempt dual start, assert rejection. |
-| INV-05 | `gateway.startAccount` MUST respect `abortSignal` | AbortController integration | AT-27, AT-28: Signal abort, verify clean shutdown. |
+| #      | Invariant (from ADR)                                                 | Enforcement Mechanism                             | Test Strategy                                                                                                       |
+| ------ | -------------------------------------------------------------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| INV-01 | Token stored only in `channels.max.accounts[id].token`, never logged | Runtime validation + logging interceptor          | S-09 through S-15: Mock logger, assert token never appears in log output. Pre-commit hook scans for token patterns. |
+| INV-02 | Every incoming webhook MUST be verified before processing            | Middleware function `verifyMaxWebhookSignature()` | S-01 through S-08: Test valid/invalid/missing signatures. **BLOCKED on R-01 research.**                             |
+| INV-03 | Outbound messages MUST respect 30 rps per token                      | Token bucket rate limiter per account             | AT-17 through AT-19, S-23 through S-27: Boundary tests at 29, 30, 31 rps.                                           |
+| INV-04 | Only one gateway mode (webhook OR polling) per account               | Guard in `gateway.startAccount`                   | AT-22: Attempt dual start, assert rejection.                                                                        |
+| INV-05 | `gateway.startAccount` MUST respect `abortSignal`                    | AbortController integration                       | AT-27, AT-28: Signal abort, verify clean shutdown.                                                                  |
 
 ### 7.2 Domain Event Testability
 
 The ADR defines 8 domain events. Each must be emittable and assertable:
 
-| Event | Testable? | How to Test |
-|-------|-----------|-------------|
-| `max.message.received` | YES | Mock webhook event, assert event emitted with correct payload |
-| `max.message.sent` | YES | Mock sendMessageMax success, assert event emitted |
-| `max.message.delivery_failed` | YES | Mock sendMessageMax failure, assert event emitted with error |
-| `max.webhook.received` | YES | Any webhook payload, assert event emitted with `updateType` |
-| `max.webhook.validation_failed` | BLOCKED | Depends on R-01 (webhook verification mechanism) |
-| `max.callback.received` | YES | Mock `message_callback` event, assert event emitted |
-| `max.gateway.started` | YES | Call `startAccount`, assert event emitted with mode |
-| `max.gateway.stopped` | YES | Trigger abort, assert event emitted with reason |
+| Event                           | Testable? | How to Test                                                   |
+| ------------------------------- | --------- | ------------------------------------------------------------- |
+| `max.message.received`          | YES       | Mock webhook event, assert event emitted with correct payload |
+| `max.message.sent`              | YES       | Mock sendMessageMax success, assert event emitted             |
+| `max.message.delivery_failed`   | YES       | Mock sendMessageMax failure, assert event emitted with error  |
+| `max.webhook.received`          | YES       | Any webhook payload, assert event emitted with `updateType`   |
+| `max.webhook.validation_failed` | BLOCKED   | Depends on R-01 (webhook verification mechanism)              |
+| `max.callback.received`         | YES       | Mock `message_callback` event, assert event emitted           |
+| `max.gateway.started`           | YES       | Call `startAccount`, assert event emitted with mode           |
+| `max.gateway.stopped`           | YES       | Trigger abort, assert event emitted with reason               |
 
 ---
 
@@ -887,53 +887,53 @@ The ADR defines 8 domain events. Each must be emittable and assertable:
 
 ### 8.1 Immediate Actions (Before Implementation)
 
-| # | Action | Owner | Deliverable |
-|---|--------|-------|-------------|
-| 1 | **Research MAX webhook signature verification** | Security Lead | Document verification mechanism, write `verifyMaxWebhookSignature()` spec |
-| 2 | **Define runtime `channel.max.*` interface as a TypeScript file** | Platform Team | `src/runtime/channels/max.d.ts` |
-| 3 | **Reconcile rate limit: 20 rps (in code docs) vs 30 rps (MAX API docs)** | Backend Dev | Confirmed value, update `rate-limiter.ts` |
-| 4 | **Verify MAX message length limit (currently "assumed ~4096")** | QA | Confirmed boundary value |
-| 5 | **Register staging MAX bot for E2E testing** | DevOps | Bot token stored in CI secrets |
-| 6 | **Evaluate `@maxhub/max-bot-api` SDK fitness** | Tech Lead | Assessment doc: API coverage, test quality, maintenance risk |
+| #   | Action                                                                   | Owner         | Deliverable                                                               |
+| --- | ------------------------------------------------------------------------ | ------------- | ------------------------------------------------------------------------- |
+| 1   | **Research MAX webhook signature verification**                          | Security Lead | Document verification mechanism, write `verifyMaxWebhookSignature()` spec |
+| 2   | **Define runtime `channel.max.*` interface as a TypeScript file**        | Platform Team | `src/runtime/channels/max.d.ts`                                           |
+| 3   | **Reconcile rate limit: 20 rps (in code docs) vs 30 rps (MAX API docs)** | Backend Dev   | Confirmed value, update `rate-limiter.ts`                                 |
+| 4   | **Verify MAX message length limit (currently "assumed ~4096")**          | QA            | Confirmed boundary value                                                  |
+| 5   | **Register staging MAX bot for E2E testing**                             | DevOps        | Bot token stored in CI secrets                                            |
+| 6   | **Evaluate `@maxhub/max-bot-api` SDK fitness**                           | Tech Lead     | Assessment doc: API coverage, test quality, maintenance risk              |
 
 ### 8.2 Implementation Phase
 
-| # | Action | Owner | Deliverable |
-|---|--------|-------|-------------|
-| 7 | Write unit tests (20+) before implementation (TDD) | Dev + QA | `extensions/max/tests/unit/` |
-| 8 | Write integration tests (10) with mock MAX API server | QA | `extensions/max/tests/integration/` |
-| 9 | Create thin SDK adapter layer (`MaxApiClient`) | Dev | `src/runtime/channels/max-api-client.ts` |
-| 10 | Implement webhook event handler for all 9 event types | Dev | Event mapping with tests |
-| 11 | Implement rate limiter with confirmed 30 rps limit | Dev | Token bucket with tests |
-| 12 | Add `"max"` to `CHAT_CHANNEL_ORDER` | Dev | `src/channels/registry.ts` update |
+| #   | Action                                                | Owner    | Deliverable                              |
+| --- | ----------------------------------------------------- | -------- | ---------------------------------------- |
+| 7   | Write unit tests (20+) before implementation (TDD)    | Dev + QA | `extensions/max/tests/unit/`             |
+| 8   | Write integration tests (10) with mock MAX API server | QA       | `extensions/max/tests/integration/`      |
+| 9   | Create thin SDK adapter layer (`MaxApiClient`)        | Dev      | `src/runtime/channels/max-api-client.ts` |
+| 10  | Implement webhook event handler for all 9 event types | Dev      | Event mapping with tests                 |
+| 11  | Implement rate limiter with confirmed 30 rps limit    | Dev      | Token bucket with tests                  |
+| 12  | Add `"max"` to `CHAT_CHANNEL_ORDER`                   | Dev      | `src/channels/registry.ts` update        |
 
 ### 8.3 Post-Implementation
 
-| # | Action | Owner | Deliverable |
-|---|--------|-------|-------------|
-| 13 | Write E2E test suite against real MAX API | QA | `extensions/max/tests/e2e/` |
-| 14 | Security audit: token leakage, webhook verification, input sanitization | Security Lead | Signed-off security report |
-| 15 | Load test: sustained 30 rps for 10 minutes, verify zero drops | QA | Load test report |
-| 16 | SDK version pinning and monthly maintenance check | DevOps | CI check, calendar reminder |
+| #   | Action                                                                  | Owner         | Deliverable                 |
+| --- | ----------------------------------------------------------------------- | ------------- | --------------------------- |
+| 13  | Write E2E test suite against real MAX API                               | QA            | `extensions/max/tests/e2e/` |
+| 14  | Security audit: token leakage, webhook verification, input sanitization | Security Lead | Signed-off security report  |
+| 15  | Load test: sustained 30 rps for 10 minutes, verify zero drops           | QA            | Load test report            |
+| 16  | SDK version pinning and monthly maintenance check                       | DevOps        | CI check, calendar reminder |
 
 ---
 
 ## 9. Appendix: Test Coverage Traceability Matrix
 
-| ADR Section | Acceptance Tests | Unit Tests | Integration Tests | E2E Tests | Security Tests |
-|-------------|-----------------|------------|-------------------|-----------|----------------|
-| 1. Extension structure | -- | U-14, U-15, U-16 | -- | -- | -- |
-| 2. ChannelPlugin sections | AT-04..07 | U-01..06 | I-03, I-04 | E2E-02..04 | -- |
-| 3. Platform registration | -- | U-01 | -- | -- | -- |
-| 4. Runtime API surface | AT-04, AT-05 | U-03, U-04, U-10, U-11 | I-01..04, I-09 | E2E-01..04 | -- |
-| 5. Config schema | AT-29..32 | U-07..09, U-18..20 | -- | -- | S-14 |
-| 6. Webhook events | AT-08..16 | U-17 | I-05, I-06, I-09 | E2E-05, E2E-06 | S-01..08 |
-| 7. Modular design | -- | U-14..16 | -- | -- | -- |
-| Invariant 1: Token security | AT-35 | -- | -- | -- | S-09..15 |
-| Invariant 2: Webhook verification | AT-33, AT-34 | -- | -- | -- | S-01..08 |
-| Invariant 3: Rate compliance | AT-17..19 | -- | I-07, I-08 | E2E-07 | S-23..27 |
-| Invariant 4: Gateway exclusivity | AT-22 | U-11, U-12 | -- | -- | -- |
-| Invariant 5: Graceful shutdown | AT-27, AT-28 | U-12 | I-10 | -- | -- |
-| Error handling | AT-23..26 | -- | I-02, I-08 | -- | -- |
+| ADR Section                       | Acceptance Tests | Unit Tests             | Integration Tests | E2E Tests      | Security Tests |
+| --------------------------------- | ---------------- | ---------------------- | ----------------- | -------------- | -------------- |
+| 1. Extension structure            | --               | U-14, U-15, U-16       | --                | --             | --             |
+| 2. ChannelPlugin sections         | AT-04..07        | U-01..06               | I-03, I-04        | E2E-02..04     | --             |
+| 3. Platform registration          | --               | U-01                   | --                | --             | --             |
+| 4. Runtime API surface            | AT-04, AT-05     | U-03, U-04, U-10, U-11 | I-01..04, I-09    | E2E-01..04     | --             |
+| 5. Config schema                  | AT-29..32        | U-07..09, U-18..20     | --                | --             | S-14           |
+| 6. Webhook events                 | AT-08..16        | U-17                   | I-05, I-06, I-09  | E2E-05, E2E-06 | S-01..08       |
+| 7. Modular design                 | --               | U-14..16               | --                | --             | --             |
+| Invariant 1: Token security       | AT-35            | --                     | --                | --             | S-09..15       |
+| Invariant 2: Webhook verification | AT-33, AT-34     | --                     | --                | --             | S-01..08       |
+| Invariant 3: Rate compliance      | AT-17..19        | --                     | I-07, I-08        | E2E-07         | S-23..27       |
+| Invariant 4: Gateway exclusivity  | AT-22            | U-11, U-12             | --                | --             | --             |
+| Invariant 5: Graceful shutdown    | AT-27, AT-28     | U-12                   | I-10              | --             | --             |
+| Error handling                    | AT-23..26        | --                     | I-02, I-08        | --             | --             |
 
 **Total test cases identified**: 35 acceptance tests + 20 unit tests + 10 integration tests + 7 E2E tests + 27 security tests = **99 test cases**

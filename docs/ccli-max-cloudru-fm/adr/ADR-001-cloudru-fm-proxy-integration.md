@@ -1,6 +1,7 @@
 # ADR-001: Cloud.ru FM Proxy Integration Architecture
 
 ## Status: ACCEPTED
+
 ## Date: 2026-02-13 (v2 — rewritten after DDD analysis + brutal honesty review + research)
 
 ## Context
@@ -12,6 +13,7 @@ OpenClaw already has `claude-cli` backend spawning Claude Code as subprocess (`s
 ### Platform Context (from Research)
 
 Cloud.ru Evolution AI Factory provides 6 integrated services:
+
 - **Foundation Models**: 20+ LLMs (GLM-4.7, Qwen3, DeepSeek, GigaChat) via OpenAI-compatible API
 - **AI Agents**: Visual editor, MCP integration, A2A protocol (up to 5 agents)
 - **Managed RAG**: Knowledge bases, vector search, document parsing
@@ -22,6 +24,7 @@ Cloud.ru Evolution AI Factory provides 6 integrated services:
 ### Why Proxy (Not Direct API)
 
 Despite OpenAI-compatible endpoints, 3 incompatibilities require a proxy layer:
+
 1. **Auth format**: Claude Code sends `x-api-key` + `anthropic-version`; Cloud.ru expects `Authorization: Bearer`
 2. **Model mapping**: Claude Code requests `claude-opus-4-6`; Cloud.ru uses `zai-org/GLM-4.7`
 3. **Tool call format**: GLM sometimes simulates tool calls in text instead of structured `tool_calls` (Insight #055)
@@ -35,6 +38,7 @@ Despite OpenAI-compatible endpoints, 3 incompatibilities require a proxy layer:
 ## Decision
 
 ### Architecture Flow
+
 ```
 User -> MAX/Telegram/Web -> OpenClaw Gateway -> runCliAgent()
   -> claude -p -> Claude Code
@@ -44,12 +48,12 @@ User -> MAX/Telegram/Web -> OpenClaw Gateway -> runCliAgent()
 
 ### Bounded Contexts (DDD)
 
-| Context | Responsibility | Files |
-|---------|---------------|-------|
-| **Onboarding** | Credential capture, config mutation | auth-choice.apply.cloudru-fm.ts, onboard-cloudru-fm.ts |
-| **Configuration** | Type-safe schema, Zod validation | cloudru-fm.constants.ts, onboard-types.ts |
-| **Execution** | CLI backend merge, model routing | cli-backends.ts, cli-runner.ts |
-| **Infrastructure** | Docker proxy lifecycle | cloudru-proxy-template.ts, cloudru-proxy-health.ts |
+| Context            | Responsibility                      | Files                                                  |
+| ------------------ | ----------------------------------- | ------------------------------------------------------ |
+| **Onboarding**     | Credential capture, config mutation | auth-choice.apply.cloudru-fm.ts, onboard-cloudru-fm.ts |
+| **Configuration**  | Type-safe schema, Zod validation    | cloudru-fm.constants.ts, onboard-types.ts              |
+| **Execution**      | CLI backend merge, model routing    | cli-backends.ts, cli-runner.ts                         |
+| **Infrastructure** | Docker proxy lifecycle              | cloudru-proxy-template.ts, cloudru-proxy-health.ts     |
 
 ### Key Design Decisions
 
@@ -62,15 +66,15 @@ User -> MAX/Telegram/Web -> OpenClaw Gateway -> runCliAgent()
 
 ### Known GLM Behavioral Issues (from Research)
 
-| # | Issue | Severity | Mitigation |
-|---|-------|----------|------------|
-| 1 | Ignores XML skill sections | High | Use dispatch tables, not XML |
-| 2 | Simulates tool calls in text | High | Proxy validates tool_calls format |
-| 3 | Streaming parse crash (tag duplication) | Medium | sglang #15721 — proxy handles |
-| 4 | Context loss with prompts >4000 chars | Medium | Keep system prompts compact |
-| 5 | RLHF refusals (GLM-4.6, potentially Flash) | Medium | Anti-refusal instructions |
-| 6 | Thinking mode conflicts with streaming | Medium | Disable thinking for agentic tasks |
-| 7 | Code reformatting by model | Low | EditorConfig + linters |
+| #   | Issue                                      | Severity | Mitigation                         |
+| --- | ------------------------------------------ | -------- | ---------------------------------- |
+| 1   | Ignores XML skill sections                 | High     | Use dispatch tables, not XML       |
+| 2   | Simulates tool calls in text               | High     | Proxy validates tool_calls format  |
+| 3   | Streaming parse crash (tag duplication)    | Medium   | sglang #15721 — proxy handles      |
+| 4   | Context loss with prompts >4000 chars      | Medium   | Keep system prompts compact        |
+| 5   | RLHF refusals (GLM-4.6, potentially Flash) | Medium   | Anti-refusal instructions          |
+| 6   | Thinking mode conflicts with streaming     | Medium   | Disable thinking for agentic tasks |
+| 7   | Code reformatting by model                 | Low      | EditorConfig + linters             |
 
 ## Consequences
 

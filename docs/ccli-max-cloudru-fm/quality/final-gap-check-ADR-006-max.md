@@ -5,20 +5,20 @@
 **Scope:** MAX extension implementation vs ADR-006 specification vs Telegram reference
 **Files reviewed:**
 
-| Role | File |
-|------|------|
-| Implementation | `extensions/max/src/channel.ts` |
-| Implementation | `extensions/max/src/types.ts` |
-| Implementation | `extensions/max/src/accounts.ts` |
-| Implementation | `extensions/max/src/config-schema.ts` |
-| Implementation | `extensions/max/src/normalize.ts` |
-| Implementation | `extensions/max/src/runtime.ts` |
-| Implementation | `extensions/max/index.ts` |
-| Implementation | `extensions/max/openclaw.plugin.json` |
-| Implementation | `extensions/max/package.json` |
-| Specification | `docs/ccli-max-cloudru-fm/adr/ADR-006-max-messenger-extension.md` |
+| Role           | File                                                                      |
+| -------------- | ------------------------------------------------------------------------- |
+| Implementation | `extensions/max/src/channel.ts`                                           |
+| Implementation | `extensions/max/src/types.ts`                                             |
+| Implementation | `extensions/max/src/accounts.ts`                                          |
+| Implementation | `extensions/max/src/config-schema.ts`                                     |
+| Implementation | `extensions/max/src/normalize.ts`                                         |
+| Implementation | `extensions/max/src/runtime.ts`                                           |
+| Implementation | `extensions/max/index.ts`                                                 |
+| Implementation | `extensions/max/openclaw.plugin.json`                                     |
+| Implementation | `extensions/max/package.json`                                             |
+| Specification  | `docs/ccli-max-cloudru-fm/adr/ADR-006-max-messenger-extension.md`         |
 | Quality report | `docs/ccli-max-cloudru-fm/quality/requirements-validation-ADR-006-max.md` |
-| Reference | `extensions/telegram/src/channel.ts` |
+| Reference      | `extensions/telegram/src/channel.ts`                                      |
 
 ---
 
@@ -123,6 +123,7 @@ The `status.buildAccountSnapshot` determines mode via `runtime?.mode ?? (account
 **Status: PASS**
 
 `gateway.logoutAccount` is fully implemented. It:
+
 - Checks for environment token (`MAX_BOT_TOKEN`)
 - Removes `botToken` from default account or named account config
 - Cleans up empty `accounts` records and empty `max` sections
@@ -134,26 +135,26 @@ The `status.buildAccountSnapshot` determines mode via `runtime?.mode ?? (account
 
 ### 13. All ChannelPlugin sections present
 
-| Section | Present | Notes |
-|---------|---------|-------|
-| **meta** | YES | Locally defined (MAX not yet in CHAT_CHANNEL_ORDER) |
-| **capabilities** | YES | `["direct", "group"]`, media, nativeCommands, blockStreaming |
-| **pairing** | YES | `idLabel: "maxUserId"`, normalizeAllowEntry, notifyApproval |
-| **config** | YES | Full CRUD: list, resolve, default, setEnabled, delete, isConfigured, describe, allowFrom |
-| **configSchema** | YES | Via `buildChannelConfigSchema(MaxConfigSchema)` |
-| **security** | YES | `resolveDmPolicy` and `collectWarnings` |
-| **groups** | **NO** | **Gap G-03** |
-| **messaging** | YES | `normalizeTarget` and `targetResolver` |
-| **outbound** | YES | `sendText`, `sendMedia`, `chunker`, `textChunkLimit`, `deliveryMode` |
-| **status** | YES | `defaultRuntime`, `collectStatusIssues`, `buildChannelSummary`, `probeAccount`, `buildAccountSnapshot` |
-| **setup** | YES | `resolveAccountId`, `applyAccountName`, `validateInput`, `applyAccountConfig` |
-| **gateway** | YES | `startAccount` and `logoutAccount` |
-| **actions** | YES | `listActions`, `supportsAction`, `handleAction` (missing `extractToolSend`) |
-| **reload** | YES | `configPrefixes: ["channels.max"]` |
-| **streaming** | YES | `blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 }` |
-| **onboarding** | **NO** | **Gap G-04** |
-| **directory** | **NO** | **Gap G-05** |
-| **threading** | N/A | Correct: MAX has no thread support per ADR-006 |
+| Section          | Present | Notes                                                                                                  |
+| ---------------- | ------- | ------------------------------------------------------------------------------------------------------ |
+| **meta**         | YES     | Locally defined (MAX not yet in CHAT_CHANNEL_ORDER)                                                    |
+| **capabilities** | YES     | `["direct", "group"]`, media, nativeCommands, blockStreaming                                           |
+| **pairing**      | YES     | `idLabel: "maxUserId"`, normalizeAllowEntry, notifyApproval                                            |
+| **config**       | YES     | Full CRUD: list, resolve, default, setEnabled, delete, isConfigured, describe, allowFrom               |
+| **configSchema** | YES     | Via `buildChannelConfigSchema(MaxConfigSchema)`                                                        |
+| **security**     | YES     | `resolveDmPolicy` and `collectWarnings`                                                                |
+| **groups**       | **NO**  | **Gap G-03**                                                                                           |
+| **messaging**    | YES     | `normalizeTarget` and `targetResolver`                                                                 |
+| **outbound**     | YES     | `sendText`, `sendMedia`, `chunker`, `textChunkLimit`, `deliveryMode`                                   |
+| **status**       | YES     | `defaultRuntime`, `collectStatusIssues`, `buildChannelSummary`, `probeAccount`, `buildAccountSnapshot` |
+| **setup**        | YES     | `resolveAccountId`, `applyAccountName`, `validateInput`, `applyAccountConfig`                          |
+| **gateway**      | YES     | `startAccount` and `logoutAccount`                                                                     |
+| **actions**      | YES     | `listActions`, `supportsAction`, `handleAction` (missing `extractToolSend`)                            |
+| **reload**       | YES     | `configPrefixes: ["channels.max"]`                                                                     |
+| **streaming**    | YES     | `blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 }`                                     |
+| **onboarding**   | **NO**  | **Gap G-04**                                                                                           |
+| **directory**    | **NO**  | **Gap G-05**                                                                                           |
+| **threading**    | N/A     | Correct: MAX has no thread support per ADR-006                                                         |
 
 **Sections present: 14/17 applicable** (82% coverage, up from 63% at validation time)
 
@@ -164,6 +165,7 @@ The `status.buildAccountSnapshot` determines mode via `runtime?.mode ?? (account
 **Status: PASS**
 
 All types in `types.ts` use explicit type definitions:
+
 - `MaxProbe`: structured with `ok`, `bot?`, `error?`
 - `MaxAccountConfig`: all 16 fields with specific types, using imported `DmPolicy`, `GroupPolicy`, `BlockStreamingCoalesceConfig`
 - `MaxConfig`: extends `MaxAccountConfig` with `accounts` record
@@ -179,18 +181,19 @@ No usage of `any` found in any MAX extension file. The `channel.ts` uses `Record
 
 The `MaxConfigSchema` (via `MaxAccountSchemaBase`) covers:
 
-| ADR-006 field | Schema field | Status |
-|---------------|-------------|--------|
-| token | `botToken` | YES |
-| enabled | `enabled` | YES |
-| webhookUrl | `webhookUrl` (`.url()` validated) | YES |
-| webhookSecret | `webhookSecret` | YES |
-| webhookPath | `webhookPath` | YES |
-| dmPolicy | `dmPolicy` (DmPolicySchema) | YES |
-| allowFrom | `allowFrom` (string/number array) | YES |
-| proxy | `proxy` | YES |
+| ADR-006 field | Schema field                      | Status |
+| ------------- | --------------------------------- | ------ |
+| token         | `botToken`                        | YES    |
+| enabled       | `enabled`                         | YES    |
+| webhookUrl    | `webhookUrl` (`.url()` validated) | YES    |
+| webhookSecret | `webhookSecret`                   | YES    |
+| webhookPath   | `webhookPath`                     | YES    |
+| dmPolicy      | `dmPolicy` (DmPolicySchema)       | YES    |
+| allowFrom     | `allowFrom` (string/number array) | YES    |
+| proxy         | `proxy`                           | YES    |
 
 Additional fields beyond ADR-006 (matching Telegram parity):
+
 - `name`, `tokenFile`, `groupAllowFrom`, `groupPolicy`, `textChunkLimit`, `format`, `blockStreaming`, `blockStreamingCoalesce`
 
 The `requireOpenAllowFrom` superRefine is applied at both account and top-level config, preventing `dmPolicy="open"` without `allowFrom: ["*"]`.
@@ -202,6 +205,7 @@ The `requireOpenAllowFrom` superRefine is applied at both account and top-level 
 **Status: PASS**
 
 `resolveMaxAccount` follows the identical pattern to `resolveTelegramAccount`:
+
 - Normalizes account ID via `normalizeAccountId`
 - Merges base config with account-specific config
 - Falls back to default account if explicit ID not provided and primary has no token
@@ -215,6 +219,7 @@ The `requireOpenAllowFrom` superRefine is applied at both account and top-level 
 **Status: PASS**
 
 `normalizeMaxMessagingTarget` handles:
+
 - Plain numerical IDs: `"12345"` -> `"12345"`
 - Negative group IDs: `"-67890"` -> `"-67890"`
 - Prefixed IDs (case-insensitive): `"max:12345"` -> `"12345"`, `"MAX:12345"` -> `"12345"`
@@ -222,6 +227,7 @@ The `requireOpenAllowFrom` superRefine is applied at both account and top-level 
 - Non-numerical after strip: returns `null`
 
 `looksLikeMaxTargetId` recognizes:
+
 - Numerical IDs (positive and negative)
 - `max:` prefixed IDs (case-insensitive)
 
@@ -234,11 +240,13 @@ This matches ADR-006 which describes MAX chat IDs as numerical (similar to Teleg
 **Status: PASS**
 
 `setup.validateInput` enforces:
+
 - `useEnv` only allowed for `DEFAULT_ACCOUNT_ID` (prevents env token on named accounts)
 - At least one of `token`, `tokenFile`, or `useEnv` must be provided
 - Returns descriptive error messages
 
 `setup.applyAccountConfig` correctly:
+
 - Applies account name via `applyAccountNameToChannelSection`
 - Migrates base name to default account for non-default IDs
 - Sets `enabled: true`
@@ -334,56 +342,56 @@ This matches ADR-006 which describes MAX chat IDs as numerical (similar to Teleg
 
 ## Summary of Gaps
 
-| ID | Description | Severity | Status from Requirements Validation |
-|----|-------------|----------|-------------------------------------|
-| G-01 | `tokenFile` resolution not implemented | **MEDIUM** | Not previously identified |
-| G-02 | `extractToolSend` missing from actions | **LOW** | Not previously identified |
-| G-03 | `groups` section missing | **MEDIUM** | MG-03 (known gap) |
-| G-04 | `onboarding` adapter missing | **MEDIUM** | MG-02 (known gap) |
-| G-05 | `directory` section missing | **LOW** | LG-01 (known gap) |
-| G-06 | `status.auditAccount` not implemented | **LOW** | Not previously identified |
-| G-07 | Platform registration deferred | **LOW** | Planned for M7 |
+| ID   | Description                            | Severity   | Status from Requirements Validation |
+| ---- | -------------------------------------- | ---------- | ----------------------------------- |
+| G-01 | `tokenFile` resolution not implemented | **MEDIUM** | Not previously identified           |
+| G-02 | `extractToolSend` missing from actions | **LOW**    | Not previously identified           |
+| G-03 | `groups` section missing               | **MEDIUM** | MG-03 (known gap)                   |
+| G-04 | `onboarding` adapter missing           | **MEDIUM** | MG-02 (known gap)                   |
+| G-05 | `directory` section missing            | **LOW**    | LG-01 (known gap)                   |
+| G-06 | `status.auditAccount` not implemented  | **LOW**    | Not previously identified           |
+| G-07 | Platform registration deferred         | **LOW**    | Planned for M7                      |
 
 ### Previously Identified Gaps Now Resolved
 
-| Validation ID | Description | Resolution |
-|---------------|-------------|------------|
-| CG-02 | `gateway.logoutAccount` not defined | **RESOLVED** -- fully implemented |
-| MG-01 | `messaging` section missing | **RESOLVED** -- `normalizeTarget` and `targetResolver` present |
-| LG-02 | `actions` section missing | **RESOLVED** -- `maxMessageActions` implemented |
-| LG-03 | `reload` section missing | **RESOLVED** -- `configPrefixes: ["channels.max"]` present |
+| Validation ID | Description                         | Resolution                                                     |
+| ------------- | ----------------------------------- | -------------------------------------------------------------- |
+| CG-02         | `gateway.logoutAccount` not defined | **RESOLVED** -- fully implemented                              |
+| MG-01         | `messaging` section missing         | **RESOLVED** -- `normalizeTarget` and `targetResolver` present |
+| LG-02         | `actions` section missing           | **RESOLVED** -- `maxMessageActions` implemented                |
+| LG-03         | `reload` section missing            | **RESOLVED** -- `configPrefixes: ["channels.max"]` present     |
 
 ### Gaps Not Addressable by Extension (Runtime Responsibility)
 
-| Validation ID | Description | Responsibility |
-|---------------|-------------|----------------|
-| CG-01 | Webhook signature verification | Runtime layer |
-| CG-03 | Error code mapping / MaxApiError taxonomy | Runtime layer |
-| MG-04 | Message deduplication | Runtime layer |
-| MG-05 | Reconnection strategy for polling | Runtime layer |
-| LG-04 | Bot command registration | Runtime layer |
+| Validation ID | Description                               | Responsibility |
+| ------------- | ----------------------------------------- | -------------- |
+| CG-01         | Webhook signature verification            | Runtime layer  |
+| CG-03         | Error code mapping / MaxApiError taxonomy | Runtime layer  |
+| MG-04         | Message deduplication                     | Runtime layer  |
+| MG-05         | Reconnection strategy for polling         | Runtime layer  |
+| LG-04         | Bot command registration                  | Runtime layer  |
 
 ---
 
 ## Structural Comparison: MAX vs Telegram
 
-| Aspect | Telegram | MAX | Match |
-|--------|----------|-----|-------|
-| File count | 5 core files | 7 files (5 core + types + normalize) | OK (decomposed) |
-| Plugin registration | `register(api)` | `register(api)` | Identical |
-| Runtime singleton | `setTelegramRuntime` / `getTelegramRuntime` | `setMaxRuntime` / `getMaxRuntime` | Identical |
-| Config CRUD methods | 8 methods | 8 methods | Identical |
-| Security section | `resolveDmPolicy` + `collectWarnings` | `resolveDmPolicy` + `collectWarnings` | Identical |
-| Outbound section | `sendText`, `sendMedia`, chunker | `sendText`, `sendMedia`, chunker | Identical |
-| Gateway section | `startAccount` + `logoutAccount` | `startAccount` + `logoutAccount` | Identical |
-| Status section | 5 methods incl. `auditAccount` | 4 methods (no `auditAccount`) | Minor gap |
-| Setup section | 4 methods | 4 methods | Identical |
-| Groups section | `resolveRequireMention` + `resolveToolPolicy` | Missing | Gap |
-| Directory section | `self`, `listPeers`, `listGroups` | Missing | Gap |
-| Onboarding section | `telegramOnboardingAdapter` | Missing | Gap |
-| Threading section | `resolveReplyToMode` | N/A (no threads in MAX) | Correct |
-| Streaming section | Not present in telegram channel.ts | Present in MAX | MAX has extra |
-| Actions | `listActions`, `extractToolSend`, `handleAction` | `listActions`, `supportsAction`, `handleAction` | Slight mismatch |
+| Aspect              | Telegram                                         | MAX                                             | Match           |
+| ------------------- | ------------------------------------------------ | ----------------------------------------------- | --------------- |
+| File count          | 5 core files                                     | 7 files (5 core + types + normalize)            | OK (decomposed) |
+| Plugin registration | `register(api)`                                  | `register(api)`                                 | Identical       |
+| Runtime singleton   | `setTelegramRuntime` / `getTelegramRuntime`      | `setMaxRuntime` / `getMaxRuntime`               | Identical       |
+| Config CRUD methods | 8 methods                                        | 8 methods                                       | Identical       |
+| Security section    | `resolveDmPolicy` + `collectWarnings`            | `resolveDmPolicy` + `collectWarnings`           | Identical       |
+| Outbound section    | `sendText`, `sendMedia`, chunker                 | `sendText`, `sendMedia`, chunker                | Identical       |
+| Gateway section     | `startAccount` + `logoutAccount`                 | `startAccount` + `logoutAccount`                | Identical       |
+| Status section      | 5 methods incl. `auditAccount`                   | 4 methods (no `auditAccount`)                   | Minor gap       |
+| Setup section       | 4 methods                                        | 4 methods                                       | Identical       |
+| Groups section      | `resolveRequireMention` + `resolveToolPolicy`    | Missing                                         | Gap             |
+| Directory section   | `self`, `listPeers`, `listGroups`                | Missing                                         | Gap             |
+| Onboarding section  | `telegramOnboardingAdapter`                      | Missing                                         | Gap             |
+| Threading section   | `resolveReplyToMode`                             | N/A (no threads in MAX)                         | Correct         |
+| Streaming section   | Not present in telegram channel.ts               | Present in MAX                                  | MAX has extra   |
+| Actions             | `listActions`, `extractToolSend`, `handleAction` | `listActions`, `supportsAction`, `handleAction` | Slight mismatch |
 
 ---
 

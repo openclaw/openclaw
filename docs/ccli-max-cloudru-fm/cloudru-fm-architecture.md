@@ -62,15 +62,15 @@
 
 Единый источник правды (Single Source of Truth) для всех констант:
 
-| Константа | Значение | Назначение |
-|-----------|----------|------------|
-| `CLOUDRU_FM_MODELS` | 4 модели | Полные ID моделей cloud.ru |
-| `CLOUDRU_FM_PRESETS` | 3 пресета | Конфигурации wizard |
-| `CLOUDRU_PROXY_PORT_DEFAULT` | `8082` | Порт прокси |
-| `CLOUDRU_BASE_URL` | `https://foundation-models.api.cloud.ru/v1` | API endpoint |
-| `CLOUDRU_PROXY_IMAGE` | `legard/claude-code-proxy:v1.0.0` | Docker образ (pinned) |
-| `CLOUDRU_PROXY_SENTINEL_KEY` | `not-a-real-key-proxy-only` | Заглушка для Claude CLI |
-| `CLOUDRU_CLEAR_ENV_EXTRAS` | 6 переменных | Очистка окружения подпроцесса |
+| Константа                    | Значение                                    | Назначение                    |
+| ---------------------------- | ------------------------------------------- | ----------------------------- |
+| `CLOUDRU_FM_MODELS`          | 4 модели                                    | Полные ID моделей cloud.ru    |
+| `CLOUDRU_FM_PRESETS`         | 3 пресета                                   | Конфигурации wizard           |
+| `CLOUDRU_PROXY_PORT_DEFAULT` | `8082`                                      | Порт прокси                   |
+| `CLOUDRU_BASE_URL`           | `https://foundation-models.api.cloud.ru/v1` | API endpoint                  |
+| `CLOUDRU_PROXY_IMAGE`        | `legard/claude-code-proxy:v1.0.0`           | Docker образ (pinned)         |
+| `CLOUDRU_PROXY_SENTINEL_KEY` | `not-a-real-key-proxy-only`                 | Заглушка для Claude CLI       |
+| `CLOUDRU_CLEAR_ENV_EXTRAS`   | 6 переменных                                | Очистка окружения подпроцесса |
 
 ### 2. Wizard Handler (Presentation Layer)
 
@@ -102,18 +102,19 @@ auth-choice.apply.ts
 
 **Файл:** `src/commands/onboard-cloudru-fm.ts`
 
-| Функция | Назначение |
-|---------|------------|
-| `resolveCloudruModelPreset()` | AuthChoice → CloudruModelPreset |
-| `writeDockerComposeFile()` | Генерирует docker-compose YAML |
-| `writeCloudruEnvFile()` | Записывает `.env` с API-ключом |
-| `ensureGitignoreEntries()` | Добавляет `.env` и compose в `.gitignore` |
+| Функция                       | Назначение                                |
+| ----------------------------- | ----------------------------------------- |
+| `resolveCloudruModelPreset()` | AuthChoice → CloudruModelPreset           |
+| `writeDockerComposeFile()`    | Генерирует docker-compose YAML            |
+| `writeCloudruEnvFile()`       | Записывает `.env` с API-ключом            |
+| `ensureGitignoreEntries()`    | Добавляет `.env` и compose в `.gitignore` |
 
 ### 4. Proxy Template (Infrastructure Layer)
 
 **Файл:** `src/agents/cloudru-proxy-template.ts`
 
 Генерирует security-hardened Docker Compose YAML:
+
 - Pinned image version (не `:latest`)
 - Localhost-only binding (`127.0.0.1:8082`)
 - `no-new-privileges`, `cap_drop: ALL`, `read_only: true`
@@ -125,11 +126,11 @@ auth-choice.apply.ts
 
 **Файл:** `src/agents/cloudru-proxy-health.ts`
 
-| Функция | Назначение |
-|---------|------------|
-| `checkProxyHealth()` | HTTP probe `/health` с 5s timeout, 30s cache |
-| `ensureProxyHealthy()` | Throws plain Error если прокси недоступен |
-| `clearProxyHealthCache()` | Сброс кэша (для тестов) |
+| Функция                   | Назначение                                   |
+| ------------------------- | -------------------------------------------- |
+| `checkProxyHealth()`      | HTTP probe `/health` с 5s timeout, 30s cache |
+| `ensureProxyHealthy()`    | Throws plain Error если прокси недоступен    |
+| `clearProxyHealthCache()` | Сброс кэша (для тестов)                      |
 
 **Архитектурное решение:** Кидает `Error`, а НЕ `FailoverError`, чтобы не запускать бессмысленный цикл fallback через тот же мертвый прокси.
 
@@ -138,6 +139,7 @@ auth-choice.apply.ts
 **Файл:** `src/commands/cloudru-rollback.ts`
 
 Идемпотентная откатка конфигурации wizard:
+
 - Удаляет `ANTHROPIC_BASE_URL` и `ANTHROPIC_API_KEY` из CLI backend env
 - Удаляет провайдер `cloudru-fm` из `models.providers`
 - НЕ удаляет `.env` и `agents.defaults.model`
@@ -164,11 +166,11 @@ cloudruApiKey?: string;
 
 ```typescript
 type CloudruModelPreset = {
-  big: string;      // opus tier model ID
-  middle: string;   // sonnet tier model ID
-  small: string;    // haiku tier model ID
-  label: string;    // Human-readable name
-  free: boolean;    // Free tier flag
+  big: string; // opus tier model ID
+  middle: string; // sonnet tier model ID
+  small: string; // haiku tier model ID
+  label: string; // Human-readable name
+  free: boolean; // Free tier flag
 };
 ```
 
@@ -198,13 +200,13 @@ cloudru-rollback.ts     ◄── (standalone, importable)
 
 ### API-ключ (CLOUDRU_API_KEY)
 
-| Место | Хранение | Безопасно? |
-|-------|----------|------------|
-| `.env` файл | На диске, рядом с docker-compose | Да (в `.gitignore`) |
-| `openclaw.json` | НИКОГДА | Да |
-| Docker env | `${CLOUDRU_API_KEY}` reference | Да (не hardcoded) |
-| Claude CLI процесс | Очищается через `clearEnv` | Да |
-| Git | В `.gitignore` | Да |
+| Место              | Хранение                         | Безопасно?          |
+| ------------------ | -------------------------------- | ------------------- |
+| `.env` файл        | На диске, рядом с docker-compose | Да (в `.gitignore`) |
+| `openclaw.json`    | НИКОГДА                          | Да                  |
+| Docker env         | `${CLOUDRU_API_KEY}` reference   | Да (не hardcoded)   |
+| Claude CLI процесс | Очищается через `clearEnv`       | Да                  |
+| Git                | В `.gitignore`                   | Да                  |
 
 ### Сетевая изоляция
 
@@ -217,6 +219,7 @@ Container  ──✔──▶ cloud.ru API     (исходящий HTTPS)
 ### Subprocess Environment
 
 `clearEnv` очищает 8 переменных окружения в подпроцессе Claude CLI:
+
 - `ANTHROPIC_API_KEY`, `ANTHROPIC_API_KEY_OLD`
 - `OPENAI_API_KEY`, `GOOGLE_API_KEY`, `GEMINI_API_KEY`
 - `AWS_SECRET_ACCESS_KEY`, `AZURE_OPENAI_API_KEY`
@@ -236,11 +239,11 @@ Container  ──✔──▶ cloud.ru API     (исходящий HTTPS)
 
 Три пресета:
 
-| Пресет | opus (BIG) | sonnet (MIDDLE) | haiku (SMALL) | Бесплатно |
-|--------|-----------|-----------------|---------------|-----------|
-| GLM-4.7 (Full) | GLM-4.7 | GLM-4.7-FlashX | GLM-4.7-Flash | Нет |
-| GLM-4.7-Flash (Free) | GLM-4.7-Flash | GLM-4.7-Flash | GLM-4.7-Flash | Да |
-| Qwen3-Coder-480B | Qwen3-Coder-480B | GLM-4.7-FlashX | GLM-4.7-Flash | Нет |
+| Пресет               | opus (BIG)       | sonnet (MIDDLE) | haiku (SMALL) | Бесплатно |
+| -------------------- | ---------------- | --------------- | ------------- | --------- |
+| GLM-4.7 (Full)       | GLM-4.7          | GLM-4.7-FlashX  | GLM-4.7-Flash | Нет       |
+| GLM-4.7-Flash (Free) | GLM-4.7-Flash    | GLM-4.7-Flash   | GLM-4.7-Flash | Да        |
+| Qwen3-Coder-480B     | Qwen3-Coder-480B | GLM-4.7-FlashX  | GLM-4.7-Flash | Нет       |
 
 ## Fallback Strategy
 
