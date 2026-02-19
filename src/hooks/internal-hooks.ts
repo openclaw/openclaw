@@ -312,9 +312,7 @@ export function isMessageSentEvent(event: InternalHookEvent): event is MessageSe
   );
 }
 
-export function isToolAfterCallEvent(
-  event: InternalHookEvent,
-): event is ToolAfterCallHookEvent {
+export function isToolAfterCallEvent(event: InternalHookEvent): event is ToolAfterCallHookEvent {
   if (event.type !== "tool" || event.action !== "after_call") {
     return false;
   }

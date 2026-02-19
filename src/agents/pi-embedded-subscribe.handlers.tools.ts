@@ -1,6 +1,6 @@
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
-import { emitAgentEvent } from "../infra/agent-events.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
+import { emitAgentEvent } from "../infra/agent-events.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { normalizeTextForComparison } from "./pi-embedded-helpers.js";
@@ -400,9 +400,10 @@ export async function handleToolExecutionEnd(
   if (hookRunnerAfter?.hasHooks("after_tool_call")) {
     const hookEvent: PluginHookAfterToolCallEvent = {
       toolName,
-      params: (afterCallArgs && typeof afterCallArgs === "object"
-        ? afterCallArgs
-        : {}) as Record<string, unknown>,
+      params: (afterCallArgs && typeof afterCallArgs === "object" ? afterCallArgs : {}) as Record<
+        string,
+        unknown
+      >,
       result: sanitizedResult,
       error: isToolError ? extractToolErrorMessage(sanitizedResult) : undefined,
       durationMs: afterCallDurationMs,
@@ -424,9 +425,10 @@ export async function handleToolExecutionEnd(
   void triggerInternalHook(
     createInternalHookEvent("tool", "after_call", ctx.params.runId ?? "", {
       toolName,
-      params: (afterCallArgs && typeof afterCallArgs === "object"
-        ? afterCallArgs
-        : {}) as Record<string, unknown>,
+      params: (afterCallArgs && typeof afterCallArgs === "object" ? afterCallArgs : {}) as Record<
+        string,
+        unknown
+      >,
       result: sanitizedResult,
       error: isToolError ? extractToolErrorMessage(sanitizedResult) : undefined,
       durationMs: afterCallDurationMs,
