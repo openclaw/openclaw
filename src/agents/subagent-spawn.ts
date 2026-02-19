@@ -41,7 +41,7 @@ export type SpawnSubagentContext = {
 };
 
 export const SUBAGENT_SPAWN_ACCEPTED_NOTE =
-  "auto-announces on completion, do not poll/sleep. The response will be sent back as an agent message.";
+  "auto-announces on completion, do not poll/sleep. The response will be sent back as an user message.";
 
 export type SpawnSubagentResult = {
   status: "accepted" | "forbidden" | "error";
