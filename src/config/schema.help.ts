@@ -59,8 +59,7 @@ export const FIELD_HELP: Record<string, string> = {
     "Consent decision engine: native (in-process) or external (future). Default: native.",
   "gateway.consentGate.audit.enabled":
     "Emit consent events to an audit destination for SIEM/compliance (default: false).",
-  "gateway.consentGate.audit.destination":
-    "Audit output: stdout or a file path.",
+  "gateway.consentGate.audit.destination": "Audit output: stdout or a file path.",
   "gateway.consentGate.audit.redactSecrets":
     "Redact secrets from audit output (default: true when audit enabled).",
   "gateway.tailscale.hostname":

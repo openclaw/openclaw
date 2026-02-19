@@ -23,15 +23,24 @@ When enabled, gated tools require a valid consent token before execution. Use **
   gateway: {
     consentGate: {
       enabled: true,
-      observeOnly: false,   // enforce mode; use true for safe rollout
+      observeOnly: false, // enforce mode; use true for safe rollout
       storagePath: "~/.openclaw/consentgate",
       trustTierDefault: "T0",
       trustTierMapping: { "telegram:": "T0", "discord:": "T1" },
-      gatedTools: ["exec", "write", "gateway", "sessions_spawn", "sessions_send", "whatsapp_login", "skills.install", "system.run"],
-      provider: "native",   // optional; "external" reserved for future
+      gatedTools: [
+        "exec",
+        "write",
+        "gateway",
+        "sessions_spawn",
+        "sessions_send",
+        "whatsapp_login",
+        "skills.install",
+        "system.run",
+      ],
+      provider: "native", // optional; "external" reserved for future
       audit: {
         enabled: true,
-        destination: "stdout",   // or a file path for SIEM
+        destination: "stdout", // or a file path for SIEM
         redactSecrets: true,
       },
     },
