@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { normalizeFingerprint } from "../tls/fingerprint.js";
-import { isPrivateIpAddress } from "./ssrf.js";
+import { isBlockedHostnameOrIp, isPrivateIpAddress } from "./ssrf.js";
 
 const privateIpCases = [
   "::ffff:127.0.0.1",
@@ -24,6 +24,8 @@ const privateIpCases = [
   "fe80::1%lo0",
   "fd00::1",
   "fec0::1",
+  "2001:db8:1234::5efe:127.0.0.1",
+  "2001:db8:1234:1:200:5efe:7f00:1",
 ];
 
 const publicIpCases = [
@@ -34,6 +36,8 @@ const publicIpCases = [
   "64:ff9b:1::8.8.8.8",
   "2002:0808:0808::",
   "2001:0000:0:0:0:0:f7f7:f7f7",
+  "2001:db8:1234::5efe:8.8.8.8",
+  "2001:db8:1234:1:1111:5efe:7f00:1",
 ];
 
 const malformedIpv6Cases = ["::::", "2001:db8::gggg"];
@@ -57,5 +61,17 @@ describe("normalizeFingerprint", () => {
     expect(normalizeFingerprint("sha256:AA:BB:cc")).toBe("aabbcc");
     expect(normalizeFingerprint("SHA-256 11-22-33")).toBe("112233");
     expect(normalizeFingerprint("aa:bb:cc")).toBe("aabbcc");
+  });
+});
+
+describe("isBlockedHostnameOrIp", () => {
+  it("blocks localhost.localdomain and metadata hostname aliases", () => {
+    expect(isBlockedHostnameOrIp("localhost.localdomain")).toBe(true);
+    expect(isBlockedHostnameOrIp("metadata.google.internal")).toBe(true);
+  });
+
+  it("blocks private transition addresses via shared IP classifier", () => {
+    expect(isBlockedHostnameOrIp("2001:db8:1234::5efe:127.0.0.1")).toBe(true);
+    expect(isBlockedHostnameOrIp("2001:db8::1")).toBe(false);
   });
 });
