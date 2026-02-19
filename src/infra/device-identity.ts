@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { STATE_DIR } from "../config/paths.js";
+import { retrieveFromKeychain, storeInKeychain } from "./keychain.js";
 
 export type DeviceIdentity = {
   deviceId: string;
@@ -61,6 +62,14 @@ function generateIdentity(): DeviceIdentity {
   return { deviceId, publicKeyPem, privateKeyPem };
 }
 
+/**
+ * VD-3: Keychain key name for the device private key.
+ * Scoped to the device file path to support multiple installations.
+ */
+function keychainKeyName(filePath: string): string {
+  return `device-private-key:${filePath}`;
+}
+
 export function loadOrCreateDeviceIdentity(filePath: string = DEFAULT_FILE): DeviceIdentity {
   try {
     if (fs.existsSync(filePath)) {
@@ -69,9 +78,35 @@ export function loadOrCreateDeviceIdentity(filePath: string = DEFAULT_FILE): Dev
       if (
         parsed?.version === 1 &&
         typeof parsed.deviceId === "string" &&
-        typeof parsed.publicKeyPem === "string" &&
-        typeof parsed.privateKeyPem === "string"
+        typeof parsed.publicKeyPem === "string"
       ) {
+        // VD-3: Prefer private key from OS keychain when available
+        const keychainPrivateKey = retrieveFromKeychain(keychainKeyName(filePath));
+        const privateKeyPem = keychainPrivateKey ?? parsed.privateKeyPem;
+
+        if (typeof privateKeyPem !== "string") {
+          throw new Error("No private key found in keychain or file");
+        }
+
+        // Migrate: if keychain is enabled and key is still in file, move it
+        if (
+          keychainPrivateKey === null &&
+          storeInKeychain(keychainKeyName(filePath), privateKeyPem)
+        ) {
+          // Successfully stored in keychain — remove from file
+          const redacted: StoredIdentity = {
+            ...parsed,
+            privateKeyPem: "STORED_IN_KEYCHAIN",
+          };
+          fs.writeFileSync(filePath, `${JSON.stringify(redacted, null, 2)}\n`, { mode: 0o600 });
+          try {
+            fs.chmodSync(filePath, 0o600);
+          } catch {
+            // best-effort
+          }
+          console.log("[keychain] Device private key migrated to OS keychain");
+        }
+
         const derivedId = fingerprintPublicKey(parsed.publicKeyPem);
         if (derivedId && derivedId !== parsed.deviceId) {
           const updated: StoredIdentity = {
@@ -87,13 +122,13 @@ export function loadOrCreateDeviceIdentity(filePath: string = DEFAULT_FILE): Dev
           return {
             deviceId: derivedId,
             publicKeyPem: parsed.publicKeyPem,
-            privateKeyPem: parsed.privateKeyPem,
+            privateKeyPem,
           };
         }
         return {
           deviceId: parsed.deviceId,
           publicKeyPem: parsed.publicKeyPem,
-          privateKeyPem: parsed.privateKeyPem,
+          privateKeyPem,
         };
       }
     }
@@ -103,11 +138,16 @@ export function loadOrCreateDeviceIdentity(filePath: string = DEFAULT_FILE): Dev
 
   const identity = generateIdentity();
   ensureDir(filePath);
+
+  // VD-3: Store private key in OS keychain if available
+  const storedInKeychain = storeInKeychain(keychainKeyName(filePath), identity.privateKeyPem);
+  const storedPrivateKeyPem = storedInKeychain ? "STORED_IN_KEYCHAIN" : identity.privateKeyPem;
+
   const stored: StoredIdentity = {
     version: 1,
     deviceId: identity.deviceId,
     publicKeyPem: identity.publicKeyPem,
-    privateKeyPem: identity.privateKeyPem,
+    privateKeyPem: storedPrivateKeyPem,
     createdAtMs: Date.now(),
   };
   fs.writeFileSync(filePath, `${JSON.stringify(stored, null, 2)}\n`, { mode: 0o600 });
