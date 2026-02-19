@@ -77,6 +77,17 @@ describe("validateBindMounts", () => {
   it("blocks symlink escapes into blocked directories", () => {
     const dir = mkdtempSync(join(tmpdir(), "openclaw-sbx-"));
     const link = join(dir, "etc-link");
+
+    // On Windows, our sandbox bind-mount validator only supports absolute POSIX paths.
+    // The temp directory will be something like `C:\\Users\\...`, and the validator
+    // should reject it before we ever get to symlink-escape logic.
+    if (process.platform === "win32") {
+      expect(() => validateBindMounts([`${link}/passwd:/mnt/passwd:ro`])).toThrow(
+        /absolute POSIX|non-absolute/,
+      );
+      return;
+    }
+
     symlinkSync("/etc", link);
     expect(() => validateBindMounts([`${link}/passwd:/mnt/passwd:ro`])).toThrow(/blocked path/);
   });
