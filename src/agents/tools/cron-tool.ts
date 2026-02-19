@@ -50,6 +50,12 @@ type CronToolOptions = {
   agentSessionKey?: string;
 };
 
+type GatewayToolCaller = typeof callGatewayTool;
+
+type CronToolDeps = {
+  callGatewayTool?: GatewayToolCaller;
+};
+
 type ChatMessage = {
   role?: unknown;
   content?: unknown;
@@ -84,6 +90,7 @@ async function buildReminderContextLines(params: {
   agentSessionKey?: string;
   gatewayOpts: GatewayCallOptions;
   contextMessages: number;
+  callGatewayTool: GatewayToolCaller;
 }) {
   const maxMessages = Math.min(
     REMINDER_CONTEXT_MESSAGES_MAX,
@@ -100,7 +107,7 @@ async function buildReminderContextLines(params: {
   const { mainKey, alias } = resolveMainSessionAlias(cfg);
   const resolvedKey = resolveInternalSessionKey({ key: sessionKey, alias, mainKey });
   try {
-    const res = await callGatewayTool<{ messages: Array<unknown> }>(
+    const res = await params.callGatewayTool<{ messages: Array<unknown> }>(
       "chat.history",
       params.gatewayOpts,
       {
@@ -197,7 +204,8 @@ function inferDeliveryFromSessionKey(agentSessionKey?: string): CronDelivery | n
   return delivery;
 }
 
-export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
+export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): AnyAgentTool {
+  const callGateway = deps?.callGatewayTool ?? callGatewayTool;
   return {
     label: "Cron",
     name: "cron",
@@ -272,10 +280,10 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
 
       switch (action) {
         case "status":
-          return jsonResult(await callGatewayTool("cron.status", gatewayOpts, {}));
+          return jsonResult(await callGateway("cron.status", gatewayOpts, {}));
         case "list":
           return jsonResult(
-            await callGatewayTool("cron.list", gatewayOpts, {
+            await callGateway("cron.list", gatewayOpts, {
               includeDisabled: Boolean(params.includeDisabled),
             }),
           );
@@ -412,6 +420,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
                 agentSessionKey: opts?.agentSessionKey,
                 gatewayOpts,
                 contextMessages,
+                callGatewayTool: callGateway,
               });
               if (contextLines.length > 0) {
                 const baseText = stripExistingContext(payload.text);
@@ -419,7 +428,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
               }
             }
           }
-          return jsonResult(await callGatewayTool("cron.add", gatewayOpts, job));
+          return jsonResult(await callGateway("cron.add", gatewayOpts, job));
         }
         case "update": {
           const id = readStringParam(params, "jobId") ?? readStringParam(params, "id");
@@ -431,7 +440,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
           }
           const patch = normalizeCronJobPatch(params.patch) ?? params.patch;
           return jsonResult(
-            await callGatewayTool("cron.update", gatewayOpts, {
+            await callGateway("cron.update", gatewayOpts, {
               id,
               patch,
             }),
@@ -442,7 +451,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
           if (!id) {
             throw new Error("jobId required (id accepted for backward compatibility)");
           }
-          return jsonResult(await callGatewayTool("cron.remove", gatewayOpts, { id }));
+          return jsonResult(await callGateway("cron.remove", gatewayOpts, { id }));
         }
         case "run": {
           const id = readStringParam(params, "jobId") ?? readStringParam(params, "id");
@@ -451,14 +460,14 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
           }
           const runMode =
             params.runMode === "due" || params.runMode === "force" ? params.runMode : "force";
-          return jsonResult(await callGatewayTool("cron.run", gatewayOpts, { id, mode: runMode }));
+          return jsonResult(await callGateway("cron.run", gatewayOpts, { id, mode: runMode }));
         }
         case "runs": {
           const id = readStringParam(params, "jobId") ?? readStringParam(params, "id");
           if (!id) {
             throw new Error("jobId required (id accepted for backward compatibility)");
           }
-          return jsonResult(await callGatewayTool("cron.runs", gatewayOpts, { id }));
+          return jsonResult(await callGateway("cron.runs", gatewayOpts, { id }));
         }
         case "wake": {
           const text = readStringParam(params, "text", { required: true });
@@ -467,7 +476,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
               ? params.mode
               : "next-heartbeat";
           return jsonResult(
-            await callGatewayTool("wake", gatewayOpts, { mode, text }, { expectFinal: false }),
+            await callGateway("wake", gatewayOpts, { mode, text }, { expectFinal: false }),
           );
         }
         default:
