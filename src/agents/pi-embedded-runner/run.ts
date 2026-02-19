@@ -852,6 +852,14 @@ export async function runEmbeddedPiAgent(
                 status: resolveFailoverStatus(promptFailoverReason ?? "unknown"),
               });
             }
+            // Log non-failover errors as a fallback to ensure they're captured
+            // in gateway logs before propagating to the user
+            log.error(`Unhandled provider error`, {
+              provider,
+              model: modelId,
+              sessionKey: params.sessionKey,
+              errorText: errorText.slice(0, 2000),
+            });
             throw promptError;
           }
 
