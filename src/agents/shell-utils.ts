@@ -19,6 +19,22 @@ function resolvePowerShellPath(): string {
   return "powershell.exe";
 }
 
+/**
+ * Wraps a command string for safe execution under the resolved shell.
+ *
+ * zsh's `nomatch` option (enabled by default) causes "no matches found" errors
+ * when commands contain unquoted glob characters like `?` or `[]` (common in
+ * URLs).  Prefixing with `setopt nonomatch` lets unmatched globs pass through
+ * as literal strings.
+ */
+export function wrapCommandForShell(shell: string, command: string): string {
+  const name = path.basename(shell);
+  if (name === "zsh") {
+    return `setopt nonomatch; ${command}`;
+  }
+  return command;
+}
+
 export function getShellConfig(): { shell: string; args: string[] } {
   if (process.platform === "win32") {
     // Use PowerShell instead of cmd.exe on Windows.

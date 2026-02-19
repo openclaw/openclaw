@@ -6,6 +6,7 @@ const { createPtyAdapterMock } = vi.hoisted(() => ({
 
 vi.mock("../../agents/shell-utils.js", () => ({
   getShellConfig: () => ({ shell: "sh", args: ["-c"] }),
+  wrapCommandForShell: (_shell: string, command: string) => command,
 }));
 
 vi.mock("./adapters/pty.js", () => ({
