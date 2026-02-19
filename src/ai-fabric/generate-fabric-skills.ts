@@ -64,13 +64,13 @@ function buildSkillContent(target: FabricSkillTarget): string {
 
   const lines: string[] = [];
 
-  // Sync marker + frontmatter
-  lines.push(SYNC_MARKER);
+  // Frontmatter (must be first line for parsers) + sync marker
   lines.push("---");
   lines.push(`name: fabric-${slug}`);
   lines.push(`description: ${description}`);
   lines.push(`metadata: { "openclaw": { "emoji": "\uD83E\uDD16" } }`);
   lines.push("---");
+  lines.push(SYNC_MARKER);
   lines.push("");
 
   // Header
@@ -163,7 +163,7 @@ export async function generateFabricSkills(params: {
       const skillMdPath = path.join(skillsDir, entry, "SKILL.md");
       try {
         const content = await fsp.readFile(skillMdPath, "utf-8");
-        if (content.startsWith(SYNC_MARKER)) {
+        if (content.includes(SYNC_MARKER)) {
           await fsp.rm(path.join(skillsDir, entry), { recursive: true });
           cleaned++;
         }
