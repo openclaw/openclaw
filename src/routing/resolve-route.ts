@@ -306,20 +306,29 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
   const dmScope = input.cfg.session?.dmScope ?? "main";
   const identityLinks = input.cfg.session?.identityLinks;
 
-  const choose = (agentId: string, matchedBy: ResolvedAgentRoute["matchedBy"]) => {
+  const choose = (
+    agentId: string,
+    matchedBy: ResolvedAgentRoute["matchedBy"],
+    bindingSessionOverride?: "main",
+  ) => {
     const resolvedAgentId = pickFirstExistingAgentId(input.cfg, agentId);
-    const sessionKey = buildAgentSessionKey({
-      agentId: resolvedAgentId,
-      channel,
-      accountId,
-      peer,
-      dmScope,
-      identityLinks,
-    }).toLowerCase();
     const mainSessionKey = buildAgentMainSessionKey({
       agentId: resolvedAgentId,
       mainKey: DEFAULT_MAIN_KEY,
     }).toLowerCase();
+    // When the binding specifies sessionKey/sessionScope "main", collapse to
+    // the agent's main session instead of the per-channel/peer derived key.
+    const sessionKey =
+      bindingSessionOverride === "main"
+        ? mainSessionKey
+        : buildAgentSessionKey({
+            agentId: resolvedAgentId,
+            channel,
+            accountId,
+            peer,
+            dmScope,
+            identityLinks,
+          }).toLowerCase();
     return {
       agentId: resolvedAgentId,
       channel,
@@ -428,10 +437,15 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
         }),
     );
     if (matched) {
+      // Resolve binding-level session override (sessionKey or sessionScope alias).
+      const bindingSessionOverride =
+        matched.binding.sessionKey ?? matched.binding.sessionScope ?? undefined;
       if (shouldLogDebug) {
-        logDebug(`[routing] match: matchedBy=${tier.matchedBy} agentId=${matched.binding.agentId}`);
+        logDebug(
+          `[routing] match: matchedBy=${tier.matchedBy} agentId=${matched.binding.agentId}${bindingSessionOverride ? ` sessionOverride=${bindingSessionOverride}` : ""}`,
+        );
       }
-      return choose(matched.binding.agentId, tier.matchedBy);
+      return choose(matched.binding.agentId, tier.matchedBy, bindingSessionOverride);
     }
   }
 

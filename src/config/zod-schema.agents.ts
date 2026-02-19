@@ -38,6 +38,10 @@ export const BindingsSchema = z
             roles: z.array(z.string()).optional(),
           })
           .strict(),
+        /** Override session key — `"main"` collapses to the agent's main session. */
+        sessionKey: z.literal("main").optional(),
+        /** Alias for `sessionKey`. */
+        sessionScope: z.literal("main").optional(),
       })
       .strict(),
   )

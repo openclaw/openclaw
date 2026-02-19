@@ -1053,6 +1053,32 @@ Run multiple isolated agents inside one Gateway. See [Multi-Agent](/concepts/mul
 
 Within each tier, the first matching `bindings` entry wins.
 
+### Binding session override
+
+Set `sessionKey: "main"` on a binding entry to collapse the matched route to the agent's **main session** (`agent:<agentId>:main`) instead of the default per-channel/peer session key. `sessionScope` is accepted as an alias.
+
+This is useful when a specific group or channel should share context with the agent's primary 1:1 session (for example, a private Discord channel used as a control room).
+
+```json5
+{
+  bindings: [
+    {
+      agentId: "atlas",
+      match: {
+        channel: "discord",
+        accountId: "atlas",
+        peer: { kind: "channel", id: "1473166565351620741" },
+      },
+      sessionKey: "main",
+    },
+  ],
+}
+```
+
+<Note>
+The override only affects **session key routing**. Replies are still delivered to the originating channel/thread. When omitted, the default per-channel/peer session key behavior is preserved.
+</Note>
+
 ### Per-agent access profiles
 
 <Accordion title="Full access (no sandbox)">

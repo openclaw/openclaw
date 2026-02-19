@@ -94,6 +94,7 @@ the workspace is writable. See [Memory](/concepts/memory) and
 - Group chats isolate state: `agent:<agentId>:<channel>:group:<id>` (rooms/channels use `agent:<agentId>:<channel>:channel:<id>`).
   - Telegram forum topics append `:topic:<threadId>` to the group id for isolation.
   - Legacy `group:<id>` keys are still recognized for migration.
+- **Binding override:** a binding with `sessionKey: "main"` (or alias `sessionScope: "main"`) collapses the matched route to `agent:<agentId>:main` regardless of peer kind. Replies still go to the originating channel. See [Configuration Reference — Binding session override](/gateway/configuration-reference#binding-session-override).
 - Inbound contexts may still use `group:<id>`; the channel is inferred from `Provider` and normalized to the canonical `agent:<agentId>:<channel>:group:<id>` form.
 - Other sources:
   - Cron jobs: `cron:<job.id>`

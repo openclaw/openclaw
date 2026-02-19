@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import type { ChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { BindingsSchema } from "../config/zod-schema.agents.js";
 import { resolveAgentRoute } from "./resolve-route.js";
 
 describe("resolveAgentRoute", () => {
@@ -668,5 +669,277 @@ describe("role-based agent routing", () => {
       expectedAgentId: "guild-roles",
       expectedMatchedBy: "binding.guild+roles",
     });
+  });
+});
+
+describe("binding sessionKey/sessionScope override", () => {
+  test("sessionKey=main on peer binding collapses to main session", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "atlas",
+          match: {
+            channel: "discord",
+            accountId: "atlas",
+            peer: { kind: "channel", id: "private-room-1" },
+          },
+          sessionKey: "main",
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      accountId: "atlas",
+      peer: { kind: "channel", id: "private-room-1" },
+    });
+    expect(route.agentId).toBe("atlas");
+    expect(route.matchedBy).toBe("binding.peer");
+    expect(route.sessionKey).toBe(route.mainSessionKey);
+    expect(route.sessionKey).toBe("agent:atlas:main");
+  });
+
+  test("sessionScope=main alias works the same as sessionKey", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "pip",
+          match: {
+            channel: "discord",
+            peer: { kind: "channel", id: "control-room" },
+          },
+          sessionScope: "main",
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      peer: { kind: "channel", id: "control-room" },
+    });
+    expect(route.agentId).toBe("pip");
+    expect(route.sessionKey).toBe(route.mainSessionKey);
+    expect(route.sessionKey).toBe("agent:pip:main");
+  });
+
+  test("both sessionKey and sessionScope set to main works (sessionKey wins)", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "both",
+          match: {
+            channel: "discord",
+            peer: { kind: "channel", id: "c1" },
+          },
+          sessionKey: "main",
+          sessionScope: "main",
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      peer: { kind: "channel", id: "c1" },
+    });
+    expect(route.sessionKey).toBe(route.mainSessionKey);
+  });
+
+  test("binding without override preserves per-channel/peer session key", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "atlas",
+          match: {
+            channel: "discord",
+            accountId: "atlas",
+            peer: { kind: "channel", id: "private-room-1" },
+          },
+          // no sessionKey or sessionScope
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      accountId: "atlas",
+      peer: { kind: "channel", id: "private-room-1" },
+    });
+    expect(route.agentId).toBe("atlas");
+    expect(route.matchedBy).toBe("binding.peer");
+    // Without override, group/channel peers get a per-peer session key
+    expect(route.sessionKey).toBe("agent:atlas:discord:channel:private-room-1");
+    expect(route.sessionKey).not.toBe(route.mainSessionKey);
+  });
+
+  test("parent-peer binding with sessionKey=main collapses to main session", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "atlas",
+          match: {
+            channel: "discord",
+            peer: { kind: "channel", id: "parent-channel-100" },
+          },
+          sessionKey: "main",
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      peer: { kind: "channel", id: "thread-200" },
+      parentPeer: { kind: "channel", id: "parent-channel-100" },
+    });
+    expect(route.agentId).toBe("atlas");
+    expect(route.matchedBy).toBe("binding.peer.parent");
+    expect(route.sessionKey).toBe(route.mainSessionKey);
+    expect(route.sessionKey).toBe("agent:atlas:main");
+  });
+
+  test("sessionKey override does not change tier precedence (peer > guild)", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "peer-agent",
+          match: {
+            channel: "discord",
+            peer: { kind: "channel", id: "c1" },
+          },
+          sessionKey: "main",
+        },
+        {
+          agentId: "guild-agent",
+          match: {
+            channel: "discord",
+            guildId: "g1",
+          },
+        },
+      ],
+    };
+    // peer binding should still win over guild binding
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      peer: { kind: "channel", id: "c1" },
+      guildId: "g1",
+    });
+    expect(route.agentId).toBe("peer-agent");
+    expect(route.matchedBy).toBe("binding.peer");
+    expect(route.sessionKey).toBe("agent:peer-agent:main");
+  });
+
+  test("guild binding with sessionKey=main collapses to main session", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "guild-main",
+          match: {
+            channel: "discord",
+            guildId: "g1",
+          },
+          sessionKey: "main",
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      guildId: "g1",
+      peer: { kind: "channel", id: "any-channel" },
+    });
+    expect(route.agentId).toBe("guild-main");
+    expect(route.matchedBy).toBe("binding.guild");
+    expect(route.sessionKey).toBe(route.mainSessionKey);
+  });
+
+  test("default route (no binding match) is unaffected by override on other bindings", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "atlas",
+          match: {
+            channel: "discord",
+            peer: { kind: "channel", id: "specific-room" },
+          },
+          sessionKey: "main",
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "telegram",
+      peer: { kind: "group", id: "group-1" },
+    });
+    expect(route.matchedBy).toBe("default");
+    expect(route.sessionKey).toBe("agent:main:telegram:group:group-1");
+    expect(route.sessionKey).not.toBe(route.mainSessionKey);
+  });
+});
+
+describe("BindingsSchema sessionKey/sessionScope validation", () => {
+  test("accepts sessionKey: 'main'", () => {
+    const result = BindingsSchema.safeParse([
+      {
+        agentId: "atlas",
+        match: { channel: "discord", peer: { kind: "channel", id: "c1" } },
+        sessionKey: "main",
+      },
+    ]);
+    expect(result.success).toBe(true);
+  });
+
+  test("accepts sessionScope: 'main'", () => {
+    const result = BindingsSchema.safeParse([
+      {
+        agentId: "atlas",
+        match: { channel: "discord" },
+        sessionScope: "main",
+      },
+    ]);
+    expect(result.success).toBe(true);
+  });
+
+  test("accepts both sessionKey and sessionScope together", () => {
+    const result = BindingsSchema.safeParse([
+      {
+        agentId: "atlas",
+        match: { channel: "discord" },
+        sessionKey: "main",
+        sessionScope: "main",
+      },
+    ]);
+    expect(result.success).toBe(true);
+  });
+
+  test("accepts binding without sessionKey or sessionScope", () => {
+    const result = BindingsSchema.safeParse([
+      {
+        agentId: "atlas",
+        match: { channel: "discord" },
+      },
+    ]);
+    expect(result.success).toBe(true);
+  });
+
+  test("rejects invalid sessionKey value", () => {
+    const result = BindingsSchema.safeParse([
+      {
+        agentId: "atlas",
+        match: { channel: "discord" },
+        sessionKey: "global",
+      },
+    ]);
+    expect(result.success).toBe(false);
+  });
+
+  test("rejects invalid sessionScope value", () => {
+    const result = BindingsSchema.safeParse([
+      {
+        agentId: "atlas",
+        match: { channel: "discord" },
+        sessionScope: "per-peer",
+      },
+    ]);
+    expect(result.success).toBe(false);
   });
 });

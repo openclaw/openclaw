@@ -81,4 +81,12 @@ export type AgentBinding = {
     /** Discord role IDs used for role-based routing. */
     roles?: string[];
   };
+  /**
+   * Override the session key for this binding.
+   * `"main"` collapses the matched route to the agent's main session
+   * (`agent:<agentId>:main`) instead of the default per-channel/peer key.
+   */
+  sessionKey?: "main";
+  /** Alias for `sessionKey` (same behavior). */
+  sessionScope?: "main";
 };
