@@ -8,7 +8,11 @@ import type {
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { HARD_MAX_TOOL_RESULT_CHARS } from "./pi-embedded-runner/tool-result-truncation.js";
 import { makeMissingToolResult, sanitizeToolCallInputs } from "./session-transcript-repair.js";
-import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
+import {
+  extractToolCallsFromAssistant,
+  extractToolResultId,
+  sanitizeToolCallId,
+} from "./tool-call-id.js";
 
 const GUARD_TRUNCATION_SUFFIX =
   "\n\n⚠️ [Content truncated during persistence — original exceeded size limit. " +
@@ -74,6 +78,60 @@ function capToolResultSize(msg: AgentMessage): AgentMessage {
   });
 
   return { ...msg, content: newContent } as AgentMessage;
+}
+
+const TOOL_CALL_BLOCK_TYPES = new Set(["toolCall", "toolUse", "functionCall"]);
+
+/**
+ * Normalize tool call IDs to a provider-neutral alphanumeric format at write time.
+ * This prevents cross-provider session corruption when switching between models
+ * that generate different ID formats (e.g. OpenAI `functions.read:0` vs Anthropic `toolu_01X`).
+ * See: https://github.com/openclaw/openclaw/issues/21178
+ */
+function normalizeToolCallIdsForWrite(message: AgentMessage): AgentMessage {
+  const role = (message as { role?: string }).role;
+
+  if (role === "assistant") {
+    const content = (message as { content?: unknown[] }).content;
+    if (!Array.isArray(content)) {
+      return message;
+    }
+    let changed = false;
+    const newContent = content.map((block) => {
+      if (!block || typeof block !== "object") {
+        return block;
+      }
+      const rec = block as { type?: string; id?: string };
+      if (!TOOL_CALL_BLOCK_TYPES.has(rec.type ?? "") || typeof rec.id !== "string" || !rec.id) {
+        return block;
+      }
+      const normalized = sanitizeToolCallId(rec.id, "strict");
+      if (normalized === rec.id) {
+        return block;
+      }
+      changed = true;
+      return { ...(block as Record<string, unknown>), id: normalized };
+    });
+    return changed ? ({ ...message, content: newContent } as AgentMessage) : message;
+  }
+
+  if (role === "toolResult") {
+    const rec = message as unknown as Record<string, unknown>;
+    const toolCallId = typeof rec.toolCallId === "string" ? rec.toolCallId : undefined;
+    const toolUseId = typeof rec.toolUseId === "string" ? rec.toolUseId : undefined;
+    const newToolCallId = toolCallId ? sanitizeToolCallId(toolCallId, "strict") : undefined;
+    const newToolUseId = toolUseId ? sanitizeToolCallId(toolUseId, "strict") : undefined;
+    if (newToolCallId === toolCallId && newToolUseId === toolUseId) {
+      return message;
+    }
+    return {
+      ...message,
+      ...(newToolCallId !== toolCallId && { toolCallId: newToolCallId }),
+      ...(newToolUseId !== toolUseId && { toolUseId: newToolUseId }),
+    } as AgentMessage;
+  }
+
+  return message;
 }
 
 export function installSessionToolResultGuard(
@@ -168,10 +226,11 @@ export function installSessionToolResultGuard(
   };
 
   const guardedAppend = (message: AgentMessage) => {
-    let nextMessage = message;
-    const role = (message as { role?: unknown }).role;
+    // Normalize tool call IDs to alphanumeric at write time for cross-provider safety (#21178).
+    let nextMessage = normalizeToolCallIdsForWrite(message);
+    const role = (nextMessage as { role?: unknown }).role;
     if (role === "assistant") {
-      const sanitized = sanitizeToolCallInputs([message]);
+      const sanitized = sanitizeToolCallInputs([nextMessage]);
       if (sanitized.length === 0) {
         if (allowSyntheticToolResults && pending.size > 0) {
           flushPendingToolResults();
