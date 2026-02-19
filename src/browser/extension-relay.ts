@@ -155,6 +155,7 @@ function rejectUpgrade(socket: Duplex, status: number, bodyText: string) {
 }
 
 const serversByPort = new Map<number, ChromeExtensionRelayServer>();
+const relayInitByPort = new Map<number, Promise<ChromeExtensionRelayServer>>();
 
 function resolveGatewayAuthToken(): string | null {
   const envToken =
@@ -244,7 +245,27 @@ export async function ensureChromeExtensionRelayServer(opts: {
     return existing;
   }
 
+  const inFlight = relayInitByPort.get(info.port);
+  if (inFlight) {
+    return await inFlight;
+  }
+
   const relayAuthToken = resolveRelayAuthToken();
+
+  let resolveInit!: (relay: ChromeExtensionRelayServer) => void;
+  let rejectInit!: (err: unknown) => void;
+  const initPromise = new Promise<ChromeExtensionRelayServer>((resolve, reject) => {
+    resolveInit = resolve;
+    rejectInit = reject;
+  });
+  relayInitByPort.set(info.port, initPromise);
+  const settleInit = async (): Promise<ChromeExtensionRelayServer> => {
+    try {
+      return await initPromise;
+    } finally {
+      relayInitByPort.delete(info.port);
+    }
+  };
 
   let extensionWs: WebSocket | null = null;
   const cdpClients = new Set<WebSocket>();
@@ -783,9 +804,11 @@ export async function ensureChromeExtensionRelayServer(opts: {
         },
       };
       serversByPort.set(info.port, existingRelay);
-      return existingRelay;
+      resolveInit(existingRelay);
+      return await settleInit();
     }
-    throw err;
+    rejectInit(err);
+    return await settleInit();
   }
 
   const addr = server.address() as AddressInfo | null;
@@ -822,7 +845,8 @@ export async function ensureChromeExtensionRelayServer(opts: {
   };
 
   serversByPort.set(port, relay);
-  return relay;
+  resolveInit(relay);
+  return await settleInit();
 }
 
 export async function stopChromeExtensionRelayServer(opts: { cdpUrl: string }): Promise<boolean> {
