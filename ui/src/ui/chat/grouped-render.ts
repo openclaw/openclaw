@@ -23,50 +23,43 @@ function extractImages(message: unknown): ImageBlock[] {
   const content = m.content;
   const images: ImageBlock[] = [];
 
-  if (Array.isArray(content)) {
-    for (const block of content) {
-      if (typeof block !== "object" || block === null) {
+  if (!Array.isArray(content)) {
+    return images;
+  }
+
+  for (const block of content) {
+    if (typeof block !== "object" || block === null) continue;
+    const b = block as Record<string, unknown>;
+
+    if (b.type === "image") {
+      // Tool result images: { type: "image", data: string, mimeType: string }
+      if (typeof b.data === "string" && b.data) {
+        const data = b.data;
+        const mimeType = (b.mimeType as string) || "image/png";
+        const url = data.startsWith("data:") ? data : `data:${mimeType};base64,${data}`;
+        images.push({ url });
         continue;
       }
-      const b = block as Record<string, unknown>;
 
-      if (b.type === "image") {
-        // Handle source object format (from sendChatMessage)
-        const source = b.source as Record<string, unknown> | undefined;
-        if (source?.type === "base64" && typeof source.data === "string") {
-          const data = source.data;
-          const mediaType = (source.media_type as string) || "image/png";
-          // If data is already a data URL, use it directly
-          const url = data.startsWith("data:") ? data : `data:${mediaType};base64,${data}`;
-          images.push({ url });
-        } else if (typeof b.url === "string") {
-          images.push({ url: b.url });
-      if (b.type === "image") {
-        // Tool result images: { type: "image", data: string, mimeType: string }
-        if (typeof b.data === "string" && b.data) {
-          const mimeType = (b.mimeType as string) || "image/png";
-          const data = b.data;
-          const url = data.startsWith("data:") ? data : `data:${mimeType};base64,${data}`;
-          images.push({ url });
-        } else {
-          // sendChatMessage images: { source: { type: "base64", data, media_type } } or { url }
-          const source = b.source as Record<string, unknown> | undefined;
+      // sendChatMessage images: { source: { type: "base64", data, media_type } } or { url }
+      const source = b.source as Record<string, unknown> | undefined;
+      if (source?.type === "base64" && typeof source.data === "string") {
+        const data = source.data;
+        const mediaType = (source.media_type as string) || "image/png";
+        const url = data.startsWith("data:") ? data : `data:${mediaType};base64,${data}`;
+        images.push({ url });
+      } else if (typeof b.url === "string") {
+        images.push({ url: b.url });
+      }
 
-          if (source?.type === "base64" && typeof source.data === "string") {
-            const data = source.data;
-            const mediaType = (source.media_type as string) || "image/png";
-            const url = data.startsWith("data:") ? data : `data:${mediaType};base64,${data}`;
-            images.push({ url });
-          } else if (typeof b.url === "string") {
-            images.push({ url: b.url });
-          }
-        }
-      } else if (b.type === "image_url") {
-        // OpenAI format
-        const imageUrl = b.image_url as Record<string, unknown> | undefined;
-        if (typeof imageUrl?.url === "string") {
-          images.push({ url: imageUrl.url });
-        }
+      continue;
+    }
+
+    if (b.type === "image_url") {
+      // OpenAI format: { type: "image_url", image_url: { url: string } }
+      const imageUrl = b.image_url as Record<string, unknown> | undefined;
+      if (typeof imageUrl?.url === "string") {
+        images.push({ url: imageUrl.url });
       }
     }
   }
