@@ -1,0 +1,21 @@
+{
+  "name": "@openclaw/google-keep",
+  "version": "2026.2.18",
+  "private": true,
+  "description": "OpenClaw Google Keep list reader plugin",
+  "type": "module",
+  "dependencies": {
+    "playwright": "^1.50.0"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.2.18"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

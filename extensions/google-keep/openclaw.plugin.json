@@ -1,0 +1,23 @@
+{
+  "id": "google-keep",
+  "name": "Google Keep",
+  "description": "Read unchecked items from a Google Keep list via a persistent browser session.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "listUrl": {
+        "type": "string",
+        "description": "Default Google Keep note URL to read from."
+      },
+      "profileDir": {
+        "type": "string",
+        "description": "Override path for Playwright browser profile directory."
+      },
+      "timeoutMs": {
+        "type": "number",
+        "description": "Navigation timeout in milliseconds (default: 15000)."
+      }
+    }
+  }
+}
