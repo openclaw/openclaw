@@ -262,11 +262,17 @@ export class BdiSyncEngine {
           if (!tagMatch) continue;
 
           const [, domain, entityId] = tagMatch;
-          const rule = this.rules.find((r) => r.domain === domain && r.toErpUpdate);
-          if (!rule?.toErpUpdate) continue;
-
-          const erpUpdate = rule.toErpUpdate(currBlock, prevStatus, currStatus);
-          if (!erpUpdate) continue;
+          const matchingRules = this.rules.filter((r) => r.domain === domain && r.toErpUpdate);
+          let erpUpdate: { action: string; params: Record<string, unknown> } | null = null;
+          let matchedRule: SyncRule | undefined;
+          for (const candidate of matchingRules) {
+            erpUpdate = candidate.toErpUpdate!(currBlock, prevStatus, currStatus);
+            if (erpUpdate) {
+              matchedRule = candidate;
+              break;
+            }
+          }
+          if (!erpUpdate || !matchedRule) continue;
 
           await this.applyErpUpdate(domain, entityId, erpUpdate);
           updatesApplied++;
@@ -274,7 +280,7 @@ export class BdiSyncEngine {
           this.logEvent({
             direction: "bdi-to-erp",
             domain,
-            entityType: rule.entityType,
+            entityType: matchedRule.entityType,
             entityId,
             agentId: params.agentId,
             action: `status: ${prevStatus} → ${currStatus}`,
