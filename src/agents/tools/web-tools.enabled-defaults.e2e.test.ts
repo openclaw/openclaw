@@ -120,19 +120,21 @@ describe("web_search country and language parameters", () => {
   });
 
   it("should request Brave extra snippets by default", async () => {
-    const mockFetch = vi.fn(() =>
-      Promise.resolve({
-        ok: true,
-        json: () => Promise.resolve({ web: { results: [] } }),
-      } as Response),
-    );
-    // @ts-expect-error mock fetch
-    global.fetch = mockFetch;
+    const mockFetch = installMockFetch({ web: { results: [] } });
 
     const tool = createWebSearchTool({ config: undefined, sandboxed: true });
-    await tool?.execute?.(1, { query: "test-extra-snippets" });
+    await tool?.execute?.("call-1", { query: "test-extra-snippets" });
 
-    const url = new URL(mockFetch.mock.calls[0][0] as string);
+    const firstRequestInput = mockFetch.mock.calls[0]?.[0];
+    const firstRequestUrl =
+      typeof firstRequestInput === "string"
+        ? firstRequestInput
+        : firstRequestInput instanceof URL
+          ? firstRequestInput.toString()
+          : firstRequestInput instanceof Request
+            ? firstRequestInput.url
+            : "";
+    const url = new URL(firstRequestUrl);
     expect(url.searchParams.get("extra_snippets")).toBe("true");
   });
 
@@ -297,29 +299,23 @@ describe("web_search external content wrapping", () => {
 
   it("appends Brave extra_snippets into wrapped description", async () => {
     vi.stubEnv("BRAVE_API_KEY", "test-key");
-    const mockFetch = vi.fn(() =>
-      Promise.resolve({
-        ok: true,
-        json: () =>
-          Promise.resolve({
-            web: {
-              results: [
-                {
-                  title: "Example",
-                  url: "https://example.com",
-                  description: "Base description",
-                  extra_snippets: ["Snippet one", "Snippet two"],
-                },
-              ],
-            },
-          }),
-      } as Response),
-    );
-    // @ts-expect-error mock fetch
-    global.fetch = mockFetch;
+    installMockFetch({
+      web: {
+        results: [
+          {
+            title: "Example",
+            url: "https://example.com",
+            description: "Base description",
+            extra_snippets: ["Snippet one", "Snippet two"],
+          },
+        ],
+      },
+    });
 
     const tool = createWebSearchTool({ config: undefined, sandboxed: true });
-    const result = await tool?.execute?.(1, { query: "test-extra-snippet-merge" });
+    const result = await tool?.execute?.("call-1", {
+      query: "test-extra-snippet-merge",
+    });
     const details = result?.details as { results?: Array<{ description?: string }> };
     const description = details.results?.[0]?.description ?? "";
 
