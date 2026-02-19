@@ -1,5 +1,6 @@
 """Tests for ra2.context_engine"""
 
+import json
 import pytest
 from ra2 import ledger, sigil, token_gate
 from ra2.context_engine import build_context
@@ -10,6 +11,8 @@ def tmp_storage(monkeypatch, tmp_path):
     """Redirect all storage to temp directories."""
     monkeypatch.setattr(ledger, "LEDGER_DIR", str(tmp_path / "ledgers"))
     monkeypatch.setattr(sigil, "SIGIL_DIR", str(tmp_path / "sigils"))
+    # Default: sigil hidden from prompt
+    monkeypatch.setattr(sigil, "DEBUG_SIGIL", False)
 
 
 class TestBuildContext:
@@ -24,16 +27,35 @@ class TestBuildContext:
         assert isinstance(result["prompt"], str)
         assert isinstance(result["token_estimate"], int)
 
-    def test_prompt_structure(self):
+    def test_prompt_structure_default(self):
         messages = [
             {"role": "user", "content": "Let's build a context engine"},
         ]
         result = build_context("s1", messages)
         prompt = result["prompt"]
         assert "=== LEDGER ===" in prompt
-        assert "=== SIGIL ===" in prompt
         assert "=== LIVE WINDOW ===" in prompt
         assert "Respond concisely" in prompt
+        # Sigil should NOT appear by default
+        assert "INTERNAL SIGIL SNAPSHOT" not in prompt
+
+    def test_sigil_hidden_by_default(self):
+        messages = [
+            {"role": "user", "content": "We forked to context_sov"},
+        ]
+        result = build_context("s1", messages)
+        # Event should be recorded in JSON but not in prompt
+        state = sigil.load("s1")
+        assert len(state["event"]) > 0
+        assert "INTERNAL SIGIL SNAPSHOT" not in result["prompt"]
+
+    def test_sigil_shown_when_debug(self, monkeypatch):
+        monkeypatch.setattr(sigil, "DEBUG_SIGIL", True)
+        messages = [
+            {"role": "user", "content": "We forked to context_sov"},
+        ]
+        result = build_context("s1", messages)
+        assert "=== INTERNAL SIGIL SNAPSHOT ===" in result["prompt"]
 
     def test_live_window_content(self):
         messages = [
@@ -59,7 +81,6 @@ class TestBuildContext:
         ]
         build_context("s1", messages)
         data = ledger.load("s1")
-        # Compression should have extracted decisions into delta
         assert data["delta"] != ""
 
     def test_compression_detects_blockers(self):
@@ -78,13 +99,24 @@ class TestBuildContext:
         data = ledger.load("s1")
         assert len(data["open"]) > 0
 
-    def test_sigil_generation(self):
+    def test_sigil_event_generation(self):
         messages = [
             {"role": "user", "content": "We forked to context_sov"},
         ]
         build_context("s1", messages)
-        entries = sigil.load("s1")
-        assert len(entries) > 0
+        state = sigil.load("s1")
+        assert len(state["event"]) > 0
+        assert state["event"][0]["operator"] == "fork"
+
+    def test_sigil_dedup_across_calls(self):
+        messages = [
+            {"role": "user", "content": "We forked to context_sov"},
+        ]
+        build_context("s1", messages)
+        build_context("s1", messages)
+        state = sigil.load("s1")
+        # Same triple should not be duplicated
+        assert len(state["event"]) == 1
 
     def test_token_estimate_positive(self):
         messages = [{"role": "user", "content": "hello"}]
@@ -92,24 +124,18 @@ class TestBuildContext:
         assert result["token_estimate"] > 0
 
     def test_window_shrinks_on_large_input(self, monkeypatch):
-        # Set a very low token cap
         monkeypatch.setattr(token_gate, "MAX_TOKENS", 200)
         monkeypatch.setattr(token_gate, "LIVE_WINDOW", 16)
-
-        # Create many messages to exceed budget
         messages = [
             {"role": "user", "content": f"This is message number {i} with some content"}
             for i in range(20)
         ]
         result = build_context("s1", messages)
-        # Should succeed with a smaller window
         assert result["token_estimate"] <= 200
 
     def test_hard_fail_on_impossible_budget(self, monkeypatch):
-        # Set impossibly low token cap
         monkeypatch.setattr(token_gate, "MAX_TOKENS", 5)
         monkeypatch.setattr(token_gate, "LIVE_WINDOW", 4)
-
         messages = [
             {"role": "user", "content": "x" * 1000},
         ]
@@ -129,10 +155,24 @@ class TestBuildContext:
         assert "Hello from structured content" in result["prompt"]
 
     def test_no_md_history_injection(self):
-        """Verify that build_context only uses provided messages, never reads .md files."""
         messages = [{"role": "user", "content": "just this"}]
         result = build_context("s1", messages)
-        # The prompt should contain only our message content plus ledger/sigil structure
         assert "just this" in result["prompt"]
-        # No markdown file references should appear
         assert ".md" not in result["prompt"]
+
+    def test_debug_sigil_snapshot_is_valid_json(self, monkeypatch):
+        monkeypatch.setattr(sigil, "DEBUG_SIGIL", True)
+        messages = [
+            {"role": "user", "content": "We forked to context_sov"},
+        ]
+        result = build_context("s1", messages)
+        # Extract the sigil JSON from the prompt
+        prompt = result["prompt"]
+        marker = "=== INTERNAL SIGIL SNAPSHOT ==="
+        assert marker in prompt
+        start = prompt.index(marker) + len(marker)
+        end = prompt.index("=== LEDGER ===")
+        sigil_json = prompt[start:end].strip()
+        data = json.loads(sigil_json)
+        assert "event" in data
+        assert "state" in data

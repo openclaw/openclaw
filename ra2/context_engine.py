@@ -98,10 +98,11 @@ def _run_compression(messages: list, stream_id: str) -> None:
         for m in _QUESTION_RE.finditer(text):
             open_questions.append(m.group(1).strip())
 
-        # Sigil generation
-        sigil_body = sigil.generate_from_message(text)
-        if sigil_body:
-            sigil.append(stream_id, sigil_body)
+        # Sigil event generation
+        sigil_triple = sigil.generate_from_message(text)
+        if sigil_triple:
+            op, constraint, decision = sigil_triple
+            sigil.append_event(stream_id, op, constraint, decision)
 
     # Build delta from decisions
     delta = "; ".join(decisions[-5:]) if decisions else ""
@@ -123,16 +124,20 @@ def _run_compression(messages: list, stream_id: str) -> None:
 
 
 def _assemble_prompt(stream_id: str, live_messages: list) -> str:
-    """Build the structured prompt from ledger + sigil + live window."""
+    """Build the structured prompt from ledger + (optional sigil) + live window."""
     sections = []
+
+    # Sigil section — only when DEBUG_SIGIL is enabled
+    if sigil.DEBUG_SIGIL:
+        sigil_snap = sigil.snapshot(stream_id)
+        if sigil_snap != "(no sigils)":
+            sections.append(
+                f"=== INTERNAL SIGIL SNAPSHOT ===\n{sigil_snap}"
+            )
 
     # Ledger section
     ledger_snap = ledger.snapshot(stream_id)
     sections.append(f"=== LEDGER ===\n{ledger_snap}")
-
-    # Sigil section
-    sigil_snap = sigil.snapshot(stream_id)
-    sections.append(f"=== SIGIL ===\n{sigil_snap}")
 
     # Live window section
     live_lines = []
