@@ -5,6 +5,7 @@ import type { GatewayHelloOk } from "../gateway.ts";
 import {
   getOnboardingActionState,
   getOnboardingNextStep,
+  getOnboardingStepStatusKey,
   getOnboardingSteps,
   getOnboardingProgress,
 } from "../onboarding-flow.ts";
@@ -148,6 +149,10 @@ export function renderOverview(props: OverviewProps) {
   const onboardingProgress = getOnboardingProgress(onboardingSteps);
   const nextOnboardingStep = getOnboardingNextStep(onboardingSteps);
   const onboardingActions = getOnboardingActionState(onboardingSteps);
+  const gatewayStep = onboardingSteps.find((step) => step.key === "gateway") ?? onboardingSteps[0];
+  const integrationsStep =
+    onboardingSteps.find((step) => step.key === "integrations") ?? onboardingSteps[1];
+  const firstRunStep = onboardingSteps.find((step) => step.key === "firstRun") ?? onboardingSteps[2];
   const nextOnboardingLabel = nextOnboardingStep
     ? t(`overview.setupFlow.${nextOnboardingStep.key}`)
     : t("overview.setupFlow.review");
@@ -186,7 +191,7 @@ export function renderOverview(props: OverviewProps) {
                   <div class="note-title">
                     1. ${t("overview.setupFlow.gateway")}
                     <span class="muted" data-testid="onboarding-setup-step-gateway">
-                      (${onboardingActions.gatewayReady ? t("common.ok") : t("common.offline")})
+                      (${t(getOnboardingStepStatusKey(gatewayStep))})
                     </span>
                   </div>
                   <div class="muted">${t("overview.setupFlow.gatewayHint")}</div>
@@ -195,7 +200,7 @@ export function renderOverview(props: OverviewProps) {
                   <div class="note-title">
                     2. ${t("overview.setupFlow.integrations")}
                     <span class="muted" data-testid="onboarding-setup-step-integrations">
-                      (${onboardingActions.integrationsReady ? t("common.ok") : t("common.na")})
+                      (${t(getOnboardingStepStatusKey(integrationsStep))})
                     </span>
                   </div>
                   <div class="muted">${t("overview.setupFlow.integrationsHint")}</div>
@@ -204,7 +209,7 @@ export function renderOverview(props: OverviewProps) {
                   <div class="note-title">
                     3. ${t("overview.setupFlow.firstRun")}
                     <span class="muted" data-testid="onboarding-setup-step-firstRun">
-                      (${onboardingActions.firstRunReady ? t("common.ok") : t("common.na")})
+                      (${t(getOnboardingStepStatusKey(firstRunStep))})
                     </span>
                   </div>
                   <div class="muted">${t("overview.setupFlow.firstRunHint")}</div>

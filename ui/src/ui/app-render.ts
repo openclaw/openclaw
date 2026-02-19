@@ -59,6 +59,7 @@ import {
   getOnboardingNextStep,
   getOnboardingNextTab,
   getOnboardingProgress,
+  getOnboardingStepStatusKey,
   getOnboardingSteps,
 } from "./onboarding-flow.ts";
 import { renderAgents } from "./views/agents.ts";
@@ -250,7 +251,7 @@ export function renderApp(state: AppViewState) {
                       (step) => html`
                         <span class="chip ${step.done ? "chip-ok" : ""}" data-testid="onboarding-step-${step.key}">
                           ${t(`overview.setupFlow.${step.key}`)}:
-                          ${step.done ? t("common.ok") : t("common.na")}
+                          ${t(getOnboardingStepStatusKey(step))}
                         </span>
                       `,
                     )}

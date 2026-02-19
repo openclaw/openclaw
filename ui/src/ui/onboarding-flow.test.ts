@@ -4,6 +4,7 @@ import {
   getOnboardingNextStep,
   getOnboardingNextTab,
   getOnboardingProgress,
+  getOnboardingStepStatusKey,
   getOnboardingSteps,
 } from "./onboarding-flow.ts";
 
@@ -60,5 +61,16 @@ describe("onboarding flow", () => {
       canOpenChat: true,
       canOpenConsent: true,
     });
+  });
+
+  it("maps step status labels consistently", () => {
+    const steps = getOnboardingSteps({
+      connected: false,
+      channelsLastSuccess: null,
+      sessionsCount: 0,
+    });
+    expect(getOnboardingStepStatusKey(steps[0])).toBe("common.offline");
+    expect(getOnboardingStepStatusKey(steps[1])).toBe("common.na");
+    expect(getOnboardingStepStatusKey(steps[2])).toBe("common.na");
   });
 });

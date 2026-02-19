@@ -36,6 +36,13 @@ export function getOnboardingNextTab(steps: OnboardingStep[]): Tab {
   return getOnboardingNextStep(steps)?.tab ?? "consent";
 }
 
+export function getOnboardingStepStatusKey(step: OnboardingStep): "common.ok" | "common.offline" | "common.na" {
+  if (step.done) {
+    return "common.ok";
+  }
+  return step.key === "gateway" ? "common.offline" : "common.na";
+}
+
 export type OnboardingActionState = {
   gatewayReady: boolean;
   integrationsReady: boolean;

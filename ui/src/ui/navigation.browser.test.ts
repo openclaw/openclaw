@@ -249,6 +249,7 @@ describe("control UI routing", () => {
     expect(gatewayState?.textContent).toContain("Offline");
     expect(integrationsState?.textContent).toContain("n/a");
     expect(firstRunState?.textContent).toContain("n/a");
+    expect(app.querySelector('[data-testid="onboarding-step-gateway"]')?.textContent).toContain("Offline");
 
     app.connected = true;
     app.channelsLastSuccess = Date.now();
