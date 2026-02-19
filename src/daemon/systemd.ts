@@ -160,10 +160,16 @@ async function execSystemctl(
     return await execFileUtf8(cmd, cmdArgs);
   } catch (error) {
     const e = error as { stdout?: unknown; stderr?: unknown; code?: unknown; message?: unknown };
+    let stderr =
+      typeof e.stderr === "string" ? e.stderr : typeof e.message === "string" ? e.message : "";
+
+    if (options?.useSudo && stderr.includes("password is required")) {
+      stderr += "\nHint: Passwordless sudo is required for system service management.";
+    }
+
     return {
       stdout: typeof e.stdout === "string" ? e.stdout : "",
-      stderr:
-        typeof e.stderr === "string" ? e.stderr : typeof e.message === "string" ? e.message : "",
+      stderr,
       code: typeof e.code === "number" ? e.code : 1,
     };
   }
