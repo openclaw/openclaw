@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const execSyncMock = vi.fn();
 const execFileSyncMock = vi.fn();
+const CLI_CREDENTIALS_CACHE_TTL_MS = 15 * 60 * 1000;
 
 function mockExistingClaudeKeychainItem() {
   execFileSyncMock.mockImplementation((file: unknown, args: unknown) => {
@@ -29,6 +30,16 @@ function getAddGenericPasswordCall() {
       Array.isArray(args) &&
       (args as unknown[]).map(String).includes("add-generic-password"),
   );
+}
+
+async function readCachedClaudeCliCredentials(allowKeychainPrompt: boolean) {
+  const { readClaudeCliCredentialsCached } = await import("./cli-credentials.js");
+  return readClaudeCliCredentialsCached({
+    allowKeychainPrompt,
+    ttlMs: CLI_CREDENTIALS_CACHE_TTL_MS,
+    platform: "darwin",
+    execSync: execSyncMock,
+  });
 }
 
 describe("cli credentials", () => {
@@ -189,20 +200,8 @@ describe("cli credentials", () => {
 
     vi.setSystemTime(new Date("2025-01-01T00:00:00Z"));
 
-    const { readClaudeCliCredentialsCached } = await import("./cli-credentials.js");
-
-    const first = readClaudeCliCredentialsCached({
-      allowKeychainPrompt: true,
-      ttlMs: 15 * 60 * 1000,
-      platform: "darwin",
-      execSync: execSyncMock,
-    });
-    const second = readClaudeCliCredentialsCached({
-      allowKeychainPrompt: false,
-      ttlMs: 15 * 60 * 1000,
-      platform: "darwin",
-      execSync: execSyncMock,
-    });
+    const first = await readCachedClaudeCliCredentials(true);
+    const second = await readCachedClaudeCliCredentials(false);
 
     expect(first).toBeTruthy();
     expect(second).toEqual(first);
@@ -222,23 +221,11 @@ describe("cli credentials", () => {
 
     vi.setSystemTime(new Date("2025-01-01T00:00:00Z"));
 
-    const { readClaudeCliCredentialsCached } = await import("./cli-credentials.js");
+    const first = await readCachedClaudeCliCredentials(true);
 
-    const first = readClaudeCliCredentialsCached({
-      allowKeychainPrompt: true,
-      ttlMs: 15 * 60 * 1000,
-      platform: "darwin",
-      execSync: execSyncMock,
-    });
+    vi.advanceTimersByTime(CLI_CREDENTIALS_CACHE_TTL_MS + 1);
 
-    vi.advanceTimersByTime(15 * 60 * 1000 + 1);
-
-    const second = readClaudeCliCredentialsCached({
-      allowKeychainPrompt: true,
-      ttlMs: 15 * 60 * 1000,
-      platform: "darwin",
-      execSync: execSyncMock,
-    });
+    const second = await readCachedClaudeCliCredentials(true);
 
     expect(first).toBeTruthy();
     expect(second).toBeTruthy();
