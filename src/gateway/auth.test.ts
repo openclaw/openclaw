@@ -7,10 +7,15 @@ function createLimiterSpy(): AuthRateLimiter & {
   recordFailure: ReturnType<typeof vi.fn>;
   reset: ReturnType<typeof vi.fn>;
 } {
+  const check = vi.fn<AuthRateLimiter["check"]>(
+    (_ip, _scope) => ({ allowed: true, remaining: 10, retryAfterMs: 0 }) as const,
+  );
+  const recordFailure = vi.fn<AuthRateLimiter["recordFailure"]>((_ip, _scope) => {});
+  const reset = vi.fn<AuthRateLimiter["reset"]>((_ip, _scope) => {});
   return {
-    check: vi.fn(() => ({ allowed: true, remaining: 10, retryAfterMs: 0 })),
-    recordFailure: vi.fn(),
-    reset: vi.fn(),
+    check,
+    recordFailure,
+    reset,
     size: () => 0,
     prune: () => {},
     dispose: () => {},

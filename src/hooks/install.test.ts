@@ -3,7 +3,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { expectSingleNpmInstallIgnoreScriptsCall } from "../test-utils/exec-assertions.js";
+import {
+  expectSingleNpmInstallIgnoreScriptsCall,
+  expectSingleNpmPackIgnoreScriptsCall,
+} from "../test-utils/exec-assertions.js";
 import { isAddressInUseError } from "./gmail-watcher.js";
 
 const fixtureRoot = path.join(os.tmpdir(), `openclaw-hook-install-${randomUUID()}`);
@@ -180,7 +183,14 @@ describe("installHooksFromPath", () => {
     );
 
     const run = vi.mocked(runCommandWithTimeout);
-    run.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
+    run.mockResolvedValue({
+      code: 0,
+      stdout: "",
+      stderr: "",
+      signal: null,
+      killed: false,
+      termination: "exit",
+    });
 
     const res = await installHooksFromPath({
       path: pkgDir,
@@ -239,9 +249,16 @@ describe("installHooksFromNpmSpec", () => {
     const packedName = "test-hooks-0.0.1.tgz";
     run.mockImplementation(async (argv, opts) => {
       if (argv[0] === "npm" && argv[1] === "pack") {
-        packTmpDir = String(opts?.cwd ?? "");
+        packTmpDir = String(typeof opts === "number" ? "" : (opts.cwd ?? ""));
         fs.writeFileSync(path.join(packTmpDir, packedName), npmPackHooksBuffer);
-        return { code: 0, stdout: `${packedName}\n`, stderr: "", signal: null, killed: false };
+        return {
+          code: 0,
+          stdout: `${packedName}\n`,
+          stderr: "",
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
       }
       throw new Error(`unexpected command: ${argv.join(" ")}`);
     });
@@ -259,17 +276,10 @@ describe("installHooksFromNpmSpec", () => {
     expect(result.hookPackId).toBe("test-hooks");
     expect(fs.existsSync(path.join(result.targetDir, "hooks", "one-hook", "HOOK.md"))).toBe(true);
 
-    const packCalls = run.mock.calls.filter(
-      (c) => Array.isArray(c[0]) && c[0][0] === "npm" && c[0][1] === "pack",
-    );
-    expect(packCalls.length).toBe(1);
-    const packCall = packCalls[0];
-    if (!packCall) {
-      throw new Error("expected npm pack call");
-    }
-    const [argv, options] = packCall;
-    expect(argv).toEqual(["npm", "pack", "@openclaw/test-hooks@0.0.1", "--ignore-scripts"]);
-    expect(options?.env).toMatchObject({ NPM_CONFIG_IGNORE_SCRIPTS: "true" });
+    expectSingleNpmPackIgnoreScriptsCall({
+      calls: run.mock.calls,
+      expectedSpec: "@openclaw/test-hooks@0.0.1",
+    });
 
     expect(packTmpDir).not.toBe("");
     expect(fs.existsSync(packTmpDir)).toBe(false);

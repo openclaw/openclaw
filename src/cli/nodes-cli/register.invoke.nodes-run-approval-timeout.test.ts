@@ -19,10 +19,12 @@ import { parseTimeoutMs } from "../nodes-run.js";
  * least approvalTimeoutMs + 10_000.
  */
 
-const callGatewaySpy = vi.fn(async () => ({ decision: "allow-once" }));
+const callGatewaySpy = vi.fn<
+  (opts: Record<string, unknown>) => Promise<{ decision: "allow-once" }>
+>(async () => ({ decision: "allow-once" }));
 
 vi.mock("../../gateway/call.js", () => ({
-  callGateway: (...args: unknown[]) => callGatewaySpy(...args),
+  callGateway: callGatewaySpy,
   randomIdempotencyKey: () => "mock-key",
 }));
 
@@ -44,7 +46,7 @@ describe("nodes run: approval transport timeout (#12098)", () => {
     });
 
     expect(callGatewaySpy).toHaveBeenCalledTimes(1);
-    const callOpts = callGatewaySpy.mock.calls[0][0] as Record<string, unknown>;
+    const callOpts = callGatewaySpy.mock.calls[0][0];
     expect(callOpts.method).toBe("exec.approval.request");
     expect(callOpts.timeoutMs).toBe(35_000);
   });
@@ -65,7 +67,7 @@ describe("nodes run: approval transport timeout (#12098)", () => {
     );
 
     expect(callGatewaySpy).toHaveBeenCalledTimes(1);
-    const callOpts = callGatewaySpy.mock.calls[0][0] as Record<string, unknown>;
+    const callOpts = callGatewaySpy.mock.calls[0][0];
     expect(callOpts.timeoutMs).toBeGreaterThanOrEqual(approvalTimeoutMs);
     expect(callOpts.timeoutMs).toBe(130_000);
   });
@@ -89,7 +91,7 @@ describe("nodes run: approval transport timeout (#12098)", () => {
       { transportTimeoutMs },
     );
 
-    const callOpts = callGatewaySpy.mock.calls[0][0] as Record<string, unknown>;
+    const callOpts = callGatewaySpy.mock.calls[0][0];
     expect(callOpts.timeoutMs).toBe(200_000);
   });
 
@@ -109,7 +111,7 @@ describe("nodes run: approval transport timeout (#12098)", () => {
       { transportTimeoutMs },
     );
 
-    const callOpts = callGatewaySpy.mock.calls[0][0] as Record<string, unknown>;
+    const callOpts = callGatewaySpy.mock.calls[0][0];
     expect(callOpts.timeoutMs).toBe(130_000);
   });
 });

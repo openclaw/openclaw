@@ -36,9 +36,11 @@ describe("createPtyAdapter", () => {
     spawnMock.mockReset();
     ptyKillMock.mockReset();
     killProcessTreeMock.mockReset();
+    vi.useRealTimers();
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.resetModules();
     vi.clearAllMocks();
   });
@@ -77,6 +79,53 @@ describe("createPtyAdapter", () => {
     adapter.kill();
     expect(killProcessTreeMock).toHaveBeenCalledWith(1234);
     expect(ptyKillMock).not.toHaveBeenCalled();
+  });
+
+  it("wait does not settle immediately on SIGKILL", async () => {
+    vi.useFakeTimers();
+    spawnMock.mockReturnValue(createStubPty());
+    const { createPtyAdapter } = await import("./pty.js");
+
+    const adapter = await createPtyAdapter({
+      shell: "bash",
+      args: ["-lc", "sleep 10"],
+    });
+
+    const waitPromise = adapter.wait();
+    const settled = vi.fn();
+    void waitPromise.then(() => settled());
+
+    adapter.kill();
+
+    await Promise.resolve();
+    expect(settled).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(3999);
+    expect(settled).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(waitPromise).resolves.toEqual({ code: null, signal: "SIGKILL" });
+  });
+
+  it("prefers real PTY exit over SIGKILL fallback settle", async () => {
+    vi.useFakeTimers();
+    const stub = createStubPty();
+    spawnMock.mockReturnValue(stub);
+    const { createPtyAdapter } = await import("./pty.js");
+
+    const adapter = await createPtyAdapter({
+      shell: "bash",
+      args: ["-lc", "sleep 10"],
+    });
+
+    const waitPromise = adapter.wait();
+    adapter.kill();
+    stub.emitExit({ exitCode: 0, signal: 9 });
+
+    await expect(waitPromise).resolves.toEqual({ code: 0, signal: 9 });
+
+    await vi.advanceTimersByTimeAsync(4_001);
+    await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: 9 });
   });
 
   it("resolves wait when exit fires before wait is called", async () => {

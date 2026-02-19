@@ -1,33 +1,14 @@
-import type { FollowupRun } from "./types.js";
 import { defaultRuntime } from "../../../runtime.js";
 import {
   buildCollectPrompt,
-  buildQueueSummaryPrompt,
+  clearQueueSummaryState,
   hasCrossChannelItems,
+  previewQueueSummaryPrompt,
   waitForQueueDebounce,
 } from "../../../utils/queue-helpers.js";
 import { isRoutableChannel } from "../route-reply.js";
 import { FOLLOWUP_QUEUES } from "./state.js";
-
-function previewQueueSummaryPrompt(queue: {
-  dropPolicy: "summarize" | "old" | "new";
-  droppedCount: number;
-  summaryLines: string[];
-}): string | undefined {
-  return buildQueueSummaryPrompt({
-    state: {
-      dropPolicy: queue.dropPolicy,
-      droppedCount: queue.droppedCount,
-      summaryLines: [...queue.summaryLines],
-    },
-    noun: "message",
-  });
-}
-
-function clearQueueSummaryState(queue: { droppedCount: number; summaryLines: string[] }): void {
-  queue.droppedCount = 0;
-  queue.summaryLines = [];
-}
+import type { FollowupRun } from "./types.js";
 
 export function scheduleFollowupDrain(
   key: string,
@@ -89,7 +70,7 @@ export function scheduleFollowupDrain(
           }
 
           const items = queue.items.slice();
-          const summary = previewQueueSummaryPrompt(queue);
+          const summary = previewQueueSummaryPrompt({ state: queue, noun: "message" });
           const run = items.at(-1)?.run ?? queue.lastRun;
           if (!run) {
             break;
@@ -127,7 +108,7 @@ export function scheduleFollowupDrain(
           continue;
         }
 
-        const summaryPrompt = previewQueueSummaryPrompt(queue);
+        const summaryPrompt = previewQueueSummaryPrompt({ state: queue, noun: "message" });
         if (summaryPrompt) {
           const run = queue.lastRun;
           if (!run) {

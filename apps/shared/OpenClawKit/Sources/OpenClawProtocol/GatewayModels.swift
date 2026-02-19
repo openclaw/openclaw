@@ -394,6 +394,7 @@ public struct SendParams: Codable, Sendable {
     public let gifplayback: Bool?
     public let channel: String?
     public let accountid: String?
+    public let threadid: String?
     public let sessionkey: String?
     public let idempotencykey: String
 
@@ -405,6 +406,7 @@ public struct SendParams: Codable, Sendable {
         gifplayback: Bool?,
         channel: String?,
         accountid: String?,
+        threadid: String?,
         sessionkey: String?,
         idempotencykey: String
     ) {
@@ -415,6 +417,7 @@ public struct SendParams: Codable, Sendable {
         self.gifplayback = gifplayback
         self.channel = channel
         self.accountid = accountid
+        self.threadid = threadid
         self.sessionkey = sessionkey
         self.idempotencykey = idempotencykey
     }
@@ -426,6 +429,7 @@ public struct SendParams: Codable, Sendable {
         case gifplayback = "gifPlayback"
         case channel
         case accountid = "accountId"
+        case threadid = "threadId"
         case sessionkey = "sessionKey"
         case idempotencykey = "idempotencyKey"
     }
@@ -918,6 +922,68 @@ public struct NodeInvokeRequestEvent: Codable, Sendable {
         case paramsjson = "paramsJSON"
         case timeoutms = "timeoutMs"
         case idempotencykey = "idempotencyKey"
+    }
+}
+
+public struct PushTestParams: Codable, Sendable {
+    public let nodeid: String
+    public let title: String?
+    public let body: String?
+    public let environment: String?
+
+    public init(
+        nodeid: String,
+        title: String?,
+        body: String?,
+        environment: String?
+    ) {
+        self.nodeid = nodeid
+        self.title = title
+        self.body = body
+        self.environment = environment
+    }
+    private enum CodingKeys: String, CodingKey {
+        case nodeid = "nodeId"
+        case title
+        case body
+        case environment
+    }
+}
+
+public struct PushTestResult: Codable, Sendable {
+    public let ok: Bool
+    public let status: Int
+    public let apnsid: String?
+    public let reason: String?
+    public let tokensuffix: String
+    public let topic: String
+    public let environment: String
+
+    public init(
+        ok: Bool,
+        status: Int,
+        apnsid: String?,
+        reason: String?,
+        tokensuffix: String,
+        topic: String,
+        environment: String
+    ) {
+        self.ok = ok
+        self.status = status
+        self.apnsid = apnsid
+        self.reason = reason
+        self.tokensuffix = tokensuffix
+        self.topic = topic
+        self.environment = environment
+    }
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case status
+        case apnsid = "apnsId"
+        case reason
+        case tokensuffix = "tokenSuffix"
+        case topic
+        case environment
     }
 }
 
@@ -2084,6 +2150,7 @@ public struct SkillsUpdateParams: Codable, Sendable {
 public struct CronJob: Codable, Sendable {
     public let id: String
     public let agentid: String?
+    public let sessionkey: String?
     public let name: String
     public let description: String?
     public let enabled: Bool
@@ -2100,6 +2167,7 @@ public struct CronJob: Codable, Sendable {
     public init(
         id: String,
         agentid: String?,
+        sessionkey: String?,
         name: String,
         description: String?,
         enabled: Bool,
@@ -2115,6 +2183,7 @@ public struct CronJob: Codable, Sendable {
     ) {
         self.id = id
         self.agentid = agentid
+        self.sessionkey = sessionkey
         self.name = name
         self.description = description
         self.enabled = enabled
@@ -2131,6 +2200,7 @@ public struct CronJob: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case id
         case agentid = "agentId"
+        case sessionkey = "sessionKey"
         case name
         case description
         case enabled
@@ -2165,6 +2235,7 @@ public struct CronStatusParams: Codable, Sendable {
 public struct CronAddParams: Codable, Sendable {
     public let name: String
     public let agentid: AnyCodable?
+    public let sessionkey: AnyCodable?
     public let description: String?
     public let enabled: Bool?
     public let deleteafterrun: Bool?
@@ -2177,6 +2248,7 @@ public struct CronAddParams: Codable, Sendable {
     public init(
         name: String,
         agentid: AnyCodable?,
+        sessionkey: AnyCodable?,
         description: String?,
         enabled: Bool?,
         deleteafterrun: Bool?,
@@ -2188,6 +2260,7 @@ public struct CronAddParams: Codable, Sendable {
     ) {
         self.name = name
         self.agentid = agentid
+        self.sessionkey = sessionkey
         self.description = description
         self.enabled = enabled
         self.deleteafterrun = deleteafterrun
@@ -2200,6 +2273,7 @@ public struct CronAddParams: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case name
         case agentid = "agentId"
+        case sessionkey = "sessionKey"
         case description
         case enabled
         case deleteafterrun = "deleteAfterRun"
@@ -2493,6 +2567,19 @@ public struct DevicePairRejectParams: Codable, Sendable {
     }
     private enum CodingKeys: String, CodingKey {
         case requestid = "requestId"
+    }
+}
+
+public struct DevicePairRemoveParams: Codable, Sendable {
+    public let deviceid: String
+
+    public init(
+        deviceid: String
+    ) {
+        self.deviceid = deviceid
+    }
+    private enum CodingKeys: String, CodingKey {
+        case deviceid = "deviceId"
     }
 }
 

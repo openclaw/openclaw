@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   getAbortMemory,
@@ -9,6 +10,7 @@ import {
   isAbortRequestText,
   isAbortTrigger,
   resetAbortMemoryForTest,
+  resolveSessionEntryForKey,
   setAbortMemory,
   tryFastAbortFromMessage,
 } from "./abort.js";
@@ -28,7 +30,9 @@ const commandQueueMocks = vi.hoisted(() => ({
 vi.mock("../../process/command-queue.js", () => commandQueueMocks);
 
 const subagentRegistryMocks = vi.hoisted(() => ({
-  listSubagentRunsForRequester: vi.fn(() => []),
+  listSubagentRunsForRequester: vi.fn<(requesterSessionKey: string) => SubagentRunRecord[]>(
+    () => [],
+  ),
   markSubagentRunTerminated: vi.fn(() => 1),
 }));
 
@@ -123,6 +127,18 @@ describe("abort detection", () => {
     expect(getAbortMemorySizeForTest()).toBe(2000);
     expect(getAbortMemory("session-0")).toBeUndefined();
     expect(getAbortMemory("session-2104")).toBe(true);
+  });
+
+  it("resolves session entry when key exists in store", () => {
+    const store = {
+      "session-1": { sessionId: "abc", updatedAt: 0 },
+    } as const;
+    expect(resolveSessionEntryForKey(store, "session-1")).toEqual({
+      entry: store["session-1"],
+      key: "session-1",
+    });
+    expect(resolveSessionEntryForKey(store, "session-2")).toEqual({});
+    expect(resolveSessionEntryForKey(undefined, "session-1")).toEqual({});
   });
 
   it("fast-aborts even when text commands are disabled", async () => {

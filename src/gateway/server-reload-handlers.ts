@@ -1,12 +1,12 @@
-import type { CliDeps } from "../cli/deps.js";
-import type { loadConfig } from "../config/config.js";
-import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
-import type { ChannelKind, GatewayReloadPlan } from "./config-reload.js";
 import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/runs.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
+import type { CliDeps } from "../cli/deps.js";
 import { resolveAgentMaxConcurrent, resolveSubagentMaxConcurrent } from "../config/agent-limits.js";
-import { startGmailWatcher, stopGmailWatcher } from "../hooks/gmail-watcher.js";
+import type { loadConfig } from "../config/config.js";
+import { startGmailWatcherWithLogs } from "../hooks/gmail-watcher-lifecycle.js";
+import { stopGmailWatcher } from "../hooks/gmail-watcher.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import {
   deferGatewayRestartUntilIdle,
@@ -15,6 +15,7 @@ import {
 } from "../infra/restart.js";
 import { setCommandLaneConcurrency, getTotalQueueSize } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
+import type { ChannelKind, GatewayReloadPlan } from "./config-reload.js";
 import { resolveHooksConfig } from "./hooks.js";
 import { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import { buildGatewayCronService, type GatewayCronState } from "./server-cron.js";
@@ -90,24 +91,12 @@ export function createGatewayReloadHandlers(params: {
 
     if (plan.restartGmailWatcher) {
       await stopGmailWatcher().catch(() => {});
-      if (!isTruthyEnvValue(process.env.OPENCLAW_SKIP_GMAIL_WATCHER)) {
-        try {
-          const gmailResult = await startGmailWatcher(nextConfig);
-          if (gmailResult.started) {
-            params.logHooks.info("gmail watcher started");
-          } else if (
-            gmailResult.reason &&
-            gmailResult.reason !== "hooks not enabled" &&
-            gmailResult.reason !== "no gmail account configured"
-          ) {
-            params.logHooks.warn(`gmail watcher not started: ${gmailResult.reason}`);
-          }
-        } catch (err) {
-          params.logHooks.error(`gmail watcher failed to start: ${String(err)}`);
-        }
-      } else {
-        params.logHooks.info("skipping gmail watcher restart (OPENCLAW_SKIP_GMAIL_WATCHER=1)");
-      }
+      await startGmailWatcherWithLogs({
+        cfg: nextConfig,
+        log: params.logHooks,
+        onSkipped: () =>
+          params.logHooks.info("skipping gmail watcher restart (OPENCLAW_SKIP_GMAIL_WATCHER=1)"),
+      });
     }
 
     if (plan.restartChannels.size > 0) {
