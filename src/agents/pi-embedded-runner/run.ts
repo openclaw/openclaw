@@ -549,12 +549,14 @@ export async function runEmbeddedPiAgent(
           const lastTurnTotal = lastAssistantUsage?.total ?? attemptUsage?.total;
           const attemptCompactionCount = Math.max(0, attempt.compactionCount ?? 0);
           autoCompactionCount += attemptCompactionCount;
+          const activeErrorProvider = lastAssistant?.provider ?? provider;
+          const activeErrorModel = lastAssistant?.model ?? modelId;
           const formattedAssistantErrorText = lastAssistant
             ? formatAssistantErrorText(lastAssistant, {
                 cfg: params.config,
                 sessionKey: params.sessionKey ?? params.sessionId,
-                provider,
-                model: modelId,
+                provider: activeErrorProvider,
+                model: activeErrorModel,
               })
             : undefined;
           const assistantErrorText =
@@ -920,8 +922,8 @@ export async function runEmbeddedPiAgent(
                   ? formatAssistantErrorText(lastAssistant, {
                       cfg: params.config,
                       sessionKey: params.sessionKey ?? params.sessionId,
-                      provider,
-                      model: modelId,
+                      provider: activeErrorProvider,
+                      model: activeErrorModel,
                     })
                   : undefined) ||
                 lastAssistant?.errorMessage?.trim() ||
@@ -930,7 +932,7 @@ export async function runEmbeddedPiAgent(
                   : rateLimitFailure
                     ? "LLM request rate limited."
                     : billingFailure
-                      ? formatBillingErrorMessage(provider, modelId)
+                      ? formatBillingErrorMessage(activeErrorProvider, activeErrorModel)
                       : authFailure
                         ? "LLM request unauthorized."
                         : "LLM request failed.");
@@ -939,8 +941,8 @@ export async function runEmbeddedPiAgent(
                 (isTimeoutErrorMessage(message) ? 408 : undefined);
               throw new FailoverError(message, {
                 reason: assistantFailoverReason ?? "unknown",
-                provider,
-                model: modelId,
+                provider: activeErrorProvider,
+                model: activeErrorModel,
                 profileId: lastProfileId,
                 status,
               });
@@ -975,7 +977,8 @@ export async function runEmbeddedPiAgent(
             lastToolError: attempt.lastToolError,
             config: params.config,
             sessionKey: params.sessionKey ?? params.sessionId,
-            provider,
+            provider: activeErrorProvider,
+            model: activeErrorModel,
             verboseLevel: params.verboseLevel,
             reasoningLevel: params.reasoningLevel,
             toolResultFormat: resolvedToolResultFormat,
