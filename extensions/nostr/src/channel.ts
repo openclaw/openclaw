@@ -40,6 +40,8 @@ const AI_INFO_DEFAULT_PROVIDER = "anthropic";
 const AI_INFO_DEFAULT_MODEL = "claude-opus-4-6";
 const AI_INFO_ENCRYPTION_SCHEME = "nip44";
 const RUN_START_THINKING_DELTA_TEXT = "run_started";
+const RUN_HEARTBEAT_THINKING_DELTA_TEXT = "run_progress";
+const RUN_HEARTBEAT_INTERVAL_MS = 3500;
 const NOSTR_TRACE_JSONL_ENV = "OPENCLAW_NOSTR_TRACE_JSONL";
 const NOSTR_TRACE_JSONL_FALLBACK_ENV = "NOSTR_TRACE_JSONL";
 const PENDING_CANCEL_TTL_MS = 5 * 60 * 1000;
@@ -1169,7 +1171,13 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
           });
           let blockSeq = 0;
           let streamedTextBuffer = "";
+          let lastRunOutboundAtMs = Date.now();
+          let heartbeatInFlight = false;
+          let heartbeatTimer: NodeJS.Timeout | null = null;
           const emitStatus = payload.kind === 25802;
+          const markRunOutbound = (): void => {
+            lastRunOutboundAtMs = Date.now();
+          };
           const safeSendStatus = async (
             state: "thinking" | "tool_use" | "done",
             options?: { info?: string; progress?: number },
@@ -1193,6 +1201,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                 },
                 NIP63_RESPONSE_KIND_STATUS,
               );
+              markRunOutbound();
             } catch (error) {
               ctx.log?.debug?.(
                 `[${account.accountId}] Nostr status publish failed (${state}) for ${payload.eventId}: ${String(error)}`,
@@ -1203,7 +1212,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
             phase: "start" | "update",
             text: string,
           ): Promise<void> => {
-            if (runControl.cancelled) {
+            if (runControl.cancelled || runControl.terminalEmitted) {
               return;
             }
             const normalizedText = text.trim();
@@ -1230,11 +1239,39 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                 },
                 NIP63_RESPONSE_KIND_DELTA,
               );
+              markRunOutbound();
             } catch (error) {
               ctx.log?.debug?.(
                 `[${account.accountId}] Nostr thinking delta publish failed (${phase}) for ${payload.eventId}: ${String(error)}`,
               );
             }
+          };
+          const stopHeartbeat = (): void => {
+            if (heartbeatTimer !== null) {
+              clearInterval(heartbeatTimer);
+              heartbeatTimer = null;
+            }
+          };
+          const startHeartbeat = (): void => {
+            stopHeartbeat();
+            heartbeatTimer = setInterval(() => {
+              if (runControl.cancelled || runControl.terminalEmitted) {
+                stopHeartbeat();
+                return;
+              }
+              if (heartbeatInFlight) {
+                return;
+              }
+              if (Date.now() - lastRunOutboundAtMs < RUN_HEARTBEAT_INTERVAL_MS) {
+                return;
+              }
+              heartbeatInFlight = true;
+              void safeSendThinkingDelta("update", RUN_HEARTBEAT_THINKING_DELTA_TEXT).finally(
+                () => {
+                  heartbeatInFlight = false;
+                },
+              );
+            }, RUN_HEARTBEAT_INTERVAL_MS);
           };
 
           try {
@@ -1267,6 +1304,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
               progress: 0,
             });
             await safeSendThinkingDelta("start", RUN_START_THINKING_DELTA_TEXT);
+            startHeartbeat();
             const dispatchStartedAt = Date.now();
             const rawDispatchResult =
               await runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
@@ -1344,6 +1382,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                       },
                       normalizedKind,
                     );
+                    markRunOutbound();
                   },
                   onSkip: (payload, { kind, reason }) => {
                     ctx.log?.debug?.(
@@ -1400,6 +1439,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                       },
                       NIP63_RESPONSE_KIND_TOOL,
                     );
+                    markRunOutbound();
                   },
                 },
               });
@@ -1474,6 +1514,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                   },
                   NIP63_RESPONSE_KIND_FINAL,
                 );
+                markRunOutbound();
                 runControl.terminalEmitted = true;
                 ctx.log?.debug?.(
                   `[${account.accountId}] Nostr emitted fallback final for run ${payload.eventId}`,
@@ -1502,6 +1543,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                   },
                   NIP63_RESPONSE_KIND_ERROR,
                 );
+                markRunOutbound();
                 runControl.terminalEmitted = true;
                 ctx.log?.warn?.(
                   `[${account.accountId}] Nostr emitted EMPTY_RESPONSE for run ${payload.eventId}`,
@@ -1554,9 +1596,11 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                 },
                 NIP63_RESPONSE_KIND_ERROR,
               );
+              markRunOutbound();
               runControl.terminalEmitted = true;
             }
           } finally {
+            stopHeartbeat();
             activeRuns.delete(runKey);
             updateRunPressureStatus();
             if (runModelSelection) {
