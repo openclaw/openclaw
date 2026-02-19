@@ -26,8 +26,7 @@ export function registerTelegramHttpHandler(params: RegisterTelegramHttpHandlerA
   const normalizedPath = normalizeTelegramWebhookPath(params.path);
   if (telegramHttpRoutes.has(normalizedPath)) {
     const suffix = params.accountId ? ` for account "${params.accountId}"` : "";
-    params.log?.(`telegram: webhook path ${normalizedPath} already registered${suffix}`);
-    return () => {};
+    throw new Error(`telegram: webhook path ${normalizedPath} already registered${suffix}`);
   }
   telegramHttpRoutes.set(normalizedPath, params.handler);
   return () => {

@@ -1,14 +1,14 @@
 import { type RunOptions, run } from "@grammyjs/runner";
 import { webhookCallback } from "grammy";
-import { resolveAgentMaxConcurrent } from "../config/agent-limits.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { RuntimeEnv } from "../runtime.js";
+import { resolveAgentMaxConcurrent } from "../config/agent-limits.js";
 import { loadConfig } from "../config/config.js";
 import { computeBackoff, sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { formatDurationPrecise } from "../infra/format-time/format-duration.ts";
 import { installRequestBodyLimitGuard } from "../infra/http-body.js";
 import { registerUnhandledRejectionHandler } from "../infra/unhandled-rejections.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
@@ -173,7 +173,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         timeoutMilliseconds: TELEGRAM_WEBHOOK_CALLBACK_TIMEOUT_MS,
       });
 
-      const webhookHandler = (req: any, res: any) => {
+      const webhookHandler = (req: IncomingMessage, res: ServerResponse) => {
         if (req.method !== "POST") {
           res.writeHead(405);
           res.end();
@@ -189,7 +189,18 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         }
         const handled = handler(req, res);
         if (handled && typeof handled.catch === "function") {
-          void handled.finally(() => guard.dispose());
+          void handled
+            .catch((err: unknown) => {
+              if (guard.isTripped()) {
+                return;
+              }
+              opts.runtime?.error?.(`telegram webhook handler failed: ${String(err)}`);
+              if (!res.headersSent) {
+                res.writeHead(500);
+              }
+              res.end();
+            })
+            .finally(() => guard.dispose());
         } else {
           guard.dispose();
         }
@@ -202,26 +213,31 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         accountId: account.accountId,
       });
 
-      await withTelegramApiErrorLogging({
-        operation: "setWebhook",
-        runtime: opts.runtime,
-        fn: () =>
-          bot.api.setWebhook(opts.webhookUrl!, {
-            secret_token: secret.trim(),
-            allowed_updates: resolveTelegramAllowedUpdates(),
-          }),
-      });
-
-      opts.runtime?.log?.(`telegram webhook registered at ${opts.webhookPath ?? "/telegram-webhook"}`);
-
-      // Wait for abort signal
-      if (opts.abortSignal && !opts.abortSignal.aborted) {
-        await new Promise<void>((resolve) => {
-          opts.abortSignal!.addEventListener("abort", () => resolve(), { once: true });
+      try {
+        await withTelegramApiErrorLogging({
+          operation: "setWebhook",
+          runtime: opts.runtime,
+          fn: () =>
+            bot.api.setWebhook(opts.webhookUrl!, {
+              secret_token: secret.trim(),
+              allowed_updates: resolveTelegramAllowedUpdates(),
+            }),
         });
+
+        opts.runtime?.log?.(
+          `telegram webhook registered at ${opts.webhookPath ?? "/telegram-webhook"}`,
+        );
+
+        // Wait for abort signal
+        if (opts.abortSignal && !opts.abortSignal.aborted) {
+          await new Promise<void>((resolve) => {
+            opts.abortSignal!.addEventListener("abort", () => resolve(), { once: true });
+          });
+        }
+      } finally {
+        unregister();
       }
 
-      unregister();
       await bot.stop();
       return;
     }
