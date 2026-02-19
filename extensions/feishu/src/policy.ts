@@ -21,6 +21,7 @@ export function resolveFeishuGroupConfig(params: {
   groupId?: string | null;
 }): FeishuGroupConfig | undefined {
   const groups = params.cfg?.groups ?? {};
+  const wildcard = groups["*"];
   const groupId = params.groupId?.trim();
   if (!groupId) {
     return undefined;
@@ -33,7 +34,12 @@ export function resolveFeishuGroupConfig(params: {
 
   const lowered = groupId.toLowerCase();
   const matchKey = Object.keys(groups).find((key) => key.toLowerCase() === lowered);
-  return matchKey ? groups[matchKey] : undefined;
+  if (matchKey) {
+    return groups[matchKey];
+  }
+
+  // Fallback to wildcard/default group policy.
+  return wildcard;
 }
 
 export function resolveFeishuGroupToolPolicy(
