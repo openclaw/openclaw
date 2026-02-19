@@ -40,7 +40,9 @@ const AI_INFO_DEFAULT_PROVIDER = "anthropic";
 const AI_INFO_DEFAULT_MODEL = "claude-opus-4-6";
 const AI_INFO_ENCRYPTION_SCHEME = "nip44";
 const RUN_START_THINKING_DELTA_TEXT = "run_started";
-const RUN_HEARTBEAT_THINKING_DELTA_TEXT = "run_progress";
+const RUN_HEARTBEAT_STATUS_INFO = "run_progress";
+const EMPTY_RESPONSE_FALLBACK_TEXT =
+  "I could not generate a response this time. Please retry your prompt.";
 const RUN_HEARTBEAT_INTERVAL_MS = resolveDurationEnvMs(
   "OPENCLAW_NOSTR_HEARTBEAT_INTERVAL_MS",
   2000,
@@ -100,22 +102,44 @@ type PendingToolCallTelemetry = {
   callId: string;
   name: string;
   startedAtMs: number;
+  arguments?: Record<string, unknown>;
+  summary?: string;
 };
 
 type ToolCallTelemetryStart = {
   callId: string;
   name: string;
+  arguments?: Record<string, unknown>;
+  summary?: string;
 };
 
 type ToolCallTelemetryResult = {
   name: string;
   callId?: string;
   durationMs?: number;
+  arguments?: Record<string, unknown>;
+  summary?: string;
+  orphaned?: boolean;
 };
 
 type ToolCallTelemetryTracker = {
-  registerStart: (name: string, startedAtMs: number) => ToolCallTelemetryStart;
-  consumeResult: (finishedAtMs: number) => ToolCallTelemetryResult;
+  registerStart: (
+    name: string,
+    startedAtMs: number,
+    options?: {
+      callId?: string;
+      arguments?: Record<string, unknown>;
+      summary?: string;
+    },
+  ) => ToolCallTelemetryStart;
+  consumeResult: (
+    finishedAtMs: number,
+    options?: {
+      name?: string;
+      arguments?: Record<string, unknown>;
+      summary?: string;
+    },
+  ) => ToolCallTelemetryResult;
   drainPendingResults: (finishedAtMs: number) => ToolCallTelemetryResult[];
   pendingCount: () => number;
 };
@@ -189,9 +213,43 @@ function nextRunSequence(run: ActiveRunControl): number {
   return value;
 }
 
-function normalizeToolPhase(raw: string | undefined): "start" | "result" {
-  const phase = raw?.trim().toLowerCase();
-  return phase === "start" ? "start" : "result";
+function toToolArguments(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  return value as Record<string, unknown>;
+}
+
+function normalizeTelemetryInline(value: string, maxLength = 140): string {
+  const normalized = value.trim().replace(/\s+/g, " ");
+  if (!normalized) {
+    return "";
+  }
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+  return `${normalized.slice(0, maxLength - 3)}...`;
+}
+
+function summarizeToolArguments(args: Record<string, unknown> | undefined): string | undefined {
+  if (!args) {
+    return undefined;
+  }
+  const fields = ["target", "url", "query", "path", "command", "expr", "file", "name", "action"];
+  for (const field of fields) {
+    const value = args[field];
+    if (typeof value === "string" && value.trim()) {
+      return normalizeTelemetryInline(value);
+    }
+  }
+  return undefined;
+}
+
+function summarizeToolInfo(name: string, summary: string | undefined): string {
+  if (!summary) {
+    return name;
+  }
+  return `${name} • ${summary}`;
 }
 
 export function createToolCallTelemetryTracker(runId: string): ToolCallTelemetryTracker {
@@ -205,29 +263,50 @@ export function createToolCallTelemetryTracker(runId: string): ToolCallTelemetry
   };
 
   return {
-    registerStart: (name, startedAtMs) => {
+    registerStart: (name, startedAtMs, options) => {
       const normalizedName = name.trim() || "tool";
+      const normalizedCallId = options?.callId?.trim();
+      const normalizedArgs = toToolArguments(options?.arguments);
+      const normalizedSummary = normalizeTelemetryInline(options?.summary ?? "");
       const call = {
-        callId: nextCallId(),
+        callId: normalizedCallId || nextCallId(),
         name: normalizedName,
         startedAtMs: Math.max(0, Math.trunc(startedAtMs)),
+        ...(normalizedArgs ? { arguments: normalizedArgs } : {}),
+        ...(normalizedSummary ? { summary: normalizedSummary } : {}),
       };
       pending.push(call);
       return {
         callId: call.callId,
         name: call.name,
+        ...(call.arguments ? { arguments: call.arguments } : {}),
+        ...(call.summary ? { summary: call.summary } : {}),
       };
     },
-    consumeResult: (finishedAtMs) => {
+    consumeResult: (finishedAtMs, options) => {
       const call = pending.shift();
       if (!call) {
-        return { name: "tool" };
+        const orphanName = options?.name?.trim() || "tool";
+        const orphanSummary = normalizeTelemetryInline(options?.summary ?? "");
+        const orphanArgs = toToolArguments(options?.arguments);
+        return {
+          name: orphanName,
+          callId: nextCallId(),
+          durationMs: 0,
+          ...(orphanArgs ? { arguments: orphanArgs } : {}),
+          ...(orphanSummary ? { summary: orphanSummary } : {}),
+          orphaned: true,
+        };
       }
       const durationMs = Math.max(0, Math.trunc(finishedAtMs) - call.startedAtMs);
+      const summary = call.summary ?? normalizeTelemetryInline(options?.summary ?? "");
+      const args = call.arguments ?? toToolArguments(options?.arguments);
       return {
         name: call.name,
         callId: call.callId,
         durationMs,
+        ...(args ? { arguments: args } : {}),
+        ...(summary ? { summary } : {}),
       };
     },
     drainPendingResults: (finishedAtMs) => {
@@ -242,6 +321,8 @@ export function createToolCallTelemetryTracker(runId: string): ToolCallTelemetry
           name: call.name,
           callId: call.callId,
           durationMs,
+          ...(call.arguments ? { arguments: call.arguments } : {}),
+          ...(call.summary ? { summary: call.summary } : {}),
         });
       }
       return results;
@@ -555,6 +636,54 @@ function buildAiInfoContent(params: {
   }
   supportedModels.add(defaultModel);
 
+  const personaByPubkey = new Map<string, NonNullable<AiInfoContent["personas"]>[number]>();
+  const cfgForAccounts = params.cfg as Parameters<typeof listNostrAccountIds>[0];
+
+  for (const accountId of listNostrAccountIds(cfgForAccounts)) {
+    let account: ReturnType<typeof resolveNostrAccount> | null = null;
+    try {
+      account = resolveNostrAccount({ cfg: cfgForAccounts, accountId });
+    } catch {
+      account = null;
+    }
+    if (!account?.publicKey) {
+      continue;
+    }
+    const key = account.publicKey.toLowerCase();
+    if (personaByPubkey.has(key)) {
+      continue;
+    }
+
+    const profile = account.profile
+      ? {
+          ...(account.profile.name ? { name: account.profile.name } : {}),
+          ...(account.profile.displayName ? { display_name: account.profile.displayName } : {}),
+          ...(account.profile.picture ? { picture: account.profile.picture } : {}),
+          ...(account.profile.about ? { about: account.profile.about } : {}),
+        }
+      : undefined;
+
+    const personaName =
+      account.name?.trim() ||
+      account.profile?.displayName?.trim() ||
+      account.profile?.name?.trim() ||
+      undefined;
+
+    personaByPubkey.set(key, {
+      account_id: account.accountId,
+      pubkey: account.publicKey,
+      ...(personaName ? { name: personaName } : {}),
+      enabled: account.enabled,
+      configured: account.configured,
+      relays: account.relays,
+      ...(profile && Object.keys(profile).length > 0 ? { profile } : {}),
+    });
+  }
+
+  const personas = [...personaByPubkey.values()].sort((left, right) =>
+    left.account_id.localeCompare(right.account_id),
+  );
+
   return {
     ver: 1,
     supports_streaming: true,
@@ -565,6 +694,7 @@ function buildAiInfoContent(params: {
     default_model: defaultModel,
     tool_names: [],
     tool_schema_version: 1,
+    ...(personas.length > 0 ? { personas } : {}),
   };
 }
 
@@ -678,19 +808,24 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
   },
 
   security: {
-    resolveDmPolicy: ({ account }) => {
+    resolveDmPolicy: ({ cfg, accountId, account }) => {
       const configuredAllowFrom = account.config.allowFrom ?? [];
       const hasWildcardAllowFrom = configuredAllowFrom.some(
         (entry) => String(entry).trim() === "*",
       );
       const hasAllowFrom = configuredAllowFrom.length > 0;
       const inferredPolicy = hasWildcardAllowFrom ? "open" : hasAllowFrom ? "allowlist" : "pairing";
+      const resolvedAccountId = accountId ?? account.accountId ?? DEFAULT_ACCOUNT_ID;
+      const hasAccountScopedConfig = Boolean(cfg?.channels?.nostr?.accounts?.[resolvedAccountId]);
+      const basePath = hasAccountScopedConfig
+        ? `channels.nostr.accounts.${resolvedAccountId}.`
+        : "channels.nostr.";
 
       return {
         policy: account.config.dmPolicy ?? inferredPolicy,
         allowFrom: account.config.allowFrom ?? [],
-        policyPath: "channels.nostr.dmPolicy",
-        allowFromPath: "channels.nostr.allowFrom",
+        policyPath: `${basePath}dmPolicy`,
+        allowFromPath: `${basePath}allowFrom`,
         approveHint: formatPairingApproveHint("nostr"),
         normalizeEntry: (raw) => {
           try {
@@ -864,9 +999,12 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
               ver: 1,
               name: pendingTool.name || "tool",
               phase: "result",
+              ...(pendingTool.arguments ? { arguments: pendingTool.arguments } : {}),
+              ...(pendingTool.summary ? { summary: pendingTool.summary } : {}),
               output: {
                 auto_closed: true,
                 reason: options.reason,
+                ...(pendingTool.summary ? { summary: pendingTool.summary } : {}),
               },
               success: options.success,
               ...(typeof pendingTool.durationMs === "number"
@@ -1526,13 +1664,16 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                 return;
               }
               heartbeatInFlight = true;
-              void safeSendThinkingDelta(
-                "update",
-                RUN_HEARTBEAT_THINKING_DELTA_TEXT,
-                "heartbeat",
-              ).finally(() => {
-                heartbeatInFlight = false;
-              });
+              const heartbeatState = toolCallTelemetry.pendingCount() > 0 ? "tool_use" : "thinking";
+              void safeSendStatus(heartbeatState, {
+                info: RUN_HEARTBEAT_STATUS_INFO,
+              })
+                .then(() => {
+                  heartbeatSentCount += 1;
+                })
+                .finally(() => {
+                  heartbeatInFlight = false;
+                });
             }, RUN_HEARTBEAT_CHECK_INTERVAL_MS);
           };
 
@@ -1647,8 +1788,68 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                     const timestampMs = Date.now();
                     const timestamp = Math.floor(timestampMs / 1000);
                     const normalizedKind = resolveResponseKindFromDispatcherKind(info.kind);
+                    const outboundRecord =
+                      outbound && typeof outbound === "object" && !Array.isArray(outbound)
+                        ? (outbound as Record<string, unknown>)
+                        : {};
                     const toolResultMeta =
-                      info.kind === "tool" ? toolCallTelemetry.consumeResult(timestampMs) : null;
+                      info.kind === "tool"
+                        ? toolCallTelemetry.consumeResult(timestampMs, {
+                            name:
+                              typeof outboundRecord.name === "string"
+                                ? outboundRecord.name
+                                : undefined,
+                            arguments: toToolArguments(outboundRecord.arguments),
+                            summary:
+                              typeof outboundRecord.summary === "string"
+                                ? outboundRecord.summary
+                                : undefined,
+                          })
+                        : null;
+                    if (info.kind === "tool" && toolResultMeta?.orphaned) {
+                      const orphanStartAtMs = Date.now();
+                      const orphanSummary = normalizeTelemetryInline(toolResultMeta.summary ?? "");
+                      await safeSendStatus("tool_use", {
+                        info: summarizeToolInfo(toolResultMeta.name ?? "tool", orphanSummary),
+                      });
+                      await reply(
+                        {
+                          ver: 1,
+                          name: toolResultMeta.name ?? "tool",
+                          phase: "start",
+                          ...(toolResultMeta.callId ? { call_id: toolResultMeta.callId } : {}),
+                          ...(toolResultMeta.arguments
+                            ? { arguments: toolResultMeta.arguments }
+                            : {}),
+                          ...(orphanSummary ? { summary: orphanSummary } : {}),
+                          timestamp: Math.floor(orphanStartAtMs / 1000),
+                          timestamp_ms: orphanStartAtMs,
+                          run_id: payload.eventId,
+                          session_id: sessionId,
+                          trace_id: traceId,
+                          run_seq: nextRunSequence(runControl),
+                        },
+                        {
+                          sessionId,
+                          inReplyTo: payload.eventId,
+                        },
+                        NIP63_RESPONSE_KIND_TOOL,
+                      );
+                      markRunOutbound();
+                    }
+                    const toolSuccess =
+                      typeof outboundRecord.success === "boolean"
+                        ? outboundRecord.success
+                        : outboundRecord.isError === true
+                          ? false
+                          : true;
+                    const toolSummary = normalizeTelemetryInline(
+                      toolResultMeta?.summary ??
+                        (typeof outboundRecord.summary === "string" ? outboundRecord.summary : ""),
+                    );
+                    const toolArguments =
+                      toolResultMeta?.arguments ?? toToolArguments(outboundRecord.arguments);
+                    const outboundToolOutput = toToolArguments(outboundRecord.output);
                     const outboundPayload =
                       info.kind === "block"
                         ? {
@@ -1669,8 +1870,20 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                               ver: 1,
                               name: toolResultMeta?.name ?? "tool",
                               phase: "result",
-                              output: hasContent ? { text: responseText } : {},
-                              success: true,
+                              ...(toolArguments ? { arguments: toolArguments } : {}),
+                              output: (() => {
+                                const output: Record<string, unknown> = outboundToolOutput
+                                  ? { ...outboundToolOutput }
+                                  : {};
+                                if (hasContent) {
+                                  output.text = responseText;
+                                } else if (toolSummary && typeof output.text !== "string") {
+                                  output.text = toolSummary;
+                                }
+                                return output;
+                              })(),
+                              ...(toolSummary ? { summary: toolSummary } : {}),
+                              success: toolSuccess,
                               ...(typeof toolResultMeta?.durationMs === "number"
                                 ? { duration_ms: toolResultMeta.durationMs }
                                 : {}),
@@ -1763,7 +1976,14 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                       );
                     }
                   },
-                  onToolStart: async ({ name, phase }) => {
+                  onToolStart: async ({
+                    name,
+                    phase,
+                    toolCallId,
+                    args,
+                    partialResult,
+                    isError,
+                  }) => {
                     if (runControl.cancelled) {
                       return;
                     }
@@ -1771,21 +1991,60 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                     if (!normalizedName) {
                       return;
                     }
-                    const normalizedPhase = normalizeToolPhase(phase);
-                    if (normalizedPhase !== "start") {
+                    const normalizedPhase =
+                      typeof phase === "string" ? phase.trim().toLowerCase() : "";
+                    if (
+                      normalizedPhase !== "start" &&
+                      normalizedPhase !== "update" &&
+                      normalizedPhase !== "result"
+                    ) {
                       return;
                     }
-                    const timestampMs = Date.now();
-                    const toolCall = toolCallTelemetry.registerStart(normalizedName, timestampMs);
+                    const toolArguments = toToolArguments(args);
+                    const toolSummary = summarizeToolArguments(toolArguments);
+                    if (normalizedPhase === "result") {
+                      return;
+                    }
                     await safeSendStatus("tool_use", {
-                      info: toolCall.name,
+                      info: summarizeToolInfo(normalizedName, toolSummary),
                     });
+                    const timestampMs = Date.now();
+                    const toolCall =
+                      normalizedPhase === "start"
+                        ? toolCallTelemetry.registerStart(normalizedName, timestampMs, {
+                            callId: typeof toolCallId === "string" ? toolCallId : undefined,
+                            arguments: toolArguments,
+                            summary: toolSummary,
+                          })
+                        : {
+                            callId: typeof toolCallId === "string" ? toolCallId : undefined,
+                            name: normalizedName,
+                            ...(toolArguments ? { arguments: toolArguments } : {}),
+                            ...(toolSummary ? { summary: toolSummary } : {}),
+                          };
+                    const partialResultText =
+                      typeof partialResult === "string"
+                        ? normalizeTelemetryInline(partialResult)
+                        : partialResult &&
+                            typeof partialResult === "object" &&
+                            !Array.isArray(partialResult) &&
+                            typeof (partialResult as Record<string, unknown>).text === "string"
+                          ? normalizeTelemetryInline(
+                              (partialResult as Record<string, unknown>).text as string,
+                            )
+                          : undefined;
                     await reply(
                       {
                         ver: 1,
                         name: toolCall.name,
-                        phase: "start",
+                        phase: normalizedPhase,
                         call_id: toolCall.callId,
+                        ...(toolCall.arguments ? { arguments: toolCall.arguments } : {}),
+                        ...(toolCall.summary ? { summary: toolCall.summary } : {}),
+                        ...(partialResultText ? { output: { text: partialResultText } } : {}),
+                        ...(normalizedPhase === "update" && isError === true
+                          ? { success: false }
+                          : {}),
                         timestamp: Math.floor(timestampMs / 1000),
                         timestamp_ms: timestampMs,
                         run_id: payload.eventId,
@@ -1929,37 +2188,47 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                     `[${account.accountId}] pending tool closeout failed before EMPTY_RESPONSE for ${payload.eventId}: ${String(error)}`,
                   );
                 }
+                traceRecorder.record({
+                  direction: "dispatch_result_empty",
+                  event_id: payload.eventId,
+                  session_id: sessionId,
+                  trace_id: traceId,
+                  dispatch_queued_final: dispatchResult.queuedFinal,
+                  dispatch_counts: dispatchResult.counts,
+                  streamed_text_length: streamedTextBuffer.length,
+                  dispatch_duration_ms: dispatchDurationMs,
+                  dispatch_attempts: dispatchAttempts,
+                  lane_wait_events: laneWaitEventCount,
+                  lane_wait_max_ms: laneWaitMaxMs > 0 ? laneWaitMaxMs : null,
+                  model_provider: runModelSelection?.provider ?? null,
+                  model_name: runModelSelection?.model ?? null,
+                  model_think_level: runModelSelection?.thinkLevel ?? null,
+                });
+                await safeSendStatus("done", {
+                  info: "run_completed_empty_fallback",
+                  progress: 100,
+                });
                 await reply(
                   {
                     ver: 1,
-                    code: "EMPTY_RESPONSE",
-                    message: "No response text produced",
+                    text: EMPTY_RESPONSE_FALLBACK_TEXT,
                     timestamp: Math.floor(Date.now() / 1000),
                     timestamp_ms: Date.now(),
                     run_id: payload.eventId,
                     session_id: sessionId,
                     trace_id: traceId,
                     run_seq: nextRunSequence(runControl),
-                    details: {
-                      dispatch_queued_final: dispatchResult.queuedFinal,
-                      dispatch_counts: dispatchResult.counts,
-                      streamed_text_length: streamedTextBuffer.length,
-                      dispatch_duration_ms: dispatchDurationMs,
-                      dispatch_attempts: dispatchAttempts,
-                      lane_wait_events: laneWaitEventCount,
-                      lane_wait_max_ms: laneWaitMaxMs > 0 ? laneWaitMaxMs : null,
-                    },
                   },
                   {
                     sessionId,
                     inReplyTo: payload.eventId,
                   },
-                  NIP63_RESPONSE_KIND_ERROR,
+                  NIP63_RESPONSE_KIND_FINAL,
                 );
                 markRunOutbound();
                 runControl.terminalEmitted = true;
                 ctx.log?.warn?.(
-                  `[${account.accountId}] Nostr emitted EMPTY_RESPONSE for run ${payload.eventId}`,
+                  `[${account.accountId}] Nostr emitted empty-response fallback final for run ${payload.eventId}`,
                 );
               }
             }
@@ -2095,6 +2364,42 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
       });
 
       busHandle = bus;
+
+      const startupProfile = account.profile;
+      if (startupProfile && Object.keys(startupProfile).length > 0) {
+        try {
+          const result = await bus.publishProfile(startupProfile);
+          traceRecorder.record({
+            direction: "profile",
+            reason: "startup",
+            event_id: result.eventId,
+            relays_ok: result.successes.length,
+            relays_failed: result.failures.length,
+          });
+          if (result.failures.length > 0) {
+            ctx.log?.warn?.(
+              `[${account.accountId}] profile startup publish partial: ok=${result.successes.length} failed=${result.failures.length}`,
+            );
+          } else {
+            ctx.log?.debug?.(
+              `[${account.accountId}] profile published on startup event=${result.eventId}`,
+            );
+          }
+        } catch (error) {
+          traceRecorder.record({
+            direction: "profile",
+            reason: "startup",
+            error: String(error),
+          });
+          ctx.log?.warn?.(
+            `[${account.accountId}] profile startup publish failed: ${String(error)}`,
+          );
+        }
+      } else {
+        ctx.log?.debug?.(
+          `[${account.accountId}] profile startup publish skipped: no profile configured`,
+        );
+      }
 
       // Store the bus handle
       activeBuses.set(account.accountId, bus);
