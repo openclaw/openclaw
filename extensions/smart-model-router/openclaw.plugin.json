@@ -1,0 +1,73 @@
+{
+  "id": "smart-model-router",
+  "name": "Smart Model Router",
+  "description": "Intelligent model routing, usage tracking, and dynamic switching.",
+  "skills": ["./skills"],
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "defaultModel": {
+        "type": "string",
+        "description": "The default model to use when no specific routing rule matches."
+      },
+      "providers": {
+        "type": "array",
+        "description": "Configure providers, their API Keys, and enabled models.",
+        "items": {
+          "type": "object",
+          "properties": {
+            "provider": {
+              "type": "string",
+              "enum": ["google", "openai", "anthropic", "moonshot", "dashscope", "other"],
+              "description": "The AI Provider ID"
+            },
+            "profileId": {
+              "type": "string",
+              "description": "Optional. Custom profile ID (e.g. 'google:free'). If omitted, uses standard default."
+            },
+            "apiKey": {
+              "type": "string",
+              "uiHints": { "sensitive": true }
+            },
+            "models": {
+              "type": "array",
+              "description": "List of models to enable for this key (e.g. 'gemini-1.5-pro', 'gpt-4o').",
+              "items": { "type": "string" }
+            }
+          },
+          "required": ["provider", "apiKey"]
+        }
+      },
+      "allowedModels": {
+        "type": "array",
+        "description": "Additional allowed model IDs (optional override).",
+        "items": { "type": "string" }
+      },
+      "limits": {
+        "type": "object",
+        "additionalProperties": { "type": "number" }
+      },
+      "rules": {
+        "type": "array",
+        "description": "Custom routing rules to override default behavior.",
+        "items": {
+          "type": "object",
+          "properties": {
+            "type": { "type": "string", "enum": ["task", "usage", "cost"] },
+            "condition": { "type": "string" },
+            "targetModel": { "type": "string" }
+          },
+          "required": ["type", "condition", "targetModel"]
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "defaultModel": { "label": "Default Model", "placeholder": "e.g. openai/gpt-4o" },
+    "providers": {
+      "label": "AI Providers & Models",
+      "description": "Add providers, enter API keys, and list enabled models for each."
+    },
+    "rules": { "label": "Routing Rules", "advanced": true }
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "@openclaw/smart-model-router",
+  "version": "1.0.0",
+  "description": "Multi-model router and usage manager for OpenClaw",
+  "type": "module",
+  "dependencies": {
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
