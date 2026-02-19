@@ -44,7 +44,7 @@ export class Mem0SQLite {
 
     try {
         const sqliteVec = await import("sqlite-vec");
-        sqliteVec.load((this.db as any).driver);
+        sqliteVec.load((db as any).driver);
 
         await db.exec(`
             CREATE VIRTUAL TABLE IF NOT EXISTS vec_memories USING vec0(
