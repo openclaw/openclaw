@@ -152,7 +152,8 @@ export async function deliverAgentCommandResult(params: {
   // here to strip directive markup and optionally synthesise audio before outbound
   // delivery.  This must happen before building normalizedPayloads so that JSON
   // output and the return value reflect the actually-delivered content.
-  const shouldApplyTts = deliver && deliveryChannel && !isInternalMessageChannel(deliveryChannel);
+  const shouldApplyTts =
+    deliver && deliveryChannel && deliveryTarget && !isInternalMessageChannel(deliveryChannel);
   const ttsProcessedPayloads = shouldApplyTts
     ? await Promise.all(
         payloads.map((payload) =>
