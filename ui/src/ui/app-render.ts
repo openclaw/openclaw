@@ -220,6 +220,32 @@ export function renderApp(state: AppViewState) {
             ? html`
                 <div class="onboarding-banner" role="status">
                   <span class="onboarding-banner__text">${t("chat.onboardingBanner")}</span>
+                  <div class="onboarding-banner__actions">
+                    <button
+                      type="button"
+                      class="btn btn--sm"
+                      data-testid="onboarding-banner-overview"
+                      @click=${() => state.setTab("overview")}
+                    >
+                      ${t("tabs.overview")}
+                    </button>
+                    <button
+                      type="button"
+                      class="btn btn--sm"
+                      data-testid="onboarding-banner-integrations"
+                      @click=${() => state.setTab("channels")}
+                    >
+                      ${t("overview.setupFlow.openIntegrations")}
+                    </button>
+                    <button
+                      type="button"
+                      class="btn btn--sm"
+                      data-testid="onboarding-banner-consent"
+                      @click=${() => state.setTab("consent")}
+                    >
+                      ${t("overview.setupFlow.openConsent")}
+                    </button>
+                  </div>
                   <button
                     type="button"
                     class="btn btn--sm onboarding-banner__dismiss"

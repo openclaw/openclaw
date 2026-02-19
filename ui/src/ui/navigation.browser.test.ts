@@ -260,4 +260,32 @@ describe("control UI routing", () => {
     expect(button).not.toBeNull();
     expect(button?.disabled).toBe(true);
   });
+
+  it("navigates to integrations from onboarding banner actions", async () => {
+    const app = mountApp("/?onboarding=1");
+    await app.updateComplete;
+
+    const button = app.querySelector<HTMLButtonElement>(
+      '[data-testid="onboarding-banner-integrations"]',
+    );
+    expect(button).not.toBeNull();
+    button?.click();
+    await app.updateComplete;
+
+    expect(app.tab).toBe("channels");
+    expect(window.location.pathname).toBe("/channels");
+  });
+
+  it("navigates to consent from onboarding banner actions", async () => {
+    const app = mountApp("/?onboarding=1");
+    await app.updateComplete;
+
+    const button = app.querySelector<HTMLButtonElement>('[data-testid="onboarding-banner-consent"]');
+    expect(button).not.toBeNull();
+    button?.click();
+    await app.updateComplete;
+
+    expect(app.tab).toBe("consent");
+    expect(window.location.pathname).toBe("/consent");
+  });
 });

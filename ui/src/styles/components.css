@@ -231,6 +231,12 @@
   min-width: 0;
 }
 
+.onboarding-banner__actions {
+  display: inline-flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .onboarding-banner__dismiss {
   flex-shrink: 0;
 }
