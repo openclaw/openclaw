@@ -225,6 +225,13 @@ export function renderApp(state: AppViewState) {
                 cronEnabled: state.cronStatus?.enabled ?? null,
                 cronNext,
                 lastChannelsRefresh: state.channelsLastSuccess,
+                refreshing:
+                  state.connected &&
+                  (state.channelsLoading ||
+                    state.presenceLoading ||
+                    state.sessionsLoading ||
+                    state.debugLoading ||
+                    state.cronLoading),
                 onSettingsChange: (next) => state.applySettings(next),
                 onPasswordChange: (next) => (state.password = next),
                 onSessionKeyChange: (next) => {

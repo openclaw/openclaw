@@ -16,6 +16,7 @@ export type OverviewProps = {
   cronEnabled: boolean | null;
   cronNext: number | null;
   lastChannelsRefresh: number | null;
+  refreshing: boolean;
   onSettingsChange: (next: UiSettings) => void;
   onPasswordChange: (next: string) => void;
   onSessionKeyChange: (next: string) => void;
@@ -205,7 +206,13 @@ export function renderOverview(props: OverviewProps) {
         </div>
         <div class="row" style="margin-top: 14px;">
           <button class="btn" @click=${() => props.onConnect()}>${t("common.connect")}</button>
-          <button class="btn" @click=${() => props.onRefresh()}>${t("common.refresh")}</button>
+          <button
+            class="btn"
+            ?disabled=${props.refreshing}
+            @click=${() => props.onRefresh()}
+          >
+            ${props.refreshing ? t("common.refreshing") : t("common.refresh")}
+          </button>
           <span class="muted">${
             isTrustedProxy ? t("overview.access.trustedProxy") : t("overview.access.connectHint")
           }</span>

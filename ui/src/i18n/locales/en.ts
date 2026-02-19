@@ -7,6 +7,7 @@ export const en: TranslationMap = {
     offline: "Offline",
     connect: "Connect",
     refresh: "Refresh",
+    refreshing: "Refreshing…",
     enabled: "Enabled",
     disabled: "Disabled",
     na: "n/a",

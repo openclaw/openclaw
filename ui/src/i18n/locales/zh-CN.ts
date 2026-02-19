@@ -7,6 +7,7 @@ export const zh_CN: TranslationMap = {
     offline: "离线",
     connect: "连接",
     refresh: "刷新",
+    refreshing: "刷新中…",
     enabled: "已启用",
     disabled: "已禁用",
     na: "不适用",
