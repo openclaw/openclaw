@@ -271,6 +271,11 @@ export const dispatchTelegramMessage = async ({
     skippedNonSilent: 0,
   };
   let finalizedViaPreviewMessage = false;
+  // Track whether a non-error final payload was delivered via fallback (deliverReplies).
+  // When true, the preview message is duplicated/stale and should be cleared.
+  // When false and only error payloads were delivered, the preview contains unique
+  // partial agent text that should be preserved (#18244).
+  let deliveredNonErrorFinalViaFallback = false;
   const clearGroupHistory = () => {
     if (isGroup && historyKey) {
       clearHistoryEntriesIfEnabled({ historyMap: groupHistories, historyKey, limit: historyLimit });
@@ -397,6 +402,9 @@ export const dispatchTelegramMessage = async ({
           });
           if (result.delivered) {
             deliveryState.delivered = true;
+            if (info.kind === "final" && !payload.isError) {
+              deliveredNonErrorFinalViaFallback = true;
+            }
           }
         },
         onSkip: (_payload, info) => {
@@ -457,7 +465,15 @@ export const dispatchTelegramMessage = async ({
     // Must stop() first to flush debounced content before clear() wipes state
     await draftStream?.stop();
     if (!finalizedViaPreviewMessage) {
-      await draftStream?.clear();
+      // Preserve the preview when it contains unique partial agent text and only
+      // error payloads were delivered as final.  Clearing it would delete the
+      // agent's conversational response, leaving the user with just the error (#18244).
+      const previewHasContent = typeof draftStream?.messageId() === "number";
+      const shouldPreservePreview =
+        previewHasContent && deliveryState.delivered && !deliveredNonErrorFinalViaFallback;
+      if (!shouldPreservePreview) {
+        await draftStream?.clear();
+      }
     }
   }
   let sentFallback = false;

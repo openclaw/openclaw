@@ -478,5 +478,58 @@ describe("dispatchTelegramMessage draft streaming", () => {
         replies: [expect.objectContaining({ text: expect.stringContaining("⚠️") })],
       }),
     );
+    // Preview message should be preserved so user sees both agent text and error (#18244)
+    expect(draftStream.clear).not.toHaveBeenCalled();
+  });
+
+  it("preserves preview when only error finals are delivered (#18244)", async () => {
+    const draftStream = createDraftStream(999);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        // Agent starts typing a response
+        await replyOptions?.onPartialReply?.({ text: "Let me run that command for you" });
+        // Agent calls a tool that fails — only the error payload is returned
+        await dispatcherOptions.deliver(
+          { text: "⚠️ 🛠️ Exec: osascript failed: execution error", isError: true },
+          { kind: "final" },
+        );
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext() });
+
+    // Error sent as new message
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [expect.objectContaining({ isError: true })],
+      }),
+    );
+    // Preview must NOT be cleared — it contains the agent's partial text
+    expect(draftStream.clear).not.toHaveBeenCalled();
+    expect(draftStream.stop).toHaveBeenCalled();
+  });
+
+  it("clears preview when non-error final is delivered via fallback", async () => {
+    const draftStream = createDraftStream(999);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    const longText = "x".repeat(5000);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "preview text" });
+        // Long text can't be edited into preview, delivered via fallback
+        await dispatcherOptions.deliver({ text: longText }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "999" });
+
+    await dispatchWithContext({ context: createContext() });
+
+    // Preview should be cleared since the full text was sent as a new message
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
   });
 });
