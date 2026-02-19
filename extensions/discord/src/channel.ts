@@ -107,9 +107,16 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
       ),
     formatAllowFrom: ({ allowFrom }) =>
       allowFrom
-        .map((entry) => String(entry).trim())
-        .filter(Boolean)
-        .map((entry) => entry.toLowerCase()),
+        .map((entry) =>
+          String(entry)
+            .trim()
+            .replace(/^<@!?/, "")
+            .replace(/>$/, "")
+            .replace(/^(discord|user):/i, "")
+            .trim()
+            .toLowerCase(),
+        )
+        .filter(Boolean),
     resolveDefaultTo: ({ cfg, accountId }) =>
       resolveDiscordAccount({ cfg, accountId }).config.defaultTo?.trim() || undefined,
   },
