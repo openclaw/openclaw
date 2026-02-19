@@ -1,8 +1,27 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
-import { parseSchtasksQuery, readScheduledTaskCommand, resolveTaskScriptPath } from "./schtasks.js";
+import { PassThrough } from "node:stream";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  installScheduledTask,
+  parseSchtasksQuery,
+  readScheduledTaskCommand,
+  resolveTaskScriptPath,
+} from "./schtasks.js";
+
+const schtasksCalls: string[][] = [];
+
+vi.mock("./schtasks-exec.js", () => ({
+  execSchtasks: async (argv: string[]) => {
+    schtasksCalls.push(argv);
+    return { code: 0, stdout: "", stderr: "" };
+  },
+}));
+
+beforeEach(() => {
+  schtasksCalls.length = 0;
+});
 
 describe("schtasks runtime parsing", () => {
   it.each(["Ready", "Running"])("parses %s status", (status) => {
@@ -197,5 +216,80 @@ describe("readScheduledTaskCommand", () => {
         });
       },
     );
+  });
+
+  it("parses quoted set assignments with escaped metacharacters", async () => {
+    await withScheduledTaskScript(
+      {
+        scriptLines: [
+          "@echo off",
+          'set "OC_AMP=left & right"',
+          'set "OC_PIPE=a | b"',
+          'set "OC_CARET=^^"',
+          'set "OC_PERCENT=%%TEMP%%"',
+          'set "OC_BANG=^!token^!"',
+          'set "OC_QUOTE=he said ^"hi^""',
+          "node gateway.js --verbose",
+        ],
+      },
+      async (env) => {
+        const result = await readScheduledTaskCommand(env);
+        expect(result?.environment).toEqual({
+          OC_AMP: "left & right",
+          OC_PIPE: "a | b",
+          OC_CARET: "^",
+          OC_PERCENT: "%TEMP%",
+          OC_BANG: "!token!",
+          OC_QUOTE: 'he said "hi"',
+        });
+      },
+    );
+  });
+});
+
+describe("installScheduledTask", () => {
+  it("writes quoted set assignments and escapes metacharacters", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-schtasks-install-"));
+    try {
+      const env = {
+        USERPROFILE: tmpDir,
+        OPENCLAW_PROFILE: "default",
+      };
+      const { scriptPath } = await installScheduledTask({
+        env,
+        stdout: new PassThrough(),
+        programArguments: ["node", "gateway.js", "--verbose"],
+        environment: {
+          OC_INJECT: "safe & whoami | calc",
+          OC_CARET: "a^b",
+          OC_PERCENT: "%TEMP%",
+          OC_BANG: "!token!",
+          OC_QUOTE: 'he said "hi"',
+        },
+      });
+
+      const script = await fs.readFile(scriptPath, "utf8");
+      expect(script).toContain('set "OC_INJECT=safe & whoami | calc"');
+      expect(script).toContain('set "OC_CARET=a^^b"');
+      expect(script).toContain('set "OC_PERCENT=%%TEMP%%"');
+      expect(script).toContain('set "OC_BANG=^!token^!"');
+      expect(script).toContain('set "OC_QUOTE=he said ^"hi^""');
+      expect(script).not.toContain("set OC_INJECT=");
+
+      const parsed = await readScheduledTaskCommand(env);
+      expect(parsed?.environment).toMatchObject({
+        OC_INJECT: "safe & whoami | calc",
+        OC_CARET: "a^b",
+        OC_PERCENT: "%TEMP%",
+        OC_BANG: "!token!",
+        OC_QUOTE: 'he said "hi"',
+      });
+
+      expect(schtasksCalls[0]).toEqual(["/Query"]);
+      expect(schtasksCalls[1]?.[0]).toBe("/Create");
+      expect(schtasksCalls[2]).toEqual(["/Run", "/TN", "OpenClaw Gateway"]);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
   });
 });
