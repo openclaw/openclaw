@@ -10,6 +10,7 @@ import {
   type LineChannelData,
   type ResolvedLineAccount,
 } from "openclaw/plugin-sdk";
+import { parseLineDirectives } from "./directives.js";
 import { getLineRuntime } from "./runtime.js";
 
 // LINE channel metadata
@@ -352,7 +353,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
       const createQuickReplyItems = runtime.channel.line.createQuickReplyItems;
 
       let lastResult: { messageId: string; chatId: string } | null = null;
-      const quickReplies = lineData.quickReplies ?? [];
+      const quickReplies = mergedLineData.quickReplies ?? [];
       const hasQuickReplies = quickReplies.length > 0;
       const quickReply = hasQuickReplies ? createQuickReplyItems(quickReplies) : undefined;
 
@@ -376,29 +377,47 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
         ? processLineMessage(payload.text)
         : { text: "", flexMessages: [] };
 
+      // Parse embedded directives like [[quick_replies:...]] from the text
+      const parsed = parseLineDirectives(processed.text);
+
+      // Merge parsed directives into lineData
+      const mergedLineData: LineChannelData = {
+        ...lineData,
+        ...parsed.lineData,
+        // Merge arrays if both exist
+        quickReplies: parsed.lineData.quickReplies ?? lineData.quickReplies,
+        location: parsed.lineData.location ?? lineData.location,
+        templateMessage: parsed.lineData.templateMessage ?? lineData.templateMessage,
+      };
+
+      // Use the cleaned text (with directives stripped)
+      const textWithDirectivesStripped = parsed.text;
+
       const chunkLimit =
         runtime.channel.text.resolveTextChunkLimit?.(cfg, "line", accountId ?? undefined, {
           fallbackLimit: 5000,
         }) ?? 5000;
 
-      const chunks = processed.text
-        ? runtime.channel.text.chunkMarkdownText(processed.text, chunkLimit)
+      const chunks = textWithDirectivesStripped
+        ? runtime.channel.text.chunkMarkdownText(textWithDirectivesStripped, chunkLimit)
         : [];
       const mediaUrls = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
       const shouldSendQuickRepliesInline = chunks.length === 0 && hasQuickReplies;
 
       if (!shouldSendQuickRepliesInline) {
-        if (lineData.flexMessage) {
+        if (mergedLineData.flexMessage) {
           // LINE SDK expects FlexContainer but we receive contents as unknown
-          const flexContents = lineData.flexMessage.contents as Parameters<typeof sendFlex>[2];
-          lastResult = await sendFlex(to, lineData.flexMessage.altText, flexContents, {
+          const flexContents = mergedLineData.flexMessage.contents as Parameters<
+            typeof sendFlex
+          >[2];
+          lastResult = await sendFlex(to, mergedLineData.flexMessage.altText, flexContents, {
             verbose: false,
             accountId: accountId ?? undefined,
           });
         }
 
-        if (lineData.templateMessage) {
-          const template = buildTemplate(lineData.templateMessage);
+        if (mergedLineData.templateMessage) {
+          const template = buildTemplate(mergedLineData.templateMessage);
           if (template) {
             lastResult = await sendTemplate(to, template, {
               verbose: false,
@@ -407,8 +426,8 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
           }
         }
 
-        if (lineData.location) {
-          lastResult = await sendLocation(to, lineData.location, {
+        if (mergedLineData.location) {
+          lastResult = await sendLocation(to, mergedLineData.location, {
             verbose: false,
             accountId: accountId ?? undefined,
           });
@@ -452,26 +471,26 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
         }
       } else if (shouldSendQuickRepliesInline) {
         const quickReplyMessages: Array<Record<string, unknown>> = [];
-        if (lineData.flexMessage) {
+        if (mergedLineData.flexMessage) {
           quickReplyMessages.push({
             type: "flex",
-            altText: lineData.flexMessage.altText.slice(0, 400),
-            contents: lineData.flexMessage.contents,
+            altText: mergedLineData.flexMessage.altText.slice(0, 400),
+            contents: mergedLineData.flexMessage.contents,
           });
         }
-        if (lineData.templateMessage) {
-          const template = buildTemplate(lineData.templateMessage);
+        if (mergedLineData.templateMessage) {
+          const template = buildTemplate(mergedLineData.templateMessage);
           if (template) {
             quickReplyMessages.push(template);
           }
         }
-        if (lineData.location) {
+        if (mergedLineData.location) {
           quickReplyMessages.push({
             type: "location",
-            title: lineData.location.title.slice(0, 100),
-            address: lineData.location.address.slice(0, 100),
-            latitude: lineData.location.latitude,
-            longitude: lineData.location.longitude,
+            title: mergedLineData.location.title.slice(0, 100),
+            address: mergedLineData.location.address.slice(0, 100),
+            latitude: mergedLineData.location.latitude,
+            longitude: mergedLineData.location.longitude,
           });
         }
         for (const flexMsg of processed.flexMessages) {
