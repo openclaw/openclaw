@@ -36,4 +36,31 @@ describe("config schema regressions", () => {
 
     expect(res.ok).toBe(true);
   });
+
+  it("accepts safe iMessage remoteHost", () => {
+    const res = validateConfigObject({
+      channels: {
+        imessage: {
+          remoteHost: "bot@gateway-host",
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects unsafe iMessage remoteHost", () => {
+    const res = validateConfigObject({
+      channels: {
+        imessage: {
+          remoteHost: "bot@gateway-host -oProxyCommand=whoami",
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("channels.imessage.remoteHost");
+    }
+  });
 });

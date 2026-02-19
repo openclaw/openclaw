@@ -410,7 +410,12 @@ export const OpenClawSchema = z
         auth: z
           .object({
             mode: z
-              .union([z.literal("token"), z.literal("password"), z.literal("trusted-proxy")])
+              .union([
+                z.literal("none"),
+                z.literal("token"),
+                z.literal("password"),
+                z.literal("trusted-proxy"),
+              ])
               .optional(),
             token: z.string().optional().register(sensitive),
             password: z.string().optional().register(sensitive),
@@ -615,6 +620,12 @@ export const OpenClawSchema = z
         load: z
           .object({
             paths: z.array(z.string()).optional(),
+          })
+          .strict()
+          .optional(),
+        runtime: z
+          .object({
+            allowLegacyExec: z.boolean().optional(),
           })
           .strict()
           .optional(),

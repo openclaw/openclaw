@@ -118,7 +118,7 @@ Notes:
 - For full provider usage breakdown, use `openclaw status --usage`.
 - `/allowlist add|remove` requires `commands.config=true` and honors channel `configWrites`.
 - `/usage` controls the per-response usage footer; `/usage cost` prints a local cost summary from OpenClaw session logs.
-- `/restart` is disabled by default; set `commands.restart: true` to enable it.
+- `/restart` is enabled by default; set `commands.restart: false` to disable it.
 - `/verbose` is meant for debugging and extra visibility; keep it **off** in normal use.
 - `/reasoning` (and `/verbose`) are risky in group settings: they may reveal internal reasoning or tool output you did not intend to expose. Prefer leaving them off, especially in group chats.
 - **Fast path:** command-only messages from allowlisted senders are handled immediately (bypass queue + model).
