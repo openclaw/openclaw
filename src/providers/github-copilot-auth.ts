@@ -99,7 +99,7 @@ async function pollForAccessToken(params: {
       continue;
     }
     if (err === "slow_down") {
-      await new Promise((r) => setTimeout(r, params.intervalMs + 2000));
+      await new Promise((r) => setTimeout(r, params.intervalMs + 5000));
       continue;
     }
     if (err === "expired_token") {
