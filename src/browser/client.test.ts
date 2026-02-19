@@ -217,6 +217,7 @@ describe("browser client", () => {
             color: "#FF4500",
             headless: false,
             noSandbox: false,
+            gpuEnabled: false,
             executablePath: null,
             attachOnly: false,
           }),

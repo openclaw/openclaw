@@ -68,6 +68,7 @@ function buildSandboxBrowserResolvedConfig(params: {
     executablePath: undefined,
     headless: params.headless,
     noSandbox: false,
+    gpuEnabled: false,
     attachOnly: true,
     defaultProfile: DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
     extraArgs: [],

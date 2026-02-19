@@ -21,6 +21,7 @@ function buildResolvedConfig(): ResolvedBrowserConfig {
     executablePath: undefined,
     headless: true,
     noSandbox: false,
+    gpuEnabled: false,
     attachOnly: true,
     defaultProfile: DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
     profiles: {
