@@ -1,7 +1,7 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { ChannelMessageActionContext, ChannelMessageActionName } from "./types.js";
 import { getChannelPlugin, listChannelPlugins } from "./index.js";
+import type { ChannelMessageActionContext, ChannelMessageActionName } from "./types.js";
 
 const trustedRequesterRequiredByChannel: Readonly<
   Partial<Record<string, ReadonlySet<ChannelMessageActionName>>>

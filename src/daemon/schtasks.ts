@@ -1,11 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { splitArgsPreservingQuotes } from "./arg-split.js";
-import { resolveGatewayServiceDescription, resolveGatewayWindowsTaskName } from "./constants.js";
-import { formatLine, writeFormattedLines } from "./output.js";
-import { resolveGatewayStateDir } from "./paths.js";
-import { parseKeyValueOutput } from "./runtime-parse.js";
-import { execSchtasks } from "./schtasks-exec.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import type {
   GatewayServiceCommandConfig,
@@ -16,6 +10,13 @@ import type {
   GatewayServiceManageArgs,
   GatewayServiceRenderArgs,
 } from "./service-types.js";
+import { splitArgsPreservingQuotes } from "./arg-split.js";
+import { parseCmdSetAssignment, renderCmdSetAssignment } from "./cmd-set.js";
+import { resolveGatewayServiceDescription, resolveGatewayWindowsTaskName } from "./constants.js";
+import { formatLine, writeFormattedLines } from "./output.js";
+import { resolveGatewayStateDir } from "./paths.js";
+import { parseKeyValueOutput } from "./runtime-parse.js";
+import { execSchtasks } from "./schtasks-exec.js";
 
 function resolveTaskName(env: GatewayServiceEnv): string {
   const override = env.OPENCLAW_WINDOWS_TASK_NAME?.trim();
@@ -77,25 +78,21 @@ export async function readScheduledTaskCommand(
       if (!line) {
         continue;
       }
+      const lower = line.toLowerCase();
       if (line.startsWith("@echo")) {
         continue;
       }
-      if (line.toLowerCase().startsWith("rem ")) {
+      if (lower.startsWith("rem ")) {
         continue;
       }
-      if (line.toLowerCase().startsWith("set ")) {
-        const assignment = line.slice(4).trim();
-        const index = assignment.indexOf("=");
-        if (index > 0) {
-          const key = assignment.slice(0, index).trim();
-          const value = assignment.slice(index + 1).trim();
-          if (key) {
-            environment[key] = value;
-          }
+      if (lower.startsWith("set ")) {
+        const assignment = parseCmdSetAssignment(line.slice(4));
+        if (assignment) {
+          environment[assignment.key] = assignment.value;
         }
         continue;
       }
-      if (line.toLowerCase().startsWith("cd /d ")) {
+      if (lower.startsWith("cd /d ")) {
         workingDirectory = line.slice("cd /d ".length).trim().replace(/^"|"$/g, "");
         continue;
       }
@@ -157,7 +154,7 @@ function buildTaskScript({
       if (!value) {
         continue;
       }
-      lines.push(`set ${key}=${value}`);
+      lines.push(renderCmdSetAssignment(key, value));
     }
   }
   const command = programArguments.map(quoteCmdArg).join(" ");

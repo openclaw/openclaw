@@ -5,6 +5,7 @@ import {
   isSecureWebSocketUrl,
   isTrustedProxyAddress,
   pickPrimaryLanIPv4,
+  resolveGatewayClientIp,
   resolveGatewayListenHosts,
   resolveHostName,
 } from "./net.js";
@@ -128,6 +129,43 @@ describe("isTrustedProxyAddress", () => {
       expect(isTrustedProxyAddress("10.0.0.5", [" ", "\t"])).toBe(false);
       expect(isTrustedProxyAddress("10.0.0.5", [" ", "10.0.0.5", ""])).toBe(true);
     });
+  });
+});
+
+describe("resolveGatewayClientIp", () => {
+  it("returns remote IP when the remote is not a trusted proxy", () => {
+    const ip = resolveGatewayClientIp({
+      remoteAddr: "203.0.113.10",
+      forwardedFor: "10.0.0.2",
+      trustedProxies: ["127.0.0.1"],
+    });
+    expect(ip).toBe("203.0.113.10");
+  });
+
+  it("returns forwarded client IP when the remote is a trusted proxy", () => {
+    const ip = resolveGatewayClientIp({
+      remoteAddr: "127.0.0.1",
+      forwardedFor: "10.0.0.2, 127.0.0.1",
+      trustedProxies: ["127.0.0.1"],
+    });
+    expect(ip).toBe("10.0.0.2");
+  });
+
+  it("fails closed when trusted proxy headers are missing", () => {
+    const ip = resolveGatewayClientIp({
+      remoteAddr: "127.0.0.1",
+      trustedProxies: ["127.0.0.1"],
+    });
+    expect(ip).toBeUndefined();
+  });
+
+  it("supports IPv6 client IP forwarded by a trusted proxy", () => {
+    const ip = resolveGatewayClientIp({
+      remoteAddr: "127.0.0.1",
+      realIp: "[2001:db8::5]",
+      trustedProxies: ["127.0.0.1"],
+    });
+    expect(ip).toBe("2001:db8::5");
   });
 });
 
