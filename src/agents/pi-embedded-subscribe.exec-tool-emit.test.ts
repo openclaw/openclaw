@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { createSubscribedSessionHarness } from "./pi-embedded-subscribe.e2e-harness.js";
 
 /**
  * Verify that exec/bash tool results do not emit summaries or output
@@ -7,18 +8,45 @@ import { describe, expect, it } from "vitest";
  * that should never be forwarded to channel users.
  */
 describe("exec tool emission suppression", () => {
-  it("subscribeEmbeddedPiSession suppresses exec tool delivery", async () => {
-    const { subscribeEmbeddedPiSession } = await import("./pi-embedded-subscribe.js");
+  it("suppresses onToolResult for exec tool events", async () => {
+    const onToolResult = vi.fn();
 
-    // subscribeEmbeddedPiSession is complex to set up, so we verify
-    // the behavioral contract here.  The actual integration path is:
-    //   tool_execution_start -> emitToolSummary("exec", meta)
-    //     -> isExecToolResult("exec") -> returns early, no callback
-    //   tool_execution_end -> emitToolOutput("exec", meta, output)
-    //     -> isExecToolResult("exec") -> returns early, no callback
-    //
-    // Since the helper is module-scoped and not exported, we verify
-    // indirectly that the subscriber function exists and is callable.
-    expect(typeof subscribeEmbeddedPiSession).toBe("function");
+    const { emit } = createSubscribedSessionHarness({
+      runId: "run-exec-suppress",
+      verboseLevel: "on",
+      onToolResult,
+    });
+
+    emit({
+      type: "tool_execution_start",
+      toolName: "exec",
+      toolCallId: "tool-exec-1",
+      args: { command: "ls -la /workspace" },
+    });
+
+    await Promise.resolve();
+
+    expect(onToolResult).not.toHaveBeenCalled();
+  });
+
+  it("does not suppress onToolResult for non-exec tool events", async () => {
+    const onToolResult = vi.fn();
+
+    const { emit } = createSubscribedSessionHarness({
+      runId: "run-read-emit",
+      verboseLevel: "on",
+      onToolResult,
+    });
+
+    emit({
+      type: "tool_execution_start",
+      toolName: "read",
+      toolCallId: "tool-read-1",
+      args: { path: "/tmp/file.txt" },
+    });
+
+    await Promise.resolve();
+
+    expect(onToolResult).toHaveBeenCalledTimes(1);
   });
 });
