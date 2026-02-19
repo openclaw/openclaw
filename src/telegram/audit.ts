@@ -71,6 +71,8 @@ export async function auditTelegramGroupMembership(params: {
   groupIds: string[];
   proxyUrl?: string;
   timeoutMs: number;
+  unresolvedGroups?: number;
+  hasWildcardUnmentionedGroups?: boolean;
 }): Promise<TelegramGroupMembershipAudit> {
   const started = Date.now();
   const token = params.token?.trim() ?? "";
@@ -141,8 +143,8 @@ export async function auditTelegramGroupMembership(params: {
   return {
     ok: groups.every((g) => g.ok),
     checkedGroups: groups.length,
-    unresolvedGroups: 0,
-    hasWildcardUnmentionedGroups: false,
+    unresolvedGroups: params.unresolvedGroups ?? 0,
+    hasWildcardUnmentionedGroups: params.hasWildcardUnmentionedGroups ?? false,
     groups,
     elapsedMs: Date.now() - started,
   };
