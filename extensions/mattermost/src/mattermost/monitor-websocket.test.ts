@@ -186,6 +186,7 @@ describe("mattermost websocket monitor", () => {
     });
 
     const connected = connectOnce();
+    // Use queueMicrotask (or setTimeout 0) to ensure listeners are attached before emitting
     queueMicrotask(() => {
       socket.emitOpen();
       socket.emitMessage(

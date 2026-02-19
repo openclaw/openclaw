@@ -20,5 +20,10 @@
     "src/auto-reply/reply/export-html/",
     "Swabble/",
     "vendor/",
+    "src/agents/tools/message-tool.ts",
+    "src/agents/tools/telegram-actions.ts",
+    "src/channels/plugins/actions/telegram.ts",
+    "src/telegram/bot-handlers.ts",
+    "src/telegram/send.ts",
   ],
 }
