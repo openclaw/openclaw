@@ -1,0 +1,20 @@
+{
+  "name": "@openclaw/memory-milvus",
+  "version": "2026.2.15",
+  "private": true,
+  "description": "OpenClaw Milvus/Zilliz-backed long-term memory plugin with auto-recall/capture",
+  "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.48",
+    "@zilliz/milvus2-sdk-node": "^2.6.9",
+    "openai": "^6.17.0"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

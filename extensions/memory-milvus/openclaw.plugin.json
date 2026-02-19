@@ -1,0 +1,103 @@
+{
+  "id": "memory-milvus",
+  "kind": "memory",
+  "uiHints": {
+    "embedding.apiKey": {
+      "label": "OpenAI API Key",
+      "sensitive": true,
+      "placeholder": "sk-proj-...",
+      "help": "API key for OpenAI embeddings (or use ${OPENAI_API_KEY})"
+    },
+    "embedding.model": {
+      "label": "Embedding Model",
+      "placeholder": "text-embedding-3-small",
+      "help": "OpenAI embedding model to use"
+    },
+    "milvus.address": {
+      "label": "Milvus Address",
+      "placeholder": "https://in03-xxx.serverless.gcp-us-west1.cloud.zilliz.com",
+      "help": "Milvus server address (local: localhost:19530, Zilliz Cloud: https://...)"
+    },
+    "milvus.token": {
+      "label": "Milvus Token",
+      "sensitive": true,
+      "placeholder": "your-api-key-or-user:pass",
+      "help": "API key for Zilliz Cloud, or user:pass for local Milvus (or use ${MILVUS_TOKEN})"
+    },
+    "milvus.ssl": {
+      "label": "SSL",
+      "help": "Enable TLS/SSL (auto-detected from https:// prefix)",
+      "advanced": true
+    },
+    "milvus.collectionName": {
+      "label": "Collection Name",
+      "placeholder": "openclaw_memories",
+      "advanced": true
+    },
+    "autoCapture": {
+      "label": "Auto-Capture",
+      "help": "Automatically capture important information from conversations"
+    },
+    "autoRecall": {
+      "label": "Auto-Recall",
+      "help": "Automatically inject relevant memories into context"
+    },
+    "captureMaxChars": {
+      "label": "Capture Max Chars",
+      "help": "Maximum message length eligible for auto-capture",
+      "advanced": true,
+      "placeholder": "500"
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "embedding": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string",
+            "enum": ["text-embedding-3-small", "text-embedding-3-large"]
+          }
+        },
+        "required": ["apiKey"]
+      },
+      "milvus": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "token": {
+            "type": "string"
+          },
+          "ssl": {
+            "type": "boolean"
+          },
+          "collectionName": {
+            "type": "string"
+          }
+        },
+        "required": ["address"]
+      },
+      "autoCapture": {
+        "type": "boolean"
+      },
+      "autoRecall": {
+        "type": "boolean"
+      },
+      "captureMaxChars": {
+        "type": "number",
+        "minimum": 100,
+        "maximum": 10000
+      }
+    },
+    "required": ["embedding", "milvus"]
+  }
+}
