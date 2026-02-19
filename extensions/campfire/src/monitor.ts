@@ -1,9 +1,9 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import type { ResolvedCampfireAccount } from "./accounts.js";
-import type { CampfireWebhookPayload } from "./types.js";
 import { sendCampfireMessage, sendCampfireAttachment } from "./api.js";
 import { getCampfireRuntime } from "./runtime.js";
+import type { CampfireWebhookPayload } from "./types.js";
 
 export type CampfireRuntimeEnv = {
   log?: (message: string) => void;
