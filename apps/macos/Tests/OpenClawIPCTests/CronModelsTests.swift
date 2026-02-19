@@ -138,4 +138,52 @@ struct CronModelsTests {
         #expect(job.nextRunDate == Date(timeIntervalSince1970: 1_700_000_000))
         #expect(job.lastRunDate == Date(timeIntervalSince1970: 1_700_000_050))
     }
+
+    @Test func enumsDecodeUnknownRawValues() throws {
+        let json = """
+        {
+          "id":"job-unknown",
+          "agentId":null,
+          "name":"Unknown job",
+          "description":null,
+          "enabled":true,
+          "deleteAfterRun":null,
+          "createdAtMs":0,
+          "updatedAtMs":0,
+          "schedule":{"kind":"at","at":"2026-02-03T18:00:00Z"},
+          "sessionTarget":"session:abc123",
+          "wakeMode":"trigger-heartbeat",
+          "payload":{"kind":"systemEvent","text":"ping"},
+          "delivery":{"mode":"custom-mode","to":"dest"},
+          "state":{}
+        }
+        """
+        let job = try JSONDecoder().decode(CronJob.self, from: Data(json.utf8))
+        #expect(job.sessionTarget.rawValue == "session:abc123")
+        #expect(job.wakeMode.rawValue == "trigger-heartbeat")
+        #expect(job.delivery?.mode.rawValue == "custom-mode")
+    }
+
+    @Test func cronJobDecodesPostRunFallbackAsWakeMode() throws {
+        let json = """
+        {
+          "id":"job-post-run",
+          "agentId":null,
+          "name":"Post run job",
+          "description":null,
+          "enabled":true,
+          "deleteAfterRun":null,
+          "createdAtMs":0,
+          "updatedAtMs":0,
+          "schedule":{"kind":"at","at":"2026-02-03T18:00:00Z"},
+          "sessionTarget":"isolated",
+          "postRun":"trigger-heartbeat",
+          "payload":{"kind":"agentTurn","message":"ping"},
+          "delivery":{"mode":"none"},
+          "state":{}
+        }
+        """
+        let job = try JSONDecoder().decode(CronJob.self, from: Data(json.utf8))
+        #expect(job.wakeMode == .nextHeartbeat)
+    }
 }

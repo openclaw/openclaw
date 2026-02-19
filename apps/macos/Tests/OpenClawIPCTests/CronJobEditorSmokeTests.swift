@@ -90,4 +90,118 @@ struct CronJobEditorSmokeTests {
         let raw = root["deleteAfterRun"] as? Bool
         #expect(raw == true)
     }
+
+    @Test func cronJobEditorEditPatchPreservesWebhookDeliveryWhenUnchanged() throws {
+        let channelsStore = ChannelsStore(isPreview: true)
+        let job = CronJob(
+            id: "job-webhook",
+            agentId: nil,
+            name: "Webhook reminder",
+            description: "desc",
+            enabled: true,
+            deleteAfterRun: nil,
+            createdAtMs: 1_700_000_000_000,
+            updatedAtMs: 1_700_000_000_000,
+            schedule: .every(everyMs: 3_600_000, anchorMs: nil),
+            sessionTarget: .isolated,
+            wakeMode: .now,
+            payload: .agentTurn(
+                message: "Ping",
+                thinking: nil,
+                timeoutSeconds: nil,
+                deliver: nil,
+                channel: nil,
+                to: nil,
+                bestEffortDeliver: nil),
+            delivery: CronDelivery(mode: .webhook, channel: nil, to: "https://example.invalid/cron", bestEffort: nil),
+            state: CronJobState())
+        var view = CronJobEditor(
+            job: job,
+            isSaving: .constant(false),
+            error: .constant(nil),
+            channelsStore: channelsStore,
+            onCancel: {},
+            onSave: { _ in })
+
+        view.hydrateFromJob()
+        let patch = try view.buildPayload()
+        #expect(patch.isEmpty)
+    }
+
+    @Test func cronJobEditorEditPatchKeepsDeliveryUntouchedWhenUpdatingName() throws {
+        let channelsStore = ChannelsStore(isPreview: true)
+        let job = CronJob(
+            id: "job-name",
+            agentId: nil,
+            name: "Daily check",
+            description: nil,
+            enabled: true,
+            deleteAfterRun: nil,
+            createdAtMs: 1_700_000_000_000,
+            updatedAtMs: 1_700_000_000_000,
+            schedule: .every(everyMs: 3_600_000, anchorMs: nil),
+            sessionTarget: .isolated,
+            wakeMode: .now,
+            payload: .agentTurn(
+                message: "Ping",
+                thinking: nil,
+                timeoutSeconds: nil,
+                deliver: nil,
+                channel: nil,
+                to: nil,
+                bestEffortDeliver: nil),
+            delivery: CronDelivery(mode: .webhook, channel: nil, to: "https://example.invalid/cron", bestEffort: nil),
+            state: CronJobState())
+        var view = CronJobEditor(
+            job: job,
+            isSaving: .constant(false),
+            error: .constant(nil),
+            channelsStore: channelsStore,
+            onCancel: {},
+            onSave: { _ in })
+
+        view.hydrateFromJob()
+        view.name = "Daily check v2"
+        let patch = try view.buildPayload()
+        #expect(patch["name"]?.stringValue == "Daily check v2")
+        #expect(patch["delivery"] == nil)
+    }
+
+    @Test func cronJobEditorEditPatchCanClearDescription() throws {
+        let channelsStore = ChannelsStore(isPreview: true)
+        let job = CronJob(
+            id: "job-desc",
+            agentId: nil,
+            name: "Desc job",
+            description: "to clear",
+            enabled: true,
+            deleteAfterRun: nil,
+            createdAtMs: 1_700_000_000_000,
+            updatedAtMs: 1_700_000_000_000,
+            schedule: .every(everyMs: 3_600_000, anchorMs: nil),
+            sessionTarget: .isolated,
+            wakeMode: .now,
+            payload: .agentTurn(
+                message: "Ping",
+                thinking: nil,
+                timeoutSeconds: nil,
+                deliver: nil,
+                channel: nil,
+                to: nil,
+                bestEffortDeliver: nil),
+            delivery: CronDelivery(mode: .announce, channel: "last", to: nil, bestEffort: nil),
+            state: CronJobState())
+        var view = CronJobEditor(
+            job: job,
+            isSaving: .constant(false),
+            error: .constant(nil),
+            channelsStore: channelsStore,
+            onCancel: {},
+            onSave: { _ in })
+
+        view.hydrateFromJob()
+        view.description = "   "
+        let patch = try view.buildPayload()
+        #expect(patch["description"]?.value is NSNull)
+    }
 }

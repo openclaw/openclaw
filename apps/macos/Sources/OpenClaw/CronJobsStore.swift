@@ -133,6 +133,9 @@ final class CronJobsStore {
         payload: [String: AnyCodable]) async throws
     {
         if let id {
+            if payload.isEmpty {
+                return
+            }
             try await GatewayConnection.shared.cronUpdate(jobId: id, patch: payload)
         } else {
             try await GatewayConnection.shared.cronAdd(payload: payload)
