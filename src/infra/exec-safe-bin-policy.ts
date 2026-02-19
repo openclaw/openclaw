@@ -29,13 +29,14 @@ export type SafeBinProfile = {
 };
 
 const NO_FLAGS = new Set<string>();
+const asFlagSet = (flags: string[]): ReadonlySet<string> => new Set(flags);
 
 export const SAFE_BIN_GENERIC_PROFILE: SafeBinProfile = {};
 
 export const SAFE_BIN_PROFILES: Record<string, SafeBinProfile> = {
   jq: {
     maxPositional: 1,
-    valueFlags: new Set([
+    valueFlags: asFlagSet([
       "--arg",
       "--argjson",
       "--argstr",
@@ -47,7 +48,7 @@ export const SAFE_BIN_PROFILES: Record<string, SafeBinProfile> = {
       "-L",
       "-f",
     ]),
-    blockedFlags: new Set([
+    blockedFlags: asFlagSet([
       "--argfile",
       "--rawfile",
       "--slurpfile",
@@ -59,7 +60,7 @@ export const SAFE_BIN_PROFILES: Record<string, SafeBinProfile> = {
   },
   grep: {
     maxPositional: 1,
-    valueFlags: new Set([
+    valueFlags: asFlagSet([
       "--regexp",
       "--file",
       "--max-count",
@@ -82,7 +83,7 @@ export const SAFE_BIN_PROFILES: Record<string, SafeBinProfile> = {
       "-D",
       "-d",
     ]),
-    blockedFlags: new Set([
+    blockedFlags: asFlagSet([
       "--file",
       "--exclude-from",
       "--dereference-recursive",
@@ -96,7 +97,7 @@ export const SAFE_BIN_PROFILES: Record<string, SafeBinProfile> = {
   },
   cut: {
     maxPositional: 0,
-    valueFlags: new Set([
+    valueFlags: asFlagSet([
       "--bytes",
       "--characters",
       "--fields",
@@ -110,7 +111,7 @@ export const SAFE_BIN_PROFILES: Record<string, SafeBinProfile> = {
   },
   sort: {
     maxPositional: 0,
-    valueFlags: new Set([
+    valueFlags: asFlagSet([
       "--key",
       "--field-separator",
       "--buffer-size",
@@ -127,11 +128,11 @@ export const SAFE_BIN_PROFILES: Record<string, SafeBinProfile> = {
       "-T",
       "-o",
     ]),
-    blockedFlags: new Set(["--files0-from", "--output", "-o"]),
+    blockedFlags: asFlagSet(["--files0-from", "--output", "-o"]),
   },
   uniq: {
     maxPositional: 0,
-    valueFlags: new Set([
+    valueFlags: asFlagSet([
       "--skip-fields",
       "--skip-chars",
       "--check-chars",
@@ -143,11 +144,11 @@ export const SAFE_BIN_PROFILES: Record<string, SafeBinProfile> = {
   },
   head: {
     maxPositional: 0,
-    valueFlags: new Set(["--lines", "--bytes", "-n", "-c"]),
+    valueFlags: asFlagSet(["--lines", "--bytes", "-n", "-c"]),
   },
   tail: {
     maxPositional: 0,
-    valueFlags: new Set([
+    valueFlags: asFlagSet([
       "--lines",
       "--bytes",
       "--sleep-interval",
@@ -163,8 +164,8 @@ export const SAFE_BIN_PROFILES: Record<string, SafeBinProfile> = {
   },
   wc: {
     maxPositional: 0,
-    valueFlags: new Set(["--files0-from"]),
-    blockedFlags: new Set(["--files0-from"]),
+    valueFlags: asFlagSet(["--files0-from"]),
+    blockedFlags: asFlagSet(["--files0-from"]),
   },
 };
 
@@ -175,14 +176,86 @@ function isSafeLiteralToken(value: string): boolean {
   return !hasGlobToken(value) && !isPathLikeToken(value);
 }
 
+function isInvalidValueToken(value: string | undefined): boolean {
+  return !value || !isSafeLiteralToken(value);
+}
+
+function consumeLongFlagToken(
+  args: string[],
+  index: number,
+  valueFlags: ReadonlySet<string>,
+  blockedFlags: ReadonlySet<string>,
+): number {
+  const token = args[index];
+  if (!token) {
+    return -1;
+  }
+  const eqIndex = token.indexOf("=");
+  const flag = eqIndex > 0 ? token.slice(0, eqIndex) : token;
+  if (blockedFlags.has(flag)) {
+    return -1;
+  }
+  if (eqIndex > 0) {
+    return isSafeLiteralToken(token.slice(eqIndex + 1)) ? index + 1 : -1;
+  }
+  if (!valueFlags.has(flag)) {
+    return index + 1;
+  }
+  return isInvalidValueToken(args[index + 1]) ? -1 : index + 2;
+}
+
+function consumeShortFlagClusterToken(
+  args: string[],
+  index: number,
+  valueFlags: ReadonlySet<string>,
+  blockedFlags: ReadonlySet<string>,
+): number {
+  const token = args[index];
+  if (!token) {
+    return -1;
+  }
+  for (let j = 1; j < token.length; j += 1) {
+    const flag = `-${token[j]}`;
+    if (blockedFlags.has(flag)) {
+      return -1;
+    }
+    if (!valueFlags.has(flag)) {
+      continue;
+    }
+    const inlineValue = token.slice(j + 1);
+    if (inlineValue) {
+      return isSafeLiteralToken(inlineValue) ? index + 1 : -1;
+    }
+    return isInvalidValueToken(args[index + 1]) ? -1 : index + 2;
+  }
+  return hasGlobToken(token) ? -1 : index + 1;
+}
+
+function consumePositionalToken(token: string, positional: string[]): boolean {
+  if (!isSafeLiteralToken(token)) {
+    return false;
+  }
+  positional.push(token);
+  return true;
+}
+
+function validatePositionalCount(positional: string[], profile: SafeBinProfile): boolean {
+  const minPositional = profile.minPositional ?? 0;
+  if (positional.length < minPositional) {
+    return false;
+  }
+  return typeof profile.maxPositional !== "number" || positional.length <= profile.maxPositional;
+}
+
 export function validateSafeBinArgv(args: string[], profile: SafeBinProfile): boolean {
   const valueFlags = profile.valueFlags ?? NO_FLAGS;
   const blockedFlags = profile.blockedFlags ?? NO_FLAGS;
   const positional: string[] = [];
-
-  for (let i = 0; i < args.length; i += 1) {
+  let i = 0;
+  while (i < args.length) {
     const token = args[i];
     if (!token) {
+      i += 1;
       continue;
     }
     if (token === "--") {
@@ -191,82 +264,39 @@ export function validateSafeBinArgv(args: string[], profile: SafeBinProfile): bo
         if (!rest || rest === "-") {
           continue;
         }
-        if (!isSafeLiteralToken(rest)) {
+        if (!consumePositionalToken(rest, positional)) {
           return false;
         }
-        positional.push(rest);
       }
       break;
     }
     if (token === "-") {
+      i += 1;
       continue;
     }
     if (!token.startsWith("-")) {
-      if (!isSafeLiteralToken(token)) {
-        return false;
-      }
-      positional.push(token);
-      continue;
-    }
-
-    if (token.startsWith("--")) {
-      const eqIndex = token.indexOf("=");
-      const flag = eqIndex > 0 ? token.slice(0, eqIndex) : token;
-      if (blockedFlags.has(flag)) {
-        return false;
-      }
-      if (eqIndex > 0) {
-        if (!isSafeLiteralToken(token.slice(eqIndex + 1))) {
-          return false;
-        }
-        continue;
-      }
-      if (!valueFlags.has(flag)) {
-        continue;
-      }
-      const value = args[i + 1];
-      if (!value || !isSafeLiteralToken(value)) {
+      if (!consumePositionalToken(token, positional)) {
         return false;
       }
       i += 1;
       continue;
     }
 
-    let consumedValue = false;
-    for (let j = 1; j < token.length; j += 1) {
-      const flag = `-${token[j]}`;
-      if (blockedFlags.has(flag)) {
+    if (token.startsWith("--")) {
+      const nextIndex = consumeLongFlagToken(args, i, valueFlags, blockedFlags);
+      if (nextIndex < 0) {
         return false;
       }
-      if (!valueFlags.has(flag)) {
-        continue;
-      }
-      const inlineValue = token.slice(j + 1);
-      if (inlineValue) {
-        if (!isSafeLiteralToken(inlineValue)) {
-          return false;
-        }
-      } else {
-        const value = args[i + 1];
-        if (!value || !isSafeLiteralToken(value)) {
-          return false;
-        }
-        i += 1;
-      }
-      consumedValue = true;
-      break;
+      i = nextIndex;
+      continue;
     }
-    if (!consumedValue && hasGlobToken(token)) {
+
+    const nextIndex = consumeShortFlagClusterToken(args, i, valueFlags, blockedFlags);
+    if (nextIndex < 0) {
       return false;
     }
+    i = nextIndex;
   }
 
-  const minPositional = profile.minPositional ?? 0;
-  if (positional.length < minPositional) {
-    return false;
-  }
-  if (typeof profile.maxPositional === "number" && positional.length > profile.maxPositional) {
-    return false;
-  }
-  return true;
+  return validatePositionalCount(positional, profile);
 }
