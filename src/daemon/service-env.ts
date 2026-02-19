@@ -214,6 +214,8 @@ export function buildServiceEnvironment(params: {
   const configPath = env.OPENCLAW_CONFIG_PATH;
   return {
     HOME: env.HOME,
+    TMPDIR: env.TMPDIR,
+    LANG: env.LANG,
     PATH: buildMinimalServicePath({ env }),
     OPENCLAW_PROFILE: profile,
     OPENCLAW_STATE_DIR: stateDir,
@@ -236,6 +238,8 @@ export function buildNodeServiceEnvironment(params: {
   const configPath = env.OPENCLAW_CONFIG_PATH;
   return {
     HOME: env.HOME,
+    TMPDIR: env.TMPDIR,
+    LANG: env.LANG,
     PATH: buildMinimalServicePath({ env }),
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_CONFIG_PATH: configPath,
