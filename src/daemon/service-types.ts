@@ -1,5 +1,6 @@
+import type { SystemdKillMode } from "./systemd-unit.js";
+
 export type GatewayServiceEnv = Record<string, string | undefined>;
-export type SystemdKillMode = "process" | "mixed" | "control-group";
 
 export type GatewayServiceInstallArgs = {
   env: GatewayServiceEnv;
