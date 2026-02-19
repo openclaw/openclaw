@@ -210,7 +210,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
   },
   mentions: {
     stripPatterns: ({ ctx }) => {
-      const selfE164 = (ctx.To ?? "").replace(/^whatsapp:/, "");
+      const selfE164 = (ctx.To ?? "").replace(/^whatsapp:/, "").replace(/^\+/, "");
       if (!selfE164) {
         return [];
       }
