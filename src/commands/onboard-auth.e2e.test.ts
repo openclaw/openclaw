@@ -536,29 +536,38 @@ describe("applyOpenrouterProviderConfig", () => {
 });
 
 describe("applyLitellmProviderConfig", () => {
-  it("preserves existing baseUrl and api key while adding the default model", () => {
-    const cfg = applyLitellmProviderConfig({
-      models: {
-        providers: {
-          litellm: {
-            baseUrl: "https://litellm.example/v1",
-            apiKey: "  old-key  ",
-            api: "anthropic-messages",
-            models: [
-              {
-                id: "custom-model",
-                name: "Custom",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 1000,
-                maxTokens: 100,
-              },
-            ],
+  it("applies baseUrl, modelId, and preserves existing api key while adding the model", () => {
+    const cfg = applyLitellmProviderConfig(
+      {
+        models: {
+          providers: {
+            litellm: {
+              baseUrl: "https://old-url.example/v1",
+              apiKey: "  old-key  ",
+              api: "anthropic-messages",
+              models: [
+                {
+                  id: "custom-model",
+                  name: "Custom",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 1000,
+                  maxTokens: 100,
+                },
+              ],
+            },
           },
         },
       },
-    });
+      {
+        baseUrl: "https://litellm.example/v1",
+        modelId: "claude-opus-4-6",
+        modelName: "Claude Opus 4.6",
+        contextWindow: 128000,
+        maxTokens: 8192,
+      },
+    );
 
     expect(cfg.models?.providers?.litellm?.baseUrl).toBe("https://litellm.example/v1");
     expect(cfg.models?.providers?.litellm?.api).toBe("openai-completions");
@@ -567,6 +576,9 @@ describe("applyLitellmProviderConfig", () => {
       "custom-model",
       "claude-opus-4-6",
     ]);
+    expect(cfg.agents?.defaults?.models?.["litellm/claude-opus-4-6"]?.alias).toBe(
+      "Claude Opus 4.6",
+    );
   });
 });
 
