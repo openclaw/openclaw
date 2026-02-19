@@ -64,6 +64,7 @@ export type CallGatewayOptions = CallGatewayBaseOptions & {
 export type GatewayConnectionDetails = {
   url: string;
   urlSource: string;
+  bindMode: import("../config/config.js").GatewayBindMode;
   bindDetail?: string;
   remoteFallbackNote?: string;
   message: string;
@@ -180,6 +181,7 @@ export function buildGatewayConnectionDetails(
   return {
     url,
     urlSource,
+    bindMode,
     bindDetail,
     remoteFallbackNote,
     message,
@@ -351,6 +353,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
 
     const client = new GatewayClient({
       url,
+      bindMode: params.connectionDetails.bindMode,
       token,
       password,
       tlsFingerprint,
