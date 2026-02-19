@@ -112,6 +112,10 @@ export type CronJob = {
   payload: CronPayload;
   delivery?: CronDelivery;
   state: CronJobState;
+  tools?: {
+    allow?: string[];
+    deny?: string[];
+  };
 };
 
 export type CronStoreFile = {
