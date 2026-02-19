@@ -1,3 +1,4 @@
+import type { RESTAPIPoll } from "discord-api-types/rest/v10";
 import {
   Embed,
   RequestClient,
@@ -7,11 +8,10 @@ import {
   type TopLevelComponents,
 } from "@buape/carbon";
 import { PollLayoutType } from "discord-api-types/payloads/v10";
-import type { RESTAPIPoll } from "discord-api-types/rest/v10";
 import { Routes, type APIEmbed } from "discord-api-types/v10";
 import type { ChunkMode } from "../auto-reply/chunk.js";
-import { loadConfig } from "../config/config.js";
 import type { RetryRunner } from "../infra/retry-policy.js";
+import { loadConfig } from "../config/config.js";
 import { normalizePollDurationHours, normalizePollInput, type PollInput } from "../polls.js";
 import { loadWebMedia } from "../web/media.js";
 import { resolveDiscordAccount } from "./accounts.js";
