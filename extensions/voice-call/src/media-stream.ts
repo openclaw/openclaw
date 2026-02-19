@@ -317,6 +317,8 @@ export class MediaStreamHandler {
     queue.length = 0;
     this.ttsActiveControllers.get(streamSid)?.abort();
     this.clearAudio(streamSid);
+    // Set cooldown to prevent echo from interrupted TTS leaking into STT
+    this.ttsCooldownUntil.set(streamSid, Date.now() + MediaStreamHandler.TTS_COOLDOWN_MS);
   }
 
   /**
@@ -360,7 +362,11 @@ export class MediaStreamHandler {
       if (!queue || queue.length === 0) {
         this.ttsPlaying.set(streamSid, false);
         // Set cooldown to suppress echo from network-delayed TTS audio
-        this.ttsCooldownUntil.set(streamSid, Date.now() + MediaStreamHandler.TTS_COOLDOWN_MS);
+        // Double-check queue in case new TTS was enqueued during the race window
+        const queueAfterCheck = this.ttsQueues.get(streamSid);
+        if (!queueAfterCheck || queueAfterCheck.length === 0) {
+          this.ttsCooldownUntil.set(streamSid, Date.now() + MediaStreamHandler.TTS_COOLDOWN_MS);
+        }
         this.ttsActiveControllers.delete(streamSid);
         return;
       }
