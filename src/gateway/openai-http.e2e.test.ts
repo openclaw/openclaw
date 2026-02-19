@@ -214,7 +214,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
               role: "user",
               content: [
                 { type: "text", text: "hello" },
-                { type: "input_text", text: "world" },
+                { type: "input_text", input_text: "world" },
               ],
             },
           ],
