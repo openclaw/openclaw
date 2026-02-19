@@ -772,148 +772,191 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
               info: "run_started",
               progress: 0,
             });
-            await runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
-              ctx: ctxPayload,
-              cfg: config,
-              dispatcherOptions: {
-                ...prefixOptions,
-                deliver: async (outbound, info: { kind: "tool" | "block" | "final" }) => {
-                  const responseText = (outbound as { text?: string } | undefined)?.text ?? "";
-                  const hasContent = responseText.length > 0;
-                  if (info.kind === "block" && hasContent) {
-                    streamedTextBuffer = streamedTextBuffer
-                      ? `${streamedTextBuffer}${responseText}`
-                      : responseText;
-                  }
-                  if (info.kind === "final") {
-                    terminalEmitted = true;
-                  }
-                  if (!hasContent && info.kind !== "final") {
-                    return;
-                  }
-                  if (info.kind === "final") {
-                    await safeSendStatus("done", {
-                      info: "run_completed",
-                      progress: 100,
-                    });
-                  }
-                  const timestampMs = Date.now();
-                  const timestamp = Math.floor(timestampMs / 1000);
-                  const normalizedKind = resolveResponseKindFromDispatcherKind(info.kind);
-                  const outboundPayload =
-                    info.kind === "block"
-                      ? {
-                          ver: 1,
-                          event: "block",
-                          phase: "update",
-                          text: responseText,
-                          seq: blockSeq++,
-                          timestamp,
-                          timestamp_ms: timestampMs,
-                          run_id: payload.eventId,
-                          session_id: sessionId,
-                          trace_id: traceId,
-                        }
-                      : info.kind === "tool"
+            const dispatchStartedAt = Date.now();
+            const rawDispatchResult =
+              await runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
+                ctx: ctxPayload,
+                cfg: config,
+                dispatcherOptions: {
+                  ...prefixOptions,
+                  deliver: async (outbound, info: { kind: "tool" | "block" | "final" }) => {
+                    const responseText = (outbound as { text?: string } | undefined)?.text ?? "";
+                    const hasContent = responseText.length > 0;
+                    if (info.kind === "block" && hasContent) {
+                      streamedTextBuffer = streamedTextBuffer
+                        ? `${streamedTextBuffer}${responseText}`
+                        : responseText;
+                    }
+                    if (info.kind === "final") {
+                      terminalEmitted = true;
+                    }
+                    if (!hasContent && info.kind !== "final") {
+                      return;
+                    }
+                    if (info.kind === "final") {
+                      await safeSendStatus("done", {
+                        info: "run_completed",
+                        progress: 100,
+                      });
+                    }
+                    const timestampMs = Date.now();
+                    const timestamp = Math.floor(timestampMs / 1000);
+                    const normalizedKind = resolveResponseKindFromDispatcherKind(info.kind);
+                    const outboundPayload =
+                      info.kind === "block"
                         ? {
                             ver: 1,
-                            name: "tool",
-                            phase: "result",
-                            output: { text: responseText },
-                            success: true,
+                            event: "block",
+                            phase: "update",
+                            text: responseText,
+                            seq: blockSeq++,
                             timestamp,
                             timestamp_ms: timestampMs,
                             run_id: payload.eventId,
                             session_id: sessionId,
                             trace_id: traceId,
                           }
-                        : {
-                            ver: 1,
-                            text: responseText || streamedTextBuffer || "Done.",
-                            timestamp,
-                            timestamp_ms: timestampMs,
-                            run_id: payload.eventId,
-                            session_id: sessionId,
-                            trace_id: traceId,
-                          };
-                  await reply(
-                    outboundPayload,
-                    {
-                      sessionId,
-                      inReplyTo: payload.eventId,
-                    },
-                    normalizedKind,
-                  );
+                        : info.kind === "tool"
+                          ? {
+                              ver: 1,
+                              name: "tool",
+                              phase: "result",
+                              output: { text: responseText },
+                              success: true,
+                              timestamp,
+                              timestamp_ms: timestampMs,
+                              run_id: payload.eventId,
+                              session_id: sessionId,
+                              trace_id: traceId,
+                            }
+                          : {
+                              ver: 1,
+                              text: responseText || streamedTextBuffer || "Done.",
+                              timestamp,
+                              timestamp_ms: timestampMs,
+                              run_id: payload.eventId,
+                              session_id: sessionId,
+                              trace_id: traceId,
+                            };
+                    await reply(
+                      outboundPayload,
+                      {
+                        sessionId,
+                        inReplyTo: payload.eventId,
+                      },
+                      normalizedKind,
+                    );
+                  },
+                  onSkip: (payload, { kind, reason }) => {
+                    ctx.log?.debug?.(
+                      `[${account.accountId}] Nostr outbound ${kind} skipped (${reason}) for session ${sessionId} from ${senderPubkey}; payload=${JSON.stringify(payload)}`,
+                    );
+                  },
+                  onError: (err, info) => {
+                    ctx.log?.error?.(
+                      `[${account.accountId}] Nostr ${info.kind} reply failed: ${String(err)}`,
+                    );
+                  },
                 },
-                onSkip: (payload, { kind, reason }) => {
-                  ctx.log?.debug?.(
-                    `[${account.accountId}] Nostr outbound ${kind} skipped (${reason}) for session ${sessionId} from ${senderPubkey}; payload=${JSON.stringify(payload)}`,
-                  );
+                replyOptions: {
+                  onModelSelected: onModelSelectedWithAiInfo,
+                  // NIP-63 clients expect streamed progress events.
+                  disableBlockStreaming: false,
+                  onReasoningStream: async (reasoningPayload) => {
+                    const reasoningText = reasoningPayload.text ?? "";
+                    if (!reasoningText.length) {
+                      return;
+                    }
+                    const timestampMs = Date.now();
+                    await reply(
+                      {
+                        ver: 1,
+                        event: "thinking",
+                        phase: "update",
+                        text: reasoningText,
+                        timestamp: Math.floor(timestampMs / 1000),
+                        timestamp_ms: timestampMs,
+                        run_id: payload.eventId,
+                        session_id: sessionId,
+                        trace_id: traceId,
+                      },
+                      {
+                        sessionId,
+                        inReplyTo: payload.eventId,
+                      },
+                      NIP63_RESPONSE_KIND_DELTA,
+                    );
+                  },
+                  onToolStart: async ({ name, phase }) => {
+                    const normalizedName = typeof name === "string" ? name.trim() : "";
+                    if (!normalizedName) {
+                      return;
+                    }
+                    const timestampMs = Date.now();
+                    await safeSendStatus("tool_use", {
+                      info: normalizedName,
+                    });
+                    await reply(
+                      {
+                        ver: 1,
+                        name: normalizedName,
+                        phase: normalizeToolPhase(phase),
+                        timestamp: Math.floor(timestampMs / 1000),
+                        timestamp_ms: timestampMs,
+                        run_id: payload.eventId,
+                        session_id: sessionId,
+                        trace_id: traceId,
+                      },
+                      {
+                        sessionId,
+                        inReplyTo: payload.eventId,
+                      },
+                      NIP63_RESPONSE_KIND_TOOL,
+                    );
+                  },
                 },
-                onError: (err, info) => {
-                  ctx.log?.error?.(
-                    `[${account.accountId}] Nostr ${info.kind} reply failed: ${String(err)}`,
-                  );
-                },
-              },
-              replyOptions: {
-                onModelSelected: onModelSelectedWithAiInfo,
-                // NIP-63 clients expect streamed progress events.
-                disableBlockStreaming: false,
-                onReasoningStream: async (reasoningPayload) => {
-                  const reasoningText = reasoningPayload.text ?? "";
-                  if (!reasoningText.length) {
-                    return;
-                  }
-                  const timestampMs = Date.now();
-                  await reply(
-                    {
-                      ver: 1,
-                      event: "thinking",
-                      phase: "update",
-                      text: reasoningText,
-                      timestamp: Math.floor(timestampMs / 1000),
-                      timestamp_ms: timestampMs,
-                      run_id: payload.eventId,
-                      session_id: sessionId,
-                      trace_id: traceId,
-                    },
-                    {
-                      sessionId,
-                      inReplyTo: payload.eventId,
-                    },
-                    NIP63_RESPONSE_KIND_DELTA,
-                  );
-                },
-                onToolStart: async ({ name, phase }) => {
-                  const normalizedName = typeof name === "string" ? name.trim() : "";
-                  if (!normalizedName) {
-                    return;
-                  }
-                  const timestampMs = Date.now();
-                  await safeSendStatus("tool_use", {
-                    info: normalizedName,
-                  });
-                  await reply(
-                    {
-                      ver: 1,
-                      name: normalizedName,
-                      phase: normalizeToolPhase(phase),
-                      timestamp: Math.floor(timestampMs / 1000),
-                      timestamp_ms: timestampMs,
-                      run_id: payload.eventId,
-                      session_id: sessionId,
-                      trace_id: traceId,
-                    },
-                    {
-                      sessionId,
-                      inReplyTo: payload.eventId,
-                    },
-                    NIP63_RESPONSE_KIND_TOOL,
-                  );
-                },
-              },
+              });
+            const dispatchResult = {
+              queuedFinal:
+                !!rawDispatchResult &&
+                typeof rawDispatchResult === "object" &&
+                Boolean((rawDispatchResult as { queuedFinal?: unknown }).queuedFinal),
+              counts: (() => {
+                const rawCounts =
+                  rawDispatchResult && typeof rawDispatchResult === "object"
+                    ? (rawDispatchResult as { counts?: Record<string, unknown> }).counts
+                    : undefined;
+                return {
+                  tool:
+                    typeof rawCounts?.tool === "number" && Number.isFinite(rawCounts.tool)
+                      ? rawCounts.tool
+                      : 0,
+                  block:
+                    typeof rawCounts?.block === "number" && Number.isFinite(rawCounts.block)
+                      ? rawCounts.block
+                      : 0,
+                  final:
+                    typeof rawCounts?.final === "number" && Number.isFinite(rawCounts.final)
+                      ? rawCounts.final
+                      : 0,
+                };
+              })(),
+            };
+            const dispatchDurationMs = Date.now() - dispatchStartedAt;
+            traceRecorder.record({
+              direction: "dispatch_result",
+              event_id: payload.eventId,
+              session_id: sessionId,
+              trace_id: traceId,
+              queued_final: dispatchResult.queuedFinal,
+              counts: dispatchResult.counts,
+              terminal_emitted: terminalEmitted,
+              streamed_text_length: streamedTextBuffer.length,
+              dispatch_duration_ms: dispatchDurationMs,
             });
+            ctx.log?.debug?.(
+              `[${account.accountId}] Nostr dispatch settled for run ${payload.eventId}: queuedFinal=${dispatchResult.queuedFinal ? "yes" : "no"} counts=${JSON.stringify(dispatchResult.counts)} terminalEmitted=${terminalEmitted ? "yes" : "no"} streamedTextLength=${streamedTextBuffer.length} durationMs=${dispatchDurationMs}`,
+            );
 
             if (!terminalEmitted) {
               const fallbackText = streamedTextBuffer.trim();
@@ -953,6 +996,12 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                     run_id: payload.eventId,
                     session_id: sessionId,
                     trace_id: traceId,
+                    details: {
+                      dispatch_queued_final: dispatchResult.queuedFinal,
+                      dispatch_counts: dispatchResult.counts,
+                      streamed_text_length: streamedTextBuffer.length,
+                      dispatch_duration_ms: dispatchDurationMs,
+                    },
                   },
                   {
                     sessionId,
