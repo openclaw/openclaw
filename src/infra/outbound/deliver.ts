@@ -24,6 +24,7 @@ import {
 import { markdownToSignalTextChunks, type SignalTextStyleRange } from "../../signal/format.js";
 import { sendMessageSignal } from "../../signal/send.js";
 import { normalizeReplyPayloadsForDelivery } from "./payloads.js";
+import { sanitizeOutbound } from "./sanitize-outbound.js";
 
 export type { NormalizedOutboundPayload } from "./payloads.js";
 export { normalizeOutboundPayloads } from "./payloads.js";
@@ -326,6 +327,31 @@ export async function deliverOutboundPayloads(params: {
     };
     try {
       throwIfAborted(abortSignal);
+
+      // P0-2: Sanitize outbound text before delivery — strip internal/system text.
+      // Apply to payloadSummary, the original payload, AND any string fields in channelData
+      // so that no delivery path can bypass the filter.
+      const sanitized = sanitizeOutbound(payloadSummary.text);
+      if (sanitized.matched) {
+        if (sanitized.text == null && payloadSummary.mediaUrls.length === 0) {
+          // Entire payload was internal text with no media — skip silently.
+          continue;
+        }
+        payloadSummary.text = sanitized.text ?? "";
+        payload.text = sanitized.text ?? "";
+      }
+      // Also sanitize any string values inside channelData (channel plugins may read text from here).
+      if (payload.channelData && typeof payload.channelData === "object") {
+        for (const [cdKey, cdVal] of Object.entries(payload.channelData)) {
+          if (typeof cdVal === "string" && cdVal.length > 0) {
+            const cdSanitized = sanitizeOutbound(cdVal);
+            if (cdSanitized.matched) {
+              (payload.channelData as Record<string, unknown>)[cdKey] = cdSanitized.text ?? "";
+            }
+          }
+        }
+      }
+
       params.onPayload?.(payloadSummary);
       if (handler.sendPayload && payload.channelData) {
         results.push(await handler.sendPayload(payload));

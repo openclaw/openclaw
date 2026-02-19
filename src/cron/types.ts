@@ -59,6 +59,8 @@ export type CronJobState = {
   lastStatus?: "ok" | "error" | "skipped";
   lastError?: string;
   lastDurationMs?: number;
+  /** P0-3: SHA-256 prefix of last delivered result, for dedup. Persisted to disk. */
+  lastDeliveredHash?: string;
 };
 
 export type CronJob = {

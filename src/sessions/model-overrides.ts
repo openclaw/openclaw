@@ -1,4 +1,5 @@
 import type { SessionEntry } from "../config/sessions.js";
+import { type ModelSwitchRestoreAction, resolveModelSwitchRestore } from "./context-lock.js";
 
 export type ModelOverrideSelection = {
   provider: string;
@@ -11,7 +12,7 @@ export function applyModelOverrideToSessionEntry(params: {
   selection: ModelOverrideSelection;
   profileOverride?: string;
   profileOverrideSource?: "auto" | "user";
-}): { updated: boolean } {
+}): { updated: boolean; contextRestore: ModelSwitchRestoreAction } {
   const { entry, selection, profileOverride } = params;
   const profileOverrideSource = params.profileOverrideSource ?? "user";
   let updated = false;
@@ -68,5 +69,10 @@ export function applyModelOverrideToSessionEntry(params: {
     entry.updatedAt = Date.now();
   }
 
-  return { updated };
+  // P1-1: After model switch, check if there's an active context lock to restore.
+  const restoreAction: ModelSwitchRestoreAction = updated
+    ? resolveModelSwitchRestore(entry)
+    : { action: "none" };
+
+  return { updated, contextRestore: restoreAction };
 }

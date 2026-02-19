@@ -12,6 +12,19 @@ import type {
 } from "./types.sandbox.js";
 import type { MemorySearchConfig } from "./types.tools.js";
 
+export type ShopConfig = {
+  /** Shop display name (e.g. "bigmk.ph"). Must match exactly on the platform page. */
+  shopName: string;
+  /** Shop code / ID on the platform (e.g. "PHLCSLWL2G"). Required, strict equality check. */
+  shopCode: string;
+  /** Browser profile name to use for this shop (e.g. "tt-3bigmk"). */
+  profile: string;
+  /** E-commerce platform (e.g. "tiktok", "shopee"). */
+  platform: string;
+  /** Default landing URL for this shop (optional). */
+  defaultUrl?: string;
+};
+
 export type AgentModelEntryConfig = {
   alias?: string;
   /** Provider-specific API parameters (e.g., GLM-4.7 thinking mode). */
@@ -209,6 +222,8 @@ export type AgentDefaultsConfig = {
     /** Default thinking level for spawned sub-agents (e.g. "off", "low", "medium", "high"). */
     thinking?: string;
   };
+  /** Multi-shop configuration table for TikTok/e-commerce tasks. */
+  shops?: Record<string, ShopConfig>;
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: {
     /** Enable sandboxing for sessions. */

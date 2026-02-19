@@ -22,6 +22,25 @@ export type SessionOrigin = {
   threadId?: string | number;
 };
 
+export type ContextLock = {
+  /** Shop key from agents.defaults.shops (e.g. "bigmk"). */
+  shopKey: string;
+  /** Browser profile name (e.g. "tt-3bigmk"). */
+  browserProfile: string;
+  /** CDP target ID of the active tab (if available). */
+  activeTabId?: string;
+  /** Date filter in YYYY-MM-DD format (if a date range was selected). */
+  dateFilter?: string;
+  /** Current page URL for restoration. */
+  pageUrl?: string;
+  /** Timestamp when the lock was created (ms). */
+  lockedAt: number;
+  /** Time-to-live in milliseconds (default: 1800000 = 30 min). */
+  ttlMs: number;
+  /** Monotonic version counter — bumped on each model switch restore. */
+  lockVersion: number;
+};
+
 export type SessionEntry = {
   /**
    * Last delivered heartbeat payload (used to suppress duplicate heartbeat notifications).
@@ -93,6 +112,8 @@ export type SessionEntry = {
   lastThreadId?: string | number;
   skillsSnapshot?: SessionSkillSnapshot;
   systemPromptReport?: SessionSystemPromptReport;
+  /** P1-1: Context lock — preserves shop/browser/tab state across model switches. */
+  contextLock?: ContextLock;
 };
 
 export function mergeSessionEntry(

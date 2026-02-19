@@ -1,6 +1,13 @@
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import type { CronJob } from "../types.js";
 import type { CronEvent, CronServiceState } from "./state.js";
+import { logWarn } from "../../logger.js";
+import {
+  findBestSnapshot,
+  formatSnapshotPrefix,
+  hashResult,
+  writeCronSnapshot,
+} from "../snapshot.js";
 import { computeJobNextRunAtMs, nextWakeAtMs, resolveJobPayloadTextForMain } from "./jobs.js";
 import { locked } from "./locked.js";
 import { ensureLoaded, persist } from "./store.js";
@@ -180,10 +187,83 @@ export async function executeJob(
       return;
     }
 
-    const res = await state.deps.runIsolatedAgentJob({
+    // P0-3: Run isolated agent with retry-once on failure.
+    let res = await state.deps.runIsolatedAgentJob({
       job,
       message: job.payload.message,
     });
+
+    // Retry once on error after a short delay.
+    if (res.status === "error") {
+      logWarn(`[cron:${job.id}] First attempt failed (${res.error}), retrying in 5s...`);
+      await new Promise<void>((resolve) => setTimeout(resolve, 5_000));
+      res = await state.deps.runIsolatedAgentJob({
+        job,
+        message: job.payload.message,
+      });
+    }
+
+    // P0-3: On success, write snapshot + check dedup.
+    const outputText = res.outputText?.trim() ?? res.summary?.trim() ?? "";
+    if (res.status === "ok" && outputText.length > 0) {
+      // Write realtime snapshot.
+      try {
+        await writeCronSnapshot({
+          storePath: state.deps.storePath,
+          snapshot: {
+            ts: state.deps.nowMs(),
+            jobId: job.id,
+            source: "realtime",
+            result: outputText,
+            durationMs: job.state.lastDurationMs,
+          },
+        });
+      } catch {
+        // best-effort
+      }
+
+      // Dedup: compare hash with last delivered.
+      // job.state.lastDeliveredHash is persisted to disk via CronJobState → saveCronStore()
+      // (called by persist() at the end of onTimer), so dedup survives process restarts.
+      const currentHash = hashResult(outputText);
+      if (job.state.lastDeliveredHash && job.state.lastDeliveredHash === currentHash) {
+        logWarn(`[cron:${job.id}] Dedup: identical result, skipping delivery`);
+        await finish("ok", undefined, res.summary);
+        return;
+      }
+      job.state.lastDeliveredHash = currentHash;
+    }
+
+    // P0-3: On failure after retry, fall back to snapshot.
+    if (res.status === "error") {
+      logWarn(
+        `[cron:${job.id}] Retry also failed (${res.error}), looking for snapshot fallback...`,
+      );
+      try {
+        const snapshot = await findBestSnapshot({
+          storePath: state.deps.storePath,
+          jobId: job.id,
+        });
+        if (snapshot) {
+          const prefix = formatSnapshotPrefix(snapshot);
+          const fallbackSummary = `${prefix}${snapshot.result}`;
+          // Deliver the snapshot as the summary instead of failing.
+          res = {
+            status: "ok",
+            summary: fallbackSummary,
+            outputText: fallbackSummary,
+            error: undefined,
+          };
+          logWarn(
+            `[cron:${job.id}] Using snapshot fallback from ${new Date(snapshot.ts).toISOString()}`,
+          );
+        } else {
+          logWarn(`[cron:${job.id}] No snapshot available, task failed`);
+        }
+      } catch {
+        // best-effort — original error stands
+      }
+    }
 
     // Post a short summary back to the main session so the user sees
     // the cron result without opening the isolated session.

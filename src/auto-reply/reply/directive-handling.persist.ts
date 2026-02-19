@@ -15,8 +15,10 @@ import {
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
+import { restoreBrowserContext } from "../../browser/restore.js";
 import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { bumpContextLockVersion, clearContextLock } from "../../sessions/context-lock.js";
 import { applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { resolveProfileOverride } from "./directive-handling.auth.js";
@@ -165,7 +167,7 @@ export async function persistInlineDirectives(params: {
           }
           const isDefault =
             resolved.ref.provider === defaultProvider && resolved.ref.model === defaultModel;
-          const { updated: modelUpdated } = applyModelOverrideToSessionEntry({
+          const { updated: modelUpdated, contextRestore } = applyModelOverrideToSessionEntry({
             entry: sessionEntry,
             selection: {
               provider: resolved.ref.provider,
@@ -182,6 +184,33 @@ export async function persistInlineDirectives(params: {
               sessionKey,
               contextKey: `model:${nextLabel}`,
             });
+          }
+          // P1-1: Execute browser context restore after model switch.
+          if (contextRestore.action === "restore") {
+            const restoreResult = await restoreBrowserContext({
+              lock: contextRestore.lock,
+              shops: agentCfg?.shops,
+            });
+            if (restoreResult.ok) {
+              bumpContextLockVersion(sessionEntry);
+              enqueueSystemEvent(
+                `[context-lock] Browser context restored: ` +
+                  `profile=${contextRestore.lock.browserProfile}, shop=${contextRestore.lock.shopKey}, ` +
+                  `tab=${restoreResult.tabId}, url=${restoreResult.url}`,
+                { sessionKey, contextKey: "context-lock:restore" },
+              );
+            } else {
+              clearContextLock(sessionEntry);
+              enqueueSystemEvent(
+                `[context-lock] Browser restore failed — lock cleared: ${restoreResult.error}`,
+                { sessionKey, contextKey: "context-lock:restore-failed" },
+              );
+            }
+          } else if (contextRestore.action === "expired") {
+            enqueueSystemEvent(
+              `[context-lock] Context lock expired — browser context not restored`,
+              { sessionKey, contextKey: "context-lock:expired" },
+            );
           }
           updated = updated || modelUpdated;
         }
