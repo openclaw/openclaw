@@ -451,6 +451,17 @@ export async function fixSecurityFootguns(opts?: {
     }
   }
 
+  for (const dir of ["cron", "browser", "settings"]) {
+    // eslint-disable-next-line no-await-in-loop
+    actions.push(await applyPerms({ path: path.join(stateDir, dir), mode: 0o700, require: "dir" }));
+  }
+  for (const file of ["cron/jobs.json", "cron/jobs.json.bak"]) {
+    // eslint-disable-next-line no-await-in-loop
+    actions.push(
+      await applyPerms({ path: path.join(stateDir, file), mode: 0o600, require: "file" }),
+    );
+  }
+
   await chmodCredentialsAndAgentState({
     env,
     stateDir,

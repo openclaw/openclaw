@@ -242,4 +242,41 @@ describe("security fix", () => {
     expectPerms((await fs.stat(transcriptPath)).mode & 0o777, 0o600);
     expectPerms((await fs.stat(includePath)).mode & 0o777, 0o600);
   });
+
+  it("tightens perms for cron, browser, and settings directories", async () => {
+    const stateDir = await createStateDir("sensitive-dirs");
+    await fs.chmod(stateDir, 0o755);
+
+    const configPath = path.join(stateDir, "openclaw.json");
+    await writeJsonConfig(configPath, {});
+    await fs.chmod(configPath, 0o644);
+
+    const cronDir = path.join(stateDir, "cron");
+    await fs.mkdir(cronDir, { recursive: true });
+    await fs.chmod(cronDir, 0o755);
+    const jobsPath = path.join(cronDir, "jobs.json");
+    await fs.writeFile(jobsPath, "{}\n", "utf-8");
+    await fs.chmod(jobsPath, 0o644);
+    const jobsBakPath = path.join(cronDir, "jobs.json.bak");
+    await fs.writeFile(jobsBakPath, "{}\n", "utf-8");
+    await fs.chmod(jobsBakPath, 0o644);
+
+    const browserDir = path.join(stateDir, "browser");
+    await fs.mkdir(browserDir, { recursive: true });
+    await fs.chmod(browserDir, 0o755);
+
+    const settingsDir = path.join(stateDir, "settings");
+    await fs.mkdir(settingsDir, { recursive: true });
+    await fs.chmod(settingsDir, 0o755);
+
+    const env = createFixEnv(stateDir, configPath);
+    const res = await fixSecurityFootguns({ env, stateDir, configPath });
+    expect(res.ok).toBe(true);
+
+    expectPerms((await fs.stat(cronDir)).mode & 0o777, 0o700);
+    expectPerms((await fs.stat(jobsPath)).mode & 0o777, 0o600);
+    expectPerms((await fs.stat(jobsBakPath)).mode & 0o777, 0o600);
+    expectPerms((await fs.stat(browserDir)).mode & 0o777, 0o700);
+    expectPerms((await fs.stat(settingsDir)).mode & 0o777, 0o700);
+  });
 });
