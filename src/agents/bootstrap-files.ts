@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { getOrLoadBootstrapFiles } from "./bootstrap-cache.js";
 import { applyBootstrapHookOverrides } from "./bootstrap-hooks.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import {
@@ -6,11 +7,7 @@ import {
   resolveBootstrapMaxChars,
   resolveBootstrapTotalMaxChars,
 } from "./pi-embedded-helpers.js";
-import {
-  filterBootstrapFilesForSession,
-  loadWorkspaceBootstrapFiles,
-  type WorkspaceBootstrapFile,
-} from "./workspace.js";
+import { filterBootstrapFilesForSession, type WorkspaceBootstrapFile } from "./workspace.js";
 
 export function makeBootstrapWarn(params: {
   sessionLabel: string;
@@ -31,7 +28,11 @@ export async function resolveBootstrapFilesForRun(params: {
 }): Promise<WorkspaceBootstrapFile[]> {
   const sessionKey = params.sessionKey ?? params.sessionId;
   const bootstrapFiles = filterBootstrapFilesForSession(
-    await loadWorkspaceBootstrapFiles(params.workspaceDir),
+    await getOrLoadBootstrapFiles({
+      workspaceDir: params.workspaceDir,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+    }),
     sessionKey,
   );
 
