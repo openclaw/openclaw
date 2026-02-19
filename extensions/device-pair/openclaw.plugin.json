@@ -2,6 +2,7 @@
   "id": "device-pair",
   "name": "Device Pairing",
   "description": "Generate setup codes and approve device pairing requests.",
+  "hasCliCommands": false,
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

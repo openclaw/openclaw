@@ -36,7 +36,7 @@ export type PluginLoadOptions = {
   logger?: PluginLogger;
   coreGatewayHandlers?: Record<string, GatewayRequestHandler>;
   cache?: boolean;
-  mode?: "full" | "validate";
+  mode?: "full" | "validate" | "cli";
 };
 
 const registryCache = new Map<string, PluginRegistry>();
@@ -84,12 +84,28 @@ const resolvePluginSdkAccountIdAlias = (): string | null => {
   return resolvePluginSdkAliasFile({ srcFile: "account-id.ts", distFile: "account-id.js" });
 };
 
+const resolvePluginSdkDevicePairingAlias = (): string | null => {
+  return resolvePluginSdkAliasFile({
+    srcFile: "device-pairing.ts",
+    distFile: "device-pairing.js",
+  });
+};
+
+const resolvePluginSdkConfigSchemaAlias = (): string | null => {
+  return resolvePluginSdkAliasFile({
+    srcFile: "config-schema.ts",
+    distFile: "config-schema.js",
+  });
+};
+
 function buildCacheKey(params: {
   workspaceDir?: string;
   plugins: NormalizedPluginsConfig;
+  mode: PluginLoadOptions["mode"];
 }): string {
   const workspaceKey = params.workspaceDir ? resolveUserPath(params.workspaceDir) : "";
-  return `${workspaceKey}::${JSON.stringify(params.plugins)}`;
+  const mode = params.mode ?? "full";
+  return `${workspaceKey}::${mode}::${JSON.stringify(params.plugins)}`;
 }
 
 function validatePluginConfig(params: {
@@ -183,10 +199,12 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   const cfg = applyTestPluginDefaults(options.config ?? {}, process.env);
   const logger = options.logger ?? defaultLogger();
   const validateOnly = options.mode === "validate";
+  const cliOnly = options.mode === "cli";
   const normalized = normalizePluginsConfig(cfg.plugins);
   const cacheKey = buildCacheKey({
     workspaceDir: options.workspaceDir,
     plugins: normalized,
+    mode: options.mode,
   });
   const cacheEnabled = options.cache !== false;
   if (cacheEnabled) {
@@ -228,16 +246,27 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     }
     const pluginSdkAlias = resolvePluginSdkAlias();
     const pluginSdkAccountIdAlias = resolvePluginSdkAccountIdAlias();
+    const pluginSdkDevicePairingAlias = resolvePluginSdkDevicePairingAlias();
+    const pluginSdkConfigSchemaAlias = resolvePluginSdkConfigSchemaAlias();
     jitiLoader = createJiti(import.meta.url, {
       interopDefault: true,
       extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
-      ...(pluginSdkAlias || pluginSdkAccountIdAlias
+      ...(pluginSdkAlias ||
+      pluginSdkAccountIdAlias ||
+      pluginSdkDevicePairingAlias ||
+      pluginSdkConfigSchemaAlias
         ? {
             alias: {
-              ...(pluginSdkAlias ? { "openclaw/plugin-sdk": pluginSdkAlias } : {}),
               ...(pluginSdkAccountIdAlias
                 ? { "openclaw/plugin-sdk/account-id": pluginSdkAccountIdAlias }
                 : {}),
+              ...(pluginSdkDevicePairingAlias
+                ? { "openclaw/plugin-sdk/device-pairing": pluginSdkDevicePairingAlias }
+                : {}),
+              ...(pluginSdkConfigSchemaAlias
+                ? { "openclaw/plugin-sdk/config-schema": pluginSdkConfigSchemaAlias }
+                : {}),
+              ...(pluginSdkAlias ? { "openclaw/plugin-sdk": pluginSdkAlias } : {}),
             },
           }
         : {}),
@@ -315,6 +344,12 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         source: record.source,
         message: record.error,
       });
+      continue;
+    }
+
+    if (cliOnly && manifestRecord.hasCliCommands === false) {
+      registry.plugins.push(record);
+      seenIds.set(pluginId, candidate.origin);
       continue;
     }
 

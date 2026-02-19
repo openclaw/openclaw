@@ -252,14 +252,14 @@ export function registerCompletionCli(program: Command) {
         }
       }
 
-      // Eagerly register all subcommands to build the full tree
+      // Eagerly register all subcommands to build the full tree.
       const entries = getSubCliEntries();
       for (const entry of entries) {
         // Skip completion command itself to avoid cycle if we were to add it to the list
         if (entry.name === "completion") {
           continue;
         }
-        await registerSubCliByName(program, entry.name);
+        await registerSubCliByName(program, entry.name, { forCompletion: true });
       }
 
       if (options.writeState) {

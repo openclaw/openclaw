@@ -44,6 +44,14 @@
       "types": "./dist/plugin-sdk/account-id.d.ts",
       "default": "./dist/plugin-sdk/account-id.js"
     },
+    "./plugin-sdk/device-pairing": {
+      "types": "./dist/plugin-sdk/device-pairing.d.ts",
+      "default": "./dist/plugin-sdk/device-pairing.js"
+    },
+    "./plugin-sdk/config-schema": {
+      "types": "./dist/plugin-sdk/config-schema.d.ts",
+      "default": "./dist/plugin-sdk/config-schema.js"
+    },
     "./cli-entry": "./openclaw.mjs"
   },
   "scripts": {

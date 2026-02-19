@@ -45,6 +45,20 @@ export default defineConfig([
     platform: "node",
   },
   {
+    entry: "src/plugin-sdk/device-pairing.ts",
+    outDir: "dist/plugin-sdk",
+    env,
+    fixedExtension: false,
+    platform: "node",
+  },
+  {
+    entry: "src/plugin-sdk/config-schema.ts",
+    outDir: "dist/plugin-sdk",
+    env,
+    fixedExtension: false,
+    platform: "node",
+  },
+  {
     entry: "src/extensionAPI.ts",
     env,
     fixedExtension: false,

@@ -2,6 +2,7 @@
   "id": "talk-voice",
   "name": "Talk Voice",
   "description": "Manage Talk voice selection (list/set).",
+  "hasCliCommands": false,
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

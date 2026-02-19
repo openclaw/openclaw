@@ -306,6 +306,10 @@ openclaw plugins doctor
 
 Plugins may also register their own top‑level commands (example: `openclaw voicecall`).
 
+If your plugin does not register any CLI commands, set `"hasCliCommands": false` in
+`openclaw.plugin.json`. This helps `openclaw completion` skip unnecessary plugin
+module loads. This field is optional; omitting it keeps existing behavior.
+
 ## Plugin API (overview)
 
 Plugins export either:

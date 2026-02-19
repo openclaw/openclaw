@@ -20,7 +20,7 @@ function setProcessTitleForCommand(actionCommand: Command) {
 }
 
 // Commands that need channel plugins loaded
-const PLUGIN_REQUIRED_COMMANDS = new Set(["message", "channels", "directory"]);
+const PLUGIN_REQUIRED_COMMANDS = new Set(["message", "channels", "directory", "pairing"]);
 
 export function registerPreActionHooks(program: Command, programVersion: string) {
   program.hook("preAction", async (_thisCommand, actionCommand) => {

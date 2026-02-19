@@ -21,6 +21,7 @@ export function registerPluginCliCommands(program: Command, cfg?: OpenClawConfig
     config,
     workspaceDir,
     logger,
+    mode: "cli",
   });
 
   const existingCommands = new Set(program.commands.map((cmd) => cmd.name()));

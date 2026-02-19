@@ -1,5 +1,6 @@
 {
   "id": "telegram",
+  "hasCliCommands": false,
   "channels": ["telegram"],
   "configSchema": {
     "type": "object",

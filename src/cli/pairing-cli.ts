@@ -49,8 +49,27 @@ async function notifyApproved(channel: PairingChannel, id: string) {
   await notifyPairingApproved({ channelId: channel, id, cfg });
 }
 
-export function registerPairingCli(program: Command) {
-  const channels = listPairingChannels();
+type PairingCliRegisterOptions = {
+  forCompletionBuild?: boolean;
+};
+
+function resolveChannelHelpLabel(forCompletionBuild = false): string {
+  if (forCompletionBuild) {
+    return "Channel id";
+  }
+  try {
+    const channels = listPairingChannels();
+    if (channels.length > 0) {
+      return `Channel (${channels.join(", ")})`;
+    }
+  } catch {
+    // Fall back to generic label when plugins are unavailable.
+  }
+  return "Channel id";
+}
+
+export function registerPairingCli(program: Command, options: PairingCliRegisterOptions = {}) {
+  const channelHelpLabel = resolveChannelHelpLabel(options.forCompletionBuild);
   const pairing = program
     .command("pairing")
     .description("Secure DM pairing (approve inbound requests)")
@@ -63,11 +82,12 @@ export function registerPairingCli(program: Command) {
   pairing
     .command("list")
     .description("List pending pairing requests")
-    .option("--channel <channel>", `Channel (${channels.join(", ")})`)
+    .option("--channel <channel>", channelHelpLabel)
     .option("--account <accountId>", "Account id (for multi-account channels)")
-    .argument("[channel]", `Channel (${channels.join(", ")})`)
+    .argument("[channel]", channelHelpLabel)
     .option("--json", "Print JSON", false)
     .action(async (channelArg, opts) => {
+      const channels = listPairingChannels();
       const channelRaw = opts.channel ?? channelArg;
       if (!channelRaw) {
         throw new Error(
@@ -114,12 +134,13 @@ export function registerPairingCli(program: Command) {
   pairing
     .command("approve")
     .description("Approve a pairing code and allow that sender")
-    .option("--channel <channel>", `Channel (${channels.join(", ")})`)
+    .option("--channel <channel>", channelHelpLabel)
     .option("--account <accountId>", "Account id (for multi-account channels)")
     .argument("<codeOrChannel>", "Pairing code (or channel when using 2 args)")
     .argument("[code]", "Pairing code (when channel is passed as the 1st arg)")
     .option("--notify", "Notify the requester on the same channel", false)
     .action(async (codeOrChannel, code, opts) => {
+      const channels = listPairingChannels();
       const channelRaw = opts.channel ?? codeOrChannel;
       const resolvedCode = opts.channel ? codeOrChannel : code;
       if (!opts.channel && !code) {
