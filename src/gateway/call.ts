@@ -16,7 +16,7 @@ import {
   type GatewayClientName,
 } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
-import { pickPrimaryLanIPv4 } from "./net.js";
+import { isSecureWebSocketUrl, pickPrimaryLanIPv4 } from "./net.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
 
 export type CallGatewayOptions = {
@@ -134,6 +134,22 @@ export function buildGatewayConnectionDetails(
     ? "Warn: gateway.mode=remote but gateway.remote.url is missing; set gateway.remote.url or switch gateway.mode=local."
     : undefined;
   const bindDetail = !urlOverride && !remoteUrl ? `Bind: ${bindMode}` : undefined;
+
+  // Security check: block ALL insecure ws:// to non-loopback addresses (CWE-319, CVSS 9.8)
+  // This applies to the FINAL resolved URL, regardless of source (config, CLI override, etc).
+  // Both credentials and chat/conversation data must not be transmitted over plaintext to remote hosts.
+  if (!isSecureWebSocketUrl(url)) {
+    throw new Error(
+      [
+        `SECURITY ERROR: Gateway URL "${url}" uses plaintext ws:// to a non-loopback address.`,
+        "Both credentials and chat data would be exposed to network interception.",
+        `Source: ${urlSource}`,
+        `Config: ${configPath}`,
+        "Fix: Use wss:// for the gateway URL, or connect via SSH tunnel to localhost.",
+      ].join("\n"),
+    );
+  }
+
   const message = [
     `Gateway target: ${url}`,
     `Source: ${urlSource}`,
