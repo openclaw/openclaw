@@ -18,11 +18,12 @@ import {
   writeCache,
 } from "./web-shared.js";
 
-const SEARCH_PROVIDERS = ["brave", "perplexity", "grok"] as const;
+const SEARCH_PROVIDERS = ["brave", "perplexity", "grok", "serpapi"] as const;
 const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
 
 const BRAVE_SEARCH_ENDPOINT = "https://api.search.brave.com/res/v1/web/search";
+const SERPAPI_ENDPOINT = "https://serpapi.com/search";
 const DEFAULT_PERPLEXITY_BASE_URL = "https://openrouter.ai/api/v1";
 const PERPLEXITY_DIRECT_BASE_URL = "https://api.perplexity.ai";
 const DEFAULT_PERPLEXITY_MODEL = "perplexity/sonar-pro";
@@ -88,6 +89,16 @@ type BraveSearchResponse = {
   };
 };
 
+type SerpApiResult = {
+  title?: string;
+  link?: string;
+  snippet?: string;
+};
+
+type SerpApiResponse = {
+  organic_results?: SerpApiResult[];
+};
+
 type PerplexityConfig = {
   apiKey?: string;
   baseUrl?: string;
@@ -148,7 +159,6 @@ function extractGrokContent(data: GrokSearchResponse): {
     }
     for (const block of output.content ?? []) {
       if (block.type === "output_text" && typeof block.text === "string" && block.text) {
-        // Extract url_citation annotations from this content block
         const urls = (block.annotations ?? [])
           .filter((a) => a.type === "url_citation" && typeof a.url === "string")
           .map((a) => a.url as string);
@@ -188,6 +198,15 @@ function resolveSearchApiKey(search?: WebSearchConfig): string | undefined {
   return fromConfig || fromEnv || undefined;
 }
 
+function resolveSerpApiKey(search?: WebSearchConfig): string | undefined {
+  const fromConfig =
+    search && "apiKey" in search && typeof search.apiKey === "string"
+      ? normalizeSecretInput(search.apiKey)
+      : "";
+  const fromEnv = normalizeSecretInput(process.env.SERPAPI_KEY);
+  return fromConfig || fromEnv || undefined;
+}
+
 function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
   if (provider === "perplexity") {
     return {
@@ -202,6 +221,14 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
       error: "missing_xai_api_key",
       message:
         "web_search (grok) needs an xAI API key. Set XAI_API_KEY in the Gateway environment, or configure tools.web.search.grok.apiKey.",
+      docs: "https://docs.openclaw.ai/tools/web",
+    };
+  }
+  if (provider === "serpapi") {
+    return {
+      error: "missing_serpapi_key",
+      message:
+        "web_search (serpapi) needs a SerpApi key. Set SERPAPI_KEY in the Gateway environment, or configure tools.web.search.apiKey.",
       docs: "https://docs.openclaw.ai/tools/web",
     };
   }
@@ -222,6 +249,9 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
   }
   if (raw === "grok") {
     return "grok";
+  }
+  if (raw === "serpapi") {
+    return "serpapi";
   }
   if (raw === "brave") {
     return "brave";
@@ -403,10 +433,6 @@ function normalizeFreshness(value: string | undefined): string | undefined {
   return `${start}to${end}`;
 }
 
-/**
- * Map normalized freshness values (pd/pw/pm/py) to Perplexity's
- * search_recency_filter values (day/week/month/year).
- */
 function freshnessToPerplexityRecency(freshness: string | undefined): string | undefined {
   if (!freshness) {
     return undefined;
@@ -444,6 +470,42 @@ function resolveSiteName(url: string | undefined): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+async function runSerpApiSearch(params: {
+  query: string;
+  apiKey: string;
+  count: number;
+  timeoutSeconds: number;
+}): Promise<{ results: Array<{ title: string; url: string; description: string }> }> {
+  const url = new URL(SERPAPI_ENDPOINT);
+  url.searchParams.set("q", params.query);
+  url.searchParams.set("api_key", params.apiKey);
+  url.searchParams.set("engine", "google");
+  url.searchParams.set("num", String(params.count));
+
+  const res = await fetch(url.toString(), {
+    method: "GET",
+    headers: {
+      Accept: "application/json",
+    },
+    signal: withTimeout(undefined, params.timeoutSeconds * 1000),
+  });
+
+  if (!res.ok) {
+    const detailResult = await readResponseText(res, { maxBytes: 64_000 });
+    const detail = detailResult.text;
+    throw new Error(`SerpApi error (${res.status}): ${detail || res.statusText}`);
+  }
+
+  const data = (await res.json()) as SerpApiResponse;
+  const results = (data.organic_results || []).map((entry) => ({
+    title: entry.title || "",
+    url: entry.link || "",
+    description: entry.snippet || "",
+  }));
+
+  return { results };
 }
 
 async function runPerplexitySearch(params: {
@@ -544,7 +606,6 @@ async function runGrokSearch(params: {
   const data = (await res.json()) as GrokSearchResponse;
   const { text: extractedText, annotationCitations } = extractGrokContent(data);
   const content = extractedText ?? "No response";
-  // Prefer top-level citations; fall back to annotation-derived ones
   const citations = (data.citations ?? []).length > 0 ? data.citations! : annotationCitations;
   const inlineCitations = data.inline_citations;
 
@@ -572,7 +633,9 @@ async function runWebSearch(params: {
       ? `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || "default"}:${params.ui_lang || "default"}:${params.freshness || "default"}`
       : params.provider === "perplexity"
         ? `${params.provider}:${params.query}:${params.perplexityBaseUrl ?? DEFAULT_PERPLEXITY_BASE_URL}:${params.perplexityModel ?? DEFAULT_PERPLEXITY_MODEL}:${params.freshness || "default"}`
-        : `${params.provider}:${params.query}:${params.grokModel ?? DEFAULT_GROK_MODEL}:${String(params.grokInlineCitations ?? false)}`,
+        : params.provider === "serpapi"
+          ? `${params.provider}:${params.query}:${params.count}`
+          : `${params.provider}:${params.query}:${params.grokModel ?? DEFAULT_GROK_MODEL}:${String(params.grokInlineCitations ?? false)}`,
   );
   const cached = readCache(SEARCH_CACHE, cacheKey);
   if (cached) {
@@ -580,6 +643,44 @@ async function runWebSearch(params: {
   }
 
   const start = Date.now();
+
+  if (params.provider === "serpapi") {
+    const { results } = await runSerpApiSearch({
+      query: params.query,
+      apiKey: params.apiKey,
+      count: params.count,
+      timeoutSeconds: params.timeoutSeconds,
+    });
+
+    const mapped = results.map((entry) => {
+      const description = entry.description ?? "";
+      const title = entry.title ?? "";
+      const url = entry.url ?? "";
+      const rawSiteName = resolveSiteName(url);
+      return {
+        title: title ? wrapWebContent(title, "web_search") : "",
+        url,
+        description: description ? wrapWebContent(description, "web_search") : "",
+        siteName: rawSiteName || undefined,
+      };
+    });
+
+    const payload = {
+      query: params.query,
+      provider: params.provider,
+      count: mapped.length,
+      tookMs: Date.now() - start,
+      externalContent: {
+        untrusted: true,
+        source: "web_search",
+        provider: params.provider,
+        wrapped: true,
+      },
+      results: mapped,
+    };
+    writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+    return payload;
+  }
 
   if (params.provider === "perplexity") {
     const { content, citations } = await runPerplexitySearch({
@@ -681,7 +782,7 @@ async function runWebSearch(params: {
     const rawSiteName = resolveSiteName(url);
     return {
       title: title ? wrapWebContent(title, "web_search") : "",
-      url, // Keep raw for tool chaining
+      url,
       description: description ? wrapWebContent(description, "web_search") : "",
       published: entry.age || undefined,
       siteName: rawSiteName || undefined,
@@ -723,7 +824,9 @@ export function createWebSearchTool(options?: {
       ? "Search the web using Perplexity Sonar (direct or via OpenRouter). Returns AI-synthesized answers with citations from real-time web search."
       : provider === "grok"
         ? "Search the web using xAI Grok. Returns AI-synthesized answers with citations from real-time web search."
-        : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
+        : provider === "serpapi"
+          ? "Search the web using SerpApi (Google Search). Returns titles, URLs, and snippets for fast research."
+          : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
 
   return {
     label: "Web Search",
@@ -738,7 +841,9 @@ export function createWebSearchTool(options?: {
           ? perplexityAuth?.apiKey
           : provider === "grok"
             ? resolveGrokApiKey(grokConfig)
-            : resolveSearchApiKey(search);
+            : provider === "serpapi"
+              ? resolveSerpApiKey(search)
+              : resolveSearchApiKey(search);
 
       if (!apiKey) {
         return jsonResult(missingSearchKeyPayload(provider));
@@ -803,4 +908,5 @@ export const __testing = {
   resolveGrokModel,
   resolveGrokInlineCitations,
   extractGrokContent,
+  resolveSerpApiKey,
 } as const;

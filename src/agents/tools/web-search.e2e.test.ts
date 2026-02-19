@@ -13,6 +13,7 @@ const {
   resolveGrokModel,
   resolveGrokInlineCitations,
   extractGrokContent,
+  resolveSerpApiKey,
 } = __testing;
 
 describe("web_search perplexity baseUrl defaults", () => {
@@ -218,5 +219,24 @@ describe("web_search grok response parsing", () => {
     const result = extractGrokContent({});
     expect(result.text).toBeUndefined();
     expect(result.annotationCitations).toEqual([]);
+  });
+});
+
+describe("web_search serpapi config resolution", () => {
+  it("uses config apiKey when provided", () => {
+    expect(resolveSerpApiKey({ apiKey: "serpapi-test-key" })).toBe("serpapi-test-key");
+  });
+
+  it("returns undefined when no apiKey is available", () => {
+    withEnv({ SERPAPI_KEY: undefined }, () => {
+      expect(resolveSerpApiKey({})).toBeUndefined();
+      expect(resolveSerpApiKey(undefined)).toBeUndefined();
+    });
+  });
+
+  it("uses env SERPAPI_KEY when provided", () => {
+    withEnv({ SERPAPI_KEY: "env-serpapi-key" }, () => {
+      expect(resolveSerpApiKey({})).toBe("env-serpapi-key");
+    });
   });
 });
