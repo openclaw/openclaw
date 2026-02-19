@@ -3,6 +3,7 @@ import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { shouldHandleTextCommands } from "../commands-registry.js";
 import { handleAllowlistCommand } from "./commands-allowlist.js";
 import { handleApproveCommand } from "./commands-approve.js";
@@ -139,7 +140,7 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
           await hookRunner.runBeforeReset(
             { sessionFile, messages, reason: commandAction },
             {
-              agentId: params.sessionKey?.split(":")[0] ?? "main",
+              agentId: parseAgentSessionKey(params.sessionKey)?.agentId ?? "main",
               sessionKey: params.sessionKey,
               sessionId: prevEntry?.sessionId,
               workspaceDir: params.workspaceDir,
