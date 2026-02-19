@@ -263,6 +263,20 @@ describe("isTransientHttpError", () => {
     expect(isTransientHttpError("429 Too Many Requests")).toBe(false);
     expect(isTransientHttpError("network timeout")).toBe(false);
   });
+
+  it("returns true for Google AI SDK JSON-wrapped 503 UNAVAILABLE", () => {
+    // Google AI SDK wraps errors as {"error":{"code":N,"status":"...","message":"..."}}
+    // without a leading HTTP status prefix — previously classified as non-transient.
+    const googleError503 =
+      '{"error":{"message":"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.","code":503,"status":"Service Unavailable"}}';
+    expect(isTransientHttpError(googleError503)).toBe(true);
+  });
+
+  it("returns false for Google AI SDK JSON-wrapped 429 (rate limit, not transient)", () => {
+    const googleError429 =
+      '{"error":{"message":"You exceeded your current quota.","code":429,"status":"RESOURCE_EXHAUSTED"}}';
+    expect(isTransientHttpError(googleError429)).toBe(false);
+  });
 });
 
 describe("isFailoverErrorMessage", () => {
@@ -347,5 +361,11 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("You have hit your ChatGPT usage limit (plus plan)")).toBe(
       "rate_limit",
     );
+  });
+
+  it("classifies Google AI SDK JSON-wrapped 503 as timeout", () => {
+    const googleError503 =
+      '{"error":{"message":"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.","code":503,"status":"Service Unavailable"}}';
+    expect(classifyFailoverReason(googleError503)).toBe("timeout");
   });
 });

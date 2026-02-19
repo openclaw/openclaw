@@ -13,6 +13,13 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ status: 403 })).toBe("auth");
     expect(resolveFailoverReasonFromError({ status: 408 })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ status: 400 })).toBe("format");
+    expect(resolveFailoverReasonFromError({ status: 503 })).toBe("timeout");
+  });
+
+  it("infers timeout from Google AI SDK JSON-wrapped 503 error message", () => {
+    const googleError503 =
+      '{"error":{"message":"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.","code":503,"status":"Service Unavailable"}}';
+    expect(resolveFailoverReasonFromError({ message: googleError503 })).toBe("timeout");
   });
 
   it("infers format errors from error messages", () => {
