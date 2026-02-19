@@ -139,7 +139,12 @@ export function parseTtsDirectives(
             if (!policy.allowProvider) {
               break;
             }
-            if (rawValue === "openai" || rawValue === "elevenlabs" || rawValue === "edge") {
+            if (
+              rawValue === "openai" ||
+              rawValue === "elevenlabs" ||
+              rawValue === "fishaudio" ||
+              rawValue === "edge"
+            ) {
               overrides.provider = rawValue;
             } else {
               warnings.push(`unsupported provider "${rawValue}"`);
@@ -305,6 +310,16 @@ export function parseTtsDirectives(
               ...overrides.elevenlabs,
               seed: normalizeSeed(Number.parseInt(rawValue, 10)),
             };
+            break;
+          case "referenceid":
+          case "reference_id":
+          case "fishaudio_reference":
+          case "fishaudio_voice":
+          case "fishaudiovoice":
+            if (!policy.allowVoice) {
+              break;
+            }
+            overrides.fishaudio = { ...overrides.fishaudio, voiceId: rawValue };
             break;
           default:
             break;
@@ -626,6 +641,54 @@ export async function openaiTTS(params: {
 
     if (!response.ok) {
       throw new Error(`OpenAI TTS API error (${response.status})`);
+    }
+
+    return Buffer.from(await response.arrayBuffer());
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export async function fishAudioTTS(params: {
+  text: string;
+  apiKey: string;
+  baseUrl: string;
+  voiceId?: string;
+  format: "mp3" | "wav" | "pcm" | "opus";
+  latency: "normal" | "balanced";
+  sampleRate?: number;
+  timeoutMs: number;
+}): Promise<Buffer> {
+  const { text, apiKey, baseUrl, voiceId, format, latency, sampleRate, timeoutMs } = params;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const body: Record<string, unknown> = {
+      text,
+      format,
+      latency,
+    };
+    if (voiceId) {
+      body.reference_id = voiceId;
+    }
+    if (sampleRate) {
+      body.sample_rate = sampleRate;
+    }
+
+    const response = await fetch(`${baseUrl}/v1/tts`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      throw new Error(`Fish Audio API error (${response.status})`);
     }
 
     return Buffer.from(await response.arrayBuffer());

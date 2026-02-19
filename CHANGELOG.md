@@ -6,6 +6,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- TTS: add Fish Audio as a core TTS provider with voice selection, model configuration, gateway integration, and documentation. Thanks @twangodev.
+
 ### Fixes
 
 - Discord/Gateway: handle close code 4014 (missing privileged gateway intents) without crashing the gateway. Thanks @thewilloftheshadow.

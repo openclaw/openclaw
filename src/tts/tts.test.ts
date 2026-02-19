@@ -40,7 +40,7 @@ vi.mock("../agents/model-auth.js", () => ({
   requireApiKey: vi.fn((auth: { apiKey?: string }) => auth.apiKey ?? ""),
 }));
 
-const { _test, resolveTtsConfig, maybeApplyTtsToPayload, getTtsProvider } = tts;
+const { _test, resolveTtsConfig, resolveTtsApiKey, maybeApplyTtsToPayload, getTtsProvider } = tts;
 
 const {
   isValidVoiceId,
@@ -48,6 +48,7 @@ const {
   isValidOpenAIModel,
   OPENAI_TTS_MODELS,
   OPENAI_TTS_VOICES,
+  DEFAULT_FISHAUDIO_VOICE_ID,
   parseTtsDirectives,
   resolveModelOverridePolicy,
   summarizeText,
@@ -397,6 +398,7 @@ describe("tts", () => {
           OPENAI_API_KEY: "test-openai-key",
           ELEVENLABS_API_KEY: undefined,
           XI_API_KEY: undefined,
+          FISH_API_KEY: undefined,
         },
         () => {
           const config = resolveTtsConfig(baseCfg);
@@ -412,6 +414,7 @@ describe("tts", () => {
           OPENAI_API_KEY: undefined,
           ELEVENLABS_API_KEY: "test-elevenlabs-key",
           XI_API_KEY: undefined,
+          FISH_API_KEY: undefined,
         },
         () => {
           const config = resolveTtsConfig(baseCfg);
@@ -427,6 +430,7 @@ describe("tts", () => {
           OPENAI_API_KEY: undefined,
           ELEVENLABS_API_KEY: undefined,
           XI_API_KEY: undefined,
+          FISH_API_KEY: undefined,
         },
         () => {
           const config = resolveTtsConfig(baseCfg);
@@ -434,6 +438,92 @@ describe("tts", () => {
           expect(provider).toBe("edge");
         },
       );
+    });
+  });
+
+  describe("Fish Audio provider", () => {
+    const baseCfg: OpenClawConfig = {
+      agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+      messages: { tts: {} },
+    };
+
+    it("resolveTtsApiKey returns Fish Audio key from config", () => {
+      const cfg: OpenClawConfig = {
+        ...baseCfg,
+        messages: { tts: { fishaudio: { apiKey: "fish-config-key" } } },
+      };
+      const config = resolveTtsConfig(cfg);
+      expect(resolveTtsApiKey(config, "fishaudio")).toBe("fish-config-key");
+    });
+
+    it("resolveTtsApiKey returns Fish Audio key from FISH_API_KEY env var", () => {
+      withEnv({ FISH_API_KEY: "fish-env-key" }, () => {
+        const config = resolveTtsConfig(baseCfg);
+        expect(resolveTtsApiKey(config, "fishaudio")).toBe("fish-env-key");
+      });
+    });
+
+    it("getTtsProvider auto-detects Fish Audio when FISH_API_KEY is set and others are missing", () => {
+      withEnv(
+        {
+          OPENAI_API_KEY: undefined,
+          ELEVENLABS_API_KEY: undefined,
+          XI_API_KEY: undefined,
+          FISH_API_KEY: "fish-env-key",
+        },
+        () => {
+          const config = resolveTtsConfig(baseCfg);
+          const provider = getTtsProvider(config, "/tmp/tts-prefs-fishaudio.json");
+          expect(provider).toBe("fishaudio");
+        },
+      );
+    });
+
+    it("parseTtsDirectives accepts provider=fishaudio", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true });
+      const input = "Hello [[tts:provider=fishaudio]] world";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.overrides.provider).toBe("fishaudio");
+    });
+
+    it("parseTtsDirectives accepts voiceid directive for Fish Audio", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true });
+      const input = "Hello [[tts:referenceid=abc123]] world";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.overrides.fishaudio?.voiceId).toBe("abc123");
+    });
+
+    it("resolveTtsConfig resolves fishaudio defaults", () => {
+      const config = resolveTtsConfig(baseCfg);
+      expect(config.fishaudio.baseUrl).toBe("https://api.fish.audio");
+      expect(config.fishaudio.format).toBe("mp3");
+      expect(config.fishaudio.latency).toBe("balanced");
+      expect(config.fishaudio.voiceId).toBe(DEFAULT_FISHAUDIO_VOICE_ID);
+    });
+
+    it("resolveTtsConfig preserves fishaudio config values", () => {
+      const cfg: OpenClawConfig = {
+        ...baseCfg,
+        messages: {
+          tts: {
+            fishaudio: {
+              apiKey: "my-key",
+              baseUrl: "https://custom.fish.audio",
+              voiceId: "ref-123",
+              format: "opus",
+              latency: "normal",
+            },
+          },
+        },
+      };
+      const config = resolveTtsConfig(cfg);
+      expect(config.fishaudio.apiKey).toBe("my-key");
+      expect(config.fishaudio.baseUrl).toBe("https://custom.fish.audio");
+      expect(config.fishaudio.voiceId).toBe("ref-123");
+      expect(config.fishaudio.format).toBe("opus");
+      expect(config.fishaudio.latency).toBe("normal");
     });
   });
 

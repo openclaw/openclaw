@@ -1303,6 +1303,13 @@ Batches rapid text-only messages from the same sender into a single agent turn. 
         model: "gpt-4o-mini-tts",
         voice: "alloy",
       },
+      fishaudio: {
+        apiKey: "fish_audio_api_key",
+        baseUrl: "https://api.fish.audio",
+        voiceId: "voice_id",
+        format: "mp3",
+        latency: "balanced",
+      },
     },
   },
 }
@@ -1310,7 +1317,7 @@ Batches rapid text-only messages from the same sender into a single agent turn. 
 
 - `auto` controls auto-TTS. `/tts off|always|inbound|tagged` overrides per session.
 - `summaryModel` overrides `agents.defaults.model.primary` for auto-summary.
-- API keys fall back to `ELEVENLABS_API_KEY`/`XI_API_KEY` and `OPENAI_API_KEY`.
+- API keys fall back to `ELEVENLABS_API_KEY`/`XI_API_KEY`, `FISH_API_KEY`, and `OPENAI_API_KEY`.
 
 ---
 

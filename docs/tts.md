@@ -9,13 +9,14 @@ title: "Text-to-Speech"
 
 # Text-to-speech (TTS)
 
-OpenClaw can convert outbound replies into audio using ElevenLabs, OpenAI, or Edge TTS.
+OpenClaw can convert outbound replies into audio using ElevenLabs, Fish Audio, OpenAI, or Edge TTS.
 It works anywhere OpenClaw can send audio; Telegram gets a round voice-note bubble.
 
 ## Supported services
 
 - **ElevenLabs** (primary or fallback provider)
 - **OpenAI** (primary or fallback provider; also used for summaries)
+- **Fish Audio** (primary or fallback provider)
 - **Edge TTS** (primary or fallback provider; uses `node-edge-tts`, default when no API keys)
 
 ### Edge TTS notes
@@ -32,9 +33,10 @@ does not publish limits, so assume similar or lower limits. citeturn0searc
 
 ## Optional keys
 
-If you want OpenAI or ElevenLabs:
+If you want OpenAI, ElevenLabs, or Fish Audio:
 
 - `ELEVENLABS_API_KEY` (or `XI_API_KEY`)
+- `FISH_API_KEY`
 - `OPENAI_API_KEY`
 
 Edge TTS does **not** require an API key. If no API keys are found, OpenClaw defaults
@@ -50,6 +52,7 @@ so that provider must also be authenticated if you enable summaries.
 - [OpenAI Audio API reference](https://platform.openai.com/docs/api-reference/audio)
 - [ElevenLabs Text to Speech](https://elevenlabs.io/docs/api-reference/text-to-speech)
 - [ElevenLabs Authentication](https://elevenlabs.io/docs/api-reference/authentication)
+- [Fish Audio Text-to-Speech](https://docs.fish.audio/developer-guide/core-features/text-to-speech)
 - [node-edge-tts](https://github.com/SchneeHertz/node-edge-tts)
 - [Microsoft Speech output formats](https://learn.microsoft.com/azure/ai-services/speech-service/rest-text-to-speech#audio-outputs)
 
@@ -138,6 +141,25 @@ Full schema is in [Gateway configuration](/gateway/configuration).
 }
 ```
 
+### Fish Audio primary
+
+```json5
+{
+  messages: {
+    tts: {
+      auto: "always",
+      provider: "fishaudio",
+      fishaudio: {
+        apiKey: "fish_audio_api_key",
+        voiceId: "voice_id",
+        format: "mp3",
+        latency: "balanced",
+      },
+    },
+  },
+}
+```
+
 ### Disable Edge TTS
 
 ```json5
@@ -204,16 +226,16 @@ Then run:
   - `tagged` only sends audio when the reply includes `[[tts]]` tags.
 - `enabled`: legacy toggle (doctor migrates this to `auto`).
 - `mode`: `"final"` (default) or `"all"` (includes tool/block replies).
-- `provider`: `"elevenlabs"`, `"openai"`, or `"edge"` (fallback is automatic).
+- `provider`: `"elevenlabs"`, `"fishaudio"`, `"openai"`, or `"edge"` (fallback is automatic).
 - If `provider` is **unset**, OpenClaw prefers `openai` (if key), then `elevenlabs` (if key),
-  otherwise `edge`.
+  then `fishaudio` (if key), otherwise `edge`.
 - `summaryModel`: optional cheap model for auto-summary; defaults to `agents.defaults.model.primary`.
   - Accepts `provider/model` or a configured model alias.
 - `modelOverrides`: allow the model to emit TTS directives (on by default).
 - `maxTextLength`: hard cap for TTS input (chars). `/tts audio` fails if exceeded.
 - `timeoutMs`: request timeout (ms).
 - `prefsPath`: override the local prefs JSON path (provider/limit/summary).
-- `apiKey` values fall back to env vars (`ELEVENLABS_API_KEY`/`XI_API_KEY`, `OPENAI_API_KEY`).
+- `apiKey` values fall back to env vars (`ELEVENLABS_API_KEY`/`XI_API_KEY`, `FISH_API_KEY`, `OPENAI_API_KEY`).
 - `elevenlabs.baseUrl`: override ElevenLabs API base URL.
 - `elevenlabs.voiceSettings`:
   - `stability`, `similarityBoost`, `style`: `0..1`
@@ -222,6 +244,11 @@ Then run:
 - `elevenlabs.applyTextNormalization`: `auto|on|off`
 - `elevenlabs.languageCode`: 2-letter ISO 639-1 (e.g. `en`, `de`)
 - `elevenlabs.seed`: integer `0..4294967295` (best-effort determinism)
+- `fishaudio.apiKey`: Fish Audio API key; falls back to `FISH_API_KEY`.
+- `fishaudio.baseUrl`: override Fish Audio API base URL (default `https://api.fish.audio`).
+- `fishaudio.voiceId`: voice reference ID for voice selection/cloning.
+- `fishaudio.format`: output audio format (`mp3`, `wav`, `pcm`, `opus`).
+- `fishaudio.latency`: latency mode (`normal`, `balanced`).
 - `edge.enabled`: allow Edge TTS usage (default `true`; no API key).
 - `edge.voice`: Edge neural voice name (e.g. `en-US-MichelleNeural`).
 - `edge.lang`: language code (e.g. `en-US`).
@@ -253,8 +280,8 @@ Here you go.
 
 Available directive keys (when enabled):
 
-- `provider` (`openai` | `elevenlabs` | `edge`)
-- `voice` (OpenAI voice) or `voiceId` (ElevenLabs)
+- `provider` (`openai` | `elevenlabs` | `fishaudio` | `edge`)
+- `voice` (OpenAI voice) or `voiceId` (ElevenLabs / Fish Audio)
 - `model` (OpenAI TTS model or ElevenLabs model id)
 - `stability`, `similarityBoost`, `style`, `speed`, `useSpeakerBoost`
 - `applyTextNormalization` (`auto|on|off`)
@@ -308,9 +335,9 @@ These override `messages.tts.*` for that host.
 
 ## Output formats (fixed)
 
-- **Telegram**: Opus voice note (`opus_48000_64` from ElevenLabs, `opus` from OpenAI).
+- **Telegram**: Opus voice note (`opus_48000_64` from ElevenLabs, `opus` from OpenAI and Fish Audio).
   - 48kHz / 64kbps is a good voice-note tradeoff and required for the round bubble.
-- **Other channels**: MP3 (`mp3_44100_128` from ElevenLabs, `mp3` from OpenAI).
+- **Other channels**: MP3 (`mp3_44100_128` from ElevenLabs, `mp3` from OpenAI and Fish Audio).
   - 44.1kHz / 128kbps is the default balance for speech clarity.
 - **Edge TTS**: uses `edge.outputFormat` (default `audio-24khz-48kbitrate-mono-mp3`).
   - `node-edge-tts` accepts an `outputFormat`, but not all formats are available
