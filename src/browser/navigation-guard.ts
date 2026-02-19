@@ -1,21 +1,44 @@
-import { resolvePinnedHostnameWithPolicy, type SsrFPolicy } from "../infra/net/ssrf.js";
+import {
+  resolvePinnedHostnameWithPolicy,
+  type LookupFn,
+  type SsrFPolicy,
+} from "../infra/net/ssrf.js";
 
 const NETWORK_NAVIGATION_PROTOCOLS = new Set(["http:", "https:"]);
 
-export async function assertBrowserNavigationAllowed(opts: {
-  url: string;
+export class InvalidBrowserNavigationUrlError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "InvalidBrowserNavigationUrlError";
+  }
+}
+
+export type BrowserNavigationPolicyOptions = {
   ssrfPolicy?: SsrFPolicy;
-}): Promise<void> {
+};
+
+export function withBrowserNavigationPolicy(
+  ssrfPolicy?: SsrFPolicy,
+): BrowserNavigationPolicyOptions {
+  return ssrfPolicy ? { ssrfPolicy } : {};
+}
+
+export async function assertBrowserNavigationAllowed(
+  opts: {
+    url: string;
+    lookupFn?: LookupFn;
+  } & BrowserNavigationPolicyOptions,
+): Promise<void> {
   const rawUrl = String(opts.url ?? "").trim();
   if (!rawUrl) {
-    throw new Error("url is required");
+    throw new InvalidBrowserNavigationUrlError("url is required");
   }
 
   let parsed: URL;
   try {
     parsed = new URL(rawUrl);
   } catch {
-    throw new Error(`Invalid URL: ${rawUrl}`);
+    throw new InvalidBrowserNavigationUrlError(`Invalid URL: ${rawUrl}`);
   }
 
   if (!NETWORK_NAVIGATION_PROTOCOLS.has(parsed.protocol)) {
@@ -23,6 +46,7 @@ export async function assertBrowserNavigationAllowed(opts: {
   }
 
   await resolvePinnedHostnameWithPolicy(parsed.hostname, {
+    lookupFn: opts.lookupFn,
     policy: opts.ssrfPolicy,
   });
 }

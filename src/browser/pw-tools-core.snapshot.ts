@@ -1,6 +1,6 @@
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { type AriaSnapshotNode, formatAriaSnapshot, type RawAXNode } from "./cdp.js";
-import { assertBrowserNavigationAllowed } from "./navigation-guard.js";
+import { assertBrowserNavigationAllowed, withBrowserNavigationPolicy } from "./navigation-guard.js";
 import {
   buildRoleSnapshotFromAiSnapshot,
   buildRoleSnapshotFromAriaSnapshot,
@@ -168,7 +168,7 @@ export async function navigateViaPlaywright(opts: {
   }
   await assertBrowserNavigationAllowed({
     url,
-    ssrfPolicy: opts.ssrfPolicy,
+    ...withBrowserNavigationPolicy(opts.ssrfPolicy),
   });
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
