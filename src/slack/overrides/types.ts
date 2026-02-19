@@ -7,6 +7,7 @@ export type SlackFile = {
   url_private_download?: string;
 };
 
+// Slack attachment for forwarded messages
 export type SlackAttachment = {
   text?: string;
   fallback?: string;
