@@ -926,6 +926,37 @@ describe("restoreRedactedValues", () => {
     expect(result.channels.slack.accounts[0].botToken).toBe("original-token-first-account");
     expect(result.channels.slack.accounts[1].botToken).toBe("user-provided-new-token-value");
   });
+
+  it("preserves top-level keys missing from incoming when using uiHints lookup", () => {
+    const hints: ConfigUiHints = {
+      "gateway.auth.token": { sensitive: true },
+    };
+    const incoming = {
+      ui: { seamColor: "#ff0000" },
+    };
+    const original = {
+      ui: { seamColor: "#0088cc" },
+      gateway: { auth: { token: "real-secret-token-value" } },
+    };
+
+    const result = restoreRedactedValues(incoming, original, hints) as typeof original;
+    expect(result.ui.seamColor).toBe("#ff0000");
+    expect(result.gateway.auth.token).toBe("real-secret-token-value");
+  });
+
+  it("preserves top-level keys missing from incoming when guessing sensitive paths", () => {
+    const incoming = {
+      ui: { seamColor: "#ff0000" },
+    };
+    const original = {
+      ui: { seamColor: "#0088cc" },
+      gateway: { auth: { token: "real-secret-token-value" } },
+    };
+
+    const result = restoreRedactedValues(incoming, original) as typeof original;
+    expect(result.ui.seamColor).toBe("#ff0000");
+    expect(result.gateway.auth.token).toBe("real-secret-token-value");
+  });
 });
 
 describe("realredactConfigSnapshot_real", () => {
