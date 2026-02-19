@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { applyJobPatch, createJob } from "./service/jobs.js";
 import type { CronServiceState } from "./service/state.js";
-import { DEFAULT_TOP_OF_HOUR_STAGGER_MS } from "./stagger.js";
 import type { CronJob, CronJobPatch } from "./types.js";
+import { applyJobPatch, createJob } from "./service/jobs.js";
+import { DEFAULT_TOP_OF_HOUR_STAGGER_MS } from "./stagger.js";
 
 describe("applyJobPatch", () => {
   it("clears delivery when switching to main session", () => {
@@ -278,5 +278,63 @@ describe("cron stagger defaults", () => {
     if (job.schedule.kind === "cron") {
       expect(job.schedule.staggerMs).toBe(DEFAULT_TOP_OF_HOUR_STAGGER_MS);
     }
+  });
+});
+
+describe("applyJobPatch gate handling", () => {
+  const baseJob = () => ({
+    id: "test-job",
+    name: "Test",
+    enabled: true,
+    createdAtMs: Date.now(),
+    updatedAtMs: Date.now(),
+    schedule: { kind: "cron" as const, expr: "0 */2 * * *" },
+    sessionTarget: "isolated" as const,
+    wakeMode: "now" as const,
+    payload: { kind: "agentTurn" as const, message: "run" },
+    state: {},
+  });
+
+  it("sets gate on a job", () => {
+    const job = baseJob();
+    applyJobPatch(job, { gate: { command: "~/check.sh" } });
+    expect(job.gate).toEqual({ command: "~/check.sh" });
+  });
+
+  it("sets gate with all fields", () => {
+    const job = baseJob();
+    applyJobPatch(job, { gate: { command: "~/check.sh", triggerExitCode: 1, timeoutMs: 5000 } });
+    expect(job.gate).toEqual({ command: "~/check.sh", triggerExitCode: 1, timeoutMs: 5000 });
+  });
+
+  it("replaces an existing gate", () => {
+    const job = { ...baseJob(), gate: { command: "old.sh" } };
+    applyJobPatch(job, { gate: { command: "new.sh" } });
+    expect(job.gate?.command).toBe("new.sh");
+  });
+
+  it("removes gate when patch.gate is null", () => {
+    const job = { ...baseJob(), gate: { command: "check.sh" } };
+    applyJobPatch(job, { gate: null });
+    expect(job.gate).toBeUndefined();
+  });
+
+  it("rejects gate with empty command", () => {
+    const job = baseJob();
+    expect(() => applyJobPatch(job, { gate: { command: "  " } })).toThrow("non-empty");
+  });
+
+  it("rejects gate with non-integer triggerExitCode", () => {
+    const job = baseJob();
+    expect(() => applyJobPatch(job, { gate: { command: "x.sh", triggerExitCode: 1.5 } })).toThrow(
+      "integer",
+    );
+  });
+
+  it("rejects gate with non-positive timeoutMs", () => {
+    const job = baseJob();
+    expect(() => applyJobPatch(job, { gate: { command: "x.sh", timeoutMs: -1 } })).toThrow(
+      "positive",
+    );
   });
 });

@@ -1,8 +1,10 @@
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
+import type { CronJob, CronRunOutcome, CronRunStatus, CronRunTelemetry } from "../types.js";
+import type { CronEvent, CronServiceState } from "./state.js";
 import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
 import { resolveCronDeliveryPlan } from "../delivery.js";
+import { runGate } from "../gate.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
-import type { CronJob, CronRunOutcome, CronRunStatus, CronRunTelemetry } from "../types.js";
 import {
   computeJobNextRunAtMs,
   nextWakeAtMs,
@@ -10,7 +12,6 @@ import {
   resolveJobPayloadTextForMain,
 } from "./jobs.js";
 import { locked } from "./locked.js";
-import type { CronEvent, CronServiceState } from "./state.js";
 import { ensureLoaded, persist } from "./store.js";
 
 const MAX_TIMER_DELAY_MS = 60_000;
@@ -456,6 +457,28 @@ async function executeJobCore(
   state: CronServiceState,
   job: CronJob,
 ): Promise<CronRunOutcome & CronRunTelemetry> {
+  // ── Gate check ────────────────────────────────────────────────────────────
+  // If the job has a gate script, evaluate it before doing any agent work.
+  // A non-passing gate skips the job for this tick at zero LLM cost.
+  if (job.gate) {
+    const gateResult = await runGate(job.gate, state.deps.log);
+    if (!gateResult.passed) {
+      const reason = gateResult.timedOut
+        ? `gate timed out after ${job.gate.timeoutMs ?? 30_000}ms`
+        : `gate exited with code ${gateResult.exitCode ?? "null"} (want ${job.gate.triggerExitCode ?? 0})`;
+      state.deps.log.debug(
+        { jobId: job.id, jobName: job.name, reason },
+        "cron:gate: skipping job — gate did not pass",
+      );
+      return { status: "skipped", error: `gate: ${reason}` };
+    }
+    state.deps.log.debug(
+      { jobId: job.id, jobName: job.name },
+      "cron:gate: gate passed — proceeding with agent turn",
+    );
+  }
+  // ─────────────────────────────────────────────────────────────────────────
+
   if (job.sessionTarget === "main") {
     const text = resolveJobPayloadTextForMain(job);
     if (!text) {

@@ -95,6 +95,31 @@ export type CronJobState = {
   scheduleErrorCount?: number;
 };
 
+/**
+ * Optional gate script that is evaluated before the agent turn runs.
+ *
+ * The `command` is executed in a shell (via `execFile`). The agent turn fires
+ * only when the gate exits with `triggerExitCode` (default 0).  Any other exit
+ * code causes the job to be recorded as `"skipped"` with no agent invocation.
+ *
+ * The gate itself is time-bounded by `timeoutMs` (default 30 s) to prevent a
+ * hung script from blocking the cron lane.
+ */
+export type CronGate = {
+  /** Shell command to execute. Runs in the OS default shell via `execFile`. */
+  command: string;
+  /**
+   * Exit code that allows the agent turn to proceed.
+   * Defaults to `0` (conventional "success / condition met").
+   */
+  triggerExitCode?: number;
+  /**
+   * Maximum wall-clock milliseconds the gate script may run.
+   * Defaults to 30 000 ms (30 s).
+   */
+  timeoutMs?: number;
+};
+
 export type CronJob = {
   id: string;
   agentId?: string;
@@ -111,6 +136,12 @@ export type CronJob = {
   wakeMode: CronWakeMode;
   payload: CronPayload;
   delivery?: CronDelivery;
+  /**
+   * Optional gate that must pass before the agent turn is invoked.
+   * When present, the gate script runs first; if it exits with a code other
+   * than `gate.triggerExitCode` (default 0) the job is skipped silently.
+   */
+  gate?: CronGate;
   state: CronJobState;
 };
 
@@ -126,5 +157,9 @@ export type CronJobCreate = Omit<CronJob, "id" | "createdAtMs" | "updatedAtMs" |
 export type CronJobPatch = Partial<Omit<CronJob, "id" | "createdAtMs" | "state" | "payload">> & {
   payload?: CronPayloadPatch;
   delivery?: CronDeliveryPatch;
+  /**
+   * Set or replace the gate config. Pass `null` to remove an existing gate.
+   */
+  gate?: CronGate | null;
   state?: Partial<CronJobState>;
 };

@@ -49,6 +49,13 @@ export function registerCronEditCommand(cron: Command) {
       .option("--thinking <level>", "Thinking level for agent jobs")
       .option("--model <model>", "Model override for agent jobs")
       .option("--timeout-seconds <n>", "Timeout seconds for agent jobs")
+      .option("--gate <cmd>", "Set or replace the gate script. Use --clear-gate to remove it.")
+      .option("--gate-exit-code <n>", "Exit code that allows the agent turn to proceed (default 0)")
+      .option(
+        "--gate-timeout-ms <n>",
+        "Max milliseconds the gate script may run before it is killed (default 30000)",
+      )
+      .option("--clear-gate", "Remove the gate from this job", false)
       .option("--announce", "Announce summary to a chat (subagent-style)")
       .option("--deliver", "Deprecated (use --announce). Announces a summary to a chat.")
       .option("--no-deliver", "Disable announce delivery")
@@ -245,6 +252,26 @@ export function registerCronEditCommand(cron: Command) {
             }
             patch.delivery = delivery;
           }
+
+          // ── Gate ──────────────────────────────────────────────────────────
+          if (opts.clearGate) {
+            patch.gate = null;
+          } else if (typeof opts.gate === "string" && opts.gate.trim()) {
+            const gateExitCodeRaw = Number.parseInt(
+              typeof opts.gateExitCode === "string" ? opts.gateExitCode : "",
+              10,
+            );
+            const gateTimeoutMsRaw = Number.parseInt(
+              typeof opts.gateTimeoutMs === "string" ? opts.gateTimeoutMs : "",
+              10,
+            );
+            patch.gate = {
+              command: opts.gate.trim(),
+              ...(Number.isFinite(gateExitCodeRaw) ? { triggerExitCode: gateExitCodeRaw } : {}),
+              ...(Number.isFinite(gateTimeoutMsRaw) ? { timeoutMs: gateTimeoutMsRaw } : {}),
+            };
+          }
+          // ─────────────────────────────────────────────────────────────────
 
           const res = await callGatewayFromCli("cron.update", opts, {
             id,

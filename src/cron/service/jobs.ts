@@ -1,11 +1,4 @@
 import crypto from "node:crypto";
-import { parseAbsoluteTimeMs } from "../parse.js";
-import { computeNextRunAtMs } from "../schedule.js";
-import {
-  normalizeCronStaggerMs,
-  resolveCronStaggerMs,
-  resolveDefaultCronStaggerMs,
-} from "../stagger.js";
 import type {
   CronDelivery,
   CronDeliveryPatch,
@@ -15,6 +8,14 @@ import type {
   CronPayload,
   CronPayloadPatch,
 } from "../types.js";
+import type { CronServiceState } from "./state.js";
+import { parseAbsoluteTimeMs } from "../parse.js";
+import { computeNextRunAtMs } from "../schedule.js";
+import {
+  normalizeCronStaggerMs,
+  resolveCronStaggerMs,
+  resolveDefaultCronStaggerMs,
+} from "../stagger.js";
 import { normalizeHttpWebhookUrl } from "../webhook-url.js";
 import {
   normalizeOptionalAgentId,
@@ -23,7 +24,6 @@ import {
   normalizePayloadToSystemText,
   normalizeRequiredName,
 } from "./normalize.js";
-import type { CronServiceState } from "./state.js";
 
 const STUCK_RUN_MS = 2 * 60 * 60 * 1000;
 
@@ -357,6 +357,21 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
     wakeMode: input.wakeMode,
     payload: input.payload,
     delivery: input.delivery,
+    gate: (() => {
+      const g = (input as { gate?: unknown }).gate;
+      if (!g || typeof g !== "object") {
+        return undefined;
+      }
+      const { command, triggerExitCode, timeoutMs } = g as Record<string, unknown>;
+      if (typeof command !== "string" || !command.trim()) {
+        return undefined;
+      }
+      return {
+        command: command.trim(),
+        ...(typeof triggerExitCode === "number" ? { triggerExitCode } : {}),
+        ...(typeof timeoutMs === "number" && timeoutMs > 0 ? { timeoutMs } : {}),
+      };
+    })(),
     state: {
       ...input.state,
     },
@@ -432,6 +447,28 @@ export function applyJobPatch(job: CronJob, patch: CronJobPatch) {
   }
   if ("sessionKey" in patch) {
     job.sessionKey = normalizeOptionalSessionKey((patch as { sessionKey?: unknown }).sessionKey);
+  }
+  // Gate — null explicitly removes it, an object replaces it.
+  if ("gate" in patch) {
+    if (patch.gate === null || patch.gate === undefined) {
+      job.gate = undefined;
+    } else {
+      const { command, triggerExitCode, timeoutMs } = patch.gate;
+      if (typeof command !== "string" || !command.trim()) {
+        throw new Error("gate.command must be a non-empty string");
+      }
+      if (triggerExitCode !== undefined && !Number.isInteger(triggerExitCode)) {
+        throw new Error("gate.triggerExitCode must be an integer");
+      }
+      if (timeoutMs !== undefined && (!Number.isInteger(timeoutMs) || timeoutMs <= 0)) {
+        throw new Error("gate.timeoutMs must be a positive integer");
+      }
+      job.gate = {
+        command: command.trim(),
+        ...(triggerExitCode !== undefined ? { triggerExitCode } : {}),
+        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+      };
+    }
   }
   assertSupportedJobSpec(job);
   assertDeliverySupport(job);

@@ -1,9 +1,9 @@
 import type { Command } from "commander";
 import type { CronJob } from "../../cron/types.js";
+import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { danger } from "../../globals.js";
 import { sanitizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
-import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { parsePositiveIntOrUndefined } from "../program/helpers.js";
 import {
@@ -83,6 +83,15 @@ export function registerCronAddCommand(cron: Command) {
       .option("--thinking <level>", "Thinking level for agent jobs (off|minimal|low|medium|high)")
       .option("--model <model>", "Model override for agent jobs (provider/model or alias)")
       .option("--timeout-seconds <n>", "Timeout seconds for agent jobs")
+      .option(
+        "--gate <cmd>",
+        "Shell command to run before the agent turn. Job is skipped unless the command exits with --gate-exit-code (default 0).",
+      )
+      .option("--gate-exit-code <n>", "Exit code that allows the agent turn to proceed (default 0)")
+      .option(
+        "--gate-timeout-ms <n>",
+        "Max milliseconds the gate script may run before it is killed (default 30000)",
+      )
       .option("--announce", "Announce summary to a chat (subagent-style)", false)
       .option("--deliver", "Deprecated (use --announce). Announces a summary to a chat.")
       .option("--no-deliver", "Disable announce delivery and skip main-session summary")
@@ -240,6 +249,28 @@ export function registerCronAddCommand(cron: Command) {
               ? opts.description.trim()
               : undefined;
 
+          // ── Gate ──────────────────────────────────────────────────────────
+          const gateCommand = typeof opts.gate === "string" ? opts.gate.trim() : undefined;
+          const gateExitCodeRaw = Number.parseInt(
+            typeof opts.gateExitCode === "string" ? opts.gateExitCode : "",
+            10,
+          );
+          const gateExitCode = Number.isFinite(gateExitCodeRaw) ? gateExitCodeRaw : undefined;
+          const gateTimeoutMsRaw = Number.parseInt(
+            typeof opts.gateTimeoutMs === "string" ? opts.gateTimeoutMs : "",
+            10,
+          );
+          const gateTimeoutMs = Number.isFinite(gateTimeoutMsRaw) ? gateTimeoutMsRaw : undefined;
+
+          const gate = gateCommand
+            ? {
+                command: gateCommand,
+                ...(gateExitCode !== undefined ? { triggerExitCode: gateExitCode } : {}),
+                ...(gateTimeoutMs !== undefined ? { timeoutMs: gateTimeoutMs } : {}),
+              }
+            : undefined;
+          // ─────────────────────────────────────────────────────────────────
+
           const params = {
             name,
             description,
@@ -250,6 +281,7 @@ export function registerCronAddCommand(cron: Command) {
             sessionTarget,
             wakeMode,
             payload,
+            gate,
             delivery: deliveryMode
               ? {
                   mode: deliveryMode,
