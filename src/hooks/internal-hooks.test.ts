@@ -7,6 +7,7 @@ import {
   isGatewayStartupEvent,
   isMessageReceivedEvent,
   isMessageSentEvent,
+  isToolAfterCallEvent,
   registerInternalHook,
   triggerInternalHook,
   unregisterInternalHook,
@@ -14,6 +15,7 @@ import {
   type GatewayStartupHookContext,
   type MessageReceivedHookContext,
   type MessageSentHookContext,
+  type ToolAfterCallHookContext,
 } from "./internal-hooks.js";
 
 describe("hooks", () => {
@@ -414,6 +416,62 @@ describe("hooks", () => {
 
       const keys = getRegisteredEventKeys();
       expect(keys).toEqual([]);
+    });
+  });
+
+  describe("isToolAfterCallEvent", () => {
+    it("returns true for tool:after_call events with expected context", () => {
+      const context: ToolAfterCallHookContext = {
+        toolName: "exec",
+        params: { command: "ls" },
+        result: "file1\nfile2",
+        durationMs: 42,
+      };
+      const event = createInternalHookEvent("tool", "after_call", "session-1", context);
+      expect(isToolAfterCallEvent(event)).toBe(true);
+    });
+
+    it("returns true for tool:after_call error events", () => {
+      const context: ToolAfterCallHookContext = {
+        toolName: "exec",
+        params: { command: "bad-cmd" },
+        error: "command not found",
+      };
+      const event = createInternalHookEvent("tool", "after_call", "session-1", context);
+      expect(isToolAfterCallEvent(event)).toBe(true);
+    });
+
+    it("returns false for non-tool events", () => {
+      const event = createInternalHookEvent("command", "new", "session-1", {});
+      expect(isToolAfterCallEvent(event)).toBe(false);
+    });
+
+    it("returns false for tool events with wrong action", () => {
+      const event = createInternalHookEvent("tool", "before_call", "session-1", {
+        toolName: "exec",
+        params: {},
+      });
+      expect(isToolAfterCallEvent(event)).toBe(false);
+    });
+
+    it("returns false when context is missing toolName", () => {
+      const event = createInternalHookEvent("tool", "after_call", "session-1", { params: {} });
+      expect(isToolAfterCallEvent(event)).toBe(false);
+    });
+
+    it("triggers registered tool:after_call handlers", async () => {
+      const handler = vi.fn();
+      registerInternalHook("tool:after_call", handler);
+
+      const event = createInternalHookEvent("tool", "after_call", "session-1", {
+        toolName: "read",
+        params: { file_path: "/foo/bar.ts" },
+        result: "file contents",
+      });
+      await triggerInternalHook(event);
+
+      expect(handler).toHaveBeenCalledOnce();
+      expect(handler).toHaveBeenCalledWith(event);
     });
   });
 });

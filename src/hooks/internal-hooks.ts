@@ -9,7 +9,13 @@ import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
 
-export type InternalHookEventType = "command" | "session" | "agent" | "gateway" | "message";
+export type InternalHookEventType =
+  | "command"
+  | "session"
+  | "agent"
+  | "gateway"
+  | "message"
+  | "tool";
 
 export type AgentBootstrapHookContext = {
   workspaceDir: string;
@@ -90,6 +96,29 @@ export type MessageSentHookEvent = InternalHookEvent & {
   type: "message";
   action: "sent";
   context: MessageSentHookContext;
+};
+
+// ============================================================================
+// Tool Hook Events
+// ============================================================================
+
+export type ToolAfterCallHookContext = {
+  /** Name of the tool that was executed */
+  toolName: string;
+  /** Input parameters passed to the tool */
+  params: Record<string, unknown>;
+  /** Result returned by the tool (undefined on error) */
+  result?: unknown;
+  /** Error message if the tool call failed */
+  error?: string;
+  /** Execution duration in milliseconds */
+  durationMs?: number;
+};
+
+export type ToolAfterCallHookEvent = InternalHookEvent & {
+  type: "tool";
+  action: "after_call";
+  context: ToolAfterCallHookContext;
 };
 
 export interface InternalHookEvent {
@@ -281,4 +310,17 @@ export function isMessageSentEvent(event: InternalHookEvent): event is MessageSe
     typeof context.channelId === "string" &&
     typeof context.success === "boolean"
   );
+}
+
+export function isToolAfterCallEvent(
+  event: InternalHookEvent,
+): event is ToolAfterCallHookEvent {
+  if (event.type !== "tool" || event.action !== "after_call") {
+    return false;
+  }
+  const context = event.context as Partial<ToolAfterCallHookContext> | null;
+  if (!context || typeof context !== "object") {
+    return false;
+  }
+  return typeof context.toolName === "string";
 }

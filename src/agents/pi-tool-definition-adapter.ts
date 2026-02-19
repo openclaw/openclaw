@@ -5,6 +5,7 @@ import type {
 } from "@mariozechner/pi-agent-core";
 import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { logDebug, logError } from "../logger.js";
+import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { isPlainObject } from "../utils.js";
 import type { ClientToolDefinition } from "./pi-embedded-runner/run/params.js";
@@ -135,6 +136,15 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
             }
           }
 
+          // Bridge to internal hook handler system (fire-and-forget)
+          void triggerInternalHook(
+            createInternalHookEvent("tool", "after_call", "", {
+              toolName: name,
+              params: isPlainObject(afterParams) ? afterParams : {},
+              result,
+            }),
+          );
+
           return result;
         } catch (err) {
           if (signal?.aborted) {
@@ -180,6 +190,15 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
               );
             }
           }
+
+          // Bridge to internal hook handler system (fire-and-forget)
+          void triggerInternalHook(
+            createInternalHookEvent("tool", "after_call", "", {
+              toolName: normalizedName,
+              params: isPlainObject(params) ? params : {},
+              error: described.message,
+            }),
+          );
 
           return errorResult;
         }
