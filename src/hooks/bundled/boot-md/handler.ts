@@ -1,35 +1,28 @@
 import { listAgentIds, resolveAgentWorkspaceDir } from "../../../agents/agent-scope.js";
-import type { CliDeps } from "../../../cli/deps.js";
 import { createDefaultDeps } from "../../../cli/deps.js";
-import type { OpenClawConfig } from "../../../config/config.js";
 import { runBootOnce } from "../../../gateway/boot.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import type { HookHandler } from "../../hooks.js";
-
-type BootHookContext = {
-  cfg?: OpenClawConfig;
-  workspaceDir?: string;
-  deps?: CliDeps;
-};
+import { isGatewayStartupEvent } from "../../internal-hooks.js";
 
 const log = createSubsystemLogger("hooks/boot-md");
 
 const runBootChecklist: HookHandler = async (event) => {
-  if (event.type !== "gateway" || event.action !== "startup") {
+  if (!isGatewayStartupEvent(event)) {
     return;
   }
 
-  const context = (event.context ?? {}) as BootHookContext;
-  if (!context.cfg) {
+  if (!event.context.cfg) {
     return;
   }
 
-  const deps = context.deps ?? createDefaultDeps();
-  const agentIds = listAgentIds(context.cfg);
+  const cfg = event.context.cfg;
+  const deps = event.context.deps ?? createDefaultDeps();
+  const agentIds = listAgentIds(cfg);
 
   for (const agentId of agentIds) {
-    const workspaceDir = resolveAgentWorkspaceDir(context.cfg, agentId);
-    const result = await runBootOnce({ cfg: context.cfg, deps, workspaceDir, agentId });
+    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+    const result = await runBootOnce({ cfg, deps, workspaceDir, agentId });
     if (result.status === "failed") {
       log.warn("boot-md failed for agent startup run", {
         agentId,
