@@ -28,7 +28,7 @@ import type { CronServiceState } from "./state.js";
 const STUCK_RUN_MS = 2 * 60 * 60 * 1000;
 
 function resolveStableCronOffsetMs(jobId: string, staggerMs: number) {
-  if (staggerMs <= 1) {
+  if (staggerMs <= 0) {
     return 0;
   }
   const digest = crypto.createHash("sha256").update(jobId).digest();
