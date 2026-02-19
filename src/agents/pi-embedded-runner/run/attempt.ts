@@ -101,7 +101,7 @@ import {
   formatImageDescriptionsForPrompt,
   shouldUseImagePreAnalysis,
 } from "./image-pre-analysis.js";
-import { detectAndLoadPromptImages } from "./images.js";
+import { detectAndLoadPromptImages, modelSupportsImages } from "./images.js";
 
 export function injectHistoryImagesIntoMessages(
   messages: AgentMessage[],
@@ -987,7 +987,7 @@ export async function runEmbeddedAttempt(
               log.warn(
                 `Image pre-analysis failed, falling back to native vision: ${String(preAnalysisErr)}`,
               );
-              if (imageResult.images.length > 0) {
+              if (imageResult.images.length > 0 && modelSupportsImages(params.model)) {
                 await abortable(
                   activeSession.prompt(effectivePrompt, { images: imageResult.images }),
                 );
