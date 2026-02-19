@@ -14,6 +14,11 @@ HEADLESS="${OPENCLAW_BROWSER_HEADLESS:-${CLAWDBOT_BROWSER_HEADLESS:-0}}"
 
 mkdir -p "${HOME}" "${HOME}/.chrome" "${XDG_CONFIG_HOME}" "${XDG_CACHE_HOME}"
 
+# If the browser profile is persisted across container restarts, Chromium may
+# leave singleton lock files behind. Clear them so the next launch doesn't
+# refuse to start.
+rm -f "${HOME}/.chrome/SingletonLock" "${HOME}/.chrome/SingletonSocket" "${HOME}/.chrome/SingletonCookie" || true
+
 Xvfb :1 -screen 0 1280x800x24 -ac -nolisten tcp &
 
 if [[ "${HEADLESS}" == "1" ]]; then

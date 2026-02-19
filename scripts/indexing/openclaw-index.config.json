@@ -1,0 +1,97 @@
+{
+  "docs": {
+    "baseUrl": "https://docs.openclaw.ai",
+    "llmsPath": "/llms.txt",
+    "sitemapPath": "/sitemap.xml",
+    "allowedLocales": ["en", "zh-CN"],
+    "crawlMaxPages": 1500,
+    "fetchConcurrency": 10,
+    "requestTimeoutMs": 15000,
+    "requestRetries": 3,
+    "requestBackoffMs": 400
+  },
+  "code": {
+    "roots": [
+      ".",
+      "../openclaw-mission-control",
+      "../ClawRouter"
+    ],
+    "includeExtensions": [
+      ".ts",
+      ".tsx",
+      ".js",
+      ".mjs",
+      ".cjs",
+      ".json",
+      ".yaml",
+      ".yml",
+      ".md",
+      ".sh",
+      ".go",
+      ".swift"
+    ],
+    "excludeDirs": [
+      ".git",
+      "node_modules",
+      "dist",
+      "build",
+      ".next",
+      "coverage",
+      ".turbo",
+      ".cache",
+      "tmp",
+      "vendor"
+    ],
+    "maxFileBytes": 1000000,
+    "chunkLines": 180,
+    "chunkOverlap": 30
+  },
+  "runtime": {
+    "homeStateDir": "~/.openclaw",
+    "maxDepth": 4,
+    "excludeDirs": [
+      "sessions",
+      "credentials",
+      "cache",
+      "tmp",
+      ".git"
+    ],
+    "includeFilePatterns": [
+      "^openclaw(\\..+)?\\.json$",
+      "^AGENTS\\.md$",
+      "^CLAUDE\\.md$",
+      "^SOUL\\.md$",
+      "^USER\\.md$",
+      "^TOOLS\\.md$",
+      "^BOOTSTRAP\\.md$",
+      "^HEARTBEAT\\.md$",
+      "^IDENTITY\\.md$",
+      "^MEMORY\\.md$"
+    ]
+  },
+  "configDocs": {
+    "files": [
+      "docs/gateway/configuration.md",
+      "docs/gateway/configuration-reference.md",
+      "docs/gateway/authentication.md",
+      "docs/gateway/security/index.md",
+      "docs/gateway/pairing.md",
+      "docs/gateway/sandboxing.md",
+      "docs/gateway/sandbox-vs-tool-policy-vs-elevated.md",
+      "docs/gateway/doctor.md",
+      "docs/concepts/session.md",
+      "docs/concepts/memory.md",
+      "docs/concepts/oauth.md",
+      "docs/concepts/system-prompt.md",
+      "docs/help/faq.md",
+      "docs/start/setup.md"
+    ]
+  },
+  "qualityGates": {
+    "minDocsPages": 250,
+    "minCodeFiles": 200,
+    "minRuntimeFiles": 5,
+    "maxDocFailureRate": 0.1,
+    "maxHiddenDocsWarning": 0
+  }
+}

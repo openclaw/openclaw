@@ -86,3 +86,5 @@ USER.md
 !.agent/workflows/
 /local/
 package-lock.json
+# Local retrieval/index build artifacts (runtime-generated)
+.openclaw-index/
