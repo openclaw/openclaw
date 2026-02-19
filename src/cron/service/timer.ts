@@ -226,7 +226,7 @@ export async function executeJob(
       // job.state.lastDeliveredHash is persisted to disk via CronJobState → saveCronStore()
       // (called by persist() at the end of onTimer), so dedup survives process restarts.
       const currentHash = hashResult(outputText);
-      if (job.state.lastDeliveredHash && job.state.lastDeliveredHash === currentHash) {
+      if (job.state.lastDeliveredHash === currentHash) {
         logWarn(`[cron:${job.id}] Dedup: identical result, skipping delivery`);
         await finish("ok", undefined, res.summary);
         return;

@@ -52,7 +52,7 @@ export function sanitizeOutbound(text: string | undefined | null): SanitizeResul
     // Reset lastIndex for stateful (global) regexes.
     pattern.lastIndex = 0;
     const matches = cleaned.match(pattern);
-    if (matches && matches.length > 0) {
+    if (matches) {
       for (const m of matches) {
         logWarn(
           JSON.stringify({
@@ -66,7 +66,6 @@ export function sanitizeOutbound(text: string | undefined | null): SanitizeResul
         );
       }
       matchedRules.push(label);
-      pattern.lastIndex = 0;
       cleaned = cleaned.replace(pattern, "");
     }
   }

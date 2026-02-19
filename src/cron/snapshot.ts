@@ -125,10 +125,7 @@ async function pruneSnapshots(dir: string): Promise<void> {
   // If still over limit, remove oldest.
   const remaining = jsonFiles.filter((f) => !toRemove.includes(f));
   if (remaining.length > MAX_SNAPSHOTS_PER_JOB) {
-    const excess = remaining.length - MAX_SNAPSHOTS_PER_JOB;
-    for (let i = 0; i < excess; i++) {
-      toRemove.push(remaining[i]!);
-    }
+    toRemove.push(...remaining.slice(0, remaining.length - MAX_SNAPSHOTS_PER_JOB));
   }
 
   for (const file of toRemove) {
