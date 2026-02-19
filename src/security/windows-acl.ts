@@ -200,9 +200,10 @@ export function parseIcaclsOutput(output: string, targetPath: string): WindowsAc
 export function classifyFromSddl(
   sddl: string,
   _env?: NodeJS.ProcessEnv,
+  currentUserSid?: string,
 ): Pick<WindowsAclSummary, "trusted" | "untrustedWorld" | "untrustedGroup"> | null {
   // Extract DACL section: D:...
-  const daclMatch = sddl.match(/D:[A-Z]*(\(.*\))/);
+  const daclMatch = sddl.match(/D:[A-Z]*(\([^)]*\)(?:\([^)]*\))*)/);
   if (!daclMatch) {
     return null;
   }
@@ -235,13 +236,12 @@ export function classifyFromSddl(
 
     // Determine trust level from SDDL abbreviation or raw SID
     const upperSid = accountSid.toUpperCase();
+    // Tokenize SDDL rights into 2-character codes to avoid substring false positives
+    const rightsTokens = rightsStr.match(/.{1,2}/g) ?? [];
+    const rightsSet = new Set(rightsTokens);
     const canWrite =
-      rightsStr.includes("FA") ||
-      rightsStr.includes("GA") ||
-      rightsStr.includes("WD") ||
-      rightsStr.includes("WO");
-    const canRead =
-      rightsStr.includes("FA") || rightsStr.includes("GA") || rightsStr.includes("FR");
+      rightsSet.has("FA") || rightsSet.has("GA") || rightsSet.has("WD") || rightsSet.has("WO");
+    const canRead = rightsSet.has("FA") || rightsSet.has("GA") || rightsSet.has("FR");
 
     const entry: WindowsAclEntry = {
       principal: accountSid,
@@ -257,11 +257,8 @@ export function classifyFromSddl(
       untrustedWorld.push(entry);
     } else if (TRUSTED_SIDS.has(accountSid.toLowerCase())) {
       trusted.push(entry);
-    } else if (accountSid.startsWith("S-1-5-21-")) {
-      // Domain/local user SID — check if it matches the current user
-      // We can't resolve SID→name without Win32 API, so we treat
-      // single-user SIDs as trusted (the audit already verified the
-      // icacls output for the user's own account)
+    } else if (currentUserSid && accountSid.toLowerCase() === currentUserSid.toLowerCase()) {
+      // Current user's SID — trusted
       trusted.push(entry);
     } else {
       untrustedGroup.push(entry);
@@ -297,18 +294,31 @@ export async function inspectWindowsAcl(
 ): Promise<WindowsAclSummary> {
   const exec = opts?.exec ?? runExec;
 
+  // Resolve current user's SID for precise trust classification.
+  let currentUserSid: string | undefined;
+  try {
+    const { stdout: whoamiOut } = await exec("whoami", ["/user", "/fo", "csv", "/nh"]);
+    const sidMatch = whoamiOut.match(/"(S-1-[\d-]+)"/);
+    if (sidMatch) {
+      currentUserSid = sidMatch[1];
+    }
+  } catch {
+    // whoami failed — proceed without current user SID
+  }
+
   // Fast path: try SDDL-based classification first.
   // SDDL uses locale-independent SID abbreviations (SY, BA, etc.), avoiding
   // false positives from localized account names (e.g. ru-RU "СИСТЕМА").
   try {
+    const escapedPath = targetPath.replace(/'/g, "''").replace(/`/g, "``");
     const { stdout: sddlOut } = await exec("powershell", [
       "-NoProfile",
       "-Command",
-      `(Get-Acl '${targetPath.replace(/'/g, "''")}').Sddl`,
+      `(Get-Acl '${escapedPath}').Sddl`,
     ]);
     const sddl = sddlOut.trim();
     if (sddl && sddl.startsWith("O:")) {
-      const sddlResult = classifyFromSddl(sddl, opts?.env);
+      const sddlResult = classifyFromSddl(sddl, opts?.env, currentUserSid);
       if (sddlResult) {
         // Also get icacls entries for display purposes (human-readable names)
         try {
