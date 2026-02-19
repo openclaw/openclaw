@@ -11,6 +11,7 @@ import {
 const state = vi.hoisted(() => ({
   launchctlCalls: [] as string[][],
   listOutput: "",
+  bootstrapError: "",
   dirs: new Set<string>(),
   files: new Map<string, string>(),
 }));
@@ -32,6 +33,9 @@ vi.mock("./exec-file.js", () => ({
     state.launchctlCalls.push(call);
     if (call[0] === "list") {
       return { stdout: state.listOutput, stderr: "", code: 0 };
+    }
+    if (call[0] === "bootstrap" && state.bootstrapError) {
+      return { stdout: "", stderr: state.bootstrapError, code: 1 };
     }
     return { stdout: "", stderr: "", code: 0 };
   }),
@@ -66,6 +70,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 beforeEach(() => {
   state.launchctlCalls.length = 0;
   state.listOutput = "";
+  state.bootstrapError = "";
   state.dirs.clear();
   state.files.clear();
   vi.clearAllMocks();
@@ -173,64 +178,24 @@ describe("launchd install", () => {
   });
 
   it("shows actionable guidance when launchctl gui domain does not support bootstrap", async () => {
-    const originalPath = process.env.PATH;
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-launchctl-test-"));
+    state.bootstrapError = "Bootstrap failed: 125: Domain does not support specified action";
+    const env: Record<string, string | undefined> = {
+      HOME: "/Users/test",
+      OPENCLAW_PROFILE: "default",
+    };
+    let message = "";
     try {
-      const binDir = path.join(tmpDir, "bin");
-      const homeDir = path.join(tmpDir, "home");
-      await fs.mkdir(binDir, { recursive: true });
-      await fs.mkdir(homeDir, { recursive: true });
-
-      const stubJsPath = path.join(binDir, "launchctl.js");
-      await fs.writeFile(
-        stubJsPath,
-        [
-          "const args = process.argv.slice(2);",
-          'if (args[0] === "bootstrap") {',
-          '  process.stderr.write("Bootstrap failed: 125: Domain does not support specified action\\n");',
-          "  process.exit(1);",
-          "}",
-          "process.exit(0);",
-          "",
-        ].join("\n"),
-        "utf8",
-      );
-
-      if (process.platform === "win32") {
-        await fs.writeFile(
-          path.join(binDir, "launchctl.cmd"),
-          `@echo off\r\nnode "%~dp0\\launchctl.js" %*\r\n`,
-          "utf8",
-        );
-      } else {
-        const shPath = path.join(binDir, "launchctl");
-        await fs.writeFile(shPath, `#!/bin/sh\nnode "$(dirname "$0")/launchctl.js" "$@"\n`, "utf8");
-        await fs.chmod(shPath, 0o755);
-      }
-
-      process.env.PATH = `${binDir}${path.delimiter}${originalPath ?? ""}`;
-
-      const env: Record<string, string | undefined> = {
-        HOME: homeDir,
-        OPENCLAW_PROFILE: "default",
-      };
-      let message = "";
-      try {
-        await installLaunchAgent({
-          env,
-          stdout: new PassThrough(),
-          programArguments: ["node", "-e", "process.exit(0)"],
-        });
-      } catch (error) {
-        message = String(error);
-      }
-      expect(message).toContain("logged-in macOS GUI session");
-      expect(message).toContain("wrong user (including sudo)");
-      expect(message).toContain("https://docs.openclaw.ai/gateway");
-    } finally {
-      process.env.PATH = originalPath;
-      await fs.rm(tmpDir, { recursive: true, force: true });
+      await installLaunchAgent({
+        env,
+        stdout: new PassThrough(),
+        programArguments: ["node", "-e", "process.exit(0)"],
+      });
+    } catch (error) {
+      message = String(error);
     }
+    expect(message).toContain("logged-in macOS GUI session");
+    expect(message).toContain("wrong user (including sudo)");
+    expect(message).toContain("https://docs.openclaw.ai/gateway");
   });
 });
 

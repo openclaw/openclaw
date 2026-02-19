@@ -113,6 +113,35 @@ import type { OpenClawPluginServiceContext } from "openclaw/plugin-sdk";
 import { emitDiagnosticEvent } from "openclaw/plugin-sdk";
 import { createDiagnosticsOtelService } from "./service.js";
 
+function createLogger() {
+  return {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  };
+}
+
+function createTraceOnlyContext(endpoint: string): OpenClawPluginServiceContext {
+  return {
+    config: {
+      diagnostics: {
+        enabled: true,
+        otel: {
+          enabled: true,
+          endpoint,
+          protocol: "http/protobuf",
+          traces: true,
+          metrics: false,
+          logs: false,
+        },
+      },
+    },
+    logger: createLogger(),
+    stateDir: "/tmp/openclaw-diagnostics-otel-test",
+  };
+}
+
 describe("diagnostics-otel service", () => {
   beforeEach(() => {
     telemetryState.counters.clear();
@@ -151,12 +180,7 @@ describe("diagnostics-otel service", () => {
           },
         },
       },
-      logger: {
-        info: vi.fn(),
-        warn: vi.fn(),
-        error: vi.fn(),
-        debug: vi.fn(),
-      },
+      logger: createLogger(),
       stateDir: "/tmp/openclaw-diagnostics-otel-test",
     };
     await service.start(ctx);
@@ -236,97 +260,41 @@ describe("diagnostics-otel service", () => {
 
   test("appends signal path when endpoint contains non-signal /v1 segment", async () => {
     const service = createDiagnosticsOtelService();
-    await service.start({
-      config: {
-        diagnostics: {
-          enabled: true,
-          otel: {
-            enabled: true,
-            endpoint: "https://www.comet.com/opik/api/v1/private/otel",
-            protocol: "http/protobuf",
-            traces: true,
-            metrics: false,
-            logs: false,
-          },
-        },
-      },
-      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-    });
+    const ctx = createTraceOnlyContext("https://www.comet.com/opik/api/v1/private/otel");
+    await service.start(ctx);
 
     const options = traceExporterCtor.mock.calls[0]?.[0] as { url?: string } | undefined;
     expect(options?.url).toBe("https://www.comet.com/opik/api/v1/private/otel/v1/traces");
-    await service.stop?.();
+    await service.stop?.(ctx);
   });
 
   test("keeps already signal-qualified endpoint unchanged", async () => {
     const service = createDiagnosticsOtelService();
-    await service.start({
-      config: {
-        diagnostics: {
-          enabled: true,
-          otel: {
-            enabled: true,
-            endpoint: "https://collector.example.com/v1/traces",
-            protocol: "http/protobuf",
-            traces: true,
-            metrics: false,
-            logs: false,
-          },
-        },
-      },
-      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-    });
+    const ctx = createTraceOnlyContext("https://collector.example.com/v1/traces");
+    await service.start(ctx);
 
     const options = traceExporterCtor.mock.calls[0]?.[0] as { url?: string } | undefined;
     expect(options?.url).toBe("https://collector.example.com/v1/traces");
-    await service.stop?.();
+    await service.stop?.(ctx);
   });
 
   test("keeps signal-qualified endpoint unchanged when it has query params", async () => {
     const service = createDiagnosticsOtelService();
-    await service.start({
-      config: {
-        diagnostics: {
-          enabled: true,
-          otel: {
-            enabled: true,
-            endpoint: "https://collector.example.com/v1/traces?timeout=30s",
-            protocol: "http/protobuf",
-            traces: true,
-            metrics: false,
-            logs: false,
-          },
-        },
-      },
-      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-    });
+    const ctx = createTraceOnlyContext("https://collector.example.com/v1/traces?timeout=30s");
+    await service.start(ctx);
 
     const options = traceExporterCtor.mock.calls[0]?.[0] as { url?: string } | undefined;
     expect(options?.url).toBe("https://collector.example.com/v1/traces?timeout=30s");
-    await service.stop?.();
+    await service.stop?.(ctx);
   });
 
   test("keeps signal-qualified endpoint unchanged when signal path casing differs", async () => {
     const service = createDiagnosticsOtelService();
-    await service.start({
-      config: {
-        diagnostics: {
-          enabled: true,
-          otel: {
-            enabled: true,
-            endpoint: "https://collector.example.com/v1/Traces",
-            protocol: "http/protobuf",
-            traces: true,
-            metrics: false,
-            logs: false,
-          },
-        },
-      },
-      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-    });
+    const ctx = createTraceOnlyContext("https://collector.example.com/v1/Traces");
+    await service.start(ctx);
 
     const options = traceExporterCtor.mock.calls[0]?.[0] as { url?: string } | undefined;
     expect(options?.url).toBe("https://collector.example.com/v1/Traces");
-    await service.stop?.();
+    await service.stop?.(ctx);
   });
 });
