@@ -1,3 +1,7 @@
+import {
+  GATEWAY_EVENT_UPDATE_AVAILABLE,
+  type GatewayUpdateAvailableEventPayload,
+} from "../../../src/gateway/events.js";
 import { CHAT_SESSIONS_ACTIVE_MINUTES, flushChatQueueForEvent } from "./app-chat.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import {
@@ -28,7 +32,13 @@ import { GatewayBrowserClient } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
 import { notifyReplyComplete } from "./reply-notifications.ts";
 import type { UiSettings } from "./storage.ts";
-import type { AgentsListResult, PresenceEntry, HealthSnapshot, StatusSummary } from "./types.ts";
+import type {
+  AgentsListResult,
+  PresenceEntry,
+  HealthSnapshot,
+  StatusSummary,
+  UpdateAvailable,
+} from "./types.ts";
 
 type GatewayHost = {
   settings: UiSettings;
@@ -56,6 +66,7 @@ type GatewayHost = {
   refreshSessionsAfterChat: Set<string>;
   execApprovalQueue: ExecApprovalRequest[];
   execApprovalError: string | null;
+  updateAvailable: UpdateAvailable | null;
 };
 
 type SessionDefaultsSnapshot = {
@@ -273,6 +284,12 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
     if (resolved) {
       host.execApprovalQueue = removeExecApproval(host.execApprovalQueue, resolved.id);
     }
+    return;
+  }
+
+  if (evt.event === GATEWAY_EVENT_UPDATE_AVAILABLE) {
+    const payload = evt.payload as GatewayUpdateAvailableEventPayload | undefined;
+    host.updateAvailable = payload?.updateAvailable ?? null;
   }
 }
 
@@ -282,6 +299,7 @@ export function applySnapshot(host: GatewayHost, hello: GatewayHelloOk) {
         presence?: PresenceEntry[];
         health?: HealthSnapshot;
         sessionDefaults?: SessionDefaultsSnapshot;
+        updateAvailable?: UpdateAvailable;
       }
     | undefined;
   if (snapshot?.presence && Array.isArray(snapshot.presence)) {
@@ -293,4 +311,5 @@ export function applySnapshot(host: GatewayHost, hello: GatewayHelloOk) {
   if (snapshot?.sessionDefaults) {
     applySessionDefaults(host, snapshot.sessionDefaults);
   }
+  host.updateAvailable = snapshot?.updateAvailable ?? null;
 }

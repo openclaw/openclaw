@@ -93,6 +93,12 @@ export type HookInstallRecord = {
   sourcePath?: string;
   installPath?: string;
   version?: string;
+  resolvedName?: string;
+  resolvedVersion?: string;
+  resolvedSpec?: string;
+  integrity?: string;
+  shasum?: string;
+  resolvedAt?: string;
   installedAt?: string;
   hooks?: string[];
 };

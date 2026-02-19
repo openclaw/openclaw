@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
 import {
   agentCommand,
   getFreePort,
@@ -389,12 +390,13 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     try {
       {
         agentCommand.mockReset();
-        agentCommand.mockImplementationOnce((async (opts: unknown) => {
-          const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
-          emitAgentEvent({ runId, stream: "assistant", data: { delta: "he" } });
-          emitAgentEvent({ runId, stream: "assistant", data: { delta: "llo" } });
-          return { payloads: [{ text: "hello" }] } as never;
-        }) as never);
+        agentCommand.mockImplementationOnce((async (opts: unknown) =>
+          buildAssistantDeltaResult({
+            opts,
+            emit: emitAgentEvent,
+            deltas: ["he", "llo"],
+            text: "hello",
+          })) as never);
 
         const res = await postChatCompletions(port, {
           stream: true,
@@ -422,12 +424,13 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
 
       {
         agentCommand.mockReset();
-        agentCommand.mockImplementationOnce((async (opts: unknown) => {
-          const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
-          emitAgentEvent({ runId, stream: "assistant", data: { delta: "hi" } });
-          emitAgentEvent({ runId, stream: "assistant", data: { delta: "hi" } });
-          return { payloads: [{ text: "hihi" }] } as never;
-        }) as never);
+        agentCommand.mockImplementationOnce((async (opts: unknown) =>
+          buildAssistantDeltaResult({
+            opts,
+            emit: emitAgentEvent,
+            deltas: ["hi", "hi"],
+            text: "hihi",
+          })) as never);
 
         const repeatedRes = await postChatCompletions(port, {
           stream: true,

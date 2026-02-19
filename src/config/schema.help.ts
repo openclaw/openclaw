@@ -281,6 +281,17 @@ export const FIELD_HELP: Record<string, string> = {
   "plugins.installs.*.installPath":
     "Resolved install directory (usually ~/.openclaw/extensions/<id>).",
   "plugins.installs.*.version": "Version recorded at install time (if available).",
+  "plugins.installs.*.resolvedName": "Resolved npm package name from the fetched artifact.",
+  "plugins.installs.*.resolvedVersion":
+    "Resolved npm package version from the fetched artifact (useful for non-pinned specs).",
+  "plugins.installs.*.resolvedSpec":
+    "Resolved exact npm spec (<name>@<version>) from the fetched artifact.",
+  "plugins.installs.*.integrity":
+    "Resolved npm dist integrity hash for the fetched artifact (if reported by npm).",
+  "plugins.installs.*.shasum":
+    "Resolved npm dist shasum for the fetched artifact (if reported by npm).",
+  "plugins.installs.*.resolvedAt":
+    "ISO timestamp when npm package metadata was last resolved for this install record.",
   "plugins.installs.*.installedAt": "ISO timestamp of last install/update.",
   "agents.list.*.identity.avatar":
     "Agent avatar (workspace-relative path, http(s) URL, or data URI).",
@@ -307,7 +318,7 @@ export const FIELD_HELP: Record<string, string> = {
     "How long bash waits before backgrounding (default: 2000; 0 backgrounds immediately).",
   "commands.config": "Allow /config chat command to read/write config on disk (default: false).",
   "commands.debug": "Allow /debug chat command for runtime-only overrides (default: false).",
-  "commands.restart": "Allow /restart and gateway restart tool actions (default: false).",
+  "commands.restart": "Allow /restart and gateway restart tool actions (default: true).",
   "commands.useAccessGroups": "Enforce access-group allowlists/policies for commands.",
   "commands.ownerAllowFrom":
     "Explicit owner allowlist for owner-only tools/commands. Use channel-native IDs (optionally prefixed like \"whatsapp:+15551234567\"). '*' is ignored.",
