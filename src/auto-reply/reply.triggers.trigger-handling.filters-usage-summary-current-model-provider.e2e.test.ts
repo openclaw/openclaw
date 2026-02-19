@@ -1,95 +1,24 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { normalizeTestText } from "../../test/helpers/normalize-text.js";
-import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
+import {
+  createBlockReplyCollector,
+  getProviderUsageMocks,
+  getRunEmbeddedPiAgentMock,
+  installTriggerHandlingE2eTestHooks,
+  makeCfg,
+  withTempHome,
+} from "./reply.triggers.trigger-handling.test-harness.js";
 
-vi.mock("../agents/pi-embedded.js", () => ({
-  abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
-  compactEmbeddedPiSession: vi.fn(),
-  runEmbeddedPiAgent: vi.fn(),
-  queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
-  resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
-  isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
-  isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
-}));
+let getReplyFromConfig: typeof import("./reply.js").getReplyFromConfig;
+beforeAll(async () => {
+  ({ getReplyFromConfig } = await import("./reply.js"));
+});
 
-const usageMocks = vi.hoisted(() => ({
-  loadProviderUsageSummary: vi.fn().mockResolvedValue({
-    updatedAt: 0,
-    providers: [],
-  }),
-  formatUsageSummaryLine: vi.fn().mockReturnValue("📊 Usage: Claude 80% left"),
-  formatUsageWindowSummary: vi.fn().mockReturnValue("Claude 80% left"),
-  resolveUsageProviderId: vi.fn((provider: string) => provider.split("/")[0]),
-}));
+installTriggerHandlingE2eTestHooks();
 
-vi.mock("../infra/provider-usage.js", () => usageMocks);
-
-const modelCatalogMocks = vi.hoisted(() => ({
-  loadModelCatalog: vi.fn().mockResolvedValue([
-    {
-      provider: "anthropic",
-      id: "claude-opus-4-5",
-      name: "Claude Opus 4.5",
-      contextWindow: 200000,
-    },
-    {
-      provider: "openrouter",
-      id: "anthropic/claude-opus-4-5",
-      name: "Claude Opus 4.5 (OpenRouter)",
-      contextWindow: 200000,
-    },
-    { provider: "openai", id: "gpt-4.1-mini", name: "GPT-4.1 mini" },
-    { provider: "openai", id: "gpt-5.2", name: "GPT-5.2" },
-    { provider: "openai-codex", id: "gpt-5.2", name: "GPT-5.2 (Codex)" },
-    { provider: "minimax", id: "MiniMax-M2.1", name: "MiniMax M2.1" },
-  ]),
-  resetModelCatalogCacheForTest: vi.fn(),
-}));
-
-vi.mock("../agents/model-catalog.js", () => modelCatalogMocks);
-
-import { abortEmbeddedPiRun, runEmbeddedPiAgent } from "../agents/pi-embedded.js";
-import { getReplyFromConfig } from "./reply.js";
-
-const _MAIN_SESSION_KEY = "agent:main:main";
-
-const webMocks = vi.hoisted(() => ({
-  webAuthExists: vi.fn().mockResolvedValue(true),
-  getWebAuthAgeMs: vi.fn().mockReturnValue(120_000),
-  readWebSelfId: vi.fn().mockReturnValue({ e164: "+1999" }),
-}));
-
-vi.mock("../web/session.js", () => webMocks);
-
-async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  return withTempHomeBase(
-    async (home) => {
-      vi.mocked(runEmbeddedPiAgent).mockClear();
-      vi.mocked(abortEmbeddedPiRun).mockClear();
-      return await fn(home);
-    },
-    { prefix: "openclaw-triggers-" },
-  );
-}
-
-function makeCfg(home: string) {
-  return {
-    agents: {
-      defaults: {
-        model: "anthropic/claude-opus-4-5",
-        workspace: join(home, "openclaw"),
-      },
-    },
-    channels: {
-      whatsapp: {
-        allowFrom: ["*"],
-      },
-    },
-    session: { store: join(home, "sessions.json") },
-  };
-}
+const usageMocks = getProviderUsageMocks();
 
 async function readSessionStore(home: string): Promise<Record<string, unknown>> {
   const raw = await readFile(join(home, "sessions.json"), "utf-8");
@@ -101,9 +30,28 @@ function pickFirstStoreEntry<T>(store: Record<string, unknown>): T | undefined {
   return entries[0];
 }
 
-afterEach(() => {
-  vi.restoreAllMocks();
-});
+async function runCommandAndCollectReplies(params: {
+  home: string;
+  body: string;
+  from?: string;
+  senderE164?: string;
+}) {
+  const { blockReplies, handlers } = createBlockReplyCollector();
+  const res = await getReplyFromConfig(
+    {
+      Body: params.body,
+      From: params.from ?? "+1000",
+      To: "+2000",
+      Provider: "whatsapp",
+      SenderE164: params.senderE164 ?? params.from ?? "+1000",
+      CommandAuthorized: true,
+    },
+    handlers,
+    makeCfg(params.home),
+  );
+  const replies = res ? (Array.isArray(res) ? res : [res]) : [];
+  return { blockReplies, replies };
+}
 
 describe("trigger handling", () => {
   it("filters usage summary to the current model provider", async () => {
@@ -147,24 +95,10 @@ describe("trigger handling", () => {
   });
   it("emits /status once (no duplicate inline + final)", async () => {
     await withTempHome(async (home) => {
-      const blockReplies: Array<{ text?: string }> = [];
-      const res = await getReplyFromConfig(
-        {
-          Body: "/status",
-          From: "+1000",
-          To: "+2000",
-          Provider: "whatsapp",
-          SenderE164: "+1000",
-          CommandAuthorized: true,
-        },
-        {
-          onBlockReply: async (payload) => {
-            blockReplies.push(payload);
-          },
-        },
-        makeCfg(home),
-      );
-      const replies = res ? (Array.isArray(res) ? res : [res]) : [];
+      const { blockReplies, replies } = await runCommandAndCollectReplies({
+        home,
+        body: "/status",
+      });
       expect(blockReplies.length).toBe(0);
       expect(replies.length).toBe(1);
       expect(String(replies[0]?.text ?? "")).toContain("Model:");
@@ -172,28 +106,14 @@ describe("trigger handling", () => {
   });
   it("sets per-response usage footer via /usage", async () => {
     await withTempHome(async (home) => {
-      const blockReplies: Array<{ text?: string }> = [];
-      const res = await getReplyFromConfig(
-        {
-          Body: "/usage tokens",
-          From: "+1000",
-          To: "+2000",
-          Provider: "whatsapp",
-          SenderE164: "+1000",
-          CommandAuthorized: true,
-        },
-        {
-          onBlockReply: async (payload) => {
-            blockReplies.push(payload);
-          },
-        },
-        makeCfg(home),
-      );
-      const replies = res ? (Array.isArray(res) ? res : [res]) : [];
+      const { blockReplies, replies } = await runCommandAndCollectReplies({
+        home,
+        body: "/usage tokens",
+      });
       expect(blockReplies.length).toBe(0);
       expect(replies.length).toBe(1);
       expect(String(replies[0]?.text ?? "")).toContain("Usage footer: tokens");
-      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+      expect(getRunEmbeddedPiAgentMock()).not.toHaveBeenCalled();
     });
   });
 
@@ -255,7 +175,7 @@ describe("trigger handling", () => {
       const s3 = await readSessionStore(home);
       expect(pickFirstStoreEntry<{ responseUsage?: string }>(s3)?.responseUsage).toBeUndefined();
 
-      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+      expect(getRunEmbeddedPiAgentMock()).not.toHaveBeenCalled();
     });
   });
 
@@ -281,41 +201,28 @@ describe("trigger handling", () => {
       const store = await readSessionStore(home);
       expect(pickFirstStoreEntry<{ responseUsage?: string }>(store)?.responseUsage).toBe("tokens");
 
-      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+      expect(getRunEmbeddedPiAgentMock()).not.toHaveBeenCalled();
     });
   });
   it("sends one inline status and still returns agent reply for mixed text", async () => {
     await withTempHome(async (home) => {
-      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+      getRunEmbeddedPiAgentMock().mockResolvedValue({
         payloads: [{ text: "agent says hi" }],
         meta: {
           durationMs: 1,
           agentMeta: { sessionId: "s", provider: "p", model: "m" },
         },
       });
-      const blockReplies: Array<{ text?: string }> = [];
-      const res = await getReplyFromConfig(
-        {
-          Body: "here we go /status now",
-          From: "+1002",
-          To: "+2000",
-          Provider: "whatsapp",
-          SenderE164: "+1002",
-          CommandAuthorized: true,
-        },
-        {
-          onBlockReply: async (payload) => {
-            blockReplies.push(payload);
-          },
-        },
-        makeCfg(home),
-      );
-      const replies = res ? (Array.isArray(res) ? res : [res]) : [];
+      const { blockReplies, replies } = await runCommandAndCollectReplies({
+        home,
+        body: "here we go /status now",
+        from: "+1002",
+      });
       expect(blockReplies.length).toBe(1);
       expect(String(blockReplies[0]?.text ?? "")).toContain("Model:");
       expect(replies.length).toBe(1);
       expect(replies[0]?.text).toBe("agent says hi");
-      const prompt = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0]?.prompt ?? "";
+      const prompt = getRunEmbeddedPiAgentMock().mock.calls[0]?.[0]?.prompt ?? "";
       expect(prompt).not.toContain("/status");
     });
   });
@@ -333,7 +240,7 @@ describe("trigger handling", () => {
       );
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toBe("⚙️ Agent was aborted.");
-      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+      expect(getRunEmbeddedPiAgentMock()).not.toHaveBeenCalled();
     });
   });
   it("handles /stop without invoking the agent", async () => {
@@ -350,7 +257,7 @@ describe("trigger handling", () => {
       );
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toBe("⚙️ Agent was aborted.");
-      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+      expect(getRunEmbeddedPiAgentMock()).not.toHaveBeenCalled();
     });
   });
 });
