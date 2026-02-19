@@ -285,10 +285,13 @@ function renderGroupedMessage(
             : nothing
         }
       ${markdown
-            ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">${unsafeHTML(toSanitizedMarkdownHtml(markdown))}</div>`
+            ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">${unsafeHTML(
+                toSanitizedMarkdownHtml(markdown),
+            )}</div>`
             : nothing
         }
       ${toolCards.map((card) => renderToolCardSidebar(card, onOpenSidebar))}
     </div>
   `;
 }
+
