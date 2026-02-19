@@ -43,6 +43,7 @@ const RUN_START_THINKING_DELTA_TEXT = "run_started";
 const RUN_HEARTBEAT_THINKING_DELTA_TEXT = "run_progress";
 const RUN_HEARTBEAT_INTERVAL_MS = 3500;
 const RUN_HEARTBEAT_CHECK_INTERVAL_MS = 500;
+const RUN_LANE_WAIT_TELEMETRY_MIN_MS = 1500;
 const NOSTR_TRACE_JSONL_ENV = "OPENCLAW_NOSTR_TRACE_JSONL";
 const NOSTR_TRACE_JSONL_FALLBACK_ENV = "NOSTR_TRACE_JSONL";
 const PENDING_CANCEL_TTL_MS = 5 * 60 * 1000;
@@ -71,6 +72,23 @@ type PendingCancel = {
   reason: CancelReason;
   cancelEventId: string;
   receivedAtMs: number;
+};
+
+type PendingToolCallTelemetry = {
+  callId: string;
+  name: string;
+  startedAtMs: number;
+};
+
+type ToolCallTelemetryStart = {
+  callId: string;
+  name: string;
+};
+
+type ToolCallTelemetryResult = {
+  name: string;
+  callId?: string;
+  durationMs?: number;
 };
 
 type NostrAiInfoState = {
@@ -128,6 +146,50 @@ function nextRunSequence(run: ActiveRunControl): number {
 function normalizeToolPhase(raw: string | undefined): "start" | "result" {
   const phase = raw?.trim().toLowerCase();
   return phase === "start" ? "start" : "result";
+}
+
+export function createToolCallTelemetryTracker(runId: string): {
+  registerStart: (name: string, startedAtMs: number) => ToolCallTelemetryStart;
+  consumeResult: (finishedAtMs: number) => ToolCallTelemetryResult;
+  pendingCount: () => number;
+} {
+  let ordinal = 0;
+  const pending: PendingToolCallTelemetry[] = [];
+
+  const nextCallId = (): string => {
+    const callId = `call_${runId.slice(0, 12)}_${ordinal.toString(36)}`;
+    ordinal += 1;
+    return callId;
+  };
+
+  return {
+    registerStart: (name, startedAtMs) => {
+      const normalizedName = name.trim() || "tool";
+      const call = {
+        callId: nextCallId(),
+        name: normalizedName,
+        startedAtMs: Math.max(0, Math.trunc(startedAtMs)),
+      };
+      pending.push(call);
+      return {
+        callId: call.callId,
+        name: call.name,
+      };
+    },
+    consumeResult: (finishedAtMs) => {
+      const call = pending.shift();
+      if (!call) {
+        return { name: "tool" };
+      }
+      const durationMs = Math.max(0, Math.trunc(finishedAtMs) - call.startedAtMs);
+      return {
+        name: call.name,
+        callId: call.callId,
+        durationMs,
+      };
+    },
+    pendingCount: () => pending.length,
+  };
 }
 
 function resolveActiveRunKey(senderPubkey: string, promptEventId: string): string {
@@ -1223,6 +1285,8 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
           let blockSeq = 0;
           let streamedTextBuffer = "";
           let lastRunOutboundAtMs = Date.now();
+          const toolCallTelemetry = createToolCallTelemetryTracker(payload.eventId);
+          let laneWaitNoticeSent = false;
           let heartbeatInFlight = false;
           let heartbeatTimer: NodeJS.Timeout | null = null;
           const emitStatus = payload.kind === 25802;
@@ -1371,6 +1435,8 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                     }
                     const responseText = (outbound as { text?: string } | undefined)?.text ?? "";
                     const hasContent = responseText.length > 0;
+                    const shouldEmitTelemetry =
+                      info.kind === "tool" || hasContent || info.kind === "final";
                     if (info.kind === "block" && hasContent) {
                       streamedTextBuffer = streamedTextBuffer
                         ? `${streamedTextBuffer}${responseText}`
@@ -1379,7 +1445,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                     if (info.kind === "final") {
                       runControl.terminalEmitted = true;
                     }
-                    if (!hasContent && info.kind !== "final") {
+                    if (!shouldEmitTelemetry) {
                       return;
                     }
                     if (info.kind === "final") {
@@ -1391,6 +1457,8 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                     const timestampMs = Date.now();
                     const timestamp = Math.floor(timestampMs / 1000);
                     const normalizedKind = resolveResponseKindFromDispatcherKind(info.kind);
+                    const toolResultMeta =
+                      info.kind === "tool" ? toolCallTelemetry.consumeResult(timestampMs) : null;
                     const outboundPayload =
                       info.kind === "block"
                         ? {
@@ -1409,10 +1477,14 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                         : info.kind === "tool"
                           ? {
                               ver: 1,
-                              name: "tool",
+                              name: toolResultMeta?.name ?? "tool",
                               phase: "result",
-                              output: { text: responseText },
+                              output: hasContent ? { text: responseText } : {},
                               success: true,
+                              ...(typeof toolResultMeta?.durationMs === "number"
+                                ? { duration_ms: toolResultMeta.durationMs }
+                                : {}),
+                              ...(toolResultMeta?.callId ? { call_id: toolResultMeta.callId } : {}),
                               timestamp,
                               timestamp_ms: timestampMs,
                               run_id: payload.eventId,
@@ -1466,6 +1538,25 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                     }
                     await safeSendThinkingDelta("update", reasoningText);
                   },
+                  onCommandLaneWait: async (event) => {
+                    traceRecorder.record({
+                      direction: "lane_wait",
+                      run_id: payload.eventId,
+                      session_id: sessionId,
+                      trace_id: traceId,
+                      lane: event.lane,
+                      lane_scope: event.scope,
+                      waited_ms: event.waitMs,
+                      queue_ahead: event.queuedAhead,
+                      ts_ms: event.tsMs,
+                    });
+                    if (!laneWaitNoticeSent && event.waitMs >= RUN_LANE_WAIT_TELEMETRY_MIN_MS) {
+                      laneWaitNoticeSent = true;
+                      await safeSendStatus("thinking", {
+                        info: `queue_wait:${Math.trunc(event.waitMs)}ms`,
+                      });
+                    }
+                  },
                   onToolStart: async ({ name, phase }) => {
                     if (runControl.cancelled) {
                       return;
@@ -1474,15 +1565,21 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                     if (!normalizedName) {
                       return;
                     }
+                    const normalizedPhase = normalizeToolPhase(phase);
+                    if (normalizedPhase !== "start") {
+                      return;
+                    }
                     const timestampMs = Date.now();
+                    const toolCall = toolCallTelemetry.registerStart(normalizedName, timestampMs);
                     await safeSendStatus("tool_use", {
-                      info: normalizedName,
+                      info: toolCall.name,
                     });
                     await reply(
                       {
                         ver: 1,
-                        name: normalizedName,
-                        phase: normalizeToolPhase(phase),
+                        name: toolCall.name,
+                        phase: "start",
+                        call_id: toolCall.callId,
                         timestamp: Math.floor(timestampMs / 1000),
                         timestamp_ms: timestampMs,
                         run_id: payload.eventId,
@@ -1527,6 +1624,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
               })(),
             };
             const dispatchDurationMs = Date.now() - dispatchStartedAt;
+            const pendingToolCalls = toolCallTelemetry.pendingCount();
             traceRecorder.record({
               direction: "dispatch_result",
               event_id: payload.eventId,
@@ -1537,10 +1635,11 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
               terminal_emitted: runControl.terminalEmitted,
               cancelled: runControl.cancelled,
               streamed_text_length: streamedTextBuffer.length,
+              pending_tool_calls: pendingToolCalls,
               dispatch_duration_ms: dispatchDurationMs,
             });
             ctx.log?.debug?.(
-              `[${account.accountId}] Nostr dispatch settled for run ${payload.eventId}: queuedFinal=${dispatchResult.queuedFinal ? "yes" : "no"} counts=${JSON.stringify(dispatchResult.counts)} terminalEmitted=${runControl.terminalEmitted ? "yes" : "no"} cancelled=${runControl.cancelled ? "yes" : "no"} streamedTextLength=${streamedTextBuffer.length} durationMs=${dispatchDurationMs}`,
+              `[${account.accountId}] Nostr dispatch settled for run ${payload.eventId}: queuedFinal=${dispatchResult.queuedFinal ? "yes" : "no"} counts=${JSON.stringify(dispatchResult.counts)} terminalEmitted=${runControl.terminalEmitted ? "yes" : "no"} cancelled=${runControl.cancelled ? "yes" : "no"} streamedTextLength=${streamedTextBuffer.length} pendingToolCalls=${pendingToolCalls} durationMs=${dispatchDurationMs}`,
             );
 
             if (runControl.cancelled) {

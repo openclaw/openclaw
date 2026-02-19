@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { resolveNostrSessionId, resolveNostrTimestampMs, nostrPlugin } from "./channel.js";
+import {
+  createToolCallTelemetryTracker,
+  resolveNostrSessionId,
+  resolveNostrTimestampMs,
+  nostrPlugin,
+} from "./channel.js";
 
 describe("nostrPlugin", () => {
   describe("meta", () => {
@@ -217,6 +222,57 @@ describe("nostrPlugin", () => {
     });
   });
 
+  describe("tool telemetry tracker", () => {
+    it("emits deterministic call ids and preserves tool names", () => {
+      const tracker = createToolCallTelemetryTracker("a".repeat(64));
+      const first = tracker.registerStart("web_fetch", 1_000);
+      const second = tracker.registerStart("calculator", 1_100);
+
+      expect(first.callId).toBe("call_aaaaaaaaaaaa_0");
+      expect(second.callId).toBe("call_aaaaaaaaaaaa_1");
+      expect(first.name).toBe("web_fetch");
+      expect(second.name).toBe("calculator");
+      expect(tracker.pendingCount()).toBe(2);
+    });
+
+    it("matches result metadata to start metadata in FIFO order", () => {
+      const tracker = createToolCallTelemetryTracker("b".repeat(64));
+      tracker.registerStart("web_fetch", 2_000);
+      tracker.registerStart("calculator", 2_500);
+
+      const firstResult = tracker.consumeResult(2_350);
+      const secondResult = tracker.consumeResult(3_000);
+
+      expect(firstResult).toEqual({
+        name: "web_fetch",
+        callId: "call_bbbbbbbbbbbb_0",
+        durationMs: 350,
+      });
+      expect(secondResult).toEqual({
+        name: "calculator",
+        callId: "call_bbbbbbbbbbbb_1",
+        durationMs: 500,
+      });
+      expect(tracker.pendingCount()).toBe(0);
+    });
+
+    it("falls back to generic tool result when no start metadata exists", () => {
+      const tracker = createToolCallTelemetryTracker("c".repeat(64));
+      expect(tracker.consumeResult(3_000)).toEqual({ name: "tool" });
+      expect(tracker.pendingCount()).toBe(0);
+    });
+
+    it("clamps negative duration to zero for out-of-order timestamps", () => {
+      const tracker = createToolCallTelemetryTracker("d".repeat(64));
+      tracker.registerStart("web_fetch", 5_000);
+      expect(tracker.consumeResult(4_900)).toEqual({
+        name: "web_fetch",
+        callId: "call_dddddddddddd_0",
+        durationMs: 0,
+      });
+    });
+  });
+
   describe("gateway", () => {
     it("has startAccount function", () => {
       expect(nostrPlugin.gateway?.startAccount).toBeTypeOf("function");
@@ -257,6 +313,8 @@ describe("nostrPlugin", () => {
           lastError: null,
           lastInboundAt: 2,
           lastOutboundAt: 3,
+          activeRuns: 4,
+          pendingCancels: 1,
         },
       } as never);
       const diagnostics = snapshot as Record<string, unknown>;
@@ -266,6 +324,8 @@ describe("nostrPlugin", () => {
       expect(diagnostics).toHaveProperty("traceJsonlPath");
       expect(diagnostics).toHaveProperty("aiInfo");
       expect(diagnostics).toHaveProperty("metrics");
+      expect(diagnostics.activeRuns).toBe(4);
+      expect(diagnostics.pendingCancels).toBe(1);
     });
   });
 });
