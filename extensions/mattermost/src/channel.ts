@@ -23,6 +23,7 @@ import { normalizeMattermostBaseUrl } from "./mattermost/client.js";
 import { monitorMattermostProvider } from "./mattermost/monitor.js";
 import { probeMattermost } from "./mattermost/probe.js";
 import { addMattermostReaction, removeMattermostReaction } from "./mattermost/reactions.js";
+import { readMattermostMessages } from "./mattermost/read.js";
 import { sendMessageMattermost } from "./mattermost/send.js";
 import { looksLikeMattermostTargetId, normalizeMattermostMessagingTarget } from "./normalize.js";
 import { mattermostOnboardingAdapter } from "./onboarding.js";
@@ -30,62 +31,89 @@ import { getMattermostRuntime } from "./runtime.js";
 
 const mattermostMessageActions: ChannelMessageActionAdapter = {
   listActions: ({ cfg }) => {
-    const actionsConfig = cfg.channels?.mattermost?.actions as { reactions?: boolean } | undefined;
+    const actionsConfig = cfg.channels?.mattermost?.actions as
+      | { reactions?: boolean; messages?: boolean }
+      | undefined;
     const baseReactions = actionsConfig?.reactions;
-    const hasReactionCapableAccount = listMattermostAccountIds(cfg)
+    const baseMessages = actionsConfig?.messages;
+    const enabledAccounts = listMattermostAccountIds(cfg)
       .map((accountId) => resolveMattermostAccount({ cfg, accountId }))
       .filter((account) => account.enabled)
-      .filter((account) => Boolean(account.botToken?.trim() && account.baseUrl?.trim()))
-      .some((account) => {
-        const accountActions = account.config.actions as { reactions?: boolean } | undefined;
-        return (accountActions?.reactions ?? baseReactions ?? true) !== false;
-      });
+      .filter((account) => Boolean(account.botToken?.trim() && account.baseUrl?.trim()));
 
-    if (!hasReactionCapableAccount) {
-      return [];
+    const hasReactionCapableAccount = enabledAccounts.some((account) => {
+      const accountActions = account.config.actions as { reactions?: boolean } | undefined;
+      return (accountActions?.reactions ?? baseReactions ?? true) !== false;
+    });
+
+    const hasMessageCapableAccount = enabledAccounts.some((account) => {
+      const accountActions = account.config.actions as { messages?: boolean } | undefined;
+      return (accountActions?.messages ?? baseMessages ?? true) !== false;
+    });
+
+    const actions: ChannelMessageActionName[] = [];
+    if (hasReactionCapableAccount) {
+      actions.push("react");
     }
-
-    return ["react"];
+    if (hasMessageCapableAccount) {
+      actions.push("read");
+    }
+    return actions;
   },
   supportsAction: ({ action }) => {
-    return action === "react";
+    return action === "react" || action === "read";
   },
   handleAction: async ({ action, params, cfg, accountId }) => {
-    if (action !== "react") {
-      throw new Error(`Mattermost action ${action} not supported`);
-    }
-    // Check reactions gate: per-account config takes precedence over base config
-    const mmBase = cfg?.channels?.mattermost as Record<string, unknown> | undefined;
-    const accounts = mmBase?.accounts as Record<string, Record<string, unknown>> | undefined;
-    const resolvedAccountId = accountId ?? resolveDefaultMattermostAccountId(cfg);
-    const acctConfig = accounts?.[resolvedAccountId];
-    const acctActions = acctConfig?.actions as { reactions?: boolean } | undefined;
-    const baseActions = mmBase?.actions as { reactions?: boolean } | undefined;
-    const reactionsEnabled = acctActions?.reactions ?? baseActions?.reactions ?? true;
-    if (!reactionsEnabled) {
-      throw new Error("Mattermost reactions are disabled in config");
-    }
+    if (action === "react") {
+      // Check reactions gate: per-account config takes precedence over base config
+      const mmBase = cfg?.channels?.mattermost as Record<string, unknown> | undefined;
+      const accounts = mmBase?.accounts as Record<string, Record<string, unknown>> | undefined;
+      const resolvedAccountId = accountId ?? resolveDefaultMattermostAccountId(cfg);
+      const acctConfig = accounts?.[resolvedAccountId];
+      const acctActions = acctConfig?.actions as { reactions?: boolean } | undefined;
+      const baseActions = mmBase?.actions as { reactions?: boolean } | undefined;
+      const reactionsEnabled = acctActions?.reactions ?? baseActions?.reactions ?? true;
+      if (!reactionsEnabled) {
+        throw new Error("Mattermost reactions are disabled in config");
+      }
 
-    const postIdRaw =
-      typeof (params as any)?.messageId === "string"
-        ? (params as any).messageId
-        : typeof (params as any)?.postId === "string"
-          ? (params as any).postId
-          : "";
-    const postId = postIdRaw.trim();
-    if (!postId) {
-      throw new Error("Mattermost react requires messageId (post id)");
-    }
+      const postIdRaw =
+        typeof (params as any)?.messageId === "string"
+          ? (params as any).messageId
+          : typeof (params as any)?.postId === "string"
+            ? (params as any).postId
+            : "";
+      const postId = postIdRaw.trim();
+      if (!postId) {
+        throw new Error("Mattermost react requires messageId (post id)");
+      }
 
-    const emojiRaw = typeof (params as any)?.emoji === "string" ? (params as any).emoji : "";
-    const emojiName = emojiRaw.trim().replace(/^:+|:+$/g, "");
-    if (!emojiName) {
-      throw new Error("Mattermost react requires emoji");
-    }
+      const emojiRaw = typeof (params as any)?.emoji === "string" ? (params as any).emoji : "";
+      const emojiName = emojiRaw.trim().replace(/^:+|:+$/g, "");
+      if (!emojiName) {
+        throw new Error("Mattermost react requires emoji");
+      }
 
-    const remove = (params as any)?.remove === true;
-    if (remove) {
-      const result = await removeMattermostReaction({
+      const remove = (params as any)?.remove === true;
+      if (remove) {
+        const result = await removeMattermostReaction({
+          cfg,
+          postId,
+          emojiName,
+          accountId: resolvedAccountId,
+        });
+        if (!result.ok) {
+          throw new Error(result.error);
+        }
+        return {
+          content: [
+            { type: "text" as const, text: `Removed reaction :${emojiName}: from ${postId}` },
+          ],
+          details: {},
+        };
+      }
+
+      const result = await addMattermostReaction({
         cfg,
         postId,
         emojiName,
@@ -94,28 +122,69 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
       if (!result.ok) {
         throw new Error(result.error);
       }
+
+      return {
+        content: [{ type: "text" as const, text: `Reacted with :${emojiName}: on ${postId}` }],
+        details: {},
+      };
+    }
+
+    if (action === "read") {
+      // Check messages gate
+      const mmBase = cfg?.channels?.mattermost as Record<string, unknown> | undefined;
+      const accounts = mmBase?.accounts as Record<string, Record<string, unknown>> | undefined;
+      const resolvedAccountId = accountId ?? resolveDefaultMattermostAccountId(cfg);
+      const acctConfig = accounts?.[resolvedAccountId];
+      const acctActions = acctConfig?.actions as { messages?: boolean } | undefined;
+      const baseActions = mmBase?.actions as { messages?: boolean } | undefined;
+      const messagesEnabled = acctActions?.messages ?? baseActions?.messages ?? true;
+      if (!messagesEnabled) {
+        throw new Error("Mattermost message reads are disabled in config");
+      }
+
+      const channelId =
+        typeof (params as any)?.channelId === "string"
+          ? (params as any).channelId.trim()
+          : typeof (params as any)?.to === "string"
+            ? (params as any).to.trim()
+            : "";
+      if (!channelId) {
+        throw new Error("Mattermost read requires channelId or to");
+      }
+
+      const limitRaw = (params as any)?.limit;
+      const limit =
+        typeof limitRaw === "number" && Number.isFinite(limitRaw) ? limitRaw : undefined;
+      const before =
+        typeof (params as any)?.before === "string" ? (params as any).before.trim() : undefined;
+      const after =
+        typeof (params as any)?.after === "string" ? (params as any).after.trim() : undefined;
+
+      const result = await readMattermostMessages({
+        cfg,
+        channelId,
+        limit,
+        before: before || undefined,
+        after: after || undefined,
+        accountId: resolvedAccountId,
+      });
+
       return {
         content: [
-          { type: "text" as const, text: `Removed reaction :${emojiName}: from ${postId}` },
+          {
+            type: "text" as const,
+            text: JSON.stringify({
+              ok: true,
+              messages: result.messages,
+              hasMore: result.hasMore,
+            }),
+          },
         ],
         details: {},
       };
     }
 
-    const result = await addMattermostReaction({
-      cfg,
-      postId,
-      emojiName,
-      accountId: resolvedAccountId,
-    });
-    if (!result.ok) {
-      throw new Error(result.error);
-    }
-
-    return {
-      content: [{ type: "text" as const, text: `Reacted with :${emojiName}: on ${postId}` }],
-      details: {},
-    };
+    throw new Error(`Mattermost action ${action} not supported`);
   },
 };
 
