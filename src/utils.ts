@@ -131,6 +131,22 @@ export function isSelfChatMode(
   });
 }
 
+/**
+ * Brazilian mobile numbers carry an extra "9" after the 2-digit area code (DDD)
+ * that WhatsApp does not use in its JID format.
+ * 55 + DD(2) + 9 + XXXXXXXX(8) = 13 digits  ->  strip the "9"  ->  12 digits.
+ * Landlines (no leading 9 after DDD) and non-BR numbers pass through unchanged.
+ */
+function normalizeBrazilianMobile(digits: string): string {
+  if (digits.length !== 13 || !digits.startsWith("55")) {
+    return digits;
+  }
+  if (digits[4] !== "9") {
+    return digits;
+  }
+  return digits.slice(0, 4) + digits.slice(5);
+}
+
 export function toWhatsappJid(number: string): string {
   const withoutPrefix = number.replace(/^whatsapp:/, "").trim();
   if (withoutPrefix.includes("@")) {
@@ -138,7 +154,8 @@ export function toWhatsappJid(number: string): string {
   }
   const e164 = normalizeE164(withoutPrefix);
   const digits = e164.replace(/\D/g, "");
-  return `${digits}@s.whatsapp.net`;
+  const normalized = normalizeBrazilianMobile(digits);
+  return `${normalized}@s.whatsapp.net`;
 }
 
 export type JidToE164Options = {

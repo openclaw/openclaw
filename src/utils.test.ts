@@ -80,6 +80,34 @@ describe("normalizeE164 & toWhatsappJid", () => {
     expect(toWhatsappJid("whatsapp:123456789-987654321@g.us")).toBe("123456789-987654321@g.us");
     expect(toWhatsappJid("1555123@s.whatsapp.net")).toBe("1555123@s.whatsapp.net");
   });
+
+  it("normalizes Brazilian mobile numbers (strips extra 9 after DDD)", () => {
+    // +55 69 9 96021005 (13 digits after +) -> 55 69 96021005 (12 digits)
+    expect(toWhatsappJid("+5569996021005")).toBe("556996021005@s.whatsapp.net");
+    // +55 11 9 99887766 (13 digits after +) -> 55 11 99887766 (12 digits)
+    expect(toWhatsappJid("+5511999887766")).toBe("551199887766@s.whatsapp.net");
+    // With whatsapp: prefix
+    expect(toWhatsappJid("whatsapp:+5521987654321")).toBe("552187654321@s.whatsapp.net");
+  });
+
+  it("does not modify non-Brazilian or landline numbers", () => {
+    // US number (not +55)
+    expect(toWhatsappJid("+12025551234")).toBe("12025551234@s.whatsapp.net");
+    // Argentine number
+    expect(toWhatsappJid("+5491155551234")).toBe("5491155551234@s.whatsapp.net");
+    // Brazilian landline (12 digits after +, no extra 9)
+    expect(toWhatsappJid("+551133224455")).toBe("551133224455@s.whatsapp.net");
+    // Already-correct Brazilian mobile (12 digits after +)
+    expect(toWhatsappJid("+556996021005")).toBe("556996021005@s.whatsapp.net");
+  });
+
+  it("normalizes Brazilian mobile from raw digits without +", () => {
+    expect(toWhatsappJid("5569996021005")).toBe("556996021005@s.whatsapp.net");
+  });
+
+  it("normalizes Brazilian mobile with formatting characters", () => {
+    expect(toWhatsappJid("+55 69 9 9602-1005")).toBe("556996021005@s.whatsapp.net");
+  });
 });
 
 describe("jidToE164", () => {
