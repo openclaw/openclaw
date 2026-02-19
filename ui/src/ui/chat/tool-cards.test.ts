@@ -46,7 +46,7 @@ describe("extractToolCards", () => {
     ]);
   });
 
-  it("suppresses only suppressible tools with empty output when another tool has text", () => {
+  it("suppresses empty suppressible tool even when other tools have output", () => {
     const message = {
       content: [
         { type: "tool_call", name: suppressedTool, arguments: { taskId: "task-1" } },
