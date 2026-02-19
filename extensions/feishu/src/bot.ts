@@ -199,6 +199,10 @@ function checkBotMentioned(event: FeishuMessageEvent, botOpenId?: string): boole
   return false;
 }
 
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function stripBotMention(
   text: string,
   mentions?: FeishuMessageEvent["message"]["mentions"],
@@ -206,8 +210,8 @@ function stripBotMention(
   if (!mentions || mentions.length === 0) return text;
   let result = text;
   for (const mention of mentions) {
-    result = result.replace(new RegExp(`@${mention.name}\\s*`, "g"), "").trim();
-    result = result.replace(new RegExp(mention.key, "g"), "").trim();
+    result = result.replace(new RegExp(`@${escapeRegExp(mention.name)}\\s*`, "g"), "").trim();
+    result = result.replace(new RegExp(escapeRegExp(mention.key), "g"), "").trim();
   }
   return result;
 }
