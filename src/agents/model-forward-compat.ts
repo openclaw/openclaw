@@ -27,6 +27,10 @@ const ANTIGRAVITY_OPUS_THINKING_TEMPLATE_MODEL_IDS = [
   "claude-opus-4.5-thinking",
 ] as const;
 
+// gemini-3.1-pro-preview: launched 2026-02-19; forward-compat until pi-ai catalog is updated.
+const GEMINI_CLI_31_PRO_PREVIEW_MODEL_ID = "gemini-3.1-pro-preview";
+const GEMINI_CLI_31_PRO_TEMPLATE_MODEL_IDS = ["gemini-3-pro-preview"] as const;
+
 export const ANTIGRAVITY_OPUS_46_FORWARD_COMPAT_CANDIDATES = [
   {
     id: ANTIGRAVITY_OPUS_46_THINKING_MODEL_ID,
@@ -278,6 +282,31 @@ function resolveAntigravityOpus46ForwardCompatModel(
   });
 }
 
+// gemini-3.1-pro-preview launched 2026-02-19 and is available via the Gemini CLI
+// (`gemini -m gemini-3.1-pro-preview`) but pi-ai's built-in model catalog does not
+// yet include it. Clone gemini-3-pro-preview as a forward-compat entry until the
+// catalog is updated upstream.
+// See: https://github.com/openclaw/openclaw/issues/21176
+function resolveGeminiCli31ProPreviewForwardCompatModel(
+  provider: string,
+  modelId: string,
+  modelRegistry: ModelRegistry,
+): Model<Api> | undefined {
+  if (normalizeProviderId(provider) !== "google-gemini-cli") {
+    return undefined;
+  }
+  if (modelId.trim().toLowerCase() !== GEMINI_CLI_31_PRO_PREVIEW_MODEL_ID) {
+    return undefined;
+  }
+
+  return cloneFirstTemplateModel({
+    normalizedProvider: "google-gemini-cli",
+    trimmedModelId: GEMINI_CLI_31_PRO_PREVIEW_MODEL_ID,
+    templateIds: [...GEMINI_CLI_31_PRO_TEMPLATE_MODEL_IDS],
+    modelRegistry,
+  });
+}
+
 export function resolveForwardCompatModel(
   provider: string,
   modelId: string,
@@ -288,6 +317,7 @@ export function resolveForwardCompatModel(
     resolveAnthropicOpus46ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveAnthropicSonnet46ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveZaiGlm5ForwardCompatModel(provider, modelId, modelRegistry) ??
-    resolveAntigravityOpus46ForwardCompatModel(provider, modelId, modelRegistry)
+    resolveAntigravityOpus46ForwardCompatModel(provider, modelId, modelRegistry) ??
+    resolveGeminiCli31ProPreviewForwardCompatModel(provider, modelId, modelRegistry)
   );
 }
