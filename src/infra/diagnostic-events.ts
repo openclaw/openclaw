@@ -282,6 +282,36 @@ export type DiagnosticToolExecutionEvent = DiagnosticBaseEvent & {
   toolOutput?: unknown;
 };
 
+export type DiagnosticModelUsageEvent = DiagnosticBaseEvent & {
+  type: "model.usage";
+  sessionKey?: string;
+  sessionId?: string;
+  channel?: string;
+  provider?: string;
+  model?: string;
+  usage: {
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+    promptTokens?: number;
+    total?: number;
+  };
+  lastCallUsage?: {
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+    total?: number;
+  };
+  context?: {
+    limit?: number;
+    used?: number;
+  };
+  costUsd?: number;
+  durationMs?: number;
+};
+
 export type DiagnosticEventPayload =
   | DiagnosticInferenceEvent
   | DiagnosticInferenceStartedEvent
@@ -299,7 +329,8 @@ export type DiagnosticEventPayload =
   | DiagnosticRunCompletedEvent
   | DiagnosticHeartbeatEvent
   | DiagnosticToolLoopEvent
-  | DiagnosticToolExecutionEvent;
+  | DiagnosticToolExecutionEvent
+  | DiagnosticModelUsageEvent;
 
 export type DiagnosticEventInput = DiagnosticEventPayload extends infer Event
   ? Event extends DiagnosticEventPayload

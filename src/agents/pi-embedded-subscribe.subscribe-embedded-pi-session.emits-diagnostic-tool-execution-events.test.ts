@@ -151,7 +151,7 @@ describe("subscribeEmbeddedPiSession", () => {
     unsub();
 
     const evt = events.find((e) => e.type === "tool.execution");
-    expect(evt.durationMs).toBe(150);
+    expect(evt!.durationMs).toBe(150);
   });
 
   it("emits run.started diagnostic event on agent_start", () => {

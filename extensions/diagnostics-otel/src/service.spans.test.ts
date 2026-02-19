@@ -129,7 +129,7 @@ describe("diagnostics-otel service – span hierarchy", () => {
 
   afterEach(async () => {
     for (const service of startedServices.splice(0)) {
-      await service.stop?.().catch(() => undefined);
+      await Promise.resolve(service.stop?.({} as never)).catch(() => undefined);
     }
   });
 
@@ -174,6 +174,7 @@ describe("diagnostics-otel service – span hierarchy", () => {
         error: vi.fn(),
         debug: vi.fn(),
       },
+      stateDir: "/tmp/openclaw-diagnostics-otel-test",
     };
   }
 
@@ -207,7 +208,7 @@ describe("diagnostics-otel service – span hierarchy", () => {
     const spanCall = telemetryState.tracer.startSpan.mock.calls[0];
     expect(spanCall[0]).toBe("invoke_agent");
 
-    const attrs = spanCall[1]?.attributes;
+    const attrs = (spanCall[1] as any)?.attributes;
     // gen_ai.* inference attributes should NOT be on the turn span —
     // they belong on child chat spans only.
     // gen_ai.operation.name IS set on the turn span (as "invoke_agent" per agent spec).
@@ -237,7 +238,7 @@ describe("diagnostics-otel service – span hierarchy", () => {
     expect(attrs["gen_ai.usage.input_tokens"]).toBeUndefined();
     expect(attrs["gen_ai.usage.output_tokens"]).toBeUndefined();
 
-    await service.stop?.();
+    await service.stop?.({} as never);
   });
 
   test("model.inference spans are children of run.started span when runId is present", async () => {
@@ -264,7 +265,7 @@ describe("diagnostics-otel service – span hierarchy", () => {
     expect(calls[1]?.[0]).toBe("chat gpt-5.2");
     expect(calls[1]?.[2]).toEqual(expect.objectContaining({ _type: "with-parent" }));
 
-    await service.stop?.();
+    await service.stop?.({} as never);
   });
 
   test("inference spans use SpanKind.CLIENT, tool spans use SpanKind.INTERNAL", async () => {
@@ -286,10 +287,10 @@ describe("diagnostics-otel service – span hierarchy", () => {
 
     const calls = telemetryState.tracer.startSpan.mock.calls;
     // SpanKind.CLIENT = 2, SpanKind.INTERNAL = 0
-    expect(calls[0][1]?.kind).toBe(2);
-    expect(calls[1][1]?.kind).toBe(0);
+    expect((calls[0][1] as any)?.kind).toBe(2);
+    expect((calls[1][1] as any)?.kind).toBe(0);
 
-    await service.stop?.();
+    await service.stop?.({} as never);
   });
 
   test("tool spans with matching runId are children of the run span", async () => {
@@ -343,7 +344,7 @@ describe("diagnostics-otel service – span hierarchy", () => {
     expect(telemetryState.tracer.startSpan.mock.results[1]?.value.end).toHaveBeenCalled();
     expect(telemetryState.tracer.startSpan.mock.results[2]?.value.end).toHaveBeenCalled();
 
-    await service.stop?.();
+    await service.stop?.({} as never);
   });
 
   test("tool spans with matching runId are children of the active inference span when present", async () => {
@@ -398,7 +399,7 @@ describe("diagnostics-otel service – span hierarchy", () => {
       ],
     });
 
-    await service.stop?.();
+    await service.stop?.({} as never);
   });
 
   test("tool events without runId create standalone spans (backward compat)", async () => {
@@ -419,7 +420,7 @@ describe("diagnostics-otel service – span hierarchy", () => {
     // No parent context
     expect(telemetryState.tracer.startSpan.mock.calls[0][2]).toBeUndefined();
 
-    await service.stop?.();
+    await service.stop?.({} as never);
   });
 
   test("tool events with runId but without run.started are standalone spans", async () => {
@@ -438,7 +439,7 @@ describe("diagnostics-otel service – span hierarchy", () => {
     expect(telemetryState.tracer.startSpan.mock.calls[0][0]).toBe("execute_tool web_search");
     expect(telemetryState.tracer.startSpan.mock.calls[0][2]).toBeUndefined();
 
-    await service.stop?.();
+    await service.stop?.({} as never);
   });
 
   test("agent.turn spans are nested under openclaw.message root span", async () => {
@@ -466,7 +467,7 @@ describe("diagnostics-otel service – span hierarchy", () => {
     // agent.turn should have a parent context pointing to the root span
     expect(calls[1]?.[2]).toEqual(expect.objectContaining({ _type: "with-parent" }));
 
-    await service.stop?.();
+    await service.stop?.({} as never);
   });
 
   test("agent span includes gen_ai.agent.name when identity is configured", async () => {
@@ -500,12 +501,12 @@ describe("diagnostics-otel service – span hierarchy", () => {
 
     const calls = telemetryState.tracer.startSpan.mock.calls;
     expect(calls[0]?.[0]).toBe("invoke_agent Samantha");
-    const attrs = calls[0]?.[1]?.attributes;
+    const attrs = (calls[0]?.[1] as any)?.attributes;
     expect(attrs["gen_ai.agent.id"]).toBe("main");
     expect(attrs["gen_ai.agent.name"]).toBe("Samantha");
     expect(attrs["gen_ai.operation.name"]).toBe("invoke_agent");
 
-    await service.stop?.();
+    await service.stop?.({} as never);
   });
 
   test("agent span uses agentId from subagent sessionKey", async () => {
@@ -520,11 +521,11 @@ describe("diagnostics-otel service – span hierarchy", () => {
       channel: "telegram",
     });
 
-    const attrs = telemetryState.tracer.startSpan.mock.calls[0]?.[1]?.attributes;
+    const attrs = (telemetryState.tracer.startSpan.mock.calls[0]?.[1] as any)?.attributes;
     expect(attrs["gen_ai.agent.id"]).toBe("helper");
     expect(attrs["gen_ai.operation.name"]).toBe("invoke_agent");
 
-    await service.stop?.();
+    await service.stop?.({} as never);
   });
 
   test("message.processed ends the root span and sets attributes", async () => {
@@ -557,7 +558,7 @@ describe("diagnostics-otel service – span hierarchy", () => {
     expect(rootSpan.setStatus).toHaveBeenCalledWith({ code: 1 }); // SpanStatusCode.OK
     expect(rootSpan.end).toHaveBeenCalled();
 
-    await service.stop?.();
+    await service.stop?.({} as never);
   });
 
   test("message.processed sets ERROR status on error outcome", async () => {
@@ -588,7 +589,7 @@ describe("diagnostics-otel service – span hierarchy", () => {
     });
     expect(rootSpan.end).toHaveBeenCalled();
 
-    await service.stop?.();
+    await service.stop?.({} as never);
   });
 
   test("message.processed without matching message.queued does not crash", async () => {
@@ -607,6 +608,6 @@ describe("diagnostics-otel service – span hierarchy", () => {
     expect(telemetryState.counters.get("openclaw.message.processed")?.add).toHaveBeenCalled();
     expect(telemetryState.tracer.startSpan).not.toHaveBeenCalled();
 
-    await service.stop?.();
+    await service.stop?.({} as never);
   });
 });

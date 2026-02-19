@@ -129,7 +129,7 @@ describe("diagnostics-otel service – metrics & inference", () => {
 
   afterEach(async () => {
     for (const service of startedServices.splice(0)) {
-      await service.stop?.().catch(() => undefined);
+      await Promise.resolve(service.stop?.({} as never)).catch(() => undefined);
     }
   });
 
@@ -174,6 +174,7 @@ describe("diagnostics-otel service – metrics & inference", () => {
         error: vi.fn(),
         debug: vi.fn(),
       },
+      stateDir: "/tmp/openclaw-diagnostics-otel-test",
     };
   }
 
@@ -206,6 +207,7 @@ describe("diagnostics-otel service – metrics & inference", () => {
         error: vi.fn(),
         debug: vi.fn(),
       },
+      stateDir: "/tmp/openclaw-diagnostics-otel-test",
     });
 
     emitDiagnosticEvent({
@@ -283,7 +285,7 @@ describe("diagnostics-otel service – metrics & inference", () => {
     });
     expect(logEmit).toHaveBeenCalled();
 
-    await service.stop?.();
+    await service.stop?.({} as never);
   });
 
   test("model.inference records gen_ai.client.operation.duration in seconds", async () => {
@@ -308,7 +310,7 @@ describe("diagnostics-otel service – metrics & inference", () => {
       }),
     );
 
-    await service.stop?.();
+    await service.stop?.({} as never);
   });
 
   test("model.inference records gen_ai.client.token.usage split by input/output", async () => {
@@ -332,7 +334,7 @@ describe("diagnostics-otel service – metrics & inference", () => {
       expect.objectContaining({ "gen_ai.token.type": "output" }),
     );
 
-    await service.stop?.();
+    await service.stop?.({} as never);
   });
 
   test("maps provider names to gen_ai.provider.name enum values", async () => {
@@ -356,11 +358,11 @@ describe("diagnostics-otel service – metrics & inference", () => {
         model: "test-model",
         usage: { input: 10, output: 5, total: 15 },
       });
-      const attrs = telemetryState.tracer.startSpan.mock.calls[0]?.[1]?.attributes;
+      const attrs = (telemetryState.tracer.startSpan.mock.calls[0]?.[1] as any)?.attributes;
       expect(attrs?.["gen_ai.provider.name"]).toBe(expected);
     }
 
-    await service.stop?.();
+    await service.stop?.({} as never);
   });
 
   test("existing openclaw.* metrics are still emitted alongside gen_ai.*", async () => {
@@ -396,7 +398,7 @@ describe("diagnostics-otel service – metrics & inference", () => {
     ).toHaveBeenCalled();
     expect(telemetryState.histograms.get("gen_ai.client.token.usage")?.record).toHaveBeenCalled();
 
-    await service.stop?.();
+    await service.stop?.({} as never);
   });
 
   test("finish_reason length is recorded for truncated responses", async () => {
@@ -411,10 +413,10 @@ describe("diagnostics-otel service – metrics & inference", () => {
       usage: { input: 10000, output: 4096, total: 14096 },
     });
 
-    const attrs = telemetryState.tracer.startSpan.mock.calls[0]?.[1]?.attributes;
+    const attrs = (telemetryState.tracer.startSpan.mock.calls[0]?.[1] as any)?.attributes;
     expect(attrs["gen_ai.response.finish_reasons"]).toEqual(["length"]);
 
-    await service.stop?.();
+    await service.stop?.({} as never);
   });
 
   test("TTFT histogram is recorded and span attribute is set", async () => {
@@ -440,10 +442,10 @@ describe("diagnostics-otel service – metrics & inference", () => {
       }),
     );
 
-    const attrs = telemetryState.tracer.startSpan.mock.calls[0]?.[1]?.attributes;
+    const attrs = (telemetryState.tracer.startSpan.mock.calls[0]?.[1] as any)?.attributes;
     expect(attrs["gen_ai.client.time_to_first_token"]).toBe(350);
 
-    await service.stop?.();
+    await service.stop?.({} as never);
   });
 
   test("gen_ai.usage.input_tokens includes cache tokens even without promptTokens", async () => {
@@ -458,14 +460,14 @@ describe("diagnostics-otel service – metrics & inference", () => {
       durationMs: 4000,
     });
 
-    const attrs = telemetryState.tracer.startSpan.mock.calls[0]?.[1]?.attributes;
+    const attrs = (telemetryState.tracer.startSpan.mock.calls[0]?.[1] as any)?.attributes;
     // gen_ai.usage.input_tokens should be input + cacheRead + cacheWrite
     expect(attrs["gen_ai.usage.input_tokens"]).toBe(12 + 28976 + 295);
     expect(attrs["gen_ai.usage.output_tokens"]).toBe(57);
     // openclaw.tokens.input stays as raw input
     expect(attrs["openclaw.tokens.input"]).toBe(12);
 
-    await service.stop?.();
+    await service.stop?.({} as never);
   });
 
   test("gen_ai.usage.input_tokens uses promptTokens when available", async () => {
@@ -480,10 +482,10 @@ describe("diagnostics-otel service – metrics & inference", () => {
       durationMs: 4000,
     });
 
-    const attrs = telemetryState.tracer.startSpan.mock.calls[0]?.[1]?.attributes;
+    const attrs = (telemetryState.tracer.startSpan.mock.calls[0]?.[1] as any)?.attributes;
     expect(attrs["gen_ai.usage.input_tokens"]).toBe(29283);
 
-    await service.stop?.();
+    await service.stop?.({} as never);
   });
 
   test("error event creates span with ERROR status and error.type attribute", async () => {
@@ -506,7 +508,7 @@ describe("diagnostics-otel service – metrics & inference", () => {
     );
 
     // Check span attributes directly from the startSpan call
-    const attrs = telemetryState.tracer.startSpan.mock.calls[0]?.[1]?.attributes;
+    const attrs = (telemetryState.tracer.startSpan.mock.calls[0]?.[1] as any)?.attributes;
     expect(attrs).toBeDefined();
 
     // error attributes are set via setAttribute, not in initial attrs
@@ -522,6 +524,6 @@ describe("diagnostics-otel service – metrics & inference", () => {
       }),
     );
 
-    await service.stop?.();
+    await service.stop?.({} as never);
   });
 });

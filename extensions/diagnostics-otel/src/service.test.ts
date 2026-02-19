@@ -161,7 +161,7 @@ describe("diagnostics-otel service – content capture & tools", () => {
 
   afterEach(async () => {
     for (const service of startedServices.splice(0)) {
-      await service.stop?.({} as never).catch(() => undefined);
+      await Promise.resolve(service.stop?.({} as never)).catch(() => undefined);
     }
   });
 
@@ -245,7 +245,7 @@ describe("diagnostics-otel service – content capture & tools", () => {
     const calls = telemetryState.tracer.startSpan.mock.calls;
     const inferenceCall = calls.find((c) => c[0] === "chat gpt-5.2");
     expect(inferenceCall).toBeDefined();
-    const attrs = inferenceCall?.[1]?.attributes as Record<string, unknown>;
+    const attrs = (inferenceCall?.[1] as any)?.attributes as Record<string, unknown>;
     expect(attrs["gen_ai.input.messages"]).toBe(JSON.stringify(inputMessages));
 
     const span = telemetryState.tracer.startSpan.mock.results.find(
@@ -256,7 +256,7 @@ describe("diagnostics-otel service – content capture & tools", () => {
       JSON.stringify(outputMessages),
     );
 
-    await service.stop?.();
+    await service.stop?.({} as never);
   });
 
   test("does NOT record gen_ai.input.messages when captureContent is disabled", async () => {
@@ -287,10 +287,10 @@ describe("diagnostics-otel service – content capture & tools", () => {
 
     const calls = telemetryState.tracer.startSpan.mock.calls;
     const inferenceCall = calls.find((c) => c[0] === "chat gpt-5.2");
-    const attrs = inferenceCall?.[1]?.attributes as Record<string, unknown>;
+    const attrs = (inferenceCall?.[1] as any)?.attributes as Record<string, unknown>;
     expect(attrs["gen_ai.input.messages"]).toBeUndefined();
 
-    await service.stop?.();
+    await service.stop?.({} as never);
   });
 
   test("input messages with media parts use correct modality and type", async () => {
@@ -334,7 +334,7 @@ describe("diagnostics-otel service – content capture & tools", () => {
 
     const calls = telemetryState.tracer.startSpan.mock.calls;
     const inferenceCall = calls.find((c) => c[0] === "chat gpt-5.2");
-    const attrs = inferenceCall?.[1]?.attributes as Record<string, unknown>;
+    const attrs = (inferenceCall?.[1] as any)?.attributes as Record<string, unknown>;
     const parsed = JSON.parse(attrs["gen_ai.input.messages"] as string);
     expect(parsed[0].parts).toHaveLength(2);
     expect(parsed[0].parts[0].type).toBe("text");
@@ -342,7 +342,7 @@ describe("diagnostics-otel service – content capture & tools", () => {
     expect(parsed[0].parts[1].modality).toBe("image");
     expect(parsed[0].parts[1].mime_type).toBe("image/png");
 
-    await service.stop?.();
+    await service.stop?.({} as never);
   });
 
   test("output messages with tool_call parts are recorded correctly", async () => {
@@ -373,14 +373,14 @@ describe("diagnostics-otel service – content capture & tools", () => {
       outputMessages,
     });
 
-    const attrs = telemetryState.tracer.startSpan.mock.calls[0]?.[1]?.attributes;
+    const attrs = (telemetryState.tracer.startSpan.mock.calls[0]?.[1] as any)?.attributes;
     expect(attrs["gen_ai.response.finish_reasons"]).toEqual(["tool_call"]);
     const parsed = JSON.parse(attrs["gen_ai.output.messages"] as string);
     expect(parsed[0].parts[0].type).toBe("tool_call");
     expect(parsed[0].parts[0].name).toBe("get_weather");
     expect(parsed[0].finish_reason).toBe("tool_call");
 
-    await service.stop?.();
+    await service.stop?.({} as never);
   });
 
   test("tool.execution emits execute_tool span with gen_ai.tool.* attributes", async () => {
@@ -399,14 +399,14 @@ describe("diagnostics-otel service – content capture & tools", () => {
     const spanCall = telemetryState.tracer.startSpan.mock.calls[0];
     expect(spanCall[0]).toBe("execute_tool web_search");
 
-    const attrs = spanCall[1]?.attributes;
+    const attrs = (spanCall[1] as any)?.attributes;
     expect(attrs["gen_ai.operation.name"]).toBe("execute_tool");
     expect(attrs["gen_ai.tool.name"]).toBe("web_search");
     expect(attrs["gen_ai.tool.type"]).toBe("function");
     expect(attrs["gen_ai.tool.call.id"]).toBe("call_xyz");
     expect(attrs["openclaw.channel"]).toBe("webchat");
 
-    await service.stop?.();
+    await service.stop?.({} as never);
   });
 
   test("tool.execution with error sets ERROR span status", async () => {
@@ -426,7 +426,7 @@ describe("diagnostics-otel service – content capture & tools", () => {
       expect.objectContaining({ code: 2, message: "timeout" }),
     );
 
-    await service.stop?.();
+    await service.stop?.({} as never);
   });
 
   test("system instructions do NOT appear on agent.turn span (belong on child chat spans)", async () => {
@@ -442,10 +442,10 @@ describe("diagnostics-otel service – content capture & tools", () => {
       systemInstructions: [{ type: "text" as const, content: "You are a helpful assistant." }],
     });
 
-    const attrs = telemetryState.tracer.startSpan.mock.calls[0]?.[1]?.attributes;
+    const attrs = (telemetryState.tracer.startSpan.mock.calls[0]?.[1] as any)?.attributes;
     expect(attrs["gen_ai.system_instructions"]).toBeUndefined();
 
-    await service.stop?.();
+    await service.stop?.({} as never);
   });
 
   test("temperature and maxOutputTokens do NOT appear on agent.turn span (belong on child chat spans)", async () => {
@@ -462,11 +462,11 @@ describe("diagnostics-otel service – content capture & tools", () => {
       maxOutputTokens: 4096,
     });
 
-    const attrs = telemetryState.tracer.startSpan.mock.calls[0]?.[1]?.attributes;
+    const attrs = (telemetryState.tracer.startSpan.mock.calls[0]?.[1] as any)?.attributes;
     expect(attrs["gen_ai.request.temperature"]).toBeUndefined();
     expect(attrs["gen_ai.request.max_tokens"]).toBeUndefined();
 
-    await service.stop?.(ctx);
+    await service.stop?.({} as never);
   });
 
   test("appends signal path when endpoint contains non-signal /v1 segment", async () => {
@@ -476,7 +476,7 @@ describe("diagnostics-otel service – content capture & tools", () => {
 
     const options = traceExporterCtor.mock.calls[0]?.[0] as { url?: string } | undefined;
     expect(options?.url).toBe("https://www.comet.com/opik/api/v1/private/otel/v1/traces");
-    await service.stop?.(ctx);
+    await service.stop?.({} as never);
   });
 
   test("keeps already signal-qualified endpoint unchanged", async () => {
@@ -486,7 +486,7 @@ describe("diagnostics-otel service – content capture & tools", () => {
 
     const options = traceExporterCtor.mock.calls[0]?.[0] as { url?: string } | undefined;
     expect(options?.url).toBe("https://collector.example.com/v1/traces");
-    await service.stop?.(ctx);
+    await service.stop?.({} as never);
   });
 
   test("keeps signal-qualified endpoint unchanged when it has query params", async () => {
@@ -496,7 +496,7 @@ describe("diagnostics-otel service – content capture & tools", () => {
 
     const options = traceExporterCtor.mock.calls[0]?.[0] as { url?: string } | undefined;
     expect(options?.url).toBe("https://collector.example.com/v1/traces?timeout=30s");
-    await service.stop?.(ctx);
+    await service.stop?.({} as never);
   });
 
   test("keeps signal-qualified endpoint unchanged when signal path casing differs", async () => {
@@ -506,6 +506,6 @@ describe("diagnostics-otel service – content capture & tools", () => {
 
     const options = traceExporterCtor.mock.calls[0]?.[0] as { url?: string } | undefined;
     expect(options?.url).toBe("https://collector.example.com/v1/Traces");
-    await service.stop?.(ctx);
+    await service.stop?.({} as never);
   });
 });
