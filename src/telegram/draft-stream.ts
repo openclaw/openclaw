@@ -47,9 +47,12 @@ export function createTelegramDraftStream(params: {
   let stopped = false;
   let isFinal = false;
 
-  // Immediately send initial text if provided (e.g., "收到，正在思考...")
+  // Immediately send initial text if provided (e.g., "received, thinking...")
   const initialText = params.initialText?.trim();
+  let initialTextSent = false;
   if (initialText) {
+    // Mark as sent immediately to skip debounce for subsequent streaming updates
+    initialTextSent = true;
     void (async () => {
       try {
         const sent = await params.api.sendMessage(chatId, initialText, replyParams);
@@ -87,7 +90,13 @@ export function createTelegramDraftStream(params: {
     }
 
     // Debounce first preview send for better push notification quality.
-    if (typeof streamMessageId !== "number" && minInitialChars != null && !isFinal) {
+    // Skip debounce if initial text was already sent.
+    if (
+      !initialTextSent &&
+      typeof streamMessageId !== "number" &&
+      minInitialChars != null &&
+      !isFinal
+    ) {
       if (trimmed.length < minInitialChars) {
         return false;
       }
