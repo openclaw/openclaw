@@ -199,6 +199,8 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           channel: message.channel,
           threadTs: streamThreadTs,
           text,
+          teamId: ctx.teamId || undefined,
+          userId: message.user,
         });
         replyPlan.markSent();
         return;
@@ -225,6 +227,14 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         await deliverWithStreaming(payload);
         return;
       }
+
+      // Flush the draft stream to ensure any pending send/edit operations
+      // complete before we read the message ID. Without this, fast model
+      // responses (e.g. Haiku) can finish before the draft stream's
+      // throttled send() resolves, causing messageId() to return undefined
+      // and the preview-edit finalization to be skipped — resulting in a
+      // duplicate message (one from the draft stream, one from deliverReplies).
+      await draftStream?.flush();
 
       const mediaCount = payload.mediaUrls?.length ?? (payload.mediaUrl ? 1 : 0);
       const draftMessageId = draftStream?.messageId();
