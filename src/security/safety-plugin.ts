@@ -198,8 +198,10 @@ export function registerSafetyPlugin(
   api.on(
     "message_sending",
     (event, _ctx) => {
+      let content = event.content;
+
       // Content security check (prompt injection in output)
-      const csResult = evaluateContentSecurity(event.content, cfg.contentPolicy);
+      const csResult = evaluateContentSecurity(content, cfg.contentPolicy);
       if (csResult.matches.length > 0) {
         eventLog.emit({
           category: "injection",
@@ -214,7 +216,7 @@ export function registerSafetyPlugin(
 
       // Secret scanning
       if (cfg.secretScanning?.enabled !== false) {
-        const scanResult = scanForSecrets(event.content);
+        const scanResult = scanForSecrets(content);
         if (scanResult.found) {
           eventLog.emit({
             category: "secret-leak",
@@ -229,13 +231,13 @@ export function registerSafetyPlugin(
             return { cancel: true };
           }
 
-          // Redact by default
-          return { content: redactSecrets(event.content) };
+          // Redact secrets and continue to PII filtering
+          content = redactSecrets(content);
         }
       }
 
-      // Output filter (PII, harmful content)
-      const filterResult = filterOutput(event.content);
+      // Output filter (PII, harmful content) — runs on potentially redacted content
+      const filterResult = filterOutput(content);
       if (!filterResult.passed) {
         eventLog.emit({
           category: "output-filter",
@@ -250,8 +252,13 @@ export function registerSafetyPlugin(
         });
 
         if (filterResult.filteredContent) {
-          return { content: filterResult.filteredContent };
+          content = filterResult.filteredContent;
         }
+      }
+
+      // Return modified content if any filter changed it
+      if (content !== event.content) {
+        return { content };
       }
     },
     { priority: 850 },
