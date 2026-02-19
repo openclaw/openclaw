@@ -317,7 +317,8 @@ function pickAmbiguousMatch(
     entry,
     rank: typeof entry.rank === "number" ? entry.rank : 0,
   }));
-  const bestRank = Math.max(...ranked.map((item) => item.rank));
+  // Use reduce instead of spread to avoid stack overflow on large arrays
+  const bestRank = ranked.reduce((max, item) => (item.rank > max ? item.rank : max), -Infinity);
   const best = ranked.find((item) => item.rank === bestRank)?.entry;
   return best ?? entries[0] ?? null;
 }
