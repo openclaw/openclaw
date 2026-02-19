@@ -1,4 +1,5 @@
 import { type OpenClawConfig, loadConfig } from "../config/config.js";
+import type { ModelInputModality } from "../config/types.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 
@@ -8,7 +9,7 @@ export type ModelCatalogEntry = {
   provider: string;
   contextWindow?: number;
   reasoning?: boolean;
-  input?: Array<"text" | "image">;
+  input?: ModelInputModality[];
 };
 
 type DiscoveredModel = {
@@ -17,7 +18,7 @@ type DiscoveredModel = {
   provider: string;
   contextWindow?: number;
   reasoning?: boolean;
-  input?: Array<"text" | "image">;
+  input?: ModelInputModality[];
 };
 
 type PiSdkModule = typeof import("./pi-model-discovery.js");

@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { ModelDefinitionConfig } from "../../config/types.models.js";
+import type { ModelDefinitionConfig, ModelInputModality } from "../../config/types.models.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import { createOpenClawCodingTools } from "../pi-tools.js";
 import { createHostSandboxFsBridge } from "../test-helpers/host-sandbox-fs-bridge.js";
@@ -64,7 +64,7 @@ function createMinimaxImageConfig(): OpenClawConfig {
   };
 }
 
-function makeModelDefinition(id: string, input: Array<"text" | "image">): ModelDefinitionConfig {
+function makeModelDefinition(id: string, input: ModelInputModality[]): ModelDefinitionConfig {
   return {
     id,
     name: id,

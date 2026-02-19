@@ -1,4 +1,4 @@
-import type { ModelDefinitionConfig } from "../config/types.js";
+import type { ModelDefinitionConfig, ModelInputModality } from "../config/types.js";
 
 export const CLOUDFLARE_AI_GATEWAY_PROVIDER_ID = "cloudflare-ai-gateway";
 export const CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_ID = "claude-sonnet-4-5";
@@ -17,7 +17,7 @@ export function buildCloudflareAiGatewayModelDefinition(params?: {
   id?: string;
   name?: string;
   reasoning?: boolean;
-  input?: Array<"text" | "image">;
+  input?: ModelInputModality[];
 }): ModelDefinitionConfig {
   const id = params?.id?.trim() || CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_ID;
   return {

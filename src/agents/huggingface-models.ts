@@ -1,4 +1,4 @@
-import type { ModelDefinitionConfig } from "../config/types.models.js";
+import type { ModelDefinitionConfig, ModelInputModality } from "../config/types.models.js";
 
 /** Hugging Face Inference Providers (router) — OpenAI-compatible chat completions. */
 export const HUGGINGFACE_BASE_URL = "https://router.huggingface.co/v1";
@@ -199,8 +199,19 @@ export async function discoverHuggingfaceModels(apiKey: string): Promise<ModelDe
         const inferred = inferredMetaFromModelId(id);
         const name = displayNameFromApiEntry(entry, inferred.name);
         const modalities = entry.architecture?.input_modalities;
-        const input: Array<"text" | "image"> =
-          Array.isArray(modalities) && modalities.includes("image") ? ["text", "image"] : ["text"];
+        const normalizedModalities = new Set(
+          Array.isArray(modalities) ? modalities.map((value) => value.toLowerCase()) : [],
+        );
+        const input: ModelInputModality[] = ["text"];
+        if (normalizedModalities.has("image")) {
+          input.push("image");
+        }
+        if (normalizedModalities.has("audio")) {
+          input.push("audio");
+        }
+        if (normalizedModalities.has("video")) {
+          input.push("video");
+        }
         const providers = Array.isArray(entry.providers) ? entry.providers : [];
         const providerWithContext = providers.find(
           (p) => typeof p?.context_length === "number" && p.context_length > 0,

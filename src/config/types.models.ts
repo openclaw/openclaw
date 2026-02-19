@@ -21,6 +21,8 @@ export type ModelCompatConfig = {
   requiresMistralToolIds?: boolean;
 };
 
+export type ModelInputModality = "text" | "image" | "audio" | "video";
+
 export type ModelProviderAuthMode = "api-key" | "aws-sdk" | "oauth" | "token";
 
 export type ModelDefinitionConfig = {
@@ -28,7 +30,7 @@ export type ModelDefinitionConfig = {
   name: string;
   api?: ModelApi;
   reasoning: boolean;
-  input: Array<"text" | "image">;
+  input: ModelInputModality[];
   cost: {
     input: number;
     output: number;

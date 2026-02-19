@@ -261,6 +261,50 @@ describe("model compat config schema", () => {
   });
 });
 
+describe("model input modalities", () => {
+  it("accepts text/image/audio/video model inputs", () => {
+    const res = validateConfigObject({
+      models: {
+        providers: {
+          google: {
+            baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+            models: [
+              {
+                id: "gemini-2.5-flash",
+                name: "Gemini 2.5 Flash",
+                input: ["text", "image", "audio", "video"],
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects unknown model input modalities", () => {
+    const res = validateConfigObject({
+      models: {
+        providers: {
+          google: {
+            baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+            models: [
+              {
+                id: "gemini-2.5-flash",
+                name: "Gemini 2.5 Flash",
+                input: ["text", "pdf"],
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+  });
+});
+
 describe("config paths", () => {
   it("rejects empty and blocked paths", () => {
     expect(parseConfigPath("")).toEqual({

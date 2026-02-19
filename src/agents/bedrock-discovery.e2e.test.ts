@@ -40,7 +40,7 @@ describe("bedrock discovery", () => {
           modelId: "anthropic.claude-3-7-sonnet-20250219-v1:0",
           modelName: "Claude 3.7 Sonnet",
           providerName: "anthropic",
-          inputModalities: ["TEXT", "IMAGE"],
+          inputModalities: ["TEXT", "IMAGE", "AUDIO", "VIDEO"],
           outputModalities: ["TEXT"],
           responseStreamingSupported: true,
           modelLifecycle: { status: "ACTIVE" },
@@ -81,7 +81,7 @@ describe("bedrock discovery", () => {
       id: "anthropic.claude-3-7-sonnet-20250219-v1:0",
       name: "Claude 3.7 Sonnet",
       reasoning: false,
-      input: ["text", "image"],
+      input: ["text", "image", "audio", "video"],
       contextWindow: 32000,
       maxTokens: 4096,
     });

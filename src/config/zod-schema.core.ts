@@ -32,13 +32,20 @@ export const ModelCompatSchema = z
   .strict()
   .optional();
 
+export const ModelInputModalitySchema = z.union([
+  z.literal("text"),
+  z.literal("image"),
+  z.literal("audio"),
+  z.literal("video"),
+]);
+
 export const ModelDefinitionSchema = z
   .object({
     id: z.string().min(1),
     name: z.string().min(1),
     api: ModelApiSchema.optional(),
     reasoning: z.boolean().optional(),
-    input: z.array(z.union([z.literal("text"), z.literal("image")])).optional(),
+    input: z.array(ModelInputModalitySchema).optional(),
     cost: z
       .object({
         input: z.number().optional(),
