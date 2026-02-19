@@ -63,6 +63,47 @@ SECURITY NOTICE: The following content is from an EXTERNAL, UNTRUSTED source (e.
   - Send messages to third parties
 `.trim();
 
+/**
+ * SECURITY: Tools that must be restricted when processing external/untrusted content.
+ *
+ * When an agent session is handling content from an untrusted source (emails, webhooks,
+ * web fetch results), these tools should be blocked or require explicit user approval
+ * to prevent prompt injection from weaponizing the agent.
+ *
+ * Consumers (agent tool pipeline, session handler) should check this set and either:
+ * - Remove these tools from the available tool list for the duration of the external content turn
+ * - Require explicit user confirmation before executing any of these tools
+ */
+export const EXTERNAL_CONTENT_RESTRICTED_TOOLS = new Set<string>([
+  // Command execution — most dangerous; prompt injection → RCE
+  "exec",
+  "spawn",
+  "shell",
+  // Session orchestration — can spawn new agents or inject messages cross-session
+  "sessions_spawn",
+  "sessions_send",
+  // Filesystem mutation — data destruction or exfiltration via written files
+  "fs_write",
+  "fs_delete",
+  "fs_move",
+  "apply_patch",
+  // Gateway control plane — prevents agent reconfiguration via injected content
+  "gateway",
+]);
+
+/**
+ * Tools that are safe to use when processing external content.
+ * Only read-only, non-mutating tools should be in this set.
+ */
+export const EXTERNAL_CONTENT_SAFE_TOOL_KINDS = new Set<string>(["read", "search"]);
+
+/**
+ * Check whether a tool should be restricted when processing external content.
+ */
+export function isToolRestrictedForExternalContent(toolName: string): boolean {
+  return EXTERNAL_CONTENT_RESTRICTED_TOOLS.has(toolName);
+}
+
 export type ExternalContentSource =
   | "email"
   | "webhook"
