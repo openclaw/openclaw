@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveGatewayRuntimeConfig } from "./server-runtime-config.js";
 
 describe("resolveGatewayRuntimeConfig", () => {
@@ -78,6 +78,18 @@ describe("resolveGatewayRuntimeConfig", () => {
   });
 
   describe("token/password auth modes", () => {
+    // resolveGatewayAuth reads from process.env, so tests that rely on specific
+    // auth config must isolate against any OPENCLAW_GATEWAY_TOKEN/PASSWORD that
+    // may be present on a developer's machine.
+    beforeEach(() => {
+      vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "");
+      vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "");
+    });
+
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
     it("should reject token mode without token configured", async () => {
       const cfg = {
         gateway: {
