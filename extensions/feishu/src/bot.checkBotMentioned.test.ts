@@ -5,6 +5,7 @@ import { parseFeishuMessageEvent } from "./bot.js";
 function makeEvent(
   chatType: "p2p" | "group",
   mentions?: Array<{ key: string; name: string; id: { open_id?: string } }>,
+  text = "hello",
 ) {
   return {
     sender: {
@@ -15,7 +16,7 @@ function makeEvent(
       chat_id: "oc_chat1",
       chat_type: chatType,
       message_type: "text",
-      content: JSON.stringify({ text: "hello" }),
+      content: JSON.stringify({ text }),
       mentions,
     },
   };
@@ -60,6 +61,26 @@ describe("parseFeishuMessageEvent – mentionedBot", () => {
     ]);
     const ctx = parseFeishuMessageEvent(event as any, "");
     expect(ctx.mentionedBot).toBe(false);
+  });
+
+  it("treats mention.name regex metacharacters as literals when stripping", () => {
+    const event = makeEvent(
+      "group",
+      [{ key: "@_bot_1", name: ".*", id: { open_id: BOT_OPEN_ID } }],
+      "@NotBot hello",
+    );
+    const ctx = parseFeishuMessageEvent(event as any, BOT_OPEN_ID);
+    expect(ctx.content).toBe("@NotBot hello");
+  });
+
+  it("treats mention.key regex metacharacters as literals when stripping", () => {
+    const event = makeEvent(
+      "group",
+      [{ key: ".*", name: "Bot", id: { open_id: BOT_OPEN_ID } }],
+      "hello world",
+    );
+    const ctx = parseFeishuMessageEvent(event as any, BOT_OPEN_ID);
+    expect(ctx.content).toBe("hello world");
   });
 
   it("returns mentionedBot=true for post message with at (no top-level mentions)", () => {
