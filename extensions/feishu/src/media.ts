@@ -399,15 +399,8 @@ export async function sendAudioFeishu(params: {
         msg_type: "audio",
       },
     });
-
-    if (response.code !== 0) {
-      throw new Error(`Feishu audio reply failed: ${response.msg || `code ${response.code}`}`);
-    }
-
-    return {
-      messageId: response.data?.message_id ?? "unknown",
-      chatId: receiveId,
-    };
+    assertFeishuMessageApiSuccess(response, "Feishu audio reply failed");
+    return toFeishuSendResult(response, receiveId);
   }
 
   const response = await client.im.message.create({
@@ -418,15 +411,8 @@ export async function sendAudioFeishu(params: {
       msg_type: "audio",
     },
   });
-
-  if (response.code !== 0) {
-    throw new Error(`Feishu audio send failed: ${response.msg || `code ${response.code}`}`);
-  }
-
-  return {
-    messageId: response.data?.message_id ?? "unknown",
-    chatId: receiveId,
-  };
+  assertFeishuMessageApiSuccess(response, "Feishu audio send failed");
+  return toFeishuSendResult(response, receiveId);
 }
 
 /** Audio extensions that Feishu can handle as playable audio messages. */
@@ -492,23 +478,6 @@ async function getAudioDurationMs(buffer: Buffer, fileName?: string): Promise<nu
     // Duration is optional; ignore parse failures.
   }
   return undefined;
-}
-
-/**
- * Check if a string is a local file path (not a URL)
- */
-function isLocalPath(urlOrPath: string): boolean {
-  // Starts with / or ~ or drive letter (Windows)
-  if (urlOrPath.startsWith("/") || urlOrPath.startsWith("~") || /^[a-zA-Z]:/.test(urlOrPath)) {
-    return true;
-  }
-  // Try to parse as URL - if it fails or has no protocol, it's likely a local path
-  try {
-    const url = new URL(urlOrPath);
-    return url.protocol === "file:";
-  } catch {
-    return true; // Not a valid URL, treat as local path
-  }
 }
 
 /**

@@ -302,10 +302,16 @@ export async function sendCaptionCardFeishu(params: {
   to: string;
   text: string;
   replyToMessageId?: string;
+  /** Mention target users */
+  mentions?: MentionTarget[];
   accountId?: string;
 }): Promise<FeishuSendResult> {
-  const { cfg, to, text, replyToMessageId, accountId } = params;
-  const card = buildCaptionCard(text);
+  const { cfg, to, text, replyToMessageId, mentions, accountId } = params;
+  let cardText = text;
+  if (mentions && mentions.length > 0) {
+    cardText = buildMentionedCardContent(mentions, text);
+  }
+  const card = buildCaptionCard(cardText);
   return sendCardFeishu({ cfg, to, card, replyToMessageId, accountId });
 }
 

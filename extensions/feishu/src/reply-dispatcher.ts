@@ -241,6 +241,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 to: chatId,
                 text: text.trim(),
                 replyToMessageId: lastMediaMessageId,
+                mentions: mentionTargets,
                 accountId,
               });
             } catch (err) {
