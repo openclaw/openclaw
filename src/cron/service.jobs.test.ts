@@ -5,11 +5,15 @@ import { DEFAULT_TOP_OF_HOUR_STAGGER_MS } from "./stagger.js";
 import type { CronJob, CronJobPatch } from "./types.js";
 
 describe("applyJobPatch", () => {
-  it("clears delivery when switching to main session", () => {
+  const createIsolatedAgentTurnJob = (
+    id: string,
+    delivery: CronJob["delivery"],
+    overrides?: Partial<CronJob>,
+  ): CronJob => {
     const now = Date.now();
-    const job: CronJob = {
-      id: "job-1",
-      name: "job-1",
+    return {
+      id,
+      name: id,
       enabled: true,
       createdAtMs: now,
       updatedAtMs: now,
@@ -17,62 +21,47 @@ describe("applyJobPatch", () => {
       sessionTarget: "isolated",
       wakeMode: "now",
       payload: { kind: "agentTurn", message: "do it" },
-      delivery: { mode: "announce", channel: "telegram", to: "123" },
+      delivery,
       state: {},
+      ...overrides,
     };
+  };
 
-    const patch: CronJobPatch = {
-      sessionTarget: "main",
-      payload: { kind: "systemEvent", text: "ping" },
-    };
+  const switchToMainPatch = (): CronJobPatch => ({
+    sessionTarget: "main",
+    payload: { kind: "systemEvent", text: "ping" },
+  });
 
-    expect(() => applyJobPatch(job, patch)).not.toThrow();
+  it("clears delivery when switching to main session", () => {
+    const job = createIsolatedAgentTurnJob("job-1", {
+      mode: "announce",
+      channel: "telegram",
+      to: "123",
+    });
+
+    expect(() => applyJobPatch(job, switchToMainPatch())).not.toThrow();
     expect(job.sessionTarget).toBe("main");
     expect(job.payload.kind).toBe("systemEvent");
     expect(job.delivery).toBeUndefined();
   });
 
   it("keeps webhook delivery when switching to main session", () => {
-    const now = Date.now();
-    const job: CronJob = {
-      id: "job-webhook",
-      name: "job-webhook",
-      enabled: true,
-      createdAtMs: now,
-      updatedAtMs: now,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "isolated",
-      wakeMode: "now",
-      payload: { kind: "agentTurn", message: "do it" },
-      delivery: { mode: "webhook", to: "https://example.invalid/cron" },
-      state: {},
-    };
+    const job = createIsolatedAgentTurnJob("job-webhook", {
+      mode: "webhook",
+      to: "https://example.invalid/cron",
+    });
 
-    const patch: CronJobPatch = {
-      sessionTarget: "main",
-      payload: { kind: "systemEvent", text: "ping" },
-    };
-
-    expect(() => applyJobPatch(job, patch)).not.toThrow();
+    expect(() => applyJobPatch(job, switchToMainPatch())).not.toThrow();
     expect(job.sessionTarget).toBe("main");
     expect(job.delivery).toEqual({ mode: "webhook", to: "https://example.invalid/cron" });
   });
 
   it("maps legacy payload delivery updates onto delivery", () => {
-    const now = Date.now();
-    const job: CronJob = {
-      id: "job-2",
-      name: "job-2",
-      enabled: true,
-      createdAtMs: now,
-      updatedAtMs: now,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "isolated",
-      wakeMode: "now",
-      payload: { kind: "agentTurn", message: "do it" },
-      delivery: { mode: "announce", channel: "telegram", to: "123" },
-      state: {},
-    };
+    const job = createIsolatedAgentTurnJob("job-2", {
+      mode: "announce",
+      channel: "telegram",
+      to: "123",
+    });
 
     const patch: CronJobPatch = {
       payload: {
@@ -101,20 +90,10 @@ describe("applyJobPatch", () => {
   });
 
   it("treats legacy payload targets as announce requests", () => {
-    const now = Date.now();
-    const job: CronJob = {
-      id: "job-3",
-      name: "job-3",
-      enabled: true,
-      createdAtMs: now,
-      updatedAtMs: now,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "isolated",
-      wakeMode: "now",
-      payload: { kind: "agentTurn", message: "do it" },
-      delivery: { mode: "none", channel: "telegram" },
-      state: {},
-    };
+    const job = createIsolatedAgentTurnJob("job-3", {
+      mode: "none",
+      channel: "telegram",
+    });
 
     const patch: CronJobPatch = {
       payload: { kind: "agentTurn", to: " 999 " },
