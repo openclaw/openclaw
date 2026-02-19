@@ -170,8 +170,9 @@ describe("delivery-queue", () => {
       expect(computeBackoffMs(2)).toBe(25_000);
       expect(computeBackoffMs(3)).toBe(120_000);
       expect(computeBackoffMs(4)).toBe(600_000);
+      expect(computeBackoffMs(5)).toBe(1_800_000);
       // Beyond defined schedule -- clamps to last value.
-      expect(computeBackoffMs(5)).toBe(600_000);
+      expect(computeBackoffMs(6)).toBe(1_800_000);
     });
   });
 
