@@ -332,7 +332,7 @@ export function collectAttackSurfaceSummaryFindings(cfg: OpenClawConfig): Securi
   const elevated = cfg.tools?.elevated?.enabled !== false;
   const webhooksEnabled = cfg.hooks?.enabled === true;
   const internalHooksEnabled = cfg.hooks?.internal?.enabled === true;
-  const browserEnabled = cfg.browser?.enabled ?? true;
+  const browserEnabled = isBrowserEnabled(cfg);
 
   const detail =
     `groups: open=${group.open}, allowlist=${group.allowlist}` +
