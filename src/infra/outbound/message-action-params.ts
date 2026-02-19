@@ -369,3 +369,20 @@ export function parseCardParam(params: Record<string, unknown>): void {
     throw new Error("--card must be valid JSON");
   }
 }
+
+export function parseComponentsParam(params: Record<string, unknown>): void {
+  const raw = params.components;
+  if (typeof raw !== "string") {
+    return;
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    delete params.components;
+    return;
+  }
+  try {
+    params.components = JSON.parse(trimmed) as unknown;
+  } catch {
+    throw new Error("--components must be valid JSON");
+  }
+}

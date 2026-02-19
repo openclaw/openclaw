@@ -28,9 +28,9 @@ vi.mock("../config/config.js", () => ({
   })),
 }));
 
-const announceSpy = vi.fn(async () => true);
+const announceSpy = vi.fn(async (_params: unknown) => true);
 vi.mock("./subagent-announce.js", () => ({
-  runSubagentAnnounceFlow: (...args: unknown[]) => announceSpy(...args),
+  runSubagentAnnounceFlow: announceSpy,
 }));
 
 vi.mock("./subagent-registry.store.js", () => ({
@@ -101,8 +101,39 @@ describe("subagent registry steer restarts", () => {
     await flushAnnounce();
     expect(announceSpy).toHaveBeenCalledTimes(1);
 
-    const announce = announceSpy.mock.calls[0]?.[0] as { childRunId?: string };
+    const announce = (announceSpy.mock.calls[0]?.[0] ?? {}) as { childRunId?: string };
     expect(announce.childRunId).toBe("run-new");
+  });
+
+  it("clears announce retry state when replacing after steer restart", () => {
+    mod.registerSubagentRun({
+      runId: "run-retry-reset-old",
+      childSessionKey: "agent:main:subagent:retry-reset",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "retry reset",
+      cleanup: "keep",
+    });
+
+    const previous = mod.listSubagentRunsForRequester("agent:main:main")[0];
+    expect(previous?.runId).toBe("run-retry-reset-old");
+    if (previous) {
+      previous.announceRetryCount = 2;
+      previous.lastAnnounceRetryAt = Date.now();
+    }
+
+    const replaced = mod.replaceSubagentRunAfterSteer({
+      previousRunId: "run-retry-reset-old",
+      nextRunId: "run-retry-reset-new",
+      fallback: previous,
+    });
+    expect(replaced).toBe(true);
+
+    const runs = mod.listSubagentRunsForRequester("agent:main:main");
+    expect(runs).toHaveLength(1);
+    expect(runs[0].runId).toBe("run-retry-reset-new");
+    expect(runs[0].announceRetryCount).toBeUndefined();
+    expect(runs[0].lastAnnounceRetryAt).toBeUndefined();
   });
 
   it("restores announce for a finished run when steer replacement dispatch fails", async () => {
@@ -130,7 +161,7 @@ describe("subagent registry steer restarts", () => {
     await flushAnnounce();
 
     expect(announceSpy).toHaveBeenCalledTimes(1);
-    const announce = announceSpy.mock.calls[0]?.[0] as { childRunId?: string };
+    const announce = (announceSpy.mock.calls[0]?.[0] ?? {}) as { childRunId?: string };
     expect(announce.childRunId).toBe("run-failed-restart");
   });
 
@@ -203,9 +234,72 @@ describe("subagent registry steer restarts", () => {
     await flushAnnounce();
 
     const childRunIds = announceSpy.mock.calls.map(
-      (call) => (call[0] as { childRunId?: string }).childRunId,
+      (call) => ((call[0] ?? {}) as { childRunId?: string }).childRunId,
     );
     expect(childRunIds.filter((id) => id === "run-parent")).toHaveLength(2);
     expect(childRunIds.filter((id) => id === "run-child")).toHaveLength(1);
+  });
+
+  it("retries completion-mode announce delivery with backoff and then gives up after retry limit", async () => {
+    const callGateway = vi.mocked((await import("../gateway/call.js")).callGateway);
+    const originalCallGateway = callGateway.getMockImplementation();
+    callGateway.mockImplementation(async (request: unknown) => {
+      const typed = request as { method?: string };
+      if (typed.method === "agent.wait") {
+        return new Promise<unknown>(() => undefined);
+      }
+      if (originalCallGateway) {
+        return originalCallGateway(request as Parameters<typeof callGateway>[0]);
+      }
+      return {};
+    });
+
+    vi.useFakeTimers();
+    try {
+      announceSpy.mockResolvedValue(false);
+
+      mod.registerSubagentRun({
+        runId: "run-completion-retry",
+        childSessionKey: "agent:main:subagent:completion",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "completion retry",
+        cleanup: "keep",
+        expectsCompletionMessage: true,
+      });
+
+      lifecycleHandler?.({
+        stream: "lifecycle",
+        runId: "run-completion-retry",
+        data: { phase: "end" },
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(announceSpy).toHaveBeenCalledTimes(1);
+      expect(mod.listSubagentRunsForRequester("agent:main:main")[0]?.announceRetryCount).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(999);
+      expect(announceSpy).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(announceSpy).toHaveBeenCalledTimes(2);
+      expect(mod.listSubagentRunsForRequester("agent:main:main")[0]?.announceRetryCount).toBe(2);
+
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(announceSpy).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(announceSpy).toHaveBeenCalledTimes(3);
+      expect(mod.listSubagentRunsForRequester("agent:main:main")[0]?.announceRetryCount).toBe(3);
+
+      await vi.advanceTimersByTimeAsync(4_001);
+      expect(announceSpy).toHaveBeenCalledTimes(3);
+      expect(mod.listSubagentRunsForRequester("agent:main:main")[0]?.cleanupCompletedAt).toBeTypeOf(
+        "number",
+      );
+    } finally {
+      if (originalCallGateway) {
+        callGateway.mockImplementation(originalCallGateway);
+      }
+      vi.useRealTimers();
+    }
   });
 });

@@ -1,7 +1,7 @@
 import { html, nothing } from "lit";
 import type { SkillStatusEntry, SkillStatusReport } from "../types.ts";
 import type { SkillGroup } from "./skills-grouping.ts";
-import { normalizeToolName } from "../../../../src/agents/tool-policy.js";
+import { normalizeToolName } from "../../../../src/agents/tool-policy-shared.js";
 import {
   isAllowedByPolicy,
   matchesList,

@@ -34,6 +34,7 @@ import {
   normalizeSandboxMediaParams,
   parseButtonsParam,
   parseCardParam,
+  parseComponentsParam,
   readBooleanParam,
   resolveSlackAutoThreadId,
   resolveTelegramAutoThreadId,
@@ -92,6 +93,7 @@ export type RunMessageActionParams = {
   action: ChannelMessageActionName;
   params: Record<string, unknown>;
   defaultAccountId?: string;
+  requesterSenderId?: string | null;
   toolContext?: ChannelThreadingToolContext;
   gateway?: MessageActionRunnerGateway;
   deps?: OutboundSendDeps;
@@ -667,6 +669,7 @@ async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageAc
     cfg,
     params,
     accountId: accountId ?? undefined,
+    requesterSenderId: input.requesterSenderId ?? undefined,
     gateway,
     toolContext: input.toolContext,
     dryRun,
@@ -697,6 +700,7 @@ export async function runMessageAction(
       : undefined);
   parseButtonsParam(params);
   parseCardParam(params);
+  parseComponentsParam(params);
 
   const action = input.action;
   if (action === "broadcast") {

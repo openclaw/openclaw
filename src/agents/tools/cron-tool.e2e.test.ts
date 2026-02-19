@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const callGatewayMock = vi.fn();
+const { callGatewayMock } = vi.hoisted(() => ({
+  callGatewayMock: vi.fn(),
+}));
+
 vi.mock("../../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
@@ -12,9 +15,36 @@ vi.mock("../agent-scope.js", () => ({
 import { createCronTool } from "./cron-tool.js";
 
 describe("cron tool", () => {
+  async function executeAddAndReadDelivery(params: {
+    callId: string;
+    agentSessionKey: string;
+    delivery?: { mode?: string; channel?: string; to?: string } | null;
+  }) {
+    const tool = createCronTool({ agentSessionKey: params.agentSessionKey });
+    await tool.execute(params.callId, {
+      action: "add",
+      job: {
+        name: "reminder",
+        schedule: { at: new Date(123).toISOString() },
+        payload: { kind: "agentTurn", message: "hello" },
+        ...(params.delivery !== undefined ? { delivery: params.delivery } : {}),
+      },
+    });
+
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      params?: { delivery?: { mode?: string; channel?: string; to?: string } };
+    };
+    return call?.params?.delivery;
+  }
+
   beforeEach(() => {
     callGatewayMock.mockReset();
     callGatewayMock.mockResolvedValue({ ok: true });
+  });
+
+  it("marks cron as owner-only", async () => {
+    const tool = createCronTool();
+    expect(tool.ownerOnly).toBe(true);
   });
 
   it.each([
@@ -120,6 +150,46 @@ describe("cron tool", () => {
       params?: { agentId?: unknown };
     };
     expect(call?.params?.agentId).toBeNull();
+  });
+
+  it("stamps cron.add with caller sessionKey when missing", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const callerSessionKey = "agent:main:discord:channel:ops";
+    const tool = createCronTool({ agentSessionKey: callerSessionKey });
+    await tool.execute("call-session-key", {
+      action: "add",
+      job: {
+        name: "wake-up",
+        schedule: { at: new Date(123).toISOString() },
+        payload: { kind: "systemEvent", text: "hello" },
+      },
+    });
+
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      params?: { sessionKey?: string };
+    };
+    expect(call?.params?.sessionKey).toBe(callerSessionKey);
+  });
+
+  it("preserves explicit job.sessionKey on add", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createCronTool({ agentSessionKey: "agent:main:discord:channel:ops" });
+    await tool.execute("call-explicit-session-key", {
+      action: "add",
+      job: {
+        name: "wake-up",
+        schedule: { at: new Date(123).toISOString() },
+        sessionKey: "agent:main:telegram:group:-100123:topic:99",
+        payload: { kind: "systemEvent", text: "hello" },
+      },
+    });
+
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      params?: { sessionKey?: string };
+    };
+    expect(call?.params?.sessionKey).toBe("agent:main:telegram:group:-100123:topic:99");
   });
 
   it("adds recent context for systemEvent reminders when contextMessages > 0", async () => {
@@ -249,24 +319,12 @@ describe("cron tool", () => {
   });
 
   it("infers delivery from threaded session keys", async () => {
-    callGatewayMock.mockResolvedValueOnce({ ok: true });
-
-    const tool = createCronTool({
-      agentSessionKey: "agent:main:slack:channel:general:thread:1699999999.0001",
-    });
-    await tool.execute("call-thread", {
-      action: "add",
-      job: {
-        name: "reminder",
-        schedule: { at: new Date(123).toISOString() },
-        payload: { kind: "agentTurn", message: "hello" },
-      },
-    });
-
-    const call = callGatewayMock.mock.calls[0]?.[0] as {
-      params?: { delivery?: { mode?: string; channel?: string; to?: string } };
-    };
-    expect(call?.params?.delivery).toEqual({
+    expect(
+      await executeAddAndReadDelivery({
+        callId: "call-thread",
+        agentSessionKey: "agent:main:slack:channel:general:thread:1699999999.0001",
+      }),
+    ).toEqual({
       mode: "announce",
       channel: "slack",
       to: "general",
@@ -274,24 +332,12 @@ describe("cron tool", () => {
   });
 
   it("preserves telegram forum topics when inferring delivery", async () => {
-    callGatewayMock.mockResolvedValueOnce({ ok: true });
-
-    const tool = createCronTool({
-      agentSessionKey: "agent:main:telegram:group:-1001234567890:topic:99",
-    });
-    await tool.execute("call-telegram-topic", {
-      action: "add",
-      job: {
-        name: "reminder",
-        schedule: { at: new Date(123).toISOString() },
-        payload: { kind: "agentTurn", message: "hello" },
-      },
-    });
-
-    const call = callGatewayMock.mock.calls[0]?.[0] as {
-      params?: { delivery?: { mode?: string; channel?: string; to?: string } };
-    };
-    expect(call?.params?.delivery).toEqual({
+    expect(
+      await executeAddAndReadDelivery({
+        callId: "call-telegram-topic",
+        agentSessionKey: "agent:main:telegram:group:-1001234567890:topic:99",
+      }),
+    ).toEqual({
       mode: "announce",
       channel: "telegram",
       to: "-1001234567890:topic:99",
@@ -299,23 +345,13 @@ describe("cron tool", () => {
   });
 
   it("infers delivery when delivery is null", async () => {
-    callGatewayMock.mockResolvedValueOnce({ ok: true });
-
-    const tool = createCronTool({ agentSessionKey: "agent:main:dm:alice" });
-    await tool.execute("call-null-delivery", {
-      action: "add",
-      job: {
-        name: "reminder",
-        schedule: { at: new Date(123).toISOString() },
-        payload: { kind: "agentTurn", message: "hello" },
+    expect(
+      await executeAddAndReadDelivery({
+        callId: "call-null-delivery",
+        agentSessionKey: "agent:main:dm:alice",
         delivery: null,
-      },
-    });
-
-    const call = callGatewayMock.mock.calls[0]?.[0] as {
-      params?: { delivery?: { mode?: string; channel?: string; to?: string } };
-    };
-    expect(call?.params?.delivery).toEqual({
+      }),
+    ).toEqual({
       mode: "announce",
       to: "alice",
     });

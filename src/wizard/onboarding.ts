@@ -351,8 +351,6 @@ export async function runOnboardingWizard(
   let authChoice: AuthChoice;
   let authChoiceOverride: AuthChoice | undefined = opts.authChoice;
 
-  let customPreferredProvider: string | undefined;
-
   // Loop to allow retrying auth choice if user cancels during configuration
   while (true) {
     authChoice =
@@ -370,7 +368,6 @@ export async function runOnboardingWizard(
         config: nextConfig,
       });
       nextConfig = customResult.config;
-      customPreferredProvider = customResult.providerId;
       break;
     }
 

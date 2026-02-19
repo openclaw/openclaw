@@ -149,4 +149,57 @@ describe("browser config", () => {
     expect(resolveProfile(resolved, "chrome")).toBe(null);
     expect(resolved.defaultProfile).toBe("openclaw");
   });
+
+  it("defaults extraArgs to empty array when not provided", () => {
+    const resolved = resolveBrowserConfig(undefined);
+    expect(resolved.extraArgs).toEqual([]);
+  });
+
+  it("passes through valid extraArgs strings", () => {
+    const resolved = resolveBrowserConfig({
+      extraArgs: ["--no-sandbox", "--disable-gpu"],
+    });
+    expect(resolved.extraArgs).toEqual(["--no-sandbox", "--disable-gpu"]);
+  });
+
+  it("filters out empty strings and whitespace-only entries from extraArgs", () => {
+    const resolved = resolveBrowserConfig({
+      extraArgs: ["--flag", "", "  ", "--other"],
+    });
+    expect(resolved.extraArgs).toEqual(["--flag", "--other"]);
+  });
+
+  it("filters out non-string entries from extraArgs", () => {
+    const resolved = resolveBrowserConfig({
+      extraArgs: ["--flag", 42, null, undefined, true, "--other"] as unknown as string[],
+    });
+    expect(resolved.extraArgs).toEqual(["--flag", "--other"]);
+  });
+
+  it("defaults extraArgs to empty array when set to non-array", () => {
+    const resolved = resolveBrowserConfig({
+      extraArgs: "not-an-array" as unknown as string[],
+    });
+    expect(resolved.extraArgs).toEqual([]);
+  });
+
+  it("resolves browser SSRF policy when configured", () => {
+    const resolved = resolveBrowserConfig({
+      ssrfPolicy: {
+        allowPrivateNetwork: true,
+        allowedHostnames: [" localhost ", ""],
+        hostnameAllowlist: [" *.trusted.example ", " "],
+      },
+    });
+    expect(resolved.ssrfPolicy).toEqual({
+      allowPrivateNetwork: true,
+      allowedHostnames: ["localhost"],
+      hostnameAllowlist: ["*.trusted.example"],
+    });
+  });
+
+  it("keeps browser SSRF policy undefined when not configured", () => {
+    const resolved = resolveBrowserConfig({});
+    expect(resolved.ssrfPolicy).toBeUndefined();
+  });
 });

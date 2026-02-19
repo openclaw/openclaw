@@ -2,12 +2,14 @@ import type { AgentMessage, AgentTool } from "@mariozechner/pi-agent-core";
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
 import type { TSchema } from "@sinclair/typebox";
 import { EventEmitter } from "node:events";
+import type { OpenClawConfig } from "../../config/config.js";
 import type { TranscriptPolicy } from "../transcript-policy.js";
 import { registerUnhandledRejectionHandler } from "../../infra/unhandled-rejections.js";
 import {
   hasInterSessionUserProvenance,
   normalizeInputProvenance,
 } from "../../sessions/input-provenance.js";
+import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import {
   downgradeOpenAIReasoningBlocks,
   isCompactionFailureError,
@@ -245,7 +247,11 @@ export function sanitizeToolsForGoogle<
   tools: AgentTool<TSchemaType, TResult>[];
   provider: string;
 }): AgentTool<TSchemaType, TResult>[] {
-  if (params.provider !== "google-antigravity" && params.provider !== "google-gemini-cli") {
+  // google-antigravity serves Anthropic models (e.g. claude-opus-4-6-thinking),
+  // NOT Gemini. Applying Gemini schema cleaning strips JSON Schema keywords
+  // (minimum, maximum, format, etc.) that Anthropic's API requires for
+  // draft 2020-12 compliance. Only clean for actual Gemini providers.
+  if (params.provider !== "google-gemini-cli") {
     return params.tools;
   }
   return params.tools.map((tool) => {
@@ -412,6 +418,7 @@ export async function sanitizeSessionHistory(params: {
   modelApi?: string | null;
   modelId?: string;
   provider?: string;
+  config?: OpenClawConfig;
   sessionManager: SessionManager;
   sessionId: string;
   policy?: TranscriptPolicy;
@@ -434,6 +441,7 @@ export async function sanitizeSessionHistory(params: {
       toolCallIdMode: policy.toolCallIdMode,
       preserveSignatures: policy.preserveSignatures,
       sanitizeThoughtSignatures: policy.sanitizeThoughtSignatures,
+      ...resolveImageSanitizationLimits(params.config),
     },
   );
   const sanitizedThinking = policy.normalizeAntigravityThinkingBlocks
@@ -457,10 +465,9 @@ export async function sanitizeSessionHistory(params: {
         modelId: params.modelId,
       })
     : false;
-  const sanitizedOpenAI =
-    isOpenAIResponsesApi && modelChanged
-      ? downgradeOpenAIReasoningBlocks(sanitizedToolResults)
-      : sanitizedToolResults;
+  const sanitizedOpenAI = isOpenAIResponsesApi
+    ? downgradeOpenAIReasoningBlocks(sanitizedToolResults)
+    : sanitizedToolResults;
 
   if (hasSnapshot && (!priorSnapshot || modelChanged)) {
     appendModelSnapshot(params.sessionManager, {

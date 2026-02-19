@@ -4,7 +4,7 @@ import {
   expandToolGroups,
   normalizeToolName,
   resolveToolProfilePolicy,
-} from "../../../../src/agents/tool-policy.js";
+} from "../../../../src/agents/tool-policy-shared.js";
 
 export const TOOL_SECTIONS = [
   {

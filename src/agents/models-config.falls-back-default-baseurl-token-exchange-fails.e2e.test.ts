@@ -5,6 +5,8 @@ import { DEFAULT_COPILOT_API_BASE_URL } from "../providers/github-copilot-token.
 import { captureEnv } from "../test-utils/env.js";
 import {
   installModelsConfigTestHooks,
+  mockCopilotTokenExchangeSuccess,
+  withUnsetCopilotTokenEnv,
   withModelsTempHome as withTempHome,
 } from "./models-config.e2e-harness.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
@@ -41,22 +43,8 @@ describe("models-config", () => {
 
   it("uses agentDir override auth profiles for copilot injection", async () => {
     await withTempHome(async (home) => {
-      const envSnapshot = captureEnv(["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"]);
-      delete process.env.COPILOT_GITHUB_TOKEN;
-      delete process.env.GH_TOKEN;
-      delete process.env.GITHUB_TOKEN;
-
-      const fetchMock = vi.fn().mockResolvedValue({
-        ok: true,
-        status: 200,
-        json: async () => ({
-          token: "copilot-token;proxy-ep=proxy.copilot.example",
-          expires_at: Math.floor(Date.now() / 1000) + 3600,
-        }),
-      });
-      globalThis.fetch = fetchMock as unknown as typeof fetch;
-
-      try {
+      await withUnsetCopilotTokenEnv(async () => {
+        mockCopilotTokenExchangeSuccess();
         const agentDir = path.join(home, "agent-override");
         await fs.mkdir(agentDir, { recursive: true });
         await fs.writeFile(
@@ -85,9 +73,7 @@ describe("models-config", () => {
         };
 
         expect(parsed.providers["github-copilot"]?.baseUrl).toBe("https://api.copilot.example");
-      } finally {
-        envSnapshot.restore();
-      }
+      });
     });
   });
 });
