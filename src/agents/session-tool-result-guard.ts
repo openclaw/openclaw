@@ -53,8 +53,6 @@ export function installSessionToolResultGuard(
       message: AgentMessage,
       meta: { toolCallId?: string; toolName?: string; isSynthetic?: boolean },
     ) => AgentMessage;
-    /** Optional transform applied to assistant messages before persistence. */
-    transformAssistantForPersistence?: (message: AgentMessage) => AgentMessage;
     /**
      * Whether to synthesize missing tool results to satisfy strict providers.
      * Defaults to true.
@@ -125,10 +123,6 @@ export function installSessionToolResultGuard(
           isSynthetic: false,
         }) as never,
       );
-    }
-
-    if (nextRole === "assistant" && opts?.transformAssistantForPersistence) {
-      nextMessage = opts.transformAssistantForPersistence(nextMessage);
     }
 
     const toolCalls =

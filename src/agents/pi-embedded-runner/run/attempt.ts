@@ -425,14 +425,6 @@ export async function runEmbeddedAttempt(
         agentId: sessionAgentId,
         sessionKey: params.sessionKey,
         allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
-        attribution: params.attribution
-          ? {
-              initiative: params.attribution.initiative,
-              activity: params.attribution.activity,
-              source: params.attribution.source,
-              schemaVersion: params.attribution.schemaVersion,
-            }
-          : undefined,
       });
       trackSessionManagerAccess(params.sessionFile);
 

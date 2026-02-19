@@ -383,7 +383,6 @@ export async function runEmbeddedPiAgent(
             extraSystemPrompt: params.extraSystemPrompt,
             streamParams: params.streamParams,
             ownerNumbers: params.ownerNumbers,
-            attribution: params.attribution,
             enforceFinalTag: params.enforceFinalTag,
           });
 
