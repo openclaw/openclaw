@@ -459,7 +459,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.forceNewMessage).toHaveBeenCalled();
   });
 
-  it("does not force new message in partial mode when reasoning ends", async () => {
+  it("does not force new message in partial mode when reasoning stream ends", async () => {
     const draftStream = createDraftStream(999);
     createTelegramDraftStream.mockReturnValue(draftStream);
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
