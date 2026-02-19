@@ -151,7 +151,7 @@ describe("TuiStreamAssembler", () => {
     expect(second).toBeNull();
   });
 
-  it("keeps non-empty final text for plain text prefix/suffix updates", () => {
+  it("keeps streamed text when final payload drops boundary text blocks", () => {
     const assembler = new TuiStreamAssembler();
     assembler.ingestDelta(
       "run-5b",
@@ -174,7 +174,7 @@ describe("TuiStreamAssembler", () => {
       false,
     );
 
-    expect(finalText).toBe("Draft line 1");
+    expect(finalText).toBe("Draft line 1\nDraft line 2");
   });
 
   it("accepts richer final payload when it extends streamed text", () => {
