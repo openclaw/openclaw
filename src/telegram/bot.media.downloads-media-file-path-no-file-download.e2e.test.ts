@@ -360,10 +360,14 @@ describe("telegram forwarded bursts", () => {
           getFile: async () => ({ file_path: "photos/fwd1.jpg" }),
         });
 
-        await sleep(250);
+        await vi.waitFor(
+          () => {
+            expect(replySpy).toHaveBeenCalledTimes(1);
+          },
+          { timeout: FORWARD_BURST_TEST_TIMEOUT_MS, interval: 10 },
+        );
 
         expect(runtimeError).not.toHaveBeenCalled();
-        expect(replySpy).toHaveBeenCalledTimes(1);
         const payload = replySpy.mock.calls[0][0];
         expect(payload.Body).toContain("Look at this");
         expect(payload.MediaPaths).toHaveLength(1);
