@@ -281,7 +281,7 @@ describe("update-cli", () => {
     serviceLoaded.mockResolvedValue(false);
     prepareRestartScript.mockResolvedValue("/tmp/openclaw-restart-test.sh");
     runRestartScript.mockResolvedValue(undefined);
-    runDaemonInstall.mockResolvedValue(undefined);
+    vi.mocked(runDaemonInstall).mockResolvedValue(undefined);
     setTty(false);
     setStdoutTty(false);
   });
