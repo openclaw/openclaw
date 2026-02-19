@@ -44,7 +44,7 @@ git add packages/email-channel
 # Commit the changes
 git commit -m "feat: Add official Email channel plugin
 
-Add comprehensive IMAP/SMTP email channel support to Clawdbot:
+Add comprehensive IMAP/SMTP email channel support to OpenClaw:
 - IMAP email receiving with automatic polling
 - SMTP email sending for AI responses
 - Sender whitelist for security
@@ -60,7 +60,7 @@ git push origin feature/email-channel
 ```
 
 Then create a Pull Request on GitHub:
-1. Go to https://github.com/openclaw/clawdbot
+1. Go to https://github.com/openclaw/openclaw
 2. Click "Compare & pull request"
 3. Select your feature branch
 4. Title: "feat: Add official Email channel plugin"
@@ -69,7 +69,7 @@ Then create a Pull Request on GitHub:
 ### Option 2: Submit as Issue
 
 If you don't have write access, create an issue:
-1. Go to https://github.com/openclaw/clawdbot/issues
+1. Go to https://github.com/openclaw/openclaw/issues
 2. Title: "Feature Request: Official Email Channel Plugin"
 3. Include the summary from below
 
@@ -78,7 +78,7 @@ If you don't have write access, create an issue:
 ```markdown
 ## Summary
 
-I've developed a comprehensive Email Channel plugin for Clawdbot that enables bidirectional communication via IMAP/SMTP servers.
+I've developed a comprehensive Email Channel plugin for OpenClaw that enables bidirectional communication via IMAP/SMTP servers.
 
 ## Features
 
@@ -98,7 +98,7 @@ I've developed a comprehensive Email Channel plugin for Clawdbot that enables bi
 The plugin consists of three components:
 
 1. **runtime.ts** - IMAP/SMTP operations and state management
-2. **channel.ts** - Clawdbot ChannelPlugin interface with dynamic imports
+2. **channel.ts** - OpenClaw ChannelPlugin interface with dynamic imports
 3. **index.ts** - Plugin registration
 
 ## Key Innovations
@@ -110,12 +110,12 @@ Most email plugins rely on the UNSEEN flag, which fails if users check email in 
 Tracks processed emails by Message-ID to prevent duplicates while supporting time-based search.
 
 ### 3. State Persistence
-State file (`~/.clawdbot/extensions/email/state.json`) tracks:
+State file (`~/.openclaw/extensions/email/state.json`) tracks:
 - `lastProcessedTimestamp`: When last email was processed
 - `processedMessageIds`: List of processed Message-IDs (max 1000)
 
 ### 4. External Plugin Compatibility
-Uses dynamic imports to load Clawdbot core functions, solving the limitation where `api.runtime` only provides basic methods for external plugins.
+Uses dynamic imports to load OpenClaw core functions, solving the limitation where `api.runtime` only provides basic methods for external plugins.
 
 ## Documentation
 
@@ -166,7 +166,7 @@ packages/email-channel/
 1. **Review**: Review the code at `packages/email-channel/`
 2. **Test**: Install and test with a test email account
 3. **Feedback**: Provide feedback or request changes
-4. **Merge**: Merge into main Clawdbot repository
+4. **Merge**: Merge into main OpenClaw repository
 
 ## Next Steps for Reviewers
 
