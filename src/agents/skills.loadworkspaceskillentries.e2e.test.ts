@@ -4,28 +4,6 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { loadWorkspaceSkillEntries } from "./skills.js";
 
-async function _writeSkill(params: {
-  dir: string;
-  name: string;
-  description: string;
-  metadata?: string;
-  body?: string;
-}) {
-  const { dir, name, description, metadata, body } = params;
-  await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(
-    path.join(dir, "SKILL.md"),
-    `---
-name: ${name}
-description: ${description}${metadata ? `\nmetadata: ${metadata}` : ""}
----
-
-${body ?? `# ${name}\n`}
-`,
-    "utf-8",
-  );
-}
-
 async function setupWorkspaceWithProsePlugin() {
   const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-"));
   const managedDir = path.join(workspaceDir, ".managed");

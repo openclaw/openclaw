@@ -1,12 +1,13 @@
 import type { OpenClawConfig, SkillConfig } from "../../config/config.js";
-import type { SkillEligibilityContext, SkillEntry } from "./types.js";
 import {
+  evaluateRuntimeRequires,
   hasBinary,
   isConfigPathTruthyWithDefaults,
   resolveConfigPath,
   resolveRuntimePlatform,
 } from "../../shared/config-eval.js";
 import { resolveSkillKey } from "./frontmatter.js";
+import type { SkillEligibilityContext, SkillEntry } from "./types.js";
 
 const DEFAULT_CONFIG_VALUES: Record<string, boolean> = {
   "browser.enabled": true,
@@ -95,52 +96,17 @@ export function shouldIncludeSkill(params: {
     return true;
   }
 
-  const requiredBins = entry.metadata?.requires?.bins ?? [];
-  if (requiredBins.length > 0) {
-    for (const bin of requiredBins) {
-      if (hasBinary(bin)) {
-        continue;
-      }
-      if (eligibility?.remote?.hasBin?.(bin)) {
-        continue;
-      }
-      return false;
-    }
-  }
-  const requiredAnyBins = entry.metadata?.requires?.anyBins ?? [];
-  if (requiredAnyBins.length > 0) {
-    const anyFound =
-      requiredAnyBins.some((bin) => hasBinary(bin)) ||
-      eligibility?.remote?.hasAnyBin?.(requiredAnyBins);
-    if (!anyFound) {
-      return false;
-    }
-  }
-
-  const requiredEnv = entry.metadata?.requires?.env ?? [];
-  if (requiredEnv.length > 0) {
-    for (const envName of requiredEnv) {
-      if (process.env[envName]) {
-        continue;
-      }
-      if (skillConfig?.env?.[envName]) {
-        continue;
-      }
-      if (skillConfig?.apiKey && entry.metadata?.primaryEnv === envName) {
-        continue;
-      }
-      return false;
-    }
-  }
-
-  const requiredConfig = entry.metadata?.requires?.config ?? [];
-  if (requiredConfig.length > 0) {
-    for (const configPath of requiredConfig) {
-      if (!isConfigPathTruthy(config, configPath)) {
-        return false;
-      }
-    }
-  }
-
-  return true;
+  return evaluateRuntimeRequires({
+    requires: entry.metadata?.requires,
+    hasBin: hasBinary,
+    hasRemoteBin: eligibility?.remote?.hasBin,
+    hasAnyRemoteBin: eligibility?.remote?.hasAnyBin,
+    hasEnv: (envName) =>
+      Boolean(
+        process.env[envName] ||
+        skillConfig?.env?.[envName] ||
+        (skillConfig?.apiKey && entry.metadata?.primaryEnv === envName),
+      ),
+    isConfigPathTruthy: (configPath) => isConfigPathTruthy(config, configPath),
+  });
 }

@@ -13,7 +13,7 @@ jobs:
     permissions:
       issues: write
       pull-requests: write
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
         id: app-token
@@ -48,7 +48,7 @@ jobs:
                 label: "r: third-party-extension",
                 close: true,
                 message:
-                  "This would be better made as a third-party extension with our SDK that you maintain yourself. Docs: https://docs.openclaw.ai/plugin.",
+                  "Please make this as a third-party plugin that you maintain yourself in your own repo. Docs: https://docs.openclaw.ai/plugin. Feel free to open a PR after to add it to our community plugins page: https://docs.openclaw.ai/plugins/community",
               },
               {
                 label: "r: moltbook",

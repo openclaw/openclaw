@@ -1,14 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { assertMediaNotDataUrl, resolveSandboxedMediaSource } from "../../agents/sandbox-paths.js";
+import { readStringParam } from "../../agents/tools/common.js";
 import type {
   ChannelId,
   ChannelMessageActionName,
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { assertMediaNotDataUrl, resolveSandboxedMediaSource } from "../../agents/sandbox-paths.js";
-import { readStringParam } from "../../agents/tools/common.js";
 import { extensionForMime } from "../../media/mime.js";
 import { parseSlackTarget } from "../../slack/targets.js";
 import { parseTelegramTarget } from "../../telegram/targets.js";
@@ -367,5 +367,22 @@ export function parseCardParam(params: Record<string, unknown>): void {
     params.card = JSON.parse(trimmed) as unknown;
   } catch {
     throw new Error("--card must be valid JSON");
+  }
+}
+
+export function parseComponentsParam(params: Record<string, unknown>): void {
+  const raw = params.components;
+  if (typeof raw !== "string") {
+    return;
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    delete params.components;
+    return;
+  }
+  try {
+    params.components = JSON.parse(trimmed) as unknown;
+  } catch {
+    throw new Error("--components must be valid JSON");
   }
 }

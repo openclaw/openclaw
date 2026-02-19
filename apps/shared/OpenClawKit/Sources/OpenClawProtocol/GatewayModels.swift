@@ -2084,10 +2084,10 @@ public struct SkillsUpdateParams: Codable, Sendable {
 public struct CronJob: Codable, Sendable {
     public let id: String
     public let agentid: String?
+    public let sessionkey: String?
     public let name: String
     public let description: String?
     public let enabled: Bool
-    public let notify: Bool?
     public let deleteafterrun: Bool?
     public let createdatms: Int
     public let updatedatms: Int
@@ -2095,16 +2095,16 @@ public struct CronJob: Codable, Sendable {
     public let sessiontarget: AnyCodable
     public let wakemode: AnyCodable
     public let payload: AnyCodable
-    public let delivery: [String: AnyCodable]?
+    public let delivery: AnyCodable?
     public let state: [String: AnyCodable]
 
     public init(
         id: String,
         agentid: String?,
+        sessionkey: String?,
         name: String,
         description: String?,
         enabled: Bool,
-        notify: Bool?,
         deleteafterrun: Bool?,
         createdatms: Int,
         updatedatms: Int,
@@ -2112,15 +2112,15 @@ public struct CronJob: Codable, Sendable {
         sessiontarget: AnyCodable,
         wakemode: AnyCodable,
         payload: AnyCodable,
-        delivery: [String: AnyCodable]?,
+        delivery: AnyCodable?,
         state: [String: AnyCodable]
     ) {
         self.id = id
         self.agentid = agentid
+        self.sessionkey = sessionkey
         self.name = name
         self.description = description
         self.enabled = enabled
-        self.notify = notify
         self.deleteafterrun = deleteafterrun
         self.createdatms = createdatms
         self.updatedatms = updatedatms
@@ -2134,10 +2134,10 @@ public struct CronJob: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case id
         case agentid = "agentId"
+        case sessionkey = "sessionKey"
         case name
         case description
         case enabled
-        case notify
         case deleteafterrun = "deleteAfterRun"
         case createdatms = "createdAtMs"
         case updatedatms = "updatedAtMs"
@@ -2169,34 +2169,34 @@ public struct CronStatusParams: Codable, Sendable {
 public struct CronAddParams: Codable, Sendable {
     public let name: String
     public let agentid: AnyCodable?
+    public let sessionkey: AnyCodable?
     public let description: String?
     public let enabled: Bool?
-    public let notify: Bool?
     public let deleteafterrun: Bool?
     public let schedule: AnyCodable
     public let sessiontarget: AnyCodable
     public let wakemode: AnyCodable
     public let payload: AnyCodable
-    public let delivery: [String: AnyCodable]?
+    public let delivery: AnyCodable?
 
     public init(
         name: String,
         agentid: AnyCodable?,
+        sessionkey: AnyCodable?,
         description: String?,
         enabled: Bool?,
-        notify: Bool?,
         deleteafterrun: Bool?,
         schedule: AnyCodable,
         sessiontarget: AnyCodable,
         wakemode: AnyCodable,
         payload: AnyCodable,
-        delivery: [String: AnyCodable]?
+        delivery: AnyCodable?
     ) {
         self.name = name
         self.agentid = agentid
+        self.sessionkey = sessionkey
         self.description = description
         self.enabled = enabled
-        self.notify = notify
         self.deleteafterrun = deleteafterrun
         self.schedule = schedule
         self.sessiontarget = sessiontarget
@@ -2207,9 +2207,9 @@ public struct CronAddParams: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case name
         case agentid = "agentId"
+        case sessionkey = "sessionKey"
         case description
         case enabled
-        case notify
         case deleteafterrun = "deleteAfterRun"
         case schedule
         case sessiontarget = "sessionTarget"

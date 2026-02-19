@@ -1,11 +1,12 @@
-import { confirm, isCancel } from "@clack/prompts";
 import path from "node:path";
+import { confirm, isCancel } from "@clack/prompts";
 import {
   checkShellCompletionStatus,
   ensureCompletionCacheExists,
 } from "../../commands/doctor-completion.js";
 import { doctorCommand } from "../../commands/doctor.js";
 import { readConfigFileSnapshot, writeConfigFile } from "../../config/config.js";
+import { resolveGatewayService } from "../../daemon/service.js";
 import {
   channelToNpmTag,
   DEFAULT_GIT_CHANNEL,
@@ -34,6 +35,7 @@ import { formatCliCommand } from "../command-format.js";
 import { installCompletion } from "../completion-cli.js";
 import { runDaemonRestart } from "../daemon-cli.js";
 import { createUpdateProgress, printResult } from "./progress.js";
+import { prepareRestartScript, runRestartScript } from "./restart-helper.js";
 import {
   DEFAULT_PACKAGE_NAME,
   ensureGitCheckout,
@@ -388,6 +390,7 @@ async function maybeRestartService(params: {
   shouldRestart: boolean;
   result: UpdateRunResult;
   opts: UpdateCommandOptions;
+  restartScriptPath?: string | null;
 }): Promise<void> {
   if (params.shouldRestart) {
     if (!params.opts.json) {
@@ -396,7 +399,15 @@ async function maybeRestartService(params: {
     }
 
     try {
-      const restarted = await runDaemonRestart();
+      let restarted = false;
+      let restartInitiated = false;
+      if (params.restartScriptPath) {
+        await runRestartScript(params.restartScriptPath);
+        restartInitiated = true;
+      } else {
+        restarted = await runDaemonRestart();
+      }
+
       if (!params.opts.json && restarted) {
         defaultRuntime.log(theme.success("Daemon restarted successfully."));
         defaultRuntime.log("");
@@ -412,6 +423,16 @@ async function maybeRestartService(params: {
         } finally {
           delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
         }
+      }
+
+      if (!params.opts.json && restartInitiated) {
+        defaultRuntime.log(theme.success("Daemon restart initiated."));
+        defaultRuntime.log(
+          theme.muted(
+            `Verify with \`${replaceCliName(formatCliCommand("openclaw gateway status"), CLI_NAME)}\` once the gateway is back.`,
+          ),
+        );
+        defaultRuntime.log("");
       }
     } catch (err) {
       if (!params.opts.json) {
@@ -566,6 +587,18 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   const { progress, stop } = createUpdateProgress(showProgress);
   const startedAt = Date.now();
 
+  let restartScriptPath: string | null = null;
+  if (shouldRestart) {
+    try {
+      const loaded = await resolveGatewayService().isLoaded({ env: process.env });
+      if (loaded) {
+        restartScriptPath = await prepareRestartScript(process.env);
+      }
+    } catch {
+      // Ignore errors during pre-check; fallback to standard restart
+    }
+  }
+
   const result = switchToPackage
     ? await runPackageInstallUpdate({
         root,
@@ -638,6 +671,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     shouldRestart,
     result,
     opts,
+    restartScriptPath,
   });
 
   if (!opts.json) {

@@ -1,8 +1,8 @@
+import { randomBytes } from "node:crypto";
 import type { IncomingMessage } from "node:http";
+import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
-import { randomBytes } from "node:crypto";
-import { createServer } from "node:http";
 import WebSocket, { WebSocketServer } from "ws";
 import { isLoopbackAddress, isLoopbackHost } from "../gateway/net.js";
 import { rawDataToString } from "../infra/ws.js";

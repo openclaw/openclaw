@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { loadSessionStore } from "../config/sessions.js";
+import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { drainSystemEvents } from "../infra/system-events.js";
 import {
   assertModelSelection,
@@ -12,6 +13,18 @@ import {
   withTempHome,
 } from "./reply.directive.directive-behavior.e2e-harness.js";
 import { getReplyFromConfig } from "./reply.js";
+
+function makeModelDefinition(id: string, name: string): ModelDefinitionConfig {
+  return {
+    id,
+    name,
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128_000,
+    maxTokens: 8_192,
+  };
+}
 
 describe("directive behavior", () => {
   installDirectiveBehaviorE2EHooks();
@@ -42,13 +55,13 @@ describe("directive behavior", () => {
                 baseUrl: "https://api.moonshot.ai/v1",
                 apiKey: "sk-test",
                 api: "openai-completions",
-                models: [{ id: "kimi-k2-0905-preview", name: "Kimi K2" }],
+                models: [makeModelDefinition("kimi-k2-0905-preview", "Kimi K2")],
               },
               lmstudio: {
                 baseUrl: "http://127.0.0.1:1234/v1",
                 apiKey: "lmstudio",
                 api: "openai-responses",
-                models: [{ id: "kimi-k2-0905-preview", name: "Kimi K2 (Local)" }],
+                models: [makeModelDefinition("kimi-k2-0905-preview", "Kimi K2 (Local)")],
               },
             },
           },

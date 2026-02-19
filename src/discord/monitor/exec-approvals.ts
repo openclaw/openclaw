@@ -11,19 +11,19 @@ import {
 } from "@buape/carbon";
 import { ButtonStyle, Routes } from "discord-api-types/v10";
 import type { OpenClawConfig } from "../../config/config.js";
+import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
 import type { DiscordExecApprovalConfig } from "../../config/types.discord.js";
+import { buildGatewayConnectionDetails } from "../../gateway/call.js";
+import { GatewayClient } from "../../gateway/client.js";
 import type { EventFrame } from "../../gateway/protocol/index.js";
 import type {
   ExecApprovalDecision,
   ExecApprovalRequest,
   ExecApprovalResolved,
 } from "../../infra/exec-approvals.js";
-import type { RuntimeEnv } from "../../runtime.js";
-import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
-import { buildGatewayConnectionDetails } from "../../gateway/call.js";
-import { GatewayClient } from "../../gateway/client.js";
 import { logDebug, logError } from "../../logger.js";
 import { normalizeAccountId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import type { RuntimeEnv } from "../../runtime.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -721,7 +721,7 @@ export class DiscordExecApprovalHandler {
   }
 
   /** Return the list of configured approver IDs. */
-  getApprovers(): Array<string | number> {
+  getApprovers(): string[] {
     return this.opts.config.approvers ?? [];
   }
 }

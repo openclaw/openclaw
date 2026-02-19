@@ -1,0 +1,13 @@
+// Shared iOS signing defaults for local development + CI.
+OPENCLAW_IOS_DEFAULT_TEAM = Y5PE65HELJ
+OPENCLAW_IOS_SELECTED_TEAM = $(OPENCLAW_IOS_DEFAULT_TEAM)
+
+// Local contributors can override this by running scripts/ios-configure-signing.sh.
+#include? "../.local-signing.xcconfig"
+
+CODE_SIGN_STYLE = Automatic
+CODE_SIGN_IDENTITY = Apple Development
+DEVELOPMENT_TEAM = $(OPENCLAW_IOS_SELECTED_TEAM)
+
+// Let Xcode manage provisioning for the selected local team.
+PROVISIONING_PROFILE_SPECIFIER =

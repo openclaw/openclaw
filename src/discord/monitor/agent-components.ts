@@ -1,4 +1,3 @@
-import type { APIStringSelectComponent } from "discord-api-types/v10";
 import {
   Button,
   ChannelSelectMenu,
@@ -16,9 +15,8 @@ import {
   type StringSelectMenuInteraction,
   type UserSelectMenuInteraction,
 } from "@buape/carbon";
+import type { APIStringSelectComponent } from "discord-api-types/v10";
 import { ButtonStyle, ChannelType } from "discord-api-types/v10";
-import type { OpenClawConfig } from "../../config/config.js";
-import type { DiscordAccountConfig } from "../../config/types.discord.js";
 import { resolveHumanDelayConfig } from "../../agents/identity.js";
 import { resolveChunkMode, resolveTextChunkLimit } from "../../auto-reply/chunk.js";
 import { formatInboundEnvelope, resolveEnvelopeFormatOptions } from "../../auto-reply/envelope.js";
@@ -27,8 +25,10 @@ import { dispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply
 import { createReplyReferencePlanner } from "../../auto-reply/reply/reply-reference.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { recordInboundSession } from "../../channels/session.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
+import type { DiscordAccountConfig } from "../../config/types.discord.js";
 import { logVerbose } from "../../globals.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { logDebug, logError } from "../../logger.js";
@@ -292,6 +292,48 @@ async function ensureGuildComponentMemberAllowed(params: {
   return false;
 }
 
+async function ensureComponentUserAllowed(params: {
+  entry: DiscordComponentEntry;
+  interaction: AgentComponentInteraction;
+  user: DiscordUser;
+  replyOpts: { ephemeral?: boolean };
+  componentLabel: string;
+  unauthorizedReply: string;
+}): Promise<boolean> {
+  const allowList = normalizeDiscordAllowList(params.entry.allowedUsers, [
+    "discord:",
+    "user:",
+    "pk:",
+  ]);
+  if (!allowList) {
+    return true;
+  }
+  const match = resolveDiscordAllowListMatch({
+    allowList,
+    candidate: {
+      id: params.user.id,
+      name: params.user.username,
+      tag: formatDiscordUserTag(params.user),
+    },
+  });
+  if (match.allowed) {
+    return true;
+  }
+
+  logVerbose(
+    `discord component ${params.componentLabel}: blocked user ${params.user.id} (not in allowedUsers)`,
+  );
+  try {
+    await params.interaction.reply({
+      content: params.unauthorizedReply,
+      ...params.replyOpts,
+    });
+  } catch {
+    // Interaction may have expired
+  }
+  return false;
+}
+
 async function ensureAgentComponentInteractionAllowed(params: {
   ctx: AgentComponentContext;
   interaction: AgentComponentInteraction;
@@ -334,7 +376,7 @@ export type AgentComponentContext = {
   token?: string;
   guildEntries?: Record<string, DiscordGuildEntryResolved>;
   /** DM allowlist (from allowFrom config; legacy: dm.allowFrom) */
-  allowFrom?: Array<string | number>;
+  allowFrom?: string[];
   /** DM policy (default: "pairing") */
   dmPolicy?: "open" | "pairing" | "allowlist" | "disabled";
 };
@@ -919,6 +961,7 @@ async function handleDiscordComponentEvent(params: {
     guildEntries: params.ctx.guildEntries,
   });
   const channelCtx = resolveDiscordChannelContext(params.interaction);
+  const unauthorizedReply = `You are not authorized to use this ${params.componentLabel}.`;
   const memberAllowed = await ensureGuildComponentMemberAllowed({
     interaction: params.interaction,
     guildInfo,
@@ -929,13 +972,28 @@ async function handleDiscordComponentEvent(params: {
     user,
     replyOpts,
     componentLabel: params.componentLabel,
-    unauthorizedReply: `You are not authorized to use this ${params.componentLabel}.`,
+    unauthorizedReply,
   });
   if (!memberAllowed) {
     return;
   }
 
-  const consumed = resolveDiscordComponentEntry({ id: parsed.componentId });
+  const componentAllowed = await ensureComponentUserAllowed({
+    entry,
+    interaction: params.interaction,
+    user,
+    replyOpts,
+    componentLabel: params.componentLabel,
+    unauthorizedReply,
+  });
+  if (!componentAllowed) {
+    return;
+  }
+
+  const consumed = resolveDiscordComponentEntry({
+    id: parsed.componentId,
+    consume: !entry.reusable,
+  });
   if (!consumed) {
     try {
       await params.interaction.reply({
@@ -1053,6 +1111,7 @@ async function handleDiscordModalTrigger(params: {
     guildEntries: params.ctx.guildEntries,
   });
   const channelCtx = resolveDiscordChannelContext(params.interaction);
+  const unauthorizedReply = "You are not authorized to use this form.";
   const memberAllowed = await ensureGuildComponentMemberAllowed({
     interaction: params.interaction,
     guildInfo,
@@ -1063,13 +1122,28 @@ async function handleDiscordModalTrigger(params: {
     user,
     replyOpts,
     componentLabel: "form",
-    unauthorizedReply: "You are not authorized to use this form.",
+    unauthorizedReply,
   });
   if (!memberAllowed) {
     return;
   }
 
-  const consumed = resolveDiscordComponentEntry({ id: parsed.componentId });
+  const componentAllowed = await ensureComponentUserAllowed({
+    entry,
+    interaction: params.interaction,
+    user,
+    replyOpts,
+    componentLabel: "form",
+    unauthorizedReply,
+  });
+  if (!componentAllowed) {
+    return;
+  }
+
+  const consumed = resolveDiscordComponentEntry({
+    id: parsed.componentId,
+    consume: !entry.reusable,
+  });
   if (!consumed) {
     try {
       await params.interaction.reply({
@@ -1501,7 +1575,10 @@ class DiscordComponentModal extends Modal {
       return;
     }
 
-    const consumed = resolveDiscordModalEntry({ id: modalId });
+    const consumed = resolveDiscordModalEntry({
+      id: modalId,
+      consume: !modalEntry.reusable,
+    });
     if (!consumed) {
       try {
         await interaction.reply({

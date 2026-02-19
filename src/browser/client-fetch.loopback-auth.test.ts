@@ -49,7 +49,7 @@ describe("fetchBrowserJson loopback auth", () => {
   });
 
   it("adds bearer auth for loopback absolute HTTP URLs", async () => {
-    const fetchMock = vi.fn(
+    const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
       async () =>
         new Response(JSON.stringify({ ok: true }), {
           status: 200,
@@ -61,13 +61,13 @@ describe("fetchBrowserJson loopback auth", () => {
     const res = await fetchBrowserJson<{ ok: boolean }>("http://127.0.0.1:18888/");
     expect(res.ok).toBe(true);
 
-    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    const init = fetchMock.mock.calls[0]?.[1];
     const headers = new Headers(init?.headers);
     expect(headers.get("authorization")).toBe("Bearer loopback-token");
   });
 
   it("does not inject auth for non-loopback absolute URLs", async () => {
-    const fetchMock = vi.fn(
+    const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
       async () =>
         new Response(JSON.stringify({ ok: true }), {
           status: 200,
@@ -78,13 +78,13 @@ describe("fetchBrowserJson loopback auth", () => {
 
     await fetchBrowserJson<{ ok: boolean }>("http://example.com/");
 
-    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    const init = fetchMock.mock.calls[0]?.[1];
     const headers = new Headers(init?.headers);
     expect(headers.get("authorization")).toBeNull();
   });
 
   it("keeps caller-supplied auth header", async () => {
-    const fetchMock = vi.fn(
+    const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
       async () =>
         new Response(JSON.stringify({ ok: true }), {
           status: 200,
@@ -99,7 +99,7 @@ describe("fetchBrowserJson loopback auth", () => {
       },
     });
 
-    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    const init = fetchMock.mock.calls[0]?.[1];
     const headers = new Headers(init?.headers);
     expect(headers.get("authorization")).toBe("Bearer caller-token");
   });

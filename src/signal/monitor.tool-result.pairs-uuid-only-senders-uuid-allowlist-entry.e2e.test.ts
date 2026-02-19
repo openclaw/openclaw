@@ -23,12 +23,14 @@ async function runMonitorWithMocks(
 }
 describe("monitorSignalProvider tool results", () => {
   it("pairs uuid-only senders with a uuid allowlist entry", async () => {
+    const baseChannels = (config.channels ?? {}) as Record<string, unknown>;
+    const baseSignal = (baseChannels.signal ?? {}) as Record<string, unknown>;
     setSignalToolResultTestConfig({
       ...config,
       channels: {
-        ...config.channels,
+        ...baseChannels,
         signal: {
-          ...config.channels?.signal,
+          ...baseSignal,
           autoStart: false,
           dmPolicy: "pairing",
           allowFrom: [],

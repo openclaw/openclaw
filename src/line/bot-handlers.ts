@@ -8,8 +8,6 @@ import type {
   PostbackEvent,
 } from "@line/bot-sdk";
 import type { OpenClawConfig } from "../config/config.js";
-import type { RuntimeEnv } from "../runtime.js";
-import type { LineGroupConfig, ResolvedLineAccount } from "./types.js";
 import { danger, logVerbose } from "../globals.js";
 import { resolvePairingIdLabel } from "../pairing/pairing-labels.js";
 import { buildPairingReply } from "../pairing/pairing-messages.js";
@@ -17,6 +15,7 @@ import {
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
 } from "../pairing/pairing-store.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { firstDefined, isSenderAllowed, normalizeAllowFromWithStore } from "./bot-access.js";
 import {
   getLineSourceInfo,
@@ -26,6 +25,7 @@ import {
 } from "./bot-message-context.js";
 import { downloadLineMedia } from "./download.js";
 import { pushMessageLine, replyMessageLine } from "./send.js";
+import type { LineGroupConfig, ResolvedLineAccount } from "./types.js";
 
 interface MediaRef {
   path: string;

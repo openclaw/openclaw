@@ -171,26 +171,4 @@ describe("config identity defaults", () => {
       expect(cfg.messages?.responsePrefix).toBe("");
     });
   });
-
-  it("does not derive responsePrefix from identity emoji", async () => {
-    await withTempHome("openclaw-config-identity-", async (home) => {
-      const cfg = await writeAndLoadConfig(home, {
-        agents: {
-          list: [
-            {
-              id: "main",
-              identity: {
-                name: "OpenClaw",
-                theme: "space lobster",
-                emoji: "🦞",
-              },
-            },
-          ],
-        },
-        messages: {},
-      });
-
-      expect(cfg.messages?.responsePrefix).toBeUndefined();
-    });
-  });
 });

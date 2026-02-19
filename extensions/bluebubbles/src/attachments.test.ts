@@ -1,38 +1,18 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import type { BlueBubblesAttachment } from "./types.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import "./test-mocks.js";
 import { downloadBlueBubblesAttachment, sendBlueBubblesAttachment } from "./attachments.js";
 import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
-
-vi.mock("./accounts.js", () => ({
-  resolveBlueBubblesAccount: vi.fn(({ cfg, accountId }) => {
-    const config = cfg?.channels?.bluebubbles ?? {};
-    return {
-      accountId: accountId ?? "default",
-      enabled: config.enabled !== false,
-      configured: Boolean(config.serverUrl && config.password),
-      config,
-    };
-  }),
-}));
-
-vi.mock("./probe.js", () => ({
-  getCachedBlueBubblesPrivateApiStatus: vi.fn().mockReturnValue(null),
-}));
+import { installBlueBubblesFetchTestHooks } from "./test-harness.js";
+import type { BlueBubblesAttachment } from "./types.js";
 
 const mockFetch = vi.fn();
 
+installBlueBubblesFetchTestHooks({
+  mockFetch,
+  privateApiStatusMock: vi.mocked(getCachedBlueBubblesPrivateApiStatus),
+});
+
 describe("downloadBlueBubblesAttachment", () => {
-  beforeEach(() => {
-    vi.stubGlobal("fetch", mockFetch);
-    mockFetch.mockReset();
-    vi.mocked(getCachedBlueBubblesPrivateApiStatus).mockReset();
-    vi.mocked(getCachedBlueBubblesPrivateApiStatus).mockReturnValue(null);
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
   it("throws when guid is missing", async () => {
     const attachment: BlueBubblesAttachment = {};
     await expect(

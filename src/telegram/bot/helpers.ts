@@ -1,13 +1,13 @@
 import type { Chat, Message, MessageOrigin, User } from "@grammyjs/types";
-import type { TelegramGroupConfig, TelegramTopicConfig } from "../../config/types.js";
-import type { TelegramStreamMode } from "./types.js";
 import { formatLocationText, type NormalizedLocation } from "../../channels/location.js";
+import type { TelegramGroupConfig, TelegramTopicConfig } from "../../config/types.js";
 import { readChannelAllowFromStore } from "../../pairing/pairing-store.js";
 import {
   firstDefined,
   normalizeAllowFromWithStore,
   type NormalizedAllowFrom,
 } from "../bot-access.js";
+import type { TelegramStreamMode } from "./types.js";
 
 const TELEGRAM_GENERAL_TOPIC_ID = 1;
 
@@ -114,7 +114,7 @@ export function resolveTelegramThreadSpec(params: {
  * Build thread params for Telegram API calls (messages, media).
  *
  * IMPORTANT: Thread IDs behave differently based on chat type:
- * - DMs (private chats): Never send thread_id (threads don't exist)
+ * - DMs (private chats): Include message_thread_id when present (DM topics)
  * - Forum topics: Skip thread_id=1 (General topic), include others
  * - Regular groups: Thread IDs are ignored by Telegram
  *
@@ -130,9 +130,8 @@ export function buildTelegramThreadParams(thread?: TelegramThreadSpec | null) {
   }
   const normalized = Math.trunc(thread.id);
 
-  // Never send thread_id for DMs (threads don't exist in private chats)
   if (thread.scope === "dm") {
-    return undefined;
+    return normalized > 0 ? { message_thread_id: normalized } : undefined;
   }
 
   // Telegram rejects message_thread_id=1 for General forum topic
@@ -195,6 +194,33 @@ export function buildSenderName(msg: Message) {
     [msg.from?.first_name, msg.from?.last_name].filter(Boolean).join(" ").trim() ||
     msg.from?.username;
   return name || undefined;
+}
+
+export function resolveTelegramMediaPlaceholder(
+  msg:
+    | Pick<Message, "photo" | "video" | "video_note" | "audio" | "voice" | "document" | "sticker">
+    | undefined
+    | null,
+): string | undefined {
+  if (!msg) {
+    return undefined;
+  }
+  if (msg.photo) {
+    return "<media:image>";
+  }
+  if (msg.video || msg.video_note) {
+    return "<media:video>";
+  }
+  if (msg.audio || msg.voice) {
+    return "<media:audio>";
+  }
+  if (msg.document) {
+    return "<media:document>";
+  }
+  if (msg.sticker) {
+    return "<media:sticker>";
+  }
+  return undefined;
 }
 
 export function buildSenderLabel(msg: Message, senderId?: number | string) {
@@ -318,15 +344,8 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
     const replyBody = (replyLike.text ?? replyLike.caption ?? "").trim();
     body = replyBody;
     if (!body) {
-      if (replyLike.photo) {
-        body = "<media:image>";
-      } else if (replyLike.video) {
-        body = "<media:video>";
-      } else if (replyLike.audio || replyLike.voice) {
-        body = "<media:audio>";
-      } else if (replyLike.document) {
-        body = "<media:document>";
-      } else {
+      body = resolveTelegramMediaPlaceholder(replyLike) ?? "";
+      if (!body) {
         const locationData = extractTelegramLocation(replyLike);
         if (locationData) {
           body = formatLocationText(locationData);

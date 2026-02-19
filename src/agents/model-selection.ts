@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
-import type { ModelCatalogEntry } from "./model-catalog.js";
 import { resolveAgentModelPrimary } from "./agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
+import type { ModelCatalogEntry } from "./model-catalog.js";
 import { normalizeGoogleModelId } from "./models-config.providers.js";
 
 export type ModelRef = {
@@ -19,6 +19,7 @@ export type ModelAliasIndex = {
 const ANTHROPIC_MODEL_ALIASES: Record<string, string> = {
   "opus-4.6": "claude-opus-4-6",
   "opus-4.5": "claude-opus-4-5",
+  "sonnet-4.6": "claude-sonnet-4-6",
   "sonnet-4.5": "claude-sonnet-4-5",
 };
 const OPENAI_CODEX_OAUTH_MODEL_PREFIXES = ["gpt-5.3-codex"] as const;
@@ -46,6 +47,33 @@ export function normalizeProviderId(provider: string): string {
     return "kimi-coding";
   }
   return normalized;
+}
+
+export function findNormalizedProviderValue<T>(
+  entries: Record<string, T> | undefined,
+  provider: string,
+): T | undefined {
+  if (!entries) {
+    return undefined;
+  }
+  const providerKey = normalizeProviderId(provider);
+  for (const [key, value] of Object.entries(entries)) {
+    if (normalizeProviderId(key) === providerKey) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+export function findNormalizedProviderKey(
+  entries: Record<string, unknown> | undefined,
+  provider: string,
+): string | undefined {
+  if (!entries) {
+    return undefined;
+  }
+  const providerKey = normalizeProviderId(provider);
+  return Object.keys(entries).find((key) => normalizeProviderId(key) === providerKey);
 }
 
 export function isCliProvider(provider: string, cfg?: OpenClawConfig): boolean {

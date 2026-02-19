@@ -36,10 +36,12 @@ bin/docs-list
 apps/macos/.build-local/
 apps/macos/.swiftpm/
 apps/shared/MoltbotKit/.swiftpm/
+apps/shared/OpenClawKit/.swiftpm/
 Core/
 apps/ios/*.xcodeproj/
 apps/ios/*.xcworkspace/
 apps/ios/.swiftpm/
+apps/ios/.local-signing.xcconfig
 vendor/
 apps/ios/Clawdbot.xcodeproj/
 apps/ios/Clawdbot.xcodeproj/**
@@ -86,3 +88,6 @@ USER.md
 !.agent/workflows/
 /local/
 package-lock.json
+
+# Local iOS signing overrides
+apps/ios/LocalSigning.xcconfig

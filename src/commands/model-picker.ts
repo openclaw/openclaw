@@ -1,5 +1,3 @@
-import type { OpenClawConfig } from "../config/config.js";
-import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "../agents/auth-profiles.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { getCustomProviderApiKey, resolveEnvApiKey } from "../agents/model-auth.js";
@@ -11,6 +9,8 @@ import {
   normalizeProviderId,
   resolveConfiguredModelRef,
 } from "../agents/model-selection.js";
+import type { OpenClawConfig } from "../config/config.js";
+import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
 import { formatTokenK } from "./models/shared.js";
 import { OPENAI_CODEX_DEFAULT_MODEL } from "./openai-codex-model-default.js";
 import { promptAndConfigureVllm } from "./vllm-setup.js";
@@ -424,6 +424,7 @@ export async function promptModelAllowlist(params: {
     message: params.message ?? "Models in /model picker (multi-select)",
     options,
     initialValues: initialKeys.length > 0 ? initialKeys : undefined,
+    searchable: true,
   });
   const selected = normalizeModelKeys(selection.map((value) => String(value)));
   if (selected.length > 0) {

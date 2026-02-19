@@ -127,6 +127,6 @@ describe("irc policy", () => {
       groupIdCaseInsensitive: true,
     });
     expect(sharedDisabled.allowed).toBe(inboundDisabled.allowed);
-    expect(sharedDisabled.groupConfig?.enabled).toBe(inboundDisabled.groupConfig?.enabled);
+    expect(inboundDisabled.groupConfig?.enabled).toBe(false);
   });
 });

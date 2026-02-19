@@ -2,51 +2,36 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
-const callGatewayMock = vi.fn();
-
-vi.mock("../gateway/call.js", () => ({
-  callGateway: (opts: unknown) => callGatewayMock(opts),
-}));
-
-let configOverride: ReturnType<(typeof import("../config/config.js"))["loadConfig"]> = {
-  session: {
-    mainKey: "main",
-    scope: "per-sender",
-  },
-};
-
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
-  return {
-    ...actual,
-    loadConfig: () => configOverride,
-  };
-});
-
-import "./test-helpers/fast-core-tools.js";
-import { createOpenClawTools } from "./openclaw-tools.js";
 import {
-  addSubagentRunForTests,
-  listSubagentRunsForRequester,
-  resetSubagentRegistryForTests,
-} from "./subagent-registry.js";
+  callGatewayMock,
+  setSubagentsConfigOverride,
+} from "./openclaw-tools.subagents.test-harness.js";
+import "./test-helpers/fast-core-tools.js";
+
+let createOpenClawTools: (typeof import("./openclaw-tools.js"))["createOpenClawTools"];
+let addSubagentRunForTests: (typeof import("./subagent-registry.js"))["addSubagentRunForTests"];
+let listSubagentRunsForRequester: (typeof import("./subagent-registry.js"))["listSubagentRunsForRequester"];
+let resetSubagentRegistryForTests: (typeof import("./subagent-registry.js"))["resetSubagentRegistryForTests"];
 
 describe("openclaw-tools: subagents steer failure", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ createOpenClawTools } = await import("./openclaw-tools.js"));
+    ({ addSubagentRunForTests, listSubagentRunsForRequester, resetSubagentRegistryForTests } =
+      await import("./subagent-registry.js"));
     resetSubagentRegistryForTests();
     callGatewayMock.mockReset();
     const storePath = path.join(
       os.tmpdir(),
       `openclaw-subagents-steer-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
     );
-    configOverride = {
+    setSubagentsConfigOverride({
       session: {
         mainKey: "main",
         scope: "per-sender",
         store: storePath,
       },
-    };
+    });
     fs.writeFileSync(storePath, "{}", "utf-8");
   });
 

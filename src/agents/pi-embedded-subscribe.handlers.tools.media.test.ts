@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 import {
   handleToolExecutionEnd,
   handleToolExecutionStart,
 } from "./pi-embedded-subscribe.handlers.tools.js";
+import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 
 // Minimal mock context factory. Only the fields needed for the media emission path.
 function createMockContext(overrides?: {
@@ -23,8 +23,10 @@ function createMockContext(overrides?: {
       toolSummaryById: new Set(),
       pendingMessagingTexts: new Map(),
       pendingMessagingTargets: new Map(),
+      pendingMessagingMediaUrls: new Map(),
       messagingToolSentTexts: [],
       messagingToolSentTextsNormalized: [],
+      messagingToolSentMediaUrls: [],
       messagingToolSentTargets: [],
     },
     log: { debug: vi.fn(), warn: vi.fn() },
@@ -159,6 +161,28 @@ describe("handleToolExecutionEnd media emission", () => {
       isError: false,
       result: {
         content: [{ type: "text", text: "Command executed successfully" }],
+      },
+    });
+
+    expect(onToolResult).not.toHaveBeenCalled();
+  });
+
+  it("does NOT emit media for <media:audio> placeholder text", async () => {
+    const onToolResult = vi.fn();
+    const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "tts",
+      toolCallId: "tc-1",
+      isError: false,
+      result: {
+        content: [
+          {
+            type: "text",
+            text: "<media:audio> placeholder with successful preflight voice transcript",
+          },
+        ],
       },
     });
 

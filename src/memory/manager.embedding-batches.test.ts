@@ -43,7 +43,10 @@ describe("memory embedding batches", () => {
     });
 
     const status = managerLarge.status();
-    const totalTexts = embedBatch.mock.calls.reduce((sum, call) => sum + (call[0]?.length ?? 0), 0);
+    const totalTexts = embedBatch.mock.calls.reduce(
+      (sum: number, call: unknown[]) => sum + ((call[0] as string[] | undefined)?.length ?? 0),
+      0,
+    );
     expect(totalTexts).toBe(status.chunks);
     expect(embedBatch.mock.calls.length).toBeGreaterThan(1);
     expect(updates.length).toBeGreaterThan(0);
@@ -112,7 +115,7 @@ describe("memory embedding batches", () => {
     await fs.writeFile(path.join(memoryDir, "2026-01-07.md"), "\n\n\n");
     await managerSmall.sync({ reason: "test" });
 
-    const inputs = embedBatch.mock.calls.flatMap((call) => call[0] ?? []);
+    const inputs = embedBatch.mock.calls.flatMap((call: unknown[]) => (call[0] as string[]) ?? []);
     expect(inputs).not.toContain("");
   });
 });

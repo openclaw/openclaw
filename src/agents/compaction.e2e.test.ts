@@ -161,10 +161,10 @@ describe("pruneHistoryForContextShare", () => {
         role: "assistant",
         content: [
           { type: "text", text: "x".repeat(4000) },
-          { type: "toolUse", id: "call_123", name: "test_tool", input: {} },
+          { type: "toolCall", id: "call_123", name: "test_tool", arguments: {} },
         ],
         timestamp: 1,
-      },
+      } as unknown as AgentMessage,
       // Chunk 2 (will be kept) - contains orphaned tool_result
       {
         role: "toolResult",
@@ -172,7 +172,7 @@ describe("pruneHistoryForContextShare", () => {
         toolName: "test_tool",
         content: [{ type: "text", text: "result".repeat(500) }],
         timestamp: 2,
-      } as AgentMessage,
+      } as unknown as AgentMessage,
       {
         role: "user",
         content: "x".repeat(500),
@@ -212,17 +212,17 @@ describe("pruneHistoryForContextShare", () => {
         role: "assistant",
         content: [
           { type: "text", text: "y".repeat(500) },
-          { type: "toolUse", id: "call_456", name: "kept_tool", input: {} },
+          { type: "toolCall", id: "call_456", name: "kept_tool", arguments: {} },
         ],
         timestamp: 2,
-      },
+      } as unknown as AgentMessage,
       {
         role: "toolResult",
         toolCallId: "call_456",
         toolName: "kept_tool",
         content: [{ type: "text", text: "result" }],
         timestamp: 3,
-      } as AgentMessage,
+      } as unknown as AgentMessage,
     ];
 
     const pruned = pruneHistoryForContextShare({
@@ -247,11 +247,11 @@ describe("pruneHistoryForContextShare", () => {
         role: "assistant",
         content: [
           { type: "text", text: "x".repeat(4000) },
-          { type: "toolUse", id: "call_a", name: "tool_a", input: {} },
-          { type: "toolUse", id: "call_b", name: "tool_b", input: {} },
+          { type: "toolCall", id: "call_a", name: "tool_a", arguments: {} },
+          { type: "toolCall", id: "call_b", name: "tool_b", arguments: {} },
         ],
         timestamp: 1,
-      },
+      } as unknown as AgentMessage,
       // Chunk 2 (will be kept) - contains orphaned tool_results
       {
         role: "toolResult",
@@ -259,14 +259,14 @@ describe("pruneHistoryForContextShare", () => {
         toolName: "tool_a",
         content: [{ type: "text", text: "result_a" }],
         timestamp: 2,
-      } as AgentMessage,
+      } as unknown as AgentMessage,
       {
         role: "toolResult",
         toolCallId: "call_b",
         toolName: "tool_b",
         content: [{ type: "text", text: "result_b" }],
         timestamp: 3,
-      } as AgentMessage,
+      } as unknown as AgentMessage,
       {
         role: "user",
         content: "x".repeat(500),

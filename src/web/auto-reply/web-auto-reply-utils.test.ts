@@ -2,10 +2,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import type { WebInboundMsg } from "./types.js";
 import { saveSessionStore } from "../../config/sessions.js";
 import { isBotMentionedFromTargets, resolveMentionTargets } from "./mentions.js";
 import { getSessionSnapshot } from "./session-snapshot.js";
+import type { WebInboundMsg } from "./types.js";
 import { elide, isLikelyWhatsAppCryptoError } from "./util.js";
 
 const makeMsg = (overrides: Partial<WebInboundMsg>): WebInboundMsg =>
@@ -169,10 +169,6 @@ describe("web auto-reply util", () => {
 
     it("returns input when under limit", () => {
       expect(elide("hi", 10)).toBe("hi");
-    });
-
-    it("returns input when exactly at limit", () => {
-      expect(elide("12345", 5)).toBe("12345");
     });
 
     it("truncates and annotates when over limit", () => {

@@ -55,7 +55,7 @@ describe("runGatewayUpdate", () => {
   }) {
     const calls: string[] = [];
     let uiBuildCount = 0;
-    const doctorKey = `${process.execPath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive`;
+    const doctorKey = `${process.execPath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive --fix`;
 
     const runCommand = async (argv: string[]) => {
       const key = argv.join(" ");
@@ -105,13 +105,28 @@ describe("runGatewayUpdate", () => {
     };
   }
 
-  it("skips git update when worktree is dirty", async () => {
+  async function setupGitCheckout(options?: { packageManager?: string }) {
     await fs.mkdir(path.join(tempDir, ".git"));
-    await fs.writeFile(
-      path.join(tempDir, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "1.0.0" }),
-      "utf-8",
-    );
+    const pkg: Record<string, string> = { name: "openclaw", version: "1.0.0" };
+    if (options?.packageManager) {
+      pkg.packageManager = options.packageManager;
+    }
+    await fs.writeFile(path.join(tempDir, "package.json"), JSON.stringify(pkg), "utf-8");
+  }
+
+  async function setupUiIndex() {
+    const uiIndexPath = path.join(tempDir, "dist", "control-ui", "index.html");
+    await fs.mkdir(path.dirname(uiIndexPath), { recursive: true });
+    await fs.writeFile(uiIndexPath, "<html></html>", "utf-8");
+    return uiIndexPath;
+  }
+
+  async function removeControlUiAssets() {
+    await fs.rm(path.join(tempDir, "dist", "control-ui"), { recursive: true, force: true });
+  }
+
+  it("skips git update when worktree is dirty", async () => {
+    await setupGitCheckout();
     const { runner, calls } = createRunner({
       [`git -C ${tempDir} rev-parse --show-toplevel`]: { stdout: tempDir },
       [`git -C ${tempDir} rev-parse HEAD`]: { stdout: "abc123" },
@@ -131,12 +146,7 @@ describe("runGatewayUpdate", () => {
   });
 
   it("aborts rebase on failure", async () => {
-    await fs.mkdir(path.join(tempDir, ".git"));
-    await fs.writeFile(
-      path.join(tempDir, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "1.0.0" }),
-      "utf-8",
-    );
+    await setupGitCheckout();
     const { runner, calls } = createRunner({
       [`git -C ${tempDir} rev-parse --show-toplevel`]: { stdout: tempDir },
       [`git -C ${tempDir} rev-parse HEAD`]: { stdout: "abc123" },
@@ -163,16 +173,72 @@ describe("runGatewayUpdate", () => {
     expect(calls.some((call) => call.includes("rebase --abort"))).toBe(true);
   });
 
-  it("uses stable tag when beta tag is older than release", async () => {
+  it("returns error and stops early when deps install fails", async () => {
     await fs.mkdir(path.join(tempDir, ".git"));
     await fs.writeFile(
       path.join(tempDir, "package.json"),
       JSON.stringify({ name: "openclaw", version: "1.0.0", packageManager: "pnpm@8.0.0" }),
       "utf-8",
     );
-    const uiIndexPath = path.join(tempDir, "dist", "control-ui", "index.html");
-    await fs.mkdir(path.dirname(uiIndexPath), { recursive: true });
-    await fs.writeFile(uiIndexPath, "<html></html>", "utf-8");
+    const stableTag = "v1.0.1-1";
+    const { runner, calls } = createRunner({
+      [`git -C ${tempDir} rev-parse --show-toplevel`]: { stdout: tempDir },
+      [`git -C ${tempDir} rev-parse HEAD`]: { stdout: "abc123" },
+      [`git -C ${tempDir} status --porcelain -- :!dist/control-ui/`]: { stdout: "" },
+      [`git -C ${tempDir} fetch --all --prune --tags`]: { stdout: "" },
+      [`git -C ${tempDir} tag --list v* --sort=-v:refname`]: { stdout: `${stableTag}\n` },
+      [`git -C ${tempDir} checkout --detach ${stableTag}`]: { stdout: "" },
+      "pnpm install": { code: 1, stderr: "ERR_PNPM_NETWORK" },
+    });
+
+    const result = await runGatewayUpdate({
+      cwd: tempDir,
+      runCommand: async (argv, _options) => runner(argv),
+      timeoutMs: 5000,
+      channel: "stable",
+    });
+
+    expect(result.status).toBe("error");
+    expect(result.reason).toBe("deps-install-failed");
+    expect(calls.some((call) => call === "pnpm build")).toBe(false);
+    expect(calls.some((call) => call === "pnpm ui:build")).toBe(false);
+  });
+
+  it("returns error and stops early when build fails", async () => {
+    await fs.mkdir(path.join(tempDir, ".git"));
+    await fs.writeFile(
+      path.join(tempDir, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "1.0.0", packageManager: "pnpm@8.0.0" }),
+      "utf-8",
+    );
+    const stableTag = "v1.0.1-1";
+    const { runner, calls } = createRunner({
+      [`git -C ${tempDir} rev-parse --show-toplevel`]: { stdout: tempDir },
+      [`git -C ${tempDir} rev-parse HEAD`]: { stdout: "abc123" },
+      [`git -C ${tempDir} status --porcelain -- :!dist/control-ui/`]: { stdout: "" },
+      [`git -C ${tempDir} fetch --all --prune --tags`]: { stdout: "" },
+      [`git -C ${tempDir} tag --list v* --sort=-v:refname`]: { stdout: `${stableTag}\n` },
+      [`git -C ${tempDir} checkout --detach ${stableTag}`]: { stdout: "" },
+      "pnpm install": { stdout: "" },
+      "pnpm build": { code: 1, stderr: "tsc: error TS2345" },
+    });
+
+    const result = await runGatewayUpdate({
+      cwd: tempDir,
+      runCommand: async (argv, _options) => runner(argv),
+      timeoutMs: 5000,
+      channel: "stable",
+    });
+
+    expect(result.status).toBe("error");
+    expect(result.reason).toBe("build-failed");
+    expect(calls.some((call) => call === "pnpm install")).toBe(true);
+    expect(calls.some((call) => call === "pnpm ui:build")).toBe(false);
+  });
+
+  it("uses stable tag when beta tag is older than release", async () => {
+    await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
+    await setupUiIndex();
     const stableTag = "v1.0.1-1";
     const betaTag = "v1.0.0-beta.2";
     const { runner, calls } = createRunner({
@@ -187,9 +253,10 @@ describe("runGatewayUpdate", () => {
       "pnpm install": { stdout: "" },
       "pnpm build": { stdout: "" },
       "pnpm ui:build": { stdout: "" },
-      [`${process.execPath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive`]: {
-        stdout: "",
-      },
+      [`${process.execPath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive --fix`]:
+        {
+          stdout: "",
+        },
     });
 
     const result = await runGatewayUpdate({
@@ -243,29 +310,18 @@ describe("runGatewayUpdate", () => {
       "utf-8",
     );
 
-    const calls: string[] = [];
-    const runCommand = async (argv: string[]) => {
-      const key = argv.join(" ");
-      calls.push(key);
-      if (key === `git -C ${pkgRoot} rev-parse --show-toplevel`) {
-        return { stdout: "", stderr: "not a git repository", code: 128 };
-      }
-      if (key === "npm root -g") {
-        return { stdout: nodeModules, stderr: "", code: 0 };
-      }
-      if (key === params.expectedInstallCommand) {
+    const { calls, runCommand } = createGlobalInstallHarness({
+      pkgRoot,
+      npmRootOutput: nodeModules,
+      installCommand: params.expectedInstallCommand,
+      onInstall: async () => {
         await fs.writeFile(
           path.join(pkgRoot, "package.json"),
           JSON.stringify({ name: "openclaw", version: "2.0.0" }),
           "utf-8",
         );
-        return { stdout: "ok", stderr: "", code: 0 };
-      }
-      if (key === "pnpm root -g") {
-        return { stdout: "", stderr: "", code: 1 };
-      }
-      return { stdout: "", stderr: "", code: 0 };
-    };
+      },
+    });
 
     const result = await runGatewayUpdate({
       cwd: pkgRoot,
@@ -277,6 +333,37 @@ describe("runGatewayUpdate", () => {
 
     return { calls, result };
   }
+
+  const createGlobalInstallHarness = (params: {
+    pkgRoot: string;
+    npmRootOutput?: string;
+    installCommand: string;
+    onInstall?: () => Promise<void>;
+  }) => {
+    const calls: string[] = [];
+    const runCommand = async (argv: string[]) => {
+      const key = argv.join(" ");
+      calls.push(key);
+      if (key === `git -C ${params.pkgRoot} rev-parse --show-toplevel`) {
+        return { stdout: "", stderr: "not a git repository", code: 128 };
+      }
+      if (key === "npm root -g") {
+        if (params.npmRootOutput) {
+          return { stdout: params.npmRootOutput, stderr: "", code: 0 };
+        }
+        return { stdout: "", stderr: "", code: 1 };
+      }
+      if (key === "pnpm root -g") {
+        return { stdout: "", stderr: "", code: 1 };
+      }
+      if (key === params.installCommand) {
+        await params.onInstall?.();
+        return { stdout: "ok", stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    };
+    return { calls, runCommand };
+  };
 
   it.each([
     {
@@ -364,29 +451,17 @@ describe("runGatewayUpdate", () => {
         "utf-8",
       );
 
-      const calls: string[] = [];
-      const runCommand = async (argv: string[]) => {
-        const key = argv.join(" ");
-        calls.push(key);
-        if (key === `git -C ${pkgRoot} rev-parse --show-toplevel`) {
-          return { stdout: "", stderr: "not a git repository", code: 128 };
-        }
-        if (key === "npm root -g") {
-          return { stdout: "", stderr: "", code: 1 };
-        }
-        if (key === "pnpm root -g") {
-          return { stdout: "", stderr: "", code: 1 };
-        }
-        if (key === "bun add -g openclaw@latest") {
+      const { calls, runCommand } = createGlobalInstallHarness({
+        pkgRoot,
+        installCommand: "bun add -g openclaw@latest",
+        onInstall: async () => {
           await fs.writeFile(
             path.join(pkgRoot, "package.json"),
             JSON.stringify({ name: "openclaw", version: "2.0.0" }),
             "utf-8",
           );
-          return { stdout: "ok", stderr: "", code: 0 };
-        }
-        return { stdout: "", stderr: "", code: 0 };
-      };
+        },
+      });
 
       const result = await runGatewayUpdate({
         cwd: pkgRoot,
@@ -429,12 +504,7 @@ describe("runGatewayUpdate", () => {
   });
 
   it("fails with a clear reason when openclaw.mjs is missing", async () => {
-    await fs.mkdir(path.join(tempDir, ".git"));
-    await fs.writeFile(
-      path.join(tempDir, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "1.0.0", packageManager: "pnpm@8.0.0" }),
-      "utf-8",
-    );
+    await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
     await fs.rm(path.join(tempDir, "openclaw.mjs"), { force: true });
 
     const stableTag = "v1.0.1-1";
@@ -463,15 +533,8 @@ describe("runGatewayUpdate", () => {
   });
 
   it("repairs UI assets when doctor run removes control-ui files", async () => {
-    await fs.mkdir(path.join(tempDir, ".git"));
-    await fs.writeFile(
-      path.join(tempDir, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "1.0.0", packageManager: "pnpm@8.0.0" }),
-      "utf-8",
-    );
-    const uiIndexPath = path.join(tempDir, "dist", "control-ui", "index.html");
-    await fs.mkdir(path.dirname(uiIndexPath), { recursive: true });
-    await fs.writeFile(uiIndexPath, "<html></html>", "utf-8");
+    await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
+    const uiIndexPath = await setupUiIndex();
 
     const stableTag = "v1.0.1-1";
     const { runCommand, calls, doctorKey, getUiBuildCount } = createStableTagRunner({
@@ -481,9 +544,7 @@ describe("runGatewayUpdate", () => {
         await fs.mkdir(path.dirname(uiIndexPath), { recursive: true });
         await fs.writeFile(uiIndexPath, `<html>${count}</html>`, "utf-8");
       },
-      onDoctor: async () => {
-        await fs.rm(path.join(tempDir, "dist", "control-ui"), { recursive: true, force: true });
-      },
+      onDoctor: removeControlUiAssets,
     });
 
     const result = await runGatewayUpdate({
@@ -500,15 +561,8 @@ describe("runGatewayUpdate", () => {
   });
 
   it("fails when UI assets are still missing after post-doctor repair", async () => {
-    await fs.mkdir(path.join(tempDir, ".git"));
-    await fs.writeFile(
-      path.join(tempDir, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "1.0.0", packageManager: "pnpm@8.0.0" }),
-      "utf-8",
-    );
-    const uiIndexPath = path.join(tempDir, "dist", "control-ui", "index.html");
-    await fs.mkdir(path.dirname(uiIndexPath), { recursive: true });
-    await fs.writeFile(uiIndexPath, "<html></html>", "utf-8");
+    await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
+    const uiIndexPath = await setupUiIndex();
 
     const stableTag = "v1.0.1-1";
     const { runCommand } = createStableTagRunner({
@@ -520,9 +574,7 @@ describe("runGatewayUpdate", () => {
           await fs.writeFile(uiIndexPath, "<html>built</html>", "utf-8");
         }
       },
-      onDoctor: async () => {
-        await fs.rm(path.join(tempDir, "dist", "control-ui"), { recursive: true, force: true });
-      },
+      onDoctor: removeControlUiAssets,
     });
 
     const result = await runGatewayUpdate({

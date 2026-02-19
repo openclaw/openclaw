@@ -1,4 +1,5 @@
 import { normalizeGoogleModelId } from "../../../agents/models-config.providers.js";
+import { parseGeminiAuth } from "../../../infra/gemini-auth.js";
 import { assertOkOrThrowHttpError, fetchWithTimeoutGuarded, normalizeBaseUrl } from "../shared.js";
 
 export async function generateGeminiInlineDataText(params: {
@@ -30,12 +31,12 @@ export async function generateGeminiInlineDataText(params: {
   })();
   const url = `${baseUrl}/models/${model}:generateContent`;
 
+  const authHeaders = parseGeminiAuth(params.apiKey);
   const headers = new Headers(params.headers);
-  if (!headers.has("content-type")) {
-    headers.set("content-type", "application/json");
-  }
-  if (!headers.has("x-goog-api-key")) {
-    headers.set("x-goog-api-key", params.apiKey);
+  for (const [key, value] of Object.entries(authHeaders.headers)) {
+    if (!headers.has(key)) {
+      headers.set(key, value);
+    }
   }
 
   const prompt = (() => {

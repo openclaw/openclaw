@@ -1,6 +1,6 @@
+import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry, SessionMaintenanceWarning } from "../config/sessions.js";
-import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
 import { resolveSessionDeliveryTarget } from "./outbound/targets.js";
 import { enqueueSystemEvent } from "./system-events.js";

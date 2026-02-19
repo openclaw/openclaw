@@ -51,7 +51,7 @@ function createBrowser(pages: unknown[]) {
     contexts: () => [ctx],
     on: vi.fn(),
     close: vi.fn().mockResolvedValue(undefined),
-  };
+  } as unknown as import("playwright-core").Browser;
 }
 
 let chromiumMock: typeof import("playwright-core").chromium;

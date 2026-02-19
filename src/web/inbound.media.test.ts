@@ -112,7 +112,12 @@ describe("web inbound media saves with extension", () => {
 
   it("stores image extension, extracts caption mentions, and keeps document filename", async () => {
     const onMessage = vi.fn();
-    const listener = await monitorWebInbox({ verbose: false, onMessage });
+    const listener = await monitorWebInbox({
+      verbose: false,
+      onMessage,
+      accountId: "default",
+      authDir: path.join(HOME, "wa-auth"),
+    });
     const { createWaSocket } = await import("./session.js");
     const realSock = await (
       createWaSocket as unknown as () => Promise<{
@@ -194,6 +199,8 @@ describe("web inbound media saves with extension", () => {
       verbose: false,
       onMessage,
       mediaMaxMb: 1,
+      accountId: "default",
+      authDir: path.join(HOME, "wa-auth"),
     });
     const { createWaSocket } = await import("./session.js");
     const realSock = await (

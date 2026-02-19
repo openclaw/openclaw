@@ -1,9 +1,9 @@
 import type { Bot } from "grammy";
-import type { RuntimeEnv } from "../runtime.js";
 import {
   normalizeTelegramCommandName,
   TELEGRAM_COMMAND_NAME_PATTERN,
 } from "../config/telegram-custom-commands.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 
 export const TELEGRAM_MAX_COMMANDS = 100;
@@ -100,5 +100,7 @@ export function syncTelegramMenuCommands(params: {
     });
   };
 
-  void sync().catch(() => {});
+  void sync().catch((err) => {
+    runtime.error?.(`Telegram command sync failed: ${String(err)}`);
+  });
 }

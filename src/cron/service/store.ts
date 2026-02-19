@@ -1,6 +1,4 @@
 import fs from "node:fs";
-import type { CronJob } from "../types.js";
-import type { CronServiceState } from "./state.js";
 import {
   buildDeliveryFromLegacyPayload,
   hasLegacyDeliveryHints,
@@ -8,9 +6,12 @@ import {
 } from "../legacy-delivery.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import { migrateLegacyCronPayload } from "../payload-migration.js";
+import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "../stagger.js";
 import { loadCronStore, saveCronStore } from "../store.js";
+import type { CronJob } from "../types.js";
 import { recomputeNextRuns } from "./jobs.js";
 import { inferLegacyName, normalizeOptionalText } from "./normalize.js";
+import type { CronServiceState } from "./state.js";
 
 function buildDeliveryPatchFromLegacyPayload(payload: Record<string, unknown>) {
   const deliver = payload.deliver;
@@ -127,7 +128,7 @@ function copyTopLevelAgentTurnFields(
     typeof raw.timeoutSeconds === "number" &&
     Number.isFinite(raw.timeoutSeconds)
   ) {
-    payload.timeoutSeconds = Math.max(1, Math.floor(raw.timeoutSeconds));
+    payload.timeoutSeconds = Math.max(0, Math.floor(raw.timeoutSeconds));
     mutated = true;
   }
 
@@ -264,6 +265,15 @@ export async function ensureLoaded(
       mutated = true;
     }
 
+    if ("sessionKey" in raw) {
+      const sessionKey =
+        typeof raw.sessionKey === "string" ? normalizeOptionalText(raw.sessionKey) : undefined;
+      if (raw.sessionKey !== sessionKey) {
+        raw.sessionKey = sessionKey;
+        mutated = true;
+      }
+    }
+
     if (typeof raw.enabled !== "boolean") {
       raw.enabled = true;
       mutated = true;
@@ -368,6 +378,26 @@ export async function ensureLoaded(
                 : null;
         if (normalizedAnchor !== null && anchorRaw !== normalizedAnchor) {
           sched.anchorMs = normalizedAnchor;
+          mutated = true;
+        }
+      }
+
+      const exprRaw = typeof sched.expr === "string" ? sched.expr.trim() : "";
+      if (typeof sched.expr === "string" && sched.expr !== exprRaw) {
+        sched.expr = exprRaw;
+        mutated = true;
+      }
+      if ((kind === "cron" || sched.kind === "cron") && exprRaw) {
+        const explicitStaggerMs = normalizeCronStaggerMs(sched.staggerMs);
+        const defaultStaggerMs = resolveDefaultCronStaggerMs(exprRaw);
+        const targetStaggerMs = explicitStaggerMs ?? defaultStaggerMs;
+        if (targetStaggerMs === undefined) {
+          if ("staggerMs" in sched) {
+            delete sched.staggerMs;
+            mutated = true;
+          }
+        } else if (sched.staggerMs !== targetStaggerMs) {
+          sched.staggerMs = targetStaggerMs;
           mutated = true;
         }
       }

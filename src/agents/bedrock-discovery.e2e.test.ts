@@ -4,15 +4,35 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const sendMock = vi.fn();
 const clientFactory = () => ({ send: sendMock }) as unknown as BedrockClient;
 
+const baseActiveAnthropicSummary = {
+  modelId: "anthropic.claude-3-7-sonnet-20250219-v1:0",
+  modelName: "Claude 3.7 Sonnet",
+  providerName: "anthropic",
+  inputModalities: ["TEXT"],
+  outputModalities: ["TEXT"],
+  responseStreamingSupported: true,
+  modelLifecycle: { status: "ACTIVE" },
+};
+
+async function loadDiscovery() {
+  const mod = await import("./bedrock-discovery.js");
+  mod.resetBedrockDiscoveryCacheForTest();
+  return mod;
+}
+
+function mockSingleActiveSummary(overrides: Partial<typeof baseActiveAnthropicSummary> = {}): void {
+  sendMock.mockResolvedValueOnce({
+    modelSummaries: [{ ...baseActiveAnthropicSummary, ...overrides }],
+  });
+}
+
 describe("bedrock discovery", () => {
   beforeEach(() => {
     sendMock.mockReset();
   });
 
   it("filters to active streaming text models and maps modalities", async () => {
-    const { discoverBedrockModels, resetBedrockDiscoveryCacheForTest } =
-      await import("./bedrock-discovery.js");
-    resetBedrockDiscoveryCacheForTest();
+    const { discoverBedrockModels } = await loadDiscovery();
 
     sendMock.mockResolvedValueOnce({
       modelSummaries: [
@@ -68,23 +88,8 @@ describe("bedrock discovery", () => {
   });
 
   it("applies provider filter", async () => {
-    const { discoverBedrockModels, resetBedrockDiscoveryCacheForTest } =
-      await import("./bedrock-discovery.js");
-    resetBedrockDiscoveryCacheForTest();
-
-    sendMock.mockResolvedValueOnce({
-      modelSummaries: [
-        {
-          modelId: "anthropic.claude-3-7-sonnet-20250219-v1:0",
-          modelName: "Claude 3.7 Sonnet",
-          providerName: "anthropic",
-          inputModalities: ["TEXT"],
-          outputModalities: ["TEXT"],
-          responseStreamingSupported: true,
-          modelLifecycle: { status: "ACTIVE" },
-        },
-      ],
-    });
+    const { discoverBedrockModels } = await loadDiscovery();
+    mockSingleActiveSummary();
 
     const models = await discoverBedrockModels({
       region: "us-east-1",
@@ -95,23 +100,8 @@ describe("bedrock discovery", () => {
   });
 
   it("uses configured defaults for context and max tokens", async () => {
-    const { discoverBedrockModels, resetBedrockDiscoveryCacheForTest } =
-      await import("./bedrock-discovery.js");
-    resetBedrockDiscoveryCacheForTest();
-
-    sendMock.mockResolvedValueOnce({
-      modelSummaries: [
-        {
-          modelId: "anthropic.claude-3-7-sonnet-20250219-v1:0",
-          modelName: "Claude 3.7 Sonnet",
-          providerName: "anthropic",
-          inputModalities: ["TEXT"],
-          outputModalities: ["TEXT"],
-          responseStreamingSupported: true,
-          modelLifecycle: { status: "ACTIVE" },
-        },
-      ],
-    });
+    const { discoverBedrockModels } = await loadDiscovery();
+    mockSingleActiveSummary();
 
     const models = await discoverBedrockModels({
       region: "us-east-1",
@@ -122,23 +112,8 @@ describe("bedrock discovery", () => {
   });
 
   it("caches results when refreshInterval is enabled", async () => {
-    const { discoverBedrockModels, resetBedrockDiscoveryCacheForTest } =
-      await import("./bedrock-discovery.js");
-    resetBedrockDiscoveryCacheForTest();
-
-    sendMock.mockResolvedValueOnce({
-      modelSummaries: [
-        {
-          modelId: "anthropic.claude-3-7-sonnet-20250219-v1:0",
-          modelName: "Claude 3.7 Sonnet",
-          providerName: "anthropic",
-          inputModalities: ["TEXT"],
-          outputModalities: ["TEXT"],
-          responseStreamingSupported: true,
-          modelLifecycle: { status: "ACTIVE" },
-        },
-      ],
-    });
+    const { discoverBedrockModels } = await loadDiscovery();
+    mockSingleActiveSummary();
 
     await discoverBedrockModels({ region: "us-east-1", clientFactory });
     await discoverBedrockModels({ region: "us-east-1", clientFactory });
@@ -146,37 +121,11 @@ describe("bedrock discovery", () => {
   });
 
   it("skips cache when refreshInterval is 0", async () => {
-    const { discoverBedrockModels, resetBedrockDiscoveryCacheForTest } =
-      await import("./bedrock-discovery.js");
-    resetBedrockDiscoveryCacheForTest();
+    const { discoverBedrockModels } = await loadDiscovery();
 
     sendMock
-      .mockResolvedValueOnce({
-        modelSummaries: [
-          {
-            modelId: "anthropic.claude-3-7-sonnet-20250219-v1:0",
-            modelName: "Claude 3.7 Sonnet",
-            providerName: "anthropic",
-            inputModalities: ["TEXT"],
-            outputModalities: ["TEXT"],
-            responseStreamingSupported: true,
-            modelLifecycle: { status: "ACTIVE" },
-          },
-        ],
-      })
-      .mockResolvedValueOnce({
-        modelSummaries: [
-          {
-            modelId: "anthropic.claude-3-7-sonnet-20250219-v1:0",
-            modelName: "Claude 3.7 Sonnet",
-            providerName: "anthropic",
-            inputModalities: ["TEXT"],
-            outputModalities: ["TEXT"],
-            responseStreamingSupported: true,
-            modelLifecycle: { status: "ACTIVE" },
-          },
-        ],
-      });
+      .mockResolvedValueOnce({ modelSummaries: [baseActiveAnthropicSummary] })
+      .mockResolvedValueOnce({ modelSummaries: [baseActiveAnthropicSummary] });
 
     await discoverBedrockModels({
       region: "us-east-1",

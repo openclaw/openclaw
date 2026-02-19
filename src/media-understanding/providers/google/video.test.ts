@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as ssrf from "../../../infra/net/ssrf.js";
+import { withFetchPreconnect } from "../../../test-utils/fetch-mock.js";
 import { describeGeminiVideo } from "./video.js";
 
 const TEST_NET_IP = "203.0.113.10";
@@ -47,7 +48,7 @@ describe("describeGeminiVideo", () => {
 
   it("respects case-insensitive x-goog-api-key overrides", async () => {
     let seenKey: string | null = null;
-    const fetchFn = async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchFn = withFetchPreconnect(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const headers = new Headers(init?.headers);
       seenKey = headers.get("x-goog-api-key");
       return new Response(
@@ -56,7 +57,7 @@ describe("describeGeminiVideo", () => {
         }),
         { status: 200, headers: { "content-type": "application/json" } },
       );
-    };
+    });
 
     const result = await describeGeminiVideo({
       buffer: Buffer.from("video"),
@@ -74,7 +75,7 @@ describe("describeGeminiVideo", () => {
   it("builds the expected request payload", async () => {
     let seenUrl: string | null = null;
     let seenInit: RequestInit | undefined;
-    const fetchFn = async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchFn = withFetchPreconnect(async (input: RequestInfo | URL, init?: RequestInit) => {
       seenUrl = resolveRequestUrl(input);
       seenInit = init;
       return new Response(
@@ -89,7 +90,7 @@ describe("describeGeminiVideo", () => {
         }),
         { status: 200, headers: { "content-type": "application/json" } },
       );
-    };
+    });
 
     const result = await describeGeminiVideo({
       buffer: Buffer.from("video-bytes"),

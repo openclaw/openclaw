@@ -1,4 +1,3 @@
-import type { OpenClawConfig } from "./config.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import {
   getChannelPluginCatalogEntry,
@@ -11,6 +10,8 @@ import {
 } from "../channels/registry.js";
 import { isRecord } from "../utils.js";
 import { hasAnyWhatsAppAuth } from "../web/accounts.js";
+import type { OpenClawConfig } from "./config.js";
+import { ensurePluginAllowlisted } from "./plugins-allowlist.js";
 
 type PluginEnableChange = {
   pluginId: string;
@@ -388,20 +389,6 @@ function shouldSkipPreferredPluginAutoEnable(
   return false;
 }
 
-function ensureAllowlisted(cfg: OpenClawConfig, pluginId: string): OpenClawConfig {
-  const allow = cfg.plugins?.allow;
-  if (!Array.isArray(allow) || allow.includes(pluginId)) {
-    return cfg;
-  }
-  return {
-    ...cfg,
-    plugins: {
-      ...cfg.plugins,
-      allow: [...allow, pluginId],
-    },
-  };
-}
-
 function registerPluginEntry(cfg: OpenClawConfig, pluginId: string): OpenClawConfig {
   const entries = {
     ...cfg.plugins?.entries,
@@ -463,7 +450,7 @@ export function applyPluginAutoEnable(params: {
       continue;
     }
     next = registerPluginEntry(next, entry.pluginId);
-    next = ensureAllowlisted(next, entry.pluginId);
+    next = ensurePluginAllowlisted(next, entry.pluginId);
     changes.push(formatAutoEnableChange(entry));
   }
 

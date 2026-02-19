@@ -83,14 +83,16 @@ Cron jobs panel notes:
 
 - For isolated jobs, delivery defaults to announce summary. You can switch to none if you want internal-only runs.
 - Channel/target fields appear when announce is selected.
-- New job form includes a **Notify webhook** toggle (`notify` on the job).
-- Gateway webhook posting requires both `notify: true` on the job and `cron.webhook` in config.
+- Webhook mode uses `delivery.mode = "webhook"` with `delivery.to` set to a valid HTTP(S) webhook URL.
+- For main-session jobs, webhook and none delivery modes are available.
 - Set `cron.webhookToken` to send a dedicated bearer token, if omitted the webhook is sent without an auth header.
+- Deprecated fallback: stored legacy jobs with `notify: true` can still use `cron.webhook` until migrated.
 
 ## Chat behavior
 
 - `chat.send` is **non-blocking**: it acks immediately with `{ runId, status: "started" }` and the response streams via `chat` events.
 - Re-sending with the same `idempotencyKey` returns `{ status: "in_flight" }` while running, and `{ status: "ok" }` after completion.
+- `chat.history` responses are size-bounded for UI safety. When transcript entries are too large, Gateway may truncate long text fields, omit heavy metadata blocks, and replace oversized messages with a placeholder (`[chat.history omitted: message too large]`).
 - `chat.inject` appends an assistant note to the session transcript and broadcasts a `chat` event for UI-only updates (no agent run, no channel delivery).
 - Stop:
   - Click **Stop** (calls `chat.abort`)

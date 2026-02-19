@@ -164,6 +164,8 @@ export type AppViewState = {
   usageTimeSeriesBreakdownMode: "total" | "by-type";
   usageTimeSeries: SessionUsageTimeSeries | null;
   usageTimeSeriesLoading: boolean;
+  usageTimeSeriesCursorStart: number | null;
+  usageTimeSeriesCursorEnd: number | null;
   usageSessionLogs: SessionLogEntry[] | null;
   usageSessionLogsLoading: boolean;
   usageSessionLogsExpanded: boolean;

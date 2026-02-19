@@ -1,17 +1,12 @@
-import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { withProgress } from "../cli/progress.js";
 import { resolveGatewayPort } from "../config/config.js";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
 import { info } from "../globals.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
+import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import { formatUsageReportLines, loadProviderUsageSummary } from "../infra/provider-usage.js";
-import {
-  formatUpdateChannelLabel,
-  normalizeUpdateChannel,
-  resolveEffectiveUpdateChannel,
-} from "../infra/update-channels.js";
+import { normalizeUpdateChannel, resolveUpdateChannelDisplay } from "../infra/update-channels.js";
 import { formatGitInstallLabel } from "../infra/update-check.js";
 import {
   resolveMemoryCacheSummary,
@@ -19,6 +14,7 @@ import {
   resolveMemoryVectorState,
   type Tone,
 } from "../memory/status-format.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { runSecurityAudit } from "../security/audit.js";
 import { renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
@@ -132,10 +128,11 @@ export async function statusCommand(
       : null;
 
   const configChannel = normalizeUpdateChannel(cfg.update?.channel);
-  const channelInfo = resolveEffectiveUpdateChannel({
+  const channelInfo = resolveUpdateChannelDisplay({
     configChannel,
     installKind: update.installKind,
-    git: update.git ? { tag: update.git.tag, branch: update.git.branch } : undefined,
+    gitTag: update.git?.tag ?? null,
+    gitBranch: update.git?.branch ?? null,
   });
 
   if (opts.json) {
@@ -352,12 +349,7 @@ export async function statusCommand(
 
   const updateAvailability = resolveUpdateAvailability(update);
   const updateLine = formatUpdateOneLiner(update).replace(/^Update:\s*/i, "");
-  const channelLabel = formatUpdateChannelLabel({
-    channel: channelInfo.channel,
-    source: channelInfo.source,
-    gitTag: update.git?.tag ?? null,
-    gitBranch: update.git?.branch ?? null,
-  });
+  const channelLabel = channelInfo.label;
   const gitLabel = formatGitInstallLabel(update);
 
   const overviewRows = [

@@ -256,7 +256,7 @@ describe("sendMessageDiscord", () => {
     });
   });
 
-  it("replies only on the first chunk", async () => {
+  it("preserves reply reference across all text chunks", async () => {
     const { rest, postMock } = makeDiscordRest();
     postMock.mockResolvedValue({ id: "msg1", channel_id: "789" });
     await sendMessageDiscord("channel:789", "a".repeat(2001), {
@@ -271,7 +271,32 @@ describe("sendMessageDiscord", () => {
       message_id: "orig-123",
       fail_if_not_exists: false,
     });
-    expect(secondBody?.message_reference).toBeUndefined();
+    expect(secondBody?.message_reference).toEqual({
+      message_id: "orig-123",
+      fail_if_not_exists: false,
+    });
+  });
+
+  it("preserves reply reference for follow-up text chunks after media caption split", async () => {
+    const { rest, postMock } = makeDiscordRest();
+    postMock.mockResolvedValue({ id: "msg1", channel_id: "789" });
+    await sendMessageDiscord("channel:789", "a".repeat(2500), {
+      rest,
+      token: "t",
+      mediaUrl: "file:///tmp/photo.jpg",
+      replyTo: "orig-123",
+    });
+    expect(postMock).toHaveBeenCalledTimes(2);
+    const firstBody = postMock.mock.calls[0]?.[1]?.body;
+    const secondBody = postMock.mock.calls[1]?.[1]?.body;
+    expect(firstBody?.message_reference).toEqual({
+      message_id: "orig-123",
+      fail_if_not_exists: false,
+    });
+    expect(secondBody?.message_reference).toEqual({
+      message_id: "orig-123",
+      fail_if_not_exists: false,
+    });
   });
 });
 

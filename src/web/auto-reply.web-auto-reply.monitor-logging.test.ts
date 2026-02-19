@@ -77,7 +77,11 @@ describe("web auto-reply monitor logging", () => {
     await capturedOnMessage?.({
       body: "hello",
       from: "+1",
+      conversationId: "+1",
       to: "+2",
+      accountId: "default",
+      chatType: "direct",
+      chatId: "+1",
       id: "msg1",
       sendComposing: vi.fn(),
       reply: vi.fn(),

@@ -1,10 +1,10 @@
 import { html } from "lit";
-import type { AgentIdentityResult, AgentsFilesListResult, AgentsListResult } from "../types.ts";
 import {
   expandToolGroups,
   normalizeToolName,
   resolveToolProfilePolicy,
 } from "../../../../src/agents/tool-policy.js";
+import type { AgentIdentityResult, AgentsFilesListResult, AgentsListResult } from "../types.ts";
 
 export const TOOL_SECTIONS = [
   {

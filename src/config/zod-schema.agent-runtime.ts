@@ -29,6 +29,7 @@ export const HeartbeatSchema = z
     accountId: z.string().optional(),
     prompt: z.string().optional(),
     ackMaxChars: z.number().int().nonnegative().optional(),
+    suppressToolErrorWarnings: z.boolean().optional(),
   })
   .strict()
   .superRefine((val, ctx) => {
@@ -276,6 +277,24 @@ export const ToolProfileSchema = z
   .union([z.literal("minimal"), z.literal("coding"), z.literal("messaging"), z.literal("full")])
   .optional();
 
+type AllowlistPolicy = {
+  allow?: string[];
+  alsoAllow?: string[];
+};
+
+function addAllowAlsoAllowConflictIssue(
+  value: AllowlistPolicy,
+  ctx: z.RefinementCtx,
+  message: string,
+): void {
+  if (value.allow && value.allow.length > 0 && value.alsoAllow && value.alsoAllow.length > 0) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message,
+    });
+  }
+}
+
 export const ToolPolicyWithProfileSchema = z
   .object({
     allow: z.array(z.string()).optional(),
@@ -285,13 +304,11 @@ export const ToolPolicyWithProfileSchema = z
   })
   .strict()
   .superRefine((value, ctx) => {
-    if (value.allow && value.allow.length > 0 && value.alsoAllow && value.alsoAllow.length > 0) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message:
-          "tools.byProvider policy cannot set both allow and alsoAllow in the same scope (merge alsoAllow into allow, or remove allow and use profile + alsoAllow)",
-      });
-    }
+    addAllowAlsoAllowConflictIssue(
+      value,
+      ctx,
+      "tools.byProvider policy cannot set both allow and alsoAllow in the same scope (merge alsoAllow into allow, or remove allow and use profile + alsoAllow)",
+    );
   });
 
 // Provider docking: allowlists keyed by provider id (no schema updates when adding providers).
@@ -340,6 +357,52 @@ const ToolFsSchema = z
   .strict()
   .optional();
 
+const ToolLoopDetectionDetectorSchema = z
+  .object({
+    genericRepeat: z.boolean().optional(),
+    knownPollNoProgress: z.boolean().optional(),
+    pingPong: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
+
+const ToolLoopDetectionSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    historySize: z.number().int().positive().optional(),
+    warningThreshold: z.number().int().positive().optional(),
+    criticalThreshold: z.number().int().positive().optional(),
+    globalCircuitBreakerThreshold: z.number().int().positive().optional(),
+    detectors: ToolLoopDetectionDetectorSchema,
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (
+      value.warningThreshold !== undefined &&
+      value.criticalThreshold !== undefined &&
+      value.warningThreshold >= value.criticalThreshold
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["criticalThreshold"],
+        message: "tools.loopDetection.warningThreshold must be lower than criticalThreshold.",
+      });
+    }
+    if (
+      value.criticalThreshold !== undefined &&
+      value.globalCircuitBreakerThreshold !== undefined &&
+      value.criticalThreshold >= value.globalCircuitBreakerThreshold
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["globalCircuitBreakerThreshold"],
+        message:
+          "tools.loopDetection.criticalThreshold must be lower than globalCircuitBreakerThreshold.",
+      });
+    }
+  })
+  .optional();
+
 export const AgentSandboxSchema = z
   .object({
     mode: z.union([z.literal("off"), z.literal("non-main"), z.literal("all")]).optional(),
@@ -371,6 +434,7 @@ export const AgentToolsSchema = z
       .optional(),
     exec: AgentToolExecSchema,
     fs: ToolFsSchema,
+    loopDetection: ToolLoopDetectionSchema,
     sandbox: z
       .object({
         tools: ToolPolicySchema,
@@ -380,13 +444,11 @@ export const AgentToolsSchema = z
   })
   .strict()
   .superRefine((value, ctx) => {
-    if (value.allow && value.allow.length > 0 && value.alsoAllow && value.alsoAllow.length > 0) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message:
-          "agent tools cannot set both allow and alsoAllow in the same scope (merge alsoAllow into allow, or remove allow and use profile + alsoAllow)",
-      });
-    }
+    addAllowAlsoAllowConflictIssue(
+      value,
+      ctx,
+      "agent tools cannot set both allow and alsoAllow in the same scope (merge alsoAllow into allow, or remove allow and use profile + alsoAllow)",
+    );
   })
   .optional();
 
@@ -487,6 +549,20 @@ export const MemorySearchSchema = z
             vectorWeight: z.number().min(0).max(1).optional(),
             textWeight: z.number().min(0).max(1).optional(),
             candidateMultiplier: z.number().int().positive().optional(),
+            mmr: z
+              .object({
+                enabled: z.boolean().optional(),
+                lambda: z.number().min(0).max(1).optional(),
+              })
+              .strict()
+              .optional(),
+            temporalDecay: z
+              .object({
+                enabled: z.boolean().optional(),
+                halfLifeDays: z.number().int().positive().optional(),
+              })
+              .strict()
+              .optional(),
           })
           .strict()
           .optional(),
@@ -557,6 +633,7 @@ export const ToolsSchema = z
       })
       .strict()
       .optional(),
+    loopDetection: ToolLoopDetectionSchema,
     message: z
       .object({
         allowCrossContextSend: z.boolean().optional(),
@@ -615,12 +692,10 @@ export const ToolsSchema = z
   })
   .strict()
   .superRefine((value, ctx) => {
-    if (value.allow && value.allow.length > 0 && value.alsoAllow && value.alsoAllow.length > 0) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message:
-          "tools cannot set both allow and alsoAllow in the same scope (merge alsoAllow into allow, or remove allow and use profile + alsoAllow)",
-      });
-    }
+    addAllowAlsoAllowConflictIssue(
+      value,
+      ctx,
+      "tools cannot set both allow and alsoAllow in the same scope (merge alsoAllow into allow, or remove allow and use profile + alsoAllow)",
+    );
   })
   .optional();

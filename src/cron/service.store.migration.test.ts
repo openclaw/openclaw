@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CronService } from "./service.js";
+import { DEFAULT_TOP_OF_HOUR_STAGGER_MS } from "./stagger.js";
 import { loadCronStore } from "./store.js";
 
 const noopLogger = {
@@ -23,6 +24,23 @@ async function makeStorePath() {
   };
 }
 
+async function migrateAndLoadFirstJob(storePath: string): Promise<Record<string, unknown>> {
+  const cron = new CronService({
+    storePath,
+    cronEnabled: true,
+    log: noopLogger,
+    enqueueSystemEvent: vi.fn(),
+    requestHeartbeatNow: vi.fn(),
+    runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+  });
+
+  await cron.start();
+  cron.stop();
+
+  const loaded = await loadCronStore(storePath);
+  return loaded.jobs[0] as Record<string, unknown>;
+}
+
 describe("cron store migration", () => {
   beforeEach(() => {
     noopLogger.debug.mockClear();
@@ -41,6 +59,7 @@ describe("cron store migration", () => {
     const legacyJob = {
       id: "job-1",
       agentId: undefined,
+      sessionKey: "  agent:main:discord:channel:ops  ",
       name: "Legacy job",
       description: null,
       enabled: true,
@@ -64,20 +83,8 @@ describe("cron store migration", () => {
     await fs.mkdir(path.dirname(store.storePath), { recursive: true });
     await fs.writeFile(store.storePath, JSON.stringify({ version: 1, jobs: [legacyJob] }, null, 2));
 
-    const cron = new CronService({
-      storePath: store.storePath,
-      cronEnabled: true,
-      log: noopLogger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeatNow: vi.fn(),
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" })),
-    });
-
-    await cron.start();
-    cron.stop();
-
-    const loaded = await loadCronStore(store.storePath);
-    const migrated = loaded.jobs[0] as Record<string, unknown>;
+    const migrated = await migrateAndLoadFirstJob(store.storePath);
+    expect(migrated.sessionKey).toBe("agent:main:discord:channel:ops");
     expect(migrated.delivery).toEqual({
       mode: "announce",
       channel: "telegram",
@@ -123,23 +130,74 @@ describe("cron store migration", () => {
     await fs.mkdir(path.dirname(store.storePath), { recursive: true });
     await fs.writeFile(store.storePath, JSON.stringify({ version: 1, jobs: [legacyJob] }, null, 2));
 
-    const cron = new CronService({
-      storePath: store.storePath,
-      cronEnabled: true,
-      log: noopLogger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeatNow: vi.fn(),
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" })),
-    });
-
-    await cron.start();
-    cron.stop();
-
-    const loaded = await loadCronStore(store.storePath);
-    const migrated = loaded.jobs[0] as Record<string, unknown>;
+    const migrated = await migrateAndLoadFirstJob(store.storePath);
     const schedule = migrated.schedule as Record<string, unknown>;
     expect(schedule.kind).toBe("every");
     expect(schedule.anchorMs).toBe(createdAtMs);
+
+    await store.cleanup();
+  });
+
+  it("adds default staggerMs to legacy recurring top-of-hour cron schedules", async () => {
+    const store = await makeStorePath();
+    const createdAtMs = 1_700_000_000_000;
+    const legacyJob = {
+      id: "job-cron-legacy",
+      agentId: undefined,
+      name: "Legacy cron",
+      description: null,
+      enabled: true,
+      deleteAfterRun: false,
+      createdAtMs,
+      updatedAtMs: createdAtMs,
+      schedule: { kind: "cron", expr: "0 */2 * * *", tz: "UTC" },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: {
+        kind: "systemEvent",
+        text: "tick",
+      },
+      state: {},
+    };
+    await fs.mkdir(path.dirname(store.storePath), { recursive: true });
+    await fs.writeFile(store.storePath, JSON.stringify({ version: 1, jobs: [legacyJob] }, null, 2));
+
+    const migrated = await migrateAndLoadFirstJob(store.storePath);
+    const schedule = migrated.schedule as Record<string, unknown>;
+    expect(schedule.kind).toBe("cron");
+    expect(schedule.staggerMs).toBe(DEFAULT_TOP_OF_HOUR_STAGGER_MS);
+
+    await store.cleanup();
+  });
+
+  it("adds default staggerMs to legacy 6-field top-of-hour cron schedules", async () => {
+    const store = await makeStorePath();
+    const createdAtMs = 1_700_000_000_000;
+    const legacyJob = {
+      id: "job-cron-seconds-legacy",
+      agentId: undefined,
+      name: "Legacy cron seconds",
+      description: null,
+      enabled: true,
+      deleteAfterRun: false,
+      createdAtMs,
+      updatedAtMs: createdAtMs,
+      schedule: { kind: "cron", expr: "0 0 */3 * * *", tz: "UTC" },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: {
+        kind: "systemEvent",
+        text: "tick",
+      },
+      state: {},
+    };
+    await fs.mkdir(path.dirname(store.storePath), { recursive: true });
+    await fs.writeFile(store.storePath, JSON.stringify({ version: 1, jobs: [legacyJob] }, null, 2));
+
+    const migrated = await migrateAndLoadFirstJob(store.storePath);
+    const schedule = migrated.schedule as Record<string, unknown>;
+    expect(schedule.kind).toBe("cron");
+    expect(schedule.staggerMs).toBe(DEFAULT_TOP_OF_HOUR_STAGGER_MS);
 
     await store.cleanup();
   });

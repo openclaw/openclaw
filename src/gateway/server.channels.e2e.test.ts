@@ -26,7 +26,7 @@ const registryState = vi.hoisted(() => ({
     cliRegistrars: [],
     services: [],
     diagnostics: [],
-  } as PluginRegistry,
+  } as unknown as PluginRegistry,
 }));
 
 vi.mock("./server-plugins.js", async () => {
@@ -150,13 +150,13 @@ describe("gateway server channels", () => {
     const res = await rpcReq<{
       channels?: Record<
         string,
-        | {
-            configured?: boolean;
-            tokenSource?: string;
-            probe?: unknown;
-            lastProbeAt?: unknown;
-          }
-        | { linked?: boolean }
+        {
+          configured?: boolean;
+          tokenSource?: string;
+          probe?: unknown;
+          lastProbeAt?: unknown;
+          linked?: boolean;
+        }
       >;
     }>(ws, "channels.status", { probe: false, timeoutMs: 2000 });
     expect(res.ok).toBe(true);

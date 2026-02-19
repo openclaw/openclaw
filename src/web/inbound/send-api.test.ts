@@ -108,7 +108,7 @@ describe("createWebSendApi", () => {
   });
 
   it("falls back to unknown messageId if Baileys result does not expose key.id", async () => {
-    sendMessage.mockResolvedValueOnce("ok");
+    sendMessage.mockResolvedValueOnce({ key: {} as { id: string } });
     const res = await api.sendMessage("+1555", "hello");
     expect(res.messageId).toBe("unknown");
   });

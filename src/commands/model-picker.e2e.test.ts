@@ -36,20 +36,33 @@ vi.mock("../agents/model-auth.js", () => ({
   getCustomProviderApiKey,
 }));
 
+const OPENROUTER_CATALOG = [
+  {
+    provider: "openrouter",
+    id: "auto",
+    name: "OpenRouter Auto",
+  },
+  {
+    provider: "openrouter",
+    id: "meta-llama/llama-3.3-70b:free",
+    name: "Llama 3.3 70B",
+  },
+] as const;
+
+function expectRouterModelFiltering(options: Array<{ value: string }>) {
+  expect(options.some((opt) => opt.value === "openrouter/auto")).toBe(false);
+  expect(options.some((opt) => opt.value === "openrouter/meta-llama/llama-3.3-70b:free")).toBe(
+    true,
+  );
+}
+
+function createSelectAllMultiselect() {
+  return vi.fn(async (params) => params.options.map((option: { value: string }) => option.value));
+}
+
 describe("promptDefaultModel", () => {
   it("filters internal router models from the selection list", async () => {
-    loadModelCatalog.mockResolvedValue([
-      {
-        provider: "openrouter",
-        id: "auto",
-        name: "OpenRouter Auto",
-      },
-      {
-        provider: "openrouter",
-        id: "meta-llama/llama-3.3-70b:free",
-        name: "Llama 3.3 70B",
-      },
-    ]);
+    loadModelCatalog.mockResolvedValue(OPENROUTER_CATALOG);
 
     const select = vi.fn(async (params) => {
       const first = params.options[0];
@@ -67,10 +80,7 @@ describe("promptDefaultModel", () => {
     });
 
     const options = select.mock.calls[0]?.[0]?.options ?? [];
-    expect(options.some((opt) => opt.value === "openrouter/auto")).toBe(false);
-    expect(options.some((opt) => opt.value === "openrouter/meta-llama/llama-3.3-70b:free")).toBe(
-      true,
-    );
+    expectRouterModelFiltering(options);
   });
 
   it("supports configuring vLLM during onboarding", async () => {
@@ -124,34 +134,18 @@ describe("promptDefaultModel", () => {
 
 describe("promptModelAllowlist", () => {
   it("filters internal router models from the selection list", async () => {
-    loadModelCatalog.mockResolvedValue([
-      {
-        provider: "openrouter",
-        id: "auto",
-        name: "OpenRouter Auto",
-      },
-      {
-        provider: "openrouter",
-        id: "meta-llama/llama-3.3-70b:free",
-        name: "Llama 3.3 70B",
-      },
-    ]);
+    loadModelCatalog.mockResolvedValue(OPENROUTER_CATALOG);
 
-    const multiselect = vi.fn(async (params) =>
-      params.options.map((option: { value: string }) => option.value),
-    );
+    const multiselect = createSelectAllMultiselect();
     const prompter = makePrompter({ multiselect });
     const config = { agents: { defaults: {} } } as OpenClawConfig;
 
     await promptModelAllowlist({ config, prompter });
 
-    const options = multiselect.mock.calls[0]?.[0]?.options ?? [];
-    expect(options.some((opt: { value: string }) => opt.value === "openrouter/auto")).toBe(false);
-    expect(
-      options.some(
-        (opt: { value: string }) => opt.value === "openrouter/meta-llama/llama-3.3-70b:free",
-      ),
-    ).toBe(true);
+    const call = multiselect.mock.calls[0]?.[0];
+    const options = call?.options ?? [];
+    expectRouterModelFiltering(options as Array<{ value: string }>);
+    expect(call?.searchable).toBe(true);
   });
 
   it("filters to allowed keys when provided", async () => {
@@ -173,9 +167,7 @@ describe("promptModelAllowlist", () => {
       },
     ]);
 
-    const multiselect = vi.fn(async (params) =>
-      params.options.map((option: { value: string }) => option.value),
-    );
+    const multiselect = createSelectAllMultiselect();
     const prompter = makePrompter({ multiselect });
     const config = { agents: { defaults: {} } } as OpenClawConfig;
 

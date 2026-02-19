@@ -91,14 +91,37 @@ export function resetBaileysMocks() {
   const recreated = createMockBaileys();
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw:lastSocket")] =
     recreated.lastSocket;
-  // @ts-expect-error
-  baileys.makeWASocket = vi.fn(recreated.mod.makeWASocket);
-  // @ts-expect-error
-  baileys.useMultiFileAuthState = vi.fn(recreated.mod.useMultiFileAuthState);
-  // @ts-expect-error
-  baileys.fetchLatestBaileysVersion = vi.fn(recreated.mod.fetchLatestBaileysVersion);
-  // @ts-expect-error
-  baileys.makeCacheableSignalKeyStore = vi.fn(recreated.mod.makeCacheableSignalKeyStore);
+
+  const makeWASocket = vi.mocked(baileys.makeWASocket);
+  const makeWASocketImpl: typeof baileys.makeWASocket = (...args) =>
+    (recreated.mod.makeWASocket as unknown as typeof baileys.makeWASocket)(...args);
+  makeWASocket.mockReset();
+  makeWASocket.mockImplementation(makeWASocketImpl);
+
+  const useMultiFileAuthState = vi.mocked(baileys.useMultiFileAuthState);
+  const useMultiFileAuthStateImpl: typeof baileys.useMultiFileAuthState = (...args) =>
+    (recreated.mod.useMultiFileAuthState as unknown as typeof baileys.useMultiFileAuthState)(
+      ...args,
+    );
+  useMultiFileAuthState.mockReset();
+  useMultiFileAuthState.mockImplementation(useMultiFileAuthStateImpl);
+
+  const fetchLatestBaileysVersion = vi.mocked(baileys.fetchLatestBaileysVersion);
+  const fetchLatestBaileysVersionImpl: typeof baileys.fetchLatestBaileysVersion = (...args) =>
+    (
+      recreated.mod.fetchLatestBaileysVersion as unknown as typeof baileys.fetchLatestBaileysVersion
+    )(...args);
+  fetchLatestBaileysVersion.mockReset();
+  fetchLatestBaileysVersion.mockImplementation(fetchLatestBaileysVersionImpl);
+
+  const makeCacheableSignalKeyStore = vi.mocked(baileys.makeCacheableSignalKeyStore);
+  const makeCacheableSignalKeyStoreImpl: typeof baileys.makeCacheableSignalKeyStore = (...args) =>
+    (
+      recreated.mod
+        .makeCacheableSignalKeyStore as unknown as typeof baileys.makeCacheableSignalKeyStore
+    )(...args);
+  makeCacheableSignalKeyStore.mockReset();
+  makeCacheableSignalKeyStore.mockImplementation(makeCacheableSignalKeyStoreImpl);
 }
 
 export function getLastSocket(): MockBaileysSocket {

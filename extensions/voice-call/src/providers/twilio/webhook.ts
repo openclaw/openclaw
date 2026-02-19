@@ -1,6 +1,6 @@
 import type { WebhookContext, WebhookVerificationResult } from "../../types.js";
-import type { TwilioProviderOptions } from "../twilio.js";
 import { verifyTwilioWebhook } from "../../webhook-security.js";
+import type { TwilioProviderOptions } from "../twilio.js";
 
 export function verifyTwilioProviderWebhook(params: {
   ctx: WebhookContext;

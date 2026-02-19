@@ -2,16 +2,17 @@ import type { DmPolicy } from "openclaw/plugin-sdk";
 import {
   addWildcardAllowFrom,
   formatDocsLink,
+  mergeAllowFromEntries,
   promptChannelAccessConfig,
   type ChannelOnboardingAdapter,
   type ChannelOnboardingDmPolicy,
   type WizardPrompter,
 } from "openclaw/plugin-sdk";
-import type { CoreConfig } from "./types.js";
 import { listMatrixDirectoryGroupsLive } from "./directory-live.js";
 import { resolveMatrixAccount } from "./matrix/accounts.js";
 import { ensureMatrixSdkInstalled, isMatrixSdkAvailable } from "./matrix/deps.js";
 import { resolveMatrixTargets } from "./resolve-targets.js";
+import type { CoreConfig } from "./types.js";
 
 const channel = "matrix" as const;
 
@@ -118,12 +119,7 @@ async function promptMatrixAllowFrom(params: {
       continue;
     }
 
-    const unique = [
-      ...new Set([
-        ...existingAllowFrom.map((item) => String(item).trim()).filter(Boolean),
-        ...resolvedIds,
-      ]),
-    ];
+    const unique = mergeAllowFromEntries(existingAllowFrom, resolvedIds);
     return {
       ...cfg,
       channels: {

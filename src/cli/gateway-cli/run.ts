@@ -1,8 +1,7 @@
-import type { Command } from "commander";
 import fs from "node:fs";
 import path from "node:path";
+import type { Command } from "commander";
 import type { GatewayAuthMode } from "../../config/config.js";
-import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import {
   CONFIG_PATH,
   loadConfig,
@@ -12,6 +11,7 @@ import {
 } from "../../config/config.js";
 import { resolveGatewayAuth } from "../../gateway/auth.js";
 import { startGatewayServer } from "../../gateway/server.js";
+import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setGatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setVerbose } from "../../globals.js";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
@@ -20,6 +20,7 @@ import { setConsoleSubsystemFilter, setConsoleTimestampPrefix } from "../../logg
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
+import { inheritOptionFromParent } from "../command-options.js";
 import { forceFreePortAndWait } from "../ports.js";
 import { ensureDevGatewayConfig } from "./dev.js";
 import { runGatewayLoop } from "./run-loop.js";
@@ -52,6 +53,50 @@ type GatewayRunOpts = {
 };
 
 const gatewayLog = createSubsystemLogger("gateway");
+
+const GATEWAY_RUN_VALUE_KEYS = [
+  "port",
+  "bind",
+  "token",
+  "auth",
+  "password",
+  "tailscale",
+  "wsLog",
+  "rawStreamPath",
+] as const;
+
+const GATEWAY_RUN_BOOLEAN_KEYS = [
+  "tailscaleResetOnExit",
+  "allowUnconfigured",
+  "dev",
+  "reset",
+  "force",
+  "verbose",
+  "claudeCliLogs",
+  "compact",
+  "rawStream",
+] as const;
+
+function resolveGatewayRunOptions(opts: GatewayRunOpts, command?: Command): GatewayRunOpts {
+  const resolved: GatewayRunOpts = { ...opts };
+
+  for (const key of GATEWAY_RUN_VALUE_KEYS) {
+    const inherited = inheritOptionFromParent(command, key);
+    if (key === "wsLog") {
+      // wsLog has a child default ("auto"), so prefer inherited parent CLI value when present.
+      resolved[key] = inherited ?? resolved[key];
+      continue;
+    }
+    resolved[key] = resolved[key] ?? inherited;
+  }
+
+  for (const key of GATEWAY_RUN_BOOLEAN_KEYS) {
+    const inherited = inheritOptionFromParent<boolean>(command, key);
+    resolved[key] = Boolean(resolved[key] || inherited);
+  }
+
+  return resolved;
+}
 
 async function runGatewayCommand(opts: GatewayRunOpts) {
   const isDevProfile = process.env.OPENCLAW_PROFILE?.trim().toLowerCase() === "dev";
@@ -353,7 +398,7 @@ export function addGatewayRunCommand(cmd: Command): Command {
     .option("--compact", 'Alias for "--ws-log compact"', false)
     .option("--raw-stream", "Log raw model stream events to jsonl", false)
     .option("--raw-stream-path <path>", "Raw stream jsonl path")
-    .action(async (opts) => {
-      await runGatewayCommand(opts);
+    .action(async (opts, command) => {
+      await runGatewayCommand(resolveGatewayRunOptions(opts, command));
     });
 }

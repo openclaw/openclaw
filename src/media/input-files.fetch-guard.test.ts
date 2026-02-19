@@ -73,7 +73,7 @@ describe("base64 size guards", () => {
     ).rejects.toThrow("Image too large");
 
     // Regression check: the oversize reject must happen before Buffer.from(..., "base64") allocates.
-    const base64Calls = fromSpy.mock.calls.filter((args) => args[1] === "base64");
+    const base64Calls = fromSpy.mock.calls.filter((args) => (args as unknown[])[1] === "base64");
     expect(base64Calls).toHaveLength(0);
     fromSpy.mockRestore();
   });
@@ -97,7 +97,7 @@ describe("base64 size guards", () => {
       }),
     ).rejects.toThrow("File too large");
 
-    const base64Calls = fromSpy.mock.calls.filter((args) => args[1] === "base64");
+    const base64Calls = fromSpy.mock.calls.filter((args) => (args as unknown[])[1] === "base64");
     expect(base64Calls).toHaveLength(0);
     fromSpy.mockRestore();
   });

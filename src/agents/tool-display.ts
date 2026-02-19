@@ -7,7 +7,10 @@ import {
   normalizeVerb,
   resolveActionSpec,
   resolveDetailFromKeys,
+  resolveExecDetail,
   resolveReadDetail,
+  resolveWebFetchDetail,
+  resolveWebSearchDetail,
   resolveWriteDetail,
   type ToolDisplaySpec as ToolDisplaySpecBase,
 } from "./tool-display-common.js";
@@ -72,14 +75,31 @@ export function resolveToolDisplay(params: {
       : undefined;
   const action = typeof actionRaw === "string" ? actionRaw.trim() : undefined;
   const actionSpec = resolveActionSpec(spec, action);
-  const verb = normalizeVerb(actionSpec?.label ?? action);
+  const fallbackVerb =
+    key === "web_search"
+      ? "search"
+      : key === "web_fetch"
+        ? "fetch"
+        : key.replace(/_/g, " ").replace(/\./g, " ");
+  const verb = normalizeVerb(actionSpec?.label ?? action ?? fallbackVerb);
 
   let detail: string | undefined;
-  if (key === "read") {
+  if (key === "exec") {
+    detail = resolveExecDetail(params.args);
+  }
+  if (!detail && key === "read") {
     detail = resolveReadDetail(params.args);
   }
   if (!detail && (key === "write" || key === "edit" || key === "attach")) {
-    detail = resolveWriteDetail(params.args);
+    detail = resolveWriteDetail(key, params.args);
+  }
+
+  if (!detail && key === "web_search") {
+    detail = resolveWebSearchDetail(params.args);
+  }
+
+  if (!detail && key === "web_fetch") {
+    detail = resolveWebFetchDetail(params.args);
   }
 
   const detailKeys = actionSpec?.detailKeys ?? spec?.detailKeys ?? FALLBACK.detailKeys ?? [];
@@ -110,17 +130,19 @@ export function resolveToolDisplay(params: {
 }
 
 export function formatToolDetail(display: ToolDisplay): string | undefined {
-  const parts: string[] = [];
-  if (display.verb) {
-    parts.push(display.verb);
-  }
-  if (display.detail) {
-    parts.push(redactToolDetail(display.detail));
-  }
-  if (parts.length === 0) {
+  const detailRaw = display.detail ? redactToolDetail(display.detail) : undefined;
+  if (!detailRaw) {
     return undefined;
   }
-  return parts.join(" · ");
+  if (detailRaw.includes(" · ")) {
+    const compact = detailRaw
+      .split(" · ")
+      .map((part) => part.trim())
+      .filter((part) => part.length > 0)
+      .join(", ");
+    return compact ? `with ${compact}` : undefined;
+  }
+  return detailRaw;
 }
 
 export function formatToolSummary(display: ToolDisplay): string {

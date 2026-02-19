@@ -1,6 +1,6 @@
 import { afterEach, expect, test, vi } from "vitest";
-import { resetProcessRegistryForTests } from "./bash-process-registry";
-import { createExecTool } from "./bash-tools.exec";
+import { resetProcessRegistryForTests } from "./bash-process-registry.js";
+import { createExecTool } from "./bash-tools.exec.js";
 
 const { ptySpawnMock } = vi.hoisted(() => ({
   ptySpawnMock: vi.fn(),

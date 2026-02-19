@@ -6,9 +6,9 @@ import type {
   WizardPrompter,
 } from "openclaw/plugin-sdk";
 import { addWildcardAllowFrom, DEFAULT_ACCOUNT_ID, formatDocsLink } from "openclaw/plugin-sdk";
-import type { FeishuConfig } from "./types.js";
 import { resolveFeishuCredentials } from "./accounts.js";
 import { probeFeishu } from "./probe.js";
+import type { FeishuConfig } from "./types.js";
 
 const channel = "feishu" as const;
 

@@ -6,6 +6,7 @@ import {
   extractSlackToolSend,
   formatPairingApproveHint,
   getChatChannelMeta,
+  handleSlackMessageAction,
   listSlackMessageActions,
   listSlackAccountIds,
   listSlackDirectoryGroupsFromConfig,
@@ -15,8 +16,6 @@ import {
   normalizeAccountId,
   normalizeSlackMessagingTarget,
   PAIRING_APPROVED_MESSAGE,
-  readNumberParam,
-  readStringParam,
   resolveDefaultSlackAccountId,
   resolveSlackAccount,
   resolveSlackReplyToMode,
@@ -234,151 +233,13 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
   actions: {
     listActions: ({ cfg }) => listSlackMessageActions(cfg),
     extractToolSend: ({ args }) => extractSlackToolSend(args),
-    handleAction: async ({ action, params, cfg, accountId, toolContext }) => {
-      const resolveChannelId = () =>
-        readStringParam(params, "channelId") ?? readStringParam(params, "to", { required: true });
-
-      if (action === "send") {
-        const to = readStringParam(params, "to", { required: true });
-        const content = readStringParam(params, "message", {
-          required: true,
-          allowEmpty: true,
-        });
-        const mediaUrl = readStringParam(params, "media", { trim: false });
-        const threadId = readStringParam(params, "threadId");
-        const replyTo = readStringParam(params, "replyTo");
-        return await getSlackRuntime().channel.slack.handleSlackAction(
-          {
-            action: "sendMessage",
-            to,
-            content,
-            mediaUrl: mediaUrl ?? undefined,
-            accountId: accountId ?? undefined,
-            threadTs: threadId ?? replyTo ?? undefined,
-          },
-          cfg,
-          toolContext,
-        );
-      }
-
-      if (action === "react") {
-        const messageId = readStringParam(params, "messageId", {
-          required: true,
-        });
-        const emoji = readStringParam(params, "emoji", { allowEmpty: true });
-        const remove = typeof params.remove === "boolean" ? params.remove : undefined;
-        return await getSlackRuntime().channel.slack.handleSlackAction(
-          {
-            action: "react",
-            channelId: resolveChannelId(),
-            messageId,
-            emoji,
-            remove,
-            accountId: accountId ?? undefined,
-          },
-          cfg,
-        );
-      }
-
-      if (action === "reactions") {
-        const messageId = readStringParam(params, "messageId", {
-          required: true,
-        });
-        const limit = readNumberParam(params, "limit", { integer: true });
-        return await getSlackRuntime().channel.slack.handleSlackAction(
-          {
-            action: "reactions",
-            channelId: resolveChannelId(),
-            messageId,
-            limit,
-            accountId: accountId ?? undefined,
-          },
-          cfg,
-        );
-      }
-
-      if (action === "read") {
-        const limit = readNumberParam(params, "limit", { integer: true });
-        return await getSlackRuntime().channel.slack.handleSlackAction(
-          {
-            action: "readMessages",
-            channelId: resolveChannelId(),
-            limit,
-            before: readStringParam(params, "before"),
-            after: readStringParam(params, "after"),
-            accountId: accountId ?? undefined,
-          },
-          cfg,
-        );
-      }
-
-      if (action === "edit") {
-        const messageId = readStringParam(params, "messageId", {
-          required: true,
-        });
-        const content = readStringParam(params, "message", { required: true });
-        return await getSlackRuntime().channel.slack.handleSlackAction(
-          {
-            action: "editMessage",
-            channelId: resolveChannelId(),
-            messageId,
-            content,
-            accountId: accountId ?? undefined,
-          },
-          cfg,
-        );
-      }
-
-      if (action === "delete") {
-        const messageId = readStringParam(params, "messageId", {
-          required: true,
-        });
-        return await getSlackRuntime().channel.slack.handleSlackAction(
-          {
-            action: "deleteMessage",
-            channelId: resolveChannelId(),
-            messageId,
-            accountId: accountId ?? undefined,
-          },
-          cfg,
-        );
-      }
-
-      if (action === "pin" || action === "unpin" || action === "list-pins") {
-        const messageId =
-          action === "list-pins"
-            ? undefined
-            : readStringParam(params, "messageId", { required: true });
-        return await getSlackRuntime().channel.slack.handleSlackAction(
-          {
-            action:
-              action === "pin" ? "pinMessage" : action === "unpin" ? "unpinMessage" : "listPins",
-            channelId: resolveChannelId(),
-            messageId,
-            accountId: accountId ?? undefined,
-          },
-          cfg,
-        );
-      }
-
-      if (action === "member-info") {
-        const userId = readStringParam(params, "userId", { required: true });
-        return await getSlackRuntime().channel.slack.handleSlackAction(
-          { action: "memberInfo", userId, accountId: accountId ?? undefined },
-          cfg,
-        );
-      }
-
-      if (action === "emoji-list") {
-        const limit = readNumberParam(params, "limit", { integer: true });
-        return await getSlackRuntime().channel.slack.handleSlackAction(
-          { action: "emojiList", limit, accountId: accountId ?? undefined },
-          cfg,
-        );
-      }
-
-      throw new Error(`Action ${action} is not supported for provider ${meta.id}.`);
-    },
+    handleAction: async (ctx) =>
+      await handleSlackMessageAction({
+        providerId: meta.id,
+        ctx,
+        invoke: async (action, cfg, toolContext) =>
+          await getSlackRuntime().channel.slack.handleSlackAction(action, cfg, toolContext),
+      }),
   },
   setup: {
     resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),

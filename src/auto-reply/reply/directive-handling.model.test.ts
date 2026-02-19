@@ -91,8 +91,8 @@ describe("/model chat UX", () => {
 describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
   const allowedModelKeys = new Set(["anthropic/claude-opus-4-5", "openai/gpt-4o"]);
   const allowedModelCatalog = [
-    { provider: "anthropic", id: "claude-opus-4-5" },
-    { provider: "openai", id: "gpt-4o" },
+    { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus 4.5" },
+    { provider: "openai", id: "gpt-4o", name: "GPT-4o" },
   ];
   const sessionKey = "agent:main:dm:1";
   const storePath = "/tmp/sessions.json";

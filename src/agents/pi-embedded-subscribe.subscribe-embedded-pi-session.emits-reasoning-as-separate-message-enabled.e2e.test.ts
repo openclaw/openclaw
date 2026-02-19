@@ -1,10 +1,7 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
+import { createStubSessionHarness } from "./pi-embedded-subscribe.e2e-harness.js";
 import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
-
-type StubSession = {
-  subscribe: (fn: (evt: unknown) => void) => () => void;
-};
 
 describe("subscribeEmbeddedPiSession", () => {
   const THINKING_TAG_CASES = [
@@ -14,24 +11,23 @@ describe("subscribeEmbeddedPiSession", () => {
     { tag: "antthinking", open: "<antthinking>", close: "</antthinking>" },
   ] as const;
 
-  it("emits reasoning as a separate message when enabled", () => {
-    let handler: ((evt: unknown) => void) | undefined;
-    const session: StubSession = {
-      subscribe: (fn) => {
-        handler = fn;
-        return () => {};
-      },
-    };
-
+  function createReasoningBlockReplyHarness() {
+    const { session, emit } = createStubSessionHarness();
     const onBlockReply = vi.fn();
 
     subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
+      session,
       runId: "run",
       onBlockReply,
       blockReplyBreak: "message_end",
       reasoningMode: "on",
     });
+
+    return { emit, onBlockReply };
+  }
+
+  it("emits reasoning as a separate message when enabled", () => {
+    const { emit, onBlockReply } = createReasoningBlockReplyHarness();
 
     const assistantMessage = {
       role: "assistant",
@@ -41,7 +37,7 @@ describe("subscribeEmbeddedPiSession", () => {
       ],
     } as AssistantMessage;
 
-    handler?.({ type: "message_end", message: assistantMessage });
+    emit({ type: "message_end", message: assistantMessage });
 
     expect(onBlockReply).toHaveBeenCalledTimes(2);
     expect(onBlockReply.mock.calls[0][0].text).toBe("Reasoning:\n_Because it helps_");
@@ -50,23 +46,7 @@ describe("subscribeEmbeddedPiSession", () => {
   it.each(THINKING_TAG_CASES)(
     "promotes <%s> tags to thinking blocks at write-time",
     ({ open, close }) => {
-      let handler: ((evt: unknown) => void) | undefined;
-      const session: StubSession = {
-        subscribe: (fn) => {
-          handler = fn;
-          return () => {};
-        },
-      };
-
-      const onBlockReply = vi.fn();
-
-      subscribeEmbeddedPiSession({
-        session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
-        runId: "run",
-        onBlockReply,
-        blockReplyBreak: "message_end",
-        reasoningMode: "on",
-      });
+      const { emit, onBlockReply } = createReasoningBlockReplyHarness();
 
       const assistantMessage = {
         role: "assistant",
@@ -78,7 +58,7 @@ describe("subscribeEmbeddedPiSession", () => {
         ],
       } as AssistantMessage;
 
-      handler?.({ type: "message_end", message: assistantMessage });
+      emit({ type: "message_end", message: assistantMessage });
 
       expect(onBlockReply).toHaveBeenCalledTimes(2);
       expect(onBlockReply.mock.calls[0][0].text).toBe("Reasoning:\n_Because it helps_");

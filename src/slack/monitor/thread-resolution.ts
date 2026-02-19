@@ -1,6 +1,7 @@
 import type { WebClient as SlackWebClient } from "@slack/web-api";
-import type { SlackMessageEvent } from "../types.js";
 import { logVerbose, shouldLogVerbose } from "../../globals.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
+import type { SlackMessageEvent } from "../types.js";
 
 type ThreadTsCacheEntry = {
   threadTs: string | null;
@@ -68,17 +69,7 @@ export function createSlackThreadTsResolver(params: {
   const setCached = (key: string, threadTs: string | null, now: number) => {
     cache.delete(key);
     cache.set(key, { threadTs, updatedAt: now });
-    if (maxSize <= 0) {
-      cache.clear();
-      return;
-    }
-    while (cache.size > maxSize) {
-      const oldestKey = cache.keys().next().value;
-      if (!oldestKey) {
-        break;
-      }
-      cache.delete(oldestKey);
-    }
+    pruneMapToMaxSize(cache, maxSize);
   };
 
   return {

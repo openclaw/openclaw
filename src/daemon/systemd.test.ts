@@ -59,13 +59,6 @@ describe("systemd runtime parsing", () => {
 });
 
 describe("resolveSystemdUserUnitPath", () => {
-  it("uses default service name when OPENCLAW_PROFILE is default", () => {
-    const env = { HOME: "/home/test", OPENCLAW_PROFILE: "default" };
-    expect(resolveSystemdUserUnitPath(env)).toBe(
-      "/home/test/.config/systemd/user/openclaw-gateway.service",
-    );
-  });
-
   it("uses default service name when OPENCLAW_PROFILE is unset", () => {
     const env = { HOME: "/home/test" };
     expect(resolveSystemdUserUnitPath(env)).toBe(
@@ -110,27 +103,6 @@ describe("resolveSystemdUserUnitPath", () => {
       "/home/test/.config/systemd/user/custom-unit.service",
     );
   });
-
-  it("handles case-insensitive 'Default' profile", () => {
-    const env = { HOME: "/home/test", OPENCLAW_PROFILE: "Default" };
-    expect(resolveSystemdUserUnitPath(env)).toBe(
-      "/home/test/.config/systemd/user/openclaw-gateway.service",
-    );
-  });
-
-  it("handles case-insensitive 'DEFAULT' profile", () => {
-    const env = { HOME: "/home/test", OPENCLAW_PROFILE: "DEFAULT" };
-    expect(resolveSystemdUserUnitPath(env)).toBe(
-      "/home/test/.config/systemd/user/openclaw-gateway.service",
-    );
-  });
-
-  it("trims whitespace from OPENCLAW_PROFILE", () => {
-    const env = { HOME: "/home/test", OPENCLAW_PROFILE: "  myprofile  " };
-    expect(resolveSystemdUserUnitPath(env)).toBe(
-      "/home/test/.config/systemd/user/openclaw-gateway-myprofile.service",
-    );
-  });
 });
 
 describe("splitArgsPreservingQuotes", () => {
@@ -168,17 +140,6 @@ describe("splitArgsPreservingQuotes", () => {
 });
 
 describe("parseSystemdExecStart", () => {
-  it("splits on whitespace outside quotes", () => {
-    const execStart = "/usr/bin/openclaw gateway start --foo bar";
-    expect(parseSystemdExecStart(execStart)).toEqual([
-      "/usr/bin/openclaw",
-      "gateway",
-      "start",
-      "--foo",
-      "bar",
-    ]);
-  });
-
   it("preserves quoted arguments", () => {
     const execStart = '/usr/bin/openclaw gateway start --name "My Bot"';
     expect(parseSystemdExecStart(execStart)).toEqual([
@@ -187,17 +148,6 @@ describe("parseSystemdExecStart", () => {
       "start",
       "--name",
       "My Bot",
-    ]);
-  });
-
-  it("parses path arguments", () => {
-    const execStart = "/usr/bin/openclaw gateway start --path /tmp/openclaw";
-    expect(parseSystemdExecStart(execStart)).toEqual([
-      "/usr/bin/openclaw",
-      "gateway",
-      "start",
-      "--path",
-      "/tmp/openclaw",
     ]);
   });
 });

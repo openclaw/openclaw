@@ -1,4 +1,5 @@
 import type { AgentMessage, AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { ImageSanitizationLimits } from "../image-sanitization.js";
 import type { ToolCallIdMode } from "../tool-call-id.js";
 import { sanitizeToolCallIdsForCloudCodeAssist } from "../tool-call-id.js";
 import { sanitizeContentBlocksImages } from "../tool-images.js";
@@ -45,15 +46,20 @@ export async function sanitizeSessionMessagesImages(
       allowBase64Only?: boolean;
       includeCamelCase?: boolean;
     };
-  },
+  } & ImageSanitizationLimits,
 ): Promise<AgentMessage[]> {
   const sanitizeMode = options?.sanitizeMode ?? "full";
   const allowNonImageSanitization = sanitizeMode === "full";
+  const imageSanitization = {
+    maxDimensionPx: options?.maxDimensionPx,
+    maxBytes: options?.maxBytes,
+  };
   // We sanitize historical session messages because Anthropic can reject a request
-  // if the transcript contains oversized base64 images (see MAX_IMAGE_DIMENSION_PX).
-  const sanitizedIds = options?.sanitizeToolCallIds
-    ? sanitizeToolCallIdsForCloudCodeAssist(messages, options.toolCallIdMode)
-    : messages;
+  // if the transcript contains oversized base64 images (default max side 1200px).
+  const sanitizedIds =
+    allowNonImageSanitization && options?.sanitizeToolCallIds
+      ? sanitizeToolCallIdsForCloudCodeAssist(messages, options.toolCallIdMode)
+      : messages;
   const out: AgentMessage[] = [];
   for (const msg of sanitizedIds) {
     if (!msg || typeof msg !== "object") {
@@ -68,6 +74,7 @@ export async function sanitizeSessionMessagesImages(
       const nextContent = (await sanitizeContentBlocksImages(
         content,
         label,
+        imageSanitization,
       )) as unknown as typeof toolMsg.content;
       out.push({ ...toolMsg, content: nextContent });
       continue;
@@ -80,6 +87,7 @@ export async function sanitizeSessionMessagesImages(
         const nextContent = (await sanitizeContentBlocksImages(
           content as unknown as ContentBlock[],
           label,
+          imageSanitization,
         )) as unknown as typeof userMsg.content;
         out.push({ ...userMsg, content: nextContent });
         continue;
@@ -94,6 +102,7 @@ export async function sanitizeSessionMessagesImages(
           const nextContent = (await sanitizeContentBlocksImages(
             content as unknown as ContentBlock[],
             label,
+            imageSanitization,
           )) as unknown as typeof assistantMsg.content;
           out.push({ ...assistantMsg, content: nextContent });
         } else {
@@ -107,6 +116,7 @@ export async function sanitizeSessionMessagesImages(
           const nextContent = (await sanitizeContentBlocksImages(
             content as unknown as ContentBlock[],
             label,
+            imageSanitization,
           )) as unknown as typeof assistantMsg.content;
           out.push({ ...assistantMsg, content: nextContent });
           continue;
@@ -128,6 +138,7 @@ export async function sanitizeSessionMessagesImages(
         const finalContent = (await sanitizeContentBlocksImages(
           filteredContent as unknown as ContentBlock[],
           label,
+          imageSanitization,
         )) as unknown as typeof assistantMsg.content;
         if (finalContent.length === 0) {
           continue;

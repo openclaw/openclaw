@@ -1,12 +1,12 @@
 import { ChannelType, type Client } from "@buape/carbon";
 import { Routes } from "discord-api-types/v10";
-import type { ReplyToMode } from "../../config/config.js";
-import type { DiscordChannelConfigResolved } from "./allow-list.js";
-import type { DiscordMessageEvent } from "./listeners.js";
 import { createReplyReferencePlanner } from "../../auto-reply/reply/reply-reference.js";
+import type { ReplyToMode } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
 import { buildAgentSessionKey } from "../../routing/resolve-route.js";
 import { truncateUtf16Safe } from "../../utils.js";
+import type { DiscordChannelConfigResolved } from "./allow-list.js";
+import type { DiscordMessageEvent } from "./listeners.js";
 import { resolveDiscordChannelInfo, resolveDiscordMessageChannelId } from "./message-utils.js";
 
 export type DiscordThreadChannel = {
@@ -298,6 +298,7 @@ export async function resolveDiscordAutoThreadReplyPlan(params: {
   isGuildMessage: boolean;
   channelConfig?: DiscordChannelConfigResolved | null;
   threadChannel?: DiscordThreadChannel | null;
+  channelType?: ChannelType;
   baseText: string;
   combinedBody: string;
   replyToMode: ReplyToMode;
@@ -320,6 +321,7 @@ export async function resolveDiscordAutoThreadReplyPlan(params: {
     isGuildMessage: params.isGuildMessage,
     channelConfig: params.channelConfig,
     threadChannel: params.threadChannel,
+    channelType: params.channelType,
     baseText: params.baseText,
     combinedBody: params.combinedBody,
   });
@@ -348,6 +350,7 @@ export async function maybeCreateDiscordAutoThread(params: {
   isGuildMessage: boolean;
   channelConfig?: DiscordChannelConfigResolved | null;
   threadChannel?: DiscordThreadChannel | null;
+  channelType?: ChannelType;
   baseText: string;
   combinedBody: string;
 }): Promise<string | undefined> {
@@ -360,6 +363,16 @@ export async function maybeCreateDiscordAutoThread(params: {
   if (params.threadChannel) {
     return undefined;
   }
+  // Avoid creating threads in channels that don't support it or are already forums
+  if (
+    params.channelType === ChannelType.GuildForum ||
+    params.channelType === ChannelType.GuildMedia ||
+    params.channelType === ChannelType.GuildVoice ||
+    params.channelType === ChannelType.GuildStageVoice
+  ) {
+    return undefined;
+  }
+
   const messageChannelId = (
     params.messageChannelId ||
     resolveDiscordMessageChannelId({

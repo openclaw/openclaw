@@ -294,6 +294,27 @@ describe("downgradeOpenAIReasoningBlocks", () => {
     // oxlint-disable-next-line typescript/no-explicit-any
     expect(downgradeOpenAIReasoningBlocks(input as any)).toEqual(input);
   });
+
+  it("is idempotent for orphaned reasoning cleanup", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinkingSignature: JSON.stringify({ id: "rs_orphan", type: "reasoning" }),
+          },
+        ],
+      },
+      { role: "user", content: "next" },
+    ];
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const once = downgradeOpenAIReasoningBlocks(input as any);
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const twice = downgradeOpenAIReasoningBlocks(once as any);
+    expect(twice).toEqual(once);
+  });
 });
 
 describe("normalizeTextForComparison", () => {

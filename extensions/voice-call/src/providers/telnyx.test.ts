@@ -22,6 +22,37 @@ function decodeBase64Url(input: string): Buffer {
   return Buffer.from(padded, "base64");
 }
 
+function expectWebhookVerificationSucceeds(params: {
+  publicKey: string;
+  privateKey: crypto.KeyObject;
+}) {
+  const provider = new TelnyxProvider(
+    { apiKey: "KEY123", connectionId: "CONN456", publicKey: params.publicKey },
+    { skipVerification: false },
+  );
+
+  const rawBody = JSON.stringify({
+    event_type: "call.initiated",
+    payload: { call_control_id: "x" },
+  });
+  const timestamp = String(Math.floor(Date.now() / 1000));
+  const signedPayload = `${timestamp}|${rawBody}`;
+  const signature = crypto
+    .sign(null, Buffer.from(signedPayload), params.privateKey)
+    .toString("base64");
+
+  const result = provider.verifyWebhook(
+    createCtx({
+      rawBody,
+      headers: {
+        "telnyx-signature-ed25519": signature,
+        "telnyx-timestamp": timestamp,
+      },
+    }),
+  );
+  expect(result.ok).toBe(true);
+}
+
 describe("TelnyxProvider.verifyWebhook", () => {
   it("fails closed when public key is missing and skipVerification is false", () => {
     const provider = new TelnyxProvider(
@@ -63,59 +94,13 @@ describe("TelnyxProvider.verifyWebhook", () => {
 
     const rawPublicKey = decodeBase64Url(jwk.x as string);
     const rawPublicKeyBase64 = rawPublicKey.toString("base64");
-
-    const provider = new TelnyxProvider(
-      { apiKey: "KEY123", connectionId: "CONN456", publicKey: rawPublicKeyBase64 },
-      { skipVerification: false },
-    );
-
-    const rawBody = JSON.stringify({
-      event_type: "call.initiated",
-      payload: { call_control_id: "x" },
-    });
-    const timestamp = String(Math.floor(Date.now() / 1000));
-    const signedPayload = `${timestamp}|${rawBody}`;
-    const signature = crypto.sign(null, Buffer.from(signedPayload), privateKey).toString("base64");
-
-    const result = provider.verifyWebhook(
-      createCtx({
-        rawBody,
-        headers: {
-          "telnyx-signature-ed25519": signature,
-          "telnyx-timestamp": timestamp,
-        },
-      }),
-    );
-    expect(result.ok).toBe(true);
+    expectWebhookVerificationSucceeds({ publicKey: rawPublicKeyBase64, privateKey });
   });
 
   it("verifies a valid signature with a DER SPKI public key (Base64)", () => {
     const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
     const spkiDer = publicKey.export({ format: "der", type: "spki" }) as Buffer;
     const spkiDerBase64 = spkiDer.toString("base64");
-
-    const provider = new TelnyxProvider(
-      { apiKey: "KEY123", connectionId: "CONN456", publicKey: spkiDerBase64 },
-      { skipVerification: false },
-    );
-
-    const rawBody = JSON.stringify({
-      event_type: "call.initiated",
-      payload: { call_control_id: "x" },
-    });
-    const timestamp = String(Math.floor(Date.now() / 1000));
-    const signedPayload = `${timestamp}|${rawBody}`;
-    const signature = crypto.sign(null, Buffer.from(signedPayload), privateKey).toString("base64");
-
-    const result = provider.verifyWebhook(
-      createCtx({
-        rawBody,
-        headers: {
-          "telnyx-signature-ed25519": signature,
-          "telnyx-timestamp": timestamp,
-        },
-      }),
-    );
-    expect(result.ok).toBe(true);
+    expectWebhookVerificationSucceeds({ publicKey: spkiDerBase64, privateKey });
   });
 });

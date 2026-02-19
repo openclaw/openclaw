@@ -1,5 +1,5 @@
-import type { MonitorIMessageOpts } from "./types.js";
 import { createNonExitingRuntime, type RuntimeEnv } from "../../runtime.js";
+import type { MonitorIMessageOpts } from "./types.js";
 
 export function resolveRuntime(opts: MonitorIMessageOpts): RuntimeEnv {
   return opts.runtime ?? createNonExitingRuntime();

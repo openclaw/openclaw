@@ -5,9 +5,8 @@ import {
 } from "../../commands/status.update.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import {
-  formatUpdateChannelLabel,
   normalizeUpdateChannel,
-  resolveEffectiveUpdateChannel,
+  resolveUpdateChannelDisplay,
 } from "../../infra/update-channels.js";
 import { checkUpdateStatus } from "../../infra/update-check.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -52,17 +51,13 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
     includeRegistry: true,
   });
 
-  const channelInfo = resolveEffectiveUpdateChannel({
+  const channelInfo = resolveUpdateChannelDisplay({
     configChannel,
     installKind: update.installKind,
-    git: update.git ? { tag: update.git.tag, branch: update.git.branch } : undefined,
-  });
-  const channelLabel = formatUpdateChannelLabel({
-    channel: channelInfo.channel,
-    source: channelInfo.source,
     gitTag: update.git?.tag ?? null,
     gitBranch: update.git?.branch ?? null,
   });
+  const channelLabel = channelInfo.label;
 
   const gitLabel =
     update.installKind === "git"

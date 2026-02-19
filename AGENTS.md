@@ -70,6 +70,10 @@
 
 - Language: TypeScript (ESM). Prefer strict typing; avoid `any`.
 - Formatting/linting via Oxlint and Oxfmt; run `pnpm check` before commits.
+- Never add `@ts-nocheck` and do not disable `no-explicit-any`; fix root causes and update Oxlint/Oxfmt config only when required.
+- Never share class behavior via prototype mutation (`applyPrototypeMixins`, `Object.defineProperty` on `.prototype`, or exporting `Class.prototype` for merges). Use explicit inheritance/composition (`A extends B extends C`) or helper composition so TypeScript can typecheck.
+- If this pattern is needed, stop and get explicit approval before shipping; default behavior is to split/refactor into an explicit class hierarchy and keep members strongly typed.
+- In tests, prefer per-instance stubs over prototype mutation (`SomeClass.prototype.method = ...`) unless a test explicitly documents why prototype-level patching is required.
 - Add brief code comments for tricky or non-obvious logic.
 - Keep files concise; extract helpers instead of “V2” copies. Use existing patterns for CLI options and dependency injection via `createDefaultDeps`.
 - Aim to keep files under ~700 LOC; guideline only (not a hard guardrail). Split/refactor when it improves clarity or testability.
@@ -110,6 +114,7 @@
 ## Git Notes
 
 - If `git branch -d/-D <branch>` is policy-blocked, delete the local ref directly: `git update-ref -d refs/heads/<branch>`.
+- Bulk PR close/reopen safety: if a close action would affect more than 5 PRs, first ask for explicit user confirmation with the exact PR count and target scope/query.
 
 ## Security & Configuration Tips
 
@@ -213,10 +218,16 @@
   - skip if package is missing on npm or version already matches.
 - Keep `openclaw` untouched: never run publish from repo root unless explicitly requested.
 - Post-check for each release:
-  - per-plugin: `npm view @openclaw/<name> version --userconfig "$(mktemp)"` should be `2026.2.15`
+  - per-plugin: `npm view @openclaw/<name> version --userconfig "$(mktemp)"` should be `2026.2.17`
   - core guard: `npm view openclaw version --userconfig "$(mktemp)"` should stay at previous version unless explicitly requested.
 
 ## Changelog Release Notes
+
+- When cutting a mac release with beta GitHub prerelease:
+  - Tag `vYYYY.M.D-beta.N` from the release commit (example: `v2026.2.15-beta.1`).
+  - Create prerelease with title `openclaw YYYY.M.D-beta.N`.
+  - Use release notes from `CHANGELOG.md` version section (`Changes` + `Fixes`, no title duplicate).
+  - Attach at least `OpenClaw-YYYY.M.D.zip` and `OpenClaw-YYYY.M.D.dSYM.zip`; include `.dmg` if available.
 
 - Keep top version entries in `CHANGELOG.md` sorted by impact:
   - `### Changes` first.

@@ -13,6 +13,17 @@ const mockTheme: SearchableSelectListTheme = {
   matchHighlight: (t) => `*${t}*`,
 };
 
+const ansiHighlightTheme: SearchableSelectListTheme = {
+  selectedPrefix: (t) => t,
+  selectedText: (t) => t,
+  description: (t) => t,
+  scrollInfo: (t) => t,
+  noMatch: (t) => t,
+  searchPrompt: (t) => t,
+  searchInput: (t) => t,
+  matchHighlight: (t) => `\u001b[31m${t}\u001b[0m`,
+};
+
 const testItems = [
   {
     value: "anthropic/claude-3-opus",
@@ -74,22 +85,12 @@ describe("SearchableSelectList", () => {
   });
 
   it("keeps ANSI-highlighted description rows within terminal width", () => {
-    const ansiTheme: SearchableSelectListTheme = {
-      selectedPrefix: (t) => t,
-      selectedText: (t) => t,
-      description: (t) => t,
-      scrollInfo: (t) => t,
-      noMatch: (t) => t,
-      searchPrompt: (t) => t,
-      searchInput: (t) => t,
-      matchHighlight: (t) => `\u001b[31m${t}\u001b[0m`,
-    };
     const label = `provider/${"x".repeat(80)}`;
     const items = [
       { value: label, label, description: "Some description text that should not overflow" },
       { value: "other", label: "other", description: "Other description" },
     ];
-    const list = new SearchableSelectList(items, 5, ansiTheme);
+    const list = new SearchableSelectList(items, 5, ansiHighlightTheme);
     list.setSelectedIndex(1); // make first row non-selected so description styling is applied
 
     for (const ch of "provider") {
@@ -119,18 +120,8 @@ describe("SearchableSelectList", () => {
   });
 
   it("does not corrupt ANSI sequences when highlighting multiple tokens", () => {
-    const ansiTheme: SearchableSelectListTheme = {
-      selectedPrefix: (t) => t,
-      selectedText: (t) => t,
-      description: (t) => t,
-      scrollInfo: (t) => t,
-      noMatch: (t) => t,
-      searchPrompt: (t) => t,
-      searchInput: (t) => t,
-      matchHighlight: (t) => `\u001b[31m${t}\u001b[0m`,
-    };
     const items = [{ value: "gpt-model", label: "gpt-model" }];
-    const list = new SearchableSelectList(items, 5, ansiTheme);
+    const list = new SearchableSelectList(items, 5, ansiHighlightTheme);
 
     for (const ch of "gpt m") {
       list.handleInput(ch);

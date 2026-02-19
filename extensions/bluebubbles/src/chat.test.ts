@@ -1,37 +1,17 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import "./test-mocks.js";
 import { markBlueBubblesChatRead, sendBlueBubblesTyping, setGroupIconBlueBubbles } from "./chat.js";
 import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
-
-vi.mock("./accounts.js", () => ({
-  resolveBlueBubblesAccount: vi.fn(({ cfg, accountId }) => {
-    const config = cfg?.channels?.bluebubbles ?? {};
-    return {
-      accountId: accountId ?? "default",
-      enabled: config.enabled !== false,
-      configured: Boolean(config.serverUrl && config.password),
-      config,
-    };
-  }),
-}));
-
-vi.mock("./probe.js", () => ({
-  getCachedBlueBubblesPrivateApiStatus: vi.fn().mockReturnValue(null),
-}));
+import { installBlueBubblesFetchTestHooks } from "./test-harness.js";
 
 const mockFetch = vi.fn();
 
+installBlueBubblesFetchTestHooks({
+  mockFetch,
+  privateApiStatusMock: vi.mocked(getCachedBlueBubblesPrivateApiStatus),
+});
+
 describe("chat", () => {
-  beforeEach(() => {
-    vi.stubGlobal("fetch", mockFetch);
-    mockFetch.mockReset();
-    vi.mocked(getCachedBlueBubblesPrivateApiStatus).mockReset();
-    vi.mocked(getCachedBlueBubblesPrivateApiStatus).mockReturnValue(null);
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
   describe("markBlueBubblesChatRead", () => {
     it("does nothing when chatGuid is empty", async () => {
       await markBlueBubblesChatRead("", {

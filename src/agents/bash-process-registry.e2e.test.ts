@@ -20,7 +20,7 @@ describe("bash process registry", () => {
     const session: ProcessSession = {
       id: "sess",
       command: "echo test",
-      child: { pid: 123, removeAllListeners: vi.fn() } as ChildProcessWithoutNullStreams,
+      child: { pid: 123, removeAllListeners: vi.fn() } as unknown as ChildProcessWithoutNullStreams,
       startedAt: Date.now(),
       cwd: "/tmp",
       maxOutputChars: 10,
@@ -51,7 +51,7 @@ describe("bash process registry", () => {
     const session: ProcessSession = {
       id: "sess",
       command: "echo test",
-      child: { pid: 123, removeAllListeners: vi.fn() } as ChildProcessWithoutNullStreams,
+      child: { pid: 123, removeAllListeners: vi.fn() } as unknown as ChildProcessWithoutNullStreams,
       startedAt: Date.now(),
       cwd: "/tmp",
       maxOutputChars: 100_000,
@@ -85,7 +85,7 @@ describe("bash process registry", () => {
     const session: ProcessSession = {
       id: "sess",
       command: "echo test",
-      child: { pid: 123, removeAllListeners: vi.fn() } as ChildProcessWithoutNullStreams,
+      child: { pid: 123, removeAllListeners: vi.fn() } as unknown as ChildProcessWithoutNullStreams,
       startedAt: Date.now(),
       cwd: "/tmp",
       maxOutputChars: 5_000,
@@ -116,7 +116,7 @@ describe("bash process registry", () => {
     const session: ProcessSession = {
       id: "sess",
       command: "echo test",
-      child: { pid: 123, removeAllListeners: vi.fn() } as ChildProcessWithoutNullStreams,
+      child: { pid: 123, removeAllListeners: vi.fn() } as unknown as ChildProcessWithoutNullStreams,
       startedAt: Date.now(),
       cwd: "/tmp",
       maxOutputChars: 100,
@@ -150,7 +150,7 @@ describe("bash process registry", () => {
     const session: ProcessSession = {
       id: "sess",
       command: "echo test",
-      child: { pid: 123, removeAllListeners: vi.fn() } as ChildProcessWithoutNullStreams,
+      child: { pid: 123, removeAllListeners: vi.fn() } as unknown as ChildProcessWithoutNullStreams,
       startedAt: Date.now(),
       cwd: "/tmp",
       maxOutputChars: 100,

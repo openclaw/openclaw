@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/config.js";
 
 let backend: "builtin" | "qmd" = "builtin";
 let searchImpl: () => Promise<unknown[]> = async () => [
@@ -42,6 +43,10 @@ vi.mock("../../memory/index.js", () => {
 
 import { createMemoryGetTool, createMemorySearchTool } from "./memory-tool.js";
 
+function asOpenClawConfig(config: Partial<OpenClawConfig>): OpenClawConfig {
+  return config as OpenClawConfig;
+}
+
 beforeEach(() => {
   backend = "builtin";
   searchImpl = async () => [
@@ -61,7 +66,10 @@ beforeEach(() => {
 describe("memory search citations", () => {
   it("appends source information when citations are enabled", async () => {
     backend = "builtin";
-    const cfg = { memory: { citations: "on" }, agents: { list: [{ id: "main", default: true }] } };
+    const cfg = asOpenClawConfig({
+      memory: { citations: "on" },
+      agents: { list: [{ id: "main", default: true }] },
+    });
     const tool = createMemorySearchTool({ config: cfg });
     if (!tool) {
       throw new Error("tool missing");
@@ -74,7 +82,10 @@ describe("memory search citations", () => {
 
   it("leaves snippet untouched when citations are off", async () => {
     backend = "builtin";
-    const cfg = { memory: { citations: "off" }, agents: { list: [{ id: "main", default: true }] } };
+    const cfg = asOpenClawConfig({
+      memory: { citations: "off" },
+      agents: { list: [{ id: "main", default: true }] },
+    });
     const tool = createMemorySearchTool({ config: cfg });
     if (!tool) {
       throw new Error("tool missing");
@@ -87,10 +98,10 @@ describe("memory search citations", () => {
 
   it("clamps decorated snippets to qmd injected budget", async () => {
     backend = "qmd";
-    const cfg = {
+    const cfg = asOpenClawConfig({
       memory: { citations: "on", backend: "qmd", qmd: { limits: { maxInjectedChars: 20 } } },
       agents: { list: [{ id: "main", default: true }] },
-    };
+    });
     const tool = createMemorySearchTool({ config: cfg });
     if (!tool) {
       throw new Error("tool missing");
@@ -102,10 +113,10 @@ describe("memory search citations", () => {
 
   it("honors auto mode for direct chats", async () => {
     backend = "builtin";
-    const cfg = {
+    const cfg = asOpenClawConfig({
       memory: { citations: "auto" },
       agents: { list: [{ id: "main", default: true }] },
-    };
+    });
     const tool = createMemorySearchTool({
       config: cfg,
       agentSessionKey: "agent:main:discord:dm:u123",
@@ -120,10 +131,10 @@ describe("memory search citations", () => {
 
   it("suppresses citations for auto mode in group chats", async () => {
     backend = "builtin";
-    const cfg = {
+    const cfg = asOpenClawConfig({
       memory: { citations: "auto" },
       agents: { list: [{ id: "main", default: true }] },
-    };
+    });
     const tool = createMemorySearchTool({
       config: cfg,
       agentSessionKey: "agent:main:discord:group:c123",

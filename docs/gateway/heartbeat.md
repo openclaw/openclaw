@@ -209,6 +209,7 @@ Use `accountId` to target a specific account on multi-account channels like Tele
 - `accountId`: optional account id for multi-account channels. When `target: "last"`, the account id applies to the resolved last channel if it supports accounts; otherwise it is ignored. If the account id does not match a configured account for the resolved channel, delivery is skipped.
 - `prompt`: overrides the default prompt body (not merged).
 - `ackMaxChars`: max chars allowed after `HEARTBEAT_OK` before delivery.
+- `suppressToolErrorWarnings`: when true, suppresses tool error warning payloads during heartbeat runs.
 - `activeHours`: restricts heartbeat runs to a time window. Object with `start` (HH:MM, inclusive), `end` (HH:MM exclusive; `24:00` allowed for end-of-day), and optional `timezone`.
   - Omitted or `"user"`: uses your `agents.defaults.userTimezone` if set, otherwise falls back to the host system timezone.
   - `"local"`: always uses the host system timezone.

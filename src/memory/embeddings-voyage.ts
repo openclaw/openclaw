@@ -1,5 +1,6 @@
+import { resolveRemoteEmbeddingBearerClient } from "./embeddings-remote-client.js";
+import { fetchRemoteEmbeddingVectors } from "./embeddings-remote-fetch.js";
 import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.js";
-import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
 
 export type VoyageEmbeddingClient = {
   baseUrl: string;
@@ -44,20 +45,12 @@ export async function createVoyageEmbeddingProvider(
       body.input_type = input_type;
     }
 
-    const res = await fetch(url, {
-      method: "POST",
+    return await fetchRemoteEmbeddingVectors({
+      url,
       headers: client.headers,
-      body: JSON.stringify(body),
+      body,
+      errorPrefix: "voyage embeddings failed",
     });
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`voyage embeddings failed: ${res.status} ${text}`);
-    }
-    const payload = (await res.json()) as {
-      data?: Array<{ embedding?: number[] }>;
-    };
-    const data = payload.data ?? [];
-    return data.map((entry) => entry.embedding ?? []);
   };
 
   return {
@@ -78,29 +71,11 @@ export async function createVoyageEmbeddingProvider(
 export async function resolveVoyageEmbeddingClient(
   options: EmbeddingProviderOptions,
 ): Promise<VoyageEmbeddingClient> {
-  const remote = options.remote;
-  const remoteApiKey = remote?.apiKey?.trim();
-  const remoteBaseUrl = remote?.baseUrl?.trim();
-
-  const apiKey = remoteApiKey
-    ? remoteApiKey
-    : requireApiKey(
-        await resolveApiKeyForProvider({
-          provider: "voyage",
-          cfg: options.config,
-          agentDir: options.agentDir,
-        }),
-        "voyage",
-      );
-
-  const providerConfig = options.config.models?.providers?.voyage;
-  const baseUrl = remoteBaseUrl || providerConfig?.baseUrl?.trim() || DEFAULT_VOYAGE_BASE_URL;
-  const headerOverrides = Object.assign({}, providerConfig?.headers, remote?.headers);
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    Authorization: `Bearer ${apiKey}`,
-    ...headerOverrides,
-  };
+  const { baseUrl, headers } = await resolveRemoteEmbeddingBearerClient({
+    provider: "voyage",
+    options,
+    defaultBaseUrl: DEFAULT_VOYAGE_BASE_URL,
+  });
   const model = normalizeVoyageModel(options.model);
   return { baseUrl, headers, model };
 }

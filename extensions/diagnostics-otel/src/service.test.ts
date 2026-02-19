@@ -104,6 +104,7 @@ vi.mock("openclaw/plugin-sdk", async () => {
   };
 });
 
+import type { OpenClawPluginServiceContext } from "openclaw/plugin-sdk";
 import { emitDiagnosticEvent } from "openclaw/plugin-sdk";
 import { createDiagnosticsOtelService } from "./service.js";
 
@@ -130,7 +131,7 @@ describe("diagnostics-otel service", () => {
     });
 
     const service = createDiagnosticsOtelService();
-    await service.start({
+    const ctx: OpenClawPluginServiceContext = {
       config: {
         diagnostics: {
           enabled: true,
@@ -150,7 +151,9 @@ describe("diagnostics-otel service", () => {
         error: vi.fn(),
         debug: vi.fn(),
       },
-    });
+      stateDir: "/tmp/openclaw-diagnostics-otel-test",
+    };
+    await service.start(ctx);
 
     emitDiagnosticEvent({
       type: "webhook.received",
@@ -222,6 +225,6 @@ describe("diagnostics-otel service", () => {
     });
     expect(logEmit).toHaveBeenCalled();
 
-    await service.stop?.();
+    await service.stop?.(ctx);
   });
 });
