@@ -45,6 +45,9 @@ describe("downloadLineMedia", () => {
     expect(result.size).toBe(jpeg.length);
     expect(result.contentType).toBe("image/jpeg");
     expect(typeof writtenPath).toBe("string");
+    if (typeof writtenPath !== "string") {
+      throw new Error("expected string temp file path");
+    }
     expect(result.path).toBe(writtenPath);
     expect(writtenPath).toContain("line-media-");
     expect(writtenPath).toMatch(/\.jpg$/);
