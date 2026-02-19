@@ -145,12 +145,19 @@ jobs:
                   issue_number: pullRequest.number,
                   body: noisyPrMessage,
                 });
-                await github.rest.issues.update({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: pullRequest.number,
-                  state: "closed",
-                });
+                try {
+                  await github.rest.issues.update({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: pullRequest.number,
+                    state: "closed",
+                  });
+                } catch (error) {
+                  // Ignore 422 errors (PR may already be closed)
+                  if (error?.status !== 422) {
+                    throw error;
+                  }
+                }
                 return;
               }
               const labelCount = labelSet.size;
@@ -161,33 +168,54 @@ jobs:
                   issue_number: pullRequest.number,
                   body: noisyPrMessage,
                 });
-                await github.rest.issues.update({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: pullRequest.number,
-                  state: "closed",
-                });
+                try {
+                  await github.rest.issues.update({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: pullRequest.number,
+                    state: "closed",
+                  });
+                } catch (error) {
+                  // Ignore 422 errors (PR may already be closed)
+                  if (error?.status !== 422) {
+                    throw error;
+                  }
+                }
                 return;
               }
               if (labelSet.has(invalidLabel)) {
-                await github.rest.issues.update({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: pullRequest.number,
-                  state: "closed",
-                });
+                try {
+                  await github.rest.issues.update({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: pullRequest.number,
+                    state: "closed",
+                  });
+                } catch (error) {
+                  // Ignore 422 errors (PR may already be closed)
+                  if (error?.status !== 422) {
+                    throw error;
+                  }
+                }
                 return;
               }
             }
 
             if (issue && labelSet.has(invalidLabel)) {
-              await github.rest.issues.update({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: issue.number,
-                state: "closed",
-                state_reason: "not_planned",
-              });
+              try {
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  state: "closed",
+                  state_reason: "not_planned",
+                });
+              } catch (error) {
+                // Ignore 422 errors (issue may already be closed)
+                if (error?.status !== 422) {
+                  throw error;
+                }
+              }
               return;
             }
 
@@ -206,12 +234,19 @@ jobs:
             });
 
             if (rule.close) {
-              await github.rest.issues.update({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: issueNumber,
-                state: "closed",
-              });
+              try {
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issueNumber,
+                  state: "closed",
+                });
+              } catch (error) {
+                // Ignore 422 errors (issue may already be closed)
+                if (error?.status !== 422) {
+                  throw error;
+                }
+              }
             }
 
             if (rule.lock) {
