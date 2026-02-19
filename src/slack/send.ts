@@ -1,5 +1,9 @@
-import { type FilesUploadV2Arguments, type WebClient } from "@slack/web-api";
-import type { SlackTokenSource } from "./accounts.js";
+import {
+  type Block,
+  type FilesUploadV2Arguments,
+  type KnownBlock,
+  type WebClient,
+} from "@slack/web-api";
 import {
   chunkMarkdownTextWithMode,
   resolveChunkMode,
@@ -9,7 +13,10 @@ import { loadConfig } from "../config/config.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { logVerbose } from "../globals.js";
 import { loadWebMedia } from "../web/media.js";
+import type { SlackTokenSource } from "./accounts.js";
 import { resolveSlackAccount } from "./accounts.js";
+import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
+import { validateSlackBlocksArray } from "./blocks-input.js";
 import { createSlackWebClient } from "./client.js";
 import { markdownToSlackMrkdwnChunks } from "./format.js";
 import { parseSlackTarget } from "./targets.js";
@@ -37,9 +44,11 @@ type SlackSendOpts = {
   token?: string;
   accountId?: string;
   mediaUrl?: string;
+  mediaLocalRoots?: readonly string[];
   client?: WebClient;
   threadTs?: string;
   identity?: SlackSendIdentity;
+  blocks?: (Block | KnownBlock)[];
 };
 
 function hasCustomIdentity(identity?: SlackSendIdentity): boolean {
@@ -78,11 +87,13 @@ async function postSlackMessageBestEffort(params: {
   text: string;
   threadTs?: string;
   identity?: SlackSendIdentity;
+  blocks?: (Block | KnownBlock)[];
 }) {
   const basePayload = {
     channel: params.channelId,
     text: params.text,
     thread_ts: params.threadTs,
+    ...(params.blocks?.length ? { blocks: params.blocks } : {}),
   };
   try {
     // Slack Web API types model icon_url and icon_emoji as mutually exclusive.
@@ -170,6 +181,7 @@ async function uploadSlackFile(params: {
   client: WebClient;
   channelId: string;
   mediaUrl: string;
+  mediaLocalRoots?: readonly string[];
   caption?: string;
   threadTs?: string;
   maxBytes?: number;
@@ -178,7 +190,10 @@ async function uploadSlackFile(params: {
     buffer,
     contentType: _contentType,
     fileName,
-  } = await loadWebMedia(params.mediaUrl, params.maxBytes);
+  } = await loadWebMedia(params.mediaUrl, {
+    maxBytes: params.maxBytes,
+    localRoots: params.mediaLocalRoots,
+  });
   const basePayload = {
     channel_id: params.channelId,
     file: buffer,
@@ -209,8 +224,9 @@ export async function sendMessageSlack(
   opts: SlackSendOpts = {},
 ): Promise<SlackSendResult> {
   const trimmedMessage = message?.trim() ?? "";
-  if (!trimmedMessage && !opts.mediaUrl) {
-    throw new Error("Slack send requires text or media");
+  const blocks = opts.blocks == null ? undefined : validateSlackBlocksArray(opts.blocks);
+  if (!trimmedMessage && !opts.mediaUrl && !blocks) {
+    throw new Error("Slack send requires text, blocks, or media");
   }
   const cfg = loadConfig();
   const account = resolveSlackAccount({
@@ -226,6 +242,24 @@ export async function sendMessageSlack(
   const client = opts.client ?? createSlackWebClient(token);
   const recipient = parseRecipient(to);
   const { channelId } = await resolveChannelId(client, recipient);
+  if (blocks) {
+    if (opts.mediaUrl) {
+      throw new Error("Slack send does not support blocks with mediaUrl");
+    }
+    const fallbackText = trimmedMessage || buildSlackBlocksFallbackText(blocks);
+    const response = await postSlackMessageBestEffort({
+      client,
+      channelId,
+      text: fallbackText,
+      threadTs: opts.threadTs,
+      identity: opts.identity,
+      blocks,
+    });
+    return {
+      messageId: response.ts ?? "unknown",
+      channelId,
+    };
+  }
   const textLimit = resolveTextChunkLimit(cfg, "slack", account.accountId);
   const chunkLimit = Math.min(textLimit, SLACK_TEXT_LIMIT);
   const tableMode = resolveMarkdownTableMode({
@@ -256,6 +290,7 @@ export async function sendMessageSlack(
       client,
       channelId,
       mediaUrl: opts.mediaUrl,
+      mediaLocalRoots: opts.mediaLocalRoots,
       caption: firstChunk,
       threadTs: opts.threadTs,
       maxBytes: mediaMaxBytes,

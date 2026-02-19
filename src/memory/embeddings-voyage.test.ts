@@ -1,23 +1,23 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as authModule from "../agents/model-auth.js";
+import { type FetchMock, withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { createVoyageEmbeddingProvider, normalizeVoyageModel } from "./embeddings-voyage.js";
 
-vi.mock("../agents/model-auth.js", () => ({
-  resolveApiKeyForProvider: vi.fn(),
-  requireApiKey: (auth: { apiKey?: string; mode?: string }, provider: string) => {
-    if (auth?.apiKey) {
-      return auth.apiKey;
-    }
-    throw new Error(`No API key resolved for provider "${provider}" (auth mode: ${auth?.mode}).`);
-  },
-}));
+vi.mock("../agents/model-auth.js", async () => {
+  const { createModelAuthMockModule } = await import("../test-utils/model-auth-mock.js");
+  return createModelAuthMockModule();
+});
 
-const createFetchMock = () =>
-  vi.fn(async () => ({
-    ok: true,
-    status: 200,
-    json: async () => ({ data: [{ embedding: [0.1, 0.2, 0.3] }] }),
-  })) as unknown as typeof fetch;
+const createFetchMock = () => {
+  const fetchMock = vi.fn<FetchMock>(
+    async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      new Response(JSON.stringify({ data: [{ embedding: [0.1, 0.2, 0.3] }] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+  );
+  return withFetchPreconnect(fetchMock);
+};
 
 describe("voyage embedding provider", () => {
   afterEach(() => {
@@ -48,7 +48,9 @@ describe("voyage embedding provider", () => {
       expect.objectContaining({ provider: "voyage" }),
     );
 
-    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    const call = fetchMock.mock.calls[0];
+    expect(call).toBeDefined();
+    const [url, init] = call as [RequestInfo | URL, RequestInit | undefined];
     expect(url).toBe("https://api.voyageai.com/v1/embeddings");
 
     const headers = (init?.headers ?? {}) as Record<string, string>;
@@ -81,7 +83,9 @@ describe("voyage embedding provider", () => {
 
     await result.provider.embedQuery("test");
 
-    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    const call = fetchMock.mock.calls[0];
+    expect(call).toBeDefined();
+    const [url, init] = call as [RequestInfo | URL, RequestInit | undefined];
     expect(url).toBe("https://proxy.example.com/embeddings");
 
     const headers = (init?.headers ?? {}) as Record<string, string>;
@@ -90,13 +94,17 @@ describe("voyage embedding provider", () => {
   });
 
   it("passes input_type=document for embedBatch", async () => {
-    const fetchMock = vi.fn(async () => ({
-      ok: true,
-      status: 200,
-      json: async () => ({
-        data: [{ embedding: [0.1, 0.2] }, { embedding: [0.3, 0.4] }],
-      }),
-    })) as unknown as typeof fetch;
+    const fetchMock = withFetchPreconnect(
+      vi.fn<FetchMock>(
+        async (_input: RequestInfo | URL, _init?: RequestInit) =>
+          new Response(
+            JSON.stringify({
+              data: [{ embedding: [0.1, 0.2] }, { embedding: [0.3, 0.4] }],
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+      ),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     vi.mocked(authModule.resolveApiKeyForProvider).mockResolvedValue({
@@ -114,7 +122,9 @@ describe("voyage embedding provider", () => {
 
     await result.provider.embedBatch(["doc1", "doc2"]);
 
-    const [, init] = fetchMock.mock.calls[0] ?? [];
+    const call = fetchMock.mock.calls[0];
+    expect(call).toBeDefined();
+    const [, init] = call as [RequestInfo | URL, RequestInit | undefined];
     const body = JSON.parse(init?.body as string);
     expect(body).toEqual({
       model: "voyage-4-large",

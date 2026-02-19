@@ -6,80 +6,95 @@ import {
   mergeMissing,
 } from "./legacy.shared.js";
 
+function migrateBindings(
+  raw: Record<string, unknown>,
+  changes: string[],
+  changeNote: string,
+  mutator: (match: Record<string, unknown>) => boolean,
+) {
+  const bindings = Array.isArray(raw.bindings) ? raw.bindings : null;
+  if (!bindings) {
+    return;
+  }
+
+  let touched = false;
+  for (const entry of bindings) {
+    if (!isRecord(entry)) {
+      continue;
+    }
+    const match = getRecord(entry.match);
+    if (!match) {
+      continue;
+    }
+    if (!mutator(match)) {
+      continue;
+    }
+    entry.match = match;
+    touched = true;
+  }
+
+  if (touched) {
+    raw.bindings = bindings;
+    changes.push(changeNote);
+  }
+}
+
+function ensureDefaultGroupEntry(section: Record<string, unknown>): {
+  groups: Record<string, unknown>;
+  entry: Record<string, unknown>;
+} {
+  const groups: Record<string, unknown> = isRecord(section.groups) ? section.groups : {};
+  const defaultKey = "*";
+  const entry: Record<string, unknown> = isRecord(groups[defaultKey]) ? groups[defaultKey] : {};
+  return { groups, entry };
+}
+
 export const LEGACY_CONFIG_MIGRATIONS_PART_1: LegacyConfigMigration[] = [
   {
     id: "bindings.match.provider->bindings.match.channel",
     describe: "Move bindings[].match.provider to bindings[].match.channel",
     apply: (raw, changes) => {
-      const bindings = Array.isArray(raw.bindings) ? raw.bindings : null;
-      if (!bindings) {
-        return;
-      }
-
-      let touched = false;
-      for (const entry of bindings) {
-        if (!isRecord(entry)) {
-          continue;
-        }
-        const match = getRecord(entry.match);
-        if (!match) {
-          continue;
-        }
-        if (typeof match.channel === "string" && match.channel.trim()) {
-          continue;
-        }
-        const provider = typeof match.provider === "string" ? match.provider.trim() : "";
-        if (!provider) {
-          continue;
-        }
-        match.channel = provider;
-        delete match.provider;
-        entry.match = match;
-        touched = true;
-      }
-
-      if (touched) {
-        raw.bindings = bindings;
-        changes.push("Moved bindings[].match.provider → bindings[].match.channel.");
-      }
+      migrateBindings(
+        raw,
+        changes,
+        "Moved bindings[].match.provider → bindings[].match.channel.",
+        (match) => {
+          if (typeof match.channel === "string" && match.channel.trim()) {
+            return false;
+          }
+          const provider = typeof match.provider === "string" ? match.provider.trim() : "";
+          if (!provider) {
+            return false;
+          }
+          match.channel = provider;
+          delete match.provider;
+          return true;
+        },
+      );
     },
   },
   {
     id: "bindings.match.accountID->bindings.match.accountId",
     describe: "Move bindings[].match.accountID to bindings[].match.accountId",
     apply: (raw, changes) => {
-      const bindings = Array.isArray(raw.bindings) ? raw.bindings : null;
-      if (!bindings) {
-        return;
-      }
-
-      let touched = false;
-      for (const entry of bindings) {
-        if (!isRecord(entry)) {
-          continue;
-        }
-        const match = getRecord(entry.match);
-        if (!match) {
-          continue;
-        }
-        if (match.accountId !== undefined) {
-          continue;
-        }
-        const accountID =
-          typeof match.accountID === "string" ? match.accountID.trim() : match.accountID;
-        if (!accountID) {
-          continue;
-        }
-        match.accountId = accountID;
-        delete match.accountID;
-        entry.match = match;
-        touched = true;
-      }
-
-      if (touched) {
-        raw.bindings = bindings;
-        changes.push("Moved bindings[].match.accountID → bindings[].match.accountId.");
-      }
+      migrateBindings(
+        raw,
+        changes,
+        "Moved bindings[].match.accountID → bindings[].match.accountId.",
+        (match) => {
+          if (match.accountId !== undefined) {
+            return false;
+          }
+          const accountID =
+            typeof match.accountID === "string" ? match.accountID.trim() : match.accountID;
+          if (!accountID) {
+            return false;
+          }
+          match.accountId = accountID;
+          delete match.accountID;
+          return true;
+        },
+      );
     },
   },
   {
@@ -263,15 +278,8 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_1: LegacyConfigMigration[] = [
           channels[key] && typeof channels[key] === "object"
             ? (channels[key] as Record<string, unknown>)
             : {};
-        const groups =
-          section.groups && typeof section.groups === "object"
-            ? (section.groups as Record<string, unknown>)
-            : {};
+        const { groups, entry } = ensureDefaultGroupEntry(section);
         const defaultKey = "*";
-        const entry =
-          groups[defaultKey] && typeof groups[defaultKey] === "object"
-            ? (groups[defaultKey] as Record<string, unknown>)
-            : {};
         if (entry.requireMention === undefined) {
           entry.requireMention = requireMention;
           groups[defaultKey] = entry;
@@ -349,16 +357,8 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_1: LegacyConfigMigration[] = [
         return;
       }
 
-      const groups =
-        (telegram as Record<string, unknown>).groups &&
-        typeof (telegram as Record<string, unknown>).groups === "object"
-          ? ((telegram as Record<string, unknown>).groups as Record<string, unknown>)
-          : {};
+      const { groups, entry } = ensureDefaultGroupEntry(telegram as Record<string, unknown>);
       const defaultKey = "*";
-      const entry =
-        groups[defaultKey] && typeof groups[defaultKey] === "object"
-          ? (groups[defaultKey] as Record<string, unknown>)
-          : {};
 
       if (entry.requireMention === undefined) {
         entry.requireMention = requireMention;
