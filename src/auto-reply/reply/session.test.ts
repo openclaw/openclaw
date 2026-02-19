@@ -5,7 +5,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { buildModelAliasIndex } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { saveSessionStore } from "../../config/sessions.js";
+import { loadSessionStore, saveSessionStore } from "../../config/sessions.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.ts";
 import { enqueueSystemEvent, resetSystemEventsForTest } from "../../infra/system-events.js";
 import { applyResetModelOverride } from "./session-reset-model.js";
@@ -925,6 +925,50 @@ describe("applyResetModelOverride", () => {
     expect(sessionEntry.authProfileOverride).toBeUndefined();
     expect(sessionEntry.authProfileOverrideSource).toBeUndefined();
     expect(sessionEntry.authProfileOverrideCompactionCount).toBeUndefined();
+  });
+
+  it("persists reset-model updates without overwriting newer session fields", async () => {
+    const storePath = await createStorePath("openclaw-reset-model-persist-");
+    const sessionKey = "agent:main:dm:1";
+    const cfg = {} as OpenClawConfig;
+    const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: "openai" });
+    const sessionEntry: SessionEntry = {
+      sessionId: "s1",
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    const sessionCtx = { BodyStripped: "minimax summarize" };
+    const ctx = { ChatType: "direct" };
+
+    await saveSessionStore(storePath, {
+      [sessionKey]: {
+        sessionId: "s1",
+        updatedAt: Date.now(),
+        lastTo: "fresh-recipient",
+        deliveryContext: { channel: "telegram", to: "fresh-recipient" },
+      },
+    });
+
+    await applyResetModelOverride({
+      cfg,
+      resetTriggered: true,
+      bodyStripped: "minimax summarize",
+      sessionCtx,
+      ctx,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      defaultProvider: "openai",
+      defaultModel: "gpt-4o-mini",
+      aliasIndex,
+    });
+
+    const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+    expect(persisted?.providerOverride).toBe("minimax");
+    expect(persisted?.modelOverride).toBe("m2.1");
+    expect(persisted?.lastTo).toBe("fresh-recipient");
+    expect(persisted?.deliveryContext?.to).toBe("fresh-recipient");
   });
 
   it("skips when resetTriggered is false", async () => {
