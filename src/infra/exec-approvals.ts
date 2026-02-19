@@ -7,7 +7,13 @@ import { requestJsonlSocket } from "./jsonl-socket.js";
 export * from "./exec-approvals-analysis.js";
 export * from "./exec-approvals-allowlist.js";
 
-export type ExecHost = "sandbox" | "gateway" | "node";
+export type ExecHost =
+  | "sandbox"
+  | "gateway"
+  | "node"
+  | "remote-ssh"
+  | "remote-container"
+  | "remote-k8s-pod";
 export type ExecSecurity = "deny" | "allowlist" | "full";
 export type ExecAsk = "off" | "on-miss" | "always";
 

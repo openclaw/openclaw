@@ -194,10 +194,13 @@ Core parameters:
 - `background` (immediate background)
 - `timeout` (seconds; kills the process if exceeded, default 1800)
 - `elevated` (bool; run on host if elevated mode is enabled/allowed; only changes behavior when the agent is sandboxed)
-- `host` (`sandbox | gateway | node`)
+- `host` (`sandbox | gateway | node | remote-ssh | remote-container | remote-k8s-pod`)
 - `security` (`deny | allowlist | full`)
 - `ask` (`off | on-miss | always`)
 - `node` (node id/name for `host=node`)
+- `sshTarget` / `sshIdentity` / `sshShell` (for `host=remote-ssh`)
+- `containerContext` / `containerSshTarget` / `containerSshIdentity` / `containerName` / `containerShell` (for `host=remote-container`)
+- `k8sContext` / `k8sNamespace` / `k8sPod` / `k8sContainer` / `k8sShell` (for `host=remote-k8s-pod`)
 - Need a real TTY? Set `pty: true`.
 
 Notes:
@@ -208,7 +211,10 @@ Notes:
 - `elevated` is gated by `tools.elevated` plus any `agents.list[].tools.elevated` override (both must allow) and is an alias for `host=gateway` + `security=full`.
 - `elevated` only changes behavior when the agent is sandboxed (otherwise it’s a no-op).
 - `host=node` can target a macOS companion app or a headless node host (`openclaw node run`).
-- gateway/node approvals and allowlists: [Exec approvals](/tools/exec-approvals).
+- `host=remote-container` needs `containerName` plus either `containerContext` (remote Docker context) or `containerSshTarget` (container-over-SSH).
+- `host=remote-k8s-pod` needs `k8sNamespace` and `k8sPod`.
+- remote hosts reuse a persistent interactive shell per target (30-minute idle timeout).
+- gateway/node/remote approvals and allowlists: [Exec approvals](/tools/exec-approvals).
 
 ### `process`
 

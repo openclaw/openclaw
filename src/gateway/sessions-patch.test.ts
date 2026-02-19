@@ -149,6 +149,36 @@ describe("gateway sessions patch", () => {
     expect(res.error.message).toContain("invalid elevatedLevel");
   });
 
+  test("accepts remote execHost values", async () => {
+    const store: Record<string, SessionEntry> = {};
+    const res = await applySessionsPatchToStore({
+      cfg: {} as OpenClawConfig,
+      store,
+      storeKey: "agent:main:main",
+      patch: { key: "agent:main:main", execHost: "remote-k8s-pod" },
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.entry.execHost).toBe("remote-k8s-pod");
+  });
+
+  test("rejects invalid execHost values with updated host list", async () => {
+    const store: Record<string, SessionEntry> = {};
+    const res = await applySessionsPatchToStore({
+      cfg: {} as OpenClawConfig,
+      store,
+      storeKey: "agent:main:main",
+      patch: { key: "agent:main:main", execHost: "remote-dream" },
+    });
+    expect(res.ok).toBe(false);
+    if (res.ok) {
+      return;
+    }
+    expect(res.error.message).toContain("remote-k8s-pod");
+  });
+
   test("clears auth overrides when model patch changes", async () => {
     const store: Record<string, SessionEntry> = {
       "agent:main:main": {

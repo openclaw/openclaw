@@ -99,7 +99,7 @@ Text + native (when enabled):
 - `/verbose on|full|off` (alias: `/v`)
 - `/reasoning on|off|stream` (alias: `/reason`; when on, sends a separate message prefixed `Reasoning:`; `stream` = Telegram draft only)
 - `/elevated on|off|ask|full` (alias: `/elev`; `full` skips exec approvals)
-- `/exec host=<sandbox|gateway|node> security=<deny|allowlist|full> ask=<off|on-miss|always> node=<id>` (send `/exec` to show current)
+- `/exec host=<sandbox|gateway|node|remote-ssh|remote-container|remote-k8s-pod> security=<deny|allowlist|full> ask=<off|on-miss|always> node=<id>` (send `/exec` to show current)
 - `/model <name>` (alias: `/models`; or `/<alias>` from `agents.defaults.models.*.alias`)
 - `/queue <mode>` (plus options like `debounce:2s cap:25 drop:summarize`; send `/queue` to see current settings)
 - `/bash <command>` (host-only; alias for `! <command>`; requires `commands.bash: true` + `tools.elevated` allowlists)

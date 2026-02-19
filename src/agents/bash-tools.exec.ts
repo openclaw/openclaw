@@ -60,6 +60,7 @@ import {
   resolveWorkdir,
   truncateMiddle,
 } from "./bash-tools.shared.js";
+import { type RemoteExecTarget, runRemoteExec } from "./exec-remote.js";
 import { callGatewayTool } from "./tools/gateway.js";
 import { listNodes, resolveNodeIdFromList } from "./tools/nodes-utils.js";
 
@@ -68,6 +69,27 @@ export type ExecToolDefaults = {
   security?: ExecSecurity;
   ask?: ExecAsk;
   node?: string;
+  remote?: {
+    ssh?: {
+      target?: string;
+      identity?: string;
+      shell?: string;
+    };
+    container?: {
+      context?: string;
+      sshTarget?: string;
+      sshIdentity?: string;
+      name?: string;
+      shell?: string;
+    };
+    k8sPod?: {
+      context?: string;
+      namespace?: string;
+      pod?: string;
+      container?: string;
+      shell?: string;
+    };
+  };
   pathPrepend?: string[];
   safeBins?: string[];
   agentId?: string;
@@ -211,6 +233,90 @@ async function validateScriptFileForShellBleed(params: {
   }
 }
 
+function resolveRemoteTarget(params: {
+  host: ExecHost;
+  defaults?: ExecToolDefaults["remote"];
+  args: {
+    sshTarget?: string;
+    sshIdentity?: string;
+    sshShell?: string;
+    containerContext?: string;
+    containerSshTarget?: string;
+    containerSshIdentity?: string;
+    containerName?: string;
+    containerShell?: string;
+    k8sContext?: string;
+    k8sNamespace?: string;
+    k8sPod?: string;
+    k8sContainer?: string;
+    k8sShell?: string;
+  };
+}): RemoteExecTarget | null {
+  const defaults = params.defaults;
+
+  if (params.host === "remote-ssh") {
+    const sshTarget = params.args.sshTarget?.trim() || defaults?.ssh?.target?.trim();
+    if (!sshTarget) {
+      throw new Error(
+        "remote-ssh requires sshTarget (set exec.sshTarget or tools.exec.remote.ssh.target).",
+      );
+    }
+    return {
+      host: "remote-ssh",
+      sshTarget,
+      sshIdentity: params.args.sshIdentity?.trim() || defaults?.ssh?.identity?.trim(),
+      sshShell: params.args.sshShell?.trim() || defaults?.ssh?.shell?.trim(),
+    };
+  }
+
+  if (params.host === "remote-container") {
+    const containerName = params.args.containerName?.trim() || defaults?.container?.name?.trim();
+    if (!containerName) {
+      throw new Error(
+        "remote-container requires containerName (set exec.containerName or tools.exec.remote.container.name).",
+      );
+    }
+    const containerContext =
+      params.args.containerContext?.trim() || defaults?.container?.context?.trim();
+    const containerSshTarget =
+      params.args.containerSshTarget?.trim() || defaults?.container?.sshTarget?.trim();
+    if (!containerContext && !containerSshTarget) {
+      throw new Error(
+        "remote-container requires containerContext (Docker context) or containerSshTarget (container-over-SSH).",
+      );
+    }
+    return {
+      host: "remote-container",
+      containerName,
+      containerContext: containerContext || undefined,
+      containerSshTarget: containerSshTarget || undefined,
+      containerSshIdentity:
+        params.args.containerSshIdentity?.trim() || defaults?.container?.sshIdentity?.trim(),
+      containerShell: params.args.containerShell?.trim() || defaults?.container?.shell?.trim(),
+    };
+  }
+
+  if (params.host === "remote-k8s-pod") {
+    const k8sNamespace = params.args.k8sNamespace?.trim() || defaults?.k8sPod?.namespace?.trim();
+    const k8sPod = params.args.k8sPod?.trim() || defaults?.k8sPod?.pod?.trim();
+    if (!k8sNamespace || !k8sPod) {
+      throw new Error(
+        "remote-k8s-pod requires k8sNamespace and k8sPod (set exec.k8sNamespace/k8sPod or tools.exec.remote.k8sPod.namespace/pod).",
+      );
+    }
+    return {
+      host: "remote-k8s-pod",
+      k8sContext: params.args.k8sContext?.trim() || defaults?.k8sPod?.context?.trim(),
+      k8sNamespace,
+      k8sPod,
+      k8sContainer: params.args.k8sContainer?.trim() || defaults?.k8sPod?.container?.trim(),
+      k8sShell: params.args.k8sShell?.trim() || defaults?.k8sPod?.shell?.trim(),
+    };
+  }
+
+  return null;
+}
+
 export function createExecTool(
   defaults?: ExecToolDefaults,
   // oxlint-disable-next-line typescript/no-explicit-any
@@ -258,6 +364,19 @@ export function createExecTool(
         security?: string;
         ask?: string;
         node?: string;
+        sshTarget?: string;
+        sshIdentity?: string;
+        sshShell?: string;
+        containerContext?: string;
+        containerSshTarget?: string;
+        containerSshIdentity?: string;
+        containerName?: string;
+        containerShell?: string;
+        k8sContext?: string;
+        k8sNamespace?: string;
+        k8sPod?: string;
+        k8sContainer?: string;
+        k8sShell?: string;
       };
 
       if (!params.command) {
@@ -693,6 +812,320 @@ export function createExecTool(
             aggregated: [stdout, stderr, errorText].filter(Boolean).join("\n"),
             cwd: workdir,
           } satisfies ExecToolDetails,
+        };
+      }
+
+      if (
+        (host === "remote-ssh" || host === "remote-container" || host === "remote-k8s-pod") &&
+        !bypassApprovals
+      ) {
+        const remoteTarget = resolveRemoteTarget({
+          host,
+          defaults: defaults?.remote,
+          args: {
+            sshTarget: params.sshTarget,
+            sshIdentity: params.sshIdentity,
+            sshShell: params.sshShell,
+            containerContext: params.containerContext,
+            containerSshTarget: params.containerSshTarget,
+            containerSshIdentity: params.containerSshIdentity,
+            containerName: params.containerName,
+            containerShell: params.containerShell,
+            k8sContext: params.k8sContext,
+            k8sNamespace: params.k8sNamespace,
+            k8sPod: params.k8sPod,
+            k8sContainer: params.k8sContainer,
+            k8sShell: params.k8sShell,
+          },
+        });
+        if (!remoteTarget) {
+          throw new Error(`exec denied: unsupported remote host ${host}`);
+        }
+
+        const approvals = resolveExecApprovals(agentId, { security, ask });
+        const hostSecurity = minSecurity(security, approvals.agent.security);
+        const hostAsk = maxAsk(ask, approvals.agent.ask);
+        const askFallback = approvals.agent.askFallback;
+        if (hostSecurity === "deny") {
+          throw new Error(`exec denied: host=${host} security=deny`);
+        }
+        const allowlistEval = evaluateShellAllowlist({
+          command: params.command,
+          allowlist: approvals.allowlist,
+          safeBins,
+          cwd: workdir,
+          env,
+          platform: process.platform,
+        });
+        const allowlistMatches = allowlistEval.allowlistMatches;
+        const analysisOk = allowlistEval.analysisOk;
+        const allowlistSatisfied =
+          hostSecurity === "allowlist" && analysisOk ? allowlistEval.allowlistSatisfied : false;
+        const requiresAsk = requiresExecApproval({
+          ask: hostAsk,
+          security: hostSecurity,
+          analysisOk,
+          allowlistSatisfied,
+        });
+
+        let remoteExecCommand = params.command;
+        if (
+          hostSecurity === "allowlist" &&
+          analysisOk &&
+          allowlistSatisfied &&
+          allowlistEval.segmentSatisfiedBy.some((by) => by === "safeBins")
+        ) {
+          const safe = buildSafeBinsShellCommand({
+            command: params.command,
+            segments: allowlistEval.segments,
+            segmentSatisfiedBy: allowlistEval.segmentSatisfiedBy,
+            platform: process.platform,
+          });
+          if (!safe.ok || !safe.command) {
+            const fallback = buildSafeShellCommand({
+              command: params.command,
+              platform: process.platform,
+            });
+            if (!fallback.ok || !fallback.command) {
+              throw new Error(
+                `exec denied: safeBins sanitize failed (${safe.reason ?? "unknown"})`,
+              );
+            }
+            warnings.push(
+              "Warning: safeBins hardening used fallback quoting due to parser mismatch.",
+            );
+            remoteExecCommand = fallback.command;
+          } else {
+            warnings.push(
+              "Warning: safeBins hardening disabled glob/variable expansion for stdin-only segments.",
+            );
+            remoteExecCommand = safe.command;
+          }
+        }
+
+        if (requiresAsk) {
+          const approvalId = crypto.randomUUID();
+          const approvalSlug = createApprovalSlug(approvalId);
+          const expiresAtMs = Date.now() + DEFAULT_APPROVAL_TIMEOUT_MS;
+          const contextKey = `exec:${approvalId}`;
+          const resolvedPath = allowlistEval.segments[0]?.resolution?.resolvedPath;
+          const noticeSeconds = Math.max(1, Math.round(approvalRunningNoticeMs / 1000));
+          const commandText = params.command;
+          const effectiveTimeout =
+            typeof params.timeout === "number" ? params.timeout : defaultTimeoutSec;
+          const warningText = warnings.length ? `${warnings.join("\n")}\n\n` : "";
+
+          void (async () => {
+            let decision: string | null = null;
+            try {
+              const decisionResult = await callGatewayTool<{ decision: string }>(
+                "exec.approval.request",
+                { timeoutMs: DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS },
+                {
+                  id: approvalId,
+                  command: commandText,
+                  cwd: workdir,
+                  host,
+                  security: hostSecurity,
+                  ask: hostAsk,
+                  agentId,
+                  resolvedPath,
+                  sessionKey: defaults?.sessionKey,
+                  timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
+                },
+              );
+              const decisionValue =
+                decisionResult && typeof decisionResult === "object"
+                  ? (decisionResult as { decision?: unknown }).decision
+                  : undefined;
+              decision = typeof decisionValue === "string" ? decisionValue : null;
+            } catch {
+              emitExecSystemEvent(
+                `Exec denied (${host} id=${approvalId}, approval-request-failed): ${commandText}`,
+                { sessionKey: notifySessionKey, contextKey },
+              );
+              return;
+            }
+
+            let approvedByAsk = false;
+            let deniedReason: string | null = null;
+
+            if (decision === "deny") {
+              deniedReason = "user-denied";
+            } else if (!decision) {
+              if (askFallback === "full") {
+                approvedByAsk = true;
+              } else if (askFallback === "allowlist") {
+                if (!analysisOk || !allowlistSatisfied) {
+                  deniedReason = "approval-timeout (allowlist-miss)";
+                } else {
+                  approvedByAsk = true;
+                }
+              } else {
+                deniedReason = "approval-timeout";
+              }
+            } else if (decision === "allow-once") {
+              approvedByAsk = true;
+            } else if (decision === "allow-always") {
+              approvedByAsk = true;
+              if (hostSecurity === "allowlist") {
+                for (const segment of allowlistEval.segments) {
+                  const pattern = segment.resolution?.resolvedPath ?? "";
+                  if (pattern) {
+                    addAllowlistEntry(approvals.file, agentId, pattern);
+                  }
+                }
+              }
+            }
+
+            if (
+              hostSecurity === "allowlist" &&
+              (!analysisOk || !allowlistSatisfied) &&
+              !approvedByAsk
+            ) {
+              deniedReason = deniedReason ?? "allowlist-miss";
+            }
+
+            if (deniedReason) {
+              emitExecSystemEvent(
+                `Exec denied (${host} id=${approvalId}, ${deniedReason}): ${commandText}`,
+                { sessionKey: notifySessionKey, contextKey },
+              );
+              return;
+            }
+
+            if (allowlistMatches.length > 0) {
+              const seen = new Set<string>();
+              for (const match of allowlistMatches) {
+                if (seen.has(match.pattern)) {
+                  continue;
+                }
+                seen.add(match.pattern);
+                recordAllowlistUse(
+                  approvals.file,
+                  agentId,
+                  match,
+                  commandText,
+                  resolvedPath ?? undefined,
+                );
+              }
+            }
+
+            let runningTimer: NodeJS.Timeout | null = null;
+            if (approvalRunningNoticeMs > 0) {
+              runningTimer = setTimeout(() => {
+                emitExecSystemEvent(
+                  `Exec running (${host} id=${approvalId}, >${noticeSeconds}s): ${commandText}`,
+                  { sessionKey: notifySessionKey, contextKey },
+                );
+              }, approvalRunningNoticeMs);
+            }
+
+            let remoteResult;
+            try {
+              remoteResult = await runRemoteExec({
+                target: remoteTarget,
+                command: remoteExecCommand,
+                workdir,
+                env,
+                timeoutSec: effectiveTimeout,
+              });
+            } catch {
+              if (runningTimer) {
+                clearTimeout(runningTimer);
+              }
+              emitExecSystemEvent(
+                `Exec denied (${host} id=${approvalId}, spawn-failed): ${commandText}`,
+                { sessionKey: notifySessionKey, contextKey },
+              );
+              return;
+            }
+            if (runningTimer) {
+              clearTimeout(runningTimer);
+            }
+            const aggregated = [remoteResult.stdout, remoteResult.stderr, remoteResult.error]
+              .filter(Boolean)
+              .join("\n")
+              .trim();
+            const output = normalizeNotifyOutput(tail(aggregated, DEFAULT_NOTIFY_TAIL_CHARS));
+            const exitLabel = remoteResult.timedOut
+              ? "timeout"
+              : `code ${remoteResult.exitCode ?? "?"}`;
+            const summary = output
+              ? `Exec finished (${host} id=${approvalId}, ${exitLabel})\n${output}`
+              : `Exec finished (${host} id=${approvalId}, ${exitLabel})`;
+            emitExecSystemEvent(summary, { sessionKey: notifySessionKey, contextKey });
+          })();
+
+          return {
+            content: [
+              {
+                type: "text",
+                text:
+                  `${warningText}Approval required (id ${approvalSlug}). ` +
+                  "Approve to run; updates will arrive after completion.",
+              },
+            ],
+            details: {
+              status: "approval-pending",
+              approvalId,
+              approvalSlug,
+              expiresAtMs,
+              host,
+              command: params.command,
+              cwd: workdir,
+            },
+          };
+        }
+
+        if (hostSecurity === "allowlist" && (!analysisOk || !allowlistSatisfied)) {
+          throw new Error("exec denied: allowlist miss");
+        }
+        if (allowlistMatches.length > 0) {
+          const seen = new Set<string>();
+          for (const match of allowlistMatches) {
+            if (seen.has(match.pattern)) {
+              continue;
+            }
+            seen.add(match.pattern);
+            recordAllowlistUse(
+              approvals.file,
+              agentId,
+              match,
+              params.command,
+              allowlistEval.segments[0]?.resolution?.resolvedPath,
+            );
+          }
+        }
+
+        const effectiveTimeout =
+          typeof params.timeout === "number" ? params.timeout : defaultTimeoutSec;
+        const startedAt = Date.now();
+        const remoteResult = await runRemoteExec({
+          target: remoteTarget,
+          command: remoteExecCommand,
+          workdir,
+          env,
+          timeoutSec: effectiveTimeout,
+        });
+        const aggregated = [remoteResult.stdout, remoteResult.stderr, remoteResult.error]
+          .filter(Boolean)
+          .join("\n")
+          .trim();
+        return {
+          content: [
+            {
+              type: "text",
+              text: `${warnings.length ? `${warnings.join("\n")}\n\n` : ""}${aggregated || "(no output)"}`,
+            },
+          ],
+          details: {
+            status: remoteResult.success ? "completed" : "failed",
+            exitCode: remoteResult.exitCode,
+            durationMs: Date.now() - startedAt,
+            aggregated,
+            cwd: workdir,
+          },
         };
       }
 

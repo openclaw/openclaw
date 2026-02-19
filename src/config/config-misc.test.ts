@@ -125,6 +125,51 @@ describe("gateway.remote.transport", () => {
   });
 });
 
+describe("tools.exec remote hosts", () => {
+  it("accepts remote exec host values", () => {
+    const res = validateConfigObject({
+      tools: {
+        exec: {
+          host: "remote-k8s-pod",
+          security: "allowlist",
+          ask: "on-miss",
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts remote exec connection defaults", () => {
+    const res = validateConfigObject({
+      tools: {
+        exec: {
+          host: "remote-container",
+          remote: {
+            container: {
+              context: "prod-ssh",
+              name: "openclaw-worker",
+              shell: "/bin/sh",
+            },
+            k8sPod: {
+              context: "prod-cluster",
+              namespace: "openclaw",
+              pod: "gateway-7f44d6f8f9-k9x7t",
+              container: "gateway",
+              shell: "/bin/sh",
+            },
+            ssh: {
+              target: "user@gateway-host",
+              identity: "~/.ssh/id_ed25519",
+              shell: "/bin/sh",
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+});
+
 describe("gateway.tools config", () => {
   it("accepts gateway.tools allow and deny lists", () => {
     const res = validateConfigObject({

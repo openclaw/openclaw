@@ -179,13 +179,51 @@ export type GroupToolPolicyBySenderConfig = Record<string, GroupToolPolicyConfig
 
 export type ExecToolConfig = {
   /** Exec host routing (default: sandbox). */
-  host?: "sandbox" | "gateway" | "node";
+  host?: "sandbox" | "gateway" | "node" | "remote-ssh" | "remote-container" | "remote-k8s-pod";
   /** Exec security mode (default: deny). */
   security?: "deny" | "allowlist" | "full";
   /** Exec ask mode (default: on-miss). */
   ask?: "off" | "on-miss" | "always";
   /** Default node binding for exec.host=node (node id/name). */
   node?: string;
+  /** Remote execution defaults for remote-* exec hosts. */
+  remote?: {
+    /** Defaults for host=remote-ssh. */
+    ssh?: {
+      /** SSH target in user@host or user@host:port format. */
+      target?: string;
+      /** Optional SSH identity file path. */
+      identity?: string;
+      /** Optional remote shell command (default: /bin/sh). */
+      shell?: string;
+    };
+    /** Defaults for host=remote-container. */
+    container?: {
+      /** Docker context name (for remote Docker contexts). */
+      context?: string;
+      /** SSH target when executing docker exec over SSH. */
+      sshTarget?: string;
+      /** Optional SSH identity file path for container-over-SSH. */
+      sshIdentity?: string;
+      /** Container name/id to target. */
+      name?: string;
+      /** Container shell command (default: /bin/sh). */
+      shell?: string;
+    };
+    /** Defaults for host=remote-k8s-pod. */
+    k8sPod?: {
+      /** Optional kube context. */
+      context?: string;
+      /** Kubernetes namespace. */
+      namespace?: string;
+      /** Pod name. */
+      pod?: string;
+      /** Optional container name. */
+      container?: string;
+      /** Pod shell command (default: /bin/sh). */
+      shell?: string;
+    };
+  };
   /** Directories to prepend to PATH when running exec (gateway/sandbox). */
   pathPrepend?: string[];
   /** Safe stdin-only binaries that can run without allowlist entries. */

@@ -326,10 +326,45 @@ const ToolExecApplyPatchSchema = z
   .optional();
 
 const ToolExecBaseShape = {
-  host: z.enum(["sandbox", "gateway", "node"]).optional(),
+  host: z
+    .enum(["sandbox", "gateway", "node", "remote-ssh", "remote-container", "remote-k8s-pod"])
+    .optional(),
   security: z.enum(["deny", "allowlist", "full"]).optional(),
   ask: z.enum(["off", "on-miss", "always"]).optional(),
   node: z.string().optional(),
+  remote: z
+    .object({
+      ssh: z
+        .object({
+          target: z.string().optional(),
+          identity: z.string().optional(),
+          shell: z.string().optional(),
+        })
+        .strict()
+        .optional(),
+      container: z
+        .object({
+          context: z.string().optional(),
+          sshTarget: z.string().optional(),
+          sshIdentity: z.string().optional(),
+          name: z.string().optional(),
+          shell: z.string().optional(),
+        })
+        .strict()
+        .optional(),
+      k8sPod: z
+        .object({
+          context: z.string().optional(),
+          namespace: z.string().optional(),
+          pod: z.string().optional(),
+          container: z.string().optional(),
+          shell: z.string().optional(),
+        })
+        .strict()
+        .optional(),
+    })
+    .strict()
+    .optional(),
   pathPrepend: z.array(z.string()).optional(),
   safeBins: z.array(z.string()).optional(),
   backgroundMs: z.number().int().positive().optional(),

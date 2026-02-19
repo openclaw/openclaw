@@ -21,7 +21,14 @@ type ExecDirectiveParse = {
 
 function normalizeExecHost(value?: string): ExecHost | undefined {
   const normalized = value?.trim().toLowerCase();
-  if (normalized === "sandbox" || normalized === "gateway" || normalized === "node") {
+  if (
+    normalized === "sandbox" ||
+    normalized === "gateway" ||
+    normalized === "node" ||
+    normalized === "remote-ssh" ||
+    normalized === "remote-container" ||
+    normalized === "remote-k8s-pod"
+  ) {
     return normalized;
   }
   return undefined;

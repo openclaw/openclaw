@@ -21,22 +21,42 @@ Background sessions are scoped per agent; `process` only sees sessions from the 
 - `background` (bool): background immediately
 - `timeout` (seconds, default 1800): kill on expiry
 - `pty` (bool): run in a pseudo-terminal when available (TTY-only CLIs, coding agents, terminal UIs)
-- `host` (`sandbox | gateway | node`): where to execute
-- `security` (`deny | allowlist | full`): enforcement mode for `gateway`/`node`
-- `ask` (`off | on-miss | always`): approval prompts for `gateway`/`node`
+- `host` (`sandbox | gateway | node | remote-ssh | remote-container | remote-k8s-pod`): where to execute
+- `security` (`deny | allowlist | full`): enforcement mode for non-sandbox hosts
+- `ask` (`off | on-miss | always`): approval prompts for non-sandbox hosts
 - `node` (string): node id/name for `host=node`
+- `sshTarget` (string): SSH target (`user@host` or `user@host:port`) for `host=remote-ssh`
+- `sshIdentity` (string): optional SSH identity file for `host=remote-ssh`
+- `sshShell` (string): shell command for `host=remote-ssh` (default: `/bin/sh`)
+- `containerContext` (string): Docker context for `host=remote-container`
+- `containerSshTarget` (string): SSH target for container-over-SSH in `host=remote-container`
+- `containerSshIdentity` (string): optional SSH identity for container-over-SSH
+- `containerName` (string): container name/id for `host=remote-container`
+- `containerShell` (string): shell command for `host=remote-container` (default: `/bin/sh`)
+- `k8sContext` (string): optional kubectl context for `host=remote-k8s-pod`
+- `k8sNamespace` (string): namespace for `host=remote-k8s-pod`
+- `k8sPod` (string): pod name for `host=remote-k8s-pod`
+- `k8sContainer` (string): optional container name for `host=remote-k8s-pod`
+- `k8sShell` (string): shell command for `host=remote-k8s-pod` (default: `/bin/sh`)
 - `elevated` (bool): request elevated mode (gateway host); `security=full` is only forced when elevated resolves to `full`
 
 Notes:
 
 - `host` defaults to `sandbox`.
 - `elevated` is ignored when sandboxing is off (exec already runs on the host).
-- `gateway`/`node` approvals are controlled by `~/.openclaw/exec-approvals.json`.
+- `gateway`/`node`/`remote-*` approvals are controlled by `~/.openclaw/exec-approvals.json`.
 - `node` requires a paired node (companion app or headless node host).
 - If multiple nodes are available, set `exec.node` or `tools.exec.node` to select one.
+- `host=remote-container` requires either `containerContext` (remote Docker context) or
+  `containerSshTarget` (container-over-SSH), plus `containerName`.
+- `host=remote-k8s-pod` requires `k8sNamespace` and `k8sPod`.
+- Remote hosts keep a reused interactive shell session per target (idle timeout: 30 minutes), so
+  OpenClaw does not reconnect for every command.
+- For `host=remote-*`, `workdir` applies to the local launcher process. Use `cd` inside the remote
+  shell to change remote directories (the session keeps that state).
 - On non-Windows hosts, exec uses `SHELL` when set; if `SHELL` is `fish`, it prefers `bash` (or `sh`)
   from `PATH` to avoid fish-incompatible scripts, then falls back to `SHELL` if neither exists.
-- Host execution (`gateway`/`node`) rejects `env.PATH` and loader overrides (`LD_*`/`DYLD_*`) to
+- Host execution (`gateway`/`node`/`remote-*`) rejects `env.PATH` and loader overrides (`LD_*`/`DYLD_*`) to
   prevent binary hijacking or injected code.
 - Important: sandboxing is **off by default**. If sandboxing is off, `host=sandbox` runs directly on
   the gateway host (no container) and **does not require approvals**. To require approvals, run with
@@ -47,9 +67,14 @@ Notes:
 - `tools.exec.notifyOnExit` (default: true): when true, backgrounded exec sessions enqueue a system event and request a heartbeat on exit.
 - `tools.exec.approvalRunningNoticeMs` (default: 10000): emit a single “running” notice when an approval-gated exec runs longer than this (0 disables).
 - `tools.exec.host` (default: `sandbox`)
-- `tools.exec.security` (default: `deny` for sandbox, `allowlist` for gateway + node when unset)
+- `tools.exec.security` (default: `deny` for sandbox, `allowlist` for non-sandbox hosts when unset)
 - `tools.exec.ask` (default: `on-miss`)
 - `tools.exec.node` (default: unset)
+- `tools.exec.remote.ssh`: defaults for `host=remote-ssh` (`target`, `identity`, `shell`).
+- `tools.exec.remote.container`: defaults for `host=remote-container`
+  (`context`, `sshTarget`, `sshIdentity`, `name`, `shell`).
+- `tools.exec.remote.k8sPod`: defaults for `host=remote-k8s-pod`
+  (`context`, `namespace`, `pod`, `container`, `shell`).
 - `tools.exec.pathPrepend`: list of directories to prepend to `PATH` for exec runs (gateway + sandbox only).
 - `tools.exec.safeBins`: stdin-only safe binaries that can run without explicit allowlist entries. For behavior details, see [Safe bins](/tools/exec-approvals#safe-bins-stdin-only).
 
@@ -77,6 +102,8 @@ Example:
 - `host=node`: only non-blocked env overrides you pass are sent to the node. `env.PATH` overrides are
   rejected for host execution and ignored by node hosts. If you need additional PATH entries on a node,
   configure the node host service environment (systemd/launchd) or install tools in standard locations.
+- `host=remote-*`: PATH/env are used for local launchers (`ssh`, `docker`, `kubectl`), while command
+  execution happens inside a persistent remote shell.
 
 Per-agent node binding (use the agent list index in config):
 
@@ -95,7 +122,7 @@ Send `/exec` with no arguments to show the current values.
 Example:
 
 ```
-/exec host=gateway security=allowlist ask=on-miss node=mac-1
+/exec host=remote-k8s-pod security=allowlist ask=always
 ```
 
 ## Authorization model
@@ -107,7 +134,7 @@ policy (`tools.deny: ["exec"]` or per-agent). Host approvals still apply unless 
 
 ## Exec approvals (companion app / node host)
 
-Sandboxed agents can require per-request approval before `exec` runs on the gateway or node host.
+Sandboxed agents can require per-request approval before `exec` runs on the gateway, node, or remote hosts.
 See [Exec approvals](/tools/exec-approvals) for the policy, allowlist, and UI flow.
 
 When approvals are required, the exec tool returns immediately with
@@ -136,6 +163,41 @@ Background + poll:
 ```json
 {"tool":"exec","command":"npm run build","yieldMs":1000}
 {"tool":"process","action":"poll","sessionId":"<id>"}
+```
+
+Remote SSH:
+
+```json
+{
+  "tool": "exec",
+  "host": "remote-ssh",
+  "sshTarget": "user@gateway-host",
+  "command": "pwd"
+}
+```
+
+Remote container (Docker context):
+
+```json
+{
+  "tool": "exec",
+  "host": "remote-container",
+  "containerContext": "prod-ssh",
+  "containerName": "openclaw-worker",
+  "command": "ls -la"
+}
+```
+
+Remote pod (kubectl exec):
+
+```json
+{
+  "tool": "exec",
+  "host": "remote-k8s-pod",
+  "k8sNamespace": "openclaw",
+  "k8sPod": "gateway-7f44d6f8f9-k9x7t",
+  "command": "id"
+}
 ```
 
 Send keys (tmux-style):

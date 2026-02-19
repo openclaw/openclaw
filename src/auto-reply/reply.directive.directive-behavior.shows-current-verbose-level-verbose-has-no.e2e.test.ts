@@ -94,7 +94,7 @@ describe("directive behavior", () => {
         "Current exec defaults: host=gateway, security=allowlist, ask=always, node=mac-1.",
       );
       expect(text).toContain(
-        "Options: host=sandbox|gateway|node, security=deny|allowlist|full, ask=off|on-miss|always, node=<id>.",
+        "Options: host=sandbox|gateway|node|remote-ssh|remote-container|remote-k8s-pod, security=deny|allowlist|full, ask=off|on-miss|always, node=<id>.",
       );
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });

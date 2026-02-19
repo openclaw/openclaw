@@ -126,7 +126,7 @@ export const execSchema = Type.Object({
   ),
   host: Type.Optional(
     Type.String({
-      description: "Exec host (sandbox|gateway|node).",
+      description: "Exec host (sandbox|gateway|node|remote-ssh|remote-container|remote-k8s-pod).",
     }),
   ),
   security: Type.Optional(
@@ -142,6 +142,71 @@ export const execSchema = Type.Object({
   node: Type.Optional(
     Type.String({
       description: "Node id/name for host=node.",
+    }),
+  ),
+  sshTarget: Type.Optional(
+    Type.String({
+      description: "SSH target for host=remote-ssh (user@host or user@host:port).",
+    }),
+  ),
+  sshIdentity: Type.Optional(
+    Type.String({
+      description: "SSH identity file path for host=remote-ssh.",
+    }),
+  ),
+  sshShell: Type.Optional(
+    Type.String({
+      description: "Remote shell for host=remote-ssh (default: /bin/sh).",
+    }),
+  ),
+  containerContext: Type.Optional(
+    Type.String({
+      description: "Docker context for host=remote-container.",
+    }),
+  ),
+  containerSshTarget: Type.Optional(
+    Type.String({
+      description: "SSH target for container-over-SSH in host=remote-container.",
+    }),
+  ),
+  containerSshIdentity: Type.Optional(
+    Type.String({
+      description: "SSH identity for container-over-SSH in host=remote-container.",
+    }),
+  ),
+  containerName: Type.Optional(
+    Type.String({
+      description: "Container name/id for host=remote-container.",
+    }),
+  ),
+  containerShell: Type.Optional(
+    Type.String({
+      description: "Container shell command for host=remote-container (default: /bin/sh).",
+    }),
+  ),
+  k8sContext: Type.Optional(
+    Type.String({
+      description: "Kubernetes context for host=remote-k8s-pod.",
+    }),
+  ),
+  k8sNamespace: Type.Optional(
+    Type.String({
+      description: "Kubernetes namespace for host=remote-k8s-pod.",
+    }),
+  ),
+  k8sPod: Type.Optional(
+    Type.String({
+      description: "Pod name for host=remote-k8s-pod.",
+    }),
+  ),
+  k8sContainer: Type.Optional(
+    Type.String({
+      description: "Container name for host=remote-k8s-pod.",
+    }),
+  ),
+  k8sShell: Type.Optional(
+    Type.String({
+      description: "Pod shell command for host=remote-k8s-pod (default: /bin/sh).",
     }),
   ),
 });
@@ -166,7 +231,14 @@ export type ExecProcessHandle = {
 
 export function normalizeExecHost(value?: string | null): ExecHost | null {
   const normalized = value?.trim().toLowerCase();
-  if (normalized === "sandbox" || normalized === "gateway" || normalized === "node") {
+  if (
+    normalized === "sandbox" ||
+    normalized === "gateway" ||
+    normalized === "node" ||
+    normalized === "remote-ssh" ||
+    normalized === "remote-container" ||
+    normalized === "remote-k8s-pod"
+  ) {
     return normalized;
   }
   return null;
@@ -189,7 +261,7 @@ export function normalizeExecAsk(value?: string | null): ExecAsk | null {
 }
 
 export function renderExecHostLabel(host: ExecHost) {
-  return host === "sandbox" ? "sandbox" : host === "gateway" ? "gateway" : "node";
+  return host;
 }
 
 export function normalizeNotifyOutput(value: string) {

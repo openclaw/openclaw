@@ -134,6 +134,17 @@ describe("directive parsing", () => {
     expect(res.cleaned).toBe("please now");
   });
 
+  it("matches exec directive with remote host options", () => {
+    const res = extractExecDirective(
+      "please /exec host=remote-k8s-pod security=allowlist ask=always now",
+    );
+    expect(res.hasDirective).toBe(true);
+    expect(res.execHost).toBe("remote-k8s-pod");
+    expect(res.execSecurity).toBe("allowlist");
+    expect(res.execAsk).toBe("always");
+    expect(res.cleaned).toBe("please now");
+  });
+
   it("captures invalid exec host values", () => {
     const res = extractExecDirective("/exec host=spaceship");
     expect(res.hasDirective).toBe(true);

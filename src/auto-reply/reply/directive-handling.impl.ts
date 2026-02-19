@@ -205,7 +205,9 @@ export async function handleDirectiveOnly(
   if (directives.hasExecDirective) {
     if (directives.invalidExecHost) {
       return {
-        text: `Unrecognized exec host "${directives.rawExecHost ?? ""}". Valid hosts: sandbox, gateway, node.`,
+        text:
+          `Unrecognized exec host "${directives.rawExecHost ?? ""}". Valid hosts: ` +
+          "sandbox, gateway, node, remote-ssh, remote-container, remote-k8s-pod.",
       };
     }
     if (directives.invalidExecSecurity) {
@@ -233,7 +235,7 @@ export async function handleDirectiveOnly(
       return {
         text: withOptions(
           `Current exec defaults: host=${execDefaults.host}, security=${execDefaults.security}, ask=${execDefaults.ask}, ${nodeLabel}.`,
-          "host=sandbox|gateway|node, security=deny|allowlist|full, ask=off|on-miss|always, node=<id>",
+          "host=sandbox|gateway|node|remote-ssh|remote-container|remote-k8s-pod, security=deny|allowlist|full, ask=off|on-miss|always, node=<id>",
         ),
       };
     }
