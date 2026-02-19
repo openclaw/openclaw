@@ -8,6 +8,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Models/Discovery: suppress repeated vLLM and Ollama model-discovery warnings when partial configuration exists (for example, after exiting `openclaw config` early), cache failures per session, and provide actionable removal guidance via `openclaw config unset models.providers.{vllm,ollama}`. (#21037) Thanks @peter-eggert.
+
 ## 2026.2.19
 
 ### Changes

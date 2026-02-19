@@ -171,6 +171,10 @@ type VllmModelsResponse = {
   }>;
 };
 
+// Cache failed discovery attempts to avoid spamming console on every config load
+const ollamaDiscoveryFailureCache = new Set<string>();
+const vllmDiscoveryFailureCache = new Set<string>();
+
 /**
  * Derive the Ollama native API base URL from a configured base URL.
  *
@@ -193,20 +197,40 @@ async function discoverOllamaModels(baseUrl?: string): Promise<ModelDefinitionCo
   if (process.env.VITEST || process.env.NODE_ENV === "test") {
     return [];
   }
+  
+  const apiBase = resolveOllamaApiBase(baseUrl);
+  const cacheKey = apiBase;
+  const alreadyFailed = ollamaDiscoveryFailureCache.has(cacheKey);
+
   try {
-    const apiBase = resolveOllamaApiBase(baseUrl);
     const response = await fetch(`${apiBase}/api/tags`, {
       signal: AbortSignal.timeout(5000),
     });
     if (!response.ok) {
-      console.warn(`Failed to discover Ollama models: ${response.status}`);
+      if (!alreadyFailed) {
+        console.warn(
+          `Failed to discover Ollama models at ${apiBase}: HTTP ${response.status}. ` +
+            `To remove: openclaw config unset models.providers.ollama`,
+        );
+        ollamaDiscoveryFailureCache.add(cacheKey);
+      }
       return [];
     }
     const data = (await response.json()) as OllamaTagsResponse;
     if (!data.models || data.models.length === 0) {
-      console.warn("No Ollama models found on local instance");
+      if (!alreadyFailed) {
+        console.warn(
+          `No Ollama models found at ${apiBase}. ` +
+            `To remove: openclaw config unset models.providers.ollama`,
+        );
+        ollamaDiscoveryFailureCache.add(cacheKey);
+      }
       return [];
     }
+
+    // Clear from failure cache on success
+    ollamaDiscoveryFailureCache.delete(cacheKey);
+
     return data.models.map((model) => {
       const modelId = model.name;
       const isReasoning =
@@ -222,7 +246,13 @@ async function discoverOllamaModels(baseUrl?: string): Promise<ModelDefinitionCo
       };
     });
   } catch (error) {
-    console.warn(`Failed to discover Ollama models: ${String(error)}`);
+    if (!alreadyFailed) {
+      console.warn(
+        `Failed to discover Ollama models at ${apiBase}: ${String(error)}. ` +
+          `To remove: openclaw config unset models.providers.ollama`,
+      );
+      ollamaDiscoveryFailureCache.add(cacheKey);
+    }
     return [];
   }
 }
@@ -239,6 +269,10 @@ async function discoverVllmModels(
   const trimmedBaseUrl = baseUrl.trim().replace(/\/+$/, "");
   const url = `${trimmedBaseUrl}/models`;
 
+  // Check cache to avoid spamming console with repeated failures
+  const cacheKey = `${trimmedBaseUrl}:${apiKey ?? ""}`;
+  const alreadyFailed = vllmDiscoveryFailureCache.has(cacheKey);
+
   try {
     const trimmedApiKey = apiKey?.trim();
     const response = await fetch(url, {
@@ -246,15 +280,30 @@ async function discoverVllmModels(
       signal: AbortSignal.timeout(5000),
     });
     if (!response.ok) {
-      console.warn(`Failed to discover vLLM models: ${response.status}`);
+      if (!alreadyFailed) {
+        console.warn(
+          `Failed to discover vLLM models at ${trimmedBaseUrl}: HTTP ${response.status}. ` +
+            `To remove: openclaw config unset models.providers.vllm`,
+        );
+        vllmDiscoveryFailureCache.add(cacheKey);
+      }
       return [];
     }
     const data = (await response.json()) as VllmModelsResponse;
     const models = data.data ?? [];
     if (models.length === 0) {
-      console.warn("No vLLM models found on local instance");
+      if (!alreadyFailed) {
+        console.warn(
+          `No vLLM models found at ${trimmedBaseUrl}. ` +
+            `To remove: openclaw config unset models.providers.vllm`,
+        );
+        vllmDiscoveryFailureCache.add(cacheKey);
+      }
       return [];
     }
+
+    // Clear from failure cache on success
+    vllmDiscoveryFailureCache.delete(cacheKey);
 
     return models
       .map((m) => ({ id: typeof m.id === "string" ? m.id.trim() : "" }))
@@ -275,7 +324,13 @@ async function discoverVllmModels(
         } satisfies ModelDefinitionConfig;
       });
   } catch (error) {
-    console.warn(`Failed to discover vLLM models: ${String(error)}`);
+    if (!alreadyFailed) {
+      console.warn(
+        `Failed to discover vLLM models at ${trimmedBaseUrl}: ${String(error)}. ` +
+          `To remove: openclaw config unset models.providers.vllm`,
+      );
+      vllmDiscoveryFailureCache.add(cacheKey);
+    }
     return [];
   }
 }
