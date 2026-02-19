@@ -112,6 +112,35 @@ describe("createLineNodeWebhookHandler", () => {
     );
   });
 
+  it("drops replayed signed webhook payloads", async () => {
+    const rawBody = JSON.stringify({
+      events: [{ type: "message", webhookEventId: "line-evt-1" }],
+    });
+    const { bot, handler, secret } = createPostWebhookTestHarness(rawBody);
+
+    const first = createRes();
+    await handler(
+      {
+        method: "POST",
+        headers: { "x-line-signature": sign(rawBody, secret) },
+      } as unknown as IncomingMessage,
+      first.res,
+    );
+    expect(first.res.statusCode).toBe(200);
+
+    const second = createRes();
+    await handler(
+      {
+        method: "POST",
+        headers: { "x-line-signature": sign(rawBody, secret) },
+      } as unknown as IncomingMessage,
+      second.res,
+    );
+    expect(second.res.statusCode).toBe(200);
+
+    expect(bot.handleWebhook).toHaveBeenCalledTimes(1);
+  });
+
   it("returns 400 for invalid JSON payload even when signature is valid", async () => {
     const rawBody = "not json";
     const { bot, handler, secret } = createPostWebhookTestHarness(rawBody);

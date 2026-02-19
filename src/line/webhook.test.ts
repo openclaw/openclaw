@@ -111,4 +111,39 @@ describe("createLineWebhookMiddleware", () => {
     });
     expect(onEvents).not.toHaveBeenCalled();
   });
+
+  it("drops replayed signed webhook payloads", async () => {
+    const rawBody = JSON.stringify({
+      events: [{ type: "message", webhookEventId: "line-evt-1" }],
+    });
+    const signature = sign(rawBody, SECRET);
+    const onEvents = vi.fn(async () => {});
+
+    const middleware = createLineWebhookMiddleware({
+      channelSecret: SECRET,
+      onEvents: onEvents as unknown as (body: WebhookRequestBody) => Promise<void>,
+    });
+
+    const firstReq = {
+      headers: { "x-line-signature": signature },
+      body: rawBody,
+      // oxlint-disable-next-line typescript/no-explicit-any
+    } as any;
+    const firstRes = createRes();
+    // oxlint-disable-next-line typescript/no-explicit-any
+    await middleware(firstReq, firstRes, {} as any);
+    expect(firstRes.status).toHaveBeenCalledWith(200);
+
+    const secondReq = {
+      headers: { "x-line-signature": signature },
+      body: rawBody,
+      // oxlint-disable-next-line typescript/no-explicit-any
+    } as any;
+    const secondRes = createRes();
+    // oxlint-disable-next-line typescript/no-explicit-any
+    await middleware(secondReq, secondRes, {} as any);
+    expect(secondRes.status).toHaveBeenCalledWith(200);
+
+    expect(onEvents).toHaveBeenCalledTimes(1);
+  });
 });

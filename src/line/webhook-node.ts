@@ -8,7 +8,12 @@ import {
 } from "../infra/http-body.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { validateLineSignature } from "./signature.js";
-import { isLineWebhookVerificationRequest, parseLineWebhookBody } from "./webhook-utils.js";
+import {
+  buildLineWebhookReplayKey,
+  isLineWebhookVerificationRequest,
+  parseLineWebhookBody,
+  shouldDropReplayLineWebhookEvent,
+} from "./webhook-utils.js";
 
 const LINE_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const LINE_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
@@ -34,6 +39,7 @@ export function createLineNodeWebhookHandler(params: {
 }): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
   const maxBodyBytes = params.maxBodyBytes ?? LINE_WEBHOOK_MAX_BODY_BYTES;
   const readBody = params.readBody ?? readLineWebhookRequestBody;
+  const recentReplayKeys = new Map<string, number>();
 
   return async (req: IncomingMessage, res: ServerResponse) => {
     // Handle GET requests for webhook verification
@@ -90,6 +96,15 @@ export function createLineNodeWebhookHandler(params: {
         res.statusCode = 400;
         res.setHeader("Content-Type", "application/json");
         res.end(JSON.stringify({ error: "Invalid webhook payload" }));
+        return;
+      }
+
+      const replayKey = buildLineWebhookReplayKey({ signature, rawBody, body });
+      if (shouldDropReplayLineWebhookEvent(recentReplayKeys, replayKey, Date.now())) {
+        logVerbose("line: dropped replayed signed webhook payload");
+        res.statusCode = 200;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ status: "ok" }));
         return;
       }
 
