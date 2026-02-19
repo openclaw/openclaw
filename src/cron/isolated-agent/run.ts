@@ -589,7 +589,9 @@ export async function runCronIsolatedAgentTurn(params: {
 
   // `true` means we confirmed at least one outbound send reached the target.
   // Keep this strict so timer fallback can safely decide whether to wake main.
-  let delivered = skipMessagingToolDelivery;
+  // Treat heartbeat-only suppression as "delivered" so the caller does not
+  // inject a spurious "Cron: HEARTBEAT_OK" summary into the main session.
+  let delivered = skipMessagingToolDelivery || skipHeartbeatDelivery;
   if (deliveryRequested && !skipHeartbeatDelivery && !skipMessagingToolDelivery) {
     if (resolvedDelivery.error) {
       if (!deliveryBestEffort) {
