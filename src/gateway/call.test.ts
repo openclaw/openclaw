@@ -172,6 +172,18 @@ describe("callGateway url resolution", () => {
     expect(result).toEqual({ ok: true });
   });
 
+  it("blocks user-provided ws:// to private network even when bind=lan", async () => {
+    loadConfig.mockReturnValue({ gateway: { mode: "local", bind: "lan" } });
+    resolveGatewayPort.mockReturnValue(18789);
+    pickPrimaryLanIPv4.mockReturnValue("192.168.1.42");
+
+    // User-provided URL override bypasses locally-resolved exemption —
+    // private network ws:// is only safe when locally resolved.
+    await expect(
+      callGateway({ method: "health", url: "ws://192.168.1.100:18789", token: "t" }),
+    ).rejects.toThrow("SECURITY ERROR");
+  });
+
   it("falls back to loopback when bind is lan but no LAN IP found", async () => {
     loadConfig.mockReturnValue({ gateway: { mode: "local", bind: "lan" } });
     resolveGatewayPort.mockReturnValue(18800);
