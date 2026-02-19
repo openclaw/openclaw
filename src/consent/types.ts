@@ -31,6 +31,7 @@ export type ConsentToken = {
 /** WAL event type enum. */
 export type WalEventType =
   | "CONSENT_ISSUED"
+  | "CONSENT_EVALUATED"
   | "CONSENT_CONSUMED"
   | "CONSENT_DENIED"
   | "CONSENT_REVOKED"
@@ -126,4 +127,6 @@ export type ConsentStatusQuery = {
 export type ConsentStatusSnapshot = {
   tokens: Array<Pick<ConsentToken, "jti" | "status" | "tool" | "sessionKey" | "issuedAt" | "expiresAt">>;
   recentEvents: WalEvent[];
+  /** Session keys (and tenant ids) currently in containment quarantine. */
+  quarantinedSessionKeys?: string[];
 };
