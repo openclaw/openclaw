@@ -73,6 +73,10 @@ export class ParallelTaskRunner {
   }
 
   detectParallelTasks(message: string): string[] {
+    return this.detectTasks(message);
+  }
+
+  detectTasks(message: string): string[] {
     const separators = [/&&&/g, /\|\|\|/g, /\n---\n/g, /===TASK\d+===/g];
 
     const tasks: string[] = [];

@@ -39,6 +39,8 @@ import { resolveAssistantIdentity } from "../assistant-identity.js";
 import { resolveAssistantAvatarUrl } from "../control-ui-shared.js";
 import { waitForAgentJob } from "./agent-job.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { AgentIntegrationHooks } from "../../agents/integration-hooks.js";
+import { ParallelTaskRunner } from "../../agents/parallel-runner.js";
 
 export const agentHandlers: GatewayRequestHandlers = {
   agent: async ({ params, respond, context }) => {
@@ -344,9 +346,110 @@ export const agentHandlers: GatewayRequestHandlers = {
 
     const resolvedThreadId = explicitThreadId ?? deliveryPlan.resolvedThreadId;
 
+    const agentCfg = cfg.agents?.defaults;
+    const todosConfig = agentCfg?.todos as { enabled?: boolean; autoTrack?: boolean } | undefined;
+    const evidenceConfig = agentCfg?.evidence as
+      | { enabled?: boolean; gates?: unknown[] }
+      | undefined;
+    const continuityConfig = agentCfg?.continuity as
+      | { enabled?: boolean; inheritMode?: string; maxHistoricalSessions?: number }
+      | undefined;
+
+    const hooks = new AgentIntegrationHooks({
+      todos: todosConfig,
+      evidence: evidenceConfig,
+      continuity: continuityConfig,
+    });
+
+    const parallelRunner = new ParallelTaskRunner(5);
+
+    let finalMessage = message;
+    const detectedTasks = parallelRunner.detectTasks(message);
+    const isParallelMode = detectedTasks.length > 1 && hooks.isParallelEnabled();
+
+    if (requestedSessionKey) {
+      const { enhancedMessage } = await hooks.beforeAgentExecution({
+        message,
+        sessionKey: requestedSessionKey,
+        agentId,
+      });
+      finalMessage = enhancedMessage;
+    }
+
+    if (isParallelMode) {
+      const tasks = detectedTasks.map((taskMsg, idx) => ({
+        id: `parallel-${idx}`,
+        message: taskMsg,
+        sessionKey: requestedSessionKey!,
+        agentId,
+      }));
+
+      const taskExecutor = async (task: (typeof tasks)[0]) => {
+        const { enhancedMessage } = await hooks.beforeAgentExecution({
+          message: task.message,
+          sessionKey: task.sessionKey,
+          agentId: task.agentId,
+        });
+
+        return agentCommand(
+          {
+            message: enhancedMessage,
+            images,
+            to: resolvedTo,
+            sessionId: resolvedSessionId,
+            sessionKey: task.sessionKey,
+            thinking: request.thinking,
+            deliver,
+            deliveryTargetMode,
+            channel: resolvedChannel,
+            accountId: resolvedAccountId,
+            threadId: resolvedThreadId,
+            runContext: {
+              messageChannel: resolvedChannel,
+              accountId: resolvedAccountId,
+              groupId: resolvedGroupId,
+              groupChannel: resolvedGroupChannel,
+              groupSpace: resolvedGroupSpace,
+              currentThreadTs: resolvedThreadId != null ? String(resolvedThreadId) : undefined,
+            },
+            groupId: resolvedGroupId,
+            groupChannel: resolvedGroupChannel,
+            groupSpace: resolvedGroupSpace,
+            spawnedBy: spawnedByValue,
+            timeout: request.timeout?.toString(),
+            bestEffortDeliver,
+            messageChannel: resolvedChannel,
+            runId: task.id,
+            lane: request.lane,
+            extraSystemPrompt: request.extraSystemPrompt,
+          },
+          defaultRuntime,
+          context.deps,
+        );
+      };
+
+      const results = await parallelRunner.run(tasks, taskExecutor);
+
+      const { evidenceResults, passed } = await hooks.afterAgentCompletion();
+
+      const payload = {
+        runId,
+        status: "ok" as const,
+        summary: passed ? "completed" : "completed with warnings",
+        result: { parallelResults: results, evidenceResults },
+      };
+      context.dedupe.set(`agent:${idem}`, {
+        ts: Date.now(),
+        ok: true,
+        payload,
+      });
+      respond(true, payload, undefined, { runId });
+      return;
+    }
+
     void agentCommand(
       {
-        message,
+        message: finalMessage,
         images,
         to: resolvedTo,
         sessionId: resolvedSessionId,
@@ -379,12 +482,14 @@ export const agentHandlers: GatewayRequestHandlers = {
       defaultRuntime,
       context.deps,
     )
-      .then((result) => {
+      .then(async (result) => {
+        const { evidenceResults, passed } = await hooks.afterAgentCompletion();
+
         const payload = {
           runId,
           status: "ok" as const,
-          summary: "completed",
-          result,
+          summary: passed ? "completed" : "completed with warnings",
+          result: { ...result, evidenceResults },
         };
         context.dedupe.set(`agent:${idem}`, {
           ts: Date.now(),
