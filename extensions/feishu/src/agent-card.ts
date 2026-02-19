@@ -122,15 +122,50 @@ function formatTimelineLine(entry: TimelineEntry): string {
   return entry.text;
 }
 
+function normalizeForCompare(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+function trimFinalDupBlocks(timeline: TimelineEntry[], answer: string): TimelineEntry[] {
+  const answerNorm = normalizeForCompare(answer);
+  if (!answerNorm) {
+    return timeline;
+  }
+
+  const out = [...timeline];
+  const tailBlocks: string[] = [];
+
+  while (out.length > 0) {
+    const last = out[out.length - 1];
+    if (last.kind !== "block") {
+      break;
+    }
+    tailBlocks.unshift(last.text);
+    const candidate = normalizeForCompare(tailBlocks.join("\n"));
+    if (!candidate) {
+      out.pop();
+      continue;
+    }
+    if (answerNorm.endsWith(candidate)) {
+      out.pop();
+      continue;
+    }
+    break;
+  }
+
+  return out;
+}
+
 function appendTimelineFromText(params: {
   text: string;
   timeline: TimelineEntry[];
   previousText: string;
+  allowBlock: boolean;
 }) {
-  const { text, timeline, previousText } = params;
+  const { text, timeline, previousText, allowBlock } = params;
   const nextText = text ?? "";
   if (!nextText) {
-    return { timeline, previousText };
+    return { timeline, previousText, sawReasoning: false };
   }
 
   let delta = nextText;
@@ -141,12 +176,13 @@ function appendTimelineFromText(params: {
   }
 
   if (!delta) {
-    return { timeline, previousText: nextText };
+    return { timeline, previousText: nextText, sawReasoning: false };
   }
 
   const out = [...timeline];
   const lines = delta.split(/\r?\n/);
   let inReasoning = false;
+  let sawReasoning = false;
 
   for (const line of lines) {
     const trimmed = line.trim();
@@ -156,6 +192,7 @@ function appendTimelineFromText(params: {
 
     if (/^Reasoning:\s*$/i.test(trimmed)) {
       inReasoning = true;
+      sawReasoning = true;
       continue;
     }
 
@@ -165,16 +202,19 @@ function appendTimelineFromText(params: {
         const cleaned = trimmed.replace(/^_+|_+$/g, "").trim();
         if (cleaned) {
           out.push({ kind: "reasoning", text: cleaned });
+          sawReasoning = true;
         }
         continue;
       }
       inReasoning = false;
     }
 
-    out.push({ kind: "block", text: trimmed });
+    if (allowBlock || sawReasoning) {
+      out.push({ kind: "block", text: trimmed });
+    }
   }
 
-  return { timeline: out, previousText: nextText };
+  return { timeline: out, previousText: nextText, sawReasoning };
 }
 
 function buildCard(params: {
@@ -185,17 +225,23 @@ function buildCard(params: {
   mentionTargets?: MentionTarget[];
   includeMentions: boolean;
 }): Record<string, unknown> {
-  const timelineMarkdown = params.timeline.length
-    ? params.timeline
+  const filteredTimeline =
+    params.collapseTimeline && params.answer
+      ? trimFinalDupBlocks(params.timeline, params.answer)
+      : params.timeline;
+
+  const timelineMarkdown = filteredTimeline.length
+    ? filteredTimeline
         .map((entry) => formatTimelineLine(entry))
         .filter(Boolean)
         .join("\n")
     : "暂无过程记录";
 
   const answer = params.answer.trim();
+  const timelineContent = answer ? `${timelineMarkdown}\n\n` : timelineMarkdown;
   const bodyElements: Array<Record<string, unknown>> = [];
 
-  if (params.timeline.length > 0) {
+  if (filteredTimeline.length > 0) {
     if (params.collapseTimeline) {
       bodyElements.push({
         tag: "collapsible_panel",
@@ -203,11 +249,11 @@ function buildCard(params: {
         header: {
           title: { tag: "plain_text", content: "执行过程" },
         },
-        elements: [{ tag: "markdown", content: timelineMarkdown, margin: "2px 0px 4px 0px" }],
+        elements: [{ tag: "markdown", content: timelineContent, margin: "2px 0px 4px 0px" }],
       });
     } else {
       // During running states, show timeline directly without the collapsible title.
-      bodyElements.push({ tag: "markdown", content: timelineMarkdown, margin: "2px 0px 6px 0px" });
+      bodyElements.push({ tag: "markdown", content: timelineContent, margin: "2px 0px 6px 0px" });
     }
   }
 
@@ -335,6 +381,7 @@ export function createFeishuAgentCardRenderer(params: CreateFeishuAgentCardRende
   let opQueue: Promise<void> = Promise.resolve();
   let previousTimelineText = "";
   let finalStreamStarted = false;
+  let hasTraceContext = false;
 
   const render = (collapseTimeline: boolean) =>
     buildCard({
@@ -385,8 +432,10 @@ export function createFeishuAgentCardRenderer(params: CreateFeishuAgentCardRende
           if (parsed) {
             timeline = [...timeline, { kind: "tool", tool: parsed }];
             status = parsed.isError ? "error" : "tool";
+            hasTraceContext = true;
           } else if (textRaw.trim()) {
             timeline = [...timeline, { kind: "block", text: textRaw.trim() }];
+            hasTraceContext = true;
           }
           await sendOrUpdate(false);
           return;
@@ -397,14 +446,22 @@ export function createFeishuAgentCardRenderer(params: CreateFeishuAgentCardRende
             text: textRaw,
             timeline,
             previousText: previousTimelineText,
+            allowBlock: hasTraceContext,
           });
           timeline = appended.timeline;
           previousTimelineText = appended.previousText;
+          if (appended.sawReasoning) {
+            hasTraceContext = true;
+          }
         }
 
         const text = stripReasoningSection(textRaw);
 
-        if (!finalStreamStarted && (info.kind === "final" || (info.kind === "block" && text))) {
+        if (
+          !finalStreamStarted &&
+          hasTraceContext &&
+          (info.kind === "final" || (info.kind === "block" && text))
+        ) {
           finalStreamStarted = true;
         }
 
@@ -421,10 +478,7 @@ export function createFeishuAgentCardRenderer(params: CreateFeishuAgentCardRende
         if (!text) {
           return;
         }
-        if (
-          !finalStreamStarted &&
-          timeline.some((entry) => entry.kind === "tool")
-        ) {
+        if (!finalStreamStarted && hasTraceContext) {
           finalStreamStarted = true;
         }
         answer = mergeStreamText(answer, text);
