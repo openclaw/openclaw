@@ -199,6 +199,8 @@ jobs:
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "${{ matrix.runtime == 'bun' }}"
 
       - name: Configure vitest JSON reports
         if: matrix.task == 'test' && matrix.runtime == 'node'
@@ -244,6 +246,8 @@ jobs:
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
 
       - name: Check types and lint and oxfmt
         run: pnpm check
@@ -261,6 +265,8 @@ jobs:
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
 
       - name: Check docs
         run: pnpm check:docs
@@ -366,16 +372,10 @@ jobs:
           pnpm-version: "10.23.0"
           cache-key-suffix: "node22"
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
       - name: Runtime versions
         run: |
           node -v
           npm -v
-          bun -v
           pnpm -v
 
       - name: Capture node path

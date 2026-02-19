@@ -26,8 +26,8 @@ describe("probeTelegram retry logic", () => {
 
   async function expectSuccessfulProbe(expectedCalls: number, retryCount = 0) {
     const probePromise = probeTelegram(token, timeoutMs);
-    for (let i = 0; i < retryCount; i += 1) {
-      await vi.advanceTimersByTimeAsync(1000);
+    if (retryCount > 0) {
+      await vi.advanceTimersByTimeAsync(retryCount * 1000);
     }
 
     const result = await probePromise;
@@ -47,30 +47,30 @@ describe("probeTelegram retry logic", () => {
     vi.restoreAllMocks();
   });
 
-  it("should succeed if the first attempt succeeds", async () => {
+  it.each([
+    {
+      errors: [],
+      expectedCalls: 2,
+      retryCount: 0,
+    },
+    {
+      errors: ["Network timeout"],
+      expectedCalls: 3,
+      retryCount: 1,
+    },
+    {
+      errors: ["Network error 1", "Network error 2"],
+      expectedCalls: 4,
+      retryCount: 2,
+    },
+  ])("succeeds after retry pattern %#", async ({ errors, expectedCalls, retryCount }) => {
+    for (const message of errors) {
+      fetchMock.mockRejectedValueOnce(new Error(message));
+    }
+
     mockGetMeSuccess();
     mockGetWebhookInfoSuccess();
-    await expectSuccessfulProbe(2);
-  });
-
-  it("should retry and succeed if first attempt fails but second succeeds", async () => {
-    // 1st attempt: Network error
-    fetchMock.mockRejectedValueOnce(new Error("Network timeout"));
-
-    mockGetMeSuccess();
-    mockGetWebhookInfoSuccess();
-    await expectSuccessfulProbe(3, 1);
-  });
-
-  it("should retry twice and succeed on the third attempt", async () => {
-    // 1st attempt: Network error
-    fetchMock.mockRejectedValueOnce(new Error("Network error 1"));
-    // 2nd attempt: Network error
-    fetchMock.mockRejectedValueOnce(new Error("Network error 2"));
-
-    mockGetMeSuccess();
-    mockGetWebhookInfoSuccess();
-    await expectSuccessfulProbe(4, 2);
+    await expectSuccessfulProbe(expectedCalls, retryCount);
   });
 
   it("should fail after 3 unsuccessful attempts", async () => {
@@ -80,8 +80,7 @@ describe("probeTelegram retry logic", () => {
     const probePromise = probeTelegram(token, timeoutMs);
 
     // Fast-forward for all retries
-    await vi.advanceTimersByTimeAsync(1000);
-    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(2000);
 
     const result = await probePromise;
 

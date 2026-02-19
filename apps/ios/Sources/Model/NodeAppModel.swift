@@ -41,6 +41,7 @@ private final class NotificationInvokeLatch<T: Sendable>: @unchecked Sendable {
 @Observable
 final class NodeAppModel {
     private let deepLinkLogger = Logger(subsystem: "ai.openclaw.ios", category: "DeepLink")
+    private let pushWakeLogger = Logger(subsystem: "ai.openclaw.ios", category: "PushWake")
     enum CameraHUDKind {
         case photo
         case recording
@@ -71,26 +72,6 @@ final class NodeAppModel {
     var gatewayAgents: [AgentSummary] = []
     var lastShareEventText: String = "No share events yet."
     var openChatRequestID: Int = 0
-
-    var mainSessionKey: String {
-        let base = SessionKey.normalizeMainKey(self.mainSessionBaseKey)
-        let agentId = (self.selectedAgentId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let defaultId = (self.gatewayDefaultAgentId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        if agentId.isEmpty || (!defaultId.isEmpty && agentId == defaultId) { return base }
-        return SessionKey.makeAgentSessionKey(agentId: agentId, baseKey: base)
-    }
-
-    var activeAgentName: String {
-        let agentId = (self.selectedAgentId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let defaultId = (self.gatewayDefaultAgentId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let resolvedId = agentId.isEmpty ? defaultId : agentId
-        if resolvedId.isEmpty { return "Main" }
-        if let match = self.gatewayAgents.first(where: { $0.id == resolvedId }) {
-            let name = (match.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            return name.isEmpty ? match.id : name
-        }
-        return resolvedId
-    }
 
     // Primary "node" connection: used for device capabilities and node.invoke requests.
     private let nodeGateway = GatewayNodeSession()
@@ -1614,6 +1595,26 @@ private extension NodeAppModel {
 }
 
 extension NodeAppModel {
+    var mainSessionKey: String {
+        let base = SessionKey.normalizeMainKey(self.mainSessionBaseKey)
+        let agentId = (self.selectedAgentId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let defaultId = (self.gatewayDefaultAgentId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if agentId.isEmpty || (!defaultId.isEmpty && agentId == defaultId) { return base }
+        return SessionKey.makeAgentSessionKey(agentId: agentId, baseKey: base)
+    }
+
+    var activeAgentName: String {
+        let agentId = (self.selectedAgentId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let defaultId = (self.gatewayDefaultAgentId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedId = agentId.isEmpty ? defaultId : agentId
+        if resolvedId.isEmpty { return "Main" }
+        if let match = self.gatewayAgents.first(where: { $0.id == resolvedId }) {
+            let name = (match.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            return name.isEmpty ? match.id : name
+        }
+        return resolvedId
+    }
+
     func connectToGateway(
         url: URL,
         gatewayStableID: String,
@@ -2125,6 +2126,15 @@ extension NodeAppModel {
         await self.registerAPNsTokenIfNeeded()
     }
 
+    func handleSilentPushWake(_ userInfo: [AnyHashable: Any]) async -> Bool {
+        guard Self.isSilentPushPayload(userInfo) else {
+            self.pushWakeLogger.info("Ignored APNs payload: not silent push")
+            return false
+        }
+        self.pushWakeLogger.info("Silent push received; attempting reconnect if needed")
+        return await self.reconnectGatewaySessionsForSilentPushIfNeeded()
+    }
+
     func updateAPNsDeviceToken(_ tokenData: Data) {
         let tokenHex = tokenData.map { String(format: "%02x", $0) }.joined()
         let trimmed = tokenHex.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2169,6 +2179,51 @@ extension NodeAppModel {
         } catch {
             // Best-effort only.
         }
+    }
+
+    private static func isSilentPushPayload(_ userInfo: [AnyHashable: Any]) -> Bool {
+        guard let apsAny = userInfo["aps"] else { return false }
+        if let aps = apsAny as? [AnyHashable: Any] {
+            return Self.hasContentAvailable(aps["content-available"])
+        }
+        if let aps = apsAny as? [String: Any] {
+            return Self.hasContentAvailable(aps["content-available"])
+        }
+        return false
+    }
+
+    private static func hasContentAvailable(_ value: Any?) -> Bool {
+        if let number = value as? NSNumber {
+            return number.intValue == 1
+        }
+        if let text = value as? String {
+            return text.trimmingCharacters(in: .whitespacesAndNewlines) == "1"
+        }
+        return false
+    }
+
+    private func reconnectGatewaySessionsForSilentPushIfNeeded() async -> Bool {
+        guard self.isBackgrounded else {
+            self.pushWakeLogger.info("Wake no-op: app not backgrounded")
+            return false
+        }
+        guard self.gatewayAutoReconnectEnabled else {
+            self.pushWakeLogger.info("Wake no-op: auto reconnect disabled")
+            return false
+        }
+        guard self.activeGatewayConnectConfig != nil else {
+            self.pushWakeLogger.info("Wake no-op: no active gateway config")
+            return false
+        }
+
+        await self.operatorGateway.disconnect()
+        await self.nodeGateway.disconnect()
+        self.operatorConnected = false
+        self.gatewayConnected = false
+        self.gatewayStatusText = "Reconnecting…"
+        self.talkMode.updateGatewayConnected(false)
+        self.pushWakeLogger.info("Wake reconnect trigger applied")
+        return true
     }
 }
 

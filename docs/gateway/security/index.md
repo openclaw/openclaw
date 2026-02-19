@@ -301,6 +301,8 @@ OpenClaw has two separate “who can trigger me?” layers:
     - `channels.whatsapp.groups`, `channels.telegram.groups`, `channels.imessage.groups`: per-group defaults like `requireMention`; when set, it also acts as a group allowlist (include `"*"` to keep allow-all behavior).
     - `groupPolicy="allowlist"` + `groupAllowFrom`: restrict who can trigger the bot _inside_ a group session (WhatsApp/Telegram/Signal/iMessage/Microsoft Teams).
     - `channels.discord.guilds` / `channels.slack.channels`: per-surface allowlists + mention defaults.
+  - Group checks run in this order: `groupPolicy`/group allowlists first, mention/reply activation second.
+  - Replying to a bot message (implicit mention) does **not** bypass sender allowlists like `groupAllowFrom`.
   - **Security note:** treat `dmPolicy="open"` and `groupPolicy="open"` as last-resort settings. They should be barely used; prefer pairing + allowlists unless you fully trust every member of the room.
 
 Details: [Configuration](/gateway/configuration) and [Groups](/channels/groups)
