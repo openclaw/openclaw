@@ -675,7 +675,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         ctx.logger.info("diagnostics-otel: logs exporter enabled (OTLP/Protobuf)");
       }
     },
-    async stop() {
+    async stop(_ctx) {
       // End any remaining root traces
       for (const [, activeTrace] of activeTraces) {
         try {

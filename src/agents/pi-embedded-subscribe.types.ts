@@ -38,11 +38,6 @@ export type SubscribeEmbeddedPiSessionParams = {
   onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void | Promise<void>;
   enforceFinalTag?: boolean;
   config?: OpenClawConfig;
-  sessionKey?: string;
-  /** Ephemeral session UUID — regenerated on /new and /reset. */
-  sessionId?: string;
-  /** Agent identity for hook context — resolved from session config in attempt.ts. */
-  agentId?: string;
 };
 
 export type { BlockReplyChunking } from "./pi-embedded-block-chunker.js";

@@ -141,18 +141,20 @@ export type EmbeddedPiSubscribeContext = {
 export type ToolHandlerParams = Pick<
   SubscribeEmbeddedPiSessionParams,
   | "runId"
+  | "sessionKey"
+  | "sessionId"
+  | "channel"
   | "onBlockReplyFlush"
   | "onAgentEvent"
   | "onToolResult"
-  | "sessionKey"
-  | "sessionId"
-  | "agentId"
 >;
 
 export type ToolHandlerState = Pick<
   EmbeddedPiSubscribeState,
   | "toolMetaById"
   | "toolMetas"
+  | "toolStartTimeById"
+  | "toolArgsById"
   | "toolSummaryById"
   | "lastToolError"
   | "pendingMessagingTargets"
