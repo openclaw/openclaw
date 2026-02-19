@@ -38,11 +38,11 @@ import {
   formatVerificationResults,
   verifyOnboarding,
 } from "./onboarding.verify.js";
-import type { GatewayWizardSettings, WizardFlow } from "./onboarding.types.js";
 import {
-  formatVerificationResults,
-  verifyOnboarding,
-} from "./onboarding.verify.js";
+  formatFirstUseHelp,
+  generateFirstUseHelp,
+} from "./onboarding.first-use.js";
+import type { GatewayWizardSettings, WizardFlow } from "./onboarding.types.js";
 import type { WizardPrompter } from "./prompts.js";
 
 type FinalizeOnboardingOptions = {
@@ -496,9 +496,57 @@ export async function finalizeOnboardingWizard(
       gatewayToken: settings.authMode === "token" ? settings.gatewayToken : undefined,
       skipGateway: !gatewayProbe.ok,
       skipChannels: opts.skipChannels ?? opts.skipProviders ?? false,
+      skipSecurity: opts.skipSecurity ?? false,
+      skipMessageFlow: opts.skipMessageFlow ?? true, // Optional, can be enabled later
     });
 
     await prompter.note(formatVerificationResults(verification), "Verification");
+
+    // Offer security audit
+    if (nextConfig.security && !opts.skipSecurity) {
+      const runAudit = await prompter.confirm(
+        "Run security audit now? (recommended)",
+        { defaultValue: true },
+      );
+      if (runAudit) {
+        try {
+          const { runSecurityAudit } = await import("../security/audit.js");
+          const auditResult = await runSecurityAudit({
+            deep: true,
+            fix: false,
+          });
+
+          if (auditResult.summary.total > 0) {
+            await prompter.note(
+              `Security audit found ${auditResult.summary.total} issue(s): ${auditResult.summary.critical} critical, ${auditResult.summary.warning} warnings`,
+              "Security Audit",
+            );
+
+            const applyFixes = await prompter.confirm(
+              "Apply automatic fixes? (safe changes only)",
+              { defaultValue: true },
+            );
+            if (applyFixes) {
+              const fixResult = await runSecurityAudit({
+                deep: true,
+                fix: true,
+              });
+              await prompter.note(
+                `Applied fixes: ${fixResult.fix?.actions?.length ?? 0} change(s) made`,
+                "Security Audit",
+              );
+            }
+          } else {
+            await prompter.note("Security audit passed - no issues found", "Security Audit");
+          }
+        } catch (error) {
+          await prompter.note(
+            `Security audit failed: ${error instanceof Error ? error.message : String(error)}`,
+            "Security Audit",
+          );
+        }
+      }
+    }
 
     // Generate personalized next steps guide
     const guide = generateNextStepsGuide(
@@ -508,6 +556,10 @@ export async function finalizeOnboardingWizard(
       settings.authMode === "token" ? settings.gatewayToken : undefined,
     );
     await prompter.note(formatNextStepsGuide(guide), guide.title);
+
+    // Show first-use help
+    const firstUseHelp = generateFirstUseHelp(nextConfig);
+    await prompter.note(formatFirstUseHelp(firstUseHelp), "Getting Started");
   } else if (opts.skipVerify) {
     await prompter.note("Verification skipped.", "Verification");
   }
