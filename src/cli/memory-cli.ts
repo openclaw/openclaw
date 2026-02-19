@@ -136,7 +136,8 @@ async function withMemoryManagerForAgent(params: {
   }
   await withManager<MemoryManager>({
     getManager: () => getMemorySearchManager(managerParams),
-    onMissing: params.onMissing ?? ((error) => defaultRuntime.log(error ?? "Memory search disabled.")),
+    onMissing:
+      params.onMissing ?? ((error) => defaultRuntime.log(error ?? "Memory search disabled.")),
     onCloseError: (err) =>
       defaultRuntime.error(`Memory manager close failed: ${formatErrorMessage(err)}`),
     close: async (manager) => {
