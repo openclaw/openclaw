@@ -110,23 +110,57 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
   const botShipName = normalizeShip(account.ship);
   runtime.log?.(`[tlon] Starting monitor for ${botShipName}`);
 
-  let api: UrbitSSEClient | null = null;
-  try {
-    const ssrfPolicy = ssrfPolicyFromAllowPrivateNetwork(account.allowPrivateNetwork);
-    runtime.log?.(`[tlon] Attempting authentication to ${account.url}...`);
-    const cookie = await authenticate(account.url, account.code, { ssrfPolicy });
-    api = new UrbitSSEClient(account.url, cookie, {
-      ship: botShipName,
-      ssrfPolicy,
-      logger: {
-        log: (message) => runtime.log?.(message),
-        error: (message) => runtime.error?.(message),
-      },
-    });
-  } catch (error: any) {
-    runtime.error?.(`[tlon] Failed to authenticate: ${error?.message ?? String(error)}`);
-    throw error;
+  const ssrfPolicy = ssrfPolicyFromAllowPrivateNetwork(account.allowPrivateNetwork);
+
+  // Helper to authenticate with retry logic
+  async function authenticateWithRetry(maxAttempts = 10): Promise<string> {
+    for (let attempt = 1; ; attempt++) {
+      if (opts.abortSignal?.aborted) {
+        throw new Error("Aborted while waiting to authenticate");
+      }
+      try {
+        runtime.log?.(`[tlon] Attempting authentication to ${account.url}...`);
+        return await authenticate(account.url, account.code, { ssrfPolicy });
+      } catch (error: any) {
+        runtime.error?.(
+          `[tlon] Failed to authenticate (attempt ${attempt}): ${error?.message ?? String(error)}`,
+        );
+        if (attempt >= maxAttempts) {
+          throw error;
+        }
+        const delay = Math.min(30000, 1000 * Math.pow(2, attempt - 1));
+        runtime.log?.(`[tlon] Retrying authentication in ${delay}ms...`);
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(resolve, delay);
+          if (opts.abortSignal) {
+            const onAbort = () => {
+              clearTimeout(timer);
+              reject(new Error("Aborted"));
+            };
+            opts.abortSignal.addEventListener("abort", onAbort, { once: true });
+          }
+        });
+      }
+    }
   }
+
+  let api: UrbitSSEClient | null = null;
+  const cookie = await authenticateWithRetry();
+  api = new UrbitSSEClient(account.url, cookie, {
+    ship: botShipName,
+    ssrfPolicy,
+    logger: {
+      log: (message) => runtime.log?.(message),
+      error: (message) => runtime.error?.(message),
+    },
+    // Re-authenticate on reconnect in case the session expired
+    onReconnect: async (client) => {
+      runtime.log?.("[tlon] Re-authenticating on SSE reconnect...");
+      const newCookie = await authenticateWithRetry(5);
+      client.updateCookie(newCookie);
+      runtime.log?.("[tlon] Re-authentication successful");
+    },
+  });
 
   const processedTracker = createProcessedMessageTracker(2000);
   let groupChannels: string[] = [];

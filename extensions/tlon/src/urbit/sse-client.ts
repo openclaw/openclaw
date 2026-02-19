@@ -341,6 +341,14 @@ export class UrbitSSEClient {
     );
   }
 
+  /**
+   * Update the cookie used for authentication.
+   * Call this when re-authenticating after session expiry.
+   */
+  updateCookie(newCookie: string): void {
+    this.cookie = normalizeUrbitCookie(newCookie);
+  }
+
   private async ack(eventId: number): Promise<void> {
     this.lastAcknowledgedEventId = eventId;
 
