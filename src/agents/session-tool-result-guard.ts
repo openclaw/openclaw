@@ -252,9 +252,11 @@ export function installSessionToolResultGuard(
         }),
       );
       if (!persisted) {
-        // Hook blocked this result; if no more pending, try to commit
+        // Hook suppressed this result. A suppressed result cannot satisfy its
+        // tool_use counterpart, so the pair is now incomplete. Discard the
+        // buffer to prevent an orphaned tool_use block from reaching JSONL.
         if (pending.size === 0 && toolPairBuffer.length > 0) {
-          commitToolPairBuffer();
+          discardToolPairBuffer("hook_suppressed_tool_result");
         }
         return undefined;
       }
