@@ -192,3 +192,64 @@ describe("devices cli clear", () => {
     );
   });
 });
+
+describe("devices cli tokens", () => {
+  afterEach(() => {
+    callGateway.mockReset();
+    withProgress.mockClear();
+    runtime.log.mockReset();
+    runtime.error.mockReset();
+    runtime.exit.mockReset();
+  });
+
+  it("rotates a token for a device role", async () => {
+    callGateway.mockResolvedValueOnce({ ok: true });
+
+    await runDevicesCommand([
+      "rotate",
+      "--device",
+      "device-1",
+      "--role",
+      "main",
+      "--scope",
+      "messages:send",
+      "--scope",
+      "messages:read",
+    ]);
+
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "device.token.rotate",
+        params: {
+          deviceId: "device-1",
+          role: "main",
+          scopes: ["messages:send", "messages:read"],
+        },
+      }),
+    );
+  });
+
+  it("revokes a token for a device role", async () => {
+    callGateway.mockResolvedValueOnce({ ok: true });
+
+    await runDevicesCommand(["revoke", "--device", "device-1", "--role", "main"]);
+
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "device.token.revoke",
+        params: {
+          deviceId: "device-1",
+          role: "main",
+        },
+      }),
+    );
+  });
+
+  it("rejects blank device or role values", async () => {
+    await runDevicesCommand(["rotate", "--device", " ", "--role", "main"]);
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith("--device and --role required");
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+});
