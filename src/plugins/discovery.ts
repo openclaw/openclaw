@@ -74,6 +74,19 @@ function checkSourceEscapesRoot(params: {
   if (isPathInside(rootRealPath, sourceRealPath)) {
     return null;
   }
+
+  // Allow file/dir entries that are symlinks located under the configured root.
+  // We still enforce stat/permission/ownership checks on both root and source.
+  if (isPathInside(path.resolve(params.rootDir), path.resolve(params.source))) {
+    try {
+      if (fs.lstatSync(params.source).isSymbolicLink()) {
+        return null;
+      }
+    } catch {
+      // Fall through and report as escaping root.
+    }
+  }
+
   return {
     reason: "source_escapes_root",
     sourcePath: params.source,
@@ -317,7 +330,10 @@ function resolvePackageEntrySource(params: {
   return source;
 }
 
-function resolveDirentKind(entry: fs.Dirent, fullPath: string): {
+function resolveDirentKind(
+  entry: fs.Dirent,
+  fullPath: string,
+): {
   isFile: boolean;
   isDirectory: boolean;
 } {

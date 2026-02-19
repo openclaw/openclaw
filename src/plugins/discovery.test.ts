@@ -130,7 +130,10 @@ describe("discoverOpenClawPlugins", () => {
     const targetDir = makeTempDir();
     fs.mkdirSync(globalExt, { recursive: true });
     fs.writeFileSync(path.join(targetDir, "actual.ts"), "export default function () {}", "utf-8");
-    const created = symlinkFile(path.join(targetDir, "actual.ts"), path.join(globalExt, "gamma.ts"));
+    const created = symlinkFile(
+      path.join(targetDir, "actual.ts"),
+      path.join(globalExt, "gamma.ts"),
+    );
     if (!created) {
       return;
     }
@@ -147,7 +150,10 @@ describe("discoverOpenClawPlugins", () => {
     const stateDir = makeTempDir();
     const globalExt = path.join(stateDir, "extensions");
     fs.mkdirSync(globalExt, { recursive: true });
-    const created = symlinkFile(path.join(globalExt, "missing.ts"), path.join(globalExt, "broken.ts"));
+    const created = symlinkFile(
+      path.join(globalExt, "missing.ts"),
+      path.join(globalExt, "broken.ts"),
+    );
     if (!created) {
       return;
     }
