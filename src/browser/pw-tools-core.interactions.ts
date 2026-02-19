@@ -89,9 +89,6 @@ export async function dragViaPlaywright(opts: {
 }): Promise<void> {
   const startRef = requireRef(opts.startRef);
   const endRef = requireRef(opts.endRef);
-  if (!startRef || !endRef) {
-    throw new Error("startRef and endRef are required");
-  }
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
