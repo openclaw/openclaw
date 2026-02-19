@@ -523,7 +523,7 @@ export function createConsentEngine(deps: ConsentEngineDeps): ConsentGateApi {
     async status(query: ConsentStatusQuery): Promise<ConsentStatusSnapshot> {
       const tokens = query.sessionKey
         ? store.findBySession(query.sessionKey, query.tenantId)
-        : [];
+        : store.list(query.tenantId);
       const recentEvents: ConsentStatusSnapshot["recentEvents"] = [];
       // In-memory WAL may expose getEvents; if not, snapshot is minimal.
       const walWithGet = wal as WalWriter & { getEvents?(): unknown[] };
@@ -773,6 +773,31 @@ function bulkRevokeInternal(
     }
   } else if (input.sessionKey) {
     const tokens = store.findBySession(input.sessionKey, input.tenantId);
+    for (const t of tokens) {
+      if (t.status === "issued" && store.transition(t.jti, "revoked")) {
+        revoked++;
+        wal.append({
+          type: "CONSENT_REVOKED",
+          jti: t.jti,
+          tool: t.tool,
+          sessionKey: t.sessionKey,
+          trustTier: t.trustTier,
+          decision: "deny",
+          reasonCode: CONSENT_REASON.TOKEN_REVOKED,
+          correlationId: input.correlationId ?? "",
+          actor: {},
+          tenantId: t.tenantId ?? "",
+        });
+        observe(metrics, "revoke", {
+          jti: t.jti,
+          tool: t.tool,
+          sessionKey: t.sessionKey,
+          correlationId: input.correlationId ?? "",
+        });
+      }
+    }
+  } else if (input.tenantId) {
+    const tokens = store.list(input.tenantId);
     for (const t of tokens) {
       if (t.status === "issued" && store.transition(t.jti, "revoked")) {
         revoked++;

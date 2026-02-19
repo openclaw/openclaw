@@ -265,4 +265,110 @@ describe("ConsentGate engine", () => {
     expect(consume.allowed).toBe(false);
     expect(consume.reasonCode).toBe(CONSENT_REASON.CONTAINMENT_QUARANTINE);
   });
+
+  it("status without sessionKey returns tokens globally and supports tenant filter", async () => {
+    const api = createEngine();
+    const tokenA = await api.issue({
+      tool: "exec",
+      trustTier: "T0",
+      sessionKey: "session-a",
+      contextHash: "a",
+      ttlMs: 60_000,
+      issuedBy: "op",
+      policyVersion,
+      tenantId: "tenant-a",
+    });
+    const tokenB = await api.issue({
+      tool: "write",
+      trustTier: "T0",
+      sessionKey: "session-b",
+      contextHash: "b",
+      ttlMs: 60_000,
+      issuedBy: "op",
+      policyVersion,
+      tenantId: "tenant-b",
+    });
+    expect(tokenA).not.toBeNull();
+    expect(tokenB).not.toBeNull();
+
+    const all = await api.status({});
+    expect(all.tokens.some((t) => t.jti === tokenA!.jti)).toBe(true);
+    expect(all.tokens.some((t) => t.jti === tokenB!.jti)).toBe(true);
+
+    const tenantA = await api.status({ tenantId: "tenant-a" });
+    expect(tenantA.tokens.some((t) => t.jti === tokenA!.jti)).toBe(true);
+    expect(tenantA.tokens.some((t) => t.jti === tokenB!.jti)).toBe(false);
+  });
+
+  it("revoke supports tenant-wide revocation", async () => {
+    const api = createEngine();
+    const tokenTenantA1 = await api.issue({
+      tool: "exec",
+      trustTier: "T0",
+      sessionKey: "session-a1",
+      contextHash: "a1",
+      ttlMs: 60_000,
+      issuedBy: "op",
+      policyVersion,
+      tenantId: "tenant-a",
+    });
+    const tokenTenantA2 = await api.issue({
+      tool: "write",
+      trustTier: "T0",
+      sessionKey: "session-a2",
+      contextHash: "a2",
+      ttlMs: 60_000,
+      issuedBy: "op",
+      policyVersion,
+      tenantId: "tenant-a",
+    });
+    const tokenTenantB = await api.issue({
+      tool: "exec",
+      trustTier: "T0",
+      sessionKey: "session-b1",
+      contextHash: "b1",
+      ttlMs: 60_000,
+      issuedBy: "op",
+      policyVersion,
+      tenantId: "tenant-b",
+    });
+    expect(tokenTenantA1).not.toBeNull();
+    expect(tokenTenantA2).not.toBeNull();
+    expect(tokenTenantB).not.toBeNull();
+
+    const revoked = await api.revoke({ tenantId: "tenant-a" });
+    expect(revoked.revoked).toBe(2);
+
+    const consumeA1 = await api.consume({
+      jti: tokenTenantA1!.jti,
+      tool: "exec",
+      trustTier: "T0",
+      sessionKey: "session-a1",
+      contextHash: "a1",
+      tenantId: "tenant-a",
+    });
+    expect(consumeA1.allowed).toBe(false);
+    expect(consumeA1.reasonCode).toBe(CONSENT_REASON.TOKEN_REVOKED);
+
+    const consumeA2 = await api.consume({
+      jti: tokenTenantA2!.jti,
+      tool: "write",
+      trustTier: "T0",
+      sessionKey: "session-a2",
+      contextHash: "a2",
+      tenantId: "tenant-a",
+    });
+    expect(consumeA2.allowed).toBe(false);
+    expect(consumeA2.reasonCode).toBe(CONSENT_REASON.TOKEN_REVOKED);
+
+    const consumeB = await api.consume({
+      jti: tokenTenantB!.jti,
+      tool: "exec",
+      trustTier: "T0",
+      sessionKey: "session-b1",
+      contextHash: "b1",
+      tenantId: "tenant-b",
+    });
+    expect(consumeB.allowed).toBe(true);
+  });
 });

@@ -79,6 +79,15 @@ export function createFileBackedTokenStore(storagePath: string): TokenStore {
       }
       return out;
     },
+    list(tenantId) {
+      load();
+      const out: ConsentToken[] = [];
+      for (const t of map.values()) {
+        if (tenantId != null && (t as Record<string, unknown>).tenantId !== tenantId) continue;
+        out.push(t);
+      }
+      return out;
+    },
     pruneExpired(nowMs) {
       load();
       let n = 0;

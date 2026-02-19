@@ -22,6 +22,8 @@ export type TokenStore = {
   transition(jti: string, toStatus: ConsentTokenStatus): boolean;
   /** Find by sessionKey and optionally tenantId. */
   findBySession(sessionKey: string, tenantId?: string): ConsentToken[];
+  /** List all tokens, optionally filtered by tenantId. */
+  list(tenantId?: string): ConsentToken[];
   /** Remove expired entries (best-effort). */
   pruneExpired(nowMs: number): number;
 };
@@ -48,6 +50,14 @@ export function createInMemoryTokenStore(): TokenStore {
       const out: ConsentToken[] = [];
       for (const t of map.values()) {
         if (t.sessionKey !== sessionKey) continue;
+        if (tenantId != null && (t as Record<string, unknown>).tenantId !== tenantId) continue;
+        out.push(t);
+      }
+      return out;
+    },
+    list(tenantId) {
+      const out: ConsentToken[] = [];
+      for (const t of map.values()) {
         if (tenantId != null && (t as Record<string, unknown>).tenantId !== tenantId) continue;
         out.push(t);
       }

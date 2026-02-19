@@ -20,6 +20,7 @@ const METRICS_PATH = "/api/consent/metrics";
 const EXPORT_PATH = "/api/consent/export";
 const QUARANTINE_LIFT_PATH = "/api/consent/quarantine/lift";
 const MAX_BODY_BYTES = 4 * 1024;
+const MAX_STATUS_LIMIT = 1_000;
 const MAX_EXPORT_LIMIT = 10_000;
 
 export type HandleConsentHttpRequestParams = {
@@ -27,6 +28,26 @@ export type HandleConsentHttpRequestParams = {
   trustedProxies: string[];
   rateLimiter?: AuthRateLimiter;
 };
+
+function parseOptionalInteger(
+  raw: string | null,
+  opts: { min: number; max?: number; field: string },
+): { ok: true; value: number | undefined } | { ok: false; message: string } {
+  if (raw == null || raw.trim() === "") {
+    return { ok: true, value: undefined };
+  }
+  const value = Number(raw);
+  if (!Number.isFinite(value) || !Number.isInteger(value)) {
+    return { ok: false, message: `${opts.field} must be an integer` };
+  }
+  if (value < opts.min) {
+    return { ok: false, message: `${opts.field} must be >= ${opts.min}` };
+  }
+  if (opts.max != null && value > opts.max) {
+    return { ok: false, message: `${opts.field} must be <= ${opts.max}` };
+  }
+  return { ok: true, value };
+}
 
 /**
  * Handle GET /api/consent/status and POST /api/consent/revoke.
@@ -57,17 +78,32 @@ export async function handleConsentHttpRequest(
   }
 
   if (pathname === STATUS_PATH && req.method === "GET") {
+    const sinceMsRaw = parseOptionalInteger(url.searchParams.get("sinceMs"), {
+      min: 0,
+      field: "sinceMs",
+    });
+    if (!sinceMsRaw.ok) {
+      sendJson(res, 400, { error: { message: sinceMsRaw.message, type: "invalid_request_error" } });
+      return true;
+    }
+    const limitRaw = parseOptionalInteger(url.searchParams.get("limit"), {
+      min: 1,
+      max: MAX_STATUS_LIMIT,
+      field: "limit",
+    });
+    if (!limitRaw.ok) {
+      sendJson(res, 400, { error: { message: limitRaw.message, type: "invalid_request_error" } });
+      return true;
+    }
     const cfg = loadConfig();
     const api = resolveConsentGateApi(cfg);
     const sessionKey = url.searchParams.get("sessionKey")?.trim() ?? undefined;
     const tenantId = url.searchParams.get("tenantId")?.trim() ?? undefined;
-    const sinceMs = url.searchParams.get("sinceMs");
-    const limit = url.searchParams.get("limit");
     const query: ConsentStatusQuery = {
       sessionKey,
       tenantId: tenantId || undefined,
-      sinceMs: sinceMs ? Number(sinceMs) : undefined,
-      limit: limit ? Number(limit) : undefined,
+      sinceMs: sinceMsRaw.value,
+      limit: limitRaw.value,
     };
     const snapshot = await api.status(query);
     sendJson(res, 200, snapshot);
@@ -132,17 +168,47 @@ export async function handleConsentHttpRequest(
       });
       return true;
     }
-    const sinceMs = url.searchParams.get("sinceMs");
-    const untilMs = url.searchParams.get("untilMs");
-    const limitParam = url.searchParams.get("limit");
-    const correlationId = url.searchParams.get("correlationId") ?? undefined;
-    const limit = Math.min(
-      limitParam ? Number(limitParam) : 1000,
-      MAX_EXPORT_LIMIT,
-    );
+    const sinceMsRaw = parseOptionalInteger(url.searchParams.get("sinceMs"), {
+      min: 0,
+      field: "sinceMs",
+    });
+    if (!sinceMsRaw.ok) {
+      sendJson(res, 400, { error: { message: sinceMsRaw.message, type: "invalid_request_error" } });
+      return true;
+    }
+    const untilMsRaw = parseOptionalInteger(url.searchParams.get("untilMs"), {
+      min: 0,
+      field: "untilMs",
+    });
+    if (!untilMsRaw.ok) {
+      sendJson(res, 400, { error: { message: untilMsRaw.message, type: "invalid_request_error" } });
+      return true;
+    }
+    if (
+      sinceMsRaw.value != null &&
+      untilMsRaw.value != null &&
+      sinceMsRaw.value > untilMsRaw.value
+    ) {
+      sendJson(res, 400, {
+        error: { message: "sinceMs must be <= untilMs", type: "invalid_request_error" },
+      });
+      return true;
+    }
+    const limitRaw = parseOptionalInteger(url.searchParams.get("limit"), {
+      min: 1,
+      max: MAX_EXPORT_LIMIT,
+      field: "limit",
+    });
+    if (!limitRaw.ok) {
+      sendJson(res, 400, { error: { message: limitRaw.message, type: "invalid_request_error" } });
+      return true;
+    }
+    const correlationIdRaw = url.searchParams.get("correlationId");
+    const correlationId = correlationIdRaw?.trim() ? correlationIdRaw.trim() : undefined;
+    const limit = limitRaw.value ?? 1000;
     const events = readWalEventsFromStorage(storagePath, {
-      sinceMs: sinceMs ? Number(sinceMs) : undefined,
-      untilMs: untilMs ? Number(untilMs) : undefined,
+      sinceMs: sinceMsRaw.value,
+      untilMs: untilMsRaw.value,
       limit,
       correlationId,
     });

@@ -332,6 +332,12 @@ type LiveWalEventRow = {
   correlationId?: string;
 };
 
+type LiveStatusResponse = {
+  tokens?: LiveTokenRow[];
+  recentEvents?: LiveWalEventRow[];
+  quarantinedSessionKeys?: string[];
+};
+
 type AnomalyReason =
   | "context_mismatch"
   | "double_spend"
@@ -462,6 +468,7 @@ class OpenClawConsentDemoElement extends LitElement {
   @state() private liveMode = false;
   @state() private liveTokens: LiveTokenRow[] = [];
   @state() private liveEvents: LiveWalEventRow[] = [];
+  @state() private liveQuarantinedSessionKeys: string[] = [];
   @state() private liveLoading = false;
   @state() private liveError: string | null = null;
 
@@ -524,15 +531,18 @@ class OpenClawConsentDemoElement extends LitElement {
         this.liveError = `Status ${res.status}: ${t.slice(0, 200)}`;
         this.liveTokens = [];
         this.liveEvents = [];
+        this.liveQuarantinedSessionKeys = [];
         return;
       }
-      const data = (await res.json()) as { tokens: LiveTokenRow[]; recentEvents: LiveWalEventRow[] };
+      const data = (await res.json()) as LiveStatusResponse;
       this.liveTokens = data.tokens ?? [];
       this.liveEvents = data.recentEvents ?? [];
+      this.liveQuarantinedSessionKeys = data.quarantinedSessionKeys ?? [];
     } catch (e) {
       this.liveError = e instanceof Error ? e.message : String(e);
       this.liveTokens = [];
       this.liveEvents = [];
+      this.liveQuarantinedSessionKeys = [];
     } finally {
       this.liveLoading = false;
     }
@@ -550,6 +560,26 @@ class OpenClawConsentDemoElement extends LitElement {
       if (!res.ok) {
         const t = await res.text();
         this.liveError = `Revoke failed ${res.status}: ${t.slice(0, 200)}`;
+        return;
+      }
+      await this.fetchLiveStatus();
+    } catch (e) {
+      this.liveError = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  private async liftLiveQuarantine(sessionKey: string): Promise<void> {
+    this.liveError = null;
+    try {
+      const res = await fetch("/api/consent/quarantine/lift", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ sessionKey }),
+      });
+      if (!res.ok) {
+        const t = await res.text();
+        this.liveError = `Lift quarantine failed ${res.status}: ${t.slice(0, 200)}`;
         return;
       }
       await this.fetchLiveStatus();
@@ -1004,13 +1034,13 @@ class OpenClawConsentDemoElement extends LitElement {
         </div>
         <div class="row" style="margin-top: 12px;">
           <button class="btn primary" ?disabled=${this.liveLoading} @click=${() => this.fetchLiveStatus()}>
-            ${this.liveLoading ? "Loading…" : "Refresh"}
+            ${this.liveLoading ? "Loading..." : "Refresh"}
           </button>
         </div>
         ${this.liveError
           ? html`<div class="callout danger" style="margin-top: 12px;">${this.liveError}</div>`
           : nothing}
-        <div class="row" style="margin-top: 12px; gap: 16px; flex-wrap: wrap;">
+        <div class="row" style="margin-top: 12px; gap: 16px; flex-wrap: wrap; align-items: flex-start;">
           <div style="min-width: 280px; flex: 1;">
             <div class="card-sub" style="margin-top: 12px;">Tokens (${this.liveTokens.length})</div>
             <div class="list" style="margin-top: 8px; max-height: 360px; overflow: auto;">
@@ -1022,10 +1052,33 @@ class OpenClawConsentDemoElement extends LitElement {
                         <div class="mono">
                           <strong>${t.jti}</strong> ${t.tool}
                           <span class=${`chip ${statusChipClass(t.status)}`} style="margin-left: 8px;">${t.status}</span>
-                          <div class="muted">${t.sessionKey} · issued ${new Date(t.issuedAt).toISOString()}</div>
+                          <div class="muted">${t.sessionKey} - issued ${new Date(t.issuedAt).toISOString()}</div>
                           ${t.status === "issued"
                             ? html`<button class="btn danger" style="margin-top: 6px;" @click=${() => this.revokeLive(t.jti)}>Revoke</button>`
                             : nothing}
+                        </div>
+                      </div>
+                    `,
+                  )}
+            </div>
+          </div>
+          <div style="min-width: 280px; flex: 1;">
+            <div class="card-sub" style="margin-top: 12px;">
+              Quarantined session keys (${this.liveQuarantinedSessionKeys.length})
+            </div>
+            <div class="list" style="margin-top: 8px; max-height: 360px; overflow: auto;">
+              ${this.liveQuarantinedSessionKeys.length === 0
+                ? html`<div class="muted">No quarantined sessions.</div>`
+                : this.liveQuarantinedSessionKeys.map(
+                    (sessionKey) => html`
+                      <div class="list-item" style="grid-template-columns: minmax(0, 1fr);">
+                        <div class="mono">
+                          <strong>${sessionKey}</strong>
+                          <div style="margin-top: 6px;">
+                            <button class="btn" @click=${() => this.liftLiveQuarantine(sessionKey)}>
+                              Lift Quarantine
+                            </button>
+                          </div>
                         </div>
                       </div>
                     `,
@@ -1390,3 +1443,4 @@ class OpenClawConsentDemoElement extends LitElement {
     `;
   }
 }
+
