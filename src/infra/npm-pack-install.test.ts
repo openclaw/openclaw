@@ -93,4 +93,63 @@ describe("installFromNpmSpecArchive", () => {
     });
     expect(installFromArchive).not.toHaveBeenCalled();
   });
+
+  it("warns and proceeds on drift when no callback is configured", async () => {
+    vi.mocked(packNpmSpecToArchive).mockResolvedValue({
+      ok: true,
+      archivePath: "/tmp/openclaw-test.tgz",
+      metadata: {
+        resolvedSpec: "@openclaw/test@1.0.0",
+        integrity: "sha512-new",
+      },
+    });
+    const warn = vi.fn();
+    const installFromArchive = vi.fn(async () => ({ ok: true as const, id: "plugin-1" }));
+
+    const result = await installFromNpmSpecArchive({
+      tempDirPrefix: "openclaw-test-",
+      spec: "@openclaw/test@1.0.0",
+      timeoutMs: 1000,
+      expectedIntegrity: "sha512-old",
+      warn,
+      installFromArchive,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(result.installResult).toEqual({ ok: true, id: "plugin-1" });
+    expect(result.integrityDrift).toEqual({
+      expectedIntegrity: "sha512-old",
+      actualIntegrity: "sha512-new",
+    });
+    expect(warn).toHaveBeenCalledWith(
+      "Integrity drift detected for @openclaw/test@1.0.0: expected sha512-old, got sha512-new",
+    );
+  });
+
+  it("returns installer failures to callers for domain-specific handling", async () => {
+    vi.mocked(packNpmSpecToArchive).mockResolvedValue({
+      ok: true,
+      archivePath: "/tmp/openclaw-test.tgz",
+      metadata: { resolvedSpec: "@openclaw/test@1.0.0", integrity: "sha512-same" },
+    });
+    const installFromArchive = vi.fn(async () => ({ ok: false as const, error: "install failed" }));
+
+    const result = await installFromNpmSpecArchive({
+      tempDirPrefix: "openclaw-test-",
+      spec: "@openclaw/test@1.0.0",
+      timeoutMs: 1000,
+      expectedIntegrity: "sha512-same",
+      installFromArchive,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(result.installResult).toEqual({ ok: false, error: "install failed" });
+    expect(result.integrityDrift).toBeUndefined();
+  });
 });
