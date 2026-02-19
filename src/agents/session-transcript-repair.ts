@@ -149,8 +149,10 @@ export function repairToolCallInputs(messages: AgentMessage[]): ToolCallInputRep
         isToolCallBlock(block) &&
         (!hasToolCallInput(block) || !hasToolCallId(block) || !hasToolCallName(block))
       ) {
-        const defect = describeToolCallDefect(block);
-        const toolName = typeof block.name === "string" && block.name ? block.name : "<unknown>";
+        const tcBlock = block as ToolCallBlock;
+        const defect = describeToolCallDefect(tcBlock);
+        const toolName =
+          typeof tcBlock.name === "string" && tcBlock.name ? tcBlock.name : "<unknown>";
         console.warn(`[transcript-repair] Dropping malformed tool call "${toolName}": ${defect}`);
         droppedToolCalls += 1;
         droppedInMessage += 1;
