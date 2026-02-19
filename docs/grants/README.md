@@ -45,3 +45,7 @@ Checked on February 19, 2026.
 - `[PI and contributors]`: names, roles, affiliations.
 - `[Budget]`: personnel, infrastructure, and dissemination.
 - `[Timeline]`: milestones that match the target program period.
+
+## Engineering plan
+
+- Enterprise implementation plan: [Enterprise ConsentGate plan](/grants/enterprise-consentgate-implementation-plan)
