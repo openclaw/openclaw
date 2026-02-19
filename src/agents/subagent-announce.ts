@@ -30,6 +30,7 @@ import {
 } from "./pi-embedded.js";
 import { type AnnounceQueueItem, enqueueAnnounce } from "./subagent-announce-queue.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
+import { readLatestAssistantReply } from "./tools/agent-step.js";
 import { sanitizeTextContent, extractAssistantText } from "./tools/sessions-helpers.js";
 
 type ToolResultMessage = {
@@ -787,10 +788,10 @@ export async function runSubagentAnnounceFlow(params: {
           outcome = { status: "timeout" };
         }
       }
-      reply = await readLatestSubagentOutput(params.childSessionKey);
+      reply = (await readLatestAssistantReply({ sessionKey: params.childSessionKey })) ?? undefined;
     }
 
-    if (!reply) {
+    if (!reply?.trim()) {
       reply = await readLatestSubagentOutput(params.childSessionKey);
     }
 
