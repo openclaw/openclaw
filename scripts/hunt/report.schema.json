@@ -1,0 +1,139 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://openclaw.ai/schemas/hunt-report-v1.json",
+  "title": "OpenClaw Hunt Report V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "release",
+    "runId",
+    "lane",
+    "startedAt",
+    "endedAt",
+    "checks",
+    "signatures",
+    "classification",
+    "upstreamLinks"
+  ],
+  "properties": {
+    "version": {
+      "type": "string",
+      "const": "1"
+    },
+    "release": {
+      "type": "string",
+      "minLength": 1
+    },
+    "runId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "lane": {
+      "type": "string",
+      "enum": ["prod-observe", "staging-chaos"]
+    },
+    "startedAt": {
+      "type": "string"
+    },
+    "endedAt": {
+      "type": "string"
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "title", "status", "summary", "startedAt", "endedAt", "durationMs"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "title": { "type": "string", "minLength": 1 },
+          "status": { "type": "string", "enum": ["pass", "warn", "fail", "skip"] },
+          "command": { "type": "string" },
+          "summary": { "type": "string" },
+          "startedAt": { "type": "string" },
+          "endedAt": { "type": "string" },
+          "durationMs": { "type": "number", "minimum": 0 },
+          "evidence": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "artifacts": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      }
+    },
+    "signatures": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "source", "countWindow", "countTotal", "windowMinutes"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "source": { "type": "string", "minLength": 1 },
+          "countWindow": { "type": "number", "minimum": 0 },
+          "countTotal": { "type": "number", "minimum": 0 },
+          "windowMinutes": { "type": "number", "minimum": 1 },
+          "baselineWindowCount": { "type": "number", "minimum": 0 },
+          "delta": { "type": "number" },
+          "issueUrl": { "type": "string" }
+        }
+      }
+    },
+    "classification": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "category", "severity", "status", "summary"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "category": {
+            "type": "string",
+            "enum": ["core", "plugin-private", "ops"]
+          },
+          "severity": {
+            "type": "string",
+            "enum": ["p0", "p1", "p2"]
+          },
+          "status": {
+            "type": "string",
+            "enum": ["new", "known", "regressed", "resolved"]
+          },
+          "summary": { "type": "string" },
+          "reproSteps": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "expected": { "type": "string" },
+          "actual": { "type": "string" },
+          "affectedVersions": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "suggestedFix": { "type": "string" },
+          "issueUrl": { "type": "string" },
+          "prUrl": { "type": "string" }
+        }
+      }
+    },
+    "upstreamLinks": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  }
+}
