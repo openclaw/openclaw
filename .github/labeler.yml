@@ -67,6 +67,12 @@
           - "src/signal/**"
           - "extensions/signal/**"
           - "docs/channels/signal.md"
+"channel: keybase":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/keybase/**"
+          - "extensions/keybase/**"
+          - "docs/channels/keybase.md"
 "channel: slack":
   - changed-files:
       - any-glob-to-any-file:
