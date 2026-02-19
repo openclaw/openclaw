@@ -162,6 +162,32 @@ describe("sendMessageDiscord", () => {
     );
   });
 
+  it.each([
+    ChannelType.GuildPublicThread,
+    ChannelType.GuildPrivateThread,
+    ChannelType.GuildNewsThread,
+    ChannelType.GuildVoice,
+    ChannelType.GuildStageVoice,
+  ])("rejects thread creation in unsupported channel type %s (#20613)", async (channelType) => {
+    const { rest, getMock } = makeDiscordRest();
+    getMock.mockResolvedValue({ type: channelType });
+    await expect(
+      createThreadDiscord("chan1", { name: "thread" }, { rest, token: "t" }),
+    ).rejects.toThrow("Cannot create thread in channel type");
+    expect(getMock).toHaveBeenCalledWith(Routes.channel("chan1"));
+  });
+
+  it("does not fetch channel type when messageId is present", async () => {
+    const { rest, getMock, postMock } = makeDiscordRest();
+    postMock.mockResolvedValue({ id: "t1" });
+    await createThreadDiscord(
+      "chan1",
+      { name: "thread", messageId: "m1", content: "hi" },
+      { rest, token: "t" },
+    );
+    expect(getMock).not.toHaveBeenCalled();
+  });
+
   it("lists active threads by guild", async () => {
     const { rest, getMock } = makeDiscordRest();
     getMock.mockResolvedValue({ threads: [] });

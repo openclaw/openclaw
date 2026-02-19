@@ -108,15 +108,27 @@ export async function createThreadDiscord(
   if (!payload.messageId && payload.type !== undefined) {
     body.type = payload.type;
   }
+  // For route-less thread creation (no messageId): fetch channel type to detect forum/media
+  // channels and reject unsupported types before hitting Discord's API. (#20613)
   let channelType: ChannelType | undefined;
   if (!payload.messageId) {
-    // Only detect channel kind for route-less thread creation.
-    // If this lookup fails, keep prior behavior and let Discord validate.
     try {
       const channel = (await rest.get(Routes.channel(channelId))) as APIChannel | null | undefined;
       channelType = channel?.type;
     } catch {
       channelType = undefined;
+    }
+    const unsupportedForThread =
+      channelType === ChannelType.GuildPublicThread ||
+      channelType === ChannelType.GuildPrivateThread ||
+      channelType === ChannelType.GuildNewsThread ||
+      channelType === ChannelType.GuildVoice ||
+      channelType === ChannelType.GuildStageVoice;
+    if (unsupportedForThread) {
+      const typeName = ChannelType[channelType!] ?? String(channelType);
+      throw new Error(
+        `Cannot create thread in channel type ${typeName} — threads, voice and stage channels do not support thread creation.`,
+      );
     }
   }
   const isForumLike =
