@@ -67,15 +67,16 @@ describe("LINE buildAccountSnapshot", () => {
       enabled: true,
       channelAccessToken: "test-token-123",
       channelSecret: "test-secret-456",
-      tokenSource: "inline",
+      tokenSource: "file",
       config: {},
       ...overrides,
     };
   }
 
-  it("sets configured=true when both token and secret are present", () => {
-    const snapshot = buildAccountSnapshot({
+  it("sets configured=true when both token and secret are present", async () => {
+    const snapshot = await buildAccountSnapshot({
       account: makeAccount(),
+      cfg: {} as never,
       runtime: undefined,
       probe: undefined,
     });
@@ -83,9 +84,10 @@ describe("LINE buildAccountSnapshot", () => {
     expect(snapshot.configured).toBe(true);
   });
 
-  it("sets configured=false when channelAccessToken is empty", () => {
-    const snapshot = buildAccountSnapshot({
+  it("sets configured=false when channelAccessToken is empty", async () => {
+    const snapshot = await buildAccountSnapshot({
       account: makeAccount({ channelAccessToken: "", channelSecret: "" }),
+      cfg: {} as never,
       runtime: undefined,
       probe: undefined,
     });
@@ -93,9 +95,10 @@ describe("LINE buildAccountSnapshot", () => {
     expect(snapshot.configured).toBe(false);
   });
 
-  it("sets configured=false when channelAccessToken is whitespace-only", () => {
-    const snapshot = buildAccountSnapshot({
+  it("sets configured=false when channelAccessToken is whitespace-only", async () => {
+    const snapshot = await buildAccountSnapshot({
       account: makeAccount({ channelAccessToken: "   " }),
+      cfg: {} as never,
       runtime: undefined,
       probe: undefined,
     });
@@ -103,9 +106,10 @@ describe("LINE buildAccountSnapshot", () => {
     expect(snapshot.configured).toBe(false);
   });
 
-  it("sets configured=false when channelSecret is missing", () => {
-    const snapshot = buildAccountSnapshot({
+  it("sets configured=false when channelSecret is missing", async () => {
+    const snapshot = await buildAccountSnapshot({
       account: makeAccount({ channelSecret: "" }),
+      cfg: {} as never,
       runtime: undefined,
       probe: undefined,
     });
@@ -123,22 +127,22 @@ describe("LINE isConfigured", () => {
       enabled: true,
       channelAccessToken: "test-token",
       channelSecret: "test-secret",
-      tokenSource: "inline",
+      tokenSource: "file",
       config: {},
       ...overrides,
     };
   }
 
   it("returns true when both token and secret are present", () => {
-    expect(isConfigured(makeAccount())).toBe(true);
+    expect(isConfigured(makeAccount(), {} as never)).toBe(true);
   });
 
   it("returns false when channelAccessToken is empty", () => {
-    expect(isConfigured(makeAccount({ channelAccessToken: "" }))).toBe(false);
+    expect(isConfigured(makeAccount({ channelAccessToken: "" }), {} as never)).toBe(false);
   });
 
   it("returns false when channelSecret is empty", () => {
-    expect(isConfigured(makeAccount({ channelSecret: "" }))).toBe(false);
+    expect(isConfigured(makeAccount({ channelSecret: "" }), {} as never)).toBe(false);
   });
 });
 
@@ -151,19 +155,19 @@ describe("LINE describeAccount", () => {
       enabled: true,
       channelAccessToken: "test-token",
       channelSecret: "test-secret",
-      tokenSource: "inline",
+      tokenSource: "file",
       config: {},
       ...overrides,
     };
   }
 
   it("sets configured=true when both token and secret are present", () => {
-    const desc = describeAccount(makeAccount());
+    const desc = describeAccount(makeAccount(), {} as never);
     expect(desc.configured).toBe(true);
   });
 
   it("sets configured=false when channelSecret is empty", () => {
-    const desc = describeAccount(makeAccount({ channelSecret: "" }));
+    const desc = describeAccount(makeAccount({ channelSecret: "" }), {} as never);
     expect(desc.configured).toBe(false);
   });
 });
