@@ -82,6 +82,8 @@ export type MessagesConfig = {
   ackReactionScope?: "group-mentions" | "group-all" | "direct" | "all";
   /** Remove ack reaction after reply is sent (default: false). */
   removeAckAfterReply?: boolean;
+  /** When true, suppress ⚠️ tool-error warnings from being shown to the user. Default: false. */
+  suppressToolErrors?: boolean;
   /** Text-to-speech settings for outbound replies. */
   tts?: TtsConfig;
 };
@@ -110,7 +112,7 @@ export type CommandsConfig = {
   config?: boolean;
   /** Allow /debug command (default: false). */
   debug?: boolean;
-  /** Allow restart commands/tools (default: false). */
+  /** Allow restart commands/tools (default: true). */
   restart?: boolean;
   /** Enforce access-group allowlists/policies for commands (default: true). */
   useAccessGroups?: boolean;

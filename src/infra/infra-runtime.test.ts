@@ -14,10 +14,24 @@ import {
   setPreRestartDeferralCheck,
 } from "./restart.js";
 import { createTelegramRetryRunner } from "./retry-policy.js";
-import { getShellPathFromLoginShell, resetShellPathCacheForTests } from "./shell-env.js";
 import { listTailnetAddresses } from "./tailnet.js";
 
 describe("infra runtime", () => {
+  function setupRestartSignalSuite() {
+    beforeEach(() => {
+      __testing.resetSigusr1State();
+      vi.useFakeTimers();
+      vi.spyOn(process, "kill").mockImplementation(() => true);
+    });
+
+    afterEach(async () => {
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+      __testing.resetSigusr1State();
+    });
+  }
+
   describe("ensureBinary", () => {
     it("passes through when binary exists", async () => {
       const exec: typeof runExec = vi.fn().mockResolvedValue({
@@ -69,18 +83,7 @@ describe("infra runtime", () => {
   });
 
   describe("restart authorization", () => {
-    beforeEach(() => {
-      __testing.resetSigusr1State();
-      vi.useFakeTimers();
-      vi.spyOn(process, "kill").mockImplementation(() => true);
-    });
-
-    afterEach(async () => {
-      await vi.runOnlyPendingTimersAsync();
-      vi.useRealTimers();
-      vi.restoreAllMocks();
-      __testing.resetSigusr1State();
-    });
+    setupRestartSignalSuite();
 
     it("authorizes exactly once when scheduled restart emits", async () => {
       expect(consumeGatewaySigusr1RestartAuthorization()).toBe(false);
@@ -124,18 +127,7 @@ describe("infra runtime", () => {
   });
 
   describe("pre-restart deferral check", () => {
-    beforeEach(() => {
-      __testing.resetSigusr1State();
-      vi.useFakeTimers();
-      vi.spyOn(process, "kill").mockImplementation(() => true);
-    });
-
-    afterEach(async () => {
-      await vi.runOnlyPendingTimersAsync();
-      vi.useRealTimers();
-      vi.restoreAllMocks();
-      __testing.resetSigusr1State();
-    });
+    setupRestartSignalSuite();
 
     it("emits SIGUSR1 immediately when no deferral check is registered", async () => {
       const emitSpy = vi.spyOn(process, "emit");
@@ -224,43 +216,6 @@ describe("infra runtime", () => {
       } finally {
         process.removeListener("SIGUSR1", handler);
       }
-    });
-  });
-
-  describe("getShellPathFromLoginShell", () => {
-    afterEach(() => resetShellPathCacheForTests());
-
-    it("returns PATH from login shell env", () => {
-      if (process.platform === "win32") {
-        return;
-      }
-      const exec = vi
-        .fn()
-        .mockReturnValue(Buffer.from("PATH=/custom/bin\0HOME=/home/user\0", "utf-8"));
-      const result = getShellPathFromLoginShell({ env: { SHELL: "/bin/sh" }, exec });
-      expect(result).toBe("/custom/bin");
-    });
-
-    it("caches the value", () => {
-      if (process.platform === "win32") {
-        return;
-      }
-      const exec = vi.fn().mockReturnValue(Buffer.from("PATH=/custom/bin\0", "utf-8"));
-      const env = { SHELL: "/bin/sh" } as NodeJS.ProcessEnv;
-      expect(getShellPathFromLoginShell({ env, exec })).toBe("/custom/bin");
-      expect(getShellPathFromLoginShell({ env, exec })).toBe("/custom/bin");
-      expect(exec).toHaveBeenCalledTimes(1);
-    });
-
-    it("returns null on exec failure", () => {
-      if (process.platform === "win32") {
-        return;
-      }
-      const exec = vi.fn(() => {
-        throw new Error("boom");
-      });
-      const result = getShellPathFromLoginShell({ env: { SHELL: "/bin/sh" }, exec });
-      expect(result).toBeNull();
     });
   });
 

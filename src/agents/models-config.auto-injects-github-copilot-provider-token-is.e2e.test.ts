@@ -1,8 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { captureEnv } from "../test-utils/env.js";
 import {
   installModelsConfigTestHooks,
+  mockCopilotTokenExchangeSuccess,
+  withCopilotGithubToken,
   withModelsTempHome as withTempHome,
 } from "./models-config.e2e-harness.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
@@ -12,19 +15,7 @@ installModelsConfigTestHooks({ restoreFetch: true });
 describe("models-config", () => {
   it("auto-injects github-copilot provider when token is present", async () => {
     await withTempHome(async (home) => {
-      const previous = process.env.COPILOT_GITHUB_TOKEN;
-      process.env.COPILOT_GITHUB_TOKEN = "gh-token";
-      const fetchMock = vi.fn().mockResolvedValue({
-        ok: true,
-        status: 200,
-        json: async () => ({
-          token: "copilot-token;proxy-ep=proxy.copilot.example",
-          expires_at: Math.floor(Date.now() / 1000) + 3600,
-        }),
-      });
-      globalThis.fetch = fetchMock as unknown as typeof fetch;
-
-      try {
+      await withCopilotGithubToken("gh-token", async () => {
         const agentDir = path.join(home, "agent-default-base-url");
         await ensureOpenClawModelsJson({ models: { providers: {} } }, agentDir);
 
@@ -35,34 +26,18 @@ describe("models-config", () => {
 
         expect(parsed.providers["github-copilot"]?.baseUrl).toBe("https://api.copilot.example");
         expect(parsed.providers["github-copilot"]?.models?.length ?? 0).toBe(0);
-      } finally {
-        if (previous === undefined) {
-          delete process.env.COPILOT_GITHUB_TOKEN;
-        } else {
-          process.env.COPILOT_GITHUB_TOKEN = previous;
-        }
-      }
+      });
     });
   });
 
   it("prefers COPILOT_GITHUB_TOKEN over GH_TOKEN and GITHUB_TOKEN", async () => {
     await withTempHome(async () => {
-      const previous = process.env.COPILOT_GITHUB_TOKEN;
-      const previousGh = process.env.GH_TOKEN;
-      const previousGithub = process.env.GITHUB_TOKEN;
+      const envSnapshot = captureEnv(["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"]);
       process.env.COPILOT_GITHUB_TOKEN = "copilot-token";
       process.env.GH_TOKEN = "gh-token";
       process.env.GITHUB_TOKEN = "github-token";
 
-      const fetchMock = vi.fn().mockResolvedValue({
-        ok: true,
-        status: 200,
-        json: async () => ({
-          token: "copilot-token;proxy-ep=proxy.copilot.example",
-          expires_at: Math.floor(Date.now() / 1000) + 3600,
-        }),
-      });
-      globalThis.fetch = fetchMock as unknown as typeof fetch;
+      const fetchMock = mockCopilotTokenExchangeSuccess();
 
       try {
         await ensureOpenClawModelsJson({ models: { providers: {} } });
@@ -70,9 +45,7 @@ describe("models-config", () => {
         const [, opts] = fetchMock.mock.calls[0] as [string, { headers?: Record<string, string> }];
         expect(opts?.headers?.Authorization).toBe("Bearer copilot-token");
       } finally {
-        process.env.COPILOT_GITHUB_TOKEN = previous;
-        process.env.GH_TOKEN = previousGh;
-        process.env.GITHUB_TOKEN = previousGithub;
+        envSnapshot.restore();
       }
     });
   });

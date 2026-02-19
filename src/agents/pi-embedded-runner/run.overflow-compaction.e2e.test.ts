@@ -5,31 +5,6 @@ vi.mock("../../utils.js", () => ({
   resolveUserPath: vi.fn((p: string) => p),
 }));
 
-vi.mock("../auth-profiles.js", () => ({
-  markAuthProfileFailure: vi.fn(async () => {}),
-  markAuthProfileGood: vi.fn(async () => {}),
-  markAuthProfileUsed: vi.fn(async () => {}),
-}));
-
-vi.mock("../usage.js", () => ({
-  normalizeUsage: vi.fn((usage?: unknown) =>
-    usage && typeof usage === "object" ? usage : undefined,
-  ),
-  derivePromptTokens: vi.fn(
-    (usage?: { input?: number; cacheRead?: number; cacheWrite?: number }) => {
-      if (!usage) {
-        return undefined;
-      }
-      const input = usage.input ?? 0;
-      const cacheRead = usage.cacheRead ?? 0;
-      const cacheWrite = usage.cacheWrite ?? 0;
-      const sum = input + cacheRead + cacheWrite;
-      return sum > 0 ? sum : undefined;
-    },
-  ),
-  hasNonzeroUsage: vi.fn(() => false),
-}));
-
 vi.mock("../pi-embedded-helpers.js", async () => {
   return {
     isCompactionFailureError: (msg?: string) => {
@@ -75,8 +50,9 @@ vi.mock("../pi-embedded-helpers.js", async () => {
 import { compactEmbeddedPiSessionDirect } from "./compact.js";
 import { log } from "./logger.js";
 import { runEmbeddedPiAgent } from "./run.js";
-import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
+import { makeAttemptResult, mockOverflowRetrySuccess } from "./run.overflow-compaction.fixture.js";
 import { runEmbeddedAttempt } from "./run/attempt.js";
+import type { EmbeddedRunAttemptResult } from "./run/types.js";
 import {
   sessionLikelyHasOversizedToolResults,
   truncateOversizedToolResultsInSession,
@@ -111,20 +87,9 @@ describe("overflow compaction in run loop", () => {
   });
 
   it("retries after successful compaction on context overflow promptError", async () => {
-    const overflowError = new Error("request_too_large: Request size exceeds model context window");
-
-    mockedRunEmbeddedAttempt
-      .mockResolvedValueOnce(makeAttemptResult({ promptError: overflowError }))
-      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
-
-    mockedCompactDirect.mockResolvedValueOnce({
-      ok: true,
-      compacted: true,
-      result: {
-        summary: "Compacted session",
-        firstKeptEntryId: "entry-5",
-        tokensBefore: 150000,
-      },
+    mockOverflowRetrySuccess({
+      runEmbeddedAttempt: mockedRunEmbeddedAttempt,
+      compactDirect: mockedCompactDirect,
     });
 
     const result = await runEmbeddedPiAgent(baseParams);
@@ -196,7 +161,12 @@ describe("overflow compaction in run loop", () => {
       .mockResolvedValueOnce(
         makeAttemptResult({
           promptError: overflowError,
-          messagesSnapshot: [{ role: "assistant", content: "big tool output" }],
+          messagesSnapshot: [
+            {
+              role: "assistant",
+              content: "big tool output",
+            } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+          ],
         }),
       )
       .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
@@ -354,6 +324,22 @@ describe("overflow compaction in run loop", () => {
     expect(log.warn).not.toHaveBeenCalledWith(expect.stringContaining("source=assistantError"));
   });
 
+  it("returns an explicit timeout payload when the run times out before producing any reply", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({
+        aborted: true,
+        timedOut: true,
+        timedOutDuringCompaction: false,
+        assistantTexts: [],
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent(baseParams);
+
+    expect(result.payloads?.[0]?.isError).toBe(true);
+    expect(result.payloads?.[0]?.text).toContain("timed out");
+  });
+
   it("sets promptTokens from the latest model call usage, not accumulated attempt usage", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValue(
       makeAttemptResult({
@@ -371,7 +357,7 @@ describe("overflow compaction in run loop", () => {
             cacheWrite: 0,
             total: 2_000,
           },
-        } as EmbeddedRunAttemptResult["lastAssistant"],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
       }),
     );
 
