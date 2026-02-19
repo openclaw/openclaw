@@ -3,7 +3,11 @@ import express from "express";
 import { loadConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveBrowserConfig } from "./config.js";
-import { ensureBrowserControlAuth, resolveBrowserControlAuth } from "./control-auth.js";
+import {
+  ensureBrowserControlAuth,
+  resolveBrowserControlAuth,
+  shouldAllowUnsafeBrowserControlNoAuth,
+} from "./control-auth.js";
 import { isPwAiLoaded } from "./pw-ai-state.js";
 import { registerBrowserRoutes } from "./routes/index.js";
 import type { BrowserRouteRegistrar } from "./routes/types.js";
@@ -38,6 +42,19 @@ export async function startBrowserControlServerFromConfig(): Promise<BrowserServ
     }
   } catch (err) {
     logServer.warn(`failed to auto-configure browser auth: ${String(err)}`);
+  }
+
+  if (!browserAuth.token && !browserAuth.password) {
+    if (!shouldAllowUnsafeBrowserControlNoAuth(process.env)) {
+      logServer.error(
+        "refusing to start browser control without auth. " +
+          "Set gateway.auth.token/password, or use OPENCLAW_UNSAFE_ALLOW_BROWSER_CONTROL_NO_AUTH=1 for short-lived break-glass use.",
+      );
+      return null;
+    }
+    logServer.warn(
+      "SECURITY WARNING: starting browser control without auth due OPENCLAW_UNSAFE_ALLOW_BROWSER_CONTROL_NO_AUTH=1.",
+    );
   }
 
   const app = express();

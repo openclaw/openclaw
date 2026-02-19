@@ -15,7 +15,7 @@ vi.mock("../config/config.js", async (importOriginal) => {
   };
 });
 
-import { ensureBrowserControlAuth } from "./control-auth.js";
+import { ensureBrowserControlAuth, shouldAllowUnsafeBrowserControlNoAuth } from "./control-auth.js";
 
 describe("ensureBrowserControlAuth", () => {
   const expectExplicitModeSkipsAutoAuth = async (mode: "password" | "none") => {
@@ -124,5 +124,25 @@ describe("ensureBrowserControlAuth", () => {
 
     expect(result).toEqual({ auth: { token: "latest-token" } });
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+  });
+
+  describe("shouldAllowUnsafeBrowserControlNoAuth", () => {
+    it("defaults to false outside test-like envs", () => {
+      expect(shouldAllowUnsafeBrowserControlNoAuth({ NODE_ENV: "production" })).toBe(false);
+    });
+
+    it("allows explicit break-glass override", () => {
+      expect(
+        shouldAllowUnsafeBrowserControlNoAuth({
+          NODE_ENV: "production",
+          OPENCLAW_UNSAFE_ALLOW_BROWSER_CONTROL_NO_AUTH: "1",
+        }),
+      ).toBe(true);
+    });
+
+    it("treats test-like envs as allowed for test harnesses", () => {
+      expect(shouldAllowUnsafeBrowserControlNoAuth({ NODE_ENV: "test" })).toBe(true);
+      expect(shouldAllowUnsafeBrowserControlNoAuth({ VITEST: "1" })).toBe(true);
+    });
   });
 });

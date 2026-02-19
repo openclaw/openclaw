@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { ensureGatewayStartupAuth } from "../gateway/startup-auth.js";
+import { isTruthyEnvValue } from "../infra/env.js";
 
 export type BrowserControlAuth = {
   token?: string;
@@ -35,6 +36,24 @@ function shouldAutoGenerateBrowserAuth(env: NodeJS.ProcessEnv): boolean {
     return false;
   }
   return true;
+}
+
+function isTestLikeEnv(env: NodeJS.ProcessEnv): boolean {
+  const nodeEnv = (env.NODE_ENV ?? "").trim().toLowerCase();
+  if (nodeEnv === "test") {
+    return true;
+  }
+  const vitest = (env.VITEST ?? "").trim().toLowerCase();
+  return Boolean(vitest && vitest !== "0" && vitest !== "false" && vitest !== "off");
+}
+
+export function shouldAllowUnsafeBrowserControlNoAuth(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (isTestLikeEnv(env)) {
+    return true;
+  }
+  return isTruthyEnvValue(env.OPENCLAW_UNSAFE_ALLOW_BROWSER_CONTROL_NO_AUTH);
 }
 
 export async function ensureBrowserControlAuth(params: {
