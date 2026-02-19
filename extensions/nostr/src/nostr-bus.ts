@@ -507,7 +507,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
       onConnect?.(relay);
     },
     onRelayConnectionFailure: (relay: string) => {
-      metrics.emit("relay.connect.failure", 1, { relay });
+      metrics.emit("relay.error", 1, { relay, phase: "connect" });
       onDisconnect?.(relay);
     },
   } as ConstructorParameters<typeof SimplePool>[0]);
