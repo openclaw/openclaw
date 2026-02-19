@@ -16,43 +16,6 @@ type ClaudeWebOrganizationsResponse = Array<{
 
 type ClaudeWebUsageResponse = ClaudeUsageResponse;
 
-type SessionKeyCandidateSource =
-  | "override"
-  | "CLAUDE_AI_SESSION_KEY"
-  | "CLAUDE_WEB_SESSION_KEY"
-  | "CLAUDE_WEB_COOKIE"
-  | "none";
-
-type SessionKeyResolution = {
-  sessionKey?: string;
-  cookieHeader?: string;
-  source: SessionKeyCandidateSource;
-  hadCandidate: boolean;
-  parsedFromCookie: boolean;
-};
-
-type ClaudeWebUsageAttempt = {
-  snapshot: ProviderUsageSnapshot | null;
-  debug: {
-    orgStatus?: number;
-    usageStatus?: number;
-    orgCount?: number;
-    hasOrgId?: boolean;
-    usageWindows?: number;
-    orgHint?: "cloudflare_challenge" | "unauthorized" | "other";
-    usageHint?: "cloudflare_challenge" | "unauthorized" | "other";
-  };
-};
-
-const CLOUDFLARE_BACKOFF_MS = 15 * 60 * 1000;
-let claudeCloudflareBackoffUntilMs = 0;
-
-function formatBackoffRemaining(targetMs: number, now = Date.now()): string {
-  const diff = Math.max(0, targetMs - now);
-  const minutes = Math.ceil(diff / 60000);
-  return `${minutes}m`;
-}
-
 function buildClaudeUsageWindows(data: ClaudeUsageResponse): UsageWindow[] {
   const windows: UsageWindow[] = [];
 
@@ -83,145 +46,47 @@ function buildClaudeUsageWindows(data: ClaudeUsageResponse): UsageWindow[] {
   return windows;
 }
 
-function extractSessionKey(value?: string): { key?: string; parsedFromCookie: boolean } {
-  const trimmed = value?.trim();
-  if (!trimmed) {
-    return { key: undefined, parsedFromCookie: false };
+function resolveClaudeWebSessionKey(): string | undefined {
+  const direct =
+    process.env.CLAUDE_AI_SESSION_KEY?.trim() ?? process.env.CLAUDE_WEB_SESSION_KEY?.trim();
+  if (direct?.startsWith("sk-ant-")) {
+    return direct;
   }
-  if (trimmed.startsWith("sk-ant-")) {
-    return { key: trimmed, parsedFromCookie: false };
-  }
-  const stripped = trimmed.replace(/^cookie:\s*/i, "");
-  const match = stripped.match(/(?:^|;\s*)sessionKey=([^;\s]+)/i);
-  const parsed = match?.[1]?.trim();
-  return {
-    key: parsed?.startsWith("sk-ant-") ? parsed : undefined,
-    parsedFromCookie: Boolean(parsed?.startsWith("sk-ant-")),
-  };
-}
 
-function extractCookieHeader(value?: string): string | undefined {
-  const trimmed = value?.trim();
-  if (!trimmed) {
+  const cookieHeader = process.env.CLAUDE_WEB_COOKIE?.trim();
+  if (!cookieHeader || !/^cookie:\s*/i.test(cookieHeader)) {
     return undefined;
   }
-  if (trimmed.startsWith("sk-ant-")) {
-    return `sessionKey=${trimmed}`;
-  }
-  const stripped = trimmed.replace(/^cookie:\s*/i, "").trim();
-  if (/(^|;\s*)sessionKey=/.test(stripped)) {
-    return stripped;
-  }
-  return undefined;
-}
-
-function getCookieValue(cookieHeader: string, name: string): string | undefined {
-  const match = cookieHeader.match(new RegExp(`(?:^|;\\s*)${name}=([^;]+)`));
-  return match?.[1]?.trim();
-}
-
-function resolveClaudeWebSessionKey(override?: string): SessionKeyResolution {
-  const candidates: Array<[SessionKeyCandidateSource, string | undefined]> = [
-    ["override", override],
-    ["CLAUDE_AI_SESSION_KEY", process.env.CLAUDE_AI_SESSION_KEY],
-    ["CLAUDE_WEB_SESSION_KEY", process.env.CLAUDE_WEB_SESSION_KEY],
-    ["CLAUDE_WEB_COOKIE", process.env.CLAUDE_WEB_COOKIE],
-  ];
-
-  for (const [source, raw] of candidates) {
-    if (!raw?.trim()) {
-      continue;
-    }
-    const extracted = extractSessionKey(raw);
-    const cookieHeader = extractCookieHeader(raw);
-    if (extracted.key || cookieHeader) {
-      return {
-        sessionKey: extracted.key,
-        cookieHeader: cookieHeader ?? (extracted.key ? `sessionKey=${extracted.key}` : undefined),
-        source,
-        hadCandidate: true,
-        parsedFromCookie: extracted.parsedFromCookie,
-      };
-    }
-    return {
-      sessionKey: undefined,
-      cookieHeader: undefined,
-      source,
-      hadCandidate: true,
-      parsedFromCookie: false,
-    };
-  }
-
-  return {
-    sessionKey: undefined,
-    source: "none",
-    hadCandidate: false,
-    parsedFromCookie: false,
-  };
+  const stripped = cookieHeader.replace(/^cookie:\s*/i, "");
+  const match = stripped.match(/(?:^|;\s*)sessionKey=([^;\s]+)/i);
+  const value = match?.[1]?.trim();
+  return value?.startsWith("sk-ant-") ? value : undefined;
 }
 
 async function fetchClaudeWebUsage(
-  cookieHeader: string,
+  sessionKey: string,
   timeoutMs: number,
   fetchFn: typeof fetch,
-  orgIdOverride?: string,
-): Promise<ClaudeWebUsageAttempt> {
+): Promise<ProviderUsageSnapshot | null> {
   const headers: Record<string, string> = {
-    Cookie: cookieHeader,
-    Accept: "*/*",
-    "Content-Type": "application/json",
-    Origin: "https://claude.ai",
-    Referer: "https://claude.ai/settings/usage",
-    "User-Agent":
-      process.env.CLAUDE_WEB_USER_AGENT ||
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
-    "Anthropic-Client-Platform": "web_claude_ai",
+    Cookie: `sessionKey=${sessionKey}`,
+    Accept: "application/json",
   };
 
-  const cookieDeviceId = getCookieValue(cookieHeader, "anthropic-device-id");
-  const cookieAnonId = getCookieValue(cookieHeader, "ajs_anonymous_id");
-  if (cookieDeviceId) {
-    headers["Anthropic-Device-Id"] = cookieDeviceId;
-  }
-  if (cookieAnonId) {
-    headers["Anthropic-Anonymous-Id"] = cookieAnonId;
+  const orgRes = await fetchJson(
+    "https://claude.ai/api/organizations",
+    { headers },
+    timeoutMs,
+    fetchFn,
+  );
+  if (!orgRes.ok) {
+    return null;
   }
 
-  let orgResStatus: number | undefined;
-  let orgCount: number | undefined;
-  let orgId = orgIdOverride?.trim();
-
+  const orgs = (await orgRes.json()) as ClaudeWebOrganizationsResponse;
+  const orgId = orgs?.[0]?.uuid?.trim();
   if (!orgId) {
-    const orgRes = await fetchJson(
-      "https://claude.ai/api/organizations",
-      { headers },
-      timeoutMs,
-      fetchFn,
-    );
-    orgResStatus = orgRes.status;
-    if (!orgRes.ok) {
-      const orgBody = (await orgRes.text()).slice(0, 400).toLowerCase();
-      const orgHint =
-        orgBody.includes("just a moment") || orgBody.includes("cf-challenge")
-          ? "cloudflare_challenge"
-          : orgRes.status === 401 || orgRes.status === 403
-            ? "unauthorized"
-            : "other";
-      return {
-        snapshot: null,
-        debug: { orgStatus: orgRes.status, orgHint },
-      };
-    }
-
-    const orgs = (await orgRes.json()) as ClaudeWebOrganizationsResponse;
-    orgCount = orgs?.length ?? 0;
-    orgId = orgs?.[0]?.uuid?.trim();
-    if (!orgId) {
-      return {
-        snapshot: null,
-        debug: { orgStatus: orgRes.status, orgCount: orgs?.length ?? 0, hasOrgId: false },
-      };
-    }
+    return null;
   }
 
   const usageRes = await fetchJson(
@@ -231,53 +96,19 @@ async function fetchClaudeWebUsage(
     fetchFn,
   );
   if (!usageRes.ok) {
-    const usageBody = (await usageRes.text()).slice(0, 400).toLowerCase();
-    const usageHint =
-      usageBody.includes("just a moment") || usageBody.includes("cf-challenge")
-        ? "cloudflare_challenge"
-        : usageRes.status === 401 || usageRes.status === 403
-          ? "unauthorized"
-          : "other";
-    return {
-      snapshot: null,
-      debug: {
-        orgStatus: orgResStatus,
-        orgCount,
-        hasOrgId: true,
-        usageStatus: usageRes.status,
-        usageHint,
-      },
-    };
+    return null;
   }
 
   const data = (await usageRes.json()) as ClaudeWebUsageResponse;
   const windows = buildClaudeUsageWindows(data);
 
   if (windows.length === 0) {
-    return {
-      snapshot: null,
-      debug: {
-        orgStatus: orgResStatus,
-        orgCount,
-        hasOrgId: true,
-        usageStatus: usageRes.status,
-        usageWindows: 0,
-      },
-    };
+    return null;
   }
   return {
-    snapshot: {
-      provider: "anthropic",
-      displayName: PROVIDER_LABELS.anthropic,
-      windows,
-    },
-    debug: {
-      orgStatus: orgResStatus,
-      orgCount,
-      hasOrgId: true,
-      usageStatus: usageRes.status,
-      usageWindows: windows.length,
-    },
+    provider: "anthropic",
+    displayName: PROVIDER_LABELS.anthropic,
+    windows,
   };
 }
 
@@ -285,7 +116,6 @@ export async function fetchClaudeUsage(
   token: string,
   timeoutMs: number,
   fetchFn: typeof fetch,
-  claudeWebSessionKey?: string,
 ): Promise<ProviderUsageSnapshot> {
   const res = await fetchJson(
     "https://api.anthropic.com/api/oauth/usage",
@@ -320,76 +150,13 @@ export async function fetchClaudeUsage(
     // include user:profile scope required by the OAuth usage endpoint. When a claude.ai
     // browser sessionKey is available, fall back to the web API.
     if (res.status === 403 && message?.includes("scope requirement user:profile")) {
-      const keyResolution = resolveClaudeWebSessionKey(claudeWebSessionKey);
-      if (keyResolution.cookieHeader) {
-        if (Date.now() < claudeCloudflareBackoffUntilMs) {
-          const retryIn = formatBackoffRemaining(claudeCloudflareBackoffUntilMs);
-          return {
-            provider: "anthropic",
-            displayName: PROVIDER_LABELS.anthropic,
-            windows: [],
-            error:
-              "Usage unavailable: Claude usage is temporarily blocked by Cloudflare from this host/network. " +
-              `Skipping retry for ${retryIn} to reduce noise. ` +
-              "(Inference is unaffected.)",
-          };
+      const sessionKey = resolveClaudeWebSessionKey();
+      if (sessionKey) {
+        const web = await fetchClaudeWebUsage(sessionKey, timeoutMs, fetchFn);
+        if (web) {
+          return web;
         }
-
-        const webAttempt = await fetchClaudeWebUsage(
-          keyResolution.cookieHeader,
-          timeoutMs,
-          fetchFn,
-          process.env.CLAUDE_ORGANIZATION_ID,
-        );
-        if (webAttempt.snapshot) {
-          claudeCloudflareBackoffUntilMs = 0;
-          return webAttempt.snapshot;
-        }
-        // Web API call failed even with valid session key
-        const cloudflareBlocked =
-          webAttempt.debug.orgHint === "cloudflare_challenge" ||
-          webAttempt.debug.usageHint === "cloudflare_challenge";
-        if (cloudflareBlocked) {
-          claudeCloudflareBackoffUntilMs = Date.now() + CLOUDFLARE_BACKOFF_MS;
-          const retryIn = formatBackoffRemaining(claudeCloudflareBackoffUntilMs);
-          return {
-            provider: "anthropic",
-            displayName: PROVIDER_LABELS.anthropic,
-            windows: [],
-            error:
-              "Usage unavailable: Claude usage is blocked by Cloudflare from this host/network (your session key is likely fine). " +
-              `Will retry automatically in ~${retryIn}. ` +
-              "(Inference is unaffected.)",
-          };
-        }
-
-        const statusHint =
-          webAttempt.debug.orgStatus === 401 || webAttempt.debug.orgStatus === 403
-            ? " claude.ai rejected this session key (401/403). Make sure CLAUDE_AI_SESSION_KEY is the current `sessionKey` cookie value from an active claude.ai browser session."
-            : "";
-        return {
-          provider: "anthropic",
-          displayName: PROVIDER_LABELS.anthropic,
-          windows: [],
-          error:
-            "Usage unavailable: claude.ai web API failed. " +
-            "Try refreshing your session key from claude.ai cookies, " +
-            "or use an Anthropic API key (inference is unaffected)." +
-            statusHint,
-        };
       }
-      // setup-token lacks user:profile scope and no session key available
-      return {
-        provider: "anthropic",
-        displayName: PROVIDER_LABELS.anthropic,
-        windows: [],
-        error:
-          "Usage unavailable: setup-token lacks user:profile scope. " +
-          "To enable usage tracking, set CLAUDE_AI_SESSION_KEY in your OpenClaw config " +
-          '(e.g. env: { CLAUDE_AI_SESSION_KEY: "<sessionKey cookie from claude.ai>" } or ' +
-          'env: { vars: { CLAUDE_AI_SESSION_KEY: "<sessionKey>" } }), ' +
-          "or in ~/.openclaw/.env (or use an Anthropic API key — inference is unaffected).",
-      };
     }
 
     return buildUsageHttpErrorSnapshot({

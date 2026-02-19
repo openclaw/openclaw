@@ -20,6 +20,8 @@ export type UsageSummary = {
 export type UsageProviderId =
   | "anthropic"
   | "github-copilot"
+  | "google-antigravity"
+  | "google-gemini-cli"
   | "minimax"
   | "moonshot"
   | "openai-codex"

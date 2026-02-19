@@ -190,7 +190,13 @@ function resolveOAuthProviders(agentDir?: string): UsageProviderId[] {
     allowKeychainPrompt: false,
   });
   const cfg = loadConfig();
-  const providers = ["anthropic", "github-copilot", "openai-codex"] satisfies UsageProviderId[];
+  const providers = [
+    "anthropic",
+    "github-copilot",
+    "openai-codex",
+    "google-antigravity",
+    "google-gemini-cli",
+  ] satisfies UsageProviderId[];
   const isOAuthLikeCredential = (id: string) => {
     const cred = store.profiles[id];
     return cred?.type === "oauth" || cred?.type === "token";

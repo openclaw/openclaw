@@ -1,9 +1,11 @@
 import { resolveFetch } from "./fetch.js";
 import { type ProviderAuth, resolveProviderAuths } from "./provider-usage.auth.js";
 import {
+  fetchAntigravityUsage,
   fetchClaudeUsage,
   fetchCodexUsage,
   fetchCopilotUsage,
+  fetchGeminiUsage,
   fetchMinimaxUsage,
   fetchMoonshotUsage,
   fetchZaiUsage,
@@ -59,6 +61,10 @@ export async function loadProviderUsageSummary(
             return await fetchClaudeUsage(auth.token, timeoutMs, fetchFn, opts.claudeWebSessionKey);
           case "github-copilot":
             return await fetchCopilotUsage(auth.token, timeoutMs, fetchFn);
+          case "google-antigravity":
+            return await fetchAntigravityUsage(auth.token, timeoutMs, fetchFn);
+          case "google-gemini-cli":
+            return await fetchGeminiUsage(auth.token, timeoutMs, fetchFn, "google-gemini-cli");
           case "openai-codex":
             return await fetchCodexUsage(auth.token, auth.accountId, timeoutMs, fetchFn);
           case "minimax":
