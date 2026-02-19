@@ -1507,9 +1507,41 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
             });
             await safeSendThinkingDelta("start", RUN_START_THINKING_DELTA_TEXT);
             startHeartbeat();
-            const dispatchStartedAt = Date.now();
-            const rawDispatchResult =
-              await runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
+            const normalizeDispatchResult = (
+              rawDispatchResult: unknown,
+            ): {
+              queuedFinal: boolean;
+              counts: { tool: number; block: number; final: number };
+            } => {
+              return {
+                queuedFinal:
+                  !!rawDispatchResult &&
+                  typeof rawDispatchResult === "object" &&
+                  Boolean((rawDispatchResult as { queuedFinal?: unknown }).queuedFinal),
+                counts: (() => {
+                  const rawCounts =
+                    rawDispatchResult && typeof rawDispatchResult === "object"
+                      ? (rawDispatchResult as { counts?: Record<string, unknown> }).counts
+                      : undefined;
+                  return {
+                    tool:
+                      typeof rawCounts?.tool === "number" && Number.isFinite(rawCounts.tool)
+                        ? rawCounts.tool
+                        : 0,
+                    block:
+                      typeof rawCounts?.block === "number" && Number.isFinite(rawCounts.block)
+                        ? rawCounts.block
+                        : 0,
+                    final:
+                      typeof rawCounts?.final === "number" && Number.isFinite(rawCounts.final)
+                        ? rawCounts.final
+                        : 0,
+                  };
+                })(),
+              };
+            };
+            const dispatchReply = () =>
+              runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
                 ctx: ctxPayload,
                 cfg: config,
                 dispatcherOptions: {
@@ -1692,33 +1724,40 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                   },
                 },
               });
-            const dispatchResult = {
-              queuedFinal:
-                !!rawDispatchResult &&
-                typeof rawDispatchResult === "object" &&
-                Boolean((rawDispatchResult as { queuedFinal?: unknown }).queuedFinal),
-              counts: (() => {
-                const rawCounts =
-                  rawDispatchResult && typeof rawDispatchResult === "object"
-                    ? (rawDispatchResult as { counts?: Record<string, unknown> }).counts
-                    : undefined;
-                return {
-                  tool:
-                    typeof rawCounts?.tool === "number" && Number.isFinite(rawCounts.tool)
-                      ? rawCounts.tool
-                      : 0,
-                  block:
-                    typeof rawCounts?.block === "number" && Number.isFinite(rawCounts.block)
-                      ? rawCounts.block
-                      : 0,
-                  final:
-                    typeof rawCounts?.final === "number" && Number.isFinite(rawCounts.final)
-                      ? rawCounts.final
-                      : 0,
-                };
-              })(),
+            const dispatchStartedAt = Date.now();
+            let dispatchAttempts = 1;
+            const rawDispatchResult = await dispatchReply();
+            let dispatchResult = normalizeDispatchResult(rawDispatchResult);
+            let dispatchDurationMs = Date.now() - dispatchStartedAt;
+            const hasDispatchOutput = (): boolean => {
+              if (runControl.terminalEmitted) {
+                return true;
+              }
+              if (streamedTextBuffer.trim().length > 0) {
+                return true;
+              }
+              return (
+                dispatchResult.counts.tool > 0 ||
+                dispatchResult.counts.block > 0 ||
+                dispatchResult.counts.final > 0
+              );
             };
-            const dispatchDurationMs = Date.now() - dispatchStartedAt;
+            if (!runControl.cancelled && !hasDispatchOutput()) {
+              await safeSendThinkingDelta("update", "retrying_response");
+              const retryDispatchStartedAt = Date.now();
+              const retryRawDispatchResult = await dispatchReply();
+              const retryDispatchResult = normalizeDispatchResult(retryRawDispatchResult);
+              dispatchAttempts += 1;
+              dispatchDurationMs += Date.now() - retryDispatchStartedAt;
+              dispatchResult = {
+                queuedFinal: dispatchResult.queuedFinal || retryDispatchResult.queuedFinal,
+                counts: {
+                  tool: dispatchResult.counts.tool + retryDispatchResult.counts.tool,
+                  block: dispatchResult.counts.block + retryDispatchResult.counts.block,
+                  final: dispatchResult.counts.final + retryDispatchResult.counts.final,
+                },
+              };
+            }
             const pendingToolCalls = toolCallTelemetry.pendingCount();
             traceRecorder.record({
               direction: "dispatch_result",
@@ -1732,9 +1771,10 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
               streamed_text_length: streamedTextBuffer.length,
               pending_tool_calls: pendingToolCalls,
               dispatch_duration_ms: dispatchDurationMs,
+              dispatch_attempts: dispatchAttempts,
             });
             ctx.log?.debug?.(
-              `[${account.accountId}] Nostr dispatch settled for run ${payload.eventId}: queuedFinal=${dispatchResult.queuedFinal ? "yes" : "no"} counts=${JSON.stringify(dispatchResult.counts)} terminalEmitted=${runControl.terminalEmitted ? "yes" : "no"} cancelled=${runControl.cancelled ? "yes" : "no"} streamedTextLength=${streamedTextBuffer.length} pendingToolCalls=${pendingToolCalls} durationMs=${dispatchDurationMs}`,
+              `[${account.accountId}] Nostr dispatch settled for run ${payload.eventId}: queuedFinal=${dispatchResult.queuedFinal ? "yes" : "no"} counts=${JSON.stringify(dispatchResult.counts)} terminalEmitted=${runControl.terminalEmitted ? "yes" : "no"} cancelled=${runControl.cancelled ? "yes" : "no"} streamedTextLength=${streamedTextBuffer.length} pendingToolCalls=${pendingToolCalls} attempts=${dispatchAttempts} durationMs=${dispatchDurationMs}`,
             );
 
             if (runControl.cancelled) {
@@ -1808,6 +1848,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                       dispatch_counts: dispatchResult.counts,
                       streamed_text_length: streamedTextBuffer.length,
                       dispatch_duration_ms: dispatchDurationMs,
+                      dispatch_attempts: dispatchAttempts,
                     },
                   },
                   {
