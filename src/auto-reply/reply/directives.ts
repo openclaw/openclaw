@@ -1,5 +1,5 @@
-import type { NoticeLevel, ReasoningLevel } from "../thinking.js";
 import { escapeRegExp } from "../../utils.js";
+import type { NoticeLevel, ReasoningLevel } from "../thinking.js";
 import {
   type ElevatedLevel,
   normalizeElevatedLevel,

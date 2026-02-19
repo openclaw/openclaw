@@ -50,13 +50,18 @@ export async function setGeminiApiKey(key: string, agentDir?: string) {
   });
 }
 
-export async function setMinimaxApiKey(key: string, agentDir?: string) {
+export async function setMinimaxApiKey(
+  key: string,
+  agentDir?: string,
+  profileId: string = "minimax:default",
+) {
+  const provider = profileId.split(":")[0] ?? "minimax";
   // Write to resolved agent dir so gateway finds credentials on startup.
   upsertAuthProfile({
-    profileId: "minimax:default",
+    profileId,
     credential: {
       type: "api_key",
-      provider: "minimax",
+      provider,
       key,
     },
     agentDir: resolveAuthAgentDir(agentDir),
@@ -118,6 +123,7 @@ export async function setVeniceApiKey(key: string, agentDir?: string) {
 export const ZAI_DEFAULT_MODEL_REF = "zai/glm-5";
 export const XIAOMI_DEFAULT_MODEL_REF = "xiaomi/mimo-v2-flash";
 export const OPENROUTER_DEFAULT_MODEL_REF = "openrouter/auto";
+export const HUGGINGFACE_DEFAULT_MODEL_REF = "huggingface/deepseek-ai/DeepSeek-R1";
 export const TOGETHER_DEFAULT_MODEL_REF = "together/moonshotai/Kimi-K2.5";
 export const LITELLM_DEFAULT_MODEL_REF = "litellm/claude-opus-4-6";
 export const VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF = "vercel-ai-gateway/anthropic/claude-opus-4.6";
@@ -148,12 +154,14 @@ export async function setXiaomiApiKey(key: string, agentDir?: string) {
 }
 
 export async function setOpenrouterApiKey(key: string, agentDir?: string) {
+  // Never persist the literal "undefined" (e.g. when prompt returns undefined and caller used String(key)).
+  const safeKey = key === "undefined" ? "" : key;
   upsertAuthProfile({
     profileId: "openrouter:default",
     credential: {
       type: "api_key",
       provider: "openrouter",
-      key,
+      key: safeKey,
     },
     agentDir: resolveAuthAgentDir(agentDir),
   });
@@ -225,6 +233,18 @@ export async function setTogetherApiKey(key: string, agentDir?: string) {
     credential: {
       type: "api_key",
       provider: "together",
+      key,
+    },
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
+
+export async function setHuggingfaceApiKey(key: string, agentDir?: string) {
+  upsertAuthProfile({
+    profileId: "huggingface:default",
+    credential: {
+      type: "api_key",
+      provider: "huggingface",
       key,
     },
     agentDir: resolveAuthAgentDir(agentDir),

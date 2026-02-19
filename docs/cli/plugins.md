@@ -44,6 +44,9 @@ openclaw plugins install <path-or-spec>
 
 Security note: treat plugin installs like running code. Prefer pinned versions.
 
+Npm specs are **registry-only** (package name + optional version/tag). Git/URL/file
+specs are rejected. Dependency installs run with `--ignore-scripts` for safety.
+
 Supported archives: `.zip`, `.tgz`, `.tar.gz`, `.tar`.
 
 Use `--link` to avoid copying a local directory (adds to `plugins.load.paths`):

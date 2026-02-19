@@ -61,4 +61,68 @@ describe("parseFeishuMessageEvent – mentionedBot", () => {
     const ctx = parseFeishuMessageEvent(event as any, "");
     expect(ctx.mentionedBot).toBe(false);
   });
+
+  it("returns mentionedBot=true for post message with at (no top-level mentions)", () => {
+    const BOT_OPEN_ID = "ou_bot_123";
+    const postContent = JSON.stringify({
+      content: [
+        [{ tag: "at", user_id: BOT_OPEN_ID, user_name: "claw" }],
+        [{ tag: "text", text: "What does this document say" }],
+      ],
+    });
+    const event = {
+      sender: { sender_id: { user_id: "u1", open_id: "ou_sender" } },
+      message: {
+        message_id: "msg_1",
+        chat_id: "oc_chat1",
+        chat_type: "group",
+        message_type: "post",
+        content: postContent,
+        mentions: [],
+      },
+    };
+    const ctx = parseFeishuMessageEvent(event as any, BOT_OPEN_ID);
+    expect(ctx.mentionedBot).toBe(true);
+  });
+
+  it("returns mentionedBot=false for post message with no at", () => {
+    const postContent = JSON.stringify({
+      content: [[{ tag: "text", text: "hello" }]],
+    });
+    const event = {
+      sender: { sender_id: { user_id: "u1", open_id: "ou_sender" } },
+      message: {
+        message_id: "msg_1",
+        chat_id: "oc_chat1",
+        chat_type: "group",
+        message_type: "post",
+        content: postContent,
+        mentions: [],
+      },
+    };
+    const ctx = parseFeishuMessageEvent(event as any, "ou_bot_123");
+    expect(ctx.mentionedBot).toBe(false);
+  });
+
+  it("returns mentionedBot=false for post message with at for another user", () => {
+    const postContent = JSON.stringify({
+      content: [
+        [{ tag: "at", user_id: "ou_other", user_name: "other" }],
+        [{ tag: "text", text: "hello" }],
+      ],
+    });
+    const event = {
+      sender: { sender_id: { user_id: "u1", open_id: "ou_sender" } },
+      message: {
+        message_id: "msg_1",
+        chat_id: "oc_chat1",
+        chat_type: "group",
+        message_type: "post",
+        content: postContent,
+        mentions: [],
+      },
+    };
+    const ctx = parseFeishuMessageEvent(event as any, "ou_bot_123");
+    expect(ctx.mentionedBot).toBe(false);
+  });
 });

@@ -1,11 +1,5 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
-import type { TemplateContext } from "../templating.js";
-import type { VerboseLevel } from "../thinking.js";
-import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import type { FollowupRun } from "./queue.js";
-import type { TypingSignaler } from "./typing-mode.js";
-import { resolveAgentModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionId } from "../../agents/cli-session.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
@@ -19,7 +13,6 @@ import {
 } from "../../agents/pi-embedded-helpers.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import {
-  resolveAgentIdFromSessionKey,
   resolveGroupSessionKey,
   resolveSessionTranscriptPath,
   type SessionEntry,
@@ -33,11 +26,19 @@ import {
   resolveMessageChannel,
 } from "../../utils/message-channel.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
+import type { TemplateContext } from "../templating.js";
+import type { VerboseLevel } from "../thinking.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
-import { buildThreadingToolContext, resolveEnforceFinalTag } from "./agent-runner-utils.js";
-import { createBlockReplyPayloadKey, type BlockReplyPipeline } from "./block-reply-pipeline.js";
-import { parseReplyDirectives } from "./reply-directives.js";
-import { applyReplyTagsToPayload, isRenderablePayload } from "./reply-payloads.js";
+import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import {
+  buildEmbeddedRunBaseParams,
+  buildEmbeddedRunContexts,
+  resolveModelFallbackOptions,
+} from "./agent-runner-utils.js";
+import { type BlockReplyPipeline } from "./block-reply-pipeline.js";
+import type { FollowupRun } from "./queue.js";
+import { createBlockReplyDeliveryHandler } from "./reply-delivery.js";
+import type { TypingSignaler } from "./typing-mode.js";
 
 export type AgentRunLoopResult =
   | {
@@ -103,13 +104,7 @@ export async function runAgentTurnWithFallback(params: {
 
   while (true) {
     try {
-      const allowPartialStream = !(
-        params.followupRun.run.reasoningLevel === "stream" && params.opts?.onReasoningStream
-      );
       const normalizeStreamingText = (payload: ReplyPayload): { text?: string; skip: boolean } => {
-        if (!allowPartialStream) {
-          return { skip: true };
-        }
         let text = payload.text;
         if (!params.isHeartbeat && text?.includes("HEARTBEAT_OK")) {
           const stripped = stripHeartbeatToken(text, {
@@ -128,6 +123,10 @@ export async function runAgentTurnWithFallback(params: {
           return { skip: true };
         }
         if (!text) {
+          // Allow media-only payloads (e.g. tool result screenshots) through.
+          if ((payload.mediaUrls?.length ?? 0) > 0) {
+            return { text: undefined, skip: false };
+          }
           return { skip: true };
         }
         const sanitized = sanitizeUserFacingText(text, {
@@ -149,14 +148,7 @@ export async function runAgentTurnWithFallback(params: {
       const blockReplyPipeline = params.blockReplyPipeline;
       const onToolResult = params.opts?.onToolResult;
       const fallbackResult = await runWithModelFallback({
-        cfg: params.followupRun.run.config,
-        provider: params.followupRun.run.provider,
-        model: params.followupRun.run.model,
-        agentDir: params.followupRun.run.agentDir,
-        fallbacksOverride: resolveAgentModelFallbacksOverride(
-          params.followupRun.run.config,
-          resolveAgentIdFromSessionKey(params.followupRun.run.sessionKey),
-        ),
+        ...resolveModelFallbackOptions(params.followupRun.run),
         run: (provider, model) => {
           // Notify that model selection is complete (including after fallback).
           // This allows responsePrefix template interpolation with the actual model.
@@ -254,51 +246,29 @@ export async function runAgentTurnWithFallback(params: {
               }
             })();
           }
-          const authProfileId =
-            provider === params.followupRun.run.provider
-              ? params.followupRun.run.authProfileId
-              : undefined;
+          const { authProfile, embeddedContext, senderContext } = buildEmbeddedRunContexts({
+            run: params.followupRun.run,
+            sessionCtx: params.sessionCtx,
+            hasRepliedRef: params.opts?.hasRepliedRef,
+            provider,
+          });
+          const runBaseParams = buildEmbeddedRunBaseParams({
+            run: params.followupRun.run,
+            provider,
+            model,
+            runId,
+            authProfile,
+          });
           return runEmbeddedPiAgent({
-            sessionId: params.followupRun.run.sessionId,
-            sessionKey: params.sessionKey,
-            agentId: params.followupRun.run.agentId,
-            messageProvider: params.sessionCtx.Provider?.trim().toLowerCase() || undefined,
-            agentAccountId: params.sessionCtx.AccountId,
-            messageTo: params.sessionCtx.OriginatingTo ?? params.sessionCtx.To,
-            messageThreadId: params.sessionCtx.MessageThreadId ?? undefined,
+            ...embeddedContext,
             groupId: resolveGroupSessionKey(params.sessionCtx)?.id,
             groupChannel:
               params.sessionCtx.GroupChannel?.trim() ?? params.sessionCtx.GroupSubject?.trim(),
             groupSpace: params.sessionCtx.GroupSpace?.trim() ?? undefined,
-            senderId: params.sessionCtx.SenderId?.trim() || undefined,
-            senderName: params.sessionCtx.SenderName?.trim() || undefined,
-            senderUsername: params.sessionCtx.SenderUsername?.trim() || undefined,
-            senderE164: params.sessionCtx.SenderE164?.trim() || undefined,
-            // Provider threading context for tool auto-injection
-            ...buildThreadingToolContext({
-              sessionCtx: params.sessionCtx,
-              config: params.followupRun.run.config,
-              hasRepliedRef: params.opts?.hasRepliedRef,
-            }),
-            sessionFile: params.followupRun.run.sessionFile,
-            workspaceDir: params.followupRun.run.workspaceDir,
-            agentDir: params.followupRun.run.agentDir,
-            config: params.followupRun.run.config,
-            skillsSnapshot: params.followupRun.run.skillsSnapshot,
+            ...senderContext,
+            ...runBaseParams,
             prompt: params.commandBody,
             extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
-            ownerNumbers: params.followupRun.run.ownerNumbers,
-            enforceFinalTag: resolveEnforceFinalTag(params.followupRun.run, provider),
-            provider,
-            model,
-            authProfileId,
-            authProfileIdSource: authProfileId
-              ? params.followupRun.run.authProfileIdSource
-              : undefined,
-            thinkLevel: params.followupRun.run.thinkLevel,
-            verboseLevel: params.followupRun.run.verboseLevel,
-            reasoningLevel: params.followupRun.run.reasoningLevel,
-            execOverrides: params.followupRun.run.execOverrides,
             toolResultFormat: (() => {
               const channel = resolveMessageChannel(
                 params.sessionCtx.Surface,
@@ -309,27 +279,24 @@ export async function runAgentTurnWithFallback(params: {
               }
               return isMarkdownCapableMessageChannel(channel) ? "markdown" : "plain";
             })(),
-            bashElevated: params.followupRun.run.bashElevated,
-            timeoutMs: params.followupRun.run.timeoutMs,
-            runId,
+            suppressToolErrorWarnings: params.opts?.suppressToolErrorWarnings,
             images: params.opts?.images,
             abortSignal: params.opts?.abortSignal,
             blockReplyBreak: params.resolvedBlockStreamingBreak,
             blockReplyChunking: params.blockReplyChunking,
-            onPartialReply: allowPartialStream
-              ? async (payload) => {
-                  const textForTyping = await handlePartialForTyping(payload);
-                  if (!params.opts?.onPartialReply || textForTyping === undefined) {
-                    return;
-                  }
-                  await params.opts.onPartialReply({
-                    text: textForTyping,
-                    mediaUrls: payload.mediaUrls,
-                  });
-                }
-              : undefined,
+            onPartialReply: async (payload) => {
+              const textForTyping = await handlePartialForTyping(payload);
+              if (!params.opts?.onPartialReply || textForTyping === undefined) {
+                return;
+              }
+              await params.opts.onPartialReply({
+                text: textForTyping,
+                mediaUrls: payload.mediaUrls,
+              });
+            },
             onAssistantMessageStart: async () => {
               await params.typingSignals.signalMessageStart();
+              await params.opts?.onAssistantMessageStart?.();
             },
             onReasoningStream:
               params.typingSignals.shouldStartOnReasoning || params.opts?.onReasoningStream
@@ -341,20 +308,22 @@ export async function runAgentTurnWithFallback(params: {
                     });
                   }
                 : undefined,
+            onReasoningEnd: params.opts?.onReasoningEnd,
             onAgentEvent: async (evt) => {
               // Trigger typing when tools start executing.
               // Must await to ensure typing indicator starts before tool summaries are emitted.
               if (evt.stream === "tool") {
                 const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
+                const name = typeof evt.data.name === "string" ? evt.data.name : undefined;
                 if (phase === "start" || phase === "update") {
                   await params.typingSignals.signalToolStart();
+                  await params.opts?.onToolStart?.({ name, phase });
                 }
               }
               // Track auto-compaction completion
               if (evt.stream === "compaction") {
                 const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
-                const willRetry = Boolean(evt.data.willRetry);
-                if (phase === "end" && !willRetry) {
+                if (phase === "end") {
                   autoCompactionCompleted = true;
                 }
               }
@@ -363,77 +332,17 @@ export async function runAgentTurnWithFallback(params: {
             // even when regular block streaming is disabled. The handler sends directly
             // via opts.onBlockReply when the pipeline isn't available.
             onBlockReply: params.opts?.onBlockReply
-              ? async (payload) => {
-                  const { text, skip } = normalizeStreamingText(payload);
-                  const hasPayloadMedia = (payload.mediaUrls?.length ?? 0) > 0;
-                  if (skip && !hasPayloadMedia) {
-                    return;
-                  }
-                  const currentMessageId =
-                    params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid;
-                  const taggedPayload = applyReplyTagsToPayload(
-                    {
-                      text,
-                      mediaUrls: payload.mediaUrls,
-                      mediaUrl: payload.mediaUrls?.[0],
-                      replyToId:
-                        payload.replyToId ??
-                        (payload.replyToCurrent === false ? undefined : currentMessageId),
-                      replyToTag: payload.replyToTag,
-                      replyToCurrent: payload.replyToCurrent,
-                    },
-                    currentMessageId,
-                  );
-                  // Let through payloads with audioAsVoice flag even if empty (need to track it)
-                  if (!isRenderablePayload(taggedPayload) && !payload.audioAsVoice) {
-                    return;
-                  }
-                  const parsed = parseReplyDirectives(taggedPayload.text ?? "", {
-                    currentMessageId,
-                    silentToken: SILENT_REPLY_TOKEN,
-                  });
-                  const cleaned = parsed.text || undefined;
-                  const hasRenderableMedia =
-                    Boolean(taggedPayload.mediaUrl) || (taggedPayload.mediaUrls?.length ?? 0) > 0;
-                  // Skip empty payloads unless they have audioAsVoice flag (need to track it)
-                  if (
-                    !cleaned &&
-                    !hasRenderableMedia &&
-                    !payload.audioAsVoice &&
-                    !parsed.audioAsVoice
-                  ) {
-                    return;
-                  }
-                  if (parsed.isSilent && !hasRenderableMedia) {
-                    return;
-                  }
-
-                  const blockPayload: ReplyPayload = params.applyReplyToMode({
-                    ...taggedPayload,
-                    text: cleaned,
-                    audioAsVoice: Boolean(parsed.audioAsVoice || payload.audioAsVoice),
-                    replyToId: taggedPayload.replyToId ?? parsed.replyToId,
-                    replyToTag: taggedPayload.replyToTag || parsed.replyToTag,
-                    replyToCurrent: taggedPayload.replyToCurrent || parsed.replyToCurrent,
-                  });
-
-                  void params.typingSignals
-                    .signalTextDelta(cleaned ?? taggedPayload.text)
-                    .catch((err) => {
-                      logVerbose(`block reply typing signal failed: ${String(err)}`);
-                    });
-
-                  // Use pipeline if available (block streaming enabled), otherwise send directly
-                  if (params.blockStreamingEnabled && params.blockReplyPipeline) {
-                    params.blockReplyPipeline.enqueue(blockPayload);
-                  } else if (params.blockStreamingEnabled) {
-                    // Send directly when flushing before tool execution (no pipeline but streaming enabled).
-                    // Track sent key to avoid duplicate in final payloads.
-                    directlySentBlockKeys.add(createBlockReplyPayloadKey(blockPayload));
-                    await params.opts?.onBlockReply?.(blockPayload);
-                  }
-                  // When streaming is disabled entirely, blocks are accumulated in final text instead.
-                }
+              ? createBlockReplyDeliveryHandler({
+                  onBlockReply: params.opts.onBlockReply,
+                  currentMessageId:
+                    params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid,
+                  normalizeStreamingText,
+                  applyReplyToMode: params.applyReplyToMode,
+                  typingSignals: params.typingSignals,
+                  blockStreamingEnabled: params.blockStreamingEnabled,
+                  blockReplyPipeline,
+                  directlySentBlockKeys,
+                })
               : undefined,
             onBlockReplyFlush:
               params.blockStreamingEnabled && blockReplyPipeline

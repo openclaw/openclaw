@@ -1,8 +1,9 @@
-import { Type } from "@sinclair/typebox";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { Type } from "@sinclair/typebox";
 import type { OpenClawPluginApi } from "../../../src/plugins/types.js";
+import { resolveWindowsLobsterSpawn } from "./windows-spawn.js";
 
 type LobsterEnvelope =
   | {
@@ -84,28 +85,13 @@ function resolveCwd(cwdRaw: unknown): string {
   return resolved;
 }
 
-function isWindowsSpawnErrorThatCanUseShell(err: unknown) {
-  if (!err || typeof err !== "object") {
-    return false;
-  }
-  const code = (err as { code?: unknown }).code;
-
-  // On Windows, spawning scripts discovered on PATH (e.g. lobster.cmd) can fail
-  // with EINVAL, and PATH discovery itself can fail with ENOENT when the binary
-  // is only available via PATHEXT/script wrappers.
-  return code === "EINVAL" || code === "ENOENT";
-}
-
-async function runLobsterSubprocessOnce(
-  params: {
-    execPath: string;
-    argv: string[];
-    cwd: string;
-    timeoutMs: number;
-    maxStdoutBytes: number;
-  },
-  useShell: boolean,
-) {
+async function runLobsterSubprocessOnce(params: {
+  execPath: string;
+  argv: string[];
+  cwd: string;
+  timeoutMs: number;
+  maxStdoutBytes: number;
+}) {
   const { execPath, argv, cwd } = params;
   const timeoutMs = Math.max(200, params.timeoutMs);
   const maxStdoutBytes = Math.max(1024, params.maxStdoutBytes);
@@ -115,19 +101,46 @@ async function runLobsterSubprocessOnce(
   if (nodeOptions.includes("--inspect")) {
     delete env.NODE_OPTIONS;
   }
+  const spawnTarget =
+    process.platform === "win32"
+      ? resolveWindowsLobsterSpawn(execPath, argv, env)
+      : { command: execPath, argv };
 
   return await new Promise<{ stdout: string }>((resolve, reject) => {
-    const child = spawn(execPath, argv, {
+    const child = spawn(spawnTarget.command, spawnTarget.argv, {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
       env,
-      shell: useShell,
-      windowsHide: useShell ? true : undefined,
+      windowsHide: spawnTarget.windowsHide,
     });
 
     let stdout = "";
     let stdoutBytes = 0;
     let stderr = "";
+    let settled = false;
+
+    const settle = (
+      result: { ok: true; value: { stdout: string } } | { ok: false; error: Error },
+    ) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      if (result.ok) {
+        resolve(result.value);
+      } else {
+        reject(result.error);
+      }
+    };
+
+    const failAndTerminate = (message: string) => {
+      try {
+        child.kill("SIGKILL");
+      } finally {
+        settle({ ok: false, error: new Error(message) });
+      }
+    };
 
     child.stdout?.setEncoding("utf8");
     child.stderr?.setEncoding("utf8");
@@ -136,11 +149,7 @@ async function runLobsterSubprocessOnce(
       const str = String(chunk);
       stdoutBytes += Buffer.byteLength(str, "utf8");
       if (stdoutBytes > maxStdoutBytes) {
-        try {
-          child.kill("SIGKILL");
-        } finally {
-          reject(new Error("lobster output exceeded maxStdoutBytes"));
-        }
+        failAndTerminate("lobster output exceeded maxStdoutBytes");
         return;
       }
       stdout += str;
@@ -151,25 +160,22 @@ async function runLobsterSubprocessOnce(
     });
 
     const timer = setTimeout(() => {
-      try {
-        child.kill("SIGKILL");
-      } finally {
-        reject(new Error("lobster subprocess timed out"));
-      }
+      failAndTerminate("lobster subprocess timed out");
     }, timeoutMs);
 
     child.once("error", (err) => {
-      clearTimeout(timer);
-      reject(err);
+      settle({ ok: false, error: err });
     });
 
     child.once("exit", (code) => {
-      clearTimeout(timer);
       if (code !== 0) {
-        reject(new Error(`lobster failed (${code ?? "?"}): ${stderr.trim() || stdout.trim()}`));
+        settle({
+          ok: false,
+          error: new Error(`lobster failed (${code ?? "?"}): ${stderr.trim() || stdout.trim()}`),
+        });
         return;
       }
-      resolve({ stdout });
+      settle({ ok: true, value: { stdout } });
     });
   });
 }
@@ -181,14 +187,7 @@ async function runLobsterSubprocess(params: {
   timeoutMs: number;
   maxStdoutBytes: number;
 }) {
-  try {
-    return await runLobsterSubprocessOnce(params, false);
-  } catch (err) {
-    if (process.platform === "win32" && isWindowsSpawnErrorThatCanUseShell(err)) {
-      return await runLobsterSubprocessOnce(params, true);
-    }
-    throw err;
-  }
+  return await runLobsterSubprocessOnce(params);
 }
 
 function parseEnvelope(stdout: string): LobsterEnvelope {

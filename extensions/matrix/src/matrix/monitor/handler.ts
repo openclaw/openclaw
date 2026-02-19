@@ -11,7 +11,6 @@ import {
   type RuntimeLogger,
 } from "openclaw/plugin-sdk";
 import type { CoreConfig, MatrixRoomConfig, ReplyToMode } from "../../types.js";
-import type { MatrixRawEvent, RoomMessageEventContent } from "./types.js";
 import { fetchEventSummary } from "../actions/summary.js";
 import {
   formatPollAsText,
@@ -36,6 +35,7 @@ import { resolveMentions } from "./mentions.js";
 import { deliverMatrixReplies } from "./replies.js";
 import { resolveMatrixRoomConfig } from "./rooms.js";
 import { resolveMatrixThreadRootId, resolveMatrixThreadTarget } from "./threads.js";
+import type { MatrixRawEvent, RoomMessageEventContent } from "./types.js";
 import { EventType, RelationType } from "./types.js";
 
 export type MatrixMonitorHandlerParams = {
@@ -68,6 +68,7 @@ export type MatrixMonitorHandlerParams = {
     roomId: string,
   ) => Promise<{ name?: string; canonicalAlias?: string; altAliases: string[] }>;
   getMemberDisplayName: (roomId: string, userId: string) => Promise<string>;
+  accountId?: string | null;
 };
 
 export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParams) {
@@ -93,6 +94,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     directTracker,
     getRoomInfo,
     getMemberDisplayName,
+    accountId,
   } = params;
 
   return async (roomId: string, event: MatrixRawEvent) => {
@@ -435,6 +437,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       const baseRoute = core.channel.routing.resolveAgentRoute({
         cfg,
         channel: "matrix",
+        accountId,
         peer: {
           kind: isDirectMessage ? "direct" : "channel",
           id: isDirectMessage ? senderId : roomId,

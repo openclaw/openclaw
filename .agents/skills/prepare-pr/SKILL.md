@@ -34,7 +34,7 @@ scripts/pr-prepare init <PR>
 - `.local/review.json` is mandatory.
 - Resolve all `BLOCKER` and `IMPORTANT` items.
 
-3. Commit with required subject format and validate it.
+3. Commit scoped changes with concise subjects (no PR number/thanks; those belong on the final merge/squash commit).
 
 4. Run gates via wrapper.
 
@@ -74,23 +74,19 @@ jq -r '.changelog' .local/review.json
 jq -r '.docs' .local/review.json
 ```
 
+Changelog gate requirement:
+
+- `CHANGELOG.md` must include a newly added changelog entry line.
+- When PR author metadata is available, that same changelog entry line must include `(#<PR>) thanks @<pr-author>`.
+
 4. Commit scoped changes
 
-Required commit subject format:
-
-- `fix: <summary> (openclaw#<PR>) thanks @<pr-author>`
+Use concise, action-oriented subject lines without PR numbers/thanks. The final merge/squash commit is the only place we include PR numbers and contributor thanks.
 
 Use explicit file list:
 
 ```sh
-source .local/pr-meta.env
-scripts/committer "fix: <summary> (openclaw#$PR_NUMBER) thanks @$PR_AUTHOR" <file1> <file2> ...
-```
-
-Validate commit subject:
-
-```sh
-scripts/pr-prepare validate-commit <PR>
+scripts/committer "fix: <summary>" <file1> <file2> ...
 ```
 
 5. Run gates

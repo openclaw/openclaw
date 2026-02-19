@@ -1,5 +1,7 @@
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolveGatewayStateDir } from "./paths.js";
 import {
   buildMinimalServicePath,
   buildNodeServiceEnvironment,
@@ -95,19 +97,66 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     expect(result).toContain("/opt/fnm/current/bin");
   });
 
-  it("does not include Linux user directories on macOS", () => {
+  it("includes version manager directories on macOS when HOME is set", () => {
     const result = getMinimalServicePathParts({
       platform: "darwin",
       home: "/Users/testuser",
     });
 
-    // Should not include Linux-specific user dirs even with HOME set
-    expect(result.some((p) => p.includes(".npm-global"))).toBe(false);
-    expect(result.some((p) => p.includes(".nvm"))).toBe(false);
+    // Should include common user bin directories
+    expect(result).toContain("/Users/testuser/.local/bin");
+    expect(result).toContain("/Users/testuser/.npm-global/bin");
+    expect(result).toContain("/Users/testuser/bin");
 
-    // Should only include macOS system directories
+    // Should include version manager paths (macOS specific)
+    // Note: nvm has no stable default path, relies on user's shell config
+    expect(result).toContain("/Users/testuser/Library/Application Support/fnm/aliases/default/bin"); // fnm default on macOS
+    expect(result).toContain("/Users/testuser/.fnm/aliases/default/bin"); // fnm if customized to ~/.fnm
+    expect(result).toContain("/Users/testuser/.volta/bin");
+    expect(result).toContain("/Users/testuser/.asdf/shims");
+    expect(result).toContain("/Users/testuser/Library/pnpm"); // pnpm default on macOS
+    expect(result).toContain("/Users/testuser/.local/share/pnpm"); // pnpm XDG fallback
+    expect(result).toContain("/Users/testuser/.bun/bin");
+
+    // Should also include macOS system directories
     expect(result).toContain("/opt/homebrew/bin");
     expect(result).toContain("/usr/local/bin");
+  });
+
+  it("includes env-configured version manager dirs on macOS", () => {
+    const result = getMinimalServicePathPartsFromEnv({
+      platform: "darwin",
+      env: {
+        HOME: "/Users/testuser",
+        FNM_DIR: "/Users/testuser/Library/Application Support/fnm",
+        NVM_DIR: "/Users/testuser/.nvm",
+        PNPM_HOME: "/Users/testuser/Library/pnpm",
+      },
+    });
+
+    // fnm uses aliases/default/bin (not current)
+    expect(result).toContain("/Users/testuser/Library/Application Support/fnm/aliases/default/bin");
+    // nvm: relies on NVM_DIR env var (no stable default path)
+    expect(result).toContain("/Users/testuser/.nvm");
+    // pnpm: binary is directly in PNPM_HOME
+    expect(result).toContain("/Users/testuser/Library/pnpm");
+  });
+
+  it("places version manager dirs before system dirs on macOS", () => {
+    const result = getMinimalServicePathParts({
+      platform: "darwin",
+      home: "/Users/testuser",
+    });
+
+    // fnm on macOS defaults to ~/Library/Application Support/fnm
+    const fnmIndex = result.indexOf(
+      "/Users/testuser/Library/Application Support/fnm/aliases/default/bin",
+    );
+    const homebrewIndex = result.indexOf("/opt/homebrew/bin");
+
+    expect(fnmIndex).toBeGreaterThan(-1);
+    expect(homebrewIndex).toBeGreaterThan(-1);
+    expect(fnmIndex).toBeLessThan(homebrewIndex);
   });
 
   it("does not include Linux user directories on Windows", () => {
@@ -234,6 +283,22 @@ describe("buildServiceEnvironment", () => {
     }
   });
 
+  it("forwards TMPDIR from the host environment", () => {
+    const env = buildServiceEnvironment({
+      env: { HOME: "/home/user", TMPDIR: "/var/folders/xw/abc123/T/" },
+      port: 18789,
+    });
+    expect(env.TMPDIR).toBe("/var/folders/xw/abc123/T/");
+  });
+
+  it("falls back to os.tmpdir when TMPDIR is not set", () => {
+    const env = buildServiceEnvironment({
+      env: { HOME: "/home/user" },
+      port: 18789,
+    });
+    expect(env.TMPDIR).toBe(os.tmpdir());
+  });
+
   it("uses profile-specific unit and label", () => {
     const env = buildServiceEnvironment({
       env: { HOME: "/home/user", OPENCLAW_PROFILE: "work" },
@@ -252,5 +317,51 @@ describe("buildNodeServiceEnvironment", () => {
       env: { HOME: "/home/user" },
     });
     expect(env.HOME).toBe("/home/user");
+  });
+
+  it("forwards TMPDIR for node services", () => {
+    const env = buildNodeServiceEnvironment({
+      env: { HOME: "/home/user", TMPDIR: "/tmp/custom" },
+    });
+    expect(env.TMPDIR).toBe("/tmp/custom");
+  });
+
+  it("falls back to os.tmpdir for node services when TMPDIR is not set", () => {
+    const env = buildNodeServiceEnvironment({
+      env: { HOME: "/home/user" },
+    });
+    expect(env.TMPDIR).toBe(os.tmpdir());
+  });
+});
+
+describe("resolveGatewayStateDir", () => {
+  it("uses the default state dir when no overrides are set", () => {
+    const env = { HOME: "/Users/test" };
+    expect(resolveGatewayStateDir(env)).toBe(path.join("/Users/test", ".openclaw"));
+  });
+
+  it("appends the profile suffix when set", () => {
+    const env = { HOME: "/Users/test", OPENCLAW_PROFILE: "rescue" };
+    expect(resolveGatewayStateDir(env)).toBe(path.join("/Users/test", ".openclaw-rescue"));
+  });
+
+  it("treats default profiles as the base state dir", () => {
+    const env = { HOME: "/Users/test", OPENCLAW_PROFILE: "Default" };
+    expect(resolveGatewayStateDir(env)).toBe(path.join("/Users/test", ".openclaw"));
+  });
+
+  it("uses OPENCLAW_STATE_DIR when provided", () => {
+    const env = { HOME: "/Users/test", OPENCLAW_STATE_DIR: "/var/lib/openclaw" };
+    expect(resolveGatewayStateDir(env)).toBe(path.resolve("/var/lib/openclaw"));
+  });
+
+  it("expands ~ in OPENCLAW_STATE_DIR", () => {
+    const env = { HOME: "/Users/test", OPENCLAW_STATE_DIR: "~/openclaw-state" };
+    expect(resolveGatewayStateDir(env)).toBe(path.resolve("/Users/test/openclaw-state"));
+  });
+
+  it("preserves Windows absolute paths without HOME", () => {
+    const env = { OPENCLAW_STATE_DIR: "C:\\State\\openclaw" };
+    expect(resolveGatewayStateDir(env)).toBe("C:\\State\\openclaw");
   });
 });

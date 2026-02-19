@@ -1,10 +1,9 @@
 import type { Command } from "commander";
-import path from "node:path";
-import type { NodesRpcOpts } from "./types.js";
 import { resolveAgentConfig, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { loadConfig } from "../../config/config.js";
 import { randomIdempotencyKey } from "../../gateway/call.js";
 import {
+  DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
   type ExecApprovalsFile,
   type ExecAsk,
   type ExecSecurity,
@@ -13,11 +12,13 @@ import {
   resolveExecApprovalsFromFile,
 } from "../../infra/exec-approvals.js";
 import { buildNodeShellCommand } from "../../infra/node-shell.js";
+import { applyPathPrepend } from "../../infra/path-prepend.js";
 import { defaultRuntime } from "../../runtime.js";
 import { parseEnvPairs, parseTimeoutMs } from "../nodes-run.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import { parseNodeList } from "./format.js";
 import { callGatewayCli, nodesCallOpts, resolveNodeId, unauthorizedHintForMessage } from "./rpc.js";
+import type { NodesRpcOpts } from "./types.js";
 
 type NodesRunOpts = NodesRpcOpts & {
   node?: string;
@@ -55,43 +56,6 @@ function normalizeExecAsk(value?: string | null): ExecAsk | null {
     return normalized as ExecAsk;
   }
   return null;
-}
-
-function mergePathPrepend(existing: string | undefined, prepend: string[]) {
-  if (prepend.length === 0) {
-    return existing;
-  }
-  const partsExisting = (existing ?? "")
-    .split(path.delimiter)
-    .map((part) => part.trim())
-    .filter(Boolean);
-  const merged: string[] = [];
-  const seen = new Set<string>();
-  for (const part of [...prepend, ...partsExisting]) {
-    if (seen.has(part)) {
-      continue;
-    }
-    seen.add(part);
-    merged.push(part);
-  }
-  return merged.join(path.delimiter);
-}
-
-function applyPathPrepend(
-  env: Record<string, string>,
-  prepend: string[] | undefined,
-  options?: { requireExisting?: boolean },
-) {
-  if (!Array.isArray(prepend) || prepend.length === 0) {
-    return;
-  }
-  if (options?.requireExisting && !env.PATH) {
-    return;
-  }
-  const merged = mergePathPrepend(env.PATH, prepend);
-  if (merged) {
-    env.PATH = merged;
-  }
 }
 
 function resolveExecDefaults(
@@ -269,18 +233,36 @@ export function registerNodesInvokeCommands(nodes: Command) {
           }
 
           const requiresAsk = hostAsk === "always" || hostAsk === "on-miss";
+          let approvalId: string | null = null;
           if (requiresAsk) {
-            const decisionResult = (await callGatewayCli("exec.approval.request", opts, {
-              command: rawCommand ?? argv.join(" "),
-              cwd: opts.cwd,
-              host: "node",
-              security: hostSecurity,
-              ask: hostAsk,
-              agentId,
-              resolvedPath: undefined,
-              sessionKey: undefined,
-              timeoutMs: 120_000,
-            })) as { decision?: string } | null;
+            approvalId = crypto.randomUUID();
+            const approvalTimeoutMs = DEFAULT_EXEC_APPROVAL_TIMEOUT_MS;
+            // The CLI transport timeout (opts.timeout) must be longer than the
+            // gateway-side approval wait so the connection stays alive while the
+            // user decides.  Without this override the default 35 s transport
+            // timeout races — and always loses — against the 120 s approval
+            // timeout, causing "gateway timeout after 35000ms" (#12098).
+            const transportTimeoutMs = Math.max(
+              parseTimeoutMs(opts.timeout) ?? 0,
+              approvalTimeoutMs + 10_000,
+            );
+            const decisionResult = (await callGatewayCli(
+              "exec.approval.request",
+              opts,
+              {
+                id: approvalId,
+                command: rawCommand ?? argv.join(" "),
+                cwd: opts.cwd,
+                host: "node",
+                security: hostSecurity,
+                ask: hostAsk,
+                agentId,
+                resolvedPath: undefined,
+                sessionKey: undefined,
+                timeoutMs: approvalTimeoutMs,
+              },
+              { transportTimeoutMs },
+            )) as { decision?: string } | null;
             const decision =
               decisionResult && typeof decisionResult === "object"
                 ? (decisionResult.decision ?? null)
@@ -329,6 +311,9 @@ export function registerNodesInvokeCommands(nodes: Command) {
           (invokeParams.params as Record<string, unknown>).approved = approvedByAsk;
           if (approvalDecision) {
             (invokeParams.params as Record<string, unknown>).approvalDecision = approvalDecision;
+          }
+          if (approvedByAsk && approvalId) {
+            (invokeParams.params as Record<string, unknown>).runId = approvalId;
           }
           if (invokeTimeout !== undefined) {
             invokeParams.timeoutMs = invokeTimeout;
