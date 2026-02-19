@@ -22,7 +22,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge" alt="MIT License"></a>
 </p>
 
-> **📘 About this fork** — This is the **openclawbook** fork, a companion repo focused on making OpenClaw accessible to everyone. It includes a ready-to-run [Google Colab notebook](openclaw_colab.ipynb) that lets you launch the full OpenClaw gateway on a free CPU instance — no local setup, no server, just click and go. Data persists on Google Drive between sessions.
+> **📘 About this fork** — This is the **openclawbook** fork, a companion repo focused on making OpenClaw accessible to everyone. It includes a ready-to-run [Google Colab notebook](openclaw_colab.ipynb) that lets you launch the full OpenClaw gateway on a free CPU instance — no local setup, no server, just click and go.
 
 **OpenClaw** is a _personal AI assistant_ you run on your own devices.
 It answers you on the channels you already use (WhatsApp, Telegram, Slack, Discord, Google Chat, Signal, iMessage, Microsoft Teams, WebChat), plus extension channels like BlueBubbles, Matrix, Zalo, and Zalo Personal. It can speak and listen on macOS/iOS/Android, and can render a live Canvas you control. The Gateway is just the control plane — the product is the assistant.
