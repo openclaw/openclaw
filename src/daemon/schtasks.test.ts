@@ -2,7 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseSchtasksQuery, readScheduledTaskCommand, resolveTaskScriptPath } from "./schtasks.js";
+import {
+  buildTaskScript,
+  parseSchtasksQuery,
+  readScheduledTaskCommand,
+  resolveTaskScriptPath,
+} from "./schtasks.js";
 
 describe("schtasks runtime parsing", () => {
   it("parses status and last run info", () => {
@@ -61,6 +66,45 @@ describe("resolveTaskScriptPath", () => {
   it("falls back to HOME when USERPROFILE is not set", () => {
     const env = { HOME: "/home/test", OPENCLAW_PROFILE: "default" };
     expect(resolveTaskScriptPath(env)).toBe(path.join("/home/test", ".openclaw", "gateway.cmd"));
+  });
+});
+
+describe("buildTaskScript", () => {
+  it("strips CRLF from environment variable values to prevent command injection", () => {
+    const script = buildTaskScript({
+      programArguments: ["node", "gateway.js"],
+      environment: {
+        SAFE_VAR: "hello",
+        MALICIOUS_VAR: "foo\r\nnet user attacker P@ss /add",
+      },
+    });
+    const lines = script.split("\r\n");
+    expect(lines.find((line) => line.trim() === "net user attacker P@ss /add")).toBeUndefined();
+    expect(lines).toContain("set MALICIOUS_VAR=foonet user attacker P@ss /add");
+    expect(lines).toContain("set SAFE_VAR=hello");
+  });
+
+  it("strips LF-only injection from environment variable values", () => {
+    const script = buildTaskScript({
+      programArguments: ["node", "gateway.js"],
+      environment: {
+        INJECT: "val\ncalc.exe",
+      },
+    });
+    const lines = script.split("\r\n");
+    expect(lines.find((line) => line === "calc.exe")).toBeUndefined();
+    expect(lines).toContain("set INJECT=valcalc.exe");
+  });
+
+  it("strips CRLF from environment variable keys", () => {
+    const script = buildTaskScript({
+      programArguments: ["node", "gateway.js"],
+      environment: {
+        "BAD\r\nKEY": "value",
+      },
+    });
+    const lines = script.split("\r\n");
+    expect(lines).toContain("set BADKEY=value");
   });
 });
 

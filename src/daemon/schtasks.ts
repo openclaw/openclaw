@@ -1,12 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { GatewayServiceRuntime } from "./service-runtime.js";
 import { splitArgsPreservingQuotes } from "./arg-split.js";
 import { resolveGatewayServiceDescription, resolveGatewayWindowsTaskName } from "./constants.js";
 import { formatLine, writeFormattedLines } from "./output.js";
 import { resolveGatewayStateDir } from "./paths.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
 import { execSchtasks } from "./schtasks-exec.js";
-import type { GatewayServiceRuntime } from "./service-runtime.js";
 
 function resolveTaskName(env: Record<string, string | undefined>): string {
   const override = env.OPENCLAW_WINDOWS_TASK_NAME?.trim();
@@ -132,7 +132,7 @@ export function parseSchtasksQuery(output: string): ScheduledTaskInfo {
   return info;
 }
 
-function buildTaskScript({
+export function buildTaskScript({
   description,
   programArguments,
   workingDirectory,
@@ -155,7 +155,8 @@ function buildTaskScript({
       if (!value) {
         continue;
       }
-      lines.push(`set ${key}=${value}`);
+      // Prevent command injection via line breaks in batch `set` statements.
+      lines.push(`set ${key.replace(/[\r\n]/g, "")}=${value.replace(/[\r\n]/g, "")}`);
     }
   }
   const command = programArguments.map(quoteCmdArg).join(" ");
