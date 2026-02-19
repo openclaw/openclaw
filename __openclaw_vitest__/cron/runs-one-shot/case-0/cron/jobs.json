@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "021db38d-7f50-4fba-8624-7775b47dbdd3",
+      "name": "one-shot hello",
+      "enabled": false,
+      "deleteAfterRun": false,
+      "createdAtMs": 1765584000000,
+      "updatedAtMs": 1765584004000,
+      "schedule": {
+        "kind": "at",
+        "at": "2025-12-13T00:00:02.000Z"
+      },
+      "sessionTarget": "main",
+      "wakeMode": "now",
+      "payload": {
+        "kind": "systemEvent",
+        "text": "hello"
+      },
+      "state": {
+        "lastRunAtMs": 1765584004000,
+        "lastStatus": "ok",
+        "lastDurationMs": 0,
+        "consecutiveErrors": 0
+      }
+    },
+    {
+      "id": "f88ae7ac-8c73-4791-9ef1-ce76a73adf26",
+      "name": "isolated error test",
+      "enabled": false,
+      "deleteAfterRun": true,
+      "createdAtMs": 1765584000000,
+      "updatedAtMs": 1765584002000,
+      "schedule": {
+        "kind": "at",
+        "at": "2025-12-13T00:00:01.000Z"
+      },
+      "sessionTarget": "isolated",
+      "wakeMode": "now",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "do it"
+      },
+      "delivery": {
+        "mode": "announce"
+      },
+      "state": {
+        "lastRunAtMs": 1765584002000,
+        "lastStatus": "error",
+        "lastDurationMs": 0,
+        "lastError": "boom",
+        "consecutiveErrors": 1
+      }
+    }
+  ]
+}
