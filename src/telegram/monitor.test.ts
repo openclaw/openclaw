@@ -23,7 +23,7 @@ const api = {
   setWebhook: vi.fn(),
   deleteWebhook: vi.fn(),
 };
-const { initSpy, runSpy, loadConfig } = vi.hoisted(() => ({
+const { initSpy, runSpy, loadConfig, createTelegramBotSpy } = vi.hoisted(() => ({
   initSpy: vi.fn(async () => undefined),
   runSpy: vi.fn(() => ({
     task: () => Promise.resolve(),
@@ -33,6 +33,7 @@ const { initSpy, runSpy, loadConfig } = vi.hoisted(() => ({
     agents: { defaults: { maxConcurrent: 2 } },
     channels: { telegram: {} },
   })),
+  createTelegramBotSpy: vi.fn(),
 }));
 
 const { computeBackoff, sleepWithAbort } = vi.hoisted(() => ({
@@ -52,28 +53,7 @@ vi.mock("../config/config.js", async (importOriginal) => {
 });
 
 vi.mock("./bot.js", () => ({
-  createTelegramBot: () => {
-    handlers.message = async (ctx: MockCtx) => {
-      const chatId = ctx.message.chat.id;
-      const isGroup = ctx.message.chat.type !== "private";
-      const text = ctx.message.text ?? ctx.message.caption ?? "";
-      if (isGroup && !text.includes("@mybot")) {
-        return;
-      }
-      if (!text.trim()) {
-        return;
-      }
-      await api.sendMessage(chatId, `echo:${text}`, { parse_mode: "HTML" });
-    };
-    return {
-      on: vi.fn(),
-      api,
-      me: { username: "mybot" },
-      init: initSpy,
-      stop: vi.fn(),
-      start: vi.fn(),
-    };
-  },
+  createTelegramBot: createTelegramBotSpy,
   createTelegramWebhookCallback: vi.fn(),
 }));
 
@@ -105,6 +85,29 @@ describe("monitorTelegramProvider (grammY)", () => {
     });
     initSpy.mockClear();
     runSpy.mockClear();
+    createTelegramBotSpy.mockReset();
+    createTelegramBotSpy.mockImplementation(() => {
+      handlers.message = async (ctx: MockCtx) => {
+        const chatId = ctx.message.chat.id;
+        const isGroup = ctx.message.chat.type !== "private";
+        const text = ctx.message.text ?? ctx.message.caption ?? "";
+        if (isGroup && !text.includes("@mybot")) {
+          return;
+        }
+        if (!text.trim()) {
+          return;
+        }
+        await api.sendMessage(chatId, `echo:${text}`, { parse_mode: "HTML" });
+      };
+      return {
+        on: vi.fn(),
+        api,
+        me: { username: "mybot" },
+        init: initSpy,
+        stop: vi.fn(),
+        start: vi.fn(),
+      };
+    });
     computeBackoff.mockClear();
     sleepWithAbort.mockClear();
     startTelegramWebhookSpy.mockClear();
@@ -186,6 +189,36 @@ describe("monitorTelegramProvider (grammY)", () => {
     expect(computeBackoff).toHaveBeenCalled();
     expect(sleepWithAbort).toHaveBeenCalled();
     expect(runSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries when bot setup throws recoverable polling error", async () => {
+    const setupErr = Object.assign(new Error("Network request for 'setMyCommands' failed!"), {
+      name: "HttpError",
+      code: "ENOTFOUND",
+    });
+    createTelegramBotSpy
+      .mockImplementationOnce(() => {
+        throw setupErr;
+      })
+      .mockImplementation(() => ({
+        on: vi.fn(),
+        api,
+        me: { username: "mybot" },
+        init: initSpy,
+        stop: vi.fn(),
+        start: vi.fn(),
+      }));
+    runSpy.mockImplementationOnce(() => ({
+      task: () => Promise.resolve(),
+      stop: vi.fn(),
+    }));
+
+    await monitorTelegramProvider({ token: "tok" });
+
+    expect(createTelegramBotSpy).toHaveBeenCalledTimes(2);
+    expect(computeBackoff).toHaveBeenCalled();
+    expect(sleepWithAbort).toHaveBeenCalled();
+    expect(runSpy).toHaveBeenCalledTimes(1);
   });
 
   it("surfaces non-recoverable errors", async () => {

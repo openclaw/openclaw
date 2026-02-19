@@ -139,18 +139,6 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       }
     };
 
-    const bot = createTelegramBot({
-      token,
-      runtime: opts.runtime,
-      proxyFetch,
-      config: cfg,
-      accountId: account.accountId,
-      updateOffset: {
-        lastUpdateId,
-        onUpdateId: persistUpdateId,
-      },
-    });
-
     if (opts.useWebhook) {
       await startTelegramWebhook({
         token,
@@ -172,14 +160,29 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
     let restartAttempts = 0;
 
     while (!opts.abortSignal?.aborted) {
-      const runner = run(bot, createTelegramRunnerOptions(cfg));
-      const stopOnAbort = () => {
-        if (opts.abortSignal?.aborted) {
-          void runner.stop();
-        }
-      };
-      opts.abortSignal?.addEventListener("abort", stopOnAbort, { once: true });
+      let runner: ReturnType<typeof run> | null = null;
+      let stopOnAbort: (() => void) | null = null;
       try {
+        const bot = createTelegramBot({
+          token,
+          runtime: opts.runtime,
+          proxyFetch,
+          config: cfg,
+          accountId: account.accountId,
+          updateOffset: {
+            lastUpdateId,
+            onUpdateId: persistUpdateId,
+          },
+        });
+
+        runner = run(bot, createTelegramRunnerOptions(cfg));
+        stopOnAbort = () => {
+          if (opts.abortSignal?.aborted && runner) {
+            void runner.stop();
+          }
+        };
+        opts.abortSignal?.addEventListener("abort", stopOnAbort, { once: true });
+
         // runner.task() returns a promise that resolves when the runner stops
         await runner.task();
         return;
@@ -208,7 +211,9 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
           throw sleepErr;
         }
       } finally {
-        opts.abortSignal?.removeEventListener("abort", stopOnAbort);
+        if (stopOnAbort) {
+          opts.abortSignal?.removeEventListener("abort", stopOnAbort);
+        }
       }
     }
   } finally {
