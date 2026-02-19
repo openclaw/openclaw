@@ -26,6 +26,12 @@ const privateIpCases = [
   "fec0::1",
   "2001:db8:1234::5efe:127.0.0.1",
   "2001:db8:1234:1:200:5efe:7f00:1",
+  "0177.0.0.1",
+  "0x7f.0.0.1",
+  "127.1",
+  "2130706433",
+  "0x7f000001",
+  "017700000001",
 ];
 
 const publicIpCases = [
@@ -38,9 +44,12 @@ const publicIpCases = [
   "2001:0000:0:0:0:0:f7f7:f7f7",
   "2001:db8:1234::5efe:8.8.8.8",
   "2001:db8:1234:1:1111:5efe:7f00:1",
+  "8.8.2056",
+  "0x08080808",
 ];
 
 const malformedIpv6Cases = ["::::", "2001:db8::gggg"];
+const malformedIpv4Cases = ["08.0.0.1", "0x7g.0.0.1", "127.0.0.1.", "127..0.1"];
 
 describe("ssrf ip classification", () => {
   it.each(privateIpCases)("classifies %s as private", (address) => {
@@ -53,6 +62,10 @@ describe("ssrf ip classification", () => {
 
   it.each(malformedIpv6Cases)("fails closed for malformed IPv6 %s", (address) => {
     expect(isPrivateIpAddress(address)).toBe(true);
+  });
+
+  it.each(malformedIpv4Cases)("treats malformed IPv4 literal %s as non-IP", (address) => {
+    expect(isPrivateIpAddress(address)).toBe(false);
   });
 });
 
@@ -73,5 +86,11 @@ describe("isBlockedHostnameOrIp", () => {
   it("blocks private transition addresses via shared IP classifier", () => {
     expect(isBlockedHostnameOrIp("2001:db8:1234::5efe:127.0.0.1")).toBe(true);
     expect(isBlockedHostnameOrIp("2001:db8::1")).toBe(false);
+  });
+
+  it("blocks legacy IPv4 literal representations", () => {
+    expect(isBlockedHostnameOrIp("0177.0.0.1")).toBe(true);
+    expect(isBlockedHostnameOrIp("127.1")).toBe(true);
+    expect(isBlockedHostnameOrIp("2130706433")).toBe(true);
   });
 });
