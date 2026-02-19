@@ -288,4 +288,30 @@ describe("control UI routing", () => {
     expect(app.tab).toBe("consent");
     expect(window.location.pathname).toBe("/consent");
   });
+
+  it("keeps onboarding banner chat action disabled until connected", async () => {
+    const app = mountApp("/?onboarding=1");
+    await app.updateComplete;
+
+    const button = app.querySelector<HTMLButtonElement>('[data-testid="onboarding-banner-chat"]');
+    expect(button).not.toBeNull();
+    expect(button?.disabled).toBe(true);
+  });
+
+  it("navigates to chat from onboarding banner when connected", async () => {
+    const app = mountApp("/?onboarding=1");
+    await app.updateComplete;
+
+    app.connected = true;
+    await app.updateComplete;
+
+    const button = app.querySelector<HTMLButtonElement>('[data-testid="onboarding-banner-chat"]');
+    expect(button).not.toBeNull();
+    expect(button?.disabled).toBe(false);
+    button?.click();
+    await app.updateComplete;
+
+    expect(app.tab).toBe("chat");
+    expect(window.location.pathname).toBe("/chat");
+  });
 });

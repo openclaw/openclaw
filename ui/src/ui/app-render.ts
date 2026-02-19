@@ -240,6 +240,15 @@ export function renderApp(state: AppViewState) {
                     <button
                       type="button"
                       class="btn btn--sm"
+                      data-testid="onboarding-banner-chat"
+                      ?disabled=${!state.connected}
+                      @click=${() => state.setTab("chat")}
+                    >
+                      ${t("overview.setupFlow.openChat")}
+                    </button>
+                    <button
+                      type="button"
+                      class="btn btn--sm"
                       data-testid="onboarding-banner-consent"
                       @click=${() => state.setTab("consent")}
                     >
