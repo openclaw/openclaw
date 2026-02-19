@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { messageCommand } from "../../../commands/message.js";
 import { danger, setVerbose } from "../../../globals.js";
 import { CHANNEL_TARGET_DESCRIPTION } from "../../../infra/outbound/channel-target.js";
+import { actionRequiresTarget } from "../../../infra/outbound/message-action-spec.js";
 import { runGlobalGatewayStopSafely } from "../../../plugins/hook-runner-global.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { runCommandWithRuntime } from "../../cli-utils.js";
@@ -53,13 +54,19 @@ export function createMessageCliHelpers(
     ensurePluginRegistryLoaded();
     const deps = createDefaultDeps();
     let failed = false;
+    const actionOverride = typeof opts.action === "string" ? opts.action.trim() : "";
+    const resolvedAction = actionOverride || action;
+    const target = typeof opts.target === "string" ? opts.target.trim() : "";
+    if (actionRequiresTarget(resolvedAction as never) && !target) {
+      throw new Error("--target is required for this action");
+    }
     await runCommandWithRuntime(
       defaultRuntime,
       async () => {
         await messageCommand(
           {
             ...normalizeMessageOptions(opts),
-            action,
+            action: resolvedAction,
           },
           deps,
           defaultRuntime,

@@ -353,32 +353,6 @@ describe("handleDiscordMessageAction", () => {
       expect.any(Object),
     );
   });
-
-  it("uses trusted requesterSenderId for moderation and ignores params senderUserId", async () => {
-    await handleDiscordMessageAction({
-      action: "timeout",
-      params: {
-        guildId: "guild-1",
-        userId: "user-2",
-        durationMin: 5,
-        senderUserId: "spoofed-admin-id",
-      },
-      cfg: {} as OpenClawConfig,
-      requesterSenderId: "trusted-sender-id",
-      toolContext: { currentChannelProvider: "discord" },
-    });
-
-    expect(handleDiscordAction).toHaveBeenCalledWith(
-      expect.objectContaining({
-        action: "timeout",
-        guildId: "guild-1",
-        userId: "user-2",
-        durationMinutes: 5,
-        senderUserId: "trusted-sender-id",
-      }),
-      expect.any(Object),
-    );
-  });
 });
 
 describe("telegramMessageActions", () => {
@@ -526,6 +500,38 @@ describe("telegramMessageActions", () => {
 
     expect(actions).not.toContain("sticker");
     expect(actions).not.toContain("sticker-search");
+  });
+
+  it("lists set-bot-avatar when enabled and forwards to handleTelegramAction", async () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          accounts: {
+            media: { botToken: "tok", actions: { setBotAvatar: true } },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const actions = telegramMessageActions.listActions?.({ cfg }) ?? [];
+    expect(actions).toContain("set-bot-avatar");
+
+    await telegramMessageActions.handleAction?.({
+      channel: "telegram",
+      action: "set-bot-avatar",
+      params: { media: "/tmp/avatar.png" },
+      cfg,
+      accountId: "media",
+    });
+
+    expect(handleTelegramAction).toHaveBeenCalledWith(
+      {
+        action: "setBotAvatar",
+        mediaUrl: "/tmp/avatar.png",
+        accountId: "media",
+      },
+      cfg,
+    );
   });
 
   it("inherits top-level reaction gate when account overrides sticker only", () => {

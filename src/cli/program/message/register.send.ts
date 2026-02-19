@@ -5,7 +5,7 @@ export function registerMessageSendCommand(message: Command, helpers: MessageCli
   helpers
     .withMessageBase(
       helpers
-        .withRequiredMessageTarget(
+        .withMessageTarget(
           message
             .command("send")
             .description("Send a message")
@@ -15,6 +15,7 @@ export function registerMessageSendCommand(message: Command, helpers: MessageCli
           "--media <path-or-url>",
           "Attach media (image/audio/video/document). Accepts local paths or URLs.",
         )
+        .option("--action <action>", "Message action override (e.g., set-bot-avatar)")
         .option(
           "--buttons <json>",
           "Telegram inline keyboard buttons as JSON (array of button rows)",
