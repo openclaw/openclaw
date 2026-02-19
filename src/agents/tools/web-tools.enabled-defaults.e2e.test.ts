@@ -119,6 +119,25 @@ describe("web_search country and language parameters", () => {
     expect(url.searchParams.get(key)).toBe(value);
   });
 
+  it("should request Brave extra snippets by default", async () => {
+    const mockFetch = installMockFetch({ web: { results: [] } });
+
+    const tool = createWebSearchTool({ config: undefined, sandboxed: true });
+    await tool?.execute?.("call-1", { query: "test-extra-snippets" });
+
+    const firstRequestInput = mockFetch.mock.calls[0]?.[0];
+    const firstRequestUrl =
+      typeof firstRequestInput === "string"
+        ? firstRequestInput
+        : firstRequestInput instanceof URL
+          ? firstRequestInput.toString()
+          : firstRequestInput instanceof Request
+            ? firstRequestInput.url
+            : "";
+    const url = new URL(firstRequestUrl);
+    expect(url.searchParams.get("extra_snippets")).toBe("true");
+  });
+
   it("rejects invalid freshness values", async () => {
     const mockFetch = installMockFetch({ web: { results: [] } });
     const tool = createWebSearchTool({ config: undefined, sandboxed: true });
@@ -276,6 +295,34 @@ describe("web_search external content wrapping", () => {
       source: "web_search",
       wrapped: true,
     });
+  });
+
+  it("appends Brave extra_snippets into wrapped description", async () => {
+    vi.stubEnv("BRAVE_API_KEY", "test-key");
+    installMockFetch({
+      web: {
+        results: [
+          {
+            title: "Example",
+            url: "https://example.com",
+            description: "Base description",
+            extra_snippets: ["Snippet one", "Snippet two"],
+          },
+        ],
+      },
+    });
+
+    const tool = createWebSearchTool({ config: undefined, sandboxed: true });
+    const result = await tool?.execute?.("call-1", {
+      query: "test-extra-snippet-merge",
+    });
+    const details = result?.details as { results?: Array<{ description?: string }> };
+    const description = details.results?.[0]?.description ?? "";
+
+    expect(description).toContain("<<<EXTERNAL_UNTRUSTED_CONTENT>>>");
+    expect(description).toContain("Base description");
+    expect(description).toContain("Snippet one");
+    expect(description).toContain("Snippet two");
   });
 
   it("does not wrap Brave result urls (raw for tool chaining)", async () => {

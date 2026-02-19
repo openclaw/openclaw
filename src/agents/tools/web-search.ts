@@ -80,6 +80,7 @@ type BraveSearchResult = {
   url?: string;
   description?: string;
   age?: string;
+  extra_snippets?: string[];
 };
 
 type BraveSearchResponse = {
@@ -656,6 +657,7 @@ async function runWebSearch(params: {
   if (params.freshness) {
     url.searchParams.set("freshness", params.freshness);
   }
+  url.searchParams.set("extra_snippets", "true");
 
   const res = await fetch(url.toString(), {
     method: "GET",
@@ -676,13 +678,20 @@ async function runWebSearch(params: {
   const results = Array.isArray(data.web?.results) ? (data.web?.results ?? []) : [];
   const mapped = results.map((entry) => {
     const description = entry.description ?? "";
+    const extraSnippets = Array.isArray(entry.extra_snippets)
+      ? entry.extra_snippets.filter((snippet): snippet is string => typeof snippet === "string")
+      : [];
+    const combinedDescription = [description, ...extraSnippets]
+      .map((snippet) => snippet.trim())
+      .filter((snippet) => snippet.length > 0)
+      .join("\n");
     const title = entry.title ?? "";
     const url = entry.url ?? "";
     const rawSiteName = resolveSiteName(url);
     return {
       title: title ? wrapWebContent(title, "web_search") : "",
       url, // Keep raw for tool chaining
-      description: description ? wrapWebContent(description, "web_search") : "",
+      description: combinedDescription ? wrapWebContent(combinedDescription, "web_search") : "",
       published: entry.age || undefined,
       siteName: rawSiteName || undefined,
     };
