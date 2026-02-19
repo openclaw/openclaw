@@ -163,7 +163,7 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads[0]?.text).toBe("All good");
   });
 
-  it("adds tool error fallback when the assistant only invoked tools", () => {
+  it("adds tool error fallback when the assistant only invoked tools and verbose mode is on", () => {
     const payloads = buildPayloads({
       lastAssistant: makeAssistant({
         stopReason: "toolUse",
@@ -178,6 +178,7 @@ describe("buildEmbeddedRunPayloads", () => {
         ],
       }),
       lastToolError: { toolName: "exec", error: "Command exited with code 1" },
+      verboseLevel: "on",
     });
 
     expect(payloads).toHaveLength(1);
