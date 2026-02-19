@@ -17,8 +17,8 @@ import { tlonOnboardingAdapter } from "./onboarding.js";
 import { formatTargetHint, normalizeShip, parseTlonTarget } from "./targets.js";
 import { resolveTlonAccount, listTlonAccountIds } from "./types.js";
 import { authenticate } from "./urbit/auth.js";
-import { UrbitChannelClient } from "./urbit/channel-client.js";
 import { ssrfPolicyFromAllowPrivateNetwork } from "./urbit/context.js";
+import { urbitFetch } from "./urbit/fetch.js";
 import {
   buildMediaStory,
   sendDm,
@@ -446,15 +446,25 @@ export const tlonPlugin: ChannelPlugin = {
       try {
         const ssrfPolicy = ssrfPolicyFromAllowPrivateNetwork(account.allowPrivateNetwork);
         const cookie = await authenticate(account.url, account.code, { ssrfPolicy });
-        const api = new UrbitChannelClient(account.url, cookie, {
-          ship: account.ship.replace(/^~/, ""),
+        // Simple probe - just verify we can reach /~/name
+        const { response, release } = await urbitFetch({
+          baseUrl: account.url,
+          path: "/~/name",
+          init: {
+            method: "GET",
+            headers: { Cookie: cookie },
+          },
           ssrfPolicy,
+          timeoutMs: 30_000,
+          auditContext: "tlon-probe-account",
         });
         try {
-          await api.getOurName();
+          if (!response.ok) {
+            return { ok: false, error: `Name request failed: ${response.status}` };
+          }
           return { ok: true };
         } finally {
-          await api.close();
+          await release();
         }
       } catch (error) {
         return { ok: false, error: (error as { message?: string })?.message ?? String(error) };
