@@ -1050,9 +1050,6 @@ export abstract class MemoryManagerSyncOps {
         chunkTokens: this.settings.chunking.tokens,
         chunkOverlap: this.settings.chunking.overlap,
       };
-      if (!nextMeta) {
-        throw new Error("Failed to compute memory index metadata for reindexing.");
-      }
 
       if (this.vector.available && this.vector.dims) {
         nextMeta.vectorDims = this.vector.dims;
