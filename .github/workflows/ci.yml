@@ -244,6 +244,8 @@ jobs:
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
 
       - name: Check types and lint and oxfmt
         run: pnpm check
@@ -261,6 +263,8 @@ jobs:
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
 
       - name: Check docs
         run: pnpm check:docs
