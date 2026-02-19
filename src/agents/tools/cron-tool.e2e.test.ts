@@ -1,15 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-
-const callGatewayMock = vi.fn();
-vi.mock("../../gateway/call.js", () => ({
-  callGateway: (opts: unknown) => callGatewayMock(opts),
-}));
-
-vi.mock("../agent-scope.js", () => ({
-  resolveSessionAgentId: () => "agent-123",
-}));
-
+import { beforeEach, describe, expect, it } from "vitest";
 import { createCronTool } from "./cron-tool.js";
+import { callGatewayMock } from "./cron-tool.test-harness.js";
 
 describe("cron tool", () => {
   async function executeAddAndReadDelivery(params: {
