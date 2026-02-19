@@ -84,12 +84,9 @@ Docs: https://docs.openclaw.ai
 - Security/Gateway/Agents: remove implicit admin scopes from agent tool gateway calls by classifying methods to least-privilege operator scopes, and enforce owner-only tooling (`cron`, `gateway`, `whatsapp_login`) through centralized tool-policy wrappers plus tool metadata to prevent non-owner DM privilege escalation. Ships in the next npm release. Thanks @Adam55A-code for reporting.
 - Security/Gateway: centralize gateway method-scope authorization and default non-CLI gateway callers to least-privilege method scopes, with explicit CLI scope handling, full core-handler scope classification coverage, and regression guards to prevent scope drift.
 - Security/Net: block SSRF bypass via NAT64 (`64:ff9b::/96`, `64:ff9b:1::/48`), 6to4 (`2002::/16`), and Teredo (`2001:0000::/32`) IPv6 transition addresses, and fail closed on IPv6 parse errors. Thanks @jackhax.
-- Refactor/Plugins: extract shared plugin path-safety utilities, split discovery safety checks into typed reasoned guards, precompute provenance matchers during plugin load, and switch ownership tests to injected uid inputs.
 - Security/OTEL: sanitize OTLP endpoint URL resolution. (#13791) Thanks @vincentkoc.
 - Security: patch Dependabot security issues in pnpm lock. (#20832) Thanks @vincentkoc.
 - Security: migrate request dependencies to `@cypress/request`. (#20836) Thanks @vincentkoc.
-- Security/Refactor: centralize hardened temp-file path generation for Feishu and LINE media downloads via shared `buildRandomTempFilePath` helper to reduce drift risk. (#20810) Thanks @mbelinky.
-- Tests/Security: refactor `src/security/audit.test.ts` by extracting shared helpers to reduce duplication in security audit test coverage. (#20087) Thanks @habakan.
 
 ## 2026.2.17
 
@@ -370,7 +367,6 @@ Docs: https://docs.openclaw.ai
 - TUI/Gateway: resolve local gateway target URL from `gateway.bind` mode (tailnet/lan) instead of hardcoded localhost so `openclaw tui` connects when gateway is non-loopback. (#16299) Thanks @cortexuvula.
 - TUI: honor explicit `--session <key>` in `openclaw tui` even when `session.scope` is `global`, so named sessions no longer collapse into shared global history. (#16575) Thanks @cinqu.
 - TUI: use available terminal width for session name display in searchable select lists. (#16238) Thanks @robbyczgw-cla.
-- TUI: refactor searchable select list description layout and add regression coverage for ANSI-highlight width bounds.
 - TUI: preserve in-flight streaming replies when a different run finalizes concurrently (avoid clearing active run or reloading history mid-stream). (#10704) Thanks @axschr73.
 - TUI: keep pre-tool streamed text visible when later tool-boundary deltas temporarily omit earlier text blocks. (#6958) Thanks @KrisKind75.
 - TUI: sanitize ANSI/control-heavy history text, redact binary-like lines, and split pathological long unbroken tokens before rendering to prevent startup crashes on binary attachment history. (#13007) Thanks @wilkinspoe.
@@ -462,7 +458,6 @@ Docs: https://docs.openclaw.ai
 - Security/Windows: avoid shell invocation when spawning child processes to prevent cmd.exe metacharacter injection via untrusted CLI arguments (e.g. agent prompt text).
 - Telegram: set webhook callback timeout handling to `onTimeout: "return"` (10s) so long-running update processing no longer emits webhook 500s and retry storms. (#16763) Thanks @chansearrington.
 - Signal: preserve case-sensitive `group:` target IDs during normalization so mixed-case group IDs no longer fail with `Group not found`. (#16748) Thanks @repfigit.
-- Feishu/Security: harden media URL fetching against SSRF and local file disclosure. (#16285) Thanks @mbelinky.
 - Security/Agents: scope CLI process cleanup to owned child PIDs to avoid killing unrelated processes on shared hosts. Thanks @aether-ai-agent.
 - Security/Agents: enforce workspace-root path bounds for `apply_patch` in non-sandbox mode to block traversal and symlink escape writes. Thanks @p80n-sec.
 - Security/Agents: enforce symlink-escape checks for `apply_patch` delete hunks under `workspaceOnly`, while still allowing deleting the symlink itself. Thanks @p80n-sec.
@@ -688,13 +683,6 @@ Docs: https://docs.openclaw.ai
 - Media: strip `MEDIA:` lines with local paths instead of leaking as visible text. (#14399) Thanks @0xRaini.
 - Config/Cron: exclude `maxTokens` from config redaction and honor `deleteAfterRun` on skipped cron jobs. (#13342) Thanks @niceysam.
 - Config: ignore `meta` field changes in config file watcher. (#13460) Thanks @brandonwise.
-- Cron: use requested `agentId` for isolated job auth resolution. (#13983) Thanks @0xRaini.
-- Cron: pass `agentId` to `runHeartbeatOnce` for main-session jobs. (#14140) Thanks @ishikawa-pro.
-- Cron: prevent cron jobs from skipping execution when `nextRunAtMs` advances. (#14068) Thanks @WalterSumbon.
-- Cron: re-arm timers when `onTimer` fires while a job is still executing. (#14233) Thanks @tomron87.
-- Cron: prevent duplicate fires when multiple jobs trigger simultaneously. (#14256) Thanks @xinhuagu.
-- Cron: isolate scheduler errors so one bad job does not break all jobs. (#14385) Thanks @MarvinDontPanic.
-- Cron: prevent one-shot `at` jobs from re-firing on restart after skipped/errored runs. (#13878) Thanks @lailoo.
 - Daemon: suppress `EPIPE` error when restarting LaunchAgent. (#14343) Thanks @0xRaini.
 - Antigravity: add opus 4.6 forward-compat model and bypass thinking signature sanitization. (#14218) Thanks @jg-noncelogic.
 - Agents: prevent file descriptor leaks in child process cleanup. (#13565) Thanks @KyleChen26.
@@ -947,17 +935,10 @@ Docs: https://docs.openclaw.ai
 - Discord: route autoThread replies to existing threads instead of the root channel. (#8302) Thanks @gavinbmoore, @thewilloftheshadow.
 - Media understanding: apply SSRF guardrails to provider fetches; allow private baseUrl overrides explicitly.
 - fix(voice-call): harden inbound allowlist; reject anonymous callers; require Telnyx publicKey for allowlist; token-gate Twilio media streams; cap webhook body size (thanks @simecek)
-- fix(webchat): respect user scroll position during streaming and refresh (#7226) (thanks @marcomarandiz)
-- Telegram: recover from grammY long-poll timed out errors. (#7466) Thanks @macmimi23.
-- Agents: repair malformed tool calls and session transcripts. (#7473) Thanks @justinhuangcode.
-- fix(agents): validate AbortSignal instances before calling AbortSignal.any() (#7277) (thanks @Elarwei001)
-- Media understanding: skip binary media from file text extraction. (#7475) Thanks @AlexZhangji.
 - Onboarding: keep TUI flow exclusive (skip completion prompt + background Web UI seed); completion prompt now handled by install/update.
-- TUI: block onboarding output while TUI is active and restore terminal state on exit.
 - CLI/Zsh completion: cache scripts in state dir and escape option descriptions to avoid invalid option errors.
 - fix(ui): resolve Control UI asset path correctly.
 - fix(ui): refresh agent files after external edits.
-- Docs: finish renaming the QMD memory docs to reference the OpenClaw state dir.
 - Tests: stub SSRF DNS pinning in web auto-reply + Gemini video coverage. (#6619) Thanks @joshp123.
 
 ## 2026.2.1
@@ -1820,7 +1801,6 @@ Thanks @AlexMikhalev, @CoreyH, @John-Rood, @KrauseFx, @MaudeBot, @Nachx639, @Nic
 - Heartbeat: tighten prompt guidance + suppress duplicate alerts for 24h. (#980) — thanks @voidserf.
 - Repo: ignore local identity files to avoid accidental commits. (#1001) — thanks @gerardward2007.
 - Sessions/Security: add `session.dmScope` for multi-user DM isolation and audit warnings. (#948) — thanks @Alphonse-arianee.
-- Plugins: add provider auth registry + `openclaw models auth login` for plugin-driven OAuth/API key flows.
 - Onboarding: switch channels setup to a single-select loop with per-channel actions and disabled hints in the picker.
 - TUI: show provider/model labels for the active session and default model.
 - Heartbeat: add per-agent heartbeat configuration and multi-agent docs example.
@@ -2356,7 +2336,6 @@ Thanks @AlexMikhalev, @CoreyH, @John-Rood, @KrauseFx, @MaudeBot, @Nachx639, @Nic
 
 - Skills additions (Himalaya email, CodexBar, 1Password).
 - Dependency refreshes (pi-\* stack, Slack SDK, discord-api-types, file-type, zod, Biome, Vite).
-- Refactors: centralized group allowlist/mention policy; lint/import cleanup; switch tsx → bun for TS execution.
 
 ## 2026.1.5
 
