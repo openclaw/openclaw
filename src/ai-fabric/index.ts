@@ -63,6 +63,18 @@ export { CloudruAgentsClient } from "./cloudru-agents-client.js";
 export { CloudruAgentSystemsClient } from "./cloudru-agent-systems-client.js";
 export { CloudruMcpClient } from "./cloudru-mcp-client.js";
 
+// Agent status monitoring
+export { getAgentStatus, mapAgentHealth } from "./agent-status.js";
+export type {
+  AgentHealth,
+  AgentStatusParams,
+  AgentStatusEntry,
+  AgentStatusSummary,
+  AgentStatusResult,
+  AgentStatusError,
+  AgentStatusErrorType,
+} from "./agent-status.js";
+
 // A2A client
 export { CloudruA2AClient, A2AError } from "./cloudru-a2a-client.js";
 export type {

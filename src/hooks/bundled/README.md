@@ -32,6 +32,20 @@ Logs all command events to a centralized audit file.
 openclaw hooks enable command-logger
 ```
 
+### 🔍 insight-logger
+
+Extracts operational insights from sessions and appends them to `docs/ru/insight.md`.
+
+**Events**: `command:new`
+**What it does**: Reads the previous session transcript, sends it to the LLM for structured extraction, and appends operational insights.
+**Output**: `docs/ru/insight.md`
+
+**Enable**:
+
+```bash
+openclaw hooks enable insight-logger
+```
+
 ### 🚀 boot-md
 
 Runs `BOOT.md` whenever the gateway starts (after channels start).

@@ -1,5 +1,7 @@
+import type { AgentStatusResult, AgentStatusError } from "../ai-fabric/index.js";
 import type { MemoryProviderStatus } from "../memory/types.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { getAgentStatus } from "../ai-fabric/index.js";
 import { withProgress } from "../cli/progress.js";
 import { loadConfig } from "../config/config.js";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
@@ -57,6 +59,7 @@ export type StatusScanResult = {
   summary: Awaited<ReturnType<typeof getStatusSummary>>;
   memory: MemoryStatusSnapshot | null;
   memoryPlugin: MemoryPluginStatus;
+  aiFabricStatus: AgentStatusResult | AgentStatusError | null;
 };
 
 export async function scanStatus(
@@ -105,6 +108,29 @@ export async function scanStatus(
       progress.setLabel("Resolving agents…");
       const agentStatus = await getAgentLocalStatuses();
       progress.tick();
+
+      // AI Fabric agent status (non-blocking; null if not configured)
+      const aiFabricStatus = await (async (): Promise<
+        AgentStatusResult | AgentStatusError | null
+      > => {
+        const fabric = cfg.aiFabric;
+        if (!fabric?.enabled || !fabric.projectId || !fabric.keyId) {
+          return null;
+        }
+        const secret = process.env["CLOUDRU_IAM_SECRET"]?.trim();
+        if (!secret) {
+          return null;
+        }
+        try {
+          return await getAgentStatus({
+            projectId: fabric.projectId,
+            auth: { keyId: fabric.keyId, secret },
+            configuredAgents: fabric.agents ?? [],
+          });
+        } catch {
+          return null;
+        }
+      })();
 
       progress.setLabel("Probing gateway…");
       const gatewayConnection = buildGatewayConnectionDetails();
@@ -197,6 +223,7 @@ export async function scanStatus(
         summary,
         memory,
         memoryPlugin,
+        aiFabricStatus,
       };
     },
   );

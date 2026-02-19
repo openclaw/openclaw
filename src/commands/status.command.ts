@@ -75,6 +75,7 @@ export async function statusCommand(
     gatewaySelf,
     channelIssues,
     agentStatus,
+    aiFabricStatus,
     channels,
     summary,
     memory,
@@ -165,6 +166,7 @@ export async function statusCommand(
           gatewayService: daemon,
           nodeService: nodeDaemon,
           agents: agentStatus,
+          aiFabric: aiFabricStatus,
           securityAudit,
           ...(health || usage || lastHeartbeat ? { health, usage, lastHeartbeat } : {}),
         },
@@ -391,6 +393,34 @@ export async function statusCommand(
     { Item: "Gateway service", Value: daemonValue },
     { Item: "Node service", Value: nodeDaemonValue },
     { Item: "Agents", Value: agentsValue },
+    ...(aiFabricStatus
+      ? [
+          {
+            Item: "AI Fabric",
+            Value: (() => {
+              if (!aiFabricStatus.ok) {
+                return warn(`error: ${aiFabricStatus.error}`);
+              }
+              const s = aiFabricStatus.summary;
+              const parts = [`${s.total} agents`];
+              if (s.healthy > 0) {
+                parts.push(ok(`${s.healthy} healthy`));
+              }
+              if (s.degraded > 0) {
+                parts.push(warn(`${s.degraded} degraded`));
+              }
+              if (s.failed > 0) {
+                parts.push(warn(`${s.failed} failed`));
+              }
+              const drifted = aiFabricStatus.entries.filter((e) => e.drift).length;
+              if (drifted > 0) {
+                parts.push(warn(`${drifted} drifted`));
+              }
+              return parts.join(" · ");
+            })(),
+          },
+        ]
+      : []),
     { Item: "Memory", Value: memoryValue },
     { Item: "Probes", Value: probesValue },
     { Item: "Events", Value: eventsValue },
