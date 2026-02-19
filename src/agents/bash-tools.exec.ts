@@ -19,6 +19,7 @@ import {
   buildSafeShellCommand,
   buildSafeBinsShellCommand,
 } from "../infra/exec-approvals.js";
+import { detectCommandObfuscation } from "../infra/exec-obfuscation-detect.js";
 import { buildNodeShellCommand } from "../infra/node-shell.js";
 import {
   getShellPathFromLoginShell,
@@ -509,12 +510,23 @@ export function createExecTool(
             // Fall back to requiring approval if node approvals cannot be fetched.
           }
         }
-        const requiresAsk = requiresExecApproval({
-          ask: hostAsk,
-          security: hostSecurity,
-          analysisOk,
-          allowlistSatisfied,
-        });
+        // Check for obfuscated commands that could bypass allowlist filters.
+        const nodeObfuscation = detectCommandObfuscation(params.command);
+        if (nodeObfuscation.detected) {
+          logInfo(
+            `exec: obfuscation detected (node=${nodeQuery ?? "default"}): ${nodeObfuscation.reasons.join(", ")}`,
+          );
+          warnings.push(`⚠️ Obfuscated command detected: ${nodeObfuscation.reasons.join("; ")}`);
+        }
+
+        const requiresAsk =
+          nodeObfuscation.detected ||
+          requiresExecApproval({
+            ask: hostAsk,
+            security: hostSecurity,
+            analysisOk,
+            allowlistSatisfied,
+          });
         const commandText = params.command;
         const invokeTimeoutMs = Math.max(
           10_000,
@@ -716,12 +728,22 @@ export function createExecTool(
         const analysisOk = allowlistEval.analysisOk;
         const allowlistSatisfied =
           hostSecurity === "allowlist" && analysisOk ? allowlistEval.allowlistSatisfied : false;
-        const requiresAsk = requiresExecApproval({
-          ask: hostAsk,
-          security: hostSecurity,
-          analysisOk,
-          allowlistSatisfied,
-        });
+
+        // Check for obfuscated commands that could bypass allowlist filters.
+        const gatewayObfuscation = detectCommandObfuscation(params.command);
+        if (gatewayObfuscation.detected) {
+          logInfo(`exec: obfuscation detected (gateway): ${gatewayObfuscation.reasons.join(", ")}`);
+          warnings.push(`⚠️ Obfuscated command detected: ${gatewayObfuscation.reasons.join("; ")}`);
+        }
+
+        const requiresAsk =
+          gatewayObfuscation.detected ||
+          requiresExecApproval({
+            ask: hostAsk,
+            security: hostSecurity,
+            analysisOk,
+            allowlistSatisfied,
+          });
 
         if (requiresAsk) {
           const approvalId = crypto.randomUUID();
