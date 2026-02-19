@@ -11,6 +11,7 @@ export type GatewayRespawnResult = {
 const SUPERVISOR_HINT_ENV_VARS = [
   "LAUNCH_JOB_LABEL",
   "LAUNCH_JOB_NAME",
+  "XPC_SERVICE_NAME",
   "INVOCATION_ID",
   "SYSTEMD_EXEC_PID",
   "JOURNAL_STREAM",

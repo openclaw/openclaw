@@ -23,6 +23,7 @@ afterEach(() => {
 function clearSupervisorHints() {
   delete process.env.LAUNCH_JOB_LABEL;
   delete process.env.LAUNCH_JOB_NAME;
+  delete process.env.XPC_SERVICE_NAME;
   delete process.env.INVOCATION_ID;
   delete process.env.SYSTEMD_EXEC_PID;
   delete process.env.JOURNAL_STREAM;
@@ -38,6 +39,14 @@ describe("restartGatewayProcessWithFreshPid", () => {
 
   it("returns supervised when launchd/systemd hints are present", () => {
     process.env.LAUNCH_JOB_LABEL = "ai.openclaw.gateway";
+    const result = restartGatewayProcessWithFreshPid();
+    expect(result.mode).toBe("supervised");
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("returns supervised when XPC_SERVICE_NAME is set by launchd", () => {
+    clearSupervisorHints();
+    process.env.XPC_SERVICE_NAME = "ai.openclaw.gateway";
     const result = restartGatewayProcessWithFreshPid();
     expect(result.mode).toBe("supervised");
     expect(spawnMock).not.toHaveBeenCalled();
