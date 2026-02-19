@@ -1,5 +1,5 @@
 ---
-summary: "Signal support via signal-cli (JSON-RPC + SSE), setup paths, and number model"
+summary: "Signal support via signal-cli (native daemon or bbernhard container), setup paths, and number model"
 read_when:
   - Setting up Signal support
   - Debugging Signal send/receive
@@ -8,12 +8,14 @@ title: "Signal"
 
 # Signal (signal-cli)
 
-Status: external CLI integration. Gateway talks to `signal-cli` over HTTP JSON-RPC + SSE.
+Status: external CLI integration. Gateway talks to `signal-cli` over HTTP — either native daemon (JSON-RPC + SSE) or bbernhard/signal-cli-rest-api container (REST + WebSocket).
 
 ## Prerequisites
 
 - OpenClaw installed on your server (Linux flow below tested on Ubuntu 24).
-- `signal-cli` available on the host where the gateway runs.
+- One of:
+  - `signal-cli` available on the host (native mode), **or**
+  - `bbernhard/signal-cli-rest-api` Docker container (container mode).
 - A phone number that can receive one verification SMS (for SMS registration path).
 - Browser access for Signal captcha (`signalcaptchas.org`) during registration.
 
@@ -179,6 +181,54 @@ If you want to manage `signal-cli` yourself (slow JVM cold starts, container ini
 
 This skips auto-spawn and the startup wait inside OpenClaw. For slow starts when auto-spawning, set `channels.signal.startupTimeoutMs`.
 
+## Container mode (bbernhard/signal-cli-rest-api)
+
+Instead of running `signal-cli` natively, you can use the [bbernhard/signal-cli-rest-api](https://github.com/bbernhard/signal-cli-rest-api) Docker container. This wraps `signal-cli` behind a REST API and WebSocket interface.
+
+Requirements:
+
+- The container **must** run with `MODE=json-rpc` for real-time message receiving.
+- Register or link your Signal account inside the container before connecting OpenClaw.
+
+Example `docker-compose.yml` service:
+
+```yaml
+signal-cli:
+  image: bbernhard/signal-cli-rest-api:latest
+  environment:
+    MODE: json-rpc
+  ports:
+    - "8080:8080"
+  volumes:
+    - signal-cli-data:/home/.local/share/signal-cli
+```
+
+OpenClaw config:
+
+```json5
+{
+  channels: {
+    signal: {
+      enabled: true,
+      account: "+15551234567",
+      httpUrl: "http://signal-cli:8080",
+      autoStart: false,
+      apiMode: "container", // or "auto" to detect automatically
+    },
+  },
+}
+```
+
+The `apiMode` field controls which protocol OpenClaw uses:
+
+| Value         | Behavior                                                                             |
+| ------------- | ------------------------------------------------------------------------------------ |
+| `"auto"`      | (Default) Probes both endpoints and picks whichever responds first                   |
+| `"native"`    | Force native signal-cli (JSON-RPC at `/api/v1/rpc`, SSE at `/api/v1/events`)         |
+| `"container"` | Force bbernhard container (REST at `/v2/send`, WebSocket at `/v1/receive/{account}`) |
+
+When `apiMode` is `"auto"`, OpenClaw caches the detected mode for 30 seconds to avoid repeated probes.
+
 ## Access control (DMs + groups)
 
 DMs:
@@ -199,7 +249,8 @@ Groups:
 
 ## How it works (behavior)
 
-- `signal-cli` runs as a daemon; the gateway reads events via SSE.
+- Native mode: `signal-cli` runs as a daemon; the gateway reads events via SSE.
+- Container mode: the gateway sends via REST API and receives via WebSocket.
 - Inbound messages are normalized into the shared channel envelope.
 - Replies always route back to the same number or group.
 
@@ -298,6 +349,7 @@ Full configuration: [Configuration](/gateway/configuration)
 Provider options:
 
 - `channels.signal.enabled`: enable/disable channel startup.
+- `channels.signal.apiMode`: `auto | native | container` (default: auto). See [Container mode](#container-mode-bbernhardsignal-cli-rest-api).
 - `channels.signal.account`: E.164 for the bot account.
 - `channels.signal.cliPath`: path to `signal-cli`.
 - `channels.signal.httpUrl`: full daemon URL (overrides host/port).
