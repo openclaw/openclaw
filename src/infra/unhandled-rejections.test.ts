@@ -92,6 +92,11 @@ describe("isTransientNetworkError", () => {
     expect(isTransientNetworkError(error)).toBe(true);
   });
 
+  it("returns true for Slack request errors that only expose ENOTFOUND in message text", () => {
+    const error = new Error("A request error occurred: getaddrinfo ENOTFOUND slack.com");
+    expect(isTransientNetworkError(error)).toBe(true);
+  });
+
   it("returns true for Slack request errors that wrap network codes in .original", () => {
     const error = Object.assign(new Error("A request error occurred: getaddrinfo EAI_AGAIN"), {
       code: "slack_webapi_request_error",
