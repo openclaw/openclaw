@@ -2,7 +2,7 @@ import type { ReplyToMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import type { OriginatingChannelType } from "../templating.js";
-import { SILENT_REPLY_TOKEN } from "../tokens.js";
+import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
 import { formatBunFetchSocketError, isBunFetchSocketError } from "./agent-runner-utils.js";
 import { createBlockReplyPayloadKey, type BlockReplyPipeline } from "./block-reply-pipeline.js";
@@ -45,7 +45,7 @@ export function buildReplyPayloads(params: {
           text = formatBunFetchSocketError(text);
         }
 
-        if (!text || !text.includes("HEARTBEAT_OK")) {
+        if (!text || !text.includes(HEARTBEAT_TOKEN)) {
           return [{ ...payload, text }];
         }
         const stripped = stripHeartbeatToken(text, { mode: "message" });

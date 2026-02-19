@@ -28,7 +28,7 @@ import {
 import { stripHeartbeatToken } from "../heartbeat.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
+import { HEARTBEAT_TOKEN, isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
   buildEmbeddedRunBaseParams,
@@ -125,7 +125,7 @@ export async function runAgentTurnWithFallback(params: {
     try {
       const normalizeStreamingText = (payload: ReplyPayload): { text?: string; skip: boolean } => {
         let text = payload.text;
-        if (!params.isHeartbeat && text?.includes("HEARTBEAT_OK")) {
+        if (!params.isHeartbeat && text?.includes(HEARTBEAT_TOKEN)) {
           const stripped = stripHeartbeatToken(text, {
             mode: "message",
           });
