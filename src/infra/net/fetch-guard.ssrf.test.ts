@@ -109,7 +109,9 @@ describe("fetchWithSsrFGuard hardening", () => {
       init: {
         headers: {
           Authorization: "Bearer secret",
+          "Proxy-Authorization": "Basic c2VjcmV0",
           Cookie: "session=abc",
+          Cookie2: "legacy=1",
           "X-Trace": "1",
         },
       },
@@ -118,7 +120,9 @@ describe("fetchWithSsrFGuard hardening", () => {
     const [, secondInit] = fetchImpl.mock.calls[1] as [string, RequestInit];
     const headers = new Headers(secondInit.headers);
     expect(headers.get("authorization")).toBeNull();
+    expect(headers.get("proxy-authorization")).toBeNull();
     expect(headers.get("cookie")).toBeNull();
+    expect(headers.get("cookie2")).toBeNull();
     expect(headers.get("x-trace")).toBe("1");
     await result.release();
   });
