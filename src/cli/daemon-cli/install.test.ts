@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const buildGatewayInstallPlan = vi.fn(async () => ({
+const buildGatewayInstallPlan = vi.fn(async (_args?: unknown) => ({
   programArguments: ["/usr/bin/node", "/tmp/openclaw/dist/index.js", "gateway"],
   workingDirectory: "/tmp/openclaw",
   environment: {
@@ -26,19 +26,19 @@ const readConfigFileSnapshot = vi.fn(async () => ({
   config: {},
 }));
 
-const resolveGatewayPort = vi.fn(() => 18789);
-const writeConfigFile = vi.fn(async () => {});
+const resolveGatewayPort = vi.fn((_cfg?: unknown) => 18789);
+const writeConfigFile = vi.fn(async (_cfg?: unknown) => {});
 
-const resolveIsNixMode = vi.fn(() => false);
+const resolveIsNixMode = vi.fn((_env?: unknown) => false);
 const randomToken = vi.fn(() => "generated-token");
-const resolveGatewayAuth = vi.fn(() => ({
+const resolveGatewayAuth = vi.fn((_input?: unknown) => ({
   mode: "token",
   token: "cfg-token",
   allowTailscale: false,
 }));
 
-const serviceInstall = vi.fn(async () => {});
-const serviceIsLoaded = vi.fn(async () => false);
+const serviceInstall = vi.fn(async (_args?: unknown) => {});
+const serviceIsLoaded = vi.fn(async (_args?: unknown) => false);
 const resolveGatewayService = vi.fn(() => ({
   label: "systemd",
   loadedText: "enabled",
