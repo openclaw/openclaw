@@ -370,16 +370,10 @@ jobs:
           pnpm-version: "10.23.0"
           cache-key-suffix: "node22"
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.3.9"
-
       - name: Runtime versions
         run: |
           node -v
           npm -v
-          bun -v
           pnpm -v
 
       - name: Capture node path
