@@ -5,14 +5,9 @@
  * TDD: tests written first, then implementation.
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import type { McpClientBase } from "../client-base.js";
-import {
-  discoverResources,
-  readResource,
-  buildResourceContext,
-  type McpResourceInfo,
-} from "../resource-bridge.js";
+import { discoverResources, readResource, buildResourceContext } from "../resource-bridge.js";
 
 // ─── Mock Client Factory ───
 
@@ -79,7 +74,8 @@ describe("discoverResources", () => {
     } as Partial<McpClientBase>);
     const resources = await discoverResources(client);
     expect(resources).toHaveLength(0);
-    expect(client.listResources).not.toHaveBeenCalled();
+    // listResources should not have been called
+    expect(vi.mocked(client.listResources)).not.toHaveBeenCalled();
   });
 });
 
