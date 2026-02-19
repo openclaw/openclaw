@@ -406,7 +406,7 @@ const memoryPlugin = {
           });
 
           return {
-            content: [{ type: "text", text: `Stored: "${text.slice(0, 100)}..."` }],
+            content: [{ type: "text", text: `Stored: "${text.length > 100 ? text.slice(0, 100) + "..." : text}"` }],
             details: { action: "created", id: entry.id },
           };
         },
