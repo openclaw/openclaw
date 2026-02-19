@@ -245,14 +245,10 @@ describe("deliverReplies", () => {
       "123",
       expect.any(String),
       expect.objectContaining({
-        reply_to_message_id: 500,
-      }),
-    );
-    expect(sendMessage).toHaveBeenCalledWith(
-      "123",
-      expect.any(String),
-      expect.not.objectContaining({
-        reply_parameters: expect.anything(),
+        reply_parameters: {
+          message_id: 500,
+          quote: "quoted text",
+        },
       }),
     );
   });
