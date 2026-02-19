@@ -78,6 +78,14 @@ const runDrySend = (params: {
     action: "send",
   });
 
+function createAlwaysConfiguredPluginConfig(account: Record<string, unknown> = { enabled: true }) {
+  return {
+    listAccountIds: () => ["default"],
+    resolveAccount: () => account,
+    isConfigured: () => true,
+  };
+}
+
 describe("runMessageAction context isolation", () => {
   beforeEach(async () => {
     const { createPluginRuntime } = await import("../../plugins/runtime/index.js");
@@ -680,11 +688,7 @@ describe("runMessageAction card-only send behavior", () => {
       blurb: "Card-only send test plugin.",
     },
     capabilities: { chatTypes: ["direct"] },
-    config: {
-      listAccountIds: () => ["default"],
-      resolveAccount: () => ({ enabled: true }),
-      isConfigured: () => true,
-    },
+    config: createAlwaysConfiguredPluginConfig(),
     actions: {
       listActions: () => ["send"],
       supportsAction: ({ action }) => action === "send",
@@ -764,11 +768,7 @@ describe("runMessageAction components parsing", () => {
       blurb: "Discord components send test plugin.",
     },
     capabilities: { chatTypes: ["direct"] },
-    config: {
-      listAccountIds: () => ["default"],
-      resolveAccount: () => ({}),
-      isConfigured: () => true,
-    },
+    config: createAlwaysConfiguredPluginConfig({}),
     actions: {
       listActions: () => ["send"],
       supportsAction: ({ action }) => action === "send",
