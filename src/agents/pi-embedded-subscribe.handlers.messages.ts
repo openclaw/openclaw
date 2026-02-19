@@ -82,6 +82,30 @@ export function handleMessageUpdate(
       : undefined;
   const evtType = typeof assistantRecord?.type === "string" ? assistantRecord.type : "";
 
+  if (evtType === "thinking_start" || evtType === "thinking_delta" || evtType === "thinking_end") {
+    const thinkingDelta = typeof assistantRecord?.delta === "string" ? assistantRecord.delta : "";
+    const thinkingContent =
+      typeof assistantRecord?.content === "string" ? assistantRecord.content : "";
+    appendRawStream({
+      ts: Date.now(),
+      event: "assistant_thinking_stream",
+      runId: ctx.params.runId,
+      sessionId: (ctx.params.session as { id?: string }).id,
+      evtType,
+      delta: thinkingDelta,
+      content: thinkingContent,
+    });
+    if (ctx.state.streamReasoning) {
+      // Prefer full partial-message thinking when available; fall back to event payloads.
+      const partialThinking = extractAssistantThinking(msg);
+      ctx.emitReasoningStream(partialThinking || thinkingContent || thinkingDelta);
+    }
+    if (evtType === "thinking_end") {
+      void ctx.params.onReasoningEnd?.();
+    }
+    return;
+  }
+
   if (evtType !== "text_delta" && evtType !== "text_start" && evtType !== "text_end") {
     return;
   }

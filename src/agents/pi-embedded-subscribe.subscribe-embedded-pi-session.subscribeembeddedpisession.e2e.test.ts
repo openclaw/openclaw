@@ -201,6 +201,56 @@ describe("subscribeEmbeddedPiSession", () => {
     },
   );
 
+  it("streams native thinking_delta events and signals reasoning end", () => {
+    let handler: ((evt: unknown) => void) | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
+
+    const onReasoningStream = vi.fn();
+    const onReasoningEnd = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
+      runId: "run",
+      reasoningMode: "stream",
+      onReasoningStream,
+      onReasoningEnd,
+    });
+
+    handler?.({
+      type: "message_update",
+      message: {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "Checking files" }],
+      },
+      assistantMessageEvent: {
+        type: "thinking_delta",
+        delta: "Checking files",
+      },
+    });
+
+    handler?.({
+      type: "message_update",
+      message: {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "Checking files done" }],
+      },
+      assistantMessageEvent: {
+        type: "thinking_end",
+      },
+    });
+
+    const streamTexts = onReasoningStream.mock.calls
+      .map((call) => call[0]?.text)
+      .filter((value): value is string => typeof value === "string");
+    expect(streamTexts.at(-1)).toBe("Reasoning:\n_Checking files done_");
+    expect(onReasoningEnd).toHaveBeenCalledTimes(1);
+  });
+
   it("emits delta chunks in agent events for streaming assistant text", () => {
     const { emit, onAgentEvent } = createAgentEventHarness();
 
