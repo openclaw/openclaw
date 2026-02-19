@@ -496,6 +496,19 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     }
   }
 
+  // Set global undici dispatcher for Carbon's REST API calls if proxy is configured
+  const proxy = discordCfg.proxy?.trim();
+  if (proxy) {
+    try {
+      const { ProxyAgent, setGlobalDispatcher } = await import("undici");
+      const proxyAgent = new ProxyAgent(proxy);
+      setGlobalDispatcher(proxyAgent);
+      runtime.log?.("discord: rest proxy enabled (global undici dispatcher)");
+    } catch (err) {
+      runtime.error?.(danger(`discord: failed to set global proxy dispatcher: ${String(err)}`));
+    }
+  }
+
   const client = new Client(
     {
       baseUrl: "http://localhost",
