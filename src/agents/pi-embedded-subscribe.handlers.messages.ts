@@ -30,6 +30,9 @@ const stripTrailingDirective = (text: string): string => {
   return text.slice(0, openIndex);
 };
 
+const stripTrailingPartialThinkingTag = (text: string): string =>
+  text.replace(/<\s*\/?\s*(?:think(?:ing)?|thought|antthinking)\s*$/i, "").trimEnd();
+
 function emitReasoningEnd(ctx: EmbeddedPiSubscribeContext) {
   if (!ctx.state.reasoningStreamOpen) {
     return;
@@ -189,7 +192,7 @@ export function handleMessageUpdate(
     }
     const parsedDelta = visibleDelta ? ctx.consumePartialReplyDirectives(visibleDelta) : null;
     const parsedFull = parseReplyDirectives(stripTrailingDirective(next));
-    const cleanedText = parsedFull.text;
+    const cleanedText = stripTrailingPartialThinkingTag(parsedFull.text);
     const mediaUrls = parsedDelta?.mediaUrls;
     const hasMedia = Boolean(mediaUrls && mediaUrls.length > 0);
     const hasAudio = Boolean(parsedDelta?.audioAsVoice);
@@ -279,6 +282,10 @@ export function handleMessageEnd(
       ? extractAssistantThinking(assistantMessage) || extractThinkingFromTaggedText(rawText)
       : "";
   const formattedReasoning = rawThinking ? formatReasoningMessage(rawThinking) : "";
+  if (ctx.state.streamReasoning && rawThinking) {
+    // Emit final reasoning snapshot before answer finalization paths.
+    ctx.emitReasoningStream(rawThinking);
+  }
   const trimmedText = text.trim();
   const parsedText = trimmedText ? parseReplyDirectives(stripTrailingDirective(trimmedText)) : null;
   let cleanedText = parsedText?.text ?? "";
@@ -394,9 +401,6 @@ export function handleMessageEnd(
 
   if (!shouldEmitReasoningBeforeAnswer) {
     maybeEmitReasoning();
-  }
-  if (ctx.state.streamReasoning && rawThinking) {
-    ctx.emitReasoningStream(rawThinking);
   }
 
   if (ctx.state.blockReplyBreak === "text_end" && onBlockReply) {

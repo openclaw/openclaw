@@ -394,9 +394,11 @@ export function extractThinkingFromTaggedStream(text: string): string {
   if (!text) {
     return "";
   }
+  const stripTrailingPartialTag = (value: string) =>
+    value.replace(/<\s*\/?\s*(?:think(?:ing)?|thought|antthinking)\s*$/i, "").trimEnd();
   const closed = extractThinkingFromTaggedText(text);
   if (closed) {
-    return closed;
+    return stripTrailingPartialTag(closed);
   }
 
   const openRe = /<\s*(?:think(?:ing)?|thought|antthinking)\s*>/gi;
@@ -409,10 +411,10 @@ export function extractThinkingFromTaggedStream(text: string): string {
   const lastOpen = openMatches[openMatches.length - 1];
   const lastClose = closeMatches[closeMatches.length - 1];
   if (lastClose && (lastClose.index ?? -1) > (lastOpen.index ?? -1)) {
-    return closed;
+    return stripTrailingPartialTag(closed);
   }
   const start = (lastOpen.index ?? 0) + lastOpen[0].length;
-  return text.slice(start).trim();
+  return stripTrailingPartialTag(text.slice(start).trim());
 }
 
 export function inferToolMetaFromArgs(toolName: string, args: unknown): string | undefined {
