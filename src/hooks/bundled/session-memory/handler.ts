@@ -207,6 +207,9 @@ const saveSessionToMemory: HookHandler = async (event) => {
         sessionsDirs.add(path.dirname(currentSessionFile));
       }
       sessionsDirs.add(path.join(workspaceDir, "sessions"));
+      // Also search the actual state-dir sessions path (may differ from workspace)
+      const stateDir = resolveStateDir(process.env, os.homedir);
+      sessionsDirs.add(path.join(stateDir, "agents", agentId, "sessions"));
 
       for (const sessionsDir of sessionsDirs) {
         const recoveredSessionFile = await findPreviousSessionFile({
