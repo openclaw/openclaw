@@ -201,6 +201,35 @@ export function extractToolResultMediaPaths(result: unknown): string[] {
   return [];
 }
 
+/**
+ * Extract audioAsVoice flag from tool result text content.
+ * Looks for [[audio_as_voice]] tag in text content blocks.
+ */
+export function extractToolResultAudioAsVoice(result: unknown): boolean {
+  if (!result || typeof result !== "object") {
+    return false;
+  }
+  const record = result as Record<string, unknown>;
+  const content = Array.isArray(record.content) ? record.content : null;
+  if (!content) {
+    return false;
+  }
+
+  for (const item of content) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+    const entry = item as Record<string, unknown>;
+    if (entry.type === "text" && typeof entry.text === "string") {
+      if (entry.text.includes("[[audio_as_voice]]")) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 export function isToolResultError(result: unknown): boolean {
   if (!result || typeof result !== "object") {
     return false;

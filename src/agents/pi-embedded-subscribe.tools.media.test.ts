@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { extractToolResultMediaPaths } from "./pi-embedded-subscribe.tools.js";
+import {
+  extractToolResultAudioAsVoice,
+  extractToolResultMediaPaths,
+} from "./pi-embedded-subscribe.tools.js";
 
 describe("extractToolResultMediaPaths", () => {
   it("returns empty array for null/undefined", () => {
@@ -216,5 +219,57 @@ describe("extractToolResultMediaPaths", () => {
       ],
     };
     expect(extractToolResultMediaPaths(result)).toEqual(["/tmp/page1.png", "/tmp/page2.png"]);
+  });
+});
+
+describe("extractToolResultAudioAsVoice", () => {
+  it("returns false for null/undefined", () => {
+    expect(extractToolResultAudioAsVoice(null)).toBe(false);
+    expect(extractToolResultAudioAsVoice(undefined)).toBe(false);
+  });
+
+  it("returns false for non-object", () => {
+    expect(extractToolResultAudioAsVoice("hello")).toBe(false);
+    expect(extractToolResultAudioAsVoice(42)).toBe(false);
+  });
+
+  it("returns false when content is missing", () => {
+    expect(extractToolResultAudioAsVoice({ details: {} })).toBe(false);
+  });
+
+  it("returns false when no [[audio_as_voice]] tag present", () => {
+    const result = {
+      content: [{ type: "text", text: "MEDIA:/tmp/audio.opus" }],
+    };
+    expect(extractToolResultAudioAsVoice(result)).toBe(false);
+  });
+
+  it("returns true when [[audio_as_voice]] tag is present", () => {
+    const result = {
+      content: [{ type: "text", text: "[[audio_as_voice]]\nMEDIA:/tmp/voice.opus" }],
+    };
+    expect(extractToolResultAudioAsVoice(result)).toBe(true);
+  });
+
+  it("returns true when [[audio_as_voice]] tag is on same line as MEDIA:", () => {
+    const result = {
+      content: [{ type: "text", text: "[[audio_as_voice]] MEDIA:/tmp/voice.opus" }],
+    };
+    expect(extractToolResultAudioAsVoice(result)).toBe(true);
+  });
+
+  it("returns true when [[audio_as_voice]] tag is in middle of text", () => {
+    const result = {
+      content: [{ type: "text", text: "Before [[audio_as_voice]] after" }],
+    };
+    expect(extractToolResultAudioAsVoice(result)).toBe(true);
+  });
+
+  it("handles TTS tool output format", () => {
+    const result = {
+      content: [{ type: "text", text: "[[audio_as_voice]]\nMEDIA:/tmp/tts-fAJy8C/voice-123.opus" }],
+      details: { audioPath: "/tmp/tts-fAJy8C/voice-123.opus", provider: "edge" },
+    };
+    expect(extractToolResultAudioAsVoice(result)).toBe(true);
   });
 });

@@ -10,6 +10,7 @@ import type {
 } from "./pi-embedded-subscribe.handlers.types.js";
 import {
   extractToolErrorMessage,
+  extractToolResultAudioAsVoice,
   extractToolResultMediaPaths,
   extractToolResultText,
   extractMessagingToolSend,
@@ -383,8 +384,12 @@ export async function handleToolExecutionEnd(
   if (ctx.params.onToolResult && !isToolError && !ctx.shouldEmitToolOutput()) {
     const mediaPaths = extractToolResultMediaPaths(result);
     if (mediaPaths.length > 0) {
+      const audioAsVoice = extractToolResultAudioAsVoice(result);
       try {
-        void ctx.params.onToolResult({ mediaUrls: mediaPaths });
+        void ctx.params.onToolResult({
+          mediaUrls: mediaPaths,
+          audioAsVoice: audioAsVoice || undefined,
+        });
       } catch {
         // ignore delivery failures
       }
