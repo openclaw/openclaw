@@ -158,10 +158,30 @@ function resolveEnvVars(value: string): string {
 export function resolveExtractionConfig(
   cfgExtraction?: MemoryNeo4jConfig["extraction"],
 ): ExtractionConfig {
-  const apiKey = cfgExtraction?.apiKey ?? process.env.OPENROUTER_API_KEY ?? "";
   const model = cfgExtraction?.model ?? process.env.EXTRACTION_MODEL ?? "anthropic/claude-opus-4-6";
-  const baseUrl =
-    cfgExtraction?.baseUrl ?? process.env.EXTRACTION_BASE_URL ?? "https://openrouter.ai/api/v1";
+
+  // Auto-detect Anthropic models and resolve the correct API key
+  const isAnthropicModel =
+    model.toLowerCase().startsWith("anthropic/") || model.toLowerCase().startsWith("claude-");
+
+  let apiKey: string;
+  let baseUrl: string;
+
+  if (isAnthropicModel && !cfgExtraction?.baseUrl) {
+    // Anthropic native: use ANTHROPIC_API_KEY, fall back to config apiKey, then OpenRouter key
+    apiKey =
+      cfgExtraction?.apiKey ??
+      process.env.ANTHROPIC_API_KEY ??
+      process.env.OPENROUTER_API_KEY ??
+      "";
+    baseUrl = "https://api.anthropic.com";
+  } else {
+    // OpenAI-compatible (OpenRouter, Ollama, etc.)
+    apiKey = cfgExtraction?.apiKey ?? process.env.OPENROUTER_API_KEY ?? "";
+    baseUrl =
+      cfgExtraction?.baseUrl ?? process.env.EXTRACTION_BASE_URL ?? "https://openrouter.ai/api/v1";
+  }
+
   // Enabled when an API key is set (cloud provider) or baseUrl was explicitly
   // configured in the plugin config (Ollama / local — no key needed).
   const enabled = apiKey.length > 0 || cfgExtraction?.baseUrl != null;

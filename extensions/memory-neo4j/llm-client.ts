@@ -1,14 +1,47 @@
 /**
- * OpenRouter/OpenAI-compatible LLM API client for memory-neo4j.
+ * LLM API client for memory-neo4j extraction.
  *
- * Handles non-streaming and streaming chat completion requests with
- * retry logic, timeout handling, and abort signal support.
+ * Supports two API formats:
+ * - **Anthropic Messages API** (native): Used when the model starts with
+ *   "anthropic/" or "claude-" and baseUrl points to api.anthropic.com.
+ * - **OpenAI-compatible** (OpenRouter, Ollama, etc.): Used for all other configs.
+ *
+ * Provider auto-detection: if the model name starts with "anthropic/" or "claude-"
+ * AND no explicit baseUrl override points elsewhere, Anthropic native API is used.
  */
 
 import type { ExtractionConfig } from "./config.js";
 
 // Timeout for LLM and embedding fetch calls to prevent hanging indefinitely
 export const FETCH_TIMEOUT_MS = 30_000;
+
+const ANTHROPIC_BASE_URL = "https://api.anthropic.com";
+const ANTHROPIC_API_VERSION = "2023-06-01";
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+/**
+ * Detect whether the config should use the Anthropic Messages API.
+ * True when the model looks like an Anthropic model AND the baseUrl is either
+ * the default OpenRouter URL (will be overridden) or explicitly Anthropic's.
+ */
+function isAnthropicNative(config: ExtractionConfig): boolean {
+  const model = config.model.toLowerCase();
+  return (
+    (model.startsWith("anthropic/") || model.startsWith("claude-")) &&
+    (!config.baseUrl ||
+      config.baseUrl === "https://openrouter.ai/api/v1" ||
+      config.baseUrl.includes("anthropic.com"))
+  );
+}
+
+/**
+ * Strip the "anthropic/" prefix from model names for the native API.
+ * e.g. "anthropic/claude-sonnet-4-6" → "claude-sonnet-4-6"
+ */
+function stripAnthropicPrefix(model: string): string {
+  return model.startsWith("anthropic/") ? model.slice("anthropic/".length) : model;
+}
 
 /**
  * Build a combined abort signal from the caller's signal and a per-request timeout.
@@ -19,12 +52,168 @@ function buildSignal(abortSignal?: AbortSignal): AbortSignal {
     : AbortSignal.timeout(FETCH_TIMEOUT_MS);
 }
 
+// ── Anthropic Messages API ──────────────────────────────────────────────────
+
 /**
- * Shared request/retry logic for OpenRouter API calls.
- * Handles signal composition, request building, error handling, and exponential backoff.
- * The `parseFn` callback processes the Response differently for streaming vs non-streaming.
+ * Call Anthropic's native Messages API (non-streaming).
  */
-async function openRouterRequest(
+async function anthropicRequest(
+  config: ExtractionConfig,
+  messages: Array<{ role: string; content: string }>,
+  abortSignal: AbortSignal | undefined,
+): Promise<string | null> {
+  // Separate system message from user/assistant messages
+  const systemMessages = messages.filter((m) => m.role === "system");
+  const chatMessages = messages.filter((m) => m.role !== "system");
+  const systemText = systemMessages.map((m) => m.content).join("\n\n") || undefined;
+
+  for (let attempt = 0; attempt <= config.maxRetries; attempt++) {
+    try {
+      const signal = buildSignal(abortSignal);
+      const model = stripAnthropicPrefix(config.model);
+
+      const response = await fetch(`${ANTHROPIC_BASE_URL}/v1/messages`, {
+        method: "POST",
+        headers: {
+          "x-api-key": config.apiKey,
+          "anthropic-version": ANTHROPIC_API_VERSION,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model,
+          max_tokens: 4096,
+          temperature: config.temperature,
+          ...(systemText ? { system: systemText } : {}),
+          messages: chatMessages.map((m) => ({
+            role: m.role as "user" | "assistant",
+            content: m.content,
+          })),
+        }),
+        signal,
+      });
+
+      if (!response.ok) {
+        const body = await response.text().catch(() => "");
+        throw new Error(`Anthropic API error ${response.status}: ${body}`);
+      }
+
+      const data = (await response.json()) as {
+        content?: Array<{ type: string; text?: string }>;
+      };
+      const textBlock = data.content?.find((b) => b.type === "text");
+      return textBlock?.text ?? null;
+    } catch (err) {
+      if (attempt >= config.maxRetries) {
+        throw err;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500 * 2 ** attempt));
+    }
+  }
+  return null;
+}
+
+/**
+ * Call Anthropic's native Messages API with streaming.
+ */
+async function anthropicStreamRequest(
+  config: ExtractionConfig,
+  messages: Array<{ role: string; content: string }>,
+  abortSignal: AbortSignal | undefined,
+): Promise<string | null> {
+  const systemMessages = messages.filter((m) => m.role === "system");
+  const chatMessages = messages.filter((m) => m.role !== "system");
+  const systemText = systemMessages.map((m) => m.content).join("\n\n") || undefined;
+
+  for (let attempt = 0; attempt <= config.maxRetries; attempt++) {
+    try {
+      const signal = buildSignal(abortSignal);
+      const model = stripAnthropicPrefix(config.model);
+
+      const response = await fetch(`${ANTHROPIC_BASE_URL}/v1/messages`, {
+        method: "POST",
+        headers: {
+          "x-api-key": config.apiKey,
+          "anthropic-version": ANTHROPIC_API_VERSION,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model,
+          max_tokens: 4096,
+          temperature: config.temperature,
+          stream: true,
+          ...(systemText ? { system: systemText } : {}),
+          messages: chatMessages.map((m) => ({
+            role: m.role as "user" | "assistant",
+            content: m.content,
+          })),
+        }),
+        signal,
+      });
+
+      if (!response.ok) {
+        const body = await response.text().catch(() => "");
+        throw new Error(`Anthropic API error ${response.status}: ${body}`);
+      }
+
+      if (!response.body) {
+        throw new Error("No response body for streaming request");
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let accumulated = "";
+      let buffer = "";
+
+      for (;;) {
+        if (abortSignal?.aborted) {
+          reader.cancel().catch(() => {});
+          return null;
+        }
+
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith("data: ")) continue;
+          const data = trimmed.slice(6);
+
+          try {
+            const parsed = JSON.parse(data) as {
+              type?: string;
+              delta?: { type?: string; text?: string };
+            };
+            // Anthropic streaming: content_block_delta events contain text
+            if (parsed.type === "content_block_delta" && parsed.delta?.text) {
+              accumulated += parsed.delta.text;
+            }
+          } catch {
+            // Skip malformed SSE chunks
+          }
+        }
+      }
+
+      return accumulated || null;
+    } catch (err) {
+      if (attempt >= config.maxRetries) {
+        throw err;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500 * 2 ** attempt));
+    }
+  }
+  return null;
+}
+
+// ── OpenAI-compatible API ───────────────────────────────────────────────────
+
+/**
+ * Shared request/retry logic for OpenAI-compatible API calls.
+ */
+async function openAIRequest(
   config: ExtractionConfig,
   messages: Array<{ role: string; content: string }>,
   abortSignal: AbortSignal | undefined,
@@ -53,7 +242,7 @@ async function openRouterRequest(
 
       if (!response.ok) {
         const body = await response.text().catch(() => "");
-        throw new Error(`OpenRouter API error ${response.status}: ${body}`);
+        throw new Error(`OpenAI-compatible API error ${response.status}: ${body}`);
       }
 
       return await parseFn(response, abortSignal);
@@ -61,16 +250,12 @@ async function openRouterRequest(
       if (attempt >= config.maxRetries) {
         throw err;
       }
-      // Exponential backoff
       await new Promise((resolve) => setTimeout(resolve, 500 * 2 ** attempt));
     }
   }
   return null;
 }
 
-/**
- * Parse a non-streaming JSON response.
- */
 function parseNonStreaming(response: Response): Promise<string | null> {
   return response.json().then((data: unknown) => {
     const typed = data as {
@@ -80,9 +265,6 @@ function parseNonStreaming(response: Response): Promise<string | null> {
   });
 }
 
-/**
- * Parse a streaming SSE response, accumulating chunks into a single string.
- */
 async function parseStreaming(
   response: Response,
   abortSignal?: AbortSignal,
@@ -97,7 +279,6 @@ async function parseStreaming(
   let buffer = "";
 
   for (;;) {
-    // Check abort between chunks for responsive cancellation
     if (abortSignal?.aborted) {
       reader.cancel().catch(() => {});
       return null;
@@ -107,8 +288,6 @@ async function parseStreaming(
     if (done) break;
 
     buffer += decoder.decode(value, { stream: true });
-
-    // Parse SSE lines
     const lines = buffer.split("\n");
     buffer = lines.pop() ?? "";
 
@@ -135,19 +314,24 @@ async function parseStreaming(
   return accumulated || null;
 }
 
+// ── Public API (auto-detects provider) ──────────────────────────────────────
+
 export async function callOpenRouter(
   config: ExtractionConfig,
   prompt: string | Array<{ role: string; content: string }>,
   abortSignal?: AbortSignal,
 ): Promise<string | null> {
   const messages = typeof prompt === "string" ? [{ role: "user", content: prompt }] : prompt;
-  return openRouterRequest(config, messages, abortSignal, false, parseNonStreaming);
+
+  if (isAnthropicNative(config)) {
+    return anthropicRequest(config, messages, abortSignal);
+  }
+  return openAIRequest(config, messages, abortSignal, false, parseNonStreaming);
 }
 
 /**
- * Streaming variant of callOpenRouter. Uses the streaming API to receive chunks
- * incrementally, allowing earlier cancellation via abort signal and better
- * latency characteristics for long responses.
+ * Streaming variant. Uses streaming to receive chunks incrementally,
+ * allowing earlier cancellation via abort signal.
  *
  * Accumulates all chunks into a single response string since extraction
  * uses JSON mode (which requires the complete object to parse).
@@ -158,7 +342,11 @@ export async function callOpenRouterStream(
   abortSignal?: AbortSignal,
 ): Promise<string | null> {
   const messages = typeof prompt === "string" ? [{ role: "user", content: prompt }] : prompt;
-  return openRouterRequest(config, messages, abortSignal, true, parseStreaming);
+
+  if (isAnthropicNative(config)) {
+    return anthropicStreamRequest(config, messages, abortSignal);
+  }
+  return openAIRequest(config, messages, abortSignal, true, parseStreaming);
 }
 
 /**
