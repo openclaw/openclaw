@@ -12,6 +12,8 @@ services:
       - OPENCLAW_GATEWAY_TOKEN=79da707a00cce6f610d7dea17e2903346294a4fc8acd2a89021f6c06400b7d31
       # State directory - must match the volume mount path
       - OPENCLAW_STATE_DIR=/home/node/.openclaw
+      # Resolve the reverse proxy IP dynamically for trustedProxies
+      - OPENCLAW_TRUSTED_PROXY_HOST=systemd-easyrunner__caddy
     restart: unless-stopped
     networks:
       - easyrunner_proxy_network
