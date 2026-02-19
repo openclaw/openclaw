@@ -16,11 +16,15 @@ import {
   type GatewayClientName,
 } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
-import type { OperatorScope } from "./method-scopes.js";
+import {
+  CLI_DEFAULT_OPERATOR_SCOPES,
+  resolveLeastPrivilegeOperatorScopesForMethod,
+  type OperatorScope,
+} from "./method-scopes.js";
 import { isSecureWebSocketUrl, pickPrimaryLanIPv4 } from "./net.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
 
-export type CallGatewayOptions = {
+type CallGatewayBaseOptions = {
   url?: string;
   token?: string;
   password?: string;
@@ -38,12 +42,23 @@ export type CallGatewayOptions = {
   instanceId?: string;
   minProtocol?: number;
   maxProtocol?: number;
-  scopes?: OperatorScope[];
   /**
    * Overrides the config path shown in connection error details.
    * Does not affect config loading; callers still control auth via opts.token/password/env/config.
    */
   configPath?: string;
+};
+
+export type CallGatewayScopedOptions = CallGatewayBaseOptions & {
+  scopes: OperatorScope[];
+};
+
+export type CallGatewayCliOptions = CallGatewayBaseOptions & {
+  scopes?: OperatorScope[];
+};
+
+export type CallGatewayOptions = CallGatewayBaseOptions & {
+  scopes?: OperatorScope[];
 };
 
 export type GatewayConnectionDetails = {
@@ -171,8 +186,9 @@ export function buildGatewayConnectionDetails(
   };
 }
 
-export async function callGateway<T = Record<string, unknown>>(
-  opts: CallGatewayOptions,
+async function callGatewayWithScopes<T = Record<string, unknown>>(
+  opts: CallGatewayBaseOptions,
+  scopes: OperatorScope[],
 ): Promise<T> {
   const timeoutMs =
     typeof opts.timeoutMs === "number" && Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : 10_000;
@@ -259,9 +275,6 @@ export async function callGateway<T = Record<string, unknown>>(
   };
   const formatTimeoutError = () =>
     `gateway timeout after ${timeoutMs}ms\n${connectionDetails.message}`;
-  const scopes = Array.isArray(opts.scopes)
-    ? opts.scopes
-    : ["operator.admin", "operator.approvals", "operator.pairing"];
   return await new Promise<T>((resolve, reject) => {
     let settled = false;
     let ignoreClose = false;
@@ -325,6 +338,44 @@ export async function callGateway<T = Record<string, unknown>>(
     }, safeTimerTimeoutMs);
 
     client.start();
+  });
+}
+
+export async function callGatewayScoped<T = Record<string, unknown>>(
+  opts: CallGatewayScopedOptions,
+): Promise<T> {
+  return await callGatewayWithScopes(opts, opts.scopes);
+}
+
+export async function callGatewayCli<T = Record<string, unknown>>(
+  opts: CallGatewayCliOptions,
+): Promise<T> {
+  const scopes = Array.isArray(opts.scopes) ? opts.scopes : CLI_DEFAULT_OPERATOR_SCOPES;
+  return await callGatewayWithScopes(opts, scopes);
+}
+
+export async function callGatewayLeastPrivilege<T = Record<string, unknown>>(
+  opts: CallGatewayBaseOptions,
+): Promise<T> {
+  const scopes = resolveLeastPrivilegeOperatorScopesForMethod(opts.method);
+  return await callGatewayWithScopes(opts, scopes);
+}
+
+export async function callGateway<T = Record<string, unknown>>(
+  opts: CallGatewayOptions,
+): Promise<T> {
+  if (Array.isArray(opts.scopes)) {
+    return await callGatewayWithScopes(opts, opts.scopes);
+  }
+  const callerMode = opts.mode ?? GATEWAY_CLIENT_MODES.BACKEND;
+  const callerName = opts.clientName ?? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT;
+  if (callerMode === GATEWAY_CLIENT_MODES.CLI || callerName === GATEWAY_CLIENT_NAMES.CLI) {
+    return await callGatewayCli(opts);
+  }
+  return await callGatewayLeastPrivilege({
+    ...opts,
+    mode: callerMode,
+    clientName: callerName,
   });
 }
 
