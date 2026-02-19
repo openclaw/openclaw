@@ -167,7 +167,9 @@ export async function launchOpenClawChrome(
   if (!profile.cdpIsLoopback) {
     throw new Error(`Profile "${profile.name}" is remote; cannot launch local Chrome.`);
   }
-  await ensurePortAvailable(profile.cdpPort);
+  if (!resolved.attachOnly) {
+    await ensurePortAvailable(profile.cdpPort);
+  }
 
   const exe = resolveBrowserExecutable(resolved);
   if (!exe) {
