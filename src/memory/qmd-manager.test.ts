@@ -407,6 +407,71 @@ describe("QmdMemoryManager", () => {
     expect(addSessions).toBeDefined();
   });
 
+  it("uses legacy unscoped collection names when scoped names are missing", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: true,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [],
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "collection" && args[1] === "list") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(child, "stdout", JSON.stringify(["memory-root", "memory-alt", "memory-dir"]));
+        return child;
+      }
+      if (args[0] === "search") {
+        const child = createMockChild({ autoClose: false });
+        if (args.includes("memory-root-main") || args.includes("memory-dir-main")) {
+          emitAndClose(child, "stderr", "Collection not found: memory-root-main", 1);
+        } else {
+          emitAndClose(child, "stdout", "[]");
+        }
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager, resolved } = await createManager({ mode: "full" });
+    const maxResults = resolved.qmd?.limits.maxResults;
+    if (!maxResults) {
+      throw new Error("qmd maxResults missing");
+    }
+
+    await expect(
+      manager.search("test", { sessionKey: "agent:main:slack:dm:u123" }),
+    ).resolves.toEqual([]);
+
+    const searchCall = spawnMock.mock.calls.find(
+      (call: unknown[]) => (call[1] as string[])?.[0] === "search",
+    );
+    expect(searchCall?.[1]).toEqual([
+      "search",
+      "test",
+      "--json",
+      "-n",
+      String(maxResults),
+      "-c",
+      "memory-root",
+      "-c",
+      "memory-alt",
+      "-c",
+      "memory-dir",
+    ]);
+
+    const addCalls = spawnMock.mock.calls
+      .map((call: unknown[]) => call[1] as string[])
+      .filter((args: string[]) => args[0] === "collection" && args[1] === "add");
+    expect(addCalls).toHaveLength(0);
+    await manager.close();
+  });
+
   it("times out qmd update during sync when configured", async () => {
     vi.useFakeTimers();
     cfg = {

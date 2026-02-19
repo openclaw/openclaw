@@ -175,6 +175,8 @@ export class QmdMemoryManager implements MemorySearchManager {
     await this.symlinkSharedModels();
 
     await this.ensureCollections();
+    // Collection names can be remapped to existing legacy aliases during bootstrap.
+    this.bootstrapCollections();
 
     if (this.qmd.update.onBoot) {
       const bootRun = this.runUpdate("boot", true);
@@ -245,6 +247,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
 
     for (const collection of this.qmd.collections) {
+      this.adoptLegacyCollectionNameIfPresent(collection, existing);
       const listed = existing.get(collection.name);
       if (listed && !this.shouldRebindCollection(collection, listed)) {
         continue;
@@ -265,6 +268,9 @@ export class QmdMemoryManager implements MemorySearchManager {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         if (this.isCollectionAlreadyExistsError(message)) {
+          // Some qmd versions keep legacy names (without agent suffix) and
+          // reject re-adding the same path/pattern under a new scoped name.
+          this.adoptLegacyCollectionNameIfPresent(collection, existing);
           continue;
         }
         log.warn(`qmd collection add failed for ${collection.name}: ${message}`);
@@ -327,6 +333,40 @@ export class QmdMemoryManager implements MemorySearchManager {
       return true;
     }
     return false;
+  }
+
+  private adoptLegacyCollectionNameIfPresent(
+    collection: {
+      kind: "memory" | "custom" | "sessions";
+      name: string;
+      path: string;
+      pattern: string;
+    },
+    existing: Map<string, ListedCollection>,
+  ): void {
+    if (collection.kind === "sessions") {
+      return;
+    }
+    const agentSuffix = `-${this.sanitizeCollectionNameSegment(this.agentId)}`;
+    if (!collection.name.endsWith(agentSuffix)) {
+      return;
+    }
+    const legacyName = collection.name.slice(0, -agentSuffix.length).trim();
+    if (!legacyName || legacyName === collection.name) {
+      return;
+    }
+    if (this.qmd.collections.some((entry) => entry !== collection && entry.name === legacyName)) {
+      return;
+    }
+    const listed = existing.get(legacyName);
+    if (!listed) {
+      return;
+    }
+    if (this.shouldRebindCollection(collection, listed)) {
+      return;
+    }
+    log.info(`qmd using legacy collection name ${legacyName} for ${collection.name}`);
+    collection.name = legacyName;
   }
 
   private pathsMatch(left: string, right: string): boolean {
