@@ -355,5 +355,10 @@ describe("classifyFailoverReason", () => {
       ),
     ).toBe("rate_limit");
     expect(classifyFailoverReason("LLM error: service unavailable")).toBe("rate_limit");
+    expect(
+      classifyFailoverReason(
+        '{"error":{"code":503,"message":"The model is overloaded. Please try later","status":"UNAVAILABLE"}}',
+      ),
+    ).toBe("rate_limit");
   });
 });

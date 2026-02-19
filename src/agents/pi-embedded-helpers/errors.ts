@@ -586,7 +586,6 @@ const ERROR_PATTERNS = {
   overloaded: [
     /overloaded_error|"type"\s*:\s*"overloaded_error"/i,
     "overloaded",
-    /\b503\b/,
     "service unavailable",
     "high demand",
   ],
