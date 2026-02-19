@@ -132,7 +132,6 @@ export async function handleToolExecutionStart(
   ctx: ToolHandlerContext,
   evt: AgentEvent & { toolName: string; toolCallId: string; args: unknown },
 ) {
-  // Flush pending block replies to preserve message boundaries before tool execution.
   ctx.flushBlockReplyBuffer();
   if (ctx.params.onBlockReplyFlush) {
     void ctx.params.onBlockReplyFlush();
@@ -143,8 +142,32 @@ export async function handleToolExecutionStart(
   const toolCallId = String(evt.toolCallId);
   const args = evt.args;
 
-  // Track start time and args for after_tool_call hook
   toolStartData.set(toolCallId, { startTime: Date.now(), args });
+
+  const coordinator = ctx.state.executionCoordinator;
+  if (coordinator) {
+    try {
+      const response = await coordinator.beforeToolExecution({
+        toolName,
+        toolCallId,
+        args: args && typeof args === "object" ? (args as Record<string, unknown>) : {},
+        timestamp: Date.now(),
+      });
+
+      if (!response.shouldExecute) {
+        ctx.log.debug(
+          `coordinator blocked tool execution: ${toolName} reason=${response.stopReason}`,
+        );
+        return;
+      }
+
+      if (response.modifiedArgs) {
+        evt.args = response.modifiedArgs;
+      }
+    } catch (err) {
+      ctx.log.debug(`coordinator beforeToolExecution failed: ${String(err)}`);
+    }
+  }
 
   if (toolName === "read") {
     const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
@@ -268,6 +291,74 @@ export async function handleToolExecutionEnd(
   const sanitizedResult = sanitizeToolResult(result);
   const startData = toolStartData.get(toolCallId);
   toolStartData.delete(toolCallId);
+  const duration = startData?.startTime != null ? Date.now() - startData.startTime : 0;
+
+  let decisionGuidance: string | undefined;
+  const coordinator = ctx.state.executionCoordinator;
+  if (coordinator) {
+    try {
+      const coordinatorResponse = await coordinator.afterToolExecution({
+        toolName,
+        toolCallId,
+        args: startData?.args && typeof startData.args === "object" 
+          ? (startData.args as Record<string, unknown>) 
+          : {},
+        result: sanitizedResult,
+        duration,
+      });
+
+      if (coordinatorResponse.evaluation || coordinatorResponse.nextRecommendedTool) {
+        const parts: string[] = [];
+        
+        if (coordinatorResponse.evaluation) {
+          const eval_ = coordinatorResponse.evaluation;
+          if (eval_.confidence < 0.5) {
+            parts.push(`Confidence: ${Math.round(eval_.confidence * 100)}% (low)`);
+          }
+          if (eval_.issues.length > 0) {
+            parts.push(`Issues: ${eval_.issues.join(", ")}`);
+          }
+          if (eval_.recommendations.length > 0) {
+            parts.push(`Recommendations: ${eval_.recommendations.join("; ")}`);
+          }
+          parts.push(`Next action: ${eval_.nextAction}`);
+        }
+        
+        if (coordinatorResponse.nextRecommendedTool) {
+          parts.push(`Recommended next tool: ${coordinatorResponse.nextRecommendedTool}`);
+        }
+        
+        if (parts.length > 0) {
+          decisionGuidance = `[Decision Guidance: ${parts.join(" | ")}]`;
+          
+          if (
+            result &&
+            typeof result === "object" &&
+            !isToolError
+          ) {
+            const record = result as Record<string, unknown>;
+            const content = Array.isArray(record.content) ? record.content : null;
+            if (content) {
+              const lastTextIndex = content.findLastIndex(
+                (item) =>
+                  item &&
+                  typeof item === "object" &&
+                  (item as Record<string, unknown>).type === "text",
+              );
+              if (lastTextIndex >= 0) {
+                const textEntry = content[lastTextIndex] as Record<string, unknown>;
+                const originalText = typeof textEntry.text === "string" ? textEntry.text : "";
+                textEntry.text = `${originalText}\n\n${decisionGuidance}`;
+              }
+            }
+          }
+        }
+      }
+    } catch (err) {
+      ctx.log.debug(`coordinator afterToolExecution failed: ${String(err)}`);
+    }
+  }
+
   const callSummary = ctx.state.toolMetaById.get(toolCallId);
   const meta = callSummary?.meta;
   ctx.state.toolMetas.push({ toolName, meta });
@@ -353,6 +444,7 @@ export async function handleToolExecutionEnd(
       meta,
       isError: isToolError,
       result: sanitizedResult,
+      decisionGuidance,
     },
   });
   void ctx.params.onAgentEvent?.({
@@ -363,6 +455,7 @@ export async function handleToolExecutionEnd(
       toolCallId,
       meta,
       isError: isToolError,
+      decisionGuidance,
     },
   });
 

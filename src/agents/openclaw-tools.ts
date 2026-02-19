@@ -25,6 +25,7 @@ import { resolveWorkspaceRoot } from "./workspace-dir.js";
 import { createEnhancedRAGTools } from "./rag-enhanced.js";
 import { createDynamicReasoningTool } from "./dynamic-reasoning.js";
 import { createAgenticWorkflowTool } from "./agentic-workflow.js";
+import { createDecisionEngineTool } from "./decision-engine.js";
 
 /**
  * Asynchronously discover and register MCP tools
@@ -119,6 +120,22 @@ export function createOpenClawTools(options?: {
     config: options?.config,
     agentSessionKey: options?.agentSessionKey,
   });
+  const ragTools = createEnhancedRAGTools({
+    config: options?.config,
+    agentSessionKey: options?.agentSessionKey,
+  }).filter((t): t is AnyAgentTool => t !== null);
+  const dynamicReasoningTool = createDynamicReasoningTool({
+    config: options?.config,
+    agentSessionKey: options?.agentSessionKey,
+  });
+  const agenticWorkflowTool = createAgenticWorkflowTool({
+    config: options?.config,
+    agentSessionKey: options?.agentSessionKey,
+  });
+  const decisionEngineTool = createDecisionEngineTool({
+    config: options?.config,
+    agentSessionKey: options?.agentSessionKey,
+  });
   const messageTool = options?.disableMessageTool
     ? null
     : createMessageTool({
@@ -195,10 +212,10 @@ export function createOpenClawTools(options?: {
     ...(webSearchTool ? [webSearchTool] : []),
     ...(webFetchTool ? [webFetchTool] : []),
     ...(imageTool ? [imageTool] : []),
-    // P0 Core Features
-    createDynamicReasoningTool(),
-    createAgenticWorkflowTool(),
-    ...createEnhancedRAGTools(),
+    ...ragTools,
+    ...(dynamicReasoningTool ? [dynamicReasoningTool] : []),
+    ...(agenticWorkflowTool ? [agenticWorkflowTool] : []),
+    ...(decisionEngineTool ? [decisionEngineTool] : []),
   ];
 
   const pluginTools = resolvePluginTools({

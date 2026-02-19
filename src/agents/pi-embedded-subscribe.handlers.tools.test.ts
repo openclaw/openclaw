@@ -1,5 +1,5 @@
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import type { MessagingToolSend } from "./pi-embedded-messaging.js";
 import {
   handleToolExecutionEnd,
@@ -9,6 +9,9 @@ import type {
   ToolCallSummary,
   ToolHandlerContext,
 } from "./pi-embedded-subscribe.handlers.types.js";
+import { ExecutionCoordinator } from "./execution-coordinator.js";
+import { resetDecisionContext } from "./decision-context.js";
+import { resetExecutionCoordinator } from "./execution-coordinator.js";
 
 type ToolExecutionStartEvent = Extract<AgentEvent, { type: "tool_execution_start" }>;
 type ToolExecutionEndEvent = Extract<AgentEvent, { type: "tool_execution_end" }>;
@@ -299,5 +302,114 @@ describe("messaging tool media URL tracking", () => {
 
     expect(ctx.state.messagingToolSentMediaUrls).toHaveLength(0);
     expect(ctx.state.pendingMessagingMediaUrls.has("tool-m3")).toBe(false);
+  });
+});
+
+describe("decision guidance injection", () => {
+  beforeEach(() => {
+    resetDecisionContext();
+    resetExecutionCoordinator();
+  });
+
+  afterEach(() => {
+    resetDecisionContext();
+    resetExecutionCoordinator();
+  });
+
+  it("injects decision guidance into tool result when coordinator exists", async () => {
+    const { ctx } = createTestContext();
+    
+    const coordinator = new ExecutionCoordinator();
+    await coordinator.initializeSession("Search for information about TypeScript");
+    ctx.state.executionCoordinator = coordinator;
+
+    const result = {
+      content: [
+        { type: "text", text: "Found 3 results about TypeScript." },
+      ],
+    };
+
+    await handleToolExecutionStart(ctx as never, {
+      type: "tool_execution_start",
+      toolName: "self_rag",
+      toolCallId: "tool-dg-1",
+      args: { query: "TypeScript" },
+    } as never);
+
+    await handleToolExecutionEnd(ctx as never, {
+      type: "tool_execution_end",
+      toolName: "self_rag",
+      toolCallId: "tool-dg-1",
+      isError: false,
+      result,
+    } as never);
+
+    const textContent = (result.content as Array<{ type: string; text: string }>)[0];
+    expect(textContent.text).toContain("Found 3 results");
+    expect(textContent.text).toContain("[Decision Guidance:");
+    expect(textContent.text).toContain("Next action:");
+  });
+
+  it("does not inject guidance on tool error", async () => {
+    const { ctx } = createTestContext();
+    
+    const coordinator = new ExecutionCoordinator();
+    await coordinator.initializeSession("Search for something");
+    ctx.state.executionCoordinator = coordinator;
+
+    const result = {
+      content: [
+        { type: "text", text: "Error occurred" },
+      ],
+    };
+
+    await handleToolExecutionStart(ctx as never, {
+      type: "tool_execution_start",
+      toolName: "self_rag",
+      toolCallId: "tool-dg-2",
+      args: {},
+    } as never);
+
+    await handleToolExecutionEnd(ctx as never, {
+      type: "tool_execution_end",
+      toolName: "self_rag",
+      toolCallId: "tool-dg-2",
+      isError: true,
+      result,
+    } as never);
+
+    const textContent = (result.content as Array<{ type: string; text: string }>)[0];
+    expect(textContent.text).toBe("Error occurred");
+    expect(textContent.text).not.toContain("[Decision Guidance:");
+  });
+
+  it("does not inject guidance when no coordinator", async () => {
+    const { ctx } = createTestContext();
+    ctx.state.executionCoordinator = undefined;
+
+    const result = {
+      content: [
+        { type: "text", text: "Simple result" },
+      ],
+    };
+
+    await handleToolExecutionStart(ctx as never, {
+      type: "tool_execution_start",
+      toolName: "read",
+      toolCallId: "tool-dg-3",
+      args: { path: "/tmp/test.txt" },
+    } as never);
+
+    await handleToolExecutionEnd(ctx as never, {
+      type: "tool_execution_end",
+      toolName: "read",
+      toolCallId: "tool-dg-3",
+      isError: false,
+      result,
+    } as never);
+
+    const textContent = (result.content as Array<{ type: string; text: string }>)[0];
+    expect(textContent.text).toBe("Simple result");
+    expect(textContent.text).not.toContain("[Decision Guidance:");
   });
 });

@@ -2,266 +2,233 @@
  * Enhanced RAG 单元测试
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
-  EnhancedRAG,
   createSelfRAGTool,
   createMultiHopRAGTool,
   createEnhancedRAGTools,
-  type SelfRAGResult,
 } from "./rag-enhanced.js";
 
+vi.mock("../memory/index.js", () => ({
+  getMemorySearchManager: vi.fn().mockResolvedValue({
+    manager: {
+      search: vi.fn().mockResolvedValue([
+        {
+          snippet: "Test snippet about quantum computing",
+          path: "MEMORY.md",
+          startLine: 10,
+          endLine: 15,
+          score: 0.85,
+        },
+      ]),
+    },
+  }),
+}));
+
+vi.mock("../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => ({
+    debug: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  }),
+}));
+
 describe("Enhanced RAG", () => {
-  describe("EnhancedRAG class", () => {
-    it("should create instance with default config", () => {
-      const rag = new EnhancedRAG();
-      expect(rag).toBeDefined();
-    });
-
-    it("should create instance with custom config", () => {
-      const rag = new EnhancedRAG({
-        maxHops: 5,
-        minConfidence: 0.8,
-        enableSelfAssessment: true,
-      });
-      expect(rag).toBeDefined();
-    });
-
-    it("should execute self-RAG with mock retrieve and generate", async () => {
-      const rag = new EnhancedRAG({ enableSelfAssessment: true });
-
-      const mockRetrieve = async (_query: string): Promise<string[]> => {
-        return [
-          "Document 1: Quantum computing uses qubits",
-          "Document 2: Qubits can be in superposition",
-        ];
-      };
-
-      const mockGenerate = async (_query: string, _context: string): Promise<string> => {
-        return "Quantum computing uses qubits which can be in superposition.";
-      };
-
-      const result = await rag.selfRAG(
-        "What is quantum computing?",
-        mockRetrieve,
-        mockGenerate,
-      );
-
-      expect(result.answer).toBeDefined();
-      expect(result.confidence).toBeGreaterThanOrEqual(0);
-      expect(result.confidence).toBeLessThanOrEqual(1);
-      expect(result.citations).toBeDefined();
-      expect(result.citations.length).toBeGreaterThan(0);
-    });
-
-    it("should return low confidence when no retrieval results", async () => {
-      const rag = new EnhancedRAG();
-
-      const mockRetrieve = async (): Promise<string[]> => [];
-      const mockGenerate = async (): Promise<string> => "Answer";
-
-      const result = await rag.selfRAG(
-        "Test query",
-        mockRetrieve,
-        mockGenerate,
-      );
-
-      expect(result.confidence).toBe(0);
-      expect(result.citations).toHaveLength(0);
-      expect(result.answer).toContain("No relevant information");
-    });
-
-    it("should assess relevance correctly", async () => {
-      const rag = new EnhancedRAG();
-
-      // Use reflection to test private method
-      const assessRelevance = (rag as any).assessRelevance.bind(rag);
-
-      const retrieved = [
-        "Machine learning is a subset of artificial intelligence",
-        "Deep learning uses neural networks",
-      ];
-      const query = "What is machine learning?";
-
-      const relevance = await assessRelevance(retrieved, query);
-
-      expect(relevance).toBeGreaterThanOrEqual(0);
-      expect(relevance).toBeLessThanOrEqual(1);
-    });
-
-    it("should assess support correctly", async () => {
-      const rag = new EnhancedRAG();
-
-      const assessSupport = (rag as any).assessSupport.bind(rag);
-
-      const retrieved = [
-        "Paris is the capital of France",
-        "France is in Europe",
-      ];
-      const answer = "Paris is the capital of France, which is in Europe.";
-
-      const support = await assessSupport(retrieved, answer);
-
-      expect(support).toBeGreaterThanOrEqual(0);
-      expect(support).toBeLessThanOrEqual(1);
-    });
-
-    it("should assess utility correctly", async () => {
-      const rag = new EnhancedRAG();
-
-      const assessUtility = (rag as any).assessUtility.bind(rag);
-
-      const answer = "Therefore, the answer is 42. This is because...";
-      const query = "What is the answer?";
-
-      const utility = await assessUtility(answer, query);
-
-      expect(utility).toBeGreaterThanOrEqual(0);
-      expect(utility).toBeLessThanOrEqual(1);
-    });
-
-    it("should extract citations", async () => {
-      const rag = new EnhancedRAG();
-
-      const extractCitations = (rag as any).extractCitations.bind(rag);
-
-      const retrieved = [
-        "Document 1 content",
-        "Document 2 content",
-        "Document 3 content",
-      ];
-      const answer = "Test answer";
-
-      const citations = await extractCitations(retrieved, answer);
-
-      expect(citations).toHaveLength(3);
-      expect(citations[0].source).toBe("source-1");
-      expect(citations[0].score).toBe(1);
-    });
-
-    it("should execute multi-hop RAG", async () => {
-      const rag = new EnhancedRAG({ maxHops: 3 });
-
-      const mockRetrieve = async (query: string): Promise<string[]> => {
-        return [`Evidence for: ${query}`];
-      };
-
-      const mockGenerateSubQuestion = async (
-        question: string,
-        _context: string,
-      ): Promise<string> => {
-        return `Sub-question: ${question}`;
-      };
-
-      const mockGenerateFinalAnswer = async (
-        question: string,
-        _context: string,
-      ): Promise<string> => {
-        return `Final answer for: ${question}`;
-      };
-
-      const result = await rag.multiHopRAG(
-        "Complex question",
-        mockRetrieve,
-        mockGenerateSubQuestion,
-        mockGenerateFinalAnswer,
-      );
-
-      expect(result.answer).toBeDefined();
-      expect(result.hops).toBeGreaterThanOrEqual(1);
-      expect(result.hops).toBeLessThanOrEqual(3);
-      expect(result.reasoningChain).toBeDefined();
-    });
-  });
-
   describe("createSelfRAGTool", () => {
-    it("should create tool with correct schema", () => {
+    it("should return null when no config provided", () => {
       const tool = createSelfRAGTool();
+      expect(tool).toBeNull();
+    });
 
-      expect(tool.name).toBe("self_rag");
-      expect(tool.label).toBe("Self-RAG");
-      expect(tool.description).toBeDefined();
-      expect(tool.parameters).toBeDefined();
-      expect(tool.execute).toBeDefined();
+    it("should create tool when config provided", () => {
+      const tool = createSelfRAGTool({
+        config: {} as Record<string, unknown>,
+        agentSessionKey: "test",
+      });
+      expect(tool).not.toBeNull();
+      expect(tool!.name).toBe("self_rag");
+      expect(tool!.label).toBe("Self-RAG");
+      expect(tool!.description).toBeDefined();
+      expect(tool!.parameters).toBeDefined();
+      expect(tool!.execute).toBeDefined();
     });
 
     it("should have required parameters", () => {
-      const tool = createSelfRAGTool();
-      const params = tool.parameters as any;
+      const tool = createSelfRAGTool({ config: {} as Record<string, unknown> });
+      const params = tool?.parameters as {
+        type: string;
+        required: string[];
+        properties: Record<string, unknown>;
+      };
 
       expect(params.type).toBe("object");
       expect(params.required).toContain("query");
       expect(params.properties.query).toBeDefined();
-      expect(params.properties.includeCitations).toBeDefined();
+      expect(params.properties.maxResults).toBeDefined();
+      expect(params.properties.minScore).toBeDefined();
     });
 
-    it("should execute successfully", async () => {
-      const tool = createSelfRAGTool();
+    it("should return structured result on execution", async () => {
+      const tool = createSelfRAGTool({
+        config: {} as Record<string, unknown>,
+        agentSessionKey: "test",
+      });
 
-      const result = await tool.execute(
+      const result = await tool!.execute(
         "test-call-id",
-        { query: "Test query" },
+        { query: "test query" },
         undefined,
         undefined,
       );
 
       expect(result).toBeDefined();
-      expect(result.details.frameworkReady).toBe(true);
+      expect(result.details).toBeDefined();
+
+      const details = result.details as {
+        results: unknown[];
+        confidence: number;
+        assessment: { relevance: number; support: number; utility: number };
+        recommendation: string;
+        actionItems: string[];
+        suggestion: string;
+      };
+
+      expect(Array.isArray(details.results)).toBe(true);
+      expect(typeof details.confidence).toBe("number");
+      expect(details.assessment).toBeDefined();
+      expect(details.recommendation).toBeDefined();
+      expect(Array.isArray(details.actionItems)).toBe(true);
+      expect(typeof details.suggestion).toBe("string");
     });
   });
 
   describe("createMultiHopRAGTool", () => {
-    it("should create tool with correct schema", () => {
+    it("should return null when no config provided", () => {
       const tool = createMultiHopRAGTool();
-
-      expect(tool.name).toBe("multihop_rag");
-      expect(tool.label).toBe("Multi-hop RAG");
-      expect(tool.description).toBeDefined();
+      expect(tool).toBeNull();
     });
 
-    it("should execute successfully", async () => {
-      const tool = createMultiHopRAGTool();
+    it("should create tool when config provided", () => {
+      const tool = createMultiHopRAGTool({
+        config: {} as Record<string, unknown>,
+        agentSessionKey: "test",
+      });
+      expect(tool).not.toBeNull();
+      expect(tool!.name).toBe("multihop_rag");
+      expect(tool!.label).toBe("Multi-hop RAG");
+      expect(tool!.description).toBeDefined();
+    });
 
-      const result = await tool.execute(
+    it("should have required parameters", () => {
+      const tool = createMultiHopRAGTool({ config: {} as Record<string, unknown> });
+      const params = tool?.parameters as {
+        type: string;
+        required: string[];
+        properties: Record<string, unknown>;
+      };
+
+      expect(params.type).toBe("object");
+      expect(params.required).toContain("question");
+      expect(params.properties.question).toBeDefined();
+      expect(params.properties.maxHops).toBeDefined();
+      expect(params.properties.subQuestions).toBeDefined();
+    });
+
+    it("should return structured reasoning chain on execution", async () => {
+      const tool = createMultiHopRAGTool({
+        config: {} as Record<string, unknown>,
+        agentSessionKey: "test",
+      });
+
+      const result = await tool!.execute(
         "test-call-id",
-        { question: "Test question", maxHops: 3 },
+        { question: "complex test question", maxHops: 2 },
         undefined,
         undefined,
       );
 
       expect(result).toBeDefined();
-      expect(result.details.frameworkReady).toBe(true);
+      const details = result.details as {
+        reasoningChain: unknown[];
+        hops: number;
+        totalResults: number;
+        avgConfidence: number;
+        status: string;
+        nextAction: string;
+      };
+
+      expect(Array.isArray(details.reasoningChain)).toBe(true);
+      expect(typeof details.hops).toBe("number");
+      expect(typeof details.totalResults).toBe("number");
+      expect(typeof details.avgConfidence).toBe("number");
+      expect(details.status).toBeDefined();
+      expect(typeof details.nextAction).toBe("string");
     });
   });
 
   describe("createEnhancedRAGTools", () => {
-    it("should return array of tools", () => {
+    it("should return array of nulls when no config provided", () => {
       const tools = createEnhancedRAGTools();
 
       expect(Array.isArray(tools)).toBe(true);
       expect(tools.length).toBe(2);
-      expect(tools[0].name).toBe("self_rag");
-      expect(tools[1].name).toBe("multihop_rag");
+      expect(tools[0]).toBeNull();
+      expect(tools[1]).toBeNull();
+    });
+
+    it("should return tools when config provided", () => {
+      const tools = createEnhancedRAGTools({ config: {} as Record<string, unknown> });
+
+      expect(Array.isArray(tools)).toBe(true);
+      expect(tools.length).toBe(2);
+      expect(tools[0]).not.toBeNull();
+      expect(tools[1]).not.toBeNull();
+      expect(tools[0]!.name).toBe("self_rag");
+      expect(tools[1]!.name).toBe("multihop_rag");
     });
   });
 
-  describe("SelfRAGResult type", () => {
-    it("should have all required fields", () => {
-      const result: SelfRAGResult = {
-        answer: "Test answer",
-        confidence: 0.8,
-        citations: [],
-        relevance: 0.7,
-        support: 0.9,
-        utility: 0.8,
+  describe("Confidence Assessment", () => {
+    it("should calculate confidence from search results", async () => {
+      const tool = createSelfRAGTool({
+        config: {} as Record<string, unknown>,
+        agentSessionKey: "test",
+      });
+
+      const result = await tool!.execute(
+        "test-call-id",
+        { query: "quantum computing algorithms" },
+        undefined,
+        undefined,
+      );
+
+      const details = result.details as { confidence: number };
+
+      expect(details.confidence).toBeGreaterThanOrEqual(0);
+      expect(details.confidence).toBeLessThanOrEqual(1);
+    });
+
+    it("should provide actionable recommendations", async () => {
+      const tool = createSelfRAGTool({
+        config: {} as Record<string, unknown>,
+        agentSessionKey: "test",
+      });
+
+      const result = await tool!.execute(
+        "test-call-id",
+        { query: "test query" },
+        undefined,
+        undefined,
+      );
+
+      const details = result.details as {
+        recommendation: string;
+        actionItems: string[];
       };
 
-      expect(result.answer).toBeDefined();
-      expect(result.confidence).toBeDefined();
-      expect(result.citations).toBeDefined();
-      expect(result.relevance).toBeDefined();
-      expect(result.support).toBeDefined();
-      expect(result.utility).toBeDefined();
+      expect(details.recommendation).toBeDefined();
+      expect(Array.isArray(details.actionItems)).toBe(true);
+      expect(details.actionItems.length).toBeGreaterThan(0);
     });
   });
 });

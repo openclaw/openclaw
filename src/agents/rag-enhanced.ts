@@ -1,46 +1,41 @@
 /**
  * Enhanced RAG - 检索增强生成 2.0
- * 
- * 实现：Self-RAG, Multi-hop RAG, Graph RAG 框架
- * 
- * 基于微软 Graph RAG 和 Self-RAG 论文
+ *
+ * 实现：Self-RAG, Multi-hop RAG
+ * 提供置信度评估和可执行建议
  */
 
+import type { OpenClawConfig } from "../config/config.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { getMemorySearchManager } from "../memory/index.js";
+import type { MemorySearchResult } from "../memory/types.js";
+import { resolveSessionAgentId } from "./agent-scope.js";
 import type { AnyAgentTool } from "./tools/common.js";
+import { jsonResult, readNumberParam, readStringParam } from "./tools/common.js";
 
-/**
- * Self-RAG 评估结果
- */
+const log = createSubsystemLogger("rag");
+
 export type SelfRAGResult = {
   answer: string;
-  confidence: number; // 0-1
+  confidence: number;
   citations: Citation[];
   relevance: number;
   support: number;
   utility: number;
 };
 
-/**
- * 引用来源
- */
 export type Citation = {
   text: string;
   source: string;
   score: number;
 };
 
-/**
- * Multi-hop 推理结果
- */
 export type MultiHopResult = {
   answer: string;
   reasoningChain: ReasoningStep[];
   hops: number;
 };
 
-/**
- * 推理步骤
- */
 export type ReasoningStep = {
   step: number;
   question: string;
@@ -48,429 +43,593 @@ export type ReasoningStep = {
   conclusion: string;
 };
 
-/**
- * Enhanced RAG 核心类
- */
-export class EnhancedRAG {
-  private readonly config: {
-    maxHops: number;
-    minConfidence: number;
-    enableSelfAssessment: boolean;
+type RAGRecommendation =
+  | "proceed_high_confidence"
+  | "proceed_moderate_confidence"
+  | "low_relevance_expand"
+  | "insufficient_gather_more"
+  | "memory_unavailable"
+  | "no_results"
+  | "error";
+
+type RAGContext = {
+  cfg: OpenClawConfig;
+  agentId: string;
+};
+
+function resolveRAGContext(options: {
+  config?: OpenClawConfig;
+  agentSessionKey?: string;
+}): RAGContext | null {
+  const cfg = options.config;
+  if (!cfg) {
+    return null;
+  }
+  const agentId = resolveSessionAgentId({
+    sessionKey: options.agentSessionKey,
+    config: cfg,
+  });
+  return { cfg, agentId };
+}
+
+function calculateConfidence(
+  results: MemorySearchResult[],
+  query: string,
+): {
+  relevance: number;
+  support: number;
+  utility: number;
+  confidence: number;
+} {
+  if (results.length === 0) {
+    return { relevance: 0, support: 0, utility: 0, confidence: 0 };
+  }
+
+  const searchScores = results.map((r) => r.score ?? 0);
+  const avgSearchScore =
+    searchScores.reduce((a, b) => a + b, 0) / searchScores.length;
+
+  const relevance = calculateRelevance(results, query);
+  const support = calculateSupport(results, query);
+  const utility = calculateUtility(query, results);
+
+  const confidence = avgSearchScore * 0.4 + relevance * 0.3 + utility * 0.3;
+
+  return {
+    relevance: Math.round(relevance * 1000) / 1000,
+    support: Math.round(support * 1000) / 1000,
+    utility: Math.round(utility * 1000) / 1000,
+    confidence: Math.min(1, Math.max(0, confidence)),
   };
+}
 
-  constructor(config?: {
-    maxHops?: number;
-    minConfidence?: number;
-    enableSelfAssessment?: boolean;
-  }) {
-    this.config = {
-      maxHops: config?.maxHops ?? 3,
-      minConfidence: config?.minConfidence ?? 0.7,
-      enableSelfAssessment: config?.enableSelfAssessment ?? true,
-    };
+function calculateRelevance(results: MemorySearchResult[], query: string): number {
+  const queryTerms = extractKeyTerms(query);
+  if (queryTerms.length === 0) {
+    return 0.5;
   }
 
-  /**
-   * 1. Self-RAG - 自我评估检索质量
-   * 
-   * 核心流程：检索 → 生成 → 自我评估 → 置信度
-   */
-  async selfRAG(
-    query: string,
-    retrieve: (query: string) => Promise<string[]>,
-    generate: (query: string, context: string) => Promise<string>,
-  ): Promise<SelfRAGResult> {
-    // Step 1: 检索
-    const retrieved = await retrieve(query);
-    
-    if (retrieved.length === 0) {
-      return {
-        answer: "No relevant information found.",
-        confidence: 0,
-        citations: [],
-        relevance: 0,
-        support: 0,
-        utility: 0,
-      };
-    }
+  const combinedText = results.map((r) => r.snippet).join(" ").toLowerCase();
+  const matchedTerms = queryTerms.filter((term) => combinedText.includes(term));
 
-    // Step 2: 生成答案
-    const context = retrieved.join('\n\n');
-    const answer = await generate(query, context);
+  return matchedTerms.length / queryTerms.length;
+}
 
-    // Step 3: 自我评估（如果启用）
-    if (!this.config.enableSelfAssessment) {
-      return {
-        answer,
-        confidence: 0.5, // 默认置信度
-        citations: retrieved.map((text, i) => ({
-          text,
-          source: `source-${i + 1}`,
-          score: 1 / (i + 1), // 简单衰减
-        })),
-        relevance: 0.5,
-        support: 0.5,
-        utility: 0.5,
-      };
-    }
+function calculateSupport(results: MemorySearchResult[], query: string): number {
+  const queryLower = query.toLowerCase();
 
-    // Step 4: 评估检索相关性
-    const relevance = await this.assessRelevance(retrieved, query);
-    
-    // Step 5: 评估答案支持度
-    const support = await this.assessSupport(retrieved, answer);
-    
-    // Step 6: 评估答案实用性
-    const utility = await this.assessUtility(answer, query);
+  const hasQuantitative = /\d+[%$]?|\d+\.\d+/.test(queryLower);
+  const hasComparison = /better|worse|more|less|higher|lower|best|worst/i.test(query);
+  const hasTemporal = /when|date|time|recent|latest|before|after/i.test(query);
 
-    // Step 7: 计算综合置信度
-    const confidence = (relevance + support + utility) / 3;
+  const combinedText = results.map((r) => r.snippet).join(" ");
 
-    // Step 8: 提取引用
-    const citations = this.extractCitations(retrieved, answer);
+  let support = 0.5;
 
-    return {
-      answer,
-      confidence,
-      citations,
-      relevance,
-      support,
-      utility,
-    };
+  if (hasQuantitative && /\d+[%$]?|\d+\.\d+/.test(combinedText)) {
+    support += 0.2;
+  }
+  if (hasComparison && /better|worse|more|less|higher|lower|best|worst/i.test(combinedText)) {
+    support += 0.2;
+  }
+  if (hasTemporal && /\d{4}|\d{1,2}\/\d{1,2}|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec/i.test(combinedText)) {
+    support += 0.2;
   }
 
-  /**
-   * 2. Multi-hop RAG - 多跳推理
-   * 
-   * 核心流程：生成子问题 → 检索 → 更新上下文 → 重复 → 综合答案
-   */
-  async multiHopRAG(
-    question: string,
-    retrieve: (query: string) => Promise<string[]>,
-    generateSubQuestion: (question: string, context: string) => Promise<string>,
-    generateFinalAnswer: (question: string, context: string) => Promise<string>,
-  ): Promise<MultiHopResult> {
-    const reasoningChain: ReasoningStep[] = [];
-    let currentContext = '';
-    let remainingQuestion = question;
+  return Math.min(1, support);
+}
 
-    for (let hop = 0; hop < this.config.maxHops; hop++) {
-      // Step 1: 生成子问题
-      const subQuestion = await generateSubQuestion(
-        remainingQuestion,
-        currentContext,
-      );
+function calculateUtility(query: string, results: MemorySearchResult[]): number {
+  const resultLength = results.reduce((sum, r) => sum + r.snippet.length, 0);
 
-      // Step 2: 检索证据
-      const evidenceList = await retrieve(subQuestion);
-      const evidence = evidenceList.join('\n\n');
+  let utility = 0.3;
 
-      // Step 3: 形成推理步骤
-      const step: ReasoningStep = {
-        step: hop + 1,
-        question: subQuestion,
-        evidence,
-        conclusion: '', // 待填充
-      };
-
-      // Step 4: 更新上下文
-      currentContext += `\n\nHop ${hop + 1}:\nQuestion: ${subQuestion}\nEvidence: ${evidence}`;
-
-      // Step 5: 检查是否已回答
-      const isAnswered = await this.checkIfAnswered(question, currentContext);
-      if (isAnswered) {
-        step.conclusion = 'Sufficient information gathered';
-        reasoningChain.push(step);
-        break;
-      }
-
-      // Step 6: 精炼剩余问题
-      remainingQuestion = await this.refineQuestion(
-        question,
-        currentContext,
-      );
-
-      step.conclusion = `Proceed to hop ${hop + 2}`;
-      reasoningChain.push(step);
-
-      // 如果没有剩余问题，停止
-      if (!remainingQuestion.trim()) {
-        break;
-      }
-    }
-
-    // Step 7: 生成最终答案
-    const answer = await generateFinalAnswer(question, currentContext);
-
-    return {
-      answer,
-      reasoningChain,
-      hops: reasoningChain.length,
-    };
+  if (resultLength > 500) {
+    utility += 0.3;
+  } else if (resultLength > 200) {
+    utility += 0.2;
+  } else if (resultLength > 50) {
+    utility += 0.1;
   }
 
-  /**
-   * 评估检索相关性
-   */
-  private async assessRelevance(
-    retrieved: string[],
-    query: string,
-  ): Promise<number> {
-    // 简化实现：基于关键词重叠度
-    const queryTerms = new Set(
-      query.toLowerCase().split(/\s+/).filter(term => term.length > 3),
-    );
-
-    let totalScore = 0;
-    for (const text of retrieved) {
-      const textTerms = new Set(
-        text.toLowerCase().split(/\s+/).filter(term => term.length > 3),
-      );
-      
-      const overlap = [...queryTerms].filter(term => textTerms.has(term));
-      const score = overlap.length / Math.max(1, queryTerms.size);
-      totalScore += score;
-    }
-
-    return totalScore / retrieved.length;
+  if (/how|what|why|when|where|which|explain|describe/i.test(query)) {
+    utility += 0.2;
   }
 
-  /**
-   * 评估答案支持度
-   */
-  private async assessSupport(
-    retrieved: string[],
-    answer: string,
-  ): Promise<number> {
-    // 简化实现：检查答案中的关键陈述是否在检索中找到支持
-    const answerSentences = answer.split(/[.!?]+/).filter(s => s.trim().length > 10);
-    
-    if (answerSentences.length === 0) {
-      return 0;
-    }
-
-    let supportedCount = 0;
-    for (const sentence of answerSentences) {
-      const terms = new Set(
-        sentence.toLowerCase().split(/\s+/).filter(term => term.length > 3),
-      );
-
-      for (const text of retrieved) {
-        const textTerms = new Set(
-          text.toLowerCase().split(/\s+/).filter(term => term.length > 3),
-        );
-
-        const overlap = [...terms].filter(term => textTerms.has(term));
-        const score = overlap.length / Math.max(1, terms.size);
-
-        if (score > 0.5) {
-          supportedCount++;
-          break;
-        }
-      }
-    }
-
-    return supportedCount / answerSentences.length;
+  if (results.length >= 3) {
+    utility += 0.2;
+  } else if (results.length >= 2) {
+    utility += 0.1;
   }
 
-  /**
-   * 评估答案实用性
-   */
-  private async assessUtility(answer: string, query: string): Promise<number> {
-    // 简化实现：基于答案长度和完整性
-    const answerLength = answer.length;
-    const queryLength = query.length;
+  return Math.min(1, utility);
+}
 
-    // 答案应该足够长以回答问题，但不应过长
-    const lengthScore = Math.min(1, answerLength / Math.max(50, queryLength * 2));
+function extractKeyTerms(text: string): string[] {
+  const stopWords = new Set([
+    "the",
+    "a",
+    "an",
+    "is",
+    "are",
+    "was",
+    "were",
+    "be",
+    "been",
+    "being",
+    "have",
+    "has",
+    "had",
+    "do",
+    "does",
+    "did",
+    "will",
+    "would",
+    "could",
+    "should",
+    "may",
+    "might",
+    "must",
+    "shall",
+    "can",
+    "need",
+    "dare",
+    "ought",
+    "used",
+    "to",
+    "of",
+    "in",
+    "for",
+    "on",
+    "with",
+    "at",
+    "by",
+    "from",
+    "as",
+    "into",
+    "through",
+    "during",
+    "before",
+    "after",
+    "above",
+    "below",
+    "between",
+    "under",
+    "again",
+    "further",
+    "then",
+    "once",
+    "here",
+    "there",
+    "when",
+    "where",
+    "why",
+    "how",
+    "all",
+    "each",
+    "few",
+    "more",
+    "most",
+    "other",
+    "some",
+    "such",
+    "no",
+    "nor",
+    "not",
+    "only",
+    "own",
+    "same",
+    "so",
+    "than",
+    "too",
+    "very",
+    "just",
+    "and",
+    "but",
+    "if",
+    "or",
+    "because",
+    "until",
+    "while",
+    "about",
+    "what",
+    "which",
+    "who",
+    "whom",
+    "this",
+    "that",
+    "these",
+    "those",
+  ]);
 
-    // 检查是否包含关键信息词
-    const hasConclusion = /therefore|thus|conclusion|answer|result/i.test(answer);
-    const hasExplanation = answerLength > 100;
+  return text
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((word) => word.length > 2 && !stopWords.has(word))
+    .filter((word) => /^[a-z0-9]+$/.test(word));
+}
 
-    const completenessScore = (hasConclusion ? 0.5 : 0) + (hasExplanation ? 0.5 : 0);
-
-    return (lengthScore + completenessScore) / 2;
+function getRecommendation(
+  confidence: number,
+  relevance: number,
+): RAGRecommendation {
+  if (confidence >= 0.7 && relevance >= 0.6) {
+    return "proceed_high_confidence";
   }
-
-  /**
-   * 提取引用
-   */
-  private extractCitations(retrieved: string[], answer: string): Citation[] {
-    // 简化实现：返回前 3 个最相关的检索结果
-    return retrieved.slice(0, 3).map((text, i) => ({
-      text: text.substring(0, 200) + (text.length > 200 ? '...' : ''),
-      source: `source-${i + 1}`,
-      score: 1 / (i + 1),
-    }));
+  if (confidence >= 0.5) {
+    return "proceed_moderate_confidence";
   }
-
-  /**
-   * 检查是否已回答
-   */
-  private async checkIfAnswered(question: string, context: string): Promise<boolean> {
-    // 简化实现：基于上下文长度和关键词
-    if (context.length < 100) {
-      return false;
-    }
-
-    // 检查是否包含答案指示词
-    const answerIndicators = [
-      'answer is',
-      'therefore',
-      'thus',
-      'conclusion',
-      'result',
-      'means that',
-    ];
-
-    return answerIndicators.some(indicator => 
-      context.toLowerCase().includes(indicator),
-    );
+  if (relevance < 0.3) {
+    return "low_relevance_expand";
   }
+  return "insufficient_gather_more";
+}
 
-  /**
-   * 精炼问题
-   */
-  private async refineQuestion(question: string, context: string): Promise<string> {
-    // 简化实现：返回原问题（实际应用中应该基于已收集信息更新问题）
-    return question;
+function getSuggestion(recommendation: RAGRecommendation, confidence: number): string {
+  const pct = `${Math.round(confidence * 100)}%`;
+
+  switch (recommendation) {
+    case "proceed_high_confidence":
+      return `High confidence (${pct}). Proceed with answer using retrieved context. Cite sources when appropriate.`;
+    case "proceed_moderate_confidence":
+      return `Moderate confidence (${pct}). Verify key claims. Consider additional memory_search with alternative terms if uncertain.`;
+    case "low_relevance_expand":
+      return `Low relevance. Try: (1) broader search terms, (2) alternative keywords, (3) web_search for external information.`;
+    case "insufficient_gather_more":
+      return `Insufficient context. Try: (1) multihop_rag for related topics, (2) web_search, (3) ask user for clarification.`;
+    case "memory_unavailable":
+      return "Memory system unavailable. Check configuration or use web_search as fallback.";
+    case "no_results":
+      return "No results found. Check if relevant information exists in memory or use web_search.";
+    default:
+      return "Review retrieved context before proceeding.";
   }
 }
 
-/**
- * 创建 Self-RAG 工具
- */
-export function createSelfRAGTool(): AnyAgentTool {
-  const rag = new EnhancedRAG();
+function getActionItems(recommendation: RAGRecommendation): string[] {
+  switch (recommendation) {
+    case "proceed_high_confidence":
+      return [
+        "Synthesize answer from retrieved context",
+        "Include citations for key claims",
+        "No additional search needed",
+      ];
+    case "proceed_moderate_confidence":
+      return [
+        "Cross-check key facts",
+        "Consider memory_search with alternative terms",
+        "Mark uncertain claims explicitly",
+      ];
+    case "low_relevance_expand":
+      return [
+        "memory_search with broader terms",
+        "Try web_search for external sources",
+        "Ask user for more specific query",
+      ];
+    case "insufficient_gather_more":
+      return [
+        "Use multihop_rag for related topics",
+        "Use web_search for additional context",
+        "Ask user clarifying questions",
+      ];
+    default:
+      return ["Review available information"];
+  }
+}
+
+export function createSelfRAGTool(options?: {
+  config?: OpenClawConfig;
+  agentSessionKey?: string;
+}): AnyAgentTool | null {
+  const ctx = resolveRAGContext(options ?? {});
+  if (!ctx) {
+    return null;
+  }
+  const { cfg, agentId } = ctx;
 
   return {
-    name: 'self_rag',
-    label: 'Self-RAG',
-    description: 'Retrieve and generate answers with self-assessment of quality and confidence',
+    name: "self_rag",
+    label: "Self-RAG",
+    description:
+      "Search memory with quality assessment. Returns context with confidence score and actionable recommendations. Use before answering questions about prior work, decisions, or domain knowledge.",
     parameters: {
-      type: 'object',
+      type: "object",
       properties: {
         query: {
-          type: 'string',
-          description: 'The question or query to answer',
+          type: "string",
+          description: "The question or query to search for",
         },
-        includeCitations: {
-          type: 'boolean',
-          description: 'Whether to include citations',
-          default: true,
+        maxResults: {
+          type: "number",
+          description: "Maximum number of results to retrieve (default: 5)",
+        },
+        minScore: {
+          type: "number",
+          description: "Minimum relevance score threshold 0-1 (default: 0.3)",
         },
       },
-      required: ['query'],
+      required: ["query"],
     },
     execute: async (_toolCallId, params) => {
-      try {
-        const query = params.query as string;
-        const includeCitations = params.includeCitations as boolean;
+      const query = readStringParam(params, "query", { required: true });
+      const maxResults = readNumberParam(params, "maxResults") ?? 5;
+      const minScore = readNumberParam(params, "minScore") ?? 0.3;
 
-        // 这是一个框架工具，需要集成到实际检索系统
-        return {
-          content: [{
-            type: 'text' as const,
-            text: `Self-RAG framework ready for query: ${query}\n\n` +
-                  `Features:\n` +
-                  `- Automatic relevance assessment\n` +
-                  `- Answer support verification\n` +
-                  `- Utility evaluation\n` +
-                  `- Confidence scoring\n` +
-                  `- Citation extraction\n\n` +
-                  `Integration: Connect to memory-search or external retrieval system`,
-          }],
-          details: {
+      log.debug(`self_rag: query="${query.substring(0, 50)}..." maxResults=${maxResults}`);
+
+      const { manager, error } = await getMemorySearchManager({ cfg, agentId });
+      if (!manager) {
+        log.warn(`self_rag: memory unavailable: ${error}`);
+        return jsonResult({
+          results: [],
+          confidence: 0,
+          assessment: { relevance: 0, support: 0, utility: 0 },
+          recommendation: "memory_unavailable",
+          actionItems: getActionItems("memory_unavailable"),
+          suggestion: getSuggestion("memory_unavailable", 0),
+          error,
+        });
+      }
+
+      try {
+        const searchResults = await manager.search(query, { maxResults, minScore });
+
+        if (searchResults.length === 0) {
+          log.debug(`self_rag: no results for query`);
+          return jsonResult({
+            results: [],
+            confidence: 0,
+            assessment: { relevance: 0, support: 0, utility: 0 },
+            recommendation: "no_results",
+            actionItems: getActionItems("no_results"),
+            suggestion: getSuggestion("no_results", 0),
             query,
-            includeCitations,
-            frameworkReady: true,
+          });
+        }
+
+        const assessment = calculateConfidence(searchResults, query);
+        const recommendation = getRecommendation(assessment.confidence, assessment.relevance);
+        const suggestion = getSuggestion(recommendation, assessment.confidence);
+        const actionItems = getActionItems(recommendation);
+
+        log.debug(
+          `self_rag: ${searchResults.length} results, confidence=${assessment.confidence.toFixed(2)}, recommendation=${recommendation}`,
+        );
+
+        return jsonResult({
+          results: searchResults.map((r) => ({
+            snippet: r.snippet,
+            path: r.path,
+            citation: `${r.path}#L${r.startLine}-L${r.endLine}`,
+            score: r.score,
+          })),
+          confidence: Math.round(assessment.confidence * 1000) / 1000,
+          assessment: {
+            relevance: assessment.relevance,
+            support: assessment.support,
+            utility: assessment.utility,
           },
-        } as any;
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        return {
-          content: [{
-            type: 'text' as const,
-            text: `Error: ${message}`,
-          }],
-          details: { error: message },
-        } as any;
+          recommendation,
+          actionItems,
+          suggestion,
+          query,
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        log.error(`self_rag error: ${message}`);
+        return jsonResult({
+          results: [],
+          confidence: 0,
+          assessment: { relevance: 0, support: 0, utility: 0 },
+          recommendation: "error",
+          actionItems: [],
+          suggestion: `Error occurred: ${message}`,
+          error: message,
+          query,
+        });
       }
     },
   };
 }
 
-/**
- * 创建 Multi-hop RAG 工具
- */
-export function createMultiHopRAGTool(): AnyAgentTool {
-  const rag = new EnhancedRAG({ maxHops: 3 });
+function generateSubQuestions(question: string, maxHops: number): string[] {
+  const subQuestions: string[] = [question];
+
+  const keyTerms = extractKeyTerms(question);
+  const hasHow = /\bhow\b/i.test(question);
+  const hasWhy = /\bwhy\b/i.test(question);
+  const hasWhat = /\bwhat\b/i.test(question);
+  const hasWhen = /\bwhen\b/i.test(question);
+
+  if (keyTerms.length > 0 && maxHops > 1) {
+    const topTerms = keyTerms.slice(0, 3).join(" ");
+
+    if (hasHow || hasWhat) {
+      subQuestions.push(`background context for ${topTerms}`);
+    }
+
+    if (hasWhy) {
+      subQuestions.push(`reasons and motivations for ${topTerms}`);
+    }
+
+    if (hasWhen) {
+      subQuestions.push(`timeline and history of ${topTerms}`);
+    }
+
+    if (!hasHow && !hasWhy && !hasWhat && !hasWhen) {
+      subQuestions.push(`related decisions and outcomes about ${topTerms}`);
+    }
+  }
+
+  if (subQuestions.length < maxHops && keyTerms.length > 2) {
+    subQuestions.push(`dependencies and prerequisites for ${keyTerms.slice(0, 2).join(" and ")}`);
+  }
+
+  return subQuestions.slice(0, maxHops);
+}
+
+export function createMultiHopRAGTool(options?: {
+  config?: OpenClawConfig;
+  agentSessionKey?: string;
+}): AnyAgentTool | null {
+  const ctx = resolveRAGContext(options ?? {});
+  if (!ctx) {
+    return null;
+  }
+  const { cfg, agentId } = ctx;
 
   return {
-    name: 'multihop_rag',
-    label: 'Multi-hop RAG',
-    description: 'Answer complex questions requiring multi-step reasoning and retrieval',
+    name: "multihop_rag",
+    label: "Multi-hop RAG",
+    description:
+      "Multi-hop reasoning for complex questions. Executes iterative searches across related queries to build comprehensive evidence. Returns reasoning chain with gathered context.",
     parameters: {
-      type: 'object',
+      type: "object",
       properties: {
         question: {
-          type: 'string',
-          description: 'The complex question requiring multi-hop reasoning',
+          type: "string",
+          description: "The complex question requiring multi-hop reasoning",
         },
         maxHops: {
-          type: 'number',
-          description: 'Maximum number of reasoning hops',
-          default: 3,
+          type: "number",
+          description: "Maximum number of reasoning hops (default: 3)",
+        },
+        subQuestions: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional custom sub-questions to investigate",
         },
       },
-      required: ['question'],
+      required: ["question"],
     },
     execute: async (_toolCallId, params) => {
+      const question = readStringParam(params, "question", { required: true });
+      const maxHops = readNumberParam(params, "maxHops") ?? 3;
+      const customSubQuestions = params.subQuestions as string[] | undefined;
+
+      log.debug(`multihop_rag: question="${question.substring(0, 50)}..." maxHops=${maxHops}`);
+
+      const { manager, error } = await getMemorySearchManager({ cfg, agentId });
+      if (!manager) {
+        log.warn(`multihop_rag: memory unavailable: ${error}`);
+        return jsonResult({
+          reasoningChain: [],
+          hops: 0,
+          totalResults: 0,
+          status: "memory_unavailable",
+          error,
+          question,
+        });
+      }
+
       try {
-        const question = params.question as string;
-        const maxHops = params.maxHops as number;
+        const reasoningChain: Array<{
+          step: number;
+          query: string;
+          results: Array<{ snippet: string; path: string; score: number }>;
+          confidence: number;
+          conclusion: string;
+        }> = [];
 
-        const customRag = new EnhancedRAG({ maxHops: typeof maxHops === 'number' ? maxHops : 3 });
+        const queries =
+          customSubQuestions ?? generateSubQuestions(question, maxHops);
 
-        return {
-          content: [{
-            type: 'text' as const,
-            text: `Multi-hop RAG framework ready for question: ${question}\n\n` +
-                  `Features:\n` +
-                  `- Automatic sub-question generation\n` +
-                  `- Iterative evidence collection\n` +
-                  `- Reasoning chain tracking\n` +
-                  `- Final answer synthesis\n\n` +
-                  `Max hops: ${customRag['config'].maxHops}\n\n` +
-                  `Integration: Connect to memory-search or external retrieval system`,
-          }],
-          details: {
-            question,
-            maxHops,
-            frameworkReady: true,
-          },
-        } as any;
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        return {
-          content: [{
-            type: 'text' as const,
-            text: `Error: ${message}`,
-          }],
-          details: { error: message },
-        } as any;
+        let totalResults = 0;
+        let aggregatedConfidence = 0;
+
+        for (let hop = 0; hop < Math.min(queries.length, maxHops); hop++) {
+          const subQuery = queries[hop];
+          const results = await manager.search(subQuery, { maxResults: 3 });
+
+          const assessment = calculateConfidence(results, subQuery);
+
+          totalResults += results.length;
+          aggregatedConfidence += assessment.confidence;
+
+          const conclusion =
+            results.length > 0
+              ? `Found ${results.length} relevant results (confidence: ${Math.round(assessment.confidence * 100)}%)`
+              : "No relevant results found";
+
+          reasoningChain.push({
+            step: hop + 1,
+            query: subQuery,
+            results: results.map((r) => ({
+              snippet: r.snippet.substring(0, 300),
+              path: r.path,
+              score: r.score,
+            })),
+            confidence: Math.round(assessment.confidence * 1000) / 1000,
+            conclusion,
+          });
+        }
+
+        const avgConfidence =
+          reasoningChain.length > 0
+            ? aggregatedConfidence / reasoningChain.length
+            : 0;
+
+        const status = totalResults > 0 ? "evidence_gathered" : "no_evidence";
+
+        const nextAction =
+          totalResults > 0
+            ? "Synthesize answer from reasoning chain. Cite relevant sources."
+            : "Try web_search or ask user for clarification.";
+
+        log.debug(
+          `multihop_rag: ${reasoningChain.length} hops, ${totalResults} total results, avg confidence=${avgConfidence.toFixed(2)}`,
+        );
+
+        return jsonResult({
+          reasoningChain,
+          hops: reasoningChain.length,
+          totalResults,
+          avgConfidence: Math.round(avgConfidence * 1000) / 1000,
+          status,
+          nextAction,
+          question,
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        log.error(`multihop_rag error: ${message}`);
+        return jsonResult({
+          reasoningChain: [],
+          hops: 0,
+          totalResults: 0,
+          status: "error",
+          error: message,
+          question,
+        });
       }
     },
   };
 }
 
-/**
- * 导出 Enhanced RAG 工具列表
- */
-export function createEnhancedRAGTools(): AnyAgentTool[] {
-  return [
-    createSelfRAGTool(),
-    createMultiHopRAGTool(),
-  ];
+export function createEnhancedRAGTools(options?: {
+  config?: OpenClawConfig;
+  agentSessionKey?: string;
+}): (AnyAgentTool | null)[] {
+  return [createSelfRAGTool(options), createMultiHopRAGTool(options)];
 }
+
+export { type SelfRAGResult as SelfRAGResultType, type MultiHopResult as MultiHopResultType };
