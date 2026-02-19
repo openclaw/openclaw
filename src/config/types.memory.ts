@@ -8,6 +8,14 @@ export type MemoryConfig = {
   backend?: MemoryBackend;
   citations?: MemoryCitationsMode;
   qmd?: MemoryQmdConfig;
+  limits?: MemoryLimitsConfig;
+};
+
+export type MemoryLimitsConfig = {
+  /** Token budget for memory_search tool results injected into the model context. */
+  maxSearchInjectedTokens?: number;
+  /** Token budget for memory_get tool results injected into the model context. */
+  maxGetInjectedTokens?: number;
 };
 
 export type MemoryQmdConfig = {

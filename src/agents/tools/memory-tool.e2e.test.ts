@@ -40,6 +40,31 @@ const stubManager = {
   close: vi.fn(),
 };
 
+vi.mock("@mariozechner/pi-coding-agent", () => {
+  return {
+    estimateTokens: (message: { content?: unknown }) => {
+      const c = message.content;
+      const text =
+        typeof c === "string"
+          ? c
+          : Array.isArray(c)
+            ? c
+                .map((p) =>
+                  p &&
+                  typeof p === "object" &&
+                  "text" in p &&
+                  typeof (p as { text?: unknown }).text === "string"
+                    ? String((p as { text: string }).text)
+                    : "",
+                )
+                .join("")
+            : "";
+      // Deterministic, simple token estimator for tests.
+      return Math.ceil(text.length / 10);
+    },
+  };
+});
+
 vi.mock("../../memory/index.js", () => {
   return {
     getMemorySearchManager: async () => ({ manager: stubManager }),
@@ -104,7 +129,12 @@ describe("memory search citations", () => {
   it("clamps decorated snippets to qmd injected budget", async () => {
     backend = "qmd";
     const cfg = asOpenClawConfig({
-      memory: { citations: "on", backend: "qmd", qmd: { limits: { maxInjectedChars: 20 } } },
+      memory: {
+        citations: "on",
+        backend: "qmd",
+        qmd: { limits: { maxInjectedChars: 20 } },
+        limits: { maxSearchInjectedTokens: 100_000 },
+      },
       agents: { list: [{ id: "main", default: true }] },
     });
     const tool = createMemorySearchTool({ config: cfg });
@@ -212,5 +242,52 @@ describe("memory tools", () => {
       text: "",
       path: "memory/2026-02-19.md",
     });
+  });
+
+  it("clamps memory_search snippets by token budget", async () => {
+    const longSnippet = "x".repeat(500);
+    searchImpl = async () => [
+      {
+        path: "MEMORY.md",
+        startLine: 1,
+        endLine: 1,
+        score: 0.9,
+        snippet: longSnippet,
+        source: "memory" as const,
+      },
+    ];
+
+    const cfg = asOpenClawConfig({
+      memory: { limits: { maxSearchInjectedTokens: 5 } },
+      agents: { list: [{ id: "main", default: true }] },
+    });
+
+    const tool = createMemorySearchTool({ config: cfg });
+    if (!tool) {
+      throw new Error("tool missing");
+    }
+
+    const result = await tool.execute("call_token_clamp_search", { query: "notes" });
+    const details = result.details as { results: Array<{ snippet: string }> };
+    expect(details.results[0]?.snippet).toContain("…[truncated]");
+  });
+
+  it("clamps memory_get text by token budget", async () => {
+    const longText = "y".repeat(500);
+    readFileImpl = async (_params: MemoryReadParams) => ({ path: "MEMORY.md", text: longText });
+
+    const cfg = asOpenClawConfig({
+      memory: { limits: { maxGetInjectedTokens: 5 } },
+      agents: { list: [{ id: "main", default: true }] },
+    });
+
+    const tool = createMemoryGetTool({ config: cfg });
+    if (!tool) {
+      throw new Error("tool missing");
+    }
+
+    const result = await tool.execute("call_token_clamp_get", { path: "MEMORY.md" });
+    const details = result.details as { text: string };
+    expect(details.text).toContain("…[truncated]");
   });
 });

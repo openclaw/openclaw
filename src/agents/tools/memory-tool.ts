@@ -1,3 +1,5 @@
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { estimateTokens } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { MemoryCitationsMode } from "../../config/types.memory.js";
@@ -21,6 +23,81 @@ const MemoryGetSchema = Type.Object({
   from: Type.Optional(Type.Number()),
   lines: Type.Optional(Type.Number()),
 });
+
+const DEFAULT_SEARCH_INJECTED_TOKENS = 800;
+const DEFAULT_GET_INJECTED_TOKENS = 1600;
+const TOKEN_SAFETY_MARGIN = 1.2;
+const TRUNCATION_MARKER = "\n…[truncated]";
+
+function estimateContentTokens(content: string): number {
+  // The estimator expects the same message shape used by the agent runtime.
+  return estimateTokens({
+    role: "toolResult",
+    toolCallId: "memory",
+    toolName: "memory",
+    isError: false,
+    timestamp: Date.now(),
+    content: [{ type: "text", text: content }],
+  } satisfies AgentMessage);
+}
+
+function clampTextByInjectedTokens(text: string, budgetTokens: number): string {
+  if (!budgetTokens || budgetTokens <= 0) {
+    return text;
+  }
+
+  // Avoid division by zero / NaN paths.
+  const est = estimateContentTokens(text);
+  if (est <= budgetTokens) {
+    return text;
+  }
+
+  // Estimate characters per token, then clamp with a safety margin.
+  const charsPerToken = text.length / Math.max(1, est);
+  const maxChars = Math.floor((budgetTokens * charsPerToken) / TOKEN_SAFETY_MARGIN);
+
+  if (maxChars <= 0) {
+    return TRUNCATION_MARKER.trimStart();
+  }
+
+  const trimmed = text.slice(0, Math.max(0, maxChars)).trimEnd();
+  return `${trimmed}${TRUNCATION_MARKER}`;
+}
+
+function clampResultsByInjectedTokens(
+  results: MemorySearchResult[],
+  budgetTokens: number,
+): MemorySearchResult[] {
+  if (!budgetTokens || budgetTokens <= 0) {
+    return results;
+  }
+
+  let remaining = budgetTokens;
+  const clamped: MemorySearchResult[] = [];
+  for (const entry of results) {
+    if (remaining <= 0) {
+      break;
+    }
+
+    const snippet = entry.snippet ?? "";
+    const snippetTokens = estimateContentTokens(snippet);
+
+    if (snippetTokens <= remaining) {
+      clamped.push(entry);
+      remaining -= snippetTokens;
+      continue;
+    }
+
+    // Partially include the snippet.
+    clamped.push({
+      ...entry,
+      snippet: clampTextByInjectedTokens(snippet, remaining),
+    });
+    break;
+  }
+
+  return clamped;
+}
 
 function resolveMemoryToolContext(options: { config?: OpenClawConfig; agentSessionKey?: string }) {
   const cfg = options.config;
@@ -77,10 +154,15 @@ export function createMemorySearchTool(options: {
         const status = manager.status();
         const decorated = decorateCitations(rawResults, includeCitations);
         const resolved = resolveMemoryBackendConfig({ cfg, agentId });
-        const results =
+        const qmdClampedResults =
           status.backend === "qmd"
             ? clampResultsByInjectedChars(decorated, resolved.qmd?.limits.maxInjectedChars)
             : decorated;
+
+        const tokenBudget =
+          cfg.memory?.limits?.maxSearchInjectedTokens ?? DEFAULT_SEARCH_INJECTED_TOKENS;
+        const results = clampResultsByInjectedTokens(qmdClampedResults, tokenBudget);
+
         const searchMode = (status.custom as { searchMode?: string } | undefined)?.searchMode;
         return jsonResult({
           results,
@@ -130,7 +212,17 @@ export function createMemoryGetTool(options: {
           from: from ?? undefined,
           lines: lines ?? undefined,
         });
-        return jsonResult(result);
+
+        const tokenBudget = cfg.memory?.limits?.maxGetInjectedTokens ?? DEFAULT_GET_INJECTED_TOKENS;
+        const text =
+          typeof (result as { text?: unknown }).text === "string"
+            ? (result as { text: string }).text
+            : "";
+
+        return jsonResult({
+          ...(result as object),
+          text: clampTextByInjectedTokens(text, tokenBudget),
+        });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         return jsonResult({ path: relPath, text: "", disabled: true, error: message });
