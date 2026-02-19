@@ -3,11 +3,13 @@ import { buildResearchDocFromInput } from "../lib/section-extractors.js";
 import { defaultRuntime } from "../runtime.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
 import { formatCliCommand } from "./command-format.js";
+import { runInteractiveResearchChat } from "./research-chat-interactive.js";
 
 export function registerResearchCommand(program: Command) {
   program
     .command("research")
     .description("Interactive research assistant and template-driven research exporter")
+    .option("--chat", "Start interactive LLM-powered research chatbot", false)
     .option("--wizard", "Run interactive wizard to build a research doc", false)
     .option("--template <name>", "Start from a named template: brief|design|postmortem")
     .option("--from-file <path>", "Read input from a file")
@@ -17,12 +19,21 @@ export function registerResearchCommand(program: Command) {
     .addHelpText(
       "after",
       () =>
-        `\nExamples:\n  ${formatCliCommand("openclaw research --wizard")}  # interactive\n  ${formatCliCommand(
+        `\nExamples:\n  ${formatCliCommand("openclaw research --chat")}  # chatbot mode\n  ${formatCliCommand("openclaw research --wizard")}  # interactive wizard\n  ${formatCliCommand(
           "openclaw research --from-file notes.md --sectioned --output research.md",
         )}\n`,
     )
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
+        // Chat mode: interactive LLM-powered research assistant
+        if (opts.chat) {
+          await runInteractiveResearchChat(defaultRuntime, {
+            template: opts.template,
+            outputPath: opts.output,
+          });
+          return;
+        }
+
         let input = "";
         if (opts.fromFile) {
           // lazy import to keep startup fast
@@ -67,7 +78,7 @@ export function registerResearchCommand(program: Command) {
         }
 
         if (!input) {
-          defaultRuntime.error("No input provided. Use --from-file or --wizard.");
+          defaultRuntime.error("No input provided. Use --from-file, --wizard, or --chat.");
           return;
         }
 
