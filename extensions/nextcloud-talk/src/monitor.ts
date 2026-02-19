@@ -183,12 +183,14 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
     });
   };
 
-  const stop = () => {
-    server.close();
+  const stop = (): Promise<void> => {
+    return new Promise((resolve) => {
+      server.close(() => resolve());
+    });
   };
 
   if (abortSignal) {
-    abortSignal.addEventListener("abort", stop, { once: true });
+    abortSignal.addEventListener("abort", () => stop(), { once: true });
   }
 
   return { server, start, stop };
