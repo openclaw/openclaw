@@ -72,6 +72,7 @@ export async function runAgentTurnWithFallback(params: {
   pendingToolTasks: Set<Promise<void>>;
   resetSessionAfterCompactionFailure: (reason: string) => Promise<boolean>;
   resetSessionAfterRoleOrderingConflict: (reason: string) => Promise<boolean>;
+  onCompactionStart?: () => Promise<void> | void;
   isHeartbeat: boolean;
   sessionKey?: string;
   getActiveSessionEntry: () => SessionEntry | undefined;
@@ -353,9 +354,12 @@ export async function runAgentTurnWithFallback(params: {
                   await params.typingSignals.signalToolStart();
                 }
               }
-              // Track auto-compaction completion
+              // Track auto-compaction lifecycle
               if (evt.stream === "compaction") {
                 const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
+                if (phase === "start") {
+                  void params.onCompactionStart?.();
+                }
                 if (phase === "end") {
                   autoCompactionCompleted = true;
                 }

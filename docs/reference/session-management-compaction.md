@@ -261,6 +261,27 @@ Config (`agents.defaults.compaction.memoryFlush`):
 - `prompt` (user message for the flush turn)
 - `systemPrompt` (extra system prompt appended for the flush turn)
 
+---
+
+## Compaction start notification (implemented)
+
+Goal: let the user know compaction is in progress so they aren't confused by a
+temporary lack of responses or red UI state during the compaction pass.
+
+When `agents.defaults.compaction.notifyOnStart` is `true`, OpenClaw delivers a
+message via the block-reply path as soon as the Pi runtime emits a
+`compaction:start` event.
+
+Config (`agents.defaults.compaction`):
+
+- `notifyOnStart` (default: `false`) — enable the notification
+- `notifyOnStartText` (default: `"🧹 Context compacting, back in a moment…"`) — notification text
+
+Implementation: the callback is created in `src/auto-reply/reply/agent-runner.ts`
+and invoked from the `onAgentEvent` handler in
+`src/auto-reply/reply/agent-runner-execution.ts` when `stream === "compaction"` and
+`phase === "start"`.
+
 Notes:
 
 - The default prompt/system prompt include a `NO_REPLY` hint to suppress delivery.

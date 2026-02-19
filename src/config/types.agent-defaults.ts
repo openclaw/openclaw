@@ -288,6 +288,10 @@ export type AgentCompactionConfig = {
   maxHistoryShare?: number;
   /** Pre-compaction memory flush (agentic turn). Default: enabled. */
   memoryFlush?: AgentCompactionMemoryFlushConfig;
+  /** Send a notification message to the user when compaction starts. Default: false. */
+  notifyOnStart?: boolean;
+  /** Notification text sent when compaction starts. Default: "🧹 Context compacting, back in a moment…" */
+  notifyOnStartText?: string;
 };
 
 export type AgentCompactionMemoryFlushConfig = {
