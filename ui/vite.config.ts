@@ -24,6 +24,18 @@ export default defineConfig(() => {
   return {
     base,
     publicDir: path.resolve(here, "public"),
+    resolve: {
+      alias: [
+        {
+          find: /spawn-utils\.(?:js|ts)$/,
+          replacement: "/src/shims/spawn-utils.browser.ts",
+        },
+        {
+          find: /\/process\/exec\.(?:js|ts)$/,
+          replacement: "/src/shims/process-exec.browser.ts",
+        },
+      ],
+    },
     optimizeDeps: {
       include: ["lit/directives/repeat.js"],
     },

@@ -79,6 +79,18 @@ function resolveMinimaxApiKey(): string | undefined {
   });
 }
 
+function resolveMoonshotApiKey(): string | undefined {
+  return resolveProviderApiKeyFromConfigAndStore({
+    providerId: "moonshot",
+    envDirect: [
+      process.env.KIMI_BALANCE_API_KEY,
+      process.env.MOONSHOT_API_KEY,
+      process.env.KIMI_API_KEY,
+      process.env.KIMICODE_API_KEY,
+    ],
+  });
+}
+
 function resolveXiaomiApiKey(): string | undefined {
   return resolveProviderApiKeyFromConfigAndStore({
     providerId: "xiaomi",
@@ -181,9 +193,9 @@ function resolveOAuthProviders(agentDir?: string): UsageProviderId[] {
   const providers = [
     "anthropic",
     "github-copilot",
-    "google-gemini-cli",
-    "google-antigravity",
     "openai-codex",
+    "google-antigravity",
+    "google-gemini-cli",
   ] satisfies UsageProviderId[];
   const isOAuthLikeCredential = (id: string) => {
     const cred = store.profiles[id];
@@ -225,6 +237,13 @@ export async function resolveProviderAuths(params: {
     }
     if (provider === "minimax") {
       const apiKey = resolveMinimaxApiKey();
+      if (apiKey) {
+        auths.push({ provider, token: apiKey });
+      }
+      continue;
+    }
+    if (provider === "moonshot") {
+      const apiKey = resolveMoonshotApiKey();
       if (apiKey) {
         auths.push({ provider, token: apiKey });
       }

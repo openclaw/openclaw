@@ -4,6 +4,7 @@ import type {
   SessionsUsageResult,
   SessionsUsageTotals,
   SessionUsageTimePoint,
+  ProviderUsageSummary,
 } from "../usage-types.ts";
 
 export type UsageSessionEntry = SessionsUsageEntry;
@@ -33,6 +34,9 @@ export type UsageProps = {
   totals: UsageTotals | null;
   aggregates: UsageAggregates | null;
   costDaily: CostDailyEntry[];
+  providerUsage: ProviderUsageSummary | null;
+  /** True once the user has triggered at least one Refresh; gates Provider Quota rendering. */
+  quotaRefreshed: boolean;
   selectedSessions: string[]; // Support multiple session selection
   selectedDays: string[]; // Support multiple day selection
   selectedHours: number[]; // Support multiple hour selection

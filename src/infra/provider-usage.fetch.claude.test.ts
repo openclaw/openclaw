@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createProviderUsageFetch, makeResponse } from "../test-utils/provider-usage-fetch.js";
 import { fetchClaudeUsage } from "./provider-usage.fetch.claude.js";
 
@@ -39,6 +39,18 @@ function makeOrgAResponse() {
 describe("fetchClaudeUsage", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
+  });
+
+  // Keep tests hermetic regardless of host environment variables.
+  // Some developer machines set CLAUDE_WEB_COOKIE globally.
+  function resetClaudeFallbackEnv() {
+    vi.stubEnv("CLAUDE_AI_SESSION_KEY", "");
+    vi.stubEnv("CLAUDE_WEB_SESSION_KEY", "");
+    vi.stubEnv("CLAUDE_WEB_COOKIE", "");
+  }
+
+  beforeEach(() => {
+    resetClaudeFallbackEnv();
   });
 
   it("parses oauth usage windows", async () => {
@@ -107,8 +119,8 @@ describe("fetchClaudeUsage", () => {
     expect(result.windows).toEqual([{ label: "5h", usedPercent: 12, resetAt: undefined }]);
   });
 
-  it("keeps oauth error when cookie header cannot be parsed into a session key", async () => {
-    vi.stubEnv("CLAUDE_WEB_COOKIE", "sessionKey=sk-ant-cookie-session");
+  it("keeps oauth error when cookie header does not include a session key", async () => {
+    vi.stubEnv("CLAUDE_WEB_COOKIE", "foo=bar; a=b");
 
     const mockFetch = createScopeFallbackFetch(async (url) => {
       if (url.endsWith("/api/organizations")) {
@@ -130,6 +142,14 @@ describe("fetchClaudeUsage", () => {
       }
       return makeResponse(404, "not found");
     });
+
+    await expectMissingScopeWithoutFallback(mockFetch);
+  });
+
+  it("keeps oauth error when cookie jar contains control characters", async () => {
+    vi.stubEnv("CLAUDE_WEB_COOKIE", "sessionKey=sk-ant-cookie-session\ninvalid");
+
+    const mockFetch = createScopeFallbackFetch(async () => makeResponse(404, "not found"));
 
     await expectMissingScopeWithoutFallback(mockFetch);
   });

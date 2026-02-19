@@ -241,6 +241,7 @@ export class OpenClawApp extends LitElement {
   @state() usageLoading = false;
   @state() usageResult: import("./types.js").SessionsUsageResult | null = null;
   @state() usageCostSummary: import("./types.js").CostUsageSummary | null = null;
+  @state() usageProviderSummary: import("./types.js").ProviderUsageSummary | null = null;
   @state() usageError: string | null = null;
   @state() usageStartDate = (() => {
     const d = new Date();
@@ -289,6 +290,8 @@ export class OpenClawApp extends LitElement {
   @state() usageLogFilterTools: string[] = [];
   @state() usageLogFilterHasTools = false;
   @state() usageLogFilterQuery = "";
+  // Tracks whether the user has triggered at least one Refresh; gates Provider Quota rendering.
+  @state() usageQuotaRefreshed = false;
 
   // Non-reactive (don’t trigger renders just for timer bookkeeping).
   usageQueryDebounceTimer: number | null = null;

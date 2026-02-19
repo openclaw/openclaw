@@ -4,6 +4,7 @@ import { getFollowupQueueDepth, resolveQueueSettings } from "../../auto-reply/re
 import { buildStatusMessage } from "../../auto-reply/status.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
+import { collectConfigEnvVars } from "../../config/env-vars.js";
 import {
   loadSessionStore,
   resolveStorePath,
@@ -300,10 +301,12 @@ export function createSessionStatusTool(opts?: {
       let usageLine: string | undefined;
       if (usageProvider) {
         try {
+          const claudeWebSessionKey = collectConfigEnvVars(cfg).CLAUDE_AI_SESSION_KEY;
           const usageSummary = await loadProviderUsageSummary({
             timeoutMs: 3500,
             providers: [usageProvider],
             agentDir,
+            claudeWebSessionKey,
           });
           const snapshot = usageSummary.providers.find((entry) => entry.provider === usageProvider);
           if (snapshot) {

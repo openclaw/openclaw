@@ -6,6 +6,8 @@ import {
 } from "../../../../src/agents/tool-policy-shared.js";
 import type { AgentIdentityResult, AgentsFilesListResult, AgentsListResult } from "../types.ts";
 
+export { normalizeToolName };
+
 export const TOOL_SECTIONS = [
   {
     id: "fs",

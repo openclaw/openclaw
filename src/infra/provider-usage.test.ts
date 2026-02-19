@@ -315,7 +315,7 @@ describe("provider usage loading", () => {
             },
           });
         }
-        if (url.includes("claude.ai/api/organizations/org-1/usage")) {
+        if (url.includes("claude.ai/api/organizations/") && url.includes("/usage")) {
           return makeResponse(200, {
             five_hour: { utilization: 20, resets_at: "2026-01-07T01:00:00Z" },
             seven_day: { utilization: 40, resets_at: "2026-01-08T01:00:00Z" },

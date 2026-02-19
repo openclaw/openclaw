@@ -78,7 +78,7 @@ describe("fetchAntigravityUsage", () => {
     const snapshot = await runUsage(mockFetch);
 
     expect(snapshot.provider).toBe("google-antigravity");
-    expect(snapshot.displayName).toBe("Antigravity");
+    expect(snapshot.displayName).toBe("Google AI Studio");
     expect(snapshot.windows).toHaveLength(3);
     expect(snapshot.plan).toBe("Standard Tier");
     expect(snapshot.error).toBeUndefined();

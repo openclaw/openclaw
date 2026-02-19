@@ -10,6 +10,7 @@ import {
   resolveMainSessionAlias,
 } from "../../agents/tools/sessions-helpers.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { collectConfigEnvVars } from "../../config/env-vars.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import {
@@ -82,10 +83,12 @@ export async function buildStatusReply(params: {
   let usageLine: string | null = null;
   if (currentUsageProvider) {
     try {
+      const claudeWebSessionKey = collectConfigEnvVars(cfg).CLAUDE_AI_SESSION_KEY;
       const usageSummary = await loadProviderUsageSummary({
         timeoutMs: 3500,
         providers: [currentUsageProvider],
         agentDir: statusAgentDir,
+        claudeWebSessionKey,
       });
       const usageEntry = usageSummary.providers[0];
       if (usageEntry && !usageEntry.error && usageEntry.windows.length > 0) {

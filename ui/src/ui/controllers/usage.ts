@@ -1,5 +1,10 @@
 import type { GatewayBrowserClient } from "../gateway.ts";
-import type { SessionsUsageResult, CostUsageSummary, SessionUsageTimeSeries } from "../types.ts";
+import type {
+  SessionsUsageResult,
+  CostUsageSummary,
+  SessionUsageTimeSeries,
+  ProviderUsageSummary,
+} from "../types.ts";
 import type { SessionLogEntry } from "../views/usage.ts";
 
 export type UsageState = {
@@ -8,6 +13,7 @@ export type UsageState = {
   usageLoading: boolean;
   usageResult: SessionsUsageResult | null;
   usageCostSummary: CostUsageSummary | null;
+  usageProviderSummary: ProviderUsageSummary | null;
   usageError: string | null;
   usageStartDate: string;
   usageEndDate: string;
@@ -40,8 +46,8 @@ export async function loadUsage(
     const startDate = overrides?.startDate ?? state.usageStartDate;
     const endDate = overrides?.endDate ?? state.usageEndDate;
 
-    // Load both endpoints in parallel
-    const [sessionsRes, costRes] = await Promise.all([
+    // Load endpoints in parallel
+    const [sessionsRes, costRes, providerRes] = await Promise.all([
       state.client.request("sessions.usage", {
         startDate,
         endDate,
@@ -49,6 +55,7 @@ export async function loadUsage(
         includeContextWeight: true,
       }),
       state.client.request("usage.cost", { startDate, endDate }),
+      state.client.request("usage.status", {}),
     ]);
 
     if (sessionsRes) {
@@ -56,6 +63,9 @@ export async function loadUsage(
     }
     if (costRes) {
       state.usageCostSummary = costRes as CostUsageSummary;
+    }
+    if (providerRes) {
+      state.usageProviderSummary = providerRes as ProviderUsageSummary;
     }
   } catch (err) {
     state.usageError = String(err);
