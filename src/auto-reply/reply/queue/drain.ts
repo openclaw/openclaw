@@ -1,13 +1,14 @@
-import type { FollowupRun } from "./types.js";
 import { defaultRuntime } from "../../../runtime.js";
 import {
   buildCollectPrompt,
-  buildQueueSummaryPrompt,
+  clearQueueSummaryState,
   hasCrossChannelItems,
+  previewQueueSummaryPrompt,
   waitForQueueDebounce,
 } from "../../../utils/queue-helpers.js";
 import { isRoutableChannel } from "../route-reply.js";
 import { FOLLOWUP_QUEUES } from "./state.js";
+import type { FollowupRun } from "./types.js";
 
 export function scheduleFollowupDrain(
   key: string,
@@ -29,11 +30,12 @@ export function scheduleFollowupDrain(
           //
           // Debug: `pnpm test src/auto-reply/reply/queue.collect-routing.test.ts`
           if (forceIndividualCollect) {
-            const next = queue.items.shift();
+            const next = queue.items[0];
             if (!next) {
               break;
             }
             await runFollowup(next);
+            queue.items.shift();
             continue;
           }
 
@@ -58,16 +60,17 @@ export function scheduleFollowupDrain(
 
           if (isCrossChannel) {
             forceIndividualCollect = true;
-            const next = queue.items.shift();
+            const next = queue.items[0];
             if (!next) {
               break;
             }
             await runFollowup(next);
+            queue.items.shift();
             continue;
           }
 
-          const items = queue.items.splice(0, queue.items.length);
-          const summary = buildQueueSummaryPrompt({ state: queue, noun: "message" });
+          const items = queue.items.slice();
+          const summary = previewQueueSummaryPrompt({ state: queue, noun: "message" });
           const run = items.at(-1)?.run ?? queue.lastRun;
           if (!run) {
             break;
@@ -98,13 +101,21 @@ export function scheduleFollowupDrain(
             originatingAccountId,
             originatingThreadId,
           });
+          queue.items.splice(0, items.length);
+          if (summary) {
+            clearQueueSummaryState(queue);
+          }
           continue;
         }
 
-        const summaryPrompt = buildQueueSummaryPrompt({ state: queue, noun: "message" });
+        const summaryPrompt = previewQueueSummaryPrompt({ state: queue, noun: "message" });
         if (summaryPrompt) {
           const run = queue.lastRun;
           if (!run) {
+            break;
+          }
+          const next = queue.items[0];
+          if (!next) {
             break;
           }
           await runFollowup({
@@ -112,16 +123,20 @@ export function scheduleFollowupDrain(
             run,
             enqueuedAt: Date.now(),
           });
+          queue.items.shift();
+          clearQueueSummaryState(queue);
           continue;
         }
 
-        const next = queue.items.shift();
+        const next = queue.items[0];
         if (!next) {
           break;
         }
         await runFollowup(next);
+        queue.items.shift();
       }
     } catch (err) {
+      queue.lastEnqueuedAt = Date.now();
       defaultRuntime.error?.(`followup queue drain failed for ${key}: ${String(err)}`);
     } finally {
       queue.draining = false;

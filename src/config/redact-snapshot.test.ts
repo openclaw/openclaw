@@ -1,17 +1,26 @@
 import { describe, expect, it } from "vitest";
-import type { ConfigUiHints } from "./schema.js";
-import type { ConfigFileSnapshot } from "./types.openclaw.js";
 import {
   REDACTED_SENTINEL,
   redactConfigSnapshot,
   restoreRedactedValues as restoreRedactedValues_orig,
 } from "./redact-snapshot.js";
 import { __test__ } from "./schema.hints.js";
+import type { ConfigUiHints } from "./schema.js";
+import type { ConfigFileSnapshot } from "./types.openclaw.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
 const { mapSensitivePaths } = __test__;
 
-function makeSnapshot(config: Record<string, unknown>, raw?: string): ConfigFileSnapshot {
+type TestSnapshot<TConfig extends Record<string, unknown>> = ConfigFileSnapshot & {
+  parsed: TConfig;
+  resolved: TConfig;
+  config: TConfig;
+};
+
+function makeSnapshot<TConfig extends Record<string, unknown>>(
+  config: TConfig,
+  raw?: string,
+): TestSnapshot<TConfig> {
   return {
     path: "/home/user/.openclaw/config.json5",
     exists: true,
@@ -24,17 +33,17 @@ function makeSnapshot(config: Record<string, unknown>, raw?: string): ConfigFile
     issues: [],
     warnings: [],
     legacyIssues: [],
-  };
+  } as unknown as TestSnapshot<TConfig>;
 }
 
-function restoreRedactedValues(
+function restoreRedactedValues<TOriginal>(
   incoming: unknown,
-  original: unknown,
+  original: TOriginal,
   hints?: ConfigUiHints,
-): unknown {
+): TOriginal {
   var result = restoreRedactedValues_orig(incoming, original, hints);
   expect(result.ok).toBe(true);
-  return result.result;
+  return result.result as TOriginal;
 }
 
 describe("redactConfigSnapshot", () => {
@@ -179,6 +188,29 @@ describe("redactConfigSnapshot", () => {
     expect(gw.auth.token).toBe(REDACTED_SENTINEL);
   });
 
+  it("does not redact passwordFile path fields", () => {
+    const snapshot = makeSnapshot({
+      channels: {
+        irc: {
+          passwordFile: "/etc/openclaw/irc-password.txt",
+          nickserv: {
+            passwordFile: "/etc/openclaw/nickserv-password.txt",
+            password: "super-secret-nickserv-password",
+          },
+        },
+      },
+    });
+
+    const result = redactConfigSnapshot(snapshot);
+    const channels = result.config.channels as Record<string, Record<string, unknown>>;
+    const irc = channels.irc;
+    const nickserv = irc.nickserv as Record<string, unknown>;
+
+    expect(irc.passwordFile).toBe("/etc/openclaw/irc-password.txt");
+    expect(nickserv.passwordFile).toBe("/etc/openclaw/nickserv-password.txt");
+    expect(nickserv.password).toBe(REDACTED_SENTINEL);
+  });
+
   it("preserves hash unchanged", () => {
     const snapshot = makeSnapshot({ gateway: { auth: { token: "secret-token-value-here" } } });
     const result = redactConfigSnapshot(snapshot);
@@ -312,7 +344,8 @@ describe("redactConfigSnapshot", () => {
       compaction: { softThresholdTokens: 50000 },
     });
     const result = redactConfigSnapshot(snapshot);
-    const compaction = result.config.compaction as Record<string, number>;
+    const config = result.config as typeof snapshot.config;
+    const compaction = config.compaction as Record<string, number>;
     expect(compaction.softThresholdTokens).toBe(50000);
   });
 
@@ -342,8 +375,11 @@ describe("redactConfigSnapshot", () => {
       custom: { mySecret: "this-is-a-custom-secret-value" },
     });
     const result = redactConfigSnapshot(snapshot, hints);
-    const custom = result.config.custom as Record<string, string>;
+    const config = result.config as typeof snapshot.config;
+    const custom = config.custom as Record<string, string>;
+    const resolved = result.resolved as Record<string, Record<string, string>>;
     expect(custom.mySecret).toBe(REDACTED_SENTINEL);
+    expect(resolved.custom.mySecret).toBe(REDACTED_SENTINEL);
   });
 
   it("keeps regex fallback for extension keys not covered by uiHints", () => {
@@ -371,12 +407,11 @@ describe("redactConfigSnapshot", () => {
     });
 
     const redacted = redactConfigSnapshot(snapshot, hints);
-    expect(redacted.config.plugins.entries["voice-call"].config.apiToken).toBe(REDACTED_SENTINEL);
-    expect(redacted.config.plugins.entries["voice-call"].config.displayName).toBe(
-      "Voice call extension",
-    );
-    expect(redacted.config.channels["my-channel"].accessToken).toBe(REDACTED_SENTINEL);
-    expect(redacted.config.channels["my-channel"].room).toBe("general");
+    const config = redacted.config as typeof snapshot.config;
+    expect(config.plugins.entries["voice-call"].config.apiToken).toBe(REDACTED_SENTINEL);
+    expect(config.plugins.entries["voice-call"].config.displayName).toBe("Voice call extension");
+    expect(config.channels["my-channel"].accessToken).toBe(REDACTED_SENTINEL);
+    expect(config.channels["my-channel"].room).toBe("general");
 
     const restored = restoreRedactedValues(redacted.config, snapshot.config, hints);
     expect(restored).toEqual(snapshot.config);
@@ -400,9 +435,8 @@ describe("redactConfigSnapshot", () => {
     });
 
     const redacted = redactConfigSnapshot(snapshot, hints);
-    expect(redacted.config.plugins.entries["voice-call"].config.apiToken).toBe(
-      "not-secret-on-purpose",
-    );
+    const config = redacted.config as typeof snapshot.config;
+    expect(config.plugins.entries["voice-call"].config.apiToken).toBe("not-secret-on-purpose");
   });
 
   it("handles nested values properly (roundtrip)", () => {
@@ -411,8 +445,9 @@ describe("redactConfigSnapshot", () => {
       custom2: [{ mySecret: "this-is-a-custom-secret-value" }],
     });
     const result = redactConfigSnapshot(snapshot);
-    expect(result.config.custom1.anykey.mySecret).toBe(REDACTED_SENTINEL);
-    expect(result.config.custom2[0].mySecret).toBe(REDACTED_SENTINEL);
+    const config = result.config as typeof snapshot.config;
+    expect(config.custom1.anykey.mySecret).toBe(REDACTED_SENTINEL);
+    expect(config.custom2[0].mySecret).toBe(REDACTED_SENTINEL);
     const restored = restoreRedactedValues(result.config, snapshot.config);
     expect(restored.custom1.anykey.mySecret).toBe("this-is-a-custom-secret-value");
     expect(restored.custom2[0].mySecret).toBe("this-is-a-custom-secret-value");
@@ -428,8 +463,9 @@ describe("redactConfigSnapshot", () => {
       custom2: [{ mySecret: "this-is-a-custom-secret-value" }],
     });
     const result = redactConfigSnapshot(snapshot, hints);
-    expect(result.config.custom1.anykey.mySecret).toBe(REDACTED_SENTINEL);
-    expect(result.config.custom2[0].mySecret).toBe(REDACTED_SENTINEL);
+    const config = result.config as typeof snapshot.config;
+    expect(config.custom1.anykey.mySecret).toBe(REDACTED_SENTINEL);
+    expect(config.custom2[0].mySecret).toBe(REDACTED_SENTINEL);
     const restored = restoreRedactedValues(result.config, snapshot.config, hints);
     expect(restored.custom1.anykey.mySecret).toBe("this-is-a-custom-secret-value");
     expect(restored.custom2[0].mySecret).toBe("this-is-a-custom-secret-value");
@@ -440,8 +476,9 @@ describe("redactConfigSnapshot", () => {
       custom: { token: "this-is-a-custom-secret-value", mySecret: "this-is-a-custom-secret-value" },
     });
     const result = redactConfigSnapshot(snapshot);
-    expect(result.config.custom.token).toBe(REDACTED_SENTINEL);
-    expect(result.config.custom.mySecret).toBe(REDACTED_SENTINEL);
+    const config = result.config as typeof snapshot.config;
+    expect(config.custom.token).toBe(REDACTED_SENTINEL);
+    expect(config.custom.mySecret).toBe(REDACTED_SENTINEL);
     const restored = restoreRedactedValues(result.config, snapshot.config);
     expect(restored.custom.token).toBe("this-is-a-custom-secret-value");
     expect(restored.custom.mySecret).toBe("this-is-a-custom-secret-value");
@@ -458,8 +495,9 @@ describe("redactConfigSnapshot", () => {
       },
     });
     const result = redactConfigSnapshot(snapshot, hints);
-    expect(result.config.custom.anykey).toBe(REDACTED_SENTINEL);
-    expect(result.config.custom.mySecret).toBe(REDACTED_SENTINEL);
+    const config = result.config as typeof snapshot.config;
+    expect(config.custom.anykey).toBe(REDACTED_SENTINEL);
+    expect(config.custom.mySecret).toBe(REDACTED_SENTINEL);
     const restored = restoreRedactedValues(result.config, snapshot.config, hints);
     expect(restored.custom.anykey).toBe("this-is-a-custom-secret-value");
     expect(restored.custom.mySecret).toBe("this-is-a-custom-secret-value");
@@ -470,8 +508,9 @@ describe("redactConfigSnapshot", () => {
       token: ["this-is-a-custom-secret-value", "this-is-a-custom-secret-value"],
     });
     const result = redactConfigSnapshot(snapshot);
-    expect(result.config.token[0]).toBe(REDACTED_SENTINEL);
-    expect(result.config.token[1]).toBe(REDACTED_SENTINEL);
+    const config = result.config as typeof snapshot.config;
+    expect(config.token[0]).toBe(REDACTED_SENTINEL);
+    expect(config.token[1]).toBe(REDACTED_SENTINEL);
     const restored = restoreRedactedValues(result.config, snapshot.config);
     expect(restored.token[0]).toBe("this-is-a-custom-secret-value");
     expect(restored.token[1]).toBe("this-is-a-custom-secret-value");
@@ -485,8 +524,9 @@ describe("redactConfigSnapshot", () => {
       custom: ["this-is-a-custom-secret-value", "this-is-a-custom-secret-value"],
     });
     const result = redactConfigSnapshot(snapshot, hints);
-    expect(result.config.custom[0]).toBe(REDACTED_SENTINEL);
-    expect(result.config.custom[1]).toBe(REDACTED_SENTINEL);
+    const config = result.config as typeof snapshot.config;
+    expect(config.custom[0]).toBe(REDACTED_SENTINEL);
+    expect(config.custom[1]).toBe(REDACTED_SENTINEL);
     const restored = restoreRedactedValues(result.config, snapshot.config, hints);
     expect(restored.custom[0]).toBe("this-is-a-custom-secret-value");
     expect(restored.custom[1]).toBe("this-is-a-custom-secret-value");
@@ -497,8 +537,9 @@ describe("redactConfigSnapshot", () => {
       harmless: ["this-is-a-custom-harmless-value", "this-is-a-custom-secret-looking-value"],
     });
     const result = redactConfigSnapshot(snapshot);
-    expect(result.config.harmless[0]).toBe("this-is-a-custom-harmless-value");
-    expect(result.config.harmless[1]).toBe("this-is-a-custom-secret-looking-value");
+    const config = result.config as typeof snapshot.config;
+    expect(config.harmless[0]).toBe("this-is-a-custom-harmless-value");
+    expect(config.harmless[1]).toBe("this-is-a-custom-secret-looking-value");
     const restored = restoreRedactedValues(result.config, snapshot.config);
     expect(restored.harmless[0]).toBe("this-is-a-custom-harmless-value");
     expect(restored.harmless[1]).toBe("this-is-a-custom-secret-looking-value");
@@ -512,8 +553,9 @@ describe("redactConfigSnapshot", () => {
       custom: ["this-is-a-custom-harmless-value", "this-is-a-custom-secret-value"],
     });
     const result = redactConfigSnapshot(snapshot, hints);
-    expect(result.config.custom[0]).toBe("this-is-a-custom-harmless-value");
-    expect(result.config.custom[1]).toBe("this-is-a-custom-secret-value");
+    const config = result.config as typeof snapshot.config;
+    expect(config.custom[0]).toBe("this-is-a-custom-harmless-value");
+    expect(config.custom[1]).toBe("this-is-a-custom-secret-value");
     const restored = restoreRedactedValues(result.config, snapshot.config, hints);
     expect(restored.custom[0]).toBe("this-is-a-custom-harmless-value");
     expect(restored.custom[1]).toBe("this-is-a-custom-secret-value");
@@ -528,8 +570,9 @@ describe("redactConfigSnapshot", () => {
       },
     });
     const result = redactConfigSnapshot(snapshot);
-    expect(result.config.nested.level.token[0]).toBe(REDACTED_SENTINEL);
-    expect(result.config.nested.level.token[1]).toBe(REDACTED_SENTINEL);
+    const config = result.config as typeof snapshot.config;
+    expect(config.nested.level.token[0]).toBe(REDACTED_SENTINEL);
+    expect(config.nested.level.token[1]).toBe(REDACTED_SENTINEL);
     const restored = restoreRedactedValues(result.config, snapshot.config);
     expect(restored.nested.level.token[0]).toBe("this-is-a-custom-secret-value");
     expect(restored.nested.level.token[1]).toBe("this-is-a-custom-secret-value");
@@ -547,8 +590,9 @@ describe("redactConfigSnapshot", () => {
       },
     });
     const result = redactConfigSnapshot(snapshot, hints);
-    expect(result.config.nested.level.custom[0]).toBe(REDACTED_SENTINEL);
-    expect(result.config.nested.level.custom[1]).toBe(REDACTED_SENTINEL);
+    const config = result.config as typeof snapshot.config;
+    expect(config.nested.level.custom[0]).toBe(REDACTED_SENTINEL);
+    expect(config.nested.level.custom[1]).toBe(REDACTED_SENTINEL);
     const restored = restoreRedactedValues(result.config, snapshot.config, hints);
     expect(restored.nested.level.custom[0]).toBe("this-is-a-custom-secret-value");
     expect(restored.nested.level.custom[1]).toBe("this-is-a-custom-secret-value");
@@ -563,8 +607,9 @@ describe("redactConfigSnapshot", () => {
       },
     });
     const result = redactConfigSnapshot(snapshot);
-    expect(result.config.nested.level.token[0]).toBe(42);
-    expect(result.config.nested.level.token[1]).toBe(815);
+    const config = result.config as typeof snapshot.config;
+    expect(config.nested.level.token[0]).toBe(42);
+    expect(config.nested.level.token[1]).toBe(815);
     const restored = restoreRedactedValues(result.config, snapshot.config);
     expect(restored.nested.level.token[0]).toBe(42);
     expect(restored.nested.level.token[1]).toBe(815);
@@ -582,8 +627,9 @@ describe("redactConfigSnapshot", () => {
       },
     });
     const result = redactConfigSnapshot(snapshot, hints);
-    expect(result.config.nested.level.custom[0]).toBe(42);
-    expect(result.config.nested.level.custom[1]).toBe(815);
+    const config = result.config as typeof snapshot.config;
+    expect(config.nested.level.custom[0]).toBe(42);
+    expect(config.nested.level.custom[1]).toBe(815);
     const restored = restoreRedactedValues(result.config, snapshot.config, hints);
     expect(restored.nested.level.custom[0]).toBe(42);
     expect(restored.nested.level.custom[1]).toBe(815);
@@ -598,8 +644,9 @@ describe("redactConfigSnapshot", () => {
       },
     });
     const result = redactConfigSnapshot(snapshot);
-    expect(result.config.nested.password.harmless[0]).toBe(REDACTED_SENTINEL);
-    expect(result.config.nested.password.harmless[1]).toBe(REDACTED_SENTINEL);
+    const config = result.config as typeof snapshot.config;
+    expect(config.nested.password.harmless[0]).toBe(REDACTED_SENTINEL);
+    expect(config.nested.password.harmless[1]).toBe(REDACTED_SENTINEL);
     const restored = restoreRedactedValues(result.config, snapshot.config);
     expect(restored.nested.password.harmless[0]).toBe("value");
     expect(restored.nested.password.harmless[1]).toBe("value");
@@ -614,8 +661,9 @@ describe("redactConfigSnapshot", () => {
       },
     });
     const result = redactConfigSnapshot(snapshot);
-    expect(result.config.nested.level.harmless[0]).toBe("value");
-    expect(result.config.nested.level.harmless[1]).toBe("value");
+    const config = result.config as typeof snapshot.config;
+    expect(config.nested.level.harmless[0]).toBe("value");
+    expect(config.nested.level.harmless[1]).toBe("value");
     const restored = restoreRedactedValues(result.config, snapshot.config);
     expect(restored.nested.level.harmless[0]).toBe("value");
     expect(restored.nested.level.harmless[1]).toBe("value");
@@ -630,7 +678,9 @@ describe("redactConfigSnapshot", () => {
     });
     const result = redactConfigSnapshot(snapshot, hints);
     const gw = result.config.gateway as Record<string, Record<string, string>>;
+    const resolved = result.resolved as Record<string, Record<string, Record<string, string>>>;
     expect(gw.auth.token).toBe("not-actually-secret-value");
+    expect(resolved.gateway.auth.token).toBe("not-actually-secret-value");
   });
 
   it("does not redact paths absent from uiHints (schema is single source of truth)", () => {
@@ -642,7 +692,9 @@ describe("redactConfigSnapshot", () => {
     });
     const result = redactConfigSnapshot(snapshot, hints);
     const gw = result.config.gateway as Record<string, Record<string, string>>;
+    const resolved = result.resolved as Record<string, Record<string, Record<string, string>>>;
     expect(gw.auth.password).toBe("not-in-hints-value");
+    expect(resolved.gateway.auth.password).toBe("not-in-hints-value");
   });
 
   it("uses wildcard hints for array items", () => {
@@ -787,7 +839,7 @@ describe("restoreRedactedValues", () => {
     };
     const snapshot = makeSnapshot(originalConfig);
     const redacted = redactConfigSnapshot(snapshot, hints);
-    const custom = redacted.config.custom as Record<string, string>;
+    const custom = (redacted.config as typeof originalConfig).custom as Record<string, string>;
     expect(custom.myApiKey).toBe(REDACTED_SENTINEL);
     expect(custom.displayName).toBe("My Bot");
 
@@ -876,8 +928,9 @@ describe("realredactConfigSnapshot_real", () => {
     });
 
     const result = redactConfigSnapshot(snapshot, hints);
-    expect(result.config.agents.defaults.memorySearch.remote.apiKey).toBe(REDACTED_SENTINEL);
-    expect(result.config.agents.list[0].memorySearch.remote.apiKey).toBe(REDACTED_SENTINEL);
+    const config = result.config as typeof snapshot.config;
+    expect(config.agents.defaults.memorySearch.remote.apiKey).toBe(REDACTED_SENTINEL);
+    expect(config.agents.list[0].memorySearch.remote.apiKey).toBe(REDACTED_SENTINEL);
     const restored = restoreRedactedValues(result.config, snapshot.config, hints);
     expect(restored.agents.defaults.memorySearch.remote.apiKey).toBe("1234");
     expect(restored.agents.list[0].memorySearch.remote.apiKey).toBe("6789");

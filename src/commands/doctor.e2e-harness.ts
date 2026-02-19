@@ -20,18 +20,47 @@ function setStdinTty(value: boolean | undefined) {
   }
 }
 
+function createGatewayUpdateResult() {
+  return {
+    status: "skipped",
+    mode: "unknown",
+    steps: [],
+    durationMs: 0,
+  } as const;
+}
+
+function createCommandWithTimeoutResult() {
+  return {
+    stdout: "",
+    stderr: "",
+    code: 0,
+    signal: null,
+    killed: false,
+  } as const;
+}
+
+function createLegacyConfigSnapshot() {
+  return {
+    path: "/tmp/openclaw.json",
+    exists: false,
+    raw: null,
+    parsed: {},
+    valid: true,
+    config: {},
+    issues: [],
+    legacyIssues: [],
+  } as const;
+}
+
 export const readConfigFileSnapshot = vi.fn() as unknown as MockFn;
 export const confirm = vi.fn().mockResolvedValue(true) as unknown as MockFn;
 export const select = vi.fn().mockResolvedValue("node") as unknown as MockFn;
 export const note = vi.fn() as unknown as MockFn;
 export const writeConfigFile = vi.fn().mockResolvedValue(undefined) as unknown as MockFn;
 export const resolveOpenClawPackageRoot = vi.fn().mockResolvedValue(null) as unknown as MockFn;
-export const runGatewayUpdate = vi.fn().mockResolvedValue({
-  status: "skipped",
-  mode: "unknown",
-  steps: [],
-  durationMs: 0,
-}) as unknown as MockFn;
+export const runGatewayUpdate = vi
+  .fn()
+  .mockResolvedValue(createGatewayUpdateResult()) as unknown as MockFn;
 export const migrateLegacyConfig = vi.fn((raw: unknown) => ({
   config: raw as Record<string, unknown>,
   changes: ["Moved routing.allowFrom → channels.whatsapp.allowFrom."],
@@ -41,28 +70,17 @@ export const runExec = vi.fn().mockResolvedValue({
   stdout: "",
   stderr: "",
 }) as unknown as MockFn;
-export const runCommandWithTimeout = vi.fn().mockResolvedValue({
-  stdout: "",
-  stderr: "",
-  code: 0,
-  signal: null,
-  killed: false,
-}) as unknown as MockFn;
+export const runCommandWithTimeout = vi
+  .fn()
+  .mockResolvedValue(createCommandWithTimeoutResult()) as unknown as MockFn;
 
 export const ensureAuthProfileStore = vi
   .fn()
   .mockReturnValue({ version: 1, profiles: {} }) as unknown as MockFn;
 
-export const legacyReadConfigFileSnapshot = vi.fn().mockResolvedValue({
-  path: "/tmp/openclaw.json",
-  exists: false,
-  raw: null,
-  parsed: {},
-  valid: true,
-  config: {},
-  issues: [],
-  legacyIssues: [],
-}) as unknown as MockFn;
+export const legacyReadConfigFileSnapshot = vi
+  .fn()
+  .mockResolvedValue(createLegacyConfigSnapshot()) as unknown as MockFn;
 export const createConfigIO = vi.fn(() => ({
   readConfigFileSnapshot: legacyReadConfigFileSnapshot,
 })) as unknown as MockFn;
@@ -84,6 +102,70 @@ export const serviceUninstall = vi.fn().mockResolvedValue(undefined) as unknown 
 export const callGateway = vi
   .fn()
   .mockRejectedValue(new Error("gateway closed")) as unknown as MockFn;
+
+export const autoMigrateLegacyStateDir = vi.fn().mockResolvedValue({
+  migrated: false,
+  skipped: false,
+  changes: [],
+  warnings: [],
+}) as unknown as MockFn;
+
+function createLegacyStateMigrationDetectionResult(params?: {
+  hasLegacySessions?: boolean;
+  preview?: string[];
+}) {
+  return {
+    targetAgentId: "main",
+    targetMainKey: "main",
+    targetScope: undefined,
+    stateDir: "/tmp/state",
+    oauthDir: "/tmp/oauth",
+    sessions: {
+      legacyDir: "/tmp/state/sessions",
+      legacyStorePath: "/tmp/state/sessions/sessions.json",
+      targetDir: "/tmp/state/agents/main/sessions",
+      targetStorePath: "/tmp/state/agents/main/sessions/sessions.json",
+      hasLegacy: params?.hasLegacySessions ?? false,
+      legacyKeys: [],
+    },
+    agentDir: {
+      legacyDir: "/tmp/state/agent",
+      targetDir: "/tmp/state/agents/main/agent",
+      hasLegacy: false,
+    },
+    whatsappAuth: {
+      legacyDir: "/tmp/oauth",
+      targetDir: "/tmp/oauth/whatsapp/default",
+      hasLegacy: false,
+    },
+    pairingAllowFrom: {
+      legacyTelegramPath: "/tmp/oauth/telegram-allowFrom.json",
+      targetTelegramPath: "/tmp/oauth/telegram-default-allowFrom.json",
+      hasLegacyTelegram: false,
+    },
+    preview: params?.preview ?? [],
+  };
+}
+
+export const detectLegacyStateMigrations = vi
+  .fn()
+  .mockResolvedValue(createLegacyStateMigrationDetectionResult()) as unknown as MockFn;
+
+export const runLegacyStateMigrations = vi.fn().mockResolvedValue({
+  changes: [],
+  warnings: [],
+}) as unknown as MockFn;
+
+const DEFAULT_CONFIG_SNAPSHOT = {
+  path: "/tmp/openclaw.json",
+  exists: true,
+  raw: "{}",
+  parsed: {},
+  valid: true,
+  config: {},
+  issues: [],
+  legacyIssues: [],
+} as const;
 
 vi.mock("@clack/prompts", () => ({
   confirm,
@@ -212,43 +294,71 @@ vi.mock("./onboard-helpers.js", () => ({
 }));
 
 vi.mock("./doctor-state-migrations.js", () => ({
-  autoMigrateLegacyStateDir: vi.fn().mockResolvedValue({
-    migrated: false,
-    skipped: false,
-    changes: [],
-    warnings: [],
-  }),
-  detectLegacyStateMigrations: vi.fn().mockResolvedValue({
-    targetAgentId: "main",
-    targetMainKey: "main",
-    targetScope: undefined,
-    stateDir: "/tmp/state",
-    oauthDir: "/tmp/oauth",
-    sessions: {
-      legacyDir: "/tmp/state/sessions",
-      legacyStorePath: "/tmp/state/sessions/sessions.json",
-      targetDir: "/tmp/state/agents/main/sessions",
-      targetStorePath: "/tmp/state/agents/main/sessions/sessions.json",
-      hasLegacy: false,
-      legacyKeys: [],
-    },
-    agentDir: {
-      legacyDir: "/tmp/state/agent",
-      targetDir: "/tmp/state/agents/main/agent",
-      hasLegacy: false,
-    },
-    whatsappAuth: {
-      legacyDir: "/tmp/oauth",
-      targetDir: "/tmp/oauth/whatsapp/default",
-      hasLegacy: false,
-    },
-    preview: [],
-  }),
-  runLegacyStateMigrations: vi.fn().mockResolvedValue({
-    changes: [],
-    warnings: [],
-  }),
+  autoMigrateLegacyStateDir,
+  detectLegacyStateMigrations,
+  runLegacyStateMigrations,
 }));
+
+export function mockDoctorConfigSnapshot(
+  params: {
+    config?: Record<string, unknown>;
+    parsed?: Record<string, unknown>;
+    valid?: boolean;
+    issues?: Array<{ path: string; message: string }>;
+    legacyIssues?: Array<{ path: string; message: string }>;
+  } = {},
+) {
+  readConfigFileSnapshot.mockResolvedValue({
+    ...DEFAULT_CONFIG_SNAPSHOT,
+    config: params.config ?? DEFAULT_CONFIG_SNAPSHOT.config,
+    parsed: params.parsed ?? DEFAULT_CONFIG_SNAPSHOT.parsed,
+    valid: params.valid ?? DEFAULT_CONFIG_SNAPSHOT.valid,
+    issues: params.issues ?? DEFAULT_CONFIG_SNAPSHOT.issues,
+    legacyIssues: params.legacyIssues ?? DEFAULT_CONFIG_SNAPSHOT.legacyIssues,
+  });
+}
+
+export function createDoctorRuntime() {
+  return {
+    log: vi.fn() as unknown as MockFn,
+    error: vi.fn() as unknown as MockFn,
+    exit: vi.fn() as unknown as MockFn,
+  };
+}
+
+export async function arrangeLegacyStateMigrationTest(): Promise<{
+  doctorCommand: unknown;
+  runtime: { log: MockFn; error: MockFn; exit: MockFn };
+  detectLegacyStateMigrations: MockFn;
+  runLegacyStateMigrations: MockFn;
+}> {
+  mockDoctorConfigSnapshot();
+
+  const { doctorCommand } = await import("./doctor.js");
+  const runtime = createDoctorRuntime();
+
+  detectLegacyStateMigrations.mockClear();
+  runLegacyStateMigrations.mockClear();
+  detectLegacyStateMigrations.mockResolvedValueOnce(
+    createLegacyStateMigrationDetectionResult({
+      hasLegacySessions: true,
+      preview: ["- Legacy sessions detected"],
+    }),
+  );
+  runLegacyStateMigrations.mockResolvedValueOnce({
+    changes: ["migrated"],
+    warnings: [],
+  });
+
+  confirm.mockClear();
+
+  return {
+    doctorCommand,
+    runtime,
+    detectLegacyStateMigrations,
+    runLegacyStateMigrations,
+  };
+}
 
 beforeEach(() => {
   confirm.mockReset().mockResolvedValue(true);
@@ -258,33 +368,13 @@ beforeEach(() => {
   readConfigFileSnapshot.mockReset();
   writeConfigFile.mockReset().mockResolvedValue(undefined);
   resolveOpenClawPackageRoot.mockReset().mockResolvedValue(null);
-  runGatewayUpdate.mockReset().mockResolvedValue({
-    status: "skipped",
-    mode: "unknown",
-    steps: [],
-    durationMs: 0,
-  });
-  legacyReadConfigFileSnapshot.mockReset().mockResolvedValue({
-    path: "/tmp/openclaw.json",
-    exists: false,
-    raw: null,
-    parsed: {},
-    valid: true,
-    config: {},
-    issues: [],
-    legacyIssues: [],
-  });
+  runGatewayUpdate.mockReset().mockResolvedValue(createGatewayUpdateResult());
+  legacyReadConfigFileSnapshot.mockReset().mockResolvedValue(createLegacyConfigSnapshot());
   createConfigIO.mockReset().mockImplementation(() => ({
     readConfigFileSnapshot: legacyReadConfigFileSnapshot,
   }));
   runExec.mockReset().mockResolvedValue({ stdout: "", stderr: "" });
-  runCommandWithTimeout.mockReset().mockResolvedValue({
-    stdout: "",
-    stderr: "",
-    code: 0,
-    signal: null,
-    killed: false,
-  });
+  runCommandWithTimeout.mockReset().mockResolvedValue(createCommandWithTimeoutResult());
   ensureAuthProfileStore.mockReset().mockReturnValue({ version: 1, profiles: {} });
   migrateLegacyConfig.mockReset().mockImplementation((raw: unknown) => ({
     config: raw as Record<string, unknown>,

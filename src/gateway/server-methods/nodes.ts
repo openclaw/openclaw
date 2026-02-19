@@ -1,4 +1,3 @@
-import type { GatewayRequestHandlers } from "./types.js";
 import { loadConfig } from "../../config/config.js";
 import { listDevicePairing } from "../../infra/device-pairing.js";
 import {
@@ -9,6 +8,11 @@ import {
   requestNodePairing,
   verifyNodeToken,
 } from "../../infra/node-pairing.js";
+import {
+  loadApnsRegistration,
+  resolveApnsAuthConfigFromEnv,
+  sendApnsBackgroundWake,
+} from "../../infra/push-apns.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
 import { sanitizeNodeInvokeParamsForForwarding } from "../node-invoke-sanitize.js";
 import {
@@ -17,7 +21,6 @@ import {
   validateNodeDescribeParams,
   validateNodeEventParams,
   validateNodeInvokeParams,
-  validateNodeInvokeResultParams,
   validateNodeListParams,
   validateNodePairApproveParams,
   validateNodePairListParams,
@@ -26,12 +29,26 @@ import {
   validateNodePairVerifyParams,
   validateNodeRenameParams,
 } from "../protocol/index.js";
+import { handleNodeInvokeResult } from "./nodes.handlers.invoke-result.js";
 import {
   respondInvalidParams,
+  respondUnavailableOnNodeInvokeError,
   respondUnavailableOnThrow,
   safeParseJson,
   uniqueSortedStrings,
 } from "./nodes.helpers.js";
+import type { GatewayRequestHandlers } from "./types.js";
+
+const NODE_WAKE_RECONNECT_WAIT_MS = 3_000;
+const NODE_WAKE_RECONNECT_POLL_MS = 150;
+const NODE_WAKE_THROTTLE_MS = 15_000;
+
+type NodeWakeState = {
+  lastWakeAtMs: number;
+  inFlight?: Promise<boolean>;
+};
+
+const nodeWakeById = new Map<string, NodeWakeState>();
 
 function isNodeEntry(entry: { role?: string; roles?: string[] }) {
   if (entry.role === "node") {
@@ -43,24 +60,75 @@ function isNodeEntry(entry: { role?: string; roles?: string[] }) {
   return false;
 }
 
-function normalizeNodeInvokeResultParams(params: unknown): unknown {
-  if (!params || typeof params !== "object") {
-    return params;
+async function delayMs(ms: number): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+async function maybeWakeNodeWithApns(nodeId: string): Promise<boolean> {
+  const state = nodeWakeById.get(nodeId) ?? { lastWakeAtMs: 0 };
+  nodeWakeById.set(nodeId, state);
+
+  if (state.inFlight) {
+    return await state.inFlight;
   }
-  const raw = params as Record<string, unknown>;
-  const normalized: Record<string, unknown> = { ...raw };
-  if (normalized.payloadJSON === null) {
-    delete normalized.payloadJSON;
-  } else if (normalized.payloadJSON !== undefined && typeof normalized.payloadJSON !== "string") {
-    if (normalized.payload === undefined) {
-      normalized.payload = normalized.payloadJSON;
+
+  const now = Date.now();
+  if (state.lastWakeAtMs > 0 && now - state.lastWakeAtMs < NODE_WAKE_THROTTLE_MS) {
+    return true;
+  }
+
+  state.inFlight = (async () => {
+    try {
+      const registration = await loadApnsRegistration(nodeId);
+      if (!registration) {
+        return false;
+      }
+
+      const auth = await resolveApnsAuthConfigFromEnv(process.env);
+      if (!auth.ok) {
+        return false;
+      }
+
+      state.lastWakeAtMs = Date.now();
+      await sendApnsBackgroundWake({
+        auth: auth.value,
+        registration,
+        nodeId,
+        wakeReason: "node.invoke",
+      });
+    } catch {
+      // Best-effort wake only.
+      if (state.lastWakeAtMs === 0) {
+        return false;
+      }
     }
-    delete normalized.payloadJSON;
+    return true;
+  })();
+
+  try {
+    return await state.inFlight;
+  } finally {
+    state.inFlight = undefined;
   }
-  if (normalized.error === null) {
-    delete normalized.error;
+}
+
+async function waitForNodeReconnect(params: {
+  nodeId: string;
+  context: { nodeRegistry: { get: (nodeId: string) => unknown } };
+  timeoutMs?: number;
+  pollMs?: number;
+}): Promise<boolean> {
+  const timeoutMs = Math.max(250, params.timeoutMs ?? NODE_WAKE_RECONNECT_WAIT_MS);
+  const pollMs = Math.max(50, params.pollMs ?? NODE_WAKE_RECONNECT_POLL_MS);
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    if (params.context.nodeRegistry.get(params.nodeId)) {
+      return true;
+    }
+    await delayMs(pollMs);
   }
-  return normalized;
+  return Boolean(params.context.nodeRegistry.get(params.nodeId));
 }
 
 export const nodeHandlers: GatewayRequestHandlers = {
@@ -402,16 +470,23 @@ export const nodeHandlers: GatewayRequestHandlers = {
     }
 
     await respondUnavailableOnThrow(respond, async () => {
-      const nodeSession = context.nodeRegistry.get(nodeId);
+      let nodeSession = context.nodeRegistry.get(nodeId);
       if (!nodeSession) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, "node not connected", {
-            details: { code: "NOT_CONNECTED" },
-          }),
-        );
-        return;
+        const wakeAvailable = await maybeWakeNodeWithApns(nodeId);
+        if (wakeAvailable) {
+          await waitForNodeReconnect({ nodeId, context });
+        }
+        nodeSession = context.nodeRegistry.get(nodeId);
+        if (!nodeSession) {
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.UNAVAILABLE, "node not connected", {
+              details: { code: "NOT_CONNECTED" },
+            }),
+          );
+          return;
+        }
       }
       const cfg = loadConfig();
       const allowlist = resolveNodeCommandAllowlist(cfg, nodeSession);
@@ -453,14 +528,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
         timeoutMs: p.timeoutMs,
         idempotencyKey: p.idempotencyKey,
       });
-      if (!res.ok) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, res.error?.message ?? "node invoke failed", {
-            details: { nodeError: res.error ?? null },
-          }),
-        );
+      if (!respondUnavailableOnNodeInvokeError(respond, res)) {
         return;
       }
       const payload = res.payloadJSON ? safeParseJson(res.payloadJSON) : res.payload;
@@ -477,46 +545,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
       );
     });
   },
-  "node.invoke.result": async ({ params, respond, context, client }) => {
-    const normalizedParams = normalizeNodeInvokeResultParams(params);
-    if (!validateNodeInvokeResultParams(normalizedParams)) {
-      respondInvalidParams({
-        respond,
-        method: "node.invoke.result",
-        validator: validateNodeInvokeResultParams,
-      });
-      return;
-    }
-    const p = normalizedParams as {
-      id: string;
-      nodeId: string;
-      ok: boolean;
-      payload?: unknown;
-      payloadJSON?: string | null;
-      error?: { code?: string; message?: string } | null;
-    };
-    const callerNodeId = client?.connect?.device?.id ?? client?.connect?.client?.id;
-    if (callerNodeId && callerNodeId !== p.nodeId) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId mismatch"));
-      return;
-    }
-    const ok = context.nodeRegistry.handleInvokeResult({
-      id: p.id,
-      nodeId: p.nodeId,
-      ok: p.ok,
-      payload: p.payload,
-      payloadJSON: p.payloadJSON ?? null,
-      error: p.error ?? null,
-    });
-    if (!ok) {
-      // Late-arriving results (after invoke timeout) are expected and harmless.
-      // Return success instead of error to reduce log noise; client can discard.
-      context.logGateway.debug(`late invoke result ignored: id=${p.id} node=${p.nodeId}`);
-      respond(true, { ok: true, ignored: true }, undefined);
-      return;
-    }
-    respond(true, { ok: true }, undefined);
-  },
+  "node.invoke.result": handleNodeInvokeResult,
   "node.event": async ({ params, respond, context, client }) => {
     if (!validateNodeEventParams(params)) {
       respondInvalidParams({

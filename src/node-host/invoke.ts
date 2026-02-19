@@ -12,12 +12,12 @@ import {
   evaluateShellAllowlist,
   requiresExecApproval,
   normalizeExecApprovals,
+  mergeExecApprovalsSocketDefaults,
   recordAllowlistUse,
   resolveExecApprovals,
   resolveSafeBins,
   ensureExecApprovals,
   readExecApprovalsSnapshot,
-  resolveExecApprovalsSocketPath,
   saveExecApprovals,
   type ExecAsk,
   type ExecApprovalsFile,
@@ -135,33 +135,22 @@ function resolveExecAsk(value?: string): ExecAsk {
   return value === "off" || value === "on-miss" || value === "always" ? value : "on-miss";
 }
 
-function sanitizeEnv(
+export function sanitizeEnv(
   overrides?: Record<string, string> | null,
 ): Record<string, string> | undefined {
   if (!overrides) {
     return undefined;
   }
   const merged = { ...process.env } as Record<string, string>;
-  const basePath = process.env.PATH ?? DEFAULT_NODE_PATH;
   for (const [rawKey, value] of Object.entries(overrides)) {
     const key = rawKey.trim();
     if (!key) {
       continue;
     }
     const upper = key.toUpperCase();
+    // PATH is part of the security boundary (command resolution + safe-bin checks). Never allow
+    // request-scoped PATH overrides from agents/gateways.
     if (upper === "PATH") {
-      const trimmed = value.trim();
-      if (!trimmed) {
-        continue;
-      }
-      if (!basePath || trimmed === basePath) {
-        merged[key] = trimmed;
-        continue;
-      }
-      const suffix = `${path.delimiter}${basePath}`;
-      if (trimmed.endsWith(suffix)) {
-        merged[key] = trimmed;
-      }
       continue;
     }
     if (blockedEnvKeys.has(upper)) {
@@ -347,6 +336,39 @@ function buildExecEventPayload(payload: ExecEventPayload): ExecEventPayload {
   return { ...payload, output: text };
 }
 
+async function sendExecFinishedEvent(params: {
+  client: GatewayClient;
+  sessionKey: string;
+  runId: string;
+  cmdText: string;
+  result: {
+    stdout?: string;
+    stderr?: string;
+    error?: string | null;
+    exitCode?: number | null;
+    timedOut?: boolean;
+    success?: boolean;
+  };
+}) {
+  const combined = [params.result.stdout, params.result.stderr, params.result.error]
+    .filter(Boolean)
+    .join("\n");
+  await sendNodeEvent(
+    params.client,
+    "exec.finished",
+    buildExecEventPayload({
+      sessionKey: params.sessionKey,
+      runId: params.runId,
+      host: "node",
+      command: params.cmdText,
+      exitCode: params.result.exitCode ?? undefined,
+      timedOut: params.result.timedOut,
+      success: params.result.success,
+      output: combined,
+    }),
+  );
+}
+
 async function runViaMacAppExecHost(params: {
   approvals: ReturnType<typeof resolveExecApprovals>;
   request: ExecHostRequest;
@@ -357,6 +379,48 @@ async function runViaMacAppExecHost(params: {
     token: approvals.token,
     request,
   });
+}
+
+async function sendJsonPayloadResult(
+  client: GatewayClient,
+  frame: NodeInvokeRequestPayload,
+  payload: unknown,
+) {
+  await sendInvokeResult(client, frame, {
+    ok: true,
+    payloadJSON: JSON.stringify(payload),
+  });
+}
+
+async function sendRawPayloadResult(
+  client: GatewayClient,
+  frame: NodeInvokeRequestPayload,
+  payloadJSON: string,
+) {
+  await sendInvokeResult(client, frame, {
+    ok: true,
+    payloadJSON,
+  });
+}
+
+async function sendErrorResult(
+  client: GatewayClient,
+  frame: NodeInvokeRequestPayload,
+  code: string,
+  message: string,
+) {
+  await sendInvokeResult(client, frame, {
+    ok: false,
+    error: { code, message },
+  });
+}
+
+async function sendInvalidRequestResult(
+  client: GatewayClient,
+  frame: NodeInvokeRequestPayload,
+  err: unknown,
+) {
+  await sendErrorResult(client, frame, "INVALID_REQUEST", String(err));
 }
 
 export async function handleInvoke(
@@ -375,17 +439,11 @@ export async function handleInvoke(
         hash: snapshot.hash,
         file: redactExecApprovals(snapshot.file),
       };
-      await sendInvokeResult(client, frame, {
-        ok: true,
-        payloadJSON: JSON.stringify(payload),
-      });
+      await sendJsonPayloadResult(client, frame, payload);
     } catch (err) {
       const message = String(err);
       const code = message.toLowerCase().includes("timed out") ? "TIMEOUT" : "INVALID_REQUEST";
-      await sendInvokeResult(client, frame, {
-        ok: false,
-        error: { code, message },
-      });
+      await sendErrorResult(client, frame, code, message);
     }
     return;
   }
@@ -400,18 +458,7 @@ export async function handleInvoke(
       const snapshot = readExecApprovalsSnapshot();
       requireExecApprovalsBaseHash(params, snapshot);
       const normalized = normalizeExecApprovals(params.file);
-      const currentSocketPath = snapshot.file.socket?.path?.trim();
-      const currentToken = snapshot.file.socket?.token?.trim();
-      const socketPath =
-        normalized.socket?.path?.trim() ?? currentSocketPath ?? resolveExecApprovalsSocketPath();
-      const token = normalized.socket?.token?.trim() ?? currentToken ?? "";
-      const next: ExecApprovalsFile = {
-        ...normalized,
-        socket: {
-          path: socketPath,
-          token,
-        },
-      };
+      const next = mergeExecApprovalsSocketDefaults({ normalized, current: snapshot.file });
       saveExecApprovals(next);
       const nextSnapshot = readExecApprovalsSnapshot();
       const payload: ExecApprovalsSnapshot = {
@@ -420,15 +467,9 @@ export async function handleInvoke(
         hash: nextSnapshot.hash,
         file: redactExecApprovals(nextSnapshot.file),
       };
-      await sendInvokeResult(client, frame, {
-        ok: true,
-        payloadJSON: JSON.stringify(payload),
-      });
+      await sendJsonPayloadResult(client, frame, payload);
     } catch (err) {
-      await sendInvokeResult(client, frame, {
-        ok: false,
-        error: { code: "INVALID_REQUEST", message: String(err) },
-      });
+      await sendInvalidRequestResult(client, frame, err);
     }
     return;
   }
@@ -441,15 +482,9 @@ export async function handleInvoke(
       }
       const env = sanitizeEnv(undefined);
       const payload = await handleSystemWhich(params, env);
-      await sendInvokeResult(client, frame, {
-        ok: true,
-        payloadJSON: JSON.stringify(payload),
-      });
+      await sendJsonPayloadResult(client, frame, payload);
     } catch (err) {
-      await sendInvokeResult(client, frame, {
-        ok: false,
-        error: { code: "INVALID_REQUEST", message: String(err) },
-      });
+      await sendInvalidRequestResult(client, frame, err);
     }
     return;
   }
@@ -457,24 +492,15 @@ export async function handleInvoke(
   if (command === "browser.proxy") {
     try {
       const payload = await runBrowserProxyCommand(frame.paramsJSON);
-      await sendInvokeResult(client, frame, {
-        ok: true,
-        payloadJSON: payload,
-      });
+      await sendRawPayloadResult(client, frame, payload);
     } catch (err) {
-      await sendInvokeResult(client, frame, {
-        ok: false,
-        error: { code: "INVALID_REQUEST", message: String(err) },
-      });
+      await sendInvalidRequestResult(client, frame, err);
     }
     return;
   }
 
   if (command !== "system.run") {
-    await sendInvokeResult(client, frame, {
-      ok: false,
-      error: { code: "UNAVAILABLE", message: "command not supported" },
-    });
+    await sendErrorResult(client, frame, "UNAVAILABLE", "command not supported");
     return;
   }
 
@@ -482,18 +508,12 @@ export async function handleInvoke(
   try {
     params = decodeParams<SystemRunParams>(frame.paramsJSON);
   } catch (err) {
-    await sendInvokeResult(client, frame, {
-      ok: false,
-      error: { code: "INVALID_REQUEST", message: String(err) },
-    });
+    await sendInvalidRequestResult(client, frame, err);
     return;
   }
 
   if (!Array.isArray(params.command) || params.command.length === 0) {
-    await sendInvokeResult(client, frame, {
-      ok: false,
-      error: { code: "INVALID_REQUEST", message: "command required" },
-    });
+    await sendErrorResult(client, frame, "INVALID_REQUEST", "command required");
     return;
   }
 
@@ -504,10 +524,7 @@ export async function handleInvoke(
     rawCommand: rawCommand || null,
   });
   if (!consistency.ok) {
-    await sendInvokeResult(client, frame, {
-      ok: false,
-      error: { code: "INVALID_REQUEST", message: consistency.message },
-    });
+    await sendErrorResult(client, frame, "INVALID_REQUEST", consistency.message);
     return;
   }
 
@@ -635,21 +652,7 @@ export async function handleInvoke(
       return;
     } else {
       const result: ExecHostRunResult = response.payload;
-      const combined = [result.stdout, result.stderr, result.error].filter(Boolean).join("\n");
-      await sendNodeEvent(
-        client,
-        "exec.finished",
-        buildExecEventPayload({
-          sessionKey,
-          runId,
-          host: "node",
-          command: cmdText,
-          exitCode: result.exitCode,
-          timedOut: result.timedOut,
-          success: result.success,
-          output: combined,
-        }),
-      );
+      await sendExecFinishedEvent({ client, sessionKey, runId, cmdText, result });
       await sendInvokeResult(client, frame, {
         ok: true,
         payloadJSON: JSON.stringify(result),
@@ -801,21 +804,7 @@ export async function handleInvoke(
       result.stdout = `${result.stdout}\n${suffix}`;
     }
   }
-  const combined = [result.stdout, result.stderr, result.error].filter(Boolean).join("\n");
-  await sendNodeEvent(
-    client,
-    "exec.finished",
-    buildExecEventPayload({
-      sessionKey,
-      runId,
-      host: "node",
-      command: cmdText,
-      exitCode: result.exitCode,
-      timedOut: result.timedOut,
-      success: result.success,
-      output: combined,
-    }),
-  );
+  await sendExecFinishedEvent({ client, sessionKey, runId, cmdText, result });
 
   await sendInvokeResult(client, frame, {
     ok: true,

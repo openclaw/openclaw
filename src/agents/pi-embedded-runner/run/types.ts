@@ -24,6 +24,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
 export type EmbeddedRunAttemptResult = {
   aborted: boolean;
   timedOut: boolean;
+  /** True if the timeout occurred while compaction was in progress or pending. */
+  timedOutDuringCompaction: boolean;
   promptError: unknown;
   sessionIdUsed: string;
   systemPromptReport?: SessionSystemPromptReport;
@@ -31,10 +33,18 @@ export type EmbeddedRunAttemptResult = {
   assistantTexts: string[];
   toolMetas: Array<{ toolName: string; meta?: string }>;
   lastAssistant: AssistantMessage | undefined;
-  lastToolError?: { toolName: string; meta?: string; error?: string };
+  lastToolError?: {
+    toolName: string;
+    meta?: string;
+    error?: string;
+    mutatingAction?: boolean;
+    actionFingerprint?: string;
+  };
   didSendViaMessagingTool: boolean;
   messagingToolSentTexts: string[];
+  messagingToolSentMediaUrls: string[];
   messagingToolSentTargets: MessagingToolSend[];
+  successfulCronAdds?: number;
   cloudCodeAssistFormatError: boolean;
   attemptUsage?: NormalizedUsage;
   compactionCount?: number;
