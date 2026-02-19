@@ -300,12 +300,14 @@ export function handleMessageEnd(
   );
   const shouldEmitReasoningBeforeAnswer =
     shouldEmitReasoning && ctx.state.blockReplyBreak === "message_end" && !addedDuringMessage;
+  // maybeEmitReasoning updates dedup state only — onBlockReply is never called
+  // here because shouldEmitReasoning is true only when !onBlockReply (reasoning
+  // is intentionally suppressed from channel delivery).
   const maybeEmitReasoning = () => {
     if (!shouldEmitReasoning || !formattedReasoning) {
       return;
     }
     ctx.state.lastReasoningSent = formattedReasoning;
-    void onBlockReply?.({ text: formattedReasoning });
   };
 
   if (shouldEmitReasoningBeforeAnswer) {

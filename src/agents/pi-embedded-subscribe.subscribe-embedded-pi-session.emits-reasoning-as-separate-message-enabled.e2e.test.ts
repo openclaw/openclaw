@@ -26,7 +26,7 @@ describe("subscribeEmbeddedPiSession", () => {
     return { emit, onBlockReply };
   }
 
-  it("emits reasoning as a separate message when enabled", () => {
+  it("suppresses reasoning from channel delivery when onBlockReply is set", () => {
     const { emit, onBlockReply } = createReasoningBlockReplyHarness();
 
     const assistantMessage = {
@@ -39,12 +39,13 @@ describe("subscribeEmbeddedPiSession", () => {
 
     emit({ type: "message_end", message: assistantMessage });
 
-    expect(onBlockReply).toHaveBeenCalledTimes(2);
-    expect(onBlockReply.mock.calls[0][0].text).toBe("Reasoning:\n_Because it helps_");
-    expect(onBlockReply.mock.calls[1][0].text).toBe("Final answer");
+    // Reasoning must NOT be delivered to the channel callback — only the
+    // answer text should be emitted.
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(onBlockReply.mock.calls[0][0].text).toBe("Final answer");
   });
   it.each(THINKING_TAG_CASES)(
-    "promotes <%s> tags to thinking blocks at write-time",
+    "suppresses <%s> tag reasoning from channel delivery at write-time",
     ({ open, close }) => {
       const { emit, onBlockReply } = createReasoningBlockReplyHarness();
 
@@ -60,9 +61,10 @@ describe("subscribeEmbeddedPiSession", () => {
 
       emit({ type: "message_end", message: assistantMessage });
 
-      expect(onBlockReply).toHaveBeenCalledTimes(2);
-      expect(onBlockReply.mock.calls[0][0].text).toBe("Reasoning:\n_Because it helps_");
-      expect(onBlockReply.mock.calls[1][0].text).toBe("Final answer");
+      // Reasoning must NOT be delivered to the channel callback — only the
+      // answer text should be emitted.
+      expect(onBlockReply).toHaveBeenCalledTimes(1);
+      expect(onBlockReply.mock.calls[0][0].text).toBe("Final answer");
 
       expect(assistantMessage.content).toEqual([
         { type: "thinking", thinking: "Because it helps" },
