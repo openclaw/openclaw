@@ -4,7 +4,6 @@ import {
   normalizeApiKeyInput,
   validateApiKeyInput,
 } from "./auth-choice.api-key.js";
-import { createAuthChoiceAgentModelNoter } from "./auth-choice.apply-helpers.js";
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { applyAuthChoicePluginProvider } from "./auth-choice.apply.plugin-provider.js";
 import { applyDefaultModelChoice } from "./auth-choice.default-model.js";
@@ -48,7 +47,15 @@ export async function applyAuthChoiceMiniMax(
       await setMinimaxApiKey(normalizeApiKeyInput(String(key)), params.agentDir, opts.profileId);
     }
   };
-  const noteAgentModel = createAuthChoiceAgentModelNoter(params);
+  const noteAgentModel = async (model: string) => {
+    if (!params.agentId) {
+      return;
+    }
+    await params.prompter.note(
+      `Default model set to ${model} for agent "${params.agentId}".`,
+      "Model configured",
+    );
+  };
   if (params.authChoice === "minimax-portal") {
     // Let user choose between Global/CN endpoints
     const endpoint = await params.prompter.select({
@@ -74,7 +81,7 @@ export async function applyAuthChoiceMiniMax(
     params.authChoice === "minimax-api-lightning"
   ) {
     const modelId =
-      params.authChoice === "minimax-api-lightning" ? "MiniMax-M2.5-Lightning" : "MiniMax-M2.5";
+      params.authChoice === "minimax-api-lightning" ? "MiniMax-M2.5-highspeed" : "MiniMax-M2.5";
     await ensureMinimaxApiKey({
       profileId: "minimax:default",
       promptMessage: "Enter MiniMax API key",
