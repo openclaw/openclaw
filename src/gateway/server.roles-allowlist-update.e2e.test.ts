@@ -60,17 +60,6 @@ const connectNodeClient = async (params: {
   });
 };
 
-async function waitForSignal(check: () => boolean, timeoutMs = 2000) {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    if (check()) {
-      return;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  throw new Error("timeout");
-}
-
 describe("gateway role enforcement", () => {
   test("enforces operator and node permissions", async () => {
     const nodeWs = new WebSocket(`ws://127.0.0.1:${port}`);
@@ -134,7 +123,12 @@ describe("gateway update.run", () => {
       const res = await onceMessage(ws, (o) => o.type === "res" && o.id === id);
       expect(res.ok).toBe(true);
 
-      await waitForSignal(() => sigusr1.mock.calls.length > 0);
+      await vi.waitFor(
+        () => {
+          expect(sigusr1.mock.calls.length).toBeGreaterThan(0);
+        },
+        { timeout: 2_000, interval: 10 },
+      );
       expect(sigusr1).toHaveBeenCalled();
 
       const sentinelPath = path.join(os.homedir(), ".openclaw", "restart-sentinel.json");

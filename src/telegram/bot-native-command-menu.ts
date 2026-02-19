@@ -100,5 +100,7 @@ export function syncTelegramMenuCommands(params: {
     });
   };
 
-  void sync().catch(() => {});
+  void sync().catch((err) => {
+    runtime.error?.(`Telegram command sync failed: ${String(err)}`);
+  });
 }

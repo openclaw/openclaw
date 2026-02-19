@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadSessionStore } from "../config/sessions.js";
 import {
+  assertElevatedOffStatusReply,
   installDirectiveBehaviorE2EHooks,
   makeRestrictedElevatedDisabledConfig,
   runEmbeddedPiAgent,
@@ -71,11 +72,8 @@ describe("directive behavior", () => {
       );
 
       const text = extractReplyText(res);
-      expect(text).toContain("Elevated mode disabled.");
       expect(text).toContain("Session: agent:main:main");
-      const optionsLine = text?.split("\n").find((line) => line.trim().startsWith("⚙️"));
-      expect(optionsLine).toBeTruthy();
-      expect(optionsLine).not.toContain("elevated");
+      assertElevatedOffStatusReply(text);
 
       const store = loadSessionStore(storePath);
       expect(store["agent:main:main"]?.elevatedLevel).toBe("off");

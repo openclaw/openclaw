@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isSafeScpRemoteHost } from "../infra/scp-host.js";
 import {
   normalizeTelegramCommandDescription,
   normalizeTelegramCommandName,
@@ -546,6 +547,7 @@ export const SlackAccountSchema = z
     chunkMode: z.enum(["length", "newline"]).optional(),
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
+    streaming: z.boolean().optional(),
     mediaMaxMb: z.number().positive().optional(),
     reactionNotifications: z.enum(["off", "own", "all", "allowlist"]).optional(),
     reactionAllowlist: z.array(z.union([z.string(), z.number()])).optional(),
@@ -803,7 +805,10 @@ export const IMessageAccountSchemaBase = z
     configWrites: z.boolean().optional(),
     cliPath: ExecutableTokenSchema.optional(),
     dbPath: z.string().optional(),
-    remoteHost: z.string().optional(),
+    remoteHost: z
+      .string()
+      .refine(isSafeScpRemoteHost, "expected SSH host or user@host (no spaces/options)")
+      .optional(),
     service: z.union([z.literal("imessage"), z.literal("sms"), z.literal("auto")]).optional(),
     region: z.string().optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),

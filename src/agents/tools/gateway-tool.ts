@@ -1,4 +1,5 @@
 import { Type } from "@sinclair/typebox";
+import { isRestartEnabled } from "../../config/commands.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveConfigSnapshotHash } from "../../config/io.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
@@ -75,8 +76,8 @@ export function createGatewayTool(opts?: {
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
       if (action === "restart") {
-        if (opts?.config?.commands?.restart !== true) {
-          throw new Error("Gateway restart is disabled. Set commands.restart=true to enable.");
+        if (!isRestartEnabled(opts?.config)) {
+          throw new Error("Gateway restart is disabled (commands.restart=false).");
         }
         const sessionKey =
           typeof params.sessionKey === "string" && params.sessionKey.trim()

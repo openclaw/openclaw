@@ -2,7 +2,7 @@ import "./run.overflow-compaction.mocks.shared.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { compactEmbeddedPiSessionDirect } from "./compact.js";
 import { runEmbeddedPiAgent } from "./run.js";
-import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
+import { mockOverflowRetrySuccess } from "./run.overflow-compaction.fixture.js";
 import { runEmbeddedAttempt } from "./run/attempt.js";
 
 const mockedRunEmbeddedAttempt = vi.mocked(runEmbeddedAttempt);
@@ -14,20 +14,9 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
   });
 
   it("passes trigger=overflow when retrying compaction after context overflow", async () => {
-    const overflowError = new Error("request_too_large: Request size exceeds model context window");
-
-    mockedRunEmbeddedAttempt
-      .mockResolvedValueOnce(makeAttemptResult({ promptError: overflowError }))
-      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
-
-    mockedCompactDirect.mockResolvedValueOnce({
-      ok: true,
-      compacted: true,
-      result: {
-        summary: "Compacted session",
-        firstKeptEntryId: "entry-5",
-        tokensBefore: 150000,
-      },
+    mockOverflowRetrySuccess({
+      runEmbeddedAttempt: mockedRunEmbeddedAttempt,
+      compactDirect: mockedCompactDirect,
     });
 
     await runEmbeddedPiAgent({

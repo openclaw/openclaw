@@ -8,6 +8,7 @@ import { enablePluginInConfig } from "../../plugins/enable.js";
 import { installPluginFromNpmSpec } from "../../plugins/install.js";
 import { recordPluginInstall } from "../../plugins/installs.js";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
+import { createPluginLoaderLogger } from "../../plugins/logger.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 
@@ -211,11 +212,6 @@ export function reloadOnboardingPluginRegistry(params: {
     config: params.cfg,
     workspaceDir,
     cache: false,
-    logger: {
-      info: (msg) => log.info(msg),
-      warn: (msg) => log.warn(msg),
-      error: (msg) => log.error(msg),
-      debug: (msg) => log.debug(msg),
-    },
+    logger: createPluginLoaderLogger(log),
   });
 }

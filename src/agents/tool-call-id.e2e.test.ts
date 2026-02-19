@@ -129,22 +129,9 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
       ] as unknown as AgentMessage[];
 
       const out = sanitizeToolCallIdsForCloudCodeAssist(input);
-      const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
-      const a = assistant.content?.[0] as { id?: string };
-      const b = assistant.content?.[1] as { id?: string };
-
-      expect(typeof a.id).toBe("string");
-      expect(typeof b.id).toBe("string");
-      expect(a.id).not.toBe(b.id);
-      expect(a.id?.length).toBeLessThanOrEqual(40);
-      expect(b.id?.length).toBeLessThanOrEqual(40);
-      expect(isValidCloudCodeAssistToolId(a.id as string, "strict")).toBe(true);
-      expect(isValidCloudCodeAssistToolId(b.id as string, "strict")).toBe(true);
-
-      const r1 = out[1] as Extract<AgentMessage, { role: "toolResult" }>;
-      const r2 = out[2] as Extract<AgentMessage, { role: "toolResult" }>;
-      expect(r1.toolCallId).toBe(a.id);
-      expect(r2.toolCallId).toBe(b.id);
+      const { aId, bId } = expectCollisionIdsRemainDistinct(out, "strict");
+      expect(aId.length).toBeLessThanOrEqual(40);
+      expect(bId.length).toBeLessThanOrEqual(40);
     });
   });
 
@@ -221,23 +208,9 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
 
       const out = sanitizeToolCallIdsForCloudCodeAssist(input, "strict9");
       expect(out).not.toBe(input);
-
-      const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
-      const a = assistant.content?.[0] as { id?: string };
-      const b = assistant.content?.[1] as { id?: string };
-
-      expect(typeof a.id).toBe("string");
-      expect(typeof b.id).toBe("string");
-      expect(a.id).not.toBe(b.id);
-      expect(a.id?.length).toBe(9);
-      expect(b.id?.length).toBe(9);
-      expect(isValidCloudCodeAssistToolId(a.id as string, "strict9")).toBe(true);
-      expect(isValidCloudCodeAssistToolId(b.id as string, "strict9")).toBe(true);
-
-      const r1 = out[1] as Extract<AgentMessage, { role: "toolResult" }>;
-      const r2 = out[2] as Extract<AgentMessage, { role: "toolResult" }>;
-      expect(r1.toolCallId).toBe(a.id);
-      expect(r2.toolCallId).toBe(b.id);
+      const { aId, bId } = expectCollisionIdsRemainDistinct(out, "strict9");
+      expect(aId.length).toBe(9);
+      expect(bId.length).toBe(9);
     });
   });
 });

@@ -41,11 +41,12 @@ scripts/pr-merge <PR>
 scripts/pr-merge run <PR>
 ```
 
-3. Ensure output reports:
+3. Capture and report these values in a human-readable summary (not raw `key=value` lines):
 
-- `merge_sha=<sha>`
-- `merge_author_email=<email>`
-- `comment_url=<url>`
+- Merge commit SHA
+- Merge author email
+- Merge completion comment URL
+- PR URL
 
 ## Steps
 
@@ -97,3 +98,4 @@ Cleanup is handled by `run` after merge success.
 
 - End in `MERGED`, never `CLOSED`.
 - Cleanup only after confirmed merge.
+- In final chat output, use labeled lines or bullets; do not paste raw wrapper diagnostics unless debugging.

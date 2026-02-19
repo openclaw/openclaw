@@ -50,6 +50,16 @@ describe("bot-native-command-menu", () => {
     expect(result.issues).toContain('Plugin command "/empty" is missing a description.');
   });
 
+  it("normalizes hyphenated plugin command names", () => {
+    const result = buildPluginTelegramMenuCommands({
+      specs: [{ name: "agent-run", description: "Run agent" }],
+      existingCommands: new Set<string>(),
+    });
+
+    expect(result.commands).toEqual([{ command: "agent_run", description: "Run agent" }]);
+    expect(result.issues).toEqual([]);
+  });
+
   it("deletes stale commands before setting new menu", async () => {
     const callOrder: string[] = [];
     const deleteMyCommands = vi.fn(async () => {

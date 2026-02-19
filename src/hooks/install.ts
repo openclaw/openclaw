@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import {
@@ -11,8 +10,12 @@ import {
 } from "../infra/archive.js";
 import { installPackageDir } from "../infra/install-package-dir.js";
 import { resolveSafeInstallDir, unscopedPackageName } from "../infra/install-safe-path.js";
+import {
+  packNpmSpecToArchive,
+  resolveArchiveSourcePath,
+  withTempDir,
+} from "../infra/install-source-utils.js";
 import { validateRegistryNpmSpec } from "../infra/npm-registry-spec.js";
-import { runCommandWithTimeout } from "../process/exec.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import { parseFrontmatter } from "./frontmatter.js";
 
@@ -103,15 +106,6 @@ function resolveTimedHookInstallModeOptions(params: {
     ...resolveHookInstallModeOptions(params),
     timeoutMs: params.timeoutMs ?? 120_000,
   };
-}
-
-async function withTempDir<T>(prefix: string, fn: (tmpDir: string) => Promise<T>): Promise<T> {
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-  try {
-    return await fn(tmpDir);
-  } finally {
-    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
-  }
 }
 
 async function resolveInstallTargetDir(
@@ -325,15 +319,11 @@ export async function installHooksFromArchive(params: {
 }): Promise<InstallHooksResult> {
   const logger = params.logger ?? defaultLogger;
   const timeoutMs = params.timeoutMs ?? 120_000;
-
-  const archivePath = resolveUserPath(params.archivePath);
-  if (!(await fileExists(archivePath))) {
-    return { ok: false, error: `archive not found: ${archivePath}` };
+  const archivePathResult = await resolveArchiveSourcePath(params.archivePath);
+  if (!archivePathResult.ok) {
+    return archivePathResult;
   }
-
-  if (!resolveArchiveKind(archivePath)) {
-    return { ok: false, error: `unsupported archive: ${archivePath}` };
-  }
+  const archivePath = archivePathResult.path;
 
   return await withTempDir("openclaw-hook-", async (tmpDir) => {
     const extractDir = path.join(tmpDir, "extract");
@@ -396,30 +386,17 @@ export async function installHooksFromNpmSpec(params: {
 
   return await withTempDir("openclaw-hook-pack-", async (tmpDir) => {
     logger.info?.(`Downloading ${spec}…`);
-    const res = await runCommandWithTimeout(["npm", "pack", spec, "--ignore-scripts"], {
-      timeoutMs: Math.max(timeoutMs, 300_000),
+    const packedResult = await packNpmSpecToArchive({
+      spec,
+      timeoutMs,
       cwd: tmpDir,
-      env: {
-        COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
-        NPM_CONFIG_IGNORE_SCRIPTS: "true",
-      },
     });
-    if (res.code !== 0) {
-      return { ok: false, error: `npm pack failed: ${res.stderr.trim() || res.stdout.trim()}` };
+    if (!packedResult.ok) {
+      return packedResult;
     }
 
-    const packed = (res.stdout || "")
-      .split("\n")
-      .map((l) => l.trim())
-      .filter(Boolean)
-      .pop();
-    if (!packed) {
-      return { ok: false, error: "npm pack produced no archive" };
-    }
-
-    const archivePath = path.join(tmpDir, packed);
     return await installHooksFromArchive({
-      archivePath,
+      archivePath: packedResult.archivePath,
       hooksDir: params.hooksDir,
       timeoutMs,
       logger,

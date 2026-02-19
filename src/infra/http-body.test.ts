@@ -15,6 +15,10 @@ type MockIncomingMessage = IncomingMessage & {
   __unhandledDestroyError?: unknown;
 };
 
+async function waitForMicrotaskTurn(): Promise<void> {
+  await new Promise<void>((resolve) => queueMicrotask(resolve));
+}
+
 function createMockRequest(params: {
   chunks?: string[];
   headers?: Record<string, string>;
@@ -101,7 +105,7 @@ describe("http body limits", () => {
     const req = createMockRequest({ chunks: ["small", "x".repeat(256)], emitEnd: false });
     const res = createMockServerResponse();
     const guard = installRequestBodyLimitGuard(req, res, { maxBytes: 128, responseFormat: "text" });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await waitForMicrotaskTurn();
     expect(guard.isTripped()).toBe(true);
     expect(guard.code()).toBe("PAYLOAD_TOO_LARGE");
     expect(res.statusCode).toBe(413);
@@ -127,7 +131,7 @@ describe("http body limits", () => {
       message: "PayloadTooLarge",
     });
     // Wait a tick for any async destroy(err) emission.
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await waitForMicrotaskTurn();
     expect(req.__unhandledDestroyError).toBeUndefined();
   });
 });

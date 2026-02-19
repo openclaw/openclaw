@@ -111,6 +111,52 @@ function getDirectSignalEventsFor(sender: string) {
   return peekSystemEvents(route.sessionKey);
 }
 
+function makeBaseEnvelope(overrides: Record<string, unknown> = {}) {
+  return {
+    sourceNumber: "+15550001111",
+    sourceName: "Ada",
+    timestamp: 1,
+    ...overrides,
+  };
+}
+
+async function receiveSingleEnvelope(
+  envelope: Record<string, unknown>,
+  opts?: Partial<Parameters<(typeof import("./monitor.js"))["monitorSignalProvider"]>[0]>,
+) {
+  await receiveSignalPayloads({
+    payloads: [{ envelope }],
+    opts,
+  });
+}
+
+function expectNoReplyDeliveryOrRouteUpdate() {
+  expect(replyMock).not.toHaveBeenCalled();
+  expect(sendMock).not.toHaveBeenCalled();
+  expect(updateLastRouteMock).not.toHaveBeenCalled();
+}
+
+function setReactionNotificationConfig(mode: "all" | "own", extra: Record<string, unknown> = {}) {
+  setSignalToolResultTestConfig(
+    createSignalConfig({
+      autoStart: false,
+      dmPolicy: "open",
+      allowFrom: ["*"],
+      reactionNotifications: mode,
+      ...extra,
+    }),
+  );
+}
+
+function expectWaitForTransportReadyTimeout(timeoutMs: number) {
+  expect(waitForTransportReadyMock).toHaveBeenCalledTimes(1);
+  expect(waitForTransportReadyMock).toHaveBeenCalledWith(
+    expect.objectContaining({
+      timeoutMs,
+    }),
+  );
+}
+
 describe("monitorSignalProvider tool results", () => {
   it("uses bounded readiness checks when auto-starting the daemon", async () => {
     const runtime = createMonitorRuntime();
@@ -150,12 +196,7 @@ describe("monitorSignalProvider tool results", () => {
       startupTimeoutMs: 90_000,
     });
 
-    expect(waitForTransportReadyMock).toHaveBeenCalledTimes(1);
-    expect(waitForTransportReadyMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        timeoutMs: 90_000,
-      }),
-    );
+    expectWaitForTransportReadyTimeout(90_000);
   });
 
   it("caps startupTimeoutMs at 2 minutes", async () => {
@@ -170,12 +211,7 @@ describe("monitorSignalProvider tool results", () => {
       runtime,
     });
 
-    expect(waitForTransportReadyMock).toHaveBeenCalledTimes(1);
-    expect(waitForTransportReadyMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        timeoutMs: 120_000,
-      }),
-    );
+    expectWaitForTransportReadyTimeout(120_000);
   });
 
   it("skips tool summaries with responsePrefix", async () => {
@@ -227,78 +263,43 @@ describe("monitorSignalProvider tool results", () => {
   });
 
   it("ignores reaction-only messages", async () => {
-    await receiveSignalPayloads({
-      payloads: [
-        {
-          envelope: {
-            sourceNumber: "+15550001111",
-            sourceName: "Ada",
-            timestamp: 1,
-            reactionMessage: {
-              emoji: "👍",
-              targetAuthor: "+15550002222",
-              targetSentTimestamp: 2,
-            },
-          },
-        },
-      ],
+    await receiveSingleEnvelope({
+      ...makeBaseEnvelope(),
+      reactionMessage: {
+        emoji: "👍",
+        targetAuthor: "+15550002222",
+        targetSentTimestamp: 2,
+      },
     });
 
-    expect(replyMock).not.toHaveBeenCalled();
-    expect(sendMock).not.toHaveBeenCalled();
-    expect(updateLastRouteMock).not.toHaveBeenCalled();
+    expectNoReplyDeliveryOrRouteUpdate();
   });
 
   it("ignores reaction-only dataMessage.reaction events (don’t treat as broken attachments)", async () => {
-    await receiveSignalPayloads({
-      payloads: [
-        {
-          envelope: {
-            sourceNumber: "+15550001111",
-            sourceName: "Ada",
-            timestamp: 1,
-            dataMessage: {
-              reaction: {
-                emoji: "👍",
-                targetAuthor: "+15550002222",
-                targetSentTimestamp: 2,
-              },
-              attachments: [{}],
-            },
-          },
+    await receiveSingleEnvelope({
+      ...makeBaseEnvelope(),
+      dataMessage: {
+        reaction: {
+          emoji: "👍",
+          targetAuthor: "+15550002222",
+          targetSentTimestamp: 2,
         },
-      ],
+        attachments: [{}],
+      },
     });
 
-    expect(replyMock).not.toHaveBeenCalled();
-    expect(sendMock).not.toHaveBeenCalled();
-    expect(updateLastRouteMock).not.toHaveBeenCalled();
+    expectNoReplyDeliveryOrRouteUpdate();
   });
 
   it("enqueues system events for reaction notifications", async () => {
-    setSignalToolResultTestConfig(
-      createSignalConfig({
-        autoStart: false,
-        dmPolicy: "open",
-        allowFrom: ["*"],
-        reactionNotifications: "all",
-      }),
-    );
-    await receiveSignalPayloads({
-      payloads: [
-        {
-          envelope: {
-            sourceNumber: "+15550001111",
-            sourceName: "Ada",
-            timestamp: 1,
-            reactionMessage: {
-              emoji: "✅",
-              targetAuthor: "+15550002222",
-              targetSentTimestamp: 2,
-            },
-          },
-        },
-      ],
+    setReactionNotificationConfig("all");
+    await receiveSingleEnvelope({
+      ...makeBaseEnvelope(),
+      reactionMessage: {
+        emoji: "✅",
+        targetAuthor: "+15550002222",
+        targetSentTimestamp: 2,
+      },
     });
 
     const events = getDirectSignalEventsFor("+15550001111");
@@ -306,31 +307,15 @@ describe("monitorSignalProvider tool results", () => {
   });
 
   it("notifies on own reactions when target includes uuid + phone", async () => {
-    setSignalToolResultTestConfig(
-      createSignalConfig({
-        autoStart: false,
-        dmPolicy: "open",
-        allowFrom: ["*"],
-        account: "+15550002222",
-        reactionNotifications: "own",
-      }),
-    );
-    await receiveSignalPayloads({
-      payloads: [
-        {
-          envelope: {
-            sourceNumber: "+15550001111",
-            sourceName: "Ada",
-            timestamp: 1,
-            reactionMessage: {
-              emoji: "✅",
-              targetAuthor: "+15550002222",
-              targetAuthorUuid: "123e4567-e89b-12d3-a456-426614174000",
-              targetSentTimestamp: 2,
-            },
-          },
-        },
-      ],
+    setReactionNotificationConfig("own", { account: "+15550002222" });
+    await receiveSingleEnvelope({
+      ...makeBaseEnvelope(),
+      reactionMessage: {
+        emoji: "✅",
+        targetAuthor: "+15550002222",
+        targetAuthorUuid: "123e4567-e89b-12d3-a456-426614174000",
+        targetSentTimestamp: 2,
+      },
     });
 
     const events = getDirectSignalEventsFor("+15550001111");

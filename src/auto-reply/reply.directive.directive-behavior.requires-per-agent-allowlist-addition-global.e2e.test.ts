@@ -42,6 +42,29 @@ function makeWorkElevatedAllowlistConfig(home: string) {
   };
 }
 
+function makeElevatedDirectiveConfig(
+  home: string,
+  defaults: Record<string, unknown> = {},
+  extra: Record<string, unknown> = {},
+) {
+  return makeWhatsAppDirectiveConfig(
+    home,
+    {
+      model: "anthropic/claude-opus-4-5",
+      ...defaults,
+    },
+    {
+      tools: {
+        elevated: {
+          allowFrom: { whatsapp: ["+1222"] },
+        },
+      },
+      channels: { whatsapp: { allowFrom: ["+1222"] } },
+      ...extra,
+    },
+  );
+}
+
 function makeCommandMessage(body: string, from = "+1222") {
   return {
     Body: body,
@@ -98,21 +121,7 @@ describe("directive behavior", () => {
       const res = await getReplyFromConfig(
         makeCommandMessage("/elevated off"),
         {},
-        makeWhatsAppDirectiveConfig(
-          home,
-          {
-            model: "anthropic/claude-opus-4-5",
-            sandbox: { mode: "off" },
-          },
-          {
-            tools: {
-              elevated: {
-                allowFrom: { whatsapp: ["+1222"] },
-              },
-            },
-            channels: { whatsapp: { allowFrom: ["+1222"] } },
-          },
-        ),
+        makeElevatedDirectiveConfig(home, { sandbox: { mode: "off" } }),
       );
 
       const text = replyText(res);
@@ -126,18 +135,7 @@ describe("directive behavior", () => {
       const res = await getReplyFromConfig(
         makeCommandMessage("/elevated maybe"),
         {},
-        makeWhatsAppDirectiveConfig(
-          home,
-          { model: "anthropic/claude-opus-4-5" },
-          {
-            tools: {
-              elevated: {
-                allowFrom: { whatsapp: ["+1222"] },
-              },
-            },
-            channels: { whatsapp: { allowFrom: ["+1222"] } },
-          },
-        ),
+        makeElevatedDirectiveConfig(home),
       );
 
       const text = replyText(res);
@@ -150,18 +148,7 @@ describe("directive behavior", () => {
       const res = await getReplyFromConfig(
         makeCommandMessage("/elevated off\n/verbose on"),
         {},
-        makeWhatsAppDirectiveConfig(
-          home,
-          { model: "anthropic/claude-opus-4-5" },
-          {
-            tools: {
-              elevated: {
-                allowFrom: { whatsapp: ["+1222"] },
-              },
-            },
-            channels: { whatsapp: { allowFrom: ["+1222"] } },
-          },
-        ),
+        makeElevatedDirectiveConfig(home),
       );
 
       const text = replyText(res);

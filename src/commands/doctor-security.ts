@@ -5,7 +5,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig, GatewayBindMode } from "../config/config.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { isLoopbackHost, resolveGatewayBindHost } from "../gateway/net.js";
-import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
+import { resolveDmAllowState } from "../security/dm-policy-shared.js";
 import { note } from "../terminal/note.js";
 
 export async function noteSecurityWarnings(cfg: OpenClawConfig) {
@@ -84,21 +84,12 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
   }) => {
     const dmPolicy = params.dmPolicy;
     const policyPath = params.policyPath ?? `${params.allowFromPath}policy`;
-    const configAllowFrom = (params.allowFrom ?? []).map((v) => String(v).trim());
-    const hasWildcard = configAllowFrom.includes("*");
-    const storeAllowFrom = await readChannelAllowFromStore(params.provider).catch(() => []);
-    const normalizedCfg = configAllowFrom
-      .filter((v) => v !== "*")
-      .map((v) => (params.normalizeEntry ? params.normalizeEntry(v) : v))
-      .map((v) => v.trim())
-      .filter(Boolean);
-    const normalizedStore = storeAllowFrom
-      .map((v) => (params.normalizeEntry ? params.normalizeEntry(v) : v))
-      .map((v) => v.trim())
-      .filter(Boolean);
-    const allowCount = Array.from(new Set([...normalizedCfg, ...normalizedStore])).length;
+    const { hasWildcard, allowCount, isMultiUserDm } = await resolveDmAllowState({
+      provider: params.provider,
+      allowFrom: params.allowFrom,
+      normalizeEntry: params.normalizeEntry,
+    });
     const dmScope = cfg.session?.dmScope ?? "main";
-    const isMultiUserDm = hasWildcard || allowCount > 1;
 
     if (dmPolicy === "open") {
       const allowFromPath = `${params.allowFromPath}allowFrom`;

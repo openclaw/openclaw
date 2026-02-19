@@ -6,7 +6,6 @@ import type { DiscordProbe } from "../../discord/probe.js";
 import type { DiscordTokenResolution } from "../../discord/token.js";
 import type { IMessageProbe } from "../../imessage/probe.js";
 import type { LineProbeResult } from "../../line/types.js";
-import type { PluginRegistry } from "../../plugins/registry.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { SignalProbe } from "../../signal/probe.js";
 import type { SlackProbe } from "../../slack/probe.js";
@@ -118,23 +117,7 @@ describe("channel plugin catalog", () => {
   });
 });
 
-const createRegistry = (channels: PluginRegistry["channels"]): PluginRegistry => ({
-  plugins: [],
-  tools: [],
-  hooks: [],
-  typedHooks: [],
-  commands: [],
-  channels,
-  providers: [],
-  gatewayHandlers: {},
-  httpHandlers: [],
-  httpRoutes: [],
-  cliRegistrars: [],
-  services: [],
-  diagnostics: [],
-});
-
-const emptyRegistry = createRegistry([]);
+const emptyRegistry = createTestRegistry([]);
 
 const msteamsOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
@@ -160,7 +143,7 @@ const msteamsPlugin: ChannelPlugin = {
   outbound: msteamsOutbound,
 };
 
-const registryWithMSTeams = createRegistry([
+const registryWithMSTeams = createTestRegistry([
   { pluginId: "msteams", plugin: msteamsPlugin, source: "test" },
 ]);
 
@@ -394,5 +377,72 @@ describe("directory (config-backed)", () => {
       limit: null,
     });
     expect(groups?.map((e) => e.id)).toEqual(["999@g.us"]);
+  });
+
+  it("applies query and limit filtering for config-backed directories", async () => {
+    const cfg = {
+      channels: {
+        slack: {
+          botToken: "xoxb-test",
+          appToken: "xapp-test",
+          dm: { allowFrom: ["U100", "U200"] },
+          dms: { U300: {} },
+          channels: { C111: {}, C222: {}, C333: {} },
+        },
+        discord: {
+          token: "discord-test",
+          guilds: {
+            "123": {
+              channels: {
+                "555": {},
+                "666": {},
+                "777": {},
+              },
+            },
+          },
+        },
+        telegram: {
+          botToken: "telegram-test",
+          groups: { "-1001": {}, "-1002": {}, "-2001": {} },
+        },
+        whatsapp: {
+          groups: { "111@g.us": {}, "222@g.us": {}, "333@s.whatsapp.net": {} },
+        },
+      },
+      // oxlint-disable-next-line typescript/no-explicit-any
+    } as any;
+
+    const slackPeers = await listSlackDirectoryPeersFromConfig({
+      cfg,
+      accountId: "default",
+      query: "user:u",
+      limit: 2,
+    });
+    expect(slackPeers).toHaveLength(2);
+    expect(slackPeers.every((entry) => entry.id.startsWith("user:u"))).toBe(true);
+
+    const discordGroups = await listDiscordDirectoryGroupsFromConfig({
+      cfg,
+      accountId: "default",
+      query: "666",
+      limit: 5,
+    });
+    expect(discordGroups.map((entry) => entry.id)).toEqual(["channel:666"]);
+
+    const telegramGroups = await listTelegramDirectoryGroupsFromConfig({
+      cfg,
+      accountId: "default",
+      query: "-100",
+      limit: 1,
+    });
+    expect(telegramGroups.map((entry) => entry.id)).toEqual(["-1001"]);
+
+    const whatsAppGroups = await listWhatsAppDirectoryGroupsFromConfig({
+      cfg,
+      accountId: "default",
+      query: "@g.us",
+      limit: 1,
+    });
+    expect(whatsAppGroups.map((entry) => entry.id)).toEqual(["111@g.us"]);
   });
 });

@@ -42,6 +42,44 @@ describe("doctor command", () => {
     expect(written.routing).toBeUndefined();
   });
 
+  it("does not add a new gateway auth token while fixing legacy issues on invalid config", async () => {
+    mockDoctorConfigSnapshot({
+      config: {
+        routing: { allowFrom: ["+15555550123"] },
+        gateway: { remote: { token: "legacy-remote-token" } },
+      },
+      parsed: {
+        routing: { allowFrom: ["+15555550123"] },
+        gateway: { remote: { token: "legacy-remote-token" } },
+      },
+      valid: false,
+      issues: [{ path: "routing.allowFrom", message: "legacy" }],
+      legacyIssues: [{ path: "routing.allowFrom", message: "legacy" }],
+    });
+
+    const { doctorCommand } = await import("./doctor.js");
+    const runtime = createDoctorRuntime();
+
+    migrateLegacyConfig.mockReturnValue({
+      config: {
+        channels: { whatsapp: { allowFrom: ["+15555550123"] } },
+        gateway: { remote: { token: "legacy-remote-token" } },
+      },
+      changes: ["Moved routing.allowFrom → channels.whatsapp.allowFrom."],
+    });
+
+    await doctorCommand(runtime, { repair: true });
+
+    expect(writeConfigFile).toHaveBeenCalledTimes(1);
+    const written = writeConfigFile.mock.calls[0]?.[0] as Record<string, unknown>;
+    const gateway = (written.gateway as Record<string, unknown>) ?? {};
+    const auth = gateway.auth as Record<string, unknown> | undefined;
+    const remote = gateway.remote as Record<string, unknown>;
+
+    expect(remote.token).toBe("legacy-remote-token");
+    expect(auth).toBeUndefined();
+  });
+
   it("skips legacy gateway services migration", { timeout: 60_000 }, async () => {
     mockDoctorConfigSnapshot();
 

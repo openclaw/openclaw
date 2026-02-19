@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ProcessSession } from "./bash-process-registry.js";
 import {
   addSession,
   getFinishedSession,
   getSession,
   resetProcessRegistryForTests,
 } from "./bash-process-registry.js";
+import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 import { createProcessTool } from "./bash-tools.process.js";
 
 const { supervisorMock } = vi.hoisted(() => ({
@@ -30,28 +30,13 @@ vi.mock("../process/kill-tree.js", () => ({
   killProcessTree: (...args: unknown[]) => killProcessTreeMock(...args),
 }));
 
-function createBackgroundSession(id: string, pid?: number): ProcessSession {
-  return {
+function createBackgroundSession(id: string, pid?: number) {
+  return createProcessSessionFixture({
     id,
     command: "sleep 999",
-    startedAt: Date.now(),
-    cwd: "/tmp",
-    maxOutputChars: 10_000,
-    pendingMaxOutputChars: 30_000,
-    totalOutputChars: 0,
-    pendingStdout: [],
-    pendingStderr: [],
-    pendingStdoutChars: 0,
-    pendingStderrChars: 0,
-    aggregated: "",
-    tail: "",
-    pid,
-    exited: false,
-    exitCode: undefined,
-    exitSignal: undefined,
-    truncated: false,
     backgrounded: true,
-  };
+    ...(pid === undefined ? {} : { pid }),
+  });
 }
 
 describe("process tool supervisor cancellation", () => {

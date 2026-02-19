@@ -37,6 +37,7 @@ specs are rejected.
 3. Restart the Gateway, then configure under `plugins.entries.<id>.config`.
 
 See [Voice Call](/plugins/voice-call) for a concrete example plugin.
+Looking for third-party listings? See [Community plugins](/plugins/community).
 
 ## Available plugins (official)
 

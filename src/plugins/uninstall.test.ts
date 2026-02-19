@@ -46,6 +46,28 @@ async function createInstalledNpmPluginFixture(params: {
   };
 }
 
+function createSinglePluginEntries(pluginId = "my-plugin") {
+  return {
+    [pluginId]: { enabled: true },
+  };
+}
+
+function createSinglePluginWithEmptySlotsConfig(): OpenClawConfig {
+  return {
+    plugins: {
+      entries: createSinglePluginEntries(),
+      slots: {},
+    },
+  };
+}
+
+async function createPluginDirFixture(baseDir: string, pluginId = "my-plugin") {
+  const pluginDir = path.join(baseDir, pluginId);
+  await fs.mkdir(pluginDir, { recursive: true });
+  await fs.writeFile(path.join(pluginDir, "index.js"), "// plugin");
+  return pluginDir;
+}
+
 describe("removePluginFromConfig", () => {
   it("removes plugin from entries", () => {
     const config: OpenClawConfig = {
@@ -175,14 +197,7 @@ describe("removePluginFromConfig", () => {
   });
 
   it("removes plugins object when uninstall leaves only empty slots", () => {
-    const config: OpenClawConfig = {
-      plugins: {
-        entries: {
-          "my-plugin": { enabled: true },
-        },
-        slots: {},
-      },
-    };
+    const config = createSinglePluginWithEmptySlotsConfig();
 
     const { config: result } = removePluginFromConfig(config, "my-plugin");
 
@@ -190,14 +205,7 @@ describe("removePluginFromConfig", () => {
   });
 
   it("cleans up empty slots object", () => {
-    const config: OpenClawConfig = {
-      plugins: {
-        entries: {
-          "my-plugin": { enabled: true },
-        },
-        slots: {},
-      },
-    };
+    const config = createSinglePluginWithEmptySlotsConfig();
 
     const { config: result } = removePluginFromConfig(config, "my-plugin");
 
@@ -345,15 +353,11 @@ describe("uninstallPlugin", () => {
   });
 
   it("preserves directory for linked plugins", async () => {
-    const pluginDir = path.join(tempDir, "my-plugin");
-    await fs.mkdir(pluginDir, { recursive: true });
-    await fs.writeFile(path.join(pluginDir, "index.js"), "// plugin");
+    const pluginDir = await createPluginDirFixture(tempDir);
 
     const config: OpenClawConfig = {
       plugins: {
-        entries: {
-          "my-plugin": { enabled: true },
-        },
+        entries: createSinglePluginEntries(),
         installs: {
           "my-plugin": {
             source: "path",
@@ -383,15 +387,11 @@ describe("uninstallPlugin", () => {
   });
 
   it("does not delete directory when deleteFiles is false", async () => {
-    const pluginDir = path.join(tempDir, "my-plugin");
-    await fs.mkdir(pluginDir, { recursive: true });
-    await fs.writeFile(path.join(pluginDir, "index.js"), "// plugin");
+    const pluginDir = await createPluginDirFixture(tempDir);
 
     const config: OpenClawConfig = {
       plugins: {
-        entries: {
-          "my-plugin": { enabled: true },
-        },
+        entries: createSinglePluginEntries(),
         installs: {
           "my-plugin": {
             source: "npm",

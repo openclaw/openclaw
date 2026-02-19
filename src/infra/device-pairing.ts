@@ -321,6 +321,22 @@ export async function rejectDevicePairing(
   });
 }
 
+export async function removePairedDevice(
+  deviceId: string,
+  baseDir?: string,
+): Promise<{ deviceId: string } | null> {
+  return await withLock(async () => {
+    const state = await loadState(baseDir);
+    const normalized = normalizeDeviceId(deviceId);
+    if (!normalized || !state.pairedByDeviceId[normalized]) {
+      return null;
+    }
+    delete state.pairedByDeviceId[normalized];
+    await persistState(state, baseDir);
+    return { deviceId: normalized };
+  });
+}
+
 export async function updatePairedDeviceMetadata(
   deviceId: string,
   patch: Partial<Omit<PairedDevice, "deviceId" | "createdAtMs" | "approvedAtMs">>,

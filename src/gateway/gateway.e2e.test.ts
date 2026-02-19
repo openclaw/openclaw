@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { startGatewayServer } from "./server.js";
+import { extractPayloadText } from "./test-helpers.agent-results.js";
 import {
   connectDeviceAuthReq,
   connectGatewayClient,
@@ -12,15 +13,6 @@ import {
 } from "./test-helpers.e2e.js";
 import { installOpenAiResponsesMock } from "./test-helpers.openai-mock.js";
 import { buildOpenAiResponsesProviderConfig } from "./test-openai-responses-model.js";
-
-function extractPayloadText(result: unknown): string {
-  const record = result as Record<string, unknown>;
-  const payloads = Array.isArray(record.payloads) ? record.payloads : [];
-  const texts = payloads
-    .map((p) => (p && typeof p === "object" ? (p as Record<string, unknown>).text : undefined))
-    .filter((t): t is string => typeof t === "string" && t.trim().length > 0);
-  return texts.join("\n").trim();
-}
 
 describe("gateway e2e", () => {
   it(

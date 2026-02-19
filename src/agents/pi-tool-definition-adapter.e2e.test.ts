@@ -6,25 +6,28 @@ import { toToolDefinitions } from "./pi-tool-definition-adapter.js";
 type ToolExecute = ReturnType<typeof toToolDefinitions>[number]["execute"];
 const extensionContext = {} as Parameters<ToolExecute>[4];
 
+async function executeThrowingTool(name: string, callId: string) {
+  const tool = {
+    name,
+    label: name === "bash" ? "Bash" : "Boom",
+    description: "throws",
+    parameters: Type.Object({}),
+    execute: async () => {
+      throw new Error("nope");
+    },
+  } satisfies AgentTool;
+
+  const defs = toToolDefinitions([tool]);
+  const def = defs[0];
+  if (!def) {
+    throw new Error("missing tool definition");
+  }
+  return await def.execute(callId, {}, undefined, undefined, extensionContext);
+}
+
 describe("pi tool definition adapter", () => {
   it("wraps tool errors into a tool result", async () => {
-    const tool = {
-      name: "boom",
-      label: "Boom",
-      description: "throws",
-      parameters: Type.Object({}),
-      execute: async () => {
-        throw new Error("nope");
-      },
-    } satisfies AgentTool;
-
-    const defs = toToolDefinitions([tool]);
-    const def = defs[0];
-    if (!def) {
-      throw new Error("missing tool definition");
-    }
-    const execute = (...args: Parameters<(typeof defs)[0]["execute"]>) => def.execute(...args);
-    const result = await execute("call1", {}, undefined, undefined, extensionContext);
+    const result = await executeThrowingTool("boom", "call1");
 
     expect(result.details).toMatchObject({
       status: "error",
@@ -35,23 +38,7 @@ describe("pi tool definition adapter", () => {
   });
 
   it("normalizes exec tool aliases in error results", async () => {
-    const tool = {
-      name: "bash",
-      label: "Bash",
-      description: "throws",
-      parameters: Type.Object({}),
-      execute: async () => {
-        throw new Error("nope");
-      },
-    } satisfies AgentTool;
-
-    const defs = toToolDefinitions([tool]);
-    const def = defs[0];
-    if (!def) {
-      throw new Error("missing tool definition");
-    }
-    const execute = (...args: Parameters<(typeof defs)[0]["execute"]>) => def.execute(...args);
-    const result = await execute("call2", {}, undefined, undefined, extensionContext);
+    const result = await executeThrowingTool("bash", "call2");
 
     expect(result.details).toMatchObject({
       status: "error",

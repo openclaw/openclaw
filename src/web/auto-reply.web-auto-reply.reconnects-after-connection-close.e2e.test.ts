@@ -105,19 +105,18 @@ describe("web auto-reply", () => {
     expect(listenerFactory).toHaveBeenCalledTimes(1);
 
     closeResolvers[0]?.();
-    const waitForSecondCall = async () => {
-      const started = Date.now();
-      while (listenerFactory.mock.calls.length < 2 && Date.now() - started < 200) {
-        await new Promise((resolve) => setTimeout(resolve, 10));
-      }
-    };
-    await waitForSecondCall();
+    await vi.waitFor(
+      () => {
+        expect(listenerFactory).toHaveBeenCalledTimes(2);
+      },
+      { timeout: 500, interval: 5 },
+    );
     expect(listenerFactory).toHaveBeenCalledTimes(2);
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Retry 1"));
 
     controller.abort();
     closeResolvers[1]?.();
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await Promise.resolve();
     await run;
   });
   it("forces reconnect when watchdog closes without onClose", async () => {
@@ -219,11 +218,15 @@ describe("web auto-reply", () => {
     expect(listenerFactory).toHaveBeenCalledTimes(1);
 
     closeResolvers.shift()?.();
-    await new Promise((resolve) => setTimeout(resolve, 15));
+    await vi.waitFor(
+      () => {
+        expect(listenerFactory).toHaveBeenCalledTimes(2);
+      },
+      { timeout: 500, interval: 5 },
+    );
     expect(listenerFactory).toHaveBeenCalledTimes(2);
 
     closeResolvers.shift()?.();
-    await new Promise((resolve) => setTimeout(resolve, 15));
     await run;
 
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("max attempts reached"));

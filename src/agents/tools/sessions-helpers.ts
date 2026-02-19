@@ -127,7 +127,7 @@ export function stripToolMessages(messages: unknown[]): unknown[] {
       return true;
     }
     const role = (msg as { role?: unknown }).role;
-    return role !== "toolResult";
+    return role !== "toolResult" && role !== "tool";
   });
 }
 

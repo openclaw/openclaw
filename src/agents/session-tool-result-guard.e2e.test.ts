@@ -33,6 +33,12 @@ function getPersistedMessages(sm: SessionManager): AgentMessage[] {
     .map((e) => (e as { message: AgentMessage }).message);
 }
 
+function expectPersistedRoles(sm: SessionManager, expectedRoles: AgentMessage["role"][]) {
+  const messages = getPersistedMessages(sm);
+  expect(messages.map((message) => message.role)).toEqual(expectedRoles);
+  return messages;
+}
+
 function getToolResultText(messages: AgentMessage[]): string {
   const toolResult = messages.find((m) => m.role === "toolResult") as {
     content: Array<{ type: string; text: string }>;
@@ -58,13 +64,8 @@ describe("installSessionToolResultGuard", () => {
       }),
     );
 
-    const entries = sm
-      .getEntries()
-      .filter((e) => e.type === "message")
-      .map((e) => (e as { message: AgentMessage }).message);
-
-    expect(entries.map((m) => m.role)).toEqual(["assistant", "toolResult", "assistant"]);
-    const synthetic = entries[1] as {
+    const messages = expectPersistedRoles(sm, ["assistant", "toolResult", "assistant"]);
+    const synthetic = messages[1] as {
       toolCallId?: string;
       isError?: boolean;
       content?: Array<{ type?: string; text?: string }>;
@@ -81,12 +82,7 @@ describe("installSessionToolResultGuard", () => {
     sm.appendMessage(toolCallMessage);
     guard.flushPendingToolResults();
 
-    const messages = sm
-      .getEntries()
-      .filter((e) => e.type === "message")
-      .map((e) => (e as { message: AgentMessage }).message);
-
-    expect(messages.map((m) => m.role)).toEqual(["assistant", "toolResult"]);
+    expectPersistedRoles(sm, ["assistant", "toolResult"]);
   });
 
   it("does not add synthetic toolResult when a matching one exists", () => {
@@ -103,12 +99,7 @@ describe("installSessionToolResultGuard", () => {
       }),
     );
 
-    const messages = sm
-      .getEntries()
-      .filter((e) => e.type === "message")
-      .map((e) => (e as { message: AgentMessage }).message);
-
-    expect(messages.map((m) => m.role)).toEqual(["assistant", "toolResult"]);
+    expectPersistedRoles(sm, ["assistant", "toolResult"]);
   });
 
   it("preserves ordering with multiple tool calls and partial results", () => {
@@ -139,12 +130,7 @@ describe("installSessionToolResultGuard", () => {
       }),
     );
 
-    const messages = sm
-      .getEntries()
-      .filter((e) => e.type === "message")
-      .map((e) => (e as { message: AgentMessage }).message);
-
-    expect(messages.map((m) => m.role)).toEqual([
+    const messages = expectPersistedRoles(sm, [
       "assistant", // tool calls
       "toolResult", // call_a real
       "toolResult", // synthetic for call_b
@@ -187,11 +173,7 @@ describe("installSessionToolResultGuard", () => {
       }),
     );
 
-    const messages = sm
-      .getEntries()
-      .filter((e) => e.type === "message")
-      .map((e) => (e as { message: AgentMessage }).message);
-    expect(messages.map((m) => m.role)).toEqual(["assistant", "toolResult"]);
+    expectPersistedRoles(sm, ["assistant", "toolResult"]);
   });
 
   it("drops malformed tool calls missing input before persistence", () => {
@@ -205,11 +187,7 @@ describe("installSessionToolResultGuard", () => {
       }),
     );
 
-    const messages = sm
-      .getEntries()
-      .filter((e) => e.type === "message")
-      .map((e) => (e as { message: AgentMessage }).message);
-
+    const messages = getPersistedMessages(sm);
     expect(messages).toHaveLength(0);
   });
 
@@ -231,12 +209,7 @@ describe("installSessionToolResultGuard", () => {
       }),
     );
 
-    const messages = sm
-      .getEntries()
-      .filter((e) => e.type === "message")
-      .map((e) => (e as { message: AgentMessage }).message);
-
-    expect(messages.map((m) => m.role)).toEqual(["assistant", "toolResult"]);
+    expectPersistedRoles(sm, ["assistant", "toolResult"]);
   });
 
   it("caps oversized tool result text during persistence", () => {

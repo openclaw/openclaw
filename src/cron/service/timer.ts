@@ -243,26 +243,43 @@ export async function onTimer(state: CronServiceState) {
       job.state.runningAtMs = startedAt;
       emit(state, { jobId: job.id, action: "started", runAtMs: startedAt });
 
-      const jobTimeoutMs =
+      const configuredTimeoutMs =
         job.payload.kind === "agentTurn" && typeof job.payload.timeoutSeconds === "number"
-          ? job.payload.timeoutSeconds * 1_000
+          ? Math.floor(job.payload.timeoutSeconds * 1_000)
+          : undefined;
+      const jobTimeoutMs =
+        configuredTimeoutMs !== undefined
+          ? configuredTimeoutMs <= 0
+            ? undefined
+            : configuredTimeoutMs
           : DEFAULT_JOB_TIMEOUT_MS;
 
       try {
-        let timeoutId: NodeJS.Timeout;
-        const result = await Promise.race([
-          executeJobCore(state, job),
-          new Promise<never>((_, reject) => {
-            timeoutId = setTimeout(
-              () => reject(new Error("cron: job execution timed out")),
-              jobTimeoutMs,
-            );
-          }),
-        ]).finally(() => clearTimeout(timeoutId!));
+        const result =
+          typeof jobTimeoutMs === "number"
+            ? await (async () => {
+                let timeoutId: NodeJS.Timeout | undefined;
+                try {
+                  return await Promise.race([
+                    executeJobCore(state, job),
+                    new Promise<never>((_, reject) => {
+                      timeoutId = setTimeout(
+                        () => reject(new Error("cron: job execution timed out")),
+                        jobTimeoutMs,
+                      );
+                    }),
+                  ]);
+                } finally {
+                  if (timeoutId) {
+                    clearTimeout(timeoutId);
+                  }
+                }
+              })()
+            : await executeJobCore(state, job);
         results.push({ jobId: id, ...result, startedAt, endedAt: state.deps.nowMs() });
       } catch (err) {
         state.deps.log.warn(
-          { jobId: id, jobName: job.name, timeoutMs: jobTimeoutMs },
+          { jobId: id, jobName: job.name, timeoutMs: jobTimeoutMs ?? null },
           `cron: job failed: ${String(err)}`,
         );
         results.push({

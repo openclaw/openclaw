@@ -125,12 +125,19 @@ function createErrnoError(code: string) {
   return err;
 }
 
-function mockWorkspaceStateRead(params: { onboardingCompletedAt?: string; errorCode?: string }) {
+function mockWorkspaceStateRead(params: {
+  onboardingCompletedAt?: string;
+  errorCode?: string;
+  rawContent?: string;
+}) {
   mocks.fsReadFile.mockImplementation(async (...args: unknown[]) => {
     const filePath = args[0];
     if (String(filePath).endsWith("workspace-state.json")) {
       if (params.errorCode) {
         throw createErrnoError(params.errorCode);
+      }
+      if (typeof params.rawContent === "string") {
+        return params.rawContent;
       }
       return JSON.stringify({
         onboardingCompletedAt: params.onboardingCompletedAt ?? "2026-02-15T14:00:00.000Z",
@@ -138,6 +145,15 @@ function mockWorkspaceStateRead(params: { onboardingCompletedAt?: string; errorC
     }
     throw createEnoentError();
   });
+}
+
+async function listAgentFileNames(agentId = "main") {
+  const { respond, promise } = makeCall("agents.files.list", { agentId });
+  await promise;
+
+  const [, result] = respond.mock.calls[0] ?? [];
+  const files = (result as { files: Array<{ name: string }> }).files;
+  return files.map((file) => file.name);
 }
 
 beforeEach(() => {
@@ -419,33 +435,28 @@ describe("agents.files.list", () => {
   });
 
   it("includes BOOTSTRAP.md when onboarding has not completed", async () => {
-    const { respond, promise } = makeCall("agents.files.list", { agentId: "main" });
-    await promise;
-
-    const [, result] = respond.mock.calls[0] ?? [];
-    const files = (result as { files: Array<{ name: string }> }).files;
-    expect(files.some((file) => file.name === "BOOTSTRAP.md")).toBe(true);
+    const names = await listAgentFileNames();
+    expect(names).toContain("BOOTSTRAP.md");
   });
 
   it("hides BOOTSTRAP.md when workspace onboarding is complete", async () => {
     mockWorkspaceStateRead({ onboardingCompletedAt: "2026-02-15T14:00:00.000Z" });
 
-    const { respond, promise } = makeCall("agents.files.list", { agentId: "main" });
-    await promise;
-
-    const [, result] = respond.mock.calls[0] ?? [];
-    const files = (result as { files: Array<{ name: string }> }).files;
-    expect(files.some((file) => file.name === "BOOTSTRAP.md")).toBe(false);
+    const names = await listAgentFileNames();
+    expect(names).not.toContain("BOOTSTRAP.md");
   });
 
   it("falls back to showing BOOTSTRAP.md when workspace state cannot be read", async () => {
     mockWorkspaceStateRead({ errorCode: "EACCES" });
 
-    const { respond, promise } = makeCall("agents.files.list", { agentId: "main" });
-    await promise;
+    const names = await listAgentFileNames();
+    expect(names).toContain("BOOTSTRAP.md");
+  });
 
-    const [, result] = respond.mock.calls[0] ?? [];
-    const files = (result as { files: Array<{ name: string }> }).files;
-    expect(files.some((file) => file.name === "BOOTSTRAP.md")).toBe(true);
+  it("falls back to showing BOOTSTRAP.md when workspace state is malformed JSON", async () => {
+    mockWorkspaceStateRead({ rawContent: "{" });
+
+    const names = await listAgentFileNames();
+    expect(names).toContain("BOOTSTRAP.md");
   });
 });

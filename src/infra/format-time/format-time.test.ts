@@ -66,9 +66,9 @@ describe("format-duration", () => {
 
   describe("formatDurationHuman", () => {
     it("returns fallback for invalid input", () => {
-      expect(formatDurationHuman(null)).toBe("n/a");
-      expect(formatDurationHuman(undefined)).toBe("n/a");
-      expect(formatDurationHuman(-100)).toBe("n/a");
+      for (const value of [null, undefined, -100]) {
+        expect(formatDurationHuman(value)).toBe("n/a");
+      }
       expect(formatDurationHuman(null, "unknown")).toBe("unknown");
     });
 
@@ -120,42 +120,46 @@ describe("format-duration", () => {
 
 describe("format-datetime", () => {
   describe("resolveTimezone", () => {
-    it("returns valid IANA timezone strings", () => {
-      expect(resolveTimezone("America/New_York")).toBe("America/New_York");
-      expect(resolveTimezone("Europe/London")).toBe("Europe/London");
-      expect(resolveTimezone("UTC")).toBe("UTC");
-    });
-
-    it("returns undefined for invalid timezones", () => {
-      expect(resolveTimezone("Invalid/Timezone")).toBeUndefined();
-      expect(resolveTimezone("garbage")).toBeUndefined();
-      expect(resolveTimezone("")).toBeUndefined();
+    it.each([
+      { input: "America/New_York", expected: "America/New_York" },
+      { input: "Europe/London", expected: "Europe/London" },
+      { input: "UTC", expected: "UTC" },
+      { input: "Invalid/Timezone", expected: undefined },
+      { input: "garbage", expected: undefined },
+      { input: "", expected: undefined },
+    ] as const)("resolves $input", ({ input, expected }) => {
+      expect(resolveTimezone(input)).toBe(expected);
     });
   });
 
   describe("formatUtcTimestamp", () => {
-    it("formats without seconds by default", () => {
+    it.each([
+      { displaySeconds: false, expected: "2024-01-15T14:30Z" },
+      { displaySeconds: true, expected: "2024-01-15T14:30:45Z" },
+    ])("formats UTC timestamp (displaySeconds=$displaySeconds)", ({ displaySeconds, expected }) => {
       const date = new Date("2024-01-15T14:30:45.000Z");
-      expect(formatUtcTimestamp(date)).toBe("2024-01-15T14:30Z");
-    });
-
-    it("includes seconds when requested", () => {
-      const date = new Date("2024-01-15T14:30:45.000Z");
-      expect(formatUtcTimestamp(date, { displaySeconds: true })).toBe("2024-01-15T14:30:45Z");
+      const result = displaySeconds
+        ? formatUtcTimestamp(date, { displaySeconds: true })
+        : formatUtcTimestamp(date);
+      expect(result).toBe(expected);
     });
   });
 
   describe("formatZonedTimestamp", () => {
-    it("formats with timezone abbreviation", () => {
-      const date = new Date("2024-01-15T14:30:00.000Z");
-      const result = formatZonedTimestamp(date, { timeZone: "UTC" });
-      expect(result).toMatch(/2024-01-15 14:30/);
-    });
-
-    it("includes seconds when requested", () => {
-      const date = new Date("2024-01-15T14:30:45.000Z");
-      const result = formatZonedTimestamp(date, { timeZone: "UTC", displaySeconds: true });
-      expect(result).toMatch(/2024-01-15 14:30:45/);
+    it.each([
+      {
+        date: new Date("2024-01-15T14:30:00.000Z"),
+        options: { timeZone: "UTC" },
+        expected: /2024-01-15 14:30/,
+      },
+      {
+        date: new Date("2024-01-15T14:30:45.000Z"),
+        options: { timeZone: "UTC", displaySeconds: true },
+        expected: /2024-01-15 14:30:45/,
+      },
+    ] as const)("formats zoned timestamp", ({ date, options, expected }) => {
+      const result = formatZonedTimestamp(date, options);
+      expect(result).toMatch(expected);
     });
   });
 });
@@ -163,9 +167,9 @@ describe("format-datetime", () => {
 describe("format-relative", () => {
   describe("formatTimeAgo", () => {
     it("returns fallback for invalid input", () => {
-      expect(formatTimeAgo(null)).toBe("unknown");
-      expect(formatTimeAgo(undefined)).toBe("unknown");
-      expect(formatTimeAgo(-100)).toBe("unknown");
+      for (const value of [null, undefined, -100]) {
+        expect(formatTimeAgo(value)).toBe("unknown");
+      }
       expect(formatTimeAgo(null, { fallback: "n/a" })).toBe("n/a");
     });
 
@@ -192,23 +196,22 @@ describe("format-relative", () => {
 
   describe("formatRelativeTimestamp", () => {
     it("returns fallback for invalid input", () => {
-      expect(formatRelativeTimestamp(null)).toBe("n/a");
-      expect(formatRelativeTimestamp(undefined)).toBe("n/a");
+      for (const value of [null, undefined]) {
+        expect(formatRelativeTimestamp(value)).toBe("n/a");
+      }
       expect(formatRelativeTimestamp(null, { fallback: "unknown" })).toBe("unknown");
     });
 
-    it("formats past timestamps", () => {
+    it.each([
+      { offsetMs: -10000, expected: "just now" },
+      { offsetMs: -300000, expected: "5m ago" },
+      { offsetMs: -7200000, expected: "2h ago" },
+      { offsetMs: 30000, expected: "in <1m" },
+      { offsetMs: 300000, expected: "in 5m" },
+      { offsetMs: 7200000, expected: "in 2h" },
+    ])("formats relative timestamp for offset $offsetMs", ({ offsetMs, expected }) => {
       const now = Date.now();
-      expect(formatRelativeTimestamp(now - 10000)).toBe("just now");
-      expect(formatRelativeTimestamp(now - 300000)).toBe("5m ago");
-      expect(formatRelativeTimestamp(now - 7200000)).toBe("2h ago");
-    });
-
-    it("formats future timestamps", () => {
-      const now = Date.now();
-      expect(formatRelativeTimestamp(now + 30000)).toBe("in <1m");
-      expect(formatRelativeTimestamp(now + 300000)).toBe("in 5m");
-      expect(formatRelativeTimestamp(now + 7200000)).toBe("in 2h");
+      expect(formatRelativeTimestamp(now + offsetMs)).toBe(expected);
     });
 
     it("falls back to date for old timestamps when enabled", () => {

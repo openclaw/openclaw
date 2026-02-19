@@ -10,6 +10,7 @@ import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
   ackDelivery,
   computeBackoffMs,
+  type DeliverFn,
   enqueueDelivery,
   failDelivery,
   loadPendingDeliveries,
@@ -36,7 +37,7 @@ import {
   normalizeOutboundPayloads,
   normalizeOutboundPayloadsForJson,
 } from "./payloads.js";
-import { resolveOutboundTarget, resolveSessionDeliveryTarget } from "./targets.js";
+import { resolveOutboundTarget } from "./targets.js";
 
 describe("delivery-queue", () => {
   let tmpDir: string;
@@ -177,22 +178,38 @@ describe("delivery-queue", () => {
   describe("recoverPendingDeliveries", () => {
     const noopDelay = async () => {};
     const baseCfg = {};
-
-    it("recovers entries from a simulated crash", async () => {
-      // Manually create two queue entries as if gateway crashed before delivery.
+    const createLog = () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() });
+    const enqueueCrashRecoveryEntries = async () => {
       await enqueueDelivery({ channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] }, tmpDir);
       await enqueueDelivery({ channel: "telegram", to: "2", payloads: [{ text: "b" }] }, tmpDir);
-
-      const deliver = vi.fn().mockResolvedValue([]);
-      const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-
+    };
+    const runRecovery = async ({
+      deliver,
+      log = createLog(),
+      delay = noopDelay,
+      maxRecoveryMs,
+    }: {
+      deliver: ReturnType<typeof vi.fn>;
+      log?: ReturnType<typeof createLog>;
+      delay?: (ms: number) => Promise<void>;
+      maxRecoveryMs?: number;
+    }) => {
       const result = await recoverPendingDeliveries({
-        deliver,
+        deliver: deliver as DeliverFn,
         log,
         cfg: baseCfg,
         stateDir: tmpDir,
-        delay: noopDelay,
+        delay,
+        ...(maxRecoveryMs === undefined ? {} : { maxRecoveryMs }),
       });
+      return { result, log };
+    };
+
+    it("recovers entries from a simulated crash", async () => {
+      // Manually create queue entries as if gateway crashed before delivery.
+      await enqueueCrashRecoveryEntries();
+      const deliver = vi.fn().mockResolvedValue([]);
+      const { result } = await runRecovery({ deliver });
 
       expect(deliver).toHaveBeenCalledTimes(2);
       expect(result.recovered).toBe(2);
@@ -216,15 +233,7 @@ describe("delivery-queue", () => {
       fs.writeFileSync(filePath, JSON.stringify(entry), "utf-8");
 
       const deliver = vi.fn();
-      const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-
-      const result = await recoverPendingDeliveries({
-        deliver,
-        log,
-        cfg: baseCfg,
-        stateDir: tmpDir,
-        delay: noopDelay,
-      });
+      const { result } = await runRecovery({ deliver });
 
       expect(deliver).not.toHaveBeenCalled();
       expect(result.skipped).toBe(1);
@@ -238,15 +247,7 @@ describe("delivery-queue", () => {
       await enqueueDelivery({ channel: "slack", to: "#ch", payloads: [{ text: "x" }] }, tmpDir);
 
       const deliver = vi.fn().mockRejectedValue(new Error("network down"));
-      const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-
-      const result = await recoverPendingDeliveries({
-        deliver,
-        log,
-        cfg: baseCfg,
-        stateDir: tmpDir,
-        delay: noopDelay,
-      });
+      const { result } = await runRecovery({ deliver });
 
       expect(result.failed).toBe(1);
       expect(result.recovered).toBe(0);
@@ -262,15 +263,7 @@ describe("delivery-queue", () => {
       await enqueueDelivery({ channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] }, tmpDir);
 
       const deliver = vi.fn().mockResolvedValue([]);
-      const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-
-      await recoverPendingDeliveries({
-        deliver,
-        log,
-        cfg: baseCfg,
-        stateDir: tmpDir,
-        delay: noopDelay,
-      });
+      await runRecovery({ deliver });
 
       expect(deliver).toHaveBeenCalledWith(expect.objectContaining({ skipQueue: true }));
     });
@@ -294,15 +287,7 @@ describe("delivery-queue", () => {
       );
 
       const deliver = vi.fn().mockResolvedValue([]);
-      const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-
-      await recoverPendingDeliveries({
-        deliver,
-        log,
-        cfg: baseCfg,
-        stateDir: tmpDir,
-        delay: noopDelay,
-      });
+      await runRecovery({ deliver });
 
       expect(deliver).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -319,19 +304,12 @@ describe("delivery-queue", () => {
     });
 
     it("respects maxRecoveryMs time budget", async () => {
-      await enqueueDelivery({ channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] }, tmpDir);
-      await enqueueDelivery({ channel: "telegram", to: "2", payloads: [{ text: "b" }] }, tmpDir);
+      await enqueueCrashRecoveryEntries();
       await enqueueDelivery({ channel: "slack", to: "#c", payloads: [{ text: "c" }] }, tmpDir);
 
       const deliver = vi.fn().mockResolvedValue([]);
-      const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-
-      const result = await recoverPendingDeliveries({
+      const { result, log } = await runRecovery({
         deliver,
-        log,
-        cfg: baseCfg,
-        stateDir: tmpDir,
-        delay: noopDelay,
         maxRecoveryMs: 0, // Immediate timeout -- no entries should be processed.
       });
 
@@ -360,13 +338,8 @@ describe("delivery-queue", () => {
 
       const deliver = vi.fn().mockResolvedValue([]);
       const delay = vi.fn(async () => {});
-      const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-
-      const result = await recoverPendingDeliveries({
+      const { result, log } = await runRecovery({
         deliver,
-        log,
-        cfg: baseCfg,
-        stateDir: tmpDir,
         delay,
         maxRecoveryMs: 1000,
       });
@@ -383,15 +356,7 @@ describe("delivery-queue", () => {
 
     it("returns zeros when queue is empty", async () => {
       const deliver = vi.fn();
-      const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-
-      const result = await recoverPendingDeliveries({
-        deliver,
-        log,
-        cfg: baseCfg,
-        stateDir: tmpDir,
-        delay: noopDelay,
-      });
+      const { result } = await runRecovery({ deliver });
 
       expect(result).toEqual({ recovered: 0, failed: 0, skipped: 0 });
       expect(deliver).not.toHaveBeenCalled();
@@ -621,18 +586,6 @@ const discordConfig = {
 } as OpenClawConfig;
 
 describe("outbound policy", () => {
-  it("blocks cross-provider sends by default", () => {
-    expect(() =>
-      enforceCrossContextPolicy({
-        cfg: slackConfig,
-        channel: "telegram",
-        action: "send",
-        args: { to: "telegram:@ops" },
-        toolContext: { currentChannelId: "C12345678", currentChannelProvider: "slack" },
-      }),
-    ).toThrow(/Cross-context messaging denied/);
-  });
-
   it("allows cross-provider sends when enabled", () => {
     const cfg = {
       ...slackConfig,
@@ -650,23 +603,6 @@ describe("outbound policy", () => {
         toolContext: { currentChannelId: "C12345678", currentChannelProvider: "slack" },
       }),
     ).not.toThrow();
-  });
-
-  it("blocks same-provider cross-context when disabled", () => {
-    const cfg = {
-      ...slackConfig,
-      tools: { message: { crossContext: { allowWithinProvider: false } } },
-    } as OpenClawConfig;
-
-    expect(() =>
-      enforceCrossContextPolicy({
-        cfg,
-        channel: "slack",
-        action: "send",
-        args: { to: "C99999999" },
-        toolContext: { currentChannelId: "C12345678", currentChannelProvider: "slack" },
-      }),
-    ).toThrow(/Cross-context messaging denied/);
   });
 
   it("uses components when available and preferred", async () => {
@@ -979,106 +915,5 @@ describe("resolveOutboundTarget", () => {
     if (!res.ok) {
       expect(res.error.message).toContain("WebChat");
     }
-  });
-});
-
-describe("resolveSessionDeliveryTarget", () => {
-  it("derives implicit delivery from the last route", () => {
-    const resolved = resolveSessionDeliveryTarget({
-      entry: {
-        sessionId: "sess-1",
-        updatedAt: 1,
-        lastChannel: " whatsapp ",
-        lastTo: " +1555 ",
-        lastAccountId: " acct-1 ",
-      },
-      requestedChannel: "last",
-    });
-
-    expect(resolved).toEqual({
-      channel: "whatsapp",
-      to: "+1555",
-      accountId: "acct-1",
-      threadId: undefined,
-      mode: "implicit",
-      lastChannel: "whatsapp",
-      lastTo: "+1555",
-      lastAccountId: "acct-1",
-      lastThreadId: undefined,
-    });
-  });
-
-  it("prefers explicit targets without reusing lastTo", () => {
-    const resolved = resolveSessionDeliveryTarget({
-      entry: {
-        sessionId: "sess-2",
-        updatedAt: 1,
-        lastChannel: "whatsapp",
-        lastTo: "+1555",
-      },
-      requestedChannel: "telegram",
-    });
-
-    expect(resolved).toEqual({
-      channel: "telegram",
-      to: undefined,
-      accountId: undefined,
-      threadId: undefined,
-      mode: "implicit",
-      lastChannel: "whatsapp",
-      lastTo: "+1555",
-      lastAccountId: undefined,
-      lastThreadId: undefined,
-    });
-  });
-
-  it("allows mismatched lastTo when configured", () => {
-    const resolved = resolveSessionDeliveryTarget({
-      entry: {
-        sessionId: "sess-3",
-        updatedAt: 1,
-        lastChannel: "whatsapp",
-        lastTo: "+1555",
-      },
-      requestedChannel: "telegram",
-      allowMismatchedLastTo: true,
-    });
-
-    expect(resolved).toEqual({
-      channel: "telegram",
-      to: "+1555",
-      accountId: undefined,
-      threadId: undefined,
-      mode: "implicit",
-      lastChannel: "whatsapp",
-      lastTo: "+1555",
-      lastAccountId: undefined,
-      lastThreadId: undefined,
-    });
-  });
-
-  it("falls back to a provided channel when requested is unsupported", () => {
-    const resolved = resolveSessionDeliveryTarget({
-      entry: {
-        sessionId: "sess-4",
-        updatedAt: 1,
-        lastChannel: "whatsapp",
-        lastTo: "+1555",
-      },
-      requestedChannel: "webchat",
-      fallbackChannel: "slack",
-    });
-
-    expect(resolved).toEqual({
-      channel: "slack",
-      to: undefined,
-      accountId: undefined,
-      threadId: undefined,
-      mode: "implicit",
-      lastChannel: "whatsapp",
-      lastTo: "+1555",
-      lastAccountId: undefined,
-      lastThreadId: undefined,
-    });
   });
 });

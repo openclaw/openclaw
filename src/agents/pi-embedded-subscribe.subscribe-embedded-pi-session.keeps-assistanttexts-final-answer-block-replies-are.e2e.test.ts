@@ -1,51 +1,26 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
+import {
+  createStubSessionHarness,
+  emitAssistantTextDelta,
+  emitAssistantTextEnd,
+} from "./pi-embedded-subscribe.e2e-harness.js";
 import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
-
-type StubSession = {
-  subscribe: (fn: (evt: unknown) => void) => () => void;
-};
 
 describe("subscribeEmbeddedPiSession", () => {
   it("keeps assistantTexts to the final answer when block replies are disabled", () => {
-    let handler: ((evt: unknown) => void) | undefined;
-    const session: StubSession = {
-      subscribe: (fn) => {
-        handler = fn;
-        return () => {};
-      },
-    };
+    const { session, emit } = createStubSessionHarness();
 
     const subscription = subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
+      session,
       runId: "run",
       reasoningMode: "on",
     });
 
-    handler?.({ type: "message_start", message: { role: "assistant" } });
-    handler?.({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: {
-        type: "text_delta",
-        delta: "Final ",
-      },
-    });
-    handler?.({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: {
-        type: "text_delta",
-        delta: "answer",
-      },
-    });
-    handler?.({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: {
-        type: "text_end",
-      },
-    });
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta({ emit, delta: "Final " });
+    emitAssistantTextDelta({ emit, delta: "answer" });
+    emitAssistantTextEnd({ emit });
 
     const assistantMessage = {
       role: "assistant",
@@ -55,45 +30,25 @@ describe("subscribeEmbeddedPiSession", () => {
       ],
     } as AssistantMessage;
 
-    handler?.({ type: "message_end", message: assistantMessage });
+    emit({ type: "message_end", message: assistantMessage });
 
     expect(subscription.assistantTexts).toEqual(["Final answer"]);
   });
   it("suppresses partial replies when reasoning is enabled and block replies are disabled", () => {
-    let handler: ((evt: unknown) => void) | undefined;
-    const session: StubSession = {
-      subscribe: (fn) => {
-        handler = fn;
-        return () => {};
-      },
-    };
+    const { session, emit } = createStubSessionHarness();
 
     const onPartialReply = vi.fn();
 
     const subscription = subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
+      session,
       runId: "run",
       reasoningMode: "on",
       onPartialReply,
     });
 
-    handler?.({ type: "message_start", message: { role: "assistant" } });
-    handler?.({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: {
-        type: "text_delta",
-        delta: "Draft ",
-      },
-    });
-    handler?.({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: {
-        type: "text_delta",
-        delta: "reply",
-      },
-    });
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta({ emit, delta: "Draft " });
+    emitAssistantTextDelta({ emit, delta: "reply" });
 
     expect(onPartialReply).not.toHaveBeenCalled();
 
@@ -105,15 +60,8 @@ describe("subscribeEmbeddedPiSession", () => {
       ],
     } as AssistantMessage;
 
-    handler?.({ type: "message_end", message: assistantMessage });
-    handler?.({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: {
-        type: "text_end",
-        content: "Draft reply",
-      },
-    });
+    emit({ type: "message_end", message: assistantMessage });
+    emitAssistantTextEnd({ emit, content: "Draft reply" });
 
     expect(onPartialReply).not.toHaveBeenCalled();
     expect(subscription.assistantTexts).toEqual(["Final answer"]);

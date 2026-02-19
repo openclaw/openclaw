@@ -115,5 +115,42 @@ describe("resolveGatewayRuntimeConfig", () => {
       expect(result.authMode).toBe("token");
       expect(result.bindHost).toBe("0.0.0.0");
     });
+
+    it("should allow loopback binding with explicit none mode", async () => {
+      const cfg = {
+        gateway: {
+          bind: "loopback" as const,
+          auth: {
+            mode: "none" as const,
+          },
+        },
+      };
+
+      const result = await resolveGatewayRuntimeConfig({
+        cfg,
+        port: 18789,
+      });
+
+      expect(result.authMode).toBe("none");
+      expect(result.bindHost).toBe("127.0.0.1");
+    });
+
+    it("should reject lan binding with explicit none mode", async () => {
+      const cfg = {
+        gateway: {
+          bind: "lan" as const,
+          auth: {
+            mode: "none" as const,
+          },
+        },
+      };
+
+      await expect(
+        resolveGatewayRuntimeConfig({
+          cfg,
+          port: 18789,
+        }),
+      ).rejects.toThrow("refusing to bind gateway");
+    });
   });
 });

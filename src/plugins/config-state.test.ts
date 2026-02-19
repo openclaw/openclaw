@@ -14,18 +14,17 @@ describe("normalizePluginsConfig", () => {
     expect(result.slots.memory).toBe("custom-memory");
   });
 
-  it("disables memory slot when set to 'none'", () => {
-    const result = normalizePluginsConfig({
-      slots: { memory: "none" },
-    });
-    expect(result.slots.memory).toBeNull();
-  });
-
-  it("disables memory slot when set to 'None' (case insensitive)", () => {
-    const result = normalizePluginsConfig({
-      slots: { memory: "None" },
-    });
-    expect(result.slots.memory).toBeNull();
+  it("disables memory slot when set to 'none' (case insensitive)", () => {
+    expect(
+      normalizePluginsConfig({
+        slots: { memory: "none" },
+      }).slots.memory,
+    ).toBeNull();
+    expect(
+      normalizePluginsConfig({
+        slots: { memory: "None" },
+      }).slots.memory,
+    ).toBeNull();
   });
 
   it("trims whitespace from memory slot value", () => {

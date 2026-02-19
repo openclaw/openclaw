@@ -290,6 +290,8 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.imageModel.primary":
     "Optional image model (provider/model) used when the primary model lacks image input.",
   "agents.defaults.imageModel.fallbacks": "Ordered fallback image models (provider/model).",
+  "agents.defaults.imageMaxDimensionPx":
+    "Max image side length in pixels when sanitizing transcript/tool-result image payloads (default: 1200).",
   "agents.defaults.cliBackends": "Optional CLI backends for text-only fallback (claude-cli, etc.).",
   "agents.defaults.humanDelay.mode": 'Delay style for block replies ("off", "natural", "custom").',
   "agents.defaults.humanDelay.minMs": "Minimum delay in ms for custom humanDelay (default: 800).",
@@ -305,7 +307,7 @@ export const FIELD_HELP: Record<string, string> = {
     "How long bash waits before backgrounding (default: 2000; 0 backgrounds immediately).",
   "commands.config": "Allow /config chat command to read/write config on disk (default: false).",
   "commands.debug": "Allow /debug chat command for runtime-only overrides (default: false).",
-  "commands.restart": "Allow /restart and gateway restart tool actions (default: false).",
+  "commands.restart": "Allow /restart and gateway restart tool actions (default: true).",
   "commands.useAccessGroups": "Enforce access-group allowlists/policies for commands.",
   "commands.ownerAllowFrom":
     "Explicit owner allowlist for owner-only tools/commands. Use channel-native IDs (optionally prefixed like \"whatsapp:+15551234567\"). '*' is ignored.",

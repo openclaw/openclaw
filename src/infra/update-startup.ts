@@ -12,7 +12,25 @@ type UpdateCheckState = {
   lastCheckedAt?: string;
   lastNotifiedVersion?: string;
   lastNotifiedTag?: string;
+  lastAvailableVersion?: string;
+  lastAvailableTag?: string;
 };
+
+export type UpdateAvailable = {
+  currentVersion: string;
+  latestVersion: string;
+  channel: string;
+};
+
+let updateAvailableCache: UpdateAvailable | null = null;
+
+export function getUpdateAvailable(): UpdateAvailable | null {
+  return updateAvailableCache;
+}
+
+export function resetUpdateAvailableStateForTest(): void {
+  updateAvailableCache = null;
+}
 
 const UPDATE_CHECK_FILENAME = "update-check.json";
 const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
@@ -42,11 +60,54 @@ async function writeState(statePath: string, state: UpdateCheckState): Promise<v
   await fs.writeFile(statePath, JSON.stringify(state, null, 2), "utf-8");
 }
 
+function sameUpdateAvailable(a: UpdateAvailable | null, b: UpdateAvailable | null): boolean {
+  if (a === b) {
+    return true;
+  }
+  if (!a || !b) {
+    return false;
+  }
+  return (
+    a.currentVersion === b.currentVersion &&
+    a.latestVersion === b.latestVersion &&
+    a.channel === b.channel
+  );
+}
+
+function setUpdateAvailableCache(params: {
+  next: UpdateAvailable | null;
+  onUpdateAvailableChange?: (updateAvailable: UpdateAvailable | null) => void;
+}): void {
+  if (sameUpdateAvailable(updateAvailableCache, params.next)) {
+    return;
+  }
+  updateAvailableCache = params.next;
+  params.onUpdateAvailableChange?.(params.next);
+}
+
+function resolvePersistedUpdateAvailable(state: UpdateCheckState): UpdateAvailable | null {
+  const latestVersion = state.lastAvailableVersion?.trim();
+  if (!latestVersion) {
+    return null;
+  }
+  const cmp = compareSemverStrings(VERSION, latestVersion);
+  if (cmp == null || cmp >= 0) {
+    return null;
+  }
+  const channel = state.lastAvailableTag?.trim() || DEFAULT_PACKAGE_CHANNEL;
+  return {
+    currentVersion: VERSION,
+    latestVersion,
+    channel,
+  };
+}
+
 export async function runGatewayUpdateCheck(params: {
   cfg: ReturnType<typeof loadConfig>;
   log: { info: (msg: string, meta?: Record<string, unknown>) => void };
   isNixMode: boolean;
   allowInTests?: boolean;
+  onUpdateAvailableChange?: (updateAvailable: UpdateAvailable | null) => void;
 }): Promise<void> {
   if (shouldSkipCheck(Boolean(params.allowInTests))) {
     return;
@@ -62,6 +123,11 @@ export async function runGatewayUpdateCheck(params: {
   const state = await readState(statePath);
   const now = Date.now();
   const lastCheckedAt = state.lastCheckedAt ? Date.parse(state.lastCheckedAt) : null;
+  const persistedAvailable = resolvePersistedUpdateAvailable(state);
+  setUpdateAvailableCache({
+    next: persistedAvailable,
+    onUpdateAvailableChange: params.onUpdateAvailableChange,
+  });
   if (lastCheckedAt && Number.isFinite(lastCheckedAt)) {
     if (now - lastCheckedAt < UPDATE_CHECK_INTERVAL_MS) {
       return;
@@ -86,6 +152,12 @@ export async function runGatewayUpdateCheck(params: {
   };
 
   if (status.installKind !== "package") {
+    delete nextState.lastAvailableVersion;
+    delete nextState.lastAvailableTag;
+    setUpdateAvailableCache({
+      next: null,
+      onUpdateAvailableChange: params.onUpdateAvailableChange,
+    });
     await writeState(statePath, nextState);
     return;
   }
@@ -100,6 +172,17 @@ export async function runGatewayUpdateCheck(params: {
 
   const cmp = compareSemverStrings(VERSION, resolved.version);
   if (cmp != null && cmp < 0) {
+    const nextAvailable: UpdateAvailable = {
+      currentVersion: VERSION,
+      latestVersion: resolved.version,
+      channel: tag,
+    };
+    setUpdateAvailableCache({
+      next: nextAvailable,
+      onUpdateAvailableChange: params.onUpdateAvailableChange,
+    });
+    nextState.lastAvailableVersion = resolved.version;
+    nextState.lastAvailableTag = tag;
     const shouldNotify =
       state.lastNotifiedVersion !== resolved.version || state.lastNotifiedTag !== tag;
     if (shouldNotify) {
@@ -109,6 +192,13 @@ export async function runGatewayUpdateCheck(params: {
       nextState.lastNotifiedVersion = resolved.version;
       nextState.lastNotifiedTag = tag;
     }
+  } else {
+    delete nextState.lastAvailableVersion;
+    delete nextState.lastAvailableTag;
+    setUpdateAvailableCache({
+      next: null,
+      onUpdateAvailableChange: params.onUpdateAvailableChange,
+    });
   }
 
   await writeState(statePath, nextState);
@@ -118,6 +208,7 @@ export function scheduleGatewayUpdateCheck(params: {
   cfg: ReturnType<typeof loadConfig>;
   log: { info: (msg: string, meta?: Record<string, unknown>) => void };
   isNixMode: boolean;
+  onUpdateAvailableChange?: (updateAvailable: UpdateAvailable | null) => void;
 }): void {
   void runGatewayUpdateCheck(params).catch(() => {});
 }

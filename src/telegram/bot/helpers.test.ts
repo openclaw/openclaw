@@ -8,86 +8,62 @@ import {
 } from "./helpers.js";
 
 describe("resolveTelegramForumThreadId", () => {
-  it("returns undefined for non-forum groups even with messageThreadId", () => {
-    // Reply threads in regular groups should not create separate sessions
-    expect(resolveTelegramForumThreadId({ isForum: false, messageThreadId: 42 })).toBeUndefined();
+  it.each([
+    { isForum: false, messageThreadId: 42 },
+    { isForum: false, messageThreadId: undefined },
+    { isForum: undefined, messageThreadId: 99 },
+  ])("returns undefined for non-forum groups", (params) => {
+    // Reply threads in regular groups should not create separate sessions.
+    expect(resolveTelegramForumThreadId(params)).toBeUndefined();
   });
 
-  it("returns undefined for non-forum groups without messageThreadId", () => {
-    expect(
-      resolveTelegramForumThreadId({ isForum: false, messageThreadId: undefined }),
-    ).toBeUndefined();
-    expect(
-      resolveTelegramForumThreadId({ isForum: undefined, messageThreadId: 99 }),
-    ).toBeUndefined();
-  });
-
-  it("returns General topic (1) for forum groups without messageThreadId", () => {
-    expect(resolveTelegramForumThreadId({ isForum: true, messageThreadId: undefined })).toBe(1);
-    expect(resolveTelegramForumThreadId({ isForum: true, messageThreadId: null })).toBe(1);
-  });
-
-  it("returns the topic id for forum groups with messageThreadId", () => {
-    expect(resolveTelegramForumThreadId({ isForum: true, messageThreadId: 99 })).toBe(99);
+  it.each([
+    { isForum: true, messageThreadId: undefined, expected: 1 },
+    { isForum: true, messageThreadId: null, expected: 1 },
+    { isForum: true, messageThreadId: 99, expected: 99 },
+  ])("resolves forum topic ids", ({ expected, ...params }) => {
+    expect(resolveTelegramForumThreadId(params)).toBe(expected);
   });
 });
 
 describe("buildTelegramThreadParams", () => {
-  it("omits General topic thread id for message sends", () => {
-    expect(buildTelegramThreadParams({ id: 1, scope: "forum" })).toBeUndefined();
-  });
-
-  it("includes non-General topic thread ids", () => {
-    expect(buildTelegramThreadParams({ id: 99, scope: "forum" })).toEqual({
-      message_thread_id: 99,
-    });
-  });
-
-  it("includes thread id for dm topics", () => {
-    expect(buildTelegramThreadParams({ id: 1, scope: "dm" })).toEqual({
-      message_thread_id: 1,
-    });
-    expect(buildTelegramThreadParams({ id: 2, scope: "dm" })).toEqual({
-      message_thread_id: 2,
-    });
-  });
-
-  it("normalizes dm thread ids and skips non-positive values", () => {
-    expect(buildTelegramThreadParams({ id: 0, scope: "dm" })).toBeUndefined();
-    expect(buildTelegramThreadParams({ id: -1, scope: "dm" })).toBeUndefined();
-    expect(buildTelegramThreadParams({ id: 1.9, scope: "dm" })).toEqual({
-      message_thread_id: 1,
-    });
-  });
-
-  it("handles thread id 0 for non-dm scopes", () => {
+  it.each([
+    { input: { id: 1, scope: "forum" as const }, expected: undefined },
+    { input: { id: 99, scope: "forum" as const }, expected: { message_thread_id: 99 } },
+    { input: { id: 1, scope: "dm" as const }, expected: { message_thread_id: 1 } },
+    { input: { id: 2, scope: "dm" as const }, expected: { message_thread_id: 2 } },
+    { input: { id: 0, scope: "dm" as const }, expected: undefined },
+    { input: { id: -1, scope: "dm" as const }, expected: undefined },
+    { input: { id: 1.9, scope: "dm" as const }, expected: { message_thread_id: 1 } },
     // id=0 should be included for forum and none scopes (not falsy)
-    expect(buildTelegramThreadParams({ id: 0, scope: "forum" })).toEqual({
-      message_thread_id: 0,
-    });
-    expect(buildTelegramThreadParams({ id: 0, scope: "none" })).toEqual({
-      message_thread_id: 0,
-    });
-  });
-
-  it("normalizes thread ids to integers", () => {
-    expect(buildTelegramThreadParams({ id: 42.9, scope: "forum" })).toEqual({
-      message_thread_id: 42,
-    });
+    { input: { id: 0, scope: "forum" as const }, expected: { message_thread_id: 0 } },
+    { input: { id: 0, scope: "none" as const }, expected: { message_thread_id: 0 } },
+  ])("builds thread params", ({ input, expected }) => {
+    expect(buildTelegramThreadParams(input)).toEqual(expected);
   });
 });
 
 describe("buildTypingThreadParams", () => {
-  it("returns undefined when no thread id is provided", () => {
-    expect(buildTypingThreadParams(undefined)).toBeUndefined();
+  it.each([
+    { input: undefined, expected: undefined },
+    { input: 1, expected: { message_thread_id: 1 } },
+  ])("builds typing params", ({ input, expected }) => {
+    expect(buildTypingThreadParams(input)).toEqual(expected);
   });
+});
 
-  it("includes General topic thread id for typing indicators", () => {
-    expect(buildTypingThreadParams(1)).toEqual({ message_thread_id: 1 });
-  });
-
-  it("normalizes thread ids to integers", () => {
-    expect(buildTypingThreadParams(42.9)).toEqual({ message_thread_id: 42 });
+describe("thread id normalization", () => {
+  it.each([
+    {
+      build: () => buildTelegramThreadParams({ id: 42.9, scope: "forum" }),
+      expected: { message_thread_id: 42 },
+    },
+    {
+      build: () => buildTypingThreadParams(42.9),
+      expected: { message_thread_id: 42 },
+    },
+  ])("normalizes thread ids to integers", ({ build, expected }) => {
+    expect(build()).toEqual(expected);
   });
 });
 

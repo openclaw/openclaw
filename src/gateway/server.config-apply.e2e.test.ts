@@ -29,25 +29,27 @@ const openClient = async () => {
   return ws;
 };
 
+const sendConfigApply = async (ws: WebSocket, id: string, raw: unknown) => {
+  ws.send(
+    JSON.stringify({
+      type: "req",
+      id,
+      method: "config.apply",
+      params: { raw },
+    }),
+  );
+  return onceMessage<{ ok: boolean; error?: { message?: string } }>(ws, (o) => {
+    const msg = o as { type?: string; id?: string };
+    return msg.type === "res" && msg.id === id;
+  });
+};
+
 describe("gateway config.apply", () => {
   it("rejects invalid raw config", async () => {
     const ws = await openClient();
     try {
       const id = "req-1";
-      ws.send(
-        JSON.stringify({
-          type: "req",
-          id,
-          method: "config.apply",
-          params: {
-            raw: "{",
-          },
-        }),
-      );
-      const res = await onceMessage<{ ok: boolean; error?: { message?: string } }>(ws, (o) => {
-        const msg = o as { type?: string; id?: string };
-        return msg.type === "res" && msg.id === id;
-      });
+      const res = await sendConfigApply(ws, id, "{");
       expect(res.ok).toBe(false);
       expect(res.error?.message ?? "").toMatch(/invalid|SyntaxError/i);
     } finally {
@@ -59,20 +61,7 @@ describe("gateway config.apply", () => {
     const ws = await openClient();
     try {
       const id = "req-2";
-      ws.send(
-        JSON.stringify({
-          type: "req",
-          id,
-          method: "config.apply",
-          params: {
-            raw: { gateway: { mode: "local" } },
-          },
-        }),
-      );
-      const res = await onceMessage<{ ok: boolean; error?: { message?: string } }>(ws, (o) => {
-        const msg = o as { type?: string; id?: string };
-        return msg.type === "res" && msg.id === id;
-      });
+      const res = await sendConfigApply(ws, id, { gateway: { mode: "local" } });
       expect(res.ok).toBe(false);
       expect(res.error?.message ?? "").toContain("raw");
     } finally {

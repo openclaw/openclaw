@@ -453,7 +453,7 @@ Core actions:
 Notes:
 
 - Use `delayMs` (defaults to 2000) to avoid interrupting an in-flight reply.
-- `restart` is disabled by default; enable with `commands.restart: true`.
+- `restart` is enabled by default; set `commands.restart: false` to disable it.
 
 ### `sessions_list` / `sessions_history` / `sessions_send` / `sessions_spawn` / `session_status`
 
@@ -475,6 +475,9 @@ Notes:
 - `sessions_send` waits for final completion when `timeoutSeconds > 0`.
 - Delivery/announce happens after completion and is best-effort; `status: "ok"` confirms the agent run finished, not that the announce was delivered.
 - `sessions_spawn` starts a sub-agent run and posts an announce reply back to the requester chat.
+  - Reply format includes `Status`, `Result`, and compact stats.
+  - `Result` is the assistant completion text; if missing, the latest `toolResult` is used as fallback.
+- Manual completion-mode spawns send directly first, with queue fallback and retry on transient failures (`status: "ok"` means run finished, not that announce delivered).
 - `sessions_spawn` is non-blocking and returns `status: "accepted"` immediately.
 - `sessions_send` runs a reply‑back ping‑pong (reply `REPLY_SKIP` to stop; max turns via `session.agentToAgent.maxPingPongTurns`, 0–5).
 - After the ping‑pong, the target agent runs an **announce step**; reply `ANNOUNCE_SKIP` to suppress the announcement.

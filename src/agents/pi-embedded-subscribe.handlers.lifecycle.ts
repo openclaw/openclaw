@@ -35,6 +35,8 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
     const friendlyError = formatAssistantErrorText(lastAssistant, {
       cfg: ctx.params.config,
       sessionKey: ctx.params.sessionKey,
+      provider: lastAssistant.provider,
+      model: lastAssistant.model,
     });
     emitAgentEvent({
       runId: ctx.params.runId,
@@ -67,15 +69,7 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
     });
   }
 
-  if (ctx.params.onBlockReply) {
-    if (ctx.blockChunker?.hasBuffered()) {
-      ctx.blockChunker.drain({ force: true, emit: ctx.emitBlockChunk });
-      ctx.blockChunker.reset();
-    } else if (ctx.state.blockBuffer.length > 0) {
-      ctx.emitBlockChunk(ctx.state.blockBuffer);
-      ctx.state.blockBuffer = "";
-    }
-  }
+  ctx.flushBlockReplyBuffer();
 
   ctx.state.blockState.thinking = false;
   ctx.state.blockState.final = false;

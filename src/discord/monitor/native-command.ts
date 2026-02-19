@@ -790,6 +790,11 @@ async function dispatchDiscordCommandInteraction(params: {
     Timestamp: Date.now(),
     CommandAuthorized: commandAuthorized,
     CommandSource: "native" as const,
+    // Native slash contexts use To=slash:<user> for interaction routing.
+    // For follow-up delivery (for example subagent completion announces),
+    // preserve the real Discord target separately.
+    OriginatingChannel: "discord" as const,
+    OriginatingTo: isDirectMessage ? `user:${user.id}` : `channel:${channelId}`,
   });
 
   const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({

@@ -5,6 +5,7 @@ import { describe, expect, test } from "vitest";
 import {
   approveDevicePairing,
   getPairedDevice,
+  removePairedDevice,
   requestDevicePairing,
   rotateDeviceToken,
   verifyDeviceToken,
@@ -108,5 +109,16 @@ describe("device pairing tokens", () => {
         baseDir,
       }),
     ).resolves.toEqual({ ok: false, reason: "token-mismatch" });
+  });
+
+  test("removes paired devices by device id", async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
+    await setupPairedOperatorDevice(baseDir, ["operator.read"]);
+
+    const removed = await removePairedDevice("device-1", baseDir);
+    expect(removed).toEqual({ deviceId: "device-1" });
+    await expect(getPairedDevice("device-1", baseDir)).resolves.toBeNull();
+
+    await expect(removePairedDevice("device-1", baseDir)).resolves.toBeNull();
   });
 });

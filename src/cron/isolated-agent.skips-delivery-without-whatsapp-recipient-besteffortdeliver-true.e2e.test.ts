@@ -93,7 +93,7 @@ async function expectBestEffortTelegramNotDelivered(
   });
 }
 
-async function expectExplicitTelegramTargetDelivery(params: {
+async function expectExplicitTelegramTargetAnnounce(params: {
   payloads: Array<Record<string, unknown>>;
   expectedText: string;
 }): Promise<void> {
@@ -110,11 +110,17 @@ async function expectExplicitTelegramTargetDelivery(params: {
 
     expect(res.status).toBe("ok");
     expect(res.delivered).toBe(true);
-    expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
-    expect(deps.sendMessageTelegram).toHaveBeenCalledTimes(1);
-    const [to, text] = vi.mocked(deps.sendMessageTelegram).mock.calls[0] ?? [];
-    expect(to).toBe("123");
-    expect(text).toBe(params.expectedText);
+    expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+    const announceArgs = vi.mocked(runSubagentAnnounceFlow).mock.calls[0]?.[0] as
+      | {
+          requesterOrigin?: { channel?: string; to?: string };
+          roundOneReply?: string;
+        }
+      | undefined;
+    expect(announceArgs?.requesterOrigin?.channel).toBe("telegram");
+    expect(announceArgs?.requesterOrigin?.to).toBe("123");
+    expect(announceArgs?.roundOneReply).toBe(params.expectedText);
+    expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
   });
 }
 
@@ -123,17 +129,58 @@ describe("runCronIsolatedAgentTurn", () => {
     setupIsolatedAgentTurnMocks();
   });
 
-  it("delivers directly when delivery has an explicit target", async () => {
-    await expectExplicitTelegramTargetDelivery({
+  it("routes text-only explicit target delivery through announce flow", async () => {
+    await expectExplicitTelegramTargetAnnounce({
       payloads: [{ text: "hello from cron" }],
       expectedText: "hello from cron",
     });
   });
 
-  it("delivers the final payload text when delivery has an explicit target", async () => {
-    await expectExplicitTelegramTargetDelivery({
+  it("announces the final payload text when delivery has an explicit target", async () => {
+    await expectExplicitTelegramTargetAnnounce({
       payloads: [{ text: "Working on it..." }, { text: "Final weather summary" }],
       expectedText: "Final weather summary",
+    });
+  });
+
+  it("routes announce injection to the delivery-target session key", async () => {
+    await withTempCronHome(async (home) => {
+      const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
+      const deps = createCliDeps();
+      mockAgentPayloads([{ text: "hello from cron" }]);
+
+      const res = await runCronIsolatedAgentTurn({
+        cfg: makeCfg(home, storePath, {
+          session: {
+            store: storePath,
+            mainKey: "main",
+            dmScope: "per-channel-peer",
+          },
+          channels: {
+            telegram: { botToken: "t-1" },
+          },
+        }),
+        deps,
+        job: {
+          ...makeJob({ kind: "agentTurn", message: "do it" }),
+          delivery: { mode: "announce", channel: "telegram", to: "123" },
+        },
+        message: "do it",
+        sessionKey: "cron:job-1",
+        lane: "cron",
+      });
+
+      expect(res.status).toBe("ok");
+      expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+      const announceArgs = vi.mocked(runSubagentAnnounceFlow).mock.calls[0]?.[0] as
+        | {
+            requesterSessionKey?: string;
+            requesterOrigin?: { channel?: string; to?: string };
+          }
+        | undefined;
+      expect(announceArgs?.requesterSessionKey).toBe("agent:main:telegram:direct:123");
+      expect(announceArgs?.requesterOrigin?.channel).toBe("telegram");
+      expect(announceArgs?.requesterOrigin?.to).toBe("123");
     });
   });
 
@@ -225,13 +272,13 @@ describe("runCronIsolatedAgentTurn", () => {
     });
   });
 
-  it("fails when direct delivery fails and best-effort is disabled", async () => {
+  it("fails when structured direct delivery fails and best-effort is disabled", async () => {
     await withTempCronHome(async (home) => {
       const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
       const deps = createCliDeps({
         sendMessageTelegram: vi.fn().mockRejectedValue(new Error("boom")),
       });
-      mockAgentPayloads([{ text: "hello from cron" }]);
+      mockAgentPayloads([{ text: "hello from cron", mediaUrl: "https://example.com/img.png" }]);
       const res = await runTelegramAnnounceTurn({
         home,
         storePath,
@@ -246,7 +293,10 @@ describe("runCronIsolatedAgentTurn", () => {
     });
   });
 
-  it("ignores direct delivery failures when best-effort is enabled", async () => {
-    await expectBestEffortTelegramNotDelivered({ text: "hello from cron" });
+  it("ignores structured direct delivery failures when best-effort is enabled", async () => {
+    await expectBestEffortTelegramNotDelivered({
+      text: "hello from cron",
+      mediaUrl: "https://example.com/img.png",
+    });
   });
 });

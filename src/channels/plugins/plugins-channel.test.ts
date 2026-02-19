@@ -42,6 +42,11 @@ describe("signal target normalization", () => {
     expect(looksLikeSignalTargetId("signal:uuid:123e4567-e89b-12d3-a456-426614174000")).toBe(true);
   });
 
+  it("accepts signal-prefixed E.164 targets for detection", () => {
+    expect(looksLikeSignalTargetId("signal:+15551234567")).toBe(true);
+    expect(looksLikeSignalTargetId("signal:15551234567")).toBe(true);
+  });
+
   it("accepts compact UUIDs for target detection", () => {
     expect(looksLikeSignalTargetId("123e4567e89b12d3a456426614174000")).toBe(true);
     expect(looksLikeSignalTargetId("uuid:123e4567e89b12d3a456426614174000")).toBe(true);

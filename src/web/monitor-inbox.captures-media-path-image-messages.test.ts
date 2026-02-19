@@ -117,16 +117,13 @@ describe("web monitor inbox", () => {
     sock.ev.emit("messages.upsert", upsert);
     await new Promise((resolve) => setImmediate(resolve));
 
-    const content = await (async () => {
-      const deadline = Date.now() + 2_000;
-      while (Date.now() < deadline) {
-        if (fsSync.existsSync(logPath)) {
-          return fsSync.readFileSync(logPath, "utf-8");
-        }
-        await new Promise((resolve) => setTimeout(resolve, 25));
-      }
-      throw new Error(`expected log file to exist: ${logPath}`);
-    })();
+    await vi.waitFor(
+      () => {
+        expect(fsSync.existsSync(logPath)).toBe(true);
+      },
+      { timeout: 2_000, interval: 5 },
+    );
+    const content = fsSync.readFileSync(logPath, "utf-8");
     expect(content).toMatch(/web-inbound/);
     expect(content).toMatch(/ping/);
     await listener.close();

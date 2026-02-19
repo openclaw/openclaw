@@ -1,53 +1,18 @@
 import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  makeRuntime,
+  mockSessionsConfig,
+  runSessionsJson,
+  writeStore,
+} from "./sessions.test-helpers.js";
 
 // Disable colors for deterministic snapshots.
 process.env.FORCE_COLOR = "0";
 
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
-  return {
-    ...actual,
-    loadConfig: () => ({
-      agents: {
-        defaults: {
-          model: { primary: "pi:opus" },
-          models: { "pi:opus": {} },
-          contextTokens: 32000,
-        },
-      },
-    }),
-  };
-});
+mockSessionsConfig();
 
 import { sessionsCommand } from "./sessions.js";
-
-const makeRuntime = () => {
-  const logs: string[] = [];
-  return {
-    runtime: {
-      log: (msg: unknown) => logs.push(String(msg)),
-      error: (msg: unknown) => {
-        throw new Error(String(msg));
-      },
-      exit: (code: number) => {
-        throw new Error(`exit ${code}`);
-      },
-    },
-    logs,
-  } as const;
-};
-
-const writeStore = (data: unknown) => {
-  const file = path.join(
-    os.tmpdir(),
-    `sessions-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
-  );
-  fs.writeFileSync(file, JSON.stringify(data, null, 2));
-  return file;
-};
 
 describe("sessionsCommand", () => {
   beforeEach(() => {
@@ -126,23 +91,61 @@ describe("sessionsCommand", () => {
       },
     });
 
-    const { runtime, logs } = makeRuntime();
-    await sessionsCommand({ store, json: true }, runtime);
-
-    fs.rmSync(store);
-
-    const payload = JSON.parse(logs[0] ?? "{}") as {
+    const payload = await runSessionsJson<{
       sessions?: Array<{
         key: string;
         totalTokens: number | null;
         totalTokensFresh: boolean;
       }>;
-    };
+    }>(sessionsCommand, store);
     const main = payload.sessions?.find((row) => row.key === "main");
     const group = payload.sessions?.find((row) => row.key === "discord:group:demo");
     expect(main?.totalTokens).toBe(2000);
     expect(main?.totalTokensFresh).toBe(true);
     expect(group?.totalTokens).toBeNull();
     expect(group?.totalTokensFresh).toBe(false);
+  });
+
+  it("applies --active filtering in JSON output", async () => {
+    const store = writeStore(
+      {
+        recent: {
+          sessionId: "recent",
+          updatedAt: Date.now() - 5 * 60_000,
+          model: "pi:opus",
+        },
+        stale: {
+          sessionId: "stale",
+          updatedAt: Date.now() - 45 * 60_000,
+          model: "pi:opus",
+        },
+      },
+      "sessions-active",
+    );
+
+    const payload = await runSessionsJson<{
+      sessions?: Array<{
+        key: string;
+      }>;
+    }>(sessionsCommand, store, { active: "10" });
+    expect(payload.sessions?.map((row) => row.key)).toEqual(["recent"]);
+  });
+
+  it("rejects invalid --active values", async () => {
+    const store = writeStore(
+      {
+        demo: {
+          sessionId: "demo",
+          updatedAt: Date.now() - 5 * 60_000,
+        },
+      },
+      "sessions-active-invalid",
+    );
+    const { runtime, errors } = makeRuntime();
+
+    await expect(sessionsCommand({ store, active: "0" }, runtime)).rejects.toThrow("exit 1");
+    expect(errors[0]).toContain("--active must be a positive integer");
+
+    fs.rmSync(store);
   });
 });

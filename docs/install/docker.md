@@ -129,6 +129,7 @@ export OPENCLAW_EXTRA_MOUNTS="$HOME/.codex:/home/node/.codex:ro,$HOME/github:/ho
 Notes:
 
 - Paths must be shared with Docker Desktop on macOS/Windows.
+- Each entry must be `source:target[:options]` with no spaces, tabs, or newlines.
 - If you edit `OPENCLAW_EXTRA_MOUNTS`, rerun `docker-setup.sh` to regenerate the
   extra compose file.
 - `docker-compose.extra.yml` is generated. Don’t hand-edit it.
@@ -158,6 +159,7 @@ export OPENCLAW_EXTRA_MOUNTS="$HOME/.codex:/home/node/.codex:ro,$HOME/github:/ho
 
 Notes:
 
+- Named volumes must match `^[A-Za-z0-9][A-Za-z0-9_.-]*$`.
 - If you change `OPENCLAW_HOME_VOLUME`, rerun `docker-setup.sh` to regenerate the
   extra compose file.
 - The named volume persists until removed with `docker volume rm <name>`.

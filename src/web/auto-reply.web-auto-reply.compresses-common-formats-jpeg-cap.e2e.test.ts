@@ -3,6 +3,7 @@ import sharp from "sharp";
 import { describe, expect, it, vi } from "vitest";
 import { monitorWebChannel } from "./auto-reply.js";
 import {
+  createMockWebListener,
   installWebAutoReplyTestHomeHooks,
   installWebAutoReplyUnitTestHooks,
   resetLoadConfigMock,
@@ -16,18 +17,6 @@ describe("web auto-reply", () => {
   installWebAutoReplyUnitTestHooks({ pinDns: true });
   type ListenerFactory = NonNullable<Parameters<typeof monitorWebChannel>[1]>;
 
-  function createMockListener() {
-    return {
-      close: vi.fn(async () => undefined),
-      onClose: new Promise<import("./inbound.js").WebListenerCloseReason>(() => {}),
-      signalClose: vi.fn(),
-      sendMessage: vi.fn(async () => ({ messageId: "msg-1" })),
-      sendPoll: vi.fn(async () => ({ messageId: "poll-1" })),
-      sendReaction: vi.fn(async () => undefined),
-      sendComposingTo: vi.fn(async () => undefined),
-    };
-  }
-
   async function setupSingleInboundMessage(params: {
     resolverValue: { text: string; mediaUrl: string };
     sendMedia: ReturnType<typeof vi.fn>;
@@ -40,7 +29,7 @@ describe("web auto-reply", () => {
     let capturedOnMessage: ((msg: WebInboundMessage) => Promise<void>) | undefined;
     const listenerFactory: ListenerFactory = async ({ onMessage }) => {
       capturedOnMessage = onMessage;
-      return createMockListener();
+      return createMockWebListener();
     };
 
     await monitorWebChannel(false, listenerFactory, false, resolver);
@@ -127,7 +116,7 @@ describe("web auto-reply", () => {
       let capturedOnMessage: ((msg: WebInboundMessage) => Promise<void>) | undefined;
       const listenerFactory: ListenerFactory = async ({ onMessage }) => {
         capturedOnMessage = onMessage;
-        return createMockListener();
+        return createMockWebListener();
       };
 
       const big = await fmt.make(sharedRaw, { width, height });
@@ -185,7 +174,7 @@ describe("web auto-reply", () => {
     let capturedOnMessage: ((msg: WebInboundMessage) => Promise<void>) | undefined;
     const listenerFactory: ListenerFactory = async ({ onMessage }) => {
       capturedOnMessage = onMessage;
-      return createMockListener();
+      return createMockWebListener();
     };
 
     const bigPng = await sharp({

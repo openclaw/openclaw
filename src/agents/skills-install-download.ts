@@ -3,9 +3,15 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
+import {
+  isWindowsDrivePath,
+  resolveArchiveOutputPath,
+  stripArchivePath,
+  validateArchiveEntryPath,
+} from "../infra/archive-path.js";
 import { extractArchive as extractArchiveSafe } from "../infra/archive.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
-import { isWithinDir, resolveSafeBaseDir } from "../infra/path-safety.js";
+import { isWithinDir } from "../infra/path-safety.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { ensureDir, resolveUserPath } from "../utils.js";
 import { formatInstallFailureMessage } from "./skills-install-output.js";
@@ -16,10 +22,6 @@ import { resolveSkillToolsRootDir } from "./skills/tools-dir.js";
 
 function isNodeReadableStream(value: unknown): value is NodeJS.ReadableStream {
   return Boolean(value && typeof (value as NodeJS.ReadableStream).pipe === "function");
-}
-
-function isWindowsDrivePath(p: string): boolean {
-  return /^[a-zA-Z]:[\\/]/.test(p);
 }
 
 function resolveDownloadTargetDir(entry: SkillEntry, spec: SkillInstallSpec): string {
@@ -59,57 +61,6 @@ function resolveArchiveType(spec: SkillInstallSpec, filename: string): string | 
     return "zip";
   }
   return undefined;
-}
-
-function normalizeArchiveEntryPath(raw: string): string {
-  return raw.replaceAll("\\", "/");
-}
-
-function validateArchiveEntryPath(entryPath: string): void {
-  if (!entryPath || entryPath === "." || entryPath === "./") {
-    return;
-  }
-  if (isWindowsDrivePath(entryPath)) {
-    throw new Error(`archive entry uses a drive path: ${entryPath}`);
-  }
-  const normalized = path.posix.normalize(normalizeArchiveEntryPath(entryPath));
-  if (normalized === ".." || normalized.startsWith("../")) {
-    throw new Error(`archive entry escapes targetDir: ${entryPath}`);
-  }
-  if (path.posix.isAbsolute(normalized) || normalized.startsWith("//")) {
-    throw new Error(`archive entry is absolute: ${entryPath}`);
-  }
-}
-
-function stripArchivePath(entryPath: string, stripComponents: number): string | null {
-  const raw = normalizeArchiveEntryPath(entryPath);
-  if (!raw || raw === "." || raw === "./") {
-    return null;
-  }
-
-  // Important: tar's --strip-components semantics operate on raw path segments,
-  // before any normalization that would collapse "..". We mimic that so we
-  // can detect strip-induced escapes like "a/../b" with stripComponents=1.
-  const parts = raw.split("/").filter((part) => part.length > 0 && part !== ".");
-  const strip = Math.max(0, Math.floor(stripComponents));
-  const stripped = strip === 0 ? parts.join("/") : parts.slice(strip).join("/");
-  const result = path.posix.normalize(stripped);
-  if (!result || result === "." || result === "./") {
-    return null;
-  }
-  return result;
-}
-
-function validateExtractedPathWithinRoot(params: {
-  rootDir: string;
-  relPath: string;
-  originalPath: string;
-}): void {
-  const safeBase = resolveSafeBaseDir(params.rootDir);
-  const outPath = path.resolve(params.rootDir, params.relPath);
-  if (!outPath.startsWith(safeBase)) {
-    throw new Error(`archive entry escapes targetDir: ${params.originalPath}`);
-  }
 }
 
 async function downloadFile(
@@ -219,13 +170,18 @@ async function extractArchive(params: {
       }
 
       for (const entry of entries) {
-        validateArchiveEntryPath(entry);
+        validateArchiveEntryPath(entry, { escapeLabel: "targetDir" });
         const relPath = stripArchivePath(entry, strip);
         if (!relPath) {
           continue;
         }
-        validateArchiveEntryPath(relPath);
-        validateExtractedPathWithinRoot({ rootDir: targetDir, relPath, originalPath: entry });
+        validateArchiveEntryPath(relPath, { escapeLabel: "targetDir" });
+        resolveArchiveOutputPath({
+          rootDir: targetDir,
+          relPath,
+          originalPath: entry,
+          escapeLabel: "targetDir",
+        });
       }
 
       const argv = ["tar", "xf", archivePath, "-C", targetDir];

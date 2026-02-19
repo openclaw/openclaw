@@ -18,6 +18,22 @@ vi.mock("../config/config.js", async (importOriginal) => {
 import { ensureBrowserControlAuth } from "./control-auth.js";
 
 describe("ensureBrowserControlAuth", () => {
+  const expectExplicitModeSkipsAutoAuth = async (mode: "password" | "none") => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        auth: { mode },
+      },
+      browser: {
+        enabled: true,
+      },
+    };
+
+    const result = await ensureBrowserControlAuth({ cfg, env: {} as NodeJS.ProcessEnv });
+    expect(result).toEqual({ auth: {} });
+    expect(mocks.loadConfig).not.toHaveBeenCalled();
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+  };
+
   beforeEach(() => {
     vi.restoreAllMocks();
     mocks.loadConfig.mockReset();
@@ -80,22 +96,11 @@ describe("ensureBrowserControlAuth", () => {
   });
 
   it("respects explicit password mode", async () => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        auth: {
-          mode: "password",
-        },
-      },
-      browser: {
-        enabled: true,
-      },
-    };
+    await expectExplicitModeSkipsAutoAuth("password");
+  });
 
-    const result = await ensureBrowserControlAuth({ cfg, env: {} as NodeJS.ProcessEnv });
-
-    expect(result).toEqual({ auth: {} });
-    expect(mocks.loadConfig).not.toHaveBeenCalled();
-    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+  it("respects explicit none mode", async () => {
+    await expectExplicitModeSkipsAutoAuth("none");
   });
 
   it("reuses auth from latest config snapshot", async () => {

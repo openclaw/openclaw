@@ -2,6 +2,7 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
+import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import {
   logMessageProcessed,
@@ -148,24 +149,25 @@ export async function dispatchReplyFromConfig(params: {
   const inboundAudio = isInboundAudioContext(ctx);
   const sessionTtsAuto = resolveSessionTtsAuto(ctx, cfg);
   const hookRunner = getGlobalHookRunner();
-  if (hookRunner?.hasHooks("message_received")) {
-    const timestamp =
-      typeof ctx.Timestamp === "number" && Number.isFinite(ctx.Timestamp)
-        ? ctx.Timestamp
-        : undefined;
-    const messageIdForHook =
-      ctx.MessageSidFull ?? ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
-    const content =
-      typeof ctx.BodyForCommands === "string"
-        ? ctx.BodyForCommands
-        : typeof ctx.RawBody === "string"
-          ? ctx.RawBody
-          : typeof ctx.Body === "string"
-            ? ctx.Body
-            : "";
-    const channelId = (ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider ?? "").toLowerCase();
-    const conversationId = ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? undefined;
 
+  // Extract message context for hooks (plugin and internal)
+  const timestamp =
+    typeof ctx.Timestamp === "number" && Number.isFinite(ctx.Timestamp) ? ctx.Timestamp : undefined;
+  const messageIdForHook =
+    ctx.MessageSidFull ?? ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
+  const content =
+    typeof ctx.BodyForCommands === "string"
+      ? ctx.BodyForCommands
+      : typeof ctx.RawBody === "string"
+        ? ctx.RawBody
+        : typeof ctx.Body === "string"
+          ? ctx.Body
+          : "";
+  const channelId = (ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider ?? "").toLowerCase();
+  const conversationId = ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? undefined;
+
+  // Trigger plugin hooks (fire-and-forget)
+  if (hookRunner?.hasHooks("message_received")) {
     void hookRunner
       .runMessageReceived(
         {
@@ -193,8 +195,35 @@ export async function dispatchReplyFromConfig(params: {
         },
       )
       .catch((err) => {
-        logVerbose(`dispatch-from-config: message_received hook failed: ${String(err)}`);
+        logVerbose(`dispatch-from-config: message_received plugin hook failed: ${String(err)}`);
       });
+  }
+
+  // Bridge to internal hooks (HOOK.md discovery system) - refs #8807
+  if (sessionKey) {
+    void triggerInternalHook(
+      createInternalHookEvent("message", "received", sessionKey, {
+        from: ctx.From ?? "",
+        content,
+        timestamp,
+        channelId,
+        accountId: ctx.AccountId,
+        conversationId,
+        messageId: messageIdForHook,
+        metadata: {
+          to: ctx.To,
+          provider: ctx.Provider,
+          surface: ctx.Surface,
+          threadId: ctx.MessageThreadId,
+          senderId: ctx.SenderId,
+          senderName: ctx.SenderName,
+          senderUsername: ctx.SenderUsername,
+          senderE164: ctx.SenderE164,
+        },
+      }),
+    ).catch((err) => {
+      logVerbose(`dispatch-from-config: message_received internal hook failed: ${String(err)}`);
+    });
   }
 
   // Check if we should route replies to originating channel instead of dispatcher.

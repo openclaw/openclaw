@@ -30,17 +30,15 @@ vi.mock("../config/config.js", async (importOriginal) => {
 });
 
 import "./test-helpers/fast-core-tools.js";
-import { sleep } from "../utils.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 
 const waitForCalls = async (getCount: () => number, count: number, timeoutMs = 2000) => {
-  const start = Date.now();
-  while (getCount() < count) {
-    if (Date.now() - start > timeoutMs) {
-      throw new Error(`timed out waiting for ${count} calls`);
-    }
-    await sleep(0);
-  }
+  await vi.waitFor(
+    () => {
+      expect(getCount()).toBeGreaterThanOrEqual(count);
+    },
+    { timeout: timeoutMs, interval: 5 },
+  );
 };
 
 describe("sessions tools", () => {
@@ -657,8 +655,12 @@ describe("sessions tools", () => {
       status: "ok",
       reply: "initial",
     });
-    await sleep(0);
-    await sleep(0);
+    await vi.waitFor(
+      () => {
+        expect(calls.filter((call) => call.method === "agent")).toHaveLength(4);
+      },
+      { timeout: 2_000, interval: 5 },
+    );
 
     const agentCalls = calls.filter((call) => call.method === "agent");
     expect(agentCalls).toHaveLength(4);

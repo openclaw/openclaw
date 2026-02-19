@@ -17,21 +17,17 @@ async function makeStorePath() {
     storePath: path.join(dir, "cron", "jobs.json"),
     cleanup: async () => {
       // On macOS, teardown can race with trailing async fs writes and leave
-      // transient ENOTEMPTY errors. Retry briefly for stability.
-      for (let i = 0; i < 10; i += 1) {
-        try {
-          await fs.rm(dir, { recursive: true, force: true });
-          return;
-        } catch (err) {
-          const code = (err as NodeJS.ErrnoException).code;
-          if (code !== "ENOTEMPTY") {
-            throw err;
-          }
-          // eslint-disable-next-line no-await-in-loop
-          await new Promise<void>((resolve) => setTimeout(resolve, 10));
-        }
+      // transient ENOTEMPTY/EBUSY errors; let fs.rm handle retries natively.
+      try {
+        await fs.rm(dir, {
+          recursive: true,
+          force: true,
+          maxRetries: 10,
+          retryDelay: 10,
+        });
+      } catch {
+        await fs.rm(dir, { recursive: true, force: true });
       }
-      await fs.rm(dir, { recursive: true, force: true });
     },
   };
 }

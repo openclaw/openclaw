@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createBaseSignalEventHandlerDeps } from "./monitor/event-handler.test-harness.js";
+import {
+  createBaseSignalEventHandlerDeps,
+  createSignalReceiveEvent,
+} from "./monitor/event-handler.test-harness.js";
 
 const sendTypingMock = vi.fn();
 const sendReadReceiptMock = vi.fn();
@@ -51,19 +54,13 @@ describe("signal event handler typing + read receipts", () => {
       }),
     );
 
-    await handler({
-      event: "receive",
-      data: JSON.stringify({
-        envelope: {
-          sourceNumber: "+15550001111",
-          sourceName: "Alice",
-          timestamp: 1700000000000,
-          dataMessage: {
-            message: "hi",
-          },
+    await handler(
+      createSignalReceiveEvent({
+        dataMessage: {
+          message: "hi",
         },
       }),
-    });
+    );
 
     expect(sendTypingMock).toHaveBeenCalledWith("signal:+15550001111", expect.any(Object));
     expect(sendReadReceiptMock).toHaveBeenCalledWith(

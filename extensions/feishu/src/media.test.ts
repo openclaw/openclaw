@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
@@ -7,7 +10,9 @@ const resolveReceiveIdTypeMock = vi.hoisted(() => vi.fn());
 const loadWebMediaMock = vi.hoisted(() => vi.fn());
 
 const fileCreateMock = vi.hoisted(() => vi.fn());
+const imageGetMock = vi.hoisted(() => vi.fn());
 const messageCreateMock = vi.hoisted(() => vi.fn());
+const messageResourceGetMock = vi.hoisted(() => vi.fn());
 const messageReplyMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./client.js", () => ({
@@ -31,7 +36,7 @@ vi.mock("./runtime.js", () => ({
   }),
 }));
 
-import { sendMediaFeishu } from "./media.js";
+import { downloadImageFeishu, downloadMessageResourceFeishu, sendMediaFeishu } from "./media.js";
 
 describe("sendMediaFeishu msg_type routing", () => {
   beforeEach(() => {
@@ -54,9 +59,15 @@ describe("sendMediaFeishu msg_type routing", () => {
         file: {
           create: fileCreateMock,
         },
+        image: {
+          get: imageGetMock,
+        },
         message: {
           create: messageCreateMock,
           reply: messageReplyMock,
+        },
+        messageResource: {
+          get: messageResourceGetMock,
         },
       },
     });
@@ -82,6 +93,9 @@ describe("sendMediaFeishu msg_type routing", () => {
       kind: "audio",
       contentType: "audio/ogg",
     });
+
+    imageGetMock.mockResolvedValue(Buffer.from("image-bytes"));
+    messageResourceGetMock.mockResolvedValue(Buffer.from("resource-bytes"));
   });
 
   it("uses msg_type=media for mp4", async () => {
@@ -183,5 +197,61 @@ describe("sendMediaFeishu msg_type routing", () => {
     expect(fileCreateMock).not.toHaveBeenCalled();
     expect(messageCreateMock).not.toHaveBeenCalled();
     expect(messageReplyMock).not.toHaveBeenCalled();
+  });
+
+  it("does not include imageKey path segments in temp file path", async () => {
+    const maliciousImageKey = "a/../../../../pwned.txt";
+    let capturedPath: string | undefined;
+
+    imageGetMock.mockResolvedValueOnce({
+      writeFile: async (tmpPath: string) => {
+        capturedPath = tmpPath;
+        await fs.writeFile(tmpPath, Buffer.from("image-data"));
+      },
+    });
+
+    const result = await downloadImageFeishu({
+      cfg: {} as any,
+      imageKey: maliciousImageKey,
+    });
+
+    expect(result.buffer).toEqual(Buffer.from("image-data"));
+    expect(capturedPath).toBeDefined();
+    expect(capturedPath).not.toContain(maliciousImageKey);
+    expect(capturedPath).not.toContain("..");
+
+    const tmpRoot = path.resolve(os.tmpdir());
+    const resolved = path.resolve(capturedPath as string);
+    const rel = path.relative(tmpRoot, resolved);
+    expect(rel === ".." || rel.startsWith(`..${path.sep}`)).toBe(false);
+  });
+
+  it("does not include fileKey path segments in temp file path", async () => {
+    const maliciousFileKey = "x/../../../../../etc/hosts";
+    let capturedPath: string | undefined;
+
+    messageResourceGetMock.mockResolvedValueOnce({
+      writeFile: async (tmpPath: string) => {
+        capturedPath = tmpPath;
+        await fs.writeFile(tmpPath, Buffer.from("resource-data"));
+      },
+    });
+
+    const result = await downloadMessageResourceFeishu({
+      cfg: {} as any,
+      messageId: "om_123",
+      fileKey: maliciousFileKey,
+      type: "image",
+    });
+
+    expect(result.buffer).toEqual(Buffer.from("resource-data"));
+    expect(capturedPath).toBeDefined();
+    expect(capturedPath).not.toContain(maliciousFileKey);
+    expect(capturedPath).not.toContain("..");
+
+    const tmpRoot = path.resolve(os.tmpdir());
+    const resolved = path.resolve(capturedPath as string);
+    const rel = path.relative(tmpRoot, resolved);
+    expect(rel === ".." || rel.startsWith(`..${path.sep}`)).toBe(false);
   });
 });

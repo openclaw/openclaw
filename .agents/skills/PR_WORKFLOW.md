@@ -3,10 +3,6 @@
 Please read this in full and do not skip sections.
 This is the single source of truth for the maintainer PR workflow.
 
-## Triage order
-
-Process PRs **oldest to newest**. Older PRs are more likely to have merge conflicts and stale dependencies; resolving them first keeps the queue healthy and avoids snowballing rebase pain.
-
 ## Working rule
 
 Skills execute workflow. Maintainers provide judgment.
@@ -110,7 +106,7 @@ Before any substantive review or prep work, **always rebase the PR branch onto c
 - During `prepare-pr`, use concise, action-oriented subjects **without** PR numbers or thanks; reserve `(#<PR>) thanks @<pr-author>` for the final merge/squash commit.
 - Group related changes; avoid bundling unrelated refactors.
 - Changelog workflow: keep the latest released version at the top (no `Unreleased`); after publishing, bump the version and start a new top section.
-- When working on a PR: add a changelog entry with the PR number and thank the contributor (mandatory in this workflow).
+- When working on a PR: add a changelog entry line with the PR number `(#<PR>)` and `thanks @<pr-author>` when author metadata is available (mandatory in this workflow).
 - When working on an issue: reference the issue in the changelog entry.
 - In this workflow, changelog is always required even for internal/test-only changes.
 

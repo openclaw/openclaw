@@ -6,9 +6,12 @@
   "experimentalSortPackageJson": {
     "sortScripts": true,
   },
+  "tabWidth": 2,
+  "useTabs": false,
   "ignorePatterns": [
     "apps/",
     "assets/",
+    "docker-compose.yml",
     "dist/",
     "docs/_layouts/",
     "node_modules/",

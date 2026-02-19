@@ -37,6 +37,22 @@ function makeMsg(): WebInboundMsg {
   } as unknown as WebInboundMsg;
 }
 
+function mockLoadedImageMedia() {
+  (
+    loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
+  ).mockResolvedValueOnce({
+    buffer: Buffer.from("img"),
+    contentType: "image/jpeg",
+    kind: "image",
+  });
+}
+
+function mockFirstSendMediaFailure(msg: WebInboundMsg, message: string) {
+  (
+    msg.sendMedia as unknown as { mockRejectedValueOnce: (v: unknown) => void }
+  ).mockRejectedValueOnce(new Error(message));
+}
+
 const replyLogger = {
   info: vi.fn(),
   warn: vi.fn(),
@@ -123,16 +139,8 @@ describe("deliverWebReply", () => {
 
   it("retries media send on transient failure", async () => {
     const msg = makeMsg();
-    (
-      loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
-    ).mockResolvedValueOnce({
-      buffer: Buffer.from("img"),
-      contentType: "image/jpeg",
-      kind: "image",
-    });
-    (
-      msg.sendMedia as unknown as { mockRejectedValueOnce: (v: unknown) => void }
-    ).mockRejectedValueOnce(new Error("socket reset"));
+    mockLoadedImageMedia();
+    mockFirstSendMediaFailure(msg, "socket reset");
     (
       msg.sendMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
     ).mockResolvedValueOnce(undefined);
@@ -152,16 +160,8 @@ describe("deliverWebReply", () => {
 
   it("falls back to text-only when the first media send fails", async () => {
     const msg = makeMsg();
-    (
-      loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
-    ).mockResolvedValueOnce({
-      buffer: Buffer.from("img"),
-      contentType: "image/jpeg",
-      kind: "image",
-    });
-    (
-      msg.sendMedia as unknown as { mockRejectedValueOnce: (v: unknown) => void }
-    ).mockRejectedValueOnce(new Error("boom"));
+    mockLoadedImageMedia();
+    mockFirstSendMediaFailure(msg, "boom");
 
     await deliverWebReply({
       replyResult: { text: "caption", mediaUrl: "http://example.com/img.jpg" },

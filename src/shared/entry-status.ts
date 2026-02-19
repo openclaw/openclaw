@@ -2,9 +2,14 @@ import { resolveEmojiAndHomepage } from "./entry-metadata.js";
 import {
   evaluateRequirementsFromMetadataWithRemote,
   type RequirementConfigCheck,
+  type RequirementRemote,
   type Requirements,
   type RequirementsMetadata,
 } from "./requirements.js";
+
+export type EntryMetadataRequirementsParams = Parameters<
+  typeof evaluateEntryMetadataRequirements
+>[0];
 
 export function evaluateEntryMetadataRequirements(params: {
   always: boolean;
@@ -17,11 +22,7 @@ export function evaluateEntryMetadataRequirements(params: {
   } | null;
   hasLocalBin: (bin: string) => boolean;
   localPlatform: string;
-  remote?: {
-    hasBin?: (bin: string) => boolean;
-    hasAnyBin?: (bins: string[]) => boolean;
-    platforms?: string[];
-  };
+  remote?: RequirementRemote;
   isEnvSatisfied: (envName: string) => boolean;
   isConfigSatisfied: (pathStr: string) => boolean;
 }): {
@@ -53,4 +54,13 @@ export function evaluateEntryMetadataRequirements(params: {
     requirementsSatisfied: eligible,
     configChecks,
   };
+}
+
+export function evaluateEntryMetadataRequirementsForCurrentPlatform(
+  params: Omit<EntryMetadataRequirementsParams, "localPlatform">,
+): ReturnType<typeof evaluateEntryMetadataRequirements> {
+  return evaluateEntryMetadataRequirements({
+    ...params,
+    localPlatform: process.platform,
+  });
 }

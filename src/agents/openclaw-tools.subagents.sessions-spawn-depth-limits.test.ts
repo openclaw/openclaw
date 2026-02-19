@@ -238,4 +238,37 @@ describe("sessions_spawn depth + child limits", () => {
       runId: "run-depth",
     });
   });
+
+  it("fails spawn when sessions.patch rejects the model", async () => {
+    setSubagentLimits({ maxSpawnDepth: 2 });
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const req = opts as { method?: string; params?: { model?: string } };
+      if (req.method === "sessions.patch" && req.params?.model === "bad-model") {
+        throw new Error("invalid model: bad-model");
+      }
+      if (req.method === "agent") {
+        return { runId: "run-depth" };
+      }
+      if (req.method === "agent.wait") {
+        return { status: "running" };
+      }
+      return {};
+    });
+
+    const tool = createSessionsSpawnTool({ agentSessionKey: "main" });
+    const result = await tool.execute("call-model-reject", {
+      task: "hello",
+      model: "bad-model",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "error",
+    });
+    expect(String((result.details as { error?: string }).error ?? "")).toContain("invalid model");
+    expect(
+      callGatewayMock.mock.calls.some(
+        (call) => (call[0] as { method?: string }).method === "agent",
+      ),
+    ).toBe(false);
+  });
 });

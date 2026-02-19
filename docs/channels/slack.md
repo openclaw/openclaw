@@ -290,6 +290,7 @@ Available action groups in current Slack tooling:
 - Message edits/deletes/thread broadcasts are mapped into system events.
 - Reaction add/remove events are mapped into system events.
 - Member join/leave, channel created/renamed, and pin add/remove events are mapped into system events.
+- Assistant thread status updates (for "is typing..." indicators in threads) use `assistant.threads.setStatus` and require bot scope `assistant:write`.
 - `channel_id_changed` can migrate channel config keys when `configWrites` is enabled.
 - Channel topic/purpose metadata is treated as untrusted context and can be injected into routing context.
 - Block actions and modal interactions emit structured `Slack interaction: ...` system events with rich payload fields:
@@ -351,6 +352,7 @@ Notes:
         "mpim:history",
         "users:read",
         "app_mentions:read",
+        "assistant:write",
         "reactions:read",
         "reactions:write",
         "pins:read",
@@ -458,6 +460,32 @@ openclaw pairing list slack
 
   </Accordion>
 </AccordionGroup>
+
+## Text streaming
+
+OpenClaw supports Slack native text streaming via the Agents and AI Apps API.
+
+By default, streaming is enabled. Disable it per account:
+
+```yaml
+channels:
+  slack:
+    streaming: false
+```
+
+### Requirements
+
+1. Enable **Agents and AI Apps** in your Slack app settings.
+2. Ensure the app has the `assistant:write` scope.
+3. A reply thread must be available for that message. Thread selection still follows `replyToMode`.
+
+### Behavior
+
+- First text chunk starts a stream (`chat.startStream`).
+- Later text chunks append to the same stream (`chat.appendStream`).
+- End of reply finalizes stream (`chat.stopStream`).
+- Media and non-text payloads fall back to normal delivery.
+- If streaming fails mid-reply, OpenClaw falls back to normal delivery for remaining payloads.
 
 ## Configuration reference pointers
 

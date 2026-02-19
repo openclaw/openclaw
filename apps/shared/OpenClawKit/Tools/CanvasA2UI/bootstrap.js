@@ -451,7 +451,6 @@ class OpenClawA2UIHost extends LitElement {
     if (this.surfaces.length === 0) {
       return html`<div class="empty">
         <div class="empty-title">Canvas (A2UI)</div>
-        <div>Waiting for A2UI messages…</div>
       </div>`;
     }
 

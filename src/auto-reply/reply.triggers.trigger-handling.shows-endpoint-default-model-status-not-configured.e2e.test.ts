@@ -58,7 +58,7 @@ describe("trigger handling", () => {
       );
     });
   });
-  it("rejects /restart by default", async () => {
+  it("restarts by default", async () => {
     await withTempHome(async (home) => {
       const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
       const res = await getReplyFromConfig(
@@ -72,14 +72,14 @@ describe("trigger handling", () => {
         makeCfg(home),
       );
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toContain("/restart is disabled");
+      expect(text?.startsWith("⚙️ Restarting") || text?.startsWith("⚠️ Restart failed")).toBe(true);
       expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     });
   });
-  it("restarts when enabled", async () => {
+  it("rejects /restart when explicitly disabled", async () => {
     await withTempHome(async (home) => {
       const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
-      const cfg = { ...makeCfg(home), commands: { restart: true } } as OpenClawConfig;
+      const cfg = { ...makeCfg(home), commands: { restart: false } } as OpenClawConfig;
       const res = await getReplyFromConfig(
         {
           Body: "/restart",
@@ -91,7 +91,7 @@ describe("trigger handling", () => {
         cfg,
       );
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text?.startsWith("⚙️ Restarting") || text?.startsWith("⚠️ Restart failed")).toBe(true);
+      expect(text).toContain("/restart is disabled");
       expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     });
   });

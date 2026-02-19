@@ -71,16 +71,35 @@ vi.mock("./client.js", () => ({
 
 const { buildGatewayConnectionDetails, callGateway } = await import("./call.js");
 
+function resetGatewayCallMocks() {
+  loadConfig.mockReset();
+  resolveGatewayPort.mockReset();
+  pickPrimaryTailnetIPv4.mockReset();
+  pickPrimaryLanIPv4.mockReset();
+  lastClientOptions = null;
+  startMode = "hello";
+  closeCode = 1006;
+  closeReason = "";
+}
+
+function setGatewayNetworkDefaults(port = 18789) {
+  resolveGatewayPort.mockReturnValue(port);
+  pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+}
+
+function makeRemotePasswordGatewayConfig(remotePassword: string, localPassword = "from-config") {
+  return {
+    gateway: {
+      mode: "remote",
+      remote: { url: "ws://remote.example:18789", password: remotePassword },
+      auth: { password: localPassword },
+    },
+  };
+}
+
 describe("callGateway url resolution", () => {
   beforeEach(() => {
-    loadConfig.mockReset();
-    resolveGatewayPort.mockReset();
-    pickPrimaryTailnetIPv4.mockReset();
-    pickPrimaryLanIPv4.mockReset();
-    lastClientOptions = null;
-    startMode = "hello";
-    closeCode = 1006;
-    closeReason = "";
+    resetGatewayCallMocks();
   });
 
   it("keeps loopback when local bind is auto even if tailnet is present", async () => {
@@ -155,10 +174,7 @@ describe("callGateway url resolution", () => {
 
 describe("buildGatewayConnectionDetails", () => {
   beforeEach(() => {
-    loadConfig.mockReset();
-    resolveGatewayPort.mockReset();
-    pickPrimaryTailnetIPv4.mockReset();
-    pickPrimaryLanIPv4.mockReset();
+    resetGatewayCallMocks();
   });
 
   it("uses explicit url overrides and omits bind details", () => {
@@ -235,14 +251,7 @@ describe("buildGatewayConnectionDetails", () => {
 
 describe("callGateway error details", () => {
   beforeEach(() => {
-    loadConfig.mockReset();
-    resolveGatewayPort.mockReset();
-    pickPrimaryTailnetIPv4.mockReset();
-    pickPrimaryLanIPv4.mockReset();
-    lastClientOptions = null;
-    startMode = "hello";
-    closeCode = 1006;
-    closeReason = "";
+    resetGatewayCallMocks();
   });
 
   afterEach(() => {
@@ -336,16 +345,8 @@ describe("callGateway url override auth requirements", () => {
 
   beforeEach(() => {
     envSnapshot = captureEnv(["OPENCLAW_GATEWAY_TOKEN", "OPENCLAW_GATEWAY_PASSWORD"]);
-    loadConfig.mockReset();
-    resolveGatewayPort.mockReset();
-    pickPrimaryTailnetIPv4.mockReset();
-    pickPrimaryLanIPv4.mockReset();
-    lastClientOptions = null;
-    startMode = "hello";
-    closeCode = 1006;
-    closeReason = "";
-    resolveGatewayPort.mockReturnValue(18789);
-    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+    resetGatewayCallMocks();
+    setGatewayNetworkDefaults(18789);
   });
 
   afterEach(() => {
@@ -373,17 +374,9 @@ describe("callGateway password resolution", () => {
 
   beforeEach(() => {
     envSnapshot = captureEnv(["OPENCLAW_GATEWAY_PASSWORD"]);
-    loadConfig.mockReset();
-    resolveGatewayPort.mockReset();
-    pickPrimaryTailnetIPv4.mockReset();
-    pickPrimaryLanIPv4.mockReset();
-    lastClientOptions = null;
-    startMode = "hello";
-    closeCode = 1006;
-    closeReason = "";
+    resetGatewayCallMocks();
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
-    resolveGatewayPort.mockReturnValue(18789);
-    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+    setGatewayNetworkDefaults(18789);
   });
 
   afterEach(() => {
@@ -420,13 +413,7 @@ describe("callGateway password resolution", () => {
   });
 
   it("uses remote password in remote mode when env is unset", async () => {
-    loadConfig.mockReturnValue({
-      gateway: {
-        mode: "remote",
-        remote: { url: "ws://remote.example:18789", password: "remote-secret" },
-        auth: { password: "from-config" },
-      },
-    });
+    loadConfig.mockReturnValue(makeRemotePasswordGatewayConfig("remote-secret"));
 
     await callGateway({ method: "health" });
 
@@ -435,13 +422,7 @@ describe("callGateway password resolution", () => {
 
   it("prefers env password over remote password in remote mode", async () => {
     process.env.OPENCLAW_GATEWAY_PASSWORD = "from-env";
-    loadConfig.mockReturnValue({
-      gateway: {
-        mode: "remote",
-        remote: { url: "ws://remote.example:18789", password: "remote-secret" },
-        auth: { password: "from-config" },
-      },
-    });
+    loadConfig.mockReturnValue(makeRemotePasswordGatewayConfig("remote-secret"));
 
     await callGateway({ method: "health" });
 
@@ -472,17 +453,9 @@ describe("callGateway token resolution", () => {
 
   beforeEach(() => {
     envSnapshot = captureEnv(["OPENCLAW_GATEWAY_TOKEN"]);
-    loadConfig.mockReset();
-    resolveGatewayPort.mockReset();
-    pickPrimaryTailnetIPv4.mockReset();
-    pickPrimaryLanIPv4.mockReset();
-    lastClientOptions = null;
-    startMode = "hello";
-    closeCode = 1006;
-    closeReason = "";
+    resetGatewayCallMocks();
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
-    resolveGatewayPort.mockReturnValue(18789);
-    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+    setGatewayNetworkDefaults(18789);
   });
 
   afterEach(() => {

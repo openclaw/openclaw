@@ -7,6 +7,32 @@ import {
 } from "./session-transcript-repair.js";
 
 describe("sanitizeToolUseResultPairing", () => {
+  const buildDuplicateToolResultInput = (opts?: {
+    middleMessage?: unknown;
+    secondText?: string;
+  }): AgentMessage[] =>
+    [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: [{ type: "text", text: "first" }],
+        isError: false,
+      },
+      ...(opts?.middleMessage ? [opts.middleMessage as AgentMessage] : []),
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: [{ type: "text", text: opts?.secondText ?? "second" }],
+        isError: false,
+      },
+    ] as unknown as AgentMessage[];
+
   it("moves tool results directly after tool calls and inserts missing results", () => {
     const input = [
       {
@@ -37,53 +63,19 @@ describe("sanitizeToolUseResultPairing", () => {
 
   it("drops duplicate tool results for the same id within a span", () => {
     const input = [
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
-      },
-      {
-        role: "toolResult",
-        toolCallId: "call_1",
-        toolName: "read",
-        content: [{ type: "text", text: "first" }],
-        isError: false,
-      },
-      {
-        role: "toolResult",
-        toolCallId: "call_1",
-        toolName: "read",
-        content: [{ type: "text", text: "second" }],
-        isError: false,
-      },
+      ...buildDuplicateToolResultInput(),
       { role: "user", content: "ok" },
-    ] as unknown as AgentMessage[];
+    ] as AgentMessage[];
 
     const out = sanitizeToolUseResultPairing(input);
     expect(out.filter((m) => m.role === "toolResult")).toHaveLength(1);
   });
 
   it("drops duplicate tool results for the same id across the transcript", () => {
-    const input = [
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
-      },
-      {
-        role: "toolResult",
-        toolCallId: "call_1",
-        toolName: "read",
-        content: [{ type: "text", text: "first" }],
-        isError: false,
-      },
-      { role: "assistant", content: [{ type: "text", text: "ok" }] },
-      {
-        role: "toolResult",
-        toolCallId: "call_1",
-        toolName: "read",
-        content: [{ type: "text", text: "second (duplicate)" }],
-        isError: false,
-      },
-    ] as unknown as AgentMessage[];
+    const input = buildDuplicateToolResultInput({
+      middleMessage: { role: "assistant", content: [{ type: "text", text: "ok" }] },
+      secondText: "second (duplicate)",
+    });
 
     const out = sanitizeToolUseResultPairing(input);
     const results = out.filter((m) => m.role === "toolResult") as Array<{

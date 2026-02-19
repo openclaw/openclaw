@@ -66,6 +66,7 @@ export function createSessionsSpawnTool(opts?: {
           thinking: thinkingOverrideRaw,
           runTimeoutSeconds,
           cleanup,
+          expectsCompletionMessage: true,
         },
         {
           agentSessionKey: opts?.agentSessionKey,

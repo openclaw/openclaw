@@ -1,3 +1,4 @@
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveGatewayStateDir } from "./paths.js";
@@ -282,6 +283,22 @@ describe("buildServiceEnvironment", () => {
     }
   });
 
+  it("forwards TMPDIR from the host environment", () => {
+    const env = buildServiceEnvironment({
+      env: { HOME: "/home/user", TMPDIR: "/var/folders/xw/abc123/T/" },
+      port: 18789,
+    });
+    expect(env.TMPDIR).toBe("/var/folders/xw/abc123/T/");
+  });
+
+  it("falls back to os.tmpdir when TMPDIR is not set", () => {
+    const env = buildServiceEnvironment({
+      env: { HOME: "/home/user" },
+      port: 18789,
+    });
+    expect(env.TMPDIR).toBe(os.tmpdir());
+  });
+
   it("uses profile-specific unit and label", () => {
     const env = buildServiceEnvironment({
       env: { HOME: "/home/user", OPENCLAW_PROFILE: "work" },
@@ -300,6 +317,20 @@ describe("buildNodeServiceEnvironment", () => {
       env: { HOME: "/home/user" },
     });
     expect(env.HOME).toBe("/home/user");
+  });
+
+  it("forwards TMPDIR for node services", () => {
+    const env = buildNodeServiceEnvironment({
+      env: { HOME: "/home/user", TMPDIR: "/tmp/custom" },
+    });
+    expect(env.TMPDIR).toBe("/tmp/custom");
+  });
+
+  it("falls back to os.tmpdir for node services when TMPDIR is not set", () => {
+    const env = buildNodeServiceEnvironment({
+      env: { HOME: "/home/user" },
+    });
+    expect(env.TMPDIR).toBe(os.tmpdir());
   });
 });
 

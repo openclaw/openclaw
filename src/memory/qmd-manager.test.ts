@@ -1114,7 +1114,6 @@ describe("QmdMemoryManager", () => {
     await manager.sync({ reason: "manual" });
     expect(writeFileSpy.mock.calls.length).toBe(firstExportWrites);
 
-    await new Promise((resolve) => setTimeout(resolve, 5));
     await fs.writeFile(
       sessionFile,
       '{"type":"message","message":{"role":"user","content":"follow-up update"}}\n',

@@ -1,3 +1,4 @@
+import os from "node:os";
 import path from "node:path";
 import { VERSION } from "../version.js";
 import {
@@ -212,8 +213,11 @@ export function buildServiceEnvironment(params: {
   const systemdUnit = `${resolveGatewaySystemdServiceName(profile)}.service`;
   const stateDir = env.OPENCLAW_STATE_DIR;
   const configPath = env.OPENCLAW_CONFIG_PATH;
+  // Keep a usable temp directory for supervised services even when the host env omits TMPDIR.
+  const tmpDir = env.TMPDIR?.trim() || os.tmpdir();
   return {
     HOME: env.HOME,
+    TMPDIR: tmpDir,
     PATH: buildMinimalServicePath({ env }),
     OPENCLAW_PROFILE: profile,
     OPENCLAW_STATE_DIR: stateDir,
@@ -234,8 +238,10 @@ export function buildNodeServiceEnvironment(params: {
   const { env } = params;
   const stateDir = env.OPENCLAW_STATE_DIR;
   const configPath = env.OPENCLAW_CONFIG_PATH;
+  const tmpDir = env.TMPDIR?.trim() || os.tmpdir();
   return {
     HOME: env.HOME,
+    TMPDIR: tmpDir,
     PATH: buildMinimalServicePath({ env }),
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_CONFIG_PATH: configPath,

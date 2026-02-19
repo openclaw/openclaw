@@ -3,26 +3,20 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { loadSessionStore } from "../config/sessions.js";
 import {
   installTriggerHandlingE2eTestHooks,
+  loadGetReplyFromConfig,
   MAIN_SESSION_KEY,
   makeWhatsAppElevatedCfg,
+  requireSessionStorePath,
   runDirectElevatedToggleAndLoadStore,
   withTempHome,
 } from "./reply.triggers.trigger-handling.test-harness.js";
 
 let getReplyFromConfig: typeof import("./reply.js").getReplyFromConfig;
 beforeAll(async () => {
-  ({ getReplyFromConfig } = await import("./reply.js"));
+  getReplyFromConfig = await loadGetReplyFromConfig();
 });
 
 installTriggerHandlingE2eTestHooks();
-
-function requireSessionStorePath(cfg: { session?: { store?: string } }): string {
-  const storePath = cfg.session?.store;
-  if (!storePath) {
-    throw new Error("expected session store path");
-  }
-  return storePath;
-}
 
 describe("trigger handling", () => {
   it("allows elevated off in groups without mention", async () => {

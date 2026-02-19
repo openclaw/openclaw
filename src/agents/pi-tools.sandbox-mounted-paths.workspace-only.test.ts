@@ -7,6 +7,7 @@ import { createOpenClawCodingTools } from "./pi-tools.js";
 import type { SandboxContext } from "./sandbox.js";
 import type { SandboxFsBridge, SandboxResolvedPath } from "./sandbox/fs-bridge.js";
 import { createSandboxFsBridgeFromResolver } from "./test-helpers/host-sandbox-fs-bridge.js";
+import { createPiToolsSandboxContext } from "./test-helpers/pi-tools-sandbox-context.js";
 
 vi.mock("../infra/shell-env.js", async (importOriginal) => {
   const mod = await importOriginal<typeof import("../infra/shell-env.js")>();
@@ -63,29 +64,13 @@ function createSandbox(params: {
   agentRoot: string;
   fsBridge: SandboxFsBridge;
 }): SandboxContext {
-  return {
-    enabled: true,
-    sessionKey: "sandbox:test",
+  return createPiToolsSandboxContext({
     workspaceDir: params.sandboxRoot,
     agentWorkspaceDir: params.agentRoot,
     workspaceAccess: "rw",
-    containerName: "openclaw-sbx-test",
-    containerWorkdir: "/workspace",
     fsBridge: params.fsBridge,
-    docker: {
-      image: "openclaw-sandbox:bookworm-slim",
-      containerPrefix: "openclaw-sbx-",
-      workdir: "/workspace",
-      readOnlyRoot: true,
-      tmpfs: [],
-      network: "none",
-      user: "1000:1000",
-      capDrop: ["ALL"],
-      env: { LANG: "C.UTF-8" },
-    },
     tools: { allow: [], deny: [] },
-    browserAllowHostControl: false,
-  };
+  });
 }
 
 async function withUnsafeMountedSandboxHarness(

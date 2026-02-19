@@ -73,13 +73,12 @@ Text + native (when enabled):
 - `/commands`
 - `/skill <name> [input]` (run a skill by name)
 - `/status` (show current status; includes provider usage/quota for the current model provider when available)
-- `/mesh <goal>` (auto-plan + run a workflow; also `/mesh plan|run|status|retry`, with `/mesh run <mesh-plan-id>` for exact plan replay in the same chat)
 - `/allowlist` (list/add/remove allowlist entries)
 - `/approve <id> allow-once|allow-always|deny` (resolve exec approval prompts)
 - `/context [list|detail|json]` (explain “context”; `detail` shows per-file + per-tool + per-skill + system prompt size)
 - `/export-session [path]` (alias: `/export`) (export current session to HTML with full system prompt)
 - `/whoami` (show your sender id; alias: `/id`)
-- `/subagents list|kill|log|info|send|steer` (inspect, kill, log, or steer sub-agent runs for the current session)
+- `/subagents list|kill|log|info|send|steer|spawn` (inspect, control, or spawn sub-agent runs for the current session)
 - `/kill <id|#|all>` (immediately abort one or all running sub-agents for this session; no confirmation message)
 - `/steer <id|#> <message>` (steer a running sub-agent immediately: in-run when possible, otherwise abort current work and restart on the steer message)
 - `/tell <id|#> <message>` (alias for `/steer`)
@@ -119,7 +118,7 @@ Notes:
 - For full provider usage breakdown, use `openclaw status --usage`.
 - `/allowlist add|remove` requires `commands.config=true` and honors channel `configWrites`.
 - `/usage` controls the per-response usage footer; `/usage cost` prints a local cost summary from OpenClaw session logs.
-- `/restart` is disabled by default; set `commands.restart: true` to enable it.
+- `/restart` is enabled by default; set `commands.restart: false` to disable it.
 - `/verbose` is meant for debugging and extra visibility; keep it **off** in normal use.
 - `/reasoning` (and `/verbose`) are risky in group settings: they may reveal internal reasoning or tool output you did not intend to expose. Prefer leaving them off, especially in group chats.
 - **Fast path:** command-only messages from allowlisted senders are handled immediately (bypass queue + model).

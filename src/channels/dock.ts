@@ -28,6 +28,7 @@ import {
   resolveWhatsAppGroupRequireMention,
   resolveWhatsAppGroupToolPolicy,
 } from "./plugins/group-mentions.js";
+import { normalizeSignalMessagingTarget } from "./plugins/normalize/signal.js";
 import type {
   ChannelCapabilities,
   ChannelCommandAdapter,
@@ -97,19 +98,51 @@ const formatDiscordAllowFrom = (allowFrom: Array<string | number>) =>
     )
     .filter(Boolean);
 
-function buildDirectOrGroupThreadToolContext(params: {
+function resolveDirectOrGroupChannelId(context: ChannelThreadingContext): string | undefined {
+  const isDirect = context.ChatType?.toLowerCase() === "direct";
+  return (isDirect ? (context.From ?? context.To) : context.To)?.trim() || undefined;
+}
+
+function buildSignalThreadToolContext(params: {
   context: ChannelThreadingContext;
   hasRepliedRef: ChannelThreadingToolContext["hasRepliedRef"];
 }): ChannelThreadingToolContext {
-  const isDirect = params.context.ChatType?.toLowerCase() === "direct";
-  const channelId =
-    (isDirect ? (params.context.From ?? params.context.To) : params.context.To)?.trim() ||
-    undefined;
+  const currentChannelIdRaw = resolveDirectOrGroupChannelId(params.context);
+  const currentChannelId = currentChannelIdRaw
+    ? (normalizeSignalMessagingTarget(currentChannelIdRaw) ?? currentChannelIdRaw.trim())
+    : undefined;
   return {
-    currentChannelId: channelId,
+    currentChannelId,
     currentThreadTs: params.context.ReplyToId,
     hasRepliedRef: params.hasRepliedRef,
   };
+}
+
+function buildIMessageThreadToolContext(params: {
+  context: ChannelThreadingContext;
+  hasRepliedRef: ChannelThreadingToolContext["hasRepliedRef"];
+}): ChannelThreadingToolContext {
+  return {
+    currentChannelId: resolveDirectOrGroupChannelId(params.context),
+    currentThreadTs: params.context.ReplyToId,
+    hasRepliedRef: params.hasRepliedRef,
+  };
+}
+
+function resolveCaseInsensitiveAccount<T>(
+  accounts: Record<string, T> | undefined,
+  accountId?: string | null,
+): T | undefined {
+  if (!accounts) {
+    return undefined;
+  }
+  const normalized = normalizeAccountId(accountId);
+  return (
+    accounts[normalized] ??
+    accounts[
+      Object.keys(accounts).find((key) => key.toLowerCase() === normalized.toLowerCase()) ?? ""
+    ]
+  );
 }
 // Channel docks: lightweight channel metadata/behavior for shared code paths.
 //
@@ -265,14 +298,7 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
     config: {
       resolveAllowFrom: ({ cfg, accountId }) => {
         const channel = cfg.channels?.irc;
-        const normalized = normalizeAccountId(accountId);
-        const account =
-          channel?.accounts?.[normalized] ??
-          channel?.accounts?.[
-            Object.keys(channel?.accounts ?? {}).find(
-              (key) => key.toLowerCase() === normalized.toLowerCase(),
-            ) ?? ""
-          ];
+        const account = resolveCaseInsensitiveAccount(channel?.accounts, accountId);
         return (account?.allowFrom ?? channel?.allowFrom ?? []).map((entry) => String(entry));
       },
       formatAllowFrom: ({ allowFrom }) =>
@@ -336,14 +362,7 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
               dm?: { allowFrom?: Array<string | number> };
             }
           | undefined;
-        const normalized = normalizeAccountId(accountId);
-        const account =
-          channel?.accounts?.[normalized] ??
-          channel?.accounts?.[
-            Object.keys(channel?.accounts ?? {}).find(
-              (key) => key.toLowerCase() === normalized.toLowerCase(),
-            ) ?? ""
-          ];
+        const account = resolveCaseInsensitiveAccount(channel?.accounts, accountId);
         return (account?.dm?.allowFrom ?? channel?.dm?.allowFrom ?? []).map((entry) =>
           String(entry),
         );
@@ -437,7 +456,7 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
     },
     threading: {
       buildToolContext: ({ context, hasRepliedRef }) =>
-        buildDirectOrGroupThreadToolContext({ context, hasRepliedRef }),
+        buildSignalThreadToolContext({ context, hasRepliedRef }),
     },
   },
   imessage: {
@@ -462,7 +481,7 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
     },
     threading: {
       buildToolContext: ({ context, hasRepliedRef }) =>
-        buildDirectOrGroupThreadToolContext({ context, hasRepliedRef }),
+        buildIMessageThreadToolContext({ context, hasRepliedRef }),
     },
   },
 };

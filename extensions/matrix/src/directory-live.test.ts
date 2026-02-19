@@ -51,4 +51,24 @@ describe("matrix directory live", () => {
 
     expect(resolveMatrixAuth).toHaveBeenCalledWith({ cfg, accountId: "assistant" });
   });
+
+  it("returns no peer results for empty query without resolving auth", async () => {
+    const result = await listMatrixDirectoryPeersLive({
+      cfg,
+      query: "   ",
+    });
+
+    expect(result).toEqual([]);
+    expect(resolveMatrixAuth).not.toHaveBeenCalled();
+  });
+
+  it("returns no group results for empty query without resolving auth", async () => {
+    const result = await listMatrixDirectoryGroupsLive({
+      cfg,
+      query: "",
+    });
+
+    expect(result).toEqual([]);
+    expect(resolveMatrixAuth).not.toHaveBeenCalled();
+  });
 });

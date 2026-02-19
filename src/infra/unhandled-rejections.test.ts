@@ -35,19 +35,12 @@ describe("isAbortError", () => {
     expect(isAbortError(new Error("Request was aborted"))).toBe(false);
   });
 
-  it("returns false for null and undefined", () => {
-    expect(isAbortError(null)).toBe(false);
-    expect(isAbortError(undefined)).toBe(false);
-  });
-
-  it("returns false for non-error values", () => {
-    expect(isAbortError("string error")).toBe(false);
-    expect(isAbortError(42)).toBe(false);
-  });
-
-  it("returns false for plain objects without AbortError name", () => {
-    expect(isAbortError({ message: "plain object" })).toBe(false);
-  });
+  it.each([null, undefined, "string error", 42, { message: "plain object" }])(
+    "returns false for non-abort input %#",
+    (value) => {
+      expect(isAbortError(value)).toBe(false);
+    },
+  );
 });
 
 describe("isTransientNetworkError", () => {
@@ -110,16 +103,12 @@ describe("isTransientNetworkError", () => {
     expect(isTransientNetworkError(error)).toBe(false);
   });
 
-  it("returns false for null and undefined", () => {
-    expect(isTransientNetworkError(null)).toBe(false);
-    expect(isTransientNetworkError(undefined)).toBe(false);
-  });
-
-  it("returns false for non-error values", () => {
-    expect(isTransientNetworkError("string error")).toBe(false);
-    expect(isTransientNetworkError(42)).toBe(false);
-    expect(isTransientNetworkError({ message: "plain object" })).toBe(false);
-  });
+  it.each([null, undefined, "string error", 42, { message: "plain object" }])(
+    "returns false for non-network input %#",
+    (value) => {
+      expect(isTransientNetworkError(value)).toBe(false);
+    },
+  );
 
   it("returns false for AggregateError with only non-network errors", () => {
     const error = new AggregateError([new Error("regular error")], "Multiple errors");

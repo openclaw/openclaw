@@ -180,6 +180,26 @@ describe("gateway server cron", () => {
       const mergeJobId = typeof mergeJobIdValue === "string" ? mergeJobIdValue : "";
       expect(mergeJobId.length > 0).toBe(true);
 
+      const noTimeoutRes = await rpcReq(ws, "cron.add", {
+        name: "no-timeout payload",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "hello", timeoutSeconds: 0 },
+      });
+      expect(noTimeoutRes.ok).toBe(true);
+      const noTimeoutPayload = noTimeoutRes.payload as
+        | {
+            payload?: {
+              kind?: unknown;
+              timeoutSeconds?: unknown;
+            };
+          }
+        | undefined;
+      expect(noTimeoutPayload?.payload?.kind).toBe("agentTurn");
+      expect(noTimeoutPayload?.payload?.timeoutSeconds).toBe(0);
+
       const mergeUpdateRes = await rpcReq(ws, "cron.update", {
         id: mergeJobId,
         patch: {

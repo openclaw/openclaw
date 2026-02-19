@@ -94,6 +94,7 @@ describe("/subagents spawn command", () => {
     expect(spawnParams.task).toBe("do the thing");
     expect(spawnParams.agentId).toBe("beta");
     expect(spawnParams.cleanup).toBe("keep");
+    expect(spawnParams.expectsCompletionMessage).toBe(true);
     expect(spawnCtx.agentSessionKey).toBeDefined();
   });
 
@@ -149,6 +150,41 @@ describe("/subagents spawn command", () => {
     });
   });
 
+  it("prefers CommandTargetSessionKey for native /subagents spawn", async () => {
+    spawnSubagentDirectMock.mockResolvedValue(acceptedResult());
+    const params = buildCommandTestParams("/subagents spawn beta do the thing", baseCfg, {
+      CommandSource: "native",
+      CommandTargetSessionKey: "agent:main:main",
+      OriginatingChannel: "discord",
+      OriginatingTo: "channel:12345",
+    });
+    params.sessionKey = "agent:main:slack:slash:u1";
+
+    const result = await handleSubagentsCommand(params, true);
+
+    expect(result).not.toBeNull();
+    expect(result?.reply?.text).toContain("Spawned subagent beta");
+    const [, spawnCtx] = spawnSubagentDirectMock.mock.calls[0];
+    expect(spawnCtx.agentSessionKey).toBe("agent:main:main");
+    expect(spawnCtx.agentChannel).toBe("discord");
+    expect(spawnCtx.agentTo).toBe("channel:12345");
+  });
+
+  it("falls back to OriginatingTo for agentTo when command.to is missing", async () => {
+    spawnSubagentDirectMock.mockResolvedValue(acceptedResult());
+    const params = buildCommandTestParams("/subagents spawn beta do the thing", baseCfg, {
+      OriginatingTo: "channel:manual",
+      To: "channel:fallback-from-to",
+    });
+    params.command.to = undefined;
+
+    const result = await handleSubagentsCommand(params, true);
+    expect(result).not.toBeNull();
+    expect(result?.reply?.text).toContain("Spawned subagent beta");
+
+    const [, spawnCtx] = spawnSubagentDirectMock.mock.calls[0];
+    expect(spawnCtx).toMatchObject({ agentTo: "channel:manual" });
+  });
   it("returns forbidden for unauthorized cross-agent spawn", async () => {
     spawnSubagentDirectMock.mockResolvedValue(
       forbiddenResult("agentId is not allowed for sessions_spawn (allowed: alpha)"),

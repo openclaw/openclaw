@@ -6,6 +6,7 @@ import { assertSandboxPath } from "../../agents/sandbox-paths.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
+import { normalizeScpRemoteHost } from "../../infra/scp-host.js";
 import { getMediaDir } from "../../media/store.js";
 import { CONFIG_DIR } from "../../utils.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
@@ -165,6 +166,10 @@ export async function stageSandboxMedia(params: {
 }
 
 async function scpFile(remoteHost: string, remotePath: string, localPath: string): Promise<void> {
+  const safeRemoteHost = normalizeScpRemoteHost(remoteHost);
+  if (!safeRemoteHost) {
+    throw new Error("invalid remote host for SCP");
+  }
   return new Promise((resolve, reject) => {
     const child = spawn(
       "/usr/bin/scp",
@@ -172,8 +177,9 @@ async function scpFile(remoteHost: string, remotePath: string, localPath: string
         "-o",
         "BatchMode=yes",
         "-o",
-        "StrictHostKeyChecking=accept-new",
-        `${remoteHost}:${remotePath}`,
+        "StrictHostKeyChecking=yes",
+        "--",
+        `${safeRemoteHost}:${remotePath}`,
         localPath,
       ],
       { stdio: ["ignore", "ignore", "pipe"] },

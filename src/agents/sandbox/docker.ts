@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { sanitizeEnvVars } from "./sanitize-env-vars.js";
 
 type ExecDockerRawOptions = {
   allowFailure?: boolean;
@@ -269,11 +270,18 @@ export function buildSandboxCreateArgs(params: {
   if (params.cfg.user) {
     args.push("--user", params.cfg.user);
   }
-  for (const [key, value] of Object.entries(params.cfg.env ?? {})) {
-    if (!key.trim()) {
-      continue;
-    }
-    args.push("--env", key + "=" + value);
+  const envSanitization = sanitizeEnvVars(params.cfg.env ?? {});
+  if (envSanitization.blocked.length > 0) {
+    console.warn(
+      "[Security] Blocked sensitive environment variables:",
+      envSanitization.blocked.join(", "),
+    );
+  }
+  if (envSanitization.warnings.length > 0) {
+    console.warn("[Security] Suspicious environment variables:", envSanitization.warnings);
+  }
+  for (const [key, value] of Object.entries(envSanitization.allowed)) {
+    args.push("--env", `${key}=${value}`);
   }
   for (const cap of params.cfg.capDrop) {
     args.push("--cap-drop", cap);

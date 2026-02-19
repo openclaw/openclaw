@@ -1,33 +1,16 @@
 import { defaultRuntime } from "../../../runtime.js";
 import {
   buildCollectPrompt,
-  buildQueueSummaryPrompt,
+  clearQueueSummaryState,
+  drainCollectItemIfNeeded,
+  drainNextQueueItem,
   hasCrossChannelItems,
+  previewQueueSummaryPrompt,
   waitForQueueDebounce,
 } from "../../../utils/queue-helpers.js";
 import { isRoutableChannel } from "../route-reply.js";
 import { FOLLOWUP_QUEUES } from "./state.js";
 import type { FollowupRun } from "./types.js";
-
-function previewQueueSummaryPrompt(queue: {
-  dropPolicy: "summarize" | "old" | "new";
-  droppedCount: number;
-  summaryLines: string[];
-}): string | undefined {
-  return buildQueueSummaryPrompt({
-    state: {
-      dropPolicy: queue.dropPolicy,
-      droppedCount: queue.droppedCount,
-      summaryLines: [...queue.summaryLines],
-    },
-    noun: "message",
-  });
-}
-
-function clearQueueSummaryState(queue: { droppedCount: number; summaryLines: string[] }): void {
-  queue.droppedCount = 0;
-  queue.summaryLines = [];
-}
 
 export function scheduleFollowupDrain(
   key: string,
@@ -48,16 +31,6 @@ export function scheduleFollowupDrain(
           // Prevents “collect after shift” collapsing different targets.
           //
           // Debug: `pnpm test src/auto-reply/reply/queue.collect-routing.test.ts`
-          if (forceIndividualCollect) {
-            const next = queue.items[0];
-            if (!next) {
-              break;
-            }
-            await runFollowup(next);
-            queue.items.shift();
-            continue;
-          }
-
           // Check if messages span multiple channels.
           // If so, process individually to preserve per-message routing.
           const isCrossChannel = hasCrossChannelItems(queue.items, (item) => {
@@ -77,19 +50,24 @@ export function scheduleFollowupDrain(
             };
           });
 
-          if (isCrossChannel) {
-            forceIndividualCollect = true;
-            const next = queue.items[0];
-            if (!next) {
-              break;
-            }
-            await runFollowup(next);
-            queue.items.shift();
+          const collectDrainResult = await drainCollectItemIfNeeded({
+            forceIndividualCollect,
+            isCrossChannel,
+            setForceIndividualCollect: (next) => {
+              forceIndividualCollect = next;
+            },
+            items: queue.items,
+            run: runFollowup,
+          });
+          if (collectDrainResult === "empty") {
+            break;
+          }
+          if (collectDrainResult === "drained") {
             continue;
           }
 
           const items = queue.items.slice();
-          const summary = previewQueueSummaryPrompt(queue);
+          const summary = previewQueueSummaryPrompt({ state: queue, noun: "message" });
           const run = items.at(-1)?.run ?? queue.lastRun;
           if (!run) {
             break;
@@ -127,32 +105,30 @@ export function scheduleFollowupDrain(
           continue;
         }
 
-        const summaryPrompt = previewQueueSummaryPrompt(queue);
+        const summaryPrompt = previewQueueSummaryPrompt({ state: queue, noun: "message" });
         if (summaryPrompt) {
           const run = queue.lastRun;
           if (!run) {
             break;
           }
-          const next = queue.items[0];
-          if (!next) {
+          if (
+            !(await drainNextQueueItem(queue.items, async () => {
+              await runFollowup({
+                prompt: summaryPrompt,
+                run,
+                enqueuedAt: Date.now(),
+              });
+            }))
+          ) {
             break;
           }
-          await runFollowup({
-            prompt: summaryPrompt,
-            run,
-            enqueuedAt: Date.now(),
-          });
-          queue.items.shift();
           clearQueueSummaryState(queue);
           continue;
         }
 
-        const next = queue.items[0];
-        if (!next) {
+        if (!(await drainNextQueueItem(queue.items, runFollowup))) {
           break;
         }
-        await runFollowup(next);
-        queue.items.shift();
       }
     } catch (err) {
       queue.lastEnqueuedAt = Date.now();
