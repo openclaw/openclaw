@@ -81,6 +81,28 @@ describe("generateInteractionToken / verifyInteractionToken", () => {
     const t2 = generateInteractionToken(context);
     expect(t1).toBe(t2);
   });
+
+  it("produces the same token regardless of key order", () => {
+    const contextA = { action_id: "do_now", tweet_id: "123", action: "do" };
+    const contextB = { action: "do", action_id: "do_now", tweet_id: "123" };
+    const contextC = { tweet_id: "123", action: "do", action_id: "do_now" };
+    const tokenA = generateInteractionToken(contextA);
+    const tokenB = generateInteractionToken(contextB);
+    const tokenC = generateInteractionToken(contextC);
+    expect(tokenA).toBe(tokenB);
+    expect(tokenB).toBe(tokenC);
+  });
+
+  it("verifies a token when Mattermost reorders context keys", () => {
+    // Simulate: token generated with keys in one order, verified with keys in another
+    // (Mattermost reorders context keys when storing/returning interactive message payloads)
+    const originalContext = { action_id: "bm_do", tweet_id: "999", action: "do" };
+    const token = generateInteractionToken(originalContext);
+
+    // Mattermost returns keys in alphabetical order (or any arbitrary order)
+    const reorderedContext = { action: "do", action_id: "bm_do", tweet_id: "999" };
+    expect(verifyInteractionToken(reorderedContext, token)).toBe(true);
+  });
 });
 
 // ── Callback URL registry ────────────────────────────────────────────
@@ -243,6 +265,25 @@ describe("buildButtonAttachments", () => {
     const token = ctx._token as string;
     const { _token, ...contextWithoutToken } = ctx;
     expect(verifyInteractionToken(contextWithoutToken, token)).toBe(true);
+  });
+
+  it("generates tokens that verify even when Mattermost reorders context keys", () => {
+    const result = buildButtonAttachments({
+      callbackUrl: "http://localhost/cb",
+      buttons: [{ id: "do_action", name: "Do", context: { tweet_id: "42", category: "ai" } }],
+    });
+
+    const ctx = result[0].actions![0].integration.context;
+    const token = ctx._token as string;
+
+    // Simulate Mattermost returning context with keys in a different order
+    const reordered: Record<string, unknown> = {};
+    const keys = Object.keys(ctx).filter((k) => k !== "_token");
+    // Reverse the key order to simulate reordering
+    for (const key of keys.reverse()) {
+      reordered[key] = ctx[key];
+    }
+    expect(verifyInteractionToken(reordered, token)).toBe(true);
   });
 });
 

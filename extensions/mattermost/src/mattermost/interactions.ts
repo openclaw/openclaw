@@ -82,7 +82,8 @@ export function getInteractionSecret(): string {
 
 export function generateInteractionToken(context: Record<string, unknown>): string {
   const secret = getInteractionSecret();
-  const payload = JSON.stringify(context);
+  // Sort keys for stable serialization — Mattermost may reorder context keys
+  const payload = JSON.stringify(context, Object.keys(context).sort());
   return createHmac("sha256", secret).update(payload).digest("hex");
 }
 
