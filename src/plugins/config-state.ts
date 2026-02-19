@@ -10,7 +10,7 @@ export type NormalizedPluginsConfig = {
   slots: {
     memory?: string | null;
   };
-  entries: Record<string, { enabled?: boolean; config?: unknown }>;
+  entries: Record<string, { enabled?: boolean; config?: unknown; allowedAgents?: string[] }>;
 };
 
 export const BUNDLED_ENABLED_BY_DEFAULT = new Set<string>([
@@ -57,6 +57,7 @@ const normalizePluginEntries = (entries: unknown): NormalizedPluginsConfig["entr
     normalized[key] = {
       enabled: typeof entry.enabled === "boolean" ? entry.enabled : undefined,
       config: "config" in entry ? entry.config : undefined,
+      allowedAgents: Array.isArray(entry.allowedAgents) ? entry.allowedAgents : undefined,
     };
   }
   return normalized;
