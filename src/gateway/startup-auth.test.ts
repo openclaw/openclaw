@@ -166,6 +166,28 @@ describe("ensureGatewayStartupAuth", () => {
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
   });
 
+  it("keeps generated token ephemeral when runtime override flips explicit none mode", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        auth: {
+          mode: "none",
+        },
+      },
+    };
+    const result = await ensureGatewayStartupAuth({
+      cfg,
+      env: {} as NodeJS.ProcessEnv,
+      authOverride: { mode: "token" },
+      persist: true,
+    });
+
+    expect(result.generatedToken).toMatch(/^[0-9a-f]{48}$/);
+    expect(result.persistedGeneratedToken).toBe(false);
+    expect(result.auth.mode).toBe("token");
+    expect(result.auth.token).toBe(result.generatedToken);
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+  });
+
   it("keeps generated token ephemeral when runtime override flips implicit password mode", async () => {
     const cfg: OpenClawConfig = {
       gateway: {
