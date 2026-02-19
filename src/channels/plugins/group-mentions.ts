@@ -9,7 +9,7 @@ import type {
   GroupToolPolicyBySenderConfig,
   GroupToolPolicyConfig,
 } from "../../config/types.tools.js";
-import { normalizeHyphenSlug } from "../../shared/string-normalization.js";
+import { normalizeAtHashSlug, normalizeHyphenSlug } from "../../shared/string-normalization.js";
 import { resolveSlackAccount } from "../../slack/accounts.js";
 
 type GroupMentionParams = {
@@ -25,18 +25,7 @@ type GroupMentionParams = {
 };
 
 function normalizeDiscordSlug(value?: string | null) {
-  if (!value) {
-    return "";
-  }
-  let text = value.trim().toLowerCase();
-  if (!text) {
-    return "";
-  }
-  text = text.replace(/^[@#]+/, "");
-  text = text.replace(/[\s_]+/g, "-");
-  text = text.replace(/[^a-z0-9-]+/g, "-");
-  text = text.replace(/-{2,}/g, "-").replace(/^-+|-+$/g, "");
-  return text;
+  return normalizeAtHashSlug(value);
 }
 
 function parseTelegramGroupId(value?: string | null) {
@@ -129,6 +118,41 @@ function resolveDiscordChannelEntry<TEntry>(
   );
 }
 
+type SlackChannelPolicyEntry = {
+  requireMention?: boolean;
+  tools?: GroupToolPolicyConfig;
+  toolsBySender?: GroupToolPolicyBySenderConfig;
+};
+
+function resolveSlackChannelPolicyEntry(
+  params: GroupMentionParams,
+): SlackChannelPolicyEntry | undefined {
+  const account = resolveSlackAccount({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
+  const channels = (account.channels ?? {}) as Record<string, SlackChannelPolicyEntry>;
+  if (Object.keys(channels).length === 0) {
+    return undefined;
+  }
+  const channelId = params.groupId?.trim();
+  const groupChannel = params.groupChannel;
+  const channelName = groupChannel?.replace(/^#/, "");
+  const normalizedName = normalizeHyphenSlug(channelName);
+  const candidates = [
+    channelId ?? "",
+    channelName ? `#${channelName}` : "",
+    channelName ?? "",
+    normalizedName,
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    if (candidate && channels[candidate]) {
+      return channels[candidate];
+    }
+  }
+  return channels["*"];
+}
+
 export function resolveTelegramGroupRequireMention(
   params: GroupMentionParams,
 ): boolean | undefined {
@@ -210,34 +234,7 @@ export function resolveGoogleChatGroupToolPolicy(
 }
 
 export function resolveSlackGroupRequireMention(params: GroupMentionParams): boolean {
-  const account = resolveSlackAccount({
-    cfg: params.cfg,
-    accountId: params.accountId,
-  });
-  const channels = account.channels ?? {};
-  const keys = Object.keys(channels);
-  if (keys.length === 0) {
-    return true;
-  }
-  const channelId = params.groupId?.trim();
-  const groupChannel = params.groupChannel;
-  const channelName = groupChannel?.replace(/^#/, "");
-  const normalizedName = normalizeHyphenSlug(channelName);
-  const candidates = [
-    channelId ?? "",
-    channelName ? `#${channelName}` : "",
-    channelName ?? "",
-    normalizedName,
-  ].filter(Boolean);
-  let matched: { requireMention?: boolean } | undefined;
-  for (const candidate of candidates) {
-    if (candidate && channels[candidate]) {
-      matched = channels[candidate];
-      break;
-    }
-  }
-  const fallback = channels["*"];
-  const resolved = matched ?? fallback;
+  const resolved = resolveSlackChannelPolicyEntry(params);
   if (typeof resolved?.requireMention === "boolean") {
     return resolved.requireMention;
   }
@@ -342,35 +339,10 @@ export function resolveDiscordGroupToolPolicy(
 export function resolveSlackGroupToolPolicy(
   params: GroupMentionParams,
 ): GroupToolPolicyConfig | undefined {
-  const account = resolveSlackAccount({
-    cfg: params.cfg,
-    accountId: params.accountId,
-  });
-  const channels = account.channels ?? {};
-  const keys = Object.keys(channels);
-  if (keys.length === 0) {
+  const resolved = resolveSlackChannelPolicyEntry(params);
+  if (!resolved) {
     return undefined;
   }
-  const channelId = params.groupId?.trim();
-  const groupChannel = params.groupChannel;
-  const channelName = groupChannel?.replace(/^#/, "");
-  const normalizedName = normalizeHyphenSlug(channelName);
-  const candidates = [
-    channelId ?? "",
-    channelName ? `#${channelName}` : "",
-    channelName ?? "",
-    normalizedName,
-  ].filter(Boolean);
-  let matched:
-    | { tools?: GroupToolPolicyConfig; toolsBySender?: GroupToolPolicyBySenderConfig }
-    | undefined;
-  for (const candidate of candidates) {
-    if (candidate && channels[candidate]) {
-      matched = channels[candidate];
-      break;
-    }
-  }
-  const resolved = matched ?? channels["*"];
   const senderPolicy = resolveToolsBySender({
     toolsBySender: resolved?.toolsBySender,
     senderId: params.senderId,

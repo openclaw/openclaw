@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("./tools/gateway.js", () => ({
   callGatewayTool: vi.fn(),
+  readGatewayCallOptions: vi.fn(() => ({})),
 }));
 
 vi.mock("./tools/nodes-utils.js", () => ({

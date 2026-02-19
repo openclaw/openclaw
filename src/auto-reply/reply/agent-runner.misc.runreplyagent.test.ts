@@ -94,6 +94,114 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+describe("runReplyAgent onAgentRunStart", () => {
+  function createRun(params?: {
+    provider?: string;
+    model?: string;
+    opts?: {
+      runId?: string;
+      onAgentRunStart?: (runId: string) => void;
+    };
+  }) {
+    const provider = params?.provider ?? "anthropic";
+    const model = params?.model ?? "claude";
+    const typing = createMockTypingController();
+    const sessionCtx = {
+      Provider: "webchat",
+      OriginatingTo: "session:1",
+      AccountId: "primary",
+      MessageSid: "msg",
+    } as unknown as TemplateContext;
+    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
+    const followupRun = {
+      prompt: "hello",
+      summaryLine: "hello",
+      enqueuedAt: Date.now(),
+      run: {
+        sessionId: "session",
+        sessionKey: "main",
+        messageProvider: "webchat",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        config: {},
+        skillsSnapshot: {},
+        provider,
+        model,
+        thinkLevel: "low",
+        verboseLevel: "off",
+        elevatedLevel: "off",
+        bashElevated: {
+          enabled: false,
+          allowed: false,
+          defaultLevel: "off",
+        },
+        timeoutMs: 1_000,
+        blockReplyBreak: "message_end",
+      },
+    } as unknown as FollowupRun;
+
+    return runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: "main",
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      opts: params?.opts,
+      typing,
+      sessionCtx,
+      defaultModel: `${provider}/${model}`,
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+  }
+
+  it("does not emit start callback when fallback fails before run start", async () => {
+    runWithModelFallbackMock.mockRejectedValueOnce(
+      new Error('No API key found for provider "anthropic".'),
+    );
+    const onAgentRunStart = vi.fn();
+
+    const result = await createRun({
+      opts: { runId: "run-no-start", onAgentRunStart },
+    });
+
+    expect(onAgentRunStart).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      text: expect.stringContaining('No API key found for provider "anthropic".'),
+    });
+  });
+
+  it("emits start callback when cli runner starts", async () => {
+    runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          provider: "claude-cli",
+          model: "opus-4.5",
+        },
+      },
+    });
+    const onAgentRunStart = vi.fn();
+
+    const result = await createRun({
+      provider: "claude-cli",
+      model: "opus-4.5",
+      opts: { runId: "run-started", onAgentRunStart },
+    });
+
+    expect(onAgentRunStart).toHaveBeenCalledTimes(1);
+    expect(onAgentRunStart).toHaveBeenCalledWith("run-started");
+    expect(result).toMatchObject({ text: "ok" });
+  });
+});
+
 describe("runReplyAgent authProfileId fallback scoping", () => {
   it("drops authProfileId when provider changes during fallback", async () => {
     runWithModelFallbackMock.mockImplementationOnce(

@@ -4,10 +4,17 @@ import {
   readStringArrayParam,
   readStringParam,
 } from "../../../../agents/tools/common.js";
+import {
+  isDiscordModerationAction,
+  readDiscordModerationCommand,
+} from "../../../../agents/tools/discord-actions-moderation-shared.js";
 import { handleDiscordAction } from "../../../../agents/tools/discord-actions.js";
 import type { ChannelMessageActionContext } from "../../types.js";
 
-type Ctx = Pick<ChannelMessageActionContext, "action" | "params" | "cfg" | "accountId">;
+type Ctx = Pick<
+  ChannelMessageActionContext,
+  "action" | "params" | "cfg" | "accountId" | "requesterSenderId"
+>;
 
 export async function tryHandleDiscordMessageActionGuildAdmin(params: {
   ctx: Ctx;
@@ -342,30 +349,26 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     );
   }
 
-  if (action === "timeout" || action === "kick" || action === "ban") {
-    const guildId = readStringParam(actionParams, "guildId", {
-      required: true,
+  if (isDiscordModerationAction(action)) {
+    const moderation = readDiscordModerationCommand(action, {
+      ...actionParams,
+      durationMinutes: readNumberParam(actionParams, "durationMin", { integer: true }),
+      deleteMessageDays: readNumberParam(actionParams, "deleteDays", {
+        integer: true,
+      }),
     });
-    const userId = readStringParam(actionParams, "userId", { required: true });
-    const durationMinutes = readNumberParam(actionParams, "durationMin", {
-      integer: true,
-    });
-    const until = readStringParam(actionParams, "until");
-    const reason = readStringParam(actionParams, "reason");
-    const deleteMessageDays = readNumberParam(actionParams, "deleteDays", {
-      integer: true,
-    });
-    const discordAction = action;
+    const senderUserId = ctx.requesterSenderId?.trim() || undefined;
     return await handleDiscordAction(
       {
-        action: discordAction,
+        action: moderation.action,
         accountId: accountId ?? undefined,
-        guildId,
-        userId,
-        durationMinutes,
-        until,
-        reason,
-        deleteMessageDays,
+        guildId: moderation.guildId,
+        userId: moderation.userId,
+        durationMinutes: moderation.durationMinutes,
+        until: moderation.until,
+        reason: moderation.reason,
+        deleteMessageDays: moderation.deleteMessageDays,
+        senderUserId,
       },
       cfg,
     );

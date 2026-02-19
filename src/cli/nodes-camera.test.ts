@@ -6,6 +6,7 @@ import {
   cameraTempPath,
   parseCameraClipPayload,
   parseCameraSnapPayload,
+  writeCameraClipPayloadToFile,
   writeBase64ToFile,
   writeUrlToFile,
 } from "./nodes-camera.js";
@@ -54,6 +55,27 @@ describe("nodes camera helpers", () => {
       id: "id1",
     });
     expect(p).toBe(path.join("/tmp", "openclaw-camera-snap-front-id1.jpg"));
+  });
+
+  it("writes camera clip payload to temp path", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-"));
+    try {
+      const out = await writeCameraClipPayloadToFile({
+        payload: {
+          format: "mp4",
+          base64: "aGk=",
+          durationMs: 200,
+          hasAudio: false,
+        },
+        facing: "front",
+        tmpDir: dir,
+        id: "clip1",
+      });
+      expect(out).toBe(path.join(dir, "openclaw-camera-clip-front-clip1.mp4"));
+      await expect(fs.readFile(out, "utf8")).resolves.toBe("hi");
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("writes base64 to file", async () => {

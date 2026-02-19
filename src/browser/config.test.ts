@@ -182,4 +182,24 @@ describe("browser config", () => {
     });
     expect(resolved.extraArgs).toEqual([]);
   });
+
+  it("resolves browser SSRF policy when configured", () => {
+    const resolved = resolveBrowserConfig({
+      ssrfPolicy: {
+        allowPrivateNetwork: true,
+        allowedHostnames: [" localhost ", ""],
+        hostnameAllowlist: [" *.trusted.example ", " "],
+      },
+    });
+    expect(resolved.ssrfPolicy).toEqual({
+      allowPrivateNetwork: true,
+      allowedHostnames: ["localhost"],
+      hostnameAllowlist: ["*.trusted.example"],
+    });
+  });
+
+  it("keeps browser SSRF policy undefined when not configured", () => {
+    const resolved = resolveBrowserConfig({});
+    expect(resolved.ssrfPolicy).toBeUndefined();
+  });
 });

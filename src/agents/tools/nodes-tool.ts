@@ -6,6 +6,7 @@ import {
   cameraTempPath,
   parseCameraClipPayload,
   parseCameraSnapPayload,
+  writeCameraClipPayloadToFile,
   writeBase64ToFile,
   writeUrlToFile,
 } from "../../cli/nodes-camera.js";
@@ -300,16 +301,10 @@ export function createNodesTool(options?: {
               idempotencyKey: crypto.randomUUID(),
             });
             const payload = parseCameraClipPayload(raw?.payload);
-            const filePath = cameraTempPath({
-              kind: "clip",
+            const filePath = await writeCameraClipPayloadToFile({
+              payload,
               facing,
-              ext: payload.format,
             });
-            if (payload.url) {
-              await writeUrlToFile(filePath, payload.url);
-            } else if (payload.base64) {
-              await writeBase64ToFile(filePath, payload.base64);
-            }
             return {
               content: [{ type: "text", text: `FILE:${filePath}` }],
               details: {

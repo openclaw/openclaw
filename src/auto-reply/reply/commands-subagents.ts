@@ -37,12 +37,13 @@ import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { stopSubagentsForRequester } from "./abort.js";
 import type { CommandHandler } from "./commands-types.js";
 import { clearSessionQueues } from "./queue.js";
-import { formatRunLabel, formatRunStatus, sortSubagentRuns } from "./subagents-utils.js";
-
-type SubagentTargetResolution = {
-  entry?: SubagentRunRecord;
-  error?: string;
-};
+import {
+  formatRunLabel,
+  formatRunStatus,
+  resolveSubagentTargetFromRuns,
+  type SubagentTargetResolution,
+  sortSubagentRuns,
+} from "./subagents-utils.js";
 
 const COMMAND = "/subagents";
 const COMMAND_KILL = "/kill";
@@ -104,6 +105,20 @@ function resolveDisplayStatus(entry: SubagentRunRecord) {
   return status === "error" ? "failed" : status;
 }
 
+function formatSubagentListLine(params: {
+  entry: SubagentRunRecord;
+  index: number;
+  runtimeMs: number;
+  sessionEntry?: SessionEntry;
+}) {
+  const usageText = formatTokenUsageDisplay(params.sessionEntry);
+  const label = truncateLine(formatRunLabel(params.entry, { maxLength: 48 }), 48);
+  const task = formatTaskPreview(params.entry.task);
+  const runtime = formatDurationCompact(params.runtimeMs);
+  const status = resolveDisplayStatus(params.entry);
+  return `${params.index}. ${label} (${resolveModelDisplay(params.sessionEntry, params.entry.model)}, ${runtime}${usageText ? `, ${usageText}` : ""}) ${status}${task.toLowerCase() !== label.toLowerCase() ? ` - ${task}` : ""}`;
+}
+
 function formatTimestamp(valueMs?: number) {
   if (!valueMs || !Number.isFinite(valueMs) || valueMs <= 0) {
     return "n/a";
@@ -138,56 +153,21 @@ function resolveSubagentTarget(
   runs: SubagentRunRecord[],
   token: string | undefined,
 ): SubagentTargetResolution {
-  const trimmed = token?.trim();
-  if (!trimmed) {
-    return { error: "Missing subagent id." };
-  }
-  if (trimmed === "last") {
-    const sorted = sortSubagentRuns(runs);
-    return { entry: sorted[0] };
-  }
-  const sorted = sortSubagentRuns(runs);
-  const recentCutoff = Date.now() - RECENT_WINDOW_MINUTES * 60_000;
-  const numericOrder = [
-    ...sorted.filter((entry) => !entry.endedAt),
-    ...sorted.filter((entry) => !!entry.endedAt && (entry.endedAt ?? 0) >= recentCutoff),
-  ];
-  if (/^\d+$/.test(trimmed)) {
-    const idx = Number.parseInt(trimmed, 10);
-    if (!Number.isFinite(idx) || idx <= 0 || idx > numericOrder.length) {
-      return { error: `Invalid subagent index: ${trimmed}` };
-    }
-    return { entry: numericOrder[idx - 1] };
-  }
-  if (trimmed.includes(":")) {
-    const match = runs.find((entry) => entry.childSessionKey === trimmed);
-    return match ? { entry: match } : { error: `Unknown subagent session: ${trimmed}` };
-  }
-  const lowered = trimmed.toLowerCase();
-  const byLabel = runs.filter((entry) => formatRunLabel(entry).toLowerCase() === lowered);
-  if (byLabel.length === 1) {
-    return { entry: byLabel[0] };
-  }
-  if (byLabel.length > 1) {
-    return { error: `Ambiguous subagent label: ${trimmed}` };
-  }
-  const byLabelPrefix = runs.filter((entry) =>
-    formatRunLabel(entry).toLowerCase().startsWith(lowered),
-  );
-  if (byLabelPrefix.length === 1) {
-    return { entry: byLabelPrefix[0] };
-  }
-  if (byLabelPrefix.length > 1) {
-    return { error: `Ambiguous subagent label prefix: ${trimmed}` };
-  }
-  const byRunId = runs.filter((entry) => entry.runId.startsWith(trimmed));
-  if (byRunId.length === 1) {
-    return { entry: byRunId[0] };
-  }
-  if (byRunId.length > 1) {
-    return { error: `Ambiguous run id prefix: ${trimmed}` };
-  }
-  return { error: `Unknown subagent id: ${trimmed}` };
+  return resolveSubagentTargetFromRuns({
+    runs,
+    token,
+    recentWindowMinutes: RECENT_WINDOW_MINUTES,
+    label: (entry) => formatRunLabel(entry),
+    errors: {
+      missingTarget: "Missing subagent id.",
+      invalidIndex: (value) => `Invalid subagent index: ${value}`,
+      unknownSession: (value) => `Unknown subagent session: ${value}`,
+      ambiguousLabel: (value) => `Ambiguous subagent label: ${value}`,
+      ambiguousLabelPrefix: (value) => `Ambiguous subagent label prefix: ${value}`,
+      ambiguousRunIdPrefix: (value) => `Ambiguous run id prefix: ${value}`,
+      unknownTarget: (value) => `Unknown subagent id: ${value}`,
+    },
+  });
 }
 
 function buildSubagentsHelp() {
@@ -311,42 +291,37 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
     const recentCutoff = now - RECENT_WINDOW_MINUTES * 60_000;
     const storeCache: SessionStoreCache = new Map();
     let index = 1;
-    const activeLines = sorted
-      .filter((entry) => !entry.endedAt)
-      .map((entry) => {
+    const mapRuns = (
+      entries: SubagentRunRecord[],
+      runtimeMs: (entry: SubagentRunRecord) => number,
+    ) =>
+      entries.map((entry) => {
         const { entry: sessionEntry } = loadSubagentSessionEntry(
           params,
           entry.childSessionKey,
           storeCache,
         );
-        const usageText = formatTokenUsageDisplay(sessionEntry);
-        const label = truncateLine(formatRunLabel(entry, { maxLength: 48 }), 48);
-        const task = formatTaskPreview(entry.task);
-        const runtime = formatDurationCompact(now - (entry.startedAt ?? entry.createdAt));
-        const status = resolveDisplayStatus(entry);
-        const line = `${index}. ${label} (${resolveModelDisplay(sessionEntry, entry.model)}, ${runtime}${usageText ? `, ${usageText}` : ""}) ${status}${task.toLowerCase() !== label.toLowerCase() ? ` - ${task}` : ""}`;
+        const line = formatSubagentListLine({
+          entry,
+          index,
+          runtimeMs: runtimeMs(entry),
+          sessionEntry,
+        });
         index += 1;
         return line;
       });
-    const recentLines = sorted
-      .filter((entry) => !!entry.endedAt && (entry.endedAt ?? 0) >= recentCutoff)
-      .map((entry) => {
-        const { entry: sessionEntry } = loadSubagentSessionEntry(
-          params,
-          entry.childSessionKey,
-          storeCache,
-        );
-        const usageText = formatTokenUsageDisplay(sessionEntry);
-        const label = truncateLine(formatRunLabel(entry, { maxLength: 48 }), 48);
-        const task = formatTaskPreview(entry.task);
-        const runtime = formatDurationCompact(
-          (entry.endedAt ?? now) - (entry.startedAt ?? entry.createdAt),
-        );
-        const status = resolveDisplayStatus(entry);
-        const line = `${index}. ${label} (${resolveModelDisplay(sessionEntry, entry.model)}, ${runtime}${usageText ? `, ${usageText}` : ""}) ${status}${task.toLowerCase() !== label.toLowerCase() ? ` - ${task}` : ""}`;
-        index += 1;
-        return line;
-      });
+    const activeEntries = sorted.filter((entry) => !entry.endedAt);
+    const activeLines = mapRuns(
+      activeEntries,
+      (entry) => now - (entry.startedAt ?? entry.createdAt),
+    );
+    const recentEntries = sorted.filter(
+      (entry) => !!entry.endedAt && (entry.endedAt ?? 0) >= recentCutoff,
+    );
+    const recentLines = mapRuns(
+      recentEntries,
+      (entry) => (entry.endedAt ?? now) - (entry.startedAt ?? entry.createdAt),
+    );
 
     const lines = ["active subagents:", "-----"];
     if (activeLines.length === 0) {

@@ -82,6 +82,10 @@ function setupTransientGetFileRetry() {
   return getFile;
 }
 
+async function flushRetryTimers() {
+  await vi.runAllTimersAsync();
+}
+
 describe("resolveMedia getFile retry", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -96,7 +100,7 @@ describe("resolveMedia getFile retry", () => {
   it("retries getFile on transient failure and succeeds on second attempt", async () => {
     const getFile = setupTransientGetFileRetry();
     const promise = resolveMedia(makeCtx("voice", getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
-    await vi.advanceTimersByTimeAsync(5000);
+    await flushRetryTimers();
     const result = await promise;
 
     expect(getFile).toHaveBeenCalledTimes(2);
@@ -105,16 +109,19 @@ describe("resolveMedia getFile retry", () => {
     );
   });
 
-  it("returns null when all getFile retries fail so message is not dropped", async () => {
-    const getFile = vi.fn().mockRejectedValue(new Error("Network request for 'getFile' failed!"));
+  it.each(["voice", "photo", "video"] as const)(
+    "returns null for %s when getFile exhausts retries so message is not dropped",
+    async (mediaField) => {
+      const getFile = vi.fn().mockRejectedValue(new Error("Network request for 'getFile' failed!"));
 
-    const promise = resolveMedia(makeCtx("voice", getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
-    await vi.advanceTimersByTimeAsync(15000);
-    const result = await promise;
+      const promise = resolveMedia(makeCtx(mediaField, getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
+      await flushRetryTimers();
+      const result = await promise;
 
-    expect(getFile).toHaveBeenCalledTimes(3);
-    expect(result).toBeNull();
-  });
+      expect(getFile).toHaveBeenCalledTimes(3);
+      expect(result).toBeNull();
+    },
+  );
 
   it("does not catch errors from fetchRemoteMedia (only getFile is retried)", async () => {
     const getFile = vi.fn().mockResolvedValue({ file_path: "voice/file_0.oga" });
@@ -126,20 +133,6 @@ describe("resolveMedia getFile retry", () => {
 
     expect(getFile).toHaveBeenCalledTimes(1);
   });
-
-  it.each(["photo", "video"] as const)(
-    "returns null for %s when getFile exhausts retries",
-    async (mediaField) => {
-      const getFile = vi.fn().mockRejectedValue(new Error("HttpError: Network error"));
-
-      const promise = resolveMedia(makeCtx(mediaField, getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
-      await vi.advanceTimersByTimeAsync(15000);
-      const result = await promise;
-
-      expect(getFile).toHaveBeenCalledTimes(3);
-      expect(result).toBeNull();
-    },
-  );
 
   it("does not retry 'file is too big' error (400 Bad Request) and returns null", async () => {
     // Simulate Telegram Bot API error when file exceeds 20MB limit
@@ -188,7 +181,7 @@ describe("resolveMedia getFile retry", () => {
   it("still retries transient errors even after encountering file too big in different call", async () => {
     const getFile = setupTransientGetFileRetry();
     const promise = resolveMedia(makeCtx("voice", getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
-    await vi.advanceTimersByTimeAsync(5000);
+    await flushRetryTimers();
     const result = await promise;
 
     // Should retry transient errors

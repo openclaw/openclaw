@@ -11,6 +11,7 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
+import { seedSessionStore } from "./heartbeat-runner.test-utils.js";
 import { enqueueSystemEvent, resetSystemEventsForTest } from "./system-events.js";
 
 // Avoid pulling optional runtime deps during isolated runs.
@@ -50,22 +51,11 @@ describe("Ghost reminder bug (issue #13317)", () => {
     };
     const sessionKey = resolveMainSessionKey(cfg);
 
-    await fs.writeFile(
-      storePath,
-      JSON.stringify(
-        {
-          [sessionKey]: {
-            sessionId: "sid",
-            updatedAt: Date.now(),
-            lastChannel: "telegram",
-            lastProvider: "telegram",
-            lastTo: "155462274",
-          },
-        },
-        null,
-        2,
-      ),
-    );
+    await seedSessionStore(storePath, sessionKey, {
+      lastChannel: "telegram",
+      lastProvider: "telegram",
+      lastTo: "155462274",
+    });
 
     return { cfg, sessionKey };
   };
@@ -182,6 +172,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
 
   it("uses CRON_EVENT_PROMPT for tagged cron events on interval wake", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-interval-"));
+    await fs.writeFile(path.join(tmpDir, "HEARTBEAT.md"), "- Check status\n", "utf-8");
     const sendTelegram = vi.fn().mockResolvedValue({
       messageId: "m1",
       chatId: "155462274",

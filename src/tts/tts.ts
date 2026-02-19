@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -382,8 +383,8 @@ function readPrefs(prefsPath: string): TtsUserPrefs {
 }
 
 function atomicWriteFileSync(filePath: string, content: string): void {
-  const tmpPath = `${filePath}.tmp.${Date.now()}.${Math.random().toString(36).slice(2)}`;
-  writeFileSync(tmpPath, content);
+  const tmpPath = `${filePath}.tmp.${Date.now()}.${randomBytes(8).toString("hex")}`;
+  writeFileSync(tmpPath, content, { mode: 0o600 });
   try {
     renameSync(tmpPath, filePath);
   } catch (err) {

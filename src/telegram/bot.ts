@@ -66,9 +66,13 @@ export function getTelegramSequentialKey(ctx: {
   chat?: { id?: number };
   me?: UserFromGetMe;
   message?: Message;
+  channelPost?: Message;
+  editedChannelPost?: Message;
   update?: {
     message?: Message;
     edited_message?: Message;
+    channel_post?: Message;
+    edited_channel_post?: Message;
     callback_query?: { message?: Message };
     message_reaction?: { chat?: { id?: number } };
   };
@@ -80,8 +84,12 @@ export function getTelegramSequentialKey(ctx: {
   }
   const msg =
     ctx.message ??
+    ctx.channelPost ??
+    ctx.editedChannelPost ??
     ctx.update?.message ??
     ctx.update?.edited_message ??
+    ctx.update?.channel_post ??
+    ctx.update?.edited_channel_post ??
     ctx.update?.callback_query?.message;
   const chatId = msg?.chat?.id ?? ctx.chat?.id;
   const rawText = msg?.text ?? msg?.caption;

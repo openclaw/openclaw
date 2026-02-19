@@ -435,8 +435,12 @@ public final class OpenClawChatViewModel {
         case let .agent(agent):
             self.handleAgentEvent(agent)
         case .seqGap:
-            self.errorText = "Event stream interrupted; try refreshing."
+            self.errorText = nil
             self.clearPendingRuns(reason: nil)
+            Task {
+                await self.refreshHistoryAfterRun()
+                await self.pollHealthIfNeeded(force: true)
+            }
         }
     }
 
@@ -447,7 +451,10 @@ public final class OpenClawChatViewModel {
         // even when this view currently uses an alias key (for example "main").
         // Never drop events for our own pending run on key mismatch, or the UI can stay
         // stuck at "thinking" until the user reopens and forces a history reload.
-        if let sessionKey = chat.sessionKey, sessionKey != self.sessionKey, !isOurRun {
+        if let sessionKey = chat.sessionKey,
+           !Self.matchesCurrentSessionKey(incoming: sessionKey, current: self.sessionKey),
+           !isOurRun
+        {
             return
         }
         if !isOurRun {
@@ -479,6 +486,21 @@ public final class OpenClawChatViewModel {
         default:
             break
         }
+    }
+
+    private static func matchesCurrentSessionKey(incoming: String, current: String) -> Bool {
+        let incomingNormalized = incoming.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let currentNormalized = current.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if incomingNormalized == currentNormalized {
+            return true
+        }
+        // Common alias pair in operator clients: UI uses "main" while gateway emits canonical.
+        if (incomingNormalized == "agent:main:main" && currentNormalized == "main") ||
+            (incomingNormalized == "main" && currentNormalized == "agent:main:main")
+        {
+            return true
+        }
+        return false
     }
 
     private func handleAgentEvent(_ evt: OpenClawAgentEventPayload) {

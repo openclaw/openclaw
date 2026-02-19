@@ -1,23 +1,10 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { splitShellArgs } from "../utils/shell-argv.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.js";
+import { expandHomePrefix } from "./home-dir.js";
 
-export const DEFAULT_SAFE_BINS = ["jq", "grep", "cut", "sort", "uniq", "head", "tail", "tr", "wc"];
-
-function expandHome(value: string): string {
-  if (!value) {
-    return value;
-  }
-  if (value === "~") {
-    return os.homedir();
-  }
-  if (value.startsWith("~/")) {
-    return path.join(os.homedir(), value.slice(2));
-  }
-  return value;
-}
+export const DEFAULT_SAFE_BINS = ["jq", "cut", "uniq", "head", "tail", "tr", "wc"];
 
 export type CommandResolution = {
   rawExecutable: string;
@@ -58,7 +45,7 @@ function parseFirstToken(command: string): string | null {
 }
 
 function resolveExecutablePath(rawExecutable: string, cwd?: string, env?: NodeJS.ProcessEnv) {
-  const expanded = rawExecutable.startsWith("~") ? expandHome(rawExecutable) : rawExecutable;
+  const expanded = rawExecutable.startsWith("~") ? expandHomePrefix(rawExecutable) : rawExecutable;
   if (expanded.includes("/") || expanded.includes("\\")) {
     if (path.isAbsolute(expanded)) {
       return isExecutableFile(expanded) ? expanded : undefined;
@@ -172,7 +159,7 @@ function matchesPattern(pattern: string, target: string): boolean {
   if (!trimmed) {
     return false;
   }
-  const expanded = trimmed.startsWith("~") ? expandHome(trimmed) : trimmed;
+  const expanded = trimmed.startsWith("~") ? expandHomePrefix(trimmed) : trimmed;
   const hasWildcard = /[*?]/.test(expanded);
   let normalizedPattern = expanded;
   let normalizedTarget = target;
@@ -200,7 +187,7 @@ export function resolveAllowlistCandidatePath(
   if (!raw) {
     return undefined;
   }
-  const expanded = raw.startsWith("~") ? expandHome(raw) : raw;
+  const expanded = raw.startsWith("~") ? expandHomePrefix(raw) : raw;
   if (!expanded.includes("/") && !expanded.includes("\\")) {
     return undefined;
   }
@@ -240,6 +227,78 @@ export type ExecCommandSegment = {
   argv: string[];
   resolution: CommandResolution | null;
 };
+
+export type ExecArgvToken =
+  | {
+      kind: "empty";
+      raw: string;
+    }
+  | {
+      kind: "terminator";
+      raw: string;
+    }
+  | {
+      kind: "stdin";
+      raw: string;
+    }
+  | {
+      kind: "positional";
+      raw: string;
+    }
+  | {
+      kind: "option";
+      raw: string;
+      style: "long";
+      flag: string;
+      inlineValue?: string;
+    }
+  | {
+      kind: "option";
+      raw: string;
+      style: "short-cluster";
+      cluster: string;
+      flags: string[];
+    };
+
+/**
+ * Tokenizes a single argv entry into a normalized option/positional model.
+ * Consumers can share this model to keep argv parsing behavior consistent.
+ */
+export function parseExecArgvToken(raw: string): ExecArgvToken {
+  if (!raw) {
+    return { kind: "empty", raw };
+  }
+  if (raw === "--") {
+    return { kind: "terminator", raw };
+  }
+  if (raw === "-") {
+    return { kind: "stdin", raw };
+  }
+  if (!raw.startsWith("-")) {
+    return { kind: "positional", raw };
+  }
+  if (raw.startsWith("--")) {
+    const eqIndex = raw.indexOf("=");
+    if (eqIndex > 0) {
+      return {
+        kind: "option",
+        raw,
+        style: "long",
+        flag: raw.slice(0, eqIndex),
+        inlineValue: raw.slice(eqIndex + 1),
+      };
+    }
+    return { kind: "option", raw, style: "long", flag: raw };
+  }
+  const cluster = raw.slice(1);
+  return {
+    kind: "option",
+    raw,
+    style: "short-cluster",
+    cluster,
+    flags: cluster.split("").map((entry) => `-${entry}`),
+  };
+}
 
 export type ExecCommandAnalysis = {
   ok: boolean;

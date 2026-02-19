@@ -1,6 +1,6 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 type FakeFsEntry = { kind: "file"; content: string } | { kind: "dir" };
 
@@ -10,6 +10,7 @@ const FIXTURE_BASE = path.join(VITEST_FS_BASE, "openclaw-root");
 const state = vi.hoisted(() => ({
   entries: new Map<string, FakeFsEntry>(),
   realpaths: new Map<string, string>(),
+  realpathErrors: new Set<string>(),
 }));
 
 const abs = (p: string) => path.resolve(p);
@@ -56,7 +57,15 @@ vi.mock("node:fs", async (importOriginal) => {
       };
     },
     realpathSync: (p: string) =>
-      isFixturePath(p) ? (state.realpaths.get(abs(p)) ?? abs(p)) : actual.realpathSync(p),
+      isFixturePath(p)
+        ? (() => {
+            const resolved = abs(p);
+            if (state.realpathErrors.has(resolved)) {
+              throw new Error(`ENOENT: no such file or directory, realpath '${p}'`);
+            }
+            return state.realpaths.get(resolved) ?? resolved;
+          })()
+        : actual.realpathSync(p),
   };
   return { ...wrapped, default: wrapped };
 });
@@ -81,14 +90,21 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 });
 
 describe("resolveOpenClawPackageRoot", () => {
+  let resolveOpenClawPackageRoot: typeof import("./openclaw-root.js").resolveOpenClawPackageRoot;
+  let resolveOpenClawPackageRootSync: typeof import("./openclaw-root.js").resolveOpenClawPackageRootSync;
+
+  beforeAll(async () => {
+    ({ resolveOpenClawPackageRoot, resolveOpenClawPackageRootSync } =
+      await import("./openclaw-root.js"));
+  });
+
   beforeEach(() => {
     state.entries.clear();
     state.realpaths.clear();
+    state.realpathErrors.clear();
   });
 
   it("resolves package root from .bin argv1", async () => {
-    const { resolveOpenClawPackageRootSync } = await import("./openclaw-root.js");
-
     const project = fx("bin-scenario");
     const argv1 = path.join(project, "node_modules", ".bin", "openclaw");
     const pkgRoot = path.join(project, "node_modules", "openclaw");
@@ -98,8 +114,6 @@ describe("resolveOpenClawPackageRoot", () => {
   });
 
   it("resolves package root via symlinked argv1", async () => {
-    const { resolveOpenClawPackageRootSync } = await import("./openclaw-root.js");
-
     const project = fx("symlink-scenario");
     const bin = path.join(project, "bin", "openclaw");
     const realPkg = path.join(project, "real-pkg");
@@ -109,9 +123,19 @@ describe("resolveOpenClawPackageRoot", () => {
     expect(resolveOpenClawPackageRootSync({ argv1: bin })).toBe(realPkg);
   });
 
-  it("prefers moduleUrl candidates", async () => {
+  it("falls back when argv1 realpath throws", async () => {
     const { resolveOpenClawPackageRootSync } = await import("./openclaw-root.js");
 
+    const project = fx("realpath-throw-scenario");
+    const argv1 = path.join(project, "node_modules", ".bin", "openclaw");
+    const pkgRoot = path.join(project, "node_modules", "openclaw");
+    state.realpathErrors.add(abs(argv1));
+    setFile(path.join(pkgRoot, "package.json"), JSON.stringify({ name: "openclaw" }));
+
+    expect(resolveOpenClawPackageRootSync({ argv1 })).toBe(pkgRoot);
+  });
+
+  it("prefers moduleUrl candidates", async () => {
     const pkgRoot = fx("moduleurl");
     setFile(path.join(pkgRoot, "package.json"), JSON.stringify({ name: "openclaw" }));
     const moduleUrl = pathToFileURL(path.join(pkgRoot, "dist", "index.js")).toString();
@@ -120,8 +144,6 @@ describe("resolveOpenClawPackageRoot", () => {
   });
 
   it("returns null for non-openclaw package roots", async () => {
-    const { resolveOpenClawPackageRootSync } = await import("./openclaw-root.js");
-
     const pkgRoot = fx("not-openclaw");
     setFile(path.join(pkgRoot, "package.json"), JSON.stringify({ name: "not-openclaw" }));
 
@@ -129,11 +151,15 @@ describe("resolveOpenClawPackageRoot", () => {
   });
 
   it("async resolver matches sync behavior", async () => {
-    const { resolveOpenClawPackageRoot } = await import("./openclaw-root.js");
-
     const pkgRoot = fx("async");
     setFile(path.join(pkgRoot, "package.json"), JSON.stringify({ name: "openclaw" }));
 
     await expect(resolveOpenClawPackageRoot({ cwd: pkgRoot })).resolves.toBe(pkgRoot);
+  });
+
+  it("async resolver returns null when no package roots exist", async () => {
+    const { resolveOpenClawPackageRoot } = await import("./openclaw-root.js");
+
+    await expect(resolveOpenClawPackageRoot({ cwd: fx("missing") })).resolves.toBeNull();
   });
 });

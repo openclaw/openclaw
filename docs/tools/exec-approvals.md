@@ -124,6 +124,12 @@ are treated as allowlisted on nodes (macOS node or headless node host). This use
 `tools.exec.safeBins` defines a small list of **stdin-only** binaries (for example `jq`)
 that can run in allowlist mode **without** explicit allowlist entries. Safe bins reject
 positional file args and path-like tokens, so they can only operate on the incoming stream.
+Validation is deterministic from argv shape only (no host filesystem existence checks), which
+prevents file-existence oracle behavior from allow/deny differences.
+File-oriented options are denied for default safe bins (for example `sort -o`, `sort --output`,
+`sort --files0-from`, `wc --files0-from`, `jq -f/--from-file`, `grep -f/--file`).
+Safe bins also enforce explicit per-binary flag policy for options that break stdin-only
+behavior (for example `sort -o/--output` and grep recursive flags).
 Safe bins also force argv tokens to be treated as **literal text** at execution time (no globbing
 and no `$VARS` expansion) for stdin-only segments, so patterns like `*` or `$HOME/...` cannot be
 used to smuggle file reads.
@@ -136,7 +142,10 @@ Shell chaining (`&&`, `||`, `;`) is allowed when every top-level segment satisfi
 Command substitution (`$()` / backticks) is rejected during allowlist parsing, including inside
 double quotes; use single quotes if you need literal `$()` text.
 
-Default safe bins: `jq`, `grep`, `cut`, `sort`, `uniq`, `head`, `tail`, `tr`, `wc`.
+Default safe bins: `jq`, `cut`, `uniq`, `head`, `tail`, `tr`, `wc`.
+
+`grep` and `sort` are not in the default list. If you opt in, keep explicit allowlist entries for
+their non-stdin workflows.
 
 ## Control UI editing
 

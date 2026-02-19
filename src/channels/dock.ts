@@ -128,6 +128,22 @@ function buildIMessageThreadToolContext(params: {
     hasRepliedRef: params.hasRepliedRef,
   };
 }
+
+function resolveCaseInsensitiveAccount<T>(
+  accounts: Record<string, T> | undefined,
+  accountId?: string | null,
+): T | undefined {
+  if (!accounts) {
+    return undefined;
+  }
+  const normalized = normalizeAccountId(accountId);
+  return (
+    accounts[normalized] ??
+    accounts[
+      Object.keys(accounts).find((key) => key.toLowerCase() === normalized.toLowerCase()) ?? ""
+    ]
+  );
+}
 // Channel docks: lightweight channel metadata/behavior for shared code paths.
 //
 // Rules:
@@ -282,14 +298,7 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
     config: {
       resolveAllowFrom: ({ cfg, accountId }) => {
         const channel = cfg.channels?.irc;
-        const normalized = normalizeAccountId(accountId);
-        const account =
-          channel?.accounts?.[normalized] ??
-          channel?.accounts?.[
-            Object.keys(channel?.accounts ?? {}).find(
-              (key) => key.toLowerCase() === normalized.toLowerCase(),
-            ) ?? ""
-          ];
+        const account = resolveCaseInsensitiveAccount(channel?.accounts, accountId);
         return (account?.allowFrom ?? channel?.allowFrom ?? []).map((entry) => String(entry));
       },
       formatAllowFrom: ({ allowFrom }) =>
@@ -353,14 +362,7 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
               dm?: { allowFrom?: Array<string | number> };
             }
           | undefined;
-        const normalized = normalizeAccountId(accountId);
-        const account =
-          channel?.accounts?.[normalized] ??
-          channel?.accounts?.[
-            Object.keys(channel?.accounts ?? {}).find(
-              (key) => key.toLowerCase() === normalized.toLowerCase(),
-            ) ?? ""
-          ];
+        const account = resolveCaseInsensitiveAccount(channel?.accounts, accountId);
         return (account?.dm?.allowFrom ?? channel?.dm?.allowFrom ?? []).map((entry) =>
           String(entry),
         );

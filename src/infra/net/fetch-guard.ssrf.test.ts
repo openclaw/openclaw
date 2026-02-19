@@ -22,6 +22,28 @@ describe("fetchWithSsrFGuard hardening", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  it("blocks legacy loopback literal URLs before fetch", async () => {
+    const fetchImpl = vi.fn();
+    await expect(
+      fetchWithSsrFGuard({
+        url: "http://0177.0.0.1:8080/internal",
+        fetchImpl,
+      }),
+    ).rejects.toThrow(/private|internal|blocked/i);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("blocks unsupported packed-hex loopback literal URLs before fetch", async () => {
+    const fetchImpl = vi.fn();
+    await expect(
+      fetchWithSsrFGuard({
+        url: "http://0x7f000001/internal",
+        fetchImpl,
+      }),
+    ).rejects.toThrow(/private|internal|blocked/i);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("blocks redirect chains that hop to private hosts", async () => {
     const lookupFn = vi.fn(async () => [
       { address: "93.184.216.34", family: 4 },

@@ -153,6 +153,28 @@ describe("acp event mapper", () => {
     expect(text).toBe("Hello\nFile contents\n[Resource link (Spec)] https://example.com");
   });
 
+  it("counts newline separators toward prompt byte limits", () => {
+    expect(() =>
+      extractTextFromPrompt(
+        [
+          { type: "text", text: "a" },
+          { type: "text", text: "b" },
+        ],
+        2,
+      ),
+    ).toThrow(/maximum allowed size/i);
+
+    expect(
+      extractTextFromPrompt(
+        [
+          { type: "text", text: "a" },
+          { type: "text", text: "b" },
+        ],
+        3,
+      ),
+    ).toBe("a\nb");
+  });
+
   it("extracts image blocks into gateway attachments", () => {
     const attachments = extractAttachmentsFromPrompt([
       { type: "image", data: "abc", mimeType: "image/png" },

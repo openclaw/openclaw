@@ -26,6 +26,32 @@ vi.mock("../runtime.js", () => ({
 }));
 
 describe("browser state option collisions", () => {
+  const createBrowserProgram = () => {
+    const program = new Command();
+    const browser = program
+      .command("browser")
+      .option("--browser-profile <name>", "Browser profile")
+      .option("--json", "Output JSON", false);
+    const parentOpts = (cmd: Command) => cmd.parent?.opts?.() as BrowserParentOpts;
+    registerBrowserStateCommands(browser, parentOpts);
+    return program;
+  };
+
+  const getLastRequest = () => {
+    const call = mocks.callBrowserRequest.mock.calls.at(-1);
+    expect(call).toBeDefined();
+    if (!call) {
+      throw new Error("expected browser request call");
+    }
+    return call[1] as { body?: Record<string, unknown> };
+  };
+
+  const runBrowserCommand = async (argv: string[]) => {
+    const program = createBrowserProgram();
+    await program.parseAsync(["browser", ...argv], { from: "user" });
+    return getLastRequest();
+  };
+
   beforeEach(() => {
     mocks.callBrowserRequest.mockClear();
     mocks.runBrowserResizeWithOutput.mockClear();
@@ -35,59 +61,24 @@ describe("browser state option collisions", () => {
   });
 
   it("forwards parent-captured --target-id on `browser cookies set`", async () => {
-    const program = new Command();
-    const browser = program
-      .command("browser")
-      .option("--browser-profile <name>", "Browser profile")
-      .option("--json", "Output JSON", false);
+    const request = await runBrowserCommand([
+      "cookies",
+      "set",
+      "session",
+      "abc",
+      "--url",
+      "https://example.com",
+      "--target-id",
+      "tab-1",
+    ]);
 
-    const parentOpts = (cmd: Command) => cmd.parent?.opts?.() as BrowserParentOpts;
-    registerBrowserStateCommands(browser, parentOpts);
-
-    await program.parseAsync(
-      [
-        "browser",
-        "cookies",
-        "set",
-        "session",
-        "abc",
-        "--url",
-        "https://example.com",
-        "--target-id",
-        "tab-1",
-      ],
-      { from: "user" },
-    );
-
-    const call = mocks.callBrowserRequest.mock.calls.at(-1);
-    expect(call).toBeDefined();
-    if (!call) {
-      throw new Error("expected browser request call");
-    }
-    const request = call[1] as { body?: { targetId?: string } };
-    expect(request.body?.targetId).toBe("tab-1");
+    expect((request as { body?: { targetId?: string } }).body?.targetId).toBe("tab-1");
   });
 
   it("accepts legacy parent `--json` by parsing payload via positional headers fallback", async () => {
-    const program = new Command();
-    const browser = program
-      .command("browser")
-      .option("--browser-profile <name>", "Browser profile")
-      .option("--json", "Output JSON", false);
-
-    const parentOpts = (cmd: Command) => cmd.parent?.opts?.() as BrowserParentOpts;
-    registerBrowserStateCommands(browser, parentOpts);
-
-    await program.parseAsync(["browser", "set", "headers", "--json", '{"x-auth":"ok"}'], {
-      from: "user",
-    });
-
-    const call = mocks.callBrowserRequest.mock.calls.at(-1);
-    expect(call).toBeDefined();
-    if (!call) {
-      throw new Error("expected browser request call");
-    }
-    const request = call[1] as { body?: { headers?: Record<string, string> } };
+    const request = (await runBrowserCommand(["set", "headers", "--json", '{"x-auth":"ok"}'])) as {
+      body?: { headers?: Record<string, string> };
+    };
     expect(request.body?.headers).toEqual({ "x-auth": "ok" });
   });
 });

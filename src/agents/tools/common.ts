@@ -5,7 +5,9 @@ import type { ImageSanitizationLimits } from "../image-sanitization.js";
 import { sanitizeToolResultImages } from "../tool-images.js";
 
 // oxlint-disable-next-line typescript/no-explicit-any
-export type AnyAgentTool = AgentTool<any, unknown>;
+export type AnyAgentTool = AgentTool<any, unknown> & {
+  ownerOnly?: boolean;
+};
 
 export type StringParamOptions = {
   required?: boolean;
@@ -18,6 +20,8 @@ export type ActionGate<T extends Record<string, boolean | undefined>> = (
   key: keyof T,
   defaultValue?: boolean,
 ) => boolean;
+
+export const OWNER_ONLY_TOOL_ERROR = "Tool restricted to owner senders.";
 
 export class ToolInputError extends Error {
   readonly status = 400;
@@ -205,6 +209,21 @@ export function jsonResult(payload: unknown): AgentToolResult<unknown> {
       },
     ],
     details: payload,
+  };
+}
+
+export function wrapOwnerOnlyToolExecution(
+  tool: AnyAgentTool,
+  senderIsOwner: boolean,
+): AnyAgentTool {
+  if (tool.ownerOnly !== true || senderIsOwner || !tool.execute) {
+    return tool;
+  }
+  return {
+    ...tool,
+    execute: async () => {
+      throw new Error(OWNER_ONLY_TOOL_ERROR);
+    },
   };
 }
 

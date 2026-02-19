@@ -154,6 +154,18 @@ const parseDateRange = (params: {
 
 type DiscoveredSessionWithAgent = DiscoveredSession & { agentId: string };
 
+function buildStoreBySessionId(
+  store: Record<string, SessionEntry>,
+): Map<string, { key: string; entry: SessionEntry }> {
+  const storeBySessionId = new Map<string, { key: string; entry: SessionEntry }>();
+  for (const [key, entry] of Object.entries(store)) {
+    if (entry?.sessionId) {
+      storeBySessionId.set(entry.sessionId, { key, entry });
+    }
+  }
+  return storeBySessionId;
+}
+
 async function discoverAllSessionsForUsage(params: {
   config: ReturnType<typeof loadConfig>;
   startMs: number;
@@ -353,12 +365,7 @@ export const usageHandlers: GatewayRequestHandlers = {
 
       // Prefer the store entry when available, even if the caller provides a discovered key
       // (`agent:<id>:<sessionId>`) for a session that now has a canonical store key.
-      const storeBySessionId = new Map<string, { key: string; entry: SessionEntry }>();
-      for (const [key, entry] of Object.entries(store)) {
-        if (entry?.sessionId) {
-          storeBySessionId.set(entry.sessionId, { key, entry });
-        }
-      }
+      const storeBySessionId = buildStoreBySessionId(store);
 
       const storeMatch = store[specificKey]
         ? { key: specificKey, entry: store[specificKey] }
@@ -409,12 +416,7 @@ export const usageHandlers: GatewayRequestHandlers = {
       });
 
       // Build a map of sessionId -> store entry for quick lookup
-      const storeBySessionId = new Map<string, { key: string; entry: SessionEntry }>();
-      for (const [key, entry] of Object.entries(store)) {
-        if (entry?.sessionId) {
-          storeBySessionId.set(entry.sessionId, { key, entry });
-        }
-      }
+      const storeBySessionId = buildStoreBySessionId(store);
 
       for (const discovered of discoveredSessions) {
         const storeMatch = storeBySessionId.get(discovered.sessionId);
