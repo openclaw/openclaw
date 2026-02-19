@@ -1,5 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { resolveCliName } from "./cli-name.js";
 import {
   asBoolean,
@@ -78,58 +79,66 @@ export async function writeUrlToFile(filePath: string, url: string) {
     throw new Error(`writeUrlToFile: only https URLs are allowed, got ${parsed.protocol}`);
   }
 
-  const res = await fetch(url);
-  if (!res.ok) {
-    throw new Error(`failed to download ${url}: ${res.status} ${res.statusText}`);
-  }
+  const { response: res, release } = await fetchWithSsrFGuard({
+    url,
+    auditContext: "writeUrlToFile",
+  });
 
-  const contentLengthRaw = res.headers.get("content-length");
-  const contentLength = contentLengthRaw ? Number.parseInt(contentLengthRaw, 10) : undefined;
-  if (
-    typeof contentLength === "number" &&
-    Number.isFinite(contentLength) &&
-    contentLength > MAX_CAMERA_URL_DOWNLOAD_BYTES
-  ) {
-    throw new Error(
-      `writeUrlToFile: content-length ${contentLength} exceeds max ${MAX_CAMERA_URL_DOWNLOAD_BYTES}`,
-    );
-  }
-
-  const body = res.body;
-  if (!body) {
-    throw new Error(`failed to download ${url}: empty response body`);
-  }
-
-  const fileHandle = await fs.open(filePath, "w");
   let bytes = 0;
-  let thrown: unknown;
   try {
-    const reader = body.getReader();
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-      if (!value || value.byteLength === 0) {
-        continue;
-      }
-      bytes += value.byteLength;
-      if (bytes > MAX_CAMERA_URL_DOWNLOAD_BYTES) {
-        throw new Error(
-          `writeUrlToFile: downloaded ${bytes} bytes, exceeds max ${MAX_CAMERA_URL_DOWNLOAD_BYTES}`,
-        );
-      }
-      await fileHandle.write(value);
+    if (!res.ok) {
+      throw new Error(`failed to download ${url}: ${res.status} ${res.statusText}`);
     }
-  } catch (err) {
-    thrown = err;
-  } finally {
-    await fileHandle.close();
-  }
 
-  if (thrown) {
-    await fs.unlink(filePath).catch(() => {});
-    throw thrown;
+    const contentLengthRaw = res.headers.get("content-length");
+    const contentLength = contentLengthRaw ? Number.parseInt(contentLengthRaw, 10) : undefined;
+    if (
+      typeof contentLength === "number" &&
+      Number.isFinite(contentLength) &&
+      contentLength > MAX_CAMERA_URL_DOWNLOAD_BYTES
+    ) {
+      throw new Error(
+        `writeUrlToFile: content-length ${contentLength} exceeds max ${MAX_CAMERA_URL_DOWNLOAD_BYTES}`,
+      );
+    }
+
+    const body = res.body;
+    if (!body) {
+      throw new Error(`failed to download ${url}: empty response body`);
+    }
+
+    const fileHandle = await fs.open(filePath, "w");
+    let thrown: unknown;
+    try {
+      const reader = body.getReader();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          break;
+        }
+        if (!value || value.byteLength === 0) {
+          continue;
+        }
+        bytes += value.byteLength;
+        if (bytes > MAX_CAMERA_URL_DOWNLOAD_BYTES) {
+          throw new Error(
+            `writeUrlToFile: downloaded ${bytes} bytes, exceeds max ${MAX_CAMERA_URL_DOWNLOAD_BYTES}`,
+          );
+        }
+        await fileHandle.write(value);
+      }
+    } catch (err) {
+      thrown = err;
+    } finally {
+      await fileHandle.close();
+    }
+
+    if (thrown) {
+      await fs.unlink(filePath).catch(() => {});
+      throw thrown;
+    }
+  } finally {
+    await release();
   }
 
   return { path: filePath, bytes };
