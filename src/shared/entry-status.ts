@@ -7,6 +7,10 @@ import {
   type RequirementsMetadata,
 } from "./requirements.js";
 
+export type EntryMetadataRequirementsParams = Parameters<
+  typeof evaluateEntryMetadataRequirements
+>[0];
+
 export function evaluateEntryMetadataRequirements(params: {
   always: boolean;
   metadata?: (RequirementsMetadata & { emoji?: string; homepage?: string }) | null;
@@ -50,4 +54,13 @@ export function evaluateEntryMetadataRequirements(params: {
     requirementsSatisfied: eligible,
     configChecks,
   };
+}
+
+export function evaluateEntryMetadataRequirementsForCurrentPlatform(
+  params: Omit<EntryMetadataRequirementsParams, "localPlatform">,
+): ReturnType<typeof evaluateEntryMetadataRequirements> {
+  return evaluateEntryMetadataRequirements({
+    ...params,
+    localPlatform: process.platform,
+  });
 }
