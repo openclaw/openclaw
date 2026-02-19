@@ -113,14 +113,6 @@ describe("skills-cli", () => {
       expect(output).toContain("eligible-one");
       expect(output).not.toContain("not-eligible");
     });
-
-    it("outputs JSON with --json flag", () => {
-      const report = createMockReport([createMockSkill({ name: "json-skill" })]);
-      const output = formatSkillsList(report, { json: true });
-      const parsed = JSON.parse(output);
-      expect(parsed.skills).toHaveLength(1);
-      expect(parsed.skills[0].name).toBe("json-skill");
-    });
   });
 
   describe("formatSkillInfo", () => {
@@ -161,13 +153,6 @@ describe("skills-cli", () => {
       expect(output).toContain("Any binaries");
       expect(output).toContain("API_KEY");
     });
-
-    it("outputs JSON with --json flag", () => {
-      const report = createMockReport([createMockSkill({ name: "info-skill" })]);
-      const output = formatSkillInfo(report, "info-skill", { json: true });
-      const parsed = JSON.parse(output);
-      expect(parsed.name).toBe("info-skill");
-    });
   });
 
   describe("formatSkillsCheck", () => {
@@ -190,16 +175,50 @@ describe("skills-cli", () => {
       expect(output).toContain("go"); // missing binary
       expect(output).toContain("npx clawhub");
     });
+  });
 
-    it("outputs JSON with --json flag", () => {
-      const report = createMockReport([
-        createMockSkill({ name: "skill-1", eligible: true }),
-        createMockSkill({ name: "skill-2", eligible: false }),
-      ]);
-      const output = formatSkillsCheck(report, { json: true });
-      const parsed = JSON.parse(output);
-      expect(parsed.summary.eligible).toBe(1);
-      expect(parsed.summary.total).toBe(2);
+  describe("JSON output", () => {
+    it.each([
+      {
+        formatter: "list",
+        output: formatSkillsList(createMockReport([createMockSkill({ name: "json-skill" })]), {
+          json: true,
+        }),
+        assert: (parsed: Record<string, unknown>) => {
+          const skills = parsed.skills as Array<Record<string, unknown>>;
+          expect(skills).toHaveLength(1);
+          expect(skills[0]?.name).toBe("json-skill");
+        },
+      },
+      {
+        formatter: "info",
+        output: formatSkillInfo(
+          createMockReport([createMockSkill({ name: "info-skill" })]),
+          "info-skill",
+          { json: true },
+        ),
+        assert: (parsed: Record<string, unknown>) => {
+          expect(parsed.name).toBe("info-skill");
+        },
+      },
+      {
+        formatter: "check",
+        output: formatSkillsCheck(
+          createMockReport([
+            createMockSkill({ name: "skill-1", eligible: true }),
+            createMockSkill({ name: "skill-2", eligible: false }),
+          ]),
+          { json: true },
+        ),
+        assert: (parsed: Record<string, unknown>) => {
+          const summary = parsed.summary as Record<string, unknown>;
+          expect(summary.eligible).toBe(1);
+          expect(summary.total).toBe(2);
+        },
+      },
+    ])("outputs JSON with --json flag for $formatter", ({ output, assert }) => {
+      const parsed = JSON.parse(output) as Record<string, unknown>;
+      assert(parsed);
     });
   });
 

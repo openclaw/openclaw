@@ -66,6 +66,31 @@ function buildApiKeyProfileResult(params: { apiKey: string; provider: string; em
   };
 }
 
+function buildOAuthProfileResult(params: {
+  provider: string;
+  credentials: OAuthCredentials;
+  email?: string;
+}) {
+  return buildApiKeyProfileResult({
+    apiKey: buildOAuthApiKey(params.provider, params.credentials),
+    provider: params.provider,
+    email: params.email,
+  });
+}
+
+function isExpiredCredential(expires: number | undefined): boolean {
+  return (
+    typeof expires === "number" && Number.isFinite(expires) && expires > 0 && Date.now() >= expires
+  );
+}
+
+type ResolveApiKeyForProfileParams = {
+  cfg?: OpenClawConfig;
+  store: AuthProfileStore;
+  profileId: string;
+  agentDir?: string;
+};
+
 async function refreshOAuthTokenWithLock(params: {
   profileId: string;
   agentDir?: string;
@@ -125,12 +150,9 @@ async function refreshOAuthTokenWithLock(params: {
   });
 }
 
-async function tryResolveOAuthProfile(params: {
-  cfg?: OpenClawConfig;
-  store: AuthProfileStore;
-  profileId: string;
-  agentDir?: string;
-}): Promise<{ apiKey: string; provider: string; email?: string } | null> {
+async function tryResolveOAuthProfile(
+  params: ResolveApiKeyForProfileParams,
+): Promise<{ apiKey: string; provider: string; email?: string } | null> {
   const { cfg, store, profileId } = params;
   const cred = store.profiles[profileId];
   if (!cred || cred.type !== "oauth") {
@@ -148,9 +170,9 @@ async function tryResolveOAuthProfile(params: {
   }
 
   if (Date.now() < cred.expires) {
-    return buildApiKeyProfileResult({
-      apiKey: buildOAuthApiKey(cred.provider, cred),
+    return buildOAuthProfileResult({
       provider: cred.provider,
+      credentials: cred,
       email: cred.email,
     });
   }
@@ -169,12 +191,9 @@ async function tryResolveOAuthProfile(params: {
   });
 }
 
-export async function resolveApiKeyForProfile(params: {
-  cfg?: OpenClawConfig;
-  store: AuthProfileStore;
-  profileId: string;
-  agentDir?: string;
-}): Promise<{ apiKey: string; provider: string; email?: string } | null> {
+export async function resolveApiKeyForProfile(
+  params: ResolveApiKeyForProfileParams,
+): Promise<{ apiKey: string; provider: string; email?: string } | null> {
   const { cfg, store, profileId } = params;
   const cred = store.profiles[profileId];
   if (!cred) {
@@ -205,20 +224,15 @@ export async function resolveApiKeyForProfile(params: {
     if (!token) {
       return null;
     }
-    if (
-      typeof cred.expires === "number" &&
-      Number.isFinite(cred.expires) &&
-      cred.expires > 0 &&
-      Date.now() >= cred.expires
-    ) {
+    if (isExpiredCredential(cred.expires)) {
       return null;
     }
     return buildApiKeyProfileResult({ apiKey: token, provider: cred.provider, email: cred.email });
   }
   if (Date.now() < cred.expires) {
-    return buildApiKeyProfileResult({
-      apiKey: buildOAuthApiKey(cred.provider, cred),
+    return buildOAuthProfileResult({
       provider: cred.provider,
+      credentials: cred,
       email: cred.email,
     });
   }
@@ -240,9 +254,9 @@ export async function resolveApiKeyForProfile(params: {
     const refreshedStore = ensureAuthProfileStore(params.agentDir);
     const refreshed = refreshedStore.profiles[profileId];
     if (refreshed?.type === "oauth" && Date.now() < refreshed.expires) {
-      return buildApiKeyProfileResult({
-        apiKey: buildOAuthApiKey(refreshed.provider, refreshed),
+      return buildOAuthProfileResult({
         provider: refreshed.provider,
+        credentials: refreshed,
         email: refreshed.email ?? cred.email,
       });
     }
@@ -282,9 +296,9 @@ export async function resolveApiKeyForProfile(params: {
             agentDir: params.agentDir,
             expires: new Date(mainCred.expires).toISOString(),
           });
-          return buildApiKeyProfileResult({
-            apiKey: buildOAuthApiKey(mainCred.provider, mainCred),
+          return buildOAuthProfileResult({
             provider: mainCred.provider,
+            credentials: mainCred,
             email: mainCred.email,
           });
         }

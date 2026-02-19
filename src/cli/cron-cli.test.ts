@@ -79,6 +79,18 @@ async function runCronAddAndGetParams(addArgs: string[]): Promise<CronAddParams>
   return (addCall?.[2] ?? {}) as CronAddParams;
 }
 
+async function runCronSimpleAndGetUpdatePatch(
+  command: "enable" | "disable",
+): Promise<{ enabled?: boolean }> {
+  resetGatewayMock();
+  const program = buildProgram();
+  await program.parseAsync(["cron", command, "job-1"], { from: "user" });
+  const updateCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.update");
+  return ((updateCall?.[2] as { patch?: { enabled?: boolean } } | undefined)?.patch ?? {}) as {
+    enabled?: boolean;
+  };
+}
+
 describe("cron cli", () => {
   it("trims model and thinking on cron add", { timeout: 60_000 }, async () => {
     resetGatewayMock();
@@ -194,6 +206,16 @@ describe("cron cli", () => {
     const addCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.add");
     const params = addCall?.[2] as { deleteAfterRun?: boolean };
     expect(params?.deleteAfterRun).toBe(false);
+  });
+
+  it("cron enable sets enabled=true patch", async () => {
+    const patch = await runCronSimpleAndGetUpdatePatch("enable");
+    expect(patch.enabled).toBe(true);
+  });
+
+  it("cron disable sets enabled=false patch", async () => {
+    const patch = await runCronSimpleAndGetUpdatePatch("disable");
+    expect(patch.enabled).toBe(false);
   });
 
   it("sends agent id on cron add", async () => {
