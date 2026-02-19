@@ -146,4 +146,102 @@ describe("context-window-guard", () => {
     expect(CONTEXT_WINDOW_HARD_MIN_TOKENS).toBe(16_000);
     expect(CONTEXT_WINDOW_WARN_BELOW_TOKENS).toBe(32_000);
   });
+
+  describe("context1m param", () => {
+    function makeCfg(modelKey: string, overrides: Record<string, unknown> = {}): OpenClawConfig {
+      return {
+        agents: {
+          defaults: {
+            models: {
+              [modelKey]: { params: { context1m: true } },
+            },
+            ...overrides,
+          },
+        },
+      } as unknown as OpenClawConfig;
+    }
+
+    it("returns 1M tokens for claude-opus-4-6 with context1m: true", () => {
+      const info = resolveContextWindowInfo({
+        cfg: makeCfg("anthropic/claude-opus-4-6"),
+        provider: "anthropic",
+        modelId: "claude-opus-4-6",
+        modelContextWindow: 200_000,
+        defaultTokens: 200_000,
+      });
+      expect(info.tokens).toBe(1_000_000);
+    });
+
+    it("returns 1M tokens for claude-sonnet-4-6 with context1m: true", () => {
+      const info = resolveContextWindowInfo({
+        cfg: makeCfg("anthropic/claude-sonnet-4-6"),
+        provider: "anthropic",
+        modelId: "claude-sonnet-4-6",
+        modelContextWindow: 200_000,
+        defaultTokens: 200_000,
+      });
+      expect(info.tokens).toBe(1_000_000);
+    });
+
+    it("returns 1M tokens for future claude-opus-4-7 with context1m: true", () => {
+      const info = resolveContextWindowInfo({
+        cfg: makeCfg("anthropic/claude-opus-4-7"),
+        provider: "anthropic",
+        modelId: "claude-opus-4-7",
+        modelContextWindow: 200_000,
+        defaultTokens: 200_000,
+      });
+      expect(info.tokens).toBe(1_000_000);
+    });
+
+    it("ignores context1m on non-1M-capable models (haiku)", () => {
+      const info = resolveContextWindowInfo({
+        cfg: makeCfg("anthropic/claude-haiku-3-5"),
+        provider: "anthropic",
+        modelId: "claude-haiku-3-5",
+        modelContextWindow: 200_000,
+        defaultTokens: 200_000,
+      });
+      expect(info.tokens).toBe(200_000);
+    });
+
+    it("respects explicit models.providers contextWindow override over context1m", () => {
+      const cfg = {
+        models: {
+          providers: {
+            anthropic: {
+              models: [{ id: "claude-opus-4-6", contextWindow: 150_000 }],
+            },
+          },
+        },
+        agents: {
+          defaults: {
+            models: { "anthropic/claude-opus-4-6": { params: { context1m: true } } },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      const info = resolveContextWindowInfo({
+        cfg,
+        provider: "anthropic",
+        modelId: "claude-opus-4-6",
+        modelContextWindow: 200_000,
+        defaultTokens: 200_000,
+      });
+      expect(info.tokens).toBe(150_000);
+      expect(info.source).toBe("modelsConfig");
+    });
+
+    it("applies agents.defaults.contextTokens cap even with context1m: true", () => {
+      const cfg = makeCfg("anthropic/claude-opus-4-6", { contextTokens: 500_000 });
+      const info = resolveContextWindowInfo({
+        cfg,
+        provider: "anthropic",
+        modelId: "claude-opus-4-6",
+        modelContextWindow: 200_000,
+        defaultTokens: 200_000,
+      });
+      expect(info.tokens).toBe(500_000);
+      expect(info.source).toBe("agentContextTokens");
+    });
+  });
 });
