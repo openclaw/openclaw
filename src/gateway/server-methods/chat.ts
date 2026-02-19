@@ -9,6 +9,7 @@ import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.j
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import {
@@ -305,7 +306,7 @@ function ensureTranscriptFile(params: { transcriptPath: string; sessionId: strin
     });
     return { ok: true };
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    return { ok: false, error: formatErrorMessage(err) };
   }
 }
 
@@ -416,7 +417,7 @@ function appendAssistantTranscriptMessage(params: {
     const messageId = sessionManager.appendMessage(messageBody);
     return { ok: true, messageId, message: messageBody };
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    return { ok: false, error: formatErrorMessage(err) };
   }
 }
 
@@ -759,7 +760,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         parsedMessage = parsed.message;
         parsedImages = parsed.images;
       } catch (err) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(err)));
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatErrorMessage(err)));
         return;
       }
     }
@@ -972,14 +973,15 @@ export const chatHandlers: GatewayRequestHandlers = {
           });
         })
         .catch((err) => {
-          const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
+          const errMsg = formatErrorMessage(err);
+          const error = errorShape(ErrorCodes.UNAVAILABLE, errMsg);
           context.dedupe.set(`chat:${clientRunId}`, {
             ts: Date.now(),
             ok: false,
             payload: {
               runId: clientRunId,
               status: "error" as const,
-              summary: String(err),
+              summary: errMsg,
             },
             error,
           });
@@ -987,18 +989,19 @@ export const chatHandlers: GatewayRequestHandlers = {
             context,
             runId: clientRunId,
             sessionKey: rawSessionKey,
-            errorMessage: String(err),
+            errorMessage: errMsg,
           });
         })
         .finally(() => {
           context.chatAbortControllers.delete(clientRunId);
         });
     } catch (err) {
-      const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
+      const errMsg = formatErrorMessage(err);
+      const error = errorShape(ErrorCodes.UNAVAILABLE, errMsg);
       const payload = {
         runId: clientRunId,
         status: "error" as const,
-        summary: String(err),
+        summary: errMsg,
       };
       context.dedupe.set(`chat:${clientRunId}`, {
         ts: Date.now(),

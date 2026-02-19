@@ -11,6 +11,7 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import {
   resolveAgentDeliveryPlan,
   resolveAgentOutboundTarget,
@@ -143,7 +144,7 @@ async function runSessionResetFromAgent(params: {
       } catch (err: unknown) {
         settle({
           ok: false,
-          error: errorShape(ErrorCodes.UNAVAILABLE, String(err)),
+          error: errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(err)),
         });
       }
     })();
@@ -227,7 +228,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         message = parsed.message.trim();
         images = parsed.images;
       } catch (err) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(err)));
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatErrorMessage(err)));
         return;
       }
     }
@@ -578,11 +579,12 @@ export const agentHandlers: GatewayRequestHandlers = {
         respond(true, payload, undefined, { runId });
       })
       .catch((err) => {
-        const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
+        const errMsg = formatErrorMessage(err);
+        const error = errorShape(ErrorCodes.UNAVAILABLE, errMsg);
         const payload = {
           runId,
           status: "error" as const,
-          summary: String(err),
+          summary: errMsg,
         };
         context.dedupe.set(`agent:${idem}`, {
           ts: Date.now(),
@@ -685,7 +687,10 @@ export const agentHandlers: GatewayRequestHandlers = {
       status: snapshot.status,
       startedAt: snapshot.startedAt,
       endedAt: snapshot.endedAt,
-      error: snapshot.error,
+      error:
+        typeof snapshot.error === "string"
+          ? snapshot.error
+          : formatErrorMessage(snapshot.error),
     });
   },
 };
