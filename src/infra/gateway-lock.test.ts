@@ -198,8 +198,9 @@ describe("gateway lock", () => {
     const lock = await acquireGatewayLock({
       env,
       allowInTests: true,
-      timeoutMs: 30,
-      pollIntervalMs: 2,
+      // Windows filesystem latency can make stale-lock delete/recreate take longer.
+      timeoutMs: process.platform === "win32" ? 250 : 30,
+      pollIntervalMs: process.platform === "win32" ? 10 : 2,
       staleMs: 1,
       platform: "linux",
     });
