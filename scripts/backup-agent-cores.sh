@@ -46,6 +46,8 @@ CORE_FILES=(
   "BOOT.md"
   "BOOTSTRAP.md"
   "HEARTBEAT.md"
+  "GROWTH_LOG.md"
+  "WEEKLY_REVIEW.md"
 )
 
 # ── 引數解析 ────────────────────────────────────────────────────────────────
@@ -183,6 +185,9 @@ for agent_dir in "${AGENT_DIRS[@]}"; do
       fi
     done < <(find "$memory_src" -name "*.md" -print0 2>/dev/null)
   fi
+
+  # 知識銀行（bank/ 子目錄：world, experience, opinions, entities）
+  copy_dir_md "$agent_dir/bank" "$dst_agent_dir/bank"
 done
 
 echo ""
