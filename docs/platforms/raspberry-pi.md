@@ -63,6 +63,12 @@ ssh user@gateway-host
 ssh user@192.168.x.x
 ```
 
+> ⚠️ **Important for persistent deployments:** If you're accessing the Pi via SSH and want the gateway to keep running after you disconnect, run:
+> ```bash
+> sudo loginctl enable-linger $USER
+> ```
+> This prevents systemd from killing your processes when the SSH session ends. Without this, the gateway will die every time you log out.
+
 ## 3) System Setup
 
 ```bash
