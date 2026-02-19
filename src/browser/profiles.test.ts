@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { resolveBrowserConfig } from "./config.js";
 import {
   allocateCdpPort,
   allocateColor,
@@ -11,15 +12,12 @@ import {
 } from "./profiles.js";
 
 describe("profile name validation", () => {
-  it("accepts valid lowercase names", () => {
-    expect(isValidProfileName("openclaw")).toBe(true);
-    expect(isValidProfileName("work")).toBe(true);
-    expect(isValidProfileName("my-profile")).toBe(true);
-    expect(isValidProfileName("test123")).toBe(true);
-    expect(isValidProfileName("a")).toBe(true);
-    expect(isValidProfileName("a-b-c-1-2-3")).toBe(true);
-    expect(isValidProfileName("1test")).toBe(true);
-  });
+  it.each(["openclaw", "work", "my-profile", "test123", "a", "a-b-c-1-2-3", "1test"])(
+    "accepts valid lowercase name: %s",
+    (name) => {
+      expect(isValidProfileName(name)).toBe(true);
+    },
+  );
 
   it("rejects empty or missing names", () => {
     expect(isValidProfileName("")).toBe(false);
@@ -37,23 +35,19 @@ describe("profile name validation", () => {
     expect(isValidProfileName(maxName)).toBe(true);
   });
 
-  it("rejects uppercase letters", () => {
-    expect(isValidProfileName("MyProfile")).toBe(false);
-    expect(isValidProfileName("PROFILE")).toBe(false);
-    expect(isValidProfileName("Work")).toBe(false);
-  });
-
-  it("rejects spaces and special characters", () => {
-    expect(isValidProfileName("my profile")).toBe(false);
-    expect(isValidProfileName("my_profile")).toBe(false);
-    expect(isValidProfileName("my.profile")).toBe(false);
-    expect(isValidProfileName("my/profile")).toBe(false);
-    expect(isValidProfileName("my@profile")).toBe(false);
-  });
-
-  it("rejects names starting with hyphen", () => {
-    expect(isValidProfileName("-invalid")).toBe(false);
-    expect(isValidProfileName("--double")).toBe(false);
+  it.each([
+    "MyProfile",
+    "PROFILE",
+    "Work",
+    "my profile",
+    "my_profile",
+    "my.profile",
+    "my/profile",
+    "my@profile",
+    "-invalid",
+    "--double",
+  ])("rejects invalid name: %s", (name) => {
+    expect(isValidProfileName(name)).toBe(false);
   });
 });
 
@@ -131,9 +125,8 @@ describe("getUsedPorts", () => {
 });
 
 describe("port collision prevention", () => {
-  it("raw config vs resolved config - shows the data source difference", async () => {
+  it("raw config vs resolved config - shows the data source difference", () => {
     // This demonstrates WHY the route handler must use resolved config
-    const { resolveBrowserConfig } = await import("./config.js");
 
     // Fresh config with no profiles defined (like a new install)
     const rawConfigProfiles = undefined;
@@ -148,9 +141,8 @@ describe("port collision prevention", () => {
     expect(usedFromResolved.has(CDP_PORT_RANGE_START)).toBe(true);
   });
 
-  it("create-profile must use resolved config to avoid port collision", async () => {
+  it("create-profile must use resolved config to avoid port collision", () => {
     // The route handler must use state.resolved.profiles, not raw config
-    const { resolveBrowserConfig } = await import("./config.js");
 
     // Simulate what happens with raw config (empty) vs resolved config
     const rawConfig: { browser: { profiles?: Record<string, { cdpPort?: number }> } } = {

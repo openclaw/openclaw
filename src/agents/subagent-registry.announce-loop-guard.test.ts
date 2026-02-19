@@ -1,4 +1,4 @@
-import { describe, expect, test, vi, beforeEach, afterEach } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
 /**
  * Regression test for #18264: Gateway announcement delivery loop.
@@ -55,6 +55,15 @@ vi.mock("./timeout.js", () => ({
 }));
 
 describe("announce loop guard (#18264)", () => {
+  let registry: typeof import("./subagent-registry.js");
+  let announceFn: ReturnType<typeof vi.fn>;
+
+  beforeAll(async () => {
+    registry = await import("./subagent-registry.js");
+    const subagentAnnounce = await import("./subagent-announce.js");
+    announceFn = vi.mocked(subagentAnnounce.runSubagentAnnounceFlow);
+  });
+
   beforeEach(() => {
     vi.useFakeTimers();
   });
@@ -67,8 +76,7 @@ describe("announce loop guard (#18264)", () => {
     vi.clearAllMocks();
   });
 
-  test("SubagentRunRecord has announceRetryCount and lastAnnounceRetryAt fields", async () => {
-    const registry = await import("./subagent-registry.js");
+  test("SubagentRunRecord has announceRetryCount and lastAnnounceRetryAt fields", () => {
     registry.resetSubagentRegistryForTests();
 
     const now = Date.now();
@@ -94,74 +102,51 @@ describe("announce loop guard (#18264)", () => {
     expect(entry!.lastAnnounceRetryAt).toBeDefined();
   });
 
-  test("expired entries with high retry count are skipped by resumeSubagentRun", async () => {
-    const registry = await import("./subagent-registry.js");
-    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
-    const announceFn = vi.mocked(runSubagentAnnounceFlow);
+  test.each([
+    {
+      name: "expired entries with high retry count are skipped by resumeSubagentRun",
+      createEntry: (now: number) => ({
+        // Ended 10 minutes ago (well past ANNOUNCE_EXPIRY_MS of 5 min).
+        runId: "test-expired-loop",
+        childSessionKey: "agent:main:subagent:expired-child",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "agent:main:main",
+        task: "expired test task",
+        cleanup: "keep" as const,
+        createdAt: now - 15 * 60_000,
+        startedAt: now - 14 * 60_000,
+        endedAt: now - 10 * 60_000,
+        announceRetryCount: 3,
+        lastAnnounceRetryAt: now - 9 * 60_000,
+      }),
+    },
+    {
+      name: "entries over retry budget are marked completed without announcing",
+      createEntry: (now: number) => ({
+        runId: "test-retry-budget",
+        childSessionKey: "agent:main:subagent:retry-budget",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "agent:main:main",
+        task: "retry budget test",
+        cleanup: "keep" as const,
+        createdAt: now - 2 * 60_000,
+        startedAt: now - 90_000,
+        endedAt: now - 60_000,
+        announceRetryCount: 3,
+        lastAnnounceRetryAt: now - 30_000,
+      }),
+    },
+  ])("$name", ({ createEntry }) => {
     announceFn.mockClear();
-
     registry.resetSubagentRegistryForTests();
 
-    const now = Date.now();
-    // Add a run that ended 10 minutes ago (well past ANNOUNCE_EXPIRY_MS of 5 min)
-    // with 3 retries already attempted
-    const entry = {
-      runId: "test-expired-loop",
-      childSessionKey: "agent:main:subagent:expired-child",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "agent:main:main",
-      task: "expired test task",
-      cleanup: "keep",
-      createdAt: now - 15 * 60_000,
-      startedAt: now - 14 * 60_000,
-      endedAt: now - 10 * 60_000, // 10 minutes ago
-      announceRetryCount: 3,
-      lastAnnounceRetryAt: now - 9 * 60_000,
-    };
-
+    const entry = createEntry(Date.now());
     loadSubagentRegistryFromDisk.mockReturnValue(new Map([[entry.runId, entry]]));
 
-    // Initialize the registry — this triggers resumeSubagentRun for persisted entries
-    registry.initSubagentRegistry();
-
-    // The announce flow should NOT be called because the entry has exceeded
-    // both the retry count and the expiry window.
-    expect(announceFn).not.toHaveBeenCalled();
-
-    const runs = registry.listSubagentRunsForRequester("agent:main:main");
-    const stored = runs.find((run) => run.runId === entry.runId);
-    expect(stored?.cleanupCompletedAt).toBeDefined();
-  });
-
-  test("entries over retry budget are marked completed without announcing", async () => {
-    const registry = await import("./subagent-registry.js");
-    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
-    const announceFn = vi.mocked(runSubagentAnnounceFlow);
-    announceFn.mockClear();
-
-    registry.resetSubagentRegistryForTests();
-
-    const now = Date.now();
-    const entry = {
-      runId: "test-retry-budget",
-      childSessionKey: "agent:main:subagent:retry-budget",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "agent:main:main",
-      task: "retry budget test",
-      cleanup: "keep",
-      createdAt: now - 2 * 60_000,
-      startedAt: now - 90_000,
-      endedAt: now - 60_000,
-      announceRetryCount: 3,
-      lastAnnounceRetryAt: now - 30_000,
-    };
-
-    loadSubagentRegistryFromDisk.mockReturnValue(new Map([[entry.runId, entry]]));
-
+    // Initialization attempts resume once, then gives up for exhausted entries.
     registry.initSubagentRegistry();
 
     expect(announceFn).not.toHaveBeenCalled();
-
     const runs = registry.listSubagentRunsForRequester("agent:main:main");
     const stored = runs.find((run) => run.runId === entry.runId);
     expect(stored?.cleanupCompletedAt).toBeDefined();

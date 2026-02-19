@@ -27,6 +27,16 @@ describe("registerSubCliCommands", () => {
   const originalArgv = process.argv;
   const originalEnv = { ...process.env };
 
+  const createRegisteredProgram = (argv: string[], name?: string) => {
+    process.argv = argv;
+    const program = new Command();
+    if (name) {
+      program.name(name);
+    }
+    registerSubCliCommands(program, process.argv);
+    return program;
+  };
+
   beforeEach(() => {
     process.env = { ...originalEnv };
     delete process.env.OPENCLAW_DISABLE_LAZY_SUBCOMMANDS;
@@ -42,9 +52,7 @@ describe("registerSubCliCommands", () => {
   });
 
   it("registers only the primary placeholder and dispatches", async () => {
-    process.argv = ["node", "openclaw", "acp"];
-    const program = new Command();
-    registerSubCliCommands(program, process.argv);
+    const program = createRegisteredProgram(["node", "openclaw", "acp"]);
 
     expect(program.commands.map((cmd) => cmd.name())).toEqual(["acp"]);
 
@@ -55,9 +63,7 @@ describe("registerSubCliCommands", () => {
   });
 
   it("registers placeholders for all subcommands when no primary", () => {
-    process.argv = ["node", "openclaw"];
-    const program = new Command();
-    registerSubCliCommands(program, process.argv);
+    const program = createRegisteredProgram(["node", "openclaw"]);
 
     const names = program.commands.map((cmd) => cmd.name());
     expect(names).toContain("acp");
@@ -67,10 +73,7 @@ describe("registerSubCliCommands", () => {
   });
 
   it("re-parses argv for lazy subcommands", async () => {
-    process.argv = ["node", "openclaw", "nodes", "list"];
-    const program = new Command();
-    program.name("openclaw");
-    registerSubCliCommands(program, process.argv);
+    const program = createRegisteredProgram(["node", "openclaw", "nodes", "list"], "openclaw");
 
     expect(program.commands.map((cmd) => cmd.name())).toEqual(["nodes"]);
 
@@ -81,10 +84,7 @@ describe("registerSubCliCommands", () => {
   });
 
   it("replaces placeholder when registering a subcommand by name", async () => {
-    process.argv = ["node", "openclaw", "acp", "--help"];
-    const program = new Command();
-    program.name("openclaw");
-    registerSubCliCommands(program, process.argv);
+    const program = createRegisteredProgram(["node", "openclaw", "acp", "--help"], "openclaw");
 
     await registerSubCliByName(program, "acp");
 

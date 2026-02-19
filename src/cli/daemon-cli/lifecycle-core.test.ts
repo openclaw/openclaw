@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadConfig = vi.fn(() => ({
   gateway: {
@@ -38,7 +38,13 @@ vi.mock("../../runtime.js", () => ({
   defaultRuntime,
 }));
 
+let runServiceRestart: typeof import("./lifecycle-core.js").runServiceRestart;
+
 describe("runServiceRestart token drift", () => {
+  beforeAll(async () => {
+    ({ runServiceRestart } = await import("./lifecycle-core.js"));
+  });
+
   beforeEach(() => {
     runtimeLogs.length = 0;
     loadConfig.mockClear();
@@ -56,8 +62,6 @@ describe("runServiceRestart token drift", () => {
   });
 
   it("emits drift warning when enabled", async () => {
-    const { runServiceRestart } = await import("./lifecycle-core.js");
-
     await runServiceRestart({
       serviceNoun: "Gateway",
       service,
@@ -73,8 +77,6 @@ describe("runServiceRestart token drift", () => {
   });
 
   it("skips drift warning when disabled", async () => {
-    const { runServiceRestart } = await import("./lifecycle-core.js");
-
     await runServiceRestart({
       serviceNoun: "Node",
       service,

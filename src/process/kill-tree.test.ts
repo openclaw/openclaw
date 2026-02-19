@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { killProcessTree } from "./kill-tree.js";
 
 const { spawnMock } = vi.hoisted(() => ({
   spawnMock: vi.fn(),
@@ -32,7 +33,6 @@ describe("killProcessTree", () => {
   afterEach(() => {
     killSpy.mockRestore();
     vi.useRealTimers();
-    vi.resetModules();
     vi.clearAllMocks();
   });
 
@@ -45,7 +45,6 @@ describe("killProcessTree", () => {
     }) as typeof process.kill);
 
     await withPlatform("win32", async () => {
-      const { killProcessTree } = await import("./kill-tree.js");
       killProcessTree(4242, { graceMs: 25 });
 
       expect(spawnMock).toHaveBeenCalledTimes(1);
@@ -70,7 +69,6 @@ describe("killProcessTree", () => {
     }) as typeof process.kill);
 
     await withPlatform("win32", async () => {
-      const { killProcessTree } = await import("./kill-tree.js");
       killProcessTree(5252, { graceMs: 10 });
 
       await vi.advanceTimersByTimeAsync(10);
@@ -103,7 +101,6 @@ describe("killProcessTree", () => {
     }) as typeof process.kill);
 
     await withPlatform("linux", async () => {
-      const { killProcessTree } = await import("./kill-tree.js");
       killProcessTree(3333, { graceMs: 10 });
 
       await vi.advanceTimersByTimeAsync(10);
@@ -123,7 +120,6 @@ describe("killProcessTree", () => {
     }) as typeof process.kill);
 
     await withPlatform("linux", async () => {
-      const { killProcessTree } = await import("./kill-tree.js");
       killProcessTree(4444, { graceMs: 5 });
 
       await vi.advanceTimersByTimeAsync(5);
