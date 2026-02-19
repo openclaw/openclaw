@@ -200,6 +200,7 @@ export async function handleInlineActions(params: {
         agentDir,
         workspaceDir,
         config: cfg,
+        senderIsOwner: command.senderIsOwner,
       });
 
       const tool = tools.find((candidate) => candidate.name === dispatch.toolName);

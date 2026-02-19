@@ -1,4 +1,4 @@
-import type { AnyAgentTool } from "./tools/common.js";
+import { OWNER_ONLY_TOOL_ERROR, type AnyAgentTool } from "./tools/common.js";
 
 export type ToolProfileId = "minimal" | "coding" | "messaging" | "full";
 
@@ -60,7 +60,7 @@ export const TOOL_GROUPS: Record<string, string[]> = {
   ],
 };
 
-const OWNER_ONLY_TOOL_NAMES = new Set<string>(["whatsapp_login"]);
+const OWNER_ONLY_TOOL_NAMES = new Set<string>(["whatsapp_login", "cron", "gateway"]);
 
 const TOOL_PROFILES: Record<ToolProfileId, ToolProfilePolicy> = {
   minimal: {
@@ -101,7 +101,7 @@ export function applyOwnerOnlyToolPolicy(tools: AnyAgentTool[], senderIsOwner: b
     return {
       ...tool,
       execute: async () => {
-        throw new Error("Tool restricted to owner senders.");
+        throw new Error(OWNER_ONLY_TOOL_ERROR);
       },
     };
   });
