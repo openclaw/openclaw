@@ -256,7 +256,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
       }
       return Array.from(actions);
     },
-    supportsAction: ({ action }) => action === "react",
+    supportsAction: ({ action }) => action === "react" || action === "poll",
     handleAction: async ({ action, params, cfg, accountId }) => {
       if (action !== "react") {
         throw new Error(`Action ${action} is not supported for provider ${meta.id}.`);
