@@ -60,6 +60,26 @@ const baseQueuedRun = (messageProvider = "whatsapp"): FollowupRun =>
     },
   }) as FollowupRun;
 
+function mockCompactionRun(params: {
+  willRetry: boolean;
+  result: {
+    payloads: Array<{ text: string }>;
+    meta: Record<string, unknown>;
+  };
+}) {
+  runEmbeddedPiAgentMock.mockImplementationOnce(
+    async (args: {
+      onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void;
+    }) => {
+      args.onAgentEvent?.({
+        stream: "compaction",
+        data: { phase: "end", willRetry: params.willRetry },
+      });
+      return params.result;
+    },
+  );
+}
+
 describe("createFollowupRunner compaction", () => {
   it("adds verbose auto-compaction notice and tracks count", async () => {
     const storePath = path.join(
@@ -75,17 +95,10 @@ describe("createFollowupRunner compaction", () => {
     };
     const onBlockReply = vi.fn(async () => {});
 
-    runEmbeddedPiAgentMock.mockImplementationOnce(
-      async (params: {
-        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void;
-      }) => {
-        params.onAgentEvent?.({
-          stream: "compaction",
-          data: { phase: "end", willRetry: true },
-        });
-        return { payloads: [{ text: "final" }], meta: {} };
-      },
-    );
+    mockCompactionRun({
+      willRetry: true,
+      result: { payloads: [{ text: "final" }], meta: {} },
+    });
 
     const runner = createFollowupRunner({
       opts: { onBlockReply },
@@ -149,29 +162,22 @@ describe("createFollowupRunner compaction", () => {
     await saveSessionStore(storePath, sessionStore);
     const onBlockReply = vi.fn(async () => {});
 
-    runEmbeddedPiAgentMock.mockImplementationOnce(
-      async (params: {
-        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void;
-      }) => {
-        params.onAgentEvent?.({
-          stream: "compaction",
-          data: { phase: "end", willRetry: false },
-        });
-        return {
-          payloads: [{ text: "done" }],
-          meta: {
-            agentMeta: {
-              // Accumulated usage across pre+post compaction calls.
-              usage: { input: 190_000, output: 8_000, total: 198_000 },
-              // Last call usage reflects post-compaction context.
-              lastCallUsage: { input: 11_000, output: 2_000, total: 13_000 },
-              model: "claude-opus-4-5",
-              provider: "anthropic",
-            },
+    mockCompactionRun({
+      willRetry: false,
+      result: {
+        payloads: [{ text: "done" }],
+        meta: {
+          agentMeta: {
+            // Accumulated usage across pre+post compaction calls.
+            usage: { input: 190_000, output: 8_000, total: 198_000 },
+            // Last call usage reflects post-compaction context.
+            lastCallUsage: { input: 11_000, output: 2_000, total: 13_000 },
+            model: "claude-opus-4-5",
+            provider: "anthropic",
           },
-        };
+        },
       },
-    );
+    });
 
     const runner = createFollowupRunner({
       opts: { onBlockReply },
