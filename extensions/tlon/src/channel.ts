@@ -19,7 +19,6 @@ import { resolveTlonAccount, listTlonAccountIds } from "./types.js";
 import { authenticate } from "./urbit/auth.js";
 import { UrbitChannelClient } from "./urbit/channel-client.js";
 import { ssrfPolicyFromAllowPrivateNetwork } from "./urbit/context.js";
-import { ensureUrbitConnectPatched, Urbit } from "./urbit/http-api.js";
 import {
   buildMediaStory,
   sendDm,
