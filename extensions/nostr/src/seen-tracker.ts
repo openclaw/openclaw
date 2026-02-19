@@ -207,7 +207,6 @@ export function createSeenTracker(options?: SeenTrackerOptions): SeenTracker {
   function has(id: string): boolean {
     const entry = entries.get(id);
     if (!entry) {
-      add(id);
       return false;
     }
 
@@ -215,7 +214,6 @@ export function createSeenTracker(options?: SeenTrackerOptions): SeenTracker {
     if (Date.now() - entry.seenAt > ttlMs) {
       removeFromList(id);
       entries.delete(id);
-      add(id);
       return false;
     }
 
