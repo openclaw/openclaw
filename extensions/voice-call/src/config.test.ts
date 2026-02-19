@@ -113,7 +113,9 @@ describe("validateProviderConfig", () => {
 
       expect(result.valid).toBe(false);
       expect(
-        result.errors.some((error) => error.includes("webhookSecurity.trustedProxyIPs is required")),
+        result.errors.some((error) =>
+          error.includes("webhookSecurity.trustedProxyIPs is required"),
+        ),
       ).toBe(true);
     });
 
@@ -130,7 +132,9 @@ describe("validateProviderConfig", () => {
 
       expect(result.valid).toBe(false);
       expect(
-        result.errors.some((error) => error.includes("webhookSecurity.trustedProxyIPs is required")),
+        result.errors.some((error) =>
+          error.includes("webhookSecurity.trustedProxyIPs is required"),
+        ),
       ).toBe(true);
     });
 

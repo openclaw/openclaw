@@ -194,7 +194,8 @@ export function reconstructWebhookUrl(ctx: WebhookContext, options?: WebhookUrlO
   const trustedProxyIPs = options?.trustedProxyIPs?.filter(Boolean) ?? [];
   const hasTrustedProxyIPs = trustedProxyIPs.length > 0;
   const remoteIP = options?.remoteIP ?? ctx.remoteAddress;
-  const fromTrustedProxy = hasTrustedProxyIPs && (remoteIP ? trustedProxyIPs.includes(remoteIP) : false);
+  const fromTrustedProxy =
+    hasTrustedProxyIPs && (remoteIP ? trustedProxyIPs.includes(remoteIP) : false);
 
   // Only trust forwarding headers if: (has whitelist OR explicitly trusted) AND from trusted proxy
   const shouldTrustForwardingHeaders = (hasAllowedHosts || explicitlyTrusted) && fromTrustedProxy;
