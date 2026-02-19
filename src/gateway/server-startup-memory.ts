@@ -1,4 +1,5 @@
 import { listAgentIds } from "../agents/agent-scope.js";
+import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMemoryBackendConfig } from "../memory/backend-config.js";
 import { getMemorySearchManager } from "../memory/index.js";
@@ -9,6 +10,14 @@ export async function startGatewayMemoryBackend(params: {
 }): Promise<void> {
   const agentIds = listAgentIds(params.cfg);
   for (const agentId of agentIds) {
+    // Respect agents.list[].memorySearch.enabled: false — skip QMD initialization
+    // for agents that have memory search disabled to avoid spawning unnecessary
+    // qmd embed processes and OOM-killing the gateway. (#20581)
+    const memorySearchConfig = resolveMemorySearchConfig(params.cfg, agentId);
+    if (!memorySearchConfig) {
+      continue;
+    }
+
     const resolved = resolveMemoryBackendConfig({ cfg: params.cfg, agentId });
     if (resolved.backend !== "qmd" || !resolved.qmd) {
       continue;

@@ -54,6 +54,31 @@ describe("startGatewayMemoryBackend", () => {
     expect(log.warn).not.toHaveBeenCalled();
   });
 
+  it("skips agents with memorySearch.enabled: false even when backend is qmd (#20581)", async () => {
+    const cfg = {
+      agents: {
+        list: [
+          { id: "main", default: true },
+          { id: "worker", memorySearch: { enabled: false } },
+          { id: "ops" },
+        ],
+      },
+      memory: { backend: "qmd", qmd: {} },
+    } as OpenClawConfig;
+    const log = { info: vi.fn(), warn: vi.fn() };
+    getMemorySearchManagerMock.mockResolvedValue({ manager: { search: vi.fn() } });
+
+    await startGatewayMemoryBackend({ cfg, log });
+
+    // "worker" has memorySearch.enabled: false — must be skipped entirely
+    expect(getMemorySearchManagerMock).toHaveBeenCalledTimes(2);
+    expect(getMemorySearchManagerMock).toHaveBeenCalledWith({ cfg, agentId: "main" });
+    expect(getMemorySearchManagerMock).toHaveBeenCalledWith({ cfg, agentId: "ops" });
+    expect(getMemorySearchManagerMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "worker" }),
+    );
+  });
+
   it("logs a warning when qmd manager init fails and continues with other agents", async () => {
     const cfg = {
       agents: { list: [{ id: "main", default: true }, { id: "ops" }] },
