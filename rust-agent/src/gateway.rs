@@ -377,12 +377,6 @@ impl MethodRegistry {
                     min_role: "client",
                 },
                 MethodSpec {
-                    name: "agent.exec",
-                    family: MethodFamily::Agent,
-                    requires_auth: true,
-                    min_role: "client",
-                },
-                MethodSpec {
                     name: "sessions.patch",
                     family: MethodFamily::Sessions,
                     requires_auth: true,
@@ -651,24 +645,6 @@ impl MethodRegistry {
                     family: MethodFamily::Gateway,
                     requires_auth: true,
                     min_role: "client",
-                },
-                MethodSpec {
-                    name: "browser.open",
-                    family: MethodFamily::Browser,
-                    requires_auth: true,
-                    min_role: "client",
-                },
-                MethodSpec {
-                    name: "canvas.present",
-                    family: MethodFamily::Canvas,
-                    requires_auth: true,
-                    min_role: "client",
-                },
-                MethodSpec {
-                    name: "pairing.approve",
-                    family: MethodFamily::Pairing,
-                    requires_auth: true,
-                    min_role: "owner",
                 },
             ],
         }
@@ -12868,10 +12844,14 @@ fn next_wizard_session_id() -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use crate::protocol::MethodFamily;
     use crate::types::{ActionRequest, Decision, DecisionAction};
 
-    use super::{MethodRegistry, RpcDispatchOutcome, RpcDispatcher, RpcRequestFrame};
+    use super::{
+        MethodRegistry, RpcDispatchOutcome, RpcDispatcher, RpcRequestFrame, SUPPORTED_RPC_METHODS,
+    };
 
     #[test]
     fn resolves_known_method() {
@@ -12902,6 +12882,22 @@ mod tests {
             let resolved = registry.resolve(method);
             assert!(!resolved.known);
             assert!(resolved.spec.is_none());
+        }
+    }
+
+    #[test]
+    fn registry_known_methods_are_dispatchable() {
+        let registry = MethodRegistry::default_registry();
+        let supported = SUPPORTED_RPC_METHODS
+            .iter()
+            .map(|method| super::normalize(method))
+            .collect::<HashSet<_>>();
+        for spec in registry.known {
+            assert!(
+                supported.contains(spec.name),
+                "known method is not dispatchable: {}",
+                spec.name
+            );
         }
     }
 
