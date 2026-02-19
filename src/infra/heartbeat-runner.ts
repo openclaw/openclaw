@@ -7,6 +7,7 @@ import {
 } from "../agents/agent-scope.js";
 import { appendCronStyleCurrentTimeLine } from "../agents/current-time.js";
 import { resolveEffectiveMessagesConfig } from "../agents/identity.js";
+import { isAuthErrorMessage } from "../agents/pi-embedded-helpers.js";
 import { DEFAULT_HEARTBEAT_FILENAME } from "../agents/workspace.js";
 import { resolveHeartbeatReplyPayload } from "../auto-reply/heartbeat-reply-payload.js";
 import {
@@ -44,9 +45,9 @@ import { escapeRegExp } from "../utils.js";
 import { formatErrorMessage } from "./errors.js";
 import { isWithinActiveHours } from "./heartbeat-active-hours.js";
 import {
-  buildCronEventPrompt,
   isCronSystemEvent,
   isExecCompletionEvent,
+  buildCronEventPrompt,
 } from "./heartbeat-events-filter.js";
 import { emitHeartbeatEvent, resolveIndicatorType } from "./heartbeat-events.js";
 import { resolveHeartbeatReasonKind } from "./heartbeat-reason.js";
@@ -742,17 +743,15 @@ export async function runHeartbeatOnce(opts: {
     if (replyResult && typeof replyResult === "object") {
       const res = replyResult as Record<string, unknown>;
       const resText = typeof res.text === "string" ? res.text : "";
-      const isFailed =
-        res.status === "failed" ||
-        Boolean(res.error) ||
-        (resText.length < 500 &&
-          (resText.includes("401") ||
-            resText.toLowerCase().includes("unauthorized") ||
-            resText.toLowerCase().includes("auth failure") ||
-            resText.toLowerCase().includes("invalid api key") ||
-            resText.toLowerCase().includes("token expired")));
+      // Check for structured failure or explicit error field.
+      const hasErrorField = res.status === "failed" || Boolean(res.error) || res.isError === true;
+      // Check for our internal error markers (⚠️) which runAgentTurnWithFallback uses
+      // when it catches an exception and returns a final error payload.
+      const hasErrorMarker = resText.startsWith("⚠️");
+      // Use existing robust helper for auth error patterns.
+      const hasAuthErrorPattern = isAuthErrorMessage(resText);
 
-      if (isFailed) {
+      if (hasErrorField || (hasErrorMarker && hasAuthErrorPattern)) {
         const errorMsg =
           (res.error as string) || (res.message as string) || resText || "Model provider error";
         throw new Error(`Heartbeat reply failed: ${errorMsg}`);
