@@ -1128,6 +1128,9 @@ export async function runEmbeddedAttempt(
               if (llmInputResult?.prompt) {
                 effectivePrompt = llmInputResult.prompt;
               }
+              if (llmInputResult?.systemPrompt) {
+                applySystemPromptOverrideToSession(activeSession, llmInputResult.systemPrompt);
+              }
             } catch (err) {
               if (err instanceof Error && err.message.includes("blocked by plugin hook")) {
                 throw err;
