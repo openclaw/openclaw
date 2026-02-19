@@ -7,10 +7,10 @@ const discordSendMocks = vi.hoisted(() => ({
   banMemberDiscord: vi.fn(async () => ({ ok: true })),
   kickMemberDiscord: vi.fn(async () => ({ ok: true })),
   timeoutMemberDiscord: vi.fn(async () => ({ id: "user-1" })),
-  hasGuildPermissionDiscord: vi.fn(async () => false),
+  hasAnyGuildPermissionDiscord: vi.fn(async () => false),
 }));
 
-const { banMemberDiscord, kickMemberDiscord, timeoutMemberDiscord, hasGuildPermissionDiscord } =
+const { banMemberDiscord, kickMemberDiscord, timeoutMemberDiscord, hasAnyGuildPermissionDiscord } =
   discordSendMocks;
 
 vi.mock("../../discord/send.js", () => ({
@@ -21,7 +21,7 @@ const enableAllActions = (_key: keyof DiscordActionConfig, _defaultValue = true)
 
 describe("discord moderation sender authorization", () => {
   it("rejects ban when sender lacks BAN_MEMBERS", async () => {
-    hasGuildPermissionDiscord.mockResolvedValueOnce(false);
+    hasAnyGuildPermissionDiscord.mockResolvedValueOnce(false);
 
     await expect(
       handleDiscordModerationAction(
@@ -35,7 +35,7 @@ describe("discord moderation sender authorization", () => {
       ),
     ).rejects.toThrow("required permissions");
 
-    expect(hasGuildPermissionDiscord).toHaveBeenCalledWith(
+    expect(hasAnyGuildPermissionDiscord).toHaveBeenCalledWith(
       "guild-1",
       "sender-1",
       [PermissionFlagsBits.BanMembers],
@@ -45,7 +45,7 @@ describe("discord moderation sender authorization", () => {
   });
 
   it("rejects kick when sender lacks KICK_MEMBERS", async () => {
-    hasGuildPermissionDiscord.mockResolvedValueOnce(false);
+    hasAnyGuildPermissionDiscord.mockResolvedValueOnce(false);
 
     await expect(
       handleDiscordModerationAction(
@@ -59,7 +59,7 @@ describe("discord moderation sender authorization", () => {
       ),
     ).rejects.toThrow("required permissions");
 
-    expect(hasGuildPermissionDiscord).toHaveBeenCalledWith(
+    expect(hasAnyGuildPermissionDiscord).toHaveBeenCalledWith(
       "guild-1",
       "sender-1",
       [PermissionFlagsBits.KickMembers],
@@ -69,7 +69,7 @@ describe("discord moderation sender authorization", () => {
   });
 
   it("rejects timeout when sender lacks MODERATE_MEMBERS", async () => {
-    hasGuildPermissionDiscord.mockResolvedValueOnce(false);
+    hasAnyGuildPermissionDiscord.mockResolvedValueOnce(false);
 
     await expect(
       handleDiscordModerationAction(
@@ -84,7 +84,7 @@ describe("discord moderation sender authorization", () => {
       ),
     ).rejects.toThrow("required permissions");
 
-    expect(hasGuildPermissionDiscord).toHaveBeenCalledWith(
+    expect(hasAnyGuildPermissionDiscord).toHaveBeenCalledWith(
       "guild-1",
       "sender-1",
       [PermissionFlagsBits.ModerateMembers],
@@ -94,7 +94,7 @@ describe("discord moderation sender authorization", () => {
   });
 
   it("executes moderation action when sender has required permission", async () => {
-    hasGuildPermissionDiscord.mockResolvedValueOnce(true);
+    hasAnyGuildPermissionDiscord.mockResolvedValueOnce(true);
     kickMemberDiscord.mockResolvedValueOnce({ ok: true });
 
     await handleDiscordModerationAction(
@@ -108,7 +108,7 @@ describe("discord moderation sender authorization", () => {
       enableAllActions,
     );
 
-    expect(hasGuildPermissionDiscord).toHaveBeenCalledWith(
+    expect(hasAnyGuildPermissionDiscord).toHaveBeenCalledWith(
       "guild-1",
       "sender-1",
       [PermissionFlagsBits.KickMembers],
@@ -122,7 +122,7 @@ describe("discord moderation sender authorization", () => {
   });
 
   it("forwards accountId into permission check and moderation execution", async () => {
-    hasGuildPermissionDiscord.mockResolvedValueOnce(true);
+    hasAnyGuildPermissionDiscord.mockResolvedValueOnce(true);
     timeoutMemberDiscord.mockResolvedValueOnce({ id: "user-1" });
 
     await handleDiscordModerationAction(
@@ -137,7 +137,7 @@ describe("discord moderation sender authorization", () => {
       enableAllActions,
     );
 
-    expect(hasGuildPermissionDiscord).toHaveBeenCalledWith(
+    expect(hasAnyGuildPermissionDiscord).toHaveBeenCalledWith(
       "guild-1",
       "sender-1",
       [PermissionFlagsBits.ModerateMembers],
