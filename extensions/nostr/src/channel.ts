@@ -53,7 +53,18 @@ const RUN_HEARTBEAT_CHECK_INTERVAL_MS = resolveDurationEnvMs(
   50,
   5_000,
 );
-const RUN_LANE_WAIT_TELEMETRY_MIN_MS = 1500;
+const RUN_LANE_WAIT_TELEMETRY_MIN_MS = resolveDurationEnvMs(
+  "OPENCLAW_NOSTR_LANE_WAIT_TELEMETRY_MIN_MS",
+  1500,
+  0,
+  60_000,
+);
+const RUN_LANE_WAIT_TELEMETRY_STEP_MS = resolveDurationEnvMs(
+  "OPENCLAW_NOSTR_LANE_WAIT_TELEMETRY_STEP_MS",
+  Math.max(250, Math.trunc(RUN_LANE_WAIT_TELEMETRY_MIN_MS / 2)),
+  100,
+  60_000,
+);
 const NOSTR_TRACE_JSONL_ENV = "OPENCLAW_NOSTR_TRACE_JSONL";
 const NOSTR_TRACE_JSONL_FALLBACK_ENV = "NOSTR_TRACE_JSONL";
 const PENDING_CANCEL_TTL_MS = 5 * 60 * 1000;
@@ -1405,6 +1416,9 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
           let firstContentAtMs: number | null = null;
           let heartbeatSentCount = 0;
           let laneWaitNoticeSent = false;
+          let laneWaitEventCount = 0;
+          let laneWaitMaxMs = 0;
+          let laneWaitLastNotifiedMs = 0;
           let heartbeatInFlight = false;
           let heartbeatTimer: NodeJS.Timeout | null = null;
           const emitStatus = payload.kind === 25802;
@@ -1715,6 +1729,9 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                     await safeSendThinkingDelta("update", reasoningText, "reasoning");
                   },
                   onCommandLaneWait: async (event) => {
+                    const normalizedWaitMs = Math.max(0, Math.trunc(event.waitMs));
+                    laneWaitEventCount += 1;
+                    laneWaitMaxMs = Math.max(laneWaitMaxMs, normalizedWaitMs);
                     traceRecorder.record({
                       direction: "lane_wait",
                       run_id: payload.eventId,
@@ -1722,15 +1739,28 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                       trace_id: traceId,
                       lane: event.lane,
                       lane_scope: event.scope,
-                      waited_ms: event.waitMs,
+                      waited_ms: normalizedWaitMs,
                       queue_ahead: event.queuedAhead,
                       ts_ms: event.tsMs,
                     });
-                    if (!laneWaitNoticeSent && event.waitMs >= RUN_LANE_WAIT_TELEMETRY_MIN_MS) {
+                    if (!laneWaitNoticeSent && normalizedWaitMs >= RUN_LANE_WAIT_TELEMETRY_MIN_MS) {
                       laneWaitNoticeSent = true;
                       await safeSendStatus("thinking", {
-                        info: `queue_wait:${Math.trunc(event.waitMs)}ms`,
+                        info: `queue_wait:${normalizedWaitMs}ms`,
                       });
+                    }
+                    const shouldEmitLaneWaitThinking =
+                      normalizedWaitMs >= RUN_LANE_WAIT_TELEMETRY_MIN_MS &&
+                      (laneWaitLastNotifiedMs === 0 ||
+                        normalizedWaitMs - laneWaitLastNotifiedMs >=
+                          RUN_LANE_WAIT_TELEMETRY_STEP_MS);
+                    if (shouldEmitLaneWaitThinking) {
+                      laneWaitLastNotifiedMs = normalizedWaitMs;
+                      await safeSendThinkingDelta(
+                        "update",
+                        `queue_wait:${normalizedWaitMs}ms`,
+                        "lane_wait",
+                      );
                     }
                   },
                   onToolStart: async ({ name, phase }) => {
@@ -1834,6 +1864,8 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                 : null,
               heartbeat_sent_count: heartbeatSentCount,
               heartbeat_interval_ms: RUN_HEARTBEAT_INTERVAL_MS,
+              lane_wait_events: laneWaitEventCount,
+              lane_wait_max_ms: laneWaitMaxMs > 0 ? laneWaitMaxMs : null,
               model_provider: runModelSelection?.provider ?? null,
               model_name: runModelSelection?.model ?? null,
               model_think_level: runModelSelection?.thinkLevel ?? null,
@@ -1914,6 +1946,8 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                       streamed_text_length: streamedTextBuffer.length,
                       dispatch_duration_ms: dispatchDurationMs,
                       dispatch_attempts: dispatchAttempts,
+                      lane_wait_events: laneWaitEventCount,
+                      lane_wait_max_ms: laneWaitMaxMs > 0 ? laneWaitMaxMs : null,
                     },
                   },
                   {
