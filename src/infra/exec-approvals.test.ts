@@ -21,6 +21,7 @@ import {
   resolveExecApprovalsFromFile,
   resolveExecApprovalsPath,
   resolveExecApprovalsSocketPath,
+  resolveSafeBins,
   type ExecAllowlistEntry,
   type ExecApprovalsFile,
 } from "./exec-approvals.js";
@@ -414,6 +415,9 @@ describe("exec approvals safe bins", () => {
     argv: string[];
     resolvedPath: string;
     expected: boolean;
+    safeBins?: string[];
+    executableName?: string;
+    rawExecutable?: string;
     cwd?: string;
     setup?: (cwd: string) => void;
   };
@@ -439,6 +443,38 @@ describe("exec approvals safe bins", () => {
       expected: false,
       cwd: "/tmp",
     },
+    {
+      name: "blocks sort output path via -o <file>",
+      argv: ["sort", "-o", "malicious.sh"],
+      resolvedPath: "/usr/bin/sort",
+      expected: false,
+      safeBins: ["sort"],
+      executableName: "sort",
+    },
+    {
+      name: "blocks sort output path via attached short option (-ofile)",
+      argv: ["sort", "-omalicious.sh"],
+      resolvedPath: "/usr/bin/sort",
+      expected: false,
+      safeBins: ["sort"],
+      executableName: "sort",
+    },
+    {
+      name: "blocks sort output path via --output=file",
+      argv: ["sort", "--output=malicious.sh"],
+      resolvedPath: "/usr/bin/sort",
+      expected: false,
+      safeBins: ["sort"],
+      executableName: "sort",
+    },
+    {
+      name: "blocks grep recursive flags that read cwd",
+      argv: ["grep", "-R", "needle"],
+      resolvedPath: "/usr/bin/grep",
+      expected: false,
+      safeBins: ["grep"],
+      executableName: "grep",
+    },
   ];
 
   for (const testCase of cases) {
@@ -448,14 +484,16 @@ describe("exec approvals safe bins", () => {
       }
       const cwd = testCase.cwd ?? makeTempDir();
       testCase.setup?.(cwd);
+      const executableName = testCase.executableName ?? "jq";
+      const rawExecutable = testCase.rawExecutable ?? executableName;
       const ok = isSafeBinUsage({
         argv: testCase.argv,
         resolution: {
-          rawExecutable: "jq",
+          rawExecutable,
           resolvedPath: testCase.resolvedPath,
-          executableName: "jq",
+          executableName,
         },
-        safeBins: normalizeSafeBins(["jq"]),
+        safeBins: normalizeSafeBins(testCase.safeBins ?? [executableName]),
         cwd,
       });
       expect(ok).toBe(testCase.expected);
@@ -478,6 +516,71 @@ describe("exec approvals safe bins", () => {
       cwd: "/tmp",
     });
     expect(ok).toBe(true);
+  });
+
+  it("does not include sort/grep in default safeBins", () => {
+    const defaults = resolveSafeBins(undefined);
+    expect(defaults.has("jq")).toBe(true);
+    expect(defaults.has("sort")).toBe(false);
+    expect(defaults.has("grep")).toBe(false);
+  });
+
+  it("blocks sort output flags independent of file existence", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const cwd = makeTempDir();
+    fs.writeFileSync(path.join(cwd, "existing.txt"), "x");
+    const resolution = {
+      rawExecutable: "sort",
+      resolvedPath: "/usr/bin/sort",
+      executableName: "sort",
+    };
+    const safeBins = normalizeSafeBins(["sort"]);
+    const existing = isSafeBinUsage({
+      argv: ["sort", "-o", "existing.txt"],
+      resolution,
+      safeBins,
+      cwd,
+    });
+    const missing = isSafeBinUsage({
+      argv: ["sort", "-o", "missing.txt"],
+      resolution,
+      safeBins,
+      cwd,
+    });
+    const longFlag = isSafeBinUsage({
+      argv: ["sort", "--output=missing.txt"],
+      resolution,
+      safeBins,
+      cwd,
+    });
+    expect(existing).toBe(false);
+    expect(missing).toBe(false);
+    expect(longFlag).toBe(false);
+  });
+
+  it("does not consult file existence callbacks for safe-bin decisions", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    let checkedExists = false;
+    const ok = isSafeBinUsage({
+      argv: ["sort", "-o", "target.txt"],
+      resolution: {
+        rawExecutable: "sort",
+        resolvedPath: "/usr/bin/sort",
+        executableName: "sort",
+      },
+      safeBins: normalizeSafeBins(["sort"]),
+      cwd: "/tmp",
+      fileExists: () => {
+        checkedExists = true;
+        return true;
+      },
+    });
+    expect(ok).toBe(false);
+    expect(checkedExists).toBe(false);
   });
 });
 

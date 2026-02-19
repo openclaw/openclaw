@@ -13,6 +13,14 @@ export type PluginsLoadConfig = {
   paths?: string[];
 };
 
+export type PluginsRuntimeConfig = {
+  /**
+   * Re-enable deprecated runtime.system.runCommandWithTimeout for legacy plugins.
+   * Disabled by default for security hardening.
+   */
+  allowLegacyExec?: boolean;
+};
+
 export type PluginInstallRecord = {
   source: "npm" | "archive" | "path";
   spec?: string;
@@ -30,6 +38,7 @@ export type PluginsConfig = {
   /** Optional plugin denylist (plugin ids). */
   deny?: string[];
   load?: PluginsLoadConfig;
+  runtime?: PluginsRuntimeConfig;
   slots?: PluginSlotsConfig;
   entries?: Record<string, PluginEntryConfig>;
   installs?: Record<string, PluginInstallRecord>;

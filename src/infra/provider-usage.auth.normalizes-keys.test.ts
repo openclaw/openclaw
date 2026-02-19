@@ -64,6 +64,16 @@ describe("resolveProviderAuths key normalization", () => {
     }
   }
 
+  async function writeAuthProfiles(home: string, profiles: Record<string, unknown>) {
+    const agentDir = path.join(home, ".openclaw", "agents", "main", "agent");
+    await fs.mkdir(agentDir, { recursive: true });
+    await fs.writeFile(
+      path.join(agentDir, "auth-profiles.json"),
+      `${JSON.stringify({ version: 1, profiles }, null, 2)}\n`,
+      "utf8",
+    );
+  }
+
   it("strips embedded CR/LF from env keys", async () => {
     await withSuiteHome(
       async () => {
@@ -87,23 +97,10 @@ describe("resolveProviderAuths key normalization", () => {
   it("strips embedded CR/LF from stored auth profiles (token + api_key)", async () => {
     await withSuiteHome(
       async (home) => {
-        const agentDir = path.join(home, ".openclaw", "agents", "main", "agent");
-        await fs.mkdir(agentDir, { recursive: true });
-        await fs.writeFile(
-          path.join(agentDir, "auth-profiles.json"),
-          `${JSON.stringify(
-            {
-              version: 1,
-              profiles: {
-                "minimax:default": { type: "token", provider: "minimax", token: "mini-\r\nmax" },
-                "xiaomi:default": { type: "api_key", provider: "xiaomi", key: "xiao-\r\nmi" },
-              },
-            },
-            null,
-            2,
-          )}\n`,
-          "utf8",
-        );
+        await writeAuthProfiles(home, {
+          "minimax:default": { type: "token", provider: "minimax", token: "mini-\r\nmax" },
+          "xiaomi:default": { type: "api_key", provider: "xiaomi", key: "xiao-\r\nmi" },
+        });
 
         const auths = await resolveProviderAuths({
           providers: ["minimax", "xiaomi"],
@@ -119,5 +116,68 @@ describe("resolveProviderAuths key normalization", () => {
         XIAOMI_API_KEY: undefined,
       },
     );
+  });
+
+  it("returns injected auth values unchanged", async () => {
+    const auths = await resolveProviderAuths({
+      providers: ["anthropic"],
+      auth: [{ provider: "anthropic", token: "token-1", accountId: "acc-1" }],
+    });
+    expect(auths).toEqual([{ provider: "anthropic", token: "token-1", accountId: "acc-1" }]);
+  });
+
+  it("accepts z-ai env alias and normalizes embedded CR/LF", async () => {
+    await withSuiteHome(
+      async () => {
+        const auths = await resolveProviderAuths({
+          providers: ["zai"],
+        });
+        expect(auths).toEqual([{ provider: "zai", token: "zai-key" }]);
+      },
+      {
+        ZAI_API_KEY: undefined,
+        Z_AI_API_KEY: "zai-\r\nkey",
+      },
+    );
+  });
+
+  it("falls back to legacy .pi auth file for zai keys", async () => {
+    await withSuiteHome(
+      async (home) => {
+        const legacyDir = path.join(home, ".pi", "agent");
+        await fs.mkdir(legacyDir, { recursive: true });
+        await fs.writeFile(
+          path.join(legacyDir, "auth.json"),
+          `${JSON.stringify({ "z-ai": { access: "legacy-zai-key" } }, null, 2)}\n`,
+          "utf8",
+        );
+
+        const auths = await resolveProviderAuths({
+          providers: ["zai"],
+        });
+        expect(auths).toEqual([{ provider: "zai", token: "legacy-zai-key" }]);
+      },
+      {
+        ZAI_API_KEY: undefined,
+        Z_AI_API_KEY: undefined,
+      },
+    );
+  });
+
+  it("extracts google oauth token from JSON payload in token profiles", async () => {
+    await withSuiteHome(async (home) => {
+      await writeAuthProfiles(home, {
+        "google-gemini-cli:default": {
+          type: "token",
+          provider: "google-gemini-cli",
+          token: '{"token":"google-oauth-token"}',
+        },
+      });
+
+      const auths = await resolveProviderAuths({
+        providers: ["google-gemini-cli"],
+      });
+      expect(auths).toEqual([{ provider: "google-gemini-cli", token: "google-oauth-token" }]);
+    }, {});
   });
 });
