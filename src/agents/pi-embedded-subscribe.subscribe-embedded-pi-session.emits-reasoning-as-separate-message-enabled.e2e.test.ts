@@ -1,16 +1,12 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
-import { createStubSessionHarness } from "./pi-embedded-subscribe.e2e-harness.js";
+import {
+  THINKING_TAG_CASES,
+  createStubSessionHarness,
+} from "./pi-embedded-subscribe.e2e-harness.js";
 import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
 
 describe("subscribeEmbeddedPiSession", () => {
-  const THINKING_TAG_CASES = [
-    { tag: "think", open: "<think>", close: "</think>" },
-    { tag: "thinking", open: "<thinking>", close: "</thinking>" },
-    { tag: "thought", open: "<thought>", close: "</thought>" },
-    { tag: "antthinking", open: "<antthinking>", close: "</antthinking>" },
-  ] as const;
-
   function createReasoningBlockReplyHarness() {
     const { session, emit } = createStubSessionHarness();
     const onBlockReply = vi.fn();
@@ -26,6 +22,12 @@ describe("subscribeEmbeddedPiSession", () => {
     return { emit, onBlockReply };
   }
 
+  function expectReasoningAndAnswerCalls(onBlockReply: ReturnType<typeof vi.fn>) {
+    expect(onBlockReply).toHaveBeenCalledTimes(2);
+    expect(onBlockReply.mock.calls[0][0].text).toBe("Reasoning:\n_Because it helps_");
+    expect(onBlockReply.mock.calls[1][0].text).toBe("Final answer");
+  }
+
   it("emits reasoning as a separate message when enabled", () => {
     const { emit, onBlockReply } = createReasoningBlockReplyHarness();
 
@@ -39,9 +41,7 @@ describe("subscribeEmbeddedPiSession", () => {
 
     emit({ type: "message_end", message: assistantMessage });
 
-    expect(onBlockReply).toHaveBeenCalledTimes(2);
-    expect(onBlockReply.mock.calls[0][0].text).toBe("Reasoning:\n_Because it helps_");
-    expect(onBlockReply.mock.calls[1][0].text).toBe("Final answer");
+    expectReasoningAndAnswerCalls(onBlockReply);
   });
   it.each(THINKING_TAG_CASES)(
     "promotes <%s> tags to thinking blocks at write-time",
@@ -60,9 +60,7 @@ describe("subscribeEmbeddedPiSession", () => {
 
       emit({ type: "message_end", message: assistantMessage });
 
-      expect(onBlockReply).toHaveBeenCalledTimes(2);
-      expect(onBlockReply.mock.calls[0][0].text).toBe("Reasoning:\n_Because it helps_");
-      expect(onBlockReply.mock.calls[1][0].text).toBe("Final answer");
+      expectReasoningAndAnswerCalls(onBlockReply);
 
       expect(assistantMessage.content).toEqual([
         { type: "thinking", thinking: "Because it helps" },

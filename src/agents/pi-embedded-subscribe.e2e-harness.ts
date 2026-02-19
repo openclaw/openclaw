@@ -7,6 +7,13 @@ type SubscribeEmbeddedPiSessionParams = Parameters<SubscribeEmbeddedPiSession>[0
 type PiSession = Parameters<SubscribeEmbeddedPiSession>[0]["session"];
 type OnBlockReply = NonNullable<SubscribeEmbeddedPiSessionParams["onBlockReply"]>;
 
+export const THINKING_TAG_CASES = [
+  { tag: "think", open: "<think>", close: "</think>" },
+  { tag: "thinking", open: "<thinking>", close: "</thinking>" },
+  { tag: "thought", open: "<thought>", close: "</thought>" },
+  { tag: "antthinking", open: "<antthinking>", close: "</antthinking>" },
+] as const;
+
 export function createStubSessionHarness(): {
   session: PiSession;
   emit: (evt: unknown) => void;
