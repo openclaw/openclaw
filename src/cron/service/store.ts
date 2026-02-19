@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import {
   buildDeliveryFromLegacyPayload,
@@ -245,6 +246,23 @@ export async function ensureLoaded(
     const state = raw.state;
     if (!state || typeof state !== "object" || Array.isArray(state)) {
       raw.state = {};
+      mutated = true;
+    }
+
+    // Normalize jobId → id: file-backed jobs commonly use "jobId" but the
+    // internal model expects "id".  Also generate a stable id when neither
+    // field is present so that run/update/remove lookups always succeed.
+    if (typeof raw.id !== "string" || !raw.id.trim()) {
+      const jobId = raw.jobId;
+      if (typeof jobId === "string" && jobId.trim()) {
+        raw.id = jobId.trim();
+        delete raw.jobId;
+      } else {
+        raw.id = crypto.randomUUID();
+      }
+      mutated = true;
+    } else if ("jobId" in raw) {
+      delete raw.jobId;
       mutated = true;
     }
 
