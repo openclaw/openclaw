@@ -15,7 +15,11 @@ import {
   ensureChromeExtensionRelayServer,
   stopChromeExtensionRelayServer,
 } from "./extension-relay.js";
-import { assertBrowserNavigationAllowed } from "./navigation-guard.js";
+import {
+  assertBrowserNavigationAllowed,
+  InvalidBrowserNavigationUrlError,
+  withBrowserNavigationPolicy,
+} from "./navigation-guard.js";
 import type { PwAiModule } from "./pw-ai-module.js";
 import { getPwAiModule } from "./pw-ai-module.js";
 import {
@@ -132,8 +136,8 @@ function createProfileContext(
   };
 
   const openTab = async (url: string): Promise<BrowserTab> => {
-    const ssrfPolicy = state().resolved.ssrfPolicy;
-    await assertBrowserNavigationAllowed({ url, ssrfPolicy });
+    const ssrfPolicyOpts = withBrowserNavigationPolicy(state().resolved.ssrfPolicy);
+    await assertBrowserNavigationAllowed({ url, ...ssrfPolicyOpts });
 
     // For remote profiles, use Playwright's persistent connection to create tabs
     // This ensures the tab persists beyond a single request
@@ -144,7 +148,8 @@ function createProfileContext(
         const page = await createPageViaPlaywright({
           cdpUrl: profile.cdpUrl,
           url,
-          ...(ssrfPolicy ? { ssrfPolicy } : {}),
+          ...ssrfPolicyOpts,
+          navigationChecked: true,
         });
         const profileState = getProfileState();
         profileState.lastTargetId = page.targetId;
@@ -160,7 +165,8 @@ function createProfileContext(
     const createdViaCdp = await createTargetViaCdp({
       cdpUrl: profile.cdpUrl,
       url,
-      ...(ssrfPolicy ? { ssrfPolicy } : {}),
+      ...ssrfPolicyOpts,
+      navigationChecked: true,
     })
       .then((r) => r.targetId)
       .catch(() => null);
@@ -645,10 +651,10 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
     if (err instanceof SsrFBlockedError) {
       return { status: 400, message: err.message };
     }
-    const msg = String(err);
-    if (msg.includes("Invalid URL:")) {
-      return { status: 400, message: msg };
+    if (err instanceof InvalidBrowserNavigationUrlError) {
+      return { status: 400, message: err.message };
     }
+    const msg = String(err);
     if (msg.includes("ambiguous target id prefix")) {
       return { status: 409, message: "ambiguous target id prefix" };
     }

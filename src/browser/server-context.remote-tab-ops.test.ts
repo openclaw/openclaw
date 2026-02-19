@@ -90,6 +90,12 @@ describe("browser server-context remote profile tab operations", () => {
     const opened = await remote.openTab("http://127.0.0.1:3000");
     expect(opened.targetId).toBe("T2");
     expect(state.profiles.get("remote")?.lastTargetId).toBe("T2");
+    expect(createPageViaPlaywright).toHaveBeenCalledWith({
+      cdpUrl: "https://browserless.example/chrome?token=abc",
+      url: "http://127.0.0.1:3000",
+      ssrfPolicy: { allowPrivateNetwork: true },
+      navigationChecked: true,
+    });
 
     await remote.closeTab("T1");
     expect(closePageByTargetIdViaPlaywright).toHaveBeenCalledWith({
@@ -214,7 +220,9 @@ describe("browser server-context remote profile tab operations", () => {
 
 describe("browser server-context tab selection state", () => {
   it("updates lastTargetId when openTab is created via CDP", async () => {
-    vi.spyOn(cdpModule, "createTargetViaCdp").mockResolvedValue({ targetId: "CREATED" });
+    const createTargetViaCdp = vi
+      .spyOn(cdpModule, "createTargetViaCdp")
+      .mockResolvedValue({ targetId: "CREATED" });
 
     const fetchMock = vi.fn(async (url: unknown) => {
       const u = String(url);
@@ -244,5 +252,11 @@ describe("browser server-context tab selection state", () => {
     const opened = await openclaw.openTab("http://127.0.0.1:8080");
     expect(opened.targetId).toBe("CREATED");
     expect(state.profiles.get("openclaw")?.lastTargetId).toBe("CREATED");
+    expect(createTargetViaCdp).toHaveBeenCalledWith({
+      cdpUrl: "http://127.0.0.1:18800",
+      url: "http://127.0.0.1:8080",
+      ssrfPolicy: { allowPrivateNetwork: true },
+      navigationChecked: true,
+    });
   });
 });
