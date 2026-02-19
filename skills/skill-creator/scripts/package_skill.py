@@ -69,9 +69,23 @@ def package_skill(skill_path, output_dir=None):
         with zipfile.ZipFile(skill_filename, "w", zipfile.ZIP_DEFLATED) as zipf:
             # Walk through the skill directory
             for file_path in skill_path.rglob("*"):
+                # Security Check 1: Reject symlinks to prevent supply chain attacks
+                if file_path.is_symlink():
+                    print(f"[ERROR] Symlinks are not allowed in skills: {file_path}")
+                    print("   This is a security restriction to prevent including arbitrary files.")
+                    return None
+
                 if file_path.is_file():
                     # Calculate the relative path within the zip
                     arcname = file_path.relative_to(skill_path.parent)
+
+                    # Security Check 2: Validate arcname to prevent Zip Slip attacks
+                    # Ensure the path doesn't escape the skill directory using ".." or absolute paths
+                    if ".." in arcname.parts or arcname.is_absolute():
+                        print(f"[ERROR] Invalid path in skill (possible Zip Slip attack): {arcname}")
+                        print("   Paths with '..' or absolute paths are not allowed.")
+                        return None
+
                     zipf.write(file_path, arcname)
                     print(f"  Added: {arcname}")
 
