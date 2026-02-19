@@ -93,6 +93,8 @@ export function registerCronAddCommand(cron: Command) {
       )
       .option("--best-effort-deliver", "Do not fail the job if delivery fails", false)
       .option("--json", "Output JSON", false)
+      .option("--tools-allowed <list>", "Comma-separated allowed tools/groups (isolated only)")
+      .option("--tools-denied <list>", "Comma-separated denied tools/groups (isolated only)")
       .action(async (opts: GatewayRpcOpts & Record<string, unknown>, cmd?: Command) => {
         try {
           const staggerRaw = typeof opts.stagger === "string" ? opts.stagger.trim() : "";
@@ -220,6 +222,11 @@ export function registerCronAddCommand(cron: Command) {
             throw new Error("--announce/--no-deliver require --session isolated.");
           }
 
+          const hasToolsFlags = opts.toolsAllowed || opts.toolsDenied;
+          if (hasToolsFlags && sessionTarget != "isolated") {
+            throw new Error("--tools-allowed/--tools-denied require --session isolated.");
+          }
+
           const deliveryMode =
             sessionTarget === "isolated" && payload.kind === "agentTurn"
               ? hasAnnounce
@@ -259,6 +266,24 @@ export function registerCronAddCommand(cron: Command) {
                       : undefined,
                   to: typeof opts.to === "string" && opts.to.trim() ? opts.to.trim() : undefined,
                   bestEffort: opts.bestEffortDeliver ? true : undefined,
+                }
+              : undefined,
+            tools: hasToolsFlags
+              ? {
+                  allow:
+                    typeof opts.toolsAllowed === "string" && opts.toolsAllowed.trim()
+                      ? opts.toolsAllowed
+                          .split(",")
+                          .map((t) => t.trim())
+                          .filter(Boolean)
+                      : undefined,
+                  deny:
+                    typeof opts.toolsDenied === "string" && opts.toolsDenied.trim()
+                      ? opts.toolsDenied
+                          .split(",")
+                          .map((t) => t.trim())
+                          .filter(Boolean)
+                      : undefined,
                 }
               : undefined,
           };

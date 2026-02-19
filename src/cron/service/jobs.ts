@@ -341,6 +341,7 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
       : schedule.kind === "at"
         ? true
         : undefined;
+
   const enabled = typeof input.enabled === "boolean" ? input.enabled : true;
   const job: CronJob = {
     id,
@@ -357,6 +358,7 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
     wakeMode: input.wakeMode,
     payload: input.payload,
     delivery: input.delivery,
+    tools: input.tools,
     state: {
       ...input.state,
     },
@@ -418,6 +420,19 @@ export function applyJobPatch(job: CronJob, patch: CronJobPatch) {
       job.delivery = mergeCronDelivery(job.delivery, legacyDeliveryPatch);
     }
   }
+
+  if (patch.tools !== undefined) {
+    job.tools = job.tools || {};
+
+    if (patch.tools.allow) {
+      job.tools.allow = [...new Set(patch.tools.allow)];
+    }
+
+    if (patch.tools.deny) {
+      job.tools.deny = [...new Set(patch.tools.deny)];
+    }
+  }
+
   if (patch.delivery) {
     job.delivery = mergeCronDelivery(job.delivery, patch.delivery);
   }

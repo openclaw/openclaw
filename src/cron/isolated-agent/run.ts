@@ -194,6 +194,17 @@ export async function runCronIsolatedAgentTurn(params: {
     agents: Object.assign({}, params.cfg.agents, { defaults: agentCfg }),
   };
 
+  const cfgWithJobTools: OpenClawConfig = params.job.tools
+    ? {
+        ...cfgWithAgentDefaults,
+        tools: {
+          ...cfgWithAgentDefaults.tools,
+          allow: [...(cfgWithAgentDefaults.tools?.allow ?? []), ...(params.job.tools.allow ?? [])],
+          deny: [...(cfgWithAgentDefaults.tools?.deny ?? []), ...(params.job.tools.deny ?? [])],
+        },
+      }
+    : cfgWithAgentDefaults;
+
   const baseSessionKey = (params.sessionKey?.trim() || `cron:${params.job.id}`).trim();
   const agentSessionKey = buildAgentMainSessionKey({
     agentId,
@@ -209,7 +220,7 @@ export async function runCronIsolatedAgentTurn(params: {
   const workspaceDir = workspace.dir;
 
   const resolvedDefault = resolveConfiguredModelRef({
-    cfg: cfgWithAgentDefaults,
+    cfg: cfgWithJobTools,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
@@ -218,7 +229,7 @@ export async function runCronIsolatedAgentTurn(params: {
   let catalog: Awaited<ReturnType<typeof loadModelCatalog>> | undefined;
   const loadCatalog = async () => {
     if (!catalog) {
-      catalog = await loadModelCatalog({ config: cfgWithAgentDefaults });
+      catalog = await loadModelCatalog({ config: cfgWithJobTools });
     }
     return catalog;
   };
@@ -250,7 +261,7 @@ export async function runCronIsolatedAgentTurn(params: {
   const modelOverride = typeof modelOverrideRaw === "string" ? modelOverrideRaw.trim() : undefined;
   if (modelOverride !== undefined && modelOverride.length > 0) {
     const resolvedOverride = resolveAllowedModelRef({
-      cfg: cfgWithAgentDefaults,
+      cfg: cfgWithJobTools,
       catalog: await loadCatalog(),
       raw: modelOverride,
       defaultProvider: resolvedDefault.provider,
@@ -312,7 +323,7 @@ export async function runCronIsolatedAgentTurn(params: {
       const sessionProviderOverride =
         cronSession.sessionEntry.providerOverride?.trim() || resolvedDefault.provider;
       const resolvedSessionOverride = resolveAllowedModelRef({
-        cfg: cfgWithAgentDefaults,
+        cfg: cfgWithJobTools,
         catalog: await loadCatalog(),
         raw: `${sessionProviderOverride}/${sessionModelOverride}`,
         defaultProvider: resolvedDefault.provider,
@@ -337,7 +348,7 @@ export async function runCronIsolatedAgentTurn(params: {
   let thinkLevel = jobThink ?? hooksGmailThinking ?? thinkOverride;
   if (!thinkLevel) {
     thinkLevel = resolveThinkingDefault({
-      cfg: cfgWithAgentDefaults,
+      cfg: cfgWithJobTools,
       provider,
       model,
       catalog: await loadCatalog(),
@@ -351,7 +362,7 @@ export async function runCronIsolatedAgentTurn(params: {
   }
 
   const timeoutMs = resolveAgentTimeoutMs({
-    cfg: cfgWithAgentDefaults,
+    cfg: cfgWithJobTools,
     overrideSeconds:
       params.job.payload.kind === "agentTurn" ? params.job.payload.timeoutSeconds : undefined,
   });
@@ -360,7 +371,7 @@ export async function runCronIsolatedAgentTurn(params: {
   const deliveryPlan = resolveCronDeliveryPlan(params.job);
   const deliveryRequested = deliveryPlan.requested;
 
-  const resolvedDelivery = await resolveDeliveryTarget(cfgWithAgentDefaults, agentId, {
+  const resolvedDelivery = await resolveDeliveryTarget(cfgWithJobTools, agentId, {
     channel: deliveryPlan.channel ?? "last",
     to: deliveryPlan.to,
     sessionKey: params.job.sessionKey,
@@ -413,7 +424,7 @@ export async function runCronIsolatedAgentTurn(params: {
   const existingSkillsSnapshot = cronSession.sessionEntry.skillsSnapshot;
   const skillsSnapshot = resolveCronSkillsSnapshot({
     workspaceDir,
-    config: cfgWithAgentDefaults,
+    config: cfgWithJobTools,
     agentId,
     existingSnapshot: existingSkillsSnapshot,
     isFastTestEnv,
@@ -448,13 +459,13 @@ export async function runCronIsolatedAgentTurn(params: {
     });
     const messageChannel = resolvedDelivery.channel;
     const fallbackResult = await runWithModelFallback({
-      cfg: cfgWithAgentDefaults,
+      cfg: cfgWithJobTools,
       provider,
       model,
       agentDir,
       fallbacksOverride: resolveAgentModelFallbacksOverride(params.cfg, agentId),
       run: (providerOverride, modelOverride) => {
-        if (isCliProvider(providerOverride, cfgWithAgentDefaults)) {
+        if (isCliProvider(providerOverride, cfgWithJobTools)) {
           const cliSessionId = getCliSessionId(cronSession.sessionEntry, providerOverride);
           return runCliAgent({
             sessionId: cronSession.sessionEntry.sessionId,
@@ -462,7 +473,7 @@ export async function runCronIsolatedAgentTurn(params: {
             agentId,
             sessionFile,
             workspaceDir,
-            config: cfgWithAgentDefaults,
+            config: cfgWithJobTools,
             prompt: commandBody,
             provider: providerOverride,
             model: modelOverride,
@@ -480,7 +491,7 @@ export async function runCronIsolatedAgentTurn(params: {
           agentAccountId: resolvedDelivery.accountId,
           sessionFile,
           workspaceDir,
-          config: cfgWithAgentDefaults,
+          config: cfgWithJobTools,
           skillsSnapshot,
           prompt: commandBody,
           lane: params.lane ?? "cron",
@@ -519,7 +530,7 @@ export async function runCronIsolatedAgentTurn(params: {
     cronSession.sessionEntry.modelProvider = providerUsed;
     cronSession.sessionEntry.model = modelUsed;
     cronSession.sessionEntry.contextTokens = contextTokens;
-    if (isCliProvider(providerUsed, cfgWithAgentDefaults)) {
+    if (isCliProvider(providerUsed, cfgWithJobTools)) {
       const cliSessionId = runResult.meta?.agentMeta?.sessionId?.trim();
       if (cliSessionId) {
         setCliSessionId(cronSession.sessionEntry, providerUsed, cliSessionId);
@@ -618,7 +629,7 @@ export async function runCronIsolatedAgentTurn(params: {
       logWarn(`[cron:${params.job.id}] ${message}`);
       return withRunSession({ status: "ok", summary, outputText, ...telemetry });
     }
-    const identity = resolveAgentOutboundIdentity(cfgWithAgentDefaults, agentId);
+    const identity = resolveAgentOutboundIdentity(cfgWithJobTools, agentId);
 
     // Route text-only cron announce output back through the main session so it
     // follows the same system-message injection path as subagent completions.
@@ -634,7 +645,7 @@ export async function runCronIsolatedAgentTurn(params: {
               : [];
         if (payloadsForDelivery.length > 0) {
           const deliveryResults = await deliverOutboundPayloads({
-            cfg: cfgWithAgentDefaults,
+            cfg: cfgWithJobTools,
             channel: resolvedDelivery.channel,
             to: resolvedDelivery.to,
             accountId: resolvedDelivery.accountId,
@@ -664,7 +675,7 @@ export async function runCronIsolatedAgentTurn(params: {
         agentId,
       });
       const announceSessionKey = await resolveCronAnnounceSessionKey({
-        cfg: cfgWithAgentDefaults,
+        cfg: cfgWithJobTools,
         agentId,
         fallbackSessionKey: announceMainSessionKey,
         delivery: {
