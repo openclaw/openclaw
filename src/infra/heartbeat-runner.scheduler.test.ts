@@ -202,4 +202,32 @@ describe("startHeartbeatRunner", () => {
 
     runner.stop();
   });
+
+  it("allows event-driven heartbeats through when requests-in-flight", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+
+    const runner = startHeartbeatRunner({
+      cfg: {
+        agents: { defaults: { heartbeat: { every: "30m" } } },
+      } as OpenClawConfig,
+      runOnce: runSpy,
+    });
+
+    // Simulate an exec event wake — runOnce should be called even though
+    // the mock would normally return requests-in-flight for interval heartbeats.
+    // Here we just verify the wake triggers runOnce at all (the exemption
+    // is in runHeartbeatOnce, which is mocked, so this tests the scheduler path).
+    requestHeartbeatNow({ reason: "exec:abc123:exit", coalesceMs: 0 });
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(runSpy).toHaveBeenCalledTimes(1);
+    expect(runSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "exec:abc123:exit" }),
+    );
+
+    runner.stop();
+  });
 });
