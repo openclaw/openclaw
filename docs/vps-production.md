@@ -148,13 +148,13 @@ sudo systemctl restart openclaw
 
 ## Troubleshooting
 
-| Issue | Fix |
-|-------|-----|
-| Gateway won't start | Check `openclaw doctor` for config errors |
-| Cron jobs not firing | Restart gateway; check watchdog script |
-| High memory usage | Reduce `compaction` settings or restart periodically |
-| Channel disconnected | Check API keys, restart gateway |
-| Disk filling up | Clean old logs: `journalctl --vacuum-time=7d` |
+| Issue                | Fix                                                    |
+| -------------------- | ------------------------------------------------------ |
+| Gateway won't start  | Check `openclaw doctor` for config errors              |
+| Cron jobs not firing | Restart gateway; check watchdog script                 |
+| High memory usage    | Reduce `compaction` settings or restart periodically   |
+| Channel disconnected | Check API keys, restart gateway                        |
+| Disk filling up      | Clean old logs: `journalctl --vacuum-time=7d`          |
 
 ## Tips from Production
 
