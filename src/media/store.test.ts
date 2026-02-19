@@ -1,44 +1,25 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import JSZip from "jszip";
 import sharp from "sharp";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { isPathWithinBase } from "../../test/helpers/paths.js";
-import { captureEnv } from "../test-utils/env.js";
+import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 
 describe("media store", () => {
   let store: typeof import("./store.js");
   let home = "";
-  let envSnapshot: ReturnType<typeof captureEnv>;
+  let tempHome: TempHomeEnv;
 
   beforeAll(async () => {
-    envSnapshot = captureEnv([
-      "HOME",
-      "USERPROFILE",
-      "HOMEDRIVE",
-      "HOMEPATH",
-      "OPENCLAW_STATE_DIR",
-    ]);
-    home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-home-"));
-    process.env.HOME = home;
-    process.env.USERPROFILE = home;
-    process.env.OPENCLAW_STATE_DIR = path.join(home, ".openclaw");
-    if (process.platform === "win32") {
-      const match = home.match(/^([A-Za-z]:)(.*)$/);
-      if (match) {
-        process.env.HOMEDRIVE = match[1];
-        process.env.HOMEPATH = match[2] || "\\";
-      }
-    }
-    await fs.mkdir(path.join(home, ".openclaw"), { recursive: true });
+    tempHome = await createTempHomeEnv("openclaw-test-home-");
+    home = tempHome.home;
     store = await import("./store.js");
   });
 
   afterAll(async () => {
-    envSnapshot.restore();
     try {
-      await fs.rm(home, { recursive: true, force: true });
+      await tempHome.restore();
     } catch {
       // ignore cleanup failures in tests
     }
