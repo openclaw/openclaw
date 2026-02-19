@@ -421,8 +421,10 @@ export async function sendMediaFeishu(params: {
   fileName?: string;
   replyToMessageId?: string;
   accountId?: string;
+  mediaLocalRoots?: readonly string[];
 }): Promise<SendMediaResult> {
-  const { cfg, to, mediaUrl, mediaBuffer, fileName, replyToMessageId, accountId } = params;
+  const { cfg, to, mediaUrl, mediaBuffer, fileName, replyToMessageId, accountId, mediaLocalRoots } =
+    params;
   const account = resolveFeishuAccount({ cfg, accountId });
   if (!account.configured) {
     throw new Error(`Feishu account "${account.accountId}" not configured`);
@@ -439,6 +441,7 @@ export async function sendMediaFeishu(params: {
     const loaded = await getFeishuRuntime().media.loadWebMedia(mediaUrl, {
       maxBytes: mediaMaxBytes,
       optimizeImages: false,
+      localRoots: mediaLocalRoots,
     });
     buffer = loaded.buffer;
     name = fileName ?? loaded.fileName ?? "file";
