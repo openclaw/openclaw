@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveUserPath } from "../utils.js";
 import { createGeminiEmbeddingProvider, type GeminiEmbeddingClient } from "./embeddings-gemini.js";
+import { createOllamaEmbeddingProvider, type OllamaEmbeddingClient } from "./embeddings-ollama.js";
 import { createOpenAiEmbeddingProvider, type OpenAiEmbeddingClient } from "./embeddings-openai.js";
 import { createVoyageEmbeddingProvider, type VoyageEmbeddingClient } from "./embeddings-voyage.js";
 import { importNodeLlamaCpp } from "./node-llama.js";
@@ -20,6 +21,7 @@ function sanitizeAndNormalizeEmbedding(vec: number[]): number[] {
 export type { GeminiEmbeddingClient } from "./embeddings-gemini.js";
 export type { OpenAiEmbeddingClient } from "./embeddings-openai.js";
 export type { VoyageEmbeddingClient } from "./embeddings-voyage.js";
+export type { OllamaEmbeddingClient } from "./embeddings-ollama.js";
 
 export type EmbeddingProvider = {
   id: string;
@@ -29,11 +31,11 @@ export type EmbeddingProvider = {
   embedBatch: (texts: string[]) => Promise<number[][]>;
 };
 
-export type EmbeddingProviderId = "openai" | "local" | "gemini" | "voyage";
+export type EmbeddingProviderId = "openai" | "local" | "gemini" | "voyage" | "ollama";
 export type EmbeddingProviderRequest = EmbeddingProviderId | "auto";
 export type EmbeddingProviderFallback = EmbeddingProviderId | "none";
 
-const REMOTE_EMBEDDING_PROVIDER_IDS = ["openai", "gemini", "voyage"] as const;
+const REMOTE_EMBEDDING_PROVIDER_IDS = ["openai", "gemini", "voyage", "ollama"] as const;
 
 export type EmbeddingProviderResult = {
   provider: EmbeddingProvider | null;
@@ -44,6 +46,7 @@ export type EmbeddingProviderResult = {
   openAi?: OpenAiEmbeddingClient;
   gemini?: GeminiEmbeddingClient;
   voyage?: VoyageEmbeddingClient;
+  ollama?: OllamaEmbeddingClient;
 };
 
 export type EmbeddingProviderOptions = {
@@ -145,6 +148,10 @@ export async function createEmbeddingProvider(
     if (id === "local") {
       const provider = await createLocalEmbeddingProvider(options);
       return { provider };
+    }
+    if (id === "ollama") {
+      const { provider, client } = await createOllamaEmbeddingProvider(options);
+      return { provider, ollama: client };
     }
     if (id === "gemini") {
       const { provider, client } = await createGeminiEmbeddingProvider(options);
