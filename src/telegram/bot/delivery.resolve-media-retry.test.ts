@@ -27,6 +27,8 @@ vi.mock("../sticker-cache.js", () => ({
 
 // eslint-disable-next-line @typescript-eslint/consistent-type-imports
 const { resolveMedia } = await import("./delivery.js");
+const MAX_MEDIA_BYTES = 10_000_000;
+const BOT_TOKEN = "tok123";
 
 function makeCtx(
   mediaField: "voice" | "audio" | "photo" | "video",
@@ -61,6 +63,29 @@ function makeCtx(
   };
 }
 
+function setupTransientGetFileRetry() {
+  const getFile = vi
+    .fn()
+    .mockRejectedValueOnce(new Error("Network request for 'getFile' failed!"))
+    .mockResolvedValueOnce({ file_path: "voice/file_0.oga" });
+
+  fetchRemoteMedia.mockResolvedValueOnce({
+    buffer: Buffer.from("audio"),
+    contentType: "audio/ogg",
+    fileName: "file_0.oga",
+  });
+  saveMediaBuffer.mockResolvedValueOnce({
+    path: "/tmp/file_0.oga",
+    contentType: "audio/ogg",
+  });
+
+  return getFile;
+}
+
+async function flushRetryTimers() {
+  await vi.runAllTimersAsync();
+}
+
 describe("resolveMedia getFile retry", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -73,23 +98,9 @@ describe("resolveMedia getFile retry", () => {
   });
 
   it("retries getFile on transient failure and succeeds on second attempt", async () => {
-    const getFile = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("Network request for 'getFile' failed!"))
-      .mockResolvedValueOnce({ file_path: "voice/file_0.oga" });
-
-    fetchRemoteMedia.mockResolvedValueOnce({
-      buffer: Buffer.from("audio"),
-      contentType: "audio/ogg",
-      fileName: "file_0.oga",
-    });
-    saveMediaBuffer.mockResolvedValueOnce({
-      path: "/tmp/file_0.oga",
-      contentType: "audio/ogg",
-    });
-
-    const promise = resolveMedia(makeCtx("voice", getFile), 10_000_000, "tok123");
-    await vi.advanceTimersByTimeAsync(5000);
+    const getFile = setupTransientGetFileRetry();
+    const promise = resolveMedia(makeCtx("voice", getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
+    await flushRetryTimers();
     const result = await promise;
 
     expect(getFile).toHaveBeenCalledTimes(2);
@@ -98,48 +109,29 @@ describe("resolveMedia getFile retry", () => {
     );
   });
 
-  it("returns null when all getFile retries fail so message is not dropped", async () => {
-    const getFile = vi.fn().mockRejectedValue(new Error("Network request for 'getFile' failed!"));
+  it.each(["voice", "photo", "video"] as const)(
+    "returns null for %s when getFile exhausts retries so message is not dropped",
+    async (mediaField) => {
+      const getFile = vi.fn().mockRejectedValue(new Error("Network request for 'getFile' failed!"));
 
-    const promise = resolveMedia(makeCtx("voice", getFile), 10_000_000, "tok123");
-    await vi.advanceTimersByTimeAsync(15000);
-    const result = await promise;
+      const promise = resolveMedia(makeCtx(mediaField, getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
+      await flushRetryTimers();
+      const result = await promise;
 
-    expect(getFile).toHaveBeenCalledTimes(3);
-    expect(result).toBeNull();
-  });
+      expect(getFile).toHaveBeenCalledTimes(3);
+      expect(result).toBeNull();
+    },
+  );
 
   it("does not catch errors from fetchRemoteMedia (only getFile is retried)", async () => {
     const getFile = vi.fn().mockResolvedValue({ file_path: "voice/file_0.oga" });
     fetchRemoteMedia.mockRejectedValueOnce(new Error("download failed"));
 
-    await expect(resolveMedia(makeCtx("voice", getFile), 10_000_000, "tok123")).rejects.toThrow(
-      "download failed",
-    );
+    await expect(
+      resolveMedia(makeCtx("voice", getFile), MAX_MEDIA_BYTES, BOT_TOKEN),
+    ).rejects.toThrow("download failed");
 
     expect(getFile).toHaveBeenCalledTimes(1);
-  });
-
-  it("returns null for photo when getFile exhausts retries", async () => {
-    const getFile = vi.fn().mockRejectedValue(new Error("HttpError: Network error"));
-
-    const promise = resolveMedia(makeCtx("photo", getFile), 10_000_000, "tok123");
-    await vi.advanceTimersByTimeAsync(15000);
-    const result = await promise;
-
-    expect(getFile).toHaveBeenCalledTimes(3);
-    expect(result).toBeNull();
-  });
-
-  it("returns null for video when getFile exhausts retries", async () => {
-    const getFile = vi.fn().mockRejectedValue(new Error("HttpError: Network error"));
-
-    const promise = resolveMedia(makeCtx("video", getFile), 10_000_000, "tok123");
-    await vi.advanceTimersByTimeAsync(15000);
-    const result = await promise;
-
-    expect(getFile).toHaveBeenCalledTimes(3);
-    expect(result).toBeNull();
   });
 
   it("does not retry 'file is too big' error (400 Bad Request) and returns null", async () => {
@@ -149,7 +141,7 @@ describe("resolveMedia getFile retry", () => {
     );
     const getFile = vi.fn().mockRejectedValue(fileTooBigError);
 
-    const result = await resolveMedia(makeCtx("video", getFile), 10_000_000, "tok123");
+    const result = await resolveMedia(makeCtx("video", getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
 
     // Should NOT retry - "file is too big" is a permanent error, not transient
     expect(getFile).toHaveBeenCalledTimes(1);
@@ -165,55 +157,31 @@ describe("resolveMedia getFile retry", () => {
     );
     const getFile = vi.fn().mockRejectedValue(fileTooBigError);
 
-    const result = await resolveMedia(makeCtx("video", getFile), 10_000_000, "tok123");
+    const result = await resolveMedia(makeCtx("video", getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
 
     expect(getFile).toHaveBeenCalledTimes(1);
     expect(result).toBeNull();
   });
 
-  it("returns null for audio when file is too big", async () => {
-    const fileTooBigError = new Error(
-      "GrammyError: Call to 'getFile' failed! (400: Bad Request: file is too big)",
-    );
-    const getFile = vi.fn().mockRejectedValue(fileTooBigError);
+  it.each(["audio", "voice"] as const)(
+    "returns null for %s when file is too big",
+    async (mediaField) => {
+      const fileTooBigError = new Error(
+        "GrammyError: Call to 'getFile' failed! (400: Bad Request: file is too big)",
+      );
+      const getFile = vi.fn().mockRejectedValue(fileTooBigError);
 
-    const result = await resolveMedia(makeCtx("audio", getFile), 10_000_000, "tok123");
+      const result = await resolveMedia(makeCtx(mediaField, getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
 
-    expect(getFile).toHaveBeenCalledTimes(1);
-    expect(result).toBeNull();
-  });
-
-  it("returns null for voice when file is too big", async () => {
-    const fileTooBigError = new Error(
-      "GrammyError: Call to 'getFile' failed! (400: Bad Request: file is too big)",
-    );
-    const getFile = vi.fn().mockRejectedValue(fileTooBigError);
-
-    const result = await resolveMedia(makeCtx("voice", getFile), 10_000_000, "tok123");
-
-    expect(getFile).toHaveBeenCalledTimes(1);
-    expect(result).toBeNull();
-  });
+      expect(getFile).toHaveBeenCalledTimes(1);
+      expect(result).toBeNull();
+    },
+  );
 
   it("still retries transient errors even after encountering file too big in different call", async () => {
-    // First call with transient error should retry
-    const getFile = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("Network request for 'getFile' failed!"))
-      .mockResolvedValueOnce({ file_path: "voice/file_0.oga" });
-
-    fetchRemoteMedia.mockResolvedValueOnce({
-      buffer: Buffer.from("audio"),
-      contentType: "audio/ogg",
-      fileName: "file_0.oga",
-    });
-    saveMediaBuffer.mockResolvedValueOnce({
-      path: "/tmp/file_0.oga",
-      contentType: "audio/ogg",
-    });
-
-    const promise = resolveMedia(makeCtx("voice", getFile), 10_000_000, "tok123");
-    await vi.advanceTimersByTimeAsync(5000);
+    const getFile = setupTransientGetFileRetry();
+    const promise = resolveMedia(makeCtx("voice", getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
+    await flushRetryTimers();
     const result = await promise;
 
     // Should retry transient errors

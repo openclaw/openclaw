@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createCronStoreHarness, createNoopLogger } from "./service.test-harness.js";
-import { createCronServiceState } from "./service/state.js";
+import {
+  createCronStoreHarness,
+  createNoopLogger,
+  createRunningCronServiceState,
+} from "./service.test-harness.js";
 import { onTimer } from "./service/timer.js";
 import type { CronJob } from "./types.js";
 
@@ -45,20 +48,10 @@ describe("CronService - timer re-arm when running (#12025)", () => {
     const store = await makeStorePath();
     const now = Date.parse("2026-02-06T10:05:00.000Z");
 
-    const state = createCronServiceState({
-      cronEnabled: true,
+    const state = createRunningCronServiceState({
       storePath: store.storePath,
       log: noopLogger,
       nowMs: () => now,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeatNow: vi.fn(),
-      runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
-    });
-
-    // Simulate a job that is currently running.
-    state.running = true;
-    state.store = {
-      version: 1,
       jobs: [
         createDueRecurringJob({
           id: "recurring-job",
@@ -66,7 +59,7 @@ describe("CronService - timer re-arm when running (#12025)", () => {
           nextRunAtMs: now + 5 * 60_000,
         }),
       ],
-    };
+    });
 
     // Before the fix in #12025, this would return without re-arming,
     // silently killing the scheduler.

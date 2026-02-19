@@ -12,6 +12,7 @@ import {
   type ExecCommandSegment,
 } from "./exec-approvals-analysis.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.js";
+import { isTrustedSafeBinPath } from "./exec-safe-bin-trust.js";
 
 function isPathLikeToken(value: string): boolean {
   const trimmed = value.trim();
@@ -67,6 +68,7 @@ export function isSafeBinUsage(params: {
   safeBins: Set<string>;
   cwd?: string;
   fileExists?: (filePath: string) => boolean;
+  trustedSafeBinDirs?: ReadonlySet<string>;
 }): boolean {
   // Windows host exec uses PowerShell, which has different parsing/expansion rules.
   // Keep safeBins conservative there (require explicit allowlist entries).
@@ -88,6 +90,14 @@ export function isSafeBinUsage(params: {
     return false;
   }
   if (!resolution?.resolvedPath) {
+    return false;
+  }
+  if (
+    !isTrustedSafeBinPath({
+      resolvedPath: resolution.resolvedPath,
+      trustedDirs: params.trustedSafeBinDirs,
+    })
+  ) {
     return false;
   }
   const cwd = params.cwd ?? process.cwd();
