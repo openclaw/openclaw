@@ -40,6 +40,12 @@ const mocks = vi.hoisted(() => {
   );
   const encryptMock = vi.fn((text: string, key: string) => `nip44:${key}:${text}`);
   const decryptMock = vi.fn((content: string, key: string) => `{"ver":1,"message":"${content}"}`);
+  const nip04EncryptMock = vi.fn(
+    (_secret: string | Uint8Array, pubkey: string, text: string) => `nip04:${pubkey}:${text}`,
+  );
+  const nip04DecryptMock = vi.fn(
+    (_secret: string | Uint8Array, _pubkey: string, content: string) => content,
+  );
 
   class MockSimplePool {
     publish(relays: string[], event: unknown): Promise<void> {
@@ -75,6 +81,8 @@ const mocks = vi.hoisted(() => {
     getConversationKeyMock,
     encryptMock,
     decryptMock,
+    nip04EncryptMock,
+    nip04DecryptMock,
     MockSimplePool,
   };
 });
@@ -101,6 +109,11 @@ vi.mock("nostr-tools/nip44", () => ({
   getConversationKey: mocks.getConversationKeyMock,
   encrypt: mocks.encryptMock,
   decrypt: mocks.decryptMock,
+}));
+
+vi.mock("nostr-tools/nip04", () => ({
+  encrypt: mocks.nip04EncryptMock,
+  decrypt: mocks.nip04DecryptMock,
 }));
 
 vi.mock("./nostr-state-store.js", () => ({
@@ -329,8 +342,7 @@ describe("startNostrBus NIP-63 protocol flow", () => {
     expect(mocks.subscriptions).toHaveLength(1);
 
     const { filters } = mocks.subscriptions[0];
-    expect(filters.kinds).toEqual([25800, 25801, 25802, 25803, 25804, 25805, 25806, 31340]);
-    expect(filters.kinds).not.toContain(4);
+    expect(filters.kinds).toEqual([4, 25800, 25801, 25802, 25803, 25804, 25805, 25806, 31340]);
     expect(filters["#p"]).toEqual([BOT_PUBLIC_KEY]);
     expect(filters.since).toBeGreaterThan(0);
 
@@ -617,6 +629,122 @@ describe("startNostrBus NIP-63 protocol flow", () => {
     bus.close();
   });
 
+  it("sendDm supports status, tool, delta, and error response kinds", async () => {
+    const bus = await startNostrBus({
+      privateKey: TEST_HEX_KEY,
+      relays: [TEST_RELAY],
+      onMessage: vi.fn(),
+      onError: vi.fn(),
+    });
+
+    await bus.sendDm("deadbeef", { ver: 1, state: "thinking", info: "queued" }, undefined, 25800);
+    await bus.sendDm("deadbeef", "tool output", undefined, 25804);
+    await bus.sendDm("deadbeef", "delta output", undefined, 25801);
+    await bus.sendDm("deadbeef", "error output", undefined, 25805);
+
+    expect(mocks.publishMock).toHaveBeenNthCalledWith(
+      1,
+      [TEST_RELAY],
+      expect.objectContaining({
+        kind: 25800,
+        content: expect.stringContaining(`\"state\":\"thinking\"`),
+      }),
+    );
+    expect(mocks.publishMock).toHaveBeenNthCalledWith(
+      2,
+      [TEST_RELAY],
+      expect.objectContaining({
+        kind: 25804,
+        content: expect.stringContaining(`\"name\":\"tool\"`),
+      }),
+    );
+    expect(mocks.publishMock).toHaveBeenNthCalledWith(
+      3,
+      [TEST_RELAY],
+      expect.objectContaining({
+        kind: 25801,
+        content: expect.stringContaining(`\"event\":\"block\"`),
+      }),
+    );
+    expect(mocks.publishMock).toHaveBeenNthCalledWith(
+      4,
+      [TEST_RELAY],
+      expect.objectContaining({
+        kind: 25805,
+        content: expect.stringContaining(`\"code\":\"INTERNAL_ERROR\"`),
+      }),
+    );
+
+    bus.close();
+  });
+
+  it("sendDm falls back to final response kind for unsupported response kinds", async () => {
+    const bus = await startNostrBus({
+      privateKey: TEST_HEX_KEY,
+      relays: [TEST_RELAY],
+      onMessage: vi.fn(),
+      onError: vi.fn(),
+    });
+
+    await bus.sendDm("deadbeef", "hello", undefined, 0);
+
+    expect(mocks.publishMock).toHaveBeenCalledWith(
+      [TEST_RELAY],
+      expect.objectContaining({
+        kind: 25803,
+        content: expect.stringContaining(`\"text\":\"hello\"`),
+      }),
+    );
+
+    bus.close();
+  });
+
+  it("sendDm rejects invalid status payload shape", async () => {
+    const bus = await startNostrBus({
+      privateKey: TEST_HEX_KEY,
+      relays: [TEST_RELAY],
+      onMessage: vi.fn(),
+      onError: vi.fn(),
+    });
+
+    await expect(
+      bus.sendDm("deadbeef", { ver: 1, state: "pending" }, undefined, 25800),
+    ).rejects.toThrow("Invalid NIP-63 status state");
+    expect(mocks.publishMock).not.toHaveBeenCalled();
+
+    bus.close();
+  });
+
+  it("sendDm publishes kind 4 replies via NIP-04", async () => {
+    const bus = await startNostrBus({
+      privateKey: TEST_HEX_KEY,
+      relays: [TEST_RELAY],
+      onMessage: vi.fn(),
+      onError: vi.fn(),
+    });
+
+    await bus.sendDm("deadbeef", "nip04 reply", { inReplyTo: "evt-1" }, 4);
+
+    expect(mocks.nip04EncryptMock).toHaveBeenCalledWith(
+      expect.any(Uint8Array),
+      "deadbeef",
+      "nip04 reply",
+    );
+    expect(mocks.publishMock).toHaveBeenCalledWith(
+      [TEST_RELAY],
+      expect.objectContaining({
+        kind: 4,
+        content: expect.stringContaining("nip04 reply"),
+        tags: [
+          ["p", "deadbeef"],
+          ["e", "evt-1", "", "root"],
+        ],
+      }),
+    );
+
+    bus.close();
+  });
+
   it("ignores non-prompt NIP-63 events", async () => {
     const inbound = {
       kind: 25803,
@@ -627,7 +755,7 @@ describe("startNostrBus NIP-63 protocol flow", () => {
       sig: "sig",
       tags: [
         ["p", BOT_PUBLIC_KEY],
-        ["encryption", "nip44"],
+        ["encryption", "nip04"],
       ],
     };
 
@@ -650,7 +778,65 @@ describe("startNostrBus NIP-63 protocol flow", () => {
     bus.close();
   });
 
-  it("rejects prompts missing required encryption tag", async () => {
+  it("processes kind 4 inbound DMs and keeps outbound on kind 4", async () => {
+    const inbound = {
+      kind: 4,
+      content: "hello from kind4",
+      pubkey: SENDER_PUBLIC_KEY,
+      created_at: Math.floor(Date.now() / 1000) + 10,
+      id: "inbound-kind4",
+      sig: "sig",
+      tags: [["p", BOT_PUBLIC_KEY]],
+    };
+
+    const onMessage = vi.fn(async (payload, reply) => {
+      expect(payload).toMatchObject({
+        kind: 4,
+        text: "hello from kind4",
+      });
+      // Caller may still pass NIP-63 response kinds; transport must keep kind 4.
+      await reply("tool update over kind4", undefined, 25804);
+      await reply("final over kind4");
+    });
+
+    const bus = await startNostrBus({
+      privateKey: TEST_HEX_KEY,
+      relays: [TEST_RELAY],
+      onMessage,
+      onError: vi.fn(),
+    });
+
+    await mocks.subscriptions[0]!.handlers.onevent(inbound);
+
+    expect(mocks.nip04DecryptMock).toHaveBeenCalledWith(
+      expect.any(Uint8Array),
+      SENDER_PUBLIC_KEY,
+      inbound.content,
+    );
+    expect(mocks.publishMock).toHaveBeenNthCalledWith(
+      1,
+      [TEST_RELAY],
+      expect.objectContaining({
+        kind: 4,
+        content: expect.stringContaining("tool update over kind4"),
+        tags: [["p", SENDER_PUBLIC_KEY]],
+      }),
+    );
+    expect(mocks.publishMock).toHaveBeenNthCalledWith(
+      2,
+      [TEST_RELAY],
+      expect.objectContaining({
+        kind: 4,
+        content: expect.stringContaining("final over kind4"),
+        tags: [["p", SENDER_PUBLIC_KEY]],
+      }),
+    );
+    expect(mocks.decryptMock).not.toHaveBeenCalled();
+
+    bus.close();
+  });
+
+  it("rejects prompts missing encryption tag", async () => {
     const inbound = {
       kind: 25802,
       content: "cipher-input",
@@ -664,17 +850,104 @@ describe("startNostrBus NIP-63 protocol flow", () => {
     const onMessage = vi.fn(async () => {
       // no-op
     });
+    const onError = vi.fn();
 
     const bus = await startNostrBus({
       privateKey: TEST_HEX_KEY,
       relays: [TEST_RELAY],
       onMessage,
-      onError: vi.fn(),
+      onError,
     });
 
     await mocks.subscriptions[0]!.handlers.onevent(inbound);
 
     expect(onMessage).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("Unsupported encryption scheme"),
+      }),
+      "event inbound-no-encryption",
+    );
+    expect(mocks.publishMock).not.toHaveBeenCalled();
+
+    bus.close();
+  });
+
+  it("rejects uppercase or hyphenated encryption tags", async () => {
+    const inbound = {
+      kind: 25802,
+      content: "cipher-input",
+      pubkey: SENDER_PUBLIC_KEY,
+      created_at: Math.floor(Date.now() / 1000) + 10,
+      id: "inbound-uppercase-encryption",
+      sig: "sig",
+      tags: [
+        ["p", BOT_PUBLIC_KEY],
+        ["encryption", "NIP-44"],
+      ],
+    };
+
+    const onMessage = vi.fn(async () => {
+      // no-op
+    });
+    const onError = vi.fn();
+
+    const bus = await startNostrBus({
+      privateKey: TEST_HEX_KEY,
+      relays: [TEST_RELAY],
+      onMessage,
+      onError,
+    });
+
+    await mocks.subscriptions[0]!.handlers.onevent(inbound);
+
+    expect(onMessage).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("Unsupported encryption scheme"),
+      }),
+      "event inbound-uppercase-encryption",
+    );
+    expect(mocks.publishMock).not.toHaveBeenCalled();
+
+    bus.close();
+  });
+
+  it("rejects unsupported encryption schemes", async () => {
+    const inbound = {
+      kind: 25802,
+      content: "cipher-input",
+      pubkey: SENDER_PUBLIC_KEY,
+      created_at: Math.floor(Date.now() / 1000) + 10,
+      id: "inbound-bad-encryption",
+      sig: "sig",
+      tags: [
+        ["p", BOT_PUBLIC_KEY],
+        ["encryption", "nip04"],
+      ],
+    };
+
+    const onMessage = vi.fn(async () => {
+      // no-op
+    });
+    const onError = vi.fn();
+
+    const bus = await startNostrBus({
+      privateKey: TEST_HEX_KEY,
+      relays: [TEST_RELAY],
+      onMessage,
+      onError,
+    });
+
+    await mocks.subscriptions[0]!.handlers.onevent(inbound);
+
+    expect(onMessage).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("Unsupported encryption scheme"),
+      }),
+      `event ${inbound.id}`,
+    );
     expect(mocks.publishMock).not.toHaveBeenCalled();
 
     bus.close();

@@ -42,14 +42,14 @@ Restart the Gateway after installing or enabling plugins.
 
 ## Quick setup
 
-1. Generate a Nostr keypair (if needed):
+1. Create or confirm the OpenClaw bot identity (the first keypair):
 
 ```bash
 # Using nak
 nak key generate
 ```
 
-2. Add to config:
+2. Add the bot key to config:
 
 ```json
 {
@@ -67,23 +67,54 @@ nak key generate
 export NOSTR_PRIVATE_KEY="nsec1..."
 ```
 
-4. Restart the Gateway.
+4. Set your sender identity key (the second keypair) so this specific user can message the bot without pairing:
+
+```json
+{
+  "channels": {
+    "nostr": {
+      "dmPolicy": "allowlist",
+      "allowFrom": ["npub1..."]
+    }
+  }
+}
+```
+
+5. Add profile metadata so clients render "OpenClaw" instead of raw npub:
+
+```json
+{
+  "channels": {
+    "nostr": {
+      "privateKey": "${NOSTR_PRIVATE_KEY}",
+      "profile": {
+        "name": "OpenClaw",
+        "about": "I am your OpenClaw agent",
+        "picture": "https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/openclaw-logo-text.png"
+      }
+    }
+  }
+}
+```
+
+6. Restart the Gateway.
 
 ## Configuration reference
 
-| Key          | Type     | Default                                     | Description                         |
-| ------------ | -------- | ------------------------------------------- | ----------------------------------- |
-| `privateKey` | string   | required                                    | Private key in `nsec` or hex format |
-| `relays`     | string[] | `['wss://relay.damus.io', 'wss://nos.lol']` | Relay URLs (WebSocket)              |
-| `dmPolicy`   | string   | `pairing`                                   | Inbound message access policy       |
-| `allowFrom`  | string[] | `[]`                                        | Allowed sender pubkeys              |
-| `enabled`    | boolean  | `true`                                      | Enable/disable channel              |
-| `name`       | string   | -                                           | Display name                        |
-| `profile`    | object   | -                                           | NIP-01 profile metadata             |
+| Key          | Type     | Default                                     | Description                                                                                                                   |
+| ------------ | -------- | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `privateKey` | string   | required                                    | Private key in `nsec` or hex format                                                                                           |
+| `relays`     | string[] | `['wss://relay.damus.io', 'wss://nos.lol']` | Relay URLs (WebSocket)                                                                                                        |
+| `dmPolicy`   | string   | inferred from `allowFrom`                   | Inbound message access policy (`pairing` by default, `allowlist` when `allowFrom` exists, `open` when `allowFrom` is `["*"]`) |
+| `allowFrom`  | string[] | `[]`                                        | Allowed sender pubkeys                                                                                                        |
+| `enabled`    | boolean  | `true`                                      | Enable/disable channel                                                                                                        |
+| `name`       | string   | -                                           | Display name                                                                                                                  |
+| `profile`    | object   | -                                           | NIP-01 profile metadata                                                                                                       |
 
 ## Profile metadata
 
-Profile data is published as a NIP-01 `kind:0` event. You can manage it from the Control UI (Channels -> Nostr -> Profile) or set it directly in config.
+Profile data is published as a NIP-01 `kind:0` event whenever the Nostr provider starts.
+You can manage it from the Control UI (Channels -> Nostr -> Profile) or set it directly in config.
 
 Example:
 
@@ -111,6 +142,26 @@ Notes:
 
 - Profile URLs must use `https://`.
 - Importing from relays merges fields and preserves local overrides.
+
+## Data visibility on relays
+
+What you send to relays is not equally private across all event types:
+
+- `kind:0` (profile metadata):
+  - **Not encrypted.** This is intentionally public and readable by anyone who can query your bot pubkey.
+  - You should only include information you are comfortable exposing (name, avatar URL, bio, etc.).
+- `kind:25802` (NIP-63 prompt) and `kind:25803/25804/25805` (NIP-63 responses):
+  - **Encrypted with `nip44`** by default (`encryption=nip44` tag is required).
+  - Only peers with the correct private keys can decrypt message content.
+- `kind:4` (legacy NIP-04 DMs):
+  - **Encrypted with NIP-04** and also not readable without the matching key pair.
+
+For all event kinds, some event fields stay public even when content is encrypted:
+
+- `id`, `kind`, `pubkey`, `created_at`, and all `tags` are always visible.
+- Only the encrypted message `content` is protected.
+
+So if you want a non-secret bot identity card, that comes from the profile metadata only; the private chat content is not exposed in plaintext.
 
 ## Access control
 
@@ -166,13 +217,13 @@ Tips:
 
 ## Protocol support
 
-| NIP    | Status      | Description                                         |
-| ------ | ----------- | --------------------------------------------------- |
-| NIP-01 | Supported   | Basic event format + profile metadata               |
-| NIP-04 | Unsupported | Replaced by NIP-44 + NIP-63 in this release         |
-| NIP-44 | Supported   | Encrypted content and key exchange                  |
-| NIP-63 | Supported   | AI agent prompts and responses (`kind:25802/25803`) |
-| NIP-17 | Planned     | Gift-wrapped DMs                                    |
+| NIP    | Status      | Description                                                     |
+| ------ | ----------- | --------------------------------------------------------------- |
+| NIP-01 | Supported   | Basic event format + profile metadata                           |
+| NIP-04 | Unsupported | Replaced by NIP-44 + NIP-63 in this release                     |
+| NIP-44 | Supported   | Encrypted content and key exchange                              |
+| NIP-63 | Supported   | AI agent prompts and responses (`kind:25802/25803/25804/25805`) |
+| NIP-17 | Planned     | Gift-wrapped DMs                                                |
 
 Current behavior is NIP-63-only for agent messaging: NIP-04 encrypted DMs are no longer processed.
 
@@ -221,9 +272,19 @@ NOSTR_BOT_SECRET=<bot_hex_or_nsec> \
 Each cycle validates:
 
 - Outbound prompt is `kind:25802` with `encryption=nip44`.
-- Response is `kind:25803` with `encryption=nip44`.
-- Response decrypts to JSON `{"ver":1,"text":"..."}` with non-empty `text`.
+- Responses use canonical JSON payloads:
+  - `kind:25800` (status): `{ver,state,progress?,info?,timestamp,...}`
+  - `kind:25801` (delta): `{ver,event,phase,text,seq?}`
+  - `kind:25804` (tool): `{ver,name,phase,arguments?,output?,success?,duration_ms?}`
+  - `kind:25803` (final): `{ver,text,timestamp,...}`
+  - `kind:25805` (error): `{ver,code,message,retry_after?,details?}`
+- All encrypted protocol events use `encryption=nip44`.
 - `s` and `e` tags match the request session and event id.
+
+Optional trace hook:
+
+- Set `OPENCLAW_NOSTR_TRACE_JSONL=/absolute/path/nostr-trace.jsonl` to capture inbound/outbound
+  Nostr channel events as JSONL for cross-client latency and ordering diagnostics.
 
 ### Manual test
 

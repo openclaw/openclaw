@@ -6,6 +6,7 @@ import {
   nip19,
   type Event,
 } from "nostr-tools";
+import { decrypt as decryptNip04, encrypt as encryptNip04 } from "nostr-tools/nip04";
 import { decrypt, encrypt, getConversationKey } from "nostr-tools/nip44";
 import type { NostrProfile } from "./config-schema.js";
 import {
@@ -15,6 +16,11 @@ import {
   type MetricsSnapshot,
   type MetricEvent,
 } from "./metrics.js";
+import {
+  publishAiInfo as publishAiInfoFn,
+  type AiInfoContent,
+  type AiInfoPublishResult,
+} from "./nostr-ai-info.js";
 import { publishProfile as publishProfileFn, type ProfilePublishResult } from "./nostr-profile.js";
 import {
   readNostrBusState,
@@ -48,9 +54,24 @@ const HEALTH_WINDOW_MS = 60000; // 1 minute window for health stats
 
 const NIP63_PROTOCOL_VERSION = 1;
 const NIP63_ENCRYPTION_SCHEME = "nip44";
+const NIP04_DM_KIND = 4;
 const NIP63_PROMPT_KIND = 25802;
-const NIP63_RESPONSE_KIND = 25803;
-const NIP63_SUBSCRIBE_KINDS = [25800, 25801, 25802, 25803, 25804, 25805, 25806, 31340] as const;
+const NIP63_RESPONSE_KIND_STATUS = 25800;
+const NIP63_RESPONSE_KIND_FINAL = 25803;
+const NIP63_RESPONSE_KIND_TOOL = 25804;
+const NIP63_RESPONSE_KIND_BLOCK = 25801;
+const NIP63_RESPONSE_KIND_ERROR = 25805;
+const NIP63_SUBSCRIBE_KINDS = [
+  NIP04_DM_KIND,
+  25800,
+  25801,
+  25802,
+  25803,
+  25804,
+  25805,
+  25806,
+  31340,
+] as const;
 
 export interface NostrBusOptions {
   /** Private key in hex or nsec format */
@@ -64,10 +85,25 @@ export interface NostrBusOptions {
   /** Called when a NIP-63 prompt is received */
   onMessage: (
     message: NostrInboundMessage,
-    reply: (text: string, options?: NostrOutboundMessageOptions) => Promise<void>,
+    reply: (
+      content: NostrOutboundContent,
+      options: NostrOutboundMessageOptions | undefined,
+      responseKind?: number,
+    ) => Promise<void>,
   ) => Promise<void>;
   /** Called on errors (optional) */
   onError?: (error: Error, context: string) => void;
+  /** Called when an outbound response is successfully published (optional) */
+  onSend?: (event: {
+    senderPubkey: string;
+    recipientPubkey: string;
+    senderRole: string;
+    recipientRole: string;
+    responseKind: number;
+    relays: string[];
+    eventId: string;
+    decryptedPayload?: string;
+  }) => void;
   /** Called on connection status changes (optional) */
   onConnect?: (relay: string) => void;
   /** Called on disconnection (optional) */
@@ -88,11 +124,18 @@ export interface NostrBusHandle {
   /** Get the bot's public key */
   publicKey: string;
   /** Send a NIP-63 response to a pubkey */
-  sendDm: (toPubkey: string, text: string, options?: NostrOutboundMessageOptions) => Promise<void>;
+  sendDm: (
+    toPubkey: string,
+    content: NostrOutboundContent,
+    options?: NostrOutboundMessageOptions,
+    responseKind?: number,
+  ) => Promise<void>;
   /** Get current metrics snapshot */
   getMetrics: () => MetricsSnapshot;
   /** Publish a profile (kind:0) to all relays */
   publishProfile: (profile: NostrProfile) => Promise<ProfilePublishResult>;
+  /** Publish AI info (kind:31340) to all relays */
+  publishAiInfo: (payload: AiInfoContent) => Promise<AiInfoPublishResult>;
   /** Get the last profile publish state */
   getProfileState: () => Promise<{
     lastPublishedAt: number | null;
@@ -115,6 +158,8 @@ export interface NostrOutboundMessageOptions {
   sessionId?: string;
   inReplyTo?: string;
 }
+
+type NostrOutboundContent = string | Record<string, unknown>;
 
 interface NostrPromptPayload {
   ver: number;
@@ -399,6 +444,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
     relays,
     onMessage,
     onError,
+    onSend,
     onEose,
     onMetric,
     maxSeenEntries = 100_000,
@@ -414,6 +460,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
   const pool = new SimplePool();
   const accountId = options.accountId ?? pk.slice(0, 16);
   const gatewayStartedAt = Math.floor(Date.now() / 1000);
+  let lastAiInfoPublishedAt: number | undefined;
 
   // Initialize metrics
   const metrics = onMetric ? createMetrics(onMetric) : createNoopMetrics();
@@ -514,18 +561,23 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
         return;
       }
 
-      // Process only prompt events for inbound message handling
-      if (event.kind !== NIP63_PROMPT_KIND) {
+      // Process only supported inbound prompt kinds.
+      if (event.kind !== NIP63_PROMPT_KIND && event.kind !== NIP04_DM_KIND) {
         metrics.emit("event.rejected.wrong_kind");
         return;
       }
 
-      // Validate required encryption scheme tag
-      const encryptionScheme = getTagValue(event.tags, "encryption");
-      if (encryptionScheme !== NIP63_ENCRYPTION_SCHEME) {
-        metrics.emit("event.rejected.invalid_shape");
-        onError?.(new Error("Unsupported or missing encryption scheme"), `event ${event.id}`);
-        return;
+      if (event.kind === NIP63_PROMPT_KIND) {
+        // Validate required encryption scheme tag for NIP-63.
+        const encryptionScheme = resolveNip63EncryptionScheme(event.tags);
+        if (encryptionScheme !== NIP63_ENCRYPTION_SCHEME) {
+          metrics.emit("event.rejected.invalid_shape");
+          onError?.(
+            new Error(`Unsupported encryption scheme ${encryptionScheme ?? "missing"}`),
+            `event ${event.id}`,
+          );
+          return;
+        }
       }
 
       // Verify signature (must pass before we trust the event)
@@ -542,8 +594,12 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
       // Decrypt the message
       let plaintext: string;
       try {
-        const conversationKey = getConversationKey(sk, event.pubkey);
-        plaintext = decrypt(event.content, conversationKey);
+        if (event.kind === NIP04_DM_KIND) {
+          plaintext = decryptNip04(sk, event.pubkey, event.content);
+        } else {
+          const conversationKey = getConversationKey(sk, event.pubkey);
+          plaintext = decrypt(event.content, conversationKey);
+        }
         metrics.emit("decrypt.success");
       } catch (err) {
         metrics.emit("decrypt.failure");
@@ -552,31 +608,45 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
         return;
       }
 
-      // Parse prompt content from encrypted JSON payload
-      let parsed: NostrPromptPayload;
-      try {
-        parsed = parseNip63PromptPayload(plaintext, event.id);
-      } catch (err) {
-        metrics.emit("event.rejected.invalid_shape");
-        onError?.(err as Error, `parse prompt ${event.id}`);
+      const inboundText =
+        event.kind === NIP04_DM_KIND
+          ? plaintext
+          : (() => {
+              // Parse NIP-63 prompt content from encrypted JSON payload.
+              let parsed: NostrPromptPayload;
+              try {
+                parsed = parseNip63PromptPayload(plaintext, event.id);
+              } catch (err) {
+                metrics.emit("event.rejected.invalid_shape");
+                onError?.(err as Error, `parse prompt ${event.id}`);
+                return undefined;
+              }
+              return parsed.message;
+            })();
+      if (inboundText === undefined) {
         return;
       }
 
       // Create reply function (try relays by health score)
       const replyTo = async (
-        text: string,
+        content: NostrOutboundContent,
         replyOptions?: NostrOutboundMessageOptions,
+        responseKind?: number,
       ): Promise<void> => {
+        const normalizedResponseKind = event.kind === NIP04_DM_KIND ? NIP04_DM_KIND : responseKind;
         await sendEncryptedDm(
           pool,
           sk,
           event.pubkey,
-          text,
+          content,
           replyOptions,
           normalizedRelays,
           metrics,
           circuitBreakers,
           healthTracker,
+          pk,
+          normalizedResponseKind,
+          onSend,
           onError,
         );
       };
@@ -588,7 +658,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
       await onMessage(
         {
           senderPubkey: event.pubkey,
-          text: parsed.message,
+          text: inboundText,
           createdAt: event.created_at,
           eventId: event.id,
           kind: event.kind,
@@ -632,7 +702,11 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
           metrics.emit("relay.message.closed", 1, { relay });
           options.onDisconnect?.(relay);
         }
-        onError?.(new Error(`Subscription closed: ${reason.join(", ")}`), "subscription");
+        const reasonText = reason.join(", ");
+        if (reasonText.toLowerCase().includes("closed by caller")) {
+          return;
+        }
+        onError?.(new Error(`Subscription closed: ${reasonText}`), "subscription");
       },
     },
   );
@@ -640,19 +714,23 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
   // Public sendDm function
   const sendDm = async (
     toPubkey: string,
-    text: string,
+    content: NostrOutboundContent,
     options?: NostrOutboundMessageOptions,
+    responseKind?: number,
   ): Promise<void> => {
     await sendEncryptedDm(
       pool,
       sk,
       toPubkey,
-      text,
+      content,
       options,
       normalizedRelays,
       metrics,
       circuitBreakers,
       healthTracker,
+      pk,
+      responseKind,
+      onSend,
       onError,
     );
   };
@@ -680,6 +758,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
       accountId,
       lastPublishedAt: result.createdAt,
       lastPublishedEventId: result.eventId,
+      lastPublishedProfileFingerprint: null,
       lastPublishResults: publishResults,
     });
 
@@ -694,6 +773,18 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
       lastPublishedEventId: state?.lastPublishedEventId ?? null,
       lastPublishResults: state?.lastPublishResults ?? null,
     };
+  };
+
+  const publishAiInfo = async (payload: AiInfoContent): Promise<AiInfoPublishResult> => {
+    const result = await publishAiInfoFn(
+      pool,
+      sk,
+      normalizedRelays,
+      payload,
+      lastAiInfoPublishedAt,
+    );
+    lastAiInfoPublishedAt = result.createdAt;
+    return result;
   };
 
   return {
@@ -715,8 +806,113 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
     sendDm,
     getMetrics: () => metrics.getSnapshot(),
     publishProfile,
+    publishAiInfo,
     getProfileState,
   };
+}
+
+function resolveNip63EncryptionScheme(tags: string[][]): string | undefined {
+  const encryptionScheme = getTagValue(tags, "encryption");
+  if (!encryptionScheme) {
+    return undefined;
+  }
+
+  const normalized = encryptionScheme.trim().toLowerCase();
+  if (!normalized.length) {
+    return undefined;
+  }
+
+  return normalized;
+}
+
+function ensureStringField(payload: Record<string, unknown>, key: string, kind: number): void {
+  if (typeof payload[key] !== "string" || !String(payload[key]).trim().length) {
+    throw new Error(`Invalid NIP-63 payload for kind ${kind}: missing ${key}`);
+  }
+}
+
+function normalizeNip63Payload(
+  content: NostrOutboundContent,
+  kind: number,
+): Record<string, unknown> {
+  const timestamp = Math.floor(Date.now() / 1000);
+  const payload: Record<string, unknown> =
+    typeof content === "string"
+      ? (() => {
+          if (kind === NIP63_RESPONSE_KIND_ERROR) {
+            return {
+              ver: NIP63_PROTOCOL_VERSION,
+              code: "INTERNAL_ERROR",
+              message: content,
+              timestamp,
+            };
+          }
+          if (kind === NIP63_RESPONSE_KIND_BLOCK) {
+            return {
+              ver: NIP63_PROTOCOL_VERSION,
+              event: "block",
+              phase: "update",
+              text: content,
+              timestamp,
+            };
+          }
+          if (kind === NIP63_RESPONSE_KIND_TOOL) {
+            return {
+              ver: NIP63_PROTOCOL_VERSION,
+              name: "tool",
+              phase: "result",
+              output: { text: content },
+              success: true,
+              timestamp,
+            };
+          }
+          return {
+            ver: NIP63_PROTOCOL_VERSION,
+            text: content,
+            timestamp,
+          };
+        })()
+      : { ...content };
+
+  if (payload.ver === undefined) {
+    payload.ver = NIP63_PROTOCOL_VERSION;
+  }
+  if (payload.ver !== NIP63_PROTOCOL_VERSION) {
+    throw new Error(`Invalid NIP-63 payload version: ${String(payload.ver)}`);
+  }
+  if (payload.timestamp === undefined) {
+    payload.timestamp = timestamp;
+  }
+
+  if (kind === NIP63_RESPONSE_KIND_FINAL) {
+    ensureStringField(payload, "text", kind);
+  } else if (kind === NIP63_RESPONSE_KIND_STATUS) {
+    ensureStringField(payload, "state", kind);
+    const state = String(payload.state).trim();
+    if (state !== "thinking" && state !== "tool_use" && state !== "done") {
+      throw new Error(`Invalid NIP-63 status state: ${state}`);
+    }
+  } else if (kind === NIP63_RESPONSE_KIND_BLOCK) {
+    ensureStringField(payload, "event", kind);
+    ensureStringField(payload, "phase", kind);
+    ensureStringField(payload, "text", kind);
+    const eventName = String(payload.event).trim();
+    if (eventName !== "thinking" && eventName !== "block") {
+      throw new Error(`Invalid NIP-63 delta event: ${eventName}`);
+    }
+  } else if (kind === NIP63_RESPONSE_KIND_TOOL) {
+    ensureStringField(payload, "name", kind);
+    ensureStringField(payload, "phase", kind);
+    const phase = String(payload.phase).trim();
+    if (phase !== "start" && phase !== "result") {
+      throw new Error(`Invalid NIP-63 tool phase: ${phase}`);
+    }
+  } else if (kind === NIP63_RESPONSE_KIND_ERROR) {
+    ensureStringField(payload, "code", kind);
+    ensureStringField(payload, "message", kind);
+  }
+
+  return payload;
 }
 
 // ============================================================================
@@ -730,12 +926,24 @@ async function sendEncryptedDm(
   pool: SimplePool,
   sk: Uint8Array,
   toPubkey: string,
-  text: string,
+  content: NostrOutboundContent,
   options: NostrOutboundMessageOptions | undefined,
   relays: string[],
   metrics: NostrMetrics,
   circuitBreakers: Map<string, CircuitBreaker>,
   healthTracker: RelayHealthTracker,
+  senderPubkey: string,
+  responseKind?: number,
+  onSend?: (event: {
+    senderPubkey: string;
+    recipientPubkey: string;
+    senderRole: string;
+    recipientRole: string;
+    responseKind: number;
+    relays: string[];
+    eventId: string;
+    decryptedPayload?: string;
+  }) => void,
   onError?: (error: Error, context: string) => void,
 ): Promise<void> {
   const relayList = [...relays];
@@ -745,25 +953,38 @@ async function sendEncryptedDm(
     throw error;
   }
 
+  const isNip04Response = responseKind === NIP04_DM_KIND;
+  const normalizedResponseKind = isNip04Response
+    ? NIP04_DM_KIND
+    : responseKind === NIP63_RESPONSE_KIND_STATUS ||
+        responseKind === NIP63_RESPONSE_KIND_TOOL ||
+        responseKind === NIP63_RESPONSE_KIND_BLOCK ||
+        responseKind === NIP63_RESPONSE_KIND_ERROR
+      ? responseKind
+      : NIP63_RESPONSE_KIND_FINAL;
   const tags: string[][] = [["p", toPubkey]];
-  tags.push(["encryption", NIP63_ENCRYPTION_SCHEME]);
-  if (options?.sessionId) {
-    tags.push(["s", options.sessionId]);
+  if (!isNip04Response) {
+    tags.push(["encryption", NIP63_ENCRYPTION_SCHEME]);
+    if (options?.sessionId) {
+      tags.push(["s", options.sessionId]);
+    }
   }
   if (options?.inReplyTo) {
     tags.push(["e", options.inReplyTo, "", "root"]);
   }
 
-  const payload = {
-    ver: NIP63_PROTOCOL_VERSION,
-    text,
-    timestamp: Math.floor(Date.now() / 1000),
-  };
-  const conversationKey = getConversationKey(sk, toPubkey);
-  const ciphertext = encrypt(JSON.stringify(payload), conversationKey);
+  let decryptedPayload: string | undefined;
+  const ciphertext = isNip04Response
+    ? encryptNip04(sk, toPubkey, typeof content === "string" ? content : JSON.stringify(content))
+    : (() => {
+        const payload = normalizeNip63Payload(content, normalizedResponseKind);
+        decryptedPayload = JSON.stringify(payload);
+        const conversationKey = getConversationKey(sk, toPubkey);
+        return encrypt(decryptedPayload, conversationKey);
+      })();
   const reply = finalizeEvent(
     {
-      kind: NIP63_RESPONSE_KIND,
+      kind: normalizedResponseKind,
       content: ciphertext,
       tags,
       created_at: Math.floor(Date.now() / 1000),
@@ -794,6 +1015,20 @@ async function sendEncryptedDm(
       // Record success
       cb?.recordSuccess();
       healthTracker.recordSuccess(relay, latency);
+      try {
+        onSend?.({
+          senderPubkey,
+          recipientPubkey: toPubkey,
+          senderRole: "gateway",
+          recipientRole: "user",
+          responseKind: normalizedResponseKind,
+          relays: [relay],
+          eventId: reply.id,
+          decryptedPayload,
+        });
+      } catch (sendError) {
+        onError?.(sendError as Error, "sendEncryptedDm.onSend");
+      }
 
       return; // Success - exit early
     } catch (err) {
