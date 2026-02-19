@@ -17,13 +17,54 @@ export function formatBillingErrorMessage(provider?: string, model?: string): st
 
 export const BILLING_ERROR_USER_MESSAGE = formatBillingErrorMessage();
 
-const RATE_LIMIT_ERROR_USER_MESSAGE = "⚠️ API rate limit reached. Please try again later.";
+const RATE_LIMIT_ERROR_USER_MESSAGE =
+  "Rate limited by the model provider (429). Failed to parse Retry-After from provider error; failover is engaged if configured.";
 const OVERLOADED_ERROR_USER_MESSAGE =
   "The AI service is temporarily overloaded. Please try again in a moment.";
 
+function extractRetryAfterLabel(raw: string): string | null {
+  const value = String(raw ?? "");
+  if (!value.trim()) {
+    return null;
+  }
+  const jsonRetryAfterMatch = value.match(/"retry_after(?:_ms)?"\s*:\s*"?([0-9]+(?:\.[0-9]+)?)"?/i);
+  if (jsonRetryAfterMatch) {
+    const num = Number.parseFloat(jsonRetryAfterMatch[1] ?? "");
+    if (Number.isFinite(num) && num > 0) {
+      if (value.toLowerCase().includes("retry_after_ms")) {
+        return `${Math.ceil(num)}ms`;
+      }
+      return `${Math.ceil(num)}s`;
+    }
+  }
+  const retryAfter = value.match(
+    /retry[- ]after[:\s]*([0-9]+(?:\.[0-9]+)?)\s*(ms|s|sec|secs|seconds|m|min|mins|minutes|h|hr|hrs|hours)?/i,
+  );
+  if (retryAfter) {
+    const num = Number.parseFloat(retryAfter[1] ?? "");
+    if (Number.isFinite(num) && num > 0) {
+      const unit = (retryAfter[2] ?? "s").toLowerCase();
+      if (unit.startsWith("ms")) {
+        return `${Math.ceil(num)}ms`;
+      }
+      if (unit.startsWith("h")) {
+        return `${Math.ceil(num)}h`;
+      }
+      if (unit.startsWith("m")) {
+        return `${Math.ceil(num)}m`;
+      }
+      return `${Math.ceil(num)}s`;
+    }
+  }
+  return null;
+}
+
 function formatRateLimitOrOverloadedErrorCopy(raw: string): string | undefined {
   if (isRateLimitErrorMessage(raw)) {
-    return RATE_LIMIT_ERROR_USER_MESSAGE;
+    const retryAfter = extractRetryAfterLabel(raw);
+    return retryAfter
+      ? `Rate limited by the model provider (429). Retry after about ${retryAfter}; failover is engaged if configured.`
+      : RATE_LIMIT_ERROR_USER_MESSAGE;
   }
   if (isOverloadedErrorMessage(raw)) {
     return OVERLOADED_ERROR_USER_MESSAGE;
