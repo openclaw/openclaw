@@ -275,7 +275,24 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
     expect(cronSession.sessionEntry.modelProvider).toBe("anthropic");
   });
 
-  it("persists cron payload model before the run starts (pre-run persist)", async () => {
+  it("session entry already carries cron model at pre-run persist time (race condition)", async () => {
+    // Capture a deep snapshot of the session entry at each persist call so we
+    // can inspect what sessions_list would see mid-run — before the post-run
+    // persist overwrites the entry with the actual model from agentMeta.
+    const persistedSnapshots: Array<{ model?: string; modelProvider?: string }> = [];
+    updateSessionStoreMock.mockImplementation(
+      async (_path: string, cb: (s: Record<string, unknown>) => void) => {
+        const store: Record<string, unknown> = {};
+        cb(store);
+        const entry = Object.values(store)[0] as
+          | { model?: string; modelProvider?: string }
+          | undefined;
+        if (entry) {
+          persistedSnapshots.push(JSON.parse(JSON.stringify(entry)));
+        }
+      },
+    );
+
     // Simulate a successful run
     runWithModelFallbackMock.mockResolvedValueOnce({
       result: {
@@ -294,27 +311,12 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
 
     await runCronIsolatedAgentTurn(makeParams());
 
-    // The pre-run persist (line 432) should already include the cron model
-    // override so that even a concurrent sessions_list call sees Sonnet, not
-    // the agent default Opus.
-    //
-    // Inspect the updateSessionStore calls: the pre-run persist happens before
-    // the run, and the post-run persist happens after.  Both should carry the
-    // cron override model — not undefined.
-    const preRunCalls = updateSessionStoreMock.mock.calls;
-    expect(preRunCalls.length).toBeGreaterThanOrEqual(2);
-
-    // Execute the pre-run persist callback (second call — first is skills snapshot)
-    // against a fresh store to capture what it would write.
-    const preRunStore: Record<string, unknown> = {};
-    const preRunCallback = preRunCalls[1][1] as (store: Record<string, unknown>) => void;
-    preRunCallback(preRunStore);
-
-    const preRunEntry = Object.values(preRunStore)[0] as {
-      model?: string;
-      modelProvider?: string;
-    };
-    expect(preRunEntry.model).toBe("claude-sonnet-4-6");
-    expect(preRunEntry.modelProvider).toBe("anthropic");
+    // There are at least 3 persists: skills snapshot, pre-run, post-run.
+    // The pre-run persist (index 1) is the one a concurrent sessions_list
+    // would read while the agent run is in flight.
+    expect(persistedSnapshots.length).toBeGreaterThanOrEqual(2);
+    const preRunSnapshot = persistedSnapshots[1];
+    expect(preRunSnapshot.model).toBe("claude-sonnet-4-6");
+    expect(preRunSnapshot.modelProvider).toBe("anthropic");
   });
 });
