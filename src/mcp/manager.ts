@@ -41,7 +41,7 @@ function defaultClientFactory(name: string, config: McpServerConfig): McpClientB
     case "http":
       return new SseMcpClient(name, config);
     default:
-      throw new Error(`Unknown transport '${transport}' for server '${name}'`);
+      throw new Error(`Unknown transport '${String(transport)}' for server '${name}'`);
   }
 }
 
@@ -73,7 +73,7 @@ export class McpManager {
       return;
     }
 
-    const results = await Promise.allSettled(
+    await Promise.allSettled(
       entries.map(async ([name, client]) => {
         try {
           // Resolve secrets in env/headers before connecting

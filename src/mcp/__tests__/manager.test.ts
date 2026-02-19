@@ -5,8 +5,9 @@
  * TDD: tests written first, implementation follows.
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { McpClientBase, McpClientStatus, McpToolInfo } from "../client-base.js";
+import { describe, it, expect } from "vitest";
+import type { McpClientBase } from "../client-base.js";
+import type { McpClientStatus, McpToolInfo } from "../client-base.js";
 import type { McpConfig, McpServerConfig } from "../config.js";
 import { McpManager } from "../manager.js";
 
@@ -72,7 +73,7 @@ class MockMcpClient {
     return this._tools;
   }
 
-  async callTool(name: string, args: Record<string, unknown>) {
+  async callTool(name: string, _args: Record<string, unknown>) {
     return { content: [{ type: "text", text: `result from ${name}` }] };
   }
 
@@ -93,7 +94,7 @@ class MockMcpClient {
 // ─── Factory for injecting mock clients ───
 
 function createMockFactory(clients: Map<string, MockMcpClient>) {
-  return (name: string, config: McpServerConfig): McpClientBase => {
+  return (name: string, _config: McpServerConfig): McpClientBase => {
     const client = clients.get(name);
     if (!client) {
       throw new Error(`No mock client for ${name}`);
