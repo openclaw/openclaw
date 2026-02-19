@@ -1,11 +1,11 @@
-import type { SlackReactionNotificationMode } from "../../config/config.js";
-import type { SlackMessageEvent } from "../types.js";
 import {
   applyChannelMatchMeta,
   buildChannelKeyCandidates,
   resolveChannelEntryMatchWithFallback,
   type ChannelMatchSource,
 } from "../../channels/channel-config.js";
+import type { SlackReactionNotificationMode } from "../../config/config.js";
+import type { SlackMessageEvent } from "../types.js";
 import { allowListMatches, normalizeAllowListLower, normalizeSlackSlug } from "./allow-list.js";
 
 export type SlackChannelConfigResolved = {
@@ -18,6 +18,18 @@ export type SlackChannelConfigResolved = {
   matchKey?: string;
   matchSource?: ChannelMatchSource;
 };
+
+export type SlackChannelConfigEntry = {
+  enabled?: boolean;
+  allow?: boolean;
+  requireMention?: boolean;
+  allowBots?: boolean;
+  users?: Array<string | number>;
+  skills?: string[];
+  systemPrompt?: string;
+};
+
+export type SlackChannelConfigEntries = Record<string, SlackChannelConfigEntry>;
 
 function firstDefined<T>(...values: Array<T | undefined>) {
   for (const value of values) {
@@ -74,18 +86,7 @@ export function resolveSlackChannelLabel(params: { channelId?: string; channelNa
 export function resolveSlackChannelConfig(params: {
   channelId: string;
   channelName?: string;
-  channels?: Record<
-    string,
-    {
-      enabled?: boolean;
-      allow?: boolean;
-      requireMention?: boolean;
-      allowBots?: boolean;
-      users?: Array<string | number>;
-      skills?: string[];
-      systemPrompt?: string;
-    }
-  >;
+  channels?: SlackChannelConfigEntries;
   defaultRequireMention?: boolean;
 }): SlackChannelConfigResolved | null {
   const { channelId, channelName, channels, defaultRequireMention } = params;

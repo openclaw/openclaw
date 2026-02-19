@@ -1,0 +1,56 @@
+name: Sandbox Common Smoke
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - Dockerfile.sandbox
+      - Dockerfile.sandbox-common
+      - scripts/sandbox-common-setup.sh
+  pull_request:
+    paths:
+      - Dockerfile.sandbox
+      - Dockerfile.sandbox-common
+      - scripts/sandbox-common-setup.sh
+
+concurrency:
+  group: sandbox-common-smoke-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  sandbox-common-smoke:
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Build minimal sandbox base (USER sandbox)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          docker build -t openclaw-sandbox-smoke-base:bookworm-slim - <<'EOF'
+          FROM debian:bookworm-slim
+          RUN useradd --create-home --shell /bin/bash sandbox
+          USER sandbox
+          WORKDIR /home/sandbox
+          EOF
+
+      - name: Build sandbox-common image (root for installs, sandbox at runtime)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BASE_IMAGE="openclaw-sandbox-smoke-base:bookworm-slim" \
+            TARGET_IMAGE="openclaw-sandbox-common-smoke:bookworm-slim" \
+            PACKAGES="ca-certificates" \
+            INSTALL_PNPM=0 \
+            INSTALL_BUN=0 \
+            INSTALL_BREW=0 \
+            FINAL_USER=sandbox \
+            scripts/sandbox-common-setup.sh
+
+          u="$(docker run --rm openclaw-sandbox-common-smoke:bookworm-slim sh -lc 'id -un')"
+          test "$u" = "sandbox"

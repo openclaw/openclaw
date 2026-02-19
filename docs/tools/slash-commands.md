@@ -18,7 +18,8 @@ There are two related systems:
   - Directives are stripped from the message before the model sees it.
   - In normal chat messages (not directive-only), they are treated as “inline hints” and do **not** persist session settings.
   - In directive-only messages (the message contains only directives), they persist to the session and reply with an acknowledgement.
-  - Directives are only applied for **authorized senders** (channel allowlists/pairing plus `commands.useAccessGroups`).
+  - Directives are only applied for **authorized senders**. If `commands.allowFrom` is set, it is the only
+    allowlist used; otherwise authorization comes from channel allowlists/pairing plus `commands.useAccessGroups`.
     Unauthorized senders see directives treated as plain text.
 
 There are also a few **inline shortcuts** (allowlisted/authorized senders only): `/help`, `/commands`, `/status`, `/whoami` (`/id`).
@@ -37,6 +38,10 @@ They run immediately, are stripped before the model sees the message, and the re
     config: false,
     debug: false,
     restart: false,
+    allowFrom: {
+      "*": ["user1"],
+      discord: ["user:123"],
+    },
     useAccessGroups: true,
   },
 }
@@ -55,7 +60,10 @@ They run immediately, are stripped before the model sees the message, and the re
 - `commands.bashForegroundMs` (default `2000`) controls how long bash waits before switching to background mode (`0` backgrounds immediately).
 - `commands.config` (default `false`) enables `/config` (reads/writes `openclaw.json`).
 - `commands.debug` (default `false`) enables `/debug` (runtime-only overrides).
-- `commands.useAccessGroups` (default `true`) enforces allowlists/policies for commands.
+- `commands.allowFrom` (optional) sets a per-provider allowlist for command authorization. When configured, it is the
+  only authorization source for commands and directives (channel allowlists/pairing and `commands.useAccessGroups`
+  are ignored). Use `"*"` for a global default; provider-specific keys override it.
+- `commands.useAccessGroups` (default `true`) enforces allowlists/policies for commands when `commands.allowFrom` is not set.
 
 ## Command list
 
@@ -68,8 +76,12 @@ Text + native (when enabled):
 - `/allowlist` (list/add/remove allowlist entries)
 - `/approve <id> allow-once|allow-always|deny` (resolve exec approval prompts)
 - `/context [list|detail|json]` (explain “context”; `detail` shows per-file + per-tool + per-skill + system prompt size)
+- `/export-session [path]` (alias: `/export`) (export current session to HTML with full system prompt)
 - `/whoami` (show your sender id; alias: `/id`)
-- `/subagents list|stop|log|info|send` (inspect, stop, log, or message sub-agent runs for the current session)
+- `/subagents list|kill|log|info|send|steer|spawn` (inspect, control, or spawn sub-agent runs for the current session)
+- `/kill <id|#|all>` (immediately abort one or all running sub-agents for this session; no confirmation message)
+- `/steer <id|#> <message>` (steer a running sub-agent immediately: in-run when possible, otherwise abort current work and restart on the steer message)
+- `/tell <id|#> <message>` (alias for `/steer`)
 - `/config show|get|set|unset` (persist config to disk, owner-only; requires `commands.config: true`)
 - `/debug show|set|unset|reset` (runtime overrides, owner-only; requires `commands.debug: true`)
 - `/usage off|tokens|full|cost` (per-response usage footer or local cost summary)
@@ -106,7 +118,7 @@ Notes:
 - For full provider usage breakdown, use `openclaw status --usage`.
 - `/allowlist add|remove` requires `commands.config=true` and honors channel `configWrites`.
 - `/usage` controls the per-response usage footer; `/usage cost` prints a local cost summary from OpenClaw session logs.
-- `/restart` is disabled by default; set `commands.restart: true` to enable it.
+- `/restart` is enabled by default; set `commands.restart: false` to disable it.
 - `/verbose` is meant for debugging and extra visibility; keep it **off** in normal use.
 - `/reasoning` (and `/verbose`) are risky in group settings: they may reveal internal reasoning or tool output you did not intend to expose. Prefer leaving them off, especially in group chats.
 - **Fast path:** command-only messages from allowlisted senders are handled immediately (bypass queue + model).

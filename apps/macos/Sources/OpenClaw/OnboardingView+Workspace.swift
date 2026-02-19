@@ -23,7 +23,7 @@ extension OnboardingView {
             } catch {
                 self.workspaceStatus = "Failed to create workspace: \(error.localizedDescription)"
             }
-        case let .unsafe(reason):
+        case let .unsafe (reason):
             self.workspaceStatus = "Workspace not touched: \(reason)"
         }
         self.refreshBootstrapStatus()
@@ -54,7 +54,7 @@ extension OnboardingView {
 
         do {
             let url = AgentWorkspace.resolveWorkspaceURL(from: self.workspacePath)
-            if case let .unsafe(reason) = AgentWorkspace.bootstrapSafety(for: url) {
+            if case let .unsafe (reason) = AgentWorkspace.bootstrapSafety(for: url) {
                 self.workspaceStatus = "Workspace not created: \(reason)"
                 return
             }

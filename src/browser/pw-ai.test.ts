@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 vi.mock("playwright-core", () => ({
   chromium: {
@@ -51,30 +51,36 @@ function createBrowser(pages: unknown[]) {
     contexts: () => [ctx],
     on: vi.fn(),
     close: vi.fn().mockResolvedValue(undefined),
-  };
+  } as unknown as import("playwright-core").Browser;
 }
 
-async function importModule() {
-  return await import("./pw-ai.js");
-}
+let chromiumMock: typeof import("playwright-core").chromium;
+let snapshotAiViaPlaywright: typeof import("./pw-tools-core.snapshot.js").snapshotAiViaPlaywright;
+let clickViaPlaywright: typeof import("./pw-tools-core.interactions.js").clickViaPlaywright;
+let closePlaywrightBrowserConnection: typeof import("./pw-session.js").closePlaywrightBrowserConnection;
+
+beforeAll(async () => {
+  const pw = await import("playwright-core");
+  chromiumMock = pw.chromium;
+  ({ snapshotAiViaPlaywright } = await import("./pw-tools-core.snapshot.js"));
+  ({ clickViaPlaywright } = await import("./pw-tools-core.interactions.js"));
+  ({ closePlaywrightBrowserConnection } = await import("./pw-session.js"));
+});
 
 afterEach(async () => {
-  const mod = await importModule();
-  await mod.closePlaywrightBrowserConnection();
+  await closePlaywrightBrowserConnection();
   vi.clearAllMocks();
 });
 
 describe("pw-ai", () => {
   it("captures an ai snapshot via Playwright for a specific target", async () => {
-    const { chromium } = await import("playwright-core");
     const p1 = createPage({ targetId: "T1", snapshotFull: "ONE" });
     const p2 = createPage({ targetId: "T2", snapshotFull: "TWO" });
     const browser = createBrowser([p1.page, p2.page]);
 
-    (chromium.connectOverCDP as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(browser);
+    (chromiumMock.connectOverCDP as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(browser);
 
-    const mod = await importModule();
-    const res = await mod.snapshotAiViaPlaywright({
+    const res = await snapshotAiViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
       targetId: "T2",
     });
@@ -85,15 +91,13 @@ describe("pw-ai", () => {
   });
 
   it("registers aria refs from ai snapshots for act commands", async () => {
-    const { chromium } = await import("playwright-core");
     const snapshot = ['- button "OK" [ref=e1]', '- link "Docs" [ref=e2]'].join("\n");
     const p1 = createPage({ targetId: "T1", snapshotFull: snapshot });
     const browser = createBrowser([p1.page]);
 
-    (chromium.connectOverCDP as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(browser);
+    (chromiumMock.connectOverCDP as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(browser);
 
-    const mod = await importModule();
-    const res = await mod.snapshotAiViaPlaywright({
+    const res = await snapshotAiViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
       targetId: "T1",
     });
@@ -103,7 +107,7 @@ describe("pw-ai", () => {
       e2: { role: "link", name: "Docs" },
     });
 
-    await mod.clickViaPlaywright({
+    await clickViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
       targetId: "T1",
       ref: "e1",
@@ -114,15 +118,13 @@ describe("pw-ai", () => {
   });
 
   it("truncates oversized snapshots", async () => {
-    const { chromium } = await import("playwright-core");
     const longSnapshot = "A".repeat(20);
     const p1 = createPage({ targetId: "T1", snapshotFull: longSnapshot });
     const browser = createBrowser([p1.page]);
 
-    (chromium.connectOverCDP as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(browser);
+    (chromiumMock.connectOverCDP as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(browser);
 
-    const mod = await importModule();
-    const res = await mod.snapshotAiViaPlaywright({
+    const res = await snapshotAiViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
       targetId: "T1",
       maxChars: 10,
@@ -134,13 +136,11 @@ describe("pw-ai", () => {
   });
 
   it("clicks a ref using aria-ref locator", async () => {
-    const { chromium } = await import("playwright-core");
     const p1 = createPage({ targetId: "T1" });
     const browser = createBrowser([p1.page]);
-    (chromium.connectOverCDP as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(browser);
+    (chromiumMock.connectOverCDP as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(browser);
 
-    const mod = await importModule();
-    await mod.clickViaPlaywright({
+    await clickViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
       targetId: "T1",
       ref: "76",
@@ -151,14 +151,12 @@ describe("pw-ai", () => {
   });
 
   it("fails with a clear error when _snapshotForAI is missing", async () => {
-    const { chromium } = await import("playwright-core");
     const p1 = createPage({ targetId: "T1", hasSnapshotForAI: false });
     const browser = createBrowser([p1.page]);
-    (chromium.connectOverCDP as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(browser);
+    (chromiumMock.connectOverCDP as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(browser);
 
-    const mod = await importModule();
     await expect(
-      mod.snapshotAiViaPlaywright({
+      snapshotAiViaPlaywright({
         cdpUrl: "http://127.0.0.1:18792",
         targetId: "T1",
       }),
@@ -166,18 +164,16 @@ describe("pw-ai", () => {
   });
 
   it("reuses the CDP connection for repeated calls", async () => {
-    const { chromium } = await import("playwright-core");
     const p1 = createPage({ targetId: "T1", snapshotFull: "ONE" });
     const browser = createBrowser([p1.page]);
-    const connect = vi.spyOn(chromium, "connectOverCDP");
+    const connect = vi.spyOn(chromiumMock, "connectOverCDP");
     connect.mockResolvedValue(browser);
 
-    const mod = await importModule();
-    await mod.snapshotAiViaPlaywright({
+    await snapshotAiViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
       targetId: "T1",
     });
-    await mod.clickViaPlaywright({
+    await clickViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
       targetId: "T1",
       ref: "1",

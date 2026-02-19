@@ -1,7 +1,7 @@
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import type { AuthChoice } from "./onboard-types.js";
 import { buildAuthChoiceGroups } from "./auth-choice-options.js";
+import type { AuthChoice } from "./onboard-types.js";
 
 const BACK_VALUE = "__back";
 
@@ -40,6 +40,10 @@ export async function promptAuthChoiceGrouped(params: {
         "Model/auth choice",
       );
       continue;
+    }
+
+    if (group.options.length === 1) {
+      return group.options[0].value;
     }
 
     const methodSelection = await params.prompter.select({
