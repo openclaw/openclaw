@@ -27,9 +27,9 @@ vi.mock("../../runtime.js", () => ({
   },
 }));
 
+import { AgentDefaultsSchema } from "../../config/zod-schema.agent-defaults.js";
 import { cancelIdleCompaction, scheduleIdleCompaction } from "./idle-compaction.js";
 import type { ScheduleIdleCompactionParams } from "./idle-compaction.js";
-import { AgentDefaultsSchema } from "../../config/zod-schema.agent-defaults.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -39,11 +39,7 @@ function makeParams(
     idleTriggerPercent?: number;
   } = {},
 ): ScheduleIdleCompactionParams {
-  const {
-    idleTriggerMinutes,
-    idleTriggerPercent,
-    ...rest
-  } = overrides;
+  const { idleTriggerMinutes, idleTriggerPercent, ...rest } = overrides;
 
   return {
     sessionKey: "test-session",
