@@ -108,6 +108,8 @@ export const zh_CN: TranslationMap = {
       integrationsHint: "完成渠道配置并至少验证一个连接。",
       firstRun: "首次交互",
       firstRunHint: "发送第一条消息验证会话与工具。",
+      review: "Review ConsentGuard",
+      next: "Next Step",
       openIntegrations: "打开集成",
       openChat: "打开聊天",
       openConsent: "打开 ConsentGuard",

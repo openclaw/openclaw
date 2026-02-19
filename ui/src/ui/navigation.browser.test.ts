@@ -314,4 +314,39 @@ describe("control UI routing", () => {
     expect(app.tab).toBe("chat");
     expect(window.location.pathname).toBe("/chat");
   });
+
+  it("routes onboarding next step to overview when gateway is offline", async () => {
+    const app = mountApp("/channels?onboarding=1");
+    await app.updateComplete;
+
+    const button = app.querySelector<HTMLButtonElement>('[data-testid="onboarding-banner-next-step"]');
+    expect(button).not.toBeNull();
+    button?.click();
+    await app.updateComplete;
+
+    expect(app.tab).toBe("overview");
+    expect(window.location.pathname).toBe("/overview");
+  });
+
+  it("routes onboarding next step to consent when setup flow is complete", async () => {
+    const app = mountApp("/overview?onboarding=1");
+    await app.updateComplete;
+
+    app.connected = true;
+    app.channelsLastSuccess = Date.now();
+    app.sessionsResult = {
+      count: 1,
+      sessions: [],
+      cursor: null,
+    } as never;
+    await app.updateComplete;
+
+    const button = app.querySelector<HTMLButtonElement>('[data-testid="onboarding-banner-next-step"]');
+    expect(button).not.toBeNull();
+    button?.click();
+    await app.updateComplete;
+
+    expect(app.tab).toBe("consent");
+    expect(window.location.pathname).toBe("/consent");
+  });
 });

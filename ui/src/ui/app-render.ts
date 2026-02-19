@@ -93,6 +93,8 @@ function resolveAssistantAvatarUrl(state: AppViewState): string | undefined {
 export function renderApp(state: AppViewState) {
   const presenceCount = state.presenceEntries.length;
   const sessionsCount = state.sessionsResult?.count ?? null;
+  const hasSessionActivity = (sessionsCount ?? 0) > 0;
+  const hasChannelRefresh = state.channelsLastSuccess != null;
   const cronNext = state.cronStatus?.nextWakeAtMs ?? null;
   const chatDisabledReason = state.connected ? null : t("chat.disconnected");
   const isChat = state.tab === "chat";
@@ -108,6 +110,16 @@ export function renderApp(state: AppViewState) {
     state.agentsList?.defaultId ??
     state.agentsList?.agents?.[0]?.id ??
     null;
+  const onboardingSteps = [
+    { key: "gateway", done: state.connected, tab: "overview" as const },
+    { key: "integrations", done: hasChannelRefresh, tab: "channels" as const },
+    { key: "firstRun", done: hasSessionActivity, tab: "chat" as const },
+  ];
+  const nextOnboardingStep = onboardingSteps.find((step) => !step.done);
+  const onboardingNextTab = nextOnboardingStep?.tab ?? ("consent" as const);
+  const onboardingNextLabel = nextOnboardingStep
+    ? t(`overview.setupFlow.${nextOnboardingStep.key}`)
+    : t("overview.setupFlow.review");
 
   return html`
     <div class="shell ${isChat ? "shell--chat" : ""} ${chatFocus ? "shell--chat-focus" : ""} ${state.settings.navCollapsed ? "shell--nav-collapsed" : ""} ${state.onboarding ? "shell--onboarding" : ""}">
@@ -220,7 +232,26 @@ export function renderApp(state: AppViewState) {
             ? html`
                 <div class="onboarding-banner" role="status">
                   <span class="onboarding-banner__text">${t("chat.onboardingBanner")}</span>
+                  <div class="onboarding-banner__steps">
+                    ${onboardingSteps.map(
+                      (step) => html`
+                        <span class="chip ${step.done ? "chip-ok" : ""}" data-testid="onboarding-step-${step.key}">
+                          ${t(`overview.setupFlow.${step.key}`)}:
+                          ${step.done ? t("common.ok") : t("common.na")}
+                        </span>
+                      `,
+                    )}
+                  </div>
                   <div class="onboarding-banner__actions">
+                    <button
+                      type="button"
+                      class="btn btn--sm"
+                      data-testid="onboarding-banner-next-step"
+                      ?disabled=${onboardingNextTab === "chat" && !state.connected}
+                      @click=${() => state.setTab(onboardingNextTab)}
+                    >
+                      ${t("overview.setupFlow.next")}: ${onboardingNextLabel}
+                    </button>
                     <button
                       type="button"
                       class="btn btn--sm"

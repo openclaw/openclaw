@@ -109,6 +109,8 @@ export const pt_BR: TranslationMap = {
       integrationsHint: "Configure canais e valide pelo menos uma conexÃ£o.",
       firstRun: "Primeira InteraÃ§Ã£o",
       firstRunHint: "Envie a primeira mensagem para validar sessÃ£o e ferramentas.",
+      review: "Revisar ConsentGuard",
+      next: "Próxima Etapa",
       openIntegrations: "Abrir IntegraÃ§Ãµes",
       openChat: "Abrir Chat",
       openConsent: "Abrir ConsentGuard",

@@ -237,6 +237,12 @@
   flex-wrap: wrap;
 }
 
+.onboarding-banner__steps {
+  display: inline-flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .onboarding-banner__dismiss {
   flex-shrink: 0;
 }

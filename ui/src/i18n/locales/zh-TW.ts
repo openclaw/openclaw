@@ -108,6 +108,8 @@ export const zh_TW: TranslationMap = {
       integrationsHint: "完成頻道設定並至少驗證一個連線。",
       firstRun: "首次互動",
       firstRunHint: "送出第一則訊息以驗證會話與工具。",
+      review: "Review ConsentGuard",
+      next: "Next Step",
       openIntegrations: "開啟整合",
       openChat: "開啟聊天",
       openConsent: "開啟 ConsentGuard",
