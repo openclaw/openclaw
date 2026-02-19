@@ -43,6 +43,7 @@ import {
   pickFallbackThinkingLevel,
   type FailoverReason,
 } from "../pi-embedded-helpers.js";
+import { resolveRuntimeType } from "../runtime/index.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { compactEmbeddedPiSessionDirect } from "./compact.js";
@@ -50,6 +51,7 @@ import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { resolveModel } from "./model.js";
 import { runEmbeddedAttempt } from "./run/attempt.js";
+import { runClaudeSdkAttempt } from "./run/claude-sdk-attempt.js";
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import {
@@ -484,64 +486,99 @@ export async function runEmbeddedPiAgent(
           const prompt =
             provider === "anthropic" ? scrubAnthropicRefusalMagic(params.prompt) : params.prompt;
 
-          const attempt = await runEmbeddedAttempt({
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
-            messageChannel: params.messageChannel,
-            messageProvider: params.messageProvider,
-            agentAccountId: params.agentAccountId,
-            messageTo: params.messageTo,
-            messageThreadId: params.messageThreadId,
-            groupId: params.groupId,
-            groupChannel: params.groupChannel,
-            groupSpace: params.groupSpace,
-            spawnedBy: params.spawnedBy,
-            senderIsOwner: params.senderIsOwner,
-            currentChannelId: params.currentChannelId,
-            currentThreadTs: params.currentThreadTs,
-            replyToMode: params.replyToMode,
-            hasRepliedRef: params.hasRepliedRef,
-            sessionFile: params.sessionFile,
-            workspaceDir: resolvedWorkspace,
-            agentDir,
-            config: params.config,
-            skillsSnapshot: params.skillsSnapshot,
-            prompt,
-            images: params.images,
-            disableTools: params.disableTools,
-            provider,
-            modelId,
-            model,
-            authStorage,
-            modelRegistry,
-            agentId: workspaceResolution.agentId,
-            thinkLevel,
-            verboseLevel: params.verboseLevel,
-            reasoningLevel: params.reasoningLevel,
-            toolResultFormat: resolvedToolResultFormat,
-            execOverrides: params.execOverrides,
-            bashElevated: params.bashElevated,
-            timeoutMs: params.timeoutMs,
-            runId: params.runId,
-            abortSignal: params.abortSignal,
-            shouldEmitToolResult: params.shouldEmitToolResult,
-            shouldEmitToolOutput: params.shouldEmitToolOutput,
-            onPartialReply: params.onPartialReply,
-            onAssistantMessageStart: params.onAssistantMessageStart,
-            onBlockReply: params.onBlockReply,
-            onBlockReplyFlush: params.onBlockReplyFlush,
-            blockReplyBreak: params.blockReplyBreak,
-            blockReplyChunking: params.blockReplyChunking,
-            onReasoningStream: params.onReasoningStream,
-            onReasoningEnd: params.onReasoningEnd,
-            onToolResult: params.onToolResult,
-            onAgentEvent: params.onAgentEvent,
-            extraSystemPrompt: params.extraSystemPrompt,
-            inputProvenance: params.inputProvenance,
-            streamParams: params.streamParams,
-            ownerNumbers: params.ownerNumbers,
-            enforceFinalTag: params.enforceFinalTag,
-          });
+          const runtimeType = resolveRuntimeType(
+            params.config as Parameters<typeof resolveRuntimeType>[0],
+          );
+
+          const attempt =
+            runtimeType === "claude-sdk"
+              ? await runClaudeSdkAttempt({
+                  sessionId: params.sessionId,
+                  sessionKey: params.sessionKey,
+                  sessionFile: params.sessionFile,
+                  workspaceDir: resolvedWorkspace,
+                  agentDir,
+                  prompt,
+                  images: params.images as unknown as Array<{
+                    type: "image";
+                    mediaType: string;
+                    data: string;
+                  }>,
+                  provider,
+                  modelId,
+                  apiKey: apiKeyInfo!.apiKey ?? "",
+                  apiKeyMode: apiKeyInfo!.mode ?? "api-key",
+                  thinkLevel,
+                  timeoutMs: params.timeoutMs,
+                  runId: params.runId,
+                  abortSignal: params.abortSignal,
+                  extraSystemPrompt: params.extraSystemPrompt,
+                  config: params.config as Record<string, unknown>,
+                  onPartialReply: params.onPartialReply,
+                  onBlockReply: params.onBlockReply,
+                  onBlockReplyFlush: params.onBlockReplyFlush,
+                  onToolResult: params.onToolResult,
+                  onAgentEvent: params.onAgentEvent,
+                  onAssistantMessageStart: params.onAssistantMessageStart,
+                })
+              : await runEmbeddedAttempt({
+                  sessionId: params.sessionId,
+                  sessionKey: params.sessionKey,
+                  messageChannel: params.messageChannel,
+                  messageProvider: params.messageProvider,
+                  agentAccountId: params.agentAccountId,
+                  messageTo: params.messageTo,
+                  messageThreadId: params.messageThreadId,
+                  groupId: params.groupId,
+                  groupChannel: params.groupChannel,
+                  groupSpace: params.groupSpace,
+                  spawnedBy: params.spawnedBy,
+                  senderIsOwner: params.senderIsOwner,
+                  currentChannelId: params.currentChannelId,
+                  currentThreadTs: params.currentThreadTs,
+                  replyToMode: params.replyToMode,
+                  hasRepliedRef: params.hasRepliedRef,
+                  sessionFile: params.sessionFile,
+                  workspaceDir: resolvedWorkspace,
+                  agentDir,
+                  config: params.config,
+                  skillsSnapshot: params.skillsSnapshot,
+                  prompt,
+                  images: params.images,
+                  disableTools: params.disableTools,
+                  provider,
+                  modelId,
+                  model,
+                  authStorage,
+                  modelRegistry,
+                  agentId: workspaceResolution.agentId,
+                  thinkLevel,
+                  verboseLevel: params.verboseLevel,
+                  reasoningLevel: params.reasoningLevel,
+                  toolResultFormat: resolvedToolResultFormat,
+                  execOverrides: params.execOverrides,
+                  bashElevated: params.bashElevated,
+                  timeoutMs: params.timeoutMs,
+                  runId: params.runId,
+                  abortSignal: params.abortSignal,
+                  shouldEmitToolResult: params.shouldEmitToolResult,
+                  shouldEmitToolOutput: params.shouldEmitToolOutput,
+                  onPartialReply: params.onPartialReply,
+                  onAssistantMessageStart: params.onAssistantMessageStart,
+                  onBlockReply: params.onBlockReply,
+                  onBlockReplyFlush: params.onBlockReplyFlush,
+                  blockReplyBreak: params.blockReplyBreak,
+                  blockReplyChunking: params.blockReplyChunking,
+                  onReasoningStream: params.onReasoningStream,
+                  onReasoningEnd: params.onReasoningEnd,
+                  onToolResult: params.onToolResult,
+                  onAgentEvent: params.onAgentEvent,
+                  extraSystemPrompt: params.extraSystemPrompt,
+                  inputProvenance: params.inputProvenance,
+                  streamParams: params.streamParams,
+                  ownerNumbers: params.ownerNumbers,
+                  enforceFinalTag: params.enforceFinalTag,
+                });
 
           const {
             aborted,
@@ -624,7 +661,9 @@ export async function runEmbeddedPiAgent(
             }
             // Attempt explicit overflow compaction only when this attempt did not
             // already auto-compact.
+            // Skip for Claude SDK runtime — the SDK subprocess handles compaction internally.
             if (
+              runtimeType !== "claude-sdk" &&
               !isCompactionFailure &&
               !hadAttemptLevelCompaction &&
               overflowCompactionAttempts < MAX_OVERFLOW_COMPACTION_ATTEMPTS
@@ -678,7 +717,8 @@ export async function runEmbeddedPiAgent(
             // Fallback: try truncating oversized tool results in the session.
             // This handles the case where a single tool result exceeds the
             // context window and compaction cannot reduce it further.
-            if (!toolResultTruncationAttempted) {
+            // Skip for Claude SDK runtime — tool results are managed by the SDK subprocess.
+            if (runtimeType !== "claude-sdk" && !toolResultTruncationAttempted) {
               const contextWindowTokens = ctxInfo.tokens;
               const hasOversized = attempt.messagesSnapshot
                 ? sessionLikelyHasOversizedToolResults({

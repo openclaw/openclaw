@@ -129,6 +129,7 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "0.14.1",
+    "@anthropic-ai/claude-agent-sdk": "^0.2.45",
     "@aws-sdk/client-bedrock": "^3.993.0",
     "@buape/carbon": "0.14.0",
     "@clack/prompts": "^1.0.1",
