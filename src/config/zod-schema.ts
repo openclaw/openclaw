@@ -717,6 +717,7 @@ export const OpenClawSchema = z
             enabled: z.boolean(),
             threshold: z.number().optional(),
             min_gap: z.number().optional(),
+            custom_utterances: z.record(z.string(), z.array(z.string())).optional(),
           })
           .strict()
           .optional(),

@@ -61,6 +61,7 @@ export type SemanticRouterConfig = {
   enabled: boolean;
   threshold: number; // default 0.68
   min_gap?: number; // top-1 与 top-2（不同 TaskType）最小分差，低于此值 fallback；default 0.05
+  custom_utterances?: Partial<Record<string, string[]>>; // TaskType key → 额外示例话语
 };
 
 export type RoutingConfig = {
