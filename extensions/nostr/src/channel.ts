@@ -43,7 +43,7 @@ const RUN_START_THINKING_DELTA_TEXT = "run_started";
 const RUN_HEARTBEAT_THINKING_DELTA_TEXT = "run_progress";
 const RUN_HEARTBEAT_INTERVAL_MS = resolveDurationEnvMs(
   "OPENCLAW_NOSTR_HEARTBEAT_INTERVAL_MS",
-  3500,
+  2000,
   250,
   60_000,
 );
