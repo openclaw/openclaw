@@ -304,6 +304,11 @@ export type ChannelMessageActionContext = {
   cfg: OpenClawConfig;
   params: Record<string, unknown>;
   accountId?: string | null;
+  /**
+   * Trusted sender id from inbound context. This is server-injected and must
+   * never be sourced from tool/model-controlled params.
+   */
+  requesterSenderId?: string | null;
   gateway?: {
     url?: string;
     token?: string;

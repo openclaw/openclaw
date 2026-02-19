@@ -46,6 +46,10 @@ export {
 export { sendDiscordComponentMessage } from "./send.components.js";
 export {
   fetchChannelPermissionsDiscord,
+  fetchMemberGuildPermissionsDiscord,
+  hasGuildPermissionDiscord,
+} from "./send.permissions.js";
+export {
   fetchReactionsDiscord,
   reactMessageDiscord,
   removeOwnReactionsDiscord,

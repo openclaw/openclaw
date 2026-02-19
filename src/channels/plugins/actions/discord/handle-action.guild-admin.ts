@@ -1,13 +1,16 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { ChannelMessageActionContext } from "../../types.js";
 import {
   readNumberParam,
   readStringArrayParam,
   readStringParam,
 } from "../../../../agents/tools/common.js";
 import { handleDiscordAction } from "../../../../agents/tools/discord-actions.js";
-import type { ChannelMessageActionContext } from "../../types.js";
 
-type Ctx = Pick<ChannelMessageActionContext, "action" | "params" | "cfg" | "accountId">;
+type Ctx = Pick<
+  ChannelMessageActionContext,
+  "action" | "params" | "cfg" | "accountId" | "requesterSenderId" | "toolContext"
+>;
 
 export async function tryHandleDiscordMessageActionGuildAdmin(params: {
   ctx: Ctx;
@@ -355,6 +358,11 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     const deleteMessageDays = readNumberParam(actionParams, "deleteDays", {
       integer: true,
     });
+    const senderUserId = ctx.requesterSenderId?.trim() || undefined;
+    // In channel/tool flows, require trusted sender identity for moderation authorization.
+    if (ctx.toolContext?.currentChannelProvider === "discord" && !senderUserId) {
+      throw new Error("Sender user ID required for Discord moderation actions.");
+    }
     const discordAction = action;
     return await handleDiscordAction(
       {
@@ -366,6 +374,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
         until,
         reason,
         deleteMessageDays,
+        senderUserId,
       },
       cfg,
     );
