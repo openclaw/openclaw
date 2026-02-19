@@ -1,7 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { resolveAgentModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
