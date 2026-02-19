@@ -205,11 +205,6 @@ describe("applyMinimaxApiConfig", () => {
     });
   });
 
-  it("sets correct primary model", () => {
-    const cfg = applyMinimaxApiConfig({}, "MiniMax-M2.1-lightning");
-    expect(cfg.agents?.defaults?.model?.primary).toBe("minimax/MiniMax-M2.1-lightning");
-  });
-
   it("does not set reasoning for non-reasoning models", () => {
     const cfg = applyMinimaxApiConfig({}, "MiniMax-M2.1");
     expect(cfg.models?.providers?.minimax?.models[0]?.reasoning).toBe(false);
@@ -299,14 +294,14 @@ describe("applyMinimaxApiConfig", () => {
 });
 
 describe("provider config helpers", () => {
-  it.each([
-    ["applyMinimaxApiProviderConfig", applyMinimaxApiProviderConfig],
-    ["applyZaiProviderConfig", applyZaiProviderConfig],
-  ] as const)("%s does not overwrite existing primary model", (_name, applyConfig) => {
-    const cfg = applyConfig({
-      agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
-    });
-    expectPrimaryModelPreserved(cfg);
+  it("does not overwrite existing primary model", () => {
+    const providerConfigAppliers = [applyMinimaxApiProviderConfig, applyZaiProviderConfig];
+    for (const applyConfig of providerConfigAppliers) {
+      const cfg = applyConfig({
+        agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
+      });
+      expectPrimaryModelPreserved(cfg);
+    }
   });
 });
 
@@ -325,21 +320,12 @@ describe("applyZaiConfig", () => {
     expect(ids).toContain("glm-4.7-flashx");
   });
 
-  it("sets correct primary model", () => {
-    const cfg = applyZaiConfig({}, { modelId: "glm-5" });
-    expect(cfg.agents?.defaults?.model?.primary).toBe("zai/glm-5");
-  });
-
-  it("supports CN endpoint", () => {
-    const cfg = applyZaiConfig({}, { endpoint: "coding-cn", modelId: "glm-4.7-flash" });
-    expect(cfg.models?.providers?.zai?.baseUrl).toBe(ZAI_CODING_CN_BASE_URL);
-    expect(cfg.agents?.defaults?.model?.primary).toBe("zai/glm-4.7-flash");
-  });
-
-  it("supports CN endpoint with glm-4.7-flashx", () => {
-    const cfg = applyZaiConfig({}, { endpoint: "coding-cn", modelId: "glm-4.7-flashx" });
-    expect(cfg.models?.providers?.zai?.baseUrl).toBe(ZAI_CODING_CN_BASE_URL);
-    expect(cfg.agents?.defaults?.model?.primary).toBe("zai/glm-4.7-flashx");
+  it("supports CN endpoint for supported coding models", () => {
+    for (const modelId of ["glm-4.7-flash", "glm-4.7-flashx"] as const) {
+      const cfg = applyZaiConfig({}, { endpoint: "coding-cn", modelId });
+      expect(cfg.models?.providers?.zai?.baseUrl).toBe(ZAI_CODING_CN_BASE_URL);
+      expect(cfg.agents?.defaults?.model?.primary).toBe(`zai/${modelId}`);
+    }
   });
 });
 
@@ -350,11 +336,6 @@ describe("applySyntheticConfig", () => {
       baseUrl: "https://api.synthetic.new/anthropic",
       api: "anthropic-messages",
     });
-  });
-
-  it("sets correct primary model", () => {
-    const cfg = applySyntheticConfig({});
-    expect(cfg.agents?.defaults?.model?.primary).toBe(SYNTHETIC_DEFAULT_MODEL_REF);
   });
 
   it("merges existing synthetic provider models", () => {
@@ -370,6 +351,29 @@ describe("applySyntheticConfig", () => {
     const ids = cfg.models?.providers?.synthetic?.models.map((m) => m.id);
     expect(ids).toContain("old-model");
     expect(ids).toContain(SYNTHETIC_DEFAULT_MODEL_ID);
+  });
+});
+
+describe("primary model defaults", () => {
+  it("sets correct primary model", () => {
+    const configCases = [
+      {
+        getConfig: () => applyMinimaxApiConfig({}, "MiniMax-M2.1-lightning"),
+        primaryModel: "minimax/MiniMax-M2.1-lightning",
+      },
+      {
+        getConfig: () => applyZaiConfig({}, { modelId: "glm-5" }),
+        primaryModel: "zai/glm-5",
+      },
+      {
+        getConfig: () => applySyntheticConfig({}),
+        primaryModel: SYNTHETIC_DEFAULT_MODEL_REF,
+      },
+    ] as const;
+    for (const { getConfig, primaryModel } of configCases) {
+      const cfg = getConfig();
+      expect(cfg.agents?.defaults?.model?.primary).toBe(primaryModel);
+    }
   });
 });
 
@@ -443,22 +447,20 @@ describe("applyXaiProviderConfig", () => {
 });
 
 describe("allowlist provider helpers", () => {
-  it.each([
-    {
-      name: "applyOpencodeZenProviderConfig",
-      applyConfig: applyOpencodeZenProviderConfig,
-      modelRef: "opencode/claude-opus-4-6",
-      alias: "My Opus",
-    },
-    {
-      name: "applyOpenrouterProviderConfig",
-      applyConfig: applyOpenrouterProviderConfig,
-      modelRef: OPENROUTER_DEFAULT_MODEL_REF,
-      alias: "Router",
-    },
-  ] as const)(
-    "$name adds allowlist entry and preserves alias",
-    ({ applyConfig, modelRef, alias }) => {
+  it("adds allowlist entry and preserves alias", () => {
+    const providerCases = [
+      {
+        applyConfig: applyOpencodeZenProviderConfig,
+        modelRef: "opencode/claude-opus-4-6",
+        alias: "My Opus",
+      },
+      {
+        applyConfig: applyOpenrouterProviderConfig,
+        modelRef: OPENROUTER_DEFAULT_MODEL_REF,
+        alias: "Router",
+      },
+    ] as const;
+    for (const { applyConfig, modelRef, alias } of providerCases) {
       const withDefault = applyConfig({});
       expectAllowlistContains(withDefault, modelRef);
 
@@ -472,8 +474,8 @@ describe("allowlist provider helpers", () => {
         },
       });
       expectAliasPreserved(withAlias, modelRef, alias);
-    },
-  );
+    }
+  });
 });
 
 describe("applyLitellmProviderConfig", () => {
@@ -500,25 +502,23 @@ describe("applyLitellmProviderConfig", () => {
 });
 
 describe("default-model config helpers", () => {
-  it.each([
-    {
-      name: "applyOpencodeZenConfig",
-      applyConfig: applyOpencodeZenConfig,
-      primaryModel: "opencode/claude-opus-4-6",
-    },
-    {
-      name: "applyOpenrouterConfig",
-      applyConfig: applyOpenrouterConfig,
-      primaryModel: OPENROUTER_DEFAULT_MODEL_REF,
-    },
-  ] as const)(
-    "$name sets primary model and preserves existing model fallbacks",
-    ({ applyConfig, primaryModel }) => {
+  it("sets primary model and preserves existing model fallbacks", () => {
+    const configCases = [
+      {
+        applyConfig: applyOpencodeZenConfig,
+        primaryModel: "opencode/claude-opus-4-6",
+      },
+      {
+        applyConfig: applyOpenrouterConfig,
+        primaryModel: OPENROUTER_DEFAULT_MODEL_REF,
+      },
+    ] as const;
+    for (const { applyConfig, primaryModel } of configCases) {
       const cfg = applyConfig({});
       expect(cfg.agents?.defaults?.model?.primary).toBe(primaryModel);
 
       const cfgWithFallbacks = applyConfig(createConfigWithFallbacks());
       expectFallbacksPreserved(cfgWithFallbacks);
-    },
-  );
+    }
+  });
 });
