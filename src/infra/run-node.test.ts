@@ -19,6 +19,7 @@ describe("run-node script", () => {
       await withTempDir(async (tmp) => {
         const argsPath = path.join(tmp, ".pnpm-args.txt");
         const indexPath = path.join(tmp, "dist", "control-ui", "index.html");
+        const fsSideEffects: Promise<unknown>[] = [];
 
         await fs.mkdir(path.dirname(indexPath), { recursive: true });
         await fs.writeFile(indexPath, "<html>sentinel</html>\n", "utf-8");
@@ -26,9 +27,11 @@ describe("run-node script", () => {
         const nodeCalls: string[][] = [];
         const spawn = (cmd: string, args: string[]) => {
           if (cmd === "pnpm") {
-            void fs.writeFile(argsPath, args.join(" "), "utf-8");
+            fsSideEffects.push(fs.writeFile(argsPath, args.join(" "), "utf-8"));
             if (!args.includes("--no-clean")) {
-              void fs.rm(path.join(tmp, "dist", "control-ui"), { recursive: true, force: true });
+              fsSideEffects.push(
+                fs.rm(path.join(tmp, "dist", "control-ui"), { recursive: true, force: true }),
+              );
             }
           }
           if (cmd === process.execPath) {
@@ -59,6 +62,7 @@ describe("run-node script", () => {
         });
 
         expect(exitCode).toBe(0);
+        await Promise.all(fsSideEffects);
         await expect(fs.readFile(argsPath, "utf-8")).resolves.toContain("exec tsdown --no-clean");
         await expect(fs.readFile(indexPath, "utf-8")).resolves.toContain("sentinel");
         expect(nodeCalls).toEqual([[process.execPath, "openclaw.mjs", "--version"]]);
