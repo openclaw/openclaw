@@ -10,18 +10,18 @@
 
 When a gated tool or node command is denied, the response includes a `reasonCode`. Use it for diagnostics and runbooks.
 
-| Code | Meaning | Operator action |
-| ---- | ------- | ---------------- |
-| CONSENT_NO_TOKEN | No consent token in request | Client must obtain a token via consent.issue (or Control UI) and send it (e.g. body.consentToken or params.consentToken). |
-| CONSENT_TOKEN_NOT_FOUND | Token id not in store | Token may be expired, revoked, or wrong id. Issue a new token. |
-| CONSENT_TOKEN_ALREADY_CONSUMED | Token was already used (replay) | Single-use only. Issue a new token per execution. |
-| CONSENT_TOKEN_REVOKED | Token was revoked | Issue a new token; check if revoke was intentional. |
-| CONSENT_TOKEN_EXPIRED | Token TTL exceeded | Issue a new token with sufficient TTL. |
-| CONSENT_TOOL_MISMATCH | Token was issued for a different tool | Issue a token for the requested tool. |
-| CONSENT_SESSION_MISMATCH | Token session does not match request | Use a token issued for this sessionKey. |
-| CONSENT_CONTEXT_MISMATCH | Request context hash does not match token | Token was issued for different args/context; re-issue for current request. |
-| CONSENT_TIER_VIOLATION | Trust tier not allowed for this tool | Check policy; issue token with correct tier or adjust tier–tool matrix. |
-| CONSENT_UNAVAILABLE | ConsentGate store or engine failed | Fail closed. Check gateway logs and ConsentGate storage; restart gateway if needed. |
+| Code                           | Meaning                                   | Operator action                                                                                                           |
+| ------------------------------ | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| CONSENT_NO_TOKEN               | No consent token in request               | Client must obtain a token via consent.issue (or Control UI) and send it (e.g. body.consentToken or params.consentToken). |
+| CONSENT_TOKEN_NOT_FOUND        | Token id not in store                     | Token may be expired, revoked, or wrong id. Issue a new token.                                                            |
+| CONSENT_TOKEN_ALREADY_CONSUMED | Token was already used (replay)           | Single-use only. Issue a new token per execution.                                                                         |
+| CONSENT_TOKEN_REVOKED          | Token was revoked                         | Issue a new token; check if revoke was intentional.                                                                       |
+| CONSENT_TOKEN_EXPIRED          | Token TTL exceeded                        | Issue a new token with sufficient TTL.                                                                                    |
+| CONSENT_TOOL_MISMATCH          | Token was issued for a different tool     | Issue a token for the requested tool.                                                                                     |
+| CONSENT_SESSION_MISMATCH       | Token session does not match request      | Use a token issued for this sessionKey.                                                                                   |
+| CONSENT_CONTEXT_MISMATCH       | Request context hash does not match token | Token was issued for different args/context; re-issue for current request.                                                |
+| CONSENT_TIER_VIOLATION         | Trust tier not allowed for this tool      | Check policy; issue token with correct tier or adjust tier–tool matrix.                                                   |
+| CONSENT_UNAVAILABLE            | ConsentGate store or engine failed        | Fail closed. Check gateway logs and ConsentGate storage; restart gateway if needed.                                       |
 
 ## Break-glass (emergency bypass)
 
@@ -33,7 +33,7 @@ When a gated tool or node command is denied, the response includes a `reasonCode
 
 - **Revoke by token:** Use ConsentGate API `consent.revoke({ jti })` to invalidate a single token.
 - **Revoke by session:** Use `consent.bulkRevoke({ sessionKey })` to revoke all tokens for a session (e.g. after suspected compromise).
-- **Quarantine:** (Phase 3) When implemented, quarantined sessions cannot receive new tokens until quarantine is lifted via admin API or runbook.
+- **Quarantine:** Quarantine is implemented. Quarantined sessions cannot receive new tokens until quarantine is lifted. Use `POST /api/consent/quarantine/lift` with body `{ "sessionKey": "<sessionKey>" }` (gateway auth required).
 
 ## WAL and audit
 
@@ -49,6 +49,12 @@ If many requests are denied (e.g. CONSENT_NO_TOKEN):
 1. Confirm whether clients are expected to send consent tokens (e.g. Control UI or automation).
 2. If tokens are required and clients do not have them, either issue tokens (e.g. via UI) or temporarily use observe-only mode to unblock while fixing client integration.
 3. Check WAL and metrics for reason-code distribution to target fixes.
+
+## Multi-tenant behavior
+
+- `tenantId` is present in WAL events and in status/export query parameters; you can filter by `tenantId` when calling `GET /api/consent/status` or `GET /api/consent/export`.
+- Policy namespacing per tenant (e.g. separate tier–tool matrix or rate limits per tenant) is not yet enforced in the engine; all tenants share the same policy.
+- Current tests do not exercise tenant isolation; treat multi-tenant deployment as best-effort isolation via `tenantId` filtering until explicit per-tenant policy is added.
 
 ## References
 

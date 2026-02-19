@@ -40,16 +40,16 @@ ConsentGuard adds a consent-gated security layer to the OpenClaw AI agent platfo
 
 ## Red-team / evaluation methodology
 
-| Scenario | Attack vector | Trust tier | Property that blocks | Red-team deliverable |
-| ---------- | --------------- | ------------ | ---------------------- | ---------------------- |
-| Email injection | Hidden instructions in email body | email_inbox (T3) | P1 + tier (no tools at T3) | Payload + WAL assertion + test |
-| ClawHub supply chain | Malicious SKILL.md with undeclared tools | owner_paired | Bundle/manifest verification | Manifest check + BUNDLE_MISMATCH test |
-| Moltbook hijack | Feed post with agent override | moltbook_feed (T3) | P1 + tier; C4 quarantine | Payload + anomaly test |
-| Session bleed | Group member requests fs_write | group_mention (T2) | P11 + tier (T2 ≠ fs_write) | Session-id + tier test |
-| Exfil | filesystem_read then channel_send | trusted_peer | P2/P3 (separate tokens; no reuse) | Two-call test + ctxHash check |
-| TOCTOU | Parallel fs_write with one token | owner_paired | P2 (atomic consume; one wins) | Parallel-invoke test |
-| Heartbeat persistence | cron_schedule then repeated exec | trusted_peer | Per-execution token; TTL | Cron registration vs exec test |
-| Skill self-write | skill_selfwrite + hidden cron | owner_paired | Content hash; separate cron token | Content-hash + cron test |
+| Scenario              | Attack vector                            | Trust tier         | Property that blocks              | Red-team deliverable                  |
+| --------------------- | ---------------------------------------- | ------------------ | --------------------------------- | ------------------------------------- |
+| Email injection       | Hidden instructions in email body        | email_inbox (T3)   | P1 + tier (no tools at T3)        | Payload + WAL assertion + test        |
+| ClawHub supply chain  | Malicious SKILL.md with undeclared tools | owner_paired       | Bundle/manifest verification      | Manifest check + BUNDLE_MISMATCH test |
+| Moltbook hijack       | Feed post with agent override            | moltbook_feed (T3) | P1 + tier; C4 quarantine          | Payload + anomaly test                |
+| Session bleed         | Group member requests fs_write           | group_mention (T2) | P11 + tier (T2 ≠ fs_write)        | Session-id + tier test                |
+| Exfil                 | filesystem_read then channel_send        | trusted_peer       | P2/P3 (separate tokens; no reuse) | Two-call test + ctxHash check         |
+| TOCTOU                | Parallel fs_write with one token         | owner_paired       | P2 (atomic consume; one wins)     | Parallel-invoke test                  |
+| Heartbeat persistence | cron_schedule then repeated exec         | trusted_peer       | Per-execution token; TTL          | Cron registration vs exec test        |
+| Skill self-write      | skill_selfwrite + hidden cron            | owner_paired       | Content hash; separate cron token | Content-hash + cron test              |
 
 Success: all eight scenarios **blocked or mitigated** with correct property attribution; regression suite in CI; short evaluation report for the Foresight community.
 

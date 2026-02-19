@@ -77,8 +77,8 @@ This document reviews all token types: where they come from, where they are stor
 
 **Important:** The **client ID and client secret** used in the OAuth **code exchange** and (if applicable) **refresh** are **not** the same as the access/refresh tokens:
 
-- **Client ID + secret:** Identify the *application* to the OAuth provider. They are required only at login (and possibly refresh). They must **never** be committed; they should come from env or a secure secret store.
-- **Access + refresh:** *User* credentials; stored in auth-profiles.json and auth.json as above.
+- **Client ID + secret:** Identify the _application_ to the OAuth provider. They are required only at login (and possibly refresh). They must **never** be committed; they should come from env or a secure secret store.
+- **Access + refresh:** _User_ credentials; stored in auth-profiles.json and auth.json as above.
 
 ---
 
@@ -86,7 +86,7 @@ This document reviews all token types: where they come from, where they are stor
 
 **Purpose:** Let users log in to Google Antigravity (Cloud Code Assist) so OpenClaw can use that provider. Same OAuth pattern as above: authorize → callback → code exchange → store access/refresh/expires.
 
-**Where the leak was:** In [extensions/google-antigravity-auth/index.ts](extensions/google-antigravity-auth/index.ts), the **OAuth client ID** and **client secret** (Google Cloud OAuth 2.0 credentials) were **hardcoded** as base64 strings. Those values identify the *app* to Google and must be kept secret.
+**Where the leak was:** In [extensions/google-antigravity-auth/index.ts](extensions/google-antigravity-auth/index.ts), the **OAuth client ID** and **client secret** (Google Cloud OAuth 2.0 credentials) were **hardcoded** as base64 strings. Those values identify the _app_ to Google and must be kept secret.
 
 **How Antigravity tokens work:**
 
@@ -122,13 +122,13 @@ In the ConsentGuard design (docs/grants and demo UI), **consent tokens** are a s
 
 ## 7. Summary table
 
-| Token kind             | Stored where                              | Who validates / uses       | Refresh / expiry                 |
-|------------------------|-------------------------------------------|----------------------------|----------------------------------|
-| Gateway auth           | Config / env (server); UI/config (client) | Gateway auth.ts            | None; rotate manually            |
-| Device pairing         | ~/.openclaw device state                  | device-pairing.ts          | Revocable; no auto-refresh       |
-| OAuth access/refresh   | auth-profiles.json, auth.json             | Provider runtime           | Auto-refresh via refresh token   |
-| OAuth client id/secret | Must be env or secret store (not repo)    | Used only at login/refresh | N/A — app credentials            |
-| Hooks / cron webhook   | Config                                    | Gateway hook handlers      | None                             |
-| Channel (Discord etc.) | Config / credentials                      | Channel adapters           | Manual rotate                    |
+| Token kind             | Stored where                              | Who validates / uses       | Refresh / expiry               |
+| ---------------------- | ----------------------------------------- | -------------------------- | ------------------------------ |
+| Gateway auth           | Config / env (server); UI/config (client) | Gateway auth.ts            | None; rotate manually          |
+| Device pairing         | ~/.openclaw device state                  | device-pairing.ts          | Revocable; no auto-refresh     |
+| OAuth access/refresh   | auth-profiles.json, auth.json             | Provider runtime           | Auto-refresh via refresh token |
+| OAuth client id/secret | Must be env or secret store (not repo)    | Used only at login/refresh | N/A — app credentials          |
+| Hooks / cron webhook   | Config                                    | Gateway hook handlers      | None                           |
+| Channel (Discord etc.) | Config / credentials                      | Channel adapters           | Manual rotate                  |
 
 This review should be enough to reason about token flow when fixing the Antigravity leak (use env for client id/secret), adding new OAuth providers, or implementing ConsentGuard-style consent tokens.

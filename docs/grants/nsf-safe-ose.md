@@ -26,7 +26,7 @@ ConsentGuard: Security and Consent Layer for the OpenClaw Open-Source AI Agent E
 
 ## Project summary (1 page — for preliminary proposal)
 
-**Ecosystem and criticality:** OpenClaw (github.com/openclaw/openclaw) is an open-source, multi-channel AI gateway and agent platform. This proposal is led by **David Weatherspoon (reconsumeralization)**, whose work on **reconsumeralization**—re-centering explicit, auditable consent in agent ecosystems—informs ConsentGuard’s design: every high-risk action requires re-established authorization and is logged and revocable. OpenClaw with substantial adoption and a large contributor base. Its ecosystem includes the core gateway (Node.js, WebSocket + HTTP), the Pi agent runtime (@openclaw/pi-agent-core), session management (main, per-peer, per-channel-peer), many channels (WhatsApp, Telegram, Discord, Slack, Signal, iMessage/BlueBubbles, Teams, Matrix, Zalo, WebChat, etc.), and a skill/plugin system (ClawHub, SKILL.md). High-risk tools—shell_exec, filesystem_read/write, browser_navigate, skill_install, skill_selfwrite, cron_schedule, sessions_spawn—are executable by the agent. The ecosystem is **mature and established** with a clear managing and development community; prompt injection, supply-chain compromise via third-party skills, and session bleed pose **concrete safety, security, and privacy risks** to deployments and downstream users.
+**Ecosystem and criticality:** OpenClaw (<https://github.com/openclaw/openclaw>) is an open-source, multi-channel AI gateway and agent platform. This proposal is led by **David Weatherspoon (reconsumeralization)**, whose work on **reconsumeralization**—re-centering explicit, auditable consent in agent ecosystems—informs ConsentGuard’s design: every high-risk action requires re-established authorization and is logged and revocable. OpenClaw with substantial adoption and a large contributor base. Its ecosystem includes the core gateway (Node.js, WebSocket + HTTP), the Pi agent runtime (@openclaw/pi-agent-core), session management (main, per-peer, per-channel-peer), many channels (WhatsApp, Telegram, Discord, Slack, Signal, iMessage/BlueBubbles, Teams, Matrix, Zalo, WebChat, etc.), and a skill/plugin system (ClawHub, SKILL.md). High-risk tools—shell_exec, filesystem_read/write, browser_navigate, skill_install, skill_selfwrite, cron_schedule, sessions_spawn—are executable by the agent. The ecosystem is **mature and established** with a clear managing and development community; prompt injection, supply-chain compromise via third-party skills, and session bleed pose **concrete safety, security, and privacy risks** to deployments and downstream users.
 
 **Problem:** The ecosystem currently lacks a **unified, auditable authorization layer** that: (1) requires **explicit consent** before high-risk tool execution; (2) tracks **trust by source/channel** (taint) so untrusted content (e.g. email, Moltbook, web-scraped) cannot authorize privileged tools; (3) **constrains autonomous persistence** (e.g. cron/heartbeat) and blast radius; (4) provides a **verifiable audit trail** (write-ahead log) for every decision. Third-party skills (ClawHub) and multi-tenant or multi-channel use amplify **supply-chain** and **isolation** risks. Existing controls (gateway auth, tool deny lists, exec approval) are valuable but do not provide consent-gated execution, taint tracking, or a single audit log for authorization decisions.
 
@@ -42,11 +42,11 @@ ConsentGuard: Security and Consent Layer for the OpenClaw Open-Source AI Agent E
 
 ## Mapping to Safe-OSE goals (safety, security, privacy)
 
-| Safe-OSE dimension | ConsentGuard contribution |
-| -------------------- | --------------------------- |
-| **Safety** | No high-risk tool execution without consent; containment limits blast radius; anomaly triggers quarantine and revoke. |
-| **Security** | Single choke point for gated tools; WAL for every decision (forensics, compliance); supply-chain verification for skills; no token laundering across tiers. |
-| **Privacy** | Session and channel isolation (per-channel-peer); minimal privilege per trust tier; audit trail supports data-access accountability. |
+| Safe-OSE dimension | ConsentGuard contribution                                                                                                                                   |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Safety**         | No high-risk tool execution without consent; containment limits blast radius; anomaly triggers quarantine and revoke.                                       |
+| **Security**       | Single choke point for gated tools; WAL for every decision (forensics, compliance); supply-chain verification for skills; no token laundering across tiers. |
+| **Privacy**        | Session and channel isolation (per-channel-peer); minimal privilege per trust tier; audit trail supports data-access accountability.                        |
 
 ---
 

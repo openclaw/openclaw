@@ -6,15 +6,15 @@ This folder contains draft grant narratives for ConsentGuard, a consent-gated au
 
 Checked on February 19, 2026.
 
-| Funder | Program | Draft | Status |
-| -------- | --------- | ------- | -------- |
-| [AI Safety Fund](https://aisfund.org/funding-opportunities/) | AI Agent Evaluation and Cybersecurity | [AISF draft](/grants/aisf-agent-cybersecurity) | No open opportunities listed; prior rounds closed in January 2025 |
-| [UK AI Safety Institute](https://www.aisi.gov.uk/grants) | Systemic AI Safety Fast Grants | [UK AISI draft](/grants/uk-aisi-systemic) | Not currently accepting applications |
-| [Foresight Institute](https://foresight.org/ai-safety/) | AI Safety (security and multi-agent) | [Foresight draft](/grants/foresight) | Quarterly deadlines (Mar, Jun, Sep, Dec 31) |
-| [NSF](https://www.nsf.gov/funding/opportunities/safe-ose-safety-security-privacy-open-source-ecosystems/nsf24-608/solicitation) | Safe-OSE | [NSF draft](/grants/nsf-safe-ose) | Verify annual cycle before submitting |
-| [OpenSSF Alpha-Omega](https://alpha-omega.dev/grants/how-to-apply/) | Critical OSS Security | [OpenSSF draft](/grants/openssf-alpha-omega) | Rolling application intake |
-| [TLA+ Foundation](https://foundation.tlapl.us/grants/2024-grant-program/index.html) | Formal verification | [TLA+ draft](/grants/tlaplus-foundation) | Rolling |
-| [Horizon Europe](https://eufundingportal.eu/) and [GitHub SOSF](https://resources.github.com/secure-open-source-fund/) | EU and OSS security programs | [Horizon and GitHub draft](/grants/horizon-github) | Program-specific timelines |
+| Funder                                                                                                                          | Program                               | Draft                                              | Status                                                            |
+| ------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- | -------------------------------------------------- | ----------------------------------------------------------------- |
+| [AI Safety Fund](https://aisfund.org/funding-opportunities/)                                                                    | AI Agent Evaluation and Cybersecurity | [AISF draft](/grants/aisf-agent-cybersecurity)     | No open opportunities listed; prior rounds closed in January 2025 |
+| [UK AI Safety Institute](https://www.aisi.gov.uk/grants)                                                                        | Systemic AI Safety Fast Grants        | [UK AISI draft](/grants/uk-aisi-systemic)          | Not currently accepting applications                              |
+| [Foresight Institute](https://foresight.org/ai-safety/)                                                                         | AI Safety (security and multi-agent)  | [Foresight draft](/grants/foresight)               | Quarterly deadlines (Mar, Jun, Sep, Dec 31)                       |
+| [NSF](https://www.nsf.gov/funding/opportunities/safe-ose-safety-security-privacy-open-source-ecosystems/nsf24-608/solicitation) | Safe-OSE                              | [NSF draft](/grants/nsf-safe-ose)                  | Verify annual cycle before submitting                             |
+| [OpenSSF Alpha-Omega](https://alpha-omega.dev/grants/how-to-apply/)                                                             | Critical OSS Security                 | [OpenSSF draft](/grants/openssf-alpha-omega)       | Rolling application intake                                        |
+| [TLA+ Foundation](https://foundation.tlapl.us/grants/2024-grant-program/index.html)                                             | Formal verification                   | [TLA+ draft](/grants/tlaplus-foundation)           | Rolling                                                           |
+| [Horizon Europe](https://eufundingportal.eu/) and [GitHub SOSF](https://resources.github.com/secure-open-source-fund/)          | EU and OSS security programs          | [Horizon and GitHub draft](/grants/horizon-github) | Program-specific timelines                                        |
 
 ## Codebase grounding for all drafts
 

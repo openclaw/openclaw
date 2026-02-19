@@ -10,11 +10,11 @@ Enhanced notes for two additional streams; full applications depend on specific 
 
 ### Relevant calls and angles
 
-| Call / programme | Focus | ConsentGuard angle |
-| ------------------ | -------- | --------------------- |
+| Call / programme                                                  | Focus                                                 | ConsentGuard angle                                                                                                                                                                      |
+| ----------------------------------------------------------------- | ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Explainable and robust AI** (e.g. HORIZON-CL4-2024-HUMAN-03-02) | Trustworthy, robust, safe AI in real-world conditions | ConsentGuard provides **auditable** and **explainable** decisions: every allow/deny is logged with reason (consent, tier, containment). Robustness: containment limits impact of abuse. |
-| **European Lighthouse on Secure and Safe AI** | Robustness, safety, privacy, **human oversight** | **Human oversight**: explicit consent before high-risk tool execution; **audit trail** (WAL) for transparency and accountability. |
-| **AI transparency and robustness** (~€15M) | Human-centric AI, transparency | **Transparent decisions**: WAL records why each tool call was allowed or denied (token, tier, anomaly). |
+| **European Lighthouse on Secure and Safe AI**                     | Robustness, safety, privacy, **human oversight**      | **Human oversight**: explicit consent before high-risk tool execution; **audit trail** (WAL) for transparency and accountability.                                                       |
+| **AI transparency and robustness** (~€15M)                        | Human-centric AI, transparency                        | **Transparent decisions**: WAL records why each tool call was allowed or denied (token, tier, anomaly).                                                                                 |
 
 ### Positioning statement (for Part B / impact)
 
@@ -59,7 +59,7 @@ Enhanced notes for two additional streams; full applications depend on specific 
 
 ## Summary table
 
-| Funder | Use this doc as | Next step |
-| -------- | ------------------ | ----------- |
+| Funder             | Use this doc as                           | Next step                                                                                                                                |
+| ------------------ | ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | **Horizon Europe** | Narrative and work-package building block | Find open call; form consortium with EU partner; fill Part B with ConsentGuard as WP or case study; use positioning statement in impact. |
-| **GitHub SOSF** | Project description and impact text | Apply via SOSF application when open; paste or adapt the **Project description** above; stress security outcomes and maintainer focus. |
+| **GitHub SOSF**    | Project description and impact text       | Apply via SOSF application when open; paste or adapt the **Project description** above; stress security outcomes and maintainer focus.   |

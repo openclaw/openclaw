@@ -39,7 +39,7 @@
 
 **Outcomes:**
 
-- ConsentGuard **integrated** into the OpenClaw gateway (or node-host) tool-invocation path for high-risk tools (shell_exec, filesystem_*, skill_install, skill_selfwrite, cron_schedule, etc.).
+- ConsentGuard **integrated** into the OpenClaw gateway (or node-host) tool-invocation path for high-risk tools (shell*exec, filesystem*\*, skill_install, skill_selfwrite, cron_schedule, etc.).
 - Every gated tool call **requires** a valid, single-use, context-bound consent token; tier violations and containment events are **logged** to the WAL.
 - A **public WAL format** specification and optional reader/tooling for audit and forensics.
 - **Documented attack scenarios** (eight: email injection, ClawHub supply chain, Moltbook hijack, session bleed, exfil, TOCTOU, heartbeat persistence, skill self-write) with expected blocks (which property) and **regression tests** in CI.
