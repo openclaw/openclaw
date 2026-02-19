@@ -1,13 +1,24 @@
 import { describe, expect, it } from "vitest";
-import { bm25RankToScore, buildFtsQuery, mergeHybridResults } from "./hybrid.js";
+import { bm25RankToScore, buildFtsQuery, mergeHybridResults, splitCjkRuns } from "./hybrid.js";
 
 describe("memory hybrid helpers", () => {
   it("buildFtsQuery tokenizes and AND-joins", () => {
     expect(buildFtsQuery("hello world")).toBe('"hello" AND "world"');
     expect(buildFtsQuery("FOO_bar baz-1")).toBe('"FOO_bar" AND "baz" AND "1"');
-    expect(buildFtsQuery("金银价格")).toBe('"金银价格"');
-    expect(buildFtsQuery("価格 2026年")).toBe('"価格" AND "2026年"');
+    expect(buildFtsQuery("金银价格")).toBe('"金" AND "银" AND "价" AND "格"');
+    expect(buildFtsQuery("今日は天気")).toBe('"今" AND "日" AND "は" AND "天" AND "気"');
+    expect(buildFtsQuery("hello 世界")).toBe('"hello" AND "世" AND "界"');
+    expect(buildFtsQuery("価格 2026年")).toBe('"価" AND "格" AND "2026年"');
     expect(buildFtsQuery("   ")).toBeNull();
+  });
+
+  it("splitCjkRuns separates CJK characters with spaces", () => {
+    // Index-time transformation must match query-time to enable FTS5 matching
+    expect(splitCjkRuns("今日は天気")).toBe("今 日 は 天 気");
+    expect(splitCjkRuns("hello 世界")).toBe("hello 世 界");
+    expect(splitCjkRuns("金银价格")).toBe("金 银 价 格");
+    expect(splitCjkRuns("abc")).toBe("abc");
+    expect(splitCjkRuns("")).toBe("");
   });
 
   it("bm25RankToScore is monotonic and clamped", () => {

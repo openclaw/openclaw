@@ -9,6 +9,7 @@ import {
 import { type VoyageBatchRequest, runVoyageEmbeddingBatches } from "./batch-voyage.js";
 import { enforceEmbeddingMaxInputTokens } from "./embedding-chunk-limits.js";
 import { estimateUtf8Bytes } from "./embedding-input-limits.js";
+import { splitCjkRuns } from "./hybrid.js";
 import {
   chunkMarkdown,
   hashText,
@@ -782,7 +783,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
               ` VALUES (?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
-            chunk.text,
+            splitCjkRuns(chunk.text),
             id,
             entry.path,
             options.source,

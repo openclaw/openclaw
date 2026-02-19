@@ -30,9 +30,20 @@ export type HybridKeywordResult = {
   textScore: number;
 };
 
+// FTS5's default 'simple' tokenizer does not segment CJK runs — it indexes
+// consecutive CJK characters as a single token, so per-character queries fail.
+// Pre-split CJK runs into individual characters (space-separated) so each
+// character becomes its own FTS token in both the FTS index and the query. (#20730)
+// Exported so the embedding layer can apply the same transformation at index time.
+export function splitCjkRuns(text: string): string {
+  // Use escaped Unicode code points to avoid normalisation of the literal
+  // boundary characters (e.g. U+F900 normalises in some editors). (#20730)
+  return text.replace(/([぀-鿿ꀀ-꓿가-퟿豈-﫿]+)/gu, (m) => m.split("").join(" "));
+}
+
 export function buildFtsQuery(raw: string): string | null {
   const tokens =
-    raw
+    splitCjkRuns(raw)
       .match(/[\p{L}\p{N}_]+/gu)
       ?.map((t) => t.trim())
       .filter(Boolean) ?? [];
