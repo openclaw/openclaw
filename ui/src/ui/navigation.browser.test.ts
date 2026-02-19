@@ -241,8 +241,14 @@ describe("control UI routing", () => {
 
     const setupProgress = app.querySelector('[data-testid="onboarding-setup-flow-progress"]');
     const bannerProgress = app.querySelector('[data-testid="onboarding-banner-progress"]');
+    const gatewayState = app.querySelector('[data-testid="onboarding-setup-step-gateway"]');
+    const integrationsState = app.querySelector('[data-testid="onboarding-setup-step-integrations"]');
+    const firstRunState = app.querySelector('[data-testid="onboarding-setup-step-firstRun"]');
     expect(setupProgress?.textContent).toContain("Progress 0/3");
     expect(bannerProgress?.textContent).toContain("Progress 0/3");
+    expect(gatewayState?.textContent).toContain("Offline");
+    expect(integrationsState?.textContent).toContain("n/a");
+    expect(firstRunState?.textContent).toContain("n/a");
 
     app.connected = true;
     app.channelsLastSuccess = Date.now();
@@ -255,15 +261,16 @@ describe("control UI routing", () => {
 
     expect(setupProgress?.textContent).toContain("Progress 3/3");
     expect(bannerProgress?.textContent).toContain("Progress 3/3");
+    expect(gatewayState?.textContent).toContain("OK");
+    expect(integrationsState?.textContent).toContain("OK");
+    expect(firstRunState?.textContent).toContain("OK");
   });
 
   it("navigates to integrations from onboarding setup flow", async () => {
     const app = mountApp("/?onboarding=1");
     await app.updateComplete;
 
-    const button = Array.from(app.querySelectorAll<HTMLButtonElement>('[data-testid="onboarding-setup-flow"] button')).find((btn) =>
-      btn.textContent?.includes("Open Integrations"),
-    );
+    const button = app.querySelector<HTMLButtonElement>('[data-testid="onboarding-setup-flow-integrations"]');
     expect(button).not.toBeNull();
     button?.click();
     await app.updateComplete;
@@ -276,9 +283,7 @@ describe("control UI routing", () => {
     const app = mountApp("/?onboarding=1");
     await app.updateComplete;
 
-    const button = Array.from(app.querySelectorAll<HTMLButtonElement>('[data-testid="onboarding-setup-flow"] button')).find((btn) =>
-      btn.textContent?.includes("Open Chat"),
-    );
+    const button = app.querySelector<HTMLButtonElement>('[data-testid="onboarding-setup-flow-chat"]');
     expect(button).not.toBeNull();
     expect(button?.disabled).toBe(true);
   });
@@ -291,9 +296,7 @@ describe("control UI routing", () => {
     app.channelsLastSuccess = null;
     await app.updateComplete;
 
-    const button = Array.from(app.querySelectorAll<HTMLButtonElement>('[data-testid="onboarding-setup-flow"] button')).find((btn) =>
-      btn.textContent?.includes("Open Chat"),
-    );
+    const button = app.querySelector<HTMLButtonElement>('[data-testid="onboarding-setup-flow-chat"]');
     expect(button).not.toBeNull();
     expect(button?.disabled).toBe(true);
   });
@@ -311,9 +314,7 @@ describe("control UI routing", () => {
     } as never;
     await app.updateComplete;
 
-    const button = Array.from(app.querySelectorAll<HTMLButtonElement>('[data-testid="onboarding-setup-flow"] button')).find((btn) =>
-      btn.textContent?.includes("Open ConsentGuard"),
-    );
+    const button = app.querySelector<HTMLButtonElement>('[data-testid="onboarding-setup-flow-consent"]');
     expect(button).not.toBeNull();
     expect(button?.disabled).toBe(true);
   });
@@ -332,6 +333,28 @@ describe("control UI routing", () => {
 
     expect(app.tab).toBe("channels");
     expect(window.location.pathname).toBe("/channels");
+  });
+
+  it("routes onboarding setup-flow next step to consent when setup flow is complete", async () => {
+    const app = mountApp("/overview?onboarding=1");
+    await app.updateComplete;
+
+    app.connected = true;
+    app.channelsLastSuccess = Date.now();
+    app.sessionsResult = {
+      count: 1,
+      sessions: [],
+      cursor: null,
+    } as never;
+    await app.updateComplete;
+
+    const button = app.querySelector<HTMLButtonElement>('[data-testid="onboarding-setup-flow-next"]');
+    expect(button).not.toBeNull();
+    button?.click();
+    await app.updateComplete;
+
+    expect(app.tab).toBe("consent");
+    expect(window.location.pathname).toBe("/consent");
   });
 
   it("navigates to integrations from onboarding banner actions", async () => {

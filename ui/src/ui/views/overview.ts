@@ -145,6 +145,9 @@ export function renderOverview(props: OverviewProps) {
   const nextOnboardingLabel = nextOnboardingStep
     ? t(`overview.setupFlow.${nextOnboardingStep.key}`)
     : t("overview.setupFlow.review");
+  const gatewayReady = onboardingSteps.some((step) => step.key === "gateway" && step.done);
+  const integrationsReady = onboardingSteps.some((step) => step.key === "integrations" && step.done);
+  const firstRunReady = onboardingSteps.some((step) => step.key === "firstRun" && step.done);
 
   const runNextOnboardingAction = () => {
     if (!nextOnboardingStep) {
@@ -179,21 +182,27 @@ export function renderOverview(props: OverviewProps) {
                 <div>
                   <div class="note-title">
                     1. ${t("overview.setupFlow.gateway")}
-                    <span class="muted">(${onboardingSteps[0].done ? t("common.ok") : t("common.offline")})</span>
+                    <span class="muted" data-testid="onboarding-setup-step-gateway">
+                      (${gatewayReady ? t("common.ok") : t("common.offline")})
+                    </span>
                   </div>
                   <div class="muted">${t("overview.setupFlow.gatewayHint")}</div>
                 </div>
                 <div>
                   <div class="note-title">
                     2. ${t("overview.setupFlow.integrations")}
-                    <span class="muted">(${onboardingSteps[1].done ? t("common.ok") : t("common.na")})</span>
+                    <span class="muted" data-testid="onboarding-setup-step-integrations">
+                      (${integrationsReady ? t("common.ok") : t("common.na")})
+                    </span>
                   </div>
                   <div class="muted">${t("overview.setupFlow.integrationsHint")}</div>
                 </div>
                 <div>
                   <div class="note-title">
                     3. ${t("overview.setupFlow.firstRun")}
-                    <span class="muted">(${onboardingSteps[2].done ? t("common.ok") : t("common.na")})</span>
+                    <span class="muted" data-testid="onboarding-setup-step-firstRun">
+                      (${firstRunReady ? t("common.ok") : t("common.na")})
+                    </span>
                   </div>
                   <div class="muted">${t("overview.setupFlow.firstRunHint")}</div>
                 </div>
@@ -202,18 +211,26 @@ export function renderOverview(props: OverviewProps) {
                 <button class="btn" data-testid="onboarding-setup-flow-next" @click=${runNextOnboardingAction}>
                   ${t("overview.setupFlow.next")}: ${nextOnboardingLabel}
                 </button>
-                <button class="btn" @click=${() => props.onConnect()}>${t("common.connect")}</button>
-                <button class="btn" @click=${() => props.onOpenChannels?.()}>
+                <button class="btn" data-testid="onboarding-setup-flow-connect" @click=${() => props.onConnect()}>
+                  ${t("common.connect")}
+                </button>
+                <button class="btn" data-testid="onboarding-setup-flow-integrations" @click=${() => props.onOpenChannels?.()}>
                   ${t("overview.setupFlow.openIntegrations")}
                 </button>
                 <button
                   class="btn"
-                  ?disabled=${!props.connected || !onboardingSteps[1].done}
+                  data-testid="onboarding-setup-flow-chat"
+                  ?disabled=${!props.connected || !integrationsReady}
                   @click=${() => props.onOpenChat?.()}
                 >
                   ${t("overview.setupFlow.openChat")}
                 </button>
-                <button class="btn" ?disabled=${!onboardingSteps[2].done} @click=${() => props.onOpenConsent?.()}>
+                <button
+                  class="btn"
+                  data-testid="onboarding-setup-flow-consent"
+                  ?disabled=${!firstRunReady}
+                  @click=${() => props.onOpenConsent?.()}
+                >
                   ${t("overview.setupFlow.openConsent")}
                 </button>
               </div>
