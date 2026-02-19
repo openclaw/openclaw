@@ -304,6 +304,12 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/discord-semantic-search:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/feishu:
     dependencies:
       '@larksuiteoapi/node-sdk':

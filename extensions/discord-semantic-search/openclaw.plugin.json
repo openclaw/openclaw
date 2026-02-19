@@ -1,0 +1,36 @@
+{
+  "id": "discord-semantic-search",
+  "name": "Discord Semantic Search",
+  "description": "Semantic search for Discord messages using embeddings. Opt-in message indexing for server-wide history search.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "default": false,
+        "description": "Enable Discord message indexing"
+      },
+      "indexChannels": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Channel IDs to index (empty = none)"
+      },
+      "excludeChannels": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Channel IDs to exclude from indexing"
+      },
+      "retentionDays": {
+        "type": "number",
+        "default": 90,
+        "description": "Days to retain indexed messages (0 = forever)"
+      },
+      "embeddingModel": {
+        "type": "string",
+        "default": "text-embedding-3-small",
+        "description": "OpenAI embedding model to use"
+      }
+    }
+  }
+}

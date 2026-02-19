@@ -1,0 +1,20 @@
+{
+  "name": "@openclaw/discord-semantic-search",
+  "version": "2026.2.16",
+  "private": true,
+  "description": "Semantic search for Discord messages",
+  "type": "module",
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "install": {
+      "npmSpec": "@openclaw/discord-semantic-search",
+      "localPath": "extensions/discord-semantic-search",
+      "defaultChoice": "npm"
+    }
+  }
+}
