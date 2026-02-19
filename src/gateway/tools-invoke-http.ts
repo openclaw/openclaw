@@ -18,6 +18,14 @@ import {
 import { ToolInputError } from "../agents/tools/common.js";
 import { loadConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
+import { buildConsentDenyPayload } from "../consent/deny-payload.js";
+import { CONSENT_REASON } from "../consent/reason-codes.js";
+import {
+  isConsentGateObserveOnly,
+  resolveConsentGateApi,
+  resolveConsentGatedTools,
+  resolveTrustTier,
+} from "../consent/resolve.js";
 import { logWarn } from "../logger.js";
 import { isTestDefaultMemorySlotDisabled } from "../plugins/config-state.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
@@ -34,14 +42,6 @@ import {
   sendMethodNotAllowed,
 } from "./http-common.js";
 import { getBearerToken, getHeader } from "./http-utils.js";
-import {
-  isConsentGateObserveOnly,
-  resolveConsentGateApi,
-  resolveConsentGatedTools,
-  resolveTrustTier,
-} from "../consent/resolve.js";
-import { CONSENT_REASON } from "../consent/reason-codes.js";
-import { buildConsentDenyPayload } from "../consent/deny-payload.js";
 
 const DEFAULT_BODY_BYTES = 2 * 1024 * 1024;
 const MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
@@ -347,7 +347,6 @@ export async function handleToolsInvokeHttpRequest(
         await consentApi.evaluate(consumeInput);
       } else {
         const result = await consentApi.consume(consumeInput);
-        const result = await consentApi.consume(consumeInput);
         if (!result.allowed) {
           const deny = buildConsentDenyPayload({
             reasonCode: result.reasonCode,
@@ -366,26 +365,26 @@ export async function handleToolsInvokeHttpRequest(
           });
           return true;
         }
-        }
-      } catch (err) {
-        logWarn(`ConsentGate error for ${toolName}: ${String(err)}`);
-        const deny = buildConsentDenyPayload({
-          reasonCode: CONSENT_REASON.UNAVAILABLE,
-          correlationId,
-          tool: toolName,
-          sessionKey,
-          trustTier: resolveTrustTier(cfg, sessionKey),
-          jti: consentTokenJti ?? null,
-        });
-        sendJson(res, 503, {
-          ok: false,
-          error: {
-            type: "consent_denied",
-            ...deny,
-          },
-        });
-        return true;
       }
+    } catch (err) {
+      logWarn(`ConsentGate error for ${toolName}: ${String(err)}`);
+      const deny = buildConsentDenyPayload({
+        reasonCode: CONSENT_REASON.UNAVAILABLE,
+        correlationId,
+        tool: toolName,
+        sessionKey,
+        trustTier: resolveTrustTier(cfg, sessionKey),
+        jti: consentTokenJti ?? null,
+      });
+      sendJson(res, 503, {
+        ok: false,
+        error: {
+          type: "consent_denied",
+          ...deny,
+        },
+      });
+      return true;
+    }
   }
 
   try {

@@ -3,8 +3,8 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
-import { resolveConsentGateApi } from "../consent/resolve.js";
 import { CONSENT_REASON } from "../consent/reason-codes.js";
+import { resolveConsentGateApi } from "../consent/resolve.js";
 
 const TEST_GATEWAY_TOKEN = "test-gateway-token-1234567890";
 

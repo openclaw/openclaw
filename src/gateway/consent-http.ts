@@ -116,11 +116,17 @@ export async function handleConsentHttpRequest(
     const input = body as Record<string, unknown>;
     const revokeInput: ConsentRevokeInput = {
       jti: typeof input.jti === "string" ? input.jti.trim() || undefined : undefined,
-      sessionKey: typeof input.sessionKey === "string" ? input.sessionKey.trim() || undefined : undefined,
+      sessionKey:
+        typeof input.sessionKey === "string" ? input.sessionKey.trim() || undefined : undefined,
       tenantId: typeof input.tenantId === "string" ? input.tenantId.trim() || undefined : undefined,
     };
     if (!revokeInput.jti && !revokeInput.sessionKey && !revokeInput.tenantId) {
-      sendJson(res, 400, { error: { message: "One of jti, sessionKey, or tenantId is required", type: "invalid_request_error" } });
+      sendJson(res, 400, {
+        error: {
+          message: "One of jti, sessionKey, or tenantId is required",
+          type: "invalid_request_error",
+        },
+      });
       return true;
     }
     const cfg = loadConfig();
@@ -151,7 +157,14 @@ export async function handleConsentHttpRequest(
   if (pathname === METRICS_PATH && req.method === "GET") {
     const cfg = loadConfig();
     const api = resolveConsentGateApi(cfg);
-    const snapshot = api.getMetrics?.() ?? { issues: 0, consumes: 0, revokes: 0, denialsByReason: {}, quarantine: 0, failClosed: 0 };
+    const snapshot = api.getMetrics?.() ?? {
+      issues: 0,
+      consumes: 0,
+      revokes: 0,
+      denialsByReason: {},
+      quarantine: 0,
+      failClosed: 0,
+    };
     sendJson(res, 200, snapshot);
     return true;
   }
@@ -223,7 +236,9 @@ export async function handleConsentHttpRequest(
     res.statusCode = 405;
     res.setHeader("Allow", "GET, POST");
     res.setHeader("Content-Type", "application/json; charset=utf-8");
-    res.end(JSON.stringify({ error: { message: "Method Not Allowed", type: "method_not_allowed" } }));
+    res.end(
+      JSON.stringify({ error: { message: "Method Not Allowed", type: "method_not_allowed" } }),
+    );
     return true;
   }
 

@@ -26,6 +26,7 @@ import {
   type GatewayAuthResult,
   type ResolvedGatewayAuth,
 } from "./auth.js";
+import { handleConsentHttpRequest } from "./consent-http.js";
 import {
   handleControlUiAvatarRequest,
   handleControlUiHttpRequest,
@@ -54,7 +55,6 @@ import { isPrivateOrLoopbackAddress, resolveGatewayClientIp } from "./net.js";
 import { handleOpenAiHttpRequest } from "./openai-http.js";
 import { handleOpenResponsesHttpRequest } from "./openresponses-http.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
-import { handleConsentHttpRequest } from "./consent-http.js";
 import { handleToolsInvokeHttpRequest } from "./tools-invoke-http.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;

@@ -133,7 +133,9 @@ describe("consent http", () => {
         headers: { authorization: `Bearer ${TEST_GATEWAY_TOKEN}` },
       },
     );
-    const tenantA = (await statusTenantA.json()) as { tokens: Array<{ jti: string; status: string }> };
+    const tenantA = (await statusTenantA.json()) as {
+      tokens: Array<{ jti: string; status: string }>;
+    };
     const s1 = tenantA.tokens.find((t) => t.jti === t1!.jti)?.status;
     const s2 = tenantA.tokens.find((t) => t.jti === t2!.jti)?.status;
     expect(s1).toBe("revoked");
@@ -149,4 +151,3 @@ describe("consent http", () => {
     expect(body.error?.message).toContain("limit must be an integer");
   });
 });
-
