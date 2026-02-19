@@ -124,7 +124,7 @@ export function registerExecPassthrough(api: OpenClawPluginApi) {
     (event) => {
       const msg = event.message;
       if (!msg || msg.role !== "toolResult") return;
-      if ((msg as any).toolName !== "exec") return;
+      if (event.toolName !== "exec") return;
 
       const contents = (msg as any).content;
       if (!Array.isArray(contents)) return;
@@ -138,7 +138,11 @@ export function registerExecPassthrough(api: OpenClawPluginApi) {
         found = true;
 
         if (sender) {
-          sender.send(result.passthrough).catch(() => {});
+          sender.send(result.passthrough).catch((err) => {
+            api.logger.error(
+              `exec-passthrough: send failed: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          });
           api.logger.info(
             `exec-passthrough: sent ${result.passthrough.length} chars directly, slim for LLM`,
           );
