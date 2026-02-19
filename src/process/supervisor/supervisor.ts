@@ -192,6 +192,8 @@ export function createProcessSupervisor(): ProcessSupervisor {
 
       const waitPromise = (async (): Promise<RunExit> => {
         const result = await adapter.wait();
+        clearTimers();
+        adapter.dispose();
         if (settled) {
           return {
             reason: forcedReason ?? "exit",
@@ -205,8 +207,6 @@ export function createProcessSupervisor(): ProcessSupervisor {
           };
         }
         settled = true;
-        clearTimers();
-        adapter.dispose();
         active.delete(runId);
 
         const reason: TerminationReason =
