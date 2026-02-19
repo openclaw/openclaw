@@ -259,6 +259,13 @@ export async function ensureChromeExtensionRelayServer(opts: {
     rejectInit = reject;
   });
   relayInitByPort.set(info.port, initPromise);
+  const settleInit = async (): Promise<ChromeExtensionRelayServer> => {
+    try {
+      return await initPromise;
+    } finally {
+      relayInitByPort.delete(info.port);
+    }
+  };
 
   let extensionWs: WebSocket | null = null;
   const cdpClients = new Set<WebSocket>();
@@ -797,13 +804,11 @@ export async function ensureChromeExtensionRelayServer(opts: {
         },
       };
       serversByPort.set(info.port, existingRelay);
-      relayInitByPort.delete(info.port);
       resolveInit(existingRelay);
-      return existingRelay;
+      return await settleInit();
     }
-    relayInitByPort.delete(info.port);
     rejectInit(err);
-    throw err;
+    return await settleInit();
   }
 
   const addr = server.address() as AddressInfo | null;
@@ -840,9 +845,8 @@ export async function ensureChromeExtensionRelayServer(opts: {
   };
 
   serversByPort.set(port, relay);
-  relayInitByPort.delete(info.port);
   resolveInit(relay);
-  return relay;
+  return await settleInit();
 }
 
 export async function stopChromeExtensionRelayServer(opts: { cdpUrl: string }): Promise<boolean> {
