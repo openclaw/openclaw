@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { createSubscribedSessionHarness } from "./pi-embedded-subscribe.e2e-harness.js";
 
 /**
  * Verify that memory tools (memory_search, memory_get) do not emit tool
@@ -7,20 +8,38 @@ import { describe, expect, it } from "vitest";
  * parser in partial-stream mode, silently dropping the final reply.
  */
 describe("memory tool emission suppression", () => {
-  it("isInternalToolResult returns true for memory_search", async () => {
-    // We test the observable behavior: the onToolResult callback must NOT
-    // be invoked for memory_search or memory_get tool names.
-    const { subscribeEmbeddedPiSession } = await import("./pi-embedded-subscribe.js");
+  it("suppresses onToolResult for memory_search but not for a regular tool", async () => {
+    const onToolResult = vi.fn();
 
-    // subscribeEmbeddedPiSession is complex to set up, so we instead
-    // verify the emitToolSummary/emitToolOutput guards via a minimal
-    // unit test of the exported helper (if available) or document the
-    // behavioral contract here.  The actual integration path is:
-    //   tool_execution_start → emitToolSummary("memory_search", meta)
-    //   → isInternalToolResult("memory_search") → returns early, no callback
-    //
-    // Since the helper is module-scoped and not exported, we verify
-    // indirectly via the list of suppressed tool names in the source.
-    expect(typeof subscribeEmbeddedPiSession).toBe("function");
+    const harness = createSubscribedSessionHarness({
+      runId: "run-memory-suppress",
+      verboseLevel: "on",
+      onToolResult,
+    });
+
+    // memory_search must NOT trigger onToolResult
+    harness.emit({
+      type: "tool_execution_start",
+      toolName: "memory_search",
+      toolCallId: "tool-mem-1",
+      args: { query: "prior work" },
+    });
+
+    // Wait for any async handler to complete
+    await Promise.resolve();
+
+    expect(onToolResult).not.toHaveBeenCalled();
+
+    // A regular tool (read) MUST trigger onToolResult
+    harness.emit({
+      type: "tool_execution_start",
+      toolName: "read",
+      toolCallId: "tool-read-1",
+      args: { path: "/tmp/file.txt" },
+    });
+
+    await Promise.resolve();
+
+    expect(onToolResult).toHaveBeenCalledTimes(1);
   });
 });
