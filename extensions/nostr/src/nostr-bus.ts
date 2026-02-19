@@ -497,8 +497,8 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
         // EOSE handler - called when all stored events have been received
         for (const relay of relays) {
           metrics.emit("relay.message.eose", 1, { relay });
+          onEose?.(relay);
         }
-        onEose?.(relays.join(", "));
       },
       onclose: (reason) => {
         // Handle subscription close
