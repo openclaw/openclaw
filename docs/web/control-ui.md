@@ -68,6 +68,7 @@ you revoke it with `openclaw devices revoke --device <id> --role <role>`. See
 - Instances: presence list + refresh (`system-presence`)
 - Sessions: list + per-session thinking/verbose overrides (`sessions.list`, `sessions.patch`)
 - Cron jobs: list/add/run/enable/disable + run history (`cron.*`)
+- ConsentGuard PoC: interactive consent-gating simulation tab (token issue/consume/revoke, trust-tier gating, WAL trail, anomaly containment)
 - Skills: status, enable/disable, install, API key updates (`skills.*`)
 - Nodes: list + caps (`node.list`)
 - Exec approvals: edit gateway or node allowlists + ask policy for `exec host=gateway/node` (`exec.approvals.*`)

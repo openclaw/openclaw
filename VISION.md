@@ -12,18 +12,22 @@ OpenClaw started as a personal playground to learn AI and build something genuin
 an assistant that can run real tasks on a real computer.
 It evolved through several names and shells: Warelay -> Clawdbot -> Moltbot -> OpenClaw.
 
-The goal: a personal assistant that is easy to use, supports a wide range of platforms, and respects privacy and security.
+The goal: an AI-powered security operations platform for red teams and blue teams, plus a personal assistant that is easy to use, supports a wide range of platforms, and respects privacy and security.
 
 The current focus is:
 
 Priority:
 
+- Security operations: Penetration testing, red team, blue team, and threat intelligence capabilities
 - Security and safe defaults
 - Bug fixes and stability
 - Setup reliability and first-run UX
 
 Next priorities:
 
+- Security tool integrations: Metasploit, Burp Suite, Splunk, Elastic Security, and more
+- Offensive security tools: Reconnaissance, exploit development, payload generation
+- Defensive security tools: Incident response, threat hunting, SIEM operations
 - Supporting all major model providers
 - Improving support for major messaging channels (and adding a few high-demand ones)
 - Performance and test infrastructure
@@ -40,12 +44,21 @@ Contribution rules:
 
 ## Security
 
-Security in OpenClaw is a deliberate tradeoff: strong defaults without killing capability.
+Security in OpenClaw operates at two levels:
+
+**Security Operations Platform**: OpenClaw provides comprehensive security operations capabilities for red teams and blue teams:
+- **Offensive Security**: Penetration testing, exploit development, red team exercises, and adversary simulation
+- **Defensive Security**: Threat hunting, incident response, SIEM operations, and security operations center (SOC) workflows
+- **Threat Intelligence**: Threat actor tracking, IOC management, campaign analysis, and information sharing (STIX/TAXII)
+- **Tool Integration**: Works with your existing security stack (Metasploit, Burp Suite, Splunk, Elastic Security, etc.)
+
+**Platform Security**: Security in OpenClaw is a deliberate tradeoff: strong defaults without killing capability.
 The goal is to stay powerful for real work while making risky paths explicit and operator-controlled.
 
 Canonical security policy and reporting:
 
 - [`SECURITY.md`](SECURITY.md)
+- [Security Operations Documentation](docs/security/)
 
 We prioritize secure defaults, but also expose clear knobs for trusted high-power workflows.
 

@@ -53,11 +53,13 @@ import {
   updateSkillEnabled,
 } from "./controllers/skills.ts";
 import { icons } from "./icons.ts";
-import { normalizeBasePath, TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
+import { normalizeBasePath, getTabGroups, subtitleForTab, titleForTab } from "./navigation.ts";
 import { renderAgents } from "./views/agents.ts";
 import { renderChannels } from "./views/channels.ts";
 import { renderChat } from "./views/chat.ts";
 import { renderConfig } from "./views/config.ts";
+import { renderConsentDemo } from "./views/consent-demo.ts";
+import { renderConsentGuardHub } from "./views/consentguard-hub.ts";
 import { renderCron } from "./views/cron.ts";
 import { renderDebug } from "./views/debug.ts";
 import { renderExecApprovalPrompt } from "./views/exec-approval.ts";
@@ -143,7 +145,7 @@ export function renderApp(state: AppViewState) {
         </div>
       </header>
       <aside class="nav ${state.settings.navCollapsed ? "nav--collapsed" : ""}">
-        ${TAB_GROUPS.map((group) => {
+        ${getTabGroups(state.settings.enterpriseNav || state.onboarding).map((group) => {
           const isGroupCollapsed = state.settings.navGroupsCollapsed[group.label] ?? false;
           const hasActiveTab = group.tabs.some((tab) => tab === state.tab);
           return html`
@@ -174,6 +176,19 @@ export function renderApp(state: AppViewState) {
             <span class="nav-label__text">${t("common.resources")}</span>
           </div>
           <div class="nav-group__items">
+            <button
+              type="button"
+              class="nav-item nav-item--action ${state.settings.enterpriseNav ? "nav-item--active" : ""}"
+              title="${state.settings.enterpriseNav ? t("nav.collapse") : t("nav.expand")} ${t("common.enterpriseNav")}"
+              @click=${() =>
+                state.applySettings({
+                  ...state.settings,
+                  enterpriseNav: !state.settings.enterpriseNav,
+                })}
+            >
+              <span class="nav-item__icon" aria-hidden="true">${icons.settings}</span>
+              <span class="nav-item__text">${t("common.enterpriseNav")}</span>
+            </button>
             <a
               class="nav-item nav-item--external"
               href="https://docs.openclaw.ai"
@@ -211,6 +226,23 @@ export function renderApp(state: AppViewState) {
             ${isChat ? renderChatControls(state) : nothing}
           </div>
         </section>
+
+        ${
+          state.onboarding && !state.onboardingBannerDismissed
+            ? html`
+                <div class="onboarding-banner" role="status">
+                  <span class="onboarding-banner__text">${t("chat.onboardingBanner")}</span>
+                  <button
+                    type="button"
+                    class="btn btn--sm onboarding-banner__dismiss"
+                    @click=${() => (state.onboardingBannerDismissed = true)}
+                  >
+                    ${t("chat.onboardingBannerDismiss")}
+                  </button>
+                </div>
+              `
+            : nothing
+        }
 
         ${
           state.tab === "overview"
@@ -347,6 +379,92 @@ export function renderApp(state: AppViewState) {
                 onRemove: (job) => removeCronJob(state, job),
                 onLoadRuns: (jobId) => loadCronRuns(state, jobId),
               })
+            : nothing
+        }
+
+        ${
+          state.tab === "consent"
+            ? state.settings.enterpriseNav
+              ? renderConsentGuardHub({
+                  loading: state.nodesLoading,
+                  nodes: state.nodes,
+                  devicesLoading: state.devicesLoading,
+                  devicesError: state.devicesError,
+                  devicesList: state.devicesList,
+                  configForm:
+                    state.configForm ??
+                    (state.configSnapshot?.config as Record<string, unknown> | null),
+                  configLoading: state.configLoading,
+                  configSaving: state.configSaving,
+                  configDirty: state.configFormDirty,
+                  configFormMode: state.configFormMode,
+                  execApprovalsLoading: state.execApprovalsLoading,
+                  execApprovalsSaving: state.execApprovalsSaving,
+                  execApprovalsDirty: state.execApprovalsDirty,
+                  execApprovalsSnapshot: state.execApprovalsSnapshot,
+                  execApprovalsForm: state.execApprovalsForm,
+                  execApprovalsSelectedAgent: state.execApprovalsSelectedAgent,
+                  execApprovalsTarget: state.execApprovalsTarget,
+                  execApprovalsTargetNodeId: state.execApprovalsTargetNodeId,
+                  onRefresh: () => loadNodes(state),
+                  onDevicesRefresh: () => loadDevices(state),
+                  onDeviceApprove: (requestId) => approveDevicePairing(state, requestId),
+                  onDeviceReject: (requestId) => rejectDevicePairing(state, requestId),
+                  onDeviceRotate: (deviceId, role, scopes) =>
+                    rotateDeviceToken(state, { deviceId, role, scopes }),
+                  onDeviceRevoke: (deviceId, role) => revokeDeviceToken(state, { deviceId, role }),
+                  onLoadConfig: () => loadConfig(state),
+                  onLoadExecApprovals: () => {
+                    const target =
+                      state.execApprovalsTarget === "node" && state.execApprovalsTargetNodeId
+                        ? { kind: "node" as const, nodeId: state.execApprovalsTargetNodeId }
+                        : { kind: "gateway" as const };
+                    return loadExecApprovals(state, target);
+                  },
+                  onBindDefault: (nodeId) => {
+                    if (nodeId) {
+                      updateConfigFormValue(state, ["tools", "exec", "node"], nodeId);
+                    } else {
+                      removeConfigFormValue(state, ["tools", "exec", "node"]);
+                    }
+                  },
+                  onBindAgent: (agentIndex, nodeId) => {
+                    const basePath = ["agents", "list", agentIndex, "tools", "exec", "node"];
+                    if (nodeId) {
+                      updateConfigFormValue(state, basePath, nodeId);
+                    } else {
+                      removeConfigFormValue(state, basePath);
+                    }
+                  },
+                  onSaveBindings: () => saveConfig(state),
+                  onExecApprovalsTargetChange: (kind, nodeId) => {
+                    state.execApprovalsTarget = kind;
+                    state.execApprovalsTargetNodeId = nodeId;
+                    state.execApprovalsSnapshot = null;
+                    state.execApprovalsForm = null;
+                    state.execApprovalsDirty = false;
+                    state.execApprovalsSelectedAgent = null;
+                  },
+                  onExecApprovalsSelectAgent: (agentId) => {
+                    state.execApprovalsSelectedAgent = agentId;
+                  },
+                  onExecApprovalsPatch: (path, value) =>
+                    updateExecApprovalsFormValue(state, path, value),
+                  onExecApprovalsRemove: (path) => removeExecApprovalsFormValue(state, path),
+                  onSaveExecApprovals: () => {
+                    const target =
+                      state.execApprovalsTarget === "node" && state.execApprovalsTargetNodeId
+                        ? { kind: "node" as const, nodeId: state.execApprovalsTargetNodeId }
+                        : { kind: "gateway" as const };
+                    return saveExecApprovals(state, target);
+                  },
+                  execApprovalQueue: state.execApprovalQueue,
+                  execApprovalBusy: state.execApprovalBusy,
+                  execApprovalError: state.execApprovalError,
+                  onExecApprovalDecision: (decision, id) =>
+                    state.handleExecApprovalDecision(decision, id),
+                })
+              : renderConsentDemo()
             : nothing
         }
 

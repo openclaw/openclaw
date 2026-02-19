@@ -25,8 +25,8 @@ title: "OpenClaw"
 > _"EXFOLIATE! EXFOLIATE!"_ — A space lobster, probably
 
 <p align="center">
-  <strong>Any OS gateway for AI agents across WhatsApp, Telegram, Discord, iMessage, and more.</strong><br />
-  Send a message, get an agent response from your pocket. Plugins add Mattermost and more.
+  <strong>AI-powered security operations platform for red teams and blue teams.</strong><br />
+  Plus: Multi-channel gateway for AI agents across WhatsApp, Telegram, Discord, iMessage, and more.
 </p>
 
 <Columns>
@@ -43,15 +43,21 @@ title: "OpenClaw"
 
 ## What is OpenClaw?
 
-OpenClaw is a **self-hosted gateway** that connects your favorite chat apps — WhatsApp, Telegram, Discord, iMessage, and more — to AI coding agents like Pi. You run a single Gateway process on your own machine (or a server), and it becomes the bridge between your messaging apps and an always-available AI assistant.
+OpenClaw is an **AI-powered security operations platform** for red teams and blue teams, plus a **self-hosted gateway** that connects your favorite chat apps — WhatsApp, Telegram, Discord, iMessage, and more — to AI coding agents like Pi.
 
-**Who is it for?** Developers and power users who want a personal AI assistant they can message from anywhere — without giving up control of their data or relying on a hosted service.
+**For Security Teams**: Automate offensive and defensive security operations — penetration testing, threat hunting, incident response, and security operations center (SOC) workflows. Integrate with your existing security tools (Metasploit, Burp Suite, Splunk, Elastic Security, and more).
+
+**For Personal Use**: Run a single Gateway process on your own machine (or a server), and it becomes the bridge between your messaging apps and an always-available AI assistant.
+
+**Who is it for?** Security professionals (red teams, blue teams, SOC analysts), developers, and power users who want AI-powered security operations or a personal AI assistant they can message from anywhere — without giving up control of their data or relying on a hosted service.
 
 **What makes it different?**
 
+- **Security-First**: Built for security professionals with offensive and defensive capabilities
 - **Self-hosted**: runs on your hardware, your rules
 - **Multi-channel**: one Gateway serves WhatsApp, Telegram, Discord, and more simultaneously
 - **Agent-native**: built for coding agents with tool use, sessions, memory, and multi-agent routing
+- **Tool Integration**: Works with your existing security stack
 - **Open source**: MIT licensed, community-driven
 
 **What do you need?** Node 22+, an API key (Anthropic recommended), and 5 minutes.
@@ -73,23 +79,29 @@ The Gateway is the single source of truth for sessions, routing, and channel con
 ## Key capabilities
 
 <Columns>
+  <Card title="Penetration Testing" href="/security/pen-testing" icon="shield">
+    Automate reconnaissance, exploit development, and post-exploitation workflows.
+  </Card>
+  <Card title="Red Team Operations" href="/security/red-team" icon="target">
+    Simulate advanced persistent threats and test security controls.
+  </Card>
+  <Card title="Blue Team Operations" href="/security/blue-team" icon="shield-check">
+    Automate incident response, threat hunting, and SOC operations.
+  </Card>
+  <Card title="Threat Intelligence" href="/cybersecurity/threat-intelligence" icon="search">
+    Track threat actors, IOCs, and campaigns with STIX/TAXII support.
+  </Card>
   <Card title="Multi-channel gateway" icon="network">
     WhatsApp, Telegram, Discord, and iMessage with a single Gateway process.
   </Card>
-  <Card title="Plugin channels" icon="plug">
-    Add Mattermost and more with extension packages.
+  <Card title="Tool Integration" icon="plug">
+    Integrate with Metasploit, Burp Suite, Splunk, Elastic Security, and more.
   </Card>
   <Card title="Multi-agent routing" icon="route">
     Isolated sessions per agent, workspace, or sender.
   </Card>
-  <Card title="Media support" icon="image">
-    Send and receive images, audio, and documents.
-  </Card>
   <Card title="Web Control UI" icon="monitor">
     Browser dashboard for chat, config, sessions, and nodes.
-  </Card>
-  <Card title="Mobile nodes" icon="smartphone">
-    Pair iOS and Android nodes with Canvas support.
   </Card>
 </Columns>
 
@@ -180,7 +192,13 @@ Example:
   <Card title="Multi-agent routing" href="/concepts/multi-agent" icon="route">
     Workspace isolation and per-agent sessions.
   </Card>
-  <Card title="Security" href="/gateway/security" icon="shield">
+  <Card title="Cyber Offense" href="/security/cyber-offense" icon="target">
+    Understanding attacker mindset and methodologies for better defense.
+  </Card>
+  <Card title="Security Operations" href="/security/pen-testing" icon="shield">
+    Penetration testing, red team, blue team, and threat intelligence.
+  </Card>
+  <Card title="Security Controls" href="/gateway/security" icon="shield-check">
     Tokens, allowlists, and safety controls.
   </Card>
   <Card title="Troubleshooting" href="/gateway/troubleshooting" icon="wrench">

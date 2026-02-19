@@ -1119,6 +1119,7 @@
                       "gateway/configuration",
                       "gateway/configuration-reference",
                       "gateway/configuration-examples",
+                      "gateway/enterprise-config",
                       "gateway/authentication",
                       "gateway/trusted-proxy-auth",
                       "gateway/health",

@@ -237,6 +237,34 @@
 }
 
 /* ===========================================
+   Onboarding banner (Mission Control / ConsentGuard)
+   =========================================== */
+
+.onboarding-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 16px;
+  margin-bottom: 16px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--secondary);
+  font-size: 13px;
+  color: var(--text);
+}
+
+.onboarding-banner__text {
+  flex: 1;
+  min-width: 0;
+}
+
+.onboarding-banner__dismiss {
+  flex-shrink: 0;
+}
+
+/* ===========================================
    Theme Toggle
    =========================================== */
 
@@ -606,7 +634,12 @@
   background: var(--panel-strong);
   color: var(--text);
   white-space: nowrap;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
   user-select: none;
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
   animation: fade-in 0.2s var(--ease-out);
 }
 
@@ -673,6 +706,12 @@
   display: grid;
   gap: 8px;
   container-type: inline-size;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
 }
 
 .list-item {
@@ -1298,6 +1337,7 @@
   100% {
     border-color: var(--border);
   }
+
   50% {
     border-color: var(--accent);
   }
@@ -1354,6 +1394,7 @@
     opacity: 0.4;
     transform: translateY(0);
   }
+
   40% {
     opacity: 1;
     transform: translateY(-3px);
@@ -1645,6 +1686,7 @@
   inset: 0;
   background: rgba(0, 0, 0, 0.8);
   backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
   display: flex;
   align-items: center;
   justify-content: center;

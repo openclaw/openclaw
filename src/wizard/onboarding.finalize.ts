@@ -29,7 +29,19 @@ import type { RuntimeEnv } from "../runtime.js";
 import { restoreTerminalState } from "../terminal/restore.js";
 import { runTui } from "../tui/tui.js";
 import { resolveUserPath } from "../utils.js";
+import {
+  formatNextStepsGuide,
+  generateNextStepsGuide,
+} from "./onboarding.guide.js";
 import { setupOnboardingShellCompletion } from "./onboarding.completion.js";
+import {
+  formatVerificationResults,
+  verifyOnboarding,
+} from "./onboarding.verify.js";
+import {
+  formatFirstUseHelp,
+  generateFirstUseHelp,
+} from "./onboarding.first-use.js";
 import type { GatewayWizardSettings, WizardFlow } from "./onboarding.types.js";
 import type { WizardPrompter } from "./prompts.js";
 
@@ -43,6 +55,15 @@ type FinalizeOnboardingOptions = {
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
 };
+
+/** Appends ?onboarding=1 (or &onboarding=1) before the hash so the Control UI shows Mission Control. */
+function appendOnboardingParam(url: string): string {
+  const hashIndex = url.indexOf("#");
+  const base = hashIndex >= 0 ? url.slice(0, hashIndex) : url;
+  const hash = hashIndex >= 0 ? url.slice(hashIndex) : "";
+  const sep = base.includes("?") ? "&" : "?";
+  return `${base}${sep}onboarding=1${hash}`;
+}
 
 export async function finalizeOnboardingWizard(
   options: FinalizeOnboardingOptions,
@@ -342,7 +363,7 @@ export async function finalizeOnboardingWizard(
     } else if (hatchChoice === "web") {
       const browserSupport = await detectBrowserOpenSupport();
       if (browserSupport.ok) {
-        controlUiOpened = await openUrl(authedUrl);
+        controlUiOpened = await openUrl(appendOnboardingParam(authedUrl));
         if (!controlUiOpened) {
           controlUiOpenHint = formatControlUiSshHint({
             port: settings.port,
@@ -392,6 +413,15 @@ export async function finalizeOnboardingWizard(
     "Security",
   );
 
+  await prompter.note(
+    [
+      "In the dashboard sidebar, use Mission Control for Governance, Observability, and ConsentGuard.",
+      "ConsentGuard: approve or deny exec/tool requests, manage allowlists, and view the gate audit.",
+      "Docs: https://docs.openclaw.ai/web/control-ui",
+    ].join("\n"),
+    "Dashboard: Mission Control",
+  );
+
   await setupOnboardingShellCompletion({ flow, prompter });
 
   const shouldOpenControlUi =
@@ -402,7 +432,7 @@ export async function finalizeOnboardingWizard(
   if (shouldOpenControlUi) {
     const browserSupport = await detectBrowserOpenSupport();
     if (browserSupport.ok) {
-      controlUiOpened = await openUrl(authedUrl);
+      controlUiOpened = await openUrl(appendOnboardingParam(authedUrl));
       if (!controlUiOpened) {
         controlUiOpenHint = formatControlUiSshHint({
           port: settings.port,
@@ -459,6 +489,80 @@ export async function finalizeOnboardingWizard(
         ].join("\n"),
     "Web search (optional)",
   );
+
+  // Run verification suite
+  if (!opts.skipHealth && !opts.skipVerify) {
+    const verification = await verifyOnboarding(nextConfig, {
+      gatewayToken: settings.authMode === "token" ? settings.gatewayToken : undefined,
+      skipGateway: !gatewayProbe.ok,
+      skipChannels: opts.skipChannels ?? opts.skipProviders ?? false,
+      skipSecurity: opts.skipSecurity ?? false,
+    });
+
+    await prompter.note(formatVerificationResults(verification), "Verification");
+
+    // Offer security audit
+    if (nextConfig.security && !opts.skipSecurity) {
+      const runAudit = await prompter.confirm(
+        "Run security audit now? (recommended)",
+        { defaultValue: true },
+      );
+      if (runAudit) {
+        try {
+          const { runSecurityAudit } = await import("../security/audit.js");
+          const auditResult = await runSecurityAudit({
+            config: nextConfig,
+            deep: true,
+          });
+
+          const totalIssues = auditResult.summary.critical + auditResult.summary.warn + auditResult.summary.info;
+          if (totalIssues > 0) {
+            await prompter.note(
+              `Security audit found ${totalIssues} issue(s): ${auditResult.summary.critical} critical, ${auditResult.summary.warn} warnings, ${auditResult.summary.info} info`,
+              "Security Audit",
+            );
+
+            const applyFixes = await prompter.confirm(
+              "Apply automatic fixes? (safe changes only)",
+              { defaultValue: true },
+            );
+            if (applyFixes) {
+              const fixResult = await runSecurityAudit({
+                deep: true,
+                fix: true,
+              });
+              await prompter.note(
+                `Applied fixes: ${fixResult.fix?.actions?.length ?? 0} change(s) made`,
+                "Security Audit",
+              );
+            }
+          } else {
+            await prompter.note("Security audit passed - no issues found", "Security Audit");
+          }
+        } catch (error) {
+          await prompter.note(
+            `Security audit failed: ${error instanceof Error ? error.message : String(error)}`,
+            "Security Audit",
+          );
+        }
+      }
+    }
+
+    // Generate personalized next steps guide
+    const guide = generateNextStepsGuide(
+      nextConfig,
+      verification,
+      flow,
+      settings.authMode === "token" ? settings.gatewayToken : undefined,
+    );
+    await prompter.note(formatNextStepsGuide(guide), guide.title);
+
+    // Show first-use help
+    const firstUseHelp = generateFirstUseHelp(nextConfig);
+    await prompter.note(formatFirstUseHelp(firstUseHelp), "Getting Started");
+  } else if (opts.skipVerify) {
+    await prompter.note("Verification skipped.", "Verification");
+  }
 
   await prompter.note(
     'What now: https://openclaw.ai/showcase ("What People Are Building").',

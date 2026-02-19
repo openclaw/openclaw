@@ -1,0 +1,52 @@
+// Enterprise configuration example for OpenClaw
+// Copy and adapt; merge into ~/.openclaw/openclaw.json
+// See https://docs.openclaw.ai/gateway/enterprise-config
+
+{
+  gateway: {
+    port: 18789,
+    bind: "lan",
+    auth: { mode: "token" },
+    trustedProxies: ["127.0.0.1"],
+    tailscale: {
+      mode: "serve",
+      hostname: "openclaw-enterprise-gateway",
+    },
+    consentGate: {
+      enabled: true,
+      observeOnly: false,
+      storagePath: "~/.openclaw/consentgate",
+      trustTierDefault: "T0",
+      trustTierMapping: { "telegram:": "T0", "discord:": "T1" },
+      gatedTools: [
+        "exec",
+        "write",
+        "gateway",
+        "sessions_spawn",
+        "sessions_send",
+        "whatsapp_login",
+        "skills.install",
+        "system.run",
+      ],
+      provider: "native",
+      audit: {
+        enabled: true,
+        destination: "stdout",
+        redactSecrets: true,
+      },
+    },
+  },
+  channels: {
+    msteams: { enabled: true },
+    googlechat: { enabled: true },
+    slack: { enabled: true },
+    mattermost: { enabled: true },
+    feishu: { enabled: true, domain: "lark" },
+  },
+  logging: {
+    level: "info",
+    consoleStyle: "json",
+    file: "./logs/openclaw-audit.log",
+    redactSensitive: "tools",
+  },
+}

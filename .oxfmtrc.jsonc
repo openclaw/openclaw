@@ -9,6 +9,7 @@
   "tabWidth": 2,
   "useTabs": false,
   "ignorePatterns": [
+    ".tmp-*/",
     "apps/",
     "assets/",
     "docker-compose.yml",

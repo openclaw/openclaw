@@ -45,6 +45,7 @@ const GROUP_LABELS: Record<string, string> = {
   discovery: "Discovery",
   presence: "Presence",
   voicewake: "Voice Wake",
+  security: "Security",
 };
 
 const GROUP_ORDER: Record<string, number> = {
@@ -72,6 +73,7 @@ const GROUP_ORDER: Record<string, number> = {
   discovery: 210,
   presence: 220,
   voicewake: 230,
+  security: 240,
   logging: 900,
 };
 

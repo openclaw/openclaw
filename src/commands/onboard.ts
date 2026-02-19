@@ -4,6 +4,10 @@ import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
+import {
+  formatPreflightReport,
+  runPreflightChecks,
+} from "../wizard/onboarding.preflight.js";
 import { isDeprecatedAuthChoice, normalizeLegacyOnboardAuthChoice } from "./auth-choice-legacy.js";
 import { DEFAULT_WORKSPACE, handleReset } from "./onboard-helpers.js";
 import { runInteractiveOnboarding } from "./onboard-interactive.js";
@@ -65,6 +69,31 @@ export async function onboardCommand(opts: OnboardOptions, runtime: RuntimeEnv =
         "Guide: https://docs.openclaw.ai/windows",
       ].join("\n"),
     );
+  }
+
+  // Run preflight checks before starting wizard
+  if (!normalizedOpts.skipPreflight) {
+    const preflightReport = await runPreflightChecks({
+      skipNetwork: normalizedOpts.skipPreflightNetwork,
+      skipPort: normalizedOpts.skipPreflightPort,
+    });
+
+    if (!preflightReport.allPassed) {
+      runtime.log(formatPreflightReport(preflightReport, runtime));
+      const failedRequired = preflightReport.checks.filter(
+        (c) => c.required && !c.result.ok,
+      );
+      if (failedRequired.length > 0) {
+        runtime.error(
+          "Preflight checks failed. Please fix the issues above before continuing.",
+        );
+        runtime.exit(1);
+        return;
+      }
+    } else if (preflightReport.checks.some((c) => !c.result.ok)) {
+      // Some optional checks failed, but we can continue
+      runtime.log(formatPreflightReport(preflightReport, runtime));
+    }
   }
 
   if (normalizedOpts.nonInteractive) {

@@ -40,6 +40,8 @@ export type AppViewState = {
   password: string;
   tab: Tab;
   onboarding: boolean;
+  /** Set when user dismisses the onboarding Mission Control banner (session-only). */
+  onboardingBannerDismissed: boolean;
   basePath: string;
   connected: boolean;
   theme: ThemeMode;
@@ -242,7 +244,10 @@ export type AppViewState = {
   handleNostrProfileSave: () => Promise<void>;
   handleNostrProfileImport: () => Promise<void>;
   handleNostrProfileToggleAdvanced: () => void;
-  handleExecApprovalDecision: (decision: "allow-once" | "allow-always" | "deny") => Promise<void>;
+  handleExecApprovalDecision: (
+    decision: "allow-once" | "allow-always" | "deny",
+    id?: string,
+  ) => Promise<void>;
   handleGatewayUrlConfirm: () => void;
   handleGatewayUrlCancel: () => void;
   handleConfigLoad: () => Promise<void>;

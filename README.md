@@ -18,10 +18,13 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge" alt="MIT License"></a>
 </p>
 
-**OpenClaw** is a _personal AI assistant_ you run on your own devices.
-It answers you on the channels you already use (WhatsApp, Telegram, Slack, Discord, Google Chat, Signal, iMessage, Microsoft Teams, WebChat), plus extension channels like BlueBubbles, Matrix, Zalo, and Zalo Personal. It can speak and listen on macOS/iOS/Android, and can render a live Canvas you control. The Gateway is just the control plane — the product is the assistant.
+**OpenClaw** is an **AI-powered security operations platform** for red teams and blue teams, plus a _personal AI assistant_ you run on your own devices.
 
-If you want a personal, single-user assistant that feels local, fast, and always-on, this is it.
+**For Security Teams**: Automate offensive and defensive security operations — penetration testing, threat hunting, incident response, and security operations center (SOC) workflows. Integrate with your existing security tools (Metasploit, Burp Suite, Splunk, Elastic Security, and more).
+
+**For Personal Use**: Answers you on the channels you already use (WhatsApp, Telegram, Slack, Discord, Google Chat, Signal, iMessage, Microsoft Teams, WebChat), plus extension channels like BlueBubbles, Matrix, Zalo, and Zalo Personal. It can speak and listen on macOS/iOS/Android, and can render a live Canvas you control. The Gateway is just the control plane — the product is the assistant.
+
+Whether you're running red team exercises, automating blue team responses, or managing a personal AI assistant, OpenClaw provides a unified platform that's local, fast, and always-on.
 
 [Website](https://openclaw.ai) · [Docs](https://docs.openclaw.ai) · [Vision](VISION.md) · [DeepWiki](https://deepwiki.com/openclaw/openclaw) · [Getting Started](https://docs.openclaw.ai/start/getting-started) · [Updating](https://docs.openclaw.ai/install/updating) · [Showcase](https://docs.openclaw.ai/start/showcase) · [FAQ](https://docs.openclaw.ai/start/faq) · [Wizard](https://docs.openclaw.ai/start/wizard) · [Nix](https://github.com/openclaw/nix-openclaw) · [Docker](https://docs.openclaw.ai/install/docker) · [Discord](https://discord.gg/clawd)
 
@@ -74,6 +77,32 @@ openclaw agent --message "Ship checklist" --thinking high
 ```
 
 Upgrading? [Updating guide](https://docs.openclaw.ai/install/updating) (and run `openclaw doctor`).
+
+## Security Operations & Pen Testing
+
+OpenClaw provides comprehensive security operations capabilities for both offensive and defensive security teams:
+
+**Red Team / Offensive Security:**
+- Automated reconnaissance and vulnerability scanning
+- Exploit development and payload generation
+- Penetration testing workflow automation
+- Integration with Metasploit, Burp Suite, Nmap, and more
+
+**Blue Team / Defensive Security:**
+- Threat intelligence tracking and IOC management
+- Incident response automation
+- SIEM integration (Splunk, Elastic Security, Azure Sentinel)
+- Threat hunting workflows
+- Security operations center (SOC) automation
+
+**Security Features:**
+- Threat actor tracking (Volt Typhoon, Scattered Spider, APT29, etc.)
+- Indicator of Compromise (IOC) management and correlation
+- Vulnerability management and patch tracking
+- Information sharing (STIX/TAXII)
+- Security audit tools (`openclaw security audit`)
+
+See: [Security Documentation](https://docs.openclaw.ai/security) · [Pen Testing Guide](https://docs.openclaw.ai/security/pen-testing) · [Threat Intelligence](https://docs.openclaw.ai/cybersecurity/threat-intelligence)
 
 ## Development channels
 

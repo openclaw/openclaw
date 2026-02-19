@@ -138,8 +138,14 @@ export type OnboardOptions = {
   /** @deprecated Legacy alias for `skipChannels`. */
   skipProviders?: boolean;
   skipSkills?: boolean;
+  skipSecurity?: boolean;
+  skipConfigure?: boolean;
   skipHealth?: boolean;
   skipUi?: boolean;
+  skipVerify?: boolean;
+  skipPreflight?: boolean;
+  skipPreflightNetwork?: boolean;
+  skipPreflightPort?: boolean;
   nodeManager?: NodeManagerChoice;
   remoteUrl?: string;
   remoteToken?: string;

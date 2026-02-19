@@ -116,6 +116,7 @@ export class OpenClawApp extends LitElement {
   @state() password = "";
   @state() tab: Tab = "chat";
   @state() onboarding = resolveOnboardingMode();
+  @state() onboardingBannerDismissed = false;
   @state() connected = false;
   @state() theme: ThemeMode = this.settings.theme ?? "system";
   @state() themeResolved: ResolvedTheme = "dark";
@@ -507,8 +508,8 @@ export class OpenClawApp extends LitElement {
     handleNostrProfileToggleAdvancedInternal(this);
   }
 
-  async handleExecApprovalDecision(decision: "allow-once" | "allow-always" | "deny") {
-    const active = this.execApprovalQueue[0];
+  async handleExecApprovalDecision(decision: "allow-once" | "allow-always" | "deny", id?: string) {
+    const active = id ? this.execApprovalQueue.find((e) => e.id === id) : this.execApprovalQueue[0];
     if (!active || !this.client || this.execApprovalBusy) {
       return;
     }

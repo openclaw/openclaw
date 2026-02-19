@@ -13,6 +13,10 @@ import type {
 } from "./types.gateway.js";
 import type { HooksConfig } from "./types.hooks.js";
 import type { MemoryConfig } from "./types.memory.js";
+import type { ContentConfig } from "./types.content.js";
+import type { AutonomousEnterpriseConfig } from "./types.enterprise.js";
+import type { CybersecurityConfig } from "./types.cybersecurity.js";
+import type { SecurityConfig } from "./types.security.js";
 import type {
   AudioConfig,
   BroadcastConfig,
@@ -97,6 +101,10 @@ export type OpenClawConfig = {
   talk?: TalkConfig;
   gateway?: GatewayConfig;
   memory?: MemoryConfig;
+  content?: ContentConfig;
+  enterprise?: AutonomousEnterpriseConfig;
+  cybersecurity?: CybersecurityConfig;
+  security?: SecurityConfig;
 };
 
 export type ConfigValidationIssue = {

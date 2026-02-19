@@ -244,6 +244,40 @@ describe("gateway auth", () => {
     expect(limiter.check).toHaveBeenCalledWith(undefined, "custom-scope");
     expect(limiter.recordFailure).toHaveBeenCalledWith(undefined, "custom-scope");
   });
+
+  it("allows loopback connections when auth mode is none (for onboarding)", async () => {
+    const limiter = createLimiterSpy();
+    const res = await authorizeGatewayConnect({
+      auth: { mode: "none", allowTailscale: false },
+      connectAuth: null,
+      req: {
+        socket: { remoteAddress: "127.0.0.1" },
+        headers: { host: "localhost" },
+      } as never,
+      rateLimiter: limiter,
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.method).toBe("none");
+    expect(limiter.reset).toHaveBeenCalled();
+  });
+
+  it("rejects non-loopback connections when auth mode is none", async () => {
+    const limiter = createLimiterSpy();
+    const res = await authorizeGatewayConnect({
+      auth: { mode: "none", allowTailscale: false },
+      connectAuth: null,
+      req: {
+        socket: { remoteAddress: "192.168.1.100" },
+        headers: { host: "gateway.local" },
+      } as never,
+      rateLimiter: limiter,
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("unauthorized");
+    expect(limiter.recordFailure).toHaveBeenCalled();
+  });
 });
 
 describe("trusted-proxy auth", () => {

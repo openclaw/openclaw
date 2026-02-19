@@ -199,6 +199,23 @@ export async function configureGatewayForOnboarding(
         },
       },
     };
+    // Security note: Token auth configured
+    if (flow === "advanced") {
+      await prompter.note(
+        [
+          "Gateway authentication configured: Token",
+          "",
+          "Security:",
+          "  • Token stored in config: ~/.openclaw/openclaw.json",
+          "  • Keep your config file secure (chmod 600)",
+          "  • Don't share your token publicly",
+          "  • Regenerate if compromised: openclaw doctor --generate-gateway-token",
+          "",
+          "For production: Consider using password auth or rotating tokens regularly.",
+        ].join("\n"),
+        "Gateway Auth",
+      );
+    }
   }
 
   nextConfig = {

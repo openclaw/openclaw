@@ -124,9 +124,16 @@ export type SessionMaintenanceConfig = {
   rotateBytes?: number | string;
 };
 
+export type LoggingFileConfig = {
+  path: string;
+  /** Enable log file rotation (when supported by the logging layer). */
+  rotate?: boolean;
+};
+
 export type LoggingConfig = {
   level?: "silent" | "fatal" | "error" | "warn" | "info" | "debug" | "trace";
-  file?: string;
+  /** File path (string) or object with path and optional rotation. */
+  file?: string | LoggingFileConfig;
   consoleLevel?: "silent" | "fatal" | "error" | "warn" | "info" | "debug" | "trace";
   consoleStyle?: "pretty" | "compact" | "json";
   /** Redact sensitive tokens in tool summaries. Default: "tools". */

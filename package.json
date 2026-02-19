@@ -1,8 +1,8 @@
 {
   "name": "openclaw",
   "version": "2026.2.18",
-  "description": "Multi-channel AI gateway with extensible messaging integrations",
-  "keywords": [],
+  "description": "AI-powered security operations platform for red teams and blue teams, plus multi-channel AI gateway with extensible messaging integrations",
+  "keywords": ["security", "penetration-testing", "red-team", "blue-team", "threat-intelligence", "incident-response", "siem", "ai-agent", "gateway", "messaging"],
   "homepage": "https://github.com/openclaw/openclaw#readme",
   "bugs": {
     "url": "https://github.com/openclaw/openclaw/issues"

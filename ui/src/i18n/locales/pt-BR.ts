@@ -12,6 +12,7 @@ export const pt_BR: TranslationMap = {
     na: "n/a",
     docs: "Docs",
     resources: "Recursos",
+    enterpriseNav: "Mission Control",
   },
   nav: {
     chat: "Chat",
@@ -20,6 +21,12 @@ export const pt_BR: TranslationMap = {
     settings: "Configurações",
     expand: "Expandir barra lateral",
     collapse: "Recolher barra lateral",
+    dashboard: "Dashboard",
+    consentguard: "ConsentGuard",
+    fleet: "Agents & Fleet",
+    integrations: "Integrations",
+    observability: "Observability",
+    billing: "Usage & Billing",
   },
   tabs: {
     agents: "Agentes",
@@ -29,6 +36,7 @@ export const pt_BR: TranslationMap = {
     sessions: "Sessões",
     usage: "Uso",
     cron: "Tarefas Cron",
+    consent: "ConsentGuard PoC",
     skills: "Habilidades",
     nodes: "Nós",
     chat: "Chat",
@@ -44,6 +52,7 @@ export const pt_BR: TranslationMap = {
     sessions: "Inspecionar sessões ativas e ajustar padrões por sessão.",
     usage: "Monitorar uso e custos da API.",
     cron: "Agendar despertares e execuções recorrentes de agentes.",
+    consent: "Simular execução de ferramentas com consentimento, binding de contexto e contenção.",
     skills: "Gerenciar disponibilidade de habilidades e injeção de chaves de API.",
     nodes: "Dispositivos pareados, capacidades e exposição de comandos.",
     chat: "Sessão de chat direta com o gateway para intervenções rápidas.",
@@ -108,6 +117,9 @@ export const pt_BR: TranslationMap = {
     thinkingToggle: "Alternar saída de pensamento/trabalho do assistente",
     focusToggle: "Alternar modo de foco (ocultar barra lateral + cabeçalho da página)",
     onboardingDisabled: "Desativado durante a integração",
+    onboardingBanner:
+      "Você está no Mission Control. Use o ConsentGuard para aprovações, listas de permissão e auditoria.",
+    onboardingBannerDismiss: "Dispensar",
   },
   languages: {
     en: "English",

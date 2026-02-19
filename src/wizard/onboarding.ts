@@ -15,6 +15,7 @@ import {
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
+import { withErrorRecovery } from "./onboarding.recovery.js";
 import type { QuickstartGatewayDefaults, WizardFlow } from "./onboarding.types.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
 
@@ -412,21 +413,73 @@ export async function runOnboardingWizard(
   if (opts.skipChannels ?? opts.skipProviders) {
     await prompter.note("Skipping channel setup.", "Channels");
   } else {
-    const { listChannelPlugins } = await import("../channels/plugins/index.js");
-    const { setupChannels } = await import("../commands/onboard-channels.js");
-    const quickstartAllowFromChannels =
-      flow === "quickstart"
-        ? listChannelPlugins()
-            .filter((plugin) => plugin.meta.quickstartAllowFrom)
-            .map((plugin) => plugin.id)
-        : [];
-    nextConfig = await setupChannels(nextConfig, runtime, prompter, {
-      allowSignalInstall: true,
-      forceAllowFromChannels: quickstartAllowFromChannels,
-      skipDmPolicyPrompt: flow === "quickstart",
-      skipConfirm: flow === "quickstart",
-      quickstartDefaults: flow === "quickstart",
-    });
+    await withErrorRecovery(
+      "Channel setup",
+      async () => {
+        const { listChannelPlugins } = await import("../channels/plugins/index.js");
+        const { setupChannels } = await import("../commands/onboard-channels.js");
+        const quickstartAllowFromChannels =
+          flow === "quickstart"
+            ? listChannelPlugins()
+                .filter((plugin) => plugin.meta.quickstartAllowFrom)
+                .map((plugin) => plugin.id)
+            : [];
+        nextConfig = await setupChannels(nextConfig, runtime, prompter, {
+          allowSignalInstall: true,
+          forceAllowFromChannels: quickstartAllowFromChannels,
+          skipDmPolicyPrompt: flow === "quickstart",
+          skipConfirm: flow === "quickstart",
+          quickstartDefaults: flow === "quickstart",
+        });
+      },
+      prompter,
+      runtime,
+    );
+
+    // Security: Ensure pairing/allowlist is configured for channels
+    if (!opts.skipSecurity && !(opts.skipChannels ?? opts.skipProviders)) {
+      const channels = nextConfig.channels ?? {};
+      const configuredChannels = Object.keys(channels).filter(
+        (id) => channels[id] && typeof channels[id] === "object",
+      );
+      if (configuredChannels.length > 0) {
+        await prompter.note(
+          [
+            "Channel security: Pairing and allowlists",
+            "",
+            "For secure channel access, configure:",
+            "  • Pairing: Unknown DMs require a pairing code (recommended)",
+            "  • Allowlist: Only specific users can DM your agent",
+            "  • Open: Anyone can DM (not recommended for production)",
+            "",
+            "Default: Pairing mode (unknown DMs get a pairing code).",
+            `Approve pairings: ${formatCliCommand("openclaw pairing approve <channel> <code>")}`,
+            "",
+            "You can configure this now or later via:",
+            `  ${formatCliCommand("openclaw configure --section channels")}`,
+            "",
+            "Docs: https://docs.openclaw.ai/channels/pairing",
+          ].join("\n"),
+          "Channel Security",
+        );
+
+        if (flow === "advanced") {
+          const configurePairing = await prompter.confirm({
+            message: "Configure channel pairing/allowlist settings now?",
+            initialValue: true,
+          });
+          if (configurePairing) {
+            const { setupChannels } = await import("../commands/onboard-channels.js");
+            nextConfig = await setupChannels(nextConfig, runtime, prompter, {
+              allowSignalInstall: false,
+              skipDmPolicyPrompt: false,
+              skipConfirm: false,
+              allowDisable: true,
+            });
+          }
+        }
+      }
+    }
   }
 
   await writeConfigFile(nextConfig);
@@ -439,13 +492,69 @@ export async function runOnboardingWizard(
   if (opts.skipSkills) {
     await prompter.note("Skipping skills setup.", "Skills");
   } else {
-    const { setupSkills } = await import("../commands/onboard-skills.js");
-    nextConfig = await setupSkills(nextConfig, workspaceDir, runtime, prompter);
+    await withErrorRecovery(
+      "Skills setup",
+      async () => {
+        const { setupSkills } = await import("../commands/onboard-skills.js");
+        nextConfig = await setupSkills(nextConfig, workspaceDir, runtime, prompter);
+      },
+      prompter,
+      runtime,
+    );
   }
 
   // Setup hooks (session memory on /new)
-  const { setupInternalHooks } = await import("../commands/onboard-hooks.js");
-  nextConfig = await setupInternalHooks(nextConfig, runtime, prompter);
+  await withErrorRecovery(
+    "Hooks setup",
+    async () => {
+      const { setupInternalHooks } = await import("../commands/onboard-hooks.js");
+      nextConfig = await setupInternalHooks(nextConfig, runtime, prompter);
+    },
+    prompter,
+    runtime,
+  );
+
+  // Setup security features
+  if (!opts.skipSecurity) {
+    await withErrorRecovery(
+      "Security setup",
+      async () => {
+        const { setupSecurityInteractive } = await import("../commands/onboard-security.js");
+        nextConfig = await setupSecurityInteractive(nextConfig, runtime, prompter);
+      },
+      prompter,
+      runtime,
+    );
+  } else {
+    await prompter.note("Skipping security setup.", "Security");
+  }
+
+  // Optional configuration step - allow users to configure additional settings
+  if (!opts.skipConfigure) {
+    await withErrorRecovery(
+      "Configuration",
+      async () => {
+        const configureMore = await prompter.confirm({
+          message: "Configure additional settings? (workspace, model, web tools, etc.)",
+          initialValue: flow === "advanced",
+        });
+        if (configureMore) {
+          const { runOnboardingConfiguration } = await import("./onboarding.config.js");
+          nextConfig = await runOnboardingConfiguration({
+            config: nextConfig,
+            workspaceDir,
+            prompter,
+            runtime,
+            flow,
+          });
+        }
+      },
+      prompter,
+      runtime,
+    );
+  } else {
+    await prompter.note("Skipping configuration step.", "Configuration");
+  }
 
   nextConfig = onboardHelpers.applyWizardMetadata(nextConfig, { command: "onboard", mode });
   await writeConfigFile(nextConfig);

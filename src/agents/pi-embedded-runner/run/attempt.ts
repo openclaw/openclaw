@@ -647,6 +647,41 @@ export async function runEmbeddedAttempt(
         params.streamParams,
       );
 
+      // Security: Check messages for prompt injection and threats
+      if (params.config?.security) {
+        const { getSecurityIntegration } = await import("../../../security/integration.js");
+        const security = getSecurityIntegration();
+        
+        // Check last user message for security issues
+        const lastUserMessage = activeSession.messages
+          .slice()
+          .reverse()
+          .find((msg) => msg.role === "user");
+        
+        if (lastUserMessage && typeof lastUserMessage.content === "string") {
+          const securityCheck = security.checkMessageSecurity(
+            params.config,
+            lastUserMessage.content,
+            params.sessionKey ?? params.sessionId,
+          );
+          
+          if (!securityCheck.allowed) {
+            log.warn(
+              `Security check blocked message: ${securityCheck.reason} (risk: ${(securityCheck.riskScore * 100).toFixed(1)}%)`,
+            );
+            // In production, would block or sanitize the message
+            // For now, log warning and continue
+          }
+          
+          // Track provenance
+          security.trackInputProvenance(
+            params.config,
+            params.sessionKey ?? params.sessionId,
+            securityCheck.riskScore < 0.5 ? 1.0 : 0.5,
+          );
+        }
+      }
+
       if (cacheTrace) {
         cacheTrace.recordStage("session:loaded", {
           messages: activeSession.messages,

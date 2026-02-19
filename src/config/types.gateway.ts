@@ -139,6 +139,8 @@ export type GatewayTailscaleConfig = {
   mode?: GatewayTailscaleMode;
   /** Reset serve/funnel configuration on shutdown. */
   resetOnExit?: boolean;
+  /** Optional hostname for serve/funnel (e.g. openclaw-enterprise-gateway). */
+  hostname?: string;
 };
 
 export type GatewayRemoteConfig = {
@@ -276,6 +278,49 @@ export type GatewayToolsConfig = {
   allow?: string[];
 };
 
+/**
+ * ConsentGate: consent-gated authorization for high-risk tool execution.
+ * When enabled, gated tools require a valid consent token before execution.
+ */
+export type ConsentGateConfig = {
+  /** Enable ConsentGate (default: false). When false, no consent checks run. */
+  enabled?: boolean;
+  /** Tool names that require consent (e.g. exec, write, gateway, sessions_spawn, sessions_send, whatsapp_login). */
+  gatedTools?: string[];
+  /** When true, log/write WAL only; do not block execution (default: true for safe rollout). */
+  observeOnly?: boolean;
+  /** Directory for token state and WAL (default: ~/.openclaw/consentgate or under state dir). */
+  storagePath?: string;
+  /** Default trust tier when no mapping matches (default: T0). */
+  trustTierDefault?: string;
+  /** Map session key prefix or exact key to trust tier (e.g. { "telegram:": "T0", "discord:": "T1" }). Longest prefix match. */
+  trustTierMapping?: Record<string, string>;
+  /** Tier–tool matrix: tier -> list of allowed tool names. If set, issue/consume denied when tool not in list for tier. */
+  tierToolMatrix?: Record<string, string[]>;
+  /** Sliding-window rate limit: max (issue+consume) ops per session per window. */
+  rateLimit?: { maxOpsPerWindow: number; windowMs: number };
+  /** Anomaly-based quarantine: weights per reason code, threshold, and optional cascade revoke. */
+  anomaly?: {
+    /** Reason code -> weight (e.g. { "CONSENT_CONTEXT_MISMATCH": 0.2 }). */
+    weightsByReason?: Record<string, number>;
+    /** Auto-quarantine when session anomaly score >= this (default: 1). */
+    quarantineThreshold?: number;
+    /** When auto-quarantining, revoke all issued tokens for that session (default: true). */
+    cascadeRevokeOnQuarantine?: boolean;
+  };
+  /** Consent decision engine: native in-process (default) or external service (future). */
+  provider?: "native" | "external";
+  /** Enterprise audit: emit consent events to a destination for SIEM/compliance. */
+  audit?: {
+    /** Enable audit stream (default: false). */
+    enabled?: boolean;
+    /** Where to write: "stdout" or a file path. */
+    destination?: string;
+    /** Redact secrets from audit output (default: true when audit enabled). */
+    redactSecrets?: boolean;
+  };
+};
+
 export type GatewayConfig = {
   /** Single multiplexed port for Gateway WS + HTTP (default: 18789). */
   port?: number;
@@ -312,6 +357,8 @@ export type GatewayConfig = {
   trustedProxies?: string[];
   /** Tool access restrictions for HTTP /tools/invoke endpoint. */
   tools?: GatewayToolsConfig;
+  /** ConsentGate: consent-gated authorization for high-risk tools. */
+  consentGate?: ConsentGateConfig;
   /**
    * Channel health monitor interval in minutes.
    * Periodically checks channel health and restarts unhealthy channels.

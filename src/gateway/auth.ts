@@ -424,6 +424,13 @@ export async function authorizeGatewayConnect(params: {
     return { ok: true, method: "password" };
   }
 
+  // Allow unauthenticated loopback connections when auth mode is "none"
+  // This enables onboarding to connect before auth is configured
+  if (auth.mode === "none" && localDirect) {
+    limiter?.reset(ip, rateLimitScope);
+    return { ok: true, method: "none" };
+  }
+
   limiter?.recordFailure(ip, rateLimitScope);
   return { ok: false, reason: "unauthorized" };
 }

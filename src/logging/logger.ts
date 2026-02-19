@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { Logger as TsLogger } from "tslog";
+import { getLoggingFilePath } from "../config/resolve-logging.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { readLoggingConfig } from "./config.js";
@@ -66,7 +67,7 @@ function resolveSettings(): ResolvedSettings {
   const defaultLevel =
     process.env.VITEST === "true" && process.env.OPENCLAW_TEST_FILE_LOG !== "1" ? "silent" : "info";
   const level = normalizeLogLevel(cfg?.level, defaultLevel);
-  const file = cfg?.file ?? defaultRollingPathForToday();
+  const file = getLoggingFilePath(cfg) || defaultRollingPathForToday();
   return { level, file };
 }
 

@@ -77,6 +77,14 @@ export async function runNonInteractiveOnboardingLocal(params: {
 
   nextConfig = applyNonInteractiveSkillsConfig({ nextConfig, opts, runtime });
 
+  // Setup security features
+  if (!opts.skipSecurity) {
+    const { setupSecurityNonInteractive } = await import("../onboard-security.js");
+    nextConfig = await setupSecurityNonInteractive(nextConfig, runtime, {
+      securityLevel: "standard",
+    });
+  }
+
   nextConfig = applyWizardMetadata(nextConfig, { command: "onboard", mode });
   await writeConfigFile(nextConfig);
   logConfigUpdated(runtime);

@@ -14,6 +14,8 @@ export type UiSettings = {
   splitRatio: number; // Sidebar split ratio (0.4 to 0.7, default 0.6)
   navCollapsed: boolean; // Collapsible sidebar state
   navGroupsCollapsed: Record<string, boolean>; // Which nav groups are collapsed
+  /** When true, show Enterprise "Mission Control" sidebar (Dashboard, ConsentGuard, Fleet, etc.). */
+  enterpriseNav: boolean;
   locale?: string;
 };
 
@@ -34,6 +36,7 @@ export function loadSettings(): UiSettings {
     splitRatio: 0.6,
     navCollapsed: false,
     navGroupsCollapsed: {},
+    enterpriseNav: false,
   };
 
   try {
@@ -79,6 +82,8 @@ export function loadSettings(): UiSettings {
         typeof parsed.navGroupsCollapsed === "object" && parsed.navGroupsCollapsed !== null
           ? parsed.navGroupsCollapsed
           : defaults.navGroupsCollapsed,
+      enterpriseNav:
+        typeof parsed.enterpriseNav === "boolean" ? parsed.enterpriseNav : defaults.enterpriseNav,
       locale: isSupportedLocale(parsed.locale) ? parsed.locale : undefined,
     };
   } catch {

@@ -180,7 +180,12 @@ export const OpenClawSchema = z
             z.literal("trace"),
           ])
           .optional(),
-        file: z.string().optional(),
+        file: z
+          .union([
+            z.string(),
+            z.object({ path: z.string(), rotate: z.boolean().optional() }).strict(),
+          ])
+          .optional(),
         consoleLevel: z
           .union([
             z.literal("silent"),
@@ -461,6 +466,7 @@ export const OpenClawSchema = z
           .object({
             mode: z.union([z.literal("off"), z.literal("serve"), z.literal("funnel")]).optional(),
             resetOnExit: z.boolean().optional(),
+            hostname: z.string().optional(),
           })
           .strict()
           .optional(),
@@ -570,6 +576,42 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        consentGate: z
+          .object({
+            enabled: z.boolean().optional(),
+            gatedTools: z.array(z.string()).optional(),
+            observeOnly: z.boolean().optional(),
+            storagePath: z.string().optional(),
+            trustTierDefault: z.string().optional(),
+            trustTierMapping: z.record(z.string(), z.string()).optional(),
+            tierToolMatrix: z.record(z.string(), z.array(z.string())).optional(),
+            rateLimit: z
+              .object({
+                maxOpsPerWindow: z.number().int().min(1),
+                windowMs: z.number().int().min(1),
+              })
+              .strict()
+              .optional(),
+            anomaly: z
+              .object({
+                weightsByReason: z.record(z.string(), z.number()).optional(),
+                quarantineThreshold: z.number().min(0).optional(),
+                cascadeRevokeOnQuarantine: z.boolean().optional(),
+              })
+              .strict()
+              .optional(),
+            provider: z.union([z.literal("native"), z.literal("external")]).optional(),
+            audit: z
+              .object({
+                enabled: z.boolean().optional(),
+                destination: z.string().optional(),
+                redactSecrets: z.boolean().optional(),
+              })
+              .strict()
+              .optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),
@@ -663,6 +705,411 @@ export const OpenClawSchema = z
               })
               .strict(),
           )
+          .optional(),
+      })
+      .strict()
+      .optional(),
+    security: z
+      .object({
+        pentest: z
+          .object({
+            enabled: z.boolean().optional(),
+            workspace: z.string().optional(),
+            tools: z.array(z.string()).optional(),
+          })
+          .strict()
+          .optional(),
+        defense: z
+          .object({
+            enabled: z.boolean().optional(),
+            workspace: z.string().optional(),
+            siem: z
+              .object({
+                provider: z
+                  .union([
+                    z.literal("splunk"),
+                    z.literal("elastic"),
+                    z.literal("sentinel"),
+                    z.literal("crowdstrike"),
+                  ])
+                  .optional(),
+                endpoint: z.string().optional(),
+                apiKey: z.string().optional().register(sensitive),
+                index: z.string().optional(),
+              })
+              .strict()
+              .optional(),
+            threatHunting: z
+              .object({
+                enabled: z.boolean().optional(),
+                schedules: z.array(z.string()).optional(),
+              })
+              .strict()
+              .optional(),
+          })
+          .strict()
+          .optional(),
+        soc: z
+          .object({
+            enabled: z.boolean().optional(),
+            alerting: z
+              .object({
+                enabled: z.boolean().optional(),
+                channels: z.array(z.string()).optional(),
+              })
+              .strict()
+              .optional(),
+            caseManagement: z
+              .object({
+                enabled: z.boolean().optional(),
+                provider: z.string().optional(),
+              })
+              .strict()
+              .optional(),
+          })
+          .strict()
+          .optional(),
+        automation: z
+          .object({
+            enabled: z.boolean().optional(),
+            workspace: z.string().optional(),
+            threatModelUpdate: z
+              .object({
+                enabled: z.boolean().optional(),
+                schedule: z.string().optional(),
+                sources: z.array(z.string()).optional(),
+              })
+              .strict()
+              .optional(),
+            redTeamExercise: z
+              .object({
+                enabled: z.boolean().optional(),
+                schedule: z.string().optional(),
+                actors: z.array(z.string()).optional(),
+              })
+              .strict()
+              .optional(),
+            vulnerabilityTesting: z
+              .object({
+                enabled: z.boolean().optional(),
+                schedule: z.string().optional(),
+                products: z.array(z.string()).optional(),
+              })
+              .strict()
+              .optional(),
+          })
+          .strict()
+          .optional(),
+        threatHunting: z
+          .object({
+            enabled: z.boolean().optional(),
+            proactiveHunting: z
+              .object({
+                enabled: z.boolean().optional(),
+                actors: z.array(z.string()).optional(),
+                schedule: z.string().optional(),
+                sources: z.array(z.string()).optional(),
+              })
+              .strict()
+              .optional(),
+            anomalyDetection: z
+              .object({
+                enabled: z.boolean().optional(),
+                livingOffTheLand: z.boolean().optional(),
+                timeBasedAnomalies: z.boolean().optional(),
+              })
+              .strict()
+              .optional(),
+            sectorTracking: z
+              .object({
+                enabled: z.boolean().optional(),
+                sectors: z.array(z.string()).optional(),
+              })
+              .strict()
+              .optional(),
+          })
+          .strict()
+          .optional(),
+        speedAutomation: z
+          .object({
+            enabled: z.boolean().optional(),
+            vulnerabilityTesting: z
+              .object({
+                instantTest: z.boolean().optional(),
+                patchValidation: z.boolean().optional(),
+              })
+              .strict()
+              .optional(),
+            attackResponse: z
+              .object({
+                automatedContainment: z.boolean().optional(),
+                incidentGeneration: z.boolean().optional(),
+              })
+              .strict()
+              .optional(),
+          })
+          .strict()
+          .optional(),
+        webSecurity: z
+          .object({
+            enabled: z.boolean().optional(),
+            browserTesting: z
+              .object({
+                enabled: z.boolean().optional(),
+                headless: z.boolean().optional(),
+              })
+              .strict()
+              .optional(),
+            proxyTesting: z
+              .object({
+                enabled: z.boolean().optional(),
+                proxyPort: z.number().int().min(1).max(65535).optional(),
+              })
+              .strict()
+              .optional(),
+            xssTesting: z
+              .object({
+                enabled: z.boolean().optional(),
+                payloads: z.array(z.string()).optional(),
+              })
+              .strict()
+              .optional(),
+            sqliTesting: z
+              .object({
+                enabled: z.boolean().optional(),
+                payloads: z.array(z.string()).optional(),
+              })
+              .strict()
+              .optional(),
+          })
+          .strict()
+          .optional(),
+        llmSecurity: z
+          .object({
+            enabled: z.boolean().optional(),
+            workspace: z.string().optional(),
+            promptInjection: z
+              .object({
+                enabled: z.boolean().optional(),
+                detectionEnabled: z.boolean().optional(),
+                testInterval: z.string().optional(),
+              })
+              .strict()
+              .optional(),
+            jailbreakTesting: z
+              .object({
+                enabled: z.boolean().optional(),
+                automatedRedTeam: z.boolean().optional(),
+                testCategories: z.array(z.string()).optional(),
+              })
+              .strict()
+              .optional(),
+            ragSecurity: z
+              .object({
+                enabled: z.boolean().optional(),
+                poisoningDetection: z.boolean().optional(),
+                integrityValidation: z.boolean().optional(),
+              })
+              .strict()
+              .optional(),
+            defenseValidation: z
+              .object({
+                enabled: z.boolean().optional(),
+                guardrailTesting: z.boolean().optional(),
+                architecturalValidation: z.boolean().optional(),
+                cotMonitoring: z.boolean().optional(),
+              })
+              .strict()
+              .optional(),
+            attackLibraries: z
+              .object({
+                promptInjection: z.array(z.string()).optional(),
+                jailbreak: z.array(z.string()).optional(),
+                ragPoisoning: z.array(z.string()).optional(),
+              })
+              .strict()
+              .optional(),
+          })
+          .strict()
+          .optional(),
+        cognitiveSecurity: z
+          .object({
+            enabled: z.boolean().optional(),
+            workspace: z.string().optional(),
+            threatDetection: z
+              .object({
+                enabled: z.boolean().optional(),
+                realTimeDetection: z.boolean().optional(),
+                detectionTypes: z.array(z.string()).optional(),
+              })
+              .strict()
+              .optional(),
+            decisionIntegrity: z
+              .object({
+                enabled: z.boolean().optional(),
+                oodaLoopEnabled: z.boolean().optional(),
+                policyChecks: z.boolean().optional(),
+                riskThreshold: z.number().min(0).max(1).optional(),
+              })
+              .strict()
+              .optional(),
+            escalationControl: z
+              .object({
+                enabled: z.boolean().optional(),
+                maxChainDepth: z.number().int().nonnegative().optional(),
+                maxCumulativeRisk: z.number().min(0).max(1).optional(),
+                maxUncertainty: z.number().min(0).max(1).optional(),
+              })
+              .strict()
+              .optional(),
+            provenanceTracking: z
+              .object({
+                enabled: z.boolean().optional(),
+                trackAllInputs: z.boolean().optional(),
+                integrityScoring: z.boolean().optional(),
+              })
+              .strict()
+              .optional(),
+            gracefulDegradation: z
+              .object({
+                enabled: z.boolean().optional(),
+                autoModeSwitching: z.boolean().optional(),
+                riskThresholds: z
+                  .object({
+                    normal: z.number().min(0).max(1).optional(),
+                    guarded: z.number().min(0).max(1).optional(),
+                    restricted: z.number().min(0).max(1).optional(),
+                    safe: z.number().min(0).max(1).optional(),
+                  })
+                  .strict()
+                  .optional(),
+              })
+              .strict()
+              .optional(),
+            resilienceSimulation: z
+              .object({
+                enabled: z.boolean().optional(),
+                schedule: z.string().optional(),
+                scenarioTypes: z.array(z.string()).optional(),
+              })
+              .strict()
+              .optional(),
+            trustTrajectory: z
+              .object({
+                enabled: z.boolean().optional(),
+                timeWindow: z.number().int().nonnegative().optional(),
+                trackingEnabled: z.boolean().optional(),
+              })
+              .strict()
+              .optional(),
+          })
+          .strict()
+          .optional(),
+        adversaryRecommender: z
+          .object({
+            enabled: z.boolean().optional(),
+            workspace: z.string().optional(),
+            attackGeneration: z
+              .object({
+                enabled: z.boolean().optional(),
+                testCount: z.number().int().nonnegative().optional(),
+                attackFamilies: z.array(z.string()).optional(),
+              })
+              .strict()
+              .optional(),
+            optimization: z
+              .object({
+                enabled: z.boolean().optional(),
+                maxIterations: z.number().int().nonnegative().optional(),
+                mutationStrategies: z.array(z.string()).optional(),
+              })
+              .strict()
+              .optional(),
+            benchmarking: z
+              .object({
+                enabled: z.boolean().optional(),
+                schedule: z.string().optional(),
+                regressionThreshold: z.number().min(0).max(1).optional(),
+              })
+              .strict()
+              .optional(),
+            heartbeatIntegration: z
+              .object({
+                enabled: z.boolean().optional(),
+                runOnHeartbeat: z.boolean().optional(),
+                testCount: z.number().int().nonnegative().optional(),
+              })
+              .strict()
+              .optional(),
+            coverage: z
+              .object({
+                trackTechniqueCoverage: z.boolean().optional(),
+                trackSurfaceCoverage: z.boolean().optional(),
+                trackSeverityWeighted: z.boolean().optional(),
+              })
+              .strict()
+              .optional(),
+          })
+          .strict()
+          .optional(),
+        swarmAgents: z
+          .object({
+            enabled: z.boolean().optional(),
+            workspace: z.string().optional(),
+            redTeamSwarm: z
+              .object({
+                enabled: z.boolean().optional(),
+                defaultSwarmSize: z.number().int().positive().optional(),
+                agents: z.array(z.string()).optional(),
+              })
+              .strict()
+              .optional(),
+            blueTeamSwarm: z
+              .object({
+                enabled: z.boolean().optional(),
+                defaultSwarmSize: z.number().int().positive().optional(),
+                agents: z.array(z.string()).optional(),
+              })
+              .strict()
+              .optional(),
+            collaboration: z
+              .object({
+                enabled: z.boolean().optional(),
+                defaultMode: z
+                  .union([
+                    z.literal("sequential"),
+                    z.literal("parallel"),
+                    z.literal("consensus"),
+                  ])
+                  .optional(),
+                communicationProtocol: z
+                  .union([
+                    z.literal("broadcast"),
+                    z.literal("hierarchical"),
+                    z.literal("peer_to_peer"),
+                  ])
+                  .optional(),
+              })
+              .strict()
+              .optional(),
+            swarmVsSwarm: z
+              .object({
+                enabled: z.boolean().optional(),
+                schedule: z.string().optional(),
+                duration: z.number().int().nonnegative().optional(),
+              })
+              .strict()
+              .optional(),
+            integration: z
+              .object({
+                arrIntegration: z.boolean().optional(),
+                cognitiveIntegration: z.boolean().optional(),
+                heartbeatIntegration: z.boolean().optional(),
+              })
+              .strict()
+              .optional(),
+          })
+          .strict()
           .optional(),
       })
       .strict()

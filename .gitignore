@@ -72,6 +72,9 @@ apps/ios/*.dSYM.zip
 # provisioning profiles (local)
 apps/ios/*.mobileprovision
 
+# Local / agent temp dirs (sync, PR fix, etc.)
+.tmp-*/
+
 # Local untracked files
 .local/
 docs/.local/

@@ -54,6 +54,13 @@ const blockedEnvKeys = new Set([
 
 const blockedEnvPrefixes = ["DYLD_", "LD_"];
 
+type ConsentEnvelope = {
+  jti: string;
+  consumedAtMs: number;
+  expiresAtMs: number;
+  sessionKey: string;
+};
+
 type SystemRunParams = {
   command: string[];
   rawCommand?: string | null;
@@ -66,6 +73,8 @@ type SystemRunParams = {
   approved?: boolean | null;
   approvalDecision?: string | null;
   runId?: string | null;
+  /** Set by gateway when ConsentGate enforce is used for system.run. */
+  consentEnvelope?: ConsentEnvelope | null;
 };
 
 type SystemWhichParams = {
@@ -533,6 +542,27 @@ export async function handleInvoke(
   const cmdText = consistency.cmdText;
   const agentId = params.agentId?.trim() || undefined;
   const cfg = loadConfig();
+  const gatedNodeCommands = cfg.gateway?.consentGate?.enabled
+    ? (cfg.gateway.consentGate.gatedTools ?? []).filter((c): c is string => typeof c === "string")
+    : [];
+  if (gatedNodeCommands.includes("system.run")) {
+    const env = params.consentEnvelope;
+    const now = Date.now();
+    if (!env || typeof env.jti !== "string" || env.expiresAtMs < now) {
+      await sendErrorResult(
+        client,
+        frame,
+        "INVALID_REQUEST",
+        "Consent required for system.run; missing or expired consent envelope.",
+      );
+      return;
+    }
+    const sessionKeyParam = params.sessionKey?.trim() ?? "node";
+    if (env.sessionKey !== sessionKeyParam) {
+      await sendErrorResult(client, frame, "INVALID_REQUEST", "Consent session key mismatch.");
+      return;
+    }
+  }
   const agentExec = agentId ? resolveAgentConfig(cfg, agentId)?.tools?.exec : undefined;
   const configuredSecurity = resolveExecSecurity(agentExec?.security ?? cfg.tools?.exec?.security);
   const configuredAsk = resolveExecAsk(agentExec?.ask ?? cfg.tools?.exec?.ask);

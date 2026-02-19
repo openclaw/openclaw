@@ -166,23 +166,31 @@ function renderSkill(skill: SkillStatusEntry, props: SkillsProps) {
         ${
           skill.primaryEnv
             ? html`
-              <div class="field" style="margin-top: 10px;">
-                <span>API key</span>
-                <input
-                  type="password"
-                  .value=${apiKey}
-                  @input=${(e: Event) =>
-                    props.onEdit(skill.skillKey, (e.target as HTMLInputElement).value)}
-                />
-              </div>
-              <button
-                class="btn primary"
-                style="margin-top: 8px;"
-                ?disabled=${busy}
-                @click=${() => props.onSaveKey(skill.skillKey)}
+              <form
+                @submit=${(e: Event) => {
+                  e.preventDefault();
+                  props.onSaveKey(skill.skillKey);
+                }}
+                style="margin-top: 10px;"
               >
-                Save key
-              </button>
+                <div class="field">
+                  <span>API key</span>
+                  <input
+                    type="password"
+                    .value=${apiKey}
+                    @input=${(e: Event) =>
+                      props.onEdit(skill.skillKey, (e.target as HTMLInputElement).value)}
+                  />
+                </div>
+                <button
+                  type="submit"
+                  class="btn primary"
+                  style="margin-top: 8px;"
+                  ?disabled=${busy}
+                >
+                  Save key
+                </button>
+              </form>
             `
             : nothing
         }

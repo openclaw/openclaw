@@ -252,6 +252,19 @@ export type AgentDefaultsConfig = {
     /** Default thinking level for spawned sub-agents (e.g. "off", "low", "medium", "high"). */
     thinking?: string;
   };
+  /** Society of Minds multi-model collaboration defaults. */
+  societyOfMinds?: {
+    /** Enable Society of Minds feature. */
+    enabled?: boolean;
+    /** List of models to use for collaboration (provider/model format). */
+    models?: string[];
+    /** Collaboration strategy: "parallel" (all models work simultaneously), "sequential" (one after another), or "debate" (models discuss). */
+    strategy?: "parallel" | "sequential" | "debate";
+    /** Model to use for synthesizing results from multiple models. */
+    synthesisModel?: string;
+    /** Maximum concurrent model executions (for parallel strategy). */
+    maxConcurrent?: number;
+  };
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: {
     /** Enable sandboxing for sessions. */

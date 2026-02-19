@@ -62,4 +62,17 @@ describe("normalizeConfigPaths", () => {
       expect(cfg.agents?.list?.[0]?.identity?.name).toBe("~not-a-path");
     });
   });
+
+  it("expands tilde in logging.file when file is object with path", async () => {
+    await withTempHome(async (home) => {
+      const cfg = normalizeConfigPaths({
+        logging: { file: { path: "~/.openclaw/logs/audit.log", rotate: true } },
+      });
+      const file = cfg.logging?.file as { path?: string; rotate?: boolean } | undefined;
+      expect(file).toBeDefined();
+      expect(typeof file).toBe("object");
+      expect(file?.path).toBe(path.join(home, ".openclaw", "logs", "audit.log"));
+      expect(file?.rotate).toBe(true);
+    });
+  });
 });

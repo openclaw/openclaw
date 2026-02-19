@@ -274,6 +274,7 @@ const SECTIONS: Array<{ key: string; label: string }> = [
   { key: "hooks", label: "Hooks" },
   { key: "skills", label: "Skills" },
   { key: "tools", label: "Tools" },
+  { key: "security", label: "Security" },
   { key: "gateway", label: "Gateway" },
   { key: "wizard", label: "Setup Wizard" },
 ];

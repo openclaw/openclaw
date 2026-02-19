@@ -135,74 +135,81 @@ export function renderOverview(props: OverviewProps) {
       <div class="card">
         <div class="card-title">${t("overview.access.title")}</div>
         <div class="card-sub">${t("overview.access.subtitle")}</div>
-        <div class="form-grid" style="margin-top: 16px;">
-          <label class="field">
-            <span>${t("overview.access.wsUrl")}</span>
-            <input
-              .value=${props.settings.gatewayUrl}
-              @input=${(e: Event) => {
-                const v = (e.target as HTMLInputElement).value;
-                props.onSettingsChange({ ...props.settings, gatewayUrl: v });
-              }}
-              placeholder="ws://100.x.y.z:18789"
-            />
-          </label>
-          ${
-            isTrustedProxy
-              ? ""
-              : html`
-                <label class="field">
-                  <span>${t("overview.access.token")}</span>
-                  <input
-                    .value=${props.settings.token}
-                    @input=${(e: Event) => {
-                      const v = (e.target as HTMLInputElement).value;
-                      props.onSettingsChange({ ...props.settings, token: v });
-                    }}
-                    placeholder="OPENCLAW_GATEWAY_TOKEN"
-                  />
-                </label>
-                <label class="field">
-                  <span>${t("overview.access.password")}</span>
-                  <input
-                    type="password"
-                    .value=${props.password}
-                    @input=${(e: Event) => {
-                      const v = (e.target as HTMLInputElement).value;
-                      props.onPasswordChange(v);
-                    }}
-                    placeholder="system or shared password"
-                  />
-                </label>
-              `
-          }
-          <label class="field">
-            <span>${t("overview.access.sessionKey")}</span>
-            <input
-              .value=${props.settings.sessionKey}
-              @input=${(e: Event) => {
-                const v = (e.target as HTMLInputElement).value;
-                props.onSessionKeyChange(v);
-              }}
-            />
-          </label>
-          <label class="field">
-            <span>${t("overview.access.language")}</span>
-            <select
-              .value=${currentLocale}
-              @change=${(e: Event) => {
-                const v = (e.target as HTMLSelectElement).value as Locale;
-                void i18n.setLocale(v);
-                props.onSettingsChange({ ...props.settings, locale: v });
-              }}
-            >
-              <option value="en">${t("languages.en")}</option>
-              <option value="zh-CN">${t("languages.zhCN")}</option>
-              <option value="zh-TW">${t("languages.zhTW")}</option>
-              <option value="pt-BR">${t("languages.ptBR")}</option>
-            </select>
-          </label>
-        </div>
+        <form
+          @submit=${(e: Event) => {
+            e.preventDefault();
+          }}
+          style="margin-top: 16px;"
+        >
+          <div class="form-grid">
+            <label class="field">
+              <span>${t("overview.access.wsUrl")}</span>
+              <input
+                .value=${props.settings.gatewayUrl}
+                @input=${(e: Event) => {
+                  const v = (e.target as HTMLInputElement).value;
+                  props.onSettingsChange({ ...props.settings, gatewayUrl: v });
+                }}
+                placeholder="ws://100.x.y.z:18789"
+              />
+            </label>
+            ${
+              isTrustedProxy
+                ? ""
+                : html`
+                  <label class="field">
+                    <span>${t("overview.access.token")}</span>
+                    <input
+                      .value=${props.settings.token}
+                      @input=${(e: Event) => {
+                        const v = (e.target as HTMLInputElement).value;
+                        props.onSettingsChange({ ...props.settings, token: v });
+                      }}
+                      placeholder="OPENCLAW_GATEWAY_TOKEN"
+                    />
+                  </label>
+                  <label class="field">
+                    <span>${t("overview.access.password")}</span>
+                    <input
+                      type="password"
+                      .value=${props.password}
+                      @input=${(e: Event) => {
+                        const v = (e.target as HTMLInputElement).value;
+                        props.onPasswordChange(v);
+                      }}
+                      placeholder="system or shared password"
+                    />
+                  </label>
+                `
+            }
+            <label class="field">
+              <span>${t("overview.access.sessionKey")}</span>
+              <input
+                .value=${props.settings.sessionKey}
+                @input=${(e: Event) => {
+                  const v = (e.target as HTMLInputElement).value;
+                  props.onSessionKeyChange(v);
+                }}
+              />
+            </label>
+            <label class="field">
+              <span>${t("overview.access.language")}</span>
+              <select
+                .value=${currentLocale}
+                @change=${(e: Event) => {
+                  const v = (e.target as HTMLSelectElement).value as Locale;
+                  void i18n.setLocale(v);
+                  props.onSettingsChange({ ...props.settings, locale: v });
+                }}
+              >
+                <option value="en">${t("languages.en")}</option>
+                <option value="zh-CN">${t("languages.zhCN")}</option>
+                <option value="zh-TW">${t("languages.zhTW")}</option>
+                <option value="pt-BR">${t("languages.ptBR")}</option>
+              </select>
+            </label>
+          </div>
+        </form>
         <div class="row" style="margin-top: 14px;">
           <button class="btn" @click=${() => props.onConnect()}>${t("common.connect")}</button>
           <button class="btn" @click=${() => props.onRefresh()}>${t("common.refresh")}</button>

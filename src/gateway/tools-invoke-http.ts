@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createOpenClawTools } from "../agents/openclaw-tools.js";
 import {
@@ -17,6 +18,14 @@ import {
 import { ToolInputError } from "../agents/tools/common.js";
 import { loadConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
+import { buildConsentDenyPayload } from "../consent/deny-payload.js";
+import { CONSENT_REASON } from "../consent/reason-codes.js";
+import {
+  isConsentGateObserveOnly,
+  resolveConsentGateApi,
+  resolveConsentGatedTools,
+  resolveTrustTier,
+} from "../consent/resolve.js";
 import { logWarn } from "../logger.js";
 import { isTestDefaultMemorySlotDisabled } from "../plugins/config-state.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
@@ -43,6 +52,8 @@ type ToolsInvokeBody = {
   args?: unknown;
   sessionKey?: unknown;
   dryRun?: unknown;
+  /** Consent token id (jti) when ConsentGate enforce mode is used for gated tools. */
+  consentToken?: unknown;
 };
 
 function resolveSessionKeyFromBody(body: ToolsInvokeBody): string | undefined {
@@ -293,6 +304,87 @@ export async function handleToolsInvokeHttpRequest(
       error: { type: "not_found", message: `Tool not available: ${toolName}` },
     });
     return true;
+  }
+
+  const gatedTools = resolveConsentGatedTools(cfg);
+  if (gatedTools.has(toolName)) {
+    const observeOnly = isConsentGateObserveOnly(cfg);
+    const consentTokenJti =
+      typeof body.consentToken === "string" && body.consentToken.trim()
+        ? body.consentToken.trim()
+        : undefined;
+    const contextHash = createHash("sha256")
+      .update(
+        JSON.stringify({
+          tool: toolName,
+          sessionKey,
+          messageChannel: messageChannel ?? null,
+          accountId: accountId ?? null,
+          args: Object.keys(args)
+            .sort()
+            .reduce<Record<string, unknown>>((acc, k) => {
+              acc[k] = args[k];
+              return acc;
+            }, {}),
+        }),
+      )
+      .digest("hex");
+    const correlationId = `http-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+    try {
+      const consentApi = resolveConsentGateApi(cfg);
+      const trustTier = resolveTrustTier(cfg, sessionKey);
+      const consumeInput = {
+        jti: consentTokenJti ?? "",
+        tool: toolName,
+        trustTier,
+        sessionKey,
+        contextHash,
+        correlationId,
+        actor: { channel: "http" },
+        tenantId: "",
+      };
+      if (observeOnly) {
+        await consentApi.evaluate(consumeInput);
+      } else {
+        const result = await consentApi.consume(consumeInput);
+        if (!result.allowed) {
+          const deny = buildConsentDenyPayload({
+            reasonCode: result.reasonCode,
+            correlationId: result.correlationId ?? correlationId,
+            tool: toolName,
+            sessionKey,
+            trustTier: consumeInput.trustTier,
+            jti: consentTokenJti ?? null,
+          });
+          sendJson(res, 403, {
+            ok: false,
+            error: {
+              type: "consent_denied",
+              ...deny,
+            },
+          });
+          return true;
+        }
+      }
+    } catch (err) {
+      logWarn(`ConsentGate error for ${toolName}: ${String(err)}`);
+      const deny = buildConsentDenyPayload({
+        reasonCode: CONSENT_REASON.UNAVAILABLE,
+        correlationId,
+        tool: toolName,
+        sessionKey,
+        trustTier: resolveTrustTier(cfg, sessionKey),
+        jti: consentTokenJti ?? null,
+      });
+      sendJson(res, 503, {
+        ok: false,
+        error: {
+          type: "consent_denied",
+          ...deny,
+        },
+      });
+      return true;
+    }
   }
 
   try {
