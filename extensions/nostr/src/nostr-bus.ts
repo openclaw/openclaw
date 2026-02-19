@@ -42,6 +42,7 @@ const MAX_PERSISTED_EVENT_IDS = 5000;
 const STATE_PERSIST_DEBOUNCE_MS = 5000; // Debounce state writes
 const REPLAY_POLL_INTERVAL_MS = 5000;
 const REPLAY_POLL_MAX_WAIT_MS = 3000;
+const REPLAY_POLL_OVERLAP_SEC = 30;
 
 // Circuit breaker configuration
 const CIRCUIT_BREAKER_THRESHOLD = 5; // failures before opening
@@ -809,7 +810,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
     }
     replayPollInFlight = true;
     try {
-      const replaySince = Math.max(0, lastProcessedAt - STARTUP_LOOKBACK_SEC);
+      const replaySince = Math.max(0, lastProcessedAt - REPLAY_POLL_OVERLAP_SEC);
       const replayEvents = await pool.querySync(
         normalizedRelays,
         {
