@@ -15,6 +15,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- CLI/Plugins: avoid caching missing binary checks in `hasBinary()`, so installs made after gateway start are discovered without requiring a PATH change. (#21094)
+
 - Gateway/WebChat: block `sessions.patch` and `sessions.delete` for WebChat clients so session-store mutations stay restricted to non-WebChat operator flows. Thanks @allsmog for reporting.
 - Security/Skills: for the next npm release, reject symlinks during skill packaging to prevent external file inclusion in distributed `.skill` archives. Thanks @aether-ai-agent for reporting.
 - Security/Config: block prototype-polluting keys (`__proto__`, `prototype`, `constructor`) in `deepMerge`, preventing prototype pollution via merged configuration objects. (#20853) Thanks @davidrudduck.
