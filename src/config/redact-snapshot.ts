@@ -384,6 +384,89 @@ function restoreOriginalValueOrThrow(params: {
   throw new RedactionError(params.path);
 }
 
+function mapRedactedArray(params: {
+  incoming: unknown[];
+  original: unknown;
+  path: string;
+  mapItem: (item: unknown, index: number, originalArray: unknown[]) => unknown;
+}): unknown[] {
+  const originalArray = Array.isArray(params.original) ? params.original : [];
+  if (params.incoming.length < originalArray.length) {
+    log.warn(`Redacted config array key ${params.path} has been truncated`);
+  }
+  return params.incoming.map((item, index) => params.mapItem(item, index, originalArray));
+}
+
+function toObjectRecord(value: unknown): Record<string, unknown> {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return {};
+}
+
+function restoreArrayItemWithLookup(params: {
+  item: unknown;
+  index: number;
+  originalArray: unknown[];
+  lookup: Set<string>;
+  path: string;
+  hints: ConfigUiHints;
+}): unknown {
+  if (params.item === REDACTED_SENTINEL) {
+    return params.originalArray[params.index];
+  }
+  return restoreRedactedValuesWithLookup(
+    params.item,
+    params.originalArray[params.index],
+    params.lookup,
+    params.path,
+    params.hints,
+  );
+}
+
+function restoreArrayItemWithGuessing(params: {
+  item: unknown;
+  index: number;
+  originalArray: unknown[];
+  path: string;
+  hints?: ConfigUiHints;
+}): unknown {
+  if (
+    !isExplicitlyNonSensitivePath(params.hints, [params.path]) &&
+    isSensitivePath(params.path) &&
+    params.item === REDACTED_SENTINEL
+  ) {
+    return params.originalArray[params.index];
+  }
+  return restoreRedactedValuesGuessing(
+    params.item,
+    params.originalArray[params.index],
+    params.path,
+    params.hints,
+  );
+}
+
+function restoreGuessingArray(
+  incoming: unknown[],
+  original: unknown,
+  path: string,
+  hints?: ConfigUiHints,
+): unknown[] {
+  return mapRedactedArray({
+    incoming,
+    original,
+    path,
+    mapItem: (item, index, originalArray) =>
+      restoreArrayItemWithGuessing({
+        item,
+        index,
+        originalArray,
+        path,
+        hints,
+      }),
+  });
+}
+
 /**
  * Worker for restoreRedactedValues().
  * Used when there are ConfigUiHints available.
@@ -413,21 +496,22 @@ function restoreRedactedValuesWithLookup(
       }
       return restoreRedactedValuesGuessing(incoming, original, prefix, hints);
     }
-    const origArr = Array.isArray(original) ? original : [];
-    if (incoming.length < origArr.length) {
-      log.warn(`Redacted config array key ${path} has been truncated`);
-    }
-    return incoming.map((item, i) => {
-      if (item === REDACTED_SENTINEL) {
-        return origArr[i];
-      }
-      return restoreRedactedValuesWithLookup(item, origArr[i], lookup, path, hints);
+    return mapRedactedArray({
+      incoming,
+      original,
+      path,
+      mapItem: (item, index, originalArray) =>
+        restoreArrayItemWithLookup({
+          item,
+          index,
+          originalArray,
+          lookup,
+          path,
+          hints,
+        }),
     });
   }
-  const orig =
-    original && typeof original === "object" && !Array.isArray(original)
-      ? (original as Record<string, unknown>)
-      : {};
+  const orig = toObjectRecord(original);
   const result: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(incoming as Record<string, unknown>)) {
     result[key] = value;
@@ -478,26 +562,10 @@ function restoreRedactedValuesGuessing(
     // we have no way of knowing which one. In this case, the last
     // element(s) get(s) chopped off. Not good, so please don't put
     // sensitive string array in the config...
-    const origArr = Array.isArray(original) ? original : [];
-    return incoming.map((item, i) => {
-      const path = `${prefix}[]`;
-      if (incoming.length < origArr.length) {
-        log.warn(`Redacted config array key ${path} has been truncated`);
-      }
-      if (
-        !isExplicitlyNonSensitivePath(hints, [path]) &&
-        isSensitivePath(path) &&
-        item === REDACTED_SENTINEL
-      ) {
-        return origArr[i];
-      }
-      return restoreRedactedValuesGuessing(item, origArr[i], path, hints);
-    });
+    const path = `${prefix}[]`;
+    return restoreGuessingArray(incoming, original, path, hints);
   }
-  const orig =
-    original && typeof original === "object" && !Array.isArray(original)
-      ? (original as Record<string, unknown>)
-      : {};
+  const orig = toObjectRecord(original);
   const result: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(incoming as Record<string, unknown>)) {
     const path = prefix ? `${prefix}.${key}` : key;
