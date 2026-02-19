@@ -350,21 +350,6 @@ describe("resolveHeartbeatDeliveryTarget", () => {
     expect(result.threadId).toBeUndefined();
   });
 
-  it("does not inherit session lastThreadId into heartbeat delivery", () => {
-    const cfg: OpenClawConfig = {};
-    const entry = {
-      ...baseEntry,
-      lastChannel: "telegram" as const,
-      lastTo: "-100123",
-      lastThreadId: 42,
-    };
-    const result = resolveHeartbeatDeliveryTarget({ cfg, entry });
-    expect(result.channel).toBe("telegram");
-    expect(result.to).toBe("-100123");
-    // Session lastThreadId should NOT leak — heartbeat messages go top-level
-    expect(result.threadId).toBeUndefined();
-  });
-
   it("uses explicit heartbeat accountId when provided", () => {
     const cfg: OpenClawConfig = {
       agents: {
