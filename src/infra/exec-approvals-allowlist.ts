@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import type { ExecAllowlistEntry } from "./exec-approvals.js";
 import {
@@ -31,14 +30,6 @@ function isPathLikeToken(value: string): boolean {
   return /^[A-Za-z]:[\\/]/.test(trimmed);
 }
 
-function defaultFileExists(filePath: string): boolean {
-  try {
-    return fs.existsSync(filePath);
-  } catch {
-    return false;
-  }
-}
-
 export function normalizeSafeBins(entries?: string[]): Set<string> {
   if (!Array.isArray(entries)) {
     return new Set();
@@ -62,57 +53,253 @@ function hasGlobToken(value: string): boolean {
   return /[*?[\]]/.test(value);
 }
 
-type SafeBinOptionPolicy = {
-  blockedShort?: ReadonlySet<string>;
-  blockedLong?: ReadonlySet<string>;
+type SafeBinProfile = {
+  minPositional?: number;
+  maxPositional?: number;
+  valueFlags?: ReadonlySet<string>;
+  blockedFlags?: ReadonlySet<string>;
 };
 
-const SAFE_BIN_OPTION_POLICIES: Readonly<Record<string, SafeBinOptionPolicy>> = {
-  // sort can write arbitrary output paths via -o/--output, which breaks stdin-only guarantees.
-  sort: {
-    blockedShort: new Set(["o"]),
-    blockedLong: new Set(["output"]),
+const NO_FLAGS = new Set<string>();
+const SAFE_BIN_GENERIC_PROFILE: SafeBinProfile = {};
+const SAFE_BIN_PROFILES: Record<string, SafeBinProfile> = {
+  jq: {
+    maxPositional: 1,
+    valueFlags: new Set([
+      "--arg",
+      "--argjson",
+      "--argstr",
+      "--argfile",
+      "--rawfile",
+      "--slurpfile",
+      "--from-file",
+      "--library-path",
+      "-L",
+      "-f",
+    ]),
+    blockedFlags: new Set([
+      "--argfile",
+      "--rawfile",
+      "--slurpfile",
+      "--from-file",
+      "--library-path",
+      "-L",
+      "-f",
+    ]),
   },
-  // grep recursion flags read from cwd (or provided roots), so they are not stdin-only.
   grep: {
-    blockedShort: new Set(["d", "r"]),
-    blockedLong: new Set(["dereference-recursive", "directories", "recursive"]),
+    maxPositional: 1,
+    valueFlags: new Set([
+      "--regexp",
+      "--file",
+      "--max-count",
+      "--after-context",
+      "--before-context",
+      "--context",
+      "--devices",
+      "--directories",
+      "--binary-files",
+      "--exclude",
+      "--exclude-from",
+      "--include",
+      "--label",
+      "-e",
+      "-f",
+      "-m",
+      "-A",
+      "-B",
+      "-C",
+      "-D",
+      "-d",
+    ]),
+    blockedFlags: new Set([
+      "--file",
+      "--exclude-from",
+      "--dereference-recursive",
+      "--directories",
+      "--recursive",
+      "-f",
+      "-d",
+      "-r",
+      "-R",
+    ]),
+  },
+  cut: {
+    maxPositional: 0,
+    valueFlags: new Set([
+      "--bytes",
+      "--characters",
+      "--fields",
+      "--delimiter",
+      "--output-delimiter",
+      "-b",
+      "-c",
+      "-f",
+      "-d",
+    ]),
+  },
+  sort: {
+    maxPositional: 0,
+    valueFlags: new Set([
+      "--key",
+      "--field-separator",
+      "--buffer-size",
+      "--temporary-directory",
+      "--compress-program",
+      "--parallel",
+      "--batch-size",
+      "--random-source",
+      "--files0-from",
+      "--output",
+      "-k",
+      "-t",
+      "-S",
+      "-T",
+      "-o",
+    ]),
+    blockedFlags: new Set(["--files0-from", "--output", "-o"]),
+  },
+  uniq: {
+    maxPositional: 0,
+    valueFlags: new Set([
+      "--skip-fields",
+      "--skip-chars",
+      "--check-chars",
+      "--group",
+      "-f",
+      "-s",
+      "-w",
+    ]),
+  },
+  head: {
+    maxPositional: 0,
+    valueFlags: new Set(["--lines", "--bytes", "-n", "-c"]),
+  },
+  tail: {
+    maxPositional: 0,
+    valueFlags: new Set([
+      "--lines",
+      "--bytes",
+      "--sleep-interval",
+      "--max-unchanged-stats",
+      "--pid",
+      "-n",
+      "-c",
+    ]),
+  },
+  tr: {
+    minPositional: 1,
+    maxPositional: 2,
+  },
+  wc: {
+    maxPositional: 0,
+    valueFlags: new Set(["--files0-from"]),
+    blockedFlags: new Set(["--files0-from"]),
   },
 };
 
-function parseLongOptionName(token: string): string | null {
-  if (!token.startsWith("--") || token === "--") {
-    return null;
+function isSafeLiteralToken(value: string): boolean {
+  if (!value || value === "-") {
+    return true;
   }
-  const body = token.slice(2);
-  if (!body) {
-    return null;
-  }
-  const eqIndex = body.indexOf("=");
-  const name = (eqIndex >= 0 ? body.slice(0, eqIndex) : body).trim().toLowerCase();
-  return name.length > 0 ? name : null;
+  return !hasGlobToken(value) && !isPathLikeToken(value);
 }
 
-function hasBlockedSafeBinOption(execName: string, token: string): boolean {
-  const policy = SAFE_BIN_OPTION_POLICIES[execName];
-  if (!policy || !token.startsWith("-")) {
-    return false;
-  }
-  const longName = parseLongOptionName(token);
-  if (longName) {
-    return policy.blockedLong?.has(longName) ?? false;
-  }
-  if (token === "-" || token === "--") {
-    return false;
-  }
-  for (const ch of token.slice(1)) {
-    if (policy.blockedShort?.has(ch.toLowerCase())) {
-      return true;
+function validateSafeBinArgv(args: string[], profile: SafeBinProfile): boolean {
+  const valueFlags = profile.valueFlags ?? NO_FLAGS;
+  const blockedFlags = profile.blockedFlags ?? NO_FLAGS;
+  const positional: string[] = [];
+
+  for (let i = 0; i < args.length; i += 1) {
+    const token = args[i];
+    if (!token) {
+      continue;
+    }
+    if (token === "--") {
+      for (let j = i + 1; j < args.length; j += 1) {
+        const rest = args[j];
+        if (!rest || rest === "-") {
+          continue;
+        }
+        if (!isSafeLiteralToken(rest)) {
+          return false;
+        }
+        positional.push(rest);
+      }
+      break;
+    }
+    if (token === "-") {
+      continue;
+    }
+    if (!token.startsWith("-")) {
+      if (!isSafeLiteralToken(token)) {
+        return false;
+      }
+      positional.push(token);
+      continue;
+    }
+
+    if (token.startsWith("--")) {
+      const eqIndex = token.indexOf("=");
+      const flag = eqIndex > 0 ? token.slice(0, eqIndex) : token;
+      if (blockedFlags.has(flag)) {
+        return false;
+      }
+      if (eqIndex > 0) {
+        if (!isSafeLiteralToken(token.slice(eqIndex + 1))) {
+          return false;
+        }
+        continue;
+      }
+      if (!valueFlags.has(flag)) {
+        continue;
+      }
+      const value = args[i + 1];
+      if (!value || !isSafeLiteralToken(value)) {
+        return false;
+      }
+      i += 1;
+      continue;
+    }
+
+    let consumedValue = false;
+    for (let j = 1; j < token.length; j += 1) {
+      const flag = `-${token[j]}`;
+      if (blockedFlags.has(flag)) {
+        return false;
+      }
+      if (!valueFlags.has(flag)) {
+        continue;
+      }
+      const inlineValue = token.slice(j + 1);
+      if (inlineValue) {
+        if (!isSafeLiteralToken(inlineValue)) {
+          return false;
+        }
+      } else {
+        const value = args[i + 1];
+        if (!value || !isSafeLiteralToken(value)) {
+          return false;
+        }
+        i += 1;
+      }
+      consumedValue = true;
+      break;
+    }
+    if (!consumedValue && hasGlobToken(token)) {
+      return false;
     }
   }
-  return false;
-}
 
+  const minPositional = profile.minPositional ?? 0;
+  if (positional.length < minPositional) {
+    return false;
+  }
+  if (typeof profile.maxPositional === "number" && positional.length > profile.maxPositional) {
+    return false;
+  }
+  return true;
+}
 export function isSafeBinUsage(params: {
   argv: string[];
   resolution: CommandResolution | null;
@@ -151,44 +338,9 @@ export function isSafeBinUsage(params: {
   ) {
     return false;
   }
-  const cwd = params.cwd ?? process.cwd();
-  const exists = params.fileExists ?? defaultFileExists;
   const argv = params.argv.slice(1);
-  for (let i = 0; i < argv.length; i += 1) {
-    const token = argv[i];
-    if (!token) {
-      continue;
-    }
-    if (token === "-") {
-      continue;
-    }
-    if (token.startsWith("-")) {
-      if (hasBlockedSafeBinOption(execName, token)) {
-        return false;
-      }
-      const eqIndex = token.indexOf("=");
-      if (eqIndex > 0) {
-        const value = token.slice(eqIndex + 1);
-        if (value && hasGlobToken(value)) {
-          return false;
-        }
-        if (value && (isPathLikeToken(value) || exists(path.resolve(cwd, value)))) {
-          return false;
-        }
-      }
-      continue;
-    }
-    if (hasGlobToken(token)) {
-      return false;
-    }
-    if (isPathLikeToken(token)) {
-      return false;
-    }
-    if (exists(path.resolve(cwd, token))) {
-      return false;
-    }
-  }
-  return true;
+  const profile = SAFE_BIN_PROFILES[execName] ?? SAFE_BIN_GENERIC_PROFILE;
+  return validateSafeBinArgv(argv, profile);
 }
 
 export type ExecAllowlistEvaluation = {
