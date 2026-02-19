@@ -76,7 +76,7 @@ process.env["AEON_MEMORY_HOME"] = tmpDir;
 
 console.log(`\n\x1b[1m══════════════════════════════════════════════════════════════\x1b[0m`);
 console.log(`\x1b[1m  AEON V3 SCIENTIFIC VALIDATION SUITE\x1b[0m`);
-console.log(`\x1b[1m  aeon-memory@1.0.2 — C++23 Native Addon\x1b[0m`);
+console.log(`\x1b[1m  aeon-memory@1.1.0 — C++23 Native Addon\x1b[0m`);
 console.log(`\x1b[1m══════════════════════════════════════════════════════════════\x1b[0m`);
 console.log(`\n  Isolated env: ${tmpDir}\n`);
 

@@ -76,6 +76,9 @@ importers:
       '@whiskeysockets/baileys':
         specifier: 7.0.0-rc.9
         version: 7.0.0-rc.9(audio-decode@2.2.3)(sharp@0.34.5)
+      aeon-memory:
+        specifier: 1.1.0
+        version: 1.1.0
       ajv:
         specifier: ^8.18.0
         version: 8.18.0
@@ -242,10 +245,6 @@ importers:
       vitest:
         specifier: ^4.0.18
         version: 4.0.18(@opentelemetry/api@1.9.0)(@types/node@25.2.3)(@vitest/browser-playwright@4.0.18)(jiti@2.6.1)(lightningcss@1.30.2)(tsx@4.21.0)(yaml@2.8.2)
-    optionalDependencies:
-      aeon-memory:
-        specifier: 1.0.3
-        version: 1.0.3
 
   extensions/bluebubbles:
     devDependencies:
@@ -3235,8 +3234,8 @@ packages:
     engines: {node: '>=0.4.0'}
     hasBin: true
 
-  aeon-memory@1.0.3:
-    resolution: {integrity: sha512-lbvwvFbrrq2A8VHKTpCGrjNfE2mD29wbdAQGQ547B7IMxaDSmzkuEp6qhtXSqCt6azIbUSbPEIQkWdfKCJvQkg==}
+  aeon-memory@1.1.0:
+    resolution: {integrity: sha512-C4lvb7QeqXafPRzut9jOnXeG/bZ2T9BbMb4RmbCoCFuRnLPE+JuKYvkM54AG93d03AfqGH1jwH9CSE8BHDEm5w==}
     engines: {node: '>=18.0.0'}
 
   agent-base@7.1.4:
@@ -6920,7 +6919,7 @@ snapshots:
 
   '@larksuiteoapi/node-sdk@1.59.0':
     dependencies:
-      axios: 1.13.5(debug@4.4.3)
+      axios: 1.13.5
       lodash.identity: 3.0.0
       lodash.merge: 4.6.2
       lodash.pickby: 4.6.0
@@ -6936,7 +6935,7 @@ snapshots:
     dependencies:
       '@types/node': 24.10.13
     optionalDependencies:
-      axios: 1.13.5(debug@4.4.3)
+      axios: 1.13.5
     transitivePeerDependencies:
       - debug
 
@@ -7140,7 +7139,7 @@ snapshots:
       '@azure/core-auth': 1.10.1
       '@azure/msal-node': 3.8.7
       '@microsoft/agents-activity': 1.2.3
-      axios: 1.13.5(debug@4.4.3)
+      axios: 1.13.5
       jsonwebtoken: 9.0.3
       jwks-rsa: 3.2.2
       object-path: 0.11.8
@@ -8087,7 +8086,7 @@ snapshots:
       '@slack/types': 2.20.0
       '@slack/web-api': 7.14.1
       '@types/express': 5.0.6
-      axios: 1.13.5(debug@4.4.3)
+      axios: 1.13.5
       express: 5.2.1
       path-to-regexp: 8.3.0
       raw-body: 3.0.2
@@ -8133,7 +8132,7 @@ snapshots:
       '@slack/types': 2.20.0
       '@types/node': 25.2.3
       '@types/retry': 0.12.0
-      axios: 1.13.5(debug@4.4.3)
+      axios: 1.13.5
       eventemitter3: 5.0.4
       form-data: 2.5.4
       is-electron: 2.2.2
@@ -8896,10 +8895,9 @@ snapshots:
 
   acorn@8.15.0: {}
 
-  aeon-memory@1.0.3:
+  aeon-memory@1.1.0:
     dependencies:
       node-addon-api: 8.5.0
-    optional: true
 
   agent-base@7.1.4: {}
 
@@ -9025,6 +9023,14 @@ snapshots:
   aws-sign2@0.7.0: {}
 
   aws4@1.13.2: {}
+
+  axios@1.13.5:
+    dependencies:
+      follow-redirects: 1.15.11
+      form-data: 2.5.4
+      proxy-from-env: 1.1.0
+    transitivePeerDependencies:
+      - debug
 
   axios@1.13.5(debug@4.4.3):
     dependencies:
@@ -9604,6 +9610,8 @@ snapshots:
       array-back: 3.1.0
 
   flatbuffers@24.12.23: {}
+
+  follow-redirects@1.15.11: {}
 
   follow-redirects@1.15.11(debug@4.4.3):
     optionalDependencies:

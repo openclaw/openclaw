@@ -29,7 +29,7 @@
  *
  * Prerequisites:
  *   - Gateway running: pnpm run gateway:dev
- *   - aeon-memory@1.0.2 installed
+ *   - aeon-memory@1.1.0 installed
  *   - ollama/deepseek-v3.1:671b-cloud accessible
  */
 

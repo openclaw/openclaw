@@ -145,6 +145,7 @@
     "@slack/bolt": "^4.6.0",
     "@slack/web-api": "^7.14.1",
     "@whiskeysockets/baileys": "7.0.0-rc.9",
+    "aeon-memory": "1.1.0",
     "ajv": "^8.18.0",
     "chalk": "^5.6.2",
     "chokidar": "^5.0.0",
@@ -205,9 +206,6 @@
   "peerDependencies": {
     "@napi-rs/canvas": "^0.1.89",
     "node-llama-cpp": "3.15.1"
-  },
-  "optionalDependencies": {
-    "aeon-memory": "1.0.3"
   },
   "engines": {
     "node": ">=22.12.0"
