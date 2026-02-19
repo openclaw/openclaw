@@ -16,8 +16,8 @@ export async function readJsonFileWithFallback<T>(
     return { value: parsed, exists: true };
   } catch (err) {
     const code = (err as { code?: string }).code;
-    if (code === "ENOENT") {
-      return { value: fallback, exists: false };
+    if (code !== "ENOENT") {
+      throw err;
     }
     return { value: fallback, exists: false };
   }

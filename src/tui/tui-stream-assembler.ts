@@ -60,7 +60,7 @@ function isDroppedBoundaryTextBlockSubset(params: {
   finalTextBlocks: string[];
 }): boolean {
   const { streamedTextBlocks, finalTextBlocks } = params;
-  if (finalTextBlocks.length === 0 || finalTextBlocks.length >= streamedTextBlocks.length) {
+  if (finalTextBlocks.length === 0 || finalTextBlocks.length > streamedTextBlocks.length) {
     return false;
   }
 
