@@ -67,6 +67,9 @@ export async function runGate(gate: CronGate, log: Logger): Promise<GateResult> 
       args,
       { timeout: 0 /* we handle timeout ourselves */ },
       (err, _stdout, stderr) => {
+        // Clear the timeout in the callback as well as the exit event so the
+        // timer is cancelled on both normal and error exit paths.
+        clearTimeout(timer);
         const exitCode = err && "code" in err ? (err.code as number | null) : 0;
         const normalizedCode = typeof exitCode === "number" ? exitCode : null;
         const passed = normalizedCode === triggerExitCode;
@@ -90,7 +93,8 @@ export async function runGate(gate: CronGate, log: Logger): Promise<GateResult> 
       }
     }, timeoutMs);
 
-    // Clean up the timer once the child exits so it doesn't hold the event loop.
+    // Belt-and-suspenders: also clear on the exit event in case the callback
+    // fires after the timer but before the exit event.
     child.on("exit", () => clearTimeout(timer));
   });
 }
