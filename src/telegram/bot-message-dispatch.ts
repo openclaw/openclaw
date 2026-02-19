@@ -399,6 +399,49 @@ export const dispatchTelegramMessage = async ({
       return false;
     }
   };
+  const tryEditExistingPreviewForLane = async (params: {
+    lane: DraftLaneState;
+    laneName: "answer" | "reasoning";
+    finalText: string;
+    previewButtons?: TelegramInlineButtons;
+  }): Promise<boolean> => {
+    const { lane, laneName, finalText, previewButtons } = params;
+    if (!lane.stream) {
+      return false;
+    }
+    const previewMessageId = lane.stream.messageId();
+    if (typeof previewMessageId !== "number") {
+      return false;
+    }
+    const currentPreviewText = streamMode === "block" ? lane.draftText : lane.lastPartialText;
+    if (
+      currentPreviewText &&
+      currentPreviewText.startsWith(finalText) &&
+      finalText.length < currentPreviewText.length
+    ) {
+      // Avoid regressive punctuation/wording flicker from occasional shorter finals.
+      deliveryState.delivered = true;
+      return true;
+    }
+    try {
+      await editMessageTelegram(chatId, previewMessageId, finalText, {
+        api: bot.api,
+        cfg,
+        accountId: route.accountId,
+        linkPreview: telegramCfg.linkPreview,
+        buttons: previewButtons,
+      });
+      lane.lastPartialText = finalText;
+      lane.draftText = finalText;
+      deliveryState.delivered = true;
+      return true;
+    } catch (err) {
+      logVerbose(
+        `telegram: ${laneName} preview update failed; falling back to standard send (${String(err)})`,
+      );
+      return false;
+    }
+  };
 
   let queuedFinal = false;
   try {
@@ -408,21 +451,21 @@ export const dispatchTelegramMessage = async ({
       dispatcherOptions: {
         ...prefixOptions,
         deliver: async (payload, info) => {
+          const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+          const finalText = payload.text;
+          const reasoningMessage = isReasoningMessage(finalText);
+          const previewButtons = (
+            payload.channelData?.telegram as { buttons?: TelegramInlineButtons } | undefined
+          )?.buttons;
+          const canFinalizeViaPreviewEdit =
+            !hasMedia &&
+            typeof finalText === "string" &&
+            finalText.length > 0 &&
+            finalText.length <= draftMaxChars &&
+            !payload.isError;
           if (info.kind === "final") {
             await flushDraftLane(answerLane);
             await flushDraftLane(reasoningLane);
-            const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
-            const finalText = payload.text;
-            const reasoningMessage = isReasoningMessage(finalText);
-            const previewButtons = (
-              payload.channelData?.telegram as { buttons?: TelegramInlineButtons } | undefined
-            )?.buttons;
-            const canFinalizeViaPreviewEdit =
-              !hasMedia &&
-              typeof finalText === "string" &&
-              finalText.length > 0 &&
-              finalText.length <= draftMaxChars &&
-              !payload.isError;
             if (canFinalizeViaPreviewEdit && reasoningMessage) {
               const finalizedReasoning = await tryFinalizePreviewForLane({
                 lane: reasoningLane,
@@ -458,6 +501,17 @@ export const dispatchTelegramMessage = async ({
             }
             await answerLane.stream?.stop();
             await reasoningLane.stream?.stop();
+          }
+          if (info.kind !== "final" && canFinalizeViaPreviewEdit && reasoningMessage) {
+            const updatedReasoning = await tryEditExistingPreviewForLane({
+              lane: reasoningLane,
+              laneName: "reasoning",
+              finalText,
+              previewButtons,
+            });
+            if (updatedReasoning) {
+              return;
+            }
           }
           const result = await deliverReplies({
             ...deliveryBaseOptions,

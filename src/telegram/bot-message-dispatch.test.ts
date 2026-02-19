@@ -687,6 +687,49 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
+  it("updates reasoning preview for reasoning block payloads instead of sending duplicates", async () => {
+    setupDraftStreams({ answerMessageId: 999, reasoningMessageId: 111 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onReasoningStream?.({
+          text: "Reasoning:\nIf I count r in strawberry, I see positions 3, 8, and",
+        });
+        await replyOptions?.onReasoningEnd?.();
+        await replyOptions?.onPartialReply?.({ text: "3" });
+        await dispatcherOptions.deliver({ text: "3" }, { kind: "final" });
+        await dispatcherOptions.deliver(
+          {
+            text: "Reasoning:\nIf I count r in strawberry, I see positions 3, 8, and 9. So the total is 3.",
+          },
+          { kind: "block" },
+        );
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "999" });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(editMessageTelegram).toHaveBeenNthCalledWith(1, 123, 999, "3", expect.any(Object));
+    expect(editMessageTelegram).toHaveBeenNthCalledWith(
+      2,
+      123,
+      111,
+      "Reasoning:\nIf I count r in strawberry, I see positions 3, 8, and 9. So the total is 3.",
+      expect.any(Object),
+    );
+    expect(deliverReplies).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [
+          expect.objectContaining({
+            text: expect.stringContaining("Reasoning:\nIf I count r in strawberry"),
+          }),
+        ],
+      }),
+    );
+  });
+
   it("splits reasoning preview only when next reasoning block starts in partial mode", async () => {
     const { reasoningDraftStream } = setupDraftStreams({
       answerMessageId: 999,
