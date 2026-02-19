@@ -29,6 +29,23 @@ function normalizeToolErrorText(text: string): string | undefined {
     : firstLine;
 }
 
+function isErrorLikeStatus(status: string): boolean {
+  const normalized = status.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  if (
+    normalized === "0" ||
+    normalized === "ok" ||
+    normalized === "success" ||
+    normalized === "completed" ||
+    normalized === "running"
+  ) {
+    return false;
+  }
+  return /error|fail|timeout|timed[_\s-]?out|denied|cancel|invalid|forbidden/.test(normalized);
+}
+
 function readErrorCandidate(value: unknown): string | undefined {
   if (typeof value === "string") {
     return normalizeToolErrorText(value);
@@ -59,7 +76,10 @@ function extractErrorField(value: unknown): string | undefined {
     return direct;
   }
   const status = typeof record.status === "string" ? record.status.trim() : "";
-  return status ? normalizeToolErrorText(status) : undefined;
+  if (!status || !isErrorLikeStatus(status)) {
+    return undefined;
+  }
+  return normalizeToolErrorText(status);
 }
 
 export function sanitizeToolResult(result: unknown): unknown {
