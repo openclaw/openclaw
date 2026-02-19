@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { SsrFBlockedError } from "../infra/net/ssrf.js";
+import { SsrfBlockedError } from "../infra/net/ssrf.js";
 import { fetchJson, fetchOk } from "./cdp.helpers.js";
 import { appendCdpPath, createTargetViaCdp, normalizeCdpWsUrl } from "./cdp.js";
 import {
@@ -648,7 +648,7 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
   const getDefaultContext = () => forProfile();
 
   const mapTabError = (err: unknown) => {
-    if (err instanceof SsrFBlockedError) {
+    if (err instanceof SsrfBlockedError) {
       return { status: 400, message: err.message };
     }
     if (err instanceof InvalidBrowserNavigationUrlError) {

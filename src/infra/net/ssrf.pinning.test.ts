@@ -4,7 +4,7 @@ import {
   type LookupFn,
   resolvePinnedHostname,
   resolvePinnedHostnameWithPolicy,
-  SsrFBlockedError,
+  SsrfBlockedError,
 } from "./ssrf.js";
 
 describe("ssrf pinning", () => {
@@ -118,7 +118,7 @@ describe("ssrf pinning", () => {
       resolvePinnedHostnameWithPolicy("2001:db8:1234::5efe:127.0.0.1", {
         lookupFn: lookup,
       }),
-    ).rejects.toThrow(SsrFBlockedError);
+    ).rejects.toThrow(SsrfBlockedError);
     expect(lookup).not.toHaveBeenCalled();
   });
 
@@ -129,7 +129,7 @@ describe("ssrf pinning", () => {
 
     await expect(
       resolvePinnedHostnameWithPolicy("0177.0.0.1", { lookupFn: lookup }),
-    ).rejects.toThrow(SsrFBlockedError);
+    ).rejects.toThrow(SsrfBlockedError);
     expect(lookup).not.toHaveBeenCalled();
   });
 
@@ -139,7 +139,7 @@ describe("ssrf pinning", () => {
     ]) as unknown as LookupFn;
 
     await expect(resolvePinnedHostnameWithPolicy("8.8.2056", { lookupFn: lookup })).rejects.toThrow(
-      SsrFBlockedError,
+      SsrfBlockedError,
     );
     expect(lookup).not.toHaveBeenCalled();
   });

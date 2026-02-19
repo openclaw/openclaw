@@ -16,7 +16,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
-import { SsrFBlockedError } from "../infra/net/ssrf.js";
+import { SsrfBlockedError } from "../infra/net/ssrf.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
 import { normalizeAgentId, toAgentStoreSessionKey } from "../routing/session-key.js";
@@ -260,7 +260,7 @@ export function buildGatewayCronService(params: {
               });
               await result.release();
             } catch (err) {
-              if (err instanceof SsrFBlockedError) {
+              if (err instanceof SsrfBlockedError) {
                 cronLogger.warn(
                   {
                     reason: formatErrorMessage(err),

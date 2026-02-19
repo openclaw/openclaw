@@ -183,7 +183,7 @@ export {
 
 export { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 export {
-  SsrFBlockedError,
+  SsrfBlockedError,
   isBlockedHostname,
   isBlockedHostnameOrIp,
   isPrivateIpAddress,

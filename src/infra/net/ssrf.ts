@@ -9,10 +9,10 @@ type LookupCallback = (
   family?: number,
 ) => void;
 
-export class SsrFBlockedError extends Error {
+export class SsrfBlockedError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = "SsrFBlockedError";
+    this.name = "SsrfBlockedError";
   }
 }
 
@@ -481,11 +481,11 @@ export async function resolvePinnedHostnameWithPolicy(
   const isExplicitAllowed = allowedHostnames.has(normalized);
 
   if (!matchesHostnameAllowlist(normalized, hostnameAllowlist)) {
-    throw new SsrFBlockedError(`Blocked hostname (not in allowlist): ${hostname}`);
+    throw new SsrfBlockedError(`Blocked hostname (not in allowlist): ${hostname}`);
   }
 
   if (!allowPrivateNetwork && !isExplicitAllowed && isBlockedHostnameOrIp(normalized)) {
-    throw new SsrFBlockedError("Blocked hostname or private/internal IP address");
+    throw new SsrfBlockedError("Blocked hostname or private/internal IP address");
   }
 
   const lookupFn = params.lookupFn ?? dnsLookup;
@@ -497,7 +497,7 @@ export async function resolvePinnedHostnameWithPolicy(
   if (!allowPrivateNetwork && !isExplicitAllowed) {
     for (const entry of results) {
       if (isPrivateIpAddress(entry.address)) {
-        throw new SsrFBlockedError("Blocked: resolves to private/internal IP address");
+        throw new SsrfBlockedError("Blocked: resolves to private/internal IP address");
       }
     }
   }

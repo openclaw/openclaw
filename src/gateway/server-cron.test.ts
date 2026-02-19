@@ -3,7 +3,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { SsrFBlockedError } from "../infra/net/ssrf.js";
+import { SsrfBlockedError } from "../infra/net/ssrf.js";
 
 const enqueueSystemEventMock = vi.fn();
 const requestHeartbeatNowMock = vi.fn();
@@ -99,7 +99,7 @@ describe("buildGatewayCronService", () => {
 
     loadConfigMock.mockReturnValue(cfg);
     fetchWithSsrFGuardMock.mockRejectedValue(
-      new SsrFBlockedError("Blocked: private/internal IP address"),
+      new SsrfBlockedError("Blocked: private/internal IP address"),
     );
 
     const state = buildGatewayCronService({

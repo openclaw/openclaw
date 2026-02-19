@@ -1,5 +1,5 @@
 import type { LookupFn } from "openclaw/plugin-sdk";
-import { SsrFBlockedError } from "openclaw/plugin-sdk";
+import { SsrfBlockedError } from "openclaw/plugin-sdk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { authenticate } from "./auth.js";
 
@@ -17,7 +17,7 @@ describe("tlon urbit auth ssrf", () => {
     vi.stubGlobal("fetch", mockFetch);
 
     await expect(authenticate("http://127.0.0.1:8080", "code")).rejects.toBeInstanceOf(
-      SsrFBlockedError,
+      SsrfBlockedError,
     );
     expect(mockFetch).not.toHaveBeenCalled();
   });

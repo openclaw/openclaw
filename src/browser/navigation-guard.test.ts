@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { SsrFBlockedError, type LookupFn } from "../infra/net/ssrf.js";
+import { SsrfBlockedError, type LookupFn } from "../infra/net/ssrf.js";
 import {
   assertBrowserNavigationAllowed,
   InvalidBrowserNavigationUrlError,
@@ -16,7 +16,7 @@ describe("browser navigation guard", () => {
       assertBrowserNavigationAllowed({
         url: "http://127.0.0.1:8080",
       }),
-    ).rejects.toBeInstanceOf(SsrFBlockedError);
+    ).rejects.toBeInstanceOf(SsrfBlockedError);
   });
 
   it("allows non-network schemes", async () => {
@@ -48,7 +48,7 @@ describe("browser navigation guard", () => {
         url: "https://example.com",
         lookupFn,
       }),
-    ).rejects.toBeInstanceOf(SsrFBlockedError);
+    ).rejects.toBeInstanceOf(SsrfBlockedError);
   });
 
   it("allows hostnames that resolve to public addresses", async () => {

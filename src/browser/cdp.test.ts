@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type WebSocket, WebSocketServer } from "ws";
-import { SsrFBlockedError } from "../infra/net/ssrf.js";
+import { SsrfBlockedError } from "../infra/net/ssrf.js";
 import { rawDataToString } from "../infra/ws.js";
 import { createTargetViaCdp, evaluateJavaScript, normalizeCdpWsUrl, snapshotAria } from "./cdp.js";
 
@@ -102,7 +102,7 @@ describe("cdp", () => {
           cdpUrl: "http://127.0.0.1:9222",
           url: "http://127.0.0.1:8080",
         }),
-      ).rejects.toBeInstanceOf(SsrFBlockedError);
+      ).rejects.toBeInstanceOf(SsrfBlockedError);
       expect(fetchSpy).not.toHaveBeenCalled();
     } finally {
       fetchSpy.mockRestore();
