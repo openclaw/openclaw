@@ -290,21 +290,12 @@ describe("buildServiceEnvironment", () => {
     expect(env.TMPDIR).toBe("/var/folders/xw/abc123/T/");
   });
 
-  it("forwards LANG from the host environment", () => {
-    const env = buildServiceEnvironment({
-      env: { HOME: "/home/user", LANG: "en_US.UTF-8" },
-      port: 18789,
-    });
-    expect(env.LANG).toBe("en_US.UTF-8");
-  });
-
-  it("omits TMPDIR and LANG when not set in host environment", () => {
+  it("omits TMPDIR when not set in host environment", () => {
     const env = buildServiceEnvironment({
       env: { HOME: "/home/user" },
       port: 18789,
     });
     expect(env.TMPDIR).toBeUndefined();
-    expect(env.LANG).toBeUndefined();
   });
 
   it("uses profile-specific unit and label", () => {
@@ -327,12 +318,11 @@ describe("buildNodeServiceEnvironment", () => {
     expect(env.HOME).toBe("/home/user");
   });
 
-  it("forwards TMPDIR and LANG for node services", () => {
+  it("forwards TMPDIR for node services", () => {
     const env = buildNodeServiceEnvironment({
-      env: { HOME: "/home/user", TMPDIR: "/tmp/custom", LANG: "en_US.UTF-8" },
+      env: { HOME: "/home/user", TMPDIR: "/tmp/custom" },
     });
     expect(env.TMPDIR).toBe("/tmp/custom");
-    expect(env.LANG).toBe("en_US.UTF-8");
   });
 });
 
