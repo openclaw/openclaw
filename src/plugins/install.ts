@@ -154,6 +154,7 @@ async function installPluginFromPackageDir(params: {
   mode?: "install" | "update";
   dryRun?: boolean;
   expectedPluginId?: string;
+  force?: boolean;
 }): Promise<InstallPluginResult> {
   const { logger, timeoutMs, mode, dryRun } = resolveTimedPluginInstallModeOptions(params);
 
@@ -205,7 +206,8 @@ async function installPluginFromPackageDir(params: {
     forcedScanEntries.push(resolvedEntry);
   }
 
-  // Scan plugin source for dangerous code patterns (warn-only; never blocks install)
+  // Scan plugin source for dangerous code patterns.
+  // SECURITY: Critical findings block install by default unless --force is used.
   try {
     const scanSummary = await skillScanner.scanDirectoryWithSummary(params.packageDir, {
       includeFiles: forcedScanEntries,
@@ -215,8 +217,14 @@ async function installPluginFromPackageDir(params: {
         .filter((f) => f.severity === "critical")
         .map((f) => `${f.message} (${f.file}:${f.line})`)
         .join("; ");
+      if (!params.force) {
+        return {
+          ok: false,
+          error: `Plugin "${pluginId}" blocked: critical dangerous code patterns detected: ${criticalDetails}. Use --force to override.`,
+        };
+      }
       logger.warn?.(
-        `WARNING: Plugin "${pluginId}" contains dangerous code patterns: ${criticalDetails}`,
+        `WARNING: Plugin "${pluginId}" contains dangerous code patterns (--force override): ${criticalDetails}`,
       );
     } else if (scanSummary.warn > 0) {
       logger.warn?.(
@@ -308,6 +316,7 @@ export async function installPluginFromArchive(params: {
   mode?: "install" | "update";
   dryRun?: boolean;
   expectedPluginId?: string;
+  force?: boolean;
 }): Promise<InstallPluginResult> {
   const logger = params.logger ?? defaultLogger;
   const timeoutMs = params.timeoutMs ?? 120_000;
@@ -349,6 +358,7 @@ export async function installPluginFromArchive(params: {
       mode,
       dryRun: params.dryRun,
       expectedPluginId: params.expectedPluginId,
+      force: params.force,
     });
   });
 }
@@ -361,6 +371,7 @@ export async function installPluginFromDir(params: {
   mode?: "install" | "update";
   dryRun?: boolean;
   expectedPluginId?: string;
+  force?: boolean;
 }): Promise<InstallPluginResult> {
   const dirPath = resolveUserPath(params.dirPath);
   if (!(await fileExists(dirPath))) {
@@ -379,6 +390,7 @@ export async function installPluginFromDir(params: {
     mode: params.mode,
     dryRun: params.dryRun,
     expectedPluginId: params.expectedPluginId,
+    force: params.force,
   });
 }
 
