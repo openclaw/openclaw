@@ -1,11 +1,11 @@
 import { describe, expect, test } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
-import { A2UI_PATH, CANVAS_HOST_PATH, CANVAS_WS_PATH } from "../canvas-host/a2ui.js";
 import type { CanvasHostHandler } from "../canvas-host/server.js";
-import { createAuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-http.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
+import { A2UI_PATH, CANVAS_HOST_PATH, CANVAS_WS_PATH } from "../canvas-host/a2ui.js";
+import { createAuthRateLimiter } from "./auth-rate-limit.js";
+import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-http.js";
 import { withTempConfig } from "./test-temp-config.js";
 
 async function listen(server: ReturnType<typeof createGatewayHttpServer>): Promise<{
@@ -48,6 +48,25 @@ async function expectWsRejected(
       resolve();
     });
   });
+}
+
+function makeWsClient(params: {
+  connId: string;
+  clientIp: string;
+  role: "node" | "operator";
+  mode: "node" | "backend";
+}): GatewayWsClient {
+  return {
+    socket: {} as unknown as WebSocket,
+    connect: {
+      role: params.role,
+      client: {
+        mode: params.mode,
+      },
+    } as GatewayWsClient["connect"],
+    connId: params.connId,
+    clientIp: params.clientIp,
+  };
 }
 
 async function withCanvasGatewayHarness(params: {
@@ -164,12 +183,31 @@ describe("gateway canvas host auth", () => {
               "x-forwarded-for": privateIpA,
             });
 
-            clients.add({
-              socket: {} as unknown as WebSocket,
-              connect: {} as never,
-              connId: "c1",
-              clientIp: privateIpA,
-            });
+            clients.add(
+              makeWsClient({
+                connId: "c-operator",
+                clientIp: privateIpA,
+                role: "operator",
+                mode: "backend",
+              }),
+            );
+
+            const operatorCanvasStillBlocked = await fetch(
+              `http://127.0.0.1:${listener.port}${CANVAS_HOST_PATH}/`,
+              {
+                headers: { "x-forwarded-for": privateIpA },
+              },
+            );
+            expect(operatorCanvasStillBlocked.status).toBe(401);
+
+            clients.add(
+              makeWsClient({
+                connId: "c-node",
+                clientIp: privateIpA,
+                role: "node",
+                mode: "node",
+              }),
+            );
 
             const authCanvas = await fetch(
               `http://127.0.0.1:${listener.port}${CANVAS_HOST_PATH}/`,
@@ -188,12 +226,14 @@ describe("gateway canvas host auth", () => {
             );
             expect(otherIpStillBlocked.status).toBe(401);
 
-            clients.add({
-              socket: {} as unknown as WebSocket,
-              connect: {} as never,
-              connId: "c-public",
-              clientIp: publicIp,
-            });
+            clients.add(
+              makeWsClient({
+                connId: "c-public",
+                clientIp: publicIp,
+                role: "node",
+                mode: "node",
+              }),
+            );
             const publicIpStillBlocked = await fetch(
               `http://127.0.0.1:${listener.port}${CANVAS_HOST_PATH}/`,
               {
@@ -205,12 +245,14 @@ describe("gateway canvas host auth", () => {
               "x-forwarded-for": publicIp,
             });
 
-            clients.add({
-              socket: {} as unknown as WebSocket,
-              connect: {} as never,
-              connId: "c-cgnat",
-              clientIp: cgnatIp,
-            });
+            clients.add(
+              makeWsClient({
+                connId: "c-cgnat",
+                clientIp: cgnatIp,
+                role: "node",
+                mode: "node",
+              }),
+            );
             const cgnatAllowed = await fetch(
               `http://127.0.0.1:${listener.port}${CANVAS_HOST_PATH}/`,
               {
@@ -234,6 +276,60 @@ describe("gateway canvas host auth", () => {
                 reject(new Error(`unexpected response ${res.statusCode}`));
               });
               ws.once("error", reject);
+            });
+          },
+        });
+      },
+    });
+  }, 60_000);
+
+  test("denies canvas IP fallback when proxy headers come from untrusted source", async () => {
+    const resolvedAuth: ResolvedGatewayAuth = {
+      mode: "token",
+      token: "test-token",
+      password: undefined,
+      allowTailscale: false,
+    };
+
+    await withTempConfig({
+      cfg: {
+        gateway: {
+          trustedProxies: [],
+        },
+      },
+      run: async () => {
+        await withCanvasGatewayHarness({
+          resolvedAuth,
+          handleHttpRequest: async (req, res) => {
+            const url = new URL(req.url ?? "/", "http://localhost");
+            if (
+              url.pathname !== CANVAS_HOST_PATH &&
+              !url.pathname.startsWith(`${CANVAS_HOST_PATH}/`)
+            ) {
+              return false;
+            }
+            res.statusCode = 200;
+            res.setHeader("Content-Type", "text/plain; charset=utf-8");
+            res.end("ok");
+            return true;
+          },
+          run: async ({ listener, clients }) => {
+            clients.add(
+              makeWsClient({
+                connId: "c-loopback-node",
+                clientIp: "127.0.0.1",
+                role: "node",
+                mode: "node",
+              }),
+            );
+
+            const res = await fetch(`http://127.0.0.1:${listener.port}${CANVAS_HOST_PATH}/`, {
+              headers: { "x-forwarded-for": "192.168.1.10" },
+            });
+            expect(res.status).toBe(401);
+
+            await expectWsRejected(`ws://127.0.0.1:${listener.port}${CANVAS_WS_PATH}`, {
+              "x-forwarded-for": "192.168.1.10",
             });
           },
         });
