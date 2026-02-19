@@ -326,6 +326,11 @@ export function createExecTool(
       }
       if (elevatedRequested) {
         host = "gateway";
+        // SECURITY: elevated commands bypass sandbox and run on the gateway host.
+        // Log this host escalation for audit visibility.
+        process.stderr.write(
+          `[SECURITY AUDIT] elevated exec forced host=gateway (was ${renderExecHostLabel(configuredHost)}), session=${defaults?.sessionKey ?? "unknown"}\n`,
+        );
       }
 
       const configuredSecurity = defaults?.security ?? (host === "sandbox" ? "deny" : "allowlist");
