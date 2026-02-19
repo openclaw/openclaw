@@ -190,4 +190,38 @@ describe("push APNs send semantics", () => {
     expect(result.ok).toBe(true);
     expect(result.environment).toBe("production");
   });
+
+  it("defaults background wake reason when not provided", async () => {
+    const send = vi.fn().mockResolvedValue({
+      status: 200,
+      apnsId: "apns-wake-default-reason-id",
+      body: "",
+    });
+
+    await sendApnsBackgroundWake({
+      auth: {
+        teamId: "TEAM123",
+        keyId: "KEY123",
+        privateKey: testAuthPrivateKey,
+      },
+      registration: {
+        nodeId: "ios-node-wake-default-reason",
+        token: "ABCD1234ABCD1234ABCD1234ABCD1234",
+        topic: "ai.openclaw.ios",
+        environment: "sandbox",
+        updatedAtMs: 1,
+      },
+      nodeId: "ios-node-wake-default-reason",
+      requestSender: send,
+    });
+
+    const sent = send.mock.calls[0]?.[0];
+    expect(sent?.payload).toMatchObject({
+      openclaw: {
+        kind: "node.wake",
+        reason: "node.invoke",
+        nodeId: "ios-node-wake-default-reason",
+      },
+    });
+  });
 });
