@@ -35,6 +35,20 @@ describe("logger helpers", () => {
     expect(error).toHaveBeenCalledTimes(1);
   });
 
+  it("sanitizes terminal control artifacts in error logs", () => {
+    const logPath = pathForTest();
+    cleanup(logPath);
+    setLoggerOverride({ level: "error", file: logPath });
+
+    logError("\u001B]0;codex\u0007[?25h message failed");
+
+    const content = fs.readFileSync(logPath, "utf-8");
+    expect(content).toContain("message failed");
+    expect(content).not.toContain("[?25h");
+    expect(content).not.toContain("]0;");
+    cleanup(logPath);
+  });
+
   it("only logs debug when verbose is enabled", () => {
     const logVerbose = vi.spyOn(console, "log");
     setVerbose(false);
