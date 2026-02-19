@@ -16,10 +16,15 @@ import {
   type GatewayClientName,
 } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
-import { pickPrimaryLanIPv4 } from "./net.js";
+import {
+  CLI_DEFAULT_OPERATOR_SCOPES,
+  resolveLeastPrivilegeOperatorScopesForMethod,
+  type OperatorScope,
+} from "./method-scopes.js";
+import { isSecureWebSocketUrl, pickPrimaryLanIPv4 } from "./net.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
 
-export type CallGatewayOptions = {
+type CallGatewayBaseOptions = {
   url?: string;
   token?: string;
   password?: string;
@@ -42,6 +47,18 @@ export type CallGatewayOptions = {
    * Does not affect config loading; callers still control auth via opts.token/password/env/config.
    */
   configPath?: string;
+};
+
+export type CallGatewayScopedOptions = CallGatewayBaseOptions & {
+  scopes: OperatorScope[];
+};
+
+export type CallGatewayCliOptions = CallGatewayBaseOptions & {
+  scopes?: OperatorScope[];
+};
+
+export type CallGatewayOptions = CallGatewayBaseOptions & {
+  scopes?: OperatorScope[];
 };
 
 export type GatewayConnectionDetails = {
@@ -134,6 +151,22 @@ export function buildGatewayConnectionDetails(
     ? "Warn: gateway.mode=remote but gateway.remote.url is missing; set gateway.remote.url or switch gateway.mode=local."
     : undefined;
   const bindDetail = !urlOverride && !remoteUrl ? `Bind: ${bindMode}` : undefined;
+
+  // Security check: block ALL insecure ws:// to non-loopback addresses (CWE-319, CVSS 9.8)
+  // This applies to the FINAL resolved URL, regardless of source (config, CLI override, etc).
+  // Both credentials and chat/conversation data must not be transmitted over plaintext to remote hosts.
+  if (!isSecureWebSocketUrl(url)) {
+    throw new Error(
+      [
+        `SECURITY ERROR: Gateway URL "${url}" uses plaintext ws:// to a non-loopback address.`,
+        "Both credentials and chat data would be exposed to network interception.",
+        `Source: ${urlSource}`,
+        `Config: ${configPath}`,
+        "Fix: Use wss:// for the gateway URL, or connect via SSH tunnel to localhost.",
+      ].join("\n"),
+    );
+  }
+
   const message = [
     `Gateway target: ${url}`,
     `Source: ${urlSource}`,
@@ -153,8 +186,9 @@ export function buildGatewayConnectionDetails(
   };
 }
 
-export async function callGateway<T = Record<string, unknown>>(
-  opts: CallGatewayOptions,
+async function callGatewayWithScopes<T = Record<string, unknown>>(
+  opts: CallGatewayBaseOptions,
+  scopes: OperatorScope[],
 ): Promise<T> {
   const timeoutMs =
     typeof opts.timeoutMs === "number" && Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : 10_000;
@@ -269,7 +303,7 @@ export async function callGateway<T = Record<string, unknown>>(
       platform: opts.platform,
       mode: opts.mode ?? GATEWAY_CLIENT_MODES.CLI,
       role: "operator",
-      scopes: ["operator.admin", "operator.approvals", "operator.pairing"],
+      scopes,
       deviceIdentity: loadOrCreateDeviceIdentity(),
       minProtocol: opts.minProtocol ?? PROTOCOL_VERSION,
       maxProtocol: opts.maxProtocol ?? PROTOCOL_VERSION,
@@ -304,6 +338,44 @@ export async function callGateway<T = Record<string, unknown>>(
     }, safeTimerTimeoutMs);
 
     client.start();
+  });
+}
+
+export async function callGatewayScoped<T = Record<string, unknown>>(
+  opts: CallGatewayScopedOptions,
+): Promise<T> {
+  return await callGatewayWithScopes(opts, opts.scopes);
+}
+
+export async function callGatewayCli<T = Record<string, unknown>>(
+  opts: CallGatewayCliOptions,
+): Promise<T> {
+  const scopes = Array.isArray(opts.scopes) ? opts.scopes : CLI_DEFAULT_OPERATOR_SCOPES;
+  return await callGatewayWithScopes(opts, scopes);
+}
+
+export async function callGatewayLeastPrivilege<T = Record<string, unknown>>(
+  opts: CallGatewayBaseOptions,
+): Promise<T> {
+  const scopes = resolveLeastPrivilegeOperatorScopesForMethod(opts.method);
+  return await callGatewayWithScopes(opts, scopes);
+}
+
+export async function callGateway<T = Record<string, unknown>>(
+  opts: CallGatewayOptions,
+): Promise<T> {
+  if (Array.isArray(opts.scopes)) {
+    return await callGatewayWithScopes(opts, opts.scopes);
+  }
+  const callerMode = opts.mode ?? GATEWAY_CLIENT_MODES.BACKEND;
+  const callerName = opts.clientName ?? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT;
+  if (callerMode === GATEWAY_CLIENT_MODES.CLI || callerName === GATEWAY_CLIENT_NAMES.CLI) {
+    return await callGatewayCli(opts);
+  }
+  return await callGatewayLeastPrivilege({
+    ...opts,
+    mode: callerMode,
+    clientName: callerName,
   });
 }
 

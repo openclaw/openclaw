@@ -114,6 +114,7 @@ High-signal `checkId` values you will most likely see in real deployments (not e
 | `fs.config.perms_world_readable`             | critical      | Config can expose tokens/settings                        | filesystem perms on config file                  | yes      |
 | `gateway.bind_no_auth`                       | critical      | Remote bind without shared secret                        | `gateway.bind`, `gateway.auth.*`                 | no       |
 | `gateway.loopback_no_auth`                   | critical      | Reverse-proxied loopback may become unauthenticated      | `gateway.auth.*`, proxy setup                    | no       |
+| `gateway.http.no_auth`                       | warn/critical | Gateway HTTP APIs reachable with `auth.mode="none"`      | `gateway.auth.mode`, `gateway.http.endpoints.*`  | no       |
 | `gateway.tools_invoke_http.dangerous_allow`  | warn/critical | Re-enables dangerous tools over HTTP API                 | `gateway.tools.allow`                            | no       |
 | `gateway.tailscale_funnel`                   | critical      | Public internet exposure                                 | `gateway.tailscale.mode`                         | no       |
 | `gateway.control_ui.insecure_auth`           | critical      | Token-only over HTTP, no device identity                 | `gateway.controlUi.allowInsecureAuth`            | no       |
@@ -301,6 +302,8 @@ OpenClaw has two separate “who can trigger me?” layers:
     - `channels.whatsapp.groups`, `channels.telegram.groups`, `channels.imessage.groups`: per-group defaults like `requireMention`; when set, it also acts as a group allowlist (include `"*"` to keep allow-all behavior).
     - `groupPolicy="allowlist"` + `groupAllowFrom`: restrict who can trigger the bot _inside_ a group session (WhatsApp/Telegram/Signal/iMessage/Microsoft Teams).
     - `channels.discord.guilds` / `channels.slack.channels`: per-surface allowlists + mention defaults.
+  - Group checks run in this order: `groupPolicy`/group allowlists first, mention/reply activation second.
+  - Replying to a bot message (implicit mention) does **not** bypass sender allowlists like `groupAllowFrom`.
   - **Security note:** treat `dmPolicy="open"` and `groupPolicy="open"` as last-resort settings. They should be barely used; prefer pairing + allowlists unless you fully trust every member of the room.
 
 Details: [Configuration](/gateway/configuration) and [Groups](/channels/groups)
@@ -658,6 +661,8 @@ One “safe default” config that keeps the Gateway private, requires DM pairin
 ```
 
 If you want “safer by default” tool execution too, add a sandbox + deny dangerous tools for any non-owner agent (example below under “Per-agent access profiles”).
+
+Built-in baseline for chat-driven agent turns: non-owner senders cannot use the `cron` or `gateway` tools.
 
 ## Sandboxing (recommended)
 

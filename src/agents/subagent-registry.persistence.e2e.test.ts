@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import "./subagent-registry.mocks.shared.js";
 import { captureEnv } from "../test-utils/env.js";
 import {
   initSubagentRegistry,
@@ -9,20 +10,6 @@ import {
   resetSubagentRegistryForTests,
 } from "./subagent-registry.js";
 import { loadSubagentRegistryFromDisk } from "./subagent-registry.store.js";
-
-const noop = () => {};
-
-vi.mock("../gateway/call.js", () => ({
-  callGateway: vi.fn(async () => ({
-    status: "ok",
-    startedAt: 111,
-    endedAt: 222,
-  })),
-}));
-
-vi.mock("../infra/agent-events.js", () => ({
-  onAgentEvent: vi.fn(() => noop),
-}));
 
 const { announceSpy } = vi.hoisted(() => ({
   announceSpy: vi.fn(async () => true),
@@ -65,18 +52,23 @@ describe("subagent registry persistence", () => {
           requesterDisplayKey: "main",
           task: params.task,
           cleanup: params.cleanup,
-          createdAt: now - 2_000,
-          startedAt: now - 1_500,
-          endedAt: now - 1_000,
+          createdAt: now - 2,
+          startedAt: now - 1,
+          endedAt: now,
         },
       },
     };
   };
 
+  const flushQueuedRegistryWork = async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  };
+
   const restartRegistryAndFlush = async () => {
     resetSubagentRegistryForTests({ persist: false });
     initSubagentRegistry();
-    await new Promise((r) => setTimeout(r, 0));
+    await flushQueuedRegistryWork();
   };
 
   afterEach(async () => {
@@ -126,7 +118,7 @@ describe("subagent registry persistence", () => {
     initSubagentRegistry();
 
     // allow queued async wait/cleanup to execute
-    await new Promise((r) => setTimeout(r, 0));
+    await flushQueuedRegistryWork();
 
     expect(announceSpy).toHaveBeenCalled();
 
@@ -178,7 +170,7 @@ describe("subagent registry persistence", () => {
     resetSubagentRegistryForTests({ persist: false });
     initSubagentRegistry();
 
-    await new Promise((r) => setTimeout(r, 0));
+    await flushQueuedRegistryWork();
 
     // announce should NOT be called since cleanupHandled was true
     const calls = (announceSpy.mock.calls as unknown as Array<[unknown]>).map((call) => call[0]);

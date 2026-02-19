@@ -3,7 +3,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { expectSingleNpmInstallIgnoreScriptsCall } from "../test-utils/exec-assertions.js";
+import {
+  expectSingleNpmInstallIgnoreScriptsCall,
+  expectSingleNpmPackIgnoreScriptsCall,
+} from "../test-utils/exec-assertions.js";
 import { isAddressInUseError } from "./gmail-watcher.js";
 
 const fixtureRoot = path.join(os.tmpdir(), `openclaw-hook-install-${randomUUID()}`);
@@ -250,7 +253,16 @@ describe("installHooksFromNpmSpec", () => {
         fs.writeFileSync(path.join(packTmpDir, packedName), npmPackHooksBuffer);
         return {
           code: 0,
-          stdout: `${packedName}\n`,
+          stdout: JSON.stringify([
+            {
+              id: "@openclaw/test-hooks@0.0.1",
+              name: "@openclaw/test-hooks",
+              version: "0.0.1",
+              filename: packedName,
+              integrity: "sha512-hook-test",
+              shasum: "hookshasum",
+            },
+          ]),
           stderr: "",
           signal: null,
           killed: false,
@@ -271,20 +283,14 @@ describe("installHooksFromNpmSpec", () => {
       return;
     }
     expect(result.hookPackId).toBe("test-hooks");
+    expect(result.npmResolution?.resolvedSpec).toBe("@openclaw/test-hooks@0.0.1");
+    expect(result.npmResolution?.integrity).toBe("sha512-hook-test");
     expect(fs.existsSync(path.join(result.targetDir, "hooks", "one-hook", "HOOK.md"))).toBe(true);
 
-    const packCalls = run.mock.calls.filter(
-      (c) => Array.isArray(c[0]) && c[0][0] === "npm" && c[0][1] === "pack",
-    );
-    expect(packCalls.length).toBe(1);
-    const packCall = packCalls[0];
-    if (!packCall) {
-      throw new Error("expected npm pack call");
-    }
-    const [argv, options] = packCall;
-    expect(argv).toEqual(["npm", "pack", "@openclaw/test-hooks@0.0.1", "--ignore-scripts"]);
-    const commandOptions = typeof options === "number" ? undefined : options;
-    expect(commandOptions?.env).toMatchObject({ NPM_CONFIG_IGNORE_SCRIPTS: "true" });
+    expectSingleNpmPackIgnoreScriptsCall({
+      calls: run.mock.calls,
+      expectedSpec: "@openclaw/test-hooks@0.0.1",
+    });
 
     expect(packTmpDir).not.toBe("");
     expect(fs.existsSync(packTmpDir)).toBe(false);
@@ -297,6 +303,46 @@ describe("installHooksFromNpmSpec", () => {
       return;
     }
     expect(result.error).toContain("unsupported npm spec");
+  });
+
+  it("aborts when integrity drift callback rejects the fetched artifact", async () => {
+    const run = vi.mocked(runCommandWithTimeout);
+    run.mockResolvedValue({
+      code: 0,
+      stdout: JSON.stringify([
+        {
+          id: "@openclaw/test-hooks@0.0.1",
+          name: "@openclaw/test-hooks",
+          version: "0.0.1",
+          filename: "test-hooks-0.0.1.tgz",
+          integrity: "sha512-new",
+          shasum: "newshasum",
+        },
+      ]),
+      stderr: "",
+      signal: null,
+      killed: false,
+      termination: "exit",
+    });
+
+    const onIntegrityDrift = vi.fn(async () => false);
+    const result = await installHooksFromNpmSpec({
+      spec: "@openclaw/test-hooks@0.0.1",
+      expectedIntegrity: "sha512-old",
+      onIntegrityDrift,
+    });
+
+    expect(onIntegrityDrift).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expectedIntegrity: "sha512-old",
+        actualIntegrity: "sha512-new",
+      }),
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.error).toContain("integrity drift");
   });
 });
 
