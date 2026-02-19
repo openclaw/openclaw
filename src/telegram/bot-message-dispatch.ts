@@ -1,4 +1,10 @@
 import type { Bot } from "grammy";
+import type { OpenClawConfig, ReplyToMode, TelegramAccountConfig } from "../config/types.js";
+import type { RuntimeEnv } from "../runtime.js";
+import type { TelegramMessageContext } from "./bot-message-context.js";
+import type { TelegramBotOptions } from "./bot.js";
+import type { TelegramStreamMode } from "./bot/types.js";
+import type { TelegramInlineButtons } from "./button-types.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import {
   findModelInCatalog,
@@ -15,24 +21,15 @@ import { logAckFailure, logTypingFailure } from "../channels/logging.js";
 import { createReplyPrefixOptions } from "../channels/reply-prefix.js";
 import { createTypingCallbacks } from "../channels/typing.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
-import type { OpenClawConfig, ReplyToMode, TelegramAccountConfig } from "../config/types.js";
 import { danger, logVerbose } from "../globals.js";
 import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
-import type { RuntimeEnv } from "../runtime.js";
-import type { TelegramMessageContext } from "./bot-message-context.js";
-import type { TelegramBotOptions } from "./bot.js";
 import { deliverReplies } from "./bot/delivery.js";
-import type { TelegramStreamMode } from "./bot/types.js";
-import type { TelegramInlineButtons } from "./button-types.js";
 import { resolveTelegramDraftStreamingChunking } from "./draft-chunking.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
 import { editMessageTelegram } from "./send.js";
 import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
-
-/** Minimum chars before sending first streaming message (improves push notification UX) */
-const DRAFT_MIN_INITIAL_CHARS = 30;
 
 async function resolveStickerVisionSupport(cfg: OpenClawConfig, agentId: string) {
   try {
@@ -97,6 +94,9 @@ export const dispatchTelegramMessage = async ({
   const canStreamDraft = streamMode !== "off" && !accountBlockStreamingEnabled;
   const draftReplyToMessageId =
     replyToMode !== "off" && typeof msg.message_id === "number" ? msg.message_id : undefined;
+  // Support config for immediate draft on message receipt
+  const draftMinInitialChars = telegramCfg.draftMinInitialChars ?? 30;
+  const initialDraftText = telegramCfg.initialDraftText;
   const draftStream = canStreamDraft
     ? createTelegramDraftStream({
         api: bot.api,
@@ -104,7 +104,8 @@ export const dispatchTelegramMessage = async ({
         maxChars: draftMaxChars,
         thread: threadSpec,
         replyToMessageId: draftReplyToMessageId,
-        minInitialChars: DRAFT_MIN_INITIAL_CHARS,
+        minInitialChars: draftMinInitialChars,
+        initialText: initialDraftText,
         log: logVerbose,
         warn: logVerbose,
       })

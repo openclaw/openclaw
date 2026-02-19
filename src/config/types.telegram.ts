@@ -101,6 +101,10 @@ export type TelegramAccountConfig = {
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
   /** Telegram stream preview mode (off|partial|block). Default: partial. */
   streamMode?: "off" | "partial" | "block";
+  /** Minimum chars before sending initial draft message. Set to 0 to send immediately on message receipt. Default: 30. */
+  draftMinInitialChars?: number;
+  /** Initial draft text to show immediately when processing starts. Use to acknowledge message receipt. */
+  initialDraftText?: string;
   mediaMaxMb?: number;
   /** Telegram API client timeout in seconds (grammY ApiClientOptions). */
   timeoutSeconds?: number;

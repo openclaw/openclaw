@@ -24,6 +24,8 @@ export function createTelegramDraftStream(params: {
   throttleMs?: number;
   /** Minimum chars before sending first message (debounce for push notifications) */
   minInitialChars?: number;
+  /** Initial text to send immediately when stream starts (e.g., "收到，正在思考...") */
+  initialText?: string;
   log?: (message: string) => void;
   warn?: (message: string) => void;
 }): TelegramDraftStream {
@@ -44,6 +46,23 @@ export function createTelegramDraftStream(params: {
   let lastSentText = "";
   let stopped = false;
   let isFinal = false;
+
+  // Immediately send initial text if provided (e.g., "收到，正在思考...")
+  const initialText = params.initialText?.trim();
+  if (initialText) {
+    void (async () => {
+      try {
+        const sent = await params.api.sendMessage(chatId, initialText, replyParams);
+        const sentMessageId = sent?.message_id;
+        if (typeof sentMessageId === "number" && Number.isFinite(sentMessageId)) {
+          streamMessageId = Math.trunc(sentMessageId);
+          lastSentText = initialText;
+        }
+      } catch (err) {
+        params.warn?.(`telegram stream initial text send failed: ${String(err)}`);
+      }
+    })();
+  }
 
   const sendOrEditStreamMessage = async (text: string): Promise<boolean> => {
     // Allow final flush even if stopped (e.g., after clear()).
