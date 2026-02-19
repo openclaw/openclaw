@@ -52,6 +52,8 @@ export async function deliverReplies(params: {
   onVoiceRecording?: () => Promise<void> | void;
   /** Controls whether link previews are shown. Default: true (previews enabled). */
   linkPreview?: boolean;
+  /** When true, messages are sent with disable_notification. */
+  silent?: boolean;
   /** Optional quote text for Telegram reply_parameters. */
   replyQuoteText?: string;
 }): Promise<{ delivered: boolean }> {
@@ -132,6 +134,7 @@ export async function deliverReplies(params: {
           textMode: "html",
           plainText: chunk.text,
           linkPreview,
+          silent: params.silent,
           replyMarkup: shouldAttachButtons ? replyMarkup : undefined,
         });
         sentTextChunk = true;
@@ -179,6 +182,7 @@ export async function deliverReplies(params: {
         ...buildTelegramSendParams({
           replyToMessageId,
           thread,
+          silent: params.silent,
         }),
       };
       if (isGif) {
@@ -242,6 +246,7 @@ export async function deliverReplies(params: {
                 replyToId: replyToMessageIdForPayload,
                 thread,
                 linkPreview,
+                silent: params.silent,
                 replyMarkup,
                 replyQuoteText,
               });
@@ -286,6 +291,7 @@ export async function deliverReplies(params: {
             textMode: "html",
             plainText: chunk.text,
             linkPreview,
+            silent: params.silent,
             replyMarkup: i === 0 ? replyMarkup : undefined,
           });
           markDelivered();
@@ -488,6 +494,7 @@ async function sendTelegramVoiceFallbackText(opts: {
   replyToId?: number;
   thread?: TelegramThreadSpec | null;
   linkPreview?: boolean;
+  silent?: boolean;
   replyMarkup?: ReturnType<typeof buildInlineKeyboard>;
   replyQuoteText?: string;
 }): Promise<void> {
@@ -501,6 +508,7 @@ async function sendTelegramVoiceFallbackText(opts: {
       textMode: "html",
       plainText: chunk.text,
       linkPreview: opts.linkPreview,
+      silent: opts.silent,
       replyMarkup: i === 0 ? opts.replyMarkup : undefined,
     });
   }
@@ -509,6 +517,7 @@ async function sendTelegramVoiceFallbackText(opts: {
 function buildTelegramSendParams(opts?: {
   replyToMessageId?: number;
   thread?: TelegramThreadSpec | null;
+  silent?: boolean;
 }): Record<string, unknown> {
   const threadParams = buildTelegramThreadParams(opts?.thread);
   const params: Record<string, unknown> = {};
@@ -517,6 +526,9 @@ function buildTelegramSendParams(opts?: {
   }
   if (threadParams) {
     params.message_thread_id = threadParams.message_thread_id;
+  }
+  if (opts?.silent === true) {
+    params.disable_notification = true;
   }
   return params;
 }
@@ -533,12 +545,14 @@ async function sendTelegramText(
     textMode?: "markdown" | "html";
     plainText?: string;
     linkPreview?: boolean;
+    silent?: boolean;
     replyMarkup?: ReturnType<typeof buildInlineKeyboard>;
   },
 ): Promise<number | undefined> {
   const baseParams = buildTelegramSendParams({
     replyToMessageId: opts?.replyToMessageId,
     thread: opts?.thread,
+    silent: opts?.silent,
   });
   // Add link_preview_options when link preview is disabled.
   const linkPreviewEnabled = opts?.linkPreview ?? true;
