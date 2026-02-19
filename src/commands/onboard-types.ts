@@ -125,6 +125,8 @@ export type OnboardOptions = {
   customModelId?: string;
   customProviderId?: string;
   customCompatibility?: "openai" | "anthropic";
+  customContextWindow?: number;
+  customMaxTokens?: number;
   gatewayPort?: number;
   gatewayBind?: GatewayBind;
   gatewayAuth?: GatewayAuthChoice;

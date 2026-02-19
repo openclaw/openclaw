@@ -9,7 +9,7 @@ import { applyPrimaryModel } from "./model-picker.js";
 import { normalizeAlias } from "./models/shared.js";
 
 const DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434/v1";
-const DEFAULT_CONTEXT_WINDOW = 4096;
+const DEFAULT_CONTEXT_WINDOW = 16000;
 const DEFAULT_MAX_TOKENS = 4096;
 const VERIFY_TIMEOUT_MS = 10000;
 
@@ -65,6 +65,8 @@ export type ApplyCustomApiConfigParams = {
   apiKey?: string;
   providerId?: string;
   alias?: string;
+  contextWindow?: number;
+  maxTokens?: number;
 };
 
 export type ParseNonInteractiveCustomApiFlagsParams = {
@@ -503,11 +505,13 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
   const existingProvider = providers[providerId];
   const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
   const hasModel = existingModels.some((model) => model.id === modelId);
+  const contextWindow = params.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
+  const maxTokens = params.maxTokens ?? DEFAULT_MAX_TOKENS;
   const nextModel = {
     id: modelId,
     name: `${modelId} (Custom Provider)`,
-    contextWindow: DEFAULT_CONTEXT_WINDOW,
-    maxTokens: DEFAULT_MAX_TOKENS,
+    contextWindow,
+    maxTokens,
     input: ["text"] as ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     reasoning: false,

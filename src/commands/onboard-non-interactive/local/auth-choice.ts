@@ -694,6 +694,8 @@ export async function applyNonInteractiveAuthChoice(params: {
         compatibility: customAuth.compatibility,
         apiKey: resolvedCustomApiKey?.key,
         providerId: customAuth.providerId,
+        contextWindow: opts.customContextWindow,
+        maxTokens: opts.customMaxTokens,
       });
       if (result.providerIdRenamedFrom && result.providerId) {
         runtime.log(
