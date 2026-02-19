@@ -21,6 +21,7 @@ import {
   resolveArchiveSourcePath,
   withTempDir,
 } from "../infra/install-source-utils.js";
+import { resolveNpmIntegrityDriftWithDefaultMessage } from "../infra/npm-integrity.js";
 import { validateRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { extensionUsesSkippedScannerPath, isPathInside } from "../security/scan-paths.js";
 import * as skillScanner from "../security/skill-scanner.js";
@@ -458,36 +459,21 @@ export async function installPluginFromNpmSpec(params: {
       resolvedAt: new Date().toISOString(),
     };
 
-    let integrityDrift: NpmIntegrityDrift | undefined;
-    if (
-      params.expectedIntegrity &&
-      npmResolution.integrity &&
-      params.expectedIntegrity !== npmResolution.integrity
-    ) {
-      integrityDrift = {
-        expectedIntegrity: params.expectedIntegrity,
-        actualIntegrity: npmResolution.integrity,
+    const driftResult = await resolveNpmIntegrityDriftWithDefaultMessage({
+      spec,
+      expectedIntegrity: params.expectedIntegrity,
+      resolution: npmResolution,
+      onIntegrityDrift: params.onIntegrityDrift,
+      warn: (message) => {
+        logger.warn?.(message);
+      },
+    });
+    const integrityDrift = driftResult.integrityDrift;
+    if (driftResult.error) {
+      return {
+        ok: false,
+        error: driftResult.error,
       };
-      const driftPayload: PluginNpmIntegrityDriftParams = {
-        spec,
-        expectedIntegrity: integrityDrift.expectedIntegrity,
-        actualIntegrity: integrityDrift.actualIntegrity,
-        resolution: npmResolution,
-      };
-      let proceed = true;
-      if (params.onIntegrityDrift) {
-        proceed = await params.onIntegrityDrift(driftPayload);
-      } else {
-        logger.warn?.(
-          `Integrity drift detected for ${driftPayload.resolution.resolvedSpec ?? driftPayload.spec}: expected ${driftPayload.expectedIntegrity}, got ${driftPayload.actualIntegrity}`,
-        );
-      }
-      if (!proceed) {
-        return {
-          ok: false,
-          error: `aborted: npm package integrity drift detected for ${driftPayload.resolution.resolvedSpec ?? driftPayload.spec}`,
-        };
-      }
     }
 
     const installResult = await installPluginFromArchive({
