@@ -179,7 +179,37 @@ export class VoiceCallWebhookServer {
   async start(): Promise<string> {
     const { port, bind, path: webhookPath } = this.config.serve;
     const streamPath = this.config.streaming?.streamPath || "/voice/stream";
+    const maxRetries = 3;
 
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      const tryPort = port + attempt;
+      try {
+        const url = await this.tryListen(tryPort, bind, webhookPath, streamPath);
+        if (attempt > 0) {
+          console.log(`[voice-call] Port ${port} was in use, fell back to ${tryPort}`);
+        }
+        return url;
+      } catch (err) {
+        const isAddrInUse =
+          err instanceof Error &&
+          "code" in err &&
+          (err as NodeJS.ErrnoException).code === "EADDRINUSE";
+        if (!isAddrInUse || attempt === maxRetries) {
+          throw err;
+        }
+        console.warn(`[voice-call] Port ${tryPort} in use (EADDRINUSE), trying ${tryPort + 1}…`);
+      }
+    }
+    // Unreachable, but satisfies TypeScript
+    throw new Error(`[voice-call] Failed to bind after ${maxRetries + 1} attempts`);
+  }
+
+  private tryListen(
+    port: number,
+    bind: string,
+    webhookPath: string,
+    streamPath: string,
+  ): Promise<string> {
     return new Promise((resolve, reject) => {
       this.server = http.createServer((req, res) => {
         this.handleRequest(req, res, webhookPath).catch((err) => {
@@ -203,7 +233,10 @@ export class VoiceCallWebhookServer {
         });
       }
 
-      this.server.on("error", reject);
+      this.server.on("error", (err) => {
+        this.server = null;
+        reject(err);
+      });
 
       this.server.listen(port, bind, () => {
         const url = `http://${bind}:${port}${webhookPath}`;
