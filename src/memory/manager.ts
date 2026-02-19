@@ -437,7 +437,19 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (!absPath.endsWith(".md")) {
       throw new Error("path required");
     }
-    const stat = await fs.lstat(absPath);
+    let stat;
+    try {
+      stat = await fs.lstat(absPath);
+    } catch (err: unknown) {
+      if (
+        err instanceof Error &&
+        "code" in err &&
+        (err as NodeJS.ErrnoException).code === "ENOENT"
+      ) {
+        return { text: "", path: relPath };
+      }
+      throw err;
+    }
     if (stat.isSymbolicLink() || !stat.isFile()) {
       throw new Error("path required");
     }
