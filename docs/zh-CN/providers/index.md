@@ -43,6 +43,7 @@ Venice 是我们推荐的 Venice AI 设置，用于隐私优先的推理，并�
 
 - [OpenAI（API + Codex）](/providers/openai)
 - [Anthropic（API + Claude Code CLI）](/providers/anthropic)
+- [GitHub Copilot](/providers/github-copilot)
 - [Qwen（OAuth）](/providers/qwen)
 - [OpenRouter](/providers/openrouter)
 - [Vercel AI Gateway](/providers/vercel-ai-gateway)
