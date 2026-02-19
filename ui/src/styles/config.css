@@ -7,8 +7,7 @@
   display: grid;
   grid-template-columns: 260px minmax(0, 1fr);
   gap: 0;
-  height: calc(100vh - 160px);
-  margin: -16px;
+  height: calc(100vh - 190px);
   border-radius: var(--radius-xl);
   border: 1px solid var(--border);
   background: var(--panel);
