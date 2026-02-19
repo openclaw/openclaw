@@ -58,6 +58,9 @@ type TtsQueueEntry = {
 export class MediaStreamHandler {
   private wss: WebSocketServer | null = null;
   private sessions = new Map<string, StreamSession>();
+  /** Cooldown period after TTS finishes — ignore audio to prevent echo from network delay */
+  private ttsCooldownUntil = new Map<string, number>();
+  private static readonly TTS_COOLDOWN_MS = 250; // 250ms cooldown after TTS ends
   private config: MediaStreamConfig;
   /** TTS playback queues per stream (serialize audio to prevent overlap) */
   private ttsQueues = new Map<string, TtsQueueEntry[]>();
@@ -106,6 +109,13 @@ export class MediaStreamHandler {
 
           case "media":
             if (session && message.media?.payload) {
+              // Echo suppression: skip forwarding audio to STT while TTS is playing
+              // or during cooldown period after TTS finishes (network delay causes echo)
+              const isTtsActive = this.ttsPlaying.get(session.streamSid);
+              const cooldownEnd = this.ttsCooldownUntil.get(session.streamSid) ?? 0;
+              if (isTtsActive || Date.now() < cooldownEnd) {
+                break;
+              }
               // Forward audio to STT
               const audioBuffer = Buffer.from(message.media.payload, "base64");
               session.sttSession.sendAudio(audioBuffer);
@@ -307,6 +317,8 @@ export class MediaStreamHandler {
     queue.length = 0;
     this.ttsActiveControllers.get(streamSid)?.abort();
     this.clearAudio(streamSid);
+    // Set cooldown to prevent echo from interrupted TTS leaking into STT
+    this.ttsCooldownUntil.set(streamSid, Date.now() + MediaStreamHandler.TTS_COOLDOWN_MS);
   }
 
   /**
@@ -349,6 +361,12 @@ export class MediaStreamHandler {
       const queue = this.ttsQueues.get(streamSid);
       if (!queue || queue.length === 0) {
         this.ttsPlaying.set(streamSid, false);
+        // Set cooldown to suppress echo from network-delayed TTS audio
+        // Double-check queue in case new TTS was enqueued during the race window
+        const queueAfterCheck = this.ttsQueues.get(streamSid);
+        if (!queueAfterCheck || queueAfterCheck.length === 0) {
+          this.ttsCooldownUntil.set(streamSid, Date.now() + MediaStreamHandler.TTS_COOLDOWN_MS);
+        }
         this.ttsActiveControllers.delete(streamSid);
         return;
       }
@@ -383,6 +401,7 @@ export class MediaStreamHandler {
     this.ttsActiveControllers.delete(streamSid);
     this.ttsPlaying.delete(streamSid);
     this.ttsQueues.delete(streamSid);
+    this.ttsCooldownUntil.delete(streamSid);
   }
 }
 
