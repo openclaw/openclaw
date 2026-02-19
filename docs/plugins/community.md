@@ -42,3 +42,8 @@ Use this format when adding entries:
   npm: `@scope/package`
   repo: `https://github.com/org/repo`
   install: `openclaw plugins install @scope/package`
+
+- **Cognee Memory** — Cognee memory plugin with automatic recall before agent runs and auto-indexing of workspace memory files
+  npm: `@cognee/cognee-openclaw`
+  repo: `https://github.com/hande-k/cognee-integrations`
+  install: `openclaw plugins install @cognee/cognee-openclaw`
