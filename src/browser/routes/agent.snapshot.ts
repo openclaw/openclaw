@@ -65,10 +65,12 @@ export function registerBrowserAgentSnapshotRoutes(
       targetId,
       feature: "navigate",
       run: async ({ cdpUrl, tab, pw }) => {
+        const ssrfPolicy = ctx.state().resolved.ssrfPolicy;
         const result = await pw.navigateViaPlaywright({
           cdpUrl,
           targetId: tab.targetId,
           url,
+          ...(ssrfPolicy ? { ssrfPolicy } : {}),
         });
         res.json({ ok: true, targetId: tab.targetId, ...result });
       },
