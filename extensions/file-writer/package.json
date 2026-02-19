@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/file-writer",
+  "version": "2026.2.18",
+  "private": true,
+  "description": "OpenClaw plugin to write text content to temporary files",
+  "type": "module",
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
