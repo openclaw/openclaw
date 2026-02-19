@@ -301,7 +301,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       const combinedText = entries
         .map((entry) => entry.bodyText)
         .filter(Boolean)
-        .join("\\n");
+        .join("\n");
       if (!combinedText.trim()) {
         return;
       }
