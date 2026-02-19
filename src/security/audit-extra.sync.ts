@@ -249,7 +249,9 @@ function resolveToolPolicies(params: {
 
   if (params.sandboxMode === "all") {
     const sandboxPolicy = resolveSandboxToolPolicyForAgent(params.cfg, params.agentId ?? undefined);
-    policies.push(sandboxPolicy);
+    if (sandboxPolicy != null) {
+      policies.push(sandboxPolicy);
+    }
   }
 
   return policies;
