@@ -26,6 +26,7 @@ import {
 } from "./controllers/exec-approval.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 import { loadSessions } from "./controllers/sessions.ts";
+import { recordGatewaySecurityClose } from "./gateway-security-alert.ts";
 import type { GatewayEventFrame, GatewayHelloOk } from "./gateway.ts";
 import { GatewayBrowserClient } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
@@ -165,6 +166,25 @@ export function connectGateway(host: GatewayHost) {
         return;
       }
       host.connected = false;
+
+      const securityClose = recordGatewaySecurityClose({
+        url: host.settings.gatewayUrl,
+        code,
+        reason,
+      });
+      if (securityClose?.shouldAlert) {
+        const alertMessage =
+          `security alert: blocked insecure gateway reconnect attempts (${securityClose.count} in 60s); ` +
+          "verify gateway URL trust and use wss:// for non-loopback hosts";
+        host.lastError = alertMessage;
+        console.warn("[gateway]", alertMessage, {
+          code,
+          reason,
+          url: host.settings.gatewayUrl,
+        });
+        return;
+      }
+
       // Code 1012 = Service Restart (expected during config saves, don't show as error)
       if (code !== 1012) {
         host.lastError = `disconnected (${code}): ${reason || "no reason"}`;
