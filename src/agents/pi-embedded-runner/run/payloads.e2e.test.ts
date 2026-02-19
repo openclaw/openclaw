@@ -96,17 +96,19 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads.some((payload) => payload.text?.includes("request_id"))).toBe(false);
   });
 
-  it("includes provider context for billing errors", () => {
+  it("includes provider and model context for billing errors", () => {
     const payloads = buildPayloads({
       lastAssistant: makeAssistant({
+        model: "claude-3-5-sonnet",
         errorMessage: "insufficient credits",
         content: [{ type: "text", text: "insufficient credits" }],
       }),
       provider: "Anthropic",
+      model: "claude-3-5-sonnet",
     });
 
     expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.text).toBe(formatBillingErrorMessage("Anthropic"));
+    expect(payloads[0]?.text).toBe(formatBillingErrorMessage("Anthropic", "claude-3-5-sonnet"));
     expect(payloads[0]?.isError).toBe(true);
   });
 
@@ -161,7 +163,7 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads[0]?.text).toBe("All good");
   });
 
-  it("adds tool error fallback when the assistant only invoked tools", () => {
+  it("adds tool error fallback when the assistant only invoked tools and verbose mode is on", () => {
     const payloads = buildPayloads({
       lastAssistant: makeAssistant({
         stopReason: "toolUse",
@@ -176,6 +178,7 @@ describe("buildEmbeddedRunPayloads", () => {
         ],
       }),
       lastToolError: { toolName: "exec", error: "Command exited with code 1" },
+      verboseLevel: "on",
     });
 
     expect(payloads).toHaveLength(1);
@@ -274,7 +277,7 @@ describe("buildEmbeddedRunPayloads", () => {
   it("shows mutating tool errors even when assistant output exists", () => {
     const payloads = buildPayloads({
       assistantTexts: ["Done."],
-      lastAssistant: { stopReason: "end_turn" } as AssistantMessage,
+      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
       lastToolError: { toolName: "write", error: "file missing" },
     });
 
@@ -287,7 +290,7 @@ describe("buildEmbeddedRunPayloads", () => {
   it("does not treat session_status read failures as mutating when explicitly flagged", () => {
     const payloads = buildPayloads({
       assistantTexts: ["Status loaded."],
-      lastAssistant: { stopReason: "end_turn" } as AssistantMessage,
+      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
       lastToolError: {
         toolName: "session_status",
         error: "model required",
@@ -312,7 +315,7 @@ describe("buildEmbeddedRunPayloads", () => {
 
     const payloads = buildPayloads({
       assistantTexts: [warningText ?? ""],
-      lastAssistant: { stopReason: "end_turn" } as AssistantMessage,
+      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
       lastToolError: {
         toolName: "write",
         error: "file missing",

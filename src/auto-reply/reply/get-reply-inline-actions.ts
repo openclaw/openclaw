@@ -7,6 +7,7 @@ import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import type { InlineDirectives } from "./directive-handling.js";
 import type { createModelSelectionState } from "./model-selection.js";
 import type { TypingController } from "./typing.js";
+import { collectTextContentBlocks } from "../../agents/content-blocks.js";
 import { createOpenClawTools } from "../../agents/openclaw-tools.js";
 import { getChannelDock } from "../../channels/dock.js";
 import { logVerbose } from "../../globals.js";
@@ -62,20 +63,7 @@ function extractTextFromToolResult(result: any): string | null {
     const trimmed = content.trim();
     return trimmed ? trimmed : null;
   }
-  if (!Array.isArray(content)) {
-    return null;
-  }
-
-  const parts: string[] = [];
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const rec = block as { type?: unknown; text?: unknown };
-    if (rec.type === "text" && typeof rec.text === "string") {
-      parts.push(rec.text);
-    }
-  }
+  const parts = collectTextContentBlocks(content);
   const out = parts.join("");
   const trimmed = out.trim();
   return trimmed ? trimmed : null;

@@ -8,8 +8,8 @@ import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
  * but before runtime defaults), so runtime defaults don't leak into the written config.
  */
 
-const mockReadConfigFileSnapshot = vi.fn<[], Promise<ConfigFileSnapshot>>();
-const mockWriteConfigFile = vi.fn<[OpenClawConfig], Promise<void>>(async () => {});
+const mockReadConfigFileSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>();
+const mockWriteConfigFile = vi.fn<(cfg: OpenClawConfig) => Promise<void>>(async () => {});
 
 vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot: () => mockReadConfigFileSnapshot(),
@@ -107,7 +107,7 @@ describe("config cli", () => {
       const resolved: OpenClawConfig = {
         gateway: { port: 18789 },
       };
-      const runtimeMerged: OpenClawConfig = {
+      const runtimeMerged = {
         ...resolved,
         agents: {
           defaults: {
@@ -118,7 +118,7 @@ describe("config cli", () => {
         } as never,
         messages: { ackReaction: "✅" } as never,
         sessions: { persistence: { enabled: true } } as never,
-      };
+      } as unknown as OpenClawConfig;
       setSnapshot(resolved, runtimeMerged);
 
       await runConfigCommand(["config", "set", "gateway.auth.mode", "token"]);

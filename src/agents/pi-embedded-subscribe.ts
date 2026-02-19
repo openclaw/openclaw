@@ -73,11 +73,14 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     messagingToolSentTexts: [],
     messagingToolSentTextsNormalized: [],
     messagingToolSentTargets: [],
+    messagingToolSentMediaUrls: [],
     pendingMessagingTexts: new Map(),
     pendingMessagingTargets: new Map(),
     firstTokenAt: undefined,
     currentMessageStartAt: undefined,
     currentMessageFirstTokenAt: undefined,
+    successfulCronAdds: 0,
+    pendingMessagingMediaUrls: new Map(),
   };
   const usageTotals = {
     input: 0,
@@ -95,6 +98,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   const messagingToolSentTexts = state.messagingToolSentTexts;
   const messagingToolSentTextsNormalized = state.messagingToolSentTextsNormalized;
   const messagingToolSentTargets = state.messagingToolSentTargets;
+  const messagingToolSentMediaUrls = state.messagingToolSentMediaUrls;
   const pendingMessagingTexts = state.pendingMessagingTexts;
   const pendingMessagingTargets = state.pendingMessagingTargets;
   const replyDirectiveAccumulator = createStreamingDirectiveAccumulator();
@@ -196,6 +200,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   // These tools can send messages via sendMessage/threadReply actions (or sessions_send with message).
   const MAX_MESSAGING_SENT_TEXTS = 200;
   const MAX_MESSAGING_SENT_TARGETS = 200;
+  const MAX_MESSAGING_SENT_MEDIA_URLS = 200;
   const trimMessagingToolSent = () => {
     if (messagingToolSentTexts.length > MAX_MESSAGING_SENT_TEXTS) {
       const overflow = messagingToolSentTexts.length - MAX_MESSAGING_SENT_TEXTS;
@@ -205,6 +210,10 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     if (messagingToolSentTargets.length > MAX_MESSAGING_SENT_TARGETS) {
       const overflow = messagingToolSentTargets.length - MAX_MESSAGING_SENT_TARGETS;
       messagingToolSentTargets.splice(0, overflow);
+    }
+    if (messagingToolSentMediaUrls.length > MAX_MESSAGING_SENT_MEDIA_URLS) {
+      const overflow = messagingToolSentMediaUrls.length - MAX_MESSAGING_SENT_MEDIA_URLS;
+      messagingToolSentMediaUrls.splice(0, overflow);
     }
   };
 
@@ -583,9 +592,12 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     messagingToolSentTexts.length = 0;
     messagingToolSentTextsNormalized.length = 0;
     messagingToolSentTargets.length = 0;
+    messagingToolSentMediaUrls.length = 0;
     pendingMessagingTexts.clear();
     pendingMessagingTargets.clear();
     state.firstTokenAt = undefined;
+    state.successfulCronAdds = 0;
+    state.pendingMessagingMediaUrls.clear();
     resetAssistantMessageState(0);
   };
 
@@ -670,7 +682,9 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     isCompactionInFlight: () => state.compactionInFlight,
     getFirstTokenAt: () => state.firstTokenAt,
     getMessagingToolSentTexts: () => messagingToolSentTexts.slice(),
+    getMessagingToolSentMediaUrls: () => messagingToolSentMediaUrls.slice(),
     getMessagingToolSentTargets: () => messagingToolSentTargets.slice(),
+    getSuccessfulCronAdds: () => state.successfulCronAdds,
     // Returns true if any messaging tool successfully sent a message.
     // Used to suppress agent's confirmation text (e.g., "Respondi no Telegram!")
     // which is generated AFTER the tool sends the actual answer.

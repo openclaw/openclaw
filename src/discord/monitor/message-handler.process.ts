@@ -29,6 +29,7 @@ import { resolveTimestampMs } from "./format.js";
 import {
   buildDiscordMediaPayload,
   resolveDiscordMessageText,
+  resolveForwardedMediaList,
   resolveMediaList,
 } from "./message-utils.js";
 import { buildDirectLabel, buildGuildLabel, resolveReplyContext } from "./reply-context.js";
@@ -315,6 +316,8 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   } = ctx;
 
   const mediaList = await resolveMediaList(message, mediaMaxBytes);
+  const forwardedMediaList = await resolveForwardedMediaList(message, mediaMaxBytes);
+  mediaList.push(...forwardedMediaList);
   const text = messageText;
   if (!text) {
     logVerbose(`discord: drop message ${message.id} (empty content)`);
@@ -480,6 +483,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     isGuildMessage,
     channelConfig,
     threadChannel,
+    channelType: channelInfo?.type,
     baseText: baseText ?? "",
     combinedBody,
     replyToMode,
@@ -499,6 +503,8 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     runtime.error?.(danger("discord: missing reply target"));
     return;
   }
+  // Keep DM routes user-addressed so follow-up sends resolve direct session keys.
+  const lastRouteTo = isDirectMessage ? `user:${author.id}` : effectiveTo;
 
   const inboundHistory =
     shouldIncludeChannelHistory && historyLimit > 0
@@ -549,19 +555,18 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     OriginatingChannel: "discord" as const,
     OriginatingTo: autoThreadContext?.OriginatingTo ?? replyTarget,
   });
+  const persistedSessionKey = ctxPayload.SessionKey ?? route.sessionKey;
 
   await recordInboundSession({
     storePath,
-    sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
+    sessionKey: persistedSessionKey,
     ctx: ctxPayload,
-    updateLastRoute: isDirectMessage
-      ? {
-          sessionKey: route.mainSessionKey,
-          channel: "discord",
-          to: `user:${author.id}`,
-          accountId: route.accountId,
-        }
-      : undefined,
+    updateLastRoute: {
+      sessionKey: persistedSessionKey,
+      channel: "discord",
+      to: lastRouteTo,
+      accountId: route.accountId,
+    },
     onRecordError: (err) => {
       logVerbose(`discord: failed updating session meta: ${String(err)}`);
     },

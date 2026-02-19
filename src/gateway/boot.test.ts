@@ -2,19 +2,25 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { SessionScope } from "../config/sessions/types.js";
 
 const agentCommand = vi.fn();
 
 vi.mock("../commands/agent.js", () => ({ agentCommand }));
 
 const { runBootOnce } = await import("./boot.js");
-const { resolveAgentIdFromSessionKey, resolveMainSessionKey } =
+const { resolveAgentIdFromSessionKey, resolveAgentMainSessionKey, resolveMainSessionKey } =
   await import("../config/sessions/main-session.js");
 const { resolveStorePath } = await import("../config/sessions/paths.js");
 const { loadSessionStore, saveSessionStore } = await import("../config/sessions/store.js");
 
 describe("runBootOnce", () => {
-  const resolveMainStore = (cfg: { session?: { store?: string } } = {}) => {
+  const resolveMainStore = (
+    cfg: {
+      session?: { store?: string; scope?: SessionScope; mainKey?: string };
+      agents?: { list?: Array<{ id?: string; default?: boolean }> };
+    } = {},
+  ) => {
     const sessionKey = resolveMainSessionKey(cfg);
     const agentId = resolveAgentIdFromSessionKey(sessionKey);
     const storePath = resolveStorePath(cfg.session?.store, { agentId });
@@ -89,6 +95,24 @@ describe("runBootOnce", () => {
     expect(call?.message).toContain("BOOT.md:");
     expect(call?.message).toContain(content);
     expect(call?.message).toContain("NO_REPLY");
+
+    await fs.rm(workspaceDir, { recursive: true, force: true });
+  });
+
+  it("uses per-agent session key when agentId is provided", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-boot-"));
+    await fs.writeFile(path.join(workspaceDir, "BOOT.md"), "Check status.", "utf-8");
+
+    agentCommand.mockResolvedValue(undefined);
+    const cfg = {};
+    const agentId = "ops";
+    await expect(runBootOnce({ cfg, deps: makeDeps(), workspaceDir, agentId })).resolves.toEqual({
+      status: "ran",
+    });
+
+    expect(agentCommand).toHaveBeenCalledTimes(1);
+    const perAgentCall = agentCommand.mock.calls[0]?.[0];
+    expect(perAgentCall?.sessionKey).toBe(resolveAgentMainSessionKey({ cfg, agentId }));
 
     await fs.rm(workspaceDir, { recursive: true, force: true });
   });

@@ -3,11 +3,14 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.js";
+import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
 import { buildTestCtx } from "./test-ctx.js";
 
+type AbortResult = { handled: boolean; aborted: boolean; stoppedSubagents?: number };
+
 const mocks = vi.hoisted(() => ({
-  routeReply: vi.fn(async () => ({ ok: true, messageId: "mock" })),
-  tryFastAbortFromMessage: vi.fn(async () => ({
+  routeReply: vi.fn(async (_params: unknown) => ({ ok: true, messageId: "mock" })),
+  tryFastAbortFromMessage: vi.fn<() => Promise<AbortResult>>(async () => ({
     handled: false,
     aborted: false,
   })),
@@ -22,6 +25,10 @@ const hookMocks = vi.hoisted(() => ({
     hasHooks: vi.fn(() => false),
     runMessageReceived: vi.fn(async () => {}),
   },
+}));
+const internalHookMocks = vi.hoisted(() => ({
+  createInternalHookEvent: vi.fn(),
+  triggerInternalHook: vi.fn(async () => {}),
 }));
 
 vi.mock("./route-reply.js", () => ({
@@ -53,12 +60,17 @@ vi.mock("../../logging/diagnostic.js", () => ({
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => hookMocks.runner,
 }));
+vi.mock("../../hooks/internal-hooks.js", () => ({
+  createInternalHookEvent: internalHookMocks.createInternalHookEvent,
+  triggerInternalHook: internalHookMocks.triggerInternalHook,
+}));
 
 const { dispatchReplyFromConfig } = await import("./dispatch-from-config.js");
 const { resetInboundDedupe } = await import("./inbound-dedupe.js");
 
 const noAbortResult = { handled: false, aborted: false } as const;
 const emptyConfig = {} as OpenClawConfig;
+type DispatchReplyArgs = Parameters<typeof dispatchReplyFromConfig>[0];
 
 function createDispatcher(): ReplyDispatcher {
   return {
@@ -81,6 +93,17 @@ function firstToolResultPayload(dispatcher: ReplyDispatcher): ReplyPayload | und
     | undefined;
 }
 
+async function dispatchTwiceWithFreshDispatchers(params: Omit<DispatchReplyArgs, "dispatcher">) {
+  await dispatchReplyFromConfig({
+    ...params,
+    dispatcher: createDispatcher(),
+  });
+  await dispatchReplyFromConfig({
+    ...params,
+    dispatcher: createDispatcher(),
+  });
+}
+
 describe("dispatchReplyFromConfig", () => {
   beforeEach(() => {
     resetInboundDedupe();
@@ -90,6 +113,9 @@ describe("dispatchReplyFromConfig", () => {
     hookMocks.runner.hasHooks.mockReset();
     hookMocks.runner.hasHooks.mockReturnValue(false);
     hookMocks.runner.runMessageReceived.mockReset();
+    internalHookMocks.createInternalHookEvent.mockReset();
+    internalHookMocks.createInternalHookEvent.mockImplementation(createInternalHookEventPayload);
+    internalHookMocks.triggerInternalHook.mockClear();
   });
   it("does not route when Provider matches OriginatingChannel (even if Surface is missing)", async () => {
     setNoAbort();
@@ -105,8 +131,8 @@ describe("dispatchReplyFromConfig", () => {
 
     const replyResolver = async (
       _ctx: MsgContext,
-      _opts: GetReplyOptions | undefined,
-      _cfg: OpenClawConfig,
+      _opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
     ) => ({ text: "hi" }) satisfies ReplyPayload;
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
@@ -129,8 +155,8 @@ describe("dispatchReplyFromConfig", () => {
 
     const replyResolver = async (
       _ctx: MsgContext,
-      _opts: GetReplyOptions | undefined,
-      _cfg: OpenClawConfig,
+      _opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
     ) => ({ text: "hi" }) satisfies ReplyPayload;
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
@@ -160,8 +186,8 @@ describe("dispatchReplyFromConfig", () => {
 
     const replyResolver = async (
       _ctx: MsgContext,
-      opts: GetReplyOptions | undefined,
-      _cfg: OpenClawConfig,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
     ) => {
       expect(opts?.onToolResult).toBeDefined();
       await opts?.onToolResult?.({
@@ -193,8 +219,8 @@ describe("dispatchReplyFromConfig", () => {
 
     const replyResolver = async (
       _ctx: MsgContext,
-      opts: GetReplyOptions | undefined,
-      _cfg: OpenClawConfig,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
     ) => {
       expect(opts?.onToolResult).toBeDefined();
       expect(typeof opts?.onToolResult).toBe("function");
@@ -216,8 +242,8 @@ describe("dispatchReplyFromConfig", () => {
 
     const replyResolver = async (
       _ctx: MsgContext,
-      opts: GetReplyOptions | undefined,
-      _cfg: OpenClawConfig,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
     ) => {
       expect(opts?.onToolResult).toBeDefined();
       await opts?.onToolResult?.({ text: "🔧 exec: ls" });
@@ -248,8 +274,8 @@ describe("dispatchReplyFromConfig", () => {
 
     const replyResolver = async (
       _ctx: MsgContext,
-      opts: GetReplyOptions | undefined,
-      _cfg: OpenClawConfig,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
     ) => {
       // Simulate tool result emission
       await opts?.onToolResult?.({ text: "🔧 exec: ls" });
@@ -275,8 +301,8 @@ describe("dispatchReplyFromConfig", () => {
 
     const replyResolver = async (
       _ctx: MsgContext,
-      opts: GetReplyOptions | undefined,
-      _cfg: OpenClawConfig,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
     ) => {
       expect(opts?.onToolResult).toBeDefined();
       await opts?.onToolResult?.({ text: "🔧 tools/sessions_send" });
@@ -352,16 +378,9 @@ describe("dispatchReplyFromConfig", () => {
     });
     const replyResolver = vi.fn(async () => ({ text: "hi" }) as ReplyPayload);
 
-    await dispatchReplyFromConfig({
+    await dispatchTwiceWithFreshDispatchers({
       ctx,
       cfg,
-      dispatcher: createDispatcher(),
-      replyResolver,
-    });
-    await dispatchReplyFromConfig({
-      ctx,
-      cfg,
-      dispatcher: createDispatcher(),
       replyResolver,
     });
 
@@ -416,6 +435,53 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
+  it("emits internal message:received hook when a session key is available", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      SessionKey: "agent:main:main",
+      CommandBody: "/help",
+      MessageSid: "msg-42",
+    });
+
+    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(internalHookMocks.createInternalHookEvent).toHaveBeenCalledWith(
+      "message",
+      "received",
+      "agent:main:main",
+      expect.objectContaining({
+        from: ctx.From,
+        content: "/help",
+        channelId: "telegram",
+        messageId: "msg-42",
+      }),
+    );
+    expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips internal message:received hook when session key is unavailable", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      CommandBody: "/help",
+    });
+    (ctx as MsgContext).SessionKey = undefined;
+
+    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(internalHookMocks.createInternalHookEvent).not.toHaveBeenCalled();
+    expect(internalHookMocks.triggerInternalHook).not.toHaveBeenCalled();
+  });
+
   it("emits diagnostics when enabled", async () => {
     setNoAbort();
     const cfg = { diagnostics: { enabled: true } } as OpenClawConfig;
@@ -457,16 +523,9 @@ describe("dispatchReplyFromConfig", () => {
     });
     const replyResolver = vi.fn(async () => ({ text: "hi" }) as ReplyPayload);
 
-    await dispatchReplyFromConfig({
+    await dispatchTwiceWithFreshDispatchers({
       ctx,
       cfg,
-      dispatcher: createDispatcher(),
-      replyResolver,
-    });
-    await dispatchReplyFromConfig({
-      ctx,
-      cfg,
-      dispatcher: createDispatcher(),
       replyResolver,
     });
 

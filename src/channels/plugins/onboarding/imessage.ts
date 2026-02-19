@@ -11,7 +11,7 @@ import {
 import { normalizeIMessageHandle } from "../../../imessage/targets.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../routing/session-key.js";
 import { formatDocsLink } from "../../../terminal/links.js";
-import { addWildcardAllowFrom, promptAccountId } from "./helpers.js";
+import { addWildcardAllowFrom, mergeAllowFromEntries, promptAccountId } from "./helpers.js";
 
 const channel = "imessage" as const;
 
@@ -138,7 +138,7 @@ async function promptIMessageAllowFrom(params: {
     },
   });
   const parts = parseIMessageAllowFromInput(String(entry));
-  const unique = [...new Set(parts)];
+  const unique = mergeAllowFromEntries(undefined, parts);
   return setIMessageAllowFrom(params.cfg, accountId, unique);
 }
 

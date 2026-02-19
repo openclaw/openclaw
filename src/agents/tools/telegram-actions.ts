@@ -1,12 +1,14 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { TelegramButtonStyle, TelegramInlineButtons } from "../../telegram/button-types.js";
+import { createTelegramActionGate } from "../../telegram/accounts.js";
 import {
   resolveTelegramInlineButtonsScope,
   resolveTelegramTargetChatType,
 } from "../../telegram/inline-buttons.js";
 import { resolveTelegramReactionLevel } from "../../telegram/reaction-level.js";
 import {
+  createForumTopicTelegram,
   deleteMessageTelegram,
   editMessageTelegram,
   reactMessageTelegram,
@@ -16,7 +18,6 @@ import {
 import { getCacheStats, searchStickers } from "../../telegram/sticker-cache.js";
 import { resolveTelegramToken } from "../../telegram/token.js";
 import {
-  createActionGate,
   jsonResult,
   readNumberParam,
   readReactionParams,
@@ -87,7 +88,7 @@ export async function handleTelegramAction(
 ): Promise<AgentToolResult<unknown>> {
   const action = readStringParam(params, "action", { required: true });
   const accountId = readStringParam(params, "accountId");
-  const isActionEnabled = createActionGate(cfg.channels?.telegram?.actions);
+  const isActionEnabled = createTelegramActionGate({ cfg, accountId });
 
   if (action === "react") {
     // Check reaction level first
@@ -337,6 +338,36 @@ export async function handleTelegramAction(
   if (action === "stickerCacheStats") {
     const stats = getCacheStats();
     return jsonResult({ ok: true, ...stats });
+  }
+
+  if (action === "createForumTopic") {
+    if (!isActionEnabled("createForumTopic")) {
+      throw new Error("Telegram createForumTopic is disabled.");
+    }
+    const chatId = readStringOrNumberParam(params, "chatId", {
+      required: true,
+    });
+    const name = readStringParam(params, "name", { required: true });
+    const iconColor = readNumberParam(params, "iconColor", { integer: true });
+    const iconCustomEmojiId = readStringParam(params, "iconCustomEmojiId");
+    const token = resolveTelegramToken(cfg, { accountId }).token;
+    if (!token) {
+      throw new Error(
+        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
+      );
+    }
+    const result = await createForumTopicTelegram(chatId ?? "", name, {
+      token,
+      accountId: accountId ?? undefined,
+      iconColor: iconColor ?? undefined,
+      iconCustomEmojiId: iconCustomEmojiId ?? undefined,
+    });
+    return jsonResult({
+      ok: true,
+      topicId: result.topicId,
+      name: result.name,
+      chatId: result.chatId,
+    });
   }
 
   throw new Error(`Unsupported Telegram action: ${action}`);

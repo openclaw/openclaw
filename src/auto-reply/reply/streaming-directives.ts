@@ -74,10 +74,12 @@ const hasRenderableContent = (parsed: ReplyDirectiveParseResult): boolean =>
 export function createStreamingDirectiveAccumulator() {
   let pendingTail = "";
   let pendingReply: PendingReplyState = { sawCurrent: false, hasTag: false };
+  let activeReply: PendingReplyState = { sawCurrent: false, hasTag: false };
 
   const reset = () => {
     pendingTail = "";
     pendingReply = { sawCurrent: false, hasTag: false };
+    activeReply = { sawCurrent: false, hasTag: false };
   };
 
   const consume = (raw: string, options: ConsumeOptions = {}): ReplyDirectiveParseResult | null => {
@@ -95,9 +97,10 @@ export function createStreamingDirectiveAccumulator() {
     }
 
     const parsed = parseChunk(combined, { silentToken: options.silentToken });
-    const hasTag = pendingReply.hasTag || parsed.replyToTag;
-    const sawCurrent = pendingReply.sawCurrent || parsed.replyToCurrent;
-    const explicitId = parsed.replyToExplicitId ?? pendingReply.explicitId;
+    const hasTag = activeReply.hasTag || pendingReply.hasTag || parsed.replyToTag;
+    const sawCurrent = activeReply.sawCurrent || pendingReply.sawCurrent || parsed.replyToCurrent;
+    const explicitId =
+      parsed.replyToExplicitId ?? pendingReply.explicitId ?? activeReply.explicitId;
 
     const combinedResult: ReplyDirectiveParseResult = {
       ...parsed,
@@ -117,6 +120,13 @@ export function createStreamingDirectiveAccumulator() {
       return null;
     }
 
+    // Keep reply context sticky for the full assistant message so split/newline chunks
+    // stay on the same native reply target until reset() is called for the next message.
+    activeReply = {
+      explicitId,
+      sawCurrent,
+      hasTag,
+    };
     pendingReply = { sawCurrent: false, hasTag: false };
     return combinedResult;
   };

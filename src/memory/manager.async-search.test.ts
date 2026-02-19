@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import { getMemorySearchManager, type MemoryIndexManager } from "./index.js";
 import { createOpenAIEmbeddingProviderMock } from "./test-embeddings-mock.js";
 
@@ -53,31 +54,24 @@ describe("memory search async sync", () => {
         },
         list: [{ id: "main", default: true }],
       },
-    };
+    } as OpenClawConfig;
 
     const result = await getMemorySearchManager({ cfg, agentId: "main" });
     expect(result.manager).not.toBeNull();
     if (!result.manager) {
       throw new Error("manager missing");
     }
-    manager = result.manager;
+    manager = result.manager as unknown as MemoryIndexManager;
 
     const pending = new Promise<void>(() => {});
-    (manager as unknown as { sync: () => Promise<void> }).sync = vi.fn(async () => pending);
+    const syncMock = vi.fn(async () => pending);
+    (manager as unknown as { sync: () => Promise<void> }).sync = syncMock;
 
-    const resolved = await new Promise<boolean>((resolve, reject) => {
-      const timeout = setTimeout(() => resolve(false), 1000);
-      void manager
-        .search("hello")
-        .then(() => {
-          clearTimeout(timeout);
-          resolve(true);
-        })
-        .catch((err) => {
-          clearTimeout(timeout);
-          reject(err);
-        });
-    });
-    expect(resolved).toBe(true);
+    const activeManager = manager;
+    if (!activeManager) {
+      throw new Error("manager missing");
+    }
+    await activeManager.search("hello");
+    expect(syncMock).toHaveBeenCalledTimes(1);
   });
 });

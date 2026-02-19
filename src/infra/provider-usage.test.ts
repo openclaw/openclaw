@@ -23,7 +23,7 @@ function toRequestUrl(input: Parameters<typeof fetch>[0]): string {
 }
 
 function createMinimaxOnlyFetch(payload: unknown) {
-  return vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>(async (input) => {
+  return vi.fn(async (input: string | Request | URL) => {
     if (toRequestUrl(input).includes(minimaxRemainsEndpoint)) {
       return makeResponse(200, payload);
     }
@@ -41,7 +41,7 @@ async function expectMinimaxUsage(
   const summary = await loadProviderUsageSummary({
     now: Date.UTC(2026, 0, 7, 0, 0, 0),
     auth: [{ provider: "minimax", token: "token-1b" }],
-    fetch: mockFetch,
+    fetch: mockFetch as unknown as typeof fetch,
   });
 
   const minimax = summary.providers.find((p) => p.provider === "minimax");
@@ -113,7 +113,7 @@ describe("provider usage formatting", () => {
 
 describe("provider usage loading", () => {
   it("loads usage snapshots with injected auth", async () => {
-    const mockFetch = vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>(async (input) => {
+    const mockFetch = vi.fn(async (input: string | Request | URL) => {
       const url = toRequestUrl(input);
       if (url.includes("api.anthropic.com")) {
         return makeResponse(200, {
@@ -159,7 +159,7 @@ describe("provider usage loading", () => {
         { provider: "minimax", token: "token-1b" },
         { provider: "zai", token: "token-2" },
       ],
-      fetch: mockFetch,
+      fetch: mockFetch as unknown as typeof fetch,
     });
 
     expect(summary.providers).toHaveLength(3);
@@ -266,33 +266,27 @@ describe("provider usage loading", () => {
           return new Response(payload, { status, headers });
         };
 
-        const mockFetch = vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>(
-          async (input, init) => {
-            const url =
-              typeof input === "string"
-                ? input
-                : input instanceof URL
-                  ? input.toString()
-                  : input.url;
-            if (url.includes("api.anthropic.com/api/oauth/usage")) {
-              const headers = (init?.headers ?? {}) as Record<string, string>;
-              expect(headers.Authorization).toBe("Bearer token-1");
-              return makeResponse(200, {
-                five_hour: {
-                  utilization: 20,
-                  resets_at: "2026-01-07T01:00:00Z",
-                },
-              });
-            }
-            return makeResponse(404, "not found");
-          },
-        );
+        const mockFetch = vi.fn(async (input: string | Request | URL, init?: RequestInit) => {
+          const url =
+            typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+          if (url.includes("api.anthropic.com/api/oauth/usage")) {
+            const headers = (init?.headers ?? {}) as Record<string, string>;
+            expect(headers.Authorization).toBe("Bearer token-1");
+            return makeResponse(200, {
+              five_hour: {
+                utilization: 20,
+                resets_at: "2026-01-07T01:00:00Z",
+              },
+            });
+          }
+          return makeResponse(404, "not found");
+        });
 
         const summary = await loadProviderUsageSummary({
           now: Date.UTC(2026, 0, 7, 0, 0, 0),
           providers: ["anthropic"],
           agentDir,
-          fetch: mockFetch,
+          fetch: mockFetch as unknown as typeof fetch,
         });
 
         expect(summary.providers).toHaveLength(1);
@@ -321,7 +315,7 @@ describe("provider usage loading", () => {
         return new Response(payload, { status, headers });
       };
 
-      const mockFetch = vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>(async (input) => {
+      const mockFetch = vi.fn(async (input: string | Request | URL) => {
         const url =
           typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
         if (url.includes("api.anthropic.com/api/oauth/usage")) {
@@ -349,7 +343,7 @@ describe("provider usage loading", () => {
       const summary = await loadProviderUsageSummary({
         now: Date.UTC(2026, 0, 7, 0, 0, 0),
         auth: [{ provider: "anthropic", token: "sk-ant-oauth-1" }],
-        fetch: mockFetch,
+        fetch: mockFetch as unknown as typeof fetch,
       });
 
       expect(summary.providers).toHaveLength(1);

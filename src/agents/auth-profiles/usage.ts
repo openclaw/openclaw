@@ -3,7 +3,9 @@ import type { AuthProfileFailureReason, AuthProfileStore, ProfileUsageStats } fr
 import { normalizeProviderId } from "../model-selection.js";
 import { saveAuthProfileStore, updateAuthProfileStoreWithLock } from "./store.js";
 
-function resolveProfileUnusableUntil(stats: ProfileUsageStats): number | null {
+export function resolveProfileUnusableUntil(
+  stats: Pick<ProfileUsageStats, "cooldownUntil" | "disabledUntil">,
+): number | null {
   const values = [stats.cooldownUntil, stats.disabledUntil]
     .filter((value): value is number => typeof value === "number")
     .filter((value) => Number.isFinite(value) && value > 0);

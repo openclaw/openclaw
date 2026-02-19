@@ -16,6 +16,14 @@ installTriggerHandlingE2eTestHooks();
 
 const DEFAULT_SESSION_KEY = "telegram:slash:111";
 
+function requireSessionStorePath(cfg: { session?: { store?: string } }): string {
+  const storePath = cfg.session?.store;
+  if (!storePath) {
+    throw new Error("expected session store path");
+  }
+  return storePath;
+}
+
 function makeTelegramModelCommand(body: string, sessionKey = DEFAULT_SESSION_KEY) {
   return {
     Body: body,
@@ -78,7 +86,7 @@ describe("trigger handling", () => {
 
       expect(normalized).toContain("Model set to openrouter/anthropic/claude-opus-4-5");
 
-      const store = loadSessionStore(cfg.session.store);
+      const store = loadSessionStore(requireSessionStorePath(cfg));
       expect(store[sessionKey]?.providerOverride).toBe("openrouter");
       expect(store[sessionKey]?.modelOverride).toBe("anthropic/claude-opus-4-5");
     });
@@ -92,7 +100,7 @@ describe("trigger handling", () => {
       expect(normalized).toContain("Browse: /models or /models <provider>");
       expect(normalized).toContain("Switch: /model <provider/model>");
 
-      const store = loadSessionStore(cfg.session.store);
+      const store = loadSessionStore(requireSessionStorePath(cfg));
       expect(store[sessionKey]?.providerOverride).toBeUndefined();
       expect(store[sessionKey]?.modelOverride).toBeUndefined();
     });
@@ -107,7 +115,7 @@ describe("trigger handling", () => {
 
       expect(normalized).toContain("Model reset to default (anthropic/claude-opus-4-5)");
 
-      const store = loadSessionStore(cfg.session.store);
+      const store = loadSessionStore(requireSessionStorePath(cfg));
       expect(store[sessionKey]?.providerOverride).toBeUndefined();
       expect(store[sessionKey]?.modelOverride).toBeUndefined();
     });
@@ -119,7 +127,7 @@ describe("trigger handling", () => {
 
       expect(normalized).toContain("Model set to openai/gpt-5.2");
 
-      const store = loadSessionStore(cfg.session.store);
+      const store = loadSessionStore(requireSessionStorePath(cfg));
       expect(store[sessionKey]?.providerOverride).toBe("openai");
       expect(store[sessionKey]?.modelOverride).toBe("gpt-5.2");
     });

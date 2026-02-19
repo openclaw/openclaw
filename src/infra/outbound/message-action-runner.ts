@@ -34,6 +34,7 @@ import {
   normalizeSandboxMediaParams,
   parseButtonsParam,
   parseCardParam,
+  parseComponentsParam,
   readBooleanParam,
   resolveSlackAutoThreadId,
   resolveTelegramAutoThreadId,
@@ -697,6 +698,7 @@ export async function runMessageAction(
       : undefined);
   parseButtonsParam(params);
   parseCardParam(params);
+  parseComponentsParam(params);
 
   const action = input.action;
   if (action === "broadcast") {

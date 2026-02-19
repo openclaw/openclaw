@@ -184,6 +184,30 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expectInboundContextContract(prepared!.ctxPayload as any);
   });
 
+  it("includes forwarded shared attachment text in raw body", async () => {
+    const prepared = await prepareWithDefaultCtx(
+      createSlackMessage({
+        text: "",
+        attachments: [{ is_share: true, author_name: "Bob", text: "Forwarded hello" }],
+      }),
+    );
+
+    expect(prepared).toBeTruthy();
+    expect(prepared!.ctxPayload.RawBody).toContain("[Forwarded message from Bob]\nForwarded hello");
+  });
+
+  it("ignores non-forward attachments when no direct text/files are present", async () => {
+    const prepared = await prepareWithDefaultCtx(
+      createSlackMessage({
+        text: "",
+        files: [],
+        attachments: [{ is_msg_unfurl: true, text: "link unfurl text" }],
+      }),
+    );
+
+    expect(prepared).toBeNull();
+  });
+
   it("keeps channel metadata out of GroupSystemPrompt", async () => {
     const slackCtx = createInboundSlackCtx({
       cfg: {

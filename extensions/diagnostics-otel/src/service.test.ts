@@ -121,6 +121,7 @@ vi.mock("openclaw/plugin-sdk", async () => {
   };
 });
 
+import type { OpenClawPluginServiceContext } from "openclaw/plugin-sdk";
 import { emitDiagnosticEvent } from "openclaw/plugin-sdk";
 import { createDiagnosticsOtelService } from "./service.js";
 
@@ -174,6 +175,7 @@ describe("diagnostics-otel service – content capture & tools", () => {
         error: vi.fn(),
         debug: vi.fn(),
       },
+      stateDir: "/tmp/openclaw-diagnostics-otel-test",
     };
   }
 

@@ -10,13 +10,12 @@ import {
   makeReasoningAssistantMessages,
   makeSimpleUserMessages,
   makeSnapshotChangedOpenAIReasoningScenario,
+  type SanitizeSessionHistoryFn,
   sanitizeWithOpenAIResponses,
   TEST_SESSION_ID,
 } from "./pi-embedded-runner.sanitize-session-history.test-harness.js";
 
-type SanitizeSessionHistory =
-  typeof import("./pi-embedded-runner/google.js").sanitizeSessionHistory;
-let sanitizeSessionHistory: SanitizeSessionHistory;
+let sanitizeSessionHistory: SanitizeSessionHistoryFn;
 
 // Mock dependencies
 vi.mock("./pi-embedded-helpers.js", async () => {
@@ -137,7 +136,7 @@ describe("sanitizeSessionHistory", () => {
   it("keeps reasoning-only assistant messages for openai-responses", async () => {
     vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
 
-    const messages: AgentMessage[] = [
+    const messages = [
       { role: "user", content: "hello" },
       {
         role: "assistant",
@@ -150,7 +149,7 @@ describe("sanitizeSessionHistory", () => {
           },
         ],
       },
-    ];
+    ] as unknown as AgentMessage[];
 
     const result = await sanitizeSessionHistory({
       messages,
@@ -165,12 +164,12 @@ describe("sanitizeSessionHistory", () => {
   });
 
   it("does not synthesize tool results for openai-responses", async () => {
-    const messages: AgentMessage[] = [
+    const messages = [
       {
         role: "assistant",
         content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
       },
-    ];
+    ] as unknown as AgentMessage[];
 
     const result = await sanitizeSessionHistory({
       messages,
@@ -185,13 +184,13 @@ describe("sanitizeSessionHistory", () => {
   });
 
   it("drops malformed tool calls missing input or arguments", async () => {
-    const messages: AgentMessage[] = [
+    const messages = [
       {
         role: "assistant",
         content: [{ type: "toolCall", id: "call_1", name: "read" }],
       },
       { role: "user", content: "hello" },
-    ];
+    ] as unknown as AgentMessage[];
 
     const result = await sanitizeSessionHistory({
       messages,
@@ -204,7 +203,7 @@ describe("sanitizeSessionHistory", () => {
     expect(result.map((msg) => msg.role)).toEqual(["user"]);
   });
 
-  it("does not downgrade openai reasoning when the model has not changed", async () => {
+  it("downgrades orphaned openai reasoning even when the model has not changed", async () => {
     const sessionEntries = [
       makeModelSnapshotEntry({
         provider: "openai",
@@ -222,10 +221,10 @@ describe("sanitizeSessionHistory", () => {
       sessionManager,
     });
 
-    expect(result).toEqual(messages);
+    expect(result).toEqual([]);
   });
 
-  it("downgrades openai reasoning only when the model changes", async () => {
+  it("downgrades orphaned openai reasoning when the model changes too", async () => {
     const { sessionManager, messages, modelId } = makeSnapshotChangedOpenAIReasoningScenario();
 
     const result = await sanitizeWithOpenAIResponses({
@@ -247,7 +246,7 @@ describe("sanitizeSessionHistory", () => {
       }),
     ];
     const sessionManager = makeInMemorySessionManager(sessionEntries);
-    const messages: AgentMessage[] = [
+    const messages = [
       {
         role: "assistant",
         content: [{ type: "toolCall", id: "tool_abc123", name: "read", arguments: {} }],
@@ -265,7 +264,7 @@ describe("sanitizeSessionHistory", () => {
         toolName: "read",
         content: [{ type: "text", text: "stale result" }],
       } as unknown as AgentMessage,
-    ];
+    ] as unknown as AgentMessage[];
 
     const result = await sanitizeSessionHistory({
       messages,

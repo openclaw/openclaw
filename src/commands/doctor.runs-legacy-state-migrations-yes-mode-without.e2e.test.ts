@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   arrangeLegacyStateMigrationTest,
   confirm,
@@ -15,7 +15,10 @@ describe("doctor command", () => {
     const { doctorCommand, runtime, runLegacyStateMigrations } =
       await arrangeLegacyStateMigrationTest();
 
-    await doctorCommand(runtime, { yes: true });
+    await (doctorCommand as (runtime: unknown, opts: Record<string, unknown>) => Promise<void>)(
+      runtime,
+      { yes: true },
+    );
 
     expect(runLegacyStateMigrations).toHaveBeenCalledTimes(1);
     expect(confirm).not.toHaveBeenCalled();
@@ -25,7 +28,10 @@ describe("doctor command", () => {
     const { doctorCommand, runtime, runLegacyStateMigrations } =
       await arrangeLegacyStateMigrationTest();
 
-    await doctorCommand(runtime, { nonInteractive: true });
+    await (doctorCommand as (runtime: unknown, opts: Record<string, unknown>) => Promise<void>)(
+      runtime,
+      { nonInteractive: true },
+    );
 
     expect(runLegacyStateMigrations).toHaveBeenCalledTimes(1);
     expect(confirm).not.toHaveBeenCalled();
@@ -35,7 +41,7 @@ describe("doctor command", () => {
     mockDoctorConfigSnapshot();
 
     const { healthCommand } = await import("./health.js");
-    healthCommand.mockRejectedValueOnce(new Error("gateway closed"));
+    vi.mocked(healthCommand).mockRejectedValueOnce(new Error("gateway closed"));
 
     serviceIsLoaded.mockResolvedValueOnce(true);
     serviceRestart.mockClear();
