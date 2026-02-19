@@ -15,6 +15,7 @@ import {
   isGoogleModelApi,
   sanitizeGoogleTurnOrdering,
   sanitizeSessionMessagesImages,
+  stripCompletionsReasoningFieldSignatures,
 } from "../pi-embedded-helpers.js";
 import { cleanToolSchemaForGemini } from "../pi-tools.schema.js";
 import {
@@ -447,7 +448,10 @@ export async function sanitizeSessionHistory(params: {
   const sanitizedThinking = policy.normalizeAntigravityThinkingBlocks
     ? sanitizeAntigravityThinkingBlocks(sanitizedImages)
     : sanitizedImages;
-  const sanitizedToolCalls = sanitizeToolCallInputs(sanitizedThinking);
+  const sanitizedCompletions = policy.stripCompletionsReasoningFieldSignatures
+    ? stripCompletionsReasoningFieldSignatures(sanitizedThinking)
+    : sanitizedThinking;
+  const sanitizedToolCalls = sanitizeToolCallInputs(sanitizedCompletions);
   const repairedTools = policy.repairToolUseResultPairing
     ? sanitizeToolUseResultPairing(sanitizedToolCalls)
     : sanitizedToolCalls;

@@ -15,6 +15,7 @@ export type TranscriptPolicy = {
     includeCamelCase?: boolean;
   };
   normalizeAntigravityThinkingBlocks: boolean;
+  stripCompletionsReasoningFieldSignatures: boolean;
   applyGoogleTurnOrdering: boolean;
   validateGeminiTurns: boolean;
   validateAnthropicTurns: boolean;
@@ -93,6 +94,7 @@ export function resolveTranscriptPolicy(params: {
     modelId,
   });
 
+  const isCopilot = provider === "github-copilot";
   const needsNonImageSanitize = isGoogle || isAnthropic || isMistral || isOpenRouterGemini;
 
   const sanitizeToolCallIds = isGoogle || isMistral || isAnthropic;
@@ -101,11 +103,19 @@ export function resolveTranscriptPolicy(params: {
     : sanitizeToolCallIds
       ? "strict"
       : undefined;
-  const repairToolUseResultPairing = isGoogle || isAnthropic;
+  // Copilot proxies to Claude and can produce orphaned toolu_* tool results
+  // that cause 400 "No tool call found for function call output" errors.
+  const repairToolUseResultPairing = isGoogle || isAnthropic || isCopilot;
   const sanitizeThoughtSignatures = isOpenRouterGemini
     ? { allowBase64Only: true, includeCamelCase: true }
     : undefined;
   const normalizeAntigravityThinkingBlocks = isAntigravityClaudeModel;
+
+  // Providers using OpenAI-compatible APIs that proxy to Anthropic (e.g. GitHub
+  // Copilot → Claude) can receive thinking blocks where pi-ai stored the
+  // reasoning field name as the thinkingSignature. Strip those to prevent 400s.
+  const stripCompletionsFieldSignatures =
+    isOpenAiApi(params.modelApi) && !isOpenAi && !isGoogle && !isAnthropic;
 
   return {
     sanitizeMode: isOpenAi ? "images-only" : needsNonImageSanitize ? "full" : "images-only",
@@ -115,6 +125,7 @@ export function resolveTranscriptPolicy(params: {
     preserveSignatures: isAntigravityClaudeModel,
     sanitizeThoughtSignatures: isOpenAi ? undefined : sanitizeThoughtSignatures,
     normalizeAntigravityThinkingBlocks,
+    stripCompletionsReasoningFieldSignatures: stripCompletionsFieldSignatures,
     applyGoogleTurnOrdering: !isOpenAi && isGoogle,
     validateGeminiTurns: !isOpenAi && isGoogle,
     validateAnthropicTurns: !isOpenAi && isAnthropic,

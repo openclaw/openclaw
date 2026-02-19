@@ -39,4 +39,49 @@ describe("resolveTranscriptPolicy", () => {
     expect(policy.sanitizeToolCallIds).toBe(false);
     expect(policy.toolCallIdMode).toBeUndefined();
   });
+
+  it("enables stripCompletionsReasoningFieldSignatures for Copilot openai-completions", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "github-copilot",
+      modelId: "claude-opus-4.6-fast",
+      modelApi: "openai-completions",
+    });
+    expect(policy.stripCompletionsReasoningFieldSignatures).toBe(true);
+  });
+
+  it("enables repairToolUseResultPairing for Copilot provider", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "github-copilot",
+      modelId: "claude-opus-4.6-fast",
+      modelApi: "openai-completions",
+    });
+    expect(policy.repairToolUseResultPairing).toBe(true);
+  });
+
+  it("enables stripCompletionsReasoningFieldSignatures for Copilot openai-responses", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "github-copilot",
+      modelId: "claude-opus-4.6-fast",
+      modelApi: "openai-responses",
+    });
+    expect(policy.stripCompletionsReasoningFieldSignatures).toBe(true);
+  });
+
+  it("disables stripCompletionsReasoningFieldSignatures for native OpenAI provider", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "openai",
+      modelId: "gpt-4o",
+      modelApi: "openai-completions",
+    });
+    expect(policy.stripCompletionsReasoningFieldSignatures).toBe(false);
+  });
+
+  it("disables stripCompletionsReasoningFieldSignatures for Anthropic provider", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "anthropic",
+      modelId: "claude-opus-4-5",
+      modelApi: "anthropic-messages",
+    });
+    expect(policy.stripCompletionsReasoningFieldSignatures).toBe(false);
+  });
 });
