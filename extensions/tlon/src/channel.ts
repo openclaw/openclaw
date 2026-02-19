@@ -16,6 +16,7 @@ import { tlonOnboardingAdapter } from "./onboarding.js";
 import { formatTargetHint, normalizeShip, parseTlonTarget } from "./targets.js";
 import { resolveTlonAccount, listTlonAccountIds } from "./types.js";
 import { authenticate } from "./urbit/auth.js";
+import { ssrfPolicyFromAllowPrivateNetwork } from "./urbit/context.js";
 import { ensureUrbitConnectPatched, Urbit } from "./urbit/http-api.js";
 import {
   buildMediaStory,
@@ -27,8 +28,14 @@ import {
 import { uploadImageFromUrl } from "./urbit/upload.js";
 
 // Simple HTTP-only poke that doesn't open an EventSource (avoids conflict with monitor's SSE)
-async function createHttpPokeApi(params: { url: string; code: string; ship: string }) {
-  const cookie = await authenticate(params.url, params.code);
+async function createHttpPokeApi(params: {
+  url: string;
+  code: string;
+  ship: string;
+  allowPrivateNetwork?: boolean;
+}) {
+  const ssrfPolicy = ssrfPolicyFromAllowPrivateNetwork(params.allowPrivateNetwork);
+  const cookie = await authenticate(params.url, params.code, { ssrfPolicy });
   const channelId = `${Math.floor(Date.now() / 1000)}-${Math.random().toString(36).substring(2, 8)}`;
   const channelUrl = `${params.url}/~/channel/${channelId}`;
   const shipName = params.ship.replace(/^~/, "");
@@ -172,6 +179,7 @@ const tlonOutbound: ChannelOutboundAdapter = {
       url: account.url,
       ship: account.ship,
       code: account.code,
+      allowPrivateNetwork: account.allowPrivateNetwork ?? undefined,
     });
 
     try {
@@ -226,6 +234,7 @@ const tlonOutbound: ChannelOutboundAdapter = {
       url: account.url,
       ship: account.ship,
       code: account.code,
+      allowPrivateNetwork: account.allowPrivateNetwork ?? undefined,
     });
 
     try {
