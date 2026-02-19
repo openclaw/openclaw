@@ -86,6 +86,7 @@ type TlonSetupInput = ChannelSetupInput & {
   groupChannels?: string[];
   dmAllowlist?: string[];
   autoDiscoverChannels?: boolean;
+  ownerShip?: string;
 };
 
 function applyTlonSetupConfig(params: {
