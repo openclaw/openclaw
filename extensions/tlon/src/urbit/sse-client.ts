@@ -273,6 +273,9 @@ export class UrbitSSEClient {
       if (eventId > this.lastHeardEventId) {
         this.lastHeardEventId = eventId;
         if (eventId - this.lastAcknowledgedEventId > this.ackThreshold) {
+          this.logger.log?.(
+            `[SSE] Acking event ${eventId} (last acked: ${this.lastAcknowledgedEventId})`,
+          );
           this.ack(eventId).catch((err) => {
             this.logger.error?.(`Failed to ack event ${eventId}: ${String(err)}`);
           });
