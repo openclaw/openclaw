@@ -37,14 +37,17 @@ type BrowserProfileActions = {
 
 export type BrowserRouteContext = {
   state: () => BrowserServerState;
-  forProfile: (profileName?: string) => ProfileContext;
+  forProfile: (profileName?: string, relayName?: string) => ProfileContext;
   listProfiles: () => Promise<ProfileStatus[]>;
+  profile: ResolvedBrowserProfile;
+  relayName?: string;
   // Legacy methods delegate to default profile for backward compatibility
   mapTabError: (err: unknown) => { status: number; message: string } | null;
 } & BrowserProfileActions;
 
 export type ProfileContext = {
   profile: ResolvedBrowserProfile;
+  relayName?: string;
 } & BrowserProfileActions;
 
 export type ProfileStatus = {
