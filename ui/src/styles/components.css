@@ -1465,76 +1465,167 @@
   background: var(--secondary);
 }
 
-/* Tool cards */
+/* Tool cards — collapsible via <details>/<summary> */
 .chat-tool-card {
   margin-top: 8px;
-  padding: 10px 12px;
   border-radius: var(--radius-md);
   border: 1px solid var(--border);
   background: var(--secondary);
-  display: grid;
-  gap: 4px;
+  overflow: hidden;
 }
 
 :root[data-theme="light"] .chat-tool-card {
   background: var(--bg-muted);
 }
 
-.chat-tool-card__title {
+/* Summary row — always visible, acts as the collapse toggle */
+.chat-tool-card__summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
   font-family: var(--mono);
   font-size: 12px;
   font-weight: 500;
   color: var(--text);
-}
-
-.chat-tool-card__detail {
-  font-family: var(--mono);
-  font-size: 11px;
-  color: var(--muted);
-}
-
-.chat-tool-card__details {
-  margin-top: 6px;
-}
-
-.chat-tool-card__summary {
-  font-family: var(--mono);
-  font-size: 11px;
-  color: var(--muted);
   cursor: pointer;
   list-style: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
+  user-select: none;
 }
 
 .chat-tool-card__summary::-webkit-details-marker {
   display: none;
 }
 
-.chat-tool-card__summary-meta {
+/* Expand/collapse chevron */
+.chat-tool-card__chevron {
+  font-size: 9px;
+  color: var(--muted);
+  display: inline-block;
+  transition: transform 0.18s ease;
+  flex-shrink: 0;
+}
+
+.chat-tool-card[open] > .chat-tool-card__summary .chat-tool-card__chevron {
+  transform: rotate(90deg);
+}
+
+/* Tool icon in summary */
+.chat-tool-card__icon {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  color: var(--muted);
+}
+
+/* Tool label */
+.chat-tool-card__label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Inline detail shown in summary (e.g. file path / command preview) */
+.chat-tool-card__detail-inline {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 220px;
+  flex-shrink: 1;
+}
+
+/* Check mark shown when there's no sidebar click handler */
+.chat-tool-card__check {
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+/* View button — inside summary, click opens sidebar without toggling details */
+.chat-tool-card__view-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition:
+    background 0.12s,
+    color 0.12s;
+}
+
+.chat-tool-card__view-btn:hover {
+  background: var(--border);
+  color: var(--text);
+}
+
+/* Expanded body */
+.chat-tool-card__body {
+  padding: 0 10px 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  /* Animate open/close */
+  animation: tool-card-expand 0.15s ease;
+}
+
+@keyframes tool-card-expand {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Detail line inside the body */
+.chat-tool-card__detail {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  word-break: break-all;
+}
+
+/* Status text (Completed — no output) */
+.chat-tool-card__status-text {
+  font-family: var(--mono);
+  font-size: 11px;
   color: var(--muted);
   opacity: 0.7;
 }
 
-.chat-tool-card__details[open] .chat-tool-card__summary {
-  color: var(--text);
-}
-
-.chat-tool-card__output {
-  margin-top: 8px;
+/* Preview / inline output */
+.chat-tool-card__preview,
+.chat-tool-card__inline {
   font-family: var(--mono);
   font-size: 11px;
   line-height: 1.5;
   white-space: pre-wrap;
   color: var(--chat-text);
-  padding: 8px 10px;
-  border-radius: var(--radius-md);
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   background: var(--card);
+  max-height: 200px;
+  overflow: auto;
 }
 
-:root[data-theme="light"] .chat-tool-card__output {
+:root[data-theme="light"] .chat-tool-card__preview,
+:root[data-theme="light"] .chat-tool-card__inline {
   background: var(--bg);
 }
 

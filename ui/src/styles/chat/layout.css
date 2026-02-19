@@ -440,3 +440,31 @@
     min-width: 120px;
   }
 }
+
+/* Attach image button */
+.chat-compose__attach-btn {
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  align-self: flex-end;
+  margin-bottom: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  font-weight: 300;
+  border-radius: 50%;
+  background: var(--secondary);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  cursor: pointer;
+  transition: all 150ms;
+  padding: 0;
+  line-height: 1;
+}
+
+.chat-compose__attach-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+  color: var(--text);
+}

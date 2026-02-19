@@ -865,8 +865,10 @@ export function renderApp(state: AppViewState) {
                 sidebarOpen: state.sidebarOpen,
                 sidebarContent: state.sidebarContent,
                 sidebarError: state.sidebarError,
+                sidebarSkipLatex: state.sidebarSkipLatex,
                 splitRatio: state.splitRatio,
-                onOpenSidebar: (content: string) => state.handleOpenSidebar(content),
+                onOpenSidebar: (content: string, skipLatex?: boolean) =>
+                  state.handleOpenSidebar(content, skipLatex),
                 onCloseSidebar: () => state.handleCloseSidebar(),
                 onSplitRatioChange: (ratio: number) => state.handleSplitRatioChange(ratio),
                 assistantName: state.assistantName,

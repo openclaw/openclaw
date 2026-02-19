@@ -149,6 +149,7 @@ export class OpenClawApp extends LitElement {
   @state() sidebarOpen = false;
   @state() sidebarContent: string | null = null;
   @state() sidebarError: string | null = null;
+  @state() sidebarSkipLatex = false;
   @state() splitRatio = this.settings.splitRatio;
 
   @state() nodesLoading = false;
@@ -545,13 +546,14 @@ export class OpenClawApp extends LitElement {
   }
 
   // Sidebar handlers for tool output viewing
-  handleOpenSidebar(content: string) {
+  handleOpenSidebar(content: string, skipLatex?: boolean) {
     if (this.sidebarCloseTimer != null) {
       window.clearTimeout(this.sidebarCloseTimer);
       this.sidebarCloseTimer = null;
     }
     this.sidebarContent = content;
     this.sidebarError = null;
+    this.sidebarSkipLatex = skipLatex ?? false;
     this.sidebarOpen = true;
   }
 

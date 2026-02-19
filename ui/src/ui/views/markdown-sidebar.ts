@@ -8,6 +8,8 @@ export type MarkdownSidebarProps = {
   error: string | null;
   onClose: () => void;
   onViewRawText: () => void;
+  /** Skip LaTeX rendering — use for tool output which may contain bare $ signs */
+  skipLatex?: boolean;
 };
 
 export function renderMarkdownSidebar(props: MarkdownSidebarProps) {
@@ -29,7 +31,7 @@ export function renderMarkdownSidebar(props: MarkdownSidebarProps) {
               </button>
             `
             : props.content
-              ? html`<div class="sidebar-markdown">${unsafeHTML(toSanitizedMarkdownHtml(props.content))}</div>`
+              ? html`<div class="sidebar-markdown">${unsafeHTML(toSanitizedMarkdownHtml(props.content, { skipLatex: props.skipLatex }))}</div>`
               : html`
                   <div class="muted">No content available</div>
                 `

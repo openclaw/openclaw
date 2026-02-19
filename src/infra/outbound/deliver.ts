@@ -26,6 +26,7 @@ import { markdownToSignalTextChunks, type SignalTextStyleRange } from "../../sig
 import { sendMessageSignal } from "../../signal/send.js";
 import type { sendMessageSlack } from "../../slack/send.js";
 import type { sendMessageTelegram } from "../../telegram/send.js";
+import { processLatexForTerminal } from "../../tui/tui-math.js";
 import type { sendMessageWhatsApp } from "../../web/outbound.js";
 import { throwIfAborted } from "./abort.js";
 import { ackDelivery, enqueueDelivery, failDelivery } from "./delivery-queue.js";
@@ -517,6 +518,16 @@ async function deliverOutboundPayloadsCore(
           }
         } catch {
           // Don't block delivery on hook failure
+        }
+      }
+
+      // Convert LaTeX math ($..$ / $$..$) to Unicode for all deliverable channels.
+      // Webchat has KaTeX rendering; deliverable channels (Discord, Telegram, etc.) do not.
+      if (payloadSummary.text) {
+        const converted = processLatexForTerminal(payloadSummary.text);
+        if (converted !== payloadSummary.text) {
+          payloadSummary.text = converted;
+          effectivePayload = { ...effectivePayload, text: converted };
         }
       }
 

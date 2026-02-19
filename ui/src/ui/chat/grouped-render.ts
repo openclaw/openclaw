@@ -73,7 +73,7 @@ export function renderReadingIndicatorGroup(assistant?: AssistantIdentity) {
 export function renderStreamingGroup(
   text: string,
   startedAt: number,
-  onOpenSidebar?: (content: string) => void,
+  onOpenSidebar?: (content: string, skipLatex?: boolean) => void,
   assistant?: AssistantIdentity,
 ) {
   const timestamp = new Date(startedAt).toLocaleTimeString([], {
@@ -107,7 +107,7 @@ export function renderStreamingGroup(
 export function renderMessageGroup(
   group: MessageGroup,
   opts: {
-    onOpenSidebar?: (content: string) => void;
+    onOpenSidebar?: (content: string, skipLatex?: boolean) => void;
     showReasoning: boolean;
     assistantName?: string;
     assistantAvatar?: string | null;
@@ -219,7 +219,7 @@ function renderMessageImages(images: ImageBlock[]) {
 function renderGroupedMessage(
   message: unknown,
   opts: { isStreaming: boolean; showReasoning: boolean },
-  onOpenSidebar?: (content: string) => void,
+  onOpenSidebar?: (content: string, skipLatex?: boolean) => void,
 ) {
   const m = message as Record<string, unknown>;
   const role = typeof m.role === "string" ? m.role : "unknown";
@@ -258,6 +258,25 @@ function renderGroupedMessage(
 
   if (!markdown && !hasToolCards && !hasImages) {
     return nothing;
+  }
+
+  // Tool result messages with text: wrap in a collapsible details element
+  if (isToolResult && markdown) {
+    const _toolName = hasToolCards ? (toolCards[0]?.name ?? "tool") : "tool";
+    const previewText = markdown.length > 80 ? markdown.slice(0, 80) + "…" : markdown;
+    return html`
+      <details class="chat-tool-result-collapsed">
+        <summary class="chat-tool-result-collapsed__summary">
+          <span class="chat-tool-card__chevron">▶</span>
+          <span class="chat-tool-result-collapsed__label">Tool result</span>
+          <span class="chat-tool-result-collapsed__preview">${previewText}</span>
+        </summary>
+        <div class="chat-tool-result-collapsed__body">
+          <div class="chat-text mono" dir="${detectTextDirection(markdown)}">${unsafeHTML(toSanitizedMarkdownHtml(markdown, { skipLatex: true }))}</div>
+        </div>
+      </details>
+      ${toolCards.map((card) => renderToolCardSidebar(card, onOpenSidebar))}
+    `;
   }
 
   return html`

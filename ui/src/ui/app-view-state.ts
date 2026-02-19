@@ -71,6 +71,7 @@ export type AppViewState = {
   sidebarOpen: boolean;
   sidebarContent: string | null;
   sidebarError: string | null;
+  sidebarSkipLatex: boolean;
   splitRatio: number;
   scrollToBottom: (opts?: { smooth?: boolean }) => void;
   devicesLoading: boolean;
@@ -282,7 +283,7 @@ export type AppViewState = {
   resetChatScroll: () => void;
   exportLogs: (lines: string[], label: string) => void;
   handleLogsScroll: (event: Event) => void;
-  handleOpenSidebar: (content: string) => void;
+  handleOpenSidebar: (content: string, skipLatex?: boolean) => void;
   handleCloseSidebar: () => void;
   handleSplitRatioChange: (ratio: number) => void;
 };

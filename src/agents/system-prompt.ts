@@ -635,6 +635,15 @@ export function buildAgentSystemPrompt(params: {
     `Reasoning: ${reasoningLevel} (hidden unless on/stream). Toggle /reasoning; /status shows Reasoning when enabled.`,
   );
 
+  // Math rendering support hint for channels that render LaTeX
+  if (runtimeChannel === "webchat" || runtimeChannel === "tui") {
+    lines.push(
+      "",
+      "## Math Rendering",
+      "This session supports LaTeX math rendering. Use `$...$` for inline math and `$$...$$` for display math when presenting mathematical content. The client renders it automatically.",
+    );
+  }
+
   return lines.filter(Boolean).join("\n");
 }
 
