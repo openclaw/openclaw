@@ -57,6 +57,38 @@ const KNUTH_DISCORD_SINGLE_FLIGHT_SESSION_KEY = "agent:knuth:discord:channel:147
 const KNUTH_DISCORD_SINGLE_FLIGHT_TIMEOUT_MS = 20 * 60 * 1000;
 const singleFlightLog = createSubsystemLogger("auto-reply/single-flight");
 
+export type RuntimeAttributionV1 = {
+  initiative: string;
+  activity: "spec" | "dev" | "test" | "incident" | "ops";
+  source: "message_tag" | "default";
+  schemaVersion: "v1";
+};
+
+const ATTRIBUTION_LINE_REGEX = /^Attribution:\s*initiative=([^\s]+)\s+activity=([^\s]+)\s*$/im;
+const ATTRIBUTION_ALLOWED_ACTIVITIES = new Set(["spec", "dev", "test", "incident", "ops"]);
+
+export function resolveMessageAttribution(raw: string | undefined): RuntimeAttributionV1 {
+  const text = raw?.trim();
+  if (!text) {
+    return { initiative: "UNSCOPED", activity: "ops", source: "default", schemaVersion: "v1" };
+  }
+  const match = text.match(ATTRIBUTION_LINE_REGEX);
+  if (!match) {
+    return { initiative: "UNSCOPED", activity: "ops", source: "default", schemaVersion: "v1" };
+  }
+  const initiative = (match[1] ?? "").trim();
+  const activityRaw = (match[2] ?? "").trim().toLowerCase();
+  if (!initiative || !ATTRIBUTION_ALLOWED_ACTIVITIES.has(activityRaw)) {
+    return { initiative: "UNSCOPED", activity: "ops", source: "default", schemaVersion: "v1" };
+  }
+  return {
+    initiative,
+    activity: activityRaw as RuntimeAttributionV1["activity"],
+    source: "message_tag",
+    schemaVersion: "v1",
+  };
+}
+
 type RunPreparedReplyParams = {
   ctx: MsgContext;
   sessionCtx: TemplateContext;
@@ -192,6 +224,7 @@ export async function runPreparedReply(
   // Use CommandBody/RawBody for bare reset detection (clean message without structural context).
   const rawBodyTrimmed = (ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "").trim();
   const baseBodyTrimmedRaw = baseBody.trim();
+  const attribution = resolveMessageAttribution(ctx.RawBody ?? ctx.Body ?? "");
   if (
     allowTextCommands &&
     (!commandAuthorized || !command.isAuthorizedSender) &&
@@ -341,6 +374,29 @@ export async function runPreparedReply(
     logVerbose(`Interrupting ${sessionLaneKey} (cleared ${cleared}, aborted=${aborted})`);
   }
   const queueKey = sessionKey ?? sessionIdFinal;
+
+  if (sessionEntry && sessionStore && sessionKey) {
+    const attributionUpdatedAt = Date.now();
+    const attributionPatch: Partial<SessionEntry> = {
+      attributionInitiative: attribution.initiative,
+      attributionActivity: attribution.activity,
+      attributionSource: attribution.source,
+      attributionSchemaVersion: attribution.schemaVersion,
+      attributionUpdatedAt,
+      updatedAt: attributionUpdatedAt,
+    };
+    sessionEntry = { ...sessionEntry, ...attributionPatch };
+    sessionStore[sessionKey] = sessionEntry;
+    if (storePath) {
+      await updateSessionStore(storePath, (store) => {
+        const current =
+          store[sessionKey] ??
+          ({ sessionId: sessionIdFinal, updatedAt: attributionUpdatedAt } as SessionEntry);
+        store[sessionKey] = { ...current, ...attributionPatch };
+      });
+    }
+  }
+
   let isActive = isEmbeddedPiRunActive(sessionIdFinal);
   const isStreaming = isEmbeddedPiRunStreaming(sessionIdFinal);
   const shouldSteer = resolvedQueue.mode === "steer" || resolvedQueue.mode === "steer-backlog";
@@ -442,6 +498,7 @@ export async function runPreparedReply(
       blockReplyBreak: resolvedBlockStreamingBreak,
       ownerNumbers: command.ownerList.length > 0 ? command.ownerList : undefined,
       extraSystemPrompt: extraSystemPrompt || undefined,
+      attribution,
       ...(isReasoningTagProvider(provider) ? { enforceFinalTag: true } : {}),
     },
   };

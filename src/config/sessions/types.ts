@@ -93,6 +93,11 @@ export type SessionEntry = {
   lastThreadId?: string | number;
   skillsSnapshot?: SessionSkillSnapshot;
   systemPromptReport?: SessionSystemPromptReport;
+  attributionInitiative?: string;
+  attributionActivity?: "spec" | "dev" | "test" | "incident" | "ops";
+  attributionSource?: "message_tag" | "default" | "packet_field";
+  attributionSchemaVersion?: "v1";
+  attributionUpdatedAt?: number;
 };
 
 export function mergeSessionEntry(

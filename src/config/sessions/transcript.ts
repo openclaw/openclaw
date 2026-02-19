@@ -109,7 +109,7 @@ export async function appendAssistantMessageToSessionTranscript(params: {
   await ensureSessionHeader({ sessionFile, sessionId: entry.sessionId });
 
   const sessionManager = SessionManager.open(sessionFile);
-  sessionManager.appendMessage({
+  const mirroredMessage: Record<string, unknown> = {
     role: "assistant",
     content: [{ type: "text", text: mirrorText }],
     api: "openai-responses",
@@ -131,7 +131,19 @@ export async function appendAssistantMessageToSessionTranscript(params: {
     },
     stopReason: "stop",
     timestamp: Date.now(),
-  });
+  };
+
+  if (entry.attributionInitiative || entry.attributionActivity || entry.attributionSource) {
+    mirroredMessage.attribution = {
+      initiative: entry.attributionInitiative ?? "UNSCOPED",
+      activity: entry.attributionActivity ?? "ops",
+      source: entry.attributionSource ?? "default",
+      schema_version: entry.attributionSchemaVersion ?? "v1",
+      updated_at: entry.attributionUpdatedAt,
+    };
+  }
+
+  sessionManager.appendMessage(mirroredMessage as never);
 
   if (!entry.sessionFile || entry.sessionFile !== sessionFile) {
     await updateSessionStore(storePath, (current) => {

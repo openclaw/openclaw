@@ -12,6 +12,12 @@ export type EmbeddedPiAgentMeta = {
     cacheWrite?: number;
     total?: number;
   };
+  attribution?: {
+    initiative: string;
+    activity: "spec" | "dev" | "test" | "incident" | "ops";
+    source: "message_tag" | "default" | "packet_field";
+    schemaVersion: "v1";
+  };
 };
 
 export type EmbeddedPiRunMeta = {

@@ -16,6 +16,12 @@ export async function persistSessionUsageUpdate(params: {
   contextTokensUsed?: number;
   systemPromptReport?: SessionSystemPromptReport;
   cliSessionId?: string;
+  attribution?: {
+    initiative: string;
+    activity: "spec" | "dev" | "test" | "incident" | "ops";
+    source: "message_tag" | "default" | "packet_field";
+    schemaVersion: "v1";
+  };
   logLabel?: string;
 }): Promise<void> {
   const { storePath, sessionKey } = params;
@@ -42,6 +48,12 @@ export async function persistSessionUsageUpdate(params: {
             model: params.modelUsed ?? entry.model,
             contextTokens: params.contextTokensUsed ?? entry.contextTokens,
             systemPromptReport: params.systemPromptReport ?? entry.systemPromptReport,
+            attributionInitiative: params.attribution?.initiative ?? entry.attributionInitiative,
+            attributionActivity: params.attribution?.activity ?? entry.attributionActivity,
+            attributionSource: params.attribution?.source ?? entry.attributionSource,
+            attributionSchemaVersion:
+              params.attribution?.schemaVersion ?? entry.attributionSchemaVersion,
+            attributionUpdatedAt: params.attribution ? Date.now() : entry.attributionUpdatedAt,
             updatedAt: Date.now(),
           };
           const cliProvider = params.providerUsed ?? entry.modelProvider;
@@ -74,6 +86,12 @@ export async function persistSessionUsageUpdate(params: {
             model: params.modelUsed ?? entry.model,
             contextTokens: params.contextTokensUsed ?? entry.contextTokens,
             systemPromptReport: params.systemPromptReport ?? entry.systemPromptReport,
+            attributionInitiative: params.attribution?.initiative ?? entry.attributionInitiative,
+            attributionActivity: params.attribution?.activity ?? entry.attributionActivity,
+            attributionSource: params.attribution?.source ?? entry.attributionSource,
+            attributionSchemaVersion:
+              params.attribution?.schemaVersion ?? entry.attributionSchemaVersion,
+            attributionUpdatedAt: params.attribution ? Date.now() : entry.attributionUpdatedAt,
             updatedAt: Date.now(),
           };
           const cliProvider = params.providerUsed ?? entry.modelProvider;

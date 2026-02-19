@@ -662,6 +662,7 @@ export async function runEmbeddedPiAgent(
             provider: lastAssistant?.provider ?? provider,
             model: lastAssistant?.model ?? model.id,
             usage,
+            attribution: params.attribution,
           };
 
           const payloads = buildEmbeddedRunPayloads({

@@ -83,6 +83,11 @@ describe("appendAssistantMessageToSessionTranscript", () => {
         sessionId,
         chatType: "direct",
         channel: "discord",
+        attributionInitiative: "CTX-010",
+        attributionActivity: "ops",
+        attributionSource: "message_tag",
+        attributionSchemaVersion: "v1",
+        attributionUpdatedAt: 123456,
       },
     };
     fs.writeFileSync(storePath, JSON.stringify(store), "utf-8");
@@ -109,6 +114,13 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       expect(messageLine.message.role).toBe("assistant");
       expect(messageLine.message.content[0].type).toBe("text");
       expect(messageLine.message.content[0].text).toBe("Hello from delivery mirror!");
+      expect(messageLine.message.attribution).toEqual({
+        initiative: "CTX-010",
+        activity: "ops",
+        source: "message_tag",
+        schema_version: "v1",
+        updated_at: 123456,
+      });
     }
   });
 });
