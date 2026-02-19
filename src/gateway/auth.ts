@@ -153,9 +153,11 @@ export function validateHostHeader(
     return { valid: false, host: "", reason: "host_missing" };
   }
 
-  // If no allowed hosts configured, accept all (backwards compat, but not recommended)
+  // Fail secure: if no allowed hosts configured, reject all requests.
+  // This prevents accidental security bypass from misconfiguration.
+  // Callers should always use resolveGatewayAuth() which provides defaults.
   if (!allowedHosts || allowedHosts.length === 0) {
-    return { valid: true, host };
+    return { valid: false, host, reason: "no_allowed_hosts_configured" };
   }
 
   // Check if host matches any allowed host (case-insensitive)

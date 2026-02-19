@@ -523,9 +523,10 @@ describe("validateHostHeader", () => {
     expect(result.host).toBe("myhost.tailnet-abc.ts.net");
   });
 
-  it("accepts any host when allowed list is empty", () => {
+  it("rejects all hosts when allowed list is empty (fail secure)", () => {
     const result = validateHostHeader({ headers: { host: "anything.com" } } as never, []);
-    expect(result.valid).toBe(true);
+    expect(result.valid).toBe(false);
+    expect(result.reason).toBe("no_allowed_hosts_configured");
   });
 });
 
