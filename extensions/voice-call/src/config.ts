@@ -414,6 +414,34 @@ export function validateProviderConfig(config: VoiceCallConfig): {
     errors.push("plugins.entries.voice-call.config.fromNumber is required");
   }
 
+  if (config.skipSignatureVerification) {
+    const env = process.env;
+    const nodeEnv = (env.NODE_ENV ?? "").trim().toLowerCase();
+    const skipVerificationOverride = (env.OPENCLAW_UNSAFE_ALLOW_SKIP_SIGNATURE_VERIFICATION ?? "")
+      .trim()
+      .toLowerCase();
+    const allowUnsafeSkip =
+      skipVerificationOverride === "1" ||
+      skipVerificationOverride === "true" ||
+      skipVerificationOverride === "yes" ||
+      skipVerificationOverride === "on";
+    const bind = (config.serve?.bind ?? "").trim().toLowerCase();
+    const bindIsLoopback = bind === "127.0.0.1" || bind === "::1" || bind === "localhost";
+    const hasRemoteExposure =
+      !bindIsLoopback ||
+      Boolean(config.publicUrl?.trim()) ||
+      (config.tunnel?.provider ?? "none") !== "none" ||
+      (config.tailscale?.mode ?? "off") !== "off";
+
+    if ((nodeEnv !== "development" || hasRemoteExposure) && !allowUnsafeSkip) {
+      errors.push(
+        "plugins.entries.voice-call.config.skipSignatureVerification is only allowed for local development " +
+          "(NODE_ENV=development with loopback-only webhook bind and no tunnel/publicUrl/tailscale exposure), " +
+          "or when OPENCLAW_UNSAFE_ALLOW_SKIP_SIGNATURE_VERIFICATION=1 is explicitly set",
+      );
+    }
+  }
+
   if (config.provider === "telnyx") {
     if (!config.telnyx?.apiKey) {
       errors.push(

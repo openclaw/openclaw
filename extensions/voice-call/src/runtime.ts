@@ -114,7 +114,8 @@ export async function createVoiceCallRuntime(params: {
 
   if (config.skipSignatureVerification) {
     log.warn(
-      "[voice-call] SECURITY WARNING: skipSignatureVerification=true disables webhook signature verification (development only). Do not use in production.",
+      "[voice-call] SECURITY WARNING: skipSignatureVerification=true disables webhook signature verification. " +
+        "This is allowed only for local development (or OPENCLAW_UNSAFE_ALLOW_SKIP_SIGNATURE_VERIFICATION=1).",
     );
   }
 
