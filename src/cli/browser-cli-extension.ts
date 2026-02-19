@@ -145,7 +145,7 @@ export function registerBrowserExtensionCommands(
 
       if (!status.connected) {
         defaultRuntime.log(
-          theme.warning("Relay server is OK, but no Chrome extensions are connected."),
+          theme.warn("Relay server is OK, but no Chrome extensions are connected."),
         );
         defaultRuntime.log(
           info("Action: Go to Chrome, click the OpenClaw extension icon (badge should show ON)."),
@@ -157,7 +157,7 @@ export function registerBrowserExtensionCommands(
       defaultRuntime.log(`${theme.heading("Connected devices:")} ${status.connections.length}`);
       for (const conn of status.connections) {
         defaultRuntime.log(
-          `${theme.muted("-")} ${theme.bold(conn.name)} ${theme.muted(`(${conn.id.slice(0, 8)})`)}`,
+          `${theme.muted("-")} ${conn.name} ${theme.muted(`(${conn.id.slice(0, 8)})`)}`,
         );
       }
     });
