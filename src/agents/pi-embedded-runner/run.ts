@@ -274,8 +274,10 @@ export async function runEmbeddedPiAgent(
         params.config,
       );
       if (!model) {
+        // Throw FailoverError (not plain Error) so runWithModelFallback can
+        // cascade to the next configured fallback instead of crashing. (#21107)
         throw new FailoverError(error ?? `Unknown model: ${provider}/${modelId}`, {
-          reason: "model_not_found",
+          reason: "format",
           provider,
           model: modelId,
         });
