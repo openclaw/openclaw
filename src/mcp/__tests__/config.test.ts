@@ -4,13 +4,7 @@
  * Phase 1: TDD — these tests are written FIRST, then implementation follows.
  */
 import { describe, it, expect } from "vitest";
-import {
-  McpServerConfigSchema,
-  McpConfigSchema,
-  validateMcpConfig,
-  type McpServerConfig,
-  type McpConfig,
-} from "../config.js";
+import { McpConfigSchema, validateMcpConfig, type McpConfig } from "../config.js";
 
 describe("McpConfigSchema", () => {
   // --- Valid configs ---
