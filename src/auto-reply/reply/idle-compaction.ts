@@ -19,7 +19,9 @@ const pendingIdleTimers = new Map<string, ReturnType<typeof setTimeout>>();
 let exitHandlerRegistered = false;
 
 function ensureExitHandler() {
-  if (exitHandlerRegistered) return;
+  if (exitHandlerRegistered) {
+    return;
+  }
   exitHandlerRegistered = true;
   process.on("exit", () => {
     for (const timer of pendingIdleTimers.values()) {
