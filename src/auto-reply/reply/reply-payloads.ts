@@ -103,12 +103,30 @@ export function filterMessagingToolMediaDuplicates(params: {
   if (sentMediaUrls.length === 0) {
     return payloads;
   }
-  const sentSet = new Set(sentMediaUrls);
+  const normalizeMediaForDedupe = (value: string | undefined): string | undefined => {
+    if (typeof value !== "string") {
+      return undefined;
+    }
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return undefined;
+    }
+    return trimmed.startsWith("file://") ? trimmed.replace(/^file:\/\//, "") : trimmed;
+  };
+  const sentSet = new Set(
+    sentMediaUrls
+      .map((url) => normalizeMediaForDedupe(url))
+      .filter((url): url is string => Boolean(url)),
+  );
   return payloads.map((payload) => {
     const mediaUrl = payload.mediaUrl;
     const mediaUrls = payload.mediaUrls;
-    const stripSingle = mediaUrl && sentSet.has(mediaUrl);
-    const filteredUrls = mediaUrls?.filter((u) => !sentSet.has(u));
+    const normalizedSingle = normalizeMediaForDedupe(mediaUrl);
+    const stripSingle = Boolean(normalizedSingle && sentSet.has(normalizedSingle));
+    const filteredUrls = mediaUrls?.filter((url) => {
+      const normalized = normalizeMediaForDedupe(url);
+      return !normalized || !sentSet.has(normalized);
+    });
     if (!stripSingle && (!mediaUrls || filteredUrls?.length === mediaUrls.length)) {
       return payload; // No change
     }

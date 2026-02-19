@@ -77,6 +77,31 @@ describe("createTelegramDraftStream", () => {
     expect(api.editMessageText).toHaveBeenCalledWith(123, 17, "Hello final");
   });
 
+  it("waits for in-flight send to settle when stopping", async () => {
+    let resolveSend: ((value: { message_id: number }) => void) | undefined;
+    const firstSend = new Promise<{ message_id: number }>((resolve) => {
+      resolveSend = resolve;
+    });
+    const api = createMockDraftApi(() => firstSend);
+    const stream = createForumDraftStream(api);
+
+    stream.update("Hello");
+    await vi.waitFor(() => expect(api.sendMessage).toHaveBeenCalledTimes(1));
+
+    let didStop = false;
+    const stopPromise = stream.stop().then(() => {
+      didStop = true;
+    });
+
+    await Promise.resolve();
+    expect(didStop).toBe(false);
+
+    resolveSend?.({ message_id: 17 });
+    await stopPromise;
+    expect(didStop).toBe(true);
+    expect(stream.messageId()).toBe(17);
+  });
+
   it("omits message_thread_id for general topic id", async () => {
     const api = createMockDraftApi();
     const stream = createThreadedDraftStream(api, { id: 1, scope: "forum" });
