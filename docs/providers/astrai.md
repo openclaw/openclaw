@@ -25,11 +25,11 @@ Instead of locking into a single provider, Astrai routes across OpenAI, Anthropi
 
 Astrai supports three routing strategies:
 
-| Strategy     | Description                                    |
-| ------------ | ---------------------------------------------- |
-| `balanced`   | Balance cost and quality (default)             |
-| `cheapest`   | Minimize cost while maintaining quality        |
-| `fastest`    | Minimize latency                               |
+| Strategy   | Description                             |
+| ---------- | --------------------------------------- |
+| `balanced` | Balance cost and quality (default)      |
+| `cheapest` | Minimize cost while maintaining quality |
+| `fastest`  | Minimize latency                        |
 
 ## Setup
 
@@ -63,11 +63,11 @@ openclaw chat --model astrai/auto "Hello, are you working?"
 
 ## Model Selection
 
-| Model ID           | Description                                              |
-| ------------------ | -------------------------------------------------------- |
-| `auto`             | Let Astrai pick the best model per request (recommended) |
-| `gpt-4o`           | Route to GPT-4o via cheapest available provider          |
-| `claude-sonnet-4`  | Route to Claude Sonnet 4 via cheapest provider           |
+| Model ID          | Description                                              |
+| ----------------- | -------------------------------------------------------- |
+| `auto`            | Let Astrai pick the best model per request (recommended) |
+| `gpt-4o`          | Route to GPT-4o via cheapest available provider          |
+| `claude-sonnet-4` | Route to Claude Sonnet 4 via cheapest provider           |
 
 With `auto`, Astrai classifies each prompt's complexity and routes accordingly:
 
@@ -84,12 +84,12 @@ openclaw models set astrai/gpt-4o
 
 ## Features
 
-| Feature              | Support                        |
-| -------------------- | ------------------------------ |
-| **Streaming**        | Supported                      |
-| **Function calling** | Supported (model-dependent)    |
+| Feature              | Support                            |
+| -------------------- | ---------------------------------- |
+| **Streaming**        | Supported                          |
+| **Function calling** | Supported (model-dependent)        |
 | **Vision/Images**    | Supported on vision-capable models |
-| **JSON mode**        | Supported via `response_format` |
+| **JSON mode**        | Supported via `response_format`    |
 
 ## Config File Example
 
