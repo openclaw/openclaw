@@ -51,7 +51,7 @@ export type PaginationParams = {
 };
 
 export type PaginatedResult<T> = {
-  items: T[];
+  data: T[];
   total: number;
 };
 

@@ -200,7 +200,7 @@ export async function setupAiFabricNonInteractive(
   let mcpConfigPath: string | undefined;
   try {
     const result = await client.listMcpServers();
-    const servers = result.items.filter((s) => s.status === "RUNNING" || s.status === "AVAILABLE");
+    const servers = result.data.filter((s) => s.status === "RUNNING" || s.status === "AVAILABLE");
     if (servers.length > 0) {
       mcpConfigPath = await writeMcpConfigFile({ workspaceDir, servers });
       await ensureGitignoreEntries({ workspaceDir, entries: [CLOUDRU_MCP_CONFIG_FILENAME] });
@@ -213,7 +213,7 @@ export async function setupAiFabricNonInteractive(
   let agents: AiFabricAgentEntry[] | undefined;
   try {
     const result = await client.listAgents({ status: "RUNNING" });
-    agents = result.items
+    agents = result.data
       .filter((a): a is Agent & { endpoint: string } => a.endpoint != null)
       .map((a) => ({ id: a.id, name: a.name, endpoint: a.endpoint }));
     if (agents.length === 0) {
@@ -346,8 +346,8 @@ async function discoverMcpServers(params: {
   const spinner = params.prompter.progress("Discovering MCP servers...");
   try {
     const result = await params.client.listMcpServers();
-    spinner.stop(`Found ${result.items.length} MCP server${result.items.length === 1 ? "" : "s"}`);
-    return result.items;
+    spinner.stop(`Found ${result.data.length} MCP server${result.data.length === 1 ? "" : "s"}`);
+    return result.data;
   } catch (err) {
     const detail =
       err instanceof CloudruAuthError
@@ -371,7 +371,7 @@ async function discoverAgents(params: {
   const spinner = params.prompter.progress("Discovering AI Agents...");
   try {
     const result = await params.client.listAgents({ status: "RUNNING" });
-    const agents = result.items
+    const agents = result.data
       .filter((a): a is Agent & { endpoint: string } => a.endpoint != null)
       .map((a) => ({ id: a.id, name: a.name, endpoint: a.endpoint }));
     spinner.stop(

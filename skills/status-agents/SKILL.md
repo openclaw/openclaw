@@ -1,11 +1,12 @@
 ---
 name: status-agents
-description: Check the live status of Cloud.ru AI Fabric agents and compare with local config. Use when a user wants to see agent health, detect configuration drift, or verify that agents are running before sending requests. Triggers on questions like "are my agents running?", "check agent status", "which agents are healthy?".
+description: Check the live status of Cloud.ru AI Fabric agents, MCP servers, and agent systems. Agents are discovered automatically from the Cloud.ru API — no local config needed. Use when a user wants to see agent health, list available agents, or check what MCP tools are available. Triggers on questions like "are my agents running?", "check agent status", "which agents are healthy?", "list MCP servers".
 ---
 
-# Check Cloud.ru AI Fabric Agent Status
+# Check Cloud.ru AI Fabric Status
 
-Show the live status of Cloud.ru AI Fabric agents, comparing the Cloud.ru API state with the local `openclaw.json` configuration.
+Show the live status of Cloud.ru AI Fabric resources: agents, MCP servers, and agent systems.
+All resources are discovered automatically from the Cloud.ru management API.
 
 ## Prerequisites
 
@@ -21,17 +22,17 @@ Show the live status of Cloud.ru AI Fabric agents, comparing the Cloud.ru API st
 
 Examples:
 
-- `/status-agents` — show all agents
-- `/status-agents code-reviewer` — show only agents matching "code-reviewer"
+- `/status-agents` — show all agents, MCP servers, and agent systems
+- `/status-agents weather` — show only resources matching "weather"
 
 ## Workflow
 
 ### 1. Read config and credentials
 
 ```typescript
-import { readConfig } from "../config/config.js";
+import { loadConfig } from "../src/config/io.js";
 
-const config = await readConfig();
+const config = loadConfig();
 const aiFabric = config.aiFabric;
 
 if (!aiFabric?.enabled) {
@@ -41,101 +42,92 @@ if (!aiFabric?.enabled) {
 const projectId = aiFabric?.projectId ?? "";
 const keyId = aiFabric?.keyId ?? "";
 const secret = process.env.CLOUDRU_IAM_SECRET ?? "";
-const configuredAgents = aiFabric?.agents ?? [];
 ```
 
-### 2. Call the agent status service
+### 2. Discover all resources from Cloud.ru API
 
 ```typescript
-import { getAgentStatus } from "../src/ai-fabric/agent-status.js";
+import { CloudruSimpleClient } from "../src/ai-fabric/cloudru-client-simple.js";
 
-const result = await getAgentStatus({
+const client = new CloudruSimpleClient({
   projectId,
   auth: { keyId, secret },
-  configuredAgents,
-  nameFilter: args[0], // optional agent name from user input
 });
+
+// Fetch all three resource types in parallel
+const [agentsResult, mcpResult] = await Promise.all([
+  client.listAgents({ limit: 100 }),
+  client.listMcpServers({ limit: 100 }),
+]);
+
+// Filter out deleted resources
+const agents = agentsResult.data.filter(
+  (a) => a.status !== "DELETED" && a.status !== "AGENT_STATUS_DELETED",
+);
+const mcpServers = mcpResult.data.filter((s) => s.status !== "MCP_SERVER_STATUS_DELETED");
 ```
 
-### 3. Handle errors
+### 3. Render agents table
 
-If `result.ok === false`, show an error message based on `result.errorType`:
+Map agent statuses to health:
 
-- **`"config"`**: "Configuration incomplete: {result.error}. Run `openclaw onboard` to set up AI Fabric."
-- **`"auth"`**: "Authentication failed: {result.error}. Check your `aiFabric.keyId` and `CLOUDRU_IAM_SECRET`."
-- **`"api"`**: "Cloud.ru API error: {result.error}"
-- **`"network"`**: "Network error: {result.error}. Check your internet connection and Cloud.ru API availability."
+| API Status           | Health   | Display   |
+| -------------------- | -------- | --------- |
+| AGENT_STATUS_RUNNING | healthy  | ✓ running |
+| AGENT_STATUS_COOLED  | degraded | ⏸ cooled  |
+| AGENT_STATUS_FAILED  | failed   | ✗ failed  |
+| Other                | unknown  | ? unknown |
 
-### 4. Render results
-
-#### Multiple agents — table view
-
-Use `renderTable` from `src/terminal/table.ts`:
-
-```typescript
-import { renderTable } from "../src/terminal/table.ts";
-
-const table = renderTable({
-  columns: [
-    { key: "name", header: "Agent", flex: true },
-    { key: "status", header: "Status", minWidth: 10 },
-    { key: "health", header: "Health", minWidth: 8 },
-    { key: "configured", header: "Config", minWidth: 6 },
-    { key: "drift", header: "Drift", minWidth: 5 },
-  ],
-  rows: result.entries.map((e) => ({
-    name: e.name,
-    status: e.status,
-    health:
-      e.health === "healthy"
-        ? "✓ healthy"
-        : e.health === "degraded"
-          ? "⚠ degraded"
-          : e.health === "failed"
-            ? "✗ failed"
-            : "? unknown",
-    configured: e.configured ? "yes" : "no",
-    drift: e.drift ? "⚠ yes" : "no",
-  })),
-});
-```
-
-#### Single agent — detail view
-
-If there is exactly one entry (either from filter or only one agent exists), show a detailed view:
+Show table:
 
 ```
-**Agent: {entry.name}** (ID: {entry.id})
-- Status: {entry.status}
-- Health: {entry.health}
-- Endpoint: {entry.endpoint ?? "none"}
-- Configured: {entry.configured ? "yes" : "no"}
-- Drift: {entry.drift ? "⚠ " + entry.driftReason : "none"}
+**Agents ({count})**
+
+| Name | Status | Health | ID |
+|------|--------|--------|----|
+| weather-agent | RUNNING | ✓ healthy | 66a83b8a... |
+| web-search-agent | COOLED | ⏸ cooled | 14f83379... |
 ```
+
+If agent has a `statusReason` with useful error info (e.g., missing env var), show it below the table.
+
+### 4. Render MCP servers table
+
+```
+**MCP Servers ({count})**
+
+| Name | Status | Tools | URL |
+|------|--------|-------|-----|
+| mcp-server-weather | RUNNING | get_today_weather, get_weekly_forecast | https://...mcp |
+| web-searcher-mcp | COOLED | search_web, search_news, +8 more | https://...mcp |
+```
+
+For each MCP server, list the `tools[].name` array. If more than 3 tools, show first 3 + `+N more`.
 
 ### 5. Show summary
 
-After the table or detail view, always show a summary line:
-
 ```
-Summary: {summary.total} agents — {summary.healthy} healthy, {summary.degraded} degraded, {summary.failed} failed, {summary.unknown} unknown
+Summary: {agents.length} agents ({healthy} healthy, {degraded} degraded, {failed} failed) | {mcpServers.length} MCP servers
 ```
 
-### 6. Show drift warnings
+### 6. Show tips
 
-If any entry has `drift: true`, add a warning section:
+After the summary, show actionable tips:
 
-```
-⚠ Configuration drift detected:
-- {entry.name}: {entry.driftReason}
-
-Run `openclaw onboard` to update your agent configuration.
-```
+- If any agent is COOLED: "⏸ Cooled agents wake up automatically on the first request."
+- If any agent is FAILED: "✗ Failed agents need attention in the Cloud.ru console."
+- "Use `/ask-agent <name> <message>` to send a message to any agent."
 
 ## Error handling
 
 - **IAM auth failure**: "Could not authenticate with Cloud.ru IAM. Check your keyId and CLOUDRU_IAM_SECRET."
 - **API error**: "Cloud.ru API returned an error: {details}. The project may not exist or your credentials may lack access."
 - **Network error**: "Cannot reach Cloud.ru API: {details}. Check your network connection."
-- **No agents found**: "No agents found in project {projectId}. Deploy agents in the Cloud.ru console or run `openclaw onboard`."
-- **AI Fabric not configured**: "AI Fabric is not enabled. Run `openclaw onboard` and select Cloud.ru AI Fabric to get started."
+- **No resources found**: "No agents or MCP servers found in project {projectId}. Deploy resources in the Cloud.ru console."
+
+## Key architecture notes
+
+- **All resources are discovered from the API** — nothing is read from `aiFabric.agents[]` in config
+- **Management API paths**: `/agents` (with `limit=100`), `/mcpServers` (camelCase, with `limit=100`)
+- **Agent public URLs**: `https://{id}-agent.ai-agent.inference.cloud.ru`
+- **MCP server public URLs**: `https://{id}-mcp-server.ai-agent.inference.cloud.ru/mcp`

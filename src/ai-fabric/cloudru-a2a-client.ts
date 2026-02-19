@@ -31,6 +31,7 @@ export type A2AClientConfig = {
 };
 
 export type A2AMessagePart = {
+  kind?: "text";
   type?: "text";
   text: string;
 };
@@ -52,11 +53,14 @@ export type A2ASendParams = {
 export type A2ATaskResponse = {
   id: string;
   sessionId?: string;
+  contextId?: string;
+  kind?: "task";
   status: {
     state: "completed" | "failed" | "working" | "input-required";
     message?: A2AMessage;
   };
   artifacts?: Array<{
+    artifactId?: string;
     name?: string;
     parts: A2AMessagePart[];
   }>;
@@ -113,7 +117,7 @@ export class CloudruA2AClient {
   /**
    * Send a message to a Cloud.ru AI Agent via A2A protocol.
    *
-   * Uses the JSON-RPC `tasks/send` method defined in A2A spec.
+   * Uses the JSON-RPC `message/send` method (A2A v0.3.0).
    */
   async sendMessage(params: A2ASendParams): Promise<A2ASendResult> {
     const { endpoint, message, sessionId } = params;
@@ -126,13 +130,14 @@ export class CloudruA2AClient {
       const body = {
         jsonrpc: "2.0",
         id: crypto.randomUUID(),
-        method: "tasks/send",
+        method: "message/send",
         params: {
-          id: crypto.randomUUID(),
-          ...(sessionId ? { sessionId } : {}),
+          ...(sessionId ? { contextId: sessionId } : {}),
           message: {
+            messageId: crypto.randomUUID(),
             role: "user" as const,
-            parts: [{ type: "text" as const, text: message }],
+            parts: [{ kind: "text" as const, text: message }],
+            kind: "message" as const,
           },
         },
       };
@@ -176,7 +181,7 @@ export class CloudruA2AClient {
         ok: true,
         text: extractResponseText(json.result),
         taskId: json.result.id,
-        sessionId: json.result.sessionId,
+        sessionId: json.result.contextId ?? json.result.sessionId,
       };
     } catch (err) {
       if (err instanceof A2AError) {
@@ -210,8 +215,15 @@ function extractResponseText(task: A2ATaskResponse): string {
     }
   }
 
-  // Fall back to artifacts
+  // Fall back to artifacts — prefer the "result" artifact, then any text part
   if (task.artifacts?.length) {
+    const resultArtifact = task.artifacts.find((a) => a.name === "result");
+    if (resultArtifact) {
+      const texts = resultArtifact.parts.filter((p) => p.text).map((p) => p.text);
+      if (texts.length > 0) {
+        return texts.join("\n");
+      }
+    }
     const texts = task.artifacts
       .flatMap((a) => a.parts)
       .filter((p) => p.text)

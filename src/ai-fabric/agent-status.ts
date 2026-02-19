@@ -133,7 +133,7 @@ export async function getAgentStatus(
     });
 
     const result = await client.listAgents({ limit: 100 });
-    liveAgents = result.items;
+    liveAgents = result.data;
   } catch (err) {
     if (err instanceof CloudruAuthError) {
       return { ok: false, errorType: "auth", error: `IAM auth failed: ${err.message}` };
