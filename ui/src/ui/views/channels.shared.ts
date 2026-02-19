@@ -1,5 +1,5 @@
 import { html, nothing } from "lit";
-import type { ChannelAccountSnapshot } from "../types.ts";
+import type { ChannelAccountSnapshot } from "../models/types.ts";
 import type { ChannelKey, ChannelsProps } from "./channels.types.ts";
 
 export function channelEnabled(key: ChannelKey, props: ChannelsProps) {

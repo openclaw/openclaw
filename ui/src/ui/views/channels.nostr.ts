@@ -1,6 +1,6 @@
 import { html, nothing } from "lit";
-import { formatRelativeTimestamp } from "../format.ts";
-import type { ChannelAccountSnapshot, NostrStatus } from "../types.ts";
+import { formatRelativeTimestamp } from "../lib/format.ts";
+import type { ChannelAccountSnapshot, NostrStatus } from "../models/types.ts";
 import { renderChannelConfigSection } from "./channels.config.ts";
 import {
   renderNostrProfileForm,

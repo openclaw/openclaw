@@ -4,7 +4,11 @@ import {
   normalizeToolName,
   resolveToolProfilePolicy,
 } from "../../../../src/agents/tool-policy.js";
-import type { AgentIdentityResult, AgentsFilesListResult, AgentsListResult } from "../types.ts";
+import type {
+  AgentIdentityResult,
+  AgentsFilesListResult,
+  AgentsListResult,
+} from "../models/types.ts";
 
 export const TOOL_SECTIONS = [
   {

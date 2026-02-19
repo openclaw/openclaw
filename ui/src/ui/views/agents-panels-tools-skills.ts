@@ -1,6 +1,6 @@
 import { html, nothing } from "lit";
 import { normalizeToolName } from "../../../../src/agents/tool-policy.js";
-import type { SkillStatusEntry, SkillStatusReport } from "../types.ts";
+import type { SkillStatusEntry, SkillStatusReport } from "../models/types.ts";
 import {
   isAllowedByPolicy,
   matchesList,

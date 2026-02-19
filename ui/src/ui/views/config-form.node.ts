@@ -1,5 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
-import type { ConfigUiHints } from "../types.ts";
+import type { ConfigUiHints } from "../models/types.ts";
 import {
   defaultValue,
   hintForPath,

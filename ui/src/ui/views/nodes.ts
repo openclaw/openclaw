@@ -6,7 +6,7 @@ import type {
   PendingDevice,
 } from "../controllers/devices.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "../controllers/exec-approvals.ts";
-import { formatRelativeTimestamp, formatList } from "../format.ts";
+import { formatRelativeTimestamp, formatList } from "../lib/format.ts";
 import { renderExecApprovals, resolveExecApprovalsState } from "./nodes-exec-approvals.ts";
 export type NodesProps = {
   loading: boolean;

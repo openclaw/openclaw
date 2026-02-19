@@ -49,7 +49,7 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 12px 16px;
+  padding: var(--space-12) var(--space-16);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
   position: sticky;
@@ -60,7 +60,7 @@
 
 /* Smaller close button for sidebar */
 .sidebar-header .btn {
-  padding: 4px 8px;
+  padding: var(--space-4) var(--space-8);
   font-size: 14px;
   min-width: auto;
   line-height: 1;
@@ -74,7 +74,7 @@
 .sidebar-content {
   flex: 1;
   overflow: auto;
-  padding: 16px;
+  padding: var(--space-16);
 }
 
 .sidebar-markdown {
@@ -85,7 +85,7 @@
 .sidebar-markdown pre {
   background: rgba(0, 0, 0, 0.12);
   border-radius: 4px;
-  padding: 12px;
+  padding: var(--space-12);
   overflow-x: auto;
 }
 

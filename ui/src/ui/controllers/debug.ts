@@ -1,5 +1,5 @@
-import type { GatewayBrowserClient } from "../gateway.ts";
-import type { HealthSnapshot, StatusSummary } from "../types.ts";
+import type { GatewayBrowserClient } from "../core/gateway.ts";
+import type { HealthSnapshot, StatusSummary } from "../models/types.ts";
 
 export type DebugState = {
   client: GatewayBrowserClient | null;

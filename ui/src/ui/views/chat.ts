@@ -7,11 +7,11 @@ import {
   renderStreamingGroup,
 } from "../chat/grouped-render.ts";
 import { normalizeMessage, normalizeRoleForGrouping } from "../chat/message-normalizer.ts";
-import { icons } from "../icons.ts";
-import { detectTextDirection } from "../text-direction.ts";
-import type { SessionsListResult } from "../types.ts";
+import { icons } from "../lib/icons.ts";
+import { detectTextDirection } from "../lib/text-direction.ts";
+import type { SessionsListResult } from "../models/types.ts";
+import type { ChatAttachment, ChatQueueItem } from "../models/ui-types.ts";
 import type { ChatItem, MessageGroup } from "../types/chat-types.ts";
-import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
 import { renderMarkdownSidebar } from "./markdown-sidebar.ts";
 import "../components/resizable-divider.ts";
 

@@ -5,11 +5,11 @@
 /* Chat Group Layout - default (assistant/other on left) */
 .chat-group {
   display: flex;
-  gap: 12px;
+  gap: var(--space-12);
   align-items: flex-start;
-  margin-bottom: 16px;
-  margin-left: 4px;
-  margin-right: 16px;
+  margin-bottom: var(--space-16);
+  margin-left: var(--space-4);
+  margin-right: var(--space-16);
 }
 
 /* User messages on right */
@@ -21,7 +21,7 @@
 .chat-group-messages {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-2);
   max-width: min(900px, calc(100% - 60px));
 }
 
@@ -37,9 +37,9 @@
 /* Footer at bottom of message group (role + time) */
 .chat-group-footer {
   display: flex;
-  gap: 8px;
+  gap: var(--space-8);
   align-items: baseline;
-  margin-top: 6px;
+  margin-top: var(--space-6);
 }
 
 .chat-sender-name {
@@ -58,8 +58,8 @@
 .chat-divider {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin: 18px 8px;
+  gap: var(--space-10);
+  margin: var(--space-18) var(--space-8);
   color: var(--muted);
   font-size: 11px;
   letter-spacing: 0.08em;
@@ -75,7 +75,7 @@
 }
 
 .chat-divider__label {
-  padding: 2px 10px;
+  padding: var(--space-2) var(--space-10);
   border: 1px solid var(--border);
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.02);
@@ -130,7 +130,7 @@ img.chat-avatar {
   border: 1px solid transparent;
   background: var(--card);
   border-radius: var(--radius-lg);
-  padding: 10px 14px;
+  padding: var(--space-10) var(--space-14);
   box-shadow: none;
   transition:
     background 150ms ease-out,
@@ -140,7 +140,7 @@ img.chat-avatar {
 }
 
 .chat-bubble.has-copy {
-  padding-right: 36px;
+  padding-right: var(--space-36);
 }
 
 .chat-copy-btn {
@@ -151,7 +151,7 @@ img.chat-avatar {
   background: var(--bg);
   color: var(--muted);
   border-radius: var(--radius-md);
-  padding: 4px 6px;
+  padding: var(--space-4) var(--space-6);
   font-size: 14px;
   line-height: 1;
   cursor: pointer;

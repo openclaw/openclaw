@@ -1,5 +1,5 @@
-import type { GatewayBrowserClient } from "../gateway.ts";
-import type { ConfigSchemaResponse, ConfigSnapshot, ConfigUiHints } from "../types.ts";
+import type { GatewayBrowserClient } from "../core/gateway.ts";
+import type { ConfigSchemaResponse, ConfigSnapshot, ConfigUiHints } from "../models/types.ts";
 import type { JsonSchema } from "../views/config-form.shared.ts";
 import { coerceFormValues } from "./config/form-coerce.ts";
 import {

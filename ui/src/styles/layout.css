@@ -80,8 +80,8 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 16px;
-  padding: 0 20px;
+  gap: var(--space-16);
+  padding: 0 var(--space-20);
   height: var(--shell-topbar-height);
   border-bottom: 1px solid var(--border);
   background: var(--bg);
@@ -90,7 +90,7 @@
 .topbar-left {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-12);
 }
 
 .topbar .nav-collapse-toggle {
@@ -113,7 +113,7 @@
 .brand {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--space-10);
 }
 
 .brand-logo {
@@ -155,12 +155,12 @@
 .topbar-status {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-8);
 }
 
 .topbar-status .pill {
-  padding: 6px 10px;
-  gap: 6px;
+  padding: var(--space-6) var(--space-10);
+  gap: var(--space-6);
   font-size: 12px;
   font-weight: 500;
   height: 32px;
@@ -171,7 +171,7 @@
   display: flex;
   align-items: center;
   line-height: 1;
-  margin-top: 0px;
+  margin-top: 0;
 }
 
 .topbar-status .statusDot {
@@ -198,7 +198,7 @@
   grid-area: nav;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 16px 12px;
+  padding: var(--space-16) var(--space-12);
   background: var(--bg);
   scrollbar-width: none; /* Firefox */
   transition:
@@ -245,7 +245,7 @@
   transition:
     background var(--duration-fast) ease,
     border-color var(--duration-fast) ease;
-  margin-bottom: 16px;
+  margin-bottom: var(--space-16);
 }
 
 .nav-collapse-toggle:hover {
@@ -279,9 +279,9 @@
 
 /* Nav groups */
 .nav-group {
-  margin-bottom: 20px;
+  margin-bottom: var(--space-20);
   display: grid;
-  gap: 2px;
+  gap: var(--space-2);
 }
 
 .nav-group:last-child {
@@ -302,13 +302,13 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--space-8);
   width: 100%;
-  padding: 6px 10px;
+  padding: var(--space-6) var(--space-10);
   font-size: 11px;
   font-weight: 500;
   color: var(--muted);
-  margin-bottom: 4px;
+  margin-bottom: var(--space-4);
   background: transparent;
   border: none;
   cursor: pointer;
@@ -353,8 +353,8 @@
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  gap: 10px;
-  padding: 8px 10px;
+  gap: var(--space-10);
+  padding: var(--space-8) var(--space-10);
   border-radius: var(--radius-md);
   border: 1px solid transparent;
   background: transparent;
@@ -420,7 +420,7 @@
 
 .content {
   grid-area: content;
-  padding: 12px 16px 32px;
+  padding: var(--space-12) var(--space-16) var(--space-32);
   display: block;
   min-height: 0;
   overflow-y: auto;
@@ -428,7 +428,7 @@
 }
 
 .content > * + * {
-  margin-top: 24px;
+  margin-top: var(--space-24);
 }
 
 :root[data-theme="light"] .content {
@@ -438,7 +438,7 @@
 .content--chat {
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: var(--space-24);
   overflow: hidden;
   padding-bottom: 0;
 }
@@ -452,8 +452,8 @@
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
-  gap: 16px;
-  padding: 4px 8px;
+  gap: var(--space-16);
+  padding: var(--space-4) var(--space-8);
   overflow: hidden;
   transform-origin: top center;
   transition:
@@ -484,13 +484,13 @@
   color: var(--muted);
   font-size: 14px;
   font-weight: 400;
-  margin-top: 6px;
+  margin-top: var(--space-6);
   letter-spacing: -0.01em;
 }
 
 .page-meta {
   display: flex;
-  gap: 8px;
+  gap: var(--space-8);
 }
 
 /* Chat view header adjustments */
@@ -498,7 +498,7 @@
   flex-direction: row;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: var(--space-16);
 }
 
 .content--chat .content-header > div:first-child {
@@ -519,7 +519,7 @@
 
 .grid {
   display: grid;
-  gap: 20px;
+  gap: var(--space-20);
 }
 
 .grid-cols-2 {
@@ -532,32 +532,32 @@
 
 .stat-grid {
   display: grid;
-  gap: 14px;
+  gap: var(--space-14);
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
 }
 
 .note-grid {
   display: grid;
-  gap: 16px;
+  gap: var(--space-16);
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
 
 .row {
   display: flex;
-  gap: 12px;
+  gap: var(--space-12);
   align-items: center;
 }
 
 .stack {
   display: grid;
-  gap: 12px;
+  gap: var(--space-12);
   grid-template-columns: minmax(0, 1fr);
 }
 
 .filters {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: var(--space-8);
   align-items: center;
 }
 
@@ -581,11 +581,11 @@
     position: static;
     max-height: none;
     display: flex;
-    gap: 6px;
+    gap: var(--space-6);
     overflow-x: auto;
     border-right: none;
     border-bottom: 1px solid var(--border);
-    padding: 10px 14px;
+    padding: var(--space-10) var(--space-14);
     background: var(--bg);
   }
 
@@ -602,8 +602,8 @@
 
   .topbar {
     position: static;
-    padding: 12px 14px;
-    gap: 10px;
+    padding: var(--space-12) var(--space-14);
+    gap: var(--space-10);
   }
 
   .topbar-status {

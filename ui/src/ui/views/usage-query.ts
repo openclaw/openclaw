@@ -1,4 +1,4 @@
-import { extractQueryTerms } from "../usage-helpers.ts";
+import { extractQueryTerms } from "../usage/usage-helpers.ts";
 import { CostDailyEntry, UsageAggregates, UsageSessionEntry } from "./usageTypes.ts";
 
 function downloadTextFile(filename: string, content: string, type = "text/plain") {

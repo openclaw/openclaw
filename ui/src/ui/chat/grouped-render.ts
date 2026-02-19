@@ -1,8 +1,8 @@
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
-import type { AssistantIdentity } from "../assistant-identity.ts";
-import { toSanitizedMarkdownHtml } from "../markdown.ts";
-import { detectTextDirection } from "../text-direction.ts";
+import type { AssistantIdentity } from "../identity/assistant-identity.ts";
+import { toSanitizedMarkdownHtml } from "../lib/markdown.ts";
+import { detectTextDirection } from "../lib/text-direction.ts";
 import type { MessageGroup } from "../types/chat-types.ts";
 import { renderCopyAsMarkdownButton } from "./copy-as-markdown.ts";
 import {

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { DEFAULT_CRON_FORM } from "../app-defaults.ts";
+import { DEFAULT_CRON_FORM } from "../app/app-defaults.ts";
 import { addCronJob, normalizeCronFormState, type CronState } from "./cron.ts";
 
 function createState(overrides: Partial<CronState> = {}): CronState {

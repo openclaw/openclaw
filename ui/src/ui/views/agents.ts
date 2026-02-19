@@ -7,7 +7,7 @@ import type {
   CronJob,
   CronStatus,
   SkillStatusReport,
-} from "../types.ts";
+} from "../models/types.ts";
 import {
   renderAgentFiles,
   renderAgentChannels,

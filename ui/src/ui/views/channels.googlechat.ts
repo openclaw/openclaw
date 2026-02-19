@@ -1,6 +1,6 @@
 import { html, nothing } from "lit";
-import { formatRelativeTimestamp } from "../format.ts";
-import type { GoogleChatStatus } from "../types.ts";
+import { formatRelativeTimestamp } from "../lib/format.ts";
+import type { GoogleChatStatus } from "../models/types.ts";
 import { renderChannelConfigSection } from "./channels.config.ts";
 import type { ChannelsProps } from "./channels.types.ts";
 

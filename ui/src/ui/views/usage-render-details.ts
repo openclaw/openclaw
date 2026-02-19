@@ -1,6 +1,6 @@
 import { html, svg, nothing } from "lit";
 import { formatDurationCompact } from "../../../../src/infra/format-time/format-duration.ts";
-import { parseToolSummary } from "../usage-helpers.ts";
+import { parseToolSummary } from "../usage/usage-helpers.ts";
 import { charsToTokens, formatCost, formatTokens } from "./usage-metrics.ts";
 import { renderInsightList } from "./usage-render-overview.ts";
 import {

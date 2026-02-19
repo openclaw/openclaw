@@ -4,7 +4,7 @@ import type {
   SessionsUsageResult,
   SessionsUsageTotals,
   SessionUsageTimePoint,
-} from "../usage-types.ts";
+} from "../models/usage-types.ts";
 
 export type UsageSessionEntry = SessionsUsageEntry;
 export type UsageTotals = SessionsUsageTotals;
