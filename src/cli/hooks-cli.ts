@@ -26,6 +26,7 @@ import { renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
+import { addJsonOption } from "./option-builders.js";
 
 export type HooksListOptions = {
   json?: boolean;
@@ -489,43 +490,42 @@ export function registerHooksCli(program: Command): void {
         `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/hooks", "docs.openclaw.ai/cli/hooks")}\n`,
     );
 
-  hooks
-    .command("list")
-    .description("List all hooks")
-    .option("--eligible", "Show only eligible hooks", false)
-    .option("--json", "Output as JSON", false)
-    .option("-v, --verbose", "Show more details including missing requirements", false)
-    .action(async (opts) =>
-      runHooksCliAction(async () => {
-        const config = loadConfig();
-        const report = buildHooksReport(config);
-        defaultRuntime.log(formatHooksList(report, opts));
-      }),
-    );
+  addJsonOption(
+    hooks
+      .command("list")
+      .description("List all hooks")
+      .option("--eligible", "Show only eligible hooks", false)
+      .option("-v, --verbose", "Show more details including missing requirements", false),
+    "Output as JSON",
+  ).action(async (opts) =>
+    runHooksCliAction(async () => {
+      const config = loadConfig();
+      const report = buildHooksReport(config);
+      defaultRuntime.log(formatHooksList(report, opts));
+    }),
+  );
 
-  hooks
-    .command("info <name>")
-    .description("Show detailed information about a hook")
-    .option("--json", "Output as JSON", false)
-    .action(async (name, opts) =>
-      runHooksCliAction(async () => {
-        const config = loadConfig();
-        const report = buildHooksReport(config);
-        defaultRuntime.log(formatHookInfo(report, name, opts));
-      }),
-    );
+  addJsonOption(
+    hooks.command("info <name>").description("Show detailed information about a hook"),
+    "Output as JSON",
+  ).action(async (name, opts) =>
+    runHooksCliAction(async () => {
+      const config = loadConfig();
+      const report = buildHooksReport(config);
+      defaultRuntime.log(formatHookInfo(report, name, opts));
+    }),
+  );
 
-  hooks
-    .command("check")
-    .description("Check hooks eligibility status")
-    .option("--json", "Output as JSON", false)
-    .action(async (opts) =>
-      runHooksCliAction(async () => {
-        const config = loadConfig();
-        const report = buildHooksReport(config);
-        defaultRuntime.log(formatHooksCheck(report, opts));
-      }),
-    );
+  addJsonOption(
+    hooks.command("check").description("Check hooks eligibility status"),
+    "Output as JSON",
+  ).action(async (opts) =>
+    runHooksCliAction(async () => {
+      const config = loadConfig();
+      const report = buildHooksReport(config);
+      defaultRuntime.log(formatHooksCheck(report, opts));
+    }),
+  );
 
   hooks
     .command("enable <name>")

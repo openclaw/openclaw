@@ -5,6 +5,7 @@ import { defaultRuntime } from "../runtime.js";
 import { renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { addJsonOption, addTimeoutOption } from "./option-builders.js";
 import { withProgress } from "./progress.js";
 
 type DevicesRpcOpts = {
@@ -54,12 +55,21 @@ type DevicePairingList = {
 };
 
 const devicesCallOpts = (cmd: Command, defaults?: { timeoutMs?: number }) =>
-  cmd
-    .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
-    .option("--token <token>", "Gateway token (if required)")
-    .option("--password <password>", "Gateway password (password auth)")
-    .option("--timeout <ms>", "Timeout in ms", String(defaults?.timeoutMs ?? 10_000))
-    .option("--json", "Output JSON", false);
+  addJsonOption(
+    addTimeoutOption(
+      cmd
+        .option(
+          "--url <url>",
+          "Gateway WebSocket URL (defaults to gateway.remote.url when configured)",
+        )
+        .option("--token <token>", "Gateway token (if required)")
+        .option("--password <password>", "Gateway password (password auth)"),
+      {
+        description: "Timeout in ms",
+        defaultValue: String(defaults?.timeoutMs ?? 10_000),
+      },
+    ),
+  );
 
 const callGatewayCli = async (method: string, opts: DevicesRpcOpts, params?: unknown) =>
   withProgress(

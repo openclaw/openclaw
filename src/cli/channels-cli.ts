@@ -17,6 +17,7 @@ import { formatCliChannelOptions } from "./channel-options.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
 import { hasExplicitOptions } from "./command-options.js";
 import { formatHelpExamples } from "./help-format.js";
+import { addJsonOption, addTimeoutOption } from "./option-builders.js";
 
 const optionNamesAdd = [
   "channel",
@@ -89,77 +90,81 @@ export function registerChannelsCli(program: Command) {
         )}\n`,
     );
 
-  channels
-    .command("list")
-    .description("List configured channels + auth profiles")
-    .option("--no-usage", "Skip model provider usage/quota snapshots")
-    .option("--json", "Output JSON", false)
-    .action(async (opts) => {
-      await runChannelsCommand(async () => {
-        await channelsListCommand(opts, defaultRuntime);
-      });
+  addJsonOption(
+    channels
+      .command("list")
+      .description("List configured channels + auth profiles")
+      .option("--no-usage", "Skip model provider usage/quota snapshots"),
+  ).action(async (opts) => {
+    await runChannelsCommand(async () => {
+      await channelsListCommand(opts, defaultRuntime);
     });
+  });
 
-  channels
-    .command("status")
-    .description("Show gateway channel status (use status --deep for local)")
-    .option("--probe", "Probe channel credentials", false)
-    .option("--timeout <ms>", "Timeout in ms", "10000")
-    .option("--json", "Output JSON", false)
-    .action(async (opts) => {
-      await runChannelsCommand(async () => {
-        await channelsStatusCommand(opts, defaultRuntime);
-      });
+  addJsonOption(
+    addTimeoutOption(
+      channels
+        .command("status")
+        .description("Show gateway channel status (use status --deep for local)")
+        .option("--probe", "Probe channel credentials", false),
+      { description: "Timeout in ms", defaultValue: "10000" },
+    ),
+  ).action(async (opts) => {
+    await runChannelsCommand(async () => {
+      await channelsStatusCommand(opts, defaultRuntime);
     });
+  });
 
-  channels
-    .command("capabilities")
-    .description("Show provider capabilities (intents/scopes + supported features)")
-    .option("--channel <name>", `Channel (${formatCliChannelOptions(["all"])})`)
-    .option("--account <id>", "Account id (only with --channel)")
-    .option("--target <dest>", "Channel target for permission audit (Discord channel:<id>)")
-    .option("--timeout <ms>", "Timeout in ms", "10000")
-    .option("--json", "Output JSON", false)
-    .action(async (opts) => {
-      await runChannelsCommand(async () => {
-        await channelsCapabilitiesCommand(opts, defaultRuntime);
-      });
+  addJsonOption(
+    addTimeoutOption(
+      channels
+        .command("capabilities")
+        .description("Show provider capabilities (intents/scopes + supported features)")
+        .option("--channel <name>", `Channel (${formatCliChannelOptions(["all"])})`)
+        .option("--account <id>", "Account id (only with --channel)")
+        .option("--target <dest>", "Channel target for permission audit (Discord channel:<id>)"),
+      { description: "Timeout in ms", defaultValue: "10000" },
+    ),
+  ).action(async (opts) => {
+    await runChannelsCommand(async () => {
+      await channelsCapabilitiesCommand(opts, defaultRuntime);
     });
+  });
 
-  channels
-    .command("resolve")
-    .description("Resolve channel/user names to IDs")
-    .argument("<entries...>", "Entries to resolve (names or ids)")
-    .option("--channel <name>", `Channel (${channelNames})`)
-    .option("--account <id>", "Account id (accountId)")
-    .option("--kind <kind>", "Target kind (auto|user|group)", "auto")
-    .option("--json", "Output JSON", false)
-    .action(async (entries, opts) => {
-      await runChannelsCommand(async () => {
-        await channelsResolveCommand(
-          {
-            channel: opts.channel as string | undefined,
-            account: opts.account as string | undefined,
-            kind: opts.kind as "auto" | "user" | "group",
-            json: Boolean(opts.json),
-            entries: Array.isArray(entries) ? entries : [String(entries)],
-          },
-          defaultRuntime,
-        );
-      });
+  addJsonOption(
+    channels
+      .command("resolve")
+      .description("Resolve channel/user names to IDs")
+      .argument("<entries...>", "Entries to resolve (names or ids)")
+      .option("--channel <name>", `Channel (${channelNames})`)
+      .option("--account <id>", "Account id (accountId)")
+      .option("--kind <kind>", "Target kind (auto|user|group)", "auto"),
+  ).action(async (entries, opts) => {
+    await runChannelsCommand(async () => {
+      await channelsResolveCommand(
+        {
+          channel: opts.channel as string | undefined,
+          account: opts.account as string | undefined,
+          kind: opts.kind as "auto" | "user" | "group",
+          json: Boolean(opts.json),
+          entries: Array.isArray(entries) ? entries : [String(entries)],
+        },
+        defaultRuntime,
+      );
     });
+  });
 
-  channels
-    .command("logs")
-    .description("Show recent channel logs from the gateway log file")
-    .option("--channel <name>", `Channel (${formatCliChannelOptions(["all"])})`, "all")
-    .option("--lines <n>", "Number of lines (default: 200)", "200")
-    .option("--json", "Output JSON", false)
-    .action(async (opts) => {
-      await runChannelsCommand(async () => {
-        await channelsLogsCommand(opts, defaultRuntime);
-      });
+  addJsonOption(
+    channels
+      .command("logs")
+      .description("Show recent channel logs from the gateway log file")
+      .option("--channel <name>", `Channel (${formatCliChannelOptions(["all"])})`, "all")
+      .option("--lines <n>", "Number of lines (default: 200)", "200"),
+  ).action(async (opts) => {
+    await runChannelsCommand(async () => {
+      await channelsLogsCommand(opts, defaultRuntime);
     });
+  });
 
   channels
     .command("add")

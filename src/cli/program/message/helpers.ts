@@ -6,6 +6,7 @@ import { runGlobalGatewayStopSafely } from "../../../plugins/hook-runner-global.
 import { defaultRuntime } from "../../../runtime.js";
 import { runCommandWithRuntime } from "../../cli-utils.js";
 import { createDefaultDeps } from "../../deps.js";
+import { addJsonOption, addVerboseOption } from "../../option-builders.js";
 import { ensurePluginRegistryLoaded } from "../../plugin-registry.js";
 
 export type MessageCliHelpers = {
@@ -36,12 +37,15 @@ export function createMessageCliHelpers(
   messageChannelOptions: string,
 ): MessageCliHelpers {
   const withMessageBase = (command: Command) =>
-    command
-      .option("--channel <channel>", `Channel: ${messageChannelOptions}`)
-      .option("--account <id>", "Channel account id (accountId)")
-      .option("--json", "Output result as JSON", false)
-      .option("--dry-run", "Print payload and skip sending", false)
-      .option("--verbose", "Verbose logging", false);
+    addVerboseOption(
+      addJsonOption(
+        command
+          .option("--channel <channel>", `Channel: ${messageChannelOptions}`)
+          .option("--account <id>", "Channel account id (accountId)")
+          .option("--dry-run", "Print payload and skip sending", false),
+        "Output result as JSON",
+      ),
+    );
 
   const withMessageTarget = (command: Command) =>
     command.option("-t, --target <dest>", CHANNEL_TARGET_DESCRIPTION);

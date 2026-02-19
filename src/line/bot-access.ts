@@ -50,11 +50,9 @@ export const isSenderAllowed = (params: {
   if (!allow.hasEntries) {
     return false;
   }
-  if (allow.hasWildcard) {
-    return true;
-  }
-  if (!senderId) {
-    return false;
-  }
-  return allow.entries.includes(senderId);
+  return resolveAllowlistMatchCandidates({
+    allowList: allow.entries,
+    candidates: [{ value: senderId, source: "id" }],
+  }).allowed;
 };
+import { resolveAllowlistMatchCandidates } from "../channels/allowlist-match.js";

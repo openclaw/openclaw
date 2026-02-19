@@ -16,6 +16,11 @@ export type AllowlistMatch<TSource extends string = AllowlistMatchSource> = {
   matchSource?: TSource;
 };
 
+export type AllowlistCandidate<TSource extends string> = {
+  value?: string;
+  source: TSource;
+};
+
 export function formatAllowlistMatchMeta(
   match?: { matchKey?: string; matchSource?: string } | null,
 ): string {
@@ -46,6 +51,34 @@ export function resolveAllowlistMatchSimple(params: {
   const senderName = params.senderName?.toLowerCase();
   if (senderName && allowFrom.includes(senderName)) {
     return { allowed: true, matchKey: senderName, matchSource: "name" };
+  }
+
+  return { allowed: false };
+}
+
+export function resolveAllowlistMatchCandidates<TSource extends string>(params: {
+  allowList: string[];
+  candidates: Array<AllowlistCandidate<TSource>>;
+}): AllowlistMatch<"wildcard" | TSource> {
+  const allowList = params.allowList;
+  if (allowList.length === 0) {
+    return { allowed: false };
+  }
+  if (allowList.includes("*")) {
+    return { allowed: true, matchKey: "*", matchSource: "wildcard" };
+  }
+
+  for (const candidate of params.candidates) {
+    if (!candidate.value) {
+      continue;
+    }
+    if (allowList.includes(candidate.value)) {
+      return {
+        allowed: true,
+        matchKey: candidate.value,
+        matchSource: candidate.source,
+      };
+    }
   }
 
   return { allowed: false };
