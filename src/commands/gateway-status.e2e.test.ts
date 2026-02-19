@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 const loadConfig = vi.fn(() => ({
   gateway: {
     mode: "remote",
-    remote: { url: "ws://remote.example:18789", token: "rtok" },
+    remote: { url: "wss://remote.example:18789", token: "rtok" },
     auth: { token: "ltok" },
   },
 }));
@@ -272,7 +272,7 @@ describe("gateway-status command", () => {
       loadConfig.mockReturnValueOnce({
         gateway: {
           mode: "remote",
-          remote: { url: "ws://studio.example:18789", token: "rtok" },
+          remote: { url: "wss://studio.example:18789", token: "rtok" },
           auth: { token: "ltok" },
         },
       });
@@ -298,7 +298,7 @@ describe("gateway-status command", () => {
     loadConfig.mockReturnValueOnce({
       gateway: {
         mode: "remote",
-        remote: { url: "ws://studio.example:18789", token: "rtok" },
+        remote: { url: "wss://studio.example:18789", token: "rtok" },
         auth: { token: "ltok" },
       },
     });

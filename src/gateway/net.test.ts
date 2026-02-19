@@ -2,6 +2,7 @@ import os from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   isPrivateOrLoopbackAddress,
+  isSecureWebSocketUrl,
   isTrustedProxyAddress,
   pickPrimaryLanIPv4,
   resolveGatewayListenHosts,
@@ -235,5 +236,44 @@ describe("isPrivateOrLoopbackAddress", () => {
     for (const ip of rejected) {
       expect(isPrivateOrLoopbackAddress(ip)).toBe(false);
     }
+  });
+});
+
+describe("isSecureWebSocketUrl", () => {
+  describe("wss:// (TLS) URLs", () => {
+    it("returns true for wss:// regardless of host", () => {
+      expect(isSecureWebSocketUrl("wss://127.0.0.1:18789")).toBe(true);
+      expect(isSecureWebSocketUrl("wss://localhost:18789")).toBe(true);
+      expect(isSecureWebSocketUrl("wss://remote.example.com:18789")).toBe(true);
+      expect(isSecureWebSocketUrl("wss://192.168.1.100:18789")).toBe(true);
+    });
+  });
+
+  describe("ws:// (plaintext) URLs", () => {
+    it("returns true for ws:// to loopback addresses", () => {
+      expect(isSecureWebSocketUrl("ws://127.0.0.1:18789")).toBe(true);
+      expect(isSecureWebSocketUrl("ws://localhost:18789")).toBe(true);
+      expect(isSecureWebSocketUrl("ws://[::1]:18789")).toBe(true);
+      expect(isSecureWebSocketUrl("ws://127.0.0.42:18789")).toBe(true);
+    });
+
+    it("returns false for ws:// to non-loopback addresses (CWE-319)", () => {
+      expect(isSecureWebSocketUrl("ws://remote.example.com:18789")).toBe(false);
+      expect(isSecureWebSocketUrl("ws://192.168.1.100:18789")).toBe(false);
+      expect(isSecureWebSocketUrl("ws://10.0.0.5:18789")).toBe(false);
+      expect(isSecureWebSocketUrl("ws://100.64.0.1:18789")).toBe(false);
+    });
+  });
+
+  describe("invalid URLs", () => {
+    it("returns false for invalid URLs", () => {
+      expect(isSecureWebSocketUrl("not-a-url")).toBe(false);
+      expect(isSecureWebSocketUrl("")).toBe(false);
+    });
+
+    it("returns false for non-WebSocket protocols", () => {
+      expect(isSecureWebSocketUrl("http://127.0.0.1:18789")).toBe(false);
+      expect(isSecureWebSocketUrl("https://127.0.0.1:18789")).toBe(false);
+    });
   });
 });
