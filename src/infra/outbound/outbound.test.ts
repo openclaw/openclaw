@@ -10,6 +10,7 @@ import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
   ackDelivery,
   computeBackoffMs,
+  type DeliverFn,
   enqueueDelivery,
   failDelivery,
   loadPendingDeliveries,
@@ -177,22 +178,38 @@ describe("delivery-queue", () => {
   describe("recoverPendingDeliveries", () => {
     const noopDelay = async () => {};
     const baseCfg = {};
-
-    it("recovers entries from a simulated crash", async () => {
-      // Manually create two queue entries as if gateway crashed before delivery.
+    const createLog = () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() });
+    const enqueueCrashRecoveryEntries = async () => {
       await enqueueDelivery({ channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] }, tmpDir);
       await enqueueDelivery({ channel: "telegram", to: "2", payloads: [{ text: "b" }] }, tmpDir);
-
-      const deliver = vi.fn().mockResolvedValue([]);
-      const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-
+    };
+    const runRecovery = async ({
+      deliver,
+      log = createLog(),
+      delay = noopDelay,
+      maxRecoveryMs,
+    }: {
+      deliver: ReturnType<typeof vi.fn>;
+      log?: ReturnType<typeof createLog>;
+      delay?: (ms: number) => Promise<void>;
+      maxRecoveryMs?: number;
+    }) => {
       const result = await recoverPendingDeliveries({
-        deliver,
+        deliver: deliver as DeliverFn,
         log,
         cfg: baseCfg,
         stateDir: tmpDir,
-        delay: noopDelay,
+        delay,
+        ...(maxRecoveryMs === undefined ? {} : { maxRecoveryMs }),
       });
+      return { result, log };
+    };
+
+    it("recovers entries from a simulated crash", async () => {
+      // Manually create queue entries as if gateway crashed before delivery.
+      await enqueueCrashRecoveryEntries();
+      const deliver = vi.fn().mockResolvedValue([]);
+      const { result } = await runRecovery({ deliver });
 
       expect(deliver).toHaveBeenCalledTimes(2);
       expect(result.recovered).toBe(2);
@@ -216,15 +233,7 @@ describe("delivery-queue", () => {
       fs.writeFileSync(filePath, JSON.stringify(entry), "utf-8");
 
       const deliver = vi.fn();
-      const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-
-      const result = await recoverPendingDeliveries({
-        deliver,
-        log,
-        cfg: baseCfg,
-        stateDir: tmpDir,
-        delay: noopDelay,
-      });
+      const { result } = await runRecovery({ deliver });
 
       expect(deliver).not.toHaveBeenCalled();
       expect(result.skipped).toBe(1);
@@ -238,15 +247,7 @@ describe("delivery-queue", () => {
       await enqueueDelivery({ channel: "slack", to: "#ch", payloads: [{ text: "x" }] }, tmpDir);
 
       const deliver = vi.fn().mockRejectedValue(new Error("network down"));
-      const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-
-      const result = await recoverPendingDeliveries({
-        deliver,
-        log,
-        cfg: baseCfg,
-        stateDir: tmpDir,
-        delay: noopDelay,
-      });
+      const { result } = await runRecovery({ deliver });
 
       expect(result.failed).toBe(1);
       expect(result.recovered).toBe(0);
@@ -262,15 +263,7 @@ describe("delivery-queue", () => {
       await enqueueDelivery({ channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] }, tmpDir);
 
       const deliver = vi.fn().mockResolvedValue([]);
-      const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-
-      await recoverPendingDeliveries({
-        deliver,
-        log,
-        cfg: baseCfg,
-        stateDir: tmpDir,
-        delay: noopDelay,
-      });
+      await runRecovery({ deliver });
 
       expect(deliver).toHaveBeenCalledWith(expect.objectContaining({ skipQueue: true }));
     });
@@ -294,15 +287,7 @@ describe("delivery-queue", () => {
       );
 
       const deliver = vi.fn().mockResolvedValue([]);
-      const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-
-      await recoverPendingDeliveries({
-        deliver,
-        log,
-        cfg: baseCfg,
-        stateDir: tmpDir,
-        delay: noopDelay,
-      });
+      await runRecovery({ deliver });
 
       expect(deliver).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -319,19 +304,12 @@ describe("delivery-queue", () => {
     });
 
     it("respects maxRecoveryMs time budget", async () => {
-      await enqueueDelivery({ channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] }, tmpDir);
-      await enqueueDelivery({ channel: "telegram", to: "2", payloads: [{ text: "b" }] }, tmpDir);
+      await enqueueCrashRecoveryEntries();
       await enqueueDelivery({ channel: "slack", to: "#c", payloads: [{ text: "c" }] }, tmpDir);
 
       const deliver = vi.fn().mockResolvedValue([]);
-      const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-
-      const result = await recoverPendingDeliveries({
+      const { result, log } = await runRecovery({
         deliver,
-        log,
-        cfg: baseCfg,
-        stateDir: tmpDir,
-        delay: noopDelay,
         maxRecoveryMs: 0, // Immediate timeout -- no entries should be processed.
       });
 
@@ -360,13 +338,8 @@ describe("delivery-queue", () => {
 
       const deliver = vi.fn().mockResolvedValue([]);
       const delay = vi.fn(async () => {});
-      const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-
-      const result = await recoverPendingDeliveries({
+      const { result, log } = await runRecovery({
         deliver,
-        log,
-        cfg: baseCfg,
-        stateDir: tmpDir,
         delay,
         maxRecoveryMs: 1000,
       });
@@ -383,15 +356,7 @@ describe("delivery-queue", () => {
 
     it("returns zeros when queue is empty", async () => {
       const deliver = vi.fn();
-      const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-
-      const result = await recoverPendingDeliveries({
-        deliver,
-        log,
-        cfg: baseCfg,
-        stateDir: tmpDir,
-        delay: noopDelay,
-      });
+      const { result } = await runRecovery({ deliver });
 
       expect(result).toEqual({ recovered: 0, failed: 0, skipped: 0 });
       expect(deliver).not.toHaveBeenCalled();
