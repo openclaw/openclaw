@@ -142,6 +142,23 @@ export async function drainNextQueueItem<T>(
   return true;
 }
 
+export async function drainCollectItemIfNeeded<T>(params: {
+  forceIndividualCollect: boolean;
+  isCrossChannel: boolean;
+  setForceIndividualCollect?: (next: boolean) => void;
+  items: T[];
+  run: (item: T) => Promise<void>;
+}): Promise<"skipped" | "drained" | "empty"> {
+  if (!params.forceIndividualCollect && !params.isCrossChannel) {
+    return "skipped";
+  }
+  if (params.isCrossChannel) {
+    params.setForceIndividualCollect?.(true);
+  }
+  const drained = await drainNextQueueItem(params.items, params.run);
+  return drained ? "drained" : "empty";
+}
+
 export function buildQueueSummaryPrompt(params: {
   state: QueueSummaryState;
   noun: string;
