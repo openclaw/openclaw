@@ -7,7 +7,11 @@ import {
   resolveBootstrapMaxChars,
   resolveBootstrapTotalMaxChars,
 } from "./pi-embedded-helpers.js";
-import { filterBootstrapFilesForSession, type WorkspaceBootstrapFile } from "./workspace.js";
+import {
+  filterBootstrapFilesForSession,
+  loadWorkspaceBootstrapFiles,
+  type WorkspaceBootstrapFile,
+} from "./workspace.js";
 
 export function makeBootstrapWarn(params: {
   sessionLabel: string;
@@ -27,14 +31,13 @@ export async function resolveBootstrapFilesForRun(params: {
   agentId?: string;
 }): Promise<WorkspaceBootstrapFile[]> {
   const sessionKey = params.sessionKey ?? params.sessionId;
-  const bootstrapFiles = filterBootstrapFilesForSession(
-    await getOrLoadBootstrapFiles({
-      workspaceDir: params.workspaceDir,
-      sessionKey: params.sessionKey,
-      sessionId: params.sessionId,
-    }),
-    sessionKey,
-  );
+  const rawFiles = params.sessionKey
+    ? await getOrLoadBootstrapFiles({
+        workspaceDir: params.workspaceDir,
+        sessionKey: params.sessionKey,
+      })
+    : await loadWorkspaceBootstrapFiles(params.workspaceDir);
+  const bootstrapFiles = filterBootstrapFilesForSession(rawFiles, sessionKey);
 
   return applyBootstrapHookOverrides({
     files: bootstrapFiles,

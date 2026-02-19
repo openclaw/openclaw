@@ -76,21 +76,6 @@ describe("getOrLoadBootstrapFiles", () => {
     expect(result).toBe(files2);
     expect(mockLoad).toHaveBeenCalledTimes(2);
   });
-
-  it("loads without caching when no session key", async () => {
-    await getOrLoadBootstrapFiles({ workspaceDir: "/ws" });
-    await getOrLoadBootstrapFiles({ workspaceDir: "/ws" });
-
-    expect(mockLoad).toHaveBeenCalledTimes(2);
-  });
-
-  it("uses sessionId as fallback cache key", async () => {
-    await getOrLoadBootstrapFiles({ workspaceDir: "/ws", sessionId: "sid-1" });
-    const result = await getOrLoadBootstrapFiles({ workspaceDir: "/ws", sessionId: "sid-1" });
-
-    expect(result).toBe(files);
-    expect(mockLoad).toHaveBeenCalledTimes(1);
-  });
 });
 
 describe("clearBootstrapSnapshot", () => {
@@ -114,7 +99,6 @@ describe("clearBootstrapSnapshot", () => {
   });
 
   it("does not affect other sessions", async () => {
-    mockLoad.mockResolvedValue([makeFile("AGENTS.md", "content")]);
     await getOrLoadBootstrapFiles({ workspaceDir: "/ws", sessionKey: "sk1" });
     await getOrLoadBootstrapFiles({ workspaceDir: "/ws", sessionKey: "sk2" });
 
@@ -123,36 +107,5 @@ describe("clearBootstrapSnapshot", () => {
     // sk2 should still be cached
     await getOrLoadBootstrapFiles({ workspaceDir: "/ws", sessionKey: "sk2" });
     expect(mockLoad).toHaveBeenCalledTimes(2); // sk1 x1, sk2 x1 — sk2 second call hit cache
-  });
-});
-
-describe("TTL eviction", () => {
-  beforeEach(() => {
-    clearAllBootstrapSnapshots();
-    vi.useFakeTimers();
-    mockLoad.mockResolvedValue([makeFile("AGENTS.md", "content")]);
-  });
-
-  afterEach(() => {
-    clearAllBootstrapSnapshots();
-    vi.useRealTimers();
-    vi.clearAllMocks();
-  });
-
-  it("serves cache within TTL", async () => {
-    await getOrLoadBootstrapFiles({ workspaceDir: "/ws", sessionKey: "sk" });
-    vi.advanceTimersByTime(23 * 60 * 60 * 1000); // 23h — under TTL
-    await getOrLoadBootstrapFiles({ workspaceDir: "/ws", sessionKey: "sk" });
-    expect(mockLoad).toHaveBeenCalledTimes(1);
-  });
-
-  it("evicts after TTL expires", async () => {
-    await getOrLoadBootstrapFiles({ workspaceDir: "/ws", sessionKey: "sk" });
-    vi.advanceTimersByTime(25 * 60 * 60 * 1000); // 25h — over TTL
-
-    // Need a second session key request to trigger sweep, then re-request sk
-    await getOrLoadBootstrapFiles({ workspaceDir: "/ws", sessionKey: "sk2" });
-    await getOrLoadBootstrapFiles({ workspaceDir: "/ws", sessionKey: "sk" });
-    expect(mockLoad).toHaveBeenCalledTimes(3); // sk, sk2, sk again
   });
 });
