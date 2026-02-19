@@ -1056,6 +1056,12 @@ impl RpcDispatcher {
             "node.pair.resolved" => {
                 self.nodes.ingest_pair_resolved(payload).await;
             }
+            "exec.approval.requested" => {
+                self.exec_approval.ingest_requested(payload).await;
+            }
+            "exec.approval.resolved" => {
+                self.exec_approval.ingest_resolved(payload).await;
+            }
             _ => {}
         }
     }
@@ -7431,6 +7437,76 @@ impl ExecApprovalRegistry {
         spawn_exec_approval_grace_cleanup(Arc::clone(&self.state), id.to_owned(), resolved_at_ms);
         true
     }
+
+    async fn ingest_requested(&self, payload: Value) {
+        let Some(id) = extract_exec_approval_event_id(&payload) else {
+            return;
+        };
+        let created_at_ms = extract_exec_approval_event_u64(
+            &payload,
+            &[
+                "createdAtMs",
+                "created_at_ms",
+                "createdAt",
+                "created_at",
+                "ts",
+            ],
+        )
+        .unwrap_or_else(now_ms);
+        let expires_at_ms = extract_exec_approval_event_u64(
+            &payload,
+            &["expiresAtMs", "expires_at_ms", "expiresAt", "expires_at"],
+        )
+        .unwrap_or_else(|| created_at_ms.saturating_add(DEFAULT_EXEC_APPROVAL_TIMEOUT_MS));
+
+        let mut guard = self.state.lock().await;
+        let entry = guard
+            .pending_by_id
+            .entry(id)
+            .or_insert_with(|| ExecApprovalPendingEntry {
+                created_at_ms,
+                expires_at_ms,
+                decision: None,
+                resolved_at_ms: None,
+                waiters: Vec::new(),
+            });
+        if entry.resolved_at_ms.is_none() {
+            entry.created_at_ms = created_at_ms;
+            entry.expires_at_ms = expires_at_ms;
+            if entry.decision.is_some() {
+                entry.decision = None;
+            }
+        }
+        prune_oldest_exec_approval_pending(&mut guard.pending_by_id, MAX_EXEC_APPROVAL_PENDING);
+    }
+
+    async fn ingest_resolved(&self, payload: Value) {
+        let Some(id) = extract_exec_approval_event_id(&payload) else {
+            return;
+        };
+        let decision =
+            extract_exec_approval_event_decision(&payload).unwrap_or_else(|| "deny".to_owned());
+        if self.resolve(&id, decision.clone()).await {
+            return;
+        }
+
+        let resolved_at_ms = now_ms();
+        {
+            let mut guard = self.state.lock().await;
+            guard.pending_by_id.insert(
+                id.clone(),
+                ExecApprovalPendingEntry {
+                    created_at_ms: resolved_at_ms,
+                    expires_at_ms: resolved_at_ms,
+                    decision: Some(decision),
+                    resolved_at_ms: Some(resolved_at_ms),
+                    waiters: Vec::new(),
+                },
+            );
+            prune_oldest_exec_approval_pending(&mut guard.pending_by_id, MAX_EXEC_APPROVAL_PENDING);
+        }
+        spawn_exec_approval_grace_cleanup(Arc::clone(&self.state), id, resolved_at_ms);
+    }
 }
 
 fn spawn_exec_approval_grace_cleanup(
@@ -7477,6 +7553,54 @@ fn prune_oldest_exec_approval_pending(
 fn next_exec_approval_id() -> String {
     let sequence = EXEC_APPROVAL_ID_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     format!("approval-{}-{sequence}", now_ms())
+}
+
+fn extract_exec_approval_event_id(payload: &Value) -> Option<String> {
+    extract_exec_approval_event_string(
+        payload,
+        &["id", "requestId", "request_id", "approvalId", "approval_id"],
+        128,
+    )
+}
+
+fn extract_exec_approval_event_decision(payload: &Value) -> Option<String> {
+    let raw = extract_exec_approval_event_string(
+        payload,
+        &["decision", "status", "result", "resolution"],
+        32,
+    )?;
+    match normalize(&raw).as_str() {
+        "allow" | "allow-once" | "approve" | "approved" => Some("allow-once".to_owned()),
+        "allow-always" => Some("allow-always".to_owned()),
+        "deny" | "denied" | "reject" | "rejected" => Some("deny".to_owned()),
+        _ => None,
+    }
+}
+
+fn extract_exec_approval_event_u64(payload: &Value, keys: &[&str]) -> Option<u64> {
+    let map = payload.as_object()?;
+    keys.iter().find_map(|key| {
+        map.get(*key).and_then(|value| match value {
+            Value::Number(number) => number.as_u64(),
+            Value::String(text) => text.trim().parse::<u64>().ok(),
+            _ => None,
+        })
+    })
+}
+
+fn extract_exec_approval_event_string(
+    payload: &Value,
+    keys: &[&str],
+    max_len: usize,
+) -> Option<String> {
+    let map = payload.as_object()?;
+    keys.iter().find_map(|key| {
+        map.get(*key).and_then(|value| match value {
+            Value::String(text) => normalize_optional_text(Some(text.clone()), max_len),
+            Value::Number(number) => normalize_optional_text(Some(number.to_string()), max_len),
+            _ => None,
+        })
+    })
 }
 
 fn next_chat_inject_message_id() -> String {
@@ -18046,6 +18170,91 @@ mod tests {
                 );
             }
             _ => panic!("expected single-phase timeout response"),
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatcher_exec_approval_ingests_requested_and_resolved_events() {
+        let dispatcher = RpcDispatcher::new();
+
+        dispatcher
+            .ingest_event_frame(&serde_json::json!({
+                "event": "exec.approval.requested",
+                "payload": {
+                    "id": "approval-event-1",
+                    "createdAtMs": 10,
+                    "expiresAtMs": 20
+                }
+            }))
+            .await;
+
+        let wait_pending = RpcRequestFrame {
+            id: "req-exec-approval-event-wait-pending".to_owned(),
+            method: "exec.approval.waitDecision".to_owned(),
+            params: serde_json::json!({
+                "id": "approval-event-1"
+            }),
+        };
+
+        let wait_future = dispatcher.handle_request(&wait_pending);
+        let resolve_future = async {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            dispatcher
+                .ingest_event_frame(&serde_json::json!({
+                    "event": "exec.approval.resolved",
+                    "payload": {
+                        "id": "approval-event-1",
+                        "decision": "approve"
+                    }
+                }))
+                .await;
+        };
+        let (wait_out, _) = tokio::join!(wait_future, resolve_future);
+
+        match wait_out {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload
+                        .pointer("/decision")
+                        .and_then(serde_json::Value::as_str),
+                    Some("allow-once")
+                );
+                assert_eq!(
+                    payload.pointer("/id").and_then(serde_json::Value::as_str),
+                    Some("approval-event-1")
+                );
+            }
+            _ => panic!("expected waitDecision to observe event-driven resolution"),
+        }
+
+        dispatcher
+            .ingest_event_frame(&serde_json::json!({
+                "event": "exec.approval.resolved",
+                "payload": {
+                    "id": "approval-event-2",
+                    "decision": "deny"
+                }
+            }))
+            .await;
+
+        let wait_resolved = RpcRequestFrame {
+            id: "req-exec-approval-event-wait-resolved".to_owned(),
+            method: "exec.approval.waitDecision".to_owned(),
+            params: serde_json::json!({
+                "id": "approval-event-2"
+            }),
+        };
+
+        match dispatcher.handle_request(&wait_resolved).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload
+                        .pointer("/decision")
+                        .and_then(serde_json::Value::as_str),
+                    Some("deny")
+                );
+            }
+            _ => panic!("expected resolved approval replay from ingested event"),
         }
     }
 
