@@ -287,6 +287,10 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.model.primary": "Primary model (provider/model).",
   "agents.defaults.model.fallbacks":
     "Ordered fallback models (provider/model). Used when the primary model fails.",
+  "agents.defaults.model.fallbackPolicy":
+    'How to select fallback models when the primary provider\'s quota or credits are exhausted. "manual" (default): only try models in `fallbacks`. "auto": also discover and try other providers configured in auth.profiles, using autoFallbackModels or built-in per-provider defaults.',
+  "agents.defaults.model.autoFallbackModels":
+    'Per-provider model overrides for auto-fallback mode (fallbackPolicy: "auto"). Keys are provider ids (e.g. "openai", "google"); values are model ids. Built-in defaults are used for any provider not listed here.',
   "agents.defaults.imageModel.primary":
     "Optional image model (provider/model) used when the primary model lacks image input.",
   "agents.defaults.imageModel.fallbacks": "Ordered fallback image models (provider/model).",

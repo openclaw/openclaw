@@ -23,6 +23,26 @@ export type AgentModelEntryConfig = {
 export type AgentModelListConfig = {
   primary?: string;
   fallbacks?: string[];
+  /**
+   * Fallback policy when the primary provider's quota or credits are exhausted.
+   *
+   * - "manual" (default): only try models explicitly listed in `fallbacks`.
+   * - "auto": when all auth profiles for the primary provider are in cooldown,
+   *   also try other providers discovered from `auth.profiles`. The model used
+   *   for each discovered provider is taken from `autoFallbackModels` first,
+   *   then built-in per-provider defaults (e.g. "gpt-4.1-mini" for openai).
+   *
+   * Useful when you have API keys for multiple providers and want automatic
+   * cross-provider failover without manually listing every fallback.
+   */
+  fallbackPolicy?: "manual" | "auto";
+  /**
+   * Per-provider model overrides for auto-fallback mode.
+   * Applies only when `fallbackPolicy` is "auto".
+   * Keys are provider ids (e.g. "openai", "google"); values are model ids.
+   * Example: { "openai": "gpt-4.1-mini", "google": "gemini-2.0-flash" }
+   */
+  autoFallbackModels?: Record<string, string>;
 };
 
 export type AgentContextPruningConfig = {

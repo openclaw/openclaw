@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import type { AgentModelListConfig } from "../config/types.agent-defaults.js";
 import {
   ensureAuthProfileStore,
   getSoonestCooldownExpiry,
@@ -22,6 +23,22 @@ import {
 } from "./model-selection.js";
 import type { FailoverReason } from "./pi-embedded-helpers.js";
 import { isLikelyContextOverflowError } from "./pi-embedded-helpers.js";
+
+/**
+ * Built-in per-provider fallback model defaults used when `fallbackPolicy` is
+ * "auto" and `autoFallbackModels` does not specify a model for the provider.
+ * Intentionally lightweight/low-cost models so auto-fallback is conservative.
+ */
+const PROVIDER_FALLBACK_DEFAULTS: Readonly<Record<string, string>> = {
+  anthropic: "claude-haiku-3-5",
+  openai: "gpt-4.1-mini",
+  google: "gemini-2.0-flash",
+  "google-vertex": "gemini-2.0-flash",
+  groq: "llama-3.3-70b-versatile",
+  "github-copilot": "gpt-4o-mini",
+  cerebras: "llama-3.3-70b",
+  "aws-bedrock": "us.amazon.nova-lite-v1:0",
+} as const;
 
 type ModelCandidate = {
   provider: string;
@@ -233,6 +250,39 @@ function resolveFallbackCandidates(params: {
 
   if (params.fallbacksOverride === undefined && primary?.provider && primary.model) {
     addCandidate({ provider: primary.provider, model: primary.model }, false);
+  }
+
+  // Auto-fallback policy: when enabled, discover additional providers from
+  // auth.profiles and append them as candidates if not already present.
+  // Only applies when fallbacks are not overridden by the caller.
+  if (params.fallbacksOverride === undefined) {
+    const cfgModel = params.cfg?.agents?.defaults?.model;
+    const policy =
+      typeof cfgModel === "object" && cfgModel !== null
+        ? (cfgModel as AgentModelListConfig).fallbackPolicy
+        : undefined;
+    if (policy === "auto") {
+      const autoFallbackModels =
+        typeof cfgModel === "object" && cfgModel !== null
+          ? ((cfgModel as AgentModelListConfig).autoFallbackModels ?? {})
+          : {};
+      const authProfiles = Object.values(params.cfg?.auth?.profiles ?? {});
+      const addedProviders = new Set(candidates.map((c) => c.provider));
+      for (const profile of authProfiles) {
+        const rawProvider = String(profile.provider ?? "").trim().toLowerCase();
+        if (!rawProvider || addedProviders.has(rawProvider)) {
+          continue;
+        }
+        const model =
+          autoFallbackModels[rawProvider] ?? PROVIDER_FALLBACK_DEFAULTS[rawProvider];
+        if (!model) {
+          continue;
+        }
+        const normalized = normalizeModelRef(rawProvider, model);
+        addCandidate(normalized, false);
+        addedProviders.add(rawProvider);
+      }
+    }
   }
 
   return candidates;
