@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { deliverWebReply } from "./deliver-reply.js";
 import type { WebInboundMsg } from "./types.js";
+import { deliverWebReply } from "./deliver-reply.js";
 
 vi.mock("../../globals.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../globals.js")>();
@@ -173,9 +173,11 @@ describe("deliverWebReply", () => {
     });
 
     expect(msg.reply).toHaveBeenCalledTimes(1);
-    expect(
-      String((msg.reply as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]?.[0]),
-    ).toContain("⚠️ Media failed");
+    const replyText = String(
+      (msg.reply as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]?.[0],
+    );
+    expect(replyText).toContain("⚠️ Media failed");
+    expect(replyText).not.toContain("boom");
     expect(replyLogger.warn).toHaveBeenCalledWith(
       expect.objectContaining({ mediaUrl: "http://example.com/img.jpg" }),
       "failed to send web media reply",

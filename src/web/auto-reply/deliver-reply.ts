@@ -1,6 +1,7 @@
-import { chunkMarkdownTextWithMode, type ChunkMode } from "../../auto-reply/chunk.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";
+import type { WebInboundMsg } from "./types.js";
+import { chunkMarkdownTextWithMode, type ChunkMode } from "../../auto-reply/chunk.js";
 import { logVerbose, shouldLogVerbose } from "../../globals.js";
 import { convertMarkdownTables } from "../../markdown/tables.js";
 import { markdownToWhatsApp } from "../../markdown/whatsapp.js";
@@ -9,7 +10,6 @@ import { loadWebMedia } from "../media.js";
 import { newConnectionId } from "../reconnect.js";
 import { formatError } from "../session.js";
 import { whatsappOutboundLog } from "./loggers.js";
-import type { WebInboundMsg } from "./types.js";
 import { elide } from "./util.js";
 
 export async function deliverWebReply(params: {
@@ -176,8 +176,7 @@ export async function deliverWebReply(params: {
       whatsappOutboundLog.error(`Failed sending web media to ${msg.from}: ${formatError(err)}`);
       replyLogger.warn({ err, mediaUrl }, "failed to send web media reply");
       if (index === 0) {
-        const warning =
-          err instanceof Error ? `⚠️ Media failed: ${err.message}` : "⚠️ Media failed.";
+        const warning = "⚠️ Media failed.";
         const fallbackTextParts = [remainingText.shift() ?? caption ?? "", warning].filter(Boolean);
         const fallbackText = fallbackTextParts.join("\n");
         if (fallbackText) {
