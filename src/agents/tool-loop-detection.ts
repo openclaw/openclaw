@@ -240,7 +240,7 @@ function getNoProgressStreak(
   for (let i = history.length - 1; i >= 0; i -= 1) {
     const record = history[i];
     if (!record || record.toolName !== toolName || record.argsHash !== argsHash) {
-      continue;
+      break;
     }
     if (typeof record.resultHash !== "string" || !record.resultHash) {
       continue;
