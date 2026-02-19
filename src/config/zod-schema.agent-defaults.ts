@@ -26,6 +26,7 @@ export const AgentDefaultsSchema = z
       .object({
         primary: z.string().optional(),
         fallbacks: z.array(z.string()).optional(),
+        force: z.boolean().optional(),
       })
       .strict()
       .optional(),

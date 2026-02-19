@@ -355,6 +355,8 @@ export async function detectAndLoadPromptImages(params: {
   historyMessages?: unknown[];
   maxBytes?: number;
   sandbox?: { root: string; bridge: SandboxFsBridge };
+  /** When true, detect and load images even if the primary model lacks vision (for imageModel pre-analysis). */
+  forceDetect?: boolean;
 }): Promise<{
   /** Images for the current prompt (existingImages + detected in current prompt) */
   images: ImageContent[];
@@ -364,8 +366,8 @@ export async function detectAndLoadPromptImages(params: {
   loadedCount: number;
   skippedCount: number;
 }> {
-  // If model doesn't support images, return empty results
-  if (!modelSupportsImages(params.model)) {
+  // If model doesn't support images and we're not force-detecting for imageModel, return empty results
+  if (!params.forceDetect && !modelSupportsImages(params.model)) {
     return {
       images: [],
       historyImagesByIndex: new Map(),

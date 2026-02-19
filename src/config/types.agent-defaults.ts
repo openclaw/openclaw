@@ -23,6 +23,8 @@ export type AgentModelEntryConfig = {
 export type AgentModelListConfig = {
   primary?: string;
   fallbacks?: string[];
+  /** When true, always use imageModel for image analysis even if the primary model supports vision. */
+  force?: boolean;
 };
 
 export type AgentContextPruningConfig = {
