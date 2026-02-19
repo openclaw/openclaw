@@ -1,18 +1,25 @@
+import os from "node:os";
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { resolveSessionAgentIds } from "../../agents/agent-scope.js";
 import { resolveBootstrapContextForRun } from "../../agents/bootstrap-files.js";
+import { listChannelSupportedActions } from "../../agents/channel-tools.js";
 import { resolveDefaultModelForAgent } from "../../agents/model-selection.js";
 import type { EmbeddedContextFile } from "../../agents/pi-embedded-helpers.js";
 import { createOpenClawCodingTools } from "../../agents/pi-tools.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
+import { detectRuntimeShell } from "../../agents/shell-utils.js";
 import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
 import { getSkillsSnapshotVersion } from "../../agents/skills/refresh.js";
 import { buildSystemPromptParams } from "../../agents/system-prompt-params.js";
 import { buildAgentSystemPrompt } from "../../agents/system-prompt.js";
 import { buildToolSummaryMap } from "../../agents/tool-summaries.js";
 import type { WorkspaceBootstrapFile } from "../../agents/workspace.js";
+import { resolveChannelCapabilities } from "../../config/channel-capabilities.js";
+import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
+import { resolveTelegramInlineButtonsScope } from "../../telegram/inline-buttons.js";
 import { buildTtsSystemPromptHint } from "../../tts/tts.js";
+import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 export type CommandsSystemPromptBundle = {
@@ -80,18 +87,57 @@ export async function resolveCommandsSystemPromptBundle(
     agentId: sessionAgentId,
   });
   const defaultModelLabel = `${defaultModelRef.provider}/${defaultModelRef.model}`;
+
+  // Resolve channel and capabilities
+  const machineName = await getMachineDisplayName();
+  const runtimeChannel = normalizeMessageChannel(params.ctx.OriginatingChannel);
+  let runtimeCapabilities = runtimeChannel
+    ? (resolveChannelCapabilities({
+        cfg: params.cfg,
+        channel: runtimeChannel,
+        accountId: undefined,
+      }) ?? [])
+    : undefined;
+  if (runtimeChannel === "telegram" && params.cfg) {
+    const inlineButtonsScope = resolveTelegramInlineButtonsScope({
+      cfg: params.cfg,
+      accountId: undefined,
+    });
+    if (inlineButtonsScope !== "off") {
+      if (!runtimeCapabilities) {
+        runtimeCapabilities = [];
+      }
+      if (
+        !runtimeCapabilities.some((cap) => String(cap).trim().toLowerCase() === "inlinebuttons")
+      ) {
+        runtimeCapabilities.push("inlineButtons");
+      }
+    }
+  }
+  // Resolve channel-specific message actions for system prompt
+  const channelActions = runtimeChannel
+    ? listChannelSupportedActions({
+        cfg: params.cfg,
+        channel: runtimeChannel,
+      })
+    : undefined;
+
   const { runtimeInfo, userTimezone, userTime, userTimeFormat } = buildSystemPromptParams({
     config: params.cfg,
     agentId: sessionAgentId,
     workspaceDir,
     cwd: process.cwd(),
     runtime: {
-      host: "unknown",
-      os: "unknown",
-      arch: "unknown",
+      host: machineName,
+      os: `${os.type()} ${os.release()}`,
+      arch: os.arch(),
       node: process.version,
       model: `${params.provider}/${params.model}`,
       defaultModel: defaultModelLabel,
+      shell: detectRuntimeShell(),
+      channel: runtimeChannel,
+      capabilities: runtimeCapabilities,
+      channelActions,
     },
   });
   const sandboxInfo = sandboxRuntime.sandboxed
