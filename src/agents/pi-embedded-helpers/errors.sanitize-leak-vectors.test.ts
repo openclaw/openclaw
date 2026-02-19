@@ -1,3 +1,4 @@
+import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
   formatAssistantErrorText,
@@ -57,16 +58,23 @@ describe("formatRawAssistantErrorForUi — leak vector sanitization", () => {
 
 describe("formatAssistantErrorText — leak vector sanitization", () => {
   /** Helper to build a minimal AssistantMessage stub for error-path tests. */
-  function errMsg(errorMessage: string) {
+  function errMsg(errorMessage: string): AssistantMessage {
     return {
-      role: "assistant" as const,
-      content: [] as never[],
-      stopReason: "error" as const,
+      role: "assistant",
+      content: [],
+      stopReason: "error",
       errorMessage,
-      api: "messages" as const,
+      api: "anthropic-messages",
       provider: "test",
       model: "test-model",
-      usage: { inputTokens: 0, outputTokens: 0 },
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
       timestamp: Date.now(),
     };
   }
