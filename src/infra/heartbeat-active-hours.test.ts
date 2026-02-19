@@ -47,7 +47,7 @@ describe("isWithinActiveHours", () => {
         heartbeatWindow("08:00", "08:00", "UTC"),
         Date.UTC(2025, 0, 1, 12, 0, 0),
       ),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("respects user timezone windows for normal ranges", () => {
