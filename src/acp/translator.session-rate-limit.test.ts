@@ -94,7 +94,7 @@ describe("acp session creation rate limit", () => {
 
 describe("acp prompt size hardening", () => {
   it("rejects oversized prompt blocks without leaking active runs", async () => {
-    const request = vi.fn(async () => ({ ok: true }));
+    const request = vi.fn(async () => ({ ok: true })) as GatewayClient["request"];
     const sessionStore = createInMemorySessionStore();
     const agent = new AcpGatewayAgent(createConnection(), createGateway(request), {
       sessionStore,
@@ -114,7 +114,7 @@ describe("acp prompt size hardening", () => {
   });
 
   it("rejects oversize final messages from cwd prefix without leaking active runs", async () => {
-    const request = vi.fn(async () => ({ ok: true }));
+    const request = vi.fn(async () => ({ ok: true })) as GatewayClient["request"];
     const sessionStore = createInMemorySessionStore();
     const agent = new AcpGatewayAgent(createConnection(), createGateway(request), {
       sessionStore,
