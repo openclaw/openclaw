@@ -468,4 +468,50 @@ describe("coerceFormValues", () => {
     const coerced = coerceFormValues(form, schema) as Record<string, unknown>;
     expect(coerced.flag).toBe(true);
   });
+
+  it("preserves large numeric strings in anyOf union to prevent precision loss", () => {
+    // Discord Snowflake IDs (64-bit integers) exceed JavaScript's safe integer range.
+    // Converting "805422583936421918" to Number silently produces 805422583936421900.
+    // The schema pattern z.union([z.string(), z.number()]) becomes anyOf: [string, number].
+    const schema: JsonSchema = {
+      type: "object",
+      properties: {
+        allowFrom: {
+          type: "array",
+          items: {
+            anyOf: [{ type: "string" }, { type: "number" }],
+          },
+        },
+      },
+    };
+    const snowflakeId = "805422583936421918";
+    const form = { allowFrom: [snowflakeId] };
+    const coerced = coerceFormValues(form, schema) as Record<string, unknown>;
+    const allowFrom = coerced.allowFrom as string[];
+    // Must preserve the exact string value — converting to number would corrupt it
+    expect(allowFrom[0]).toBe(snowflakeId);
+    expect(typeof allowFrom[0]).toBe("string");
+  });
+
+  it("coerces small numeric strings in anyOf union when precision is preserved", () => {
+    // Small numbers that fit in JavaScript's safe integer range should still be coerced.
+    const schema: JsonSchema = {
+      type: "object",
+      properties: {
+        ids: {
+          type: "array",
+          items: {
+            anyOf: [{ type: "string" }, { type: "number" }],
+          },
+        },
+      },
+    };
+    const form = { ids: ["123", "456"] };
+    const coerced = coerceFormValues(form, schema) as Record<string, unknown>;
+    const ids = coerced.ids as number[];
+    // These should be coerced to numbers since precision is preserved
+    expect(ids[0]).toBe(123);
+    expect(ids[1]).toBe(456);
+    expect(typeof ids[0]).toBe("number");
+  });
 });
