@@ -2,6 +2,7 @@ import { defaultRuntime } from "../../../runtime.js";
 import {
   buildCollectPrompt,
   clearQueueSummaryState,
+  drainCollectItemIfNeeded,
   drainNextQueueItem,
   hasCrossChannelItems,
   previewQueueSummaryPrompt,
@@ -30,13 +31,6 @@ export function scheduleFollowupDrain(
           // Prevents “collect after shift” collapsing different targets.
           //
           // Debug: `pnpm test src/auto-reply/reply/queue.collect-routing.test.ts`
-          if (forceIndividualCollect) {
-            if (!(await drainNextQueueItem(queue.items, runFollowup))) {
-              break;
-            }
-            continue;
-          }
-
           // Check if messages span multiple channels.
           // If so, process individually to preserve per-message routing.
           const isCrossChannel = hasCrossChannelItems(queue.items, (item) => {
@@ -56,11 +50,19 @@ export function scheduleFollowupDrain(
             };
           });
 
-          if (isCrossChannel) {
-            forceIndividualCollect = true;
-            if (!(await drainNextQueueItem(queue.items, runFollowup))) {
-              break;
-            }
+          const collectDrainResult = await drainCollectItemIfNeeded({
+            forceIndividualCollect,
+            isCrossChannel,
+            setForceIndividualCollect: (next) => {
+              forceIndividualCollect = next;
+            },
+            items: queue.items,
+            run: runFollowup,
+          });
+          if (collectDrainResult === "empty") {
+            break;
+          }
+          if (collectDrainResult === "drained") {
             continue;
           }
 
