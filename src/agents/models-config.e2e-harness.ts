@@ -71,6 +71,17 @@ export function mockCopilotTokenExchangeSuccess(): MockFn {
   return fetchMock;
 }
 
+export async function withCopilotGithubToken<T>(
+  token: string,
+  fn: (fetchMock: MockFn) => Promise<T>,
+): Promise<T> {
+  return withTempEnv(["COPILOT_GITHUB_TOKEN"], async () => {
+    process.env.COPILOT_GITHUB_TOKEN = token;
+    const fetchMock = mockCopilotTokenExchangeSuccess();
+    return fn(fetchMock);
+  });
+}
+
 export const MODELS_CONFIG_IMPLICIT_ENV_VARS = [
   "CLOUDFLARE_AI_GATEWAY_API_KEY",
   "COPILOT_GITHUB_TOKEN",
