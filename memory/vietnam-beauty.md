@@ -802,11 +802,11 @@ python src/workers/video_worker.py --api-url https://maibeauty-api-production.up
 
 <!-- AUTO:subrepo-commits:START -->
 
+- `fe4a008 docs: A014 완판원정대 x MAIBEAUTY 적합성 종합 분석 (02-19)`
 - `274f6c2 feat: add alembic migrations 012-014 (subscriptions, users multibrand, orders extension) (02-12)`
 - `61d4aed feat(sprint3): 통합 대시보드 + KPI - 구독/주문 KPI, 매출 추이, 브랜드 비교, 최근 주문 (02-12)`
 - `5f2a9bb Sprint 3: 배포 준비 - 마이그레이션 통합 스크립트, migrate.py, 배포 가이드, requirements/env 업데이트 (02-12)`
 - `7849882 feat(orders): Sprint 3 - ecommerce order extensions (shipping, refund, analytics, timeline) (02-12)`
-- `e7c3209 docs: update STATUS, CHANGELOG, README for Admin v2.0 (02-12)`
 <!-- AUTO:subrepo-commits:END -->
 
 _Last updated: 2026-02-12_

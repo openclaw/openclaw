@@ -13,6 +13,7 @@ _마이봇과 지니의 프로젝트 총 목록. 새 프로젝트 시작 시 여
 | 5   | MAITUTOR                             | [memory/maitutor.md](memory/maitutor.md)             | 🟢 진행중 | 2026-02-14 |
 | 6   | MAIBOTALKS (마이봇 음성대화 앱)      | [memory/maibotalks.md](memory/maibotalks.md)         | 🟢 진행중 | 2026-02-15 |
 | 7   | MAITOK (Tikly - TikTok 댓글 AI)      | [memory/maitok.md](memory/maitok.md)                 | 🟢 진행중 | 2026-02-18 |
+| 8   | MAIAX (스마트제조 AX 7KL 발효 POC)   | [memory/maiax.md](memory/maiax.md)                   | 🟢 진행중 | 2025-11    |
 
 ### 개발 환경 요약
 
@@ -25,6 +26,7 @@ _마이봇과 지니의 프로젝트 총 목록. 새 프로젝트 시작 시 여
 | MAITUTOR        | `C:\TEST\MAITUTOR`   | [jini92/MAITUTOR](https://github.com/jini92/MAITUTOR)     | MAIBOT 직접 | TBD                    |
 | MAIBOTALKS      | `C:\TEST\MAIBOTALKS` | [jini92/MAIBOTALKS](https://github.com/jini92/MAIBOTALKS) | MAIBOT 직접 | TBD                    |
 | MAITOK (Tikly)  | `C:\TEST\MAITOK`     | [jini92/MAITOK](https://github.com/jini92/MAITOK)         | MAIBOT 직접 | TBD                    |
+| MAIAX           | `C:\TEST\MAIAX`      | [jini92/MAIAX](https://github.com/jini92/MAIAX)           | MAIBOT 직접 | TBD                    |
 | MAIBOT (메인)   | `C:\MAIBOT`          | [jini92/MAIBOT](https://github.com/jini92/MAIBOT)         | MAIBOT 직접 | —                      |
 
 ## 개발 방식 (전체 프로젝트 공통)
@@ -56,4 +58,4 @@ _(아직 없음)_
 
 ---
 
-_Last updated: 2026-02-18_
+_Last updated: 2026-02-19_
