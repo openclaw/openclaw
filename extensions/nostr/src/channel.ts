@@ -1664,16 +1664,11 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                 return;
               }
               heartbeatInFlight = true;
-              const heartbeatState = toolCallTelemetry.pendingCount() > 0 ? "tool_use" : "thinking";
-              void safeSendStatus(heartbeatState, {
-                info: RUN_HEARTBEAT_STATUS_INFO,
-              })
-                .then(() => {
-                  heartbeatSentCount += 1;
-                })
-                .finally(() => {
+              void safeSendThinkingDelta("update", RUN_HEARTBEAT_STATUS_INFO, "heartbeat").finally(
+                () => {
                   heartbeatInFlight = false;
-                });
+                },
+              );
             }, RUN_HEARTBEAT_CHECK_INTERVAL_MS);
           };
 
