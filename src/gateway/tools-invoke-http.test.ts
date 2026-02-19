@@ -1,6 +1,9 @@
+import { createHash } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.js";
+import { resolveConsentGateApi } from "../consent/resolve.js";
 
 const TEST_GATEWAY_TOKEN = "test-gateway-token-1234567890";
 
@@ -482,5 +485,96 @@ describe("POST /tools/invoke", () => {
     expect(crashBody.ok).toBe(false);
     expect(crashBody.error?.type).toBe("tool_error");
     expect(crashBody.error?.message).toBe("tool execution failed");
+  });
+
+  it("returns 403 consent_denied when ConsentGate enforce and gated tool has no token", async () => {
+    cfg = {
+      ...cfg,
+      agents: {
+        list: [{ id: "main", default: true, tools: { allow: ["sessions_spawn"] } }],
+      },
+      gateway: {
+        tools: { allow: ["sessions_spawn"] },
+        consentGate: {
+          enabled: true,
+          observeOnly: false,
+          gatedTools: ["sessions_spawn"],
+        },
+      },
+    } as OpenClawConfig;
+
+    const res = await invokeToolAuthed({
+      tool: "sessions_spawn",
+      args: {},
+      sessionKey: "main",
+    });
+    expect(res.status).toBe(403);
+    const body = await res.json();
+    expect(body.ok).toBe(false);
+    expect(body.error?.type).toBe("consent_denied");
+    expect(body.error?.reasonCode).toBeDefined();
+  });
+
+  it("allows gated tool when ConsentGate enforce and valid consent token provided", async () => {
+    cfg = {
+      ...cfg,
+      agents: {
+        list: [{ id: "main", default: true, tools: { allow: ["sessions_spawn"] } }],
+      },
+      gateway: {
+        tools: { allow: ["sessions_spawn"] },
+        consentGate: {
+          enabled: true,
+          observeOnly: false,
+          gatedTools: ["sessions_spawn"],
+        },
+      },
+    } as OpenClawConfig;
+
+    const sessionKeyResolved = "agent:main:main";
+    const args: Record<string, unknown> = {};
+    const contextHash = createHash("sha256")
+      .update(
+        JSON.stringify({
+          tool: "sessions_spawn",
+          sessionKey: sessionKeyResolved,
+          args: Object.keys(args)
+            .sort()
+            .reduce<Record<string, unknown>>((acc, k) => {
+              acc[k] = args[k];
+              return acc;
+            }, {}),
+        }),
+      )
+      .digest("hex");
+
+    const api = resolveConsentGateApi(cfg as OpenClawConfig);
+    const token = await api.issue({
+      tool: "sessions_spawn",
+      trustTier: "T0",
+      sessionKey: sessionKeyResolved,
+      contextHash,
+      ttlMs: 60_000,
+      issuedBy: "test",
+      policyVersion: "1",
+    });
+    expect(token).not.toBeNull();
+
+    const res = await fetch(`http://127.0.0.1:${sharedPort}/tools/invoke`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...gatewayAuthHeaders(),
+      },
+      body: JSON.stringify({
+        tool: "sessions_spawn",
+        args: {},
+        sessionKey: "main",
+        consentToken: token!.jti,
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.ok).toBe(true);
   });
 });

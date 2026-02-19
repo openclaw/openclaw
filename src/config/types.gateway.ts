@@ -276,6 +276,21 @@ export type GatewayToolsConfig = {
   allow?: string[];
 };
 
+/**
+ * ConsentGate: consent-gated authorization for high-risk tool execution.
+ * When enabled, gated tools require a valid consent token before execution.
+ */
+export type ConsentGateConfig = {
+  /** Enable ConsentGate (default: false). When false, no consent checks run. */
+  enabled?: boolean;
+  /** Tool names that require consent (e.g. exec, write, gateway, sessions_spawn, sessions_send, whatsapp_login). */
+  gatedTools?: string[];
+  /** When true, log/write WAL only; do not block execution (default: true for safe rollout). */
+  observeOnly?: boolean;
+  /** Directory for token state and WAL (default: ~/.openclaw/consentgate or under state dir). */
+  storagePath?: string;
+};
+
 export type GatewayConfig = {
   /** Single multiplexed port for Gateway WS + HTTP (default: 18789). */
   port?: number;
@@ -312,6 +327,8 @@ export type GatewayConfig = {
   trustedProxies?: string[];
   /** Tool access restrictions for HTTP /tools/invoke endpoint. */
   tools?: GatewayToolsConfig;
+  /** ConsentGate: consent-gated authorization for high-risk tools. */
+  consentGate?: ConsentGateConfig;
   /**
    * Channel health monitor interval in minutes.
    * Periodically checks channel health and restarts unhealthy channels.

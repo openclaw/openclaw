@@ -47,6 +47,14 @@ export const FIELD_HELP: Record<string, string> = {
     "Extra node.invoke commands to allow beyond the gateway defaults (array of command strings).",
   "gateway.nodes.denyCommands":
     "Commands to block even if present in node claims or default allowlist.",
+  "gateway.consentGate.enabled":
+    "Enable ConsentGate: require consent tokens for gated tools (default: false).",
+  "gateway.consentGate.gatedTools":
+    "Tool names that require consent when ConsentGate is enabled (default: exec, write, gateway, sessions_spawn, sessions_send, whatsapp_login, skills.install).",
+  "gateway.consentGate.observeOnly":
+    "When true, log consent decisions only; do not block execution (default: true for safe rollout).",
+  "gateway.consentGate.storagePath":
+    "Directory for ConsentGate token state and WAL (optional; default under state dir).",
   "nodeHost.browserProxy.enabled": "Expose the local browser control server via node proxy.",
   "nodeHost.browserProxy.allowProfiles":
     "Optional allowlist of browser profile names exposed via the node proxy.",

@@ -557,6 +557,15 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        consentGate: z
+          .object({
+            enabled: z.boolean().optional(),
+            gatedTools: z.array(z.string()).optional(),
+            observeOnly: z.boolean().optional(),
+            storagePath: z.string().optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),

@@ -1,4 +1,10 @@
+import { createHash } from "node:crypto";
 import { loadConfig } from "../../config/config.js";
+import {
+  isConsentGateObserveOnly,
+  resolveConsentGateApi,
+  resolveConsentGatedTools,
+} from "../../consent/resolve.js";
 import { listDevicePairing } from "../../infra/device-pairing.js";
 import {
   approveNodePairing,
@@ -505,6 +511,77 @@ export const nodeHandlers: GatewayRequestHandlers = {
         );
         return;
       }
+      const gatedTools = resolveConsentGatedTools(cfg);
+      let consentEnvelope: { jti: string; consumedAtMs: number; expiresAtMs: number; sessionKey: string } | null = null;
+      if (gatedTools.has(command)) {
+        const rawParams = (p.params && typeof p.params === "object" ? p.params : {}) as Record<string, unknown>;
+        const sessionKey = typeof rawParams.sessionKey === "string" && rawParams.sessionKey.trim()
+          ? rawParams.sessionKey.trim()
+          : "node";
+        const consentTokenJti = typeof rawParams.consentToken === "string" && rawParams.consentToken.trim()
+          ? rawParams.consentToken.trim()
+          : undefined;
+        const contextHash = createHash("sha256")
+          .update(
+            JSON.stringify({
+              tool: command,
+              sessionKey,
+              params: Object.keys(rawParams)
+                .filter((k) => k !== "consentToken")
+                .sort()
+                .reduce<Record<string, unknown>>((acc, k) => {
+                  acc[k] = rawParams[k];
+                  return acc;
+                }, {}),
+            }),
+          )
+          .digest("hex");
+        const correlationId = `node-${nodeId}-${Date.now()}`;
+        try {
+          const consentApi = resolveConsentGateApi(cfg);
+          const consumeInput = {
+            jti: consentTokenJti ?? "",
+            tool: command,
+            trustTier: "T0",
+            sessionKey,
+            contextHash,
+            correlationId,
+            actor: { channel: "node.invoke", nodeId },
+            tenantId: "",
+          };
+          if (isConsentGateObserveOnly(cfg)) {
+            await consentApi.evaluate(consumeInput);
+          } else {
+            const result = await consentApi.consume(consumeInput);
+            if (!result.allowed) {
+              respond(
+                false,
+                undefined,
+                errorShape(ErrorCodes.INVALID_REQUEST, "Consent required for this node command", {
+                  details: { reasonCode: result.reasonCode, command },
+                }),
+              );
+              return;
+            }
+            const now = Date.now();
+            consentEnvelope = {
+              jti: consentTokenJti ?? "",
+              consumedAtMs: now,
+              expiresAtMs: now + 60_000,
+              sessionKey,
+            };
+          }
+        } catch (err) {
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.UNAVAILABLE, "Consent check unavailable", {
+              details: { reasonCode: "CONSENT_UNAVAILABLE", command },
+            }),
+          );
+          return;
+        }
+      }
       const forwardedParams = sanitizeNodeInvokeParamsForForwarding({
         command,
         rawParams: p.params,
@@ -521,10 +598,14 @@ export const nodeHandlers: GatewayRequestHandlers = {
         );
         return;
       }
+      const invokeParams =
+        consentEnvelope != null
+          ? { ...forwardedParams.params, consentEnvelope }
+          : forwardedParams.params;
       const res = await context.nodeRegistry.invoke({
         nodeId,
         command,
-        params: forwardedParams.params,
+        params: invokeParams,
         timeoutMs: p.timeoutMs,
         idempotencyKey: p.idempotencyKey,
       });

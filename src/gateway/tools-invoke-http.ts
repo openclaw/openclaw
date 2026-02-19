@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createOpenClawTools } from "../agents/openclaw-tools.js";
 import {
@@ -33,6 +34,11 @@ import {
   sendMethodNotAllowed,
 } from "./http-common.js";
 import { getBearerToken, getHeader } from "./http-utils.js";
+import {
+  isConsentGateObserveOnly,
+  resolveConsentGateApi,
+  resolveConsentGatedTools,
+} from "../consent/resolve.js";
 
 const DEFAULT_BODY_BYTES = 2 * 1024 * 1024;
 const MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
@@ -43,6 +49,8 @@ type ToolsInvokeBody = {
   args?: unknown;
   sessionKey?: unknown;
   dryRun?: unknown;
+  /** Consent token id (jti) when ConsentGate enforce mode is used for gated tools. */
+  consentToken?: unknown;
 };
 
 function resolveSessionKeyFromBody(body: ToolsInvokeBody): string | undefined {
@@ -293,6 +301,70 @@ export async function handleToolsInvokeHttpRequest(
       error: { type: "not_found", message: `Tool not available: ${toolName}` },
     });
     return true;
+  }
+
+  const gatedTools = resolveConsentGatedTools(cfg);
+  if (gatedTools.has(toolName)) {
+    const observeOnly = isConsentGateObserveOnly(cfg);
+    const consentTokenJti =
+      typeof body.consentToken === "string" && body.consentToken.trim()
+        ? body.consentToken.trim()
+        : undefined;
+    const contextHash = createHash("sha256")
+      .update(
+        JSON.stringify({
+          tool: toolName,
+          sessionKey,
+          args: Object.keys(args)
+            .sort()
+            .reduce<Record<string, unknown>>((acc, k) => {
+              acc[k] = args[k];
+              return acc;
+            }, {}),
+        }),
+      )
+      .digest("hex");
+    const correlationId = `http-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+    try {
+      const consentApi = resolveConsentGateApi(cfg);
+      const consumeInput = {
+        jti: consentTokenJti ?? "",
+        tool: toolName,
+        trustTier: "T0",
+        sessionKey,
+        contextHash,
+        correlationId,
+        actor: { channel: "http" },
+        tenantId: "",
+      };
+      if (observeOnly) {
+        await consentApi.evaluate(consumeInput);
+      } else {
+        const result = await consentApi.consume(consumeInput);
+        if (!result.allowed) {
+          sendJson(res, 403, {
+            ok: false,
+            error: {
+              type: "consent_denied",
+              reasonCode: result.reasonCode,
+              message: "Consent required for this tool; token missing, invalid, or already used.",
+            },
+          });
+          return true;
+        }
+      }
+    } catch (err) {
+      logWarn(`ConsentGate error for ${toolName}: ${String(err)}`);
+      sendJson(res, 503, {
+        ok: false,
+        error: {
+          type: "consent_denied",
+          reasonCode: "CONSENT_UNAVAILABLE",
+          message: "Consent check unavailable; request denied (fail closed).",
+        },
+      });
+      return true;
+    }
   }
 
   try {
