@@ -135,6 +135,7 @@ export function createTelegramDraftStream(params: {
   };
 
   const forceNewMessage = () => {
+    isFinal = false;
     streamMessageId = undefined;
     lastSentText = "";
     loop.resetPending();
