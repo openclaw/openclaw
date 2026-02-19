@@ -4,9 +4,11 @@ import type {
   VerificationResult,
   EvidenceGateType,
 } from "./types.js";
+import { BaseVerifier } from "./verifier.js";
 import { LSPVerifier } from "./verifiers/lsp.js";
 import { BuildVerifier } from "./verifiers/build.js";
 import { TestVerifier } from "./verifiers/test.js";
+import { CustomVerifier } from "./verifiers/custom.js";
 
 export class EvidenceGateManager {
   private config: EvidenceConfig;
@@ -67,6 +69,11 @@ export class EvidenceGateManager {
         return new BuildVerifier(gate, this.workspace);
       case "test":
         return new TestVerifier(gate, this.workspace);
+      case "custom":
+        if (!gate.command) {
+          throw new Error("Custom gate requires a command");
+        }
+        return new CustomVerifier(gate, this.workspace);
       default:
         throw new Error(`Unknown gate type: ${gate.type}`);
     }

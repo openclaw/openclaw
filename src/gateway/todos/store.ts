@@ -1,6 +1,6 @@
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { resolve, dirname } from "node:path";
 import type { Todo } from "./types.js";
 
 const TODO_DIR = "~/.openclaw";
@@ -9,13 +9,13 @@ export class TodoStore {
   private filePath: string;
 
   constructor(baseDir: string = TODO_DIR) {
-    // Expand ~ to home directory
     const home = process.env.HOME || process.env.USERPROFILE || "~";
-    this.filePath = resolve(baseDir.replace("~", home), "todos.jsonl");
+    const expanded = baseDir.replace(/^~/, home);
+    this.filePath = resolve(expanded, "todos.jsonl");
   }
 
   private async ensureDir(): Promise<void> {
-    const dir = this.filePath.split("/").slice(0, -1).join("/");
+    const dir = dirname(this.filePath);
     if (!existsSync(dir)) {
       await mkdir(dir, { recursive: true });
     }

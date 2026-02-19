@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI 面试助手 - 测试</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        h1 {
+            text-align: center;
+            color: #333;
+        }
+        .info {
+            background: white;
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+        }
+        .status {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #ccc;
+            margin-right: 8px;
+        }
+        .status.connected {
+            background: #4CAF50;
+        }
+        elevenlabs-convai {
+            width: 100%;
+            height: 500px;
+        }
+    </style>
+</head>
+<body>
+    <h1>🤖 AI 面试助手</h1>
+    
+    <div class="info">
+        <h3>使用说明：</h3>
+        <p>1. 点击下面的麦克风图标授权麦克风</p>
+        <p>2. 对着手机说话，AI 会实时回复</p>
+        <p>3. 手机音量调到最大能听到 AI 说话</p>
+    </div>
+
+    <elevenlabs-convai agent-id="agent_6301khrcdp7eezzam8demapyzdv1"></elevenlabs-convai>
+    <script src="https://unpkg.com/@elevenlabs/convai-widget-embed" async type="text/javascript"></script>
+</body>
+</html>
