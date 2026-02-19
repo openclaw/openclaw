@@ -166,11 +166,6 @@ export function handleMessageUpdate(
   }
 
   const streamedReasoning = extractThinkingFromTaggedStream(ctx.state.deltaBuffer);
-  if (streamedReasoning) {
-    // Keep the latest observed reasoning so reasoning=on can still emit a separate
-    // reasoning block when providers omit thinking blocks in final message content.
-    ctx.state.lastObservedReasoning = streamedReasoning;
-  }
   if (ctx.state.streamReasoning) {
     // Handle partial <think> tags: stream whatever reasoning is visible so far.
     ctx.emitReasoningStream(streamedReasoning);
@@ -280,12 +275,10 @@ export function handleMessageEnd(
     text: ctx.stripBlockTags(rawText, { thinking: false, final: false }),
     messagingToolSentTexts: ctx.state.messagingToolSentTexts,
   });
-  const streamedReasoningFallback =
-    ctx.state.lastObservedReasoning || extractThinkingFromTaggedStream(ctx.state.deltaBuffer);
   const rawThinking =
     ctx.state.includeReasoning || ctx.state.streamReasoning
       ? extractAssistantThinking(assistantMessage) ||
-        streamedReasoningFallback ||
+        extractThinkingFromTaggedStream(ctx.state.deltaBuffer) ||
         extractThinkingFromTaggedText(rawText)
       : "";
   const formattedReasoning = rawThinking ? formatReasoningMessage(rawThinking) : "";
