@@ -14,9 +14,9 @@ import {
   resolveSessionTranscriptPathInDir,
   validateSessionId,
 } from "./paths.js";
-import { resolveSessionResetPolicy } from "./reset.js";
+import { evaluateSessionFreshness, resolveSessionResetPolicy } from "./reset.js";
 import { appendAssistantMessageToSessionTranscript } from "./transcript.js";
-import type { SessionEntry } from "./types.js";
+import { mergeSessionEntry, type SessionEntry } from "./types.js";
 
 describe("session path safety", () => {
   it("rejects unsafe session IDs", () => {
@@ -201,5 +201,73 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       expect(messageLine.message.content[0].type).toBe("text");
       expect(messageLine.message.content[0].text).toBe("Hello from delivery mirror!");
     }
+  });
+});
+
+describe("mergeSessionEntry — updatedAt behavior (#21161)", () => {
+  it("does not auto-bump updatedAt when merging metadata-only patch into existing entry", () => {
+    const sixHoursAgo = Date.now() - 6 * 60 * 60 * 1000;
+    const existing: SessionEntry = {
+      sessionId: "s1",
+      updatedAt: sixHoursAgo,
+    };
+
+    const merged = mergeSessionEntry(existing, { chatType: "group" });
+
+    // updatedAt must stay at the original value — not jump to Date.now().
+    expect(merged.updatedAt).toBe(sixHoursAgo);
+    expect(merged.chatType).toBe("group");
+  });
+
+  it("advances updatedAt when patch explicitly provides a newer value", () => {
+    const existing: SessionEntry = {
+      sessionId: "s1",
+      updatedAt: 1000,
+    };
+    const now = Date.now();
+
+    const merged = mergeSessionEntry(existing, { updatedAt: now });
+
+    expect(merged.updatedAt).toBe(now);
+  });
+
+  it("defaults updatedAt to Date.now() for brand-new entries", () => {
+    const before = Date.now();
+    const merged = mergeSessionEntry(undefined, { sessionId: "new-session" });
+    const after = Date.now();
+
+    expect(merged.updatedAt).toBeGreaterThanOrEqual(before);
+    expect(merged.updatedAt).toBeLessThanOrEqual(after);
+  });
+});
+
+describe("daily reset freshness after metadata merge (#21161)", () => {
+  it("session updated before 4am resets after the daily boundary", () => {
+    // Simulate a session last active at 3am — before the 4am daily reset.
+    const today4am = new Date();
+    today4am.setHours(4, 0, 0, 0);
+
+    const lastActive = today4am.getTime() - 60 * 60 * 1000; // 3am today
+    const now = today4am.getTime() + 60 * 60 * 1000; // 5am today
+
+    const existing: SessionEntry = {
+      sessionId: "s1",
+      updatedAt: lastActive,
+    };
+
+    // Simulate a metadata-only merge (like recordSessionMetaFromInbound).
+    const merged = mergeSessionEntry(existing, { chatType: "group" });
+
+    // The merge must NOT bump updatedAt.
+    expect(merged.updatedAt).toBe(lastActive);
+
+    // Freshness check should detect the session as stale (past daily boundary).
+    const freshness = evaluateSessionFreshness({
+      updatedAt: merged.updatedAt,
+      now,
+      policy: { mode: "daily", atHour: 4 },
+    });
+
+    expect(freshness.fresh).toBe(false);
   });
 });
