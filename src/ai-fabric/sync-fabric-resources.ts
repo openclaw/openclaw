@@ -354,8 +354,11 @@ async function buildSkillTargets(
         target.description = full.description;
         target.systemPrompt = full.options?.systemPrompt;
         target.tools = full.options?.tools;
-      } catch {
-        // Use basic info from status entry
+        log.debug(
+          `agent "${entry.name}": description=${!!full.description}, systemPrompt=${!!full.options?.systemPrompt}, tools=${full.options?.tools?.length ?? 0}`,
+        );
+      } catch (err) {
+        log.warn(`failed to fetch agent details for "${entry.name}" (${entry.id}): ${String(err)}`);
       }
     }
 
@@ -377,8 +380,13 @@ async function buildSkillTargets(
       try {
         const full = await client.getAgentSystem(entry.id);
         target.description = full.description;
-      } catch {
-        // Use basic info
+        log.debug(
+          `agent-system "${entry.name}": description=${!!full.description}, members=${full.options?.agents?.length ?? 0}`,
+        );
+      } catch (err) {
+        log.warn(
+          `failed to fetch agent-system details for "${entry.name}" (${entry.id}): ${String(err)}`,
+        );
       }
     }
 
