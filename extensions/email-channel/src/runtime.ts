@@ -1,9 +1,9 @@
-import Imap from "imap";
-import nodemailer from "nodemailer";
-import { simpleParser } from "mailparser";
 import * as fs from "fs";
-import * as path from "path";
 import * as os from "os";
+import * as path from "path";
+import Imap from "imap";
+import { simpleParser } from "mailparser";
+import nodemailer from "nodemailer";
 
 interface EmailConfig {
   imap: {
@@ -25,8 +25,8 @@ interface EmailConfig {
 }
 
 interface EmailProcessorState {
-  lastProcessedTimestamp: string;  // ISO 8601 format
-  processedMessageIds: string[];   // List of Message-IDs that have been processed
+  lastProcessedTimestamp: string; // ISO 8601 format
+  processedMessageIds: string[]; // List of Message-IDs that have been processed
 }
 
 const STATE_FILE_PATH = path.join(os.homedir(), ".openclaw", "extensions", "email", "state.json");
@@ -34,12 +34,21 @@ const STATE_FILE_PATH = path.join(os.homedir(), ".openclaw", "extensions", "emai
 let imapConnection: Imap | null = null;
 let smtpTransporter: nodemailer.Transporter | null = null;
 let checkTimer: NodeJS.Timeout | null = null;
-let isInboxOpen = false;  // Track if inbox is open to prevent race conditions
-let messageHandler: ((from: string, fromEmail: string, subject: string, body: string, messageId: string, uid: number) => Promise<void>) | null = null;
+let isInboxOpen = false; // Track if inbox is open to prevent race conditions
+let messageHandler:
+  | ((
+      from: string,
+      fromEmail: string,
+      subject: string,
+      body: string,
+      messageId: string,
+      uid: number,
+    ) => Promise<void>)
+  | null = null;
 let allowedSenders: string[] = [];
 let currentState: EmailProcessorState = {
-  lastProcessedTimestamp: new Date(0).toISOString(),  // Default to epoch
-  processedMessageIds: []
+  lastProcessedTimestamp: new Date(0).toISOString(), // Default to epoch
+  processedMessageIds: [],
 };
 
 // Load state from file
@@ -48,7 +57,9 @@ function loadState(): void {
     if (fs.existsSync(STATE_FILE_PATH)) {
       const data = fs.readFileSync(STATE_FILE_PATH, "utf-8");
       currentState = JSON.parse(data);
-      console.log(`[EMAIL PLUGIN] Loaded state: lastProcessed=${currentState.lastProcessedTimestamp}, processedCount=${currentState.processedMessageIds.length}`);
+      console.log(
+        `[EMAIL PLUGIN] Loaded state: lastProcessed=${currentState.lastProcessedTimestamp}, processedCount=${currentState.processedMessageIds.length}`,
+      );
     } else {
       console.log("[EMAIL PLUGIN] No existing state file, starting fresh");
     }
@@ -112,7 +123,7 @@ function isSenderAllowed(fromEmail: string): boolean {
   if (!allowedSenders || allowedSenders.length === 0) {
     return true; // No restrictions
   }
-  return allowedSenders.some(allowed => fromEmail === allowed.toLowerCase());
+  return allowedSenders.some((allowed) => fromEmail === allowed.toLowerCase());
 }
 
 function createImapConnection(config: EmailConfig): Imap {
@@ -122,7 +133,7 @@ function createImapConnection(config: EmailConfig): Imap {
     host: config.imap.host,
     port: config.imap.port,
     tls: config.imap.secure,
-    tlsOptions: { rejectUnauthorized: false }
+    tlsOptions: { rejectUnauthorized: false },
   });
 }
 
@@ -133,8 +144,8 @@ function createSmtpTransporter(config: EmailConfig): nodemailer.Transporter {
     secure: config.smtp.secure,
     auth: {
       user: config.smtp.user,
-      pass: config.smtp.password
-    }
+      pass: config.smtp.password,
+    },
   });
 }
 
@@ -148,7 +159,20 @@ function openInbox(cb: (err: Error | null, box?: any) => void): void {
 
 function formatDateForImap(date: Date): string {
   // IMAP date format: 06-Feb-2026
-  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const months = [
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+  ];
   const day = String(date.getDate()).padStart(2, "0");
   const month = months[date.getMonth()];
   const year = date.getFullYear();
@@ -163,8 +187,10 @@ function checkEmail(): void {
   }
 
   // Check IMAP connection state
-  if (imapConnection.state !== 'authenticated') {
-    console.log(`[EMAIL PLUGIN] IMAP connection not authenticated (state: ${imapConnection.state}), skipping check`);
+  if (imapConnection.state !== "authenticated") {
+    console.log(
+      `[EMAIL PLUGIN] IMAP connection not authenticated (state: ${imapConnection.state}), skipping check`,
+    );
     return;
   }
 
@@ -174,13 +200,15 @@ function checkEmail(): void {
   const searchDate = new Date(lastProcessedDate.getTime() - 60000); // 1 minute buffer
   const dateStr = formatDateForImap(searchDate);
 
-  console.log(`[EMAIL PLUGIN] Searching for emails since ${dateStr} (last processed: ${currentState.lastProcessedTimestamp})`);
+  console.log(
+    `[EMAIL PLUGIN] Searching for emails since ${dateStr} (last processed: ${currentState.lastProcessedTimestamp})`,
+  );
 
   imapConnection.search([["SINCE", dateStr]], (err, results) => {
     if (err) {
       console.error("[EMAIL PLUGIN] Email search error:", err);
       // Reset inbox state on error - might need to reopen
-      if (err.message && err.message.includes('No mailbox')) {
+      if (err.message && err.message.includes("No mailbox")) {
         console.error("[EMAIL PLUGIN] Mailbox not selected, will attempt to reopen on next start");
         isInboxOpen = false;
       }
@@ -285,18 +313,30 @@ function checkEmail(): void {
   });
 }
 
-export function startEmail(config: EmailConfig, handler: (from: string, fromEmail: string, subject: string, body: string, messageId: string, uid: number) => Promise<void>): void {
+export function startEmail(
+  config: EmailConfig,
+  handler: (
+    from: string,
+    fromEmail: string,
+    subject: string,
+    body: string,
+    messageId: string,
+    uid: number,
+  ) => Promise<void>,
+): void {
   console.error("[EMAIL PLUGIN] startEmail called!");
 
   // Load persistent state
   loadState();
 
   messageHandler = handler;
-  allowedSenders = (config.allowedSenders || []).map(email => email.trim().toLowerCase());
+  allowedSenders = (config.allowedSenders || []).map((email) => email.trim().toLowerCase());
 
   // Log allowed senders configuration
   if (allowedSenders.length > 0) {
-    console.error(`[EMAIL PLUGIN] Restricting to ${allowedSenders.length} allowed sender(s): ${allowedSenders.join(", ")}`);
+    console.error(
+      `[EMAIL PLUGIN] Restricting to ${allowedSenders.length} allowed sender(s): ${allowedSenders.join(", ")}`,
+    );
   } else {
     console.error(`[EMAIL PLUGIN] Accepting emails from all senders`);
   }
@@ -314,7 +354,7 @@ export function startEmail(config: EmailConfig, handler: (from: string, fromEmai
         return;
       }
 
-      isInboxOpen = true;  // Mark inbox as open
+      isInboxOpen = true; // Mark inbox as open
       checkEmail();
 
       // Set up interval to check for new emails
@@ -330,7 +370,12 @@ export function startEmail(config: EmailConfig, handler: (from: string, fromEmai
   imapConnection.connect();
 }
 
-export async function sendEmail(to: string, subject: string, body: string, inReplyTo?: string): Promise<boolean> {
+export async function sendEmail(
+  to: string,
+  subject: string,
+  body: string,
+  inReplyTo?: string,
+): Promise<boolean> {
   if (!smtpTransporter) {
     console.error("SMTP transporter not initialized");
     return false;
@@ -341,7 +386,7 @@ export async function sendEmail(to: string, subject: string, body: string, inRep
       from: smtpTransporter.options.auth?.user,
       to: to,
       subject: subject.startsWith("Re:") ? subject : `Re: ${subject}`,
-      text: body
+      text: body,
     };
 
     if (inReplyTo) {
@@ -358,7 +403,7 @@ export async function sendEmail(to: string, subject: string, body: string, inRep
 }
 
 export function stopEmail(): void {
-  isInboxOpen = false;  // Reset inbox state
+  isInboxOpen = false; // Reset inbox state
 
   if (checkTimer) {
     clearInterval(checkTimer);

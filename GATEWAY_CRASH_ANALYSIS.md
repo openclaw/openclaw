@@ -3,6 +3,7 @@
 ## 问题诊断
 
 ### 错误信息
+
 ```
 Error: No mailbox is currently selected
 at Connection._search (/Users/guxiaobo/.openclaw/extensions/email/node_modules/imap/lib/Connection.js:571:11)
@@ -12,16 +13,20 @@ at Timeout.checkEmail (/Users/guxiaobo/.openclaw/extensions/email/src/runtime.ts
 ### 根本原因
 
 #### 1. 竞态条件 (Race Condition)
+
 从错误日志可以看到 `startEmail called!` 被频繁调用（每隔几秒就调用一次），这表明：
+
 - Email channel 不断重启
 - 旧的定时器还在运行
 - 新的连接还没完全建立
 
 #### 2. 邮箱状态检查缺失
+
 在 `runtime.ts` 的 `checkEmail()` 函数中：
+
 ```typescript
 function checkEmail(): void {
-  if (!imapConnection) return;  // ❌ 只检查连接对象，不检查邮箱是否打开
+  if (!imapConnection) return; // ❌ 只检查连接对象，不检查邮箱是否打开
 
   imapConnection.search([["SINCE", dateStr]], (err, results) => {
     // 这里会抛出 "No mailbox is currently selected" 错误
@@ -30,17 +35,19 @@ function checkEmail(): void {
 ```
 
 **问题**：
+
 - 只检查 `imapConnection` 对象是否存在
 - **没有检查邮箱（INBOX）是否已经打开**
 - 在邮箱未打开时调用 `search()` 导致异常
 
 #### 3. 启动流程问题
+
 ```typescript
 imapConnection.once("ready", () => {
   openInbox((err) => {
     if (err) {
       console.error("Error opening inbox:", err);
-      return;  // ❌ 打开失败后，定时器不会被设置，但之前的定时器可能还在运行
+      return; // ❌ 打开失败后，定时器不会被设置，但之前的定时器可能还在运行
     }
 
     checkEmail();
@@ -50,6 +57,7 @@ imapConnection.once("ready", () => {
 ```
 
 **问题**：
+
 - 如果 `openInbox` 失败，只是返回，没有清理资源
 - 如果 `startEmail` 被多次调用，旧的 `checkTimer` 没有被清理
 - 多个定时器可能同时运行，导致竞态条件
@@ -74,11 +82,12 @@ imapConnection.once("ready", () => {
 修改 `checkEmail()` 函数，添加邮箱状态检查：
 
 ```typescript
-let isInboxOpen = false;  // 新增状态标志
+let isInboxOpen = false; // 新增状态标志
 
 function checkEmail(): void {
   if (!imapConnection) return;
-  if (!isInboxOpen) {  // ✅ 检查邮箱是否已打开
+  if (!isInboxOpen) {
+    // ✅ 检查邮箱是否已打开
     console.log("[EMAIL PLUGIN] Inbox not ready, skipping check");
     return;
   }
@@ -93,7 +102,7 @@ imapConnection.once("ready", () => {
       return;
     }
 
-    isInboxOpen = true;  // ✅ 标记邮箱已打开
+    isInboxOpen = true; // ✅ 标记邮箱已打开
     checkEmail();
     checkTimer = setInterval(checkEmail, interval);
   });
@@ -162,7 +171,7 @@ imapConnection.once("ready", () => {
       return;
     }
 
-    isInboxOpen = true;  // 设置状态
+    isInboxOpen = true; // 设置状态
     checkEmail();
     checkTimer = setInterval(checkEmail, interval);
   });
@@ -170,7 +179,7 @@ imapConnection.once("ready", () => {
 
 // 在 stopEmail 中重置状态
 export function stopEmail(): void {
-  isInboxOpen = false;  // 重置状态
+  isInboxOpen = false; // 重置状态
   // ... 其余代码
 }
 ```
