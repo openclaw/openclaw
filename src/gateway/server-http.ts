@@ -591,7 +591,7 @@ export function createGatewayHttpServer(opts: {
       }
       if (controlUiEnabled) {
         if (
-          handleControlUiAvatarRequest(req, res, {
+          await handleControlUiAvatarRequest(req, res, {
             basePath: controlUiBasePath,
             resolveAvatar: (agentId) => resolveAgentAvatar(configSnapshot, agentId),
           })
@@ -599,7 +599,7 @@ export function createGatewayHttpServer(opts: {
           return;
         }
         if (
-          handleControlUiHttpRequest(req, res, {
+          await handleControlUiHttpRequest(req, res, {
             basePath: controlUiBasePath,
             config: configSnapshot,
             root: controlUiRoot,
