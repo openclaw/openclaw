@@ -30,6 +30,7 @@ const sdkStart = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const sdkShutdown = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const logEmit = vi.hoisted(() => vi.fn());
 const logShutdown = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const traceExporterCtor = vi.hoisted(() => vi.fn());
 
 vi.mock("@opentelemetry/api", () => ({
   metrics: {
@@ -55,7 +56,11 @@ vi.mock("@opentelemetry/exporter-metrics-otlp-http", () => ({
 }));
 
 vi.mock("@opentelemetry/exporter-trace-otlp-http", () => ({
-  OTLPTraceExporter: class {},
+  OTLPTraceExporter: class {
+    constructor(options?: unknown) {
+      traceExporterCtor(options);
+    }
+  },
 }));
 
 vi.mock("@opentelemetry/exporter-logs-otlp-http", () => ({
@@ -119,6 +124,7 @@ describe("diagnostics-otel service", () => {
     sdkShutdown.mockClear();
     logEmit.mockClear();
     logShutdown.mockClear();
+    traceExporterCtor.mockClear();
     registerLogTransportMock.mockReset();
   });
 
@@ -226,5 +232,101 @@ describe("diagnostics-otel service", () => {
     expect(logEmit).toHaveBeenCalled();
 
     await service.stop?.(ctx);
+  });
+
+  test("appends signal path when endpoint contains non-signal /v1 segment", async () => {
+    const service = createDiagnosticsOtelService();
+    await service.start({
+      config: {
+        diagnostics: {
+          enabled: true,
+          otel: {
+            enabled: true,
+            endpoint: "https://www.comet.com/opik/api/v1/private/otel",
+            protocol: "http/protobuf",
+            traces: true,
+            metrics: false,
+            logs: false,
+          },
+        },
+      },
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+    });
+
+    const options = traceExporterCtor.mock.calls[0]?.[0] as { url?: string } | undefined;
+    expect(options?.url).toBe("https://www.comet.com/opik/api/v1/private/otel/v1/traces");
+    await service.stop?.();
+  });
+
+  test("keeps already signal-qualified endpoint unchanged", async () => {
+    const service = createDiagnosticsOtelService();
+    await service.start({
+      config: {
+        diagnostics: {
+          enabled: true,
+          otel: {
+            enabled: true,
+            endpoint: "https://collector.example.com/v1/traces",
+            protocol: "http/protobuf",
+            traces: true,
+            metrics: false,
+            logs: false,
+          },
+        },
+      },
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+    });
+
+    const options = traceExporterCtor.mock.calls[0]?.[0] as { url?: string } | undefined;
+    expect(options?.url).toBe("https://collector.example.com/v1/traces");
+    await service.stop?.();
+  });
+
+  test("keeps signal-qualified endpoint unchanged when it has query params", async () => {
+    const service = createDiagnosticsOtelService();
+    await service.start({
+      config: {
+        diagnostics: {
+          enabled: true,
+          otel: {
+            enabled: true,
+            endpoint: "https://collector.example.com/v1/traces?timeout=30s",
+            protocol: "http/protobuf",
+            traces: true,
+            metrics: false,
+            logs: false,
+          },
+        },
+      },
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+    });
+
+    const options = traceExporterCtor.mock.calls[0]?.[0] as { url?: string } | undefined;
+    expect(options?.url).toBe("https://collector.example.com/v1/traces?timeout=30s");
+    await service.stop?.();
+  });
+
+  test("keeps signal-qualified endpoint unchanged when signal path casing differs", async () => {
+    const service = createDiagnosticsOtelService();
+    await service.start({
+      config: {
+        diagnostics: {
+          enabled: true,
+          otel: {
+            enabled: true,
+            endpoint: "https://collector.example.com/v1/Traces",
+            protocol: "http/protobuf",
+            traces: true,
+            metrics: false,
+            logs: false,
+          },
+        },
+      },
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+    });
+
+    const options = traceExporterCtor.mock.calls[0]?.[0] as { url?: string } | undefined;
+    expect(options?.url).toBe("https://collector.example.com/v1/Traces");
+    await service.stop?.();
   });
 });
