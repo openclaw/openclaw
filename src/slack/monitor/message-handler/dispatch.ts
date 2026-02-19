@@ -199,7 +199,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           channel: message.channel,
           threadTs: streamThreadTs,
           text,
-          teamId: ctx.teamId,
+          teamId: ctx.teamId || undefined,
           userId: message.user,
         });
         replyPlan.markSent();
