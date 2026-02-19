@@ -365,6 +365,7 @@ export const dispatchTelegramMessage = async ({
     if (!lane.stream) {
       return false;
     }
+    const hadPreviewMessage = typeof lane.stream.messageId() === "number";
     const currentPreviewText = streamMode === "block" ? lane.draftText : lane.lastPartialText;
     await lane.stream.stop();
     const previewMessageId = lane.stream.messageId();
@@ -372,6 +373,7 @@ export const dispatchTelegramMessage = async ({
       return false;
     }
     if (
+      hadPreviewMessage &&
       currentPreviewText &&
       currentPreviewText.startsWith(finalText) &&
       finalText.length < currentPreviewText.length

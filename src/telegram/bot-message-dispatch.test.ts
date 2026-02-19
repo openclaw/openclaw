@@ -710,6 +710,45 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(reasoningDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
   });
 
+  it("edits stop-created preview when final text is shorter than buffered draft", async () => {
+    let answerMessageId: number | undefined;
+    const answerDraftStream = {
+      update: vi.fn(),
+      flush: vi.fn().mockResolvedValue(undefined),
+      messageId: vi.fn().mockImplementation(() => answerMessageId),
+      clear: vi.fn().mockResolvedValue(undefined),
+      stop: vi.fn().mockImplementation(async () => {
+        answerMessageId = 999;
+      }),
+      forceNewMessage: vi.fn(),
+    };
+    const reasoningDraftStream = createDraftStream();
+    createTelegramDraftStream
+      .mockImplementationOnce(() => answerDraftStream)
+      .mockImplementationOnce(() => reasoningDraftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({
+          text: "Let me check that file and confirm details for you.",
+        });
+        await dispatcherOptions.deliver({ text: "Let me check that file." }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "999" });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "block" });
+
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      999,
+      "Let me check that file.",
+      expect.any(Object),
+    );
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
   it("does not edit preview message when final payload is an error", async () => {
     const draftStream = createDraftStream(999);
     createTelegramDraftStream.mockReturnValue(draftStream);
