@@ -1,24 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
-import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
+import { describe, expect, it } from "vitest";
+import { createProviderUsageFetch, makeResponse } from "../test-utils/provider-usage-fetch.js";
 import { fetchAntigravityUsage } from "./provider-usage.fetch.antigravity.js";
-
-const makeResponse = (status: number, body: unknown): Response => {
-  const payload = typeof body === "string" ? body : JSON.stringify(body);
-  const headers = typeof body === "string" ? undefined : { "Content-Type": "application/json" };
-  return new Response(payload, { status, headers });
-};
-
-const toRequestUrl = (input: Parameters<typeof fetch>[0]): string =>
-  typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-
-const createAntigravityFetch = (
-  handler: (url: string, init?: Parameters<typeof fetch>[1]) => Promise<Response> | Response,
-) => {
-  const mockFetch = vi.fn(async (input: string | Request | URL, init?: RequestInit) =>
-    handler(toRequestUrl(input), init),
-  );
-  return withFetchPreconnect(mockFetch) as typeof fetch & typeof mockFetch;
-};
 
 const getRequestBody = (init?: Parameters<typeof fetch>[1]) =>
   typeof init?.body === "string" ? init.body : undefined;
@@ -29,7 +11,7 @@ function createEndpointFetch(spec: {
   loadCodeAssist?: EndpointHandler;
   fetchAvailableModels?: EndpointHandler;
 }) {
-  return createAntigravityFetch(async (url, init) => {
+  return createProviderUsageFetch(async (url, init) => {
     if (url.includes("loadCodeAssist")) {
       return (await spec.loadCodeAssist?.(init)) ?? makeResponse(404, "not found");
     }
@@ -40,12 +22,26 @@ function createEndpointFetch(spec: {
   });
 }
 
-async function runUsage(mockFetch: ReturnType<typeof createAntigravityFetch>) {
+async function runUsage(mockFetch: ReturnType<typeof createProviderUsageFetch>) {
   return fetchAntigravityUsage("token-123", 5000, mockFetch as unknown as typeof fetch);
 }
 
 function findWindow(snapshot: Awaited<ReturnType<typeof fetchAntigravityUsage>>, label: string) {
   return snapshot.windows.find((window) => window.label === label);
+}
+
+function expectTokenExpired(snapshot: Awaited<ReturnType<typeof fetchAntigravityUsage>>) {
+  expect(snapshot.error).toBe("Token expired");
+  expect(snapshot.windows).toHaveLength(0);
+}
+
+function expectSingleWindow(
+  snapshot: Awaited<ReturnType<typeof fetchAntigravityUsage>>,
+  label: string,
+) {
+  expect(snapshot.windows).toHaveLength(1);
+  expect(snapshot.windows[0]?.label).toBe(label);
+  return snapshot.windows[0];
 }
 
 describe("fetchAntigravityUsage", () => {
@@ -209,9 +205,7 @@ describe("fetchAntigravityUsage", () => {
     });
 
     const snapshot = await runUsage(mockFetch);
-
-    expect(snapshot.error).toBe("Token expired");
-    expect(snapshot.windows).toHaveLength(0);
+    expectTokenExpired(snapshot);
   });
 
   it.each([
@@ -246,54 +240,41 @@ describe("fetchAntigravityUsage", () => {
 
   it("includes reset times in model windows", async () => {
     const resetTime = "2026-01-10T12:00:00Z";
-    const mockFetch = createAntigravityFetch(async (url) => {
-      if (url.includes("loadCodeAssist")) {
-        return makeResponse(500, "Error");
-      }
-
-      if (url.includes("fetchAvailableModels")) {
-        return makeResponse(200, {
+    const mockFetch = createEndpointFetch({
+      loadCodeAssist: () => makeResponse(500, "Error"),
+      fetchAvailableModels: () =>
+        makeResponse(200, {
           models: {
             "gemini-pro-experimental": {
               quotaInfo: { remainingFraction: 0.3, resetTime },
             },
           },
-        });
-      }
-
-      return makeResponse(404, "not found");
+        }),
     });
 
-    const snapshot = await fetchAntigravityUsage("token-123", 5000, mockFetch);
-
+    const snapshot = await runUsage(mockFetch);
     const proWindow = snapshot.windows.find((w) => w.label === "gemini-pro-experimental");
     expect(proWindow?.resetAt).toBe(new Date(resetTime).getTime());
   });
 
   it("parses string numbers correctly", async () => {
-    const mockFetch = createAntigravityFetch(async (url) => {
-      if (url.includes("loadCodeAssist")) {
-        return makeResponse(200, {
+    const mockFetch = createEndpointFetch({
+      loadCodeAssist: () =>
+        makeResponse(200, {
           availablePromptCredits: "600",
           planInfo: { monthlyPromptCredits: "1000" },
-        });
-      }
-
-      if (url.includes("fetchAvailableModels")) {
-        return makeResponse(200, {
+        }),
+      fetchAvailableModels: () =>
+        makeResponse(200, {
           models: {
             "gemini-flash-lite": {
               quotaInfo: { remainingFraction: "0.9" },
             },
           },
-        });
-      }
-
-      return makeResponse(404, "not found");
+        }),
     });
 
-    const snapshot = await fetchAntigravityUsage("token-123", 5000, mockFetch);
-
+    const snapshot = await runUsage(mockFetch);
     expect(snapshot.windows).toHaveLength(2);
 
     const creditsWindow = snapshot.windows.find((w) => w.label === "Credits");
@@ -304,65 +285,43 @@ describe("fetchAntigravityUsage", () => {
   });
 
   it("skips internal models", async () => {
-    const mockFetch = createAntigravityFetch(async (url) => {
-      if (url.includes("loadCodeAssist")) {
-        return makeResponse(200, {
+    const mockFetch = createEndpointFetch({
+      loadCodeAssist: () =>
+        makeResponse(200, {
           availablePromptCredits: 500,
           planInfo: { monthlyPromptCredits: 1000 },
           cloudaicompanionProject: "projects/internal",
-        });
-      }
-
-      if (url.includes("fetchAvailableModels")) {
-        return makeResponse(200, {
+        }),
+      fetchAvailableModels: () =>
+        makeResponse(200, {
           models: {
             chat_hidden: { quotaInfo: { remainingFraction: 0.1 } },
             tab_hidden: { quotaInfo: { remainingFraction: 0.2 } },
             "gemini-pro-1.5": { quotaInfo: { remainingFraction: 0.7 } },
           },
-        });
-      }
-
-      return makeResponse(404, "not found");
+        }),
     });
 
-    const snapshot = await fetchAntigravityUsage("token-123", 5000, mockFetch);
-
+    const snapshot = await runUsage(mockFetch);
     expect(snapshot.windows.map((w) => w.label)).toEqual(["Credits", "gemini-pro-1.5"]);
   });
 
   it("sorts models by usage and shows individual model IDs", async () => {
-    const mockFetch = createAntigravityFetch(async (url) => {
-      if (url.includes("loadCodeAssist")) {
-        return makeResponse(500, "Error");
-      }
-
-      if (url.includes("fetchAvailableModels")) {
-        return makeResponse(200, {
+    const mockFetch = createEndpointFetch({
+      loadCodeAssist: () => makeResponse(500, "Error"),
+      fetchAvailableModels: () =>
+        makeResponse(200, {
           models: {
-            "gemini-pro-1.0": {
-              quotaInfo: { remainingFraction: 0.8 },
-            },
-            "gemini-pro-1.5": {
-              quotaInfo: { remainingFraction: 0.3 },
-            },
-            "gemini-flash-1.5": {
-              quotaInfo: { remainingFraction: 0.6 },
-            },
-            "gemini-flash-2.0": {
-              quotaInfo: { remainingFraction: 0.9 },
-            },
+            "gemini-pro-1.0": { quotaInfo: { remainingFraction: 0.8 } },
+            "gemini-pro-1.5": { quotaInfo: { remainingFraction: 0.3 } },
+            "gemini-flash-1.5": { quotaInfo: { remainingFraction: 0.6 } },
+            "gemini-flash-2.0": { quotaInfo: { remainingFraction: 0.9 } },
           },
-        });
-      }
-
-      return makeResponse(404, "not found");
+        }),
     });
 
-    const snapshot = await fetchAntigravityUsage("token-123", 5000, mockFetch);
-
+    const snapshot = await runUsage(mockFetch);
     expect(snapshot.windows).toHaveLength(4);
-    // Should be sorted by usage (highest first)
     expect(snapshot.windows[0]?.label).toBe("gemini-pro-1.5");
     expect(snapshot.windows[0]?.usedPercent).toBe(70); // (1 - 0.3) * 100
     expect(snapshot.windows[1]?.label).toBe("gemini-flash-1.5");
@@ -374,124 +333,137 @@ describe("fetchAntigravityUsage", () => {
   });
 
   it("returns Token expired error on 401 from loadCodeAssist", async () => {
-    const mockFetch = createAntigravityFetch(async (url) => {
-      if (url.includes("loadCodeAssist")) {
-        return makeResponse(401, { error: { message: "Unauthorized" } });
-      }
-
-      return makeResponse(404, "not found");
+    const mockFetch = createEndpointFetch({
+      loadCodeAssist: () => makeResponse(401, { error: { message: "Unauthorized" } }),
     });
 
-    const snapshot = await fetchAntigravityUsage("token-123", 5000, mockFetch);
-
-    expect(snapshot.error).toBe("Token expired");
-    expect(snapshot.windows).toHaveLength(0);
+    const snapshot = await runUsage(mockFetch);
+    expectTokenExpired(snapshot);
     expect(mockFetch).toHaveBeenCalledTimes(1); // Should stop early on 401
   });
 
-  it("handles empty models array gracefully", async () => {
-    const mockFetch = createAntigravityFetch(async (url) => {
-      if (url.includes("loadCodeAssist")) {
-        return makeResponse(200, {
+  it("handles empty models object gracefully", async () => {
+    const mockFetch = createEndpointFetch({
+      loadCodeAssist: () =>
+        makeResponse(200, {
           availablePromptCredits: 800,
           planInfo: { monthlyPromptCredits: 1000 },
-        });
-      }
-
-      if (url.includes("fetchAvailableModels")) {
-        return makeResponse(200, { models: {} });
-      }
-
-      return makeResponse(404, "not found");
+        }),
+      fetchAvailableModels: () => makeResponse(200, { models: {} }),
     });
 
-    const snapshot = await fetchAntigravityUsage("token-123", 5000, mockFetch);
-
+    const snapshot = await runUsage(mockFetch);
     expect(snapshot.windows).toHaveLength(1);
     const creditsWindow = snapshot.windows[0];
     expect(creditsWindow?.label).toBe("Credits");
     expect(creditsWindow?.usedPercent).toBe(20);
   });
 
-  it("handles missing credits fields gracefully", async () => {
-    const mockFetch = createAntigravityFetch(async (url) => {
-      if (url.includes("loadCodeAssist")) {
-        return makeResponse(200, { planType: "Free" });
-      }
+  it("handles missing or invalid model quota payloads", async () => {
+    const mockFetch = createEndpointFetch({
+      loadCodeAssist: () => makeResponse(500, "Error"),
+      fetchAvailableModels: () =>
+        makeResponse(200, {
+          models: {
+            no_quota: {},
+            missing_fraction: { quotaInfo: {} },
+            invalid_fraction: { quotaInfo: { remainingFraction: "oops" } },
+            valid_model: { quotaInfo: { remainingFraction: 0.25 } },
+          },
+        }),
+    });
 
-      if (url.includes("fetchAvailableModels")) {
-        return makeResponse(200, {
+    const snapshot = await runUsage(mockFetch);
+    expect(snapshot.windows).toEqual([{ label: "valid_model", usedPercent: 75 }]);
+  });
+
+  it("handles non-object models payload gracefully", async () => {
+    const mockFetch = createEndpointFetch({
+      loadCodeAssist: () =>
+        makeResponse(200, {
+          availablePromptCredits: 900,
+          planInfo: { monthlyPromptCredits: 1000 },
+        }),
+      fetchAvailableModels: () => makeResponse(200, { models: null }),
+    });
+
+    const snapshot = await runUsage(mockFetch);
+    expect(snapshot.windows).toEqual([{ label: "Credits", usedPercent: 10 }]);
+  });
+
+  it("handles missing credits fields gracefully", async () => {
+    const mockFetch = createEndpointFetch({
+      loadCodeAssist: () => makeResponse(200, { planType: "Free" }),
+      fetchAvailableModels: () =>
+        makeResponse(200, {
           models: {
             "gemini-flash-experimental": {
               quotaInfo: { remainingFraction: 0.5 },
             },
           },
-        });
-      }
-
-      return makeResponse(404, "not found");
+        }),
     });
 
-    const snapshot = await fetchAntigravityUsage("token-123", 5000, mockFetch);
-
-    expect(snapshot.windows).toHaveLength(1);
-    const flashWindow = snapshot.windows[0];
-    expect(flashWindow?.label).toBe("gemini-flash-experimental");
+    const snapshot = await runUsage(mockFetch);
+    const flashWindow = expectSingleWindow(snapshot, "gemini-flash-experimental");
     expect(flashWindow?.usedPercent).toBe(50);
     expect(snapshot.plan).toBe("Free");
   });
 
   it("handles invalid reset time gracefully", async () => {
-    const mockFetch = createAntigravityFetch(async (url) => {
-      if (url.includes("loadCodeAssist")) {
-        return makeResponse(500, "Error");
-      }
-
-      if (url.includes("fetchAvailableModels")) {
-        return makeResponse(200, {
+    const mockFetch = createEndpointFetch({
+      loadCodeAssist: () => makeResponse(500, "Error"),
+      fetchAvailableModels: () =>
+        makeResponse(200, {
           models: {
             "gemini-pro-test": {
               quotaInfo: { remainingFraction: 0.4, resetTime: "invalid-date" },
             },
           },
-        });
-      }
-
-      return makeResponse(404, "not found");
+        }),
     });
 
-    const snapshot = await fetchAntigravityUsage("token-123", 5000, mockFetch);
-
+    const snapshot = await runUsage(mockFetch);
     const proWindow = snapshot.windows.find((w) => w.label === "gemini-pro-test");
     expect(proWindow?.usedPercent).toBe(60);
     expect(proWindow?.resetAt).toBeUndefined();
   });
 
-  it("handles network errors with graceful degradation", async () => {
-    const mockFetch = createAntigravityFetch(async (url) => {
-      if (url.includes("loadCodeAssist")) {
+  it("handles loadCodeAssist network errors with graceful degradation", async () => {
+    const mockFetch = createEndpointFetch({
+      loadCodeAssist: () => {
         throw new Error("Network failure");
-      }
-
-      if (url.includes("fetchAvailableModels")) {
-        return makeResponse(200, {
+      },
+      fetchAvailableModels: () =>
+        makeResponse(200, {
           models: {
             "gemini-flash-stable": {
               quotaInfo: { remainingFraction: 0.85 },
             },
           },
-        });
-      }
-
-      return makeResponse(404, "not found");
+        }),
     });
 
-    const snapshot = await fetchAntigravityUsage("token-123", 5000, mockFetch);
-
-    expect(snapshot.windows).toHaveLength(1);
-    const flashWindow = snapshot.windows[0];
-    expect(flashWindow?.label).toBe("gemini-flash-stable");
+    const snapshot = await runUsage(mockFetch);
+    const flashWindow = expectSingleWindow(snapshot, "gemini-flash-stable");
     expect(flashWindow?.usedPercent).toBeCloseTo(15, 1);
+    expect(snapshot.error).toBeUndefined();
+  });
+
+  it("handles fetchAvailableModels network errors with graceful degradation", async () => {
+    const mockFetch = createEndpointFetch({
+      loadCodeAssist: () =>
+        makeResponse(200, {
+          availablePromptCredits: 300,
+          planInfo: { monthlyPromptCredits: 1000 },
+        }),
+      fetchAvailableModels: () => {
+        throw new Error("Network failure");
+      },
+    });
+
+    const snapshot = await runUsage(mockFetch);
+    expect(snapshot.windows).toEqual([{ label: "Credits", usedPercent: 70 }]);
     expect(snapshot.error).toBeUndefined();
   });
 });
