@@ -279,6 +279,23 @@ describe("nostr-profile-http", () => {
       expect(data.error).toContain("private");
     });
 
+    it("rejects ISATAP-embedded private IPv4 in picture URL", async () => {
+      const ctx = createMockContext();
+      const handler = createNostrProfileHttpHandler(ctx);
+      const req = createMockRequest("PUT", "/api/channels/nostr/default/profile", {
+        name: "hacker",
+        picture: "https://[2001:db8:1234::5efe:127.0.0.1]/evil.jpg",
+      });
+      const res = createMockResponse();
+
+      await handler(req, res);
+
+      expect(res._getStatusCode()).toBe(400);
+      const data = JSON.parse(res._getData());
+      expect(data.ok).toBe(false);
+      expect(data.error).toContain("private");
+    });
+
     it("rejects non-https URLs", async () => {
       const ctx = createMockContext();
       const handler = createNostrProfileHttpHandler(ctx);
