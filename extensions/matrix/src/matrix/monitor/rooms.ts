@@ -18,10 +18,13 @@ export function resolveMatrixRoomConfig(params: {
   const rooms = params.rooms ?? {};
   const keys = Object.keys(rooms);
   const allowlistConfigured = keys.length > 0;
+  // Normalize room ID to lowercase to match the case used when stored in config
+  const normalizedRoomId = params.roomId.toLowerCase();
+  const normalizedAliases = params.aliases.map((alias) => alias.toLowerCase());
   const candidates = buildChannelKeyCandidates(
-    params.roomId,
-    `room:${params.roomId}`,
-    ...params.aliases,
+    normalizedRoomId,
+    `room:${normalizedRoomId}`,
+    ...normalizedAliases,
   );
   const {
     entry: matched,
