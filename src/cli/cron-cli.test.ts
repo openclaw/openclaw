@@ -91,6 +91,24 @@ async function runCronSimpleAndGetUpdatePatch(
   };
 }
 
+function mockCronEditJobLookup(schedule: unknown): void {
+  callGatewayFromCli.mockImplementation(
+    async (method: string, _opts: unknown, params?: unknown) => {
+      if (method === "cron.status") {
+        return { enabled: true };
+      }
+      if (method === "cron.list") {
+        return {
+          ok: true,
+          params: {},
+          jobs: [{ id: "job-1", schedule }],
+        };
+      }
+      return { ok: true, params };
+    },
+  );
+}
+
 describe("cron cli", () => {
   it("trims model and thinking on cron add", { timeout: 60_000 }, async () => {
     resetGatewayMock();
@@ -535,26 +553,7 @@ describe("cron cli", () => {
 
   it("applies --exact to existing cron job without requiring --cron on edit", async () => {
     resetGatewayMock();
-    callGatewayFromCli.mockImplementation(
-      async (method: string, _opts: unknown, params?: unknown) => {
-        if (method === "cron.status") {
-          return { enabled: true };
-        }
-        if (method === "cron.list") {
-          return {
-            ok: true,
-            params: {},
-            jobs: [
-              {
-                id: "job-1",
-                schedule: { kind: "cron", expr: "0 */2 * * *", tz: "UTC", staggerMs: 300_000 },
-              },
-            ],
-          };
-        }
-        return { ok: true, params };
-      },
-    );
+    mockCronEditJobLookup({ kind: "cron", expr: "0 */2 * * *", tz: "UTC", staggerMs: 300_000 });
     const program = buildProgram();
 
     await program.parseAsync(["cron", "edit", "job-1", "--exact"], { from: "user" });
@@ -573,21 +572,7 @@ describe("cron cli", () => {
 
   it("rejects --exact on edit when existing job is not cron", async () => {
     resetGatewayMock();
-    callGatewayFromCli.mockImplementation(
-      async (method: string, _opts: unknown, params?: unknown) => {
-        if (method === "cron.status") {
-          return { enabled: true };
-        }
-        if (method === "cron.list") {
-          return {
-            ok: true,
-            params: {},
-            jobs: [{ id: "job-1", schedule: { kind: "every", everyMs: 60_000 } }],
-          };
-        }
-        return { ok: true, params };
-      },
-    );
+    mockCronEditJobLookup({ kind: "every", everyMs: 60_000 });
     const program = buildProgram();
 
     await expect(
