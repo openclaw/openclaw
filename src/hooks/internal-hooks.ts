@@ -79,6 +79,60 @@ export type MessageSentHookEvent = InternalHookEvent & {
   context: MessageSentHookContext;
 };
 
+// ============================================================================
+// Session Pre-Spawn Hook Events
+// ============================================================================
+
+export type SessionPreSpawnHookContext = {
+  /** Agent ID for the subagent being spawned */
+  agentId?: string;
+  /** Model override (can be mutated by hooks) */
+  model?: string;
+  /** Fallback model (can be mutated by hooks) */
+  fallbackModel?: string;
+  /** Thinking level (can be mutated by hooks) */
+  thinking?: string;
+  /** Task description for the subagent */
+  task?: string;
+  /** Session key of the requester/parent agent */
+  requesterSessionKey?: string;
+  /** Set to true to block the spawn (defaults to false) */
+  blocked?: boolean;
+  /** Reason for blocking (used in error response if blocked) */
+  blockReason?: string;
+};
+
+export type SessionPreSpawnHookEvent = InternalHookEvent & {
+  type: "session";
+  action: "pre-spawn";
+  context: SessionPreSpawnHookContext;
+};
+
+// ============================================================================
+// Agent Pre-Run Hook Events
+// ============================================================================
+
+export type AgentPreRunHookContext = {
+  /** Agent ID for the agent run */
+  agentId?: string;
+  /** Session key for the agent run */
+  sessionKey?: string;
+  /** Model (can be mutated by hooks) */
+  model?: string;
+  /** Thinking level (can be mutated by hooks) */
+  thinking?: string;
+  /** Set to true to block the agent run (defaults to false) */
+  blocked?: boolean;
+  /** Reason for blocking (used in error response if blocked) */
+  blockReason?: string;
+};
+
+export type AgentPreRunHookEvent = InternalHookEvent & {
+  type: "agent";
+  action: "pre-run";
+  context: AgentPreRunHookContext;
+};
+
 export interface InternalHookEvent {
   /** The type of event (command, session, agent, gateway, etc.) */
   type: InternalHookEventType;
@@ -260,4 +314,30 @@ export function isMessageSentEvent(event: InternalHookEvent): event is MessageSe
     typeof context.channelId === "string" &&
     typeof context.success === "boolean"
   );
+}
+
+export function isSessionPreSpawnEvent(
+  event: InternalHookEvent,
+): event is SessionPreSpawnHookEvent {
+  if (event.type !== "session" || event.action !== "pre-spawn") {
+    return false;
+  }
+  const context = event.context as Partial<SessionPreSpawnHookContext> | null;
+  if (!context || typeof context !== "object") {
+    return false;
+  }
+  // All fields are optional, so we just verify it's an object
+  return true;
+}
+
+export function isAgentPreRunEvent(event: InternalHookEvent): event is AgentPreRunHookEvent {
+  if (event.type !== "agent" || event.action !== "pre-run") {
+    return false;
+  }
+  const context = event.context as Partial<AgentPreRunHookContext> | null;
+  if (!context || typeof context !== "object") {
+    return false;
+  }
+  // All fields are optional, so we just verify it's an object
+  return true;
 }

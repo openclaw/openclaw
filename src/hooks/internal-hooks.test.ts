@@ -4,14 +4,18 @@ import {
   createInternalHookEvent,
   getRegisteredEventKeys,
   isAgentBootstrapEvent,
+  isAgentPreRunEvent,
   isMessageReceivedEvent,
   isMessageSentEvent,
+  isSessionPreSpawnEvent,
   registerInternalHook,
   triggerInternalHook,
   unregisterInternalHook,
   type AgentBootstrapHookContext,
+  type AgentPreRunHookContext,
   type MessageReceivedHookContext,
   type MessageSentHookContext,
+  type SessionPreSpawnHookContext,
 } from "./internal-hooks.js";
 
 describe("hooks", () => {
@@ -400,3 +404,167 @@ describe("hooks", () => {
     });
   });
 });
+
+  describe("isSessionPreSpawnEvent", () => {
+    it("returns true for session:pre-spawn events", () => {
+      const context: SessionPreSpawnHookContext = {
+        agentId: "coder",
+        model: "claude-sonnet-4-20250514",
+        thinking: "high",
+        task: "Fix bug",
+        requesterSessionKey: "agent:main:main",
+      };
+      const event = createInternalHookEvent("session", "pre-spawn", "test-session", context);
+      expect(isSessionPreSpawnEvent(event)).toBe(true);
+    });
+
+    it("returns true even with minimal context (all fields optional)", () => {
+      const context: SessionPreSpawnHookContext = {};
+      const event = createInternalHookEvent("session", "pre-spawn", "test-session", context);
+      expect(isSessionPreSpawnEvent(event)).toBe(true);
+    });
+
+    it("returns false for non-session events", () => {
+      const event = createInternalHookEvent("command", "new", "test-session");
+      expect(isSessionPreSpawnEvent(event)).toBe(false);
+    });
+
+    it("returns false for session events with different action", () => {
+      const event = createInternalHookEvent("session", "start", "test-session");
+      expect(isSessionPreSpawnEvent(event)).toBe(false);
+    });
+  });
+
+  describe("isAgentPreRunEvent", () => {
+    it("returns true for agent:pre-run events with expected context", () => {
+      const context: AgentPreRunHookContext = {
+        agentId: "researcher",
+        sessionKey: "agent:researcher:main",
+        model: "gpt-4o",
+        thinking: "low",
+      };
+      const event = createInternalHookEvent("agent", "pre-run", "test-session", context);
+      expect(isAgentPreRunEvent(event)).toBe(true);
+    });
+
+    it("returns true even with minimal context (all fields optional)", () => {
+      const context: AgentPreRunHookContext = {};
+      const event = createInternalHookEvent("agent", "pre-run", "test-session", context);
+      expect(isAgentPreRunEvent(event)).toBe(true);
+    });
+
+    it("returns false for non-agent events", () => {
+      const event = createInternalHookEvent("command", "new", "test-session");
+      expect(isAgentPreRunEvent(event)).toBe(false);
+    });
+
+    it("returns false for agent:bootstrap events", () => {
+      const context: AgentBootstrapHookContext = {
+        workspaceDir: "/tmp",
+        bootstrapFiles: [],
+      };
+      const event = createInternalHookEvent("agent", "bootstrap", "test-session", context);
+      expect(isAgentPreRunEvent(event)).toBe(false);
+    });
+  });
+
+  describe("session:pre-spawn hooks", () => {
+    it("should trigger session:pre-spawn handlers", async () => {
+      const handler = vi.fn();
+      registerInternalHook("session:pre-spawn", handler);
+
+      const context: SessionPreSpawnHookContext = {
+        agentId: "coder",
+        model: "claude-sonnet-4-20250514",
+        thinking: "high",
+        task: "Implement feature",
+        requesterSessionKey: "agent:main:main",
+      };
+      const event = createInternalHookEvent("session", "pre-spawn", "test-session", context);
+      await triggerInternalHook(event);
+
+      expect(handler).toHaveBeenCalledWith(event);
+    });
+
+    it("should allow hooks to mutate context fields", async () => {
+      const handler = vi.fn((event) => {
+        const ctx = event.context as SessionPreSpawnHookContext;
+        ctx.model = "gpt-4o";
+        ctx.thinking = "low";
+        ctx.fallbackModel = "claude-haiku";
+      });
+      registerInternalHook("session:pre-spawn", handler);
+
+      const context: SessionPreSpawnHookContext = {
+        agentId: "researcher",
+        model: "claude-sonnet-4-20250514",
+        thinking: "high",
+      };
+      const event = createInternalHookEvent("session", "pre-spawn", "test-session", context);
+      await triggerInternalHook(event);
+
+      expect(handler).toHaveBeenCalled();
+      const mutatedContext = event.context as SessionPreSpawnHookContext;
+      expect(mutatedContext.model).toBe("gpt-4o");
+      expect(mutatedContext.thinking).toBe("low");
+      expect(mutatedContext.fallbackModel).toBe("claude-haiku");
+    });
+  });
+
+  describe("agent:pre-run hooks", () => {
+    it("should trigger agent:pre-run handlers", async () => {
+      const handler = vi.fn();
+      registerInternalHook("agent:pre-run", handler);
+
+      const context: AgentPreRunHookContext = {
+        agentId: "writer",
+        sessionKey: "agent:writer:main",
+        model: "claude-opus-4-20250514",
+        thinking: "high",
+      };
+      const event = createInternalHookEvent("agent", "pre-run", "test-session", context);
+      await triggerInternalHook(event);
+
+      expect(handler).toHaveBeenCalledWith(event);
+    });
+
+    it("should allow hooks to mutate model and thinking", async () => {
+      const handler = vi.fn((event) => {
+        const ctx = event.context as AgentPreRunHookContext;
+        ctx.model = "gpt-4o";
+        ctx.thinking = "off";
+      });
+      registerInternalHook("agent:pre-run", handler);
+
+      const context: AgentPreRunHookContext = {
+        agentId: "helper",
+        model: "claude-sonnet-4-20250514",
+        thinking: "high",
+      };
+      const event = createInternalHookEvent("agent", "pre-run", "test-session", context);
+      await triggerInternalHook(event);
+
+      expect(handler).toHaveBeenCalled();
+      const mutatedContext = event.context as AgentPreRunHookContext;
+      expect(mutatedContext.model).toBe("gpt-4o");
+      expect(mutatedContext.thinking).toBe("off");
+    });
+
+    it("should trigger general agent handlers for pre-run", async () => {
+      const generalHandler = vi.fn();
+      const specificHandler = vi.fn();
+
+      registerInternalHook("agent", generalHandler);
+      registerInternalHook("agent:pre-run", specificHandler);
+
+      const context: AgentPreRunHookContext = {
+        agentId: "coder",
+        model: "claude-sonnet-4-20250514",
+      };
+      const event = createInternalHookEvent("agent", "pre-run", "test-session", context);
+      await triggerInternalHook(event);
+
+      expect(generalHandler).toHaveBeenCalledWith(event);
+      expect(specificHandler).toHaveBeenCalledWith(event);
+    });
+  });

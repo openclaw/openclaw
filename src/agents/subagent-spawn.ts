@@ -2,6 +2,11 @@ import crypto from "node:crypto";
 import { formatThinkingLevels, normalizeThinkLevel } from "../auto-reply/thinking.js";
 import { loadConfig } from "../config/config.js";
 import { callGateway } from "../gateway/call.js";
+import {
+  createInternalHookEvent,
+  triggerInternalHook,
+  type SessionPreSpawnHookContext,
+} from "../hooks/internal-hooks.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { resolveAgentConfig } from "./agent-scope.js";
@@ -149,10 +154,40 @@ export async function spawnSubagentDirect(
   const childDepth = callerDepth + 1;
   const spawnedByKey = requesterInternalKey;
   const targetAgentConfig = resolveAgentConfig(cfg, targetAgentId);
+
+  // Fire session:pre-spawn hook to allow hooks to override model/thinking/fallbackModel
+  // This happens BEFORE model resolution so hook values take precedence
+  let modelOverrideFromHook = modelOverride;
+  let thinkingOverrideRawFromHook = thinkingOverrideRaw;
+
+  const hookContext: SessionPreSpawnHookContext = {
+    agentId: targetAgentId,
+    model: modelOverrideFromHook,
+    fallbackModel: undefined,
+    thinking: thinkingOverrideRawFromHook,
+    task,
+    requesterSessionKey: requesterInternalKey,
+  };
+
+  const hookEvent = createInternalHookEvent("session", "pre-spawn", childSessionKey, hookContext);
+  await triggerInternalHook(hookEvent);
+
+  // Check if hook blocked the spawn
+  const mutatedContext = hookEvent.context as SessionPreSpawnHookContext;
+  if (mutatedContext.blocked) {
+    return {
+      status: "error",
+      error: mutatedContext.blockReason || "Spawn blocked by hook",
+    };
+  }
+
+  // Read back hook-mutated values
+  modelOverrideFromHook = mutatedContext.model;
+  thinkingOverrideRawFromHook = mutatedContext.thinking;
   const resolvedModel = resolveSubagentSpawnModelSelection({
     cfg,
     agentId: targetAgentId,
-    modelOverride,
+    modelOverride: modelOverrideFromHook,
   });
 
   const resolvedThinkingDefaultRaw =
@@ -160,7 +195,7 @@ export async function spawnSubagentDirect(
     readStringParam(cfg.agents?.defaults?.subagents ?? {}, "thinking");
 
   let thinkingOverride: string | undefined;
-  const thinkingCandidateRaw = thinkingOverrideRaw || resolvedThinkingDefaultRaw;
+  const thinkingCandidateRaw = thinkingOverrideRawFromHook || resolvedThinkingDefaultRaw;
   if (thinkingCandidateRaw) {
     const normalized = normalizeThinkLevel(thinkingCandidateRaw);
     if (!normalized) {

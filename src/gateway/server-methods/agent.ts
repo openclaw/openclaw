@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { listAgentIds } from "../../agents/agent-scope.js";
 import { BARE_SESSION_RESET_PROMPT } from "../../auto-reply/reply/session-reset-prompt.js";
 import { agentCommand } from "../../commands/agent.js";
@@ -10,6 +11,11 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
+import {
+  createInternalHookEvent,
+  triggerInternalHook,
+  type AgentPreRunHookContext,
+} from "../../hooks/internal-hooks.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import {
   resolveAgentDeliveryPlan,
@@ -49,7 +55,6 @@ import { waitForAgentJob } from "./agent-job.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { sessionsHandlers } from "./sessions.js";
-import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 
 const RESET_COMMAND_RE = /^\/(new|reset)(?:\s+([\s\S]*))?$/i;
 
@@ -525,6 +530,37 @@ export const agentHandlers: GatewayRequestHandlers = {
 
     const resolvedThreadId = explicitThreadId ?? deliveryPlan.resolvedThreadId;
 
+    // Fire agent:pre-run hook to allow hooks to override model/thinking
+    const resolvedAgentIdForHook =
+      agentId ?? resolveAgentIdFromSessionKey(resolvedSessionKey) ?? "main";
+    let thinkingFromHook = request.thinking;
+    let modelFromHook = request.model;
+
+    const hookContext: AgentPreRunHookContext = {
+      agentId: resolvedAgentIdForHook,
+      sessionKey: resolvedSessionKey,
+      model: modelFromHook,
+      thinking: thinkingFromHook,
+    };
+
+    const hookEvent = createInternalHookEvent("agent", "pre-run", resolvedSessionKey, hookContext);
+    await triggerInternalHook(hookEvent);
+
+    // Check if hook blocked the run
+    const mutatedContext = hookEvent.context as AgentPreRunHookContext;
+    if (mutatedContext.blocked) {
+      const error = errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        mutatedContext.blockReason || "Agent run blocked by hook",
+      );
+      respond(false, undefined, error);
+      return;
+    }
+
+    // Read back hook-mutated values
+    thinkingFromHook = mutatedContext.thinking;
+    modelFromHook = mutatedContext.model;
+
     void agentCommand(
       {
         message,
@@ -532,7 +568,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         to: resolvedTo,
         sessionId: resolvedSessionId,
         sessionKey: resolvedSessionKey,
-        thinking: request.thinking,
+        thinking: thinkingFromHook,
         deliver,
         deliveryTargetMode,
         channel: resolvedChannel,
