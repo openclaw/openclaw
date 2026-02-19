@@ -11,7 +11,7 @@ import {
 } from "./auth.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import { resolveHooksConfig } from "./hooks.js";
-import { isLoopbackHost, resolveGatewayBindHost } from "./net.js";
+import { isLoopbackHost, isValidIPv4, resolveGatewayBindHost } from "./net.js";
 import { mergeGatewayTailscaleConfig } from "./startup-auth.js";
 
 export type GatewayRuntimeConfig = {
@@ -44,6 +44,27 @@ export async function resolveGatewayRuntimeConfig(params: {
   const bindMode = params.bind ?? params.cfg.gateway?.bind ?? "loopback";
   const customBindHost = params.cfg.gateway?.customBindHost;
   const bindHost = params.host ?? (await resolveGatewayBindHost(bindMode, customBindHost));
+  if (bindMode === "loopback" && !isLoopbackHost(bindHost)) {
+    throw new Error(
+      `gateway bind=loopback resolved to non-loopback host ${bindHost}; refusing fallback to a network bind`,
+    );
+  }
+  if (bindMode === "custom") {
+    const configuredCustomBindHost = customBindHost?.trim();
+    if (!configuredCustomBindHost) {
+      throw new Error("gateway.bind=custom requires gateway.customBindHost");
+    }
+    if (!isValidIPv4(configuredCustomBindHost)) {
+      throw new Error(
+        `gateway.bind=custom requires a valid IPv4 customBindHost (got ${configuredCustomBindHost})`,
+      );
+    }
+    if (bindHost !== configuredCustomBindHost) {
+      throw new Error(
+        `gateway bind=custom requested ${configuredCustomBindHost} but resolved ${bindHost}; refusing fallback`,
+      );
+    }
+  }
   const controlUiEnabled =
     params.controlUiEnabled ?? params.cfg.gateway?.controlUi?.enabled ?? true;
   const openAiChatCompletionsEnabled =
