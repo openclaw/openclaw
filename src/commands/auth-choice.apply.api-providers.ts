@@ -976,7 +976,7 @@ export async function applyAuthChoiceApiProviders(
     if (!hasCredential) {
       await params.prompter.note(
         [
-          "Tetrate Agent Router Service routes to Anthropic Claude models.",
+          "Tetrate Agent Router Service routes to many public models.",
           "Get your API key from your Tetrate admin or https://tetrate.ai",
         ].join("\n"),
         "Tetrate Agent Router Service",
