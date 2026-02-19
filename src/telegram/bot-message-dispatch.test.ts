@@ -504,9 +504,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     expect(reactionApi).toHaveBeenNthCalledWith(1, 123, 456, [{ type: "emoji", emoji: "👀" }]);
     expect(reactionApi).toHaveBeenNthCalledWith(2, 123, 456, [{ type: "emoji", emoji: "⏳" }]);
-    expect(reactionApi).toHaveBeenNthCalledWith(3, 123, 456, [{ type: "emoji", emoji: "🌐" }]);
-    expect(reactionApi).toHaveBeenNthCalledWith(4, 123, 456, [{ type: "emoji", emoji: "✅" }]);
-    expect(reactionApi).toHaveBeenNthCalledWith(5, 123, 456, []);
+    expect(reactionApi).toHaveBeenNthCalledWith(3, 123, 456, [{ type: "emoji", emoji: "🤔" }]);
+    expect(reactionApi).toHaveBeenNthCalledWith(4, 123, 456, [{ type: "emoji", emoji: "🌐" }]);
+    expect(reactionApi).toHaveBeenNthCalledWith(5, 123, 456, [{ type: "emoji", emoji: "✅" }]);
+    expect(reactionApi).toHaveBeenNthCalledWith(6, 123, 456, []);
   });
 
   it("sets error reaction when dispatch fails", async () => {

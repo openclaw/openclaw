@@ -113,9 +113,14 @@ function createTelegramStatusReactionController(params: {
         return;
       }
       let lastError: unknown = null;
+      let sawActiveCandidate = false;
       for (const emoji of emojiCandidates) {
-        if (!emoji || activeEmoji === emoji) {
-          return;
+        if (!emoji) {
+          continue;
+        }
+        if (activeEmoji === emoji) {
+          sawActiveCandidate = true;
+          continue;
         }
         try {
           await params.reactionApi(params.chatId, params.messageId, [{ type: "emoji", emoji }]);
@@ -124,6 +129,9 @@ function createTelegramStatusReactionController(params: {
         } catch (err) {
           lastError = err;
         }
+      }
+      if (sawActiveCandidate) {
+        return;
       }
       if (lastError) {
         throw lastError;
