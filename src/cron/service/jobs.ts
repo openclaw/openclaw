@@ -419,6 +419,10 @@ export function applyJobPatch(job: CronJob, patch: CronJobPatch) {
       job.delivery = mergeCronDelivery(job.delivery, legacyDeliveryPatch);
     }
   }
+  if (patch.tools !== undefined) {
+    job.tools = patch.tools;
+  }
+
   if (patch.delivery) {
     job.delivery = mergeCronDelivery(job.delivery, patch.delivery);
   }
