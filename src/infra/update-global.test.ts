@@ -71,6 +71,30 @@ describe("checkDirectoryOwnership", () => {
     expect(result.foreignFiles).toContain(foreignFile);
   });
 
+  it("returns ok:false when a directory is unreadable", async () => {
+    if (typeof process.getuid !== "function") {
+      return;
+    }
+
+    const dir = path.join(tmpDir, "unreadable");
+    await fs.mkdir(dir, { recursive: true });
+    const subDir = path.join(dir, "restricted");
+    await fs.mkdir(subDir, { recursive: true });
+
+    const realReaddir = fs.readdir.bind(fs);
+    vi.spyOn(fs, "readdir").mockImplementation(async (p, opts?) => {
+      if (String(p) === subDir) {
+        throw new Error("EACCES: permission denied");
+      }
+      return realReaddir(p as string, opts as never);
+    });
+
+    const result = await checkDirectoryOwnership(dir);
+
+    expect(result.ok).toBe(false);
+    expect(result.foreignFiles).toContain(subDir);
+  });
+
   it("returns ok:true when process.getuid is unavailable (Windows)", async () => {
     const originalGetuid = process.getuid;
     try {

@@ -175,6 +175,9 @@ export async function checkDirectoryOwnership(dirPath: string): Promise<Director
     try {
       entries = await fs.readdir(dir, { withFileTypes: true });
     } catch {
+      // If we can't read a directory, treat it as a foreign-owned file —
+      // proceeding would let the same EACCES hit npm during the update.
+      foreignFiles.push(dir);
       return;
     }
     for (const entry of entries) {
