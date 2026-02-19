@@ -14,11 +14,17 @@ import {
 
 export { resetBaileysMocks, resetLoadConfigMock, setLoadConfigMock } from "./test-helpers.js";
 
-// Avoid exporting inferred vitest mock types (TS2742 under pnpm + d.ts emit).
-// oxlint-disable-next-line typescript/no-explicit-any
-type AnyExport = any;
-
-export const TEST_NET_IP = "203.0.113.10";
+export function createMockWebListener(): AnyExport {
+  return {
+    close: vi.fn(async () => undefined),
+    onClose: new Promise<WebListenerCloseReason>(() => {}),
+    signalClose: vi.fn(),
+    sendMessage: vi.fn(async () => ({ messageId: "msg-1" })),
+    sendPoll: vi.fn(async () => ({ messageId: "poll-1" })),
+    sendReaction: vi.fn(async () => undefined),
+    sendComposingTo: vi.fn(async () => undefined),
+  };
+}
 
 vi.mock("../agents/pi-embedded.js", () => ({
   abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
