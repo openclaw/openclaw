@@ -211,7 +211,6 @@ function getTextStats(text: string): { printableRatio: number; wordishRatio: num
     const code = char.codePointAt(0) ?? 0;
     if (code === 9 || code === 10 || code === 13 || code === 32) {
       printable += 1;
-      wordish += 1;
       continue;
     }
     if (code < 32 || (code >= 0x7f && code <= 0x9f)) {
