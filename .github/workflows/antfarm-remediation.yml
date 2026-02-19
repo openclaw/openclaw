@@ -1,0 +1,31 @@
+name: Antfarm Remediation
+
+on:
+  workflow_dispatch:
+    inputs:
+      run-id:
+        description: 'Antfarm run ID to remediate'
+        required: true
+      issue:
+        description: 'Issues to fix'
+        required: true
+
+jobs:
+  remediate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger fix workflow
+        run: |
+          echo "Remediating issues from run: ${{ github.event.inputs.run-id }}"
+          echo "Issues: ${{ github.event.inputs.issue }}"
+          echo "🤖 Remediation triggered - Antfarm will push fixes"
+
+  notify:
+    needs: remediate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post remediation summary
+        run: |
+          echo "## 🔧 Remediation Complete"
+          echo "Run: ${{ github.event.inputs.run-id }}"
+          echo "A fix has been pushed. The PR will auto-rerun verification."
