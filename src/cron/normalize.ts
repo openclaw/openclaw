@@ -220,13 +220,10 @@ function normalizeWakeMode(raw: unknown) {
 
 function copyTopLevelAgentTurnFields(next: UnknownRecord, payload: UnknownRecord) {
   const copyString = (field: "model" | "thinking") => {
-    if (typeof payload[field] === "string" && payload[field].trim()) {
+    if (typeof next[field] !== "string" || !next[field].trim()) {
       return;
     }
-    const value = next[field];
-    if (typeof value === "string" && value.trim()) {
-      payload[field] = value.trim();
-    }
+    payload[field] = (next[field] as string).trim();
   };
   copyString("model");
   copyString("thinking");
