@@ -265,14 +265,14 @@ jobs:
         run: |
           set -euo pipefail
           pnpm -s exec -- oxfmt \
-            src/channels/plugins/message-actions.security.test.ts \
             src/channels/plugins/message-actions.ts \
-            src/daemon/schtasks.ts || true
+            src/daemon/schtasks.ts \
+            src/plugins/runtime/index.ts || true
           echo "=== BEGIN oxfmt linux diff ==="
           git diff -- \
-            src/channels/plugins/message-actions.security.test.ts \
             src/channels/plugins/message-actions.ts \
-            src/daemon/schtasks.ts || true
+            src/daemon/schtasks.ts \
+            src/plugins/runtime/index.ts || true
           echo "=== END oxfmt linux diff ==="
 
   # Validate docs (format, lint, broken links) only when docs files changed.
