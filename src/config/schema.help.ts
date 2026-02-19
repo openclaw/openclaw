@@ -33,9 +33,9 @@ export const FIELD_HELP: Record<string, string> = {
   "gateway.controlUi.allowedOrigins":
     "Allowed browser origins for Control UI/WebChat websocket connections (full origins only, e.g. https://control.example.com).",
   "gateway.controlUi.allowInsecureAuth":
-    "Allow Control UI auth over insecure HTTP (token-only; not recommended).",
+    "Allow Control UI auth over insecure HTTP (token-only; not recommended). Requires OPENCLAW_UNSAFE_ALLOW_CONTROL_UI_BYPASS=1 at startup.",
   "gateway.controlUi.dangerouslyDisableDeviceAuth":
-    "DANGEROUS. Disable Control UI device identity checks (token/password only).",
+    "DANGEROUS. Disable Control UI device identity checks (token/password only). Requires OPENCLAW_UNSAFE_ALLOW_CONTROL_UI_BYPASS=1 at startup.",
   "gateway.http.endpoints.chatCompletions.enabled":
     "Enable the OpenAI-compatible `POST /v1/chat/completions` endpoint (default: false).",
   "gateway.reload.mode": 'Hot reload strategy for config changes ("hybrid" recommended).',
