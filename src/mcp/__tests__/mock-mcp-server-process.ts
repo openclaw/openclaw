@@ -68,7 +68,7 @@ for (const tool of config.tools ?? []) {
     }
   }
 
-  server.tool(tool.name, tool.description, shape, async (args) => {
+  server.tool(tool.name, tool.description, shape, async (_args) => {
     callCount++;
 
     // Fault injection: crash after N calls
