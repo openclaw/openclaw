@@ -212,6 +212,12 @@ Periodically (every few days), use a heartbeat to:
 
 Think of it like a human reviewing their journal and updating their mental model. Daily files are raw notes; MEMORY.md is curated wisdom.
 
+### Managing MEMORY.md size
+
+MEMORY.md is injected into context on every main session start but truncated at 20,000 characters.
+When it grows large, run `openclaw memory prune` to archive older sections to `memory/YYYY-MM-DD-archived.md`.
+Run `openclaw memory status` to check current file sizes.
+
 The goal: Be helpful without being annoying. Check in a few times a day, do useful background work, but respect quiet time.
 
 ## Make It Yours

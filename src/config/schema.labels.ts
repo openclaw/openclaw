@@ -134,6 +134,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.envelopeTimezone": "Envelope Timezone",
   "agents.defaults.envelopeTimestamp": "Envelope Timestamp",
   "agents.defaults.envelopeElapsed": "Envelope Elapsed",
+  "agents.defaults.memory.warnChars": "Memory Warn Chars",
+  "agents.defaults.memory.pruneKeepChars": "Memory Prune Keep Chars",
   "agents.defaults.memorySearch": "Memory Search",
   "agents.defaults.memorySearch.enabled": "Enable Memory Search",
   "agents.defaults.memorySearch.sources": "Memory Search Sources",

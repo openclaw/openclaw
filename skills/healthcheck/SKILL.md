@@ -241,5 +241,9 @@ Redact sensitive host details (usernames, hostnames, IPs, serials, service names
 If there are durable preferences or decisions (risk posture, allowed ports, update policy),
 also update `MEMORY.md` (long-term memory is optional and only used in private sessions).
 
+Before writing to MEMORY.md, check its size with `openclaw memory status`. If the file exceeds the
+warning threshold (default: 15,000 chars), run `openclaw memory prune` to archive older sections
+before adding new content.
+
 If the session cannot write to the workspace, ask for permission or provide exact entries
 the user can paste into the memory files.
