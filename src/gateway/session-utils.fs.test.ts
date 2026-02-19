@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
+import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
 import {
   archiveSessionTranscripts,
   readFirstUserMessageFromTranscript,
@@ -12,17 +13,29 @@ import {
   resolveSessionTranscriptCandidates,
 } from "./session-utils.fs.js";
 
+function registerTempSessionStore(
+  prefix: string,
+  assignPaths: (tmpDir: string, storePath: string) => void,
+) {
+  let dir = "";
+  beforeAll(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+    assignPaths(dir, path.join(dir, "sessions.json"));
+  });
+  afterAll(() => {
+    if (dir) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}
+
 describe("readFirstUserMessageFromTranscript", () => {
   let tmpDir: string;
   let storePath: string;
 
-  beforeAll(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-fs-test-"));
-    storePath = path.join(tmpDir, "sessions.json");
-  });
-
-  afterAll(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+  registerTempSessionStore("openclaw-session-fs-test-", (nextTmpDir, nextStorePath) => {
+    tmpDir = nextTmpDir;
+    storePath = nextStorePath;
   });
 
   test("returns null when transcript file does not exist", () => {
@@ -183,13 +196,9 @@ describe("readLastMessagePreviewFromTranscript", () => {
   let tmpDir: string;
   let storePath: string;
 
-  beforeAll(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-fs-test-"));
-    storePath = path.join(tmpDir, "sessions.json");
-  });
-
-  afterAll(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+  registerTempSessionStore("openclaw-session-fs-test-", (nextTmpDir, nextStorePath) => {
+    tmpDir = nextTmpDir;
+    storePath = nextStorePath;
   });
 
   test("returns null when transcript file does not exist", () => {
@@ -372,13 +381,9 @@ describe("readSessionTitleFieldsFromTranscript cache", () => {
   let tmpDir: string;
   let storePath: string;
 
-  beforeAll(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-fs-test-"));
-    storePath = path.join(tmpDir, "sessions.json");
-  });
-
-  afterAll(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+  registerTempSessionStore("openclaw-session-fs-test-", (nextTmpDir, nextStorePath) => {
+    tmpDir = nextTmpDir;
+    storePath = nextStorePath;
   });
 
   test("returns cached values without re-reading when unchanged", () => {
@@ -436,13 +441,9 @@ describe("readSessionMessages", () => {
   let tmpDir: string;
   let storePath: string;
 
-  beforeAll(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-fs-test-"));
-    storePath = path.join(tmpDir, "sessions.json");
-  });
-
-  afterAll(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+  registerTempSessionStore("openclaw-session-fs-test-", (nextTmpDir, nextStorePath) => {
+    tmpDir = nextTmpDir;
+    storePath = nextStorePath;
   });
 
   test("includes synthetic compaction markers for compaction entries", () => {
@@ -535,37 +536,32 @@ describe("readSessionPreviewItemsFromTranscript", () => {
   let tmpDir: string;
   let storePath: string;
 
-  beforeAll(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-preview-test-"));
-    storePath = path.join(tmpDir, "sessions.json");
+  registerTempSessionStore("openclaw-session-preview-test-", (nextTmpDir, nextStorePath) => {
+    tmpDir = nextTmpDir;
+    storePath = nextStorePath;
   });
 
-  afterAll(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  });
-
-  test("returns recent preview items with tool summary", () => {
-    const sessionId = "preview-session";
+  function writeTranscriptLines(sessionId: string, lines: string[]) {
     const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
-    const lines = [
-      JSON.stringify({ type: "session", version: 1, id: sessionId }),
-      JSON.stringify({ message: { role: "user", content: "Hello" } }),
-      JSON.stringify({ message: { role: "assistant", content: "Hi" } }),
-      JSON.stringify({
-        message: { role: "assistant", content: [{ type: "toolcall", name: "weather" }] },
-      }),
-      JSON.stringify({ message: { role: "assistant", content: "Forecast ready" } }),
-    ];
     fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
+  }
 
-    const result = readSessionPreviewItemsFromTranscript(
+  function readPreview(sessionId: string, maxItems = 3, maxChars = 120) {
+    return readSessionPreviewItemsFromTranscript(
       sessionId,
       storePath,
       undefined,
       undefined,
-      3,
-      120,
+      maxItems,
+      maxChars,
     );
+  }
+
+  test("returns recent preview items with tool summary", () => {
+    const sessionId = "preview-session";
+    const lines = createToolSummaryPreviewTranscriptLines(sessionId);
+    writeTranscriptLines(sessionId, lines);
+    const result = readPreview(sessionId);
 
     expect(result.map((item) => item.role)).toEqual(["assistant", "tool", "assistant"]);
     expect(result[1]?.text).toContain("call weather");
@@ -573,7 +569,6 @@ describe("readSessionPreviewItemsFromTranscript", () => {
 
   test("detects tool calls from tool_use/tool_call blocks and toolName field", () => {
     const sessionId = "preview-session-tools";
-    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
     const lines = [
       JSON.stringify({ type: "session", version: 1, id: sessionId }),
       JSON.stringify({ message: { role: "assistant", content: "Hi" } }),
@@ -589,16 +584,8 @@ describe("readSessionPreviewItemsFromTranscript", () => {
       }),
       JSON.stringify({ message: { role: "assistant", content: "Done" } }),
     ];
-    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
-
-    const result = readSessionPreviewItemsFromTranscript(
-      sessionId,
-      storePath,
-      undefined,
-      undefined,
-      3,
-      120,
-    );
+    writeTranscriptLines(sessionId, lines);
+    const result = readPreview(sessionId);
 
     expect(result.map((item) => item.role)).toEqual(["assistant", "tool", "assistant"]);
     expect(result[1]?.text).toContain("call");
@@ -610,19 +597,10 @@ describe("readSessionPreviewItemsFromTranscript", () => {
 
   test("truncates preview text to max chars", () => {
     const sessionId = "preview-truncate";
-    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
     const longText = "a".repeat(60);
     const lines = [JSON.stringify({ message: { role: "assistant", content: longText } })];
-    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
-
-    const result = readSessionPreviewItemsFromTranscript(
-      sessionId,
-      storePath,
-      undefined,
-      undefined,
-      1,
-      24,
-    );
+    writeTranscriptLines(sessionId, lines);
+    const result = readPreview(sessionId, 1, 24);
 
     expect(result).toHaveLength(1);
     expect(result[0]?.text.length).toBe(24);
@@ -692,15 +670,17 @@ describe("archiveSessionTranscripts", () => {
   let tmpDir: string;
   let storePath: string;
 
+  registerTempSessionStore("openclaw-archive-test-", (nextTmpDir, nextStorePath) => {
+    tmpDir = nextTmpDir;
+    storePath = nextStorePath;
+  });
+
   beforeAll(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-archive-test-"));
-    storePath = path.join(tmpDir, "sessions.json");
     vi.stubEnv("OPENCLAW_HOME", tmpDir);
   });
 
   afterAll(() => {
     vi.unstubAllEnvs();
-    fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
   test("archives existing transcript file and returns archived path", () => {

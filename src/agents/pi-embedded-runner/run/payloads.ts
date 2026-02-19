@@ -48,7 +48,11 @@ function shouldShowToolErrorWarning(params: {
   lastToolError: LastToolError;
   hasUserFacingReply: boolean;
   suppressToolErrors: boolean;
+  suppressToolErrorWarnings?: boolean;
 }): boolean {
+  if (params.suppressToolErrorWarnings) {
+    return false;
+  }
   const isMutatingToolError =
     params.lastToolError.mutatingAction ?? isLikelyMutatingToolName(params.lastToolError.toolName);
   if (isMutatingToolError) {
@@ -71,6 +75,7 @@ export function buildEmbeddedRunPayloads(params: {
   verboseLevel?: VerboseLevel;
   reasoningLevel?: ReasoningLevel;
   toolResultFormat?: ToolResultFormat;
+  suppressToolErrorWarnings?: boolean;
   inlineToolResultsAllowed: boolean;
 }): Array<{
   text?: string;
@@ -218,6 +223,7 @@ export function buildEmbeddedRunPayloads(params: {
         : []
   ).filter((text) => !shouldSuppressRawErrorText(text));
 
+  let hasUserFacingAssistantReply = false;
   for (const text of answerTexts) {
     const {
       text: cleanedText,
@@ -238,23 +244,15 @@ export function buildEmbeddedRunPayloads(params: {
       replyToTag,
       replyToCurrent,
     });
+    hasUserFacingAssistantReply = true;
   }
 
   if (params.lastToolError) {
-    const lastAssistantHasToolCalls =
-      Array.isArray(params.lastAssistant?.content) &&
-      params.lastAssistant?.content.some((block) =>
-        block && typeof block === "object"
-          ? (block as { type?: unknown }).type === "toolCall"
-          : false,
-      );
-    const lastAssistantWasToolUse = params.lastAssistant?.stopReason === "toolUse";
-    const hasUserFacingReply =
-      replyItems.length > 0 && !lastAssistantHasToolCalls && !lastAssistantWasToolUse;
     const shouldShowToolError = shouldShowToolErrorWarning({
       lastToolError: params.lastToolError,
-      hasUserFacingReply,
+      hasUserFacingReply: hasUserFacingAssistantReply,
       suppressToolErrors: Boolean(params.config?.messages?.suppressToolErrors),
+      suppressToolErrorWarnings: params.suppressToolErrorWarnings,
     });
 
     // Always surface mutating tool failures so we do not silently confirm actions that did not happen.

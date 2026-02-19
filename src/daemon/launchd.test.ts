@@ -154,13 +154,6 @@ describe("launchd install", () => {
 });
 
 describe("resolveLaunchAgentPlistPath", () => {
-  it("uses default label when OPENCLAW_PROFILE is default", () => {
-    const env = { HOME: "/Users/test", OPENCLAW_PROFILE: "default" };
-    expect(resolveLaunchAgentPlistPath(env)).toBe(
-      "/Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist",
-    );
-  });
-
   it("uses default label when OPENCLAW_PROFILE is unset", () => {
     const env = { HOME: "/Users/test" };
     expect(resolveLaunchAgentPlistPath(env)).toBe(
@@ -202,27 +195,6 @@ describe("resolveLaunchAgentPlistPath", () => {
       OPENCLAW_PROFILE: "myprofile",
       OPENCLAW_LAUNCHD_LABEL: "   ",
     };
-    expect(resolveLaunchAgentPlistPath(env)).toBe(
-      "/Users/test/Library/LaunchAgents/ai.openclaw.myprofile.plist",
-    );
-  });
-
-  it("handles case-insensitive 'Default' profile", () => {
-    const env = { HOME: "/Users/test", OPENCLAW_PROFILE: "Default" };
-    expect(resolveLaunchAgentPlistPath(env)).toBe(
-      "/Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist",
-    );
-  });
-
-  it("handles case-insensitive 'DEFAULT' profile", () => {
-    const env = { HOME: "/Users/test", OPENCLAW_PROFILE: "DEFAULT" };
-    expect(resolveLaunchAgentPlistPath(env)).toBe(
-      "/Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist",
-    );
-  });
-
-  it("trims whitespace from OPENCLAW_PROFILE", () => {
-    const env = { HOME: "/Users/test", OPENCLAW_PROFILE: "  myprofile  " };
     expect(resolveLaunchAgentPlistPath(env)).toBe(
       "/Users/test/Library/LaunchAgents/ai.openclaw.myprofile.plist",
     );

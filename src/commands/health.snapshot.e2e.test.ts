@@ -72,6 +72,33 @@ function stubTelegramFetchOk(calls: string[]) {
   );
 }
 
+async function runSuccessfulTelegramProbe(
+  config: Record<string, unknown>,
+  options?: { clearTokenEnv?: boolean },
+) {
+  testConfig = config;
+  testStore = {};
+  vi.stubEnv("DISCORD_BOT_TOKEN", "");
+  if (options?.clearTokenEnv) {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
+  }
+
+  const calls: string[] = [];
+  stubTelegramFetchOk(calls);
+
+  const snap = await getHealthSnapshot({ timeoutMs: 25 });
+  const telegram = snap.channels.telegram as {
+    configured?: boolean;
+    probe?: {
+      ok?: boolean;
+      bot?: { username?: string };
+      webhook?: { url?: string };
+    };
+  };
+
+  return { calls, telegram };
+}
+
 describe("getHealthSnapshot", () => {
   beforeEach(async () => {
     setActivePluginRegistry(
@@ -112,22 +139,9 @@ describe("getHealthSnapshot", () => {
   });
 
   it("probes telegram getMe + webhook info when configured", async () => {
-    testConfig = { channels: { telegram: { botToken: "t-1" } } };
-    testStore = {};
-    vi.stubEnv("DISCORD_BOT_TOKEN", "");
-
-    const calls: string[] = [];
-    stubTelegramFetchOk(calls);
-
-    const snap = await getHealthSnapshot({ timeoutMs: 25 });
-    const telegram = snap.channels.telegram as {
-      configured?: boolean;
-      probe?: {
-        ok?: boolean;
-        bot?: { username?: string };
-        webhook?: { url?: string };
-      };
-    };
+    const { calls, telegram } = await runSuccessfulTelegramProbe({
+      channels: { telegram: { botToken: "t-1" } },
+    });
     expect(telegram.configured).toBe(true);
     expect(telegram.probe?.ok).toBe(true);
     expect(telegram.probe?.bot?.username).toBe("bot");
@@ -140,18 +154,10 @@ describe("getHealthSnapshot", () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-health-"));
     const tokenFile = path.join(tmpDir, "telegram-token");
     fs.writeFileSync(tokenFile, "t-file\n", "utf-8");
-    testConfig = { channels: { telegram: { tokenFile } } };
-    testStore = {};
-    vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
-
-    const calls: string[] = [];
-    stubTelegramFetchOk(calls);
-
-    const snap = await getHealthSnapshot({ timeoutMs: 25 });
-    const telegram = snap.channels.telegram as {
-      configured?: boolean;
-      probe?: { ok?: boolean };
-    };
+    const { calls, telegram } = await runSuccessfulTelegramProbe(
+      { channels: { telegram: { tokenFile } } },
+      { clearTokenEnv: true },
+    );
     expect(telegram.configured).toBe(true);
     expect(telegram.probe?.ok).toBe(true);
     expect(calls.some((c) => c.includes("bott-file/getMe"))).toBe(true);

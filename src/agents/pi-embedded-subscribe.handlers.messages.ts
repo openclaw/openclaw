@@ -140,7 +140,12 @@ export function handleMessageUpdate(
     })
     .trim();
   if (next) {
+    const wasThinking = ctx.state.partialBlockState.thinking;
     const visibleDelta = chunk ? ctx.stripBlockTags(chunk, ctx.state.partialBlockState) : "";
+    // Detect when thinking block ends (</think> tag processed)
+    if (wasThinking && !ctx.state.partialBlockState.thinking) {
+      void ctx.params.onReasoningEnd?.();
+    }
     const parsedDelta = visibleDelta ? ctx.consumePartialReplyDirectives(visibleDelta) : null;
     const parsedFull = parseReplyDirectives(stripTrailingDirective(next));
     const cleanedText = parsedFull.text;
@@ -196,13 +201,7 @@ export function handleMessageUpdate(
   }
 
   if (evtType === "text_end" && ctx.state.blockReplyBreak === "text_end") {
-    if (ctx.blockChunker?.hasBuffered()) {
-      ctx.blockChunker.drain({ force: true, emit: ctx.emitBlockChunk });
-      ctx.blockChunker.reset();
-    } else if (ctx.state.blockBuffer.length > 0) {
-      ctx.emitBlockChunk(ctx.state.blockBuffer);
-      ctx.state.blockBuffer = "";
-    }
+    ctx.flushBlockReplyBuffer();
   }
 }
 

@@ -1,55 +1,34 @@
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
+import { withEnvOverride } from "../config/test-helpers.js";
+import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 
-const callGateway = vi.fn(async () => ({ ok: true }));
-const startGatewayServer = vi.fn(async () => ({
+type DiscoveredBeacon = Awaited<
+  ReturnType<typeof import("../infra/bonjour-discovery.js").discoverGatewayBeacons>
+>[number];
+
+const callGateway = vi.fn<(opts: unknown) => Promise<{ ok: true }>>(async () => ({ ok: true }));
+const startGatewayServer = vi.fn<
+  (port: number, opts?: unknown) => Promise<{ close: () => Promise<void> }>
+>(async () => ({
   close: vi.fn(async () => {}),
 }));
 const setVerbose = vi.fn();
-const forceFreePortAndWait = vi.fn(async () => ({
+const forceFreePortAndWait = vi.fn<
+  (port: number) => Promise<{ killed: unknown[]; waitedMs: number; escalatedToSigkill: boolean }>
+>(async () => ({
   killed: [],
   waitedMs: 0,
   escalatedToSigkill: false,
 }));
 const serviceIsLoaded = vi.fn().mockResolvedValue(true);
-const discoverGatewayBeacons = vi.fn(async () => []);
-const gatewayStatusCommand = vi.fn(async () => {});
+const discoverGatewayBeacons = vi.fn<(opts: unknown) => Promise<DiscoveredBeacon[]>>(
+  async () => [],
+);
+const gatewayStatusCommand = vi.fn<(opts: unknown) => Promise<void>>(async () => {});
 
-const runtimeLogs: string[] = [];
-const runtimeErrors: string[] = [];
-const defaultRuntime = {
-  log: (msg: string) => runtimeLogs.push(msg),
-  error: (msg: string) => runtimeErrors.push(msg),
-  exit: (code: number) => {
-    throw new Error(`__exit__:${code}`);
-  },
-};
-
-async function withEnvOverride<T>(
-  overrides: Record<string, string | undefined>,
-  fn: () => Promise<T>,
-): Promise<T> {
-  const saved: Record<string, string | undefined> = {};
-  for (const key of Object.keys(overrides)) {
-    saved[key] = process.env[key];
-    if (overrides[key] === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = overrides[key];
-    }
-  }
-  try {
-    return await fn();
-  } finally {
-    for (const key of Object.keys(saved)) {
-      if (saved[key] === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = saved[key];
-      }
-    }
-  }
-}
+const { runtimeLogs, runtimeErrors, defaultRuntime, resetRuntimeCapture } =
+  createCliRuntimeCapture();
 
 vi.mock(
   new URL("../../gateway/call.ts", new URL("./gateway-cli/call.ts", import.meta.url)).href,
@@ -108,8 +87,7 @@ vi.mock("../commands/gateway-status.js", () => ({
 
 describe("gateway-cli coverage", () => {
   it("registers call/health commands and routes to callGateway", async () => {
-    runtimeLogs.length = 0;
-    runtimeErrors.length = 0;
+    resetRuntimeCapture();
     callGateway.mockClear();
 
     const { registerGatewayCli } = await import("./gateway-cli.js");
@@ -126,8 +104,7 @@ describe("gateway-cli coverage", () => {
   }, 60_000);
 
   it("registers gateway probe and routes to gatewayStatusCommand", async () => {
-    runtimeLogs.length = 0;
-    runtimeErrors.length = 0;
+    resetRuntimeCapture();
     gatewayStatusCommand.mockClear();
 
     const { registerGatewayCli } = await import("./gateway-cli.js");
@@ -141,8 +118,7 @@ describe("gateway-cli coverage", () => {
   }, 60_000);
 
   it("registers gateway discover and prints JSON", async () => {
-    runtimeLogs.length = 0;
-    runtimeErrors.length = 0;
+    resetRuntimeCapture();
     discoverGatewayBeacons.mockReset();
     discoverGatewayBeacons.mockResolvedValueOnce([
       {
@@ -173,8 +149,7 @@ describe("gateway-cli coverage", () => {
   });
 
   it("registers gateway discover and prints human output with details on new lines", async () => {
-    runtimeLogs.length = 0;
-    runtimeErrors.length = 0;
+    resetRuntimeCapture();
     discoverGatewayBeacons.mockReset();
     discoverGatewayBeacons.mockResolvedValueOnce([
       {
@@ -208,8 +183,7 @@ describe("gateway-cli coverage", () => {
   });
 
   it("validates gateway discover timeout", async () => {
-    runtimeLogs.length = 0;
-    runtimeErrors.length = 0;
+    resetRuntimeCapture();
     discoverGatewayBeacons.mockReset();
 
     const { registerGatewayCli } = await import("./gateway-cli.js");
@@ -228,8 +202,7 @@ describe("gateway-cli coverage", () => {
   });
 
   it("fails gateway call on invalid params JSON", async () => {
-    runtimeLogs.length = 0;
-    runtimeErrors.length = 0;
+    resetRuntimeCapture();
     callGateway.mockClear();
 
     const { registerGatewayCli } = await import("./gateway-cli.js");
@@ -246,8 +219,7 @@ describe("gateway-cli coverage", () => {
   });
 
   it("validates gateway ports and handles force/start errors", async () => {
-    runtimeLogs.length = 0;
-    runtimeErrors.length = 0;
+    resetRuntimeCapture();
 
     const { registerGatewayCli } = await import("./gateway-cli.js");
 
@@ -303,8 +275,7 @@ describe("gateway-cli coverage", () => {
   });
 
   it("prints stop hints on GatewayLockError when service is loaded", async () => {
-    runtimeLogs.length = 0;
-    runtimeErrors.length = 0;
+    resetRuntimeCapture();
     serviceIsLoaded.mockResolvedValue(true);
 
     const { GatewayLockError } = await import("../infra/gateway-lock.js");
@@ -330,8 +301,7 @@ describe("gateway-cli coverage", () => {
 
   it("uses env/config port when --port is omitted", async () => {
     await withEnvOverride({ OPENCLAW_GATEWAY_PORT: "19001" }, async () => {
-      runtimeLogs.length = 0;
-      runtimeErrors.length = 0;
+      resetRuntimeCapture();
       startGatewayServer.mockClear();
 
       const { registerGatewayCli } = await import("./gateway-cli.js");

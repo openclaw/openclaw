@@ -14,6 +14,7 @@ import { healthHandlers } from "./server-methods/health.js";
 import { logsHandlers } from "./server-methods/logs.js";
 import { modelsHandlers } from "./server-methods/models.js";
 import { nodeHandlers } from "./server-methods/nodes.js";
+import { pushHandlers } from "./server-methods/push.js";
 import { sendHandlers } from "./server-methods/send.js";
 import { sessionsHandlers } from "./server-methods/sessions.js";
 import { skillsHandlers } from "./server-methods/skills.js";
@@ -47,6 +48,7 @@ const PAIRING_METHODS = new Set([
   "device.pair.list",
   "device.pair.approve",
   "device.pair.reject",
+  "device.pair.remove",
   "device.token.rotate",
   "device.token.revoke",
   "node.rename",
@@ -96,6 +98,7 @@ const WRITE_METHODS = new Set([
   "chat.abort",
   "browser.request",
   "matrix.verify.recoveryKey",
+  "push.test",
 ]);
 
 function authorizeGatewayMethod(method: string, client: GatewayRequestOptions["client"]) {
@@ -191,6 +194,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...systemHandlers,
   ...updateHandlers,
   ...nodeHandlers,
+  ...pushHandlers,
   ...sendHandlers,
   ...usageHandlers,
   ...agentHandlers,

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   createPinnedLookup,
+  type LookupFn,
   resolvePinnedHostname,
   resolvePinnedHostnameWithPolicy,
 } from "./ssrf.js";
@@ -10,7 +11,7 @@ describe("ssrf pinning", () => {
     const lookup = vi.fn(async () => [
       { address: "93.184.216.34", family: 4 },
       { address: "93.184.216.35", family: 4 },
-    ]);
+    ]) as unknown as LookupFn;
 
     const pinned = await resolvePinnedHostname("Example.com.", lookup);
     expect(pinned.hostname).toBe("example.com");
@@ -44,7 +45,7 @@ describe("ssrf pinning", () => {
   });
 
   it("rejects private DNS results", async () => {
-    const lookup = vi.fn(async () => [{ address: "10.0.0.8", family: 4 }]);
+    const lookup = vi.fn(async () => [{ address: "10.0.0.8", family: 4 }]) as unknown as LookupFn;
     await expect(resolvePinnedHostname("example.com", lookup)).rejects.toThrow(/private|internal/i);
   });
 
@@ -52,7 +53,7 @@ describe("ssrf pinning", () => {
     const fallback = vi.fn((host: string, options?: unknown, callback?: unknown) => {
       const cb = typeof options === "function" ? options : (callback as () => void);
       (cb as (err: null, address: string, family: number) => void)(null, "1.2.3.4", 4);
-    });
+    }) as unknown as Parameters<typeof createPinnedLookup>[0]["fallback"];
     const lookup = createPinnedLookup({
       hostname: "example.com",
       addresses: ["93.184.216.34"],
@@ -74,7 +75,9 @@ describe("ssrf pinning", () => {
   });
 
   it("enforces hostname allowlist when configured", async () => {
-    const lookup = vi.fn(async () => [{ address: "93.184.216.34", family: 4 }]);
+    const lookup = vi.fn(async () => [
+      { address: "93.184.216.34", family: 4 },
+    ]) as unknown as LookupFn;
 
     await expect(
       resolvePinnedHostnameWithPolicy("api.example.com", {
@@ -86,7 +89,9 @@ describe("ssrf pinning", () => {
   });
 
   it("supports wildcard hostname allowlist patterns", async () => {
-    const lookup = vi.fn(async () => [{ address: "93.184.216.34", family: 4 }]);
+    const lookup = vi.fn(async () => [
+      { address: "93.184.216.34", family: 4 },
+    ]) as unknown as LookupFn;
 
     await expect(
       resolvePinnedHostnameWithPolicy("assets.example.com", {

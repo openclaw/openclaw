@@ -2,8 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import { splitArgsPreservingQuotes } from "./arg-split.js";
-import { formatGatewayServiceDescription, resolveGatewayWindowsTaskName } from "./constants.js";
-import { formatLine } from "./output.js";
+import { resolveGatewayServiceDescription, resolveGatewayWindowsTaskName } from "./constants.js";
+import { formatLine, writeFormattedLines } from "./output.js";
 import { resolveGatewayStateDir } from "./paths.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
 import { execSchtasks } from "./schtasks-exec.js";
@@ -190,12 +190,7 @@ export async function installScheduledTask({
   await assertSchtasksAvailable();
   const scriptPath = resolveTaskScriptPath(env);
   await fs.mkdir(path.dirname(scriptPath), { recursive: true });
-  const taskDescription =
-    description ??
-    formatGatewayServiceDescription({
-      profile: env.OPENCLAW_PROFILE,
-      version: environment?.OPENCLAW_SERVICE_VERSION ?? env.OPENCLAW_SERVICE_VERSION,
-    });
+  const taskDescription = resolveGatewayServiceDescription({ env, environment, description });
   const script = buildTaskScript({
     description: taskDescription,
     programArguments,
@@ -235,9 +230,14 @@ export async function installScheduledTask({
 
   await execSchtasks(["/Run", "/TN", taskName]);
   // Ensure we don't end up writing to a clack spinner line (wizards show progress without a newline).
-  stdout.write("\n");
-  stdout.write(`${formatLine("Installed Scheduled Task", taskName)}\n`);
-  stdout.write(`${formatLine("Task script", scriptPath)}\n`);
+  writeFormattedLines(
+    stdout,
+    [
+      { label: "Installed Scheduled Task", value: taskName },
+      { label: "Task script", value: scriptPath },
+    ],
+    { leadingBlankLine: true },
+  );
   return { scriptPath };
 }
 

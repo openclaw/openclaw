@@ -6,6 +6,7 @@ import { Readable } from "stream";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { getFeishuRuntime } from "./runtime.js";
+import { assertFeishuMessageApiSuccess, toFeishuSendResult } from "./send-result.js";
 import { resolveReceiveIdType, normalizeFeishuTarget } from "./targets.js";
 
 export type DownloadImageResult = {
@@ -283,15 +284,8 @@ export async function sendImageFeishu(params: {
         msg_type: "image",
       },
     });
-
-    if (response.code !== 0) {
-      throw new Error(`Feishu image reply failed: ${response.msg || `code ${response.code}`}`);
-    }
-
-    return {
-      messageId: response.data?.message_id ?? "unknown",
-      chatId: receiveId,
-    };
+    assertFeishuMessageApiSuccess(response, "Feishu image reply failed");
+    return toFeishuSendResult(response, receiveId);
   }
 
   const response = await client.im.message.create({
@@ -302,15 +296,8 @@ export async function sendImageFeishu(params: {
       msg_type: "image",
     },
   });
-
-  if (response.code !== 0) {
-    throw new Error(`Feishu image send failed: ${response.msg || `code ${response.code}`}`);
-  }
-
-  return {
-    messageId: response.data?.message_id ?? "unknown",
-    chatId: receiveId,
-  };
+  assertFeishuMessageApiSuccess(response, "Feishu image send failed");
+  return toFeishuSendResult(response, receiveId);
 }
 
 /**
@@ -349,15 +336,8 @@ export async function sendFileFeishu(params: {
         msg_type: msgType,
       },
     });
-
-    if (response.code !== 0) {
-      throw new Error(`Feishu file reply failed: ${response.msg || `code ${response.code}`}`);
-    }
-
-    return {
-      messageId: response.data?.message_id ?? "unknown",
-      chatId: receiveId,
-    };
+    assertFeishuMessageApiSuccess(response, "Feishu file reply failed");
+    return toFeishuSendResult(response, receiveId);
   }
 
   const response = await client.im.message.create({
@@ -368,15 +348,8 @@ export async function sendFileFeishu(params: {
       msg_type: msgType,
     },
   });
-
-  if (response.code !== 0) {
-    throw new Error(`Feishu file send failed: ${response.msg || `code ${response.code}`}`);
-  }
-
-  return {
-    messageId: response.data?.message_id ?? "unknown",
-    chatId: receiveId,
-  };
+  assertFeishuMessageApiSuccess(response, "Feishu file send failed");
+  return toFeishuSendResult(response, receiveId);
 }
 
 /**

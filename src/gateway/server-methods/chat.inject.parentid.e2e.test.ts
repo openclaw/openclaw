@@ -26,7 +26,7 @@ describe("gateway chat.inject transcript writes", () => {
     );
 
     vi.doMock("../session-utils.js", async (importOriginal) => {
-      const original = await importOriginal();
+      const original = await importOriginal<typeof import("../session-utils.js")>();
       return {
         ...original,
         loadSessionEntry: () => ({
@@ -50,7 +50,10 @@ describe("gateway chat.inject transcript writes", () => {
     await chatHandlers["chat.inject"]({
       params: { sessionKey: "k1", message: "hello" },
       respond,
-      context,
+      req: {} as never,
+      client: null as never,
+      isWebchatConnect: () => false,
+      context: context as unknown as GatewayRequestContext,
     });
 
     expect(respond).toHaveBeenCalled();

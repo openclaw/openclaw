@@ -9,6 +9,7 @@ import {
   DEFAULT_ACCOUNT_ID,
   addWildcardAllowFrom,
   formatDocsLink,
+  mergeAllowFromEntries,
   normalizeAccountId,
   promptAccountId,
 } from "openclaw/plugin-sdk";
@@ -127,7 +128,7 @@ async function promptBlueBubblesAllowFrom(params: {
     },
   });
   const parts = parseBlueBubblesAllowFromInput(String(entry));
-  const unique = [...new Set(parts)];
+  const unique = mergeAllowFromEntries(undefined, parts);
   return setBlueBubblesAllowFrom(params.cfg, accountId, unique);
 }
 

@@ -59,15 +59,20 @@ export const isLocalBaseUrl = (baseUrl: string) => {
   }
 };
 
-export async function updateConfig(
-  mutator: (cfg: OpenClawConfig) => OpenClawConfig,
-): Promise<OpenClawConfig> {
+export async function loadValidConfigOrThrow(): Promise<OpenClawConfig> {
   const snapshot = await readConfigFileSnapshot();
   if (!snapshot.valid) {
     const issues = snapshot.issues.map((issue) => `- ${issue.path}: ${issue.message}`).join("\n");
     throw new Error(`Invalid config at ${snapshot.path}\n${issues}`);
   }
-  const next = mutator(snapshot.config);
+  return snapshot.config;
+}
+
+export async function updateConfig(
+  mutator: (cfg: OpenClawConfig) => OpenClawConfig,
+): Promise<OpenClawConfig> {
+  const config = await loadValidConfigOrThrow();
+  const next = mutator(config);
   await writeConfigFile(next);
   return next;
 }
@@ -167,6 +172,37 @@ export function mergePrimaryFallbackConfig(
     next.fallbacks = patch.fallbacks;
   }
   return next;
+}
+
+export function applyDefaultModelPrimaryUpdate(params: {
+  cfg: OpenClawConfig;
+  modelRaw: string;
+  field: "model" | "imageModel";
+}): OpenClawConfig {
+  const resolved = resolveModelTarget({ raw: params.modelRaw, cfg: params.cfg });
+  const key = `${resolved.provider}/${resolved.model}`;
+
+  const nextModels = { ...params.cfg.agents?.defaults?.models };
+  if (!nextModels[key]) {
+    nextModels[key] = {};
+  }
+
+  const defaults = params.cfg.agents?.defaults ?? {};
+  const existing = (defaults as Record<string, unknown>)[params.field] as
+    | PrimaryFallbackConfig
+    | undefined;
+
+  return {
+    ...params.cfg,
+    agents: {
+      ...params.cfg.agents,
+      defaults: {
+        ...defaults,
+        [params.field]: mergePrimaryFallbackConfig(existing, { primary: key }),
+        models: nextModels,
+      },
+    },
+  };
 }
 
 export { modelKey };

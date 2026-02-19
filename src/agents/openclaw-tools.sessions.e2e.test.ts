@@ -20,23 +20,25 @@ vi.mock("../config/config.js", async (importOriginal) => {
         scope: "per-sender",
         agentToAgent: { maxPingPongTurns: 2 },
       },
+      tools: {
+        // Keep sessions tools permissive in this suite; dedicated visibility tests cover defaults.
+        sessions: { visibility: "all" },
+      },
     }),
     resolveGatewayPort: () => 18789,
   };
 });
 
 import "./test-helpers/fast-core-tools.js";
-import { sleep } from "../utils.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 
 const waitForCalls = async (getCount: () => number, count: number, timeoutMs = 2000) => {
-  const start = Date.now();
-  while (getCount() < count) {
-    if (Date.now() - start > timeoutMs) {
-      throw new Error(`timed out waiting for ${count} calls`);
-    }
-    await sleep(0);
-  }
+  await vi.waitFor(
+    () => {
+      expect(getCount()).toBeGreaterThanOrEqual(count);
+    },
+    { timeout: timeoutMs, interval: 5 },
+  );
 };
 
 describe("sessions tools", () => {
@@ -136,7 +138,11 @@ describe("sessions tools", () => {
 
     const result = await tool.execute("call1", { messageLimit: 1 });
     const details = result.details as {
-      sessions?: Array<Record<string, unknown>>;
+      sessions?: Array<{
+        key?: string;
+        channel?: string;
+        messages?: Array<{ role?: string }>;
+      }>;
     };
     expect(details.sessions).toHaveLength(3);
     const main = details.sessions?.find((s) => s.key === "main");
@@ -174,7 +180,7 @@ describe("sessions tools", () => {
     }
 
     const result = await tool.execute("call3", { sessionKey: "main" });
-    const details = result.details as { messages?: unknown[] };
+    const details = result.details as { messages?: Array<{ role?: string }> };
     expect(details.messages).toHaveLength(1);
     expect(details.messages?.[0]?.role).toBe("assistant");
 
@@ -649,8 +655,12 @@ describe("sessions tools", () => {
       status: "ok",
       reply: "initial",
     });
-    await sleep(0);
-    await sleep(0);
+    await vi.waitFor(
+      () => {
+        expect(calls.filter((call) => call.method === "agent")).toHaveLength(4);
+      },
+      { timeout: 2_000, interval: 5 },
+    );
 
     const agentCalls = calls.filter((call) => call.method === "agent");
     expect(agentCalls).toHaveLength(4);
@@ -760,6 +770,8 @@ describe("sessions tools", () => {
       .spyOn(sessionsModule, "loadSessionStore")
       .mockImplementation(() => ({
         "agent:main:subagent:usage-active": {
+          sessionId: "session-usage-active",
+          updatedAt: now,
           modelProvider: "anthropic",
           model: "claude-opus-4-6",
           inputTokens: 12,
@@ -783,7 +795,7 @@ describe("sessions tools", () => {
         text?: string;
       };
       expect(details.status).toBe("ok");
-      expect(details.text).toContain("tokens 1k (in 12 / out 1k)");
+      expect(details.text).toMatch(/tokens 1(\.0)?k \(in 12 \/ out 1(\.0)?k\)/);
       expect(details.text).toContain("prompt/cache 197k");
       expect(details.text).not.toContain("1.0k io");
     } finally {

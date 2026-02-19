@@ -75,7 +75,10 @@ afterEach(() => {
 });
 
 describe("runHeartbeatOnce – heartbeat model override", () => {
-  async function runDefaultsHeartbeat(params: { model?: string }) {
+  async function runDefaultsHeartbeat(params: {
+    model?: string;
+    suppressToolErrorWarnings?: boolean;
+  }) {
     return withHeartbeatFixture(async ({ tmpDir, storePath, seedSession }) => {
       const cfg: OpenClawConfig = {
         agents: {
@@ -85,6 +88,7 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
               every: "5m",
               target: "whatsapp",
               model: params.model,
+              suppressToolErrorWarnings: params.suppressToolErrorWarnings,
             },
           },
         },
@@ -112,10 +116,23 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
 
   it("passes heartbeatModelOverride from defaults heartbeat config", async () => {
     const replyOpts = await runDefaultsHeartbeat({ model: "ollama/llama3.2:1b" });
-    expect(replyOpts).toEqual({
-      isHeartbeat: true,
-      heartbeatModelOverride: "ollama/llama3.2:1b",
-    });
+    expect(replyOpts).toEqual(
+      expect.objectContaining({
+        isHeartbeat: true,
+        heartbeatModelOverride: "ollama/llama3.2:1b",
+        suppressToolErrorWarnings: false,
+      }),
+    );
+  });
+
+  it("passes suppressToolErrorWarnings when configured", async () => {
+    const replyOpts = await runDefaultsHeartbeat({ suppressToolErrorWarnings: true });
+    expect(replyOpts).toEqual(
+      expect.objectContaining({
+        isHeartbeat: true,
+        suppressToolErrorWarnings: true,
+      }),
+    );
   });
 
   it("passes per-agent heartbeat model override (merged with defaults)", async () => {
@@ -171,14 +188,20 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
 
   it("does not pass heartbeatModelOverride when no heartbeat model is configured", async () => {
     const replyOpts = await runDefaultsHeartbeat({ model: undefined });
-    expect(replyOpts).toStrictEqual({ isHeartbeat: true });
+    expect(replyOpts).toEqual(
+      expect.objectContaining({
+        isHeartbeat: true,
+      }),
+    );
   });
 
   it("trims heartbeat model override before passing it downstream", async () => {
     const replyOpts = await runDefaultsHeartbeat({ model: "  ollama/llama3.2:1b  " });
-    expect(replyOpts).toEqual({
-      isHeartbeat: true,
-      heartbeatModelOverride: "ollama/llama3.2:1b",
-    });
+    expect(replyOpts).toEqual(
+      expect.objectContaining({
+        isHeartbeat: true,
+        heartbeatModelOverride: "ollama/llama3.2:1b",
+      }),
+    );
   });
 });

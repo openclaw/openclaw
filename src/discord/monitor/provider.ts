@@ -1,5 +1,10 @@
 import type { GatewayPlugin } from "@buape/carbon/gateway";
-import { Client, ReadyListener, type BaseMessageInteractiveComponent } from "@buape/carbon";
+import {
+  Client,
+  ReadyListener,
+  type BaseMessageInteractiveComponent,
+  type Modal,
+} from "@buape/carbon";
 import { Routes } from "discord-api-types/v10";
 import { inspect } from "node:util";
 import type { HistoryEntry } from "../../auto-reply/reply/history.js";
@@ -33,7 +38,17 @@ import { fetchDiscordApplicationId } from "../probe.js";
 import { resolveDiscordChannelAllowlist } from "../resolve-channels.js";
 import { resolveDiscordUserAllowlist } from "../resolve-users.js";
 import { normalizeDiscordToken } from "../token.js";
-import { createAgentComponentButton, createAgentSelectMenu } from "./agent-components.js";
+import {
+  createAgentComponentButton,
+  createAgentSelectMenu,
+  createDiscordComponentButton,
+  createDiscordComponentChannelSelect,
+  createDiscordComponentMentionableSelect,
+  createDiscordComponentModal,
+  createDiscordComponentRoleSelect,
+  createDiscordComponentStringSelect,
+  createDiscordComponentUserSelect,
+} from "./agent-components.js";
 import { createExecApprovalButton, DiscordExecApprovalHandler } from "./exec-approvals.js";
 import { createDiscordGatewayPlugin } from "./gateway-plugin.js";
 import { registerGateway, unregisterGateway } from "./gateway-registry.js";
@@ -50,6 +65,7 @@ import {
   createDiscordNativeCommand,
 } from "./native-command.js";
 import { resolveDiscordPresenceUpdate } from "./presence.js";
+import { resolveDiscordRestFetch } from "./rest-fetch.js";
 
 export type MonitorDiscordOpts = {
   token?: string;
@@ -62,7 +78,7 @@ export type MonitorDiscordOpts = {
   replyToMode?: ReplyToMode;
 };
 
-function summarizeAllowList(list?: Array<string | number>) {
+function summarizeAllowList(list?: string[]) {
   if (!list || list.length === 0) {
     return "any";
   }
@@ -79,6 +95,26 @@ function summarizeGuilds(entries?: Record<string, unknown>) {
   const sample = keys.slice(0, 4);
   const suffix = keys.length > sample.length ? ` (+${keys.length - sample.length})` : "";
   return `${sample.join(", ")}${suffix}`;
+}
+
+function dedupeSkillCommandsForDiscord(
+  skillCommands: ReturnType<typeof listSkillCommandsForAgents>,
+) {
+  const seen = new Set<string>();
+  const deduped: ReturnType<typeof listSkillCommandsForAgents> = [];
+  for (const command of skillCommands) {
+    const key = command.skillName.trim().toLowerCase();
+    if (!key) {
+      deduped.push(command);
+      continue;
+    }
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(command);
+  }
+  return deduped;
 }
 
 async function deployDiscordCommands(params: {
@@ -147,6 +183,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   const runtime: RuntimeEnv = opts.runtime ?? createNonExitingRuntime();
 
   const discordCfg = account.config;
+  const discordRestFetch = resolveDiscordRestFetch(discordCfg.proxy, runtime);
   const dmConfig = discordCfg.dm;
   let guildEntries = discordCfg.guilds;
   const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
@@ -222,6 +259,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
           const resolved = await resolveDiscordChannelAllowlist({
             token,
             entries: entries.map((entry) => entry.input),
+            fetcher: discordRestFetch,
           });
           const nextGuilds = { ...guildEntries };
           const mapping: string[] = [];
@@ -278,6 +316,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         const resolvedUsers = await resolveDiscordUserAllowlist({
           token,
           entries: allowEntries.map((entry) => String(entry)),
+          fetcher: discordRestFetch,
         });
         const { mapping, unresolved, additions } = buildAllowlistResolutionSummary(resolvedUsers);
         allowFrom = mergeAllowlist({ existing: allowFrom, additions });
@@ -307,6 +346,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
           const resolvedUsers = await resolveDiscordUserAllowlist({
             token,
             entries: Array.from(userEntries),
+            fetcher: discordRestFetch,
           });
           const { resolvedMap, mapping, unresolved } =
             buildAllowlistResolutionSummary(resolvedUsers);
@@ -317,7 +357,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
               continue;
             }
             const nextGuild = { ...guildConfig } as Record<string, unknown>;
-            const users = (guildConfig as { users?: Array<string | number> }).users;
+            const users = (guildConfig as { users?: string[] }).users;
             if (Array.isArray(users) && users.length > 0) {
               const additions = resolveAllowlistIdAdditions({ existing: users, resolvedMap });
               nextGuild.users = mergeAllowlist({ existing: users, additions });
@@ -348,14 +388,16 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     );
   }
 
-  const applicationId = await fetchDiscordApplicationId(token, 4000);
+  const applicationId = await fetchDiscordApplicationId(token, 4000, discordRestFetch);
   if (!applicationId) {
     throw new Error("Failed to resolve Discord application id");
   }
 
   const maxDiscordCommands = 100;
   let skillCommands =
-    nativeEnabled && nativeSkillsEnabled ? listSkillCommandsForAgents({ cfg }) : [];
+    nativeEnabled && nativeSkillsEnabled
+      ? dedupeSkillCommandsForDiscord(listSkillCommandsForAgents({ cfg }))
+      : [];
   let commandSpecs = nativeEnabled
     ? listNativeCommandSpecsForConfig(cfg, { skillCommands, provider: "discord" })
     : [];
@@ -410,30 +452,32 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       sessionPrefix,
     }),
   ];
+  const modals: Modal[] = [];
 
   if (execApprovalsHandler) {
     components.push(createExecApprovalButton({ handler: execApprovalsHandler }));
   }
 
   if (agentComponentsEnabled) {
-    components.push(
-      createAgentComponentButton({
-        cfg,
-        accountId: account.accountId,
-        guildEntries,
-        allowFrom,
-        dmPolicy,
-      }),
-    );
-    components.push(
-      createAgentSelectMenu({
-        cfg,
-        accountId: account.accountId,
-        guildEntries,
-        allowFrom,
-        dmPolicy,
-      }),
-    );
+    const componentContext = {
+      cfg,
+      discordConfig: discordCfg,
+      accountId: account.accountId,
+      guildEntries,
+      allowFrom,
+      dmPolicy,
+      runtime,
+      token,
+    };
+    components.push(createAgentComponentButton(componentContext));
+    components.push(createAgentSelectMenu(componentContext));
+    components.push(createDiscordComponentButton(componentContext));
+    components.push(createDiscordComponentStringSelect(componentContext));
+    components.push(createDiscordComponentUserSelect(componentContext));
+    components.push(createDiscordComponentRoleSelect(componentContext));
+    components.push(createDiscordComponentMentionableSelect(componentContext));
+    components.push(createDiscordComponentChannelSelect(componentContext));
+    modals.push(createDiscordComponentModal(componentContext));
   }
 
   class DiscordStatusReadyListener extends ReadyListener {
@@ -465,6 +509,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       commands,
       listeners: [new DiscordStatusReadyListener()],
       components,
+      modals,
     },
     [createDiscordGatewayPlugin({ discordConfig: discordCfg, runtime })],
   );
@@ -648,4 +693,6 @@ async function clearDiscordNativeCommands(params: {
 
 export const __testing = {
   createDiscordGatewayPlugin,
+  dedupeSkillCommandsForDiscord,
+  resolveDiscordRestFetch,
 };

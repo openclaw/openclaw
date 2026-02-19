@@ -22,14 +22,12 @@ describe("downloadMatrixMedia", () => {
     setMatrixRuntime(runtimeStub);
   });
 
-  it("decrypts encrypted media when file payloads are present", async () => {
+  function makeEncryptedMediaFixture() {
     const decryptMedia = vi.fn().mockResolvedValue(Buffer.from("decrypted"));
-
     const client = {
       crypto: { decryptMedia },
       mxcToHttp: vi.fn().mockReturnValue("https://example/mxc"),
     } as unknown as import("@vector-im/matrix-bot-sdk").MatrixClient;
-
     const file = {
       url: "mxc://example/file",
       key: {
@@ -43,6 +41,11 @@ describe("downloadMatrixMedia", () => {
       hashes: { sha256: "hash" },
       v: "v2",
     };
+    return { decryptMedia, client, file };
+  }
+
+  it("decrypts encrypted media when file payloads are present", async () => {
+    const { decryptMedia, client, file } = makeEncryptedMediaFixture();
 
     const result = await downloadMatrixMedia({
       client,
@@ -64,26 +67,7 @@ describe("downloadMatrixMedia", () => {
   });
 
   it("rejects encrypted media that exceeds maxBytes before decrypting", async () => {
-    const decryptMedia = vi.fn().mockResolvedValue(Buffer.from("decrypted"));
-
-    const client = {
-      crypto: { decryptMedia },
-      mxcToHttp: vi.fn().mockReturnValue("https://example/mxc"),
-    } as unknown as import("@vector-im/matrix-bot-sdk").MatrixClient;
-
-    const file = {
-      url: "mxc://example/file",
-      key: {
-        kty: "oct",
-        key_ops: ["encrypt", "decrypt"],
-        alg: "A256CTR",
-        k: "secret",
-        ext: true,
-      },
-      iv: "iv",
-      hashes: { sha256: "hash" },
-      v: "v2",
-    };
+    const { decryptMedia, client, file } = makeEncryptedMediaFixture();
 
     await expect(
       downloadMatrixMedia({

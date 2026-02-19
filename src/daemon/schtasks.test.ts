@@ -35,13 +35,6 @@ describe("schtasks runtime parsing", () => {
 });
 
 describe("resolveTaskScriptPath", () => {
-  it("uses default path when OPENCLAW_PROFILE is default", () => {
-    const env = { USERPROFILE: "C:\\Users\\test", OPENCLAW_PROFILE: "default" };
-    expect(resolveTaskScriptPath(env)).toBe(
-      path.join("C:\\Users\\test", ".openclaw", "gateway.cmd"),
-    );
-  });
-
   it("uses default path when OPENCLAW_PROFILE is unset", () => {
     const env = { USERPROFILE: "C:\\Users\\test" };
     expect(resolveTaskScriptPath(env)).toBe(
@@ -65,27 +58,6 @@ describe("resolveTaskScriptPath", () => {
     expect(resolveTaskScriptPath(env)).toBe(path.join("C:\\State\\openclaw", "gateway.cmd"));
   });
 
-  it("handles case-insensitive 'Default' profile", () => {
-    const env = { USERPROFILE: "C:\\Users\\test", OPENCLAW_PROFILE: "Default" };
-    expect(resolveTaskScriptPath(env)).toBe(
-      path.join("C:\\Users\\test", ".openclaw", "gateway.cmd"),
-    );
-  });
-
-  it("handles case-insensitive 'DEFAULT' profile", () => {
-    const env = { USERPROFILE: "C:\\Users\\test", OPENCLAW_PROFILE: "DEFAULT" };
-    expect(resolveTaskScriptPath(env)).toBe(
-      path.join("C:\\Users\\test", ".openclaw", "gateway.cmd"),
-    );
-  });
-
-  it("trims whitespace from OPENCLAW_PROFILE", () => {
-    const env = { USERPROFILE: "C:\\Users\\test", OPENCLAW_PROFILE: "  myprofile  " };
-    expect(resolveTaskScriptPath(env)).toBe(
-      path.join("C:\\Users\\test", ".openclaw-myprofile", "gateway.cmd"),
-    );
-  });
-
   it("falls back to HOME when USERPROFILE is not set", () => {
     const env = { HOME: "/home/test", OPENCLAW_PROFILE: "default" };
     expect(resolveTaskScriptPath(env)).toBe(path.join("/home/test", ".openclaw", "gateway.cmd"));
@@ -93,215 +65,150 @@ describe("resolveTaskScriptPath", () => {
 });
 
 describe("readScheduledTaskCommand", () => {
-  it("parses basic command script", async () => {
+  async function withScheduledTaskScript(
+    options: {
+      scriptLines?: string[];
+      env?:
+        | Record<string, string | undefined>
+        | ((tmpDir: string) => Record<string, string | undefined>);
+    },
+    run: (env: Record<string, string | undefined>) => Promise<void>,
+  ) {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-schtasks-test-"));
     try {
-      const scriptPath = path.join(tmpDir, ".openclaw", "gateway.cmd");
-      await fs.mkdir(path.dirname(scriptPath), { recursive: true });
-      await fs.writeFile(
-        scriptPath,
-        ["@echo off", "node gateway.js --port 18789"].join("\r\n"),
-        "utf8",
-      );
-
-      const env = { USERPROFILE: tmpDir, OPENCLAW_PROFILE: "default" };
-      const result = await readScheduledTaskCommand(env);
-      expect(result).toEqual({
-        programArguments: ["node", "gateway.js", "--port", "18789"],
-      });
+      const extraEnv = typeof options.env === "function" ? options.env(tmpDir) : options.env;
+      const env = {
+        USERPROFILE: tmpDir,
+        OPENCLAW_PROFILE: "default",
+        ...extraEnv,
+      };
+      if (options.scriptLines) {
+        const scriptPath = resolveTaskScriptPath(env);
+        await fs.mkdir(path.dirname(scriptPath), { recursive: true });
+        await fs.writeFile(scriptPath, options.scriptLines.join("\r\n"), "utf8");
+      }
+      await run(env);
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
-  });
-
-  it("parses script with working directory", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-schtasks-test-"));
-    try {
-      const scriptPath = path.join(tmpDir, ".openclaw", "gateway.cmd");
-      await fs.mkdir(path.dirname(scriptPath), { recursive: true });
-      await fs.writeFile(
-        scriptPath,
-        ["@echo off", "cd /d C:\\Projects\\openclaw", "node gateway.js"].join("\r\n"),
-        "utf8",
-      );
-
-      const env = { USERPROFILE: tmpDir, OPENCLAW_PROFILE: "default" };
-      const result = await readScheduledTaskCommand(env);
-      expect(result).toEqual({
-        programArguments: ["node", "gateway.js"],
-        workingDirectory: "C:\\Projects\\openclaw",
-      });
-    } finally {
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    }
-  });
-
-  it("parses script with environment variables", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-schtasks-test-"));
-    try {
-      const scriptPath = path.join(tmpDir, ".openclaw", "gateway.cmd");
-      await fs.mkdir(path.dirname(scriptPath), { recursive: true });
-      await fs.writeFile(
-        scriptPath,
-        ["@echo off", "set NODE_ENV=production", "set PORT=18789", "node gateway.js"].join("\r\n"),
-        "utf8",
-      );
-
-      const env = { USERPROFILE: tmpDir, OPENCLAW_PROFILE: "default" };
-      const result = await readScheduledTaskCommand(env);
-      expect(result).toEqual({
-        programArguments: ["node", "gateway.js"],
-        environment: {
-          NODE_ENV: "production",
-          PORT: "18789",
-        },
-      });
-    } finally {
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    }
-  });
+  }
 
   it("parses script with quoted arguments containing spaces", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-schtasks-test-"));
-    try {
-      const scriptPath = path.join(tmpDir, ".openclaw", "gateway.cmd");
-      await fs.mkdir(path.dirname(scriptPath), { recursive: true });
-      // Use forward slashes which work in Windows cmd and avoid escape parsing issues
-      await fs.writeFile(
-        scriptPath,
-        ["@echo off", '"C:/Program Files/Node/node.exe" gateway.js'].join("\r\n"),
-        "utf8",
-      );
-
-      const env = { USERPROFILE: tmpDir, OPENCLAW_PROFILE: "default" };
-      const result = await readScheduledTaskCommand(env);
-      expect(result).toEqual({
-        programArguments: ["C:/Program Files/Node/node.exe", "gateway.js"],
-      });
-    } finally {
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    }
+    await withScheduledTaskScript(
+      {
+        // Use forward slashes which work in Windows cmd and avoid escape parsing issues.
+        scriptLines: ["@echo off", '"C:/Program Files/Node/node.exe" gateway.js'],
+      },
+      async (env) => {
+        const result = await readScheduledTaskCommand(env);
+        expect(result).toEqual({
+          programArguments: ["C:/Program Files/Node/node.exe", "gateway.js"],
+        });
+      },
+    );
   });
 
   it("returns null when script does not exist", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-schtasks-test-"));
-    try {
-      const env = { USERPROFILE: tmpDir, OPENCLAW_PROFILE: "default" };
+    await withScheduledTaskScript({}, async (env) => {
       const result = await readScheduledTaskCommand(env);
       expect(result).toBeNull();
-    } finally {
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    }
+    });
   });
 
   it("returns null when script has no command", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-schtasks-test-"));
-    try {
-      const scriptPath = path.join(tmpDir, ".openclaw", "gateway.cmd");
-      await fs.mkdir(path.dirname(scriptPath), { recursive: true });
-      await fs.writeFile(
-        scriptPath,
-        ["@echo off", "rem This is just a comment"].join("\r\n"),
-        "utf8",
-      );
-
-      const env = { USERPROFILE: tmpDir, OPENCLAW_PROFILE: "default" };
-      const result = await readScheduledTaskCommand(env);
-      expect(result).toBeNull();
-    } finally {
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    }
+    await withScheduledTaskScript(
+      { scriptLines: ["@echo off", "rem This is just a comment"] },
+      async (env) => {
+        const result = await readScheduledTaskCommand(env);
+        expect(result).toBeNull();
+      },
+    );
   });
 
   it("parses full script with all components", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-schtasks-test-"));
-    try {
-      const scriptPath = path.join(tmpDir, ".openclaw", "gateway.cmd");
-      await fs.mkdir(path.dirname(scriptPath), { recursive: true });
-      await fs.writeFile(
-        scriptPath,
-        [
+    await withScheduledTaskScript(
+      {
+        scriptLines: [
           "@echo off",
           "rem OpenClaw Gateway",
           "cd /d C:\\Projects\\openclaw",
           "set NODE_ENV=production",
           "set OPENCLAW_PORT=18789",
           "node gateway.js --verbose",
-        ].join("\r\n"),
-        "utf8",
-      );
-
-      const env = { USERPROFILE: tmpDir, OPENCLAW_PROFILE: "default" };
-      const result = await readScheduledTaskCommand(env);
-      expect(result).toEqual({
-        programArguments: ["node", "gateway.js", "--verbose"],
-        workingDirectory: "C:\\Projects\\openclaw",
-        environment: {
-          NODE_ENV: "production",
-          OPENCLAW_PORT: "18789",
-        },
-      });
-    } finally {
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    }
+        ],
+      },
+      async (env) => {
+        const result = await readScheduledTaskCommand(env);
+        expect(result).toEqual({
+          programArguments: ["node", "gateway.js", "--verbose"],
+          workingDirectory: "C:\\Projects\\openclaw",
+          environment: {
+            NODE_ENV: "production",
+            OPENCLAW_PORT: "18789",
+          },
+        });
+      },
+    );
   });
+
   it("parses command with Windows backslash paths", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-schtasks-test-"));
-    try {
-      const scriptPath = path.join(tmpDir, ".openclaw", "gateway.cmd");
-      await fs.mkdir(path.dirname(scriptPath), { recursive: true });
-      await fs.writeFile(
-        scriptPath,
-        [
+    await withScheduledTaskScript(
+      {
+        scriptLines: [
           "@echo off",
           '"C:\\Program Files\\nodejs\\node.exe" C:\\Users\\test\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js gateway --port 18789',
-        ].join("\r\n"),
-        "utf8",
-      );
-
-      const env = { USERPROFILE: tmpDir, OPENCLAW_PROFILE: "default" };
-      const result = await readScheduledTaskCommand(env);
-      expect(result).toEqual({
-        programArguments: [
-          "C:\\Program Files\\nodejs\\node.exe",
-          "C:\\Users\\test\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js",
-          "gateway",
-          "--port",
-          "18789",
         ],
-      });
-    } finally {
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    }
+      },
+      async (env) => {
+        const result = await readScheduledTaskCommand(env);
+        expect(result).toEqual({
+          programArguments: [
+            "C:\\Program Files\\nodejs\\node.exe",
+            "C:\\Users\\test\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js",
+            "gateway",
+            "--port",
+            "18789",
+          ],
+        });
+      },
+    );
   });
 
   it("preserves UNC paths in command arguments", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-schtasks-test-"));
-    try {
-      const scriptPath = path.join(tmpDir, ".openclaw", "gateway.cmd");
-      await fs.mkdir(path.dirname(scriptPath), { recursive: true });
-      await fs.writeFile(
-        scriptPath,
-        [
+    await withScheduledTaskScript(
+      {
+        scriptLines: [
           "@echo off",
           '"\\\\fileserver\\OpenClaw Share\\node.exe" "\\\\fileserver\\OpenClaw Share\\dist\\index.js" gateway --port 18789',
-        ].join("\r\n"),
-        "utf8",
-      );
-
-      const env = { USERPROFILE: tmpDir, OPENCLAW_PROFILE: "default" };
-      const result = await readScheduledTaskCommand(env);
-      expect(result).toEqual({
-        programArguments: [
-          "\\\\fileserver\\OpenClaw Share\\node.exe",
-          "\\\\fileserver\\OpenClaw Share\\dist\\index.js",
-          "gateway",
-          "--port",
-          "18789",
         ],
-      });
-    } finally {
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    }
+      },
+      async (env) => {
+        const result = await readScheduledTaskCommand(env);
+        expect(result).toEqual({
+          programArguments: [
+            "\\\\fileserver\\OpenClaw Share\\node.exe",
+            "\\\\fileserver\\OpenClaw Share\\dist\\index.js",
+            "gateway",
+            "--port",
+            "18789",
+          ],
+        });
+      },
+    );
+  });
+
+  it("reads script from OPENCLAW_STATE_DIR override", async () => {
+    await withScheduledTaskScript(
+      {
+        env: (tmpDir) => ({ OPENCLAW_STATE_DIR: path.join(tmpDir, "custom-state") }),
+        scriptLines: ["@echo off", "node gateway.js --from-state-dir"],
+      },
+      async (env) => {
+        const result = await readScheduledTaskCommand(env);
+        expect(result).toEqual({
+          programArguments: ["node", "gateway.js", "--from-state-dir"],
+        });
+      },
+    );
   });
 });

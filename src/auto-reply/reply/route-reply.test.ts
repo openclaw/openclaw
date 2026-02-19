@@ -16,7 +16,7 @@ import { SILENT_REPLY_TOKEN } from "../tokens.js";
 const mocks = vi.hoisted(() => ({
   sendMessageDiscord: vi.fn(async () => ({ messageId: "m1", channelId: "c1" })),
   sendMessageIMessage: vi.fn(async () => ({ messageId: "ok" })),
-  sendMessageMSTeams: vi.fn(async () => ({
+  sendMessageMSTeams: vi.fn(async (_params: unknown) => ({
     messageId: "m1",
     conversationId: "c1",
   })),
@@ -64,6 +64,9 @@ const { routeReply } = await import("./route-reply.js");
 const createRegistry = (channels: PluginRegistry["channels"]): PluginRegistry => ({
   plugins: [],
   tools: [],
+  hooks: [],
+  typedHooks: [],
+  commands: [],
   channels,
   providers: [],
   gatewayHandlers: {},

@@ -42,4 +42,16 @@ describe("resolveCronDeliveryPlan", () => {
     expect(plan.mode).toBe("none");
     expect(plan.requested).toBe(false);
   });
+
+  it("resolves webhook mode without channel routing", () => {
+    const plan = resolveCronDeliveryPlan(
+      makeJob({
+        delivery: { mode: "webhook", to: "https://example.invalid/cron" },
+      }),
+    );
+    expect(plan.mode).toBe("webhook");
+    expect(plan.requested).toBe(false);
+    expect(plan.channel).toBeUndefined();
+    expect(plan.to).toBe("https://example.invalid/cron");
+  });
 });

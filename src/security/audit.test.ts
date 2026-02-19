@@ -25,7 +25,7 @@ function stubChannelPlugin(params: {
       blurb: "test stub",
     },
     capabilities: {
-      chatTypes: ["dm", "group"],
+      chatTypes: ["direct", "group"],
     },
     security: {},
     config: {
@@ -386,6 +386,38 @@ describe("security audit", () => {
     ).toBe(true);
   });
 
+  it("uses symlink target permissions for config checks", async () => {
+    if (isWindows) {
+      return;
+    }
+
+    const tmp = await makeTmpDir("config-symlink");
+    const stateDir = path.join(tmp, "state");
+    await fs.mkdir(stateDir, { recursive: true, mode: 0o700 });
+
+    const targetConfigPath = path.join(tmp, "managed-openclaw.json");
+    await fs.writeFile(targetConfigPath, "{}\n", "utf-8");
+    await fs.chmod(targetConfigPath, 0o444);
+
+    const configPath = path.join(stateDir, "openclaw.json");
+    await fs.symlink(targetConfigPath, configPath);
+
+    const res = await runSecurityAudit({
+      config: {},
+      includeFilesystem: true,
+      includeChannelSecurity: false,
+      stateDir,
+      configPath,
+    });
+
+    expect(res.findings).toEqual(
+      expect.arrayContaining([expect.objectContaining({ checkId: "fs.config.symlink" })]),
+    );
+    expect(res.findings.some((f) => f.checkId === "fs.config.perms_writable")).toBe(false);
+    expect(res.findings.some((f) => f.checkId === "fs.config.perms_world_readable")).toBe(false);
+    expect(res.findings.some((f) => f.checkId === "fs.config.perms_group_readable")).toBe(false);
+  });
+
   it("warns when small models are paired with web/browser tools", async () => {
     const cfg: OpenClawConfig = {
       agents: { defaults: { model: { primary: "ollama/mistral-8b" } } },
@@ -484,6 +516,48 @@ describe("security audit", () => {
     });
 
     expect(res.findings.some((f) => f.checkId === "sandbox.docker_config_mode_off")).toBe(false);
+  });
+
+  it("flags dangerous sandbox docker config (binds/network/seccomp/apparmor)", async () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            docker: {
+              binds: ["/etc/passwd:/mnt/passwd:ro", "/run:/run"],
+              network: "host",
+              seccompProfile: "unconfined",
+              apparmorProfile: "unconfined",
+            },
+          },
+        },
+      },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    expect(res.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ checkId: "sandbox.dangerous_bind_mount", severity: "critical" }),
+        expect.objectContaining({
+          checkId: "sandbox.dangerous_network_mode",
+          severity: "critical",
+        }),
+        expect.objectContaining({
+          checkId: "sandbox.dangerous_seccomp_profile",
+          severity: "critical",
+        }),
+        expect.objectContaining({
+          checkId: "sandbox.dangerous_apparmor_profile",
+          severity: "critical",
+        }),
+      ]),
+    );
   });
 
   it("flags ineffective gateway.nodes.denyCommands entries", async () => {
@@ -1202,8 +1276,8 @@ describe("security audit", () => {
       },
     });
 
-    expect(res.deep?.gateway.ok).toBe(false);
-    expect(res.deep?.gateway.error).toContain("probe boom");
+    expect(res.deep?.gateway?.ok).toBe(false);
+    expect(res.deep?.gateway?.error).toContain("probe boom");
     expect(res.findings).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ checkId: "gateway.probe_failed", severity: "warn" }),
