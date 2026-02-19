@@ -55,10 +55,10 @@ export function registerBrowserCookiesAndStorageCommands(
 
   cookies
     .command("set")
-    .description("Set a cookie (requires --url or domain+path)")
+    .description("Set a cookie (requires --cookie-url or domain+path)")
     .argument("<name>", "Cookie name")
     .argument("<value>", "Cookie value")
-    .requiredOption("--url <url>", "Cookie URL scope (recommended)")
+    .requiredOption("--cookie-url <url>", "Cookie URL scope (recommended)")
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (name: string, value: string, opts, cmd) => {
       const parent = parentOpts(cmd);
@@ -73,7 +73,7 @@ export function registerBrowserCookiesAndStorageCommands(
             query: profile ? { profile } : undefined,
             body: {
               targetId,
-              cookie: { name, value, url: opts.url },
+              cookie: { name, value, url: opts.cookieUrl },
             },
           },
           { timeoutMs: 20000 },

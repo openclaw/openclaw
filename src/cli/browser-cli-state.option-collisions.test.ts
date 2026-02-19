@@ -2,6 +2,7 @@ import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserParentOpts } from "./browser-cli-shared.js";
 import { registerBrowserStateCommands } from "./browser-cli-state.js";
+import { addGatewayClientOptions } from "./gateway-rpc.js";
 
 const mocks = vi.hoisted(() => ({
   callBrowserRequest: vi.fn(async (..._args: unknown[]) => ({ ok: true })),
@@ -32,6 +33,7 @@ describe("browser state option collisions", () => {
       .command("browser")
       .option("--browser-profile <name>", "Browser profile")
       .option("--json", "Output JSON", false);
+    addGatewayClientOptions(browser); // Add --url option that causes collision
     const parentOpts = (cmd: Command) => cmd.parent?.opts?.() as BrowserParentOpts;
     registerBrowserStateCommands(browser, parentOpts);
     return program;
@@ -64,7 +66,7 @@ describe("browser state option collisions", () => {
         "set",
         "session",
         "abc",
-        "--url",
+        "--cookie-url",
         "https://example.com",
         "--target-id",
         "tab-1",
@@ -74,6 +76,28 @@ describe("browser state option collisions", () => {
 
     const request = getLastRequest() as { body?: { targetId?: string } };
     expect(request.body?.targetId).toBe("tab-1");
+  });
+
+  it("accepts --cookie-url without collision from parent --url", async () => {
+    const program = createBrowserProgram();
+
+    await program.parseAsync(
+      [
+        "browser",
+        "--url",
+        "ws://localhost:3030",
+        "cookies",
+        "set",
+        "test_cookie",
+        "test_value",
+        "--cookie-url",
+        "https://example.com",
+      ],
+      { from: "user" },
+    );
+
+    const request = getLastRequest() as { body?: { cookie?: { url?: string } } };
+    expect(request.body?.cookie?.url).toBe("https://example.com");
   });
 
   it("accepts legacy parent `--json` by parsing payload via positional headers fallback", async () => {
