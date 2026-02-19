@@ -154,12 +154,30 @@ describe("trigger handling", () => {
         {
           error: "sandbox is not defined.",
           expected:
-            "⚠️ Agent failed before reply: sandbox is not defined.\nLogs: openclaw logs --follow",
+            "Something unexpected happened. Try /new to start a fresh conversation, or try again in a moment.",
         },
         {
           error: "Context window exceeded",
           expected:
             "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model.",
+        },
+        {
+          error: "rate_limit_exceeded: API rate limit exceeded",
+          expected: "The AI service is busy. Please wait a moment and try again.",
+        },
+        {
+          error: "401 Unauthorized: Invalid API key",
+          expected:
+            "I couldn't connect to the AI service. Please verify your API key is configured correctly.",
+        },
+        {
+          error: "402 Payment Required: billing limit exceeded",
+          expected:
+            "I've reached my limit with the AI service. Please check your account balance and try again.",
+        },
+        {
+          error: "408 Request Timeout: connection timed out",
+          expected: "The request timed out. Please try again, or start a fresh session with /new.",
         },
       ] as const;
       for (const testCase of errorCases) {
