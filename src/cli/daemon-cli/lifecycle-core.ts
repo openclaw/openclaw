@@ -295,11 +295,11 @@ export async function runServiceRestart(params: {
 
   try {
     await params.service.restart({ env: process.env, stdout });
-    let restarted = true;
+    let restarted = false;
     try {
       restarted = await params.service.isLoaded({ env: process.env });
     } catch {
-      restarted = true;
+      restarted = false;
     }
     emit({
       ok: true,
