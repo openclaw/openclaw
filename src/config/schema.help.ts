@@ -40,6 +40,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Enable the OpenAI-compatible `POST /v1/chat/completions` endpoint (default: false).",
   "gateway.reload.mode": 'Hot reload strategy for config changes ("hybrid" recommended).',
   "gateway.reload.debounceMs": "Debounce window (ms) before applying config changes.",
+  "gateway.channelHealthCheckMinutes":
+    "How often (in minutes) the gateway checks channel health and automatically restarts disconnected channels such as WhatsApp or Telegram (default: 5). Set to 0 to disable the watchdog. Up to 3 restarts per hour per channel are attempted before backing off.",
   "gateway.nodes.browser.mode":
     'Node browser routing ("auto" = pick single connected browser node, "manual" = require node param, "off" = disable).',
   "gateway.nodes.browser.node": "Pin browser routing to a specific node id or name (optional).",
@@ -318,7 +320,11 @@ export const FIELD_HELP: Record<string, string> = {
   "session.dmScope":
     'DM session scoping: "main" keeps continuity; "per-peer", "per-channel-peer", or "per-account-channel-peer" isolates DM history (recommended for shared inboxes/multi-account).',
   "session.identityLinks":
-    "Map canonical identities to provider-prefixed peer IDs for DM session linking (example: telegram:123456).",
+    "Link identities across channels so they share the same DM session. Key is the canonical peer (e.g. \"whatsapp:+15551234567\"); value is an array of equivalent peers on other channels (e.g. [\"telegram:123456789\"]). Useful when the same user messages you on both WhatsApp and Telegram and you want them to share a single conversation thread.",
+  "session.idleMinutes":
+    "Minutes of inactivity before a DM session is considered stale (default: 60). Increase this to preserve conversation context across longer gaps. Set to 0 to disable idle reset. Can be overridden per channel with session.resetByChannel.",
+  "session.resetByChannel":
+    "Per-channel session reset policy overrides. Keys are channel names (e.g. \"whatsapp\", \"telegram\") or full channel:account pairs. Values are reset config objects with optional mode (\"idle\" or \"always\") and idleMinutes. Example: { \"whatsapp\": { \"mode\": \"idle\", \"idleMinutes\": 1440 } } keeps WhatsApp sessions alive for 24 hours.",
   "channels.telegram.configWrites":
     "Allow Telegram to write config in response to channel events/commands (default: true).",
   "channels.slack.configWrites":

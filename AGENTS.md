@@ -309,6 +309,17 @@ Large integration surfaces (`src/gateway/**`, `src/agents/**`, channels, CLI, TU
 - **Multi-agent safety:** focus reports on your edits; avoid guard-rail disclaimers unless truly blocked; when multiple agents touch the same file, continue if safe; end with a brief "other files present" note only if relevant.
 - **Agent growth system:** workspace agents running long-term should maintain `bank/` (tiered memory) and `GROWTH_LOG.md` in their workspace. See `docs/reference/templates/AGENTS.md` (🌱 成長協議 section) and `docs/agent-growth-blueprint.md` for the full protocol.
 - **Model fallback / quota resilience:** configure `agents.defaults.model` to avoid hard failures when quota runs out. `fallbacks` is an explicit ordered list. `fallbackPolicy: "auto"` auto-discovers other providers from `auth.profiles`; `autoFallbackModels` sets per-provider model overrides. Cooldown tuning: `auth.cooldowns.billingBackoffHours` (default 5h), `billingBackoffHoursByProvider` for per-provider overrides. See `src/agents/model-fallback.ts`.
+- **Channel health watchdog (WhatsApp / Telegram stability):** The gateway has a built-in health monitor (`src/gateway/channel-health-monitor.ts`) that automatically detects and restarts disconnected channels every 5 minutes by default. Configure with `gateway.channelHealthCheckMinutes` (0 = disable). Up to 3 auto-restarts/hour per channel before backing off. The monitor uses `channelManager.getRuntimeSnapshot()` to check `running` and `connected` states and calls `startChannel`/`stopChannel` as needed. Default startup grace period is 60 s so transient start-up noise is ignored.
+- **Cross-channel session continuity (WhatsApp ↔ Telegram):** `session.identityLinks` links the same person's identities across channels so they share one conversation thread. Key = canonical peer (e.g. `"whatsapp:+15551234567"`); value = array of equivalent peers on other channels (e.g. `["telegram:123456789"]`). Example config:
+  ```json
+  { "session": { "identityLinks": { "whatsapp:+15551234567": ["telegram:123456789"] } } }
+  ```
+  When set, any message from `telegram:123456789` resolves to the same DM session as `whatsapp:+15551234567`, so conversation history flows across channels. Implemented in `src/config/types.base.ts` and consumed during DM session key resolution.
+- **Session memory continuity (prevent context loss on restart):** The default idle reset is 60 minutes (`session.idleMinutes`). If sessions feel like they "forget" context after a break, increase this value or use per-channel overrides. Example that keeps WhatsApp sessions alive for 24 h while keeping Telegram at 60 min:
+  ```json
+  { "session": { "idleMinutes": 60, "resetByChannel": { "whatsapp": { "mode": "idle", "idleMinutes": 1440 } } } }
+  ```
+  The agent also loads MEMORY.md and `memory/*.md` files on each session for long-term memory persistence across restarts; see `src/memory/` and `agents.defaults.memorySearch`.
 - Bug investigations: read source code of relevant npm dependencies and all related local code before concluding; aim for high-confidence root cause.
 - Code style: add brief comments for tricky logic; keep files under ~500 LOC when feasible (split/refactor as needed).
 - Tool schema guardrails (google-antigravity): avoid `Type.Union` in tool input schemas; no `anyOf`/`oneOf`/`allOf`. Use `stringEnum`/`optionalStringEnum` (Type.Unsafe enum) for string lists, and `Type.Optional(...)` instead of `... | null`. Keep top-level tool schema as `type: "object"` with `properties`.
