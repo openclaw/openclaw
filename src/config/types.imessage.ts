@@ -50,6 +50,10 @@ export type IMessageAccountConfig = {
   dms?: Record<string, DmConfig>;
   /** Include attachments + reactions in watch payloads. */
   includeAttachments?: boolean;
+  /** Allowed local iMessage attachment roots (supports single-segment `*` wildcards). */
+  attachmentRoots?: string[];
+  /** Allowed remote iMessage attachment roots for SCP fetches (supports `*`). */
+  remoteAttachmentRoots?: string[];
   /** Max outbound media size in MB. */
   mediaMaxMb?: number;
   /** Timeout for probe/RPC operations in milliseconds (default: 10000). */
