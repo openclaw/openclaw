@@ -18,11 +18,15 @@ android {
   }
 
   defaultConfig {
-    applicationId = "ai.openclaw.android"
+    // Use a distinct app id so it can be installed alongside any previous builds (no uninstall loop)
+    applicationId = "ai.openclaw.android.devfix"
     minSdk = 31
     targetSdk = 36
-    versionCode = 202602030
-    versionName = "2026.2.4"
+    // Bump to force update on devices that aggressively cache/keep old debug installs
+    // Bump again after adding BouncyCastle Ed25519 fallback
+    // Bump after adding BouncyCastle signing fallback (JCA Ed25519 Signature may be missing)
+    versionCode = 202602054
+    versionName = "2026.2.4-ed25519fix3b"
   }
 
   buildTypes {
@@ -104,6 +108,11 @@ dependencies {
   implementation("androidx.security:security-crypto:1.1.0")
   implementation("androidx.exifinterface:exifinterface:1.4.2")
   implementation("com.squareup.okhttp3:okhttp:5.3.2")
+
+  // Crypto provider for devices that lack Ed25519 KeyPairGenerator (common on some HarmonyOS builds)
+  implementation("org.conscrypt:conscrypt-android:2.5.3")
+  // Ed25519 key generation fallback (some ROMs still lack Ed25519 KeyPairGenerator even with Conscrypt)
+  implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
 
   // CameraX (for node.invoke camera.* parity)
   implementation("androidx.camera:camera-core:1.5.2")

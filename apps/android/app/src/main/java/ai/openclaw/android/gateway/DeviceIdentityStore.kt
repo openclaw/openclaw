@@ -6,10 +6,22 @@ import java.io.File
 import java.security.KeyFactory
 import java.security.KeyPairGenerator
 import java.security.MessageDigest
+import java.security.Security
 import java.security.Signature
 import java.security.spec.PKCS8EncodedKeySpec
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import org.conscrypt.Conscrypt
+import org.bouncycastle.crypto.Signer
+import org.bouncycastle.crypto.generators.Ed25519KeyPairGenerator
+import org.bouncycastle.crypto.params.Ed25519KeyGenerationParameters
+import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters
+import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters
+import org.bouncycastle.crypto.signers.Ed25519Signer
+import org.bouncycastle.crypto.util.PrivateKeyFactory
+import org.bouncycastle.crypto.util.PrivateKeyInfoFactory
+import org.bouncycastle.crypto.util.SubjectPublicKeyInfoFactory
+import java.security.SecureRandom
 
 @Serializable
 data class DeviceIdentity(
@@ -41,15 +53,31 @@ class DeviceIdentityStore(context: Context) {
   }
 
   fun signPayload(payload: String, identity: DeviceIdentity): String? {
-    return try {
+    val payloadBytes = payload.toByteArray(Charsets.UTF_8)
+
+    // 1) Try JCA (fast path)
+    try {
+      ensureEd25519Provider()
       val privateKeyBytes = Base64.decode(identity.privateKeyPkcs8Base64, Base64.DEFAULT)
       val keySpec = PKCS8EncodedKeySpec(privateKeyBytes)
       val keyFactory = KeyFactory.getInstance("Ed25519")
       val privateKey = keyFactory.generatePrivate(keySpec)
       val signature = Signature.getInstance("Ed25519")
       signature.initSign(privateKey)
-      signature.update(payload.toByteArray(Charsets.UTF_8))
-      base64UrlEncode(signature.sign())
+      signature.update(payloadBytes)
+      return base64UrlEncode(signature.sign())
+    } catch (_: Throwable) {
+      // fall through
+    }
+
+    // 2) Fallback: BouncyCastle pure-Java Ed25519 signing (works even if JCA Ed25519 is missing)
+    return try {
+      val privateKeyPkcs8 = Base64.decode(identity.privateKeyPkcs8Base64, Base64.DEFAULT)
+      val keyParam = PrivateKeyFactory.createKey(privateKeyPkcs8)
+      val signer: Signer = Ed25519Signer()
+      signer.init(true, keyParam)
+      signer.update(payloadBytes, 0, payloadBytes.size)
+      base64UrlEncode(signer.generateSignature())
     } catch (_: Throwable) {
       null
     }
@@ -97,17 +125,58 @@ class DeviceIdentityStore(context: Context) {
   }
 
   private fun generate(): DeviceIdentity {
-    val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
-    val spki = keyPair.public.encoded
+    // Some Android/HarmonyOS builds don't ship Ed25519 KeyPairGenerator.
+    // Try JCA first; if unavailable, fall back to BouncyCastle pure-Java Ed25519 keygen.
+    ensureEd25519Provider()
+
+    val (spki, privateKeyPkcs8) = try {
+      val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
+      Pair(keyPair.public.encoded, keyPair.private.encoded)
+    } catch (_: Throwable) {
+      generateEd25519WithBouncyCastle()
+    }
+
     val rawPublic = stripSpkiPrefix(spki)
     val deviceId = sha256Hex(rawPublic)
-    val privateKey = keyPair.private.encoded
+
     return DeviceIdentity(
       deviceId = deviceId,
       publicKeyRawBase64 = Base64.encodeToString(rawPublic, Base64.NO_WRAP),
-      privateKeyPkcs8Base64 = Base64.encodeToString(privateKey, Base64.NO_WRAP),
+      privateKeyPkcs8Base64 = Base64.encodeToString(privateKeyPkcs8, Base64.NO_WRAP),
       createdAtMs = System.currentTimeMillis(),
     )
+  }
+
+  private fun generateEd25519WithBouncyCastle(): Pair<ByteArray, ByteArray> {
+    val gen = Ed25519KeyPairGenerator()
+    gen.init(Ed25519KeyGenerationParameters(SecureRandom()))
+    val kp = gen.generateKeyPair()
+    val priv = kp.private as Ed25519PrivateKeyParameters
+    val pub = kp.public as Ed25519PublicKeyParameters
+
+    val spki = SubjectPublicKeyInfoFactory.createSubjectPublicKeyInfo(pub).encoded
+    val pkcs8 = PrivateKeyInfoFactory.createPrivateKeyInfo(priv).encoded
+    return Pair(spki, pkcs8)
+  }
+
+  private fun ensureEd25519Provider() {
+    // If Ed25519 already works, do nothing.
+    try {
+      KeyPairGenerator.getInstance("Ed25519")
+      return
+    } catch (_: Throwable) {
+      // fall through
+    }
+
+    try {
+      // Conscrypt provides Ed25519 on many devices that otherwise lack it.
+      val provider = Conscrypt.newProvider()
+      Security.insertProviderAt(provider, 1)
+      // Trigger lookup so any failure surfaces early.
+      KeyPairGenerator.getInstance("Ed25519")
+    } catch (_: Throwable) {
+      // best-effort
+    }
   }
 
   private fun deriveDeviceId(publicKeyRawBase64: String): String? {
