@@ -168,23 +168,14 @@ export async function isChromeCdpReady(
  * so normal traffic is not blocked.
  */
 function enableFetchAuthOnSession(
-  ws: WebSocket,
+  sendSessionAwait: (
+    sessionId: string,
+    method: string,
+    params?: Record<string, unknown>,
+  ) => Promise<void>,
   sessionId: string,
-  idCounter: { value: number },
-): void {
-  const send = (method: string, params: Record<string, unknown> = {}) => {
-    const msg: Record<string, unknown> = {
-      id: ++idCounter.value,
-      method,
-      params,
-    };
-    if (sessionId) {
-      msg.sessionId = sessionId;
-    }
-    ws.send(JSON.stringify(msg));
-  };
-
-  send("Fetch.enable", {
+): Promise<void> {
+  return sendSessionAwait(sessionId, "Fetch.enable", {
     handleAuthRequests: true,
     patterns: [{ urlPattern: "*" }],
   });
@@ -202,7 +193,10 @@ function enableFetchAuthOnSession(
  * and enable Fetch on every page session. This ensures proxy auth works across
  * all tabs, not just the initial about:blank.
  */
-async function setupCdpProxyAuth(profile: ResolvedBrowserProfile): Promise<void> {
+async function setupCdpProxyAuth(
+  profile: ResolvedBrowserProfile,
+  proc: ChildProcessWithoutNullStreams,
+): Promise<void> {
   const { proxyCredentials, cdpPort } = profile;
   if (!proxyCredentials) {
     return;
@@ -222,8 +216,44 @@ async function setupCdpProxyAuth(profile: ResolvedBrowserProfile): Promise<void>
     ws.once("error", reject);
   });
 
+  ws.on("error", (err) => {
+    log.warn(`proxy auth WebSocket error for profile "${profile.name}": ${String(err)}`);
+  });
+
+  let cleanedUp = false;
+  const cleanup = () => {
+    if (cleanedUp) {
+      return;
+    }
+    cleanedUp = true;
+    try {
+      ws.close();
+    } catch {
+      // ignore
+    }
+    if (ws.readyState !== WebSocket.CLOSED) {
+      try {
+        ws.terminate();
+      } catch {
+        // ignore
+      }
+    }
+  };
+
+  proc.once("exit", cleanup);
+  proc.once("close", cleanup);
+  proc.once("error", cleanup);
+
   const idCounter = { value: 0 };
   const enabledSessions = new Set<string>();
+  const pendingAcks = new Map<
+    number,
+    {
+      method: string;
+      resolve: () => void;
+      reject: (err: Error) => void;
+    }
+  >();
 
   const sendBrowser = (method: string, params: Record<string, unknown> = {}) => {
     ws.send(JSON.stringify({ id: ++idCounter.value, method, params }));
@@ -233,16 +263,96 @@ async function setupCdpProxyAuth(profile: ResolvedBrowserProfile): Promise<void>
     ws.send(JSON.stringify({ id: ++idCounter.value, sessionId, method, params }));
   };
 
+  const sendBrowserAwait = async (method: string, params: Record<string, unknown> = {}) => {
+    const id = ++idCounter.value;
+    await new Promise<void>((resolve, reject) => {
+      pendingAcks.set(id, { method, resolve, reject });
+      ws.send(JSON.stringify({ id, method, params }));
+    });
+  };
+
+  const sendSessionAwait = async (
+    sessionId: string,
+    method: string,
+    params: Record<string, unknown> = {},
+  ) => {
+    const id = ++idCounter.value;
+    await new Promise<void>((resolve, reject) => {
+      pendingAcks.set(id, { method: `${sessionId}:${method}`, resolve, reject });
+      ws.send(JSON.stringify({ id, sessionId, method, params }));
+    });
+  };
+
+  let firstFetchEnabledSettled = false;
+  let resolveFirstFetchEnabled: () => void = () => {};
+  let rejectFirstFetchEnabled: (err: Error) => void = () => {};
+  const firstFetchEnabled = new Promise<void>((resolve, reject) => {
+    resolveFirstFetchEnabled = () => {
+      if (firstFetchEnabledSettled) {
+        return;
+      }
+      firstFetchEnabledSettled = true;
+      resolve();
+    };
+    rejectFirstFetchEnabled = (err: Error) => {
+      if (firstFetchEnabledSettled) {
+        return;
+      }
+      firstFetchEnabledSettled = true;
+      reject(err);
+    };
+  });
+
+  const firstFetchEnabledTimeout = setTimeout(() => {
+    rejectFirstFetchEnabled(
+      new Error(`timed out waiting for proxy auth hooks for profile "${profile.name}"`),
+    );
+  }, 1_500);
+
+  const rejectPendingAcks = (reason: string) => {
+    for (const [id, pending] of pendingAcks) {
+      pendingAcks.delete(id);
+      pending.reject(new Error(reason));
+    }
+  };
+
+  ws.on("close", () => {
+    rejectPendingAcks(`proxy auth WebSocket closed for profile "${profile.name}"`);
+    rejectFirstFetchEnabled(
+      new Error(
+        `proxy auth WebSocket closed before hooks were ready for profile "${profile.name}"`,
+      ),
+    );
+  });
+
   // Handle all CDP messages from browser + forwarded session events.
   ws.on("message", (data: Buffer) => {
     let msg: {
+      id?: number;
       method?: string;
       params?: Record<string, unknown>;
       sessionId?: string;
+      error?: { message?: string };
     };
     try {
       msg = JSON.parse(data.toString());
     } catch {
+      return;
+    }
+
+    if (typeof msg.id === "number") {
+      const pending = pendingAcks.get(msg.id);
+      if (!pending) {
+        return;
+      }
+      pendingAcks.delete(msg.id);
+      if (msg.error) {
+        pending.reject(
+          new Error(`CDP ${pending.method} failed: ${msg.error.message ?? "unknown"}`),
+        );
+      } else {
+        pending.resolve();
+      }
       return;
     }
 
@@ -263,7 +373,13 @@ async function setupCdpProxyAuth(profile: ResolvedBrowserProfile): Promise<void>
       const sessionId = msg.params?.sessionId as string | undefined;
       if (sessionId && !enabledSessions.has(sessionId)) {
         enabledSessions.add(sessionId);
-        enableFetchAuthOnSession(ws, sessionId, idCounter);
+        void enableFetchAuthOnSession(sendSessionAwait, sessionId)
+          .then(() => {
+            resolveFirstFetchEnabled();
+          })
+          .catch((err) => {
+            rejectFirstFetchEnabled(err instanceof Error ? err : new Error(String(err)));
+          });
       }
       return;
     }
@@ -290,14 +406,20 @@ async function setupCdpProxyAuth(profile: ResolvedBrowserProfile): Promise<void>
     }
   });
 
-  // Auto-attach to existing and future targets.
-  sendBrowser("Target.setDiscoverTargets", { discover: true });
-  // Also attach to targets that already exist (the initial about:blank page).
-  sendBrowser("Target.setAutoAttach", {
-    autoAttach: true,
-    waitForDebuggerOnStart: false,
-    flatten: true,
-  });
+  try {
+    // Auto-attach to existing and future targets.
+    await sendBrowserAwait("Target.setDiscoverTargets", { discover: true });
+    // Also attach to targets that already exist (the initial about:blank page).
+    await sendBrowserAwait("Target.setAutoAttach", {
+      autoAttach: true,
+      waitForDebuggerOnStart: false,
+      flatten: true,
+    });
+
+    await firstFetchEnabled;
+  } finally {
+    clearTimeout(firstFetchEnabledTimeout);
+  }
 
   log.info(`🔑 proxy auth handler installed for profile "${profile.name}"`);
 }
@@ -457,7 +579,7 @@ export async function launchOpenClawChrome(
   // the 407 auth challenge via the Fetch domain and respond programmatically.
   if (profile.proxyCredentials) {
     try {
-      await setupCdpProxyAuth(profile);
+      await setupCdpProxyAuth(profile, proc);
     } catch (err) {
       log.warn(`proxy auth setup failed for profile "${profile.name}": ${String(err)}`);
     }
