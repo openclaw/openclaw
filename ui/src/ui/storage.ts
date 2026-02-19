@@ -74,10 +74,17 @@ export function loadSettings(): UiSettings {
       chatAutoSendEnabled:
         typeof parsed.chatAutoSendEnabled === "boolean"
           ? parsed.chatAutoSendEnabled
-          : defaults.chatAutoSendEnabled,
+          : (parsed as Record<string, unknown>).chatAutoSendQuestionMark === true
+            ? true
+            : defaults.chatAutoSendEnabled,
       chatAutoSendTriggers: Array.isArray(parsed.chatAutoSendTriggers)
         ? parsed.chatAutoSendTriggers.filter((t): t is string => typeof t === "string")
-        : defaults.chatAutoSendTriggers,
+        : // migrate old boolean setting
+          typeof (parsed as Record<string, unknown>).chatAutoSendQuestionMark === "boolean"
+          ? (parsed as Record<string, unknown>).chatAutoSendQuestionMark
+            ? ["?"]
+            : []
+          : defaults.chatAutoSendTriggers,
       splitRatio:
         typeof parsed.splitRatio === "number" &&
         parsed.splitRatio >= 0.4 &&

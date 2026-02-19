@@ -735,7 +735,7 @@ export function renderConfig(props: ConfigProps) {
                       Add
                     </button>
                   </div>
-                  <div class="cfg-array__help">Send immediately (250ms) when a message ends with any of these strings</div>
+                  <div class="cfg-array__help">Send instantly when a message ends with any of these strings</div>
                   ${
                     props.autoSendTriggers.length === 0
                       ? html`
