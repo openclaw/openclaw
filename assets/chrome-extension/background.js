@@ -42,6 +42,12 @@ async function getRelayPort() {
   return n
 }
 
+async function getGatewayToken() {
+  const stored = await chrome.storage.local.get(['gatewayToken'])
+  const token = String(stored.gatewayToken || '').trim()
+  return token || ''
+}
+
 function setBadge(tabId, kind) {
   const cfg = BADGE[kind]
   void chrome.action.setBadgeText({ tabId, text: cfg.text })
@@ -55,14 +61,23 @@ async function ensureRelayConnection() {
 
   relayConnectPromise = (async () => {
     const port = await getRelayPort()
+    const gatewayToken = await getGatewayToken()
     const httpBase = `http://127.0.0.1:${port}`
-    const wsUrl = `ws://127.0.0.1:${port}/extension`
+    const wsUrl = gatewayToken
+      ? `ws://127.0.0.1:${port}/extension?token=${encodeURIComponent(gatewayToken)}`
+      : `ws://127.0.0.1:${port}/extension`
 
     // Fast preflight: is the relay server up?
     try {
       await fetch(`${httpBase}/`, { method: 'HEAD', signal: AbortSignal.timeout(2000) })
     } catch (err) {
       throw new Error(`Relay server not reachable at ${httpBase} (${String(err)})`)
+    }
+
+    if (!gatewayToken) {
+      throw new Error(
+        'Missing gatewayToken in extension settings (chrome.storage.local.gatewayToken)',
+      )
     }
 
     const ws = new WebSocket(wsUrl)
