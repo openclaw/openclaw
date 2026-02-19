@@ -85,7 +85,54 @@ describe("resolveArchiveSourcePath", () => {
 });
 
 describe("packNpmSpecToArchive", () => {
-  it("packs spec and returns archive path using the final non-empty stdout line", async () => {
+  it("packs spec and returns archive path using JSON output metadata", async () => {
+    const cwd = await createTempDir("openclaw-install-source-utils-");
+    const archivePath = path.join(cwd, "openclaw-plugin-1.2.3.tgz");
+    await fs.writeFile(archivePath, "", "utf-8");
+    runCommandWithTimeoutMock.mockResolvedValue({
+      stdout: JSON.stringify([
+        {
+          id: "openclaw-plugin@1.2.3",
+          name: "openclaw-plugin",
+          version: "1.2.3",
+          filename: "openclaw-plugin-1.2.3.tgz",
+          integrity: "sha512-test-integrity",
+          shasum: "abc123",
+        },
+      ]),
+      stderr: "",
+      code: 0,
+      signal: null,
+      killed: false,
+    });
+
+    const result = await packNpmSpecToArchive({
+      spec: "openclaw-plugin@1.2.3",
+      timeoutMs: 1000,
+      cwd,
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      archivePath,
+      metadata: {
+        name: "openclaw-plugin",
+        version: "1.2.3",
+        resolvedSpec: "openclaw-plugin@1.2.3",
+        integrity: "sha512-test-integrity",
+        shasum: "abc123",
+      },
+    });
+    expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(
+      ["npm", "pack", "openclaw-plugin@1.2.3", "--ignore-scripts", "--json"],
+      expect.objectContaining({
+        cwd,
+        timeoutMs: 300_000,
+      }),
+    );
+  });
+
+  it("falls back to parsing final stdout line when npm json output is unavailable", async () => {
     const cwd = await createTempDir("openclaw-install-source-utils-");
     const expectedArchivePath = path.join(cwd, "openclaw-plugin-1.2.3.tgz");
     await fs.writeFile(expectedArchivePath, "", "utf-8");
@@ -106,14 +153,8 @@ describe("packNpmSpecToArchive", () => {
     expect(result).toEqual({
       ok: true,
       archivePath: expectedArchivePath,
+      metadata: {},
     });
-    expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(
-      ["npm", "pack", "openclaw-plugin@1.2.3", "--ignore-scripts"],
-      expect.objectContaining({
-        cwd,
-        timeoutMs: 300_000,
-      }),
-    );
   });
 
   it("returns npm pack error details when command fails", async () => {
@@ -160,6 +201,7 @@ describe("packNpmSpecToArchive", () => {
     expect(result).toEqual({
       ok: true,
       archivePath,
+      metadata: {},
     });
   });
 
@@ -184,6 +226,7 @@ describe("packNpmSpecToArchive", () => {
     expect(result).toEqual({
       ok: true,
       archivePath,
+      metadata: {},
     });
   });
 
