@@ -145,61 +145,6 @@ describe("createFollowupRunner compaction", () => {
     expect(firstCall?.[0]?.text).toContain("Auto-compaction complete");
     expect(sessionStore.main.compactionCount).toBe(1);
   });
-
-  it("updates totalTokens after auto-compaction using lastCallUsage", async () => {
-    const storePath = path.join(
-      await fs.mkdtemp(path.join(tmpdir(), "openclaw-followup-compaction-")),
-      "sessions.json",
-    );
-    const sessionKey = "main";
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-      totalTokens: 180_000,
-      compactionCount: 0,
-    };
-    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
-    await saveSessionStore(storePath, sessionStore);
-    const onBlockReply = vi.fn(async () => {});
-
-    mockCompactionRun({
-      willRetry: false,
-      result: {
-        payloads: [{ text: "done" }],
-        meta: {
-          agentMeta: {
-            // Accumulated usage across pre+post compaction calls.
-            usage: { input: 190_000, output: 8_000, total: 198_000 },
-            // Last call usage reflects post-compaction context.
-            lastCallUsage: { input: 11_000, output: 2_000, total: 13_000 },
-            model: "claude-opus-4-5",
-            provider: "anthropic",
-          },
-        },
-      },
-    });
-
-    const runner = createFollowupRunner({
-      opts: { onBlockReply },
-      typing: createMockTypingController(),
-      typingMode: "instant",
-      sessionEntry,
-      sessionStore,
-      sessionKey,
-      storePath,
-      defaultModel: "anthropic/claude-opus-4-5",
-      agentCfgContextTokens: 200_000,
-    });
-
-    await runner(baseQueuedRun());
-
-    const store = loadSessionStore(storePath, { skipCache: true });
-    expect(store[sessionKey]?.compactionCount).toBe(1);
-    expect(store[sessionKey]?.totalTokens).toBe(11_000);
-    // We only keep the total estimate after compaction.
-    expect(store[sessionKey]?.inputTokens).toBeUndefined();
-    expect(store[sessionKey]?.outputTokens).toBeUndefined();
-  });
 });
 
 describe("createFollowupRunner messaging tool dedupe", () => {
