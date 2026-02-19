@@ -2,12 +2,21 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setDefaultChannelPluginRegistryForTests } from "./channel-test-helpers.js";
 import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
 
-const configMocks = vi.hoisted(() => ({
+type ConfigMocks = {
+  readConfigFileSnapshot: ReturnType<typeof vi.fn>;
+  writeConfigFile: ReturnType<typeof vi.fn>;
+};
+
+const configMocks: ConfigMocks = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(),
   writeConfigFile: vi.fn().mockResolvedValue(undefined),
 }));
 
-const offsetMocks = vi.hoisted(() => ({
+type OffsetMocks = {
+  deleteTelegramUpdateOffset: ReturnType<typeof vi.fn>;
+};
+
+const offsetMocks: OffsetMocks = vi.hoisted(() => ({
   deleteTelegramUpdateOffset: vi.fn().mockResolvedValue(undefined),
 }));
 

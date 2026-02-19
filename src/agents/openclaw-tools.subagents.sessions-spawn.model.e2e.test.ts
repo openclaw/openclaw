@@ -10,7 +10,7 @@ import {
 import { resetSubagentRegistryForTests } from "./subagent-registry.js";
 import { SUBAGENT_SPAWN_ACCEPTED_NOTE } from "./subagent-spawn.js";
 
-const callGatewayMock = getCallGatewayMock();
+const callGatewayMock: ReturnType<typeof getCallGatewayMock> = getCallGatewayMock();
 type GatewayCall = { method?: string; params?: unknown };
 type SessionsSpawnConfigOverride = Parameters<typeof setSessionsSpawnConfigOverride>[0];
 
