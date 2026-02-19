@@ -461,9 +461,17 @@ export function formatAssistantErrorText(
       raw,
     )
   ) {
+    if (raw.startsWith("{") && raw.endsWith("}")) {
+      return (
+        "Message ordering conflict - please try again. " +
+        "If this persists, use /new to start a fresh session."
+      );
+    }
+    const providerHint = (raw.split(/\r?\n/, 1)[0] ?? "").replace(/\s+/g, " ").slice(0, 200);
     return (
       "Message ordering conflict - please try again. " +
-      "If this persists, use /new to start a fresh session."
+      "If this persists, use /new to start a fresh session. " +
+      `Provider error: ${providerHint}`
     );
   }
 

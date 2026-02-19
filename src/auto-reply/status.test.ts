@@ -487,6 +487,28 @@ describe("buildStatusMessage", () => {
       { prefix: "openclaw-status-" },
     );
   });
+
+  it("prefers configured agent contextTokens over session entry contextTokens", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "anthropic/claude-opus-4-5",
+        contextTokens: 1_000_000,
+      },
+      sessionEntry: {
+        sessionId: "ctx-precedence",
+        updatedAt: 0,
+        totalTokens: 50_000,
+        contextTokens: 200_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toMatch(/Context:\s*50k\/(1\.0m|1000k)\s*\(5%\)/);
+  });
 });
 
 describe("buildCommandsMessage", () => {

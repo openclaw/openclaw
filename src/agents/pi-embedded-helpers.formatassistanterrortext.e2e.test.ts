@@ -53,6 +53,16 @@ describe("formatAssistantErrorText", () => {
     expect(result).toContain("Message ordering conflict");
     expect(result).not.toContain("400");
   });
+  it("surfaces provider error for unsupported role (issue #19260)", () => {
+    const msg = makeAssistantError("400 unsupported role: developer");
+    const result = formatAssistantErrorText(msg);
+    expect(result).toContain("Message ordering conflict");
+    expect(result).toContain("Provider error: 400 unsupported role: developer");
+    expect(result).toBeDefined();
+    expect(result).not.toMatch(/[\r\n]/);
+    const appendedHint = result!.split("Provider error: ")[1] ?? "";
+    expect(appendedHint.length).toBeLessThanOrEqual(200);
+  });
   it("suppresses raw error JSON payloads that are not otherwise classified", () => {
     const msg = makeAssistantError(
       '{"type":"error","error":{"message":"Something exploded","type":"server_error"}}',
