@@ -52,6 +52,15 @@ describe("dispatchTelegramMessage draft streaming", () => {
     };
   }
 
+  function setupDraftStreams(params?: { answerMessageId?: number; reasoningMessageId?: number }) {
+    const answerDraftStream = createDraftStream(params?.answerMessageId);
+    const reasoningDraftStream = createDraftStream(params?.reasoningMessageId);
+    createTelegramDraftStream
+      .mockImplementationOnce(() => answerDraftStream)
+      .mockImplementationOnce(() => reasoningDraftStream);
+    return { answerDraftStream, reasoningDraftStream };
+  }
+
   function createContext(overrides?: Partial<TelegramMessageContext>): TelegramMessageContext {
     const base = {
       ctxPayload: {},
@@ -152,6 +161,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       expect.objectContaining({
         chatId: 123,
         thread: { id: 777, scope: "dm" },
+        minInitialChars: 1,
       }),
     );
     expect(draftStream.update).toHaveBeenCalledWith("Hello");
@@ -170,6 +180,27 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
     expect(editMessageTelegram).not.toHaveBeenCalled();
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a higher initial debounce threshold in block stream mode", async () => {
+    const draftStream = createDraftStream();
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Hello" });
+        await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "block" });
+
+    expect(createTelegramDraftStream).toHaveBeenCalledWith(
+      expect.objectContaining({
+        minInitialChars: 30,
+      }),
+    );
   });
 
   it("keeps block streaming enabled when account config enables it", async () => {
@@ -451,12 +482,12 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.forceNewMessage).not.toHaveBeenCalled();
   });
 
-  it("does not force new message on reasoning end without previous output", async () => {
+  it("forces new message on reasoning end after streamed reasoning output", async () => {
     const draftStream = createDraftStream(999);
     createTelegramDraftStream.mockReturnValue(draftStream);
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
-        // Reasoning starts immediately (no previous text output)
+        // Reasoning starts immediately (no assistant-answer output yet)
         await replyOptions?.onReasoningStream?.({ text: "Thinking..." });
         // Reasoning ends
         await replyOptions?.onReasoningEnd?.();
@@ -470,8 +501,109 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     await dispatchWithContext({ context: createContext(), streamMode: "block" });
 
-    // No previous text output, so no forceNewMessage needed
-    expect(draftStream.forceNewMessage).not.toHaveBeenCalled();
+    // Reasoning stream produced preview output, so split for final answer.
+    expect(draftStream.forceNewMessage).toHaveBeenCalled();
+  });
+
+  it("does not finalize preview with reasoning payloads before answer payloads", async () => {
+    setupDraftStreams({ answerMessageId: 999 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Hi, I did what you asked and..." });
+        await dispatcherOptions.deliver({ text: "Reasoning:\n_step one_" }, { kind: "final" });
+        await dispatcherOptions.deliver(
+          { text: "Hi, I did what you asked and..." },
+          { kind: "final" },
+        );
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "999" });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    // Keep reasoning as its own message.
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [expect.objectContaining({ text: "Reasoning:\n_step one_" })],
+      }),
+    );
+    // Finalize preview with the actual answer instead of overwriting with reasoning.
+    expect(editMessageTelegram).toHaveBeenCalledTimes(1);
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      999,
+      "Hi, I did what you asked and...",
+      expect.any(Object),
+    );
+  });
+
+  it("wires reasoning stream updates into telegram draft previews", async () => {
+    const { reasoningDraftStream } = setupDraftStreams({
+      answerMessageId: 999,
+      reasoningMessageId: 111,
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onReasoningStream?.({ text: "Reasoning:\n_Thinking..._" });
+        await dispatcherOptions.deliver({ text: "Final answer" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "999" });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(reasoningDraftStream.update).toHaveBeenCalledWith("Reasoning:\n_Thinking..._");
+  });
+
+  it("keeps reasoning and answer streaming in separate preview lanes", async () => {
+    const { answerDraftStream, reasoningDraftStream } = setupDraftStreams({
+      answerMessageId: 999,
+      reasoningMessageId: 111,
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onReasoningStream?.({ text: "Reasoning:\n_Working on it..._" });
+        await replyOptions?.onPartialReply?.({ text: "Checking the directory..." });
+        await dispatcherOptions.deliver({ text: "Checking the directory..." }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "999" });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(reasoningDraftStream.update).toHaveBeenCalledWith("Reasoning:\n_Working on it..._");
+    expect(answerDraftStream.update).toHaveBeenCalledWith("Checking the directory...");
+    expect(answerDraftStream.forceNewMessage).not.toHaveBeenCalled();
+    expect(reasoningDraftStream.forceNewMessage).not.toHaveBeenCalled();
+  });
+
+  it("does not edit reasoning preview bubble with final answer when no assistant partial arrived yet", async () => {
+    setupDraftStreams({ reasoningMessageId: 999 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onReasoningStream?.({ text: "Reasoning:\n_Working on it..._" });
+        await dispatcherOptions.deliver({ text: "Here's what I found." }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "999" });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [expect.objectContaining({ text: "Here's what I found." })],
+      }),
+    );
   });
 
   it("does not edit preview message when final payload is an error", async () => {
