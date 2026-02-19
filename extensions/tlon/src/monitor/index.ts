@@ -33,6 +33,7 @@ import {
   extractCites,
   formatModelName,
   isBotMentioned,
+  stripBotMention,
   isDmAllowed,
   isSummarizationRequest,
   type ParsedCite,
@@ -994,6 +995,30 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       ? `${senderShip} [${senderRole}] in ${channelNest}`
       : `${senderShip} [${senderRole}]`;
 
+    // Compute command authorization for slash commands (owner-only)
+    const shouldComputeAuth = core.channel.commands.shouldComputeCommandAuthorized(
+      messageText,
+      cfg,
+    );
+    let commandAuthorized = false;
+
+    if (shouldComputeAuth) {
+      const useAccessGroups = cfg.commands?.useAccessGroups !== false;
+      const senderIsOwner = isOwner(senderShip);
+
+      commandAuthorized = core.channel.commands.resolveCommandAuthorizedFromAuthorizers({
+        useAccessGroups,
+        authorizers: [{ configured: Boolean(effectiveOwnerShip), allowed: senderIsOwner }],
+      });
+
+      // Log when non-owner attempts a slash command (will be silently ignored by Gateway)
+      if (!commandAuthorized) {
+        console.log(
+          `[tlon] Command attempt denied: ${senderShip} is not owner (owner=${effectiveOwnerShip ?? "not configured"})`,
+        );
+      }
+    }
+
     // Prepend attachment annotations to message body (similar to Signal format)
     let bodyWithAttachments = messageText;
     if (attachments.length > 0) {
@@ -1010,10 +1035,13 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       body: bodyWithAttachments,
     });
 
+    // Strip bot ship mention for CommandBody so "/status" is recognized as command-only
+    const commandBody = isGroup ? stripBotMention(messageText, botShipName) : messageText;
+
     const ctxPayload = core.channel.reply.finalizeInboundContext({
       Body: body,
       RawBody: messageText,
-      CommandBody: messageText,
+      CommandBody: commandBody,
       From: isGroup ? `tlon:group:${groupChannel}` : `tlon:${senderShip}`,
       To: `tlon:${botShipName}`,
       SessionKey: route.sessionKey,
@@ -1023,6 +1051,8 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       SenderName: senderShip,
       SenderId: senderShip,
       SenderRole: senderRole,
+      CommandAuthorized: commandAuthorized,
+      CommandSource: "text" as const,
       Provider: "tlon",
       Surface: "tlon",
       MessageSid: messageId,
