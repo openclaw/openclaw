@@ -1,6 +1,6 @@
 import net from "node:net";
 import os from "node:os";
-import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
+import { isTailnetIPv4, pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
 
 /**
  * Pick the primary non-internal IPv4 address (LAN IP).
@@ -406,11 +406,17 @@ export function isLoopbackHost(host: string): boolean {
  * Returns true if the URL is secure for transmitting data:
  * - wss:// (TLS) is always secure
  * - ws:// is only secure for loopback addresses (localhost, 127.x.x.x, ::1)
+ * - ws:// is also secure for Tailscale CGNAT addresses (100.64.0.0/10) when
+ *   bindMode is explicitly 'tailnet', since Tailscale connections are encrypted
+ *   at the network layer via WireGuard (ChaCha20-Poly1305)
  *
  * All other ws:// URLs are considered insecure because both credentials
  * AND chat/conversation data would be exposed to network interception.
  */
-export function isSecureWebSocketUrl(url: string): boolean {
+export function isSecureWebSocketUrl(
+  url: string,
+  bindMode?: import("../config/config.js").GatewayBindMode,
+): boolean {
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -426,6 +432,17 @@ export function isSecureWebSocketUrl(url: string): boolean {
     return false;
   }
 
-  // ws:// is only secure for loopback addresses
-  return isLoopbackHost(parsed.hostname);
+  // ws:// is always secure for loopback addresses
+  if (isLoopbackHost(parsed.hostname)) {
+    return true;
+  }
+
+  // Tailscale CGNAT addresses (100.64.0.0/10) are encrypted at the network layer
+  // via WireGuard. The ws:// frames never travel as cleartext on the wire.
+  // This exemption only applies when the caller explicitly configured bind='tailnet'.
+  if (bindMode === "tailnet" && isTailnetIPv4(parsed.hostname)) {
+    return true;
+  }
+
+  return false;
 }

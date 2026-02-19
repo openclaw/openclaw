@@ -303,6 +303,35 @@ describe("isSecureWebSocketUrl", () => {
     });
   });
 
+  describe("Tailscale CGNAT exemption (bindMode='tailnet')", () => {
+    it("returns true for ws:// to Tailscale IPs when bindMode is 'tailnet'", () => {
+      expect(isSecureWebSocketUrl("ws://100.64.0.1:18789", "tailnet")).toBe(true);
+      expect(isSecureWebSocketUrl("ws://100.127.255.254:18789", "tailnet")).toBe(true);
+      expect(isSecureWebSocketUrl("ws://100.74.146.43:18789", "tailnet")).toBe(true);
+    });
+
+    it("returns false for ws:// to Tailscale IPs without bindMode (default strict)", () => {
+      expect(isSecureWebSocketUrl("ws://100.64.0.1:18789")).toBe(false);
+      expect(isSecureWebSocketUrl("ws://100.127.255.254:18789")).toBe(false);
+    });
+
+    it("returns false for ws:// to Tailscale IPs when bindMode is not 'tailnet'", () => {
+      expect(isSecureWebSocketUrl("ws://100.64.0.1:18789", "lan")).toBe(false);
+      expect(isSecureWebSocketUrl("ws://100.64.0.1:18789", "loopback")).toBe(false);
+    });
+
+    it("returns false for ws:// to non-Tailscale IPs even when bindMode is 'tailnet'", () => {
+      expect(isSecureWebSocketUrl("ws://192.168.1.100:18789", "tailnet")).toBe(false);
+      expect(isSecureWebSocketUrl("ws://10.0.0.5:18789", "tailnet")).toBe(false);
+      expect(isSecureWebSocketUrl("ws://remote.example.com:18789", "tailnet")).toBe(false);
+    });
+
+    it("still returns true for loopback regardless of bindMode", () => {
+      expect(isSecureWebSocketUrl("ws://127.0.0.1:18789", "tailnet")).toBe(true);
+      expect(isSecureWebSocketUrl("ws://localhost:18789", "lan")).toBe(true);
+    });
+  });
+
   describe("invalid URLs", () => {
     it("returns false for invalid URLs", () => {
       expect(isSecureWebSocketUrl("not-a-url")).toBe(false);

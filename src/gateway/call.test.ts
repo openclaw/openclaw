@@ -145,12 +145,14 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.url).toBe("wss://100.64.0.1:18800");
   });
 
-  it("blocks ws:// to tailnet IP without TLS (CWE-319)", async () => {
+  it("allows ws:// to tailnet IP without TLS when bind is tailnet (WireGuard encrypted)", async () => {
     loadConfig.mockReturnValue({ gateway: { mode: "local", bind: "tailnet" } });
     resolveGatewayPort.mockReturnValue(18800);
     pickPrimaryTailnetIPv4.mockReturnValue("100.64.0.1");
 
-    await expect(callGateway({ method: "health" })).rejects.toThrow("SECURITY ERROR");
+    await callGateway({ method: "health" });
+
+    expect(lastClientOptions?.url).toBe("ws://100.64.0.1:18800");
   });
 
   it("uses LAN IP with TLS when bind is lan", async () => {
