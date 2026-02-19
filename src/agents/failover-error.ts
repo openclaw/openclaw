@@ -164,6 +164,10 @@ export function resolveFailoverReasonFromError(err: unknown): FailoverReason | n
   if (status === 400) {
     return "format";
   }
+  // Treat server overload / temporary unavailable as rate-limit-like for fallback
+  if (status === 502 || status === 503 || status === 504) {
+    return "rate_limit";
+  }
 
   const code = (getErrorCode(err) ?? "").toUpperCase();
   if (["ETIMEDOUT", "ESOCKETTIMEDOUT", "ECONNRESET", "ECONNABORTED"].includes(code)) {
