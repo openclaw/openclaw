@@ -769,11 +769,16 @@ export async function runEmbeddedPiAgent(
               };
             }
             // Handle orphaned tool call errors — these happen when session compaction
-            // removes a tool_use block but the tool_result is still in the transcript.
-            // The provider returns 400 "No tool call found for function call output".
-            // Don't surface this raw error to the user; repair and retry once.
+            // removes a tool_use or tool_result block but leaves the other in the transcript.
+            // Provider returns 400 with various messages:
+            //   Anthropic: "tool_use ids were found without tool_result blocks immediately after"
+            //   OpenAI:    "No tool call found for function call output"
+            //   Generic:   "tool_use_id ... not found"
+            // Don't surface this raw error to the user; return a friendly message.
             if (
-              /tool.?call.*not found|tool_use_id.*not found|function call output/i.test(errorText)
+              /tool.?call.*not found|tool_use_id.*not found|function call output|tool_use.*without.*tool_result/i.test(
+                errorText,
+              )
             ) {
               log.warn(
                 `Orphaned tool result detected after compaction — suppressing error (${errorText.slice(0, 120)})`,
