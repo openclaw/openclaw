@@ -110,6 +110,13 @@ describe("media store", () => {
       await fs.symlink(target, source);
 
       await expect(store.saveMediaSource(source)).rejects.toThrow("symlink");
+      await expect(store.saveMediaSource(source)).rejects.toMatchObject({ code: "invalid-path" });
+    });
+  });
+
+  it("rejects directory sources with typed error code", async () => {
+    await withTempStore(async (store, home) => {
+      await expect(store.saveMediaSource(home)).rejects.toMatchObject({ code: "not-file" });
     });
   });
 
