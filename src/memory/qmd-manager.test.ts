@@ -1165,12 +1165,12 @@ describe("QmdMemoryManager", () => {
   it("throws when sqlite index is busy", async () => {
     const { manager } = await createManager();
     const inner = manager as unknown as {
-      db: { prepare: () => { get: () => never }; close: () => void } | null;
+      db: { prepare: () => { all: () => never }; close: () => void } | null;
       resolveDocLocation: (docid?: string) => Promise<unknown>;
     };
     inner.db = {
       prepare: () => ({
-        get: () => {
+        all: () => {
           throw new Error("SQLITE_BUSY: database is locked");
         },
       }),
@@ -1198,11 +1198,11 @@ describe("QmdMemoryManager", () => {
 
     const { manager } = await createManager();
     const inner = manager as unknown as {
-      db: { prepare: () => { get: () => never }; close: () => void } | null;
+      db: { prepare: () => { all: () => never }; close: () => void } | null;
     };
     inner.db = {
       prepare: () => ({
-        get: () => {
+        all: () => {
           throw new Error("SQLITE_BUSY: database is locked");
         },
       }),
@@ -1235,19 +1235,19 @@ describe("QmdMemoryManager", () => {
     const { manager } = await createManager();
 
     const inner = manager as unknown as {
-      db: { prepare: (query: string) => { get: (arg: unknown) => unknown }; close: () => void };
+      db: { prepare: (query: string) => { all: (arg: unknown) => unknown[] }; close: () => void };
     };
     inner.db = {
       prepare: (query: string) => {
         prepareCalls.push(query);
         return {
-          get: (arg: unknown) => {
+          all: (arg: unknown) => {
             if (query.includes("hash = ?")) {
-              return undefined;
+              return [];
             }
             if (query.includes("hash LIKE ?")) {
               expect(arg).toBe(`${exactDocid}%`);
-              return { collection: "workspace-main", path: "notes/welcome.md" };
+              return [{ collection: "workspace-main", path: "notes/welcome.md" }];
             }
             throw new Error(`unexpected sqlite query: ${query}`);
           },

@@ -929,19 +929,21 @@ export class QmdMemoryManager implements MemorySearchManager {
       return cached;
     }
     const db = this.ensureDb();
-    let row: { collection: string; path: string } | undefined;
+    let rows: Array<{ collection: string; path: string }>;
     try {
-      const exact = db
-        .prepare("SELECT collection, path FROM documents WHERE hash = ? AND active = 1 LIMIT 1")
-        .get(normalized) as { collection: string; path: string } | undefined;
-      row = exact;
-      if (!row) {
-        row = db
-          .prepare(
-            "SELECT collection, path FROM documents WHERE hash LIKE ? AND active = 1 LIMIT 1",
-          )
-          .get(`${normalized}%`) as { collection: string; path: string } | undefined;
-      }
+      // Use .all() instead of .get() with LIMIT 1: if the first matching row belongs to
+      // a stale or unknown collection, toDocLocation() returns null and we need to check
+      // subsequent rows. LIMIT 1 silently returns empty results when the first match is
+      // from an unrecognised collection. (#20513)
+      const exactRows = db
+        .prepare("SELECT collection, path FROM documents WHERE hash = ? AND active = 1")
+        .all(normalized) as Array<{ collection: string; path: string }>;
+      rows =
+        exactRows.length > 0
+          ? exactRows
+          : (db
+              .prepare("SELECT collection, path FROM documents WHERE hash LIKE ? AND active = 1")
+              .all(`${normalized}%`) as Array<{ collection: string; path: string }>);
     } catch (err) {
       if (this.isSqliteBusyError(err)) {
         log.debug(`qmd index is busy while resolving doc path: ${String(err)}`);
@@ -949,15 +951,14 @@ export class QmdMemoryManager implements MemorySearchManager {
       }
       throw err;
     }
-    if (!row) {
-      return null;
+    for (const row of rows) {
+      const location = this.toDocLocation(row.collection, row.path);
+      if (location) {
+        this.docPathCache.set(normalized, location);
+        return location;
+      }
     }
-    const location = this.toDocLocation(row.collection, row.path);
-    if (!location) {
-      return null;
-    }
-    this.docPathCache.set(normalized, location);
-    return location;
+    return null;
   }
 
   private extractSnippetLines(snippet: string): { startLine: number; endLine: number } {
