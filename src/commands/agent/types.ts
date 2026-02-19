@@ -76,4 +76,6 @@ export type AgentCommandOpts = {
   inputProvenance?: InputProvenance;
   /** Per-call stream param overrides (best-effort). */
   streamParams?: AgentStreamParams;
+  /** Override the LLM model for this request (e.g. "claude-sonnet-4-6"). Takes lower priority than a session-stored model override. */
+  modelOverride?: string;
 };

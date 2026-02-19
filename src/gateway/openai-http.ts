@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { loadModelCatalog } from "../agents/model-catalog.js";
+import { resolveConfiguredModelRef } from "../agents/model-selection.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommand } from "../commands/agent.js";
 import { loadConfig } from "../config/config.js";
@@ -179,11 +182,11 @@ function applyCorsHeaders(
   }
 }
 
-function handleOpenAiModelsRequest(
+async function handleOpenAiModelsRequest(
   req: IncomingMessage,
   res: ServerResponse,
   opts: OpenAiHttpOptions,
-): boolean {
+): Promise<boolean> {
   const url = new URL(req.url ?? "/", "http://localhost");
   if (url.pathname !== "/v1/models") {
     return false;
@@ -206,19 +209,37 @@ function handleOpenAiModelsRequest(
     return true;
   }
 
-  const config = loadConfig();
-  const agentList = config.agents?.list ?? [];
   const created = Math.floor(Date.now() / 1000);
 
+  // Return actual LLM model IDs from the catalog, filtered to the configured
+  // provider, so clients (e.g. Open WebUI) show real model names instead of
+  // internal agent identifiers. Falls back to the default model on failure.
+  const cfg = loadConfig();
+  const configuredRef = resolveConfiguredModelRef({
+    cfg,
+    defaultProvider: DEFAULT_PROVIDER,
+    defaultModel: "claude-opus-4-6",
+  });
+  const activeProvider = configuredRef.provider || DEFAULT_PROVIDER;
+
+  const catalog = await loadModelCatalog({ config: cfg }).catch(() => []);
+  const filtered = catalog.filter((entry) => entry.provider === activeProvider);
   const models =
-    agentList.length > 0
-      ? agentList.map((a) => ({
-          id: typeof (a as { id?: unknown }).id === "string" ? (a as { id: string }).id : "main",
+    filtered.length > 0
+      ? filtered.map((entry) => ({
+          id: entry.id,
           object: "model",
           created,
-          owned_by: "openclaw",
+          owned_by: entry.provider,
         }))
-      : [{ id: "main", object: "model", created, owned_by: "openclaw" }];
+      : [
+          {
+            id: "claude-opus-4-6",
+            object: "model",
+            created,
+            owned_by: activeProvider,
+          },
+        ];
 
   sendJson(res, 200, { object: "list", data: models });
   return true;
@@ -257,7 +278,7 @@ export async function handleOpenAiHttpRequest(
   }
 
   // GET /v1/models — no auth required, mirrors OpenAI behaviour.
-  if (handleOpenAiModelsRequest(req, res, opts)) {
+  if (await handleOpenAiModelsRequest(req, res, opts)) {
     return true;
   }
 
@@ -282,7 +303,15 @@ export async function handleOpenAiHttpRequest(
   const model = typeof payload.model === "string" ? payload.model : "openclaw";
   const user = typeof payload.user === "string" ? payload.user : undefined;
 
+  // If the model field is a bare LLM model ID (not an agent routing prefix),
+  // route to the default agent but pass it as a per-request model override.
   const agentId = resolveAgentIdForRequest({ req, model });
+  const isLlmModelOverride =
+    agentId === "main" &&
+    model !== "openclaw" &&
+    !model.startsWith("openclaw") &&
+    !model.startsWith("agent:");
+  const modelOverride = isLlmModelOverride ? model : undefined;
   const sessionKey = resolveOpenAiSessionKey({ req, agentId, user });
   const prompt = buildAgentPrompt(payload.messages);
   if (!prompt.message) {
@@ -309,6 +338,7 @@ export async function handleOpenAiHttpRequest(
           deliver: false,
           messageChannel: "webchat",
           bestEffortDeliver: false,
+          modelOverride,
         },
         defaultRuntime,
         deps,
@@ -417,6 +447,7 @@ export async function handleOpenAiHttpRequest(
           deliver: false,
           messageChannel: "webchat",
           bestEffortDeliver: false,
+          modelOverride,
         },
         defaultRuntime,
         deps,

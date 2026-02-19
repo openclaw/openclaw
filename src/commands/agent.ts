@@ -426,7 +426,11 @@ export async function agentCommand(
         ) {
           const { updated } = applyModelOverrideToSessionEntry({
             entry,
-            selection: { provider: defaultProvider, model: defaultModel, isDefault: true },
+            selection: {
+              provider: defaultProvider,
+              model: defaultModel,
+              isDefault: true,
+            },
           });
           if (updated) {
             await persistSessionEntry({
@@ -441,7 +445,7 @@ export async function agentCommand(
     }
 
     const storedProviderOverride = sessionEntry?.providerOverride?.trim();
-    const storedModelOverride = sessionEntry?.modelOverride?.trim();
+    const storedModelOverride = sessionEntry?.modelOverride?.trim() || opts.modelOverride?.trim();
     if (storedModelOverride) {
       const candidateProvider = storedProviderOverride || defaultProvider;
       const normalizedStored = normalizeModelRef(candidateProvider, storedModelOverride);
