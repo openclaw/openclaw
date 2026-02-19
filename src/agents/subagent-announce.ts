@@ -864,10 +864,11 @@ export async function runSubagentAnnounceFlow(params: {
         // Parent run has ended. Check if parent SESSION still exists.
         // If it does, the parent may be waiting for child results — inject there.
         const parentSessionEntry = loadSessionEntryByKey(targetRequesterSessionKey);
-        const parentSessionAlive =
+        const parentSessionAlive = Boolean(
           parentSessionEntry &&
           typeof parentSessionEntry.sessionId === "string" &&
-          parentSessionEntry.sessionId.trim();
+          parentSessionEntry.sessionId.trim(),
+        );
 
         if (!parentSessionAlive) {
           // Parent session is truly gone — fallback to grandparent
@@ -883,7 +884,7 @@ export async function runSubagentAnnounceFlow(params: {
           targetRequesterOrigin =
             normalizeDeliveryContext(fallback.requesterOrigin) ?? targetRequesterOrigin;
           requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey);
-          requesterIsSubagent = requesterDepth >= 1;
+          requesterIsSubagent = !expectsCompletionMessage && requesterDepth >= 1;
         }
         // If parent session is alive (just has no active run), continue with parent
         // as target. Injecting the announce will start a new agent turn for processing.
