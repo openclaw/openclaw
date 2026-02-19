@@ -184,10 +184,6 @@ export type PluginRuntime = {
   };
   system: {
     enqueueSystemEvent: EnqueueSystemEvent;
-    /**
-     * @deprecated Disabled by default for security hardening.
-     * Set `plugins.runtime.allowLegacyExec: true` to opt in for legacy compatibility.
-     */
     runCommandWithTimeout: RunCommandWithTimeout;
     formatNativeDependencyHint: FormatNativeDependencyHint;
   };
