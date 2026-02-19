@@ -2,7 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseSchtasksQuery, readScheduledTaskCommand, resolveTaskScriptPath } from "./schtasks.js";
+import {
+  deriveScheduledTaskRuntimeStatus,
+  parseSchtasksQuery,
+  readScheduledTaskCommand,
+  resolveTaskScriptPath,
+} from "./schtasks.js";
 
 describe("schtasks runtime parsing", () => {
   it("parses status and last run info", () => {
@@ -30,6 +35,46 @@ describe("schtasks runtime parsing", () => {
       status: "Running",
       lastRunTime: "1/8/2026 1:23:45 AM",
       lastRunResult: "0x0",
+    });
+  });
+});
+
+describe("scheduled task runtime derivation", () => {
+  it("treats Running + 0x41301 as running", () => {
+    expect(
+      deriveScheduledTaskRuntimeStatus({
+        status: "Running",
+        lastRunResult: "0x41301",
+      }),
+    ).toEqual({ status: "running" });
+  });
+
+  it("treats Running + decimal 267009 as running", () => {
+    expect(
+      deriveScheduledTaskRuntimeStatus({
+        status: "Running",
+        lastRunResult: "267009",
+      }),
+    ).toEqual({ status: "running" });
+  });
+
+  it("treats Running without last result as running", () => {
+    expect(
+      deriveScheduledTaskRuntimeStatus({
+        status: "Running",
+      }),
+    ).toEqual({ status: "running" });
+  });
+
+  it("downgrades stale Running status when last result is not a running code", () => {
+    expect(
+      deriveScheduledTaskRuntimeStatus({
+        status: "Running",
+        lastRunResult: "0x0",
+      }),
+    ).toEqual({
+      status: "stopped",
+      detail: "Task reports Running but Last Run Result=0x0; treating as stale runtime state.",
     });
   });
 });
