@@ -3,10 +3,6 @@
 Please read this in full and do not skip sections.
 This is the single source of truth for the maintainer PR workflow.
 
-## Triage order
-
-Process PRs **oldest to newest**. Older PRs are more likely to have merge conflicts and stale dependencies; resolving them first keeps the queue healthy and avoids snowballing rebase pain.
-
 ## Working rule
 
 Skills execute workflow. Maintainers provide judgment.
