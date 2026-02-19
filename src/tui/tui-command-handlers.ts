@@ -293,6 +293,19 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       case "model":
         if (!args) {
           await openModelSelector();
+        } else if (args === "status") {
+          // Show current model information
+          const provider = state.sessionInfo.modelProvider ?? "unknown";
+          const model = state.sessionInfo.model ?? "unknown";
+          const current = `${provider}/${model}`;
+          chatLog.addSystem(
+            [`Current: ${current}`, "", "Switch: /model <provider/model>", "Browse: /models"].join(
+              "\n",
+            ),
+          );
+        } else if (args === "list") {
+          // /model list is an alias for /models
+          await openModelSelector();
         } else {
           try {
             const result = await client.patchSession({
