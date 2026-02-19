@@ -669,6 +669,16 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
 
       const runtime = getNostrRuntime();
       const traceRecorder = createNostrTraceRecorder(account.accountId, ctx.log);
+      const updateActivityStatus = (patch: {
+        lastInboundAt?: number;
+        lastOutboundAt?: number;
+      }): void => {
+        ctx.setStatus({
+          accountId: account.accountId,
+          publicKey: account.publicKey,
+          ...patch,
+        });
+      };
       let lastAiInfoFingerprint: string | null = null;
       let lastSelectedModel: ModelSelectionSnapshot | undefined;
       const activeRuns = new Map<string, ActiveRunControl>();
@@ -856,9 +866,15 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
               typeof parsedPayload?.trace_id === "string" ? parsedPayload.trace_id : undefined,
             payload: parsedPayload ?? undefined,
           });
+          updateActivityStatus({
+            lastOutboundAt: Date.now(),
+          });
         },
         onMessage: async (inbound, reply) => {
           const payload: NostrInboundMessage = inbound;
+          updateActivityStatus({
+            lastInboundAt: Date.now(),
+          });
           const config = runtime.config.loadConfig();
           const senderPubkey = payload.senderPubkey.toLowerCase();
           const rawText = payload.text;
