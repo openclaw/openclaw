@@ -10,6 +10,20 @@ async function writeFile(filePath: string, contents = "avatar") {
   await fs.writeFile(filePath, contents, "utf-8");
 }
 
+async function expectLocalAvatarPath(
+  cfg: OpenClawConfig,
+  workspace: string,
+  expectedRelativePath: string,
+) {
+  const workspaceReal = await fs.realpath(workspace);
+  const resolved = resolveAgentAvatar(cfg, "main");
+  expect(resolved.kind).toBe("local");
+  if (resolved.kind === "local") {
+    const resolvedReal = await fs.realpath(resolved.filePath);
+    expect(path.relative(workspaceReal, resolvedReal)).toBe(expectedRelativePath);
+  }
+}
+
 describe("resolveAgentAvatar", () => {
   it("resolves local avatar from config when inside workspace", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-avatar-"));
@@ -29,13 +43,7 @@ describe("resolveAgentAvatar", () => {
       },
     };
 
-    const workspaceReal = await fs.realpath(workspace);
-    const resolved = resolveAgentAvatar(cfg, "main");
-    expect(resolved.kind).toBe("local");
-    if (resolved.kind === "local") {
-      const resolvedReal = await fs.realpath(resolved.filePath);
-      expect(path.relative(workspaceReal, resolvedReal)).toBe(path.join("avatars", "main.png"));
-    }
+    await expectLocalAvatarPath(cfg, workspace, path.join("avatars", "main.png"));
   });
 
   it("rejects avatars outside the workspace", async () => {
@@ -82,12 +90,24 @@ describe("resolveAgentAvatar", () => {
       },
     };
 
-    const workspaceReal = await fs.realpath(workspace);
+    await expectLocalAvatarPath(cfg, workspace, path.join("avatars", "fallback.png"));
+  });
+
+  it("returns missing for non-existent local avatar files", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-avatar-"));
+    const workspace = path.join(root, "work");
+    await fs.mkdir(workspace, { recursive: true });
+
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "main", workspace, identity: { avatar: "avatars/missing.png" } }],
+      },
+    };
+
     const resolved = resolveAgentAvatar(cfg, "main");
-    expect(resolved.kind).toBe("local");
-    if (resolved.kind === "local") {
-      const resolvedReal = await fs.realpath(resolved.filePath);
-      expect(path.relative(workspaceReal, resolvedReal)).toBe(path.join("avatars", "fallback.png"));
+    expect(resolved.kind).toBe("none");
+    if (resolved.kind === "none") {
+      expect(resolved.reason).toBe("missing");
     }
   });
 

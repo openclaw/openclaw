@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { compactEmbeddedPiSession } from "../../agents/pi-embedded.js";
 import {
   addSubagentRunForTests,
   listSubagentRunsForRequester,
@@ -288,161 +289,12 @@ describe("/approve command", () => {
   });
 });
 
-describe("/mesh command", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    callGatewayMock.mockReset();
-  });
-
-  it("shows usage for bare /mesh", async () => {
-    const cfg = {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
-    const params = buildParams("/mesh", cfg);
-    const result = await handleCommands(params);
-    expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("Mesh command");
-    expect(result.reply?.text).toContain("/mesh run <goal|mesh-plan-id>");
-    expect(callGatewayMock).not.toHaveBeenCalled();
-  });
-
-  it("runs auto plan + run for /mesh <goal>", async () => {
-    const cfg = {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
-    const params = buildParams("/mesh build a landing animation", cfg);
-
-    callGatewayMock
-      .mockResolvedValueOnce({
-        plan: {
-          planId: "mesh-plan-1",
-          goal: "build a landing animation",
-          createdAt: Date.now(),
-          steps: [
-            { id: "design", prompt: "Design animation" },
-            { id: "mobile-test", prompt: "Test mobile", dependsOn: ["design"] },
-          ],
-        },
-        order: ["design", "mobile-test"],
-        source: "llm",
-      })
-      .mockResolvedValueOnce({
-        runId: "mesh-run-1",
-        status: "completed",
-        stats: { total: 2, succeeded: 2, failed: 0, skipped: 0, running: 0, pending: 0 },
-      });
-
-    const result = await handleCommands(params);
-    expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("Mesh Plan");
-    expect(result.reply?.text).toContain("Mesh Run");
-    expect(callGatewayMock).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        method: "mesh.plan.auto",
-        params: expect.objectContaining({
-          goal: "build a landing animation",
-        }),
-      }),
-    );
-    expect(callGatewayMock).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        method: "mesh.run",
-      }),
-    );
-  });
-
-  it("returns status via /mesh status <runId>", async () => {
-    const cfg = {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
-    const params = buildParams("/mesh status mesh-run-77", cfg);
-
-    callGatewayMock.mockResolvedValueOnce({
-      runId: "mesh-run-77",
-      status: "failed",
-      stats: { total: 3, succeeded: 1, failed: 1, skipped: 1, running: 0, pending: 0 },
-    });
-
-    const result = await handleCommands(params);
-    expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("Run: mesh-run-77");
-    expect(result.reply?.text).toContain("Status: failed");
-    expect(callGatewayMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "mesh.status",
-        params: { runId: "mesh-run-77" },
-      }),
-    );
-  });
-
-  it("runs a previously planned mesh plan id without re-planning", async () => {
-    const cfg = {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
-    const planParams = buildParams("/mesh plan Build Hero Animation", cfg);
-
-    callGatewayMock.mockResolvedValueOnce({
-      plan: {
-        planId: "mesh-plan-abc",
-        goal: "Build Hero Animation",
-        createdAt: Date.now(),
-        steps: [{ id: "design", prompt: "Design hero animation" }],
-      },
-      order: ["design"],
-      source: "llm",
-    });
-
-    const planResult = await handleCommands(planParams);
-    expect(planResult.shouldContinue).toBe(false);
-    expect(planResult.reply?.text).toContain("Run exact plan: /mesh run mesh-plan-abc");
-    expect(callGatewayMock).toHaveBeenCalledTimes(1);
-    expect(callGatewayMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "mesh.plan.auto",
-        params: expect.objectContaining({
-          goal: "Build Hero Animation",
-        }),
-      }),
-    );
-
-    callGatewayMock.mockReset();
-    callGatewayMock.mockResolvedValueOnce({
-      runId: "mesh-run-abc",
-      status: "completed",
-      stats: { total: 1, succeeded: 1, failed: 0, skipped: 0, running: 0, pending: 0 },
-    });
-
-    const runParams = buildParams("/mesh run mesh-plan-abc", cfg);
-    const runResult = await handleCommands(runParams);
-    expect(runResult.shouldContinue).toBe(false);
-    expect(callGatewayMock).toHaveBeenCalledTimes(1);
-    expect(callGatewayMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "mesh.run",
-        params: expect.objectContaining({
-          plan: expect.objectContaining({
-            planId: "mesh-plan-abc",
-            goal: "Build Hero Animation",
-          }),
-        }),
-      }),
-    );
-  });
-});
-
 describe("/compact command", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
   it("returns null when command is not /compact", async () => {
-    const { compactEmbeddedPiSession } = await import("../../agents/pi-embedded.js");
     const cfg = {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
@@ -461,7 +313,6 @@ describe("/compact command", () => {
   });
 
   it("rejects unauthorized /compact commands", async () => {
-    const { compactEmbeddedPiSession } = await import("../../agents/pi-embedded.js");
     const cfg = {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
@@ -485,7 +336,6 @@ describe("/compact command", () => {
   });
 
   it("routes manual compaction with explicit trigger and context metadata", async () => {
-    const { compactEmbeddedPiSession } = await import("../../agents/pi-embedded.js");
     const cfg = {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
