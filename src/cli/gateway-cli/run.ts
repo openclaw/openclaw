@@ -292,6 +292,13 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     defaultRuntime.exit(1);
     return;
   }
+  if (resolvedAuthMode === "none") {
+    const log = createSubsystemLogger("gateway");
+    log.warn(
+      "Gateway auth mode is 'none' — all connections are unauthenticated. " +
+        "Set gateway.auth.token or gateway.auth.password to secure the gateway.",
+    );
+  }
   if (bind !== "loopback" && !hasSharedSecret && resolvedAuthMode !== "trusted-proxy") {
     defaultRuntime.error(
       [
