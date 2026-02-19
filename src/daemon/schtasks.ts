@@ -35,6 +35,15 @@ export function resolveTaskScriptPath(env: GatewayServiceEnv): string {
   return path.join(stateDir, scriptName);
 }
 
+/**
+ * Strip CR/LF characters to prevent command injection in batch scripts.
+ * In cmd.exe, line breaks terminate the current statement, so a CRLF
+ * inside a `set` or `rem` value would allow arbitrary command execution.
+ */
+export function sanitizeCmdLine(value: string): string {
+  return value.replace(/[\r\n]+/g, " ");
+}
+
 function quoteCmdArg(value: string): string {
   if (!/[ \t"]/g.test(value)) {
     return value;
@@ -147,20 +156,20 @@ function buildTaskScript({
 }: GatewayServiceRenderArgs): string {
   const lines: string[] = ["@echo off"];
   if (description?.trim()) {
-    lines.push(`rem ${description.trim()}`);
+    lines.push(`rem ${sanitizeCmdLine(description.trim())}`);
   }
   if (workingDirectory) {
-    lines.push(`cd /d ${quoteCmdArg(workingDirectory)}`);
+    lines.push(`cd /d ${quoteCmdArg(sanitizeCmdLine(workingDirectory))}`);
   }
   if (environment) {
     for (const [key, value] of Object.entries(environment)) {
       if (!value) {
         continue;
       }
-      lines.push(`set ${key}=${value}`);
+      lines.push(`set ${sanitizeCmdLine(key)}=${sanitizeCmdLine(value)}`);
     }
   }
-  const command = programArguments.map(quoteCmdArg).join(" ");
+  const command = programArguments.map((a) => quoteCmdArg(sanitizeCmdLine(a))).join(" ");
   lines.push(command);
   return `${lines.join("\r\n")}\r\n`;
 }

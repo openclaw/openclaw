@@ -2,7 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseSchtasksQuery, readScheduledTaskCommand, resolveTaskScriptPath } from "./schtasks.js";
+import {
+  parseSchtasksQuery,
+  readScheduledTaskCommand,
+  resolveTaskScriptPath,
+  sanitizeCmdLine,
+} from "./schtasks.js";
 
 describe("schtasks runtime parsing", () => {
   it.each(["Ready", "Running"])("parses %s status", (status) => {
@@ -197,5 +202,31 @@ describe("readScheduledTaskCommand", () => {
         });
       },
     );
+  });
+});
+
+describe("sanitizeCmdLine", () => {
+  it("strips CRLF sequences", () => {
+    expect(sanitizeCmdLine("foo\r\nbar")).toBe("foo bar");
+  });
+
+  it("strips lone CR and LF", () => {
+    expect(sanitizeCmdLine("foo\rbar\nbaz")).toBe("foo bar baz");
+  });
+
+  it("collapses multiple line breaks into a single space", () => {
+    expect(sanitizeCmdLine("foo\r\n\r\nbar")).toBe("foo bar");
+  });
+
+  it("returns clean strings unchanged", () => {
+    expect(sanitizeCmdLine("NODE_ENV=production")).toBe("NODE_ENV=production");
+  });
+
+  it("prevents command injection via CRLF in environment values", () => {
+    const malicious = "foo\r\nnet user attacker P@ss /add";
+    const sanitized = sanitizeCmdLine(malicious);
+    expect(sanitized).not.toContain("\r");
+    expect(sanitized).not.toContain("\n");
+    expect(sanitized).toBe("foo net user attacker P@ss /add");
   });
 });
