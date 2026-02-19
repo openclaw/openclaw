@@ -127,8 +127,9 @@ vi.mock("../../infra/skills-remote.js", () => ({
   getRemoteSkillEligibility: vi.fn().mockReturnValue({}),
 }));
 
+const logWarnMock = vi.fn();
 vi.mock("../../logger.js", () => ({
-  logWarn: vi.fn(),
+  logWarn: logWarnMock,
 }));
 
 vi.mock("../../security/external-content.js", () => ({
@@ -201,7 +202,7 @@ function makeParams(overrides?: Record<string, unknown>) {
   };
 }
 
-function makeFreshSessionEntry() {
+function makeFreshSessionEntry(overrides?: Record<string, unknown>) {
   return {
     sessionId: "test-session-id",
     updatedAt: 0,
@@ -210,6 +211,25 @@ function makeFreshSessionEntry() {
     // Crucially: no model or modelProvider — simulates a brand-new session
     model: undefined as string | undefined,
     modelProvider: undefined as string | undefined,
+    ...overrides,
+  };
+}
+
+function makeSuccessfulRunResult(overrides?: Record<string, unknown>) {
+  return {
+    result: {
+      payloads: [{ text: "digest complete" }],
+      meta: {
+        agentMeta: {
+          model: "claude-sonnet-4-6",
+          provider: "anthropic",
+          usage: { input: 100, output: 50 },
+        },
+      },
+    },
+    provider: "anthropic",
+    model: "claude-sonnet-4-6",
+    ...overrides,
   };
 }
 
@@ -239,6 +259,7 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
     });
 
     resolveAgentConfigMock.mockReturnValue(undefined);
+    updateSessionStoreMock.mockResolvedValue(undefined);
 
     cronSession = {
       storePath: "/tmp/store.json",
@@ -269,23 +290,29 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
     // The session entry should record the intended cron model override (Sonnet)
     // so that sessions_list does not fall back to the agent default (Opus).
     //
-    // BUG (#21057): the model is only written AFTER a successful run (line 520),
-    // so it remains undefined when the run throws at the catch on line 502.
+    // BUG (#21057): before the fix, the model was only written to the session
+    // entry AFTER a successful run (in the post-run telemetry block), so it
+    // remained undefined when the run threw in the catch block.
     expect(cronSession.sessionEntry.model).toBe("claude-sonnet-4-6");
     expect(cronSession.sessionEntry.modelProvider).toBe("anthropic");
+    expect(cronSession.sessionEntry.systemSent).toBe(true);
   });
 
   it("session entry already carries cron model at pre-run persist time (race condition)", async () => {
     // Capture a deep snapshot of the session entry at each persist call so we
     // can inspect what sessions_list would see mid-run — before the post-run
     // persist overwrites the entry with the actual model from agentMeta.
-    const persistedSnapshots: Array<{ model?: string; modelProvider?: string }> = [];
+    const persistedSnapshots: Array<{
+      model?: string;
+      modelProvider?: string;
+      systemSent?: boolean;
+    }> = [];
     updateSessionStoreMock.mockImplementation(
       async (_path: string, cb: (s: Record<string, unknown>) => void) => {
         const store: Record<string, unknown> = {};
         cb(store);
         const entry = Object.values(store)[0] as
-          | { model?: string; modelProvider?: string }
+          | { model?: string; modelProvider?: string; systemSent?: boolean }
           | undefined;
         if (entry) {
           persistedSnapshots.push(JSON.parse(JSON.stringify(entry)));
@@ -293,30 +320,102 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
       },
     );
 
-    // Simulate a successful run
-    runWithModelFallbackMock.mockResolvedValueOnce({
-      result: {
-        payloads: [{ text: "digest complete" }],
-        meta: {
-          agentMeta: {
-            model: "claude-sonnet-4-6",
-            provider: "anthropic",
-            usage: { input: 100, output: 50 },
-          },
-        },
-      },
-      provider: "anthropic",
-      model: "claude-sonnet-4-6",
-    });
+    runWithModelFallbackMock.mockResolvedValueOnce(makeSuccessfulRunResult());
 
     await runCronIsolatedAgentTurn(makeParams());
 
-    // There are at least 3 persists: skills snapshot, pre-run, post-run.
-    // The pre-run persist (index 1) is the one a concurrent sessions_list
+    // Persist ordering: [0] skills snapshot, [1] pre-run model+systemSent,
+    // [2] post-run telemetry.  Index 1 is what a concurrent sessions_list
     // would read while the agent run is in flight.
-    expect(persistedSnapshots.length).toBeGreaterThanOrEqual(2);
+    expect(persistedSnapshots.length).toBeGreaterThanOrEqual(3);
     const preRunSnapshot = persistedSnapshots[1];
     expect(preRunSnapshot.model).toBe("claude-sonnet-4-6");
     expect(preRunSnapshot.modelProvider).toBe("anthropic");
+    expect(preRunSnapshot.systemSent).toBe(true);
+  });
+
+  it("returns error without persisting model when payload model is disallowed", async () => {
+    resolveAllowedModelRefMock.mockReturnValueOnce({
+      error: "Model not allowed: anthropic/claude-sonnet-4-6",
+    });
+
+    const result = await runCronIsolatedAgentTurn(makeParams());
+
+    expect(result.status).toBe("error");
+    expect(result.error).toContain("Model not allowed");
+    // Model should remain undefined — the early return happens before the
+    // pre-run persist block, so neither the session entry nor the store
+    // should be touched with a rejected model.
+    expect(cronSession.sessionEntry.model).toBeUndefined();
+    expect(cronSession.sessionEntry.modelProvider).toBeUndefined();
+  });
+
+  it("persists session-level /model override on session entry before the run", async () => {
+    // No cron payload model — the job has no model field
+    const jobWithoutModel = makeJob({
+      payload: { kind: "agentTurn", message: "run daily digest" },
+    });
+
+    // Session-level /model override set by user (e.g. via /model command)
+    cronSession.sessionEntry = makeFreshSessionEntry({
+      modelOverride: "claude-haiku-4-5",
+      providerOverride: "anthropic",
+    });
+    resolveCronSessionMock.mockReturnValue(cronSession);
+
+    // resolveAllowedModelRef is called for the session override path too
+    resolveAllowedModelRefMock.mockReturnValue({
+      ref: { provider: "anthropic", model: "claude-haiku-4-5" },
+    });
+
+    runWithModelFallbackMock.mockRejectedValueOnce(new Error("LLM provider timeout"));
+
+    const result = await runCronIsolatedAgentTurn(makeParams({ job: jobWithoutModel }));
+
+    expect(result.status).toBe("error");
+    // Even though the run failed, the session-level model override should
+    // be persisted on the entry — not the agent default (Opus).
+    expect(cronSession.sessionEntry.model).toBe("claude-haiku-4-5");
+    expect(cronSession.sessionEntry.modelProvider).toBe("anthropic");
+  });
+
+  it("logs warning and continues when pre-run persist fails", async () => {
+    // Persist ordering: [1] skills snapshot, [2] pre-run, [3] post-run.
+    // Only the pre-run persist (call 2) should fail — the skills snapshot
+    // persist is pre-existing code without a try-catch guard.
+    let callCount = 0;
+    updateSessionStoreMock.mockImplementation(async () => {
+      callCount++;
+      if (callCount === 2) {
+        throw new Error("ENOSPC: no space left on device");
+      }
+    });
+
+    runWithModelFallbackMock.mockResolvedValueOnce(makeSuccessfulRunResult());
+
+    const result = await runCronIsolatedAgentTurn(makeParams());
+
+    // The run should still complete successfully despite the persist failure
+    expect(result.status).toBe("ok");
+    expect(logWarnMock).toHaveBeenCalledWith(
+      expect.stringContaining("Failed to persist pre-run session entry"),
+    );
+  });
+
+  it("persists default model pre-run when no payload override is present", async () => {
+    // No cron payload model override
+    const jobWithoutModel = makeJob({
+      payload: { kind: "agentTurn", message: "run daily digest" },
+    });
+
+    runWithModelFallbackMock.mockRejectedValueOnce(new Error("LLM provider timeout"));
+
+    const result = await runCronIsolatedAgentTurn(makeParams({ job: jobWithoutModel }));
+
+    expect(result.status).toBe("error");
+    // With no override, the default model (Opus) should still be persisted
+    // on the session entry rather than left undefined.
+    expect(cronSession.sessionEntry.model).toBe("claude-opus-4-6");
+    expect(cronSession.sessionEntry.modelProvider).toBe("anthropic");
   });
 });

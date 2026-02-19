@@ -384,11 +384,16 @@ export async function runCronIsolatedAgentTurn(params: {
 
   // Persist the intended model and systemSent before the run so that
   // sessions_list reflects the cron override even if the run fails or is
-  // still in progress (#21057).
+  // still in progress (#21057).  Best-effort: a filesystem error here
+  // must not prevent the actual agent run from executing.
   cronSession.sessionEntry.modelProvider = provider;
   cronSession.sessionEntry.model = model;
   cronSession.sessionEntry.systemSent = true;
-  await persistSessionEntry();
+  try {
+    await persistSessionEntry();
+  } catch (err) {
+    logWarn(`[cron:${params.job.id}] Failed to persist pre-run session entry: ${String(err)}`);
+  }
 
   // Resolve auth profile for the session, mirroring the inbound auto-reply path
   // (get-reply-run.ts). Without this, isolated cron sessions fall back to env-var
