@@ -5,14 +5,14 @@ export const configMocks: {
   readConfigFileSnapshot: MockFn;
   writeConfigFile: MockFn;
 } = {
-  readConfigFileSnapshot: vi.fn() as unknown as MockFn,
-  writeConfigFile: vi.fn().mockResolvedValue(undefined) as unknown as MockFn,
+  readConfigFileSnapshot: vi.fn(),
+  writeConfigFile: vi.fn().mockResolvedValue(undefined),
 };
 
 export const offsetMocks: {
   deleteTelegramUpdateOffset: MockFn;
 } = {
-  deleteTelegramUpdateOffset: vi.fn().mockResolvedValue(undefined) as unknown as MockFn,
+  deleteTelegramUpdateOffset: vi.fn().mockResolvedValue(undefined),
 };
 
 vi.mock("../config/config.js", async (importOriginal) => {

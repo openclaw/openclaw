@@ -39,6 +39,7 @@ type CronUpdatePatch = {
   patch?: {
     payload?: { message?: string; model?: string; thinking?: string };
     delivery?: { mode?: string; channel?: string; to?: string; bestEffort?: boolean };
+    schedule?: { kind?: string; expr?: string; tz?: string; staggerMs?: number };
   };
 };
 

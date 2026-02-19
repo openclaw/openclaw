@@ -94,7 +94,7 @@ describe("browser cli snapshot defaults", () => {
       browser: { snapshotDefaults: { mode: "efficient" } },
     });
 
-    if (args.includes("--format")) {
+    if ((args as string[]).includes("--format")) {
       gatewayMocks.callGatewayFromCli.mockResolvedValueOnce({
         ok: true,
         format: "aria",
