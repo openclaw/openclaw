@@ -59,6 +59,7 @@ import {
   type SkillSnapshot,
 } from "../skills.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
+import { aeonCheckpointSessionFile } from "./aeon-session-checkpoint.js";
 import {
   compactWithSafetyTimeout,
   EMBEDDED_COMPACTION_TIMEOUT_MS,
@@ -520,6 +521,12 @@ export async function compactEmbeddedPiSessionDirect(
         warn: (message) => log.warn(message),
       });
       await prewarmSessionFile(params.sessionFile);
+      // ── AEON V3: Materialize WAL → JSONL before Pi reads it ──────────
+      await aeonCheckpointSessionFile({
+        sessionFile: params.sessionFile,
+        sessionId: params.sessionId,
+        cwd: effectiveWorkspace,
+      });
       const transcriptPolicy = resolveTranscriptPolicy({
         modelApi: model.api,
         provider,
