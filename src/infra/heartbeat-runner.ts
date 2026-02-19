@@ -54,7 +54,10 @@ import {
   isExecCompletionEvent,
 } from "./heartbeat-events-filter.js";
 import { emitHeartbeatEvent, resolveIndicatorType } from "./heartbeat-events.js";
-import { resolveHeartbeatReasonKind } from "./heartbeat-reason.js";
+import {
+  isHeartbeatEventDrivenReason,
+  resolveHeartbeatReasonKind,
+} from "./heartbeat-reason.js";
 import { resolveHeartbeatVisibility } from "./heartbeat-visibility.js";
 import {
   areHeartbeatsEnabled,
@@ -637,7 +640,7 @@ export async function runHeartbeatOnce(opts: {
   }
 
   const queueSize = (opts.deps?.getQueueSize ?? getQueueSize)(CommandLane.Main);
-  if (queueSize > 0) {
+  if (queueSize > 0 && !isHeartbeatEventDrivenReason(opts.reason)) {
     return { status: "skipped", reason: "requests-in-flight" };
   }
 
