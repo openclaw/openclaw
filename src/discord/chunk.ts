@@ -88,7 +88,7 @@ function splitLongLine(
         break;
       }
     }
-    if (breakIdx <= 0) {
+    if (breakIdx < 0) {
       breakIdx = limit;
     }
     out.push(remaining.slice(0, breakIdx));
