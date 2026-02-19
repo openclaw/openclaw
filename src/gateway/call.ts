@@ -21,7 +21,7 @@ import {
   resolveLeastPrivilegeOperatorScopesForMethod,
   type OperatorScope,
 } from "./method-scopes.js";
-import { isSecureWebSocketUrl } from "./net.js";
+import { isSecureWebSocketUrl, pickPrimaryLanIPv4 } from "./net.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
 
 type CallGatewayBaseOptions = {
@@ -66,6 +66,8 @@ export type GatewayConnectionDetails = {
   urlSource: string;
   bindDetail?: string;
   remoteFallbackNote?: string;
+  /** True when ws:// to private network addresses is safe (locally resolved bind=lan). */
+  allowPrivateNetwork?: boolean;
   message: string;
 };
 
@@ -117,9 +119,10 @@ export function buildGatewayConnectionDetails(
   const tlsEnabled = config.gateway?.tls?.enabled === true;
   const localPort = resolveGatewayPort(config);
   const bindMode = config.gateway?.bind ?? "loopback";
+  const preferLan = bindMode === "lan";
+  const lanIPv4 = preferLan ? pickPrimaryLanIPv4() : undefined;
   const scheme = tlsEnabled ? "wss" : "ws";
-  // Self-connections should always target loopback; bind mode only controls listener exposure.
-  const localUrl = `${scheme}://127.0.0.1:${localPort}`;
+  const localUrl = preferLan && lanIPv4 ? `${scheme}://${lanIPv4}:${localPort}` : `${scheme}://127.0.0.1:${localPort}`;
   const urlOverride =
     typeof options.url === "string" && options.url.trim().length > 0
       ? options.url.trim()
@@ -134,16 +137,19 @@ export function buildGatewayConnectionDetails(
       ? "config gateway.remote.url"
       : remoteMisconfigured
         ? "missing gateway.remote.url (fallback local)"
-        : "local loopback";
+        : preferLan && lanIPv4
+          ? `local lan ${lanIPv4}`
+          : "local loopback";
   const remoteFallbackNote = remoteMisconfigured
     ? "Warn: gateway.mode=remote but gateway.remote.url is missing; set gateway.remote.url or switch gateway.mode=local."
     : undefined;
   const bindDetail = !urlOverride && !remoteUrl ? `Bind: ${bindMode}` : undefined;
 
-  // Security check: block ALL insecure ws:// to non-loopback addresses (CWE-319, CVSS 9.8)
-  // This applies to the FINAL resolved URL, regardless of source (config, CLI override, etc).
-  // Both credentials and chat/conversation data must not be transmitted over plaintext to remote hosts.
-  if (!isSecureWebSocketUrl(url)) {
+  // Security check: block insecure ws:// to non-loopback addresses (CWE-319).
+  // When the URL was locally resolved from bind=lan, private network addresses are
+  // acceptable — the traffic stays on the host (Docker bridge, LAN interface).
+  const isLocallyResolved = !urlOverride && !remoteUrl;
+  if (!isSecureWebSocketUrl(url, { allowPrivateNetwork: isLocallyResolved && preferLan })) {
     throw new Error(
       [
         `SECURITY ERROR: Gateway URL "${url}" uses plaintext ws:// to a non-loopback address.`,
@@ -175,6 +181,7 @@ export function buildGatewayConnectionDetails(
     urlSource,
     bindDetail,
     remoteFallbackNote,
+    allowPrivateNetwork: isLocallyResolved && preferLan,
     message,
   };
 }
@@ -330,6 +337,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
 
     const client = new GatewayClient({
       url,
+      allowPrivateNetwork: params.connectionDetails.allowPrivateNetwork,
       token,
       password,
       tlsFingerprint,

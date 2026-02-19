@@ -357,7 +357,10 @@ export function isLocalishHost(hostHeader?: string): boolean {
  * All other ws:// URLs are considered insecure because both credentials
  * AND chat/conversation data would be exposed to network interception.
  */
-export function isSecureWebSocketUrl(url: string): boolean {
+export function isSecureWebSocketUrl(
+  url: string,
+  options?: { allowPrivateNetwork?: boolean },
+): boolean {
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -373,6 +376,17 @@ export function isSecureWebSocketUrl(url: string): boolean {
     return false;
   }
 
-  // ws:// is only secure for loopback addresses
-  return isLoopbackHost(parsed.hostname);
+  if (isLoopbackHost(parsed.hostname)) {
+    return true;
+  }
+
+  // When the caller knows the URL was locally resolved (e.g. bind=lan in Docker),
+  // private network addresses are acceptable — traffic stays on the host or bridge.
+  if (options?.allowPrivateNetwork) {
+    const h = parsed.hostname.trim().toLowerCase();
+    const unbracket = h.startsWith("[") && h.endsWith("]") ? h.slice(1, -1) : h;
+    return isPrivateOrLoopbackAddress(unbracket);
+  }
+
+  return false;
 }

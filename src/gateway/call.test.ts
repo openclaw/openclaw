@@ -133,14 +133,14 @@ describe("callGateway url resolution", () => {
       gateway: { mode: "local", bind: "lan", tls: { enabled: true } },
       tailnetIp: undefined,
       lanIp: "192.168.1.42",
-      expectedUrl: "wss://127.0.0.1:18800",
+      expectedUrl: "wss://192.168.1.42:18800",
     },
     {
       label: "lan without TLS",
       gateway: { mode: "local", bind: "lan" },
       tailnetIp: undefined,
       lanIp: "192.168.1.42",
-      expectedUrl: "ws://127.0.0.1:18800",
+      expectedUrl: "ws://192.168.1.42:18800",
     },
     {
       label: "lan without discovered LAN IP",
@@ -158,6 +158,29 @@ describe("callGateway url resolution", () => {
     await callGateway({ method: "health" });
 
     expect(lastClientOptions?.url).toBe(expectedUrl);
+  });
+
+  it("allows ws:// to LAN IP when bind=lan (locally resolved, Docker-safe)", async () => {
+    loadConfig.mockReturnValue({ gateway: { mode: "local", bind: "lan" } });
+    resolveGatewayPort.mockReturnValue(18800);
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+    pickPrimaryLanIPv4.mockReturnValue("192.168.1.42");
+
+    // Should NOT throw SECURITY ERROR — bind=lan means the user opted into
+    // LAN binding, and the URL was locally resolved (not user-provided).
+    const result = await callGateway({ method: "health" });
+    expect(result).toEqual({ ok: true });
+  });
+
+  it("falls back to loopback when bind is lan but no LAN IP found", async () => {
+    loadConfig.mockReturnValue({ gateway: { mode: "local", bind: "lan" } });
+    resolveGatewayPort.mockReturnValue(18800);
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+    pickPrimaryLanIPv4.mockReturnValue(undefined);
+
+    await callGateway({ method: "health" });
+
+    expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18800");
   });
 
   it("uses url override in remote mode even when remote url is missing", async () => {
@@ -254,14 +277,14 @@ describe("buildGatewayConnectionDetails", () => {
     {
       label: "with TLS",
       gateway: { mode: "local", bind: "lan", tls: { enabled: true } },
-      expectedUrl: "wss://127.0.0.1:18800",
+      expectedUrl: "wss://10.0.0.5:18800",
     },
     {
       label: "without TLS",
       gateway: { mode: "local", bind: "lan" },
-      expectedUrl: "ws://127.0.0.1:18800",
+      expectedUrl: "ws://10.0.0.5:18800",
     },
-  ])("uses loopback URL for bind=lan $label", ({ gateway, expectedUrl }) => {
+  ])("uses LAN URL for bind=lan $label", ({ gateway, expectedUrl }) => {
     loadConfig.mockReturnValue({ gateway });
     resolveGatewayPort.mockReturnValue(18800);
     pickPrimaryTailnetIPv4.mockReturnValue(undefined);
@@ -270,8 +293,22 @@ describe("buildGatewayConnectionDetails", () => {
     const details = buildGatewayConnectionDetails();
 
     expect(details.url).toBe(expectedUrl);
-    expect(details.urlSource).toBe("local loopback");
+    expect(details.urlSource).toBe("local lan 10.0.0.5");
     expect(details.bindDetail).toBe("Bind: lan");
+  });
+
+  it("allows ws:// to LAN IP when bind=lan (locally resolved, Docker-safe)", () => {
+    loadConfig.mockReturnValue({
+      gateway: { mode: "local", bind: "lan" },
+    });
+    resolveGatewayPort.mockReturnValue(18800);
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+    pickPrimaryLanIPv4.mockReturnValue("10.0.0.5");
+
+    // bind=lan with locally resolved URL should be allowed — traffic
+    // stays on the host (Docker bridge, LAN interface).
+    const details = buildGatewayConnectionDetails();
+    expect(details.url).toBe("ws://10.0.0.5:18800");
   });
 
   it("prefers remote url when configured", () => {

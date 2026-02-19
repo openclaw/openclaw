@@ -374,4 +374,28 @@ describe("isSecureWebSocketUrl", () => {
       expect(isSecureWebSocketUrl(testCase.input), testCase.input).toBe(testCase.expected);
     }
   });
+
+  describe("allowPrivateNetwork option (Docker bind=lan)", () => {
+    const opts = { allowPrivateNetwork: true };
+
+    it("returns true for ws:// to RFC1918 private addresses", () => {
+      expect(isSecureWebSocketUrl("ws://172.18.0.2:18789", opts)).toBe(true);
+      expect(isSecureWebSocketUrl("ws://192.168.1.100:18789", opts)).toBe(true);
+      expect(isSecureWebSocketUrl("ws://10.0.0.5:18789", opts)).toBe(true);
+    });
+
+    it("returns true for ws:// to CGNAT addresses (Tailscale)", () => {
+      expect(isSecureWebSocketUrl("ws://100.64.0.1:18789", opts)).toBe(true);
+    });
+
+    it("still returns false for ws:// to public addresses", () => {
+      expect(isSecureWebSocketUrl("ws://remote.example.com:18789", opts)).toBe(false);
+      expect(isSecureWebSocketUrl("ws://8.8.8.8:18789", opts)).toBe(false);
+    });
+
+    it("still returns true for loopback regardless of option", () => {
+      expect(isSecureWebSocketUrl("ws://127.0.0.1:18789", opts)).toBe(true);
+      expect(isSecureWebSocketUrl("ws://localhost:18789", opts)).toBe(true);
+    });
+  });
 });
