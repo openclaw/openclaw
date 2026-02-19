@@ -3,6 +3,7 @@ import {
   applyQueueRuntimeSettings,
   buildQueueSummaryPrompt,
   clearQueueSummaryState,
+  drainCollectItemIfNeeded,
   previewQueueSummaryPrompt,
 } from "./queue-helpers.js";
 
@@ -109,5 +110,60 @@ describe("queue summary helpers", () => {
     clearQueueSummaryState(state);
     expect(state.droppedCount).toBe(0);
     expect(state.summaryLines).toEqual([]);
+  });
+});
+
+describe("drainCollectItemIfNeeded", () => {
+  it("skips when neither force mode nor cross-channel routing is active", async () => {
+    const seen: number[] = [];
+    const items = [1];
+
+    const result = await drainCollectItemIfNeeded({
+      forceIndividualCollect: false,
+      isCrossChannel: false,
+      items,
+      run: async (item) => {
+        seen.push(item);
+      },
+    });
+
+    expect(result).toBe("skipped");
+    expect(seen).toEqual([]);
+    expect(items).toEqual([1]);
+  });
+
+  it("drains one item in force mode", async () => {
+    const seen: number[] = [];
+    const items = [1, 2];
+
+    const result = await drainCollectItemIfNeeded({
+      forceIndividualCollect: true,
+      isCrossChannel: false,
+      items,
+      run: async (item) => {
+        seen.push(item);
+      },
+    });
+
+    expect(result).toBe("drained");
+    expect(seen).toEqual([1]);
+    expect(items).toEqual([2]);
+  });
+
+  it("switches to force mode and returns empty when cross-channel with no queued item", async () => {
+    let forced = false;
+
+    const result = await drainCollectItemIfNeeded({
+      forceIndividualCollect: false,
+      isCrossChannel: true,
+      setForceIndividualCollect: (next) => {
+        forced = next;
+      },
+      items: [],
+      run: async () => {},
+    });
+
+    expect(result).toBe("empty");
+    expect(forced).toBe(true);
   });
 });

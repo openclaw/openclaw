@@ -2,6 +2,8 @@ import { defaultRuntime } from "../../../runtime.js";
 import {
   buildCollectPrompt,
   clearQueueSummaryState,
+  drainCollectItemIfNeeded,
+  drainNextQueueItem,
   hasCrossChannelItems,
   previewQueueSummaryPrompt,
   waitForQueueDebounce,
@@ -29,16 +31,6 @@ export function scheduleFollowupDrain(
           // Prevents “collect after shift” collapsing different targets.
           //
           // Debug: `pnpm test src/auto-reply/reply/queue.collect-routing.test.ts`
-          if (forceIndividualCollect) {
-            const next = queue.items[0];
-            if (!next) {
-              break;
-            }
-            await runFollowup(next);
-            queue.items.shift();
-            continue;
-          }
-
           // Check if messages span multiple channels.
           // If so, process individually to preserve per-message routing.
           const isCrossChannel = hasCrossChannelItems(queue.items, (item) => {
@@ -58,14 +50,19 @@ export function scheduleFollowupDrain(
             };
           });
 
-          if (isCrossChannel) {
-            forceIndividualCollect = true;
-            const next = queue.items[0];
-            if (!next) {
-              break;
-            }
-            await runFollowup(next);
-            queue.items.shift();
+          const collectDrainResult = await drainCollectItemIfNeeded({
+            forceIndividualCollect,
+            isCrossChannel,
+            setForceIndividualCollect: (next) => {
+              forceIndividualCollect = next;
+            },
+            items: queue.items,
+            run: runFollowup,
+          });
+          if (collectDrainResult === "empty") {
+            break;
+          }
+          if (collectDrainResult === "drained") {
             continue;
           }
 
@@ -114,26 +111,24 @@ export function scheduleFollowupDrain(
           if (!run) {
             break;
           }
-          const next = queue.items[0];
-          if (!next) {
+          if (
+            !(await drainNextQueueItem(queue.items, async () => {
+              await runFollowup({
+                prompt: summaryPrompt,
+                run,
+                enqueuedAt: Date.now(),
+              });
+            }))
+          ) {
             break;
           }
-          await runFollowup({
-            prompt: summaryPrompt,
-            run,
-            enqueuedAt: Date.now(),
-          });
-          queue.items.shift();
           clearQueueSummaryState(queue);
           continue;
         }
 
-        const next = queue.items[0];
-        if (!next) {
+        if (!(await drainNextQueueItem(queue.items, runFollowup))) {
           break;
         }
-        await runFollowup(next);
-        queue.items.shift();
       }
     } catch (err) {
       queue.lastEnqueuedAt = Date.now();
