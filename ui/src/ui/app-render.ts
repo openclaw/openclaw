@@ -55,6 +55,7 @@ import {
 import { icons } from "./icons.ts";
 import { normalizeBasePath, getTabGroups, subtitleForTab, titleForTab } from "./navigation.ts";
 import {
+  getOnboardingActionState,
   getOnboardingNextStep,
   getOnboardingNextTab,
   getOnboardingProgress,
@@ -99,8 +100,6 @@ function resolveAssistantAvatarUrl(state: AppViewState): string | undefined {
 export function renderApp(state: AppViewState) {
   const presenceCount = state.presenceEntries.length;
   const sessionsCount = state.sessionsResult?.count ?? null;
-  const hasSessionActivity = (sessionsCount ?? 0) > 0;
-  const hasChannelRefresh = state.channelsLastSuccess != null;
   const cronNext = state.cronStatus?.nextWakeAtMs ?? null;
   const chatDisabledReason = state.connected ? null : t("chat.disconnected");
   const isChat = state.tab === "chat";
@@ -121,6 +120,7 @@ export function renderApp(state: AppViewState) {
     channelsLastSuccess: state.channelsLastSuccess,
     sessionsCount,
   });
+  const onboardingActions = getOnboardingActionState(onboardingSteps);
   const onboardingProgress = getOnboardingProgress(onboardingSteps);
   const nextOnboardingStep = getOnboardingNextStep(onboardingSteps);
   const onboardingNextTab = getOnboardingNextTab(onboardingSteps);
@@ -285,7 +285,7 @@ export function renderApp(state: AppViewState) {
                       type="button"
                       class="btn btn--sm"
                       data-testid="onboarding-banner-chat"
-                      ?disabled=${!state.connected || !hasChannelRefresh}
+                      ?disabled=${!onboardingActions.canOpenChat}
                       @click=${() => state.setTab("chat")}
                     >
                       ${t("overview.setupFlow.openChat")}
@@ -294,7 +294,7 @@ export function renderApp(state: AppViewState) {
                       type="button"
                       class="btn btn--sm"
                       data-testid="onboarding-banner-consent"
-                      ?disabled=${!hasSessionActivity}
+                      ?disabled=${!onboardingActions.canOpenConsent}
                       @click=${() => state.setTab("consent")}
                     >
                       ${t("overview.setupFlow.openConsent")}

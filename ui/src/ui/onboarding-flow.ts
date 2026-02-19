@@ -35,3 +35,25 @@ export function getOnboardingNextStep(steps: OnboardingStep[]) {
 export function getOnboardingNextTab(steps: OnboardingStep[]): Tab {
   return getOnboardingNextStep(steps)?.tab ?? "consent";
 }
+
+export type OnboardingActionState = {
+  gatewayReady: boolean;
+  integrationsReady: boolean;
+  firstRunReady: boolean;
+  canOpenChat: boolean;
+  canOpenConsent: boolean;
+};
+
+export function getOnboardingActionState(steps: OnboardingStep[]): OnboardingActionState {
+  const gatewayReady = steps.some((step) => step.key === "gateway" && step.done);
+  const integrationsReady = steps.some((step) => step.key === "integrations" && step.done);
+  const firstRunReady = steps.some((step) => step.key === "firstRun" && step.done);
+
+  return {
+    gatewayReady,
+    integrationsReady,
+    firstRunReady,
+    canOpenChat: gatewayReady && integrationsReady,
+    canOpenConsent: firstRunReady,
+  };
+}

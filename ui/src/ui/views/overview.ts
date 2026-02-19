@@ -2,7 +2,12 @@ import { html } from "lit";
 import { t, i18n, type Locale } from "../../i18n/index.ts";
 import { formatRelativeTimestamp, formatDurationHuman } from "../format.ts";
 import type { GatewayHelloOk } from "../gateway.ts";
-import { getOnboardingNextStep, getOnboardingSteps, getOnboardingProgress } from "../onboarding-flow.ts";
+import {
+  getOnboardingActionState,
+  getOnboardingNextStep,
+  getOnboardingSteps,
+  getOnboardingProgress,
+} from "../onboarding-flow.ts";
 import { formatNextRun } from "../presenter.ts";
 import type { UiSettings } from "../storage.ts";
 
@@ -142,12 +147,10 @@ export function renderOverview(props: OverviewProps) {
   });
   const onboardingProgress = getOnboardingProgress(onboardingSteps);
   const nextOnboardingStep = getOnboardingNextStep(onboardingSteps);
+  const onboardingActions = getOnboardingActionState(onboardingSteps);
   const nextOnboardingLabel = nextOnboardingStep
     ? t(`overview.setupFlow.${nextOnboardingStep.key}`)
     : t("overview.setupFlow.review");
-  const gatewayReady = onboardingSteps.some((step) => step.key === "gateway" && step.done);
-  const integrationsReady = onboardingSteps.some((step) => step.key === "integrations" && step.done);
-  const firstRunReady = onboardingSteps.some((step) => step.key === "firstRun" && step.done);
 
   const runNextOnboardingAction = () => {
     if (!nextOnboardingStep) {
@@ -183,7 +186,7 @@ export function renderOverview(props: OverviewProps) {
                   <div class="note-title">
                     1. ${t("overview.setupFlow.gateway")}
                     <span class="muted" data-testid="onboarding-setup-step-gateway">
-                      (${gatewayReady ? t("common.ok") : t("common.offline")})
+                      (${onboardingActions.gatewayReady ? t("common.ok") : t("common.offline")})
                     </span>
                   </div>
                   <div class="muted">${t("overview.setupFlow.gatewayHint")}</div>
@@ -192,7 +195,7 @@ export function renderOverview(props: OverviewProps) {
                   <div class="note-title">
                     2. ${t("overview.setupFlow.integrations")}
                     <span class="muted" data-testid="onboarding-setup-step-integrations">
-                      (${integrationsReady ? t("common.ok") : t("common.na")})
+                      (${onboardingActions.integrationsReady ? t("common.ok") : t("common.na")})
                     </span>
                   </div>
                   <div class="muted">${t("overview.setupFlow.integrationsHint")}</div>
@@ -201,7 +204,7 @@ export function renderOverview(props: OverviewProps) {
                   <div class="note-title">
                     3. ${t("overview.setupFlow.firstRun")}
                     <span class="muted" data-testid="onboarding-setup-step-firstRun">
-                      (${firstRunReady ? t("common.ok") : t("common.na")})
+                      (${onboardingActions.firstRunReady ? t("common.ok") : t("common.na")})
                     </span>
                   </div>
                   <div class="muted">${t("overview.setupFlow.firstRunHint")}</div>
@@ -220,7 +223,7 @@ export function renderOverview(props: OverviewProps) {
                 <button
                   class="btn"
                   data-testid="onboarding-setup-flow-chat"
-                  ?disabled=${!props.connected || !integrationsReady}
+                  ?disabled=${!onboardingActions.canOpenChat}
                   @click=${() => props.onOpenChat?.()}
                 >
                   ${t("overview.setupFlow.openChat")}
@@ -228,7 +231,7 @@ export function renderOverview(props: OverviewProps) {
                 <button
                   class="btn"
                   data-testid="onboarding-setup-flow-consent"
-                  ?disabled=${!firstRunReady}
+                  ?disabled=${!onboardingActions.canOpenConsent}
                   @click=${() => props.onOpenConsent?.()}
                 >
                   ${t("overview.setupFlow.openConsent")}

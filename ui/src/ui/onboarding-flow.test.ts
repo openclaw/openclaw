@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  getOnboardingActionState,
   getOnboardingNextStep,
   getOnboardingNextTab,
   getOnboardingProgress,
@@ -31,5 +32,33 @@ describe("onboarding flow", () => {
     expect(getOnboardingProgress(steps)).toEqual({ done: 3, total: 3 });
     expect(getOnboardingNextStep(steps)).toBeNull();
     expect(getOnboardingNextTab(steps)).toBe("consent");
+  });
+
+  it("computes consistent action gating from step state", () => {
+    const partial = getOnboardingSteps({
+      connected: true,
+      channelsLastSuccess: null,
+      sessionsCount: 0,
+    });
+    expect(getOnboardingActionState(partial)).toEqual({
+      gatewayReady: true,
+      integrationsReady: false,
+      firstRunReady: false,
+      canOpenChat: false,
+      canOpenConsent: false,
+    });
+
+    const complete = getOnboardingSteps({
+      connected: true,
+      channelsLastSuccess: Date.now(),
+      sessionsCount: 1,
+    });
+    expect(getOnboardingActionState(complete)).toEqual({
+      gatewayReady: true,
+      integrationsReady: true,
+      firstRunReady: true,
+      canOpenChat: true,
+      canOpenConsent: true,
+    });
   });
 });
