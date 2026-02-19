@@ -91,6 +91,10 @@ export function filterOutput(content: string, _constitution?: Constitution): Out
   let filteredContent = content;
   let hasHighSeverity = false;
 
+  // Single pass: collect violations and redact entries together
+  type RedactEntry = { index: number; length: number };
+  const redactEntries: RedactEntry[] = [];
+
   for (const pattern of FILTER_PATTERNS) {
     const cloned = new RegExp(pattern.regex.source, pattern.regex.flags);
     let match: RegExpExecArray | null;
@@ -105,6 +109,9 @@ export function filterOutput(content: string, _constitution?: Constitution): Out
       if (pattern.severity === "high") {
         hasHighSeverity = true;
       }
+      if (pattern.redactable) {
+        redactEntries.push({ index: match.index, length: match[0].length });
+      }
     }
   }
 
@@ -112,24 +119,8 @@ export function filterOutput(content: string, _constitution?: Constitution): Out
     return { passed: true, violations };
   }
 
-  // Collect all redactable matches with their original indices and lengths,
-  // then replace from end to start on the original string to preserve indices.
-  type RedactEntry = { index: number; length: number };
-  const redactEntries: RedactEntry[] = [];
-
-  for (const pattern of FILTER_PATTERNS) {
-    if (!pattern.redactable) {
-      continue;
-    }
-    const cloned = new RegExp(pattern.regex.source, pattern.regex.flags);
-    let m: RegExpExecArray | null;
-    while ((m = cloned.exec(content)) !== null) {
-      redactEntries.push({ index: m.index, length: m[0].length });
-    }
-  }
-
+  // Replace from end to start on the original string to preserve indices
   if (redactEntries.length > 0) {
-    // Sort by index descending to replace from end to start
     redactEntries.sort((a, b) => b.index - a.index);
     for (const entry of redactEntries) {
       filteredContent =
