@@ -517,7 +517,6 @@ describe("exec approvals safe bins", () => {
     });
     expect(ok).toBe(true);
   });
-
   it("does not include sort/grep in default safeBins", () => {
     const defaults = resolveSafeBins(undefined);
     expect(defaults.has("jq")).toBe(true);
@@ -581,6 +580,43 @@ describe("exec approvals safe bins", () => {
     });
     expect(ok).toBe(false);
     expect(checkedExists).toBe(false);
+  });
+
+  it("threads trusted safe-bin dirs through allowlist evaluation", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const analysis = {
+      ok: true as const,
+      segments: [
+        {
+          raw: "jq .foo",
+          argv: ["jq", ".foo"],
+          resolution: {
+            rawExecutable: "jq",
+            resolvedPath: "/custom/bin/jq",
+            executableName: "jq",
+          },
+        },
+      ],
+    };
+    const denied = evaluateExecAllowlist({
+      analysis,
+      allowlist: [],
+      safeBins: normalizeSafeBins(["jq"]),
+      trustedSafeBinDirs: new Set(["/usr/bin"]),
+      cwd: "/tmp",
+    });
+    expect(denied.allowlistSatisfied).toBe(false);
+
+    const allowed = evaluateExecAllowlist({
+      analysis,
+      allowlist: [],
+      safeBins: normalizeSafeBins(["jq"]),
+      trustedSafeBinDirs: new Set(["/custom/bin"]),
+      cwd: "/tmp",
+    });
+    expect(allowed.allowlistSatisfied).toBe(true);
   });
 });
 
