@@ -166,13 +166,16 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.url).toBe("wss://192.168.1.42:18800");
   });
 
-  it("blocks ws:// to LAN IP without TLS (CWE-319)", async () => {
+  it("allows ws:// to LAN IP when bind=lan (locally resolved, Docker-safe)", async () => {
     loadConfig.mockReturnValue({ gateway: { mode: "local", bind: "lan" } });
     resolveGatewayPort.mockReturnValue(18800);
     pickPrimaryTailnetIPv4.mockReturnValue(undefined);
     pickPrimaryLanIPv4.mockReturnValue("192.168.1.42");
 
-    await expect(callGateway({ method: "health" })).rejects.toThrow("SECURITY ERROR");
+    // Should NOT throw SECURITY ERROR — bind=lan means the user opted into
+    // LAN binding, and the URL was locally resolved (not user-provided).
+    const result = await callGateway({ method: "health" });
+    expect(result).toEqual({ ok: true });
   });
 
   it("falls back to loopback when bind is lan but no LAN IP found", async () => {
@@ -285,7 +288,7 @@ describe("buildGatewayConnectionDetails", () => {
     expect(details.bindDetail).toBe("Bind: lan");
   });
 
-  it("throws for ws:// to LAN IP without TLS (CWE-319)", () => {
+  it("allows ws:// to LAN IP when bind=lan (locally resolved, Docker-safe)", () => {
     loadConfig.mockReturnValue({
       gateway: { mode: "local", bind: "lan" },
     });
@@ -293,7 +296,10 @@ describe("buildGatewayConnectionDetails", () => {
     pickPrimaryTailnetIPv4.mockReturnValue(undefined);
     pickPrimaryLanIPv4.mockReturnValue("10.0.0.5");
 
-    expect(() => buildGatewayConnectionDetails()).toThrow("SECURITY ERROR");
+    // bind=lan with locally resolved URL should be allowed — traffic
+    // stays on the host (Docker bridge, LAN interface).
+    const details = buildGatewayConnectionDetails();
+    expect(details.url).toBe("ws://10.0.0.5:18800");
   });
 
   it("prefers remote url when configured", () => {
