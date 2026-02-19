@@ -10,6 +10,7 @@ import {
   applyQueueDropPolicy,
   buildCollectPrompt,
   clearQueueSummaryState,
+  drainNextQueueItem,
   hasCrossChannelItems,
   previewQueueSummaryPrompt,
   waitForQueueDebounce,
@@ -108,12 +109,9 @@ function scheduleAnnounceDrain(key: string) {
         await waitForQueueDebounce(queue);
         if (queue.mode === "collect") {
           if (forceIndividualCollect) {
-            const next = queue.items[0];
-            if (!next) {
+            if (!(await drainNextQueueItem(queue.items, async (item) => await queue.send(item)))) {
               break;
             }
-            await queue.send(next);
-            queue.items.shift();
             continue;
           }
           const isCrossChannel = hasCrossChannelItems(queue.items, (item) => {
@@ -127,12 +125,9 @@ function scheduleAnnounceDrain(key: string) {
           });
           if (isCrossChannel) {
             forceIndividualCollect = true;
-            const next = queue.items[0];
-            if (!next) {
+            if (!(await drainNextQueueItem(queue.items, async (item) => await queue.send(item)))) {
               break;
             }
-            await queue.send(next);
-            queue.items.shift();
             continue;
           }
           const items = queue.items.slice();
@@ -157,22 +152,21 @@ function scheduleAnnounceDrain(key: string) {
 
         const summaryPrompt = previewQueueSummaryPrompt({ state: queue, noun: "announce" });
         if (summaryPrompt) {
-          const next = queue.items[0];
-          if (!next) {
+          if (
+            !(await drainNextQueueItem(
+              queue.items,
+              async (item) => await queue.send({ ...item, prompt: summaryPrompt }),
+            ))
+          ) {
             break;
           }
-          await queue.send({ ...next, prompt: summaryPrompt });
-          queue.items.shift();
           clearQueueSummaryState(queue);
           continue;
         }
 
-        const next = queue.items[0];
-        if (!next) {
+        if (!(await drainNextQueueItem(queue.items, async (item) => await queue.send(item)))) {
           break;
         }
-        await queue.send(next);
-        queue.items.shift();
       }
     } catch (err) {
       // Keep items in queue and retry after debounce; avoid hot-loop retries.
