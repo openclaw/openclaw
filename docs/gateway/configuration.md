@@ -61,7 +61,7 @@ See the [full reference](/gateway/configuration-reference) for every available f
 ## Strict validation
 
 <Warning>
-OpenClaw only accepts configurations that fully match the schema. Unknown keys, malformed types, or invalid values cause the Gateway to **refuse to start**.
+OpenClaw only accepts configurations that fully match the schema. Unknown keys, malformed types, or invalid values cause the Gateway to **refuse to start**. The only root-level exception is `$schema` (string), so editors can attach JSON Schema metadata.
 </Warning>
 
 When validation fails:
@@ -126,6 +126,7 @@ When validation fails:
 
     - `agents.defaults.models` defines the model catalog and acts as the allowlist for `/model`.
     - Model refs use `provider/model` format (e.g. `anthropic/claude-opus-4-6`).
+    - `agents.defaults.imageMaxDimensionPx` controls transcript/tool image downscaling (default `1200`); lower values usually reduce vision-token usage on screenshot-heavy runs.
     - See [Models CLI](/concepts/models) for switching models in chat and [Model Failover](/concepts/model-failover) for auth rotation and fallback behavior.
     - For custom/self-hosted providers, see [Custom providers](/gateway/configuration-reference#custom-providers-and-base-urls) in the reference.
 

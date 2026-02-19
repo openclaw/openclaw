@@ -28,7 +28,9 @@ enum VoiceWakeChime: Codable, Equatable, Sendable {
 
 enum VoiceWakeChimeCatalog {
     /// Options shown in the picker.
-    static var systemOptions: [String] { SoundEffectCatalog.systemOptions }
+    static var systemOptions: [String] {
+        SoundEffectCatalog.systemOptions
+    }
 
     static func displayName(for raw: String) -> String {
         SoundEffectCatalog.displayName(for: raw)

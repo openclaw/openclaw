@@ -1,13 +1,18 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
-import {
-  buildWorkspaceSkillStatus,
-  type SkillStatusEntry,
-  type SkillStatusReport,
-} from "../agents/skills-status.js";
-import { formatSkillInfo, formatSkillsCheck, formatSkillsList } from "./skills-cli.js";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import type { SkillStatusEntry, SkillStatusReport } from "../agents/skills-status.js";
+import type { SkillEntry } from "../agents/skills.js";
+import { captureEnv } from "../test-utils/env.js";
+import { createEmptyInstallChecks } from "./requirements-test-fixtures.js";
+import { formatSkillInfo, formatSkillsCheck, formatSkillsList } from "./skills-cli.format.js";
+
+// Unit tests: don't pay the runtime cost of loading/parsing the real skills loader.
+vi.mock("@mariozechner/pi-coding-agent", () => ({
+  loadSkillsFromDir: () => ({ skills: [] }),
+  formatSkillsForPrompt: () => "",
+}));
 
 function createMockSkill(overrides: Partial<SkillStatusEntry> = {}): SkillStatusEntry {
   return {
@@ -24,22 +29,7 @@ function createMockSkill(overrides: Partial<SkillStatusEntry> = {}): SkillStatus
     disabled: false,
     blockedByAllowlist: false,
     eligible: true,
-    requirements: {
-      bins: [],
-      anyBins: [],
-      env: [],
-      config: [],
-      os: [],
-    },
-    missing: {
-      bins: [],
-      anyBins: [],
-      env: [],
-      config: [],
-      os: [],
-    },
-    configChecks: [],
-    install: [],
+    ...createEmptyInstallChecks(),
     ...overrides,
   };
 }
@@ -123,14 +113,6 @@ describe("skills-cli", () => {
       expect(output).toContain("eligible-one");
       expect(output).not.toContain("not-eligible");
     });
-
-    it("outputs JSON with --json flag", () => {
-      const report = createMockReport([createMockSkill({ name: "json-skill" })]);
-      const output = formatSkillsList(report, { json: true });
-      const parsed = JSON.parse(output);
-      expect(parsed.skills).toHaveLength(1);
-      expect(parsed.skills[0].name).toBe("json-skill");
-    });
   });
 
   describe("formatSkillInfo", () => {
@@ -171,13 +153,6 @@ describe("skills-cli", () => {
       expect(output).toContain("Any binaries");
       expect(output).toContain("API_KEY");
     });
-
-    it("outputs JSON with --json flag", () => {
-      const report = createMockReport([createMockSkill({ name: "info-skill" })]);
-      const output = formatSkillInfo(report, "info-skill", { json: true });
-      const parsed = JSON.parse(output);
-      expect(parsed.name).toBe("info-skill");
-    });
   });
 
   describe("formatSkillsCheck", () => {
@@ -200,39 +175,99 @@ describe("skills-cli", () => {
       expect(output).toContain("go"); // missing binary
       expect(output).toContain("npx clawhub");
     });
+  });
 
-    it("outputs JSON with --json flag", () => {
-      const report = createMockReport([
-        createMockSkill({ name: "skill-1", eligible: true }),
-        createMockSkill({ name: "skill-2", eligible: false }),
-      ]);
-      const output = formatSkillsCheck(report, { json: true });
-      const parsed = JSON.parse(output);
-      expect(parsed.summary.eligible).toBe(1);
-      expect(parsed.summary.total).toBe(2);
+  describe("JSON output", () => {
+    it.each([
+      {
+        formatter: "list",
+        output: formatSkillsList(createMockReport([createMockSkill({ name: "json-skill" })]), {
+          json: true,
+        }),
+        assert: (parsed: Record<string, unknown>) => {
+          const skills = parsed.skills as Array<Record<string, unknown>>;
+          expect(skills).toHaveLength(1);
+          expect(skills[0]?.name).toBe("json-skill");
+        },
+      },
+      {
+        formatter: "info",
+        output: formatSkillInfo(
+          createMockReport([createMockSkill({ name: "info-skill" })]),
+          "info-skill",
+          { json: true },
+        ),
+        assert: (parsed: Record<string, unknown>) => {
+          expect(parsed.name).toBe("info-skill");
+        },
+      },
+      {
+        formatter: "check",
+        output: formatSkillsCheck(
+          createMockReport([
+            createMockSkill({ name: "skill-1", eligible: true }),
+            createMockSkill({ name: "skill-2", eligible: false }),
+          ]),
+          { json: true },
+        ),
+        assert: (parsed: Record<string, unknown>) => {
+          const summary = parsed.summary as Record<string, unknown>;
+          expect(summary.eligible).toBe(1);
+          expect(summary.total).toBe(2);
+        },
+      },
+    ])("outputs JSON with --json flag for $formatter", ({ output, assert }) => {
+      const parsed = JSON.parse(output) as Record<string, unknown>;
+      assert(parsed);
     });
   });
 
   describe("integration: loads real skills from bundled directory", () => {
-    function resolveBundledSkillsDir(): string | undefined {
-      const moduleDir = path.dirname(fileURLToPath(import.meta.url));
-      const root = path.resolve(moduleDir, "..", "..");
-      const candidate = path.join(root, "skills");
-      if (fs.existsSync(candidate)) {
-        return candidate;
-      }
-      return undefined;
-    }
+    let tempWorkspaceDir = "";
+    let tempBundledDir = "";
+    let envSnapshot: ReturnType<typeof captureEnv>;
+    let buildWorkspaceSkillStatus: typeof import("../agents/skills-status.js").buildWorkspaceSkillStatus;
 
-    it("loads bundled skills and formats them", () => {
-      const bundledDir = resolveBundledSkillsDir();
-      if (!bundledDir) {
-        // Skip if skills dir not found (e.g., in CI without skills)
-        return;
-      }
+    beforeAll(async () => {
+      envSnapshot = captureEnv(["OPENCLAW_BUNDLED_SKILLS_DIR"]);
+      tempWorkspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-skills-test-"));
+      tempBundledDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-skills-test-"));
+      process.env.OPENCLAW_BUNDLED_SKILLS_DIR = tempBundledDir;
+      ({ buildWorkspaceSkillStatus } = await import("../agents/skills-status.js"));
+    });
 
-      const report = buildWorkspaceSkillStatus("/tmp", {
+    afterAll(() => {
+      if (tempWorkspaceDir) {
+        fs.rmSync(tempWorkspaceDir, { recursive: true, force: true });
+      }
+      if (tempBundledDir) {
+        fs.rmSync(tempBundledDir, { recursive: true, force: true });
+      }
+      envSnapshot.restore();
+    });
+
+    const createEntries = (): SkillEntry[] => {
+      const baseDir = path.join(tempWorkspaceDir, "peekaboo");
+      return [
+        {
+          skill: {
+            name: "peekaboo",
+            description: "Capture UI screenshots",
+            source: "openclaw-bundled",
+            filePath: path.join(baseDir, "SKILL.md"),
+            baseDir,
+          } as SkillEntry["skill"],
+          frontmatter: {},
+          metadata: { emoji: "📸" },
+        },
+      ];
+    };
+
+    it("loads bundled skills and formats them", async () => {
+      const entries = createEntries();
+      const report = buildWorkspaceSkillStatus(tempWorkspaceDir, {
         managedSkillsDir: "/nonexistent",
+        entries,
       });
 
       // Should have loaded some skills
@@ -251,21 +286,17 @@ describe("skills-cli", () => {
       expect(parsed.skills).toBeInstanceOf(Array);
     });
 
-    it("formats info for a real bundled skill (peekaboo)", () => {
-      const bundledDir = resolveBundledSkillsDir();
-      if (!bundledDir) {
-        return;
-      }
-
-      const report = buildWorkspaceSkillStatus("/tmp", {
+    it("formats info for a real bundled skill (peekaboo)", async () => {
+      const entries = createEntries();
+      const report = buildWorkspaceSkillStatus(tempWorkspaceDir, {
         managedSkillsDir: "/nonexistent",
+        entries,
       });
 
       // peekaboo is a bundled skill that should always exist
       const peekaboo = report.skills.find((s) => s.name === "peekaboo");
       if (!peekaboo) {
-        // Skip if peekaboo not found
-        return;
+        throw new Error("peekaboo fixture skill missing");
       }
 
       const output = formatSkillInfo(report, "peekaboo", {});

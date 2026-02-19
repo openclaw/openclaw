@@ -1,11 +1,18 @@
 import { formatCliCommand } from "../cli/command-format.js";
 import { loadConfig } from "../config/config.js";
+import { getBridgeAuthForPort } from "./bridge-auth-registry.js";
 import { resolveBrowserControlAuth } from "./control-auth.js";
 import {
   createBrowserControlContext,
   startBrowserControlServiceFromConfig,
 } from "./control-service.js";
 import { createBrowserRouteDispatcher } from "./routes/dispatcher.js";
+
+type LoopbackBrowserAuthDeps = {
+  loadConfig: typeof loadConfig;
+  resolveBrowserControlAuth: typeof resolveBrowserControlAuth;
+  getBridgeAuthForPort: typeof getBridgeAuthForPort;
+};
 
 function isAbsoluteHttp(url: string): boolean {
   return /^https?:\/\//i.test(url.trim());
@@ -14,15 +21,20 @@ function isAbsoluteHttp(url: string): boolean {
 function isLoopbackHttpUrl(url: string): boolean {
   try {
     const host = new URL(url).hostname.trim().toLowerCase();
-    return host === "127.0.0.1" || host === "localhost" || host === "::1";
+    // URL hostnames may keep IPv6 brackets (for example "[::1]"); normalize before checks.
+    const normalizedHost = host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
+    return (
+      normalizedHost === "127.0.0.1" || normalizedHost === "localhost" || normalizedHost === "::1"
+    );
   } catch {
     return false;
   }
 }
 
-function withLoopbackBrowserAuth(
+function withLoopbackBrowserAuthImpl(
   url: string,
   init: (RequestInit & { timeoutMs?: number }) | undefined,
+  deps: LoopbackBrowserAuthDeps,
 ): RequestInit & { timeoutMs?: number } {
   const headers = new Headers(init?.headers ?? {});
   if (headers.has("authorization") || headers.has("x-openclaw-password")) {
@@ -33,24 +45,65 @@ function withLoopbackBrowserAuth(
   }
 
   try {
-    const cfg = loadConfig();
-    const auth = resolveBrowserControlAuth(cfg);
+    const cfg = deps.loadConfig();
+    const auth = deps.resolveBrowserControlAuth(cfg);
     if (auth.token) {
       headers.set("Authorization", `Bearer ${auth.token}`);
-    } else if (auth.password) {
+      return { ...init, headers };
+    }
+    if (auth.password) {
       headers.set("x-openclaw-password", auth.password);
+      return { ...init, headers };
     }
   } catch {
     // ignore config/auth lookup failures and continue without auth headers
   }
 
+  // Sandbox bridge servers can run with per-process ephemeral auth on dynamic ports.
+  // Fall back to the in-memory registry if config auth is not available.
+  try {
+    const parsed = new URL(url);
+    const port =
+      parsed.port && Number.parseInt(parsed.port, 10) > 0
+        ? Number.parseInt(parsed.port, 10)
+        : parsed.protocol === "https:"
+          ? 443
+          : 80;
+    const bridgeAuth = deps.getBridgeAuthForPort(port);
+    if (bridgeAuth?.token) {
+      headers.set("Authorization", `Bearer ${bridgeAuth.token}`);
+    } else if (bridgeAuth?.password) {
+      headers.set("x-openclaw-password", bridgeAuth.password);
+    }
+  } catch {
+    // ignore
+  }
+
   return { ...init, headers };
 }
 
+function withLoopbackBrowserAuth(
+  url: string,
+  init: (RequestInit & { timeoutMs?: number }) | undefined,
+): RequestInit & { timeoutMs?: number } {
+  return withLoopbackBrowserAuthImpl(url, init, {
+    loadConfig,
+    resolveBrowserControlAuth,
+    getBridgeAuthForPort,
+  });
+}
+
 function enhanceBrowserFetchError(url: string, err: unknown, timeoutMs: number): Error {
-  const hint = isAbsoluteHttp(url)
-    ? "If this is a sandboxed session, ensure the sandbox browser is running and try again."
-    : `Start (or restart) the OpenClaw gateway (OpenClaw.app menubar, or \`${formatCliCommand("openclaw gateway")}\`) and try again.`;
+  const isLocal = !isAbsoluteHttp(url);
+  // Human-facing hint for logs/diagnostics.
+  const operatorHint = isLocal
+    ? `Restart the OpenClaw gateway (OpenClaw.app menubar, or \`${formatCliCommand("openclaw gateway")}\`).`
+    : "If this is a sandboxed session, ensure the sandbox browser is running.";
+  // Model-facing suffix: explicitly tell the LLM NOT to retry.
+  // Without this, models see "try again" and enter an infinite tool-call loop.
+  const modelHint =
+    "Do NOT retry the browser tool — it will keep failing. " +
+    "Use an alternative approach or inform the user that the browser is currently unavailable.";
   const msg = String(err);
   const msgLower = msg.toLowerCase();
   const looksLikeTimeout =
@@ -61,10 +114,12 @@ function enhanceBrowserFetchError(url: string, err: unknown, timeoutMs: number):
     msgLower.includes("aborterror");
   if (looksLikeTimeout) {
     return new Error(
-      `Can't reach the OpenClaw browser control service (timed out after ${timeoutMs}ms). ${hint}`,
+      `Can't reach the OpenClaw browser control service (timed out after ${timeoutMs}ms). ${operatorHint} ${modelHint}`,
     );
   }
-  return new Error(`Can't reach the OpenClaw browser control service. ${hint} (${msg})`);
+  return new Error(
+    `Can't reach the OpenClaw browser control service. ${operatorHint} ${modelHint} (${msg})`,
+  );
 }
 
 async function fetchHttpJson<T>(
@@ -191,3 +246,7 @@ export async function fetchBrowserJson<T>(
     throw enhanceBrowserFetchError(url, err, timeoutMs);
   }
 }
+
+export const __test = {
+  withLoopbackBrowserAuth: withLoopbackBrowserAuthImpl,
+};
