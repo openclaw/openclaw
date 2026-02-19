@@ -322,5 +322,11 @@ export const FIELD_LABELS: Record<string, string> = {
   "plugins.installs.*.sourcePath": "Plugin Install Source Path",
   "plugins.installs.*.installPath": "Plugin Install Path",
   "plugins.installs.*.version": "Plugin Install Version",
+  "plugins.installs.*.resolvedName": "Plugin Resolved Package Name",
+  "plugins.installs.*.resolvedVersion": "Plugin Resolved Package Version",
+  "plugins.installs.*.resolvedSpec": "Plugin Resolved Package Spec",
+  "plugins.installs.*.integrity": "Plugin Resolved Integrity",
+  "plugins.installs.*.shasum": "Plugin Resolved Shasum",
+  "plugins.installs.*.resolvedAt": "Plugin Resolution Time",
   "plugins.installs.*.installedAt": "Plugin Install Time",
 };

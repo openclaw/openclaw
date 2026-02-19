@@ -4,9 +4,9 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { SecurityAuditOptions, SecurityAuditReport } from "./audit.js";
 import { collectPluginsCodeSafetyFindings } from "./audit-extra.js";
 import { runSecurityAudit } from "./audit.js";
-import type { SecurityAuditOptions, SecurityAuditReport } from "./audit.js";
 import * as skillScanner from "./skill-scanner.js";
 
 const isWindows = process.platform === "win32";
@@ -1500,6 +1500,143 @@ describe("security audit", () => {
         process.env.SLACK_APP_TOKEN = prevSlackAppToken;
       }
     }
+  });
+
+  it("warns on unpinned npm install specs and missing integrity metadata", async () => {
+    const tmp = await makeTmpDir("install-metadata-warns");
+    const stateDir = path.join(tmp, "state");
+    await fs.mkdir(stateDir, { recursive: true });
+
+    const cfg: OpenClawConfig = {
+      plugins: {
+        installs: {
+          "voice-call": {
+            source: "npm",
+            spec: "@openclaw/voice-call",
+          },
+        },
+      },
+      hooks: {
+        internal: {
+          installs: {
+            "test-hooks": {
+              source: "npm",
+              spec: "@openclaw/test-hooks",
+            },
+          },
+        },
+      },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      includeFilesystem: true,
+      includeChannelSecurity: false,
+      stateDir,
+      configPath: path.join(stateDir, "openclaw.json"),
+    });
+
+    expect(hasFinding(res, "plugins.installs_unpinned_npm_specs", "warn")).toBe(true);
+    expect(hasFinding(res, "plugins.installs_missing_integrity", "warn")).toBe(true);
+    expect(hasFinding(res, "hooks.installs_unpinned_npm_specs", "warn")).toBe(true);
+    expect(hasFinding(res, "hooks.installs_missing_integrity", "warn")).toBe(true);
+  });
+
+  it("does not warn on pinned npm install specs with integrity metadata", async () => {
+    const tmp = await makeTmpDir("install-metadata-clean");
+    const stateDir = path.join(tmp, "state");
+    await fs.mkdir(stateDir, { recursive: true });
+
+    const cfg: OpenClawConfig = {
+      plugins: {
+        installs: {
+          "voice-call": {
+            source: "npm",
+            spec: "@openclaw/voice-call@1.2.3",
+            integrity: "sha512-plugin",
+          },
+        },
+      },
+      hooks: {
+        internal: {
+          installs: {
+            "test-hooks": {
+              source: "npm",
+              spec: "@openclaw/test-hooks@1.2.3",
+              integrity: "sha512-hook",
+            },
+          },
+        },
+      },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      includeFilesystem: true,
+      includeChannelSecurity: false,
+      stateDir,
+      configPath: path.join(stateDir, "openclaw.json"),
+    });
+
+    expect(hasFinding(res, "plugins.installs_unpinned_npm_specs")).toBe(false);
+    expect(hasFinding(res, "plugins.installs_missing_integrity")).toBe(false);
+    expect(hasFinding(res, "hooks.installs_unpinned_npm_specs")).toBe(false);
+    expect(hasFinding(res, "hooks.installs_missing_integrity")).toBe(false);
+  });
+
+  it("warns when install records drift from installed package versions", async () => {
+    const tmp = await makeTmpDir("install-version-drift");
+    const stateDir = path.join(tmp, "state");
+    const pluginDir = path.join(stateDir, "extensions", "voice-call");
+    const hookDir = path.join(stateDir, "hooks", "test-hooks");
+    await fs.mkdir(pluginDir, { recursive: true });
+    await fs.mkdir(hookDir, { recursive: true });
+    await fs.writeFile(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({ name: "@openclaw/voice-call", version: "9.9.9" }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(hookDir, "package.json"),
+      JSON.stringify({ name: "@openclaw/test-hooks", version: "8.8.8" }),
+      "utf-8",
+    );
+
+    const cfg: OpenClawConfig = {
+      plugins: {
+        installs: {
+          "voice-call": {
+            source: "npm",
+            spec: "@openclaw/voice-call@1.2.3",
+            integrity: "sha512-plugin",
+            resolvedVersion: "1.2.3",
+          },
+        },
+      },
+      hooks: {
+        internal: {
+          installs: {
+            "test-hooks": {
+              source: "npm",
+              spec: "@openclaw/test-hooks@1.2.3",
+              integrity: "sha512-hook",
+              resolvedVersion: "1.2.3",
+            },
+          },
+        },
+      },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      includeFilesystem: true,
+      includeChannelSecurity: false,
+      stateDir,
+      configPath: path.join(stateDir, "openclaw.json"),
+    });
+
+    expect(hasFinding(res, "plugins.installs_version_drift", "warn")).toBe(true);
+    expect(hasFinding(res, "hooks.installs_version_drift", "warn")).toBe(true);
   });
 
   it("flags enabled extensions when tool policy can expose plugin tools", async () => {

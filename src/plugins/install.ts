@@ -15,6 +15,8 @@ import {
   unscopedPackageName,
 } from "../infra/install-safe-path.js";
 import {
+  type NpmIntegrityDrift,
+  type NpmSpecResolution,
   packNpmSpecToArchive,
   resolveArchiveSourcePath,
   withTempDir,
@@ -43,8 +45,17 @@ export type InstallPluginResult =
       manifestName?: string;
       version?: string;
       extensions: string[];
+      npmResolution?: NpmSpecResolution;
+      integrityDrift?: NpmIntegrityDrift;
     }
   | { ok: false; error: string };
+
+export type PluginNpmIntegrityDriftParams = {
+  spec: string;
+  expectedIntegrity: string;
+  actualIntegrity: string;
+  resolution: NpmSpecResolution;
+};
 
 const defaultLogger: PluginInstallLogger = {};
 function safeFileName(input: string): string {
@@ -420,6 +431,8 @@ export async function installPluginFromNpmSpec(params: {
   mode?: "install" | "update";
   dryRun?: boolean;
   expectedPluginId?: string;
+  expectedIntegrity?: string;
+  onIntegrityDrift?: (params: PluginNpmIntegrityDriftParams) => boolean | Promise<boolean>;
 }): Promise<InstallPluginResult> {
   const { logger, timeoutMs, mode, dryRun } = resolveTimedPluginInstallModeOptions(params);
   const expectedPluginId = params.expectedPluginId;
@@ -440,7 +453,44 @@ export async function installPluginFromNpmSpec(params: {
       return packedResult;
     }
 
-    return await installPluginFromArchive({
+    const npmResolution: NpmSpecResolution = {
+      ...packedResult.metadata,
+      resolvedAt: new Date().toISOString(),
+    };
+
+    let integrityDrift: NpmIntegrityDrift | undefined;
+    if (
+      params.expectedIntegrity &&
+      npmResolution.integrity &&
+      params.expectedIntegrity !== npmResolution.integrity
+    ) {
+      integrityDrift = {
+        expectedIntegrity: params.expectedIntegrity,
+        actualIntegrity: npmResolution.integrity,
+      };
+      const driftPayload: PluginNpmIntegrityDriftParams = {
+        spec,
+        expectedIntegrity: integrityDrift.expectedIntegrity,
+        actualIntegrity: integrityDrift.actualIntegrity,
+        resolution: npmResolution,
+      };
+      let proceed = true;
+      if (params.onIntegrityDrift) {
+        proceed = await params.onIntegrityDrift(driftPayload);
+      } else {
+        logger.warn?.(
+          `Integrity drift detected for ${driftPayload.resolution.resolvedSpec ?? driftPayload.spec}: expected ${driftPayload.expectedIntegrity}, got ${driftPayload.actualIntegrity}`,
+        );
+      }
+      if (!proceed) {
+        return {
+          ok: false,
+          error: `aborted: npm package integrity drift detected for ${driftPayload.resolution.resolvedSpec ?? driftPayload.spec}`,
+        };
+      }
+    }
+
+    const installResult = await installPluginFromArchive({
       archivePath: packedResult.archivePath,
       extensionsDir: params.extensionsDir,
       timeoutMs,
@@ -449,6 +499,15 @@ export async function installPluginFromNpmSpec(params: {
       dryRun,
       expectedPluginId,
     });
+    if (!installResult.ok) {
+      return installResult;
+    }
+
+    return {
+      ...installResult,
+      npmResolution,
+      integrityDrift,
+    };
   });
 }
 
