@@ -93,7 +93,7 @@ export async function callZaloApi<T = unknown>(
   body?: Record<string, unknown>,
   options?: { timeoutMs?: number; fetch?: ZaloFetch },
 ): Promise<ZaloApiResponse<T>> {
-  const url = `${ZALO_API_BASE}/bot${token}/${method}`;
+  const url = `${ZALO_API_BASE}/bot/${token}/${method}`;
   const controller = new AbortController();
   const timeoutId = options?.timeoutMs
     ? setTimeout(() => controller.abort(), options.timeoutMs)
