@@ -1163,7 +1163,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
 
   // Clean up slash commands on shutdown
   if (slashEnabled) {
-    const onAbortCleanup = () => {
+    const runAbortCleanup = () => {
+      if (slashShutdownCleanup) {
+        return;
+      }
       // Snapshot registered commands before deactivating state.
       // This listener may run concurrently with startup in a new process, so we keep
       // monitor shutdown alive until the remote cleanup completes.
@@ -1179,7 +1182,12 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         runtime.error?.(`mattermost: slash cleanup failed: ${String(err)}`);
       });
     };
-    opts.abortSignal?.addEventListener("abort", onAbortCleanup, { once: true });
+
+    if (opts.abortSignal?.aborted) {
+      runAbortCleanup();
+    } else {
+      opts.abortSignal?.addEventListener("abort", runAbortCleanup, { once: true });
+    }
   }
 
   await runWithReconnect(connectOnce, {

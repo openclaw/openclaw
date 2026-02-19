@@ -132,8 +132,9 @@ async function authorizeSlashInvocation(params: {
   channelId: string;
   senderId: string;
   senderName: string;
+  log?: (msg: string) => void;
 }): Promise<SlashInvocationAuth> {
-  const { account, cfg, client, commandText, channelId, senderId, senderName } = params;
+  const { account, cfg, client, commandText, channelId, senderId, senderName, log } = params;
   const core = getMattermostRuntime();
 
   // Resolve channel info so we can enforce DM vs group/channel policies.
@@ -443,6 +444,7 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
       channelId,
       senderId,
       senderName,
+      log,
     });
 
     if (!auth.ok) {
