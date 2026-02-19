@@ -369,6 +369,8 @@ Tools:
 
 - `memory_search` — returns snippets with file + line ranges.
 - `memory_get` — read memory file content by path.
+- `memory_write` — append a durable memory line to daily (`memory/YYYY-MM-DD.md`) or long-term (`MEMORY.md`) memory.
+- `memory_upsert` — keyed update/insert for durable memory entries to avoid duplicates.
 
 Local mode:
 
@@ -380,7 +382,9 @@ Local mode:
 
 - `memory_search` semantically searches Markdown chunks (~400 token target, 80-token overlap) from `MEMORY.md` + `memory/**/*.md`. It returns snippet text (capped ~700 chars), file path, line range, score, provider/model, and whether we fell back from local → remote embeddings. No full file payload is returned.
 - `memory_get` reads a specific memory Markdown file (workspace-relative), optionally from a starting line and for N lines. Paths outside `MEMORY.md` / `memory/` are rejected.
-- Both tools are enabled only when `memorySearch.enabled` resolves true for the agent.
+- `memory_write` appends one normalized Markdown bullet to daily or long-term memory files.
+- `memory_upsert` writes a keyed bullet (`[key:<id>]`) and updates existing entries that share the same key.
+- Search tools require `memorySearch.enabled`; write tools require memory plugin availability and a writable workspace.
 
 ### What gets indexed (and when)
 
