@@ -66,4 +66,40 @@ describe("hooks workspace", () => {
     const entries = loadHookEntriesFromDir({ dir: hooksRoot, source: "openclaw-workspace" });
     expect(entries.some((e) => e.hook.name === "nested")).toBe(true);
   });
+
+  it("ignores package.json hook paths that escape via symlink", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hooks-workspace-link-"));
+    const hooksRoot = path.join(root, "hooks");
+    fs.mkdirSync(hooksRoot, { recursive: true });
+
+    const pkgDir = path.join(hooksRoot, "pkg");
+    const outsideDir = path.join(root, "outside");
+    const linkedDir = path.join(pkgDir, "linked");
+    fs.mkdirSync(pkgDir, { recursive: true });
+    fs.mkdirSync(outsideDir, { recursive: true });
+    fs.writeFileSync(path.join(outsideDir, "HOOK.md"), "---\nname: outside\n---\n");
+    fs.writeFileSync(path.join(outsideDir, "handler.js"), "export default async () => {};\n");
+    try {
+      fs.symlinkSync(outsideDir, linkedDir, process.platform === "win32" ? "junction" : "dir");
+    } catch {
+      return;
+    }
+
+    fs.writeFileSync(
+      path.join(pkgDir, "package.json"),
+      JSON.stringify(
+        {
+          name: "pkg",
+          [MANIFEST_KEY]: {
+            hooks: ["./linked"],
+          },
+        },
+        null,
+        2,
+      ),
+    );
+
+    const entries = loadHookEntriesFromDir({ dir: hooksRoot, source: "openclaw-workspace" });
+    expect(entries.some((e) => e.hook.name === "outside")).toBe(false);
+  });
 });

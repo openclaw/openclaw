@@ -38,6 +38,20 @@ describe("cdp", () => {
     return wsPort;
   };
 
+  const startVersionHttpServer = async (versionBody: Record<string, unknown>) => {
+    httpServer = createServer((req, res) => {
+      if (req.url === "/json/version") {
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify(versionBody));
+        return;
+      }
+      res.statusCode = 404;
+      res.end("not found");
+    });
+    await new Promise<void>((resolve) => httpServer?.listen(0, "127.0.0.1", resolve));
+    return (httpServer.address() as { port: number }).port;
+  };
+
   afterEach(async () => {
     await new Promise<void>((resolve) => {
       if (!httpServer) {
@@ -68,22 +82,9 @@ describe("cdp", () => {
       );
     });
 
-    httpServer = createServer((req, res) => {
-      if (req.url === "/json/version") {
-        res.setHeader("content-type", "application/json");
-        res.end(
-          JSON.stringify({
-            webSocketDebuggerUrl: `ws://127.0.0.1:${wsPort}/devtools/browser/TEST`,
-          }),
-        );
-        return;
-      }
-      res.statusCode = 404;
-      res.end("not found");
+    const httpPort = await startVersionHttpServer({
+      webSocketDebuggerUrl: `ws://127.0.0.1:${wsPort}/devtools/browser/TEST`,
     });
-
-    await new Promise<void>((resolve) => httpServer?.listen(0, "127.0.0.1", resolve));
-    const httpPort = (httpServer.address() as { port: number }).port;
 
     const created = await createTargetViaCdp({
       cdpUrl: `http://127.0.0.1:${httpPort}`,
@@ -122,22 +123,9 @@ describe("cdp", () => {
       );
     });
 
-    httpServer = createServer((req, res) => {
-      if (req.url === "/json/version") {
-        res.setHeader("content-type", "application/json");
-        res.end(
-          JSON.stringify({
-            webSocketDebuggerUrl: `ws://127.0.0.1:${wsPort}/devtools/browser/TEST`,
-          }),
-        );
-        return;
-      }
-      res.statusCode = 404;
-      res.end("not found");
+    const httpPort = await startVersionHttpServer({
+      webSocketDebuggerUrl: `ws://127.0.0.1:${wsPort}/devtools/browser/TEST`,
     });
-
-    await new Promise<void>((resolve) => httpServer?.listen(0, "127.0.0.1", resolve));
-    const httpPort = (httpServer.address() as { port: number }).port;
 
     const created = await createTargetViaCdp({
       cdpUrl: `http://127.0.0.1:${httpPort}`,
@@ -172,6 +160,16 @@ describe("cdp", () => {
 
     expect(res.result.type).toBe("number");
     expect(res.result.value).toBe(2);
+  });
+
+  it("fails when /json/version omits webSocketDebuggerUrl", async () => {
+    const httpPort = await startVersionHttpServer({});
+    await expect(
+      createTargetViaCdp({
+        cdpUrl: `http://127.0.0.1:${httpPort}`,
+        url: "https://example.com",
+      }),
+    ).rejects.toThrow("CDP /json/version missing webSocketDebuggerUrl");
   });
 
   it("captures an aria snapshot via CDP", async () => {

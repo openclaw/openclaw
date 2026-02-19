@@ -1,15 +1,26 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const { callGatewayToolMock } = vi.hoisted(() => ({
+  callGatewayToolMock: vi.fn(),
+}));
+
+vi.mock("../agent-scope.js", () => ({
+  resolveSessionAgentId: () => "agent-123",
+}));
+
 import { createCronTool } from "./cron-tool.js";
-import { callGatewayMock } from "./cron-tool.test-harness.js";
 
 describe("cron tool flat-params", () => {
   beforeEach(() => {
-    callGatewayMock.mockReset();
-    callGatewayMock.mockResolvedValue({ ok: true });
+    callGatewayToolMock.mockReset();
+    callGatewayToolMock.mockResolvedValue({ ok: true });
   });
 
   it("preserves explicit top-level sessionKey during flat-params recovery", async () => {
-    const tool = createCronTool({ agentSessionKey: "agent:main:discord:channel:ops" });
+    const tool = createCronTool(
+      { agentSessionKey: "agent:main:discord:channel:ops" },
+      { callGatewayTool: callGatewayToolMock },
+    );
     await tool.execute("call-flat-session-key", {
       action: "add",
       sessionKey: "agent:main:telegram:group:-100123:topic:99",
@@ -17,11 +28,12 @@ describe("cron tool flat-params", () => {
       message: "do stuff",
     });
 
-    const call = callGatewayMock.mock.calls[0]?.[0] as {
-      method?: string;
-      params?: { sessionKey?: string };
-    };
-    expect(call.method).toBe("cron.add");
-    expect(call.params?.sessionKey).toBe("agent:main:telegram:group:-100123:topic:99");
+    const [method, _gatewayOpts, params] = callGatewayToolMock.mock.calls[0] as [
+      string,
+      unknown,
+      { sessionKey?: string },
+    ];
+    expect(method).toBe("cron.add");
+    expect(params.sessionKey).toBe("agent:main:telegram:group:-100123:topic:99");
   });
 });
