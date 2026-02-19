@@ -11,6 +11,24 @@ title: "Slash Commands"
 Commands are handled by the Gateway. Most commands must be sent as a **standalone** message that starts with `/`.
 The host-only bash chat command uses `! <cmd>` (with `/bash <cmd>` as an alias).
 
+## Authorization model
+
+Access to commands is controlled by three independent layers, applied in order:
+
+| Layer              | Config                                                 | Controls                                                                 |
+| ------------------ | ------------------------------------------------------ | ------------------------------------------------------------------------ |
+| **Channel access** | `channels.<provider>.allowFrom` / `dmPolicy` / pairing | Who can send messages to the agent at all                                |
+| **Command access** | `commands.allowFrom`                                   | Who can use slash commands and directives                                |
+| **Owner access**   | `commands.ownerAllowFrom`                              | Who is the privileged owner (system prompt identity + owner-gated tools) |
+
+**Channel access** is the outer gate — if someone can't chat with the agent, they can't use commands either.
+
+**Command access** (`commands.allowFrom`) controls slash commands and directives independently of channel access. Useful when you have multiple chatters but only want some to run commands. When not set, command access falls back to `commands.useAccessGroups` (uses channel allowlists).
+
+**Owner access** (`commands.ownerAllowFrom`) designates the privileged owner. The owner's identity is injected into the agent's system prompt as `Owner numbers: ...`, and owner-gated agent tools (e.g. `whatsapp_login`) are restricted to owners only. Slash commands themselves do not distinguish owner from non-owner — all use the same authorized-sender check — unless a provider enforces owner-for-commands (e.g. WhatsApp when `commands.allowFrom` is not set). When not set, ownership is derived from channel allowlists (`channels.<provider>.allowFrom` / pairing) — so in single-user setups you usually don't need to set this explicitly.
+
+> **Common setup:** Lock `commands.allowFrom` to yourself across each channel. Leave `commands.ownerAllowFrom` unset — the gateway will derive ownership from your channel allowlists. Only configure `ownerAllowFrom` explicitly if you want a different person to have owner designation (system prompt identity + owner-gated tools) than command access.
+
 There are two related systems:
 
 - **Commands**: standalone `/...` messages.
@@ -43,6 +61,7 @@ They run immediately, are stripped before the model sees the message, and the re
       discord: ["user:123"],
     },
     useAccessGroups: true,
+    // ownerAllowFrom: ["user1", "whatsapp:+15551234567"], // explicit owner override (optional)
   },
 }
 ```
@@ -61,9 +80,14 @@ They run immediately, are stripped before the model sees the message, and the re
 - `commands.config` (default `false`) enables `/config` (reads/writes `openclaw.json`).
 - `commands.debug` (default `false`) enables `/debug` (runtime-only overrides).
 - `commands.allowFrom` (optional) sets a per-provider allowlist for command authorization. When configured, it is the
-  only authorization source for commands and directives (channel allowlists/pairing and `commands.useAccessGroups`
-  are ignored). Use `"*"` for a global default; provider-specific keys override it.
+  only authorization source for commands and directives — channel allowlists/pairing and `commands.useAccessGroups`
+  are ignored. Use `"*"` for a global default; provider-specific keys override it.
 - `commands.useAccessGroups` (default `true`) enforces allowlists/policies for commands when `commands.allowFrom` is not set.
+- `commands.ownerAllowFrom` (optional) sets the explicit owner allowlist. The owner's ID is injected into the
+  agent's system prompt as `Owner numbers: ...` and gates owner-only agent tools (e.g. `whatsapp_login`). Accepts
+  plain channel-native IDs or provider-prefixed IDs (e.g. `"whatsapp:+15551234567"`). Do not use `"*"` — it
+  results in no owner being designated. When not set, ownership is derived from channel allowlists — sufficient
+  for single-user setups.
 
 ## Command list
 
@@ -82,8 +106,8 @@ Text + native (when enabled):
 - `/kill <id|#|all>` (immediately abort one or all running sub-agents for this session; no confirmation message)
 - `/steer <id|#> <message>` (steer a running sub-agent immediately: in-run when possible, otherwise abort current work and restart on the steer message)
 - `/tell <id|#> <message>` (alias for `/steer`)
-- `/config show|get|set|unset` (persist config to disk, owner-only; requires `commands.config: true`)
-- `/debug show|set|unset|reset` (runtime overrides, owner-only; requires `commands.debug: true`)
+- `/config show|get|set|unset` (persist config to disk; requires `commands.config: true`)
+- `/debug show|set|unset|reset` (runtime overrides; requires `commands.debug: true`)
 - `/usage off|tokens|full|cost` (per-response usage footer or local cost summary)
 - `/tts off|always|inbound|tagged|status|provider|limit|summary|audio` (control TTS; see [/tts](/tts))
   - Discord: native command is `/voice` (Discord reserves `/tts`); text `/tts` still works.
@@ -93,7 +117,7 @@ Text + native (when enabled):
 - `/dock-discord` (alias: `/dock_discord`) (switch replies to Discord)
 - `/dock-slack` (alias: `/dock_slack`) (switch replies to Slack)
 - `/activation mention|always` (groups only)
-- `/send on|off|inherit` (owner-only)
+- `/send on|off|inherit`
 - `/reset` or `/new [model]` (optional model hint; remainder is passed through)
 - `/think <off|minimal|low|medium|high|xhigh>` (dynamic choices by model/provider; aliases: `/thinking`, `/t`)
 - `/verbose on|full|off` (alias: `/v`)
@@ -163,7 +187,7 @@ Notes:
 
 ## Debug overrides
 
-`/debug` lets you set **runtime-only** config overrides (memory, not disk). Owner-only. Disabled by default; enable with `commands.debug: true`.
+`/debug` lets you set **runtime-only** config overrides (memory, not disk). Disabled by default; enable with `commands.debug: true`. Requires command access (authorized sender).
 
 Examples:
 
@@ -182,7 +206,7 @@ Notes:
 
 ## Config updates
 
-`/config` writes to your on-disk config (`openclaw.json`). Owner-only. Disabled by default; enable with `commands.config: true`.
+`/config` writes to your on-disk config (`openclaw.json`). Disabled by default; enable with `commands.config: true`. Requires command access (authorized sender).
 
 Examples:
 
