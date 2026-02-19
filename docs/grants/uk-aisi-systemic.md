@@ -4,7 +4,7 @@
 - **Program:** Systemic AI Safety Fast Grants
 - **Status (as of February 19, 2026):** "We are not currently accepting applications" per the grants page
 - **Eligibility model:** UK host organization required; international collaborators allowed
-- **Contact:** AISIgrants@dsit.gov.uk
+- **Contact:** <AISIgrants@dsit.gov.uk>
 
 ---
 
