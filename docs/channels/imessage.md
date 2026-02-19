@@ -97,6 +97,10 @@ exec ssh -T gateway-host imsg "$@"
       cliPath: "~/.openclaw/scripts/imsg-ssh",
       remoteHost: "user@gateway-host", // used for SCP attachment fetches
       includeAttachments: true,
+      // Optional: override allowed attachment roots.
+      // Defaults include /Users/*/Library/Messages/Attachments
+      attachmentRoots: ["/Users/*/Library/Messages/Attachments"],
+      remoteAttachmentRoots: ["/Users/*/Library/Messages/Attachments"],
     },
   },
 }
@@ -105,6 +109,7 @@ exec ssh -T gateway-host imsg "$@"
     If `remoteHost` is not set, OpenClaw attempts to auto-detect it by parsing the SSH wrapper script.
     `remoteHost` must be `host` or `user@host` (no spaces or SSH options).
     OpenClaw uses strict host-key checking for SCP, so the relay host key must already exist in `~/.ssh/known_hosts`.
+    Attachment paths are validated against allowed roots (`attachmentRoots` / `remoteAttachmentRoots`).
 
   </Tab>
 </Tabs>
@@ -233,7 +238,7 @@ exec ssh -T bot@mac-mini.tailnet-1234.ts.net imsg "$@"
   <Accordion title="Multi-account pattern">
     iMessage supports per-account config under `channels.imessage.accounts`.
 
-    Each account can override fields such as `cliPath`, `dbPath`, `allowFrom`, `groupPolicy`, `mediaMaxMb`, and history settings.
+    Each account can override fields such as `cliPath`, `dbPath`, `allowFrom`, `groupPolicy`, `mediaMaxMb`, history settings, and attachment root allowlists.
 
   </Accordion>
 </AccordionGroup>
@@ -244,6 +249,10 @@ exec ssh -T bot@mac-mini.tailnet-1234.ts.net imsg "$@"
   <Accordion title="Attachments and media">
     - inbound attachment ingestion is optional: `channels.imessage.includeAttachments`
     - remote attachment paths can be fetched via SCP when `remoteHost` is set
+    - attachment paths must match allowed roots:
+      - `channels.imessage.attachmentRoots` (local)
+      - `channels.imessage.remoteAttachmentRoots` (remote SCP mode)
+      - default root pattern: `/Users/*/Library/Messages/Attachments`
     - SCP uses strict host-key checking (`StrictHostKeyChecking=yes`)
     - outbound media size uses `channels.imessage.mediaMaxMb` (default 16 MB)
   </Accordion>
@@ -329,6 +338,7 @@ openclaw channels status --probe
     Check:
 
     - `channels.imessage.remoteHost`
+    - `channels.imessage.remoteAttachmentRoots`
     - SSH/SCP key auth from the gateway host
     - host key exists in `~/.ssh/known_hosts` on the gateway host
     - remote path readability on the Mac running Messages

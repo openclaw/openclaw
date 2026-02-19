@@ -63,4 +63,32 @@ describe("config schema regressions", () => {
       expect(res.issues[0]?.path).toBe("channels.imessage.remoteHost");
     }
   });
+
+  it("accepts iMessage attachment root patterns", () => {
+    const res = validateConfigObject({
+      channels: {
+        imessage: {
+          attachmentRoots: ["/Users/*/Library/Messages/Attachments"],
+          remoteAttachmentRoots: ["/Volumes/relay/attachments"],
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects relative iMessage attachment roots", () => {
+    const res = validateConfigObject({
+      channels: {
+        imessage: {
+          attachmentRoots: ["./attachments"],
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("channels.imessage.attachmentRoots.0");
+    }
+  });
 });
