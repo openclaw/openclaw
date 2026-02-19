@@ -43,8 +43,8 @@ function normalizeAllowlist(input: unknown): string[] | undefined {
     return undefined;
   }
   const normalized = input.map((entry) => String(entry).trim()).filter(Boolean);
-  // 关键：如果用户明确配置了数组（包括空数组），就返回它
-  // 这样 allowedAgents: [] 会被正确地解释为"不允许任何 agent"
+  // Key: if user explicitly configured array (including empty array), return it
+  // This way allowedAgents: [] will be correctly interpreted as "no agents allowed"
   return normalized;
 }
 
