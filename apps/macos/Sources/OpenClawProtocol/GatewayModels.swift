@@ -2244,6 +2244,7 @@ public struct CronAddParams: Codable, Sendable {
     public let wakemode: AnyCodable
     public let payload: AnyCodable
     public let delivery: AnyCodable?
+    public let tools: [String: AnyCodable]?
 
     public init(
         name: String,
@@ -2256,7 +2257,8 @@ public struct CronAddParams: Codable, Sendable {
         sessiontarget: AnyCodable,
         wakemode: AnyCodable,
         payload: AnyCodable,
-        delivery: AnyCodable?
+        delivery: AnyCodable?,
+        tools: [String: AnyCodable]?
     ) {
         self.name = name
         self.agentid = agentid
@@ -2269,6 +2271,7 @@ public struct CronAddParams: Codable, Sendable {
         self.wakemode = wakemode
         self.payload = payload
         self.delivery = delivery
+        self.tools = tools
     }
     private enum CodingKeys: String, CodingKey {
         case name
@@ -2282,6 +2285,7 @@ public struct CronAddParams: Codable, Sendable {
         case wakemode = "wakeMode"
         case payload
         case delivery
+        case tools
     }
 }
 
