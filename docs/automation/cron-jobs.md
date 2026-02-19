@@ -11,10 +11,10 @@ title: "Cron Jobs"
 
 > **Cron vs Heartbeat?** See [Cron vs Heartbeat](/automation/cron-vs-heartbeat) for guidance on when to use each.
 
-Cron is the Gateway’s built-in scheduler. It persists jobs, wakes the agent at
+Cron is the Gateway's built-in scheduler. It persists jobs, wakes the agent at
 the right time, and can optionally deliver output back to a chat.
 
-If you want _“run this every morning”_ or _“poke the agent in 20 minutes”_,
+If you want _"run this every morning"_ or _"poke the agent in 20 minutes"_,
 cron is the mechanism.
 
 Troubleshooting: [/automation/troubleshooting](/automation/troubleshooting)
@@ -22,11 +22,12 @@ Troubleshooting: [/automation/troubleshooting](/automation/troubleshooting)
 ## TL;DR
 
 - Cron runs **inside the Gateway** (not inside the model).
-- Jobs persist under `~/.openclaw/cron/` so restarts don’t lose schedules.
+- Jobs persist under `~/.openclaw/cron/` so restarts don't lose schedules.
 - Two execution styles:
   - **Main session**: enqueue a system event, then run on the next heartbeat.
   - **Isolated**: run a dedicated agent turn in `cron:<jobId>`, with delivery (announce by default or none).
-- Wakeups are first-class: a job can request “wake now” vs “next heartbeat”.
+- Wakeups are first-class: a job can request "wake now" vs "next heartbeat".
+- **Gates**: add `--gate <cmd>` to skip the agent turn at zero cost when a condition is not met.
 - Webhook posting is per job via `delivery.mode = "webhook"` + `delivery.to = "<url>"`.
 - Legacy fallback remains for stored jobs with `notify: true` when `cron.webhook` is set, migrate those jobs to webhook delivery mode.
 
@@ -117,7 +118,7 @@ Cron supports three schedule kinds:
 - `every`: fixed interval (ms).
 - `cron`: 5-field cron expression (or 6-field with seconds) with optional IANA timezone.
 
-Cron expressions use `croner`. If a timezone is omitted, the Gateway host’s
+Cron expressions use `croner`. If a timezone is omitted, the Gateway host's
 local timezone is used.
 
 To reduce top-of-hour load spikes across many gateways, OpenClaw applies a
@@ -246,8 +247,8 @@ Isolated jobs can deliver output to a channel via the top-level `delivery` confi
 `announce` delivery is only valid for isolated jobs (`sessionTarget: "isolated"`).
 `webhook` delivery is valid for both main and isolated jobs.
 
-If `delivery.channel` or `delivery.to` is omitted, cron can fall back to the main session’s
-“last route” (the last place the agent replied).
+If `delivery.channel` or `delivery.to` is omitted, cron can fall back to the main session's
+"last route" (the last place the agent replied).
 
 Target format reminders:
 
@@ -266,6 +267,101 @@ the topic/thread into the `to` field:
 Prefixed targets like `telegram:...` / `telegram:group:...` are also accepted:
 
 - `telegram:group:-1001234567890:topic:123`
+
+### Gate scripts (conditional execution)
+
+A gate is an optional shell command that runs **before** the agent turn. If the gate exits
+with `gate.triggerExitCode` (default `0`) the job proceeds normally. Any other exit code -
+or a timeout - causes the tick to be recorded as `"skipped"` with **zero LLM cost**.
+
+Use gates when you want the scheduler to keep firing on schedule but only wake the agent
+when there is actually something to do:
+
+```
+schedule fires → gate runs (fast, cheap) → passes? → agent turn
+                                          ↘ fails?  → skipped (no tokens used)
+```
+
+Common patterns:
+
+- Run the PR-review agent only when open PRs exist
+- Alert on disk / memory usage only when above a threshold
+- Drain a task queue only when items are pending
+- Poll an external API and skip when nothing changed
+
+#### Gate fields
+
+| Field             | Type     | Default | Description                                                                 |
+| ----------------- | -------- | ------- | --------------------------------------------------------------------------- |
+| `command`         | `string` | -       | Shell command. Full shell syntax is available (`&&`, pipes, env vars, etc.) |
+| `triggerExitCode` | `number` | `0`     | Exit code that allows the agent turn to proceed                             |
+| `timeoutMs`       | `number` | `30000` | Max milliseconds before the gate process is killed                          |
+
+The gate runs via `/bin/sh -c` on POSIX and `cmd /c` on Windows, so you can use the full
+shell syntax your system supports.
+
+#### Skipped ticks
+
+When a gate does not pass, the run is stored in history with `status: "skipped"` and an
+`error` field explaining why (e.g. `gate exited with code 1 (want 0)`). No agent session is
+created and no heartbeat is triggered. Skipped ticks do **not** count as errors and do not
+trigger exponential backoff.
+
+#### CLI flags
+
+```
+cron add / cron edit:
+  --gate <cmd>            Shell command to run as the gate
+  --gate-exit-code <n>    Exit code that allows the agent to proceed (default 0)
+  --gate-timeout-ms <n>   Max ms the gate may run before it is killed (default 30000)
+
+cron edit only:
+  --clear-gate            Remove the gate from an existing job
+```
+
+#### Examples
+
+Only run the PR-review agent when open PRs exist:
+
+```bash
+openclaw cron add \
+  --name "PR review" \
+  --cron "0 */2 * * *" \
+  --tz "America/Chicago" \
+  --session isolated \
+  --message "Review open PRs and summarise findings." \
+  --gate "gh pr list --repo myorg/myrepo --state open --json number --jq 'length > 0'" \
+  --announce
+```
+
+Alert only when disk usage is above 80 %:
+
+```bash
+openclaw cron add \
+  --name "Disk alert" \
+  --cron "0 * * * *" \
+  --session main \
+  --system-event "Disk usage is critical - investigate and report." \
+  --gate "bash -c '[ \$(df / --output=pcent | tail -1 | tr -dc 0-9) -ge 80 ]'"
+```
+
+Custom trigger code - script exits `1` when work is pending, `0` when idle:
+
+```bash
+openclaw cron add \
+  --name "Queue drain" \
+  --cron "*/5 * * * *" \
+  --session isolated \
+  --message "Process the pending task queue." \
+  --gate "~/scripts/has-pending-tasks.sh" \
+  --gate-exit-code 1
+```
+
+Remove a gate from an existing job:
+
+```bash
+openclaw cron edit <jobId> --clear-gate
+```
 
 ## JSON schema for tool calls
 
@@ -309,6 +405,27 @@ Recurring, isolated job with delivery:
 }
 ```
 
+Isolated job with a gate (only runs when open PRs exist):
+
+```json
+{
+  "name": "PR review",
+  "schedule": { "kind": "cron", "expr": "0 */2 * * *", "tz": "America/Chicago" },
+  "sessionTarget": "isolated",
+  "wakeMode": "now",
+  "payload": {
+    "kind": "agentTurn",
+    "message": "Review open PRs and summarise findings."
+  },
+  "gate": {
+    "command": "gh pr list --repo myorg/myrepo --state open --json number --jq 'length > 0'",
+    "triggerExitCode": 0,
+    "timeoutMs": 15000
+  },
+  "delivery": { "mode": "announce" }
+}
+```
+
 Notes:
 
 - `schedule.kind`: `at` (`at`), `every` (`everyMs`), or `cron` (`expr`, optional `tz`).
@@ -316,8 +433,9 @@ Notes:
 - `everyMs` is milliseconds.
 - `sessionTarget` must be `"main"` or `"isolated"` and must match `payload.kind`.
 - Optional fields: `agentId`, `description`, `enabled`, `deleteAfterRun` (defaults to true for `at`),
-  `delivery`.
+  `delivery`, `gate`.
 - `wakeMode` defaults to `"now"` when omitted.
+- `gate`: `{ command: string, triggerExitCode?: number, timeoutMs?: number }` - see [Gate scripts](#gate-scripts-conditional-execution).
 
 ### cron.update params
 
@@ -507,6 +625,25 @@ Immediate system event without creating a job:
 openclaw system event --mode now --text "Next heartbeat: check battery."
 ```
 
+Recurring job with a gate (only wakes the agent when open PRs exist):
+
+```bash
+openclaw cron add \
+  --name "PR review" \
+  --cron "0 */2 * * *" \
+  --tz "America/Chicago" \
+  --session isolated \
+  --message "Review open PRs and summarise findings." \
+  --gate "gh pr list --repo myorg/myrepo --state open --json number --jq 'length > 0'" \
+  --announce
+```
+
+Remove a gate from an existing job:
+
+```bash
+openclaw cron edit <jobId> --clear-gate
+```
+
 ## Gateway API surface
 
 - `cron.list`, `cron.status`, `cron.add`, `cron.update`, `cron.remove`
@@ -515,7 +652,7 @@ openclaw system event --mode now --text "Next heartbeat: check battery."
 
 ## Troubleshooting
 
-### “Nothing runs”
+### "Nothing runs"
 
 - Check cron is enabled: `cron.enabled` and `OPENCLAW_SKIP_CRON`.
 - Check the Gateway is running continuously (cron runs inside the Gateway process).
@@ -530,8 +667,8 @@ openclaw system event --mode now --text "Next heartbeat: check battery."
 
 ### Telegram delivers to the wrong place
 
-- For forum topics, use `-100…:topic:<id>` so it’s explicit and unambiguous.
-- If you see `telegram:...` prefixes in logs or stored “last route” targets, that’s normal;
+- For forum topics, use `-100…:topic:<id>` so it's explicit and unambiguous.
+- If you see `telegram:...` prefixes in logs or stored "last route" targets, that's normal;
   cron delivery accepts them and still parses topic IDs correctly.
 
 ### Subagent announce delivery retries
