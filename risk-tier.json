@@ -1,0 +1,35 @@
+{
+  "version": "1",
+  "riskTierRules": {
+    "high": [
+      "**/auth/**",
+      "**/security/**",
+      "**/api/**"
+    ],
+    "medium": [
+      "**/core/**",
+      "**/lib/**"
+    ],
+    "low": ["**"]
+  },
+  "mergePolicy": {
+    "high": {
+      "requiredChecks": [
+        "risk-policy-gate",
+        "CI Pipeline"
+      ]
+    },
+    "medium": {
+      "requiredChecks": [
+        "risk-policy-gate",
+        "CI Pipeline"
+      ]
+    },
+    "low": {
+      "requiredChecks": [
+        "risk-policy-gate",
+        "CI Pipeline"
+      ]
+    }
+  }
+}

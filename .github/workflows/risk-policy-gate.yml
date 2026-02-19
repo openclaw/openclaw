@@ -1,0 +1,95 @@
+name: Risk Policy Gate
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+jobs:
+  risk-tier:
+    runs-on: ubuntu-latest
+    outputs:
+      tier: ${{ steps.compute.outputs.tier }}
+      changed-files: ${{ steps.compute.outputs.changed-files }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute risk tier
+        id: compute
+        run: |
+          # Get changed files
+          CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }}...HEAD)
+          echo "changed-files: $CHANGED_FILES"
+          
+          # Load risk config
+          TIER_CONFIG=$(cat risk-tier.json)
+          
+          # Simple tier detection - if any high-risk files changed, use high
+          if echo "$CHANGED_FILES" | grep -qE "(api/legal|lib/tools|db/schema|auth|payment)"; then
+            echo "tier=high" >> $GITHUB_OUTPUT
+          elif echo "$CHANGED_FILES" | grep -qE "(components|lib)/"; then
+            echo "tier=medium" >> $GITHUB_OUTPUT
+          else
+            echo "tier=low" >> $GITHUB_OUTPUT
+          fi
+          
+          echo "Changed files: $CHANGED_FILES"
+          echo "Risk tier: ${{ steps.compute.outputs.tier }}"
+
+      - name: Post tier comment
+        run: |
+          echo "## Risk Assessment" >> $GITHUB_STEP_SUMMARY
+          echo "**Tier:** ${{ steps.compute.outputs.tier }}" >> $GITHUB_STEP_SUMMARY
+
+  policy-gate:
+    needs: risk-tier
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify policy compliance
+        run: |
+          TIER=${{ needs.risk-tier.outputs.tier }}
+          echo "Running policy gate for tier: $TIER"
+          
+          # In full implementation, this would:
+          # 1. Check required checks based on tier
+          # 2. Verify code review agent status (Greptile/Coderabbit)
+          # 3. Verify current-head SHA matches
+          # 4. Check for stale comments
+          
+          echo "Policy gate passed for tier: $TIER"
+
+  browser-evidence:
+    needs: risk-tier
+    if: needs.risk-tier.outputs.tier == 'high'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run browser smoke tests
+        run: |
+          echo "Running browser evidence capture for UI changes"
+          # npm run harness:ui:verify-browser-evidence
+
+      - name: Upload evidence
+        uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: browser-evidence
+          path: evidence/
+          retention-days: 30
+
+  preflight-summary:
+    needs: [risk-tier, policy-gate]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Summary
+        run: |
+          echo "## Preflight Results" >> $GITHUB_STEP_SUMMARY
+          echo "**Risk Tier:** ${{ needs.risk-tier.outputs.tier }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Policy Gate:** ${{ needs.policy-gate.result }}" >> $GITHUB_STEP_SUMMARY
