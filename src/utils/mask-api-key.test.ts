@@ -7,12 +7,9 @@ describe("maskApiKey", () => {
     expect(maskApiKey("   ")).toBe("missing");
   });
 
-  it("returns trimmed value when length is 16 chars or less", () => {
-    expect(maskApiKey(" abcdefghijklmnop ")).toBe("abcdefghijklmnop");
-    expect(maskApiKey(" short ")).toBe("short");
-  });
-
-  it("masks long values with first and last 8 chars", () => {
-    expect(maskApiKey("1234567890abcdefghijklmnop")).toBe("12345678...ijklmnop");
+  it("always masks keys showing only first 4 chars", () => {
+    expect(maskApiKey(" abcdefghijklmnop ")).toBe("abcd****");
+    expect(maskApiKey(" short ")).toBe("shor****");
+    expect(maskApiKey("1234567890abcdefghijklmnop")).toBe("1234****");
   });
 });
