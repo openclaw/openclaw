@@ -34,25 +34,46 @@
    =========================================== */
 
 .card {
-  border: 1px solid var(--border);
-  background: var(--card);
+  position: relative;
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
   border-radius: var(--radius-lg);
   padding: 20px;
   animation: rise 0.35s var(--ease-out) backwards;
   transition:
     border-color var(--duration-normal) var(--ease-out),
     box-shadow var(--duration-normal) var(--ease-out),
-    transform var(--duration-normal) var(--ease-out);
+    transform var(--duration-normal) var(--ease-out),
+    background var(--duration-normal) var(--ease-out);
   box-shadow:
-    var(--shadow-sm),
-    inset 0 1px 0 var(--card-highlight);
+    var(--glass-shadow-sm),
+    var(--glass-inner-highlight);
+}
+
+.card::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(0, 163, 225, 0.3), transparent);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  opacity: 0;
+  transition: opacity var(--duration-normal) var(--ease-out);
 }
 
 .card:hover {
-  border-color: var(--border-strong);
+  border-color: var(--glass-border-hover);
   box-shadow:
-    var(--shadow-md),
-    inset 0 1px 0 var(--card-highlight);
+    var(--glass-shadow),
+    0 0 20px var(--glow-primary-subtle);
+}
+
+.card:hover::before {
+  opacity: 1;
 }
 
 .card-title {
@@ -74,21 +95,23 @@
    =========================================== */
 
 .stat {
-  background: var(--card);
+  background: var(--glass-bg);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   border-radius: var(--radius-md);
   padding: 14px 16px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--glass-border);
   transition:
     border-color var(--duration-normal) var(--ease-out),
     box-shadow var(--duration-normal) var(--ease-out);
-  box-shadow: inset 0 1px 0 var(--card-highlight);
+  box-shadow: var(--glass-inner-highlight);
 }
 
 .stat:hover {
-  border-color: var(--border-strong);
+  border-color: var(--glass-border-hover);
   box-shadow:
-    var(--shadow-sm),
-    inset 0 1px 0 var(--card-highlight);
+    var(--glass-shadow-sm),
+    var(--glass-inner-highlight);
 }
 
 .stat-label {
@@ -337,8 +360,10 @@
   align-items: center;
   justify-content: center;
   gap: 8px;
-  border: 1px solid var(--border);
-  background: var(--bg-elevated);
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
   padding: 9px 16px;
   border-radius: var(--radius-md);
   font-size: 13px;
@@ -353,15 +378,15 @@
 }
 
 .btn:hover {
-  background: var(--bg-hover);
-  border-color: var(--border-strong);
+  background: var(--glass-bg-hover);
+  border-color: var(--glass-border-hover);
   transform: translateY(-1px);
-  box-shadow: var(--shadow-sm);
+  box-shadow: 0 0 20px var(--glow-primary-subtle);
 }
 
 .btn:active {
-  background: var(--secondary);
-  transform: translateY(0);
+  background: var(--glass-bg-active);
+  transform: scale(0.98);
   box-shadow: none;
 }
 
@@ -468,12 +493,14 @@
 .field input,
 .field textarea,
 .field select {
-  border: 1px solid var(--input);
-  background: var(--card);
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
   border-radius: var(--radius-md);
   padding: 8px 12px;
   outline: none;
-  box-shadow: inset 0 1px 0 var(--card-highlight);
+  box-shadow: var(--glass-inner-highlight);
   transition:
     border-color var(--duration-fast) ease,
     box-shadow var(--duration-fast) ease;
@@ -482,8 +509,8 @@
 .field input:focus,
 .field textarea:focus,
 .field select:focus {
-  border-color: var(--ring);
-  box-shadow: var(--focus-ring);
+  border-color: var(--sonance-blue);
+  box-shadow: var(--focus-ring), 0 0 20px var(--glow-primary-subtle);
 }
 
 .field select {
@@ -529,17 +556,17 @@
 :root[data-theme="light"] .field input,
 :root[data-theme="light"] .field textarea,
 :root[data-theme="light"] .field select {
-  background: var(--card);
-  border-color: var(--input);
+  background: var(--glass-bg);
+  border-color: var(--glass-border);
 }
 
 :root[data-theme="light"] .btn {
-  background: var(--bg);
-  border-color: var(--input);
+  background: var(--glass-bg);
+  border-color: var(--glass-border);
 }
 
 :root[data-theme="light"] .btn:hover {
-  background: var(--bg-hover);
+  background: var(--glass-bg-hover);
 }
 
 :root[data-theme="light"] .btn.primary {
@@ -1279,8 +1306,8 @@
 }
 
 :root[data-theme="light"] .chat-line.user .chat-bubble {
-  border-color: rgba(234, 88, 12, 0.2);
-  background: rgba(251, 146, 60, 0.12);
+  border-color: rgba(0, 163, 225, 0.2);
+  background: rgba(0, 163, 225, 0.1);
 }
 
 .chat-line.assistant .chat-bubble {

@@ -1,0 +1,15 @@
+{
+  "name": "@athena/cortex-tools",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Athena plugin that exposes all Cortex MCP tools as native agent tools",
+  "type": "module",
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

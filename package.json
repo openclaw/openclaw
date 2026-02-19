@@ -1,19 +1,26 @@
 {
   "name": "openclaw",
-  "version": "2026.2.19",
-  "description": "Multi-channel AI gateway with extensible messaging integrations",
-  "keywords": [],
-  "homepage": "https://github.com/openclaw/openclaw#readme",
+  "version": "2026.2.18",
+  "description": "Athena — Multi-channel AI agent gateway powered by Cortex",
+  "keywords": [
+    "agent",
+    "ai",
+    "athena",
+    "cortex",
+    "gateway"
+  ],
+  "homepage": "https://github.com/Dana-Innovations/Athena#readme",
   "bugs": {
-    "url": "https://github.com/openclaw/openclaw/issues"
+    "url": "https://github.com/Dana-Innovations/Athena/issues"
   },
   "license": "MIT",
-  "author": "",
+  "author": "Dana Innovations",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/openclaw/openclaw.git"
+    "url": "git+https://github.com/Dana-Innovations/Athena.git"
   },
   "bin": {
+    "athena": "athena.mjs",
     "openclaw": "openclaw.mjs"
   },
   "directories": {
@@ -23,6 +30,7 @@
   "files": [
     "CHANGELOG.md",
     "LICENSE",
+    "athena.mjs",
     "openclaw.mjs",
     "README-header.png",
     "README.md",
@@ -44,7 +52,7 @@
       "types": "./dist/plugin-sdk/account-id.d.ts",
       "default": "./dist/plugin-sdk/account-id.js"
     },
-    "./cli-entry": "./openclaw.mjs"
+    "./cli-entry": "./athena.mjs"
   },
   "scripts": {
     "android:assemble": "cd apps/android && ./gradlew :app:assembleDebug",

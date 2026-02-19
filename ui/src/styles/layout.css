@@ -28,6 +28,14 @@
   }
 }
 
+/* Subtle Sonance blue ambient gradient in dark mode */
+:root:not([data-theme="light"]) .shell {
+  background:
+    radial-gradient(ellipse at 20% 50%, rgba(0, 163, 225, 0.04) 0%, transparent 50%),
+    radial-gradient(ellipse at 80% 20%, rgba(0, 163, 225, 0.03) 0%, transparent 40%),
+    var(--bg);
+}
+
 .shell--chat {
   min-height: 100vh;
   height: 100vh;
@@ -83,8 +91,10 @@
   gap: 16px;
   padding: 0 20px;
   height: var(--shell-topbar-height);
-  border-bottom: 1px solid var(--border);
-  background: var(--bg);
+  border-bottom: 1px solid var(--glass-border);
+  background: var(--glass-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
 }
 
 .topbar-left {
@@ -199,7 +209,9 @@
   overflow-y: auto;
   overflow-x: hidden;
   padding: 16px 12px;
-  background: var(--bg);
+  background: var(--glass-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
   scrollbar-width: none; /* Firefox */
   transition:
     width var(--shell-focus-duration) var(--shell-focus-ease),
@@ -584,9 +596,11 @@
     gap: 6px;
     overflow-x: auto;
     border-right: none;
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid var(--glass-border);
     padding: 10px 14px;
-    background: var(--bg);
+    background: var(--glass-bg);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
   }
 
   .nav-group {

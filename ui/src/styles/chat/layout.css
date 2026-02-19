@@ -351,8 +351,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid var(--border);
-  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg);
 }
 
 /* Controls separator */
@@ -368,8 +368,8 @@
 }
 
 .btn--icon:hover {
-  background: rgba(255, 255, 255, 0.12);
-  border-color: rgba(255, 255, 255, 0.2);
+  background: var(--glass-bg-hover);
+  border-color: var(--glass-border-hover);
 }
 
 /* Light theme icon button overrides */
