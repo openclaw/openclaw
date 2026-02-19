@@ -29,33 +29,29 @@ function asMessage(payload: Record<string, unknown>): Message {
 }
 
 describe("resolveDiscordMessageChannelId", () => {
-  it("uses message.channelId when present", () => {
-    const channelId = resolveDiscordMessageChannelId({
-      message: asMessage({ channelId: " 123 " }),
-    });
-    expect(channelId).toBe("123");
-  });
-
-  it("falls back to message.channel_id", () => {
-    const channelId = resolveDiscordMessageChannelId({
-      message: asMessage({ channel_id: " 234 " }),
-    });
-    expect(channelId).toBe("234");
-  });
-
-  it("falls back to message.rawData.channel_id", () => {
-    const channelId = resolveDiscordMessageChannelId({
-      message: asMessage({ rawData: { channel_id: "456" } }),
-    });
-    expect(channelId).toBe("456");
-  });
-
-  it("falls back to eventChannelId and coerces numeric values", () => {
-    const channelId = resolveDiscordMessageChannelId({
-      message: asMessage({}),
-      eventChannelId: 789,
-    });
-    expect(channelId).toBe("789");
+  it.each([
+    {
+      name: "uses message.channelId when present",
+      params: { message: asMessage({ channelId: " 123 " }) },
+      expected: "123",
+    },
+    {
+      name: "falls back to message.channel_id",
+      params: { message: asMessage({ channel_id: " 234 " }) },
+      expected: "234",
+    },
+    {
+      name: "falls back to message.rawData.channel_id",
+      params: { message: asMessage({ rawData: { channel_id: "456" } }) },
+      expected: "456",
+    },
+    {
+      name: "falls back to eventChannelId and coerces numeric values",
+      params: { message: asMessage({}), eventChannelId: 789 },
+      expected: "789",
+    },
+  ] as const)("$name", ({ params, expected }) => {
+    expect(resolveDiscordMessageChannelId(params)).toBe(expected);
   });
 });
 

@@ -14,11 +14,17 @@ runs:
   steps:
     - name: Setup pnpm (corepack retry)
       shell: bash
+      env:
+        PNPM_VERSION: ${{ inputs.pnpm-version }}
       run: |
         set -euo pipefail
+        if [[ ! "$PNPM_VERSION" =~ ^[0-9]+(\.[0-9]+){1,2}([.-][0-9A-Za-z.-]+)?$ ]]; then
+          echo "::error::Invalid pnpm-version input: '$PNPM_VERSION'"
+          exit 2
+        fi
         corepack enable
         for attempt in 1 2 3; do
-          if corepack prepare "pnpm@${{ inputs.pnpm-version }}" --activate; then
+          if corepack prepare "pnpm@$PNPM_VERSION" --activate; then
             pnpm -v
             exit 0
           fi
