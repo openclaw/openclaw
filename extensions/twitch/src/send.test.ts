@@ -10,9 +10,13 @@
  * - Registry integration
  */
 
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { sendMessageTwitchInternal } from "./send.js";
+import {
+  BASE_TWITCH_TEST_ACCOUNT,
+  installTwitchTestHooks,
+  makeTwitchTestConfig,
+} from "./test-fixtures.js";
 
 // Mock dependencies
 vi.mock("./config.js", () => ({
@@ -43,29 +47,12 @@ describe("send", () => {
   };
 
   const mockAccount = {
-    username: "testbot",
-    token: "oauth:test123",
-    clientId: "test-client-id",
-    channel: "#testchannel",
+    ...BASE_TWITCH_TEST_ACCOUNT,
+    accessToken: "test123",
   };
 
-  const mockConfig = {
-    channels: {
-      twitch: {
-        accounts: {
-          default: mockAccount,
-        },
-      },
-    },
-  } as unknown as OpenClawConfig;
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
+  const mockConfig = makeTwitchTestConfig(mockAccount);
+  installTwitchTestHooks();
 
   describe("sendMessageTwitchInternal", () => {
     it("should send a message successfully", async () => {
@@ -79,7 +66,7 @@ describe("send", () => {
           ok: true,
           messageId: "twitch-msg-123",
         }),
-      } as ReturnType<typeof getClientManager>);
+      } as unknown as ReturnType<typeof getClientManager>);
       vi.mocked(stripMarkdownForTwitch).mockImplementation((text) => text);
 
       const result = await sendMessageTwitchInternal(
@@ -106,7 +93,7 @@ describe("send", () => {
           ok: true,
           messageId: "twitch-msg-456",
         }),
-      } as ReturnType<typeof getClientManager>);
+      } as unknown as ReturnType<typeof getClientManager>);
       vi.mocked(stripMarkdownForTwitch).mockImplementation((text) => text.replace(/\*\*/g, ""));
 
       await sendMessageTwitchInternal(
@@ -237,7 +224,7 @@ describe("send", () => {
       vi.mocked(isAccountConfigured).mockReturnValue(true);
       vi.mocked(getClientManager).mockReturnValue({
         sendMessage: vi.fn().mockRejectedValue(new Error("Connection lost")),
-      } as ReturnType<typeof getClientManager>);
+      } as unknown as ReturnType<typeof getClientManager>);
 
       const result = await sendMessageTwitchInternal(
         "#testchannel",
@@ -266,7 +253,7 @@ describe("send", () => {
       });
       vi.mocked(getClientManager).mockReturnValue({
         sendMessage: mockSend,
-      } as ReturnType<typeof getClientManager>);
+      } as unknown as ReturnType<typeof getClientManager>);
 
       await sendMessageTwitchInternal(
         "",

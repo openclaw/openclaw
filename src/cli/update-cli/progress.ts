@@ -1,13 +1,13 @@
 import { spinner } from "@clack/prompts";
+import { formatDurationPrecise } from "../../infra/format-time/format-duration.ts";
 import type {
   UpdateRunResult,
   UpdateStepInfo,
   UpdateStepProgress,
 } from "../../infra/update-runner.js";
-import type { UpdateCommandOptions } from "./shared.js";
-import { formatDurationPrecise } from "../../infra/format-time/format-duration.ts";
 import { defaultRuntime } from "../../runtime.js";
 import { theme } from "../../terminal/theme.js";
+import type { UpdateCommandOptions } from "./shared.js";
 
 const STEP_LABELS: Record<string, string> = {
   "clean check": "Working directory is clean",

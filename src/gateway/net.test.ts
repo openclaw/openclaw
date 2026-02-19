@@ -2,10 +2,25 @@ import os from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   isPrivateOrLoopbackAddress,
+  isSecureWebSocketUrl,
   isTrustedProxyAddress,
   pickPrimaryLanIPv4,
+  resolveGatewayClientIp,
   resolveGatewayListenHosts,
+  resolveHostName,
 } from "./net.js";
+
+describe("resolveHostName", () => {
+  it("returns hostname without port for IPv4/hostnames", () => {
+    expect(resolveHostName("localhost:18789")).toBe("localhost");
+    expect(resolveHostName("127.0.0.1:18789")).toBe("127.0.0.1");
+  });
+
+  it("handles bracketed and unbracketed IPv6 loopback hosts", () => {
+    expect(resolveHostName("[::1]:18789")).toBe("::1");
+    expect(resolveHostName("::1")).toBe("::1");
+  });
+});
 
 describe("isTrustedProxyAddress", () => {
   describe("exact IP matching", () => {
@@ -21,6 +36,10 @@ describe("isTrustedProxyAddress", () => {
       expect(isTrustedProxyAddress("10.0.0.5", ["192.168.1.1", "10.0.0.5", "172.16.0.1"])).toBe(
         true,
       );
+    });
+
+    it("ignores surrounding whitespace in exact IP entries", () => {
+      expect(isTrustedProxyAddress("10.0.0.5", [" 10.0.0.5 "])).toBe(true);
     });
   });
 
@@ -101,6 +120,52 @@ describe("isTrustedProxyAddress", () => {
       expect(isTrustedProxyAddress("10.42.0.59", ["10.42.0.0/-1"])).toBe(false); // negative prefix
       expect(isTrustedProxyAddress("10.42.0.59", ["invalid/24"])).toBe(false); // invalid IP
     });
+
+    it("ignores surrounding whitespace in CIDR entries", () => {
+      expect(isTrustedProxyAddress("10.42.0.59", [" 10.42.0.0/24 "])).toBe(true);
+    });
+
+    it("ignores blank trusted proxy entries", () => {
+      expect(isTrustedProxyAddress("10.0.0.5", [" ", "\t"])).toBe(false);
+      expect(isTrustedProxyAddress("10.0.0.5", [" ", "10.0.0.5", ""])).toBe(true);
+    });
+  });
+});
+
+describe("resolveGatewayClientIp", () => {
+  it("returns remote IP when the remote is not a trusted proxy", () => {
+    const ip = resolveGatewayClientIp({
+      remoteAddr: "203.0.113.10",
+      forwardedFor: "10.0.0.2",
+      trustedProxies: ["127.0.0.1"],
+    });
+    expect(ip).toBe("203.0.113.10");
+  });
+
+  it("returns forwarded client IP when the remote is a trusted proxy", () => {
+    const ip = resolveGatewayClientIp({
+      remoteAddr: "127.0.0.1",
+      forwardedFor: "10.0.0.2, 127.0.0.1",
+      trustedProxies: ["127.0.0.1"],
+    });
+    expect(ip).toBe("10.0.0.2");
+  });
+
+  it("fails closed when trusted proxy headers are missing", () => {
+    const ip = resolveGatewayClientIp({
+      remoteAddr: "127.0.0.1",
+      trustedProxies: ["127.0.0.1"],
+    });
+    expect(ip).toBeUndefined();
+  });
+
+  it("supports IPv6 client IP forwarded by a trusted proxy", () => {
+    const ip = resolveGatewayClientIp({
+      remoteAddr: "127.0.0.1",
+      realIp: "[2001:db8::5]",
+      trustedProxies: ["127.0.0.1"],
+    });
+    expect(ip).toBe("2001:db8::5");
   });
 });
 
@@ -209,5 +274,44 @@ describe("isPrivateOrLoopbackAddress", () => {
     for (const ip of rejected) {
       expect(isPrivateOrLoopbackAddress(ip)).toBe(false);
     }
+  });
+});
+
+describe("isSecureWebSocketUrl", () => {
+  describe("wss:// (TLS) URLs", () => {
+    it("returns true for wss:// regardless of host", () => {
+      expect(isSecureWebSocketUrl("wss://127.0.0.1:18789")).toBe(true);
+      expect(isSecureWebSocketUrl("wss://localhost:18789")).toBe(true);
+      expect(isSecureWebSocketUrl("wss://remote.example.com:18789")).toBe(true);
+      expect(isSecureWebSocketUrl("wss://192.168.1.100:18789")).toBe(true);
+    });
+  });
+
+  describe("ws:// (plaintext) URLs", () => {
+    it("returns true for ws:// to loopback addresses", () => {
+      expect(isSecureWebSocketUrl("ws://127.0.0.1:18789")).toBe(true);
+      expect(isSecureWebSocketUrl("ws://localhost:18789")).toBe(true);
+      expect(isSecureWebSocketUrl("ws://[::1]:18789")).toBe(true);
+      expect(isSecureWebSocketUrl("ws://127.0.0.42:18789")).toBe(true);
+    });
+
+    it("returns false for ws:// to non-loopback addresses (CWE-319)", () => {
+      expect(isSecureWebSocketUrl("ws://remote.example.com:18789")).toBe(false);
+      expect(isSecureWebSocketUrl("ws://192.168.1.100:18789")).toBe(false);
+      expect(isSecureWebSocketUrl("ws://10.0.0.5:18789")).toBe(false);
+      expect(isSecureWebSocketUrl("ws://100.64.0.1:18789")).toBe(false);
+    });
+  });
+
+  describe("invalid URLs", () => {
+    it("returns false for invalid URLs", () => {
+      expect(isSecureWebSocketUrl("not-a-url")).toBe(false);
+      expect(isSecureWebSocketUrl("")).toBe(false);
+    });
+
+    it("returns false for non-WebSocket protocols", () => {
+      expect(isSecureWebSocketUrl("http://127.0.0.1:18789")).toBe(false);
+      expect(isSecureWebSocketUrl("https://127.0.0.1:18789")).toBe(false);
+    });
   });
 });

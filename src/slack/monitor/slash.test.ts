@@ -3,6 +3,31 @@ import { getSlackSlashMocks, resetSlackSlashMocks } from "./slash.test-harness.j
 
 vi.mock("../../auto-reply/commands-registry.js", () => {
   const usageCommand = { key: "usage", nativeName: "usage" };
+  const reportCommand = { key: "report", nativeName: "report" };
+  const reportCompactCommand = { key: "reportcompact", nativeName: "reportcompact" };
+  const reportExternalCommand = { key: "reportexternal", nativeName: "reportexternal" };
+  const reportLongCommand = { key: "reportlong", nativeName: "reportlong" };
+  const unsafeConfirmCommand = { key: "unsafeconfirm", nativeName: "unsafeconfirm" };
+  const periodArg = { name: "period", description: "period" };
+  const hasNonEmptyArgValue = (values: unknown, key: string) => {
+    const raw =
+      typeof values === "object" && values !== null
+        ? (values as Record<string, unknown>)[key]
+        : undefined;
+    return typeof raw === "string" && raw.trim().length > 0;
+  };
+  const resolvePeriodMenu = (
+    params: { args?: { values?: unknown } },
+    choices: Array<{
+      value: string;
+      label: string;
+    }>,
+  ) => {
+    if (hasNonEmptyArgValue(params.args?.values, "period")) {
+      return null;
+    }
+    return { arg: periodArg, choices };
+  };
 
   return {
     buildCommandTextFromArgs: (
@@ -10,16 +35,73 @@ vi.mock("../../auto-reply/commands-registry.js", () => {
       args?: { values?: Record<string, unknown> },
     ) => {
       const name = cmd.nativeName ?? cmd.key;
-      const mode = args?.values?.mode;
-      return typeof mode === "string" && mode.trim() ? `/${name} ${mode.trim()}` : `/${name}`;
+      const values = args?.values ?? {};
+      const mode = values.mode;
+      const period = values.period;
+      const selected =
+        typeof mode === "string" && mode.trim()
+          ? mode.trim()
+          : typeof period === "string" && period.trim()
+            ? period.trim()
+            : "";
+      return selected ? `/${name} ${selected}` : `/${name}`;
     },
     findCommandByNativeName: (name: string) => {
-      return name.trim().toLowerCase() === "usage" ? usageCommand : undefined;
+      const normalized = name.trim().toLowerCase();
+      if (normalized === "usage") {
+        return usageCommand;
+      }
+      if (normalized === "report") {
+        return reportCommand;
+      }
+      if (normalized === "reportcompact") {
+        return reportCompactCommand;
+      }
+      if (normalized === "reportexternal") {
+        return reportExternalCommand;
+      }
+      if (normalized === "reportlong") {
+        return reportLongCommand;
+      }
+      if (normalized === "unsafeconfirm") {
+        return unsafeConfirmCommand;
+      }
+      return undefined;
     },
     listNativeCommandSpecsForConfig: () => [
       {
         name: "usage",
         description: "Usage",
+        acceptsArgs: true,
+        args: [],
+      },
+      {
+        name: "report",
+        description: "Report",
+        acceptsArgs: true,
+        args: [],
+      },
+      {
+        name: "reportcompact",
+        description: "ReportCompact",
+        acceptsArgs: true,
+        args: [],
+      },
+      {
+        name: "reportexternal",
+        description: "ReportExternal",
+        acceptsArgs: true,
+        args: [],
+      },
+      {
+        name: "reportlong",
+        description: "ReportLong",
+        acceptsArgs: true,
+        args: [],
+      },
+      {
+        name: "unsafeconfirm",
+        description: "UnsafeConfirm",
         acceptsArgs: true,
         args: [],
       },
@@ -29,6 +111,52 @@ vi.mock("../../auto-reply/commands-registry.js", () => {
       command?: { key?: string };
       args?: { values?: unknown };
     }) => {
+      if (params.command?.key === "report") {
+        return resolvePeriodMenu(params, [
+          { value: "day", label: "day" },
+          { value: "week", label: "week" },
+          { value: "month", label: "month" },
+          { value: "quarter", label: "quarter" },
+          { value: "year", label: "year" },
+          { value: "all", label: "all" },
+        ]);
+      }
+      if (params.command?.key === "reportlong") {
+        return resolvePeriodMenu(params, [
+          { value: "day", label: "day" },
+          { value: "week", label: "week" },
+          { value: "month", label: "month" },
+          { value: "quarter", label: "quarter" },
+          { value: "year", label: "year" },
+          { value: "x".repeat(90), label: "long" },
+        ]);
+      }
+      if (params.command?.key === "reportcompact") {
+        return resolvePeriodMenu(params, [
+          { value: "day", label: "day" },
+          { value: "week", label: "week" },
+          { value: "month", label: "month" },
+          { value: "quarter", label: "quarter" },
+        ]);
+      }
+      if (params.command?.key === "reportexternal") {
+        return {
+          arg: { name: "period", description: "period" },
+          choices: Array.from({ length: 140 }, (_v, i) => ({
+            value: `period-${i + 1}`,
+            label: `Period ${i + 1}`,
+          })),
+        };
+      }
+      if (params.command?.key === "unsafeconfirm") {
+        return {
+          arg: { name: "mode_*`~<&>", description: "mode" },
+          choices: [
+            { value: "on", label: "on" },
+            { value: "off", label: "off" },
+          ],
+        };
+      }
       if (params.command?.key !== "usage") {
         return null;
       }
@@ -76,9 +204,16 @@ function encodeValue(parts: { command: string; arg: string; value: string; userI
   ].join("|");
 }
 
+function findFirstActionsBlock(payload: { blocks?: Array<{ type: string }> }) {
+  return payload.blocks?.find((block) => block.type === "actions") as
+    | { type: string; elements?: Array<{ type?: string; action_id?: string; confirm?: unknown }> }
+    | undefined;
+}
+
 function createArgMenusHarness() {
   const commands = new Map<string, (args: unknown) => Promise<void>>();
   const actions = new Map<string, (args: unknown) => Promise<void>>();
+  const options = new Map<string, (args: unknown) => Promise<void>>();
 
   const postEphemeral = vi.fn().mockResolvedValue({ ok: true });
   const app = {
@@ -88,6 +223,9 @@ function createArgMenusHarness() {
     },
     action: (id: string, handler: (args: unknown) => Promise<void>) => {
       actions.set(id, handler);
+    },
+    options: (id: string, handler: (args: unknown) => Promise<void>) => {
+      options.set(id, handler);
     },
   };
 
@@ -124,29 +262,108 @@ function createArgMenusHarness() {
     config: { commands: { native: true, nativeSkills: false } },
   } as unknown;
 
-  return { commands, actions, postEphemeral, ctx, account };
+  return { commands, actions, options, postEphemeral, ctx, account };
+}
+
+function requireHandler(
+  handlers: Map<string, (args: unknown) => Promise<void>>,
+  key: string,
+  label: string,
+): (args: unknown) => Promise<void> {
+  const handler = handlers.get(key);
+  if (!handler) {
+    throw new Error(`Missing ${label} handler`);
+  }
+  return handler;
+}
+
+function createSlashCommand(overrides: Partial<Record<string, string>> = {}) {
+  return {
+    user_id: "U1",
+    user_name: "Ada",
+    channel_id: "C1",
+    channel_name: "directmessage",
+    text: "",
+    trigger_id: "t1",
+    ...overrides,
+  };
+}
+
+async function runCommandHandler(handler: (args: unknown) => Promise<void>) {
+  const respond = vi.fn().mockResolvedValue(undefined);
+  const ack = vi.fn().mockResolvedValue(undefined);
+  await handler({
+    command: createSlashCommand(),
+    ack,
+    respond,
+  });
+  return { respond, ack };
+}
+
+function expectArgMenuLayout(respond: ReturnType<typeof vi.fn>): {
+  type: string;
+  elements?: Array<{ type?: string; action_id?: string; confirm?: unknown }>;
+} {
+  expect(respond).toHaveBeenCalledTimes(1);
+  const payload = respond.mock.calls[0]?.[0] as { blocks?: Array<{ type: string }> };
+  expect(payload.blocks?.[0]?.type).toBe("header");
+  expect(payload.blocks?.[1]?.type).toBe("section");
+  expect(payload.blocks?.[2]?.type).toBe("context");
+  return findFirstActionsBlock(payload) ?? { type: "actions", elements: [] };
+}
+
+async function runArgMenuAction(
+  handler: (args: unknown) => Promise<void>,
+  params: {
+    action: Record<string, unknown>;
+    userId?: string;
+    userName?: string;
+    channelId?: string;
+    channelName?: string;
+    respond?: ReturnType<typeof vi.fn>;
+    includeRespond?: boolean;
+  },
+) {
+  const includeRespond = params.includeRespond ?? true;
+  const respond = params.respond ?? vi.fn().mockResolvedValue(undefined);
+  const payload: Record<string, unknown> = {
+    ack: vi.fn().mockResolvedValue(undefined),
+    action: params.action,
+    body: {
+      user: { id: params.userId ?? "U1", name: params.userName ?? "Ada" },
+      channel: { id: params.channelId ?? "C1", name: params.channelName ?? "directmessage" },
+      trigger_id: "t1",
+    },
+  };
+  if (includeRespond) {
+    payload.respond = respond;
+  }
+  await handler(payload);
+  return respond;
 }
 
 describe("Slack native command argument menus", () => {
   let harness: ReturnType<typeof createArgMenusHarness>;
   let usageHandler: (args: unknown) => Promise<void>;
+  let reportHandler: (args: unknown) => Promise<void>;
+  let reportCompactHandler: (args: unknown) => Promise<void>;
+  let reportExternalHandler: (args: unknown) => Promise<void>;
+  let reportLongHandler: (args: unknown) => Promise<void>;
+  let unsafeConfirmHandler: (args: unknown) => Promise<void>;
   let argMenuHandler: (args: unknown) => Promise<void>;
+  let argMenuOptionsHandler: (args: unknown) => Promise<void>;
 
   beforeAll(async () => {
     harness = createArgMenusHarness();
     await registerCommands(harness.ctx, harness.account);
-
-    const usage = harness.commands.get("/usage");
-    if (!usage) {
-      throw new Error("Missing /usage handler");
-    }
-    usageHandler = usage;
-
-    const argMenu = harness.actions.get("openclaw_cmdarg");
-    if (!argMenu) {
-      throw new Error("Missing arg-menu action handler");
-    }
-    argMenuHandler = argMenu;
+    usageHandler = requireHandler(harness.commands, "/usage", "/usage");
+    reportHandler = requireHandler(harness.commands, "/report", "/report");
+    reportCompactHandler = requireHandler(harness.commands, "/reportcompact", "/reportcompact");
+    reportExternalHandler = requireHandler(harness.commands, "/reportexternal", "/reportexternal");
+    reportLongHandler = requireHandler(harness.commands, "/reportlong", "/reportlong");
+    unsafeConfirmHandler = requireHandler(harness.commands, "/unsafeconfirm", "/unsafeconfirm");
+    argMenuHandler = requireHandler(harness.actions, "openclaw_cmdarg", "arg-menu action");
+    argMenuOptionsHandler = requireHandler(harness.options, "openclaw_cmdarg", "arg-menu options");
   });
 
   beforeEach(() => {
@@ -154,41 +371,64 @@ describe("Slack native command argument menus", () => {
   });
 
   it("shows a button menu when required args are omitted", async () => {
-    const respond = vi.fn().mockResolvedValue(undefined);
-    const ack = vi.fn().mockResolvedValue(undefined);
+    const { respond } = await runCommandHandler(usageHandler);
+    const actions = expectArgMenuLayout(respond);
+    const elementType = actions?.elements?.[0]?.type;
+    expect(elementType).toBe("button");
+    expect(actions?.elements?.[0]?.confirm).toBeTruthy();
+  });
 
-    await usageHandler({
-      command: {
-        user_id: "U1",
-        user_name: "Ada",
-        channel_id: "C1",
-        channel_name: "directmessage",
-        text: "",
-        trigger_id: "t1",
-      },
-      ack,
-      respond,
-    });
+  it("shows a static_select menu when choices exceed button row size", async () => {
+    const { respond } = await runCommandHandler(reportHandler);
+    const actions = expectArgMenuLayout(respond);
+    const element = actions?.elements?.[0];
+    expect(element?.type).toBe("static_select");
+    expect(element?.action_id).toBe("openclaw_cmdarg");
+    expect(element?.confirm).toBeTruthy();
+  });
+
+  it("falls back to buttons when static_select value limit would be exceeded", async () => {
+    const { respond } = await runCommandHandler(reportLongHandler);
 
     expect(respond).toHaveBeenCalledTimes(1);
     const payload = respond.mock.calls[0]?.[0] as { blocks?: Array<{ type: string }> };
-    expect(payload.blocks?.[0]?.type).toBe("section");
-    expect(payload.blocks?.[1]?.type).toBe("actions");
+    const actions = findFirstActionsBlock(payload);
+    const firstElement = actions?.elements?.[0];
+    expect(firstElement?.type).toBe("button");
+    expect(firstElement?.confirm).toBeTruthy();
+  });
+
+  it("shows an overflow menu when choices fit compact range", async () => {
+    const { respond } = await runCommandHandler(reportCompactHandler);
+
+    expect(respond).toHaveBeenCalledTimes(1);
+    const payload = respond.mock.calls[0]?.[0] as { blocks?: Array<{ type: string }> };
+    const actions = findFirstActionsBlock(payload);
+    const element = actions?.elements?.[0];
+    expect(element?.type).toBe("overflow");
+    expect(element?.action_id).toBe("openclaw_cmdarg");
+    expect(element?.confirm).toBeTruthy();
+  });
+
+  it("escapes mrkdwn characters in confirm dialog text", async () => {
+    const { respond } = await runCommandHandler(unsafeConfirmHandler);
+
+    expect(respond).toHaveBeenCalledTimes(1);
+    const payload = respond.mock.calls[0]?.[0] as { blocks?: Array<{ type: string }> };
+    const actions = findFirstActionsBlock(payload);
+    const element = actions?.elements?.[0] as
+      | { confirm?: { text?: { text?: string } } }
+      | undefined;
+    expect(element?.confirm?.text?.text).toContain(
+      "Run */unsafeconfirm* with *mode\\_\\*\\`\\~&lt;&amp;&gt;* set to this value?",
+    );
   });
 
   it("dispatches the command when a menu button is clicked", async () => {
-    const respond = vi.fn().mockResolvedValue(undefined);
-    await argMenuHandler({
-      ack: vi.fn().mockResolvedValue(undefined),
+    await runArgMenuAction(argMenuHandler, {
       action: {
         value: encodeValue({ command: "usage", arg: "mode", value: "tokens", userId: "U1" }),
       },
-      body: {
-        user: { id: "U1", name: "Ada" },
-        channel: { id: "C1", name: "directmessage" },
-        trigger_id: "t1",
-      },
-      respond,
     });
 
     expect(dispatchMock).toHaveBeenCalledTimes(1);
@@ -196,19 +436,89 @@ describe("Slack native command argument menus", () => {
     expect(call.ctx?.Body).toBe("/usage tokens");
   });
 
+  it("dispatches the command when a static_select option is chosen", async () => {
+    await runArgMenuAction(argMenuHandler, {
+      action: {
+        selected_option: {
+          value: encodeValue({ command: "report", arg: "period", value: "month", userId: "U1" }),
+        },
+      },
+    });
+
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+    const call = dispatchMock.mock.calls[0]?.[0] as { ctx?: { Body?: string } };
+    expect(call.ctx?.Body).toBe("/report month");
+  });
+
+  it("dispatches the command when an overflow option is chosen", async () => {
+    await runArgMenuAction(argMenuHandler, {
+      action: {
+        selected_option: {
+          value: encodeValue({
+            command: "reportcompact",
+            arg: "period",
+            value: "quarter",
+            userId: "U1",
+          }),
+        },
+      },
+    });
+
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+    const call = dispatchMock.mock.calls[0]?.[0] as { ctx?: { Body?: string } };
+    expect(call.ctx?.Body).toBe("/reportcompact quarter");
+  });
+
+  it("shows an external_select menu when choices exceed static_select options max", async () => {
+    const { respond } = await runCommandHandler(reportExternalHandler);
+
+    expect(respond).toHaveBeenCalledTimes(1);
+    const payload = respond.mock.calls[0]?.[0] as {
+      blocks?: Array<{ type: string; block_id?: string }>;
+    };
+    const actions = findFirstActionsBlock(payload);
+    const element = actions?.elements?.[0];
+    expect(element?.type).toBe("external_select");
+    expect(element?.action_id).toBe("openclaw_cmdarg");
+    expect(payload.blocks?.find((block) => block.type === "actions")?.block_id).toContain(
+      "openclaw_cmdarg_ext:",
+    );
+  });
+
+  it("serves filtered options for external_select menus", async () => {
+    const { respond } = await runCommandHandler(reportExternalHandler);
+
+    const payload = respond.mock.calls[0]?.[0] as {
+      blocks?: Array<{ type: string; block_id?: string }>;
+    };
+    const blockId = payload.blocks?.find((block) => block.type === "actions")?.block_id;
+    expect(blockId).toContain("openclaw_cmdarg_ext:");
+
+    const ackOptions = vi.fn().mockResolvedValue(undefined);
+    await argMenuOptionsHandler({
+      ack: ackOptions,
+      body: {
+        user: { id: "U1" },
+        value: "period 12",
+        actions: [{ block_id: blockId }],
+      },
+    });
+
+    expect(ackOptions).toHaveBeenCalledTimes(1);
+    const optionsPayload = ackOptions.mock.calls[0]?.[0] as {
+      options?: Array<{ text?: { text?: string }; value?: string }>;
+    };
+    const optionTexts = (optionsPayload.options ?? []).map((option) => option.text?.text ?? "");
+    expect(optionTexts.some((text) => text.includes("Period 12"))).toBe(true);
+  });
+
   it("rejects menu clicks from other users", async () => {
-    const respond = vi.fn().mockResolvedValue(undefined);
-    await argMenuHandler({
-      ack: vi.fn().mockResolvedValue(undefined),
+    const respond = await runArgMenuAction(argMenuHandler, {
       action: {
         value: encodeValue({ command: "usage", arg: "mode", value: "tokens", userId: "U1" }),
       },
-      body: {
-        user: { id: "U2", name: "Eve" },
-        channel: { id: "C1", name: "directmessage" },
-        trigger_id: "t1",
-      },
-      respond,
+      userId: "U2",
+      userName: "Eve",
     });
 
     expect(dispatchMock).not.toHaveBeenCalled();
@@ -219,10 +529,9 @@ describe("Slack native command argument menus", () => {
   });
 
   it("falls back to postEphemeral with token when respond is unavailable", async () => {
-    await argMenuHandler({
-      ack: vi.fn().mockResolvedValue(undefined),
+    await runArgMenuAction(argMenuHandler, {
       action: { value: "garbage" },
-      body: { user: { id: "U1" }, channel: { id: "C1" } },
+      includeRespond: false,
     });
 
     expect(harness.postEphemeral).toHaveBeenCalledWith(
@@ -235,10 +544,9 @@ describe("Slack native command argument menus", () => {
   });
 
   it("treats malformed percent-encoding as an invalid button (no throw)", async () => {
-    await argMenuHandler({
-      ack: vi.fn().mockResolvedValue(undefined),
+    await runArgMenuAction(argMenuHandler, {
       action: { value: "cmdarg|%E0%A4%A|mode|on|U1" },
-      body: { user: { id: "U1" }, channel: { id: "C1" } },
+      includeRespond: false,
     });
 
     expect(harness.postEphemeral).toHaveBeenCalledWith(
@@ -342,23 +650,53 @@ async function runSlashHandler(params: {
   return { respond, ack };
 }
 
+async function registerAndRunPolicySlash(params: {
+  harness: ReturnType<typeof createPolicyHarness>;
+  command?: Partial<{
+    user_id: string;
+    user_name: string;
+    channel_id: string;
+    channel_name: string;
+    text: string;
+    trigger_id: string;
+  }>;
+}) {
+  await registerCommands(params.harness.ctx, params.harness.account);
+  return await runSlashHandler({
+    commands: params.harness.commands,
+    command: {
+      channel_id: params.command?.channel_id ?? params.harness.channelId,
+      channel_name: params.command?.channel_name ?? params.harness.channelName,
+      ...params.command,
+    },
+  });
+}
+
+function expectChannelBlockedResponse(respond: ReturnType<typeof vi.fn>) {
+  expect(dispatchMock).not.toHaveBeenCalled();
+  expect(respond).toHaveBeenCalledWith({
+    text: "This channel is not allowed.",
+    response_type: "ephemeral",
+  });
+}
+
+function expectUnauthorizedResponse(respond: ReturnType<typeof vi.fn>) {
+  expect(dispatchMock).not.toHaveBeenCalled();
+  expect(respond).toHaveBeenCalledWith({
+    text: "You are not authorized to use this command.",
+    response_type: "ephemeral",
+  });
+}
+
 describe("slack slash commands channel policy", () => {
   it("allows unlisted channels when groupPolicy is open", async () => {
-    const { commands, ctx, account, channelId, channelName } = createPolicyHarness({
+    const harness = createPolicyHarness({
       groupPolicy: "open",
       channelsConfig: { C_LISTED: { requireMention: true } },
       channelId: "C_UNLISTED",
       channelName: "unlisted",
     });
-    await registerCommands(ctx, account);
-
-    const { respond } = await runSlashHandler({
-      commands,
-      command: {
-        channel_id: channelId,
-        channel_name: channelName,
-      },
-    });
+    const { respond } = await registerAndRunPolicySlash({ harness });
 
     expect(dispatchMock).toHaveBeenCalledTimes(1);
     expect(respond).not.toHaveBeenCalledWith(
@@ -367,90 +705,52 @@ describe("slack slash commands channel policy", () => {
   });
 
   it("blocks explicitly denied channels when groupPolicy is open", async () => {
-    const { commands, ctx, account, channelId, channelName } = createPolicyHarness({
+    const harness = createPolicyHarness({
       groupPolicy: "open",
       channelsConfig: { C_DENIED: { allow: false } },
       channelId: "C_DENIED",
       channelName: "denied",
     });
-    await registerCommands(ctx, account);
+    const { respond } = await registerAndRunPolicySlash({ harness });
 
-    const { respond } = await runSlashHandler({
-      commands,
-      command: {
-        channel_id: channelId,
-        channel_name: channelName,
-      },
-    });
-
-    expect(dispatchMock).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith({
-      text: "This channel is not allowed.",
-      response_type: "ephemeral",
-    });
+    expectChannelBlockedResponse(respond);
   });
 
   it("blocks unlisted channels when groupPolicy is allowlist", async () => {
-    const { commands, ctx, account, channelId, channelName } = createPolicyHarness({
+    const harness = createPolicyHarness({
       groupPolicy: "allowlist",
       channelsConfig: { C_LISTED: { requireMention: true } },
       channelId: "C_UNLISTED",
       channelName: "unlisted",
     });
-    await registerCommands(ctx, account);
+    const { respond } = await registerAndRunPolicySlash({ harness });
 
-    const { respond } = await runSlashHandler({
-      commands,
-      command: {
-        channel_id: channelId,
-        channel_name: channelName,
-      },
-    });
-
-    expect(dispatchMock).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith({
-      text: "This channel is not allowed.",
-      response_type: "ephemeral",
-    });
+    expectChannelBlockedResponse(respond);
   });
 });
 
 describe("slack slash commands access groups", () => {
   it("fails closed when channel type lookup returns empty for channels", async () => {
-    const { commands, ctx, account, channelId, channelName } = createPolicyHarness({
+    const harness = createPolicyHarness({
       allowFrom: [],
       channelId: "C_UNKNOWN",
       channelName: "unknown",
       resolveChannelName: async () => ({}),
     });
-    await registerCommands(ctx, account);
+    const { respond } = await registerAndRunPolicySlash({ harness });
 
-    const { respond } = await runSlashHandler({
-      commands,
-      command: {
-        channel_id: channelId,
-        channel_name: channelName,
-      },
-    });
-
-    expect(dispatchMock).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith({
-      text: "You are not authorized to use this command.",
-      response_type: "ephemeral",
-    });
+    expectUnauthorizedResponse(respond);
   });
 
   it("still treats D-prefixed channel ids as DMs when lookup fails", async () => {
-    const { commands, ctx, account } = createPolicyHarness({
+    const harness = createPolicyHarness({
       allowFrom: [],
       channelId: "D123",
       channelName: "notdirectmessage",
       resolveChannelName: async () => ({}),
     });
-    await registerCommands(ctx, account);
-
-    const { respond } = await runSlashHandler({
-      commands,
+    const { respond } = await registerAndRunPolicySlash({
+      harness,
       command: {
         channel_id: "D123",
         channel_name: "notdirectmessage",
@@ -468,16 +768,14 @@ describe("slack slash commands access groups", () => {
   });
 
   it("computes CommandAuthorized for DM slash commands when dmPolicy is open", async () => {
-    const { commands, ctx, account } = createPolicyHarness({
+    const harness = createPolicyHarness({
       allowFrom: ["U_OWNER"],
       channelId: "D999",
       channelName: "directmessage",
       resolveChannelName: async () => ({ name: "directmessage", type: "im" }),
     });
-    await registerCommands(ctx, account);
-
-    await runSlashHandler({
-      commands,
+    await registerAndRunPolicySlash({
+      harness,
       command: {
         user_id: "U_ATTACKER",
         user_name: "Mallory",
@@ -494,26 +792,14 @@ describe("slack slash commands access groups", () => {
   });
 
   it("enforces access-group gating when lookup fails for private channels", async () => {
-    const { commands, ctx, account, channelId, channelName } = createPolicyHarness({
+    const harness = createPolicyHarness({
       allowFrom: [],
       channelId: "G123",
       channelName: "private",
       resolveChannelName: async () => ({}),
     });
-    await registerCommands(ctx, account);
+    const { respond } = await registerAndRunPolicySlash({ harness });
 
-    const { respond } = await runSlashHandler({
-      commands,
-      command: {
-        channel_id: channelId,
-        channel_name: channelName,
-      },
-    });
-
-    expect(dispatchMock).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith({
-      text: "You are not authorized to use this command.",
-      response_type: "ephemeral",
-    });
+    expectUnauthorizedResponse(respond);
   });
 });

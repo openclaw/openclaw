@@ -191,9 +191,6 @@ describe("sanitizeToolCallId", () => {
     it("strips invalid characters", () => {
       expect(sanitizeToolCallId("call_abc|item:456")).toBe("callabcitem456");
     });
-    it("returns default for empty IDs", () => {
-      expect(sanitizeToolCallId("")).toBe("defaulttoolid");
-    });
   });
 
   describe("strict mode (alphanumeric only)", () => {
@@ -204,9 +201,6 @@ describe("sanitizeToolCallId", () => {
         "whatsapplogin17687998415271",
       );
     });
-    it("returns default for empty IDs", () => {
-      expect(sanitizeToolCallId("", "strict")).toBe("defaulttoolid");
-    });
   });
 
   describe("strict9 mode (Mistral tool call IDs)", () => {
@@ -214,9 +208,26 @@ describe("sanitizeToolCallId", () => {
       const out = sanitizeToolCallId("call_abc|item:456", "strict9");
       expect(out).toMatch(/^[a-zA-Z0-9]{9}$/);
     });
-    it("returns default for empty IDs", () => {
-      expect(sanitizeToolCallId("", "strict9")).toMatch(/^[a-zA-Z0-9]{9}$/);
-    });
+  });
+
+  it.each([
+    {
+      modeLabel: "default",
+      run: () => sanitizeToolCallId(""),
+      assert: (value: string) => expect(value).toBe("defaulttoolid"),
+    },
+    {
+      modeLabel: "strict",
+      run: () => sanitizeToolCallId("", "strict"),
+      assert: (value: string) => expect(value).toBe("defaulttoolid"),
+    },
+    {
+      modeLabel: "strict9",
+      run: () => sanitizeToolCallId("", "strict9"),
+      assert: (value: string) => expect(value).toMatch(/^[a-zA-Z0-9]{9}$/),
+    },
+  ])("returns default for empty IDs in $modeLabel mode", ({ run, assert }) => {
+    assert(run());
   });
 });
 
@@ -293,6 +304,27 @@ describe("downgradeOpenAIReasoningBlocks", () => {
 
     // oxlint-disable-next-line typescript/no-explicit-any
     expect(downgradeOpenAIReasoningBlocks(input as any)).toEqual(input);
+  });
+
+  it("is idempotent for orphaned reasoning cleanup", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinkingSignature: JSON.stringify({ id: "rs_orphan", type: "reasoning" }),
+          },
+        ],
+      },
+      { role: "user", content: "next" },
+    ];
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const once = downgradeOpenAIReasoningBlocks(input as any);
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const twice = downgradeOpenAIReasoningBlocks(once as any);
+    expect(twice).toEqual(once);
   });
 });
 

@@ -78,7 +78,15 @@ describe("validateBindMounts", () => {
     const dir = mkdtempSync(join(tmpdir(), "openclaw-sbx-"));
     const link = join(dir, "etc-link");
     symlinkSync("/etc", link);
-    expect(() => validateBindMounts([`${link}/passwd:/mnt/passwd:ro`])).toThrow(/blocked path/);
+    const run = () => validateBindMounts([`${link}/passwd:/mnt/passwd:ro`]);
+
+    if (process.platform === "win32") {
+      // Windows source paths (e.g. C:\...) are intentionally rejected as non-POSIX.
+      expect(run).toThrow(/non-absolute source path/);
+      return;
+    }
+
+    expect(run).toThrow(/blocked path/);
   });
 
   it("rejects non-absolute source paths (relative or named volumes)", () => {

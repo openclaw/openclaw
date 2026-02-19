@@ -2,7 +2,9 @@ import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import {
   createStubSessionHarness,
-  extractAgentEventPayloads,
+  emitAssistantTextDelta,
+  emitMessageStartAndEndForAssistantText,
+  expectSingleAgentEventText,
 } from "./pi-embedded-subscribe.e2e-harness.js";
 import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
 
@@ -22,14 +24,7 @@ describe("subscribeEmbeddedPiSession", () => {
     });
 
     emit({ type: "message_start", message: { role: "assistant" } });
-    emit({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: {
-        type: "text_delta",
-        delta: "<final>Hi there</final>",
-      },
-    });
+    emitAssistantTextDelta({ emit, delta: "<final>Hi there</final>" });
 
     expect(onPartialReply).toHaveBeenCalled();
     const firstPayload = onPartialReply.mock.calls[0][0];
@@ -38,14 +33,7 @@ describe("subscribeEmbeddedPiSession", () => {
     onPartialReply.mockReset();
 
     emit({ type: "message_start", message: { role: "assistant" } });
-    emit({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: {
-        type: "text_delta",
-        delta: "</final>Oops no start",
-      },
-    });
+    emitAssistantTextDelta({ emit, delta: "</final>Oops no start" });
 
     expect(onPartialReply).not.toHaveBeenCalled();
   });
@@ -60,62 +48,32 @@ describe("subscribeEmbeddedPiSession", () => {
       enforceFinalTag: true,
       onAgentEvent,
     });
-
-    const assistantMessage = {
-      role: "assistant",
-      content: [{ type: "text", text: "Hello world" }],
-    } as AssistantMessage;
-
-    emit({ type: "message_start", message: assistantMessage });
-    emit({ type: "message_end", message: assistantMessage });
-
-    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.text).toBe("Hello world");
-    expect(payloads[0]?.delta).toBe("Hello world");
+    emitMessageStartAndEndForAssistantText({ emit, text: "Hello world" });
+    expectSingleAgentEventText(onAgentEvent.mock.calls, "Hello world");
   });
   it("does not require <final> when enforcement is off", () => {
-    let handler: ((evt: unknown) => void) | undefined;
-    const session: StubSession = {
-      subscribe: (fn) => {
-        handler = fn;
-        return () => {};
-      },
-    };
+    const { session, emit } = createStubSessionHarness();
 
     const onPartialReply = vi.fn();
 
     subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
+      session,
       runId: "run",
       onPartialReply,
     });
 
-    handler?.({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: {
-        type: "text_delta",
-        delta: "Hello world",
-      },
-    });
+    emitAssistantTextDelta({ emit, delta: "Hello world" });
 
     const payload = onPartialReply.mock.calls[0][0];
     expect(payload.text).toBe("Hello world");
   });
   it("emits block replies on message_end", () => {
-    let handler: ((evt: unknown) => void) | undefined;
-    const session: StubSession = {
-      subscribe: (fn) => {
-        handler = fn;
-        return () => {};
-      },
-    };
+    const { session, emit } = createStubSessionHarness();
 
     const onBlockReply = vi.fn();
 
     subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
+      session,
       runId: "run",
       onBlockReply,
       blockReplyBreak: "message_end",
@@ -126,7 +84,7 @@ describe("subscribeEmbeddedPiSession", () => {
       content: [{ type: "text", text: "Hello block" }],
     } as AssistantMessage;
 
-    handler?.({ type: "message_end", message: assistantMessage });
+    emit({ type: "message_end", message: assistantMessage });
 
     expect(onBlockReply).toHaveBeenCalled();
     const payload = onBlockReply.mock.calls[0][0];

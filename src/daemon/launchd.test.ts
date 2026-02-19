@@ -11,9 +11,11 @@ import {
 const state = vi.hoisted(() => ({
   launchctlCalls: [] as string[][],
   listOutput: "",
+  bootstrapError: "",
   dirs: new Set<string>(),
   files: new Map<string, string>(),
 }));
+const defaultProgramArguments = ["node", "-e", "process.exit(0)"];
 
 function normalizeLaunchctlArgs(file: string, args: string[]): string[] {
   if (file === "launchctl") {
@@ -32,6 +34,9 @@ vi.mock("./exec-file.js", () => ({
     state.launchctlCalls.push(call);
     if (call[0] === "list") {
       return { stdout: state.listOutput, stderr: "", code: 0 };
+    }
+    if (call[0] === "bootstrap" && state.bootstrapError) {
+      return { stdout: "", stderr: state.bootstrapError, code: 1 };
     }
     return { stdout: "", stderr: "", code: 0 };
   }),
@@ -66,6 +71,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 beforeEach(() => {
   state.launchctlCalls.length = 0;
   state.listOutput = "";
+  state.bootstrapError = "";
   state.dirs.clear();
   state.files.clear();
   vi.clearAllMocks();
@@ -125,15 +131,19 @@ describe("launchd bootstrap repair", () => {
 });
 
 describe("launchd install", () => {
-  it("enables service before bootstrap (clears persisted disabled state)", async () => {
-    const env: Record<string, string | undefined> = {
+  function createDefaultLaunchdEnv(): Record<string, string | undefined> {
+    return {
       HOME: "/Users/test",
       OPENCLAW_PROFILE: "default",
     };
+  }
+
+  it("enables service before bootstrap (clears persisted disabled state)", async () => {
+    const env = createDefaultLaunchdEnv();
     await installLaunchAgent({
       env,
       stdout: new PassThrough(),
-      programArguments: ["node", "-e", "process.exit(0)"],
+      programArguments: defaultProgramArguments,
     });
 
     const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
@@ -151,80 +161,95 @@ describe("launchd install", () => {
     expect(bootstrapIndex).toBeGreaterThanOrEqual(0);
     expect(enableIndex).toBeLessThan(bootstrapIndex);
   });
+
+  it("writes TMPDIR to LaunchAgent environment when provided", async () => {
+    const env = createDefaultLaunchdEnv();
+    const tmpDir = "/var/folders/xy/abc123/T/";
+    await installLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+      programArguments: defaultProgramArguments,
+      environment: { TMPDIR: tmpDir },
+    });
+
+    const plistPath = resolveLaunchAgentPlistPath(env);
+    const plist = state.files.get(plistPath) ?? "";
+    expect(plist).toContain("<key>EnvironmentVariables</key>");
+    expect(plist).toContain("<key>TMPDIR</key>");
+    expect(plist).toContain(`<string>${tmpDir}</string>`);
+  });
+
+  it("shows actionable guidance when launchctl gui domain does not support bootstrap", async () => {
+    state.bootstrapError = "Bootstrap failed: 125: Domain does not support specified action";
+    const env = createDefaultLaunchdEnv();
+    let message = "";
+    try {
+      await installLaunchAgent({
+        env,
+        stdout: new PassThrough(),
+        programArguments: defaultProgramArguments,
+      });
+    } catch (error) {
+      message = String(error);
+    }
+    expect(message).toContain("logged-in macOS GUI session");
+    expect(message).toContain("wrong user (including sudo)");
+    expect(message).toContain("https://docs.openclaw.ai/gateway");
+  });
+
+  it("surfaces generic bootstrap failures without GUI-specific guidance", async () => {
+    state.bootstrapError = "Operation not permitted";
+    const env = createDefaultLaunchdEnv();
+
+    await expect(
+      installLaunchAgent({
+        env,
+        stdout: new PassThrough(),
+        programArguments: defaultProgramArguments,
+      }),
+    ).rejects.toThrow("launchctl bootstrap failed: Operation not permitted");
+  });
 });
 
 describe("resolveLaunchAgentPlistPath", () => {
-  it("uses default label when OPENCLAW_PROFILE is default", () => {
-    const env = { HOME: "/Users/test", OPENCLAW_PROFILE: "default" };
-    expect(resolveLaunchAgentPlistPath(env)).toBe(
-      "/Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist",
-    );
-  });
-
-  it("uses default label when OPENCLAW_PROFILE is unset", () => {
-    const env = { HOME: "/Users/test" };
-    expect(resolveLaunchAgentPlistPath(env)).toBe(
-      "/Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist",
-    );
-  });
-
-  it("uses profile-specific label when OPENCLAW_PROFILE is set to a custom value", () => {
-    const env = { HOME: "/Users/test", OPENCLAW_PROFILE: "jbphoenix" };
-    expect(resolveLaunchAgentPlistPath(env)).toBe(
-      "/Users/test/Library/LaunchAgents/ai.openclaw.jbphoenix.plist",
-    );
-  });
-
-  it("prefers OPENCLAW_LAUNCHD_LABEL over OPENCLAW_PROFILE", () => {
-    const env = {
-      HOME: "/Users/test",
-      OPENCLAW_PROFILE: "jbphoenix",
-      OPENCLAW_LAUNCHD_LABEL: "com.custom.label",
-    };
-    expect(resolveLaunchAgentPlistPath(env)).toBe(
-      "/Users/test/Library/LaunchAgents/com.custom.label.plist",
-    );
-  });
-
-  it("trims whitespace from OPENCLAW_LAUNCHD_LABEL", () => {
-    const env = {
-      HOME: "/Users/test",
-      OPENCLAW_LAUNCHD_LABEL: "  com.custom.label  ",
-    };
-    expect(resolveLaunchAgentPlistPath(env)).toBe(
-      "/Users/test/Library/LaunchAgents/com.custom.label.plist",
-    );
-  });
-
-  it("ignores empty OPENCLAW_LAUNCHD_LABEL and falls back to profile", () => {
-    const env = {
-      HOME: "/Users/test",
-      OPENCLAW_PROFILE: "myprofile",
-      OPENCLAW_LAUNCHD_LABEL: "   ",
-    };
-    expect(resolveLaunchAgentPlistPath(env)).toBe(
-      "/Users/test/Library/LaunchAgents/ai.openclaw.myprofile.plist",
-    );
-  });
-
-  it("handles case-insensitive 'Default' profile", () => {
-    const env = { HOME: "/Users/test", OPENCLAW_PROFILE: "Default" };
-    expect(resolveLaunchAgentPlistPath(env)).toBe(
-      "/Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist",
-    );
-  });
-
-  it("handles case-insensitive 'DEFAULT' profile", () => {
-    const env = { HOME: "/Users/test", OPENCLAW_PROFILE: "DEFAULT" };
-    expect(resolveLaunchAgentPlistPath(env)).toBe(
-      "/Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist",
-    );
-  });
-
-  it("trims whitespace from OPENCLAW_PROFILE", () => {
-    const env = { HOME: "/Users/test", OPENCLAW_PROFILE: "  myprofile  " };
-    expect(resolveLaunchAgentPlistPath(env)).toBe(
-      "/Users/test/Library/LaunchAgents/ai.openclaw.myprofile.plist",
-    );
+  it.each([
+    {
+      name: "uses default label when OPENCLAW_PROFILE is unset",
+      env: { HOME: "/Users/test" },
+      expected: "/Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist",
+    },
+    {
+      name: "uses profile-specific label when OPENCLAW_PROFILE is set to a custom value",
+      env: { HOME: "/Users/test", OPENCLAW_PROFILE: "jbphoenix" },
+      expected: "/Users/test/Library/LaunchAgents/ai.openclaw.jbphoenix.plist",
+    },
+    {
+      name: "prefers OPENCLAW_LAUNCHD_LABEL over OPENCLAW_PROFILE",
+      env: {
+        HOME: "/Users/test",
+        OPENCLAW_PROFILE: "jbphoenix",
+        OPENCLAW_LAUNCHD_LABEL: "com.custom.label",
+      },
+      expected: "/Users/test/Library/LaunchAgents/com.custom.label.plist",
+    },
+    {
+      name: "trims whitespace from OPENCLAW_LAUNCHD_LABEL",
+      env: {
+        HOME: "/Users/test",
+        OPENCLAW_LAUNCHD_LABEL: "  com.custom.label  ",
+      },
+      expected: "/Users/test/Library/LaunchAgents/com.custom.label.plist",
+    },
+    {
+      name: "ignores empty OPENCLAW_LAUNCHD_LABEL and falls back to profile",
+      env: {
+        HOME: "/Users/test",
+        OPENCLAW_PROFILE: "myprofile",
+        OPENCLAW_LAUNCHD_LABEL: "   ",
+      },
+      expected: "/Users/test/Library/LaunchAgents/ai.openclaw.myprofile.plist",
+    },
+  ])("$name", ({ env, expected }) => {
+    expect(resolveLaunchAgentPlistPath(env)).toBe(expected);
   });
 });

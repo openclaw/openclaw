@@ -115,5 +115,121 @@ describe("resolveGatewayRuntimeConfig", () => {
       expect(result.authMode).toBe("token");
       expect(result.bindHost).toBe("0.0.0.0");
     });
+
+    it("should allow loopback binding with explicit none mode", async () => {
+      const cfg = {
+        gateway: {
+          bind: "loopback" as const,
+          auth: {
+            mode: "none" as const,
+          },
+        },
+      };
+
+      const result = await resolveGatewayRuntimeConfig({
+        cfg,
+        port: 18789,
+      });
+
+      expect(result.authMode).toBe("none");
+      expect(result.bindHost).toBe("127.0.0.1");
+    });
+
+    it("should reject lan binding with explicit none mode", async () => {
+      const cfg = {
+        gateway: {
+          bind: "lan" as const,
+          auth: {
+            mode: "none" as const,
+          },
+        },
+      };
+
+      await expect(
+        resolveGatewayRuntimeConfig({
+          cfg,
+          port: 18789,
+        }),
+      ).rejects.toThrow("refusing to bind gateway");
+    });
+
+    it("should reject loopback mode if host resolves to non-loopback", async () => {
+      const cfg = {
+        gateway: {
+          bind: "loopback" as const,
+          auth: {
+            mode: "none" as const,
+          },
+        },
+      };
+
+      await expect(
+        resolveGatewayRuntimeConfig({
+          cfg,
+          port: 18789,
+          host: "0.0.0.0",
+        }),
+      ).rejects.toThrow("gateway bind=loopback resolved to non-loopback host");
+    });
+
+    it("should reject custom bind without customBindHost", async () => {
+      const cfg = {
+        gateway: {
+          bind: "custom" as const,
+          auth: {
+            mode: "token" as const,
+            token: "test-token-123",
+          },
+        },
+      };
+
+      await expect(
+        resolveGatewayRuntimeConfig({
+          cfg,
+          port: 18789,
+        }),
+      ).rejects.toThrow("gateway.bind=custom requires gateway.customBindHost");
+    });
+
+    it("should reject custom bind with invalid customBindHost", async () => {
+      const cfg = {
+        gateway: {
+          bind: "custom" as const,
+          customBindHost: "192.168.001.100",
+          auth: {
+            mode: "token" as const,
+            token: "test-token-123",
+          },
+        },
+      };
+
+      await expect(
+        resolveGatewayRuntimeConfig({
+          cfg,
+          port: 18789,
+        }),
+      ).rejects.toThrow("gateway.bind=custom requires a valid IPv4 customBindHost");
+    });
+
+    it("should reject custom bind if resolved host differs from configured host", async () => {
+      const cfg = {
+        gateway: {
+          bind: "custom" as const,
+          customBindHost: "192.168.1.100",
+          auth: {
+            mode: "token" as const,
+            token: "test-token-123",
+          },
+        },
+      };
+
+      await expect(
+        resolveGatewayRuntimeConfig({
+          cfg,
+          port: 18789,
+          host: "0.0.0.0",
+        }),
+      ).rejects.toThrow("gateway bind=custom requested 192.168.1.100 but resolved 0.0.0.0");
+    });
   });
 });
