@@ -298,9 +298,12 @@ describe("applyMinimaxApiConfig", () => {
   });
 });
 
-describe("applyMinimaxApiProviderConfig", () => {
-  it("does not overwrite existing primary model", () => {
-    const cfg = applyMinimaxApiProviderConfig({
+describe("provider config helpers", () => {
+  it.each([
+    ["applyMinimaxApiProviderConfig", applyMinimaxApiProviderConfig],
+    ["applyZaiProviderConfig", applyZaiProviderConfig],
+  ] as const)("%s does not overwrite existing primary model", (_name, applyConfig) => {
+    const cfg = applyConfig({
       agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
     });
     expectPrimaryModelPreserved(cfg);
@@ -337,15 +340,6 @@ describe("applyZaiConfig", () => {
     const cfg = applyZaiConfig({}, { endpoint: "coding-cn", modelId: "glm-4.7-flashx" });
     expect(cfg.models?.providers?.zai?.baseUrl).toBe(ZAI_CODING_CN_BASE_URL);
     expect(cfg.agents?.defaults?.model?.primary).toBe("zai/glm-4.7-flashx");
-  });
-});
-
-describe("applyZaiProviderConfig", () => {
-  it("does not overwrite existing primary model", () => {
-    const cfg = applyZaiProviderConfig({
-      agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
-    });
-    expectPrimaryModelPreserved(cfg);
   });
 });
 
@@ -448,56 +442,38 @@ describe("applyXaiProviderConfig", () => {
   });
 });
 
-describe("applyOpencodeZenProviderConfig", () => {
-  it("adds allowlist entry for the default model", () => {
-    const cfg = applyOpencodeZenProviderConfig({});
-    expectAllowlistContains(cfg, "opencode/claude-opus-4-6");
-  });
+describe("allowlist provider helpers", () => {
+  it.each([
+    {
+      name: "applyOpencodeZenProviderConfig",
+      applyConfig: applyOpencodeZenProviderConfig,
+      modelRef: "opencode/claude-opus-4-6",
+      alias: "My Opus",
+    },
+    {
+      name: "applyOpenrouterProviderConfig",
+      applyConfig: applyOpenrouterProviderConfig,
+      modelRef: OPENROUTER_DEFAULT_MODEL_REF,
+      alias: "Router",
+    },
+  ] as const)(
+    "$name adds allowlist entry and preserves alias",
+    ({ applyConfig, modelRef, alias }) => {
+      const withDefault = applyConfig({});
+      expectAllowlistContains(withDefault, modelRef);
 
-  it("preserves existing alias for the default model", () => {
-    const cfg = applyOpencodeZenProviderConfig({
-      agents: {
-        defaults: {
-          models: {
-            "opencode/claude-opus-4-6": { alias: "My Opus" },
+      const withAlias = applyConfig({
+        agents: {
+          defaults: {
+            models: {
+              [modelRef]: { alias },
+            },
           },
         },
-      },
-    });
-    expectAliasPreserved(cfg, "opencode/claude-opus-4-6", "My Opus");
-  });
-});
-
-describe("applyOpencodeZenConfig", () => {
-  it("sets correct primary model", () => {
-    const cfg = applyOpencodeZenConfig({});
-    expect(cfg.agents?.defaults?.model?.primary).toBe("opencode/claude-opus-4-6");
-  });
-
-  it("preserves existing model fallbacks", () => {
-    const cfg = applyOpencodeZenConfig(createConfigWithFallbacks());
-    expectFallbacksPreserved(cfg);
-  });
-});
-
-describe("applyOpenrouterProviderConfig", () => {
-  it("adds allowlist entry for the default model", () => {
-    const cfg = applyOpenrouterProviderConfig({});
-    expectAllowlistContains(cfg, OPENROUTER_DEFAULT_MODEL_REF);
-  });
-
-  it("preserves existing alias for the default model", () => {
-    const cfg = applyOpenrouterProviderConfig({
-      agents: {
-        defaults: {
-          models: {
-            [OPENROUTER_DEFAULT_MODEL_REF]: { alias: "Router" },
-          },
-        },
-      },
-    });
-    expectAliasPreserved(cfg, OPENROUTER_DEFAULT_MODEL_REF, "Router");
-  });
+      });
+      expectAliasPreserved(withAlias, modelRef, alias);
+    },
+  );
 });
 
 describe("applyLitellmProviderConfig", () => {
@@ -523,14 +499,26 @@ describe("applyLitellmProviderConfig", () => {
   });
 });
 
-describe("applyOpenrouterConfig", () => {
-  it("sets correct primary model", () => {
-    const cfg = applyOpenrouterConfig({});
-    expect(cfg.agents?.defaults?.model?.primary).toBe(OPENROUTER_DEFAULT_MODEL_REF);
-  });
+describe("default-model config helpers", () => {
+  it.each([
+    {
+      name: "applyOpencodeZenConfig",
+      applyConfig: applyOpencodeZenConfig,
+      primaryModel: "opencode/claude-opus-4-6",
+    },
+    {
+      name: "applyOpenrouterConfig",
+      applyConfig: applyOpenrouterConfig,
+      primaryModel: OPENROUTER_DEFAULT_MODEL_REF,
+    },
+  ] as const)(
+    "$name sets primary model and preserves existing model fallbacks",
+    ({ applyConfig, primaryModel }) => {
+      const cfg = applyConfig({});
+      expect(cfg.agents?.defaults?.model?.primary).toBe(primaryModel);
 
-  it("preserves existing model fallbacks", () => {
-    const cfg = applyOpenrouterConfig(createConfigWithFallbacks());
-    expectFallbacksPreserved(cfg);
-  });
+      const cfgWithFallbacks = applyConfig(createConfigWithFallbacks());
+      expectFallbacksPreserved(cfgWithFallbacks);
+    },
+  );
 });
