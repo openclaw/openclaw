@@ -1,5 +1,5 @@
-import fs from "node:fs";
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import fs from "node:fs";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk";
 import type { MaxAccountConfig, ResolvedMaxAccount } from "./types.js";
 
@@ -36,9 +36,13 @@ export function resolveDefaultMaxAccountId(cfg: OpenClawConfig): string {
   return ids[0] ?? DEFAULT_ACCOUNT_ID;
 }
 
-function getMaxChannelConfig(cfg: OpenClawConfig): MaxAccountConfig & { accounts?: Record<string, MaxAccountConfig> } {
+function getMaxChannelConfig(
+  cfg: OpenClawConfig,
+): MaxAccountConfig & { accounts?: Record<string, MaxAccountConfig> } {
   const channels = cfg.channels as Record<string, unknown> | undefined;
-  return (channels?.max ?? {}) as MaxAccountConfig & { accounts?: Record<string, MaxAccountConfig> };
+  return (channels?.max ?? {}) as MaxAccountConfig & {
+    accounts?: Record<string, MaxAccountConfig>;
+  };
 }
 
 function resolveAccountConfig(

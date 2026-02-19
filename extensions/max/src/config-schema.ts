@@ -33,8 +33,7 @@ const MaxAccountSchema = MaxAccountSchemaBase.superRefine((value, ctx) => {
     allowFrom: value.allowFrom,
     ctx,
     path: ["allowFrom"],
-    message:
-      'channels.max.dmPolicy="open" requires channels.max.allowFrom to include "*"',
+    message: 'channels.max.dmPolicy="open" requires channels.max.allowFrom to include "*"',
   });
 });
 
@@ -46,7 +45,6 @@ export const MaxConfigSchema = MaxAccountSchemaBase.extend({
     allowFrom: value.allowFrom,
     ctx,
     path: ["allowFrom"],
-    message:
-      'channels.max.dmPolicy="open" requires channels.max.allowFrom to include "*"',
+    message: 'channels.max.dmPolicy="open" requires channels.max.allowFrom to include "*"',
   });
 });
