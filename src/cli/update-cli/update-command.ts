@@ -40,6 +40,7 @@ import {
   DEFAULT_PACKAGE_NAME,
   ensureGitCheckout,
   normalizeTag,
+  parseTimeoutMsOrExit,
   readPackageName,
   readPackageVersion,
   resolveGitInstallDir,
@@ -468,12 +469,9 @@ async function maybeRestartService(params: {
 export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   suppressDeprecations();
 
-  const timeoutMs = opts.timeout ? Number.parseInt(opts.timeout, 10) * 1000 : undefined;
+  const timeoutMs = parseTimeoutMsOrExit(opts.timeout);
   const shouldRestart = opts.restart !== false;
-
-  if (timeoutMs !== undefined && (Number.isNaN(timeoutMs) || timeoutMs <= 0)) {
-    defaultRuntime.error("--timeout must be a positive integer (seconds)");
-    defaultRuntime.exit(1);
+  if (timeoutMs === null) {
     return;
   }
 
