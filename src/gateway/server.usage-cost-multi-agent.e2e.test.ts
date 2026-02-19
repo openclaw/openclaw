@@ -35,7 +35,7 @@ describe("usage.cost multi-agent e2e (#20558)", () => {
           role: "assistant",
           provider: "openai",
           model: "gpt-5.2",
-          usage: { input: 100, output: 50, totalTokens: 150, cost: { total: 0.10 } },
+          usage: { input: 100, output: 50, totalTokens: 150, cost: { total: 0.1 } },
         },
       }),
       "utf-8",
@@ -53,7 +53,7 @@ describe("usage.cost multi-agent e2e (#20558)", () => {
           role: "assistant",
           provider: "openai",
           model: "gpt-5.2",
-          usage: { input: 200, output: 100, totalTokens: 300, cost: { total: 0.20 } },
+          usage: { input: 200, output: 100, totalTokens: 300, cost: { total: 0.2 } },
         },
       }),
       "utf-8",
@@ -81,7 +81,7 @@ describe("usage.cost multi-agent e2e (#20558)", () => {
 
       // Should be 450 (main 150 + worker 300)
       expect(totals.totalTokens).toBeGreaterThanOrEqual(450);
-      expect(totals.totalCost).toBeGreaterThanOrEqual(0.30 - 0.001);
+      expect(totals.totalCost).toBeGreaterThanOrEqual(0.3 - 0.001);
     });
   });
 });

@@ -257,7 +257,8 @@ async function loadCostUsageSummaryAllAgents(params: {
   }
 
   const daily = Array.from(dailyMap.values()).toSorted((a, b) => a.date.localeCompare(b.date));
-  const days = perAgent[0]?.days ?? Math.ceil((params.endMs - params.startMs) / (24 * 60 * 60 * 1000)) + 1;
+  const days =
+    perAgent[0]?.days ?? Math.ceil((params.endMs - params.startMs) / (24 * 60 * 60 * 1000)) + 1;
 
   return { updatedAt: Date.now(), days, daily, totals };
 }

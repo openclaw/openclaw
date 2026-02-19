@@ -40,7 +40,7 @@ describe("usage.cost multi-agent (#20558)", () => {
           role: "assistant",
           provider: "openai",
           model: "gpt-5.2",
-          usage: { input: 100, output: 50, totalTokens: 150, cost: { total: 0.10 } },
+          usage: { input: 100, output: 50, totalTokens: 150, cost: { total: 0.1 } },
         },
       }),
       "utf-8",
@@ -57,7 +57,7 @@ describe("usage.cost multi-agent (#20558)", () => {
           role: "assistant",
           provider: "openai",
           model: "gpt-5.2",
-          usage: { input: 200, output: 100, totalTokens: 300, cost: { total: 0.20 } },
+          usage: { input: 200, output: 100, totalTokens: 300, cost: { total: 0.2 } },
         },
       }),
       "utf-8",
@@ -70,13 +70,17 @@ describe("usage.cost multi-agent (#20558)", () => {
     const summary = await loadCostUsageSummaryCached({ startMs, endMs, config });
 
     expect(summary.totals.totalTokens).toBe(450);
-    expect(summary.totals.totalCost).toBeCloseTo(0.30, 5);
+    expect(summary.totals.totalCost).toBeCloseTo(0.3, 5);
   });
 
   it("merges daily entries from multiple agents on the same date", async () => {
     const ts = new Date().toISOString();
 
-    for (const [agentId, tokens] of [["main", 100], ["alpha", 200], ["beta", 300]] as const) {
+    for (const [agentId, tokens] of [
+      ["main", 100],
+      ["alpha", 200],
+      ["beta", 300],
+    ] as const) {
       const dir = path.join(root, "agents", agentId, "sessions");
       await fs.mkdir(dir, { recursive: true });
       await fs.writeFile(
@@ -88,7 +92,12 @@ describe("usage.cost multi-agent (#20558)", () => {
             role: "assistant",
             provider: "openai",
             model: "gpt-5.2",
-            usage: { input: tokens, output: 0, totalTokens: tokens, cost: { total: tokens * 0.001 } },
+            usage: {
+              input: tokens,
+              output: 0,
+              totalTokens: tokens,
+              cost: { total: tokens * 0.001 },
+            },
           },
         }),
         "utf-8",
@@ -102,7 +111,7 @@ describe("usage.cost multi-agent (#20558)", () => {
     const summary = await loadCostUsageSummaryCached({ startMs, endMs, config });
 
     expect(summary.totals.totalTokens).toBe(600);
-    expect(summary.totals.totalCost).toBeCloseTo(0.60, 5);
+    expect(summary.totals.totalCost).toBeCloseTo(0.6, 5);
     // All three agents report on the same day → single daily entry
     expect(summary.daily).toHaveLength(1);
     expect(summary.daily[0]?.totalTokens).toBe(600);
