@@ -1,7 +1,7 @@
-import { createAccountActionGate } from "../channels/plugins/account-action-gate.js";
-import { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { DiscordAccountConfig, DiscordActionConfig } from "../config/types.js";
+import { createAccountActionGate } from "../channels/plugins/account-action-gate.js";
+import { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import { resolveDiscordToken } from "./token.js";
 

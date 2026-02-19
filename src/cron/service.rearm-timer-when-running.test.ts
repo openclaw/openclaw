@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { CronJob } from "./types.js";
 import {
   createCronStoreHarness,
   createNoopLogger,
   createRunningCronServiceState,
 } from "./service.test-harness.js";
 import { onTimer } from "./service/timer.js";
-import type { CronJob } from "./types.js";
 
 const noopLogger = createNoopLogger();
 const { makeStorePath } = createCronStoreHarness();

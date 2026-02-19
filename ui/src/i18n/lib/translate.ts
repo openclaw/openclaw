@@ -1,5 +1,5 @@
-import { en } from "../locales/en.ts";
 import type { Locale, TranslationMap } from "./types.ts";
+import { en } from "../locales/en.ts";
 
 type Subscriber = (locale: Locale) => void;
 

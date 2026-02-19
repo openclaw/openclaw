@@ -1,3 +1,12 @@
+import type { GatewayServiceRuntime } from "./service-runtime.js";
+import type {
+  GatewayServiceCommandConfig,
+  GatewayServiceControlArgs,
+  GatewayServiceEnv,
+  GatewayServiceEnvArgs,
+  GatewayServiceInstallArgs,
+  GatewayServiceManageArgs,
+} from "./service-types.js";
 import {
   installLaunchAgent,
   isLaunchAgentLoaded,
@@ -16,15 +25,6 @@ import {
   stopScheduledTask,
   uninstallScheduledTask,
 } from "./schtasks.js";
-import type { GatewayServiceRuntime } from "./service-runtime.js";
-import type {
-  GatewayServiceCommandConfig,
-  GatewayServiceControlArgs,
-  GatewayServiceEnv,
-  GatewayServiceEnvArgs,
-  GatewayServiceInstallArgs,
-  GatewayServiceManageArgs,
-} from "./service-types.js";
 import {
   installSystemdService,
   isSystemdServiceEnabled,

@@ -1,7 +1,7 @@
+import type { CoreConfig, NextcloudTalkSendResult } from "./types.js";
 import { resolveNextcloudTalkAccount } from "./accounts.js";
 import { getNextcloudTalkRuntime } from "./runtime.js";
 import { generateNextcloudTalkSignature } from "./signature.js";
-import type { CoreConfig, NextcloudTalkSendResult } from "./types.js";
 
 type NextcloudTalkSendOpts = {
   baseUrl?: string;

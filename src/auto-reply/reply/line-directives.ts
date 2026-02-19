@@ -1,3 +1,5 @@
+import type { LineChannelData } from "../../line/types.js";
+import type { ReplyPayload } from "../types.js";
 import {
   createMediaPlayerCard,
   createEventCard,
@@ -5,8 +7,6 @@ import {
   createDeviceControlCard,
   createAppleTvRemoteCard,
 } from "../../line/flex-templates.js";
-import type { LineChannelData } from "../../line/types.js";
-import type { ReplyPayload } from "../types.js";
 
 /**
  * Parse LINE-specific directives from text and extract them into ReplyPayload fields.

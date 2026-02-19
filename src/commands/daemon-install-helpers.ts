@@ -1,6 +1,7 @@
+import type { OpenClawConfig } from "../config/types.js";
+import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { collectConfigEnvVars } from "../config/env-vars.js";
-import type { OpenClawConfig } from "../config/types.js";
 import { resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
 import { resolvePreferredNodePath } from "../daemon/runtime-paths.js";
@@ -9,7 +10,6 @@ import {
   emitNodeRuntimeWarning,
   type DaemonInstallWarnFn,
 } from "./daemon-install-runtime-warning.js";
-import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
 
 export type GatewayInstallPlan = {
   programArguments: string[];

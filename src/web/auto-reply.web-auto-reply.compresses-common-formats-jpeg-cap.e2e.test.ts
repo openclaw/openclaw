@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import sharp from "sharp";
 import { describe, expect, it, vi } from "vitest";
+import type { WebInboundMessage } from "./inbound.js";
 import { monitorWebChannel } from "./auto-reply.js";
 import {
   createMockWebListener,
@@ -9,7 +10,6 @@ import {
   resetLoadConfigMock,
   setLoadConfigMock,
 } from "./auto-reply.test-harness.js";
-import type { WebInboundMessage } from "./inbound.js";
 
 installWebAutoReplyTestHomeHooks();
 

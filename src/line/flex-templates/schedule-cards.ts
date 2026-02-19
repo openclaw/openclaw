@@ -1,5 +1,5 @@
-import { attachFooterText } from "./common.js";
 import type { Action, FlexBox, FlexBubble, FlexComponent, FlexText } from "./types.js";
+import { attachFooterText } from "./common.js";
 
 function buildTitleSubtitleHeader(params: { title: string; subtitle?: string }): FlexComponent[] {
   const { title, subtitle } = params;
