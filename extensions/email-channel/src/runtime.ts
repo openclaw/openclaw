@@ -133,8 +133,7 @@ function createImapConnection(config: EmailConfig): Imap {
     host: config.imap.host,
     port: config.imap.port,
     tls: config.imap.secure,
-    // Note: TLS certificate verification is enabled by default for security
-    // If you need to disable it for self-signed certificates, configure it in your environment
+    tlsOptions: { rejectUnauthorized: true }, // Enforce TLS certificate verification for security
   });
 }
 
