@@ -82,7 +82,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
       };
     },
     deleteAccount: ({ cfg, accountId }) => {
-      const accountKey = accountId || DEFAULT_ACCOUNT_ID;
+      const accountKey = accountId ?? DEFAULT_ACCOUNT_ID;
       const accounts = { ...cfg.channels?.whatsapp?.accounts };
       delete accounts[accountKey];
       return {
