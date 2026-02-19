@@ -785,6 +785,41 @@ export async function runEmbeddedPiAgent(
                 },
               };
             }
+            // Handle orphaned tool call errors — these happen when session compaction
+            // removes a tool_use or tool_result block but leaves the other in the transcript.
+            // Provider returns 400 with various messages:
+            //   Anthropic: "tool_use ids were found without tool_result blocks immediately after"
+            //   OpenAI:    "No tool call found for function call output"
+            //   Generic:   "tool_use_id ... not found"
+            // Don't surface this raw error to the user; return a friendly message.
+            if (
+              /tool.?call.*not found|tool_use_id.*not found|function call output|tool_use.*without.*tool_result/i.test(
+                errorText,
+              )
+            ) {
+              log.warn(
+                `Orphaned tool result detected after compaction — suppressing error (${errorText.slice(0, 120)})`,
+              );
+              return {
+                payloads: [
+                  {
+                    text: "Session context was refreshed mid-operation. Please try again.",
+                    isError: true,
+                  },
+                ],
+                meta: {
+                  durationMs: Date.now() - started,
+                  agentMeta: {
+                    sessionId: sessionIdUsed,
+                    provider,
+                    model: model.id,
+                  },
+                  systemPromptReport: attempt.systemPromptReport,
+                  error: { kind: "orphaned_tool_result", message: errorText },
+                },
+              };
+            }
+
             // Handle image size errors with a user-friendly message (no retry needed)
             const imageSizeError = parseImageSizeError(errorText);
             if (imageSizeError) {

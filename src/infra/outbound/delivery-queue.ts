@@ -9,6 +9,8 @@ import type { OutboundChannel } from "./targets.js";
 const QUEUE_DIRNAME = "delivery-queue";
 const FAILED_DIRNAME = "failed";
 const MAX_RETRIES = 5;
+/** Maximum age for a queued delivery entry before it's considered stale. Default: 30 min. */
+const MAX_AGE_MS = 30 * 60 * 1000;
 
 /** Backoff delays in milliseconds indexed by retry count (1-based). */
 const BACKOFF_MS: readonly number[] = [
@@ -16,6 +18,21 @@ const BACKOFF_MS: readonly number[] = [
   25_000, // retry 2: 25s
   120_000, // retry 3: 2m
   600_000, // retry 4: 10m
+];
+
+/**
+ * Patterns that indicate a permanent failure — retrying won't help.
+ * These entries are moved directly to failed/ without consuming retry budget.
+ */
+const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
+  /message is too long/i,
+  /bot token missing/i,
+  /chat not found/i,
+  /blocked by (?:the )?user/i,
+  /user is deactivated/i,
+  /group chat was (?:deactivated|upgraded)/i,
+  /have no rights to send/i,
+  /CHAT_WRITE_FORBIDDEN/i,
 ];
 
 type DeliveryMirrorPayload = {
@@ -124,9 +141,21 @@ export async function ackDelivery(id: string, stateDir?: string): Promise<void> 
   }
 }
 
-/** Update a queue entry after a failed delivery attempt. */
+/** Update a queue entry after a failed delivery attempt.
+ * If the error is permanent (non-retryable), moves the entry directly to failed/. */
 export async function failDelivery(id: string, error: string, stateDir?: string): Promise<void> {
   const filePath = path.join(resolveQueueDir(stateDir), `${id}.json`);
+
+  // Permanent errors: move to failed/ immediately, no retry.
+  if (isPermanentError(error)) {
+    try {
+      await moveToFailed(id, stateDir);
+    } catch {
+      // Best-effort — if move fails, fall through to normal retry path.
+    }
+    return;
+  }
+
   const raw = await fs.promises.readFile(filePath, "utf-8");
   const entry: QueuedDelivery = JSON.parse(raw);
   entry.retryCount += 1;
@@ -245,6 +274,37 @@ export async function recoverPendingDeliveries(opts: {
       opts.log.warn(`Recovery time budget exceeded — ${deferred} entries deferred to next restart`);
       break;
     }
+    // Skip entries that are too old — stale messages confuse users.
+    const ageMs = now - entry.enqueuedAt;
+    if (ageMs > MAX_AGE_MS) {
+      opts.log.warn(
+        `Delivery ${entry.id} too old (${Math.round(ageMs / 60_000)}min) — moving to failed/`,
+      );
+      try {
+        await moveToFailed(entry.id, opts.stateDir);
+      } catch (err) {
+        opts.log.error(`Failed to move stale entry ${entry.id} to failed/: ${String(err)}`);
+      }
+      skipped += 1;
+      continue;
+    }
+
+    // Skip entries whose last error is permanent (non-retryable).
+    if (entry.lastError && isPermanentError(entry.lastError)) {
+      opts.log.warn(
+        `Delivery ${entry.id} has permanent error ("${entry.lastError.slice(0, 80)}") — moving to failed/`,
+      );
+      try {
+        await moveToFailed(entry.id, opts.stateDir);
+      } catch (err) {
+        opts.log.error(
+          `Failed to move permanent-error entry ${entry.id} to failed/: ${String(err)}`,
+        );
+      }
+      skipped += 1;
+      continue;
+    }
+
     if (entry.retryCount >= MAX_RETRIES) {
       opts.log.warn(
         `Delivery ${entry.id} exceeded max retries (${entry.retryCount}/${MAX_RETRIES}) — moving to failed/`,
@@ -312,4 +372,9 @@ export async function recoverPendingDeliveries(opts: {
   return { recovered, failed, skipped };
 }
 
-export { MAX_RETRIES };
+/** Check if an error message indicates a permanent (non-retryable) failure. */
+export function isPermanentError(error: string): boolean {
+  return PERMANENT_ERROR_PATTERNS.some((p) => p.test(error));
+}
+
+export { MAX_RETRIES, MAX_AGE_MS };
