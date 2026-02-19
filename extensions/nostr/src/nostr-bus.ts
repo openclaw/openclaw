@@ -38,12 +38,13 @@ export const DEFAULT_RELAYS = ["wss://relay.damus.io", "wss://nos.lol"];
 // Constants
 // ============================================================================
 
-const DEFAULT_STARTUP_LOOKBACK_SEC = 120; // tolerate relay lag / clock skew
+const DEFAULT_STARTUP_LOOKBACK_SEC = 5; // keep startup replay narrow for low-latency operation
 const MAX_PERSISTED_EVENT_IDS = 5000;
 const STATE_PERSIST_DEBOUNCE_MS = 5000; // Debounce state writes
 const REPLAY_POLL_INTERVAL_MS = 5000;
 const REPLAY_POLL_MAX_WAIT_MS = 3000;
 const REPLAY_POLL_OVERLAP_SEC = 30;
+const REPLAY_STRICT_FLOOR_BACKFILL_SEC = 2;
 
 // Circuit breaker configuration
 const CIRCUIT_BREAKER_THRESHOLD = 5; // failures before opening
@@ -120,6 +121,23 @@ export interface NostrBusOptions {
     eventId: string;
     encryptionScheme: string;
     tags: string[][];
+    decryptedPayload?: string;
+    relayLatencyMs?: number;
+  }) => void;
+  /** Called on each relay publish attempt (success/failure/timeout). */
+  onSendAttempt?: (event: {
+    senderPubkey: string;
+    recipientPubkey: string;
+    senderRole: string;
+    recipientRole: string;
+    responseKind: number;
+    relay: string;
+    eventId: string;
+    encryptionScheme: string;
+    tags: string[][];
+    outcome: "ok" | "failed" | "timeout";
+    latencyMs: number;
+    error?: string;
     decryptedPayload?: string;
   }) => void;
   /** Called on connection status changes (optional) */
@@ -492,6 +510,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
     onMessage,
     onError,
     onSend,
+    onSendAttempt,
     onConnect,
     onDisconnect,
     onEose,
@@ -545,6 +564,10 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
   const baseSince = computeSinceTimestamp(state, gatewayStartedAt);
   const startupLookbackSec = resolveStartupLookbackSec();
   const since = Math.max(0, baseSince - startupLookbackSec);
+  const strictReplayFloor =
+    typeof state?.lastProcessedAt === "number"
+      ? Math.max(0, state.lastProcessedAt - REPLAY_STRICT_FLOOR_BACKFILL_SEC)
+      : 0;
 
   // Seed in-memory dedupe with recent IDs from disk (prevents restart replay)
   if (state?.recentEventIds?.length) {
@@ -630,10 +653,11 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
         return;
       }
 
-      // Skip events older than our `since` (relay may ignore filter)
-      if (event.created_at < since) {
+      // Keep replay window narrow even if relay replays older events.
+      const minAcceptedCreatedAt = Math.max(since, strictReplayFloor);
+      if (event.created_at < minAcceptedCreatedAt) {
         metrics.emit("event.rejected.stale");
-        traceInbound("stale", event, { source, since });
+        traceInbound("stale", event, { source, since, strictReplayFloor, minAcceptedCreatedAt });
         return;
       }
 
@@ -777,6 +801,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
           pk,
           normalizedResponseKind,
           onSend,
+          onSendAttempt,
           onError,
         );
       };
@@ -861,7 +886,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
       const replayEvents = await pool.querySync(
         normalizedRelays,
         {
-          kinds: [NIP63_PROMPT_KIND, NIP04_DM_KIND],
+          kinds: [NIP63_PROMPT_KIND, NIP63_CANCEL_KIND, NIP04_DM_KIND],
           "#p": [pk],
           since: replaySince,
         },
@@ -914,6 +939,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
       pk,
       responseKind,
       onSend,
+      onSendAttempt,
       onError,
     );
   };
@@ -1151,6 +1177,22 @@ async function sendEncryptedDm(
     encryptionScheme: string;
     tags: string[][];
     decryptedPayload?: string;
+    relayLatencyMs?: number;
+  }) => void,
+  onSendAttempt?: (event: {
+    senderPubkey: string;
+    recipientPubkey: string;
+    senderRole: string;
+    recipientRole: string;
+    responseKind: number;
+    relay: string;
+    eventId: string;
+    encryptionScheme: string;
+    tags: string[][];
+    outcome: "ok" | "failed" | "timeout";
+    latencyMs: number;
+    error?: string;
+    decryptedPayload?: string;
   }) => void,
   onError?: (error: Error, context: string) => void,
 ): Promise<void> {
@@ -1258,17 +1300,58 @@ async function sendEncryptedDm(
           encryptionScheme: isNip04Response ? "nip04" : NIP63_ENCRYPTION_SCHEME,
           tags,
           decryptedPayload,
+          relayLatencyMs: latencyMs,
         });
       } catch (sendError) {
         onError?.(sendError as Error, "sendEncryptedDm.onSend");
+      }
+      try {
+        onSendAttempt?.({
+          senderPubkey,
+          recipientPubkey: toPubkey,
+          senderRole: "gateway",
+          recipientRole: "user",
+          responseKind: normalizedResponseKind,
+          relay,
+          eventId: reply.id,
+          encryptionScheme: isNip04Response ? "nip04" : NIP63_ENCRYPTION_SCHEME,
+          tags,
+          outcome: "ok",
+          latencyMs,
+          decryptedPayload,
+        });
+      } catch (sendError) {
+        onError?.(sendError as Error, "sendEncryptedDm.onSendAttempt");
       }
       return { relay, ok: true, latencyMs };
     } catch (err) {
       const error = err as Error;
       const latencyMs = Date.now() - startTime;
+      const isTimeout =
+        typeof error?.message === "string" &&
+        error.message.toLowerCase().includes("publish timeout after");
       cb?.recordFailure();
       healthTracker.recordFailure(relay);
       metrics.emit("relay.error", 1, { relay, latency: latencyMs });
+      try {
+        onSendAttempt?.({
+          senderPubkey,
+          recipientPubkey: toPubkey,
+          senderRole: "gateway",
+          recipientRole: "user",
+          responseKind: normalizedResponseKind,
+          relay,
+          eventId: reply.id,
+          encryptionScheme: isNip04Response ? "nip04" : NIP63_ENCRYPTION_SCHEME,
+          tags,
+          outcome: isTimeout ? "timeout" : "failed",
+          latencyMs,
+          error: error.message,
+          decryptedPayload,
+        });
+      } catch (sendError) {
+        onError?.(sendError as Error, "sendEncryptedDm.onSendAttempt");
+      }
       onError?.(
         error,
         `publish failed relay=${relay} latencyMs=${latencyMs} relays=${relayList.length}`,

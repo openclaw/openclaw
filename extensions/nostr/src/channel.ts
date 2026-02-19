@@ -42,6 +42,7 @@ const AI_INFO_ENCRYPTION_SCHEME = "nip44";
 const RUN_START_THINKING_DELTA_TEXT = "run_started";
 const RUN_HEARTBEAT_THINKING_DELTA_TEXT = "run_progress";
 const RUN_HEARTBEAT_INTERVAL_MS = 3500;
+const RUN_HEARTBEAT_CHECK_INTERVAL_MS = 500;
 const NOSTR_TRACE_JSONL_ENV = "OPENCLAW_NOSTR_TRACE_JSONL";
 const NOSTR_TRACE_JSONL_FALLBACK_ENV = "NOSTR_TRACE_JSONL";
 const PENDING_CANCEL_TTL_MS = 5 * 60 * 1000;
@@ -59,6 +60,7 @@ type ActiveRunControl = {
   senderPubkey: string;
   sessionId: string;
   traceId: string;
+  outboundSeq: number;
   abortController: AbortController;
   cancelled: boolean;
   cancelReason: CancelReason;
@@ -115,6 +117,12 @@ function nowUnixSeconds(): number {
 
 function createRunTraceId(runId: string): string {
   return `nostr-${runId.slice(0, 12)}-${Date.now().toString(36)}`;
+}
+
+function nextRunSequence(run: ActiveRunControl): number {
+  const value = run.outboundSeq;
+  run.outboundSeq += 1;
+  return value;
 }
 
 function normalizeToolPhase(raw: string | undefined): "start" | "result" {
@@ -345,6 +353,7 @@ function buildStatusPayload(params: {
   runId: string;
   sessionId: string;
   traceId: string;
+  runSeq: number;
   info?: string;
   progress?: number;
 }): Record<string, unknown> {
@@ -359,6 +368,7 @@ function buildStatusPayload(params: {
     run_id: params.runId,
     session_id: params.sessionId,
     trace_id: params.traceId,
+    run_seq: params.runSeq,
   };
 }
 
@@ -733,6 +743,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
               run_id: run.promptEventId,
               session_id: run.sessionId,
               trace_id: run.traceId,
+              run_seq: nextRunSequence(run),
               details: {
                 reason: run.cancelReason,
                 cancelled_at_ms: timestampMs,
@@ -864,6 +875,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
           encryptionScheme,
           tags,
           decryptedPayload,
+          relayLatencyMs,
         }) => {
           const payloadSuffix = decryptedPayload ? ` payload=${decryptedPayload}` : "";
           const parsedPayload = parseTracePayload(decryptedPayload);
@@ -879,6 +891,10 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
             relays,
             encryption_scheme: encryptionScheme,
             tags,
+            relay_latency_ms:
+              typeof relayLatencyMs === "number" && Number.isFinite(relayLatencyMs)
+                ? relayLatencyMs
+                : undefined,
             run_id: typeof parsedPayload?.run_id === "string" ? parsedPayload.run_id : undefined,
             session_id:
               typeof parsedPayload?.session_id === "string" ? parsedPayload.session_id : undefined,
@@ -888,6 +904,40 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
           });
           updateActivityStatus({
             lastOutboundAt: Date.now(),
+          });
+        },
+        onSendAttempt: ({
+          senderPubkey,
+          recipientPubkey,
+          responseKind,
+          relay,
+          eventId,
+          encryptionScheme,
+          tags,
+          outcome,
+          latencyMs,
+          error,
+          decryptedPayload,
+        }) => {
+          const parsedPayload = parseTracePayload(decryptedPayload);
+          traceRecorder.record({
+            direction: "outbound_attempt",
+            response_kind: responseKind,
+            relay,
+            event_id: eventId,
+            sender_pubkey: senderPubkey,
+            recipient_pubkey: recipientPubkey,
+            encryption_scheme: encryptionScheme,
+            tags,
+            outcome,
+            latency_ms: latencyMs,
+            error: error ?? undefined,
+            run_id: typeof parsedPayload?.run_id === "string" ? parsedPayload.run_id : undefined,
+            session_id:
+              typeof parsedPayload?.session_id === "string" ? parsedPayload.session_id : undefined,
+            trace_id:
+              typeof parsedPayload?.trace_id === "string" ? parsedPayload.trace_id : undefined,
+            payload: parsedPayload ?? undefined,
           });
         },
         onMessage: async (inbound, reply) => {
@@ -1155,6 +1205,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
             senderPubkey,
             sessionId,
             traceId,
+            outboundSeq: 0,
             abortController: new AbortController(),
             cancelled: false,
             cancelReason: "user_cancel",
@@ -1194,6 +1245,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                   runId: payload.eventId,
                   sessionId,
                   traceId,
+                  runSeq: nextRunSequence(runControl),
                 }),
                 {
                   sessionId,
@@ -1232,6 +1284,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                   run_id: payload.eventId,
                   session_id: sessionId,
                   trace_id: traceId,
+                  run_seq: nextRunSequence(runControl),
                 },
                 {
                   sessionId,
@@ -1271,7 +1324,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                   heartbeatInFlight = false;
                 },
               );
-            }, RUN_HEARTBEAT_INTERVAL_MS);
+            }, RUN_HEARTBEAT_CHECK_INTERVAL_MS);
           };
 
           try {
@@ -1351,6 +1404,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                             run_id: payload.eventId,
                             session_id: sessionId,
                             trace_id: traceId,
+                            run_seq: nextRunSequence(runControl),
                           }
                         : info.kind === "tool"
                           ? {
@@ -1364,6 +1418,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                               run_id: payload.eventId,
                               session_id: sessionId,
                               trace_id: traceId,
+                              run_seq: nextRunSequence(runControl),
                             }
                           : {
                               ver: 1,
@@ -1373,6 +1428,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                               run_id: payload.eventId,
                               session_id: sessionId,
                               trace_id: traceId,
+                              run_seq: nextRunSequence(runControl),
                             };
                     await reply(
                       outboundPayload,
@@ -1432,6 +1488,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                         run_id: payload.eventId,
                         session_id: sessionId,
                         trace_id: traceId,
+                        run_seq: nextRunSequence(runControl),
                       },
                       {
                         sessionId,
@@ -1507,6 +1564,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                     run_id: payload.eventId,
                     session_id: sessionId,
                     trace_id: traceId,
+                    run_seq: nextRunSequence(runControl),
                   },
                   {
                     sessionId,
@@ -1530,6 +1588,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                     run_id: payload.eventId,
                     session_id: sessionId,
                     trace_id: traceId,
+                    run_seq: nextRunSequence(runControl),
                     details: {
                       dispatch_queued_final: dispatchResult.queuedFinal,
                       dispatch_counts: dispatchResult.counts,
@@ -1584,6 +1643,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                   run_id: payload.eventId,
                   session_id: sessionId,
                   trace_id: traceId,
+                  run_seq: nextRunSequence(runControl),
                   details: {
                     run_id: payload.eventId,
                     session_id: sessionId,
@@ -1631,6 +1691,11 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
         },
         onError: (error, context) => {
           ctx.log?.error?.(`[${account.accountId}] Nostr error (${context}): ${error.message}`);
+          traceRecorder.record({
+            direction: "bus_error",
+            context,
+            error: error.message,
+          });
         },
         onConnect: (relay) => {
           ctx.log?.debug?.(`[${account.accountId}] Connected to relay: ${relay}`);
