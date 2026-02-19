@@ -110,6 +110,19 @@ function formatTokenSummary(tokens: DeviceTokenSummary[] | undefined) {
   return parts.join(", ");
 }
 
+function resolveRequiredDeviceRole(
+  opts: DevicesRpcOpts,
+): { deviceId: string; role: string } | null {
+  const deviceId = String(opts.device ?? "").trim();
+  const role = String(opts.role ?? "").trim();
+  if (deviceId && role) {
+    return { deviceId, role };
+  }
+  defaultRuntime.error("--device and --role required");
+  defaultRuntime.exit(1);
+  return null;
+}
+
 export function registerDevicesCli(program: Command) {
   const devices = program.command("devices").description("Device pairing and auth tokens");
 
@@ -318,16 +331,13 @@ export function registerDevicesCli(program: Command) {
       .requiredOption("--role <role>", "Role name")
       .option("--scope <scope...>", "Scopes to attach to the token (repeatable)")
       .action(async (opts: DevicesRpcOpts) => {
-        const deviceId = String(opts.device ?? "").trim();
-        const role = String(opts.role ?? "").trim();
-        if (!deviceId || !role) {
-          defaultRuntime.error("--device and --role required");
-          defaultRuntime.exit(1);
+        const required = resolveRequiredDeviceRole(opts);
+        if (!required) {
           return;
         }
         const result = await callGatewayCli("device.token.rotate", opts, {
-          deviceId,
-          role,
+          deviceId: required.deviceId,
+          role: required.role,
           scopes: Array.isArray(opts.scope) ? opts.scope : undefined,
         });
         defaultRuntime.log(JSON.stringify(result, null, 2));
@@ -341,16 +351,13 @@ export function registerDevicesCli(program: Command) {
       .requiredOption("--device <id>", "Device id")
       .requiredOption("--role <role>", "Role name")
       .action(async (opts: DevicesRpcOpts) => {
-        const deviceId = String(opts.device ?? "").trim();
-        const role = String(opts.role ?? "").trim();
-        if (!deviceId || !role) {
-          defaultRuntime.error("--device and --role required");
-          defaultRuntime.exit(1);
+        const required = resolveRequiredDeviceRole(opts);
+        if (!required) {
           return;
         }
         const result = await callGatewayCli("device.token.revoke", opts, {
-          deviceId,
-          role,
+          deviceId: required.deviceId,
+          role: required.role,
         });
         defaultRuntime.log(JSON.stringify(result, null, 2));
       }),
