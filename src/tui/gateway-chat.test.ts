@@ -21,9 +21,15 @@ vi.mock("../infra/tailnet.js", () => ({
   pickPrimaryTailnetIPv4,
 }));
 
-vi.mock("../gateway/net.js", () => ({
-  pickPrimaryLanIPv4,
-}));
+vi.mock("../gateway/net.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../gateway/net.js")>();
+  return {
+    ...actual,
+    pickPrimaryLanIPv4,
+    // Allow all URLs in tests - security validation is tested separately
+    isSecureWebSocketUrl: () => true,
+  };
+});
 
 const { resolveGatewayConnection } = await import("./gateway-chat.js");
 
