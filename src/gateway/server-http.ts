@@ -31,6 +31,7 @@ import { createControlUiLoopbackGuard } from "./control-ui-loopback-guard.js";
 import {
   handleControlUiAvatarRequest,
   handleControlUiHttpRequest,
+  isControlUiRequest,
   type ControlUiRootState,
 } from "./control-ui.js";
 import { applyHookMappings } from "./hooks-mapping.js";
@@ -594,11 +595,16 @@ export function createGatewayHttpServer(opts: {
         }
       }
       if (controlUiEnabled) {
-        // Apply loopback guard ONLY to Control UI requests
-        const guardResult = controlUiLoopbackGuard(req, res);
-        if (!guardResult.allowed) {
-          return; // Request was rejected by guard
+        // Only apply the loopback guard if the request is actually targeting the Control UI.
+        // This prevents blocking other endpoints (e.g. /api/hooks) when strictLoopback is enabled
+        // but the gateway is bound to a non-loopback address.
+        if (isControlUiRequest(req, controlUiBasePath)) {
+          const guardResult = controlUiLoopbackGuard(req, res);
+          if (!guardResult.allowed) {
+            return;
+          }
         }
+
         if (
           handleControlUiAvatarRequest(req, res, {
             basePath: controlUiBasePath,
