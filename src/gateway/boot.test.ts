@@ -63,12 +63,15 @@ describe("runBootOnce", () => {
     await fs.rm(workspaceDir, { recursive: true, force: true });
   });
 
-  it("skips when BOOT.md is empty", async () => {
+  it.each([
+    { title: "empty", content: "   \n", reason: "empty" as const },
+    { title: "whitespace-only", content: "\n\t ", reason: "empty" as const },
+  ])("skips when BOOT.md is $title", async ({ content, reason }) => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-boot-"));
-    await fs.writeFile(path.join(workspaceDir, "BOOT.md"), "   \n", "utf-8");
+    await fs.writeFile(path.join(workspaceDir, "BOOT.md"), content, "utf-8");
     await expect(runBootOnce({ cfg: {}, deps: makeDeps(), workspaceDir })).resolves.toEqual({
       status: "skipped",
-      reason: "empty",
+      reason,
     });
     expect(agentCommand).not.toHaveBeenCalled();
     await fs.rm(workspaceDir, { recursive: true, force: true });
