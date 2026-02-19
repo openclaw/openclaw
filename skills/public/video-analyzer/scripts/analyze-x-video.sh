@@ -1,10 +1,10 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # X/Twitter Video Tweet Analysis
 # Workflow: Download video → Extract audio → Speech recognition → Text summary
 #
 
-set -e
+set -euo pipefail
 
 # Configuration
 DOWNLOAD_DIR="${HOME}/.openclaw/workspace/media/x-videos"

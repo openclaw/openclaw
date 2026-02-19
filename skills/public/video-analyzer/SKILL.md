@@ -1,19 +1,27 @@
 ---
 name: video-analyzer
 description: Download and analyze videos from X/Twitter posts. Extracts video, converts audio to text using Whisper, and provides comprehensive analysis including spoken content and tweet text. Use when: (1) User sends an X/Twitter video URL and wants a summary, (2) Need to extract spoken content from X video posts, (3) Analyzing video tweets that contain audio narration.
-dependencies:
-  system:
-    - yt-dlp
-    - ffmpeg
-  python:
-    - openai-whisper
-requirements_note: |
-  This skill requires external tools that must be installed separately:
-  1. yt-dlp: pip3 install yt-dlp
-  2. ffmpeg: brew install ffmpeg (macOS) or apt install ffmpeg (Linux)
-  3. whisper: pip3 install openai-whisper
-  
-  The first run will download Whisper models (~150MB) automatically.
+metadata:
+  openclaw:
+    emoji: "🎬"
+    requires:
+      bins: ["yt-dlp", "ffmpeg", "whisper"]
+    install:
+      - id: "brew-ytdlp"
+        kind: "brew"
+        formula: "yt-dlp"
+        bins: ["yt-dlp"]
+        label: "Install yt-dlp via Homebrew"
+      - id: "brew-ffmpeg"
+        kind: "brew"
+        formula: "ffmpeg"
+        bins: ["ffmpeg"]
+        label: "Install ffmpeg via Homebrew"
+      - id: "pip-whisper"
+        kind: "shell"
+        command: "pip3 install openai-whisper"
+        bins: ["whisper"]
+        label: "Install OpenAI Whisper via pip"
 ---
 
 # Video Analyzer
