@@ -12,6 +12,7 @@ import type { MentionTarget } from "./mention.js";
 import { buildMentionedCardContent } from "./mention.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { sendMarkdownCardFeishu, sendMessageFeishu } from "./send.js";
+import { createFeishuAgentCardRenderer } from "./agent-card.js";
 import { FeishuStreamingSession } from "./streaming-card.js";
 import { resolveReceiveIdType } from "./targets.js";
 import { addTypingIndicator, removeTypingIndicator, type TypingIndicatorState } from "./typing.js";
@@ -74,7 +75,20 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const chunkMode = core.channel.text.resolveChunkMode(cfg, "feishu");
   const tableMode = core.channel.text.resolveMarkdownTableMode({ cfg, channel: "feishu" });
   const renderMode = account.config?.renderMode ?? "auto";
-  const streamingEnabled = account.config?.streaming !== false && renderMode !== "raw";
+  const cardRenderer = account.config?.cardRenderer ?? "default";
+  const useAgentCardRenderer = renderMode === "card" && cardRenderer === "agent";
+  const streamingEnabled =
+    !useAgentCardRenderer && account.config?.streaming !== false && renderMode !== "raw";
+
+  const agentCardRenderer = useAgentCardRenderer
+    ? createFeishuAgentCardRenderer({
+        cfg,
+        chatId,
+        replyToMessageId,
+        mentionTargets,
+        accountId,
+      })
+    : null;
 
   let streaming: FeishuStreamingSession | null = null;
   let streamText = "";
@@ -137,6 +151,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         void typingCallbacks.onReplyStart?.();
       },
       deliver: async (payload: ReplyPayload, info) => {
+        if (agentCardRenderer) {
+          await agentCardRenderer.deliver(payload, info);
+          return;
+        }
+
         const text = payload.text ?? "";
         if (!text.trim()) {
           return;
@@ -199,10 +218,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         params.runtime.error?.(
           `feishu[${account.accountId}] ${info.kind} reply failed: ${String(error)}`,
         );
+        await agentCardRenderer?.onError();
         await closeStreaming();
         typingCallbacks.onIdle?.();
       },
       onIdle: async () => {
+        await agentCardRenderer?.finalize();
         await closeStreaming();
         typingCallbacks.onIdle?.();
       },
@@ -232,7 +253,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               }
             });
           }
-        : undefined,
+        : agentCardRenderer
+          ? (payload: ReplyPayload) => {
+              void agentCardRenderer.onPartialReply(payload);
+            }
+          : undefined,
     },
     markDispatchIdle,
   };
