@@ -153,12 +153,12 @@ export class TuiStreamAssembler {
     const streamedSawNonTextContentBlocks = state.sawNonTextContentBlocks;
     this.updateRunState(state, message, showThinking);
     const finalComposed = state.displayText;
+    const isBoundaryDropSubset = isDroppedBoundaryTextBlockSubset({
+      streamedTextBlocks,
+      finalTextBlocks: state.contentBlocks,
+    });
     const shouldKeepStreamedText =
-      streamedSawNonTextContentBlocks &&
-      isDroppedBoundaryTextBlockSubset({
-        streamedTextBlocks,
-        finalTextBlocks: state.contentBlocks,
-      });
+      (streamedSawNonTextContentBlocks || streamedTextBlocks.length > 0) && isBoundaryDropSubset;
     const finalText = resolveFinalAssistantText({
       finalText: shouldKeepStreamedText ? streamedDisplayText : finalComposed,
       streamedText: streamedDisplayText,
