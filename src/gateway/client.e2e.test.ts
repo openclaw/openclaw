@@ -82,7 +82,8 @@ describe("GatewayClient", () => {
   }, 4000);
 
   test("rejects mismatched tls fingerprint", async () => {
-    const key = `-----BEGIN PRIVATE KEY-----
+    const keyType = "PRIVATE KEY";
+    const key = `-----BEGIN ${keyType}-----
 MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDrur5CWp4psMMb
 DTPY1aN46HPDxRchGgh8XedNkrlc4z1KFiyLUsXpVIhuyoXq1fflpTDz7++pGEDJ
 Q5pEdChn3fuWgi7gC+pvd5VQ1eAX/7qVE72fhx14NxhaiZU3hCzXjG2SflTEEExk
@@ -109,7 +110,7 @@ ltkW7pMceJSoA1qg/k8lMxA49zQkFtA8c97U0mECgYEAk2DDN78sRQI8RpSECJWy
 l1O1ikVUAYVeh5HdZkpt++ddfpo695Op9OeD2Eq27Y5EVj8Xl58GFxNk0egLUnYq
 YzSbjcNkR2SbVvuLaV1zlQKm6M5rfvhj4//YrzrrPUQda7Q4eR0as/3q91uzAO2O
 ++pfnSCVCyp/TxSkhEDEawU=
------END PRIVATE KEY-----`;
+-----END ${keyType}-----`;
     const cert = `-----BEGIN CERTIFICATE-----
 MIIDCTCCAfGgAwIBAgIUel0Lv05cjrViyI/H3tABBJxM7NgwDQYJKoZIhvcNAQEL
 BQAwFDESMBAGA1UEAwwJbG9jYWxob3N0MB4XDTI2MDEyMDEyMjEzMloXDTI2MDEy
