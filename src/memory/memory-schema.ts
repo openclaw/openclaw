@@ -66,6 +66,11 @@ export function ensureMemoryIndexSchema(params: {
           `  end_line UNINDEXED\n` +
           `);`,
       );
+      // Probe: verify the fts5 module is actually loaded, not just that the
+      // table definition exists from a previous SQLite build.  IF NOT EXISTS
+      // silently succeeds when the table rows are present even if the fts5
+      // extension is missing, causing a false-positive "fts ready" status.
+      params.db.prepare(`SELECT count(*) FROM ${params.ftsTable} LIMIT 1`).get();
       ftsAvailable = true;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
