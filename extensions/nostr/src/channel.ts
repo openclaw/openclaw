@@ -734,6 +734,8 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
           };
           const traceId = createRunTraceId(payload.eventId);
           let blockSeq = 0;
+          let terminalEmitted = false;
+          let streamedTextBuffer = "";
           const emitStatus = payload.kind === 25802;
           const safeSendStatus = async (
             state: "thinking" | "tool_use" | "done",
@@ -778,7 +780,15 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                 deliver: async (outbound, info: { kind: "tool" | "block" | "final" }) => {
                   const responseText = (outbound as { text?: string } | undefined)?.text ?? "";
                   const trimmedResponse = responseText.trim();
-                  if (!trimmedResponse) {
+                  if (info.kind === "block" && trimmedResponse) {
+                    streamedTextBuffer = streamedTextBuffer
+                      ? `${streamedTextBuffer}${trimmedResponse}`
+                      : trimmedResponse;
+                  }
+                  if (info.kind === "final") {
+                    terminalEmitted = true;
+                  }
+                  if (!trimmedResponse && info.kind !== "final") {
                     return;
                   }
                   if (info.kind === "final") {
@@ -819,7 +829,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                           }
                         : {
                             ver: 1,
-                            text: trimmedResponse,
+                            text: trimmedResponse || streamedTextBuffer || "Done.",
                             timestamp,
                             timestamp_ms: timestampMs,
                             run_id: payload.eventId,
@@ -902,6 +912,58 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                 },
               },
             });
+
+            if (!terminalEmitted) {
+              const fallbackText = streamedTextBuffer.trim();
+              if (fallbackText.length > 0) {
+                await safeSendStatus("done", {
+                  info: "run_completed_fallback",
+                  progress: 100,
+                });
+                await reply(
+                  {
+                    ver: 1,
+                    text: fallbackText,
+                    timestamp: Math.floor(Date.now() / 1000),
+                    timestamp_ms: Date.now(),
+                    run_id: payload.eventId,
+                    session_id: sessionId,
+                    trace_id: traceId,
+                  },
+                  {
+                    sessionId,
+                    inReplyTo: payload.eventId,
+                  },
+                  NIP63_RESPONSE_KIND_FINAL,
+                );
+                terminalEmitted = true;
+                ctx.log?.debug?.(
+                  `[${account.accountId}] Nostr emitted fallback final for run ${payload.eventId}`,
+                );
+              } else {
+                await reply(
+                  {
+                    ver: 1,
+                    code: "EMPTY_RESPONSE",
+                    message: "No response text produced",
+                    timestamp: Math.floor(Date.now() / 1000),
+                    timestamp_ms: Date.now(),
+                    run_id: payload.eventId,
+                    session_id: sessionId,
+                    trace_id: traceId,
+                  },
+                  {
+                    sessionId,
+                    inReplyTo: payload.eventId,
+                  },
+                  NIP63_RESPONSE_KIND_ERROR,
+                );
+                terminalEmitted = true;
+                ctx.log?.warn?.(
+                  `[${account.accountId}] Nostr emitted EMPTY_RESPONSE for run ${payload.eventId}`,
+                );
+              }
+            }
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
             ctx.log?.error?.(`[${account.accountId}] Nostr run failed: ${message}`);
