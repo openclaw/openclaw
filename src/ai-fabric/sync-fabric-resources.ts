@@ -235,6 +235,42 @@ export async function disconnectFabricResources(params: {
 }
 
 // ---------------------------------------------------------------------------
+// Connection status (read-only filesystem check)
+// ---------------------------------------------------------------------------
+
+export type FabricConnectionStatus = {
+  connected: boolean;
+  mcpServers: number;
+  skills: number;
+  commands: number;
+};
+
+/**
+ * Check whether AI Fabric resources are currently connected to the
+ * Claude CLI workspace. Pure read-only — no API calls, no side-effects.
+ *
+ * Reusable across: plugins, CLI, gateway, health checks.
+ */
+export async function getFabricConnectionStatus(params: {
+  workspaceDir: string;
+}): Promise<FabricConnectionStatus> {
+  const { workspaceDir } = params;
+
+  const [mcpServers, skills, commands] = await Promise.all([
+    countMcpInSettings(workspaceDir),
+    countFabricSkills(workspaceDir),
+    countSyncedCommands(workspaceDir),
+  ]);
+
+  return {
+    connected: mcpServers > 0 || skills > 0 || commands > 0,
+    mcpServers,
+    skills,
+    commands,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -261,6 +297,27 @@ async function countSyncedCommands(workspaceDir: string): Promise<number> {
     // Directory doesn't exist
   }
   return count;
+}
+
+async function countMcpInSettings(workspaceDir: string): Promise<number> {
+  const settingsPath = path.join(workspaceDir, ".claude", "settings.json");
+  try {
+    const raw = await fsp.readFile(settingsPath, "utf-8");
+    const parsed = JSON.parse(raw) as { mcpServers?: Record<string, unknown> };
+    return Object.keys(parsed.mcpServers ?? {}).length;
+  } catch {
+    return 0;
+  }
+}
+
+async function countFabricSkills(workspaceDir: string): Promise<number> {
+  const skillsDir = path.join(workspaceDir, "skills");
+  try {
+    const entries = await fsp.readdir(skillsDir);
+    return entries.filter((e) => e.startsWith("fabric-")).length;
+  } catch {
+    return 0;
+  }
 }
 
 async function buildSkillTargets(

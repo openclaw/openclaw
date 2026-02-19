@@ -210,6 +210,29 @@ export function formatStatusOutput(
 }
 
 // ---------------------------------------------------------------------------
+// Connection status formatting
+// ---------------------------------------------------------------------------
+
+export function formatConnectionStatus(status: {
+  connected: boolean;
+  mcpServers: number;
+  skills: number;
+  commands: number;
+}): string {
+  const icon = status.connected ? "\u2713" : "\u2717";
+  const label = status.connected ? "Connected" : "Disconnected";
+  const lines = [`Bot connection: ${icon} ${label}`];
+
+  if (status.connected) {
+    lines.push(`  ${status.mcpServers} MCP servers in settings.json`);
+    lines.push(`  ${status.skills} fabric skills`);
+    lines.push(`  ${status.commands} synced commands`);
+  }
+
+  return lines.join("\n");
+}
+
+// ---------------------------------------------------------------------------
 // Shared credential validation
 // ---------------------------------------------------------------------------
 
@@ -267,7 +290,12 @@ export default function register(api: OpenClawPluginApi) {
       const nameFilter = ctx.args?.trim() || undefined;
       const authParams = { keyId, secret };
 
-      const [agentResult, mcpResult, systemResult] = await Promise.all([
+      const workspaceDir = await resolveWorkspaceDir(ctx.config);
+
+      const { getFabricConnectionStatus } =
+        await import("../../src/ai-fabric/sync-fabric-resources.js");
+
+      const [agentResult, mcpResult, systemResult, connStatus] = await Promise.all([
         getAgentStatus({
           projectId,
           auth: authParams,
@@ -276,10 +304,16 @@ export default function register(api: OpenClawPluginApi) {
         }),
         getMcpServerStatus({ projectId, auth: authParams, nameFilter }),
         getAgentSystemStatus({ projectId, auth: authParams, nameFilter }),
+        getFabricConnectionStatus({ workspaceDir }),
       ]);
 
+      const cloudStatus = formatStatusOutput(agentResult, mcpResult, systemResult);
+      const localStatus = formatConnectionStatus(connStatus);
+
       const text =
-        formatStatusOutput(agentResult, mcpResult, systemResult) +
+        cloudStatus +
+        "\n\n" +
+        localStatus +
         "\n\nRun /agents_on to connect, /agents_off to disconnect.";
 
       return { text };
