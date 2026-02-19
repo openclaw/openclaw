@@ -338,8 +338,12 @@ export async function runEmbeddedAttempt(
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         tools = (await aeon.filterToolsSemantic(params.prompt, tools)) as any;
       }
-    } catch {
-      // aeon-memory not installed — standard OpenClaw engine continues
+    } catch (e: unknown) {
+      const code = e instanceof Error ? (e as NodeJS.ErrnoException).code : undefined;
+      if (code !== "ERR_MODULE_NOT_FOUND" && code !== "MODULE_NOT_FOUND") {
+        console.error("🚨 [AeonMemory] Semantic filter failed, falling back to all tools:", e);
+      }
+      // tools remains unmodified, pipeline continues safely
     }
     logToolSchemasForGoogle({ tools, provider: params.provider });
 

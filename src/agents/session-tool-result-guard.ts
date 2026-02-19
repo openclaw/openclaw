@@ -8,7 +8,16 @@ import type {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let AeonMemoryPlugin: any = null;
 // @ts-ignore: Optional dependency for ultra-low-latency memory
-import("aeon-memory").then(m => { AeonMemoryPlugin = m.AeonMemory; }).catch(() => {});
+import("aeon-memory")
+  .then((m) => {
+    AeonMemoryPlugin = m.AeonMemory;
+  })
+  .catch((e: unknown) => {
+    const code = e instanceof Error ? (e as NodeJS.ErrnoException).code : undefined;
+    if (code !== "ERR_MODULE_NOT_FOUND" && code !== "MODULE_NOT_FOUND") {
+      console.error("🚨 [AeonMemory] Load failed:", e);
+    }
+  });
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { HARD_MAX_TOOL_RESULT_CHARS } from "./pi-embedded-runner/tool-result-truncation.js";
 import { makeMissingToolResult, sanitizeToolCallInputs } from "./session-transcript-repair.js";
@@ -167,7 +176,10 @@ export function installSessionToolResultGuard(
           if (AeonMemoryPlugin) {
             const aeon = AeonMemoryPlugin.getInstance();
             if (aeon && aeon.isAvailable()) {
-              const sid = (sessionManager as { getSessionId?: () => string }).getSessionId?.() ?? "unknown";
+              const sid = (sessionManager as { getSessionId?: () => string }).getSessionId?.();
+              if (!sid) {
+                throw new Error("Cannot persist to Aeon: sessionId unavailable");
+              }
               aeon.saveTurn(sid, flushed);
             } else {
               originalAppend(flushed as never);
@@ -218,7 +230,10 @@ export function installSessionToolResultGuard(
       if (AeonMemoryPlugin) {
         const aeon = AeonMemoryPlugin.getInstance();
         if (aeon && aeon.isAvailable()) {
-          const sid = (sessionManager as { getSessionId?: () => string }).getSessionId?.() ?? "unknown";
+          const sid = (sessionManager as { getSessionId?: () => string }).getSessionId?.();
+          if (!sid) {
+            throw new Error("Cannot persist to Aeon: sessionId unavailable");
+          }
           aeon.saveTurn(sid, persisted);
           return `aeon-${Date.now()}`;
         }
@@ -250,7 +265,10 @@ export function installSessionToolResultGuard(
     if (AeonMemoryPlugin) {
       const aeon = AeonMemoryPlugin.getInstance();
       if (aeon && aeon.isAvailable()) {
-        const sid = (sessionManager as { getSessionId?: () => string }).getSessionId?.() ?? "unknown";
+        const sid = (sessionManager as { getSessionId?: () => string }).getSessionId?.();
+        if (!sid) {
+          throw new Error("Cannot persist to Aeon: sessionId unavailable");
+        }
         aeon.saveTurn(sid, finalMessage);
         result = `aeon-${Date.now()}`;
       } else {

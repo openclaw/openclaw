@@ -8,7 +8,12 @@ import("aeon-memory")
   .then((m) => {
     AeonMemoryPlugin = m.AeonMemory;
   })
-  .catch((e) => console.error("🚨 AEON LOAD ERROR (chat.ts):", e));
+  .catch((e: unknown) => {
+    const code = e instanceof Error ? (e as NodeJS.ErrnoException).code : undefined;
+    if (code !== "ERR_MODULE_NOT_FOUND" && code !== "MODULE_NOT_FOUND") {
+      console.error("🚨 [AeonMemory] Load failed:", e);
+    }
+  });
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveThinkingDefault } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";

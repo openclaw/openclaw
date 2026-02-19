@@ -77,8 +77,8 @@ importers:
         specifier: 7.0.0-rc.9
         version: 7.0.0-rc.9(audio-decode@2.2.3)(sharp@0.34.5)
       aeon-memory:
-        specifier: 1.0.2
-        version: 1.0.2
+        specifier: 1.0.3
+        version: 1.0.3
       ajv:
         specifier: ^8.18.0
         version: 8.18.0
@@ -3234,11 +3234,9 @@ packages:
     engines: {node: '>=0.4.0'}
     hasBin: true
 
-  aeon-memory@1.0.2:
-    resolution: {integrity: sha512-6E1K2NntAZWgVz+OZ7Nvh+c+IcUlXvFHYho0bI4NEkp8cTfMu0/3z1YXVf+XscJQq6uk5yQAR68nuaiEYPDmWQ==}
+  aeon-memory@1.0.3:
+    resolution: {integrity: sha512-lbvwvFbrrq2A8VHKTpCGrjNfE2mD29wbdAQGQ547B7IMxaDSmzkuEp6qhtXSqCt6azIbUSbPEIQkWdfKCJvQkg==}
     engines: {node: '>=18.0.0'}
-    cpu: [arm64]
-    os: [darwin]
 
   agent-base@7.1.4:
     resolution: {integrity: sha512-MnA+YT8fwfJPgBx3m60MNqakm30XOkyIoH1y6huTQvC0PwZG7ki8NacLBcrPbNoo8vEZy7Jpuk7+jMO+CUovTQ==}
@@ -8897,7 +8895,7 @@ snapshots:
 
   acorn@8.15.0: {}
 
-  aeon-memory@1.0.2:
+  aeon-memory@1.0.3:
     dependencies:
       node-addon-api: 8.5.0
 

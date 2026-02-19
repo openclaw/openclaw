@@ -9,7 +9,16 @@ import {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let AeonMemoryPlugin: any = null;
 // @ts-ignore: Optional dependency for ultra-low-latency memory
-import("aeon-memory").then(m => { AeonMemoryPlugin = m.AeonMemory; }).catch(() => {});
+import("aeon-memory")
+  .then((m) => {
+    AeonMemoryPlugin = m.AeonMemory;
+  })
+  .catch((e: unknown) => {
+    const code = e instanceof Error ? (e as NodeJS.ErrnoException).code : undefined;
+    if (code !== "ERR_MODULE_NOT_FOUND" && code !== "MODULE_NOT_FOUND") {
+      console.error("🚨 [AeonMemory] Load failed:", e);
+    }
+  });
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
 import { extractToolCallNames, hasToolCall } from "../utils/transcript-tools.js";
