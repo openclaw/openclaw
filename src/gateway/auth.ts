@@ -14,14 +14,22 @@ import {
 import {
   isLoopbackAddress,
   isTrustedProxyAddress,
+  resolveHostName,
   parseForwardedForClientIp,
   resolveGatewayClientIp,
 } from "./net.js";
 
 export type ResolvedGatewayAuthMode = "none" | "token" | "password" | "trusted-proxy";
+export type ResolvedGatewayAuthModeSource =
+  | "override"
+  | "config"
+  | "password"
+  | "token"
+  | "default";
 
 export type ResolvedGatewayAuth = {
   mode: ResolvedGatewayAuthMode;
+  modeSource?: ResolvedGatewayAuthModeSource;
   token?: string;
   password?: string;
   allowTailscale: boolean;
@@ -54,21 +62,6 @@ type TailscaleWhoisLookup = (ip: string) => Promise<TailscaleWhoisIdentity | nul
 
 function normalizeLogin(login: string): string {
   return login.trim().toLowerCase();
-}
-
-function getHostName(hostHeader?: string): string {
-  const host = (hostHeader ?? "").trim().toLowerCase();
-  if (!host) {
-    return "";
-  }
-  if (host.startsWith("[")) {
-    const end = host.indexOf("]");
-    if (end !== -1) {
-      return host.slice(1, end);
-    }
-  }
-  const [name] = host.split(":");
-  return name ?? "";
 }
 
 function headerValue(value: string | string[] | undefined): string | undefined {
@@ -107,7 +100,7 @@ export function isLocalDirectRequest(req?: IncomingMessage, trustedProxies?: str
     return false;
   }
 
-  const host = getHostName(req.headers?.host);
+  const host = resolveHostName(req.headers?.host);
   const hostIsLocal = host === "localhost" || host === "127.0.0.1" || host === "::1";
   const hostIsTailscaleServe = host.endsWith(".ts.net");
 
@@ -192,24 +185,55 @@ async function resolveVerifiedTailscaleUser(params: {
 
 export function resolveGatewayAuth(params: {
   authConfig?: GatewayAuthConfig | null;
+  authOverride?: GatewayAuthConfig | null;
   env?: NodeJS.ProcessEnv;
   tailscaleMode?: GatewayTailscaleMode;
 }): ResolvedGatewayAuth {
-  const authConfig = params.authConfig ?? {};
+  const baseAuthConfig = params.authConfig ?? {};
+  const authOverride = params.authOverride ?? undefined;
+  const authConfig: GatewayAuthConfig = { ...baseAuthConfig };
+  if (authOverride) {
+    if (authOverride.mode !== undefined) {
+      authConfig.mode = authOverride.mode;
+    }
+    if (authOverride.token !== undefined) {
+      authConfig.token = authOverride.token;
+    }
+    if (authOverride.password !== undefined) {
+      authConfig.password = authOverride.password;
+    }
+    if (authOverride.allowTailscale !== undefined) {
+      authConfig.allowTailscale = authOverride.allowTailscale;
+    }
+    if (authOverride.rateLimit !== undefined) {
+      authConfig.rateLimit = authOverride.rateLimit;
+    }
+    if (authOverride.trustedProxy !== undefined) {
+      authConfig.trustedProxy = authOverride.trustedProxy;
+    }
+  }
   const env = params.env ?? process.env;
   const token = authConfig.token ?? env.OPENCLAW_GATEWAY_TOKEN ?? undefined;
   const password = authConfig.password ?? env.OPENCLAW_GATEWAY_PASSWORD ?? undefined;
   const trustedProxy = authConfig.trustedProxy;
 
   let mode: ResolvedGatewayAuth["mode"];
-  if (authConfig.mode) {
+  let modeSource: ResolvedGatewayAuth["modeSource"];
+  if (authOverride?.mode !== undefined) {
+    mode = authOverride.mode;
+    modeSource = "override";
+  } else if (authConfig.mode) {
     mode = authConfig.mode;
+    modeSource = "config";
   } else if (password) {
     mode = "password";
+    modeSource = "password";
   } else if (token) {
     mode = "token";
+    modeSource = "token";
   } else {
-    mode = "none";
+    mode = "token";
+    modeSource = "default";
   }
 
   const allowTailscale =
@@ -218,6 +242,7 @@ export function resolveGatewayAuth(params: {
 
   return {
     mode,
+    modeSource,
     token,
     password,
     allowTailscale,
@@ -329,6 +354,10 @@ export async function authorizeGatewayConnect(params: {
       return { ok: true, method: "trusted-proxy", user: result.user };
     }
     return { ok: false, reason: result.reason };
+  }
+
+  if (auth.mode === "none") {
+    return { ok: true, method: "none" };
   }
 
   const limiter = params.rateLimiter;

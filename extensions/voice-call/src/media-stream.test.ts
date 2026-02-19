@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { MediaStreamHandler } from "./media-stream.js";
 import type {
   OpenAIRealtimeSTTProvider,
   RealtimeSTTSession,
 } from "./providers/stt-openai-realtime.js";
-import { MediaStreamHandler } from "./media-stream.js";
 
 const createStubSession = (): RealtimeSTTSession => ({
   connect: async () => {},

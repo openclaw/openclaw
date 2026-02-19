@@ -1,13 +1,13 @@
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveAgentConfig } from "../agent-scope.js";
+import { compileGlobPatterns, matchesAnyGlobPattern } from "../glob-pattern.js";
+import { expandToolGroups } from "../tool-policy.js";
+import { DEFAULT_TOOL_ALLOW, DEFAULT_TOOL_DENY } from "./constants.js";
 import type {
   SandboxToolPolicy,
   SandboxToolPolicyResolved,
   SandboxToolPolicySource,
 } from "./types.js";
-import { resolveAgentConfig } from "../agent-scope.js";
-import { compileGlobPatterns, matchesAnyGlobPattern } from "../glob-pattern.js";
-import { expandToolGroups } from "../tool-policy.js";
-import { DEFAULT_TOOL_ALLOW, DEFAULT_TOOL_DENY } from "./constants.js";
 
 function normalizeGlob(value: string) {
   return value.trim().toLowerCase();
@@ -89,6 +89,9 @@ export function resolveSandboxToolPolicyForAgent(
   // `image` is essential for multimodal workflows; always include it in sandboxed
   // sessions unless explicitly denied.
   if (
+    // Empty allowlist means "allow all" for `isToolAllowed`, so don't inject a
+    // single tool that would accidentally turn it into an explicit allowlist.
+    expandedAllow.length > 0 &&
     !expandedDeny.map((v) => v.toLowerCase()).includes("image") &&
     !expandedAllow.map((v) => v.toLowerCase()).includes("image")
   ) {

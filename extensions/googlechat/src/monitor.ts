@@ -3,17 +3,13 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import {
   createReplyPrefixOptions,
   readJsonBodyWithLimit,
+  registerWebhookTarget,
+  rejectNonPostWebhookRequest,
+  resolveWebhookPath,
+  resolveWebhookTargets,
   requestBodyErrorToText,
   resolveMentionGatingWithBypass,
 } from "openclaw/plugin-sdk";
-import type {
-  GoogleChatAnnotation,
-  GoogleChatAttachment,
-  GoogleChatEvent,
-  GoogleChatSpace,
-  GoogleChatMessage,
-  GoogleChatUser,
-} from "./types.js";
 import { type ResolvedGoogleChatAccount } from "./accounts.js";
 import {
   downloadGoogleChatMedia,
@@ -23,6 +19,14 @@ import {
 } from "./api.js";
 import { verifyGoogleChatRequest, type GoogleChatAudienceType } from "./auth.js";
 import { getGoogleChatRuntime } from "./runtime.js";
+import type {
+  GoogleChatAnnotation,
+  GoogleChatAttachment,
+  GoogleChatEvent,
+  GoogleChatSpace,
+  GoogleChatMessage,
+  GoogleChatUser,
+} from "./types.js";
 
 export type GoogleChatRuntimeEnv = {
   log?: (message: string) => void;
@@ -86,48 +90,8 @@ function warnDeprecatedUsersEmailEntries(
   );
 }
 
-function normalizeWebhookPath(raw: string): string {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return "/";
-  }
-  const withSlash = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
-  if (withSlash.length > 1 && withSlash.endsWith("/")) {
-    return withSlash.slice(0, -1);
-  }
-  return withSlash;
-}
-
-function resolveWebhookPath(webhookPath?: string, webhookUrl?: string): string | null {
-  const trimmedPath = webhookPath?.trim();
-  if (trimmedPath) {
-    return normalizeWebhookPath(trimmedPath);
-  }
-  if (webhookUrl?.trim()) {
-    try {
-      const parsed = new URL(webhookUrl);
-      return normalizeWebhookPath(parsed.pathname || "/");
-    } catch {
-      return null;
-    }
-  }
-  return "/googlechat";
-}
-
 export function registerGoogleChatWebhookTarget(target: WebhookTarget): () => void {
-  const key = normalizeWebhookPath(target.path);
-  const normalizedTarget = { ...target, path: key };
-  const existing = webhookTargets.get(key) ?? [];
-  const next = [...existing, normalizedTarget];
-  webhookTargets.set(key, next);
-  return () => {
-    const updated = (webhookTargets.get(key) ?? []).filter((entry) => entry !== normalizedTarget);
-    if (updated.length > 0) {
-      webhookTargets.set(key, updated);
-    } else {
-      webhookTargets.delete(key);
-    }
-  };
+  return registerWebhookTarget(webhookTargets, target).unregister;
 }
 
 function normalizeAudienceType(value?: string | null): GoogleChatAudienceType | undefined {
@@ -149,17 +113,13 @@ export async function handleGoogleChatWebhookRequest(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<boolean> {
-  const url = new URL(req.url ?? "/", "http://localhost");
-  const path = normalizeWebhookPath(url.pathname);
-  const targets = webhookTargets.get(path);
-  if (!targets || targets.length === 0) {
+  const resolved = resolveWebhookTargets(req, webhookTargets);
+  if (!resolved) {
     return false;
   }
+  const { targets } = resolved;
 
-  if (req.method !== "POST") {
-    res.statusCode = 405;
-    res.setHeader("Allow", "POST");
-    res.end("Method Not Allowed");
+  if (rejectNonPostWebhookRequest(req, res)) {
     return true;
   }
 
@@ -933,7 +893,11 @@ async function uploadAttachmentForReply(params: {
 
 export function monitorGoogleChatProvider(options: GoogleChatMonitorOptions): () => void {
   const core = getGoogleChatRuntime();
-  const webhookPath = resolveWebhookPath(options.webhookPath, options.webhookUrl);
+  const webhookPath = resolveWebhookPath({
+    webhookPath: options.webhookPath,
+    webhookUrl: options.webhookUrl,
+    defaultPath: "/googlechat",
+  });
   if (!webhookPath) {
     options.runtime.error?.(`[${options.account.accountId}] invalid webhook path`);
     return () => {};
@@ -968,8 +932,11 @@ export function resolveGoogleChatWebhookPath(params: {
   account: ResolvedGoogleChatAccount;
 }): string {
   return (
-    resolveWebhookPath(params.account.config.webhookPath, params.account.config.webhookUrl) ??
-    "/googlechat"
+    resolveWebhookPath({
+      webhookPath: params.account.config.webhookPath,
+      webhookUrl: params.account.config.webhookUrl,
+      defaultPath: "/googlechat",
+    }) ?? "/googlechat"
   );
 }
 

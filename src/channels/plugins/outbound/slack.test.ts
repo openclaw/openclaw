@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../../config/config.js";
 
 vi.mock("../../../slack/send.js", () => ({
   sendMessageSlack: vi.fn().mockResolvedValue({ messageId: "1234.5678", channelId: "C123" }),
@@ -12,6 +13,24 @@ import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { sendMessageSlack } from "../../../slack/send.js";
 import { slackOutbound } from "./slack.js";
 
+const sendSlackText = async (ctx: {
+  to: string;
+  text: string;
+  accountId: string;
+  replyToId: string;
+  identity?: {
+    name?: string;
+    avatarUrl?: string;
+    emoji?: string;
+  };
+}) => {
+  const sendText = slackOutbound.sendText as NonNullable<typeof slackOutbound.sendText>;
+  return await sendText({
+    cfg: {} as OpenClawConfig,
+    ...ctx,
+  });
+};
+
 describe("slack outbound hook wiring", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -24,7 +43,7 @@ describe("slack outbound hook wiring", () => {
   it("calls send without hooks when no hooks registered", async () => {
     vi.mocked(getGlobalHookRunner).mockReturnValue(null);
 
-    await slackOutbound.sendText({
+    await sendSlackText({
       to: "C123",
       text: "hello",
       accountId: "default",
@@ -40,7 +59,7 @@ describe("slack outbound hook wiring", () => {
   it("forwards identity opts when present", async () => {
     vi.mocked(getGlobalHookRunner).mockReturnValue(null);
 
-    await slackOutbound.sendText({
+    await sendSlackText({
       to: "C123",
       text: "hello",
       accountId: "default",
@@ -62,7 +81,7 @@ describe("slack outbound hook wiring", () => {
   it("forwards icon_emoji only when icon_url is absent", async () => {
     vi.mocked(getGlobalHookRunner).mockReturnValue(null);
 
-    await slackOutbound.sendText({
+    await sendSlackText({
       to: "C123",
       text: "hello",
       accountId: "default",
@@ -85,7 +104,7 @@ describe("slack outbound hook wiring", () => {
     // oxlint-disable-next-line typescript/no-explicit-any
     vi.mocked(getGlobalHookRunner).mockReturnValue(mockRunner as any);
 
-    await slackOutbound.sendText({
+    await sendSlackText({
       to: "C123",
       text: "hello",
       accountId: "default",
@@ -111,7 +130,7 @@ describe("slack outbound hook wiring", () => {
     // oxlint-disable-next-line typescript/no-explicit-any
     vi.mocked(getGlobalHookRunner).mockReturnValue(mockRunner as any);
 
-    const result = await slackOutbound.sendText({
+    const result = await sendSlackText({
       to: "C123",
       text: "hello",
       accountId: "default",
@@ -130,7 +149,7 @@ describe("slack outbound hook wiring", () => {
     // oxlint-disable-next-line typescript/no-explicit-any
     vi.mocked(getGlobalHookRunner).mockReturnValue(mockRunner as any);
 
-    await slackOutbound.sendText({
+    await sendSlackText({
       to: "C123",
       text: "original",
       accountId: "default",
@@ -151,7 +170,7 @@ describe("slack outbound hook wiring", () => {
     // oxlint-disable-next-line typescript/no-explicit-any
     vi.mocked(getGlobalHookRunner).mockReturnValue(mockRunner as any);
 
-    await slackOutbound.sendText({
+    await sendSlackText({
       to: "C123",
       text: "hello",
       accountId: "default",

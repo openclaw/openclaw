@@ -8,6 +8,7 @@ import java.security.MessageDigest
 import java.security.SecureRandom
 import java.security.cert.CertificateException
 import java.security.cert.X509Certificate
+import java.util.Locale
 import javax.net.ssl.HttpsURLConnection
 import javax.net.ssl.HostnameVerifier
 import javax.net.ssl.SSLContext
@@ -91,9 +92,11 @@ suspend fun probeGatewayTlsFingerprint(
 
   return withContext(Dispatchers.IO) {
     val trustAll =
-      @SuppressLint("CustomX509TrustManager")
+      @SuppressLint("CustomX509TrustManager", "TrustAllX509TrustManager")
       object : X509TrustManager {
+        @SuppressLint("TrustAllX509TrustManager")
         override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
+        @SuppressLint("TrustAllX509TrustManager")
         override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {}
         override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
       }
@@ -144,7 +147,7 @@ private fun sha256Hex(data: ByteArray): String {
   val digest = MessageDigest.getInstance("SHA-256").digest(data)
   val out = StringBuilder(digest.size * 2)
   for (byte in digest) {
-    out.append(String.format("%02x", byte))
+    out.append(String.format(Locale.US, "%02x", byte))
   }
   return out.toString()
 }
@@ -152,5 +155,5 @@ private fun sha256Hex(data: ByteArray): String {
 private fun normalizeFingerprint(raw: String): String {
   val stripped = raw.trim()
     .replace(Regex("^sha-?256\\s*:?\\s*", RegexOption.IGNORE_CASE), "")
-  return stripped.lowercase().filter { it in '0'..'9' || it in 'a'..'f' }
+  return stripped.lowercase(Locale.US).filter { it in '0'..'9' || it in 'a'..'f' }
 }

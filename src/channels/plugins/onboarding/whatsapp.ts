@@ -1,13 +1,11 @@
 import path from "node:path";
-import type { OpenClawConfig } from "../../../config/config.js";
-import type { DmPolicy } from "../../../config/types.js";
-import type { RuntimeEnv } from "../../../runtime.js";
-import type { WizardPrompter } from "../../../wizard/prompts.js";
-import type { ChannelOnboardingAdapter } from "../onboarding-types.js";
 import { loginWeb } from "../../../channel-web.js";
 import { formatCliCommand } from "../../../cli/command-format.js";
+import type { OpenClawConfig } from "../../../config/config.js";
 import { mergeWhatsAppConfig } from "../../../config/merge-config.js";
+import type { DmPolicy } from "../../../config/types.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../routing/session-key.js";
+import type { RuntimeEnv } from "../../../runtime.js";
 import { formatDocsLink } from "../../../terminal/links.js";
 import { normalizeE164, pathExists } from "../../../utils.js";
 import {
@@ -15,7 +13,9 @@ import {
   resolveDefaultWhatsAppAccountId,
   resolveWhatsAppAuthDir,
 } from "../../../web/accounts.js";
-import { promptAccountId } from "./helpers.js";
+import type { WizardPrompter } from "../../../wizard/prompts.js";
+import type { ChannelOnboardingAdapter } from "../onboarding-types.js";
+import { mergeAllowFromEntries, promptAccountId } from "./helpers.js";
 
 const channel = "whatsapp" as const;
 
@@ -72,11 +72,32 @@ async function promptWhatsAppOwnerAllowFrom(params: {
     ...existingAllowFrom
       .filter((item) => item !== "*")
       .map((item) => normalizeE164(item))
-      .filter(Boolean),
+      .filter((item): item is string => typeof item === "string" && item.trim().length > 0),
     normalized,
   ];
-  const allowFrom = [...new Set(merged.filter(Boolean))];
+  const allowFrom = mergeAllowFromEntries(undefined, merged);
   return { normalized, allowFrom };
+}
+
+async function applyWhatsAppOwnerAllowlist(params: {
+  cfg: OpenClawConfig;
+  prompter: WizardPrompter;
+  existingAllowFrom: string[];
+  title: string;
+  messageLines: string[];
+}): Promise<OpenClawConfig> {
+  const { normalized, allowFrom } = await promptWhatsAppOwnerAllowFrom({
+    prompter: params.prompter,
+    existingAllowFrom: params.existingAllowFrom,
+  });
+  let next = setWhatsAppSelfChatMode(params.cfg, true);
+  next = setWhatsAppDmPolicy(next, "allowlist");
+  next = setWhatsAppAllowFrom(next, allowFrom);
+  await params.prompter.note(
+    [...params.messageLines, `- allowFrom includes ${normalized}`].join("\n"),
+    params.title,
+  );
+  return next;
 }
 
 async function promptWhatsAppAllowFrom(
@@ -90,18 +111,13 @@ async function promptWhatsAppAllowFrom(
   const existingLabel = existingAllowFrom.length > 0 ? existingAllowFrom.join(", ") : "unset";
 
   if (options?.forceAllowlist) {
-    const { normalized, allowFrom } = await promptWhatsAppOwnerAllowFrom({
+    return await applyWhatsAppOwnerAllowlist({
+      cfg,
       prompter,
       existingAllowFrom,
+      title: "WhatsApp allowlist",
+      messageLines: ["Allowlist mode enabled."],
     });
-    let next = setWhatsAppSelfChatMode(cfg, true);
-    next = setWhatsAppDmPolicy(next, "allowlist");
-    next = setWhatsAppAllowFrom(next, allowFrom);
-    await prompter.note(
-      ["Allowlist mode enabled.", `- allowFrom includes ${normalized}`].join("\n"),
-      "WhatsApp allowlist",
-    );
-    return next;
   }
 
   await prompter.note(
@@ -127,22 +143,16 @@ async function promptWhatsAppAllowFrom(
   });
 
   if (phoneMode === "personal") {
-    const { normalized, allowFrom } = await promptWhatsAppOwnerAllowFrom({
+    return await applyWhatsAppOwnerAllowlist({
+      cfg,
       prompter,
       existingAllowFrom,
-    });
-    let next = setWhatsAppSelfChatMode(cfg, true);
-    next = setWhatsAppDmPolicy(next, "allowlist");
-    next = setWhatsAppAllowFrom(next, allowFrom);
-    await prompter.note(
-      [
+      title: "WhatsApp personal phone",
+      messageLines: [
         "Personal phone mode enabled.",
         "- dmPolicy set to allowlist (pairing skipped)",
-        `- allowFrom includes ${normalized}`,
-      ].join("\n"),
-      "WhatsApp personal phone",
-    );
-    return next;
+      ],
+    });
   }
 
   const policy = (await prompter.select({
@@ -224,8 +234,10 @@ async function promptWhatsAppAllowFrom(
       .split(/[\n,;]+/g)
       .map((p) => p.trim())
       .filter(Boolean);
-    const normalized = parts.map((part) => (part === "*" ? "*" : normalizeE164(part)));
-    const unique = [...new Set(normalized.filter(Boolean))];
+    const normalized = parts
+      .map((part) => (part === "*" ? "*" : normalizeE164(part)))
+      .filter((part): part is string => typeof part === "string" && part.trim().length > 0);
+    const unique = mergeAllowFromEntries(undefined, normalized);
     next = setWhatsAppAllowFrom(next, unique);
   }
 

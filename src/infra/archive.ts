@@ -1,10 +1,15 @@
-import JSZip from "jszip";
 import { createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import JSZip from "jszip";
 import * as tar from "tar";
+import {
+  resolveArchiveOutputPath,
+  stripArchivePath,
+  validateArchiveEntryPath,
+} from "./archive-path.js";
 
 export type ArchiveKind = "tar" | "zip";
 
@@ -99,64 +104,6 @@ export async function withTimeout<T>(
       clearTimeout(timeoutId);
     }
   }
-}
-
-function resolveSafeBaseDir(destDir: string): string {
-  const resolved = path.resolve(destDir);
-  return resolved.endsWith(path.sep) ? resolved : `${resolved}${path.sep}`;
-}
-
-// Path hygiene.
-function normalizeArchivePath(raw: string): string {
-  // Archives may contain Windows separators; treat them as separators.
-  return raw.replaceAll("\\", "/");
-}
-
-function isWindowsDrivePath(p: string): boolean {
-  return /^[a-zA-Z]:[\\/]/.test(p);
-}
-
-function validateArchiveEntryPath(entryPath: string): void {
-  if (!entryPath || entryPath === "." || entryPath === "./") {
-    return;
-  }
-  if (isWindowsDrivePath(entryPath)) {
-    throw new Error(`archive entry uses a drive path: ${entryPath}`);
-  }
-  const normalized = path.posix.normalize(normalizeArchivePath(entryPath));
-  if (normalized === ".." || normalized.startsWith("../")) {
-    throw new Error(`archive entry escapes destination: ${entryPath}`);
-  }
-  if (path.posix.isAbsolute(normalized) || normalized.startsWith("//")) {
-    throw new Error(`archive entry is absolute: ${entryPath}`);
-  }
-}
-
-function stripArchivePath(entryPath: string, stripComponents: number): string | null {
-  const raw = normalizeArchivePath(entryPath);
-  if (!raw || raw === "." || raw === "./") {
-    return null;
-  }
-
-  // Important: mimic tar --strip-components semantics (raw segments before
-  // normalization) so strip-induced escapes like "a/../b" are not hidden.
-  const parts = raw.split("/").filter((part) => part.length > 0 && part !== ".");
-  const strip = Math.max(0, Math.floor(stripComponents));
-  const stripped = strip === 0 ? parts.join("/") : parts.slice(strip).join("/");
-  const result = path.posix.normalize(stripped);
-  if (!result || result === "." || result === "./") {
-    return null;
-  }
-  return result;
-}
-
-function resolveCheckedOutPath(destDir: string, relPath: string, original: string): string {
-  const safeBase = resolveSafeBaseDir(destDir);
-  const outPath = path.resolve(destDir, relPath);
-  if (!outPath.startsWith(safeBase)) {
-    throw new Error(`archive entry escapes destination: ${original}`);
-  }
-  return outPath;
 }
 
 type ResolvedArchiveExtractLimits = Required<ArchiveExtractLimits>;
@@ -290,7 +237,11 @@ async function extractZip(params: {
     }
     validateArchiveEntryPath(relPath);
 
-    const outPath = resolveCheckedOutPath(params.destDir, relPath, entry.name);
+    const outPath = resolveArchiveOutputPath({
+      rootDir: params.destDir,
+      relPath,
+      originalPath: entry.name,
+    });
     if (entry.dir) {
       await fs.mkdir(outPath, { recursive: true });
       continue;
@@ -383,7 +334,11 @@ export async function extractArchive(params: {
               return;
             }
             validateArchiveEntryPath(relPath);
-            resolveCheckedOutPath(params.destDir, relPath, info.path);
+            resolveArchiveOutputPath({
+              rootDir: params.destDir,
+              relPath,
+              originalPath: info.path,
+            });
 
             if (
               info.type === "SymbolicLink" ||

@@ -1,8 +1,8 @@
-import type { OAuthCredentials, OAuthProvider } from "@mariozechner/pi-ai";
 import { execFileSync, execSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import type { OAuthCredentials, OAuthProvider } from "@mariozechner/pi-ai";
 import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveUserPath } from "../utils.js";
@@ -91,6 +91,37 @@ type ExecFileSyncFn = typeof execFileSync;
 function resolveClaudeCliCredentialsPath(homeDir?: string) {
   const baseDir = homeDir ?? resolveUserPath("~");
   return path.join(baseDir, CLAUDE_CLI_CREDENTIALS_RELATIVE_PATH);
+}
+
+function parseClaudeCliOauthCredential(claudeOauth: unknown): ClaudeCliCredential | null {
+  if (!claudeOauth || typeof claudeOauth !== "object") {
+    return null;
+  }
+  const accessToken = (claudeOauth as Record<string, unknown>).accessToken;
+  const refreshToken = (claudeOauth as Record<string, unknown>).refreshToken;
+  const expiresAt = (claudeOauth as Record<string, unknown>).expiresAt;
+
+  if (typeof accessToken !== "string" || !accessToken) {
+    return null;
+  }
+  if (typeof expiresAt !== "number" || !Number.isFinite(expiresAt) || expiresAt <= 0) {
+    return null;
+  }
+  if (typeof refreshToken === "string" && refreshToken) {
+    return {
+      type: "oauth",
+      provider: "anthropic",
+      access: accessToken,
+      refresh: refreshToken,
+      expires: expiresAt,
+    };
+  }
+  return {
+    type: "token",
+    provider: "anthropic",
+    token: accessToken,
+    expires: expiresAt,
+  };
 }
 
 function resolveCodexCliAuthPath() {
@@ -187,6 +218,13 @@ function readCodexKeychainCredentials(options?: {
 
 function readQwenCliCredentials(options?: { homeDir?: string }): QwenCliCredential | null {
   const credPath = resolveQwenCliCredentialsPath(options?.homeDir);
+  return readPortalCliOauthCredentials(credPath, "qwen-portal");
+}
+
+function readPortalCliOauthCredentials<TProvider extends string>(
+  credPath: string,
+  provider: TProvider,
+): { type: "oauth"; provider: TProvider; access: string; refresh: string; expires: number } | null {
   const raw = loadJsonFile(credPath);
   if (!raw || typeof raw !== "object") {
     return null;
@@ -208,7 +246,7 @@ function readQwenCliCredentials(options?: { homeDir?: string }): QwenCliCredenti
 
   return {
     type: "oauth",
-    provider: "qwen-portal",
+    provider,
     access: accessToken,
     refresh: refreshToken,
     expires: expiresAt,
@@ -217,32 +255,7 @@ function readQwenCliCredentials(options?: { homeDir?: string }): QwenCliCredenti
 
 function readMiniMaxCliCredentials(options?: { homeDir?: string }): MiniMaxCliCredential | null {
   const credPath = resolveMiniMaxCliCredentialsPath(options?.homeDir);
-  const raw = loadJsonFile(credPath);
-  if (!raw || typeof raw !== "object") {
-    return null;
-  }
-  const data = raw as Record<string, unknown>;
-  const accessToken = data.access_token;
-  const refreshToken = data.refresh_token;
-  const expiresAt = data.expiry_date;
-
-  if (typeof accessToken !== "string" || !accessToken) {
-    return null;
-  }
-  if (typeof refreshToken !== "string" || !refreshToken) {
-    return null;
-  }
-  if (typeof expiresAt !== "number" || !Number.isFinite(expiresAt)) {
-    return null;
-  }
-
-  return {
-    type: "oauth",
-    provider: "minimax-portal",
-    access: accessToken,
-    refresh: refreshToken,
-    expires: expiresAt,
-  };
+  return readPortalCliOauthCredentials(credPath, "minimax-portal");
 }
 
 function readClaudeCliKeychainCredentials(
@@ -255,38 +268,7 @@ function readClaudeCliKeychainCredentials(
     );
 
     const data = JSON.parse(result.trim());
-    const claudeOauth = data?.claudeAiOauth;
-    if (!claudeOauth || typeof claudeOauth !== "object") {
-      return null;
-    }
-
-    const accessToken = claudeOauth.accessToken;
-    const refreshToken = claudeOauth.refreshToken;
-    const expiresAt = claudeOauth.expiresAt;
-
-    if (typeof accessToken !== "string" || !accessToken) {
-      return null;
-    }
-    if (typeof expiresAt !== "number" || expiresAt <= 0) {
-      return null;
-    }
-
-    if (typeof refreshToken === "string" && refreshToken) {
-      return {
-        type: "oauth",
-        provider: "anthropic",
-        access: accessToken,
-        refresh: refreshToken,
-        expires: expiresAt,
-      };
-    }
-
-    return {
-      type: "token",
-      provider: "anthropic",
-      token: accessToken,
-      expires: expiresAt,
-    };
+    return parseClaudeCliOauthCredential(data?.claudeAiOauth);
   } catch {
     return null;
   }
@@ -316,38 +298,7 @@ export function readClaudeCliCredentials(options?: {
   }
 
   const data = raw as Record<string, unknown>;
-  const claudeOauth = data.claudeAiOauth as Record<string, unknown> | undefined;
-  if (!claudeOauth || typeof claudeOauth !== "object") {
-    return null;
-  }
-
-  const accessToken = claudeOauth.accessToken;
-  const refreshToken = claudeOauth.refreshToken;
-  const expiresAt = claudeOauth.expiresAt;
-
-  if (typeof accessToken !== "string" || !accessToken) {
-    return null;
-  }
-  if (typeof expiresAt !== "number" || expiresAt <= 0) {
-    return null;
-  }
-
-  if (typeof refreshToken === "string" && refreshToken) {
-    return {
-      type: "oauth",
-      provider: "anthropic",
-      access: accessToken,
-      refresh: refreshToken,
-      expires: expiresAt,
-    };
-  }
-
-  return {
-    type: "token",
-    provider: "anthropic",
-    token: accessToken,
-    expires: expiresAt,
-  };
+  return parseClaudeCliOauthCredential(data.claudeAiOauth);
 }
 
 export function readClaudeCliCredentialsCached(options?: {

@@ -1,16 +1,21 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { SessionManager } from "@mariozechner/pi-coding-agent";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as helpers from "./pi-embedded-helpers.js";
 import {
+  expectGoogleModelApiFullSanitizeCall,
+  loadSanitizeSessionHistoryWithCleanMocks,
+  makeMockSessionManager,
   makeInMemorySessionManager,
   makeModelSnapshotEntry,
   makeReasoningAssistantMessages,
+  makeSimpleUserMessages,
+  makeSnapshotChangedOpenAIReasoningScenario,
+  type SanitizeSessionHistoryFn,
+  sanitizeWithOpenAIResponses,
+  TEST_SESSION_ID,
 } from "./pi-embedded-runner.sanitize-session-history.test-harness.js";
 
-type SanitizeSessionHistory =
-  typeof import("./pi-embedded-runner/google.js").sanitizeSessionHistory;
-let sanitizeSessionHistory: SanitizeSessionHistory;
+let sanitizeSessionHistory: SanitizeSessionHistoryFn;
 
 // Mock dependencies
 vi.mock("./pi-embedded-helpers.js", async () => {
@@ -26,35 +31,19 @@ vi.mock("./pi-embedded-helpers.js", async () => {
 // We rely on the real implementation which should pass through our simple messages.
 
 describe("sanitizeSessionHistory", () => {
-  const mockSessionManager = {
-    getEntries: vi.fn().mockReturnValue([]),
-    appendCustomEntry: vi.fn(),
-  } as unknown as SessionManager;
-
-  const mockMessages: AgentMessage[] = [{ role: "user", content: "hello" }];
+  const mockSessionManager = makeMockSessionManager();
+  const mockMessages = makeSimpleUserMessages();
 
   beforeEach(async () => {
-    vi.resetAllMocks();
-    vi.mocked(helpers.sanitizeSessionMessagesImages).mockImplementation(async (msgs) => msgs);
-    ({ sanitizeSessionHistory } = await import("./pi-embedded-runner/google.js"));
+    sanitizeSessionHistory = await loadSanitizeSessionHistoryWithCleanMocks();
   });
 
   it("sanitizes tool call ids for Google model APIs", async () => {
-    vi.mocked(helpers.isGoogleModelApi).mockReturnValue(true);
-
-    await sanitizeSessionHistory({
+    await expectGoogleModelApiFullSanitizeCall({
+      sanitizeSessionHistory,
       messages: mockMessages,
-      modelApi: "google-generative-ai",
-      provider: "google-vertex",
       sessionManager: mockSessionManager,
-      sessionId: "test-session",
     });
-
-    expect(helpers.sanitizeSessionMessagesImages).toHaveBeenCalledWith(
-      mockMessages,
-      "session:history",
-      expect.objectContaining({ sanitizeMode: "full", sanitizeToolCallIds: true }),
-    );
   });
 
   it("sanitizes tool call ids with strict9 for Mistral models", async () => {
@@ -66,7 +55,7 @@ describe("sanitizeSessionHistory", () => {
       provider: "openrouter",
       modelId: "mistralai/devstral-2512:free",
       sessionManager: mockSessionManager,
-      sessionId: "test-session",
+      sessionId: TEST_SESSION_ID,
     });
 
     expect(helpers.sanitizeSessionMessagesImages).toHaveBeenCalledWith(
@@ -88,7 +77,7 @@ describe("sanitizeSessionHistory", () => {
       modelApi: "anthropic-messages",
       provider: "anthropic",
       sessionManager: mockSessionManager,
-      sessionId: "test-session",
+      sessionId: TEST_SESSION_ID,
     });
 
     expect(helpers.sanitizeSessionMessagesImages).toHaveBeenCalledWith(
@@ -98,25 +87,19 @@ describe("sanitizeSessionHistory", () => {
     );
   });
 
-  it("sanitizes tool call ids for openai-responses while keeping images-only mode", async () => {
+  it("does not sanitize tool call ids for openai-responses", async () => {
     vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
 
-    await sanitizeSessionHistory({
+    await sanitizeWithOpenAIResponses({
+      sanitizeSessionHistory,
       messages: mockMessages,
-      modelApi: "openai-responses",
-      provider: "openai",
       sessionManager: mockSessionManager,
-      sessionId: "test-session",
     });
 
     expect(helpers.sanitizeSessionMessagesImages).toHaveBeenCalledWith(
       mockMessages,
       "session:history",
-      expect.objectContaining({
-        sanitizeMode: "images-only",
-        sanitizeToolCallIds: true,
-        toolCallIdMode: "strict",
-      }),
+      expect.objectContaining({ sanitizeMode: "images-only", sanitizeToolCallIds: false }),
     );
   });
 
@@ -140,7 +123,7 @@ describe("sanitizeSessionHistory", () => {
       modelApi: "openai-responses",
       provider: "openai",
       sessionManager: mockSessionManager,
-      sessionId: "test-session",
+      sessionId: TEST_SESSION_ID,
     });
 
     const first = result[0] as Extract<AgentMessage, { role: "user" }>;
@@ -153,7 +136,7 @@ describe("sanitizeSessionHistory", () => {
   it("keeps reasoning-only assistant messages for openai-responses", async () => {
     vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
 
-    const messages: AgentMessage[] = [
+    const messages = [
       { role: "user", content: "hello" },
       {
         role: "assistant",
@@ -166,14 +149,14 @@ describe("sanitizeSessionHistory", () => {
           },
         ],
       },
-    ];
+    ] as unknown as AgentMessage[];
 
     const result = await sanitizeSessionHistory({
       messages,
       modelApi: "openai-responses",
       provider: "openai",
       sessionManager: mockSessionManager,
-      sessionId: "test-session",
+      sessionId: TEST_SESSION_ID,
     });
 
     expect(result).toHaveLength(2);
@@ -181,19 +164,19 @@ describe("sanitizeSessionHistory", () => {
   });
 
   it("does not synthesize tool results for openai-responses", async () => {
-    const messages: AgentMessage[] = [
+    const messages = [
       {
         role: "assistant",
         content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
       },
-    ];
+    ] as unknown as AgentMessage[];
 
     const result = await sanitizeSessionHistory({
       messages,
       modelApi: "openai-responses",
       provider: "openai",
       sessionManager: mockSessionManager,
-      sessionId: "test-session",
+      sessionId: TEST_SESSION_ID,
     });
 
     expect(result).toHaveLength(1);
@@ -201,13 +184,13 @@ describe("sanitizeSessionHistory", () => {
   });
 
   it("drops malformed tool calls missing input or arguments", async () => {
-    const messages: AgentMessage[] = [
+    const messages = [
       {
         role: "assistant",
         content: [{ type: "toolCall", id: "call_1", name: "read" }],
       },
       { role: "user", content: "hello" },
-    ];
+    ] as unknown as AgentMessage[];
 
     const result = await sanitizeSessionHistory({
       messages,
@@ -220,7 +203,7 @@ describe("sanitizeSessionHistory", () => {
     expect(result.map((msg) => msg.role)).toEqual(["user"]);
   });
 
-  it("does not downgrade openai reasoning when the model has not changed", async () => {
+  it("downgrades orphaned openai reasoning even when the model has not changed", async () => {
     const sessionEntries = [
       makeModelSnapshotEntry({
         provider: "openai",
@@ -231,38 +214,74 @@ describe("sanitizeSessionHistory", () => {
     const sessionManager = makeInMemorySessionManager(sessionEntries);
     const messages = makeReasoningAssistantMessages({ thinkingSignature: "json" });
 
-    const result = await sanitizeSessionHistory({
+    const result = await sanitizeWithOpenAIResponses({
+      sanitizeSessionHistory,
       messages,
-      modelApi: "openai-responses",
-      provider: "openai",
       modelId: "gpt-5.2-codex",
       sessionManager,
-      sessionId: "test-session",
-    });
-
-    expect(result).toEqual(messages);
-  });
-
-  it("downgrades openai reasoning only when the model changes", async () => {
-    const sessionEntries = [
-      makeModelSnapshotEntry({
-        provider: "anthropic",
-        modelApi: "anthropic-messages",
-        modelId: "claude-3-7",
-      }),
-    ];
-    const sessionManager = makeInMemorySessionManager(sessionEntries);
-    const messages = makeReasoningAssistantMessages({ thinkingSignature: "object" });
-
-    const result = await sanitizeSessionHistory({
-      messages,
-      modelApi: "openai-responses",
-      provider: "openai",
-      modelId: "gpt-5.2-codex",
-      sessionManager,
-      sessionId: "test-session",
     });
 
     expect(result).toEqual([]);
+  });
+
+  it("downgrades orphaned openai reasoning when the model changes too", async () => {
+    const { sessionManager, messages, modelId } = makeSnapshotChangedOpenAIReasoningScenario();
+
+    const result = await sanitizeWithOpenAIResponses({
+      sanitizeSessionHistory,
+      messages,
+      modelId,
+      sessionManager,
+    });
+
+    expect(result).toEqual([]);
+  });
+
+  it("drops orphaned toolResult entries when switching from openai history to anthropic", async () => {
+    const sessionEntries = [
+      makeModelSnapshotEntry({
+        provider: "openai",
+        modelApi: "openai-responses",
+        modelId: "gpt-5.2",
+      }),
+    ];
+    const sessionManager = makeInMemorySessionManager(sessionEntries);
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "tool_abc123", name: "read", arguments: {} }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "tool_abc123",
+        toolName: "read",
+        content: [{ type: "text", text: "ok" }],
+      } as unknown as AgentMessage,
+      { role: "user", content: "continue" },
+      {
+        role: "toolResult",
+        toolCallId: "tool_01VihkDRptyLpX1ApUPe7ooU",
+        toolName: "read",
+        content: [{ type: "text", text: "stale result" }],
+      } as unknown as AgentMessage,
+    ] as unknown as AgentMessage[];
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "anthropic-messages",
+      provider: "anthropic",
+      modelId: "claude-opus-4-6",
+      sessionManager,
+      sessionId: TEST_SESSION_ID,
+    });
+
+    expect(result.map((msg) => msg.role)).toEqual(["assistant", "toolResult", "user"]);
+    expect(
+      result.some(
+        (msg) =>
+          msg.role === "toolResult" &&
+          (msg as { toolCallId?: string }).toolCallId === "tool_01VihkDRptyLpX1ApUPe7ooU",
+      ),
+    ).toBe(false);
   });
 });

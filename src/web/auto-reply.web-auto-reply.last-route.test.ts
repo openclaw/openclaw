@@ -8,6 +8,91 @@ import { createEchoTracker } from "./auto-reply/monitor/echo.js";
 import { awaitBackgroundTasks } from "./auto-reply/monitor/last-route.js";
 import { createWebOnMessageHandler } from "./auto-reply/monitor/on-message.js";
 
+function makeCfg(storePath: string): OpenClawConfig {
+  return {
+    channels: { whatsapp: { allowFrom: ["*"] } },
+    session: { store: storePath },
+  };
+}
+
+function makeReplyLogger() {
+  return {
+    warn: vi.fn(),
+    info: vi.fn(),
+    debug: vi.fn(),
+    error: vi.fn(),
+  } as unknown as Parameters<typeof createWebOnMessageHandler>[0]["replyLogger"];
+}
+
+function createHandlerForTest(opts: { cfg: OpenClawConfig; replyResolver: unknown }) {
+  const backgroundTasks = new Set<Promise<unknown>>();
+  const handler = createWebOnMessageHandler({
+    cfg: opts.cfg,
+    verbose: false,
+    connectionId: "test",
+    maxMediaBytes: 1024,
+    groupHistoryLimit: 3,
+    groupHistories: new Map(),
+    groupMemberNames: new Map(),
+    echoTracker: createEchoTracker({ maxItems: 10 }),
+    backgroundTasks,
+    replyResolver: opts.replyResolver as Parameters<
+      typeof createWebOnMessageHandler
+    >[0]["replyResolver"],
+    replyLogger: makeReplyLogger(),
+    baseMentionConfig: buildMentionConfig(opts.cfg),
+    account: {},
+  });
+
+  return { handler, backgroundTasks };
+}
+
+function createLastRouteHarness(storePath: string) {
+  const replyResolver = vi.fn().mockResolvedValue(undefined);
+  const cfg = makeCfg(storePath);
+  return createHandlerForTest({ cfg, replyResolver });
+}
+
+function buildInboundMessage(params: {
+  id: string;
+  from: string;
+  conversationId: string;
+  chatType: "direct" | "group";
+  chatId: string;
+  timestamp: number;
+  body?: string;
+  to?: string;
+  accountId?: string;
+  senderE164?: string;
+  senderName?: string;
+  selfE164?: string;
+}) {
+  return {
+    id: params.id,
+    from: params.from,
+    conversationId: params.conversationId,
+    to: params.to ?? "+2000",
+    body: params.body ?? "hello",
+    timestamp: params.timestamp,
+    chatType: params.chatType,
+    chatId: params.chatId,
+    accountId: params.accountId ?? "default",
+    senderE164: params.senderE164,
+    senderName: params.senderName,
+    selfE164: params.selfE164,
+    sendComposing: vi.fn().mockResolvedValue(undefined),
+    reply: vi.fn().mockResolvedValue(undefined),
+    sendMedia: vi.fn().mockResolvedValue(undefined),
+  };
+}
+
+async function readStoredRoutes(storePath: string) {
+  return JSON.parse(await fs.readFile(storePath, "utf8")) as Record<
+    string,
+    { lastChannel?: string; lastTo?: string; lastAccountId?: string }
+  >;
+}
+
 describe("web auto-reply last-route", () => {
   installWebAutoReplyUnitTestHooks();
 
@@ -18,55 +103,22 @@ describe("web auto-reply last-route", () => {
       [mainSessionKey]: { sessionId: "sid", updatedAt: now - 1 },
     });
 
-    const replyResolver = vi.fn().mockResolvedValue(undefined);
+    const { handler, backgroundTasks } = createLastRouteHarness(store.storePath);
 
-    const mockConfig: OpenClawConfig = {
-      channels: { whatsapp: { allowFrom: ["*"] } },
-      session: { store: store.storePath },
-    };
-
-    const backgroundTasks = new Set<Promise<unknown>>();
-    const handler = createWebOnMessageHandler({
-      cfg: mockConfig,
-      verbose: false,
-      connectionId: "test",
-      maxMediaBytes: 1024,
-      groupHistoryLimit: 3,
-      groupHistories: new Map(),
-      groupMemberNames: new Map(),
-      echoTracker: createEchoTracker({ maxItems: 10 }),
-      backgroundTasks,
-      replyResolver,
-      replyLogger: {
-        warn: vi.fn(),
-        info: vi.fn(),
-        debug: vi.fn(),
-        error: vi.fn(),
-      } as unknown as Parameters<typeof createWebOnMessageHandler>[0]["replyLogger"],
-      baseMentionConfig: buildMentionConfig(mockConfig),
-      account: {},
-    });
-
-    await handler({
-      id: "m1",
-      from: "+1000",
-      conversationId: "+1000",
-      to: "+2000",
-      body: "hello",
-      timestamp: now,
-      chatType: "direct",
-      chatId: "direct:+1000",
-      sendComposing: vi.fn().mockResolvedValue(undefined),
-      reply: vi.fn().mockResolvedValue(undefined),
-      sendMedia: vi.fn().mockResolvedValue(undefined),
-    });
+    await handler(
+      buildInboundMessage({
+        id: "m1",
+        from: "+1000",
+        conversationId: "+1000",
+        chatType: "direct",
+        chatId: "direct:+1000",
+        timestamp: now,
+      }),
+    );
 
     await awaitBackgroundTasks(backgroundTasks);
 
-    const stored = JSON.parse(await fs.readFile(store.storePath, "utf8")) as Record<
-      string,
-      { lastChannel?: string; lastTo?: string }
-    >;
+    const stored = await readStoredRoutes(store.storePath);
     expect(stored[mainSessionKey]?.lastChannel).toBe("whatsapp");
     expect(stored[mainSessionKey]?.lastTo).toBe("+1000");
 
@@ -80,59 +132,26 @@ describe("web auto-reply last-route", () => {
       [groupSessionKey]: { sessionId: "sid", updatedAt: now - 1 },
     });
 
-    const replyResolver = vi.fn().mockResolvedValue(undefined);
+    const { handler, backgroundTasks } = createLastRouteHarness(store.storePath);
 
-    const mockConfig: OpenClawConfig = {
-      channels: { whatsapp: { allowFrom: ["*"] } },
-      session: { store: store.storePath },
-    };
-
-    const backgroundTasks = new Set<Promise<unknown>>();
-    const handler = createWebOnMessageHandler({
-      cfg: mockConfig,
-      verbose: false,
-      connectionId: "test",
-      maxMediaBytes: 1024,
-      groupHistoryLimit: 3,
-      groupHistories: new Map(),
-      groupMemberNames: new Map(),
-      echoTracker: createEchoTracker({ maxItems: 10 }),
-      backgroundTasks,
-      replyResolver,
-      replyLogger: {
-        warn: vi.fn(),
-        info: vi.fn(),
-        debug: vi.fn(),
-        error: vi.fn(),
-      } as unknown as Parameters<typeof createWebOnMessageHandler>[0]["replyLogger"],
-      baseMentionConfig: buildMentionConfig(mockConfig),
-      account: {},
-    });
-
-    await handler({
-      id: "g1",
-      from: "123@g.us",
-      conversationId: "123@g.us",
-      to: "+2000",
-      body: "hello",
-      timestamp: now,
-      chatType: "group",
-      chatId: "123@g.us",
-      accountId: "work",
-      senderE164: "+1000",
-      senderName: "Alice",
-      selfE164: "+2000",
-      sendComposing: vi.fn().mockResolvedValue(undefined),
-      reply: vi.fn().mockResolvedValue(undefined),
-      sendMedia: vi.fn().mockResolvedValue(undefined),
-    });
+    await handler(
+      buildInboundMessage({
+        id: "g1",
+        from: "123@g.us",
+        conversationId: "123@g.us",
+        chatType: "group",
+        chatId: "123@g.us",
+        timestamp: now,
+        accountId: "work",
+        senderE164: "+1000",
+        senderName: "Alice",
+        selfE164: "+2000",
+      }),
+    );
 
     await awaitBackgroundTasks(backgroundTasks);
 
-    const stored = JSON.parse(await fs.readFile(store.storePath, "utf8")) as Record<
-      string,
-      { lastChannel?: string; lastTo?: string; lastAccountId?: string }
-    >;
+    const stored = await readStoredRoutes(store.storePath);
     expect(stored[groupSessionKey]?.lastChannel).toBe("whatsapp");
     expect(stored[groupSessionKey]?.lastTo).toBe("123@g.us");
     expect(stored[groupSessionKey]?.lastAccountId).toBe("work");

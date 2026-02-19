@@ -10,14 +10,14 @@
  * - No other content (text, embeds, etc.)
  */
 
-import type { RequestClient } from "@buape/carbon";
 import { execFile } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import type { RequestClient } from "@buape/carbon";
 import type { RetryRunner } from "../infra/retry-policy.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -73,7 +73,7 @@ export async function generateWaveform(filePath: string): Promise<string> {
  * Generate waveform by extracting raw PCM data and sampling amplitudes
  */
 async function generateWaveformFromPcm(filePath: string): Promise<string> {
-  const tempDir = os.tmpdir();
+  const tempDir = resolvePreferredOpenClawTmpDir();
   const tempPcm = path.join(tempDir, `waveform-${crypto.randomUUID()}.raw`);
 
   try {
@@ -148,6 +148,14 @@ function generatePlaceholderWaveform(): string {
  * Returns path to the OGG file (may be same as input if already OGG/Opus)
  */
 export async function ensureOggOpus(filePath: string): Promise<{ path: string; cleanup: boolean }> {
+  const trimmed = filePath.trim();
+  // Defense-in-depth: callers should never hand ffmpeg/ffprobe a URL/protocol path.
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) {
+    throw new Error(
+      `Voice message conversion requires a local file path; received a URL/protocol source: ${trimmed}`,
+    );
+  }
+
   const ext = path.extname(filePath).toLowerCase();
 
   // Check if already OGG
@@ -174,7 +182,7 @@ export async function ensureOggOpus(filePath: string): Promise<{ path: string; c
   }
 
   // Convert to OGG/Opus
-  const tempDir = os.tmpdir();
+  const tempDir = resolvePreferredOpenClawTmpDir();
   const outputPath = path.join(tempDir, `voice-${crypto.randomUUID()}.ogg`);
 
   await execFileAsync("ffmpeg", [

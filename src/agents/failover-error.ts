@@ -1,6 +1,7 @@
 import { classifyFailoverReason, type FailoverReason } from "./pi-embedded-helpers.js";
 
-const TIMEOUT_HINT_RE = /timeout|timed out|deadline exceeded|context deadline exceeded/i;
+const TIMEOUT_HINT_RE =
+  /timeout|timed out|deadline exceeded|context deadline exceeded|stop reason:\s*abort|reason:\s*abort|unhandled stop reason:\s*abort/i;
 const ABORT_TIMEOUT_RE = /request was aborted|request aborted/i;
 
 export class FailoverError extends Error {
@@ -158,6 +159,9 @@ export function resolveFailoverReasonFromError(err: unknown): FailoverReason | n
     return "auth";
   }
   if (status === 408) {
+    return "timeout";
+  }
+  if (status === 503) {
     return "timeout";
   }
   if (status === 400) {
