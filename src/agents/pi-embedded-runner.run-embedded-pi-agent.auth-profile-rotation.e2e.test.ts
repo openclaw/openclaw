@@ -518,6 +518,59 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
     }
   });
 
+  it("uses the active erroring model in billing failover errors", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-"));
+    try {
+      await writeAuthStore(agentDir);
+      runEmbeddedAttemptMock.mockResolvedValueOnce(
+        makeAttempt({
+          assistantTexts: [],
+          lastAssistant: buildAssistant({
+            stopReason: "error",
+            errorMessage: "insufficient credits",
+            provider: "openai",
+            model: "mock-rotated",
+          }),
+        }),
+      );
+
+      let thrown: unknown;
+      try {
+        await runEmbeddedPiAgent({
+          sessionId: "session:test",
+          sessionKey: "agent:test:billing-failover-active-model",
+          sessionFile: path.join(workspaceDir, "session.jsonl"),
+          workspaceDir,
+          agentDir,
+          config: makeConfig({ fallbacks: ["openai/mock-2"] }),
+          prompt: "hello",
+          provider: "openai",
+          model: "mock-1",
+          authProfileId: "openai:p1",
+          authProfileIdSource: "user",
+          timeoutMs: 5_000,
+          runId: "run:billing-failover-active-model",
+        });
+      } catch (err) {
+        thrown = err;
+      }
+
+      expect(thrown).toMatchObject({
+        name: "FailoverError",
+        reason: "billing",
+        provider: "openai",
+        model: "mock-rotated",
+      });
+      expect(thrown).toBeInstanceOf(Error);
+      expect((thrown as Error).message).toContain("openai (mock-rotated) returned a billing error");
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
   it("skips profiles in cooldown when rotating after failure", async () => {
     vi.useFakeTimers();
     try {
