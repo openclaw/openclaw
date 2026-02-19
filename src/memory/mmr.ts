@@ -135,9 +135,18 @@ export function mmrRerank<T extends MMRItem>(items: T[], config: Partial<MMRConf
     tokenCache.set(item.id, tokenize(item.content));
   }
 
-  // Normalize scores to [0, 1] for fair comparison with similarity
-  const maxScore = Math.max(...items.map((i) => i.score));
-  const minScore = Math.min(...items.map((i) => i.score));
+  // Normalize scores to [0, 1] for fair comparison with similarity.
+  // Use an iterative pass to avoid variadic Math.max/min calls on large arrays.
+  let maxScore = -Infinity;
+  let minScore = Infinity;
+  for (const item of items) {
+    if (item.score > maxScore) {
+      maxScore = item.score;
+    }
+    if (item.score < minScore) {
+      minScore = item.score;
+    }
+  }
   const scoreRange = maxScore - minScore;
 
   const normalizeScore = (score: number): number => {
