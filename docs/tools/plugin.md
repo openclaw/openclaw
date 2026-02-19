@@ -151,6 +151,10 @@ becomes `name/<fileBase>`.
 If your plugin imports npm deps, install them in that directory so
 `node_modules` is available (`npm install` / `pnpm install`).
 
+Security guardrail: every `openclaw.extensions` entry must stay inside the plugin
+directory after symlink resolution. Entries that escape the package directory are
+rejected.
+
 Security note: `openclaw plugins install` installs plugin dependencies with
 `npm install --ignore-scripts` (no lifecycle scripts). Keep plugin dependency
 trees "pure JS/TS" and avoid packages that require `postinstall` builds.
