@@ -384,7 +384,15 @@ export function buildAllowedModelSet(params: {
 
   const allowedKeys = new Set<string>();
   const configuredProviders = (params.cfg.models?.providers ?? {}) as Record<string, unknown>;
-  for (const raw of rawAllowlist) {
+  // Include both the explicit allowlist and any fallback models so that
+  // sessions using configured fallbacks are not rejected. (#20540)
+  const modelConfig = params.cfg.agents?.defaults?.model as
+    | { fallbacks?: string[] }
+    | string
+    | undefined;
+  const fallbacks =
+    modelConfig && typeof modelConfig === "object" ? (modelConfig.fallbacks ?? []) : [];
+  for (const raw of [...rawAllowlist, ...fallbacks]) {
     const parsed = parseModelRef(String(raw), params.defaultProvider);
     if (!parsed) {
       continue;

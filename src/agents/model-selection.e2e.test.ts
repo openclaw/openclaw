@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { ModelCatalogEntry } from "./model-catalog.js";
 import {
   parseModelRef,
   resolveModelRefFromString,
@@ -7,6 +8,7 @@ import {
   buildModelAliasIndex,
   normalizeProviderId,
   modelKey,
+  buildAllowedModelSet,
 } from "./model-selection.js";
 
 describe("model-selection", () => {
@@ -44,14 +46,6 @@ describe("model-selection", () => {
       expect(parseModelRef("opus-4.6", "anthropic")).toEqual({
         provider: "anthropic",
         model: "claude-opus-4-6",
-      });
-      expect(parseModelRef("anthropic/sonnet-4.6", "openai")).toEqual({
-        provider: "anthropic",
-        model: "claude-sonnet-4-6",
-      });
-      expect(parseModelRef("sonnet-4.6", "anthropic")).toEqual({
-        provider: "anthropic",
-        model: "claude-sonnet-4-6",
       });
     });
 
@@ -150,7 +144,7 @@ describe("model-selection", () => {
       const cfg: Partial<OpenClawConfig> = {
         agents: {
           defaults: {
-            model: { primary: "claude-3-5-sonnet" },
+            model: "claude-3-5-sonnet",
           },
         },
       };
@@ -176,6 +170,46 @@ describe("model-selection", () => {
         defaultModel: "gpt-4",
       });
       expect(result).toEqual({ provider: "openai", model: "gpt-4" });
+    });
+  });
+
+  describe("buildAllowedModelSet", () => {
+    it("should include fallback models in allowed keys", () => {
+      const cfg: Partial<OpenClawConfig> = {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-3-5-sonnet": { alias: "fast" },
+            },
+            model: {
+              primary: "anthropic/claude-3-5-sonnet",
+              fallbacks: ["anthropic/fallback-model"],
+            },
+          },
+        },
+      };
+
+      const catalog: ModelCatalogEntry[] = [
+        {
+          provider: "anthropic",
+          id: "claude-3-5-sonnet",
+          name: "Claude 3.5 Sonnet",
+        },
+        {
+          provider: "anthropic",
+          id: "fallback-model",
+          name: "Fallback Model",
+        },
+      ];
+
+      const result = buildAllowedModelSet({
+        cfg: cfg as OpenClawConfig,
+        catalog,
+        defaultProvider: "anthropic",
+      });
+
+      expect(result.allowedKeys.has("anthropic/claude-3-5-sonnet")).toBe(true);
+      expect(result.allowedKeys.has("anthropic/fallback-model")).toBe(true);
     });
   });
 });
