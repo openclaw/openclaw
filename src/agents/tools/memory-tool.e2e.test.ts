@@ -12,7 +12,7 @@ let searchImpl: () => Promise<unknown[]> = async () => [
     source: "memory" as const,
   },
 ];
-let readFileImpl: () => Promise<string> = async () => "";
+let readFileImpl: () => Promise<unknown> = async () => "";
 
 const stubManager = {
   search: vi.fn(async () => await searchImpl()),
@@ -59,7 +59,7 @@ beforeEach(() => {
       source: "memory" as const,
     },
   ];
-  readFileImpl = async () => "";
+  readFileImpl = async () => ""; // default: return empty string
   vi.clearAllMocks();
 });
 
@@ -187,6 +187,25 @@ describe("memory tools", () => {
       text: "",
       disabled: true,
       error: "path required",
+    });
+  });
+
+  it("returns empty text without error when file does not exist (ENOENT)", async () => {
+    readFileImpl = async () => {
+      return { text: "", path: "memory/2026-02-19.md" };
+    };
+
+    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const tool = createMemoryGetTool({ config: cfg });
+    expect(tool).not.toBeNull();
+    if (!tool) {
+      throw new Error("tool missing");
+    }
+
+    const result = await tool.execute("call_enoent", { path: "memory/2026-02-19.md" });
+    expect(result.details).toEqual({
+      text: "",
+      path: "memory/2026-02-19.md",
     });
   });
 });
