@@ -110,6 +110,7 @@ export const zh_CN: TranslationMap = {
       firstRunHint: "发送第一条消息验证会话与工具。",
       review: "Review ConsentGuard",
       next: "Next Step",
+      progress: "Progress {done}/{total}",
       openIntegrations: "打开集成",
       openChat: "打开聊天",
       openConsent: "打开 ConsentGuard",

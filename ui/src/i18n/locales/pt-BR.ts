@@ -111,6 +111,7 @@ export const pt_BR: TranslationMap = {
       firstRunHint: "Envie a primeira mensagem para validar sessÃ£o e ferramentas.",
       review: "Revisar ConsentGuard",
       next: "Próxima Etapa",
+      progress: "Progresso {done}/{total}",
       openIntegrations: "Abrir IntegraÃ§Ãµes",
       openChat: "Abrir Chat",
       openConsent: "Abrir ConsentGuard",

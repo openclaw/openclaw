@@ -54,6 +54,7 @@ import {
 } from "./controllers/skills.ts";
 import { icons } from "./icons.ts";
 import { normalizeBasePath, getTabGroups, subtitleForTab, titleForTab } from "./navigation.ts";
+import { getOnboardingNextStep, getOnboardingNextTab, getOnboardingSteps } from "./onboarding-flow.ts";
 import { renderAgents } from "./views/agents.ts";
 import { renderChannels } from "./views/channels.ts";
 import { renderChat } from "./views/chat.ts";
@@ -93,8 +94,6 @@ function resolveAssistantAvatarUrl(state: AppViewState): string | undefined {
 export function renderApp(state: AppViewState) {
   const presenceCount = state.presenceEntries.length;
   const sessionsCount = state.sessionsResult?.count ?? null;
-  const hasSessionActivity = (sessionsCount ?? 0) > 0;
-  const hasChannelRefresh = state.channelsLastSuccess != null;
   const cronNext = state.cronStatus?.nextWakeAtMs ?? null;
   const chatDisabledReason = state.connected ? null : t("chat.disconnected");
   const isChat = state.tab === "chat";
@@ -110,13 +109,13 @@ export function renderApp(state: AppViewState) {
     state.agentsList?.defaultId ??
     state.agentsList?.agents?.[0]?.id ??
     null;
-  const onboardingSteps = [
-    { key: "gateway", done: state.connected, tab: "overview" as const },
-    { key: "integrations", done: hasChannelRefresh, tab: "channels" as const },
-    { key: "firstRun", done: hasSessionActivity, tab: "chat" as const },
-  ];
-  const nextOnboardingStep = onboardingSteps.find((step) => !step.done);
-  const onboardingNextTab = nextOnboardingStep?.tab ?? ("consent" as const);
+  const onboardingSteps = getOnboardingSteps({
+    connected: state.connected,
+    channelsLastSuccess: state.channelsLastSuccess,
+    sessionsCount,
+  });
+  const nextOnboardingStep = getOnboardingNextStep(onboardingSteps);
+  const onboardingNextTab = getOnboardingNextTab(onboardingSteps);
   const onboardingNextLabel = nextOnboardingStep
     ? t(`overview.setupFlow.${nextOnboardingStep.key}`)
     : t("overview.setupFlow.review");

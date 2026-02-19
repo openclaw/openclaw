@@ -261,6 +261,22 @@ describe("control UI routing", () => {
     expect(button?.disabled).toBe(true);
   });
 
+  it("routes onboarding setup-flow next step to channels after gateway connect", async () => {
+    const app = mountApp("/overview?onboarding=1");
+    await app.updateComplete;
+
+    app.connected = true;
+    await app.updateComplete;
+
+    const button = app.querySelector<HTMLButtonElement>('[data-testid="onboarding-setup-flow-next"]');
+    expect(button).not.toBeNull();
+    button?.click();
+    await app.updateComplete;
+
+    expect(app.tab).toBe("channels");
+    expect(window.location.pathname).toBe("/channels");
+  });
+
   it("navigates to integrations from onboarding banner actions", async () => {
     const app = mountApp("/?onboarding=1");
     await app.updateComplete;

@@ -2,6 +2,7 @@ import { html } from "lit";
 import { t, i18n, type Locale } from "../../i18n/index.ts";
 import { formatRelativeTimestamp, formatDurationHuman } from "../format.ts";
 import type { GatewayHelloOk } from "../gateway.ts";
+import { getOnboardingNextStep, getOnboardingSteps, getOnboardingProgress } from "../onboarding-flow.ts";
 import { formatNextRun } from "../presenter.ts";
 import type { UiSettings } from "../storage.ts";
 
@@ -134,8 +135,32 @@ export function renderOverview(props: OverviewProps) {
 
   const currentLocale = i18n.getLocale();
   const showSetupFlow = Boolean(props.onboarding);
-  const channelsConnected = props.lastChannelsRefresh != null;
-  const hasSessions = (props.sessionsCount ?? 0) > 0;
+  const onboardingSteps = getOnboardingSteps({
+    connected: props.connected,
+    channelsLastSuccess: props.lastChannelsRefresh,
+    sessionsCount: props.sessionsCount,
+  });
+  const onboardingProgress = getOnboardingProgress(onboardingSteps);
+  const nextOnboardingStep = getOnboardingNextStep(onboardingSteps);
+  const nextOnboardingLabel = nextOnboardingStep
+    ? t(`overview.setupFlow.${nextOnboardingStep.key}`)
+    : t("overview.setupFlow.review");
+
+  const runNextOnboardingAction = () => {
+    if (!nextOnboardingStep) {
+      props.onOpenConsent?.();
+      return;
+    }
+    if (nextOnboardingStep.key === "gateway") {
+      props.onConnect();
+      return;
+    }
+    if (nextOnboardingStep.key === "integrations") {
+      props.onOpenChannels?.();
+      return;
+    }
+    props.onOpenChat?.();
+  };
 
   return html`
     ${
@@ -144,30 +169,39 @@ export function renderOverview(props: OverviewProps) {
             <section class="card" data-testid="onboarding-setup-flow">
               <div class="card-title">${t("overview.setupFlow.title")}</div>
               <div class="card-sub">${t("overview.setupFlow.subtitle")}</div>
+              <div class="muted" style="margin-top: 8px;">
+                ${t("overview.setupFlow.progress", {
+                  done: onboardingProgress.done.toString(),
+                  total: onboardingProgress.total.toString(),
+                })}
+              </div>
               <div class="note-grid" style="margin-top: 12px;">
                 <div>
                   <div class="note-title">
                     1. ${t("overview.setupFlow.gateway")}
-                    <span class="muted">(${props.connected ? t("common.ok") : t("common.offline")})</span>
+                    <span class="muted">(${onboardingSteps[0].done ? t("common.ok") : t("common.offline")})</span>
                   </div>
                   <div class="muted">${t("overview.setupFlow.gatewayHint")}</div>
                 </div>
                 <div>
                   <div class="note-title">
                     2. ${t("overview.setupFlow.integrations")}
-                    <span class="muted">(${channelsConnected ? t("common.ok") : t("common.na")})</span>
+                    <span class="muted">(${onboardingSteps[1].done ? t("common.ok") : t("common.na")})</span>
                   </div>
                   <div class="muted">${t("overview.setupFlow.integrationsHint")}</div>
                 </div>
                 <div>
                   <div class="note-title">
                     3. ${t("overview.setupFlow.firstRun")}
-                    <span class="muted">(${hasSessions ? t("common.ok") : t("common.na")})</span>
+                    <span class="muted">(${onboardingSteps[2].done ? t("common.ok") : t("common.na")})</span>
                   </div>
                   <div class="muted">${t("overview.setupFlow.firstRunHint")}</div>
                 </div>
               </div>
               <div class="row" style="margin-top: 12px;">
+                <button class="btn" data-testid="onboarding-setup-flow-next" @click=${runNextOnboardingAction}>
+                  ${t("overview.setupFlow.next")}: ${nextOnboardingLabel}
+                </button>
                 <button class="btn" @click=${() => props.onConnect()}>${t("common.connect")}</button>
                 <button class="btn" @click=${() => props.onOpenChannels?.()}>
                   ${t("overview.setupFlow.openIntegrations")}

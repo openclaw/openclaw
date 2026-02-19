@@ -110,6 +110,7 @@ export const en: TranslationMap = {
       firstRunHint: "Send a first message to validate session and tools.",
       review: "Review ConsentGuard",
       next: "Next Step",
+      progress: "Progress {done}/{total}",
       openIntegrations: "Open Integrations",
       openChat: "Open Chat",
       openConsent: "Open ConsentGuard",
