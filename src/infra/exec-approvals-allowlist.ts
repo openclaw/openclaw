@@ -1,3 +1,4 @@
+import type { ExecAllowlistEntry } from "./exec-approvals.js";
 import {
   DEFAULT_SAFE_BINS,
   analyzeShellCommand,
@@ -9,7 +10,6 @@ import {
   type CommandResolution,
   type ExecCommandSegment,
 } from "./exec-approvals-analysis.js";
-import type { ExecAllowlistEntry } from "./exec-approvals.js";
 import {
   SAFE_BIN_GENERIC_PROFILE,
   SAFE_BIN_PROFILES,
@@ -38,8 +38,6 @@ export function isSafeBinUsage(params: {
   argv: string[];
   resolution: CommandResolution | null;
   safeBins: Set<string>;
-  cwd?: string;
-  fileExists?: (filePath: string) => boolean;
   trustedSafeBinDirs?: ReadonlySet<string>;
 }): boolean {
   // Windows host exec uses PowerShell, which has different parsing/expansion rules.
@@ -116,7 +114,6 @@ function evaluateSegments(
       argv: segment.argv,
       resolution: segment.resolution,
       safeBins: params.safeBins,
-      cwd: params.cwd,
       trustedSafeBinDirs: params.trustedSafeBinDirs,
     });
     const skillAllow =

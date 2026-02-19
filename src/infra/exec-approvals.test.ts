@@ -494,7 +494,6 @@ describe("exec approvals safe bins", () => {
           executableName,
         },
         safeBins: normalizeSafeBins(testCase.safeBins ?? [executableName]),
-        cwd,
       });
       expect(ok).toBe(testCase.expected);
     });
@@ -513,7 +512,6 @@ describe("exec approvals safe bins", () => {
       },
       safeBins: normalizeSafeBins(["jq"]),
       trustedSafeBinDirs: new Set(["/custom/bin"]),
-      cwd: "/tmp",
     });
     expect(ok).toBe(true);
   });
@@ -540,46 +538,20 @@ describe("exec approvals safe bins", () => {
       argv: ["sort", "-o", "existing.txt"],
       resolution,
       safeBins,
-      cwd,
     });
     const missing = isSafeBinUsage({
       argv: ["sort", "-o", "missing.txt"],
       resolution,
       safeBins,
-      cwd,
     });
     const longFlag = isSafeBinUsage({
       argv: ["sort", "--output=missing.txt"],
       resolution,
       safeBins,
-      cwd,
     });
     expect(existing).toBe(false);
     expect(missing).toBe(false);
     expect(longFlag).toBe(false);
-  });
-
-  it("does not consult file existence callbacks for safe-bin decisions", () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    let checkedExists = false;
-    const ok = isSafeBinUsage({
-      argv: ["sort", "-o", "target.txt"],
-      resolution: {
-        rawExecutable: "sort",
-        resolvedPath: "/usr/bin/sort",
-        executableName: "sort",
-      },
-      safeBins: normalizeSafeBins(["sort"]),
-      cwd: "/tmp",
-      fileExists: () => {
-        checkedExists = true;
-        return true;
-      },
-    });
-    expect(ok).toBe(false);
-    expect(checkedExists).toBe(false);
   });
 
   it("threads trusted safe-bin dirs through allowlist evaluation", () => {
@@ -847,7 +819,6 @@ describe("exec approvals node host allowlist check", () => {
       argv: ["unknown-tool", "--help"],
       resolution,
       safeBins: normalizeSafeBins(["jq", "curl"]),
-      cwd: "/tmp",
     });
     expect(safe).toBe(false);
   });
@@ -868,7 +839,6 @@ describe("exec approvals node host allowlist check", () => {
       argv: ["jq", ".foo"],
       resolution,
       safeBins: normalizeSafeBins(["jq"]),
-      cwd: "/tmp",
     });
     // Safe bins are disabled on Windows (PowerShell parsing/expansion differences).
     if (process.platform === "win32") {
