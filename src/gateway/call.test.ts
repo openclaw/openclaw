@@ -75,7 +75,8 @@ vi.mock("./client.js", () => ({
   },
 }));
 
-const { buildGatewayConnectionDetails, callGateway } = await import("./call.js");
+const { buildGatewayConnectionDetails, callGateway, callGatewayCli, callGatewayScoped } =
+  await import("./call.js");
 
 function resetGatewayCallMocks() {
   loadConfig.mockReset();
@@ -198,12 +199,22 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.token).toBe("explicit-token");
   });
 
-  it("keeps legacy admin scopes when call scopes are omitted", async () => {
+  it("uses least-privilege scopes by default for non-CLI callers", async () => {
     loadConfig.mockReturnValue({ gateway: { mode: "local", bind: "loopback" } });
     resolveGatewayPort.mockReturnValue(18789);
     pickPrimaryTailnetIPv4.mockReturnValue(undefined);
 
     await callGateway({ method: "health" });
+
+    expect(lastClientOptions?.scopes).toEqual(["operator.read"]);
+  });
+
+  it("keeps legacy admin scopes for explicit CLI callers", async () => {
+    loadConfig.mockReturnValue({ gateway: { mode: "local", bind: "loopback" } });
+    resolveGatewayPort.mockReturnValue(18789);
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+
+    await callGatewayCli({ method: "health" });
 
     expect(lastClientOptions?.scopes).toEqual([
       "operator.admin",
@@ -217,10 +228,10 @@ describe("callGateway url resolution", () => {
     resolveGatewayPort.mockReturnValue(18789);
     pickPrimaryTailnetIPv4.mockReturnValue(undefined);
 
-    await callGateway({ method: "health", scopes: ["operator.read"] });
+    await callGatewayScoped({ method: "health", scopes: ["operator.read"] });
     expect(lastClientOptions?.scopes).toEqual(["operator.read"]);
 
-    await callGateway({ method: "health", scopes: [] });
+    await callGatewayScoped({ method: "health", scopes: [] });
     expect(lastClientOptions?.scopes).toEqual([]);
   });
 });

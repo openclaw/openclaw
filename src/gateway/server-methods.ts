@@ -2,16 +2,8 @@ import { formatControlPlaneActor, resolveControlPlaneActor } from "./control-pla
 import { consumeControlPlaneWriteBudget } from "./control-plane-rate-limit.js";
 import {
   ADMIN_SCOPE,
-  APPROVALS_SCOPE,
-  isAdminOnlyMethod,
-  isApprovalMethod,
+  authorizeOperatorScopesForMethod,
   isNodeRoleMethod,
-  isPairingMethod,
-  isReadMethod,
-  isWriteMethod,
-  PAIRING_SCOPE,
-  READ_SCOPE,
-  WRITE_SCOPE,
 } from "./method-scopes.js";
 import { ErrorCodes, errorShape } from "./protocol/index.js";
 import { agentHandlers } from "./server-methods/agent.js";
@@ -64,34 +56,11 @@ function authorizeGatewayMethod(method: string, client: GatewayRequestOptions["c
   if (scopes.includes(ADMIN_SCOPE)) {
     return null;
   }
-  if (isApprovalMethod(method) && !scopes.includes(APPROVALS_SCOPE)) {
-    return errorShape(ErrorCodes.INVALID_REQUEST, "missing scope: operator.approvals");
+  const scopeAuth = authorizeOperatorScopesForMethod(method, scopes);
+  if (!scopeAuth.allowed) {
+    return errorShape(ErrorCodes.INVALID_REQUEST, `missing scope: ${scopeAuth.missingScope}`);
   }
-  if (isPairingMethod(method) && !scopes.includes(PAIRING_SCOPE)) {
-    return errorShape(ErrorCodes.INVALID_REQUEST, "missing scope: operator.pairing");
-  }
-  if (isReadMethod(method) && !(scopes.includes(READ_SCOPE) || scopes.includes(WRITE_SCOPE))) {
-    return errorShape(ErrorCodes.INVALID_REQUEST, "missing scope: operator.read");
-  }
-  if (isWriteMethod(method) && !scopes.includes(WRITE_SCOPE)) {
-    return errorShape(ErrorCodes.INVALID_REQUEST, "missing scope: operator.write");
-  }
-  if (isApprovalMethod(method)) {
-    return null;
-  }
-  if (isPairingMethod(method)) {
-    return null;
-  }
-  if (isReadMethod(method)) {
-    return null;
-  }
-  if (isWriteMethod(method)) {
-    return null;
-  }
-  if (isAdminOnlyMethod(method)) {
-    return errorShape(ErrorCodes.INVALID_REQUEST, "missing scope: operator.admin");
-  }
-  return errorShape(ErrorCodes.INVALID_REQUEST, "missing scope: operator.admin");
+  return null;
 }
 
 export const coreGatewayHandlers: GatewayRequestHandlers = {

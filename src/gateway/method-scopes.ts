@@ -11,6 +11,12 @@ export type OperatorScope =
   | typeof APPROVALS_SCOPE
   | typeof PAIRING_SCOPE;
 
+export const CLI_DEFAULT_OPERATOR_SCOPES: OperatorScope[] = [
+  ADMIN_SCOPE,
+  APPROVALS_SCOPE,
+  PAIRING_SCOPE,
+];
+
 const APPROVAL_METHODS = new Set([
   "exec.approval.request",
   "exec.approval.waitDecision",
@@ -52,6 +58,7 @@ const READ_METHODS = new Set([
   "voicewake.get",
   "sessions.list",
   "sessions.preview",
+  "sessions.resolve",
   "cron.list",
   "cron.status",
   "cron.runs",
@@ -66,6 +73,7 @@ const READ_METHODS = new Set([
 
 const WRITE_METHODS = new Set([
   "send",
+  "poll",
   "agent",
   "agent.wait",
   "wake",
@@ -133,22 +141,50 @@ export function isAdminOnlyMethod(method: string): boolean {
   return ADMIN_METHODS.has(method);
 }
 
-export function resolveLeastPrivilegeOperatorScopesForMethod(method: string): OperatorScope[] {
+export function resolveRequiredOperatorScopeForMethod(method: string): OperatorScope | undefined {
   if (isApprovalMethod(method)) {
-    return [APPROVALS_SCOPE];
+    return APPROVALS_SCOPE;
   }
   if (isPairingMethod(method)) {
-    return [PAIRING_SCOPE];
+    return PAIRING_SCOPE;
   }
   if (isReadMethod(method)) {
-    return [READ_SCOPE];
+    return READ_SCOPE;
   }
   if (isWriteMethod(method)) {
-    return [WRITE_SCOPE];
+    return WRITE_SCOPE;
   }
   if (isAdminOnlyMethod(method)) {
-    return [ADMIN_SCOPE];
+    return ADMIN_SCOPE;
+  }
+  return undefined;
+}
+
+export function resolveLeastPrivilegeOperatorScopesForMethod(method: string): OperatorScope[] {
+  const requiredScope = resolveRequiredOperatorScopeForMethod(method);
+  if (requiredScope) {
+    return [requiredScope];
   }
   // Default-deny for unclassified methods.
   return [];
+}
+
+export function authorizeOperatorScopesForMethod(
+  method: string,
+  scopes: readonly string[],
+): { allowed: true } | { allowed: false; missingScope: OperatorScope } {
+  if (scopes.includes(ADMIN_SCOPE)) {
+    return { allowed: true };
+  }
+  const requiredScope = resolveRequiredOperatorScopeForMethod(method) ?? ADMIN_SCOPE;
+  if (requiredScope === READ_SCOPE) {
+    if (scopes.includes(READ_SCOPE) || scopes.includes(WRITE_SCOPE)) {
+      return { allowed: true };
+    }
+    return { allowed: false, missingScope: READ_SCOPE };
+  }
+  if (scopes.includes(requiredScope)) {
+    return { allowed: true };
+  }
+  return { allowed: false, missingScope: requiredScope };
 }
