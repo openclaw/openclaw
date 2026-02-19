@@ -540,7 +540,7 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.BodyForCommands).toBe("audio ok");
   });
 
-  it("treats text-like attachments as CSV (comma wins over tabs)", async () => {
+  it("treats text-like attachments as TSV (tabs win over commas)", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-"));
     const csvPath = path.join(dir, "data.bin");
     const csvText = '"a","b"\t"c"\n"1","2"\t"3"';
@@ -552,7 +552,7 @@ describe("applyMediaUnderstanding", () => {
     });
 
     expect(result.appliedFile).toBe(true);
-    expect(ctx.Body).toContain('<file name="data.bin" mime="text/csv">');
+    expect(ctx.Body).toContain('<file name="data.bin" mime="text/tab-separated-values">');
     expect(ctx.Body).toContain('"a","b"\t"c"');
   });
 
