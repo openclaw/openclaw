@@ -229,6 +229,7 @@ function makeSuccessfulRunResult(overrides?: Record<string, unknown>) {
     },
     provider: "anthropic",
     model: "claude-sonnet-4-6",
+    attempts: [],
     ...overrides,
   };
 }
