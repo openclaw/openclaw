@@ -134,15 +134,14 @@ describe("buildModelsKeyboard", () => {
     expect(result[2]?.[0]?.text).toBe("<< Back");
   });
 
-  it("marks current model with checkmark", () => {
+  it("does not add checkmark to current model", () => {
     const result = buildModelsKeyboard({
       provider: "anthropic",
       models: ["claude-sonnet-4", "claude-opus-4"],
-      currentModel: "anthropic/claude-sonnet-4",
       currentPage: 1,
       totalPages: 1,
     });
-    expect(result[0]?.[0]?.text).toBe("claude-sonnet-4 ✓");
+    expect(result[0]?.[0]?.text).toBe("claude-sonnet-4");
     expect(result[1]?.[0]?.text).toBe("claude-opus-4");
   });
 

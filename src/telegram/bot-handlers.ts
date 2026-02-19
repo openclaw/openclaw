@@ -7,19 +7,16 @@ import {
 } from "../auto-reply/inbound-debounce.js";
 import { buildCommandsPaginationKeyboard } from "../auto-reply/reply/commands-info.js";
 import { buildModelsProviderData } from "../auto-reply/reply/commands-models.js";
-import { resolveStoredModelOverride } from "../auto-reply/reply/model-selection.js";
 import { listSkillCommandsForAgents } from "../auto-reply/skill-commands.js";
 import { buildCommandsMessagePaginated } from "../auto-reply/status.js";
 import { resolveChannelConfigWrites } from "../channels/plugins/config-writes.js";
 import { loadConfig } from "../config/config.js";
 import { writeConfigFile } from "../config/io.js";
-import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import type { TelegramGroupConfig, TelegramTopicConfig } from "../config/types.js";
 import { danger, logVerbose, warn } from "../globals.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
-import { resolveThreadSessionKeys } from "../routing/session-key.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
   isSenderAllowed,
@@ -57,6 +54,62 @@ import {
 } from "./model-buttons.js";
 import { buildInlineKeyboard } from "./send.js";
 import { wasSentByBot } from "./sent-message-cache.js";
+
+const CALLBACK_DEFAULT_DEDUPE_WINDOW_MS = 8000;
+const CALLBACK_DISABLE_SENTINEL = "ocb:clicked";
+
+function isUiStateTransitionCallback(data: string): boolean {
+  return data.startsWith("mdl_") || data.startsWith("commands_page_");
+}
+
+function buildEditedCallbackKeyboard(params: {
+  callbackData: string;
+  mode: "mark-clicked" | "disable-clicked";
+  message: Message;
+}) {
+  const rows = params.message.reply_markup?.inline_keyboard;
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return undefined;
+  }
+
+  // UX decision: for non built-in callbacks, reflect the click visually.
+  // mark-clicked: prefix text with ✅, keep callback_data (button stays tappable).
+  // disable-clicked: prefix text and replace callback_data with sentinel (button becomes noop).
+  let selectedButton: { text: string; callback_data: string } | null = null;
+  for (const row of rows) {
+    for (const button of row) {
+      if (!button || typeof button !== "object") {
+        continue;
+      }
+      if (!("callback_data" in button) || !("text" in button)) {
+        continue;
+      }
+      if (button.callback_data !== params.callbackData) {
+        continue;
+      }
+      const normalizedText = button.text.replace(/^✅\s*/, "").trimStart();
+      const clickedText = `✅ ${normalizedText}`;
+      selectedButton = {
+        ...button,
+        text: clickedText,
+        callback_data:
+          params.mode === "disable-clicked"
+            ? `${CALLBACK_DISABLE_SENTINEL}:${Date.now().toString(36)}`
+            : button.callback_data,
+      };
+      break;
+    }
+    if (selectedButton) {
+      break;
+    }
+  }
+
+  if (!selectedButton) {
+    return undefined;
+  }
+
+  return { inline_keyboard: [[selectedButton]] };
+}
 
 export const registerTelegramHandlers = ({
   cfg,
@@ -99,6 +152,17 @@ export const registerTelegramHandlers = ({
   };
   const textFragmentBuffer = new Map<string, TextFragmentEntry>();
   let textFragmentProcessing: Promise<void> = Promise.resolve();
+
+  const callbackCfg = telegramCfg.callback;
+  const callbackDirectEnabled = callbackCfg?.enabled === true;
+  const callbackForwardUnhandled = callbackCfg?.forwardUnhandled ?? true;
+  const callbackTapIntercept = callbackCfg?.tapIntercept === true;
+  const callbackDedupeWindowMs = Math.max(
+    0,
+    Math.min(60_000, callbackCfg?.dedupeWindowMs ?? CALLBACK_DEFAULT_DEDUPE_WINDOW_MS),
+  );
+  const callbackButtonStateMode = callbackCfg?.buttonStateMode ?? "off";
+  const callbackDedupeCache = new Map<string, number>();
 
   const debounceMs = resolveInboundDebounceMs({ cfg, channel: "telegram" });
   type TelegramDebounceEntry = {
@@ -181,66 +245,6 @@ export const registerTelegramHandlers = ({
       runtime.error?.(danger(`telegram debounce flush failed: ${String(err)}`));
     },
   });
-
-  const resolveTelegramSessionModel = (params: {
-    chatId: number | string;
-    isGroup: boolean;
-    isForum: boolean;
-    messageThreadId?: number;
-    resolvedThreadId?: number;
-  }): string | undefined => {
-    const resolvedThreadId =
-      params.resolvedThreadId ??
-      resolveTelegramForumThreadId({
-        isForum: params.isForum,
-        messageThreadId: params.messageThreadId,
-      });
-    const peerId = params.isGroup
-      ? buildTelegramGroupPeerId(params.chatId, resolvedThreadId)
-      : String(params.chatId);
-    const parentPeer = buildTelegramParentPeer({
-      isGroup: params.isGroup,
-      resolvedThreadId,
-      chatId: params.chatId,
-    });
-    const route = resolveAgentRoute({
-      cfg,
-      channel: "telegram",
-      accountId,
-      peer: {
-        kind: params.isGroup ? "group" : "direct",
-        id: peerId,
-      },
-      parentPeer,
-    });
-    const baseSessionKey = route.sessionKey;
-    const dmThreadId = !params.isGroup ? params.messageThreadId : undefined;
-    const threadKeys =
-      dmThreadId != null
-        ? resolveThreadSessionKeys({ baseSessionKey, threadId: String(dmThreadId) })
-        : null;
-    const sessionKey = threadKeys?.sessionKey ?? baseSessionKey;
-    const storePath = resolveStorePath(cfg.session?.store, { agentId: route.agentId });
-    const store = loadSessionStore(storePath);
-    const entry = store[sessionKey];
-    const storedOverride = resolveStoredModelOverride({
-      sessionEntry: entry,
-      sessionStore: store,
-      sessionKey,
-    });
-    if (storedOverride) {
-      return storedOverride.provider
-        ? `${storedOverride.provider}/${storedOverride.model}`
-        : storedOverride.model;
-    }
-    const provider = entry?.modelProvider?.trim();
-    const model = entry?.model?.trim();
-    if (provider && model) {
-      return `${provider}/${model}`;
-    }
-    const modelCfg = cfg.agents?.defaults?.model;
-    return typeof modelCfg === "string" ? modelCfg : modelCfg?.primary;
-  };
 
   const processMediaGroup = async (entry: MediaGroupEntry) => {
     try {
@@ -703,55 +707,111 @@ export const registerTelegramHandlers = ({
     if (shouldSkipUpdate(ctx)) {
       return;
     }
+    const data = (callback.data ?? "").trim();
+    const callbackMessage = callback.message;
     const answerCallbackQuery =
       typeof (ctx as { answerCallbackQuery?: unknown }).answerCallbackQuery === "function"
-        ? () => ctx.answerCallbackQuery()
-        : () => bot.api.answerCallbackQuery(callback.id);
-    // Answer immediately to prevent Telegram from retrying while we process
-    await withTelegramApiErrorLogging({
-      operation: "answerCallbackQuery",
-      runtime,
-      fn: answerCallbackQuery,
-    }).catch(() => {});
-    try {
-      const data = (callback.data ?? "").trim();
-      const callbackMessage = callback.message;
-      if (!data || !callbackMessage) {
+        ? () =>
+            ctx.answerCallbackQuery({
+              text: callbackCfg?.ackText,
+              show_alert: callbackCfg?.ackAlert,
+            })
+        : () => {
+            const ackText = callbackCfg?.ackText;
+            const ackAlert = callbackCfg?.ackAlert;
+            if (typeof ackText === "string" || typeof ackAlert === "boolean") {
+              return bot.api.answerCallbackQuery(callback.id, {
+                text: ackText,
+                show_alert: ackAlert,
+              });
+            }
+            return bot.api.answerCallbackQuery(callback.id);
+          };
+    const plainAck = () => bot.api.answerCallbackQuery(callback.id);
+
+    // Early-return for disabled buttons — ack without ackText/ackAlert.
+    // If tapIntercept is enabled, middleware already answered this callback.
+    if (data.startsWith(`${CALLBACK_DISABLE_SENTINEL}:`)) {
+      if (!callbackTapIntercept) {
+        await withTelegramApiErrorLogging({
+          operation: "answerCallbackQuery",
+          runtime,
+          fn: plainAck,
+        }).catch(() => {});
+      }
+      return;
+    }
+
+    // Answer immediately to prevent Telegram from retrying while we process.
+    // Skip if tapIntercept already answered in the middleware layer.
+    if (!callbackTapIntercept) {
+      await withTelegramApiErrorLogging({
+        operation: "answerCallbackQuery",
+        runtime,
+        fn: answerCallbackQuery,
+      }).catch(() => {});
+    }
+
+    if (!data || !callbackMessage) {
+      return;
+    }
+
+    const callbackDedupeId = [
+      String(callbackMessage.chat.id),
+      String(callbackMessage.message_id),
+      String(callback.from?.id ?? "anon"),
+      data,
+    ].join(":");
+
+    const shouldSkipDedupe = isUiStateTransitionCallback(data);
+    if (callbackDirectEnabled && callbackDedupeWindowMs > 0 && !shouldSkipDedupe) {
+      const now = Date.now();
+      for (const [key, expiresAt] of callbackDedupeCache) {
+        if (expiresAt <= now) {
+          callbackDedupeCache.delete(key);
+        }
+      }
+      const seenUntil = callbackDedupeCache.get(callbackDedupeId);
+      if (typeof seenUntil === "number" && seenUntil > now) {
         return;
       }
-      const editCallbackMessage = async (
-        text: string,
-        params?: Parameters<typeof bot.api.editMessageText>[3],
-      ) => {
-        const editTextFn = (ctx as { editMessageText?: unknown }).editMessageText;
-        if (typeof editTextFn === "function") {
-          return await ctx.editMessageText(text, params);
-        }
-        return await bot.api.editMessageText(
-          callbackMessage.chat.id,
-          callbackMessage.message_id,
-          text,
-          params,
-        );
-      };
-      const deleteCallbackMessage = async () => {
-        const deleteFn = (ctx as { deleteMessage?: unknown }).deleteMessage;
-        if (typeof deleteFn === "function") {
-          return await ctx.deleteMessage();
-        }
-        return await bot.api.deleteMessage(callbackMessage.chat.id, callbackMessage.message_id);
-      };
-      const replyToCallbackChat = async (
-        text: string,
-        params?: Parameters<typeof bot.api.sendMessage>[2],
-      ) => {
-        const replyFn = (ctx as { reply?: unknown }).reply;
-        if (typeof replyFn === "function") {
-          return await ctx.reply(text, params);
-        }
-        return await bot.api.sendMessage(callbackMessage.chat.id, text, params);
-      };
+      callbackDedupeCache.set(callbackDedupeId, now + callbackDedupeWindowMs);
+    }
 
+    const editCallbackMessage = async (
+      text: string,
+      params?: Parameters<typeof bot.api.editMessageText>[3],
+    ) => {
+      const editTextFn = (ctx as { editMessageText?: unknown }).editMessageText;
+      if (typeof editTextFn === "function") {
+        return await ctx.editMessageText(text, params);
+      }
+      return await bot.api.editMessageText(
+        callbackMessage.chat.id,
+        callbackMessage.message_id,
+        text,
+        params,
+      );
+    };
+    const deleteCallbackMessage = async () => {
+      const deleteFn = (ctx as { deleteMessage?: unknown }).deleteMessage;
+      if (typeof deleteFn === "function") {
+        return await ctx.deleteMessage();
+      }
+      return await bot.api.deleteMessage(callbackMessage.chat.id, callbackMessage.message_id);
+    };
+    const replyToCallbackChat = async (
+      text: string,
+      params?: Parameters<typeof bot.api.sendMessage>[2],
+    ) => {
+      const replyFn = (ctx as { reply?: unknown }).reply;
+      if (typeof replyFn === "function") {
+        return await ctx.reply(text, params);
+      }
+      return await bot.api.sendMessage(callbackMessage.chat.id, text, params);
+    };
+
+    try {
       const inlineButtonsScope = resolveTelegramInlineButtonsScope({
         cfg,
         accountId,
@@ -828,6 +888,24 @@ export const registerTelegramHandlers = ({
           if (!allowed) {
             return;
           }
+        }
+      }
+
+      if (callbackButtonStateMode !== "off" && !isUiStateTransitionCallback(data)) {
+        const editedMarkup = buildEditedCallbackKeyboard({
+          callbackData: data,
+          mode: callbackButtonStateMode,
+          message: callbackMessage,
+        });
+        if (editedMarkup) {
+          await withTelegramApiErrorLogging({
+            operation: "editMessageReplyMarkup",
+            runtime,
+            fn: () =>
+              bot.api.editMessageReplyMarkup(callbackMessage.chat.id, callbackMessage.message_id, {
+                reply_markup: editedMarkup,
+              }),
+          }).catch(() => undefined);
         }
       }
 
@@ -933,18 +1011,9 @@ export const registerTelegramHandlers = ({
           const safePage = Math.max(1, Math.min(page, totalPages));
 
           // Resolve current model from session (prefer overrides)
-          const currentModel = resolveTelegramSessionModel({
-            chatId,
-            isGroup,
-            isForum,
-            messageThreadId,
-            resolvedThreadId,
-          });
-
           const buttons = buildModelsKeyboard({
             provider,
             models,
-            currentModel,
             currentPage: safePage,
             totalPages,
             pageSize,
@@ -969,6 +1038,10 @@ export const registerTelegramHandlers = ({
           return;
         }
 
+        return;
+      }
+
+      if (callbackDirectEnabled && !callbackForwardUnhandled) {
         return;
       }
 

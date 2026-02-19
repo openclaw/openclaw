@@ -9,12 +9,14 @@ import { normalizeTelegramCommandName } from "../config/telegram-custom-commands
 import {
   answerCallbackQuerySpy,
   commandSpy,
+  editMessageReplyMarkupSpy,
   editMessageTextSpy,
   enqueueSystemEventSpy,
   getLoadConfigMock,
   getReadChannelAllowFromStoreMock,
   getOnHandler,
   listSkillCommandsForAgents,
+  middlewareUseSpy,
   onSpy,
   replySpy,
   sendMessageSpy,
@@ -153,6 +155,343 @@ describe("createTelegramBot", () => {
     expect(registered.some((command) => reserved.has(command.command))).toBe(false);
   });
 
+  it("routes callback_query payloads as messages and answers callbacks", async () => {
+    onSpy.mockReset();
+    replySpy.mockReset();
+
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+    expect(callbackHandler).toBeDefined();
+
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-1",
+        data: "cmd:option_a",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 10,
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = replySpy.mock.calls[0][0];
+    expect(payload.Body).toContain("cmd:option_a");
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-1");
+  });
+
+  it("supports callback direct mode without forwarding unhandled payloads", async () => {
+    onSpy.mockReset();
+    replySpy.mockReset();
+
+    createTelegramBot({
+      token: "tok",
+      config: {
+        channels: {
+          telegram: {
+            dmPolicy: "open",
+            allowFrom: ["*"],
+            callback: { enabled: true, forwardUnhandled: false },
+          },
+        },
+      },
+    });
+    const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-direct-1",
+        data: "plain_payload",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 14,
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-direct-1");
+    expect(replySpy).not.toHaveBeenCalled();
+  });
+
+  it("dedupes repeated callback clicks by sender/message/data", async () => {
+    onSpy.mockReset();
+    replySpy.mockReset();
+
+    createTelegramBot({
+      token: "tok",
+      config: {
+        channels: {
+          telegram: {
+            dmPolicy: "open",
+            allowFrom: ["*"],
+            callback: { enabled: true, dedupeWindowMs: 15_000 },
+          },
+        },
+      },
+    });
+    const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    const baseCallback = {
+      callbackQuery: {
+        id: "cbq-dedupe-1",
+        data: "cmd:option_a",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 15,
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    };
+
+    await callbackHandler(baseCallback);
+    await callbackHandler({
+      ...baseCallback,
+      callbackQuery: { ...baseCallback.callbackQuery, id: "cbq-dedupe-2" },
+    });
+
+    expect(answerCallbackQuerySpy).toHaveBeenCalledTimes(2);
+    expect(replySpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not dedupe built-in UI transition callbacks", async () => {
+    onSpy.mockReset();
+    editMessageTextSpy.mockReset();
+
+    createTelegramBot({
+      token: "tok",
+      config: {
+        channels: {
+          telegram: {
+            dmPolicy: "open",
+            allowFrom: ["*"],
+            callback: { enabled: true, dedupeWindowMs: 15_000 },
+          },
+        },
+      },
+    });
+
+    const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    const base = {
+      callbackQuery: {
+        id: "cbq-ui-1",
+        data: "mdl_back",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 21,
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    };
+
+    await callbackHandler(base);
+    await callbackHandler({
+      ...base,
+      callbackQuery: { ...base.callbackQuery, id: "cbq-ui-2" },
+    });
+
+    expect(editMessageTextSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("ignores disabled callback sentinel payloads", async () => {
+    onSpy.mockReset();
+    replySpy.mockReset();
+
+    createTelegramBot({
+      token: "tok",
+      config: {
+        channels: {
+          telegram: {
+            dmPolicy: "open",
+            allowFrom: ["*"],
+            callback: {
+              enabled: true,
+              forwardUnhandled: true,
+            },
+          },
+        },
+      },
+    });
+
+    const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-disabled-1",
+        data: "ocb:clicked:abc123",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 17,
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-disabled-1");
+    expect(replySpy).not.toHaveBeenCalled();
+  });
+
+  it("locks non built-in callback choices by hiding unclicked options", async () => {
+    onSpy.mockReset();
+    editMessageReplyMarkupSpy.mockReset();
+
+    createTelegramBot({
+      token: "tok",
+      config: {
+        channels: {
+          telegram: {
+            dmPolicy: "open",
+            allowFrom: ["*"],
+            callback: {
+              enabled: true,
+              forwardUnhandled: false,
+              buttonStateMode: "mark-clicked",
+            },
+          },
+        },
+      },
+    });
+
+    const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-lock-1",
+        data: "choice:b",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 19,
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { text: "A", callback_data: "choice:a" },
+                { text: "B", callback_data: "choice:b" },
+              ],
+            ],
+          },
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(editMessageReplyMarkupSpy).toHaveBeenCalledTimes(1);
+    const [, , params] = editMessageReplyMarkupSpy.mock.calls[0] ?? [];
+    // mark-clicked: prefixes clicked button with ✅ and keeps callback_data tappable
+    expect(params).toEqual(
+      expect.objectContaining({
+        reply_markup: {
+          inline_keyboard: [
+            [
+              expect.objectContaining({
+                text: "✅ B",
+                callback_data: "choice:b",
+              }),
+            ],
+          ],
+        },
+      }),
+    );
+  });
+
+  it("replaces callback_data with sentinel in disable-clicked mode", async () => {
+    onSpy.mockReset();
+    editMessageReplyMarkupSpy.mockReset();
+
+    createTelegramBot({
+      token: "tok",
+      config: {
+        channels: {
+          telegram: {
+            dmPolicy: "open",
+            allowFrom: ["*"],
+            callback: {
+              enabled: true,
+              forwardUnhandled: false,
+              buttonStateMode: "disable-clicked",
+            },
+          },
+        },
+      },
+    });
+
+    const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-disable-1",
+        data: "choice:a",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 20,
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { text: "A", callback_data: "choice:a" },
+                { text: "B", callback_data: "choice:b" },
+              ],
+            ],
+          },
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(editMessageReplyMarkupSpy).toHaveBeenCalledTimes(1);
+    const [, , params2] = editMessageReplyMarkupSpy.mock.calls[0] ?? [];
+    // disable-clicked: clicked button gets ✅ prefix and callback_data sentinel (noop)
+    expect(params2).toEqual(
+      expect.objectContaining({
+        reply_markup: {
+          inline_keyboard: [
+            [
+              expect.objectContaining({
+                text: "✅ A",
+                callback_data: expect.stringContaining("ocb:clicked"),
+              }),
+            ],
+          ],
+        },
+      }),
+    );
+  });
+
   it("blocks callback_query when inline buttons are allowlist-only and sender not authorized", async () => {
     onSpy.mockReset();
     replySpy.mockReset();
@@ -232,6 +571,53 @@ describe("createTelegramBot", () => {
         reply_markup: expect.any(Object),
       }),
     );
+  });
+
+  it("skips checkmark state edit for UI transition callbacks", async () => {
+    onSpy.mockReset();
+    editMessageReplyMarkupSpy.mockReset();
+    editMessageTextSpy.mockReset();
+
+    createTelegramBot({
+      token: "tok",
+      config: {
+        channels: {
+          telegram: {
+            dmPolicy: "open",
+            allowFrom: ["*"],
+            callback: {
+              enabled: true,
+              buttonStateMode: "mark-clicked",
+            },
+          },
+        },
+      },
+    });
+
+    const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-ui-transition-1",
+        data: "commands_page_2:main",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 18,
+          reply_markup: {
+            inline_keyboard: [[{ text: "Next", callback_data: "commands_page_2:main" }]],
+          },
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(editMessageReplyMarkupSpy).not.toHaveBeenCalled();
+    expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
   });
 
   it("blocks pagination callbacks when allowlist rejects sender", async () => {
@@ -1158,5 +1544,196 @@ describe("createTelegramBot", () => {
     };
     const sessionKey = eventOptions.sessionKey ?? "";
     expect(sessionKey).not.toContain(":topic:");
+  });
+
+  it("calls answerCallbackQuery exactly once with ackText when tapIntercept is enabled", async () => {
+    onSpy.mockReset();
+    answerCallbackQuerySpy.mockReset();
+    middlewareUseSpy.mockReset();
+    replySpy.mockReset();
+
+    createTelegramBot({
+      token: "tok",
+      config: {
+        channels: {
+          telegram: {
+            dmPolicy: "open",
+            allowFrom: ["*"],
+            callback: {
+              enabled: true,
+              tapIntercept: true,
+              ackText: "Got it!",
+              forwardUnhandled: true,
+            },
+          },
+        },
+      },
+    });
+
+    // The tapIntercept middleware is registered via bot.use().
+    // Extract the last middleware registered (the tap intercept + logging middleware).
+    const middlewareFn = middlewareUseSpy.mock.calls.at(-1)?.[0] as
+      | ((ctx: Record<string, unknown>, next: () => Promise<void>) => Promise<void>)
+      | undefined;
+    expect(middlewareFn).toBeDefined();
+
+    const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+    expect(callbackHandler).toBeDefined();
+
+    const ctx = {
+      callbackQuery: {
+        id: "cbq-tap-1",
+        data: "cmd:option_a",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 30,
+        },
+      },
+      update: {
+        callback_query: {
+          id: "cbq-tap-1",
+          data: "cmd:option_a",
+          from: { id: 9, first_name: "Ada", username: "ada_bot" },
+          message: {
+            chat: { id: 1234, type: "private" },
+            date: 1736380800,
+            message_id: 30,
+          },
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    };
+
+    // Run the middleware (which should call answerCallbackQuery with ackText)
+    await middlewareFn!(ctx, async () => {});
+
+    // Run the handler (which should skip answerCallbackQuery since tapIntercept is on)
+    await callbackHandler(ctx);
+
+    // answerCallbackQuery should be called exactly once — by the middleware
+    expect(answerCallbackQuerySpy).toHaveBeenCalledTimes(1);
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-tap-1", {
+      text: "Got it!",
+      show_alert: undefined,
+    });
+  });
+
+  it("acks disabled sentinel button without forwarding to processMessage", async () => {
+    onSpy.mockReset();
+    replySpy.mockReset();
+    answerCallbackQuerySpy.mockReset();
+    enqueueSystemEventSpy.mockReset();
+
+    createTelegramBot({
+      token: "tok",
+      config: {
+        channels: {
+          telegram: {
+            dmPolicy: "open",
+            allowFrom: ["*"],
+            callback: {
+              enabled: true,
+              forwardUnhandled: true,
+              ackText: "Custom ack",
+            },
+          },
+        },
+      },
+    });
+
+    const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-sentinel-1",
+        data: "ocb:clicked:xyz789",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 31,
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    // Should get a plain ack (no ackText/ackAlert) since it's a disabled button
+    expect(answerCallbackQuerySpy).toHaveBeenCalledTimes(1);
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-sentinel-1");
+    // Should NOT forward to processMessage or enqueue system events
+    expect(replySpy).not.toHaveBeenCalled();
+    expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
+  });
+
+  it("answers sentinel callback exactly once when tapIntercept is enabled", async () => {
+    onSpy.mockReset();
+    answerCallbackQuerySpy.mockReset();
+    middlewareUseSpy.mockReset();
+
+    createTelegramBot({
+      token: "tok",
+      config: {
+        channels: {
+          telegram: {
+            dmPolicy: "open",
+            allowFrom: ["*"],
+            callback: {
+              enabled: true,
+              tapIntercept: true,
+              forwardUnhandled: true,
+              ackText: "Got it!",
+            },
+          },
+        },
+      },
+    });
+
+    const middlewareFn = middlewareUseSpy.mock.calls.at(-1)?.[0] as
+      | ((ctx: Record<string, unknown>, next: () => Promise<void>) => Promise<void>)
+      | undefined;
+    const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    const ctx = {
+      callbackQuery: {
+        id: "cbq-sentinel-tap-1",
+        data: "ocb:clicked:xyz789",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 32,
+        },
+      },
+      update: {
+        callback_query: {
+          id: "cbq-sentinel-tap-1",
+          data: "ocb:clicked:xyz789",
+          from: { id: 9, first_name: "Ada", username: "ada_bot" },
+          message: {
+            chat: { id: 1234, type: "private" },
+            date: 1736380800,
+            message_id: 32,
+          },
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    };
+
+    await middlewareFn!(ctx, async () => {});
+    await callbackHandler(ctx);
+
+    expect(answerCallbackQuerySpy).toHaveBeenCalledTimes(1);
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-sentinel-tap-1", undefined);
   });
 });

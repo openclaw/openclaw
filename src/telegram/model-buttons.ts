@@ -24,7 +24,6 @@ export type ProviderInfo = {
 export type ModelsKeyboardParams = {
   provider: string;
   models: string[];
-  currentModel?: string;
   currentPage: number;
   totalPages: number;
   pageSize?: number;
@@ -113,7 +112,7 @@ export function buildProviderKeyboard(providers: ProviderInfo[]): ButtonRow[] {
  * Build model list keyboard with pagination and back button.
  */
 export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
-  const { provider, models, currentModel, currentPage, totalPages } = params;
+  const { provider, models, currentPage, totalPages } = params;
   const pageSize = params.pageSize ?? MODELS_PAGE_SIZE;
 
   if (models.length === 0) {
@@ -128,9 +127,6 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
   const pageModels = models.slice(startIndex, endIndex);
 
   // Model buttons - one per row
-  const currentModelId = currentModel?.includes("/")
-    ? currentModel.split("/").slice(1).join("/")
-    : currentModel;
 
   for (const model of pageModels) {
     const callbackData = `mdl_sel_${provider}/${model}`;
@@ -139,9 +135,8 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
       continue;
     }
 
-    const isCurrentModel = model === currentModelId;
     const displayText = truncateModelId(model, 38);
-    const text = isCurrentModel ? `${displayText} ✓` : displayText;
+    const text = displayText;
 
     rows.push([
       {

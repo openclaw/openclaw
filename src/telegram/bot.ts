@@ -186,9 +186,34 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   };
 
   const rawUpdateLogger = createSubsystemLogger("gateway/channels/telegram/raw-update");
+  const tapInterceptLogger = createSubsystemLogger("gateway/channels/telegram/callback-tap");
+  const callbackTapInterceptEnabled = telegramCfg.callback?.tapIntercept === true;
   const MAX_RAW_UPDATE_CHARS = 8000;
   const MAX_RAW_UPDATE_STRING = 500;
   const MAX_RAW_UPDATE_ARRAY = 20;
+  const sanitizeDataPrefix = (value: unknown, max = 48) => {
+    if (typeof value !== "string") {
+      return "";
+    }
+    const compact = value.replace(/[\r\n\t]+/g, " ").trim();
+    return compact.slice(0, max);
+  };
+  const resolveUpdateType = (
+    update:
+      | {
+          callback_query?: unknown;
+          message?: unknown;
+        }
+      | undefined,
+  ) => {
+    if (update?.callback_query) {
+      return "callback_query";
+    }
+    if (update?.message) {
+      return "message";
+    }
+    return "other";
+  };
   const stringifyUpdate = (update: unknown) => {
     const seen = new WeakSet();
     return JSON.stringify(update ?? null, (key, value) => {
@@ -212,6 +237,39 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   };
 
   bot.use(async (ctx, next) => {
+    const updateType = resolveUpdateType(ctx.update);
+
+    if (callbackTapInterceptEnabled) {
+      try {
+        if (updateType === "callback_query") {
+          const callback = ctx.update?.callback_query;
+          const chatId = callback?.message?.chat?.id ?? callback?.from?.id ?? "unknown";
+          const messageId = callback?.message?.message_id ?? "unknown";
+          const dataPrefix = sanitizeDataPrefix(callback?.data);
+          tapInterceptLogger.debug(
+            `tap-intercept hit type=callback_query chatId=${String(chatId)} messageId=${String(messageId)} dataPrefix=${JSON.stringify(dataPrefix)}`,
+          );
+          // Tap intercept answers the callback immediately so Telegram does not retry.
+          // The downstream handler in bot-handlers.ts skips its own answerCallbackQuery
+          // when tapIntercept is enabled to avoid a double-answer race.
+          if (callback?.id) {
+            const callbackData = typeof callback.data === "string" ? callback.data.trim() : "";
+            const isSentinel = callbackData.startsWith("ocb:clicked:");
+            const ackText = telegramCfg.callback?.ackText;
+            const ackAlert = telegramCfg.callback?.ackAlert;
+            // Don't show ackText toast for already-disabled (sentinel) buttons — misleading UX.
+            const ackParams =
+              !isSentinel && (typeof ackText === "string" || typeof ackAlert === "boolean")
+                ? { text: ackText, show_alert: ackAlert }
+                : undefined;
+            await bot.api.answerCallbackQuery(callback.id, ackParams).catch(() => {});
+          }
+        }
+      } catch (err) {
+        tapInterceptLogger.debug(`tap-intercept failed: ${String(err)}`);
+      }
+    }
+
     if (shouldLogVerbose()) {
       try {
         const raw = stringifyUpdate(ctx.update);

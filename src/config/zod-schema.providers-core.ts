@@ -33,6 +33,7 @@ const DiscordIdSchema = z
 const DiscordIdListSchema = z.array(DiscordIdSchema);
 
 const TelegramInlineButtonsScopeSchema = z.enum(["off", "dm", "group", "all", "allowlist"]);
+const TelegramCallbackButtonStateModeSchema = z.enum(["off", "mark-clicked", "disable-clicked"]);
 
 const TelegramCapabilitiesSchema = z.union([
   z.array(z.string()),
@@ -149,6 +150,28 @@ export const TelegramAccountSchemaBase = z
     reactionLevel: z.enum(["off", "ack", "minimal", "extensive"]).optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
     linkPreview: z.boolean().optional(),
+    callback: z
+      .object({
+        enabled: z.boolean().optional(),
+        tapIntercept: z.boolean().optional(),
+        forwardUnhandled: z.boolean().optional(),
+        dedupeWindowMs: z.number().int().min(0).optional(),
+        ackText: z.string().optional(),
+        ackAlert: z.boolean().optional(),
+        buttonStateMode: TelegramCallbackButtonStateModeSchema.optional(),
+      })
+      .strict()
+      .superRefine((value, ctx) => {
+        if (value.forwardUnhandled === false && value.enabled !== true) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["forwardUnhandled"],
+            message:
+              "callback.forwardUnhandled=false requires callback.enabled=true to take effect",
+          });
+        }
+      })
+      .optional(),
     responsePrefix: z.string().optional(),
     ackReaction: z.string().optional(),
   })

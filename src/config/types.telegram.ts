@@ -29,6 +29,53 @@ export type TelegramNetworkConfig = {
 
 export type TelegramInlineButtonsScope = "off" | "dm" | "group" | "all" | "allowlist";
 
+export type TelegramCallbackButtonStateMode = "off" | "mark-clicked" | "disable-clicked";
+
+export type TelegramCallbackConfig = {
+  /**
+   * Enable callback-direct mode for inline buttons.
+   *
+   * When disabled (default), callbacks continue through the legacy processing path.
+   */
+  enabled?: boolean;
+  /**
+   * Enable top-layer callback tap intercept middleware.
+   *
+   * When enabled, raw callback_query updates are observed and immediately acknowledged
+   * before downstream textification/handlers run. Default: false.
+   */
+  tapIntercept?: boolean;
+  /**
+   * If false, unhandled callbacks are acknowledged and stopped without entering message processing.
+   * Default: true.
+   *
+   * Requires `callback.enabled=true` to take effect.
+   */
+  forwardUnhandled?: boolean;
+  /**
+   * Deduplicate repeated callback clicks within this time window (ms).
+   * Default: 8000.
+   */
+  dedupeWindowMs?: number;
+  /**
+   * Optional callback acknowledgement text shown as toast.
+   * Empty/undefined keeps Telegram default behavior.
+   */
+  ackText?: string;
+  /**
+   * Whether callback acknowledgement should be an alert popup.
+   * Default: false.
+   */
+  ackAlert?: boolean;
+  /**
+   * Optional post-click button state edit mode.
+   * - off: do not edit buttons
+   * - mark-clicked: prefix clicked button with "✅ "
+   * - disable-clicked: prefix clicked button and replace callback_data with noop marker
+   */
+  buttonStateMode?: TelegramCallbackButtonStateMode;
+};
+
 export type TelegramCapabilitiesConfig =
   | string[]
   | {
@@ -135,6 +182,8 @@ export type TelegramAccountConfig = {
   heartbeat?: ChannelHeartbeatVisibilityConfig;
   /** Controls whether link previews are shown in outbound messages. Default: true. */
   linkPreview?: boolean;
+  /** Inline callback handling behavior (dedupe, direct mode, optional button state edits). */
+  callback?: TelegramCallbackConfig;
   /**
    * Per-channel outbound response prefix override.
    *

@@ -257,7 +257,6 @@ export async function resolveModelsCommandReply(params: {
     const buttons = buildModelsKeyboard({
       provider,
       models,
-      currentModel: params.currentModel,
       currentPage: safePage,
       totalPages,
       pageSize: telegramPageSize,
