@@ -151,6 +151,7 @@ export async function runCommandWithTimeout(
     let timedOut = false;
     let noOutputTimedOut = false;
     let noOutputTimer: NodeJS.Timeout | null = null;
+    const childHasExited = () => child.exitCode !== null || child.signalCode !== null;
     const shouldTrackOutputTimeout =
       typeof noOutputTimeoutMs === "number" &&
       Number.isFinite(noOutputTimeoutMs) &&
@@ -165,12 +166,12 @@ export async function runCommandWithTimeout(
     };
 
     const armNoOutputTimer = () => {
-      if (!shouldTrackOutputTimeout || settled) {
+      if (!shouldTrackOutputTimeout || settled || childHasExited()) {
         return;
       }
       clearNoOutputTimer();
       noOutputTimer = setTimeout(() => {
-        if (settled) {
+        if (settled || childHasExited()) {
           return;
         }
         noOutputTimedOut = true;
@@ -200,6 +201,9 @@ export async function runCommandWithTimeout(
     child.stderr?.on("data", (d) => {
       stderr += d.toString();
       armNoOutputTimer();
+    });
+    child.on("exit", () => {
+      clearNoOutputTimer();
     });
     child.on("error", (err) => {
       if (settled) {
