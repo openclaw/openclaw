@@ -109,16 +109,23 @@ describe("extractReadPaths", () => {
 describe("auditPostCompactionReads", () => {
   const workspaceDir = "/Users/test/workspace";
 
+  // Use explicit required reads for deterministic tests (default list skips
+  // literal strings that don't exist on disk — see #20444).
+  const explicitRequired: Array<string | RegExp> = [
+    "WORKFLOW_AUTO.md",
+    /memory\/\d{4}-\d{2}-\d{2}\.md/,
+  ];
+
   it("passes when all required files are read", () => {
     const readPaths = ["WORKFLOW_AUTO.md", "memory/2026-02-16.md"];
-    const result = auditPostCompactionReads(readPaths, workspaceDir);
+    const result = auditPostCompactionReads(readPaths, workspaceDir, explicitRequired);
 
     expect(result.passed).toBe(true);
     expect(result.missingPatterns).toEqual([]);
   });
 
   it("fails when no files are read", () => {
-    const result = auditPostCompactionReads([], workspaceDir);
+    const result = auditPostCompactionReads([], workspaceDir, explicitRequired);
 
     expect(result.passed).toBe(false);
     expect(result.missingPatterns).toContain("WORKFLOW_AUTO.md");
@@ -127,7 +134,7 @@ describe("auditPostCompactionReads", () => {
 
   it("reports only missing files", () => {
     const readPaths = ["WORKFLOW_AUTO.md"];
-    const result = auditPostCompactionReads(readPaths, workspaceDir);
+    const result = auditPostCompactionReads(readPaths, workspaceDir, explicitRequired);
 
     expect(result.passed).toBe(false);
     expect(result.missingPatterns).not.toContain("WORKFLOW_AUTO.md");
@@ -136,7 +143,7 @@ describe("auditPostCompactionReads", () => {
 
   it("matches RegExp patterns against relative paths", () => {
     const readPaths = ["memory/2026-02-16.md"];
-    const result = auditPostCompactionReads(readPaths, workspaceDir);
+    const result = auditPostCompactionReads(readPaths, workspaceDir, explicitRequired);
 
     expect(result.passed).toBe(false);
     expect(result.missingPatterns).toContain("WORKFLOW_AUTO.md");
@@ -145,7 +152,7 @@ describe("auditPostCompactionReads", () => {
 
   it("normalizes relative paths when matching", () => {
     const readPaths = ["./WORKFLOW_AUTO.md", "memory/2026-02-16.md"];
-    const result = auditPostCompactionReads(readPaths, workspaceDir);
+    const result = auditPostCompactionReads(readPaths, workspaceDir, explicitRequired);
 
     expect(result.passed).toBe(true);
     expect(result.missingPatterns).toEqual([]);
@@ -156,7 +163,7 @@ describe("auditPostCompactionReads", () => {
       "/Users/test/workspace/WORKFLOW_AUTO.md",
       "/Users/test/workspace/memory/2026-02-16.md",
     ];
-    const result = auditPostCompactionReads(readPaths, workspaceDir);
+    const result = auditPostCompactionReads(readPaths, workspaceDir, explicitRequired);
 
     expect(result.passed).toBe(true);
     expect(result.missingPatterns).toEqual([]);
@@ -169,6 +176,15 @@ describe("auditPostCompactionReads", () => {
 
     expect(result.passed).toBe(true);
     expect(result.missingPatterns).toEqual([]);
+  });
+
+  it("defaults no longer include WORKFLOW_AUTO.md (#20444)", () => {
+    // With defaults, only RegExp patterns (memory files) are enforced.
+    // WORKFLOW_AUTO.md was removed because it is never auto-generated.
+    const result = auditPostCompactionReads([], workspaceDir);
+
+    expect(result.missingPatterns).not.toContain("WORKFLOW_AUTO.md");
+    expect(result.missingPatterns.some((p) => p.includes("memory"))).toBe(true);
   });
 });
 
