@@ -27,7 +27,10 @@ function isPathAllowed(filePath: string, allowedDirs: string[]): boolean {
 
 export function createFileWriterTool(api: OpenClawPluginApi) {
   const pluginCfg = (api.pluginConfig ?? {}) as PluginCfg;
-  const allowedDirs = [...DEFAULT_ALLOWED_DIRS, ...(pluginCfg.allowedDirs ?? [])];
+  const allowedDirs = [
+    ...DEFAULT_ALLOWED_DIRS,
+    ...(pluginCfg.allowedDirs ?? []).map((d) => path.resolve(d)),
+  ];
 
   api.logger.info(`file-writer: allowed dirs: ${allowedDirs.join(", ")}`);
 
