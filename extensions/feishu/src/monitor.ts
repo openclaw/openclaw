@@ -11,6 +11,10 @@ import { handleFeishuMessage, type FeishuMessageEvent, type FeishuBotAddedEvent 
 import { createFeishuWSClient, createEventDispatcher } from "./client.js";
 import { probeFeishu } from "./probe.js";
 import type { ResolvedFeishuAccount } from "./types.js";
+import {
+  validateFeishuMessageEventPayload,
+  validateFeishuBotAddedEventPayload,
+} from "./webhook-schema-validation.js";
 
 export type MonitorFeishuOpts = {
   config?: ClawdbotConfig;
@@ -57,7 +61,14 @@ function registerEventHandlers(
   eventDispatcher.register({
     "im.message.receive_v1": async (data) => {
       try {
-        const event = data as unknown as FeishuMessageEvent;
+        // Validate webhook payload structure (CWE-20: Improper Input Validation)
+        const validation = validateFeishuMessageEventPayload(data);
+        if (!validation.valid) {
+          error(`feishu[${accountId}]: invalid message event payload: ${validation.error}`);
+          return;
+        }
+        const event = validation.data;
+
         const promise = handleFeishuMessage({
           cfg,
           event,
@@ -82,7 +93,14 @@ function registerEventHandlers(
     },
     "im.chat.member.bot.added_v1": async (data) => {
       try {
-        const event = data as unknown as FeishuBotAddedEvent;
+        // Validate webhook payload structure (CWE-20: Improper Input Validation)
+        const validation = validateFeishuBotAddedEventPayload(data);
+        if (!validation.valid) {
+          error(`feishu[${accountId}]: invalid bot added event payload: ${validation.error}`);
+          return;
+        }
+        const event = validation.data;
+
         log(`feishu[${accountId}]: bot added to chat ${event.chat_id}`);
       } catch (err) {
         error(`feishu[${accountId}]: error handling bot added event: ${String(err)}`);
@@ -90,8 +108,14 @@ function registerEventHandlers(
     },
     "im.chat.member.bot.deleted_v1": async (data) => {
       try {
-        const event = data as unknown as { chat_id: string };
-        log(`feishu[${accountId}]: bot removed from chat ${event.chat_id}`);
+        // Validate chat_id field exists
+        const record = data as unknown as Record<string, unknown>;
+        if (typeof record?.chat_id !== "string") {
+          error(`feishu[${accountId}]: invalid bot deleted event: missing or invalid chat_id`);
+          return;
+        }
+
+        log(`feishu[${accountId}]: bot removed from chat ${record.chat_id}`);
       } catch (err) {
         error(`feishu[${accountId}]: error handling bot removed event: ${String(err)}`);
       }

@@ -24,6 +24,7 @@ import {
 } from "./api.js";
 import { resolveZaloProxyFetch } from "./proxy.js";
 import { getZaloRuntime } from "./runtime.js";
+import { validateZaloWebhookPayload } from "./webhook-schema-validation.js";
 
 export type ZaloRuntimeEnv = {
   log?: (message: string) => void;
@@ -136,16 +137,17 @@ export async function handleZaloWebhookRequest(
   // Zalo sends updates directly as { event_name, message, ... }, not wrapped in { ok, result }
   const raw = body.value;
   const record = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : null;
-  const update: ZaloUpdate | undefined =
-    record && record.ok === true && record.result
-      ? (record.result as ZaloUpdate)
-      : ((record as ZaloUpdate | null) ?? undefined);
+  const unwrappedPayload = record && record.ok === true && record.result ? record.result : record;
 
-  if (!update?.event_name) {
+  // Validate webhook payload structure (CWE-20: Improper Input Validation)
+  const validation = validateZaloWebhookPayload(unwrappedPayload);
+  if (!validation.valid) {
     res.statusCode = 400;
-    res.end("invalid payload");
+    res.end(`Bad Request: ${validation.error}`);
     return true;
   }
+
+  const update = validation.data;
 
   target.statusSink?.({ lastInboundAt: Date.now() });
   processUpdate(
