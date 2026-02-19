@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const callGatewayMock = vi.fn();
+const { callGatewayMock } = vi.hoisted(() => ({
+  callGatewayMock: vi.fn(),
+}));
+
 vi.mock("../../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));

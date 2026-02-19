@@ -455,6 +455,7 @@ export function createOpenClawCodingTools(options?: {
       requireExplicitMessageTarget: options?.requireExplicitMessageTarget,
       disableMessageTool: options?.disableMessageTool,
       requesterAgentIdOverride: agentId,
+      requesterSenderId: options?.senderId,
       senderIsOwner: options?.senderIsOwner,
     }),
   ];

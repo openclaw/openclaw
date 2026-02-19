@@ -61,4 +61,25 @@ describe("exec script preflight", () => {
       /exec preflight: (detected likely shell variable injection|JS file starts with shell syntax)/,
     );
   });
+
+  it("skips preflight file reads for script paths outside the workdir", async () => {
+    if (isWin) {
+      return;
+    }
+
+    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-exec-preflight-parent-"));
+    const outsidePath = path.join(parent, "outside.js");
+    const workdir = path.join(parent, "workdir");
+    await fs.mkdir(workdir, { recursive: true });
+    await fs.writeFile(outsidePath, "const value = $DM_JSON;", "utf-8");
+
+    const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+
+    const result = await tool.execute("call-outside", {
+      command: "node ../outside.js",
+      workdir,
+    });
+    const text = result.content.find((block) => block.type === "text")?.text ?? "";
+    expect(text).not.toMatch(/exec preflight:/);
+  });
 });

@@ -22,6 +22,7 @@ import { resolveSlackChannelConfig, type SlackChannelConfigResolved } from "./ch
 import { buildSlackSlashCommandMatcher, resolveSlackSlashCommandConfig } from "./commands.js";
 import type { SlackMonitorContext } from "./context.js";
 import { normalizeSlackChannelType } from "./context.js";
+import { escapeSlackMrkdwn } from "./mrkdwn.js";
 import { isSlackChannelAllowedByPolicy } from "./policy.js";
 import { resolveSlackRoomContextHints } from "./room-context.js";
 
@@ -53,15 +54,6 @@ function truncatePlainText(value: string, max: number): string {
     return trimmed.slice(0, max);
   }
   return `${trimmed.slice(0, max - 1)}…`;
-}
-
-function escapeSlackMrkdwn(value: string): string {
-  return value
-    .replaceAll("\\", "\\\\")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replace(/([*_`~])/g, "\\$1");
 }
 
 function buildSlackArgMenuConfirm(params: { command: string; arg: string }) {
