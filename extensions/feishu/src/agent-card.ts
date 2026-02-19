@@ -65,16 +65,16 @@ function stripReasoningSection(text: string): string {
 }
 
 function parseToolSummary(rawText: string): ToolEntry | null {
-  const text = rawText.trim();
-  if (!text) {
+  if (!rawText || !rawText.trim()) {
     return null;
   }
 
-  const lines = text.split(/\r?\n/);
-  const firstLine = lines[0]?.trim() ?? "";
-  const rest = lines.slice(1).join("\n").trim();
+  const lines = rawText.split(/\r?\n/);
+  const firstLine = lines[0] ?? "";
+  const firstLineTrimmed = firstLine.trim();
+  const rest = lines.slice(1).join("\n");
 
-  const match = firstLine.match(
+  const match = firstLineTrimmed.match(
     /^(?<warn>⚠️\s+)?(?<emoji>[\p{Extended_Pictographic}\uFE0F\u200D]+(?:\s+[\p{Extended_Pictographic}\uFE0F\u200D]+)*)\s+(?<name>[^:\n]+?)(?::\s*(?<meta>.*))?$/u,
   );
   if (!match?.groups) {
@@ -86,23 +86,29 @@ function parseToolSummary(rawText: string): ToolEntry | null {
     return null;
   }
 
-  const detailHead = (match.groups.meta ?? "").trim();
-  const detail = [detailHead, rest].filter(Boolean).join("\n").trim();
-  const isError = Boolean(match.groups.warn) || /\bfailed\b/i.test(firstLine);
+  let detail = "";
+  const colonIndex = firstLineTrimmed.indexOf(":");
+  if (colonIndex >= 0) {
+    detail = firstLineTrimmed.slice(colonIndex + 1);
+  }
+  if (rest) {
+    detail = detail ? `${detail}\n${rest}` : rest;
+  }
+  const isError = Boolean(match.groups.warn) || /\bfailed\b/i.test(firstLineTrimmed);
 
   return {
     name,
-    detail: detail || undefined,
+    detail: detail.length > 0 ? detail : undefined,
     isError,
   };
 }
 
 function formatToolLine(entry: ToolEntry): string {
-  const header = `调用\`${entry.name}\`工具`;
+  const header = `调用\`${entry.name}\`工具:`;
   if (!entry.detail) {
-    return entry.isError ? `${header}: 执行失败` : header;
+    return header;
   }
-  return `${header}: ${entry.detail}`;
+  return `${header}${entry.detail}`;
 }
 
 function formatBlockLine(text: string): string {
@@ -126,7 +132,7 @@ function buildCard(params: {
         .join("\n\n")
     : "暂无过程记录";
 
-  const answer = params.answer.trim() || "思考中...";
+  const answer = params.answer.trim();
   const bodyElements: Array<Record<string, unknown>> = [];
 
   if (params.timeline.length > 0) {
@@ -145,11 +151,13 @@ function buildCard(params: {
     }
   }
 
-  let answerContent = answer;
-  if (params.includeMentions && params.mentionTargets?.length) {
-    answerContent = buildMentionedCardContent(params.mentionTargets, answerContent);
+  if (answer) {
+    let answerContent = answer;
+    if (params.includeMentions && params.mentionTargets?.length) {
+      answerContent = buildMentionedCardContent(params.mentionTargets, answerContent);
+    }
+    bodyElements.push({ tag: "markdown", content: answerContent, margin: "2px 0px 0px 0px" });
   }
-  bodyElements.push({ tag: "markdown", content: answerContent, margin: "2px 0px 0px 0px" });
 
   const title =
     params.status === "completed"
