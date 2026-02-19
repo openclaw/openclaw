@@ -3,6 +3,7 @@ import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ExtensionAPI, FileOperations } from "@mariozechner/pi-coding-agent";
 import { extractSections } from "../../auto-reply/reply/post-compaction-context.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   BASE_CHUNK_RATIO,
   MIN_CHUNK_RATIO,
@@ -16,13 +17,16 @@ import {
 } from "../compaction.js";
 import { collectTextContentBlocks } from "../content-blocks.js";
 import { getCompactionSafeguardRuntime } from "./compaction-safeguard-runtime.js";
+
+const logger = createSubsystemLogger("agent/compaction-safeguard");
+
 const FALLBACK_SUMMARY =
   "Summary unavailable due to context limits. Older messages were truncated.";
 const TURN_PREFIX_INSTRUCTIONS =
   "This summary covers the prefix of a split turn. Focus on the original request," +
   " early progress, and any details needed to understand the retained suffix.";
-const MAX_TOOL_FAILURES = 8;
-const MAX_TOOL_FAILURE_CHARS = 240;
+const MAX_TOOL_FAILURES = 2; // Reduced from 8 to reduce noise
+const MAX_TOOL_FAILURE_CHARS = 120; // Reduced from 240
 
 type ToolFailure = {
   toolCallId: string;
@@ -251,7 +255,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           });
           if (pruned.droppedChunks > 0) {
             const newContentRatio = (newContentTokens / contextWindowTokens) * 100;
-            console.warn(
+            logger.warn(
               `Compaction safeguard: new content uses ${newContentRatio.toFixed(
                 1,
               )}% of context; dropped ${pruned.droppedChunks} older chunk(s) ` +
@@ -282,7 +286,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                   previousSummary: preparation.previousSummary,
                 });
               } catch (droppedError) {
-                console.warn(
+                logger.warn(
                   `Compaction safeguard: failed to summarize dropped messages, continuing without: ${
                     droppedError instanceof Error ? droppedError.message : String(droppedError)
                   }`,
@@ -349,7 +353,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         },
       };
     } catch (error) {
-      console.warn(
+      logger.warn(
         `Compaction summarization failed; truncating history: ${
           error instanceof Error ? error.message : String(error)
         }`,
