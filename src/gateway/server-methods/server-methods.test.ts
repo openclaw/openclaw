@@ -467,7 +467,7 @@ describe("gateway healthHandlers.status scope handling", () => {
     vi.mocked(status.getStatusSummary).mockClear();
   });
 
-  it("requests redacted status for non-admin clients", async () => {
+  async function runHealthStatus(scopes: string[]) {
     const respond = vi.fn();
     const status = await import("../../commands/status.js");
     const { healthHandlers } = await import("./health.js");
@@ -477,27 +477,22 @@ describe("gateway healthHandlers.status scope handling", () => {
       params: {} as never,
       respond: respond as never,
       context: {} as never,
-      client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+      client: { connect: { role: "operator", scopes } } as never,
       isWebchatConnect: () => false,
     });
+
+    return { respond, status };
+  }
+
+  it("requests redacted status for non-admin clients", async () => {
+    const { respond, status } = await runHealthStatus(["operator.read"]);
 
     expect(vi.mocked(status.getStatusSummary)).toHaveBeenCalledWith({ includeSensitive: false });
     expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
   });
 
   it("requests full status for admin clients", async () => {
-    const respond = vi.fn();
-    const status = await import("../../commands/status.js");
-    const { healthHandlers } = await import("./health.js");
-
-    await healthHandlers.status({
-      req: {} as never,
-      params: {} as never,
-      respond: respond as never,
-      context: {} as never,
-      client: { connect: { role: "operator", scopes: ["operator.admin"] } } as never,
-      isWebchatConnect: () => false,
-    });
+    const { respond, status } = await runHealthStatus(["operator.admin"]);
 
     expect(vi.mocked(status.getStatusSummary)).toHaveBeenCalledWith({ includeSensitive: true });
     expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
