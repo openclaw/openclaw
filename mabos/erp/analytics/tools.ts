@@ -8,43 +8,68 @@ const actions: ErpAction[] = [
   {
     name: "create_report",
     description: "Create a new analytics report definition",
-    params: ["name", "type", "query", "parameters?", "schedule?"],
-    handler: async (pg, params) => {
-      const report = await q.createReport(pg, params);
-      await writeAuditLog(pg, "analytics", "create_report", report.id, params);
-      return report;
+    params: {},
+    handler: async (params, ctx) => {
+      const report = await q.createReport(ctx.pg, params as any);
+      await writeAuditLog(ctx.pg, {
+        domain: "analytics",
+        entityType: "report",
+        entityId: report.id,
+        action: "create",
+        agentId: ctx.agentId,
+        payload: params as any,
+      });
+      return { success: true, data: report };
     },
   },
   {
     name: "get_report",
     description: "Retrieve a report by ID",
-    params: ["id"],
-    handler: async (pg, { id }) => q.getReport(pg, id),
+    params: {},
+    handler: async (params, ctx) => {
+      const report = await q.getReport(ctx.pg, (params as any).id);
+      return report ? { success: true, data: report } : { error: "Report not found" };
+    },
   },
   {
     name: "list_reports",
     description: "List reports with optional type/status filters",
-    params: ["type?", "status?", "limit?"],
-    handler: async (pg, params) => q.listReports(pg, params),
+    params: {},
+    handler: async (params, ctx) => {
+      return { success: true, data: await q.listReports(ctx.pg, params as any) };
+    },
   },
   {
     name: "run_report",
     description: "Execute a report query and store the resulting snapshot",
-    params: ["report_id"],
-    handler: async (pg, { report_id }) => {
-      const snapshot = await q.runReport(pg, report_id);
-      await writeAuditLog(pg, "analytics", "run_report", report_id, {});
-      return snapshot;
+    params: {},
+    handler: async (params, ctx) => {
+      const snapshot = await q.runReport(ctx.pg, (params as any).report_id);
+      await writeAuditLog(ctx.pg, {
+        domain: "analytics",
+        entityType: "report",
+        entityId: (params as any).report_id,
+        action: "run_report",
+        agentId: ctx.agentId,
+      });
+      return { success: true, data: snapshot };
     },
   },
   {
     name: "delete_report",
     description: "Soft-delete (archive) a report",
-    params: ["id"],
-    handler: async (pg, { id }) => {
-      const report = await q.deleteReport(pg, id);
-      await writeAuditLog(pg, "analytics", "delete_report", id, {});
-      return report;
+    params: {},
+    handler: async (params, ctx) => {
+      const report = await q.deleteReport(ctx.pg, (params as any).id);
+      if (!report) return { error: "Report not found" };
+      await writeAuditLog(ctx.pg, {
+        domain: "analytics",
+        entityType: "report",
+        entityId: (params as any).id,
+        action: "delete",
+        agentId: ctx.agentId,
+      });
+      return { success: true, data: report };
     },
   },
 
@@ -52,32 +77,49 @@ const actions: ErpAction[] = [
   {
     name: "create_dashboard",
     description: "Create a new dashboard with widget layout",
-    params: ["name", "description?", "widgets?", "owner_id?"],
-    handler: async (pg, params) => {
-      const dashboard = await q.createDashboard(pg, params);
-      await writeAuditLog(pg, "analytics", "create_dashboard", dashboard.id, params);
-      return dashboard;
+    params: {},
+    handler: async (params, ctx) => {
+      const dashboard = await q.createDashboard(ctx.pg, params as any);
+      await writeAuditLog(ctx.pg, {
+        domain: "analytics",
+        entityType: "dashboard",
+        entityId: dashboard.id,
+        action: "create",
+        agentId: ctx.agentId,
+        payload: params as any,
+      });
+      return { success: true, data: dashboard };
     },
   },
   {
     name: "get_dashboard",
     description: "Retrieve a dashboard by ID",
-    params: ["id"],
-    handler: async (pg, { id }) => q.getDashboard(pg, id),
+    params: {},
+    handler: async (params, ctx) => {
+      const dashboard = await q.getDashboard(ctx.pg, (params as any).id);
+      return dashboard ? { success: true, data: dashboard } : { error: "Dashboard not found" };
+    },
   },
   {
     name: "list_dashboards",
     description: "List dashboards with optional owner filter",
-    params: ["owner_id?", "limit?"],
-    handler: async (pg, params) => q.listDashboards(pg, params),
+    params: {},
+    handler: async (params, ctx) => {
+      return { success: true, data: await q.listDashboards(ctx.pg, params as any) };
+    },
   },
 
   /* ── Snapshots ────────────────────────────────────────────────────── */
   {
     name: "report_snapshots",
     description: "Get recent data snapshots for a report",
-    params: ["report_id", "limit?"],
-    handler: async (pg, { report_id, limit }) => q.getSnapshots(pg, report_id, limit),
+    params: {},
+    handler: async (params, ctx) => {
+      return {
+        success: true,
+        data: await q.getSnapshots(ctx.pg, (params as any).report_id, (params as any).limit),
+      };
+    },
   },
 ];
 

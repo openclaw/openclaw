@@ -8,33 +8,54 @@ const actions: ErpAction[] = [
   {
     name: "create_workflow",
     description: "Create a new workflow definition with trigger and steps",
-    params: ["name", "description?", "trigger", "steps", "status?"],
-    handler: async (pg, params) => {
-      const workflow = await q.createWorkflow(pg, params);
-      await writeAuditLog(pg, "workflows", "create_workflow", workflow.id, params);
-      return workflow;
+    params: {},
+    handler: async (params, ctx) => {
+      const workflow = await q.createWorkflow(ctx.pg, params as any);
+      await writeAuditLog(ctx.pg, {
+        domain: "workflows",
+        entityType: "workflow",
+        entityId: workflow.id,
+        action: "create",
+        agentId: ctx.agentId,
+        payload: params as any,
+      });
+      return { success: true, data: workflow };
     },
   },
   {
     name: "get_workflow",
     description: "Retrieve a workflow by ID",
-    params: ["id"],
-    handler: async (pg, { id }) => q.getWorkflow(pg, id),
+    params: {},
+    handler: async (params, ctx) => {
+      const workflow = await q.getWorkflow(ctx.pg, (params as any).id);
+      return workflow ? { success: true, data: workflow } : { error: "Workflow not found" };
+    },
   },
   {
     name: "list_workflows",
     description: "List workflows with optional status/trigger filters",
-    params: ["status?", "trigger?", "limit?"],
-    handler: async (pg, params) => q.listWorkflows(pg, params),
+    params: {},
+    handler: async (params, ctx) => {
+      return { success: true, data: await q.listWorkflows(ctx.pg, params as any) };
+    },
   },
   {
     name: "update_workflow",
     description: "Update a workflow definition (auto-increments version)",
-    params: ["id", "name?", "description?", "trigger?", "steps?", "status?"],
-    handler: async (pg, { id, ...rest }) => {
-      const workflow = await q.updateWorkflow(pg, id, rest);
-      await writeAuditLog(pg, "workflows", "update_workflow", id, rest);
-      return workflow;
+    params: {},
+    handler: async (params, ctx) => {
+      const { id, ...rest } = params as any;
+      const workflow = await q.updateWorkflow(ctx.pg, id, rest);
+      if (!workflow) return { error: "Workflow not found" };
+      await writeAuditLog(ctx.pg, {
+        domain: "workflows",
+        entityType: "workflow",
+        entityId: id,
+        action: "update",
+        agentId: ctx.agentId,
+        payload: rest,
+      });
+      return { success: true, data: workflow };
     },
   },
 
@@ -42,53 +63,86 @@ const actions: ErpAction[] = [
   {
     name: "start_run",
     description: "Start a new workflow run",
-    params: ["workflow_id", "context?"],
-    handler: async (pg, params) => {
-      const run = await q.createRun(pg, params);
-      await writeAuditLog(pg, "workflows", "start_run", run.id, params);
-      return run;
+    params: {},
+    handler: async (params, ctx) => {
+      const run = await q.createRun(ctx.pg, params as any);
+      await writeAuditLog(ctx.pg, {
+        domain: "workflows",
+        entityType: "workflow_run",
+        entityId: run.id,
+        action: "start_run",
+        agentId: ctx.agentId,
+        payload: params as any,
+      });
+      return { success: true, data: run };
     },
   },
   {
     name: "get_run",
     description: "Retrieve a workflow run by ID",
-    params: ["id"],
-    handler: async (pg, { id }) => q.getRun(pg, id),
+    params: {},
+    handler: async (params, ctx) => {
+      const run = await q.getRun(ctx.pg, (params as any).id);
+      return run ? { success: true, data: run } : { error: "Run not found" };
+    },
   },
   {
     name: "list_runs",
     description: "List workflow runs with optional filters",
-    params: ["workflow_id?", "status?", "limit?"],
-    handler: async (pg, params) => q.listRuns(pg, params),
+    params: {},
+    handler: async (params, ctx) => {
+      return { success: true, data: await q.listRuns(ctx.pg, params as any) };
+    },
   },
   {
     name: "advance_step",
     description: "Advance a running workflow to the next step (auto-completes when all steps done)",
-    params: ["run_id"],
-    handler: async (pg, { run_id }) => {
-      const run = await q.advanceStep(pg, run_id);
-      await writeAuditLog(pg, "workflows", "advance_step", run_id, {});
-      return run;
+    params: {},
+    handler: async (params, ctx) => {
+      const run = await q.advanceStep(ctx.pg, (params as any).run_id);
+      await writeAuditLog(ctx.pg, {
+        domain: "workflows",
+        entityType: "workflow_run",
+        entityId: (params as any).run_id,
+        action: "advance_step",
+        agentId: ctx.agentId,
+      });
+      return { success: true, data: run };
     },
   },
   {
     name: "fail_run",
     description: "Mark a workflow run as failed with an error message",
-    params: ["run_id", "error"],
-    handler: async (pg, { run_id, error }) => {
-      const run = await q.failRun(pg, run_id, error);
-      await writeAuditLog(pg, "workflows", "fail_run", run_id, { error });
-      return run;
+    params: {},
+    handler: async (params, ctx) => {
+      const run = await q.failRun(ctx.pg, (params as any).run_id, (params as any).error);
+      if (!run) return { error: "Run not found" };
+      await writeAuditLog(ctx.pg, {
+        domain: "workflows",
+        entityType: "workflow_run",
+        entityId: (params as any).run_id,
+        action: "fail_run",
+        agentId: ctx.agentId,
+        payload: { error: (params as any).error },
+      });
+      return { success: true, data: run };
     },
   },
   {
     name: "complete_run",
     description: "Manually mark a workflow run as completed",
-    params: ["run_id"],
-    handler: async (pg, { run_id }) => {
-      const run = await q.completeRun(pg, run_id);
-      await writeAuditLog(pg, "workflows", "complete_run", run_id, {});
-      return run;
+    params: {},
+    handler: async (params, ctx) => {
+      const run = await q.completeRun(ctx.pg, (params as any).run_id);
+      if (!run) return { error: "Run not found" };
+      await writeAuditLog(ctx.pg, {
+        domain: "workflows",
+        entityType: "workflow_run",
+        entityId: (params as any).run_id,
+        action: "complete_run",
+        agentId: ctx.agentId,
+      });
+      return { success: true, data: run };
     },
   },
 ];
