@@ -71,6 +71,7 @@ export type ExternalContentSource =
   | "channel_metadata"
   | "web_search"
   | "web_fetch"
+  | "mcp_server"
   | "unknown";
 
 const EXTERNAL_SOURCE_LABELS: Record<ExternalContentSource, string> = {
@@ -81,6 +82,7 @@ const EXTERNAL_SOURCE_LABELS: Record<ExternalContentSource, string> = {
   channel_metadata: "Channel metadata",
   web_search: "Web Search",
   web_fetch: "Web Fetch",
+  mcp_server: "MCP Server",
   unknown: "External",
 };
 
