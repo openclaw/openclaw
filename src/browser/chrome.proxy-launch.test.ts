@@ -8,15 +8,13 @@ vi.mock("node:child_process", async (importOriginal) => {
   };
 });
 
-vi.mock("node:fs", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs")>();
+vi.mock("node:fs", () => {
   const existsSync = vi.fn(() => true);
   const mkdirSync = vi.fn();
   return {
-    ...actual,
     existsSync,
     mkdirSync,
-    default: { ...actual.default, existsSync, mkdirSync },
+    default: { existsSync, mkdirSync },
   };
 });
 
