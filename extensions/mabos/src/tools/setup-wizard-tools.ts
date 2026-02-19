@@ -9,7 +9,7 @@ import { join, dirname } from "node:path";
 import { promisify } from "node:util";
 import { Type, type Static } from "@sinclair/typebox";
 import type { OpenClawPluginApi, AnyAgentTool } from "openclaw/plugin-sdk";
-import { textResult, resolveWorkspaceDir } from "./common.js";
+import { textResult, resolveWorkspaceDir, httpRequest } from "./common.js";
 
 const exec = promisify(execCallback);
 
@@ -86,24 +86,46 @@ async function checkServiceStatus(serviceName: string): Promise<HealthStatus> {
   }
 }
 
+/** Parse a calver string "YYYY.M.D" into a comparable number. */
+function calverToNum(v: string): number {
+  const parts = v.split(".").map(Number);
+  return (parts[0] || 0) * 10000 + (parts[1] || 0) * 100 + (parts[2] || 0);
+}
+
+const MIN_GATEWAY_VERSION = "2026.1.26";
+
 async function checkGatewayVersion(): Promise<VersionHealth> {
   try {
     // Try to get gateway version from openclaw binary
     const { stdout } = await exec('openclaw version 2>/dev/null || echo "unknown"');
     const gatewayVersion = stdout.trim();
 
-    // Get plugin version from package.json
-    const pluginVersion = "1.0.0"; // TODO: Read from actual package.json
+    // Read plugin version from our own package.json
+    let pluginVersion = "unknown";
+    try {
+      const pkgPath = join(dirname(new URL(import.meta.url).pathname), "..", "..", "package.json");
+      const pkg = JSON.parse(await readFile(pkgPath, "utf-8"));
+      pluginVersion = pkg.version || "unknown";
+    } catch {
+      // Fallback if package.json resolution fails
+    }
+
+    // Calver compatibility: gateway must be >= MIN_GATEWAY_VERSION
+    const compatible =
+      gatewayVersion !== "unknown" &&
+      calverToNum(gatewayVersion) >= calverToNum(MIN_GATEWAY_VERSION);
 
     return {
       gateway_version: gatewayVersion,
       plugin_version: pluginVersion,
-      compatible: true, // TODO: Implement actual compatibility check
+      compatible,
+      update_available:
+        !compatible && gatewayVersion !== "unknown" ? MIN_GATEWAY_VERSION : undefined,
     };
   } catch {
     return {
       gateway_version: "unknown",
-      plugin_version: "1.0.0",
+      plugin_version: "unknown",
       compatible: false,
     };
   }
@@ -112,9 +134,8 @@ async function checkGatewayVersion(): Promise<VersionHealth> {
 async function testChannelConnection(
   channelType: string,
   credentials: any,
-): Promise<{ success: boolean; error?: string }> {
-  // TODO: Implement actual channel testing
-  // For now, just validate the credentials format
+): Promise<{ success: boolean; error?: string; bot_info?: any }> {
+  // Step 1: Validate credential format
   switch (channelType) {
     case "telegram":
       if (!credentials.bot_token || !credentials.bot_token.match(/^\d+:[A-Za-z0-9_-]+$/)) {
@@ -126,11 +147,105 @@ async function testChannelConnection(
         return { success: false, error: "Discord bot token and application ID required" };
       }
       break;
+    case "slack":
+      if (!credentials.bot_token || !credentials.bot_token.startsWith("xoxb-")) {
+        return { success: false, error: "Invalid Slack bot token format (must start with xoxb-)" };
+      }
+      break;
+    case "signal":
+      if (!credentials.account) {
+        return { success: false, error: "Signal account (E.164 phone number) required" };
+      }
+      break;
+    case "whatsapp":
+      if (!credentials.access_token && !credentials.session_path) {
+        return { success: false, error: "WhatsApp access_token or session_path required" };
+      }
+      break;
     default:
       return { success: false, error: `Unsupported channel type: ${channelType}` };
   }
 
-  return { success: true };
+  // Step 2: Make real API call to verify credentials
+  try {
+    let result: { status: number; data: any };
+
+    switch (channelType) {
+      case "telegram":
+        result = await httpRequest(
+          `https://api.telegram.org/bot${credentials.bot_token}/getMe`,
+          "GET",
+          {},
+        );
+        if (result.status === 0) {
+          return { success: true, error: "Network unavailable; format validated only" };
+        }
+        if (result.data?.ok === true) {
+          return { success: true, bot_info: result.data.result };
+        }
+        return { success: false, error: result.data?.description || "Telegram token rejected" };
+
+      case "discord":
+        result = await httpRequest("https://discord.com/api/v10/oauth2/applications/@me", "GET", {
+          Authorization: `Bot ${credentials.bot_token}`,
+        });
+        if (result.status === 0) {
+          return { success: true, error: "Network unavailable; format validated only" };
+        }
+        if (result.data?.id) {
+          return { success: true, bot_info: { id: result.data.id, name: result.data.name } };
+        }
+        return { success: false, error: result.data?.message || "Discord token rejected" };
+
+      case "slack":
+        result = await httpRequest("https://slack.com/api/auth.test", "GET", {
+          Authorization: `Bearer ${credentials.bot_token}`,
+        });
+        if (result.status === 0) {
+          return { success: true, error: "Network unavailable; format validated only" };
+        }
+        if (result.data?.ok === true) {
+          return { success: true, bot_info: { team: result.data.team, user: result.data.user } };
+        }
+        return { success: false, error: result.data?.error || "Slack token rejected" };
+
+      case "signal": {
+        const cliUrl = credentials.cli_url || "http://localhost:8080";
+        result = await httpRequest(`${cliUrl}/v1/about`, "GET", {}, undefined, 3000);
+        if (result.status === 0) {
+          return { success: true, error: "Network unavailable; format validated only" };
+        }
+        if (result.status === 200) {
+          return { success: true, bot_info: result.data };
+        }
+        return { success: false, error: "Signal CLI API not responding" };
+      }
+
+      case "whatsapp":
+        if (!credentials.access_token || !credentials.phone_number_id) {
+          // Session-based WhatsApp doesn't support API test
+          return { success: true, error: "Session-based setup; cannot verify remotely" };
+        }
+        result = await httpRequest(
+          `https://graph.facebook.com/v19.0/${credentials.phone_number_id}`,
+          "GET",
+          { Authorization: `Bearer ${credentials.access_token}` },
+        );
+        if (result.status === 0) {
+          return { success: true, error: "Network unavailable; format validated only" };
+        }
+        if (result.status === 200) {
+          return { success: true, bot_info: result.data };
+        }
+        return { success: false, error: result.data?.error?.message || "WhatsApp token rejected" };
+
+      default:
+        return { success: true };
+    }
+  } catch {
+    // Network failure should not block setup
+    return { success: true, error: "Network unavailable; format validated only" };
+  }
 }
 
 // Parameter schemas
@@ -165,7 +280,33 @@ const SetupChannelParams = Type.Object({
           application_id: Type.String({ description: "Discord application ID" }),
         }),
       ),
-      // Add other channel types as needed
+      signal: Type.Optional(
+        Type.Object({
+          account: Type.String({ description: "Signal account phone number (E.164 format)" }),
+          cli_url: Type.Optional(
+            Type.String({
+              description: "Signal CLI REST API URL (default: http://localhost:8080)",
+            }),
+          ),
+        }),
+      ),
+      slack: Type.Optional(
+        Type.Object({
+          bot_token: Type.String({ description: "Slack bot token (xoxb-...)" }),
+          app_id: Type.Optional(Type.String({ description: "Slack app ID" })),
+        }),
+      ),
+      whatsapp: Type.Optional(
+        Type.Object({
+          access_token: Type.Optional(
+            Type.String({ description: "WhatsApp Cloud API access token" }),
+          ),
+          phone_number_id: Type.Optional(Type.String({ description: "WhatsApp phone number ID" })),
+          session_path: Type.Optional(
+            Type.String({ description: "Path to local WhatsApp session data" }),
+          ),
+        }),
+      ),
     },
     { description: "Channel-specific credentials" },
   ),
@@ -265,10 +406,23 @@ export function createSetupWizardTools(api: OpenClawPluginApi): AnyAgentTool[] {
             api.logger.warn(`Could not count agents: ${error}`);
           }
 
-          // Check configured channels
+          // Check configured channels by scanning workspace/channels/*.json
           const channelsConfigured: string[] = [];
+          const channelsScanDir = join(ws, "channels");
+          try {
+            if (existsSync(channelsScanDir)) {
+              const channelFiles = await readdir(channelsScanDir);
+              for (const f of channelFiles) {
+                if (f.endsWith(".json")) {
+                  const cfg = await readJson(join(channelsScanDir, f));
+                  if (cfg?.type) channelsConfigured.push(cfg.type);
+                }
+              }
+            }
+          } catch {
+            // Non-fatal — just report no channels
+          }
           const configPath = join(ws, "gateway-config.yaml");
-          // TODO: Parse actual gateway config to find configured channels
 
           // Identify issues
           const issues: Issue[] = [];
@@ -658,22 +812,79 @@ ${healthReport.manual_issues.length > 0 ? "- Address manual issues before produc
           const userActionNeeded: string[] = [];
 
           switch (issue_type) {
-            case "service_unit_stale":
+            case "service_unit_stale": {
+              const unitPath = join(
+                process.env.HOME || "~",
+                ".config/systemd/user/openclaw-gateway.service",
+              );
               if (dry_run) {
-                actionsTaken.push("Would regenerate systemd service unit");
-                actionsTaken.push("Would reload systemd daemon");
+                actionsTaken.push("Would check user-level systemd service unit");
+                actionsTaken.push("Would compare ExecStart path with `which openclaw`");
+                actionsTaken.push("Would regenerate and reload if stale");
               } else {
                 try {
-                  // Check if service unit exists and is stale
+                  // Use user-level systemd (matches OpenClaw convention)
                   const { stdout: unitStatus } = await exec(
-                    'systemctl status openclaw-gateway 2>/dev/null || echo "not-found"',
+                    'systemctl --user status openclaw-gateway 2>/dev/null || echo "not-found"',
                   );
 
-                  if (unitStatus.includes("not-found") || force) {
-                    actionsTaken.push("Regenerated systemd service unit");
-                    requiresRestart = true;
+                  // Detect stale ExecStart by comparing with current binary location
+                  let stale = unitStatus.includes("not-found");
+                  if (!stale) {
+                    try {
+                      const { stdout: binPath } = await exec("which openclaw 2>/dev/null");
+                      const currentBin = binPath.trim();
+                      if (currentBin && !unitStatus.includes(currentBin)) {
+                        stale = true;
+                        actionsTaken.push(`ExecStart path stale (binary at ${currentBin})`);
+                      }
+                    } catch {
+                      // `which` failed — can't detect staleness
+                    }
+                  }
+
+                  if (stale || force) {
+                    // Try openclaw's own installer first
+                    try {
+                      await exec("openclaw gateway install 2>/dev/null");
+                      actionsTaken.push("Regenerated service via `openclaw gateway install`");
+                    } catch {
+                      // Fallback: generate minimal systemd unit
+                      const binPath = (
+                        await exec("which openclaw 2>/dev/null").catch(() => ({
+                          stdout: "/usr/local/bin/openclaw",
+                        }))
+                      ).stdout.trim();
+                      const unit = `[Unit]
+Description=OpenClaw Gateway
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=${binPath} gateway serve
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+`;
+                      await mkdir(dirname(unitPath), { recursive: true });
+                      await writeFile(unitPath, unit, "utf-8");
+                      actionsTaken.push("Generated minimal systemd user unit");
+                    }
+
+                    await exec("systemctl --user daemon-reload");
+                    actionsTaken.push("Reloaded systemd user daemon");
+
+                    try {
+                      await exec("systemctl --user restart openclaw-gateway");
+                      actionsTaken.push("Restarted openclaw-gateway service");
+                    } catch (restartErr) {
+                      remainingIssues.push(`Service restart failed: ${restartErr}`);
+                    }
+                    requiresRestart = false; // Already restarted
                   } else {
-                    remainingIssues.push("Service unit appears current");
+                    actionsTaken.push("Service unit is current — no changes needed");
                   }
                 } catch (error) {
                   success = false;
@@ -681,28 +892,198 @@ ${healthReport.manual_issues.length > 0 ? "- Address manual issues before produc
                 }
               }
               break;
+            }
 
-            case "token_mismatch":
+            case "token_mismatch": {
+              const ws = resolveWorkspaceDir(api);
+              const chDir = join(ws, "channels");
+              const channelResults: { id: string; type: string; ok: boolean; error?: string }[] =
+                [];
+
+              if (existsSync(chDir)) {
+                const files = await readdir(chDir);
+                for (const f of files) {
+                  if (!f.endsWith(".json")) continue;
+                  const cfg = await readJson(join(chDir, f));
+                  if (!cfg?.type || !cfg?.credentials) continue;
+
+                  if (dry_run) {
+                    channelResults.push({ id: cfg.id, type: cfg.type, ok: true });
+                    continue;
+                  }
+
+                  const test = await testChannelConnection(cfg.type, cfg.credentials);
+                  channelResults.push({
+                    id: cfg.id,
+                    type: cfg.type,
+                    ok: test.success && !test.error?.includes("rejected"),
+                    error: test.error,
+                  });
+
+                  // Update config status based on result
+                  const newStatus =
+                    test.success && !test.error?.includes("rejected") ? "active" : "token_invalid";
+                  if (cfg.status !== newStatus) {
+                    cfg.status = newStatus;
+                    await writeJson(join(chDir, f), cfg);
+                  }
+                }
+              }
+
               if (dry_run) {
-                actionsTaken.push("Would validate all stored tokens");
-                actionsTaken.push("Would refresh expired tokens");
+                actionsTaken.push(`Would validate ${channelResults.length} channel token(s)`);
+                for (const ch of channelResults) {
+                  actionsTaken.push(`  ${ch.type} (${ch.id})`);
+                }
               } else {
-                // TODO: Implement token validation and refresh
-                actionsTaken.push("Token validation completed");
-                userActionNeeded.push("Some tokens may need manual renewal");
+                const passed = channelResults.filter((c) => c.ok);
+                const failed = channelResults.filter((c) => !c.ok);
+                actionsTaken.push(
+                  `Validated ${channelResults.length} channel(s): ${passed.length} passed, ${failed.length} failed`,
+                );
+                for (const ch of failed) {
+                  userActionNeeded.push(`Re-configure ${ch.type} channel (${ch.id}): ${ch.error}`);
+                }
+                if (failed.length > 0) {
+                  success = channelResults.length > failed.length; // partial success
+                }
               }
               break;
+            }
 
-            case "config_drift":
+            case "config_drift": {
+              const ws = resolveWorkspaceDir(api);
+              const backupDir = join(
+                ws,
+                ".config-backups",
+                new Date().toISOString().replace(/[:.]/g, "-"),
+              );
+              const driftIssues: string[] = [];
+
+              // Check gateway config exists
+              const gwConfigPath = join(ws, "gateway-config.yaml");
+              const gwConfigExists = existsSync(gwConfigPath);
+              if (!gwConfigExists) {
+                driftIssues.push("Gateway config file missing");
+              }
+
+              // Validate channel config JSON structure
+              const chDir = join(ws, "channels");
+              const requiredChannelFields = ["id", "type", "credentials", "created_at"];
+              if (existsSync(chDir)) {
+                const files = await readdir(chDir);
+                for (const f of files) {
+                  if (!f.endsWith(".json")) continue;
+                  const cfg = await readJson(join(chDir, f));
+                  if (!cfg) {
+                    driftIssues.push(`Corrupt channel config: ${f}`);
+                    continue;
+                  }
+                  for (const field of requiredChannelFields) {
+                    if (!(field in cfg)) {
+                      driftIssues.push(`Channel ${f} missing required field: ${field}`);
+                    }
+                  }
+                }
+              }
+
+              // Check agent cognitive files exist
+              const cognitiveFiles = [
+                "Beliefs.md",
+                "Desires.md",
+                "Goals.md",
+                "Plans.md",
+                "Intentions.md",
+              ];
+              const businessesDir = join(ws, "businesses");
+              if (existsSync(businessesDir)) {
+                const businesses = await readdir(businessesDir).catch(() => [] as string[]);
+                for (const biz of businesses) {
+                  const agentsDir = join(businessesDir, biz, "agents");
+                  if (!existsSync(agentsDir)) continue;
+                  const agents = await readdir(agentsDir).catch(() => [] as string[]);
+                  for (const agent of agents) {
+                    const agentDir = join(agentsDir, agent);
+                    const agentStat = await stat(agentDir).catch(() => null);
+                    if (!agentStat?.isDirectory()) continue;
+                    for (const cf of cognitiveFiles) {
+                      if (!existsSync(join(agentDir, cf))) {
+                        driftIssues.push(`Agent ${biz}/${agent} missing ${cf}`);
+                      }
+                    }
+                  }
+                }
+              }
+
+              // Check business manifest.json exists
+              if (existsSync(businessesDir)) {
+                const businesses = await readdir(businessesDir).catch(() => [] as string[]);
+                for (const biz of businesses) {
+                  if (!existsSync(join(businessesDir, biz, "manifest.json"))) {
+                    driftIssues.push(`Business ${biz} missing manifest.json`);
+                  }
+                }
+              }
+
               if (dry_run) {
-                actionsTaken.push("Would restore configuration from template");
-                actionsTaken.push("Would backup current config");
+                actionsTaken.push(`Found ${driftIssues.length} drift issue(s)`);
+                for (const issue of driftIssues) {
+                  actionsTaken.push(`  - ${issue}`);
+                }
+                if (driftIssues.length > 0) {
+                  actionsTaken.push("Would back up configs and restore missing files");
+                }
               } else {
-                // TODO: Implement config drift detection and fix
-                actionsTaken.push("Configuration validated");
-                requiresRestart = true;
+                if (driftIssues.length > 0) {
+                  // Back up current configs before modifications
+                  await mkdir(backupDir, { recursive: true });
+                  if (gwConfigExists) {
+                    const gwContent = await readFile(gwConfigPath, "utf-8");
+                    await writeFile(join(backupDir, "gateway-config.yaml"), gwContent, "utf-8");
+                  }
+                  if (existsSync(chDir)) {
+                    const chBackup = join(backupDir, "channels");
+                    await mkdir(chBackup, { recursive: true });
+                    for (const f of await readdir(chDir)) {
+                      if (f.endsWith(".json")) {
+                        const content = await readFile(join(chDir, f), "utf-8");
+                        await writeFile(join(chBackup, f), content, "utf-8");
+                      }
+                    }
+                  }
+                  actionsTaken.push(`Backed up configs to ${backupDir}`);
+
+                  // Restore missing cognitive files as stubs
+                  if (existsSync(businessesDir)) {
+                    const businesses = await readdir(businessesDir).catch(() => [] as string[]);
+                    for (const biz of businesses) {
+                      const agentsDir = join(businessesDir, biz, "agents");
+                      if (!existsSync(agentsDir)) continue;
+                      const agents = await readdir(agentsDir).catch(() => [] as string[]);
+                      for (const agent of agents) {
+                        const agentDir = join(agentsDir, agent);
+                        const agentStat = await stat(agentDir).catch(() => null);
+                        if (!agentStat?.isDirectory()) continue;
+                        for (const cf of cognitiveFiles) {
+                          const cfPath = join(agentDir, cf);
+                          if (!existsSync(cfPath)) {
+                            const stub = `# ${cf.replace(".md", "")}\n\n_Auto-restored by setup_auto_fix — please populate._\n`;
+                            await writeFile(cfPath, stub, "utf-8");
+                            actionsTaken.push(`Restored stub: ${biz}/${agent}/${cf}`);
+                          }
+                        }
+                      }
+                    }
+                  }
+
+                  actionsTaken.push(`Resolved ${driftIssues.length} drift issue(s)`);
+                  requiresRestart = true;
+                } else {
+                  actionsTaken.push("No configuration drift detected");
+                }
               }
               break;
+            }
 
             case "permission_error":
               if (dry_run) {

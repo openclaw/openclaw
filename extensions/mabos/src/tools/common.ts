@@ -5,6 +5,36 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 
 /**
+ * Make an HTTP request using built-in fetch with AbortController timeout.
+ * Returns `{ status: 0, data: { error } }` on network or timeout errors.
+ */
+export async function httpRequest(
+  url: string,
+  method: string,
+  headers: Record<string, string>,
+  body?: any,
+  timeoutMs = 5000,
+): Promise<{ status: number; data: any }> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const resp = await fetch(url, {
+      method,
+      headers: { "Content-Type": "application/json", ...headers },
+      body: body ? JSON.stringify(body) : undefined,
+      signal: controller.signal,
+    });
+    const data = await resp.json().catch(() => resp.text());
+    return { status: resp.status, data };
+  } catch (err: any) {
+    const msg = err?.name === "AbortError" ? "Request timed out" : String(err);
+    return { status: 0, data: { error: msg } };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * Create an AgentToolResult with text content.
  * Includes the required `details` field for pi-agent-core compatibility.
  */
