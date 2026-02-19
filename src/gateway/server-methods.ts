@@ -24,8 +24,11 @@ import { pushHandlers } from "./server-methods/push.js";
 import { sendHandlers } from "./server-methods/send.js";
 import { sessionsHandlers } from "./server-methods/sessions.js";
 import { skillsHandlers } from "./server-methods/skills.js";
+import { swarmHandlers } from "./server-methods/swarm.js";
 import { systemHandlers } from "./server-methods/system.js";
 import { talkHandlers } from "./server-methods/talk.js";
+import { taskQueueHandlers } from "./server-methods/task-queue.js";
+import { trustHandlers } from "./server-methods/trust.js";
 import { ttsHandlers } from "./server-methods/tts.js";
 import type { GatewayRequestHandlers, GatewayRequestOptions } from "./server-methods/types.js";
 import { updateHandlers } from "./server-methods/update.js";
@@ -93,6 +96,9 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...agentHandlers,
   ...agentsHandlers,
   ...browserHandlers,
+  ...taskQueueHandlers,
+  ...swarmHandlers,
+  ...trustHandlers,
 };
 
 export async function handleGatewayRequest(

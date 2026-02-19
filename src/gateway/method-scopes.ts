@@ -62,6 +62,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "cron.list",
     "cron.status",
     "cron.runs",
+    "taskQueue.list",
     "system-presence",
     "last-heartbeat",
     "node.list",
