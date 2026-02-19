@@ -49,6 +49,27 @@ describe("ensureBrowserControlAuth", () => {
     });
   });
 
+  describe("none mode", () => {
+    it("should not auto-generate token when auth mode is none", async () => {
+      const cfg: OpenClawConfig = {
+        gateway: {
+          auth: {
+            mode: "none",
+          },
+        },
+      };
+
+      const result = await ensureBrowserControlAuth({
+        cfg,
+        env: { OPENCLAW_BROWSER_AUTO_AUTH: "1" },
+      });
+
+      expect(result.generatedToken).toBeUndefined();
+      expect(result.auth.token).toBeUndefined();
+      expect(result.auth.password).toBeUndefined();
+    });
+  });
+
   describe("token mode", () => {
     it("should return existing token if configured", async () => {
       const cfg: OpenClawConfig = {

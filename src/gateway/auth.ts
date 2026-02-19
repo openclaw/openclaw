@@ -20,9 +20,16 @@ import {
 } from "./net.js";
 
 export type ResolvedGatewayAuthMode = "none" | "token" | "password" | "trusted-proxy";
+export type ResolvedGatewayAuthModeSource =
+  | "override"
+  | "config"
+  | "password"
+  | "token"
+  | "default";
 
 export type ResolvedGatewayAuth = {
   mode: ResolvedGatewayAuthMode;
+  modeSource?: ResolvedGatewayAuthModeSource;
   token?: string;
   password?: string;
   allowTailscale: boolean;
@@ -178,24 +185,55 @@ async function resolveVerifiedTailscaleUser(params: {
 
 export function resolveGatewayAuth(params: {
   authConfig?: GatewayAuthConfig | null;
+  authOverride?: GatewayAuthConfig | null;
   env?: NodeJS.ProcessEnv;
   tailscaleMode?: GatewayTailscaleMode;
 }): ResolvedGatewayAuth {
-  const authConfig = params.authConfig ?? {};
+  const baseAuthConfig = params.authConfig ?? {};
+  const authOverride = params.authOverride ?? undefined;
+  const authConfig: GatewayAuthConfig = { ...baseAuthConfig };
+  if (authOverride) {
+    if (authOverride.mode !== undefined) {
+      authConfig.mode = authOverride.mode;
+    }
+    if (authOverride.token !== undefined) {
+      authConfig.token = authOverride.token;
+    }
+    if (authOverride.password !== undefined) {
+      authConfig.password = authOverride.password;
+    }
+    if (authOverride.allowTailscale !== undefined) {
+      authConfig.allowTailscale = authOverride.allowTailscale;
+    }
+    if (authOverride.rateLimit !== undefined) {
+      authConfig.rateLimit = authOverride.rateLimit;
+    }
+    if (authOverride.trustedProxy !== undefined) {
+      authConfig.trustedProxy = authOverride.trustedProxy;
+    }
+  }
   const env = params.env ?? process.env;
   const token = authConfig.token ?? env.OPENCLAW_GATEWAY_TOKEN ?? undefined;
   const password = authConfig.password ?? env.OPENCLAW_GATEWAY_PASSWORD ?? undefined;
   const trustedProxy = authConfig.trustedProxy;
 
   let mode: ResolvedGatewayAuth["mode"];
-  if (authConfig.mode) {
+  let modeSource: ResolvedGatewayAuth["modeSource"];
+  if (authOverride?.mode !== undefined) {
+    mode = authOverride.mode;
+    modeSource = "override";
+  } else if (authConfig.mode) {
     mode = authConfig.mode;
+    modeSource = "config";
   } else if (password) {
     mode = "password";
+    modeSource = "password";
   } else if (token) {
     mode = "token";
+    modeSource = "token";
   } else {
-    mode = "none";
+    mode = "token";
+    modeSource = "default";
   }
 
   const allowTailscale =
@@ -204,6 +242,7 @@ export function resolveGatewayAuth(params: {
 
   return {
     mode,
+    modeSource,
     token,
     password,
     allowTailscale,
@@ -315,6 +354,10 @@ export async function authorizeGatewayConnect(params: {
       return { ok: true, method: "trusted-proxy", user: result.user };
     }
     return { ok: false, reason: result.reason };
+  }
+
+  if (auth.mode === "none") {
+    return { ok: true, method: "none" };
   }
 
   const limiter = params.rateLimiter;
