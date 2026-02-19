@@ -149,4 +149,71 @@ describe("discoverOpenClawPlugins", () => {
     const ids = candidates.map((c) => c.idHint);
     expect(ids).toContain("demo-plugin-dir");
   });
+
+  it("blocks extension entries that escape plugin root", async () => {
+    const stateDir = makeTempDir();
+    const globalExt = path.join(stateDir, "extensions", "escape-pack");
+    const outside = path.join(stateDir, "outside.js");
+    fs.mkdirSync(globalExt, { recursive: true });
+
+    fs.writeFileSync(
+      path.join(globalExt, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/escape-pack",
+        openclaw: { extensions: ["../../outside.js"] },
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(outside, "export default function () {}", "utf-8");
+
+    const result = await withStateDir(stateDir, async () => {
+      return discoverOpenClawPlugins({});
+    });
+
+    expect(result.candidates).toHaveLength(0);
+    expect(
+      result.diagnostics.some((diag) => diag.message.includes("source escapes plugin root")),
+    ).toBe(true);
+  });
+
+  it.runIf(process.platform !== "win32")("blocks world-writable plugin paths", async () => {
+    const stateDir = makeTempDir();
+    const globalExt = path.join(stateDir, "extensions");
+    fs.mkdirSync(globalExt, { recursive: true });
+    const pluginPath = path.join(globalExt, "world-open.ts");
+    fs.writeFileSync(pluginPath, "export default function () {}", "utf-8");
+    fs.chmodSync(pluginPath, 0o777);
+
+    const result = await withStateDir(stateDir, async () => {
+      return discoverOpenClawPlugins({});
+    });
+
+    expect(result.candidates).toHaveLength(0);
+    expect(result.diagnostics.some((diag) => diag.message.includes("world-writable path"))).toBe(
+      true,
+    );
+  });
+
+  it.runIf(process.platform !== "win32" && typeof process.getuid === "function")(
+    "blocks suspicious ownership when uid mismatch is detected",
+    async () => {
+      const stateDir = makeTempDir();
+      const globalExt = path.join(stateDir, "extensions");
+      fs.mkdirSync(globalExt, { recursive: true });
+      fs.writeFileSync(
+        path.join(globalExt, "owner-mismatch.ts"),
+        "export default function () {}",
+        "utf-8",
+      );
+
+      const actualUid = (process as NodeJS.Process & { getuid: () => number }).getuid();
+      const result = await withStateDir(stateDir, async () => {
+        return discoverOpenClawPlugins({ ownershipUid: actualUid + 1 });
+      });
+      expect(result.candidates).toHaveLength(0);
+      expect(result.diagnostics.some((diag) => diag.message.includes("suspicious ownership"))).toBe(
+        true,
+      );
+    },
+  );
 });
