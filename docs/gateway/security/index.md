@@ -662,6 +662,8 @@ One “safe default” config that keeps the Gateway private, requires DM pairin
 
 If you want “safer by default” tool execution too, add a sandbox + deny dangerous tools for any non-owner agent (example below under “Per-agent access profiles”).
 
+Built-in baseline for chat-driven agent turns: non-owner senders cannot use the `cron` or `gateway` tools.
+
 ## Sandboxing (recommended)
 
 Dedicated doc: [Sandboxing](/gateway/sandboxing)
