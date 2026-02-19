@@ -72,4 +72,4 @@ Notes:
 - Runs the `lobster` executable as a local subprocess.
 - Does not manage OAuth/tokens.
 - Uses timeouts, stdout caps, and strict JSON envelope parsing.
-- Prefer an absolute `lobsterPath` in production to avoid PATH hijack.
+- Ensure `lobster` is available on `PATH` for the gateway process.
