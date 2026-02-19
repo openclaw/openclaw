@@ -44,14 +44,15 @@ function normalizeAny(key: string | undefined, value: unknown): unknown {
     return value;
   }
 
-  for (const [childKey, childValue] of Object.entries(value)) {
+  const result = { ...value };
+  for (const [childKey, childValue] of Object.entries(result)) {
     const next = normalizeAny(childKey, childValue);
     if (next !== childValue) {
-      value[childKey] = next;
+      result[childKey] = next;
     }
   }
 
-  return value;
+  return result;
 }
 
 /**
