@@ -1,5 +1,9 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { loadSessionStore, saveSessionStore, type SessionEntry } from "../../config/sessions.js";
 import { createModelSelectionState } from "./model-selection.js";
 
 vi.mock("../../agents/model-catalog.js", () => ({
@@ -192,6 +196,58 @@ describe("createModelSelectionState parent inheritance", () => {
 
     expect(state.provider).toBe("anthropic");
     expect(state.model).toBe("claude-opus-4-5");
+  });
+
+  it("persists reset override without clobbering fresher stored metadata", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-model-selection-"));
+    const storePath = path.join(tmpDir, "sessions.json");
+    const sessionKey = "agent:main:discord:channel:c1";
+    try {
+      await saveSessionStore(storePath, {
+        [sessionKey]: {
+          sessionId: "session-id",
+          updatedAt: Date.now() - 1_000,
+          providerOverride: "anthropic",
+          modelOverride: "claude-opus-4-5",
+          lastTo: "fresh-recipient",
+        },
+      });
+      const sessionEntry = makeEntry({
+        providerOverride: "anthropic",
+        modelOverride: "claude-opus-4-5",
+      }) as SessionEntry;
+      const sessionStore = { [sessionKey]: sessionEntry };
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-4o-mini": {},
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      await createModelSelectionState({
+        cfg,
+        agentCfg: cfg.agents?.defaults,
+        sessionEntry,
+        sessionStore,
+        sessionKey,
+        storePath,
+        defaultProvider,
+        defaultModel,
+        provider: defaultProvider,
+        model: defaultModel,
+        hasModelDirective: false,
+      });
+
+      const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+      expect(persisted?.lastTo).toBe("fresh-recipient");
+      expect(persisted?.providerOverride).toBeUndefined();
+      expect(persisted?.modelOverride).toBeUndefined();
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
   });
 });
 

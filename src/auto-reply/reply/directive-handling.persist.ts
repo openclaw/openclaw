@@ -193,10 +193,62 @@ export async function persistInlineDirectives(params: {
 
     if (updated) {
       sessionEntry.updatedAt = Date.now();
+      const persistedPatch: Partial<SessionEntry> = {
+        updatedAt: sessionEntry.updatedAt,
+      };
+      if (directives.hasThinkDirective && directives.thinkLevel) {
+        persistedPatch.thinkingLevel = sessionEntry.thinkingLevel;
+      }
+      if (directives.hasVerboseDirective && directives.verboseLevel) {
+        persistedPatch.verboseLevel = sessionEntry.verboseLevel;
+      }
+      if (directives.hasReasoningDirective && directives.reasoningLevel) {
+        persistedPatch.reasoningLevel = sessionEntry.reasoningLevel;
+      }
+      if (
+        directives.hasElevatedDirective &&
+        directives.elevatedLevel &&
+        elevatedEnabled &&
+        elevatedAllowed
+      ) {
+        persistedPatch.elevatedLevel = sessionEntry.elevatedLevel;
+      }
+      if (directives.hasExecDirective && directives.hasExecOptions) {
+        if (directives.execHost) {
+          persistedPatch.execHost = sessionEntry.execHost;
+        }
+        if (directives.execSecurity) {
+          persistedPatch.execSecurity = sessionEntry.execSecurity;
+        }
+        if (directives.execAsk) {
+          persistedPatch.execAsk = sessionEntry.execAsk;
+        }
+        if (directives.execNode) {
+          persistedPatch.execNode = sessionEntry.execNode;
+        }
+      }
+      if (modelDirective) {
+        persistedPatch.providerOverride = sessionEntry.providerOverride;
+        persistedPatch.modelOverride = sessionEntry.modelOverride;
+        persistedPatch.authProfileOverride = sessionEntry.authProfileOverride;
+        persistedPatch.authProfileOverrideSource = sessionEntry.authProfileOverrideSource;
+        persistedPatch.authProfileOverrideCompactionCount =
+          sessionEntry.authProfileOverrideCompactionCount;
+      }
+      if (directives.hasQueueDirective && directives.queueReset) {
+        persistedPatch.queueMode = sessionEntry.queueMode;
+        persistedPatch.queueDebounceMs = sessionEntry.queueDebounceMs;
+        persistedPatch.queueCap = sessionEntry.queueCap;
+        persistedPatch.queueDrop = sessionEntry.queueDrop;
+      }
       sessionStore[sessionKey] = sessionEntry;
       if (storePath) {
         await updateSessionStore(storePath, (store) => {
-          store[sessionKey] = sessionEntry;
+          const entry = store[sessionKey] ?? sessionEntry;
+          store[sessionKey] = {
+            ...entry,
+            ...persistedPatch,
+          };
         });
       }
       enqueueModeSwitchEvents({

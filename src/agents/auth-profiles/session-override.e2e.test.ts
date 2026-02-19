@@ -3,8 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { SessionEntry } from "../../config/sessions.js";
-import { resolveSessionAuthProfileOverride } from "./session-override.js";
+import { loadSessionStore, saveSessionStore, type SessionEntry } from "../../config/sessions.js";
+import {
+  clearSessionAuthProfileOverride,
+  resolveSessionAuthProfileOverride,
+} from "./session-override.js";
 
 async function writeAuthStore(agentDir: string) {
   const authPath = path.join(agentDir, "auth-profiles.json");
@@ -57,6 +60,43 @@ describe("resolveSessionAuthProfileOverride", () => {
       } else {
         process.env.OPENCLAW_STATE_DIR = prevStateDir;
       }
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("clears auth-profile override without clobbering fresher persisted fields", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-"));
+    const sessionKey = "agent:main:main";
+    const storePath = path.join(tmpDir, "sessions.json");
+    try {
+      const sessionEntry: SessionEntry = {
+        sessionId: "s1",
+        updatedAt: Date.now(),
+        authProfileOverride: "zai:work",
+        authProfileOverrideSource: "auto",
+        authProfileOverrideCompactionCount: 3,
+      };
+      const sessionStore = { [sessionKey]: sessionEntry };
+      await saveSessionStore(storePath, {
+        [sessionKey]: {
+          ...sessionEntry,
+          lastTo: "fresh-recipient",
+        },
+      });
+
+      await clearSessionAuthProfileOverride({
+        sessionEntry,
+        sessionStore,
+        sessionKey,
+        storePath,
+      });
+
+      const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+      expect(persisted?.authProfileOverride).toBeUndefined();
+      expect(persisted?.authProfileOverrideSource).toBeUndefined();
+      expect(persisted?.authProfileOverrideCompactionCount).toBeUndefined();
+      expect(persisted?.lastTo).toBe("fresh-recipient");
+    } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
   });

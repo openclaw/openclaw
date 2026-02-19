@@ -30,10 +30,20 @@ export async function clearSessionAuthProfileOverride(params: {
   delete sessionEntry.authProfileOverrideSource;
   delete sessionEntry.authProfileOverrideCompactionCount;
   sessionEntry.updatedAt = Date.now();
+  const persistedPatch: Partial<SessionEntry> = {
+    authProfileOverride: sessionEntry.authProfileOverride,
+    authProfileOverrideSource: sessionEntry.authProfileOverrideSource,
+    authProfileOverrideCompactionCount: sessionEntry.authProfileOverrideCompactionCount,
+    updatedAt: sessionEntry.updatedAt,
+  };
   sessionStore[sessionKey] = sessionEntry;
   if (storePath) {
     await updateSessionStore(storePath, (store) => {
-      store[sessionKey] = sessionEntry;
+      const entry = store[sessionKey] ?? sessionEntry;
+      store[sessionKey] = {
+        ...entry,
+        ...persistedPatch,
+      };
     });
   }
 }
@@ -139,10 +149,20 @@ export async function resolveSessionAuthProfileOverride(params: {
     sessionEntry.authProfileOverrideSource = "auto";
     sessionEntry.authProfileOverrideCompactionCount = compactionCount;
     sessionEntry.updatedAt = Date.now();
+    const persistedPatch: Partial<SessionEntry> = {
+      authProfileOverride: sessionEntry.authProfileOverride,
+      authProfileOverrideSource: sessionEntry.authProfileOverrideSource,
+      authProfileOverrideCompactionCount: sessionEntry.authProfileOverrideCompactionCount,
+      updatedAt: sessionEntry.updatedAt,
+    };
     sessionStore[sessionKey] = sessionEntry;
     if (storePath) {
       await updateSessionStore(storePath, (store) => {
-        store[sessionKey] = sessionEntry;
+        const entry = store[sessionKey] ?? sessionEntry;
+        store[sessionKey] = {
+          ...entry,
+          ...persistedPatch,
+        };
       });
     }
   }
