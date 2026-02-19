@@ -10,7 +10,7 @@ type BootstrapCacheEntry = {
 
 const cache = new Map<string, BootstrapCacheEntry>();
 
-export function resolveBootstrapCacheKey(params: {
+function resolveBootstrapCacheKey(params: {
   sessionKey?: string;
   sessionId?: string;
 }): string | undefined {
@@ -56,19 +56,6 @@ export async function getOrLoadBootstrapFiles(params: {
   }
 
   return files;
-}
-
-/**
- * Returns the content of a named bootstrap file from the cache.
- * Returns undefined if no cache entry exists or the file is missing.
- */
-export function getBootstrapFileContent(cacheKey: string, fileName: string): string | undefined {
-  const entry = cache.get(cacheKey);
-  if (!entry) {
-    return undefined;
-  }
-  const file = entry.files.find((f) => f.name === fileName && !f.missing);
-  return file?.content;
 }
 
 export function clearBootstrapSnapshot(cacheKey: string): void {

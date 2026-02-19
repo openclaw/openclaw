@@ -2,9 +2,7 @@ import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 import {
   clearAllBootstrapSnapshots,
   clearBootstrapSnapshot,
-  getBootstrapFileContent,
   getOrLoadBootstrapFiles,
-  resolveBootstrapCacheKey,
 } from "./bootstrap-cache.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
@@ -24,24 +22,6 @@ function makeFile(name: string, content: string): WorkspaceBootstrapFile {
     missing: false,
   };
 }
-
-function makeMissingFile(name: string): WorkspaceBootstrapFile {
-  return { name: name as WorkspaceBootstrapFile["name"], path: `/ws/${name}`, missing: true };
-}
-
-describe("resolveBootstrapCacheKey", () => {
-  it("prefers sessionKey over sessionId", () => {
-    expect(resolveBootstrapCacheKey({ sessionKey: "sk", sessionId: "sid" })).toBe("sk");
-  });
-
-  it("falls back to sessionId when no sessionKey", () => {
-    expect(resolveBootstrapCacheKey({ sessionId: "sid" })).toBe("sid");
-  });
-
-  it("returns undefined when neither provided", () => {
-    expect(resolveBootstrapCacheKey({})).toBeUndefined();
-  });
-});
 
 describe("getOrLoadBootstrapFiles", () => {
   const files = [makeFile("AGENTS.md", "# Agent"), makeFile("SOUL.md", "# Soul")];
@@ -110,38 +90,6 @@ describe("getOrLoadBootstrapFiles", () => {
 
     expect(result).toBe(files);
     expect(mockLoad).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("getBootstrapFileContent", () => {
-  const files = [
-    makeFile("AGENTS.md", "# Agent rules"),
-    makeFile("SOUL.md", "# Soul content"),
-    makeMissingFile("MEMORY.md"),
-  ];
-
-  beforeEach(() => {
-    clearAllBootstrapSnapshots();
-    mockLoad.mockResolvedValue(files);
-  });
-
-  afterEach(() => {
-    clearAllBootstrapSnapshots();
-    vi.clearAllMocks();
-  });
-
-  it("returns content for a cached file", async () => {
-    await getOrLoadBootstrapFiles({ workspaceDir: "/ws", sessionKey: "sk" });
-    expect(getBootstrapFileContent("sk", "AGENTS.md")).toBe("# Agent rules");
-  });
-
-  it("returns undefined for a missing file", async () => {
-    await getOrLoadBootstrapFiles({ workspaceDir: "/ws", sessionKey: "sk" });
-    expect(getBootstrapFileContent("sk", "MEMORY.md")).toBeUndefined();
-  });
-
-  it("returns undefined when no cache entry exists", () => {
-    expect(getBootstrapFileContent("no-such-key", "AGENTS.md")).toBeUndefined();
   });
 });
 
