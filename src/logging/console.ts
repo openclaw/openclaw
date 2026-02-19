@@ -1,4 +1,3 @@
-import { createRequire } from "node:module";
 import util from "node:util";
 import type { OpenClawConfig } from "../config/types.js";
 import { isVerbose } from "../globals.js";
@@ -16,18 +15,8 @@ type ConsoleSettings = {
 };
 export type ConsoleLoggerSettings = ConsoleSettings;
 
-const requireConfig = createRequire(import.meta.url);
 type ConsoleConfigLoader = () => OpenClawConfig["logging"] | undefined;
-const loadConfigFallbackDefault: ConsoleConfigLoader = () => {
-  try {
-    const loaded = requireConfig("../config/config.js") as {
-      loadConfig?: () => OpenClawConfig;
-    };
-    return loaded.loadConfig?.().logging;
-  } catch {
-    return undefined;
-  }
-};
+const loadConfigFallbackDefault: ConsoleConfigLoader = () => undefined;
 let loadConfigFallback: ConsoleConfigLoader = loadConfigFallbackDefault;
 
 export function setConsoleConfigLoaderForTests(loader?: ConsoleConfigLoader): void {

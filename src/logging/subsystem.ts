@@ -1,4 +1,3 @@
-import { inspect } from "node:util";
 import { Chalk } from "chalk";
 import type { Logger as TsLogger } from "tslog";
 import { CHAT_CHANNEL_ORDER } from "../channels/registry.js";
@@ -323,7 +322,16 @@ export function runtimeForLogger(
 ): RuntimeEnv {
   const formatArgs = (...args: unknown[]) =>
     args
-      .map((arg) => (typeof arg === "string" ? arg : inspect(arg)))
+      .map((arg) => {
+        if (typeof arg === "string") {
+          return arg;
+        }
+        try {
+          return JSON.stringify(arg);
+        } catch {
+          return String(arg);
+        }
+      })
       .join(" ")
       .trim();
   return {

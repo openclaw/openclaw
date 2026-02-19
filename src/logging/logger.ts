@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { Logger as TsLogger } from "tslog";
 import type { OpenClawConfig } from "../config/types.js";
@@ -15,8 +14,6 @@ export const DEFAULT_LOG_FILE = path.join(DEFAULT_LOG_DIR, "openclaw.log"); // l
 const LOG_PREFIX = "openclaw";
 const LOG_SUFFIX = ".log";
 const MAX_LOG_AGE_MS = 24 * 60 * 60 * 1000; // 24h
-
-const requireConfig = createRequire(import.meta.url);
 
 export type LoggerSettings = {
   level?: LogLevel;
@@ -53,16 +50,6 @@ function attachExternalTransport(logger: TsLogger<LogObj>, transport: LogTranspo
 function resolveSettings(): ResolvedSettings {
   let cfg: OpenClawConfig["logging"] | undefined =
     (loggingState.overrideSettings as LoggerSettings | null) ?? readLoggingConfig();
-  if (!cfg) {
-    try {
-      const loaded = requireConfig("../config/config.js") as {
-        loadConfig?: () => OpenClawConfig;
-      };
-      cfg = loaded.loadConfig?.().logging;
-    } catch {
-      cfg = undefined;
-    }
-  }
   const defaultLevel =
     process.env.VITEST === "true" && process.env.OPENCLAW_TEST_FILE_LOG !== "1" ? "silent" : "info";
   const level = normalizeLogLevel(cfg?.level, defaultLevel);

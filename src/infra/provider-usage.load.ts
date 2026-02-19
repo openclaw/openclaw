@@ -58,7 +58,7 @@ export async function loadProviderUsageSummary(
       (async (): Promise<ProviderUsageSnapshot> => {
         switch (auth.provider) {
           case "anthropic":
-            return await fetchClaudeUsage(auth.token, timeoutMs, fetchFn, opts.claudeWebSessionKey);
+            return await fetchClaudeUsage(auth.token, timeoutMs, fetchFn);
           case "github-copilot":
             return await fetchCopilotUsage(auth.token, timeoutMs, fetchFn);
           case "google-antigravity":
