@@ -11,7 +11,7 @@ export type BlockReplyPipeline = {
   didStream: () => boolean;
   isAborted: () => boolean;
   hasSentPayload: (payload: ReplyPayload) => boolean;
-  hasEnqueuedPayload: (payload: ReplyPayload) => boolean;
+  hasAttemptedPayload: (payload: ReplyPayload) => boolean;
 };
 
 export type BlockReplyBuffer = {
@@ -45,6 +45,7 @@ export function createBlockReplyPayloadKey(payload: ReplyPayload): string {
   return JSON.stringify({
     text,
     mediaList,
+    replyToId: payload.replyToId ?? null,
   });
 }
 
@@ -84,8 +85,8 @@ export function createBlockReplyPipeline(params: {
   const seenKeys = new Set<string>();
   const bufferedKeys = new Set<string>();
   const bufferedPayloadKeys = new Set<string>();
-  /** Persistent record of every individual payload key ever enqueued (never cleared). */
-  const allEnqueuedKeys = new Set<string>();
+  /** Persistent record of every payload key that started a delivery attempt. */
+  const attemptedKeys = new Set<string>();
   const bufferedPayloads: ReplyPayload[] = [];
   let sendChain: Promise<void> = Promise.resolve();
   let aborted = false;
@@ -115,6 +116,7 @@ export function createBlockReplyPipeline(params: {
         if (aborted) {
           return false;
         }
+        attemptedKeys.add(payloadKey);
         await withTimeout(
           onBlockReply(payload, {
             abortSignal: abortController.signal,
@@ -198,7 +200,6 @@ export function createBlockReplyPipeline(params: {
     if (aborted) {
       return;
     }
-    allEnqueuedKeys.add(createBlockReplyPayloadKey(payload));
     if (bufferPayload(payload)) {
       return;
     }
@@ -241,9 +242,9 @@ export function createBlockReplyPipeline(params: {
       const payloadKey = createBlockReplyPayloadKey(payload);
       return sentKeys.has(payloadKey);
     },
-    hasEnqueuedPayload: (payload) => {
+    hasAttemptedPayload: (payload) => {
       const payloadKey = createBlockReplyPayloadKey(payload);
-      return allEnqueuedKeys.has(payloadKey);
+      return attemptedKeys.has(payloadKey);
     },
   };
 }

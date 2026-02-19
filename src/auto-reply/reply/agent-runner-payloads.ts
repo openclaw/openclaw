@@ -101,13 +101,13 @@ export function buildReplyPayloads(params: {
   });
   // Filter out payloads already sent via pipeline or directly during tool flush.
   // When the pipeline aborted (for example due to delivery timeout), suppress payloads that
-  // were already enqueued even if ack never confirmed.
+  // already started delivery attempts to avoid duplicate final fallbacks.
   const filteredPayloads = shouldDropFinalPayloads
     ? []
     : params.blockStreamingEnabled
       ? mediaFilteredPayloads.filter((payload) =>
           params.blockReplyPipeline?.isAborted()
-            ? !params.blockReplyPipeline.hasEnqueuedPayload(payload)
+            ? !params.blockReplyPipeline.hasAttemptedPayload(payload)
             : !params.blockReplyPipeline?.hasSentPayload(payload),
         )
       : params.directlySentBlockKeys?.size
