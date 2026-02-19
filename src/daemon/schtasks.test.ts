@@ -198,4 +198,32 @@ describe("readScheduledTaskCommand", () => {
       },
     );
   });
+
+  it("parses quoted set assignments with escaped metacharacters", async () => {
+    await withScheduledTaskScript(
+      {
+        scriptLines: [
+          "@echo off",
+          'set "OC_AMP=left & right"',
+          'set "OC_PIPE=a | b"',
+          'set "OC_CARET=^^"',
+          'set "OC_PERCENT=%%TEMP%%"',
+          'set "OC_BANG=^!token^!"',
+          'set "OC_QUOTE=he said ^"hi^""',
+          "node gateway.js --verbose",
+        ],
+      },
+      async (env) => {
+        const result = await readScheduledTaskCommand(env);
+        expect(result?.environment).toEqual({
+          OC_AMP: "left & right",
+          OC_PIPE: "a | b",
+          OC_CARET: "^",
+          OC_PERCENT: "%TEMP%",
+          OC_BANG: "!token!",
+          OC_QUOTE: 'he said "hi"',
+        });
+      },
+    );
+  });
 });

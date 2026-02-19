@@ -267,8 +267,6 @@ export const FIELD_HELP: Record<string, string> = {
   "plugins.allow": "Optional allowlist of plugin ids; when set, only listed plugins load.",
   "plugins.deny": "Optional denylist of plugin ids; deny wins over allowlist.",
   "plugins.load.paths": "Additional plugin files or directories to load.",
-  "plugins.runtime.allowLegacyExec":
-    "Opt-in compatibility switch to re-enable deprecated runtime.system.runCommandWithTimeout for legacy plugins (default: false).",
   "plugins.slots": "Select which plugins own exclusive slots (memory, etc.).",
   "plugins.slots.memory":
     'Select the active memory plugin by id, or "none" to disable memory plugins.',
@@ -283,6 +281,17 @@ export const FIELD_HELP: Record<string, string> = {
   "plugins.installs.*.installPath":
     "Resolved install directory (usually ~/.openclaw/extensions/<id>).",
   "plugins.installs.*.version": "Version recorded at install time (if available).",
+  "plugins.installs.*.resolvedName": "Resolved npm package name from the fetched artifact.",
+  "plugins.installs.*.resolvedVersion":
+    "Resolved npm package version from the fetched artifact (useful for non-pinned specs).",
+  "plugins.installs.*.resolvedSpec":
+    "Resolved exact npm spec (<name>@<version>) from the fetched artifact.",
+  "plugins.installs.*.integrity":
+    "Resolved npm dist integrity hash for the fetched artifact (if reported by npm).",
+  "plugins.installs.*.shasum":
+    "Resolved npm dist shasum for the fetched artifact (if reported by npm).",
+  "plugins.installs.*.resolvedAt":
+    "ISO timestamp when npm package metadata was last resolved for this install record.",
   "plugins.installs.*.installedAt": "ISO timestamp of last install/update.",
   "agents.list.*.identity.avatar":
     "Agent avatar (workspace-relative path, http(s) URL, or data URI).",

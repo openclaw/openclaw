@@ -36,8 +36,8 @@ Jobs are ordered so cheap checks fail before expensive ones run:
 
 | Runner                          | Jobs                          |
 | ------------------------------- | ----------------------------- |
-| `blacksmith-4vcpu-ubuntu-2404`  | Most Linux jobs               |
-| `blacksmith-4vcpu-windows-2025` | `checks-windows`              |
+| `blacksmith-8vcpu-ubuntu-2404`  | Most Linux jobs               |
+| `blacksmith-8vcpu-windows-2025` | `checks-windows`              |
 | `macos-latest`                  | `macos`, `ios`                |
 | `ubuntu-latest`                 | Scope detection (lightweight) |
 
