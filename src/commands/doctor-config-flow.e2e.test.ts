@@ -432,4 +432,64 @@ describe("doctor config flow", () => {
 
     expectGoogleChatDmAllowFromRepaired(result.cfg);
   });
+
+  it("preserves memory section during repair with pending changes", async () => {
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        memory: {
+          backend: "qmd",
+          qmd: {
+            searchMode: "vsearch",
+            paths: [{ path: "~/notes" }],
+          },
+        },
+        channels: {
+          discord: {
+            token: "test-token",
+            dmPolicy: "open",
+          },
+        },
+      },
+    });
+
+    const cfg = result.cfg as Record<string, unknown>;
+    const memory = cfg.memory as { backend: string; qmd: { searchMode: string; paths: unknown[] } };
+    expect(memory).toBeDefined();
+    expect(memory.backend).toBe("qmd");
+    expect(memory.qmd.searchMode).toBe("vsearch");
+    expect(memory.qmd.paths).toEqual([{ path: "~/notes" }]);
+  });
+
+  it("preserves memory section in non-repair mode with unknown keys", async () => {
+    const result = await withTempHome(async (home) => {
+      const configDir = path.join(home, ".openclaw");
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(
+        path.join(configDir, "openclaw.json"),
+        JSON.stringify(
+          {
+            memory: {
+              backend: "qmd",
+              citations: "auto",
+            },
+            bridge: { bind: "auto" },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+      return loadAndMaybeMigrateDoctorConfig({
+        options: { nonInteractive: true, repair: false },
+        confirm: async () => true,
+      });
+    });
+
+    const cfg = result.cfg as Record<string, unknown>;
+    const memory = cfg.memory as { backend: string; citations: string };
+    expect(memory).toBeDefined();
+    expect(memory.backend).toBe("qmd");
+    expect(memory.citations).toBe("auto");
+  });
 });

@@ -826,6 +826,23 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     if (snapshot.valid && snapshot.exists) {
       const patch = createMergePatch(snapshot.config, cfg);
       persistCandidate = applyMergePatch(snapshot.resolved, patch);
+
+      // Guard against merge-patch spuriously deleting top-level config sections.
+      // This can happen when default-application differs between the two reads
+      // (e.g., env var changes, plugin manifest loading differences).
+      if (typeof persistCandidate === "object" && persistCandidate !== null) {
+        const candidate = persistCandidate as Record<string, unknown>;
+        const resolved = snapshot.resolved as Record<string, unknown>;
+        for (const key of Object.keys(resolved)) {
+          if (resolved[key] !== undefined && !(key in candidate)) {
+            candidate[key] = resolved[key];
+            deps.logger.warn(
+              `Config write: restored dropped section "${key}" — this usually indicates a merge-patch inconsistency.`,
+            );
+          }
+        }
+      }
+
       try {
         const resolvedIncludes = resolveConfigIncludes(snapshot.parsed, configPath, {
           readFile: (candidate) => deps.fs.readFileSync(candidate, "utf-8"),

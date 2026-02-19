@@ -897,10 +897,10 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   const unknown = stripUnknownConfigKeys(candidate);
   if (unknown.removed.length > 0) {
     const lines = unknown.removed.map((path) => `- ${path}`).join("\n");
-    candidate = unknown.config;
-    pendingChanges = true;
     if (shouldRepair) {
+      candidate = unknown.config;
       cfg = unknown.config;
+      pendingChanges = true;
       note(lines, "Doctor changes");
     } else {
       note(lines, "Unknown config keys");
@@ -922,6 +922,18 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   }
 
   noteOpencodeProviderOverrides(cfg);
+
+  // Safety check: restore any recognized schema keys from baseCfg that were
+  // inadvertently dropped during doctor processing (e.g., memory section).
+  const schemaKeys = new Set(Object.keys(OpenClawSchema.shape));
+  const baseCfgRecord = baseCfg as Record<string, unknown>;
+  const cfgRecord = cfg as Record<string, unknown>;
+  for (const key of Object.keys(baseCfgRecord)) {
+    if (schemaKeys.has(key) && baseCfgRecord[key] !== undefined && !(key in cfgRecord)) {
+      cfgRecord[key] = baseCfgRecord[key];
+      note(`Restored dropped config section "${key}".`, "Doctor");
+    }
+  }
 
   return {
     cfg,
