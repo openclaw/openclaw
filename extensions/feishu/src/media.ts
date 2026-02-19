@@ -1,4 +1,5 @@
 import fs from "fs";
+import crypto from "node:crypto";
 import os from "os";
 import path from "path";
 import { Readable } from "stream";
@@ -99,7 +100,7 @@ export async function downloadImageFeishu(params: {
     path: { image_key: imageKey },
   });
 
-  const tmpPath = path.join(os.tmpdir(), `feishu_img_${Date.now()}_${imageKey}`);
+  const tmpPath = path.join(os.tmpdir(), `feishu_img_${Date.now()}_${crypto.randomUUID()}`);
   const buffer = await readFeishuResponseBuffer({
     response,
     tmpPath,
@@ -132,7 +133,7 @@ export async function downloadMessageResourceFeishu(params: {
     params: { type },
   });
 
-  const tmpPath = path.join(os.tmpdir(), `feishu_${Date.now()}_${fileKey}`);
+  const tmpPath = path.join(os.tmpdir(), `feishu_${Date.now()}_${crypto.randomUUID()}`);
   const buffer = await readFeishuResponseBuffer({
     response,
     tmpPath,

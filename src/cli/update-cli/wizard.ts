@@ -14,6 +14,7 @@ import { pathExists } from "../../utils.js";
 import {
   isEmptyDir,
   isGitCheckout,
+  parseTimeoutMsOrExit,
   resolveGitInstallDir,
   resolveUpdateRoot,
   type UpdateWizardOptions,
@@ -29,10 +30,8 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
     return;
   }
 
-  const timeoutMs = opts.timeout ? Number.parseInt(opts.timeout, 10) * 1000 : undefined;
-  if (timeoutMs !== undefined && (Number.isNaN(timeoutMs) || timeoutMs <= 0)) {
-    defaultRuntime.error("--timeout must be a positive integer (seconds)");
-    defaultRuntime.exit(1);
+  const timeoutMs = parseTimeoutMsOrExit(opts.timeout);
+  if (timeoutMs === null) {
     return;
   }
 
