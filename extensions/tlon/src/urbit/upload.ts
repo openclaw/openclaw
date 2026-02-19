@@ -2,6 +2,8 @@
  * Upload an image from a URL to Tlon storage.
  */
 import { uploadFile } from "@tloncorp/api";
+import { getDefaultSsrFPolicy } from "./context.js";
+import { urbitFetch } from "./fetch.js";
 
 /**
  * Fetch an image from a URL and upload it to Tlon storage.
@@ -11,8 +13,22 @@ import { uploadFile } from "@tloncorp/api";
  */
 export async function uploadImageFromUrl(imageUrl: string): Promise<string> {
   try {
-    // Fetch the image
-    const response = await fetch(imageUrl);
+    // Validate URL is http/https before fetching
+    const url = new URL(imageUrl);
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      console.warn(`[tlon] Rejected non-http(s) URL: ${imageUrl}`);
+      return imageUrl;
+    }
+
+    // Fetch the image with SSRF protection
+    const { response } = await urbitFetch({
+      baseUrl: imageUrl,
+      path: "",
+      init: { method: "GET" },
+      ssrfPolicy: getDefaultSsrFPolicy(),
+      auditContext: "tlon-upload-image",
+    });
+
     if (!response.ok) {
       console.warn(`[tlon] Failed to fetch image from ${imageUrl}: ${response.status}`);
       return imageUrl;

@@ -9,6 +9,21 @@ import { setTlonRuntime } from "./src/runtime.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
+// Whitelist of allowed tlon subcommands
+const ALLOWED_TLON_COMMANDS = new Set([
+  "activity",
+  "channels",
+  "contacts",
+  "groups",
+  "messages",
+  "dms",
+  "posts",
+  "notebook",
+  "settings",
+  "help",
+  "version",
+]);
+
 /**
  * Find the tlon binary from the skill package
  */
@@ -141,6 +156,21 @@ const plugin = {
       async execute(_id: string, params: { command: string }) {
         try {
           const args = shellSplit(params.command);
+
+          // Validate first argument is a whitelisted tlon subcommand
+          const subcommand = args[0];
+          if (!ALLOWED_TLON_COMMANDS.has(subcommand)) {
+            return {
+              content: [
+                {
+                  type: "text" as const,
+                  text: `Error: Unknown tlon subcommand '${subcommand}'. Allowed: ${[...ALLOWED_TLON_COMMANDS].join(", ")}`,
+                },
+              ],
+              details: { error: true },
+            };
+          }
+
           const output = await runTlonCommand(tlonBinary, args);
           return {
             content: [{ type: "text" as const, text: output }],

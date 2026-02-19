@@ -5,6 +5,8 @@ import { homedir } from "node:os";
 import * as path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { getDefaultSsrFPolicy } from "../urbit/context.js";
+import { urbitFetch } from "../urbit/fetch.js";
 
 // Default to OpenClaw workspace media directory
 const DEFAULT_MEDIA_DIR = path.join(homedir(), ".openclaw", "workspace", "media", "inbound");
@@ -52,11 +54,25 @@ export async function downloadMedia(
   mediaDir: string = DEFAULT_MEDIA_DIR,
 ): Promise<DownloadedMedia | null> {
   try {
+    // Validate URL is http/https before fetching
+    const parsedUrl = new URL(url);
+    if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
+      console.warn(`[tlon-media] Rejected non-http(s) URL: ${url}`);
+      return null;
+    }
+
     // Ensure media directory exists
     await mkdir(mediaDir, { recursive: true });
 
-    // Fetch the image
-    const response = await fetch(url);
+    // Fetch with SSRF protection
+    const { response } = await urbitFetch({
+      baseUrl: url,
+      path: "",
+      init: { method: "GET" },
+      ssrfPolicy: getDefaultSsrFPolicy(),
+      auditContext: "tlon-media-download",
+    });
+
     if (!response.ok) {
       console.error(`[tlon-media] Failed to fetch ${url}: ${response.status}`);
       return null;
