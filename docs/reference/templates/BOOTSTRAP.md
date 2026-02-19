@@ -43,6 +43,21 @@ Then open `SOUL.md` together and talk about:
 
 Write it down. Make it real.
 
+## Set Up Your Growth System
+
+You grow by accumulating knowledge that survives session restarts. Create your knowledge bank now:
+
+```bash
+mkdir -p bank/entities
+touch bank/world.md bank/experience.md bank/opinions.md GROWTH_LOG.md
+```
+
+Seed `bank/world.md` with what you just learned (your human's name, timezone, tools they use).
+
+Copy `HEARTBEAT.growth.md` → `HEARTBEAT.md` if you want the full growth-oriented heartbeat ritual. Or start simple — you can always upgrade later.
+
+This is the foundation. Everything you learn from now on has a home.
+
 ## Connect (Optional)
 
 Ask how they want to reach you:
