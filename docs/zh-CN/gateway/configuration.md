@@ -1769,7 +1769,7 @@ MiniMax 认证：设置 `MINIMAX_API_KEY`（环境变量）或配置 `models.pro
       thinkingDefault: "low",
       verboseDefault: "off",
       elevatedDefault: "on",
-      timeoutSeconds: 600,
+      timeoutSeconds: 0,
       mediaMaxMb: 5,
       heartbeat: {
         every: "30m",

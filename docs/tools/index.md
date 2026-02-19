@@ -227,7 +227,7 @@ Notes:
 ### `loop-detection` (tool-call loop guardrails)
 
 OpenClaw tracks recent tool-call history and blocks or warns when it detects repetitive no-progress loops.
-Enable with `tools.loopDetection.enabled: true` (default is `false`).
+Loop detection is enabled by default (`tools.loopDetection.enabled: true`).
 
 ```json5
 {

@@ -1,4 +1,5 @@
 import { listAgentIds } from "../agents/agent-scope.js";
+import { resolveAgentTimeoutSeconds } from "../agents/timeout.js";
 import { DEFAULT_CHAT_CHANNEL } from "../channels/registry.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { CliDeps } from "../cli/deps.js";
@@ -31,7 +32,7 @@ type GatewayAgentResponse = {
   result?: AgentGatewayResult;
 };
 
-const NO_GATEWAY_TIMEOUT_MS = 2_147_000_000;
+const NO_GATEWAY_TIMEOUT_MS = 2_147_483_647;
 
 export type AgentCliOpts = {
   message: string;
@@ -58,7 +59,7 @@ function parseTimeoutSeconds(opts: { cfg: ReturnType<typeof loadConfig>; timeout
   const raw =
     opts.timeout !== undefined
       ? Number.parseInt(String(opts.timeout), 10)
-      : (opts.cfg.agents?.defaults?.timeoutSeconds ?? 600);
+      : resolveAgentTimeoutSeconds(opts.cfg);
   if (Number.isNaN(raw) || raw < 0) {
     throw new Error("--timeout must be a non-negative integer (seconds; 0 means no timeout)");
   }
