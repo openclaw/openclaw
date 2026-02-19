@@ -10,7 +10,7 @@ import time
 import uuid
 from pathlib import Path
 from .contract import TaskContract, TaskResult, TaskStatus
-from .verifier import Verifier as _Verifier
+from .verification import run_full_verification
 from .reputation import (
     init_db, get_reputation, update_reputation, get_supervision_level,
     SCORE_FIRST_PASS, SCORE_RETRY_PASS, SCORE_HONEST_BLOCK,
@@ -19,6 +19,11 @@ from .reputation import (
 
 
 SELF_REPORT_SCRIPT = str(Path(__file__).parent / "self_report.py")
+
+
+class AgentSuspendedException(Exception):
+    """Raised when agent reputation is too low to spawn any task."""
+    pass
 
 def score_result(result: TaskResult) -> float:
     """Determine the score based on task outcome."""
@@ -139,10 +144,7 @@ def execute_governed(contract: TaskContract, agent_id: str,
         # 6. If agent claims success, VERIFY
         if result.status == TaskStatus.SUCCESS:
             print(f"  ✅ Agent claims SUCCESS — verifying...")
-            verifier = _Verifier(required_files=getattr(contract, "required_files", []), run_tests=getattr(contract, "run_tests", None), work_dir=work_dir)
-            verification = verifier.run()
-            # compatibility shim
-            verification.summary = verification.details
+            verification = run_full_verification(contract, work_dir)
             result.verification_passed = verification.passed
             
             if verification.passed:
@@ -253,8 +255,34 @@ Führe nach Implementation die Verification durch und berichte:
         automatisch geupdated wenn Sub-Agent fertig ist.
         """
         agent_id = self.model.lower().replace("/", "-").replace(".", "_")
+        level_info = get_supervision_level(agent_id)
+        level = level_info["level"]
+        rep = level_info["reputation"]
+
+        # Gate 1: Suspended → block
+        if level == "suspended":
+            raise AgentSuspendedException(
+                f"Agent '{self.model}' is suspended (reputation={rep:.3f}). "
+                f"Task blocked. Improve reputation through honest work first."
+            )
+
+        # Gate 2: Strict → model override
+        self.effective_model = self.model
+        if level == "strict":
+            self.effective_model = "anthropic/claude-opus-4-6"
+
+        # Gate 3: Supervised/Strict → supervision notice in prompt
+        supervision_notice = ""
+        if level in ("supervised", "strict"):
+            supervision_notice = (
+                f"\n\n⚠️ SUPERVISION NOTICE: Your reputation score is {rep:.3f} ({level}). "
+                f"Work incrementally. Report progress after each file. "
+                f"Do NOT claim completion without deliverables present on disk."
+            )
+
+        agent_id = self.model.lower().replace("/", "-").replace(".", "_")
         safe_agent_id = shlex.quote(agent_id)
-        base_instructions = self.instructions()
+        base_instructions = self.instructions() + supervision_notice
 
         safe_objective = shlex.quote(self.contract.objective)
         self_report_cmd = f"""
@@ -278,6 +306,27 @@ python3 {SELF_REPORT_SCRIPT} \\
 Dieser Command schreibt das Ergebnis in die Reputation-Datenbank.
 """
         return base_instructions + self_report_cmd
+
+    def decompose_task(self) -> list["GovernedOrchestrator"]:
+        """Split task into sub-tasks based on acceptance_criteria.
+        Used for supervised/strict agents. Max 2 criteria per sub-task.
+        """
+        criteria = self.contract.criteria
+        if len(criteria) <= 2:
+            return [self]
+        chunk_size = 2
+        chunks = [criteria[i:i+chunk_size] for i in range(0, len(criteria), chunk_size)]
+        sub_tasks = []
+        for i, chunk in enumerate(chunks):
+            sub = GovernedOrchestrator.for_task(
+                objective=f"{self.contract.objective} [part {i+1}/{len(chunks)}]",
+                model=self.model,
+                criteria=chunk,
+                required_files=self.contract.required_files,
+                run_tests=self.contract.run_tests if i == len(chunks) - 1 else None,
+            )
+            sub_tasks.append(sub)
+        return sub_tasks
 
     def record_success(self, details: str = ""):
         from governed_agents.verifier import Verifier
@@ -342,4 +391,8 @@ Dieser Command schreibt das Ergebnis in die Reputation-Datenbank.
             required_files=required_files if required_files is not None else (files or []),
             run_tests=run_tests,
         )
-        return cls(contract, model)
+        contract.model = model
+        contract.criteria = contract.acceptance_criteria
+        orchestrator = cls(contract, model)
+        orchestrator.effective_model = contract.model
+        return orchestrator
