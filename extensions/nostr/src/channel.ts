@@ -158,12 +158,14 @@ function buildStatusPayload(params: {
   info?: string;
   progress?: number;
 }): Record<string, unknown> {
+  const timestampMs = Date.now();
   return {
     ver: 1,
     state: params.state,
     ...(params.info ? { info: params.info } : {}),
     ...(typeof params.progress === "number" ? { progress: params.progress } : {}),
-    timestamp: nowUnixSeconds(),
+    timestamp: Math.floor(timestampMs / 1000),
+    timestamp_ms: timestampMs,
     run_id: params.runId,
     session_id: params.sessionId,
     trace_id: params.traceId,
@@ -785,7 +787,8 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                       progress: 100,
                     });
                   }
-                  const timestamp = nowUnixSeconds();
+                  const timestampMs = Date.now();
+                  const timestamp = Math.floor(timestampMs / 1000);
                   const normalizedKind = resolveResponseKindFromDispatcherKind(info.kind);
                   const outboundPayload =
                     info.kind === "block"
@@ -796,6 +799,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                           text: trimmedResponse,
                           seq: blockSeq++,
                           timestamp,
+                          timestamp_ms: timestampMs,
                           run_id: payload.eventId,
                           session_id: sessionId,
                           trace_id: traceId,
@@ -808,6 +812,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                             output: { text: trimmedResponse },
                             success: true,
                             timestamp,
+                            timestamp_ms: timestampMs,
                             run_id: payload.eventId,
                             session_id: sessionId,
                             trace_id: traceId,
@@ -816,6 +821,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                             ver: 1,
                             text: trimmedResponse,
                             timestamp,
+                            timestamp_ms: timestampMs,
                             run_id: payload.eventId,
                             session_id: sessionId,
                             trace_id: traceId,
@@ -855,7 +861,8 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                       event: "thinking",
                       phase: "update",
                       text: reasoningText,
-                      timestamp: nowUnixSeconds(),
+                      timestamp: Math.floor(Date.now() / 1000),
+                      timestamp_ms: Date.now(),
                       run_id: payload.eventId,
                       session_id: sessionId,
                       trace_id: traceId,
@@ -880,7 +887,8 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                       ver: 1,
                       name: normalizedName,
                       phase: normalizeToolPhase(phase),
-                      timestamp: nowUnixSeconds(),
+                      timestamp: Math.floor(Date.now() / 1000),
+                      timestamp_ms: Date.now(),
                       run_id: payload.eventId,
                       session_id: sessionId,
                       trace_id: traceId,
@@ -909,7 +917,11 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                 ver: 1,
                 code: "INTERNAL_ERROR",
                 message,
-                timestamp: nowUnixSeconds(),
+                timestamp: Math.floor(Date.now() / 1000),
+                timestamp_ms: Date.now(),
+                run_id: payload.eventId,
+                session_id: sessionId,
+                trace_id: traceId,
                 details: {
                   run_id: payload.eventId,
                   session_id: sessionId,
