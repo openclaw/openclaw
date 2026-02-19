@@ -510,7 +510,7 @@ export function verifyTwilioWebhook(
 
   // Check if this is ngrok free tier - the URL might have different format
   const isNgrokFreeTier =
-    verificationUrl.includes(".ngrok-free.app") || verificationUrl.includes(".ngrok.io");
+    verificationUrl.includes(".ngrok-free.app") || verificationUrl.includes(".ngrok-free.dev") || verificationUrl.includes(".ngrok.io");
 
   return {
     ok: false,
