@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   authorizeOperatorScopesForMethod,
+  isGatewayMethodClassified,
   resolveLeastPrivilegeOperatorScopesForMethod,
 } from "./method-scopes.js";
+import { coreGatewayHandlers } from "./server-methods.js";
 
 describe("method scope resolution", () => {
   it("classifies sessions.resolve as read and poll as write", () => {
@@ -46,5 +48,14 @@ describe("operator scope authorization", () => {
       allowed: false,
       missingScope: "operator.admin",
     });
+  });
+});
+
+describe("core gateway method classification", () => {
+  it("classifies every exposed core gateway handler method", () => {
+    const unclassified = Object.keys(coreGatewayHandlers).filter(
+      (method) => !isGatewayMethodClassified(method),
+    );
+    expect(unclassified).toEqual([]);
   });
 });
