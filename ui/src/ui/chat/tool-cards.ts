@@ -1,6 +1,6 @@
 import { html, nothing } from "lit";
-import { icons } from "../icons.ts";
 import type { ToolCard } from "../types/chat-types.ts";
+import { icons } from "../icons.ts";
 import {
   formatToolDetail,
   resolveToolDisplay,
@@ -49,23 +49,26 @@ export function extractToolCards(message: unknown): ToolCard[] {
     cards.push({ kind: "result", name, text });
   }
 
-  const hasResultText = cards.some((card) => card.kind === "result" && Boolean(card.text?.trim()));
-  if (!hasResultText) {
-    return cards.filter((card) => {
-      if (!shouldSuppressToolCardWhenNoOutput(card.name)) {
-        return true;
-      }
-      if (card.kind === "call") {
-        return false;
-      }
-      if (card.kind === "result" && !card.text?.trim()) {
-        return false;
-      }
+  const toolsWithResultText = new Set(
+    cards
+      .filter((card) => card.kind === "result" && Boolean(card.text?.trim()))
+      .map((card) => card.name.toLowerCase()),
+  );
+  return cards.filter((card) => {
+    if (!shouldSuppressToolCardWhenNoOutput(card.name)) {
       return true;
-    });
-  }
-
-  return cards;
+    }
+    if (toolsWithResultText.has(card.name.toLowerCase())) {
+      return true;
+    }
+    if (card.kind === "call") {
+      return false;
+    }
+    if (card.kind === "result" && !card.text?.trim()) {
+      return false;
+    }
+    return true;
+  });
 }
 
 export function renderToolCardSidebar(card: ToolCard, onOpenSidebar?: (content: string) => void) {

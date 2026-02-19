@@ -45,4 +45,22 @@ describe("extractToolCards", () => {
       `result:${suppressedTool}`,
     ]);
   });
+
+  it("suppresses only suppressible tools with empty output when another tool has text", () => {
+    const message = {
+      content: [
+        { type: "tool_call", name: suppressedTool, arguments: { taskId: "task-1" } },
+        { type: "tool_result", name: suppressedTool, content: "" },
+        { type: "tool_call", name: "search", arguments: { q: "test" } },
+        { type: "tool_result", name: "search", content: "ok" },
+      ],
+    };
+
+    const cards = extractToolCards(message);
+
+    expect(cards.map((card) => `${card.kind}:${card.name}`)).toEqual([
+      "call:search",
+      "result:search",
+    ]);
+  });
 });
