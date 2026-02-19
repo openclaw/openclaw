@@ -37,9 +37,18 @@ const { registerCronCli } = await import("./cron-cli.js");
 
 type CronUpdatePatch = {
   patch?: {
-    payload?: { message?: string };
+    payload?: { message?: string; model?: string; thinking?: string };
     delivery?: { mode?: string; channel?: string; to?: string; bestEffort?: boolean };
   };
+};
+
+type CronAddParams = {
+  schedule?: { kind?: string; staggerMs?: number };
+  payload?: { model?: string; thinking?: string };
+  delivery?: { mode?: string };
+  deleteAfterRun?: boolean;
+  agentId?: string;
+  sessionTarget?: string;
 };
 
 function buildProgram() {
@@ -60,6 +69,26 @@ async function runCronEditAndGetPatch(editArgs: string[]): Promise<CronUpdatePat
   await program.parseAsync(["cron", "edit", "job-1", ...editArgs], { from: "user" });
   const updateCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.update");
   return (updateCall?.[2] ?? {}) as CronUpdatePatch;
+}
+
+async function runCronAddAndGetParams(addArgs: string[]): Promise<CronAddParams> {
+  resetGatewayMock();
+  const program = buildProgram();
+  await program.parseAsync(["cron", "add", ...addArgs], { from: "user" });
+  const addCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.add");
+  return (addCall?.[2] ?? {}) as CronAddParams;
+}
+
+async function runCronSimpleAndGetUpdatePatch(
+  command: "enable" | "disable",
+): Promise<{ enabled?: boolean }> {
+  resetGatewayMock();
+  const program = buildProgram();
+  await program.parseAsync(["cron", command, "job-1"], { from: "user" });
+  const updateCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.update");
+  return ((updateCall?.[2] as { patch?: { enabled?: boolean } } | undefined)?.patch ?? {}) as {
+    enabled?: boolean;
+  };
 }
 
 describe("cron cli", () => {
@@ -179,6 +208,16 @@ describe("cron cli", () => {
     expect(params?.deleteAfterRun).toBe(false);
   });
 
+  it("cron enable sets enabled=true patch", async () => {
+    const patch = await runCronSimpleAndGetUpdatePatch("enable");
+    expect(patch.enabled).toBe(true);
+  });
+
+  it("cron disable sets enabled=false patch", async () => {
+    const patch = await runCronSimpleAndGetUpdatePatch("disable");
+    expect(patch.enabled).toBe(false);
+  });
+
   it("sends agent id on cron add", async () => {
     resetGatewayMock();
 
@@ -208,48 +247,28 @@ describe("cron cli", () => {
   });
 
   it("omits empty model and thinking on cron edit", async () => {
-    resetGatewayMock();
-
-    const program = buildProgram();
-
-    await program.parseAsync(
-      ["cron", "edit", "job-1", "--message", "hello", "--model", "   ", "--thinking", "  "],
-      { from: "user" },
-    );
-
-    const updateCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.update");
-    const patch = updateCall?.[2] as {
-      patch?: { payload?: { model?: string; thinking?: string } };
-    };
+    const patch = await runCronEditAndGetPatch([
+      "--message",
+      "hello",
+      "--model",
+      "   ",
+      "--thinking",
+      "  ",
+    ]);
 
     expect(patch?.patch?.payload?.model).toBeUndefined();
     expect(patch?.patch?.payload?.thinking).toBeUndefined();
   });
 
   it("trims model and thinking on cron edit", async () => {
-    resetGatewayMock();
-
-    const program = buildProgram();
-
-    await program.parseAsync(
-      [
-        "cron",
-        "edit",
-        "job-1",
-        "--message",
-        "hello",
-        "--model",
-        "  opus  ",
-        "--thinking",
-        "  high  ",
-      ],
-      { from: "user" },
-    );
-
-    const updateCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.update");
-    const patch = updateCall?.[2] as {
-      patch?: { payload?: { model?: string; thinking?: string } };
-    };
+    const patch = await runCronEditAndGetPatch([
+      "--message",
+      "hello",
+      "--model",
+      "  opus  ",
+      "--thinking",
+      "  high  ",
+    ]);
 
     expect(patch?.patch?.payload?.model).toBe("opus");
     expect(patch?.patch?.payload?.thinking).toBe("high");
@@ -415,56 +434,34 @@ describe("cron cli", () => {
   });
 
   it("sets explicit stagger for cron add", async () => {
-    resetGatewayMock();
-    const program = buildProgram();
-
-    await program.parseAsync(
-      [
-        "cron",
-        "add",
-        "--name",
-        "staggered",
-        "--cron",
-        "0 * * * *",
-        "--stagger",
-        "45s",
-        "--session",
-        "main",
-        "--system-event",
-        "tick",
-      ],
-      { from: "user" },
-    );
-
-    const addCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.add");
-    const params = addCall?.[2] as { schedule?: { kind?: string; staggerMs?: number } };
+    const params = await runCronAddAndGetParams([
+      "--name",
+      "staggered",
+      "--cron",
+      "0 * * * *",
+      "--stagger",
+      "45s",
+      "--session",
+      "main",
+      "--system-event",
+      "tick",
+    ]);
     expect(params?.schedule?.kind).toBe("cron");
     expect(params?.schedule?.staggerMs).toBe(45_000);
   });
 
   it("sets exact cron mode on add", async () => {
-    resetGatewayMock();
-    const program = buildProgram();
-
-    await program.parseAsync(
-      [
-        "cron",
-        "add",
-        "--name",
-        "exact",
-        "--cron",
-        "0 * * * *",
-        "--exact",
-        "--session",
-        "main",
-        "--system-event",
-        "tick",
-      ],
-      { from: "user" },
-    );
-
-    const addCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.add");
-    const params = addCall?.[2] as { schedule?: { kind?: string; staggerMs?: number } };
+    const params = await runCronAddAndGetParams([
+      "--name",
+      "exact",
+      "--cron",
+      "0 * * * *",
+      "--exact",
+      "--session",
+      "main",
+      "--system-event",
+      "tick",
+    ]);
     expect(params?.schedule?.kind).toBe("cron");
     expect(params?.schedule?.staggerMs).toBe(0);
   });

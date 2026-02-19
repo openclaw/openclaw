@@ -20,6 +20,26 @@ const {
   sendStickerTelegram,
 } = await importTelegramSendModule();
 
+async function expectChatNotFoundWithChatId(
+  action: Promise<unknown>,
+  expectedChatId: string,
+): Promise<void> {
+  try {
+    await action;
+    throw new Error("Expected action to reject with chat-not-found context");
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message === "Expected action to reject with chat-not-found context"
+    ) {
+      throw error;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    expect(message).toMatch(/chat not found/i);
+    expect(message).toMatch(new RegExp(`chat_id=${expectedChatId}`));
+  }
+}
+
 describe("sent-message-cache", () => {
   afterEach(() => {
     clearSentMessageCache();
@@ -285,11 +305,9 @@ describe("sendMessageTelegram", () => {
       sendMessage: typeof sendMessage;
     };
 
-    await expect(sendMessageTelegram(chatId, "hi", { token: "tok", api })).rejects.toThrow(
-      /chat not found/i,
-    );
-    await expect(sendMessageTelegram(chatId, "hi", { token: "tok", api })).rejects.toThrow(
-      /chat_id=123/,
+    await expectChatNotFoundWithChatId(
+      sendMessageTelegram(chatId, "hi", { token: "tok", api }),
+      chatId,
     );
   });
 
@@ -1102,47 +1120,44 @@ describe("sendMessageTelegram", () => {
 });
 
 describe("reactMessageTelegram", () => {
-  it("sends emoji reactions", async () => {
-    const setMessageReaction = vi.fn().mockResolvedValue(undefined);
-    const api = { setMessageReaction } as unknown as {
-      setMessageReaction: typeof setMessageReaction;
-    };
-
-    await reactMessageTelegram("telegram:123", "456", "✅", {
-      token: "tok",
-      api,
-    });
-
-    expect(setMessageReaction).toHaveBeenCalledWith("123", 456, [{ type: "emoji", emoji: "✅" }]);
-  });
-
-  it("removes reactions when emoji is empty", async () => {
-    const setMessageReaction = vi.fn().mockResolvedValue(undefined);
-    const api = { setMessageReaction } as unknown as {
-      setMessageReaction: typeof setMessageReaction;
-    };
-
-    await reactMessageTelegram("123", 456, "", {
-      token: "tok",
-      api,
-    });
-
-    expect(setMessageReaction).toHaveBeenCalledWith("123", 456, []);
-  });
-
-  it("removes reactions when remove flag is set", async () => {
-    const setMessageReaction = vi.fn().mockResolvedValue(undefined);
-    const api = { setMessageReaction } as unknown as {
-      setMessageReaction: typeof setMessageReaction;
-    };
-
-    await reactMessageTelegram("123", 456, "✅", {
-      token: "tok",
-      api,
+  it.each([
+    {
+      testName: "sends emoji reactions",
+      target: "telegram:123",
+      messageId: "456",
+      emoji: "✅",
+      remove: false,
+      expected: [{ type: "emoji", emoji: "✅" }],
+    },
+    {
+      testName: "removes reactions when emoji is empty",
+      target: "123",
+      messageId: 456,
+      emoji: "",
+      remove: false,
+      expected: [],
+    },
+    {
+      testName: "removes reactions when remove flag is set",
+      target: "123",
+      messageId: 456,
+      emoji: "✅",
       remove: true,
+      expected: [],
+    },
+  ] as const)("$testName", async (testCase) => {
+    const setMessageReaction = vi.fn().mockResolvedValue(undefined);
+    const api = { setMessageReaction } as unknown as {
+      setMessageReaction: typeof setMessageReaction;
+    };
+
+    await reactMessageTelegram(testCase.target, testCase.messageId, testCase.emoji, {
+      token: "tok",
+      api,
+      ...(testCase.remove ? { remove: true } : {}),
     });
 
-    expect(setMessageReaction).toHaveBeenCalledWith("123", 456, []);
+    expect(setMessageReaction).toHaveBeenCalledWith("123", 456, testCase.expected);
   });
 });
 
@@ -1239,11 +1254,9 @@ describe("sendStickerTelegram", () => {
       sendSticker: typeof sendSticker;
     };
 
-    await expect(sendStickerTelegram(chatId, "fileId123", { token: "tok", api })).rejects.toThrow(
-      /chat not found/i,
-    );
-    await expect(sendStickerTelegram(chatId, "fileId123", { token: "tok", api })).rejects.toThrow(
-      /chat_id=123/,
+    await expectChatNotFoundWithChatId(
+      sendStickerTelegram(chatId, "fileId123", { token: "tok", api }),
+      chatId,
     );
   });
 
