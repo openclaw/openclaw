@@ -8,6 +8,23 @@ import {
 } from "./shell-env.js";
 
 describe("shell env fallback", () => {
+  function getShellPathTwice(params: {
+    exec: Parameters<typeof getShellPathFromLoginShell>[0]["exec"];
+    platform: NodeJS.Platform;
+  }) {
+    const first = getShellPathFromLoginShell({
+      env: {} as NodeJS.ProcessEnv,
+      exec: params.exec,
+      platform: params.platform,
+    });
+    const second = getShellPathFromLoginShell({
+      env: {} as NodeJS.ProcessEnv,
+      exec: params.exec,
+      platform: params.platform,
+    });
+    return { first, second };
+  }
+
   it("is disabled by default", () => {
     expect(shouldEnableShellEnvFallback({} as NodeJS.ProcessEnv)).toBe(false);
     expect(shouldEnableShellEnvFallback({ OPENCLAW_LOAD_SHELL_ENV: "0" })).toBe(false);
@@ -78,13 +95,7 @@ describe("shell env fallback", () => {
     resetShellPathCacheForTests();
     const exec = vi.fn(() => Buffer.from("PATH=/usr/local/bin:/usr/bin\0HOME=/tmp\0"));
 
-    const first = getShellPathFromLoginShell({
-      env: {} as NodeJS.ProcessEnv,
-      exec: exec as unknown as Parameters<typeof getShellPathFromLoginShell>[0]["exec"],
-      platform: "linux",
-    });
-    const second = getShellPathFromLoginShell({
-      env: {} as NodeJS.ProcessEnv,
+    const { first, second } = getShellPathTwice({
       exec: exec as unknown as Parameters<typeof getShellPathFromLoginShell>[0]["exec"],
       platform: "linux",
     });
@@ -100,13 +111,7 @@ describe("shell env fallback", () => {
       throw new Error("exec failed");
     });
 
-    const first = getShellPathFromLoginShell({
-      env: {} as NodeJS.ProcessEnv,
-      exec: exec as unknown as Parameters<typeof getShellPathFromLoginShell>[0]["exec"],
-      platform: "linux",
-    });
-    const second = getShellPathFromLoginShell({
-      env: {} as NodeJS.ProcessEnv,
+    const { first, second } = getShellPathTwice({
       exec: exec as unknown as Parameters<typeof getShellPathFromLoginShell>[0]["exec"],
       platform: "linux",
     });
@@ -120,13 +125,7 @@ describe("shell env fallback", () => {
     resetShellPathCacheForTests();
     const exec = vi.fn(() => Buffer.from("PATH=/usr/local/bin:/usr/bin\0HOME=/tmp\0"));
 
-    const first = getShellPathFromLoginShell({
-      env: {} as NodeJS.ProcessEnv,
-      exec: exec as unknown as Parameters<typeof getShellPathFromLoginShell>[0]["exec"],
-      platform: "win32",
-    });
-    const second = getShellPathFromLoginShell({
-      env: {} as NodeJS.ProcessEnv,
+    const { first, second } = getShellPathTwice({
       exec: exec as unknown as Parameters<typeof getShellPathFromLoginShell>[0]["exec"],
       platform: "win32",
     });
