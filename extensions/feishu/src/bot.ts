@@ -512,8 +512,8 @@ export async function handleFeishuMessage(params: {
 
   // Dedup check: skip if this message was already processed by this account
   const messageId = event.message.message_id;
-  if (!tryRecordMessage(messageId, accountId)) {
-    log(`feishu: skipping duplicate message ${messageId} (account: ${accountId})`);
+  if (!tryRecordMessage(messageId, account.accountId)) {
+    log(`feishu: skipping duplicate message ${messageId} (account: ${account.accountId})`);
     return;
   }
 
