@@ -57,7 +57,15 @@ export async function persistSessionUsageUpdate(params: {
   }
 
   const label = params.logLabel ? `${params.logLabel} ` : "";
-  if (hasNonzeroUsage(params.usage)) {
+  const hasUsage = hasNonzeroUsage(params.usage);
+  if (!hasUsage) {
+    // Log when usage is missing/zero - this is a common reason for totalTokens not being set
+    logVerbose(
+      `${label}skipping totalTokens update: no usage data (input=${params.usage?.input ?? "undefined"} ` +
+        `output=${params.usage?.output ?? "undefined"} total=${params.usage?.total ?? "undefined"})`,
+    );
+  }
+  if (hasUsage) {
     try {
       await updateSessionStoreEntry({
         storePath,
