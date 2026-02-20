@@ -106,6 +106,7 @@ function createStreamFnWithExtraParams(
     underlying(model, context, {
       ...streamParams,
       ...options,
+      headers: { ...streamParams.headers, ...options?.headers },
     });
 
   return wrappedStreamFn;
