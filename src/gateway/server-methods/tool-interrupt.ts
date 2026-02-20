@@ -3,6 +3,7 @@ import {
   errorShape,
   formatValidationErrors,
   validateToolInterruptEmitParams,
+  validateToolInterruptListParams,
   validateToolInterruptResumeParams,
 } from "../protocol/index.js";
 import type { ToolInterruptManager } from "../tool-interrupt-manager.js";
@@ -103,6 +104,8 @@ export function createToolInterruptHandlers(manager: ToolInterruptManager): Gate
         return;
       }
 
+      // SECURITY: resumeToken is a capability secret. Keep this event approvals-scoped only and
+      // never mirror it into end-user chat streams or non-privileged logs.
       context.broadcast(
         "tool.interrupt.requested",
         {
@@ -144,6 +147,41 @@ export function createToolInterruptHandlers(manager: ToolInterruptManager): Gate
       }
 
       respond(true, waitResult, undefined);
+    },
+    "tool.interrupt.list": async ({ params, respond }) => {
+      if (!validateToolInterruptListParams(params)) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `invalid tool.interrupt.list params: ${formatValidationErrors(
+              validateToolInterruptListParams.errors,
+            )}`,
+          ),
+        );
+        return;
+      }
+
+      const p = params as { state?: "pending" };
+      const state = p.state ?? "pending";
+      if (state !== "pending") {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "unsupported state filter"),
+        );
+        return;
+      }
+
+      respond(
+        true,
+        {
+          state,
+          interrupts: manager.listPending(),
+        },
+        undefined,
+      );
     },
     "tool.interrupt.resume": async ({ params, respond, context, client }) => {
       if (!validateToolInterruptResumeParams(params)) {
@@ -222,7 +260,15 @@ export function createToolInterruptHandlers(manager: ToolInterruptManager): Gate
         true,
         {
           ok: true,
+          status: "resumed",
+          alreadyResolved: resumed.alreadyResolved,
+          approvalRequestId: resumed.waitResult.approvalRequestId,
+          runId: resumed.waitResult.runId,
+          sessionKey: resumed.waitResult.sessionKey,
+          toolCallId: resumed.waitResult.toolCallId,
           resumedAtMs: resumed.waitResult.resumedAtMs,
+          resumedBy: resumed.waitResult.resumedBy,
+          result: resumed.waitResult.result,
         },
         undefined,
       );

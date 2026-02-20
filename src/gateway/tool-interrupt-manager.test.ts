@@ -27,11 +27,11 @@ describe("ToolInterruptManager", () => {
     const token = emitted.requested.resumeToken;
     const waitPromise = emitted.wait;
     const persisted = JSON.parse(await fs.readFile(filePath, "utf-8")) as {
-      interrupts?: Record<string, { resumeTokenHash?: string }>;
+      interrupts?: Record<string, { resumeTokenHash?: string; resumeToken?: string }>;
     };
     const record = persisted.interrupts?.["approval-1"];
     expect(record?.resumeTokenHash).toMatch(/^[a-f0-9]{64}$/);
-    expect(JSON.stringify(persisted)).not.toContain(token);
+    expect(record?.resumeToken).toBe(token);
 
     const resumed = await manager.resume({
       approvalRequestId: "approval-1",
@@ -43,6 +43,9 @@ describe("ToolInterruptManager", () => {
       resumedBy: "tester",
     });
     expect(resumed.ok).toBe(true);
+    if (resumed.ok) {
+      expect(resumed.alreadyResolved).toBe(false);
+    }
     await expect(waitPromise).resolves.toMatchObject({
       status: "resumed",
       approvalRequestId: "approval-1",
@@ -52,6 +55,10 @@ describe("ToolInterruptManager", () => {
       resumedBy: "tester",
       result: { ok: true, resumed: "done" },
     });
+    const persistedAfterResume = JSON.parse(await fs.readFile(filePath, "utf-8")) as {
+      interrupts?: Record<string, { resumeToken?: string }>;
+    };
+    expect(persistedAfterResume.interrupts?.["approval-1"]?.resumeToken).toBeUndefined();
     manager.stop();
   });
 
@@ -169,9 +176,64 @@ describe("ToolInterruptManager", () => {
       }),
     ]);
 
-    expect([a.ok, b.ok].filter(Boolean)).toHaveLength(1);
-    expect([a, b].some((item) => !item.ok && item.code === "already_resumed")).toBe(true);
+    expect([a.ok, b.ok].filter(Boolean)).toHaveLength(2);
+    const resolved = [a, b].filter((item) => item.ok);
+    expect(resolved).toHaveLength(2);
+    if (resolved[0] && resolved[1]) {
+      expect(
+        [resolved[0].alreadyResolved, resolved[1].alreadyResolved].toSorted(
+          (x, y) => Number(x) - Number(y),
+        ),
+      ).toEqual([false, true]);
+      expect(resolved[0].waitResult.resumedAtMs).toBe(resolved[1].waitResult.resumedAtMs);
+    }
     manager.stop();
+  });
+
+  it("lists pending interrupts and preserves resume capability across reload", async () => {
+    const filePath = await createTempInterruptPath();
+    const manager = new ToolInterruptManager({ filePath });
+    await manager.load();
+
+    const emitted = await manager.emit({
+      approvalRequestId: "approval-list-1",
+      runId: "run-list-1",
+      sessionKey: "agent:main:main",
+      toolCallId: "tool-list-1",
+      toolName: "browser",
+      normalizedArgsHash: "c".repeat(64),
+      interrupt: { type: "approval", text: "Need approval" },
+      timeoutMs: 60_000,
+    });
+
+    const pending = manager.listPending();
+    expect(pending).toHaveLength(1);
+    expect(pending[0]).toMatchObject({
+      approvalRequestId: "approval-list-1",
+      toolCallId: "tool-list-1",
+      toolName: "browser",
+      normalizedArgsHash: "c".repeat(64),
+      resumeToken: emitted.requested.resumeToken,
+    });
+
+    manager.stop();
+    const reloaded = new ToolInterruptManager({ filePath });
+    await reloaded.load();
+    const pendingAfterReload = reloaded.listPending();
+    expect(pendingAfterReload).toHaveLength(1);
+
+    const resumed = await reloaded.resume({
+      approvalRequestId: "approval-list-1",
+      runId: "run-list-1",
+      sessionKey: "agent:main:main",
+      toolCallId: "tool-list-1",
+      toolName: "browser",
+      normalizedArgsHash: "c".repeat(64),
+      resumeToken: pendingAfterReload[0].resumeToken,
+      result: { ok: true },
+    });
+    expect(resumed).toMatchObject({ ok: true, alreadyResolved: false });
+    reloaded.stop();
   });
 
   it("enforces expiry and survives restart with persisted records", async () => {

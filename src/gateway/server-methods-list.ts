@@ -28,6 +28,7 @@ const BASE_METHODS = [
   "exec.approval.waitDecision",
   "exec.approval.resolve",
   "tool.interrupt.emit",
+  "tool.interrupt.list",
   "tool.interrupt.resume",
   "wizard.start",
   "wizard.next",

@@ -26,6 +26,7 @@ type StoredToolInterruptRecord = ToolInterruptBinding & {
   normalizedArgsHash?: string;
   createdAtMs: number;
   expiresAtMs: number;
+  resumeToken?: string;
   resumeTokenHash: string;
   resumedAtMs?: number;
   resumedBy?: string | null;
@@ -49,6 +50,15 @@ export type ToolInterruptRequested = ToolInterruptBinding & {
   resumeToken: string;
 };
 
+export type ToolInterruptPendingSnapshot = ToolInterruptBinding & {
+  interrupt: Record<string, unknown>;
+  toolName?: string;
+  normalizedArgsHash?: string;
+  createdAtMs: number;
+  expiresAtMs: number;
+  resumeToken: string;
+};
+
 export type ToolInterruptWaitResult =
   | (ToolInterruptBinding & {
       status: "resumed";
@@ -64,6 +74,7 @@ export type ToolInterruptWaitResult =
 export type ToolInterruptResumeResult =
   | {
       ok: true;
+      alreadyResolved: boolean;
       waitResult: Extract<ToolInterruptWaitResult, { status: "resumed" }>;
     }
   | {
@@ -146,7 +157,12 @@ function parseStoredRecord(value: unknown): StoredToolInterruptRecord | null {
   if (typeof record.expiresAtMs !== "number" || !Number.isFinite(record.expiresAtMs)) {
     return null;
   }
-  if (typeof record.resumeTokenHash !== "string" || !record.resumeTokenHash.trim()) {
+  const resumeTokenRaw = typeof record.resumeToken === "string" ? record.resumeToken.trim() : "";
+  const resumeTokenHashRaw =
+    typeof record.resumeTokenHash === "string" ? record.resumeTokenHash.trim() : "";
+  const resumeTokenHash =
+    resumeTokenHashRaw || (resumeTokenRaw ? hashResumeToken(resumeTokenRaw) : "");
+  if (!resumeTokenHash) {
     return null;
   }
   const interrupt = asRecord(record.interrupt);
@@ -182,7 +198,8 @@ function parseStoredRecord(value: unknown): StoredToolInterruptRecord | null {
         : undefined,
     createdAtMs: Math.floor(record.createdAtMs),
     expiresAtMs: Math.floor(record.expiresAtMs),
-    resumeTokenHash: record.resumeTokenHash.trim(),
+    resumeToken: resumeTokenRaw || undefined,
+    resumeTokenHash,
     resumedAtMs: resumedAtMs ? Math.floor(resumedAtMs) : undefined,
     resumedBy:
       typeof record.resumedBy === "string" || record.resumedBy === null
@@ -298,6 +315,32 @@ export class ToolInterruptManager {
     };
   }
 
+  listPending(): ToolInterruptPendingSnapshot[] {
+    const now = this.nowMs();
+    const snapshots: ToolInterruptPendingSnapshot[] = [];
+    for (const record of this.records.values()) {
+      if (record.resumedAtMs || record.expiredAtMs || now >= record.expiresAtMs) {
+        continue;
+      }
+      if (!record.resumeToken) {
+        continue;
+      }
+      snapshots.push({
+        approvalRequestId: record.approvalRequestId,
+        runId: record.runId,
+        sessionKey: record.sessionKey,
+        toolCallId: record.toolCallId,
+        interrupt: { ...record.interrupt },
+        toolName: record.toolName,
+        normalizedArgsHash: record.normalizedArgsHash,
+        createdAtMs: record.createdAtMs,
+        expiresAtMs: record.expiresAtMs,
+        resumeToken: record.resumeToken,
+      });
+    }
+    return snapshots.toSorted((a, b) => a.createdAtMs - b.createdAtMs);
+  }
+
   async emit(
     params: ToolInterruptBinding & {
       interrupt: Record<string, unknown>;
@@ -355,6 +398,7 @@ export class ToolInterruptManager {
           normalizedArgsHash,
           createdAtMs: now,
           expiresAtMs: now + timeoutMs,
+          resumeToken,
           resumeTokenHash,
           resumedAtMs: undefined,
           resumedBy: undefined,
@@ -366,6 +410,7 @@ export class ToolInterruptManager {
         record.toolName = toolName;
         record.normalizedArgsHash = normalizedArgsHash;
         record.expiresAtMs = now + timeoutMs;
+        record.resumeToken = resumeToken;
         record.resumeTokenHash = resumeTokenHash;
         record.expiredAtMs = undefined;
       }
@@ -468,7 +513,25 @@ export class ToolInterruptManager {
         return;
       }
       if (record.resumedAtMs) {
-        result = { ok: false, code: "already_resumed", message: "interrupt already resumed" };
+        const providedHash = hashResumeToken(resumeToken);
+        if (!safeEqualSecret(providedHash, record.resumeTokenHash)) {
+          result = { ok: false, code: "invalid_token", message: "invalid resume token" };
+          return;
+        }
+        result = {
+          ok: true,
+          alreadyResolved: true,
+          waitResult: {
+            status: "resumed",
+            approvalRequestId: record.approvalRequestId,
+            runId: record.runId,
+            sessionKey: record.sessionKey,
+            toolCallId: record.toolCallId,
+            resumedAtMs: record.resumedAtMs,
+            resumedBy: record.resumedBy ?? null,
+            result: record.resumedResult,
+          },
+        };
         return;
       }
       if (record.toolName || record.normalizedArgsHash) {
@@ -494,6 +557,7 @@ export class ToolInterruptManager {
       }
       if (record.expiredAtMs || now >= record.expiresAtMs) {
         record.expiredAtMs = record.expiredAtMs ?? now;
+        record.resumeToken = undefined;
         this.settlePendingLocked(binding.approvalRequestId, {
           status: "expired",
           approvalRequestId: record.approvalRequestId,
@@ -525,6 +589,7 @@ export class ToolInterruptManager {
         result: params.result,
       };
       record.resumedAtMs = resumedAtMs;
+      record.resumeToken = undefined;
       record.resumedBy = params.resumedBy ?? null;
       record.decisionReason =
         typeof params.decisionReason === "string" || params.decisionReason === null
@@ -545,6 +610,7 @@ export class ToolInterruptManager {
       this.settlePendingLocked(binding.approvalRequestId, waitResult);
       result = {
         ok: true,
+        alreadyResolved: false,
         waitResult,
       };
     });
@@ -609,6 +675,7 @@ export class ToolInterruptManager {
         return;
       }
       record.expiredAtMs = record.expiredAtMs ?? now;
+      record.resumeToken = undefined;
       this.records.set(record.approvalRequestId, record);
       this.settlePendingLocked(approvalRequestId, {
         status: "expired",
@@ -690,6 +757,7 @@ export class ToolInterruptManager {
         normalizedArgsHash: record.normalizedArgsHash,
         createdAtMs: record.createdAtMs,
         expiresAtMs: record.expiresAtMs,
+        resumeToken: record.resumeToken,
         resumeTokenHash: record.resumeTokenHash,
         resumedAtMs: record.resumedAtMs,
         resumedBy: record.resumedBy,

@@ -118,6 +118,8 @@ import {
   ExecApprovalResolveParamsSchema,
   type ToolInterruptEmitParams,
   ToolInterruptEmitParamsSchema,
+  type ToolInterruptListParams,
+  ToolInterruptListParamsSchema,
   type ToolInterruptResumeParams,
   ToolInterruptResumeParamsSchema,
   ErrorCodes,
@@ -373,6 +375,9 @@ export const validateExecApprovalsNodeSetParams = ajv.compile<ExecApprovalsNodeS
 export const validateToolInterruptEmitParams = ajv.compile<ToolInterruptEmitParams>(
   ToolInterruptEmitParamsSchema,
 );
+export const validateToolInterruptListParams = ajv.compile<ToolInterruptListParams>(
+  ToolInterruptListParamsSchema,
+);
 export const validateToolInterruptResumeParams = ajv.compile<ToolInterruptResumeParams>(
   ToolInterruptResumeParamsSchema,
 );
@@ -617,6 +622,7 @@ export type {
   ExecApprovalsSetParams,
   ExecApprovalsSnapshot,
   ToolInterruptEmitParams,
+  ToolInterruptListParams,
   ToolInterruptResumeParams,
   LogsTailParams,
   LogsTailResult,

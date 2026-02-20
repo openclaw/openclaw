@@ -37,3 +37,10 @@ export const ToolInterruptResumeParamsSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
+export const ToolInterruptListParamsSchema = Type.Object(
+  {
+    state: Type.Optional(Type.Union([Type.Literal("pending")])),
+  },
+  { additionalProperties: false },
+);

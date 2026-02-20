@@ -132,6 +132,7 @@ import {
 import { PresenceEntrySchema, SnapshotSchema, StateVersionSchema } from "./snapshot.js";
 import {
   ToolInterruptEmitParamsSchema,
+  ToolInterruptListParamsSchema,
   ToolInterruptResumeParamsSchema,
 } from "./tool-interrupts.js";
 import {
@@ -251,6 +252,7 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   ExecApprovalRequestParams: ExecApprovalRequestParamsSchema,
   ExecApprovalResolveParams: ExecApprovalResolveParamsSchema,
   ToolInterruptEmitParams: ToolInterruptEmitParamsSchema,
+  ToolInterruptListParams: ToolInterruptListParamsSchema,
   ToolInterruptResumeParams: ToolInterruptResumeParamsSchema,
   DevicePairListParams: DevicePairListParamsSchema,
   DevicePairApproveParams: DevicePairApproveParamsSchema,

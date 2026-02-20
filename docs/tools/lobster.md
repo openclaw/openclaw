@@ -38,6 +38,10 @@ Lobster is intentionally small. The goal is not "a new language," it's a predict
 OpenClaw launches the local `lobster` CLI in **tool mode** and parses a JSON envelope from stdout.
 If the pipeline pauses for approval, the tool returns a `resumeToken` so you can continue later.
 
+> `resumeToken` is capability-bearing (whoever has it can resume the paused side-effect).
+> Deliver it only over privileged operator approvals RPC/channels. Never paste it into end-user chat,
+> analytics, or non-privileged logs.
+
 ## Pattern: small CLI + JSON pipes + approvals
 
 Build tiny commands that speak JSON, then chain them into a single Lobster call. (Example command names below — swap in your own.)
@@ -57,6 +61,9 @@ inbox apply --json
 ```
 
 If the pipeline requests approval, resume with the token:
+
+- Recovery after reconnect/restart: fetch pending approvals through `tool.interrupt.list({"state":"pending"})` on the privileged approvals RPC surface.
+- Resume is idempotent at RPC level: duplicate `tool.interrupt.resume` calls for the same interrupt return the same terminal resumed state (`alreadyResolved: true`) and do not re-execute side effects.
 
 ```json
 {

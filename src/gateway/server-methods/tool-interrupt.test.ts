@@ -110,7 +110,7 @@ describe("tool interrupt handlers", () => {
 
     expect(resumeRespond).toHaveBeenCalledWith(
       true,
-      expect.objectContaining({ ok: true }),
+      expect.objectContaining({ ok: true, alreadyResolved: false, status: "resumed" }),
       undefined,
     );
 
@@ -130,6 +130,168 @@ describe("tool interrupt handlers", () => {
       decisionReason: "looks safe",
       policyRuleId: "rule-1",
     });
+    manager.stop();
+  });
+
+  it("lists pending interrupts for approval UI recovery", async () => {
+    const filePath = await createTempInterruptPath();
+    const manager = new ToolInterruptManager({ filePath });
+    await manager.load();
+    const handlers = createToolInterruptHandlers(manager);
+
+    const emitRespond = vi.fn();
+    const emitPromise = handlers["tool.interrupt.emit"](
+      baseHandlerArgs({
+        req: { id: "req-emit", type: "req", method: "tool.interrupt.emit" } as never,
+        params: {
+          approvalRequestId: "approval-list-1",
+          runId: "run-list-1",
+          sessionKey: "agent:main:main",
+          toolCallId: "tool-list-1",
+          toolName: "browser",
+          normalizedArgsHash: "d".repeat(64),
+          interrupt: { type: "approval", text: "approve this" },
+          timeoutMs: 60_000,
+          twoPhase: true,
+        },
+        respond: emitRespond,
+      }),
+    );
+
+    await vi.waitFor(() => {
+      expect(emitRespond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ status: "accepted" }),
+        undefined,
+      );
+    });
+
+    const listRespond = vi.fn();
+    await handlers["tool.interrupt.list"](
+      baseHandlerArgs({
+        req: { id: "req-list", type: "req", method: "tool.interrupt.list" } as never,
+        params: { state: "pending" },
+        respond: listRespond,
+      }),
+    );
+
+    expect(listRespond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        state: "pending",
+        interrupts: [
+          expect.objectContaining({
+            approvalRequestId: "approval-list-1",
+            toolName: "browser",
+            normalizedArgsHash: "d".repeat(64),
+            resumeToken: expect.any(String),
+          }),
+        ],
+      }),
+      undefined,
+    );
+
+    const listedPayload = listRespond.mock.calls[0]?.[1] as
+      | { interrupts?: Array<{ resumeToken?: string }> }
+      | undefined;
+    const resumeToken = listedPayload?.interrupts?.[0]?.resumeToken;
+    await handlers["tool.interrupt.resume"](
+      baseHandlerArgs({
+        req: { id: "req-resume", type: "req", method: "tool.interrupt.resume" } as never,
+        params: {
+          approvalRequestId: "approval-list-1",
+          runId: "run-list-1",
+          sessionKey: "agent:main:main",
+          toolCallId: "tool-list-1",
+          toolName: "browser",
+          normalizedArgsHash: "d".repeat(64),
+          resumeToken,
+          result: { ok: true },
+        },
+        respond: vi.fn(),
+      }),
+    );
+
+    await emitPromise;
+    manager.stop();
+  });
+
+  it("returns deterministic terminal state for duplicate resume RPC calls", async () => {
+    const filePath = await createTempInterruptPath();
+    const manager = new ToolInterruptManager({ filePath });
+    await manager.load();
+    const handlers = createToolInterruptHandlers(manager);
+    const broadcasts: Array<{ event: string; payload: unknown }> = [];
+
+    const emitPromise = handlers["tool.interrupt.emit"](
+      baseHandlerArgs({
+        req: { id: "req-emit", type: "req", method: "tool.interrupt.emit" } as never,
+        params: {
+          approvalRequestId: "approval-idempotent-1",
+          runId: "run-idempotent-1",
+          sessionKey: "agent:main:main",
+          toolCallId: "tool-idempotent-1",
+          interrupt: { type: "approval", text: "approve" },
+          timeoutMs: 60_000,
+        },
+        respond: vi.fn(),
+        context: {
+          broadcast: (event: string, payload: unknown) => broadcasts.push({ event, payload }),
+        } as never,
+      }),
+    );
+
+    await vi.waitFor(() => {
+      expect(broadcasts.some((entry) => entry.event === "tool.interrupt.requested")).toBe(true);
+    });
+    const requested = broadcasts.find((entry) => entry.event === "tool.interrupt.requested");
+    const resumeToken = (requested?.payload as { resumeToken?: string } | undefined)?.resumeToken;
+
+    const respondA = vi.fn();
+    await handlers["tool.interrupt.resume"](
+      baseHandlerArgs({
+        req: { id: "req-resume-a", type: "req", method: "tool.interrupt.resume" } as never,
+        params: {
+          approvalRequestId: "approval-idempotent-1",
+          runId: "run-idempotent-1",
+          sessionKey: "agent:main:main",
+          toolCallId: "tool-idempotent-1",
+          resumeToken,
+          result: { approved: true },
+        },
+        respond: respondA,
+        context: {
+          broadcast: (event: string, payload: unknown) => broadcasts.push({ event, payload }),
+        } as never,
+      }),
+    );
+
+    const respondB = vi.fn();
+    await handlers["tool.interrupt.resume"](
+      baseHandlerArgs({
+        req: { id: "req-resume-b", type: "req", method: "tool.interrupt.resume" } as never,
+        params: {
+          approvalRequestId: "approval-idempotent-1",
+          runId: "run-idempotent-1",
+          sessionKey: "agent:main:main",
+          toolCallId: "tool-idempotent-1",
+          resumeToken,
+          result: { approved: true },
+        },
+        respond: respondB,
+        context: {
+          broadcast: (event: string, payload: unknown) => broadcasts.push({ event, payload }),
+        } as never,
+      }),
+    );
+
+    const payloadA = respondA.mock.calls[0]?.[1] as Record<string, unknown>;
+    const payloadB = respondB.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(payloadA).toMatchObject({ ok: true, alreadyResolved: false, status: "resumed" });
+    expect(payloadB).toMatchObject({ ok: true, alreadyResolved: true, status: "resumed" });
+    expect(payloadB.result).toEqual(payloadA.result);
+
+    await emitPromise;
     manager.stop();
   });
 
