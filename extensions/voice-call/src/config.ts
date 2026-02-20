@@ -52,8 +52,28 @@ export const TwilioConfigSchema = z
   .object({
     /** Twilio Account SID */
     accountSid: z.string().min(1).optional(),
-    /** Twilio Auth Token */
+    /** Twilio Auth Token (must match the target region — each region has its own credentials) */
     authToken: z.string().min(1).optional(),
+    /**
+     * Twilio Region for data processing (e.g. "ie1" for Ireland, "au1" for Australia).
+     * When set, API calls target `api.{edge}.{region}.twilio.com` instead of the
+     * default US1 endpoint (`api.twilio.com`). Requires region-specific auth credentials.
+     *
+     * Supported processing regions: "ie1" (Ireland), "au1" (Australia).
+     * US1 is the default when region is not set.
+     *
+     * @see https://www.twilio.com/docs/global-infrastructure/understanding-twilio-regions
+     * @see https://www.twilio.com/docs/global-infrastructure/api-domain-migration-guide
+     */
+    region: z.string().min(1).optional(),
+    /**
+     * Twilio Edge Location (e.g. "dublin", "sydney", "ashburn").
+     * Used together with `region` to construct the API FQDN.
+     * Auto-inferred from region if omitted (ie1→dublin, au1→sydney).
+     * Must be specified with `region` to avoid the deprecated domain pattern.
+     * @see https://www.twilio.com/docs/global-infrastructure/understanding-edge-locations
+     */
+    edge: z.string().min(1).optional(),
   })
   .strict();
 export type TwilioConfig = z.infer<typeof TwilioConfigSchema>;
@@ -360,6 +380,8 @@ export function resolveVoiceCallConfig(config: VoiceCallConfig): VoiceCallConfig
     resolved.twilio = resolved.twilio ?? {};
     resolved.twilio.accountSid = resolved.twilio.accountSid ?? process.env.TWILIO_ACCOUNT_SID;
     resolved.twilio.authToken = resolved.twilio.authToken ?? process.env.TWILIO_AUTH_TOKEN;
+    resolved.twilio.region = resolved.twilio.region ?? process.env.TWILIO_REGION;
+    resolved.twilio.edge = resolved.twilio.edge ?? process.env.TWILIO_EDGE;
   }
 
   // Plivo

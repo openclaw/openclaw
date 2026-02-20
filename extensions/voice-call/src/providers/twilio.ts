@@ -111,12 +111,67 @@ export class TwilioProvider implements VoiceCallProvider {
 
     this.accountSid = config.accountSid;
     this.authToken = config.authToken;
-    this.baseUrl = `https://api.twilio.com/2010-04-01/Accounts/${this.accountSid}`;
+    this.baseUrl = TwilioProvider.buildBaseUrl(this.accountSid, config.region, config.edge);
     this.options = options;
 
     if (options.publicUrl) {
       this.currentPublicUrl = options.publicUrl;
     }
+  }
+
+  /**
+   * Build the Twilio API base URL for a given region/edge combination.
+   *
+   * FQDN format: `{product}.{edge}.{region}.twilio.com`
+   *
+   * When both region and edge are specified, targets that specific region.
+   * When only region is specified, edge defaults to the canonical edge for that region.
+   * When neither is specified, falls back to the default US1 endpoint (`api.twilio.com`).
+   *
+   * Supported processing regions (as of 2026):
+   * - **us1** (default) — United States
+   * - **ie1** — Ireland (edge: dublin)
+   * - **au1** — Australia (edge: sydney)
+   *
+   * Note: The legacy `api.{region}.twilio.com` pattern (without edge) is deprecated
+   * and will stop working on April 28, 2026. This method always includes the edge
+   * in the FQDN to use the correct, non-deprecated format.
+   *
+   * @see https://www.twilio.com/docs/global-infrastructure/using-the-twilio-rest-api-in-a-non-us-region
+   * @see https://www.twilio.com/docs/global-infrastructure/api-domain-migration-guide
+   */
+  static buildBaseUrl(accountSid: string, region?: string, edge?: string): string {
+    if (!region) {
+      // Default US1 endpoint — no region/edge needed
+      return `https://api.twilio.com/2010-04-01/Accounts/${accountSid}`;
+    }
+
+    // When region is set, edge must also be specified to avoid the deprecated
+    // api.{region}.twilio.com pattern (which routes to US1 and stops working
+    // April 28, 2026). If the user omitted edge, infer the canonical one.
+    const resolvedEdge = edge || TwilioProvider.defaultEdgeForRegion(region);
+    const host = `api.${resolvedEdge}.${region}.twilio.com`;
+    return `https://${host}/2010-04-01/Accounts/${accountSid}`;
+  }
+
+  /**
+   * Map Twilio processing regions to their canonical edge location.
+   * Used as fallback when `edge` is not explicitly configured.
+   *
+   * Only includes regions that support regional data processing.
+   * Legacy region codes (br1, de1, jp1, sg1, us2) are NOT included —
+   * those were edge-only shortcuts that always processed in US1 and are
+   * deprecated as of April 28, 2026.
+   *
+   * @see https://www.twilio.com/docs/global-infrastructure/api-domain-migration-guide
+   */
+  private static defaultEdgeForRegion(region: string): string {
+    const defaults: Record<string, string> = {
+      ie1: "dublin",
+      au1: "sydney",
+      us1: "ashburn",
+    };
+    return defaults[region.toLowerCase()] ?? "ashburn";
   }
 
   setPublicUrl(url: string): void {
