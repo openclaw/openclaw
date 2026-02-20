@@ -2,10 +2,8 @@ import { inspect } from "node:util";
 import {
   Client,
   ReadyListener,
-  type BaseCommand,
   type BaseMessageInteractiveComponent,
   type Modal,
-  type Plugin,
 } from "@buape/carbon";
 import { GatewayCloseCodes, type GatewayPlugin } from "@buape/carbon/gateway";
 import { VoicePlugin } from "@buape/carbon/voice";
