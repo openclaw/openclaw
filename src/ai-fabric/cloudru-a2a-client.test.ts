@@ -33,6 +33,22 @@ function mockFetch(response: { status: number; body?: unknown }): ReturnType<typ
   });
 }
 
+function mockFetchSequence(
+  responses: Array<{ status: number; body?: unknown }>,
+): ReturnType<typeof vi.fn> {
+  const fn = vi.fn();
+  for (const response of responses) {
+    fn.mockResolvedValueOnce({
+      ok: response.status >= 200 && response.status < 300,
+      status: response.status,
+      json: () => Promise.resolve(response.body),
+      text: () => Promise.resolve(JSON.stringify(response.body ?? {})),
+      headers: new Headers(),
+    });
+  }
+  return fn;
+}
+
 const AUTH_CONFIG = { keyId: "test-key-id", secret: "test-secret" };
 const AGENT_ENDPOINT = "https://agent.cloudru.test/a2a";
 
@@ -232,5 +248,220 @@ describe("CloudruA2AClient", () => {
     });
 
     expect(result.text).toContain("no text response");
+  });
+
+  // ---------------------------------------------------------------------------
+  // Polling tests (agent-system orchestrators)
+  // ---------------------------------------------------------------------------
+
+  describe("polling", () => {
+    it("polls working → completed and returns final text", async () => {
+      const fetchImpl = mockFetchSequence([
+        // 1. message/send returns working
+        {
+          status: 200,
+          body: {
+            result: {
+              id: "task-poll-1",
+              contextId: "sess-poll",
+              status: { state: "working" },
+            },
+          },
+        },
+        // 2. first tasks/get — still working
+        {
+          status: 200,
+          body: {
+            result: {
+              id: "task-poll-1",
+              contextId: "sess-poll",
+              status: { state: "working" },
+            },
+          },
+        },
+        // 3. second tasks/get — completed
+        {
+          status: 200,
+          body: {
+            result: {
+              id: "task-poll-1",
+              contextId: "sess-poll",
+              status: {
+                state: "completed",
+                message: {
+                  role: "agent",
+                  parts: [{ kind: "text", text: "Aggregated results here" }],
+                },
+              },
+            },
+          },
+        },
+      ]);
+
+      const client = new CloudruA2AClient({
+        auth: AUTH_CONFIG,
+        timeoutMs: 120_000,
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      });
+
+      const result = await client.sendMessage({
+        endpoint: AGENT_ENDPOINT,
+        message: "multi-agent query",
+      });
+
+      expect(result.ok).toBe(true);
+      expect(result.text).toBe("Aggregated results here");
+      expect(result.taskId).toBe("task-poll-1");
+      expect(result.sessionId).toBe("sess-poll");
+      // 1 send + 2 polls = 3 fetch calls
+      expect(fetchImpl).toHaveBeenCalledTimes(3);
+
+      // Verify second call is tasks/get
+      const secondBody = JSON.parse(
+        (fetchImpl.mock.calls[1] as [string, RequestInit])[1].body as string,
+      );
+      expect(secondBody.method).toBe("tasks/get");
+      expect(secondBody.params.id).toBe("task-poll-1");
+    });
+
+    it("throws timeout when polling exceeds deadline", async () => {
+      // Always returns working — will exhaust the short timeout
+      const fetchImpl = vi.fn().mockImplementation(() =>
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () =>
+            Promise.resolve({
+              result: {
+                id: "task-stuck",
+                status: { state: "working" },
+              },
+            }),
+          text: () => Promise.resolve("{}"),
+          headers: new Headers(),
+        }),
+      );
+
+      const client = new CloudruA2AClient({
+        auth: AUTH_CONFIG,
+        timeoutMs: 1_500, // very short — will time out after 1 poll
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      });
+
+      await expect(
+        client.sendMessage({ endpoint: AGENT_ENDPOINT, message: "stuck" }),
+      ).rejects.toThrow(/timed out/);
+    });
+
+    it("returns error text when poll reaches failed state", async () => {
+      const fetchImpl = mockFetchSequence([
+        {
+          status: 200,
+          body: {
+            result: {
+              id: "task-fail",
+              status: { state: "working" },
+            },
+          },
+        },
+        {
+          status: 200,
+          body: {
+            result: {
+              id: "task-fail",
+              status: {
+                state: "failed",
+                message: {
+                  role: "agent",
+                  parts: [{ kind: "text", text: "Sub-agent crashed" }],
+                },
+              },
+            },
+          },
+        },
+      ]);
+
+      const client = new CloudruA2AClient({
+        auth: AUTH_CONFIG,
+        timeoutMs: 30_000,
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      });
+
+      const result = await client.sendMessage({
+        endpoint: AGENT_ENDPOINT,
+        message: "fail scenario",
+      });
+
+      expect(result.ok).toBe(true);
+      expect(result.text).toBe("Sub-agent crashed");
+    });
+
+    it("returns input-required fallback message", async () => {
+      const fetchImpl = mockFetchSequence([
+        {
+          status: 200,
+          body: {
+            result: {
+              id: "task-input",
+              status: { state: "working" },
+            },
+          },
+        },
+        {
+          status: 200,
+          body: {
+            result: {
+              id: "task-input",
+              status: { state: "input-required" },
+            },
+          },
+        },
+      ]);
+
+      const client = new CloudruA2AClient({
+        auth: AUTH_CONFIG,
+        timeoutMs: 30_000,
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      });
+
+      const result = await client.sendMessage({
+        endpoint: AGENT_ENDPOINT,
+        message: "needs input",
+      });
+
+      expect(result.text).toBe("Agent requires additional input but provided no prompt.");
+    });
+
+    it("does not poll when first response is already completed", async () => {
+      const fetchImpl = mockFetch({
+        status: 200,
+        body: {
+          result: {
+            id: "task-immediate",
+            status: {
+              state: "completed",
+              message: {
+                role: "agent",
+                parts: [{ kind: "text", text: "Immediate response" }],
+              },
+            },
+          },
+        },
+      });
+
+      const client = new CloudruA2AClient({
+        auth: AUTH_CONFIG,
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      });
+
+      const result = await client.sendMessage({
+        endpoint: AGENT_ENDPOINT,
+        message: "quick query",
+      });
+
+      expect(result.text).toBe("Immediate response");
+      // Only 1 fetch call — no polling
+      expect(fetchImpl).toHaveBeenCalledOnce();
+    });
   });
 });

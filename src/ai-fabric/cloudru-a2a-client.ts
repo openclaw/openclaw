@@ -11,9 +11,10 @@
  */
 
 import type { CloudruAuthConfig } from "./types.js";
+import { computeBackoff, sleepWithAbort } from "../infra/backoff.js";
 import { resolveFetch } from "../infra/fetch.js";
 import { CloudruTokenProvider, type CloudruAuthOptions } from "./cloudru-auth.js";
-import { CLOUDRU_DEFAULT_TIMEOUT_MS } from "./constants.js";
+import { CLOUDRU_A2A_POLL_POLICY, CLOUDRU_DEFAULT_TIMEOUT_MS } from "./constants.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -121,6 +122,7 @@ export class CloudruA2AClient {
    */
   async sendMessage(params: A2ASendParams): Promise<A2ASendResult> {
     const { endpoint, message, sessionId } = params;
+    const deadline = Date.now() + this.timeoutMs;
 
     const token = await this.tokenProvider.getToken();
     const controller = new AbortController();
@@ -177,22 +179,98 @@ export class CloudruA2AClient {
         throw new A2AError("A2A response missing result");
       }
 
+      let task = json.result;
+      if (task.status.state === "working" && task.id) {
+        task = await this.pollTask(task.id, endpoint, deadline, controller.signal);
+      }
+
       return {
         ok: true,
-        text: extractResponseText(json.result),
-        taskId: json.result.id,
-        sessionId: json.result.contextId ?? json.result.sessionId,
+        text: extractResponseText(task),
+        taskId: task.id,
+        sessionId: task.contextId ?? task.sessionId,
       };
     } catch (err) {
       if (err instanceof A2AError) {
         throw err;
       }
-      if ((err as Error).name === "AbortError") {
+      const errName = (err as Error).name;
+      const errMsg = (err as Error).message;
+      if (errName === "AbortError" || errMsg === "aborted") {
         throw new A2AError(`A2A request to ${endpoint} timed out after ${this.timeoutMs}ms`);
       }
       throw new A2AError(`A2A request failed: ${(err as Error).message}`);
     } finally {
       clearTimeout(timer);
+    }
+  }
+
+  /**
+   * Poll `tasks/get` until the task reaches a terminal state.
+   * Used for agent-system orchestrators that return `working` from `message/send`.
+   */
+  private async pollTask(
+    taskId: string,
+    endpoint: string,
+    deadline: number,
+    signal: AbortSignal,
+  ): Promise<A2ATaskResponse> {
+    for (let attempt = 1; ; attempt++) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        throw new A2AError(`A2A task ${taskId} polling timed out after ${this.timeoutMs}ms`);
+      }
+
+      const delayMs = computeBackoff(CLOUDRU_A2A_POLL_POLICY, attempt);
+      await sleepWithAbort(Math.min(delayMs, remaining), signal);
+
+      const token = await this.tokenProvider.getToken();
+      const body = {
+        jsonrpc: "2.0",
+        id: crypto.randomUUID(),
+        method: "tasks/get",
+        params: { id: taskId },
+      };
+
+      const res = await this.fetchImpl(endpoint, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token.token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+        signal,
+      });
+
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw new A2AError(
+          `A2A tasks/get failed (${res.status}): ${text || "no details"}`,
+          res.status,
+        );
+      }
+
+      const json = (await res.json()) as {
+        result?: A2ATaskResponse;
+        error?: { code: number; message: string };
+      };
+
+      if (json.error) {
+        throw new A2AError(
+          `A2A tasks/get RPC error: ${json.error.message}`,
+          undefined,
+          String(json.error.code),
+        );
+      }
+
+      if (!json.result) {
+        throw new A2AError("A2A tasks/get response missing result");
+      }
+
+      const { state } = json.result.status;
+      if (state === "completed" || state === "failed" || state === "input-required") {
+        return json.result;
+      }
     }
   }
 
@@ -233,7 +311,11 @@ function extractResponseText(task: A2ATaskResponse): string {
     }
   }
 
-  return task.status.state === "failed"
-    ? "Agent returned an error with no details."
-    : "Agent completed but returned no text response.";
+  if (task.status.state === "failed") {
+    return "Agent returned an error with no details.";
+  }
+  if (task.status.state === "input-required") {
+    return "Agent requires additional input but provided no prompt.";
+  }
+  return "Agent completed but returned no text response.";
 }

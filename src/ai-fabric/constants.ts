@@ -26,3 +26,11 @@ export const CLOUDRU_RETRY_DEFAULTS = {
 
 /** Default page size for paginated list endpoints. */
 export const CLOUDRU_DEFAULT_PAGE_SIZE = 20;
+
+/** Backoff policy for polling A2A task status (agent-system orchestrators). */
+export const CLOUDRU_A2A_POLL_POLICY = {
+  initialMs: 1_000,
+  maxMs: 5_000,
+  factor: 1.5,
+  jitter: 0.1,
+} as const;
