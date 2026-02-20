@@ -67,6 +67,7 @@ export class FeishuStreamingSession {
   private log?: (msg: string) => void;
   private lastUpdateTime = 0;
   private pendingText: string | null = null;
+  private pendingTimer: ReturnType<typeof setTimeout> | undefined = undefined;
   private updateThrottleMs = 100; // Throttle updates to max 10/sec
 
   constructor(client: Client, creds: Credentials, log?: (msg: string) => void) {
@@ -140,11 +141,14 @@ export class FeishuStreamingSession {
     const now = Date.now();
     if (now - this.lastUpdateTime < this.updateThrottleMs) {
       this.pendingText = text;
-      setTimeout(() => {
-        if (this.pendingText !== null && !this.closed) {
-          void this.update(this.pendingText);
-        }
-      }, this.updateThrottleMs);
+      if (!this.pendingTimer) {
+        this.pendingTimer = setTimeout(() => {
+          this.pendingTimer = undefined;
+          if (this.pendingText !== null && !this.closed) {
+            void this.update(this.pendingText);
+          }
+        }, this.updateThrottleMs);
+      }
       return;
     }
     this.pendingText = null;
