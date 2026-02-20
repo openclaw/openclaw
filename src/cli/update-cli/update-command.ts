@@ -539,10 +539,17 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
         });
     const cmp =
       currentVersion && targetVersion ? compareSemverStrings(currentVersion, targetVersion) : null;
+    if (targetVersion == null) {
+      defaultRuntime.error(`Could not resolve version for ${tag}`);
+    } else if (!opts.json && currentVersion != null && cmp === 0) {
+      defaultRuntime.log(theme.muted(`Already up to date (${currentVersion})`));
+    }
     const needsConfirm =
       !fallbackToLatest &&
       currentVersion != null &&
-      (targetVersion == null || (cmp != null && cmp > 0));
+      targetVersion != null &&
+      cmp != null &&
+      cmp > 0;
 
     if (needsConfirm && !opts.yes) {
       if (!process.stdin.isTTY || opts.json) {

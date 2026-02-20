@@ -656,6 +656,110 @@ describe("update-cli", () => {
     expect(vi.mocked(runGatewayUpdate).mock.calls.length > 0).toBe(shouldRunUpdate);
   });
 
+  it("reports unresolved channel version without downgrade messaging", async () => {
+    const tempDir = await createCaseDir("openclaw-update");
+
+    setTty(false);
+    readPackageVersion.mockResolvedValue("2.0.0");
+    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(tempDir);
+    vi.mocked(checkUpdateStatus).mockResolvedValue({
+      root: tempDir,
+      installKind: "package",
+      packageManager: "npm",
+      deps: {
+        manager: "npm",
+        status: "ok",
+        lockfilePath: null,
+        markerPath: null,
+      },
+    });
+    vi.mocked(resolveNpmChannelTag).mockResolvedValue({
+      tag: "latest",
+      version: null,
+    });
+    vi.mocked(runGatewayUpdate).mockResolvedValue({
+      status: "ok",
+      mode: "npm",
+      steps: [],
+      durationMs: 100,
+    });
+
+    await updateCommand({});
+
+    expect(defaultRuntime.error).toHaveBeenCalledWith("Could not resolve version for latest");
+    expect(defaultRuntime.error).not.toHaveBeenCalledWith(
+      expect.stringContaining("Downgrade confirmation required."),
+    );
+  });
+
+  it("logs already up to date when current and target versions match", async () => {
+    const tempDir = await createCaseDir("openclaw-update");
+
+    readPackageVersion.mockResolvedValue("1.2.3");
+    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(tempDir);
+    vi.mocked(checkUpdateStatus).mockResolvedValue({
+      root: tempDir,
+      installKind: "package",
+      packageManager: "npm",
+      deps: {
+        manager: "npm",
+        status: "ok",
+        lockfilePath: null,
+        markerPath: null,
+      },
+    });
+    vi.mocked(resolveNpmChannelTag).mockResolvedValue({
+      tag: "latest",
+      version: "1.2.3",
+    });
+    vi.mocked(runGatewayUpdate).mockResolvedValue({
+      status: "ok",
+      mode: "npm",
+      steps: [],
+      durationMs: 100,
+    });
+
+    await updateCommand({});
+
+    expect(defaultRuntime.log).toHaveBeenCalledWith(
+      expect.stringContaining("Already up to date (1.2.3)"),
+    );
+  });
+
+  it("keeps channel persistence when target version resolution fails", async () => {
+    const tempDir = await createCaseDir("openclaw-update");
+
+    readPackageVersion.mockResolvedValue("1.0.0");
+    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(tempDir);
+    vi.mocked(checkUpdateStatus).mockResolvedValue({
+      root: tempDir,
+      installKind: "package",
+      packageManager: "npm",
+      deps: {
+        manager: "npm",
+        status: "ok",
+        lockfilePath: null,
+        markerPath: null,
+      },
+    });
+    vi.mocked(resolveNpmChannelTag).mockResolvedValue({
+      tag: "latest",
+      version: null,
+    });
+    vi.mocked(runGatewayUpdate).mockResolvedValue({
+      status: "ok",
+      mode: "npm",
+      steps: [],
+      durationMs: 100,
+    });
+
+    await updateCommand({ channel: "beta" });
+
+    expect(defaultRuntime.error).toHaveBeenCalledWith("Could not resolve version for latest");
+    expect(writeConfigFile).toHaveBeenCalled();
+    expect(runGatewayUpdate).toHaveBeenCalled();
+  });
+
   it("updateWizardCommand requires a TTY", async () => {
     setTty(false);
     vi.mocked(defaultRuntime.error).mockClear();
