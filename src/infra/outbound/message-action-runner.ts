@@ -396,12 +396,13 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     readStringParam(params, "media", { trim: false }) ??
     readStringParam(params, "path", { trim: false }) ??
     readStringParam(params, "filePath", { trim: false });
+  const bufferHint = readStringParam(params, "buffer", { trim: false });
   const hasCard = params.card != null && typeof params.card === "object";
   const hasComponents = params.components != null && typeof params.components === "object";
   const caption = readStringParam(params, "caption", { allowEmpty: true }) ?? "";
   let message =
     readStringParam(params, "message", {
-      required: !mediaHint && !hasCard && !hasComponents,
+      required: !mediaHint && !bufferHint && !hasCard && !hasComponents,
       allowEmpty: true,
     }) ?? "";
   if (message.includes("\\n")) {
@@ -438,6 +439,36 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   mergedMediaUrls.length = 0;
   mergedMediaUrls.push(...normalizedMediaUrls);
 
+  // Materialize buffer to temp file if provided
+  const bufferParam = bufferHint;
+  let tempAttachmentPath: string | undefined;
+
+  if (bufferParam && !dryRun) {
+    try {
+      const { resolvePreferredOpenClawTmpDir } = await import("../tmp-openclaw-dir.js");
+      const { extensionForMime } = await import("../../media/mime.js");
+      const fs = await import("node:fs/promises");
+      const path = await import("node:path");
+
+      const buffer = Buffer.from(bufferParam, "base64");
+      const tmpDir = resolvePreferredOpenClawTmpDir();
+      const contentType = readStringParam(params, "contentType") || "application/octet-stream";
+      const ext = extensionForMime(contentType) || ".bin";
+      const filename = readStringParam(params, "filename") || `attachment-${Date.now()}${ext}`;
+      const safeFilename = path.basename(filename); // simple sanitization
+
+      tempAttachmentPath = path.join(tmpDir, safeFilename);
+      await fs.writeFile(tempAttachmentPath, buffer);
+      mergedMediaUrls.push(tempAttachmentPath);
+    } catch (err) {
+      // detailed error for better debugging
+      throw new Error(
+        `Failed to materialize attachment buffer: ${err instanceof Error ? err.message : String(err)}`,
+        { cause: err },
+      );
+    }
+  }
+
   message = parsed.text;
   params.message = message;
   if (!params.replyTo && parsed.replyToId) {
@@ -467,6 +498,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       message = "";
     }
   }
+
   if (!message.trim() && !mediaUrl && mergedMediaUrls.length === 0 && !hasCard && !hasComponents) {
     throw new Error("send requires text or media");
   }
@@ -513,50 +545,62 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   const mirrorMediaUrls =
     mergedMediaUrls.length > 0 ? mergedMediaUrls : mediaUrl ? [mediaUrl] : undefined;
   throwIfAborted(abortSignal);
-  const send = await executeSendAction({
-    ctx: {
-      cfg,
-      channel,
-      params,
-      agentId,
-      accountId: accountId ?? undefined,
-      gateway,
-      toolContext: input.toolContext,
-      deps: input.deps,
-      dryRun,
-      mirror:
-        outboundRoute && !dryRun
-          ? {
-              sessionKey: outboundRoute.sessionKey,
-              agentId,
-              text: message,
-              mediaUrls: mirrorMediaUrls,
-            }
-          : undefined,
-      abortSignal,
-      silent: silent ?? undefined,
-    },
-    to,
-    message,
-    mediaUrl: mediaUrl || undefined,
-    mediaUrls: mergedMediaUrls.length ? mergedMediaUrls : undefined,
-    gifPlayback,
-    bestEffort: bestEffort ?? undefined,
-    replyToId: replyToId ?? undefined,
-    threadId: resolvedThreadId ?? undefined,
-  });
 
-  return {
-    kind: "send",
-    channel,
-    action,
-    to,
-    handledBy: send.handledBy,
-    payload: send.payload,
-    toolResult: send.toolResult,
-    sendResult: send.sendResult,
-    dryRun,
-  };
+  try {
+    const send = await executeSendAction({
+      ctx: {
+        cfg,
+        channel,
+        params,
+        agentId,
+        accountId: accountId ?? undefined,
+        gateway,
+        toolContext: input.toolContext,
+        deps: input.deps,
+        dryRun,
+        mirror:
+          outboundRoute && !dryRun
+            ? {
+                sessionKey: outboundRoute.sessionKey,
+                agentId,
+                text: message,
+                mediaUrls: mirrorMediaUrls,
+              }
+            : undefined,
+        abortSignal,
+        silent: silent ?? undefined,
+      },
+      to,
+      message,
+      mediaUrl: mediaUrl || undefined,
+      mediaUrls: mergedMediaUrls.length ? mergedMediaUrls : undefined,
+      gifPlayback,
+      bestEffort: bestEffort ?? undefined,
+      replyToId: replyToId ?? undefined,
+      threadId: resolvedThreadId ?? undefined,
+    });
+
+    return {
+      kind: "send",
+      channel,
+      action,
+      to,
+      handledBy: send.handledBy,
+      payload: send.payload,
+      toolResult: send.toolResult,
+      sendResult: send.sendResult,
+      dryRun,
+    };
+  } finally {
+    if (tempAttachmentPath) {
+      try {
+        const fs = await import("node:fs/promises");
+        await fs.unlink(tempAttachmentPath);
+      } catch {
+        // ignore cleanup error
+      }
+    }
+  }
 }
 
 async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActionRunResult> {
