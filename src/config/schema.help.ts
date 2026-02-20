@@ -87,6 +87,15 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.exec.pathPrepend": "Directories to prepend to PATH for exec runs (gateway/sandbox).",
   "tools.exec.safeBins":
     "Allow stdin-only safe binaries to run without explicit allowlist entries.",
+  "tools.exec.rubberband.enabled":
+    "Enable RubberBand static command pattern detection (default: true).",
+  "tools.exec.rubberband.mode": "RubberBand enforcement mode: block, alert, log, shadow, or off.",
+  "tools.exec.rubberband.thresholds.alert": "Score threshold to trigger an alert (default: 40).",
+  "tools.exec.rubberband.thresholds.block": "Score threshold to block execution (default: 60).",
+  "tools.exec.rubberband.allowedDestinations":
+    "Hostnames/IPs allowed for network commands (e.g. localhost, 127.0.0.1). Destinations not on this list raise the exfil score.",
+  "tools.exec.rubberband.notifyChannel":
+    "When true, RubberBand alerts/blocks are sent to the user's messaging channel.",
   "tools.fs.workspaceOnly":
     "Restrict filesystem tools (read/write/edit/apply_patch) to the workspace directory (default: false).",
   "tools.sessions.visibility":

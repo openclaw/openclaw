@@ -340,15 +340,39 @@ const ToolExecBaseShape = {
   applyPatch: ToolExecApplyPatchSchema,
 } as const;
 
-const AgentToolExecSchema = z
+const RubberbandSchema = z
   .object({
-    ...ToolExecBaseShape,
-    approvalRunningNoticeMs: z.number().int().nonnegative().optional(),
+    enabled: z.boolean().optional(),
+    mode: z.enum(["block", "alert", "log", "off", "shadow"]).optional(),
+    thresholds: z
+      .object({
+        alert: z.number().int().min(0).max(100).optional(),
+        block: z.number().int().min(0).max(100).optional(),
+      })
+      .strict()
+      .optional(),
+    allowedDestinations: z.array(z.string()).optional(),
+    notifyChannel: z.boolean().optional(),
   })
   .strict()
   .optional();
 
-const ToolExecSchema = z.object(ToolExecBaseShape).strict().optional();
+const AgentToolExecSchema = z
+  .object({
+    ...ToolExecBaseShape,
+    approvalRunningNoticeMs: z.number().int().nonnegative().optional(),
+    rubberband: RubberbandSchema,
+  })
+  .strict()
+  .optional();
+
+const ToolExecSchema = z
+  .object({
+    ...ToolExecBaseShape,
+    rubberband: RubberbandSchema,
+  })
+  .strict()
+  .optional();
 
 const ToolFsSchema = z
   .object({

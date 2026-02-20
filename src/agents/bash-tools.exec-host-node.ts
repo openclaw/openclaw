@@ -12,6 +12,7 @@ import {
   resolveExecApprovalsFromFile,
 } from "../infra/exec-approvals.js";
 import { buildNodeShellCommand } from "../infra/node-shell.js";
+import { type RubberBandConfig, runRubberBandCheck } from "../security/rubberband.js";
 import { requestExecApprovalDecision } from "./bash-tools.exec-approval-request.js";
 import {
   DEFAULT_APPROVAL_TIMEOUT_MS,
@@ -39,6 +40,9 @@ export type ExecuteNodeHostCommandParams = {
   warnings: string[];
   notifySessionKey?: string;
   trustedSafeBinDirs?: ReadonlySet<string>;
+  rbConfig?: Partial<RubberBandConfig>;
+  rbNotifyCfg?: Parameters<typeof runRubberBandCheck>[0]["rbNotifyCfg"];
+  rbNotifyUserChannel?: Parameters<typeof runRubberBandCheck>[0]["notifyUserChannel"];
 };
 
 export async function executeNodeHostCommand(
@@ -54,6 +58,19 @@ export async function executeNodeHostCommand(
   if (hostSecurity === "deny") {
     throw new Error("exec denied: host=node security=deny");
   }
+
+  // === RUBBERBAND CHECK (before approval decision) ===
+  await runRubberBandCheck({
+    command: params.command,
+    rbConfig: params.rbConfig ?? {},
+    warnings: params.warnings,
+    notifySessionKey: params.notifySessionKey,
+    rbNotifyCfg: params.rbNotifyCfg,
+    emitExecSystemEvent,
+    notifyUserChannel: params.rbNotifyUserChannel ?? (async () => {}),
+  });
+  // === END RUBBERBAND ===
+
   if (params.boundNode && params.requestedNode && params.boundNode !== params.requestedNode) {
     throw new Error(`exec node not allowed (bound to ${params.boundNode})`);
   }
