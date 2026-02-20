@@ -1,0 +1,18 @@
+# Gitleaks configuration — suppress known false positives in test fixtures & docs.
+# https://github.com/gitleaks/gitleaks#configuration
+
+title = "clawdbot gitleaks config"
+
+# ── Allowlist (global) ───────────────────────────────────────────────
+# Paths that are inherently safe: test fixtures, docs examples, snapshots.
+[allowlist]
+  description = "Test fixtures, documentation examples, and snapshot files"
+  paths = [
+    '''(^|\/).*\.test\.(ts|js|mjs)$''',
+    '''(^|\/).*\.spec\.(ts|js|mjs)$''',
+    '''(^|\/)__tests__\/''',
+    '''(^|\/)__snapshots__\/''',
+    '''(^|\/)docs\/''',
+    '''(^|\/).*\.md$''',
+    '''(^|\/)\.secrets\.baseline$''',
+  ]

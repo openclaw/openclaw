@@ -20,17 +20,40 @@ export type HybridKeywordResult = {
   textScore: number;
 };
 
-export function buildFtsQuery(raw: string): string | null {
-  const tokens =
+function tokenize(raw: string): string[] {
+  return (
     raw
       .match(/[\p{L}\p{N}_]+/gu)
       ?.map((t) => t.trim())
-      .filter(Boolean) ?? [];
+      .filter(Boolean) ?? []
+  );
+}
+
+/**
+ * Build a strict FTS5 query requiring ALL tokens to match (AND-join).
+ * Best for precise lookups — higher precision, lower recall.
+ */
+export function buildFtsQuery(raw: string): string | null {
+  const tokens = tokenize(raw);
   if (tokens.length === 0) {
     return null;
   }
   const quoted = tokens.map((t) => `"${t.replaceAll('"', "")}"`);
   return quoted.join(" AND ");
+}
+
+/**
+ * Build a permissive FTS5 query matching ANY token (OR-join).
+ * Used as a fallback when the AND query returns no results — improves recall
+ * for short facts where not all query terms appear in a single chunk.
+ */
+export function buildFtsOrQuery(raw: string): string | null {
+  const tokens = tokenize(raw);
+  if (tokens.length === 0) {
+    return null;
+  }
+  const quoted = tokens.map((t) => `"${t.replaceAll('"', "")}"`);
+  return quoted.join(" OR ");
 }
 
 export function bm25RankToScore(rank: number): number {
