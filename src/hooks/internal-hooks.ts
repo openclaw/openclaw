@@ -93,6 +93,92 @@ export type MessageSentHookEvent = InternalHookEvent & {
   context: MessageSentHookContext;
 };
 
+export type MessageTranscribedHookContext = {
+  /** Sender identifier (e.g., phone number, user ID) */
+  from?: string;
+  /** Recipient identifier */
+  to?: string;
+  /** Original raw message body (e.g., "🎤 [Audio]") */
+  body?: string;
+  /** Enriched body shown to the agent, including transcript */
+  bodyForAgent?: string;
+  /** The transcribed text from audio */
+  transcript: string;
+  /** Unix timestamp when the message was received */
+  timestamp?: number;
+  /** Channel identifier (e.g., "telegram", "whatsapp") */
+  channelId: string;
+  /** Conversation/chat ID */
+  conversationId?: string;
+  /** Message ID from the provider */
+  messageId?: string;
+  /** Sender user ID */
+  senderId?: string;
+  /** Sender display name */
+  senderName?: string;
+  /** Sender username */
+  senderUsername?: string;
+  /** Provider name */
+  provider?: string;
+  /** Surface name */
+  surface?: string;
+  /** Path to the media file that was transcribed */
+  mediaPath?: string;
+  /** MIME type of the media */
+  mediaType?: string;
+};
+
+export type MessageTranscribedHookEvent = InternalHookEvent & {
+  type: "message";
+  action: "transcribed";
+  context: MessageTranscribedHookContext;
+};
+
+export type MessagePreprocessedHookContext = {
+  /** Sender identifier (e.g., phone number, user ID) */
+  from?: string;
+  /** Recipient identifier */
+  to?: string;
+  /** Original raw message body */
+  body?: string;
+  /** Fully enriched body shown to the agent (transcripts, image descriptions, link summaries) */
+  bodyForAgent?: string;
+  /** Transcribed audio text, if the message contained audio */
+  transcript?: string;
+  /** Unix timestamp when the message was received */
+  timestamp?: number;
+  /** Channel identifier (e.g., "telegram", "whatsapp") */
+  channelId: string;
+  /** Conversation/chat ID */
+  conversationId?: string;
+  /** Message ID from the provider */
+  messageId?: string;
+  /** Sender user ID */
+  senderId?: string;
+  /** Sender display name */
+  senderName?: string;
+  /** Sender username */
+  senderUsername?: string;
+  /** Provider name */
+  provider?: string;
+  /** Surface name */
+  surface?: string;
+  /** Path to the media file, if present */
+  mediaPath?: string;
+  /** MIME type of the media, if present */
+  mediaType?: string;
+  /** Whether this message was sent in a group/channel context */
+  isGroup?: boolean;
+  /** Group or channel identifier, if applicable */
+  groupId?: string;
+};
+
+export type MessagePreprocessedHookEvent = InternalHookEvent & {
+  type: "message";
+  action: "preprocessed";
+  context: MessagePreprocessedHookContext;
+};
+
 export interface InternalHookEvent {
   /** The type of event (command, session, agent, gateway, etc.) */
   type: InternalHookEventType;
@@ -281,4 +367,30 @@ export function isMessageSentEvent(event: InternalHookEvent): event is MessageSe
     typeof context.channelId === "string" &&
     typeof context.success === "boolean"
   );
+}
+
+export function isMessageTranscribedEvent(
+  event: InternalHookEvent,
+): event is MessageTranscribedHookEvent {
+  if (event.type !== "message" || event.action !== "transcribed") {
+    return false;
+  }
+  const context = event.context as Partial<MessageTranscribedHookContext> | null;
+  if (!context || typeof context !== "object") {
+    return false;
+  }
+  return typeof context.transcript === "string" && typeof context.channelId === "string";
+}
+
+export function isMessagePreprocessedEvent(
+  event: InternalHookEvent,
+): event is MessagePreprocessedHookEvent {
+  if (event.type !== "message" || event.action !== "preprocessed") {
+    return false;
+  }
+  const context = event.context as Partial<MessagePreprocessedHookContext> | null;
+  if (!context || typeof context !== "object") {
+    return false;
+  }
+  return typeof context.channelId === "string";
 }
