@@ -133,6 +133,16 @@ export const FIELD_HELP: Record<string, string> = {
   "gateway.remote.sshTarget":
     "Remote gateway over SSH (tunnels the gateway port to localhost). Format: user@host or user@host:port.",
   "gateway.remote.sshIdentity": "Optional SSH identity file path (passed to ssh -i).",
+  "talk.voiceId":
+    "Default ElevenLabs voice ID for Talk mode (iOS/macOS/Android). Falls back to ELEVENLABS_VOICE_ID or SAG_VOICE_ID when unset.",
+  "talk.voiceAliases":
+    'Optional map of friendly names to ElevenLabs voice IDs for Talk directives (for example {"Clawd":"EXAVITQu4vr4xnSDxMaL"}).',
+  "talk.modelId": "Default ElevenLabs model ID for Talk mode (default: eleven_v3).",
+  "talk.outputFormat":
+    "Default ElevenLabs output format for Talk mode (for example pcm_44100 or mp3_44100_128).",
+  "talk.apiKey": "ElevenLabs API key for Talk mode. Falls back to ELEVENLABS_API_KEY when unset.",
+  "talk.interruptOnSpeech":
+    "If true (default), stop assistant speech when the user starts speaking in Talk mode.",
   "agents.list.*.skills":
     "Optional allowlist of skills for this agent (omit = all skills; empty = no skills).",
   "agents.list[].skills":
