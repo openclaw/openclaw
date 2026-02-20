@@ -8,6 +8,7 @@ import { AppShell } from "@/components/layout/AppShell";
 import { OverviewPage } from "@/pages/OverviewPage";
 import { AgentsPage } from "@/pages/AgentsPage";
 import { AgentDetailPage } from "@/pages/AgentDetailPage";
+import { TasksPage } from "@/pages/TasksPage";
 
 // Root layout
 const rootRoute = createRootRoute({
@@ -19,17 +20,6 @@ const rootRoute = createRootRoute({
 });
 
 // Page components (inline placeholders for now)
-
-function TasksPage() {
-  return (
-    <div>
-      <h1 className="text-2xl font-bold mb-2">Task Management</h1>
-      <p className="text-[var(--text-secondary)]">
-        Agent tasks across all departments
-      </p>
-    </div>
-  );
-}
 
 function PerformancePage() {
   return (
