@@ -47,10 +47,12 @@ export function parseChatTargetPrefixesOrThrow(
   for (const prefix of params.chatIdPrefixes) {
     if (params.lower.startsWith(prefix)) {
       const value = stripPrefix(params.trimmed, prefix);
-      const chatId = Number.parseInt(value, 10);
-      if (!Number.isFinite(chatId)) {
-        throw new Error(`Invalid chat_id: ${value}`);
+      if (!/^\d+$/.test(value)) {
+        throw new Error(
+          `Invalid chat_id: ${value}. Use chat_identifier: for non-numeric identifiers.`,
+        );
       }
+      const chatId = Number.parseInt(value, 10);
       return { kind: "chat_id", chatId };
     }
   }
