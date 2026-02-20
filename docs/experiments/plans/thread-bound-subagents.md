@@ -24,17 +24,21 @@ The goal is to let users "zoom in" to a subagent session directly from Discord b
 
 ## 3. Concepts
 
+### Auto-thread-on-spawn (primary flow)
+
+Default UX: the main agent calls `sessions_spawn({ ..., thread: true })`, Discord creates a thread, and that thread is immediately bound to the new subagent session. The user sees a new thread and talks to the subagent directly there, with no manual `/focus` step.
+
 ### Thread-session binding
 
 A mapping between a Discord thread ID and a subagent session key. While a binding is active, messages in the thread bypass the main agent and route directly to the bound session.
 
-### Focus / unfocus
+### Focus / unfocus (advanced usage)
 
-The user action of binding (focus) or unbinding (unfocus) a thread to a subagent. This can be triggered by:
+Manual binding (focus) and unbinding (unfocus) remain available as an escape hatch:
 
-- A slash command (`/focus <subagent-label>`)
-- A tool call from the main agent (`message.thread-create` + bind)
-- An automatic bind when `sessions_spawn` is called with a `thread: true` option
+- `/focus <subagent-label>` binds an existing subagent that was spawned without `thread: true`.
+- `/unfocus` manually removes an active binding from the current thread.
+- Agent-side/manual thread creation plus bind remains possible when needed.
 
 ### Webhook persona
 
@@ -88,7 +92,19 @@ When a bound subagent session produces output:
 
 ### 4.5 Lifecycle
 
-#### Binding
+#### Auto-binding on spawn (primary)
+
+```
+Parent agent: sessions_spawn({ task: "...", label: "codex-task-42", thread: true })
+→ Spawn subagent session
+→ Create Discord thread for that subagent
+→ Create/reuse webhook for the channel
+→ Store binding: threadId → sessionKey
+→ Post intro message in thread via webhook: "Codex session active. Messages here go directly to the agent."
+→ User talks in the new thread directly (no /focus required)
+```
+
+#### Manual binding via `/focus` (advanced)
 
 ```
 User: /focus codex-task-42
@@ -103,7 +119,7 @@ User: /focus codex-task-42
 
 Triggered by:
 
-- `/unfocus` in the thread
+- `/unfocus` in the thread (manual escape hatch)
 - Subagent session completing (cleanup: "delete")
 - Subagent session being killed (`subagents kill`)
 - Thread being archived/deleted
@@ -120,30 +136,13 @@ When a subagent finishes its task:
 
 - If bound to a thread → post final result in the thread AND announce to parent.
 - Unbind the thread.
-- If `cleanup: "keep"` → thread stays open, user can re-bind later.
+- If `cleanup: "keep"` → thread stays open, user can re-bind later with `/focus` if needed.
 
 ## 5. User interface
 
-### Slash commands
+### Primary flow: spawn and auto-bind a thread
 
-| Command          | Description                                      |
-| ---------------- | ------------------------------------------------ |
-| `/focus <label>` | Bind current or new thread to a subagent session |
-| `/unfocus`       | Unbind the current thread                        |
-| `/agents`        | List active subagents with their thread bindings |
-
-### Main agent tool integration
-
-The main agent can also create bindings programmatically:
-
-```js
-// Spawn a subagent and immediately bind it to a thread
-sessions_spawn({ task: "...", label: "codex-refactor" });
-message({ action: "thread-create", threadName: "codex-refactor" });
-// New: bind the thread to the spawned session
-```
-
-This could be a new parameter on `sessions_spawn`:
+The happy path is agent-driven and automatic. The main agent uses `thread: true` on spawn, and the user immediately gets a dedicated subagent thread.
 
 ```js
 sessions_spawn({
@@ -153,6 +152,21 @@ sessions_spawn({
 });
 ```
 
+Expected user-visible behavior:
+
+- A new Discord thread appears for the spawned subagent.
+- Messages in that thread route directly to the subagent session.
+- Subagent replies in-thread with webhook persona identity.
+- No `/focus` command is required for normal usage.
+
+### Advanced usage: manual focus controls
+
+| Command          | Description                                                                                |
+| ---------------- | ------------------------------------------------------------------------------------------ |
+| `/focus <label>` | Bind current or new thread to an existing subagent that was spawned without `thread: true` |
+| `/unfocus`       | Manually unbind the current thread                                                         |
+| `/agents`        | List active subagents with their thread bindings                                           |
+
 ### Visual indicators
 
 - Thread name includes agent identity: `🤖 codex-refactor`
@@ -161,36 +175,43 @@ sessions_spawn({
 
 ## 6. Implementation layers
 
-### Layer 1: Binding table and message routing
+### Layer 1: Spawn schema and auto-bind flow (primary)
 
-- Add `ThreadBindingManager` to gateway
-- Hook into Discord inbound message handler
-- Route bound-thread messages to `sessions_send`
-- Route unbound-thread messages normally
+- Add optional `thread: boolean` to spawn tool/schema and spawn params.
+- On `sessions_spawn({ thread: true })`, auto-create a Discord thread and bind it to the new subagent session.
+- Keep this as the default UX path for user-visible subagents.
 
-### Layer 2: Webhook outbound
+### Layer 2: Binding table and message routing
 
-- Webhook creation and caching
-- Subagent responses posted via webhook with persona
-- Fallback to normal bot message if webhook fails
+- Add `ThreadBindingManager` to gateway.
+- Hook into Discord inbound message handler.
+- Route bound-thread messages to `sessions_send`.
+- Route unbound-thread messages normally.
 
-### Layer 3: Slash commands
+### Layer 3: Webhook outbound
 
-- Register `/focus`, `/unfocus`, `/agents`
-- Permission checks (only the user who bound can unbind, or admins)
+- Webhook creation and caching.
+- Subagent responses posted via webhook with persona.
+- Fallback to normal bot message if webhook fails.
 
 ### Layer 4: Lifecycle automation
 
-- Auto-unbind on session completion/kill
-- Auto-bind via `sessions_spawn({ thread: true })`
-- Thread archival on unbind
-- Crash recovery (reload bindings from disk on gateway restart)
+- Auto-unbind on session completion/kill.
+- Thread archival on unbind.
+- Crash recovery (reload bindings from disk on gateway restart).
 
-### Layer 5: Agent-side awareness
+### Layer 5: Advanced slash-command escape hatch
 
-- Subagent system prompt includes context about being in a direct thread
-- Parent agent notified when user focuses/unfocuses a subagent
-- Parent can still see subagent output via `sessions_history`
+- Register `/focus`, `/unfocus`, `/agents` for manual control.
+- `/focus` is for existing subagents without auto-thread binding.
+- `/unfocus` is for manual unbinding.
+- Permission checks (only the user who bound can unbind, or admins).
+
+### Layer 6: Agent-side awareness
+
+- Subagent system prompt includes context about being in a direct thread.
+- Parent agent notified when user focuses/unfocuses a subagent (manual path).
+- Parent can still see subagent output via `sessions_history`.
 
 ## 7. Open questions
 
@@ -216,14 +237,21 @@ sessions_spawn({
 
 ## 10. Exact implementation touchpoints
 
-### 10.1 Binding table bootstrap and persistence
+### 10.1 Primary spawn path (`sessions_spawn({ thread: true })`)
 
-| Hook point                                 | Exact location                                                                                                                                                                                                                      | What to add/modify                                                                                                                           |
-| ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| State dir resolution                       | `src/config/paths.ts:60` (`resolveStateDir`)                                                                                                                                                                                        | Use this for the binding file root so behavior matches existing session/subagent state resolution.                                           |
-| JSON persistence primitives                | `src/infra/json-file.ts:4` (`loadJsonFile`), `src/infra/json-file.ts:16` (`saveJsonFile`)                                                                                                                                           | Reuse these for binding table disk IO (atomic-enough write style + `0600` file mode).                                                        |
-| Existing persisted-store pattern to mirror | `src/agents/subagent-registry.store.ts:44` (`resolveSubagentRegistryPath`), `src/agents/subagent-registry.store.ts:48` (`loadSubagentRegistryFromDisk`), `src/agents/subagent-registry.store.ts:119` (`saveSubagentRegistryToDisk`) | Implement the same pattern for thread bindings: versioned payload + migration-friendly loader + save on mutation.                            |
-| Discord provider boot path                 | `src/discord/monitor/provider.ts:548` (`createDiscordMessageHandler({...})`) and `src/discord/monitor/provider.ts:431` (`createDiscordNativeCommand({...})`)                                                                        | Instantiate one binding manager per account in `monitorDiscordProvider` and inject it into both inbound text and native slash-command flows. |
+| Hook point                            | Exact location                                                                                                                                                         | What to add/modify                                                                                                                                                                |
+| ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Spawn tool schema                     | `src/agents/tools/sessions-spawn-tool.ts:8` (`SessionsSpawnToolSchema`) and `src/agents/subagent-spawn.ts:20` (`SpawnSubagentParams`)                                  | Add optional `thread: boolean` and carry it through spawn flow so `thread: true` auto-creates + binds a Discord thread after run registration succeeds.                           |
+| Spawn origin capture (thread context) | `src/agents/subagent-spawn.ts:81` (`requesterOrigin`), `src/agents/subagent-spawn.ts:255` (RPC `threadId`), `src/agents/subagent-spawn.ts:284` (`registerSubagentRun`) | Keep/extend this for `sessions_spawn({ thread: true })` so initial requester origin includes thread metadata and lifecycle cleanup can map back cleanly.                          |
+| Provider boot path wiring             | `src/discord/monitor/provider.ts:548` (`createDiscordMessageHandler({...})`) and `src/discord/monitor/provider.ts:431` (`createDiscordNativeCommand({...})`)           | Instantiate one binding manager per account in `monitorDiscordProvider` and inject it into spawn-adjacent routing paths so auto-thread binds are immediately routable end-to-end. |
+
+### 10.2 Binding table bootstrap and persistence
+
+| Hook point                                 | Exact location                                                                                                                                                                                                                      | What to add/modify                                                                                                |
+| ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| State dir resolution                       | `src/config/paths.ts:60` (`resolveStateDir`)                                                                                                                                                                                        | Use this for the binding file root so behavior matches existing session/subagent state resolution.                |
+| JSON persistence primitives                | `src/infra/json-file.ts:4` (`loadJsonFile`), `src/infra/json-file.ts:16` (`saveJsonFile`)                                                                                                                                           | Reuse these for binding table disk IO (atomic-enough write style + `0600` file mode).                             |
+| Existing persisted-store pattern to mirror | `src/agents/subagent-registry.store.ts:44` (`resolveSubagentRegistryPath`), `src/agents/subagent-registry.store.ts:48` (`loadSubagentRegistryFromDisk`), `src/agents/subagent-registry.store.ts:119` (`saveSubagentRegistryToDisk`) | Implement the same pattern for thread bindings: versioned payload + migration-friendly loader + save on mutation. |
 
 **Recommended binding file location**
 
@@ -254,7 +282,7 @@ sessions_spawn({
   - `byThreadId: Map<string, ThreadBindingRecord>`
   - `bySessionKey: Map<string, Set<string>>` (for fast unbind on completion/kill)
 
-### 10.2 Inbound routing hooks (user -> subagent)
+### 10.3 Inbound routing hooks (user -> subagent)
 
 | Hook point                          | Exact location                                                                                                                                                                                | What to add/modify                                                                                                                                                                                                                                             |
 | ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -272,7 +300,7 @@ sessions_spawn({
 - `src/discord/monitor/message-handler.preflight.ts`: import `resolveAgentIdFromSessionKey` from `../../routing/session-key.js` to derive effective agent id from a bound session key.
 - `src/discord/monitor/message-handler.preflight.ts`: import binding manager types/helpers from the new thread-binding module.
 
-### 10.3 Native slash-command routing hooks (for `/focus`, `/unfocus`, `/agents`)
+### 10.4 Native slash-command routing hooks (advanced `/focus`, `/unfocus`, `/agents` path)
 
 | Hook point                           | Exact location                                                                              | What to add/modify                                                                                                                 |
 | ------------------------------------ | ------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
@@ -282,7 +310,7 @@ sessions_spawn({
 | Slash inbound context assembly       | `src/discord/monitor/native-command.ts:743` (`finalizeInboundContext({...})`)               | Set `SessionKey` and `CommandTargetSessionKey` to bound session when present; set `MessageThreadId` for thread commands.           |
 | Current slash session keys           | `src/discord/monitor/native-command.ts:755` and `src/discord/monitor/native-command.ts:756` | Replace current defaults with bound-session values when bound; fallback to existing behavior otherwise.                            |
 
-### 10.4 Outbound routing hooks (subagent -> thread)
+### 10.5 Outbound routing hooks (subagent -> thread)
 
 | Hook point                                                     | Exact location                                                                                  | What to add/modify                                                                                                                                                                                                                                        |
 | -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -292,18 +320,16 @@ sessions_spawn({
 | Existing send primitive                                        | `src/discord/send.outbound.ts:104` (`sendMessageDiscord`)                                       | Keep as fallback; add a webhook-specific sender in a Discord send module and call it from `reply-delivery.ts` when bound.                                                                                                                                 |
 | Generic outbound adapter (optional but recommended for parity) | `src/channels/plugins/outbound/discord.ts:11` and `src/channels/plugins/outbound/discord.ts:31` | This adapter currently ignores `threadId`/`identity`; update to consume both from `ChannelOutboundContext` (`src/channels/plugins/types.adapters.ts:78`) similarly to Slack adapter behavior (`src/channels/plugins/outbound/slack.ts:61`, `:80`, `:96`). |
 
-### 10.5 Lifecycle hooks (auto-unbind, kill, completion)
+### 10.6 Lifecycle hooks (auto-unbind, kill, completion)
 
-| Hook point                            | Exact location                                                                                                                                                         | What to add/modify                                                                                                                                       |
-| ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | --- | ----------------------------------------------------------------------------------------------------------------- |
-| Completion event listener             | `src/agents/subagent-registry.ts:273` (`ensureListener`), especially `:295-317`                                                                                        | On `phase === "end"                                                                                                                                      |     | "error"`, call `threadBindings.unbindBySessionKey(entry.childSessionKey)` before/alongside cleanup announce flow. |
-| Gateway wait completion fallback      | `src/agents/subagent-registry.ts:554` (`waitForSubagentCompletion`) and `:604`                                                                                         | Mirror unbind-by-session-key here too, since this path handles cross-process completion.                                                                 |
-| Kill path in registry                 | `src/agents/subagent-registry.ts:716` (`markSubagentRunTerminated`)                                                                                                    | Unbind all thread bindings for the terminated child session key(s).                                                                                      |
-| Kill command user path                | `src/auto-reply/reply/commands-subagents.ts:341` (kill branch) and `:395` (`markSubagentRunTerminated`)                                                                | No new lookup needed if registry kill path unbinds; this call will trigger auto-unbind transitively.                                                     |
-| Spawn origin capture (thread context) | `src/agents/subagent-spawn.ts:81` (`requesterOrigin`), `src/agents/subagent-spawn.ts:255` (RPC `threadId`), `src/agents/subagent-spawn.ts:284` (`registerSubagentRun`) | Keep/extend this for `sessions_spawn({ thread: true })` so initial requester origin includes thread metadata and lifecycle cleanup can map back cleanly. |
-| Spawn tool schema                     | `src/agents/tools/sessions-spawn-tool.ts:8` (`SessionsSpawnToolSchema`) and `src/agents/subagent-spawn.ts:20` (`SpawnSubagentParams`)                                  | Add optional `thread: boolean` and carry to spawn flow so spawn can auto-create + bind thread after run registration succeeds.                           |
+| Hook point                       | Exact location                                                                                          | What to add/modify                                                                                                          |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| Completion event listener        | `src/agents/subagent-registry.ts:273` (`ensureListener`), especially `:295-317`                         | On end/error phase, call `threadBindings.unbindBySessionKey(entry.childSessionKey)` before/alongside cleanup announce flow. |
+| Gateway wait completion fallback | `src/agents/subagent-registry.ts:554` (`waitForSubagentCompletion`) and `:604`                          | Mirror unbind-by-session-key here too, since this path handles cross-process completion.                                    |
+| Kill path in registry            | `src/agents/subagent-registry.ts:716` (`markSubagentRunTerminated`)                                     | Unbind all thread bindings for the terminated child session key(s).                                                         |
+| Kill command user path           | `src/auto-reply/reply/commands-subagents.ts:341` (kill branch) and `:395` (`markSubagentRunTerminated`) | No new lookup needed if registry kill path unbinds; this call will trigger auto-unbind transitively.                        |
 
-### 10.6 Slash command registration: exact path and insertion points
+### 10.7 Slash command registration (advanced usage): exact path and insertion points
 
 1. Add command definitions in `src/auto-reply/commands-registry.data.ts:131` (`buildChatCommands`) using `defineChatCommand({...})` entries near existing `subagents` command at `:266`.
 2. If Discord-specific naming overrides are needed, add to `NATIVE_NAME_OVERRIDES` in `src/auto-reply/commands-registry.ts:121`.
@@ -316,7 +342,13 @@ sessions_spawn({
    - existing command prefix parsing (`handledPrefix` at `:241-249`).
 7. Extend command prefix constants at `src/auto-reply/reply/commands-subagents.ts:48-52` and action parsing blocks (`:260+`) to handle `/focus`, `/unfocus`, `/agents` directly.
 
-### 10.7 Data flow (exact runtime path)
+### 10.8 Data flow (exact runtime path)
+
+**Primary: parent spawn -> auto-bound thread**
+
+1. Parent agent calls `sessions_spawn({ ..., thread: true })`.
+2. Spawn flow registers run + captures origin/thread context in `src/agents/subagent-spawn.ts:81`, `:255`, and `:284`.
+3. Discord thread is created, binding persisted, and inbound/outbound routing immediately uses the new `threadId <-> sessionKey` mapping.
 
 **Inbound: user message -> bound subagent session**
 
@@ -335,8 +367,10 @@ sessions_spawn({
    - existing `sendMessageDiscord(...)` fallback (`src/discord/monitor/reply-delivery.ts:49` et al).
 3. For completion/kill cleanup, subagent lifecycle updates in `src/agents/subagent-registry.ts:273`, `:554`, and `:716` trigger `unbindBySessionKey(...)` so bindings do not outlive the run.
 
-### 10.8 Minimal import/signature changes checklist
+### 10.9 Minimal import/signature changes checklist
 
+- `src/agents/tools/sessions-spawn-tool.ts` and `src/agents/subagent-spawn.ts`
+  - add and propagate `thread?: boolean` so `sessions_spawn({ thread: true })` is first-class
 - `src/discord/monitor/provider.ts`
   - add `import { createThreadBindingManager } from "./thread-bindings.js"` (new module)
   - pass `threadBindings` into both `createDiscordMessageHandler` and `createDiscordNativeCommand`
