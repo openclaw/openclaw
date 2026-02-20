@@ -74,7 +74,7 @@ These are the standard files OpenClaw expects inside the workspace:
 
 - `USER.md`
   - Who the user is and how to address them.
-  - Loaded every session.
+  - Loaded every session. Use `<!-- OWNER_ONLY -->` tags to hide sensitive sections from non-owner senders.
 
 - `IDENTITY.md`
   - The agent's name, vibe, and emoji.
@@ -103,7 +103,7 @@ These are the standard files OpenClaw expects inside the workspace:
 
 - `MEMORY.md` (optional)
   - Curated long-term memory.
-  - Only load in the main, private session (not shared/group contexts).
+  - Only load in the main, private session (not shared/group contexts). Use `<!-- OWNER_ONLY -->` tags to protect content for non-owner sessions.
 
 See [Memory](/concepts/memory) for the workflow and automatic memory flush.
 

@@ -32,7 +32,7 @@ export async function resolveBootstrapFilesForRun(params: {
   const sessionKey = params.sessionKey ?? params.sessionId;
   const bootstrapFiles = filterBootstrapFilesForSession(
     await loadWorkspaceBootstrapFiles(params.workspaceDir),
-    sessionKey,
+    { sessionKey },
   );
 
   return applyBootstrapHookOverrides({
@@ -51,16 +51,19 @@ export async function resolveBootstrapContextForRun(params: {
   sessionKey?: string;
   sessionId?: string;
   agentId?: string;
+  senderIsOwner?: boolean;
   warn?: (message: string) => void;
 }): Promise<{
   bootstrapFiles: WorkspaceBootstrapFile[];
   contextFiles: EmbeddedContextFile[];
 }> {
   const bootstrapFiles = await resolveBootstrapFilesForRun(params);
+
   const contextFiles = buildBootstrapContextFiles(bootstrapFiles, {
     maxChars: resolveBootstrapMaxChars(params.config),
     totalMaxChars: resolveBootstrapTotalMaxChars(params.config),
     warn: params.warn,
+    senderIsOwner: params.senderIsOwner,
   });
   return { bootstrapFiles, contextFiles };
 }

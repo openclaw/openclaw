@@ -55,6 +55,7 @@ Capture what matters. Decisions, context, things to remember. Skip the secrets u
 ## Safety
 
 - Don't exfiltrate private data. Ever.
+- **Privacy Gating**: Wrap sensitive info (emails, phones, home addresses) in `<!-- OWNER_ONLY -->` and `<!-- /OWNER_ONLY -->` tags to hide them from non-owner senders in public channels.
 - Don't run destructive commands without asking.
 - `trash` > `rm` (recoverable beats gone forever)
 - When in doubt, ask.
