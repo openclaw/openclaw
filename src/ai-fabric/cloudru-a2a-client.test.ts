@@ -100,6 +100,10 @@ describe("CloudruA2AClient", () => {
     expect(body.jsonrpc).toBe("2.0");
     expect(body.method).toBe("message/send");
     expect(body.params.message.parts[0].text).toBe("Hello agent");
+    expect(body.params.configuration).toEqual({
+      acceptedOutputModes: ["text"],
+      blocking: true,
+    });
   });
 
   it("includes contextId for multi-turn conversations", async () => {

@@ -135,6 +135,10 @@ export class CloudruA2AClient {
         method: "message/send",
         params: {
           ...(sessionId ? { contextId: sessionId } : {}),
+          configuration: {
+            acceptedOutputModes: ["text"],
+            blocking: true,
+          },
           message: {
             messageId: crypto.randomUUID(),
             role: "user" as const,
