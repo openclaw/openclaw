@@ -81,7 +81,7 @@ describe("parseLineDirectives", () => {
   describe("buttons", () => {
     it("parses buttons with postback actions", () => {
       const result = parseLineDirectives(
-        "[[buttons: Menu | Choose an action | Start:start, Stop:stop, Reset:reset]]",
+        "[[buttons: Menu | Choose an action | Start:start; Stop:stop; Reset:reset]]",
       );
       expect(result.lineData.templateMessage).toEqual({
         type: "buttons",
@@ -98,7 +98,7 @@ describe("parseLineDirectives", () => {
 
     it("parses buttons with URI actions", () => {
       const result = parseLineDirectives(
-        "[[buttons: Links | Click to visit | Website:https://example.com, Docs:https://docs.example.com]]",
+        "[[buttons: Links | Click to visit | Website:https://example.com; Docs:https://docs.example.com]]",
       );
       const tmpl = result.lineData.templateMessage as
         | { actions?: Array<{ type: string; label: string; uri?: string }> }
@@ -111,7 +111,7 @@ describe("parseLineDirectives", () => {
 
     it("handles mixed postback and URI actions", () => {
       const result = parseLineDirectives(
-        "[[buttons: Actions | What to do? | Open:https://url.com, Refresh:refresh]]",
+        "[[buttons: Actions | What to do? | Open:https://url.com; Refresh:refresh]]",
       );
       const tmpl = result.lineData.templateMessage as
         | { actions?: Array<{ type: string; label: string; uri?: string; data?: string }> }

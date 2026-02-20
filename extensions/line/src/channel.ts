@@ -781,7 +781,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
       "  [[confirm: Question text? | Yes Label | No Label]]",
       "",
       "**Button Menu** (title + text + buttons):",
-      "  [[buttons: Title | Description | Btn1:action1, Btn2:https://url.com]]",
+      "  [[buttons: Title | Description | Btn1:action1; Btn2:https://url.com]]",
       "",
       "**Media Player Card** (music status):",
       "  [[media_player: Song Title | Artist Name | Source | https://albumart.url | playing]]",

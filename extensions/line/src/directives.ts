@@ -60,14 +60,14 @@ export function parseLineDirectives(text: string): {
     cleanedText = cleanedText.replace(confirmMatch[0], "");
   }
 
-  // 4. Buttons: [[buttons: Title | Text | Label:Action, Label:Action...]]
-  // This is complex to regex robustly; implementing basic support
+  // 4. Buttons: [[buttons: Title | Text | Label:Action; Label:Action...]]
+  // Uses semicolon as delimiter to support commas in label/data values
   const btnRegex = /\[\[buttons:\s*([^|]+)\s*\|\s*([^|]+)\s*\|\s*([\s\S]+?)\]\]/i;
   const btnMatch = cleanedText.match(btnRegex);
   if (btnMatch) {
     const title = btnMatch[1].trim();
     const body = btnMatch[2].trim();
-    const actionsRaw = btnMatch[3].split(",");
+    const actionsRaw = btnMatch[3].split(";");
     const actions = actionsRaw.map((a) => {
       const parts = a.split(":"); // Label:Data or Label:http...
       const label = parts[0].trim();
