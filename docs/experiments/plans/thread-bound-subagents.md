@@ -409,3 +409,16 @@ Expected user-visible behavior:
   - subagent bindings auto-unbind on completion/kill
   - ACP bindings unbind on `/unfocus`, thread archive/delete, or `sessions.reset` / `sessions.delete`
 - Keep ACP transport/protocol unchanged; only routing + thread-binding state management is added.
+
+## Appendix: Plugin hook architecture
+
+Clean architecture recommendation: remove direct core-to-Discord coupling (for example `autoBindSpawnedDiscordSubagent` invoked from `subagent-spawn.ts`) and move channel behavior behind plugin hooks.
+
+- Core emits channel-agnostic lifecycle hooks:
+  - `subagent_spawned` (includes child session metadata and origin context)
+  - `subagent_ended` (includes completion/termination metadata)
+- Discord plugin subscribes to those hooks and performs Discord-specific actions:
+  - on `subagent_spawned`, create/bind thread and webhook persona
+  - on `subagent_ended`, unbind/cleanup thread routing
+
+This keeps core routing and subagent orchestration channel-agnostic, while enabling equivalent Slack/Telegram thread binding by implementing the same hook handlers in those plugins.
