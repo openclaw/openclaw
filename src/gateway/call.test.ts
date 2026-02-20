@@ -11,6 +11,7 @@ let lastClientOptions: {
   token?: string;
   password?: string;
   scopes?: string[];
+  allowPlaintextPrivateWs?: boolean;
   onHelloOk?: () => void | Promise<void>;
   onClose?: (code: number, reason: string) => void;
 } | null = null;
@@ -110,8 +111,16 @@ function makeRemotePasswordGatewayConfig(remotePassword: string, localPassword =
 }
 
 describe("callGateway url resolution", () => {
+  let envSnapshot: ReturnType<typeof captureEnv>;
+
   beforeEach(() => {
+    envSnapshot = captureEnv(["OPENCLAW_ALLOW_PLAINTEXT_PRIVATE_WS"]);
     resetGatewayCallMocks();
+    delete process.env.OPENCLAW_ALLOW_PLAINTEXT_PRIVATE_WS;
+  });
+
+  afterEach(() => {
+    envSnapshot.restore();
   });
 
   it.each([
@@ -167,6 +176,36 @@ describe("callGateway url resolution", () => {
   });
 
   it("blocks ws:// to LAN IP without TLS (CWE-319)", async () => {
+    loadConfig.mockReturnValue({ gateway: { mode: "local", bind: "lan" } });
+    resolveGatewayPort.mockReturnValue(18800);
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+    pickPrimaryLanIPv4.mockReturnValue("192.168.1.42");
+
+    await expect(callGateway({ method: "health" })).rejects.toThrow("SECURITY ERROR");
+  });
+
+  it("allows ws:// to LAN IP only with explicit private-ws override and auth", async () => {
+    process.env.OPENCLAW_ALLOW_PLAINTEXT_PRIVATE_WS = "1";
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        bind: "lan",
+        auth: { token: "secret" },
+      },
+    });
+    resolveGatewayPort.mockReturnValue(18800);
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+    pickPrimaryLanIPv4.mockReturnValue("192.168.1.42");
+
+    await callGateway({ method: "health" });
+
+    expect(lastClientOptions?.url).toBe("ws://192.168.1.42:18800");
+    expect(lastClientOptions?.token).toBe("secret");
+    expect(lastClientOptions?.allowPlaintextPrivateWs).toBe(true);
+  });
+
+  it("keeps blocking ws:// to LAN IP when override is set but auth is missing", async () => {
+    process.env.OPENCLAW_ALLOW_PLAINTEXT_PRIVATE_WS = "1";
     loadConfig.mockReturnValue({ gateway: { mode: "local", bind: "lan" } });
     resolveGatewayPort.mockReturnValue(18800);
     pickPrimaryTailnetIPv4.mockReturnValue(undefined);
@@ -232,8 +271,16 @@ describe("callGateway url resolution", () => {
 });
 
 describe("buildGatewayConnectionDetails", () => {
+  let envSnapshot: ReturnType<typeof captureEnv>;
+
   beforeEach(() => {
+    envSnapshot = captureEnv(["OPENCLAW_ALLOW_PLAINTEXT_PRIVATE_WS"]);
     resetGatewayCallMocks();
+    delete process.env.OPENCLAW_ALLOW_PLAINTEXT_PRIVATE_WS;
+  });
+
+  afterEach(() => {
+    envSnapshot.restore();
   });
 
   it("uses explicit url overrides and omits bind details", () => {
@@ -294,6 +341,20 @@ describe("buildGatewayConnectionDetails", () => {
     pickPrimaryLanIPv4.mockReturnValue("10.0.0.5");
 
     expect(() => buildGatewayConnectionDetails()).toThrow("SECURITY ERROR");
+  });
+
+  it("allows ws:// to LAN IP when explicit private-ws override is enabled", () => {
+    loadConfig.mockReturnValue({
+      gateway: { mode: "local", bind: "lan" },
+    });
+    resolveGatewayPort.mockReturnValue(18800);
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+    pickPrimaryLanIPv4.mockReturnValue("10.0.0.5");
+
+    const details = buildGatewayConnectionDetails({ allowPlaintextPrivateWs: true });
+
+    expect(details.url).toBe("ws://10.0.0.5:18800");
+    expect(details.urlSource).toBe("local lan 10.0.0.5");
   });
 
   it("prefers remote url when configured", () => {

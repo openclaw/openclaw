@@ -142,6 +142,41 @@ describe("GatewayClient security checks", () => {
     client.stop();
   });
 
+  it("blocks ws:// to private LAN IP without explicit override", () => {
+    const onConnectError = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://192.168.1.42:18789",
+      token: "secret",
+      onConnectError,
+    });
+
+    client.start();
+
+    expect(onConnectError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("SECURITY ERROR"),
+      }),
+    );
+    expect(wsInstances.length).toBe(0); // No WebSocket created
+    client.stop();
+  });
+
+  it("allows ws:// to private LAN IP only when explicit override is enabled", () => {
+    const onConnectError = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://192.168.1.42:18789",
+      token: "secret",
+      allowPlaintextPrivateWs: true,
+      onConnectError,
+    });
+
+    client.start();
+
+    expect(onConnectError).not.toHaveBeenCalled();
+    expect(wsInstances.length).toBe(1); // WebSocket created
+    client.stop();
+  });
+
   it("allows wss:// to any address", () => {
     const onConnectError = vi.fn();
     const client = new GatewayClient({

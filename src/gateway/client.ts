@@ -21,7 +21,7 @@ import {
   type GatewayClientName,
 } from "../utils/message-channel.js";
 import { buildDeviceAuthPayload } from "./device-auth.js";
-import { isSecureWebSocketUrl } from "./net.js";
+import { isPlaintextPrivateWebSocketUrl, isSecureWebSocketUrl } from "./net.js";
 import {
   type ConnectParams,
   type EventFrame,
@@ -61,6 +61,7 @@ export type GatewayClientOptions = {
   minProtocol?: number;
   maxProtocol?: number;
   tlsFingerprint?: string;
+  allowPlaintextPrivateWs?: boolean;
   onEvent?: (evt: EventFrame) => void;
   onHelloOk?: (hello: HelloOk) => void;
   onConnectError?: (err: Error) => void;
@@ -114,7 +115,12 @@ export class GatewayClient {
     // Security check: block ALL plaintext ws:// to non-loopback addresses (CWE-319, CVSS 9.8)
     // This protects both credentials AND chat/conversation data from MITM attacks.
     // Device tokens may be loaded later in sendConnect(), so we block regardless of hasCredentials.
-    if (!isSecureWebSocketUrl(url)) {
+    const hasExplicitAuth = Boolean(this.opts.token || this.opts.password);
+    const allowPlaintextPrivateWs =
+      this.opts.allowPlaintextPrivateWs === true &&
+      hasExplicitAuth &&
+      isPlaintextPrivateWebSocketUrl(url);
+    if (!isSecureWebSocketUrl(url) && !allowPlaintextPrivateWs) {
       // Safe hostname extraction - avoid throwing on malformed URLs in error path
       let displayHost = url;
       try {
@@ -122,10 +128,13 @@ export class GatewayClient {
       } catch {
         // Use raw URL if parsing fails
       }
+      const privateWsHint = isPlaintextPrivateWebSocketUrl(url)
+        ? " Temporary local override: set OPENCLAW_ALLOW_PLAINTEXT_PRIVATE_WS=1 with token/password auth."
+        : "";
       const error = new Error(
         `SECURITY ERROR: Cannot connect to "${displayHost}" over plaintext ws://. ` +
           "Both credentials and chat data would be exposed to network interception. " +
-          "Use wss:// for the gateway URL, or connect via SSH tunnel to localhost.",
+          `Use wss:// for the gateway URL, or connect via SSH tunnel to localhost.${privateWsHint}`,
       );
       this.opts.onConnectError?.(error);
       return;

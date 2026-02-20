@@ -1101,5 +1101,76 @@ describe("gateway server auth/connect", () => {
     }
   });
 
+  test("allows operator scopes covered by paired admin scope without re-pairing", async () => {
+    const { mkdtemp } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { buildDeviceAuthPayload } = await import("./device-auth.js");
+    const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem, signDevicePayload } =
+      await import("../infra/device-identity.js");
+    const { getPairedDevice } = await import("../infra/device-pairing.js");
+    const { server, ws, port, prevToken } = await startServerWithClient("secret");
+    const identityDir = await mkdtemp(join(tmpdir(), "openclaw-device-admin-scope-"));
+    const identity = loadOrCreateDeviceIdentity(join(identityDir, "device.json"));
+    const client = {
+      id: GATEWAY_CLIENT_NAMES.TEST,
+      version: "1.0.0",
+      platform: "test",
+      mode: GATEWAY_CLIENT_MODES.TEST,
+    };
+    const buildDevice = (scopes: string[]) => {
+      const signedAtMs = Date.now();
+      const payload = buildDeviceAuthPayload({
+        deviceId: identity.deviceId,
+        clientId: client.id,
+        clientMode: client.mode,
+        role: "operator",
+        scopes,
+        signedAtMs,
+        token: "secret",
+      });
+      return {
+        id: identity.deviceId,
+        publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+        signature: signDevicePayload(identity.privateKeyPem, payload),
+        signedAt: signedAtMs,
+      };
+    };
+    const initial = await connectReq(ws, {
+      token: "secret",
+      scopes: ["operator.admin"],
+      client,
+      device: buildDevice(["operator.admin"]),
+    });
+    if (!initial.ok) {
+      await approvePendingPairingIfNeeded();
+    }
+
+    let paired = await getPairedDevice(identity.deviceId);
+    expect(paired?.scopes).toContain("operator.admin");
+
+    ws.close();
+
+    const ws2 = new WebSocket(`ws://127.0.0.1:${port}`);
+    await new Promise<void>((resolve) => ws2.once("open", resolve));
+    const downgraded = await connectReq(ws2, {
+      token: "secret",
+      scopes: ["operator.write"],
+      client,
+      device: buildDevice(["operator.write"]),
+    });
+    expect(downgraded.ok).toBe(true);
+    paired = await getPairedDevice(identity.deviceId);
+    expect(paired?.scopes).toContain("operator.admin");
+    ws2.close();
+
+    await server.close();
+    if (prevToken === undefined) {
+      delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    } else {
+      process.env.OPENCLAW_GATEWAY_TOKEN = prevToken;
+    }
+  });
+
   // Remaining tests require isolated gateway state.
 });
