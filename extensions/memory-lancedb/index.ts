@@ -1,9 +1,9 @@
 /**
  * OpenClaw Memory (LanceDB) Plugin
  *
- * Long-term memory with vector search for AI conversations.
+ * Long-term memory with vector search, versioning, and time-travel for AI conversations.
  * Uses LanceDB for storage and OpenAI for embeddings.
- * Provides seamless auto-recall and auto-capture via lifecycle hooks.
+ * Features: auto-recall, auto-capture, versioning, snapshots, checkout, and compaction.
  */
 
 import { randomUUID } from "node:crypto";
@@ -154,6 +154,104 @@ class MemoryDB {
     await this.ensureInitialized();
     return this.table!.countRows();
   }
+
+  // ========================================================================
+  // Versioning
+  // ========================================================================
+
+  async getVersion(): Promise<number> {
+    await this.ensureInitialized();
+    return this.table!.version();
+  }
+
+  async checkout(versionOrTag: number | string): Promise<void> {
+    await this.ensureInitialized();
+
+    let versionNum: number;
+    if (typeof versionOrTag === "string") {
+      // Resolve tag name to version number
+      const tags = await this.table!.tags();
+      const tagList = await tags.list();
+      const tagInfo = tagList[versionOrTag];
+      if (!tagInfo) {
+        throw new Error(
+          `Snapshot "${versionOrTag}" not found. Available snapshots: ${Object.keys(tagList).join(", ") || "none"}`,
+        );
+      }
+      versionNum = tagInfo.version;
+    } else {
+      versionNum = versionOrTag;
+    }
+
+    try {
+      await this.table!.checkout(versionNum);
+    } catch (err) {
+      throw new Error(`Failed to checkout version ${versionNum}: ${String(err)}`);
+    }
+  }
+
+  async checkoutLatest(): Promise<void> {
+    await this.ensureInitialized();
+    await this.table!.checkoutLatest();
+  }
+
+  async listVersions(): Promise<
+    Array<{ version: number; timestamp: Date; metadata: Record<string, string> }>
+  > {
+    await this.ensureInitialized();
+    return this.table!.listVersions();
+  }
+
+  async createSnapshot(name: string, version?: number): Promise<void> {
+    await this.ensureInitialized();
+    const tags = await this.table!.tags();
+
+    // Check for duplicate snapshot names
+    const existingTags = await tags.list();
+    if (existingTags[name]) {
+      throw new Error(`Snapshot "${name}" already exists at version ${existingTags[name].version}`);
+    }
+
+    const targetVersion = version ?? (await this.table!.version());
+    try {
+      await tags.create(name, targetVersion);
+    } catch (err) {
+      throw new Error(`Failed to create snapshot "${name}": ${String(err)}`);
+    }
+  }
+
+  async listSnapshots(): Promise<Record<string, { version: number; manifestSize: number }>> {
+    await this.ensureInitialized();
+    const tags = await this.table!.tags();
+    return tags.list();
+  }
+
+  async deleteSnapshot(name: string): Promise<void> {
+    await this.ensureInitialized();
+    const tags = await this.table!.tags();
+    const existingTags = await tags.list();
+    if (!existingTags[name]) {
+      throw new Error(
+        `Snapshot "${name}" not found. Available snapshots: ${Object.keys(existingTags).join(", ") || "none"}`,
+      );
+    }
+    try {
+      await tags.delete(name);
+    } catch (err) {
+      throw new Error(`Failed to delete snapshot "${name}": ${String(err)}`);
+    }
+  }
+
+  async optimize(cleanupOlderThan?: Date): Promise<{
+    compaction: { fragmentsRemoved: number; fragmentsAdded: number };
+    prune: { bytesRemoved: number; oldVersionsRemoved: number };
+  }> {
+    await this.ensureInitialized();
+    const result = await this.table!.optimize(
+      cleanupOlderThan ? { cleanupOlderThan, deleteUnverified: false } : undefined,
+    );
+    return result;
+  }
 }
 
 // ============================================================================
@@ -286,7 +384,8 @@ export function detectCategory(text: string): MemoryCategory {
 const memoryPlugin = {
   id: "memory-lancedb",
   name: "Memory (LanceDB)",
-  description: "LanceDB-backed long-term memory with auto-recall/capture",
+  description:
+    "LanceDB-backed long-term memory with versioning, time-travel, snapshots, and auto-recall/capture",
   kind: "memory" as const,
   configSchema: memoryConfigSchema,
 
@@ -485,6 +584,145 @@ const memoryPlugin = {
       { name: "memory_forget" },
     );
 
+    api.registerTool(
+      {
+        name: "memory_snapshot",
+        label: "Memory Snapshot",
+        description:
+          "Create a named snapshot of the current memory state for later restoration (time-travel).",
+        parameters: Type.Object({
+          name: Type.String({ description: "Snapshot name (e.g., 'before-experiment')" }),
+        }),
+        async execute(_toolCallId, params) {
+          const { name } = params as { name: string };
+          const currentVersion = await db.getVersion();
+          await db.createSnapshot(name);
+          return {
+            content: [
+              { type: "text", text: `Snapshot '${name}' created at version ${currentVersion}` },
+            ],
+            details: { action: "snapshot_created", name, version: currentVersion },
+          };
+        },
+      },
+      { name: "memory_snapshot" },
+    );
+
+    api.registerTool(
+      {
+        name: "memory_checkout",
+        label: "Memory Checkout",
+        description:
+          "Checkout a specific version or snapshot (time-travel). All searches/recalls will return memories from that point in time.",
+        parameters: Type.Object({
+          version: Type.String({ description: "Version number or snapshot name" }),
+        }),
+        async execute(_toolCallId, params) {
+          const { version: versionStr } = params as { version: string };
+          const version = /^\d+$/.test(versionStr) ? parseInt(versionStr, 10) : versionStr;
+          await db.checkout(version);
+          const currentVersion = await db.getVersion();
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Checked out to version ${currentVersion}. Use memory_checkout_latest to return to current state.`,
+              },
+            ],
+            details: { action: "checkout", version: currentVersion },
+          };
+        },
+      },
+      { name: "memory_checkout" },
+    );
+
+    api.registerTool(
+      {
+        name: "memory_checkout_latest",
+        label: "Memory Checkout Latest",
+        description: "Return to the latest version after time-traveling to a previous version.",
+        parameters: Type.Object({}),
+        async execute() {
+          await db.checkoutLatest();
+          const currentVersion = await db.getVersion();
+          return {
+            content: [{ type: "text", text: `Returned to latest version ${currentVersion}` }],
+            details: { action: "checkout_latest", version: currentVersion },
+          };
+        },
+      },
+      { name: "memory_checkout_latest" },
+    );
+
+    api.registerTool(
+      {
+        name: "memory_versions",
+        label: "Memory Versions",
+        description: "List all versions of the memory database with timestamps.",
+        parameters: Type.Object({
+          limit: Type.Optional(Type.Number({ description: "Max versions to show (default: 10)" })),
+        }),
+        async execute(_toolCallId, params) {
+          const { limit = 10 } = params as { limit?: number };
+          const versions = await db.listVersions();
+          const recent = versions.slice(-limit).reverse();
+          const text = recent
+            .map((v) => `Version ${v.version}: ${v.timestamp.toISOString()}`)
+            .join("\n");
+          return {
+            content: [{ type: "text", text: `Recent versions:\n${text}` }],
+            details: { count: versions.length, versions: recent },
+          };
+        },
+      },
+      { name: "memory_versions" },
+    );
+
+    api.registerTool(
+      {
+        name: "memory_snapshots",
+        label: "Memory Snapshots",
+        description: "List all named snapshots (bookmarks to specific versions).",
+        parameters: Type.Object({}),
+        async execute() {
+          const snapshots = await db.listSnapshots();
+          const entries = Object.entries(snapshots);
+          if (entries.length === 0) {
+            return {
+              content: [{ type: "text", text: "No snapshots found." }],
+              details: { count: 0, snapshots: {} },
+            };
+          }
+          const text = entries.map(([name, info]) => `${name}: version ${info.version}`).join("\n");
+          return {
+            content: [{ type: "text", text: `Snapshots:\n${text}` }],
+            details: { count: entries.length, snapshots },
+          };
+        },
+      },
+      { name: "memory_snapshots" },
+    );
+
+    api.registerTool(
+      {
+        name: "memory_delete_snapshot",
+        label: "Memory Delete Snapshot",
+        description: "Delete a named snapshot.",
+        parameters: Type.Object({
+          name: Type.String({ description: "Snapshot name to delete" }),
+        }),
+        async execute(_toolCallId, params) {
+          const { name } = params as { name: string };
+          await db.deleteSnapshot(name);
+          return {
+            content: [{ type: "text", text: `Snapshot '${name}' deleted` }],
+            details: { action: "snapshot_deleted", name },
+          };
+        },
+      },
+      { name: "memory_delete_snapshot" },
+    );
+
     // ========================================================================
     // CLI Commands
     // ========================================================================
@@ -526,6 +764,84 @@ const memoryPlugin = {
           .action(async () => {
             const count = await db.count();
             console.log(`Total memories: ${count}`);
+          });
+
+        memory
+          .command("version")
+          .description("Show current version")
+          .action(async () => {
+            const version = await db.getVersion();
+            console.log(`Current version: ${version}`);
+          });
+
+        memory
+          .command("versions")
+          .description("List all versions")
+          .option("--limit <n>", "Max versions", "10")
+          .action(async (opts) => {
+            const versions = await db.listVersions();
+            const recent = versions.slice(-parseInt(opts.limit, 10)).reverse();
+            console.log(JSON.stringify(recent, null, 2));
+          });
+
+        memory
+          .command("checkout")
+          .description("Checkout a version or snapshot (time-travel)")
+          .argument("<version>", "Version number or snapshot name")
+          .action(async (version) => {
+            const versionNum = /^\d+$/.test(version) ? parseInt(version, 10) : version;
+            await db.checkout(versionNum);
+            const currentVersion = await db.getVersion();
+            console.log(`Checked out to version ${currentVersion}`);
+          });
+
+        memory
+          .command("checkout-latest")
+          .description("Return to latest version")
+          .action(async () => {
+            await db.checkoutLatest();
+            const version = await db.getVersion();
+            console.log(`Returned to latest version ${version}`);
+          });
+
+        memory
+          .command("snapshot")
+          .description("Create a named snapshot")
+          .argument("<name>", "Snapshot name")
+          .action(async (name) => {
+            const currentVersion = await db.getVersion();
+            await db.createSnapshot(name);
+            console.log(`Snapshot '${name}' created at version ${currentVersion}`);
+          });
+
+        memory
+          .command("snapshots")
+          .description("List all snapshots")
+          .action(async () => {
+            const snapshots = await db.listSnapshots();
+            console.log(JSON.stringify(snapshots, null, 2));
+          });
+
+        memory
+          .command("delete-snapshot")
+          .description("Delete a snapshot")
+          .argument("<name>", "Snapshot name")
+          .action(async (name) => {
+            await db.deleteSnapshot(name);
+            console.log(`Snapshot '${name}' deleted`);
+          });
+
+        memory
+          .command("optimize")
+          .description("Optimize storage (compaction)")
+          .option("--cleanup-days <n>", "Remove versions older than N days", "7")
+          .action(async (opts) => {
+            const days = parseInt(opts.cleanupDays, 10);
+            const cleanupDate = new Date();
+            cleanupDate.setDate(cleanupDate.getDate() - days);
+            console.log(`Starting optimization (cleanup older than ${days} days)...`);
+            const result = await db.optimize(cleanupDate);
+            console.log(JSON.stringify(result, null, 2));
           });
       },
       { commands: ["ltm"] },
