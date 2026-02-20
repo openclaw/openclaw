@@ -1,4 +1,3 @@
-<<<<<<< Updated upstream
 import { formatControlPlaneActor, resolveControlPlaneActor } from "./control-plane-audit.js";
 import { consumeControlPlaneWriteBudget } from "./control-plane-rate-limit.js";
 import {
@@ -6,9 +5,6 @@ import {
   authorizeOperatorScopesForMethod,
   isNodeRoleMethod,
 } from "./method-scopes.js";
-=======
-import type { GatewayRequestHandlers, GatewayRequestOptions } from "./server-methods/types.js";
->>>>>>> Stashed changes
 import { ErrorCodes, errorShape } from "./protocol/index.js";
 import { agentHandlers } from "./server-methods/agent.js";
 import { agentsHandlers } from "./server-methods/agents.js";
@@ -32,101 +28,14 @@ import { skillsHandlers } from "./server-methods/skills.js";
 import { systemHandlers } from "./server-methods/system.js";
 import { talkHandlers } from "./server-methods/talk.js";
 import { ttsHandlers } from "./server-methods/tts.js";
+import type { GatewayRequestHandlers, GatewayRequestOptions } from "./server-methods/types.js";
 import { updateHandlers } from "./server-methods/update.js";
 import { usageHandlers } from "./server-methods/usage.js";
 import { voicewakeHandlers } from "./server-methods/voicewake.js";
 import { webHandlers } from "./server-methods/web.js";
 import { wizardHandlers } from "./server-methods/wizard.js";
 
-<<<<<<< Updated upstream
 const CONTROL_PLANE_WRITE_METHODS = new Set(["config.apply", "config.patch", "update.run"]);
-=======
-const ADMIN_SCOPE = "operator.admin";
-const READ_SCOPE = "operator.read";
-const WRITE_SCOPE = "operator.write";
-const APPROVALS_SCOPE = "operator.approvals";
-const PAIRING_SCOPE = "operator.pairing";
-
-const APPROVAL_METHODS = new Set([
-  "exec.approval.request",
-  "exec.approval.waitDecision",
-  "exec.approval.resolve",
-]);
-const NODE_ROLE_METHODS = new Set(["node.invoke.result", "node.event", "skills.bins"]);
-const PAIRING_METHODS = new Set([
-  "node.pair.request",
-  "node.pair.list",
-  "node.pair.approve",
-  "node.pair.reject",
-  "node.pair.verify",
-  "device.pair.list",
-  "device.pair.approve",
-  "device.pair.reject",
-  "device.token.rotate",
-  "device.token.revoke",
-  "node.rename",
-]);
-const ADMIN_METHOD_PREFIXES = ["exec.approvals."];
-const READ_METHODS = new Set([
-  "health",
-  "logs.tail",
-  "channels.status",
-  "status",
-  "usage.status",
-  "usage.cost",
-  "tts.status",
-  "tts.providers",
-  "models.list",
-  "agents.list",
-  "agent.identity.get",
-  "skills.status",
-  "voicewake.get",
-  "sessions.list",
-  "sessions.preview",
-  "cron.list",
-  "cron.status",
-  "cron.runs",
-  "system-presence",
-  "last-heartbeat",
-  "node.list",
-  "node.describe",
-  "chat.history",
-  "config.get",
-  "talk.config",
-  "clarityos.status",
-  "clarityos.summary",
-  "clarityos.timeline",
-  "clarityos.timeline.query",
-  "clarityos.proposals",
-  "clarityos.nightly",
-  "clarityos.costs.variance",
-  "clarityos.costs.ingestExact",
-  "clarityos.metrics.slo",
-  "clarityos.tasks.validate",
-  "clarityos.tasks.transition",
-  "clarityos.tasks.releaseLease",
-  "clarityos.tasks.heartbeat",
-  "clarityos.tasks.claimLease",
-]);
-const WRITE_METHODS = new Set([
-  "send",
-  "agent",
-  "agent.wait",
-  "wake",
-  "talk.mode",
-  "tts.enable",
-  "tts.disable",
-  "tts.convert",
-  "tts.setProvider",
-  "voicewake.set",
-  "node.invoke",
-  "chat.send",
-  "chat.abort",
-  "browser.request",
-  "clarityos.proposal.state",
-]);
-
->>>>>>> Stashed changes
 function authorizeGatewayMethod(method: string, client: GatewayRequestOptions["client"]) {
   if (!client?.connect) {
     return null;
