@@ -286,6 +286,15 @@ const entries: SubCliEntry[] = [
       mod.registerCompletionCli(program);
     },
   },
+  {
+    name: "cc",
+    description: "Claude Code session management",
+    hasSubcommands: false,
+    register: async (program) => {
+      const mod = await import("../cc-cli.js");
+      mod.registerCcCli(program);
+    },
+  },
 ];
 
 export function getSubCliEntries(): SubCliEntry[] {

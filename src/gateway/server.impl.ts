@@ -764,6 +764,18 @@ export async function startGatewayServer(
       skillsChangeUnsub();
       authRateLimiter?.dispose();
       channelHealthMonitor?.stop();
+
+      // Kill orphaned Claude Code child processes
+      try {
+        const { killAllClaudeCode } = await import("../agents/claude-code/live-state.js");
+        const killed = killAllClaudeCode();
+        if (killed > 0) {
+          log.info(`killed ${killed} Claude Code child process(es) during shutdown`);
+        }
+      } catch {
+        // claude-code module may not be loaded; ignore
+      }
+
       await close(opts);
     },
   };

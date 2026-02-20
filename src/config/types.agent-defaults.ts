@@ -1,3 +1,4 @@
+import type { ClaudeCodeSubagentConfig } from "../agents/claude-code/types.js";
 import type { ChannelId } from "../channels/plugins/types.js";
 import type {
   BlockStreamingChunkConfig,
@@ -251,6 +252,8 @@ export type AgentDefaultsConfig = {
     model?: string | { primary?: string; fallbacks?: string[] };
     /** Default thinking level for spawned sub-agents (e.g. "off", "low", "medium", "high"). */
     thinking?: string;
+    /** Claude Code spawn mode configuration. */
+    claudeCode?: ClaudeCodeSubagentConfig;
   };
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: {

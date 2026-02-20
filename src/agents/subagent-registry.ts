@@ -658,8 +658,6 @@ function getRunsSnapshotForRead(): Map<string, SubagentRunRecord> {
   const shouldReadDisk = !(process.env.VITEST || process.env.NODE_ENV === "test");
   if (shouldReadDisk) {
     try {
-      // Registry state is persisted to disk so other worker processes (for
-      // example cron runners) can observe active children spawned elsewhere.
       for (const [runId, entry] of loadSubagentRegistryFromDisk().entries()) {
         merged.set(runId, entry);
       }
@@ -753,6 +751,31 @@ export function markSubagentRunTerminated(params: {
     persistSubagentRuns();
   }
   return updated;
+}
+
+/**
+ * Mark a subagent run as announced externally (e.g. by Claude Code spawn mode
+ * which handles its own announce). This prevents the registry's lifecycle
+ * listener from triggering a duplicate announce flow.
+ */
+export function markSubagentAnnounced(
+  runId: string,
+  outcome: SubagentRunOutcome,
+  opts?: { endedAt?: number; cleanup?: "delete" | "keep" },
+) {
+  const entry = subagentRuns.get(runId);
+  if (!entry) {
+    return;
+  }
+  entry.endedAt = opts?.endedAt ?? Date.now();
+  entry.outcome = outcome;
+  entry.cleanupHandled = true;
+  entry.cleanupCompletedAt = Date.now();
+  const cleanup = opts?.cleanup ?? entry.cleanup;
+  if (cleanup === "delete") {
+    subagentRuns.delete(runId);
+  }
+  persistSubagentRuns();
 }
 
 export function listSubagentRunsForRequester(requesterSessionKey: string): SubagentRunRecord[] {

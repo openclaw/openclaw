@@ -94,6 +94,35 @@ const DEFAULT_CODEX_BACKEND: CliBackendConfig = {
   serialize: true,
 };
 
+/**
+ * Claude Code spawn backend — identical to claude-cli but clears CLAUDECODE env
+ * to avoid nested session detection. Used for fire-and-forget mode.
+ */
+const DEFAULT_CLAUDE_CODE_SPAWN_BACKEND: CliBackendConfig = {
+  command: "claude",
+  args: ["-p", "--output-format", "json", "--dangerously-skip-permissions"],
+  resumeArgs: [
+    "-p",
+    "--output-format",
+    "json",
+    "--dangerously-skip-permissions",
+    "--resume",
+    "{sessionId}",
+  ],
+  output: "json",
+  input: "arg",
+  modelArg: "--model",
+  modelAliases: CLAUDE_MODEL_ALIASES,
+  sessionArg: "--session-id",
+  sessionMode: "always",
+  sessionIdFields: ["session_id", "sessionId", "conversation_id", "conversationId"],
+  systemPromptArg: "--append-system-prompt",
+  systemPromptMode: "append",
+  systemPromptWhen: "first",
+  clearEnv: ["ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY_OLD", "CLAUDECODE"],
+  serialize: true,
+};
+
 function normalizeBackendKey(key: string): string {
   return normalizeProviderId(key);
 }
@@ -151,6 +180,7 @@ export function resolveCliBackendIds(cfg?: OpenClawConfig): Set<string> {
   const ids = new Set<string>([
     normalizeBackendKey("claude-cli"),
     normalizeBackendKey("codex-cli"),
+    normalizeBackendKey("claude-code-spawn"),
   ]);
   const configured = cfg?.agents?.defaults?.cliBackends ?? {};
   for (const key of Object.keys(configured)) {
@@ -169,6 +199,14 @@ export function resolveCliBackendConfig(
 
   if (normalized === "claude-cli") {
     const merged = mergeBackendConfig(DEFAULT_CLAUDE_BACKEND, override);
+    const command = merged.command?.trim();
+    if (!command) {
+      return null;
+    }
+    return { id: normalized, config: { ...merged, command } };
+  }
+  if (normalized === "claude-code-spawn") {
+    const merged = mergeBackendConfig(DEFAULT_CLAUDE_CODE_SPAWN_BACKEND, override);
     const command = merged.command?.trim();
     if (!command) {
       return null;
