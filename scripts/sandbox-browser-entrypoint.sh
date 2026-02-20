@@ -56,7 +56,7 @@ for _ in $(seq 1 50); do
 done
 
 socat \
-  TCP-LISTEN:"${CDP_PORT}",fork,reuseaddr,bind=0.0.0.0 \
+  TCP-LISTEN:"${CDP_PORT}",fork,reuseaddr,bind=127.0.0.1 \
   TCP:127.0.0.1:"${CHROME_CDP_PORT}" &
 
 if [[ "${ENABLE_NOVNC}" == "1" && "${HEADLESS}" != "1" ]]; then

@@ -92,9 +92,9 @@ function resolveCacheTraceConfig(params: CacheTraceInit): CacheTraceConfig {
   return {
     enabled,
     filePath,
-    includeMessages: includeMessages ?? true,
-    includePrompt: includePrompt ?? true,
-    includeSystem: includeSystem ?? true,
+    includeMessages: includeMessages ?? false,
+    includePrompt: includePrompt ?? false,
+    includeSystem: includeSystem ?? false,
   };
 }
 
