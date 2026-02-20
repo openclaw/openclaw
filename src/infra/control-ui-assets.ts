@@ -91,6 +91,31 @@ export async function resolveControlUiDistIndexPath(
     return path.join(packageRoot, "dist", "control-ui", "index.html");
   }
 
+  // Global install fallback: resolve symlinked argv1 (e.g. /usr/bin/openclaw -> .../node_modules/openclaw)
+  // and probe nearby package roots before generic traversal.
+  try {
+    const resolvedArgv1 = fs.realpathSync(normalized);
+    const probeDirs = [path.dirname(resolvedArgv1), path.dirname(path.dirname(resolvedArgv1))];
+    for (const dir of probeDirs) {
+      const pkgJsonPath = path.join(dir, "package.json");
+      const indexPath = path.join(dir, "dist", "control-ui", "index.html");
+      if (!fs.existsSync(pkgJsonPath)) {
+        continue;
+      }
+      try {
+        const raw = fs.readFileSync(pkgJsonPath, "utf-8");
+        const parsed = JSON.parse(raw) as { name?: unknown };
+        if (parsed.name === "openclaw" && fs.existsSync(indexPath)) {
+          return indexPath;
+        }
+      } catch {
+        continue;
+      }
+    }
+  } catch {
+    // Ignore realpath failures and continue with generic traversal.
+  }
+
   // Fallback: traverse up and find package.json with name "openclaw" + dist/control-ui/index.html
   // This handles global installs where path-based resolution might fail.
   let dir = path.dirname(normalized);
