@@ -21,10 +21,59 @@ export interface OneDriveUploadResult {
   name: string;
 }
 
+const MAX_SIMPLE_UPLOAD_SIZE = 4 * 1024 * 1024; // 4 MB
+
+/**
+ * Handle chunked upload using an upload session.
+ */
+async function uploadChunked(
+  uploadUrl: string,
+  buffer: Buffer,
+  fetchFn: typeof fetch,
+): Promise<OneDriveUploadResult> {
+  // Graph API requires chunks to be a multiple of 320 KiB
+  // 320 KiB * 10 = 3,276,800 bytes (~3.1 MB) per chunk
+  const CHUNK_SIZE = 327680 * 10;
+  const totalSize = buffer.byteLength;
+  let start = 0;
+  let lastResponseData: any = null;
+
+  while (start < totalSize) {
+    const end = Math.min(start + CHUNK_SIZE, totalSize);
+    const chunk = buffer.subarray(start, end);
+
+    const res = await fetchFn(uploadUrl, {
+      method: "PUT",
+      headers: {
+        "Content-Length": chunk.length.toString(),
+        "Content-Range": `bytes ${start}-${end - 1}/${totalSize}`,
+      },
+      body: new Uint8Array(chunk),
+    });
+
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      throw new Error(`Upload session chunk failed: ${res.status} ${res.statusText} - ${body}`);
+    }
+
+    lastResponseData = await res.json();
+    start = end;
+  }
+
+  if (!lastResponseData?.id || !lastResponseData?.webUrl || !lastResponseData?.name) {
+    throw new Error("Upload session response missing required fields");
+  }
+
+  return {
+    id: lastResponseData.id,
+    webUrl: lastResponseData.webUrl,
+    name: lastResponseData.name,
+  };
+}
+
 /**
  * Upload a file to the user's OneDrive root folder.
- * For larger files, this uses the simple upload endpoint (up to 4MB).
- * TODO: For files >4MB, implement resumable upload session.
+ * For files >4MB, this automatically uses a resumable upload session.
  */
 export async function uploadToOneDrive(params: {
   buffer: Buffer;
@@ -39,6 +88,41 @@ export async function uploadToOneDrive(params: {
   // Use "OpenClawShared" folder to organize bot-uploaded files
   const uploadPath = `/OpenClawShared/${encodeURIComponent(params.filename)}`;
 
+  if (params.buffer.byteLength > MAX_SIMPLE_UPLOAD_SIZE) {
+    // 1. Create upload session
+    const sessionRes = await fetchFn(
+      `${GRAPH_ROOT}/me/drive/root:${uploadPath}:/createUploadSession`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          item: {
+            "@microsoft.graph.conflictBehavior": "rename",
+          },
+        }),
+      },
+    );
+
+    if (!sessionRes.ok) {
+      const body = await sessionRes.text().catch(() => "");
+      throw new Error(
+        `Create upload session failed: ${sessionRes.status} ${sessionRes.statusText} - ${body}`,
+      );
+    }
+
+    const sessionData = (await sessionRes.json()) as { uploadUrl?: string };
+    if (!sessionData.uploadUrl) {
+      throw new Error("Failed to get uploadUrl from createUploadSession");
+    }
+
+    // 2. Upload chunks to uploadUrl
+    return uploadChunked(sessionData.uploadUrl, params.buffer, fetchFn);
+  }
+
+  // Fallback to simple upload for files <= 4MB
   const res = await fetchFn(`${GRAPH_ROOT}/me/drive/root:${uploadPath}:/content`, {
     method: "PUT",
     headers: {
@@ -182,6 +266,41 @@ export async function uploadToSharePoint(params: {
   // Use "OpenClawShared" folder to organize bot-uploaded files
   const uploadPath = `/OpenClawShared/${encodeURIComponent(params.filename)}`;
 
+  if (params.buffer.byteLength > MAX_SIMPLE_UPLOAD_SIZE) {
+    // 1. Create upload session
+    const sessionRes = await fetchFn(
+      `${GRAPH_ROOT}/sites/${params.siteId}/drive/root:${uploadPath}:/createUploadSession`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          item: {
+            "@microsoft.graph.conflictBehavior": "rename",
+          },
+        }),
+      },
+    );
+
+    if (!sessionRes.ok) {
+      const body = await sessionRes.text().catch(() => "");
+      throw new Error(
+        `Create upload session failed: ${sessionRes.status} ${sessionRes.statusText} - ${body}`,
+      );
+    }
+
+    const sessionData = (await sessionRes.json()) as { uploadUrl?: string };
+    if (!sessionData.uploadUrl) {
+      throw new Error("Failed to get uploadUrl from createUploadSession");
+    }
+
+    // 2. Upload chunks to uploadUrl
+    return uploadChunked(sessionData.uploadUrl, params.buffer, fetchFn);
+  }
+
+  // Fallback to simple upload for files <= 4MB
   const res = await fetchFn(
     `${GRAPH_ROOT}/sites/${params.siteId}/drive/root:${uploadPath}:/content`,
     {
