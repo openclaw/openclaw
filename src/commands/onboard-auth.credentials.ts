@@ -126,6 +126,7 @@ export const OPENROUTER_DEFAULT_MODEL_REF = "openrouter/auto";
 export const HUGGINGFACE_DEFAULT_MODEL_REF = "huggingface/deepseek-ai/DeepSeek-R1";
 export const TOGETHER_DEFAULT_MODEL_REF = "together/moonshotai/Kimi-K2.5";
 export const LITELLM_DEFAULT_MODEL_REF = "litellm/claude-opus-4-6";
+export const CENCORI_DEFAULT_MODEL_REF = "cencori/gpt-4o";
 export const VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF = "vercel-ai-gateway/anthropic/claude-opus-4.6";
 
 export async function setZaiApiKey(key: string, agentDir?: string) {
@@ -197,6 +198,18 @@ export async function setLitellmApiKey(key: string, agentDir?: string) {
     credential: {
       type: "api_key",
       provider: "litellm",
+      key,
+    },
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
+
+export async function setCencoriApiKey(key: string, agentDir?: string) {
+  upsertAuthProfile({
+    profileId: "cencori:default",
+    credential: {
+      type: "api_key",
+      provider: "cencori",
       key,
     },
     agentDir: resolveAuthAgentDir(agentDir),

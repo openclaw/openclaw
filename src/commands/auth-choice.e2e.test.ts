@@ -52,6 +52,7 @@ describe("applyAuthChoice", () => {
     "HF_TOKEN",
     "HUGGINGFACE_HUB_TOKEN",
     "LITELLM_API_KEY",
+    "CENCORI_API_KEY",
     "AI_GATEWAY_API_KEY",
     "CLOUDFLARE_AI_GATEWAY_API_KEY",
     "SSH_TTY",
@@ -570,6 +571,39 @@ describe("applyAuthChoice", () => {
     expect((await readAuthProfile("vercel-ai-gateway:default"))?.key).toBe("gateway-test-key");
 
     delete process.env.AI_GATEWAY_API_KEY;
+  });
+
+  it("uses existing CENCORI_API_KEY when selecting cencori-api-key", async () => {
+    await setupTempState();
+    process.env.CENCORI_API_KEY = "cencori-test-key";
+
+    const text = vi.fn();
+    const confirm = vi.fn(async () => true);
+    const { prompter, runtime } = createApiKeyPromptHarness({ text, confirm });
+
+    const result = await applyAuthChoice({
+      authChoice: "cencori-api-key",
+      config: {},
+      prompter,
+      runtime,
+      setDefaultModel: true,
+    });
+
+    expect(confirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("CENCORI_API_KEY"),
+      }),
+    );
+    expect(text).not.toHaveBeenCalled();
+    expect(result.config.auth?.profiles?.["cencori:default"]).toMatchObject({
+      provider: "cencori",
+      mode: "api_key",
+    });
+    expect(result.config.agents?.defaults?.model?.primary).toBe("cencori/gpt-4o");
+
+    expect((await readAuthProfile("cencori:default"))?.key).toBe("cencori-test-key");
+
+    delete process.env.CENCORI_API_KEY;
   });
 
   it("uses existing CLOUDFLARE_AI_GATEWAY_API_KEY when selecting cloudflare-ai-gateway-api-key", async () => {

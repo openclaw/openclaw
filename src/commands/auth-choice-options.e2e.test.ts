@@ -37,6 +37,7 @@ describe("buildAuthChoiceOptions", () => {
       ["moonshot-api-key", "moonshot-api-key-cn", "kimi-code-api-key", "together-api-key"],
     ],
     ["Vercel AI Gateway auth choice", ["ai-gateway-api-key"]],
+    ["Cencori auth choice", ["cencori-api-key"]],
     ["Cloudflare AI Gateway auth choice", ["cloudflare-ai-gateway-api-key"]],
     ["Together AI auth choice", ["together-api-key"]],
     ["Synthetic auth choice", ["synthetic-api-key"]],

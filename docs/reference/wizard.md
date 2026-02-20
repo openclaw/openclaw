@@ -40,6 +40,8 @@ For a high-level overview, see [Onboarding Wizard](/start/wizard).
     - **API key**: stores the key for you.
     - **Vercel AI Gateway (multi-model proxy)**: prompts for `AI_GATEWAY_API_KEY`.
     - More detail: [Vercel AI Gateway](/providers/vercel-ai-gateway)
+    - **Cencori (AI Infrastructure)**: prompts for `CENCORI_API_KEY`.
+    - More detail: [Cencori](/providers/cencori)
     - **Cloudflare AI Gateway**: prompts for Account ID, Gateway ID, and `CLOUDFLARE_AI_GATEWAY_API_KEY`.
     - More detail: [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)
     - **MiniMax M2.1**: config is auto-written.
@@ -158,6 +160,16 @@ Add `--json` for a machine‑readable summary.
       --mode local \
       --auth-choice ai-gateway-api-key \
       --ai-gateway-api-key "$AI_GATEWAY_API_KEY" \
+      --gateway-port 18789 \
+      --gateway-bind loopback
+    ```
+  </Accordion>
+  <Accordion title="Cencori example">
+    ```bash
+    openclaw onboard --non-interactive \
+      --mode local \
+      --auth-choice cencori-api-key \
+      --cencori-api-key "$CENCORI_API_KEY" \
       --gateway-port 18789 \
       --gateway-bind loopback
     ```

@@ -149,6 +149,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["litellm-api-key"],
   },
   {
+    value: "cencori",
+    label: "Cencori",
+    hint: "AI Infrastructure",
+    choices: ["cencori-api-key"],
+  },
+  {
     value: "cloudflare-ai-gateway",
     label: "Cloudflare AI Gateway",
     hint: "Account ID + Gateway ID + API key",
@@ -189,6 +195,11 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
     value: "litellm-api-key",
     label: "LiteLLM API key",
     hint: "Unified gateway for 100+ LLM providers",
+  },
+  {
+    value: "cencori-api-key",
+    label: "Cencori API key",
+    hint: "OpenAI-compatible AI gateway with built-in security",
   },
   {
     value: "ai-gateway-api-key",

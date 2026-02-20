@@ -37,6 +37,8 @@ import {
   XAI_DEFAULT_MODEL_REF,
 } from "./onboard-auth.credentials.js";
 export {
+  applyCencoriConfig,
+  applyCencoriProviderConfig,
   applyCloudflareAiGatewayConfig,
   applyCloudflareAiGatewayProviderConfig,
   applyVercelAiGatewayConfig,

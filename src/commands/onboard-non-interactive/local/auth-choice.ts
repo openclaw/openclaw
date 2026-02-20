@@ -10,6 +10,7 @@ import { buildTokenProfileId, validateAnthropicSetupToken } from "../../auth-tok
 import { applyGoogleGeminiModelDefault } from "../../google-gemini-model-default.js";
 import {
   applyAuthProfileConfig,
+  applyCencoriConfig,
   applyCloudflareAiGatewayConfig,
   applyQianfanConfig,
   applyKimiCodeConfig,
@@ -31,6 +32,7 @@ import {
   applyZaiConfig,
   setAnthropicApiKey,
   setCloudflareAiGatewayConfig,
+  setCencoriApiKey,
   setQianfanApiKey,
   setGeminiApiKey,
   setKimiCodingApiKey,
@@ -413,6 +415,29 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applyVercelAiGatewayConfig(nextConfig);
+  }
+
+  if (authChoice === "cencori-api-key") {
+    const resolved = await resolveNonInteractiveApiKey({
+      provider: "cencori",
+      cfg: baseConfig,
+      flagValue: opts.cencoriApiKey,
+      flagName: "--cencori-api-key",
+      envVar: "CENCORI_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (resolved.source !== "profile") {
+      await setCencoriApiKey(resolved.key);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "cencori:default",
+      provider: "cencori",
+      mode: "api_key",
+    });
+    return applyCencoriConfig(nextConfig);
   }
 
   if (authChoice === "cloudflare-ai-gateway-api-key") {

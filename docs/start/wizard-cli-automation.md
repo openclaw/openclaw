@@ -64,6 +64,16 @@ Add `--json` for a machine-readable summary.
       --gateway-bind loopback
     ```
   </Accordion>
+  <Accordion title="Cencori example">
+    ```bash
+    openclaw onboard --non-interactive \
+      --mode local \
+      --auth-choice cencori-api-key \
+      --cencori-api-key "$CENCORI_API_KEY" \
+      --gateway-port 18789 \
+      --gateway-bind loopback
+    ```
+  </Accordion>
   <Accordion title="Cloudflare AI Gateway example">
     ```bash
     openclaw onboard --non-interactive \

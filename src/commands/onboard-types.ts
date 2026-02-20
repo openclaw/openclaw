@@ -14,6 +14,7 @@ export type AuthChoice =
   | "openai-api-key"
   | "openrouter-api-key"
   | "litellm-api-key"
+  | "cencori-api-key"
   | "ai-gateway-api-key"
   | "cloudflare-ai-gateway-api-key"
   | "moonshot-api-key"
@@ -57,6 +58,7 @@ export type AuthChoiceGroupId =
   | "copilot"
   | "openrouter"
   | "litellm"
+  | "cencori"
   | "ai-gateway"
   | "cloudflare-ai-gateway"
   | "moonshot"
@@ -103,6 +105,7 @@ export type OnboardOptions = {
   openaiApiKey?: string;
   openrouterApiKey?: string;
   litellmApiKey?: string;
+  cencoriApiKey?: string;
   aiGatewayApiKey?: string;
   cloudflareAiGatewayAccountId?: string;
   cloudflareAiGatewayGatewayId?: string;

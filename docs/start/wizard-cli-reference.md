@@ -159,6 +159,10 @@ What you set:
     Prompts for `AI_GATEWAY_API_KEY`.
     More detail: [Vercel AI Gateway](/providers/vercel-ai-gateway).
   </Accordion>
+  <Accordion title="Cencori">
+    Prompts for `CENCORI_API_KEY`.
+    More detail: [Cencori](/providers/cencori).
+  </Accordion>
   <Accordion title="Cloudflare AI Gateway">
     Prompts for account ID, gateway ID, and `CLOUDFLARE_AI_GATEWAY_API_KEY`.
     More detail: [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway).
