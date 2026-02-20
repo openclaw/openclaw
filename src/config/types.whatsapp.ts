@@ -67,6 +67,8 @@ export type WhatsAppConfig = {
   selfChatMode?: boolean;
   /** Optional allowlist for WhatsApp direct chats (E.164). */
   allowFrom?: string[];
+  /** Default delivery target for CLI `--deliver` when no explicit `--reply-to` is provided (E.164 or group JID). */
+  defaultTo?: string;
   /** Optional allowlist for WhatsApp group senders (E.164). */
   groupAllowFrom?: string[];
   /**
@@ -127,6 +129,8 @@ export type WhatsAppAccountConfig = {
   /** Same-phone setup for this account (bot uses your personal WhatsApp number). */
   selfChatMode?: boolean;
   allowFrom?: string[];
+  /** Default delivery target for CLI `--deliver` when no explicit `--reply-to` is provided (E.164 or group JID). */
+  defaultTo?: string;
   groupAllowFrom?: string[];
   groupPolicy?: GroupPolicy;
   /** Max group messages to keep as history context (0 disables). */

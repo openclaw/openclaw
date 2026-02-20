@@ -178,6 +178,8 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
         .map((entry) => String(entry))
         .filter(Boolean)
         .map(formatAllowFromEntry),
+    resolveDefaultTo: ({ cfg, accountId }) =>
+      resolveGoogleChatAccount({ cfg, accountId }).config.defaultTo?.trim() || undefined,
   },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
