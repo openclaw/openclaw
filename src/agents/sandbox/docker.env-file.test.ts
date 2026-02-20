@@ -114,6 +114,8 @@ vi.mock("node:fs/promises", async (_importOriginal) => {
         throw new Error("ENOENT");
       }),
       mkdir: vi.fn(),
+      // realpath resolves to the same path by default (no symlinks in test fixtures).
+      realpath: vi.fn(async (p: string) => p),
     },
   };
 });

@@ -396,11 +396,24 @@ function formatSandboxRecreateHint(params: { scope: SandboxConfig["scope"]; sess
  * This prevents directory-swap attacks where an attacker replaces an
  * intermediate directory to point the file path at a malicious file.
  *
+ * The path is resolved to its canonical form first (via fs.realpath) so that
+ * symlinked parent directories (e.g. path-symmetry symlinks in Docker gateway
+ * containers) are followed transparently. The actual on-disk directories are
+ * then checked for safe ownership and permissions.
+ *
  * Root-owned directories are considered safe (root uid 0).
  */
 async function checkParentDirSafety(filePath: string): Promise<void> {
   const processUid = process.getuid?.() ?? 0;
-  let dir = path.dirname(filePath);
+  // Resolve symlinks in the path so we check actual on-disk directories.
+  let resolvedPath: string;
+  try {
+    resolvedPath = await fs.realpath(filePath);
+  } catch {
+    // If realpath fails (e.g. broken symlink), fall back to the raw path.
+    resolvedPath = filePath;
+  }
+  let dir = path.dirname(resolvedPath);
   const seen = new Set<string>();
   while (dir !== path.dirname(dir)) {
     if (seen.has(dir)) {
@@ -411,11 +424,6 @@ async function checkParentDirSafety(filePath: string): Promise<void> {
     if (!st.ok) {
       throw new Error(
         `Sandbox security: cannot stat parent directory "${dir}" of envFile: ${st.error ?? "unknown error"}`,
-      );
-    }
-    if (st.isSymlink) {
-      throw new Error(
-        `Sandbox security: parent directory "${dir}" of envFile is a symlink, which is not permitted.`,
       );
     }
     // Root-owned directories (uid 0) are inherently safe.
