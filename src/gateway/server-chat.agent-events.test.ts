@@ -257,6 +257,134 @@ describe("agent event handler", () => {
     resetAgentRunContextForTest();
   });
 
+  it("accumulates text across multiple assistant blocks", () => {
+    let now = 1_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const broadcast = vi.fn();
+    const broadcastToConnIds = vi.fn();
+    const nodeSendToSession = vi.fn();
+    const agentRunSeq = new Map<string, number>();
+    const chatRunState = createChatRunState();
+    const toolEventRecipients = createToolEventRecipientRegistry();
+    chatRunState.registry.add("run-1", { sessionKey: "session-1", clientRunId: "client-1" });
+
+    const handler = createAgentEventHandler({
+      broadcast,
+      broadcastToConnIds,
+      nodeSendToSession,
+      agentRunSeq,
+      chatRunState,
+      resolveSessionKeyForRun: () => undefined,
+      clearAgentRunContext: vi.fn(),
+      toolEventRecipients,
+    });
+
+    // First text block (e.g. before a tool call)
+    handler({
+      runId: "run-1",
+      seq: 1,
+      stream: "assistant",
+      ts: now,
+      data: { text: "First block content" },
+    });
+
+    // Advance time past the 150ms throttle
+    now = 2_000;
+
+    // Second text block (after tool call — text resets, doesn't start with first block)
+    handler({
+      runId: "run-1",
+      seq: 2,
+      stream: "assistant",
+      ts: now,
+      data: { text: "Second block content" },
+    });
+
+    const chatCalls = broadcast.mock.calls.filter(([event]) => event === "chat");
+    expect(chatCalls).toHaveLength(2);
+    const secondPayload = chatCalls[1]?.[1] as {
+      state?: string;
+      message?: { content?: Array<{ text?: string }> };
+    };
+    expect(secondPayload.state).toBe("delta");
+    const text = secondPayload.message?.content?.[0]?.text ?? "";
+    // Both blocks must be present in the accumulated text
+    expect(text).toContain("First block content");
+    expect(text).toContain("Second block content");
+    resetAgentRunContextForTest();
+    nowSpy.mockRestore();
+  });
+
+  it("includes all blocks in the final chat message", () => {
+    let now = 1_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const broadcast = vi.fn();
+    const broadcastToConnIds = vi.fn();
+    const nodeSendToSession = vi.fn();
+    const agentRunSeq = new Map<string, number>();
+    const chatRunState = createChatRunState();
+    const toolEventRecipients = createToolEventRecipientRegistry();
+    chatRunState.registry.add("run-1", { sessionKey: "session-1", clientRunId: "client-1" });
+
+    const handler = createAgentEventHandler({
+      broadcast,
+      broadcastToConnIds,
+      nodeSendToSession,
+      agentRunSeq,
+      chatRunState,
+      resolveSessionKeyForRun: () => undefined,
+      clearAgentRunContext: vi.fn(),
+      toolEventRecipients,
+    });
+
+    // First text block
+    handler({
+      runId: "run-1",
+      seq: 1,
+      stream: "assistant",
+      ts: now,
+      data: { text: "First block" },
+    });
+
+    now = 2_000;
+
+    // Second text block (text resets after tool use)
+    handler({
+      runId: "run-1",
+      seq: 2,
+      stream: "assistant",
+      ts: now,
+      data: { text: "Second block" },
+    });
+
+    now = 3_000;
+
+    // Lifecycle end — triggers emitChatFinal
+    handler({
+      runId: "run-1",
+      seq: 3,
+      stream: "lifecycle",
+      ts: now,
+      data: { phase: "end" },
+    });
+
+    const chatCalls = broadcast.mock.calls.filter(([event]) => event === "chat");
+    const finalCall = chatCalls.find((call) => {
+      const p = call[1] as { state?: string };
+      return p.state === "final";
+    });
+    expect(finalCall).toBeDefined();
+    const finalPayload = finalCall?.[1] as {
+      state?: string;
+      message?: { content?: Array<{ text?: string }> };
+    };
+    const text = finalPayload?.message?.content?.[0]?.text ?? "";
+    expect(text).toContain("First block");
+    expect(text).toContain("Second block");
+    resetAgentRunContextForTest();
+    nowSpy.mockRestore();
+  });
+
   it("broadcasts fallback events to agent subscribers and node session", () => {
     const { broadcast, broadcastToConnIds, nodeSendToSession, handler } = createHarness({
       resolveSessionKeyForRun: () => "session-fallback",
@@ -392,5 +520,63 @@ describe("agent event handler", () => {
     const payload = broadcastToConnIds.mock.calls[0]?.[1] as { runId?: string };
     expect(payload.runId).toBe("run-tool-client");
     resetAgentRunContextForTest();
+  });
+
+  it("final message includes blocks even without trailing delta after boundary", () => {
+    let now = 1_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const broadcast = vi.fn();
+    const broadcastToConnIds = vi.fn();
+    const nodeSendToSession = vi.fn();
+    const agentRunSeq = new Map<string, number>();
+    const chatRunState = createChatRunState();
+    const toolEventRecipients = createToolEventRecipientRegistry();
+    chatRunState.registry.add("run-1", { sessionKey: "session-1", clientRunId: "client-1" });
+
+    const handler = createAgentEventHandler({
+      broadcast,
+      broadcastToConnIds,
+      nodeSendToSession,
+      agentRunSeq,
+      chatRunState,
+      resolveSessionKeyForRun: () => undefined,
+      clearAgentRunContext: vi.fn(),
+      toolEventRecipients,
+    });
+
+    // Only one assistant block — text never gets "finalized" into blockBases via
+    // the boundary detection in emitChatDelta.  emitChatFinal must still capture it.
+    handler({
+      runId: "run-1",
+      seq: 1,
+      stream: "assistant",
+      ts: now,
+      data: { text: "Only block" },
+    });
+
+    now = 2_000;
+
+    // Lifecycle end fires without any second assistant delta
+    handler({
+      runId: "run-1",
+      seq: 2,
+      stream: "lifecycle",
+      ts: now,
+      data: { phase: "end" },
+    });
+
+    const chatCalls = broadcast.mock.calls.filter(([event]) => event === "chat");
+    const finalCall = chatCalls.find((call) => {
+      const p = call[1] as { state?: string };
+      return p.state === "final";
+    });
+    expect(finalCall).toBeDefined();
+    const finalPayload = finalCall?.[1] as {
+      state?: string;
+      message?: { content?: Array<{ text?: string }> };
+    };
+    expect(finalPayload?.message?.content?.[0]?.text).toBe("Only block");
+    resetAgentRunContextForTest();
+    nowSpy.mockRestore();
   });
 });
