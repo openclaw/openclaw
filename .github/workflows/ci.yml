@@ -259,6 +259,9 @@ jobs:
       - name: Check types and lint and oxfmt
         run: pnpm check
 
+      - name: Check unused dependencies with knip
+        run: pnpm knip:ci
+
   # Report-only dead-code scans. Runs after scope detection and stores machine-readable
   # results as artifacts for later triage before we enable hard gates.
   # Temporarily disabled in CI while we process initial findings.
