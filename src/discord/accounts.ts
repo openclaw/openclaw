@@ -29,12 +29,28 @@ function resolveAccountConfig(
   return accounts[accountId] as DiscordAccountConfig | undefined;
 }
 
+/** Default DM config applied when neither the base nor account config provides a `dm` block. */
+const DEFAULT_DM_CONFIG: NonNullable<DiscordAccountConfig["dm"]> = {
+  enabled: true,
+  policy: "pairing" as const,
+};
+
 function mergeDiscordAccountConfig(cfg: OpenClawConfig, accountId: string): DiscordAccountConfig {
   const { accounts: _ignored, ...base } = (cfg.channels?.discord ?? {}) as DiscordAccountConfig & {
     accounts?: unknown;
   };
   const account = resolveAccountConfig(cfg, accountId) ?? {};
-  return { ...base, ...account };
+  const merged = { ...base, ...account };
+
+  // Ensure `dm` always has a sane default so downstream code never encounters `undefined`.
+  // The shallow merge means a sub-account without an explicit `dm` block inherits the base's
+  // `dm`, but when *neither* provides one the result is `undefined` — which previously could
+  // cause silent crashes in DM processing paths.
+  if (!merged.dm && !merged.dmPolicy) {
+    merged.dm = DEFAULT_DM_CONFIG;
+  }
+
+  return merged;
 }
 
 export function createDiscordActionGate(params: {

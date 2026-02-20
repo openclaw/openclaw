@@ -195,6 +195,14 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   const discordCfg = account.config;
   const discordRestFetch = resolveDiscordRestFetch(discordCfg.proxy, runtime);
   const dmConfig = discordCfg.dm;
+  if (!dmConfig && !discordCfg.dmPolicy) {
+    runtime.log?.(
+      warn(
+        `discord: [${account.accountId}] no dm config found; defaulting to dm.policy="pairing". ` +
+          `Set channels.discord${account.accountId !== "default" ? `.accounts.${account.accountId}` : ""}.dmPolicy (or .dm.policy) to suppress this warning.`,
+      ),
+    );
+  }
   let guildEntries = discordCfg.guilds;
   const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
   const groupPolicy = discordCfg.groupPolicy ?? defaultGroupPolicy ?? "open";
