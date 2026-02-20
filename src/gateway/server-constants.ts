@@ -32,5 +32,35 @@ export const getHandshakeTimeoutMs = () => {
 };
 export const TICK_INTERVAL_MS = 30_000;
 export const HEALTH_REFRESH_INTERVAL_MS = 60_000;
+const DEFAULT_HEALTH_BACKGROUND_REFRESH_MIN_INTERVAL_MS = 5_000;
+let healthBackgroundRefreshMinIntervalMs = DEFAULT_HEALTH_BACKGROUND_REFRESH_MIN_INTERVAL_MS;
+export const getHealthBackgroundRefreshMinIntervalMs = () => healthBackgroundRefreshMinIntervalMs;
+export const __setHealthBackgroundRefreshMinIntervalMsForTest = (value?: number) => {
+  if (!process.env.VITEST && process.env.NODE_ENV !== "test") {
+    return;
+  }
+  if (value === undefined) {
+    healthBackgroundRefreshMinIntervalMs = DEFAULT_HEALTH_BACKGROUND_REFRESH_MIN_INTERVAL_MS;
+    return;
+  }
+  if (Number.isFinite(value) && value >= 0) {
+    healthBackgroundRefreshMinIntervalMs = value;
+  }
+};
+const DEFAULT_HEALTH_REQUEST_MIN_INTERVAL_MS = 250;
+let healthRequestMinIntervalMs = DEFAULT_HEALTH_REQUEST_MIN_INTERVAL_MS;
+export const getHealthRequestMinIntervalMs = () => healthRequestMinIntervalMs;
+export const __setHealthRequestMinIntervalMsForTest = (value?: number) => {
+  if (!process.env.VITEST && process.env.NODE_ENV !== "test") {
+    return;
+  }
+  if (value === undefined) {
+    healthRequestMinIntervalMs = DEFAULT_HEALTH_REQUEST_MIN_INTERVAL_MS;
+    return;
+  }
+  if (Number.isFinite(value) && value >= 0) {
+    healthRequestMinIntervalMs = value;
+  }
+};
 export const DEDUPE_TTL_MS = 5 * 60_000;
 export const DEDUPE_MAX = 1000;

@@ -1,11 +1,47 @@
+import type { GatewayRequestHandlers } from "./types.js";
 import { getStatusSummary } from "../../commands/status.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
-import { HEALTH_REFRESH_INTERVAL_MS } from "../server-constants.js";
+import {
+  getHealthBackgroundRefreshMinIntervalMs,
+  HEALTH_REFRESH_INTERVAL_MS,
+} from "../server-constants.js";
 import { formatError } from "../server-utils.js";
 import { formatForLog } from "../ws-log.js";
-import type { GatewayRequestHandlers } from "./types.js";
 
 const ADMIN_SCOPE = "operator.admin";
+let backgroundRefreshInFlight: Promise<void> | null = null;
+let nextBackgroundRefreshAt = 0;
+
+function scheduleBackgroundRefresh(params: {
+  refreshHealthSnapshot: (opts?: { probe?: boolean }) => Promise<unknown>;
+  logHealth: { error: (msg: string) => void };
+}) {
+  if (backgroundRefreshInFlight) {
+    return;
+  }
+  const now = Date.now();
+  if (now < nextBackgroundRefreshAt) {
+    return;
+  }
+  nextBackgroundRefreshAt = now + getHealthBackgroundRefreshMinIntervalMs();
+  backgroundRefreshInFlight = params
+    .refreshHealthSnapshot({ probe: false })
+    .then(() => undefined)
+    .catch((err) => {
+      params.logHealth.error(`background health refresh failed: ${formatError(err)}`);
+    })
+    .finally(() => {
+      backgroundRefreshInFlight = null;
+    });
+}
+
+export function __resetHealthBackgroundRefreshStateForTest() {
+  if (!process.env.VITEST && process.env.NODE_ENV !== "test") {
+    return;
+  }
+  backgroundRefreshInFlight = null;
+  nextBackgroundRefreshAt = 0;
+}
 
 export const healthHandlers: GatewayRequestHandlers = {
   health: async ({ respond, context, params }) => {
@@ -15,9 +51,7 @@ export const healthHandlers: GatewayRequestHandlers = {
     const cached = getHealthCache();
     if (!wantsProbe && cached && now - cached.ts < HEALTH_REFRESH_INTERVAL_MS) {
       respond(true, cached, undefined, { cached: true });
-      void refreshHealthSnapshot({ probe: false }).catch((err) =>
-        logHealth.error(`background health refresh failed: ${formatError(err)}`),
-      );
+      scheduleBackgroundRefresh({ refreshHealthSnapshot, logHealth });
       return;
     }
     try {

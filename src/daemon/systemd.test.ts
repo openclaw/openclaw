@@ -7,7 +7,7 @@ vi.mock("node:child_process", () => ({
 }));
 
 import { splitArgsPreservingQuotes } from "./arg-split.js";
-import { parseSystemdExecStart } from "./systemd-unit.js";
+import { buildSystemdUnit, parseSystemdExecStart } from "./systemd-unit.js";
 import {
   isSystemdUserServiceAvailable,
   parseSystemdShow,
@@ -133,6 +133,19 @@ describe("splitArgsPreservingQuotes", () => {
         escapeMode: "backslash-quote-only",
       }),
     ).toEqual(["openclaw", "--label", 'My "Quoted" Name']);
+  });
+});
+
+describe("buildSystemdUnit", () => {
+  it("renders hardening defaults that cleanup remaining cgroup members", () => {
+    const unit = buildSystemdUnit({
+      description: "OpenClaw Gateway",
+      programArguments: ["/usr/bin/openclaw", "gateway"],
+    });
+
+    expect(unit).toContain("KillMode=mixed");
+    expect(unit).toContain("TimeoutStopSec=15");
+    expect(unit).toContain("SendSIGKILL=yes");
   });
 });
 

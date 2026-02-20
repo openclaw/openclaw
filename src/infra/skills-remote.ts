@@ -1,9 +1,9 @@
 import type { SkillEligibilityContext, SkillEntry } from "../agents/skills.js";
+import type { OpenClawConfig } from "../config/config.js";
+import type { NodeRegistry } from "../gateway/node-registry.js";
 import { loadWorkspaceSkillEntries } from "../agents/skills.js";
 import { bumpSkillsSnapshotVersion } from "../agents/skills/refresh.js";
 import { listAgentWorkspaceDirs } from "../agents/workspace-dirs.js";
-import type { OpenClawConfig } from "../config/config.js";
-import type { NodeRegistry } from "../gateway/node-registry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { listNodePairing, updatePairedNodeMetadata } from "./node-pairing.js";
 
@@ -17,9 +17,55 @@ type RemoteNodeRecord = {
   remoteIp?: string;
 };
 
+type RemoteProbeState = {
+  failures: number;
+  nextAttemptAt: number;
+  circuitOpenUntil: number;
+};
+
+type RemoteProbePolicy = {
+  baseBackoffMs: number;
+  maxBackoffMs: number;
+  circuitOpenAfterFailures: number;
+  circuitOpenMs: number;
+};
+
 const log = createSubsystemLogger("gateway/skills-remote");
 const remoteNodes = new Map<string, RemoteNodeRecord>();
+const remoteProbeState = new Map<string, RemoteProbeState>();
 let remoteRegistry: NodeRegistry | null = null;
+const DEFAULT_REMOTE_PROBE_POLICY: RemoteProbePolicy = {
+  baseBackoffMs: 5_000,
+  maxBackoffMs: 5 * 60_000,
+  circuitOpenAfterFailures: 5,
+  circuitOpenMs: 60_000,
+};
+let remoteProbePolicy: RemoteProbePolicy = { ...DEFAULT_REMOTE_PROBE_POLICY };
+
+export function __resetRemoteProbeStateForTest() {
+  if (!process.env.VITEST && process.env.NODE_ENV !== "test") {
+    return;
+  }
+  remoteProbeState.clear();
+  remoteProbePolicy = { ...DEFAULT_REMOTE_PROBE_POLICY };
+}
+
+export function __setRemoteProbePolicyForTest(next: Partial<RemoteProbePolicy> | undefined) {
+  if (!process.env.VITEST && process.env.NODE_ENV !== "test") {
+    return;
+  }
+  remoteProbePolicy = {
+    ...DEFAULT_REMOTE_PROBE_POLICY,
+    ...next,
+  };
+}
+
+export function __getRemoteProbeStateForTest(nodeId: string): RemoteProbeState | undefined {
+  if (!process.env.VITEST && process.env.NODE_ENV !== "test") {
+    return undefined;
+  }
+  return remoteProbeState.get(nodeId);
+}
 
 function describeNode(nodeId: string): string {
   const record = remoteNodes.get(nodeId);
@@ -170,6 +216,41 @@ export function recordRemoteNodeBins(nodeId: string, bins: string[]) {
 
 export function removeRemoteNodeInfo(nodeId: string) {
   remoteNodes.delete(nodeId);
+  remoteProbeState.delete(nodeId);
+}
+
+function canAttemptRemoteProbe(nodeId: string, now: number): boolean {
+  const state = remoteProbeState.get(nodeId);
+  if (!state) {
+    return true;
+  }
+  return now >= state.nextAttemptAt && now >= state.circuitOpenUntil;
+}
+
+function markRemoteProbeSuccess(nodeId: string) {
+  remoteProbeState.delete(nodeId);
+}
+
+function markRemoteProbeFailure(nodeId: string) {
+  const now = Date.now();
+  const prev = remoteProbeState.get(nodeId);
+  const failures = (prev?.failures ?? 0) + 1;
+  const backoffMs = Math.min(
+    remoteProbePolicy.maxBackoffMs,
+    remoteProbePolicy.baseBackoffMs * 2 ** Math.max(0, failures - 1),
+  );
+  const circuitOpenUntil =
+    failures >= remoteProbePolicy.circuitOpenAfterFailures
+      ? now + remoteProbePolicy.circuitOpenMs
+      : 0;
+  const nextAttemptAt = circuitOpenUntil > 0 ? circuitOpenUntil : now + backoffMs;
+  const enteredCircuit = circuitOpenUntil > 0 && (prev?.circuitOpenUntil ?? 0) <= now;
+  remoteProbeState.set(nodeId, { failures, nextAttemptAt, circuitOpenUntil });
+  if (enteredCircuit) {
+    log.warn(
+      `remote bin probe circuit opened (${describeNode(nodeId)}): failures=${failures} hold=${remoteProbePolicy.circuitOpenMs}ms`,
+    );
+  }
 }
 
 function collectRequiredBins(entries: SkillEntry[], targetPlatform: string): string[] {
@@ -249,6 +330,10 @@ export async function refreshRemoteNodeBins(params: {
   if (!remoteRegistry) {
     return;
   }
+  const now = Date.now();
+  if (!canAttemptRemoteProbe(params.nodeId, now)) {
+    return;
+  }
   if (!isMacPlatform(params.platform, params.deviceFamily)) {
     return;
   }
@@ -290,6 +375,7 @@ export async function refreshRemoteNodeBins(params: {
           },
     );
     if (!res.ok) {
+      markRemoteProbeFailure(params.nodeId);
       logRemoteBinProbeFailure(params.nodeId, res.error?.message ?? "unknown");
       return;
     }
@@ -299,11 +385,14 @@ export async function refreshRemoteNodeBins(params: {
     const hasChanged = !areBinSetsEqual(existingBins, nextBins);
     recordRemoteNodeBins(params.nodeId, bins);
     if (!hasChanged) {
+      markRemoteProbeSuccess(params.nodeId);
       return;
     }
     await updatePairedNodeMetadata(params.nodeId, { bins });
+    markRemoteProbeSuccess(params.nodeId);
     bumpSkillsSnapshotVersion({ reason: "remote-node" });
   } catch (err) {
+    markRemoteProbeFailure(params.nodeId);
     logRemoteBinProbeFailure(params.nodeId, err);
   }
 }

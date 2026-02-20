@@ -1,6 +1,10 @@
 import type { IncomingMessage } from "node:http";
-import os from "node:os";
 import type { WebSocket } from "ws";
+import os from "node:os";
+import type { createSubsystemLogger } from "../../../logging/subsystem.js";
+import type { GatewayAuthResult, ResolvedGatewayAuth } from "../../auth.js";
+import type { GatewayRequestContext, GatewayRequestHandlers } from "../../server-methods/types.js";
+import type { GatewayWsClient } from "../ws-types.js";
 import { loadConfig } from "../../../config/config.js";
 import {
   deriveDeviceIdFromPublicKey,
@@ -20,7 +24,6 @@ import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../../infra/skil
 import { upsertPresence } from "../../../infra/system-presence.js";
 import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
 import { rawDataToString } from "../../../infra/ws.js";
-import type { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { isGatewayCliClient, isWebchatClient } from "../../../utils/message-channel.js";
 import { resolveRuntimeServiceVersion } from "../../../version.js";
 import {
@@ -28,7 +31,6 @@ import {
   AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
   type AuthRateLimiter,
 } from "../../auth-rate-limit.js";
-import type { GatewayAuthResult, ResolvedGatewayAuth } from "../../auth.js";
 import { authorizeGatewayConnect, isLocalDirectRequest } from "../../auth.js";
 import {
   buildCanvasScopedHostUrl,
@@ -51,9 +53,13 @@ import {
   validateConnectParams,
   validateRequestFrame,
 } from "../../protocol/index.js";
-import { MAX_BUFFERED_BYTES, MAX_PAYLOAD_BYTES, TICK_INTERVAL_MS } from "../../server-constants.js";
+import {
+  getHealthRequestMinIntervalMs,
+  MAX_BUFFERED_BYTES,
+  MAX_PAYLOAD_BYTES,
+  TICK_INTERVAL_MS,
+} from "../../server-constants.js";
 import { handleGatewayRequest } from "../../server-methods.js";
-import type { GatewayRequestContext, GatewayRequestHandlers } from "../../server-methods/types.js";
 import { formatError } from "../../server-utils.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
@@ -64,8 +70,8 @@ import {
   incrementPresenceVersion,
   refreshGatewayHealthSnapshot,
 } from "../health-state.js";
-import type { GatewayWsClient } from "../ws-types.js";
 import { formatGatewayAuthFailureMessage, type AuthProvidedKind } from "./auth-messages.js";
+import { shouldThrottleHealthRequest } from "./health-pressure.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
@@ -174,6 +180,7 @@ export function attachGatewayWsMessageHandler(params: {
   }
 
   const isWebchatConnect = (p: ConnectParams | null | undefined) => isWebchatClient(p?.client);
+  let lastHealthRequestAtMs = 0;
 
   socket.on("message", async (data) => {
     if (isClosed()) {
@@ -972,6 +979,28 @@ export function attachGatewayWsMessageHandler(params: {
           ...meta,
         });
       };
+      const context = buildRequestContext();
+      const healthParams =
+        req.params && typeof req.params === "object" ? (req.params as { probe?: unknown }) : null;
+      const probeRequested = healthParams?.probe === true;
+      const cachedHealth = context.getHealthCache();
+      const nowMs = Date.now();
+      if (
+        shouldThrottleHealthRequest({
+          method: req.method,
+          probe: probeRequested,
+          cachedAvailable: Boolean(cachedHealth),
+          nowMs,
+          lastHealthRequestAtMs,
+          minIntervalMs: getHealthRequestMinIntervalMs(),
+        })
+      ) {
+        respond(true, cachedHealth, undefined, { cached: true, throttled: true });
+        return;
+      }
+      if (req.method === "health" && !probeRequested) {
+        lastHealthRequestAtMs = nowMs;
+      }
 
       void (async () => {
         await handleGatewayRequest({
@@ -980,7 +1009,7 @@ export function attachGatewayWsMessageHandler(params: {
           client,
           isWebchatConnect,
           extraHandlers,
-          context: buildRequestContext(),
+          context,
         });
       })().catch((err) => {
         logGateway.error(`request handler failed: ${formatForLog(err)}`);

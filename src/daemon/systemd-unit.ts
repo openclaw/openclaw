@@ -1,5 +1,5 @@
-import { splitArgsPreservingQuotes } from "./arg-split.js";
 import type { GatewayServiceRenderArgs } from "./service-types.js";
+import { splitArgsPreservingQuotes } from "./arg-split.js";
 
 function systemdEscapeArg(value: string): string {
   if (!/[\\s"\\\\]/.test(value)) {
@@ -45,10 +45,11 @@ export function buildSystemdUnit({
     `ExecStart=${execStart}`,
     "Restart=always",
     "RestartSec=5",
-    // KillMode=process ensures systemd only waits for the main process to exit.
-    // Without this, podman's conmon (container monitor) processes block shutdown
-    // since they run as children of the gateway and stay in the same cgroup.
-    "KillMode=process",
+    // Kill the service process first, then force-terminate remaining cgroup
+    // members after the stop timeout to avoid orphaned descendants across restarts.
+    "KillMode=mixed",
+    "TimeoutStopSec=15",
+    "SendSIGKILL=yes",
     workingDirLine,
     ...envLines,
     "",

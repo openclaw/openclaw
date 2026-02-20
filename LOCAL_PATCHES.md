@@ -173,9 +173,35 @@ Quick status:
 - What:
   - `src/auto-reply/reply/dispatch-from-config.ts`
     - detect summarize-like inbound turns (summarize intent + URL).
-    - set `timeoutOverrideSeconds: 0` for those turns only (unless a timeout override is already explicitly provided upstream).
-    - keep default timeout behavior unchanged for all non-summarize traffic.
+  - set `timeoutOverrideSeconds: 0` for those turns only (unless a timeout override is already explicitly provided upstream).
+  - keep default timeout behavior unchanged for all non-summarize traffic.
   - This uses the existing reply pipeline override (`GetReplyOptions.timeoutOverrideSeconds`) rather than config-level timeout inflation.
+
+### 14) Gateway pressure hardening: cgroup cleanup + health burst damping + remote probe backoff
+
+- Commit: `working tree (2026-02-20)` — pending commit
+- Why:
+  - Browser/control failures were correlated with restart leftovers in the gateway cgroup, health request bursts, and repeated remote-skill probe failures without backoff.
+  - Needed explicit hardening so pressure does not rebuild across restarts.
+- What:
+  - Service unit defaults (`src/daemon/systemd-unit.ts`):
+    - switch to `KillMode=mixed` with `TimeoutStopSec=15` and `SendSIGKILL=yes`.
+  - Startup self-heal (`src/gateway/startup-cgroup-gc.ts`, wired in `src/gateway/server.impl.ts`):
+    - Linux-only cgroup scan at startup.
+    - terminate + force-kill non-descendant stale members from the gateway cgroup.
+  - Health burst damping:
+    - `src/gateway/server-methods/health.ts`: coalesce/throttle cached-path background refreshes.
+    - `src/gateway/server/ws-connection/message-handler.ts`: per-connection non-probe health throttle using cached snapshot.
+    - new knobs in `src/gateway/server-constants.ts` for testability.
+  - Remote skills probe resilience (`src/infra/skills-remote.ts`):
+    - exponential backoff + temporary circuit breaker on repeated failures.
+    - clear probe state on successful refresh / node removal.
+  - Tests:
+    - `src/gateway/startup-cgroup-gc.test.ts`
+    - `src/gateway/server-methods/health.test.ts`
+    - `src/gateway/server/ws-connection/health-pressure.test.ts`
+    - `src/infra/skills-remote.backoff.test.ts`
+    - `src/daemon/systemd.test.ts` (unit rendering assertions)
 
 ## Operating rules
 
