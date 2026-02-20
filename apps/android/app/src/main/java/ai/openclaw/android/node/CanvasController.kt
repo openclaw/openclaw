@@ -32,8 +32,6 @@ class CanvasController {
   @Volatile private var debugStatusTitle: String? = null
   @Volatile private var debugStatusSubtitle: String? = null
 
-  private val scaffoldAssetUrl = "file:///android_asset/CanvasScaffold/scaffold.html"
-
   private fun clampJpegQuality(quality: Double?): Int {
     val q = (quality ?: 0.82).coerceIn(0.1, 1.0)
     return (q * 100.0).toInt().coerceIn(1, 100)
@@ -84,9 +82,9 @@ class CanvasController {
     withWebViewOnMain { wv ->
       if (currentUrl == null) {
         if (BuildConfig.DEBUG) {
-          Log.d("OpenClawCanvas", "load scaffold: $scaffoldAssetUrl")
+          Log.d("OpenClawCanvas", "load scaffold: $SCAFFOLD_ASSET_URL")
         }
-        wv.loadUrl(scaffoldAssetUrl)
+        wv.loadUrl(SCAFFOLD_ASSET_URL)
       } else {
         if (BuildConfig.DEBUG) {
           Log.d("OpenClawCanvas", "load url: $currentUrl")
@@ -184,6 +182,8 @@ class CanvasController {
     }
 
   companion object {
+    const val SCAFFOLD_ASSET_URL = "file:///android_asset/CanvasScaffold/scaffold.html"
+
     data class SnapshotParams(val format: SnapshotFormat, val quality: Double?, val maxWidth: Int?)
 
     fun parseNavigateUrl(paramsJson: String?): String {
