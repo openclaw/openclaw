@@ -741,7 +741,7 @@ export async function registerSlackMonitorSlashCommands(params: {
           }) => Promise<void>,
         ) => void;
       }
-    ).options;
+    ).options?.bind(ctx.app);
     if (typeof optionsHandler !== "function") {
       return;
     }
