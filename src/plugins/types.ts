@@ -392,8 +392,7 @@ export type PluginHookLlmOutputEvent = {
 
 // agent_end hook
 export type PluginHookAgentEndEvent = {
-  messages: unknown[];
-  lastAssistantMessage?: string;
+  messages: AgentMessage[];
   success: boolean;
   error?: string;
   durationMs?: number;
