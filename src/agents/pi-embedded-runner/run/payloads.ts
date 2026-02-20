@@ -49,8 +49,14 @@ function shouldShowToolErrorWarning(params: {
   hasUserFacingReply: boolean;
   suppressToolErrors: boolean;
   suppressToolErrorWarnings?: boolean;
+  verboseLevel?: VerboseLevel;
 }): boolean {
   if (params.suppressToolErrorWarnings) {
+    return false;
+  }
+  const normalizedToolName = params.lastToolError.toolName.trim().toLowerCase();
+  const verboseEnabled = params.verboseLevel === "on" || params.verboseLevel === "full";
+  if ((normalizedToolName === "exec" || normalizedToolName === "bash") && !verboseEnabled) {
     return false;
   }
   const isMutatingToolError =
@@ -255,6 +261,7 @@ export function buildEmbeddedRunPayloads(params: {
       hasUserFacingReply: hasUserFacingAssistantReply,
       suppressToolErrors: Boolean(params.config?.messages?.suppressToolErrors),
       suppressToolErrorWarnings: params.suppressToolErrorWarnings,
+      verboseLevel: params.verboseLevel,
     });
 
     // Always surface mutating tool failures so we do not silently confirm actions that did not happen.

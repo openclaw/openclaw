@@ -6,25 +6,34 @@ export type GatewayAttachment = {
   content: string;
 };
 
-export function extractTextFromPrompt(prompt: ContentBlock[]): string {
+export function extractTextFromPrompt(prompt: ContentBlock[], maxBytes?: number): string {
   const parts: string[] = [];
+  // Track accumulated byte count per block to catch oversized prompts before full concatenation
+  let totalBytes = 0;
   for (const block of prompt) {
+    let blockText: string | undefined;
     if (block.type === "text") {
-      parts.push(block.text);
-      continue;
-    }
-    if (block.type === "resource") {
+      blockText = block.text;
+    } else if (block.type === "resource") {
       const resource = block.resource as { text?: string } | undefined;
       if (resource?.text) {
-        parts.push(resource.text);
+        blockText = resource.text;
       }
-      continue;
-    }
-    if (block.type === "resource_link") {
+    } else if (block.type === "resource_link") {
       const title = block.title ? ` (${block.title})` : "";
       const uri = block.uri ?? "";
-      const line = uri ? `[Resource link${title}] ${uri}` : `[Resource link${title}]`;
-      parts.push(line);
+      blockText = uri ? `[Resource link${title}] ${uri}` : `[Resource link${title}]`;
+    }
+    if (blockText !== undefined) {
+      // Guard: reject before allocating the full concatenated string
+      if (maxBytes !== undefined) {
+        const separatorBytes = parts.length > 0 ? 1 : 0; // "\n" added by join() between blocks
+        totalBytes += separatorBytes + Buffer.byteLength(blockText, "utf-8");
+        if (totalBytes > maxBytes) {
+          throw new Error(`Prompt exceeds maximum allowed size of ${maxBytes} bytes`);
+        }
+      }
+      parts.push(blockText);
     }
   }
   return parts.join("\n");

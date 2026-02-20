@@ -221,6 +221,14 @@ export const OpenClawSchema = z
         attachOnly: z.boolean().optional(),
         defaultProfile: z.string().optional(),
         snapshotDefaults: BrowserSnapshotDefaultsSchema,
+        ssrfPolicy: z
+          .object({
+            allowPrivateNetwork: z.boolean().optional(),
+            allowedHostnames: z.array(z.string()).optional(),
+            hostnameAllowlist: z.array(z.string()).optional(),
+          })
+          .strict()
+          .optional(),
         profiles: z
           .record(
             z
@@ -410,7 +418,12 @@ export const OpenClawSchema = z
         auth: z
           .object({
             mode: z
-              .union([z.literal("token"), z.literal("password"), z.literal("trusted-proxy")])
+              .union([
+                z.literal("none"),
+                z.literal("token"),
+                z.literal("password"),
+                z.literal("trusted-proxy"),
+              ])
               .optional(),
             token: z.string().optional().register(sensitive),
             password: z.string().optional().register(sensitive),

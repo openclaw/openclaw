@@ -6,6 +6,11 @@ import { assertSandboxPath } from "../../agents/sandbox-paths.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
+import { normalizeScpRemoteHost } from "../../infra/scp-host.js";
+import {
+  isInboundPathAllowed,
+  resolveIMessageRemoteAttachmentRoots,
+} from "../../media/inbound-path-policy.js";
 import { getMediaDir } from "../../media/store.js";
 import { CONFIG_DIR } from "../../utils.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
@@ -69,6 +74,10 @@ export async function stageSandboxMedia(params: {
       ? path.join(effectiveWorkspaceDir, "media", "inbound")
       : effectiveWorkspaceDir;
     await fs.mkdir(destDir, { recursive: true });
+    const remoteAttachmentRoots = resolveIMessageRemoteAttachmentRoots({
+      cfg,
+      accountId: ctx.AccountId,
+    });
 
     const usedNames = new Set<string>();
     const staged = new Map<string, string>(); // absolute source -> relative sandbox path
@@ -82,9 +91,29 @@ export async function stageSandboxMedia(params: {
         continue;
       }
 
+      if (
+        ctx.MediaRemoteHost &&
+        !isInboundPathAllowed({
+          filePath: source,
+          roots: remoteAttachmentRoots,
+        })
+      ) {
+        logVerbose(`Blocking remote media staging from disallowed attachment path: ${source}`);
+        continue;
+      }
+
       // Local paths must be restricted to the media directory.
       if (!ctx.MediaRemoteHost) {
         const mediaDir = getMediaDir();
+        if (
+          !isInboundPathAllowed({
+            filePath: source,
+            roots: [mediaDir],
+          })
+        ) {
+          logVerbose(`Blocking attempt to stage media from outside media directory: ${source}`);
+          continue;
+        }
         try {
           await assertSandboxPath({
             filePath: source,
@@ -165,6 +194,10 @@ export async function stageSandboxMedia(params: {
 }
 
 async function scpFile(remoteHost: string, remotePath: string, localPath: string): Promise<void> {
+  const safeRemoteHost = normalizeScpRemoteHost(remoteHost);
+  if (!safeRemoteHost) {
+    throw new Error("invalid remote host for SCP");
+  }
   return new Promise((resolve, reject) => {
     const child = spawn(
       "/usr/bin/scp",
@@ -172,8 +205,9 @@ async function scpFile(remoteHost: string, remotePath: string, localPath: string
         "-o",
         "BatchMode=yes",
         "-o",
-        "StrictHostKeyChecking=accept-new",
-        `${remoteHost}:${remotePath}`,
+        "StrictHostKeyChecking=yes",
+        "--",
+        `${safeRemoteHost}:${remotePath}`,
         localPath,
       ],
       { stdio: ["ignore", "ignore", "pipe"] },
