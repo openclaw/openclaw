@@ -7,6 +7,7 @@ struct TalkOrbOverlay: View {
     var body: some View {
         let seam = self.appModel.seamColor
         let status = self.appModel.talkMode.statusText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let mic = min(max(self.appModel.talkMode.micLevel, 0), 1)
 
         VStack(spacing: 14) {
             ZStack {
@@ -28,7 +29,7 @@ struct TalkOrbOverlay: View {
                     .fill(
                         RadialGradient(
                             colors: [
-                                seam.opacity(0.95),
+                                seam.opacity(0.75 + (0.20 * mic)),
                                 seam.opacity(0.40),
                                 Color.black.opacity(0.55),
                             ],
@@ -36,6 +37,7 @@ struct TalkOrbOverlay: View {
                             startRadius: 1,
                             endRadius: 112))
                     .frame(width: 190, height: 190)
+                    .scaleEffect(1.0 + (0.12 * mic))
                     .overlay(
                         Circle()
                             .stroke(seam.opacity(0.35), lineWidth: 1))
@@ -45,6 +47,13 @@ struct TalkOrbOverlay: View {
             .contentShape(Circle())
             .onTapGesture {
                 self.appModel.talkMode.userTappedOrb()
+            }
+
+            let agentName = self.appModel.activeAgentName.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !agentName.isEmpty {
+                Text("Bot: \(agentName)")
+                    .font(.system(.caption, design: .rounded).weight(.semibold))
+                    .foregroundStyle(Color.white.opacity(0.70))
             }
 
             if !status.isEmpty, status != "Off" {
@@ -58,6 +67,14 @@ struct TalkOrbOverlay: View {
                             .fill(Color.black.opacity(0.40))
                             .overlay(
                                 Capsule().stroke(seam.opacity(0.22), lineWidth: 1)))
+            }
+
+            if self.appModel.talkMode.isListening {
+                Capsule()
+                    .fill(seam.opacity(0.90))
+                    .frame(width: max(18, 180 * mic), height: 6)
+                    .animation(.easeOut(duration: 0.12), value: mic)
+                    .accessibilityLabel("Microphone level")
             }
         }
         .padding(28)

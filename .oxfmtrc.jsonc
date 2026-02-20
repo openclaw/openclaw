@@ -6,14 +6,18 @@
   "experimentalSortPackageJson": {
     "sortScripts": true,
   },
+  "tabWidth": 2,
+  "useTabs": false,
   "ignorePatterns": [
     "apps/",
     "assets/",
+    "docker-compose.yml",
     "dist/",
     "docs/_layouts/",
     "node_modules/",
     "patches/",
     "pnpm-lock.yaml/",
+    "src/auto-reply/reply/export-html/",
     "Swabble/",
     "vendor/",
   ],

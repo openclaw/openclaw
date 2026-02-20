@@ -1,7 +1,27 @@
-import { createRequire } from "node:module";
 import type { OpenClawConfig } from "../config/config.js";
 
-const requireConfig = createRequire(import.meta.url);
+function resolveNodeRequire(): ((id: string) => NodeJS.Require) | null {
+  const getBuiltinModule = (
+    process as NodeJS.Process & {
+      getBuiltinModule?: (id: string) => unknown;
+    }
+  ).getBuiltinModule;
+  if (typeof getBuiltinModule !== "function") {
+    return null;
+  }
+  try {
+    const moduleNamespace = getBuiltinModule("module") as {
+      createRequire?: (id: string) => NodeJS.Require;
+    };
+    return typeof moduleNamespace.createRequire === "function"
+      ? moduleNamespace.createRequire
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+const requireConfig = resolveNodeRequire()?.(import.meta.url) ?? null;
 
 export type RedactSensitiveMode = "off" | "tools";
 
@@ -32,6 +52,8 @@ const DEFAULT_REDACT_PATTERNS: string[] = [
   String.raw`\b(AIza[0-9A-Za-z\-_]{20,})\b`,
   String.raw`\b(pplx-[A-Za-z0-9_-]{10,})\b`,
   String.raw`\b(npm_[A-Za-z0-9]{10,})\b`,
+  // Telegram Bot API URLs embed the token as `/bot<token>/...` (no word-boundary before digits).
+  String.raw`\bbot(\d{6,}:[A-Za-z0-9_-]{20,})\b`,
   String.raw`\b(\d{6,}:[A-Za-z0-9_-]{20,})\b`,
 ];
 
@@ -108,10 +130,12 @@ function redactText(text: string, patterns: RegExp[]): string {
 function resolveConfigRedaction(): RedactOptions {
   let cfg: OpenClawConfig["logging"] | undefined;
   try {
-    const loaded = requireConfig("../config/config.js") as {
-      loadConfig?: () => OpenClawConfig;
-    };
-    cfg = loaded.loadConfig?.().logging;
+    const loaded = requireConfig?.("../config/config.js") as
+      | {
+          loadConfig?: () => OpenClawConfig;
+        }
+      | undefined;
+    cfg = loaded?.loadConfig?.().logging;
   } catch {
     cfg = undefined;
   }

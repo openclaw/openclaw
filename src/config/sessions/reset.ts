@@ -1,9 +1,9 @@
-import type { SessionConfig, SessionResetConfig } from "../types.base.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
+import type { SessionConfig, SessionResetConfig } from "../types.base.js";
 import { DEFAULT_IDLE_MINUTES } from "./types.js";
 
 export type SessionResetMode = "daily" | "idle";
-export type SessionResetType = "dm" | "group" | "thread";
+export type SessionResetType = "direct" | "group" | "thread";
 
 export type SessionResetPolicy = {
   mode: SessionResetMode;
@@ -46,7 +46,7 @@ export function resolveSessionResetType(params: {
   if (GROUP_SESSION_MARKERS.some((marker) => normalized.includes(marker))) {
     return "group";
   }
-  return "dm";
+  return "direct";
 }
 
 export function resolveThreadFlag(params: {
@@ -88,7 +88,13 @@ export function resolveSessionResetPolicy(params: {
 }): SessionResetPolicy {
   const sessionCfg = params.sessionCfg;
   const baseReset = params.resetOverride ?? sessionCfg?.reset;
-  const typeReset = params.resetOverride ? undefined : sessionCfg?.resetByType?.[params.resetType];
+  // Backward compat: accept legacy "dm" key as alias for "direct"
+  const typeReset = params.resetOverride
+    ? undefined
+    : (sessionCfg?.resetByType?.[params.resetType] ??
+      (params.resetType === "direct"
+        ? (sessionCfg?.resetByType as { dm?: SessionResetConfig } | undefined)?.dm
+        : undefined));
   const hasExplicitReset = Boolean(baseReset || sessionCfg?.resetByType);
   const legacyIdleMinutes = params.resetOverride ? undefined : sessionCfg?.idleMinutes;
   const mode =

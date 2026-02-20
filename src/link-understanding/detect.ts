@@ -1,3 +1,4 @@
+import { isBlockedHostnameOrIp } from "../infra/net/ssrf.js";
 import { DEFAULT_MAX_LINKS } from "./defaults.js";
 
 // Remove markdown link syntax so only bare URLs are considered.
@@ -21,7 +22,7 @@ function isAllowedUrl(raw: string): boolean {
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
       return false;
     }
-    if (parsed.hostname === "127.0.0.1") {
+    if (isBlockedHostnameOrIp(parsed.hostname)) {
       return false;
     }
     return true;

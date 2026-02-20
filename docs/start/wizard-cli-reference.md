@@ -145,6 +145,9 @@ What you set:
     Sets `agents.defaults.model` to `openai/gpt-5.1-codex` when model is unset, `openai/*`, or `openai-codex/*`.
 
   </Accordion>
+  <Accordion title="xAI (Grok) API key">
+    Prompts for `XAI_API_KEY` and configures xAI as a model provider.
+  </Accordion>
   <Accordion title="OpenCode Zen">
     Prompts for `OPENCODE_API_KEY` (or `OPENCODE_ZEN_API_KEY`).
     Setup URL: [opencode.ai/auth](https://opencode.ai/auth).
@@ -171,6 +174,18 @@ What you set:
   <Accordion title="Moonshot and Kimi Coding">
     Moonshot (Kimi K2) and Kimi Coding configs are auto-written.
     More detail: [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot).
+  </Accordion>
+  <Accordion title="Custom provider">
+    Works with OpenAI-compatible and Anthropic-compatible endpoints.
+
+    Non-interactive flags:
+    - `--auth-choice custom-api-key`
+    - `--custom-base-url`
+    - `--custom-model-id`
+    - `--custom-api-key` (optional; falls back to `CUSTOM_API_KEY`)
+    - `--custom-provider-id` (optional)
+    - `--custom-compatibility <openai|anthropic>` (optional; default `openai`)
+
   </Accordion>
   <Accordion title="Skip">
     Leaves auth unconfigured.

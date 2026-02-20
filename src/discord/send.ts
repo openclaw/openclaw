@@ -37,9 +37,20 @@ export {
   searchMessagesDiscord,
   unpinMessageDiscord,
 } from "./send.messages.js";
-export { sendMessageDiscord, sendPollDiscord, sendStickerDiscord } from "./send.outbound.js";
+export {
+  sendMessageDiscord,
+  sendPollDiscord,
+  sendStickerDiscord,
+  sendVoiceMessageDiscord,
+} from "./send.outbound.js";
+export { sendDiscordComponentMessage } from "./send.components.js";
 export {
   fetchChannelPermissionsDiscord,
+  hasAllGuildPermissionsDiscord,
+  hasAnyGuildPermissionDiscord,
+  fetchMemberGuildPermissionsDiscord,
+} from "./send.permissions.js";
+export {
   fetchReactionsDiscord,
   reactMessageDiscord,
   removeOwnReactionsDiscord,

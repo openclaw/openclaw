@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
+import type { MsgContext } from "../auto-reply/templating.js";
 import {
+  type ChannelMatchSource,
   buildChannelKeyCandidates,
   normalizeChannelSlug,
   resolveChannelEntryMatch,
@@ -8,6 +10,7 @@ import {
   applyChannelMatchMeta,
   resolveChannelMatchConfig,
 } from "./channel-config.js";
+import { validateSenderIdentity } from "./sender-identity.js";
 
 describe("buildChannelKeyCandidates", () => {
   it("dedupes and trims keys", () => {
@@ -93,10 +96,8 @@ describe("resolveChannelEntryMatchWithFallback", () => {
 
 describe("applyChannelMatchMeta", () => {
   it("copies match metadata onto resolved configs", () => {
-    const resolved = applyChannelMatchMeta(
-      { allowed: true },
-      { matchKey: "general", matchSource: "direct" },
-    );
+    const base: { matchKey?: string; matchSource?: ChannelMatchSource } = {};
+    const resolved = applyChannelMatchMeta(base, { matchKey: "general", matchSource: "direct" });
     expect(resolved.matchKey).toBe("general");
     expect(resolved.matchSource).toBe("direct");
   });
@@ -104,17 +105,50 @@ describe("applyChannelMatchMeta", () => {
 
 describe("resolveChannelMatchConfig", () => {
   it("returns null when no entry is matched", () => {
-    const resolved = resolveChannelMatchConfig({ matchKey: "x" }, () => ({ allowed: true }));
+    const resolved = resolveChannelMatchConfig({ matchKey: "x" }, () => {
+      const out: { matchKey?: string; matchSource?: ChannelMatchSource } = {};
+      return out;
+    });
     expect(resolved).toBeNull();
   });
 
   it("resolves entry and applies match metadata", () => {
     const resolved = resolveChannelMatchConfig(
       { entry: { allow: true }, matchKey: "*", matchSource: "wildcard" },
-      () => ({ allowed: true }),
+      () => {
+        const out: { matchKey?: string; matchSource?: ChannelMatchSource } = {};
+        return out;
+      },
     );
     expect(resolved?.matchKey).toBe("*");
     expect(resolved?.matchSource).toBe("wildcard");
+  });
+});
+
+describe("validateSenderIdentity", () => {
+  it("allows direct messages without sender fields", () => {
+    const ctx: MsgContext = { ChatType: "direct" };
+    expect(validateSenderIdentity(ctx)).toEqual([]);
+  });
+
+  it("requires some sender identity for non-direct chats", () => {
+    const ctx: MsgContext = { ChatType: "group" };
+    expect(validateSenderIdentity(ctx)).toContain(
+      "missing sender identity (SenderId/SenderName/SenderUsername/SenderE164)",
+    );
+  });
+
+  it("validates SenderE164 and SenderUsername shape", () => {
+    const ctx: MsgContext = {
+      ChatType: "group",
+      SenderE164: "123",
+      SenderUsername: "@ada lovelace",
+    };
+    expect(validateSenderIdentity(ctx)).toEqual([
+      "invalid SenderE164: 123",
+      'SenderUsername should not include "@": @ada lovelace',
+      "SenderUsername should not include whitespace: @ada lovelace",
+    ]);
   });
 });
 

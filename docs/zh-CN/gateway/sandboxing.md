@@ -163,7 +163,7 @@ Docker 安装和容器化 Gateway 网关在此：
 
 每个智能体可以覆盖沙箱 + 工具：
 `agents.list[].sandbox` 和 `agents.list[].tools`（加上 `agents.list[].tools.sandbox.tools` 用于沙箱工具策略）。
-参见[多智能体沙箱与工具](/multi-agent-sandbox-tools)了解优先级。
+参见[多智能体沙箱与工具](/tools/multi-agent-sandbox-tools)了解优先级。
 
 ## 最小启用示例
 
@@ -184,5 +184,5 @@ Docker 安装和容器化 Gateway 网关在此：
 ## 相关文档
 
 - [沙箱配置](/gateway/configuration#agentsdefaults-sandbox)
-- [多智能体沙箱与工具](/multi-agent-sandbox-tools)
+- [多智能体沙箱与工具](/tools/multi-agent-sandbox-tools)
 - [安全](/gateway/security)

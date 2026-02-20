@@ -1,11 +1,10 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import crypto from "node:crypto";
+import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import { stripMarkdown } from "openclaw/plugin-sdk";
 import { resolveBlueBubblesAccount } from "./accounts.js";
-import {
-  extractHandleFromChatGuid,
-  normalizeBlueBubblesHandle,
-  parseBlueBubblesTarget,
-} from "./targets.js";
+import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
+import { extractBlueBubblesMessageId, resolveBlueBubblesSendTarget } from "./send-helpers.js";
+import { extractHandleFromChatGuid, normalizeBlueBubblesHandle } from "./targets.js";
 import {
   blueBubblesFetchWithTimeout,
   buildBlueBubblesApiUrl,
@@ -70,57 +69,6 @@ function resolveEffectId(raw?: string): string | undefined {
     return EFFECT_MAP[compact];
   }
   return raw;
-}
-
-function resolveSendTarget(raw: string): BlueBubblesSendTarget {
-  const parsed = parseBlueBubblesTarget(raw);
-  if (parsed.kind === "handle") {
-    return {
-      kind: "handle",
-      address: normalizeBlueBubblesHandle(parsed.to),
-      service: parsed.service,
-    };
-  }
-  if (parsed.kind === "chat_id") {
-    return { kind: "chat_id", chatId: parsed.chatId };
-  }
-  if (parsed.kind === "chat_guid") {
-    return { kind: "chat_guid", chatGuid: parsed.chatGuid };
-  }
-  return { kind: "chat_identifier", chatIdentifier: parsed.chatIdentifier };
-}
-
-function extractMessageId(payload: unknown): string {
-  if (!payload || typeof payload !== "object") {
-    return "unknown";
-  }
-  const record = payload as Record<string, unknown>;
-  const data =
-    record.data && typeof record.data === "object"
-      ? (record.data as Record<string, unknown>)
-      : null;
-  const candidates = [
-    record.messageId,
-    record.messageGuid,
-    record.message_guid,
-    record.guid,
-    record.id,
-    data?.messageId,
-    data?.messageGuid,
-    data?.message_guid,
-    data?.message_id,
-    data?.guid,
-    data?.id,
-  ];
-  for (const candidate of candidates) {
-    if (typeof candidate === "string" && candidate.trim()) {
-      return candidate.trim();
-    }
-    if (typeof candidate === "number" && Number.isFinite(candidate)) {
-      return String(candidate);
-    }
-  }
-  return "unknown";
 }
 
 type BlueBubblesChatRecord = Record<string, unknown>;
@@ -332,6 +280,7 @@ async function createNewChatWithMessage(params: {
   const payload = {
     addresses: [params.address],
     message: params.message,
+    tempGuid: `temp-${crypto.randomUUID()}`,
   };
   const res = await blueBubblesFetchWithTimeout(
     url,
@@ -362,7 +311,7 @@ async function createNewChatWithMessage(params: {
   }
   try {
     const parsed = JSON.parse(body) as unknown;
-    return { messageId: extractMessageId(parsed) };
+    return { messageId: extractBlueBubblesMessageId(parsed) };
   } catch {
     return { messageId: "ok" };
   }
@@ -377,6 +326,11 @@ export async function sendMessageBlueBubbles(
   if (!trimmedText.trim()) {
     throw new Error("BlueBubbles send requires text");
   }
+  // Strip markdown early and validate - ensures messages like "***" or "---" don't become empty
+  const strippedText = stripMarkdown(trimmedText);
+  if (!strippedText.trim()) {
+    throw new Error("BlueBubbles send requires text (message was empty after markdown removal)");
+  }
 
   const account = resolveBlueBubblesAccount({
     cfg: opts.cfg ?? {},
@@ -390,8 +344,9 @@ export async function sendMessageBlueBubbles(
   if (!password) {
     throw new Error("BlueBubbles password is required");
   }
+  const privateApiStatus = getCachedBlueBubblesPrivateApiStatus(account.accountId);
 
-  const target = resolveSendTarget(to);
+  const target = resolveBlueBubblesSendTarget(to);
   const chatGuid = await resolveChatGuidForTarget({
     baseUrl,
     password,
@@ -406,7 +361,7 @@ export async function sendMessageBlueBubbles(
         baseUrl,
         password,
         address: target.address,
-        message: trimmedText,
+        message: strippedText,
         timeoutMs: opts.timeoutMs,
       });
     }
@@ -415,18 +370,26 @@ export async function sendMessageBlueBubbles(
     );
   }
   const effectId = resolveEffectId(opts.effectId);
-  const needsPrivateApi = Boolean(opts.replyToMessageGuid || effectId);
+  const wantsReplyThread = Boolean(opts.replyToMessageGuid?.trim());
+  const wantsEffect = Boolean(effectId);
+  const needsPrivateApi = wantsReplyThread || wantsEffect;
+  const canUsePrivateApi = needsPrivateApi && privateApiStatus !== false;
+  if (wantsEffect && privateApiStatus === false) {
+    throw new Error(
+      "BlueBubbles send failed: reply/effect requires Private API, but it is disabled on the BlueBubbles server.",
+    );
+  }
   const payload: Record<string, unknown> = {
     chatGuid,
     tempGuid: crypto.randomUUID(),
-    message: trimmedText,
+    message: strippedText,
   };
-  if (needsPrivateApi) {
+  if (canUsePrivateApi) {
     payload.method = "private-api";
   }
 
   // Add reply threading support
-  if (opts.replyToMessageGuid) {
+  if (wantsReplyThread && canUsePrivateApi) {
     payload.selectedMessageGuid = opts.replyToMessageGuid;
     payload.partIndex = typeof opts.replyToPartIndex === "number" ? opts.replyToPartIndex : 0;
   }
@@ -460,7 +423,7 @@ export async function sendMessageBlueBubbles(
   }
   try {
     const parsed = JSON.parse(body) as unknown;
-    return { messageId: extractMessageId(parsed) };
+    return { messageId: extractBlueBubblesMessageId(parsed) };
   } catch {
     return { messageId: "ok" };
   }
