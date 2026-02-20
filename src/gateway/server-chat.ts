@@ -256,7 +256,7 @@ export function createAgentEventHandler({
     if (!shouldSuppressHeartbeatBroadcast(clientRunId)) {
       broadcast("chat", payload, { dropIfSlow: true });
     }
-    nodeSendToSession(sessionKey, "chat", payload);
+    // Nodes only need the final message — skip delta events to avoid partial token leaks.
   };
 
   const emitChatFinal = (
