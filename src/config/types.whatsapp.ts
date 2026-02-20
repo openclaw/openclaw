@@ -103,6 +103,10 @@ export type WhatsAppConfig = {
   debounceMs?: number;
   /** Heartbeat visibility settings for this channel. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /** Process offline/catch-up messages received after reconnect (default: false). */
+  replyToOfflineMessages?: boolean;
+  /** Maximum age in seconds for offline messages to be processed (default: 300). Messages older than this are still skipped. Only applies when replyToOfflineMessages is true. */
+  offlineMessageMaxAgeSeconds?: number;
 };
 
 export type WhatsAppAccountConfig = {
@@ -153,4 +157,8 @@ export type WhatsAppAccountConfig = {
   debounceMs?: number;
   /** Heartbeat visibility settings for this account. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /** Process offline/catch-up messages received after reconnect (default: false). */
+  replyToOfflineMessages?: boolean;
+  /** Maximum age in seconds for offline messages to be processed (default: 300). Messages older than this are still skipped. Only applies when replyToOfflineMessages is true. */
+  offlineMessageMaxAgeSeconds?: number;
 };

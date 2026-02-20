@@ -28,6 +28,8 @@ export type ResolvedWhatsAppAccount = {
   ackReaction?: WhatsAppAccountConfig["ackReaction"];
   groups?: WhatsAppAccountConfig["groups"];
   debounceMs?: number;
+  replyToOfflineMessages: boolean;
+  offlineMessageMaxAgeSeconds: number;
 };
 
 const { listConfiguredAccountIds, listAccountIds, resolveDefaultAccountId } =
@@ -148,6 +150,8 @@ export function resolveWhatsAppAccount(params: {
     ackReaction: accountCfg?.ackReaction ?? rootCfg?.ackReaction,
     groups: accountCfg?.groups ?? rootCfg?.groups,
     debounceMs: accountCfg?.debounceMs ?? rootCfg?.debounceMs,
+    replyToOfflineMessages: accountCfg?.replyToOfflineMessages ?? rootCfg?.replyToOfflineMessages ?? false,
+    offlineMessageMaxAgeSeconds: accountCfg?.offlineMessageMaxAgeSeconds ?? rootCfg?.offlineMessageMaxAgeSeconds ?? 300,
   };
 }
 
