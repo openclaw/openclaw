@@ -10,6 +10,8 @@ import {
   applyQueueDropPolicy,
   buildCollectPrompt,
   clearQueueSummaryState,
+  drainCollectItemIfNeeded,
+  drainNextQueueItem,
   hasCrossChannelItems,
   previewQueueSummaryPrompt,
   waitForQueueDebounce,
@@ -107,15 +109,6 @@ function scheduleAnnounceDrain(key: string) {
       while (queue.items.length > 0 || queue.droppedCount > 0) {
         await waitForQueueDebounce(queue);
         if (queue.mode === "collect") {
-          if (forceIndividualCollect) {
-            const next = queue.items[0];
-            if (!next) {
-              break;
-            }
-            await queue.send(next);
-            queue.items.shift();
-            continue;
-          }
           const isCrossChannel = hasCrossChannelItems(queue.items, (item) => {
             if (!item.origin) {
               return {};
@@ -125,14 +118,19 @@ function scheduleAnnounceDrain(key: string) {
             }
             return { key: item.originKey };
           });
-          if (isCrossChannel) {
-            forceIndividualCollect = true;
-            const next = queue.items[0];
-            if (!next) {
-              break;
-            }
-            await queue.send(next);
-            queue.items.shift();
+          const collectDrainResult = await drainCollectItemIfNeeded({
+            forceIndividualCollect,
+            isCrossChannel,
+            setForceIndividualCollect: (next) => {
+              forceIndividualCollect = next;
+            },
+            items: queue.items,
+            run: async (item) => await queue.send(item),
+          });
+          if (collectDrainResult === "empty") {
+            break;
+          }
+          if (collectDrainResult === "drained") {
             continue;
           }
           const items = queue.items.slice();
@@ -157,22 +155,21 @@ function scheduleAnnounceDrain(key: string) {
 
         const summaryPrompt = previewQueueSummaryPrompt({ state: queue, noun: "announce" });
         if (summaryPrompt) {
-          const next = queue.items[0];
-          if (!next) {
+          if (
+            !(await drainNextQueueItem(
+              queue.items,
+              async (item) => await queue.send({ ...item, prompt: summaryPrompt }),
+            ))
+          ) {
             break;
           }
-          await queue.send({ ...next, prompt: summaryPrompt });
-          queue.items.shift();
           clearQueueSummaryState(queue);
           continue;
         }
 
-        const next = queue.items[0];
-        if (!next) {
+        if (!(await drainNextQueueItem(queue.items, async (item) => await queue.send(item)))) {
           break;
         }
-        await queue.send(next);
-        queue.items.shift();
       }
     } catch (err) {
       // Keep items in queue and retry after debounce; avoid hot-loop retries.

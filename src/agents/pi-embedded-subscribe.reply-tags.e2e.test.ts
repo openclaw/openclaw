@@ -1,6 +1,10 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
-import { createStubSessionHarness } from "./pi-embedded-subscribe.e2e-harness.js";
+import {
+  createStubSessionHarness,
+  emitAssistantTextDelta,
+  emitAssistantTextEnd,
+} from "./pi-embedded-subscribe.e2e-harness.js";
 import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
 
 describe("subscribeEmbeddedPiSession reply tags", () => {
@@ -27,19 +31,8 @@ describe("subscribeEmbeddedPiSession reply tags", () => {
     const { emit, onBlockReply } = createBlockReplyHarness();
 
     emit({ type: "message_start", message: { role: "assistant" } });
-    emit({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: {
-        type: "text_delta",
-        delta: "[[reply_to_current]]\nHello",
-      },
-    });
-    emit({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: { type: "text_end" },
-    });
+    emitAssistantTextDelta({ emit, delta: "[[reply_to_current]]\nHello" });
+    emitAssistantTextEnd({ emit });
 
     const assistantMessage = {
       role: "assistant",
@@ -58,16 +51,8 @@ describe("subscribeEmbeddedPiSession reply tags", () => {
     const { emit, onBlockReply } = createBlockReplyHarness();
 
     emit({ type: "message_start", message: { role: "assistant" } });
-    emit({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: { type: "text_delta", delta: "Hello [[" },
-    });
-    emit({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: { type: "text_end" },
-    });
+    emitAssistantTextDelta({ emit, delta: "Hello [[" });
+    emitAssistantTextEnd({ emit });
 
     const assistantMessage = {
       role: "assistant",
@@ -92,26 +77,10 @@ describe("subscribeEmbeddedPiSession reply tags", () => {
     });
 
     emit({ type: "message_start", message: { role: "assistant" } });
-    emit({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: { type: "text_delta", delta: "[[reply_to:1897" },
-    });
-    emit({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: { type: "text_delta", delta: "]] Hello" },
-    });
-    emit({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: { type: "text_delta", delta: " world" },
-    });
-    emit({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: { type: "text_end" },
-    });
+    emitAssistantTextDelta({ emit, delta: "[[reply_to:1897" });
+    emitAssistantTextDelta({ emit, delta: "]] Hello" });
+    emitAssistantTextDelta({ emit, delta: " world" });
+    emitAssistantTextEnd({ emit });
 
     const lastPayload = onPartialReply.mock.calls.at(-1)?.[0];
     expect(lastPayload?.text).toBe("Hello world");
