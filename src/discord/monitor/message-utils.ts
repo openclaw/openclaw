@@ -236,12 +236,13 @@ export function resolveDiscordMessageText(
   message: Message,
   options?: { fallbackText?: string; includeForwarded?: boolean },
 ): string {
-  const baseText =
+  const rawText =
     message.content?.trim() ||
     buildDiscordAttachmentPlaceholder(message.attachments) ||
     message.embeds?.[0]?.description ||
     options?.fallbackText?.trim() ||
     "";
+  const baseText = resolveDiscordMentions(rawText, message);
   if (!options?.includeForwarded) {
     return baseText;
   }
@@ -253,6 +254,27 @@ export function resolveDiscordMessageText(
     return forwardedText;
   }
   return `${baseText}\n${forwardedText}`;
+}
+
+function resolveDiscordMentions(text: string, message: Message): string {
+  if (!text.includes("<") || !message.mentions) {
+    return text;
+  }
+  let out = text;
+  // Resolve user mentions
+  const mentions = message.mentions as Array<{
+    id: string;
+    username: string;
+    global_name?: string | null;
+    discriminator: string;
+  }>;
+  if (Array.isArray(mentions)) {
+    for (const user of mentions) {
+      const label = user.global_name || user.username;
+      out = out.replace(new RegExp(`<@!?${user.id}>`, "g"), `@${label}`);
+    }
+  }
+  return out;
 }
 
 function resolveDiscordForwardedMessagesText(message: Message): string {

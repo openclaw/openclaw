@@ -152,6 +152,29 @@ describe("resolveDiscordMessageText", () => {
     expect(text).toContain("[Forwarded message from @Bob]");
     expect(text).toContain("forwarded hello");
   });
+
+  it("resolves user mentions in content", () => {
+    const text = resolveDiscordMessageText(
+      asMessage({
+        content: "Hello <@123> and <@456>!",
+        mentions: [
+          { id: "123", username: "alice", global_name: "Alice Wonderland", discriminator: "0" },
+          { id: "456", username: "bob", discriminator: "0" },
+        ],
+      }),
+    );
+    expect(text).toBe("Hello @Alice Wonderland and @bob!");
+  });
+
+  it("leaves content unchanged if no mentions present", () => {
+    const text = resolveDiscordMessageText(
+      asMessage({
+        content: "Hello world",
+        mentions: [],
+      }),
+    );
+    expect(text).toBe("Hello world");
+  });
 });
 
 describe("resolveDiscordChannelInfo", () => {
