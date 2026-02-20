@@ -218,9 +218,19 @@ import Testing
         #expect(url.absoluteString == "https://gateway.example:443/remote-ui/")
     }
 
-    @Test func normalizeGatewayUrlAddsDefaultPortForWs() {
-        let url = GatewayRemoteConfig.normalizeGatewayUrl("ws://gateway")
+    @Test func normalizeGatewayUrlAddsDefaultPortForLoopbackWs() {
+        let url = GatewayRemoteConfig.normalizeGatewayUrl("ws://127.0.0.1")
         #expect(url?.port == 18789)
-        #expect(url?.absoluteString == "ws://gateway:18789")
+        #expect(url?.absoluteString == "ws://127.0.0.1:18789")
+    }
+
+    @Test func normalizeGatewayUrlRejectsNonLoopbackWs() {
+        let url = GatewayRemoteConfig.normalizeGatewayUrl("ws://gateway")
+        #expect(url == nil)
+    }
+
+    @Test func normalizeGatewayUrlRejectsPrefixBypassLoopbackHost() {
+        let url = GatewayRemoteConfig.normalizeGatewayUrl("ws://127.attacker.example")
+        #expect(url == nil)
     }
 }
