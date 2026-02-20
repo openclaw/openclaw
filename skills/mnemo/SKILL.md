@@ -174,6 +174,21 @@ src/mnemo/
 └── cli.py             # CLI: build, stats, neighbors, query, serve
 ```
 
+### 8. 외부 지식 수집
+
+```powershell
+python scripts/collect_knowledge.py                    # 전체 프로젝트
+python scripts/collect_knowledge.py MAIOSS MAITOK      # 특정 프로젝트만
+```
+
+수집 소스: YouTube (기본), Brave Search (API 키 필요), GitHub trending
+저장 위치: `03.RESOURCES/외부지식/` (Obsidian 볼트)
+프로젝트별 관심 토픽 자동 검색 → 마크다운 노트로 변환 → 볼트에 저장
+
+지원 프로젝트: MAIOSS, MAIBEAUTY, MAITOK, MAISECONDBRAIN, MAIAX, MAITUTOR, MAIBOTALKS, GENERAL_AI
+
+`daily_enrich.py`에 통합되어 매일 크론으로 자동 실행.
+
 ## 주의사항
 
 - 볼트 변경 후 `mnemo build`로 그래프 갱신 필요 (증분, ~6초)
