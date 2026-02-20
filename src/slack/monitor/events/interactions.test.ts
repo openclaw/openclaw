@@ -771,6 +771,73 @@ describe("registerSlackInteractionEvents", () => {
     );
   });
 
+  it("routes modal submissions via private metadata sessionKey", async () => {
+    enqueueSystemEventMock.mockReset();
+    const { ctx, getViewHandler, resolveSessionKey } = createContext();
+    registerSlackInteractionEvents({ ctx: ctx as never });
+    const viewHandler = getViewHandler();
+    expect(viewHandler).toBeTruthy();
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    await viewHandler!({
+      ack,
+      body: {
+        user: { id: "U701" },
+        view: {
+          id: "V701",
+          callback_id: "openclaw:deploy_form",
+          private_metadata: JSON.stringify({
+            sessionKey: "agent:main:slack:channel:C777",
+            channelId: "C777",
+            channelType: "channel",
+          }),
+          state: { values: {} },
+        },
+      },
+    } as never);
+
+    expect(ack).toHaveBeenCalled();
+    expect(resolveSessionKey).not.toHaveBeenCalled();
+    const [, options] = enqueueSystemEventMock.mock.calls[0] as [string, { sessionKey?: string }];
+    expect(options.sessionKey).toBe("agent:main:slack:channel:C777");
+  });
+
+  it("falls back to default modal routing for invalid private metadata", async () => {
+    enqueueSystemEventMock.mockReset();
+    const { ctx, getViewHandler, resolveSessionKey } = createContext();
+    registerSlackInteractionEvents({ ctx: ctx as never });
+    const viewHandler = getViewHandler();
+    expect(viewHandler).toBeTruthy();
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    await viewHandler!({
+      ack,
+      body: {
+        user: { id: "U702" },
+        view: {
+          id: "V702",
+          callback_id: "openclaw:deploy_form",
+          private_metadata: "{bad-json",
+          state: { values: {} },
+        },
+      },
+    } as never);
+
+    expect(ack).toHaveBeenCalled();
+    expect(resolveSessionKey).toHaveBeenCalledWith({});
+    const [eventText, options] = enqueueSystemEventMock.mock.calls[0] as [
+      string,
+      { sessionKey?: string },
+    ];
+    const payload = JSON.parse(eventText.replace("Slack interaction: ", "")) as {
+      routedChannelId?: string;
+      routedChannelType?: string;
+    };
+    expect(payload.routedChannelId).toBeUndefined();
+    expect(payload.routedChannelType).toBeUndefined();
+    expect(options.sessionKey).toBe("agent:ops:slack:channel:C1");
+  });
+
   it("captures modal input labels and picker values across block types", async () => {
     enqueueSystemEventMock.mockReset();
     const { ctx, getViewHandler } = createContext();

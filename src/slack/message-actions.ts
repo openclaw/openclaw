@@ -1,6 +1,6 @@
-import { createActionGate } from "../agents/tools/common.js";
 import type { ChannelMessageActionName, ChannelToolSend } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { createActionGate } from "../agents/tools/common.js";
 import { listEnabledSlackAccounts } from "./accounts.js";
 
 export function listSlackMessageActions(cfg: OpenClawConfig): ChannelMessageActionName[] {
@@ -37,6 +37,11 @@ export function listSlackMessageActions(cfg: OpenClawConfig): ChannelMessageActi
     actions.add("pin");
     actions.add("unpin");
     actions.add("list-pins");
+  }
+  if (isActionEnabled("modals")) {
+    actions.add("modal-open");
+    actions.add("modal-push");
+    actions.add("modal-update");
   }
   if (isActionEnabled("memberInfo")) {
     actions.add("member-info");

@@ -190,6 +190,18 @@
         "pin": { "label": "pin", "detailKeys": ["provider", "to", "messageId"] },
         "unpin": { "label": "unpin", "detailKeys": ["provider", "to", "messageId"] },
         "list-pins": { "label": "list pins", "detailKeys": ["provider", "to"] },
+        "modal-open": {
+          "label": "modal open",
+          "detailKeys": ["provider", "triggerId", "accountId"]
+        },
+        "modal-push": {
+          "label": "modal push",
+          "detailKeys": ["provider", "triggerId", "accountId"]
+        },
+        "modal-update": {
+          "label": "modal update",
+          "detailKeys": ["provider", "viewId", "externalId", "hash", "accountId"]
+        },
         "permissions": { "label": "permissions", "detailKeys": ["provider", "channelId", "to"] },
         "thread-create": {
           "label": "thread create",
