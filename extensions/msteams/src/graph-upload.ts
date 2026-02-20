@@ -57,7 +57,7 @@ async function uploadChunked(
     }
 
     lastResponseData = await res.json();
-    start = Math.max(start, end);
+    start = end;
   }
 
   if (!lastResponseData?.id || !lastResponseData?.webUrl || !lastResponseData?.name) {
