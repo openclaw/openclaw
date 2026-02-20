@@ -120,8 +120,10 @@ export async function applyAuthChoiceOpenAI(
       await writeOAuthCredentials("openai-codex", creds, params.agentDir, {
         syncSiblingAgents: true,
       });
+      const codexEmail =
+        typeof creds.email === "string" && creds.email.trim() ? creds.email.trim() : "default";
       nextConfig = applyAuthProfileConfig(nextConfig, {
-        profileId: "openai-codex:default",
+        profileId: `openai-codex:${codexEmail}`,
         provider: "openai-codex",
         mode: "oauth",
       });
