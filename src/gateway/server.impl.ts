@@ -8,7 +8,7 @@ import type { CanvasHostServer } from "../canvas-host/server.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { isRestartEnabled } from "../config/commands.js";
-import { CONFIG_PATH } from "../config/config.js";
+import { CONFIG_PATH, isNixMode, loadConfig, readConfigFileSnapshot } from "../config/config.js";
 import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
 import {
   ensureControlUiAssetsBuilt,
