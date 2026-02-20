@@ -1,0 +1,17 @@
+{
+  "name": "@openclaw/agent-eye",
+  "version": "2026.2.18",
+  "description": "Passive browser bug catcher — captures JS errors, failed network requests, and console.error with a full user action timeline",
+  "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.48"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

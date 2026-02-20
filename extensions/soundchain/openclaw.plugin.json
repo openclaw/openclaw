@@ -1,0 +1,56 @@
+{
+  "id": "soundchain",
+  "name": "SoundChain",
+  "description": "Search music, play tracks, earn OGUN streaming rewards, and command the War Room — 7 Ollama models, fleet nodes, and SCid Worker.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "apiUrl": {
+        "type": "string",
+        "description": "SoundChain API base URL"
+      },
+      "agentName": {
+        "type": "string",
+        "description": "Agent identity for play tracking"
+      },
+      "agentWallet": {
+        "type": "string",
+        "description": "Polygon wallet address for OGUN listener rewards"
+      },
+      "scidWorkerUrl": {
+        "type": "string",
+        "description": "SCid Worker URL (task router for Ollama models)"
+      },
+      "ollamaUrl": {
+        "type": "string",
+        "description": "Ollama API URL (local LLM inference)"
+      }
+    }
+  },
+  "uiHints": {
+    "apiUrl": {
+      "label": "API URL",
+      "placeholder": "https://soundchain.io"
+    },
+    "agentName": {
+      "label": "Agent Name",
+      "placeholder": "my-agent"
+    },
+    "agentWallet": {
+      "label": "OGUN Wallet",
+      "placeholder": "0x...",
+      "help": "Polygon wallet to receive listener rewards"
+    },
+    "scidWorkerUrl": {
+      "label": "SCid Worker URL",
+      "placeholder": "http://localhost:8787",
+      "help": "Task router for War Room Ollama models"
+    },
+    "ollamaUrl": {
+      "label": "Ollama URL",
+      "placeholder": "http://localhost:11434",
+      "help": "Local Ollama API for zero-cost LLM inference"
+    }
+  }
+}

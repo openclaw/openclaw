@@ -1,0 +1,10 @@
+{
+  "id": "agent-eye",
+  "name": "Agent Eye",
+  "description": "Passive browser bug catcher. Watches user actions (clicks, scrolls, inputs, navigation) and auto-captures bugs (JS errors, failed network requests, console.error) with a full action timeline.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

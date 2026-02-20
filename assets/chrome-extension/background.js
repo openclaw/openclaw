@@ -451,3 +451,124 @@ chrome.runtime.onInstalled.addListener(() => {
   // Useful: first-time instructions.
   void chrome.runtime.openOptionsPage()
 })
+
+// =============================================================================
+// Agent Eye — Passive browser bug catcher
+// Zero booleans. All state uses typed string enums with explicit equality checks.
+// =============================================================================
+
+const EYE_MODE = Object.freeze({
+  WATCHING: 'WATCHING',
+  DORMANT: 'DORMANT',
+  PAUSED: 'PAUSED',
+})
+
+const VALID_EYE_MODES = new Set(Object.values(EYE_MODE))
+
+/** @type {string} */
+let agentEyeMode = EYE_MODE.DORMANT
+
+// Restore persisted mode on startup, validate against known enum values
+chrome.storage.local.get(['agentEyeMode']).then((stored) => {
+  const raw = stored.agentEyeMode
+  if (typeof raw === 'string' && VALID_EYE_MODES.has(raw)) {
+    agentEyeMode = raw
+  } else {
+    // Unknown/corrupted value — reset to DORMANT
+    agentEyeMode = EYE_MODE.DORMANT
+    void chrome.storage.local.set({ agentEyeMode: EYE_MODE.DORMANT })
+  }
+})
+
+/**
+ * Get the gateway HTTP port (same as relay port by default, or override).
+ * @returns {Promise<number>}
+ */
+async function getGatewayPort() {
+  const stored = await chrome.storage.local.get(['gatewayPort', 'relayPort'])
+  // Prefer explicit gatewayPort, fall back to relayPort, then default
+  const raw = stored.gatewayPort || stored.relayPort
+  const n = Number.parseInt(String(raw || ''), 10)
+  if (!Number.isFinite(n) || n <= 0 || n > 65535) return 18789
+  return n
+}
+
+/**
+ * POST a bug report to the OpenClaw gateway.
+ * @param {object} report
+ */
+async function postBugReport(report) {
+  const port = await getGatewayPort()
+  const url = `http://127.0.0.1:${port}/agent-eye/report`
+  try {
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(report),
+      signal: AbortSignal.timeout(5000),
+    })
+    if (!resp.ok) {
+      console.warn(`Agent Eye: report rejected (${resp.status})`)
+    }
+  } catch (err) {
+    // Gateway not running — silently drop
+    console.debug('Agent Eye: gateway unreachable', err instanceof Error ? err.message : String(err))
+  }
+}
+
+/**
+ * Inject the Agent Eye content script into a tab.
+ * Only injects when agentEyeMode === EYE_MODE.WATCHING.
+ * @param {number} tabId
+ */
+async function injectAgentEye(tabId) {
+  if (agentEyeMode !== EYE_MODE.WATCHING) return
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ['content-script.js'],
+    })
+  } catch {
+    // Tab may not be injectable (chrome://, extensions, etc.)
+  }
+}
+
+// Listen for messages from content script
+chrome.runtime.onMessage.addListener((msg, sender) => {
+  // Typed channel check — never truthy/falsy
+  if (typeof msg !== 'object' || msg === null) return
+  if (msg.channel !== 'AGENT_EYE_REPORT') return
+  if (agentEyeMode !== EYE_MODE.WATCHING) return
+
+  const payload = msg.payload || {}
+  const tabId = sender.tab ? sender.tab.id : undefined
+  const tabTitle = sender.tab ? sender.tab.title : undefined
+
+  const report = {
+    trigger: msg.trigger,
+    ...payload,
+    tabId,
+    tabTitle,
+  }
+
+  void postBugReport(report)
+})
+
+// Re-inject content script on tab navigation (only when WATCHING)
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.status !== 'complete') return
+  if (agentEyeMode !== EYE_MODE.WATCHING) return
+  void injectAgentEye(tabId)
+})
+
+// Listen for mode changes from storage (allows /eye command to control mode)
+chrome.storage.onChanged.addListener((changes) => {
+  if (changes.agentEyeMode) {
+    const newVal = changes.agentEyeMode.newValue
+    if (typeof newVal === 'string' && VALID_EYE_MODES.has(newVal)) {
+      agentEyeMode = newVal
+    } else {
+      agentEyeMode = EYE_MODE.DORMANT
+    }
+  }
+})

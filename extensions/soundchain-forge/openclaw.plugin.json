@@ -1,0 +1,20 @@
+{
+  "id": "soundchain-forge",
+  "name": "SoundChain Forge",
+  "description": "Coding agent tools for SMITH v2 — read, write, edit files, run bash commands, git operations, glob search, grep content search. Secured with path/command guards.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "allowedPaths": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Filesystem paths the agent can access (default: /home/ubuntu/soundchain, /tmp)"
+      },
+      "repoDir": {
+        "type": "string",
+        "description": "Primary repo directory for git operations (default: /home/ubuntu/soundchain)"
+      }
+    }
+  }
+}

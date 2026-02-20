@@ -1,0 +1,18 @@
+{
+  "name": "@openclaw/soundchain-forge",
+  "version": "2026.2.19",
+  "description": "SoundChain Forge — coding agent tools: read, write, edit, bash, git, glob, grep",
+  "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.48",
+    "fast-glob": "^3.3.3"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
