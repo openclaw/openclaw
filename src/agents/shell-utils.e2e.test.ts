@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { getShellConfig } from "./shell-utils.js";
+import { getShellConfig, resolveShellFromPath } from "./shell-utils.js";
 
 const isWin = process.platform === "win32";
 
@@ -77,5 +77,61 @@ describe("getShellConfig", () => {
     process.env.PATH = "";
     const { shell } = getShellConfig();
     expect(shell).toBe("sh");
+  });
+});
+
+describe("resolveShellFromPath", () => {
+  const originalPath = process.env.PATH;
+  const tempDirs: string[] = [];
+
+  const createTempBin = (name: string, executable: boolean) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shell-path-"));
+    tempDirs.push(dir);
+    const filePath = path.join(dir, name);
+    fs.writeFileSync(filePath, "");
+    if (executable) {
+      fs.chmodSync(filePath, 0o755);
+    } else {
+      fs.chmodSync(filePath, 0o644);
+    }
+    return dir;
+  };
+
+  afterEach(() => {
+    if (originalPath == null) {
+      delete process.env.PATH;
+    } else {
+      process.env.PATH = originalPath;
+    }
+    for (const dir of tempDirs.splice(0)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  if (isWin) {
+    it("returns undefined on Windows for missing PATH entries in this test harness", () => {
+      process.env.PATH = "";
+      expect(resolveShellFromPath("bash")).toBeUndefined();
+    });
+    return;
+  }
+
+  it("returns undefined when PATH is empty", () => {
+    process.env.PATH = "";
+    expect(resolveShellFromPath("bash")).toBeUndefined();
+  });
+
+  it("returns the first executable match from PATH", () => {
+    const notExecutable = createTempBin("bash", false);
+    const executable = createTempBin("bash", true);
+    process.env.PATH = [notExecutable, executable].join(path.delimiter);
+    expect(resolveShellFromPath("bash")).toBe(path.join(executable, "bash"));
+  });
+
+  it("returns undefined when command does not exist", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shell-empty-"));
+    tempDirs.push(dir);
+    process.env.PATH = dir;
+    expect(resolveShellFromPath("bash")).toBeUndefined();
   });
 });

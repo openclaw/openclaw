@@ -7,15 +7,18 @@ import {
   DEFAULT_GROUP_HISTORY_LIMIT,
   type HistoryEntry,
 } from "openclaw/plugin-sdk";
-import type { FeishuMessageContext, FeishuMediaInfo, ResolvedFeishuAccount } from "./types.js";
-import type { DynamicAgentCreationConfig } from "./types.js";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { tryRecordMessage } from "./dedup.js";
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { downloadMessageResourceFeishu } from "./media.js";
-import { extractMentionTargets, extractMessageBody, isMentionForwardRequest } from "./mention.js";
+import {
+  escapeRegExp,
+  extractMentionTargets,
+  extractMessageBody,
+  isMentionForwardRequest,
+} from "./mention.js";
 import {
   resolveFeishuGroupConfig,
   resolveFeishuReplyPolicy,
@@ -25,6 +28,8 @@ import {
 import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu, sendMessageFeishu } from "./send.js";
+import type { FeishuMessageContext, FeishuMediaInfo, ResolvedFeishuAccount } from "./types.js";
+import type { DynamicAgentCreationConfig } from "./types.js";
 
 // --- Permission error extraction ---
 // Extract permission grant URL from Feishu API error response.
@@ -199,17 +204,17 @@ function checkBotMentioned(event: FeishuMessageEvent, botOpenId?: string): boole
   return false;
 }
 
-function stripBotMention(
+export function stripBotMention(
   text: string,
   mentions?: FeishuMessageEvent["message"]["mentions"],
 ): string {
   if (!mentions || mentions.length === 0) return text;
   let result = text;
   for (const mention of mentions) {
-    result = result.replace(new RegExp(`@${mention.name}\\s*`, "g"), "").trim();
-    result = result.replace(new RegExp(mention.key, "g"), "").trim();
+    result = result.replace(new RegExp(`@${escapeRegExp(mention.name)}\\s*`, "g"), "");
+    result = result.replace(new RegExp(escapeRegExp(mention.key), "g"), "");
   }
-  return result;
+  return result.trim();
 }
 
 /**

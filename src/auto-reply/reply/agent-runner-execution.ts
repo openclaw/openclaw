@@ -40,12 +40,23 @@ import type { FollowupRun } from "./queue.js";
 import { createBlockReplyDeliveryHandler } from "./reply-delivery.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
+export type RuntimeFallbackAttempt = {
+  provider: string;
+  model: string;
+  error: string;
+  reason?: string;
+  status?: number;
+  code?: string;
+};
+
 export type AgentRunLoopResult =
   | {
       kind: "success";
+      runId: string;
       runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
       fallbackProvider?: string;
       fallbackModel?: string;
+      fallbackAttempts: RuntimeFallbackAttempt[];
       didLogHeartbeatStrip: boolean;
       autoCompactionCompleted: boolean;
       /** Payload keys sent directly (not via pipeline) during tool flush. */
@@ -88,7 +99,14 @@ export async function runAgentTurnWithFallback(params: {
   const directlySentBlockKeys = new Set<string>();
 
   const runId = params.opts?.runId ?? crypto.randomUUID();
-  params.opts?.onAgentRunStart?.(runId);
+  let didNotifyAgentRunStart = false;
+  const notifyAgentRunStart = () => {
+    if (didNotifyAgentRunStart) {
+      return;
+    }
+    didNotifyAgentRunStart = true;
+    params.opts?.onAgentRunStart?.(runId);
+  };
   if (params.sessionKey) {
     registerAgentRunContext(runId, {
       sessionKey: params.sessionKey,
@@ -99,6 +117,7 @@ export async function runAgentTurnWithFallback(params: {
   let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
   let fallbackProvider = params.followupRun.run.provider;
   let fallbackModel = params.followupRun.run.model;
+  let fallbackAttempts: RuntimeFallbackAttempt[] = [];
   let didResetAfterCompactionFailure = false;
   let didRetryTransientHttpError = false;
 
@@ -160,6 +179,7 @@ export async function runAgentTurnWithFallback(params: {
 
           if (isCliProvider(provider, params.followupRun.run.config)) {
             const startedAt = Date.now();
+            notifyAgentRunStart();
             emitAgentEvent({
               runId,
               stream: "lifecycle",
@@ -310,6 +330,12 @@ export async function runAgentTurnWithFallback(params: {
                 : undefined,
             onReasoningEnd: params.opts?.onReasoningEnd,
             onAgentEvent: async (evt) => {
+              // Signal run start only after the embedded agent emits real activity.
+              const hasLifecyclePhase =
+                evt.stream === "lifecycle" && typeof evt.data.phase === "string";
+              if (evt.stream !== "lifecycle" || hasLifecyclePhase) {
+                notifyAgentRunStart();
+              }
               // Trigger typing when tools start executing.
               // Must await to ensure typing indicator starts before tool summaries are emitted.
               if (evt.stream === "tool") {
@@ -383,6 +409,16 @@ export async function runAgentTurnWithFallback(params: {
       runResult = fallbackResult.result;
       fallbackProvider = fallbackResult.provider;
       fallbackModel = fallbackResult.model;
+      fallbackAttempts = Array.isArray(fallbackResult.attempts)
+        ? fallbackResult.attempts.map((attempt) => ({
+            provider: String(attempt.provider ?? ""),
+            model: String(attempt.model ?? ""),
+            error: String(attempt.error ?? ""),
+            reason: attempt.reason ? String(attempt.reason) : undefined,
+            status: typeof attempt.status === "number" ? attempt.status : undefined,
+            code: attempt.code ? String(attempt.code) : undefined,
+          }))
+        : [];
 
       // Some embedded runs surface context overflow as an error payload instead of throwing.
       // Treat those as a session-level failure and auto-recover by starting a fresh session.
@@ -529,9 +565,11 @@ export async function runAgentTurnWithFallback(params: {
 
   return {
     kind: "success",
+    runId,
     runResult,
     fallbackProvider,
     fallbackModel,
+    fallbackAttempts,
     didLogHeartbeatStrip,
     autoCompactionCompleted,
     directlySentBlockKeys: directlySentBlockKeys.size > 0 ? directlySentBlockKeys : undefined,
