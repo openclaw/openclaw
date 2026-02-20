@@ -2,8 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 import { handleAbortChat, type ChatHost } from "./app-chat.ts";
 
 const requestMock = vi.fn().mockResolvedValue({});
+type TestChatHost = ChatHost & {
+  client: {
+    request: typeof requestMock;
+  };
+};
 
-function createHost(overrides: Partial<ChatHost> = {}): ChatHost {
+function createHost(overrides: Partial<TestChatHost> = {}): TestChatHost {
   return {
     connected: true,
     client: { request: requestMock },
