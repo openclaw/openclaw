@@ -258,17 +258,24 @@ export async function performStartupCatchUp(
   const dmChannelIds: string[] = [];
   if (ctx.dmEnabled) {
     try {
-      const dmResult = await ctx.app.client.conversations.list({
-        token: ctx.botToken,
-        types: "im",
-        limit: 200,
-      });
-      for (const ch of (dmResult as { channels?: Array<{ id?: string; is_open?: boolean }> })
-        .channels ?? []) {
-        if (ch.id) {
-          dmChannelIds.push(ch.id);
+      let dmCursor: string | undefined;
+      do {
+        const dmResult = await ctx.app.client.conversations.list({
+          token: ctx.botToken,
+          types: "im",
+          limit: 200,
+          ...(dmCursor ? { cursor: dmCursor } : {}),
+        });
+        for (const ch of (dmResult as { channels?: Array<{ id?: string; is_open?: boolean }> })
+          .channels ?? []) {
+          if (ch.id) {
+            dmChannelIds.push(ch.id);
+          }
         }
-      }
+        const next = (dmResult as { response_metadata?: { next_cursor?: string } })
+          .response_metadata?.next_cursor;
+        dmCursor = typeof next === "string" && next.trim().length > 0 ? next.trim() : undefined;
+      } while (dmCursor);
     } catch (err) {
       runtime.error?.(`slack catch-up [${accountId}]: failed to list DM channels: ${String(err)}`);
     }
@@ -342,9 +349,6 @@ export async function performStartupCatchUp(
       for (const msg of sorted) {
         // Skip bot's own messages
         if (msg.user === ctx.botUserId) {
-          continue;
-        }
-        if (msg.bot_id && msg.user === ctx.botUserId) {
           continue;
         }
 
