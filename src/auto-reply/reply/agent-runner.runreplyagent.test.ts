@@ -158,6 +158,7 @@ function createMinimalRun(params?: {
         resolvedBlockStreamingBreak: "message_end",
         shouldInjectGroupIntro: false,
         typingMode: params?.typingMode ?? "instant",
+        workspaceDir: "/tmp",
       });
     },
   };
@@ -265,6 +266,7 @@ async function runReplyAgentWithBase(params: {
     resolvedBlockStreamingBreak: "message_end",
     shouldInjectGroupIntro: false,
     typingMode: params.typingMode ?? "instant",
+    workspaceDir: "/tmp",
   });
 }
 

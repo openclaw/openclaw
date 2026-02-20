@@ -460,5 +460,6 @@ export async function runPreparedReply(
     sessionCtx,
     shouldInjectGroupIntro,
     typingMode,
+    workspaceDir,
   });
 }

@@ -159,6 +159,7 @@ describe("runReplyAgent onAgentRunStart", () => {
       resolvedBlockStreamingBreak: "message_end",
       shouldInjectGroupIntro: false,
       typingMode: "instant",
+      workspaceDir: "/tmp",
     });
   }
 
@@ -286,6 +287,7 @@ describe("runReplyAgent authProfileId fallback scoping", () => {
       resolvedBlockStreamingBreak: "message_end",
       shouldInjectGroupIntro: false,
       typingMode: "instant",
+      workspaceDir: "/tmp",
     });
 
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
@@ -428,6 +430,7 @@ describe("runReplyAgent auto-compaction token update", () => {
       resolvedBlockStreamingBreak: "message_end",
       shouldInjectGroupIntro: false,
       typingMode: "instant",
+      workspaceDir: "/tmp",
     });
 
     const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
@@ -489,6 +492,7 @@ describe("runReplyAgent auto-compaction token update", () => {
       resolvedBlockStreamingBreak: "message_end",
       shouldInjectGroupIntro: false,
       typingMode: "instant",
+      workspaceDir: "/tmp",
     });
 
     const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
@@ -579,6 +583,7 @@ describe("runReplyAgent block streaming", () => {
       resolvedBlockStreamingBreak: "text_end",
       shouldInjectGroupIntro: false,
       typingMode: "instant",
+      workspaceDir: "/tmp",
     });
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
@@ -681,6 +686,7 @@ describe("runReplyAgent block streaming", () => {
       resolvedBlockStreamingBreak: "text_end",
       shouldInjectGroupIntro: false,
       typingMode: "instant",
+      workspaceDir: "/tmp",
     });
 
     await vi.advanceTimersByTimeAsync(5);
@@ -746,6 +752,7 @@ describe("runReplyAgent claude-cli routing", () => {
       resolvedBlockStreamingBreak: "message_end",
       shouldInjectGroupIntro: false,
       typingMode: "instant",
+      workspaceDir: "/tmp",
     });
   }
 
@@ -847,6 +854,7 @@ describe("runReplyAgent messaging tool suppression", () => {
       resolvedBlockStreamingBreak: "message_end",
       shouldInjectGroupIntro: false,
       typingMode: "instant",
+      workspaceDir: "/tmp",
     });
   }
 
@@ -1019,6 +1027,7 @@ describe("runReplyAgent reminder commitment guard", () => {
       resolvedBlockStreamingBreak: "message_end",
       shouldInjectGroupIntro: false,
       typingMode: "instant",
+      workspaceDir: "/tmp",
     });
   }
 
@@ -1119,6 +1128,7 @@ describe("runReplyAgent fallback reasoning tags", () => {
       resolvedBlockStreamingBreak: "message_end",
       shouldInjectGroupIntro: false,
       typingMode: "instant",
+      workspaceDir: "/tmp",
     });
   }
 
@@ -1239,6 +1249,7 @@ describe("runReplyAgent response usage footer", () => {
       resolvedBlockStreamingBreak: "message_end",
       shouldInjectGroupIntro: false,
       typingMode: "instant",
+      workspaceDir: "/tmp",
     });
   }
 
@@ -1346,6 +1357,7 @@ describe("runReplyAgent transient HTTP retry", () => {
       resolvedBlockStreamingBreak: "message_end",
       shouldInjectGroupIntro: false,
       typingMode: "instant",
+      workspaceDir: "/tmp",
     });
 
     await vi.advanceTimersByTimeAsync(2_500);

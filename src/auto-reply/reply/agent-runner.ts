@@ -125,6 +125,7 @@ export async function runReplyAgent(params: {
   sessionCtx: TemplateContext;
   shouldInjectGroupIntro: boolean;
   typingMode: TypingMode;
+  workspaceDir: string;
 }): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   const {
     commandBody,
@@ -151,6 +152,7 @@ export async function runReplyAgent(params: {
     sessionCtx,
     shouldInjectGroupIntro,
     typingMode,
+    workspaceDir,
   } = params;
 
   let activeSessionEntry = sessionEntry;
@@ -672,7 +674,6 @@ export async function runReplyAgent(params: {
 
       // Inject post-compaction workspace context for the next agent turn
       if (sessionKey) {
-        const workspaceDir = process.cwd();
         readPostCompactionContext(workspaceDir)
           .then((contextContent) => {
             if (contextContent) {
@@ -707,7 +708,6 @@ export async function runReplyAgent(params: {
         if (sessionFile) {
           const messages = readSessionMessages(sessionFile);
           const readPaths = extractReadPaths(messages);
-          const workspaceDir = process.cwd();
           const audit = auditPostCompactionReads(readPaths, workspaceDir);
           if (!audit.passed) {
             enqueueSystemEvent(formatAuditWarning(audit.missingPatterns), { sessionKey });
