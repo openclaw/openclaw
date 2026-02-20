@@ -176,6 +176,7 @@ export function logSessionStateChange(
   const isProbeSession = state.sessionId?.startsWith("probe-") ?? false;
   const prevState = state.state;
   state.state = params.state;
+  state.lastReason = params.reason;
   state.lastActivity = Date.now();
   if (params.state === "idle") {
     state.queueDepth = Math.max(0, state.queueDepth - 1);

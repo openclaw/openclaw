@@ -6,6 +6,7 @@ export type SessionState = {
   lastActivity: number;
   state: SessionStateValue;
   queueDepth: number;
+  lastReason?: string;
   toolCallHistory?: ToolCallRecord[];
   toolLoopWarningBuckets?: Map<string, number>;
   commandPollCounts?: Map<string, { count: number; lastPollAt: number }>;
@@ -74,6 +75,22 @@ function findStateBySessionId(sessionId: string): SessionState | undefined {
     }
   }
   return undefined;
+}
+
+export function peekDiagnosticSessionState(ref: SessionRef): SessionState | undefined {
+  pruneDiagnosticSessionStates();
+  const key = resolveSessionKey(ref);
+  const existing =
+    diagnosticSessionStates.get(key) ?? (ref.sessionId && findStateBySessionId(ref.sessionId));
+  if (existing) {
+    if (ref.sessionId) {
+      existing.sessionId = ref.sessionId;
+    }
+    if (ref.sessionKey) {
+      existing.sessionKey = ref.sessionKey;
+    }
+  }
+  return existing;
 }
 
 export function getDiagnosticSessionState(ref: SessionRef): SessionState {
