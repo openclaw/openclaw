@@ -1,7 +1,7 @@
-import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -26,7 +26,7 @@ describe("gateway chat.inject transcript writes", () => {
     );
 
     vi.doMock("../session-utils.js", async (importOriginal) => {
-      const original = await importOriginal();
+      const original = await importOriginal<typeof import("../session-utils.js")>();
       return {
         ...original,
         loadSessionEntry: () => ({
@@ -50,7 +50,10 @@ describe("gateway chat.inject transcript writes", () => {
     await chatHandlers["chat.inject"]({
       params: { sessionKey: "k1", message: "hello" },
       respond,
-      context,
+      req: {} as never,
+      client: null as never,
+      isWebchatConnect: () => false,
+      context: context as unknown as GatewayRequestContext,
     });
 
     expect(respond).toHaveBeenCalled();

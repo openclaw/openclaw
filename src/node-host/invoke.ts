@@ -12,12 +12,12 @@ import {
   evaluateShellAllowlist,
   requiresExecApproval,
   normalizeExecApprovals,
+  mergeExecApprovalsSocketDefaults,
   recordAllowlistUse,
   resolveExecApprovals,
   resolveSafeBins,
   ensureExecApprovals,
   readExecApprovalsSnapshot,
-  resolveExecApprovalsSocketPath,
   saveExecApprovals,
   type ExecAsk,
   type ExecApprovalsFile,
@@ -31,6 +31,8 @@ import {
   type ExecHostResponse,
   type ExecHostRunResult,
 } from "../infra/exec-host.js";
+import { getTrustedSafeBinDirs } from "../infra/exec-safe-bin-trust.js";
+import { validateSystemRunCommandConsistency } from "../infra/system-run-command.js";
 import { runBrowserProxyCommand } from "./invoke-browser.js";
 
 const OUTPUT_CAP = 200_000;
@@ -134,33 +136,22 @@ function resolveExecAsk(value?: string): ExecAsk {
   return value === "off" || value === "on-miss" || value === "always" ? value : "on-miss";
 }
 
-function sanitizeEnv(
+export function sanitizeEnv(
   overrides?: Record<string, string> | null,
 ): Record<string, string> | undefined {
   if (!overrides) {
     return undefined;
   }
   const merged = { ...process.env } as Record<string, string>;
-  const basePath = process.env.PATH ?? DEFAULT_NODE_PATH;
   for (const [rawKey, value] of Object.entries(overrides)) {
     const key = rawKey.trim();
     if (!key) {
       continue;
     }
     const upper = key.toUpperCase();
+    // PATH is part of the security boundary (command resolution + safe-bin checks). Never allow
+    // request-scoped PATH overrides from agents/gateways.
     if (upper === "PATH") {
-      const trimmed = value.trim();
-      if (!trimmed) {
-        continue;
-      }
-      if (!basePath || trimmed === basePath) {
-        merged[key] = trimmed;
-        continue;
-      }
-      const suffix = `${path.delimiter}${basePath}`;
-      if (trimmed.endsWith(suffix)) {
-        merged[key] = trimmed;
-      }
       continue;
     }
     if (blockedEnvKeys.has(upper)) {
@@ -172,22 +163,6 @@ function sanitizeEnv(
     merged[key] = value;
   }
   return merged;
-}
-
-function formatCommand(argv: string[]): string {
-  return argv
-    .map((arg) => {
-      const trimmed = arg.trim();
-      if (!trimmed) {
-        return '""';
-      }
-      const needsQuotes = /\s|"/.test(trimmed);
-      if (!needsQuotes) {
-        return trimmed;
-      }
-      return `"${trimmed.replace(/"/g, '\\"')}"`;
-    })
-    .join(" ");
 }
 
 function truncateOutput(raw: string, maxChars: number): { text: string; truncated: boolean } {
@@ -362,6 +337,39 @@ function buildExecEventPayload(payload: ExecEventPayload): ExecEventPayload {
   return { ...payload, output: text };
 }
 
+async function sendExecFinishedEvent(params: {
+  client: GatewayClient;
+  sessionKey: string;
+  runId: string;
+  cmdText: string;
+  result: {
+    stdout?: string;
+    stderr?: string;
+    error?: string | null;
+    exitCode?: number | null;
+    timedOut?: boolean;
+    success?: boolean;
+  };
+}) {
+  const combined = [params.result.stdout, params.result.stderr, params.result.error]
+    .filter(Boolean)
+    .join("\n");
+  await sendNodeEvent(
+    params.client,
+    "exec.finished",
+    buildExecEventPayload({
+      sessionKey: params.sessionKey,
+      runId: params.runId,
+      host: "node",
+      command: params.cmdText,
+      exitCode: params.result.exitCode ?? undefined,
+      timedOut: params.result.timedOut,
+      success: params.result.success,
+      output: combined,
+    }),
+  );
+}
+
 async function runViaMacAppExecHost(params: {
   approvals: ReturnType<typeof resolveExecApprovals>;
   request: ExecHostRequest;
@@ -372,6 +380,48 @@ async function runViaMacAppExecHost(params: {
     token: approvals.token,
     request,
   });
+}
+
+async function sendJsonPayloadResult(
+  client: GatewayClient,
+  frame: NodeInvokeRequestPayload,
+  payload: unknown,
+) {
+  await sendInvokeResult(client, frame, {
+    ok: true,
+    payloadJSON: JSON.stringify(payload),
+  });
+}
+
+async function sendRawPayloadResult(
+  client: GatewayClient,
+  frame: NodeInvokeRequestPayload,
+  payloadJSON: string,
+) {
+  await sendInvokeResult(client, frame, {
+    ok: true,
+    payloadJSON,
+  });
+}
+
+async function sendErrorResult(
+  client: GatewayClient,
+  frame: NodeInvokeRequestPayload,
+  code: string,
+  message: string,
+) {
+  await sendInvokeResult(client, frame, {
+    ok: false,
+    error: { code, message },
+  });
+}
+
+async function sendInvalidRequestResult(
+  client: GatewayClient,
+  frame: NodeInvokeRequestPayload,
+  err: unknown,
+) {
+  await sendErrorResult(client, frame, "INVALID_REQUEST", String(err));
 }
 
 export async function handleInvoke(
@@ -390,17 +440,11 @@ export async function handleInvoke(
         hash: snapshot.hash,
         file: redactExecApprovals(snapshot.file),
       };
-      await sendInvokeResult(client, frame, {
-        ok: true,
-        payloadJSON: JSON.stringify(payload),
-      });
+      await sendJsonPayloadResult(client, frame, payload);
     } catch (err) {
       const message = String(err);
       const code = message.toLowerCase().includes("timed out") ? "TIMEOUT" : "INVALID_REQUEST";
-      await sendInvokeResult(client, frame, {
-        ok: false,
-        error: { code, message },
-      });
+      await sendErrorResult(client, frame, code, message);
     }
     return;
   }
@@ -415,18 +459,7 @@ export async function handleInvoke(
       const snapshot = readExecApprovalsSnapshot();
       requireExecApprovalsBaseHash(params, snapshot);
       const normalized = normalizeExecApprovals(params.file);
-      const currentSocketPath = snapshot.file.socket?.path?.trim();
-      const currentToken = snapshot.file.socket?.token?.trim();
-      const socketPath =
-        normalized.socket?.path?.trim() ?? currentSocketPath ?? resolveExecApprovalsSocketPath();
-      const token = normalized.socket?.token?.trim() ?? currentToken ?? "";
-      const next: ExecApprovalsFile = {
-        ...normalized,
-        socket: {
-          path: socketPath,
-          token,
-        },
-      };
+      const next = mergeExecApprovalsSocketDefaults({ normalized, current: snapshot.file });
       saveExecApprovals(next);
       const nextSnapshot = readExecApprovalsSnapshot();
       const payload: ExecApprovalsSnapshot = {
@@ -435,15 +468,9 @@ export async function handleInvoke(
         hash: nextSnapshot.hash,
         file: redactExecApprovals(nextSnapshot.file),
       };
-      await sendInvokeResult(client, frame, {
-        ok: true,
-        payloadJSON: JSON.stringify(payload),
-      });
+      await sendJsonPayloadResult(client, frame, payload);
     } catch (err) {
-      await sendInvokeResult(client, frame, {
-        ok: false,
-        error: { code: "INVALID_REQUEST", message: String(err) },
-      });
+      await sendInvalidRequestResult(client, frame, err);
     }
     return;
   }
@@ -456,15 +483,9 @@ export async function handleInvoke(
       }
       const env = sanitizeEnv(undefined);
       const payload = await handleSystemWhich(params, env);
-      await sendInvokeResult(client, frame, {
-        ok: true,
-        payloadJSON: JSON.stringify(payload),
-      });
+      await sendJsonPayloadResult(client, frame, payload);
     } catch (err) {
-      await sendInvokeResult(client, frame, {
-        ok: false,
-        error: { code: "INVALID_REQUEST", message: String(err) },
-      });
+      await sendInvalidRequestResult(client, frame, err);
     }
     return;
   }
@@ -472,24 +493,15 @@ export async function handleInvoke(
   if (command === "browser.proxy") {
     try {
       const payload = await runBrowserProxyCommand(frame.paramsJSON);
-      await sendInvokeResult(client, frame, {
-        ok: true,
-        payloadJSON: payload,
-      });
+      await sendRawPayloadResult(client, frame, payload);
     } catch (err) {
-      await sendInvokeResult(client, frame, {
-        ok: false,
-        error: { code: "INVALID_REQUEST", message: String(err) },
-      });
+      await sendInvalidRequestResult(client, frame, err);
     }
     return;
   }
 
   if (command !== "system.run") {
-    await sendInvokeResult(client, frame, {
-      ok: false,
-      error: { code: "UNAVAILABLE", message: "command not supported" },
-    });
+    await sendErrorResult(client, frame, "UNAVAILABLE", "command not supported");
     return;
   }
 
@@ -497,24 +509,28 @@ export async function handleInvoke(
   try {
     params = decodeParams<SystemRunParams>(frame.paramsJSON);
   } catch (err) {
-    await sendInvokeResult(client, frame, {
-      ok: false,
-      error: { code: "INVALID_REQUEST", message: String(err) },
-    });
+    await sendInvalidRequestResult(client, frame, err);
     return;
   }
 
   if (!Array.isArray(params.command) || params.command.length === 0) {
-    await sendInvokeResult(client, frame, {
-      ok: false,
-      error: { code: "INVALID_REQUEST", message: "command required" },
-    });
+    await sendErrorResult(client, frame, "INVALID_REQUEST", "command required");
     return;
   }
 
   const argv = params.command.map((item) => String(item));
   const rawCommand = typeof params.rawCommand === "string" ? params.rawCommand.trim() : "";
-  const cmdText = rawCommand || formatCommand(argv);
+  const consistency = validateSystemRunCommandConsistency({
+    argv,
+    rawCommand: rawCommand || null,
+  });
+  if (!consistency.ok) {
+    await sendErrorResult(client, frame, "INVALID_REQUEST", consistency.message);
+    return;
+  }
+
+  const shellCommand = consistency.shellCommand;
+  const cmdText = consistency.cmdText;
   const agentId = params.agentId?.trim() || undefined;
   const cfg = loadConfig();
   const agentExec = agentId ? resolveAgentConfig(cfg, agentId)?.tools?.exec : undefined;
@@ -531,18 +547,20 @@ export async function handleInvoke(
   const runId = params.runId?.trim() || crypto.randomUUID();
   const env = sanitizeEnv(params.env ?? undefined);
   const safeBins = resolveSafeBins(agentExec?.safeBins ?? cfg.tools?.exec?.safeBins);
+  const trustedSafeBinDirs = getTrustedSafeBinDirs();
   const bins = autoAllowSkills ? await skillBins.current() : new Set<string>();
   let analysisOk = false;
   let allowlistMatches: ExecAllowlistEntry[] = [];
   let allowlistSatisfied = false;
   let segments: ExecCommandSegment[] = [];
-  if (rawCommand) {
+  if (shellCommand) {
     const allowlistEval = evaluateShellAllowlist({
-      command: rawCommand,
+      command: shellCommand,
       allowlist: approvals.allowlist,
       safeBins,
       cwd: params.cwd ?? undefined,
       env,
+      trustedSafeBinDirs,
       skillBins: bins,
       autoAllowSkills,
       platform: process.platform,
@@ -559,6 +577,7 @@ export async function handleInvoke(
       allowlist: approvals.allowlist,
       safeBins,
       cwd: params.cwd ?? undefined,
+      trustedSafeBinDirs,
       skillBins: bins,
       autoAllowSkills,
     });
@@ -569,7 +588,7 @@ export async function handleInvoke(
     segments = analysis.segments;
   }
   const isWindows = process.platform === "win32";
-  const cmdInvocation = rawCommand
+  const cmdInvocation = shellCommand
     ? isCmdExeInvocation(segments[0]?.argv ?? [])
     : isCmdExeInvocation(argv);
   if (security === "allowlist" && isWindows && cmdInvocation) {
@@ -585,7 +604,7 @@ export async function handleInvoke(
         : null;
     const execRequest: ExecHostRequest = {
       command: argv,
-      rawCommand: rawCommand || null,
+      rawCommand: rawCommand || shellCommand || null,
       cwd: params.cwd ?? null,
       env: params.env ?? null,
       timeoutMs: params.timeoutMs ?? null,
@@ -637,21 +656,7 @@ export async function handleInvoke(
       return;
     } else {
       const result: ExecHostRunResult = response.payload;
-      const combined = [result.stdout, result.stderr, result.error].filter(Boolean).join("\n");
-      await sendNodeEvent(
-        client,
-        "exec.finished",
-        buildExecEventPayload({
-          sessionKey,
-          runId,
-          host: "node",
-          command: cmdText,
-          exitCode: result.exitCode,
-          timedOut: result.timedOut,
-          success: result.success,
-          output: combined,
-        }),
-      );
+      await sendExecFinishedEvent({ client, sessionKey, runId, cmdText, result });
       await sendInvokeResult(client, frame, {
         ok: true,
         payloadJSON: JSON.stringify(result),
@@ -780,7 +785,7 @@ export async function handleInvoke(
     security === "allowlist" &&
     isWindows &&
     !approvedByAsk &&
-    rawCommand &&
+    shellCommand &&
     analysisOk &&
     allowlistSatisfied &&
     segments.length === 1 &&
@@ -803,21 +808,7 @@ export async function handleInvoke(
       result.stdout = `${result.stdout}\n${suffix}`;
     }
   }
-  const combined = [result.stdout, result.stderr, result.error].filter(Boolean).join("\n");
-  await sendNodeEvent(
-    client,
-    "exec.finished",
-    buildExecEventPayload({
-      sessionKey,
-      runId,
-      host: "node",
-      command: cmdText,
-      exitCode: result.exitCode,
-      timedOut: result.timedOut,
-      success: result.success,
-      output: combined,
-    }),
-  );
+  await sendExecFinishedEvent({ client, sessionKey, runId, cmdText, result });
 
   await sendInvokeResult(client, frame, {
     ok: true,

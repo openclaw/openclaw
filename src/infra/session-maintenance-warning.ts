@@ -1,3 +1,4 @@
+import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry, SessionMaintenanceWarning } from "../config/sessions.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
@@ -100,6 +101,7 @@ export async function deliverSessionMaintenanceWarning(params: WarningParams): P
       accountId: target.accountId,
       threadId: target.threadId,
       payloads: [{ text }],
+      agentId: resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg }),
     });
   } catch (err) {
     console.warn(`Failed to deliver session maintenance warning: ${String(err)}`);

@@ -80,7 +80,19 @@ export async function inspectPathPermissions(
     };
   }
 
-  const bits = modeBits(st.mode);
+  let effectiveMode = st.mode;
+  let effectiveIsDir = st.isDir;
+  if (st.isSymlink) {
+    try {
+      const target = await fs.stat(targetPath);
+      effectiveMode = typeof target.mode === "number" ? target.mode : st.mode;
+      effectiveIsDir = target.isDirectory();
+    } catch {
+      // Keep lstat-derived metadata when target lookup fails.
+    }
+  }
+
+  const bits = modeBits(effectiveMode);
   const platform = opts?.platform ?? process.platform;
 
   if (platform === "win32") {
@@ -89,8 +101,8 @@ export async function inspectPathPermissions(
       return {
         ok: true,
         isSymlink: st.isSymlink,
-        isDir: st.isDir,
-        mode: st.mode,
+        isDir: effectiveIsDir,
+        mode: effectiveMode,
         bits,
         source: "unknown",
         worldWritable: false,
@@ -103,8 +115,8 @@ export async function inspectPathPermissions(
     return {
       ok: true,
       isSymlink: st.isSymlink,
-      isDir: st.isDir,
-      mode: st.mode,
+      isDir: effectiveIsDir,
+      mode: effectiveMode,
       bits,
       source: "windows-acl",
       worldWritable: acl.untrustedWorld.some((entry) => entry.canWrite),
@@ -118,8 +130,8 @@ export async function inspectPathPermissions(
   return {
     ok: true,
     isSymlink: st.isSymlink,
-    isDir: st.isDir,
-    mode: st.mode,
+    isDir: effectiveIsDir,
+    mode: effectiveMode,
     bits,
     source: "posix",
     worldWritable: isWorldWritable(bits),

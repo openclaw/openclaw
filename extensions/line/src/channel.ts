@@ -119,12 +119,13 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
         },
       };
     },
-    isConfigured: (account) => Boolean(account.channelAccessToken?.trim()),
+    isConfigured: (account) =>
+      Boolean(account.channelAccessToken?.trim() && account.channelSecret?.trim()),
     describeAccount: (account) => ({
       accountId: account.accountId,
       name: account.name,
       enabled: account.enabled,
-      configured: Boolean(account.channelAccessToken?.trim()),
+      configured: Boolean(account.channelAccessToken?.trim() && account.channelSecret?.trim()),
       tokenSource: account.tokenSource ?? undefined,
     }),
     resolveAllowFrom: ({ cfg, accountId }) =>
@@ -603,7 +604,9 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
     probeAccount: async ({ account, timeoutMs }) =>
       getLineRuntime().channel.line.probeLineBot(account.channelAccessToken, timeoutMs),
     buildAccountSnapshot: ({ account, runtime, probe }) => {
-      const configured = Boolean(account.channelAccessToken?.trim());
+      const configured = Boolean(
+        account.channelAccessToken?.trim() && account.channelSecret?.trim(),
+      );
       return {
         accountId: account.accountId,
         name: account.name,
@@ -626,6 +629,16 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
       const account = ctx.account;
       const token = account.channelAccessToken.trim();
       const secret = account.channelSecret.trim();
+      if (!token) {
+        throw new Error(
+          `LINE webhook mode requires a non-empty channel access token for account "${account.accountId}".`,
+        );
+      }
+      if (!secret) {
+        throw new Error(
+          `LINE webhook mode requires a non-empty channel secret for account "${account.accountId}".`,
+        );
+      }
 
       let lineBotLabel = "";
       try {

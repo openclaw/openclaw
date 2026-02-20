@@ -37,6 +37,18 @@ describe("oauth paths", () => {
 });
 
 describe("state + config path candidates", () => {
+  function expectOpenClawHomeDefaults(env: NodeJS.ProcessEnv): void {
+    const configuredHome = env.OPENCLAW_HOME;
+    if (!configuredHome) {
+      throw new Error("OPENCLAW_HOME must be set for this assertion helper");
+    }
+    const resolvedHome = path.resolve(configuredHome);
+    expect(resolveStateDir(env)).toBe(path.join(resolvedHome, ".openclaw"));
+
+    const candidates = resolveDefaultConfigCandidates(env);
+    expect(candidates[0]).toBe(path.join(resolvedHome, ".openclaw", "openclaw.json"));
+  }
+
   it("uses OPENCLAW_STATE_DIR when set", () => {
     const env = {
       OPENCLAW_STATE_DIR: "/new/state",
@@ -49,12 +61,7 @@ describe("state + config path candidates", () => {
     const env = {
       OPENCLAW_HOME: "/srv/openclaw-home",
     } as NodeJS.ProcessEnv;
-
-    const resolvedHome = path.resolve("/srv/openclaw-home");
-    expect(resolveStateDir(env)).toBe(path.join(resolvedHome, ".openclaw"));
-
-    const candidates = resolveDefaultConfigCandidates(env);
-    expect(candidates[0]).toBe(path.join(resolvedHome, ".openclaw", "openclaw.json"));
+    expectOpenClawHomeDefaults(env);
   });
 
   it("prefers OPENCLAW_HOME over HOME for default state/config locations", () => {
@@ -62,12 +69,7 @@ describe("state + config path candidates", () => {
       OPENCLAW_HOME: "/srv/openclaw-home",
       HOME: "/home/other",
     } as NodeJS.ProcessEnv;
-
-    const resolvedHome = path.resolve("/srv/openclaw-home");
-    expect(resolveStateDir(env)).toBe(path.join(resolvedHome, ".openclaw"));
-
-    const candidates = resolveDefaultConfigCandidates(env);
-    expect(candidates[0]).toBe(path.join(resolvedHome, ".openclaw", "openclaw.json"));
+    expectOpenClawHomeDefaults(env);
   });
 
   it("orders default config candidates in a stable order", () => {
@@ -77,20 +79,20 @@ describe("state + config path candidates", () => {
     const expected = [
       path.join(resolvedHome, ".openclaw", "openclaw.json"),
       path.join(resolvedHome, ".openclaw", "clawdbot.json"),
-      path.join(resolvedHome, ".openclaw", "moltbot.json"),
       path.join(resolvedHome, ".openclaw", "moldbot.json"),
+      path.join(resolvedHome, ".openclaw", "moltbot.json"),
       path.join(resolvedHome, ".clawdbot", "openclaw.json"),
       path.join(resolvedHome, ".clawdbot", "clawdbot.json"),
-      path.join(resolvedHome, ".clawdbot", "moltbot.json"),
       path.join(resolvedHome, ".clawdbot", "moldbot.json"),
-      path.join(resolvedHome, ".moltbot", "openclaw.json"),
-      path.join(resolvedHome, ".moltbot", "clawdbot.json"),
-      path.join(resolvedHome, ".moltbot", "moltbot.json"),
-      path.join(resolvedHome, ".moltbot", "moldbot.json"),
+      path.join(resolvedHome, ".clawdbot", "moltbot.json"),
       path.join(resolvedHome, ".moldbot", "openclaw.json"),
       path.join(resolvedHome, ".moldbot", "clawdbot.json"),
-      path.join(resolvedHome, ".moldbot", "moltbot.json"),
       path.join(resolvedHome, ".moldbot", "moldbot.json"),
+      path.join(resolvedHome, ".moldbot", "moltbot.json"),
+      path.join(resolvedHome, ".moltbot", "openclaw.json"),
+      path.join(resolvedHome, ".moltbot", "clawdbot.json"),
+      path.join(resolvedHome, ".moltbot", "moldbot.json"),
+      path.join(resolvedHome, ".moltbot", "moltbot.json"),
     ];
     expect(candidates).toEqual(expected);
   });

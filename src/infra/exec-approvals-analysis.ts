@@ -1,22 +1,10 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
+import { splitShellArgs } from "../utils/shell-argv.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.js";
+import { expandHomePrefix } from "./home-dir.js";
 
-export const DEFAULT_SAFE_BINS = ["jq", "grep", "cut", "sort", "uniq", "head", "tail", "tr", "wc"];
-
-function expandHome(value: string): string {
-  if (!value) {
-    return value;
-  }
-  if (value === "~") {
-    return os.homedir();
-  }
-  if (value.startsWith("~/")) {
-    return path.join(os.homedir(), value.slice(2));
-  }
-  return value;
-}
+export const DEFAULT_SAFE_BINS = ["jq", "cut", "uniq", "head", "tail", "tr", "wc"];
 
 export type CommandResolution = {
   rawExecutable: string;
@@ -57,7 +45,7 @@ function parseFirstToken(command: string): string | null {
 }
 
 function resolveExecutablePath(rawExecutable: string, cwd?: string, env?: NodeJS.ProcessEnv) {
-  const expanded = rawExecutable.startsWith("~") ? expandHome(rawExecutable) : rawExecutable;
+  const expanded = rawExecutable.startsWith("~") ? expandHomePrefix(rawExecutable) : rawExecutable;
   if (expanded.includes("/") || expanded.includes("\\")) {
     if (path.isAbsolute(expanded)) {
       return isExecutableFile(expanded) ? expanded : undefined;
@@ -171,7 +159,7 @@ function matchesPattern(pattern: string, target: string): boolean {
   if (!trimmed) {
     return false;
   }
-  const expanded = trimmed.startsWith("~") ? expandHome(trimmed) : trimmed;
+  const expanded = trimmed.startsWith("~") ? expandHomePrefix(trimmed) : trimmed;
   const hasWildcard = /[*?]/.test(expanded);
   let normalizedPattern = expanded;
   let normalizedTarget = target;
@@ -199,7 +187,7 @@ export function resolveAllowlistCandidatePath(
   if (!raw) {
     return undefined;
   }
-  const expanded = raw.startsWith("~") ? expandHome(raw) : raw;
+  const expanded = raw.startsWith("~") ? expandHomePrefix(raw) : raw;
   if (!expanded.includes("/") && !expanded.includes("\\")) {
     return undefined;
   }
@@ -240,11 +228,90 @@ export type ExecCommandSegment = {
   resolution: CommandResolution | null;
 };
 
+export type ExecArgvToken =
+  | {
+      kind: "empty";
+      raw: string;
+    }
+  | {
+      kind: "terminator";
+      raw: string;
+    }
+  | {
+      kind: "stdin";
+      raw: string;
+    }
+  | {
+      kind: "positional";
+      raw: string;
+    }
+  | {
+      kind: "option";
+      raw: string;
+      style: "long";
+      flag: string;
+      inlineValue?: string;
+    }
+  | {
+      kind: "option";
+      raw: string;
+      style: "short-cluster";
+      cluster: string;
+      flags: string[];
+    };
+
+/**
+ * Tokenizes a single argv entry into a normalized option/positional model.
+ * Consumers can share this model to keep argv parsing behavior consistent.
+ */
+export function parseExecArgvToken(raw: string): ExecArgvToken {
+  if (!raw) {
+    return { kind: "empty", raw };
+  }
+  if (raw === "--") {
+    return { kind: "terminator", raw };
+  }
+  if (raw === "-") {
+    return { kind: "stdin", raw };
+  }
+  if (!raw.startsWith("-")) {
+    return { kind: "positional", raw };
+  }
+  if (raw.startsWith("--")) {
+    const eqIndex = raw.indexOf("=");
+    if (eqIndex > 0) {
+      return {
+        kind: "option",
+        raw,
+        style: "long",
+        flag: raw.slice(0, eqIndex),
+        inlineValue: raw.slice(eqIndex + 1),
+      };
+    }
+    return { kind: "option", raw, style: "long", flag: raw };
+  }
+  const cluster = raw.slice(1);
+  return {
+    kind: "option",
+    raw,
+    style: "short-cluster",
+    cluster,
+    flags: cluster.split("").map((entry) => `-${entry}`),
+  };
+}
+
 export type ExecCommandAnalysis = {
   ok: boolean;
   reason?: string;
   segments: ExecCommandSegment[];
   chains?: ExecCommandSegment[][]; // Segments grouped by chain operator (&&, ||, ;)
+};
+
+export type ShellChainOperator = "&&" | "||" | ";";
+
+export type ShellChainPart = {
+  part: string;
+  opToNext: ShellChainOperator | null;
 };
 
 const DISALLOWED_PIPELINE_TOKENS = new Set([">", "<", "`", "\n", "\r", "(", ")"]);
@@ -582,75 +649,6 @@ export function isWindowsPlatform(platform?: string | null): boolean {
   return normalized.startsWith("win");
 }
 
-function tokenizeShellSegment(segment: string): string[] | null {
-  const tokens: string[] = [];
-  let buf = "";
-  let inSingle = false;
-  let inDouble = false;
-  let escaped = false;
-
-  const pushToken = () => {
-    if (buf.length > 0) {
-      tokens.push(buf);
-      buf = "";
-    }
-  };
-
-  for (let i = 0; i < segment.length; i += 1) {
-    const ch = segment[i];
-    if (escaped) {
-      buf += ch;
-      escaped = false;
-      continue;
-    }
-    if (!inSingle && !inDouble && ch === "\\") {
-      escaped = true;
-      continue;
-    }
-    if (inSingle) {
-      if (ch === "'") {
-        inSingle = false;
-      } else {
-        buf += ch;
-      }
-      continue;
-    }
-    if (inDouble) {
-      const next = segment[i + 1];
-      if (ch === "\\" && isDoubleQuoteEscape(next)) {
-        buf += next;
-        i += 1;
-        continue;
-      }
-      if (ch === '"') {
-        inDouble = false;
-      } else {
-        buf += ch;
-      }
-      continue;
-    }
-    if (ch === "'") {
-      inSingle = true;
-      continue;
-    }
-    if (ch === '"') {
-      inDouble = true;
-      continue;
-    }
-    if (/\s/.test(ch)) {
-      pushToken();
-      continue;
-    }
-    buf += ch;
-  }
-
-  if (escaped || inSingle || inDouble) {
-    return null;
-  }
-  pushToken();
-  return tokens;
-}
-
 function parseSegmentsFromParts(
   parts: string[],
   cwd?: string,
@@ -658,7 +656,7 @@ function parseSegmentsFromParts(
 ): ExecCommandSegment[] | null {
   const segments: ExecCommandSegment[] = [];
   for (const raw of parts) {
-    const argv = tokenizeShellSegment(raw);
+    const argv = splitShellArgs(raw);
     if (!argv || argv.length === 0) {
       return null;
     }
@@ -672,11 +670,11 @@ function parseSegmentsFromParts(
 }
 
 /**
- * Splits a command string by chain operators (&&, ||, ;) while respecting quotes.
+ * Splits a command string by chain operators (&&, ||, ;) while preserving the operators.
  * Returns null when no chain is present or when the chain is malformed.
  */
-export function splitCommandChain(command: string): string[] | null {
-  const parts: string[] = [];
+export function splitCommandChainWithOperators(command: string): ShellChainPart[] | null {
+  const parts: ShellChainPart[] = [];
   let buf = "";
   let inSingle = false;
   let inDouble = false;
@@ -684,15 +682,14 @@ export function splitCommandChain(command: string): string[] | null {
   let foundChain = false;
   let invalidChain = false;
 
-  const pushPart = () => {
+  const pushPart = (opToNext: ShellChainOperator | null) => {
     const trimmed = buf.trim();
-    if (trimmed) {
-      parts.push(trimmed);
-      buf = "";
-      return true;
-    }
     buf = "";
-    return false;
+    if (!trimmed) {
+      return false;
+    }
+    parts.push({ part: trimmed, opToNext });
+    return true;
   };
 
   for (let i = 0; i < command.length; i += 1) {
@@ -739,16 +736,16 @@ export function splitCommandChain(command: string): string[] | null {
       continue;
     }
 
-    if (ch === "&" && command[i + 1] === "&") {
-      if (!pushPart()) {
+    if (ch === "&" && next === "&") {
+      if (!pushPart("&&")) {
         invalidChain = true;
       }
       i += 1;
       foundChain = true;
       continue;
     }
-    if (ch === "|" && command[i + 1] === "|") {
-      if (!pushPart()) {
+    if (ch === "|" && next === "|") {
+      if (!pushPart("||")) {
         invalidChain = true;
       }
       i += 1;
@@ -756,7 +753,7 @@ export function splitCommandChain(command: string): string[] | null {
       continue;
     }
     if (ch === ";") {
-      if (!pushPart()) {
+      if (!pushPart(";")) {
         invalidChain = true;
       }
       foundChain = true;
@@ -766,14 +763,143 @@ export function splitCommandChain(command: string): string[] | null {
     buf += ch;
   }
 
-  const pushedFinal = pushPart();
   if (!foundChain) {
     return null;
   }
-  if (invalidChain || !pushedFinal) {
+  const trimmed = buf.trim();
+  if (!trimmed) {
     return null;
   }
-  return parts.length > 0 ? parts : null;
+  parts.push({ part: trimmed, opToNext: null });
+  if (invalidChain || parts.length === 0) {
+    return null;
+  }
+  return parts;
+}
+
+function shellEscapeSingleArg(value: string): string {
+  // Shell-safe across sh/bash/zsh: single-quote everything, escape embedded single quotes.
+  // Example: foo'bar -> 'foo'"'"'bar'
+  const singleQuoteEscape = `'"'"'`;
+  return `'${value.replace(/'/g, singleQuoteEscape)}'`;
+}
+
+/**
+ * Builds a shell command string that preserves pipes/chaining, but forces *arguments* to be
+ * literal (no globbing, no env-var expansion) by single-quoting every argv token.
+ *
+ * Used to make "safe bins" actually stdin-only even though execution happens via `shell -c`.
+ */
+export function buildSafeShellCommand(params: { command: string; platform?: string | null }): {
+  ok: boolean;
+  command?: string;
+  reason?: string;
+} {
+  const platform = params.platform ?? null;
+  if (isWindowsPlatform(platform)) {
+    return { ok: false, reason: "unsupported platform" };
+  }
+  const source = params.command.trim();
+  if (!source) {
+    return { ok: false, reason: "empty command" };
+  }
+
+  const chain = splitCommandChainWithOperators(source);
+  const chainParts = chain ?? [{ part: source, opToNext: null }];
+  let out = "";
+
+  for (let i = 0; i < chainParts.length; i += 1) {
+    const part = chainParts[i];
+    const pipelineSplit = splitShellPipeline(part.part);
+    if (!pipelineSplit.ok) {
+      return { ok: false, reason: pipelineSplit.reason ?? "unable to parse pipeline" };
+    }
+    const renderedSegments: string[] = [];
+    for (const segmentRaw of pipelineSplit.segments) {
+      const argv = splitShellArgs(segmentRaw);
+      if (!argv || argv.length === 0) {
+        return { ok: false, reason: "unable to parse shell segment" };
+      }
+      renderedSegments.push(argv.map((token) => shellEscapeSingleArg(token)).join(" "));
+    }
+    out += renderedSegments.join(" | ");
+    if (part.opToNext) {
+      out += ` ${part.opToNext} `;
+    }
+  }
+
+  return { ok: true, command: out };
+}
+
+function renderQuotedArgv(argv: string[]): string {
+  return argv.map((token) => shellEscapeSingleArg(token)).join(" ");
+}
+
+/**
+ * Rebuilds a shell command and selectively single-quotes argv tokens for segments that
+ * must be treated as literal (safeBins hardening) while preserving the rest of the
+ * shell syntax (pipes + chaining).
+ */
+export function buildSafeBinsShellCommand(params: {
+  command: string;
+  segments: ExecCommandSegment[];
+  segmentSatisfiedBy: ("allowlist" | "safeBins" | "skills" | null)[];
+  platform?: string | null;
+}): { ok: boolean; command?: string; reason?: string } {
+  const platform = params.platform ?? null;
+  if (isWindowsPlatform(platform)) {
+    return { ok: false, reason: "unsupported platform" };
+  }
+  if (params.segments.length !== params.segmentSatisfiedBy.length) {
+    return { ok: false, reason: "segment metadata mismatch" };
+  }
+
+  const chain = splitCommandChainWithOperators(params.command.trim());
+  const chainParts: ShellChainPart[] = chain ?? [{ part: params.command.trim(), opToNext: null }];
+  let segIndex = 0;
+  let out = "";
+
+  for (const part of chainParts) {
+    const pipelineSplit = splitShellPipeline(part.part);
+    if (!pipelineSplit.ok) {
+      return { ok: false, reason: pipelineSplit.reason ?? "unable to parse pipeline" };
+    }
+
+    const rendered: string[] = [];
+    for (const raw of pipelineSplit.segments) {
+      const seg = params.segments[segIndex];
+      const by = params.segmentSatisfiedBy[segIndex];
+      if (!seg || by === undefined) {
+        return { ok: false, reason: "segment mapping failed" };
+      }
+      const needsLiteral = by === "safeBins";
+      rendered.push(needsLiteral ? renderQuotedArgv(seg.argv) : raw.trim());
+      segIndex += 1;
+    }
+
+    out += rendered.join(" | ");
+    if (part.opToNext) {
+      out += ` ${part.opToNext} `;
+    }
+  }
+
+  if (segIndex !== params.segments.length) {
+    return { ok: false, reason: "segment count mismatch" };
+  }
+
+  return { ok: true, command: out };
+}
+
+/**
+ * Splits a command string by chain operators (&&, ||, ;) while respecting quotes.
+ * Returns null when no chain is present or when the chain is malformed.
+ */
+export function splitCommandChain(command: string): string[] | null {
+  const parts = splitCommandChainWithOperators(command);
+  if (!parts) {
+    return null;
+  }
+  return parts.map((p) => p.part);
 }
 
 export function analyzeShellCommand(params: {

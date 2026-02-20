@@ -8,14 +8,19 @@ import {
 } from "./onboard-helpers.js";
 
 const mocks = vi.hoisted(() => ({
-  runCommandWithTimeout: vi.fn(async () => ({
+  runCommandWithTimeout: vi.fn<
+    (
+      argv: string[],
+      options?: { timeoutMs?: number; windowsVerbatimArguments?: boolean },
+    ) => Promise<{ stdout: string; stderr: string; code: number; signal: null; killed: boolean }>
+  >(async () => ({
     stdout: "",
     stderr: "",
     code: 0,
     signal: null,
     killed: false,
   })),
-  pickPrimaryTailnetIPv4: vi.fn(() => undefined),
+  pickPrimaryTailnetIPv4: vi.fn<() => string | undefined>(() => undefined),
 }));
 
 vi.mock("../process/exec.js", () => ({
@@ -123,11 +128,8 @@ describe("normalizeGatewayTokenInput", () => {
     expect(normalizeGatewayTokenInput(123)).toBe("");
   });
 
-  it('rejects the literal string "undefined"', () => {
+  it('rejects literal string coercion artifacts ("undefined"/"null")', () => {
     expect(normalizeGatewayTokenInput("undefined")).toBe("");
-  });
-
-  it('rejects the literal string "null"', () => {
     expect(normalizeGatewayTokenInput("null")).toBe("");
   });
 });

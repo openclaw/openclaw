@@ -1,34 +1,14 @@
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  getPwToolsCoreSessionMocks,
+  installPwToolsCoreTestHooks,
+  setPwToolsCoreCurrentPage,
+  setPwToolsCoreCurrentRefLocator,
+} from "./pw-tools-core.test-harness.js";
 
-let currentPage: Record<string, unknown> | null = null;
-let currentRefLocator: Record<string, unknown> | null = null;
-let pageState: {
-  console: unknown[];
-  armIdUpload: number;
-  armIdDialog: number;
-  armIdDownload: number;
-};
-
-const sessionMocks = vi.hoisted(() => ({
-  getPageForTargetId: vi.fn(async () => {
-    if (!currentPage) {
-      throw new Error("missing page");
-    }
-    return currentPage;
-  }),
-  ensurePageState: vi.fn(() => pageState),
-  restoreRoleRefsForTarget: vi.fn(() => {}),
-  refLocator: vi.fn(() => {
-    if (!currentRefLocator) {
-      throw new Error("missing locator");
-    }
-    return currentRefLocator;
-  }),
-  rememberRoleRefsForTarget: vi.fn(() => {}),
-}));
-
-vi.mock("./pw-session.js", () => sessionMocks);
+installPwToolsCoreTestHooks();
+const sessionMocks = getPwToolsCoreSessionMocks();
 const tmpDirMocks = vi.hoisted(() => ({
   resolvePreferredOpenClawTmpDir: vi.fn(() => "/tmp/openclaw"),
 }));
@@ -37,24 +17,38 @@ const mod = await import("./pw-tools-core.js");
 
 describe("pw-tools-core", () => {
   beforeEach(() => {
-    currentPage = null;
-    currentRefLocator = null;
-    pageState = {
-      console: [],
-      armIdUpload: 0,
-      armIdDialog: 0,
-      armIdDownload: 0,
-    };
-    for (const fn of Object.values(sessionMocks)) {
-      fn.mockClear();
-    }
     for (const fn of Object.values(tmpDirMocks)) {
       fn.mockClear();
     }
     tmpDirMocks.resolvePreferredOpenClawTmpDir.mockReturnValue("/tmp/openclaw");
   });
 
-  it("waits for the next download and saves it", async () => {
+  async function waitForImplicitDownloadOutput(params: {
+    downloadUrl: string;
+    suggestedFilename: string;
+  }) {
+    const harness = createDownloadEventHarness();
+    const saveAs = vi.fn(async () => {});
+
+    const p = mod.waitForDownloadViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "T1",
+      timeoutMs: 1000,
+    });
+
+    await Promise.resolve();
+    harness.trigger({
+      url: () => params.downloadUrl,
+      suggestedFilename: () => params.suggestedFilename,
+      saveAs,
+    });
+
+    const res = await p;
+    const outPath = (vi.mocked(saveAs).mock.calls as unknown as Array<[string]>)[0]?.[0];
+    return { res, outPath };
+  }
+
+  function createDownloadEventHarness() {
     let downloadHandler: ((download: unknown) => void) | undefined;
     const on = vi.fn((event: string, handler: (download: unknown) => void) => {
       if (event === "download") {
@@ -62,6 +56,19 @@ describe("pw-tools-core", () => {
       }
     });
     const off = vi.fn();
+    setPwToolsCoreCurrentPage({ on, off });
+    return {
+      trigger: (download: unknown) => {
+        downloadHandler?.(download);
+      },
+      expectArmed: () => {
+        expect(downloadHandler).toBeDefined();
+      },
+    };
+  }
+
+  it("waits for the next download and saves it", async () => {
+    const harness = createDownloadEventHarness();
 
     const saveAs = vi.fn(async () => {});
     const download = {
@@ -69,8 +76,6 @@ describe("pw-tools-core", () => {
       suggestedFilename: () => "file.bin",
       saveAs,
     };
-
-    currentPage = { on, off };
 
     const targetPath = path.resolve("/tmp/file.bin");
     const p = mod.waitForDownloadViaPlaywright({
@@ -81,24 +86,18 @@ describe("pw-tools-core", () => {
     });
 
     await Promise.resolve();
-    expect(downloadHandler).toBeDefined();
-    downloadHandler?.(download);
+    harness.expectArmed();
+    harness.trigger(download);
 
     const res = await p;
     expect(saveAs).toHaveBeenCalledWith(targetPath);
     expect(res.path).toBe(targetPath);
   });
   it("clicks a ref and saves the resulting download", async () => {
-    let downloadHandler: ((download: unknown) => void) | undefined;
-    const on = vi.fn((event: string, handler: (download: unknown) => void) => {
-      if (event === "download") {
-        downloadHandler = handler;
-      }
-    });
-    const off = vi.fn();
+    const harness = createDownloadEventHarness();
 
     const click = vi.fn(async () => {});
-    currentRefLocator = { click };
+    setPwToolsCoreCurrentRefLocator({ click });
 
     const saveAs = vi.fn(async () => {});
     const download = {
@@ -106,8 +105,6 @@ describe("pw-tools-core", () => {
       suggestedFilename: () => "report.pdf",
       saveAs,
     };
-
-    currentPage = { on, off };
 
     const targetPath = path.resolve("/tmp/report.pdf");
     const p = mod.downloadViaPlaywright({
@@ -119,45 +116,21 @@ describe("pw-tools-core", () => {
     });
 
     await Promise.resolve();
-    expect(downloadHandler).toBeDefined();
+    harness.expectArmed();
     expect(click).toHaveBeenCalledWith({ timeout: 1000 });
 
-    downloadHandler?.(download);
+    harness.trigger(download);
 
     const res = await p;
     expect(saveAs).toHaveBeenCalledWith(targetPath);
     expect(res.path).toBe(targetPath);
   });
   it("uses preferred tmp dir when waiting for download without explicit path", async () => {
-    let downloadHandler: ((download: unknown) => void) | undefined;
-    const on = vi.fn((event: string, handler: (download: unknown) => void) => {
-      if (event === "download") {
-        downloadHandler = handler;
-      }
-    });
-    const off = vi.fn();
-
-    const saveAs = vi.fn(async () => {});
-    const download = {
-      url: () => "https://example.com/file.bin",
-      suggestedFilename: () => "file.bin",
-      saveAs,
-    };
-
     tmpDirMocks.resolvePreferredOpenClawTmpDir.mockReturnValue("/tmp/openclaw-preferred");
-    currentPage = { on, off };
-
-    const p = mod.waitForDownloadViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
-      targetId: "T1",
-      timeoutMs: 1000,
+    const { res, outPath } = await waitForImplicitDownloadOutput({
+      downloadUrl: "https://example.com/file.bin",
+      suggestedFilename: "file.bin",
     });
-
-    await Promise.resolve();
-    downloadHandler?.(download);
-
-    const res = await p;
-    const outPath = vi.mocked(saveAs).mock.calls[0]?.[0];
     expect(typeof outPath).toBe("string");
     const expectedRootedDownloadsDir = path.join(
       path.sep,
@@ -171,6 +144,22 @@ describe("pw-tools-core", () => {
     expect(path.normalize(res.path)).toContain(path.normalize(expectedDownloadsTail));
     expect(tmpDirMocks.resolvePreferredOpenClawTmpDir).toHaveBeenCalled();
   });
+
+  it("sanitizes suggested download filenames to prevent traversal escapes", async () => {
+    tmpDirMocks.resolvePreferredOpenClawTmpDir.mockReturnValue("/tmp/openclaw-preferred");
+    const { res, outPath } = await waitForImplicitDownloadOutput({
+      downloadUrl: "https://example.com/evil",
+      suggestedFilename: "../../../../etc/passwd",
+    });
+    expect(typeof outPath).toBe("string");
+    expect(path.dirname(String(outPath))).toBe(
+      path.join(path.sep, "tmp", "openclaw-preferred", "downloads"),
+    );
+    expect(path.basename(String(outPath))).toMatch(/-passwd$/);
+    expect(path.normalize(res.path)).toContain(
+      path.normalize(`${path.join("tmp", "openclaw-preferred", "downloads")}${path.sep}`),
+    );
+  });
   it("waits for a matching response and returns its body", async () => {
     let responseHandler: ((resp: unknown) => void) | undefined;
     const on = vi.fn((event: string, handler: (resp: unknown) => void) => {
@@ -179,7 +168,7 @@ describe("pw-tools-core", () => {
       }
     });
     const off = vi.fn();
-    currentPage = { on, off };
+    setPwToolsCoreCurrentPage({ on, off });
 
     const resp = {
       url: () => "https://example.com/api/data",
@@ -208,8 +197,9 @@ describe("pw-tools-core", () => {
   });
   it("scrolls a ref into view (default timeout)", async () => {
     const scrollIntoViewIfNeeded = vi.fn(async () => {});
-    currentRefLocator = { scrollIntoViewIfNeeded };
-    currentPage = {};
+    setPwToolsCoreCurrentRefLocator({ scrollIntoViewIfNeeded });
+    const page = {};
+    setPwToolsCoreCurrentPage(page);
 
     await mod.scrollIntoViewViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
@@ -217,12 +207,12 @@ describe("pw-tools-core", () => {
       ref: "1",
     });
 
-    expect(sessionMocks.refLocator).toHaveBeenCalledWith(currentPage, "1");
+    expect(sessionMocks.refLocator).toHaveBeenCalledWith(page, "1");
     expect(scrollIntoViewIfNeeded).toHaveBeenCalledWith({ timeout: 20_000 });
   });
   it("requires a ref for scrollIntoView", async () => {
-    currentRefLocator = { scrollIntoViewIfNeeded: vi.fn(async () => {}) };
-    currentPage = {};
+    setPwToolsCoreCurrentRefLocator({ scrollIntoViewIfNeeded: vi.fn(async () => {}) });
+    setPwToolsCoreCurrentPage({});
 
     await expect(
       mod.scrollIntoViewViaPlaywright({

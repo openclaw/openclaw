@@ -1,7 +1,18 @@
 import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 
-const callGateway = vi.fn(async (opts: { method?: string }) => {
+type NodeInvokeCall = {
+  method?: string;
+  params?: {
+    idempotencyKey?: string;
+    command?: string;
+    params?: unknown;
+    timeoutMs?: number;
+  };
+};
+
+const callGateway = vi.fn(async (opts: NodeInvokeCall) => {
   if (opts.method === "node.list") {
     return {
       nodes: [
@@ -51,18 +62,10 @@ const callGateway = vi.fn(async (opts: { method?: string }) => {
 
 const randomIdempotencyKey = vi.fn(() => "rk_test");
 
-const runtimeLogs: string[] = [];
-const runtimeErrors: string[] = [];
-const defaultRuntime = {
-  log: (msg: string) => runtimeLogs.push(msg),
-  error: (msg: string) => runtimeErrors.push(msg),
-  exit: (code: number) => {
-    throw new Error(`__exit__:${code}`);
-  },
-};
+const { defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
 
 vi.mock("../gateway/call.js", () => ({
-  callGateway: (opts: unknown) => callGateway(opts as { method?: string }),
+  callGateway: (opts: unknown) => callGateway(opts as NodeInvokeCall),
   randomIdempotencyKey: () => randomIdempotencyKey(),
 }));
 
@@ -77,44 +80,50 @@ vi.mock("../config/config.js", () => ({
 describe("nodes-cli coverage", () => {
   let registerNodesCli: (program: Command) => void;
 
+  const getNodeInvokeCall = () =>
+    callGateway.mock.calls.find((call) => call[0]?.method === "node.invoke")?.[0] as NodeInvokeCall;
+
+  const createNodesProgram = () => {
+    const program = new Command();
+    program.exitOverride();
+    registerNodesCli(program);
+    return program;
+  };
+
+  const runNodesCommand = async (args: string[]) => {
+    const program = createNodesProgram();
+    await program.parseAsync(args, { from: "user" });
+    return getNodeInvokeCall();
+  };
+
   beforeAll(async () => {
     ({ registerNodesCli } = await import("./nodes-cli.js"));
   });
 
   beforeEach(() => {
-    runtimeLogs.length = 0;
-    runtimeErrors.length = 0;
+    resetRuntimeCapture();
     callGateway.mockClear();
     randomIdempotencyKey.mockClear();
   });
 
   it("invokes system.run with parsed params", async () => {
-    const program = new Command();
-    program.exitOverride();
-    registerNodesCli(program);
-
-    await program.parseAsync(
-      [
-        "nodes",
-        "run",
-        "--node",
-        "mac-1",
-        "--cwd",
-        "/tmp",
-        "--env",
-        "FOO=bar",
-        "--command-timeout",
-        "1200",
-        "--needs-screen-recording",
-        "--invoke-timeout",
-        "5000",
-        "echo",
-        "hi",
-      ],
-      { from: "user" },
-    );
-
-    const invoke = callGateway.mock.calls.find((call) => call[0]?.method === "node.invoke")?.[0];
+    const invoke = await runNodesCommand([
+      "nodes",
+      "run",
+      "--node",
+      "mac-1",
+      "--cwd",
+      "/tmp",
+      "--env",
+      "FOO=bar",
+      "--command-timeout",
+      "1200",
+      "--needs-screen-recording",
+      "--invoke-timeout",
+      "5000",
+      "echo",
+      "hi",
+    ]);
 
     expect(invoke).toBeTruthy();
     expect(invoke?.params?.idempotencyKey).toBe("rk_test");
@@ -128,21 +137,22 @@ describe("nodes-cli coverage", () => {
       agentId: "main",
       approved: true,
       approvalDecision: "allow-once",
+      runId: expect.any(String),
     });
     expect(invoke?.params?.timeoutMs).toBe(5000);
   });
 
   it("invokes system.run with raw command", async () => {
-    const program = new Command();
-    program.exitOverride();
-    registerNodesCli(program);
-
-    await program.parseAsync(
-      ["nodes", "run", "--agent", "main", "--node", "mac-1", "--raw", "echo hi"],
-      { from: "user" },
-    );
-
-    const invoke = callGateway.mock.calls.find((call) => call[0]?.method === "node.invoke")?.[0];
+    const invoke = await runNodesCommand([
+      "nodes",
+      "run",
+      "--agent",
+      "main",
+      "--node",
+      "mac-1",
+      "--raw",
+      "echo hi",
+    ]);
 
     expect(invoke).toBeTruthy();
     expect(invoke?.params?.idempotencyKey).toBe("rk_test");
@@ -153,31 +163,23 @@ describe("nodes-cli coverage", () => {
       agentId: "main",
       approved: true,
       approvalDecision: "allow-once",
+      runId: expect.any(String),
     });
   });
 
   it("invokes system.notify with provided fields", async () => {
-    const program = new Command();
-    program.exitOverride();
-    registerNodesCli(program);
-
-    await program.parseAsync(
-      [
-        "nodes",
-        "notify",
-        "--node",
-        "mac-1",
-        "--title",
-        "Ping",
-        "--body",
-        "Gateway ready",
-        "--delivery",
-        "overlay",
-      ],
-      { from: "user" },
-    );
-
-    const invoke = callGateway.mock.calls.find((call) => call[0]?.method === "node.invoke")?.[0];
+    const invoke = await runNodesCommand([
+      "nodes",
+      "notify",
+      "--node",
+      "mac-1",
+      "--title",
+      "Ping",
+      "--body",
+      "Gateway ready",
+      "--delivery",
+      "overlay",
+    ]);
 
     expect(invoke).toBeTruthy();
     expect(invoke?.params?.command).toBe("system.notify");
@@ -191,30 +193,21 @@ describe("nodes-cli coverage", () => {
   });
 
   it("invokes location.get with params", async () => {
-    const program = new Command();
-    program.exitOverride();
-    registerNodesCli(program);
-
-    await program.parseAsync(
-      [
-        "nodes",
-        "location",
-        "get",
-        "--node",
-        "mac-1",
-        "--accuracy",
-        "precise",
-        "--max-age",
-        "1000",
-        "--location-timeout",
-        "5000",
-        "--invoke-timeout",
-        "6000",
-      ],
-      { from: "user" },
-    );
-
-    const invoke = callGateway.mock.calls.find((call) => call[0]?.method === "node.invoke")?.[0];
+    const invoke = await runNodesCommand([
+      "nodes",
+      "location",
+      "get",
+      "--node",
+      "mac-1",
+      "--accuracy",
+      "precise",
+      "--max-age",
+      "1000",
+      "--location-timeout",
+      "5000",
+      "--invoke-timeout",
+      "6000",
+    ]);
 
     expect(invoke).toBeTruthy();
     expect(invoke?.params?.command).toBe("location.get");

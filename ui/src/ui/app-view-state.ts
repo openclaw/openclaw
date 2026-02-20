@@ -164,6 +164,8 @@ export type AppViewState = {
   usageTimeSeriesBreakdownMode: "total" | "by-type";
   usageTimeSeries: SessionUsageTimeSeries | null;
   usageTimeSeriesLoading: boolean;
+  usageTimeSeriesCursorStart: number | null;
+  usageTimeSeriesCursorEnd: number | null;
   usageSessionLogs: SessionLogEntry[] | null;
   usageSessionLogsLoading: boolean;
   usageSessionLogsExpanded: boolean;
@@ -219,6 +221,7 @@ export type AppViewState = {
   logsLimit: number;
   logsMaxBytes: number;
   logsAtBottom: boolean;
+  updateAvailable: import("./types.js").UpdateAvailable | null;
   client: GatewayBrowserClient | null;
   refreshSessionsAfterChat: Set<string>;
   connect: () => void;

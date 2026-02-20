@@ -1,10 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   formatIMessageChatTarget,
   isAllowedIMessageSender,
   normalizeIMessageHandle,
   parseIMessageTarget,
 } from "./targets.js";
+
+const spawnMock = vi.hoisted(() => vi.fn());
+
+vi.mock("node:child_process", () => ({
+  spawn: (...args: unknown[]) => spawnMock(...args),
+}));
 
 describe("imessage targets", () => {
   it("parses chat_id targets", () => {
@@ -68,5 +74,20 @@ describe("imessage targets", () => {
   it("formats chat targets", () => {
     expect(formatIMessageChatTarget(42)).toBe("chat_id:42");
     expect(formatIMessageChatTarget(undefined)).toBe("");
+  });
+});
+
+describe("createIMessageRpcClient", () => {
+  beforeEach(() => {
+    spawnMock.mockReset();
+    vi.stubEnv("VITEST", "true");
+  });
+
+  it("refuses to spawn imsg rpc in test environments", async () => {
+    const { createIMessageRpcClient } = await import("./client.js");
+    await expect(createIMessageRpcClient()).rejects.toThrow(
+      /Refusing to start imsg rpc in test environment/i,
+    );
+    expect(spawnMock).not.toHaveBeenCalled();
   });
 });

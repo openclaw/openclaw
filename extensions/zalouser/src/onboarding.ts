@@ -7,17 +7,18 @@ import type {
 import {
   addWildcardAllowFrom,
   DEFAULT_ACCOUNT_ID,
+  mergeAllowFromEntries,
   normalizeAccountId,
   promptAccountId,
   promptChannelAccessConfig,
 } from "openclaw/plugin-sdk";
-import type { ZcaFriend, ZcaGroup } from "./types.js";
 import {
   listZalouserAccountIds,
   resolveDefaultZalouserAccountId,
   resolveZalouserAccountSync,
   checkZcaAuthenticated,
 } from "./accounts.js";
+import type { ZcaFriend, ZcaGroup } from "./types.js";
 import { runZca, runZcaInteractive, checkZcaInstalled, parseJsonOutput } from "./zca.js";
 
 const channel = "zalouser" as const;
@@ -121,11 +122,7 @@ async function promptZalouserAllowFrom(params: {
       );
       continue;
     }
-    const merged = [
-      ...existingAllowFrom.map((item) => String(item).trim()).filter(Boolean),
-      ...(results.filter(Boolean) as string[]),
-    ];
-    const unique = [...new Set(merged)];
+    const unique = mergeAllowFromEntries(existingAllowFrom, results.filter(Boolean) as string[]);
     if (accountId === DEFAULT_ACCOUNT_ID) {
       return {
         ...cfg,

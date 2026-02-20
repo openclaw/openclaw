@@ -1,71 +1,50 @@
+import "./reply.directive.directive-behavior.e2e-mocks.js";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
-import { loadModelCatalog } from "../agents/model-catalog.js";
-import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
+import { describe, expect, it } from "vitest";
 import { loadSessionStore } from "../config/sessions.js";
+import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { drainSystemEvents } from "../infra/system-events.js";
+import {
+  assertModelSelection,
+  installDirectiveBehaviorE2EHooks,
+  MAIN_SESSION_KEY,
+  makeWhatsAppDirectiveConfig,
+  replyText,
+  runEmbeddedPiAgent,
+  sessionStorePath,
+  withTempHome,
+} from "./reply.directive.directive-behavior.e2e-harness.js";
 import { getReplyFromConfig } from "./reply.js";
 
-const MAIN_SESSION_KEY = "agent:main:main";
-
-vi.mock("../agents/pi-embedded.js", () => ({
-  abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
-  runEmbeddedPiAgent: vi.fn(),
-  queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
-  resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
-  isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
-  isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
-}));
-vi.mock("../agents/model-catalog.js", () => ({
-  loadModelCatalog: vi.fn(),
-}));
-
-async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  return withTempHomeBase(
-    async (home) => {
-      return await fn(home);
-    },
-    {
-      env: {
-        OPENCLAW_AGENT_DIR: (home) => path.join(home, ".openclaw", "agent"),
-        PI_CODING_AGENT_DIR: (home) => path.join(home, ".openclaw", "agent"),
-      },
-      prefix: "openclaw-reply-",
-    },
-  );
+function makeModelDefinition(id: string, name: string): ModelDefinitionConfig {
+  return {
+    id,
+    name,
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128_000,
+    maxTokens: 8_192,
+  };
 }
 
-function assertModelSelection(
-  storePath: string,
-  selection: { model?: string; provider?: string } = {},
-) {
-  const store = loadSessionStore(storePath);
-  const entry = store[MAIN_SESSION_KEY];
-  expect(entry).toBeDefined();
-  expect(entry?.modelOverride).toBe(selection.model);
-  expect(entry?.providerOverride).toBe(selection.provider);
+function makeModelSwitchConfig(home: string) {
+  return makeWhatsAppDirectiveConfig(home, {
+    model: { primary: "openai/gpt-4.1-mini" },
+    models: {
+      "openai/gpt-4.1-mini": {},
+      "anthropic/claude-opus-4-5": { alias: "Opus" },
+    },
+  });
 }
 
 describe("directive behavior", () => {
-  beforeEach(() => {
-    vi.mocked(runEmbeddedPiAgent).mockReset();
-    vi.mocked(loadModelCatalog).mockResolvedValue([
-      { id: "claude-opus-4-5", name: "Opus 4.5", provider: "anthropic" },
-      { id: "claude-sonnet-4-1", name: "Sonnet 4.1", provider: "anthropic" },
-      { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
-    ]);
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
+  installDirectiveBehaviorE2EHooks();
 
   it("prefers alias matches when fuzzy selection is ambiguous", async () => {
     await withTempHome(async (home) => {
-      vi.mocked(runEmbeddedPiAgent).mockReset();
-      const storePath = path.join(home, "sessions.json");
+      const storePath = sessionStorePath(home);
 
       const res = await getReplyFromConfig(
         { Body: "/model ki", From: "+1222", To: "+1222", CommandAuthorized: true },
@@ -89,13 +68,13 @@ describe("directive behavior", () => {
                 baseUrl: "https://api.moonshot.ai/v1",
                 apiKey: "sk-test",
                 api: "openai-completions",
-                models: [{ id: "kimi-k2-0905-preview", name: "Kimi K2" }],
+                models: [makeModelDefinition("kimi-k2-0905-preview", "Kimi K2")],
               },
               lmstudio: {
                 baseUrl: "http://127.0.0.1:1234/v1",
                 apiKey: "lmstudio",
                 api: "openai-responses",
-                models: [{ id: "kimi-k2-0905-preview", name: "Kimi K2 (Local)" }],
+                models: [makeModelDefinition("kimi-k2-0905-preview", "Kimi K2 (Local)")],
               },
             },
           },
@@ -103,7 +82,7 @@ describe("directive behavior", () => {
         },
       );
 
-      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      const text = replyText(res);
       expect(text).toContain("Model set to Kimi (moonshot/kimi-k2-0905-preview).");
       assertModelSelection(storePath, {
         provider: "moonshot",
@@ -114,8 +93,7 @@ describe("directive behavior", () => {
   });
   it("stores auth profile overrides on /model directive", async () => {
     await withTempHome(async (home) => {
-      vi.mocked(runEmbeddedPiAgent).mockReset();
-      const storePath = path.join(home, "sessions.json");
+      const storePath = sessionStorePath(home);
       const authDir = path.join(home, ".openclaw", "agents", "main", "agent");
       await fs.mkdir(authDir, { recursive: true, mode: 0o700 });
       await fs.writeFile(
@@ -139,22 +117,10 @@ describe("directive behavior", () => {
       const res = await getReplyFromConfig(
         { Body: "/model Opus@anthropic:work", From: "+1222", To: "+1222", CommandAuthorized: true },
         {},
-        {
-          agents: {
-            defaults: {
-              model: { primary: "openai/gpt-4.1-mini" },
-              workspace: path.join(home, "openclaw"),
-              models: {
-                "openai/gpt-4.1-mini": {},
-                "anthropic/claude-opus-4-5": { alias: "Opus" },
-              },
-            },
-          },
-          session: { store: storePath },
-        },
+        makeModelSwitchConfig(home),
       );
 
-      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      const text = replyText(res);
       expect(text).toContain("Auth profile set to anthropic:work");
       const store = loadSessionStore(storePath);
       const entry = store["agent:main:main"];
@@ -165,25 +131,10 @@ describe("directive behavior", () => {
   it("queues a system event when switching models", async () => {
     await withTempHome(async (home) => {
       drainSystemEvents(MAIN_SESSION_KEY);
-      vi.mocked(runEmbeddedPiAgent).mockReset();
-      const storePath = path.join(home, "sessions.json");
-
       await getReplyFromConfig(
         { Body: "/model Opus", From: "+1222", To: "+1222", CommandAuthorized: true },
         {},
-        {
-          agents: {
-            defaults: {
-              model: { primary: "openai/gpt-4.1-mini" },
-              workspace: path.join(home, "openclaw"),
-              models: {
-                "openai/gpt-4.1-mini": {},
-                "anthropic/claude-opus-4-5": { alias: "Opus" },
-              },
-            },
-          },
-          session: { store: storePath },
-        },
+        makeModelSwitchConfig(home),
       );
 
       const events = drainSystemEvents(MAIN_SESSION_KEY);
@@ -194,7 +145,6 @@ describe("directive behavior", () => {
   it("queues a system event when toggling elevated", async () => {
     await withTempHome(async (home) => {
       drainSystemEvents(MAIN_SESSION_KEY);
-      const storePath = path.join(home, "sessions.json");
 
       await getReplyFromConfig(
         {
@@ -205,17 +155,11 @@ describe("directive behavior", () => {
           CommandAuthorized: true,
         },
         {},
-        {
-          agents: {
-            defaults: {
-              model: { primary: "openai/gpt-4.1-mini" },
-              workspace: path.join(home, "openclaw"),
-            },
-          },
-          tools: { elevated: { allowFrom: { whatsapp: ["*"] } } },
-          channels: { whatsapp: { allowFrom: ["*"] } },
-          session: { store: storePath },
-        },
+        makeWhatsAppDirectiveConfig(
+          home,
+          { model: { primary: "openai/gpt-4.1-mini" } },
+          { tools: { elevated: { allowFrom: { whatsapp: ["*"] } } } },
+        ),
       );
 
       const events = drainSystemEvents(MAIN_SESSION_KEY);
@@ -225,7 +169,6 @@ describe("directive behavior", () => {
   it("queues a system event when toggling reasoning", async () => {
     await withTempHome(async (home) => {
       drainSystemEvents(MAIN_SESSION_KEY);
-      const storePath = path.join(home, "sessions.json");
 
       await getReplyFromConfig(
         {
@@ -236,16 +179,7 @@ describe("directive behavior", () => {
           CommandAuthorized: true,
         },
         {},
-        {
-          agents: {
-            defaults: {
-              model: { primary: "openai/gpt-4.1-mini" },
-              workspace: path.join(home, "openclaw"),
-            },
-          },
-          channels: { whatsapp: { allowFrom: ["*"] } },
-          session: { store: storePath },
-        },
+        makeWhatsAppDirectiveConfig(home, { model: { primary: "openai/gpt-4.1-mini" } }),
       );
 
       const events = drainSystemEvents(MAIN_SESSION_KEY);

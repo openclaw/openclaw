@@ -5,7 +5,6 @@ import {
   type OAuthProvider,
 } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { AuthProfileStore } from "./types.js";
 import { withFileLock } from "../../infra/file-lock.js";
 import { refreshQwenPortalCredentials } from "../../providers/qwen-portal-oauth.js";
 import { refreshChutesTokens } from "../chutes-oauth.js";
@@ -14,6 +13,7 @@ import { formatAuthDoctorHint } from "./doctor.js";
 import { ensureAuthStoreFile, resolveAuthStorePath } from "./paths.js";
 import { suggestOAuthProfileIdForLegacyDefault } from "./repair.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./store.js";
+import type { AuthProfileStore } from "./types.js";
 
 const OAUTH_PROVIDER_IDS = new Set<string>(getOAuthProviders().map((provider) => provider.id));
 
@@ -22,6 +22,31 @@ const isOAuthProvider = (provider: string): provider is OAuthProvider =>
 
 const resolveOAuthProvider = (provider: string): OAuthProvider | null =>
   isOAuthProvider(provider) ? provider : null;
+
+function isProfileConfigCompatible(params: {
+  cfg?: OpenClawConfig;
+  profileId: string;
+  provider: string;
+  mode: "api_key" | "token" | "oauth";
+  allowOAuthTokenCompatibility?: boolean;
+}): boolean {
+  const profileConfig = params.cfg?.auth?.profiles?.[params.profileId];
+  if (profileConfig && profileConfig.provider !== params.provider) {
+    return false;
+  }
+  if (profileConfig && profileConfig.mode !== params.mode) {
+    if (
+      !(
+        params.allowOAuthTokenCompatibility &&
+        profileConfig.mode === "oauth" &&
+        params.mode === "token"
+      )
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
 
 function buildOAuthApiKey(provider: string, credentials: OAuthCredentials): string {
   const needsProjectId = provider === "google-gemini-cli" || provider === "google-antigravity";
@@ -32,6 +57,39 @@ function buildOAuthApiKey(provider: string, credentials: OAuthCredentials): stri
       })
     : credentials.access;
 }
+
+function buildApiKeyProfileResult(params: { apiKey: string; provider: string; email?: string }) {
+  return {
+    apiKey: params.apiKey,
+    provider: params.provider,
+    email: params.email,
+  };
+}
+
+function buildOAuthProfileResult(params: {
+  provider: string;
+  credentials: OAuthCredentials;
+  email?: string;
+}) {
+  return buildApiKeyProfileResult({
+    apiKey: buildOAuthApiKey(params.provider, params.credentials),
+    provider: params.provider,
+    email: params.email,
+  });
+}
+
+function isExpiredCredential(expires: number | undefined): boolean {
+  return (
+    typeof expires === "number" && Number.isFinite(expires) && expires > 0 && Date.now() >= expires
+  );
+}
+
+type ResolveApiKeyForProfileParams = {
+  cfg?: OpenClawConfig;
+  store: AuthProfileStore;
+  profileId: string;
+  agentDir?: string;
+};
 
 async function refreshOAuthTokenWithLock(params: {
   profileId: string;
@@ -92,31 +150,31 @@ async function refreshOAuthTokenWithLock(params: {
   });
 }
 
-async function tryResolveOAuthProfile(params: {
-  cfg?: OpenClawConfig;
-  store: AuthProfileStore;
-  profileId: string;
-  agentDir?: string;
-}): Promise<{ apiKey: string; provider: string; email?: string } | null> {
+async function tryResolveOAuthProfile(
+  params: ResolveApiKeyForProfileParams,
+): Promise<{ apiKey: string; provider: string; email?: string } | null> {
   const { cfg, store, profileId } = params;
   const cred = store.profiles[profileId];
   if (!cred || cred.type !== "oauth") {
     return null;
   }
-  const profileConfig = cfg?.auth?.profiles?.[profileId];
-  if (profileConfig && profileConfig.provider !== cred.provider) {
-    return null;
-  }
-  if (profileConfig && profileConfig.mode !== cred.type) {
+  if (
+    !isProfileConfigCompatible({
+      cfg,
+      profileId,
+      provider: cred.provider,
+      mode: cred.type,
+    })
+  ) {
     return null;
   }
 
   if (Date.now() < cred.expires) {
-    return {
-      apiKey: buildOAuthApiKey(cred.provider, cred),
+    return buildOAuthProfileResult({
       provider: cred.provider,
+      credentials: cred,
       email: cred.email,
-    };
+    });
   }
 
   const refreshed = await refreshOAuthTokenWithLock({
@@ -126,33 +184,32 @@ async function tryResolveOAuthProfile(params: {
   if (!refreshed) {
     return null;
   }
-  return {
+  return buildApiKeyProfileResult({
     apiKey: refreshed.apiKey,
     provider: cred.provider,
     email: cred.email,
-  };
+  });
 }
 
-export async function resolveApiKeyForProfile(params: {
-  cfg?: OpenClawConfig;
-  store: AuthProfileStore;
-  profileId: string;
-  agentDir?: string;
-}): Promise<{ apiKey: string; provider: string; email?: string } | null> {
+export async function resolveApiKeyForProfile(
+  params: ResolveApiKeyForProfileParams,
+): Promise<{ apiKey: string; provider: string; email?: string } | null> {
   const { cfg, store, profileId } = params;
   const cred = store.profiles[profileId];
   if (!cred) {
     return null;
   }
-  const profileConfig = cfg?.auth?.profiles?.[profileId];
-  if (profileConfig && profileConfig.provider !== cred.provider) {
+  if (
+    !isProfileConfigCompatible({
+      cfg,
+      profileId,
+      provider: cred.provider,
+      mode: cred.type,
+      // Compatibility: treat "oauth" config as compatible with stored token profiles.
+      allowOAuthTokenCompatibility: true,
+    })
+  ) {
     return null;
-  }
-  if (profileConfig && profileConfig.mode !== cred.type) {
-    // Compatibility: treat "oauth" config as compatible with stored token profiles.
-    if (!(profileConfig.mode === "oauth" && cred.type === "token")) {
-      return null;
-    }
   }
 
   if (cred.type === "api_key") {
@@ -160,29 +217,24 @@ export async function resolveApiKeyForProfile(params: {
     if (!key) {
       return null;
     }
-    return { apiKey: key, provider: cred.provider, email: cred.email };
+    return buildApiKeyProfileResult({ apiKey: key, provider: cred.provider, email: cred.email });
   }
   if (cred.type === "token") {
     const token = cred.token?.trim();
     if (!token) {
       return null;
     }
-    if (
-      typeof cred.expires === "number" &&
-      Number.isFinite(cred.expires) &&
-      cred.expires > 0 &&
-      Date.now() >= cred.expires
-    ) {
+    if (isExpiredCredential(cred.expires)) {
       return null;
     }
-    return { apiKey: token, provider: cred.provider, email: cred.email };
+    return buildApiKeyProfileResult({ apiKey: token, provider: cred.provider, email: cred.email });
   }
   if (Date.now() < cred.expires) {
-    return {
-      apiKey: buildOAuthApiKey(cred.provider, cred),
+    return buildOAuthProfileResult({
       provider: cred.provider,
+      credentials: cred,
       email: cred.email,
-    };
+    });
   }
 
   try {
@@ -193,20 +245,20 @@ export async function resolveApiKeyForProfile(params: {
     if (!result) {
       return null;
     }
-    return {
+    return buildApiKeyProfileResult({
       apiKey: result.apiKey,
       provider: cred.provider,
       email: cred.email,
-    };
+    });
   } catch (error) {
     const refreshedStore = ensureAuthProfileStore(params.agentDir);
     const refreshed = refreshedStore.profiles[profileId];
     if (refreshed?.type === "oauth" && Date.now() < refreshed.expires) {
-      return {
-        apiKey: buildOAuthApiKey(refreshed.provider, refreshed),
+      return buildOAuthProfileResult({
         provider: refreshed.provider,
+        credentials: refreshed,
         email: refreshed.email ?? cred.email,
-      };
+      });
     }
     const fallbackProfileId = suggestOAuthProfileIdForLegacyDefault({
       cfg,
@@ -244,11 +296,11 @@ export async function resolveApiKeyForProfile(params: {
             agentDir: params.agentDir,
             expires: new Date(mainCred.expires).toISOString(),
           });
-          return {
-            apiKey: buildOAuthApiKey(mainCred.provider, mainCred),
+          return buildOAuthProfileResult({
             provider: mainCred.provider,
+            credentials: mainCred,
             email: mainCred.email,
-          };
+          });
         }
       } catch {
         // keep original error if main agent fallback also fails

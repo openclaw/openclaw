@@ -2,6 +2,8 @@ import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
+import { createRegistry } from "./server.e2e-registry-helpers.js";
 import {
   connectOk,
   installGatewayTestHooks,
@@ -25,7 +27,7 @@ const registryState = vi.hoisted(() => ({
     cliRegistrars: [],
     services: [],
     diagnostics: [],
-  } as PluginRegistry,
+  } as unknown as PluginRegistry,
 }));
 
 vi.mock("./server-plugins.js", async () => {
@@ -41,39 +43,17 @@ vi.mock("./server-plugins.js", async () => {
   };
 });
 
-const createRegistry = (channels: PluginRegistry["channels"]): PluginRegistry => ({
-  plugins: [],
-  tools: [],
-  channels,
-  providers: [],
-  gatewayHandlers: {},
-  httpHandlers: [],
-  httpRoutes: [],
-  cliRegistrars: [],
-  services: [],
-  diagnostics: [],
-});
-
 const createStubChannelPlugin = (params: {
   id: ChannelPlugin["id"];
   label: string;
   summary?: Record<string, unknown>;
   logoutCleared?: boolean;
 }): ChannelPlugin => ({
-  id: params.id,
-  meta: {
+  ...createChannelTestPluginBase({
     id: params.id,
     label: params.label,
-    selectionLabel: params.label,
-    docsPath: `/channels/${params.id}`,
-    blurb: "test stub.",
-  },
-  capabilities: { chatTypes: ["direct"] },
-  config: {
-    listAccountIds: () => ["default"],
-    resolveAccount: () => ({}),
-    isConfigured: async () => false,
-  },
+    config: { isConfigured: async () => false },
+  }),
   status: {
     buildChannelSummary: async () => ({
       configured: false,
@@ -162,13 +142,13 @@ describe("gateway server channels", () => {
     const res = await rpcReq<{
       channels?: Record<
         string,
-        | {
-            configured?: boolean;
-            tokenSource?: string;
-            probe?: unknown;
-            lastProbeAt?: unknown;
-          }
-        | { linked?: boolean }
+        {
+          configured?: boolean;
+          tokenSource?: string;
+          probe?: unknown;
+          lastProbeAt?: unknown;
+          linked?: boolean;
+        }
       >;
     }>(ws, "channels.status", { probe: false, timeoutMs: 2000 });
     expect(res.ok).toBe(true);

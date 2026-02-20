@@ -23,7 +23,7 @@ export type IMessageAccountConfig = {
   cliPath?: string;
   /** Optional Messages db path override. */
   dbPath?: string;
-  /** Remote host for SCP when attachments live on a different machine (e.g., openclaw@192.168.64.3). */
+  /** Remote SSH host token for SCP attachment fetches (`host` or `user@host`). */
   remoteHost?: string;
   /** Optional default send service (imessage|sms|auto). */
   service?: "imessage" | "sms" | "auto";
@@ -50,6 +50,10 @@ export type IMessageAccountConfig = {
   dms?: Record<string, DmConfig>;
   /** Include attachments + reactions in watch payloads. */
   includeAttachments?: boolean;
+  /** Allowed local iMessage attachment roots (supports single-segment `*` wildcards). */
+  attachmentRoots?: string[];
+  /** Allowed remote iMessage attachment roots for SCP fetches (supports `*`). */
+  remoteAttachmentRoots?: string[];
   /** Max outbound media size in MB. */
   mediaMaxMb?: number;
   /** Timeout for probe/RPC operations in milliseconds (default: 10000). */

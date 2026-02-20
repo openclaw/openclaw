@@ -13,8 +13,21 @@ export async function readLatestAssistantReply(params: {
     params: { sessionKey: params.sessionKey, limit: params.limit ?? 50 },
   });
   const filtered = stripToolMessages(Array.isArray(history?.messages) ? history.messages : []);
-  const last = filtered.length > 0 ? filtered[filtered.length - 1] : undefined;
-  return last ? extractAssistantText(last) : undefined;
+  for (let i = filtered.length - 1; i >= 0; i -= 1) {
+    const candidate = filtered[i];
+    if (!candidate || typeof candidate !== "object") {
+      continue;
+    }
+    if ((candidate as { role?: unknown }).role !== "assistant") {
+      continue;
+    }
+    const text = extractAssistantText(candidate);
+    if (!text?.trim()) {
+      continue;
+    }
+    return text;
+  }
+  return undefined;
 }
 
 export async function runAgentStep(params: {

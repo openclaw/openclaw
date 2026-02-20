@@ -28,6 +28,12 @@ protocol LocationServicing: Sendable {
         desiredAccuracy: OpenClawLocationAccuracy,
         maxAgeMs: Int?,
         timeoutMs: Int?) async throws -> CLLocation
+    func startLocationUpdates(
+        desiredAccuracy: OpenClawLocationAccuracy,
+        significantChangesOnly: Bool) -> AsyncStream<CLLocation>
+    func stopLocationUpdates()
+    func startMonitoringSignificantLocationChanges(onUpdate: @escaping @Sendable (CLLocation) -> Void)
+    func stopMonitoringSignificantLocationChanges()
 }
 
 protocol DeviceStatusServicing: Sendable {
@@ -57,6 +63,29 @@ protocol RemindersServicing: Sendable {
 protocol MotionServicing: Sendable {
     func activities(params: OpenClawMotionActivityParams) async throws -> OpenClawMotionActivityPayload
     func pedometer(params: OpenClawPedometerParams) async throws -> OpenClawPedometerPayload
+}
+
+struct WatchMessagingStatus: Sendable, Equatable {
+    var supported: Bool
+    var paired: Bool
+    var appInstalled: Bool
+    var reachable: Bool
+    var activationState: String
+}
+
+struct WatchNotificationSendResult: Sendable, Equatable {
+    var deliveredImmediately: Bool
+    var queuedForDelivery: Bool
+    var transport: String
+}
+
+protocol WatchMessagingServicing: AnyObject, Sendable {
+    func status() async -> WatchMessagingStatus
+    func sendNotification(
+        id: String,
+        title: String,
+        body: String,
+        priority: OpenClawNotificationPriority?) async throws -> WatchNotificationSendResult
 }
 
 extension CameraController: CameraServicing {}

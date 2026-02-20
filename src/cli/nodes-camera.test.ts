@@ -6,9 +6,11 @@ import {
   cameraTempPath,
   parseCameraClipPayload,
   parseCameraSnapPayload,
+  writeCameraClipPayloadToFile,
   writeBase64ToFile,
   writeUrlToFile,
 } from "./nodes-camera.js";
+import { parseScreenRecordPayload, screenRecordTempPath } from "./nodes-screen.js";
 
 describe("nodes camera helpers", () => {
   it("parses camera.snap payload", () => {
@@ -53,6 +55,27 @@ describe("nodes camera helpers", () => {
       id: "id1",
     });
     expect(p).toBe(path.join("/tmp", "openclaw-camera-snap-front-id1.jpg"));
+  });
+
+  it("writes camera clip payload to temp path", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-"));
+    try {
+      const out = await writeCameraClipPayloadToFile({
+        payload: {
+          format: "mp4",
+          base64: "aGk=",
+          durationMs: 200,
+          hasAudio: false,
+        },
+        facing: "front",
+        tmpDir: dir,
+        id: "clip1",
+      });
+      expect(out).toBe(path.join(dir, "openclaw-camera-clip-front-clip1.mp4"));
+      await expect(fs.readFile(out, "utf8")).resolves.toBe("hi");
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("writes base64 to file", async () => {
@@ -102,5 +125,54 @@ describe("nodes camera helpers", () => {
     await expect(writeUrlToFile("/tmp/ignored", "https://example.com/huge.bin")).rejects.toThrow(
       /exceeds max/i,
     );
+  });
+});
+
+describe("nodes screen helpers", () => {
+  it("parses screen.record payload", () => {
+    const payload = parseScreenRecordPayload({
+      format: "mp4",
+      base64: "Zm9v",
+      durationMs: 1000,
+      fps: 12,
+      screenIndex: 0,
+      hasAudio: true,
+    });
+    expect(payload.format).toBe("mp4");
+    expect(payload.base64).toBe("Zm9v");
+    expect(payload.durationMs).toBe(1000);
+    expect(payload.fps).toBe(12);
+    expect(payload.screenIndex).toBe(0);
+    expect(payload.hasAudio).toBe(true);
+  });
+
+  it("drops invalid optional fields instead of throwing", () => {
+    const payload = parseScreenRecordPayload({
+      format: "mp4",
+      base64: "Zm9v",
+      durationMs: "nope",
+      fps: null,
+      screenIndex: "0",
+      hasAudio: 1,
+    });
+    expect(payload.durationMs).toBeUndefined();
+    expect(payload.fps).toBeUndefined();
+    expect(payload.screenIndex).toBeUndefined();
+    expect(payload.hasAudio).toBeUndefined();
+  });
+
+  it("rejects invalid screen.record payload", () => {
+    expect(() => parseScreenRecordPayload({ format: "mp4" })).toThrow(
+      /invalid screen\.record payload/i,
+    );
+  });
+
+  it("builds screen record temp path", () => {
+    const p = screenRecordTempPath({
+      ext: "mp4",
+      tmpDir: "/tmp",
+      id: "id1",
+    });
+    expect(p).toBe(path.join("/tmp", "openclaw-screen-record-id1.mp4"));
   });
 });

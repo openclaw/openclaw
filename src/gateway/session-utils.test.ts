@@ -12,6 +12,7 @@ import {
   parseGroupKey,
   pruneLegacyStoreKeys,
   resolveGatewaySessionStoreTarget,
+  resolveSessionModelRef,
   resolveSessionStoreKey,
 } from "./session-utils.js";
 
@@ -68,6 +69,25 @@ describe("gateway session utils", () => {
     expect(resolveSessionStoreKey({ cfg, sessionKey: "agent:alpha:main" })).toBe(
       "agent:alpha:main",
     );
+  });
+
+  test("resolveSessionStoreKey falls back to first list entry when no agent is marked default", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: { list: [{ id: "ops" }, { id: "review" }] },
+    } as OpenClawConfig;
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "main" })).toBe("agent:ops:main");
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "discord:group:123" })).toBe(
+      "agent:ops:discord:group:123",
+    );
+  });
+
+  test("resolveSessionStoreKey falls back to main when agents.list is missing", () => {
+    const cfg = {
+      session: { mainKey: "work" },
+    } as OpenClawConfig;
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "main" })).toBe("agent:main:work");
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "thread-1" })).toBe("agent:main:thread-1");
   });
 
   test("resolveSessionStoreKey normalizes session key casing", () => {
@@ -196,6 +216,47 @@ describe("gateway session utils", () => {
       candidates: ["agent:ops:work", "agent:ops:main"],
     });
     expect(Object.keys(store).toSorted()).toEqual(["agent:ops:work"]);
+  });
+});
+
+describe("resolveSessionModelRef", () => {
+  test("prefers runtime model/provider from session entry", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-6" },
+        },
+      },
+    } as OpenClawConfig;
+
+    const resolved = resolveSessionModelRef(cfg, {
+      sessionId: "s1",
+      updatedAt: Date.now(),
+      modelProvider: "openai-codex",
+      model: "gpt-5.3-codex",
+      modelOverride: "claude-opus-4-6",
+      providerOverride: "anthropic",
+    });
+
+    expect(resolved).toEqual({ provider: "openai-codex", model: "gpt-5.3-codex" });
+  });
+
+  test("falls back to override when runtime model is not recorded yet", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-6" },
+        },
+      },
+    } as OpenClawConfig;
+
+    const resolved = resolveSessionModelRef(cfg, {
+      sessionId: "s2",
+      updatedAt: Date.now(),
+      modelOverride: "openai-codex/gpt-5.3-codex",
+    });
+
+    expect(resolved).toEqual({ provider: "openai-codex", model: "gpt-5.3-codex" });
   });
 });
 

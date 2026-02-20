@@ -65,6 +65,8 @@ export type SandboxBrowserSettings = {
   autoStart?: boolean;
   /** Max time to wait for CDP to become reachable after auto-start (ms). */
   autoStartTimeoutMs?: number;
+  /** Additional bind mounts for the browser container only. When set, replaces docker.binds for the browser container. */
+  binds?: string[];
 };
 
 export type SandboxPruneSettings = {

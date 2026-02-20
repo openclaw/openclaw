@@ -1,12 +1,14 @@
-import { Type } from "@sinclair/typebox";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
+import { Type } from "@sinclair/typebox";
 import { writeBase64ToFile } from "../../cli/nodes-camera.js";
 import { canvasSnapshotTempPath, parseCanvasSnapshotPayload } from "../../cli/nodes-canvas.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { imageMimeFromFormat } from "../../media/mime.js";
+import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
 import { type AnyAgentTool, imageResult, jsonResult, readStringParam } from "./common.js";
-import { callGatewayTool, type GatewayCallOptions } from "./gateway.js";
+import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
 import { resolveNodeId } from "./nodes-utils.js";
 
 const CANVAS_ACTIONS = [
@@ -48,7 +50,8 @@ const CanvasToolSchema = Type.Object({
   jsonlPath: Type.Optional(Type.String()),
 });
 
-export function createCanvasTool(): AnyAgentTool {
+export function createCanvasTool(options?: { config?: OpenClawConfig }): AnyAgentTool {
+  const imageSanitization = resolveImageSanitizationLimits(options?.config);
   return {
     label: "Canvas",
     name: "canvas",
@@ -58,11 +61,7 @@ export function createCanvasTool(): AnyAgentTool {
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
-      const gatewayOpts: GatewayCallOptions = {
-        gatewayUrl: readStringParam(params, "gatewayUrl", { trim: false }),
-        gatewayToken: readStringParam(params, "gatewayToken", { trim: false }),
-        timeoutMs: typeof params.timeoutMs === "number" ? params.timeoutMs : undefined,
-      };
+      const gatewayOpts = readGatewayCallOptions(params);
 
       const nodeId = await resolveNodeId(
         gatewayOpts,
@@ -87,8 +86,13 @@ export function createCanvasTool(): AnyAgentTool {
             height: typeof params.height === "number" ? params.height : undefined,
           };
           const invokeParams: Record<string, unknown> = {};
-          if (typeof params.target === "string" && params.target.trim()) {
-            invokeParams.url = params.target.trim();
+          // Accept both `target` and `url` for present to match common caller expectations.
+          // `target` remains the canonical field for CLI compatibility.
+          const presentTarget =
+            readStringParam(params, "target", { trim: true }) ??
+            readStringParam(params, "url", { trim: true });
+          if (presentTarget) {
+            invokeParams.url = presentTarget;
           }
           if (
             Number.isFinite(placement.x) ||
@@ -105,7 +109,10 @@ export function createCanvasTool(): AnyAgentTool {
           await invoke("canvas.hide", undefined);
           return jsonResult({ ok: true });
         case "navigate": {
-          const url = readStringParam(params, "url", { required: true });
+          // Support `target` as an alias so callers can reuse the same field across present/navigate.
+          const url =
+            readStringParam(params, "url", { trim: true }) ??
+            readStringParam(params, "target", { required: true, trim: true, label: "url" });
           await invoke("canvas.navigate", { url });
           return jsonResult({ ok: true });
         }
@@ -154,6 +161,7 @@ export function createCanvasTool(): AnyAgentTool {
             base64: payload.base64,
             mimeType,
             details: { format: payload.format },
+            imageSanitization,
           });
         }
         case "a2ui_push": {
