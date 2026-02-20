@@ -58,7 +58,7 @@ export async function resolveSshConfig(
   target: SshParsedTarget,
   opts: { identity?: string; timeoutMs?: number } = {},
 ): Promise<SshResolvedConfig | null> {
-  const sshPath = "/usr/bin/ssh";
+  const sshPath = "ssh";
   const args = ["-G"];
   if (target.port > 0 && target.port !== 22) {
     args.push("-p", String(target.port));

@@ -443,6 +443,9 @@ jobs:
       - name: TS tests (macOS)
         env:
           NODE_OPTIONS: --max-old-space-size=4096
+          # vmForks + single-worker macOS CI can leak mocks across files.
+          # Keep mac test execution on process forks for deterministic results.
+          OPENCLAW_TEST_VM_FORKS: "0"
         run: pnpm test
 
       # --- Xcode/Swift setup ---
