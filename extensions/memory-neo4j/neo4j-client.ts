@@ -2152,6 +2152,41 @@ export class Neo4jMemoryClient {
   }
 
   /**
+   * Fetch non-core memories older than minAgeDays for temporal staleness checking.
+   * Only returns memories that contain date-like patterns to avoid wasting LLM calls
+   * on memories that have no temporal component.
+   */
+  async fetchMemoriesForTemporalCheck(
+    minAgeDays: number = 3,
+    agentId?: string,
+  ): Promise<Array<{ id: string; text: string }>> {
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      const agentFilter = agentId ? "AND m.agentId = $agentId" : "";
+      const result = await session.run(
+        `MATCH (m:Memory)
+         WHERE m.category <> 'core'
+           AND m.createdAt IS NOT NULL
+           AND duration.between(datetime(m.createdAt), datetime()).days >= $minAgeDays
+           AND (m.text =~ '(?i).*\\b(\\d{1,2}[:/]\\d{2}|\\d{1,2}\\s*(am|pm)|tomorrow|today|tonight|this morning|this afternoon|this evening|yesterday|last night|next week|\\d{1,2}(st|nd|rd|th)?\\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)|\\d{4}-\\d{2}-\\d{2}|\\d{1,2}/\\d{1,2}/\\d{2,4}|at \\d+%|progress|downloading|in progress|pending|waiting for)\\b.*')
+           ${agentFilter}
+         RETURN m.id AS id, m.text AS text
+         ORDER BY m.createdAt ASC
+         LIMIT 200`,
+        { minAgeDays: neo4j.int(minAgeDays), agentId },
+      );
+
+      return result.records.map((r) => ({
+        id: r.get("id") as string,
+        text: r.get("text") as string,
+      }));
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
    * Delete memories by IDs (DETACH DELETE).
    * Used by the sleep cycle credential scanner.
    *

@@ -8,6 +8,7 @@
  * 1d. ENTITY DEDUP - Merge near-duplicate entities (reduce entity bloat)
  * 2.  EXTRACTION - Form entity relationships (strengthen connections)
  * 3.  DECAY/PRUNING - Remove old, low-importance memories (forgetting curve)
+ * 3b. TEMPORAL STALENESS - Remove memories about past events/dates (temporal decay)
  * 4.  CLEANUP - Remove orphaned entities/tags (garbage collection)
  * 5.  NOISE CLEANUP - Remove dangerous pattern memories
  * 5b. CREDENTIAL SCAN - Remove memories containing leaked credentials
@@ -25,6 +26,7 @@ import path from "node:path";
 import type { ExtractionConfig } from "./config.js";
 import type { Embeddings } from "./embeddings.js";
 import {
+  classifyTemporalStaleness,
   extractTagsOnly,
   isSemanticDuplicate,
   resolveConflict,
@@ -82,6 +84,11 @@ export type SleepCycleResult = {
   decay: {
     memoriesPruned: number;
   };
+  // Phase 3b: Temporal Staleness
+  temporalStaleness: {
+    memoriesChecked: number;
+    memoriesRemoved: number;
+  };
   // Phase 4: Orphan Cleanup
   cleanup: {
     entitiesRemoved: number;
@@ -137,6 +144,10 @@ export type SleepCycleOptions = {
   // Phase 4: Cleanup
   singleUseTagMinAgeDays?: number; // Min age before single-use tag pruning (default: 14)
 
+  // Phase 3b: Temporal Staleness
+  skipTemporalStaleness?: boolean; // Skip temporal staleness detection (default: false)
+  temporalStalenessMinAgeDays?: number; // Only check memories older than this (default: 3)
+
   // Phase 3: Decay
   decayRetentionThreshold?: number; // Below this, memory is pruned (default: 0.1)
   decayBaseHalfLifeDays?: number; // Base half-life in days (default: 30)
@@ -159,6 +170,7 @@ export type SleepCycleOptions = {
       | "semanticDedup"
       | "entityDedup"
       | "decay"
+      | "temporalStaleness"
       | "extraction"
       | "retroactiveTagging"
       | "cleanup"
@@ -316,6 +328,7 @@ export async function runSleepCycle(
     decayCurves,
     extractionBatchSize = 50,
     extractionDelayMs = 1000,
+    skipTemporalStaleness = false,
     skipRetroactiveTagging = false,
     retroactiveTagBatchSize = 50,
     singleUseTagMinAgeDays = 14,
@@ -333,6 +346,7 @@ export async function runSleepCycle(
     semanticDedup: { pairsChecked: 0, duplicatesMerged: 0 },
     entityDedup: { pairsFound: 0, merged: 0 },
     decay: { memoriesPruned: 0 },
+    temporalStaleness: { memoriesChecked: 0, memoriesRemoved: 0 },
     extraction: { total: 0, processed: 0, succeeded: 0, failed: 0 },
     retroactiveTagging: { total: 0, tagged: 0, failed: 0 },
     cleanup: { entitiesRemoved: 0, tagsRemoved: 0, singleUseTagsRemoved: 0 },
@@ -830,6 +844,68 @@ export async function runSleepCycle(
     } catch (err) {
       logger.warn(`memory-neo4j: [sleep] Phase 3 error: ${String(err)}`);
     }
+  }
+
+  // --------------------------------------------------------------------------
+  // Phase 3b: Temporal Staleness Detection
+  // Uses LLM to identify memories about past events/dates that are no longer
+  // relevant (e.g., 'ferry at 8:35 AM tomorrow', 'download at 78%').
+  // Only checks memories older than temporalStalenessMinAgeDays to avoid
+  // removing memories about recent/upcoming events.
+  // --------------------------------------------------------------------------
+  if (!abortSignal?.aborted && config.enabled && !skipTemporalStaleness) {
+    onPhaseStart?.("temporalStaleness");
+    logger.info("memory-neo4j: [sleep] Phase 3b: Temporal Staleness Detection");
+
+    const temporalMinAgeDays = options.temporalStalenessMinAgeDays ?? 3;
+
+    try {
+      const candidates = await db.fetchMemoriesForTemporalCheck(temporalMinAgeDays, agentId);
+      const currentDate = new Date().toISOString().split("T")[0];
+      const toRemove: string[] = [];
+
+      // Process in parallel batches
+      for (let i = 0; i < candidates.length && !abortSignal?.aborted; i += llmConcurrency) {
+        const batch = candidates.slice(i, i + llmConcurrency);
+
+        const outcomes = await Promise.allSettled(
+          batch.map((mem) => classifyTemporalStaleness(mem.text, currentDate, config, abortSignal)),
+        );
+
+        for (let k = 0; k < outcomes.length; k++) {
+          result.temporalStaleness.memoriesChecked++;
+          const outcome = outcomes[k];
+          const mem = batch[k];
+
+          if (outcome.status === "fulfilled" && outcome.value === "stale") {
+            toRemove.push(mem.id);
+            onProgress?.("temporalStaleness", `Stale: "${mem.text.slice(0, 60)}..."`);
+          }
+        }
+      }
+
+      // Remove stale memories
+      if (toRemove.length > 0 && !abortSignal?.aborted) {
+        for (const id of toRemove) {
+          if (abortSignal?.aborted) {
+            break;
+          }
+          await db.invalidateMemory(id);
+        }
+        result.temporalStaleness.memoriesRemoved = toRemove.length;
+        onProgress?.("temporalStaleness", `Removed ${toRemove.length} temporally stale memories`);
+      }
+
+      logger.info(
+        `memory-neo4j: [sleep] Phase 3b complete — ${result.temporalStaleness.memoriesChecked} checked, ${result.temporalStaleness.memoriesRemoved} removed`,
+      );
+    } catch (err) {
+      logger.warn(`memory-neo4j: [sleep] Phase 3b error: ${String(err)}`);
+    }
+  } else if (!config.enabled) {
+    logger.info("memory-neo4j: [sleep] Phase 3b skipped — extraction not enabled");
+  } else if (skipTemporalStaleness) {
+    logger.info("memory-neo4j: [sleep] Phase 3b skipped — temporal staleness disabled");
   }
 
   // --------------------------------------------------------------------------

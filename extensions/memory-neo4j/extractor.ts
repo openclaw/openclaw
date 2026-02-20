@@ -661,6 +661,81 @@ export async function rateImportance(text: string, config: ExtractionConfig): Pr
 }
 
 // ============================================================================
+// Temporal Staleness Classification
+// ============================================================================
+
+/**
+ * Use LLM to classify whether a memory is temporally stale.
+ * A memory is stale if it references a specific event, booking, reminder,
+ * or time-bound logistics that have already passed and hold no lasting value.
+ *
+ * Examples of STALE:
+ * - 'Ferry at 8:35 AM tomorrow from Genting Pier' (event passed)
+ * - 'Meeting at 3pm today in room 5' (event passed)
+ * - 'Download is at 78% progress' (transient state)
+ *
+ * Examples of LASTING:
+ * - 'Tarun visited Tioman Feb 13-18' (historical record)
+ * - 'Prefer window seats on flights' (preference)
+ * - 'Hotel wifi password is abc123' (could still be useful)
+ *
+ * Conservative: returns 'lasting' on any failure.
+ */
+export async function classifyTemporalStaleness(
+  memoryText: string,
+  currentDate: string,
+  config: ExtractionConfig,
+  abortSignal?: AbortSignal,
+): Promise<"stale" | "lasting"> {
+  if (!config.enabled) {
+    return "lasting";
+  }
+
+  try {
+    const content = await callOpenRouter(
+      config,
+      [
+        {
+          role: "system",
+          content: `Today's date is ${currentDate}. You are evaluating whether a memory is temporally stale.
+
+A memory is STALE if ALL of these are true:
+1. It references a specific date, time, or event that has ALREADY PASSED
+2. The information is EPHEMERAL — only useful around the time of the event (e.g., logistics, real-time status, countdowns)
+3. It has NO lasting historical, educational, or reference value
+
+A memory is LASTING if ANY of these are true:
+1. It contains preferences, decisions, facts, or knowledge valuable independent of time
+2. It is a historical record worth keeping (e.g., trip summary, what happened, lessons learned)
+3. It contains contact info, credentials, configuration, or reference data
+4. The date has not passed yet (future event)
+5. It has no specific date/time reference at all
+6. It documents a lesson learned, a how-to, or a decision rationale
+
+When in doubt, choose "lasting". It is far better to keep a slightly stale memory than to delete useful knowledge.
+
+Return JSON: {"classification": "stale"|"lasting", "reason": "brief explanation"}`,
+        },
+        { role: "user", content: memoryText },
+      ],
+      abortSignal,
+    );
+
+    if (!content) {
+      return "lasting";
+    }
+
+    const parsed = JSON.parse(content) as { classification?: string };
+    if (parsed.classification === "stale") {
+      return "stale";
+    }
+    return "lasting";
+  } catch {
+    return "lasting";
+  }
+}
+
+// ============================================================================
 // Semantic Deduplication
 // ============================================================================
 
