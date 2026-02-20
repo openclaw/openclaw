@@ -207,7 +207,7 @@ const WARNING_SUPPRESSION_FLAGS = [
   "--disable-warning=MaxListenersExceededWarning",
 ];
 
-const DEFAULT_CI_MAX_OLD_SPACE_SIZE_MB = 4096;
+const DEFAULT_MAX_OLD_SPACE_SIZE_MB = 4096;
 const maxOldSpaceSizeMb = (() => {
   // CI can hit Node heap limits (especially on large suites). Allow override, default to 4GB.
   const raw = process.env.OPENCLAW_TEST_MAX_OLD_SPACE_SIZE_MB ?? "";
@@ -216,9 +216,10 @@ const maxOldSpaceSizeMb = (() => {
     return parsed;
   }
   if (isCI && !isWindows) {
-    return DEFAULT_CI_MAX_OLD_SPACE_SIZE_MB;
+    return DEFAULT_MAX_OLD_SPACE_SIZE_MB;
   }
-  return null;
+  // Local and Windows CI runs need the same guard to avoid hitting default 4GB V8 ceilings.
+  return DEFAULT_MAX_OLD_SPACE_SIZE_MB;
 })();
 
 function resolveReportDir() {
