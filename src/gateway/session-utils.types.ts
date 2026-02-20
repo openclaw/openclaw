@@ -25,6 +25,16 @@ export type GatewaySessionRow = {
   sessionId?: string;
   systemSent?: boolean;
   abortedLastRun?: boolean;
+  /** Best-effort diagnostics-derived state (only present when the gateway observed activity for this session). */
+  diagnosticsState?: "idle" | "waiting" | "processing";
+  /** Epoch ms timestamp for the diagnostics state sample (usually last activity). */
+  diagnosticsStateTs?: number;
+  /** Convenience boolean for UIs: true when diagnosticsState==="processing". */
+  processingConfirmed?: boolean;
+  /** Diagnostics queue depth (if tracked). */
+  diagnosticsQueueDepth?: number;
+  /** Most recent diagnostics reason (if known). */
+  diagnosticsReason?: string;
   thinkingLevel?: string;
   verboseLevel?: string;
   reasoningLevel?: string;

@@ -392,6 +392,11 @@ export type GatewaySessionRow = {
   sessionId?: string;
   systemSent?: boolean;
   abortedLastRun?: boolean;
+  diagnosticsState?: "idle" | "waiting" | "processing";
+  diagnosticsStateTs?: number;
+  processingConfirmed?: boolean;
+  diagnosticsQueueDepth?: number;
+  diagnosticsReason?: string;
   thinkingLevel?: string;
   verboseLevel?: string;
   reasoningLevel?: string;

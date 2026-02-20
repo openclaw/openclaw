@@ -5,6 +5,11 @@ import { describe, expect, test } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import {
+  getDiagnosticSessionState,
+  getDiagnosticSessionStateCountForTest,
+  resetDiagnosticSessionStateForTest,
+} from "../logging/diagnostic-session-state.js";
+import {
   capArrayByJsonBytes,
   classifySessionKey,
   deriveSessionTitle,
@@ -562,5 +567,100 @@ describe("listSessionsFromStore search", () => {
     expect(stale?.totalTokensFresh).toBe(false);
     expect(missing?.totalTokens).toBeUndefined();
     expect(missing?.totalTokensFresh).toBe(false);
+  });
+});
+
+describe("listSessionsFromStore diagnostics fields", () => {
+  const baseCfg = {
+    session: { mainKey: "main" },
+    agents: { list: [{ id: "main", default: true }] },
+  } as OpenClawConfig;
+
+  test("includes diagnostics-derived state when present", () => {
+    resetDiagnosticSessionStateForTest();
+
+    const key = "agent:main:work-project";
+    const sessionId = "sess-work-1";
+    const state = getDiagnosticSessionState({ sessionKey: key, sessionId });
+    state.state = "processing";
+    state.queueDepth = 2;
+    state.lastActivity = 1234567890;
+    state.lastReason = "unit-test";
+
+    const store: Record<string, SessionEntry> = {
+      [key]: {
+        sessionId,
+        updatedAt: Date.now(),
+        displayName: "Work Project",
+      } as SessionEntry,
+    };
+
+    const result = listSessionsFromStore({
+      cfg: baseCfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: {},
+    });
+
+    expect(result.sessions).toHaveLength(1);
+    const row = result.sessions[0];
+    expect(row.diagnosticsState).toBe("processing");
+    expect(row.processingConfirmed).toBe(true);
+    expect(row.diagnosticsStateTs).toBe(1234567890);
+    expect(row.diagnosticsQueueDepth).toBe(2);
+    expect(row.diagnosticsReason).toBe("unit-test");
+  });
+
+  test("does not create diagnostic state entries when none exist", () => {
+    resetDiagnosticSessionStateForTest();
+    expect(getDiagnosticSessionStateCountForTest()).toBe(0);
+
+    const store: Record<string, SessionEntry> = {
+      "agent:main:personal-chat": {
+        sessionId: "sess-personal-1",
+        updatedAt: Date.now(),
+      } as SessionEntry,
+    };
+
+    const result = listSessionsFromStore({
+      cfg: baseCfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: {},
+    });
+
+    expect(result.sessions).toHaveLength(1);
+    expect(result.sessions[0].processingConfirmed).toBe(false);
+    expect(getDiagnosticSessionStateCountForTest()).toBe(0);
+  });
+
+  test("matches diagnostics state keyed only by sessionId", () => {
+    resetDiagnosticSessionStateForTest();
+
+    const sessionId = "sess-id-only";
+    const state = getDiagnosticSessionState({ sessionId });
+    state.state = "waiting";
+    state.queueDepth = 1;
+    state.lastActivity = 42;
+
+    const store: Record<string, SessionEntry> = {
+      "agent:main:any": {
+        sessionId,
+        updatedAt: Date.now(),
+      } as SessionEntry,
+    };
+
+    const result = listSessionsFromStore({
+      cfg: baseCfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: {},
+    });
+
+    const row = result.sessions[0];
+    expect(row.diagnosticsState).toBe("waiting");
+    expect(row.processingConfirmed).toBe(false);
+    expect(row.diagnosticsStateTs).toBe(42);
+    expect(row.diagnosticsQueueDepth).toBe(1);
   });
 });

@@ -21,6 +21,7 @@ import {
   type SessionEntry,
   type SessionScope,
 } from "../config/sessions.js";
+import { peekDiagnosticSessionState } from "../logging/diagnostic-session-state.js";
 import {
   normalizeAgentId,
   normalizeMainKey,
@@ -788,6 +789,12 @@ export function listSessionsFromStore(params: {
       const resolvedModel = resolveSessionModelRef(cfg, entry, sessionAgentId);
       const modelProvider = resolvedModel.provider ?? DEFAULT_PROVIDER;
       const model = resolvedModel.model ?? DEFAULT_MODEL;
+      const diagState = peekDiagnosticSessionState({
+        sessionKey: key,
+        sessionId: entry?.sessionId,
+      });
+      const diagnosticsState = diagState?.state;
+      const processingConfirmed = diagnosticsState === "processing";
       return {
         key,
         entry,
@@ -804,6 +811,11 @@ export function listSessionsFromStore(params: {
         sessionId: entry?.sessionId,
         systemSent: entry?.systemSent,
         abortedLastRun: entry?.abortedLastRun,
+        diagnosticsState,
+        diagnosticsStateTs: diagState?.lastActivity,
+        processingConfirmed,
+        diagnosticsQueueDepth: diagState?.queueDepth,
+        diagnosticsReason: diagState?.lastReason,
         thinkingLevel: entry?.thinkingLevel,
         verboseLevel: entry?.verboseLevel,
         reasoningLevel: entry?.reasoningLevel,
