@@ -12,11 +12,16 @@ let searchImpl: () => Promise<unknown[]> = async () => [
     source: "memory" as const,
   },
 ];
-let readFileImpl: () => Promise<string> = async () => "";
+let readFileImpl: (params: { relPath: string; from?: number; lines?: number }) => Promise<{
+  text: string;
+  path: string;
+}> = async (params) => ({ text: "", path: params.relPath });
 
 const stubManager = {
   search: vi.fn(async () => await searchImpl()),
-  readFile: vi.fn(async () => await readFileImpl()),
+  readFile: vi.fn(async (params: { relPath: string; from?: number; lines?: number }) => {
+    return await readFileImpl(params);
+  }),
   status: () => ({
     backend,
     files: 1,
@@ -59,7 +64,7 @@ beforeEach(() => {
       source: "memory" as const,
     },
   ];
-  readFileImpl = async () => "";
+  readFileImpl = async (params) => ({ text: "", path: params.relPath });
   vi.clearAllMocks();
 });
 
@@ -187,6 +192,41 @@ describe("memory tools", () => {
       text: "",
       disabled: true,
       error: "path required",
+    });
+  });
+
+  it("roundtrips memory_search path into memory_get", async () => {
+    searchImpl = async () => [
+      {
+        path: "memory/2026-02-07.md",
+        startLine: 1,
+        endLine: 2,
+        score: 0.9,
+        snippet: "hello",
+        source: "memory" as const,
+      },
+    ];
+    readFileImpl = async (params) => ({
+      path: params.relPath,
+      text: `loaded:${params.relPath}`,
+    });
+
+    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const searchTool = createMemorySearchTool({ config: cfg });
+    const getTool = createMemoryGetTool({ config: cfg });
+    if (!searchTool || !getTool) {
+      throw new Error("memory tools missing");
+    }
+
+    const searchResult = await searchTool.execute("call_roundtrip_search", { query: "notes" });
+    const details = searchResult.details as { results: Array<{ path: string }> };
+    const pathFromSearch = details.results[0]?.path;
+    expect(pathFromSearch).toBe("memory/2026-02-07.md");
+
+    const getResult = await getTool.execute("call_roundtrip_get", { path: pathFromSearch });
+    expect(getResult.details).toEqual({
+      path: "memory/2026-02-07.md",
+      text: "loaded:memory/2026-02-07.md",
     });
   });
 });

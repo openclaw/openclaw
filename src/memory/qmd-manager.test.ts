@@ -1064,6 +1064,91 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("maps daemon collection-prefixed file paths to memory_get-compatible paths", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: true,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [],
+        },
+      },
+    } as OpenClawConfig;
+
+    const memoryDir = path.join(workspaceDir, "memory");
+    await fs.mkdir(memoryDir, { recursive: true });
+    await fs.writeFile(path.join(memoryDir, "2026-02-07.md"), "hello from memory", "utf-8");
+
+    const { manager } = await createManager();
+    const inner = manager as unknown as {
+      resolveDocFromFile: (
+        file: string,
+      ) => { rel: string; abs: string; source: "memory" | "sessions" } | null;
+    };
+
+    const mapped = inner.resolveDocFromFile("memory-dir-main/2026-02-07.md");
+    expect(mapped).toEqual({
+      rel: "memory/2026-02-07.md",
+      abs: path.join(memoryDir, "2026-02-07.md"),
+      source: "memory",
+    });
+
+    await expect(manager.readFile({ relPath: mapped?.rel ?? "" })).resolves.toMatchObject({
+      path: "memory/2026-02-07.md",
+      text: "hello from memory",
+    });
+    await expect(
+      manager.readFile({ relPath: "memory-dir-main/2026-02-07.md" }),
+    ).resolves.toMatchObject({
+      path: "memory-dir-main/2026-02-07.md",
+      text: "hello from memory",
+    });
+
+    await manager.close();
+  });
+
+  it("maps daemon absolute file paths to memory_get-compatible paths", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: true,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [],
+        },
+      },
+    } as OpenClawConfig;
+
+    const memoryDir = path.join(workspaceDir, "memory");
+    await fs.mkdir(memoryDir, { recursive: true });
+    const memoryFile = path.join(memoryDir, "2026-02-08.md");
+    await fs.writeFile(memoryFile, "absolute path entry", "utf-8");
+
+    const { manager } = await createManager();
+    const inner = manager as unknown as {
+      resolveDocFromFile: (
+        file: string,
+      ) => { rel: string; abs: string; source: "memory" | "sessions" } | null;
+    };
+
+    const mapped = inner.resolveDocFromFile(memoryFile);
+    expect(mapped).toEqual({
+      rel: "memory/2026-02-08.md",
+      abs: memoryFile,
+      source: "memory",
+    });
+
+    await expect(manager.readFile({ relPath: mapped?.rel ?? "" })).resolves.toMatchObject({
+      path: "memory/2026-02-08.md",
+      text: "absolute path entry",
+    });
+
+    await manager.close();
+  });
+
   it("reads only requested line ranges without loading the whole file", async () => {
     const readFileSpy = vi.spyOn(fs, "readFile");
     const text = Array.from({ length: 50 }, (_, index) => `line-${index + 1}`).join("\n");

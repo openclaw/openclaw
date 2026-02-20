@@ -26,6 +26,7 @@ describe("resolveMemoryBackendConfig", () => {
     expect(resolved.qmd?.collections.length).toBeGreaterThanOrEqual(3);
     expect(resolved.qmd?.command).toBe("qmd");
     expect(resolved.qmd?.searchMode).toBe("search");
+    expect(resolved.qmd?.daemon.port).toBe(18_790);
     expect(resolved.qmd?.update.intervalMs).toBeGreaterThan(0);
     expect(resolved.qmd?.update.waitForBootSync).toBe(false);
     expect(resolved.qmd?.update.commandTimeoutMs).toBe(30_000);
@@ -142,5 +143,23 @@ describe("resolveMemoryBackendConfig", () => {
     } as OpenClawConfig;
     const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
     expect(resolved.qmd?.searchMode).toBe("vsearch");
+  });
+
+  it("resolves qmd daemon port override", () => {
+    const cfg = {
+      agents: { defaults: { workspace: "/tmp/memory-test" } },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          daemon: {
+            enabled: true,
+            port: 19001,
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
+    expect(resolved.qmd?.daemon.enabled).toBe(true);
+    expect(resolved.qmd?.daemon.port).toBe(19_001);
   });
 });

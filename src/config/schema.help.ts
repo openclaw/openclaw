@@ -254,6 +254,15 @@ export const FIELD_HELP: Record<string, string> = {
   "memory.qmd.limits.timeoutMs": "Per-query timeout for QMD searches (default: 4000).",
   "memory.qmd.scope":
     "Session/channel scope for QMD recall (same syntax as session.sendPolicy; default: direct-only). Use match.rawKeyPrefix to match full agent-prefixed session keys.",
+  "memory.qmd.daemon.enabled":
+    "Keep QMD running as a persistent daemon for faster queries (default: false).",
+  "memory.qmd.daemon.port":
+    "Port for the local QMD HTTP daemon endpoint (default: 18790, host fixed to 127.0.0.1).",
+  "memory.qmd.daemon.idleTimeoutMs":
+    "Kill daemon after this many ms of inactivity (default: 900000 / 15 min; 0 = never).",
+  "memory.qmd.daemon.coldStartTimeoutMs":
+    "Timeout for first query while models load (default: 30000).",
+  "memory.qmd.daemon.warmTimeoutMs": "Timeout for queries when daemon is warm (default: 15000).",
   "agents.defaults.memorySearch.cache.maxEntries":
     "Optional cap on cached embeddings (best-effort).",
   "agents.defaults.memorySearch.sync.onSearch":

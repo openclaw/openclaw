@@ -50,6 +50,14 @@ export type ResolvedQmdSessionConfig = {
   retentionDays?: number;
 };
 
+export type ResolvedQmdDaemonConfig = {
+  enabled: boolean;
+  port: number;
+  idleTimeoutMs: number;
+  coldStartTimeoutMs: number;
+  warmTimeoutMs: number;
+};
+
 export type ResolvedQmdConfig = {
   command: string;
   searchMode: MemoryQmdSearchMode;
@@ -59,6 +67,7 @@ export type ResolvedQmdConfig = {
   limits: ResolvedQmdLimitsConfig;
   includeDefaultMemory: boolean;
   scope?: SessionSendPolicyConfig;
+  daemon: ResolvedQmdDaemonConfig;
 };
 
 const DEFAULT_BACKEND: MemoryBackend = "builtin";
@@ -73,6 +82,7 @@ const DEFAULT_QMD_EMBED_INTERVAL = "60m";
 const DEFAULT_QMD_COMMAND_TIMEOUT_MS = 30_000;
 const DEFAULT_QMD_UPDATE_TIMEOUT_MS = 120_000;
 const DEFAULT_QMD_EMBED_TIMEOUT_MS = 120_000;
+const DEFAULT_QMD_DAEMON_PORT = 18_790;
 const DEFAULT_QMD_LIMITS: ResolvedQmdLimitsConfig = {
   maxResults: 6,
   maxSnippetChars: 700,
@@ -259,6 +269,28 @@ function resolveDefaultCollections(
   }));
 }
 
+function resolveDaemonConfig(raw?: MemoryQmdConfig["daemon"]): ResolvedQmdDaemonConfig {
+  return {
+    enabled: raw?.enabled === true,
+    port:
+      typeof raw?.port === "number" && raw.port >= 1 && raw.port <= 65_535
+        ? Math.floor(raw.port)
+        : DEFAULT_QMD_DAEMON_PORT,
+    idleTimeoutMs:
+      typeof raw?.idleTimeoutMs === "number" && raw.idleTimeoutMs >= 0
+        ? raw.idleTimeoutMs
+        : 900_000,
+    coldStartTimeoutMs:
+      typeof raw?.coldStartTimeoutMs === "number" && raw.coldStartTimeoutMs >= 1000
+        ? raw.coldStartTimeoutMs
+        : 30_000,
+    warmTimeoutMs:
+      typeof raw?.warmTimeoutMs === "number" && raw.warmTimeoutMs >= 1000
+        ? raw.warmTimeoutMs
+        : 15_000,
+  };
+}
+
 export function resolveMemoryBackendConfig(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -281,9 +313,13 @@ export function resolveMemoryBackendConfig(params: {
   const rawCommand = qmdCfg?.command?.trim() || "qmd";
   const parsedCommand = splitShellArgs(rawCommand);
   const command = parsedCommand?.[0] || rawCommand.split(/\s+/)[0] || "qmd";
+  const daemon = resolveDaemonConfig(qmdCfg?.daemon);
+  const searchMode = resolveSearchMode(qmdCfg?.searchMode);
+
   const resolved: ResolvedQmdConfig = {
     command,
-    searchMode: resolveSearchMode(qmdCfg?.searchMode),
+    searchMode,
+    daemon,
     collections,
     includeDefaultMemory,
     sessions: resolveSessionConfig(qmdCfg?.sessions, workspaceDir),

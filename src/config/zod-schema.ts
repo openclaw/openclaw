@@ -72,6 +72,16 @@ const MemoryQmdLimitsSchema = z
   })
   .strict();
 
+const MemoryQmdDaemonSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    port: z.number().int().min(1).max(65535).optional(),
+    idleTimeoutMs: z.number().int().min(0).optional(),
+    coldStartTimeoutMs: z.number().int().min(1000).optional(),
+    warmTimeoutMs: z.number().int().min(1000).optional(),
+  })
+  .strict();
+
 const MemoryQmdSchema = z
   .object({
     command: z.string().optional(),
@@ -82,6 +92,7 @@ const MemoryQmdSchema = z
     update: MemoryQmdUpdateSchema.optional(),
     limits: MemoryQmdLimitsSchema.optional(),
     scope: SessionSendPolicySchema.optional(),
+    daemon: MemoryQmdDaemonSchema.optional(),
   })
   .strict();
 
