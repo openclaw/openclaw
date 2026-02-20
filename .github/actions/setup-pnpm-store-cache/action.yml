@@ -18,6 +18,7 @@ runs:
         PNPM_VERSION: ${{ inputs.pnpm-version }}
       run: |
         set -euo pipefail
+        PNPM_VERSION="${PNPM_VERSION:-10.23.0}"
         if [[ ! "$PNPM_VERSION" =~ ^[0-9]+(\.[0-9]+){1,2}([.-][0-9A-Za-z.-]+)?$ ]]; then
           echo "::error::Invalid pnpm-version input: '$PNPM_VERSION'"
           exit 2

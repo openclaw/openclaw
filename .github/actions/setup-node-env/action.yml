@@ -77,6 +77,7 @@ runs:
         which node
         node -v
         pnpm -v
+        FROZEN_LOCKFILE="${FROZEN_LOCKFILE:-true}"
         case "$FROZEN_LOCKFILE" in
           true) LOCKFILE_FLAG="--frozen-lockfile" ;;
           false) LOCKFILE_FLAG="" ;;
