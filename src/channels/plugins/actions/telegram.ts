@@ -15,6 +15,14 @@ import { isTelegramInlineButtonsEnabled } from "../../../telegram/inline-buttons
 import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "../types.js";
 
 const providerId = "telegram";
+const TELEGRAM_PLUGIN_ACTIONS = new Set<ChannelMessageActionName>([
+  "send",
+  "react",
+  "delete",
+  "edit",
+  "sticker",
+  "sticker-search",
+]);
 
 function readTelegramSendParams(params: Record<string, unknown>) {
   const to = readStringParam(params, "to", { required: true });
@@ -42,6 +50,7 @@ function readTelegramSendParams(params: Record<string, unknown>) {
 }
 
 export const telegramMessageActions: ChannelMessageActionAdapter = {
+  supportsAction: ({ action }) => TELEGRAM_PLUGIN_ACTIONS.has(action),
   listActions: ({ cfg }) => {
     const accounts = listEnabledTelegramAccounts(cfg).filter(
       (account) => account.tokenSource !== "none",

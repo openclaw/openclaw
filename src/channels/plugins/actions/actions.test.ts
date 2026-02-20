@@ -389,6 +389,11 @@ describe("telegramMessageActions", () => {
     expect(actions).not.toContain("sticker-search");
   });
 
+  it("defers unsupported actions (like poll) to non-plugin handlers", () => {
+    expect(telegramMessageActions.supportsAction?.({ action: "send" })).toBe(true);
+    expect(telegramMessageActions.supportsAction?.({ action: "poll" })).toBe(false);
+  });
+
   it("allows media-only sends and passes asVoice", async () => {
     const cfg = telegramCfg();
 
