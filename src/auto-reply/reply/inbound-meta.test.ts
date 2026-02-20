@@ -24,6 +24,7 @@ describe("buildInboundMetaSystemPrompt", () => {
       MessageSid: "123",
       MessageSidFull: "123",
       ReplyToId: "99",
+      SenderId: "289522496",
       OriginatingTo: "telegram:5494292670",
       OriginatingChannel: "telegram",
       Provider: "telegram",
@@ -71,8 +72,23 @@ describe("buildInboundMetaSystemPrompt", () => {
     const payload = parseInboundMetaPayload(prompt);
     expect(payload["sender_id"]).toBeUndefined();
   });
-});
 
+  it("system prompt is stable across turns with different message ids (#21785)", () => {
+    const base = {
+      OriginatingTo: "telegram:5494292670",
+      OriginatingChannel: "telegram",
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "direct",
+      SenderId: "289522496",
+    } as TemplateContext;
+
+    const turn1 = buildInboundMetaSystemPrompt({ ...base, MessageSid: "6678" } as TemplateContext);
+    const turn2 = buildInboundMetaSystemPrompt({ ...base, MessageSid: "6680" } as TemplateContext);
+
+    expect(turn1).toBe(turn2);
+  });
+});
 describe("buildInboundUserContextPrefix", () => {
   it("omits conversation label block for direct chats", () => {
     const text = buildInboundUserContextPrefix({
@@ -124,7 +140,6 @@ describe("buildInboundUserContextPrefix", () => {
     expect(conversationInfo["message_id"]).toBe("short-id");
     expect(conversationInfo["message_id_full"]).toBe("full-provider-message-id");
   });
-
   it("omits message_id_full when it matches message_id", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "direct",
