@@ -27,6 +27,28 @@ describe("serializeDoltSummaryFrontmatter", () => {
       ].join("\n"),
     );
   });
+
+  it("can omit children from serialized front-matter", () => {
+    const frontmatter = serializeDoltSummaryFrontmatter(
+      {
+        summaryType: "leaf",
+        datesCovered: { startEpochMs: 1000, endEpochMs: 2000 },
+        children: ["turn-1", "turn-2"],
+        finalizedAtReset: false,
+      },
+      { includeChildren: false },
+    );
+
+    expect(frontmatter).toBe(
+      [
+        "---",
+        "summary-type: leaf",
+        "dates-covered: 1000|2000",
+        "finalized-at-reset: false",
+        "---",
+      ].join("\n"),
+    );
+  });
 });
 
 describe("parseDoltSummaryDocument", () => {
@@ -53,6 +75,22 @@ describe("parseDoltSummaryDocument", () => {
       finalizedAtReset: true,
     });
     expect(parsed.body).toBe("Bindle body");
+  });
+
+  it("accepts summaries without children in front-matter", () => {
+    const parsed = parseDoltSummaryDocument(
+      [
+        "---",
+        "summary-type: leaf",
+        "dates-covered: 100|300",
+        "finalized-at-reset: false",
+        "---",
+        "Leaf body",
+      ].join("\n"),
+    );
+
+    expect(parsed.frontmatter.children).toEqual([]);
+    expect(parsed.body).toBe("Leaf body");
   });
 
   it("rejects malformed front-matter", () => {
@@ -95,6 +133,23 @@ describe("prefixDoltSummaryFrontmatter", () => {
     expect(summary).toContain("children: ['turn-1', 'turn-2']");
     expect(summary).toContain("finalized-at-reset: true");
     expect(summary.endsWith("Old body")).toBe(true);
+  });
+
+  it("supports prefixing front-matter without children", () => {
+    const summary = prefixDoltSummaryFrontmatter({
+      summary: "Body only",
+      frontmatter: {
+        summaryType: "leaf",
+        datesCovered: { startEpochMs: 100, endEpochMs: 200 },
+        children: ["turn-1", "turn-2"],
+        finalizedAtReset: false,
+      },
+      serializeOptions: { includeChildren: false },
+    });
+
+    expect(summary).toContain("summary-type: leaf");
+    expect(summary).not.toContain("children:");
+    expect(summary.endsWith("Body only")).toBe(true);
   });
 });
 

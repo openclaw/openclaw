@@ -1,9 +1,8 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { createAgentSession, SessionManager, SettingsManager } from "@mariozechner/pi-coding-agent";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { createAgentSession, SessionManager, SettingsManager } from "@mariozechner/pi-coding-agent";
 import { resolveOpenClawAgentDir } from "../../agents/agent-paths.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { getApiKeyForModel } from "../../agents/model-auth.js";
@@ -11,10 +10,11 @@ import { ensureOpenClawModelsJson } from "../../agents/models-config.js";
 import { ensureSessionHeader } from "../../agents/pi-embedded-helpers.js";
 import { applyExtraParamsToAgent } from "../../agents/pi-embedded-runner/extra-params.js";
 import { resolveModel } from "../../agents/pi-embedded-runner/model.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { resolveUserPath } from "../../utils.js";
 import {
   prefixDoltSummaryFrontmatter,
-  serializeDoltSummaryFrontmatter,
+  stripLeadingDoltSummaryFrontmatter,
   type DoltSummaryType,
 } from "./contract.js";
 import { type DoltPromptOverrides, resolveDoltPromptTemplate } from "./prompts.js";
@@ -150,7 +150,6 @@ export async function summarizeDoltRollup(
   const prompt = buildDoltSummaryPrompt({
     template,
     sourceTurns,
-    childPointers: params.childPointers,
     datesCovered: params.datesCovered,
     finalizedAtReset,
     instructionText,
@@ -171,12 +170,15 @@ export async function summarizeDoltRollup(
   if (!rawSummary) {
     throw new Error("Dolt summarizer returned an empty response.");
   }
+  const summaryBody = stripLeadingDoltSummaryFrontmatterBlocks(rawSummary).trim();
+  if (!summaryBody) {
+    throw new Error("Dolt summarizer returned front-matter without prose body.");
+  }
 
   const summaryWithFrontmatter = prefixSummaryFrontmatter({
-    summary: rawSummary,
+    summary: summaryBody,
     summaryType: metadata.summary_type,
     datesCovered: params.datesCovered,
-    childPointers: params.childPointers,
     finalizedAtReset,
   });
   return {
@@ -194,7 +196,6 @@ export async function summarizeDoltRollup(
 export function buildDoltSummaryPrompt(params: {
   template: DoltSummaryPromptTemplate;
   sourceTurns: DoltSummarySourceTurn[];
-  childPointers: string[];
   datesCovered: { startEpochMs: number; endEpochMs: number };
   finalizedAtReset: boolean;
   instructionText: string;
@@ -207,22 +208,7 @@ export function buildDoltSummaryPrompt(params: {
     })
     .join("\n\n");
 
-  const frontmatterPreview = renderSummaryFrontmatter({
-    summaryType: params.template.summaryType,
-    datesCovered: params.datesCovered,
-    childPointers: params.childPointers,
-    finalizedAtReset: params.finalizedAtReset,
-  });
-
-  return [
-    params.instructionText,
-    "",
-    `Output must begin with this exact YAML front-matter shape (values filled for this rollup):`,
-    frontmatterPreview,
-    "",
-    "Source material:",
-    sourceBlock,
-  ].join("\n");
+  return [params.instructionText, "", "Source material:", sourceBlock].join("\n");
 }
 
 function resolveFinalizedAtReset(mode: DoltRollupPromptTemplateId, explicit?: boolean): boolean {
@@ -232,25 +218,10 @@ function resolveFinalizedAtReset(mode: DoltRollupPromptTemplateId, explicit?: bo
   return explicit === true;
 }
 
-function renderSummaryFrontmatter(params: {
-  summaryType: DoltRollupSummaryType;
-  datesCovered: { startEpochMs: number; endEpochMs: number };
-  childPointers: string[];
-  finalizedAtReset: boolean;
-}): string {
-  return serializeDoltSummaryFrontmatter({
-    summaryType: params.summaryType,
-    datesCovered: params.datesCovered,
-    children: params.childPointers,
-    finalizedAtReset: params.finalizedAtReset,
-  });
-}
-
 function prefixSummaryFrontmatter(params: {
   summary: string;
   summaryType: DoltRollupSummaryType;
   datesCovered: { startEpochMs: number; endEpochMs: number };
-  childPointers: string[];
   finalizedAtReset: boolean;
 }): string {
   return prefixDoltSummaryFrontmatter({
@@ -258,10 +229,22 @@ function prefixSummaryFrontmatter(params: {
     frontmatter: {
       summaryType: params.summaryType,
       datesCovered: params.datesCovered,
-      children: params.childPointers,
+      children: [],
       finalizedAtReset: params.finalizedAtReset,
     },
+    serializeOptions: { includeChildren: false },
   });
+}
+
+function stripLeadingDoltSummaryFrontmatterBlocks(summary: string): string {
+  let remaining = summary;
+  while (true) {
+    const stripped = stripLeadingDoltSummaryFrontmatter(remaining).trimStart();
+    if (stripped === remaining) {
+      return remaining;
+    }
+    remaining = stripped;
+  }
 }
 
 async function runDoltSummaryPromptWithEmbeddedSession(

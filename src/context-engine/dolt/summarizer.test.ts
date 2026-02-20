@@ -176,12 +176,59 @@ describe("summarizeDoltRollup", () => {
     });
     expect(result.summary).toContain("summary-type: leaf");
     expect(result.summary).toContain("finalized-at-reset: false");
+    expect(result.summary).not.toContain("children:");
     expect(result.summary).toContain("Leaf summary body");
+  });
+
+  it("strips repeated echoed front-matter and persists only prose body", async () => {
+    const echoedFrontmatter = [
+      "---",
+      "summary-type: leaf",
+      "dates-covered: 1000|2000",
+      "children: ['turn-001', 'turn-002']",
+      "finalized-at-reset: false",
+      "---",
+    ].join("\n");
+
+    const result = await summarizeDoltRollup({
+      sourceTurns: BASE_SOURCE,
+      mode: "leaf",
+      datesCovered: { startEpochMs: 1000, endEpochMs: 2000 },
+      childPointers: ["turn-001", "turn-002"],
+      runPrompt: vi.fn(
+        async () => `${echoedFrontmatter}\n${echoedFrontmatter}\nConversation summary prose.`,
+      ),
+    });
+
+    expect(result.summary).toContain("Conversation summary prose.");
+    expect(result.summary).not.toContain("children:");
+    expect(result.summary.match(/summary-type: leaf/g)).toHaveLength(1);
+  });
+
+  it("rejects front-matter-only responses with no prose body", async () => {
+    const frontmatterOnly = [
+      "---",
+      "summary-type: leaf",
+      "dates-covered: 1000|2000",
+      "children: ['turn-001', 'turn-002']",
+      "finalized-at-reset: false",
+      "---",
+    ].join("\n");
+
+    await expect(
+      summarizeDoltRollup({
+        sourceTurns: BASE_SOURCE,
+        mode: "leaf",
+        datesCovered: { startEpochMs: 1000, endEpochMs: 2000 },
+        childPointers: ["turn-001", "turn-002"],
+        runPrompt: vi.fn(async () => `${frontmatterOnly}\n${frontmatterOnly}`),
+      }),
+    ).rejects.toThrow("Dolt summarizer returned front-matter without prose body.");
   });
 });
 
 describe("buildDoltSummaryPrompt", () => {
-  it("uses leaf instruction text and includes front-matter and source material", () => {
+  it("uses leaf instruction text and includes only source material scaffolding", () => {
     const prompt = buildDoltSummaryPrompt({
       template: {
         id: "leaf",
@@ -189,7 +236,6 @@ describe("buildDoltSummaryPrompt", () => {
         summaryType: "leaf",
       },
       sourceTurns: BASE_SOURCE,
-      childPointers: ["turn-001", "turn-002"],
       datesCovered: { startEpochMs: 1000, endEpochMs: 2000 },
       finalizedAtReset: false,
       instructionText: DOLT_LEAF_PROMPT_DEFAULT,
@@ -198,7 +244,11 @@ describe("buildDoltSummaryPrompt", () => {
     expect(prompt).toContain("State changes:");
     expect(prompt).toContain("Open threads:");
     expect(prompt).toContain("RETRIEVABLE:");
-    expect(prompt).toContain("finalized-at-reset: false");
+    expect(prompt).toContain("Source material:");
+    expect(prompt).not.toContain("Output must begin with this exact YAML front-matter shape");
+    expect(prompt).not.toContain("summary-type:");
+    expect(prompt).not.toContain("finalized-at-reset:");
+    expect(prompt).not.toContain("children:");
     expect(prompt).toContain(
       "pointer=turn-002 role=assistant ts=2000 safety_relevant_tool_outcome=true",
     );
@@ -212,7 +262,6 @@ describe("buildDoltSummaryPrompt", () => {
         summaryType: "bindle",
       },
       sourceTurns: BASE_SOURCE,
-      childPointers: ["leaf-001", "leaf-002"],
       datesCovered: { startEpochMs: 1000, endEpochMs: 2000 },
       finalizedAtReset: false,
       instructionText: DOLT_BINDLE_PROMPT_DEFAULT,
@@ -221,7 +270,8 @@ describe("buildDoltSummaryPrompt", () => {
     expect(prompt).toContain("Thread map:");
     expect(prompt).toContain("Cross-leaf continuity:");
     expect(prompt).toContain("ROUTING");
-    expect(prompt).toContain("finalized-at-reset: false");
+    expect(prompt).toContain("Source material:");
+    expect(prompt).not.toContain("summary-type:");
   });
 
   it("accepts custom instruction text from file overrides", () => {
@@ -233,13 +283,12 @@ describe("buildDoltSummaryPrompt", () => {
         summaryType: "leaf",
       },
       sourceTurns: BASE_SOURCE,
-      childPointers: ["turn-001"],
       datesCovered: { startEpochMs: 1000, endEpochMs: 2000 },
       finalizedAtReset: false,
       instructionText: customInstructions,
     });
     expect(prompt).toContain("You are a custom summarizer");
-    expect(prompt).toContain("finalized-at-reset: false");
     expect(prompt).toContain("Source material:");
+    expect(prompt).not.toContain("summary-type:");
   });
 });

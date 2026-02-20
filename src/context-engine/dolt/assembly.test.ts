@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { requireNodeSqlite } from "../../memory/sqlite.js";
 import {
   assembleDoltContext,
+  resolveDoltAssemblyLaneBudgets,
+  resolveDoltLaneCap,
   writeDoltContextSnapshot,
   type DoltContextSnapshot,
 } from "./assembly.js";
@@ -127,16 +129,16 @@ describe("assembleDoltContext", () => {
       tokenBudget: 50_000,
       lanePolicyOverrides: {
         bindle: {
-          target: 50_000,
-          soft: 50_000,
+          target: bindle2.tokenCount + 1,
+          soft: bindle2.tokenCount + 1,
           delta: 0,
-          summaryCap: bindle2.tokenCount + 1,
+          summaryCap: 50_000,
         },
         leaf: {
-          target: 50_000,
-          soft: 50_000,
+          target: leaf2.tokenCount + 1,
+          soft: leaf2.tokenCount + 1,
           delta: 0,
-          summaryCap: leaf2.tokenCount + 1,
+          summaryCap: 50_000,
         },
         turn: {
           target: turn2.tokenCount + turn3.tokenCount + 1,
@@ -210,10 +212,10 @@ describe("assembleDoltContext", () => {
       lanePolicyOverrides: {
         bindle: { target: 0, soft: 0, delta: 0, summaryCap: 0 },
         leaf: {
-          target: 50_000,
-          soft: 50_000,
+          target: leaf2.tokenCount + leaf3.tokenCount + 1,
+          soft: leaf2.tokenCount + leaf3.tokenCount + 1,
           delta: 0,
-          summaryCap: leaf2.tokenCount + leaf3.tokenCount + 1,
+          summaryCap: 50_000,
         },
         turn: { target: 0, soft: 0, delta: 0 },
       },
@@ -369,6 +371,36 @@ describe("assembleDoltContext", () => {
 
     expect(result.budget.availableTokens).toBe(0);
     expect(result.messages).toHaveLength(0);
+  });
+});
+
+describe("resolveDoltLaneCap", () => {
+  it("uses lane target and ignores summaryCap", () => {
+    expect(
+      resolveDoltLaneCap({
+        target: 9_000,
+        soft: 11_000,
+        delta: 0,
+        summaryCap: 2_000,
+      }),
+    ).toBe(9_000);
+  });
+});
+
+describe("resolveDoltAssemblyLaneBudgets", () => {
+  it("allocates leaf and bindle lanes from target caps", () => {
+    const laneBudgets = resolveDoltAssemblyLaneBudgets({
+      availableTokens: 20_000,
+      lanePolicies: {
+        bindle: { target: 9_000, soft: 11_000, delta: 0, summaryCap: 2_000 },
+        leaf: { target: 9_000, soft: 11_000, delta: 0, summaryCap: 2_000 },
+        turn: { target: 9_000, soft: 11_000, delta: 0 },
+      },
+    });
+
+    expect(laneBudgets.bindle).toBe(9_000);
+    expect(laneBudgets.leaf).toBe(9_000);
+    expect(laneBudgets.turn).toBe(2_000);
   });
 });
 

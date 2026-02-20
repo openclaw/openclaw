@@ -19,22 +19,33 @@ export type DoltParsedSummaryDocument = {
   body: string;
 };
 
+export type DoltSummaryFrontmatterSerializeOptions = {
+  includeChildren?: boolean;
+};
+
 /**
  * Render canonical Dolt summary front-matter with deterministic key order.
  */
-export function serializeDoltSummaryFrontmatter(frontmatter: DoltSummaryFrontmatter): string {
+export function serializeDoltSummaryFrontmatter(
+  frontmatter: DoltSummaryFrontmatter,
+  options: DoltSummaryFrontmatterSerializeOptions = {},
+): string {
   const normalized = normalizeFrontmatter(frontmatter);
-  const children = normalized.children
-    .map((pointer) => `'${escapeYamlSingleQuoted(pointer)}'`)
-    .join(", ");
-  return [
+  const includeChildren = options.includeChildren !== false;
+  const lines = [
     "---",
     `summary-type: ${normalized.summaryType}`,
     `dates-covered: ${normalized.datesCovered.startEpochMs}|${normalized.datesCovered.endEpochMs}`,
-    `children: [${children}]`,
     `finalized-at-reset: ${normalized.finalizedAtReset ? "true" : "false"}`,
-    "---",
-  ].join("\n");
+  ];
+  if (includeChildren) {
+    const children = normalized.children
+      .map((pointer) => `'${escapeYamlSingleQuoted(pointer)}'`)
+      .join(", ");
+    lines.splice(3, 0, `children: [${children}]`);
+  }
+  lines.push("---");
+  return lines.join("\n");
 }
 
 /**
@@ -70,9 +81,10 @@ export function stripLeadingDoltSummaryFrontmatter(summary: string): string {
 export function prefixDoltSummaryFrontmatter(params: {
   summary: string;
   frontmatter: DoltSummaryFrontmatter;
+  serializeOptions?: DoltSummaryFrontmatterSerializeOptions;
 }): string {
   const summaryWithoutFrontmatter = stripLeadingDoltSummaryFrontmatter(params.summary).trimStart();
-  const frontmatter = serializeDoltSummaryFrontmatter(params.frontmatter);
+  const frontmatter = serializeDoltSummaryFrontmatter(params.frontmatter, params.serializeOptions);
   return `${frontmatter}\n${summaryWithoutFrontmatter}`;
 }
 
@@ -140,21 +152,23 @@ function parseDoltSummaryFrontmatterLines(frontmatterLines: string): DoltSummary
     values.set(key, value);
   }
 
-  const expectedKeys = ["summary-type", "dates-covered", "children", "finalized-at-reset"];
-  for (const key of expectedKeys) {
+  const requiredKeys = ["summary-type", "dates-covered", "finalized-at-reset"];
+  const optionalKeys = new Set(["children"]);
+  for (const key of requiredKeys) {
     if (!values.has(key)) {
       throw new Error(`Missing Dolt front-matter key: ${key}`);
     }
   }
   for (const key of values.keys()) {
-    if (!expectedKeys.includes(key)) {
+    if (!requiredKeys.includes(key) && !optionalKeys.has(key)) {
       throw new Error(`Unsupported Dolt front-matter key: ${key}`);
     }
   }
 
   const summaryType = parseSummaryType(values.get("summary-type")!);
   const datesCovered = parseDatesCovered(values.get("dates-covered")!);
-  const children = parseChildrenList(values.get("children")!);
+  const childrenValue = values.get("children");
+  const children = typeof childrenValue === "string" ? parseChildrenList(childrenValue) : [];
   const finalizedAtReset = parseBoolean(values.get("finalized-at-reset")!, "finalized-at-reset");
 
   return normalizeFrontmatter({
