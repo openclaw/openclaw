@@ -13,6 +13,11 @@
   "devDependencies": {
     "openclaw": "workspace:*"
   },
+  "pnpm": {
+    "overrides": {
+      "request": "npm:@cypress/request@3.0.10"
+    }
+  },
   "openclaw": {
     "extensions": [
       "./index.ts"
