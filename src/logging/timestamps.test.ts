@@ -1,58 +1,45 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { formatLocalIsoWithOffset } from "./timestamps.js";
 
-function buildFakeDate(parts: {
-  year: number;
-  month: number;
-  day: number;
-  hour: number;
-  minute: number;
-  second: number;
-  millisecond: number;
-  timezoneOffsetMinutes: number;
-}): Date {
-  return {
-    getFullYear: () => parts.year,
-    getMonth: () => parts.month - 1,
-    getDate: () => parts.day,
-    getHours: () => parts.hour,
-    getMinutes: () => parts.minute,
-    getSeconds: () => parts.second,
-    getMilliseconds: () => parts.millisecond,
-    getTimezoneOffset: () => parts.timezoneOffsetMinutes,
-  } as unknown as Date;
-}
-
 describe("formatLocalIsoWithOffset", () => {
-  it("formats positive offset with millisecond padding", () => {
-    const value = formatLocalIsoWithOffset(
-      buildFakeDate({
-        year: 2026,
-        month: 1,
-        day: 2,
-        hour: 3,
-        minute: 4,
-        second: 5,
-        millisecond: 6,
-        timezoneOffsetMinutes: -150, // UTC+02:30
-      }),
-    );
-    expect(value).toBe("2026-01-02T03:04:05.006+02:30");
+  const testDate = new Date("2025-01-01T04:00:00.000Z");
+
+  it("produces +00:00 offset for UTC", () => {
+    const result = formatLocalIsoWithOffset(testDate, "UTC");
+    expect(result).toBe("2025-01-01T04:00:00.000+00:00");
   });
 
-  it("formats negative offset", () => {
-    const value = formatLocalIsoWithOffset(
-      buildFakeDate({
-        year: 2026,
-        month: 12,
-        day: 31,
-        hour: 23,
-        minute: 59,
-        second: 58,
-        millisecond: 321,
-        timezoneOffsetMinutes: 300, // UTC-05:00
-      }),
-    );
-    expect(value).toBe("2026-12-31T23:59:58.321-05:00");
+  it("produces +08:00 offset for Asia/Shanghai", () => {
+    const result = formatLocalIsoWithOffset(testDate, "Asia/Shanghai");
+    expect(result).toBe("2025-01-01T12:00:00.000+08:00");
+  });
+
+  it("produces correct offset for America/New_York", () => {
+    const result = formatLocalIsoWithOffset(testDate, "America/New_York");
+    // January is EST = UTC-5
+    expect(result).toBe("2024-12-31T23:00:00.000-05:00");
+  });
+
+  it("produces correct offset for America/New_York in summer (EDT)", () => {
+    const summerDate = new Date("2025-07-01T12:00:00.000Z");
+    const result = formatLocalIsoWithOffset(summerDate, "America/New_York");
+    // July is EDT = UTC-4
+    expect(result).toBe("2025-07-01T08:00:00.000-04:00");
+  });
+
+  it("outputs a valid ISO 8601 string with offset", () => {
+    const result = formatLocalIsoWithOffset(testDate, "Asia/Shanghai");
+    // ISO 8601 with offset: YYYY-MM-DDTHH:MM:SS.mmm±HH:MM
+    const iso8601WithOffset = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2}$/;
+    expect(result).toMatch(iso8601WithOffset);
+  });
+
+  it("does NOT use getHours, getMinutes, getTimezoneOffset in the implementation", () => {
+    const source = fs.readFileSync(path.resolve(__dirname, "timestamps.ts"), "utf-8");
+    expect(source).not.toMatch(/\.getHours\s*\(/);
+    expect(source).not.toMatch(/\.getMinutes\s*\(/);
+    expect(source).not.toMatch(/\.getTimezoneOffset\s*\(/);
   });
 });

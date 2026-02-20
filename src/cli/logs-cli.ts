@@ -223,7 +223,7 @@ export function registerLogsCli(program: Command) {
     const jsonMode = Boolean(opts.json);
     const pretty = !jsonMode && Boolean(process.stdout.isTTY) && !opts.plain;
     const rich = isRich() && opts.color !== false;
-    const localTime = Boolean(opts.localTime);
+    const localTime = Boolean(opts.localTime) || Boolean(process.env.TZ);
 
     while (true) {
       let payload: LogsTailPayload;
