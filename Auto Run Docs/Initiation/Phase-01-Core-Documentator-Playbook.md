@@ -77,7 +77,8 @@ This phase creates the **openclaw-documentator** — a read-only investigator ag
     - One-liner mappings: "channels → src/channels + src/<name>", "CLI commands → src/commands/", "gateway API → src/gateway/", etc.
     - Common investigation shortcuts
 
-- [ ] Validate the documentator by running a test investigation and saving the result:
+- [x] Validate the documentator by running a test investigation and saving the result:
+  > Completed 2026-02-19: Investigated "How does the hook lifecycle system work in OpenClaw?" following all 7 playbook methodology steps. Read 15+ source files across `src/plugins/` and `src/hooks/`, traced both Layer 1 (typed plugin hooks with 14 named events, priority-sorted execution via `HookRunner`) and Layer 2 (internal event bus with `type:action` string-keyed dispatch). Identified 5 active Layer 1 trigger sites and 4 Layer 2 trigger sites. Confirmed 9 of 14 typed hooks are infrastructure-ready but not yet triggered. Cross-referenced 11 test files and 6 documentation sources. Reviewed output against playbook format spec — all 5 required sections present, all 8 formatting rules followed. No SKILL.md updates needed. Report saved to `Auto Run Docs/Initiation/Working/test-investigation-hooks.md`.
   - Read the completed `skills/documentator/SKILL.md` in full
   - Choose a non-trivial investigation question: "How does the hook lifecycle system work in OpenClaw?"
   - Follow the playbook methodology step by step:
