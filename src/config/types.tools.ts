@@ -28,7 +28,22 @@ export type MediaUnderstandingAttachmentsConfig = {
   prefer?: "first" | "last" | "path" | "url";
 };
 
-export type MediaUnderstandingModelConfig = {
+type MediaProviderRequestConfig = {
+  /** Optional provider-specific query params (merged into requests). */
+  providerOptions?: Record<string, Record<string, string | number | boolean>>;
+  /** @deprecated Use providerOptions.deepgram instead. */
+  deepgram?: {
+    detectLanguage?: boolean;
+    punctuate?: boolean;
+    smartFormat?: boolean;
+  };
+  /** Optional base URL override for provider requests. */
+  baseUrl?: string;
+  /** Optional headers merged into provider requests. */
+  headers?: Record<string, string>;
+};
+
+export type MediaUnderstandingModelConfig = MediaProviderRequestConfig & {
   /** provider API id (e.g. openai, google). */
   provider?: string;
   /** Model id for provider-based understanding. */
@@ -51,25 +66,13 @@ export type MediaUnderstandingModelConfig = {
   timeoutSeconds?: number;
   /** Optional language hint for audio transcription. */
   language?: string;
-  /** Optional provider-specific query params (merged into requests). */
-  providerOptions?: Record<string, Record<string, string | number | boolean>>;
-  /** @deprecated Use providerOptions.deepgram instead. */
-  deepgram?: {
-    detectLanguage?: boolean;
-    punctuate?: boolean;
-    smartFormat?: boolean;
-  };
-  /** Optional base URL override for provider requests. */
-  baseUrl?: string;
-  /** Optional headers merged into provider requests. */
-  headers?: Record<string, string>;
   /** Auth profile id to use for this provider. */
   profile?: string;
   /** Preferred profile id if multiple are available. */
   preferredProfile?: string;
 };
 
-export type MediaUnderstandingConfig = {
+export type MediaUnderstandingConfig = MediaProviderRequestConfig & {
   /** Enable media understanding when models are configured. */
   enabled?: boolean;
   /** Optional scope gating for understanding. */
@@ -84,18 +87,6 @@ export type MediaUnderstandingConfig = {
   timeoutSeconds?: number;
   /** Default language hint (audio). */
   language?: string;
-  /** Optional provider-specific query params (merged into requests). */
-  providerOptions?: Record<string, Record<string, string | number | boolean>>;
-  /** @deprecated Use providerOptions.deepgram instead. */
-  deepgram?: {
-    detectLanguage?: boolean;
-    punctuate?: boolean;
-    smartFormat?: boolean;
-  };
-  /** Optional base URL override for provider requests. */
-  baseUrl?: string;
-  /** Optional headers merged into provider requests. */
-  headers?: Record<string, string>;
   /** Attachment selection policy. */
   attachments?: MediaUnderstandingAttachmentsConfig;
   /** Ordered model list (fallbacks in order). */
@@ -395,8 +386,6 @@ export type ToolsConfig = {
   /** Optional tool policy overrides keyed by provider id or "provider/model". */
   byProvider?: Record<string, ToolPolicyConfig>;
   web?: {
-    /** Optional URL/domain allowlist for web tools. When configured, only URLs matching these patterns are allowed. */
-    urlAllowlist?: string[];
     search?: {
       /** Enable web search tool (default: true when API key is present). */
       enabled?: boolean;

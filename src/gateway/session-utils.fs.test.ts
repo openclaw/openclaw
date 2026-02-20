@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
+import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
 import {
   archiveSessionTranscripts,
   readFirstUserMessageFromTranscript,
@@ -558,15 +559,7 @@ describe("readSessionPreviewItemsFromTranscript", () => {
 
   test("returns recent preview items with tool summary", () => {
     const sessionId = "preview-session";
-    const lines = [
-      JSON.stringify({ type: "session", version: 1, id: sessionId }),
-      JSON.stringify({ message: { role: "user", content: "Hello" } }),
-      JSON.stringify({ message: { role: "assistant", content: "Hi" } }),
-      JSON.stringify({
-        message: { role: "assistant", content: [{ type: "toolcall", name: "weather" }] },
-      }),
-      JSON.stringify({ message: { role: "assistant", content: "Forecast ready" } }),
-    ];
+    const lines = createToolSummaryPreviewTranscriptLines(sessionId);
     writeTranscriptLines(sessionId, lines);
     const result = readPreview(sessionId);
 

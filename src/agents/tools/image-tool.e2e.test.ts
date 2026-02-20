@@ -3,6 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { ModelDefinitionConfig } from "../../config/types.models.js";
+import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import { createOpenClawCodingTools } from "../pi-tools.js";
 import { createHostSandboxFsBridge } from "../test-helpers/host-sandbox-fs-bridge.js";
 import { __testing, createImageTool, resolveImageModelConfigForTool } from "./image-tool.js";
@@ -18,6 +20,7 @@ async function writeAuthProfiles(agentDir: string, profiles: unknown) {
 
 const ONE_PIXEL_PNG_B64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+const ONE_PIXEL_GIF_B64 = "R0lGODlhAQABAIABAP///wAAACwAAAAAAQABAAACAkQBADs=";
 
 async function withTempWorkspacePng(
   cb: (args: { workspaceDir: string; imagePath: string }) => Promise<void>,
@@ -45,8 +48,7 @@ function stubMinimaxOkFetch() {
       base_resp: { status_code: 0, status_msg: "" },
     }),
   });
-  // @ts-expect-error partial global
-  global.fetch = fetch;
+  global.fetch = withFetchPreconnect(fetch);
   vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
   return fetch;
 }
@@ -59,6 +61,18 @@ function createMinimaxImageConfig(): OpenClawConfig {
         imageModel: { primary: "minimax/MiniMax-VL-01" },
       },
     },
+  };
+}
+
+function makeModelDefinition(id: string, input: Array<"text" | "image">): ModelDefinitionConfig {
+  return {
+    id,
+    name: id,
+    reasoning: false,
+    input,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128_000,
+    maxTokens: 8_192,
   };
 }
 
@@ -76,6 +90,33 @@ async function expectImageToolExecOk(
   ).resolves.toMatchObject({
     content: [{ type: "text", text: "ok" }],
   });
+}
+
+function requireImageTool<T>(tool: T | null | undefined): T {
+  expect(tool).not.toBeNull();
+  if (!tool) {
+    throw new Error("expected image tool");
+  }
+  return tool;
+}
+
+function findSchemaUnionKeywords(schema: unknown, path = "root"): string[] {
+  if (!schema || typeof schema !== "object") {
+    return [];
+  }
+  if (Array.isArray(schema)) {
+    return schema.flatMap((item, index) => findSchemaUnionKeywords(item, `${path}[${index}]`));
+  }
+  const record = schema as Record<string, unknown>;
+  const out: string[] = [];
+  for (const [key, value] of Object.entries(record)) {
+    const nextPath = `${path}.${key}`;
+    if (key === "anyOf" || key === "oneOf" || key === "allOf") {
+      out.push(nextPath);
+    }
+    out.push(...findSchemaUnionKeywords(value, nextPath));
+  }
+  return out;
 }
 
 describe("image tool implicit imageModel config", () => {
@@ -96,7 +137,6 @@ describe("image tool implicit imageModel config", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
-    // @ts-expect-error global fetch cleanup
     global.fetch = priorFetch;
   });
 
@@ -152,9 +192,10 @@ describe("image tool implicit imageModel config", () => {
       models: {
         providers: {
           acme: {
+            baseUrl: "https://example.com",
             models: [
-              { id: "text-1", input: ["text"] },
-              { id: "vision-1", input: ["text", "image"] },
+              makeModelDefinition("text-1", ["text"]),
+              makeModelDefinition("vision-1", ["text", "image"]),
             ],
           },
         },
@@ -197,7 +238,8 @@ describe("image tool implicit imageModel config", () => {
       models: {
         providers: {
           acme: {
-            models: [{ id: "vision-1", input: ["text", "image"] }],
+            baseUrl: "https://example.com",
+            models: [makeModelDefinition("vision-1", ["text", "image"])],
           },
         },
       },
@@ -211,6 +253,58 @@ describe("image tool implicit imageModel config", () => {
     expect(tool?.description).toContain("Only use this tool when images were NOT already provided");
   });
 
+  it("exposes an Anthropic-safe image schema without union keywords", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-image-"));
+    try {
+      const cfg = createMinimaxImageConfig();
+      const tool = requireImageTool(createImageTool({ config: cfg, agentDir }));
+
+      const violations = findSchemaUnionKeywords(tool.parameters, "image.parameters");
+      expect(violations).toEqual([]);
+
+      const schema = tool.parameters as {
+        properties?: Record<string, unknown>;
+      };
+      const imageSchema = schema.properties?.image as { type?: unknown } | undefined;
+      const imagesSchema = schema.properties?.images as
+        | { type?: unknown; items?: unknown }
+        | undefined;
+      const imageItems = imagesSchema?.items as { type?: unknown } | undefined;
+
+      expect(imageSchema?.type).toBe("string");
+      expect(imagesSchema?.type).toBe("array");
+      expect(imageItems?.type).toBe("string");
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps an Anthropic-safe image schema snapshot", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-image-"));
+    try {
+      const cfg = createMinimaxImageConfig();
+      const tool = requireImageTool(createImageTool({ config: cfg, agentDir }));
+
+      expect(JSON.parse(JSON.stringify(tool.parameters))).toEqual({
+        type: "object",
+        properties: {
+          prompt: { type: "string" },
+          image: { description: "Single image path or URL.", type: "string" },
+          images: {
+            description: "Multiple image paths or URLs (up to maxImages, default 20).",
+            type: "array",
+            items: { type: "string" },
+          },
+          model: { type: "string" },
+          maxBytesMb: { type: "number" },
+          maxImages: { type: "number" },
+        },
+      });
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
   it("allows workspace images outside default local media roots", async () => {
     await withTempWorkspacePng(async ({ workspaceDir, imagePath }) => {
       const fetch = stubMinimaxOkFetch();
@@ -218,11 +312,7 @@ describe("image tool implicit imageModel config", () => {
       try {
         const cfg = createMinimaxImageConfig();
 
-        const withoutWorkspace = createImageTool({ config: cfg, agentDir });
-        expect(withoutWorkspace).not.toBeNull();
-        if (!withoutWorkspace) {
-          throw new Error("expected image tool");
-        }
+        const withoutWorkspace = requireImageTool(createImageTool({ config: cfg, agentDir }));
         await expect(
           withoutWorkspace.execute("t0", {
             prompt: "Describe the image.",
@@ -230,11 +320,9 @@ describe("image tool implicit imageModel config", () => {
           }),
         ).rejects.toThrow(/Local media path is not under an allowed directory/i);
 
-        const withWorkspace = createImageTool({ config: cfg, agentDir, workspaceDir });
-        expect(withWorkspace).not.toBeNull();
-        if (!withWorkspace) {
-          throw new Error("expected image tool");
-        }
+        const withWorkspace = requireImageTool(
+          createImageTool({ config: cfg, agentDir, workspaceDir }),
+        );
 
         await expectImageToolExecOk(withWorkspace, imagePath);
 
@@ -253,11 +341,7 @@ describe("image tool implicit imageModel config", () => {
         const cfg = createMinimaxImageConfig();
 
         const tools = createOpenClawCodingTools({ config: cfg, agentDir });
-        const tool = tools.find((candidate) => candidate.name === "image");
-        expect(tool).not.toBeNull();
-        if (!tool) {
-          throw new Error("expected image tool");
-        }
+        const tool = requireImageTool(tools.find((candidate) => candidate.name === "image"));
 
         await expectImageToolExecOk(tool, imagePath);
 
@@ -281,11 +365,7 @@ describe("image tool implicit imageModel config", () => {
     const cfg: OpenClawConfig = {
       agents: { defaults: { model: { primary: "minimax/MiniMax-M2.1" } } },
     };
-    const tool = createImageTool({ config: cfg, agentDir, sandbox });
-    expect(tool).not.toBeNull();
-    if (!tool) {
-      throw new Error("expected image tool");
-    }
+    const tool = requireImageTool(createImageTool({ config: cfg, agentDir, sandbox }));
 
     await expect(tool.execute("t1", { image: "https://example.com/a.png" })).rejects.toThrow(
       /Sandboxed image tool does not allow remote URLs/i,
@@ -311,19 +391,7 @@ describe("image tool implicit imageModel config", () => {
       Buffer.from(pngB64, "base64"),
     );
 
-    const fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      statusText: "OK",
-      headers: new Headers(),
-      json: async () => ({
-        content: "ok",
-        base_resp: { status_code: 0, status_msg: "" },
-      }),
-    });
-    // @ts-expect-error partial global
-    global.fetch = fetch;
-    vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
+    const fetch = stubMinimaxOkFetch();
 
     const cfg: OpenClawConfig = {
       agents: {
@@ -334,11 +402,7 @@ describe("image tool implicit imageModel config", () => {
       },
     };
     const sandbox = { root: sandboxRoot, bridge: createHostSandboxFsBridge(sandboxRoot) };
-    const tool = createImageTool({ config: cfg, agentDir, sandbox });
-    expect(tool).not.toBeNull();
-    if (!tool) {
-      throw new Error("expected image tool");
-    }
+    const tool = requireImageTool(createImageTool({ config: cfg, agentDir, sandbox }));
 
     const res = await tool.execute("t1", {
       prompt: "Describe the image.",
@@ -381,7 +445,6 @@ describe("image tool MiniMax VLM routing", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
-    // @ts-expect-error global fetch cleanup
     global.fetch = priorFetch;
   });
 
@@ -396,23 +459,18 @@ describe("image tool MiniMax VLM routing", () => {
         base_resp: baseResp,
       }),
     });
-    // @ts-expect-error partial global
-    global.fetch = fetch;
+    global.fetch = withFetchPreconnect(fetch);
 
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-minimax-vlm-"));
     vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
     const cfg: OpenClawConfig = {
       agents: { defaults: { model: { primary: "minimax/MiniMax-M2.1" } } },
     };
-    const tool = createImageTool({ config: cfg, agentDir });
-    expect(tool).not.toBeNull();
-    if (!tool) {
-      throw new Error("expected image tool");
-    }
+    const tool = requireImageTool(createImageTool({ config: cfg, agentDir }));
     return { fetch, tool };
   }
 
-  it("calls /v1/coding_plan/vlm for minimax image models", async () => {
+  it("accepts image for single-image requests and calls /v1/coding_plan/vlm", async () => {
     const { fetch, tool } = await createMinimaxVlmFixture({ status_code: 0, status_msg: "" });
 
     const res = await tool.execute("t1", {
@@ -434,6 +492,59 @@ describe("image tool MiniMax VLM routing", () => {
     expect(text).toBe("ok");
   });
 
+  it("accepts images[] for multi-image requests", async () => {
+    const { fetch, tool } = await createMinimaxVlmFixture({ status_code: 0, status_msg: "" });
+
+    const res = await tool.execute("t1", {
+      prompt: "Compare these images.",
+      images: [`data:image/png;base64,${pngB64}`, `data:image/gif;base64,${ONE_PIXEL_GIF_B64}`],
+    });
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    const details = res.details as
+      | {
+          images?: Array<{ image: string }>;
+        }
+      | undefined;
+    expect(details?.images).toHaveLength(2);
+  });
+
+  it("combines image + images with dedupe and enforces maxImages", async () => {
+    const { fetch, tool } = await createMinimaxVlmFixture({ status_code: 0, status_msg: "" });
+
+    const deduped = await tool.execute("t1", {
+      prompt: "Compare these images.",
+      image: `data:image/png;base64,${pngB64}`,
+      images: [
+        `data:image/png;base64,${pngB64}`,
+        `data:image/gif;base64,${ONE_PIXEL_GIF_B64}`,
+        `data:image/gif;base64,${ONE_PIXEL_GIF_B64}`,
+      ],
+    });
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    const dedupedDetails = deduped.details as
+      | {
+          images?: Array<{ image: string }>;
+        }
+      | undefined;
+    expect(dedupedDetails?.images).toHaveLength(2);
+
+    const tooMany = await tool.execute("t2", {
+      prompt: "Compare these images.",
+      image: `data:image/png;base64,${pngB64}`,
+      images: [`data:image/gif;base64,${ONE_PIXEL_GIF_B64}`],
+      maxImages: 1,
+    });
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(tooMany.details).toMatchObject({
+      error: "too_many_images",
+      count: 2,
+      max: 1,
+    });
+  });
+
   it("surfaces MiniMax API errors from /v1/coding_plan/vlm", async () => {
     const { tool } = await createMinimaxVlmFixture({ status_code: 1004, status_msg: "bad key" });
 
@@ -447,6 +558,46 @@ describe("image tool MiniMax VLM routing", () => {
 });
 
 describe("image tool response validation", () => {
+  function zeroUsage() {
+    return {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        total: 0,
+      },
+    };
+  }
+
+  function createAssistantMessage(
+    overrides: Partial<{
+      api: string;
+      provider: string;
+      model: string;
+      stopReason: string;
+      errorMessage: string;
+      content: unknown[];
+    }>,
+  ) {
+    return {
+      role: "assistant",
+      api: "openai-responses",
+      provider: "openai",
+      model: "gpt-5-mini",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      usage: zeroUsage(),
+      content: [] as unknown[],
+      ...overrides,
+    };
+  }
+
   it("caps image-tool max tokens by model capability", () => {
     expect(__testing.resolveImageToolMaxTokens(4000)).toBe(4000);
   });
@@ -464,29 +615,9 @@ describe("image tool response validation", () => {
       __testing.coerceImageAssistantText({
         provider: "openai",
         model: "gpt-5-mini",
-        message: {
-          role: "assistant",
-          api: "openai-responses",
-          provider: "openai",
-          model: "gpt-5-mini",
-          stopReason: "stop",
-          timestamp: Date.now(),
-          usage: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 0,
-            cost: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              total: 0,
-            },
-          },
+        message: createAssistantMessage({
           content: [{ type: "thinking", thinking: "hmm" }],
-        },
+        }) as never,
       }),
     ).toThrow(/returned no text/i);
   });
@@ -496,30 +627,10 @@ describe("image tool response validation", () => {
       __testing.coerceImageAssistantText({
         provider: "openai",
         model: "gpt-5-mini",
-        message: {
-          role: "assistant",
-          api: "openai-responses",
-          provider: "openai",
-          model: "gpt-5-mini",
+        message: createAssistantMessage({
           stopReason: "error",
           errorMessage: "boom",
-          timestamp: Date.now(),
-          usage: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 0,
-            cost: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              total: 0,
-            },
-          },
-          content: [],
-        },
+        }) as never,
       }),
     ).toThrow(/boom/i);
   });
@@ -529,28 +640,13 @@ describe("image tool response validation", () => {
       provider: "anthropic",
       model: "claude-opus-4-5",
       message: {
-        role: "assistant",
-        api: "anthropic-messages",
-        provider: "anthropic",
-        model: "claude-opus-4-5",
-        stopReason: "stop",
-        timestamp: Date.now(),
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            total: 0,
-          },
-        },
+        ...createAssistantMessage({
+          api: "anthropic-messages",
+          provider: "anthropic",
+          model: "claude-opus-4-5",
+        }),
         content: [{ type: "text", text: "  hello  " }],
-      },
+      } as never,
     });
     expect(text).toBe("hello");
   });

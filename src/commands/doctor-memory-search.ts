@@ -4,6 +4,7 @@ import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveMemoryBackendConfig } from "../memory/backend-config.js";
 import { note } from "../terminal/note.js";
 import { resolveUserPath } from "../utils.js";
 
@@ -19,6 +20,13 @@ export async function noteMemorySearchHealth(cfg: OpenClawConfig): Promise<void>
 
   if (!resolved) {
     note("Memory search is explicitly disabled (enabled: false).", "Memory search");
+    return;
+  }
+
+  // QMD backend handles embeddings internally (e.g. embeddinggemma) — no
+  // separate embedding provider is needed. Skip the provider check entirely.
+  const backendConfig = resolveMemoryBackendConfig({ cfg, agentId });
+  if (backendConfig.backend === "qmd") {
     return;
   }
 
@@ -54,7 +62,7 @@ export async function noteMemorySearchHealth(cfg: OpenClawConfig): Promise<void>
         "",
         "Fix (pick one):",
         `- Set ${envVar} in your environment`,
-        `- Add credentials: ${formatCliCommand("openclaw configure --section provider")}`,
+        `- Add credentials: ${formatCliCommand(`openclaw auth add --provider ${resolved.provider}`)}`,
         `- To disable: ${formatCliCommand("openclaw config set agents.defaults.memorySearch.enabled false")}`,
         "",
         `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
@@ -81,7 +89,7 @@ export async function noteMemorySearchHealth(cfg: OpenClawConfig): Promise<void>
       "",
       "Fix (pick one):",
       "- Set OPENAI_API_KEY or GEMINI_API_KEY in your environment",
-      `- Add credentials: ${formatCliCommand("openclaw configure --section provider")}`,
+      `- Add credentials: ${formatCliCommand("openclaw auth add --provider openai")}`,
       `- For local embeddings: configure agents.defaults.memorySearch.provider and local model path`,
       `- To disable: ${formatCliCommand("openclaw config set agents.defaults.memorySearch.enabled false")}`,
       "",

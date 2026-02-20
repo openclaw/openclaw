@@ -23,6 +23,30 @@ function isBatchSafe(value: string): boolean {
   return /^[A-Za-z0-9 _\-().]+$/.test(value);
 }
 
+function resolveSystemdUnit(env: NodeJS.ProcessEnv): string {
+  const override = env.OPENCLAW_SYSTEMD_UNIT?.trim();
+  if (override) {
+    return override.endsWith(".service") ? override : `${override}.service`;
+  }
+  return `${resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE)}.service`;
+}
+
+function resolveLaunchdLabel(env: NodeJS.ProcessEnv): string {
+  const override = env.OPENCLAW_LAUNCHD_LABEL?.trim();
+  if (override) {
+    return override;
+  }
+  return resolveGatewayLaunchAgentLabel(env.OPENCLAW_PROFILE);
+}
+
+function resolveWindowsTaskName(env: NodeJS.ProcessEnv): string {
+  const override = env.OPENCLAW_WINDOWS_TASK_NAME?.trim();
+  if (override) {
+    return override;
+  }
+  return resolveGatewayWindowsTaskName(env.OPENCLAW_PROFILE);
+}
+
 /**
  * Prepares a standalone script to restart the gateway service.
  * This script is written to a temporary directory and does not depend on
@@ -41,8 +65,8 @@ export async function prepareRestartScript(
 
   try {
     if (platform === "linux") {
-      const serviceName = resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
-      const escaped = shellEscape(`${serviceName}.service`);
+      const unitName = resolveSystemdUnit(env);
+      const escaped = shellEscape(unitName);
       filename = `openclaw-restart-${timestamp}.sh`;
       scriptContent = `#!/bin/sh
 # Standalone restart script — survives parent process termination.
@@ -53,7 +77,7 @@ systemctl --user restart '${escaped}'
 rm -f "$0"
 `;
     } else if (platform === "darwin") {
-      const label = resolveGatewayLaunchAgentLabel(env.OPENCLAW_PROFILE);
+      const label = resolveLaunchdLabel(env);
       const escaped = shellEscape(label);
       // Fallback to 501 if getuid is not available (though it should be on macOS)
       const uid = process.getuid ? process.getuid() : 501;
@@ -67,7 +91,7 @@ launchctl kickstart -k 'gui/${uid}/${escaped}'
 rm -f "$0"
 `;
     } else if (platform === "win32") {
-      const taskName = resolveGatewayWindowsTaskName(env.OPENCLAW_PROFILE);
+      const taskName = resolveWindowsTaskName(env);
       if (!isBatchSafe(taskName)) {
         return null;
       }

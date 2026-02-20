@@ -22,13 +22,14 @@ import { getApiKeyForModel } from "../agents/model-auth.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
 import { discoverAuthStorage, discoverModels } from "../agents/pi-model-discovery.js";
 import { loadConfig } from "../config/config.js";
-import type { OpenClawConfig, ModelProviderConfig } from "../config/types.js";
+import type { ModelsConfig, OpenClawConfig, ModelProviderConfig } from "../config/types.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
 import { renderCatNoncePngBase64 } from "./live-image-probe.js";
 import { startGatewayServer } from "./server.js";
+import { extractPayloadText } from "./test-helpers.agent-results.js";
 
 const LIVE = isTruthyEnvValue(process.env.LIVE) || isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST);
 const GATEWAY_LIVE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_GATEWAY);
@@ -72,15 +73,6 @@ function assertNoReasoningTags(params: {
       `[${params.label}] reasoning tag leak (${params.model} / ${params.phase}): ${snippet}`,
     );
   }
-}
-
-function extractPayloadText(result: unknown): string {
-  const record = result as Record<string, unknown>;
-  const payloads = Array.isArray(record.payloads) ? record.payloads : [];
-  const texts = payloads
-    .map((p) => (p && typeof p === "object" ? (p as Record<string, unknown>).text : undefined))
-    .filter((t): t is string => typeof t === "string" && t.trim().length > 0);
-  return texts.join("\n").trim();
 }
 
 function isMeaningful(text: string): boolean {
@@ -401,6 +393,7 @@ function buildLiveGatewayConfig(params: {
     ...providerOverrides,
   };
   const providers = Object.keys(nextProviders).length > 0 ? nextProviders : baseProviders;
+  const baseModels = params.cfg.models;
   return {
     ...params.cfg,
     agents: {
@@ -418,7 +411,9 @@ function buildLiveGatewayConfig(params: {
       },
     },
     models:
-      Object.keys(providers).length > 0 ? { ...params.cfg.models, providers } : params.cfg.models,
+      Object.keys(providers).length > 0
+        ? ({ ...baseModels, providers } as ModelsConfig)
+        : baseModels,
   };
 }
 
@@ -1149,10 +1144,10 @@ describeLive("gateway live (dev agent, profile keys)", () => {
     await fs.writeFile(toolProbePath, `nonceA=${nonceA}\nnonceB=${nonceB}\n`);
 
     const port = await getFreeGatewayPort();
-    const server = await startGatewayServer({
-      configPath: cfg.__meta?.path,
-      port,
-      token,
+    const server = await startGatewayServer(port, {
+      bind: "loopback",
+      auth: { mode: "token", token },
+      controlUiEnabled: false,
     });
 
     const client = await connectClient({

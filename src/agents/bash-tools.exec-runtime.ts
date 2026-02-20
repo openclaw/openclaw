@@ -6,7 +6,7 @@ import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { mergePathPrepend } from "../infra/path-prepend.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import type { ProcessSession } from "./bash-process-registry.js";
-import type { ExecToolDetails } from "./bash-tools.exec.js";
+import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 export { applyPathPrepend, normalizePathPrepend } from "../infra/path-prepend.js";
 import { logWarn } from "../logger.js";
@@ -116,7 +116,7 @@ export const execSchema = Type.Object({
   pty: Type.Optional(
     Type.Boolean({
       description:
-        "Run in a pseudo-terminal (PTY) when available (TTY-required CLIs e.g. gog, coding agents)",
+        "Run in a pseudo-terminal (PTY) when available (TTY-required CLIs, coding agents)",
     }),
   ),
   elevated: Type.Optional(

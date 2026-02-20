@@ -6,7 +6,7 @@ import { cancel, isCancel } from "@clack/prompts";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../agents/workspace.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { CONFIG_PATH } from "../config/config.js";
-import { resolveMainSessionKey, resolveSessionTranscriptsDirForAgent } from "../config/sessions.js";
+import { resolveSessionTranscriptsDirForAgent } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
 import { pickPrimaryLanIPv4, isValidIPv4 } from "../gateway/net.js";
@@ -31,6 +31,7 @@ export function guardCancel<T>(value: T | symbol, runtime: RuntimeEnv): T {
   if (isCancel(value)) {
     cancel(stylePromptTitle("Setup cancelled.") ?? "Setup cancelled.");
     runtime.exit(0);
+    throw new Error("unreachable");
   }
   return value;
 }
@@ -454,17 +455,12 @@ function summarizeError(err: unknown): string {
 
 export const DEFAULT_WORKSPACE = DEFAULT_AGENT_WORKSPACE_DIR;
 
-type ControlUiLinksParams = {
+export function resolveControlUiLinks(params: {
   port: number;
   bind?: "auto" | "lan" | "loopback" | "custom" | "tailnet";
   customBindHost?: string;
   basePath?: string;
-};
-
-export function resolveControlUiLinks(params: ControlUiLinksParams): {
-  httpUrl: string;
-  wsUrl: string;
-} {
+}): { httpUrl: string; wsUrl: string } {
   const port = params.port;
   const bind = params.bind ?? "loopback";
   const customBindHost = params.customBindHost?.trim();
@@ -488,40 +484,4 @@ export function resolveControlUiLinks(params: ControlUiLinksParams): {
     httpUrl: `http://${host}:${port}${uiPath}`,
     wsUrl: `ws://${host}:${port}${wsPath}`,
   };
-}
-
-export function resolveLocalBrowserControlUiLinks(params: ControlUiLinksParams): {
-  httpUrl: string;
-  wsUrl: string;
-} {
-  const bind = params.bind === "lan" ? "loopback" : params.bind;
-  return resolveControlUiLinks({
-    ...params,
-    bind,
-  });
-}
-
-export function resolveCanonicalMainSessionKey(cfg: OpenClawConfig): string {
-  return resolveMainSessionKey(cfg);
-}
-
-export function buildWebchatUrl(params: {
-  httpUrl: string;
-  sessionKey: string;
-  token?: string;
-}): string {
-  const base = new URL(params.httpUrl);
-  if (!base.pathname.endsWith("/")) {
-    base.pathname = `${base.pathname}/`;
-  }
-
-  const chatUrl = new URL("chat", base);
-  chatUrl.searchParams.set("session", params.sessionKey.trim());
-
-  const token = params.token?.trim();
-  if (token) {
-    chatUrl.hash = `token=${encodeURIComponent(token)}`;
-  }
-
-  return chatUrl.toString();
 }

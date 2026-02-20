@@ -87,6 +87,7 @@ function buildReplyTagsSection(isMinimal: boolean) {
   return [
     "## Reply Tags",
     "To request a native reply/quote on supported surfaces, include one tag in your reply:",
+    "- Reply tags must be the very first token in the message (no leading text/newlines): [[reply_to_current]] your reply.",
     "- [[reply_to_current]] replies to the triggering message.",
     "- Prefer [[reply_to_current]]. Use [[reply_to:<id>]] only when an id was explicitly provided (e.g. by the user or a tool).",
     "Whitespace inside the tag is allowed (e.g. [[ reply_to_current ]] / [[ reply_to: 123 ]]).",
@@ -145,23 +146,6 @@ function buildVoiceSection(params: { isMinimal: boolean; ttsHint?: string }) {
     return [];
   }
   return ["## Voice (TTS)", hint, ""];
-}
-
-function buildLlmsTxtSection(params: { isMinimal: boolean; availableTools: Set<string> }) {
-  if (params.isMinimal) {
-    return [];
-  }
-  if (!params.availableTools.has("web_fetch")) {
-    return [];
-  }
-  return [
-    "## llms.txt Discovery",
-    "When exploring a new domain or website (via web_fetch or browser), check for an llms.txt file that describes how AI agents should interact with the site:",
-    "- Try `/llms.txt` or `/.well-known/llms.txt` at the domain root",
-    "- If found, follow its guidance for interacting with that site's content and APIs",
-    "- llms.txt is an emerging standard (like robots.txt for AI) — not all sites have one, so don't warn if missing",
-    "",
-  ];
 }
 
 function buildDocsSection(params: { docsPath?: string; isMinimal: boolean; readToolName: string }) {
@@ -265,10 +249,6 @@ export function buildAgentSystemPrompt(params: {
     subagents: "List, steer, or kill sub-agent runs for this requester session",
     session_status:
       "Show a /status-equivalent status card (usage + time + Reasoning/Verbose/Elevated); use for model-use questions (📊 session_status); optional per-session model override",
-    architect_pipeline:
-      "Manage Architect CEO orchestration state and audit decision gates for multi-agent build loops",
-    venture_studio:
-      "Capture web/forum pain-point research and generate monetized app plans + workflow documents; pair with web_search/web_fetch for source discovery",
     image: "Analyze an image with the configured image model",
   };
 
@@ -296,8 +276,6 @@ export function buildAgentSystemPrompt(params: {
     "sessions_send",
     "subagents",
     "session_status",
-    "architect_pipeline",
-    "venture_studio",
     "image",
   ];
 
@@ -563,7 +541,6 @@ export function buildAgentSystemPrompt(params: {
       messageToolHints: params.messageToolHints,
     }),
     ...buildVoiceSection({ isMinimal, ttsHint: params.ttsHint }),
-    ...buildLlmsTxtSection({ isMinimal, availableTools }),
   ];
 
   if (extraSystemPrompt) {

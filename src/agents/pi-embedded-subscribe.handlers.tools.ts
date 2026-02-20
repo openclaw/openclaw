@@ -5,8 +5,8 @@ import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { normalizeTextForComparison } from "./pi-embedded-helpers.js";
 import { isMessagingTool, isMessagingToolSendAction } from "./pi-embedded-messaging.js";
 import type {
-  EmbeddedPiSubscribeContext,
   ToolCallSummary,
+  ToolHandlerContext,
 } from "./pi-embedded-subscribe.handlers.types.js";
 import {
   extractToolErrorMessage,
@@ -63,8 +63,73 @@ function extendExecMeta(toolName: string, args: unknown, meta?: string): string 
   return meta ? `${meta} · ${suffix}` : suffix;
 }
 
+function pushUniqueMediaUrl(urls: string[], seen: Set<string>, value: unknown): void {
+  if (typeof value !== "string") {
+    return;
+  }
+  const normalized = value.trim();
+  if (!normalized || seen.has(normalized)) {
+    return;
+  }
+  seen.add(normalized);
+  urls.push(normalized);
+}
+
+function collectMessagingMediaUrlsFromRecord(record: Record<string, unknown>): string[] {
+  const urls: string[] = [];
+  const seen = new Set<string>();
+
+  pushUniqueMediaUrl(urls, seen, record.media);
+  pushUniqueMediaUrl(urls, seen, record.mediaUrl);
+  pushUniqueMediaUrl(urls, seen, record.path);
+  pushUniqueMediaUrl(urls, seen, record.filePath);
+
+  const mediaUrls = record.mediaUrls;
+  if (Array.isArray(mediaUrls)) {
+    for (const mediaUrl of mediaUrls) {
+      pushUniqueMediaUrl(urls, seen, mediaUrl);
+    }
+  }
+
+  return urls;
+}
+
+function collectMessagingMediaUrlsFromToolResult(result: unknown): string[] {
+  const urls: string[] = [];
+  const seen = new Set<string>();
+  const appendFromRecord = (value: unknown) => {
+    if (!value || typeof value !== "object") {
+      return;
+    }
+    const extracted = collectMessagingMediaUrlsFromRecord(value as Record<string, unknown>);
+    for (const url of extracted) {
+      if (seen.has(url)) {
+        continue;
+      }
+      seen.add(url);
+      urls.push(url);
+    }
+  };
+
+  appendFromRecord(result);
+  if (result && typeof result === "object") {
+    appendFromRecord((result as Record<string, unknown>).details);
+  }
+
+  const outputText = extractToolResultText(result);
+  if (outputText) {
+    try {
+      appendFromRecord(JSON.parse(outputText));
+    } catch {
+      // Ignore non-JSON tool output.
+    }
+  }
+
+  return urls;
+}
+
 export async function handleToolExecutionStart(
-  ctx: EmbeddedPiSubscribeContext,
+  ctx: ToolHandlerContext,
   evt: AgentEvent & { toolName: string; toolCallId: string; args: unknown },
 ) {
   // Flush pending block replies to preserve message boundaries before tool execution.
@@ -145,17 +210,17 @@ export async function handleToolExecutionStart(
         ctx.state.pendingMessagingTexts.set(toolCallId, text);
         ctx.log.debug(`Tracking pending messaging text: tool=${toolName} len=${text.length}`);
       }
-      // Track media URL from messaging tool args (pending until tool_execution_end)
-      const mediaUrl = argsRecord.mediaUrl ?? argsRecord.path ?? argsRecord.filePath;
-      if (mediaUrl && typeof mediaUrl === "string") {
-        ctx.state.pendingMessagingMediaUrls.set(toolCallId, mediaUrl);
+      // Track media URLs from messaging tool args (pending until tool_execution_end).
+      const mediaUrls = collectMessagingMediaUrlsFromRecord(argsRecord);
+      if (mediaUrls.length > 0) {
+        ctx.state.pendingMessagingMediaUrls.set(toolCallId, mediaUrls);
       }
     }
   }
 }
 
 export function handleToolExecutionUpdate(
-  ctx: EmbeddedPiSubscribeContext,
+  ctx: ToolHandlerContext,
   evt: AgentEvent & {
     toolName: string;
     toolCallId: string;
@@ -187,7 +252,7 @@ export function handleToolExecutionUpdate(
 }
 
 export async function handleToolExecutionEnd(
-  ctx: EmbeddedPiSubscribeContext,
+  ctx: ToolHandlerContext,
   evt: AgentEvent & {
     toolName: string;
     toolCallId: string;
@@ -253,11 +318,22 @@ export async function handleToolExecutionEnd(
       ctx.trimMessagingToolSent();
     }
   }
-  const pendingMediaUrl = ctx.state.pendingMessagingMediaUrls.get(toolCallId);
-  if (pendingMediaUrl) {
-    ctx.state.pendingMessagingMediaUrls.delete(toolCallId);
-    if (!isToolError) {
-      ctx.state.messagingToolSentMediaUrls.push(pendingMediaUrl);
+  const pendingMediaUrls = ctx.state.pendingMessagingMediaUrls.get(toolCallId) ?? [];
+  ctx.state.pendingMessagingMediaUrls.delete(toolCallId);
+  const startArgs =
+    startData?.args && typeof startData.args === "object"
+      ? (startData.args as Record<string, unknown>)
+      : {};
+  const isMessagingSend =
+    pendingMediaUrls.length > 0 ||
+    (isMessagingTool(toolName) && isMessagingToolSendAction(toolName, startArgs));
+  if (!isToolError && isMessagingSend) {
+    const committedMediaUrls = [
+      ...pendingMediaUrls,
+      ...collectMessagingMediaUrlsFromToolResult(result),
+    ];
+    if (committedMediaUrls.length > 0) {
+      ctx.state.messagingToolSentMediaUrls.push(...committedMediaUrls);
       ctx.trimMessagingToolSent();
     }
   }

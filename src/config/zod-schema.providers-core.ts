@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { isSafeScpRemoteHost } from "../infra/scp-host.js";
+import { isValidInboundPathRootPattern } from "../media/inbound-path-policy.js";
 import {
   normalizeTelegramCommandDescription,
   normalizeTelegramCommandName,
@@ -546,6 +548,7 @@ export const SlackAccountSchema = z
     chunkMode: z.enum(["length", "newline"]).optional(),
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
+    streaming: z.boolean().optional(),
     mediaMaxMb: z.number().positive().optional(),
     reactionNotifications: z.enum(["off", "own", "all", "allowlist"]).optional(),
     reactionAllowlist: z.array(z.union([z.string(), z.number()])).optional(),
@@ -803,7 +806,10 @@ export const IMessageAccountSchemaBase = z
     configWrites: z.boolean().optional(),
     cliPath: ExecutableTokenSchema.optional(),
     dbPath: z.string().optional(),
-    remoteHost: z.string().optional(),
+    remoteHost: z
+      .string()
+      .refine(isSafeScpRemoteHost, "expected SSH host or user@host (no spaces/options)")
+      .optional(),
     service: z.union([z.literal("imessage"), z.literal("sms"), z.literal("auto")]).optional(),
     region: z.string().optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),
@@ -814,6 +820,12 @@ export const IMessageAccountSchemaBase = z
     dmHistoryLimit: z.number().int().min(0).optional(),
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
     includeAttachments: z.boolean().optional(),
+    attachmentRoots: z
+      .array(z.string().refine(isValidInboundPathRootPattern, "expected absolute path root"))
+      .optional(),
+    remoteAttachmentRoots: z
+      .array(z.string().refine(isValidInboundPathRootPattern, "expected absolute path root"))
+      .optional(),
     mediaMaxMb: z.number().int().positive().optional(),
     textChunkLimit: z.number().int().positive().optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),
@@ -1010,65 +1022,3 @@ export const MSTeamsConfigSchema = z
         'channels.msteams.dmPolicy="open" requires channels.msteams.allowFrom to include "*"',
     });
   });
-
-// ── Linq ─────────────────────────────────────────────────────────────────────
-
-const LinqAllowFromEntry = z.union([z.string(), z.number()]);
-
-const LinqAccountSchemaBase = z
-  .object({
-    name: z.string().optional(),
-    enabled: z.boolean().optional(),
-    apiToken: z.string().optional().register(sensitive),
-    tokenFile: z.string().optional(),
-    fromPhone: z.string().optional(),
-    dmPolicy: DmPolicySchema.optional(),
-    allowFrom: z.array(LinqAllowFromEntry).optional(),
-    groupPolicy: GroupPolicySchema.optional(),
-    groupAllowFrom: z.array(LinqAllowFromEntry).optional(),
-    mediaMaxMb: z.number().positive().optional(),
-    textChunkLimit: z.number().positive().optional(),
-    webhookUrl: z.string().optional(),
-    webhookSecret: z.string().optional().register(sensitive),
-    webhookPath: z.string().optional(),
-    webhookHost: z.string().optional(),
-    historyLimit: z.number().nonnegative().optional(),
-    blockStreaming: z.boolean().optional(),
-    groups: z
-      .record(
-        z.string(),
-        z
-          .object({
-            requireMention: z.boolean().optional(),
-            tools: ToolPolicySchema,
-            toolsBySender: ToolPolicyBySenderSchema,
-          })
-          .strict()
-          .optional(),
-      )
-      .optional(),
-    responsePrefix: z.string().optional(),
-  })
-  .strict();
-
-const LinqAccountSchema = LinqAccountSchemaBase.superRefine((value, ctx) => {
-  requireOpenAllowFrom({
-    policy: value.dmPolicy,
-    allowFrom: value.allowFrom,
-    ctx,
-    path: ["allowFrom"],
-    message: 'channels.linq.dmPolicy="open" requires channels.linq.allowFrom to include "*"',
-  });
-});
-
-export const LinqConfigSchema = LinqAccountSchemaBase.extend({
-  accounts: z.record(z.string(), LinqAccountSchema.optional()).optional(),
-}).superRefine((value, ctx) => {
-  requireOpenAllowFrom({
-    policy: value.dmPolicy,
-    allowFrom: value.allowFrom,
-    ctx,
-    path: ["allowFrom"],
-    message: 'channels.linq.dmPolicy="open" requires channels.linq.allowFrom to include "*"',
-  });
-});

@@ -296,6 +296,7 @@ public struct Snapshot: Codable, Sendable {
     public let statedir: String?
     public let sessiondefaults: [String: AnyCodable]?
     public let authmode: AnyCodable?
+    public let updateavailable: [String: AnyCodable]?
 
     public init(
         presence: [PresenceEntry],
@@ -305,7 +306,8 @@ public struct Snapshot: Codable, Sendable {
         configpath: String?,
         statedir: String?,
         sessiondefaults: [String: AnyCodable]?,
-        authmode: AnyCodable?
+        authmode: AnyCodable?,
+        updateavailable: [String: AnyCodable]?
     ) {
         self.presence = presence
         self.health = health
@@ -315,6 +317,7 @@ public struct Snapshot: Codable, Sendable {
         self.statedir = statedir
         self.sessiondefaults = sessiondefaults
         self.authmode = authmode
+        self.updateavailable = updateavailable
     }
     private enum CodingKeys: String, CodingKey {
         case presence
@@ -325,6 +328,7 @@ public struct Snapshot: Codable, Sendable {
         case statedir = "stateDir"
         case sessiondefaults = "sessionDefaults"
         case authmode = "authMode"
+        case updateavailable = "updateAvailable"
     }
 }
 
@@ -394,6 +398,7 @@ public struct SendParams: Codable, Sendable {
     public let gifplayback: Bool?
     public let channel: String?
     public let accountid: String?
+    public let threadid: String?
     public let sessionkey: String?
     public let idempotencykey: String
 
@@ -405,6 +410,7 @@ public struct SendParams: Codable, Sendable {
         gifplayback: Bool?,
         channel: String?,
         accountid: String?,
+        threadid: String?,
         sessionkey: String?,
         idempotencykey: String
     ) {
@@ -415,6 +421,7 @@ public struct SendParams: Codable, Sendable {
         self.gifplayback = gifplayback
         self.channel = channel
         self.accountid = accountid
+        self.threadid = threadid
         self.sessionkey = sessionkey
         self.idempotencykey = idempotencykey
     }
@@ -426,6 +433,7 @@ public struct SendParams: Codable, Sendable {
         case gifplayback = "gifPlayback"
         case channel
         case accountid = "accountId"
+        case threadid = "threadId"
         case sessionkey = "sessionKey"
         case idempotencykey = "idempotencyKey"
     }
@@ -918,6 +926,68 @@ public struct NodeInvokeRequestEvent: Codable, Sendable {
         case paramsjson = "paramsJSON"
         case timeoutms = "timeoutMs"
         case idempotencykey = "idempotencyKey"
+    }
+}
+
+public struct PushTestParams: Codable, Sendable {
+    public let nodeid: String
+    public let title: String?
+    public let body: String?
+    public let environment: String?
+
+    public init(
+        nodeid: String,
+        title: String?,
+        body: String?,
+        environment: String?
+    ) {
+        self.nodeid = nodeid
+        self.title = title
+        self.body = body
+        self.environment = environment
+    }
+    private enum CodingKeys: String, CodingKey {
+        case nodeid = "nodeId"
+        case title
+        case body
+        case environment
+    }
+}
+
+public struct PushTestResult: Codable, Sendable {
+    public let ok: Bool
+    public let status: Int
+    public let apnsid: String?
+    public let reason: String?
+    public let tokensuffix: String
+    public let topic: String
+    public let environment: String
+
+    public init(
+        ok: Bool,
+        status: Int,
+        apnsid: String?,
+        reason: String?,
+        tokensuffix: String,
+        topic: String,
+        environment: String
+    ) {
+        self.ok = ok
+        self.status = status
+        self.apnsid = apnsid
+        self.reason = reason
+        self.tokensuffix = tokensuffix
+        self.topic = topic
+        self.environment = environment
+    }
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case status
+        case apnsid = "apnsId"
+        case reason
+        case tokensuffix = "tokenSuffix"
+        case topic
+        case environment
     }
 }
 
@@ -2504,6 +2574,19 @@ public struct DevicePairRejectParams: Codable, Sendable {
     }
 }
 
+public struct DevicePairRemoveParams: Codable, Sendable {
+    public let deviceid: String
+
+    public init(
+        deviceid: String
+    ) {
+        self.deviceid = deviceid
+    }
+    private enum CodingKeys: String, CodingKey {
+        case deviceid = "deviceId"
+    }
+}
+
 public struct DeviceTokenRotateParams: Codable, Sendable {
     public let deviceid: String
     public let role: String
@@ -2762,144 +2845,6 @@ public struct ChatEvent: Codable, Sendable {
         case errormessage = "errorMessage"
         case usage
         case stopreason = "stopReason"
-    }
-}
-
-public struct MeshPlanParams: Codable, Sendable {
-    public let goal: String
-    public let steps: [[String: AnyCodable]]?
-
-    public init(
-        goal: String,
-        steps: [[String: AnyCodable]]?
-    ) {
-        self.goal = goal
-        self.steps = steps
-    }
-    private enum CodingKeys: String, CodingKey {
-        case goal
-        case steps
-    }
-}
-
-public struct MeshPlanAutoParams: Codable, Sendable {
-    public let goal: String
-    public let maxsteps: Int?
-    public let agentid: String?
-    public let sessionkey: String?
-    public let thinking: String?
-    public let timeoutms: Int?
-    public let lane: String?
-
-    public init(
-        goal: String,
-        maxsteps: Int?,
-        agentid: String?,
-        sessionkey: String?,
-        thinking: String?,
-        timeoutms: Int?,
-        lane: String?
-    ) {
-        self.goal = goal
-        self.maxsteps = maxsteps
-        self.agentid = agentid
-        self.sessionkey = sessionkey
-        self.thinking = thinking
-        self.timeoutms = timeoutms
-        self.lane = lane
-    }
-    private enum CodingKeys: String, CodingKey {
-        case goal
-        case maxsteps = "maxSteps"
-        case agentid = "agentId"
-        case sessionkey = "sessionKey"
-        case thinking
-        case timeoutms = "timeoutMs"
-        case lane
-    }
-}
-
-public struct MeshWorkflowPlan: Codable, Sendable {
-    public let planid: String
-    public let goal: String
-    public let createdat: Int
-    public let steps: [[String: AnyCodable]]
-
-    public init(
-        planid: String,
-        goal: String,
-        createdat: Int,
-        steps: [[String: AnyCodable]]
-    ) {
-        self.planid = planid
-        self.goal = goal
-        self.createdat = createdat
-        self.steps = steps
-    }
-    private enum CodingKeys: String, CodingKey {
-        case planid = "planId"
-        case goal
-        case createdat = "createdAt"
-        case steps
-    }
-}
-
-public struct MeshRunParams: Codable, Sendable {
-    public let plan: MeshWorkflowPlan
-    public let continueonerror: Bool?
-    public let maxparallel: Int?
-    public let defaultsteptimeoutms: Int?
-    public let lane: String?
-
-    public init(
-        plan: MeshWorkflowPlan,
-        continueonerror: Bool?,
-        maxparallel: Int?,
-        defaultsteptimeoutms: Int?,
-        lane: String?
-    ) {
-        self.plan = plan
-        self.continueonerror = continueonerror
-        self.maxparallel = maxparallel
-        self.defaultsteptimeoutms = defaultsteptimeoutms
-        self.lane = lane
-    }
-    private enum CodingKeys: String, CodingKey {
-        case plan
-        case continueonerror = "continueOnError"
-        case maxparallel = "maxParallel"
-        case defaultsteptimeoutms = "defaultStepTimeoutMs"
-        case lane
-    }
-}
-
-public struct MeshStatusParams: Codable, Sendable {
-    public let runid: String
-
-    public init(
-        runid: String
-    ) {
-        self.runid = runid
-    }
-    private enum CodingKeys: String, CodingKey {
-        case runid = "runId"
-    }
-}
-
-public struct MeshRetryParams: Codable, Sendable {
-    public let runid: String
-    public let stepids: [String]?
-
-    public init(
-        runid: String,
-        stepids: [String]?
-    ) {
-        self.runid = runid
-        self.stepids = stepids
-    }
-    private enum CodingKeys: String, CodingKey {
-        case runid = "runId"
-        case stepids = "stepIds"
     }
 }
 

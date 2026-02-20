@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, type Mock } from "vitest";
 import { resolveSessionTranscriptPath } from "../config/sessions.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { captureEnv } from "../test-utils/env.js";
@@ -37,8 +37,8 @@ afterAll(async () => {
 
 describe("sessions_send gateway loopback", () => {
   it("returns reply when lifecycle ends before agent.wait", async () => {
-    const spy = vi.mocked(agentCommand);
-    spy.mockImplementation(async (opts) => {
+    const spy = agentCommand as unknown as Mock<(opts: unknown) => Promise<void>>;
+    spy.mockImplementation(async (opts: unknown) => {
       const params = opts as {
         sessionId?: string;
         runId?: string;
@@ -124,8 +124,8 @@ describe("sessions_send label lookup", () => {
       "utf-8",
     );
 
-    const spy = vi.mocked(agentCommand);
-    spy.mockImplementation(async (opts) => {
+    const spy = agentCommand as unknown as Mock<(opts: unknown) => Promise<void>>;
+    spy.mockImplementation(async (opts: unknown) => {
       const params = opts as {
         sessionId?: string;
         runId?: string;

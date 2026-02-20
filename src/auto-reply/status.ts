@@ -40,9 +40,14 @@ import {
   type ChatCommandDefinition,
 } from "./commands-registry.js";
 import type { CommandCategory } from "./commands-registry.types.js";
+import { resolveActiveFallbackState } from "./fallback-state.js";
+import { formatProviderModelRef, resolveSelectedAndActiveModel } from "./model-runtime.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "./thinking.js";
 
-type AgentConfig = Partial<NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>>;
+type AgentDefaults = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>;
+type AgentConfig = Partial<AgentDefaults> & {
+  model?: AgentDefaults["model"] | string;
+};
 
 export const formatTokenCount = formatTokenCountShared;
 
@@ -53,15 +58,6 @@ type QueueStatus = {
   cap?: number;
   dropPolicy?: string;
   showDetails?: boolean;
-};
-
-export type TranscriptInfo = {
-  /** File size in bytes. */
-  sizeBytes: number;
-  /** Number of non-empty lines (messages) in the transcript. */
-  messageCount: number;
-  /** Absolute path to the transcript file. */
-  filePath: string;
 };
 
 type StatusArgs = {
@@ -78,13 +74,13 @@ type StatusArgs = {
   resolvedReasoning?: ReasoningLevel;
   resolvedElevated?: ElevatedLevel;
   modelAuth?: string;
+  activeModelAuth?: string;
   usageLine?: string;
   timeLine?: string;
   queue?: QueueStatus;
-  mediaDecisions?: MediaUnderstandingDecision[];
+  mediaDecisions?: ReadonlyArray<MediaUnderstandingDecision>;
   subagentsLine?: string;
   includeTranscriptUsage?: boolean;
-  transcriptInfo?: TranscriptInfo;
   now?: number;
 };
 
@@ -268,7 +264,37 @@ const formatUsagePair = (input?: number | null, output?: number | null) => {
   return `🧮 Tokens: ${inputLabel} in / ${outputLabel} out`;
 };
 
-const formatMediaUnderstandingLine = (decisions?: MediaUnderstandingDecision[]) => {
+const formatCacheLine = (
+  input?: number | null,
+  cacheRead?: number | null,
+  cacheWrite?: number | null,
+) => {
+  if (!cacheRead && !cacheWrite) {
+    return null;
+  }
+  if (
+    (typeof cacheRead !== "number" || cacheRead <= 0) &&
+    (typeof cacheWrite !== "number" || cacheWrite <= 0)
+  ) {
+    return null;
+  }
+
+  const cachedLabel = typeof cacheRead === "number" ? formatTokenCount(cacheRead) : "0";
+  const newLabel = typeof cacheWrite === "number" ? formatTokenCount(cacheWrite) : "0";
+
+  const totalInput =
+    (typeof cacheRead === "number" ? cacheRead : 0) +
+    (typeof cacheWrite === "number" ? cacheWrite : 0) +
+    (typeof input === "number" ? input : 0);
+  const hitRate =
+    totalInput > 0 && typeof cacheRead === "number"
+      ? Math.round((cacheRead / totalInput) * 100)
+      : 0;
+
+  return `🗄️ Cache: ${hitRate}% hit · ${cachedLabel} cached, ${newLabel} new`;
+};
+
+const formatMediaUnderstandingLine = (decisions?: ReadonlyArray<MediaUnderstandingDecision>) => {
   if (!decisions || decisions.length === 0) {
     return null;
   }
@@ -334,74 +360,6 @@ const formatVoiceModeLine = (
   return `🔊 Voice: ${autoMode} · provider=${provider} · limit=${maxLength} · summary=${summarize}`;
 };
 
-/**
- * Read transcript file metadata (size + line count) for a session.
- * Returns `undefined` when the file does not exist or cannot be read.
- */
-export function getTranscriptInfo(params: {
-  sessionId?: string;
-  sessionEntry?: SessionEntry;
-  agentId?: string;
-  sessionKey?: string;
-  storePath?: string;
-}): TranscriptInfo | undefined {
-  if (!params.sessionId) {
-    return undefined;
-  }
-  let logPath: string;
-  try {
-    const resolvedAgentId =
-      params.agentId ??
-      (params.sessionKey ? resolveAgentIdFromSessionKey(params.sessionKey) : undefined);
-    logPath = resolveSessionFilePath(
-      params.sessionId,
-      params.sessionEntry,
-      resolveSessionFilePathOptions({ agentId: resolvedAgentId, storePath: params.storePath }),
-    );
-  } catch {
-    return undefined;
-  }
-  try {
-    const stat = fs.statSync(logPath);
-    if (!stat.isFile()) {
-      return undefined;
-    }
-    // Count non-empty lines for message count.
-    const content = fs.readFileSync(logPath, "utf-8");
-    let messageCount = 0;
-    for (const line of content.split("\n")) {
-      if (line.trim()) {
-        messageCount += 1;
-      }
-    }
-    return { sizeBytes: stat.size, messageCount, filePath: logPath };
-  } catch {
-    return undefined;
-  }
-}
-
-function formatFileSize(bytes: number): string {
-  if (bytes < 1024) {
-    return `${bytes} B`;
-  }
-  if (bytes < 1024 * 1024) {
-    return `${(bytes / 1024).toFixed(1)} KB`;
-  }
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-/** Size threshold (bytes) above which a warning emoji is shown. Default: 1 MB. */
-const TRANSCRIPT_SIZE_WARNING_BYTES = 1024 * 1024;
-
-function formatTranscriptLine(info: TranscriptInfo | undefined): string | null {
-  if (!info) {
-    return null;
-  }
-  const sizeLabel = formatFileSize(info.sizeBytes);
-  const warning = info.sizeBytes >= TRANSCRIPT_SIZE_WARNING_BYTES ? " ⚠️" : "";
-  return `📄 Transcript: ${sizeLabel}, ${info.messageCount} message${info.messageCount === 1 ? "" : "s"}${warning}`;
-}
-
 export function buildStatusMessage(args: StatusArgs): string {
   const now = args.now ?? Date.now();
   const entry = args.sessionEntry;
@@ -414,16 +372,25 @@ export function buildStatusMessage(args: StatusArgs): string {
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
-  const provider = entry?.providerOverride ?? resolved.provider ?? DEFAULT_PROVIDER;
-  let model = entry?.modelOverride ?? resolved.model ?? DEFAULT_MODEL;
+  const selectedProvider = entry?.providerOverride ?? resolved.provider ?? DEFAULT_PROVIDER;
+  const selectedModel = entry?.modelOverride ?? resolved.model ?? DEFAULT_MODEL;
+  const modelRefs = resolveSelectedAndActiveModel({
+    selectedProvider,
+    selectedModel,
+    sessionEntry: entry,
+  });
+  let activeProvider = modelRefs.active.provider;
+  let activeModel = modelRefs.active.model;
   let contextTokens =
     entry?.contextTokens ??
     args.agent?.contextTokens ??
-    lookupContextTokens(model) ??
+    lookupContextTokens(activeModel) ??
     DEFAULT_CONTEXT_TOKENS;
 
   let inputTokens = entry?.inputTokens;
   let outputTokens = entry?.outputTokens;
+  let cacheRead = entry?.cacheRead;
+  let cacheWrite = entry?.cacheWrite;
   let totalTokens = entry?.totalTokens ?? (entry?.inputTokens ?? 0) + (entry?.outputTokens ?? 0);
 
   // Prefer prompt-size tokens from the session transcript when it looks larger
@@ -441,8 +408,18 @@ export function buildStatusMessage(args: StatusArgs): string {
       if (!totalTokens || totalTokens === 0 || candidate > totalTokens) {
         totalTokens = candidate;
       }
-      if (!model) {
-        model = logUsage.model ?? model;
+      if (!entry?.model && logUsage.model) {
+        const slashIndex = logUsage.model.indexOf("/");
+        if (slashIndex > 0) {
+          const provider = logUsage.model.slice(0, slashIndex).trim();
+          const model = logUsage.model.slice(slashIndex + 1).trim();
+          if (provider && model) {
+            activeProvider = provider;
+            activeModel = model;
+          }
+        } else {
+          activeModel = logUsage.model;
+        }
       }
       if (!contextTokens && logUsage.model) {
         contextTokens = lookupContextTokens(logUsage.model) ?? contextTokens;
@@ -515,14 +492,21 @@ export function buildStatusMessage(args: StatusArgs): string {
   ];
   const activationLine = activationParts.filter(Boolean).join(" · ");
 
-  const authMode = resolveModelAuthMode(provider, args.config);
-  const authLabelValue =
-    args.modelAuth ?? (authMode && authMode !== "unknown" ? authMode : undefined);
-  const showCost = authLabelValue === "api-key" || authLabelValue === "mixed";
+  const activeAuthMode = resolveModelAuthMode(activeProvider, args.config);
+  const selectedAuthLabelValue =
+    args.modelAuth ??
+    (() => {
+      const selectedAuthMode = resolveModelAuthMode(selectedProvider, args.config);
+      return selectedAuthMode && selectedAuthMode !== "unknown" ? selectedAuthMode : undefined;
+    })();
+  const activeAuthLabelValue =
+    args.activeModelAuth ??
+    (activeAuthMode && activeAuthMode !== "unknown" ? activeAuthMode : undefined);
+  const showCost = activeAuthLabelValue === "api-key" || activeAuthLabelValue === "mixed";
   const costConfig = showCost
     ? resolveModelCostConfig({
-        provider,
-        model,
+        provider: activeProvider,
+        model: activeModel,
         config: args.config,
       })
     : undefined;
@@ -539,26 +523,39 @@ export function buildStatusMessage(args: StatusArgs): string {
       : undefined;
   const costLabel = showCost && hasUsage ? formatUsd(cost) : undefined;
 
-  const modelLabel = model ? `${provider}/${model}` : "unknown";
-  const authLabel = authLabelValue ? ` · 🔑 ${authLabelValue}` : "";
-  const modelLine = `🧠 Model: ${modelLabel}${authLabel}`;
+  const selectedModelLabel = modelRefs.selected.label || "unknown";
+  const activeModelLabel = formatProviderModelRef(activeProvider, activeModel) || "unknown";
+  const fallbackState = resolveActiveFallbackState({
+    selectedModelRef: selectedModelLabel,
+    activeModelRef: activeModelLabel,
+    state: entry,
+  });
+  const selectedAuthLabel = selectedAuthLabelValue ? ` · 🔑 ${selectedAuthLabelValue}` : "";
+  const modelLine = `🧠 Model: ${selectedModelLabel}${selectedAuthLabel}`;
+  const showFallbackAuth = activeAuthLabelValue && activeAuthLabelValue !== selectedAuthLabelValue;
+  const fallbackLine = fallbackState.active
+    ? `↪️ Fallback: ${activeModelLabel}${
+        showFallbackAuth ? ` · 🔑 ${activeAuthLabelValue}` : ""
+      } (${fallbackState.reason ?? "selected model unavailable"})`
+    : null;
   const commit = resolveCommitHash();
   const versionLine = `🦞 OpenClaw ${VERSION}${commit ? ` (${commit})` : ""}`;
   const usagePair = formatUsagePair(inputTokens, outputTokens);
+  const cacheLine = formatCacheLine(inputTokens, cacheRead, cacheWrite);
   const costLine = costLabel ? `💵 Cost: ${costLabel}` : null;
   const usageCostLine =
     usagePair && costLine ? `${usagePair} · ${costLine}` : (usagePair ?? costLine);
   const mediaLine = formatMediaUnderstandingLine(args.mediaDecisions);
   const voiceLine = formatVoiceModeLine(args.config, args.sessionEntry);
-  const transcriptLine = formatTranscriptLine(args.transcriptInfo);
 
   return [
     versionLine,
     args.timeLine,
     modelLine,
+    fallbackLine,
     usageCostLine,
+    cacheLine,
     `📚 ${contextLine}`,
-    transcriptLine,
     mediaLine,
     args.usageLine,
     `🧵 ${sessionLine}`,

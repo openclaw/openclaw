@@ -8,7 +8,6 @@ import {
   validateNetworkMode,
   validateSeccompProfile,
   validateApparmorProfile,
-  validateEnvVars,
   validateSandboxSecurity,
 } from "./validate-sandbox-security.js";
 
@@ -140,75 +139,6 @@ describe("validateApparmorProfile", () => {
   });
 });
 
-describe("validateEnvVars", () => {
-  it("allows safe environment variables", () => {
-    expect(() =>
-      validateEnvVars({
-        NODE_ENV: "production",
-        DEBUG: "true",
-        LOG_LEVEL: "info",
-      }),
-    ).not.toThrow();
-  });
-
-  it("allows undefined or empty env", () => {
-    expect(() => validateEnvVars(undefined)).not.toThrow();
-    expect(() => validateEnvVars({})).not.toThrow();
-  });
-
-  it("blocks ANTHROPIC_API_KEY", () => {
-    expect(() =>
-      validateEnvVars({
-        ANTHROPIC_API_KEY: "sk-ant-test123",
-      }),
-    ).toThrow(/blocked sensitive environment variables.*ANTHROPIC_API_KEY/);
-  });
-
-  it("blocks OPENAI_API_KEY", () => {
-    expect(() =>
-      validateEnvVars({
-        OPENAI_API_KEY: "sk-test123",
-      }),
-    ).toThrow(/OPENAI_API_KEY/);
-  });
-
-  it("blocks OPENCLAW_GATEWAY_TOKEN", () => {
-    expect(() =>
-      validateEnvVars({
-        OPENCLAW_GATEWAY_TOKEN: "token123",
-      }),
-    ).toThrow(/OPENCLAW_GATEWAY_TOKEN/);
-  });
-
-  it("blocks database credentials", () => {
-    expect(() =>
-      validateEnvVars({
-        DATABASE_URL: "postgresql://user:pass@host/db",
-      }),
-    ).toThrow(/DATABASE_URL/);
-  });
-
-  it("blocks multiple sensitive variables", () => {
-    expect(() =>
-      validateEnvVars({
-        ANTHROPIC_API_KEY: "key1",
-        OPENAI_API_KEY: "key2",
-        AWS_SECRET_ACCESS_KEY: "key3",
-      }),
-    ).toThrow(/blocked sensitive environment variables/);
-  });
-
-  it("allows safe vars but blocks sensitive ones in mixed config", () => {
-    expect(() =>
-      validateEnvVars({
-        NODE_ENV: "production",
-        ANTHROPIC_API_KEY: "sk-test",
-        DEBUG: "true",
-      }),
-    ).toThrow(/ANTHROPIC_API_KEY/);
-  });
-});
-
 describe("validateSandboxSecurity", () => {
   it("passes with safe config", () => {
     expect(() =>
@@ -217,32 +147,7 @@ describe("validateSandboxSecurity", () => {
         network: "none",
         seccompProfile: "/tmp/seccomp.json",
         apparmorProfile: "openclaw-sandbox",
-        env: {
-          NODE_ENV: "production",
-          DEBUG: "false",
-        },
       }),
     ).not.toThrow();
-  });
-
-  it("rejects config with sensitive environment variables", () => {
-    expect(() =>
-      validateSandboxSecurity({
-        binds: ["/home/user/src:/src:rw"],
-        network: "none",
-        env: {
-          ANTHROPIC_API_KEY: "sk-test",
-        },
-      }),
-    ).toThrow(/blocked sensitive environment variables/);
-  });
-
-  it("rejects config with dangerous binds", () => {
-    expect(() =>
-      validateSandboxSecurity({
-        binds: ["/etc/passwd:/etc/passwd:ro"],
-        env: { NODE_ENV: "production" },
-      }),
-    ).toThrow(/blocked path/);
   });
 });

@@ -51,6 +51,8 @@ async function withHeartbeatFixture(
     );
   };
 
+  await fs.writeFile(path.join(tmpDir, "HEARTBEAT.md"), "- Check status\n", "utf-8");
+
   try {
     return await run({ tmpDir, storePath, seedSession });
   } finally {
@@ -75,7 +77,10 @@ afterEach(() => {
 });
 
 describe("runHeartbeatOnce – heartbeat model override", () => {
-  async function runDefaultsHeartbeat(params: { model?: string }) {
+  async function runDefaultsHeartbeat(params: {
+    model?: string;
+    suppressToolErrorWarnings?: boolean;
+  }) {
     return withHeartbeatFixture(async ({ tmpDir, storePath, seedSession }) => {
       const cfg: OpenClawConfig = {
         agents: {
@@ -85,6 +90,7 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
               every: "5m",
               target: "whatsapp",
               model: params.model,
+              suppressToolErrorWarnings: params.suppressToolErrorWarnings,
             },
           },
         },
@@ -121,8 +127,18 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
     );
   });
 
+  it("passes suppressToolErrorWarnings when configured", async () => {
+    const replyOpts = await runDefaultsHeartbeat({ suppressToolErrorWarnings: true });
+    expect(replyOpts).toEqual(
+      expect.objectContaining({
+        isHeartbeat: true,
+        suppressToolErrorWarnings: true,
+      }),
+    );
+  });
+
   it("passes per-agent heartbeat model override (merged with defaults)", async () => {
-    await withHeartbeatFixture(async ({ storePath, seedSession }) => {
+    await withHeartbeatFixture(async ({ tmpDir, storePath, seedSession }) => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
@@ -135,6 +151,7 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
             { id: "main", default: true },
             {
               id: "ops",
+              workspace: tmpDir,
               heartbeat: {
                 every: "5m",
                 target: "whatsapp",

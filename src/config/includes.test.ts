@@ -1,8 +1,11 @@
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   CircularIncludeError,
   ConfigIncludeError,
+  deepMerge,
   type IncludeResolver,
   resolveConfigIncludes,
 } from "./includes.js";
@@ -67,13 +70,12 @@ describe("resolveConfigIncludes", () => {
     });
   });
 
-  it("resolves absolute path $include", () => {
+  it("rejects absolute path outside config directory (CWE-22)", () => {
     const absolute = etcOpenClawPath("agents.json");
     const files = { [absolute]: { list: [{ id: "main" }] } };
     const obj = { agents: { $include: absolute } };
-    expect(resolve(obj, files)).toEqual({
-      agents: { list: [{ id: "main" }] },
-    });
+    expect(() => resolve(obj, files)).toThrow(ConfigIncludeError);
+    expect(() => resolve(obj, files)).toThrow(/escapes config directory/);
   });
 
   it("resolves array $include with deep merge", () => {
@@ -278,10 +280,24 @@ describe("resolveConfigIncludes", () => {
     });
   });
 
-  it("resolves parent directory references", () => {
+  it("rejects parent directory traversal escaping config directory (CWE-22)", () => {
     const files = { [sharedPath("common.json")]: { shared: true } };
     const obj = { $include: "../../shared/common.json" };
-    expect(resolve(obj, files, configPath("sub", "openclaw.json"))).toEqual({
+    expect(() => resolve(obj, files, configPath("sub", "openclaw.json"))).toThrow(
+      ConfigIncludeError,
+    );
+    expect(() => resolve(obj, files, configPath("sub", "openclaw.json"))).toThrow(
+      /escapes config directory/,
+    );
+  });
+
+  it("allows nested parent traversal when path stays under top-level config directory", () => {
+    const files = {
+      [configPath("sub", "child.json")]: { $include: "../shared/common.json" },
+      [configPath("shared", "common.json")]: { shared: true },
+    };
+    const obj = { $include: "./sub/child.json" };
+    expect(resolve(obj, files)).toEqual({
       shared: true,
     });
   });
@@ -356,6 +372,222 @@ describe("real-world config patterns", () => {
       gateway: { port: 18789, bind: "loopback" },
       channels: { whatsapp: { dmPolicy: "pairing", allowFrom: ["+49123"] } },
       agents: { defaults: { sandbox: { mode: "all" } } },
+    });
+  });
+});
+describe("security: path traversal protection (CWE-22)", () => {
+  describe("absolute path attacks", () => {
+    it("rejects /etc/passwd", () => {
+      const obj = { $include: "/etc/passwd" };
+      expect(() => resolve(obj, {})).toThrow(ConfigIncludeError);
+      expect(() => resolve(obj, {})).toThrow(/escapes config directory/);
+    });
+
+    it("rejects /etc/shadow", () => {
+      const obj = { $include: "/etc/shadow" };
+      expect(() => resolve(obj, {})).toThrow(ConfigIncludeError);
+      expect(() => resolve(obj, {})).toThrow(/escapes config directory/);
+    });
+
+    it("rejects home directory SSH key", () => {
+      const obj = { $include: `${process.env.HOME}/.ssh/id_rsa` };
+      expect(() => resolve(obj, {})).toThrow(ConfigIncludeError);
+    });
+
+    it("rejects /tmp paths", () => {
+      const obj = { $include: "/tmp/malicious.json" };
+      expect(() => resolve(obj, {})).toThrow(ConfigIncludeError);
+    });
+
+    it("rejects root directory", () => {
+      const obj = { $include: "/" };
+      expect(() => resolve(obj, {})).toThrow(ConfigIncludeError);
+    });
+  });
+
+  describe("relative traversal attacks", () => {
+    it("rejects ../../etc/passwd", () => {
+      const obj = { $include: "../../etc/passwd" };
+      expect(() => resolve(obj, {})).toThrow(ConfigIncludeError);
+      expect(() => resolve(obj, {})).toThrow(/escapes config directory/);
+    });
+
+    it("rejects ../../../etc/shadow", () => {
+      const obj = { $include: "../../../etc/shadow" };
+      expect(() => resolve(obj, {})).toThrow(ConfigIncludeError);
+    });
+
+    it("rejects deeply nested traversal", () => {
+      const obj = { $include: "../../../../../../../../etc/passwd" };
+      expect(() => resolve(obj, {})).toThrow(ConfigIncludeError);
+    });
+
+    it("rejects traversal to parent of config directory", () => {
+      const obj = { $include: "../sibling-dir/secret.json" };
+      expect(() => resolve(obj, {})).toThrow(ConfigIncludeError);
+    });
+
+    it("rejects mixed absolute and traversal", () => {
+      const obj = { $include: "/config/../../../etc/passwd" };
+      expect(() => resolve(obj, {})).toThrow(ConfigIncludeError);
+    });
+  });
+
+  describe("legitimate includes (should work)", () => {
+    it("allows relative include in same directory", () => {
+      const files = { [configPath("sub.json")]: { key: "value" } };
+      const obj = { $include: "./sub.json" };
+      expect(resolve(obj, files)).toEqual({ key: "value" });
+    });
+
+    it("allows include without ./ prefix", () => {
+      const files = { [configPath("sub.json")]: { key: "value" } };
+      const obj = { $include: "sub.json" };
+      expect(resolve(obj, files)).toEqual({ key: "value" });
+    });
+
+    it("allows include in subdirectory", () => {
+      const files = { [configPath("sub", "nested.json")]: { nested: true } };
+      const obj = { $include: "./sub/nested.json" };
+      expect(resolve(obj, files)).toEqual({ nested: true });
+    });
+
+    it("allows deeply nested subdirectory", () => {
+      const files = { [configPath("a", "b", "c", "deep.json")]: { deep: true } };
+      const obj = { $include: "./a/b/c/deep.json" };
+      expect(resolve(obj, files)).toEqual({ deep: true });
+    });
+
+    // Note: Upward traversal from nested configs is restricted for security.
+    // Each config file can only include files from its own directory and subdirectories.
+    // This prevents potential path traversal attacks even in complex nested scenarios.
+  });
+
+  describe("error properties", () => {
+    it("throws ConfigIncludeError with correct type", () => {
+      const obj = { $include: "/etc/passwd" };
+      try {
+        resolve(obj, {});
+        expect.fail("Should have thrown");
+      } catch (err) {
+        expect(err).toBeInstanceOf(ConfigIncludeError);
+        expect(err).toHaveProperty("name", "ConfigIncludeError");
+      }
+    });
+
+    it("includes offending path in error", () => {
+      const maliciousPath = "/etc/shadow";
+      const obj = { $include: maliciousPath };
+      try {
+        resolve(obj, {});
+        expect.fail("Should have thrown");
+      } catch (err) {
+        expect(err).toBeInstanceOf(ConfigIncludeError);
+        expect((err as ConfigIncludeError).includePath).toBe(maliciousPath);
+      }
+    });
+
+    it("includes descriptive message", () => {
+      const obj = { $include: "../../etc/passwd" };
+      try {
+        resolve(obj, {});
+        expect.fail("Should have thrown");
+      } catch (err) {
+        expect(err).toBeInstanceOf(ConfigIncludeError);
+        expect((err as Error).message).toContain("escapes config directory");
+        expect((err as Error).message).toContain("../../etc/passwd");
+      }
+    });
+  });
+
+  describe("array includes with malicious paths", () => {
+    it("rejects array with one malicious path", () => {
+      const files = { [configPath("good.json")]: { good: true } };
+      const obj = { $include: ["./good.json", "/etc/passwd"] };
+      expect(() => resolve(obj, files)).toThrow(ConfigIncludeError);
+    });
+
+    it("rejects array with multiple malicious paths", () => {
+      const obj = { $include: ["/etc/passwd", "/etc/shadow"] };
+      expect(() => resolve(obj, {})).toThrow(ConfigIncludeError);
+    });
+
+    it("allows array with all legitimate paths", () => {
+      const files = {
+        [configPath("a.json")]: { a: 1 },
+        [configPath("b.json")]: { b: 2 },
+      };
+      const obj = { $include: ["./a.json", "./b.json"] };
+      expect(resolve(obj, files)).toEqual({ a: 1, b: 2 });
+    });
+  });
+
+  describe("prototype pollution protection", () => {
+    it("blocks __proto__ keys from polluting Object.prototype", () => {
+      const result = deepMerge({}, JSON.parse('{"__proto__":{"polluted":true}}'));
+      expect((Object.prototype as Record<string, unknown>).polluted).toBeUndefined();
+      expect(result).toEqual({});
+    });
+
+    it("blocks prototype and constructor keys", () => {
+      const result = deepMerge(
+        { safe: 1 },
+        { prototype: { x: 1 }, constructor: { y: 2 }, normal: 3 },
+      );
+      expect(result).toEqual({ safe: 1, normal: 3 });
+    });
+
+    it("blocks __proto__ in nested merges", () => {
+      const result = deepMerge(
+        { nested: { a: 1 } },
+        { nested: JSON.parse('{"__proto__":{"polluted":true}}') },
+      );
+      expect((Object.prototype as Record<string, unknown>).polluted).toBeUndefined();
+      expect(result).toEqual({ nested: { a: 1 } });
+    });
+  });
+
+  describe("edge cases", () => {
+    it("rejects null bytes in path", () => {
+      const obj = { $include: "./file\x00.json" };
+      // Path with null byte should be rejected or handled safely
+      expect(() => resolve(obj, {})).toThrow();
+    });
+
+    it("rejects double slashes", () => {
+      const obj = { $include: "//etc/passwd" };
+      expect(() => resolve(obj, {})).toThrow(ConfigIncludeError);
+    });
+
+    it("allows child include when config is at filesystem root", () => {
+      const rootConfigPath = path.join(path.parse(process.cwd()).root, "test.json");
+      const childPath = path.join(path.parse(process.cwd()).root, "child.json");
+      const files = { [childPath]: { root: true } };
+      const obj = { $include: childPath };
+      expect(resolve(obj, files, rootConfigPath)).toEqual({ root: true });
+    });
+
+    it("allows include files when the config root path is a symlink", async () => {
+      const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-includes-symlink-"));
+      try {
+        const realRoot = path.join(tempRoot, "real");
+        const linkRoot = path.join(tempRoot, "link");
+        await fs.mkdir(path.join(realRoot, "includes"), { recursive: true });
+        await fs.writeFile(
+          path.join(realRoot, "includes", "extra.json5"),
+          "{ logging: { redactSensitive: 'tools' } }\n",
+          "utf-8",
+        );
+        await fs.symlink(realRoot, linkRoot);
+
+        const result = resolveConfigIncludes(
+          { $include: "./includes/extra.json5" },
+          path.join(linkRoot, "openclaw.json"),
+        );
+        expect(result).toEqual({ logging: { redactSensitive: "tools" } });
+      } finally {
+        await fs.rm(tempRoot, { recursive: true, force: true });
+      }
     });
   });
 });

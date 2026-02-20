@@ -63,6 +63,32 @@ describe("/model chat UX", () => {
     expect(reply?.text).toContain("Switch: /model <provider/model>");
   });
 
+  it("shows active runtime model when different from selected model", async () => {
+    const directives = parseInlineDirectives("/model");
+    const cfg = { commands: { text: true } } as unknown as OpenClawConfig;
+
+    const reply = await maybeHandleModelDirectiveInfo({
+      directives,
+      cfg,
+      agentDir: "/tmp/agent",
+      activeAgentId: "main",
+      provider: "fireworks",
+      model: "fireworks/minimax-m2p5",
+      defaultProvider: "fireworks",
+      defaultModel: "fireworks/minimax-m2p5",
+      aliasIndex: baseAliasIndex(),
+      allowedModelCatalog: [],
+      resetModelOverride: false,
+      sessionEntry: {
+        modelProvider: "deepinfra",
+        model: "moonshotai/Kimi-K2.5",
+      },
+    });
+
+    expect(reply?.text).toContain("Current: fireworks/minimax-m2p5 (selected)");
+    expect(reply?.text).toContain("Active: deepinfra/moonshotai/Kimi-K2.5 (runtime)");
+  });
+
   it("auto-applies closest match for typos", () => {
     const directives = parseInlineDirectives("/model anthropic/claud-opus-4-5");
     const cfg = { commands: { text: true } } as unknown as OpenClawConfig;
@@ -91,8 +117,8 @@ describe("/model chat UX", () => {
 describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
   const allowedModelKeys = new Set(["anthropic/claude-opus-4-5", "openai/gpt-4o"]);
   const allowedModelCatalog = [
-    { provider: "anthropic", id: "claude-opus-4-5" },
-    { provider: "openai", id: "gpt-4o" },
+    { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus 4.5" },
+    { provider: "openai", id: "gpt-4o", name: "GPT-4o" },
   ];
   const sessionKey = "agent:main:dm:1";
   const storePath = "/tmp/sessions.json";

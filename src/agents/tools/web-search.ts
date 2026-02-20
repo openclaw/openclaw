@@ -1,7 +1,6 @@
 import { Type } from "@sinclair/typebox";
 import { formatCliCommand } from "../../cli/command-format.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { matchesHostnameAllowlist, normalizeHostnameAllowlist } from "../../infra/net/ssrf.js";
 import { wrapWebContent } from "../../security/external-content.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import type { AnyAgentTool } from "./common.js";
@@ -13,7 +12,6 @@ import {
   normalizeCacheKey,
   readCache,
   readResponseText,
-  resolveWebUrlAllowlist,
   resolveCacheTtlMs,
   resolveTimeoutSeconds,
   withTimeout,
@@ -77,33 +75,6 @@ type WebSearchConfig = NonNullable<OpenClawConfig["tools"]>["web"] extends infer
     : undefined
   : undefined;
 
-type WebConfig = NonNullable<OpenClawConfig["tools"]>["web"];
-
-export function resolveUrlAllowlist(web?: WebConfig): string[] | undefined {
-  return resolveWebUrlAllowlist(web);
-}
-
-export function filterResultsByAllowlist(
-  results: Array<{ url?: string; siteName?: string }>,
-  allowlist: string[],
-): Array<{ url?: string; siteName?: string }> {
-  if (allowlist.length === 0) {
-    return results;
-  }
-  const normalizedAllowlist = normalizeHostnameAllowlist(allowlist);
-  return results.filter((result) => {
-    if (!result.url) {
-      return true; // Keep entries without URL
-    }
-    try {
-      const hostname = new URL(result.url).hostname;
-      return matchesHostnameAllowlist(hostname, normalizedAllowlist);
-    } catch {
-      return true; // Keep entries with invalid URLs (let them pass through)
-    }
-  });
-}
-
 type BraveSearchResult = {
   title?: string;
   url?: string;
@@ -135,6 +106,7 @@ type GrokSearchResponse = {
   output?: Array<{
     type?: string;
     role?: string;
+    text?: string; // present when type === "output_text" (top-level output_text block)
     content?: Array<{
       type?: string;
       text?: string;
@@ -144,6 +116,12 @@ type GrokSearchResponse = {
         start_index?: number;
         end_index?: number;
       }>;
+    }>;
+    annotations?: Array<{
+      type?: string;
+      url?: string;
+      start_index?: number;
+      end_index?: number;
     }>;
   }>;
   output_text?: string; // deprecated field - kept for backwards compatibility
@@ -172,17 +150,32 @@ function extractGrokContent(data: GrokSearchResponse): {
 } {
   // xAI Responses API format: find the message output with text content
   for (const output of data.output ?? []) {
-    if (output.type !== "message") {
-      continue;
-    }
-    for (const block of output.content ?? []) {
-      if (block.type === "output_text" && typeof block.text === "string" && block.text) {
-        // Extract url_citation annotations from this content block
-        const urls = (block.annotations ?? [])
-          .filter((a) => a.type === "url_citation" && typeof a.url === "string")
-          .map((a) => a.url as string);
-        return { text: block.text, annotationCitations: [...new Set(urls)] };
+    if (output.type === "message") {
+      for (const block of output.content ?? []) {
+        if (block.type === "output_text" && typeof block.text === "string" && block.text) {
+          const urls = (block.annotations ?? [])
+            .filter((a) => a.type === "url_citation" && typeof a.url === "string")
+            .map((a) => a.url as string);
+          return { text: block.text, annotationCitations: [...new Set(urls)] };
+        }
       }
+    }
+    // Some xAI responses place output_text blocks directly in the output array
+    // without a message wrapper.
+    if (
+      output.type === "output_text" &&
+      "text" in output &&
+      typeof output.text === "string" &&
+      output.text
+    ) {
+      const rawAnnotations =
+        "annotations" in output && Array.isArray(output.annotations) ? output.annotations : [];
+      const urls = rawAnnotations
+        .filter(
+          (a: Record<string, unknown>) => a.type === "url_citation" && typeof a.url === "string",
+        )
+        .map((a: Record<string, unknown>) => a.url as string);
+      return { text: output.text, annotationCitations: [...new Set(urls)] };
     }
   }
   // Fallback: deprecated output_text field
@@ -595,7 +588,6 @@ async function runWebSearch(params: {
   perplexityModel?: string;
   grokModel?: string;
   grokInlineCitations?: boolean;
-  urlAllowlist?: string[];
 }): Promise<Record<string, unknown>> {
   const cacheKey = normalizeCacheKey(
     params.provider === "brave"
@@ -718,15 +710,10 @@ async function runWebSearch(params: {
     };
   });
 
-  // Filter results by urlAllowlist if configured
-  const filteredResults = params.urlAllowlist
-    ? filterResultsByAllowlist(mapped, params.urlAllowlist)
-    : mapped;
-
   const payload = {
     query: params.query,
     provider: params.provider,
-    count: filteredResults.length,
+    count: mapped.length,
     tookMs: Date.now() - start,
     externalContent: {
       untrusted: true,
@@ -734,7 +721,7 @@ async function runWebSearch(params: {
       provider: params.provider,
       wrapped: true,
     },
-    results: filteredResults,
+    results: mapped,
   };
   writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
   return payload;
@@ -752,7 +739,6 @@ export function createWebSearchTool(options?: {
   const provider = resolveSearchProvider(search);
   const perplexityConfig = resolvePerplexityConfig(search);
   const grokConfig = resolveGrokConfig(search);
-  const urlAllowlist = resolveUrlAllowlist(options?.config?.tools?.web);
 
   const description =
     provider === "perplexity"
@@ -822,7 +808,6 @@ export function createWebSearchTool(options?: {
         perplexityModel: resolvePerplexityModel(perplexityConfig),
         grokModel: resolveGrokModel(grokConfig),
         grokInlineCitations: resolveGrokInlineCitations(grokConfig),
-        urlAllowlist,
       });
       return jsonResult(result);
     },
@@ -840,6 +825,4 @@ export const __testing = {
   resolveGrokModel,
   resolveGrokInlineCitations,
   extractGrokContent,
-  resolveUrlAllowlist,
-  filterResultsByAllowlist,
 } as const;

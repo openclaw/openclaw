@@ -1,32 +1,64 @@
 /**
- * Layer 2: Model Override Pipeline Wiring Tests
+ * Layer 2: Explicit model/prompt hook wiring tests.
  *
- * Tests the integration between the hook runner and model override flow.
- * Verifies that:
- * 1. When hooks return modelOverride/providerOverride, the run pipeline applies them
- * 2. The earlyHookResult mechanism prevents double-firing of before_agent_start
- * 3. Graceful degradation when hooks throw errors
- *
- * These tests verify the hook runner contract at the boundary — the same runner
- * that's used by both run.ts (early invocation) and attempt.ts (fallback invocation).
+ * Verifies:
+ * 1. before_model_resolve applies deterministic provider/model overrides
+ * 2. before_prompt_build receives session messages and prepends prompt context
+ * 3. before_agent_start remains a legacy compatibility fallback
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createHookRunner } from "./hooks.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "./registry.js";
 import type {
-  PluginHookBeforeAgentStartEvent,
-  PluginHookBeforeAgentStartResult,
   PluginHookAgentContext,
-  TypedPluginHookRegistration,
+  PluginHookBeforeAgentStartResult,
+  PluginHookBeforeModelResolveEvent,
+  PluginHookBeforeModelResolveResult,
+  PluginHookBeforePromptBuildEvent,
+  PluginHookBeforePromptBuildResult,
+  PluginHookRegistration,
 } from "./types.js";
 
-function addBeforeAgentStartHook(
+function addBeforeModelResolveHook(
   registry: PluginRegistry,
   pluginId: string,
   handler: (
-    event: PluginHookBeforeAgentStartEvent,
+    event: PluginHookBeforeModelResolveEvent,
     ctx: PluginHookAgentContext,
-  ) => PluginHookBeforeAgentStartResult | Promise<PluginHookBeforeAgentStartResult>,
+  ) => PluginHookBeforeModelResolveResult | Promise<PluginHookBeforeModelResolveResult>,
+  priority?: number,
+) {
+  registry.typedHooks.push({
+    pluginId,
+    hookName: "before_model_resolve",
+    handler,
+    priority,
+    source: "test",
+  } as PluginHookRegistration);
+}
+
+function addBeforePromptBuildHook(
+  registry: PluginRegistry,
+  pluginId: string,
+  handler: (
+    event: PluginHookBeforePromptBuildEvent,
+    ctx: PluginHookAgentContext,
+  ) => PluginHookBeforePromptBuildResult | Promise<PluginHookBeforePromptBuildResult>,
+  priority?: number,
+) {
+  registry.typedHooks.push({
+    pluginId,
+    hookName: "before_prompt_build",
+    handler,
+    priority,
+    source: "test",
+  } as PluginHookRegistration);
+}
+
+function addLegacyBeforeAgentStartHook(
+  registry: PluginRegistry,
+  pluginId: string,
+  handler: () => PluginHookBeforeAgentStartResult | Promise<PluginHookBeforeAgentStartResult>,
   priority?: number,
 ) {
   registry.typedHooks.push({
@@ -35,7 +67,7 @@ function addBeforeAgentStartHook(
     handler,
     priority,
     source: "test",
-  } as TypedPluginHookRegistration);
+  } as PluginHookRegistration);
 }
 
 const stubCtx: PluginHookAgentContext = {
@@ -52,203 +84,134 @@ describe("model override pipeline wiring", () => {
     registry = createEmptyPluginRegistry();
   });
 
-  describe("early invocation (run.ts pattern)", () => {
-    it("hook receives prompt-only event and returns model override", async () => {
+  describe("before_model_resolve (run.ts pattern)", () => {
+    it("hook receives prompt-only event and returns provider/model override", async () => {
       const handlerSpy = vi.fn(
-        (_event: PluginHookBeforeAgentStartEvent) =>
+        (_event: PluginHookBeforeModelResolveEvent) =>
           ({
             modelOverride: "llama3.3:8b",
             providerOverride: "ollama",
-            prependContext: "PII detected: routing to local model",
-          }) as PluginHookBeforeAgentStartResult,
+          }) as PluginHookBeforeModelResolveResult,
       );
 
-      addBeforeAgentStartHook(registry, "router-plugin", handlerSpy);
+      addBeforeModelResolveHook(registry, "router-plugin", handlerSpy);
       const runner = createHookRunner(registry);
-
-      // Simulate run.ts early invocation: prompt only, no messages
-      const result = await runner.runBeforeAgentStart({ prompt: "My SSN is 123-45-6789" }, stubCtx);
+      const result = await runner.runBeforeModelResolve({ prompt: "PII text" }, stubCtx);
 
       expect(handlerSpy).toHaveBeenCalledTimes(1);
-      expect(handlerSpy).toHaveBeenCalledWith({ prompt: "My SSN is 123-45-6789" }, stubCtx);
+      expect(handlerSpy).toHaveBeenCalledWith({ prompt: "PII text" }, stubCtx);
       expect(result?.modelOverride).toBe("llama3.3:8b");
       expect(result?.providerOverride).toBe("ollama");
-      expect(result?.prependContext).toBe("PII detected: routing to local model");
     });
 
-    it("overrides can be applied to mutable provider/model variables", async () => {
-      addBeforeAgentStartHook(registry, "router-plugin", () => ({
+    it("new hook overrides beat legacy before_agent_start fallback", async () => {
+      addBeforeModelResolveHook(registry, "new-hook", () => ({
         modelOverride: "llama3.3:8b",
         providerOverride: "ollama",
       }));
-
-      const runner = createHookRunner(registry);
-      const result = await runner.runBeforeAgentStart({ prompt: "sensitive data" }, stubCtx);
-
-      // Simulate run.ts override application
-      let provider = "anthropic";
-      let modelId = "claude-sonnet-4-5-20250929";
-
-      if (result?.providerOverride) {
-        provider = result.providerOverride;
-      }
-      if (result?.modelOverride) {
-        modelId = result.modelOverride;
-      }
-
-      expect(provider).toBe("ollama");
-      expect(modelId).toBe("llama3.3:8b");
-    });
-
-    it("no overrides when hook returns only prependContext", async () => {
-      addBeforeAgentStartHook(registry, "context-plugin", () => ({
-        prependContext: "Additional instructions",
+      addLegacyBeforeAgentStartHook(registry, "legacy-hook", () => ({
+        modelOverride: "gpt-4o",
+        providerOverride: "openai",
       }));
 
       const runner = createHookRunner(registry);
-      const result = await runner.runBeforeAgentStart({ prompt: "normal query" }, stubCtx);
+      const explicit = await runner.runBeforeModelResolve({ prompt: "sensitive" }, stubCtx);
+      const legacy = await runner.runBeforeAgentStart({ prompt: "sensitive" }, stubCtx);
+      const merged = {
+        providerOverride: explicit?.providerOverride ?? legacy?.providerOverride,
+        modelOverride: explicit?.modelOverride ?? legacy?.modelOverride,
+      };
 
-      // Simulate run.ts override application
-      let provider = "anthropic";
-      let modelId = "claude-sonnet-4-5-20250929";
-
-      if (result?.providerOverride) {
-        provider = result.providerOverride;
-      }
-      if (result?.modelOverride) {
-        modelId = result.modelOverride;
-      }
-
-      // Original values preserved
-      expect(provider).toBe("anthropic");
-      expect(modelId).toBe("claude-sonnet-4-5-20250929");
+      expect(merged.providerOverride).toBe("ollama");
+      expect(merged.modelOverride).toBe("llama3.3:8b");
     });
   });
 
-  describe("earlyHookResult passthrough (attempt.ts pattern)", () => {
-    it("when earlyHookResult exists, hook does not need to fire again", async () => {
-      const handlerSpy = vi.fn(() => ({
-        modelOverride: "should-not-be-called",
-      }));
-
-      addBeforeAgentStartHook(registry, "router-plugin", handlerSpy);
-      const runner = createHookRunner(registry);
-
-      // Simulate the earlyHookResult already computed by run.ts
-      const earlyHookResult: PluginHookBeforeAgentStartResult = {
-        modelOverride: "llama3.3:8b",
-        providerOverride: "ollama",
-        prependContext: "PII detected",
-      };
-
-      // Simulate attempt.ts pattern: use earlyHookResult if present
-      const hookResult =
-        earlyHookResult ??
-        (runner.hasHooks("before_agent_start")
-          ? await runner.runBeforeAgentStart({ prompt: "test", messages: [] }, stubCtx)
-          : undefined);
-
-      expect(handlerSpy).not.toHaveBeenCalled();
-      expect(hookResult?.modelOverride).toBe("llama3.3:8b");
-      expect(hookResult?.prependContext).toBe("PII detected");
-    });
-
-    it("when earlyHookResult is undefined, hook fires normally with messages", async () => {
+  describe("before_prompt_build (attempt.ts pattern)", () => {
+    it("hook receives prompt and messages and can prepend context", async () => {
       const handlerSpy = vi.fn(
-        (event: PluginHookBeforeAgentStartEvent) =>
+        (event: PluginHookBeforePromptBuildEvent) =>
           ({
-            prependContext: `Saw ${(event.messages ?? []).length} messages`,
-          }) as PluginHookBeforeAgentStartResult,
+            prependContext: `Saw ${event.messages.length} messages`,
+          }) as PluginHookBeforePromptBuildResult,
       );
 
-      addBeforeAgentStartHook(registry, "context-plugin", handlerSpy);
+      addBeforePromptBuildHook(registry, "context-plugin", handlerSpy);
       const runner = createHookRunner(registry);
-
-      const earlyHookResult: PluginHookBeforeAgentStartResult | undefined = undefined;
-
-      // Simulate attempt.ts pattern: fire hook since no early result
-      const hookResult =
-        earlyHookResult ??
-        (runner.hasHooks("before_agent_start")
-          ? await runner.runBeforeAgentStart(
-              { prompt: "test", messages: [{}, {}] as unknown[] },
-              stubCtx,
-            )
-          : undefined);
+      const result = await runner.runBeforePromptBuild(
+        { prompt: "test", messages: [{}, {}] as unknown[] },
+        stubCtx,
+      );
 
       expect(handlerSpy).toHaveBeenCalledTimes(1);
-      expect(hookResult?.prependContext).toBe("Saw 2 messages");
+      expect(result?.prependContext).toBe("Saw 2 messages");
     });
 
-    it("prependContext from earlyHookResult is applied to prompt", async () => {
-      const earlyHookResult: PluginHookBeforeAgentStartResult = {
-        prependContext: "PII detected: SSN found. Routing to local model.",
-        modelOverride: "llama3.3:8b",
-        providerOverride: "ollama",
-      };
+    it("legacy before_agent_start context can still be merged as fallback", async () => {
+      addBeforePromptBuildHook(registry, "new-hook", () => ({
+        prependContext: "new context",
+      }));
+      addLegacyBeforeAgentStartHook(registry, "legacy-hook", () => ({
+        prependContext: "legacy context",
+      }));
 
-      // Simulate attempt.ts prompt modification
-      const originalPrompt = "My SSN is 123-45-6789";
-      let effectivePrompt = originalPrompt;
-      if (earlyHookResult.prependContext) {
-        effectivePrompt = `${earlyHookResult.prependContext}\n\n${originalPrompt}`;
-      }
-
-      expect(effectivePrompt).toBe(
-        "PII detected: SSN found. Routing to local model.\n\nMy SSN is 123-45-6789",
+      const runner = createHookRunner(registry);
+      const promptBuild = await runner.runBeforePromptBuild(
+        { prompt: "test", messages: [{ role: "user", content: "x" }] as unknown[] },
+        stubCtx,
       );
+      const legacy = await runner.runBeforeAgentStart(
+        { prompt: "test", messages: [{ role: "user", content: "x" }] as unknown[] },
+        stubCtx,
+      );
+      const prependContext = [promptBuild?.prependContext, legacy?.prependContext]
+        .filter((value): value is string => Boolean(value))
+        .join("\n\n");
+
+      expect(prependContext).toBe("new context\n\nlegacy context");
     });
   });
 
-  describe("graceful degradation", () => {
-    it("hook error does not produce override (run.ts pattern)", async () => {
-      addBeforeAgentStartHook(registry, "broken-plugin", () => {
-        throw new Error("plugin crashed");
-      });
-
-      const runner = createHookRunner(registry, { catchErrors: true });
-
-      // The runner catches errors internally when catchErrors is true
-      const result = await runner.runBeforeAgentStart({ prompt: "test" }, stubCtx);
-
-      // Result should be undefined since the handler threw
-      expect(result?.modelOverride).toBeUndefined();
-      expect(result?.providerOverride).toBeUndefined();
-    });
-
-    it("one broken plugin does not prevent other plugins from providing overrides", async () => {
-      addBeforeAgentStartHook(
+  describe("graceful degradation + hook detection", () => {
+    it("one broken before_model_resolve plugin does not block other overrides", async () => {
+      addBeforeModelResolveHook(
         registry,
         "broken-plugin",
         () => {
           throw new Error("plugin crashed");
         },
-        10, // Higher priority, runs first
+        10,
       );
-      addBeforeAgentStartHook(
+      addBeforeModelResolveHook(
         registry,
         "router-plugin",
         () => ({
           modelOverride: "llama3.3:8b",
           providerOverride: "ollama",
         }),
-        1, // Lower priority, runs second
+        1,
       );
 
       const runner = createHookRunner(registry, { catchErrors: true });
-      const result = await runner.runBeforeAgentStart({ prompt: "PII data" }, stubCtx);
+      const result = await runner.runBeforeModelResolve({ prompt: "PII data" }, stubCtx);
 
-      // The router plugin's result should still be returned
       expect(result?.modelOverride).toBe("llama3.3:8b");
       expect(result?.providerOverride).toBe("ollama");
     });
 
-    it("hasHooks correctly reports when before_agent_start hooks exist", () => {
+    it("hasHooks reports new and legacy hooks independently", () => {
       const runner1 = createHookRunner(registry);
+      expect(runner1.hasHooks("before_model_resolve")).toBe(false);
+      expect(runner1.hasHooks("before_prompt_build")).toBe(false);
       expect(runner1.hasHooks("before_agent_start")).toBe(false);
 
-      addBeforeAgentStartHook(registry, "plugin-a", () => ({}));
+      addBeforeModelResolveHook(registry, "plugin-a", () => ({}));
+      addBeforePromptBuildHook(registry, "plugin-b", () => ({}));
+      addLegacyBeforeAgentStartHook(registry, "plugin-c", () => ({}));
+
       const runner2 = createHookRunner(registry);
+      expect(runner2.hasHooks("before_model_resolve")).toBe(true);
+      expect(runner2.hasHooks("before_prompt_build")).toBe(true);
       expect(runner2.hasHooks("before_agent_start")).toBe(true);
     });
   });

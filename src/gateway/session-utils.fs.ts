@@ -197,6 +197,67 @@ export function archiveSessionTranscripts(opts: {
   return archived;
 }
 
+function restoreArchiveTimestamp(raw: string): string {
+  const [datePart, timePart] = raw.split("T");
+  if (!datePart || !timePart) {
+    return raw;
+  }
+  return `${datePart}T${timePart.replace(/-/g, ":")}`;
+}
+
+function parseArchivedTimestamp(fileName: string, reason: ArchiveFileReason): number | null {
+  const marker = `.${reason}.`;
+  const index = fileName.lastIndexOf(marker);
+  if (index < 0) {
+    return null;
+  }
+  const raw = fileName.slice(index + marker.length);
+  if (!raw) {
+    return null;
+  }
+  const timestamp = Date.parse(restoreArchiveTimestamp(raw));
+  return Number.isNaN(timestamp) ? null : timestamp;
+}
+
+export async function cleanupArchivedSessionTranscripts(opts: {
+  directories: string[];
+  olderThanMs: number;
+  reason?: "deleted";
+  nowMs?: number;
+}): Promise<{ removed: number; scanned: number }> {
+  if (!Number.isFinite(opts.olderThanMs) || opts.olderThanMs < 0) {
+    return { removed: 0, scanned: 0 };
+  }
+  const now = opts.nowMs ?? Date.now();
+  const reason: ArchiveFileReason = opts.reason ?? "deleted";
+  const directories = Array.from(new Set(opts.directories.map((dir) => path.resolve(dir))));
+  let removed = 0;
+  let scanned = 0;
+
+  for (const dir of directories) {
+    const entries = await fs.promises.readdir(dir).catch(() => []);
+    for (const entry of entries) {
+      const timestamp = parseArchivedTimestamp(entry, reason);
+      if (timestamp == null) {
+        continue;
+      }
+      scanned += 1;
+      if (now - timestamp <= opts.olderThanMs) {
+        continue;
+      }
+      const fullPath = path.join(dir, entry);
+      const stat = await fs.promises.stat(fullPath).catch(() => null);
+      if (!stat?.isFile()) {
+        continue;
+      }
+      await fs.promises.rm(fullPath).catch(() => undefined);
+      removed += 1;
+    }
+  }
+
+  return { removed, scanned };
+}
+
 function jsonUtf8Bytes(value: unknown): number {
   try {
     return Buffer.byteLength(JSON.stringify(value), "utf8");
@@ -362,27 +423,21 @@ function extractFirstUserMessageFromTranscriptChunk(
   return null;
 }
 
-export function readFirstUserMessageFromTranscript(
+function findExistingTranscriptPath(
   sessionId: string,
   storePath: string | undefined,
   sessionFile?: string,
   agentId?: string,
-  opts?: { includeInterSession?: boolean },
 ): string | null {
   const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile, agentId);
-  const filePath = candidates.find((p) => fs.existsSync(p));
-  if (!filePath) {
-    return null;
-  }
+  return candidates.find((p) => fs.existsSync(p)) ?? null;
+}
 
+function withOpenTranscriptFd<T>(filePath: string, read: (fd: number) => T | null): T | null {
   let fd: number | null = null;
   try {
     fd = fs.openSync(filePath, "r");
-    const chunk = readTranscriptHeadChunk(fd);
-    if (!chunk) {
-      return null;
-    }
-    return extractFirstUserMessageFromTranscriptChunk(chunk, opts);
+    return read(fd);
   } catch {
     // file read error
   } finally {
@@ -391,6 +446,27 @@ export function readFirstUserMessageFromTranscript(
     }
   }
   return null;
+}
+
+export function readFirstUserMessageFromTranscript(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile?: string,
+  agentId?: string,
+  opts?: { includeInterSession?: boolean },
+): string | null {
+  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile, agentId);
+  if (!filePath) {
+    return null;
+  }
+
+  return withOpenTranscriptFd(filePath, (fd) => {
+    const chunk = readTranscriptHeadChunk(fd);
+    if (!chunk) {
+      return null;
+    }
+    return extractFirstUserMessageFromTranscriptChunk(chunk, opts);
+  });
 }
 
 const LAST_MSG_MAX_BYTES = 16384;
@@ -434,29 +510,19 @@ export function readLastMessagePreviewFromTranscript(
   sessionFile?: string,
   agentId?: string,
 ): string | null {
-  const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile, agentId);
-  const filePath = candidates.find((p) => fs.existsSync(p));
+  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile, agentId);
   if (!filePath) {
     return null;
   }
 
-  let fd: number | null = null;
-  try {
-    fd = fs.openSync(filePath, "r");
+  return withOpenTranscriptFd(filePath, (fd) => {
     const stat = fs.fstatSync(fd);
     const size = stat.size;
     if (size === 0) {
       return null;
     }
     return readLastMessagePreviewFromOpenTranscript({ fd, size });
-  } catch {
-    // file error
-  } finally {
-    if (fd !== null) {
-      fs.closeSync(fd);
-    }
-  }
-  return null;
+  });
 }
 
 const PREVIEW_READ_SIZES = [64 * 1024, 256 * 1024, 1024 * 1024];
