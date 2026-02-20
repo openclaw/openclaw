@@ -101,6 +101,12 @@ export function sanitizeAntigravityThinkingBlocks(messages: AgentMessage[]): Age
       const candidate =
         rec.thinkingSignature ?? rec.signature ?? rec.thought_signature ?? rec.thoughtSignature;
       if (!isValidAntigravitySignature(candidate)) {
+        // Preserve reasoning content as plain text when signatures are invalid/missing.
+        // Antigravity Claude rejects unsigned thinking blocks, but dropping them loses context.
+        const thinkingText = (block as { thinking?: unknown }).thinking;
+        if (typeof thinkingText === "string" && thinkingText.trim()) {
+          nextContent.push({ type: "text", text: thinkingText } as AssistantContentBlock);
+        }
         contentChanged = true;
         continue;
       }
