@@ -261,6 +261,56 @@ extension TestChatTransportState {
         }
     }
 
+    @Test func acceptsCanonicalSessionKeyEventsForExternalRuns() async throws {
+        let now = Date().timeIntervalSince1970 * 1000
+        let history1 = OpenClawChatHistoryPayload(
+            sessionKey: "main",
+            sessionId: "sess-main",
+            messages: [
+                AnyCodable([
+                    "role": "user",
+                    "content": [["type": "text", "text": "first"]],
+                    "timestamp": now,
+                ]),
+            ],
+            thinkingLevel: "off")
+        let history2 = OpenClawChatHistoryPayload(
+            sessionKey: "main",
+            sessionId: "sess-main",
+            messages: [
+                AnyCodable([
+                    "role": "user",
+                    "content": [["type": "text", "text": "first"]],
+                    "timestamp": now,
+                ]),
+                AnyCodable([
+                    "role": "assistant",
+                    "content": [["type": "text", "text": "from external run"]],
+                    "timestamp": now + 1,
+                ]),
+            ],
+            thinkingLevel: "off")
+
+        let transport = TestChatTransport(historyResponses: [history1, history2])
+        let vm = await MainActor.run { OpenClawChatViewModel(sessionKey: "main", transport: transport) }
+
+        await MainActor.run { vm.load() }
+        try await waitUntil("bootstrap") { await MainActor.run { vm.messages.count == 1 } }
+
+        transport.emit(
+            .chat(
+                OpenClawChatEventPayload(
+                    runId: "external-run",
+                    sessionKey: "agent:main:main",
+                    state: "final",
+                    message: nil,
+                    errorMessage: nil)))
+
+        try await waitUntil("history refresh after canonical external event") {
+            await MainActor.run { vm.messages.count == 2 }
+        }
+    }
+
     @Test func preservesMessageIDsAcrossHistoryRefreshes() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let history1 = OpenClawChatHistoryPayload(
@@ -364,6 +414,48 @@ extension TestChatTransportState {
 
         try await waitUntil("streaming cleared") { await MainActor.run { vm.streamingAssistantText == nil } }
         #expect(await MainActor.run { vm.pendingToolCalls.isEmpty })
+    }
+
+    @Test func seqGapClearsPendingRunsAndAutoRefreshesHistory() async throws {
+        let now = Date().timeIntervalSince1970 * 1000
+        let history1 = OpenClawChatHistoryPayload(
+            sessionKey: "main",
+            sessionId: "sess-main",
+            messages: [],
+            thinkingLevel: "off")
+        let history2 = OpenClawChatHistoryPayload(
+            sessionKey: "main",
+            sessionId: "sess-main",
+            messages: [
+                AnyCodable([
+                    "role": "assistant",
+                    "content": [["type": "text", "text": "resynced after gap"]],
+                    "timestamp": now,
+                ]),
+            ],
+            thinkingLevel: "off")
+
+        let transport = TestChatTransport(historyResponses: [history1, history2])
+        let vm = await MainActor.run { OpenClawChatViewModel(sessionKey: "main", transport: transport) }
+
+        await MainActor.run { vm.load() }
+        try await waitUntil("bootstrap") { await MainActor.run { vm.healthOK } }
+
+        await MainActor.run {
+            vm.input = "hello"
+            vm.send()
+        }
+        try await waitUntil("pending run starts") { await MainActor.run { vm.pendingRunCount == 1 } }
+
+        transport.emit(.seqGap)
+
+        try await waitUntil("pending run clears on seqGap") {
+            await MainActor.run { vm.pendingRunCount == 0 }
+        }
+        try await waitUntil("history refreshes on seqGap") {
+            await MainActor.run { vm.messages.contains(where: { $0.role == "assistant" }) }
+        }
+        #expect(await MainActor.run { vm.errorText == nil })
     }
 
     @Test func sessionChoicesPreferMainAndRecent() async throws {

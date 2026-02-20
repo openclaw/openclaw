@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import "./test-helpers/fast-core-tools.js";
-import { sleep } from "../utils.js";
 import {
   getCallGatewayMock,
   resetSessionsSpawnConfigOverride,
@@ -126,13 +125,12 @@ function setupSessionsSpawnGatewayMock(opts: {
 }
 
 const waitFor = async (predicate: () => boolean, timeoutMs = 2000) => {
-  const start = Date.now();
-  while (!predicate()) {
-    if (Date.now() - start > timeoutMs) {
-      throw new Error(`timed out waiting for condition (timeoutMs=${timeoutMs})`);
-    }
-    await sleep(10);
-  }
+  await vi.waitFor(
+    () => {
+      expect(predicate()).toBe(true);
+    },
+    { timeout: timeoutMs, interval: 10 },
+  );
 };
 
 function expectSingleCompletionSend(
@@ -148,6 +146,20 @@ function expectSingleCompletionSend(
   expect(send?.channel).toBe(expected.channel);
   expect(send?.to).toBe(expected.to);
   expect(send?.message).toBe(expected.message);
+}
+
+function createDeleteCleanupHooks(setDeletedKey: (key: string | undefined) => void) {
+  return {
+    onAgentSubagentSpawn: (params: unknown) => {
+      const rec = params as { channel?: string; timeout?: number } | undefined;
+      expect(rec?.channel).toBe("discord");
+      expect(rec?.timeout).toBe(1);
+    },
+    onSessionsDelete: (params: unknown) => {
+      const rec = params as { key?: string } | undefined;
+      setDeletedKey(rec?.key);
+    },
+  };
 }
 
 describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
@@ -233,15 +245,9 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     callGatewayMock.mockReset();
     let deletedKey: string | undefined;
     const ctx = setupSessionsSpawnGatewayMock({
-      onAgentSubagentSpawn: (params) => {
-        const rec = params as { channel?: string; timeout?: number } | undefined;
-        expect(rec?.channel).toBe("discord");
-        expect(rec?.timeout).toBe(1);
-      },
-      onSessionsDelete: (params) => {
-        const rec = params as { key?: string } | undefined;
-        deletedKey = rec?.key;
-      },
+      ...createDeleteCleanupHooks((key) => {
+        deletedKey = key;
+      }),
     });
 
     const tool = await getSessionsSpawnTool({
@@ -317,15 +323,9 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     let deletedKey: string | undefined;
     const ctx = setupSessionsSpawnGatewayMock({
       includeChatHistory: true,
-      onAgentSubagentSpawn: (params) => {
-        const rec = params as { channel?: string; timeout?: number } | undefined;
-        expect(rec?.channel).toBe("discord");
-        expect(rec?.timeout).toBe(1);
-      },
-      onSessionsDelete: (params) => {
-        const rec = params as { key?: string } | undefined;
-        deletedKey = rec?.key;
-      },
+      ...createDeleteCleanupHooks((key) => {
+        deletedKey = key;
+      }),
       agentWaitResult: { status: "ok", startedAt: 3000, endedAt: 4000 },
     });
 
