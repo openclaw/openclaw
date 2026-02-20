@@ -36,6 +36,9 @@ import type {
   PluginHookSessionContext,
   PluginHookSessionEndEvent,
   PluginHookSessionStartEvent,
+  PluginHookSubagentContext,
+  PluginHookSubagentEndedEvent,
+  PluginHookSubagentSpawnedEvent,
   PluginHookToolContext,
   PluginHookToolResultPersistContext,
   PluginHookToolResultPersistEvent,
@@ -76,6 +79,9 @@ export type {
   PluginHookSessionContext,
   PluginHookSessionStartEvent,
   PluginHookSessionEndEvent,
+  PluginHookSubagentContext,
+  PluginHookSubagentSpawnedEvent,
+  PluginHookSubagentEndedEvent,
   PluginHookGatewayContext,
   PluginHookGatewayStartEvent,
   PluginHookGatewayStopEvent,
@@ -570,6 +576,28 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     return runVoidHook("session_end", event, ctx);
   }
 
+  /**
+   * Run subagent_spawned hook.
+   * Runs in parallel (fire-and-forget).
+   */
+  async function runSubagentSpawned(
+    event: PluginHookSubagentSpawnedEvent,
+    ctx: PluginHookSubagentContext,
+  ): Promise<void> {
+    return runVoidHook("subagent_spawned", event, ctx);
+  }
+
+  /**
+   * Run subagent_ended hook.
+   * Runs in parallel (fire-and-forget).
+   */
+  async function runSubagentEnded(
+    event: PluginHookSubagentEndedEvent,
+    ctx: PluginHookSubagentContext,
+  ): Promise<void> {
+    return runVoidHook("subagent_ended", event, ctx);
+  }
+
   // =========================================================================
   // Gateway Hooks
   // =========================================================================
@@ -638,6 +666,8 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     // Session hooks
     runSessionStart,
     runSessionEnd,
+    runSubagentSpawned,
+    runSubagentEnded,
     // Gateway hooks
     runGatewayStart,
     runGatewayStop,

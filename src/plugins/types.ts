@@ -314,6 +314,8 @@ export type PluginHookName =
   | "before_message_write"
   | "session_start"
   | "session_end"
+  | "subagent_spawned"
+  | "subagent_ended"
   | "gateway_start"
   | "gateway_stop";
 
@@ -547,6 +549,43 @@ export type PluginHookSessionEndEvent = {
   durationMs?: number;
 };
 
+// Subagent context
+export type PluginHookSubagentContext = {
+  runId?: string;
+  childSessionKey?: string;
+  requesterSessionKey?: string;
+};
+
+export type PluginHookSubagentTargetKind = "subagent" | "acp";
+
+// subagent_spawned hook
+export type PluginHookSubagentSpawnedEvent = {
+  runId: string;
+  childSessionKey: string;
+  agentId: string;
+  label?: string;
+  requester?: {
+    channel?: string;
+    accountId?: string;
+    to?: string;
+    threadId?: string | number;
+  };
+  threadRequested: boolean;
+};
+
+// subagent_ended hook
+export type PluginHookSubagentEndedEvent = {
+  targetSessionKey: string;
+  targetKind: PluginHookSubagentTargetKind;
+  reason: string;
+  sendFarewell?: boolean;
+  accountId?: string;
+  runId?: string;
+  endedAt?: number;
+  outcome?: "ok" | "error" | "timeout" | "killed" | "reset" | "deleted";
+  error?: string;
+};
+
 // Gateway context
 export type PluginHookGatewayContext = {
   port?: number;
@@ -632,6 +671,14 @@ export type PluginHookHandlerMap = {
   session_end: (
     event: PluginHookSessionEndEvent,
     ctx: PluginHookSessionContext,
+  ) => Promise<void> | void;
+  subagent_spawned: (
+    event: PluginHookSubagentSpawnedEvent,
+    ctx: PluginHookSubagentContext,
+  ) => Promise<void> | void;
+  subagent_ended: (
+    event: PluginHookSubagentEndedEvent,
+    ctx: PluginHookSubagentContext,
   ) => Promise<void> | void;
   gateway_start: (
     event: PluginHookGatewayStartEvent,
