@@ -451,3 +451,318 @@ This section maps user-facing concepts to the `src/` directories that implement 
 | Skill | Purpose |
 |-------|---------|
 | `skills/documentator/` | This skill — read-only codebase investigator |
+
+---
+
+## Investigation Methodology
+
+Follow these steps in order when answering any question about the OpenClaw codebase.
+
+### Step 1: Understand the Question Scope
+
+Classify the question before searching:
+- **Feature question** — "How does X work?" → identify the module(s), trace code paths
+- **Location question** — "Where is X defined?" → search for definitions, check key files
+- **Architecture question** — "How do X and Y interact?" → trace imports across modules
+- **Configuration question** — "How do I configure X?" → check `src/config/`, docs, Zod schemas
+- **Extension question** — "How do I add X?" → check `extensions/`, plugin SDK, existing examples
+
+### Step 2: Identify Which Modules Are Involved
+
+Map the question's keywords to `src/` directories using this keyword guide:
+
+| Keywords | Primary Module(s) | Secondary Module(s) |
+|----------|-------------------|---------------------|
+| message, send, receive, channel | `src/channels/`, `src/<channel-name>/` | `src/routing/`, `src/auto-reply/` |
+| WhatsApp, Baileys, QR | `src/web/` | `extensions/whatsapp/`, `src/pairing/` |
+| Telegram, bot, webhook | `src/telegram/` | `extensions/telegram/` |
+| Discord, Carbon | `src/discord/` | `extensions/discord/` |
+| Slack, Socket Mode, Bolt | `src/slack/` | `extensions/slack/` |
+| plugin, extension, register, activate | `src/plugins/` | `extensions/`, `src/plugin-sdk/` |
+| hook, lifecycle, event, before, after | `src/plugins/hooks.ts` (Layer 1) | `src/hooks/internal-hooks.ts` (Layer 2) |
+| config, settings, schema, Zod | `src/config/` | `src/wizard/` |
+| CLI, command, argument, program | `src/cli/`, `src/commands/` | `src/entry.ts` |
+| gateway, server, HTTP, API, auth | `src/gateway/` | `src/routing/` |
+| agent, workspace, identity, scope | `src/agents/` | `src/commands/` |
+| route, session, binding | `src/routing/`, `src/sessions/` | `src/agents/` |
+| memory, embedding, recall | `src/memory/` | `extensions/memory-*/` |
+| cron, schedule, job | `src/cron/` | `src/hooks/` |
+| LLM, provider, model, AI | `src/providers/` | `src/auto-reply/` |
+| browser, Playwright, CDP | `src/browser/` | — |
+| media, image, audio, MIME | `src/media/`, `src/media-understanding/` | `src/tts/` |
+| TUI, terminal, slash command | `src/tui/`, `src/terminal/` | — |
+| security, ACL, audit | `src/security/` | `src/config/redact-snapshot.ts` |
+| daemon, service, LaunchAgent | `src/daemon/` | `src/macos/` |
+| secret, redact, token, password | `src/config/redact-snapshot.ts` | `src/security/` |
+
+### Step 3: Find Entry Points
+
+For each identified module, locate the entry point:
+
+1. **Check for an `index.ts`** in the module directory — this is the public API
+2. **Check for a barrel file** exporting the main classes/functions
+3. **If no index**, look at the filenames — the module name often matches the main file (e.g., `src/cron/schedule.ts` for cron scheduling)
+4. **For CLI commands**, start at `src/cli/program/build-program.ts` → find the subcommand registration → follow to `src/commands/<command>.ts`
+5. **For gateway endpoints**, start at `src/gateway/server.ts` → trace route handlers
+
+### Step 4: Trace Code Paths
+
+Follow this pattern to trace how code flows:
+
+1. **Start at the entry point** identified in Step 3
+2. **Follow imports** — each `import { X } from "./Y.js"` is a dependency link
+3. **Check for DI injection** — look for `createDefaultDeps()` usage (`src/cli/deps.ts`) which maps channel IDs to send implementations
+4. **Watch for plugin registration** — `register(api)` or `activate(api)` calls set up hooks, tools, commands, and gateway methods
+5. **Watch for hook triggers** — `triggerInternalHook()` for Layer 2 events, `hookRunner.runX()` for Layer 1 plugin hooks
+6. **Note async boundaries** — look for `await`, `Promise.all`, event emitters
+
+### Step 5: Check Tests for Behavior Confirmation
+
+Tests confirm *intended* behavior. For any module at `src/<module>/`:
+
+1. **Colocated tests**: look for `src/<module>/**/*.test.ts`
+2. **E2E tests**: check `test/` for integration tests involving the module
+3. **Test utilities**: `src/test-utils/channel-plugins.ts` provides `createTestRegistry()`, `createStubPlugin()`, `createStubOutbound()`
+4. **Mock data**: `test/mocks/` contains mock implementations (e.g., `baileys.ts` for WhatsApp)
+
+Read test files to understand:
+- What inputs produce what outputs
+- Edge cases the developers considered
+- How modules are wired together in integration scenarios
+
+### Step 6: Check Docs for Intended Behavior
+
+Documentation describes the *user-facing* intent:
+
+1. **Feature docs**: `docs/<feature>/` (e.g., `docs/channels/`, `docs/hooks/`)
+2. **CLI command docs**: `docs/cli/` (43 command reference pages)
+3. **Provider docs**: `docs/providers/` (24 LLM provider setup guides)
+4. **Concept docs**: `docs/concepts/` (30 conceptual guides)
+5. **Plugin docs**: `docs/plugins/` (plugin development guides)
+
+Cross-reference code behavior with doc descriptions to identify discrepancies or undocumented behavior.
+
+### Step 7: Synthesize Findings
+
+Combine what you found into a structured answer:
+1. **One-line direct answer** to the question
+2. **Key files** with paths and line numbers
+3. **Code flow explanation** — how the pieces connect
+4. **Related modules** that interact with this feature
+5. **Code snippets** where they clarify the explanation
+
+### How to Identify Cross-Module Interactions
+
+When a feature spans multiple modules:
+
+1. **Check imports** — `import ... from "../<other-module>/..."` reveals direct dependencies
+2. **Grep for usage** — search for a function/class name across all of `src/` to find all consumers
+3. **Follow the hook chain** — a module may register a plugin hook that another module triggers
+4. **Check the DI layer** — `createDefaultDeps()` and `createOutboundSendDeps()` wire channel send functions across modules
+5. **Check the plugin registry** — `requireActivePluginRegistry()` is used to access cross-module channel plugin state
+
+---
+
+## Search Strategy Guide
+
+### Effective Grep Patterns
+
+**Finding definitions:**
+```
+# Function/const definition
+export function <name>
+export const <name>
+export type <name>
+export interface <name>
+
+# Class definition
+export class <name>
+
+# Enum definition
+export enum <name>
+```
+
+**Finding all usages of an identifier:**
+```
+# Import usage (reveals which modules depend on it)
+import.*<name>
+
+# Direct usage in code
+<name>\(          # function calls
+new <name>        # class instantiation
+: <name>          # type annotations
+```
+
+**Tracing hook registrations:**
+```
+# Plugin hook registration
+registerHook\(.*"<hookName>"
+hookName: "<hookName>"
+
+# Internal hook registration
+registerInternalHook\(.*"<eventType>"
+triggerInternalHook\(
+```
+
+**Finding config schema fields:**
+```
+# Zod schema definitions
+z\.\w+\(\).*// <fieldName>
+<fieldName>: z\.
+```
+
+### Effective Glob Patterns
+
+| Goal | Pattern |
+|------|---------|
+| All files in a module | `src/<module>/**/*.ts` |
+| All test files in a module | `src/<module>/**/*.test.ts` |
+| All E2E tests | `test/**/*.e2e.test.ts` |
+| All extension entry points | `extensions/*/index.ts` |
+| All skill definitions | `skills/*/SKILL.md` |
+| All config schemas | `src/config/zod-schema*.ts` |
+| All Mintlify docs for a topic | `docs/<topic>/**/*.mdx` |
+| All package.json files | `**/package.json` |
+| Channel plugin types | `src/channels/plugins/types*.ts` |
+
+### Searching Across the Monorepo
+
+The codebase has three main code locations. Always check the right one:
+
+| Location | Contains | When to Search Here |
+|----------|----------|---------------------|
+| `src/` | Core application code | Most questions; main logic lives here |
+| `extensions/` | Plugin packages (each is its own npm package) | Channel extensions, memory plugins, auth providers, utility plugins |
+| `packages/` | Shared workspace packages | Shared libraries used across root and extensions |
+
+**For channel-related questions**, always check both:
+- `src/<channel-name>/` — core channel implementation (send, monitor, accounts)
+- `extensions/<channel-name>/` — extension plugin that registers the channel
+
+**For plugin-related questions**, check the chain:
+- `src/plugins/` — plugin system core (loader, discovery, registry, hooks)
+- `src/plugin-sdk/` — public SDK types for plugin authors
+- `extensions/<plugin-name>/` — actual plugin implementations
+
+### Search Tips
+
+1. **Prefer exact identifiers over fuzzy terms** — search for `sendMessageWhatsApp` not "send whatsapp message"
+2. **Use the type system** — searching for a TypeScript type like `ChannelPlugin` often reveals the interface contract faster than reading implementation
+3. **Check test files first for behavior** — `*.test.ts` files often contain the clearest examples of how a module is used
+4. **Use file extensions to narrow scope** — restrict to `*.ts` to avoid hitting compiled `dist/` output or docs
+5. **For config questions**, start with Zod schemas in `src/config/zod-schema*.ts` — they define the canonical shape
+
+### Common Search Starting Points
+
+| Question Type | Start Here | Then Check |
+|---------------|------------|------------|
+| Channel behavior | `src/channels/plugins/types.plugin.ts` | `src/<channel-name>/`, `extensions/<channel-name>/` |
+| Plugin development | `src/plugins/types.ts` | `src/plugin-sdk/index.ts`, `extensions/` for examples |
+| CLI command | `src/cli/program/build-program.ts` | `src/commands/<command>.ts` |
+| Config option | `src/config/zod-schema*.ts` | `src/config/types.ts`, `docs/concepts/` |
+| Hook lifecycle | `src/plugins/hooks.ts` (Layer 1) | `src/hooks/internal-hooks.ts` (Layer 2) |
+| Gateway API | `src/gateway/server.ts` | `src/gateway/server-methods/` |
+| Message routing | `src/routing/resolve-route.ts` | `src/routing/session-key.ts`, `src/sessions/` |
+| Memory system | `src/memory/manager.ts` | `extensions/memory-core/`, `extensions/memory-lancedb/` |
+| Cron/scheduling | `src/cron/schedule.ts` | `src/cron/delivery.ts`, `src/hooks/` |
+| Browser automation | `src/browser/bridge-server.ts` | `src/browser/client-actions.ts`, `src/browser/cdp.helpers.ts` |
+| Security/secrets | `src/config/redact-snapshot.ts` | `src/security/`, `src/gateway/auth.ts` |
+| Media handling | `src/media/mime.ts` | `src/media-understanding/`, `src/media/store.ts` |
+
+---
+
+## Dependency Tracing
+
+### Tracing npm Dependencies
+
+1. **Root `package.json`** — lists all direct dependencies for the main CLI/library
+2. **Extension `package.json` files** — each `extensions/*/package.json` has its own deps
+3. **`pnpm-workspace.yaml`** — defines workspace packages (root, `ui`, `packages/*`, `extensions/*`)
+4. **`pnpm-lock.yaml`** — resolved dependency tree (don't read manually; use `pnpm why <pkg>` to trace)
+5. **`vendor/`** — vendored dependencies not from npm (bundled locally)
+6. **`patches/`** — pnpm patch files that modify npm package behavior
+
+**Key commands for dependency investigation:**
+```bash
+# Find why a package is installed
+pnpm why <package-name>
+
+# List all workspace packages
+pnpm ls --depth 0 -r
+
+# Check a specific extension's deps
+cat extensions/<name>/package.json
+```
+
+### Tracing Internal Module Dependencies
+
+Internal modules connect via TypeScript imports. To trace how modules depend on each other:
+
+1. **Follow `import` statements** — every `import { X } from "../<module>/Y.js"` is an explicit dependency edge
+2. **Check `src/index.ts`** — the library's public API re-exports from internal modules; these are the "official" boundaries
+3. **Check `src/cli/deps.ts`** — `createDefaultDeps()` wires channel send functions; `createOutboundSendDeps()` adapts them for the infra layer
+4. **Watch for lazy imports** — some modules use dynamic `import()` to avoid loading heavy dependencies at startup
+5. **Check for circular dependencies** — if module A imports from B and B imports from A, look for barrel re-exports or interface-based decoupling
+
+**Common dependency patterns:**
+- `src/commands/` → `src/agents/`, `src/channels/`, `src/routing/` (commands orchestrate these)
+- `src/gateway/` → `src/routing/`, `src/channels/`, `src/plugins/` (gateway uses all of them)
+- `src/auto-reply/` → `src/channels/`, `src/media/`, `src/infra/` (reply pipeline)
+- `src/plugins/` → standalone (other modules depend on it, not the reverse)
+
+### Understanding the Extension Loading Mechanism
+
+Extensions are loaded via the plugin discovery and loading pipeline in `src/plugins/`. Here is the full chain:
+
+**1. Discovery** (`src/plugins/discovery.ts` → `discoverOpenClawPlugins()`)
+
+Scans four locations in priority order (earlier = higher precedence):
+1. **Config paths** — `config.plugins.loadPaths[]` (explicit paths from user config)
+2. **Workspace extensions** — `<workspaceDir>/.openclaw/extensions/`
+3. **Global extensions** — `<configDir>/extensions/`
+4. **Bundled extensions** — `extensions/` directory shipped with OpenClaw
+
+For each location, it scans for:
+- Direct `.ts`/`.js` files
+- Directories with `package.json` that declare `openclaw.extensions[]` paths
+- Directories with an `index.ts`/`index.js` fallback
+
+**2. Manifest Resolution** (`src/plugins/manifest-registry.ts` → `loadPluginManifestRegistry()`)
+
+For each discovered candidate:
+- Reads `package.json` for metadata (id, name, version, description, config schema)
+- Validates the manifest against expected structure
+- Deduplicates by plugin ID (first-seen wins)
+
+**3. Module Loading** (`src/plugins/loader.ts` → `loadOpenClawPlugins()`)
+
+For each validated candidate:
+- Checks enable/disable state from config
+- Loads the module via `createJiti()` (supports `.ts` natively, no compile step needed)
+- Resolves the module export (supports `default` export or named `register`/`activate`)
+- Validates plugin config against the declared JSON schema
+- Calls `register(api)` or `activate(api)` with a `PluginApi` instance
+
+**4. Registration** (via the `PluginApi` provided to `register()`)
+
+During registration, plugins can:
+- Register **hooks** (lifecycle events like `before_agent_start`, `message_received`, etc.)
+- Register **tools** (callable by the AI agent)
+- Register **commands** (CLI subcommands)
+- Register **gateway methods** (HTTP API endpoints)
+- Register **channel plugins** (messaging channel implementations)
+- Register **provider adapters** (LLM provider integrations)
+- Register **services** (long-running background services)
+
+**5. Activation** (`src/plugins/runtime.ts` → `setActivePluginRegistry()`)
+
+After all plugins are loaded:
+- The registry is cached (keyed by workspace dir + plugin config)
+- The global hook runner is initialized (`initializeGlobalHookRunner()`)
+- The registry is set as the active registry for the rest of the application
+
+**Extension package conventions:**
+- Located in `extensions/<name>/`
+- Has a `package.json` with `name: "@openclaw/<name>"` and `openclaw.extensions` array
+- Entry point exports an `OpenClawPluginDefinition` or a `register(api)` function
+- Config schema declared in `package.json` under `openclaw.configSchema`

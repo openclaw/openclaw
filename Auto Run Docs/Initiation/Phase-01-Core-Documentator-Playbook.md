@@ -33,7 +33,8 @@ This phase creates the **openclaw-documentator** — a read-only investigator ag
     - **Extension & Plugin Registry**: list all extensions/ packages and what they do
     - **Skills Catalog**: list all skills/ and their purposes
 
-- [ ] Add investigation methodology and search strategy sections to the SKILL.md:
+- [x] Add investigation methodology and search strategy sections to the SKILL.md:
+  > Completed 2026-02-19: Added three comprehensive sections to `skills/documentator/SKILL.md`: **Investigation Methodology** (7-step process with keyword-to-module mapping table covering 17 keyword groups, entry point finding, code path tracing, test/doc cross-referencing, cross-module interaction guidance), **Search Strategy Guide** (grep patterns for definitions/usages/hooks/config, glob pattern table, monorepo search guidance, 5 search tips, 12-row starting points table), and **Dependency Tracing** (npm dep tracing, internal module dependency patterns, full 5-stage extension loading mechanism walkthrough from discovery → manifest → loading → registration → activation with file references).
   - Read the current `skills/documentator/SKILL.md` to understand what's already written
   - Add an **Investigation Methodology** section with:
     - Step-by-step approach: 1) Understand the question scope, 2) Identify which module(s) are involved, 3) Find entry points, 4) Trace code paths, 5) Check tests for behavior confirmation, 6) Check docs for intended behavior, 7) Synthesize findings
