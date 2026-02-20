@@ -22,6 +22,7 @@ import {
   DEFAULT_OPENCLAW_BROWSER_COLOR,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
 } from "./constants.js";
+import { reapStaleCrashpadHandlersForProfile } from "./crashpad-gc.js";
 
 const log = createSubsystemLogger("browser").child("chrome");
 
@@ -178,6 +179,12 @@ export async function launchOpenClawChrome(
 
   const userDataDir = resolveOpenClawUserDataDir(profile.name);
   fs.mkdirSync(userDataDir, { recursive: true });
+  await reapStaleCrashpadHandlersForProfile({
+    userDataDir,
+    logger: log,
+  }).catch((err) => {
+    log.warn(`openclaw browser crashpad preflight failed: ${String(err)}`);
+  });
   const isolatedXdgConfigHome = path.join(userDataDir, "xdg-config");
   fs.mkdirSync(isolatedXdgConfigHome, { recursive: true });
 
@@ -324,6 +331,12 @@ export async function launchOpenClawChrome(
     } catch {
       // ignore
     }
+    await reapStaleCrashpadHandlersForProfile({
+      userDataDir,
+      logger: log,
+    }).catch((err) => {
+      log.warn(`openclaw browser crashpad cleanup failed after launch error: ${String(err)}`);
+    });
     throw new Error(
       `Failed to start Chrome CDP on port ${profile.cdpPort} for profile "${profile.name}".`,
     );
@@ -346,7 +359,16 @@ export async function launchOpenClawChrome(
 
 export async function stopOpenClawChrome(running: RunningChrome, timeoutMs = 2500) {
   const proc = running.proc;
+  const reapCrashpad = async () => {
+    await reapStaleCrashpadHandlersForProfile({
+      userDataDir: running.userDataDir,
+      logger: log,
+    }).catch((err) => {
+      log.warn(`openclaw browser crashpad cleanup failed on stop: ${String(err)}`);
+    });
+  };
   if (proc.killed) {
+    await reapCrashpad();
     return;
   }
   try {
@@ -361,6 +383,7 @@ export async function stopOpenClawChrome(running: RunningChrome, timeoutMs = 250
       break;
     }
     if (!(await isChromeReachable(cdpUrlForPort(running.cdpPort), 200))) {
+      await reapCrashpad();
       return;
     }
     await new Promise((r) => setTimeout(r, 100));
@@ -371,4 +394,5 @@ export async function stopOpenClawChrome(running: RunningChrome, timeoutMs = 250
   } catch {
     // ignore
   }
+  await reapCrashpad();
 }

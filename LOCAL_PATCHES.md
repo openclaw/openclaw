@@ -189,6 +189,10 @@ Quick status:
   - Startup self-heal (`src/gateway/startup-cgroup-gc.ts`, wired in `src/gateway/server.impl.ts`):
     - Linux-only cgroup scan at startup.
     - terminate + force-kill non-descendant stale members from the gateway cgroup.
+  - Browser crashpad GC (`src/browser/crashpad-gc.ts`, wired in `src/browser/chrome.ts`):
+    - Linux-only stale crashpad cleanup scoped to OpenClaw-managed `user-data-dir`.
+    - run pre-launch and on stop/launch-failure.
+    - only reap when no matching profile Chromium process is active (avoids touching live sessions).
   - Health burst damping:
     - `src/gateway/server-methods/health.ts`: coalesce/throttle cached-path background refreshes.
     - `src/gateway/server/ws-connection/message-handler.ts`: per-connection non-probe health throttle using cached snapshot.
