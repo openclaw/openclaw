@@ -242,4 +242,50 @@ describe("security fix", () => {
     expectPerms((await fs.stat(transcriptPath)).mode & 0o777, 0o600);
     expectPerms((await fs.stat(includePath)).mode & 0o777, 0o600);
   });
+
+  it("tightens perms for cron, browser, and settings directories (#18866)", async () => {
+    const stateDir = await createStateDir("sensitive-dirs");
+
+    const configPath = path.join(stateDir, "openclaw.json");
+    await writeJsonConfig(configPath, {});
+
+    // Create cron directory with world-readable permissions (simulating bug)
+    const cronDir = path.join(stateDir, "cron");
+    await fs.mkdir(cronDir, { recursive: true });
+    await fs.chmod(cronDir, 0o755);
+    const jobsJsonPath = path.join(cronDir, "jobs.json");
+    await fs.writeFile(
+      jobsJsonPath,
+      JSON.stringify({ jobs: [{ id: "test", payload: { message: "secret" } }] }),
+      "utf-8",
+    );
+    await fs.chmod(jobsJsonPath, 0o644);
+    const jobsJsonBakPath = path.join(cronDir, "jobs.json.bak");
+    await fs.writeFile(jobsJsonBakPath, "{}", "utf-8");
+    await fs.chmod(jobsJsonBakPath, 0o644);
+
+    // Create browser directory with world-readable permissions
+    const browserDir = path.join(stateDir, "browser");
+    await fs.mkdir(browserDir, { recursive: true });
+    await fs.chmod(browserDir, 0o755);
+
+    // Create settings directory with world-readable permissions
+    const settingsDir = path.join(stateDir, "settings");
+    await fs.mkdir(settingsDir, { recursive: true });
+    await fs.chmod(settingsDir, 0o755);
+
+    const env = createFixEnv(stateDir, configPath);
+
+    const res = await fixSecurityFootguns({ env, stateDir, configPath });
+    expect(res.ok).toBe(true);
+
+    // Verify directories are tightened to 700
+    expectPerms((await fs.stat(cronDir)).mode & 0o777, 0o700);
+    expectPerms((await fs.stat(browserDir)).mode & 0o777, 0o700);
+    expectPerms((await fs.stat(settingsDir)).mode & 0o777, 0o700);
+
+    // Verify cron job files are tightened to 600
+    expectPerms((await fs.stat(jobsJsonPath)).mode & 0o777, 0o600);
+    expectPerms((await fs.stat(jobsJsonBakPath)).mode & 0o777, 0o600);
+  });
 });

@@ -461,6 +461,24 @@ export async function fixSecurityFootguns(opts?: {
     errors.push(`chmodCredentialsAndAgentState failed: ${String(err)}`);
   });
 
+  // Fix permissions on sensitive directories not covered above (#18866)
+  // - cron/: Contains scheduled task details including payload/message content
+  // - browser/: Contains session state and cookies
+  // - settings/: Contains user settings
+  const sensitiveDirs = ["cron", "browser", "settings"];
+  for (const dir of sensitiveDirs) {
+    const dirPath = path.join(stateDir, dir);
+    actions.push(await applyPerms({ path: dirPath, mode: 0o700, require: "dir" }));
+  }
+
+  // Fix permissions on cron job files
+  const cronDir = path.join(stateDir, "cron");
+  const cronFiles = ["jobs.json", "jobs.json.bak"];
+  for (const file of cronFiles) {
+    const filePath = path.join(cronDir, file);
+    actions.push(await applyPerms({ path: filePath, mode: 0o600, require: "file" }));
+  }
+
   return {
     ok: errors.length === 0,
     stateDir,
