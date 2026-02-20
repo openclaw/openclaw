@@ -342,7 +342,6 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         verboseLevel: entry?.verboseLevel,
         reasoningLevel: entry?.reasoningLevel,
         responseUsage: entry?.responseUsage,
-        model: entry?.model,
         contextTokens: entry?.contextTokens,
         sendPolicy: entry?.sendPolicy,
         label: entry?.label,

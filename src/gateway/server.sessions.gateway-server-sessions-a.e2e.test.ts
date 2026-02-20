@@ -160,6 +160,8 @@ describe("gateway server sessions", () => {
         main: {
           sessionId: "sess-main",
           updatedAt: recent,
+          modelProvider: "openai",
+          model: "gpt-test-a",
           inputTokens: 10,
           outputTokens: 20,
           thinkingLevel: "low",
@@ -414,11 +416,13 @@ describe("gateway server sessions", () => {
     const reset = await rpcReq<{
       ok: true;
       key: string;
-      entry: { sessionId: string };
+      entry: { sessionId: string; model?: string; modelProvider?: string };
     }>(ws, "sessions.reset", { key: "agent:main:main" });
     expect(reset.ok).toBe(true);
     expect(reset.payload?.key).toBe("agent:main:main");
     expect(reset.payload?.entry.sessionId).not.toBe("sess-main");
+    expect(reset.payload?.entry.model).toBeUndefined();
+    expect(reset.payload?.entry.modelProvider).toBeUndefined();
     const filesAfterReset = await fs.readdir(dir);
     expect(filesAfterReset.some((f) => f.startsWith("sess-main.jsonl.reset."))).toBe(true);
 
