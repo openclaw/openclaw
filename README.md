@@ -485,6 +485,16 @@ by Peter Steinberger and the community.
 - [steipete.me](https://steipete.me)
 - [@openclaw](https://x.com/openclaw)
 
+## Community Tools
+
+Open-source tools built by the community to extend the OpenClaw ecosystem:
+
+| Tool | Description | Author |
+|------|-------------|--------|
+| [Agent Dashboard](https://github.com/aiwithabidi/agent-dash) | Real-time surveillance dashboard for Claude Code Agent Teams — monitor agents, tasks, and messages live | [Mohammad-Ali Abidi](https://agxntsix.ai) |
+
+Built something on top of OpenClaw? Open a PR to add it here.
+
 ## Community
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines, maintainers, and how to submit PRs.
