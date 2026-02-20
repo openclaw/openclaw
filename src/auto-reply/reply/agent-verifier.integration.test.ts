@@ -48,7 +48,7 @@ function makeSuccessOutcome(
   return {
     kind: "success",
     runId: "test-run-id",
-    runResult: { payloads, meta: {} },
+    runResult: { payloads, meta: { durationMs: 100 } },
     fallbackAttempts: [],
     didLogHeartbeatStrip: false,
     autoCompactionCompleted: false,
