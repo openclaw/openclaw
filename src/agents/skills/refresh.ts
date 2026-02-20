@@ -3,6 +3,7 @@ import path from "node:path";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { CONFIG_DIR, resolveUserPath } from "../../utils.js";
+import { resolveBundledSkillsDir } from "./bundled-dir.js";
 import { resolvePluginSkillDirs } from "./plugin-skills.js";
 
 type SkillsChangeEvent = {
@@ -52,6 +53,10 @@ function resolveWatchPaths(workspaceDir: string, config?: OpenClawConfig): strin
     paths.push(path.join(workspaceDir, "skills"));
   }
   paths.push(path.join(CONFIG_DIR, "skills"));
+  const bundledSkillsDir = resolveBundledSkillsDir();
+  if (bundledSkillsDir?.trim()) {
+    paths.push(bundledSkillsDir.trim());
+  }
   const extraDirsRaw = config?.skills?.load?.extraDirs ?? [];
   const extraDirs = extraDirsRaw
     .map((d) => (typeof d === "string" ? d.trim() : ""))
@@ -60,7 +65,7 @@ function resolveWatchPaths(workspaceDir: string, config?: OpenClawConfig): strin
   paths.push(...extraDirs);
   const pluginSkillDirs = resolvePluginSkillDirs({ workspaceDir, config });
   paths.push(...pluginSkillDirs);
-  return paths;
+  return Array.from(new Set(paths));
 }
 
 export function registerSkillsChangeListener(listener: (event: SkillsChangeEvent) => void) {
@@ -172,4 +177,11 @@ export function ensureSkillsWatcher(params: { workspaceDir: string; config?: Ope
   });
 
   watchers.set(workspaceDir, state);
+  // Force one snapshot refresh after watcher (re)initialization so existing
+  // sessions don't stay pinned to stale skill snapshots across restarts.
+  bumpSkillsSnapshotVersion({
+    workspaceDir,
+    reason: "manual",
+    changedPath: watchPaths[0],
+  });
 }
