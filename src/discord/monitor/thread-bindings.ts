@@ -23,6 +23,7 @@ export type ThreadBindingRecord = {
   webhookToken?: string;
   boundBy: string;
   boundAt: number;
+  expiresAt?: number;
 };
 
 type PersistedThreadBindingRecord = ThreadBindingRecord & {
@@ -36,6 +37,7 @@ type PersistedThreadBindingsPayload = {
 
 export type ThreadBindingManager = {
   accountId: string;
+  getSessionTtlMs: () => number;
   getByThreadId: (threadId: string) => ThreadBindingRecord | undefined;
   getBySessionKey: (targetSessionKey: string) => ThreadBindingRecord | undefined;
   listBySessionKey: (targetSessionKey: string) => ThreadBindingRecord[];
@@ -72,6 +74,7 @@ export type ThreadBindingManager = {
 
 const THREAD_BINDINGS_VERSION = 1 as const;
 const THREAD_BINDINGS_SWEEP_INTERVAL_MS = 120_000;
+const DEFAULT_THREAD_BINDING_TTL_MS = 24 * 60 * 60 * 1000; // 24h
 const DEFAULT_FAREWELL_TEXT = "Session ended. Messages here will no longer be routed.";
 
 type ThreadBindingsGlobalState = {
@@ -168,6 +171,10 @@ function normalizePersistedBinding(threadIdKey: string, raw: unknown): ThreadBin
     typeof value.boundAt === "number" && Number.isFinite(value.boundAt)
       ? Math.floor(value.boundAt)
       : Date.now();
+  const expiresAt =
+    typeof value.expiresAt === "number" && Number.isFinite(value.expiresAt) && value.expiresAt > 0
+      ? Math.floor(value.expiresAt)
+      : undefined;
   return {
     accountId,
     channelId,
@@ -180,7 +187,54 @@ function normalizePersistedBinding(threadIdKey: string, raw: unknown): ThreadBin
     webhookToken,
     boundBy,
     boundAt,
+    expiresAt,
   };
+}
+
+function normalizeThreadBindingTtlMs(raw: unknown): number {
+  if (typeof raw !== "number" || !Number.isFinite(raw)) {
+    return DEFAULT_THREAD_BINDING_TTL_MS;
+  }
+  const ttlMs = Math.floor(raw);
+  if (ttlMs < 0) {
+    return DEFAULT_THREAD_BINDING_TTL_MS;
+  }
+  return ttlMs;
+}
+
+function formatThreadBindingTtlLabel(ttlMs: number): string {
+  if (ttlMs <= 0) {
+    return "disabled";
+  }
+  if (ttlMs < 60_000) {
+    return "<1m";
+  }
+  const totalMinutes = Math.floor(ttlMs / 60_000);
+  if (totalMinutes % 60 === 0) {
+    return `${Math.floor(totalMinutes / 60)}h`;
+  }
+  return `${totalMinutes}m`;
+}
+
+function resolveThreadBindingExpiresAt(params: {
+  record: Pick<ThreadBindingRecord, "boundAt" | "expiresAt">;
+  sessionTtlMs: number;
+}): number | undefined {
+  if (
+    typeof params.record.expiresAt === "number" &&
+    Number.isFinite(params.record.expiresAt) &&
+    params.record.expiresAt > 0
+  ) {
+    return Math.floor(params.record.expiresAt);
+  }
+  if (params.sessionTtlMs <= 0) {
+    return undefined;
+  }
+  const boundAt = Math.floor(params.record.boundAt);
+  if (!Number.isFinite(boundAt) || boundAt <= 0) {
+    return undefined;
+  }
+  return boundAt + params.sessionTtlMs;
 }
 
 function linkSessionBinding(targetSessionKey: string, threadId: string) {
@@ -294,11 +348,31 @@ export function resolveThreadBindingThreadName(params: {
 export function resolveThreadBindingIntroText(params: {
   agentId?: string;
   label?: string;
+  sessionTtlMs?: number;
 }): string {
   const label = params.label?.trim();
   const base = label || params.agentId?.trim() || "agent";
   const normalized = base.replace(/\s+/g, " ").trim().slice(0, 100) || "agent";
+  const ttlMs = normalizeThreadBindingTtlMs(params.sessionTtlMs);
+  if (ttlMs > 0) {
+    return `🤖 ${normalized} session active (auto-unfocus in ${formatThreadBindingTtlLabel(ttlMs)}). Messages here go directly to this session.`;
+  }
   return `🤖 ${normalized} session active. Messages here go directly to this session.`;
+}
+
+function resolveThreadBindingFarewellText(params: {
+  reason?: string;
+  farewellText?: string;
+  sessionTtlMs: number;
+}): string {
+  const custom = params.farewellText?.trim();
+  if (custom) {
+    return custom;
+  }
+  if (params.reason === "ttl-expired") {
+    return `Session ended automatically after ${formatThreadBindingTtlLabel(params.sessionTtlMs)}. Messages here will no longer be routed.`;
+  }
+  return DEFAULT_FAREWELL_TEXT;
 }
 
 function summarizeBindingPersona(record: ThreadBindingRecord): string {
@@ -554,6 +628,7 @@ function createNoopManager(accountIdRaw?: string): ThreadBindingManager {
   const accountId = normalizeAccountId(accountIdRaw);
   return {
     accountId,
+    getSessionTtlMs: () => DEFAULT_THREAD_BINDING_TTL_MS,
     getByThreadId: () => undefined,
     getBySessionKey: () => undefined,
     listBySessionKey: () => [],
@@ -571,6 +646,7 @@ export function createThreadBindingManager(
     token?: string;
     persist?: boolean;
     enableSweeper?: boolean;
+    sessionTtlMs?: number;
   } = {},
 ): ThreadBindingManager {
   ensureBindingsLoaded();
@@ -582,11 +658,13 @@ export function createThreadBindingManager(
 
   const persist = params.persist ?? shouldDefaultPersist();
   PERSIST_BY_ACCOUNT_ID.set(accountId, persist);
+  const sessionTtlMs = normalizeThreadBindingTtlMs(params.sessionTtlMs);
 
   let sweepTimer: NodeJS.Timeout | null = null;
 
   const manager: ThreadBindingManager = {
     accountId,
+    getSessionTtlMs: () => sessionTtlMs,
     getByThreadId: (threadId) => {
       const key = threadId.trim();
       if (!key) {
@@ -674,6 +752,7 @@ export function createThreadBindingManager(
         webhookToken = createdWebhook.webhookToken ?? "";
       }
 
+      const boundAt = Date.now();
       const record: ThreadBindingRecord = {
         accountId,
         channelId,
@@ -685,7 +764,8 @@ export function createThreadBindingManager(
         webhookId: webhookId || undefined,
         webhookToken: webhookToken || undefined,
         boundBy: bindParams.boundBy?.trim() || "system",
-        boundAt: Date.now(),
+        boundAt,
+        expiresAt: sessionTtlMs > 0 ? boundAt + sessionTtlMs : undefined,
       };
 
       setBindingRecord(record);
@@ -716,7 +796,11 @@ export function createThreadBindingManager(
         saveBindingsToDisk();
       }
       if (unbindParams.sendFarewell !== false) {
-        const farewell = unbindParams.farewellText?.trim() || DEFAULT_FAREWELL_TEXT;
+        const farewell = resolveThreadBindingFarewellText({
+          reason: unbindParams.reason,
+          farewellText: unbindParams.farewellText,
+          sessionTtlMs,
+        });
         void maybeSendBindingMessage({ record: removed, text: farewell });
       }
       return removed;
@@ -767,6 +851,18 @@ export function createThreadBindingManager(
           return;
         }
         for (const binding of bindings) {
+          const expiresAt = resolveThreadBindingExpiresAt({
+            record: binding,
+            sessionTtlMs,
+          });
+          if (expiresAt != null && Date.now() >= expiresAt) {
+            manager.unbindThread({
+              threadId: binding.threadId,
+              reason: "ttl-expired",
+              sendFarewell: true,
+            });
+            continue;
+          }
           try {
             const channel = await rest.get(Routes.channel(binding.threadId));
             if (!channel || typeof channel !== "object") {
@@ -871,6 +967,7 @@ export async function autoBindSpawnedDiscordSubagent(params: {
     introText: resolveThreadBindingIntroText({
       agentId: params.agentId,
       label: params.label,
+      sessionTtlMs: manager.getSessionTtlMs(),
     }),
   });
 }

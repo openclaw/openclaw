@@ -1,3 +1,4 @@
+import { inspect } from "node:util";
 import {
   Client,
   ReadyListener,
@@ -9,11 +10,9 @@ import {
 import { GatewayCloseCodes, type GatewayPlugin } from "@buape/carbon/gateway";
 import { VoicePlugin } from "@buape/carbon/voice";
 import { Routes } from "discord-api-types/v10";
-import { inspect } from "node:util";
-import type { HistoryEntry } from "../../auto-reply/reply/history.js";
-import type { OpenClawConfig, ReplyToMode } from "../../config/config.js";
 import { resolveTextChunkLimit } from "../../auto-reply/chunk.js";
 import { listNativeCommandSpecsForConfig } from "../../auto-reply/commands-registry.js";
+import type { HistoryEntry } from "../../auto-reply/reply/history.js";
 import { listSkillCommandsForAgents } from "../../auto-reply/skill-commands.js";
 import {
   addAllowlistUserEntriesFromConfigEntry,
@@ -28,6 +27,7 @@ import {
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
 } from "../../config/commands.js";
+import type { OpenClawConfig, ReplyToMode } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import { danger, logVerbose, shouldLogVerbose, warn } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -104,6 +104,32 @@ function summarizeGuilds(entries?: Record<string, unknown>) {
   const sample = keys.slice(0, 4);
   const suffix = keys.length > sample.length ? ` (+${keys.length - sample.length})` : "";
   return `${sample.join(", ")}${suffix}`;
+}
+
+const DEFAULT_THREAD_BINDING_TTL_HOURS = 24;
+
+function resolveThreadBindingSessionTtlMs(ttlHoursRaw: unknown): number {
+  if (typeof ttlHoursRaw !== "number" || !Number.isFinite(ttlHoursRaw)) {
+    return DEFAULT_THREAD_BINDING_TTL_HOURS * 60 * 60 * 1000;
+  }
+  if (ttlHoursRaw < 0) {
+    return DEFAULT_THREAD_BINDING_TTL_HOURS * 60 * 60 * 1000;
+  }
+  return Math.floor(ttlHoursRaw * 60 * 60 * 1000);
+}
+
+function formatThreadBindingSessionTtlLabel(ttlMs: number): string {
+  if (ttlMs <= 0) {
+    return "off";
+  }
+  if (ttlMs < 60_000) {
+    return "<1m";
+  }
+  const totalMinutes = Math.floor(ttlMs / 60_000);
+  if (totalMinutes % 60 === 0) {
+    return `${Math.floor(totalMinutes / 60)}h`;
+  }
+  return `${totalMinutes}m`;
 }
 
 function dedupeSkillCommandsForDiscord(
@@ -231,6 +257,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   const replyToMode = opts.replyToMode ?? discordCfg.replyToMode ?? "off";
   const dmEnabled = dmConfig?.enabled ?? true;
   const dmPolicy = discordCfg.dmPolicy ?? dmConfig?.policy ?? "pairing";
+  const threadBindingSessionTtlMs = resolveThreadBindingSessionTtlMs(
+    discordCfg.threadBindings?.ttlHours,
+  );
   const groupDmEnabled = dmConfig?.groupEnabled ?? false;
   const groupDmChannels = dmConfig?.groupChannels;
   const nativeEnabled = resolveNativeCommandsEnabled({
@@ -405,7 +434,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
 
   if (shouldLogVerbose()) {
     logVerbose(
-      `discord: config dm=${dmEnabled ? "on" : "off"} dmPolicy=${dmPolicy} allowFrom=${summarizeAllowList(allowFrom)} groupDm=${groupDmEnabled ? "on" : "off"} groupDmChannels=${summarizeAllowList(groupDmChannels)} groupPolicy=${groupPolicy} guilds=${summarizeGuilds(guildEntries)} historyLimit=${historyLimit} mediaMaxMb=${Math.round(mediaMaxBytes / (1024 * 1024))} native=${nativeEnabled ? "on" : "off"} nativeSkills=${nativeSkillsEnabled ? "on" : "off"} accessGroups=${useAccessGroups ? "on" : "off"}`,
+      `discord: config dm=${dmEnabled ? "on" : "off"} dmPolicy=${dmPolicy} allowFrom=${summarizeAllowList(allowFrom)} groupDm=${groupDmEnabled ? "on" : "off"} groupDmChannels=${summarizeAllowList(groupDmChannels)} groupPolicy=${groupPolicy} guilds=${summarizeGuilds(guildEntries)} historyLimit=${historyLimit} mediaMaxMb=${Math.round(mediaMaxBytes / (1024 * 1024))} native=${nativeEnabled ? "on" : "off"} nativeSkills=${nativeSkillsEnabled ? "on" : "off"} accessGroups=${useAccessGroups ? "on" : "off"} threadSessionTtl=${formatThreadBindingSessionTtlLabel(threadBindingSessionTtlMs)}`,
     );
   }
 
@@ -443,6 +472,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   const threadBindings = createThreadBindingManager({
     accountId: account.accountId,
     token,
+    sessionTtlMs: threadBindingSessionTtlMs,
   });
   const commands: BaseCommand[] = commandSpecs.map((spec) =>
     createDiscordNativeCommand({

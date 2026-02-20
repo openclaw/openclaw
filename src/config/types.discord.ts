@@ -142,6 +142,14 @@ export type DiscordUiConfig = {
   components?: DiscordUiComponentsConfig;
 };
 
+export type DiscordThreadBindingsConfig = {
+  /**
+   * Auto-unfocus TTL for thread-bound sessions in hours.
+   * Set to 0 to disable TTL. Default: 24.
+   */
+  ttlHours?: number;
+};
+
 export type DiscordSlashCommandConfig = {
   /** Reply ephemerally (default: true). */
   ephemeral?: boolean;
@@ -233,6 +241,8 @@ export type DiscordAccountConfig = {
   ui?: DiscordUiConfig;
   /** Slash command configuration. */
   slashCommand?: DiscordSlashCommandConfig;
+  /** Thread binding lifecycle settings (focus/subagent thread sessions). */
+  threadBindings?: DiscordThreadBindingsConfig;
   /** Privileged Gateway Intents (must also be enabled in Discord Developer Portal). */
   intents?: DiscordIntentsConfig;
   /** Voice channel conversation settings. */

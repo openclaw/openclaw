@@ -512,6 +512,7 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
       introText: resolveThreadBindingIntroText({
         agentId: focusTarget.agentId,
         label,
+        sessionTtlMs: threadBindings.getSessionTtlMs(),
       }),
     });
     if (!binding) {
