@@ -245,7 +245,9 @@ describe("openclaw-tools: subagents (sessions_spawn model + thinking)", () => {
     });
   });
 
-  it("sessions_spawn fails when model patch is rejected", async () => {
+  it("sessions_spawn fails when model patch is rejected with a non-allowlist error", async () => {
+    resetSubagentRegistryForTests();
+    callGatewayMock.mockReset();
     const calls: GatewayCall[] = [];
     mockLongRunningSpawnFlow({
       calls,
@@ -253,7 +255,7 @@ describe("openclaw-tools: subagents (sessions_spawn model + thinking)", () => {
       patch: async (request) => {
         const model = (request.params as { model?: unknown } | undefined)?.model;
         if (model === "bad-model") {
-          throw new Error("invalid model: bad-model");
+          throw new Error("gateway timeout");
         }
         return { ok: true };
       },
@@ -272,8 +274,80 @@ describe("openclaw-tools: subagents (sessions_spawn model + thinking)", () => {
     expect(result.details).toMatchObject({
       status: "error",
     });
-    expect(String((result.details as { error?: string }).error ?? "")).toContain("invalid model");
+    expect(String((result.details as { error?: string }).error ?? "")).toContain("gateway timeout");
     expect(calls.some((call) => call.method === "agent")).toBe(false);
+  });
+
+  it("sessions_spawn falls back gracefully when model is not in allowlist", async () => {
+    resetSubagentRegistryForTests();
+    callGatewayMock.mockReset();
+    const calls: GatewayCall[] = [];
+    mockLongRunningSpawnFlow({
+      calls,
+      acceptedAtBase: 5000,
+      patch: async (request) => {
+        const model = (request.params as { model?: unknown } | undefined)?.model;
+        if (model === "minimax/MiniMax-M2.5") {
+          throw new Error("model not allowed: minimax/MiniMax-M2.5");
+        }
+        return { ok: true };
+      },
+    });
+
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "main",
+      agentChannel: "whatsapp",
+    });
+
+    const result = await tool.execute("call-allowlist", {
+      task: "do thing",
+      model: "minimax/MiniMax-M2.5",
+    });
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      modelApplied: false,
+    });
+    const warning = (result.details as { warning?: string }).warning ?? "";
+    expect(warning).toContain("model not allowed");
+    expect(warning).toContain("task will run with the default model instead");
+    // Task should still have been dispatched
+    expect(calls.some((call) => call.method === "agent")).toBe(true);
+  });
+
+  it("sessions_spawn falls back gracefully when gateway reports invalid model (allowlist variant)", async () => {
+    resetSubagentRegistryForTests();
+    callGatewayMock.mockReset();
+    const calls: GatewayCall[] = [];
+    mockLongRunningSpawnFlow({
+      calls,
+      acceptedAtBase: 6000,
+      patch: async (request) => {
+        const model = (request.params as { model?: unknown } | undefined)?.model;
+        if (model === "unknown-provider/some-model") {
+          throw new Error("invalid model: unknown-provider/some-model");
+        }
+        return { ok: true };
+      },
+    });
+
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "main",
+      agentChannel: "whatsapp",
+    });
+
+    const result = await tool.execute("call-invalid-model", {
+      task: "do thing",
+      model: "unknown-provider/some-model",
+    });
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      modelApplied: false,
+    });
+    const warning = (result.details as { warning?: string }).warning ?? "";
+    expect(warning).toContain("invalid model");
+    expect(warning).toContain("task will run with the default model instead");
+    // Task should still have been dispatched
+    expect(calls.some((call) => call.method === "agent")).toBe(true);
   });
 
   it("sessions_spawn supports legacy timeoutSeconds alias", async () => {
