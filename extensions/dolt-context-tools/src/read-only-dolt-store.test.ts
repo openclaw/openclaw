@@ -222,6 +222,7 @@ describe("createDoltReadOnlyQueryRuntime", () => {
       pattern: "hello",
     });
     expect(allMatches.map((row) => row.pointer)).toEqual(["turn:session-1:100:1"]);
+    expect(allMatches[0]?.coveringLeafPointer).toBe("leaf:session-1:100:1");
 
     const scopedToLeaf = queries.searchTurnPayloads({
       sessionId: "session-1",
@@ -229,6 +230,7 @@ describe("createDoltReadOnlyQueryRuntime", () => {
       pattern: "world",
     });
     expect(scopedToLeaf.map((row) => row.pointer)).toEqual(["turn:session-1:100:1"]);
+    expect(scopedToLeaf[0]?.coveringLeafPointer).toBe("leaf:session-1:100:1");
 
     const scopedToBindle = queries.searchTurnPayloads({
       sessionId: "session-1",
@@ -236,6 +238,7 @@ describe("createDoltReadOnlyQueryRuntime", () => {
       pattern: "world",
     });
     expect(scopedToBindle.map((row) => row.pointer)).toEqual(["turn:session-1:100:1"]);
+    expect(scopedToBindle[0]?.coveringLeafPointer).toBe("leaf:session-1:100:1");
 
     // Optional table in future work; missing table should not throw.
     expect(queries.getGhostSummary("bindle:session-1:100:1")).toBeNull();

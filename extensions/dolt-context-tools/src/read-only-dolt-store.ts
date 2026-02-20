@@ -67,6 +67,7 @@ type SqliteSearchRow = {
   session_id: string;
   event_ts_ms: number;
   payload_json: string | null;
+  covering_leaf_pointer: string | null;
 };
 
 export type DoltQueryAvailability = {
@@ -131,6 +132,7 @@ export type SearchTurnPayloadMatch = {
   role: string | null;
   content: string;
   payloadJson: string | null;
+  coveringLeafPointer: string | null;
 };
 
 export type DoltReadOnlyQueryHelpers = {
@@ -451,7 +453,7 @@ export function createDoltReadOnlyQueryRuntime(params: {
         if (!normalizedSessionId || !normalizedPattern) {
           return [];
         }
-        const regex = new RegExp(normalizedPattern, "iu");
+        const regex = new RegExp(normalizedPattern);
         const limit = normalizePositiveInt(searchParams.limit, 50);
         const offset = normalizeOffset(searchParams.offset);
 
@@ -484,6 +486,7 @@ export function createDoltReadOnlyQueryRuntime(params: {
                   role: extracted.role,
                   content: extracted.content,
                   payloadJson: row.payload_json,
+                  coveringLeafPointer: row.covering_leaf_pointer,
                 } satisfies SearchTurnPayloadMatch,
               ];
             });
@@ -555,10 +558,25 @@ function listSearchCandidateRows(params: {
     return params.db
       .prepare(
         `
-          SELECT pointer, session_id, event_ts_ms, payload_json
-          FROM dolt_records
-          WHERE session_id = ? AND level = 'turn'
-          ORDER BY event_ts_ms ASC, pointer ASC
+          SELECT
+            r.pointer,
+            r.session_id,
+            r.event_ts_ms,
+            r.payload_json,
+            (
+              SELECT l.parent_pointer
+              FROM dolt_lineage l
+              JOIN dolt_records parent ON parent.pointer = l.parent_pointer
+              WHERE l.child_pointer = r.pointer
+                AND l.child_level = 'turn'
+                AND parent.level = 'leaf'
+              ORDER BY l.created_at_ms DESC, l.parent_pointer DESC
+              LIMIT 1
+            ) AS covering_leaf_pointer
+          FROM dolt_records r
+          WHERE r.session_id = ?
+            AND r.level = 'turn'
+          ORDER BY r.event_ts_ms ASC, r.pointer ASC
         `,
       )
       .all(params.sessionId) as SqliteSearchRow[];
@@ -567,19 +585,44 @@ function listSearchCandidateRows(params: {
   return params.db
     .prepare(
       `
-        SELECT r.pointer, r.session_id, r.event_ts_ms, r.payload_json
+        SELECT
+          r.pointer,
+          r.session_id,
+          r.event_ts_ms,
+          r.payload_json,
+          (
+            SELECT l.parent_pointer
+            FROM dolt_lineage l
+            JOIN dolt_records parent ON parent.pointer = l.parent_pointer
+            WHERE l.child_pointer = r.pointer
+              AND l.child_level = 'turn'
+              AND parent.level = 'leaf'
+            ORDER BY l.created_at_ms DESC, l.parent_pointer DESC
+            LIMIT 1
+          ) AS covering_leaf_pointer
         FROM dolt_records r
         WHERE r.session_id = ?
           AND r.level = 'turn'
-          AND r.pointer IN (
-            SELECT child_pointer
-            FROM dolt_lineage
-            WHERE parent_pointer = ?
-            UNION
-            SELECT l2.child_pointer
-            FROM dolt_lineage l1
-            JOIN dolt_lineage l2 ON l2.parent_pointer = l1.child_pointer
-            WHERE l1.parent_pointer = ?
+          AND (
+            EXISTS (
+              SELECT 1
+              FROM dolt_lineage direct_scope
+              WHERE direct_scope.parent_pointer = ?
+                AND direct_scope.child_pointer = r.pointer
+                AND direct_scope.child_level = 'turn'
+            )
+            OR EXISTS (
+              SELECT 1
+              FROM dolt_lineage bindle_scope
+              JOIN dolt_records leaf_scope
+                ON leaf_scope.pointer = bindle_scope.child_pointer
+                AND leaf_scope.level = 'leaf'
+              JOIN dolt_lineage leaf_turn_scope
+                ON leaf_turn_scope.parent_pointer = leaf_scope.pointer
+                AND leaf_turn_scope.child_pointer = r.pointer
+                AND leaf_turn_scope.child_level = 'turn'
+              WHERE bindle_scope.parent_pointer = ?
+            )
           )
         ORDER BY r.event_ts_ms ASC, r.pointer ASC
       `,
