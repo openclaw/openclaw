@@ -1,11 +1,11 @@
 import type { BrowserActionPathResult, BrowserActionTargetOk } from "./client-actions-types.js";
-import { buildProfileQuery, withBaseUrl } from "./client-actions-url.js";
-import { fetchBrowserJson } from "./client-fetch.js";
 import type {
   BrowserConsoleMessage,
   BrowserNetworkRequest,
   BrowserPageError,
 } from "./pw-session.js";
+import { buildProfileQuery, withBaseUrl } from "./client-actions-url.js";
+import { fetchBrowserJson } from "./client-fetch.js";
 
 function buildQuerySuffix(params: Array<[string, string | boolean | undefined]>): string {
   const query = new URLSearchParams();
@@ -24,18 +24,22 @@ function buildQuerySuffix(params: Array<[string, string | boolean | undefined]>)
 
 export async function browserConsoleMessages(
   baseUrl: string | undefined,
-  opts: { level?: string; targetId?: string; profile?: string } = {},
+  opts: { level?: string; targetId?: string; profile?: string; timeoutMs?: number } = {},
 ): Promise<{ ok: true; messages: BrowserConsoleMessage[]; targetId: string }> {
   const suffix = buildQuerySuffix([
     ["level", opts.level],
     ["targetId", opts.targetId],
     ["profile", opts.profile],
   ]);
+  const timeoutMs =
+    typeof opts.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
+      ? Math.max(1000, Math.min(120_000, Math.floor(opts.timeoutMs)))
+      : 20000;
   return await fetchBrowserJson<{
     ok: true;
     messages: BrowserConsoleMessage[];
     targetId: string;
-  }>(withBaseUrl(baseUrl, `/console${suffix}`), { timeoutMs: 20000 });
+  }>(withBaseUrl(baseUrl, `/console${suffix}`), { timeoutMs });
 }
 
 export async function browserPdfSave(

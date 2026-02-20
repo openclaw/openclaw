@@ -18,6 +18,16 @@ class BrowserControlHttpError extends Error {
   }
 }
 
+class BrowserControlTimeoutError extends Error {
+  readonly timeoutMs: number;
+
+  constructor(timeoutMs: number) {
+    super(`Browser request timed out after ${timeoutMs}ms`);
+    this.name = "BrowserControlTimeoutError";
+    this.timeoutMs = timeoutMs;
+  }
+}
+
 type LoopbackBrowserAuthDeps = {
   loadConfig: typeof loadConfig;
   resolveBrowserControlAuth: typeof resolveBrowserControlAuth;
@@ -103,7 +113,34 @@ function withLoopbackBrowserAuth(
   });
 }
 
+function isBrowserTimeoutError(err: unknown): err is BrowserControlTimeoutError {
+  if (err instanceof BrowserControlTimeoutError) {
+    return true;
+  }
+  const msgLower = String(err).toLowerCase();
+  return (
+    msgLower.includes("timed out") ||
+    msgLower.includes("timeout") ||
+    msgLower.includes("aborted") ||
+    msgLower.includes("abort") ||
+    msgLower.includes("aborterror")
+  );
+}
+
+function getSuggestedRetryTimeoutMs(timeoutMs: number): number {
+  return Math.max(10_000, Math.min(120_000, timeoutMs * 3));
+}
+
 function enhanceBrowserFetchError(url: string, err: unknown, timeoutMs: number): Error {
+  if (isBrowserTimeoutError(err)) {
+    const suggestedTimeoutMs = getSuggestedRetryTimeoutMs(timeoutMs);
+    return new Error(
+      `Browser request timed out after ${timeoutMs}ms. ` +
+        `The browser service may still be healthy. ` +
+        `Retry once with a higher timeoutMs (for example ${suggestedTimeoutMs}ms).`,
+    );
+  }
+
   const isLocal = !isAbsoluteHttp(url);
   // Human-facing hint for logs/diagnostics.
   const operatorHint = isLocal
@@ -115,18 +152,6 @@ function enhanceBrowserFetchError(url: string, err: unknown, timeoutMs: number):
     "Do NOT retry the browser tool — it will keep failing. " +
     "Use an alternative approach or inform the user that the browser is currently unavailable.";
   const msg = String(err);
-  const msgLower = msg.toLowerCase();
-  const looksLikeTimeout =
-    msgLower.includes("timed out") ||
-    msgLower.includes("timeout") ||
-    msgLower.includes("aborted") ||
-    msgLower.includes("abort") ||
-    msgLower.includes("aborterror");
-  if (looksLikeTimeout) {
-    return new Error(
-      `Can't reach the OpenClaw browser control service (timed out after ${timeoutMs}ms). ${operatorHint} ${modelHint}`,
-    );
-  }
   return new Error(
     `Can't reach the OpenClaw browser control service. ${operatorHint} ${modelHint} (${msg})`,
   );
@@ -138,6 +163,7 @@ async function fetchHttpJson<T>(
 ): Promise<T> {
   const timeoutMs = init.timeoutMs ?? 5000;
   const ctrl = new AbortController();
+  const timeoutReason = new BrowserControlTimeoutError(timeoutMs);
   const upstreamSignal = init.signal;
   let upstreamAbortListener: (() => void) | undefined;
   if (upstreamSignal) {
@@ -149,7 +175,7 @@ async function fetchHttpJson<T>(
     }
   }
 
-  const t = setTimeout(() => ctrl.abort(new Error("timed out")), timeoutMs);
+  const t = setTimeout(() => ctrl.abort(timeoutReason), timeoutMs);
   try {
     const res = await fetch(url, { ...init, signal: ctrl.signal });
     if (!res.ok) {
@@ -157,6 +183,11 @@ async function fetchHttpJson<T>(
       throw new BrowserControlHttpError(res.status, text || `HTTP ${res.status}`);
     }
     return (await res.json()) as T;
+  } catch (err) {
+    if (ctrl.signal.aborted && ctrl.signal.reason === timeoutReason) {
+      throw timeoutReason;
+    }
+    throw err;
   } finally {
     clearTimeout(t);
     if (upstreamSignal && upstreamAbortListener) {
@@ -170,6 +201,7 @@ export async function fetchBrowserJson<T>(
   init?: RequestInit & { timeoutMs?: number },
 ): Promise<T> {
   const timeoutMs = init?.timeoutMs ?? 5000;
+  const timeoutReason = new BrowserControlTimeoutError(timeoutMs);
   try {
     if (isAbsoluteHttp(url)) {
       const httpInit = withLoopbackBrowserAuth(url, init);
@@ -216,7 +248,7 @@ export async function fetchBrowserJson<T>(
 
     let timer: ReturnType<typeof setTimeout> | undefined;
     if (timeoutMs) {
-      timer = setTimeout(() => abortCtrl.abort(new Error("timed out")), timeoutMs);
+      timer = setTimeout(() => abortCtrl.abort(timeoutReason), timeoutMs);
     }
 
     const dispatchPromise = dispatcher.dispatch({

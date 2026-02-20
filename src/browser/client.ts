@@ -242,12 +242,16 @@ export async function browserDeleteProfile(
 
 export async function browserTabs(
   baseUrl?: string,
-  opts?: { profile?: string },
+  opts?: { profile?: string; timeoutMs?: number },
 ): Promise<BrowserTab[]> {
   const q = buildProfileQuery(opts?.profile);
+  const timeoutMs =
+    typeof opts?.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
+      ? Math.max(1000, Math.min(120_000, Math.floor(opts.timeoutMs)))
+      : 3000;
   const res = await fetchBrowserJson<{ running: boolean; tabs: BrowserTab[] }>(
     withBaseUrl(baseUrl, `/tabs${q}`),
-    { timeoutMs: 3000 },
+    { timeoutMs },
   );
   return res.tabs ?? [];
 }

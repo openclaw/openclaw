@@ -126,4 +126,36 @@ describe("fetchBrowserJson loopback auth", () => {
     expect(message).toContain("404: tab not found");
     expect(message).not.toContain("Can't reach the OpenClaw browser control service");
   });
+
+  it("reports timeout as a request timeout with retry guidance", async () => {
+    const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
+      async (_input, init) =>
+        await new Promise<Response>((_resolve, reject) => {
+          const signal = init?.signal;
+          if (!signal) {
+            reject(new Error("missing signal"));
+            return;
+          }
+          if (signal.aborted) {
+            reject(signal.reason);
+            return;
+          }
+          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    let message = "";
+    try {
+      await fetchBrowserJson("http://127.0.0.1:18888/", { timeoutMs: 20 });
+      throw new Error("expected fetchBrowserJson to throw");
+    } catch (error) {
+      message = String(error);
+    }
+
+    expect(message).toContain("Browser request timed out after 20ms");
+    expect(message).toContain("Retry once with a higher timeoutMs");
+    expect(message).not.toContain("Can't reach the OpenClaw browser control service");
+    expect(message).not.toContain("Do NOT retry the browser tool");
+  });
 });

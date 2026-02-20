@@ -20,7 +20,10 @@ import {
   browserTabs,
 } from "../../browser/client.js";
 import { resolveBrowserConfig } from "../../browser/config.js";
-import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "../../browser/constants.js";
+import {
+  DEFAULT_AI_SNAPSHOT_MAX_CHARS,
+  DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
+} from "../../browser/constants.js";
 import { DEFAULT_UPLOAD_DIR, resolvePathsWithinRoot } from "../../browser/paths.js";
 import { applyBrowserProxyPaths, persistBrowserProxyFiles } from "../../browser/proxy-files.js";
 import { loadConfig } from "../../config/config.js";
@@ -66,6 +69,54 @@ type BrowserProxyResult = {
 };
 
 const DEFAULT_BROWSER_PROXY_TIMEOUT_MS = 20_000;
+const LOW_TIMEOUT_RETRY_THRESHOLD_MS = 5_000;
+const READ_RETRY_MIN_TIMEOUT_MS = 10_000;
+const READ_RETRY_TIMEOUT_MULTIPLIER = 3;
+const PREFERRED_HEADLESS_PROFILE_NAME = "work";
+
+function normalizeTimeoutMs(timeoutMs: number): number {
+  return Math.max(1000, Math.min(120_000, Math.floor(timeoutMs)));
+}
+
+function parseTimeoutMsFromError(error: unknown): number | null {
+  const match = String(error).match(/timed out after\s+(\d+)\s*ms/i);
+  if (!match) {
+    return null;
+  }
+  const parsed = Number.parseInt(match[1] ?? "", 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return null;
+  }
+  return normalizeTimeoutMs(parsed);
+}
+
+function resolveReadRetryTimeoutMs(
+  initialTimeoutMs: number | undefined,
+  error: unknown,
+): number | null {
+  const timeoutMs = initialTimeoutMs ?? parseTimeoutMsFromError(error);
+  if (timeoutMs === undefined || timeoutMs > LOW_TIMEOUT_RETRY_THRESHOLD_MS) {
+    return null;
+  }
+  return normalizeTimeoutMs(
+    Math.max(READ_RETRY_MIN_TIMEOUT_MS, timeoutMs * READ_RETRY_TIMEOUT_MULTIPLIER),
+  );
+}
+
+async function runWithReadTimeoutRetry<T>(params: {
+  timeoutMs?: number;
+  run: (timeoutMs?: number) => Promise<T>;
+}): Promise<T> {
+  try {
+    return await params.run(params.timeoutMs);
+  } catch (error) {
+    const retryTimeoutMs = resolveReadRetryTimeoutMs(params.timeoutMs, error);
+    if (retryTimeoutMs === null) {
+      throw error;
+    }
+    return await params.run(retryTimeoutMs);
+  }
+}
 
 type BrowserNodeTarget = {
   nodeId: string;
@@ -188,6 +239,79 @@ function applyProxyPaths(result: unknown, mapping: Map<string, string>) {
   applyBrowserProxyPaths(result, mapping);
 }
 
+async function resolveBrowserProfileForToolCall(params: {
+  requestedProfile?: string;
+  requestedHeadless?: boolean;
+  baseUrl?: string;
+  proxyRequest:
+    | ((opts: {
+        method: string;
+        path: string;
+        query?: Record<string, string | number | boolean | undefined>;
+        body?: unknown;
+        timeoutMs?: number;
+        profile?: string;
+      }) => Promise<unknown>)
+    | null;
+}): Promise<string> {
+  if (params.requestedProfile?.trim()) {
+    return params.requestedProfile.trim();
+  }
+  if (params.requestedHeadless !== true) {
+    return DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME;
+  }
+
+  const candidateNames = new Set<string>([
+    PREFERRED_HEADLESS_PROFILE_NAME,
+    DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
+  ]);
+  try {
+    const profiles = params.proxyRequest
+      ? ((
+          (await params.proxyRequest({
+            method: "GET",
+            path: "/profiles",
+          })) as { profiles?: Array<{ name?: unknown }> }
+        ).profiles ?? [])
+      : await browserProfiles(params.baseUrl);
+    for (const entry of profiles) {
+      const nameRaw = typeof entry?.name === "string" ? entry.name : "";
+      const name = nameRaw.trim();
+      if (name) {
+        candidateNames.add(name);
+      }
+    }
+  } catch {
+    // Keep fallback candidates only.
+  }
+
+  const orderedCandidates = [
+    PREFERRED_HEADLESS_PROFILE_NAME,
+    ...Array.from(candidateNames).filter((name) => name !== PREFERRED_HEADLESS_PROFILE_NAME),
+  ];
+
+  for (const name of orderedCandidates) {
+    try {
+      const status = params.proxyRequest
+        ? ((await params.proxyRequest({
+            method: "GET",
+            path: "/",
+            query: { profile: name },
+          })) as { headless?: unknown })
+        : await browserStatus(params.baseUrl, { profile: name });
+      if (status.headless === true) {
+        return name;
+      }
+    } catch {
+      // Ignore unavailable profiles while probing.
+    }
+  }
+
+  throw new Error(
+    'No headless browser profile is available. Pass profile="<name>" or configure browser.profiles.<name>.headless=true.',
+  );
+}
+
 function resolveBrowserBaseUrl(params: {
   target?: "sandbox" | "host";
   sandboxBridgeUrl?: string;
@@ -231,6 +355,7 @@ export function createBrowserTool(opts?: {
     description: [
       "Control the browser via OpenClaw's browser control server (status/start/stop/profiles/tabs/open/snapshot/screenshot/actions).",
       'Profiles: use profile="chrome" for Chrome extension relay takeover (your existing Chrome tabs). Use profile="openclaw" for the isolated openclaw-managed browser.',
+      'Default profile is headful profile="openclaw". If headless behavior is requested, pass headless=true (or explicitly set profile).',
       'If the user mentions the Chrome extension / Browser Relay / toolbar button / “attach tab”, ALWAYS use profile="chrome" (do not ask which profile).',
       'When a node-hosted browser proxy is available, the tool may auto-route to it. Pin a node with node=<id|name> or target="node".',
       "Chrome extension relay needs an attached tab: user must click the OpenClaw Browser Relay toolbar icon on the tab (badge ON). If no tab is connected, ask them to attach it.",
@@ -244,7 +369,8 @@ export function createBrowserTool(opts?: {
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
-      const profile = readStringParam(params, "profile");
+      const requestedProfile = readStringParam(params, "profile");
+      const requestedHeadless = typeof params.headless === "boolean" ? params.headless : undefined;
       const requestedNode = readStringParam(params, "node");
       let target = readStringParam(params, "target") as "sandbox" | "host" | "node" | undefined;
 
@@ -252,7 +378,7 @@ export function createBrowserTool(opts?: {
         throw new Error('node is only supported with target="node".');
       }
 
-      if (!target && !requestedNode && profile === "chrome") {
+      if (!target && !requestedNode && requestedProfile === "chrome") {
         // Chrome extension relay takeover is a host Chrome feature; prefer host unless explicitly targeting a node.
         target = "host";
       }
@@ -295,6 +421,12 @@ export function createBrowserTool(opts?: {
             return proxy.result;
           }
         : null;
+      const profile = await resolveBrowserProfileForToolCall({
+        requestedProfile: requestedProfile ?? undefined,
+        requestedHeadless,
+        baseUrl,
+        proxyRequest,
+      });
 
       switch (action) {
         case "status":
@@ -351,36 +483,31 @@ export function createBrowserTool(opts?: {
             return jsonResult(result);
           }
           return jsonResult({ profiles: await browserProfiles(baseUrl) });
-        case "tabs":
-          if (proxyRequest) {
-            const result = await proxyRequest({
-              method: "GET",
-              path: "/tabs",
-              profile,
-            });
-            const tabs = (result as { tabs?: unknown[] }).tabs ?? [];
-            const wrapped = wrapBrowserExternalJson({
-              kind: "tabs",
-              payload: { tabs },
-              includeWarning: false,
-            });
-            return {
-              content: [{ type: "text", text: wrapped.wrappedText }],
-              details: { ...wrapped.safeDetails, tabCount: tabs.length },
-            };
-          }
-          {
-            const tabs = await browserTabs(baseUrl, { profile });
-            const wrapped = wrapBrowserExternalJson({
-              kind: "tabs",
-              payload: { tabs },
-              includeWarning: false,
-            });
-            return {
-              content: [{ type: "text", text: wrapped.wrappedText }],
-              details: { ...wrapped.safeDetails, tabCount: tabs.length },
-            };
-          }
+        case "tabs": {
+          const tabs = await runWithReadTimeoutRetry({
+            run: async (timeoutMs) => {
+              if (proxyRequest) {
+                const result = await proxyRequest({
+                  method: "GET",
+                  path: "/tabs",
+                  profile,
+                  timeoutMs,
+                });
+                return (result as { tabs?: unknown[] }).tabs ?? [];
+              }
+              return await browserTabs(baseUrl, { profile, timeoutMs });
+            },
+          });
+          const wrapped = wrapBrowserExternalJson({
+            kind: "tabs",
+            payload: { tabs },
+            includeWarning: false,
+          });
+          return {
+            content: [{ type: "text", text: wrapped.wrappedText }],
+            details: { ...wrapped.safeDetails, tabCount: tabs.length },
+          };
+        }
         case "open": {
           const targetUrl = readStringParam(params, "targetUrl", {
             required: true,
@@ -481,30 +608,34 @@ export function createBrowserTool(opts?: {
           const frame = typeof params.frame === "string" ? params.frame.trim() : undefined;
           const timeoutMs =
             typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
-              ? Math.max(1000, Math.min(120_000, Math.floor(params.timeoutMs)))
+              ? normalizeTimeoutMs(params.timeoutMs)
               : undefined;
-          const snapshot = proxyRequest
-            ? ((await proxyRequest({
-                method: "GET",
-                path: "/snapshot",
-                profile,
-                timeoutMs,
-                query: {
-                  format,
-                  targetId,
-                  limit,
-                  ...(typeof resolvedMaxChars === "number" ? { maxChars: resolvedMaxChars } : {}),
-                  refs,
-                  interactive,
-                  compact,
-                  depth,
-                  selector,
-                  frame,
-                  labels,
-                  mode,
-                },
-              })) as Awaited<ReturnType<typeof browserSnapshot>>)
-            : await browserSnapshot(baseUrl, {
+          const snapshot = await runWithReadTimeoutRetry({
+            timeoutMs,
+            run: async (effectiveTimeoutMs) => {
+              if (proxyRequest) {
+                return (await proxyRequest({
+                  method: "GET",
+                  path: "/snapshot",
+                  profile,
+                  timeoutMs: effectiveTimeoutMs,
+                  query: {
+                    format,
+                    targetId,
+                    limit,
+                    ...(typeof resolvedMaxChars === "number" ? { maxChars: resolvedMaxChars } : {}),
+                    refs,
+                    interactive,
+                    compact,
+                    depth,
+                    selector,
+                    frame,
+                    labels,
+                    mode,
+                  },
+                })) as Awaited<ReturnType<typeof browserSnapshot>>;
+              }
+              return await browserSnapshot(baseUrl, {
                 format,
                 targetId,
                 limit,
@@ -518,8 +649,10 @@ export function createBrowserTool(opts?: {
                 labels,
                 mode,
                 profile,
-                timeoutMs,
+                timeoutMs: effectiveTimeoutMs,
               });
+            },
+          });
           if (snapshot.format === "ai") {
             const extractedText = snapshot.snapshot ?? "";
             const wrappedSnapshot = wrapExternalContent(extractedText, {
@@ -659,16 +792,29 @@ export function createBrowserTool(opts?: {
         case "console": {
           const level = typeof params.level === "string" ? params.level.trim() : undefined;
           const targetId = typeof params.targetId === "string" ? params.targetId.trim() : undefined;
-          if (proxyRequest) {
-            const result = (await proxyRequest({
-              method: "GET",
-              path: "/console",
-              profile,
-              query: {
-                level,
-                targetId,
+          {
+            const result = await runWithReadTimeoutRetry({
+              run: async (timeoutMs) => {
+                if (proxyRequest) {
+                  return (await proxyRequest({
+                    method: "GET",
+                    path: "/console",
+                    profile,
+                    timeoutMs,
+                    query: {
+                      level,
+                      targetId,
+                    },
+                  })) as { ok?: boolean; targetId?: string; messages?: unknown[] };
+                }
+                return await browserConsoleMessages(baseUrl, {
+                  level,
+                  targetId,
+                  profile,
+                  timeoutMs,
+                });
               },
-            })) as { ok?: boolean; targetId?: string; messages?: unknown[] };
+            });
             const wrapped = wrapBrowserExternalJson({
               kind: "console",
               payload: result,
@@ -680,22 +826,6 @@ export function createBrowserTool(opts?: {
                 ...wrapped.safeDetails,
                 targetId: typeof result.targetId === "string" ? result.targetId : undefined,
                 messageCount: Array.isArray(result.messages) ? result.messages.length : undefined,
-              },
-            };
-          }
-          {
-            const result = await browserConsoleMessages(baseUrl, { level, targetId, profile });
-            const wrapped = wrapBrowserExternalJson({
-              kind: "console",
-              payload: result,
-              includeWarning: false,
-            });
-            return {
-              content: [{ type: "text", text: wrapped.wrappedText }],
-              details: {
-                ...wrapped.safeDetails,
-                targetId: result.targetId,
-                messageCount: result.messages.length,
               },
             };
           }
