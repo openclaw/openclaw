@@ -171,14 +171,20 @@ export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRep
 
   const pushToolResult = (msg: Extract<AgentMessage, { role: "toolResult" }>) => {
     const id = extractToolResultId(msg);
-    if (id && seenToolResultIds.has(id)) {
+    // Drop tool results with empty/missing toolCallId — they can't be paired
+    // with any assistant tool call and corrupt sessions for strict providers.
+    // See #21985.
+    if (!id) {
+      droppedOrphanCount += 1;
+      changed = true;
+      return;
+    }
+    if (seenToolResultIds.has(id)) {
       droppedDuplicateCount += 1;
       changed = true;
       return;
     }
-    if (id) {
-      seenToolResultIds.add(id);
-    }
+    seenToolResultIds.add(id);
     out.push(msg);
   };
 

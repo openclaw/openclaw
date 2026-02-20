@@ -184,16 +184,22 @@ export function installSessionToolResultGuard(
 
     if (nextRole === "toolResult") {
       const id = extractToolResultId(nextMessage as Extract<AgentMessage, { role: "toolResult" }>);
-      const toolName = id ? pending.get(id) : undefined;
-      if (id) {
-        pending.delete(id);
+
+      // Drop tool results with empty/missing toolCallId — they can't be paired
+      // with any assistant tool call and will corrupt the session for strict
+      // providers (Anthropic, MiniMax, Cloud Code Assist). See #21985.
+      if (!id) {
+        return undefined;
       }
+
+      const toolName = pending.get(id);
+      pending.delete(id);
       // Apply hard size cap before persistence to prevent oversized tool results
       // from consuming the entire context window on subsequent LLM calls.
       const capped = capToolResultSize(persistMessage(nextMessage));
       const persisted = applyBeforeWriteHook(
         persistToolResult(capped, {
-          toolCallId: id ?? undefined,
+          toolCallId: id,
           toolName,
           isSynthetic: false,
         }),

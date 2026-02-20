@@ -176,6 +176,33 @@ describe("installSessionToolResultGuard", () => {
     expectPersistedRoles(sm, ["assistant", "toolResult"]);
   });
 
+  it("drops toolResult entries with empty toolCallId", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm);
+
+    sm.appendMessage(toolCallMessage);
+    sm.appendMessage(
+      asAppendMessage({
+        role: "toolResult",
+        toolCallId: "",
+        toolName: "read",
+        content: [{ type: "text", text: "bad" }],
+        isError: false,
+      }),
+    );
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "after" }],
+      }),
+    );
+
+    const messages = getPersistedMessages(sm);
+    expect(messages.map((m) => m.role)).toEqual(["assistant", "toolResult", "assistant"]);
+    expect((messages[1] as { isError?: boolean; toolCallId?: string }).isError).toBe(true);
+    expect((messages[1] as { isError?: boolean; toolCallId?: string }).toolCallId).toBe("call_1");
+  });
+
   it("drops malformed tool calls missing input before persistence", () => {
     const sm = SessionManager.inMemory();
     installSessionToolResultGuard(sm);
