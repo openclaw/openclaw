@@ -242,6 +242,9 @@ function parseMediaKeys(
       case "video":
         // Video has both file_key (video) and image_key (thumbnail)
         return { fileKey, imageKey };
+      case "media":
+        // Feishu may use "media" as message_type for video/audio files
+        return { fileKey, imageKey, fileName: parsed.file_name };
       case "sticker":
         return { fileKey };
       default:
@@ -253,12 +256,13 @@ function parseMediaKeys(
 }
 
 /**
- * Parse post (rich text) content and extract embedded image keys.
- * Post structure: { title?: string, content: [[{ tag, text?, image_key?, ... }]] }
+ * Parse post (rich text) content and extract embedded image and media keys.
+ * Post structure: { title?: string, content: [[{ tag, text?, image_key?, file_key?, ... }]] }
  */
 function parsePostContent(content: string): {
   textContent: string;
   imageKeys: string[];
+  mediaKeys: Array<{ fileKey: string; fileName?: string }>;
   mentionedOpenIds: string[];
 } {
   try {
@@ -267,6 +271,7 @@ function parsePostContent(content: string): {
     const contentBlocks = parsed.content || [];
     let textContent = title ? `${title}\n\n` : "";
     const imageKeys: string[] = [];
+    const mediaKeys: Array<{ fileKey: string; fileName?: string }> = [];
     const mentionedOpenIds: string[] = [];
 
     for (const paragraph of contentBlocks) {
@@ -289,6 +294,12 @@ function parsePostContent(content: string): {
             if (imageKey) {
               imageKeys.push(imageKey);
             }
+          } else if (element.tag === "media" && element.file_key) {
+            // Embedded video/audio media
+            const fileKey = normalizeFeishuExternalKey(element.file_key);
+            if (fileKey) {
+              mediaKeys.push({ fileKey, fileName: element.file_name });
+            }
           }
         }
         textContent += "\n";
@@ -298,10 +309,16 @@ function parsePostContent(content: string): {
     return {
       textContent: textContent.trim() || "[Rich text message]",
       imageKeys,
+      mediaKeys,
       mentionedOpenIds,
     };
   } catch {
-    return { textContent: "[Rich text message]", imageKeys: [], mentionedOpenIds: [] };
+    return {
+      textContent: "[Rich text message]",
+      imageKeys: [],
+      mediaKeys: [],
+      mentionedOpenIds: [],
+    };
   }
 }
 
@@ -341,7 +358,7 @@ async function resolveFeishuMediaList(params: {
   const { cfg, messageId, messageType, content, maxBytes, log, accountId } = params;
 
   // Only process media message types (including post for embedded images)
-  const mediaTypes = ["image", "file", "audio", "video", "sticker", "post"];
+  const mediaTypes = ["image", "file", "audio", "video", "media", "sticker", "post"];
   if (!mediaTypes.includes(messageType)) {
     return [];
   }
@@ -349,14 +366,20 @@ async function resolveFeishuMediaList(params: {
   const out: FeishuMediaInfo[] = [];
   const core = getFeishuRuntime();
 
-  // Handle post (rich text) messages with embedded images
+  // Handle post (rich text) messages with embedded images and media
   if (messageType === "post") {
-    const { imageKeys } = parsePostContent(content);
-    if (imageKeys.length === 0) {
+    const { imageKeys, mediaKeys: postMediaKeys } = parsePostContent(content);
+
+    if (imageKeys.length === 0 && postMediaKeys.length === 0) {
       return [];
     }
 
-    log?.(`feishu: post message contains ${imageKeys.length} embedded image(s)`);
+    if (imageKeys.length > 0) {
+      log?.(`feishu: post message contains ${imageKeys.length} embedded image(s)`);
+    }
+    if (postMediaKeys.length > 0) {
+      log?.(`feishu: post message contains ${postMediaKeys.length} embedded media file(s)`);
+    }
 
     for (const imageKey of imageKeys) {
       try {
@@ -393,6 +416,42 @@ async function resolveFeishuMediaList(params: {
       }
     }
 
+    // Download embedded video/audio media from post
+    for (const media of postMediaKeys) {
+      try {
+        const result = await downloadMessageResourceFeishu({
+          cfg,
+          messageId,
+          fileKey: media.fileKey,
+          type: "file",
+          accountId,
+        });
+
+        let contentType = result.contentType;
+        if (!contentType) {
+          contentType = await core.media.detectMime({ buffer: result.buffer });
+        }
+
+        const saved = await core.channel.media.saveMediaBuffer(
+          result.buffer,
+          contentType,
+          "inbound",
+          maxBytes,
+        );
+
+        out.push({
+          path: saved.path,
+          contentType: saved.contentType,
+          fileName: media.fileName,
+          placeholder: "<media:video>",
+        });
+
+        log?.(`feishu: downloaded embedded media ${media.fileKey}, saved to ${saved.path}`);
+      } catch (err) {
+        log?.(`feishu: failed to download embedded media ${media.fileKey}: ${String(err)}`);
+      }
+    }
+
     return out;
   }
 
@@ -409,7 +468,11 @@ async function resolveFeishuMediaList(params: {
 
     // For message media, always use messageResource API
     // The image.get API is only for images uploaded via im/v1/images, not for message attachments
-    const fileKey = mediaKeys.imageKey || mediaKeys.fileKey;
+    // For video/media types, prefer fileKey (the actual video) over imageKey (thumbnail)
+    const isVideoLike = messageType === "video" || messageType === "media";
+    const fileKey = isVideoLike
+      ? mediaKeys.fileKey || mediaKeys.imageKey
+      : mediaKeys.imageKey || mediaKeys.fileKey;
     if (!fileKey) {
       return [];
     }
