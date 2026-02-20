@@ -437,8 +437,6 @@ export function createFeishuAgentCardRenderer(params: CreateFeishuAgentCardRende
   const { cfg, chatId, replyToMessageId, mentionTargets, accountId } = params;
   let status: "thinking" | "tool" | "completed" | "error" = "thinking";
   let timeline: TimelineEntry[] = [];
-  let progressText = "";
-  let finalText = "";
   let answer = "";
   let messageId: string | null = null;
   let updater: ReturnType<typeof createCardUpdateQueue> | null = null;
@@ -446,25 +444,6 @@ export function createFeishuAgentCardRenderer(params: CreateFeishuAgentCardRende
   let opQueue: Promise<void> = Promise.resolve();
   let timelineCarryLine = "";
   let finalStreamStarted = false;
-  let finalHasBegun = false;
-
-  const recomputeAnswer = () => {
-    if (!finalHasBegun || !finalText.trim()) {
-      answer = progressText;
-      return;
-    }
-    const left = progressText.trimEnd();
-    const right = finalText.trimStart();
-    if (!left) {
-      answer = right;
-      return;
-    }
-    if (!right) {
-      answer = left;
-      return;
-    }
-    answer = `${left}\n\n${right}`;
-  };
 
   const render = (collapseTimeline: boolean) =>
     buildCard({
@@ -559,11 +538,9 @@ export function createFeishuAgentCardRenderer(params: CreateFeishuAgentCardRende
         }
 
         if (info.kind === "final") {
-          finalHasBegun = true;
-          // The final payload often includes the entire assistant message (including the
-          // earlier "progress" text). Keep progress as-is and append only the delta.
-          finalText = stripProcessPrefixFromFinal(text, progressText);
-          recomputeAnswer();
+          // Some providers send the full assistant text again at `final`; mergeStreamText
+          // handles both delta and full-text cases without duplicating.
+          answer = mergeStreamText(answer, text);
         }
         status = info.kind === "final" ? "completed" : status === "error" ? "error" : "thinking";
         await sendOrUpdate(info.kind === "final" || finalStreamStarted);
@@ -576,14 +553,9 @@ export function createFeishuAgentCardRenderer(params: CreateFeishuAgentCardRende
         if (!text) {
           return;
         }
-        // Keep streaming assistant text in the body (progress), not the timeline.
-        // Text may be either delta chunks or cumulative; mergeStreamText handles both.
-        if (!finalHasBegun) {
-          progressText = mergeStreamText(progressText, text);
-        } else {
-          finalText = mergeStreamText(finalText, text);
-        }
-        recomputeAnswer();
+        // Keep streaming assistant text in the body. Do not force a newline between
+        // "process text" and final; let the model decide formatting.
+        answer = mergeStreamText(answer, text);
         await sendOrUpdate(false);
       });
     },
