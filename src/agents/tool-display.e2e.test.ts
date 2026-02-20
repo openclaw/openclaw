@@ -104,7 +104,7 @@ describe("tool display details", () => {
     expect(detail).toContain(".openclaw/workspace)");
   });
 
-  it("strips cd preamble and summarizes the real command", () => {
+  it("moves cd path to context suffix and summarizes the real command", () => {
     const detail = formatToolDetail(
       resolveToolDisplay({
         name: "exec",
@@ -115,7 +115,7 @@ describe("tool display details", () => {
     expect(detail).toBe("install dependencies (in ~/my-project)");
   });
 
-  it("strips cd preamble and summarizes multiple stages", () => {
+  it("moves cd path to context suffix with multiple stages", () => {
     const detail = formatToolDetail(
       resolveToolDisplay({
         name: "exec",
@@ -126,7 +126,7 @@ describe("tool display details", () => {
     expect(detail).toBe("install dependencies → run tests (in ~/my-project)");
   });
 
-  it("strips pushd preamble", () => {
+  it("moves pushd path to context suffix", () => {
     const detail = formatToolDetail(
       resolveToolDisplay({
         name: "exec",
@@ -137,7 +137,7 @@ describe("tool display details", () => {
     expect(detail).toBe("check git status (in /tmp)");
   });
 
-  it("strips cd preamble with || separator", () => {
+  it("moves cd path to context suffix with || separator", () => {
     const detail = formatToolDetail(
       resolveToolDisplay({
         name: "exec",
