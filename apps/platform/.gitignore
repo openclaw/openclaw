@@ -1,0 +1,37 @@
+# Separate repos (have their own .git)
+apps/dashboard/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors / IDEs
+.cursor/
+.vscode/
+.idea/
+
+# Node
+node_modules/
+.next/
+.turbo/
+dist/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+
+# Testing / tooling
+.playwright-cli/
+coverage/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Databases
+*.db
+*.sqlite
+*.sqlite3

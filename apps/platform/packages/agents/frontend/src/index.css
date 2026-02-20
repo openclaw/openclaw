@@ -1,0 +1,184 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #3f3f46;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #52525b;
+}
+
+/* Base styles */
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+  
+  body {
+    @apply min-h-screen;
+  }
+}
+
+/* Component styles */
+@layer components {
+  /* Card component */
+  .card {
+    @apply bg-surface-900 border border-surface-800 rounded-xl p-4 shadow-lg;
+  }
+  
+  .card-header {
+    @apply flex items-center justify-between mb-4 pb-3 border-b border-surface-800;
+  }
+  
+  .card-title {
+    @apply text-lg font-semibold text-surface-100;
+  }
+  
+  /* Button variants */
+  .btn {
+    @apply px-4 py-2 rounded-lg font-medium transition-all duration-200 
+           focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-surface-900
+           disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  
+  .btn-primary {
+    @apply btn bg-primary-600 text-white hover:bg-primary-700 focus:ring-primary-500;
+  }
+  
+  .btn-secondary {
+    @apply btn bg-surface-800 text-surface-100 hover:bg-surface-700 focus:ring-surface-500;
+  }
+  
+  .btn-danger {
+    @apply btn bg-red-600 text-white hover:bg-red-700 focus:ring-red-500;
+  }
+  
+  .btn-ghost {
+    @apply btn bg-transparent text-surface-300 hover:bg-surface-800 hover:text-surface-100;
+  }
+  
+  .btn-icon {
+    @apply p-2 rounded-lg transition-colors hover:bg-surface-800;
+  }
+
+  .btn-icon-sm {
+    @apply p-1.5 rounded-md transition-colors hover:bg-surface-800;
+  }
+  
+  /* Status badges */
+  .badge {
+    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium;
+  }
+  
+  .badge-success {
+    @apply badge bg-green-500/20 text-green-400;
+  }
+  
+  .badge-warning {
+    @apply badge bg-yellow-500/20 text-yellow-400;
+  }
+  
+  .badge-error {
+    @apply badge bg-red-500/20 text-red-400;
+  }
+  
+  .badge-info {
+    @apply badge bg-primary-500/20 text-primary-400;
+  }
+  
+  .badge-neutral {
+    @apply badge bg-surface-700 text-surface-300;
+  }
+  
+  /* Status indicators */
+  .status-dot {
+    @apply w-2 h-2 rounded-full;
+  }
+  
+  .status-dot-success {
+    @apply status-dot bg-green-500 animate-pulse-slow;
+  }
+  
+  .status-dot-warning {
+    @apply status-dot bg-yellow-500;
+  }
+  
+  .status-dot-error {
+    @apply status-dot bg-red-500;
+  }
+  
+  .status-dot-idle {
+    @apply status-dot bg-surface-500;
+  }
+  
+  /* Input styles */
+  .input {
+    @apply w-full px-3 py-2 bg-surface-800 border border-surface-700 rounded-lg 
+           text-surface-100 placeholder-surface-500
+           focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent
+           transition-colors;
+  }
+  
+  .input-error {
+    @apply input border-red-500 focus:ring-red-500;
+  }
+  
+  /* Table styles */
+  .table {
+    @apply w-full text-left;
+  }
+  
+  .table th {
+    @apply px-4 py-3 text-xs font-medium text-surface-400 uppercase tracking-wider bg-surface-800/50;
+  }
+  
+  .table td {
+    @apply px-4 py-3 text-sm text-surface-300 border-b border-surface-800;
+  }
+  
+  .table tr:hover td {
+    @apply bg-surface-800/30;
+  }
+  
+  /* Tooltip */
+  .tooltip {
+    @apply relative group;
+  }
+  
+  .tooltip::after {
+    content: attr(data-tooltip);
+    @apply absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-1.5
+           bg-surface-800 text-surface-100 text-xs rounded-lg
+           opacity-0 invisible group-hover:opacity-100 group-hover:visible
+           transition-all duration-200 whitespace-nowrap z-50
+           border border-surface-700 shadow-xl;
+  }
+}
+
+/* Animation utilities */
+@layer utilities {
+  .gradient-text {
+    @apply bg-clip-text text-transparent bg-gradient-to-r from-primary-400 to-accent-400;
+  }
+  
+  .glass {
+    @apply backdrop-blur-xl bg-surface-900/70;
+  }
+  
+  .glow {
+    box-shadow: 0 0 20px rgba(14, 165, 233, 0.3);
+  }
+}

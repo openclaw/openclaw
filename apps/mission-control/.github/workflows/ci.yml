@@ -1,0 +1,67 @@
+name: Mission Control CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+
+concurrency:
+  group: mission-control-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Secret Scan
+        run: |
+          npx secretlint "src/**/*.{ts,tsx}" "*.config.*" ".env.example" --secretlintrc '{"rules":[{"id":"@secretlint/secretlint-rule-preset-recommend"}]}'
+        continue-on-error: true
+
+      - name: Dependency Audit
+        run: npm audit --audit-level=high
+        continue-on-error: true
+
+      - name: Docs Gate
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: npm run docs:gate
+
+      - name: Dashboard Footprint Guard
+        run: npm run audit:dashboards
+
+      - name: Lint
+        run: npm run lint -- src
+
+      - name: Build
+        run: npm run build
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run Scroll/Chat Audit
+        run: npm run audit:scroll-chat:ci
+
+      - name: API Contract Smoke
+        run: npm run test:api-contract:ci
+
+      - name: Chat E2E Smoke
+        run: npm run test:chat-e2e:ci

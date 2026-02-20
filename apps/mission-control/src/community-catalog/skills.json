@@ -1,0 +1,268 @@
+{
+  "generatedAt": "2026-02-19T02:52:59.285Z",
+  "sourceZips": [
+    "openclaw-skills-main.zip",
+    "openclaw-main.zip"
+  ],
+  "total": 17,
+  "skills": [
+    {
+      "id": "community-skill-openclaw-skills-pack-bankr",
+      "slug": "bankr",
+      "name": "Bankr",
+      "description": "AI-powered crypto trading agent and LLM gateway via natural language. Use when the user wants to trade crypto, check portfolio balances, view token prices, transfer crypto, manage NFTs, use leverage, bet on Polymarket, deploy tokens, set up automated trading, ",
+      "category": "crypto",
+      "tags": [
+        "bankr"
+      ],
+      "source": "openclaw-skills-pack",
+      "sourcePath": "openclaw-skills-main/bankr/SKILL.md",
+      "url": "https://github.com/openclaw/openclaw-skills/blob/main/bankr/SKILL.md",
+      "scriptsCount": 0,
+      "referencesCount": 15
+    },
+    {
+      "id": "community-skill-openclaw-skills-pack-base",
+      "slug": "base",
+      "name": "Base",
+      "description": "Placeholder for Base skill.",
+      "category": "developer-tools",
+      "tags": [
+        "base"
+      ],
+      "source": "openclaw-skills-pack",
+      "sourcePath": "openclaw-skills-main/base/SKILL.md",
+      "url": "https://github.com/openclaw/openclaw-skills/blob/main/base/SKILL.md",
+      "scriptsCount": 0,
+      "referencesCount": 0
+    },
+    {
+      "id": "community-skill-openclaw-skills-pack-botchan",
+      "slug": "botchan",
+      "name": "Botchan",
+      "description": "CLI for the onchain agent messaging layer on the Base blockchain, built on Net Protocol. Explore other agents, post to feeds, send direct messages, and store information permanently onchain.",
+      "category": "developer-tools",
+      "tags": [
+        "botchan"
+      ],
+      "source": "openclaw-skills-pack",
+      "sourcePath": "openclaw-skills-main/botchan/SKILL.md",
+      "url": "https://github.com/openclaw/openclaw-skills/blob/main/botchan/SKILL.md",
+      "scriptsCount": 0,
+      "referencesCount": 0
+    },
+    {
+      "id": "community-skill-openclaw-skills-pack-clanker",
+      "slug": "clanker",
+      "name": "Clanker",
+      "description": "Deploy ERC20 tokens on Base, Ethereum, Arbitrum, and other EVM chains using the Clanker SDK. Use when the user wants to deploy a new token, create a memecoin, set up token vesting, configure airdrops, manage token rewards, claim LP fees, or update token metada",
+      "category": "crypto",
+      "tags": [
+        "clanker"
+      ],
+      "source": "openclaw-skills-pack",
+      "sourcePath": "openclaw-skills-main/clanker/SKILL.md",
+      "url": "https://github.com/openclaw/openclaw-skills/blob/main/clanker/SKILL.md",
+      "scriptsCount": 0,
+      "referencesCount": 6
+    },
+    {
+      "id": "community-skill-openclaw-skills-pack-endaoment",
+      "slug": "endaoment",
+      "name": "Endaoment",
+      "description": "Donate to charities onchain via Endaoment. Use when the user wants to donate crypto to charity, make a charitable contribution, give to nonprofits, support a cause, or donate to a 501(c)(3). Supports Base, Ethereum, and Optimism. Handles USDC donations directl",
+      "category": "integration",
+      "tags": [
+        "endaoment"
+      ],
+      "source": "openclaw-skills-pack",
+      "sourcePath": "openclaw-skills-main/endaoment/SKILL.md",
+      "url": "https://github.com/openclaw/openclaw-skills/blob/main/endaoment/SKILL.md",
+      "scriptsCount": 2,
+      "referencesCount": 1
+    },
+    {
+      "id": "community-skill-openclaw-skills-pack-ens-primary-name",
+      "slug": "ens-primary-name",
+      "name": "Ens Primary Name",
+      "description": "Set your primary ENS name on Base and other L2s. Use when user wants to set their ENS name, configure reverse resolution, set primary name, or make their address resolve to an ENS name. Supports Base, Arbitrum, Optimism, and Ethereum mainnet.",
+      "category": "integration",
+      "tags": [
+        "ens",
+        "primary",
+        "name"
+      ],
+      "source": "openclaw-skills-pack",
+      "sourcePath": "openclaw-skills-main/ens-primary-name/SKILL.md",
+      "url": "https://github.com/openclaw/openclaw-skills/blob/main/ens-primary-name/SKILL.md",
+      "scriptsCount": 3,
+      "referencesCount": 0
+    },
+    {
+      "id": "community-skill-openclaw-skills-pack-erc-8004",
+      "slug": "erc-8004",
+      "name": "Erc 8004",
+      "description": "Register AI agents on Ethereum mainnet using ERC-8004 (Trustless Agents). Use when the user wants to register their agent identity on-chain, create an agent profile, claim an agent NFT, set up agent reputation, or make their agent discoverable. Handles bridgin",
+      "category": "crypto",
+      "tags": [
+        "erc",
+        "8004"
+      ],
+      "source": "openclaw-skills-pack",
+      "sourcePath": "openclaw-skills-main/erc-8004/SKILL.md",
+      "url": "https://github.com/openclaw/openclaw-skills/blob/main/erc-8004/SKILL.md",
+      "scriptsCount": 8,
+      "referencesCount": 1
+    },
+    {
+      "id": "community-skill-openclaw-main-merge-pr",
+      "slug": "merge-pr",
+      "name": "Merge Pr",
+      "description": "Script-first deterministic squash merge with strict required-check gating, head-SHA pinning, and reliable attribution/commenting.",
+      "category": "workflow",
+      "tags": [
+        "merge"
+      ],
+      "source": "openclaw-main",
+      "sourcePath": "openclaw-main/.agents/skills/merge-pr/SKILL.md",
+      "url": "https://github.com/openclaw/openclaw/blob/main/.agents/skills/merge-pr/SKILL.md",
+      "scriptsCount": 0,
+      "referencesCount": 0
+    },
+    {
+      "id": "community-skill-openclaw-main-mintlify",
+      "slug": "mintlify",
+      "name": "Mintlify",
+      "description": "Build and maintain documentation sites with Mintlify. Use when",
+      "category": "workflow",
+      "tags": [
+        "mintlify"
+      ],
+      "source": "openclaw-main",
+      "sourcePath": "openclaw-main/.agents/skills/mintlify/SKILL.md",
+      "url": "https://github.com/openclaw/openclaw/blob/main/.agents/skills/mintlify/SKILL.md",
+      "scriptsCount": 0,
+      "referencesCount": 0
+    },
+    {
+      "id": "community-skill-openclaw-skills-pack-neynar",
+      "slug": "neynar",
+      "name": "Neynar",
+      "description": "Interact with Farcaster via Neynar API. Use when the user wants to read Farcaster feeds, look up users, post casts, search content, or interact with the Farcaster social protocol. Requires NEYNAR_API_KEY.",
+      "category": "integration",
+      "tags": [
+        "neynar"
+      ],
+      "source": "openclaw-skills-pack",
+      "sourcePath": "openclaw-skills-main/neynar/SKILL.md",
+      "url": "https://github.com/openclaw/openclaw-skills/blob/main/neynar/SKILL.md",
+      "scriptsCount": 1,
+      "referencesCount": 0
+    },
+    {
+      "id": "community-skill-openclaw-skills-pack-onchainkit",
+      "slug": "onchainkit",
+      "name": "Onchainkit",
+      "description": "Build onchain applications with React components and TypeScript utilities from Coinbase's OnchainKit. Use when users want to create crypto wallets, swap tokens, mint NFTs, build payments, display blockchain identities, or develop any onchain app functionality.",
+      "category": "developer-tools",
+      "tags": [
+        "onchainkit"
+      ],
+      "source": "openclaw-skills-pack",
+      "sourcePath": "openclaw-skills-main/onchainkit/SKILL.md",
+      "url": "https://github.com/openclaw/openclaw-skills/blob/main/onchainkit/SKILL.md",
+      "scriptsCount": 4,
+      "referencesCount": 5
+    },
+    {
+      "id": "community-skill-openclaw-main-prepare-pr",
+      "slug": "prepare-pr",
+      "name": "Prepare Pr",
+      "description": "Script-first PR preparation with structured findings resolution, deterministic push safety, and explicit gate execution.",
+      "category": "workflow",
+      "tags": [
+        "prepare"
+      ],
+      "source": "openclaw-main",
+      "sourcePath": "openclaw-main/.agents/skills/prepare-pr/SKILL.md",
+      "url": "https://github.com/openclaw/openclaw/blob/main/.agents/skills/prepare-pr/SKILL.md",
+      "scriptsCount": 0,
+      "referencesCount": 0
+    },
+    {
+      "id": "community-skill-openclaw-skills-pack-qrcoin",
+      "slug": "qrcoin",
+      "name": "Qrcoin",
+      "description": "Interact with QR Coin auctions on Base. Use when the user wants to participate in qrcoin.fun QR code auctions — check auction status, view current bids, create new bids, or contribute to existing bids. QR Coin lets you bid to display URLs on QR codes; the high",
+      "category": "crypto",
+      "tags": [
+        "qrcoin"
+      ],
+      "source": "openclaw-skills-pack",
+      "sourcePath": "openclaw-skills-main/qrcoin/SKILL.md",
+      "url": "https://github.com/openclaw/openclaw-skills/blob/main/qrcoin/SKILL.md",
+      "scriptsCount": 0,
+      "referencesCount": 0
+    },
+    {
+      "id": "community-skill-openclaw-main-review-pr",
+      "slug": "review-pr",
+      "name": "Review Pr",
+      "description": "Script-first review-only GitHub pull request analysis. Use for deterministic PR review with structured findings handoff to /prepare-pr.",
+      "category": "workflow",
+      "tags": [
+        "review"
+      ],
+      "source": "openclaw-main",
+      "sourcePath": "openclaw-main/.agents/skills/review-pr/SKILL.md",
+      "url": "https://github.com/openclaw/openclaw/blob/main/.agents/skills/review-pr/SKILL.md",
+      "scriptsCount": 0,
+      "referencesCount": 0
+    },
+    {
+      "id": "community-skill-openclaw-skills-pack-veil",
+      "slug": "veil",
+      "name": "Veil",
+      "description": "Privacy and shielded transactions on Base via Veil Cash (veil.cash). Deposit ETH into a private pool, withdraw/transfer privately using ZK proofs. Manage Veil keypairs, check private/queue balances, and submit deposits via Bankr. Use when the user wants anonym",
+      "category": "developer-tools",
+      "tags": [
+        "veil"
+      ],
+      "source": "openclaw-skills-pack",
+      "sourcePath": "openclaw-skills-main/veil/SKILL.md",
+      "url": "https://github.com/openclaw/openclaw-skills/blob/main/veil/SKILL.md",
+      "scriptsCount": 14,
+      "referencesCount": 2
+    },
+    {
+      "id": "community-skill-openclaw-skills-pack-yoink",
+      "slug": "yoink",
+      "name": "Yoink",
+      "description": "Play Yoink, an onchain capture-the-flag game on Base. Yoink the flag from the current holder, check game stats and leaderboards, view player scores, and compete for the trophy. Uses Bankr for transaction execution.",
+      "category": "integration",
+      "tags": [
+        "yoink"
+      ],
+      "source": "openclaw-skills-pack",
+      "sourcePath": "openclaw-skills-main/yoink/SKILL.md",
+      "url": "https://github.com/openclaw/openclaw-skills/blob/main/yoink/SKILL.md",
+      "scriptsCount": 0,
+      "referencesCount": 0
+    },
+    {
+      "id": "community-skill-openclaw-skills-pack-zapper",
+      "slug": "zapper",
+      "name": "Zapper",
+      "description": "Placeholder for Zapper skill.",
+      "category": "crypto",
+      "tags": [
+        "zapper"
+      ],
+      "source": "openclaw-skills-pack",
+      "sourcePath": "openclaw-skills-main/zapper/SKILL.md",
+      "url": "https://github.com/openclaw/openclaw-skills/blob/main/zapper/SKILL.md",
+      "scriptsCount": 0,
+      "referencesCount": 0
+    }
+  ]
+}
