@@ -12,12 +12,19 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import {
   CONFIG_PATH,
+  STATE_DIR,
   isNixMode,
   loadConfig,
   migrateLegacyConfig,
   readConfigFileSnapshot,
   writeConfigFile,
 } from "../config/config.js";
+import {
+  hasLastKnownGood,
+  recordStartupAndCheckCrashLoop,
+  revertToLastKnownGood,
+  scheduleLastKnownGoodSave,
+} from "../config/crash-tracker.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
 import {
@@ -156,6 +163,16 @@ export async function startGatewayServer(
   port = 18789,
   opts: GatewayServerOptions = {},
 ): Promise<GatewayServer> {
+  const isCrashLoop = recordStartupAndCheckCrashLoop(STATE_DIR);
+  if (isCrashLoop) {
+    if (hasLastKnownGood(CONFIG_PATH)) {
+      log.warn("gateway: crash loop detected; reverting to last-known-good config");
+      revertToLastKnownGood(CONFIG_PATH, STATE_DIR);
+    } else {
+      log.warn("gateway: crash loop detected but no last-known-good config found");
+    }
+  }
+
   // Ensure all default port derivations (browser/canvas) see the actual runtime port.
   process.env.OPENCLAW_GATEWAY_PORT = String(port);
   logAcceptedEnvOption({
@@ -621,6 +638,8 @@ export async function startGatewayServer(
     httpServer,
     httpServers,
   });
+
+  scheduleLastKnownGoodSave(CONFIG_PATH, STATE_DIR);
 
   return {
     close: async (opts) => {
