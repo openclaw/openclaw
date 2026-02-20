@@ -1,6 +1,10 @@
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
+import type {
+  AgentCompactionConfig,
+  AgentContextPruningConfig,
+} from "../config/types.agent-defaults.js";
 import {
   DEFAULT_AGENT_ID,
   normalizeAgentId,
@@ -26,6 +30,8 @@ type ResolvedAgentConfig = {
   identity?: AgentEntry["identity"];
   groupChat?: AgentEntry["groupChat"];
   subagents?: AgentEntry["subagents"];
+  compaction?: AgentEntry["compaction"];
+  contextPruning?: AgentEntry["contextPruning"];
   sandbox?: AgentEntry["sandbox"];
   tools?: AgentEntry["tools"];
 };
@@ -120,9 +126,88 @@ export function resolveAgentConfig(
     identity: entry.identity,
     groupChat: entry.groupChat,
     subagents: typeof entry.subagents === "object" && entry.subagents ? entry.subagents : undefined,
+    compaction: entry.compaction,
+    contextPruning: entry.contextPruning,
     sandbox: entry.sandbox,
     tools: entry.tools,
   };
+}
+
+/**
+ * Resolve the effective compaction config for an agent by merging per-agent
+ * overrides with global defaults. Per-agent fields take precedence; the
+ * `memoryFlush` sub-object is shallow-merged one level deeper so partial
+ * overrides (e.g., `enabled: false`) don't wipe unrelated default fields.
+ */
+export function resolveAgentCompaction(
+  cfg: OpenClawConfig,
+  agentId?: string,
+): AgentCompactionConfig | undefined {
+  const perAgent = agentId ? resolveAgentConfig(cfg, agentId)?.compaction : undefined;
+  const defaults = cfg?.agents?.defaults?.compaction;
+  if (!perAgent && !defaults) {
+    return undefined;
+  }
+  if (!perAgent) {
+    return defaults;
+  }
+  if (!defaults) {
+    return perAgent;
+  }
+  return {
+    ...defaults,
+    ...perAgent,
+    memoryFlush:
+      perAgent.memoryFlush || defaults.memoryFlush
+        ? { ...defaults.memoryFlush, ...perAgent.memoryFlush }
+        : undefined,
+  };
+}
+
+/**
+ * Resolve the effective context pruning mode for an agent.
+ * Per-agent `contextPruning.mode` overrides the global default.
+ */
+export function resolveAgentContextPruningMode(
+  cfg: OpenClawConfig,
+  agentId?: string,
+): "off" | "cache-ttl" | undefined {
+  const perAgent = agentId ? resolveAgentConfig(cfg, agentId)?.contextPruning : undefined;
+  if (perAgent?.mode) {
+    return perAgent.mode;
+  }
+  return cfg?.agents?.defaults?.contextPruning?.mode;
+}
+
+/**
+ * Resolve the full effective context pruning config for an agent by merging
+ * per-agent overrides with global defaults (shallow merge).
+ */
+export function resolveAgentContextPruning(
+  cfg: OpenClawConfig,
+  agentId?: string,
+): AgentContextPruningConfig | undefined {
+  const perAgent = agentId ? resolveAgentConfig(cfg, agentId)?.contextPruning : undefined;
+  const defaults = cfg?.agents?.defaults?.contextPruning;
+  if (!perAgent && !defaults) {
+    return undefined;
+  }
+  if (!perAgent) {
+    return defaults;
+  }
+  if (!defaults) {
+    return perAgent;
+  }
+  return { ...defaults, ...perAgent };
+}
+
+/**
+ * Check whether compaction is enabled for the given agent (or globally).
+ * Returns `false` when the resolved compaction mode is `"off"`.
+ */
+export function isCompactionEnabled(cfg: OpenClawConfig, agentId?: string): boolean {
+  const compaction = resolveAgentCompaction(cfg, agentId);
+  return compaction?.mode !== "off";
 }
 
 export function resolveAgentSkillsFilter(

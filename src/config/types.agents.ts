@@ -1,5 +1,5 @@
 import type { ChatType } from "../channels/chat-type.js";
-import type { AgentDefaultsConfig } from "./types.agent-defaults.js";
+import type { AgentCompactionConfig, AgentDefaultsConfig } from "./types.agent-defaults.js";
 import type { HumanDelayConfig, IdentityConfig } from "./types.base.js";
 import type { GroupChatConfig } from "./types.messages.js";
 import type {
@@ -61,6 +61,14 @@ export type AgentConfig = {
     browser?: SandboxBrowserSettings;
     /** Auto-prune overrides for this agent. */
     prune?: SandboxPruneSettings;
+  };
+  /** Per-agent compaction overrides (mode, reserveTokensFloor, maxHistoryShare, memoryFlush). */
+  compaction?: AgentCompactionConfig;
+  /** Per-agent context pruning overrides (mode: off | cache-ttl). */
+  contextPruning?: {
+    mode?: "off" | "cache-ttl";
+    ttl?: string;
+    keepLastAssistants?: number;
   };
   tools?: AgentToolsConfig;
 };

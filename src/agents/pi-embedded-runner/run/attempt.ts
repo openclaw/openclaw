@@ -22,7 +22,7 @@ import { resolveUserPath } from "../../../utils.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../../agent-paths.js";
-import { resolveSessionAgentIds } from "../../agent-scope.js";
+import { resolveAgentCompaction, resolveSessionAgentIds } from "../../agent-scope.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../../bootstrap-files.js";
 import { createCacheTrace } from "../../cache-trace.js";
@@ -531,10 +531,15 @@ export async function runEmbeddedAttempt(
       });
 
       const settingsManager = SettingsManager.create(effectiveWorkspace, agentDir);
-      ensurePiCompactionReserveTokens({
-        settingsManager,
-        minReserveTokens: resolveCompactionReserveTokensFloor(params.config),
-      });
+      const compactionMode = params.config
+        ? (resolveAgentCompaction(params.config, sessionAgentId)?.mode ?? "default")
+        : "default";
+      if (compactionMode !== "off") {
+        ensurePiCompactionReserveTokens({
+          settingsManager,
+          minReserveTokens: resolveCompactionReserveTokensFloor(params.config, sessionAgentId),
+        });
+      }
 
       // Call for side effects (sets compaction/pruning runtime state)
       buildEmbeddedExtensionPaths({
@@ -543,6 +548,7 @@ export async function runEmbeddedAttempt(
         provider: params.provider,
         modelId: params.modelId,
         model: params.model,
+        agentId: sessionAgentId,
       });
 
       // Get hook runner early so it's available when creating tools

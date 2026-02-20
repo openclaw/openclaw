@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { type SessionEntry, updateSessionStoreEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions } from "../types.js";
@@ -38,7 +39,8 @@ export async function runMemoryFlushIfNeeded(params: {
   storePath?: string;
   isHeartbeat: boolean;
 }): Promise<SessionEntry | undefined> {
-  const memoryFlushSettings = resolveMemoryFlushSettings(params.cfg);
+  const agentId = params.sessionKey ? resolveAgentIdFromSessionKey(params.sessionKey) : undefined;
+  const memoryFlushSettings = resolveMemoryFlushSettings(params.cfg, agentId);
   if (!memoryFlushSettings) {
     return params.sessionEntry;
   }

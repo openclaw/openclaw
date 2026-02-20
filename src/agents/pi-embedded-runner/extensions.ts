@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveAgentCompaction, resolveAgentContextPruning } from "../agent-scope.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { setCompactionSafeguardRuntime } from "../pi-extensions/compaction-safeguard-runtime.js";
@@ -41,16 +42,18 @@ function buildContextPruningExtension(params: {
   provider: string;
   modelId: string;
   model: Model<Api> | undefined;
+  agentId?: string;
 }): { additionalExtensionPaths?: string[] } {
-  const raw = params.cfg?.agents?.defaults?.contextPruning;
-  if (raw?.mode !== "cache-ttl") {
+  // Resolve full context pruning config (per-agent merged with defaults).
+  const resolved = params.cfg ? resolveAgentContextPruning(params.cfg, params.agentId) : undefined;
+  if (resolved?.mode !== "cache-ttl") {
     return {};
   }
   if (!isCacheTtlEligibleProvider(params.provider, params.modelId)) {
     return {};
   }
 
-  const settings = computeEffectiveSettings(raw);
+  const settings = computeEffectiveSettings(resolved);
   if (!settings) {
     return {};
   }
@@ -67,8 +70,15 @@ function buildContextPruningExtension(params: {
   };
 }
 
-function resolveCompactionMode(cfg?: OpenClawConfig): "default" | "safeguard" {
-  return cfg?.agents?.defaults?.compaction?.mode === "safeguard" ? "safeguard" : "default";
+function resolveCompactionMode(
+  cfg?: OpenClawConfig,
+  agentId?: string,
+): "default" | "safeguard" | "off" {
+  const compaction = cfg ? resolveAgentCompaction(cfg, agentId) : undefined;
+  if (compaction?.mode === "off") {
+    return "off";
+  }
+  return compaction?.mode === "safeguard" ? "safeguard" : "default";
 }
 
 export function buildEmbeddedExtensionPaths(params: {
@@ -77,10 +87,13 @@ export function buildEmbeddedExtensionPaths(params: {
   provider: string;
   modelId: string;
   model: Model<Api> | undefined;
+  agentId?: string;
 }): string[] {
   const paths: string[] = [];
-  if (resolveCompactionMode(params.cfg) === "safeguard") {
-    const compactionCfg = params.cfg?.agents?.defaults?.compaction;
+  if (resolveCompactionMode(params.cfg, params.agentId) === "safeguard") {
+    const compactionCfg = params.cfg
+      ? resolveAgentCompaction(params.cfg, params.agentId)
+      : undefined;
     const contextWindowInfo = resolveContextWindowInfo({
       cfg: params.cfg,
       provider: params.provider,
