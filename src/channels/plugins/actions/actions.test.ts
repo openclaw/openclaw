@@ -1002,4 +1002,25 @@ describe("slack actions adapter", () => {
       },
     });
   });
+
+  it("rejects modal-update without viewId or externalId", async () => {
+    const { cfg, actions } = slackHarness();
+
+    await expect(
+      actions.handleAction?.({
+        channel: "slack",
+        action: "modal-update",
+        cfg,
+        params: {
+          view: JSON.stringify({
+            type: "modal",
+            callback_id: "openclaw:modal:update",
+            title: { type: "plain_text", text: "Updated" },
+            blocks: [],
+          }),
+        },
+      }),
+    ).rejects.toThrow(/requires viewId or externalId/i);
+    expect(handleSlackAction).not.toHaveBeenCalled();
+  });
 });
