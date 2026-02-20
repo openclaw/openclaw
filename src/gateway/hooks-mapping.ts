@@ -353,7 +353,12 @@ async function loadTransform(transform: HookMappingTransformResolved): Promise<H
       throw new Error(`hook transforms directory not found: ${transform.containingDir}`);
     }
     const relative = path.relative(realContainingDir, realModulePath);
-    if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    if (
+      !relative ||
+      relative === ".." ||
+      relative.startsWith(`..${path.sep}`) ||
+      path.isAbsolute(relative)
+    ) {
       throw new Error(
         `hook transform module escapes transforms directory via symlink: ${transform.modulePath}`,
       );
