@@ -5,6 +5,7 @@ import CoreMotion
 import CryptoKit
 import EventKit
 import Foundation
+import Darwin
 import OpenClawKit
 import Network
 import Observation
@@ -162,7 +163,7 @@ final class GatewayConnectionController {
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let token = GatewaySettingsStore.loadGatewayToken(instanceId: instanceId)
         let password = GatewaySettingsStore.loadGatewayPassword(instanceId: instanceId)
-        let resolvedUseTLS = useTLS
+        let resolvedUseTLS = self.resolveManualUseTLS(host: host, useTLS: useTLS)
         guard let resolvedPort = self.resolveManualPort(host: host, port: port, useTLS: resolvedUseTLS)
         else { return }
         let stableID = self.manualStableID(host: host, port: resolvedPort)
@@ -309,7 +310,7 @@ final class GatewayConnectionController {
 
             let manualPort = defaults.integer(forKey: "gateway.manual.port")
             let manualTLS = defaults.bool(forKey: "gateway.manual.tls")
-            let resolvedUseTLS = manualTLS || self.shouldForceTLS(host: manualHost)
+            let resolvedUseTLS = self.resolveManualUseTLS(host: manualHost, useTLS: manualTLS)
             guard let resolvedPort = self.resolveManualPort(
                 host: manualHost,
                 port: manualPort,
@@ -320,7 +321,7 @@ final class GatewayConnectionController {
             let tlsParams = self.resolveManualTLSParams(
                 stableID: stableID,
                 tlsEnabled: resolvedUseTLS,
-                allowTOFUReset: self.shouldForceTLS(host: manualHost))
+                allowTOFUReset: self.shouldRequireTLS(host: manualHost))
 
             guard let url = self.buildGatewayURL(
                 host: manualHost,
@@ -340,7 +341,7 @@ final class GatewayConnectionController {
 
         if let lastKnown = GatewaySettingsStore.loadLastGatewayConnection() {
             if case let .manual(host, port, useTLS, stableID) = lastKnown {
-                let resolvedUseTLS = useTLS || self.shouldForceTLS(host: host)
+                let resolvedUseTLS = self.resolveManualUseTLS(host: host, useTLS: useTLS)
                 let stored = GatewayTLSStore.loadFingerprint(stableID: stableID)
                 let tlsParams = stored.map { fp in
                     GatewayTLSParams(required: true, expectedFingerprint: fp, allowTOFU: false, storeKey: stableID)
@@ -646,10 +647,63 @@ final class GatewayConnectionController {
         return components.url
     }
 
+    private func resolveManualUseTLS(host: String, useTLS: Bool) -> Bool {
+        useTLS || self.shouldRequireTLS(host: host)
+    }
+
+    private func shouldRequireTLS(host: String) -> Bool {
+        !Self.isLoopbackHost(host)
+    }
+
     private func shouldForceTLS(host: String) -> Bool {
         let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if trimmed.isEmpty { return false }
         return trimmed.hasSuffix(".ts.net") || trimmed.hasSuffix(".ts.net.")
+    }
+
+    private static func isLoopbackHost(_ rawHost: String) -> Bool {
+        var host = rawHost.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !host.isEmpty else { return false }
+
+        if host.hasPrefix("[") && host.hasSuffix("]") {
+            host.removeFirst()
+            host.removeLast()
+        }
+        if host.hasSuffix(".") {
+            host.removeLast()
+        }
+        if let zoneIndex = host.firstIndex(of: "%") {
+            host = String(host[..<zoneIndex])
+        }
+        if host.isEmpty { return false }
+
+        if host == "localhost" || host == "0.0.0.0" || host == "::" {
+            return true
+        }
+        return Self.isLoopbackIPv4(host) || Self.isLoopbackIPv6(host)
+    }
+
+    private static func isLoopbackIPv4(_ host: String) -> Bool {
+        var addr = in_addr()
+        let parsed = host.withCString { inet_pton(AF_INET, $0, &addr) == 1 }
+        guard parsed else { return false }
+        let value = ntohl(addr.s_addr)
+        let firstOctet = UInt8((value >> 24) & 0xFF)
+        return firstOctet == 127
+    }
+
+    private static func isLoopbackIPv6(_ host: String) -> Bool {
+        var addr = in6_addr()
+        let parsed = host.withCString { inet_pton(AF_INET6, $0, &addr) == 1 }
+        guard parsed else { return false }
+        return withUnsafeBytes(of: &addr) { rawBytes in
+            let bytes = rawBytes.bindMemory(to: UInt8.self)
+            let isV6Loopback = bytes[0..<15].allSatisfy { $0 == 0 } && bytes[15] == 1
+            if isV6Loopback { return true }
+
+            let isMappedV4 = bytes[0..<10].allSatisfy { $0 == 0 } && bytes[10] == 0xFF && bytes[11] == 0xFF
+            return isMappedV4 && bytes[12] == 127
+        }
     }
 
     private func manualStableID(host: String, port: Int) -> String {
@@ -941,6 +995,14 @@ extension GatewayConnectionController {
         allowTOFU: Bool) -> GatewayTLSParams?
     {
         self.resolveDiscoveredTLSParams(gateway: gateway, allowTOFU: allowTOFU)
+    }
+
+    func _test_resolveManualUseTLS(host: String, useTLS: Bool) -> Bool {
+        self.resolveManualUseTLS(host: host, useTLS: useTLS)
+    }
+
+    func _test_resolveManualPort(host: String, port: Int, useTLS: Bool) -> Int? {
+        self.resolveManualPort(host: host, port: port, useTLS: useTLS)
     }
 }
 #endif

@@ -37,6 +37,18 @@ describe("oauth paths", () => {
 });
 
 describe("state + config path candidates", () => {
+  function expectOpenClawHomeDefaults(env: NodeJS.ProcessEnv): void {
+    const configuredHome = env.OPENCLAW_HOME;
+    if (!configuredHome) {
+      throw new Error("OPENCLAW_HOME must be set for this assertion helper");
+    }
+    const resolvedHome = path.resolve(configuredHome);
+    expect(resolveStateDir(env)).toBe(path.join(resolvedHome, ".openclaw"));
+
+    const candidates = resolveDefaultConfigCandidates(env);
+    expect(candidates[0]).toBe(path.join(resolvedHome, ".openclaw", "openclaw.json"));
+  }
+
   it("uses OPENCLAW_STATE_DIR when set", () => {
     const env = {
       OPENCLAW_STATE_DIR: "/new/state",
@@ -49,12 +61,7 @@ describe("state + config path candidates", () => {
     const env = {
       OPENCLAW_HOME: "/srv/openclaw-home",
     } as NodeJS.ProcessEnv;
-
-    const resolvedHome = path.resolve("/srv/openclaw-home");
-    expect(resolveStateDir(env)).toBe(path.join(resolvedHome, ".openclaw"));
-
-    const candidates = resolveDefaultConfigCandidates(env);
-    expect(candidates[0]).toBe(path.join(resolvedHome, ".openclaw", "openclaw.json"));
+    expectOpenClawHomeDefaults(env);
   });
 
   it("prefers OPENCLAW_HOME over HOME for default state/config locations", () => {
@@ -62,12 +69,7 @@ describe("state + config path candidates", () => {
       OPENCLAW_HOME: "/srv/openclaw-home",
       HOME: "/home/other",
     } as NodeJS.ProcessEnv;
-
-    const resolvedHome = path.resolve("/srv/openclaw-home");
-    expect(resolveStateDir(env)).toBe(path.join(resolvedHome, ".openclaw"));
-
-    const candidates = resolveDefaultConfigCandidates(env);
-    expect(candidates[0]).toBe(path.join(resolvedHome, ".openclaw", "openclaw.json"));
+    expectOpenClawHomeDefaults(env);
   });
 
   it("orders default config candidates in a stable order", () => {

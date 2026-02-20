@@ -4,12 +4,14 @@ import {
   createInternalHookEvent,
   getRegisteredEventKeys,
   isAgentBootstrapEvent,
+  isGatewayStartupEvent,
   isMessageReceivedEvent,
   isMessageSentEvent,
   registerInternalHook,
   triggerInternalHook,
   unregisterInternalHook,
   type AgentBootstrapHookContext,
+  type GatewayStartupHookContext,
   type MessageReceivedHookContext,
   type MessageSentHookContext,
 } from "./internal-hooks.js";
@@ -182,6 +184,21 @@ describe("hooks", () => {
     it("returns false for non-bootstrap events", () => {
       const event = createInternalHookEvent("command", "new", "test-session");
       expect(isAgentBootstrapEvent(event)).toBe(false);
+    });
+  });
+
+  describe("isGatewayStartupEvent", () => {
+    it("returns true for gateway:startup events with expected context", () => {
+      const context: GatewayStartupHookContext = {
+        cfg: {},
+      };
+      const event = createInternalHookEvent("gateway", "startup", "gateway:startup", context);
+      expect(isGatewayStartupEvent(event)).toBe(true);
+    });
+
+    it("returns false for non-startup gateway events", () => {
+      const event = createInternalHookEvent("gateway", "shutdown", "gateway:shutdown", {});
+      expect(isGatewayStartupEvent(event)).toBe(false);
     });
   });
 

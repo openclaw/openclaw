@@ -1,5 +1,6 @@
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { runRegisteredCli } from "../../test-utils/command-runner.js";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 
 const startGatewayServer = vi.fn(async (_port: number, _opts?: unknown) => ({
@@ -91,6 +92,12 @@ vi.mock("./run-loop.js", () => ({
 }));
 
 describe("gateway run option collisions", () => {
+  let addGatewayRunCommand: typeof import("./run.js").addGatewayRunCommand;
+
+  beforeAll(async () => {
+    ({ addGatewayRunCommand } = await import("./run.js"));
+  });
+
   beforeEach(() => {
     resetRuntimeCapture();
     startGatewayServer.mockClear();
@@ -101,25 +108,27 @@ describe("gateway run option collisions", () => {
     runGatewayLoop.mockClear();
   });
 
-  it("forwards parent-captured options to `gateway run` subcommand", async () => {
-    const { addGatewayRunCommand } = await import("./run.js");
-    const program = new Command();
-    const gateway = addGatewayRunCommand(program.command("gateway"));
-    addGatewayRunCommand(gateway.command("run"));
+  async function runGatewayCli(argv: string[]) {
+    await runRegisteredCli({
+      register: ((program: Command) => {
+        const gateway = addGatewayRunCommand(program.command("gateway"));
+        addGatewayRunCommand(gateway.command("run"));
+      }) as (program: Command) => void,
+      argv,
+    });
+  }
 
-    await program.parseAsync(
-      [
-        "gateway",
-        "run",
-        "--token",
-        "tok_run",
-        "--allow-unconfigured",
-        "--ws-log",
-        "full",
-        "--force",
-      ],
-      { from: "user" },
-    );
+  it("forwards parent-captured options to `gateway run` subcommand", async () => {
+    await runGatewayCli([
+      "gateway",
+      "run",
+      "--token",
+      "tok_run",
+      "--allow-unconfigured",
+      "--ws-log",
+      "full",
+      "--force",
+    ]);
 
     expect(forceFreePortAndWait).toHaveBeenCalledWith(18789, expect.anything());
     expect(setGatewayWsLogStyle).toHaveBeenCalledWith("full");
@@ -129,6 +138,17 @@ describe("gateway run option collisions", () => {
         auth: expect.objectContaining({
           token: "tok_run",
         }),
+      }),
+    );
+  });
+
+  it("starts gateway when token mode has no configured token (startup bootstrap path)", async () => {
+    await runGatewayCli(["gateway", "run", "--allow-unconfigured"]);
+
+    expect(startGatewayServer).toHaveBeenCalledWith(
+      18789,
+      expect.objectContaining({
+        bind: "loopback",
       }),
     );
   });

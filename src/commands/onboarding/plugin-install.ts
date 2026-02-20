@@ -175,6 +175,12 @@ export async function ensureOnboardingPluginInstalled(params: {
       spec: entry.install.npmSpec,
       installPath: result.targetDir,
       version: result.version,
+      resolvedName: result.npmResolution?.name,
+      resolvedVersion: result.npmResolution?.version,
+      resolvedSpec: result.npmResolution?.resolvedSpec,
+      integrity: result.npmResolution?.integrity,
+      shasum: result.npmResolution?.shasum,
+      resolvedAt: result.npmResolution?.resolvedAt,
     });
     return { cfg: next, installed: true };
   }
