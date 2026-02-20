@@ -15,10 +15,11 @@ vi.mock("../../config/config.js", () => {
   };
 });
 
+const { skillsHandlers } = await import("./skills.js");
+
 describe("skills.update", () => {
   it("strips embedded CR/LF from apiKey", async () => {
     writtenConfig = null;
-    const { skillsHandlers } = await import("./skills.js");
 
     let ok: boolean | null = null;
     let error: unknown = null;
@@ -27,6 +28,10 @@ describe("skills.update", () => {
         skillKey: "brave-search",
         apiKey: "abc\r\ndef",
       },
+      req: {} as never,
+      client: null as never,
+      isWebchatConnect: () => false,
+      context: {} as never,
       respond: (success, _result, err) => {
         ok = success;
         error = err;

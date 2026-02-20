@@ -2,6 +2,18 @@
 
 set -euo pipefail
 
+# If invoked from a linked worktree copy of this script, re-exec the canonical
+# script from the repository root so behavior stays consistent across worktrees.
+script_self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+script_parent_dir="$(dirname "$script_self")"
+if common_git_dir=$(git -C "$script_parent_dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
+  canonical_repo_root="$(dirname "$common_git_dir")"
+  canonical_self="$canonical_repo_root/scripts/$(basename "${BASH_SOURCE[0]}")"
+  if [ "$script_self" != "$canonical_self" ] && [ -x "$canonical_self" ]; then
+    exec "$canonical_self" "$@"
+  fi
+fi
+
 usage() {
   cat <<USAGE
 Usage:
@@ -38,9 +50,18 @@ require_cmds() {
 }
 
 repo_root() {
-  # Resolve canonical root from script location so wrappers work from root or worktree cwd.
+  # Resolve canonical repository root from git common-dir so wrappers work
+  # the same from main checkout or any linked worktree.
   local script_dir
+  local common_git_dir
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+  if common_git_dir=$(git -C "$script_dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
+    (cd "$(dirname "$common_git_dir")" && pwd)
+    return
+  fi
+
+  # Fallback for environments where git common-dir is unavailable.
   (cd "$script_dir/.." && pwd)
 }
 
@@ -604,12 +625,54 @@ prepare_validate_commit() {
   echo "commit subject validated: $subject"
 }
 
+validate_changelog_entry_for_pr() {
+  local pr="$1"
+  local contrib="$2"
+
+  local added_lines
+  added_lines=$(git diff --unified=0 origin/main...HEAD -- CHANGELOG.md | awk '
+    /^\+\+\+/ { next }
+    /^\+/ { print substr($0, 2) }
+  ')
+
+  if [ -z "$added_lines" ]; then
+    echo "CHANGELOG.md is in diff but no added lines were detected."
+    exit 1
+  fi
+
+  local pr_pattern
+  pr_pattern="(#$pr|openclaw#$pr)"
+
+  local with_pr
+  with_pr=$(printf '%s\n' "$added_lines" | rg -in "$pr_pattern" || true)
+  if [ -z "$with_pr" ]; then
+    echo "CHANGELOG.md update must reference PR #$pr (for example, (#$pr))."
+    exit 1
+  fi
+
+  if [ -n "$contrib" ] && [ "$contrib" != "null" ]; then
+    local with_pr_and_thanks
+    with_pr_and_thanks=$(printf '%s\n' "$added_lines" | rg -in "$pr_pattern" | rg -i "thanks @$contrib" || true)
+    if [ -z "$with_pr_and_thanks" ]; then
+      echo "CHANGELOG.md update must include both PR #$pr and thanks @$contrib on the changelog entry line."
+      exit 1
+    fi
+    echo "changelog validated: found PR #$pr + thanks @$contrib"
+    return 0
+  fi
+
+  echo "changelog validated: found PR #$pr (contributor handle unavailable, skipping thanks check)"
+}
+
 prepare_gates() {
   local pr="$1"
   enter_worktree "$pr" false
 
   checkout_prep_branch "$pr"
   bootstrap_deps_if_needed
+  require_artifact .local/pr-meta.env
+  # shellcheck disable=SC1091
+  source .local/pr-meta.env
 
   local changed_files
   changed_files=$(git diff --name-only origin/main...HEAD)
@@ -626,6 +689,8 @@ prepare_gates() {
     echo "Missing CHANGELOG.md update in PR diff. This workflow requires a changelog entry."
     exit 1
   fi
+  local contrib="${PR_AUTHOR:-}"
+  validate_changelog_entry_for_pr "$pr" "$contrib"
 
   run_quiet_logged "pnpm build" ".local/gates-build.log" pnpm build
   run_quiet_logged "pnpm check" ".local/gates-check.log" pnpm check
@@ -1022,10 +1087,14 @@ EOF_COMMENT
   git branch -D "pr-$pr" 2>/dev/null || true
   git branch -D "pr-$pr-prep" 2>/dev/null || true
 
+  local pr_url
+  pr_url=$(gh pr view "$pr" --json url --jq .url)
+
   echo "merge-run complete for PR #$pr"
-  echo "merge_sha=$merge_sha"
-  echo "merge_author_email=$selected_merge_author_email"
-  echo "comment_url=$comment_url"
+  echo "merge commit: $merge_sha"
+  echo "merge author email: $selected_merge_author_email"
+  echo "completion comment: $comment_url"
+  echo "$pr_url"
 }
 
 main() {

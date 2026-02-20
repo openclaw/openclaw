@@ -53,6 +53,10 @@ describe("buildLineMessageContext", () => {
       cfg,
       account,
     });
+    expect(context).not.toBeNull();
+    if (!context) {
+      throw new Error("context missing");
+    }
 
     expect(context.ctxPayload.OriginatingTo).toBe("line:group:group-1");
     expect(context.ctxPayload.To).toBe("line:group:group-1");

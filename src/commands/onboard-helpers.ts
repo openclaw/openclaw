@@ -31,6 +31,7 @@ export function guardCancel<T>(value: T | symbol, runtime: RuntimeEnv): T {
   if (isCancel(value)) {
     cancel(stylePromptTitle("Setup cancelled.") ?? "Setup cancelled.");
     runtime.exit(0);
+    throw new Error("unreachable");
   }
   return value;
 }
@@ -73,7 +74,27 @@ export function normalizeGatewayTokenInput(value: unknown): string {
   if (typeof value !== "string") {
     return "";
   }
-  return value.trim();
+  const trimmed = value.trim();
+  // Reject the literal string "undefined" — a common bug when JS undefined
+  // gets coerced to a string via template literals or String(undefined).
+  if (trimmed === "undefined" || trimmed === "null") {
+    return "";
+  }
+  return trimmed;
+}
+
+export function validateGatewayPasswordInput(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return "Required";
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "Required";
+  }
+  if (trimmed === "undefined" || trimmed === "null") {
+    return 'Cannot be the literal string "undefined" or "null"';
+  }
+  return undefined;
 }
 
 export function printWizardHeader(runtime: RuntimeEnv) {

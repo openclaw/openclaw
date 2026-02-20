@@ -22,6 +22,16 @@ export function readBody(req: BrowserRequest): Record<string, unknown> {
   return body;
 }
 
+export function resolveTargetIdFromBody(body: Record<string, unknown>): string | undefined {
+  const targetId = typeof body.targetId === "string" ? body.targetId.trim() : "";
+  return targetId || undefined;
+}
+
+export function resolveTargetIdFromQuery(query: Record<string, unknown>): string | undefined {
+  const targetId = typeof query.targetId === "string" ? query.targetId.trim() : "";
+  return targetId || undefined;
+}
+
 export function handleRouteError(ctx: BrowserRouteContext, res: BrowserResponse, err: unknown) {
   const mapped = ctx.mapTabError(err);
   if (mapped) {
@@ -65,4 +75,69 @@ export async function requirePwAi(
     ].join("\n"),
   );
   return null;
+}
+
+type RouteTabContext = {
+  profileCtx: ProfileContext;
+  tab: Awaited<ReturnType<ProfileContext["ensureTabAvailable"]>>;
+  cdpUrl: string;
+};
+
+type RouteTabPwContext = RouteTabContext & {
+  pw: PwAiModule;
+};
+
+type RouteWithTabParams<T> = {
+  req: BrowserRequest;
+  res: BrowserResponse;
+  ctx: BrowserRouteContext;
+  targetId?: string;
+  run: (ctx: RouteTabContext) => Promise<T>;
+};
+
+export async function withRouteTabContext<T>(
+  params: RouteWithTabParams<T>,
+): Promise<T | undefined> {
+  const profileCtx = resolveProfileContext(params.req, params.res, params.ctx);
+  if (!profileCtx) {
+    return undefined;
+  }
+  try {
+    const tab = await profileCtx.ensureTabAvailable(params.targetId);
+    return await params.run({
+      profileCtx,
+      tab,
+      cdpUrl: profileCtx.profile.cdpUrl,
+    });
+  } catch (err) {
+    handleRouteError(params.ctx, params.res, err);
+    return undefined;
+  }
+}
+
+type RouteWithPwParams<T> = {
+  req: BrowserRequest;
+  res: BrowserResponse;
+  ctx: BrowserRouteContext;
+  targetId?: string;
+  feature: string;
+  run: (ctx: RouteTabPwContext) => Promise<T>;
+};
+
+export async function withPlaywrightRouteContext<T>(
+  params: RouteWithPwParams<T>,
+): Promise<T | undefined> {
+  return await withRouteTabContext({
+    req: params.req,
+    res: params.res,
+    ctx: params.ctx,
+    targetId: params.targetId,
+    run: async ({ profileCtx, tab, cdpUrl }) => {
+      const pw = await requirePwAi(params.res, params.feature);
+      if (!pw) {
+        return undefined as T | undefined;
+      }
+      return await params.run({ profileCtx, tab, cdpUrl, pw });
+    },
+  });
 }

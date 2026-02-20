@@ -22,7 +22,10 @@ function readParentIdParam(params: Record<string, unknown>): string | null | und
 }
 
 export async function handleDiscordMessageAction(
-  ctx: Pick<ChannelMessageActionContext, "action" | "params" | "cfg" | "accountId">,
+  ctx: Pick<
+    ChannelMessageActionContext,
+    "action" | "params" | "cfg" | "accountId" | "requesterSenderId" | "toolContext"
+  >,
 ): Promise<AgentToolResult<unknown>> {
   const { action, params, cfg } = ctx;
   const accountId = ctx.accountId ?? readStringParam(params, "accountId");
@@ -34,13 +37,28 @@ export async function handleDiscordMessageAction(
 
   if (action === "send") {
     const to = readStringParam(params, "to", { required: true });
+    const asVoice = params.asVoice === true;
+    const rawComponents = params.components;
+    const hasComponents =
+      Boolean(rawComponents) &&
+      (typeof rawComponents === "function" || typeof rawComponents === "object");
+    const components = hasComponents ? rawComponents : undefined;
     const content = readStringParam(params, "message", {
-      required: true,
+      required: !asVoice && !hasComponents,
       allowEmpty: true,
     });
-    const mediaUrl = readStringParam(params, "media", { trim: false });
+    // Support media, path, and filePath for media URL
+    const mediaUrl =
+      readStringParam(params, "media", { trim: false }) ??
+      readStringParam(params, "path", { trim: false }) ??
+      readStringParam(params, "filePath", { trim: false });
+    const filename = readStringParam(params, "filename");
     const replyTo = readStringParam(params, "replyTo");
-    const embeds = Array.isArray(params.embeds) ? params.embeds : undefined;
+    const rawEmbeds = params.embeds;
+    const embeds = Array.isArray(rawEmbeds) ? rawEmbeds : undefined;
+    const silent = params.silent === true;
+    const sessionKey = readStringParam(params, "__sessionKey");
+    const agentId = readStringParam(params, "__agentId");
     return await handleDiscordAction(
       {
         action: "sendMessage",
@@ -48,8 +66,14 @@ export async function handleDiscordMessageAction(
         to,
         content,
         mediaUrl: mediaUrl ?? undefined,
+        filename: filename ?? undefined,
         replyTo: replyTo ?? undefined,
+        components,
         embeds,
+        asVoice,
+        silent,
+        __sessionKey: sessionKey ?? undefined,
+        __agentId: agentId ?? undefined,
       },
       cfg,
     );

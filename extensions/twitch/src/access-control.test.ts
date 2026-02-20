@@ -5,7 +5,9 @@ import { checkTwitchAccessControl, extractMentions } from "./access-control.js";
 describe("checkTwitchAccessControl", () => {
   const mockAccount: TwitchAccountConfig = {
     username: "testbot",
-    token: "oauth:test",
+    accessToken: "test",
+    clientId: "test-client-id",
+    channel: "testchannel",
   };
 
   const mockMessage: TwitchChatMessage = {

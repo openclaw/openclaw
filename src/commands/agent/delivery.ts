@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { AgentCommandOpts } from "./types.js";
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { AGENT_LANE_NESTED } from "../../agents/lanes.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
@@ -178,12 +179,18 @@ export async function deliverAgentCommandResult(params: {
   }
   if (deliver && deliveryChannel && !isInternalMessageChannel(deliveryChannel)) {
     if (deliveryTarget) {
+      const deliveryAgentId =
+        opts.agentId ??
+        (opts.sessionKey
+          ? resolveSessionAgentId({ sessionKey: opts.sessionKey, config: cfg })
+          : undefined);
       await deliverOutboundPayloads({
         cfg,
         channel: deliveryChannel,
         to: deliveryTarget,
         accountId: resolvedAccountId,
         payloads: deliveryPayloads,
+        agentId: deliveryAgentId,
         replyToId: resolvedReplyToId ?? null,
         threadId: resolvedThreadTarget ?? null,
         bestEffort: bestEffortDeliver,

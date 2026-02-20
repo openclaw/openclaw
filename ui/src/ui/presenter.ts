@@ -71,9 +71,13 @@ export function formatCronPayload(job: CronJob) {
   const delivery = job.delivery;
   if (delivery && delivery.mode !== "none") {
     const target =
-      delivery.channel || delivery.to
-        ? ` (${delivery.channel ?? "last"}${delivery.to ? ` -> ${delivery.to}` : ""})`
-        : "";
+      delivery.mode === "webhook"
+        ? delivery.to
+          ? ` (${delivery.to})`
+          : ""
+        : delivery.channel || delivery.to
+          ? ` (${delivery.channel ?? "last"}${delivery.to ? ` -> ${delivery.to}` : ""})`
+          : "";
     return `${base} · ${delivery.mode}${target}`;
   }
   return base;

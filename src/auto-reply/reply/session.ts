@@ -26,6 +26,7 @@ import {
   type SessionScope,
   updateSessionStore,
 } from "../../config/sessions.js";
+import { archiveSessionTranscripts } from "../../gateway/session-utils.fs.js";
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
@@ -55,12 +56,13 @@ export type SessionInitResult = {
 
 function forkSessionFromParent(params: {
   parentEntry: SessionEntry;
+  agentId: string;
   sessionsDir: string;
 }): { sessionId: string; sessionFile: string } | null {
   const parentSessionFile = resolveSessionFilePath(
     params.parentEntry.sessionId,
     params.parentEntry,
-    { sessionsDir: params.sessionsDir },
+    { agentId: params.agentId, sessionsDir: params.sessionsDir },
   );
   if (!parentSessionFile || !fs.existsSync(parentSessionFile)) {
     return null;
@@ -121,7 +123,13 @@ export async function initSessionState(params: {
   const sessionScope = sessionCfg?.scope ?? "per-sender";
   const storePath = resolveStorePath(sessionCfg?.store, { agentId });
 
-  const sessionStore: Record<string, SessionEntry> = loadSessionStore(storePath);
+  // CRITICAL: Skip cache to ensure fresh data when resolving session identity.
+  // Stale cache (especially with multiple gateway processes or on Windows where
+  // mtime granularity may miss rapid writes) can cause incorrect sessionId
+  // generation, leading to orphaned transcript files. See #17971.
+  const sessionStore: Record<string, SessionEntry> = loadSessionStore(storePath, {
+    skipCache: true,
+  });
   let sessionKey: string | undefined;
   let sessionEntry: SessionEntry;
 
@@ -225,11 +233,7 @@ export async function initSessionState(params: {
     ? evaluateSessionFreshness({ updatedAt: entry.updatedAt, now, policy: resetPolicy }).fresh
     : false;
 
-  // When this is the first user message in a thread, the session entry may already
-  // exist (created by recordInboundSession in prepare.ts), but we should still treat
-  // it as a new session so that thread context (history/starter/fork) is applied.
-  const forceNewForThread = Boolean(ctx.IsFirstThreadTurn) && !resetTriggered;
-  if (!isNewSession && freshEntry && !forceNewForThread) {
+  if (!isNewSession && freshEntry) {
     sessionId = entry.sessionId;
     systemSent = entry.systemSent ?? false;
     abortedLastRun = entry.abortedLastRun ?? false;
@@ -252,6 +256,8 @@ export async function initSessionState(params: {
       persistedVerbose = entry.verboseLevel;
       persistedReasoning = entry.reasoningLevel;
       persistedTtsAuto = entry.ttsAuto;
+      persistedModelOverride = entry.modelOverride;
+      persistedProviderOverride = entry.providerOverride;
     }
   }
 
@@ -260,7 +266,10 @@ export async function initSessionState(params: {
   const lastChannelRaw = (ctx.OriginatingChannel as string | undefined) || baseEntry?.lastChannel;
   const lastToRaw = ctx.OriginatingTo || ctx.To || baseEntry?.lastTo;
   const lastAccountIdRaw = ctx.AccountId || baseEntry?.lastAccountId;
-  const lastThreadIdRaw = ctx.MessageThreadId || baseEntry?.lastThreadId;
+  // Only fall back to persisted threadId for thread sessions.  Non-thread
+  // sessions (e.g. DM without topics) must not inherit a stale threadId from a
+  // previous interaction that happened inside a topic/thread.
+  const lastThreadIdRaw = ctx.MessageThreadId || (isThread ? baseEntry?.lastThreadId : undefined);
   const deliveryFields = normalizeSessionDeliveryFields({
     deliveryContext: {
       channel: lastChannelRaw,
@@ -335,6 +344,7 @@ export async function initSessionState(params: {
     );
     const forked = forkSessionFromParent({
       parentEntry: sessionStore[parentSessionKey],
+      agentId,
       sessionsDir: path.dirname(storePath),
     });
     if (forked) {
@@ -358,7 +368,6 @@ export async function initSessionState(params: {
     // Clear stale token metrics from previous session so /status doesn't
     // display the old session's context usage after /new or /reset.
     sessionEntry.totalTokens = undefined;
-    sessionEntry.totalTokensFresh = false;
     sessionEntry.inputTokens = undefined;
     sessionEntry.outputTokens = undefined;
     sessionEntry.contextTokens = undefined;
@@ -382,6 +391,17 @@ export async function initSessionState(params: {
         }),
     },
   );
+
+  // Archive old transcript so it doesn't accumulate on disk (#14869).
+  if (previousSessionEntry?.sessionId) {
+    archiveSessionTranscripts({
+      sessionId: previousSessionEntry.sessionId,
+      storePath,
+      sessionFile: previousSessionEntry.sessionFile,
+      agentId,
+      reason: "reset",
+    });
+  }
 
   const sessionCtx: TemplateContext = {
     ...ctx,

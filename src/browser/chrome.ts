@@ -80,7 +80,7 @@ type ChromeVersion = {
 
 async function fetchChromeVersion(cdpUrl: string, timeoutMs = 500): Promise<ChromeVersion | null> {
   const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  const t = setTimeout(ctrl.abort.bind(ctrl), timeoutMs);
   try {
     const versionUrl = appendCdpPath(cdpUrl, "/json/version");
     const res = await fetch(versionUrl, {
@@ -216,6 +216,11 @@ export async function launchOpenClawChrome(
 
     // Stealth: hide navigator.webdriver from automation detection (#80)
     args.push("--disable-blink-features=AutomationControlled");
+
+    // Append user-configured extra arguments (e.g., stealth flags, window size)
+    if (resolved.extraArgs.length > 0) {
+      args.push(...resolved.extraArgs);
+    }
 
     // Always open a blank tab to ensure a target exists.
     args.push("about:blank");

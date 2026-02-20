@@ -72,7 +72,10 @@ async function ensureSessionHeader(params: {
     timestamp: new Date().toISOString(),
     cwd: process.cwd(),
   };
-  await fs.promises.writeFile(params.sessionFile, `${JSON.stringify(header)}\n`, "utf-8");
+  await fs.promises.writeFile(params.sessionFile, `${JSON.stringify(header)}\n`, {
+    encoding: "utf-8",
+    mode: 0o600,
+  });
 }
 
 export async function appendAssistantMessageToSessionTranscript(params: {
@@ -106,6 +109,7 @@ export async function appendAssistantMessageToSessionTranscript(params: {
   let sessionFile: string;
   try {
     sessionFile = resolveSessionFilePath(entry.sessionId, entry, {
+      agentId: params.agentId,
       sessionsDir: path.dirname(storePath),
     });
   } catch (err) {

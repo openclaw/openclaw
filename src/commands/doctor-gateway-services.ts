@@ -50,6 +50,16 @@ function normalizeExecutablePath(value: string): string {
   return path.resolve(value);
 }
 
+function resolveGatewayAuthToken(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): string | undefined {
+  const configToken = cfg.gateway?.auth?.token?.trim();
+  if (configToken) {
+    return configToken;
+  }
+  const envToken = env.OPENCLAW_GATEWAY_TOKEN ?? env.CLAWDBOT_GATEWAY_TOKEN;
+  const trimmedEnvToken = envToken?.trim();
+  return trimmedEnvToken || undefined;
+}
+
 function extractDetailPath(detail: string, prefix: string): string | null {
   if (!detail.startsWith(prefix)) {
     return null;
@@ -115,9 +125,11 @@ export async function maybeRepairGatewayServiceConfig(
     return;
   }
 
+  const expectedGatewayToken = resolveGatewayAuthToken(cfg, process.env);
   const audit = await auditGatewayServiceConfig({
     env: process.env,
     command,
+    expectedGatewayToken,
   });
   const needsNodeRuntime = needsNodeRuntimeMigration(audit.issues);
   const systemNodeInfo = needsNodeRuntime
@@ -140,7 +152,7 @@ export async function maybeRepairGatewayServiceConfig(
   const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
     env: process.env,
     port,
-    token: cfg.gateway?.auth?.token ?? process.env.OPENCLAW_GATEWAY_TOKEN,
+    token: expectedGatewayToken,
     runtime: needsNodeRuntime && systemNodePath ? "node" : runtimeChoice,
     nodePath: systemNodePath ?? undefined,
     warn: (message, title) => note(message, title),

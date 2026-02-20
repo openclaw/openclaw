@@ -15,9 +15,11 @@ import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
+import { resolveRunAuthProfile } from "./agent-runner-utils.js";
 import {
   applyReplyThreading,
   filterMessagingToolDuplicates,
+  filterMessagingToolMediaDuplicates,
   shouldSuppressMessagingToolReplies,
 } from "./reply-payloads.js";
 import { resolveReplyToMode } from "./reply-threading.js";
@@ -134,8 +136,7 @@ export function createFollowupRunner(params: {
             resolveAgentIdFromSessionKey(queued.run.sessionKey),
           ),
           run: (provider, model) => {
-            const authProfileId =
-              provider === queued.run.provider ? queued.run.authProfileId : undefined;
+            const authProfile = resolveRunAuthProfile(queued.run, provider);
             return runEmbeddedPiAgent({
               sessionId: queued.run.sessionId,
               sessionKey: queued.run.sessionKey,
@@ -161,11 +162,11 @@ export function createFollowupRunner(params: {
               enforceFinalTag: queued.run.enforceFinalTag,
               provider,
               model,
-              authProfileId,
-              authProfileIdSource: authProfileId ? queued.run.authProfileIdSource : undefined,
+              ...authProfile,
               thinkLevel: queued.run.thinkLevel,
               verboseLevel: queued.run.verboseLevel,
               reasoningLevel: queued.run.reasoningLevel,
+              suppressToolErrorWarnings: opts?.suppressToolErrorWarnings,
               execOverrides: queued.run.execOverrides,
               bashElevated: queued.run.bashElevated,
               timeoutMs: queued.run.timeoutMs,
@@ -176,8 +177,7 @@ export function createFollowupRunner(params: {
                   return;
                 }
                 const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
-                const willRetry = Boolean(evt.data.willRetry);
-                if (phase === "end" && !willRetry) {
+                if (phase === "end") {
                   autoCompactionCompleted = true;
                 }
               },
@@ -193,9 +193,9 @@ export function createFollowupRunner(params: {
         return;
       }
 
-      const usage = runResult.meta.agentMeta?.usage;
-      const promptTokens = runResult.meta.agentMeta?.promptTokens;
-      const modelUsed = runResult.meta.agentMeta?.model ?? fallbackModel ?? defaultModel;
+      const usage = runResult.meta?.agentMeta?.usage;
+      const promptTokens = runResult.meta?.agentMeta?.promptTokens;
+      const modelUsed = runResult.meta?.agentMeta?.model ?? fallbackModel ?? defaultModel;
       const contextTokensUsed =
         agentCfgContextTokens ??
         lookupContextTokens(modelUsed) ??
@@ -207,7 +207,7 @@ export function createFollowupRunner(params: {
           storePath,
           sessionKey,
           usage,
-          lastCallUsage: runResult.meta.agentMeta?.lastCallUsage,
+          lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
           promptTokens,
           modelUsed,
           providerUsed: fallbackProvider,
@@ -252,13 +252,17 @@ export function createFollowupRunner(params: {
         payloads: replyTaggedPayloads,
         sentTexts: runResult.messagingToolSentTexts ?? [],
       });
+      const mediaFilteredPayloads = filterMessagingToolMediaDuplicates({
+        payloads: dedupedPayloads,
+        sentMediaUrls: runResult.messagingToolSentMediaUrls ?? [],
+      });
       const suppressMessagingToolReplies = shouldSuppressMessagingToolReplies({
         messageProvider: queued.run.messageProvider,
         messagingToolSentTargets: runResult.messagingToolSentTargets,
         originatingTo: queued.originatingTo,
         accountId: queued.run.agentAccountId,
       });
-      const finalPayloads = suppressMessagingToolReplies ? [] : dedupedPayloads;
+      const finalPayloads = suppressMessagingToolReplies ? [] : mediaFilteredPayloads;
 
       if (finalPayloads.length === 0) {
         return;
@@ -270,7 +274,7 @@ export function createFollowupRunner(params: {
           sessionStore,
           sessionKey,
           storePath,
-          lastCallUsage: runResult.meta.agentMeta?.lastCallUsage,
+          lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
           contextTokensUsed,
         });
         if (queued.run.verboseLevel && queued.run.verboseLevel !== "off") {
