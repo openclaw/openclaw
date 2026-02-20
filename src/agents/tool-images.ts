@@ -43,6 +43,51 @@ function isTextBlock(block: unknown): block is TextContentBlock {
   return rec.type === "text" && typeof rec.text === "string";
 }
 
+/**
+ * Matches a data URL prefix: `data:<mime>;base64,`
+ * Capture group 1 = MIME type, rest after the comma is raw base64.
+ */
+const DATA_URL_RE = /^data:([^;,]+);base64,/i;
+
+/**
+ * Validate that a string is strict base64 (RFC 4648 §4).
+ * Anthropic's API rejects data that Node.js `Buffer.from(s,"base64")` silently accepts,
+ * so we need an explicit check.
+ *
+ * Strips embedded whitespace (MIME line breaks) before validating.
+ * Returns the cleaned base64 string on success, or null on failure.
+ */
+function validateAndCleanBase64(str: string): string | null {
+  if (!str || str.length === 0) {
+    return null;
+  }
+  // Strip any embedded whitespace (MIME-style line breaks)
+  const cleaned = str.replace(/\s+/g, "");
+  if (cleaned.length === 0) {
+    return null;
+  }
+  // Must be a multiple of 4 and only contain valid chars
+  if (cleaned.length % 4 !== 0) {
+    return null;
+  }
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(cleaned)) {
+    return null;
+  }
+  return cleaned;
+}
+
+/**
+ * If the data is a `data:` URL, strip the prefix and return the raw base64 + detected MIME.
+ * Otherwise return the data as-is.
+ */
+function stripDataUrlPrefix(data: string): { data: string; mimeType?: string } {
+  const match = DATA_URL_RE.exec(data);
+  if (match) {
+    return { data: data.slice(match[0].length), mimeType: match[1] };
+  }
+  return { data };
+}
+
 function inferMimeTypeFromBase64(base64: string): string | undefined {
   const trimmed = base64.trim();
   if (!trimmed) {
@@ -199,7 +244,7 @@ export async function sanitizeContentBlocksImages(
       continue;
     }
 
-    const data = block.data.trim();
+    let data = block.data.trim();
     if (!data) {
       out.push({
         type: "text",
@@ -208,9 +253,28 @@ export async function sanitizeContentBlocksImages(
       continue;
     }
 
+    // Strip data URL prefix if present (e.g. "data:image/png;base64,iVBOR...")
+    // Some code paths may store the full data URL instead of raw base64.
+    const stripped = stripDataUrlPrefix(data);
+    data = stripped.data;
+
+    // Validate and clean base64 strictly — Anthropic's API rejects data that
+    // Node.js Buffer.from(s,"base64") silently accepts (invalid chars, bad
+    // padding, embedded whitespace).
+    const cleanedBase64 = validateAndCleanBase64(data);
+    if (!cleanedBase64) {
+      log.warn("Image block has invalid base64 data; omitting", { label, dataLen: data.length });
+      out.push({
+        type: "text",
+        text: `[${label}] omitted image with invalid base64 data`,
+      } satisfies TextContentBlock);
+      continue;
+    }
+    data = cleanedBase64;
+
     try {
       const inferredMimeType = inferMimeTypeFromBase64(data);
-      const mimeType = inferredMimeType ?? block.mimeType;
+      const mimeType = inferredMimeType ?? stripped.mimeType ?? block.mimeType;
       const resized = await resizeImageBase64IfNeeded({
         base64: data,
         mimeType,
