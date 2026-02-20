@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+exec "/mnt/c/nvm4w/nodejs/node.exe" "$@"

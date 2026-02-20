@@ -51,7 +51,7 @@ describe("fetchCodexUsage", () => {
     expect(result.plan).toBe("Plus ($12.50)");
     expect(result.windows).toEqual([
       { label: "3h", usedPercent: 35.5, resetAt: 1_700_000_000_000 },
-      { label: "Day", usedPercent: 75, resetAt: 1_700_050_000_000 },
+      { label: "Week", usedPercent: 75, resetAt: 1_700_050_000_000 },
     ]);
   });
 });
