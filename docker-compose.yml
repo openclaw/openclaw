@@ -61,7 +61,7 @@ services:
     init: true
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:9222/json/version"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:9222/json/version"]
       interval: 15s
       timeout: 5s
       retries: 5
