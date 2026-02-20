@@ -189,7 +189,7 @@ export class GatewayClient {
           void clearDevicePairing(deviceId).catch((err) => {
             logDebug(`failed clearing stale device pairing for device ${deviceId}: ${String(err)}`);
           });
-          logDebug(`cleared stale device-auth token and pairing for device ${deviceId}`);
+          logDebug(`cleared stale device-auth token for device ${deviceId}`);
         } catch (err) {
           logDebug(
             `failed clearing stale device-auth token for device ${deviceId}: ${String(err)}`,
