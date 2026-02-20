@@ -2,6 +2,7 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { Api, AssistantMessage, Model } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import type { SessionSystemPromptReport } from "../../../config/sessions/types.js";
+import type { ContextEngine } from "../../../context-engine/types.js";
 import type { MessagingToolSend } from "../../pi-embedded-messaging.js";
 import type { AuthStorage, ModelRegistry } from "../../pi-model-discovery.js";
 import type { NormalizedUsage } from "../../usage.js";
@@ -13,6 +14,10 @@ type EmbeddedRunAttemptBase = Omit<
 >;
 
 export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
+  /** Pluggable context engine for ingest/assemble/compact lifecycle. */
+  contextEngine?: ContextEngine;
+  /** Resolved model context window in tokens for assemble/compact budgeting. */
+  contextTokenBudget?: number;
   provider: string;
   modelId: string;
   model: Model<Api>;
