@@ -54,7 +54,9 @@ export function getAgentScopedMediaLocalRoots(
   const extra = cfg.messages?.mediaLocalRoots;
   if (extra) {
     for (const dir of extra) {
-      const resolved = path.resolve(dir);
+      const trimmed = dir.trim();
+      if (!trimmed || !path.isAbsolute(trimmed)) continue;
+      const resolved = path.resolve(trimmed);
       if (!roots.includes(resolved)) {
         roots.push(resolved);
       }
