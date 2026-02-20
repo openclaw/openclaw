@@ -33,6 +33,7 @@ const STATE_FILE_PATH = path.join(os.homedir(), ".openclaw", "extensions", "emai
 
 let imapConnection: Imap | null = null;
 let smtpTransporter: nodemailer.Transporter | null = null;
+let currentConfig: EmailConfig | null = null;
 let checkTimer: NodeJS.Timeout | null = null;
 let messageHandler:
   | ((
@@ -152,7 +153,7 @@ function openInbox(cb: (err: Error | null, box?: any) => void): void {
     cb(new Error("IMAP connection not initialized"));
     return;
   }
-  imapConnection.openBox("INBOX", false, cb);
+  imapConnection.openBox("INBOX", cb);
 }
 
 function formatDateForImap(date: Date): string {
@@ -190,7 +191,7 @@ function checkEmail(): void {
     `[EMAIL PLUGIN] Searching for emails since ${dateStr} (last processed: ${currentState.lastProcessedTimestamp})`,
   );
 
-  imapConnection.search([["SINCE", dateStr]], (err, results) => {
+  imapConnection.search([["SINCE", dateStr]], (err: Error | null, results: number[]) => {
     if (err) {
       console.error("[EMAIL PLUGIN] Email search error:", err);
       return;
@@ -203,21 +204,21 @@ function checkEmail(): void {
 
     console.log(`[EMAIL PLUGIN] Found ${results.length} email(s) since ${dateStr}`);
 
-    const fetch = imapConnection.fetch(results, { bodies: "", markSeen: false });
+    const fetch = imapConnection!.fetch(results, { bodies: "", markSeen: false });
 
-    fetch.on("message", (msg) => {
+    fetch.on("message", (msg: any) => {
       let uid: number | null = null;
 
       // Capture the UID from message attributes
-      msg.on("attributes", (attrs) => {
+      msg.on("attributes", (attrs: any) => {
         uid = attrs.uid;
       });
 
-      msg.on("body", async (stream) => {
+      msg.on("body", async (stream: NodeJS.ReadableStream) => {
         try {
           const parsed = await simpleParser(stream);
 
-          const from = parsed.from?.text || "";
+          const from = parsed.from?.value?.[0]?.address || "";
           const fromEmail = extractEmail(from);
           const subject = parsed.subject || "";
           const body = parsed.text || parsed.html || "";
@@ -258,7 +259,7 @@ function checkEmail(): void {
               markMessageAsProcessed(messageId);
 
               // Mark email as \Seen after successful processing
-              imapConnection!.addFlags(uid, ["\\Seen"], (err) => {
+              imapConnection!.addFlags(uid, ["\\Seen"], (err: Error | null) => {
                 if (err) {
                   console.error(`[EMAIL PLUGIN] Failed to mark email as seen:`, err);
                 } else {
@@ -284,11 +285,11 @@ function checkEmail(): void {
       });
     });
 
-    fetch.once("error", (err) => {
+    fetch.on("error", (err: Error) => {
       console.error("[EMAIL PLUGIN] Email fetch error:", err);
     });
 
-    fetch.once("end", () => {
+    fetch.on("end", () => {
       console.log("[EMAIL PLUGIN] Email check complete");
     });
   });
@@ -310,6 +311,7 @@ export function startEmail(
   // Load persistent state
   loadState();
 
+  currentConfig = config;
   messageHandler = handler;
   allowedSenders = (config.allowedSenders || []).map((email) => email.trim().toLowerCase());
 
@@ -363,15 +365,16 @@ export async function sendEmail(
   }
 
   try {
-    const mailOptions: nodemailer.SendMailOptions = {
-      from: smtpTransporter.options.auth?.user,
+    const mailOptions: nodemailer.MailOptions = {
+      from: currentConfig?.smtp.user,
       to: to,
       subject: subject.startsWith("Re:") ? subject : `Re: ${subject}`,
       text: body,
     };
 
     if (inReplyTo) {
-      mailOptions.headers = { "In-Reply-To": inReplyTo, References: inReplyTo };
+      mailOptions.inReplyTo = inReplyTo;
+      mailOptions.references = inReplyTo;
     }
 
     await smtpTransporter.sendMail(mailOptions);
@@ -399,6 +402,7 @@ export function stopEmail(): void {
     smtpTransporter = null;
   }
 
+  currentConfig = null;
   messageHandler = null;
   allowedSenders = [];
   // Don't clear currentState, it should persist

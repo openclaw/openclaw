@@ -84,9 +84,6 @@ const emailPlugin: ChannelPlugin<EmailAccount> = {
   },
   gateway: {
     startAccount: async (ctx) => {
-      // Store runtime for later use
-      runtime = ctx.runtime as PluginRuntime;
-
       const account = ctx.account as EmailAccount;
 
       if (!account || !account.enabled) {
@@ -175,7 +172,7 @@ const emailPlugin: ChannelPlugin<EmailAccount> = {
             cfg: ctx.cfg,
             dispatcherOptions: {
               responsePrefix: undefined,
-              humanDelay: core.reply.resolveEffectiveMessagesConfig(ctx.cfg, undefined).humanDelay,
+              humanDelay: core.reply.resolveHumanDelayConfig(ctx.cfg, "default"),
               deliver: async (payload, info) => {
                 // Send the reply via email
                 const replyText = payload.text || "";
@@ -230,21 +227,30 @@ const emailPlugin: ChannelPlugin<EmailAccount> = {
       // Parse the target: format is "recipientEmail|subject|messageId"
       const match = to.match(/^([^|]+)\|([^|]+)\|(.+)$/);
       if (!match) {
-        return { ok: false, error: "Invalid email target format" };
+        return {
+          ok: false,
+          error: "Invalid email target format",
+          channel: "email" as const,
+          messageId: `error-${Date.now()}`,
+        };
       }
 
       const [, recipientEmail, subject, messageId] = match;
 
       const success = await sendEmail(recipientEmail, subject, text, messageId);
-      return { ok: success };
+      return {
+        ok: success,
+        channel: "email" as const,
+        messageId: success ? messageId : `failed-${Date.now()}`,
+      };
     },
   },
   messaging: {
-    normalizeTarget: ({ to }) => {
+    normalizeTarget: (raw: string) => {
       // Convert email address to target format: "email|subject|messageId"
       // We store the context in dispatch, so we can retrieve it here
       // For now, return the email as-is (it will be formatted in dispatch)
-      return to;
+      return raw;
     },
   },
 };
