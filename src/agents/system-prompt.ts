@@ -442,7 +442,7 @@ export function buildAgentSystemPrompt(params: {
     "- openclaw gateway status",
     "- openclaw gateway start",
     "- openclaw gateway stop",
-    "- openclaw gateway restart",
+    "- openclaw gateway restart (WARNING: does not preserve session context; prefer 'gateway' tool)",
     "If unsure, ask the user to run `openclaw help` (or `openclaw gateway --help`) and paste the output.",
     "",
     ...skillsSection,
