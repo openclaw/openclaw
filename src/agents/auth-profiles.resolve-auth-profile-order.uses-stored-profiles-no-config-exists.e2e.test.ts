@@ -49,6 +49,74 @@ describe("resolveAuthProfileOrder", () => {
     });
     expect(order).toEqual(["minimax:prod"]);
   });
+  it("falls back to stored provider profiles when config profile ids drift", () => {
+    const order = resolveAuthProfileOrder({
+      cfg: {
+        auth: {
+          profiles: {
+            "openai-codex:default": {
+              provider: "openai-codex",
+              mode: "oauth",
+            },
+          },
+          order: {
+            "openai-codex": ["openai-codex:default"],
+          },
+        },
+      },
+      store: {
+        version: 1,
+        profiles: {
+          "openai-codex:user@example.com": {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "access-token",
+            refresh: "refresh-token",
+            expires: Date.now() + 60_000,
+          },
+        },
+      },
+      provider: "openai-codex",
+    });
+    expect(order).toEqual(["openai-codex:user@example.com"]);
+  });
+  it("does not bypass explicit ids when the configured profile exists but is invalid", () => {
+    const order = resolveAuthProfileOrder({
+      cfg: {
+        auth: {
+          profiles: {
+            "openai-codex:default": {
+              provider: "openai-codex",
+              mode: "token",
+            },
+          },
+          order: {
+            "openai-codex": ["openai-codex:default"],
+          },
+        },
+      },
+      store: {
+        version: 1,
+        profiles: {
+          "openai-codex:default": {
+            type: "token",
+            provider: "openai-codex",
+            token: "expired-token",
+            expires: Date.now() - 1_000,
+          },
+          "openai-codex:user@example.com": {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "access-token",
+            refresh: "refresh-token",
+            expires: Date.now() + 60_000,
+          },
+        },
+      },
+      provider: "openai-codex",
+    });
+    expect(order).toEqual([]);
+  });
   it("drops explicit order entries that belong to another provider", () => {
     const order = resolveAuthProfileOrder({
       cfg: {

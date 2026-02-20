@@ -256,6 +256,8 @@ export async function initSessionState(params: {
       persistedVerbose = entry.verboseLevel;
       persistedReasoning = entry.reasoningLevel;
       persistedTtsAuto = entry.ttsAuto;
+      persistedModelOverride = entry.modelOverride;
+      persistedProviderOverride = entry.providerOverride;
     }
   }
 
