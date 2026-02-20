@@ -762,6 +762,12 @@ export function attachGatewayWsMessageHandler(params: {
                   }
                 }
               }
+            } else {
+              logUpgradeAudit("scope-upgrade", pairedRoles, undefined);
+              const ok = await requirePairing("scope-upgrade");
+              if (!ok) {
+                return;
+              }
             }
 
             await updatePairedDeviceMetadata(device.id, {
