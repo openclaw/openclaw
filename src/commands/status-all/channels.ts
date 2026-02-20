@@ -262,7 +262,7 @@ function summarizeTokenConfig(params: {
     const hint = botHint || appHint ? ` (bot ${botHint || "?"}, app ${appHint || "?"})` : "";
     return {
       state: "ok",
-      detail: `tokens ok (bot ${botSources.label}, app ${appSources.label})${hint} · accounts ${ready.length}/${enabled.length || 1}`,
+      detail: `tokens ok (bot ${botSources.label}, app ${appSources.label})${hint} · accounts ${ready.length}/${enabled.length}`,
     };
   }
 
@@ -286,7 +286,7 @@ function summarizeTokenConfig(params: {
 
     return {
       state: "ok",
-      detail: `bot token config${hint} · accounts ${ready.length}/${enabled.length || 1}`,
+      detail: `bot token config${hint} · accounts ${ready.length}/${enabled.length}`,
     };
   }
 
@@ -306,7 +306,7 @@ function summarizeTokenConfig(params: {
     : "";
   return {
     state: "ok",
-    detail: `token ${sources.label}${hint} · accounts ${ready.length}/${enabled.length || 1}`,
+    detail: `token ${sources.label}${hint} · accounts ${ready.length}/${enabled.length}`,
   };
 }
 
@@ -435,7 +435,7 @@ export async function buildChannelsTable(
           extra.push(`auth ${formatTimeAgo(link.authAgeMs)}`);
         }
         if (accounts.length > 1 || plugin.meta.forceAccountBinding) {
-          extra.push(`accounts ${accounts.length || 1}`);
+          extra.push(`accounts ${accounts.length}`);
         }
         return extra.length > 0 ? `${base} · ${extra.join(" · ")}` : base;
       }
@@ -449,7 +449,7 @@ export async function buildChannelsTable(
         if (accounts.length <= 1 && !plugin.meta.forceAccountBinding) {
           return head;
         }
-        return `${head} · accounts ${configuredAccounts.length}/${enabledAccounts.length || 1}`;
+        return `${head} · accounts ${configuredAccounts.length}/${enabledAccounts.length}`;
       }
 
       const reason =
