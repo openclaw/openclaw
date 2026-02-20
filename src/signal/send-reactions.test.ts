@@ -30,36 +30,39 @@ describe("sendReactionSignal", () => {
     rpcMock.mockReset().mockResolvedValue({ timestamp: 123 });
   });
 
-  it("uses recipients array and targetAuthor for uuid dms", async () => {
+  it("sends recipient as array for DM reactions", async () => {
     await sendReactionSignal("uuid:123e4567-e89b-12d3-a456-426614174000", 123, "🔥");
 
     const params = rpcMock.mock.calls[0]?.[1] as Record<string, unknown>;
     expect(rpcMock).toHaveBeenCalledWith("sendReaction", expect.any(Object), expect.any(Object));
-    expect(params.recipients).toEqual(["123e4567-e89b-12d3-a456-426614174000"]);
-    expect(params.groupIds).toBeUndefined();
+    expect(params.recipient).toEqual(["123e4567-e89b-12d3-a456-426614174000"]);
     expect(params.targetAuthor).toBe("123e4567-e89b-12d3-a456-426614174000");
-    expect(params).not.toHaveProperty("recipient");
+    expect(params).not.toHaveProperty("recipients");
     expect(params).not.toHaveProperty("groupId");
+    expect(params).not.toHaveProperty("groupIds");
   });
 
-  it("uses groupIds array and maps targetAuthorUuid", async () => {
+  it("sends groupId as string for group reactions", async () => {
     await sendReactionSignal("", 123, "✅", {
       groupId: "group-id",
       targetAuthorUuid: "uuid:123e4567-e89b-12d3-a456-426614174000",
     });
 
     const params = rpcMock.mock.calls[0]?.[1] as Record<string, unknown>;
-    expect(params.recipients).toBeUndefined();
-    expect(params.groupIds).toEqual(["group-id"]);
+    expect(params).not.toHaveProperty("recipient");
+    expect(params).not.toHaveProperty("recipients");
+    expect(params).not.toHaveProperty("groupIds");
+    expect(params.groupId).toBe("group-id");
     expect(params.targetAuthor).toBe("123e4567-e89b-12d3-a456-426614174000");
   });
 
-  it("defaults targetAuthor to recipient for removals", async () => {
+  it("sends remove for reaction removal", async () => {
     await removeReactionSignal("+15551230000", 456, "❌");
 
     const params = rpcMock.mock.calls[0]?.[1] as Record<string, unknown>;
-    expect(params.recipients).toEqual(["+15551230000"]);
+    expect(params.recipient).toEqual(["+15551230000"]);
     expect(params.targetAuthor).toBe("+15551230000");
     expect(params.remove).toBe(true);
+    expect(params).not.toHaveProperty("isRemove");
   });
 });
