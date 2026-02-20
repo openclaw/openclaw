@@ -1,133 +1,18 @@
-//! MCP (Model Context Protocol) SSE server for Synology API.
-//!
-//! Exposes Synology NAS operations as MCP tools over HTTP SSE transport.
-//! Clients connect via GET /sse and send requests via POST /messages?sessionId=xxx.
+//! MCP tool definitions (JSON schema) and tool implementation functions.
 
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
-use axum::extract::{Query, State};
-use axum::http::StatusCode;
-use axum::response::sse::{Event, Sse};
-use axum::response::IntoResponse;
-use axum::routing::{get, post};
-use axum::Router;
-use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tokio::sync::{mpsc, Mutex};
-use tokio_stream::wrappers::ReceiverStream;
-use tokio_stream::StreamExt;
 
 use crate::api::{auth, client::SynoClient, download_station, file_station, note_station, system};
 use crate::crypto;
 use crate::markdown;
 
-// 鈹€鈹€ Types 鈹€鈹€
+use super::session::*;
 
-/// A cached Synology session (NAS connection).
-struct NasSession {
-    client: SynoClient,
-    sid: String,
-    synotoken: Option<String>,
-    created: Instant,
-}
+// ── Tool definitions ──
 
-/// An SSE client connection.
-struct SseClient {
-    tx: mpsc::Sender<Result<Event, axum::Error>>,
-    #[allow(dead_code)]
-    created: Instant,
-}
-
-/// NAS connection config extracted from HTTP headers.
-#[derive(Clone)]
-struct NasConfig {
-    host: String,
-    port: u16,
-    https: bool,
-    username: String,
-    password: String,
-}
-
-impl NasConfig {
-    /// Try to extract from HTTP headers. Returns None if required headers are missing.
-    fn from_headers(headers: &axum::http::HeaderMap) -> Option<Self> {
-        let host = headers.get("X-Syno-Host")?.to_str().ok().filter(|s| !s.is_empty())?.to_string();
-        let username = headers.get("X-Syno-Username")?.to_str().ok().filter(|s| !s.is_empty())?.to_string();
-        let password = headers.get("X-Syno-Password")?.to_str().ok().filter(|s| !s.is_empty())?.to_string();
-        let port = headers.get("X-Syno-Port")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(5000);
-        let https = headers.get("X-Syno-Https")
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.eq_ignore_ascii_case("true"))
-            .unwrap_or(false);
-        Some(Self { host, port, https, username, password })
-    }
-}
-
-/// Shared application state.
-struct AppState {
-    /// MCP session_id 鈫?SSE client sender
-    sse_clients: Mutex<HashMap<String, SseClient>>,
-    /// NAS session_id 鈫?authenticated NAS connection
-    nas_sessions: Mutex<HashMap<String, NasSession>>,
-    /// MCP session_id 鈫?NAS config from headers (for auto re-login)
-    session_configs: Mutex<HashMap<String, NasConfig>>,
-}
-
-#[derive(Deserialize)]
-struct SessionQuery {
-    #[serde(rename = "sessionId")]
-    session_id: String,
-}
-
-// 鈹€鈹€ JSON-RPC 鈹€鈹€
-
-#[derive(Deserialize)]
-struct JsonRpcRequest {
-    #[allow(dead_code)]
-    jsonrpc: Option<String>,
-    id: Option<Value>,
-    method: String,
-    params: Option<Value>,
-}
-
-#[derive(Serialize)]
-struct JsonRpcResponse {
-    jsonrpc: String,
-    id: Value,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    result: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<Value>,
-}
-
-impl JsonRpcResponse {
-    fn success(id: Value, result: Value) -> Self {
-        Self {
-            jsonrpc: "2.0".into(),
-            id,
-            result: Some(result),
-            error: None,
-        }
-    }
-
-    fn error(id: Value, code: i64, message: &str) -> Self {
-        Self {
-            jsonrpc: "2.0".into(),
-            id,
-            result: None,
-            error: Some(json!({ "code": code, "message": message })),
-        }
-    }
-}
-
-// 鈹€鈹€ Tool definitions 鈹€鈹€
-
-fn tool_definitions() -> Value {
+pub(crate) fn tool_definitions() -> Value {
     json!({
         "tools": [
             {
@@ -531,189 +416,46 @@ fn tool_definitions() -> Value {
                     },
                     "required": ["id"]
                 }
+            },
+            {
+                "name": "syno_note_pull",
+                "description": "Pull a note from NoteStation to a local file. Auto-detects if HTML→Markdown conversion is viable; if not, saves as raw HTML and adjusts the file extension accordingly.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "nas_session_id": { "type": "string", "description": "Session ID from syno_login. Optional if headers auth is configured." },
+                        "id": { "type": "string", "description": "Note object ID" },
+                        "path": { "type": "string", "description": "Local file path to save (e.g. C:/tmp/note.md). Extension may be auto-changed to .html if conversion fails." }
+                    },
+                    "required": ["id", "path"]
+                }
+            },
+            {
+                "name": "syno_note_push",
+                "description": "Push a local file to update a note in NoteStation. Auto-detects format by file extension: .html/.htm files are pushed as raw HTML, .md files are converted to HTML first.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "nas_session_id": { "type": "string", "description": "Session ID from syno_login. Optional if headers auth is configured." },
+                        "id": { "type": "string", "description": "Note object ID to update" },
+                        "path": { "type": "string", "description": "Local file path (.md or .html) to read and push" },
+                        "title": { "type": "string", "description": "Optionally update the note title" }
+                    },
+                    "required": ["id", "path"]
+                }
             }
         ]
     })
 }
 
-// 鈹€鈹€ Helper: get NAS session from state 鈹€鈹€
+// ── Tool implementations ──
 
-/// Perform login with the given config, return a NasSession.
-async fn login_with_config(cfg: &NasConfig) -> Result<NasSession, String> {
-    let scheme = if cfg.https { "https" } else { "http" };
-    let base_url = format!("{scheme}://{}:{}", cfg.host, cfg.port);
-    let client = SynoClient::new(&base_url, cfg.https).map_err(|e| e.to_string())?;
-    let data = auth::login(&client, &cfg.username, &cfg.password, None)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(NasSession {
-        client,
-        sid: data.sid,
-        synotoken: data.synotoken,
-        created: Instant::now(),
-    })
-}
-
-/// Ensure the header-based session for an MCP session exists and is valid. Auto-(re)login if needed.
-async fn ensure_header_session(state: &AppState, mcp_session_id: &str) -> Result<(), String> {
-    let cfg = {
-        let configs = state.session_configs.lock().await;
-        configs.get(mcp_session_id).cloned()
-    };
-    let cfg = cfg.ok_or("No NAS session. Please call syno_login first or configure X-Syno-* headers.")?;
-
-    let nas_key = format!("__header_{mcp_session_id}__");
-    let need_login = {
-        let sessions = state.nas_sessions.lock().await;
-        match sessions.get(&nas_key) {
-            None => true,
-            Some(s) => s.created.elapsed() > Duration::from_secs(30 * 60),
-        }
-    };
-
-    if need_login {
-        let t = Instant::now();
-        let session = login_with_config(&cfg).await?;
-        eprintln!("[timing] ensure_header_session: login={:?}", t.elapsed());
-        state.nas_sessions.lock().await.insert(nas_key, session);
-    }
-    Ok(())
-}
-
-async fn get_nas_session(
-    state: &AppState,
-    nas_session_id: &str,
-) -> Result<(SynoClient, String, Option<String>), String> {
-    // Auto re-login for header-based sessions
-    if nas_session_id.starts_with("__header_") {
-        // mcp_session_id is embedded in the key
-        let mcp_id = nas_session_id
-            .strip_prefix("__header_")
-            .and_then(|s| s.strip_suffix("__"))
-            .unwrap_or("");
-        ensure_header_session(state, mcp_id).await?;
-    }
-
-    let sessions = state.nas_sessions.lock().await;
-    let s = sessions
-        .get(nas_session_id)
-        .ok_or_else(|| "Invalid or expired nas_session_id. Please call syno_login first.".to_string())?;
-    // Check 30 min expiry (header sessions auto-renew above, others expire)
-    if !nas_session_id.starts_with("__header_") && s.created.elapsed() > Duration::from_secs(30 * 60) {
-        drop(sessions);
-        state.nas_sessions.lock().await.remove(nas_session_id);
-        return Err("NAS session expired. Please call syno_login again.".to_string());
-    }
-    Ok((s.client.clone(), s.sid.clone(), s.synotoken.clone()))
-}
-
-/// Resolve the session ID: use provided value, or fall back to header-based session for this MCP connection.
-fn resolve_session_id(params: &Value, mcp_session_id: &str, has_header_config: bool) -> Result<String, String> {
-    match get_str(params, "nas_session_id") {
-        Some(id) => Ok(id),
-        None if has_header_config => Ok(format!("__header_{mcp_session_id}__")),
-        None => Err("Missing nas_session_id. Please call syno_login first or configure X-Syno-* headers.".to_string()),
-    }
-}
-
-fn get_str(params: &Value, key: &str) -> Option<String> {
-    params.get(key).and_then(|v| v.as_str()).map(|s| s.to_string())
-}
-
-fn get_u64(params: &Value, key: &str, default: u64) -> u64 {
-    params.get(key).and_then(|v| v.as_u64()).unwrap_or(default)
-}
-
-fn get_bool(params: &Value, key: &str, default: bool) -> bool {
-    params.get(key).and_then(|v| v.as_bool()).unwrap_or(default)
-}
-
-fn get_i64_opt(params: &Value, key: &str) -> Option<i64> {
-    params.get(key).and_then(|v| v.as_i64())
-}
-
-fn get_bool_opt(params: &Value, key: &str) -> Option<bool> {
-    params.get(key).and_then(|v| v.as_bool())
-}
-
-// 鈹€鈹€ Tool dispatch 鈹€鈹€
-
-async fn handle_tool_call(state: &AppState, name: &str, params: &Value, mcp_session_id: &str) -> Value {
-    match dispatch_tool(state, name, params, mcp_session_id).await {
-        Ok(result) => json!({
-            "content": [{ "type": "text", "text": result }]
-        }),
-        Err(e) => json!({
-            "content": [{ "type": "text", "text": format!("Error: {e}") }],
-            "isError": true
-        }),
-    }
-}
-
-async fn dispatch_tool(state: &AppState, name: &str, params: &Value, mcp_session_id: &str) -> Result<String, String> {
-    let t0 = Instant::now();
-    let has_header_config = {
-        state.session_configs.lock().await.contains_key(mcp_session_id)
-    };
-    let t_config = t0.elapsed();
-    match name {
-        "syno_login" => tool_login(state, params).await,
-        _ => {
-            let sid = resolve_session_id(params, mcp_session_id, has_header_config)?;
-            let t_resolve = t0.elapsed();
-            let (client, nas_sid, token) = get_nas_session(state, &sid).await?;
-            let t_session = t0.elapsed();
-            eprintln!("[timing] {name}: config_check={t_config:?} resolve={t_resolve:?} get_session={t_session:?}");
-            let token_ref = token.as_deref();
-
-            match name {
-                "syno_info" => tool_info(&client, &nas_sid, token_ref).await,
-                "syno_fs_ls" => tool_fs_ls(&client, &nas_sid, token_ref, params).await,
-                "syno_fs_info" => tool_fs_info(&client, &nas_sid, token_ref, params).await,
-                "syno_fs_mkdir" => tool_fs_mkdir(&client, &nas_sid, token_ref, params).await,
-                "syno_fs_rename" => tool_fs_rename(&client, &nas_sid, token_ref, params).await,
-                "syno_fs_delete" => tool_fs_delete(&client, &nas_sid, token_ref, params).await,
-                "syno_dl_ls" => tool_dl_ls(&client, &nas_sid, token_ref).await,
-                "syno_dl_create" => tool_dl_create(&client, &nas_sid, token_ref, params).await,
-                "syno_dl_delete" => tool_dl_action(&client, &nas_sid, token_ref, params, "delete").await,
-                "syno_dl_pause" => tool_dl_action(&client, &nas_sid, token_ref, params, "pause").await,
-                "syno_dl_resume" => tool_dl_action(&client, &nas_sid, token_ref, params, "resume").await,
-                "syno_note_notebooks" => tool_note_notebooks(&client, &nas_sid, token_ref).await,
-                "syno_note_list" => tool_note_list(&client, &nas_sid, token_ref, params).await,
-                "syno_note_get" => tool_note_get(&client, &nas_sid, token_ref, params).await,
-                "syno_note_create" => tool_note_create(&client, &nas_sid, token_ref, params).await,
-                "syno_note_update" => tool_note_update(&client, &nas_sid, token_ref, params).await,
-                "syno_note_delete" => tool_note_delete(&client, &nas_sid, token_ref, params).await,
-                "syno_note_search" => tool_note_search(&client, &nas_sid, token_ref, params).await,
-                "syno_note_tags" => tool_note_tags(&client, &nas_sid, token_ref).await,
-                "syno_note_tag" => tool_note_tag(&client, &nas_sid, token_ref, params).await,
-                "syno_note_untag" => tool_note_untag(&client, &nas_sid, token_ref, params).await,
-                "syno_note_move" => tool_note_move(&client, &nas_sid, token_ref, params).await,
-                "syno_note_create_notebook" => tool_note_create_notebook(&client, &nas_sid, token_ref, params).await,
-                "syno_note_rename_notebook" => tool_note_rename_notebook(&client, &nas_sid, token_ref, params).await,
-                "syno_note_delete_notebook" => tool_note_delete_notebook(&client, &nas_sid, token_ref, params).await,
-                "syno_todo_list" => tool_todo_list(&client, &nas_sid, token_ref, params).await,
-                "syno_todo_create" => tool_todo_create(&client, &nas_sid, token_ref, params).await,
-                "syno_todo_update" => tool_todo_update(&client, &nas_sid, token_ref, params).await,
-                "syno_todo_delete" => tool_todo_delete(&client, &nas_sid, token_ref, params).await,
-                "syno_todo_done" => tool_todo_done(&client, &nas_sid, token_ref, params).await,
-                _ => Err(format!("Unknown tool: {name}")),
-            }
-        }
-    }
-}
-
-// 鈹€鈹€ Tool implementations 鈹€鈹€
-
-async fn tool_login(state: &AppState, params: &Value) -> Result<String, String> {
-    let host = get_str(params, "host")
-        .ok_or("Missing host")?;
+pub(crate) async fn tool_login(state: &AppState, params: &Value) -> Result<String, String> {
+    let host = get_str(params, "host").ok_or("Missing host")?;
     let port = get_u64(params, "port", 5000) as u16;
     let https = get_bool(params, "https", false);
-    let username = get_str(params, "username")
-        .ok_or("Missing username")?;
-    let password = get_str(params, "password")
-        .ok_or("Missing password")?;
+    let username = get_str(params, "username").ok_or("Missing username")?;
+    let password = get_str(params, "password").ok_or("Missing password")?;
     let otp = get_str(params, "otp");
 
     let scheme = if https { "https" } else { "http" };
@@ -738,7 +480,7 @@ async fn tool_login(state: &AppState, params: &Value) -> Result<String, String> 
     })).unwrap())
 }
 
-async fn tool_info(client: &SynoClient, sid: &str, token: Option<&str>) -> Result<String, String> {
+pub(crate) async fn tool_info(client: &SynoClient, sid: &str, token: Option<&str>) -> Result<String, String> {
     let info = system::get_info(client, sid, token).await.map_err(|e| e.to_string())?;
     Ok(serde_json::to_string_pretty(&json!({
         "model": info.model,
@@ -749,7 +491,7 @@ async fn tool_info(client: &SynoClient, sid: &str, token: Option<&str>) -> Resul
     })).unwrap())
 }
 
-async fn tool_fs_ls(client: &SynoClient, sid: &str, token: Option<&str>, params: &Value) -> Result<String, String> {
+pub(crate) async fn tool_fs_ls(client: &SynoClient, sid: &str, token: Option<&str>, params: &Value) -> Result<String, String> {
     let path = get_str(params, "path");
     let offset = get_u64(params, "offset", 0);
     let limit = get_u64(params, "limit", 100);
@@ -772,7 +514,7 @@ async fn tool_fs_ls(client: &SynoClient, sid: &str, token: Option<&str>, params:
     }
 }
 
-async fn tool_fs_info(client: &SynoClient, sid: &str, token: Option<&str>, params: &Value) -> Result<String, String> {
+pub(crate) async fn tool_fs_info(client: &SynoClient, sid: &str, token: Option<&str>, params: &Value) -> Result<String, String> {
     let path = get_str(params, "path").ok_or("Missing path")?;
     let result = file_station::get_info(client, sid, token, &path).await.map_err(|e| e.to_string())?;
     let files: Vec<Value> = result.files.unwrap_or_default().iter().map(|f| {
@@ -781,27 +523,27 @@ async fn tool_fs_info(client: &SynoClient, sid: &str, token: Option<&str>, param
     Ok(serde_json::to_string_pretty(&json!({"files": files})).unwrap())
 }
 
-async fn tool_fs_mkdir(client: &SynoClient, sid: &str, token: Option<&str>, params: &Value) -> Result<String, String> {
+pub(crate) async fn tool_fs_mkdir(client: &SynoClient, sid: &str, token: Option<&str>, params: &Value) -> Result<String, String> {
     let folder_path = get_str(params, "folder_path").ok_or("Missing folder_path")?;
     let name = get_str(params, "name").ok_or("Missing name")?;
     let data = file_station::create_folder(client, sid, token, &folder_path, &name).await.map_err(|e| e.to_string())?;
     Ok(serde_json::to_string_pretty(&data).unwrap())
 }
 
-async fn tool_fs_rename(client: &SynoClient, sid: &str, token: Option<&str>, params: &Value) -> Result<String, String> {
+pub(crate) async fn tool_fs_rename(client: &SynoClient, sid: &str, token: Option<&str>, params: &Value) -> Result<String, String> {
     let path = get_str(params, "path").ok_or("Missing path")?;
     let name = get_str(params, "name").ok_or("Missing name")?;
     let data = file_station::rename(client, sid, token, &path, &name).await.map_err(|e| e.to_string())?;
     Ok(serde_json::to_string_pretty(&data).unwrap())
 }
 
-async fn tool_fs_delete(client: &SynoClient, sid: &str, token: Option<&str>, params: &Value) -> Result<String, String> {
+pub(crate) async fn tool_fs_delete(client: &SynoClient, sid: &str, token: Option<&str>, params: &Value) -> Result<String, String> {
     let path = get_str(params, "path").ok_or("Missing path")?;
     file_station::delete(client, sid, token, &path).await.map_err(|e| e.to_string())?;
     Ok(json!({"message": "Deleted", "path": path}).to_string())
 }
 
-async fn tool_dl_ls(client: &SynoClient, sid: &str, token: Option<&str>) -> Result<String, String> {
+pub(crate) async fn tool_dl_ls(client: &SynoClient, sid: &str, token: Option<&str>) -> Result<String, String> {
     let tasks = download_station::list(client, sid, token).await.map_err(|e| e.to_string())?;
     let items: Vec<Value> = tasks.tasks.unwrap_or_default().iter().map(|t| {
         json!({"id": t.id, "title": t.title, "status": t.status, "size": t.size})
@@ -809,14 +551,14 @@ async fn tool_dl_ls(client: &SynoClient, sid: &str, token: Option<&str>) -> Resu
     Ok(serde_json::to_string_pretty(&json!({"tasks": items, "total": tasks.total})).unwrap())
 }
 
-async fn tool_dl_create(client: &SynoClient, sid: &str, token: Option<&str>, params: &Value) -> Result<String, String> {
+pub(crate) async fn tool_dl_create(client: &SynoClient, sid: &str, token: Option<&str>, params: &Value) -> Result<String, String> {
     let uri = get_str(params, "uri").ok_or("Missing uri")?;
     let dest = get_str(params, "destination");
     download_station::create(client, sid, token, &uri, dest.as_deref()).await.map_err(|e| e.to_string())?;
     Ok(json!({"message": "Download task created"}).to_string())
 }
 
-async fn tool_dl_action(client: &SynoClient, sid: &str, token: Option<&str>, params: &Value, action: &str) -> Result<String, String> {
+pub(crate) async fn tool_dl_action(client: &SynoClient, sid: &str, token: Option<&str>, params: &Value, action: &str) -> Result<String, String> {
     let ids = get_str(params, "ids").ok_or("Missing ids")?;
     match action {
         "delete" => download_station::delete(client, sid, token, &ids).await.map_err(|e| e.to_string())?,
@@ -827,14 +569,13 @@ async fn tool_dl_action(client: &SynoClient, sid: &str, token: Option<&str>, par
     Ok(json!({"message": format!("Task(s) {action}d")}).to_string())
 }
 
-async fn tool_note_notebooks(client: &SynoClient, sid: &str, token: Option<&str>) -> Result<String, String> {
+pub(crate) async fn tool_note_notebooks(client: &SynoClient, sid: &str, token: Option<&str>) -> Result<String, String> {
     let t = Instant::now();
     let data = note_station::list_notebook(client, sid, token).await.map_err(|e| e.to_string())?;
     eprintln!("[timing] note_notebooks: api_call={:?}", t.elapsed());
     let notebooks: Vec<Value> = data["notebooks"]
         .as_array()
         .map(|arr| arr.iter().map(|nb| {
-            // "items" contains the note count (array length or number)
             let count = nb["items"].as_array().map(|a| a.len() as u64)
                 .or_else(|| nb["items"].as_u64());
             json!({
@@ -850,7 +591,7 @@ async fn tool_note_notebooks(client: &SynoClient, sid: &str, token: Option<&str>
     })).unwrap())
 }
 
-async fn tool_note_list(client: &SynoClient, sid: &str, token: Option<&str>, params: &Value) -> Result<String, String> {
+pub(crate) async fn tool_note_list(client: &SynoClient, sid: &str, token: Option<&str>, params: &Value) -> Result<String, String> {
     let notebook = get_str(params, "notebook");
     let offset = get_u64(params, "offset", 0);
     let limit = get_u64(params, "limit", 50);
@@ -891,7 +632,7 @@ async fn tool_note_list(client: &SynoClient, sid: &str, token: Option<&str>, par
     })).unwrap())
 }
 
-async fn tool_note_get(client: &SynoClient, sid: &str, token: Option<&str>, params: &Value) -> Result<String, String> {
+pub(crate) async fn tool_note_get(client: &SynoClient, sid: &str, token: Option<&str>, params: &Value) -> Result<String, String> {
     let id = get_str(params, "id").ok_or("Missing id")?;
     let password = get_str(params, "password");
 
@@ -941,7 +682,7 @@ async fn tool_note_get(client: &SynoClient, sid: &str, token: Option<&str>, para
     Ok(serde_json::to_string_pretty(&note).unwrap())
 }
 
-async fn tool_note_create(client: &SynoClient, sid: &str, token: Option<&str>, params: &Value) -> Result<String, String> {
+pub(crate) async fn tool_note_create(client: &SynoClient, sid: &str, token: Option<&str>, params: &Value) -> Result<String, String> {
     let notebook_id = get_str(params, "notebook_id").ok_or("Missing notebook_id")?;
     let title = get_str(params, "title").ok_or("Missing title")?;
     let content = get_str(params, "content").unwrap_or_default();
@@ -952,7 +693,7 @@ async fn tool_note_create(client: &SynoClient, sid: &str, token: Option<&str>, p
     Ok(serde_json::to_string_pretty(&data).unwrap())
 }
 
-async fn tool_note_update(client: &SynoClient, sid: &str, token: Option<&str>, params: &Value) -> Result<String, String> {
+pub(crate) async fn tool_note_update(client: &SynoClient, sid: &str, token: Option<&str>, params: &Value) -> Result<String, String> {
     let id = get_str(params, "id").ok_or("Missing id")?;
     let title = get_str(params, "title");
     let content = get_str(params, "content");
@@ -966,13 +707,13 @@ async fn tool_note_update(client: &SynoClient, sid: &str, token: Option<&str>, p
     Ok(serde_json::to_string_pretty(&data).unwrap())
 }
 
-async fn tool_note_delete(client: &SynoClient, sid: &str, token: Option<&str>, params: &Value) -> Result<String, String> {
+pub(crate) async fn tool_note_delete(client: &SynoClient, sid: &str, token: Option<&str>, params: &Value) -> Result<String, String> {
     let id = get_str(params, "id").ok_or("Missing id")?;
     note_station::delete_note(client, sid, token, &id).await.map_err(|e| e.to_string())?;
     Ok(json!({"message": "Note deleted"}).to_string())
 }
 
-async fn tool_note_search(client: &SynoClient, sid: &str, token: Option<&str>, params: &Value) -> Result<String, String> {
+pub(crate) async fn tool_note_search(client: &SynoClient, sid: &str, token: Option<&str>, params: &Value) -> Result<String, String> {
     let keyword = get_str(params, "keyword").ok_or("Missing keyword")?;
     let exact = get_bool(params, "exact", false);
     let offset = get_u64(params, "offset", 0);
@@ -1002,7 +743,7 @@ async fn tool_note_search(client: &SynoClient, sid: &str, token: Option<&str>, p
     })).unwrap())
 }
 
-async fn tool_note_tags(client: &SynoClient, sid: &str, token: Option<&str>) -> Result<String, String> {
+pub(crate) async fn tool_note_tags(client: &SynoClient, sid: &str, token: Option<&str>) -> Result<String, String> {
     let data = note_station::list_tag(client, sid, token).await.map_err(|e| e.to_string())?;
     let tags: Vec<Value> = data["tags"]
         .as_array()
@@ -1018,7 +759,7 @@ async fn tool_note_tags(client: &SynoClient, sid: &str, token: Option<&str>) -> 
     })).unwrap())
 }
 
-async fn tool_note_tag(client: &SynoClient, sid: &str, token: Option<&str>, params: &Value) -> Result<String, String> {
+pub(crate) async fn tool_note_tag(client: &SynoClient, sid: &str, token: Option<&str>, params: &Value) -> Result<String, String> {
     let id = get_str(params, "id").ok_or("Missing id")?;
     let tag = get_str(params, "tag").ok_or("Missing tag")?;
 
@@ -1035,7 +776,7 @@ async fn tool_note_tag(client: &SynoClient, sid: &str, token: Option<&str>, para
     Ok(json!({"message": "Tag added"}).to_string())
 }
 
-async fn tool_note_untag(client: &SynoClient, sid: &str, token: Option<&str>, params: &Value) -> Result<String, String> {
+pub(crate) async fn tool_note_untag(client: &SynoClient, sid: &str, token: Option<&str>, params: &Value) -> Result<String, String> {
     let id = get_str(params, "id").ok_or("Missing id")?;
     let tag = get_str(params, "tag").ok_or("Missing tag")?;
 
@@ -1052,33 +793,33 @@ async fn tool_note_untag(client: &SynoClient, sid: &str, token: Option<&str>, pa
     Ok(json!({"message": "Tag removed"}).to_string())
 }
 
-async fn tool_note_move(client: &SynoClient, sid: &str, token: Option<&str>, params: &Value) -> Result<String, String> {
+pub(crate) async fn tool_note_move(client: &SynoClient, sid: &str, token: Option<&str>, params: &Value) -> Result<String, String> {
     let id = get_str(params, "id").ok_or("Missing id")?;
     let notebook_id = get_str(params, "notebook_id").ok_or("Missing notebook_id")?;
     note_station::move_note(client, sid, token, &id, &notebook_id).await.map_err(|e| e.to_string())?;
     Ok(json!({"message": "Note moved"}).to_string())
 }
 
-async fn tool_note_create_notebook(client: &SynoClient, sid: &str, token: Option<&str>, params: &Value) -> Result<String, String> {
+pub(crate) async fn tool_note_create_notebook(client: &SynoClient, sid: &str, token: Option<&str>, params: &Value) -> Result<String, String> {
     let title = get_str(params, "title").ok_or("Missing title")?;
     let data = note_station::create_notebook(client, sid, token, &title).await.map_err(|e| e.to_string())?;
     Ok(serde_json::to_string_pretty(&data).unwrap())
 }
 
-async fn tool_note_rename_notebook(client: &SynoClient, sid: &str, token: Option<&str>, params: &Value) -> Result<String, String> {
+pub(crate) async fn tool_note_rename_notebook(client: &SynoClient, sid: &str, token: Option<&str>, params: &Value) -> Result<String, String> {
     let id = get_str(params, "id").ok_or("Missing id")?;
     let title = get_str(params, "title").ok_or("Missing title")?;
     note_station::rename_notebook(client, sid, token, &id, &title).await.map_err(|e| e.to_string())?;
     Ok(json!({"message": "Notebook renamed"}).to_string())
 }
 
-async fn tool_note_delete_notebook(client: &SynoClient, sid: &str, token: Option<&str>, params: &Value) -> Result<String, String> {
+pub(crate) async fn tool_note_delete_notebook(client: &SynoClient, sid: &str, token: Option<&str>, params: &Value) -> Result<String, String> {
     let id = get_str(params, "id").ok_or("Missing id")?;
     note_station::delete_notebook(client, sid, token, &id).await.map_err(|e| e.to_string())?;
     Ok(json!({"message": "Notebook deleted"}).to_string())
 }
 
-async fn tool_todo_list(client: &SynoClient, sid: &str, token: Option<&str>, params: &Value) -> Result<String, String> {
+pub(crate) async fn tool_todo_list(client: &SynoClient, sid: &str, token: Option<&str>, params: &Value) -> Result<String, String> {
     let done = get_bool_opt(params, "done");
     let offset = get_u64(params, "offset", 0);
     let limit = get_u64(params, "limit", 100);
@@ -1124,13 +865,13 @@ async fn tool_todo_list(client: &SynoClient, sid: &str, token: Option<&str>, par
     })).unwrap())
 }
 
-async fn tool_todo_create(client: &SynoClient, sid: &str, token: Option<&str>, params: &Value) -> Result<String, String> {
+pub(crate) async fn tool_todo_create(client: &SynoClient, sid: &str, token: Option<&str>, params: &Value) -> Result<String, String> {
     let title = get_str(params, "title").ok_or("Missing title")?;
     let data = note_station::create_todo(client, sid, token, &title).await.map_err(|e| e.to_string())?;
     Ok(serde_json::to_string_pretty(&data).unwrap())
 }
 
-async fn tool_todo_update(client: &SynoClient, sid: &str, token: Option<&str>, params: &Value) -> Result<String, String> {
+pub(crate) async fn tool_todo_update(client: &SynoClient, sid: &str, token: Option<&str>, params: &Value) -> Result<String, String> {
     let id = get_str(params, "id").ok_or("Missing id")?;
     let title = get_str(params, "title");
     let done = get_bool_opt(params, "done");
@@ -1155,13 +896,13 @@ async fn tool_todo_update(client: &SynoClient, sid: &str, token: Option<&str>, p
     Ok(serde_json::to_string_pretty(&data).unwrap())
 }
 
-async fn tool_todo_delete(client: &SynoClient, sid: &str, token: Option<&str>, params: &Value) -> Result<String, String> {
+pub(crate) async fn tool_todo_delete(client: &SynoClient, sid: &str, token: Option<&str>, params: &Value) -> Result<String, String> {
     let id = get_str(params, "id").ok_or("Missing id")?;
     note_station::delete_todo(client, sid, token, &id).await.map_err(|e| e.to_string())?;
     Ok(json!({"message": "Todo deleted"}).to_string())
 }
 
-async fn tool_todo_done(client: &SynoClient, sid: &str, token: Option<&str>, params: &Value) -> Result<String, String> {
+pub(crate) async fn tool_todo_done(client: &SynoClient, sid: &str, token: Option<&str>, params: &Value) -> Result<String, String> {
     let id = get_str(params, "id").ok_or("Missing id")?;
     let undo = get_bool(params, "undo", false);
     let done_val = !undo;
@@ -1170,211 +911,70 @@ async fn tool_todo_done(client: &SynoClient, sid: &str, token: Option<&str>, par
     Ok(json!({"message": if done_val { "Marked as done" } else { "Marked as undone" }}).to_string())
 }
 
-// 鈹€鈹€ MCP protocol handler 鈹€鈹€
+pub(crate) async fn tool_note_pull(client: &SynoClient, sid: &str, token: Option<&str>, params: &Value) -> Result<String, String> {
+    let id = get_str(params, "id").ok_or("Missing id")?;
+    let path = get_str(params, "path").ok_or("Missing path")?;
 
-async fn handle_jsonrpc(state: &AppState, req: JsonRpcRequest, mcp_session_id: &str) -> JsonRpcResponse {
-    let id = req.id.clone().unwrap_or(Value::Null);
+    let data = note_station::get_note(client, sid, token, &id, None)
+        .await.map_err(|e| e.to_string())?;
 
-    match req.method.as_str() {
-        "initialize" => {
-            JsonRpcResponse::success(id, json!({
-                "protocolVersion": "2024-11-05",
-                "capabilities": {
-                    "tools": {}
-                },
-                "serverInfo": {
-                    "name": "synology-mcp",
-                    "version": "0.1.0"
-                }
-            }))
-        }
-        "notifications/initialized" => {
-            // No response needed for notifications, but we return empty result
-            JsonRpcResponse::success(id, json!({}))
-        }
-        "tools/list" => {
-            JsonRpcResponse::success(id, tool_definitions())
-        }
-        "tools/call" => {
-            let params = req.params.unwrap_or(Value::Null);
-            let tool_name = params["name"].as_str().unwrap_or("");
-            let tool_args = params.get("arguments").cloned().unwrap_or(json!({}));
-            let result = handle_tool_call(state, tool_name, &tool_args, mcp_session_id).await;
-            JsonRpcResponse::success(id, result)
-        }
-        "ping" => {
-            JsonRpcResponse::success(id, json!({}))
-        }
-        _ => {
-            JsonRpcResponse::error(id, -32601, &format!("Method not found: {}", req.method))
-        }
-    }
-}
+    let title = data["title"].as_str().unwrap_or("Untitled");
+    let html_content = data["content"].as_str().unwrap_or("");
 
-// 鈹€鈹€ HTTP handlers 鈹€鈹€
+    let md = markdown::html_to_md(html_content);
+    let html_text_len = html_content.len();
+    let md_text_len = md.trim().len();
 
-async fn sse_handler(
-    State(state): State<Arc<AppState>>,
-    headers: axum::http::HeaderMap,
-) -> Sse<impl tokio_stream::Stream<Item = Result<Event, axum::Error>>> {
-    let session_id = uuid::Uuid::new_v4().to_string();
-    let (tx, rx) = mpsc::channel::<Result<Event, axum::Error>>(32);
-
-    // Extract NAS config from headers and auto-login
-    if let Some(cfg) = NasConfig::from_headers(&headers) {
-        eprintln!("SSE {session_id}: headers auth detected ({}:{})", cfg.host, cfg.port);
-        let t = Instant::now();
-        match login_with_config(&cfg).await {
-            Ok(session) => {
-                eprintln!("[timing] SSE auto-login: {:?}", t.elapsed());
-                let nas_key = format!("__header_{session_id}__");
-                state.nas_sessions.lock().await.insert(nas_key, session);
-                state.session_configs.lock().await.insert(session_id.clone(), cfg);
-                eprintln!("SSE {session_id}: auto-login successful");
-            }
-            Err(e) => {
-                eprintln!("SSE {session_id}: auto-login failed: {e} (config saved for retry)");
-                state.session_configs.lock().await.insert(session_id.clone(), cfg);
-            }
-        }
-    }
-
-    // Send the endpoint event so client knows where to POST
-    let endpoint_msg = format!("/messages?sessionId={session_id}");
-    let _ = tx
-        .send(Ok(Event::default().event("endpoint").data(endpoint_msg)))
-        .await;
-
-    state.sse_clients.lock().await.insert(
-        session_id.clone(),
-        SseClient {
-            tx,
-            created: Instant::now(),
-        },
-    );
-
-    let stream = ReceiverStream::new(rx);
-    // Send keepalive comments every 30s
-    let keepalive = tokio_stream::StreamExt::map(
-        tokio_stream::wrappers::IntervalStream::new(tokio::time::interval(Duration::from_secs(30))),
-        |_| Ok(Event::default().comment("keepalive")),
-    );
-    let merged = stream.merge(keepalive);
-
-    Sse::new(merged).keep_alive(
-        axum::response::sse::KeepAlive::new()
-            .interval(Duration::from_secs(15))
-            .text("keepalive"),
-    )
-}
-
-async fn messages_handler(
-    State(state): State<Arc<AppState>>,
-    Query(query): Query<SessionQuery>,
-    body: String,
-) -> impl IntoResponse {
-    let session_id = &query.session_id;
-
-    // Parse JSON-RPC request
-    let req: JsonRpcRequest = match serde_json::from_str(&body) {
-        Ok(r) => r,
-        Err(e) => {
-            let err = JsonRpcResponse::error(Value::Null, -32700, &format!("Parse error: {e}"));
-            return (StatusCode::BAD_REQUEST, axum::Json(serde_json::to_value(err).unwrap()));
-        }
+    let (content, format) = if html_text_len == 0 || md_text_len == 0 {
+        (html_content.to_string(), "html")
+    } else if md_text_len * 100 / html_text_len < 20 {
+        (html_content.to_string(), "html")
+    } else {
+        (format!("# {}\n\n{}", title, md), "markdown")
     };
 
-    let is_notification = req.id.is_none()
-        || req.method.starts_with("notifications/");
-
-    // Handle the request, passing MCP session_id for NAS session resolution
-    let response = handle_jsonrpc(&state, req, session_id).await;
-
-    // Try to send via SSE
-    let clients = state.sse_clients.lock().await;
-    if let Some(client) = clients.get(session_id) {
-        let response_json = serde_json::to_string(&response).unwrap_or_default();
-        let event = Event::default().event("message").data(response_json);
-        let _ = client.tx.send(Ok(event)).await;
-    }
-
-    if is_notification {
-        (StatusCode::ACCEPTED, axum::Json(json!({})))
+    let final_path = if format == "html" && !path.ends_with(".html") && !path.ends_with(".htm") {
+        let p = std::path::Path::new(&path);
+        p.with_extension("html").to_string_lossy().to_string()
+    } else if format == "markdown" && !path.ends_with(".md") {
+        let p = std::path::Path::new(&path);
+        p.with_extension("md").to_string_lossy().to_string()
     } else {
-        (StatusCode::ACCEPTED, axum::Json(json!({})))
-    }
+        path.clone()
+    };
+
+    std::fs::write(&final_path, &content).map_err(|e| format!("Failed to write file: {e}"))?;
+
+    Ok(json!({
+        "message": format!("Note pulled as {format}"),
+        "path": final_path,
+        "format": format,
+        "title": title,
+        "size": content.len()
+    }).to_string())
 }
 
-async fn health_handler() -> &'static str {
-    "ok"
-}
+pub(crate) async fn tool_note_push(client: &SynoClient, sid: &str, token: Option<&str>, params: &Value) -> Result<String, String> {
+    let id = get_str(params, "id").ok_or("Missing id")?;
+    let path = get_str(params, "path").ok_or("Missing path")?;
+    let title = get_str(params, "title");
 
-// 鈹€鈹€ Session cleanup task 鈹€鈹€
+    let file_content = std::fs::read_to_string(&path)
+        .map_err(|e| format!("Failed to read file: {e}"))?;
 
-async fn cleanup_expired_sessions(state: Arc<AppState>) {
-    let mut interval = tokio::time::interval(Duration::from_secs(60));
-    loop {
-        interval.tick().await;
-        let now = Instant::now();
+    let is_html = path.ends_with(".html") || path.ends_with(".htm");
+    let html = if is_html {
+        file_content
+    } else {
+        markdown::md_to_html(&file_content)
+    };
 
-        // Clean stale SSE clients (2 hours) and collect removed IDs
-        let removed_sse: Vec<String>;
-        {
-            let mut sse = state.sse_clients.lock().await;
-            let before: std::collections::HashSet<String> = sse.keys().cloned().collect();
-            sse.retain(|_, c| now.duration_since(c.created) < Duration::from_secs(2 * 60 * 60));
-            let after: std::collections::HashSet<String> = sse.keys().cloned().collect();
-            removed_sse = before.difference(&after).cloned().collect();
-        }
+    let data = note_station::update_note(client, sid, token, &id, title.as_deref(), Some(&html))
+        .await.map_err(|e| e.to_string())?;
 
-        // Clean NAS sessions: expire non-header sessions (30 min), and remove header sessions for cleaned-up SSE clients
-        {
-            let mut nas = state.nas_sessions.lock().await;
-            nas.retain(|key, s| {
-                if key.starts_with("__header_") {
-                    // Keep if the parent SSE session still exists
-                    let mcp_id = key.strip_prefix("__header_").and_then(|k| k.strip_suffix("__")).unwrap_or("");
-                    !removed_sse.contains(&mcp_id.to_string())
-                } else {
-                    now.duration_since(s.created) < Duration::from_secs(30 * 60)
-                }
-            });
-        }
-
-        // Clean session configs for removed SSE clients
-        if !removed_sse.is_empty() {
-            let mut configs = state.session_configs.lock().await;
-            for id in &removed_sse {
-                configs.remove(id);
-            }
-        }
-    }
-}
-
-// ── Public entry point ──
-
-pub async fn run_server(host: &str, port: u16) -> anyhow::Result<()> {
-    let state = Arc::new(AppState {
-        sse_clients: Mutex::new(HashMap::new()),
-        nas_sessions: Mutex::new(HashMap::new()),
-        session_configs: Mutex::new(HashMap::new()),
-    });
-
-    // Spawn cleanup task
-    tokio::spawn(cleanup_expired_sessions(state.clone()));
-
-    let app = Router::new()
-        .route("/sse", get(sse_handler))
-        .route("/messages", post(messages_handler))
-        .route("/health", get(health_handler))
-        .with_state(state);
-
-    let addr = format!("{host}:{port}");
-    eprintln!("Synology MCP server listening on {addr}");
-    eprintln!("SSE endpoint: http://{addr}/sse");
-
-    let listener = tokio::net::TcpListener::bind(&addr).await?;
-    axum::serve(listener, app).await?;
-
-    Ok(())
+    Ok(serde_json::to_string_pretty(&json!({
+        "message": if is_html { "Note updated from HTML file" } else { "Note updated from Markdown file" },
+        "path": path,
+        "data": data
+    })).unwrap())
 }

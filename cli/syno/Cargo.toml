@@ -9,7 +9,7 @@ name = "syno"
 path = "src/main.rs"
 
 [dependencies]
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "multipart", "stream"], default-features = false }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
@@ -24,6 +24,7 @@ aes = "0.8"
 cbc = { version = "0.1", features = ["alloc"] }
 md-5 = "0.10"
 pulldown-cmark = "0.12"
+htmd = "0.5"
 axum = "0.8"
 tokio-stream = "0.1"
 uuid = { version = "=1.12.1", features = ["v4"] }

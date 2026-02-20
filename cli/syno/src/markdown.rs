@@ -11,6 +11,11 @@ pub fn md_to_html(markdown: &str) -> String {
     html_output
 }
 
+/// Convert HTML to Markdown string.
+pub fn html_to_md(html_content: &str) -> String {
+    htmd::convert(html_content).unwrap_or_else(|_| html_content.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

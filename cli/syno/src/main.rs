@@ -43,6 +43,9 @@ enum Commands {
 
     /// Start MCP SSE server
     Mcp(McpArgs),
+
+    /// Start MCP stdio server (for local use, saves AI tokens)
+    McpStdio(McpStdioArgs),
 }
 
 #[derive(clap::Args)]
@@ -53,6 +56,25 @@ struct McpArgs {
     /// Listen port (default 3000)
     #[arg(long, default_value = "3000")]
     port: u16,
+}
+
+#[derive(clap::Args)]
+struct McpStdioArgs {
+    /// NAS host (IP or domain). Can also be set via SYNO_HOST env var.
+    #[arg(long, env = "SYNO_HOST")]
+    host: String,
+    /// NAS port (default 5000). Can also be set via SYNO_PORT env var.
+    #[arg(long, env = "SYNO_PORT", default_value = "5000")]
+    port: u16,
+    /// Use HTTPS. Can also be set via SYNO_HTTPS env var.
+    #[arg(long, env = "SYNO_HTTPS", default_value = "false")]
+    https: bool,
+    /// Login username. Can also be set via SYNO_USERNAME env var.
+    #[arg(long, env = "SYNO_USERNAME")]
+    username: String,
+    /// Login password. Can also be set via SYNO_PASSWORD env var.
+    #[arg(long, env = "SYNO_PASSWORD")]
+    password: String,
 }
 
 #[derive(Subcommand)]
@@ -177,6 +199,7 @@ async fn main() -> anyhow::Result<()> {
             DlCmd::Resume(args) => cli::download_station::resume(&args).await?,
         },
         Commands::Mcp(args) => mcp::run_server(&args.host, args.port).await?,
+        Commands::McpStdio(args) => mcp::run_stdio(&args.host, args.port, args.https, &args.username, &args.password).await?,
         Commands::Note(cmd) => match cmd {
             NoteCmd::Info => cli::note_station::info().await?,
             NoteCmd::Notebooks => cli::note_station::notebooks().await?,
