@@ -4,10 +4,18 @@ services:
     environment:
       HOME: /home/node
       TERM: xterm-256color
-      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
-      CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY}
-      CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY}
-      CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE}
+      # Non-sensitive env vars can remain here.
+      # Sensitive credentials are loaded from Docker secrets by the entrypoint.
+      # Direct env vars still work as a fallback (entrypoint skips if already set).
+    secrets:
+      - openclaw_gateway_token
+      - openclaw_gateway_password
+      - claude_ai_session_key
+      - claude_web_session_key
+      - claude_web_cookie
+      - openai_api_key
+      - anthropic_api_key
+      - gemini_api_key
     volumes:
       - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
       - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
@@ -32,15 +40,41 @@ services:
     environment:
       HOME: /home/node
       TERM: xterm-256color
-      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
       BROWSER: echo
-      CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY}
-      CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY}
-      CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE}
+    secrets:
+      - openclaw_gateway_token
+      - openclaw_gateway_password
+      - claude_ai_session_key
+      - claude_web_session_key
+      - claude_web_cookie
+      - openai_api_key
+      - anthropic_api_key
+      - gemini_api_key
     volumes:
       - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
       - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
     stdin_open: true
     tty: true
     init: true
-    entrypoint: ["node", "dist/index.js"]
+    entrypoint: ["/app/docker-entrypoint.sh", "node", "dist/index.js"]
+
+# Docker secrets – point each to a local file containing the credential.
+# Create the files before running: echo "your-token" > ./secrets/openclaw_gateway_token
+# Files should be chmod 600 and NOT committed to version control.
+secrets:
+  openclaw_gateway_token:
+    file: ${OPENCLAW_SECRETS_DIR:-./secrets}/openclaw_gateway_token
+  openclaw_gateway_password:
+    file: ${OPENCLAW_SECRETS_DIR:-./secrets}/openclaw_gateway_password
+  claude_ai_session_key:
+    file: ${OPENCLAW_SECRETS_DIR:-./secrets}/claude_ai_session_key
+  claude_web_session_key:
+    file: ${OPENCLAW_SECRETS_DIR:-./secrets}/claude_web_session_key
+  claude_web_cookie:
+    file: ${OPENCLAW_SECRETS_DIR:-./secrets}/claude_web_cookie
+  openai_api_key:
+    file: ${OPENCLAW_SECRETS_DIR:-./secrets}/openai_api_key
+  anthropic_api_key:
+    file: ${OPENCLAW_SECRETS_DIR:-./secrets}/anthropic_api_key
+  gemini_api_key:
+    file: ${OPENCLAW_SECRETS_DIR:-./secrets}/gemini_api_key

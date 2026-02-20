@@ -86,6 +86,9 @@ USER.md
 # local tooling
 .serena/
 
+# Docker secrets (NEVER COMMIT)
+secrets/
+
 # Agent credentials and memory (NEVER COMMIT)
 /memory/
 .agent/*.json
