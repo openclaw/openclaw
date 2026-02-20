@@ -1,0 +1,34 @@
+{
+  "name": "@openclaw/deltachat",
+  "version": "2026.2.2",
+  "description": "OpenClaw Delta.Chat channel plugin",
+  "type": "module",
+  "dependencies": {
+    "@deltachat/jsonrpc-client": "^1.160.0",
+    "@deltachat/stdio-rpc-server": "^1.160.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "openclaw": "2026.2.1"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "deltachat",
+      "label": "Delta.Chat",
+      "selectionLabel": "Delta.Chat (plugin)",
+      "docsPath": "/channels/deltachat",
+      "docsLabel": "deltachat",
+      "blurb": "end-to-end encrypted messaging via Delta.Chat core.",
+      "order": 80,
+      "quickstartAllowFrom": true
+    },
+    "install": {
+      "npmSpec": "@openclaw/deltachat",
+      "localPath": "extensions/deltachat",
+      "defaultChoice": "npm"
+    }
+  }
+}

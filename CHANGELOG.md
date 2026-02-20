@@ -80,6 +80,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Delta.Chat/Channel: add Delta.Chat channel extension plugin with end-to-end encrypted messaging via Delta.Chat core, supporting DM policies (pairing, allowlist, open), group policies, multiple accounts, chatmail servers, and avatar sync.
 - Highlight: External Secrets Management introduces a full `openclaw secrets` workflow (`audit`, `configure`, `apply`, `reload`) with runtime snapshot activation, strict `secrets apply` target-path validation, safer migration scrubbing, ref-only auth-profile support, and dedicated docs. (#26155) Thanks @joshavant.
 - ACP/Thread-bound agents: make ACP agents first-class runtimes for thread sessions with `acp` spawn/send dispatch integration, acpx backend bridging, lifecycle controls, startup reconciliation, runtime cleanup, and coalesced thread replies. (#23580) thanks @osolmaz.
 - Agents/Routing CLI: add `openclaw agents bindings`, `openclaw agents bind`, and `openclaw agents unbind` for account-scoped route management, including channel-only to account-scoped binding upgrades, role-aware binding identity handling, plugin-resolved binding account IDs, and optional account-binding prompts in `openclaw channels add`. (#27195) thanks @gumadeiras.
@@ -1745,6 +1746,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- **Delta.Chat**: Add complete Delta.Chat channel extension with JSON-RPC integration, QR code pairing, security policies (DMs: disabled/pairing/allowlist/open; groups: allowlist/open), media support, and group configuration with mention detection.
 - Feishu: add Feishu/Lark plugin support + docs. (#7313) Thanks @jiulingyun (openclaw-cn).
 - Web UI: add Agents dashboard for managing agent files, tools, skills, models, channels, and cron jobs.
 - Subagents: discourage direct messaging tool use unless a specific external recipient is requested.

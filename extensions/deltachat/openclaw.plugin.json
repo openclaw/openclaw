@@ -1,0 +1,9 @@
+{
+  "id": "deltachat",
+  "channels": ["deltachat"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
