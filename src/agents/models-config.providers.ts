@@ -150,6 +150,16 @@ const NVIDIA_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+const ASTRAI_BASE_URL = "https://astrai-compute.fly.dev/v1";
+const ASTRAI_DEFAULT_CONTEXT_WINDOW = 200000;
+const ASTRAI_DEFAULT_MAX_TOKENS = 8192;
+const ASTRAI_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
 interface OllamaModel {
   name: string;
   modified_at: string;
@@ -656,6 +666,42 @@ export function buildNvidiaProvider(): ProviderConfig {
   };
 }
 
+export function buildAstraiProvider(): ProviderConfig {
+  return {
+    baseUrl: ASTRAI_BASE_URL,
+    api: "openai-completions",
+    models: [
+      {
+        id: "auto",
+        name: "Astrai Auto (intelligent routing)",
+        reasoning: false,
+        input: ["text"],
+        cost: ASTRAI_DEFAULT_COST,
+        contextWindow: ASTRAI_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: ASTRAI_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "gpt-4o",
+        name: "GPT-4o (via Astrai)",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: { input: 2.5, output: 10, cacheRead: 1.25, cacheWrite: 2.5 },
+        contextWindow: 128000,
+        maxTokens: 16384,
+      },
+      {
+        id: "claude-sonnet-4",
+        name: "Claude Sonnet 4 (via Astrai)",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      },
+    ],
+  };
+}
+
 export async function resolveImplicitProviders(params: {
   agentDir: string;
   explicitProviders?: Record<string, ProviderConfig> | null;
@@ -805,6 +851,13 @@ export async function resolveImplicitProviders(params: {
     resolveApiKeyFromProfiles({ provider: "nvidia", store: authStore });
   if (nvidiaKey) {
     providers.nvidia = { ...buildNvidiaProvider(), apiKey: nvidiaKey };
+  }
+
+  const astraiKey =
+    resolveEnvApiKeyVarName("astrai") ??
+    resolveApiKeyFromProfiles({ provider: "astrai", store: authStore });
+  if (astraiKey) {
+    providers.astrai = { ...buildAstraiProvider(), apiKey: astraiKey };
   }
 
   return providers;
