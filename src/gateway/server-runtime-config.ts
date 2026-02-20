@@ -117,11 +117,6 @@ export async function resolveGatewayRuntimeConfig(params: {
   }
 
   if (authMode === "trusted-proxy") {
-    if (isLoopbackHost(bindHost)) {
-      throw new Error(
-        "gateway auth mode=trusted-proxy makes no sense with bind=loopback; use bind=lan or bind=custom with gateway.trustedProxies configured",
-      );
-    }
     if (trustedProxies.length === 0) {
       throw new Error(
         "gateway auth mode=trusted-proxy requires gateway.trustedProxies to be configured with at least one proxy IP",
