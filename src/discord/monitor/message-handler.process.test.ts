@@ -3,10 +3,27 @@ import { createBaseDiscordMessageContext } from "./message-handler.test-harness.
 
 const reactMessageDiscord = vi.fn(async () => {});
 const removeReactionDiscord = vi.fn(async () => {});
+const editMessageDiscord = vi.fn(async () => ({}));
+const deliverDiscordReply = vi.fn(async () => {});
+const createDiscordDraftStream = vi.fn(() => ({
+  update: vi.fn<(text: string) => void>(() => {}),
+  flush: vi.fn(async () => {}),
+  messageId: vi.fn(() => "preview-1"),
+  clear: vi.fn(async () => {}),
+  stop: vi.fn(async () => {}),
+  forceNewMessage: vi.fn(() => {}),
+}));
+
 type DispatchInboundParams = {
+  dispatcher: {
+    sendFinalReply: (payload: { text?: string }) => boolean | Promise<boolean>;
+  };
   replyOptions?: {
     onReasoningStream?: () => Promise<void> | void;
+    onReasoningEnd?: () => Promise<void> | void;
     onToolStart?: (payload: { name?: string }) => Promise<void> | void;
+    onPartialReply?: (payload: { text?: string }) => Promise<void> | void;
+    onAssistantMessageStart?: () => Promise<void> | void;
   };
 };
 const dispatchInboundMessage = vi.fn(async (_params?: DispatchInboundParams) => ({
@@ -22,23 +39,40 @@ vi.mock("../send.js", () => ({
   removeReactionDiscord,
 }));
 
+vi.mock("../send.messages.js", () => ({
+  editMessageDiscord,
+}));
+
+vi.mock("../draft-stream.js", () => ({
+  createDiscordDraftStream,
+}));
+
+vi.mock("./reply-delivery.js", () => ({
+  deliverDiscordReply,
+}));
+
 vi.mock("../../auto-reply/dispatch.js", () => ({
   dispatchInboundMessage,
 }));
 
 vi.mock("../../auto-reply/reply/reply-dispatcher.js", () => ({
-  createReplyDispatcherWithTyping: vi.fn(() => ({
-    dispatcher: {
-      sendToolResult: vi.fn(() => true),
-      sendBlockReply: vi.fn(() => true),
-      sendFinalReply: vi.fn(() => true),
-      waitForIdle: vi.fn(async () => {}),
-      getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
-      markComplete: vi.fn(),
-    },
-    replyOptions: {},
-    markDispatchIdle: vi.fn(),
-  })),
+  createReplyDispatcherWithTyping: vi.fn(
+    (opts: { deliver: (payload: unknown, info: { kind: string }) => Promise<void> | void }) => ({
+      dispatcher: {
+        sendToolResult: vi.fn(() => true),
+        sendBlockReply: vi.fn(() => true),
+        sendFinalReply: vi.fn((payload: unknown) => {
+          void opts.deliver(payload as never, { kind: "final" });
+          return true;
+        }),
+        waitForIdle: vi.fn(async () => {}),
+        getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+        markComplete: vi.fn(),
+      },
+      replyOptions: {},
+      markDispatchIdle: vi.fn(),
+    }),
+  ),
 }));
 
 vi.mock("../../channels/session.js", () => ({
@@ -58,6 +92,9 @@ beforeEach(() => {
   vi.useRealTimers();
   reactMessageDiscord.mockClear();
   removeReactionDiscord.mockClear();
+  editMessageDiscord.mockClear();
+  deliverDiscordReply.mockClear();
+  createDiscordDraftStream.mockClear();
   dispatchInboundMessage.mockReset();
   recordInboundSession.mockReset();
   readSessionUpdatedAt.mockReset();
@@ -159,10 +196,12 @@ describe("processDiscordMessage ack reactions", () => {
 
   it("shows stall emojis for long no-progress runs", async () => {
     vi.useFakeTimers();
+    let releaseDispatch!: () => void;
+    const dispatchGate = new Promise<void>((resolve) => {
+      releaseDispatch = () => resolve();
+    });
     dispatchInboundMessage.mockImplementationOnce(async () => {
-      await new Promise((resolve) => {
-        setTimeout(resolve, 31_000);
-      });
+      await dispatchGate;
       return { queuedFinal: false, counts: { final: 0, tool: 0, block: 0 } };
     });
 
@@ -170,13 +209,9 @@ describe("processDiscordMessage ack reactions", () => {
     // oxlint-disable-next-line typescript/no-explicit-any
     const runPromise = processDiscordMessage(ctx as any);
 
-    let settled = false;
-    void runPromise.finally(() => {
-      settled = true;
-    });
-    for (let i = 0; i < 120 && !settled; i++) {
-      await vi.advanceTimersByTimeAsync(1_000);
-    }
+    await vi.advanceTimersByTimeAsync(30_001);
+    releaseDispatch();
+    await vi.runAllTimersAsync();
 
     await runPromise;
     const emojis = (
@@ -252,5 +287,118 @@ describe("processDiscordMessage session routing", () => {
       to: "channel:c1",
       accountId: "default",
     });
+  });
+});
+
+describe("processDiscordMessage draft streaming", () => {
+  it("finalizes via preview edit when final fits one chunk", async () => {
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.dispatcher.sendFinalReply({ text: "Hello\nWorld" });
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+    });
+
+    const ctx = await createBaseContext({
+      discordConfig: { streamMode: "partial", maxLinesPerMessage: 5 },
+    });
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    await processDiscordMessage(ctx as any);
+
+    expect(editMessageDiscord).toHaveBeenCalledWith(
+      "c1",
+      "preview-1",
+      { content: "Hello\nWorld" },
+      { rest: {} },
+    );
+    expect(deliverDiscordReply).not.toHaveBeenCalled();
+  });
+
+  it("falls back to standard send when final needs multiple chunks", async () => {
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.dispatcher.sendFinalReply({ text: "Hello\nWorld" });
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+    });
+
+    const ctx = await createBaseContext({
+      discordConfig: { streamMode: "partial", maxLinesPerMessage: 1 },
+    });
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    await processDiscordMessage(ctx as any);
+
+    expect(editMessageDiscord).not.toHaveBeenCalled();
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("streams block previews using draft chunking", async () => {
+    const draftStream = {
+      update: vi.fn<(text: string) => void>(() => {}),
+      flush: vi.fn(async () => {}),
+      messageId: vi.fn(() => "preview-1"),
+      clear: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+      forceNewMessage: vi.fn(() => {}),
+    };
+    createDiscordDraftStream.mockReturnValueOnce(draftStream);
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onPartialReply?.({ text: "HelloWorld" });
+      return { queuedFinal: false, counts: { final: 0, tool: 0, block: 0 } };
+    });
+
+    const ctx = await createBaseContext({
+      cfg: {
+        messages: { ackReaction: "👀" },
+        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
+        channels: {
+          discord: {
+            draftChunk: { minChars: 1, maxChars: 5, breakPreference: "newline" },
+          },
+        },
+      },
+      discordConfig: { streamMode: "block" },
+    });
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    await processDiscordMessage(ctx as any);
+
+    const updates = draftStream.update.mock.calls.map((call) => call[0]);
+    expect(updates).toEqual(["Hello", "HelloWorld"]);
+  });
+
+  it("forces new preview messages on assistant boundaries in block mode", async () => {
+    const draftStream = {
+      update: vi.fn<(text: string) => void>(() => {}),
+      flush: vi.fn(async () => {}),
+      messageId: vi.fn(() => "preview-1"),
+      clear: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+      forceNewMessage: vi.fn(() => {}),
+    };
+    createDiscordDraftStream.mockReturnValueOnce(draftStream);
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onPartialReply?.({ text: "Hello" });
+      await params?.replyOptions?.onAssistantMessageStart?.();
+      return { queuedFinal: false, counts: { final: 0, tool: 0, block: 0 } };
+    });
+
+    const ctx = await createBaseContext({
+      cfg: {
+        messages: { ackReaction: "👀" },
+        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
+        channels: {
+          discord: {
+            draftChunk: { minChars: 1, maxChars: 5, breakPreference: "newline" },
+          },
+        },
+      },
+      discordConfig: { streamMode: "block" },
+    });
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    await processDiscordMessage(ctx as any);
+
+    expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
   });
 });

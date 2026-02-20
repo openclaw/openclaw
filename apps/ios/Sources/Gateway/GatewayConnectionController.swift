@@ -1,14 +1,12 @@
 import AVFoundation
-import Contacts
 import CoreLocation
 import CoreMotion
 import CryptoKit
-import EventKit
 import Foundation
+import Darwin
 import OpenClawKit
 import Network
 import Observation
-import Photos
 import ReplayKit
 import Security
 import Speech
@@ -162,7 +160,7 @@ final class GatewayConnectionController {
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let token = GatewaySettingsStore.loadGatewayToken(instanceId: instanceId)
         let password = GatewaySettingsStore.loadGatewayPassword(instanceId: instanceId)
-        let resolvedUseTLS = useTLS
+        let resolvedUseTLS = self.resolveManualUseTLS(host: host, useTLS: useTLS)
         guard let resolvedPort = self.resolveManualPort(host: host, port: port, useTLS: resolvedUseTLS)
         else { return }
         let stableID = self.manualStableID(host: host, port: resolvedPort)
@@ -213,6 +211,23 @@ final class GatewayConnectionController {
             guard let gateway = self.gateways.first(where: { $0.stableID == stableID }) else { return }
             await self.connectDiscoveredGateway(gateway)
         }
+    }
+
+    /// Rebuild connect options from current local settings (caps/commands/permissions)
+    /// and re-apply the active gateway config so capability changes take effect immediately.
+    func refreshActiveGatewayRegistrationFromSettings() {
+        guard let appModel else { return }
+        guard let cfg = appModel.activeGatewayConnectConfig else { return }
+        guard appModel.gatewayAutoReconnectEnabled else { return }
+
+        let refreshedConfig = GatewayConnectConfig(
+            url: cfg.url,
+            stableID: cfg.stableID,
+            tls: cfg.tls,
+            token: cfg.token,
+            password: cfg.password,
+            nodeOptions: self.makeConnectOptions(stableID: cfg.stableID))
+        appModel.applyGatewayConnectConfig(refreshedConfig)
     }
 
     func clearPendingTrustPrompt() {
@@ -309,7 +324,7 @@ final class GatewayConnectionController {
 
             let manualPort = defaults.integer(forKey: "gateway.manual.port")
             let manualTLS = defaults.bool(forKey: "gateway.manual.tls")
-            let resolvedUseTLS = manualTLS || self.shouldForceTLS(host: manualHost)
+            let resolvedUseTLS = self.resolveManualUseTLS(host: manualHost, useTLS: manualTLS)
             guard let resolvedPort = self.resolveManualPort(
                 host: manualHost,
                 port: manualPort,
@@ -320,7 +335,7 @@ final class GatewayConnectionController {
             let tlsParams = self.resolveManualTLSParams(
                 stableID: stableID,
                 tlsEnabled: resolvedUseTLS,
-                allowTOFUReset: self.shouldForceTLS(host: manualHost))
+                allowTOFUReset: self.shouldRequireTLS(host: manualHost))
 
             guard let url = self.buildGatewayURL(
                 host: manualHost,
@@ -340,7 +355,7 @@ final class GatewayConnectionController {
 
         if let lastKnown = GatewaySettingsStore.loadLastGatewayConnection() {
             if case let .manual(host, port, useTLS, stableID) = lastKnown {
-                let resolvedUseTLS = useTLS || self.shouldForceTLS(host: host)
+                let resolvedUseTLS = self.resolveManualUseTLS(host: host, useTLS: useTLS)
                 let stored = GatewayTLSStore.loadFingerprint(stableID: stableID)
                 let tlsParams = stored.map { fp in
                     GatewayTLSParams(required: true, expectedFingerprint: fp, allowTOFU: false, storeKey: stableID)
@@ -646,10 +661,63 @@ final class GatewayConnectionController {
         return components.url
     }
 
+    private func resolveManualUseTLS(host: String, useTLS: Bool) -> Bool {
+        useTLS || self.shouldRequireTLS(host: host)
+    }
+
+    private func shouldRequireTLS(host: String) -> Bool {
+        !Self.isLoopbackHost(host)
+    }
+
     private func shouldForceTLS(host: String) -> Bool {
         let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if trimmed.isEmpty { return false }
         return trimmed.hasSuffix(".ts.net") || trimmed.hasSuffix(".ts.net.")
+    }
+
+    private static func isLoopbackHost(_ rawHost: String) -> Bool {
+        var host = rawHost.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !host.isEmpty else { return false }
+
+        if host.hasPrefix("[") && host.hasSuffix("]") {
+            host.removeFirst()
+            host.removeLast()
+        }
+        if host.hasSuffix(".") {
+            host.removeLast()
+        }
+        if let zoneIndex = host.firstIndex(of: "%") {
+            host = String(host[..<zoneIndex])
+        }
+        if host.isEmpty { return false }
+
+        if host == "localhost" || host == "0.0.0.0" || host == "::" {
+            return true
+        }
+        return Self.isLoopbackIPv4(host) || Self.isLoopbackIPv6(host)
+    }
+
+    private static func isLoopbackIPv4(_ host: String) -> Bool {
+        var addr = in_addr()
+        let parsed = host.withCString { inet_pton(AF_INET, $0, &addr) == 1 }
+        guard parsed else { return false }
+        let value = UInt32(bigEndian: addr.s_addr)
+        let firstOctet = UInt8((value >> 24) & 0xFF)
+        return firstOctet == 127
+    }
+
+    private static func isLoopbackIPv6(_ host: String) -> Bool {
+        var addr = in6_addr()
+        let parsed = host.withCString { inet_pton(AF_INET6, $0, &addr) == 1 }
+        guard parsed else { return false }
+        return withUnsafeBytes(of: &addr) { rawBytes in
+            let bytes = rawBytes.bindMemory(to: UInt8.self)
+            let isV6Loopback = bytes[0..<15].allSatisfy { $0 == 0 } && bytes[15] == 1
+            if isV6Loopback { return true }
+
+            let isMappedV4 = bytes[0..<10].allSatisfy { $0 == 0 } && bytes[10] == 0xFF && bytes[11] == 0xFF
+            return isMappedV4 && bytes[12] == 127
+        }
     }
 
     private func manualStableID(host: String, port: Int) -> String {
@@ -712,6 +780,7 @@ final class GatewayConnectionController {
     }
 
     private func currentCaps() -> [String] {
+        let permissionSnapshot = IOSPermissionCenter.statusSnapshot()
         var caps = [OpenClawCapability.canvas.rawValue, OpenClawCapability.screen.rawValue]
 
         // Default-on: if the key doesn't exist yet, treat it as enabled.
@@ -729,11 +798,22 @@ final class GatewayConnectionController {
         if locationMode != .off { caps.append(OpenClawCapability.location.rawValue) }
 
         caps.append(OpenClawCapability.device.rawValue)
-        caps.append(OpenClawCapability.photos.rawValue)
-        caps.append(OpenClawCapability.contacts.rawValue)
-        caps.append(OpenClawCapability.calendar.rawValue)
-        caps.append(OpenClawCapability.reminders.rawValue)
-        if Self.motionAvailable() {
+        if WatchMessagingService.isSupportedOnDevice() {
+            caps.append(OpenClawCapability.watch.rawValue)
+        }
+        if permissionSnapshot.photosAllowed {
+            caps.append(OpenClawCapability.photos.rawValue)
+        }
+        if permissionSnapshot.contactsAllowed {
+            caps.append(OpenClawCapability.contacts.rawValue)
+        }
+        if permissionSnapshot.calendarReadAllowed || permissionSnapshot.calendarWriteAllowed {
+            caps.append(OpenClawCapability.calendar.rawValue)
+        }
+        if permissionSnapshot.remindersReadAllowed || permissionSnapshot.remindersWriteAllowed {
+            caps.append(OpenClawCapability.reminders.rawValue)
+        }
+        if Self.motionAvailable() && permissionSnapshot.motionAllowed {
             caps.append(OpenClawCapability.motion.rawValue)
         }
 
@@ -741,6 +821,7 @@ final class GatewayConnectionController {
     }
 
     private func currentCommands() -> [String] {
+        let permissionSnapshot = IOSPermissionCenter.statusSnapshot()
         var commands: [String] = [
             OpenClawCanvasCommand.present.rawValue,
             OpenClawCanvasCommand.hide.rawValue,
@@ -772,6 +853,10 @@ final class GatewayConnectionController {
             commands.append(OpenClawDeviceCommand.status.rawValue)
             commands.append(OpenClawDeviceCommand.info.rawValue)
         }
+        if caps.contains(OpenClawCapability.watch.rawValue) {
+            commands.append(OpenClawWatchCommand.status.rawValue)
+            commands.append(OpenClawWatchCommand.notify.rawValue)
+        }
         if caps.contains(OpenClawCapability.photos.rawValue) {
             commands.append(OpenClawPhotosCommand.latest.rawValue)
         }
@@ -780,12 +865,20 @@ final class GatewayConnectionController {
             commands.append(OpenClawContactsCommand.add.rawValue)
         }
         if caps.contains(OpenClawCapability.calendar.rawValue) {
-            commands.append(OpenClawCalendarCommand.events.rawValue)
-            commands.append(OpenClawCalendarCommand.add.rawValue)
+            if permissionSnapshot.calendarReadAllowed {
+                commands.append(OpenClawCalendarCommand.events.rawValue)
+            }
+            if permissionSnapshot.calendarWriteAllowed {
+                commands.append(OpenClawCalendarCommand.add.rawValue)
+            }
         }
         if caps.contains(OpenClawCapability.reminders.rawValue) {
-            commands.append(OpenClawRemindersCommand.list.rawValue)
-            commands.append(OpenClawRemindersCommand.add.rawValue)
+            if permissionSnapshot.remindersReadAllowed {
+                commands.append(OpenClawRemindersCommand.list.rawValue)
+            }
+            if permissionSnapshot.remindersWriteAllowed {
+                commands.append(OpenClawRemindersCommand.add.rawValue)
+            }
         }
         if caps.contains(OpenClawCapability.motion.rawValue) {
             commands.append(OpenClawMotionCommand.activity.rawValue)
@@ -796,6 +889,7 @@ final class GatewayConnectionController {
     }
 
     private func currentPermissions() -> [String: Bool] {
+        let permissionSnapshot = IOSPermissionCenter.statusSnapshot()
         var permissions: [String: Bool] = [:]
         permissions["camera"] = AVCaptureDevice.authorizationStatus(for: .video) == .authorized
         permissions["microphone"] = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
@@ -805,22 +899,29 @@ final class GatewayConnectionController {
             && CLLocationManager.locationServicesEnabled()
         permissions["screenRecording"] = RPScreenRecorder.shared().isAvailable
 
-        let photoStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
-        permissions["photos"] = photoStatus == .authorized || photoStatus == .limited
-        let contactsStatus = CNContactStore.authorizationStatus(for: .contacts)
-        permissions["contacts"] = contactsStatus == .authorized || contactsStatus == .limited
+        permissions["photos"] = permissionSnapshot.photosAllowed
+        permissions["photosDenied"] = permissionSnapshot.photos.isDeniedOrRestricted
+        permissions["contacts"] = permissionSnapshot.contactsAllowed
+        permissions["contactsDenied"] = permissionSnapshot.contacts.isDeniedOrRestricted
 
-        let calendarStatus = EKEventStore.authorizationStatus(for: .event)
-        permissions["calendar"] =
-            calendarStatus == .authorized || calendarStatus == .fullAccess || calendarStatus == .writeOnly
-        let remindersStatus = EKEventStore.authorizationStatus(for: .reminder)
-        permissions["reminders"] =
-            remindersStatus == .authorized || remindersStatus == .fullAccess || remindersStatus == .writeOnly
+        permissions["calendar"] = permissionSnapshot.calendarReadAllowed || permissionSnapshot.calendarWriteAllowed
+        permissions["calendarRead"] = permissionSnapshot.calendarReadAllowed
+        permissions["calendarWrite"] = permissionSnapshot.calendarWriteAllowed
+        permissions["calendarDenied"] = permissionSnapshot.calendar.isDeniedOrRestricted
 
-        let motionStatus = CMMotionActivityManager.authorizationStatus()
-        let pedometerStatus = CMPedometer.authorizationStatus()
-        permissions["motion"] =
-            motionStatus == .authorized || pedometerStatus == .authorized
+        permissions["reminders"] = permissionSnapshot.remindersReadAllowed || permissionSnapshot.remindersWriteAllowed
+        permissions["remindersRead"] = permissionSnapshot.remindersReadAllowed
+        permissions["remindersWrite"] = permissionSnapshot.remindersWriteAllowed
+        permissions["remindersDenied"] = permissionSnapshot.reminders.isDeniedOrRestricted
+
+        permissions["motion"] = permissionSnapshot.motionAllowed
+        permissions["motionDenied"] = permissionSnapshot.motion.isDeniedOrRestricted
+
+        let watchStatus = WatchMessagingService.currentStatusSnapshot()
+        permissions["watchSupported"] = watchStatus.supported
+        permissions["watchPaired"] = watchStatus.paired
+        permissions["watchAppInstalled"] = watchStatus.appInstalled
+        permissions["watchReachable"] = watchStatus.reachable
 
         return permissions
     }
@@ -928,6 +1029,14 @@ extension GatewayConnectionController {
         allowTOFU: Bool) -> GatewayTLSParams?
     {
         self.resolveDiscoveredTLSParams(gateway: gateway, allowTOFU: allowTOFU)
+    }
+
+    func _test_resolveManualUseTLS(host: String, useTLS: Bool) -> Bool {
+        self.resolveManualUseTLS(host: host, useTLS: useTLS)
+    }
+
+    func _test_resolveManualPort(host: String, port: Int, useTLS: Bool) -> Int? {
+        self.resolveManualPort(host: host, port: port, useTLS: useTLS)
     }
 }
 #endif

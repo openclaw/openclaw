@@ -1,10 +1,15 @@
 import crypto from "node:crypto";
-import fs from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { Type } from "@sinclair/typebox";
 import { writeBase64ToFile } from "../../cli/nodes-camera.js";
 import { canvasSnapshotTempPath, parseCanvasSnapshotPayload } from "../../cli/nodes-canvas.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { openFileWithinRoot, SafeOpenError } from "../../infra/fs-safe.js";
+import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { imageMimeFromFormat } from "../../media/mime.js";
+import { resolveUserPath } from "../../utils.js";
+import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
 import { type AnyAgentTool, imageResult, jsonResult, readStringParam } from "./common.js";
@@ -22,6 +27,79 @@ const CANVAS_ACTIONS = [
 ] as const;
 
 const CANVAS_SNAPSHOT_FORMATS = ["png", "jpg", "jpeg"] as const;
+
+const PATH_SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i;
+const WINDOWS_DRIVE_RE = /^[a-zA-Z]:[\\/]/;
+
+function resolveJsonlLocalPath(rawPath: string): string {
+  const trimmed = rawPath.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+  if (trimmed.startsWith("file://")) {
+    try {
+      return fileURLToPath(trimmed);
+    } catch (err) {
+      throw new Error(`Invalid jsonlPath file URL: ${rawPath}`, { cause: err });
+    }
+  }
+  if (PATH_SCHEME_RE.test(trimmed) && !WINDOWS_DRIVE_RE.test(trimmed)) {
+    throw new Error("jsonlPath must be a local file path.");
+  }
+  if (trimmed.startsWith("~")) {
+    return resolveUserPath(trimmed);
+  }
+  return path.resolve(trimmed);
+}
+
+function resolveLocalRoot(filePath: string, roots: readonly string[]): string | null {
+  const resolvedPath = path.resolve(filePath);
+  for (const root of roots) {
+    const resolvedRoot = path.resolve(root);
+    const rel = path.relative(resolvedRoot, resolvedPath);
+    if (!rel || (!rel.startsWith("..") && !path.isAbsolute(rel))) {
+      return resolvedRoot;
+    }
+  }
+  return null;
+}
+
+async function readJsonlFromPath(params: {
+  jsonlPath: string;
+  localRoots: readonly string[];
+}): Promise<string> {
+  const resolvedPath = resolveJsonlLocalPath(params.jsonlPath);
+  const resolvedRoot = resolveLocalRoot(resolvedPath, params.localRoots);
+  if (!resolvedRoot) {
+    throw new Error("jsonlPath must be under an allowed directory.");
+  }
+  const relativePath = path.relative(resolvedRoot, resolvedPath);
+  try {
+    const opened = await openFileWithinRoot({
+      rootDir: resolvedRoot,
+      relativePath,
+    });
+    try {
+      const buffer = await opened.handle.readFile();
+      return buffer.toString("utf8");
+    } finally {
+      await opened.handle.close().catch(() => {});
+    }
+  } catch (err) {
+    if (err instanceof SafeOpenError) {
+      if (err.code === "not-found") {
+        throw new Error("jsonlPath file not found.", { cause: err });
+      }
+      if (err.code === "not-file") {
+        throw new Error("jsonlPath must be a regular file.", { cause: err });
+      }
+      throw new Error("jsonlPath must be a regular file within an allowed directory.", {
+        cause: err,
+      });
+    }
+    throw err;
+  }
+}
 
 // Flattened schema: runtime validates per-action requirements.
 const CanvasToolSchema = Type.Object({
@@ -50,8 +128,15 @@ const CanvasToolSchema = Type.Object({
   jsonlPath: Type.Optional(Type.String()),
 });
 
-export function createCanvasTool(options?: { config?: OpenClawConfig }): AnyAgentTool {
+export function createCanvasTool(options?: {
+  config?: OpenClawConfig;
+  agentSessionKey?: string;
+}): AnyAgentTool {
   const imageSanitization = resolveImageSanitizationLimits(options?.config);
+  const agentId = options?.agentSessionKey
+    ? resolveSessionAgentId({ sessionKey: options.agentSessionKey, config: options?.config })
+    : undefined;
+  const localRoots = getAgentScopedMediaLocalRoots(options?.config ?? {}, agentId);
   return {
     label: "Canvas",
     name: "canvas",
@@ -169,7 +254,10 @@ export function createCanvasTool(options?: { config?: OpenClawConfig }): AnyAgen
             typeof params.jsonl === "string" && params.jsonl.trim()
               ? params.jsonl
               : typeof params.jsonlPath === "string" && params.jsonlPath.trim()
-                ? await fs.readFile(params.jsonlPath.trim(), "utf8")
+                ? await readJsonlFromPath({
+                    jsonlPath: params.jsonlPath,
+                    localRoots,
+                  })
                 : "";
           if (!jsonl.trim()) {
             throw new Error("jsonl or jsonlPath required");

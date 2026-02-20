@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveBrowserConfig } from "./config.js";
 import {
   refreshResolvedBrowserConfigFromDisk,
@@ -40,6 +40,12 @@ vi.mock("../config/config.js", () => ({
 }));
 
 describe("server-context hot-reload profiles", () => {
+  let loadConfig: typeof import("../config/config.js").loadConfig;
+
+  beforeAll(async () => {
+    ({ loadConfig } = await import("../config/config.js"));
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     cfgProfiles = {
@@ -49,8 +55,6 @@ describe("server-context hot-reload profiles", () => {
   });
 
   it("forProfile hot-reloads newly added profiles from config", async () => {
-    const { loadConfig } = await import("../config/config.js");
-
     // Start with only openclaw profile
     // 1. Prime the cache by calling loadConfig() first
     const cfg = loadConfig();
@@ -101,8 +105,6 @@ describe("server-context hot-reload profiles", () => {
   });
 
   it("forProfile still throws for profiles that don't exist in fresh config", async () => {
-    const { loadConfig } = await import("../config/config.js");
-
     const cfg = loadConfig();
     const resolved = resolveBrowserConfig(cfg.browser, cfg);
     const state = {
@@ -123,8 +125,6 @@ describe("server-context hot-reload profiles", () => {
   });
 
   it("forProfile refreshes existing profile config after loadConfig cache updates", async () => {
-    const { loadConfig } = await import("../config/config.js");
-
     const cfg = loadConfig();
     const resolved = resolveBrowserConfig(cfg.browser, cfg);
     const state = {
@@ -147,8 +147,6 @@ describe("server-context hot-reload profiles", () => {
   });
 
   it("listProfiles refreshes config before enumerating profiles", async () => {
-    const { loadConfig } = await import("../config/config.js");
-
     const cfg = loadConfig();
     const resolved = resolveBrowserConfig(cfg.browser, cfg);
     const state = {

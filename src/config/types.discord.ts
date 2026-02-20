@@ -1,5 +1,6 @@
 import type { DiscordPluralKitConfig } from "../discord/pluralkit.js";
 import type {
+  BlockStreamingChunkConfig,
   BlockStreamingCoalesceConfig,
   DmPolicy,
   GroupPolicy,
@@ -10,6 +11,8 @@ import type {
 import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
 import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
+
+export type DiscordStreamMode = "partial" | "block" | "off";
 
 export type DiscordDmConfig = {
   /** If false, ignore all incoming Discord DMs. Default: true. */
@@ -153,6 +156,16 @@ export type DiscordAccountConfig = {
   chunkMode?: "length" | "newline";
   /** Disable block streaming for this account. */
   blockStreaming?: boolean;
+  /**
+   * Live preview streaming mode (edit-based, like Telegram).
+   * - "partial": send a message and continuously edit it with new content as tokens arrive.
+   * - "block": stream previews in draft-sized chunks (like Telegram block mode).
+   * - "off": no preview streaming (default).
+   * When enabled, block streaming is automatically suppressed to avoid double-streaming.
+   */
+  streamMode?: DiscordStreamMode;
+  /** Chunking config for Discord stream previews in `streamMode: "block"`. */
+  draftChunk?: BlockStreamingChunkConfig;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
   /**
@@ -183,6 +196,8 @@ export type DiscordAccountConfig = {
    * Legacy key: channels.discord.dm.allowFrom.
    */
   allowFrom?: string[];
+  /** Default delivery target for CLI --deliver when no explicit --reply-to is provided. */
+  defaultTo?: string;
   dm?: DiscordDmConfig;
   /** New per-guild config keyed by guild id or slug. */
   guilds?: Record<string, DiscordGuildEntry>;

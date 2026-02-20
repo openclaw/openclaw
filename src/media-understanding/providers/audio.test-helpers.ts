@@ -1,6 +1,7 @@
 import type { MockInstance } from "vitest";
 import { afterEach, beforeEach, vi } from "vitest";
 import * as ssrf from "../../infra/net/ssrf.js";
+import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 
 export function resolveRequestUrl(input: RequestInfo | URL): string {
   if (typeof input === "string") {
@@ -39,4 +40,37 @@ export function installPinnedHostnameTestHooks(): void {
     resolvePinnedHostnameSpy = null;
     resolvePinnedHostnameWithPolicySpy = null;
   });
+}
+
+export function createAuthCaptureJsonFetch(responseBody: unknown) {
+  let seenAuth: string | null = null;
+  const fetchFn = withFetchPreconnect(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const headers = new Headers(init?.headers);
+    seenAuth = headers.get("authorization");
+    return new Response(JSON.stringify(responseBody), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  });
+  return {
+    fetchFn,
+    getAuthHeader: () => seenAuth,
+  };
+}
+
+export function createRequestCaptureJsonFetch(responseBody: unknown) {
+  let seenUrl: string | null = null;
+  let seenInit: RequestInit | undefined;
+  const fetchFn = withFetchPreconnect(async (input: RequestInfo | URL, init?: RequestInit) => {
+    seenUrl = resolveRequestUrl(input);
+    seenInit = init;
+    return new Response(JSON.stringify(responseBody), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  });
+  return {
+    fetchFn,
+    getRequest: () => ({ url: seenUrl, init: seenInit }),
+  };
 }
