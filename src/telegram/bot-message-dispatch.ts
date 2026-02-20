@@ -1,4 +1,10 @@
 import type { Bot } from "grammy";
+import type { OpenClawConfig, ReplyToMode, TelegramAccountConfig } from "../config/types.js";
+import type { RuntimeEnv } from "../runtime.js";
+import type { TelegramMessageContext } from "./bot-message-context.js";
+import type { TelegramBotOptions } from "./bot.js";
+import type { TelegramStreamMode } from "./bot/types.js";
+import type { TelegramInlineButtons } from "./button-types.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import {
   findModelInCatalog,
@@ -15,15 +21,9 @@ import { logAckFailure, logTypingFailure } from "../channels/logging.js";
 import { createReplyPrefixOptions } from "../channels/reply-prefix.js";
 import { createTypingCallbacks } from "../channels/typing.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
-import type { OpenClawConfig, ReplyToMode, TelegramAccountConfig } from "../config/types.js";
 import { danger, logVerbose } from "../globals.js";
 import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
-import type { RuntimeEnv } from "../runtime.js";
-import type { TelegramMessageContext } from "./bot-message-context.js";
-import type { TelegramBotOptions } from "./bot.js";
 import { deliverReplies } from "./bot/delivery.js";
-import type { TelegramStreamMode } from "./bot/types.js";
-import type { TelegramInlineButtons } from "./button-types.js";
 import { resolveTelegramDraftStreamingChunking } from "./draft-chunking.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
 import { editMessageTelegram } from "./send.js";
@@ -334,6 +334,7 @@ export const dispatchTelegramMessage = async ({
                 await editMessageTelegram(chatId, previewMessageId, finalText, {
                   api: bot.api,
                   cfg,
+                  token: opts.token,
                   accountId: route.accountId,
                   linkPreview: telegramCfg.linkPreview,
                   buttons: previewButtons,
@@ -358,6 +359,19 @@ export const dispatchTelegramMessage = async ({
               );
             }
             if (!draftStoppedForPreviewEdit) {
+              if (
+                hasStreamedMessage &&
+                typeof previewMessageId !== "number" &&
+                !hasMedia &&
+                !payload.isError &&
+                typeof finalText === "string" &&
+                finalText.length > 0 &&
+                finalText.length <= draftMaxChars
+              ) {
+                // Avoid showing an incomplete fragment as the first preview.
+                // Keep pending preview text at finalText before finalization.
+                draftStream?.update(finalText);
+              }
               await draftStream?.stop();
             }
             // Check if stop() sent a message (debounce released on isFinal)
@@ -376,6 +390,7 @@ export const dispatchTelegramMessage = async ({
                 await editMessageTelegram(chatId, messageIdAfterStop, finalText, {
                   api: bot.api,
                   cfg,
+                  token: opts.token,
                   accountId: route.accountId,
                   linkPreview: telegramCfg.linkPreview,
                   buttons: previewButtons,

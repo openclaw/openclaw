@@ -1,5 +1,5 @@
-import path from "node:path";
 import type { Bot } from "grammy";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { STATE_DIR } from "../config/paths.js";
 
@@ -239,6 +239,38 @@ describe("dispatchTelegramMessage draft streaming", () => {
     await dispatchWithContext({ context: createContext() });
 
     expect(editMessageTelegram).toHaveBeenCalledWith(123, 777, "Short final", expect.any(Object));
+    expect(deliverReplies).not.toHaveBeenCalled();
+    expect(draftStream.stop).toHaveBeenCalled();
+  });
+
+  it("primes stop() with final text when a stale short partial exists", async () => {
+    let messageId: number | undefined;
+    const draftStream = {
+      update: vi.fn(),
+      flush: vi.fn().mockResolvedValue(undefined),
+      messageId: vi.fn().mockImplementation(() => messageId),
+      clear: vi.fn().mockResolvedValue(undefined),
+      stop: vi.fn().mockImplementation(async () => {
+        messageId = 777;
+      }),
+      forceNewMessage: vi.fn(),
+    };
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "no" });
+        await dispatcherOptions.deliver({ text: "no problem" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "777" });
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(draftStream.update).toHaveBeenCalledWith("no");
+    expect(draftStream.update).toHaveBeenLastCalledWith("no problem");
+    expect(editMessageTelegram).toHaveBeenCalledWith(123, 777, "no problem", expect.any(Object));
     expect(deliverReplies).not.toHaveBeenCalled();
     expect(draftStream.stop).toHaveBeenCalled();
   });
