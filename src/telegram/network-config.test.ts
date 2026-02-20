@@ -3,12 +3,16 @@ import { resolveTelegramAutoSelectFamilyDecision } from "./network-config.js";
 
 // Mock isWSL2Sync at the top level
 vi.mock("../infra/wsl.js", () => ({
-  isWSL2Sync: vi.fn(),
+  isWSL2Sync: vi.fn(() => false),
 }));
 
 import { isWSL2Sync } from "../infra/wsl.js";
 
 describe("resolveTelegramAutoSelectFamilyDecision", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("prefers env enable over env disable", () => {
     const decision = resolveTelegramAutoSelectFamilyDecision({
       env: {
@@ -78,10 +82,6 @@ describe("resolveTelegramAutoSelectFamilyDecision", () => {
   });
 
   describe("WSL2 detection", () => {
-    afterEach(() => {
-      vi.restoreAllMocks();
-    });
-
     it("disables autoSelectFamily on WSL2", () => {
       vi.mocked(isWSL2Sync).mockReturnValue(true);
       const decision = resolveTelegramAutoSelectFamilyDecision({ env: {}, nodeMajor: 22 });
