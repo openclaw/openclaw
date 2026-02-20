@@ -73,7 +73,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   });
   const chunkMode = core.channel.text.resolveChunkMode(cfg, "feishu");
   const tableMode = core.channel.text.resolveMarkdownTableMode({ cfg, channel: "feishu" });
-  const renderMode = account.config?.renderMode ?? "auto";
+  const renderMode = account.config?.renderMode ?? "card";
   const streamingEnabled = account.config?.streaming !== false && renderMode !== "raw";
 
   let streaming: FeishuStreamingSession | null = null;
