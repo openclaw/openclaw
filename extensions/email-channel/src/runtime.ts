@@ -35,6 +35,8 @@ let imapConnection: Imap | null = null;
 let smtpTransporter: nodemailer.Transporter | null = null;
 let currentConfig: EmailConfig | null = null;
 let checkTimer: NodeJS.Timeout | null = null;
+let isInboxOpen = false; // Track if inbox is currently open
+let isProcessingEmails = false; // Prevent overlapping email processing
 let messageHandler:
   | ((
       from: string,
@@ -153,7 +155,12 @@ function openInbox(cb: (err: Error | null, box?: any) => void): void {
     cb(new Error("IMAP connection not initialized"));
     return;
   }
-  imapConnection.openBox("INBOX", cb);
+  imapConnection.openBox("INBOX", (err, box) => {
+    if (!err) {
+      isInboxOpen = true;
+    }
+    cb(err, box);
+  });
 }
 
 function formatDateForImap(date: Date): string {
@@ -181,6 +188,20 @@ function formatDateForImap(date: Date): string {
 function checkEmail(): void {
   if (!imapConnection) return;
 
+  // Check if inbox is open before searching
+  if (!isInboxOpen) {
+    console.log("[EMAIL PLUGIN] Inbox not open, skipping check");
+    return;
+  }
+
+  // Prevent overlapping email processing
+  if (isProcessingEmails) {
+    console.log("[EMAIL PLUGIN] Already processing emails, skipping check");
+    return;
+  }
+
+  isProcessingEmails = true;
+
   // Search for emails SINCE the last processed timestamp
   // Add a small buffer (1 minute) to catch any edge cases
   const lastProcessedDate = new Date(currentState.lastProcessedTimestamp);
@@ -194,11 +215,13 @@ function checkEmail(): void {
   imapConnection.search([["SINCE", dateStr]], (err: Error | null, results: number[]) => {
     if (err) {
       console.error("[EMAIL PLUGIN] Email search error:", err);
+      isProcessingEmails = false;
       return;
     }
 
     if (!results || results.length === 0) {
       console.log("[EMAIL PLUGIN] No new emails found");
+      isProcessingEmails = false;
       return;
     }
 
@@ -291,6 +314,7 @@ function checkEmail(): void {
 
     fetch.on("end", () => {
       console.log("[EMAIL PLUGIN] Email check complete");
+      isProcessingEmails = false;
     });
   });
 }
@@ -307,6 +331,10 @@ export function startEmail(
   ) => Promise<void>,
 ): void {
   console.error("[EMAIL PLUGIN] startEmail called!");
+
+  // Reset state flags in case this is a restart
+  isInboxOpen = false;
+  isProcessingEmails = false;
 
   // Load persistent state
   loadState();
@@ -403,6 +431,8 @@ export function stopEmail(): void {
   }
 
   currentConfig = null;
+  isInboxOpen = false;
+  isProcessingEmails = false;
   messageHandler = null;
   allowedSenders = [];
   // Don't clear currentState, it should persist
