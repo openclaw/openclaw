@@ -446,7 +446,7 @@ describe("readSessionMessages", () => {
     storePath = nextStorePath;
   });
 
-  test("includes synthetic compaction markers for compaction entries", () => {
+  test("includes synthetic compaction markers for compaction entries", async () => {
     const sessionId = "test-session-compaction";
     const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
     const lines = [
@@ -464,7 +464,7 @@ describe("readSessionMessages", () => {
     ];
     fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
 
-    const out = readSessionMessages(sessionId, storePath);
+    const out = await readSessionMessages(sessionId, storePath);
     expect(out).toHaveLength(3);
     const marker = out[1] as {
       role: string;
@@ -479,7 +479,7 @@ describe("readSessionMessages", () => {
     expect(typeof marker.timestamp).toBe("number");
   });
 
-  test("reads cross-agent absolute sessionFile when storePath points to another agent dir", () => {
+  test("reads cross-agent absolute sessionFile when storePath points to another agent dir", async () => {
     const sessionId = "cross-agent-default-root";
     const sessionFile = path.join(tmpDir, "agents", "ops", "sessions", `${sessionId}.jsonl`);
     fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
@@ -493,12 +493,12 @@ describe("readSessionMessages", () => {
     );
 
     const wrongStorePath = path.join(tmpDir, "agents", "main", "sessions", "sessions.json");
-    const out = readSessionMessages(sessionId, wrongStorePath, sessionFile);
+    const out = await readSessionMessages(sessionId, wrongStorePath, sessionFile);
 
     expect(out).toEqual([{ role: "user", content: "from-ops" }]);
   });
 
-  test("reads cross-agent absolute sessionFile for custom per-agent store roots", () => {
+  test("reads cross-agent absolute sessionFile for custom per-agent store roots", async () => {
     const sessionId = "cross-agent-custom-root";
     const sessionFile = path.join(
       tmpDir,
@@ -526,7 +526,7 @@ describe("readSessionMessages", () => {
       "sessions",
       "sessions.json",
     );
-    const out = readSessionMessages(sessionId, wrongStorePath, sessionFile);
+    const out = await readSessionMessages(sessionId, wrongStorePath, sessionFile);
 
     expect(out).toEqual([{ role: "assistant", content: "from-custom-ops" }]);
   });

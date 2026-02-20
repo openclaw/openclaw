@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -66,19 +67,29 @@ function setCachedSessionTitleFields(cacheKey: string, stat: fs.Stats, value: Se
   }
 }
 
-export function readSessionMessages(
+export async function readSessionMessages(
   sessionId: string,
   storePath: string | undefined,
   sessionFile?: string,
-): unknown[] {
+): Promise<unknown[]> {
   const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile);
 
-  const filePath = candidates.find((p) => fs.existsSync(p));
+  let filePath: string | undefined;
+  for (const p of candidates) {
+    try {
+      await fsp.access(p);
+      filePath = p;
+      break;
+    } catch {
+      // not found, try next
+    }
+  }
   if (!filePath) {
     return [];
   }
 
-  const lines = fs.readFileSync(filePath, "utf-8").split(/\r?\n/);
+  const content = await fsp.readFile(filePath, "utf-8");
+  const lines = content.split(/\r?\n/);
   const messages: unknown[] = [];
   for (const line of lines) {
     if (!line.trim()) {
