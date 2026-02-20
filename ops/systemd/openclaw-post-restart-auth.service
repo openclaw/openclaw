@@ -1,0 +1,26 @@
+# OpenClaw Post-Restart Auth Check
+# Gateway 起動後に認証トークンの健全性を即座に確認する
+# - Gateway の /health エンドポイントが応答するまで待機
+# - models status --check で認証状態を検証
+# - 問題があれば auth_monitor.py で Slack 通知
+[Unit]
+Description=OpenClaw Post-Restart Auth Check
+After=openclaw-gateway.service docker.service
+Requires=docker.service
+BindsTo=openclaw-gateway.service
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/home/ubuntu/openclaw
+SupplementaryGroups=docker
+EnvironmentFile=-/etc/openclaw/auth-monitor.env
+ExecStart=/bin/bash /home/ubuntu/openclaw/ops/post_restart_auth_check.sh
+TimeoutStartSec=180
+# Security: read-only + write only to ops dir for state
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/home/ubuntu/openclaw/ops
+
+[Install]
+WantedBy=openclaw-gateway.service

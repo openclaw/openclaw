@@ -1,4 +1,7 @@
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { buildAuthHealthSummary, formatRemainingShort } from "../agents/auth-health.js";
+import { resolveApiKeyForProfile } from "../agents/auth-profiles/oauth.js";
+import { ensureAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import {
   getModelRefStatus,
@@ -29,6 +32,73 @@ import { startGatewayMemoryBackend } from "./server-startup-memory.js";
 
 const SESSION_LOCK_STALE_MS = 30 * 60 * 1000;
 
+/**
+ * Proactive auth health check on Gateway startup.
+ * Validates all auth profiles and attempts to refresh expired OAuth tokens
+ * before the first API call, avoiding latency on the first request.
+ */
+async function checkAndRefreshAuthOnStartup(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  log: { info: (msg: string) => void; warn: (msg: string) => void };
+}): Promise<void> {
+  const store = ensureAuthProfileStore(undefined, { allowKeychainPrompt: false });
+  const summary = buildAuthHealthSummary({ store, cfg: params.cfg });
+
+  const profileCount = summary.profiles.length;
+  if (profileCount === 0) {
+    params.log.info("startup auth check: no auth profiles configured");
+    return;
+  }
+
+  const expired = summary.profiles.filter((p) => p.status === "expired");
+  const expiring = summary.profiles.filter((p) => p.status === "expiring");
+  const ok = summary.profiles.filter((p) => p.status === "ok" || p.status === "static");
+
+  params.log.info(
+    `startup auth check: ${profileCount} profiles — ${ok.length} ok, ${expiring.length} expiring, ${expired.length} expired`,
+  );
+
+  for (const profile of expiring) {
+    const remaining = formatRemainingShort(profile.remainingMs);
+    params.log.warn(
+      `auth profile "${profile.profileId}" (${profile.provider}) expiring in ${remaining}`,
+    );
+  }
+
+  // Proactively refresh expired OAuth tokens so the first API call doesn't block.
+  for (const profile of expired) {
+    if (profile.type !== "oauth") {
+      params.log.warn(
+        `auth profile "${profile.profileId}" (${profile.provider}) is expired (type=${profile.type}, no auto-refresh)`,
+      );
+      continue;
+    }
+    params.log.warn(
+      `auth profile "${profile.profileId}" (${profile.provider}) expired — attempting proactive refresh`,
+    );
+    try {
+      const refreshed = await resolveApiKeyForProfile({
+        cfg: params.cfg,
+        store,
+        profileId: profile.profileId,
+      });
+      if (refreshed) {
+        params.log.info(
+          `auth profile "${profile.profileId}" refreshed successfully`,
+        );
+      } else {
+        params.log.warn(
+          `auth profile "${profile.profileId}" refresh returned null — may need re-authentication`,
+        );
+      }
+    } catch (err) {
+      params.log.warn(
+        `auth profile "${profile.profileId}" refresh failed: ${String(err)}`,
+      );
+    }
+  }
+}
+
 export async function startGatewaySidecars(params: {
   cfg: ReturnType<typeof loadConfig>;
   pluginRegistry: ReturnType<typeof loadOpenClawPlugins>;
@@ -57,6 +127,19 @@ export async function startGatewaySidecars(params: {
     }
   } catch (err) {
     params.log.warn(`session lock cleanup failed on startup: ${String(err)}`);
+  }
+
+  // Proactive auth health check: validate and refresh tokens before accepting requests.
+  try {
+    await checkAndRefreshAuthOnStartup({
+      cfg: params.cfg,
+      log: {
+        info: (msg) => params.log.warn(msg), // use warn level for visibility in logs
+        warn: (msg) => params.log.warn(msg),
+      },
+    });
+  } catch (err) {
+    params.log.warn(`startup auth check failed: ${String(err)}`);
   }
 
   // Start OpenClaw browser control server (unless disabled via config).
