@@ -6,7 +6,6 @@ import {
   pruneExpiredPending,
   readJsonFile,
   resolvePairingPaths,
-  upsertPendingPairingRequest,
   writeJsonAtomic,
 } from "./pairing-files.js";
 import { generatePairingToken, verifyPairingToken } from "./pairing-token.js";
@@ -153,6 +152,30 @@ function mergeScopes(...items: Array<string[] | undefined>): string[] | undefine
   return [...scopes];
 }
 
+function mergePendingDevicePairingRequest(
+  existing: DevicePairingPendingRequest,
+  incoming: Omit<DevicePairingPendingRequest, "requestId" | "ts" | "isRepair">,
+  isRepair: boolean,
+): DevicePairingPendingRequest {
+  const existingRole = normalizeRole(existing.role);
+  const incomingRole = normalizeRole(incoming.role);
+  return {
+    ...existing,
+    displayName: incoming.displayName ?? existing.displayName,
+    platform: incoming.platform ?? existing.platform,
+    clientId: incoming.clientId ?? existing.clientId,
+    clientMode: incoming.clientMode ?? existing.clientMode,
+    role: existingRole ?? incomingRole ?? undefined,
+    roles: mergeRoles(existing.roles, existing.role, incoming.role),
+    scopes: mergeScopes(existing.scopes, incoming.scopes),
+    remoteIp: incoming.remoteIp ?? existing.remoteIp,
+    // If either request is interactive, keep the pending request visible for approval.
+    silent: Boolean(existing.silent && incoming.silent),
+    isRepair: existing.isRepair || isRepair,
+    ts: Date.now(),
+  };
+}
+
 function newToken() {
   return generatePairingToken();
 }
@@ -217,29 +240,36 @@ export async function requestDevicePairing(
     if (!deviceId) {
       throw new Error("deviceId required");
     }
+    const isRepair = Boolean(state.pairedByDeviceId[deviceId]);
+    const existing = Object.values(state.pendingById).find(
+      (pending) => pending.deviceId === deviceId,
+    );
+    if (existing) {
+      const merged = mergePendingDevicePairingRequest(existing, req, isRepair);
+      state.pendingById[existing.requestId] = merged;
+      await persistState(state, baseDir);
+      return { status: "pending" as const, request: merged, created: false };
+    }
 
-    return await upsertPendingPairingRequest({
-      pendingById: state.pendingById,
-      isExisting: (pending) => pending.deviceId === deviceId,
-      isRepair: Boolean(state.pairedByDeviceId[deviceId]),
-      createRequest: (isRepair) => ({
-        requestId: randomUUID(),
-        deviceId,
-        publicKey: req.publicKey,
-        displayName: req.displayName,
-        platform: req.platform,
-        clientId: req.clientId,
-        clientMode: req.clientMode,
-        role: req.role,
-        roles: req.role ? [req.role] : undefined,
-        scopes: req.scopes,
-        remoteIp: req.remoteIp,
-        silent: req.silent,
-        isRepair,
-        ts: Date.now(),
-      }),
-      persist: async () => await persistState(state, baseDir),
-    });
+    const request: DevicePairingPendingRequest = {
+      requestId: randomUUID(),
+      deviceId,
+      publicKey: req.publicKey,
+      displayName: req.displayName,
+      platform: req.platform,
+      clientId: req.clientId,
+      clientMode: req.clientMode,
+      role: req.role,
+      roles: req.role ? [req.role] : undefined,
+      scopes: req.scopes,
+      remoteIp: req.remoteIp,
+      silent: req.silent,
+      isRepair,
+      ts: Date.now(),
+    };
+    state.pendingById[request.requestId] = request;
+    await persistState(state, baseDir);
+    return { status: "pending" as const, request, created: true };
   });
 }
 
