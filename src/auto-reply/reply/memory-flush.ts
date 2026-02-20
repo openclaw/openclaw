@@ -119,6 +119,24 @@ export function shouldRunMemoryFlush(params: {
   reserveTokensFloor: number;
   softThresholdTokens: number;
 }): boolean {
+  const compactionCount = params.entry?.compactionCount ?? 0;
+  const lastFlushAt = params.entry?.memoryFlushCompactionCount;
+
+  // Already flushed for the current compaction cycle — skip.
+  if (typeof lastFlushAt === "number" && lastFlushAt >= compactionCount) {
+    return false;
+  }
+
+  // Compaction happened since the last flush. The detailed conversation has been
+  // summarized, but the summary still holds key context worth persisting. Trigger
+  // the flush regardless of token count — the narrow threshold window (softThresholdTokens)
+  // means the proactive check almost never fires in practice because compaction resets
+  // totalTokens to a post-compaction value before the next turn boundary.
+  if (compactionCount > 0) {
+    return true;
+  }
+
+  // Proactive flush when approaching the compaction threshold (pre-first-compaction).
   const totalTokens = resolveFreshSessionTotalTokens(params.entry);
   if (!totalTokens || totalTokens <= 0) {
     return false;
@@ -131,12 +149,6 @@ export function shouldRunMemoryFlush(params: {
     return false;
   }
   if (totalTokens < threshold) {
-    return false;
-  }
-
-  const compactionCount = params.entry?.compactionCount ?? 0;
-  const lastFlushAt = params.entry?.memoryFlushCompactionCount;
-  if (typeof lastFlushAt === "number" && lastFlushAt === compactionCount) {
     return false;
   }
 

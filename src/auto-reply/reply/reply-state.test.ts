@@ -292,13 +292,57 @@ describe("shouldRunMemoryFlush", () => {
     ).toBe(true);
   });
 
-  it("ignores stale cached totals", () => {
+  it("ignores stale cached totals for proactive threshold flush", () => {
+    expect(
+      shouldRunMemoryFlush({
+        entry: { totalTokens: 96_000, totalTokensFresh: false, compactionCount: 0 },
+        contextWindowTokens: 100_000,
+        reserveTokensFloor: 5_000,
+        softThresholdTokens: 2_000,
+      }),
+    ).toBe(false);
+  });
+
+  it("triggers after missed compaction even when tokens are low", () => {
+    expect(
+      shouldRunMemoryFlush({
+        entry: { totalTokens: 50_000, compactionCount: 1 },
+        contextWindowTokens: 200_000,
+        reserveTokensFloor: 20_000,
+        softThresholdTokens: 4_000,
+      }),
+    ).toBe(true);
+  });
+
+  it("triggers after missed compaction with stale totals", () => {
     expect(
       shouldRunMemoryFlush({
         entry: { totalTokens: 96_000, totalTokensFresh: false, compactionCount: 1 },
         contextWindowTokens: 100_000,
         reserveTokensFloor: 5_000,
         softThresholdTokens: 2_000,
+      }),
+    ).toBe(true);
+  });
+
+  it("triggers when compactionCount exceeds memoryFlushCompactionCount", () => {
+    expect(
+      shouldRunMemoryFlush({
+        entry: { totalTokens: 50_000, compactionCount: 3, memoryFlushCompactionCount: 1 },
+        contextWindowTokens: 200_000,
+        reserveTokensFloor: 20_000,
+        softThresholdTokens: 4_000,
+      }),
+    ).toBe(true);
+  });
+
+  it("skips for fresh session without any compaction", () => {
+    expect(
+      shouldRunMemoryFlush({
+        entry: { totalTokens: 50_000, compactionCount: 0 },
+        contextWindowTokens: 200_000,
+        reserveTokensFloor: 20_000,
+        softThresholdTokens: 4_000,
       }),
     ).toBe(false);
   });
