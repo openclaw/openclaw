@@ -1,0 +1,11 @@
+{
+  "id": "dolt-context-tools",
+  "name": "Dolt Context Tools",
+  "version": "0.1.0",
+  "description": "Agent-facing tools for exploring the dolt context memory tree",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

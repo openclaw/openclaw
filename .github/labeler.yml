@@ -240,6 +240,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/device-pair/**"
+"extensions: dolt-context-tools":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/dolt-context-tools/**"
 "extensions: minimax-portal-auth":
   - changed-files:
       - any-glob-to-any-file:
