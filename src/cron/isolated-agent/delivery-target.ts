@@ -12,8 +12,11 @@ import {
   resolveOutboundTarget,
   resolveSessionDeliveryTarget,
 } from "../../infra/outbound/targets.js";
+import { readChannelAllowFromStoreSync } from "../../pairing/pairing-store.js";
 import { buildChannelAccountBindings } from "../../routing/bindings.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { resolveWhatsAppAccount } from "../../web/accounts.js";
+import { normalizeWhatsAppTarget } from "../../whatsapp/normalize.js";
 
 export async function resolveDeliveryTarget(
   cfg: OpenClawConfig,
@@ -21,6 +24,7 @@ export async function resolveDeliveryTarget(
   jobPayload: {
     channel?: "last" | ChannelId;
     to?: string;
+    sessionKey?: string;
   },
 ): Promise<{
   channel: Exclude<OutboundChannel, "none">;
@@ -38,7 +42,12 @@ export async function resolveDeliveryTarget(
   const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId });
   const storePath = resolveStorePath(sessionCfg?.store, { agentId });
   const store = loadSessionStore(storePath);
-  const main = store[mainSessionKey];
+
+  // Look up thread-specific session first (e.g. agent:main:main:thread:1234),
+  // then fall back to the main session entry.
+  const threadSessionKey = jobPayload.sessionKey?.trim();
+  const threadEntry = threadSessionKey ? store[threadSessionKey] : undefined;
+  const main = threadEntry ?? store[mainSessionKey];
 
   const preliminary = resolveSessionDeliveryTarget({
     entry: main,
@@ -70,7 +79,7 @@ export async function resolveDeliveryTarget(
 
   const channel = resolved.channel ?? fallbackChannel ?? DEFAULT_CHAT_CHANNEL;
   const mode = resolved.mode as "explicit" | "implicit";
-  const toCandidate = resolved.to;
+  let toCandidate = resolved.to;
 
   // When the session has no lastAccountId (e.g. first-run isolated cron
   // session), fall back to the agent's bound account from bindings config.
@@ -86,12 +95,13 @@ export async function resolveDeliveryTarget(
     }
   }
 
-  // Only carry threadId when delivering to the same recipient as the session's
-  // last conversation. This prevents stale thread IDs (e.g. from a Telegram
-  // supergroup topic) from being sent to a different target (e.g. a private
-  // chat) where they would cause API errors.
+  // Carry threadId when it was explicitly set (from :topic: parsing or config)
+  // or when delivering to the same recipient as the session's last conversation.
+  // Session-derived threadIds are dropped when the target differs to prevent
+  // stale thread IDs from leaking to a different chat.
   const threadId =
-    resolved.threadId && resolved.to && resolved.to === resolved.lastTo
+    resolved.threadId &&
+    (resolved.threadIdExplicit || (resolved.to && resolved.to === resolved.lastTo))
       ? resolved.threadId
       : undefined;
 
@@ -105,12 +115,34 @@ export async function resolveDeliveryTarget(
     };
   }
 
+  let allowFromOverride: string[] | undefined;
+  if (channel === "whatsapp") {
+    const configuredAllowFromRaw = resolveWhatsAppAccount({ cfg, accountId }).allowFrom ?? [];
+    const configuredAllowFrom = configuredAllowFromRaw
+      .map((entry) => String(entry).trim())
+      .filter((entry) => entry && entry !== "*")
+      .map((entry) => normalizeWhatsAppTarget(entry))
+      .filter((entry): entry is string => Boolean(entry));
+    const storeAllowFrom = readChannelAllowFromStoreSync("whatsapp", process.env, accountId)
+      .map((entry) => normalizeWhatsAppTarget(entry))
+      .filter((entry): entry is string => Boolean(entry));
+    allowFromOverride = [...new Set([...configuredAllowFrom, ...storeAllowFrom])];
+
+    if (mode === "implicit" && allowFromOverride.length > 0) {
+      const normalizedCurrentTarget = normalizeWhatsAppTarget(toCandidate);
+      if (!normalizedCurrentTarget || !allowFromOverride.includes(normalizedCurrentTarget)) {
+        toCandidate = allowFromOverride[0];
+      }
+    }
+  }
+
   const docked = resolveOutboundTarget({
     channel,
     to: toCandidate,
     cfg,
     accountId,
     mode,
+    allowFrom: allowFromOverride,
   });
   return {
     channel,

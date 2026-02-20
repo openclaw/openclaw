@@ -112,7 +112,7 @@ export type CommandsConfig = {
   config?: boolean;
   /** Allow /debug command (default: false). */
   debug?: boolean;
-  /** Allow restart commands/tools (default: false). */
+  /** Allow restart commands/tools (default: true). */
   restart?: boolean;
   /** Enforce access-group allowlists/policies for commands (default: true). */
   useAccessGroups?: boolean;

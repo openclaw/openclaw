@@ -99,7 +99,7 @@ struct RootCanvas: View {
                 ChatSheet(
                     // Chat RPCs run on the operator session (read/write scopes).
                     gateway: self.appModel.operatorSession,
-                    sessionKey: self.appModel.mainSessionKey,
+                    sessionKey: self.appModel.chatSessionKey,
                     agentName: self.appModel.activeAgentName,
                     userAccent: self.appModel.seamColor)
             case .quickSetup:
@@ -145,6 +145,9 @@ struct RootCanvas: View {
                 OnboardingStateStore.markCompleted(mode: nil)
             }
             self.maybeAutoOpenSettings()
+        }
+        .onChange(of: self.appModel.openChatRequestID) { _, _ in
+            self.presentedSheet = .chat
         }
         .onChange(of: self.voiceWake.lastTriggeredCommand) { _, newValue in
             guard let newValue else { return }

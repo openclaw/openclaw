@@ -1,4 +1,4 @@
-import type { Message } from "@buape/carbon";
+import { ChannelType, type Client, type Message } from "@buape/carbon";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const fetchRemoteMedia = vi.fn();
@@ -16,41 +16,42 @@ vi.mock("../../globals.js", () => ({
   logVerbose: () => {},
 }));
 
-const { resolveDiscordMessageChannelId, resolveForwardedMediaList } =
-  await import("./message-utils.js");
+const {
+  __resetDiscordChannelInfoCacheForTest,
+  resolveDiscordChannelInfo,
+  resolveDiscordMessageChannelId,
+  resolveDiscordMessageText,
+  resolveForwardedMediaList,
+} = await import("./message-utils.js");
 
 function asMessage(payload: Record<string, unknown>): Message {
   return payload as unknown as Message;
 }
 
 describe("resolveDiscordMessageChannelId", () => {
-  it("uses message.channelId when present", () => {
-    const channelId = resolveDiscordMessageChannelId({
-      message: asMessage({ channelId: " 123 " }),
-    });
-    expect(channelId).toBe("123");
-  });
-
-  it("falls back to message.channel_id", () => {
-    const channelId = resolveDiscordMessageChannelId({
-      message: asMessage({ channel_id: " 234 " }),
-    });
-    expect(channelId).toBe("234");
-  });
-
-  it("falls back to message.rawData.channel_id", () => {
-    const channelId = resolveDiscordMessageChannelId({
-      message: asMessage({ rawData: { channel_id: "456" } }),
-    });
-    expect(channelId).toBe("456");
-  });
-
-  it("falls back to eventChannelId and coerces numeric values", () => {
-    const channelId = resolveDiscordMessageChannelId({
-      message: asMessage({}),
-      eventChannelId: 789,
-    });
-    expect(channelId).toBe("789");
+  it.each([
+    {
+      name: "uses message.channelId when present",
+      params: { message: asMessage({ channelId: " 123 " }) },
+      expected: "123",
+    },
+    {
+      name: "falls back to message.channel_id",
+      params: { message: asMessage({ channel_id: " 234 " }) },
+      expected: "234",
+    },
+    {
+      name: "falls back to message.rawData.channel_id",
+      params: { message: asMessage({ rawData: { channel_id: "456" } }) },
+      expected: "456",
+    },
+    {
+      name: "falls back to eventChannelId and coerces numeric values",
+      params: { message: asMessage({}), eventChannelId: 789 },
+      expected: "789",
+    },
+  ] as const)("$name", ({ params, expected }) => {
+    expect(resolveDiscordMessageChannelId(params)).toBe(expected);
   });
 });
 
@@ -120,5 +121,74 @@ describe("resolveForwardedMediaList", () => {
 
     expect(result).toEqual([]);
     expect(fetchRemoteMedia).not.toHaveBeenCalled();
+  });
+});
+
+describe("resolveDiscordMessageText", () => {
+  it("includes forwarded message snapshots in body text", () => {
+    const text = resolveDiscordMessageText(
+      asMessage({
+        content: "",
+        rawData: {
+          message_snapshots: [
+            {
+              message: {
+                content: "forwarded hello",
+                embeds: [],
+                attachments: [],
+                author: {
+                  id: "u2",
+                  username: "Bob",
+                  discriminator: "0",
+                },
+              },
+            },
+          ],
+        },
+      }),
+      { includeForwarded: true },
+    );
+
+    expect(text).toContain("[Forwarded message from @Bob]");
+    expect(text).toContain("forwarded hello");
+  });
+});
+
+describe("resolveDiscordChannelInfo", () => {
+  beforeEach(() => {
+    __resetDiscordChannelInfoCacheForTest();
+  });
+
+  it("caches channel lookups between calls", async () => {
+    const fetchChannel = vi.fn().mockResolvedValue({
+      type: ChannelType.DM,
+      name: "dm",
+    });
+    const client = { fetchChannel } as unknown as Client;
+
+    const first = await resolveDiscordChannelInfo(client, "cache-channel-1");
+    const second = await resolveDiscordChannelInfo(client, "cache-channel-1");
+
+    expect(first).toEqual({
+      type: ChannelType.DM,
+      name: "dm",
+      topic: undefined,
+      parentId: undefined,
+      ownerId: undefined,
+    });
+    expect(second).toEqual(first);
+    expect(fetchChannel).toHaveBeenCalledTimes(1);
+  });
+
+  it("negative-caches missing channels", async () => {
+    const fetchChannel = vi.fn().mockResolvedValue(null);
+    const client = { fetchChannel } as unknown as Client;
+
+    const first = await resolveDiscordChannelInfo(client, "missing-channel");
+    const second = await resolveDiscordChannelInfo(client, "missing-channel");
+
+    expect(first).toBeNull();
+    expect(second).toBeNull();
+    expect(fetchChannel).toHaveBeenCalledTimes(1);
   });
 });

@@ -8,6 +8,8 @@ const OPENROUTER_APP_HEADERS: Record<string, string> = {
   "HTTP-Referer": "https://openclaw.ai",
   "X-Title": "OpenClaw",
 };
+const ANTHROPIC_CONTEXT_1M_BETA = "context-1m-2025-08-07";
+const ANTHROPIC_1M_MODEL_PREFIXES = ["claude-opus-4", "claude-sonnet-4"] as const;
 // NOTE: We only force `store=true` for *direct* OpenAI Responses.
 // Codex responses (chatgpt.com/backend-api/codex/responses) require `store=false`.
 const OPENAI_RESPONSES_APIS = new Set(["openai-responses"]);
@@ -42,6 +44,8 @@ type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
  *
  * Only applies to Anthropic provider (OpenRouter uses openai-completions API
  * with hardcoded cache_control, not the cacheRetention stream option).
+ *
+ * Defaults to "short" for Anthropic provider when not explicitly configured.
  */
 function resolveCacheRetention(
   extraParams: Record<string, unknown> | undefined,
@@ -65,7 +69,9 @@ function resolveCacheRetention(
   if (legacy === "1h") {
     return "long";
   }
-  return undefined;
+
+  // Default to "short" for Anthropic when not explicitly configured
+  return "short";
 }
 
 function createStreamFnWithExtraParams(
@@ -156,6 +162,108 @@ function createOpenAIResponsesStoreWrapper(baseStreamFn: StreamFn | undefined): 
   };
 }
 
+function isAnthropic1MModel(modelId: string): boolean {
+  const normalized = modelId.trim().toLowerCase();
+  return ANTHROPIC_1M_MODEL_PREFIXES.some((prefix) => normalized.startsWith(prefix));
+}
+
+function parseHeaderList(value: unknown): string[] {
+  if (typeof value !== "string") {
+    return [];
+  }
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function resolveAnthropicBetas(
+  extraParams: Record<string, unknown> | undefined,
+  provider: string,
+  modelId: string,
+): string[] | undefined {
+  if (provider !== "anthropic") {
+    return undefined;
+  }
+
+  const betas = new Set<string>();
+  const configured = extraParams?.anthropicBeta;
+  if (typeof configured === "string" && configured.trim()) {
+    betas.add(configured.trim());
+  } else if (Array.isArray(configured)) {
+    for (const beta of configured) {
+      if (typeof beta === "string" && beta.trim()) {
+        betas.add(beta.trim());
+      }
+    }
+  }
+
+  if (extraParams?.context1m === true) {
+    if (isAnthropic1MModel(modelId)) {
+      betas.add(ANTHROPIC_CONTEXT_1M_BETA);
+    } else {
+      log.warn(`ignoring context1m for non-opus/sonnet model: ${provider}/${modelId}`);
+    }
+  }
+
+  return betas.size > 0 ? [...betas] : undefined;
+}
+
+function mergeAnthropicBetaHeader(
+  headers: Record<string, string> | undefined,
+  betas: string[],
+): Record<string, string> {
+  const merged = { ...headers };
+  const existingKey = Object.keys(merged).find((key) => key.toLowerCase() === "anthropic-beta");
+  const existing = existingKey ? parseHeaderList(merged[existingKey]) : [];
+  const values = Array.from(new Set([...existing, ...betas]));
+  const key = existingKey ?? "anthropic-beta";
+  merged[key] = values.join(",");
+  return merged;
+}
+
+// Betas that pi-ai's createClient injects for standard Anthropic API key calls.
+// Must be included when injecting anthropic-beta via options.headers, because
+// pi-ai's mergeHeaders uses Object.assign (last-wins), which would otherwise
+// overwrite the hardcoded defaultHeaders["anthropic-beta"].
+const PI_AI_DEFAULT_ANTHROPIC_BETAS = [
+  "fine-grained-tool-streaming-2025-05-14",
+  "interleaved-thinking-2025-05-14",
+] as const;
+
+// Additional betas pi-ai injects when the API key is an OAuth token (sk-ant-oat-*).
+// These are required for Anthropic to accept OAuth Bearer auth. Losing oauth-2025-04-20
+// causes a 401 "OAuth authentication is currently not supported".
+const PI_AI_OAUTH_ANTHROPIC_BETAS = [
+  "claude-code-20250219",
+  "oauth-2025-04-20",
+  ...PI_AI_DEFAULT_ANTHROPIC_BETAS,
+] as const;
+
+function isAnthropicOAuthApiKey(apiKey: unknown): boolean {
+  return typeof apiKey === "string" && apiKey.includes("sk-ant-oat");
+}
+
+function createAnthropicBetaHeadersWrapper(
+  baseStreamFn: StreamFn | undefined,
+  betas: string[],
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    // Preserve the betas pi-ai's createClient would inject for the given token type.
+    // Without this, our options.headers["anthropic-beta"] overwrites the pi-ai
+    // defaultHeaders via Object.assign, stripping critical betas like oauth-2025-04-20.
+    const piAiBetas = isAnthropicOAuthApiKey(options?.apiKey)
+      ? (PI_AI_OAUTH_ANTHROPIC_BETAS as readonly string[])
+      : (PI_AI_DEFAULT_ANTHROPIC_BETAS as readonly string[]);
+    const allBetas = [...new Set([...piAiBetas, ...betas])];
+    return underlying(model, context, {
+      ...options,
+      headers: mergeAnthropicBetaHeader(options?.headers, allBetas),
+    });
+  };
+}
+
 /**
  * Create a streamFn wrapper that adds OpenRouter app attribution headers.
  * These headers allow OpenClaw to appear on OpenRouter's leaderboard.
@@ -235,6 +343,14 @@ export function applyExtraParamsToAgent(
   if (wrappedStreamFn) {
     log.debug(`applying extraParams to agent streamFn for ${provider}/${modelId}`);
     agent.streamFn = wrappedStreamFn;
+  }
+
+  const anthropicBetas = resolveAnthropicBetas(merged, provider, modelId);
+  if (anthropicBetas?.length) {
+    log.debug(
+      `applying Anthropic beta header for ${provider}/${modelId}: ${anthropicBetas.join(",")}`,
+    );
+    agent.streamFn = createAnthropicBetaHeadersWrapper(agent.streamFn, anthropicBetas);
   }
 
   if (provider === "openrouter") {

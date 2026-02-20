@@ -38,10 +38,10 @@ describe("runCommandWithTimeout", () => {
 
   it("kills command when no output timeout elapses", async () => {
     const result = await runCommandWithTimeout(
-      [process.execPath, "-e", "setTimeout(() => {}, 10_000)"],
+      [process.execPath, "-e", "setTimeout(() => {}, 120)"],
       {
-        timeoutMs: 5_000,
-        noOutputTimeoutMs: 50,
+        timeoutMs: 1_000,
+        noOutputTimeoutMs: 35,
       },
     );
 
@@ -55,14 +55,11 @@ describe("runCommandWithTimeout", () => {
       [
         process.execPath,
         "-e",
-        // Emit immediately, then keep emitting at intervals that stay below the
-        // no-output timeout. This validates timer resets while avoiding startup
-        // jitter flakes on slower CI machines.
-        'process.stdout.write("."); let i=0; const t=setInterval(() => { process.stdout.write("."); i += 1; if (i >= 2) { clearInterval(t); process.exit(0); } }, 300);',
+        'process.stdout.write("."); setTimeout(() => process.stdout.write("."), 30); setTimeout(() => process.exit(0), 60);',
       ],
       {
-        timeoutMs: 5_000,
-        noOutputTimeoutMs: 700,
+        timeoutMs: 1_000,
+        noOutputTimeoutMs: 500,
       },
     );
 
@@ -75,7 +72,7 @@ describe("runCommandWithTimeout", () => {
 
   it("reports global timeout termination when overall timeout elapses", async () => {
     const result = await runCommandWithTimeout(
-      [process.execPath, "-e", "setTimeout(() => {}, 10_000)"],
+      [process.execPath, "-e", "setTimeout(() => {}, 120)"],
       {
         timeoutMs: 15,
       },

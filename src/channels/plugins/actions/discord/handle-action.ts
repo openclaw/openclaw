@@ -22,7 +22,10 @@ function readParentIdParam(params: Record<string, unknown>): string | null | und
 }
 
 export async function handleDiscordMessageAction(
-  ctx: Pick<ChannelMessageActionContext, "action" | "params" | "cfg" | "accountId">,
+  ctx: Pick<
+    ChannelMessageActionContext,
+    "action" | "params" | "cfg" | "accountId" | "requesterSenderId" | "toolContext"
+  >,
 ): Promise<AgentToolResult<unknown>> {
   const { action, params, cfg } = ctx;
   const accountId = ctx.accountId ?? readStringParam(params, "accountId");
