@@ -99,7 +99,9 @@ export class CrashLoopError extends Error {
     super(
       `CRASH LOOP DETECTED: ${count} crashes in the last ${windowMinutes} minutes. ` +
         `The gateway will not restart automatically. ` +
-        `Fix the root cause, then run the gateway manually.`,
+        `Fix the root cause, then run the gateway manually. ` +
+        `To reset the crash counter immediately, delete the gateway-crash-history.json ` +
+        `file in the state directory, or wait ${windowMinutes} minutes for it to expire.`,
     );
     this.name = "CrashLoopError";
     this.recentCrashCount = count;
@@ -118,6 +120,27 @@ export async function applyCrashLoopGuard(deps: CrashLoopGuardDeps): Promise<voi
   const recentCrashes = history.crashes.filter((t) => t > cutoff);
 
   if (recentCrashes.length >= MAX_CRASHES) {
+    const reportPath = path.join(deps.stateDir, "crash-report.json");
+    try {
+      fs.mkdirSync(path.dirname(reportPath), { recursive: true });
+      fs.writeFileSync(
+        reportPath,
+        JSON.stringify(
+          {
+            detectedAt: new Date(now).toISOString(),
+            recentCrashCount: recentCrashes.length,
+            windowMinutes: CRASH_WINDOW_MS / 60_000,
+            crashTimestamps: recentCrashes.map((t) => new Date(t).toISOString()),
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+      deps.logger.error(`Crash report written to ${reportPath}`);
+    } catch {
+      // best-effort
+    }
     throw new CrashLoopError(recentCrashes.length, CRASH_WINDOW_MS / 60_000);
   }
 
