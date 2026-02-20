@@ -64,6 +64,8 @@ export type FeishuMediaInfo = {
   path: string;
   contentType?: string;
   placeholder: string;
+  /** Optional transcript for audio media (e.g., Feishu native STT result) */
+  transcript?: string;
 };
 
 export type FeishuToolsConfig = {

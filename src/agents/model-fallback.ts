@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { FailoverReason } from "./pi-embedded-helpers.js";
+import { sleep } from "../utils.js";
 import {
   ensureAuthProfileStore,
   isProfileInCooldown,
@@ -21,6 +22,33 @@ import {
   resolveModelRefFromString,
 } from "./model-selection.js";
 import { isLikelyContextOverflowError } from "./pi-embedded-helpers.js";
+
+/**
+ * Maximum number of retry rounds when all fallback candidates fail with a
+ * retryable reason (rate_limit, timeout, or unknown — the latter two cover
+ * Antigravity-style proxies that hang instead of returning 429).
+ * Each round waits progressively longer before retrying the full candidate list.
+ */
+const RATE_LIMIT_MAX_RETRIES = 2;
+
+/**
+ * Reasons that qualify for automatic retry-with-backoff.
+ * - rate_limit: explicit 429 / cooldown skip
+ * - timeout:    request hung (commonly a silent rate limit from proxies)
+ * - unknown:    no classifiable reason — often a timeout with empty error body
+ */
+const RETRYABLE_REASONS = new Set<string>(["rate_limit", "timeout", "unknown"]);
+
+/**
+ * Base delay (ms) for 429 retry backoff.  Actual delay = base × 2^(round-1),
+ * i.e. 15 s → 30 s for the default 2-round cap.
+ */
+const RATE_LIMIT_RETRY_BASE_DELAY_MS = 15_000;
+
+/**
+ * Hard ceiling for any single retry delay to prevent unbounded waits.
+ */
+const RATE_LIMIT_RETRY_MAX_DELAY_MS = 60_000;
 
 type ModelCandidate = {
   provider: string;
@@ -236,96 +264,142 @@ export async function runWithModelFallback<T>(params: {
   const authStore = params.cfg
     ? ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false })
     : null;
-  const attempts: FallbackAttempt[] = [];
-  let lastError: unknown;
+  const baseDelay = RATE_LIMIT_RETRY_BASE_DELAY_MS;
 
-  for (let i = 0; i < candidates.length; i += 1) {
-    const candidate = candidates[i];
-    if (authStore) {
-      const profileIds = resolveAuthProfileOrder({
-        cfg: params.cfg,
-        store: authStore,
-        provider: candidate.provider,
-      });
-      const isAnyProfileAvailable = profileIds.some((id) => !isProfileInCooldown(authStore, id));
+  for (let retryRound = 0; ; retryRound += 1) {
+    const attempts: FallbackAttempt[] = [];
+    let lastError: unknown;
 
-      if (profileIds.length > 0 && !isAnyProfileAvailable) {
-        // All profiles for this provider are in cooldown; skip without attempting
+    for (let i = 0; i < candidates.length; i += 1) {
+      const candidate = candidates[i];
+      if (authStore) {
+        const profileIds = resolveAuthProfileOrder({
+          cfg: params.cfg,
+          store: authStore,
+          provider: candidate.provider,
+        });
+        const isAnyProfileAvailable = profileIds.some((id) => !isProfileInCooldown(authStore, id));
+
+        if (profileIds.length > 0 && !isAnyProfileAvailable) {
+          // All profiles for this provider are in cooldown; skip without attempting
+          attempts.push({
+            provider: candidate.provider,
+            model: candidate.model,
+            error: `Provider ${candidate.provider} is in cooldown (all profiles unavailable)`,
+            reason: "rate_limit",
+          });
+          continue;
+        }
+      }
+      try {
+        const result = await params.run(candidate.provider, candidate.model);
+        return {
+          result,
+          provider: candidate.provider,
+          model: candidate.model,
+          attempts,
+        };
+      } catch (err) {
+        if (shouldRethrowAbort(err)) {
+          throw err;
+        }
+        // Context overflow errors should be handled by the inner runner's
+        // compaction/retry logic, not by model fallback.  If one escapes as a
+        // throw, rethrow it immediately rather than trying a different model
+        // that may have a smaller context window and fail worse.
+        const errMessage = err instanceof Error ? err.message : String(err);
+        if (isLikelyContextOverflowError(errMessage)) {
+          throw err;
+        }
+        const normalized =
+          coerceToFailoverError(err, {
+            provider: candidate.provider,
+            model: candidate.model,
+          }) ?? err;
+        if (!isFailoverError(normalized)) {
+          throw err;
+        }
+
+        lastError = normalized;
+        const described = describeFailoverError(normalized);
         attempts.push({
           provider: candidate.provider,
           model: candidate.model,
-          error: `Provider ${candidate.provider} is in cooldown (all profiles unavailable)`,
-          reason: "rate_limit",
+          error: described.message,
+          reason: described.reason,
+          status: described.status,
+          code: described.code,
         });
-        continue;
-      }
-    }
-    try {
-      const result = await params.run(candidate.provider, candidate.model);
-      return {
-        result,
-        provider: candidate.provider,
-        model: candidate.model,
-        attempts,
-      };
-    } catch (err) {
-      if (shouldRethrowAbort(err)) {
-        throw err;
-      }
-      // Context overflow errors should be handled by the inner runner's
-      // compaction/retry logic, not by model fallback.  If one escapes as a
-      // throw, rethrow it immediately rather than trying a different model
-      // that may have a smaller context window and fail worse.
-      const errMessage = err instanceof Error ? err.message : String(err);
-      if (isLikelyContextOverflowError(errMessage)) {
-        throw err;
-      }
-      const normalized =
-        coerceToFailoverError(err, {
+        await params.onError?.({
           provider: candidate.provider,
           model: candidate.model,
-        }) ?? err;
-      if (!isFailoverError(normalized)) {
-        throw err;
+          error: normalized,
+          attempt: i + 1,
+          total: candidates.length,
+        });
+      }
+    }
+
+    // ── Retryable-failure backoff ────────────────────────────────────────
+    // When every attempt failed with a retryable reason (rate_limit,
+    // timeout, or unknown), wait and retry the full candidate list.
+    // This handles the common single-provider scenario where all fallbacks
+    // share the same auth profile and a single 429 (or silent hang that
+    // manifests as timeout/unknown) puts them all in cooldown.
+    const allRetryable =
+      attempts.length > 0 && attempts.every((a) => RETRYABLE_REASONS.has(a.reason ?? "unknown"));
+
+    if (allRetryable && retryRound < RATE_LIMIT_MAX_RETRIES) {
+      const delay = Math.min(baseDelay * 2 ** retryRound, RATE_LIMIT_RETRY_MAX_DELAY_MS);
+
+      // Log so we can verify retry behaviour in production
+      const reasons = [...new Set(attempts.map((a) => a.reason ?? "unknown"))].join(",");
+      const logMsg = `[model-fallback] retry: round ${retryRound + 1}/${RATE_LIMIT_MAX_RETRIES}, reasons=${reasons}, waiting ${(delay / 1000).toFixed(0)}s before retrying ${candidates.length} candidates`;
+      if (typeof globalThis.console?.warn === "function") {
+        console.warn(logMsg);
       }
 
-      lastError = normalized;
-      const described = describeFailoverError(normalized);
-      attempts.push({
-        provider: candidate.provider,
-        model: candidate.model,
-        error: described.message,
-        reason: described.reason,
-        status: described.status,
-        code: described.code,
-      });
-      await params.onError?.({
-        provider: candidate.provider,
-        model: candidate.model,
-        error: normalized,
-        attempt: i + 1,
-        total: candidates.length,
-      });
-    }
-  }
+      await sleep(delay);
 
-  if (attempts.length <= 1 && lastError) {
-    throw lastError;
+      // Temporarily lift cooldowns so the next round actually attempts
+      // the providers again instead of immediately skipping them.
+      if (authStore) {
+        for (const candidate of candidates) {
+          const profileIds = resolveAuthProfileOrder({
+            cfg: params.cfg,
+            store: authStore,
+            provider: candidate.provider,
+          });
+          for (const id of profileIds) {
+            const stats = authStore.usageStats?.[id];
+            if (stats?.cooldownUntil) {
+              stats.cooldownUntil = undefined;
+            }
+          }
+        }
+      }
+      continue; // retry the full candidate list
+    }
+
+    // ── Terminal failure ────────────────────────────────────────────────
+    if (attempts.length <= 1 && lastError) {
+      throw lastError;
+    }
+    const summary =
+      attempts.length > 0
+        ? attempts
+            .map(
+              (attempt) =>
+                `${attempt.provider}/${attempt.model}: ${attempt.error}${
+                  attempt.reason ? ` (${attempt.reason})` : ""
+                }`,
+            )
+            .join(" | ")
+        : "unknown";
+    throw new Error(`All models failed (${attempts.length || candidates.length}): ${summary}`, {
+      cause: lastError instanceof Error ? lastError : undefined,
+    });
   }
-  const summary =
-    attempts.length > 0
-      ? attempts
-          .map(
-            (attempt) =>
-              `${attempt.provider}/${attempt.model}: ${attempt.error}${
-                attempt.reason ? ` (${attempt.reason})` : ""
-              }`,
-          )
-          .join(" | ")
-      : "unknown";
-  throw new Error(`All models failed (${attempts.length || candidates.length}): ${summary}`, {
-    cause: lastError instanceof Error ? lastError : undefined,
-  });
 }
 
 export async function runWithImageModelFallback<T>(params: {

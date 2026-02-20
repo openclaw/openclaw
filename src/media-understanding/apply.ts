@@ -490,7 +490,18 @@ export async function applyMediaUnderstanding(params: {
       .find((value) => value && value.trim()) ?? undefined;
 
   const attachments = normalizeMediaAttachments(ctx);
+  console.error(
+    "[DEBUG-MU] applyMediaUnderstanding called, attachments:",
+    JSON.stringify(
+      attachments.map((a) => ({ path: a.path?.slice(-30), mime: a.mime, index: a.index })),
+    ),
+  );
+  console.error(
+    "[DEBUG-MU] cfg.tools.media:",
+    JSON.stringify({ audio: cfg.tools?.media?.audio, models: cfg.tools?.media?.models }),
+  );
   const providerRegistry = buildProviderRegistry(params.providers);
+  console.error("[DEBUG-MU] providerRegistry keys:", [...providerRegistry.keys()]);
   const cache = createMediaAttachmentCache(attachments);
 
   try {

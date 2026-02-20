@@ -1,4 +1,6 @@
 import type { ClawdbotConfig, RuntimeEnv } from "openclaw/plugin-sdk";
+import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import {
   buildPendingHistoryContextFromMap,
   recordPendingHistoryEntryIfEnabled,
@@ -59,6 +61,201 @@ function extractPermissionError(err: unknown): PermissionError | null {
     message: msg,
     grantUrl,
   };
+}
+
+// --- Feishu native STT (speech_to_text) ---
+// Token cache (keyed by domain + appId)
+const sttTokenCache = new Map<string, { token: string; expiresAt: number }>();
+
+function resolveFeishuApiBase(domain?: string): string {
+  if (domain === "lark") {
+    return "https://open.larksuite.com/open-apis";
+  }
+  if (domain && domain !== "feishu" && domain.startsWith("http")) {
+    return `${domain.replace(/\/+$/, "")}/open-apis`;
+  }
+  return "https://open.feishu.cn/open-apis";
+}
+
+async function getFeishuTenantAccessToken(params: {
+  account: ResolvedFeishuAccount;
+}): Promise<string> {
+  const { account } = params;
+  if (!account.appId || !account.appSecret) {
+    throw new Error("Feishu appId/appSecret not configured");
+  }
+
+  const key = `${account.domain ?? "feishu"}|${account.appId}`;
+  const cached = sttTokenCache.get(key);
+  if (cached && cached.expiresAt > Date.now() + 60_000) {
+    return cached.token;
+  }
+
+  const res = await fetch(
+    `${resolveFeishuApiBase(account.domain)}/auth/v3/tenant_access_token/internal`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ app_id: account.appId, app_secret: account.appSecret }),
+    },
+  );
+
+  const data = (await res.json()) as {
+    code: number;
+    msg: string;
+    tenant_access_token?: string;
+    expire?: number;
+  };
+
+  if (data.code !== 0 || !data.tenant_access_token) {
+    throw new Error(`Token error: ${data.msg}`);
+  }
+
+  sttTokenCache.set(key, {
+    token: data.tenant_access_token,
+    expiresAt: Date.now() + (data.expire ?? 7200) * 1000,
+  });
+
+  return data.tenant_access_token;
+}
+
+async function recognizeAudioWithFeishuStt(params: {
+  cfg: ClawdbotConfig;
+  accountId?: string;
+  audioPath: string;
+  messageId: string;
+  log?: (msg: string) => void;
+}): Promise<string | undefined> {
+  const { cfg, accountId, audioPath, messageId, log } = params;
+  try {
+    log?.(`feishu: STT attempting for ${audioPath}`);
+    const account = resolveFeishuAccount({ cfg, accountId });
+    if (!account.configured) {
+      log?.(`feishu: STT skipped - account not configured`);
+      return undefined;
+    }
+
+    const audioBuf = await readFile(audioPath);
+    const token = await getFeishuTenantAccessToken({ account });
+
+    // Small delay to avoid rate-limit when token was just fetched
+    await new Promise((r) => setTimeout(r, 500));
+
+    const apiBase = resolveFeishuApiBase(account.domain);
+    const fileId = `${messageId}:${randomUUID()}`;
+
+    // Note: Feishu voice messages are typically ogg/opus.
+    // If formats vary, we can improve by detecting mime/extension later.
+    const reqBody = {
+      speech: { speech: audioBuf.toString("base64") },
+      config: {
+        engine_type: "16k_auto",
+        file_id: fileId,
+        format: "ogg_opus",
+        sample_rate: 16000,
+      },
+    };
+
+    const doFetch = async () => {
+      const r = await fetch(`${apiBase}/speech_to_text/v1/speech/file_recognize`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(reqBody),
+      });
+      return r;
+    };
+
+    let res = await doFetch();
+    // Retry once on rate limit (99991400) after waiting for reset
+    if (res.status === 429 || res.status === 400) {
+      const limit = res.headers.get("x-ogw-ratelimit-limit");
+      const resetSec = Number(res.headers.get("x-ogw-ratelimit-reset") || "3");
+      const waitMs = Math.max(Math.min(resetSec * 1000, 10000), 3000); // at least 3s
+      log?.(`feishu: STT rate-limited, limit=${limit} reset=${resetSec}s, retrying in ${waitMs}ms`);
+      await new Promise((r) => setTimeout(r, waitMs));
+      res = await doFetch();
+    }
+
+    const data = (await res.json()) as {
+      code?: number;
+      msg?: string;
+      data?: { recognition_text?: string };
+    };
+
+    log?.(`feishu: STT response code=${data?.code} msg=${data?.msg}`);
+    const text = data?.data?.recognition_text?.trim();
+    if (!text) {
+      log?.(`feishu: STT returned empty text`);
+      return undefined;
+    }
+
+    log?.(`feishu: STT success (${audioPath}): ${text.slice(0, 80)}`);
+    return text;
+  } catch (err) {
+    // Silent downgrade: do not affect the original media flow.
+    log?.(`feishu: STT failed (${audioPath}): ${String(err)}`);
+    return undefined;
+  }
+}
+
+// --- Whisper STT via external service or local CLI ---
+async function recognizeAudioWithWhisper(params: {
+  audioPath: string;
+  log?: (msg: string) => void;
+}): Promise<string | undefined> {
+  const { audioPath, log } = params;
+  const whisperUrl = process.env.OPENCLAW_WHISPER_URL;
+
+  // If a whisper URL is configured, use HTTP service
+  if (whisperUrl) {
+    try {
+      const audioBuf = await readFile(audioPath);
+      const b64 = audioBuf.toString("base64");
+      log?.(`feishu: Whisper STT (remote) attempting for ${audioPath}`);
+      const res = await fetch(whisperUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ audio_base64: b64 }),
+        signal: AbortSignal.timeout(30000),
+      });
+      const data = (await res.json()) as { text?: string; error?: string };
+      const text = data?.text?.trim();
+      if (!text) {
+        log?.(`feishu: Whisper STT (remote) returned empty`);
+        return undefined;
+      }
+      log?.(`feishu: Whisper STT (remote) success: ${text.slice(0, 80)}`);
+      return text;
+    } catch (err) {
+      log?.(`feishu: Whisper STT (remote) failed: ${String(err)}`);
+      return undefined;
+    }
+  }
+
+  // Otherwise, use local CLI
+  try {
+    log?.(`feishu: Whisper STT (local) attempting for ${audioPath}`);
+    const { execFile } = await import("node:child_process");
+    const { promisify } = await import("node:util");
+    const execFileAsync = promisify(execFile);
+    const scriptPath =
+      process.env.OPENCLAW_WHISPER_SCRIPT || "/root/.openclaw/workspace/scripts/whisper_stt.py";
+    const { stdout } = await execFileAsync("python3", [scriptPath, audioPath], { timeout: 60000 });
+    const data = JSON.parse(stdout.trim()) as { text?: string };
+    const text = data?.text?.trim();
+    if (!text) {
+      log?.(`feishu: Whisper STT (local) returned empty`);
+      return undefined;
+    }
+    log?.(`feishu: Whisper STT (local) success: ${text.slice(0, 80)}`);
+    return text;
+  } catch (err) {
+    log?.(`feishu: Whisper STT (local) failed: ${String(err)}`);
+    return undefined;
+  }
 }
 
 // --- Sender name resolution (so the agent can distinguish who is speaking in group chats) ---
@@ -415,10 +612,23 @@ async function resolveFeishuMediaList(params: {
       fileName,
     );
 
+    const transcript =
+      messageType === "audio"
+        ? ((await recognizeAudioWithWhisper({ audioPath: saved.path, log })) ??
+          (await recognizeAudioWithFeishuStt({
+            cfg,
+            accountId,
+            audioPath: saved.path,
+            messageId,
+            log,
+          })))
+        : undefined;
+
     out.push({
       path: saved.path,
       contentType: saved.contentType,
       placeholder: inferPlaceholder(messageType),
+      transcript,
     });
 
     log?.(`feishu: downloaded ${messageType} media, saved to ${saved.path}`);
@@ -440,10 +650,12 @@ function buildFeishuMediaPayload(mediaList: FeishuMediaInfo[]): {
   MediaPaths?: string[];
   MediaUrls?: string[];
   MediaTypes?: string[];
+  Transcript?: string;
 } {
   const first = mediaList[0];
   const mediaPaths = mediaList.map((media) => media.path);
   const mediaTypes = mediaList.map((media) => media.contentType).filter(Boolean) as string[];
+  const transcript = mediaList.find((m) => m.transcript)?.transcript;
   return {
     MediaPath: first?.path,
     MediaType: first?.contentType,
@@ -451,6 +663,7 @@ function buildFeishuMediaPayload(mediaList: FeishuMediaInfo[]): {
     MediaPaths: mediaPaths.length > 0 ? mediaPaths : undefined,
     MediaUrls: mediaPaths.length > 0 ? mediaPaths : undefined,
     MediaTypes: mediaTypes.length > 0 ? mediaTypes : undefined,
+    Transcript: transcript || undefined,
   };
 }
 

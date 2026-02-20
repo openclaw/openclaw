@@ -572,6 +572,7 @@ async function runAttachmentEntries(params: {
       );
     } catch (err) {
       if (isMediaUnderstandingSkipError(err)) {
+        console.error(`[DEBUG-MU] runAttachmentEntries SKIP: ${err.reason}: ${err.message}`);
         attempts.push(
           buildModelDecision({
             entry,
@@ -593,6 +594,7 @@ async function runAttachmentEntries(params: {
           reason: String(err),
         }),
       );
+      console.error(`[DEBUG-MU] runAttachmentEntries FAILED: ${String(err)}`);
       if (shouldLogVerbose()) {
         logVerbose(`${capability} understanding failed: ${String(err)}`);
       }
@@ -615,6 +617,9 @@ export async function runCapability(params: {
 }): Promise<RunCapabilityResult> {
   const { capability, cfg, ctx } = params;
   const config = params.config ?? cfg.tools?.media?.[capability];
+  console.error(
+    `[DEBUG-MU] runCapability(${capability}): enabled=${config?.enabled}, hasConfig=${!!config}`,
+  );
   if (config?.enabled === false) {
     return {
       outputs: [],
@@ -628,6 +633,7 @@ export async function runCapability(params: {
     attachments: params.media,
     policy: attachmentPolicy,
   });
+  console.error(`[DEBUG-MU] runCapability(${capability}): selected=${selected.length} attachments`);
   if (selected.length === 0) {
     return {
       outputs: [],
@@ -694,6 +700,9 @@ export async function runCapability(params: {
   });
   let resolvedEntries = entries;
   if (resolvedEntries.length === 0) {
+    console.error(
+      `[DEBUG-MU] runCapability(${capability}): resolveModelEntries returned 0, trying auto`,
+    );
     resolvedEntries = await resolveAutoEntries({
       cfg,
       agentDir: params.agentDir,
@@ -702,6 +711,10 @@ export async function runCapability(params: {
       activeModel: params.activeModel,
     });
   }
+  console.error(
+    `[DEBUG-MU] runCapability(${capability}): resolvedEntries=${resolvedEntries.length}`,
+    JSON.stringify(resolvedEntries.map((e) => ({ provider: e.provider, model: e.model }))),
+  );
   if (resolvedEntries.length === 0) {
     return {
       outputs: [],
@@ -727,6 +740,9 @@ export async function runCapability(params: {
       entries: resolvedEntries,
       config,
     });
+    console.error(
+      `[DEBUG-MU] runCapability(${capability}): attachment ${attachment.index} result: output=${output ? `kind=${output.kind} text=${output.text?.length}chars` : "null"}, attempts=${JSON.stringify(attempts.map((a) => ({ outcome: a.outcome, reason: (a as any).reason })))}`,
+    );
     if (output) {
       outputs.push(output);
     }

@@ -391,11 +391,15 @@ export async function runProviderEntry(params: {
     if (!provider.transcribeAudio) {
       throw new Error(`Audio transcription provider "${providerId}" not available.`);
     }
+    console.error(`[DEBUG-MU] runProviderEntry(audio): getting buffer...`);
     const media = await params.cache.getBuffer({
       attachmentIndex: params.attachmentIndex,
       maxBytes,
       timeoutMs,
     });
+    console.error(
+      `[DEBUG-MU] runProviderEntry(audio): buffer size=${media.buffer.length}, mime=${media.mime}, fileName=${media.fileName}`,
+    );
     const auth = await resolveApiKeyForProvider({
       provider: providerId,
       cfg,
@@ -404,6 +408,9 @@ export async function runProviderEntry(params: {
       agentDir: params.agentDir,
     });
     const apiKey = requireApiKey(auth, providerId);
+    console.error(
+      `[DEBUG-MU] runProviderEntry(audio): apiKey=${apiKey?.slice(0, 10)}..., provider=${providerId}`,
+    );
     const providerConfig = cfg.models?.providers?.[providerId];
     const baseUrl = entry.baseUrl ?? params.config?.baseUrl ?? providerConfig?.baseUrl;
     const mergedHeaders = {
@@ -418,6 +425,9 @@ export async function runProviderEntry(params: {
       entry,
     });
     const model = entry.model?.trim() || DEFAULT_AUDIO_MODELS[providerId] || entry.model;
+    console.error(
+      `[DEBUG-MU] runProviderEntry(audio): calling transcribeAudio model=${model}, baseUrl=${baseUrl}`,
+    );
     const result = await provider.transcribeAudio({
       buffer: media.buffer,
       fileName: media.fileName,
@@ -431,6 +441,9 @@ export async function runProviderEntry(params: {
       query: providerQuery,
       timeoutMs,
     });
+    console.error(
+      `[DEBUG-MU] runProviderEntry(audio): result text=${result.text?.length ?? 0} chars, model=${result.model}`,
+    );
     return {
       kind: "audio.transcription",
       attachmentIndex: params.attachmentIndex,
