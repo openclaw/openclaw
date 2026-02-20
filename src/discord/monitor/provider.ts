@@ -2,8 +2,10 @@ import { inspect } from "node:util";
 import {
   Client,
   ReadyListener,
+  type BaseCommand,
   type BaseMessageInteractiveComponent,
   type Modal,
+  type Plugin,
 } from "@buape/carbon";
 import { GatewayCloseCodes, type GatewayPlugin } from "@buape/carbon/gateway";
 import { VoicePlugin } from "@buape/carbon/voice";
@@ -433,7 +435,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     );
   }
   const voiceManagerRef: { current: DiscordVoiceManager | null } = { current: null };
-  const commands = commandSpecs.map((spec) =>
+  const commands: BaseCommand[] = commandSpecs.map((spec) =>
     createDiscordNativeCommand({
       command: spec,
       cfg,
@@ -524,7 +526,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     }
   }
 
-  const clientPlugins = [createDiscordGatewayPlugin({ discordConfig: discordCfg, runtime })];
+  const clientPlugins: Plugin[] = [
+    createDiscordGatewayPlugin({ discordConfig: discordCfg, runtime }),
+  ];
   if (voiceEnabled) {
     clientPlugins.push(new VoicePlugin());
   }

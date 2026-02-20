@@ -3,10 +3,12 @@ import {
   Command,
   CommandWithSubcommands,
   type CommandInteraction,
+  type CommandOptions,
 } from "@buape/carbon";
 import {
   ApplicationCommandOptionType,
   ChannelType as DiscordChannelType,
+  type APIApplicationCommandChannelOption,
 } from "discord-api-types/v10";
 import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -25,7 +27,7 @@ import { resolveDiscordSenderIdentity } from "../monitor/sender-identity.js";
 import { resolveDiscordThreadParentInfo } from "../monitor/threading.js";
 import type { DiscordVoiceManager } from "./manager.js";
 
-const VOICE_CHANNEL_TYPES: DiscordChannelType[] = [
+const VOICE_CHANNEL_TYPES: NonNullable<APIApplicationCommandChannelOption["channel_types"]> = [
   DiscordChannelType.GuildVoice,
   DiscordChannelType.GuildStageVoice,
 ];
@@ -192,7 +194,7 @@ export function createDiscordVoiceCommand(params: VoiceCommandContext): CommandW
     description = "Join a voice channel";
     defer = true;
     ephemeral = params.ephemeralDefault;
-    options = [
+    options: CommandOptions = [
       {
         name: "channel",
         description: "Voice channel to join",
