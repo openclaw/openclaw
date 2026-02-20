@@ -882,7 +882,18 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   const { url, token } = msg
   const headers = token ? { 'x-openclaw-relay-token': token } : {}
   fetch(url, { method: 'GET', headers, signal: AbortSignal.timeout(2000) })
-    .then((res) => sendResponse({ status: res.status, ok: res.ok }))
+    .then(async (res) => {
+      const contentType = String(res.headers.get('content-type') || '')
+      let json = null
+      if (contentType.includes('application/json')) {
+        try {
+          json = await res.json()
+        } catch {
+          json = null
+        }
+      }
+      sendResponse({ status: res.status, ok: res.ok, contentType, json })
+    })
     .catch((err) => sendResponse({ status: 0, ok: false, error: String(err) }))
   return true
 })
