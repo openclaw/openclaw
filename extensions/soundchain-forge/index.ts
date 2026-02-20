@@ -8,6 +8,7 @@ import type {
   OpenClawPluginApi,
   OpenClawPluginToolFactory,
 } from "../../src/plugins/types.js";
+import { runForgeAgent } from "./src/agent-loop.js";
 import { createBashTool, createGitTool, createGlobTool, createGrepTool } from "./src/exec-tools.js";
 import { createReadTool, createWriteTool, createEditTool } from "./src/file-tools.js";
 import { PathGuard, BashGuard, GitGuard } from "./src/guards.js";
@@ -168,6 +169,73 @@ export default {
           res.statusCode = 500;
           res.setHeader("Content-Type", "application/json");
           res.end(JSON.stringify({ error: `Execution failed: ${err.message}` }));
+        }
+      },
+    });
+
+    // ─── HTTP Route: POST /forge/agent (BYOK Agent Loop) ─────────────
+    // The key endpoint. User's API key flows in the request body,
+    // hits Anthropic, tool calls execute locally, streams SSE back.
+    // Key never touches disk. True BYOK.
+    api.registerHttpRoute({
+      path: "/forge/agent",
+      handler: async (req, res) => {
+        if (req.method === "OPTIONS") {
+          res.writeHead(204, {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "POST, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization",
+            "Access-Control-Max-Age": "86400",
+          });
+          res.end();
+          return;
+        }
+
+        if (req.method !== "POST") {
+          res.statusCode = 405;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ error: "Method not allowed" }));
+          return;
+        }
+
+        let body: Record<string, unknown>;
+        try {
+          const raw = await parseRequestBody(req);
+          body = JSON.parse(raw);
+        } catch {
+          res.statusCode = 400;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ error: "Invalid JSON body" }));
+          return;
+        }
+
+        const apiKey = typeof body.apiKey === "string" ? body.apiKey : "";
+        const messages = Array.isArray(body.messages) ? body.messages : [];
+        const model = typeof body.model === "string" ? body.model : undefined;
+
+        if (!apiKey) {
+          res.statusCode = 401;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ error: "Missing apiKey — BYOK required" }));
+          return;
+        }
+
+        if (messages.length === 0) {
+          res.statusCode = 400;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ error: "Missing messages array" }));
+          return;
+        }
+
+        // Run the agent loop with the user's key
+        try {
+          await runForgeAgent(res, apiKey, messages, allTools, model);
+        } catch (err: any) {
+          if (!res.headersSent) {
+            res.statusCode = 500;
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify({ error: `Agent loop failed: ${err.message}` }));
+          }
         }
       },
     });
