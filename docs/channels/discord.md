@@ -530,6 +530,49 @@ See [Slash commands](/tools/slash-commands) for command catalog and behavior.
 
   </Accordion>
 
+  <Accordion title="Live stream preview">
+    OpenClaw can stream draft replies by sending a temporary message and editing it as text arrives.
+
+    - `channels.discord.streamMode` controls preview streaming (`off` | `partial` | `block`, default: `off`).
+    - `partial` edits a single preview message as tokens arrive.
+    - `block` emits draft-sized chunks (use `draftChunk` to tune size and breakpoints).
+
+    Example:
+
+```json5
+{
+  channels: {
+    discord: {
+      streamMode: "partial",
+    },
+  },
+}
+```
+
+    `block` mode chunking defaults (clamped to `channels.discord.textChunkLimit`):
+
+```json5
+{
+  channels: {
+    discord: {
+      streamMode: "block",
+      draftChunk: {
+        minChars: 200,
+        maxChars: 800,
+        breakPreference: "paragraph",
+      },
+    },
+  },
+}
+```
+
+    Preview streaming is text-only; media replies fall back to normal delivery.
+
+    Note: preview streaming is separate from block streaming. When block streaming is explicitly
+    enabled for Discord, OpenClaw skips the preview stream to avoid double streaming.
+
+  </Accordion>
+
   <Accordion title="History, context, and thread behavior">
     Guild history context:
 
@@ -863,6 +906,7 @@ High-signal Discord fields:
 - command: `commands.native`, `commands.useAccessGroups`, `configWrites`
 - reply/history: `replyToMode`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
 - delivery: `textChunkLimit`, `chunkMode`, `maxLinesPerMessage`
+- streaming: `streamMode`, `draftChunk`, `blockStreaming`, `blockStreamingCoalesce`
 - media/retry: `mediaMaxMb`, `retry`
 - actions: `actions.*`
 - presence: `activity`, `status`, `activityType`, `activityUrl`
