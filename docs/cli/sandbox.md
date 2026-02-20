@@ -66,7 +66,39 @@ openclaw sandbox recreate --all --force        # Skip confirmation
 
 **Important:** Containers are automatically recreated when the agent is next used.
 
+### `openclaw sandbox run <command>`
+
+Run a shell command inside a sandbox container exactly like an agent would via the `exec` tool.
+
+```bash
+openclaw sandbox run "ls -la"                  # Default sandbox
+openclaw sandbox run "npm test" --agent coder  # Specific agent's sandbox
+openclaw sandbox run "pwd" --workdir ./subdir  # Map host path to sandbox
+```
+
+**Options:**
+
+- `--session <key>`: Session key to use (affects which container is used)
+- `--agent <id>`: Agent ID to use for config/session resolution
+- `--workdir <path>`: Working directory inside the sandbox (or host path to resolve)
+
+This is the recommended way to manually test sandbox environments, verify dependencies, or debug issues without starting a full agent session.
+
 ## Use Cases
+
+### Testing sandbox dependencies
+
+```bash
+# Verify if a tool is available in the sandbox
+openclaw sandbox run "ffmpeg -version"
+```
+
+### Debugging sandbox permissions
+
+```bash
+# Verify if you can write to a specific directory
+openclaw sandbox run "touch test.txt" --workdir /path/to/check
+```
 
 ### After updating Docker images
 
