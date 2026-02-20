@@ -53,7 +53,8 @@ This phase creates the **openclaw-documentator** — a read-only investigator ag
     - How to trace internal module dependencies: follow import statements
     - How to understand the extension loading mechanism: src/channels/plugins/ loads extensions/*
 
-- [ ] Add output formatting rules and example investigation workflows to the SKILL.md:
+- [x] Add output formatting rules and example investigation workflows to the SKILL.md:
+  > Completed 2026-02-19: Added three sections to `skills/documentator/SKILL.md`: **Output Format Specification** (5-part required answer structure — one-line summary, key files table, how-it-works flow, related modules, code snippets — plus 8 formatting rules), **Example Investigation Workflows** (5 worked examples: WhatsApp message routing tracing inbound from Baileys→monitor→routing→agent and outbound back, extension channel creation covering ChannelPlugin interface and registration pattern, LLM provider enumeration covering 16+ providers and 6 API protocols, cron system lifecycle from definition→scheduling→execution→delivery with state tracking, browser automation architecture covering HTTP bridge→Playwright/CDP→Chrome with ref system), and **Quick Reference Cheat Sheet** (17-row module mapping table + 10-row investigation shortcuts table).
   - Read the current `skills/documentator/SKILL.md`
   - Add an **Output Format Specification** section with:
     - All answers must be structured Markdown
