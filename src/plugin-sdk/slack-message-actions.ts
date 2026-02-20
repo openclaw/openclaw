@@ -190,6 +190,9 @@ export async function handleSlackMessageAction(params: {
     const viewId = readStringParam(actionParams, "viewId");
     const externalId = readStringParam(actionParams, "externalId");
     const hash = readStringParam(actionParams, "hash");
+    if (!viewId && !externalId) {
+      throw new Error("Slack modal-update requires viewId or externalId.");
+    }
     return await invoke(
       {
         action: "updateModal",
