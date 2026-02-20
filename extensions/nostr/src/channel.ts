@@ -239,8 +239,8 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
         onDisconnect: (relay) => {
           ctx.log?.debug?.(`[${account.accountId}] Disconnected from relay: ${relay}`);
         },
-        onEose: (relays) => {
-          ctx.log?.debug?.(`[${account.accountId}] EOSE received from relays: ${relays}`);
+        onEose: (relay) => {
+          ctx.log?.debug?.(`[${account.accountId}] EOSE received from relay: ${relay}`);
         },
         onMetric: (event: MetricEvent) => {
           // Log significant metrics at appropriate levels
