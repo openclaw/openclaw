@@ -10,21 +10,25 @@ Always use placeholder values in example configurations.
 ## Configuration Examples
 
 ### Gmail
+
 - Requires App-Specific Password: https://support.google.com/accounts/answer/185833
 - IMAP: imap.gmail.com:993 (SSL)
 - SMTP: smtp.gmail.com:587 (STARTTLS)
 
 ### QQ Mail
+
 - Requires authorization code (not QQ password)
 - IMAP: imap.qq.com:993 (SSL)
 - SMTP: smtp.qq.com:587 (STARTTLS)
 
 ### 163 Mail
+
 - Requires authorization code
 - IMAP: imap.163.com:993 (SSL)
 - SMTP: smtp.163.com:465 (SSL)
 
 ### Outlook
+
 - IMAP: outlook.office365.com:993 (SSL)
 - SMTP: smtp-mail.outlook.com:587 (STARTTLS)
 
@@ -52,9 +56,7 @@ Always use placeholder values in example configurations.
             "password": "your-password-or-token"
           },
           "checkInterval": 30,
-          "allowedSenders": [
-            "trusted@example.com"
-          ]
+          "allowedSenders": ["trusted@example.com"]
         }
       }
     }

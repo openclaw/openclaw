@@ -27,14 +27,12 @@ The email channel uses intelligent state tracking:
 ```json
 {
   "lastProcessedTimestamp": "2026-02-07T03:04:51.614Z",
-  "processedMessageIds": [
-    "<message-id-1>",
-    "<message-id-2>"
-  ]
+  "processedMessageIds": ["<message-id-1>", "<message-id-2>"]
 }
 ```
 
 **Benefits**:
+
 - ✅ Processes both read and unread emails (works even if you check email in other clients)
 - ✅ No duplicate processing (Message-ID tracking)
 - ✅ Survives restarts (state persistence)
@@ -80,10 +78,7 @@ Edit `~/.openclaw/openclaw.json`:
             "password": "your-password-or-app-token"
           },
           "checkInterval": 30,
-          "allowedSenders": [
-            "trusted@example.com",
-            "admin@yourdomain.com"
-          ]
+          "allowedSenders": ["trusted@example.com", "admin@yourdomain.com"]
         }
       }
     }
@@ -101,30 +96,30 @@ openclaw gateway restart
 
 ### IMAP Settings (Receiving Emails)
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `host` | string | IMAP server address |
-| `port` | number | IMAP port (993 for SSL, 143 for non-encrypted) |
-| `secure` | boolean | Use SSL/TLS connection |
-| `user` | string | Email username |
-| `password` | string | Email password or app-specific token |
+| Field      | Type    | Description                                    |
+| ---------- | ------- | ---------------------------------------------- |
+| `host`     | string  | IMAP server address                            |
+| `port`     | number  | IMAP port (993 for SSL, 143 for non-encrypted) |
+| `secure`   | boolean | Use SSL/TLS connection                         |
+| `user`     | string  | Email username                                 |
+| `password` | string  | Email password or app-specific token           |
 
 ### SMTP Settings (Sending Emails)
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `host` | string | SMTP server address |
-| `port` | number | SMTP port (465 for SSL, 587 for STARTTLS) |
-| `secure` | boolean | Use SSL (typically false for port 587) |
-| `user` | string | Email username |
-| `password` | string | Email password or app-specific token |
+| Field      | Type    | Description                               |
+| ---------- | ------- | ----------------------------------------- |
+| `host`     | string  | SMTP server address                       |
+| `port`     | number  | SMTP port (465 for SSL, 587 for STARTTLS) |
+| `secure`   | boolean | Use SSL (typically false for port 587)    |
+| `user`     | string  | Email username                            |
+| `password` | string  | Email password or app-specific token      |
 
 ### Optional Settings
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `checkInterval` | number | 30 | Email check interval in seconds |
-| `allowedSenders` | string[] | [] | Whitelist of authorized sender email addresses |
+| Field            | Type     | Default | Description                                    |
+| ---------------- | -------- | ------- | ---------------------------------------------- |
+| `checkInterval`  | number   | 30      | Email check interval in seconds                |
+| `allowedSenders` | string[] | []      | Whitelist of authorized sender email addresses |
 
 ### Security: Sender Whitelist
 
@@ -134,6 +129,7 @@ openclaw gateway restart
 - If empty or omitted: All senders are accepted (not recommended for production)
 
 **Example**:
+
 ```json
 "allowedSenders": [
   "personal@example.com",
@@ -262,6 +258,7 @@ openclaw dashboard
 ### View Sessions
 
 Email conversations appear in the session list with format:
+
 - **Title**: `📧 {sender-email} - {subject}`
 - **Aggregation**: All emails from same sender are in one conversation
 - **Session Key**: `email:{sender-email}`
@@ -269,6 +266,7 @@ Email conversations appear in the session list with format:
 ### View Conversation
 
 Click any email session to see:
+
 - Complete email content
 - AI responses
 - Timestamps and metadata
@@ -314,11 +312,13 @@ Email sent to trusted@example.com
 ### Email Not Processed
 
 **Possible causes**:
+
 1. Sender not in whitelist
 2. IMAP connection lost
 3. Email already processed (check logs for "Skipping already processed")
 
 **Solutions**:
+
 1. Verify whitelist configuration
 2. Check logs: `tail -f /tmp/openclaw/openclaw-*.log | grep EMAIL`
 3. Check state file: `cat ~/.openclaw/extensions/email/state.json`
@@ -328,6 +328,7 @@ Email sent to trusted@example.com
 **Resolved in current version!**
 
 The email channel now:
+
 - ✅ Processes all emails regardless of read/unread status
 - ✅ Uses time-based search instead of UNSEEN flag
 - ✅ Prevents duplicates via Message-ID tracking
@@ -336,10 +337,12 @@ The email channel now:
 ### Cannot See Session History
 
 **Possible causes**:
+
 1. No emails successfully processed yet
 2. Dashboard needs refresh
 
 **Solutions**:
+
 1. Verify at least one email was processed (check logs)
 2. Refresh Dashboard page
 3. Check session files exist: `ls ~/.openclaw/agents/main/sessions/`
@@ -387,10 +390,12 @@ openclaw gateway restart
 ### State Persistence
 
 The email channel maintains a persistent state file that tracks:
+
 - **lastProcessedTimestamp**: ISO 8601 timestamp of last successful email processing
 - **processedMessageIds**: Array of Message-IDs that have been processed (max 1000)
 
 This enables:
+
 - Recovery from Gateway restarts
 - Prevention of duplicate processing
 - Time-based email search (independent of read/unread flags)
@@ -439,6 +444,7 @@ This enables:
 The email channel consists of three main components:
 
 ### `src/runtime.ts`
+
 - IMAP connection management
 - Email receiving and parsing
 - SMTP email sending
@@ -446,12 +452,14 @@ The email channel consists of three main components:
 - Duplicate detection
 
 ### `src/channel.ts`
+
 - OpenClaw ChannelPlugin interface implementation
 - Dynamic import of OpenClaw core functions
 - Message dispatching to AI agent
 - Session history integration
 
 ### `index.ts`
+
 - Plugin entry point
 - Plugin registration with OpenClaw
 

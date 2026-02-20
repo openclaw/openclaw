@@ -7,23 +7,27 @@ The Email Channel plugin has been prepared as a clean, professional open-source 
 ## What's Included
 
 ### ✅ Source Code
+
 - `src/channel.ts` - Channel plugin implementation with dynamic imports
 - `src/runtime.ts` - IMAP/SMTP runtime with state management
 - `index.ts` - Plugin entry point
 
 ### ✅ Documentation
+
 - `README.md` - Comprehensive usage guide (English)
 - `CHANGELOG.md` - Version history following Keep a Changelog format
 - `CONTRIBUTING.md` - Contribution guidelines
 - `CONFIG_EXAMPLES.md` - Configuration examples for various email providers
 
 ### ✅ Meta Files
+
 - `package.json` - NPM package configuration
 - `tsconfig.json` - TypeScript configuration
 - `LICENSE` - MIT License
 - `.gitignore` - Git ignore patterns
 
 ### ✅ Security
+
 - **No hardcoded credentials** in source code
 - Only placeholder values in examples
 - Whitelist functionality documented
@@ -60,6 +64,7 @@ git push origin feature/email-channel
 ```
 
 Then create a Pull Request on GitHub:
+
 1. Go to https://github.com/openclaw/openclaw
 2. Click "Compare & pull request"
 3. Select your feature branch
@@ -69,6 +74,7 @@ Then create a Pull Request on GitHub:
 ### Option 2: Submit as Issue
 
 If you don't have write access, create an issue:
+
 1. Go to https://github.com/openclaw/openclaw/issues
 2. Title: "Feature Request: Official Email Channel Plugin"
 3. Include the summary from below
@@ -104,22 +110,28 @@ The plugin consists of three components:
 ## Key Innovations
 
 ### 1. Time-Based Search vs UNSEEN Flag
+
 Most email plugins rely on the UNSEEN flag, which fails if users check email in other clients. This plugin uses timestamp-based search, processing all emails since `lastProcessedTimestamp`, regardless of read/unread status.
 
 ### 2. Message-ID Deduplication
+
 Tracks processed emails by Message-ID to prevent duplicates while supporting time-based search.
 
 ### 3. State Persistence
+
 State file (`~/.openclaw/extensions/email/state.json`) tracks:
+
 - `lastProcessedTimestamp`: When last email was processed
 - `processedMessageIds`: List of processed Message-IDs (max 1000)
 
 ### 4. External Plugin Compatibility
+
 Uses dynamic imports to load OpenClaw core functions, solving the limitation where `api.runtime` only provides basic methods for external plugins.
 
 ## Documentation
 
 Comprehensive documentation included:
+
 - **README.md**: User guide with configuration examples
 - **CHANGELOG.md**: Version history
 - **CONTRIBUTING.md**: Developer guide
@@ -128,6 +140,7 @@ Comprehensive documentation included:
 ## Testing
 
 Tested with:
+
 - ✅ QQ Mail (imap.qq.com)
 - ✅ Multiple senders (whitelist feature)
 - ✅ State persistence across restarts
@@ -144,21 +157,22 @@ Tested with:
 ## Files
 
 Located at: `/packages/email-channel/`
-
 ```
+
 packages/email-channel/
 ├── src/
-│   ├── channel.ts      # Channel plugin implementation
-│   └── runtime.ts      # IMAP/SMTP runtime
-├── index.ts             # Plugin entry point
-├── package.json         # NPM configuration
-├── tsconfig.json        # TypeScript config
-├── README.md            # User documentation
-├── CHANGELOG.md         # Version history
-├── CONTRIBUTING.md      # Contribution guide
-├── CONFIG_EXAMPLES.md   # Configuration examples
-├── LICENSE              # MIT License
-└── .gitignore          # Git ignore patterns
+│ ├── channel.ts # Channel plugin implementation
+│ └── runtime.ts # IMAP/SMTP runtime
+├── index.ts # Plugin entry point
+├── package.json # NPM configuration
+├── tsconfig.json # TypeScript config
+├── README.md # User documentation
+├── CHANGELOG.md # Version history
+├── CONTRIBUTING.md # Contribution guide
+├── CONFIG_EXAMPLES.md # Configuration examples
+├── LICENSE # MIT License
+└── .gitignore # Git ignore patterns
+
 ```
 
 ## Suggested Integration Path

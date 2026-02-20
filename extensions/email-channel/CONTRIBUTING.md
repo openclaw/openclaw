@@ -5,12 +5,14 @@ Thank you for your interest in contributing to the Email Channel plugin for Open
 ## Development Setup
 
 1. **Clone the repository**
+
    ```bash
    git clone https://github.com/openclaw/openclaw.git
    cd openclaw/packages/email-channel
    ```
 
 2. **Install dependencies**
+
    ```bash
    npm install
    ```
@@ -71,6 +73,7 @@ Follow conventional commits:
 - `chore:` Maintenance tasks
 
 Example:
+
 ```
 feat: Add support for OAuth2 authentication
 
