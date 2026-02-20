@@ -1,13 +1,13 @@
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import fs from "node:fs";
 import path from "node:path";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { DoltRecord, DoltRecordLevel, DoltStore } from "./store/types.js";
 import {
   resolveDoltLanePolicies,
   type DoltLanePolicy,
   type DoltLanePolicyOverrides,
   type DoltLanePolicies,
 } from "./policy.js";
-import type { DoltRecord, DoltRecordLevel, DoltStore } from "./store/types.js";
 import { collectDoltActiveLaneSnapshot, emitDoltTelemetryEvent } from "./telemetry.js";
 
 export type DoltAssemblyParams = {
@@ -223,12 +223,13 @@ export function resolveDoltAssemblyLaneBudgets(params: {
 }
 
 /**
- * Resolve hard cap for one lane from policy target/summary cap fields.
+ * Resolve assembly budget for one lane from policy target.
+ *
+ * `summaryCap` governs the summarizer's max output per rollup — it is NOT the
+ * lane's assembly budget.  The assembly budget is always `target`: the token
+ * level the lane drains toward after compaction.
  */
 export function resolveDoltLaneCap(policy: DoltLanePolicy): number {
-  if (typeof policy.summaryCap === "number") {
-    return normalizeNonNegativeInt(policy.summaryCap);
-  }
   return normalizeNonNegativeInt(policy.target);
 }
 
