@@ -226,7 +226,7 @@ export class TwitchClientManager {
     this.clients.forEach((client) => client.quit());
     this.clients.clear();
     this.messageHandlers.clear();
-    this.logger.info(" Disconnected all clients");
+    this.logger.info("Disconnected all clients");
   }
 
   /**
