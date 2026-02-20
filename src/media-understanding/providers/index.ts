@@ -6,6 +6,7 @@ import { googleProvider } from "./google/index.js";
 import { groqProvider } from "./groq/index.js";
 import { minimaxProvider } from "./minimax/index.js";
 import { openaiProvider } from "./openai/index.js";
+import { sonioxProvider } from "./soniox/index.js";
 import { zaiProvider } from "./zai/index.js";
 
 const PROVIDERS: MediaUnderstandingProvider[] = [
@@ -16,6 +17,7 @@ const PROVIDERS: MediaUnderstandingProvider[] = [
   minimaxProvider,
   zaiProvider,
   deepgramProvider,
+  sonioxProvider,
 ];
 
 export function normalizeMediaProviderId(id: string): string {

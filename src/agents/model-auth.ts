@@ -297,6 +297,7 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
     voyage: "VOYAGE_API_KEY",
     groq: "GROQ_API_KEY",
     deepgram: "DEEPGRAM_API_KEY",
+    soniox: "SONIOX_API_KEY",
     cerebras: "CEREBRAS_API_KEY",
     xai: "XAI_API_KEY",
     openrouter: "OPENROUTER_API_KEY",
