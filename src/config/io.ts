@@ -1,10 +1,11 @@
+import JSON5 from "json5";
+import { ensureOwnerDisplaySecret } from "../agents/owner-display.js";
+import type { OpenClawConfig, ConfigFileSnapshot, LegacyConfigIssue } from "./types.js";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import JSON5 from "json5";
-import { ensureOwnerDisplaySecret } from "../agents/owner-display.js";
 import { loadDotEnv } from "../infra/dotenv.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import {
@@ -16,7 +17,7 @@ import {
 import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { VERSION } from "../version.js";
 import { DuplicateAgentDirError, findDuplicateAgentDirs } from "./agent-dirs.js";
-import { maintainConfigBackups } from "./backup-rotation.js";
+import { CONFIG_BACKUP_COUNT, maintainConfigBackups } from "./backup-rotation.js";
 import {
   applyCompactionDefaults,
   applyContextPruningDefaults,
@@ -48,7 +49,6 @@ import { normalizeConfigPaths } from "./normalize-paths.js";
 import { resolveConfigPath, resolveDefaultConfigCandidates, resolveStateDir } from "./paths.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
 import { applyConfigOverrides } from "./runtime-overrides.js";
-import type { OpenClawConfig, ConfigFileSnapshot, LegacyConfigIssue } from "./types.js";
 import {
   validateConfigObjectRawWithPlugins,
   validateConfigObjectWithPlugins,
@@ -1556,4 +1556,53 @@ export async function writeConfigFile(
   }
   // When we had no runtime snapshot, keep callers reading from disk/cache so external/manual
   // edits to openclaw.json remain visible (no stale snapshot).
+}
+
+/**
+ * Iterate through config backup files (.bak, .bak.1, …) and return the first
+ * snapshot that passes validation.  Returns `null` when no usable backup exists.
+ */
+export async function tryLoadValidConfigBackup(
+  configPath: string,
+): Promise<{ snapshot: ConfigFileSnapshot; backupPath: string } | null> {
+  const backupBase = `${configPath}.bak`;
+  const candidates = [backupBase];
+  for (let i = 1; i < CONFIG_BACKUP_COUNT; i++) {
+    candidates.push(`${backupBase}.${i}`);
+  }
+
+  for (const candidate of candidates) {
+    try {
+      const raw = await fs.promises.readFile(candidate, "utf-8");
+      const parsed = JSON5.parse(raw);
+      if (typeof parsed !== "object" || parsed === null) {
+        continue;
+      }
+
+      const validated = validateConfigObjectRawWithPlugins(parsed);
+      if (!validated.ok) {
+        continue;
+      }
+
+      return {
+        snapshot: {
+          path: candidate,
+          exists: true,
+          raw,
+          parsed,
+          resolved: parsed as OpenClawConfig,
+          valid: true,
+          config: parsed as OpenClawConfig,
+          issues: [],
+          warnings: validated.warnings ?? [],
+          legacyIssues: [],
+        },
+        backupPath: candidate,
+      };
+    } catch {
+      // Backup missing or unreadable — try the next one.
+    }
+  }
+
+  return null;
 }
