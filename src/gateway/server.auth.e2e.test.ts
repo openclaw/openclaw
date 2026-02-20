@@ -948,6 +948,91 @@ describe("gateway server auth/connect", () => {
     restoreGatewayToken(prevToken);
   });
 
+  test("allows reconnect after token rotation when approved scope set is preserved", async () => {
+    const { mkdtemp } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem, signDevicePayload } =
+      await import("../infra/device-identity.js");
+    const { getPairedDevice } = await import("../infra/device-pairing.js");
+    const { server, ws, port, prevToken } = await startServerWithClient("secret");
+    const identityDir = await mkdtemp(join(tmpdir(), "openclaw-device-scope-"));
+    const identity = loadOrCreateDeviceIdentity(join(identityDir, "device.json"));
+    const client = {
+      id: GATEWAY_CLIENT_NAMES.TEST,
+      version: "1.0.0",
+      platform: "test",
+      mode: GATEWAY_CLIENT_MODES.TEST,
+    };
+    const buildDevice = (scopes: string[]) => {
+      const signedAtMs = Date.now();
+      const payload = buildDeviceAuthPayload({
+        deviceId: identity.deviceId,
+        clientId: client.id,
+        clientMode: client.mode,
+        role: "operator",
+        scopes,
+        signedAtMs,
+        token: "secret",
+      });
+      return {
+        id: identity.deviceId,
+        publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+        signature: signDevicePayload(identity.privateKeyPem, payload),
+        signedAt: signedAtMs,
+      };
+    };
+
+    const initial = await connectReq(ws, {
+      token: "secret",
+      scopes: ["operator.admin", "operator.approvals", "operator.pairing"],
+      client,
+      device: buildDevice(["operator.admin", "operator.approvals", "operator.pairing"]),
+    });
+    if (!initial.ok) {
+      await approvePendingPairingIfNeeded();
+    }
+
+    ws.close();
+
+    const rotateWs = new WebSocket(`ws://127.0.0.1:${port}`);
+    await new Promise<void>((resolve) => rotateWs.once("open", resolve));
+    const rotateConn = await connectReq(rotateWs, {
+      token: "secret",
+      scopes: ["operator.admin", "operator.approvals", "operator.pairing"],
+      client,
+      device: buildDevice(["operator.admin", "operator.approvals", "operator.pairing"]),
+    });
+    expect(rotateConn.ok).toBe(true);
+    const rotated = await rpcReq(rotateWs, "device.token.rotate", {
+      deviceId: identity.deviceId,
+      role: "operator",
+      scopes: ["operator.read"],
+    });
+    expect(rotated.ok).toBe(true);
+    rotateWs.close();
+
+    const pairedAfterRotate = await getPairedDevice(identity.deviceId);
+    expect(pairedAfterRotate?.approvedScopes).toEqual(
+      expect.arrayContaining(["operator.admin", "operator.approvals", "operator.pairing"]),
+    );
+    expect(pairedAfterRotate?.scopes).toEqual(["operator.read"]);
+
+    const ws2 = new WebSocket(`ws://127.0.0.1:${port}`);
+    await new Promise<void>((resolve) => ws2.once("open", resolve));
+    const res = await connectReq(ws2, {
+      token: "secret",
+      scopes: ["operator.admin", "operator.approvals", "operator.pairing"],
+      client,
+      device: buildDevice(["operator.admin", "operator.approvals", "operator.pairing"]),
+    });
+    expect(res.ok).toBe(true);
+    ws2.close();
+
+    await server.close();
+    restoreGatewayToken(prevToken);
+  });
+
   test("allows operator.read connect when device is paired with operator.admin", async () => {
     const { mkdtemp } = await import("node:fs/promises");
     const { tmpdir } = await import("node:os");

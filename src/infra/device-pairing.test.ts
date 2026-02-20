@@ -88,6 +88,50 @@ describe("device pairing tokens", () => {
     expect(paired?.tokens?.operator?.scopes).toEqual(["operator.read"]);
   });
 
+  test("preserves approved scopes across token rotations", async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
+    await setupPairedOperatorDevice(baseDir, [
+      "operator.admin",
+      "operator.approvals",
+      "operator.pairing",
+    ]);
+
+    await rotateDeviceToken({
+      deviceId: "device-1",
+      role: "operator",
+      scopes: ["operator.read"],
+      baseDir,
+    });
+    const rotated = await getPairedDevice("device-1", baseDir);
+    expect(rotated?.approvedScopes).toEqual(
+      expect.arrayContaining([
+        "operator.admin",
+        "operator.approvals",
+        "operator.pairing",
+        "operator.read",
+      ]),
+    );
+    expect(rotated?.scopes).toEqual(["operator.read"]);
+    expect(rotated?.tokens?.operator?.scopes).toEqual(["operator.read"]);
+
+    await rotateDeviceToken({
+      deviceId: "device-1",
+      role: "operator",
+      scopes: ["operator.approvals"],
+      baseDir,
+    });
+    const rotatedDown = await getPairedDevice("device-1", baseDir);
+    expect(rotatedDown?.approvedScopes).toEqual(
+      expect.arrayContaining([
+        "operator.admin",
+        "operator.approvals",
+        "operator.pairing",
+        "operator.read",
+      ]),
+    );
+    expect(rotatedDown?.scopes).toEqual(["operator.approvals"]);
+  });
+
   test("verifies token and rejects mismatches", async () => {
     const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
     await setupPairedOperatorDevice(baseDir, ["operator.read"]);

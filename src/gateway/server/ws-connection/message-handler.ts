@@ -712,8 +712,16 @@ export function attachGatewayWsMessageHandler(params: {
               return;
             }
           } else {
+            const pairedScopesFromDevice = () => {
+              if (Array.isArray(paired?.approvedScopes) && paired.approvedScopes.length > 0) {
+                return paired.approvedScopes;
+              }
+              return Array.isArray(paired?.scopes) ? paired.scopes : [];
+            };
             const hasLegacyPairedMetadata =
-              paired.roles === undefined && paired.scopes === undefined;
+              paired?.roles === undefined &&
+              paired?.scopes === undefined &&
+              paired?.approvedScopes === undefined;
             const pairedRoles = Array.isArray(paired.roles)
               ? paired.roles
               : paired.role
@@ -735,7 +743,7 @@ export function attachGatewayWsMessageHandler(params: {
                 }
               }
 
-              const pairedScopes = Array.isArray(paired.scopes) ? paired.scopes : [];
+              const pairedScopes = pairedScopesFromDevice();
               if (scopes.length > 0) {
                 if (pairedScopes.length === 0) {
                   logUpgradeAudit("scope-upgrade", pairedRoles, pairedScopes);

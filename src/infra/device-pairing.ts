@@ -57,6 +57,7 @@ export type PairedDevice = {
   role?: string;
   roles?: string[];
   scopes?: string[];
+  approvedScopes?: string[];
   remoteIp?: string;
   tokens?: Record<string, DeviceAuthToken>;
   createdAtMs: number;
@@ -257,6 +258,7 @@ export async function approveDevicePairing(
     const existing = state.pairedByDeviceId[pending.deviceId];
     const roles = mergeRoles(existing?.roles, existing?.role, pending.roles, pending.role);
     const scopes = mergeScopes(existing?.scopes, pending.scopes);
+    const approvedScopes = mergeScopes(existing?.approvedScopes, existing?.scopes, pending.scopes);
     const tokens = existing?.tokens ? { ...existing.tokens } : {};
     const roleForToken = normalizeRole(pending.role);
     if (roleForToken) {
@@ -284,6 +286,7 @@ export async function approveDevicePairing(
       roles,
       scopes,
       remoteIp: pending.remoteIp,
+      approvedScopes,
       tokens,
       createdAtMs: existing?.createdAtMs ?? now,
       approvedAtMs: now,
@@ -495,6 +498,7 @@ export async function rotateDeviceToken(params: {
     const requestedScopes = normalizeDeviceAuthScopes(
       params.scopes ?? existing?.scopes ?? device.scopes,
     );
+    const approvedScopes = mergeScopes(device.approvedScopes, existing?.scopes, params.scopes);
     const now = Date.now();
     const next = buildDeviceAuthToken({
       role,
@@ -505,6 +509,9 @@ export async function rotateDeviceToken(params: {
     });
     tokens[role] = next;
     device.tokens = tokens;
+    if (approvedScopes) {
+      device.approvedScopes = approvedScopes;
+    }
     if (params.scopes !== undefined) {
       device.scopes = requestedScopes;
     }
