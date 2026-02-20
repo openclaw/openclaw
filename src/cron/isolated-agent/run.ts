@@ -1,8 +1,3 @@
-import type { MessagingToolSend } from "../../agents/pi-embedded-messaging.js";
-import type { OpenClawConfig } from "../../config/config.js";
-import type { CronQualityCheckConfig } from "../../config/types.cron.js";
-import type { AgentDefaultsConfig } from "../../config/types.js";
-import type { CronJob } from "../types.js";
 import {
   resolveAgentConfig,
   resolveAgentDir,
@@ -25,6 +20,7 @@ import {
   resolveHooksGmailModel,
   resolveThinkingDefault,
 } from "../../agents/model-selection.js";
+import type { MessagingToolSend } from "../../agents/pi-embedded-messaging.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { runSubagentAnnounceFlow } from "../../agents/subagent-announce.js";
 import { countActiveDescendantRuns } from "../../agents/subagent-registry.js";
@@ -38,11 +34,14 @@ import {
 } from "../../auto-reply/thinking.js";
 import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveAgentMainSessionKey,
   resolveSessionTranscriptPath,
   updateSessionStore,
 } from "../../config/sessions.js";
+import type { CronQualityCheckConfig } from "../../config/types.cron.js";
+import type { AgentDefaultsConfig } from "../../config/types.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { resolveAgentOutboundIdentity } from "../../infra/outbound/identity.js";
@@ -55,6 +54,7 @@ import {
   isExternalHookSession,
 } from "../../security/external-content.js";
 import { resolveCronDeliveryPlan } from "../delivery.js";
+import type { CronJob } from "../types.js";
 import { resolveDeliveryTarget } from "./delivery-target.js";
 import {
   isHeartbeatOnlyResponse,
@@ -609,26 +609,8 @@ export async function runCronIsolatedAgentTurn(params: {
       cronSession.sessionEntry.outputTokens = output;
       cronSession.sessionEntry.totalTokens = totalTokens;
       cronSession.sessionEntry.totalTokensFresh = true;
-<<<<<<< HEAD
       cronSession.sessionEntry.cacheRead = usage.cacheRead ?? 0;
       cronSession.sessionEntry.cacheWrite = usage.cacheWrite ?? 0;
-
-      telemetry = {
-        model: modelUsed,
-        provider: providerUsed,
-        usage: {
-          input_tokens: input,
-          output_tokens: output,
-          total_tokens: totalTokens,
-        },
-      };
-    } else {
-      telemetry = {
-        model: modelUsed,
-        provider: providerUsed,
-      };
-=======
->>>>>>> d7a017419 (fix: cron self-contained context + output quality gate)
     }
     await persistSessionEntry();
   }
