@@ -4,7 +4,14 @@
 // The operator's console. The warroom desk.
 
 import type { ServerResponse } from "node:http";
-import type { AnyAgentTool } from "../../../src/plugins/types.js";
+
+// Minimal tool interface — works standalone without OpenClaw dependency
+interface ForgeTool {
+  name: string;
+  description?: string;
+  parameters?: Record<string, unknown>;
+  execute: (id: string, params: Record<string, unknown>) => Promise<any>;
+}
 
 // ─── Enums ───────────────────────────────────────────────────────────
 const AGENT_STATUS = {
@@ -58,7 +65,7 @@ function setupSSE(res: ServerResponse) {
 
 // ─── Tool Definitions → Anthropic Format ─────────────────────────────
 
-function toolsToAnthropic(tools: AnyAgentTool[]) {
+function toolsToAnthropic(tools: ForgeTool[]) {
   return tools.map((t) => ({
     name: t.name,
     description: t.description || "",
@@ -166,7 +173,7 @@ export async function runForgeAgent(
   res: ServerResponse,
   apiKey: string,
   userMessages: Array<{ role: string; content: string }>,
-  tools: AnyAgentTool[],
+  tools: ForgeTool[],
   model?: string,
 ) {
   const emit = setupSSE(res);

@@ -7,7 +7,14 @@ import { readFile, readdir, stat } from "node:fs/promises";
 import { resolve, join, relative } from "node:path";
 import { createInterface } from "node:readline";
 import { Type } from "@sinclair/typebox";
-import type { AnyAgentTool } from "../../../src/plugins/types.js";
+// Standalone type — no OpenClaw dependency needed at runtime
+type AnyAgentTool = {
+  name: string;
+  label?: string;
+  description?: string;
+  parameters?: any;
+  execute: (id: string, params: Record<string, unknown>) => Promise<any>;
+};
 import { PathGuard, BashGuard, GitGuard } from "./guards.js";
 
 const MAX_OUTPUT = 30 * 1024; // 30 KB output cap

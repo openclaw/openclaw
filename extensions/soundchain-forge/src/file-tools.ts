@@ -5,7 +5,14 @@ import { randomBytes } from "node:crypto";
 import { readFile, writeFile, mkdir, rename, stat } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { Type } from "@sinclair/typebox";
-import type { AnyAgentTool } from "../../../src/plugins/types.js";
+// Standalone type — no OpenClaw dependency needed at runtime
+type AnyAgentTool = {
+  name: string;
+  label?: string;
+  description?: string;
+  parameters?: any;
+  execute: (id: string, params: Record<string, unknown>) => Promise<any>;
+};
 import { PathGuard } from "./guards.js";
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
