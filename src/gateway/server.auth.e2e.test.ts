@@ -948,6 +948,101 @@ describe("gateway server auth/connect", () => {
     restoreGatewayToken(prevToken);
   });
 
+  test("single approval captures pending node and operator roles for the same device", async () => {
+    const { mkdtemp } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem, signDevicePayload } =
+      await import("../infra/device-identity.js");
+    const { approveDevicePairing, getPairedDevice, listDevicePairing } =
+      await import("../infra/device-pairing.js");
+    const { server, ws, port, prevToken } = await startServerWithClient("secret");
+    ws.close();
+    const identityDir = await mkdtemp(join(tmpdir(), "openclaw-device-scope-"));
+    const identity = loadOrCreateDeviceIdentity(join(identityDir, "device.json"));
+    const client = {
+      id: GATEWAY_CLIENT_NAMES.TEST,
+      version: "1.0.0",
+      platform: "test",
+      mode: GATEWAY_CLIENT_MODES.TEST,
+    };
+    const buildDevice = (role: "operator" | "node", scopes: string[], nonce?: string) => {
+      const signedAtMs = Date.now();
+      const payload = buildDeviceAuthPayload({
+        deviceId: identity.deviceId,
+        clientId: client.id,
+        clientMode: client.mode,
+        role,
+        scopes,
+        signedAtMs,
+        token: "secret",
+        nonce,
+      });
+      return {
+        id: identity.deviceId,
+        publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+        signature: signDevicePayload(identity.privateKeyPem, payload),
+        signedAt: signedAtMs,
+        nonce,
+      };
+    };
+    const connectWithNonce = async (role: "operator" | "node", scopes: string[]) => {
+      const socket = new WebSocket(`ws://127.0.0.1:${port}`, {
+        headers: { host: "gateway.example" },
+      });
+      const challengePromise = onceMessage<{
+        type?: string;
+        event?: string;
+        payload?: Record<string, unknown> | null;
+      }>(socket, (o) => o.type === "event" && o.event === "connect.challenge");
+      await new Promise<void>((resolve) => socket.once("open", resolve));
+      const challenge = await challengePromise;
+      const nonce = (challenge.payload as { nonce?: unknown } | undefined)?.nonce;
+      expect(typeof nonce).toBe("string");
+      const result = await connectReq(socket, {
+        token: "secret",
+        role,
+        scopes,
+        client,
+        device: buildDevice(role, scopes, String(nonce)),
+      });
+      socket.close();
+      return result;
+    };
+
+    const nodeConnect = await connectWithNonce("node", []);
+    expect(nodeConnect.ok).toBe(false);
+    expect(nodeConnect.error?.message ?? "").toContain("pairing required");
+
+    const operatorConnect = await connectWithNonce("operator", ["operator.read", "operator.write"]);
+    expect(operatorConnect.ok).toBe(false);
+    expect(operatorConnect.error?.message ?? "").toContain("pairing required");
+
+    const pending = await listDevicePairing();
+    expect(pending.pending).toHaveLength(1);
+    expect(pending.pending[0]?.roles).toEqual(expect.arrayContaining(["node", "operator"]));
+    expect(pending.pending[0]?.scopes).toEqual(
+      expect.arrayContaining(["operator.read", "operator.write"]),
+    );
+    if (!pending.pending[0]) {
+      throw new Error("expected pending pairing request");
+    }
+    await approveDevicePairing(pending.pending[0].requestId);
+
+    const paired = await getPairedDevice(identity.deviceId);
+    expect(paired?.roles).toEqual(expect.arrayContaining(["node", "operator"]));
+    expect(paired?.scopes).toEqual(expect.arrayContaining(["operator.read", "operator.write"]));
+
+    const approvedOperatorConnect = await connectWithNonce("operator", ["operator.read"]);
+    expect(approvedOperatorConnect.ok).toBe(true);
+
+    const afterApproval = await listDevicePairing();
+    expect(afterApproval.pending).toEqual([]);
+
+    await server.close();
+    restoreGatewayToken(prevToken);
+  });
+
   test("allows operator.read connect when device is paired with operator.admin", async () => {
     const { mkdtemp } = await import("node:fs/promises");
     const { tmpdir } = await import("node:os");
