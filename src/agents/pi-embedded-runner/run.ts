@@ -480,6 +480,7 @@ export async function runEmbeddedPiAgent(
       const usageAccumulator = createUsageAccumulator();
       let lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
       let autoCompactionCount = 0;
+      let stallNotifyCount = 0;
       try {
         while (true) {
           attemptedThinking.add(thinkLevel);
@@ -540,6 +541,7 @@ export async function runEmbeddedPiAgent(
             onReasoningEnd: params.onReasoningEnd,
             onToolResult: params.onToolResult,
             onAgentEvent: params.onAgentEvent,
+            onPromptCycleStart: params.onPromptCycleStart,
             extraSystemPrompt: params.extraSystemPrompt,
             inputProvenance: params.inputProvenance,
             streamParams: params.streamParams,
@@ -929,6 +931,15 @@ export async function runEmbeddedPiAgent(
             }
 
             const rotated = await advanceAuthProfile();
+            if (timedOut && params.onBlockReply) {
+              stallNotifyCount++;
+              const msg =
+                stallNotifyCount === 1
+                  ? "Response stalled \u2014 retrying..."
+                  : `Still waiting for response (retry ${stallNotifyCount})...`;
+              // Best-effort UI notification — channel send failure must not block retry.
+              Promise.resolve(params.onBlockReply({ text: msg })).catch(() => {});
+            }
             if (rotated) {
               continue;
             }

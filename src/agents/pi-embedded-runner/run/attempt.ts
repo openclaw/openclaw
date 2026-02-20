@@ -751,6 +751,15 @@ export async function runEmbeddedAttempt(
         });
       };
 
+      // Streaming inactivity detection: abort if no events arrive for STREAM_INACTIVITY_MS.
+      const STREAM_INACTIVITY_MS = 90_000;
+      let lastStreamActivity = Date.now();
+      let streamInactivityTimer: NodeJS.Timeout | null = null;
+      let streamWatchdogDone = false;
+      const resetStreamActivity = () => {
+        lastStreamActivity = Date.now();
+      };
+
       const subscription = subscribeEmbeddedPiSession({
         session: activeSession,
         runId: params.runId,
@@ -770,6 +779,7 @@ export async function runEmbeddedAttempt(
         onPartialReply: params.onPartialReply,
         onAssistantMessageStart: params.onAssistantMessageStart,
         onAgentEvent: params.onAgentEvent,
+        onStreamActivity: resetStreamActivity,
         enforceFinalTag: params.enforceFinalTag,
         config: params.config,
         sessionKey: params.sessionKey ?? params.sessionId,
@@ -834,6 +844,26 @@ export async function runEmbeddedAttempt(
         },
         Math.max(1, params.timeoutMs),
       );
+
+      // Start streaming inactivity watchdog (aborts if no SSE chunks for STREAM_INACTIVITY_MS).
+      const startStreamInactivityCheck = () => {
+        streamInactivityTimer = setTimeout(function check() {
+          const elapsed = Date.now() - lastStreamActivity;
+          if (elapsed >= STREAM_INACTIVITY_MS && activeSession.isStreaming) {
+            if (!isProbeSession) {
+              log.warn(
+                `streaming inactivity: runId=${params.runId} sessionId=${params.sessionId} silentMs=${elapsed}`,
+              );
+            }
+            abortRun(true);
+            return;
+          }
+          if (!aborted && !streamWatchdogDone) {
+            streamInactivityTimer = setTimeout(check, 30_000);
+          }
+        }, STREAM_INACTIVITY_MS);
+      };
+      startStreamInactivityCheck();
 
       let messagesSnapshot: AgentMessage[] = [];
       let sessionIdUsed = activeSession.sessionId;
@@ -1039,6 +1069,8 @@ export async function runEmbeddedAttempt(
 
           // Only pass images option if there are actually images to pass
           // This avoids potential issues with models that don't expect the images parameter
+          resetStreamActivity();
+          params.onPromptCycleStart?.();
           if (imageResult.images.length > 0) {
             await abortable(activeSession.prompt(effectivePrompt, { images: imageResult.images }));
           } else {
@@ -1173,6 +1205,10 @@ export async function runEmbeddedAttempt(
         clearTimeout(abortTimer);
         if (abortWarnTimer) {
           clearTimeout(abortWarnTimer);
+        }
+        streamWatchdogDone = true;
+        if (streamInactivityTimer) {
+          clearTimeout(streamInactivityTimer);
         }
         if (!isProbeSession && (aborted || timedOut) && !timedOutDuringCompaction) {
           log.debug(
