@@ -152,6 +152,21 @@ describe("control UI assets helpers (fs-mocked)", () => {
     await expect(resolveControlUiDistIndexPath(path.join(root, "index.mjs"))).resolves.toBeNull();
   });
 
+  it("resolves global install symlink path to package dist assets", async () => {
+    const { resolveControlUiDistIndexPath } = await import("./control-ui-assets.js");
+
+    const globalBin = abs("fixtures/global/bin/openclaw");
+    const packageRoot = abs("fixtures/global/lib/node_modules/openclaw");
+    state.realpaths.set(globalBin, path.join(packageRoot, "bin", "openclaw.js"));
+
+    setFile(path.join(packageRoot, "package.json"), JSON.stringify({ name: "openclaw" }));
+    setFile(path.join(packageRoot, "dist", "control-ui", "index.html"), "<html></html>\n");
+
+    await expect(resolveControlUiDistIndexPath(globalBin)).resolves.toBe(
+      path.join(packageRoot, "dist", "control-ui", "index.html"),
+    );
+  });
+
   it("reports health for missing + existing dist assets", async () => {
     const root = abs("fixtures/health");
     const indexPath = path.join(root, "dist", "control-ui", "index.html");
