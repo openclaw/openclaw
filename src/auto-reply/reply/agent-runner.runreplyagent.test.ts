@@ -562,6 +562,32 @@ describe("runReplyAgent typing (heartbeat)", () => {
     expect(deliveryOrder).toEqual(["first", "second"]);
   });
 
+  it("continues delivering later tool results after an earlier tool result fails", async () => {
+    const delivered: string[] = [];
+    const onToolResult = vi.fn(async (payload: { text?: string }) => {
+      if (payload.text === "first") {
+        throw new Error("simulated delivery failure");
+      }
+      delivered.push(payload.text ?? "");
+    });
+
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      void params.onToolResult?.({ text: "first", mediaUrls: [] });
+      void params.onToolResult?.({ text: "second", mediaUrls: [] });
+      await new Promise((r) => setTimeout(r, 50));
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const { run } = createMinimalRun({
+      typingMode: "message",
+      opts: { onToolResult },
+    });
+    await run();
+
+    expect(onToolResult).toHaveBeenCalledTimes(2);
+    expect(delivered).toEqual(["second"]);
+  });
+
   it("announces auto-compaction in verbose mode and tracks count", async () => {
     await withTempStateDir(async (stateDir) => {
       const storePath = path.join(stateDir, "sessions", "sessions.json");

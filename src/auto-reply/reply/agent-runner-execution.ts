@@ -386,23 +386,25 @@ export async function runAgentTurnWithFallback(params: {
                   // See: https://github.com/openclaw/openclaw/issues/11044
                   let toolResultChain: Promise<void> = Promise.resolve();
                   return (payload: ReplyPayload) => {
-                    const task = (toolResultChain = toolResultChain.then(async () => {
-                      const { text, skip } = normalizeStreamingText(payload);
-                      if (skip) {
-                        return;
-                      }
-                      await params.typingSignals.signalTextDelta(text);
-                      await onToolResult({
-                        text,
-                        mediaUrls: payload.mediaUrls,
-                      });
-                    }))
-                      .catch((err) => {
-                        logVerbose(`tool result delivery failed: ${String(err)}`);
+                    toolResultChain = toolResultChain
+                      .then(async () => {
+                        const { text, skip } = normalizeStreamingText(payload);
+                        if (skip) {
+                          return;
+                        }
+                        await params.typingSignals.signalTextDelta(text);
+                        await onToolResult({
+                          text,
+                          mediaUrls: payload.mediaUrls,
+                        });
                       })
-                      .finally(() => {
-                        params.pendingToolTasks.delete(task);
+                      .catch((err) => {
+                        // Keep chain healthy after an error so later tool results still deliver.
+                        logVerbose(`tool result delivery failed: ${String(err)}`);
                       });
+                    const task = toolResultChain.finally(() => {
+                      params.pendingToolTasks.delete(task);
+                    });
                     params.pendingToolTasks.add(task);
                   };
                 })()
