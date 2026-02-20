@@ -122,7 +122,10 @@ export async function handleIrcInbound(params: {
     allowFrom: message.isGroup ? effectiveGroupAllowFrom : effectiveAllowFrom,
     message,
   }).allowed;
-  const hasControlCommand = core.channel.text.hasControlCommand(rawBody, config as OpenClawConfig);
+  const commandPrefix = account.config.commandPrefix ?? "!";
+  const hasControlCommand = core.channel.text.hasControlCommand(rawBody, config as OpenClawConfig, {
+    commandPrefix,
+  });
   const commandGate = resolveControlCommandGate({
     useAccessGroups,
     authorizers: [
@@ -259,10 +262,16 @@ export async function handleIrcInbound(params: {
 
   const groupSystemPrompt = groupMatch.groupConfig?.systemPrompt?.trim() || undefined;
 
+  // Normalize CommandBody so downstream pipeline sees canonical "/" commands.
+  const normalizedCommandBody =
+    commandPrefix !== "/" && rawBody.startsWith(commandPrefix)
+      ? "/" + rawBody.slice(commandPrefix.length)
+      : rawBody;
+
   const ctxPayload = core.channel.reply.finalizeInboundContext({
     Body: body,
     RawBody: rawBody,
-    CommandBody: rawBody,
+    CommandBody: normalizedCommandBody,
     From: message.isGroup ? `irc:channel:${message.target}` : `irc:${senderDisplay}`,
     To: `irc:${peerId}`,
     SessionKey: route.sessionKey,

@@ -1,5 +1,6 @@
 export const IRC_FIELD_LABELS: Record<string, string> = {
   "channels.irc": "IRC",
+  "channels.irc.commandPrefix": "IRC Command Prefix",
   "channels.irc.dmPolicy": "IRC DM Policy",
   "channels.irc.nickserv.enabled": "IRC NickServ Enabled",
   "channels.irc.nickserv.service": "IRC NickServ Service",
@@ -10,6 +11,8 @@ export const IRC_FIELD_LABELS: Record<string, string> = {
 };
 
 export const IRC_FIELD_HELP: Record<string, string> = {
+  "channels.irc.commandPrefix":
+    'Character(s) used to trigger bot commands in IRC (default: "!"). Set to any 1-3 character string (e.g. "!", "~", ">>").',
   "channels.irc.configWrites":
     "Allow IRC to write config in response to channel events/commands (default: true).",
   "channels.irc.dmPolicy":

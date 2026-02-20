@@ -371,12 +371,21 @@ export function resolveCommandArgMenu(params: {
 
 export function normalizeCommandBody(raw: string, options?: CommandNormalizeOptions): string {
   const trimmed = raw.trim();
-  if (!trimmed.startsWith("/")) {
-    return trimmed;
+
+  // When a transport-specific prefix is configured (e.g. "!" for IRC),
+  // normalize it to the canonical "/" so the rest of the pipeline is unchanged.
+  const prefix = options?.commandPrefix;
+  const prefixed =
+    prefix && prefix !== "/" && trimmed.startsWith(prefix)
+      ? "/" + trimmed.slice(prefix.length)
+      : trimmed;
+
+  if (!prefixed.startsWith("/")) {
+    return prefixed;
   }
 
-  const newline = trimmed.indexOf("\n");
-  const singleLine = newline === -1 ? trimmed : trimmed.slice(0, newline).trim();
+  const newline = prefixed.indexOf("\n");
+  const singleLine = newline === -1 ? prefixed : prefixed.slice(0, newline).trim();
 
   const colonMatch = singleLine.match(/^\/([^\s:]+)\s*:(.*)$/);
   const normalized = colonMatch

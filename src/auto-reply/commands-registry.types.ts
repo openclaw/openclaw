@@ -72,6 +72,9 @@ export type NativeCommandSpec = {
 
 export type CommandNormalizeOptions = {
   botUsername?: string;
+  /** Transport-specific command prefix (e.g. "!" for IRC). When set,
+   *  messages starting with this prefix are normalized to canonical "/" form. */
+  commandPrefix?: string;
 };
 
 export type CommandDetection = {

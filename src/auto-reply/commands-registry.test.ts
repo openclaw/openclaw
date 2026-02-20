@@ -168,6 +168,57 @@ describe("commands registry", () => {
   it("normalizes dock command aliases", () => {
     expect(normalizeCommandBody("/dock_telegram")).toBe("/dock-telegram");
   });
+
+  describe("prefix-aware normalization (commandPrefix option)", () => {
+    it("normalizes ! prefix to canonical / for IRC", () => {
+      expect(normalizeCommandBody("!status", { commandPrefix: "!" })).toBe("/status");
+      expect(normalizeCommandBody("!help", { commandPrefix: "!" })).toBe("/help");
+      expect(normalizeCommandBody("!model gpt-5", { commandPrefix: "!" })).toBe("/model gpt-5");
+    });
+
+    it("normalizes multi-character prefix to /", () => {
+      expect(normalizeCommandBody(">>status", { commandPrefix: ">>" })).toBe("/status");
+      expect(normalizeCommandBody(">>model gpt-5", { commandPrefix: ">>" })).toBe("/model gpt-5");
+    });
+
+    it("does not normalize when prefix does not match", () => {
+      expect(normalizeCommandBody("!status", { commandPrefix: "~" })).toBe("!status");
+      expect(normalizeCommandBody("hello world", { commandPrefix: "!" })).toBe("hello world");
+    });
+
+    it("works with canonical / prefix unchanged", () => {
+      expect(normalizeCommandBody("/status", { commandPrefix: "/" })).toBe("/status");
+      expect(normalizeCommandBody("/help", { commandPrefix: "/" })).toBe("/help");
+    });
+
+    it("works without commandPrefix option (backward compat)", () => {
+      expect(normalizeCommandBody("/status")).toBe("/status");
+      expect(normalizeCommandBody("hello")).toBe("hello");
+    });
+
+    it("handles prefix with trailing whitespace in input", () => {
+      expect(normalizeCommandBody("  !status  ", { commandPrefix: "!" })).toBe("/status");
+    });
+
+    it("combines commandPrefix with botUsername", () => {
+      expect(
+        normalizeCommandBody("!help@openclaw", { commandPrefix: "!", botUsername: "openclaw" }),
+      ).toBe("/help");
+      expect(
+        normalizeCommandBody("!help@otherbot", { commandPrefix: "!", botUsername: "openclaw" }),
+      ).toBe("/help@otherbot");
+    });
+
+    it("normalizes ~ prefix", () => {
+      expect(normalizeCommandBody("~status", { commandPrefix: "~" })).toBe("/status");
+    });
+
+    it("passes plain text through with any prefix configured", () => {
+      expect(normalizeCommandBody("just a regular message", { commandPrefix: "!" })).toBe(
+        "just a regular message",
+      );
+    });
+  });
 });
 
 describe("commands registry args", () => {

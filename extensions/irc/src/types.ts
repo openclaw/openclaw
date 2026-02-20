@@ -57,6 +57,7 @@ export type IrcAccountConfig = {
   chunkMode?: "length" | "newline";
   blockStreaming?: boolean;
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
+  commandPrefix?: string;
   responsePrefix?: string;
   mediaMaxMb?: number;
 };
