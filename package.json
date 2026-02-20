@@ -129,7 +129,7 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "0.14.1",
-    "@aws-sdk/client-bedrock": "^3.993.0",
+    "@aws-sdk/client-bedrock": "^3.994.0",
     "@buape/carbon": "0.14.0",
     "@clack/prompts": "^1.0.1",
     "@grammyjs/runner": "^2.0.3",
@@ -138,10 +138,10 @@
     "@larksuiteoapi/node-sdk": "^1.59.0",
     "@line/bot-sdk": "^10.6.0",
     "@lydell/node-pty": "1.2.0-beta.3",
-    "@mariozechner/pi-agent-core": "0.53.0",
-    "@mariozechner/pi-ai": "0.53.0",
-    "@mariozechner/pi-coding-agent": "0.53.0",
-    "@mariozechner/pi-tui": "0.53.0",
+    "@mariozechner/pi-agent-core": "0.54.0",
+    "@mariozechner/pi-ai": "0.54.0",
+    "@mariozechner/pi-coding-agent": "0.54.0",
+    "@mariozechner/pi-tui": "0.54.0",
     "@mozilla/readability": "^0.6.0",
     "@sinclair/typebox": "0.34.48",
     "@slack/bolt": "^4.6.0",
@@ -195,8 +195,8 @@
     "@vitest/coverage-v8": "^4.0.18",
     "lit": "^3.3.2",
     "ollama": "^0.6.3",
-    "oxfmt": "0.33.0",
-    "oxlint": "^1.48.0",
+    "oxfmt": "0.34.0",
+    "oxlint": "^1.49.0",
     "oxlint-tsgolint": "^0.14.1",
     "rolldown": "1.0.0-rc.5",
     "tsdown": "^0.20.3",
@@ -211,7 +211,7 @@
   "engines": {
     "node": ">=22.12.0"
   },
-  "packageManager": "pnpm@10.23.0",
+  "packageManager": "pnpm@10.30.0",
   "pnpm": {
     "minimumReleaseAge": 2880,
     "overrides": {
