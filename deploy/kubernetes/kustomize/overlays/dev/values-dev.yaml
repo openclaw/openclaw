@@ -1,0 +1,25 @@
+replicaCount: 1
+image:
+  tag: v2026.2.13
+secret:
+  create: true
+  stringData:
+    OPENCLAW_GATEWAY_TOKEN: "REPLACE_ME"
+persistence:
+  config:
+    size: 3Gi
+  workspace:
+    size: 15Gi
+service:
+  type: ClusterIP
+gateway:
+  env:
+    - name: OPENCLAW_GATEWAY_BIND
+      value: lan
+resources:
+  limits:
+    cpu: "1"
+    memory: 2Gi
+  requests:
+    cpu: 200m
+    memory: 512Mi

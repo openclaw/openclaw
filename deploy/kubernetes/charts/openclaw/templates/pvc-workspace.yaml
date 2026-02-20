@@ -1,0 +1,18 @@
+{{- $p := .Values.persistence.workspace -}}
+{{- if and $p.enabled (not $p.existingClaim) -}}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ printf "%s-workspace" (include "openclaw.fullname" .) | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "openclaw.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    {{- toYaml $p.accessModes | nindent 4 }}
+  resources:
+    requests:
+      storage: {{ $p.size }}
+  {{- if $p.storageClass }}
+  storageClassName: {{ $p.storageClass | quote }}
+  {{- end }}
+{{- end -}}

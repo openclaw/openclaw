@@ -1,0 +1,132 @@
+replicaCount: 1
+
+image:
+  repository: ghcr.io/openclaw/openclaw
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+  fsGroupChangePolicy: "OnRootMismatch"
+
+securityContext:
+  allowPrivilegeEscalation: false
+  runAsNonRoot: true
+  capabilities:
+    drop:
+      - ALL
+
+resources: {}
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+
+topologySpreadConstraints: []
+
+service:
+  type: ClusterIP
+  annotations: {}
+  additionalLabels: {}
+  ports:
+    gateway: 18789
+    bridge: 18790
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: openclaw.local
+      paths:
+        - path: /
+          pathType: Prefix
+          servicePort: gateway
+  tls: []
+
+secret:
+  create: false
+  name: ""
+  annotations: {}
+  stringData: {}
+
+gateway:
+  command: []
+  args: []
+  env:
+    - name: OPENCLAW_GATEWAY_BIND
+      value: lan
+  envFrom: []
+  extraEnv: []
+  extraEnvFrom: []
+  livenessProbe:
+    enabled: true
+    httpGet:
+      path: /healthz
+      port: gateway
+    initialDelaySeconds: 20
+    periodSeconds: 15
+  readinessProbe:
+    enabled: true
+    httpGet:
+      path: /healthz
+      port: gateway
+    initialDelaySeconds: 10
+    periodSeconds: 10
+
+persistence:
+  config:
+    enabled: true
+    existingClaim: ""
+    accessModes:
+      - ReadWriteOnce
+    storageClass: ""
+    size: 5Gi
+  workspace:
+    enabled: true
+    existingClaim: ""
+    accessModes:
+      - ReadWriteOnce
+    storageClass: ""
+    size: 20Gi
+
+initContainers:
+  enabled: true
+  image: busybox:1.36
+  command:
+    - /bin/sh
+    - -c
+  args:
+    - |
+      set -euo pipefail
+      if [ -d /config ]; then
+        mkdir -p /config/workspace
+        chown -R 1000:1000 /config
+      fi
+      if [ -d /workspace ]; then
+        chown -R 1000:1000 /workspace
+      fi
+  extra: []
+
+extraContainers: []
+
+extraVolumes: []
+
+extraVolumeMounts: []

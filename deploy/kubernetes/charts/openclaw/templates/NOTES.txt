@@ -1,0 +1,15 @@
+1. Get the OpenClaw gateway URL by running:
+
+  kubectl get svc {{ include "openclaw.fullname" . }} -n {{ .Release.Namespace }}
+
+2. The gateway exposes two ports:
+   * {{ .Values.service.ports.gateway }} (primary API)
+   * {{ .Values.service.ports.bridge }} (bridge/tunnel)
+
+3. Provide your gateway token and any model credentials via a Secret. You can either:
+   * Supply values under `secret.stringData` and keep them in git-ignored files, or
+   * Reference an existing secret using `secret.name` and disable secret creation.
+
+4. Your workspace and configuration live under `/home/node/.openclaw`. Make sure the
+   associated PersistentVolumeClaims have enough capacity for downloaded skills,
+   memory snapshots, and gateways logs.
