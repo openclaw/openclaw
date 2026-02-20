@@ -216,6 +216,23 @@ final class GatewayConnectionController {
         }
     }
 
+    /// Rebuild connect options from current local settings (caps/commands/permissions)
+    /// and re-apply the active gateway config so capability changes take effect immediately.
+    func refreshActiveGatewayRegistrationFromSettings() {
+        guard let appModel else { return }
+        guard let cfg = appModel.activeGatewayConnectConfig else { return }
+        guard appModel.gatewayAutoReconnectEnabled else { return }
+
+        let refreshedConfig = GatewayConnectConfig(
+            url: cfg.url,
+            stableID: cfg.stableID,
+            tls: cfg.tls,
+            token: cfg.token,
+            password: cfg.password,
+            nodeOptions: self.makeConnectOptions(stableID: cfg.stableID))
+        appModel.applyGatewayConnectConfig(refreshedConfig)
+    }
+
     func clearPendingTrustPrompt() {
         self.pendingTrustPrompt = nil
         self.pendingTrustConnect = nil
