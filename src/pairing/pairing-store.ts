@@ -269,6 +269,16 @@ async function readAllowFromStateForPath(
   return normalizeAllowFromList(channel, value);
 }
 
+function readAllowFromStateForPathSync(channel: PairingChannel, filePath: string): string[] {
+  try {
+    const raw = fs.readFileSync(filePath, "utf8");
+    const parsed = JSON.parse(raw) as AllowFromStore;
+    return normalizeAllowFromList(channel, parsed);
+  } catch {
+    return [];
+  }
+}
+
 async function readAllowFromState(params: {
   channel: PairingChannel;
   entry: string | number;
@@ -338,6 +348,24 @@ export async function readChannelAllowFromStore(
   // Keep honoring it alongside account-scoped files to prevent re-pair prompts after upgrades.
   const legacyPath = resolveAllowFromPath(channel, env);
   const legacyEntries = await readAllowFromStateForPath(channel, legacyPath);
+  return dedupePreserveOrder([...scopedEntries, ...legacyEntries]);
+}
+
+export function readChannelAllowFromStoreSync(
+  channel: PairingChannel,
+  env: NodeJS.ProcessEnv = process.env,
+  accountId?: string,
+): string[] {
+  const normalizedAccountId = accountId?.trim().toLowerCase() ?? "";
+  if (!normalizedAccountId) {
+    const filePath = resolveAllowFromPath(channel, env);
+    return readAllowFromStateForPathSync(channel, filePath);
+  }
+
+  const scopedPath = resolveAllowFromPath(channel, env, accountId);
+  const scopedEntries = readAllowFromStateForPathSync(channel, scopedPath);
+  const legacyPath = resolveAllowFromPath(channel, env);
+  const legacyEntries = readAllowFromStateForPathSync(channel, legacyPath);
   return dedupePreserveOrder([...scopedEntries, ...legacyEntries]);
 }
 
