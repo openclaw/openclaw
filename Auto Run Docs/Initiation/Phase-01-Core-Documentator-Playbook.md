@@ -19,7 +19,8 @@ This phase creates the **openclaw-documentator** — a read-only investigator ag
     - type: research, title: "OpenClaw Codebase Exploration", tags: [codebase, structure, reference]
   - Use wiki-links like `[[SKILL.md]]` to reference the eventual skill file
 
-- [ ] Create the documentator skill file with metadata, purpose statement, and comprehensive codebase structure map:
+- [x] Create the documentator skill file with metadata, purpose statement, and comprehensive codebase structure map:
+  > Completed 2026-02-19: Created `skills/documentator/SKILL.md` with YAML front matter (name, description, emoji metadata), Purpose & Constraints section, comprehensive Codebase Structure Map (annotated directory tree), Key Files Reference Table (3 tables: entry points, core modules, config/build), Module Boundary Guide (7 domain categories mapping user concepts to src/ directories), Extension & Plugin Registry (31 extensions in 3 categories), and Skills Catalog (51 skills in 11 categories). Based on exploration notes, coding-agent SKILL.md format, and AGENTS.md conventions.
   - Read the exploration notes from `Auto Run Docs/Initiation/Working/codebase-exploration.md`
   - Read `skills/coding-agent/SKILL.md` to understand the existing skill file format (YAML front matter with name, description, metadata)
   - Read `AGENTS.md` to understand the conventions for agent instructions
