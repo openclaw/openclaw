@@ -136,4 +136,26 @@ class ConnectionManagerTest {
 
     assertNull(params)
   }
+
+  @Test
+  fun isLoopbackHost_doesNotTreatWildcardBindsAsLoopback() {
+    assertEquals(false, ConnectionManager.isLoopbackHost("0.0.0.0"))
+    assertEquals(false, ConnectionManager.isLoopbackHost("::"))
+  }
+
+  @Test
+  fun resolveTlsParamsForEndpoint_manualWildcardRequiresTlsWhenManualTlsDisabled() {
+    val endpoint = GatewayEndpoint.manual(host = "0.0.0.0", port = 18789)
+
+    val params =
+      ConnectionManager.resolveTlsParamsForEndpoint(
+        endpoint,
+        storedFingerprint = null,
+        manualTlsEnabled = false,
+      )
+
+    assertNotNull(params)
+    assertEquals(true, params?.required)
+    assertEquals(null, params?.expectedFingerprint)
+  }
 }

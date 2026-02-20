@@ -28,11 +28,18 @@ class ConnectionManager(
 ) {
   companion object {
     internal fun isLoopbackHost(rawHost: String?): Boolean {
-      val host = rawHost?.trim()?.lowercase().orEmpty()
+      val host =
+        rawHost
+          ?.trim()
+          ?.lowercase()
+          ?.removePrefix("[")
+          ?.removeSuffix("]")
+          .orEmpty()
       if (host.isEmpty()) return false
       if (host == "localhost") return true
       if (host == "::1") return true
-      if (host == "0.0.0.0" || host == "::") return true
+      if (host == "0.0.0.0" || host == "::") return false
+      if (host.startsWith("::ffff:127.")) return true
       return host.startsWith("127.")
     }
 
