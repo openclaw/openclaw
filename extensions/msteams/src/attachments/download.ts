@@ -22,6 +22,16 @@ type DownloadCandidate = {
   placeholder: string;
 };
 
+/** Detect Bot Framework /v3/attachments/{id} URLs that need /views/original. */
+const BF_ATTACHMENT_RE = /\/v3\/attachments\/[^/]+\/?$/i;
+function isBotFrameworkAttachmentUrl(url: string): boolean {
+  try {
+    return BF_ATTACHMENT_RE.test(new URL(url).pathname);
+  } catch {
+    return false;
+  }
+}
+
 function resolveDownloadCandidate(att: MSTeamsAttachmentLike): DownloadCandidate | null {
   const contentType = normalizeContentType(att.contentType);
   const name = typeof att.name === "string" ? att.name.trim() : "";
@@ -58,8 +68,14 @@ function resolveDownloadCandidate(att: MSTeamsAttachmentLike): DownloadCandidate
     return null;
   }
 
+  // Bot Framework attachment URLs (…/v3/attachments/{id}) return JSON metadata;
+  // append /views/original to retrieve the actual binary content.
+  const url = isBotFrameworkAttachmentUrl(contentUrl)
+    ? `${contentUrl.replace(/\/+$/, "")}/views/original`
+    : contentUrl;
+
   return {
-    url: contentUrl,
+    url,
     fileHint: name || undefined,
     contentTypeHint: contentType,
     placeholder: inferPlaceholder({ contentType, fileName: name }),
