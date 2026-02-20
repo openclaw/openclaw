@@ -506,6 +506,42 @@ export function createGatewayHttpServer(opts: {
         req.url = scopedCanvas.rewrittenUrl;
       }
       const requestPath = new URL(req.url ?? "/", "http://localhost").pathname;
+
+      // Handle /config endpoint for OpenClaw Deck and other clients
+      if (requestPath === "/config") {
+        // Enable CORS for config endpoint
+        res.setHeader("Access-Control-Allow-Origin", "*");
+        res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+        res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+
+        if (req.method === "OPTIONS") {
+          res.statusCode = 204;
+          res.end();
+          return;
+        }
+
+        if (req.method === "GET") {
+          res.statusCode = 200;
+          res.setHeader("Content-Type", "application/json; charset=utf-8");
+          res.end(
+            JSON.stringify({
+              agents: {
+                defaults: {
+                  model: configSnapshot.agents?.defaults?.model,
+                  models: configSnapshot.agents?.defaults?.models,
+                },
+              },
+            }),
+          );
+          return;
+        }
+
+        res.statusCode = 405;
+        res.setHeader("Allow", "GET, OPTIONS");
+        res.end("Method Not Allowed");
+        return;
+      }
+
       if (await handleHooksRequest(req, res)) {
         return;
       }
