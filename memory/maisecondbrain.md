@@ -80,6 +80,8 @@ Mnemo
 
 - 2026-02-20: 프로젝트 초기화 (workspace, GitHub, Obsidian, memory)
 - 2026-02-20: 문서 8종 작성 완료 (PRD, 경쟁분석, 기술분석, 수익화전략, 아키텍처, 온톨로지스키마, 노드링크설계, 개발계획)
+- 2026-02-20: **Sprint 1 완료** — 볼트 파서 + 그래프 빌더 + CLI (3,113 노트 → 2,475 노드 + 16,576 엣지, 19초)
+- 2026-02-20: **Sprint 2 완료** — 임베딩(Ollama nomic-embed-text, 2,164개, 46초) + GraphRAG 하이브리드 검색(키워드50%+벡터30%+그래프20%) + FastAPI API + MAIBOT 스킬
 
 ## 결정사항
 
@@ -92,10 +94,12 @@ Mnemo
 
 ## 다음 액션
 
-- [ ] Sprint 1 착수: Python 프로젝트 초기화 + 볼트 파서 개발
-- [ ] JINI_SYNC 3,037파일 그래프 빌드 테스트
-- [ ] 임베딩 + GraphRAG 쿼리 엔진
-- [ ] MAIBOT OpenClaw 스킬 연동
+- [x] Sprint 1: 볼트 파서 + 그래프 빌더 + CLI
+- [x] Sprint 2: 임베딩 + GraphRAG + API + 스킬
+- [ ] Phase 2: Obsidian 플러그인 (TypeScript)
+- [ ] Mnemo를 memory_search 대체/보강으로 MAIBOT 핵심 루프에 통합
+- [ ] 태그 공유 엣지 추가 (현재 wiki_link만, 태그 추가 시 엣지 ~50K+)
+- [ ] YAML relations 엣지 추가 (frontmatter `related:` 등)
 
 ## 문서 목록
 
