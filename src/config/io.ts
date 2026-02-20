@@ -71,7 +71,7 @@ const SHELL_ENV_EXPECTED_KEYS = [
 const CONFIG_AUDIT_LOG_FILENAME = "config-audit.jsonl";
 const loggedInvalidConfigs = new Set<string>();
 
-type ConfigWriteAuditResult = "rename" | "copy-fallback" | "failed";
+type ConfigWriteAuditResult = "rename" | "copy-fallback" | "failed" | "rejected";
 
 type ConfigWriteAuditRecord = {
   ts: string;
@@ -974,6 +974,33 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       gatewayModeAfter,
       suspicious: suspiciousReasons,
     };
+    // Block destructive writes instead of merely logging them.
+    // Only hard-block on reasons that indicate data destruction (size-drop and
+    // gateway-mode-removed). The informational `missing-meta-before-write` reason
+    // continues to be logged as a warning but does NOT block the write.
+    const blockingReasons = suspiciousReasons.filter(
+      (r) => r.startsWith("size-drop:") || r === "gateway-mode-removed",
+    );
+    if (blockingReasons.length > 0) {
+      const rejectedPath = `${configPath}.rejected`;
+      const errorMsg = `Config write blocked (${blockingReasons.join(", ")}): ${configPath}. Rejected payload saved to ${rejectedPath}.`;
+      try {
+        await deps.fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
+        await deps.fs.promises.writeFile(rejectedPath, json, { encoding: "utf-8", mode: 0o600 });
+      } catch {
+        // best-effort — don't obscure the primary error
+      }
+      deps.logger.error(errorMsg);
+      // Append a rejected audit record for forensics before throwing.
+      await appendConfigWriteAuditRecord(deps, {
+        ...auditRecordBase,
+        result: "rejected",
+        nextHash: null,
+        nextBytes: null,
+      });
+      throw new Error(errorMsg);
+    }
+
     const appendWriteAudit = async (result: ConfigWriteAuditResult, err?: unknown) => {
       const errorCode =
         err && typeof err === "object" && "code" in err && typeof err.code === "string"

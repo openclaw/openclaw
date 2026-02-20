@@ -340,4 +340,107 @@ describe("config io write", () => {
       expect(last.watchCommand).toBe("gateway --force");
     });
   });
+
+  it("blocks and rejects a write that reduces config size by more than 50%", async () => {
+    await withTempHome("openclaw-config-io-", async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const rejectedPath = `${configPath}.rejected`;
+      // Write a large initial config (>512 bytes) so the size-drop check triggers.
+      // Use env.vars for bulk — these are valid schema fields.
+      const bigConfig = {
+        gateway: { mode: "local", port: 18789 },
+        env: {
+          vars: Object.fromEntries(
+            Array.from({ length: 30 }, (_, i) => [`PADDING_VAR_${i}`, "x".repeat(20)]),
+          ),
+        },
+      };
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, JSON.stringify(bigConfig, null, 2), "utf-8");
+
+      const errorFn = vi.fn();
+      const io = createConfigIO({
+        env: {} as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: { warn: vi.fn(), error: errorFn },
+      });
+
+      const snapshot = await io.readConfigFileSnapshot();
+      expect(snapshot.valid).toBe(true);
+
+      // A tiny config — triggers the >50% size-drop safeguard.
+      await expect(io.writeConfigFile({ gateway: { mode: "local" } })).rejects.toThrow(
+        "Config write blocked",
+      );
+
+      // Original file must be untouched.
+      const remaining = JSON.parse(await fs.readFile(configPath, "utf-8")) as Record<
+        string,
+        unknown
+      >;
+      expect((remaining as { gateway?: { port?: number } }).gateway?.port).toBe(18789);
+
+      // Rejected payload must be saved for debugging.
+      const rejectedExists = await fs
+        .access(rejectedPath)
+        .then(() => true)
+        .catch(() => false);
+      expect(rejectedExists).toBe(true);
+
+      // Error must be logged.
+      expect(errorFn).toHaveBeenCalledWith(expect.stringContaining("Config write blocked"));
+    });
+  });
+
+  it("blocks and rejects a write that removes gateway.mode from an existing config", async () => {
+    await withTempHome("openclaw-config-io-", async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const rejectedPath = `${configPath}.rejected`;
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({ gateway: { mode: "local", port: 18789 } }, null, 2),
+        "utf-8",
+      );
+
+      const errorFn = vi.fn();
+      const io = createConfigIO({
+        env: {} as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: { warn: vi.fn(), error: errorFn },
+      });
+
+      const snapshot = await io.readConfigFileSnapshot();
+      expect(snapshot.valid).toBe(true);
+
+      // Strip gateway.mode — triggers the gateway-mode-removed safeguard.
+      const next = structuredClone(snapshot.config);
+      if (next.gateway) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test helper
+        delete (next.gateway as any).mode;
+      }
+
+      await expect(io.writeConfigFile(next)).rejects.toThrow("Config write blocked");
+
+      // Original file must be untouched.
+      const remaining = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+        gateway?: { mode?: string };
+      };
+      expect(remaining.gateway?.mode).toBe("local");
+
+      // Rejected payload saved.
+      const rejectedExists = await fs
+        .access(rejectedPath)
+        .then(() => true)
+        .catch(() => false);
+      expect(rejectedExists).toBe(true);
+
+      // Audit log must contain a "rejected" entry.
+      const auditPath = path.join(home, ".openclaw", "logs", "config-audit.jsonl");
+      const auditLines = (await fs.readFile(auditPath, "utf-8")).trim().split("\n").filter(Boolean);
+      const last = JSON.parse(auditLines.at(-1) ?? "{}") as Record<string, unknown>;
+      expect(last.result).toBe("rejected");
+      expect(Array.isArray(last.suspicious) && (last.suspicious as string[]).length > 0).toBe(true);
+    });
+  });
 });
