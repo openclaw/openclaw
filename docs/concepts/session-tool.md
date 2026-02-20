@@ -166,12 +166,12 @@ Behavior:
 
 - Starts a new `agent:<agentId>:subagent:<uuid>` session with `deliver: false`.
 - Sub-agents default to the full tool set **minus session tools** (configurable via `tools.subagents.tools`).
-- Sub-agents are not allowed to call `sessions_spawn` (no sub-agent → sub-agent spawning).
+- Depth policy is enforced for nested spawns. With the default `maxSpawnDepth = 2`, depth-1 sub-agents can call `sessions_spawn`, depth-2 sub-agents cannot.
 - Always non-blocking: returns `{ status: "accepted", runId, childSessionKey }` immediately.
-- After completion, OpenClaw runs a sub-agent **announce step** and posts the result to the requester chat channel.
-  - If the assistant final reply is empty, the latest `toolResult` from sub-agent history is included as `Result`.
-- Reply exactly `ANNOUNCE_SKIP` during the announce step to stay silent.
-- Announce replies are normalized to `Status`/`Result`/`Notes`; `Status` comes from runtime outcome (not model text).
+- After completion, OpenClaw builds a sub-agent announce system message from the child session's latest assistant reply and injects it to the requester session.
+- Delivery stays internal (`deliver=false`) when the requester is a sub-agent, and is user-facing (`deliver=true`) when the requester is main.
+- Recipient agents can return the internal silent token to suppress duplicate outward delivery in the same turn.
+- Announce replies are normalized to runtime-derived status plus result context.
 - Sub-agent sessions are auto-archived after `agents.defaults.subagents.archiveAfterMinutes` (default: 60).
 - Announce replies include a stats line (runtime, tokens, sessionKey/sessionId, transcript path, and optional cost).
 

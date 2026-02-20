@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import "./test-helpers/fast-core-tools.js";
-import { sleep } from "../utils.js";
 import {
   getCallGatewayMock,
   resetSessionsSpawnConfigOverride,
@@ -126,13 +125,12 @@ function setupSessionsSpawnGatewayMock(opts: {
 }
 
 const waitFor = async (predicate: () => boolean, timeoutMs = 2000) => {
-  const start = Date.now();
-  while (!predicate()) {
-    if (Date.now() - start > timeoutMs) {
-      throw new Error(`timed out waiting for condition (timeoutMs=${timeoutMs})`);
-    }
-    await sleep(10);
-  }
+  await vi.waitFor(
+    () => {
+      expect(predicate()).toBe(true);
+    },
+    { timeout: timeoutMs, interval: 10 },
+  );
 };
 
 describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {

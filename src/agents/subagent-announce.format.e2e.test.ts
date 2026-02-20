@@ -7,6 +7,12 @@ type RequesterResolution = {
   requesterOrigin?: Record<string, unknown>;
 } | null;
 
+type DescendantRun = {
+  runId: string;
+  requesterSessionKey: string;
+  childSessionKey: string;
+};
+
 const agentSpy = vi.fn(async (_req: AgentCallRequest) => ({ runId: "run-main", status: "ok" }));
 const sessionsDeleteSpy = vi.fn((_req: AgentCallRequest) => undefined);
 const readLatestAssistantReplyMock = vi.fn(
@@ -21,7 +27,7 @@ const embeddedRunMock = {
 const subagentRegistryMock = {
   isSubagentSessionRunActive: vi.fn(() => true),
   countActiveDescendantRuns: vi.fn((_sessionKey: string) => 0),
-  listDescendantRunsForRequester: vi.fn((_sessionKey: string) => []),
+  listDescendantRunsForRequester: vi.fn((_sessionKey: string): DescendantRun[] => []),
   resolveRequesterForChildSession: vi.fn((_sessionKey: string): RequesterResolution => null),
 };
 let sessionStore: Record<string, Record<string, unknown>> = {};
@@ -828,6 +834,35 @@ describe("subagent announce formatting", () => {
     // The channel should match requesterOrigin, NOT the stale session entry.
     expect(call?.params?.channel).toBe("bluebubbles");
     expect(call?.params?.to).toBe("bluebubbles:chat_guid:123");
+  });
+
+  it("falls back to persisted deliverable route when requesterOrigin channel is non-deliverable", async () => {
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(false);
+    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
+    sessionStore = {
+      "agent:main:main": {
+        sessionId: "session-webchat-origin",
+        lastChannel: "discord",
+        lastTo: "discord:channel:123",
+        lastAccountId: "acct-store",
+      },
+    };
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-webchat-origin",
+      requesterSessionKey: "main",
+      requesterOrigin: { channel: "webchat", to: "ignored", accountId: "acct-live" },
+      requesterDisplayKey: "main",
+      ...defaultOutcomeAnnounce,
+    });
+
+    expect(didAnnounce).toBe(true);
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    expect(call?.params?.channel).toBe("discord");
+    expect(call?.params?.to).toBe("discord:channel:123");
+    expect(call?.params?.accountId).toBe("acct-live");
   });
 
   it("routes to parent subagent when parent run ended but session still exists (#18037)", async () => {
