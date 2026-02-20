@@ -179,3 +179,12 @@
 {"type":"dep_add","timestamp":"2026-02-20T18:38:16.618545Z","issue_id":"clawdbot-0cc.2","payload":{"dep_type":"blocks","depends_on":"clawdbot-0cc.1"}}
 {"type":"dep_add","timestamp":"2026-02-20T18:38:16.739769Z","issue_id":"clawdbot-0cc.3","payload":{"dep_type":"blocks","depends_on":"clawdbot-0cc.1"}}
 {"type":"dep_add","timestamp":"2026-02-20T18:38:16.806752Z","issue_id":"clawdbot-0cc.4","payload":{"dep_type":"blocks","depends_on":"clawdbot-0cc.1"}}
+{"type":"status_update","timestamp":"2026-02-20T19:11:41.943485Z","issue_id":"clawdbot-0cc.1","payload":{"status":"in_progress"}}
+{"type":"close","timestamp":"2026-02-20T19:22:19.639407Z","issue_id":"clawdbot-0cc.1","payload":{}}
+{"type":"status_update","timestamp":"2026-02-20T19:57:40.262629Z","issue_id":"clawdbot-0cc.3","payload":{"status":"in_progress"}}
+{"type":"status_update","timestamp":"2026-02-20T19:57:46.051393Z","issue_id":"clawdbot-0cc.2","payload":{"status":"in_progress"}}
+{"type":"status_update","timestamp":"2026-02-20T19:57:46.286501Z","issue_id":"clawdbot-0cc.4","payload":{"status":"in_progress"}}
+{"type":"close","timestamp":"2026-02-20T20:01:35.768248Z","issue_id":"clawdbot-0cc.2","payload":{}}
+{"type":"close","timestamp":"2026-02-20T20:02:28.382703Z","issue_id":"clawdbot-0cc.4","payload":{}}
+{"type":"close","timestamp":"2026-02-20T20:02:35.616787Z","issue_id":"clawdbot-0cc.3","payload":{}}
+{"type":"close","timestamp":"2026-02-20T21:10:32.863152Z","issue_id":"clawdbot-0cc","payload":{}}
