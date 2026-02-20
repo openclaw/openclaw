@@ -8,11 +8,11 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { OpenClawConfig } from "../config/config.js";
+import type { InternalHookHandler } from "./internal-hooks.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isPathInsideWithRealpath } from "../security/scan-paths.js";
 import { resolveHookConfig } from "./config.js";
 import { shouldIncludeHook } from "./config.js";
-import type { InternalHookHandler } from "./internal-hooks.js";
 import { registerInternalHook } from "./internal-hooks.js";
 import { loadWorkspaceHookEntries } from "./workspace.js";
 
@@ -82,6 +82,15 @@ export async function loadInternalHooks(
           );
           continue;
         }
+        // Warn when auto-loading workspace-sourced hooks since they
+        // execute with full gateway privileges and could originate from
+        // an untrusted repository.
+        if (entry.hook.source === "openclaw-workspace" || entry.hook.source === "openclaw-plugin") {
+          log.warn(
+            `Loading workspace hook '${entry.hook.name}' from ${entry.hook.handlerPath} — workspace hooks run with full gateway privileges. Verify you trust this hook source.`,
+          );
+        }
+
         // Import handler module with cache-busting
         const url = pathToFileURL(entry.hook.handlerPath).href;
         const cacheBustedUrl = `${url}?t=${Date.now()}`;
