@@ -252,3 +252,7 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/talk-voice/**"
+"extensions: thread-ownership":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/thread-ownership/**"

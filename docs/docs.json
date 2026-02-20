@@ -890,10 +890,15 @@
                   "channels/googlechat",
                   "channels/mattermost",
                   "channels/signal",
+                  "channels/bluebubbles",
                   "channels/imessage",
                   "channels/msteams",
+                  "channels/nextcloud-talk",
+                  "channels/nostr",
                   "channels/line",
                   "channels/matrix",
+                  "channels/tlon",
+                  "channels/twitch",
                   "channels/zalo",
                   "channels/zalouser"
                 ]

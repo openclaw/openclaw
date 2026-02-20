@@ -14,6 +14,7 @@ import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 const GRAPH_ROOT = "https://graph.microsoft.com/v1.0";
 const GRAPH_BETA = "https://graph.microsoft.com/beta";
 const GRAPH_SCOPE = "https://graph.microsoft.com";
+const ONEDRIVE_SIMPLE_UPLOAD_MAX_BYTES = 4 * 1024 * 1024;
 
 export interface OneDriveUploadResult {
   id: string;
@@ -33,6 +34,12 @@ export async function uploadToOneDrive(params: {
   tokenProvider: MSTeamsAccessTokenProvider;
   fetchFn?: typeof fetch;
 }): Promise<OneDriveUploadResult> {
+  if (params.buffer.length > ONEDRIVE_SIMPLE_UPLOAD_MAX_BYTES) {
+    throw new Error(
+      `OneDrive simple upload size limit exceeded for ${params.filename}: ${params.buffer.length} bytes (max ${ONEDRIVE_SIMPLE_UPLOAD_MAX_BYTES} bytes). Use files <= 4MB until resumable upload is implemented.`,
+    );
+  }
+
   const fetchFn = params.fetchFn ?? fetch;
   const token = await params.tokenProvider.getAccessToken(GRAPH_SCOPE);
 
@@ -176,6 +183,12 @@ export async function uploadToSharePoint(params: {
   siteId: string;
   fetchFn?: typeof fetch;
 }): Promise<OneDriveUploadResult> {
+  if (params.buffer.length > ONEDRIVE_SIMPLE_UPLOAD_MAX_BYTES) {
+    throw new Error(
+      `SharePoint simple upload size limit exceeded for ${params.filename}: ${params.buffer.length} bytes (max ${ONEDRIVE_SIMPLE_UPLOAD_MAX_BYTES} bytes). Use files <= 4MB until resumable upload is implemented.`,
+    );
+  }
+
   const fetchFn = params.fetchFn ?? fetch;
   const token = await params.tokenProvider.getAccessToken(GRAPH_SCOPE);
 
