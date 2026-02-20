@@ -215,12 +215,6 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     throw err;
   }
 
-  process.on("exit", (code) => {
-    if (code !== 0) {
-      recordGatewayCrash(stateDir);
-    }
-  });
-
   if (devMode) {
     await ensureDevGatewayConfig({ reset: Boolean(opts.reset) });
   }
@@ -444,6 +438,12 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
           ...(opts.tailscaleResetOnExit ? { resetOnExit: true } : {}),
         }
       : undefined;
+
+  process.on("exit", (code) => {
+    if (code !== 0) {
+      recordGatewayCrash(stateDir);
+    }
+  });
 
   try {
     await runGatewayLoop({
