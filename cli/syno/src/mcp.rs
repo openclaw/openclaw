@@ -572,7 +572,9 @@ async fn ensure_header_session(state: &AppState, mcp_session_id: &str) -> Result
     };
 
     if need_login {
+        let t = Instant::now();
         let session = login_with_config(&cfg).await?;
+        eprintln!("[timing] ensure_header_session: login={:?}", t.elapsed());
         state.nas_sessions.lock().await.insert(nas_key, session);
     }
     Ok(())
@@ -649,14 +651,19 @@ async fn handle_tool_call(state: &AppState, name: &str, params: &Value, mcp_sess
 }
 
 async fn dispatch_tool(state: &AppState, name: &str, params: &Value, mcp_session_id: &str) -> Result<String, String> {
+    let t0 = Instant::now();
     let has_header_config = {
         state.session_configs.lock().await.contains_key(mcp_session_id)
     };
+    let t_config = t0.elapsed();
     match name {
         "syno_login" => tool_login(state, params).await,
         _ => {
             let sid = resolve_session_id(params, mcp_session_id, has_header_config)?;
+            let t_resolve = t0.elapsed();
             let (client, nas_sid, token) = get_nas_session(state, &sid).await?;
+            let t_session = t0.elapsed();
+            eprintln!("[timing] {name}: config_check={t_config:?} resolve={t_resolve:?} get_session={t_session:?}");
             let token_ref = token.as_deref();
 
             match name {
@@ -821,17 +828,67 @@ async fn tool_dl_action(client: &SynoClient, sid: &str, token: Option<&str>, par
 }
 
 async fn tool_note_notebooks(client: &SynoClient, sid: &str, token: Option<&str>) -> Result<String, String> {
+    let t = Instant::now();
     let data = note_station::list_notebook(client, sid, token).await.map_err(|e| e.to_string())?;
-    Ok(serde_json::to_string_pretty(&data).unwrap())
+    eprintln!("[timing] note_notebooks: api_call={:?}", t.elapsed());
+    let notebooks: Vec<Value> = data["notebooks"]
+        .as_array()
+        .map(|arr| arr.iter().map(|nb| {
+            // "items" contains the note count (array length or number)
+            let count = nb["items"].as_array().map(|a| a.len() as u64)
+                .or_else(|| nb["items"].as_u64());
+            json!({
+                "id": nb["object_id"],
+                "title": nb["title"],
+                "note_count": count,
+            })
+        }).collect())
+        .unwrap_or_default();
+    Ok(serde_json::to_string_pretty(&json!({
+        "notebooks": notebooks,
+        "total": data["total"],
+    })).unwrap())
 }
 
 async fn tool_note_list(client: &SynoClient, sid: &str, token: Option<&str>, params: &Value) -> Result<String, String> {
     let notebook = get_str(params, "notebook");
     let offset = get_u64(params, "offset", 0);
     let limit = get_u64(params, "limit", 50);
+    let t = Instant::now();
     let data = note_station::list_note(client, sid, token, notebook.as_deref(), offset, limit)
         .await.map_err(|e| e.to_string())?;
-    Ok(serde_json::to_string_pretty(&data).unwrap())
+    eprintln!("[timing] note_list: api_call={:?}", t.elapsed());
+    let notes: Vec<Value> = data["notes"]
+        .as_array()
+        .map(|arr| arr.iter().map(|n| {
+            let mut note = json!({
+                "id": n["object_id"],
+                "title": n["title"],
+                "parent_id": n["parent_id"],
+                "mtime": n["mtime"],
+                "ctime": n["ctime"],
+            });
+            if let Some(brief) = n["brief"].as_str() {
+                if !brief.is_empty() {
+                    note["brief"] = Value::String(brief.chars().take(200).collect());
+                }
+            }
+            if n["encrypt"].as_bool() == Some(true) {
+                note["encrypt"] = json!(true);
+            }
+            if let Some(tags) = n["tag"].as_array() {
+                if !tags.is_empty() {
+                    note["tag"] = Value::Array(tags.clone());
+                }
+            }
+            note
+        }).collect())
+        .unwrap_or_default();
+    Ok(serde_json::to_string_pretty(&json!({
+        "notes": notes,
+        "total": data["total"],
+        "offset": data["offset"],
+    })).unwrap())
 }
 
 async fn tool_note_get(client: &SynoClient, sid: &str, token: Option<&str>, params: &Value) -> Result<String, String> {
@@ -865,7 +922,23 @@ async fn tool_note_get(client: &SynoClient, sid: &str, token: Option<&str>, para
         }
     }
 
-    Ok(serde_json::to_string_pretty(&data).unwrap())
+    let mut note = json!({
+        "id": data["object_id"],
+        "title": data["title"],
+        "parent_id": data["parent_id"],
+        "content": data["content"],
+        "mtime": data["mtime"],
+        "ctime": data["ctime"],
+    });
+    if data["encrypt"].as_bool() == Some(true) {
+        note["encrypt"] = json!(true);
+    }
+    if let Some(tags) = data["tag"].as_array() {
+        if !tags.is_empty() {
+            note["tag"] = Value::Array(tags.clone());
+        }
+    }
+    Ok(serde_json::to_string_pretty(&note).unwrap())
 }
 
 async fn tool_note_create(client: &SynoClient, sid: &str, token: Option<&str>, params: &Value) -> Result<String, String> {
@@ -906,12 +979,43 @@ async fn tool_note_search(client: &SynoClient, sid: &str, token: Option<&str>, p
     let limit = get_u64(params, "limit", 50);
     let data = note_station::search(client, sid, token, &keyword, exact, offset, limit)
         .await.map_err(|e| e.to_string())?;
-    Ok(serde_json::to_string_pretty(&data).unwrap())
+    let notes: Vec<Value> = data["notes"]
+        .as_array()
+        .map(|arr| arr.iter().map(|n| {
+            let mut note = json!({
+                "id": n["object_id"],
+                "title": n["title"],
+                "parent_id": n["parent_id"],
+                "mtime": n["mtime"],
+            });
+            if let Some(brief) = n["brief"].as_str() {
+                if !brief.is_empty() {
+                    note["brief"] = Value::String(brief.chars().take(200).collect());
+                }
+            }
+            note
+        }).collect())
+        .unwrap_or_default();
+    Ok(serde_json::to_string_pretty(&json!({
+        "notes": notes,
+        "total": data["total"],
+    })).unwrap())
 }
 
 async fn tool_note_tags(client: &SynoClient, sid: &str, token: Option<&str>) -> Result<String, String> {
     let data = note_station::list_tag(client, sid, token).await.map_err(|e| e.to_string())?;
-    Ok(serde_json::to_string_pretty(&data).unwrap())
+    let tags: Vec<Value> = data["tags"]
+        .as_array()
+        .map(|arr| arr.iter().map(|t| json!({
+            "id": t["object_id"],
+            "name": t["name"],
+            "note_count": t["note_count"],
+        })).collect())
+        .unwrap_or_default();
+    Ok(serde_json::to_string_pretty(&json!({
+        "tags": tags,
+        "total": data["total"],
+    })).unwrap())
 }
 
 async fn tool_note_tag(client: &SynoClient, sid: &str, token: Option<&str>, params: &Value) -> Result<String, String> {
@@ -980,7 +1084,44 @@ async fn tool_todo_list(client: &SynoClient, sid: &str, token: Option<&str>, par
     let limit = get_u64(params, "limit", 100);
     let data = note_station::list_todo(client, sid, token, done, offset, limit)
         .await.map_err(|e| e.to_string())?;
-    Ok(serde_json::to_string_pretty(&data).unwrap())
+    let todos: Vec<Value> = data["todos"]
+        .as_array()
+        .map(|arr| arr.iter().map(|t| {
+            let mut todo = json!({
+                "id": t["object_id"],
+                "title": t["title"],
+                "done": t["done"],
+            });
+            if t["star"].as_bool() == Some(true) {
+                todo["star"] = json!(true);
+            }
+            if let Some(p) = t["priority"].as_i64() {
+                if p != -1 {
+                    todo["priority"] = json!(p);
+                }
+            }
+            if let Some(d) = t["due_date"].as_i64() {
+                if d > 0 {
+                    todo["due_date"] = json!(d);
+                }
+            }
+            if let Some(c) = t["comment"].as_str() {
+                if !c.is_empty() {
+                    todo["comment"] = Value::String(c.to_string());
+                }
+            }
+            if let Some(items) = t["items"].as_array() {
+                if !items.is_empty() {
+                    todo["items"] = Value::Array(items.clone());
+                }
+            }
+            todo
+        }).collect())
+        .unwrap_or_default();
+    Ok(serde_json::to_string_pretty(&json!({
+        "todos": todos,
+        "total": data["total"],
+    })).unwrap())
 }
 
 async fn tool_todo_create(client: &SynoClient, sid: &str, token: Option<&str>, params: &Value) -> Result<String, String> {
@@ -1082,8 +1223,10 @@ async fn sse_handler(
     // Extract NAS config from headers and auto-login
     if let Some(cfg) = NasConfig::from_headers(&headers) {
         eprintln!("SSE {session_id}: headers auth detected ({}:{})", cfg.host, cfg.port);
+        let t = Instant::now();
         match login_with_config(&cfg).await {
             Ok(session) => {
+                eprintln!("[timing] SSE auto-login: {:?}", t.elapsed());
                 let nas_key = format!("__header_{session_id}__");
                 state.nas_sessions.lock().await.insert(nas_key, session);
                 state.session_configs.lock().await.insert(session_id.clone(), cfg);

@@ -18,7 +18,7 @@ pub struct NotebookList {
 pub struct Notebook {
     pub object_id: Option<String>,
     pub title: Option<String>,
-    pub note_count: Option<u64>,
+    pub items: Option<Vec<Value>>,
 }
 
 // ── Note ──

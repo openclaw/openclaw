@@ -44,6 +44,9 @@ impl SynoClient {
         params: &[(&str, &str)],
     ) -> Result<Value> {
         let url = format!("{}/webapi/{}", self.base_url, cgi_path);
+        let api_name = params.iter().find(|(k, _)| *k == "api").map(|(_, v)| *v).unwrap_or("?");
+        let method_name = params.iter().find(|(k, _)| *k == "method").map(|(_, v)| *v).unwrap_or("?");
+        let t = std::time::Instant::now();
         let resp = self
             .client
             .post(&url)
@@ -51,8 +54,11 @@ impl SynoClient {
             .form(params)
             .send()
             .await?;
+        let t_send = t.elapsed();
         let status = resp.status();
         let body = resp.text().await?;
+        let t_total = t.elapsed();
+        eprintln!("[timing] HTTP {api_name}.{method_name}: send={t_send:?} total={t_total:?} body_len={}", body.len());
         if !status.is_success() {
             bail!("HTTP {status}: {body}");
         }
@@ -89,6 +95,11 @@ impl SynoClient {
         let mut all_params: Vec<(&str, &str)> = params.to_vec();
         all_params.push(("_sid", sid));
 
+        // Extract api name for logging
+        let api_name = params.iter().find(|(k, _)| *k == "api").map(|(_, v)| *v).unwrap_or("?");
+        let method_name = params.iter().find(|(k, _)| *k == "method").map(|(_, v)| *v).unwrap_or("?");
+        let t = std::time::Instant::now();
+
         let mut req = self
             .client
             .post(&url)
@@ -99,8 +110,11 @@ impl SynoClient {
         }
 
         let resp = req.form(&all_params).send().await?;
+        let t_send = t.elapsed();
         let status = resp.status();
         let body = resp.text().await?;
+        let t_total = t.elapsed();
+        eprintln!("[timing] HTTP {api_name}.{method_name}: send={t_send:?} total={t_total:?} body_len={}", body.len());
         if !status.is_success() {
             bail!("HTTP {status}: {body}");
         }
