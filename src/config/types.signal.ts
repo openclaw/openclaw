@@ -6,9 +6,22 @@ import type {
 } from "./types.base.js";
 import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
 import type { DmConfig } from "./types.messages.js";
+import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 export type SignalReactionNotificationMode = "off" | "own" | "all" | "allowlist";
 export type SignalReactionLevel = "off" | "ack" | "minimal" | "extensive";
+
+export type SignalGroupConfig = {
+  requireMention?: boolean;
+  tools?: GroupToolPolicyConfig;
+  toolsBySender?: GroupToolPolicyBySenderConfig;
+  skills?: string[];
+  enabled?: boolean;
+  allowFrom?: Array<string | number>;
+  systemPrompt?: string;
+  /** Enable silent message ingestion (runs message_ingest hooks without LLM/tools). */
+  ingest?: boolean;
+};
 
 export type SignalAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
@@ -53,6 +66,7 @@ export type SignalAccountConfig = {
    * - "allowlist": only allow group messages from senders in groupAllowFrom/allowFrom
    */
   groupPolicy?: GroupPolicy;
+  groups?: Record<string, SignalGroupConfig>;
   /** Max group messages to keep as history context (0 disables). */
   historyLimit?: number;
   /** Max DM turns to keep as history context. */

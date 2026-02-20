@@ -9,6 +9,8 @@ export type ChannelGroupConfig = {
   requireMention?: boolean;
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
+  /** Enable silent message ingestion (runs message_ingest hooks without LLM/tools). */
+  ingest?: boolean;
 };
 
 export type ChannelGroupPolicy = {
@@ -196,6 +198,36 @@ export function resolveChannelGroupRequireMention(params: {
     return requireMentionOverride;
   }
   return true;
+}
+
+export function resolveChannelGroupIngest(params: {
+  cfg: OpenClawConfig;
+  channel: GroupPolicyChannel;
+  groupId?: string | null;
+  accountId?: string | null;
+  groupIdCaseInsensitive?: boolean;
+  ingestOverride?: boolean;
+  overrideOrder?: "before-config" | "after-config";
+}): boolean {
+  const { ingestOverride, overrideOrder = "after-config" } = params;
+  const { groupConfig, defaultConfig } = resolveChannelGroupPolicy(params);
+  const configIngest =
+    typeof groupConfig?.ingest === "boolean"
+      ? groupConfig.ingest
+      : typeof defaultConfig?.ingest === "boolean"
+        ? defaultConfig.ingest
+        : undefined;
+
+  if (overrideOrder === "before-config" && typeof ingestOverride === "boolean") {
+    return ingestOverride;
+  }
+  if (typeof configIngest === "boolean") {
+    return configIngest;
+  }
+  if (overrideOrder !== "before-config" && typeof ingestOverride === "boolean") {
+    return ingestOverride;
+  }
+  return false;
 }
 
 export function resolveChannelGroupToolsPolicy(

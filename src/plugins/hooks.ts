@@ -342,6 +342,18 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   }
 
   /**
+   * Run message_ingest hook.
+   * Runs on non-mentioned group messages for passive context tracking.
+   * Does not invoke LLM or provide tool access.
+   */
+  async function runMessageIngest(
+    event: PluginHookMessageReceivedEvent,
+    ctx: PluginHookMessageContext,
+  ): Promise<void> {
+    return runVoidHook("message_ingest", event, ctx);
+  }
+
+  /**
    * Run message_sending hook.
    * Allows plugins to modify or cancel outgoing messages.
    * Runs sequentially.
@@ -627,6 +639,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     runBeforeReset,
     // Message hooks
     runMessageReceived,
+    runMessageIngest,
     runMessageSending,
     runMessageSent,
     // Tool hooks

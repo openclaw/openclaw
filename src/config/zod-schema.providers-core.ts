@@ -49,6 +49,7 @@ export const TelegramTopicSchema = z
   .object({
     requireMention: z.boolean().optional(),
     groupPolicy: GroupPolicySchema.optional(),
+    ingest: z.boolean().optional(),
     skills: z.array(z.string()).optional(),
     enabled: z.boolean().optional(),
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
@@ -60,6 +61,7 @@ export const TelegramGroupSchema = z
   .object({
     requireMention: z.boolean().optional(),
     groupPolicy: GroupPolicySchema.optional(),
+    ingest: z.boolean().optional(),
     tools: ToolPolicySchema,
     toolsBySender: ToolPolicyBySenderSchema,
     skills: z.array(z.string()).optional(),
@@ -647,6 +649,19 @@ export const SlackConfigSchema = SlackAccountSchema.safeExtend({
   }
 });
 
+export const SignalGroupSchema = z
+  .object({
+    requireMention: z.boolean().optional(),
+    tools: ToolPolicySchema,
+    toolsBySender: ToolPolicyBySenderSchema,
+    skills: z.array(z.string()).optional(),
+    enabled: z.boolean().optional(),
+    allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+    systemPrompt: z.string().optional(),
+    ingest: z.boolean().optional(),
+  })
+  .strict();
+
 export const SignalAccountSchemaBase = z
   .object({
     name: z.string().optional(),
@@ -670,6 +685,7 @@ export const SignalAccountSchemaBase = z
     defaultTo: z.string().optional(),
     groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
+    groups: z.record(z.string(), SignalGroupSchema.optional()).optional(),
     historyLimit: z.number().int().min(0).optional(),
     dmHistoryLimit: z.number().int().min(0).optional(),
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),

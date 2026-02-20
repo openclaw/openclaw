@@ -24,8 +24,12 @@ import { resolveMentionGatingWithBypass } from "../../channels/mention-gating.js
 import { normalizeSignalMessagingTarget } from "../../channels/plugins/normalize/signal.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { recordInboundSession } from "../../channels/session.js";
+import { runSilentMessageIngest } from "../../channels/silent-ingest.js";
 import { createTypingCallbacks } from "../../channels/typing.js";
-import { resolveChannelGroupRequireMention } from "../../config/group-policy.js";
+import {
+  resolveChannelGroupIngest,
+  resolveChannelGroupRequireMention,
+} from "../../config/group-policy.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
@@ -592,6 +596,46 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
             typeof envelope.timestamp === "number" ? String(envelope.timestamp) : undefined,
         },
       });
+
+      // Silent ingest: run hooks on non-mentioned messages
+      const ingestEnabled = resolveChannelGroupIngest({
+        cfg: deps.cfg,
+        channel: "signal",
+        groupId,
+        accountId: deps.accountId,
+      });
+      if (groupId) {
+        const timestamp =
+          typeof envelope.timestamp === "number" && envelope.timestamp > 0
+            ? envelope.timestamp
+            : undefined;
+        const messageIdForHook = timestamp ? String(timestamp) : undefined;
+        void runSilentMessageIngest({
+          enabled: ingestEnabled,
+          event: {
+            from: senderDisplay,
+            content: pendingBodyText,
+            timestamp,
+            metadata: {
+              to: groupId,
+              provider: "signal",
+              surface: "signal",
+              messageId: messageIdForHook,
+              originatingChannel: "signal",
+              originatingTo: groupId,
+              senderName: senderDisplay,
+            },
+          },
+          ctx: {
+            channelId: "signal",
+            accountId: deps.accountId,
+            conversationId: groupId,
+          },
+          log: logVerbose,
+          logPrefix: "signal",
+        });
+      }
+
       return;
     }
 
