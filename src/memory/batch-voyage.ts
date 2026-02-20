@@ -210,10 +210,15 @@ export async function runVoyageEmbeddingBatches(params: {
 
       const completed =
         batchInfo.status === "completed"
-          ? {
-              outputFileId: batchInfo.output_file_id ?? "",
-              errorFileId: batchInfo.error_file_id ?? undefined,
-            }
+          ? (() => {
+              if (!batchInfo.output_file_id) {
+                throw new Error(`voyage batch ${batchInfo.id} completed without output file id`);
+              }
+              return {
+                outputFileId: batchInfo.output_file_id,
+                errorFileId: batchInfo.error_file_id ?? undefined,
+              };
+            })()
           : await waitForVoyageBatch({
               client: params.client,
               batchId: batchInfo.id,
