@@ -1,13 +1,13 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import fs from "node:fs";
 import path from "node:path";
-import type { DoltRecord, DoltRecordLevel, DoltStore } from "./store/types.js";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import {
   resolveDoltLanePolicies,
   type DoltLanePolicy,
   type DoltLanePolicyOverrides,
   type DoltLanePolicies,
 } from "./policy.js";
+import type { DoltRecord, DoltRecordLevel, DoltStore } from "./store/types.js";
 import { collectDoltActiveLaneSnapshot, emitDoltTelemetryEvent } from "./telemetry.js";
 
 export type DoltAssemblyParams = {
@@ -210,7 +210,7 @@ export function resolveDoltAssemblyLaneBudgets(params: {
 } {
   const bindleCap = resolveDoltLaneCap(params.lanePolicies.bindle);
   const leafCap = resolveDoltLaneCap(params.lanePolicies.leaf);
-  const turnCap = resolveDoltLaneCap(params.lanePolicies.turn);
+  const turnCap = resolveDoltTurnAssemblyCap(params.lanePolicies.turn);
 
   let remaining = params.availableTokens;
   const bindle = Math.min(remaining, bindleCap);
@@ -230,6 +230,18 @@ export function resolveDoltLaneCap(policy: DoltLanePolicy): number {
     return normalizeNonNegativeInt(policy.summaryCap);
   }
   return normalizeNonNegativeInt(policy.target);
+}
+
+/**
+ * Keep turn assembly capacity at or above the compaction trigger threshold.
+ *
+ * This avoids a dead zone where assembly drops old turns before compaction can
+ * roll them up into leaf summaries.
+ */
+function resolveDoltTurnAssemblyCap(policy: DoltLanePolicy): number {
+  const laneCap = resolveDoltLaneCap(policy);
+  const compactionTrigger = normalizeNonNegativeInt(policy.soft + policy.delta);
+  return Math.max(laneCap, compactionTrigger);
 }
 
 function selectLaneByRecency(params: {

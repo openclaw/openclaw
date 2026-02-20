@@ -2,7 +2,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { DoltRecord } from "./store/types.js";
 import { requireNodeSqlite } from "../../memory/sqlite.js";
 import {
   assembleDoltContext,
@@ -11,6 +10,7 @@ import {
 } from "./assembly.js";
 import { serializeDoltSummaryFrontmatter } from "./contract.js";
 import { SqliteDoltStore } from "./store/sqlite-dolt-store.js";
+import type { DoltRecord } from "./store/types.js";
 
 type TestStore = {
   store: SqliteDoltStore;
@@ -225,6 +225,60 @@ describe("assembleDoltContext", () => {
     ]);
     expect(result.selectedRecords.bindle).toHaveLength(0);
     expect(result.selectedRecords.turn).toHaveLength(0);
+  });
+
+  it("keeps all active turns while lane pressure has not crossed compaction trigger", () => {
+    const { store } = createInMemoryStore(() => 2_500);
+    const sessionId = "session-turn-trigger-alignment";
+    const turn1 = upsertTurn({
+      store,
+      sessionId,
+      pointer: "turn-1",
+      eventTsMs: 100,
+      content: "oldest turn content that should not disappear",
+    });
+    const turn2 = upsertTurn({
+      store,
+      sessionId,
+      pointer: "turn-2",
+      eventTsMs: 200,
+      content: "middle turn content that should stay assembled",
+    });
+    const turn3 = upsertTurn({
+      store,
+      sessionId,
+      pointer: "turn-3",
+      eventTsMs: 300,
+      content: "newest turn content that should stay assembled",
+    });
+    for (const turn of [turn1, turn2, turn3]) {
+      markActive(store, turn);
+    }
+
+    const laneTokenCount = turn1.tokenCount + turn2.tokenCount + turn3.tokenCount;
+    const turnTarget = turn2.tokenCount + turn3.tokenCount;
+    expect(laneTokenCount).toBeGreaterThan(turnTarget);
+
+    const result = assembleDoltContext({
+      store,
+      sessionId,
+      tokenBudget: 50_000,
+      lanePolicyOverrides: {
+        bindle: { target: 0, soft: 0, delta: 0, summaryCap: 0 },
+        leaf: { target: 0, soft: 0, delta: 0, summaryCap: 0 },
+        turn: {
+          target: turnTarget,
+          soft: laneTokenCount,
+          delta: 0,
+        },
+      },
+    });
+
+    expect(result.selectedRecords.turn.map((record) => record.pointer)).toEqual([
+      "turn-1",
+      "turn-2",
+      "turn-3",
+    ]);
   });
 
   it("writes an atomic context snapshot file with lane pointers", () => {

@@ -8,6 +8,7 @@ import { serializeDoltSummaryFrontmatter } from "./contract.js";
 import { DoltContextEngine } from "./engine.js";
 import type { DoltRollupParams } from "./rollup.js";
 import { SqliteDoltStore } from "./store/sqlite-dolt-store.js";
+import { estimateDoltTokenCount } from "./store/token-count.js";
 import type { DoltStore } from "./store/types.js";
 
 const executeDoltRollupMock = vi.hoisted(() => vi.fn());
@@ -225,6 +226,40 @@ describe("DoltContextEngine", () => {
         })
         .map((entry) => entry.pointer),
     ).toHaveLength(1);
+  });
+
+  it("ingest preserves structured content blocks and counts full payload tokens", async () => {
+    const { store } = createInMemoryStore();
+    const engine = new DoltContextEngine();
+    setEngineStore(engine, store);
+    const contentBlocks = [
+      { type: "text", text: "Twas brillig, and the slithy toves" },
+      { type: "text", text: "Did gyre and gimble in the wabe;" },
+    ];
+
+    await engine.ingest({
+      sessionId: "session-ingest-structured-content",
+      message: { role: "assistant", content: contentBlocks } as AgentMessage,
+    });
+
+    const [turn] = store.listRecordsBySession({
+      sessionId: "session-ingest-structured-content",
+      level: "turn",
+    });
+    expect(turn).toBeTruthy();
+    const payload = turn?.payload as { role?: string; content?: unknown };
+    expect(payload.role).toBe("assistant");
+    expect(payload.content).toEqual(contentBlocks);
+
+    const estimatedFull = estimateDoltTokenCount({ payload });
+    const estimatedFirstBlockOnly = estimateDoltTokenCount({
+      payload: {
+        role: "assistant",
+        content: [contentBlocks[0]],
+      },
+    });
+    expect(turn?.tokenCount).toBe(estimatedFull.tokenCount);
+    expect(turn?.tokenCount).toBeGreaterThan(estimatedFirstBlockOnly.tokenCount);
   });
 
   it("afterTurn ingests new turns and compacts when lane pressure exceeds threshold", async () => {

@@ -1,6 +1,10 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import path from "node:path";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { resolveAgentDir } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveStateDir } from "../../config/paths.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
+import { registerContextEngine } from "../registry.js";
 import type {
   AssembleResult,
   BootstrapResult,
@@ -10,12 +14,11 @@ import type {
   IngestBatchResult,
   IngestResult,
 } from "../types.js";
-import type { DoltRecord, DoltRecordLevel, DoltStore } from "./store/types.js";
-import { resolveAgentDir } from "../../agents/agent-scope.js";
-import { resolveStateDir } from "../../config/paths.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
-import { registerContextEngine } from "../registry.js";
-import { assembleDoltContext, writeDoltContextSnapshot } from "./assembly.js";
+import {
+  assembleDoltContext,
+  resolveDoltAssemblyLaneBudgets,
+  writeDoltContextSnapshot,
+} from "./assembly.js";
 import { hydrateDoltBootstrapState } from "./bootstrap.js";
 import { enforceDoltBindleOldestFirstEviction } from "./eviction.js";
 import {
@@ -27,6 +30,7 @@ import {
 import { finalizeDoltReset } from "./reset-finalization.js";
 import { executeDoltRollup } from "./rollup.js";
 import { openSqliteDoltStore } from "./store/sqlite-dolt-store.js";
+import type { DoltRecord, DoltRecordLevel, DoltStore } from "./store/types.js";
 
 type DoltContextEngineOptions = {
   agentId?: string;
@@ -280,7 +284,11 @@ export class DoltContextEngine implements ContextEngine {
 
   private resolveBootstrapTokenBudget(): number {
     const policies = resolveDoltLanePolicies();
-    return policies.bindle.target + policies.leaf.target + policies.turn.target;
+    const laneBudgets = resolveDoltAssemblyLaneBudgets({
+      availableTokens: Number.MAX_SAFE_INTEGER,
+      lanePolicies: policies,
+    });
+    return laneBudgets.bindle + laneBudgets.leaf + laneBudgets.turn;
   }
 
   private async runCompactionCycle(params: {
