@@ -485,6 +485,12 @@ export function resolveModelDirectiveSelection(params: {
       return {};
     }
 
+    // Exact model-id match takes priority over fuzzy scoring (#21942).
+    const exactMatch = candidates.find((c) => c.model.toLowerCase() === fragment);
+    if (exactMatch) {
+      return { selection: buildSelection(exactMatch.provider, exactMatch.model) };
+    }
+
     const scored = candidates
       .map((candidate) => {
         const details = scoreFuzzyMatch({

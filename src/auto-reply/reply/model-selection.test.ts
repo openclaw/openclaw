@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import { buildModelAliasIndex, modelKey } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { createModelSelectionState } from "./model-selection.js";
+import { createModelSelectionState, resolveModelDirectiveSelection } from "./model-selection.js";
 
 vi.mock("../../agents/model-catalog.js", () => ({
   loadModelCatalog: vi.fn(async () => [
@@ -262,5 +263,40 @@ describe("createModelSelectionState respects session model override", () => {
 
     expect(state.provider).toBe(defaultProvider);
     expect(state.model).toBe("deepseek-v3-4bit-mlx");
+  });
+});
+
+describe("resolveModelDirectiveSelection exact match priority", () => {
+  const defaultProvider = "gemini";
+  const defaultModel = "gemini-2.0-flash";
+
+  function buildAllowedKeys(...models: Array<[string, string]>): Set<string> {
+    return new Set(models.map(([p, m]) => modelKey(p, m)));
+  }
+
+  function emptyAliasIndex() {
+    return buildModelAliasIndex({
+      cfg: {} as OpenClawConfig,
+      defaultProvider,
+    });
+  }
+
+  it("resolves exact model ID over fuzzy match when both are in allowlist", () => {
+    const allowedModelKeys = buildAllowedKeys(
+      ["gemini", "gemini-3.1-pro-preview"],
+      ["gemini", "gemini-3-flash-preview"],
+      ["gemini", "gemini-3.1-pro"],
+      ["gemini", "gemini-2.0-flash"],
+    );
+
+    const result = resolveModelDirectiveSelection({
+      raw: "gemini-3.1-pro-preview",
+      defaultProvider,
+      defaultModel,
+      aliasIndex: emptyAliasIndex(),
+      allowedModelKeys,
+    });
+
+    expect(result.selection?.model).toBe("gemini-3.1-pro-preview");
   });
 });
