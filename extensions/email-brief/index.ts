@@ -101,10 +101,12 @@ export default function register(api: OpenClawPluginApi) {
       // 7. Summarize via LLM
       let summary: string;
       try {
+        const pc = api.pluginConfig as Record<string, unknown> | undefined;
         summary = await summarizeEmails(messages, {
           urgent: args.filters.urgent ?? false,
           config: api.config,
-          model: (api.pluginConfig as Record<string, unknown>)?.model as string | undefined,
+          model: pc?.model as string | undefined,
+          provider: pc?.provider as string | undefined,
         });
       } catch {
         // LLM failed — use fallback

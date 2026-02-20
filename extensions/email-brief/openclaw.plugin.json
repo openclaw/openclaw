@@ -23,6 +23,10 @@
       "language": {
         "type": "string",
         "description": "Summary language: 'auto' (detect from emails), 'ru', 'en', etc."
+      },
+      "provider": {
+        "type": "string",
+        "description": "LLM provider for summarization (e.g., 'anthropic', 'cloudru-fm')."
       }
     }
   }
