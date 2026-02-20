@@ -111,6 +111,43 @@ function isValidAgentId(agentId: string): boolean {
   return /^[a-z0-9][a-z0-9_-]{0,63}$/i.test(agentId);
 }
 
+/**
+ * Checks if the request URL targets the Control UI (either avatar or generic UI).
+ * This allows applying security guards (like loopback checks) only to relevant requests.
+ */
+export function isControlUiRequest(req: IncomingMessage, basePath?: string): boolean {
+  const urlRaw = req.url;
+  if (!urlRaw) {
+    return false;
+  }
+  const url = new URL(urlRaw, "http://localhost");
+  const normalizedBase = normalizeControlUiBasePath(basePath);
+
+  // Check avatar path
+  const avatarPath = normalizedBase
+    ? `${normalizedBase}${CONTROL_UI_AVATAR_PREFIX}/`
+    : `${CONTROL_UI_AVATAR_PREFIX}/`;
+  if (url.pathname.startsWith(avatarPath)) {
+    return true;
+  }
+
+  // Check general UI path
+  if (normalizedBase) {
+    if (url.pathname === normalizedBase || url.pathname.startsWith(`${normalizedBase}/`)) {
+      return true;
+    }
+    return false;
+  }
+
+  // If basePath is not set (i.e., root), then anything that falls through to here
+  // is potentially a Control UI request (SPA fallback).
+  // However, we want to be conservative for the guard.
+  // If strictLoopback is on, and we are at root, blocking everything non-local is correct behavior
+  // FOR THE CONTROL UI. But this function is just "is it a control UI request?"
+  // If hosted at root, it claims the namespace.
+  return true;
+}
+
 export function handleControlUiAvatarRequest(
   req: IncomingMessage,
   res: ServerResponse,

@@ -16,7 +16,7 @@ import {
 } from "../canvas-host/a2ui.js";
 import type { CanvasHostHandler } from "../canvas-host/server.js";
 import { loadConfig } from "../config/config.js";
-import type { createSubsystemLogger } from "../logging/subsystem.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import { handleSlackHttpRequest } from "../slack/http/index.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
@@ -27,9 +27,11 @@ import {
   type ResolvedGatewayAuth,
 } from "./auth.js";
 import { CANVAS_CAPABILITY_TTL_MS, normalizeCanvasScopedUrl } from "./canvas-capability.js";
+import { createControlUiLoopbackGuard } from "./control-ui-loopback-guard.js";
 import {
   handleControlUiAvatarRequest,
   handleControlUiHttpRequest,
+  isControlUiRequest,
   type ControlUiRootState,
 } from "./control-ui.js";
 import { applyHookMappings } from "./hooks-mapping.js";
@@ -454,6 +456,7 @@ export function createGatewayHttpServer(opts: {
   controlUiEnabled: boolean;
   controlUiBasePath: string;
   controlUiRoot?: ControlUiRootState;
+  strictLoopback?: boolean;
   openAiChatCompletionsEnabled: boolean;
   openResponsesEnabled: boolean;
   openResponsesConfig?: import("../config/types.gateway.js").GatewayHttpResponsesConfig;
@@ -464,6 +467,8 @@ export function createGatewayHttpServer(opts: {
   rateLimiter?: AuthRateLimiter;
   tlsOptions?: TlsOptions;
 }): HttpServer {
+  const log = createSubsystemLogger("gateway/http");
+  const controlUiLoopbackGuard = createControlUiLoopbackGuard(log, opts.strictLoopback ?? false);
   const {
     canvasHost,
     clients,
@@ -590,6 +595,16 @@ export function createGatewayHttpServer(opts: {
         }
       }
       if (controlUiEnabled) {
+        // Only apply the loopback guard if the request is actually targeting the Control UI.
+        // This prevents blocking other endpoints (e.g. /api/hooks) when strictLoopback is enabled
+        // but the gateway is bound to a non-loopback address.
+        if (isControlUiRequest(req, controlUiBasePath)) {
+          const guardResult = controlUiLoopbackGuard(req, res);
+          if (!guardResult.allowed) {
+            return;
+          }
+        }
+
         if (
           handleControlUiAvatarRequest(req, res, {
             basePath: controlUiBasePath,
