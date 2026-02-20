@@ -7,6 +7,10 @@ export {
   resolveBootstrapTotalMaxChars,
   stripThoughtSignatures,
 } from "./pi-embedded-helpers/bootstrap.js";
+export type {
+  BootstrapTruncationInfo,
+  BuildBootstrapContextResult,
+} from "./pi-embedded-helpers/bootstrap.js";
 export {
   BILLING_ERROR_USER_MESSAGE,
   formatBillingErrorMessage,

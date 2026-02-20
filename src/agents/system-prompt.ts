@@ -1,9 +1,10 @@
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
-import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
-import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import type { ResolvedTimeFormat } from "./date-time.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
+import type { BootstrapTruncationInfo } from "./pi-embedded-helpers.js";
+import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
 
 /**
@@ -220,6 +221,7 @@ export function buildAgentSystemPrompt(params: {
     level: "minimal" | "extensive";
     channel: string;
   };
+  bootstrapTruncations?: BootstrapTruncationInfo[];
   memoryCitationsMode?: MemoryCitationsMode;
 }) {
   const coreToolSummaries: Record<string, string> = {
@@ -530,6 +532,18 @@ export function buildAgentSystemPrompt(params: {
     }),
     "## Workspace Files (injected)",
     "These user-editable files are loaded by OpenClaw and included below in Project Context.",
+    ...(params.bootstrapTruncations && params.bootstrapTruncations.length > 0
+      ? [
+          "",
+          "Bootstrap files truncated (context budget limits):",
+          ...params.bootstrapTruncations.map((t) =>
+            t.budgetChars === 0
+              ? `- ${t.name}: SKIPPED (${t.originalChars} chars, budget exhausted)`
+              : `- ${t.name}: truncated from ${t.originalChars} to ${t.budgetChars} chars`,
+          ),
+          "Consider moving content to docs/reference/ files or increasing agents.defaults.bootstrapMaxChars.",
+        ]
+      : []),
     "",
     ...buildReplyTagsSection(isMinimal),
     ...buildMessagingSection({

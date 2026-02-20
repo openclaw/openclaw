@@ -1,10 +1,10 @@
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { OpenClawConfig } from "../../config/config.js";
-import { truncateUtf16Safe } from "../../utils.js";
 import type { WorkspaceBootstrapFile } from "../workspace.js";
 import type { EmbeddedContextFile } from "./types.js";
+import { truncateUtf16Safe } from "../../utils.js";
 
 type ContentBlockWithSignature = {
   thought_signature?: unknown;
@@ -93,6 +93,17 @@ type TrimBootstrapResult = {
   truncated: boolean;
   maxChars: number;
   originalLength: number;
+};
+
+export type BootstrapTruncationInfo = {
+  name: string;
+  originalChars: number;
+  budgetChars: number;
+};
+
+export type BuildBootstrapContextResult = {
+  files: EmbeddedContextFile[];
+  truncations: BootstrapTruncationInfo[];
 };
 
 export function resolveBootstrapMaxChars(cfg?: OpenClawConfig): number {
@@ -187,7 +198,7 @@ export async function ensureSessionHeader(params: {
 export function buildBootstrapContextFiles(
   files: WorkspaceBootstrapFile[],
   opts?: { warn?: (message: string) => void; maxChars?: number; totalMaxChars?: number },
-): EmbeddedContextFile[] {
+): BuildBootstrapContextResult {
   const maxChars = opts?.maxChars ?? DEFAULT_BOOTSTRAP_MAX_CHARS;
   const totalMaxChars = Math.max(
     1,
@@ -195,29 +206,40 @@ export function buildBootstrapContextFiles(
   );
   let remainingTotalChars = totalMaxChars;
   const result: EmbeddedContextFile[] = [];
+  const truncations: BootstrapTruncationInfo[] = [];
   for (const file of files) {
-    if (remainingTotalChars <= 0) {
-      break;
-    }
     if (file.missing) {
       const missingText = `[MISSING] Expected at: ${file.path}`;
       const cappedMissingText = clampToBudget(missingText, remainingTotalChars);
+      // If we can't fit even a char of missing text, we stop trying to add it
       if (!cappedMissingText) {
-        break;
+        continue;
       }
       remainingTotalChars = Math.max(0, remainingTotalChars - cappedMissingText.length);
-      result.push({
-        path: file.path,
-        content: cappedMissingText,
+      if (cappedMissingText) {
+        result.push({
+          path: file.path,
+          content: cappedMissingText,
+        });
+      }
+      continue;
+    }
+
+    if (remainingTotalChars < MIN_BOOTSTRAP_FILE_BUDGET_CHARS) {
+      if (remainingTotalChars > 0) {
+        opts?.warn?.(
+          `remaining bootstrap budget is ${remainingTotalChars} chars (<${MIN_BOOTSTRAP_FILE_BUDGET_CHARS}); skipping additional bootstrap files`,
+        );
+        remainingTotalChars = 0;
+      }
+      truncations.push({
+        name: file.name,
+        originalChars: (file.content ?? "").length,
+        budgetChars: 0,
       });
       continue;
     }
-    if (remainingTotalChars < MIN_BOOTSTRAP_FILE_BUDGET_CHARS) {
-      opts?.warn?.(
-        `remaining bootstrap budget is ${remainingTotalChars} chars (<${MIN_BOOTSTRAP_FILE_BUDGET_CHARS}); skipping additional bootstrap files`,
-      );
-      break;
-    }
+
     const fileMaxChars = Math.max(1, Math.min(maxChars, remainingTotalChars));
     const trimmed = trimBootstrapContent(file.content ?? "", file.name, fileMaxChars);
     const contentWithinBudget = clampToBudget(trimmed.content, remainingTotalChars);
@@ -228,6 +250,11 @@ export function buildBootstrapContextFiles(
       opts?.warn?.(
         `workspace bootstrap file ${file.name} is ${trimmed.originalLength} chars (limit ${trimmed.maxChars}); truncating in injected context`,
       );
+      truncations.push({
+        name: file.name,
+        originalChars: trimmed.originalLength,
+        budgetChars: trimmed.maxChars,
+      });
     }
     remainingTotalChars = Math.max(0, remainingTotalChars - contentWithinBudget.length);
     result.push({
@@ -235,7 +262,7 @@ export function buildBootstrapContextFiles(
       content: contentWithinBudget,
     });
   }
-  return result;
+  return { files: result, truncations };
 }
 
 export function sanitizeGoogleTurnOrdering(messages: AgentMessage[]): AgentMessage[] {

@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { applyBootstrapHookOverrides } from "./bootstrap-hooks.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
+import type { BootstrapTruncationInfo } from "./pi-embedded-helpers.js";
+import { applyBootstrapHookOverrides } from "./bootstrap-hooks.js";
 import {
   buildBootstrapContextFiles,
   resolveBootstrapMaxChars,
@@ -55,12 +56,13 @@ export async function resolveBootstrapContextForRun(params: {
 }): Promise<{
   bootstrapFiles: WorkspaceBootstrapFile[];
   contextFiles: EmbeddedContextFile[];
+  truncations: BootstrapTruncationInfo[];
 }> {
   const bootstrapFiles = await resolveBootstrapFilesForRun(params);
-  const contextFiles = buildBootstrapContextFiles(bootstrapFiles, {
+  const buildResult = buildBootstrapContextFiles(bootstrapFiles, {
     maxChars: resolveBootstrapMaxChars(params.config),
     totalMaxChars: resolveBootstrapTotalMaxChars(params.config),
     warn: params.warn,
   });
-  return { bootstrapFiles, contextFiles };
+  return { bootstrapFiles, contextFiles: buildResult.files, truncations: buildResult.truncations };
 }
