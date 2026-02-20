@@ -106,7 +106,7 @@ describe("resolveSkillCommandInvocation", () => {
 });
 
 describe("listSkillCommandsForAgents", () => {
-  it("merges command names across agents and de-duplicates", async () => {
+  it("drops duplicate skills across agents while keeping unique skills", async () => {
     const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-"));
     const mainWorkspace = path.join(baseDir, "main");
     const researchWorkspace = path.join(baseDir, "research");
@@ -125,7 +125,7 @@ describe("listSkillCommandsForAgents", () => {
     });
     const names = commands.map((entry) => entry.name);
     expect(names).toContain("demo_skill");
-    expect(names).toContain("demo_skill_2");
+    expect(names).not.toContain("demo_skill_2");
     expect(names).toContain("extra_skill");
   });
 });

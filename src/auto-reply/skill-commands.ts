@@ -47,6 +47,7 @@ export function listSkillCommandsForAgents(params: {
 }): SkillCommandSpec[] {
   const used = listReservedChatSlashCommandNames();
   const entries: SkillCommandSpec[] = [];
+  const seenSkillNames = new Set<string>();
   const agentIds = params.agentIds ?? listAgentIds(params.cfg);
   // Track visited workspace dirs to avoid registering duplicate commands
   // when multiple agents share the same workspace directory (#5717).
@@ -68,6 +69,13 @@ export function listSkillCommandsForAgents(params: {
       reservedNames: used,
     });
     for (const command of commands) {
+      const skillKey = command.skillName.trim().toLowerCase();
+      if (skillKey && seenSkillNames.has(skillKey)) {
+        continue;
+      }
+      if (skillKey) {
+        seenSkillNames.add(skillKey);
+      }
       used.add(command.name.toLowerCase());
       entries.push(command);
     }
