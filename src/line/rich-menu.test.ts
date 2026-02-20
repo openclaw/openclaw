@@ -22,13 +22,6 @@ describe("messageAction", () => {
 
     expect((action as { text: string }).text).toBe("Click");
   });
-
-  it("truncates label to 20 characters", () => {
-    const action = messageAction("This is a very long label text");
-
-    expect((action.label ?? "").length).toBe(20);
-    expect(action.label).toBe("This is a very long ");
-  });
 });
 
 describe("uriAction", () => {
@@ -39,10 +32,21 @@ describe("uriAction", () => {
     expect(action.label).toBe("Open");
     expect((action as { uri: string }).uri).toBe("https://example.com");
   });
+});
 
-  it("truncates label to 20 characters", () => {
-    const action = uriAction("Click here to visit our website", "https://example.com");
-
+describe("action label truncation", () => {
+  it.each([
+    {
+      createAction: () => messageAction("This is a very long label text"),
+      expectedLabel: "This is a very long ",
+    },
+    {
+      createAction: () => uriAction("Click here to visit our website", "https://example.com"),
+      expectedLabel: "Click here to visit ",
+    },
+  ])("truncates labels to 20 characters", ({ createAction, expectedLabel }) => {
+    const action = createAction();
+    expect(action.label).toBe(expectedLabel);
     expect((action.label ?? "").length).toBe(20);
   });
 });
