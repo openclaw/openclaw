@@ -201,8 +201,10 @@ export function createSessionActions(context: SessionActionContext) {
       next.totalTokens = entry.totalTokens;
     }
     if (entry?.contextTokens !== undefined || defaults?.contextTokens !== undefined) {
+      // Prefer config-level contextTokens (defaults) over persisted session value (entry)
+      // so user's explicit config takes precedence over model-derived defaults
       next.contextTokens =
-        entry?.contextTokens ?? defaults?.contextTokens ?? state.sessionInfo.contextTokens;
+        defaults?.contextTokens ?? entry?.contextTokens ?? state.sessionInfo.contextTokens;
     }
     if (entry?.displayName !== undefined) {
       next.displayName = entry.displayName;
