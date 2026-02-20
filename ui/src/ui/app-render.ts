@@ -1,5 +1,5 @@
 import { html, nothing } from "lit";
-import { parseAgentSessionKey } from "../../../src/routing/session-key.js";
+import { buildAgentMainSessionKey, parseAgentSessionKey } from "../../../src/routing/session-key.js";
 import { t } from "../i18n/index.ts";
 import { refreshChatAvatar } from "./app-chat.ts";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
@@ -391,6 +391,27 @@ export function renderApp(state: AppViewState) {
                   if (agentIds.length > 0) {
                     void loadAgentIdentities(state, agentIds);
                   }
+                },
+                onStartNewSession: (agentId) => {
+                  const mainKey = state.agentsList?.mainKey ?? state.sessionsResult?.defaults?.mainKey;
+                  const sessionKey = buildAgentMainSessionKey({ agentId, mainKey });
+                  state.sessionKey = sessionKey;
+                  state.chatMessage = "";
+                  state.chatAttachments = [];
+                  state.chatStream = null;
+                  state.chatStreamStartedAt = null;
+                  state.chatRunId = null;
+                  state.chatQueue = [];
+                  state.resetToolStream();
+                  state.resetChatScroll();
+                  state.applySettings({
+                    ...state.settings,
+                    sessionKey,
+                    lastActiveSessionKey: sessionKey,
+                  });
+                  void state.loadAssistantIdentity();
+                  state.setTab("chat");
+                  void state.handleSendChat("/new", { restoreDraft: true });
                 },
                 onSelectAgent: (agentId) => {
                   if (state.agentsSelectedId === agentId) {
