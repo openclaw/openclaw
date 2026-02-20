@@ -26,8 +26,14 @@ function resolveCustomCommands(cfg: {
  *   ${ARGS} — everything after the command name
  *   ${WORKSPACE} — workspace directory
  */
+function shellEscape(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
 function interpolateExec(template: string, args: string, workspaceDir: string): string {
-  return template.replace(/\$\{ARGS\}/g, args).replace(/\$\{WORKSPACE\}/g, workspaceDir);
+  return template
+    .replace(/\$\{ARGS\}/g, shellEscape(args))
+    .replace(/\$\{WORKSPACE\}/g, workspaceDir);
 }
 
 export const handleCustomCommand: CommandHandler = async (params, allowTextCommands) => {

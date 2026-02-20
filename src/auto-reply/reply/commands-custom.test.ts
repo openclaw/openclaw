@@ -138,4 +138,17 @@ describe("handleCustomCommand", () => {
       expect(result!.reply?.text).toBe("/tmp");
     }
   });
+
+  it("escapes shell metacharacters in ARGS to prevent injection", async () => {
+    const [params, allow] = makeParams({
+      commandBody: "/cmd ; rm -rf /",
+      custom: {
+        cmd: { exec: "echo ${ARGS}", reply: true },
+      },
+    });
+    const result = await handleCustomCommand(params, allow);
+    expect(result).not.toBeNull();
+    // The semicolon should be treated as literal text, not a command separator
+    expect(result!.reply?.text).toBe("; rm -rf /");
+  });
 });
