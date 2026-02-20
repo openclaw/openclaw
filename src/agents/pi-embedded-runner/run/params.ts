@@ -94,6 +94,8 @@ export type RunEmbeddedPiAgentParams = {
   onReasoningEnd?: () => void | Promise<void>;
   onToolResult?: (payload: { text?: string; mediaUrls?: string[] }) => void | Promise<void>;
   onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void;
+  /** Called before each prompt cycle starts (useful for refreshing typing indicators). */
+  onPromptCycleStart?: () => void;
   lane?: string;
   enqueue?: typeof enqueueCommand;
   extraSystemPrompt?: string;

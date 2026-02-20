@@ -28,6 +28,8 @@ export type SubscribeEmbeddedPiSessionParams = {
   onPartialReply?: (payload: { text?: string; mediaUrls?: string[] }) => void | Promise<void>;
   onAssistantMessageStart?: () => void | Promise<void>;
   onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void | Promise<void>;
+  /** Called on every streaming event (message_start, message_update, tool_execution_*, etc.). */
+  onStreamActivity?: () => void;
   enforceFinalTag?: boolean;
   config?: OpenClawConfig;
   sessionKey?: string;
