@@ -16,6 +16,13 @@ services:
       - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"
     init: true
     restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /home/node/.npm
+      - /run
+    cap_drop:
+      - ALL
     command:
       [
         "node",
@@ -43,4 +50,11 @@ services:
     stdin_open: true
     tty: true
     init: true
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /home/node/.npm
+      - /run
+    cap_drop:
+      - ALL
     entrypoint: ["node", "dist/index.js"]
