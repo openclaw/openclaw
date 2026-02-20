@@ -17,6 +17,7 @@ import {
   serializeDoltSummaryFrontmatter,
   type DoltSummaryType,
 } from "./contract.js";
+import { type DoltPromptOverrides, resolveDoltPromptTemplate } from "./prompts.js";
 
 export const DOLT_SUMMARY_MAX_OUTPUT_TOKENS = 2000;
 export const DOLT_LEAF_MIN_SOURCE_TURNS = 2;
@@ -54,6 +55,7 @@ export type DoltSummarizeParams = {
   };
   childPointers: string[];
   finalizedAtReset?: boolean;
+  promptOverrides?: DoltPromptOverrides;
   provider?: string;
   model?: string;
   providerOverride?: string;
@@ -133,12 +135,14 @@ export async function summarizeDoltRollup(
     max_output_tokens: DOLT_SUMMARY_MAX_OUTPUT_TOKENS,
   };
 
+  const instructionText = await resolveDoltPromptTemplate(params.mode, params.promptOverrides);
   const prompt = buildDoltSummaryPrompt({
     template,
     sourceTurns,
     childPointers: params.childPointers,
     datesCovered: params.datesCovered,
     finalizedAtReset,
+    instructionText,
   });
   const modelSelection = resolveDoltSummaryModelSelection(params);
   const runPrompt = params.runPrompt ?? runDoltSummaryPromptWithEmbeddedSession;
@@ -173,6 +177,8 @@ export async function summarizeDoltRollup(
 
 /**
  * Build the model prompt for a Dolt rollup.
+ * Combines the resolved instruction text (from file override or built-in default)
+ * with the front-matter shape and formatted source material.
  */
 export function buildDoltSummaryPrompt(params: {
   template: DoltSummaryPromptTemplate;
@@ -180,6 +186,7 @@ export function buildDoltSummaryPrompt(params: {
   childPointers: string[];
   datesCovered: { startEpochMs: number; endEpochMs: number };
   finalizedAtReset: boolean;
+  instructionText: string;
 }): string {
   const sourceBlock = params.sourceTurns
     .map((turn, index) => {
@@ -197,20 +204,10 @@ export function buildDoltSummaryPrompt(params: {
   });
 
   return [
-    `You are producing a ${params.template.label} for the bounded Dolt context engine.`,
-    "Keep chronology intact and preserve durable details needed for future turns.",
-    "",
-    "Required content to preserve:",
-    "- Decisions and outcomes (including reversals).",
-    "- Open tasks and unresolved follow-ups.",
-    "- Active constraints, assumptions, and boundary conditions.",
-    "- Safety-relevant tool outcomes and risk-related observations.",
+    params.instructionText,
     "",
     `Output must begin with this exact YAML front-matter shape (values filled for this rollup):`,
     frontmatterPreview,
-    "",
-    `Then output concise markdown summary paragraphs.`,
-    "Do not include analysis outside the summary itself.",
     "",
     "Source material:",
     sourceBlock,

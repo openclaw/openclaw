@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
+import { DOLT_BINDLE_PROMPT_DEFAULT, DOLT_LEAF_PROMPT_DEFAULT } from "./prompts.js";
 import {
   DOLT_LEAF_MIN_SOURCE_TURNS,
   DOLT_SUMMARY_MAX_OUTPUT_TOKENS,
@@ -122,7 +123,7 @@ describe("summarizeDoltRollup", () => {
 });
 
 describe("buildDoltSummaryPrompt", () => {
-  it("contains contract requirements for preserved content and template-specific labeling", () => {
+  it("uses leaf instruction text and includes front-matter and source material", () => {
     const prompt = buildDoltSummaryPrompt({
       template: {
         id: "leaf",
@@ -133,14 +134,54 @@ describe("buildDoltSummaryPrompt", () => {
       childPointers: ["turn-001", "turn-002"],
       datesCovered: { startEpochMs: 1000, endEpochMs: 2000 },
       finalizedAtReset: false,
+      instructionText: DOLT_LEAF_PROMPT_DEFAULT,
     });
-    expect(prompt).toContain("normal leaf rollup");
-    expect(prompt).toContain("Decisions and outcomes");
-    expect(prompt).toContain("Open tasks and unresolved follow-ups");
-    expect(prompt).toContain("Safety-relevant tool outcomes");
+    expect(prompt).toContain("LEAF summary");
+    expect(prompt).toContain("State changes:");
+    expect(prompt).toContain("Open threads:");
+    expect(prompt).toContain("RETRIEVABLE:");
     expect(prompt).toContain("finalized-at-reset: false");
     expect(prompt).toContain(
       "pointer=turn-002 role=assistant ts=2000 safety_relevant_tool_outcome=true",
     );
+  });
+
+  it("uses bindle instruction text for bindle mode", () => {
+    const prompt = buildDoltSummaryPrompt({
+      template: {
+        id: "bindle",
+        label: "normal bindle rollup",
+        summaryType: "bindle",
+      },
+      sourceTurns: BASE_SOURCE,
+      childPointers: ["leaf-001", "leaf-002"],
+      datesCovered: { startEpochMs: 1000, endEpochMs: 2000 },
+      finalizedAtReset: false,
+      instructionText: DOLT_BINDLE_PROMPT_DEFAULT,
+    });
+    expect(prompt).toContain("BINDLE summary");
+    expect(prompt).toContain("Thread map:");
+    expect(prompt).toContain("Cross-leaf continuity:");
+    expect(prompt).toContain("ROUTING");
+    expect(prompt).toContain("finalized-at-reset: false");
+  });
+
+  it("accepts custom instruction text from file overrides", () => {
+    const customInstructions = "You are a custom summarizer. Do your thing.";
+    const prompt = buildDoltSummaryPrompt({
+      template: {
+        id: "leaf",
+        label: "normal leaf rollup",
+        summaryType: "leaf",
+      },
+      sourceTurns: BASE_SOURCE,
+      childPointers: ["turn-001"],
+      datesCovered: { startEpochMs: 1000, endEpochMs: 2000 },
+      finalizedAtReset: false,
+      instructionText: customInstructions,
+    });
+    expect(prompt).toContain("You are a custom summarizer");
+    expect(prompt).toContain("finalized-at-reset: false");
+    expect(prompt).toContain("Source material:");
   });
 });
