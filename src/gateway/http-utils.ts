@@ -70,7 +70,11 @@ export function resolveSessionKey(params: {
 }): string {
   const explicit = getHeader(params.req, "x-openclaw-session-key")?.trim();
   if (explicit) {
-    return explicit;
+    const agentPrefix = `agent:${normalizeAgentId(params.agentId)}:`;
+    if (explicit.startsWith(agentPrefix)) {
+      return explicit;
+    }
+    // Explicit key does not belong to this agent's scope; fall through to default.
   }
 
   const user = params.user?.trim();
