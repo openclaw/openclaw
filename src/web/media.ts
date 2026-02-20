@@ -386,8 +386,9 @@ export async function loadWebMedia(
   options?: { ssrfPolicy?: SsrFPolicy; localRoots?: readonly string[] | "any" },
 ): Promise<WebMediaResult> {
   if (typeof maxBytesOrOptions === "number" || maxBytesOrOptions === undefined) {
+    const maxBytes = typeof maxBytesOrOptions === "number" ? maxBytesOrOptions : undefined;
     return await loadWebMediaInternal(mediaUrl, {
-      maxBytes: maxBytesOrOptions,
+      maxBytes,
       optimizeImages: true,
       ssrfPolicy: options?.ssrfPolicy,
       localRoots: options?.localRoots,
@@ -405,8 +406,9 @@ export async function loadWebMediaRaw(
   options?: { ssrfPolicy?: SsrFPolicy; localRoots?: readonly string[] | "any" },
 ): Promise<WebMediaResult> {
   if (typeof maxBytesOrOptions === "number" || maxBytesOrOptions === undefined) {
+    const maxBytes = typeof maxBytesOrOptions === "number" ? maxBytesOrOptions : undefined;
     return await loadWebMediaInternal(mediaUrl, {
-      maxBytes: maxBytesOrOptions,
+      maxBytes,
       optimizeImages: false,
       ssrfPolicy: options?.ssrfPolicy,
       localRoots: options?.localRoots,
