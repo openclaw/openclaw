@@ -618,6 +618,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           provider,
           model,
           catalog,
+          agentId: sessionAgentId,
         });
       }
     }

@@ -501,8 +501,13 @@ export function resolveThinkingDefault(params: {
   provider: string;
   model: string;
   catalog?: ModelCatalogEntry[];
+  agentId?: string;
 }): ThinkLevel {
-  const configured = params.cfg.agents?.defaults?.thinkingDefault;
+  const perAgentConfigured =
+    typeof params.agentId === "string" && params.agentId.trim()
+      ? resolveAgentConfig(params.cfg, params.agentId)?.thinkingDefault
+      : undefined;
+  const configured = perAgentConfigured ?? params.cfg.agents?.defaults?.thinkingDefault;
   if (configured) {
     return configured;
   }

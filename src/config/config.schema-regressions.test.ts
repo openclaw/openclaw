@@ -2,6 +2,21 @@ import { describe, expect, it } from "vitest";
 import { validateConfigObject } from "./config.js";
 
 describe("config schema regressions", () => {
+  it("accepts agent-level thinkingDefault overrides", () => {
+    const res = validateConfigObject({
+      agents: {
+        list: [
+          {
+            id: "atlas",
+            thinkingDefault: "high",
+          },
+        ],
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
   it("accepts nested telegram groupPolicy overrides", () => {
     const res = validateConfigObject({
       channels: {
