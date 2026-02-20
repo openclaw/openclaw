@@ -31,6 +31,7 @@ import {
 } from "./status.format.js";
 import { resolveGatewayProbeAuth } from "./status.gateway-probe.js";
 import { scanStatus } from "./status.scan.js";
+import { formatTailscaleOverviewValue } from "./status.tailscale.js";
 import {
   formatUpdateAvailableHint,
   formatUpdateOneLiner,
@@ -61,6 +62,7 @@ export async function statusCommand(
     cfg,
     osSummary,
     tailscaleMode,
+    tailscaleBackendState,
     tailscaleDns,
     tailscaleHttpsUrl,
     update,
@@ -357,12 +359,14 @@ export async function statusCommand(
     { Item: "OS", Value: `${osSummary.label} · node ${process.versions.node}` },
     {
       Item: "Tailscale",
-      Value:
-        tailscaleMode === "off"
-          ? muted("off")
-          : tailscaleDns && tailscaleHttpsUrl
-            ? `${tailscaleMode} · ${tailscaleDns} · ${tailscaleHttpsUrl}`
-            : warn(`${tailscaleMode} · magicdns unknown`),
+      Value: formatTailscaleOverviewValue({
+        tailscaleMode,
+        tailscaleDns,
+        tailscaleHttpsUrl,
+        tailscaleBackendState,
+        muted,
+        warn,
+      }),
     },
     { Item: "Channel", Value: channelLabel },
     ...(gitLabel ? [{ Item: "Git", Value: gitLabel }] : []),

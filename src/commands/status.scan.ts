@@ -5,7 +5,7 @@ import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
 import { probeGateway } from "../gateway/probe.js";
 import { collectChannelStatusIssues } from "../infra/channels-status-issues.js";
 import { resolveOsSummary } from "../infra/os-summary.js";
-import { getTailnetHostname } from "../infra/tailscale.js";
+import { getTailnetHostname, readTailscaleStatusJson } from "../infra/tailscale.js";
 import { getMemorySearchManager } from "../memory/index.js";
 import type { MemoryProviderStatus } from "../memory/types.js";
 import { runExec } from "../process/exec.js";
@@ -42,6 +42,7 @@ export type StatusScanResult = {
   cfg: ReturnType<typeof loadConfig>;
   osSummary: ReturnType<typeof resolveOsSummary>;
   tailscaleMode: string;
+  tailscaleBackendState: string | null;
   tailscaleDns: string | null;
   tailscaleHttpsUrl: string | null;
   update: Awaited<ReturnType<typeof getUpdateCheckResult>>;
@@ -81,12 +82,28 @@ export async function scanStatus(
 
       progress.setLabel("Checking Tailscale…");
       const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
+      const tailscaleStatus = await readTailscaleStatusJson(runExec, { timeoutMs: 1200 }).catch(
+        () => null,
+      );
+      const tailscaleSelf =
+        tailscaleStatus && typeof tailscaleStatus.Self === "object" && tailscaleStatus.Self !== null
+          ? (tailscaleStatus.Self as Record<string, unknown>)
+          : null;
+      const tailscaleBackendState =
+        tailscaleStatus && typeof tailscaleStatus.BackendState === "string"
+          ? tailscaleStatus.BackendState
+          : null;
+      const tailscaleDnsFromStatus =
+        tailscaleSelf && typeof tailscaleSelf.DNSName === "string"
+          ? tailscaleSelf.DNSName.replace(/\.$/, "")
+          : null;
       const tailscaleDns =
-        tailscaleMode === "off"
+        tailscaleDnsFromStatus ??
+        (tailscaleMode === "off"
           ? null
           : await getTailnetHostname((cmd, args) =>
               runExec(cmd, args, { timeoutMs: 1200, maxBuffer: 200_000 }),
-            ).catch(() => null);
+            ).catch(() => null));
       const tailscaleHttpsUrl =
         tailscaleMode !== "off" && tailscaleDns
           ? `https://${tailscaleDns}${normalizeControlUiBasePath(cfg.gateway?.controlUi?.basePath)}`
@@ -182,6 +199,7 @@ export async function scanStatus(
         cfg,
         osSummary,
         tailscaleMode,
+        tailscaleBackendState,
         tailscaleDns,
         tailscaleHttpsUrl,
         update,
