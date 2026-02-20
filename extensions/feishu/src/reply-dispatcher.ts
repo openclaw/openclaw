@@ -204,8 +204,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         // replying to the media message (mirrors Telegram's caption-on-media pattern).
         // If all media sends fail, fall back to normal text delivery.
         if (mediaList.length > 0) {
-          // Close streaming card with cleaned text (TTS tags stripped) before
-          // sending media, so the card doesn't display raw [[tts:...]] markup.
+          // Close streaming card before sending media to ensure proper message ordering.
           if (streaming?.isActive()) {
             streamText = text;
             await closeStreaming();
