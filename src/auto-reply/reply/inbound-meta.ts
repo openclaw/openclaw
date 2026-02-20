@@ -43,6 +43,7 @@ export function buildInboundMetaSystemPrompt(ctx: TemplateContext): string {
     provider: safeTrim(ctx.Provider),
     surface: safeTrim(ctx.Surface),
     chat_type: chatType ?? (isDirect ? "direct" : undefined),
+    message_id: safeTrim(ctx.MessageSidFull) ?? safeTrim(ctx.MessageSid),
     flags: {
       is_group_chat: !isDirect ? true : undefined,
       was_mentioned: ctx.WasMentioned === true ? true : undefined,
