@@ -12,6 +12,56 @@ import { whatsappOutboundLog } from "./loggers.js";
 import type { WebInboundMsg } from "./types.js";
 import { elide } from "./util.js";
 
+/**
+ * Sanitize an error message for user-facing display.
+ * Strips PII (phone numbers, group IDs), internal paths, and raw JSON dumps.
+ * Returns a short, generic reason suitable for chat messages.
+ */
+function sanitizeMediaError(raw: string): string {
+  // Known safe short reasons we can pass through directly.
+  const safeReasons: RegExp[] = [
+    /\btimeout\b/i,
+    /\bnetwork\b/i,
+    /\bfetch failed\b/i,
+    /\bECONNREFUSED\b/i,
+    /\bECONNRESET\b/i,
+    /\bENOTFOUND\b/i,
+    /\b404\b/,
+    /\b403\b/,
+    /\b413\b/,
+    /\b5\d{2}\b/,
+    /\btoo large\b/i,
+    /\bnot found\b/i,
+    /\bforbidden\b/i,
+    /\bunsupported\b/i,
+    /\binvalid url\b/i,
+  ];
+
+  for (const re of safeReasons) {
+    const m = raw.match(re);
+    if (m) return m[0];
+  }
+
+  // If the message looks like it contains PII or metadata, redact entirely.
+  const piiPatterns = [
+    /\+\d{7,15}/, // phone numbers
+    /@[gs]\.us/, // WhatsApp group/user JIDs
+    /[A-Za-z]:\\/, // Windows paths
+    /\/home\//, // Unix paths
+    /\{[\s\S]{20,}/, // JSON dumps (opening brace + long content)
+  ];
+
+  for (const re of piiPatterns) {
+    if (re.test(raw)) return "download failed";
+  }
+
+  // Truncate to avoid leaking anything unexpected.
+  const cleaned = raw.replace(/[\r\n]+/g, " ").trim();
+  if (cleaned.length > 80) return "download failed";
+
+  return cleaned;
+}
+
 export async function deliverWebReply(params: {
   replyResult: ReplyPayload;
   msg: WebInboundMsg;
@@ -177,7 +227,9 @@ export async function deliverWebReply(params: {
       replyLogger.warn({ err, mediaUrl }, "failed to send web media reply");
       if (index === 0) {
         const warning =
-          err instanceof Error ? `⚠️ Media failed: ${err.message}` : "⚠️ Media failed.";
+          err instanceof Error
+            ? `⚠️ Media failed: ${sanitizeMediaError(err.message)}`
+            : "⚠️ Media failed.";
         const fallbackTextParts = [remainingText.shift() ?? caption ?? "", warning].filter(Boolean);
         const fallbackText = fallbackTextParts.join("\n");
         if (fallbackText) {
