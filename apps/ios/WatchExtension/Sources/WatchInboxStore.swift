@@ -178,7 +178,7 @@ struct WatchNotifyMessage: Sendable {
         }
     }
 
-    func makeReplyDraft(action: WatchPromptAction) -> WatchReplyDraft {
+    func makeReplyDraft(action: WatchPromptAction, note: String? = nil) -> WatchReplyDraft {
         let prompt = self.promptId?.trimmingCharacters(in: .whitespacesAndNewlines)
         return WatchReplyDraft(
             replyId: UUID().uuidString,
@@ -186,7 +186,7 @@ struct WatchNotifyMessage: Sendable {
             actionId: action.id,
             actionLabel: action.label,
             sessionKey: self.sessionKey,
-            note: nil,
+            note: note,
             sentAtMs: Int(Date().timeIntervalSince1970 * 1000))
     }
 

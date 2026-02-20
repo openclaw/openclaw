@@ -7,9 +7,9 @@ struct OpenClawWatchApp: App {
 
     var body: some Scene {
         WindowGroup {
-            WatchInboxView(store: self.inboxStore) { action in
+            WatchInboxView(store: self.inboxStore) { action, note in
                 guard let receiver = self.receiver else { return }
-                let draft = self.inboxStore.makeReplyDraft(action: action)
+                let draft = self.inboxStore.makeReplyDraft(action: action, note: note)
                 self.inboxStore.markReplySending(actionLabel: action.label)
                 Task { @MainActor in
                     let result = await receiver.sendReply(draft)
