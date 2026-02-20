@@ -260,28 +260,29 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       },
     });
 
-  const partialReplyHandler = streamingEnabled
-    ? (payload: ReplyPayload) => {
-        if (!payload.text || payload.text === lastPartial) {
-          return;
-        }
-        lastPartial = payload.text;
-        streamText = payload.text;
-        fallbackStreamText = payload.text;
-        partialUpdateQueue = partialUpdateQueue.then(async () => {
-          if (streamingStartPromise) {
-            await streamingStartPromise;
-          }
-          if (streaming?.isActive()) {
-            await streaming.update(streamText);
-          }
-        });
+  let partialReplyHandler: ((payload: ReplyPayload) => void) | undefined;
+  if (streamingEnabled) {
+    partialReplyHandler = (payload: ReplyPayload) => {
+      if (!payload.text || payload.text === lastPartial) {
+        return;
       }
-    : agentCardRenderer
-      ? (payload: ReplyPayload) => {
-          void agentCardRenderer.onPartialReply(payload);
+      lastPartial = payload.text;
+      streamText = payload.text;
+      fallbackStreamText = payload.text;
+      partialUpdateQueue = partialUpdateQueue.then(async () => {
+        if (streamingStartPromise) {
+          await streamingStartPromise;
         }
-      : undefined;
+        if (streaming?.isActive()) {
+          await streaming.update(streamText);
+        }
+      });
+    };
+  } else if (agentCardRenderer) {
+    partialReplyHandler = (payload: ReplyPayload) => {
+      void agentCardRenderer.onPartialReply(payload);
+    };
+  }
 
   return {
     dispatcher,

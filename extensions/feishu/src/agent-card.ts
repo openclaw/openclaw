@@ -37,6 +37,13 @@ function mergeStreamText(prev: string, next: string): string {
   if (prev.startsWith(next)) {
     return prev;
   }
+
+  const maxOverlap = Math.min(prev.length, next.length);
+  for (let overlap = maxOverlap; overlap > 0; overlap--) {
+    if (prev.slice(-overlap) === next.slice(0, overlap)) {
+      return prev + next.slice(overlap);
+    }
+  }
   return prev + next;
 }
 
@@ -179,27 +186,34 @@ function appendTimelineFromText(params: {
   text: string;
   timeline: TimelineEntry[];
   previousText: string;
+  carryLine: string;
   allowBlock: boolean;
+  flushIncompleteLine: boolean;
 }) {
-  const { text, timeline, previousText, allowBlock } = params;
+  const { text, timeline, previousText, carryLine, allowBlock, flushIncompleteLine } = params;
   const nextText = text ?? "";
   if (!nextText) {
-    return { timeline, previousText, sawReasoning: false };
+    return { timeline, previousText, carryLine, sawReasoning: false };
   }
 
-  let delta = nextText;
-  if (previousText && nextText.startsWith(previousText)) {
-    delta = nextText.slice(previousText.length);
-  } else if (previousText && previousText.startsWith(nextText)) {
-    delta = "";
-  }
+  const mergedText = mergeStreamText(previousText, nextText);
+  const delta = mergedText.startsWith(previousText)
+    ? mergedText.slice(previousText.length)
+    : mergedText;
 
   if (!delta) {
-    return { timeline, previousText: nextText, sawReasoning: false };
+    return { timeline, previousText: mergedText, carryLine, sawReasoning: false };
   }
 
   const out = [...timeline];
-  const lines = delta.split(/\r?\n/);
+  const combined = `${carryLine}${delta}`;
+  const lines = combined.split(/\r?\n/);
+  const endsWithNewline = /\r?\n$/.test(combined);
+  let nextCarryLine = endsWithNewline ? "" : (lines.pop() ?? "");
+  if (flushIncompleteLine && nextCarryLine.trim()) {
+    lines.push(nextCarryLine);
+    nextCarryLine = "";
+  }
   let inReasoning = false;
   let sawReasoning = false;
 
@@ -233,7 +247,7 @@ function appendTimelineFromText(params: {
     }
   }
 
-  return { timeline: out, previousText: nextText, sawReasoning };
+  return { timeline: out, previousText: mergedText, carryLine: nextCarryLine, sawReasoning };
 }
 
 function buildCard(params: {
@@ -244,8 +258,10 @@ function buildCard(params: {
   mentionTargets?: MentionTarget[];
   includeMentions: boolean;
 }): Record<string, unknown> {
+  const hasAnswer = Boolean(params.answer.trim());
+  const shouldCollapseTimeline = params.collapseTimeline && hasAnswer;
   const filteredTimeline =
-    params.collapseTimeline && params.answer
+    shouldCollapseTimeline
       ? trimFinalDupBlocks(params.timeline, params.answer)
       : params.timeline;
 
@@ -259,7 +275,7 @@ function buildCard(params: {
   const bodyElements: Array<Record<string, unknown>> = [];
 
   if (filteredTimeline.length > 0) {
-    if (params.collapseTimeline) {
+    if (shouldCollapseTimeline) {
       bodyElements.push({
         tag: "collapsible_panel",
         expanded: false,
@@ -397,6 +413,7 @@ export function createFeishuAgentCardRenderer(params: CreateFeishuAgentCardRende
   let createMessagePromise: Promise<void> | null = null;
   let opQueue: Promise<void> = Promise.resolve();
   let previousTimelineText = "";
+  let timelineCarryLine = "";
   let finalStreamStarted = false;
   let hasTraceContext = false;
 
@@ -471,10 +488,13 @@ export function createFeishuAgentCardRenderer(params: CreateFeishuAgentCardRende
             text: textRaw,
             timeline,
             previousText: previousTimelineText,
+            carryLine: timelineCarryLine,
             allowBlock: hasTraceContext,
+            flushIncompleteLine: info.kind === "final",
           });
           timeline = appended.timeline;
           previousTimelineText = appended.previousText;
+          timelineCarryLine = appended.carryLine;
           if (appended.sawReasoning) {
             hasTraceContext = true;
           }
@@ -522,14 +542,14 @@ export function createFeishuAgentCardRenderer(params: CreateFeishuAgentCardRende
         if (status !== "error") {
           status = "completed";
         }
-        await sendOrUpdate(true);
+        await sendOrUpdate(Boolean(answer.trim()));
         await updater?.flush();
       });
     },
     async onError() {
       await enqueueOp(async () => {
         status = "error";
-        await sendOrUpdate(true);
+        await sendOrUpdate(Boolean(answer.trim()));
         await updater?.flush();
       });
     },
