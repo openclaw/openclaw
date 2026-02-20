@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document outlines the design for integrating "Kilo Gateway" as a first-class provider in Moltbot, modeled after the existing OpenRouter implementation. Kilo Gateway uses an OpenAI-compatible completions API with a different base URL.
+This document outlines the design for integrating "Kilo Gateway" as a first-class provider in OpenClaw, modeled after the existing OpenRouter implementation. Kilo Gateway uses an OpenAI-compatible completions API with a different base URL.
 
 ## Design Decisions
 
@@ -113,7 +113,7 @@ Add new functions:
 ```typescript
 export const KILOCODE_BASE_URL = "https://api.kilo.ai/api/gateway/";
 
-export function applyKilocodeProviderConfig(cfg: MoltbotConfig): MoltbotConfig {
+export function applyKilocodeProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
   const models = { ...cfg.agents?.defaults?.models };
   models[KILOCODE_DEFAULT_MODEL_REF] = {
     ...models[KILOCODE_DEFAULT_MODEL_REF],
@@ -152,7 +152,7 @@ export function applyKilocodeProviderConfig(cfg: MoltbotConfig): MoltbotConfig {
   };
 }
 
-export function applyKilocodeConfig(cfg: MoltbotConfig): MoltbotConfig {
+export function applyKilocodeConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyKilocodeProviderConfig(cfg);
   const existingModel = next.agents?.defaults?.model;
   return {
@@ -432,26 +432,7 @@ export function isCacheTtlEligibleProvider(provider: string, modelId: string): b
 }
 ```
 
-#### 13. `src/agents/pi-embedded-runner/extra-params.ts`
-
-Add Kilo Gateway support:
-
-```typescript
-function resolveCacheControlTtl(
-  extraParams: Record<string, unknown> | undefined,
-  provider: string,
-  modelId: string,
-): CacheControlTtl | undefined {
-  const raw = extraParams?.cacheControlTtl;
-  if (raw !== "5m" && raw !== "1h") return undefined;
-  if (provider === "anthropic") return raw;
-  if (provider === "openrouter" && modelId.startsWith("anthropic/")) return raw;
-  if (provider === "kilocode" && modelId.startsWith("anthropic/")) return raw;
-  return undefined;
-}
-```
-
-#### 14. `src/agents/transcript-policy.ts`
+#### 13. `src/agents/transcript-policy.ts`
 
 Add Kilo Gateway handling (similar to OpenRouter):
 
@@ -477,7 +458,10 @@ const needsNonImageSanitize =
         "apiKey": "xxxxx",
         "api": "openai-completions",
         "models": [
-          { "id": "anthropic/claude-opus-4.6", "name": "Anthropic: Claude Opus 4.6" },
+          {
+            "id": "anthropic/claude-opus-4.6",
+            "name": "Anthropic: Claude Opus 4.6"
+          },
           { "id": "minimax/minimax-m2.1:free", "name": "Minimax: Minimax M2.1" }
         ]
       }
@@ -529,7 +513,7 @@ const needsNonImageSanitize =
 
 3. **Rate Limiting:** Consider adding rate limit handling specific to Kilo Gateway if needed
 
-4. **Documentation:** Add docs at `docs/providers/kilo-gateway.md` explaining setup and usage
+4. **Documentation:** Add docs at `docs/providers/kilocode.md` explaining setup and usage
 
 ## Summary of Changes
 
@@ -547,5 +531,4 @@ const needsNonImageSanitize =
 | `src/commands/onboard-non-interactive/local/auth-choice.ts` | Modify      | Add non-interactive handling                                            |
 | `src/commands/onboard-auth.ts`                              | Modify      | Export new functions                                                    |
 | `src/agents/pi-embedded-runner/cache-ttl.ts`                | Modify      | Add kilocode support                                                    |
-| `src/agents/pi-embedded-runner/extra-params.ts`             | Modify      | Add kilocode support                                                    |
 | `src/agents/transcript-policy.ts`                           | Modify      | Add kilocode Gemini handling                                            |
