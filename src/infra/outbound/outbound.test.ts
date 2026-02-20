@@ -236,7 +236,7 @@ describe("delivery-queue", () => {
       const { result } = await runRecovery({ deliver });
 
       expect(deliver).not.toHaveBeenCalled();
-      expect(result.skipped).toBe(1);
+      expect(result.failed).toBe(1);
 
       // Entry should be in failed/ directory.
       const failedDir = path.join(tmpDir, "delivery-queue", "failed");

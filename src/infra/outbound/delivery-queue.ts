@@ -307,7 +307,7 @@ export async function recoverPendingDeliveries(opts: {
   }
 
   opts.log.info(
-    `Delivery recovery complete: ${recovered} recovered, ${failed} failed, ${skipped} skipped (max retries)`,
+    `Delivery recovery complete: ${recovered} recovered, ${failed} failed, ${skipped} skipped`,
   );
   return { recovered, failed, skipped };
 }
