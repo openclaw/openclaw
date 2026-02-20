@@ -105,6 +105,9 @@ pnpm openclaw onboard --install-daemon
 
 # Dev loop (auto-reload on TS changes)
 pnpm gateway:watch
+
+# Windows (native PowerShell/cmd, no WSL2)
+node scripts/watch-node.mjs gateway run --bind loopback --port 18789 --allow-unconfigured
 ```
 
 Note: `pnpm openclaw ...` runs TypeScript directly (via `tsx`). `pnpm build` produces `dist/` for running via Node / the packaged `openclaw` binary.
