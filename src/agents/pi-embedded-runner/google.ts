@@ -247,11 +247,11 @@ export function sanitizeToolsForGoogle<
   tools: AgentTool<TSchemaType, TResult>[];
   provider: string;
 }): AgentTool<TSchemaType, TResult>[] {
-  // google-antigravity serves Anthropic models (e.g. claude-opus-4-6-thinking),
-  // NOT Gemini. Applying Gemini schema cleaning strips JSON Schema keywords
-  // (minimum, maximum, format, etc.) that Anthropic's API requires for
-  // draft 2020-12 compliance. Only clean for actual Gemini providers.
-  if (params.provider !== "google-gemini-cli") {
+  // Cloud Code Assist uses the OpenAPI 3.03 `parameters` field for both Gemini
+  // AND Claude models.  This field does not support JSON Schema keywords such as
+  // patternProperties, additionalProperties, $ref, etc.  We must clean schemas
+  // for every provider that routes through this path.
+  if (params.provider !== "google-gemini-cli" && params.provider !== "google-antigravity") {
     return params.tools;
   }
   return params.tools.map((tool) => {
