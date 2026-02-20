@@ -54,6 +54,203 @@ function sleep(ms: number): Promise<void> {
   });
 }
 
+<<<<<<< HEAD
+=======
+function createDiscordStatusReactionController(params: {
+  enabled: boolean;
+  intermediateEnabled: boolean;
+  channelId: string;
+  messageId: string;
+  initialEmoji: string;
+  rest: unknown;
+}) {
+  let activeEmoji: string | null = null;
+  let chain: Promise<void> = Promise.resolve();
+  let pendingEmoji: string | null = null;
+  let pendingTimer: ReturnType<typeof setTimeout> | null = null;
+  let finished = false;
+  let softStallTimer: ReturnType<typeof setTimeout> | null = null;
+  let hardStallTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const enqueue = (work: () => Promise<void>) => {
+    chain = chain.then(work).catch((err) => {
+      logAckFailure({
+        log: logVerbose,
+        channel: "discord",
+        target: `${params.channelId}/${params.messageId}`,
+        error: err,
+      });
+    });
+    return chain;
+  };
+
+  const clearStallTimers = () => {
+    if (softStallTimer) {
+      clearTimeout(softStallTimer);
+      softStallTimer = null;
+    }
+    if (hardStallTimer) {
+      clearTimeout(hardStallTimer);
+      hardStallTimer = null;
+    }
+  };
+
+  const clearPendingDebounce = () => {
+    if (pendingTimer) {
+      clearTimeout(pendingTimer);
+      pendingTimer = null;
+    }
+    pendingEmoji = null;
+  };
+
+  const applyEmoji = (emoji: string) =>
+    enqueue(async () => {
+      if (!params.enabled || !emoji || activeEmoji === emoji) {
+        return;
+      }
+      const previousEmoji = activeEmoji;
+      await reactMessageDiscord(params.channelId, params.messageId, emoji, {
+        rest: params.rest as never,
+      });
+      activeEmoji = emoji;
+      if (previousEmoji && previousEmoji !== emoji) {
+        await removeReactionDiscord(params.channelId, params.messageId, previousEmoji, {
+          rest: params.rest as never,
+        });
+      }
+    });
+
+  const requestEmoji = (emoji: string, options?: { immediate?: boolean; ignoreIntermediate?: boolean }) => {
+    if (!params.enabled || !emoji) {
+      return Promise.resolve();
+    }
+    if (!options?.ignoreIntermediate && !params.intermediateEnabled) {
+      return Promise.resolve();
+    }
+    if (options?.immediate) {
+      clearPendingDebounce();
+      return applyEmoji(emoji);
+    }
+    pendingEmoji = emoji;
+    if (pendingTimer) {
+      clearTimeout(pendingTimer);
+    }
+    pendingTimer = setTimeout(() => {
+      pendingTimer = null;
+      const emojiToApply = pendingEmoji;
+      pendingEmoji = null;
+      if (!emojiToApply || emojiToApply === activeEmoji) {
+        return;
+      }
+      void applyEmoji(emojiToApply);
+    }, DISCORD_STATUS_DEBOUNCE_MS);
+    return Promise.resolve();
+  };
+
+  const scheduleStallTimers = () => {
+    if (!params.enabled || !params.intermediateEnabled || finished) {
+      return;
+    }
+    clearStallTimers();
+    softStallTimer = setTimeout(() => {
+      if (finished) {
+        return;
+      }
+      void requestEmoji(DISCORD_STATUS_STALL_SOFT_EMOJI, { immediate: true });
+    }, DISCORD_STATUS_STALL_SOFT_MS);
+    hardStallTimer = setTimeout(() => {
+      if (finished) {
+        return;
+      }
+      void requestEmoji(DISCORD_STATUS_STALL_HARD_EMOJI, { immediate: true });
+    }, DISCORD_STATUS_STALL_HARD_MS);
+  };
+
+  const setPhase = (emoji: string) => {
+    if (!params.enabled || !params.intermediateEnabled || finished) {
+      return Promise.resolve();
+    }
+    scheduleStallTimers();
+    return requestEmoji(emoji);
+  };
+
+  const setTerminal = async (emoji: string) => {
+    if (!params.enabled) {
+      return;
+    }
+    finished = true;
+    clearStallTimers();
+    if (!params.intermediateEnabled) {
+        return;
+    }
+    await requestEmoji(emoji, { immediate: true });
+  };
+
+  const clear = async () => {
+    if (!params.enabled) {
+      return;
+    }
+    finished = true;
+    clearStallTimers();
+    clearPendingDebounce();
+    await enqueue(async () => {
+      const cleanupCandidates = new Set<string>([
+        params.initialEmoji,
+        activeEmoji ?? "",
+        DISCORD_STATUS_THINKING_EMOJI,
+        DISCORD_STATUS_TOOL_EMOJI,
+        DISCORD_STATUS_CODING_EMOJI,
+        DISCORD_STATUS_WEB_EMOJI,
+        DISCORD_STATUS_DONE_EMOJI,
+        DISCORD_STATUS_ERROR_EMOJI,
+        DISCORD_STATUS_STALL_SOFT_EMOJI,
+        DISCORD_STATUS_STALL_HARD_EMOJI,
+      ]);
+      activeEmoji = null;
+      for (const emoji of cleanupCandidates) {
+        if (!emoji) {
+          continue;
+        }
+        try {
+          await removeReactionDiscord(params.channelId, params.messageId, emoji, {
+            rest: params.rest as never,
+          });
+        } catch (err) {
+          logAckFailure({
+            log: logVerbose,
+            channel: "discord",
+            target: `${params.channelId}/${params.messageId}`,
+            error: err,
+          });
+        }
+      }
+    });
+  };
+
+  const restoreInitial = async () => {
+    if (!params.enabled) {
+      return;
+    }
+    finished = true;
+    clearStallTimers();
+    clearPendingDebounce();
+    await requestEmoji(params.initialEmoji, { immediate: true, ignoreIntermediate: true });
+  };
+
+  return {
+    setQueued: () => {
+      scheduleStallTimers();
+      return requestEmoji(params.initialEmoji, { immediate: true, ignoreIntermediate: true });
+    },
+    setThinking: () => setPhase(DISCORD_STATUS_THINKING_EMOJI),
+    setTool: (toolName?: string) => setPhase(resolveToolStatusEmoji(toolName)),
+    setDone: () => setTerminal(DISCORD_STATUS_DONE_EMOJI),
+    setError: () => setTerminal(DISCORD_STATUS_ERROR_EMOJI),
+    clear,
+    restoreInitial,
+  };
+}
+>>>>>>> a2da34c60 (feat(discord): check both discord-level and global messages.statusReactions toggle)
 
 export async function processDiscordMessage(ctx: DiscordMessagePreflightContext) {
   const {
