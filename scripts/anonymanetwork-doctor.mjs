@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 
+import { execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
-import { execSync } from "node:child_process";
 
 const cwd = process.cwd();
-const packageRoot = fs.existsSync(path.join(cwd, "package.json")) ? cwd : path.resolve(import.meta.dirname, "..");
+const packageRoot = fs.existsSync(path.join(cwd, "package.json"))
+  ? cwd
+  : path.resolve(import.meta.dirname, "..");
 const controlUiIndex = path.join(packageRoot, "dist", "control-ui", "index.html");
 
 const checks = [];
@@ -71,7 +73,9 @@ console.log("=");
 for (const check of checks) {
   console.log(`${check.ok ? "PASS" : "FAIL"}  ${check.name}`);
   console.log(`      ${check.details}`);
-  if (!check.ok) console.log(`      Fix: ${check.fix}`);
+  if (!check.ok) {
+    console.log(`      Fix: ${check.fix}`);
+  }
 }
 
 if (failed.length) {
