@@ -6,7 +6,7 @@ metadata:
     "openclaw":
       {
         "emoji": "🔌",
-        "requires": { "bins": ["mcporter"], "env": ["COMPOSIO_MCP_URL", "COMPOSIO_MCP_TOKEN"] },
+        "requires": { "bins": ["mcporter"], "env": ["COMPOSIO_MCP_URL"] },
         "install":
           [
             {
@@ -27,7 +27,11 @@ Use `mcporter` to call Composio MCP tools. This skill connects to 100+ external 
 
 ## Setup
 
-The MCP server `clawdi-mcp` is auto-configured at deploy time from `COMPOSIO_MCP_URL` and `COMPOSIO_MCP_TOKEN` env vars. The entrypoint writes `~/.mcporter/mcporter.json` automatically.
+The MCP server `clawdi-mcp` is auto-configured at deploy time. Two modes are supported:
+
+**Proxy mode (Clawdi):** Set `COMPOSIO_MCP_URL` + `COMPOSIO_MCP_TOKEN` in `skills.entries.composio.env`. Uses `Authorization: Bearer` header.
+
+**Standalone mode:** `COMPOSIO_MCP_URL` + `COMPOSIO_API_KEY` in `skills.entries.composio.env`. Uses `x-api-key` header. The operator sets this up via `migrate-openclaw.sh` at deploy time.
 
 Verify with:
 

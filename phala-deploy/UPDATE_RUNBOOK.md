@@ -87,7 +87,73 @@ export CVM_SSH_HOST=<openclaw-app-id>-1022.<gateway-domain>
 ./phala-deploy/mux-pair-token.sh telegram agent:main:main
 ```
 
-## Standard update flow
+## Update flow with a local env file
+
+If you have a local secrets file (e.g., `configs/my-instance.env`) instead of rv vault:
+
+### 1. Build and pin the new image
+
+```bash
+./phala-deploy/build-pin-openclaw.sh
+# This pushes to Docker Hub and updates the digest in docker-compose.yml
+```
+
+### 2. Download the existing config
+
+The config on the data volume persists across deploys. Download it so you can pass it back as `OPENCLAW_CONFIG_B64`:
+
+```bash
+phala ssh <cvm-id> -- docker cp openclaw:/root/.openclaw/openclaw.json /tmp/openclaw.json
+phala cp <cvm-id>:/tmp/openclaw.json ./openclaw.json
+```
+
+### 3. Build the deploy env file
+
+Combine your secrets with the base64-encoded config:
+
+```bash
+OPENCLAW_CONFIG_B64=$(base64 -w0 ./openclaw.json)
+
+# Start with your secrets
+cp configs/my-instance.env /tmp/deploy.env
+chmod 600 /tmp/deploy.env
+
+# Append the config (add REDPILL_API_KEY if not in your env file)
+echo "OPENCLAW_CONFIG_B64=${OPENCLAW_CONFIG_B64}" >> /tmp/deploy.env
+```
+
+The env file needs at minimum: `MASTER_KEY`, `OPENCLAW_CONFIG_B64`. Add `REDPILL_API_KEY` and S3 vars as needed.
+
+### 4. Deploy
+
+```bash
+phala deploy --cvm-id <cvm-id> \
+  -c phala-deploy/docker-compose.yml \
+  -e /tmp/deploy.env
+```
+
+### 5. Wait and verify
+
+Image pulls can take 5-10 minutes on a node that hasn't cached the image.
+
+```bash
+# Check CVM status (starting → running)
+phala cvms list
+
+# Once running, check entrypoint logs
+phala ssh <cvm-id> -- docker logs openclaw 2>&1 \
+  | grep -iE '(mcporter|Starting|Keys derived|error)'
+```
+
+Expected output:
+
+```
+Keys derived (gateway token, crypt password, crypt salt).
+mcporter config written for Composio MCP (standalone mode).
+Starting OpenClaw gateway...
+```
+
+## Standard update flow (with rv vault)
 
 ### 1. Preflight
 
@@ -103,13 +169,13 @@ This validates vault secrets and prints the deploy commands without executing th
 OpenClaw:
 
 ```bash
-./phala-deploy/build-pin-image.sh
+./phala-deploy/build-pin-openclaw.sh
 ```
 
 mux-server (only when mux changed):
 
 ```bash
-./phala-deploy/build-pin-mux-image.sh
+./phala-deploy/build-pin-mux.sh
 ```
 
 ### 3. Deploy

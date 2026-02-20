@@ -7,7 +7,7 @@ backup/
 .env.rollout
 .env.rollout-targets
 
-# local tarball artifact (built by build-pin-image.sh)
+# local tarball artifact (built by build-pin-openclaw.sh)
 openclaw.tgz
 
 # local mux e2e state

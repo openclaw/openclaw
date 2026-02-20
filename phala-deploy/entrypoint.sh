@@ -176,19 +176,28 @@ if [ -f "$CONFIG_FILE" ]; then
     const env = cfg.skills?.entries?.composio?.env || {};
     const url = env.COMPOSIO_MCP_URL || "";
     const token = env.COMPOSIO_MCP_TOKEN || "";
-    if (!url || !token) { process.exit(0); }
+    const apiKey = env.COMPOSIO_API_KEY || "";
+
+    let headers;
+    if (url && token) {
+      headers = { Authorization: "Bearer " + token };
+    } else if (url && apiKey) {
+      headers = { "x-api-key": apiKey };
+    } else {
+      if (url) console.log("Composio: COMPOSIO_MCP_URL set but no auth token/key — skipping mcporter config.");
+      else console.log("Composio: not configured, skipping mcporter config.");
+      process.exit(0);
+    }
+
     const cfgPath = "/root/.mcporter/mcporter.json";
     let mcpCfg = { mcpServers: {}, imports: [] };
     try { mcpCfg = JSON.parse(fs.readFileSync(cfgPath, "utf8")); } catch {}
     if (!mcpCfg.mcpServers) mcpCfg.mcpServers = {};
-    mcpCfg.mcpServers["clawdi-mcp"] = {
-      baseUrl: url,
-      headers: { Authorization: "Bearer " + token },
-    };
+    mcpCfg.mcpServers["clawdi-mcp"] = { baseUrl: url, headers };
     fs.mkdirSync("/root/.mcporter", { recursive: true });
     fs.writeFileSync(cfgPath, JSON.stringify(mcpCfg, null, 2), { mode: 0o600 });
-    console.log("mcporter config written for Composio MCP proxy.");
-  ' "$CONFIG_FILE" 2>/dev/null || true
+    console.log("mcporter config written for Composio MCP (" + (token ? "proxy" : "standalone") + " mode).");
+  ' "$CONFIG_FILE" || true
 fi
 
 # --- Pre-seed device pairing for local CLI ---

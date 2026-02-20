@@ -4,20 +4,18 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-IMAGE_REPO="${PHALA_IMAGE_REPO:-h4x3rotab/openclaw-cvm}"
-IMAGE_TAG="${PHALA_IMAGE_TAG:-latest}"
-COMPOSE_FILE="${PHALA_COMPOSE_FILE:-${SCRIPT_DIR}/docker-compose.yml}"
-NO_BUILD=0
-NO_UI_INSTALL=0
+IMAGE_REPO="${PHALA_MUX_IMAGE_REPO:-h4x3rotab/openclaw-mux}"
+IMAGE_TAG="${PHALA_MUX_IMAGE_TAG:-latest}"
+COMPOSE_FILE="${PHALA_MUX_COMPOSE_FILE:-${SCRIPT_DIR}/mux-server-compose.yml}"
 NO_PUSH=0
 DRY_RUN=0
 
 log() {
-  printf '[build-pin-image] %s\n' "$*"
+  printf '[build-pin-mux] %s\n' "$*"
 }
 
 die() {
-  printf '[build-pin-image] ERROR: %s\n' "$*" >&2
+  printf '[build-pin-mux] ERROR: %s\n' "$*" >&2
   exit 1
 }
 
@@ -27,23 +25,21 @@ Usage:
   $(basename "$0") [options]
 
 Options:
-  --image-repo <repo>     Docker image repo (default: h4x3rotab/openclaw-cvm)
+  --image-repo <repo>     Docker image repo (default: h4x3rotab/openclaw-mux)
   --image-tag <tag>       Docker image tag (default: latest)
-  --compose <path>        Compose file path (default: phala-deploy/docker-compose.yml)
-  --no-build              Skip pnpm build/ui/npm pack steps
-  --no-ui-install         Skip pnpm ui:install (useful if already installed)
+  --compose <path>        Compose file path (default: phala-deploy/mux-server-compose.yml)
   --no-push               Build image only (skip push and compose digest update)
   --dry-run               Print commands without executing
   -h, --help              Show this help
 
 Environment:
-  PHALA_IMAGE_REPO        Docker repo override
-  PHALA_IMAGE_TAG         Docker tag override
-  PHALA_COMPOSE_FILE      Compose file override
+  PHALA_MUX_IMAGE_REPO    Docker repo override
+  PHALA_MUX_IMAGE_TAG     Docker tag override
+  PHALA_MUX_COMPOSE_FILE  Compose file override
 
 Examples:
   $(basename "$0")
-  $(basename "$0") --image-repo your-user/openclaw-cvm --image-tag 2026.2.12
+  $(basename "$0") --image-repo your-user/openclaw-mux --image-tag 2026.2.13
 USAGE
 }
 
@@ -74,14 +70,6 @@ while [[ $# -gt 0 ]]; do
       COMPOSE_FILE="${2:-}"
       shift 2
       ;;
-    --no-build)
-      NO_BUILD=1
-      shift
-      ;;
-    --no-ui-install)
-      NO_UI_INSTALL=1
-      shift
-      ;;
     --no-push)
       NO_PUSH=1
       shift
@@ -101,36 +89,12 @@ while [[ $# -gt 0 ]]; do
 done
 
 require_cmd docker
-require_cmd pnpm
-require_cmd npm
 [[ -f "$COMPOSE_FILE" ]] || die "compose file not found: $COMPOSE_FILE"
 
 IMAGE_REF="${IMAGE_REPO}:${IMAGE_TAG}"
 
-if [[ "$NO_BUILD" -eq 0 ]]; then
-  log "building OpenClaw package tarball"
-  run pnpm --dir "$ROOT_DIR" build
-  if [[ "$NO_UI_INSTALL" -eq 0 ]]; then
-    run pnpm --dir "$ROOT_DIR" ui:install
-  fi
-  run pnpm --dir "$ROOT_DIR" ui:build
-
-  if [[ "$DRY_RUN" -eq 1 ]]; then
-    printf '%q ' npm --prefix "$ROOT_DIR" pack --pack-destination "$SCRIPT_DIR"
-    printf '\n'
-    log "dry-run: skipping tarball creation"
-  else
-    PACK_OUT="$(npm --prefix "$ROOT_DIR" pack --pack-destination "$SCRIPT_DIR")"
-    TGZ_NAME="$(printf '%s\n' "$PACK_OUT" | tail -n 1 | tr -d '[:space:]')"
-    [[ -n "$TGZ_NAME" ]] || die "failed to resolve npm pack output"
-    rm -f "$SCRIPT_DIR/openclaw.tgz"
-    mv -f "$SCRIPT_DIR/$TGZ_NAME" "$SCRIPT_DIR/openclaw.tgz"
-    log "updated tarball: $SCRIPT_DIR/openclaw.tgz"
-  fi
-fi
-
 log "building Docker image: $IMAGE_REF"
-run docker build -f "$SCRIPT_DIR/Dockerfile" -t "$IMAGE_REF" "$ROOT_DIR"
+run docker build -f "$ROOT_DIR/mux-server/Dockerfile" -t "$IMAGE_REF" "$ROOT_DIR"
 
 if [[ "$NO_PUSH" -eq 0 ]]; then
   log "pushing Docker image: $IMAGE_REF"
@@ -149,14 +113,17 @@ fi
 
 DIGEST="$(docker inspect --format='{{index .RepoDigests 0}}' "$IMAGE_REF")"
 [[ -n "$DIGEST" ]] || die "failed to resolve image digest"
-
 log "resolved digest: $DIGEST"
 
 TMP_FILE="$(mktemp)"
 awk -v digest="$DIGEST" '
-  BEGIN { updated = 0 }
+  BEGIN { in_mux = 0; updated = 0 }
+  # Reset on every top-level service key, then re-enable within mux-server.
+  # Order matters: the mux-server line matches both patterns.
+  /^  [^[:space:]].*:/ { in_mux = 0 }
+  /^  mux-server:/ { in_mux = 1 }
   {
-    if (!updated && $1 == "image:") {
+    if (in_mux && !updated && $1 == "image:") {
       print "    image: " digest
       updated = 1
       next
@@ -170,8 +137,8 @@ awk -v digest="$DIGEST" '
   }
 ' "$COMPOSE_FILE" > "$TMP_FILE" || {
   rm -f "$TMP_FILE"
-  die "could not find image: line in $COMPOSE_FILE"
+  die "could not find mux-server image: line in $COMPOSE_FILE"
 }
 
 mv "$TMP_FILE" "$COMPOSE_FILE"
-log "updated compose image digest in $COMPOSE_FILE"
+log "updated mux compose image digest in $COMPOSE_FILE"

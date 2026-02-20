@@ -148,6 +148,7 @@ deploy() {
   if (( DRY_RUN )); then
     log "[dry-run] ${rv_cmd[*]}"
     generate_openclaw_config "$DEPLOY_ENV_FILE"
+
     log "[dry-run] phala deploy --cvm-id $OPENCLAW_CVM_ID -c $COMPOSE_FILE -e $DEPLOY_ENV_FILE"
     return 0
   fi

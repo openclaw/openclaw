@@ -202,22 +202,55 @@ Once the CVM is running, generate a pairing token to link a chat to your instanc
 
 This calls `POST /v1/admin/pairings/token` on the mux-server. Send the returned token as a message in the Telegram bot to complete pairing.
 
-### Modifying config on an existing CVM
+### Manual pairing (without mux-pair-token.sh)
 
-`OPENCLAW_CONFIG_B64` is only used on first boot (when no `openclaw.json` exists yet). To update config on a running CVM, SSH in and edit the JSON directly:
+If you don't have `.env.rollout-targets`, issue tokens directly:
 
 ```sh
-export CVM_SSH_HOST=<app_id>-1022.<gateway>.phala.network
+# 1. Get the device ID from the OpenClaw CVM
+phala ssh <openclaw-cvm-id> -- \
+  'docker exec openclaw cat /root/.openclaw/identity/device.json' \
+  | jq -r .deviceId
 
-# Open an interactive shell
-./phala-deploy/cvm-ssh
+# 2. Build the payload (telegram example — change channel for whatsapp/discord)
+jq -nc \
+  --arg oid "<deviceId>" \
+  --arg iu "https://<openclaw-app-id>-18789.<gateway>/v1/mux/inbound" \
+  '{openclawId:$oid, inboundUrl:$iu, inboundTimeoutMs:15000, channel:"telegram", ttlSec:900}' \
+  > /tmp/pair.json
 
-# Edit the config inside the CVM
-vi /root/.openclaw/openclaw.json
-
-# Restart the gateway to pick up changes (the supervisor loop restarts it automatically)
-pkill -f "openclaw gateway"
+# 3. Issue the token
+curl -sS -X POST "https://<mux-app-id>-18891.<gateway>/v1/admin/pairings/token" \
+  -H "Authorization: Bearer <MUX_ADMIN_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d @/tmp/pair.json | jq .
 ```
+
+The response includes `token` (and `startCommand` for Telegram). Send the token as a message in the chat to complete pairing.
+
+### Modifying config on an existing CVM
+
+> **Important:** `OPENCLAW_CONFIG_B64` is only written on **first boot** (when no `openclaw.json` exists). Subsequent deploys with `phala deploy` preserve the existing config on the data volume. To change config after first boot, edit the file directly.
+
+Use `phala ssh` and `phala cp` to transfer files — this works even on images without SSH:
+
+```sh
+# 1. Download: container → CVM host → local
+phala ssh <cvm-id> -- docker cp openclaw:/root/.openclaw/openclaw.json /tmp/openclaw.json
+phala cp <cvm-id>:/tmp/openclaw.json ./openclaw.json
+
+# 2. Edit locally
+vi ./openclaw.json   # or jq, node -e, etc.
+
+# 3. Upload: local → CVM host → container
+phala cp ./openclaw.json <cvm-id>:/tmp/openclaw.json
+phala ssh <cvm-id> -- docker cp /tmp/openclaw.json openclaw:/root/.openclaw/openclaw.json
+
+# 4. Restart to pick up changes
+phala ssh <cvm-id> -- docker restart openclaw
+```
+
+> **Note:** A few fields hot-reload without restart (e.g., `skills`, `agents.defaults.model.primary`), but structural changes (model providers, gateway config) require a container restart.
 
 Key config fields:
 
@@ -225,6 +258,39 @@ Key config fields:
    - For `inboundUrl`, use `https://${DSTACK_APP_ID}-18789.${DSTACK_GATEWAY_DOMAIN}/v1/mux/inbound` — the placeholders are resolved at boot time
 2. `channels.<channel>.accounts.mux` — `enabled: true` and `mux: { enabled: true, timeoutMs: 30000 }`
 3. `plugins.entries.<channel>.enabled` — `true` for each channel
+
+### Config migrations
+
+`migrate-openclaw.sh` applies idempotent patches to a running CVM's `openclaw.json`. It downloads the config, runs each migration locally, and uploads it back only if something changed.
+
+Available migrations:
+
+| Migration  | Trigger env var       | What it does                                                                            |
+| ---------- | --------------------- | --------------------------------------------------------------------------------------- |
+| `composio` | `COMPOSEIO_ADMIN_API` | Creates a Composio Tool Router session, injects `COMPOSIO_MCP_URL` + `COMPOSIO_API_KEY` |
+
+Usage:
+
+```sh
+# With Composio API key from vault:
+rv-exec COMPOSEIO_ADMIN_API -- bash phala-deploy/migrate-openclaw.sh <cvm-id>
+
+# With API key directly:
+COMPOSEIO_ADMIN_API=ak_xxx bash phala-deploy/migrate-openclaw.sh <cvm-id>
+```
+
+After migration, restart the container so the entrypoint writes the mcporter config:
+
+```sh
+phala ssh <cvm-id> -- docker restart openclaw
+```
+
+Verify Composio is working:
+
+```sh
+phala ssh <cvm-id> -- 'docker exec openclaw mcporter list clawdi-mcp'
+# Should show 6 tools
+```
 
 ## How S3 storage works
 
@@ -340,8 +406,9 @@ The entrypoint keeps SSH available even if the gateway crashes and restarts it w
 Two commands: build, then deploy.
 
 ```sh
-# Build and push both images (openclaw + mux-server)
-./phala-deploy/build.sh
+# Build and push images
+./phala-deploy/build-pin-openclaw.sh
+./phala-deploy/build-pin-mux.sh        # only when mux changed
 
 # Deploy OpenClaw CVM
 rv-exec MASTER_KEY REDPILL_API_KEY S3_BUCKET S3_ENDPOINT S3_PROVIDER S3_REGION \
@@ -353,9 +420,44 @@ rv-exec MUX_REGISTER_KEY MUX_ADMIN_TOKEN TELEGRAM_BOT_TOKEN_PROD DISCORD_BOT_TOK
   -- bash phala-deploy/deploy-mux.sh
 ```
 
-`build.sh` accepts `--openclaw-only` or `--mux-only` to build one image. Both deploy scripts accept `--dry-run`, `--test-only` (smoke tests without deploying), and `--skip-test`.
+Both deploy scripts accept `--dry-run`, `--test-only` (smoke tests without deploying), and `--skip-test`.
 
 All scripts read CVM IDs from `phala-deploy/.env.rollout-targets` (see `cvm-rollout-targets.env.example`).
+
+### Manual deploy (without deploy-openclaw.sh)
+
+If you manage secrets outside rv vault (e.g., a local env file), deploy manually:
+
+```sh
+# 1. Build and push a new image (pins digest in docker-compose.yml)
+./phala-deploy/build-pin-openclaw.sh
+
+# 2. Download the existing config from the CVM (preserved across deploys)
+phala ssh <cvm-id> -- docker cp openclaw:/root/.openclaw/openclaw.json /tmp/openclaw.json
+phala cp <cvm-id>:/tmp/openclaw.json ./openclaw.json
+
+# 3. Base64-encode it
+OPENCLAW_CONFIG_B64=$(base64 -w0 ./openclaw.json)
+
+# 4. Build your env file (S3 vars optional — omit for local-only mode)
+cat > /tmp/deploy.env <<EOF
+MASTER_KEY=<from-your-env-file>
+REDPILL_API_KEY=<your-key>
+OPENCLAW_CONFIG_B64=${OPENCLAW_CONFIG_B64}
+EOF
+chmod 600 /tmp/deploy.env
+
+# 5. Deploy
+phala deploy --cvm-id <cvm-id> -c phala-deploy/docker-compose.yml -e /tmp/deploy.env
+
+# 6. Wait for the CVM to come up (image pull can take 5-10 min on a new node)
+phala cvms list    # check status: starting → running
+
+# 7. Verify
+phala ssh <cvm-id> -- docker logs openclaw 2>&1 | grep -iE '(mcporter|Starting|error)'
+```
+
+> **Tip:** If you only need to update the config (not the image), skip steps 1 and 4-5 and use the [download-edit-upload](#modifying-config-on-an-existing-cvm) workflow instead.
 
 **Verification:** each deploy script runs smoke tests automatically. For manual checks:
 
@@ -384,11 +486,11 @@ If your CVM is destroyed (S3 mode only):
 | `entrypoint.sh`          | Boot sequence: key derivation, S3 mount, SSH, Docker, gateway     |
 | `docker-compose.yml`     | Compose file for `phala deploy`                                   |
 | `mux-server-compose.yml` | Compose file for mux-server CVM deployment                        |
-| `build.sh`               | Build and push both images (wraps the two scripts below)          |
-| `build-pin-image.sh`     | Rebuild tarball + image, push, and pin compose image digest       |
-| `build-pin-mux-image.sh` | Rebuild mux image, push, and pin mux compose digest               |
+| `build-pin-openclaw.sh`  | Rebuild tarball + image, push, and pin compose image digest       |
+| `build-pin-mux.sh`       | Rebuild mux image, push, and pin mux compose digest               |
 | `deploy-openclaw.sh`     | Deploy OpenClaw CVM, wait for health, run smoke tests             |
 | `deploy-mux.sh`          | Deploy mux-server CVM, wait for health, run smoke tests           |
+| `migrate-openclaw.sh`    | Apply config migrations to a running CVM via SSH                  |
 | `gen-cvm-config.sh`      | Generate `OPENCLAW_CONFIG_B64` from env vars (MASTER_KEY, etc.)   |
 | `mux-pair-token.sh`      | Mint mux pairing token for a tenant OpenClaw instance (admin API) |
 | `UPDATE_RUNBOOK.md`      | Detailed update runbook with fallback procedures                  |
