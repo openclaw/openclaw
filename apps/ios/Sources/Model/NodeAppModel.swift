@@ -2140,9 +2140,7 @@ private extension NodeAppModel {
             clientId: clientId,
             clientMode: "ui",
             clientDisplayName: displayName,
-            // Operator traffic should authenticate via shared gateway auth only.
-            // Including device identity here can trigger duplicate pairing flows.
-            includeDeviceIdentity: false)
+            includeDeviceIdentity: true)
     }
 
     func legacyClientIdFallback(currentClientId: String, error: Error) -> String? {
