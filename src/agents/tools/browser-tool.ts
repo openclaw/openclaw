@@ -21,7 +21,7 @@ import {
 } from "../../browser/client.js";
 import { resolveBrowserConfig } from "../../browser/config.js";
 import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "../../browser/constants.js";
-import { DEFAULT_UPLOAD_DIR, resolvePathsWithinRoot } from "../../browser/paths.js";
+import { DEFAULT_UPLOAD_DIR, resolveExistingPathsWithinRoot } from "../../browser/paths.js";
 import { applyBrowserProxyPaths, persistBrowserProxyFiles } from "../../browser/proxy-files.js";
 import { loadConfig } from "../../config/config.js";
 import { wrapExternalContent } from "../../security/external-content.js";
@@ -700,7 +700,7 @@ export function createBrowserTool(opts?: {
           if (paths.length === 0) {
             throw new Error("paths required");
           }
-          const uploadPathsResult = resolvePathsWithinRoot({
+          const uploadPathsResult = await resolveExistingPathsWithinRoot({
             rootDir: DEFAULT_UPLOAD_DIR,
             requestedPaths: paths,
             scopeLabel: `uploads directory (${DEFAULT_UPLOAD_DIR})`,

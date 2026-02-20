@@ -24,7 +24,9 @@ async function withAudioFixture(
   await fs.writeFile(tmpPath, Buffer.from("RIFF"));
   const ctx: MsgContext = { MediaPath: tmpPath, MediaType: "audio/wav" };
   const media = normalizeMediaAttachments(ctx);
-  const cache = createMediaAttachmentCache(media);
+  const cache = createMediaAttachmentCache(media, {
+    localPathRoots: [os.tmpdir()],
+  });
 
   try {
     await run({ ctx, media, cache });

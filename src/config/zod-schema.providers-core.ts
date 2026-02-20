@@ -21,6 +21,7 @@ import {
   ProviderCommandsSchema,
   ReplyToModeSchema,
   RetryConfigSchema,
+  TtsConfigSchema,
   requireOpenAllowFrom,
 } from "./zod-schema.core.js";
 import { sensitive } from "./zod-schema.sensitive.js";
@@ -271,6 +272,22 @@ const DiscordUiSchema = z
   .strict()
   .optional();
 
+const DiscordVoiceAutoJoinSchema = z
+  .object({
+    guildId: z.string().min(1),
+    channelId: z.string().min(1),
+  })
+  .strict();
+
+const DiscordVoiceSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    autoJoin: z.array(DiscordVoiceAutoJoinSchema).optional(),
+    tts: TtsConfigSchema.optional(),
+  })
+  .strict()
+  .optional();
+
 export const DiscordAccountSchema = z
   .object({
     name: z.string().optional(),
@@ -290,6 +307,8 @@ export const DiscordAccountSchema = z
     chunkMode: z.enum(["length", "newline"]).optional(),
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
+    streamMode: z.enum(["partial", "block", "off"]).optional().default("off"),
+    draftChunk: BlockStreamingChunkSchema.optional(),
     maxLinesPerMessage: z.number().int().positive().optional(),
     mediaMaxMb: z.number().positive().optional(),
     retry: RetryConfigSchema,
@@ -345,6 +364,7 @@ export const DiscordAccountSchema = z
       })
       .strict()
       .optional(),
+    voice: DiscordVoiceSchema,
     pluralkit: z
       .object({
         enabled: z.boolean().optional(),

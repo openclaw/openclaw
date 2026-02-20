@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import {
   approveDevicePairing,
+  clearDevicePairing,
   getPairedDevice,
   removePairedDevice,
   requestDevicePairing,
@@ -97,7 +98,7 @@ describe("device pairing tokens", () => {
     expect(Buffer.from(token, "base64url")).toHaveLength(32);
   });
 
-  test("preserves existing token scopes when rotating without scopes", async () => {
+  test("allows down-scoping from admin and preserves approved scope baseline", async () => {
     const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
     await setupPairedOperatorDevice(baseDir, ["operator.admin"]);
 
@@ -109,7 +110,8 @@ describe("device pairing tokens", () => {
     });
     let paired = await getPairedDevice("device-1", baseDir);
     expect(paired?.tokens?.operator?.scopes).toEqual(["operator.read"]);
-    expect(paired?.scopes).toEqual(["operator.read"]);
+    expect(paired?.scopes).toEqual(["operator.admin"]);
+    expect(paired?.approvedScopes).toEqual(["operator.admin"]);
 
     await rotateDeviceToken({
       deviceId: "device-1",
@@ -118,6 +120,26 @@ describe("device pairing tokens", () => {
     });
     paired = await getPairedDevice("device-1", baseDir);
     expect(paired?.tokens?.operator?.scopes).toEqual(["operator.read"]);
+  });
+
+  test("rejects scope escalation when rotating a token and leaves state unchanged", async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
+    await setupPairedOperatorDevice(baseDir, ["operator.read"]);
+    const before = await getPairedDevice("device-1", baseDir);
+
+    const rotated = await rotateDeviceToken({
+      deviceId: "device-1",
+      role: "operator",
+      scopes: ["operator.admin"],
+      baseDir,
+    });
+    expect(rotated).toBeNull();
+
+    const after = await getPairedDevice("device-1", baseDir);
+    expect(after?.tokens?.operator?.token).toEqual(before?.tokens?.operator?.token);
+    expect(after?.tokens?.operator?.scopes).toEqual(["operator.read"]);
+    expect(after?.scopes).toEqual(["operator.read"]);
+    expect(after?.approvedScopes).toEqual(["operator.read"]);
   });
 
   test("verifies token and rejects mismatches", async () => {
@@ -199,5 +221,14 @@ describe("device pairing tokens", () => {
     await expect(getPairedDevice("device-1", baseDir)).resolves.toBeNull();
 
     await expect(removePairedDevice("device-1", baseDir)).resolves.toBeNull();
+  });
+
+  test("clears paired device state by device id", async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
+    await setupPairedOperatorDevice(baseDir, ["operator.read"]);
+
+    await expect(clearDevicePairing("device-1", baseDir)).resolves.toBe(true);
+    await expect(getPairedDevice("device-1", baseDir)).resolves.toBeNull();
+    await expect(clearDevicePairing("device-1", baseDir)).resolves.toBe(false);
   });
 });
