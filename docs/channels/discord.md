@@ -817,6 +817,47 @@ Example:
 }
 ```
 
+## Voice channels
+
+OpenClaw can join Discord voice channels for realtime, continuous conversations. This is separate from voice message attachments.
+
+Requirements:
+
+- Enable native commands (`commands.native` or `channels.discord.commands.native`).
+- Configure `channels.discord.voice`.
+- The bot needs Connect + Speak permissions in the target voice channel.
+
+Use the Discord-only native command `/vc join|leave|status` to control sessions. The command uses the account default agent and follows the same allowlist and group policy rules as other Discord commands.
+
+Auto-join example:
+
+```json5
+{
+  channels: {
+    discord: {
+      voice: {
+        enabled: true,
+        autoJoin: [
+          {
+            guildId: "123456789012345678",
+            channelId: "234567890123456789",
+          },
+        ],
+        tts: {
+          provider: "openai",
+          openai: { voice: "alloy" },
+        },
+      },
+    },
+  },
+}
+```
+
+Notes:
+
+- `voice.tts` overrides `messages.tts` for voice playback only.
+- Voice is enabled by default; set `channels.discord.voice.enabled=false` to disable it.
+
 ## Voice messages
 
 Discord voice messages show a waveform preview and require OGG/Opus audio plus metadata. OpenClaw generates the waveform automatically, but it needs `ffmpeg` and `ffprobe` available on the gateway host to inspect and convert audio files.

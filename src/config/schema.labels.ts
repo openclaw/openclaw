@@ -291,6 +291,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "channels.discord.ui.components.accentColor": "Discord Component Accent Color",
   "channels.discord.intents.presence": "Discord Presence Intent",
   "channels.discord.intents.guildMembers": "Discord Guild Members Intent",
+  "channels.discord.voice.enabled": "Discord Voice Enabled",
+  "channels.discord.voice.autoJoin": "Discord Voice Auto-Join",
   "channels.discord.pluralkit.enabled": "Discord PluralKit Enabled",
   "channels.discord.pluralkit.token": "Discord PluralKit Token",
   "channels.discord.activity": "Discord Presence Activity",

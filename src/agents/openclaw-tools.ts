@@ -107,10 +107,7 @@ export function createOpenClawTools(options?: {
       sandboxBridgeUrl: options?.sandboxBrowserBridgeUrl,
       allowHostControl: options?.allowHostBrowserControl,
     }),
-    createCanvasTool({
-      config: options?.config,
-      agentSessionKey: options?.agentSessionKey,
-    }),
+    createCanvasTool({ config: options?.config }),
     createNodesTool({
       agentSessionKey: options?.agentSessionKey,
       config: options?.config,
