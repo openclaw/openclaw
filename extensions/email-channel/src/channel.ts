@@ -1,9 +1,10 @@
 import type { ChannelPlugin, PluginRuntime } from "openclaw/plugin-sdk";
-import { startEmail, stopEmail, sendEmail } from "./runtime";
+import { startEmail, stopEmail, sendEmail } from "./runtime.js";
 
 let runtime: PluginRuntime | null = null;
 
 interface EmailAccount {
+  accountId?: string;
   enabled?: boolean;
   imap: {
     host: string;
@@ -49,10 +50,10 @@ const emailPlugin: ChannelPlugin<EmailAccount> = {
     selectionLabel: "Email (IMAP/SMTP)",
     docsPath: "/channels/email",
     blurb: "Send and receive email via IMAP/SMTP servers.",
-    aliases: ["mail", "smtp"]
+    aliases: ["mail", "smtp"],
   },
   capabilities: {
-    chatTypes: ["direct"]
+    chatTypes: ["direct"],
   },
   config: {
     listAccountIds: (cfg) => {
@@ -65,7 +66,7 @@ const emailPlugin: ChannelPlugin<EmailAccount> = {
       return {
         accountId: accountId || "default",
         enabled: account.enabled ?? true,
-        ...account
+        ...account,
       } as EmailAccount;
     },
     isConfigured: (account) => {
@@ -77,9 +78,9 @@ const emailPlugin: ChannelPlugin<EmailAccount> = {
         account.smtp?.host &&
         account.smtp?.port &&
         account.smtp?.user &&
-        account.smtp?.password
+        account.smtp?.password,
       );
-    }
+    },
   },
   gateway: {
     startAccount: async (ctx) => {
@@ -93,12 +94,22 @@ const emailPlugin: ChannelPlugin<EmailAccount> = {
         return;
       }
 
-      if (!account.imap?.host || !account.imap?.port || !account.imap?.user || !account.imap?.password) {
+      if (
+        !account.imap?.host ||
+        !account.imap?.port ||
+        !account.imap?.user ||
+        !account.imap?.password
+      ) {
         ctx.log?.error?.(`[${account.accountId}] Email IMAP configuration incomplete`);
         return;
       }
 
-      if (!account.smtp?.host || !account.smtp?.port || !account.smtp?.user || !account.smtp?.password) {
+      if (
+        !account.smtp?.host ||
+        !account.smtp?.port ||
+        !account.smtp?.user ||
+        !account.smtp?.password
+      ) {
         ctx.log?.error?.(`[${account.accountId}] Email SMTP configuration incomplete`);
         return;
       }
@@ -107,7 +118,9 @@ const emailPlugin: ChannelPlugin<EmailAccount> = {
 
       // Log allowed senders configuration
       if (account.allowedSenders && account.allowedSenders.length > 0) {
-        ctx.log?.info?.(`[${account.accountId}] Only accepting emails from: ${account.allowedSenders.join(", ")}`);
+        ctx.log?.info?.(
+          `[${account.accountId}] Only accepting emails from: ${account.allowedSenders.join(", ")}`,
+        );
       } else {
         ctx.log?.info?.(`[${account.accountId}] Accepting emails from all senders`);
       }
@@ -120,16 +133,25 @@ const emailPlugin: ChannelPlugin<EmailAccount> = {
         const sessionKey = `email:${fromEmail}`;
 
         // Create a readable title for the session in Dashboard
-        const title = `📧 ${fromEmail}${subject ? ` - ${subject}` : ''}`;
+        const title = `📧 ${fromEmail}${subject ? ` - ${subject}` : ""}`;
 
-        ctx.log?.info?.(`[${account.accountId}] Processing email from ${fromEmail}: "${subject}" (UID: ${uid})`);
+        ctx.log?.info?.(
+          `[${account.accountId}] Processing email from ${fromEmail}: "${subject}" (UID: ${uid})`,
+        );
 
         try {
           // Store email context for outbound messaging
           emailContexts.set(sessionKey, { fromEmail, subject, messageId });
 
-          // Use runtime to dispatch the message
-          const core = runtime!.channel;
+          // Check if channelRuntime is available (Plugin SDK 2026.2.19+)
+          if (!ctx.channelRuntime) {
+            throw new Error(
+              "Email channel requires Plugin SDK 2026.2.19 or later with channelRuntime support",
+            );
+          }
+
+          // Use channelRuntime to dispatch the message
+          const core = ctx.channelRuntime;
 
           // Use the dispatch function to process the message
           const result = await core.reply.dispatchReplyWithBufferedBlockDispatcher({
@@ -156,7 +178,7 @@ const emailPlugin: ChannelPlugin<EmailAccount> = {
               humanDelay: core.reply.resolveEffectiveMessagesConfig(ctx.cfg, undefined).humanDelay,
               deliver: async (payload, info) => {
                 // Send the reply via email
-                const replyText = payload.text || '';
+                const replyText = payload.text || "";
                 ctx.log?.info?.(`[${account.accountId}] Sending reply to ${fromEmail}`);
                 await sendEmail(fromEmail, subject, replyText, messageId);
               },
@@ -173,19 +195,24 @@ const emailPlugin: ChannelPlugin<EmailAccount> = {
         } catch (error: any) {
           // Log detailed error information
           const errorMsg = error?.message || String(error);
-          const errorStack = error?.stack || '';
+          const errorStack = error?.stack || "";
           const errorDetails = error?.toString() || String(error);
 
           ctx.log?.error?.(`[${account.accountId}] Error processing email from ${fromEmail}:`);
-          ctx.log?.error?.(`[${account.accountId}] Error type: ${error?.constructor?.name || 'Unknown'}`);
+          ctx.log?.error?.(
+            `[${account.accountId}] Error type: ${error?.constructor?.name || "Unknown"}`,
+          );
           ctx.log?.error?.(`[${account.accountId}] Error message: ${errorMsg}`);
           if (errorStack) {
-            ctx.log?.error?.(`[${account.accountId}] Stack trace: ${errorStack.split('\n').slice(0, 5).join(' | ')}`);
+            ctx.log?.error?.(
+              `[${account.accountId}] Stack trace: ${errorStack.split("\n").slice(0, 5).join(" | ")}`,
+            );
           }
           ctx.log?.error?.(`[${account.accountId}] Full error: ${errorDetails}`);
 
           // Send error notification to sender
-          const errorMessage = "Sorry, there was an error processing your request. Please try again later.";
+          const errorMessage =
+            "Sorry, there was an error processing your request. Please try again later.";
           await sendEmail(fromEmail, subject, errorMessage, messageId);
         }
       });
@@ -195,7 +222,7 @@ const emailPlugin: ChannelPlugin<EmailAccount> = {
         ctx.log?.info?.(`[${account.accountId}] Stopping email channel`);
         stopEmail();
       };
-    }
+    },
   },
   outbound: {
     deliveryMode: "direct",
@@ -210,7 +237,7 @@ const emailPlugin: ChannelPlugin<EmailAccount> = {
 
       const success = await sendEmail(recipientEmail, subject, text, messageId);
       return { ok: success };
-    }
+    },
   },
   messaging: {
     normalizeTarget: ({ to }) => {
@@ -218,8 +245,8 @@ const emailPlugin: ChannelPlugin<EmailAccount> = {
       // We store the context in dispatch, so we can retrieve it here
       // For now, return the email as-is (it will be formatted in dispatch)
       return to;
-    }
-  }
+    },
+  },
 };
 
 export { emailPlugin };

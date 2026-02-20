@@ -1,7 +1,7 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
-import { emailPlugin } from "./src/channel";
-import { setEmailRuntime } from "./src/channel";
+import { emailPlugin } from "./src/channel.js";
+import { setEmailRuntime } from "./src/channel.js";
 
 const plugin = {
   id: "email",

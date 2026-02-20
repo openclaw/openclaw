@@ -3,43 +3,26 @@
   "version": "1.0.0",
   "private": true,
   "description": "OpenClaw Email channel plugin - Send and receive messages via IMAP/SMTP",
-  "type": "module",
-  "main": "index.ts",
   "keywords": [
-    "openclaw",
-    "plugin",
     "channel",
     "email",
     "imap",
+    "openclaw",
+    "plugin",
     "smtp"
   ],
-  "author": "OpenClaw Contributors",
+  "bugs": {
+    "url": "https://github.com/openclaw/openclaw/issues"
+  },
   "license": "MIT",
+  "author": "OpenClaw Contributors",
   "repository": {
     "type": "git",
     "url": "https://github.com/openclaw/openclaw",
     "directory": "extensions/email-channel"
   },
-  "bugs": {
-    "url": "https://github.com/openclaw/openclaw/issues"
-  },
-  "openclaw": {
-    "extensions": [
-      "./index.ts"
-    ],
-    "channel": {
-      "id": "email",
-      "label": "Email",
-      "selectionLabel": "Email (IMAP/SMTP)",
-      "docsPath": "/channels/email",
-      "blurb": "Send and receive email via IMAP/SMTP servers.",
-      "order": 100,
-      "aliases": [
-        "mail",
-        "smtp"
-      ]
-    }
-  },
+  "type": "module",
+  "main": "index.ts",
   "dependencies": {
     "imap": "^0.8.19",
     "mailparser": "^3.6.9",
@@ -52,5 +35,10 @@
   },
   "engines": {
     "node": ">=18.0.0"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
   }
 }
