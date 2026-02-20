@@ -1455,6 +1455,53 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 });
 
+describe("runReplyAgent heartbeat model isolation", () => {
+  it("does not persist heartbeat model/context over the user session model", async () => {
+    const fixtureRoot = await fs.mkdtemp(path.join(tmpdir(), "openclaw-heartbeat-model-isolation-"));
+    try {
+      const storePath = path.join(fixtureRoot, "sessions.json");
+      const sessionKey = "main";
+      const sessionEntry: SessionEntry = {
+        sessionId: "session",
+        updatedAt: Date.now(),
+        modelProvider: "openrouter",
+        model: "minimax/minimax-m2.5",
+        contextTokens: 200_000,
+      };
+
+      await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+
+      state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => ({
+        payloads: [{ text: "heartbeat reply" }],
+        meta: {
+          agentMeta: {
+            usage: { input: 42, output: 7 },
+            provider: "ollama",
+            model: "qwen3:8b",
+          },
+        },
+      }));
+
+      const { run } = createMinimalRun({
+        opts: { isHeartbeat: true },
+        sessionStore: { [sessionKey]: sessionEntry },
+        sessionEntry,
+        sessionKey,
+        storePath,
+      });
+
+      await run();
+
+      const persisted = JSON.parse(await fs.readFile(storePath, "utf-8"));
+      expect(persisted[sessionKey]?.modelProvider).toBe("openrouter");
+      expect(persisted[sessionKey]?.model).toBe("minimax/minimax-m2.5");
+      expect(persisted[sessionKey]?.contextTokens).toBe(200_000);
+    } finally {
+      await fs.rm(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("runReplyAgent memory flush", () => {
   let fixtureRoot = "";
   let caseId = 0;

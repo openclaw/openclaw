@@ -491,9 +491,11 @@ export async function runReplyAgent(params: {
       usage,
       lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
       promptTokens,
-      modelUsed,
-      providerUsed,
-      contextTokensUsed,
+      // Heartbeat runs may use heartbeat.model overrides; do not persist those
+      // into the user session's model/context fields.
+      modelUsed: isHeartbeat ? undefined : modelUsed,
+      providerUsed: isHeartbeat ? undefined : providerUsed,
+      contextTokensUsed: isHeartbeat ? undefined : contextTokensUsed,
       systemPromptReport: runResult.meta?.systemPromptReport,
       cliSessionId,
     });
