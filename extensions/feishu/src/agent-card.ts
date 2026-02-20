@@ -38,12 +38,27 @@ function mergeStreamText(prev: string, next: string): string {
     return prev;
   }
 
-  const maxOverlap = Math.min(prev.length, next.length);
+  // Providers vary: partial chunks may be deltas or cumulative full text, and `final` may
+  // resend the full assistant content. Do a whitespace-insensitive containment/overlap merge
+  // so we don't duplicate paragraphs when strings differ only by spacing/newlines.
+  const prevWs = stripWhitespace(prev);
+  const nextWs = stripWhitespace(next);
+
+  if (nextWs && prevWs && nextWs.includes(prevWs)) {
+    return next;
+  }
+  if (nextWs && prevWs && prevWs.includes(nextWs)) {
+    return prev;
+  }
+
+  const maxOverlap = Math.min(prevWs.length, nextWs.length);
   for (let overlap = maxOverlap; overlap > 0; overlap--) {
-    if (prev.slice(-overlap) === next.slice(0, overlap)) {
-      return prev + next.slice(overlap);
+    if (prevWs.slice(-overlap) === nextWs.slice(0, overlap)) {
+      const remaining = stripLeadingByNonWsPrefix(next, nextWs.slice(0, overlap));
+      return prev + remaining;
     }
   }
+
   return prev + next;
 }
 
