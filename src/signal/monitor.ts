@@ -20,7 +20,7 @@ import type {
   SignalReactionTarget,
 } from "./monitor/event-handler.types.js";
 import { sendMessageSignal } from "./send.js";
-import { runSignalSseLoop } from "./sse-reconnect.js";
+import { runSignalReceiveLoop } from "./sse-reconnect.js";
 
 export type MonitorSignalOpts = {
   runtime?: RuntimeEnv;
@@ -350,7 +350,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       buildSignalReactionSystemEventText,
     });
 
-    await runSignalSseLoop({
+    await runSignalReceiveLoop({
       baseUrl,
       account,
       abortSignal: opts.abortSignal,

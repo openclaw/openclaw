@@ -193,3 +193,84 @@ export async function streamSignalEvents(params: {
 
   flushEvent();
 }
+
+export type SignalApiMode = "sse" | "jsonrpc";
+
+/**
+ * Probe the signal-cli HTTP API to determine whether it exposes an SSE
+ * endpoint (/api/v1/events — used by the bbernhard REST wrapper) or only
+ * the native JSON-RPC WebSocket (/api/v1/rpc).
+ */
+export async function detectSignalApiMode(
+  baseUrl: string,
+  timeoutMs = 3_000,
+): Promise<SignalApiMode> {
+  const normalized = normalizeBaseUrl(baseUrl);
+  const fetchImpl = resolveFetch();
+  if (!fetchImpl) {
+    return "jsonrpc";
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetchImpl(`${normalized}/api/v1/events`, {
+      method: "GET",
+      headers: { Accept: "text/event-stream" },
+      signal: controller.signal,
+    });
+    // Close the body immediately — we only care about the status code.
+    try {
+      await res.body?.cancel();
+    } catch {
+      /* ignore */
+    }
+    return res.ok ? "sse" : "jsonrpc";
+  } catch {
+    return "jsonrpc";
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Poll for incoming Signal messages via the native signal-cli JSON-RPC
+ * HTTP endpoint.  Calls the `receive` method with a long-poll timeout;
+ * each returned envelope is normalised into a SignalSseEvent so the
+ * existing event handler works unchanged.
+ *
+ * Requires the daemon to be started with `--receive-mode manual`.
+ */
+export async function pollSignalJsonRpc(params: {
+  baseUrl: string;
+  account?: string;
+  abortSignal?: AbortSignal;
+  onEvent: (event: SignalSseEvent) => void;
+  pollTimeoutSec?: number;
+}): Promise<void> {
+  if (params.abortSignal?.aborted) {
+    return;
+  }
+  const pollTimeout = params.pollTimeoutSec ?? 10;
+  const rpcParams: Record<string, unknown> = { timeout: pollTimeout };
+  if (params.account) {
+    rpcParams.account = params.account;
+  }
+
+  const result = await signalRpcRequest<unknown[]>("receive", rpcParams, {
+    baseUrl: params.baseUrl,
+    // HTTP timeout must exceed the long-poll timeout
+    timeoutMs: (pollTimeout + 5) * 1000,
+  });
+
+  if (!Array.isArray(result)) {
+    return;
+  }
+  for (const entry of result) {
+    if (entry && typeof entry === "object") {
+      params.onEvent({
+        event: "receive",
+        data: JSON.stringify(entry),
+      });
+    }
+  }
+}
