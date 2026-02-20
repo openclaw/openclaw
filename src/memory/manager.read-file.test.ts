@@ -3,8 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import type { MemoryIndexManager } from "./index.js";
 import { resetEmbeddingMocks } from "./embedding.test-mocks.js";
+import type { MemoryIndexManager } from "./index.js";
 import { getRequiredMemoryIndexManager } from "./test-manager-helpers.js";
 
 function createMemorySearchCfg(options: {
