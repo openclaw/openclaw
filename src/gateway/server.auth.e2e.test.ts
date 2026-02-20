@@ -687,7 +687,7 @@ describe("gateway server auth/connect", () => {
     });
   });
 
-  test("allows control ui without device identity when insecure auth is enabled", async () => {
+  test("rejects control ui without device identity even when insecure auth is enabled", async () => {
     testState.gatewayControlUi = { allowInsecureAuth: true };
     const { server, ws, prevToken } = await startServerWithClient("secret", {
       wsHeaders: { origin: "http://127.0.0.1" },
@@ -702,13 +702,32 @@ describe("gateway server auth/connect", () => {
         mode: GATEWAY_CLIENT_MODES.WEBCHAT,
       },
     });
-    expect(res.ok).toBe(true);
+    expect(res.ok).toBe(false);
+    expect(res.error?.message ?? "").toContain("secure context");
     ws.close();
     await server.close();
     restoreGatewayToken(prevToken);
   });
 
-  test("allows control ui with device identity when insecure auth is enabled", async () => {
+  test("rejects control ui password-only auth when insecure auth is enabled", async () => {
+    testState.gatewayControlUi = { allowInsecureAuth: true };
+    testState.gatewayAuth = { mode: "password", password: "secret" };
+    await withGatewayServer(async ({ port }) => {
+      const ws = await openWs(port, { origin: originForPort(port) });
+      const res = await connectReq(ws, {
+        password: "secret",
+        device: null,
+        client: {
+          ...CONTROL_UI_CLIENT,
+        },
+      });
+      expect(res.ok).toBe(false);
+      expect(res.error?.message ?? "").toContain("secure context");
+      ws.close();
+    });
+  });
+
+  test("does not bypass pairing for control ui device identity when insecure auth is enabled", async () => {
     testState.gatewayControlUi = { allowInsecureAuth: true };
     testState.gatewayAuth = { mode: "token", token: "secret" };
     const { writeConfigFile } = await import("../config/config.js");
@@ -753,7 +772,8 @@ describe("gateway server auth/connect", () => {
             ...CONTROL_UI_CLIENT,
           },
         });
-        expect(res.ok).toBe(true);
+        expect(res.ok).toBe(false);
+        expect(res.error?.message ?? "").toContain("pairing required");
         ws.close();
       });
     } finally {
