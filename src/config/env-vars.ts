@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "./types.js";
 import { logWarn } from "../logger.js";
+import type { OpenClawConfig } from "./types.js";
 
 const BLOCKED_ENV_KEYS = new Set([
   "NODE_OPTIONS",
