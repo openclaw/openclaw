@@ -1,12 +1,39 @@
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import { pathExists } from "../utils.js";
 
-const FALLBACK_TEMPLATE_DIR = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "../../docs/reference/templates",
-);
+const TEMPLATE_SUBPATH = path.join("docs", "reference", "templates");
+
+/**
+ * Walk up from a starting directory to find a parent that contains the
+ * templates directory.  This handles both the source layout (`src/agents/`)
+ * and the bundled layout (`dist/`) where the relative depth differs.
+ */
+function findTemplateDirFromAncestors(startDir: string, maxDepth = 6): string | null {
+  let current = path.resolve(startDir);
+  for (let i = 0; i < maxDepth; i++) {
+    const candidate = path.join(current, TEMPLATE_SUBPATH);
+    try {
+      if (fs.statSync(candidate).isDirectory()) {
+        return candidate;
+      }
+    } catch {
+      // not found at this level, keep walking up
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      break;
+    }
+    current = parent;
+  }
+  return null;
+}
+
+const FALLBACK_TEMPLATE_DIR =
+  findTemplateDirFromAncestors(path.dirname(fileURLToPath(import.meta.url))) ??
+  path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", TEMPLATE_SUBPATH);
 
 let cachedTemplateDir: string | undefined;
 let resolvingTemplateDir: Promise<string> | undefined;
