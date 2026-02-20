@@ -195,6 +195,7 @@ export async function runCronIsolatedAgentTurn(params: {
   };
 
   const baseSessionKey = (params.sessionKey?.trim() || `cron:${params.job.id}`).trim();
+  const isCronSession = baseSessionKey.startsWith("cron:");
   const agentSessionKey = buildAgentMainSessionKey({
     agentId,
     mainKey: baseSessionKey,
@@ -263,16 +264,16 @@ export async function runCronIsolatedAgentTurn(params: {
     model = resolvedOverride.ref.model;
   }
   const now = Date.now();
+  const forceNewSession = isCronSession ? params.job.sessionReuse !== true : false;
   const cronSession = resolveCronSession({
     cfg: params.cfg,
     sessionKey: agentSessionKey,
     agentId,
     nowMs: now,
+    forceNew: forceNewSession,
   });
   const runSessionId = cronSession.sessionEntry.sessionId;
-  const runSessionKey = baseSessionKey.startsWith("cron:")
-    ? `${agentSessionKey}:run:${runSessionId}`
-    : agentSessionKey;
+  const runSessionKey = isCronSession ? `${agentSessionKey}:run:${runSessionId}` : agentSessionKey;
   const persistSessionEntry = async () => {
     if (isFastTestEnv) {
       return;
@@ -295,7 +296,7 @@ export async function runCronIsolatedAgentTurn(params: {
     sessionId: runSessionId,
     sessionKey: runSessionKey,
   });
-  if (!cronSession.sessionEntry.label?.trim() && baseSessionKey.startsWith("cron:")) {
+  if (!cronSession.sessionEntry.label?.trim() && isCronSession) {
     const labelSuffix =
       typeof params.job.name === "string" && params.job.name.trim()
         ? params.job.name.trim()

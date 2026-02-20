@@ -38,6 +38,8 @@ export function registerCronEditCommand(cron: Command) {
       .option("--agent <id>", "Set agent id")
       .option("--clear-agent", "Unset agent and use default", false)
       .option("--wake <mode>", "Wake mode (now|next-heartbeat)")
+      .option("--session-reuse", "Reuse the same isolated cron session across runs")
+      .option("--fresh-session", "Always start a fresh isolated cron session per run")
       .option("--at <when>", "Set one-shot time (ISO) or duration like 20m")
       .option("--every <duration>", "Set interval duration like 10m")
       .option("--cron <expr>", "Set cron expression")
@@ -123,6 +125,15 @@ export function registerCronEditCommand(cron: Command) {
           }
           if (typeof opts.wake === "string") {
             patch.wakeMode = opts.wake;
+          }
+          if (opts.sessionReuse && opts.freshSession) {
+            throw new Error("Choose --session-reuse or --fresh-session, not both");
+          }
+          if (opts.sessionReuse) {
+            patch.sessionReuse = true;
+          }
+          if (opts.freshSession) {
+            patch.sessionReuse = false;
           }
           if (opts.agent && opts.clearAgent) {
             throw new Error("Use --agent or --clear-agent, not both");
