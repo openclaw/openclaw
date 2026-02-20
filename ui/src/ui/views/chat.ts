@@ -1,7 +1,7 @@
 import { html, nothing } from "lit";
-import { t } from "../../i18n/index.ts";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
+import { t } from "../../i18n/index.ts";
 import {
   renderMessageGroup,
   renderReadingIndicatorGroup,
