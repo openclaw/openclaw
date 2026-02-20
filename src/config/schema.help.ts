@@ -215,6 +215,14 @@ export const FIELD_HELP: Record<string, string> = {
     "Weight for BM25 text relevance when merging results (0-1).",
   "agents.defaults.memorySearch.query.hybrid.candidateMultiplier":
     "Multiplier for candidate pool size (default: 4).",
+  "agents.defaults.memorySearch.query.hybrid.mmr.enabled":
+    "Enable MMR re-ranking to reduce near-duplicate memory hits (default: false).",
+  "agents.defaults.memorySearch.query.hybrid.mmr.lambda":
+    "MMR relevance/diversity balance (0 = max diversity, 1 = max relevance, default: 0.7).",
+  "agents.defaults.memorySearch.query.hybrid.temporalDecay.enabled":
+    "Enable exponential recency decay for hybrid scoring (default: false).",
+  "agents.defaults.memorySearch.query.hybrid.temporalDecay.halfLifeDays":
+    "Half-life in days for temporal decay (default: 30).",
   "agents.defaults.memorySearch.cache.enabled":
     "Cache chunk embeddings in SQLite to speed up reindexing and frequent updates (default: true).",
   memory: "Memory backend configuration (global).",
@@ -267,8 +275,6 @@ export const FIELD_HELP: Record<string, string> = {
   "plugins.allow": "Optional allowlist of plugin ids; when set, only listed plugins load.",
   "plugins.deny": "Optional denylist of plugin ids; deny wins over allowlist.",
   "plugins.load.paths": "Additional plugin files or directories to load.",
-  "plugins.runtime.allowLegacyExec":
-    "Opt-in compatibility switch to re-enable deprecated runtime.system.runCommandWithTimeout for legacy plugins (default: false).",
   "plugins.slots": "Select which plugins own exclusive slots (memory, etc.).",
   "plugins.slots.memory":
     'Select the active memory plugin by id, or "none" to disable memory plugins.',
@@ -283,6 +289,17 @@ export const FIELD_HELP: Record<string, string> = {
   "plugins.installs.*.installPath":
     "Resolved install directory (usually ~/.openclaw/extensions/<id>).",
   "plugins.installs.*.version": "Version recorded at install time (if available).",
+  "plugins.installs.*.resolvedName": "Resolved npm package name from the fetched artifact.",
+  "plugins.installs.*.resolvedVersion":
+    "Resolved npm package version from the fetched artifact (useful for non-pinned specs).",
+  "plugins.installs.*.resolvedSpec":
+    "Resolved exact npm spec (<name>@<version>) from the fetched artifact.",
+  "plugins.installs.*.integrity":
+    "Resolved npm dist integrity hash for the fetched artifact (if reported by npm).",
+  "plugins.installs.*.shasum":
+    "Resolved npm dist shasum for the fetched artifact (if reported by npm).",
+  "plugins.installs.*.resolvedAt":
+    "ISO timestamp when npm package metadata was last resolved for this install record.",
   "plugins.installs.*.installedAt": "ISO timestamp of last install/update.",
   "agents.list.*.identity.avatar":
     "Agent avatar (workspace-relative path, http(s) URL, or data URI).",
@@ -368,6 +385,14 @@ export const FIELD_HELP: Record<string, string> = {
     'Target max size for a Telegram stream preview chunk when channels.telegram.streamMode="block" (default: 800; clamped to channels.telegram.textChunkLimit).',
   "channels.telegram.draftChunk.breakPreference":
     "Preferred breakpoints for Telegram draft chunks (paragraph | newline | sentence). Default: paragraph.",
+  "channels.discord.streamMode":
+    "Live stream preview mode for Discord replies (off | partial | block). Separate from block streaming; uses sendMessage + editMessage.",
+  "channels.discord.draftChunk.minChars":
+    'Minimum chars before emitting a Discord stream preview update when channels.discord.streamMode="block" (default: 200).',
+  "channels.discord.draftChunk.maxChars":
+    'Target max size for a Discord stream preview chunk when channels.discord.streamMode="block" (default: 800; clamped to channels.discord.textChunkLimit).',
+  "channels.discord.draftChunk.breakPreference":
+    "Preferred breakpoints for Discord draft chunks (paragraph | newline | sentence). Default: paragraph.",
   "channels.telegram.retry.attempts":
     "Max retry attempts for outbound Telegram API calls (default: 3).",
   "channels.telegram.retry.minDelayMs": "Minimum retry delay in ms for Telegram outbound calls.",

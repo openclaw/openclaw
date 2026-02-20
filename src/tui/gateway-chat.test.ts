@@ -68,33 +68,28 @@ describe("resolveGatewayConnection", () => {
     );
   });
 
-  it("uses explicit token when url override is set", () => {
+  it.each([
+    {
+      label: "token",
+      auth: { token: "explicit-token" },
+      expected: { token: "explicit-token", password: undefined },
+    },
+    {
+      label: "password",
+      auth: { password: "explicit-password" },
+      expected: { token: undefined, password: "explicit-password" },
+    },
+  ])("uses explicit $label when url override is set", ({ auth, expected }) => {
     loadConfig.mockReturnValue({ gateway: { mode: "local" } });
 
     const result = resolveGatewayConnection({
       url: "wss://override.example/ws",
-      token: "explicit-token",
+      ...auth,
     });
 
     expect(result).toEqual({
       url: "wss://override.example/ws",
-      token: "explicit-token",
-      password: undefined,
-    });
-  });
-
-  it("uses explicit password when url override is set", () => {
-    loadConfig.mockReturnValue({ gateway: { mode: "local" } });
-
-    const result = resolveGatewayConnection({
-      url: "wss://override.example/ws",
-      password: "explicit-password",
-    });
-
-    expect(result).toEqual({
-      url: "wss://override.example/ws",
-      token: undefined,
-      password: "explicit-password",
+      ...expected,
     });
   });
 

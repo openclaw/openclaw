@@ -256,4 +256,141 @@ describe("agent event handler", () => {
     expect(payload.data?.result).toEqual(result);
     resetAgentRunContextForTest();
   });
+
+  it("broadcasts fallback events to agent subscribers and node session", () => {
+    const { broadcast, broadcastToConnIds, nodeSendToSession, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-fallback",
+    });
+
+    handler({
+      runId: "run-fallback",
+      seq: 1,
+      stream: "lifecycle",
+      ts: Date.now(),
+      data: {
+        phase: "fallback",
+        selectedProvider: "fireworks",
+        selectedModel: "fireworks/minimax-m2p5",
+        activeProvider: "deepinfra",
+        activeModel: "moonshotai/Kimi-K2.5",
+      },
+    });
+
+    expect(broadcastToConnIds).not.toHaveBeenCalled();
+    const broadcastAgentCalls = broadcast.mock.calls.filter(([event]) => event === "agent");
+    expect(broadcastAgentCalls).toHaveLength(1);
+    const payload = broadcastAgentCalls[0]?.[1] as {
+      sessionKey?: string;
+      stream?: string;
+      data?: Record<string, unknown>;
+    };
+    expect(payload.stream).toBe("lifecycle");
+    expect(payload.data?.phase).toBe("fallback");
+    expect(payload.sessionKey).toBe("session-fallback");
+    expect(payload.data?.activeProvider).toBe("deepinfra");
+
+    const nodeCalls = nodeSendToSession.mock.calls.filter(([, event]) => event === "agent");
+    expect(nodeCalls).toHaveLength(1);
+  });
+
+  it("remaps chat-linked lifecycle runId to client runId", () => {
+    const { broadcast, nodeSendToSession, chatRunState, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-fallback",
+    });
+    chatRunState.registry.add("run-fallback-internal", {
+      sessionKey: "session-fallback",
+      clientRunId: "run-fallback-client",
+    });
+
+    handler({
+      runId: "run-fallback-internal",
+      seq: 1,
+      stream: "lifecycle",
+      ts: Date.now(),
+      data: {
+        phase: "fallback",
+        selectedProvider: "fireworks",
+        selectedModel: "fireworks/minimax-m2p5",
+        activeProvider: "deepinfra",
+        activeModel: "moonshotai/Kimi-K2.5",
+      },
+    });
+
+    const broadcastAgentCalls = broadcast.mock.calls.filter(([event]) => event === "agent");
+    expect(broadcastAgentCalls).toHaveLength(1);
+    const payload = broadcastAgentCalls[0]?.[1] as {
+      runId?: string;
+      sessionKey?: string;
+      stream?: string;
+      data?: Record<string, unknown>;
+    };
+    expect(payload.runId).toBe("run-fallback-client");
+    expect(payload.stream).toBe("lifecycle");
+    expect(payload.data?.phase).toBe("fallback");
+
+    const nodeCalls = nodeSendToSession.mock.calls.filter(([, event]) => event === "agent");
+    expect(nodeCalls).toHaveLength(1);
+    const nodePayload = nodeCalls[0]?.[2] as { runId?: string };
+    expect(nodePayload.runId).toBe("run-fallback-client");
+  });
+
+  it("uses agent event sessionKey when run-context lookup cannot resolve", () => {
+    const { broadcast, handler } = createHarness({
+      resolveSessionKeyForRun: () => undefined,
+    });
+
+    handler({
+      runId: "run-fallback-session-key",
+      seq: 1,
+      stream: "lifecycle",
+      ts: Date.now(),
+      sessionKey: "session-from-event",
+      data: {
+        phase: "fallback",
+        selectedProvider: "fireworks",
+        selectedModel: "fireworks/minimax-m2p5",
+        activeProvider: "deepinfra",
+        activeModel: "moonshotai/Kimi-K2.5",
+      },
+    });
+
+    const broadcastAgentCalls = broadcast.mock.calls.filter(([event]) => event === "agent");
+    expect(broadcastAgentCalls).toHaveLength(1);
+    const payload = broadcastAgentCalls[0]?.[1] as { sessionKey?: string };
+    expect(payload.sessionKey).toBe("session-from-event");
+  });
+
+  it("remaps chat-linked tool runId for non-full verbose payloads", () => {
+    const { broadcastToConnIds, chatRunState, toolEventRecipients, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-tool-remap",
+    });
+
+    chatRunState.registry.add("run-tool-internal", {
+      sessionKey: "session-tool-remap",
+      clientRunId: "run-tool-client",
+    });
+    registerAgentRunContext("run-tool-internal", {
+      sessionKey: "session-tool-remap",
+      verboseLevel: "on",
+    });
+    toolEventRecipients.add("run-tool-internal", "conn-1");
+
+    handler({
+      runId: "run-tool-internal",
+      seq: 1,
+      stream: "tool",
+      ts: Date.now(),
+      data: {
+        phase: "result",
+        name: "exec",
+        toolCallId: "tool-remap-1",
+        result: { content: [{ type: "text", text: "secret" }] },
+      },
+    });
+
+    expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
+    const payload = broadcastToConnIds.mock.calls[0]?.[1] as { runId?: string };
+    expect(payload.runId).toBe("run-tool-client");
+    resetAgentRunContextForTest();
+  });
 });
