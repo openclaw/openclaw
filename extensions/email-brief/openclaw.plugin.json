@@ -1,0 +1,29 @@
+{
+  "id": "email-brief",
+  "name": "Email Brief",
+  "description": "Gmail inbox summary via Telegram. Fetches emails using Google Service Account and summarizes with LLM.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "userEmail": {
+        "type": "string",
+        "description": "Gmail user email for Service Account impersonation (domain-wide delegation)."
+      },
+      "maxEmails": {
+        "type": "number",
+        "minimum": 1,
+        "maximum": 100,
+        "description": "Maximum number of emails to fetch per invocation."
+      },
+      "model": {
+        "type": "string",
+        "description": "Override model for summarization (e.g., 'cloudru-fm-glm/glm-4.7')."
+      },
+      "language": {
+        "type": "string",
+        "description": "Summary language: 'auto' (detect from emails), 'ru', 'en', etc."
+      }
+    }
+  }
+}
