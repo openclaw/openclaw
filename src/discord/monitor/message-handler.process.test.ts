@@ -228,7 +228,7 @@ describe("processDiscordMessage ack reactions", () => {
     const emojis = (
       sendMocks.reactMessageDiscord.mock.calls as unknown as Array<[unknown, unknown, string]>
     ).map((call) => call[2]);
-    expect(emojis).toContain("👀");
+    expect(emojis).toContain(DEFAULT_EMOJIS.queued);
     expect(emojis).toContain(DEFAULT_EMOJIS.done);
     expect(emojis).not.toContain(DEFAULT_EMOJIS.thinking);
     expect(emojis).not.toContain(DEFAULT_EMOJIS.coding);
