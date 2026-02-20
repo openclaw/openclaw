@@ -87,6 +87,19 @@ async function checkRelayReachable(port, token) {
         `Relay not reachable/authenticated at http://127.0.0.1:${port}/. Start OpenClaw browser relay and verify token.`,
       )
     }
+  } catch (err) {
+    const message = String(err || '').toLowerCase()
+    if (message.includes('json') || message.includes('syntax')) {
+      setStatus(
+        'error',
+        'Wrong port: this is not a relay endpoint. Use gateway port + 3 (for gateway 18789, relay is 18792).',
+      )
+    } else {
+      setStatus(
+        'error',
+        `Relay not reachable/authenticated at http://127.0.0.1:${port}/. Start OpenClaw browser relay and verify token.`,
+      )
+    }
   }
 }
 
