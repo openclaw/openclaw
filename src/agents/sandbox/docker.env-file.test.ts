@@ -62,12 +62,34 @@ vi.mock("./registry.js", () => ({
   updateRegistry: vi.fn(),
 }));
 
+const MOCK_ENV_FILES: Record<string, string> = {
+  "/path/to/test.env": "TEST_VAR=test_value\nANTHROPIC_API_KEY=secret_value\n",
+  "/path/to/override.env": "TEST_VAR=overridden_value\nEXTRA_VAR=extra_value\n",
+};
+
+// Mock inspectPathPermissions from the shared security module.
+vi.mock("../../security/audit-fs.js", () => ({
+  inspectPathPermissions: vi.fn(async () => ({
+    ok: true,
+    isSymlink: false,
+    isDir: false,
+    mode: 0o100644,
+    bits: 0o644,
+    source: "posix" as const,
+    worldWritable: false,
+    groupWritable: false,
+    worldReadable: true,
+    groupReadable: true,
+  })),
+}));
+
 vi.mock("node:fs/promises", async (_importOriginal) => {
   return {
     default: {
-      readFile: vi.fn(async (path: string) => {
-        if (path.includes("test.env")) {
-          return "TEST_VAR=test_value\nANTHROPIC_API_KEY=secret_value\n";
+      readFile: vi.fn(async (filePath: string) => {
+        const content = MOCK_ENV_FILES[filePath];
+        if (content !== undefined) {
+          return content;
         }
         throw new Error("ENOENT");
       }),
@@ -129,5 +151,89 @@ describe("ensureSandboxContainer with envFile", () => {
     expect(cfg.docker.env).toHaveProperty("ANTHROPIC_API_KEY", "secret_value");
     expect(cfg.docker.env).toHaveProperty("TEST_VAR", "test_value");
     expect(cfg.docker.env).toHaveProperty("LANG", "C.UTF-8");
+  });
+
+  it("merges envFile array with last file taking precedence on key collisions", async () => {
+    const cfg: SandboxConfig = {
+      mode: "all",
+      scope: "shared",
+      workspaceAccess: "rw",
+      workspaceRoot: "/tmp/sandboxes",
+      docker: {
+        image: "test-image",
+        containerPrefix: "prefix-",
+        workdir: "/app",
+        readOnlyRoot: false,
+        tmpfs: [],
+        network: "none",
+        capDrop: [],
+        env: {},
+        // test.env sets TEST_VAR=test_value; override.env sets TEST_VAR=overridden_value.
+        // The last file should win.
+        envFile: ["/path/to/test.env", "/path/to/override.env"],
+      },
+      browser: { enabled: false } as unknown as SandboxBrowserConfig,
+      tools: {} as unknown as SandboxToolPolicy,
+      prune: {} as unknown as SandboxPruneConfig,
+    };
+
+    await ensureSandboxContainer({
+      sessionKey: "session-array",
+      workspaceDir: "/tmp/ws",
+      agentWorkspaceDir: "/tmp/aws",
+      cfg,
+    });
+
+    // override.env (last) should win over test.env (first) for TEST_VAR.
+    expect(cfg.docker.env).toHaveProperty("TEST_VAR", "overridden_value");
+    // Values from both files are present.
+    expect(cfg.docker.env).toHaveProperty("EXTRA_VAR", "extra_value");
+    expect(cfg.docker.env).toHaveProperty("ANTHROPIC_API_KEY", "secret_value");
+  });
+
+  it("explicit env overrides envFile values but envFile values remain for tool injection", async () => {
+    const cfg: SandboxConfig = {
+      mode: "all",
+      scope: "shared",
+      workspaceAccess: "rw",
+      workspaceRoot: "/tmp/sandboxes",
+      docker: {
+        image: "test-image",
+        containerPrefix: "prefix-",
+        workdir: "/app",
+        readOnlyRoot: false,
+        tmpfs: [],
+        network: "none",
+        capDrop: [],
+        // Explicit env should always take precedence over envFile values.
+        env: { TEST_VAR: "explicit_value", LANG: "C.UTF-8" },
+        envFile: "/path/to/test.env",
+      },
+      browser: { enabled: false } as unknown as SandboxBrowserConfig,
+      tools: {} as unknown as SandboxToolPolicy,
+      prune: {} as unknown as SandboxPruneConfig,
+    };
+
+    await ensureSandboxContainer({
+      sessionKey: "session-explicit-wins",
+      workspaceDir: "/tmp/ws",
+      agentWorkspaceDir: "/tmp/aws",
+      cfg,
+    });
+
+    const createCall = spawnState.calls.find((c) => c.args[0] === "create");
+    expect(createCall).toBeDefined();
+    const args = createCall!.args;
+
+    // Explicit env wins for TEST_VAR.
+    expect(args).toContain("TEST_VAR=explicit_value");
+    expect(args).not.toContain("TEST_VAR=test_value");
+    // LANG from explicit env is present.
+    expect(args).toContain("LANG=C.UTF-8");
+
+    // Merged env has explicit value (not file value) for TEST_VAR.
+    expect(cfg.docker.env).toHaveProperty("TEST_VAR", "explicit_value");
+    // Secret from envFile is still in merged env for tool call injection.
+    expect(cfg.docker.env).toHaveProperty("ANTHROPIC_API_KEY", "secret_value");
   });
 });

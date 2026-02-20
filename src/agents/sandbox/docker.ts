@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import dotenv from "dotenv";
+import { inspectPathPermissions } from "../../security/audit-fs.js";
 import { sanitizeEnvVars } from "./sanitize-env-vars.js";
 
 type ExecDockerRawOptions = {
@@ -387,6 +388,43 @@ function formatSandboxRecreateHint(params: { scope: SandboxConfig["scope"]; sess
   return formatCliCommand("openclaw sandbox recreate --all");
 }
 
+/**
+ * Reads a single env file with security validation via the shared
+ * `inspectPathPermissions` utility (supports POSIX + Windows ACLs):
+ * - Rejects symlinks to avoid late-stage path substitution attacks.
+ * - Rejects world-writable files which could be silently tampered with.
+ * Returns the parsed key=value pairs from the file.
+ */
+async function readEnvFileSafe(rawPath: string): Promise<Record<string, string>> {
+  const filePath = rawPath.trim();
+  const perms = await inspectPathPermissions(filePath);
+  if (!perms.ok) {
+    throw new Error(
+      `Failed to stat sandbox env file "${filePath}": ${perms.error ?? "unknown error"}`,
+    );
+  }
+  if (perms.isSymlink) {
+    throw new Error(
+      `Sandbox security: envFile "${filePath}" is a symbolic link, which is not permitted.`,
+    );
+  }
+  if (perms.isDir) {
+    throw new Error(`Sandbox security: envFile "${filePath}" is not a regular file.`);
+  }
+  if (perms.worldWritable) {
+    throw new Error(
+      `Sandbox security: envFile "${filePath}" is world-writable. ` +
+        "Remove world-write permission before use (e.g. chmod o-w).",
+    );
+  }
+  try {
+    const content = await fs.readFile(filePath, "utf-8");
+    return dotenv.parse(content);
+  } catch (error) {
+    throw new Error(`Failed to read sandbox env file "${filePath}"`, { cause: error });
+  }
+}
+
 export async function ensureSandboxContainer(params: {
   sessionKey: string;
   workspaceDir: string;
@@ -396,17 +434,17 @@ export async function ensureSandboxContainer(params: {
   const envFile = params.cfg.docker.envFile;
   if (envFile) {
     const filePaths = Array.isArray(envFile) ? envFile : [envFile];
+    // Accumulate file-provided vars in iteration order so that later files
+    // override earlier ones on key collisions (standard env_file semantics).
+    // Explicit cfg.docker.env values are merged last so they always win.
+    const fileEnv: Record<string, string> = {};
     for (const filePath of filePaths) {
       if (filePath) {
-        try {
-          const content = await fs.readFile(filePath.trim(), "utf-8");
-          const parsed = dotenv.parse(content);
-          params.cfg.docker.env = { ...parsed, ...params.cfg.docker.env };
-        } catch (error) {
-          throw new Error(`Failed to read sandbox env file "${filePath}"`, { cause: error });
-        }
+        const parsed = await readEnvFileSafe(filePath);
+        Object.assign(fileEnv, parsed);
       }
     }
+    params.cfg.docker.env = { ...fileEnv, ...params.cfg.docker.env };
   }
 
   const scopeKey = resolveSandboxScopeKey(params.cfg.scope, params.sessionKey);
