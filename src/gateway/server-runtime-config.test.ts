@@ -51,6 +51,27 @@ describe("resolveGatewayRuntimeConfig", () => {
       expect(result.bindHost).toBe("127.0.0.1");
     });
 
+    it("should allow loopback trusted-proxy when trustedProxies includes ::1", async () => {
+      const cfg = {
+        gateway: {
+          bind: "loopback" as const,
+          auth: {
+            mode: "trusted-proxy" as const,
+            trustedProxy: {
+              userHeader: "x-forwarded-user",
+            },
+          },
+          trustedProxies: ["::1"],
+        },
+      };
+
+      const result = await resolveGatewayRuntimeConfig({
+        cfg,
+        port: 18789,
+      });
+      expect(result.bindHost).toBe("127.0.0.1");
+    });
+
     it("should reject loopback trusted-proxy without trustedProxies configured", async () => {
       const cfg = {
         gateway: {
@@ -72,6 +93,30 @@ describe("resolveGatewayRuntimeConfig", () => {
         }),
       ).rejects.toThrow(
         "gateway auth mode=trusted-proxy requires gateway.trustedProxies to be configured",
+      );
+    });
+
+    it("should reject loopback trusted-proxy when trustedProxies has no loopback address", async () => {
+      const cfg = {
+        gateway: {
+          bind: "loopback" as const,
+          auth: {
+            mode: "trusted-proxy" as const,
+            trustedProxy: {
+              userHeader: "x-forwarded-user",
+            },
+          },
+          trustedProxies: ["10.0.0.1"],
+        },
+      };
+
+      await expect(
+        resolveGatewayRuntimeConfig({
+          cfg,
+          port: 18789,
+        }),
+      ).rejects.toThrow(
+        "gateway auth mode=trusted-proxy with bind=loopback requires gateway.trustedProxies to include 127.0.0.1, ::1, or a loopback CIDR",
       );
     });
 
