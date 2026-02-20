@@ -95,6 +95,30 @@ else
   log "Migration: composio — skipped (no COMPOSEIO_ADMIN_API)"
 fi
 
+# --- Migration: Brave Search web tool ---
+if [[ -n "${BRAVE_SEARCH_API_KEY:-}" ]]; then
+  log "Migration: brave-search..."
+  BRAVE_KEY="${BRAVE_SEARCH_API_KEY}" node -e '
+    const fs = require("fs");
+    function main() {
+      const cfgPath = process.argv[1];
+      const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+      if (cfg.tools?.web?.search?.apiKey) {
+        console.log("  brave-search: already configured, skipping.");
+        return;
+      }
+      if (!cfg.tools) cfg.tools = {};
+      if (!cfg.tools.web) cfg.tools.web = {};
+      cfg.tools.web.search = { enabled: true, provider: "brave", apiKey: process.env.BRAVE_KEY };
+      fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
+      console.log("  brave-search: configured (provider: brave)");
+    }
+    main();
+  ' "$LOCAL_TMP" || die "brave-search migration failed"
+else
+  log "Migration: brave-search — skipped (no BRAVE_SEARCH_API_KEY)"
+fi
+
 # --- (future migrations go here) ---
 
 # ── upload if changed ───────────────────────────────────────────────────────

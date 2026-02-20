@@ -14,6 +14,7 @@ set -euo pipefail
 # Optional env vars:
 #   MODEL_BASE_URL    — AI provider base URL (omitted from config if unset)
 #   MODEL_API_KEY     — AI provider API key (omitted from config if unset)
+#   BRAVE_SEARCH_API_KEY — Brave Search API key (web search tool, omitted if unset)
 #
 # Output: prints OPENCLAW_CONFIG_B64 to stdout (base64, no line wrapping).
 
@@ -69,7 +70,13 @@ CONFIG_JSON=$(node -e "
     };
   }
 
+  // Brave Search web tool (optional)
+  const braveKey = process.argv[9] || '';
+  if (braveKey) {
+    cfg.tools = { web: { search: { enabled: true, provider: 'brave', apiKey: braveKey } } };
+  }
+
   process.stdout.write(JSON.stringify(cfg, null, 2));
-" "$TEMPLATE" "$GATEWAY_AUTH_TOKEN" "$MUX_BASE_URL" "$MUX_REGISTER_KEY" "$INBOUND_URL" "$MODEL_PRIMARY" "${MODEL_BASE_URL:-}" "${MODEL_API_KEY:-}")
+" "$TEMPLATE" "$GATEWAY_AUTH_TOKEN" "$MUX_BASE_URL" "$MUX_REGISTER_KEY" "$INBOUND_URL" "$MODEL_PRIMARY" "${MODEL_BASE_URL:-}" "${MODEL_API_KEY:-}" "${BRAVE_SEARCH_API_KEY:-}")
 
 printf '%s' "$CONFIG_JSON" | base64 -w0
