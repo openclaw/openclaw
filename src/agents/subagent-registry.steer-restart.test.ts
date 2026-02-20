@@ -29,8 +29,13 @@ vi.mock("../config/config.js", () => ({
 }));
 
 const announceSpy = vi.fn(async (_params: unknown) => true);
+const unbindThreadBindingsBySessionKeyMock = vi.fn(() => []);
 vi.mock("./subagent-announce.js", () => ({
   runSubagentAnnounceFlow: announceSpy,
+}));
+
+vi.mock("../discord/monitor/thread-bindings.js", () => ({
+  unbindThreadBindingsBySessionKey: unbindThreadBindingsBySessionKeyMock,
 }));
 
 vi.mock("./subagent-registry.store.js", () => ({
@@ -52,6 +57,7 @@ describe("subagent registry steer restarts", () => {
   afterEach(async () => {
     announceSpy.mockReset();
     announceSpy.mockResolvedValue(true);
+    unbindThreadBindingsBySessionKeyMock.mockClear();
     lifecycleHandler = undefined;
     mod.resetSubagentRegistryForTests({ persist: false });
   });
@@ -189,6 +195,12 @@ describe("subagent registry steer restarts", () => {
     expect(run?.outcome).toEqual({ status: "error", error: "manual kill" });
     expect(run?.cleanupHandled).toBe(true);
     expect(typeof run?.cleanupCompletedAt).toBe("number");
+    expect(unbindThreadBindingsBySessionKeyMock).toHaveBeenCalledWith({
+      targetSessionKey: childSessionKey,
+      targetKind: "subagent",
+      reason: "subagent-killed",
+      sendFarewell: true,
+    });
   });
 
   it("retries deferred parent cleanup after a descendant announces", async () => {

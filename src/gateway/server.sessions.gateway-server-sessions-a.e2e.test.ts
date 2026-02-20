@@ -26,6 +26,10 @@ const sessionHookMocks = vi.hoisted(() => ({
   triggerInternalHook: vi.fn(async () => {}),
 }));
 
+const threadBindingLifecycleMocks = vi.hoisted(() => ({
+  unbindThreadBindingsBySessionKey: vi.fn(() => []),
+}));
+
 vi.mock("../auto-reply/reply/queue.js", async () => {
   const actual = await vi.importActual<typeof import("../auto-reply/reply/queue.js")>(
     "../auto-reply/reply/queue.js",
@@ -53,6 +57,14 @@ vi.mock("../hooks/internal-hooks.js", async () => {
   return {
     ...actual,
     triggerInternalHook: sessionHookMocks.triggerInternalHook,
+  };
+});
+
+vi.mock("../discord/monitor/thread-bindings.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../discord/monitor/thread-bindings.js")>();
+  return {
+    ...actual,
+    unbindThreadBindingsBySessionKey: threadBindingLifecycleMocks.unbindThreadBindingsBySessionKey,
   };
 });
 
@@ -134,6 +146,7 @@ describe("gateway server sessions", () => {
     sessionCleanupMocks.clearSessionQueues.mockClear();
     sessionCleanupMocks.stopSubagentsForRequester.mockClear();
     sessionHookMocks.triggerInternalHook.mockClear();
+    threadBindingLifecycleMocks.unbindThreadBindingsBySessionKey.mockClear();
   });
 
   test("lists and patches session store via sessions.* RPC", async () => {
@@ -605,6 +618,13 @@ describe("gateway server sessions", () => {
       ["discord:group:dev", "agent:main:discord:group:dev", "sess-active"],
       "sess-active",
     );
+    expect(threadBindingLifecycleMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledTimes(1);
+    expect(threadBindingLifecycleMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledWith({
+      targetSessionKey: "agent:main:discord:group:dev",
+      targetKind: "acp",
+      reason: "session-delete",
+      sendFarewell: true,
+    });
 
     ws.close();
   });
@@ -632,6 +652,13 @@ describe("gateway server sessions", () => {
       ["main", "agent:main:main", "sess-main"],
       "sess-main",
     );
+    expect(threadBindingLifecycleMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledTimes(1);
+    expect(threadBindingLifecycleMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledWith({
+      targetSessionKey: "agent:main:main",
+      targetKind: "acp",
+      reason: "session-reset",
+      sendFarewell: true,
+    });
 
     ws.close();
   });
