@@ -482,6 +482,8 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
     capabilities: {
       chatTypes: ["direct", "group"],
       reactions: true,
+      unsend: true,
+      polls: true,
       media: true,
     },
     outbound: { textChunkLimit: 4000 },
