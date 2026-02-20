@@ -54,7 +54,7 @@ export function resolveSessionFilePathOptions(params: {
   return undefined;
 }
 
-export const SAFE_SESSION_ID_RE = /^[a-z0-9][a-z0-9._-]{0,127}$/i;
+export const SAFE_SESSION_ID_RE = /^[a-z0-9][a-z0-9._:+-]{0,127}$/i;
 
 export function validateSessionId(sessionId: string): string {
   const trimmed = sessionId.trim();
@@ -62,6 +62,22 @@ export function validateSessionId(sessionId: string): string {
     throw new Error(`Invalid session ID: ${sessionId}`);
   }
   return trimmed;
+}
+
+/**
+ * Dot-quote characters that are unsafe in filenames.
+ * `.` → `.2E`, `+` → `.2B`, `:` → `.3A`
+ */
+export function dotQuote(raw: string): string {
+  return raw.replace(
+    /[.:+]/g,
+    (ch) => `.${ch.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0")}`,
+  );
+}
+
+/** Reverse dot-quoting. */
+export function dotUnquote(quoted: string): string {
+  return quoted.replace(/\.([0-9A-Fa-f]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
 }
 
 function resolveSessionsDir(opts?: SessionFilePathOptions): string {
@@ -170,7 +186,7 @@ export function resolveSessionTranscriptPathInDir(
   sessionsDir: string,
   topicId?: string | number,
 ): string {
-  const safeSessionId = validateSessionId(sessionId);
+  const safeSessionId = dotQuote(validateSessionId(sessionId));
   const safeTopicId =
     typeof topicId === "string"
       ? encodeURIComponent(topicId)
