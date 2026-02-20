@@ -62,6 +62,8 @@ actor TalkModeRuntime {
     private var voiceAliases: [String: String] = [:]
     private var lastSpokenText: String?
     private var apiKey: String?
+    private var ttsBaseUrl: String?
+    private var talkAgentId: String?
     private var fallbackVoiceId: String?
     private var lastPlaybackWasPCM: Bool = false
 
@@ -329,7 +331,9 @@ actor TalkModeRuntime {
         guard self.isCurrent(gen) else { return }
         let prompt = self.buildPrompt(transcript: transcript)
         let activeSessionKey = await MainActor.run { WebChatManager.shared.activeSessionKey }
-        let sessionKey: String = if let activeSessionKey {
+        let sessionKey: String = if let agentId = self.talkAgentId {
+            "agent:\(agentId):main"
+        } else if let activeSessionKey {
             activeSessionKey
         } else {
             await GatewayConnection.shared.mainSessionKey()
@@ -428,7 +432,8 @@ actor TalkModeRuntime {
             }
             guard let assistant else { return nil }
             let text = assistant.content.compactMap(\.text).joined(separator: "\n")
-            let trimmed = text.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+            let stripped = Self.stripDirectiveTags(text)
+            let trimmed = stripped.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
             return trimmed.isEmpty ? nil : trimmed
         } catch {
             self.logger.error("talk history fetch failed: \(error.localizedDescription, privacy: .public)")
@@ -436,10 +441,25 @@ actor TalkModeRuntime {
         }
     }
 
+    /// Strip openclaw inline directive tags (e.g. [[reply_to_current]], [[audio_as_voice]])
+    /// before sending text to TTS so they are not spoken aloud.
+    private static func stripDirectiveTags(_ text: String) -> String {
+        // Matches [[reply_to_current]], [[reply_to: <id>]], [[audio_as_voice]]
+        let pattern = #"\[\[\s*(?:reply_to_current|reply_to\s*:[^\]\n]+|audio_as_voice)\s*\]\]"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else {
+            return text
+        }
+        let range = NSRange(text.startIndex..., in: text)
+        return regex.stringByReplacingMatches(in: text, range: range, withTemplate: "")
+            .replacingOccurrences(of: "  ", with: " ")
+    }
+
     private func playAssistant(text: String) async {
         guard let input = await self.preparePlaybackInput(text: text) else { return }
         do {
-            if let apiKey = input.apiKey, !apiKey.isEmpty, let voiceId = input.voiceId {
+            if self.ttsBaseUrl != nil {
+                try await self.playOpenAITTS(input: input)
+            } else if let apiKey = input.apiKey, !apiKey.isEmpty, let voiceId = input.voiceId {
                 try await self.playElevenLabs(input: input, apiKey: apiKey, voiceId: voiceId)
             } else {
                 try await self.playSystemVoice(input: input)
@@ -584,7 +604,9 @@ actor TalkModeRuntime {
 
         let request = makeRequest(outputFormat: outputFormat)
         self.ttsLogger.info("talk TTS synth timeout=\(input.synthTimeoutSeconds, privacy: .public)s")
-        let client = ElevenLabsTTSClient(apiKey: apiKey)
+        let baseUrl = self.ttsBaseUrl.flatMap { URL(string: $0) }
+        let client = baseUrl.map { ElevenLabsTTSClient(apiKey: apiKey, baseUrl: $0) }
+            ?? ElevenLabsTTSClient(apiKey: apiKey)
         let stream = client.streamSynthesize(voiceId: voiceId, request: request)
         guard self.isCurrent(input.generation) else { return }
 
@@ -641,6 +663,209 @@ actor TalkModeRuntime {
         }
         self.lastPlaybackWasPCM = false
         return await self.playMP3(stream: stream)
+    }
+
+    private func playOpenAITTS(input: TalkPlaybackInput) async throws {
+        guard let baseUrlString = self.ttsBaseUrl, let baseUrl = URL(string: baseUrlString) else {
+            throw NSError(domain: "OpenAITTS", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "ttsBaseUrl not configured",
+            ])
+        }
+        let voice = self.currentVoiceId ?? self.defaultVoiceId ?? "default"
+        let model = self.currentModelId ?? self.defaultModelId ?? "qwen3-tts"
+        let sampleRate = 24000
+
+        self.ttsLogger.info(
+            "talk openai-tts start voice=\(voice, privacy: .public) " +
+                "model=\(model, privacy: .public) " +
+                "chars=\(input.cleanedText.count, privacy: .public)")
+
+        let stream = Self.openAITTSStream(
+            baseUrl: baseUrl,
+            text: input.cleanedText,
+            model: model,
+            voice: voice,
+            sampleRate: sampleRate,
+            timeoutSeconds: input.synthTimeoutSeconds)
+        guard self.isCurrent(input.generation) else { return }
+
+        if self.interruptOnSpeech {
+            guard await self.prepareForPlayback(generation: input.generation) else { return }
+        }
+
+        await MainActor.run { TalkModeController.shared.updatePhase(.speaking) }
+        self.phase = .speaking
+        self.lastPlaybackWasPCM = true
+
+        let finished = await Self.playInt16PCMStream(
+            stream: stream,
+            sampleRate: Double(sampleRate),
+            logger: self.ttsLogger)
+        self.ttsLogger.info("talk openai-tts finished=\(finished, privacy: .public)")
+        if !finished {
+            throw NSError(domain: "OpenAITTS", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "audio playback failed",
+            ])
+        }
+    }
+
+    /// Plays a stream of int16 LE PCM bytes using AVAudioEngine with float32 format.
+    /// Returns true when playback completes normally.
+    @MainActor
+    private static func playInt16PCMStream(
+        stream: AsyncThrowingStream<Data, Error>,
+        sampleRate: Double,
+        logger: Logger) async -> Bool
+    {
+        guard let format = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: sampleRate,
+            channels: 1,
+            interleaved: false)
+        else {
+            logger.error("talk openai-tts: failed to create AVAudioFormat")
+            return false
+        }
+
+        let engine = AVAudioEngine()
+        let player = AVAudioPlayerNode()
+        engine.attach(player)
+        engine.connect(player, to: engine.mainMixerNode, format: format)
+
+        do {
+            try engine.start()
+        } catch {
+            logger.error("talk openai-tts: engine start failed: \(error.localizedDescription, privacy: .public)")
+            return false
+        }
+
+        return await withCheckedContinuation { continuation in
+            var pendingBuffers = 0
+            var inputDone = false
+            var resumed = false
+
+            func finish(_ success: Bool) {
+                guard !resumed else { return }
+                resumed = true
+                player.stop()
+                engine.stop()
+                continuation.resume(returning: success)
+            }
+
+            Task { @MainActor in
+                do {
+                    for try await chunk in stream {
+                        guard chunk.count >= 2 else { continue }
+                        let frameCount = chunk.count / 2
+                        guard let buf = AVAudioPCMBuffer(
+                            pcmFormat: format,
+                            frameCapacity: AVAudioFrameCount(frameCount))
+                        else { continue }
+                        buf.frameLength = AVAudioFrameCount(frameCount)
+
+                        // Convert int16 LE → float32 [-1, 1]
+                        chunk.withUnsafeBytes { raw in
+                            let src = raw.bindMemory(to: Int16.self)
+                            let dst = buf.floatChannelData![0]
+                            for i in 0 ..< frameCount {
+                                dst[i] = Float(src[i]) / 32768.0
+                            }
+                        }
+
+                        pendingBuffers += 1
+                        player.scheduleBuffer(buf) {
+                            Task { @MainActor in
+                                pendingBuffers -= 1
+                                if inputDone, pendingBuffers == 0 {
+                                    finish(true)
+                                }
+                            }
+                        }
+                        if !player.isPlaying { player.play() }
+                    }
+                    inputDone = true
+                    if pendingBuffers == 0 { finish(true) }
+                } catch {
+                    logger.error("talk openai-tts stream error: \(error.localizedDescription, privacy: .public)")
+                    finish(false)
+                }
+            }
+        }
+    }
+
+    private static func openAITTSStream(
+        baseUrl: URL,
+        text: String,
+        model: String,
+        voice: String,
+        sampleRate: Int,
+        timeoutSeconds: TimeInterval) -> AsyncThrowingStream<Data, Error>
+    {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    let url = baseUrl.appendingPathComponent("v1/audio/speech")
+                    let payload: [String: Any] = [
+                        "input": text,
+                        "model": model,
+                        "voice": voice,
+                        "response_format": "pcm",
+                        "sample_rate": sampleRate,
+                    ]
+                    let body = try JSONSerialization.data(withJSONObject: payload)
+
+                    var req = URLRequest(url: url)
+                    req.httpMethod = "POST"
+                    req.httpBody = body
+                    req.timeoutInterval = timeoutSeconds
+                    req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                    req.setValue("audio/pcm", forHTTPHeaderField: "Accept")
+
+                    // Use ephemeral session to bypass system-level internet reachability
+                    // checks that block LAN connections when there's no internet route.
+                    let sessionConfig = URLSessionConfiguration.ephemeral
+                    sessionConfig.timeoutIntervalForRequest = timeoutSeconds
+                    sessionConfig.timeoutIntervalForResource = timeoutSeconds + 30
+                    sessionConfig.waitsForConnectivity = false
+                    let session = URLSession(configuration: sessionConfig)
+                    let (bytes, response) = try await session.bytes(for: req)
+                    guard let http = response as? HTTPURLResponse else {
+                        throw NSError(domain: "OpenAITTS", code: 1, userInfo: [
+                            NSLocalizedDescriptionKey: "invalid response",
+                        ])
+                    }
+                    if http.statusCode >= 400 {
+                        var errorData = Data()
+                        for try await byte in bytes {
+                            errorData.append(byte)
+                            if errorData.count >= 4096 { break }
+                        }
+                        let msg = String(data: errorData.prefix(4096), encoding: .utf8) ?? "unknown"
+                        throw NSError(domain: "OpenAITTS", code: http.statusCode, userInfo: [
+                            NSLocalizedDescriptionKey: "OpenAI TTS failed: \(http.statusCode) \(msg)",
+                        ])
+                    }
+
+                    let chunkSize = 4096
+                    var buffer = Data()
+                    buffer.reserveCapacity(chunkSize)
+                    for try await byte in bytes {
+                        buffer.append(byte)
+                        if buffer.count >= chunkSize {
+                            continuation.yield(buffer)
+                            buffer.removeAll(keepingCapacity: true)
+                        }
+                    }
+                    if !buffer.isEmpty {
+                        continuation.yield(buffer)
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
     }
 
     private func playSystemVoice(input: TalkPlaybackInput) async throws {
@@ -772,15 +997,21 @@ extension TalkModeRuntime {
         self.defaultOutputFormat = cfg.outputFormat
         self.interruptOnSpeech = cfg.interruptOnSpeech
         self.apiKey = cfg.apiKey
+        self.ttsBaseUrl = cfg.ttsBaseUrl
+        self.talkAgentId = cfg.agentId
         let hasApiKey = (cfg.apiKey?.isEmpty == false)
         let voiceLabel = (cfg.voiceId?.isEmpty == false) ? cfg.voiceId! : "none"
         let modelLabel = (cfg.modelId?.isEmpty == false) ? cfg.modelId! : "none"
+        let baseUrlLabel = cfg.ttsBaseUrl ?? "default"
+        let agentLabel = cfg.agentId ?? "main"
         self.logger
             .info(
                 "talk config voiceId=\(voiceLabel, privacy: .public) " +
                     "modelId=\(modelLabel, privacy: .public) " +
                     "apiKey=\(hasApiKey, privacy: .public) " +
-                    "interrupt=\(cfg.interruptOnSpeech, privacy: .public)")
+                    "interrupt=\(cfg.interruptOnSpeech, privacy: .public) " +
+                    "ttsBaseUrl=\(baseUrlLabel, privacy: .public) " +
+                    "agentId=\(agentLabel, privacy: .public)")
     }
 
     private struct TalkRuntimeConfig {
@@ -790,6 +1021,8 @@ extension TalkModeRuntime {
         let outputFormat: String?
         let interruptOnSpeech: Bool
         let apiKey: String?
+        let ttsBaseUrl: String?
+        let agentId: String?
     }
 
     private func fetchTalkConfig() async -> TalkRuntimeConfig {
@@ -823,6 +1056,8 @@ extension TalkModeRuntime {
             let outputFormat = talk?["outputFormat"]?.stringValue
             let interrupt = talk?["interruptOnSpeech"]?.boolValue
             let apiKey = talk?["apiKey"]?.stringValue
+            let udTtsBaseUrl = UserDefaults.standard.string(forKey: "openclaw.ttsBaseUrl")
+            let udAgentId = UserDefaults.standard.string(forKey: "openclaw.talkAgentId")
             let resolvedVoice =
                 (voice?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? voice : nil) ??
                 (envVoice?.isEmpty == false ? envVoice : nil) ??
@@ -830,25 +1065,39 @@ extension TalkModeRuntime {
             let resolvedApiKey =
                 (envApiKey?.isEmpty == false ? envApiKey : nil) ??
                 (apiKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? apiKey : nil)
+            let resolvedTtsBaseUrl = udTtsBaseUrl?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                ? udTtsBaseUrl : nil
+            let resolvedAgentId = udAgentId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                ? udAgentId : nil
             return TalkRuntimeConfig(
                 voiceId: resolvedVoice,
                 voiceAliases: resolvedAliases,
                 modelId: resolvedModel,
                 outputFormat: outputFormat,
                 interruptOnSpeech: interrupt ?? true,
-                apiKey: resolvedApiKey)
+                apiKey: resolvedApiKey,
+                ttsBaseUrl: resolvedTtsBaseUrl,
+                agentId: resolvedAgentId)
         } catch {
             let resolvedVoice =
                 (envVoice?.isEmpty == false ? envVoice : nil) ??
                 (sagVoice?.isEmpty == false ? sagVoice : nil)
             let resolvedApiKey = envApiKey?.isEmpty == false ? envApiKey : nil
+            let udTtsBaseUrl = UserDefaults.standard.string(forKey: "openclaw.ttsBaseUrl")
+            let udAgentId = UserDefaults.standard.string(forKey: "openclaw.talkAgentId")
+            let resolvedTtsBaseUrl = udTtsBaseUrl?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                ? udTtsBaseUrl : nil
+            let resolvedAgentId = udAgentId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                ? udAgentId : nil
             return TalkRuntimeConfig(
                 voiceId: resolvedVoice,
                 voiceAliases: [:],
                 modelId: Self.defaultModelIdFallback,
                 outputFormat: nil,
                 interruptOnSpeech: true,
-                apiKey: resolvedApiKey)
+                apiKey: resolvedApiKey,
+                ttsBaseUrl: resolvedTtsBaseUrl,
+                agentId: resolvedAgentId)
         }
     }
 

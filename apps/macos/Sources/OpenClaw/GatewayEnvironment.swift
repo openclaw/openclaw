@@ -292,6 +292,28 @@ enum GatewayEnvironment {
     // MARK: - Internals
 
     private static func readGatewayVersion(binary: String) -> Semver? {
+        // Fast path: read package.json next to the binary (avoids spawning Node.js)
+        let binURL = URL(fileURLWithPath: binary).resolvingSymlinksInPath()
+        let candidates = [
+            binURL.deletingLastPathComponent().appendingPathComponent("package.json"),
+            binURL.deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent("package.json"),
+            binURL.deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent("lib/node_modules/openclaw/package.json"),
+        ]
+        for pkg in candidates {
+            if let data = try? Data(contentsOf: pkg),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let version = json["version"] as? String,
+               let semver = Semver.parse(version)
+            {
+                self.logger.debug(
+                    "gateway version via package.json (\(pkg.path, privacy: .public)): \(version, privacy: .public)")
+                return semver
+            }
+        }
+
+        // Slow path: spawn the binary
         let start = Date()
         let process = Process()
         process.executableURL = URL(fileURLWithPath: binary)
