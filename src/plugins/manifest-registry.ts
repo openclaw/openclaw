@@ -201,7 +201,16 @@ export function loadPluginManifestRegistry(params: {
       const existingReal = safeRealpathSync(existing.candidate.rootDir, realpathCache);
       const candidateReal = safeRealpathSync(candidate.rootDir, realpathCache);
       const samePlugin = Boolean(existingReal && candidateReal && existingReal === candidateReal);
-      if (samePlugin) {
+      // When both candidates are the same physical directory (symlink / path
+      // alias) OR exactly one of them is a bundled plugin, silently prefer
+      // the higher-precedence copy. A warning is only appropriate when two
+      // genuinely different non-bundled plugins claim the same ID (or two
+      // bundled plugins at different paths, which shouldn't normally happen).
+      const existingIsBundled = existing.candidate.origin === "bundled";
+      const candidateIsBundled = candidate.origin === "bundled";
+      // XOR: exactly one is bundled (user-installed plugin shadowing a bundled one).
+      const oneBundled = existingIsBundled !== candidateIsBundled;
+      if (samePlugin || oneBundled) {
         // Prefer higher-precedence origins even if candidates are passed in
         // an unexpected order (config > workspace > global > bundled).
         if (PLUGIN_ORIGIN_RANK[candidate.origin] < PLUGIN_ORIGIN_RANK[existing.candidate.origin]) {
