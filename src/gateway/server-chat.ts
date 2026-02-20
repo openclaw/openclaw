@@ -95,6 +95,7 @@ export type ChatRunState = {
   registry: ChatRunRegistry;
   buffers: Map<string, string>;
   deltaSentAt: Map<string, number>;
+  nodeDeltaSent: Set<string>;
   abortedRuns: Map<string, number>;
   clear: () => void;
 };
@@ -103,12 +104,14 @@ export function createChatRunState(): ChatRunState {
   const registry = createChatRunRegistry();
   const buffers = new Map<string, string>();
   const deltaSentAt = new Map<string, number>();
+  const nodeDeltaSent = new Set<string>();
   const abortedRuns = new Map<string, number>();
 
   const clear = () => {
     registry.clear();
     buffers.clear();
     deltaSentAt.clear();
+    nodeDeltaSent.clear();
     abortedRuns.clear();
   };
 
@@ -116,6 +119,7 @@ export function createChatRunState(): ChatRunState {
     registry,
     buffers,
     deltaSentAt,
+    nodeDeltaSent,
     abortedRuns,
     clear,
   };
@@ -256,7 +260,12 @@ export function createAgentEventHandler({
     if (!shouldSuppressHeartbeatBroadcast(clientRunId)) {
       broadcast("chat", payload, { dropIfSlow: true });
     }
-    // Nodes only need the final message — skip delta events to avoid partial token leaks.
+    // Send first delta to nodes so they can show a typing indicator; subsequent deltas are dropped.
+    // Nodes don't render delta content — they only use this to know a response has started.
+    if (!chatRunState.nodeDeltaSent.has(clientRunId)) {
+      chatRunState.nodeDeltaSent.add(clientRunId);
+      nodeSendToSession(sessionKey, "chat", payload);
+    }
   };
 
   const emitChatFinal = (
@@ -280,6 +289,7 @@ export function createAgentEventHandler({
 
     chatRunState.buffers.delete(clientRunId);
     chatRunState.deltaSentAt.delete(clientRunId);
+    chatRunState.nodeDeltaSent.delete(clientRunId);
     if (jobState === "done") {
       const payload = {
         runId: clientRunId,
