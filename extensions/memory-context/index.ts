@@ -9,6 +9,7 @@ import {
 import { memoryContextConfigSchema, type MemoryContextConfig } from "./src/core/config.js";
 import { createEmbeddingProvider } from "./src/core/embedding.js";
 import { KnowledgeStore } from "./src/core/knowledge-store.js";
+import { mmrRerank, type MMRCandidate } from "./src/core/mmr.js";
 import { buildRecalledContextBlock } from "./src/core/recall-format.js";
 import { maybeRedact } from "./src/core/redaction.js";
 import { SYSTEM_PREFIX_RE, stripChannelPrefix } from "./src/core/shared.js";
@@ -335,10 +336,21 @@ const memoryContextPlugin = {
           `memory-context: window expansion ${details.length} → ${expandedDetails.length} segments`,
         );
 
+        // MMR re-ranking: reduce redundancy while preserving relevance
+        const mmrCandidates: MMRCandidate<(typeof expandedDetails)[number]>[] = expandedDetails.map(
+          (d) => ({
+            item: d,
+            score: d.score,
+            content: d.segment.content,
+          }),
+        );
+        const mmrLimit = Math.max(searchLimit, expandedDetails.length);
+        const diverseDetails = mmrRerank(mmrCandidates, mmrLimit, { lambda: 0.7 });
+
         const knowledge = runtime.knowledgeStore.search(query);
         const recalled = buildRecalledContextBlock(
           knowledge,
-          expandedDetails,
+          diverseDetails,
           runtime.config.autoRecallMaxTokens,
         );
 

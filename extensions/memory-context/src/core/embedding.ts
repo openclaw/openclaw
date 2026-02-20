@@ -21,6 +21,80 @@ export type EmbeddingProvider = {
   readonly name?: string;
 };
 
+// ---- LRU Embedding Cache ----
+
+/**
+ * Simple LRU cache for query embeddings.
+ * Avoids redundant API calls for repeated or similar queries.
+ */
+class EmbeddingCache {
+  private readonly cache = new Map<string, number[]>();
+  constructor(private readonly maxSize: number = 128) {}
+
+  get(key: string): number[] | undefined {
+    const v = this.cache.get(key);
+    if (v !== undefined) {
+      // Move to end (most recently used)
+      this.cache.delete(key);
+      this.cache.set(key, v);
+    }
+    return v;
+  }
+
+  set(key: string, value: number[]): void {
+    if (this.cache.has(key)) {
+      this.cache.delete(key);
+    } else if (this.cache.size >= this.maxSize) {
+      // Evict LRU (first entry)
+      const first = this.cache.keys().next().value;
+      if (first !== undefined) {
+        this.cache.delete(first);
+      }
+    }
+    this.cache.set(key, value);
+  }
+
+  get size(): number {
+    return this.cache.size;
+  }
+
+  clear(): void {
+    this.cache.clear();
+  }
+}
+
+/**
+ * Wrap an EmbeddingProvider with an LRU cache.
+ * Cache key is the raw text (normalized to trim whitespace).
+ */
+export function withEmbeddingCache(provider: EmbeddingProvider, maxSize = 128): EmbeddingProvider {
+  const cache = new EmbeddingCache(maxSize);
+
+  return {
+    get dim() {
+      return provider.dim;
+    },
+    get name() {
+      return provider.name;
+    },
+    async embed(text: string): Promise<number[]> {
+      const key = text.trim();
+      const cached = cache.get(key);
+      if (cached) {
+        return cached;
+      }
+      const vec = await provider.embed(text);
+      if (vec.length > 0) {
+        cache.set(key, vec);
+      }
+      return vec;
+    },
+    async init(): Promise<void> {
+      await provider.init?.();
+    },
+  };
+}
+
 /**
  * Adapter: wrap a unified EmbeddingProvider (memory-search interface) into
  * the memory-context EmbeddingProvider interface ({ dim, embed }).
@@ -150,7 +224,8 @@ export async function createEmbeddingProvider(
       return createHashEmbedding(384);
     }
 
-    return adapter;
+    // Wrap with LRU cache to avoid redundant API calls for repeated queries
+    return withEmbeddingCache(adapter);
   } catch (err) {
     logger?.warn?.(
       `[memory-context] unified embedding failed (${String(err)}), using hash fallback`,
