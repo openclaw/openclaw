@@ -400,15 +400,28 @@ export function isLoopbackHost(host: string): boolean {
   return isLoopbackAddress(unbracket);
 }
 
+function isTailscaleIPv4Address(ip: string | undefined): boolean {
+  if (!ip) {
+    return false;
+  }
+  const octets = ip.split(".").map((value) => Number.parseInt(value, 10));
+  if (octets.length !== 4 || octets.some((value) => Number.isNaN(value))) {
+    return false;
+  }
+  const [first, second] = octets;
+  return first === 100 && second >= 64 && second <= 127;
+}
+
 /**
  * Security check for WebSocket URLs (CWE-319: Cleartext Transmission of Sensitive Information).
  *
  * Returns true if the URL is secure for transmitting data:
  * - wss:// (TLS) is always secure
- * - ws:// is only secure for loopback addresses (localhost, 127.x.x.x, ::1)
+ * - ws:// is treated as secure for loopback addresses and Tailscale CGNAT space
+ *   (100.64.0.0/10) because Tailscale traffic is already encrypted over WireGuard.
  *
- * All other ws:// URLs are considered insecure because both credentials
- * AND chat/conversation data would be exposed to network interception.
+ * Other ws:// URLs are considered insecure because both credentials
+ * and chat/conversation data would be exposed to network interception.
  */
 export function isSecureWebSocketUrl(url: string): boolean {
   let parsed: URL;
@@ -426,6 +439,11 @@ export function isSecureWebSocketUrl(url: string): boolean {
     return false;
   }
 
-  // ws:// is only secure for loopback addresses
-  return isLoopbackHost(parsed.hostname);
+  if (isLoopbackHost(parsed.hostname)) {
+    return true;
+  }
+
+  // Tailscale tailnet traffic can stay on ws:// in CI-safe encrypted transport.
+  const normalizedHost = normalizeIPv4MappedAddress(parsed.hostname);
+  return isTailscaleIPv4Address(normalizedHost);
 }

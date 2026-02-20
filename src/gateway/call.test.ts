@@ -145,12 +145,13 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.url).toBe("wss://100.64.0.1:18800");
   });
 
-  it("blocks ws:// to tailnet IP without TLS (CWE-319)", async () => {
+  it("allows ws:// to tailnet IP without TLS for encrypted WireGuard links", async () => {
     loadConfig.mockReturnValue({ gateway: { mode: "local", bind: "tailnet" } });
     resolveGatewayPort.mockReturnValue(18800);
     pickPrimaryTailnetIPv4.mockReturnValue("100.64.0.1");
 
-    await expect(callGateway({ method: "health" })).rejects.toThrow("SECURITY ERROR");
+    await callGateway({ method: "health" });
+    expect(lastClientOptions?.url).toBe("ws://100.64.0.1:18800");
   });
 
   it("uses LAN IP with TLS when bind is lan", async () => {
@@ -294,6 +295,21 @@ describe("buildGatewayConnectionDetails", () => {
     pickPrimaryLanIPv4.mockReturnValue("10.0.0.5");
 
     expect(() => buildGatewayConnectionDetails()).toThrow("SECURITY ERROR");
+  });
+
+  it("allows ws:// to Tailscale CGNAT IPs in local lan mode", () => {
+    loadConfig.mockReturnValue({
+      gateway: { mode: "local", bind: "lan" },
+    });
+    resolveGatewayPort.mockReturnValue(18800);
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+    pickPrimaryLanIPv4.mockReturnValue("100.64.0.1");
+
+    const details = buildGatewayConnectionDetails();
+
+    expect(details.url).toBe("ws://100.64.0.1:18800");
+    expect(details.urlSource).toBe("local lan 100.64.0.1");
+    expect(details.message).toContain("Source: local lan 100.64.0.1");
   });
 
   it("prefers remote url when configured", () => {
