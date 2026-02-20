@@ -535,6 +535,40 @@ export function collectGatewayHttpSessionKeyOverrideFindings(
   return findings;
 }
 
+export function collectGatewayHttpNoAuthFindings(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+): SecurityAuditFinding[] {
+  const findings: SecurityAuditFinding[] = [];
+  const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
+  const auth = resolveGatewayAuth({ authConfig: cfg.gateway?.auth, tailscaleMode, env });
+  if (auth.mode !== "none") {
+    return findings;
+  }
+
+  const chatCompletionsEnabled = cfg.gateway?.http?.endpoints?.chatCompletions?.enabled === true;
+  const responsesEnabled = cfg.gateway?.http?.endpoints?.responses?.enabled === true;
+  const enabledEndpoints = [
+    "/tools/invoke",
+    chatCompletionsEnabled ? "/v1/chat/completions" : null,
+    responsesEnabled ? "/v1/responses" : null,
+  ].filter((entry): entry is string => Boolean(entry));
+
+  const remoteExposure = isGatewayRemotelyExposed(cfg);
+  findings.push({
+    checkId: "gateway.http.no_auth",
+    severity: remoteExposure ? "critical" : "warn",
+    title: "Gateway HTTP APIs are reachable without auth",
+    detail:
+      `gateway.auth.mode="none" leaves ${enabledEndpoints.join(", ")} callable without a shared secret. ` +
+      "Treat this as trusted-local only and avoid exposing the gateway beyond loopback.",
+    remediation:
+      "Set gateway.auth.mode to token/password (recommended). If you intentionally keep mode=none, keep gateway.bind=loopback and disable optional HTTP endpoints.",
+  });
+
+  return findings;
+}
+
 export function collectSandboxDockerNoopFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const configuredPaths: string[] = [];

@@ -1,5 +1,4 @@
 import { spawn } from "node:child_process";
-import fs from "node:fs";
 import path from "node:path";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawPluginApi } from "../../../src/plugins/types.js";
@@ -21,43 +20,6 @@ type LobsterEnvelope =
       ok: false;
       error: { type?: string; message: string };
     };
-
-function resolveExecutablePath(lobsterPathRaw: string | undefined) {
-  const lobsterPath = lobsterPathRaw?.trim() || "lobster";
-
-  // SECURITY:
-  // Never allow arbitrary executables (e.g. /bin/bash). If the caller overrides
-  // the path, it must still be the lobster binary (by name) and be absolute.
-  if (lobsterPath !== "lobster") {
-    if (!path.isAbsolute(lobsterPath)) {
-      throw new Error("lobsterPath must be an absolute path (or omit to use PATH)");
-    }
-    const base = path.basename(lobsterPath).toLowerCase();
-    const allowed =
-      process.platform === "win32" ? ["lobster.exe", "lobster.cmd", "lobster.bat"] : ["lobster"];
-    if (!allowed.includes(base)) {
-      throw new Error("lobsterPath must point to the lobster executable");
-    }
-    let stat: fs.Stats;
-    try {
-      stat = fs.statSync(lobsterPath);
-    } catch {
-      throw new Error("lobsterPath must exist");
-    }
-    if (!stat.isFile()) {
-      throw new Error("lobsterPath must point to a file");
-    }
-    if (process.platform !== "win32") {
-      try {
-        fs.accessSync(lobsterPath, fs.constants.X_OK);
-      } catch {
-        throw new Error("lobsterPath must be executable");
-      }
-    }
-  }
-
-  return lobsterPath;
-}
 
 function normalizeForCwdSandbox(p: string): string {
   const normalized = path.normalize(p);
@@ -180,16 +142,6 @@ async function runLobsterSubprocessOnce(params: {
   });
 }
 
-async function runLobsterSubprocess(params: {
-  execPath: string;
-  argv: string[];
-  cwd: string;
-  timeoutMs: number;
-  maxStdoutBytes: number;
-}) {
-  return await runLobsterSubprocessOnce(params);
-}
-
 function parseEnvelope(stdout: string): LobsterEnvelope {
   const trimmed = stdout.trim();
 
@@ -228,6 +180,33 @@ function parseEnvelope(stdout: string): LobsterEnvelope {
   throw new Error("lobster returned invalid JSON envelope");
 }
 
+function buildLobsterArgv(action: string, params: Record<string, unknown>): string[] {
+  if (action === "run") {
+    const pipeline = typeof params.pipeline === "string" ? params.pipeline : "";
+    if (!pipeline.trim()) {
+      throw new Error("pipeline required");
+    }
+    const argv = ["run", "--mode", "tool", pipeline];
+    const argsJson = typeof params.argsJson === "string" ? params.argsJson : "";
+    if (argsJson.trim()) {
+      argv.push("--args-json", argsJson);
+    }
+    return argv;
+  }
+  if (action === "resume") {
+    const token = typeof params.token === "string" ? params.token : "";
+    if (!token.trim()) {
+      throw new Error("token required");
+    }
+    const approve = params.approve;
+    if (typeof approve !== "boolean") {
+      throw new Error("approve required");
+    }
+    return ["resume", "--token", token, "--approve", approve ? "yes" : "no"];
+  }
+  throw new Error(`Unknown action: ${action}`);
+}
+
 export function createLobsterTool(api: OpenClawPluginApi) {
   return {
     name: "lobster",
@@ -241,11 +220,6 @@ export function createLobsterTool(api: OpenClawPluginApi) {
       argsJson: Type.Optional(Type.String()),
       token: Type.Optional(Type.String()),
       approve: Type.Optional(Type.Boolean()),
-      // SECURITY: Do not allow the agent to choose an executable path.
-      // Host can configure the lobster binary via plugin config.
-      lobsterPath: Type.Optional(
-        Type.String({ description: "(deprecated) Use plugin config instead." }),
-      ),
       cwd: Type.Optional(
         Type.String({
           description:
@@ -261,55 +235,19 @@ export function createLobsterTool(api: OpenClawPluginApi) {
         throw new Error("action required");
       }
 
-      // SECURITY: never allow tool callers (agent/user) to select executables.
-      // If a host needs to override the binary, it must do so via plugin config.
-      // We still validate the parameter shape to prevent reintroducing an RCE footgun.
-      if (typeof params.lobsterPath === "string" && params.lobsterPath.trim()) {
-        resolveExecutablePath(params.lobsterPath);
-      }
-
-      const execPath = resolveExecutablePath(
-        typeof api.pluginConfig?.lobsterPath === "string"
-          ? api.pluginConfig.lobsterPath
-          : undefined,
-      );
+      const execPath = "lobster";
       const cwd = resolveCwd(params.cwd);
       const timeoutMs = typeof params.timeoutMs === "number" ? params.timeoutMs : 20_000;
       const maxStdoutBytes =
         typeof params.maxStdoutBytes === "number" ? params.maxStdoutBytes : 512_000;
 
-      const argv = (() => {
-        if (action === "run") {
-          const pipeline = typeof params.pipeline === "string" ? params.pipeline : "";
-          if (!pipeline.trim()) {
-            throw new Error("pipeline required");
-          }
-          const argv = ["run", "--mode", "tool", pipeline];
-          const argsJson = typeof params.argsJson === "string" ? params.argsJson : "";
-          if (argsJson.trim()) {
-            argv.push("--args-json", argsJson);
-          }
-          return argv;
-        }
-        if (action === "resume") {
-          const token = typeof params.token === "string" ? params.token : "";
-          if (!token.trim()) {
-            throw new Error("token required");
-          }
-          const approve = params.approve;
-          if (typeof approve !== "boolean") {
-            throw new Error("approve required");
-          }
-          return ["resume", "--token", token, "--approve", approve ? "yes" : "no"];
-        }
-        throw new Error(`Unknown action: ${action}`);
-      })();
+      const argv = buildLobsterArgv(action, params);
 
       if (api.runtime?.version && api.logger?.debug) {
         api.logger.debug(`lobster plugin runtime=${api.runtime.version}`);
       }
 
-      const { stdout } = await runLobsterSubprocess({
+      const { stdout } = await runLobsterSubprocessOnce({
         execPath,
         argv,
         cwd,

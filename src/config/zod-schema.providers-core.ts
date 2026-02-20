@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { isSafeScpRemoteHost } from "../infra/scp-host.js";
+import { isValidInboundPathRootPattern } from "../media/inbound-path-policy.js";
 import {
   normalizeTelegramCommandDescription,
   normalizeTelegramCommandName,
@@ -112,6 +113,7 @@ export const TelegramAccountSchemaBase = z
     replyToMode: ReplyToModeSchema.optional(),
     groups: z.record(z.string(), TelegramGroupSchema.optional()).optional(),
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+    defaultTo: z.union([z.string(), z.number()]).optional(),
     groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
     historyLimit: z.number().int().min(0).optional(),
@@ -320,6 +322,7 @@ export const DiscordAccountSchema = z
     // inheritance in multi-account setups (shallow merge works; nested dm object doesn't).
     dmPolicy: DmPolicySchema.optional(),
     allowFrom: DiscordIdListSchema.optional(),
+    defaultTo: z.string().optional(),
     dm: DiscordDmSchema.optional(),
     guilds: z.record(z.string(), DiscordGuildSchema.optional()).optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
@@ -447,6 +450,7 @@ export const GoogleChatAccountSchema = z
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
     groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     groups: z.record(z.string(), GoogleChatGroupSchema.optional()).optional(),
+    defaultTo: z.string().optional(),
     serviceAccount: z.union([z.string(), z.record(z.string(), z.unknown())]).optional(),
     serviceAccountFile: z.string().optional(),
     audienceType: z.enum(["app-url", "project-number"]).optional(),
@@ -580,6 +584,7 @@ export const SlackAccountSchema = z
     // inheritance in multi-account setups (shallow merge works; nested dm object doesn't).
     dmPolicy: DmPolicySchema.optional(),
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+    defaultTo: z.string().optional(),
     dm: SlackDmSchema.optional(),
     channels: z.record(z.string(), SlackChannelSchema.optional()).optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
@@ -662,6 +667,7 @@ export const SignalAccountSchemaBase = z
     sendReadReceipts: z.boolean().optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+    defaultTo: z.string().optional(),
     groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
     historyLimit: z.number().int().min(0).optional(),
@@ -750,6 +756,7 @@ export const IrcAccountSchemaBase = z
     channels: z.array(z.string()).optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+    defaultTo: z.string().optional(),
     groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
     groups: z.record(z.string(), IrcGroupSchema.optional()).optional(),
@@ -813,12 +820,19 @@ export const IMessageAccountSchemaBase = z
     region: z.string().optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+    defaultTo: z.string().optional(),
     groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
     historyLimit: z.number().int().min(0).optional(),
     dmHistoryLimit: z.number().int().min(0).optional(),
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
     includeAttachments: z.boolean().optional(),
+    attachmentRoots: z
+      .array(z.string().refine(isValidInboundPathRootPattern, "expected absolute path root"))
+      .optional(),
+    remoteAttachmentRoots: z
+      .array(z.string().refine(isValidInboundPathRootPattern, "expected absolute path root"))
+      .optional(),
     mediaMaxMb: z.number().int().positive().optional(),
     textChunkLimit: z.number().int().positive().optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),
@@ -984,6 +998,7 @@ export const MSTeamsConfigSchema = z
       .optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),
     allowFrom: z.array(z.string()).optional(),
+    defaultTo: z.string().optional(),
     groupAllowFrom: z.array(z.string()).optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
     textChunkLimit: z.number().int().positive().optional(),

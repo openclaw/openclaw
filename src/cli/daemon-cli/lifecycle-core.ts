@@ -10,6 +10,7 @@ import {
   buildDaemonServiceSnapshot,
   createNullWriter,
   type DaemonAction,
+  type DaemonActionResponse,
   emitDaemonActionJson,
 } from "./response.js";
 
@@ -30,20 +31,7 @@ async function maybeAugmentSystemdHints(hints: string[]): Promise<string[]> {
 
 function createActionIO(params: { action: DaemonAction; json: boolean }) {
   const stdout = params.json ? createNullWriter() : process.stdout;
-  const emit = (payload: {
-    ok: boolean;
-    result?: string;
-    message?: string;
-    error?: string;
-    hints?: string[];
-    warnings?: string[];
-    service?: {
-      label: string;
-      loaded: boolean;
-      loadedText: string;
-      notLoadedText: string;
-    };
-  }) => {
+  const emit = (payload: Omit<DaemonActionResponse, "action">) => {
     if (!params.json) {
       return;
     }

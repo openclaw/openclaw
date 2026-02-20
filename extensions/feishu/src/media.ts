@@ -1,10 +1,10 @@
 import fs from "fs";
-import os from "os";
 import path from "path";
 import { Readable } from "stream";
-import type { ClawdbotConfig } from "openclaw/plugin-sdk";
+import { withTempDownloadPath, type ClawdbotConfig } from "openclaw/plugin-sdk";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
+import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { assertFeishuMessageApiSuccess, toFeishuSendResult } from "./send-result.js";
 import { resolveReceiveIdType, normalizeFeishuTarget } from "./targets.js";
@@ -19,19 +19,6 @@ export type DownloadMessageResourceResult = {
   contentType?: string;
   fileName?: string;
 };
-
-async function withTempDownloadPath<T>(
-  prefix: string,
-  fn: (tmpPath: string) => Promise<T>,
-): Promise<T> {
-  const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), prefix));
-  const tmpPath = path.join(dir, "download.bin");
-  try {
-    return await fn(tmpPath);
-  } finally {
-    await fs.promises.rm(dir, { recursive: true, force: true }).catch(() => {});
-  }
-}
 
 async function readFeishuResponseBuffer(params: {
   response: unknown;
@@ -66,7 +53,7 @@ async function readFeishuResponseBuffer(params: {
     return Buffer.concat(chunks);
   }
   if (typeof responseAny.writeFile === "function") {
-    return await withTempDownloadPath(params.tmpDirPrefix, async (tmpPath) => {
+    return await withTempDownloadPath({ prefix: params.tmpDirPrefix }, async (tmpPath) => {
       await responseAny.writeFile(tmpPath);
       return await fs.promises.readFile(tmpPath);
     });
@@ -101,6 +88,10 @@ export async function downloadImageFeishu(params: {
   accountId?: string;
 }): Promise<DownloadImageResult> {
   const { cfg, imageKey, accountId } = params;
+  const normalizedImageKey = normalizeFeishuExternalKey(imageKey);
+  if (!normalizedImageKey) {
+    throw new Error("Feishu image download failed: invalid image_key");
+  }
   const account = resolveFeishuAccount({ cfg, accountId });
   if (!account.configured) {
     throw new Error(`Feishu account "${account.accountId}" not configured`);
@@ -109,7 +100,7 @@ export async function downloadImageFeishu(params: {
   const client = createFeishuClient(account);
 
   const response = await client.im.image.get({
-    path: { image_key: imageKey },
+    path: { image_key: normalizedImageKey },
   });
 
   const buffer = await readFeishuResponseBuffer({
@@ -132,6 +123,10 @@ export async function downloadMessageResourceFeishu(params: {
   accountId?: string;
 }): Promise<DownloadMessageResourceResult> {
   const { cfg, messageId, fileKey, type, accountId } = params;
+  const normalizedFileKey = normalizeFeishuExternalKey(fileKey);
+  if (!normalizedFileKey) {
+    throw new Error("Feishu message resource download failed: invalid file_key");
+  }
   const account = resolveFeishuAccount({ cfg, accountId });
   if (!account.configured) {
     throw new Error(`Feishu account "${account.accountId}" not configured`);
@@ -140,7 +135,7 @@ export async function downloadMessageResourceFeishu(params: {
   const client = createFeishuClient(account);
 
   const response = await client.im.messageResource.get({
-    path: { message_id: messageId, file_key: fileKey },
+    path: { message_id: messageId, file_key: normalizedFileKey },
     params: { type },
   });
 

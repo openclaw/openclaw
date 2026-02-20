@@ -14,6 +14,7 @@ import {
   mergeExecApprovalsSocketDefaults,
   minSecurity,
   normalizeExecApprovals,
+  parseExecArgvToken,
   normalizeSafeBins,
   requiresExecApproval,
   resolveCommandResolution,
@@ -21,9 +22,11 @@ import {
   resolveExecApprovalsFromFile,
   resolveExecApprovalsPath,
   resolveExecApprovalsSocketPath,
+  resolveSafeBins,
   type ExecAllowlistEntry,
   type ExecApprovalsFile,
 } from "./exec-approvals.js";
+import { SAFE_BIN_PROFILE_FIXTURES, SAFE_BIN_PROFILES } from "./exec-safe-bin-policy.js";
 
 function makePathEnv(binDir: string): NodeJS.ProcessEnv {
   if (process.platform !== "win32") {
@@ -327,6 +330,26 @@ describe("exec approvals shell parsing", () => {
     expect(res.ok).toBe(true);
     expect(res.segments[0]?.argv).toEqual(["C:\\Program Files\\Tool\\tool.exe", "--version"]);
   });
+
+  it("normalizes short option clusters with attached payloads", () => {
+    const parsed = parseExecArgvToken("-oblocked.txt");
+    expect(parsed.kind).toBe("option");
+    if (parsed.kind !== "option" || parsed.style !== "short-cluster") {
+      throw new Error("expected short-cluster option");
+    }
+    expect(parsed.flags[0]).toBe("-o");
+    expect(parsed.cluster).toBe("oblocked.txt");
+  });
+
+  it("normalizes long options with inline payloads", () => {
+    const parsed = parseExecArgvToken("--output=blocked.txt");
+    expect(parsed.kind).toBe("option");
+    if (parsed.kind !== "option" || parsed.style !== "long") {
+      throw new Error("expected long option");
+    }
+    expect(parsed.flag).toBe("--output");
+    expect(parsed.inlineValue).toBe("blocked.txt");
+  });
 });
 
 describe("exec approvals shell allowlist (chained commands)", () => {
@@ -414,6 +437,9 @@ describe("exec approvals safe bins", () => {
     argv: string[];
     resolvedPath: string;
     expected: boolean;
+    safeBins?: string[];
+    executableName?: string;
+    rawExecutable?: string;
     cwd?: string;
     setup?: (cwd: string) => void;
   };
@@ -439,6 +465,38 @@ describe("exec approvals safe bins", () => {
       expected: false,
       cwd: "/tmp",
     },
+    {
+      name: "blocks sort output path via -o <file>",
+      argv: ["sort", "-o", "malicious.sh"],
+      resolvedPath: "/usr/bin/sort",
+      expected: false,
+      safeBins: ["sort"],
+      executableName: "sort",
+    },
+    {
+      name: "blocks sort output path via attached short option (-ofile)",
+      argv: ["sort", "-omalicious.sh"],
+      resolvedPath: "/usr/bin/sort",
+      expected: false,
+      safeBins: ["sort"],
+      executableName: "sort",
+    },
+    {
+      name: "blocks sort output path via --output=file",
+      argv: ["sort", "--output=malicious.sh"],
+      resolvedPath: "/usr/bin/sort",
+      expected: false,
+      safeBins: ["sort"],
+      executableName: "sort",
+    },
+    {
+      name: "blocks grep recursive flags that read cwd",
+      argv: ["grep", "-R", "needle"],
+      resolvedPath: "/usr/bin/grep",
+      expected: false,
+      safeBins: ["grep"],
+      executableName: "grep",
+    },
   ];
 
   for (const testCase of cases) {
@@ -448,15 +506,16 @@ describe("exec approvals safe bins", () => {
       }
       const cwd = testCase.cwd ?? makeTempDir();
       testCase.setup?.(cwd);
+      const executableName = testCase.executableName ?? "jq";
+      const rawExecutable = testCase.rawExecutable ?? executableName;
       const ok = isSafeBinUsage({
         argv: testCase.argv,
         resolution: {
-          rawExecutable: "jq",
+          rawExecutable,
           resolvedPath: testCase.resolvedPath,
-          executableName: "jq",
+          executableName,
         },
-        safeBins: normalizeSafeBins(["jq"]),
-        cwd,
+        safeBins: normalizeSafeBins(testCase.safeBins ?? [executableName]),
       });
       expect(ok).toBe(testCase.expected);
     });
@@ -475,9 +534,140 @@ describe("exec approvals safe bins", () => {
       },
       safeBins: normalizeSafeBins(["jq"]),
       trustedSafeBinDirs: new Set(["/custom/bin"]),
-      cwd: "/tmp",
     });
     expect(ok).toBe(true);
+  });
+
+  it("supports injected platform for deterministic safe-bin checks", () => {
+    const ok = isSafeBinUsage({
+      argv: ["jq", ".foo"],
+      resolution: {
+        rawExecutable: "jq",
+        resolvedPath: "/usr/bin/jq",
+        executableName: "jq",
+      },
+      safeBins: normalizeSafeBins(["jq"]),
+      platform: "win32",
+    });
+    expect(ok).toBe(false);
+  });
+
+  it("supports injected trusted path checker for deterministic callers", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const baseParams = {
+      argv: ["jq", ".foo"],
+      resolution: {
+        rawExecutable: "jq",
+        resolvedPath: "/tmp/custom/jq",
+        executableName: "jq",
+      },
+      safeBins: normalizeSafeBins(["jq"]),
+    };
+    expect(
+      isSafeBinUsage({
+        ...baseParams,
+        isTrustedSafeBinPathFn: () => true,
+      }),
+    ).toBe(true);
+    expect(
+      isSafeBinUsage({
+        ...baseParams,
+        isTrustedSafeBinPathFn: () => false,
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps safe-bin profile fixtures aligned with compiled profiles", () => {
+    for (const [name, fixture] of Object.entries(SAFE_BIN_PROFILE_FIXTURES)) {
+      const profile = SAFE_BIN_PROFILES[name];
+      expect(profile).toBeDefined();
+      const fixtureBlockedFlags = fixture.blockedFlags ?? [];
+      const compiledBlockedFlags = profile?.blockedFlags ?? new Set<string>();
+      for (const blockedFlag of fixtureBlockedFlags) {
+        expect(compiledBlockedFlags.has(blockedFlag)).toBe(true);
+      }
+      expect(Array.from(compiledBlockedFlags).toSorted()).toEqual(
+        [...fixtureBlockedFlags].toSorted(),
+      );
+    }
+  });
+
+  it("does not include sort/grep in default safeBins", () => {
+    const defaults = resolveSafeBins(undefined);
+    expect(defaults.has("jq")).toBe(true);
+    expect(defaults.has("sort")).toBe(false);
+    expect(defaults.has("grep")).toBe(false);
+  });
+
+  it("blocks sort output flags independent of file existence", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const cwd = makeTempDir();
+    fs.writeFileSync(path.join(cwd, "existing.txt"), "x");
+    const resolution = {
+      rawExecutable: "sort",
+      resolvedPath: "/usr/bin/sort",
+      executableName: "sort",
+    };
+    const safeBins = normalizeSafeBins(["sort"]);
+    const existing = isSafeBinUsage({
+      argv: ["sort", "-o", "existing.txt"],
+      resolution,
+      safeBins,
+    });
+    const missing = isSafeBinUsage({
+      argv: ["sort", "-o", "missing.txt"],
+      resolution,
+      safeBins,
+    });
+    const longFlag = isSafeBinUsage({
+      argv: ["sort", "--output=missing.txt"],
+      resolution,
+      safeBins,
+    });
+    expect(existing).toBe(false);
+    expect(missing).toBe(false);
+    expect(longFlag).toBe(false);
+  });
+
+  it("threads trusted safe-bin dirs through allowlist evaluation", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const analysis = {
+      ok: true as const,
+      segments: [
+        {
+          raw: "jq .foo",
+          argv: ["jq", ".foo"],
+          resolution: {
+            rawExecutable: "jq",
+            resolvedPath: "/custom/bin/jq",
+            executableName: "jq",
+          },
+        },
+      ],
+    };
+    const denied = evaluateExecAllowlist({
+      analysis,
+      allowlist: [],
+      safeBins: normalizeSafeBins(["jq"]),
+      trustedSafeBinDirs: new Set(["/usr/bin"]),
+      cwd: "/tmp",
+    });
+    expect(denied.allowlistSatisfied).toBe(false);
+
+    const allowed = evaluateExecAllowlist({
+      analysis,
+      allowlist: [],
+      safeBins: normalizeSafeBins(["jq"]),
+      trustedSafeBinDirs: new Set(["/custom/bin"]),
+      cwd: "/tmp",
+    });
+    expect(allowed.allowlistSatisfied).toBe(true);
   });
 });
 
@@ -708,7 +898,6 @@ describe("exec approvals node host allowlist check", () => {
       argv: ["unknown-tool", "--help"],
       resolution,
       safeBins: normalizeSafeBins(["jq", "curl"]),
-      cwd: "/tmp",
     });
     expect(safe).toBe(false);
   });
@@ -729,7 +918,6 @@ describe("exec approvals node host allowlist check", () => {
       argv: ["jq", ".foo"],
       resolution,
       safeBins: normalizeSafeBins(["jq"]),
-      cwd: "/tmp",
     });
     // Safe bins are disabled on Windows (PowerShell parsing/expansion differences).
     if (process.platform === "win32") {

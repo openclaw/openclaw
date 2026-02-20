@@ -154,7 +154,7 @@ export { extractToolSend } from "./tool-send.js";
 export { resolveChannelAccountConfigBasePath } from "./config-paths.js";
 export { chunkTextForOutbound } from "./text-chunking.js";
 export { readJsonFileWithFallback, writeJsonFileAtomically } from "./json-store.js";
-export { buildRandomTempFilePath } from "./temp-path.js";
+export { buildRandomTempFilePath, withTempDownloadPath } from "./temp-path.js";
 export type { ChatType } from "../channels/chat-type.js";
 /** @deprecated Use ChatType instead */
 export type { RoutePeerKind } from "../routing/resolve-route.js";

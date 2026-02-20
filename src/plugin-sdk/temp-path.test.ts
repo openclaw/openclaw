@@ -1,7 +1,8 @@
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildRandomTempFilePath } from "./temp-path.js";
+import { buildRandomTempFilePath, withTempDownloadPath } from "./temp-path.js";
 
 describe("buildRandomTempFilePath", () => {
   it("builds deterministic paths when now/uuid are provided", () => {
@@ -28,5 +29,43 @@ describe("buildRandomTempFilePath", () => {
     expect(rel === ".." || rel.startsWith(`..${path.sep}`)).toBe(false);
     expect(path.basename(result)).toBe("line-media-123-abc.jpg");
     expect(result).not.toContain("..");
+  });
+});
+
+describe("withTempDownloadPath", () => {
+  it("creates a temp path under tmp dir and cleans up the temp directory", async () => {
+    let capturedPath = "";
+    await withTempDownloadPath(
+      {
+        prefix: "line-media",
+      },
+      async (tmpPath) => {
+        capturedPath = tmpPath;
+        await fs.writeFile(tmpPath, "ok");
+      },
+    );
+
+    expect(capturedPath).toContain(path.join(os.tmpdir(), "line-media-"));
+    await expect(fs.stat(capturedPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("sanitizes prefix and fileName", async () => {
+    let capturedPath = "";
+    await withTempDownloadPath(
+      {
+        prefix: "../../line/../media",
+        fileName: "../../evil.bin",
+      },
+      async (tmpPath) => {
+        capturedPath = tmpPath;
+      },
+    );
+
+    const tmpRoot = path.resolve(os.tmpdir());
+    const resolved = path.resolve(capturedPath);
+    const rel = path.relative(tmpRoot, resolved);
+    expect(rel === ".." || rel.startsWith(`..${path.sep}`)).toBe(false);
+    expect(path.basename(capturedPath)).toBe("evil.bin");
+    expect(capturedPath).not.toContain("..");
   });
 });
