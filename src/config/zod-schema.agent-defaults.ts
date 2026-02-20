@@ -42,7 +42,10 @@ export const AgentDefaultsSchema = z
           .strict(),
       )
       .optional(),
-    workspace: z.string().optional(),
+    workspace: z.object({
+        injectMode: z.enum(["every-turn", "once", "minimal"]).optional(),
+      }).optional(),
+      // Legacy: workspace: z.string().optional(),
     repoRoot: z.string().optional(),
     skipBootstrap: z.boolean().optional(),
     bootstrapMaxChars: z.number().int().positive().optional(),
