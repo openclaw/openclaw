@@ -56,6 +56,7 @@ export type EmbeddingProviderOptions = {
     headers?: Record<string, string>;
   };
   model: string;
+  dimensions?: number;
   fallback: EmbeddingProviderFallback;
   local?: {
     modelPath?: string;

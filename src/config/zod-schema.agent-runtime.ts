@@ -494,6 +494,7 @@ export const MemorySearchSchema = z
       ])
       .optional(),
     model: z.string().optional(),
+    dimensions: z.number().int().positive().optional(),
     local: z
       .object({
         modelPath: z.string().optional(),

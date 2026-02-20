@@ -6,6 +6,7 @@ export type VoyageEmbeddingClient = {
   baseUrl: string;
   headers: Record<string, string>;
   model: string;
+  dimensions?: number;
 };
 
 export const DEFAULT_VOYAGE_EMBEDDING_MODEL = "voyage-4-large";
@@ -37,12 +38,20 @@ export async function createVoyageEmbeddingProvider(
     if (input.length === 0) {
       return [];
     }
-    const body: { model: string; input: string[]; input_type?: "query" | "document" } = {
+    const body: {
+      model: string;
+      input: string[];
+      input_type?: "query" | "document";
+      output_dimension?: number;
+    } = {
       model: client.model,
       input,
     };
     if (input_type) {
       body.input_type = input_type;
+    }
+    if (client.dimensions) {
+      body.output_dimension = client.dimensions;
     }
 
     return await fetchRemoteEmbeddingVectors({
@@ -77,5 +86,5 @@ export async function resolveVoyageEmbeddingClient(
     defaultBaseUrl: DEFAULT_VOYAGE_BASE_URL,
   });
   const model = normalizeVoyageModel(options.model);
-  return { baseUrl, headers, model };
+  return { baseUrl, headers, model, dimensions: options.dimensions };
 }
