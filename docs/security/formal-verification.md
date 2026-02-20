@@ -23,7 +23,7 @@ misconfiguration safety), under explicit assumptions.
 
 ## Where the models live
 
-> Note: The formal models repository is currently being migrated. For now, security models are maintained in the main OpenClaw repository under `specs/`.
+> Note: The formal models repository is currently being migrated. For now, please contact the OpenClaw team for access to the security models.
 
 ## Important caveats
 
