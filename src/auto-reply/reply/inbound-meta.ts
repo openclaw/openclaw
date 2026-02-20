@@ -70,7 +70,8 @@ export function buildInboundMetaSystemPrompt(ctx: TemplateContext): string {
 export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
   const blocks: string[] = [];
   const chatType = normalizeChatType(ctx.ChatType);
-  const isDirect = !chatType || chatType === "direct";
+  const isDirect =
+    !chatType || chatType === "direct" || safeTrim(ctx.SenderId) === "openclaw-control-ui";
 
   const messageId = safeTrim(ctx.MessageSid);
   const messageIdFull = safeTrim(ctx.MessageSidFull);
@@ -81,8 +82,8 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
       : messageIdFull && messageIdFull !== messageId
         ? messageIdFull
         : undefined,
-    reply_to_id: safeTrim(ctx.ReplyToId),
-    sender_id: safeTrim(ctx.SenderId),
+    reply_to_id: isDirect ? undefined : safeTrim(ctx.ReplyToId),
+    sender_id: isDirect ? undefined : safeTrim(ctx.SenderId),
     conversation_label: isDirect ? undefined : safeTrim(ctx.ConversationLabel),
     sender: isDirect
       ? undefined
