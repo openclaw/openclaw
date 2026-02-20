@@ -1,10 +1,11 @@
-import type { CronJob, CronSchedule } from "../../cron/types.js";
-import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import { parseAbsoluteTimeMs } from "../../cron/parse.js";
+import { resolveCronStaggerMs } from "../../cron/stagger.js";
+import type { CronJob, CronSchedule } from "../../cron/types.js";
 import { formatDurationHuman } from "../../infra/format-time/format-duration.ts";
 import { defaultRuntime } from "../../runtime.js";
 import { colorize, isRich, theme } from "../../terminal/theme.js";
+import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { callGatewayFromCli } from "../gateway-rpc.js";
 
 export const getCronChannelOptions = () =>
@@ -137,7 +138,12 @@ const formatSchedule = (schedule: CronSchedule) => {
   if (schedule.kind === "every") {
     return `every ${formatDurationHuman(schedule.everyMs)}`;
   }
-  return schedule.tz ? `cron ${schedule.expr} @ ${schedule.tz}` : `cron ${schedule.expr}`;
+  const base = schedule.tz ? `cron ${schedule.expr} @ ${schedule.tz}` : `cron ${schedule.expr}`;
+  const staggerMs = resolveCronStaggerMs(schedule);
+  if (staggerMs <= 0) {
+    return `${base} (exact)`;
+  }
+  return `${base} (stagger ${formatDurationHuman(staggerMs)})`;
 };
 
 const formatStatus = (job: CronJob) => {

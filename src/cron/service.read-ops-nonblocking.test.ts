@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { CronService } from "./service.js";
 
@@ -17,29 +16,53 @@ async function makeStorePath() {
   return {
     storePath: path.join(dir, "cron", "jobs.json"),
     cleanup: async () => {
-      await fs.rm(dir, { recursive: true, force: true });
+      // On macOS, teardown can race with trailing async fs writes and leave
+      // transient ENOTEMPTY/EBUSY errors; let fs.rm handle retries natively.
+      try {
+        await fs.rm(dir, {
+          recursive: true,
+          force: true,
+          maxRetries: 10,
+          retryDelay: 10,
+        });
+      } catch {
+        await fs.rm(dir, { recursive: true, force: true });
+      }
     },
   };
 }
 
 describe("CronService read ops while job is running", () => {
   it("keeps list and status responsive during a long isolated run", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2025-12-13T00:00:00.000Z"));
     const store = await makeStorePath();
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeatNow = vi.fn();
+    let resolveFinished: (() => void) | undefined;
+    const finished = new Promise<void>((resolve) => {
+      resolveFinished = resolve;
+    });
 
     let resolveRun:
       | ((value: { status: "ok" | "error" | "skipped"; summary?: string; error?: string }) => void)
       | undefined;
 
-    const runIsolatedAgentJob = vi.fn(
-      async () =>
-        await new Promise<{ status: "ok" | "error" | "skipped"; summary?: string; error?: string }>(
-          (resolve) => {
-            resolveRun = resolve;
-          },
-        ),
-    );
+    let resolveRunStarted: (() => void) | undefined;
+    const runStarted = new Promise<void>((resolve) => {
+      resolveRunStarted = resolve;
+    });
+
+    const runIsolatedAgentJob = vi.fn(async () => {
+      resolveRunStarted?.();
+      return await new Promise<{
+        status: "ok" | "error" | "skipped";
+        summary?: string;
+        error?: string;
+      }>((resolve) => {
+        resolveRun = resolve;
+      });
+    });
 
     const cron = new CronService({
       storePath: store.storePath,
@@ -48,57 +71,68 @@ describe("CronService read ops while job is running", () => {
       enqueueSystemEvent,
       requestHeartbeatNow,
       runIsolatedAgentJob,
+      onEvent: (evt) => {
+        if (evt.action === "finished" && evt.status === "ok") {
+          resolveFinished?.();
+        }
+      },
     });
 
-    await cron.start();
+    try {
+      await cron.start();
 
-    const runAt = Date.now() + 30;
-    await cron.add({
-      name: "slow isolated",
-      enabled: true,
-      deleteAfterRun: false,
-      schedule: { kind: "at", at: new Date(runAt).toISOString() },
-      sessionTarget: "isolated",
-      wakeMode: "next-heartbeat",
-      payload: { kind: "agentTurn", message: "long task" },
-      delivery: { mode: "none" },
-    });
+      // Schedule the job a second in the future; then jump time to trigger the tick.
+      await cron.add({
+        name: "slow isolated",
+        enabled: true,
+        deleteAfterRun: false,
+        schedule: {
+          kind: "at",
+          at: new Date("2025-12-13T00:00:01.000Z").toISOString(),
+        },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "long task" },
+        delivery: { mode: "none" },
+      });
 
-    for (let i = 0; i < 25 && runIsolatedAgentJob.mock.calls.length === 0; i++) {
-      await delay(20);
-    }
+      vi.setSystemTime(new Date("2025-12-13T00:00:01.000Z"));
+      await vi.runOnlyPendingTimersAsync();
 
-    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+      await runStarted;
+      expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
 
-    const listRace = await Promise.race([
-      cron.list({ includeDisabled: true }).then(() => "ok"),
-      delay(200).then(() => "timeout"),
-    ]);
-    expect(listRace).toBe("ok");
+      await expect(cron.list({ includeDisabled: true })).resolves.toBeTypeOf("object");
+      await expect(cron.status()).resolves.toBeTypeOf("object");
 
-    const statusRace = await Promise.race([
-      cron.status().then(() => "ok"),
-      delay(200).then(() => "timeout"),
-    ]);
-    expect(statusRace).toBe("ok");
+      const running = await cron.list({ includeDisabled: true });
+      expect(running[0]?.state.runningAtMs).toBeTypeOf("number");
 
-    const running = await cron.list({ includeDisabled: true });
-    expect(running[0]?.state.runningAtMs).toBeTypeOf("number");
+      resolveRun?.({ status: "ok", summary: "done" });
 
-    resolveRun?.({ status: "ok", summary: "done" });
+      // Wait until the scheduler writes the result back to the store.
+      await finished;
+      // Ensure any trailing store writes have finished before cleanup.
+      await cron.status();
 
-    for (let i = 0; i < 25; i++) {
-      const jobs = await cron.list({ includeDisabled: true });
-      if (jobs[0]?.state.lastStatus === "ok") {
-        break;
+      const completed = await cron.list({ includeDisabled: true });
+      expect(completed[0]?.state.lastStatus).toBe("ok");
+
+      // Ensure the scheduler loop has fully settled before deleting the store directory.
+      const internal = cron as unknown as { state?: { running?: boolean } };
+      for (let i = 0; i < 100; i += 1) {
+        if (!internal.state?.running) {
+          break;
+        }
+        // eslint-disable-next-line no-await-in-loop
+        await Promise.resolve();
       }
-      await delay(20);
+      expect(internal.state?.running).toBe(false);
+    } finally {
+      cron.stop();
+      vi.clearAllTimers();
+      vi.useRealTimers();
+      await store.cleanup();
     }
-
-    const finished = await cron.list({ includeDisabled: true });
-    expect(finished[0]?.state.lastStatus).toBe("ok");
-
-    cron.stop();
-    await store.cleanup();
   });
 });

@@ -1,6 +1,3 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 import {
@@ -15,22 +12,14 @@ installGatewayTestHooks({ scope: "suite" });
 
 let server: Awaited<ReturnType<typeof startGatewayServer>>;
 let port = 0;
-let previousToken: string | undefined;
 
 beforeAll(async () => {
-  previousToken = process.env.OPENCLAW_GATEWAY_TOKEN;
-  delete process.env.OPENCLAW_GATEWAY_TOKEN;
   port = await getFreePort();
-  server = await startGatewayServer(port);
+  server = await startGatewayServer(port, { controlUiEnabled: true });
 });
 
 afterAll(async () => {
   await server.close();
-  if (previousToken === undefined) {
-    delete process.env.OPENCLAW_GATEWAY_TOKEN;
-  } else {
-    process.env.OPENCLAW_GATEWAY_TOKEN = previousToken;
-  }
 });
 
 const openClient = async () => {
@@ -40,67 +29,41 @@ const openClient = async () => {
   return ws;
 };
 
+const sendConfigApply = async (ws: WebSocket, id: string, raw: unknown) => {
+  ws.send(
+    JSON.stringify({
+      type: "req",
+      id,
+      method: "config.apply",
+      params: { raw },
+    }),
+  );
+  return onceMessage<{ ok: boolean; error?: { message?: string } }>(ws, (o) => {
+    const msg = o as { type?: string; id?: string };
+    return msg.type === "res" && msg.id === id;
+  });
+};
+
 describe("gateway config.apply", () => {
-  it("writes config, stores sentinel, and schedules restart", async () => {
+  it("rejects invalid raw config", async () => {
     const ws = await openClient();
     try {
       const id = "req-1";
-      ws.send(
-        JSON.stringify({
-          type: "req",
-          id,
-          method: "config.apply",
-          params: {
-            raw: '{ "agents": { "list": [{ "id": "main", "workspace": "~/openclaw" }] } }',
-            sessionKey: "agent:main:whatsapp:dm:+15555550123",
-            restartDelayMs: 0,
-          },
-        }),
-      );
-      const res = await onceMessage<{ ok: boolean; payload?: unknown }>(
-        ws,
-        (o) => o.type === "res" && o.id === id,
-      );
-      expect(res.ok).toBe(true);
-
-      // Verify sentinel file was created (restart was scheduled)
-      const sentinelPath = path.join(os.homedir(), ".openclaw", "restart-sentinel.json");
-
-      // Wait for file to be written
-      await new Promise((resolve) => setTimeout(resolve, 100));
-
-      try {
-        const raw = await fs.readFile(sentinelPath, "utf-8");
-        const parsed = JSON.parse(raw) as { payload?: { kind?: string } };
-        expect(parsed.payload?.kind).toBe("config-apply");
-      } catch {
-        // File may not exist if signal delivery is mocked, verify response was ok instead
-        expect(res.ok).toBe(true);
-      }
+      const res = await sendConfigApply(ws, id, "{");
+      expect(res.ok).toBe(false);
+      expect(res.error?.message ?? "").toMatch(/invalid|SyntaxError/i);
     } finally {
       ws.close();
     }
   });
 
-  it("rejects invalid raw config", async () => {
+  it("requires raw to be a string", async () => {
     const ws = await openClient();
     try {
       const id = "req-2";
-      ws.send(
-        JSON.stringify({
-          type: "req",
-          id,
-          method: "config.apply",
-          params: {
-            raw: "{",
-          },
-        }),
-      );
-      const res = await onceMessage<{ ok: boolean; error?: unknown }>(
-        ws,
-        (o) => o.type === "res" && o.id === id,
-      );
+      const res = await sendConfigApply(ws, id, { gateway: { mode: "local" } });
       expect(res.ok).toBe(false);
+      expect(res.error?.message ?? "").toContain("raw");
     } finally {
       ws.close();
     }

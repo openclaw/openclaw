@@ -64,6 +64,7 @@ export function registerPairingCli(program: Command) {
     .command("list")
     .description("List pending pairing requests")
     .option("--channel <channel>", `Channel (${channels.join(", ")})`)
+    .option("--account <accountId>", "Account id (for multi-account channels)")
     .argument("[channel]", `Channel (${channels.join(", ")})`)
     .option("--json", "Print JSON", false)
     .action(async (channelArg, opts) => {
@@ -74,7 +75,10 @@ export function registerPairingCli(program: Command) {
         );
       }
       const channel = parseChannel(channelRaw, channels);
-      const requests = await listChannelPairingRequests(channel);
+      const accountId = String(opts.account ?? "").trim();
+      const requests = accountId
+        ? await listChannelPairingRequests(channel, process.env, accountId)
+        : await listChannelPairingRequests(channel);
       if (opts.json) {
         defaultRuntime.log(JSON.stringify({ channel, requests }, null, 2));
         return;
@@ -111,6 +115,7 @@ export function registerPairingCli(program: Command) {
     .command("approve")
     .description("Approve a pairing code and allow that sender")
     .option("--channel <channel>", `Channel (${channels.join(", ")})`)
+    .option("--account <accountId>", "Account id (for multi-account channels)")
     .argument("<codeOrChannel>", "Pairing code (or channel when using 2 args)")
     .argument("[code]", "Pairing code (when channel is passed as the 1st arg)")
     .option("--notify", "Notify the requester on the same channel", false)
@@ -128,10 +133,17 @@ export function registerPairingCli(program: Command) {
         );
       }
       const channel = parseChannel(channelRaw, channels);
-      const approved = await approveChannelPairingCode({
-        channel,
-        code: String(resolvedCode),
-      });
+      const accountId = String(opts.account ?? "").trim();
+      const approved = accountId
+        ? await approveChannelPairingCode({
+            channel,
+            code: String(resolvedCode),
+            accountId,
+          })
+        : await approveChannelPairingCode({
+            channel,
+            code: String(resolvedCode),
+          });
       if (!approved) {
         throw new Error(`No pending pairing request found for code: ${String(resolvedCode)}`);
       }

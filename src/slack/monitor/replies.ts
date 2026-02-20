@@ -1,10 +1,10 @@
 import type { ChunkMode } from "../../auto-reply/chunk.js";
-import type { ReplyPayload } from "../../auto-reply/types.js";
-import type { MarkdownTableMode } from "../../config/types.base.js";
-import type { RuntimeEnv } from "../../runtime.js";
 import { chunkMarkdownTextWithMode } from "../../auto-reply/chunk.js";
 import { createReplyReferencePlanner } from "../../auto-reply/reply/reply-reference.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import type { ReplyPayload } from "../../auto-reply/types.js";
+import type { MarkdownTableMode } from "../../config/types.base.js";
+import type { RuntimeEnv } from "../../runtime.js";
 import { markdownToSlackMrkdwnChunks } from "../format.js";
 import { sendMessageSlack } from "../send.js";
 
@@ -89,8 +89,11 @@ function createSlackReplyReferencePlanner(params: {
   messageTs: string | undefined;
   hasReplied?: boolean;
 }) {
+  // When already inside a Slack thread, always stay in it regardless of
+  // replyToMode — thread_ts is required to keep messages in the thread.
+  const effectiveMode = params.incomingThreadTs ? "all" : params.replyToMode;
   return createReplyReferencePlanner({
-    replyToMode: params.replyToMode,
+    replyToMode: effectiveMode,
     existingId: params.incomingThreadTs,
     startId: params.messageTs,
     hasReplied: params.hasReplied,

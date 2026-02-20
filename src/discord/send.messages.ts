@@ -1,5 +1,6 @@
 import type { APIChannel, APIMessage } from "discord-api-types/v10";
 import { ChannelType, Routes } from "discord-api-types/v10";
+import { resolveDiscordRest } from "./send.shared.js";
 import type {
   DiscordMessageEdit,
   DiscordMessageQuery,
@@ -8,7 +9,6 @@ import type {
   DiscordThreadCreate,
   DiscordThreadList,
 } from "./send.types.js";
-import { resolveDiscordRest } from "./send.shared.js";
 
 export async function readMessagesDiscord(
   channelId: string,
@@ -105,6 +105,9 @@ export async function createThreadDiscord(
   if (payload.autoArchiveMinutes) {
     body.auto_archive_duration = payload.autoArchiveMinutes;
   }
+  if (!payload.messageId && payload.type !== undefined) {
+    body.type = payload.type;
+  }
   let channelType: ChannelType | undefined;
   if (!payload.messageId) {
     // Only detect channel kind for route-less thread creation.
@@ -122,10 +125,26 @@ export async function createThreadDiscord(
     const starterContent = payload.content?.trim() ? payload.content : payload.name;
     body.message = { content: starterContent };
   }
+  // When creating a standalone thread (no messageId) in a non-forum channel,
+  // default to public thread (type 11). Discord defaults to private (type 12)
+  // which is unexpected for most users. (#14147)
+  if (!payload.messageId && !isForumLike && body.type === undefined) {
+    body.type = ChannelType.PublicThread;
+  }
   const route = payload.messageId
     ? Routes.threads(channelId, payload.messageId)
     : Routes.threads(channelId);
-  return await rest.post(route, { body });
+  const thread = (await rest.post(route, { body })) as { id: string };
+
+  // For non-forum channels, send the initial message separately after thread creation.
+  // Forum channels handle this via the `message` field in the request body.
+  if (!isForumLike && payload.content?.trim()) {
+    await rest.post(Routes.channelMessages(thread.id), {
+      body: { content: payload.content },
+    });
+  }
+
+  return thread;
 }
 
 export async function listThreadsDiscord(payload: DiscordThreadList, opts: DiscordReactOpts = {}) {

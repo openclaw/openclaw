@@ -1,4 +1,4 @@
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { ApiContributor, Entry, MapConfig, User } from "./update-clawtributors.types.js";
@@ -290,6 +290,27 @@ function parseCount(value: string): number {
   return /^\d+$/.test(value) ? Number(value) : 0;
 }
 
+function isValidLogin(login: string): boolean {
+  if (!/^[A-Za-z0-9-]{1,39}$/.test(login)) {
+    return false;
+  }
+  if (login.startsWith("-") || login.endsWith("-")) {
+    return false;
+  }
+  if (login.includes("--")) {
+    return false;
+  }
+  return true;
+}
+
+function normalizeLogin(login: string | null): string | null {
+  if (!login) {
+    return null;
+  }
+  const trimmed = login.trim();
+  return isValidLogin(trimmed) ? trimmed : null;
+}
+
 function normalizeAvatar(url: string): string {
   if (!/^https?:/i.test(url)) {
     return url;
@@ -307,8 +328,12 @@ function isGhostAvatar(url: string): boolean {
 }
 
 function fetchUser(login: string): User | null {
+  const normalized = normalizeLogin(login);
+  if (!normalized) {
+    return null;
+  }
   try {
-    const data = execSync(`gh api users/${login}`, {
+    const data = execFileSync("gh", ["api", `users/${normalized}`], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -334,45 +359,45 @@ function resolveLogin(
   emailToLogin: Record<string, string>,
 ): string | null {
   if (email && emailToLogin[email]) {
-    return emailToLogin[email];
+    return normalizeLogin(emailToLogin[email]);
   }
 
   if (email && name) {
     const guessed = guessLoginFromEmailName(name, email, apiByLogin);
     if (guessed) {
-      return guessed;
+      return normalizeLogin(guessed);
     }
   }
 
   if (email && email.endsWith("@users.noreply.github.com")) {
     const local = email.split("@", 1)[0];
     const login = local.includes("+") ? local.split("+")[1] : local;
-    return login || null;
+    return normalizeLogin(login);
   }
 
   if (email && email.endsWith("@github.com")) {
     const login = email.split("@", 1)[0];
     if (apiByLogin.has(login.toLowerCase())) {
-      return login;
+      return normalizeLogin(login);
     }
   }
 
   const normalized = normalizeName(name);
   if (nameToLogin[normalized]) {
-    return nameToLogin[normalized];
+    return normalizeLogin(nameToLogin[normalized]);
   }
 
   const compact = normalized.replace(/\s+/g, "");
   if (nameToLogin[compact]) {
-    return nameToLogin[compact];
+    return normalizeLogin(nameToLogin[compact]);
   }
 
   if (apiByLogin.has(normalized)) {
-    return normalized;
+    return normalizeLogin(normalized);
   }
 
   if (apiByLogin.has(compact)) {
-    return compact;
+    return normalizeLogin(compact);
   }
 
   return null;

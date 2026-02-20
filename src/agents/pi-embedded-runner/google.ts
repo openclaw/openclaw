@@ -1,9 +1,14 @@
+import { EventEmitter } from "node:events";
 import type { AgentMessage, AgentTool } from "@mariozechner/pi-agent-core";
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
 import type { TSchema } from "@sinclair/typebox";
-import { EventEmitter } from "node:events";
-import type { TranscriptPolicy } from "../transcript-policy.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { registerUnhandledRejectionHandler } from "../../infra/unhandled-rejections.js";
+import {
+  hasInterSessionUserProvenance,
+  normalizeInputProvenance,
+} from "../../sessions/input-provenance.js";
+import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import {
   downgradeOpenAIReasoningBlocks,
   isCompactionFailureError,
@@ -14,8 +19,10 @@ import {
 import { cleanToolSchemaForGemini } from "../pi-tools.schema.js";
 import {
   sanitizeToolCallInputs,
+  stripToolResultDetails,
   sanitizeToolUseResultPairing,
 } from "../session-transcript-repair.js";
+import type { TranscriptPolicy } from "../transcript-policy.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import { log } from "./logger.js";
 import { describeUnknownError } from "./utils.js";
@@ -44,6 +51,7 @@ const GOOGLE_SCHEMA_UNSUPPORTED_KEYWORDS = new Set([
   "maxProperties",
 ]);
 const ANTIGRAVITY_SIGNATURE_RE = /^[A-Za-z0-9+/]+={0,2}$/;
+const INTER_SESSION_PREFIX_BASE = "[Inter-session message]";
 
 function isValidAntigravitySignature(value: unknown): value is string {
   if (typeof value !== "string") {
@@ -59,7 +67,7 @@ function isValidAntigravitySignature(value: unknown): value is string {
   return ANTIGRAVITY_SIGNATURE_RE.test(trimmed);
 }
 
-function sanitizeAntigravityThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
+export function sanitizeAntigravityThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
   let touched = false;
   const out: AgentMessage[] = [];
   for (const msg of messages) {
@@ -93,6 +101,12 @@ function sanitizeAntigravityThinkingBlocks(messages: AgentMessage[]): AgentMessa
       const candidate =
         rec.thinkingSignature ?? rec.signature ?? rec.thought_signature ?? rec.thoughtSignature;
       if (!isValidAntigravitySignature(candidate)) {
+        // Preserve reasoning content as plain text when signatures are invalid/missing.
+        // Antigravity Claude rejects unsigned thinking blocks, but dropping them loses context.
+        const thinkingText = (block as { thinking?: unknown }).thinking;
+        if (typeof thinkingText === "string" && thinkingText.trim()) {
+          nextContent.push({ type: "text", text: thinkingText } as AssistantContentBlock);
+        }
         contentChanged = true;
         continue;
       }
@@ -115,6 +129,85 @@ function sanitizeAntigravityThinkingBlocks(messages: AgentMessage[]): AgentMessa
       continue;
     }
     out.push(contentChanged ? { ...assistant, content: nextContent } : msg);
+  }
+  return touched ? out : messages;
+}
+
+function buildInterSessionPrefix(message: AgentMessage): string {
+  const provenance = normalizeInputProvenance((message as { provenance?: unknown }).provenance);
+  if (!provenance) {
+    return INTER_SESSION_PREFIX_BASE;
+  }
+  const details = [
+    provenance.sourceSessionKey ? `sourceSession=${provenance.sourceSessionKey}` : undefined,
+    provenance.sourceChannel ? `sourceChannel=${provenance.sourceChannel}` : undefined,
+    provenance.sourceTool ? `sourceTool=${provenance.sourceTool}` : undefined,
+  ].filter(Boolean);
+  if (details.length === 0) {
+    return INTER_SESSION_PREFIX_BASE;
+  }
+  return `${INTER_SESSION_PREFIX_BASE} ${details.join(" ")}`;
+}
+
+function annotateInterSessionUserMessages(messages: AgentMessage[]): AgentMessage[] {
+  let touched = false;
+  const out: AgentMessage[] = [];
+  for (const msg of messages) {
+    if (!hasInterSessionUserProvenance(msg as { role?: unknown; provenance?: unknown })) {
+      out.push(msg);
+      continue;
+    }
+    const prefix = buildInterSessionPrefix(msg);
+    const user = msg as Extract<AgentMessage, { role: "user" }>;
+    if (typeof user.content === "string") {
+      if (user.content.startsWith(prefix)) {
+        out.push(msg);
+        continue;
+      }
+      touched = true;
+      out.push({
+        ...(msg as unknown as Record<string, unknown>),
+        content: `${prefix}\n${user.content}`,
+      } as AgentMessage);
+      continue;
+    }
+    if (!Array.isArray(user.content)) {
+      out.push(msg);
+      continue;
+    }
+
+    const textIndex = user.content.findIndex(
+      (block) =>
+        block &&
+        typeof block === "object" &&
+        (block as { type?: unknown }).type === "text" &&
+        typeof (block as { text?: unknown }).text === "string",
+    );
+
+    if (textIndex >= 0) {
+      const existing = user.content[textIndex] as { type: "text"; text: string };
+      if (existing.text.startsWith(prefix)) {
+        out.push(msg);
+        continue;
+      }
+      const nextContent = [...user.content];
+      nextContent[textIndex] = {
+        ...existing,
+        text: `${prefix}\n${existing.text}`,
+      };
+      touched = true;
+      out.push({
+        ...(msg as unknown as Record<string, unknown>),
+        content: nextContent,
+      } as AgentMessage);
+      continue;
+    }
+
+    touched = true;
+    out.push({
+      ...(msg as unknown as Record<string, unknown>),
+      content: [{ type: "text", text: prefix }, ...user.content],
+    } as AgentMessage);
   }
   return touched ? out : messages;
 }
@@ -160,7 +253,11 @@ export function sanitizeToolsForGoogle<
   tools: AgentTool<TSchemaType, TResult>[];
   provider: string;
 }): AgentTool<TSchemaType, TResult>[] {
-  if (params.provider !== "google-antigravity" && params.provider !== "google-gemini-cli") {
+  // Cloud Code Assist uses the OpenAPI 3.03 `parameters` field for both Gemini
+  // AND Claude models.  This field does not support JSON Schema keywords such as
+  // patternProperties, additionalProperties, $ref, etc.  We must clean schemas
+  // for every provider that routes through this path.
+  if (params.provider !== "google-gemini-cli" && params.provider !== "google-antigravity") {
     return params.tools;
   }
   return params.tools.map((tool) => {
@@ -327,6 +424,7 @@ export async function sanitizeSessionHistory(params: {
   modelApi?: string | null;
   modelId?: string;
   provider?: string;
+  config?: OpenClawConfig;
   sessionManager: SessionManager;
   sessionId: string;
   policy?: TranscriptPolicy;
@@ -339,13 +437,19 @@ export async function sanitizeSessionHistory(params: {
       provider: params.provider,
       modelId: params.modelId,
     });
-  const sanitizedImages = await sanitizeSessionMessagesImages(params.messages, "session:history", {
-    sanitizeMode: policy.sanitizeMode,
-    sanitizeToolCallIds: policy.sanitizeToolCallIds,
-    toolCallIdMode: policy.toolCallIdMode,
-    preserveSignatures: policy.preserveSignatures,
-    sanitizeThoughtSignatures: policy.sanitizeThoughtSignatures,
-  });
+  const withInterSessionMarkers = annotateInterSessionUserMessages(params.messages);
+  const sanitizedImages = await sanitizeSessionMessagesImages(
+    withInterSessionMarkers,
+    "session:history",
+    {
+      sanitizeMode: policy.sanitizeMode,
+      sanitizeToolCallIds: policy.sanitizeToolCallIds,
+      toolCallIdMode: policy.toolCallIdMode,
+      preserveSignatures: policy.preserveSignatures,
+      sanitizeThoughtSignatures: policy.sanitizeThoughtSignatures,
+      ...resolveImageSanitizationLimits(params.config),
+    },
+  );
   const sanitizedThinking = policy.normalizeAntigravityThinkingBlocks
     ? sanitizeAntigravityThinkingBlocks(sanitizedImages)
     : sanitizedImages;
@@ -353,6 +457,7 @@ export async function sanitizeSessionHistory(params: {
   const repairedTools = policy.repairToolUseResultPairing
     ? sanitizeToolUseResultPairing(sanitizedToolCalls)
     : sanitizedToolCalls;
+  const sanitizedToolResults = stripToolResultDetails(repairedTools);
 
   const isOpenAIResponsesApi =
     params.modelApi === "openai-responses" || params.modelApi === "openai-codex-responses";
@@ -366,10 +471,9 @@ export async function sanitizeSessionHistory(params: {
         modelId: params.modelId,
       })
     : false;
-  const sanitizedOpenAI =
-    isOpenAIResponsesApi && modelChanged
-      ? downgradeOpenAIReasoningBlocks(repairedTools)
-      : repairedTools;
+  const sanitizedOpenAI = isOpenAIResponsesApi
+    ? downgradeOpenAIReasoningBlocks(sanitizedToolResults)
+    : sanitizedToolResults;
 
   if (hasSnapshot && (!priorSnapshot || modelChanged)) {
     appendModelSnapshot(params.sessionManager, {
