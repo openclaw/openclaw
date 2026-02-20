@@ -149,7 +149,21 @@ export async function update(state: CronServiceState, id: string, patch: CronJob
     job.updatedAtMs = now;
     if (scheduleChanged || enabledChanged) {
       if (job.enabled) {
-        job.state.nextRunAtMs = computeJobNextRunAtMs(job, now);
+        const currentNext = job.state.nextRunAtMs;
+        const hasMissedRun =
+          typeof currentNext === "number" && Number.isFinite(currentNext) && currentNext < now;
+
+        // If schedule changed, always recompute (old nextRunAtMs is invalid for new schedule)
+        // If only enabled/other fields changed, preserve missed runs
+        if (scheduleChanged) {
+          job.state.nextRunAtMs = computeJobNextRunAtMs(job, now);
+        } else if (hasMissedRun) {
+          // Keep the missed run time - job will execute on next wake
+          job.state.nextRunAtMs = currentNext;
+        } else {
+          // No missed run or no previous nextRunAtMs - compute fresh
+          job.state.nextRunAtMs = computeJobNextRunAtMs(job, now);
+        }
       } else {
         job.state.nextRunAtMs = undefined;
         job.state.runningAtMs = undefined;
