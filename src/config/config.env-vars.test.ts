@@ -22,6 +22,31 @@ describe("config env vars", () => {
     });
   });
 
+  it("prepends and deduplicates PATH entries from env.vars", async () => {
+    const existingPath = ["system-bin", "shared-bin"].join(path.delimiter);
+    const configuredPath = ["openclaw-bin", "shared-bin"].join(path.delimiter);
+    await withEnvOverride({ PATH: existingPath }, async () => {
+      applyConfigEnvVars({ env: { vars: { PATH: configuredPath } } } as OpenClawConfig);
+      expect(process.env.PATH).toBe(
+        ["openclaw-bin", "shared-bin", "system-bin"].join(path.delimiter),
+      );
+    });
+  });
+
+  it("merges PATH into an existing Windows-style Path key", () => {
+    const env: NodeJS.ProcessEnv = {
+      Path: ["system-bin", "shared-bin"].join(path.delimiter),
+    };
+    applyConfigEnvVars(
+      {
+        env: { vars: { PATH: ["openclaw-bin", "shared-bin"].join(path.delimiter) } },
+      } as OpenClawConfig,
+      env,
+    );
+    expect(env.Path).toBe(["openclaw-bin", "shared-bin", "system-bin"].join(path.delimiter));
+    expect(env.PATH).toBeUndefined();
+  });
+
   it("applies env vars from env.vars when missing", async () => {
     await withEnvOverride({ GROQ_API_KEY: undefined }, async () => {
       applyConfigEnvVars({ env: { vars: { GROQ_API_KEY: "gsk-config" } } } as OpenClawConfig);

@@ -89,7 +89,15 @@ function candidateBinDirs(opts: EnsureOpenClawPathOpts): { prepend: string[]; ap
 
   prepend.push(...resolveBrewPathDirs({ homeDir }));
 
-  // Common global install locations (macOS first).
+  // Common global install locations (platform-specific first).
+  if (platform === "win32") {
+    const appDataDir = process.env.APPDATA ?? path.join(homeDir, "AppData", "Roaming");
+    const localAppDataDir = process.env.LOCALAPPDATA ?? path.join(homeDir, "AppData", "Local");
+    prepend.push(path.join(appDataDir, "npm"));
+    prepend.push(path.join(localAppDataDir, "pnpm"));
+    prepend.push(path.join(localAppDataDir, "Microsoft", "WindowsApps"));
+    prepend.push(path.join(localAppDataDir, "Programs", "Microsoft VS Code", "bin"));
+  }
   if (platform === "darwin") {
     prepend.push(path.join(homeDir, "Library", "pnpm"));
   }

@@ -44,6 +44,8 @@ describe("ensureOpenClawCliOnPath", () => {
     "HOMEBREW_PREFIX",
     "HOMEBREW_BREW_FILE",
     "XDG_BIN_HOME",
+    "APPDATA",
+    "LOCALAPPDATA",
   ] as const;
   let envSnapshot: Record<(typeof envKeys)[number], string | undefined>;
 
@@ -211,5 +213,43 @@ describe("ensureOpenClawCliOnPath", () => {
     const parts = updated.split(path.delimiter);
     expect(parts[0]).toBe(linuxbrewBin);
     expect(parts[1]).toBe(linuxbrewSbin);
+  });
+
+  it("prepends Windows global bin dirs when present", () => {
+    const tmp = abs("/tmp/openclaw-path/case-win32");
+    const appDataDir = path.join(tmp, "AppData", "Roaming");
+    const localAppDataDir = path.join(tmp, "AppData", "Local");
+    const npmBinDir = path.join(appDataDir, "npm");
+    const pnpmBinDir = path.join(localAppDataDir, "pnpm");
+    const windowsAppsDir = path.join(localAppDataDir, "Microsoft", "WindowsApps");
+    const vscodeBinDir = path.join(localAppDataDir, "Programs", "Microsoft VS Code", "bin");
+    setDir(tmp);
+    setDir(appDataDir);
+    setDir(localAppDataDir);
+    setDir(npmBinDir);
+    setDir(pnpmBinDir);
+    setDir(windowsAppsDir);
+    setDir(vscodeBinDir);
+
+    process.env.APPDATA = appDataDir;
+    process.env.LOCALAPPDATA = localAppDataDir;
+    process.env.PATH = ["system32", "shared-bin"].join(path.delimiter);
+    delete process.env.OPENCLAW_PATH_BOOTSTRAPPED;
+
+    ensureOpenClawCliOnPath({
+      execPath: path.join(tmp, "node.exe"),
+      cwd: tmp,
+      homeDir: tmp,
+      platform: "win32",
+    });
+
+    const parts = (process.env.PATH ?? "").split(path.delimiter);
+    const systemIndex = parts.indexOf("system32");
+    expect(systemIndex).toBeGreaterThanOrEqual(0);
+    for (const binDir of [npmBinDir, pnpmBinDir, windowsAppsDir, vscodeBinDir]) {
+      const index = parts.indexOf(binDir);
+      expect(index).toBeGreaterThanOrEqual(0);
+      expect(index).toBeLessThan(systemIndex);
+    }
   });
 });
