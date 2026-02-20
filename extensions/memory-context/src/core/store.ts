@@ -110,14 +110,18 @@ export class WarmStore {
 
     // Detect provider downgrade vs upgrade when dim changes.
     // Downgrade: cached vectors are higher-quality (e.g. Gemini 3072) but current
-    //   provider is a fallback (e.g. hash 384) because the real provider is unavailable.
+    //   provider is a fallback (e.g. hash 384 or local 768) because the real API
+    //   provider is unavailable.
     //   → Skip re-embedding, use BM25-only, preserve vectors.bin for when provider returns.
     // Upgrade: cached vectors are lower-quality (e.g. hash 384) and current provider
     //   is better (e.g. Gemini 3072). → Re-embed all segments with the better provider.
     const currentDim = this.opts.embedding.dim;
     const providerName = this.opts.embedding.name ?? "";
-    const isFallbackProvider =
-      providerName === "hash" || providerName === "none" || providerName === "noop";
+    // Only remote API providers (gemini, openai, voyage) justify mass re-embedding.
+    // Local providers (local/onnx, hash, none, noop, transformer) are fallbacks —
+    // when they produce a different dim, preserve the cached high-quality vectors.
+    const API_PROVIDERS = new Set(["gemini", "openai", "voyage"]);
+    const isFallbackProvider = !API_PROVIDERS.has(providerName);
     const isDowngrade = cachedDim > 0 && cachedDim !== currentDim && isFallbackProvider;
 
     if (isDowngrade) {
@@ -206,12 +210,15 @@ export class WarmStore {
     seg: ColdStoreSegment,
     cachedVec?: number[],
   ): Promise<ConversationSegment> {
-    const embedding =
-      cachedVec && cachedVec.length === this.opts.embedding.dim
-        ? cachedVec
-        : seg.embedding && seg.embedding.length === this.opts.embedding.dim
-          ? seg.embedding
-          : await this.opts.embedding.embed(seg.content);
+    let embedding: number[] | undefined;
+    if (cachedVec && cachedVec.length === this.opts.embedding.dim) {
+      embedding = cachedVec;
+    } else if (seg.embedding && seg.embedding.length === this.opts.embedding.dim) {
+      embedding = seg.embedding;
+    } else {
+      const vec = await this.safeEmbed(seg.content);
+      embedding = vec.length > 0 ? vec : undefined;
+    }
 
     return {
       id: seg.id,
@@ -227,6 +234,22 @@ export class WarmStore {
         entities: extractEntities(seg.content),
       },
     };
+  }
+
+  /**
+   * Safely embed text with truncation and error handling.
+   * Truncates to MAX_EMBED_CHARS to stay within model context limits,
+   * and returns empty array on any embedding failure (BM25-only fallback).
+   */
+  private static readonly MAX_EMBED_CHARS = 2000;
+  private async safeEmbed(text: string): Promise<number[]> {
+    try {
+      const truncated =
+        text.length > WarmStore.MAX_EMBED_CHARS ? text.slice(0, WarmStore.MAX_EMBED_CHARS) : text;
+      return await this.opts.embedding.embed(truncated);
+    } catch {
+      return [];
+    }
   }
 
   stats(): { count: number; bm25Size: number } {
@@ -265,7 +288,7 @@ export class WarmStore {
       }
 
       const timestamp = typeof input.timestamp === "number" ? input.timestamp : Date.now();
-      const embedding = await this.opts.embedding.embed(input.content);
+      const embedding = await this.safeEmbed(input.content);
       const segment: ConversationSegment = {
         id: randomUUID(),
         sessionId: this.opts.sessionId,
@@ -286,7 +309,9 @@ export class WarmStore {
       this.segments.set(segment.id, segment);
       this.timeline.push(segment.id);
       this.dedupSet.set(dk, segment.id);
-      this.index.add(segment.id, embedding);
+      if (embedding.length > 0) {
+        this.index.add(segment.id, embedding);
+      }
       this.bm25.add(segment.id, segment.content);
       this.evictIfNeeded();
 
@@ -445,7 +470,7 @@ export class WarmStore {
 
   async search(query: string, limit = 5, minScore = 0): Promise<SegmentSearchResult[]> {
     await this.init();
-    const vec = await this.opts.embedding.embed(query);
+    const vec = await this.safeEmbed(query);
     return this.searchByVector(vec, limit, minScore);
   }
 
@@ -461,7 +486,7 @@ export class WarmStore {
     await this.init();
 
     // Get vector results
-    const vec = await this.opts.embedding.embed(query);
+    const vec = await this.safeEmbed(query);
     const vectorResults = this.searchByVector(vec, limit * 2, 0);
 
     // Get BM25 results

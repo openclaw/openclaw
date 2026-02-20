@@ -209,7 +209,9 @@ async function getOrCreateRuntime(api: OpenClawPluginApi, ctx: HookCtx): Promise
       sessionId,
       sessionKey: ctx.sessionKey,
       embedding,
-      coldStore: { path: `${config.storagePath}/raw` },
+      // KnowledgeStore and WarmStore share the same directory intentionally:
+      // KnowledgeStore writes knowledge.jsonl, WarmStore writes segments.jsonl — no collision.
+      coldStore: { path: config.storagePath },
       maxSegments: config.maxSegments,
       crossSession: config.crossSession,
       eviction: {
@@ -218,7 +220,7 @@ async function getOrCreateRuntime(api: OpenClawPluginApi, ctx: HookCtx): Promise
       },
       vectorPersist: config.vectorPersist,
     });
-    const knowledgeStore = new KnowledgeStore(`${config.storagePath}/knowledge`);
+    const knowledgeStore = new KnowledgeStore(config.storagePath);
 
     await rawStore.init();
     await knowledgeStore.init();
