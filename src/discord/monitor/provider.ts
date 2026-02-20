@@ -666,9 +666,15 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       },
       shouldStopOnError: (err) => {
         const message = String(err);
-        return (
-          message.includes("Max reconnect attempts") || message.includes("Fatal Gateway error")
-        );
+        if (message.includes("Max reconnect attempts") || message.includes("Fatal Gateway error")) {
+          runtime.log?.(
+            warn(
+              `discord: gateway reported reconnect exhaustion; keeping provider alive and continuing reconnect loop (${message})`,
+            ),
+          );
+          return false;
+        }
+        return false;
       },
     });
   } finally {

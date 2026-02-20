@@ -100,6 +100,36 @@ function getResolvedFetch(fetcher: typeof fetch): typeof fetch {
   return fetchImpl;
 }
 
+function resolveDiscordIdFromToken(token: string): string | undefined {
+  const normalized = normalizeDiscordToken(token);
+  if (!normalized) {
+    return undefined;
+  }
+  const encodedId = normalized.split(".")[0]?.trim();
+  if (!encodedId) {
+    return undefined;
+  }
+  try {
+    const decoded = Buffer.from(encodedId, "base64").toString("utf8").trim();
+    if (/^\d{5,}$/.test(decoded)) {
+      return decoded;
+    }
+  } catch {
+    // Fallback below.
+  }
+  try {
+    const base64 = encodedId.replace(/-/g, "+").replace(/_/g, "/");
+    const padding = base64.length % 4 === 0 ? "" : "=".repeat(4 - (base64.length % 4));
+    const decoded = Buffer.from(`${base64}${padding}`, "base64").toString("utf8").trim();
+    if (/^\d{5,}$/.test(decoded)) {
+      return decoded;
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
 export async function probeDiscord(
   token: string,
   timeoutMs: number,
@@ -172,11 +202,11 @@ export async function fetchDiscordApplicationId(
       getResolvedFetch(fetcher),
     );
     if (!res.ok) {
-      return undefined;
+      return resolveDiscordIdFromToken(normalized);
     }
     const json = (await res.json()) as { id?: string };
-    return json.id ?? undefined;
+    return json.id ?? resolveDiscordIdFromToken(normalized);
   } catch {
-    return undefined;
+    return resolveDiscordIdFromToken(normalized);
   }
 }
