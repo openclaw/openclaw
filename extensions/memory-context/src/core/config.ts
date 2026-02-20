@@ -20,6 +20,7 @@ export type MemoryContextConfig = {
   embeddingDim: number;
   storagePath: string;
   redaction: boolean;
+  knowledgeExtraction: boolean;
   autoRecall: boolean;
   autoRecallMinScore: number;
   autoRecallMaxTokens: number;
@@ -158,6 +159,7 @@ export const memoryContextConfigSchema = {
         "embeddingDim",
         "storagePath",
         "redaction",
+        "knowledgeExtraction",
         "autoRecall",
         "autoRecallMinScore",
         "autoRecallMaxTokens",
@@ -184,6 +186,7 @@ export const memoryContextConfigSchema = {
 
     const autoRecall = cfg.autoRecall !== false;
     const redaction = cfg.redaction !== false;
+    const knowledgeExtraction = cfg.knowledgeExtraction !== false;
 
     const autoRecallMinScore =
       cfg.autoRecallMinScore === undefined
@@ -235,6 +238,7 @@ export const memoryContextConfigSchema = {
       embeddingDim,
       storagePath,
       redaction,
+      knowledgeExtraction,
       autoRecall,
       autoRecallMinScore,
       autoRecallMaxTokens,
@@ -262,6 +266,11 @@ export const memoryContextConfigSchema = {
     redaction: {
       label: "Redaction",
       help: "Mask potential secrets before persisting compacted content",
+      advanced: true,
+    },
+    knowledgeExtraction: {
+      label: "Knowledge Extraction",
+      help: "Extract durable technical facts from compacted messages",
       advanced: true,
     },
     embeddingModel: {

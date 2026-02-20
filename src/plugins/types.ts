@@ -1,6 +1,6 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { Command } from "commander";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AuthProfileCredential, OAuthCredential } from "../agents/auth-profiles/types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
@@ -328,6 +328,14 @@ export type PluginHookAgentContext = {
   sessionId?: string;
   workspaceDir?: string;
   messageProvider?: string;
+  /** Current compaction model metadata (available in compaction hooks). */
+  compactionModel?: {
+    provider: string;
+    id: string;
+    api: string;
+  };
+  /** Runtime API key for compaction model (best-effort; may be absent for non-key auth modes). */
+  compactionApiKey?: string;
 };
 
 // before_model_resolve hook

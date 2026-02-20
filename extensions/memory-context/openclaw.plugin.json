@@ -18,6 +18,11 @@
       "help": "Mask potential secrets before persisting compacted content",
       "advanced": true
     },
+    "knowledgeExtraction": {
+      "label": "Knowledge Extraction",
+      "help": "Extract durable technical facts from compacted messages",
+      "advanced": true
+    },
     "embeddingModel": {
       "label": "Embedding Model",
       "help": "Use 'transformer' for semantic search (recommended) or 'hash' for fast local fallback"
@@ -57,6 +62,9 @@
         "type": "boolean"
       },
       "redaction": {
+        "type": "boolean"
+      },
+      "knowledgeExtraction": {
         "type": "boolean"
       },
       "autoRecallMinScore": {

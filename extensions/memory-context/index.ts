@@ -1,6 +1,8 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import { completeSimple } from "@mariozechner/pi-ai";
 import { sanitizeToolUseResultPairing } from "../../src/agents/session-transcript-repair.js";
+import { scheduleKnowledgeExtraction } from "./src/core/compaction-bridge.js";
 import { memoryContextConfigSchema, type MemoryContextConfig } from "./src/core/config.js";
 import { createEmbeddingProvider } from "./src/core/embedding.js";
 import { KnowledgeStore } from "./src/core/knowledge-store.js";
@@ -23,6 +25,12 @@ const RECALLED_CONTEXT_MARKER = '<recalled-context source="memory-context">';
 type HookCtx = {
   sessionId?: string;
   sessionKey?: string;
+  compactionModel?: {
+    provider: string;
+    id: string;
+    api: string;
+  };
+  compactionApiKey?: string;
 };
 
 function asMessageArray(value: unknown): AgentMessage[] {
@@ -74,6 +82,48 @@ function extractQueryFromRecentUserMessages(messages: AgentMessage[]): string {
 
 function estimateMessageTokens(msg: MessageLike): number {
   return Math.max(1, Math.ceil(extractText(msg as AgentMessage).length / 3));
+}
+
+function createKnowledgeExtractionLlmCall(
+  ctx: HookCtx,
+): ((prompt: string) => Promise<string>) | undefined {
+  const model = ctx.compactionModel;
+  const apiKey = ctx.compactionApiKey;
+  if (!model || !apiKey) {
+    return undefined;
+  }
+  return async (prompt: string) => {
+    try {
+      const res = await completeSimple(
+        model,
+        {
+          messages: [
+            {
+              role: "user",
+              content: prompt,
+              timestamp: Date.now(),
+            },
+          ],
+        },
+        {
+          apiKey,
+          maxTokens: 2000,
+          reasoning: "low",
+        },
+      );
+
+      if (res.stopReason === "error") {
+        return "";
+      }
+
+      return res.content
+        .filter((block) => block.type === "text")
+        .map((block) => block.text)
+        .join("\n");
+    } catch {
+      return "";
+    }
+  };
 }
 
 async function getOrCreateRuntime(api: OpenClawPluginApi, ctx: HookCtx): Promise<RuntimeState> {
@@ -238,6 +288,20 @@ const memoryContextPlugin = {
           role,
           content: archived,
         });
+      }
+
+      if (runtime.config.knowledgeExtraction) {
+        const llmCall = createKnowledgeExtractionLlmCall(ctx);
+        scheduleKnowledgeExtraction(
+          messages,
+          runtime.knowledgeStore,
+          llmCall,
+          {
+            warn: console.warn.bind(console),
+            info: console.info.bind(console),
+          },
+          runtime.config.redaction,
+        );
       }
     });
 
