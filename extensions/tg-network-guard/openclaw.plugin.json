@@ -1,0 +1,112 @@
+{
+  "id": "tg-network-guard",
+  "name": "Telegram Network Guard",
+  "description": "Conservative retries for retry-safe Telegram endpoints plus deterministic voice-note transcript replies.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "default": true
+      },
+      "maxAttempts": {
+        "type": "number",
+        "default": 4,
+        "description": "Retry attempts for retry-safe Telegram endpoints."
+      },
+      "minDelayMs": {
+        "type": "number",
+        "default": 400
+      },
+      "maxDelayMs": {
+        "type": "number",
+        "default": 4000
+      },
+      "jitter": {
+        "type": "number",
+        "default": 0.25
+      },
+      "ownerChatId": {
+        "type": "string",
+        "default": "1336356696"
+      },
+      "ackVoiceMessages": {
+        "type": "boolean",
+        "default": false
+      },
+      "voiceAckCooldownMs": {
+        "type": "number",
+        "default": 15000
+      },
+      "voiceAckText": {
+        "type": "string",
+        "default": "Voice note received. Processing now, usually under a minute."
+      },
+      "transcribeVoiceMessages": {
+        "type": "boolean",
+        "default": true
+      },
+      "transcribingText": {
+        "type": "string",
+        "default": "Transcribing..."
+      },
+      "transcribedText": {
+        "type": "string",
+        "default": "Transcribed."
+      },
+      "transcriptionFailedText": {
+        "type": "string",
+        "default": "Transcription failed."
+      },
+      "transcriptPrefix": {
+        "type": "string",
+        "default": "Transcript:"
+      },
+      "transcriptMaxChars": {
+        "type": "number",
+        "default": 3500
+      },
+      "whisperCommand": {
+        "type": "string",
+        "default": "whisper"
+      },
+      "whisperModel": {
+        "type": "string",
+        "default": "tiny"
+      },
+      "whisperLanguage": {
+        "type": "string"
+      },
+      "whisperPrompt": {
+        "type": "string"
+      },
+      "whisperOutputDir": {
+        "type": "string"
+      },
+      "whisperTimeoutMs": {
+        "type": "number",
+        "default": 180000
+      },
+      "mediaPathResolveTimeoutMs": {
+        "type": "number",
+        "default": 8000,
+        "description": "How long to wait for Telegram media path materialization before failing transcription."
+      },
+      "mediaPathPollMs": {
+        "type": "number",
+        "default": 250,
+        "description": "Polling interval while waiting for media file path availability."
+      },
+      "mediaPathLookbackMs": {
+        "type": "number",
+        "default": 120000,
+        "description": "Recent inbound media lookback window used as fallback when event payload omits a direct file path."
+      },
+      "inboundMediaDir": {
+        "type": "string",
+        "description": "Optional override for inbound media directory (defaults to ~/.openclaw/media/inbound)."
+      }
+    }
+  }
+}

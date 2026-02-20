@@ -1,0 +1,14 @@
+{
+  "name": "@openclaw/tg-network-guard",
+  "version": "2026.2.18",
+  "description": "Telegram retry-safe network guard with deterministic voice-note transcript replies",
+  "type": "module",
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
