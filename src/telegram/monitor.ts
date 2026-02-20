@@ -1,19 +1,22 @@
 import { type RunOptions, run } from "@grammyjs/runner";
-import { resolveAgentMaxConcurrent } from "../config/agent-limits.js";
+import { webhookCallback } from "grammy";
 import type { OpenClawConfig } from "../config/config.js";
+import type { RuntimeEnv } from "../runtime.js";
+import { resolveAgentMaxConcurrent } from "../config/agent-limits.js";
 import { loadConfig } from "../config/config.js";
 import { computeBackoff, sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { formatDurationPrecise } from "../infra/format-time/format-duration.ts";
+import { installRequestBodyLimitGuard } from "../infra/http-body.js";
 import { registerUnhandledRejectionHandler } from "../infra/unhandled-rejections.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
+import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { createTelegramBot } from "./bot.js";
+import { registerTelegramHttpHandler } from "./http/index.js";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 import { makeProxyFetch } from "./proxy.js";
 import { readTelegramUpdateOffset, writeTelegramUpdateOffset } from "./update-offset-store.js";
-import { startTelegramWebhook } from "./webhook.js";
 
 export type MonitorTelegramOpts = {
   token?: string;
@@ -152,19 +155,90 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
     });
 
     if (opts.useWebhook) {
-      await startTelegramWebhook({
-        token,
-        accountId: account.accountId,
-        config: cfg,
-        path: opts.webhookPath,
-        port: opts.webhookPort,
-        secret: opts.webhookSecret ?? account.config.webhookSecret,
-        host: opts.webhookHost ?? account.config.webhookHost,
-        runtime: opts.runtime as RuntimeEnv,
-        fetch: proxyFetch,
-        abortSignal: opts.abortSignal,
-        publicUrl: opts.webhookUrl,
+      const secret = opts.webhookSecret ?? account.config.webhookSecret;
+      if (!secret || !secret.trim()) {
+        throw new Error(
+          "Telegram webhook mode requires a non-empty secret token. " +
+            "Set channels.telegram.webhookSecret in your config.",
+        );
+      }
+
+      const TELEGRAM_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
+      const TELEGRAM_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
+      const TELEGRAM_WEBHOOK_CALLBACK_TIMEOUT_MS = 10_000;
+
+      const handler = webhookCallback(bot, "http", {
+        secretToken: secret.trim(),
+        onTimeout: "return",
+        timeoutMilliseconds: TELEGRAM_WEBHOOK_CALLBACK_TIMEOUT_MS,
       });
+
+      const webhookHandler = (req: IncomingMessage, res: ServerResponse) => {
+        if (req.method !== "POST") {
+          res.writeHead(405);
+          res.end();
+          return;
+        }
+        const guard = installRequestBodyLimitGuard(req, res, {
+          maxBytes: TELEGRAM_WEBHOOK_MAX_BODY_BYTES,
+          timeoutMs: TELEGRAM_WEBHOOK_BODY_TIMEOUT_MS,
+          responseFormat: "text",
+        });
+        if (guard.isTripped()) {
+          return;
+        }
+        const handled = handler(req, res);
+        if (handled && typeof handled.catch === "function") {
+          void handled
+            .catch((err: unknown) => {
+              if (guard.isTripped()) {
+                return;
+              }
+              opts.runtime?.error?.(`telegram webhook handler failed: ${String(err)}`);
+              if (!res.headersSent) {
+                res.writeHead(500);
+              }
+              res.end();
+            })
+            .finally(() => guard.dispose());
+        } else {
+          guard.dispose();
+        }
+      };
+
+      const unregister = registerTelegramHttpHandler({
+        path: opts.webhookPath,
+        handler: webhookHandler,
+        log: opts.runtime?.log,
+        accountId: account.accountId,
+      });
+
+      try {
+        await withTelegramApiErrorLogging({
+          operation: "setWebhook",
+          runtime: opts.runtime,
+          fn: () =>
+            bot.api.setWebhook(opts.webhookUrl!, {
+              secret_token: secret.trim(),
+              allowed_updates: resolveTelegramAllowedUpdates(),
+            }),
+        });
+
+        opts.runtime?.log?.(
+          `telegram webhook registered at ${opts.webhookPath ?? "/telegram-webhook"}`,
+        );
+
+        // Wait for abort signal
+        if (opts.abortSignal && !opts.abortSignal.aborted) {
+          await new Promise<void>((resolve) => {
+            opts.abortSignal!.addEventListener("abort", () => resolve(), { once: true });
+          });
+        }
+      } finally {
+        unregister();
+      }
+
+      await bot.stop();
       return;
     }
 
