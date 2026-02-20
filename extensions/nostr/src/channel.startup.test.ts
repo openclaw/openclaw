@@ -517,6 +517,195 @@ describe("nostrPlugin gateway.startAccount", () => {
     );
   });
 
+  it("emits inferred skill telemetry for tool runs", async () => {
+    const formatAgentEnvelope = vi.fn();
+    const finalizeInboundContext = vi.fn((ctx) => ctx);
+    const resolveAgentRoute = vi.fn(() => ({
+      agentId: "default-agent",
+      accountId: "default",
+      sessionKey: "session:user",
+      mainSessionKey: "session",
+    }));
+    const recordInboundSession = vi.fn(async () => undefined);
+    const mockReplyDispatcher = vi.fn(async (params) => {
+      await params.replyOptions.onToolStart?.({
+        name: "exec",
+        phase: "start",
+        toolCallId: "call-skill-1",
+        args: {
+          skillName: "openclaw",
+          command: "status",
+        },
+      });
+      await params.dispatcherOptions.deliver(
+        {
+          name: "exec",
+          summary: "status",
+          success: true,
+          text: "ok",
+        } satisfies { name: string; summary: string; success: boolean; text: string },
+        { kind: "tool" as const },
+      );
+      await params.dispatcherOptions.deliver(
+        {
+          text: "final answer",
+        } satisfies { text: string },
+        { kind: "final" as const },
+      );
+      return undefined;
+    });
+
+    const senderPubkey = "d".repeat(64);
+    const eventId = "event-skill";
+    const sessionId = resolveNostrSessionId(senderPubkey, undefined);
+    const replySpy = vi.fn(async (_content: unknown, _options?: NostrOutboundMessageOptions) => {});
+    type OnMessage = NostrBusOptions["onMessage"];
+    let capturedOnMessage: OnMessage | null = null;
+
+    vi.mocked(startNostrBus).mockImplementation(async (options: NostrBusOptions) => {
+      const { onMessage } = options;
+      capturedOnMessage = onMessage;
+      return {
+        close: vi.fn(),
+        publicKey: "bot-pubkey",
+        sendDm: vi.fn(),
+        getMetrics: vi.fn(() => ({})),
+        publishProfile: vi.fn(),
+        publishAiInfo: vi.fn(),
+        getProfileState: vi.fn(),
+      } as never;
+    });
+
+    const runtime = {
+      channel: {
+        routing: {
+          resolveAgentRoute,
+        },
+        session: {
+          resolveStorePath: vi.fn(() => "/tmp/nostr-session-store.json"),
+          readSessionUpdatedAt: vi.fn(() => 1_700_000_500_000),
+          recordInboundSession,
+        },
+        reply: {
+          resolveEnvelopeFormatOptions: vi.fn(() => ({ template: "channel+name+time" })),
+          formatAgentEnvelope,
+          finalizeInboundContext,
+          dispatchReplyWithBufferedBlockDispatcher: mockReplyDispatcher,
+        },
+        text: {
+          resolveMarkdownTableMode: vi.fn(() => "code"),
+          convertMarkdownTables: vi.fn((text: string) => text),
+        },
+        pairing: {
+          readAllowFromStore: vi.fn(async () => []),
+          upsertPairingRequest: vi.fn(),
+          buildPairingReply: vi.fn(),
+        },
+        commands: {
+          shouldComputeCommandAuthorized: vi.fn(() => false),
+          resolveCommandAuthorizedFromAuthorizers: vi.fn(() => true),
+        },
+      },
+      config: {
+        loadConfig: vi.fn(() => ({})),
+      },
+      logging: {
+        shouldLogVerbose: () => false,
+      },
+    } as unknown as PluginRuntime;
+
+    setNostrRuntime(runtime);
+
+    const startAccount = nostrPlugin.gateway?.startAccount;
+    if (!startAccount) {
+      throw new Error("nostr plugin startAccount is not defined");
+    }
+    const abort = new AbortController();
+    abort.abort();
+    await startAccount({
+      account: {
+        accountId: "default",
+        configured: true,
+        privateKey: "a".repeat(64),
+        relays: ["ws://localhost:7777"],
+        publicKey: "b".repeat(64),
+        enabled: true,
+        name: "default",
+        config: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+        },
+        lastError: null,
+        profile: null,
+      },
+      cfg: {},
+      runtime,
+      abortSignal: abort.signal,
+      log: { info: vi.fn(), debug: vi.fn(), error: vi.fn() },
+      setStatus: vi.fn(),
+    } as never);
+
+    if (!capturedOnMessage) {
+      throw new Error("inbound handler was not registered");
+    }
+    const onMessageHandler = capturedOnMessage as OnMessage;
+
+    await onMessageHandler(
+      {
+        senderPubkey,
+        text: "hello world",
+        createdAt: 1_700_000_000,
+        eventId,
+        kind: 25802,
+      },
+      replySpy,
+    );
+
+    expect(replySpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ver: 1,
+        event: "thinking",
+        phase: "update",
+        text: "Using skill: openclaw",
+        source: "skill",
+      }),
+      expect.objectContaining({
+        sessionId,
+        inReplyTo: eventId,
+      }),
+      25801,
+    );
+    expect(replySpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ver: 1,
+        name: "exec",
+        phase: "start",
+        call_id: "call-skill-1",
+        skill_name: "openclaw",
+      }),
+      expect.objectContaining({
+        sessionId,
+        inReplyTo: eventId,
+      }),
+      25804,
+    );
+    expect(replySpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ver: 1,
+        name: "exec",
+        phase: "result",
+        call_id: "call-skill-1",
+        skill_name: "openclaw",
+        success: true,
+      }),
+      expect.objectContaining({
+        sessionId,
+        inReplyTo: eventId,
+      }),
+      25804,
+    );
+  });
+
   it("emits fallback final when dispatcher never emits final", async () => {
     const formatAgentEnvelope = vi.fn();
     const finalizeInboundContext = vi.fn((ctx) => ctx);

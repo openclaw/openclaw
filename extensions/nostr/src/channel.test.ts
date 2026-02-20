@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   createToolCallTelemetryTracker,
+  inferSkillNameFromToolContext,
   resolveNostrSessionId,
   resolveNostrTimestampMs,
   nostrPlugin,
@@ -318,6 +319,48 @@ describe("nostrPlugin", () => {
     it("returns an empty drain result when no tools are pending", () => {
       const tracker = createToolCallTelemetryTracker("f".repeat(64));
       expect(tracker.drainPendingResults(1_234)).toEqual([]);
+    });
+
+    it("persists inferred skill metadata across tool start/result lifecycle", () => {
+      const tracker = createToolCallTelemetryTracker("9".repeat(64));
+      tracker.registerStart("exec", 1_000, { skillName: "openclaw" });
+      expect(tracker.consumeResult(1_250)).toEqual({
+        name: "exec",
+        callId: "call_999999999999_0",
+        durationMs: 250,
+        skillName: "openclaw",
+      });
+    });
+  });
+
+  describe("skill inference", () => {
+    it("prefers explicit skillName fields from tool args", () => {
+      expect(
+        inferSkillNameFromToolContext({
+          toolName: "exec",
+          args: { skillName: "openclaw", command: "status" },
+        }),
+      ).toBe("openclaw");
+    });
+
+    it("falls back to commandName when explicit skill name is absent", () => {
+      expect(
+        inferSkillNameFromToolContext({
+          toolName: "exec",
+          args: { commandName: "coder_bot" },
+        }),
+      ).toBe("coder_bot");
+    });
+
+    it("extracts skill name from SKILL.md path references", () => {
+      expect(
+        inferSkillNameFromToolContext({
+          toolName: "read",
+          args: {
+            path: "/Users/honk/.codex/skills/openclaw/SKILL.md",
+          },
+        }),
+      ).toBe("openclaw");
     });
   });
 

@@ -104,6 +104,7 @@ type PendingToolCallTelemetry = {
   startedAtMs: number;
   arguments?: Record<string, unknown>;
   summary?: string;
+  skillName?: string;
 };
 
 type ToolCallTelemetryStart = {
@@ -111,6 +112,7 @@ type ToolCallTelemetryStart = {
   name: string;
   arguments?: Record<string, unknown>;
   summary?: string;
+  skillName?: string;
 };
 
 type ToolCallTelemetryResult = {
@@ -119,6 +121,7 @@ type ToolCallTelemetryResult = {
   durationMs?: number;
   arguments?: Record<string, unknown>;
   summary?: string;
+  skillName?: string;
   orphaned?: boolean;
 };
 
@@ -130,6 +133,7 @@ type ToolCallTelemetryTracker = {
       callId?: string;
       arguments?: Record<string, unknown>;
       summary?: string;
+      skillName?: string;
     },
   ) => ToolCallTelemetryStart;
   consumeResult: (
@@ -138,6 +142,7 @@ type ToolCallTelemetryTracker = {
       name?: string;
       arguments?: Record<string, unknown>;
       summary?: string;
+      skillName?: string;
     },
   ) => ToolCallTelemetryResult;
   drainPendingResults: (finishedAtMs: number) => ToolCallTelemetryResult[];
@@ -235,7 +240,19 @@ function summarizeToolArguments(args: Record<string, unknown> | undefined): stri
   if (!args) {
     return undefined;
   }
-  const fields = ["target", "url", "query", "path", "command", "expr", "file", "name", "action"];
+  const fields = [
+    "skillName",
+    "skill_name",
+    "target",
+    "url",
+    "query",
+    "path",
+    "command",
+    "expr",
+    "file",
+    "name",
+    "action",
+  ];
   for (const field of fields) {
     const value = args[field];
     if (typeof value === "string" && value.trim()) {
@@ -250,6 +267,135 @@ function summarizeToolInfo(name: string, summary: string | undefined): string {
     return name;
   }
   return `${name} • ${summary}`;
+}
+
+const TOOL_SKILL_NAME_FIELDS = ["skillName", "skill_name", "skill", "skillId", "skill_id"] as const;
+const TOOL_SKILL_COMMAND_FIELDS = ["commandName", "command_name"] as const;
+const TOOL_SKILL_PATH_FIELDS = [
+  "path",
+  "file",
+  "file_path",
+  "filepath",
+  "target",
+  "uri",
+  "url",
+] as const;
+
+function normalizeSkillName(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim().replace(/^\/+/u, "").replace(/\s+/g, " ");
+  if (!normalized) {
+    return undefined;
+  }
+  return normalizeTelemetryInline(normalized, 80);
+}
+
+function inferSkillNameFromPath(pathValue: string): string | undefined {
+  const trimmed = pathValue.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  let decoded = trimmed;
+  try {
+    decoded = decodeURIComponent(trimmed);
+  } catch {
+    decoded = trimmed;
+  }
+  const bySkillsRoot = decoded.match(
+    /(?:^|[\\/])(?:\.agents[\\/])?skills[\\/]+([^\\/]+)(?:[\\/]|$)/iu,
+  );
+  if (bySkillsRoot?.[1]) {
+    return normalizeSkillName(bySkillsRoot[1]);
+  }
+  const bySkillMd = decoded.match(/[\\/]([^\\/]+)[\\/]SKILL\.md$/iu);
+  if (bySkillMd?.[1]) {
+    return normalizeSkillName(bySkillMd[1]);
+  }
+  return undefined;
+}
+
+function inferSkillNameFromPathLike(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return inferSkillNameFromPath(value);
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const inferred = inferSkillNameFromPathLike(entry);
+      if (inferred) {
+        return inferred;
+      }
+    }
+  }
+  return undefined;
+}
+
+export function inferSkillNameFromToolContext(params: {
+  toolName?: string;
+  args?: Record<string, unknown>;
+  meta?: Record<string, unknown>;
+}): string | undefined {
+  const args = params.args;
+  const meta = params.meta;
+  const records: Array<Record<string, unknown> | undefined> = [
+    args,
+    meta,
+    toToolArguments(args?.details),
+    toToolArguments(args?.meta),
+    toToolArguments(args?.input),
+    toToolArguments(args?.arguments),
+    toToolArguments(meta?.details),
+    toToolArguments(meta?.meta),
+    toToolArguments(meta?.input),
+    toToolArguments(meta?.arguments),
+  ];
+
+  for (const record of records) {
+    if (!record) {
+      continue;
+    }
+    for (const field of TOOL_SKILL_NAME_FIELDS) {
+      const inferred = normalizeSkillName(record[field]);
+      if (inferred) {
+        return inferred;
+      }
+    }
+  }
+
+  for (const record of records) {
+    if (!record) {
+      continue;
+    }
+    for (const field of TOOL_SKILL_COMMAND_FIELDS) {
+      const inferred = normalizeSkillName(record[field]);
+      if (inferred) {
+        return inferred;
+      }
+    }
+  }
+
+  for (const record of records) {
+    if (!record) {
+      continue;
+    }
+    for (const field of TOOL_SKILL_PATH_FIELDS) {
+      const inferred = inferSkillNameFromPathLike(record[field]);
+      if (inferred) {
+        return inferred;
+      }
+    }
+  }
+
+  if (params.toolName?.trim().toLowerCase() === "read") {
+    return (
+      inferSkillNameFromPathLike(args?.path) ??
+      inferSkillNameFromPathLike(args?.file_path) ??
+      inferSkillNameFromPathLike(args?.target)
+    );
+  }
+
+  return undefined;
 }
 
 export function createToolCallTelemetryTracker(runId: string): ToolCallTelemetryTracker {
@@ -268,12 +414,14 @@ export function createToolCallTelemetryTracker(runId: string): ToolCallTelemetry
       const normalizedCallId = options?.callId?.trim();
       const normalizedArgs = toToolArguments(options?.arguments);
       const normalizedSummary = normalizeTelemetryInline(options?.summary ?? "");
+      const normalizedSkillName = normalizeSkillName(options?.skillName);
       const call = {
         callId: normalizedCallId || nextCallId(),
         name: normalizedName,
         startedAtMs: Math.max(0, Math.trunc(startedAtMs)),
         ...(normalizedArgs ? { arguments: normalizedArgs } : {}),
         ...(normalizedSummary ? { summary: normalizedSummary } : {}),
+        ...(normalizedSkillName ? { skillName: normalizedSkillName } : {}),
       };
       pending.push(call);
       return {
@@ -281,6 +429,7 @@ export function createToolCallTelemetryTracker(runId: string): ToolCallTelemetry
         name: call.name,
         ...(call.arguments ? { arguments: call.arguments } : {}),
         ...(call.summary ? { summary: call.summary } : {}),
+        ...(call.skillName ? { skillName: call.skillName } : {}),
       };
     },
     consumeResult: (finishedAtMs, options) => {
@@ -289,24 +438,28 @@ export function createToolCallTelemetryTracker(runId: string): ToolCallTelemetry
         const orphanName = options?.name?.trim() || "tool";
         const orphanSummary = normalizeTelemetryInline(options?.summary ?? "");
         const orphanArgs = toToolArguments(options?.arguments);
+        const orphanSkillName = normalizeSkillName(options?.skillName);
         return {
           name: orphanName,
           callId: nextCallId(),
           durationMs: 0,
           ...(orphanArgs ? { arguments: orphanArgs } : {}),
           ...(orphanSummary ? { summary: orphanSummary } : {}),
+          ...(orphanSkillName ? { skillName: orphanSkillName } : {}),
           orphaned: true,
         };
       }
       const durationMs = Math.max(0, Math.trunc(finishedAtMs) - call.startedAtMs);
       const summary = call.summary ?? normalizeTelemetryInline(options?.summary ?? "");
       const args = call.arguments ?? toToolArguments(options?.arguments);
+      const skillName = call.skillName ?? normalizeSkillName(options?.skillName);
       return {
         name: call.name,
         callId: call.callId,
         durationMs,
         ...(args ? { arguments: args } : {}),
         ...(summary ? { summary } : {}),
+        ...(skillName ? { skillName } : {}),
       };
     },
     drainPendingResults: (finishedAtMs) => {
@@ -323,6 +476,7 @@ export function createToolCallTelemetryTracker(runId: string): ToolCallTelemetry
           durationMs,
           ...(call.arguments ? { arguments: call.arguments } : {}),
           ...(call.summary ? { summary: call.summary } : {}),
+          ...(call.skillName ? { skillName: call.skillName } : {}),
         });
       }
       return results;
@@ -1001,6 +1155,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
               phase: "result",
               ...(pendingTool.arguments ? { arguments: pendingTool.arguments } : {}),
               ...(pendingTool.summary ? { summary: pendingTool.summary } : {}),
+              ...(pendingTool.skillName ? { skill_name: pendingTool.skillName } : {}),
               output: {
                 auto_closed: true,
                 reason: options.reason,
@@ -1557,6 +1712,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
           let laneWaitEventCount = 0;
           let laneWaitMaxMs = 0;
           let laneWaitLastNotifiedMs = 0;
+          const announcedSkillNames = new Set<string>();
           let heartbeatInFlight = false;
           let heartbeatTimer: NodeJS.Timeout | null = null;
           const emitStatus = payload.kind === 25802;
@@ -1787,6 +1943,13 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                       outbound && typeof outbound === "object" && !Array.isArray(outbound)
                         ? (outbound as Record<string, unknown>)
                         : {};
+                    const outboundSkillName = normalizeSkillName(
+                      typeof outboundRecord.skill_name === "string"
+                        ? outboundRecord.skill_name
+                        : typeof outboundRecord.skillName === "string"
+                          ? outboundRecord.skillName
+                          : undefined,
+                    );
                     const toolResultMeta =
                       info.kind === "tool"
                         ? toolCallTelemetry.consumeResult(timestampMs, {
@@ -1799,6 +1962,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                               typeof outboundRecord.summary === "string"
                                 ? outboundRecord.summary
                                 : undefined,
+                            skillName: outboundSkillName,
                           })
                         : null;
                     if (info.kind === "tool" && toolResultMeta?.orphaned) {
@@ -1817,6 +1981,9 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                             ? { arguments: toolResultMeta.arguments }
                             : {}),
                           ...(orphanSummary ? { summary: orphanSummary } : {}),
+                          ...(toolResultMeta.skillName
+                            ? { skill_name: toolResultMeta.skillName }
+                            : {}),
                           timestamp: Math.floor(orphanStartAtMs / 1000),
                           timestamp_ms: orphanStartAtMs,
                           run_id: payload.eventId,
@@ -1866,6 +2033,9 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                               name: toolResultMeta?.name ?? "tool",
                               phase: "result",
                               ...(toolArguments ? { arguments: toolArguments } : {}),
+                              ...(toolResultMeta?.skillName
+                                ? { skill_name: toolResultMeta.skillName }
+                                : {}),
                               output: (() => {
                                 const output: Record<string, unknown> = outboundToolOutput
                                   ? { ...outboundToolOutput }
@@ -1976,6 +2146,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                     phase,
                     toolCallId,
                     args,
+                    meta,
                     partialResult,
                     isError,
                   }) => {
@@ -1996,12 +2167,30 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                       return;
                     }
                     const toolArguments = toToolArguments(args);
+                    const toolMeta = toToolArguments(meta);
+                    const inferredSkillName = inferSkillNameFromToolContext({
+                      toolName: normalizedName,
+                      args: toolArguments,
+                      meta: toolMeta,
+                    });
+                    if (inferredSkillName) {
+                      const skillKey = inferredSkillName.toLowerCase();
+                      if (!announcedSkillNames.has(skillKey)) {
+                        announcedSkillNames.add(skillKey);
+                        await safeSendThinkingDelta(
+                          "update",
+                          `Using skill: ${inferredSkillName}`,
+                          "skill",
+                        );
+                      }
+                    }
                     const toolSummary = summarizeToolArguments(toolArguments);
+                    const effectiveToolSummary = toolSummary || inferredSkillName;
                     if (normalizedPhase === "result") {
                       return;
                     }
                     await safeSendStatus("tool_use", {
-                      info: summarizeToolInfo(normalizedName, toolSummary),
+                      info: summarizeToolInfo(normalizedName, effectiveToolSummary),
                     });
                     const timestampMs = Date.now();
                     const toolCall =
@@ -2010,12 +2199,14 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                             callId: typeof toolCallId === "string" ? toolCallId : undefined,
                             arguments: toolArguments,
                             summary: toolSummary,
+                            skillName: inferredSkillName,
                           })
                         : {
                             callId: typeof toolCallId === "string" ? toolCallId : undefined,
                             name: normalizedName,
                             ...(toolArguments ? { arguments: toolArguments } : {}),
                             ...(toolSummary ? { summary: toolSummary } : {}),
+                            ...(inferredSkillName ? { skillName: inferredSkillName } : {}),
                           };
                     const partialResultText =
                       typeof partialResult === "string"
@@ -2036,6 +2227,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                         call_id: toolCall.callId,
                         ...(toolCall.arguments ? { arguments: toolCall.arguments } : {}),
                         ...(toolCall.summary ? { summary: toolCall.summary } : {}),
+                        ...(toolCall.skillName ? { skill_name: toolCall.skillName } : {}),
                         ...(partialResultText ? { output: { text: partialResultText } } : {}),
                         ...(normalizedPhase === "update" && isError === true
                           ? { success: false }
