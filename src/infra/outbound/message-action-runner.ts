@@ -399,10 +399,16 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     : typeof mediaParam === "string" && mediaParam.trim()
       ? [mediaParam]
       : [];
-  const mediaHint =
-    mediaHints[0] ??
-    readStringParam(params, "path", { trim: false }) ??
-    readStringParam(params, "filePath", { trim: false });
+  // Include path/filePath fallbacks if no --media flags were provided
+  if (mediaHints.length === 0) {
+    const pathHint =
+      readStringParam(params, "path", { trim: false }) ??
+      readStringParam(params, "filePath", { trim: false });
+    if (pathHint) {
+      mediaHints.push(pathHint);
+    }
+  }
+  const mediaHint = mediaHints[0];
   const hasCard = params.card != null && typeof params.card === "object";
   const hasComponents = params.components != null && typeof params.components === "object";
   const caption = readStringParam(params, "caption", { allowEmpty: true }) ?? "";
