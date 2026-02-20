@@ -80,6 +80,7 @@ export type ChatProps = {
   onCloseSidebar?: () => void;
   onSplitRatioChange?: (ratio: number) => void;
   onChatScroll?: (event: Event) => void;
+  onGoToOverview?: () => void;
 };
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
@@ -318,7 +319,35 @@ export function renderChat(props: ChatProps) {
     <section class="card chat">
       ${props.disabledReason ? html`<div class="callout">${props.disabledReason}</div>` : nothing}
 
-      ${props.error ? html`<div class="callout danger">${props.error}</div>` : nothing}
+      ${
+        props.error
+          ? html`
+              <div class="callout danger">
+                ${props.error}
+                ${
+                  props.onGoToOverview &&
+                  (props.error.toLowerCase().includes("unauthorized") ||
+                    props.error.toLowerCase().includes("connect failed"))
+                    ? html`
+                        <div style="margin-top: 8px">
+                          <a
+                            class="session-link"
+                            href="#"
+                            @click=${(e: Event) => {
+                              e.preventDefault();
+                              props.onGoToOverview?.();
+                            }}
+                          >
+                            → Go to Settings to add a gateway token
+                          </a>
+                        </div>
+                      `
+                    : nothing
+                }
+              </div>
+            `
+          : nothing
+      }
 
       ${
         props.focusMode
