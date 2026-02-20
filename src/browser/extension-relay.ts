@@ -530,9 +530,17 @@ export async function ensureChromeExtensionRelayServer(opts: {
         rejectUpgrade(socket, 401, "Unauthorized");
         return;
       }
-      if (extensionWs) {
+      if (extensionWs && extensionWs.readyState === WebSocket.OPEN) {
         rejectUpgrade(socket, 409, "Extension already connected");
         return;
+      }
+      if (extensionWs && extensionWs.readyState !== WebSocket.OPEN) {
+        try {
+          extensionWs.terminate();
+        } catch {
+          // ignore
+        }
+        extensionWs = null;
       }
       wssExtension.handleUpgrade(req, socket, head, (ws) => {
         wssExtension.emit("connection", ws, req);
@@ -671,6 +679,9 @@ export async function ensureChromeExtensionRelayServer(opts: {
 
     ws.on("close", () => {
       clearInterval(ping);
+      if (extensionWs !== ws) {
+        return;
+      }
       extensionWs = null;
       for (const [, pending] of pendingExtension) {
         clearTimeout(pending.timer);
