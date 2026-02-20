@@ -139,6 +139,40 @@ describe("imessage monitor gating + envelope builders", () => {
     expect(ctxPayload.To).toBe("chat_id:42");
   });
 
+  it("dispatches group messages with chat_guid and no chat_id", () => {
+    const cfg = baseCfg();
+    const message: IMessagePayload = {
+      id: 16,
+      sender: "+15550001111",
+      is_from_me: false,
+      text: "@openclaw group chat",
+      is_group: true,
+      chat_guid: "1234567-ABCD",
+      chat_name: "Team Chat",
+      participants: ["+15551111111", "+15552222222"],
+    };
+    const { decision } = resolveDispatchDecision({
+      cfg,
+      message,
+    });
+    expect(decision.route.sessionKey).toBe("agent:main:imessage:group:1234567-abcd");
+
+    const detailDecision = resolve({ cfg, message });
+    expect(detailDecision).toMatchObject({
+      kind: "dispatch",
+      isGroup: true,
+      groupTarget: "chat_guid:1234567-ABCD",
+    });
+    if (detailDecision.kind !== "dispatch") {
+      throw new Error("expected dispatch decision");
+    }
+
+    const ctxPayload = buildDispatchContextPayload({ cfg, message });
+    expect(ctxPayload.From).toBe("imessage:group:1234567-ABCD");
+    expect(ctxPayload.To).toBe("chat_guid:1234567-ABCD");
+    expect(ctxPayload.ChatType).toBe("group");
+  });
+
   it("includes reply-to context fields + suffix", () => {
     const cfg = baseCfg();
     const message: IMessagePayload = {
