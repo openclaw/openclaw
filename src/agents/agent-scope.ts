@@ -32,7 +32,7 @@ type ResolvedAgentConfig = {
 
 let defaultAgentWarned = false;
 
-function listAgents(cfg: OpenClawConfig): AgentEntry[] {
+export function listAgentEntries(cfg: OpenClawConfig): AgentEntry[] {
   const list = cfg.agents?.list;
   if (!Array.isArray(list)) {
     return [];
@@ -41,7 +41,7 @@ function listAgents(cfg: OpenClawConfig): AgentEntry[] {
 }
 
 export function listAgentIds(cfg: OpenClawConfig): string[] {
-  const agents = listAgents(cfg);
+  const agents = listAgentEntries(cfg);
   if (agents.length === 0) {
     return [DEFAULT_AGENT_ID];
   }
@@ -59,7 +59,7 @@ export function listAgentIds(cfg: OpenClawConfig): string[] {
 }
 
 export function resolveDefaultAgentId(cfg: OpenClawConfig): string {
-  const agents = listAgents(cfg);
+  const agents = listAgentEntries(cfg);
   if (agents.length === 0) {
     return DEFAULT_AGENT_ID;
   }
@@ -93,7 +93,7 @@ export function resolveSessionAgentId(params: {
 
 function resolveAgentEntry(cfg: OpenClawConfig, agentId: string): AgentEntry | undefined {
   const id = normalizeAgentId(agentId);
-  return listAgents(cfg).find((entry) => normalizeAgentId(entry.id) === id);
+  return listAgentEntries(cfg).find((entry) => normalizeAgentId(entry.id) === id);
 }
 
 export function resolveAgentConfig(
