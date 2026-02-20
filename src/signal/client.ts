@@ -77,7 +77,12 @@ export async function signalRpcRequest<T = unknown>(
   if (!text) {
     throw new Error(`Signal RPC empty response (status ${res.status})`);
   }
-  const parsed = JSON.parse(text) as SignalRpcResponse<T>;
+  let parsed: SignalRpcResponse<T>;
+  try {
+    parsed = JSON.parse(text) as SignalRpcResponse<T>;
+  } catch (err) {
+    throw new Error(`Signal RPC returned malformed JSON (status ${res.status})`, { cause: err });
+  }
   if (parsed.error) {
     const code = parsed.error.code ?? "unknown";
     const msg = parsed.error.message ?? "Signal RPC error";
