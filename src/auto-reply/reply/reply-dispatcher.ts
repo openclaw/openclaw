@@ -3,7 +3,10 @@ import { sleep } from "../../utils.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { registerDispatcher } from "./dispatcher-registry.js";
 import { normalizeReplyPayload, type NormalizeReplySkipReason } from "./normalize-reply.js";
-import type { ResponsePrefixContext } from "./response-prefix-template.js";
+import {
+  resolveResponsePrefixTemplate,
+  type ResponsePrefixContext,
+} from "./response-prefix-template.js";
 import type { TypingController } from "./typing.js";
 
 export type ReplyDispatchKind = "tool" | "block" | "final";
@@ -83,6 +86,8 @@ type NormalizeReplyPayloadInternalOptions = Pick<
   "responsePrefix" | "responsePrefixContext" | "responsePrefixContextProvider" | "onHeartbeatStrip"
 > & {
   onSkip?: (reason: NormalizeReplySkipReason) => void;
+  /** Resolved prefix from a previous enqueue call, to strip before applying the current one. */
+  previouslyAppliedPrefix?: string;
 };
 
 function normalizeReplyPayloadInternal(
@@ -95,6 +100,7 @@ function normalizeReplyPayloadInternal(
   return normalizeReplyPayload(payload, {
     responsePrefix: opts.responsePrefix,
     responsePrefixContext: prefixContext,
+    previouslyAppliedPrefix: opts.previouslyAppliedPrefix,
     onHeartbeatStrip: opts.onHeartbeatStrip,
     onSkip: opts.onSkip,
   });
@@ -109,6 +115,9 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
   let completeCalled = false;
   // Track whether we've sent a block reply (for human delay - skip delay on first block).
   let sentFirstBlock = false;
+  // Track the last resolved prefix to detect changes after model fallback.
+  // Safe: dispatcher is instantiated per agent turn, so this never leaks across runs.
+  let lastAppliedPrefix: string | undefined;
   // Serialize outbound replies to preserve tool/block/final order.
   const queuedCounts: Record<ReplyDispatchKind, number> = {
     tool: 0,
@@ -123,15 +132,30 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
   });
 
   const enqueue = (kind: ReplyDispatchKind, payload: ReplyPayload) => {
+    // Resolve the current prefix to detect changes from model fallback.
+    const prefixCtx =
+      options.responsePrefixContextProvider?.() ?? options.responsePrefixContext;
+    const currentResolvedPrefix =
+      prefixCtx && options.responsePrefix
+        ? resolveResponsePrefixTemplate(options.responsePrefix, prefixCtx)
+        : options.responsePrefix;
+
     const normalized = normalizeReplyPayloadInternal(payload, {
       responsePrefix: options.responsePrefix,
       responsePrefixContext: options.responsePrefixContext,
       responsePrefixContextProvider: options.responsePrefixContextProvider,
       onHeartbeatStrip: options.onHeartbeatStrip,
       onSkip: (reason) => options.onSkip?.(payload, { kind, reason }),
+      previouslyAppliedPrefix:
+        lastAppliedPrefix !== currentResolvedPrefix ? lastAppliedPrefix : undefined,
     });
     if (!normalized) {
       return false;
+    }
+
+    // Track the prefix that was just applied.
+    if (currentResolvedPrefix) {
+      lastAppliedPrefix = currentResolvedPrefix;
     }
     queuedCounts[kind] += 1;
     pending += 1;

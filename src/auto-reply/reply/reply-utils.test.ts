@@ -114,6 +114,60 @@ describe("normalizeReplyPayload", () => {
     expect(normalized).toBeNull();
     expect(reasons).toEqual(["empty"]);
   });
+
+  it("strips previously applied prefix before applying new one", () => {
+    const normalized = normalizeReplyPayload(
+      { text: "[openai/gpt-5] pong" },
+      {
+        responsePrefix: "[{provider}/{model}]",
+        responsePrefixContext: { provider: "anthropic", model: "claude-sonnet" },
+        previouslyAppliedPrefix: "[openai/gpt-5]",
+      },
+    );
+
+    expect(normalized).not.toBeNull();
+    expect(normalized?.text).toBe("[anthropic/claude-sonnet] pong");
+  });
+
+  it("does not strip when previouslyAppliedPrefix is undefined", () => {
+    const normalized = normalizeReplyPayload(
+      { text: "pong" },
+      {
+        responsePrefix: "[{provider}/{model}]",
+        responsePrefixContext: { provider: "anthropic", model: "claude-sonnet" },
+      },
+    );
+
+    expect(normalized).not.toBeNull();
+    expect(normalized?.text).toBe("[anthropic/claude-sonnet] pong");
+  });
+
+  it("does not double-prefix when prefix is the same", () => {
+    const normalized = normalizeReplyPayload(
+      { text: "[anthropic/claude-sonnet] pong" },
+      {
+        responsePrefix: "[{provider}/{model}]",
+        responsePrefixContext: { provider: "anthropic", model: "claude-sonnet" },
+        previouslyAppliedPrefix: "[anthropic/claude-sonnet]",
+      },
+    );
+
+    expect(normalized).not.toBeNull();
+    expect(normalized?.text).toBe("[anthropic/claude-sonnet] pong");
+  });
+
+  it("does not add extra space when prefix ends with whitespace", () => {
+    const normalized = normalizeReplyPayload(
+      { text: "pong" },
+      {
+        responsePrefix: "[{provider}/{model}]\n",
+        responsePrefixContext: { provider: "anthropic", model: "claude-sonnet" },
+      },
+    );
+
+    expect(normalized).not.toBeNull();
+    expect(normalized?.text).toBe("[anthropic/claude-sonnet]\npong");
+  });
 });
 
 describe("typing controller", () => {

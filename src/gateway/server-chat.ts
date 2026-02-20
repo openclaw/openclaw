@@ -144,6 +144,8 @@ export type ChatRunState = {
   buffers: Map<string, string>;
   deltaSentAt: Map<string, number>;
   abortedRuns: Map<string, number>;
+  /** Resolved response-prefix strings keyed by clientRunId, set by onModelSelected. */
+  resolvedPrefixes: Map<string, string>;
   clear: () => void;
 };
 
@@ -152,12 +154,14 @@ export function createChatRunState(): ChatRunState {
   const buffers = new Map<string, string>();
   const deltaSentAt = new Map<string, number>();
   const abortedRuns = new Map<string, number>();
+  const resolvedPrefixes = new Map<string, string>();
 
   const clear = () => {
     registry.clear();
     buffers.clear();
     deltaSentAt.clear();
     abortedRuns.clear();
+    resolvedPrefixes.clear();
   };
 
   return {
@@ -165,6 +169,7 @@ export function createChatRunState(): ChatRunState {
     buffers,
     deltaSentAt,
     abortedRuns,
+    resolvedPrefixes,
     clear,
   };
 }
@@ -296,6 +301,11 @@ export function createAgentEventHandler({
       return;
     }
     chatRunState.deltaSentAt.set(clientRunId, now);
+    // Apply resolved prefix to broadcast text; the buffer stays raw so emitChatFinal
+    // can apply the definitive (possibly updated after fallback) prefix.
+    const prefix = chatRunState.resolvedPrefixes.get(clientRunId);
+    const sep = prefix && /\s$/.test(prefix) ? "" : " ";
+    const broadcastText = prefix && !text.startsWith(prefix) ? `${prefix}${sep}${text}` : text;
     const payload = {
       runId: clientRunId,
       sessionKey,
@@ -303,7 +313,7 @@ export function createAgentEventHandler({
       state: "delta" as const,
       message: {
         role: "assistant",
-        content: [{ type: "text", text }],
+        content: [{ type: "text", text: broadcastText }],
         timestamp: now,
       },
     };
@@ -320,17 +330,24 @@ export function createAgentEventHandler({
     error?: unknown,
   ) => {
     const bufferedText = chatRunState.buffers.get(clientRunId)?.trim() ?? "";
+    const prefix = chatRunState.resolvedPrefixes.get(clientRunId) ?? "";
     const normalizedHeartbeatText = normalizeHeartbeatChatFinalText({
       runId: clientRunId,
       sourceRunId,
       text: bufferedText,
     });
-    const text = normalizedHeartbeatText.text.trim();
+    const rawText = normalizedHeartbeatText.text.trim();
     const shouldSuppressSilent =
-      normalizedHeartbeatText.suppress || isSilentReplyText(text, SILENT_REPLY_TOKEN);
+      normalizedHeartbeatText.suppress || isSilentReplyText(rawText, SILENT_REPLY_TOKEN);
     chatRunState.buffers.delete(clientRunId);
     chatRunState.deltaSentAt.delete(clientRunId);
+    chatRunState.resolvedPrefixes.delete(clientRunId);
     if (jobState === "done") {
+      const sep = prefix && /\s$/.test(prefix) ? "" : " ";
+      const text =
+        rawText && prefix && !shouldSuppressSilent && !rawText.startsWith(prefix)
+          ? `${prefix}${sep}${rawText}`
+          : rawText;
       const payload = {
         runId: clientRunId,
         sessionKey,
@@ -478,6 +495,7 @@ export function createAgentEventHandler({
         chatRunState.abortedRuns.delete(evt.runId);
         chatRunState.buffers.delete(clientRunId);
         chatRunState.deltaSentAt.delete(clientRunId);
+        chatRunState.resolvedPrefixes.delete(clientRunId);
         if (chatLink) {
           chatRunState.registry.remove(evt.runId, clientRunId, sessionKey);
         }

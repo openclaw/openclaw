@@ -8,6 +8,7 @@ import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
+import { resolveResponsePrefixTemplate } from "../../auto-reply/reply/response-prefix-template.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
@@ -866,14 +867,31 @@ export const chatHandlers: GatewayRequestHandlers = {
         sessionKey,
         config: cfg,
       });
-      const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+      const {
+        onModelSelected: baseOnModelSelected,
+        responsePrefix,
+        responsePrefixContextProvider,
+      } = createReplyPrefixOptions({
         cfg,
         agentId,
         channel: INTERNAL_MESSAGE_CHANNEL,
       });
+      const onModelSelected: typeof baseOnModelSelected = (selCtx) => {
+        baseOnModelSelected(selCtx);
+        if (responsePrefix) {
+          const resolved = resolveResponsePrefixTemplate(
+            responsePrefix,
+            responsePrefixContextProvider(),
+          );
+          if (resolved) {
+            context.chatRunPrefixes.set(clientRunId, resolved);
+          }
+        }
+      };
       const finalReplyParts: string[] = [];
       const dispatcher = createReplyDispatcher({
-        ...prefixOptions,
+        responsePrefix,
+        responsePrefixContextProvider,
         onError: (err) => {
           context.logGateway.warn(`webchat dispatch failed: ${formatForLog(err)}`);
         },

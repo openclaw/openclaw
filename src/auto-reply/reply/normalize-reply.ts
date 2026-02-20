@@ -14,6 +14,9 @@ export type NormalizeReplyOptions = {
   responsePrefix?: string;
   /** Context for template variable interpolation in responsePrefix */
   responsePrefixContext?: ResponsePrefixContext;
+  /** If the prefix was previously applied with a different resolved value
+   *  (e.g., after model fallback), this is the old prefix to strip first. */
+  previouslyAppliedPrefix?: string;
   onHeartbeatStrip?: () => void;
   stripHeartbeat?: boolean;
   silentToken?: string;
@@ -81,13 +84,20 @@ export function normalizeReplyPayload(
     ? resolveResponsePrefixTemplate(opts.responsePrefix, opts.responsePrefixContext)
     : opts.responsePrefix;
 
-  if (
-    effectivePrefix &&
-    text &&
-    text.trim() !== HEARTBEAT_TOKEN &&
-    !text.startsWith(effectivePrefix)
-  ) {
-    text = `${effectivePrefix} ${text}`;
+  if (effectivePrefix && text && text.trim() !== HEARTBEAT_TOKEN) {
+    // If a previous (different) prefix was applied, strip it before applying the current one.
+    // This prevents double-prefix after model fallback (e.g. block reply with model A, final with model B).
+    if (
+      opts.previouslyAppliedPrefix &&
+      opts.previouslyAppliedPrefix !== effectivePrefix &&
+      text.startsWith(opts.previouslyAppliedPrefix)
+    ) {
+      text = text.slice(opts.previouslyAppliedPrefix.length).trimStart();
+    }
+    if (!text.startsWith(effectivePrefix)) {
+      const sep = /\s$/.test(effectivePrefix) ? "" : " ";
+      text = `${effectivePrefix}${sep}${text}`;
+    }
   }
 
   return { ...enrichedPayload, text };

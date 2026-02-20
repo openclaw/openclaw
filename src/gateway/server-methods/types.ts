@@ -53,6 +53,8 @@ export type GatewayRequestContext = {
   chatAbortedRuns: Map<string, number>;
   chatRunBuffers: Map<string, string>;
   chatDeltaSentAt: Map<string, number>;
+  /** Resolved response-prefix strings keyed by clientRunId, updated by onModelSelected. */
+  chatRunPrefixes: Map<string, string>;
   addChatRun: (sessionId: string, entry: { sessionKey: string; clientRunId: string }) => void;
   removeChatRun: (
     sessionId: string,
