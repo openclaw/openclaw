@@ -1,0 +1,32 @@
+[Unit]
+Description=OpenClaw Gateway (from source, v2026.2.12 + local patches)
+After=network-online.target
+Wants=network-online.target
+# Avoid running two gateways at once (legacy unit names).
+Conflicts=clawdbot-gateway.service clawdbot-gateway-dev.service
+
+[Service]
+# OpenClaw needs provider/channel warm-up before ws/HTTP is fully ready.
+# Clients should use `openclaw gateway status` or retry for RPC-ready probe after start.
+ExecStartPost=/home/dvk/.config/systemd/user/openclaw-gateway-wait.sh
+TimeoutStartSec=120
+Type=simple
+WorkingDirectory=/home/dvk/src/tries/2026-01-14-clawd
+# Run directly via the repo's local tsx binary so systemd tracks the actual gateway process.
+ExecStart=/home/dvk/src/tries/2026-01-14-clawd/node_modules/.bin/tsx src/entry.ts gateway --port 18789
+Restart=always
+RestartSec=5
+KillMode=process
+
+# Minimal+user PATH so binaries are consistent between interactive shells and systemd.
+# (OpenClaw status checks expect common user bin dirs to be present.)
+Environment="PATH=/home/dvk/.codex/agent-scripts/scripts:/home/dvk/bin:/home/dvk/.local/bin:/home/dvk/.npm-global/bin:/home/dvk/.nvm/current/bin:/home/dvk/.fnm/current/bin:/home/dvk/.volta/bin:/home/dvk/.asdf/shims:/home/dvk/.local/share/pnpm:/home/dvk/.bun/bin:/home/dvk/.local/share/mise/installs/go/1.25.5/bin:/home/dvk/.local/share/mise/installs/node/25.1.0/bin:/usr/local/sbin:/usr/local/bin:/usr/bin:/usr/lib/jvm/default/bin:/usr/bin/site_perl:/usr/bin/vendor_perl:/usr/bin/core_perl:/home/dvk/.local/npm/bin:/bin"
+Environment=OPENCLAW_GATEWAY_PORT=18789
+Environment=ASKCODEX_PTY_GATEWAY_FALLBACK=1
+Environment="OPENCLAW_SYSTEMD_UNIT=openclaw-gateway.service"
+Environment=OPENCLAW_SERVICE_MARKER=openclaw
+Environment=OPENCLAW_SERVICE_KIND=gateway
+Environment=OPENCLAW_SERVICE_VERSION=2026.2.12
+
+[Install]
+WantedBy=default.target
