@@ -44,6 +44,7 @@ import {
   buildGroupLabel,
   buildSenderLabel,
   buildSenderName,
+  buildTelegramThreadParams,
   buildTelegramGroupFrom,
   buildTelegramGroupPeerId,
   buildTelegramParentPeer,
@@ -164,6 +165,7 @@ export const buildTelegramMessageContext = async ({
   });
   const resolvedThreadId = threadSpec.scope === "forum" ? threadSpec.id : undefined;
   const replyThreadId = threadSpec.id;
+  const messageThreadParams = buildTelegramThreadParams(threadSpec);
   const { groupConfig, topicConfig } = resolveTelegramGroupConfig(chatId, resolvedThreadId);
   const peerId = isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : String(chatId);
   const parentPeer = buildTelegramParentPeer({ isGroup, resolvedThreadId, chatId });
@@ -321,6 +323,7 @@ export const buildTelegramMessageContext = async ({
                       idLine: `Your Telegram user id: ${telegramUserId}`,
                       code,
                     }),
+                    messageThreadParams,
                   ),
               });
             }

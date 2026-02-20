@@ -304,6 +304,44 @@ describe("createTelegramBot", () => {
     expect(pairingText).toContain("openclaw pairing approve telegram PAIRME12");
     expect(pairingText).not.toContain("<code>");
   });
+
+  it("threads pairing replies inside DM topics", async () => {
+    onSpy.mockReset();
+    sendMessageSpy.mockReset();
+    replySpy.mockReset();
+
+    loadConfig.mockReturnValue({
+      channels: { telegram: { dmPolicy: "pairing" } },
+    });
+    readChannelAllowFromStore.mockResolvedValue([]);
+    upsertChannelPairingRequest.mockResolvedValue({
+      code: "PAIRME12",
+      created: true,
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: { id: 1234, type: "private" },
+        text: "hello",
+        date: 1736380800,
+        from: { id: 999, username: "random" },
+        message_thread_id: 77,
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).not.toHaveBeenCalled();
+    expect(sendMessageSpy).toHaveBeenCalledWith(
+      1234,
+      expect.stringContaining("Pairing code:"),
+      expect.objectContaining({ message_thread_id: 77 }),
+    );
+  });
+
   it("does not resend pairing code when a request is already pending", async () => {
     onSpy.mockReset();
     sendMessageSpy.mockReset();

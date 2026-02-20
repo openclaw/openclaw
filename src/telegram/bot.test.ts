@@ -234,6 +234,42 @@ describe("createTelegramBot", () => {
     );
   });
 
+  it("keeps DM topic thread when callback fallback sends a new message", async () => {
+    onSpy.mockReset();
+    sendMessageSpy.mockReset();
+    editMessageTextSpy.mockReset();
+    editMessageTextSpy.mockRejectedValueOnce(new Error("400: Bad Request: no text in the message"));
+
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+    expect(callbackHandler).toBeDefined();
+
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-thread-1",
+        data: "mdl_back",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 14,
+          message_thread_id: 42,
+        },
+      },
+      deleteMessage: vi.fn(async () => undefined),
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(sendMessageSpy).toHaveBeenCalledWith(
+      1234,
+      expect.any(String),
+      expect.objectContaining({ message_thread_id: 42 }),
+    );
+  });
+
   it("blocks pagination callbacks when allowlist rejects sender", async () => {
     onSpy.mockReset();
     editMessageTextSpy.mockReset();
@@ -736,6 +772,50 @@ describe("createTelegramBot", () => {
     expect(sendMessageSpy).toHaveBeenCalledWith(
       12345,
       "You are not authorized to use this command.",
+    );
+  });
+
+  it("threads unauthorized native DM command responses inside DM topics", async () => {
+    onSpy.mockReset();
+    sendMessageSpy.mockReset();
+    commandSpy.mockReset();
+    replySpy.mockReset();
+
+    loadConfig.mockReturnValue({
+      commands: { native: true },
+      channels: {
+        telegram: {
+          dmPolicy: "pairing",
+        },
+      },
+    });
+    readChannelAllowFromStore.mockResolvedValueOnce([]);
+
+    createTelegramBot({ token: "tok" });
+    const handler = commandSpy.mock.calls.find((call) => call[0] === "status")?.[1] as
+      | ((ctx: Record<string, unknown>) => Promise<void>)
+      | undefined;
+    if (!handler) {
+      throw new Error("status command handler missing");
+    }
+
+    await handler({
+      message: {
+        chat: { id: 12345, type: "private" },
+        from: { id: 12345, username: "testuser" },
+        text: "/status",
+        date: 1736380800,
+        message_id: 42,
+        message_thread_id: 99,
+      },
+      match: "",
+    });
+
+    expect(replySpy).not.toHaveBeenCalled();
+    expect(sendMessageSpy).toHaveBeenCalledWith(
+      12345,
+      "You are not authorized to use this command.",
+      expect.objectContaining({ message_thread_id: 99 }),
     );
   });
 

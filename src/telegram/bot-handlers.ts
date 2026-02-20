@@ -38,10 +38,12 @@ import {
 } from "./bot-updates.js";
 import { resolveMedia } from "./bot/delivery.js";
 import {
+  buildTelegramThreadParams,
   buildTelegramGroupPeerId,
   buildTelegramParentPeer,
   resolveTelegramForumThreadId,
   resolveTelegramGroupAllowFromContext,
+  resolveTelegramThreadSpec,
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import {
@@ -667,12 +669,24 @@ export const registerTelegramHandlers = ({
       if (errMsg.includes("exceeds") && errMsg.includes("MB limit")) {
         if (sendOversizeWarning) {
           const limitMb = Math.round(mediaMaxBytes / (1024 * 1024));
+          const messageThreadId = (msg as { message_thread_id?: number }).message_thread_id;
+          const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
+          const isForum = (msg.chat as { is_forum?: boolean }).is_forum === true;
+          const threadParams =
+            buildTelegramThreadParams(
+              resolveTelegramThreadSpec({
+                isGroup,
+                isForum,
+                messageThreadId,
+              }),
+            ) ?? {};
           await withTelegramApiErrorLogging({
             operation: "sendMessage",
             runtime,
             fn: () =>
               bot.api.sendMessage(chatId, `⚠️ File too large. Maximum size is ${limitMb}MB.`, {
                 reply_to_message_id: msg.message_id,
+                ...threadParams,
               }),
           }).catch(() => {});
         }
@@ -764,11 +778,22 @@ export const registerTelegramHandlers = ({
         text: string,
         params?: Parameters<typeof bot.api.sendMessage>[2],
       ) => {
+        const callbackIsGroup =
+          callbackMessage.chat.type === "group" || callbackMessage.chat.type === "supergroup";
+        const callbackThreadParams =
+          buildTelegramThreadParams(
+            resolveTelegramThreadSpec({
+              isGroup: callbackIsGroup,
+              isForum: callbackMessage.chat.is_forum === true,
+              messageThreadId: callbackMessage.message_thread_id,
+            }),
+          ) ?? {};
+        const mergedParams = { ...callbackThreadParams, ...params };
         const replyFn = (ctx as { reply?: unknown }).reply;
         if (typeof replyFn === "function") {
-          return await ctx.reply(text, params);
+          return await ctx.reply(text, mergedParams);
         }
-        return await bot.api.sendMessage(callbackMessage.chat.id, text, params);
+        return await bot.api.sendMessage(callbackMessage.chat.id, text, mergedParams);
       };
 
       const inlineButtonsScope = resolveTelegramInlineButtonsScope({
