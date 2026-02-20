@@ -24,16 +24,26 @@ export function getAgentScopedMediaLocalRoots(
   agentId?: string,
 ): readonly string[] {
   const roots = buildMediaLocalRoots(resolveStateDir());
-  if (!agentId?.trim()) {
-    return roots;
+  if (agentId?.trim()) {
+    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+    if (workspaceDir) {
+      const normalizedWorkspaceDir = path.resolve(workspaceDir);
+      if (!roots.includes(normalizedWorkspaceDir)) {
+        roots.push(normalizedWorkspaceDir);
+      }
+    }
   }
-  const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-  if (!workspaceDir) {
-    return roots;
-  }
-  const normalizedWorkspaceDir = path.resolve(workspaceDir);
-  if (!roots.includes(normalizedWorkspaceDir)) {
-    roots.push(normalizedWorkspaceDir);
+  // Merge user-configured extra media roots from messages.mediaLocalRoots
+  const extra = cfg.messages?.mediaLocalRoots;
+  if (extra) {
+    for (const dir of extra) {
+      const trimmed = dir.trim();
+      if (!trimmed || !path.isAbsolute(trimmed)) continue;
+      const resolved = path.resolve(trimmed);
+      if (!roots.includes(resolved)) {
+        roots.push(resolved);
+      }
+    }
   }
   return roots;
 }
