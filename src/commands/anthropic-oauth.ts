@@ -2,8 +2,7 @@ import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { loginAnthropic } from "@mariozechner/pi-ai";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-
-const validateRequiredInput = (value: string) => (value.trim().length > 0 ? undefined : "Required");
+import { createVpsAwareOAuthHandlers } from "./oauth-flow.js";
 
 export async function loginAnthropicOAuth(params: {
   prompter: WizardPrompter;
@@ -32,31 +31,25 @@ export async function loginAnthropicOAuth(params: {
 
   const spin = prompter.progress("Starting OAuth flow…");
   try {
-    let authUrlShown = false;
+    const { onAuth, onPrompt } = createVpsAwareOAuthHandlers({
+      isRemote,
+      prompter,
+      runtime,
+      spin,
+      openUrl,
+      localBrowserMessage: "Complete sign-in in browser…",
+      manualPromptMessage: "Paste Anthropic authorization code (code#state)",
+    });
+
     const creds = await loginAnthropic(
       (url) => {
-        authUrlShown = true;
-        if (isRemote) {
-          spin.stop("OAuth URL ready");
-          runtime.log(`\nOpen this URL in your LOCAL browser:\n\n${url}\n`);
-          return;
-        }
-
-        spin.update("Complete sign-in in browser…");
-        void openUrl(url);
-        runtime.log(`Open: ${url}`);
+        void onAuth({ url });
       },
-      async () => {
-        if (!authUrlShown) {
-          spin.update("Waiting for authorization URL…");
-        }
-        const code = await prompter.text({
+      () =>
+        onPrompt({
           message: "Paste Anthropic authorization code (code#state)",
           placeholder: "code#state",
-          validate: (value) => validateRequiredInput(String(value ?? "")),
-        });
-        return String(code);
-      },
+        }),
     );
 
     spin.stop("Anthropic OAuth complete");

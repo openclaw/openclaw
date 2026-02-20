@@ -50,6 +50,7 @@ const select = <T>(params: Parameters<typeof clackSelect<T>>[0]) =>
   });
 
 type TokenProvider = "anthropic";
+const DEFAULT_ANTHROPIC_MODEL = "anthropic/claude-sonnet-4-6";
 
 function resolveTokenProvider(raw?: string): TokenProvider | "custom" | null {
   const trimmed = raw?.trim();
@@ -160,7 +161,12 @@ export async function modelsAuthPasteTokenCommand(
   runtime.log(`Auth profile: ${profileId} (${provider}/token)`);
 }
 
-export async function modelsAuthAnthropicOAuthCommand(runtime: RuntimeEnv) {
+export async function modelsAuthAnthropicOAuthCommand(params: {
+  runtime: RuntimeEnv;
+  agentDir?: string;
+  setDefault?: boolean;
+}) {
+  const { runtime, agentDir, setDefault = false } = params;
   if (!process.stdin.isTTY) {
     throw new Error("models auth oauth requires an interactive TTY.");
   }
@@ -181,6 +187,7 @@ export async function modelsAuthAnthropicOAuthCommand(runtime: RuntimeEnv) {
   const profileId = "anthropic:default";
   upsertAuthProfile({
     profileId,
+    agentDir,
     credential: {
       type: "oauth",
       provider: "anthropic",
@@ -188,16 +195,23 @@ export async function modelsAuthAnthropicOAuthCommand(runtime: RuntimeEnv) {
     },
   });
 
-  await updateConfig((cfg) =>
-    applyAuthProfileConfig(cfg, {
+  await updateConfig((cfg) => {
+    let next = applyAuthProfileConfig(cfg, {
       profileId,
       provider: "anthropic",
       mode: "oauth",
-    }),
-  );
+    });
+    if (setDefault) {
+      next = applyDefaultModel(next, DEFAULT_ANTHROPIC_MODEL);
+    }
+    return next;
+  });
 
   logConfigUpdated(runtime);
   runtime.log(`Auth profile: ${profileId} (anthropic/oauth)`);
+  if (setDefault) {
+    runtime.log(`Default model set to ${DEFAULT_ANTHROPIC_MODEL}`);
+  }
 }
 
 export async function modelsAuthAddCommand(_opts: Record<string, never>, runtime: RuntimeEnv) {
@@ -243,7 +257,10 @@ export async function modelsAuthAddCommand(_opts: Record<string, never>, runtime
   })) as "oauth" | "setup-token" | "paste";
 
   if (method === "oauth") {
-    await modelsAuthAnthropicOAuthCommand(runtime);
+    const config = await loadValidConfigOrThrow();
+    const defaultAgentId = resolveDefaultAgentId(config);
+    const agentDir = resolveAgentDir(config, defaultAgentId);
+    await modelsAuthAnthropicOAuthCommand({ runtime, agentDir });
     return;
   }
 
@@ -345,7 +362,11 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
         `Unknown auth method "${opts.method}" for Anthropic. Use \`--method oauth\` or omit --method.`,
       );
     }
-    await modelsAuthAnthropicOAuthCommand(runtime);
+    await modelsAuthAnthropicOAuthCommand({
+      runtime,
+      agentDir,
+      setDefault: opts.setDefault,
+    });
     return;
   }
   if (providers.length === 0) {
