@@ -61,7 +61,10 @@ export function shouldRejectBrowserMutation(params: {
  */
 export function enforceSameSiteCookies(res: Response): void {
   const originalSetHeader = res.setHeader.bind(res);
-  res.setHeader = function patchedSetHeader(name: string, value: unknown) {
+  res.setHeader = function patchedSetHeader(
+    name: string,
+    value: string | number | readonly string[],
+  ) {
     if (name.toLowerCase() === "set-cookie") {
       const cookies = Array.isArray(value) ? value : [String(value)];
       const patched = cookies.map((cookie: string) => {
