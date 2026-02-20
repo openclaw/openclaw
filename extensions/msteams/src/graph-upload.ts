@@ -48,7 +48,7 @@ async function uploadChunked(
         "Content-Length": chunk.length.toString(),
         "Content-Range": `bytes ${start}-${end - 1}/${totalSize}`,
       },
-      body: chunk,
+      body: new Uint8Array(chunk),
     });
 
     if (!res.ok) {
