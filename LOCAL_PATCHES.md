@@ -205,7 +205,25 @@ Quick status:
     - `src/gateway/server-methods/health.test.ts`
     - `src/gateway/server/ws-connection/health-pressure.test.ts`
     - `src/infra/skills-remote.backoff.test.ts`
-    - `src/daemon/systemd.test.ts` (unit rendering assertions)
+  - `src/daemon/systemd.test.ts` (unit rendering assertions)
+
+### 15) Browser profiles: per-profile headless/headful mode selection
+
+- Commit: `working tree (2026-02-20)` — pending commit
+- Why:
+  - Browser launch mode was globally controlled by `browser.headless`, so the agent could not choose headful vs headless by profile.
+  - We need profile-level mode control (for example, `openclaw` headful and `work` headless) while keeping a global fallback.
+- What:
+  - Add `browser.profiles.<name>.headless?: boolean` in config types + schema.
+  - Resolve effective mode per profile in `resolveProfile`:
+    - use profile override when set
+    - otherwise fallback to global `browser.headless`
+  - Use resolved profile mode in Chrome launch args:
+    - `--headless=new`/`--disable-gpu` now keyed to the selected profile.
+    - Linux headful X11/Ozone fallback now keyed to the selected profile.
+  - Status endpoint now reports the selected profile’s effective `headless` mode.
+  - Add focused tests for config precedence and launch-arg behavior.
+  - Update browser docs and configuration reference with per-profile examples.
 
 ## Operating rules
 

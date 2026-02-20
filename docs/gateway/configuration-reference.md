@@ -1932,8 +1932,8 @@ See [Plugins](/tools/plugin).
     evaluateEnabled: true,
     defaultProfile: "chrome",
     profiles: {
-      openclaw: { cdpPort: 18800, color: "#FF4500" },
-      work: { cdpPort: 18801, color: "#0066CC" },
+      openclaw: { cdpPort: 18800, color: "#FF4500", headless: false },
+      work: { cdpPort: 18801, color: "#0066CC", headless: true },
       remote: { cdpUrl: "http://10.0.0.42:9222", color: "#00AA00" },
     },
     color: "#FF4500",
@@ -1946,6 +1946,7 @@ See [Plugins](/tools/plugin).
 ```
 
 - `evaluateEnabled: false` disables `act:evaluate` and `wait --fn`.
+- `profiles.<name>.headless` lets each local profile choose headless/headful mode.
 - Remote profiles are attach-only (start/stop/reset disabled).
 - Auto-detect order: default browser if Chromium-based → Chrome → Brave → Edge → Chromium → Chrome Canary.
 - Control service: loopback only (port derived from `gateway.port`, default `18791`).

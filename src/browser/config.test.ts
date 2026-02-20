@@ -20,6 +20,7 @@ describe("browser config", () => {
     expect(openclaw?.driver).toBe("openclaw");
     expect(openclaw?.cdpPort).toBe(18800);
     expect(openclaw?.cdpUrl).toBe("http://127.0.0.1:18800");
+    expect(openclaw?.headless).toBe(false);
     expect(resolved.remoteCdpTimeoutMs).toBe(1500);
     expect(resolved.remoteCdpHandshakeTimeoutMs).toBe(3000);
   });
@@ -134,6 +135,30 @@ describe("browser config", () => {
 
     const work = resolveProfile(resolved, "work");
     expect(work?.cdpUrl).toBe("https://example.com:18801");
+  });
+
+  it("inherits global headless mode when profile override is unset", () => {
+    const resolved = resolveBrowserConfig({
+      headless: true,
+      profiles: {
+        openclaw: { cdpPort: 18800, color: "#FF4500" },
+      },
+    });
+
+    const openclaw = resolveProfile(resolved, "openclaw");
+    expect(openclaw?.headless).toBe(true);
+  });
+
+  it("allows profile headless override to disable global headless", () => {
+    const resolved = resolveBrowserConfig({
+      headless: true,
+      profiles: {
+        openclaw: { cdpPort: 18800, color: "#FF4500", headless: false },
+      },
+    });
+
+    const openclaw = resolveProfile(resolved, "openclaw");
+    expect(openclaw?.headless).toBe(false);
   });
 
   it("rejects unsupported protocols", () => {

@@ -1,4 +1,5 @@
 import type { BrowserConfig, BrowserProfileConfig, OpenClawConfig } from "../config/config.js";
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { resolveGatewayPort } from "../config/paths.js";
 import {
   deriveDefaultBrowserCdpPortRange,
@@ -6,7 +7,6 @@ import {
   DEFAULT_BROWSER_CONTROL_PORT,
 } from "../config/port-defaults.js";
 import { isLoopbackHost } from "../gateway/net.js";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import {
   DEFAULT_OPENCLAW_BROWSER_COLOR,
   DEFAULT_OPENCLAW_BROWSER_ENABLED,
@@ -43,6 +43,7 @@ export type ResolvedBrowserProfile = {
   cdpHost: string;
   cdpIsLoopback: boolean;
   color: string;
+  headless: boolean;
   driver: "openclaw" | "extension";
 };
 
@@ -273,6 +274,7 @@ export function resolveProfile(
   let cdpPort = profile.cdpPort ?? 0;
   let cdpUrl = "";
   const driver = profile.driver === "extension" ? "extension" : "openclaw";
+  const headless = profile.headless ?? resolved.headless;
 
   if (rawProfileUrl) {
     const parsed = parseHttpUrl(rawProfileUrl, `browser.profiles.${profileName}.cdpUrl`);
@@ -292,6 +294,7 @@ export function resolveProfile(
     cdpHost,
     cdpIsLoopback: isLoopbackHost(cdpHost),
     color: profile.color,
+    headless,
     driver,
   };
 }

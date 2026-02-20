@@ -56,6 +56,9 @@ export type RunningChrome = {
   proc: ChildProcessWithoutNullStreams;
 };
 
+type LaunchArgsConfig = Pick<ResolvedBrowserConfig, "noSandbox" | "extraArgs">;
+type LaunchArgsProfile = Pick<ResolvedBrowserProfile, "cdpPort" | "headless">;
+
 function resolveBrowserExecutable(resolved: ResolvedBrowserConfig): BrowserExecutable | null {
   return resolveBrowserExecutableForPlatform(resolved, process.platform);
 }
@@ -161,6 +164,81 @@ export async function isChromeCdpReady(
   return await canOpenWebSocket(wsUrl, handshakeTimeoutMs);
 }
 
+export function buildOpenClawChromeLaunchArgs(params: {
+  config: LaunchArgsConfig;
+  profile: LaunchArgsProfile;
+  userDataDir: string;
+  platform?: NodeJS.Platform;
+  display?: string | undefined;
+  forceDisableDevShmUsage?: string | undefined;
+}) {
+  const {
+    config,
+    profile,
+    userDataDir,
+    platform = process.platform,
+    display = process.env.DISPLAY,
+    forceDisableDevShmUsage = process.env.OPENCLAW_BROWSER_DISABLE_DEV_SHM_USAGE,
+  } = params;
+  const args: string[] = [
+    `--remote-debugging-port=${profile.cdpPort}`,
+    `--user-data-dir=${userDataDir}`,
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--disable-sync",
+    "--disable-background-networking",
+    "--disable-component-update",
+    // Keep renderers running even when the window is occluded/backgrounded.
+    // Without this, Chromium can stop producing compositor frames and CDP
+    // Page.captureScreenshot may hang indefinitely on some Linux setups.
+    "--disable-backgrounding-occluded-windows",
+    "--disable-renderer-backgrounding",
+    "--disable-features=Translate,MediaRouter",
+    "--disable-session-crashed-bubble",
+    "--hide-crash-restore-bubble",
+    "--password-store=basic",
+  ];
+
+  if (profile.headless) {
+    // Best-effort; older Chromes may ignore.
+    args.push("--headless=new");
+    args.push("--disable-gpu");
+  }
+  if (config.noSandbox) {
+    args.push("--no-sandbox");
+    args.push("--disable-setuid-sandbox");
+  }
+  if (platform === "linux") {
+    // Some Linux Chromium builds (observed on Arch Chromium 144) hard-crash
+    // with --disable-dev-shm-usage in headless mode. Keep this opt-in only.
+    if (forceDisableDevShmUsage === "1" || forceDisableDevShmUsage?.toLowerCase() === "true") {
+      args.push("--disable-dev-shm-usage");
+    }
+
+    // Workaround: On some Linux systems Chromium is launched with Ozone/Wayland
+    // (often via distro wrappers that append --ozone-platform=wayland). We've
+    // observed CDP Page.captureScreenshot hanging indefinitely in that mode.
+    // If X11 is available, prefer it for the managed OpenClaw browser.
+    if (!profile.headless && display?.trim()) {
+      args.push("--ozone-platform=x11");
+      args.push("--ozone-platform-hint=x11");
+    }
+  }
+
+  // Stealth: hide navigator.webdriver from automation detection (#80)
+  args.push("--disable-blink-features=AutomationControlled");
+
+  // Append user-configured extra arguments (e.g., stealth flags, window size)
+  if (config.extraArgs.length > 0) {
+    args.push(...config.extraArgs);
+  }
+
+  // Always open a blank tab to ensure a target exists.
+  args.push("about:blank");
+
+  return args;
+}
+
 export async function launchOpenClawChrome(
   resolved: ResolvedBrowserConfig,
   profile: ResolvedBrowserProfile,
@@ -196,62 +274,11 @@ export async function launchOpenClawChrome(
 
   // First launch to create preference files if missing, then decorate and relaunch.
   const spawnOnce = () => {
-    const args: string[] = [
-      `--remote-debugging-port=${profile.cdpPort}`,
-      `--user-data-dir=${userDataDir}`,
-      "--no-first-run",
-      "--no-default-browser-check",
-      "--disable-sync",
-      "--disable-background-networking",
-      "--disable-component-update",
-      // Keep renderers running even when the window is occluded/backgrounded.
-      // Without this, Chromium can stop producing compositor frames and CDP
-      // Page.captureScreenshot may hang indefinitely on some Linux setups.
-      "--disable-backgrounding-occluded-windows",
-      "--disable-renderer-backgrounding",
-      "--disable-features=Translate,MediaRouter",
-      "--disable-session-crashed-bubble",
-      "--hide-crash-restore-bubble",
-      "--password-store=basic",
-    ];
-
-    if (resolved.headless) {
-      // Best-effort; older Chromes may ignore.
-      args.push("--headless=new");
-      args.push("--disable-gpu");
-    }
-    if (resolved.noSandbox) {
-      args.push("--no-sandbox");
-      args.push("--disable-setuid-sandbox");
-    }
-    if (process.platform === "linux") {
-      // Some Linux Chromium builds (observed on Arch Chromium 144) hard-crash
-      // with --disable-dev-shm-usage in headless mode. Keep this opt-in only.
-      const forceDisableDevShm = process.env.OPENCLAW_BROWSER_DISABLE_DEV_SHM_USAGE;
-      if (forceDisableDevShm === "1" || forceDisableDevShm?.toLowerCase() === "true") {
-        args.push("--disable-dev-shm-usage");
-      }
-
-      // Workaround: On some Linux systems Chromium is launched with Ozone/Wayland
-      // (often via distro wrappers that append --ozone-platform=wayland). We've
-      // observed CDP Page.captureScreenshot hanging indefinitely in that mode.
-      // If X11 is available, prefer it for the managed clawd browser.
-      if (!resolved.headless && process.env.DISPLAY?.trim()) {
-        args.push("--ozone-platform=x11");
-        args.push("--ozone-platform-hint=x11");
-      }
-    }
-
-    // Stealth: hide navigator.webdriver from automation detection (#80)
-    args.push("--disable-blink-features=AutomationControlled");
-
-    // Append user-configured extra arguments (e.g., stealth flags, window size)
-    if (resolved.extraArgs.length > 0) {
-      args.push(...resolved.extraArgs);
-    }
-
-    // Always open a blank tab to ensure a target exists.
-    args.push("about:blank");
+    const args = buildOpenClawChromeLaunchArgs({
+      config: resolved,
+      profile,
+      userDataDir,
+    });
 
     return spawn(exe.path, args, {
       stdio: "pipe",

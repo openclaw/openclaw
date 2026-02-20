@@ -69,8 +69,8 @@ Browser settings live in `~/.openclaw/openclaw.json`.
     attachOnly: false,
     executablePath: "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
     profiles: {
-      openclaw: { cdpPort: 18800, color: "#FF4500" },
-      work: { cdpPort: 18801, color: "#0066CC" },
+      openclaw: { cdpPort: 18800, color: "#FF4500", headless: false },
+      work: { cdpPort: 18801, color: "#0066CC", headless: true },
       remote: { cdpUrl: "http://10.0.0.42:9222", color: "#00AA00" },
     },
   },
@@ -87,6 +87,7 @@ Notes:
 - `remoteCdpTimeoutMs` applies to remote (non-loopback) CDP reachability checks.
 - `remoteCdpHandshakeTimeoutMs` applies to remote CDP WebSocket reachability checks.
 - `attachOnly: true` means “never launch a local browser; only attach if it is already running.”
+- `profiles.<name>.headless` overrides the global `browser.headless` flag per profile.
 - `color` + per-profile `color` tint the browser UI so you can see which profile is active.
 - Default profile is `chrome` (extension relay). Use `defaultProfile: "openclaw"` for the managed browser.
 - Auto-detect order: system default browser if Chromium-based; otherwise Chrome → Brave → Edge → Chromium → Chrome Canary.
