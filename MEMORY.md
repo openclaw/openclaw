@@ -4,30 +4,32 @@ _마이봇과 지니의 프로젝트 총 목록. 새 프로젝트 시작 시 여
 
 ## 활성 프로젝트
 
-| #   | 프로젝트                             | 파일                                                 | 상태      | 시작일     |
-| --- | ------------------------------------ | ---------------------------------------------------- | --------- | ---------- |
-| 1   | 베트남 호치민 화장품 사업 (BnF)      | [memory/vietnam-beauty.md](memory/vietnam-beauty.md) | 🟢 진행중 | 2026-01-30 |
-| 2   | MAIOSS (AI OSS 보안 스캐너)          | [memory/maioss.md](memory/maioss.md)                 | 🟢 진행중 | 2025-08    |
-| 3   | MAISTAR7 (베트남 한국기업 인력 매칭) | [memory/maistar7.md](memory/maistar7.md)             | 🟢 진행중 | 2026-02-11 |
-| 4   | MAICON (AI 베트남 로컬 서비스 예약)  | [memory/maicon.md](memory/maicon.md)                 | 🟢 진행중 | 2026-02-13 |
-| 5   | MAITUTOR                             | [memory/maitutor.md](memory/maitutor.md)             | 🟢 진행중 | 2026-02-14 |
-| 6   | MAIBOTALKS (마이봇 음성대화 앱)      | [memory/maibotalks.md](memory/maibotalks.md)         | 🟢 진행중 | 2026-02-15 |
-| 7   | MAITOK (Tikly - TikTok 댓글 AI)      | [memory/maitok.md](memory/maitok.md)                 | 🟢 진행중 | 2026-02-18 |
-| 8   | MAIAX (스마트제조 AX 7KL 발효 POC)   | [memory/maiax.md](memory/maiax.md)                   | 🟢 진행중 | 2025-11    |
+| #   | 프로젝트                                     | 파일                                                 | 상태      | 시작일     |
+| --- | -------------------------------------------- | ---------------------------------------------------- | --------- | ---------- |
+| 1   | 베트남 호치민 화장품 사업 (BnF)              | [memory/vietnam-beauty.md](memory/vietnam-beauty.md) | 🟢 진행중 | 2026-01-30 |
+| 2   | MAIOSS (AI OSS 보안 스캐너)                  | [memory/maioss.md](memory/maioss.md)                 | 🟢 진행중 | 2025-08    |
+| 3   | MAISTAR7 (베트남 한국기업 인력 매칭)         | [memory/maistar7.md](memory/maistar7.md)             | 🟢 진행중 | 2026-02-11 |
+| 4   | MAICON (AI 베트남 로컬 서비스 예약)          | [memory/maicon.md](memory/maicon.md)                 | 🟢 진행중 | 2026-02-13 |
+| 5   | MAITUTOR                                     | [memory/maitutor.md](memory/maitutor.md)             | 🟢 진행중 | 2026-02-14 |
+| 6   | MAIBOTALKS (마이봇 음성대화 앱)              | [memory/maibotalks.md](memory/maibotalks.md)         | 🟢 진행중 | 2026-02-15 |
+| 7   | MAITOK (Tikly - TikTok 댓글 AI)              | [memory/maitok.md](memory/maitok.md)                 | 🟢 진행중 | 2026-02-18 |
+| 8   | MAIAX (스마트제조 AX 7KL 발효 POC)           | [memory/maiax.md](memory/maiax.md)                   | 🟢 진행중 | 2025-11    |
+| 9   | MAISECONDBRAIN (Mnemo - 개인화 세컨드브레인) | [memory/maisecondbrain.md](memory/maisecondbrain.md) | 🟢 진행중 | 2026-02-20 |
 
 ### 개발 환경 요약
 
-| 프로젝트        | 로컬 경로            | GitHub                                                    | 개발 도구   | 배포                   |
-| --------------- | -------------------- | --------------------------------------------------------- | ----------- | ---------------------- |
-| MAIBEAUTY (BnF) | `C:\TEST\MAIBEAUTY`  | [jini92/MAIBEAUTY](https://github.com/jini92/MAIBEAUTY)   | MAIBOT 직접 | —                      |
-| MAIOSS          | `C:\TEST\MAIOSS`     | [jini92/MAIOSS](https://github.com/jini92/MAIOSS)         | MAIBOT 직접 | Railway + GitHub Pages |
-| MAISTAR7        | `C:\TEST\MAISTAR7`   | TBD                                                       | MAIBOT 직접 | TBD                    |
-| MAICON          | `C:\TEST\MAICON`     | TBD                                                       | MAIBOT 직접 | TBD                    |
-| MAITUTOR        | `C:\TEST\MAITUTOR`   | [jini92/MAITUTOR](https://github.com/jini92/MAITUTOR)     | MAIBOT 직접 | TBD                    |
-| MAIBOTALKS      | `C:\TEST\MAIBOTALKS` | [jini92/MAIBOTALKS](https://github.com/jini92/MAIBOTALKS) | MAIBOT 직접 | TBD                    |
-| MAITOK (Tikly)  | `C:\TEST\MAITOK`     | [jini92/MAITOK](https://github.com/jini92/MAITOK)         | MAIBOT 직접 | TBD                    |
-| MAIAX           | `C:\TEST\MAIAX`      | [jini92/MAIAX](https://github.com/jini92/MAIAX)           | MAIBOT 직접 | TBD                    |
-| MAIBOT (메인)   | `C:\MAIBOT`          | [jini92/MAIBOT](https://github.com/jini92/MAIBOT)         | MAIBOT 직접 | —                      |
+| 프로젝트        | 로컬 경로                | GitHub                                                            | 개발 도구   | 배포                   |
+| --------------- | ------------------------ | ----------------------------------------------------------------- | ----------- | ---------------------- |
+| MAIBEAUTY (BnF) | `C:\TEST\MAIBEAUTY`      | [jini92/MAIBEAUTY](https://github.com/jini92/MAIBEAUTY)           | MAIBOT 직접 | —                      |
+| MAIOSS          | `C:\TEST\MAIOSS`         | [jini92/MAIOSS](https://github.com/jini92/MAIOSS)                 | MAIBOT 직접 | Railway + GitHub Pages |
+| MAISTAR7        | `C:\TEST\MAISTAR7`       | TBD                                                               | MAIBOT 직접 | TBD                    |
+| MAICON          | `C:\TEST\MAICON`         | TBD                                                               | MAIBOT 직접 | TBD                    |
+| MAITUTOR        | `C:\TEST\MAITUTOR`       | [jini92/MAITUTOR](https://github.com/jini92/MAITUTOR)             | MAIBOT 직접 | TBD                    |
+| MAIBOTALKS      | `C:\TEST\MAIBOTALKS`     | [jini92/MAIBOTALKS](https://github.com/jini92/MAIBOTALKS)         | MAIBOT 직접 | TBD                    |
+| MAITOK (Tikly)  | `C:\TEST\MAITOK`         | [jini92/MAITOK](https://github.com/jini92/MAITOK)                 | MAIBOT 직접 | TBD                    |
+| MAIAX           | `C:\TEST\MAIAX`          | [jini92/MAIAX](https://github.com/jini92/MAIAX)                   | MAIBOT 직접 | TBD                    |
+| MAISECONDBRAIN  | `C:\TEST\MAISECONDBRAIN` | [jini92/MAISECONDBRAIN](https://github.com/jini92/MAISECONDBRAIN) | MAIBOT 직접 | TBD                    |
+| MAIBOT (메인)   | `C:\MAIBOT`              | [jini92/MAIBOT](https://github.com/jini92/MAIBOT)                 | MAIBOT 직접 | —                      |
 
 ## 개발 방식 (전체 프로젝트 공통)
 
@@ -58,4 +60,4 @@ _(아직 없음)_
 
 ---
 
-_Last updated: 2026-02-19_
+_Last updated: 2026-02-20_
