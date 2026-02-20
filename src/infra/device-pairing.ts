@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { normalizeDeviceAuthScopes } from "../shared/device-auth.js";
+import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import {
   createAsyncLock,
   pruneExpiredPending,
   readJsonFile,
   resolvePairingPaths,
-  upsertPendingPairingRequest,
   writeJsonAtomic,
 } from "./pairing-files.js";
 import { generatePairingToken, verifyPairingToken } from "./pairing-token.js";
@@ -152,15 +152,28 @@ function mergeScopes(...items: Array<string[] | undefined>): string[] | undefine
   return [...scopes];
 }
 
-function scopesAllow(requested: string[], allowed: string[]): boolean {
-  if (requested.length === 0) {
-    return true;
-  }
-  if (allowed.length === 0) {
-    return false;
-  }
-  const allowedSet = new Set(allowed);
-  return requested.every((scope) => allowedSet.has(scope));
+function mergePendingDevicePairingRequest(
+  existing: DevicePairingPendingRequest,
+  incoming: Omit<DevicePairingPendingRequest, "requestId" | "ts" | "isRepair">,
+  isRepair: boolean,
+): DevicePairingPendingRequest {
+  const existingRole = normalizeRole(existing.role);
+  const incomingRole = normalizeRole(incoming.role);
+  return {
+    ...existing,
+    displayName: incoming.displayName ?? existing.displayName,
+    platform: incoming.platform ?? existing.platform,
+    clientId: incoming.clientId ?? existing.clientId,
+    clientMode: incoming.clientMode ?? existing.clientMode,
+    role: existingRole ?? incomingRole ?? undefined,
+    roles: mergeRoles(existing.roles, existing.role, incoming.role),
+    scopes: mergeScopes(existing.scopes, incoming.scopes),
+    remoteIp: incoming.remoteIp ?? existing.remoteIp,
+    // If either request is interactive, keep the pending request visible for approval.
+    silent: Boolean(existing.silent && incoming.silent),
+    isRepair: existing.isRepair || isRepair,
+    ts: Date.now(),
+  };
 }
 
 function newToken() {
@@ -227,29 +240,36 @@ export async function requestDevicePairing(
     if (!deviceId) {
       throw new Error("deviceId required");
     }
+    const isRepair = Boolean(state.pairedByDeviceId[deviceId]);
+    const existing = Object.values(state.pendingById).find(
+      (pending) => pending.deviceId === deviceId,
+    );
+    if (existing) {
+      const merged = mergePendingDevicePairingRequest(existing, req, isRepair);
+      state.pendingById[existing.requestId] = merged;
+      await persistState(state, baseDir);
+      return { status: "pending" as const, request: merged, created: false };
+    }
 
-    return await upsertPendingPairingRequest({
-      pendingById: state.pendingById,
-      isExisting: (pending) => pending.deviceId === deviceId,
-      isRepair: Boolean(state.pairedByDeviceId[deviceId]),
-      createRequest: (isRepair) => ({
-        requestId: randomUUID(),
-        deviceId,
-        publicKey: req.publicKey,
-        displayName: req.displayName,
-        platform: req.platform,
-        clientId: req.clientId,
-        clientMode: req.clientMode,
-        role: req.role,
-        roles: req.role ? [req.role] : undefined,
-        scopes: req.scopes,
-        remoteIp: req.remoteIp,
-        silent: req.silent,
-        isRepair,
-        ts: Date.now(),
-      }),
-      persist: async () => await persistState(state, baseDir),
-    });
+    const request: DevicePairingPendingRequest = {
+      requestId: randomUUID(),
+      deviceId,
+      publicKey: req.publicKey,
+      displayName: req.displayName,
+      platform: req.platform,
+      clientId: req.clientId,
+      clientMode: req.clientMode,
+      role: req.role,
+      roles: req.role ? [req.role] : undefined,
+      scopes: req.scopes,
+      remoteIp: req.remoteIp,
+      silent: req.silent,
+      isRepair,
+      ts: Date.now(),
+    };
+    state.pendingById[request.requestId] = request;
+    await persistState(state, baseDir);
+    return { status: "pending" as const, request, created: true };
   });
 }
 
@@ -411,7 +431,7 @@ export async function verifyDeviceToken(params: {
       return { ok: false, reason: "token-mismatch" };
     }
     const requestedScopes = normalizeDeviceAuthScopes(params.scopes);
-    if (!scopesAllow(requestedScopes, entry.scopes)) {
+    if (!roleScopesAllow({ role, requestedScopes, allowedScopes: entry.scopes })) {
       return { ok: false, reason: "scope-mismatch" };
     }
     entry.lastUsedAtMs = Date.now();
@@ -442,7 +462,7 @@ export async function ensureDeviceToken(params: {
     }
     const { device, role, tokens, existing } = context;
     if (existing && !existing.revokedAtMs) {
-      if (scopesAllow(requestedScopes, existing.scopes)) {
+      if (roleScopesAllow({ role, requestedScopes, allowedScopes: existing.scopes })) {
         return existing;
       }
     }
