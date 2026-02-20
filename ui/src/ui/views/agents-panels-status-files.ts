@@ -479,10 +479,19 @@ export function renderAgentFiles(params: {
   `;
 }
 
+/** Rough token estimate from word count (~1.3 tokens per word for English). */
+function approxTokensFromWords(wordCount: number): number {
+  return Math.round(wordCount * 1.3);
+}
+
 function renderAgentFileRow(file: AgentFileEntry, active: string | null, onSelect: () => void) {
-  const status = file.missing
-    ? "Missing"
-    : `${formatBytes(file.size)} · ${formatRelativeTimestamp(file.updatedAtMs ?? null)}`;
+  const sizePart = file.missing ? "" : formatBytes(file.size);
+  const tokenPart =
+    !file.missing && file.wordCount !== undefined
+      ? ` · ~${approxTokensFromWords(file.wordCount)} tokens`
+      : "";
+  const timePart = file.missing ? "Missing" : formatRelativeTimestamp(file.updatedAtMs ?? null);
+  const status = file.missing ? timePart : `${sizePart}${tokenPart} · ${timePart}`;
   return html`
     <button
       type="button"

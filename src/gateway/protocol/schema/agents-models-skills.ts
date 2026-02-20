@@ -107,6 +107,7 @@ export const AgentsFileEntrySchema = Type.Object(
     missing: Type.Boolean(),
     size: Type.Optional(Type.Integer({ minimum: 0 })),
     updatedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    wordCount: Type.Optional(Type.Integer({ minimum: 0 })),
     content: Type.Optional(Type.String()),
   },
   { additionalProperties: false },

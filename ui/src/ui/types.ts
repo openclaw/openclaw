@@ -357,6 +357,7 @@ export type AgentFileEntry = {
   missing: boolean;
   size?: number;
   updatedAtMs?: number;
+  wordCount?: number;
   content?: string;
 };
 

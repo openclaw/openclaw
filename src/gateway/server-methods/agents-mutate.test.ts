@@ -458,4 +458,43 @@ describe("agents.files.list", () => {
     const names = await listAgentFileNames();
     expect(names).toContain("BOOTSTRAP.md");
   });
+
+  it("returns wordCount for existing files", async () => {
+    mockWorkspaceStateRead({ onboardingCompletedAt: "2026-02-15T14:00:00.000Z" });
+    const workspaceDir = "/workspace/test-agent";
+    mocks.resolveAgentWorkspaceDir.mockReturnValue(workspaceDir);
+    const statImpl = async (...args: unknown[]) => {
+      const filePath = args[0];
+      if (String(filePath).startsWith(workspaceDir + "/")) {
+        return { isFile: () => true, size: 100, mtimeMs: 1000 };
+      }
+      throw createEnoentError();
+    };
+    const readFileImpl = async (...args: unknown[]) => {
+      const filePath = args[0];
+      if (String(filePath).endsWith("workspace-state.json")) {
+        return JSON.stringify({ onboardingCompletedAt: "2026-02-15T14:00:00.000Z" });
+      }
+      if (String(filePath).startsWith(workspaceDir + "/")) {
+        return "one two three four five";
+      }
+      throw createEnoentError();
+    };
+    mocks.fsStat.mockImplementation(statImpl as unknown as () => Promise<null>);
+    mocks.fsReadFile.mockImplementation(readFileImpl as unknown as () => Promise<string>);
+
+    const { respond, promise } = makeCall("agents.files.list", { agentId: "main" });
+    await promise;
+    const [, result] = respond.mock.calls[0] ?? [];
+    const resultTyped = result as {
+      files: Array<{ name: string; missing: boolean; wordCount?: number }>;
+    };
+    const files = resultTyped.files;
+
+    const existingFile = files.find((f) => !f.missing);
+    expect(existingFile).toBeDefined();
+    expect(typeof existingFile!.wordCount).toBe("number");
+    expect(existingFile!.wordCount).toBeGreaterThanOrEqual(0);
+    expect(existingFile!.wordCount).toBe(5);
+  });
 });

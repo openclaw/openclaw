@@ -112,6 +112,22 @@ async function statFile(filePath: string): Promise<FileMeta | null> {
   }
 }
 
+function countWords(content: string): number {
+  return content
+    .trim()
+    .split(/\s+/)
+    .filter((s) => s.length > 0).length;
+}
+
+async function readWordCount(filePath: string): Promise<number | undefined> {
+  try {
+    const content = await fs.readFile(filePath, "utf-8");
+    return countWords(content);
+  } catch {
+    return undefined;
+  }
+}
+
 async function listAgentFiles(workspaceDir: string, options?: { hideBootstrap?: boolean }) {
   const files: Array<{
     name: string;
@@ -119,6 +135,7 @@ async function listAgentFiles(workspaceDir: string, options?: { hideBootstrap?: 
     missing: boolean;
     size?: number;
     updatedAtMs?: number;
+    wordCount?: number;
   }> = [];
 
   const bootstrapFileNames = options?.hideBootstrap
@@ -128,12 +145,14 @@ async function listAgentFiles(workspaceDir: string, options?: { hideBootstrap?: 
     const filePath = path.join(workspaceDir, name);
     const meta = await statFile(filePath);
     if (meta) {
+      const wordCount = await readWordCount(filePath);
       files.push({
         name,
         path: filePath,
         missing: false,
         size: meta.size,
         updatedAtMs: meta.updatedAtMs,
+        ...(wordCount !== undefined && { wordCount }),
       });
     } else {
       files.push({ name, path: filePath, missing: true });
@@ -143,23 +162,27 @@ async function listAgentFiles(workspaceDir: string, options?: { hideBootstrap?: 
   const primaryMemoryPath = path.join(workspaceDir, DEFAULT_MEMORY_FILENAME);
   const primaryMeta = await statFile(primaryMemoryPath);
   if (primaryMeta) {
+    const wordCount = await readWordCount(primaryMemoryPath);
     files.push({
       name: DEFAULT_MEMORY_FILENAME,
       path: primaryMemoryPath,
       missing: false,
       size: primaryMeta.size,
       updatedAtMs: primaryMeta.updatedAtMs,
+      ...(wordCount !== undefined && { wordCount }),
     });
   } else {
     const altMemoryPath = path.join(workspaceDir, DEFAULT_MEMORY_ALT_FILENAME);
     const altMeta = await statFile(altMemoryPath);
     if (altMeta) {
+      const wordCount = await readWordCount(altMemoryPath);
       files.push({
         name: DEFAULT_MEMORY_ALT_FILENAME,
         path: altMemoryPath,
         missing: false,
         size: altMeta.size,
         updatedAtMs: altMeta.updatedAtMs,
+        ...(wordCount !== undefined && { wordCount }),
       });
     } else {
       files.push({ name: DEFAULT_MEMORY_FILENAME, path: primaryMemoryPath, missing: true });
@@ -478,6 +501,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
           missing: false,
           size: meta.size,
           updatedAtMs: meta.updatedAtMs,
+          wordCount: countWords(content),
           content,
         },
       },
@@ -520,6 +544,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
           missing: false,
           size: meta?.size,
           updatedAtMs: meta?.updatedAtMs,
+          wordCount: countWords(content),
           content,
         },
       },
