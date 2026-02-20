@@ -150,8 +150,15 @@ function setupIptables(proxyPort: number, log: SetupLogger): void {
   try {
     // Remove any existing rule first (idempotent).
     try {
+    const portStr = String(Math.floor(proxyPort));
+    if (!/^\d+$/.test(portStr)) {
+      throw new Error(`Invalid port: ${proxyPort}`);
+    }
+    try {
       execSync(
-        `iptables -t nat -D OUTPUT -p tcp --dport 80 -j REDIRECT --to-port ${proxyPort} 2>/dev/null`,
+        `iptables -t nat -D OUTPUT -p tcp --dport 80 -j REDIRECT --to-port ${portStr} 2>/dev/null`,
+        { stdio: "pipe" },
+      );
         { stdio: "pipe" },
       );
     } catch {
