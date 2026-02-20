@@ -17,7 +17,14 @@ Use the Notion API to create/read/update pages, data sources (databases), and bl
 
 1. Create an integration at https://notion.so/my-integrations
 2. Copy the API key (starts with `ntn_` or `secret_`)
-3. Set the environment variable `NOTION_API_KEY` with the key value
+3. Store it persistently using `config.patch` to add it to the `env` section of the configuration:
+
+```
+config.patch action with raw: {"env":{"NOTION_API_KEY":"ntn_your_key_here"}}
+```
+
+Alternatively, set the `NOTION_API_KEY` environment variable externally (e.g., Docker `--env`, `.env` file, or CI secrets).
+
 4. Share target pages/databases with your integration (click "..." → "Connect to" → your integration name)
 
 ## API Basics
