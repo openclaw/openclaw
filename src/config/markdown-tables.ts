@@ -1,7 +1,7 @@
-import { normalizeChannelId } from "../channels/plugins/index.js";
-import { normalizeAccountId } from "../routing/session-key.js";
 import type { OpenClawConfig } from "./config.js";
 import type { MarkdownTableMode } from "./types.base.js";
+import { normalizeChannelId } from "../channels/plugins/index.js";
+import { normalizeAccountId } from "../routing/session-key.js";
 
 type MarkdownConfigEntry = {
   markdown?: {
@@ -14,6 +14,7 @@ type MarkdownConfigSection = MarkdownConfigEntry & {
 };
 
 const DEFAULT_TABLE_MODES = new Map<string, MarkdownTableMode>([
+  ["discord", "code"],
   ["signal", "bullets"],
   ["whatsapp", "bullets"],
 ]);

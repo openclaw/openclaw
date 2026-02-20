@@ -104,4 +104,26 @@ describe("fetchBrowserJson loopback auth", () => {
     const headers = new Headers(init?.headers);
     expect(headers.get("authorization")).toBe("Bearer loopback-token");
   });
+
+  it("preserves HTTP error details instead of wrapping as service unreachable", async () => {
+    const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
+      async () =>
+        new Response("tab not found", {
+          status: 404,
+          headers: { "Content-Type": "text/plain" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    let message = "";
+    try {
+      await fetchBrowserJson("http://127.0.0.1:18888/");
+      throw new Error("expected fetchBrowserJson to throw");
+    } catch (error) {
+      message = String(error);
+    }
+
+    expect(message).toContain("404: tab not found");
+    expect(message).not.toContain("Can't reach the OpenClaw browser control service");
+  });
 });

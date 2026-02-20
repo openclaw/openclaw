@@ -826,6 +826,16 @@ export function createBrowserTool(opts?: {
             return jsonResult(result);
           } catch (err) {
             const msg = String(err);
+            const msgLower = msg.toLowerCase();
+            const looksLikeStaleElement =
+              msgLower.includes("element") &&
+              (msgLower.includes("not found") || msgLower.includes("not visible"));
+            if (looksLikeStaleElement) {
+              throw new Error(
+                'Browser element reference is stale. Run action="snapshot" again on the same tab, then retry using a fresh ref/element id.',
+                { cause: err },
+              );
+            }
             if (msg.includes("404:") && msg.includes("tab not found") && profile === "chrome") {
               const tabs = proxyRequest
                 ? ((

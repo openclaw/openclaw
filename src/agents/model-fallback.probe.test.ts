@@ -314,6 +314,33 @@ describe("runWithModelFallback – probe logic", () => {
     expect(run).not.toHaveBeenCalled();
   });
 
+  it("uses stored profile failure reason when skipping provider cooldown", async () => {
+    const cfg = makeCfg();
+    mockedEnsureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {},
+      usageStats: {
+        "openai-profile-1": {
+          lastFailureAt: NOW - 1_000,
+          lastFailureReason: "timeout",
+        },
+      },
+    } as AuthProfileStore);
+    mockedGetSoonestCooldownExpiry.mockReturnValue(NOW + 30 * 60 * 1000);
+
+    const run = vi.fn().mockResolvedValue("fallback-ok");
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+    });
+
+    expect(result.result).toBe("fallback-ok");
+    expect(run).toHaveBeenCalledWith("anthropic", "claude-haiku-3-5");
+    expect(result.attempts[0]?.reason).toBe("timeout");
+  });
+
   it("scopes probe throttling by agentDir to avoid cross-agent suppression", async () => {
     const cfg = makeCfg();
     const almostExpired = NOW + 30 * 1000;

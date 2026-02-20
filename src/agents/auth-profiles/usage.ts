@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../../config/config.js";
+import type { AuthProfileFailureReason, AuthProfileStore, ProfileUsageStats } from "./types.js";
 import { normalizeProviderId } from "../model-selection.js";
 import { saveAuthProfileStore, updateAuthProfileStoreWithLock } from "./store.js";
-import type { AuthProfileFailureReason, AuthProfileStore, ProfileUsageStats } from "./types.js";
 
 export function resolveProfileUnusableUntil(
   stats: Pick<ProfileUsageStats, "cooldownUntil" | "disabledUntil">,
@@ -149,6 +149,7 @@ export async function markAuthProfileUsed(params: {
         disabledUntil: undefined,
         disabledReason: undefined,
         failureCounts: undefined,
+        lastFailureReason: undefined,
       };
       return true;
     },
@@ -170,6 +171,7 @@ export async function markAuthProfileUsed(params: {
     disabledUntil: undefined,
     disabledReason: undefined,
     failureCounts: undefined,
+    lastFailureReason: undefined,
   };
   saveAuthProfileStore(store, agentDir);
 }
@@ -179,6 +181,14 @@ export function calculateAuthProfileCooldownMs(errorCount: number): number {
   return Math.min(
     60 * 60 * 1000, // 1 hour max
     60 * 1000 * 5 ** Math.min(normalized - 1, 3),
+  );
+}
+
+export function calculateAuthProfileTimeoutCooldownMs(errorCount: number): number {
+  const normalized = Math.max(1, errorCount);
+  return Math.min(
+    5 * 60 * 1000, // 5 minutes max for timeout-only cooldowns
+    15 * 1000 * 2 ** Math.min(normalized - 1, 4),
   );
 }
 
@@ -278,6 +288,7 @@ function computeNextProfileUsageStats(params: {
     errorCount: nextErrorCount,
     failureCounts,
     lastFailureAt: params.now,
+    lastFailureReason: params.reason,
   };
 
   if (params.reason === "billing") {
@@ -290,7 +301,10 @@ function computeNextProfileUsageStats(params: {
     updatedStats.disabledUntil = params.now + backoffMs;
     updatedStats.disabledReason = "billing";
   } else {
-    const backoffMs = calculateAuthProfileCooldownMs(nextErrorCount);
+    const backoffMs =
+      params.reason === "timeout"
+        ? calculateAuthProfileTimeoutCooldownMs(nextErrorCount)
+        : calculateAuthProfileCooldownMs(nextErrorCount);
     updatedStats.cooldownUntil = params.now + backoffMs;
   }
 
@@ -400,6 +414,7 @@ export async function clearAuthProfileCooldown(params: {
         ...freshStore.usageStats[profileId],
         errorCount: 0,
         cooldownUntil: undefined,
+        lastFailureReason: undefined,
       };
       return true;
     },
@@ -416,6 +431,7 @@ export async function clearAuthProfileCooldown(params: {
     ...store.usageStats[profileId],
     errorCount: 0,
     cooldownUntil: undefined,
+    lastFailureReason: undefined,
   };
   saveAuthProfileStore(store, agentDir);
 }

@@ -2,9 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { Logger as TsLogger } from "tslog";
 import type { OpenClawConfig } from "../config/types.js";
+import type { ConsoleStyle } from "./console.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { readLoggingConfig } from "./config.js";
-import type { ConsoleStyle } from "./console.js";
 import { type LogLevel, levelToMinLevel, normalizeLogLevel } from "./levels.js";
 import { loggingState } from "./state.js";
 
@@ -14,6 +14,7 @@ export const DEFAULT_LOG_FILE = path.join(DEFAULT_LOG_DIR, "openclaw.log"); // l
 const LOG_PREFIX = "openclaw";
 const LOG_SUFFIX = ".log";
 const MAX_LOG_AGE_MS = 24 * 60 * 60 * 1000; // 24h
+const MAX_LOG_FILE_BYTES = 20 * 1024 * 1024; // 20 MiB hard cap per file
 
 function resolveNodeRequire(): ((id: string) => NodeJS.Require) | null {
   const getBuiltinModule = (
@@ -116,6 +117,7 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
   if (isRollingPath(settings.file)) {
     pruneOldRollingLogs(path.dirname(settings.file));
   }
+  enforceLogFileSizeLimit(settings.file);
   const logger = new TsLogger<LogObj>({
     name: "openclaw",
     minLevel: levelToMinLevel(settings.level),
@@ -124,6 +126,7 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
 
   logger.attachTransport((logObj: LogObj) => {
     try {
+      enforceLogFileSizeLimit(settings.file);
       const time = logObj.date?.toISOString?.() ?? new Date().toISOString();
       const line = JSON.stringify({ ...logObj, time });
       fs.appendFileSync(settings.file, `${line}\n`, { encoding: "utf8" });
@@ -270,5 +273,17 @@ function pruneOldRollingLogs(dir: string): void {
     }
   } catch {
     // ignore missing dir or read errors
+  }
+}
+
+function enforceLogFileSizeLimit(file: string): void {
+  try {
+    const stat = fs.statSync(file);
+    if (stat.size < MAX_LOG_FILE_BYTES) {
+      return;
+    }
+    fs.truncateSync(file, 0);
+  } catch {
+    // ignore missing file or access errors
   }
 }

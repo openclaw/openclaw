@@ -1,7 +1,7 @@
 import { Type } from "@sinclair/typebox";
+import type { CronDelivery, CronMessageChannel } from "../../cron/types.js";
 import { loadConfig } from "../../config/config.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
-import type { CronDelivery, CronMessageChannel } from "../../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
@@ -251,8 +251,8 @@ PAYLOAD TYPES (payload.kind):
 DELIVERY (isolated-only, top-level):
   { "mode": "none|announce|webhook", "format": "summary|full", "channel": "<optional>", "to": "<optional>", "bestEffort": <optional-bool> }
   - Default for isolated agentTurn jobs (when delivery omitted): "announce"
-  - announce: `delivery.format` defaults to "summary"; use "full" to deliver the isolated run output untrimmed.
-  - webhook: sends finished event payload as HTTP POST to `delivery.to` (URL required).
+  - announce: \`delivery.format\` defaults to "summary"; use "full" to deliver the isolated run output untrimmed.
+  - webhook: sends finished event payload as HTTP POST to \`delivery.to\` (URL required).
   - If the task needs to send to a specific chat/recipient, set delivery.channel/to here; do not call messaging tools inside the run.
 
 CRITICAL CONSTRAINTS:

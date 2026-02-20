@@ -1,3 +1,4 @@
+import type { GatewayRequestHandlers, GatewayRequestOptions } from "./server-methods/types.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "./control-plane-audit.js";
 import { consumeControlPlaneWriteBudget } from "./control-plane-rate-limit.js";
 import {
@@ -27,7 +28,6 @@ import { skillsHandlers } from "./server-methods/skills.js";
 import { systemHandlers } from "./server-methods/system.js";
 import { talkHandlers } from "./server-methods/talk.js";
 import { ttsHandlers } from "./server-methods/tts.js";
-import type { GatewayRequestHandlers, GatewayRequestOptions } from "./server-methods/types.js";
 import { updateHandlers } from "./server-methods/update.js";
 import { usageHandlers } from "./server-methods/usage.js";
 import { voicewakeHandlers } from "./server-methods/voicewake.js";
@@ -41,6 +41,11 @@ function authorizeGatewayMethod(method: string, client: GatewayRequestOptions["c
   }
   const role = client.connect.role ?? "operator";
   const scopes = client.connect.scopes ?? [];
+  // Compatibility: allow node-role clients to call health.
+  // Some remote node apps probe gateway health over their node socket.
+  if (method === "health" && role === "node") {
+    return null;
+  }
   if (isNodeRoleMethod(method)) {
     if (role === "node") {
       return null;

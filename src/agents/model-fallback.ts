@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import type { FailoverReason } from "./pi-embedded-helpers.js";
 import {
   ensureAuthProfileStore,
   getSoonestCooldownExpiry,
@@ -20,13 +21,29 @@ import {
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "./model-selection.js";
-import type { FailoverReason } from "./pi-embedded-helpers.js";
 import { isLikelyContextOverflowError } from "./pi-embedded-helpers.js";
 
 type ModelCandidate = {
   provider: string;
   model: string;
 };
+
+function mapCooldownReasonToFailoverReason(reason: string | undefined): FailoverReason | undefined {
+  if (!reason) {
+    return undefined;
+  }
+  if (
+    reason === "auth" ||
+    reason === "format" ||
+    reason === "rate_limit" ||
+    reason === "billing" ||
+    reason === "timeout" ||
+    reason === "unknown"
+  ) {
+    return reason;
+  }
+  return undefined;
+}
 
 type FallbackAttempt = {
   provider: string;
@@ -331,13 +348,20 @@ export async function runWithModelFallback<T>(params: {
           authStore,
           profileIds,
         });
+        const cooldownReason = mapCooldownReasonToFailoverReason(
+          profileIds
+            .map((profileId) => authStore.usageStats?.[profileId])
+            .filter((stats): stats is NonNullable<typeof stats> => Boolean(stats))
+            .toSorted((a, b) => (b.lastFailureAt ?? 0) - (a.lastFailureAt ?? 0))[0]
+            ?.lastFailureReason,
+        );
         if (!shouldProbe) {
           // Skip without attempting
           attempts.push({
             provider: candidate.provider,
             model: candidate.model,
             error: `Provider ${candidate.provider} is in cooldown (all profiles unavailable)`,
-            reason: "rate_limit",
+            reason: cooldownReason ?? "rate_limit",
           });
           continue;
         }

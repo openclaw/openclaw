@@ -1,5 +1,8 @@
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { FinalizedMsgContext } from "../templating.js";
+import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
@@ -12,17 +15,39 @@ import {
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { maybeApplyTtsToPayload, normalizeTtsAutoMode, resolveTtsConfig } from "../../tts/tts.js";
 import { getReplyFromConfig } from "../reply.js";
-import type { FinalizedMsgContext } from "../templating.js";
-import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { formatAbortReplyText, tryFastAbortFromMessage } from "./abort.js";
 import { shouldSkipDuplicateInbound } from "./inbound-dedupe.js";
-import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
 
 const AUDIO_PLACEHOLDER_RE = /^<media:audio>(\s*\([^)]*\))?$/i;
 const AUDIO_HEADER_RE = /^\[Audio\b/i;
+const SUMMARIZE_INTENT_RE = /\b(?:summari[sz]e(?:-link)?)\b/i;
+const URL_LIKE_RE = /\b(?:https?:\/\/|www\.|youtu\.be\/|youtube\.com\/)\S+/i;
+const SUMMARIZE_TIMEOUT_OVERRIDE_SECONDS = 0;
 
 const normalizeMediaType = (value: string): string => value.split(";")[0]?.trim().toLowerCase();
+
+const resolveInboundText = (ctx: FinalizedMsgContext): string => {
+  const body =
+    typeof ctx.BodyForCommands === "string"
+      ? ctx.BodyForCommands
+      : typeof ctx.CommandBody === "string"
+        ? ctx.CommandBody
+        : typeof ctx.RawBody === "string"
+          ? ctx.RawBody
+          : typeof ctx.Body === "string"
+            ? ctx.Body
+            : "";
+  return body.trim();
+};
+
+const shouldUseSummarizeNoTimeout = (ctx: FinalizedMsgContext): boolean => {
+  const text = resolveInboundText(ctx);
+  if (!text) {
+    return false;
+  }
+  return SUMMARIZE_INTENT_RE.test(text) && URL_LIKE_RE.test(text);
+};
 
 const isInboundAudioContext = (ctx: FinalizedMsgContext): boolean => {
   const rawTypes = [
@@ -34,17 +59,7 @@ const isInboundAudioContext = (ctx: FinalizedMsgContext): boolean => {
     return true;
   }
 
-  const body =
-    typeof ctx.BodyForCommands === "string"
-      ? ctx.BodyForCommands
-      : typeof ctx.CommandBody === "string"
-        ? ctx.CommandBody
-        : typeof ctx.RawBody === "string"
-          ? ctx.RawBody
-          : typeof ctx.Body === "string"
-            ? ctx.Body
-            : "";
-  const trimmed = body.trim();
+  const trimmed = resolveInboundText(ctx);
   if (!trimmed) {
     return false;
   }
@@ -147,6 +162,7 @@ export async function dispatchReplyFromConfig(params: {
   }
 
   const inboundAudio = isInboundAudioContext(ctx);
+  const useSummarizeNoTimeout = shouldUseSummarizeNoTimeout(ctx);
   const sessionTtsAuto = resolveSessionTtsAuto(ctx, cfg);
   const hookRunner = getGlobalHookRunner();
 
@@ -339,6 +355,12 @@ export async function dispatchReplyFromConfig(params: {
       ctx,
       {
         ...params.replyOptions,
+        timeoutOverrideSeconds:
+          typeof params.replyOptions?.timeoutOverrideSeconds === "number"
+            ? params.replyOptions.timeoutOverrideSeconds
+            : useSummarizeNoTimeout
+              ? SUMMARIZE_TIMEOUT_OVERRIDE_SECONDS
+              : undefined,
         onToolResult: (payload: ReplyPayload) => {
           const run = async () => {
             const ttsPayload = await maybeApplyTtsToPayload({

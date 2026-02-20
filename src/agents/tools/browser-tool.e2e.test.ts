@@ -215,6 +215,26 @@ describe("browser tool snapshot maxChars", () => {
     );
   });
 
+  it("returns stale-element guidance when act refs are no longer valid", async () => {
+    browserActionsMocks.browserAct.mockRejectedValueOnce(
+      new Error('Element "e12" not found or not visible'),
+    );
+    const tool = createBrowserTool();
+
+    await expect(
+      tool.execute?.(null, {
+        action: "act",
+        request: {
+          kind: "click",
+          targetId: "t1",
+          ref: "e12",
+        },
+      }),
+    ).rejects.toThrow(
+      'Browser element reference is stale. Run action="snapshot" again on the same tab, then retry using a fresh ref/element id.',
+    );
+  });
+
   it("passes refs mode through to browser snapshot", async () => {
     const tool = createBrowserTool();
     await tool.execute?.("call-1", { action: "snapshot", snapshotFormat: "ai", refs: "aria" });

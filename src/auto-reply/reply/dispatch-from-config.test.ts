@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.js";
+import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 type AbortResult = { handled: boolean; aborted: boolean; stoppedSubagents?: number };
@@ -537,5 +537,51 @@ describe("dispatchReplyFromConfig", () => {
         reason: "duplicate",
       }),
     );
+  });
+
+  it("sets timeoutOverrideSeconds=0 for summarize+URL turns", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      CommandBody: "summarize https://www.youtube.com/watch?v=FzyHxjchBRs",
+    });
+
+    const replyResolver = vi.fn(
+      async (_ctx: MsgContext, opts?: GetReplyOptions, _cfg?: OpenClawConfig) => {
+        expect(opts?.timeoutOverrideSeconds).toBe(0);
+        return { text: "ok" } satisfies ReplyPayload;
+      },
+    );
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps explicit timeoutOverrideSeconds when summarize+URL turn already has one", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      CommandBody: "summarize-link https://example.com/article",
+    });
+
+    const replyResolver = vi.fn(
+      async (_ctx: MsgContext, opts?: GetReplyOptions, _cfg?: OpenClawConfig) => {
+        expect(opts?.timeoutOverrideSeconds).toBe(42);
+        return { text: "ok" } satisfies ReplyPayload;
+      },
+    );
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyResolver,
+      replyOptions: { timeoutOverrideSeconds: 42 },
+    });
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 });

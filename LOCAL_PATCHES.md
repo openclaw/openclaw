@@ -118,6 +118,65 @@ Quick status:
     - `full` bypasses shared announce rewrite for text and delivers payload directly via outbound adapters.
   - Add regression tests for plan/normalization and isolated full-delivery behavior.
 
+### 10) Logging: prevent `/tmp/openclaw` quota blowups from oversized daily log files
+
+- Commit: `working tree (2026-02-20)` — pending commit
+- Why:
+  - Daily gateway log files under `/tmp/openclaw/openclaw-YYYY-MM-DD.log` grew to multi-GB in less than a day.
+  - This triggered write quota errors (`Unknown system error -122`, `Disk quota exceeded`) and caused plugin load failures during startup.
+- What:
+  - `src/logging/logger.ts`
+    - add hard per-file cap (`MAX_LOG_FILE_BYTES = 20 MiB`).
+    - enforce cap before appending log lines (truncate when at/above cap).
+  - Runtime config hardening (host config, not repo code):
+    - set `logging.level = "warn"` in `~/.openclaw/openclaw.json` to reduce high-volume info logging.
+  - Operations:
+    - truncate oversized `/tmp/openclaw/openclaw-2026-02-18.log` and `/tmp/openclaw/openclaw-2026-02-19.log`.
+    - restart gateway after freeing `/tmp`.
+
+### 11) Browser control errors: stop mislabeling stale tab/element failures as service outages
+
+- Commit: `working tree (2026-02-20)` — pending commit
+- Why:
+  - Browser tool failures like `tab not found` or `Element "... not found or not visible"` were being presented as “Can’t reach the OpenClaw browser control service,” which is misleading and pushes the wrong remediation (restart) instead of a fresh snapshot/tab selection.
+- What:
+  - `src/browser/client-fetch.ts`
+    - preserve HTTP/application errors as `BrowserControlHttpError` and only apply the “service unreachable” wrapper for real transport/timeout failures.
+  - `src/agents/tools/browser-tool.ts`
+    - for `act` errors that look like stale element refs, throw explicit guidance to run a new `snapshot` on the same tab and retry with fresh refs.
+
+### 12) Auth profile cooldown reasoning: stop labeling timeouts as `rate_limit`
+
+- Commit: `working tree (2026-02-20)` — pending commit
+- Why:
+  - Provider/profile cooldown incidents triggered by long-running turns were being surfaced as `rate_limit` even when no 429 occurred.
+  - This caused misleading operator messaging (`Provider ... in cooldown (rate_limit)`), making timeout debugging harder.
+- What:
+  - `src/agents/auth-profiles/types.ts`
+    - add `lastFailureReason?: AuthProfileFailureReason` to profile usage stats.
+  - `src/agents/auth-profiles/usage.ts`
+    - add timeout-specific cooldown helper (`calculateAuthProfileTimeoutCooldownMs`).
+    - persist `lastFailureReason` on failures.
+    - clear `lastFailureReason` on successful use / cooldown clear paths.
+  - `src/agents/pi-embedded-runner/run.ts`
+    - derive failover reason from latest profile failure reason instead of hard-coding `rate_limit` when profiles are in cooldown.
+    - update timeout log text to remove misleading “possible rate limit” wording.
+  - `src/agents/model-fallback.ts`
+    - map provider-cooldown failover reason from profile stats (when available) instead of forcing `rate_limit`.
+
+### 13) Summarize turns: per-request no-timeout override without changing global defaults
+
+- Commit: `working tree (2026-02-20)` — pending commit
+- Why:
+  - Summarize jobs can run longer than normal agent turns.
+  - Increasing global `agents.defaults.timeoutSeconds` is too broad and weakens timeout behavior for unrelated sessions.
+- What:
+  - `src/auto-reply/reply/dispatch-from-config.ts`
+    - detect summarize-like inbound turns (summarize intent + URL).
+    - set `timeoutOverrideSeconds: 0` for those turns only (unless a timeout override is already explicitly provided upstream).
+    - keep default timeout behavior unchanged for all non-summarize traffic.
+  - This uses the existing reply pipeline override (`GetReplyOptions.timeoutOverrideSeconds`) rather than config-level timeout inflation.
+
 ## Operating rules
 
 - Treat this file as the **source of truth** for why a local commit exists.

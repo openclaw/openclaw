@@ -8,6 +8,16 @@ import {
 } from "./control-service.js";
 import { createBrowserRouteDispatcher } from "./routes/dispatcher.js";
 
+class BrowserControlHttpError extends Error {
+  readonly status: number;
+
+  constructor(status: number, message: string) {
+    super(`${status}: ${message}`);
+    this.name = "BrowserControlHttpError";
+    this.status = status;
+  }
+}
+
 type LoopbackBrowserAuthDeps = {
   loadConfig: typeof loadConfig;
   resolveBrowserControlAuth: typeof resolveBrowserControlAuth;
@@ -144,7 +154,7 @@ async function fetchHttpJson<T>(
     const res = await fetch(url, { ...init, signal: ctrl.signal });
     if (!res.ok) {
       const text = await res.text().catch(() => "");
-      throw new Error(text || `HTTP ${res.status}`);
+      throw new BrowserControlHttpError(res.status, text || `HTTP ${res.status}`);
     }
     return (await res.json()) as T;
   } finally {
@@ -239,10 +249,13 @@ export async function fetchBrowserJson<T>(
         result.body && typeof result.body === "object" && "error" in result.body
           ? String((result.body as { error?: unknown }).error)
           : `HTTP ${result.status}`;
-      throw new Error(message);
+      throw new BrowserControlHttpError(result.status, message);
     }
     return result.body as T;
   } catch (err) {
+    if (err instanceof BrowserControlHttpError) {
+      throw err;
+    }
     throw enhanceBrowserFetchError(url, err, timeoutMs);
   }
 }

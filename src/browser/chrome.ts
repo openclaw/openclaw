@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import WebSocket from "ws";
+import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./config.js";
 import { ensurePortAvailable } from "../infra/ports.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { CONFIG_DIR } from "../utils.js";
@@ -17,7 +18,6 @@ import {
   ensureProfileCleanExit,
   isProfileDecorated,
 } from "./chrome.profile-decoration.js";
-import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./config.js";
 import {
   DEFAULT_OPENCLAW_BROWSER_COLOR,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
@@ -178,6 +178,8 @@ export async function launchOpenClawChrome(
 
   const userDataDir = resolveOpenClawUserDataDir(profile.name);
   fs.mkdirSync(userDataDir, { recursive: true });
+  const isolatedXdgConfigHome = path.join(userDataDir, "xdg-config");
+  fs.mkdirSync(isolatedXdgConfigHome, { recursive: true });
 
   const needsDecorate = !isProfileDecorated(
     userDataDir,
@@ -216,13 +218,18 @@ export async function launchOpenClawChrome(
       args.push("--disable-setuid-sandbox");
     }
     if (process.platform === "linux") {
-      args.push("--disable-dev-shm-usage");
+      // Some Linux Chromium builds (observed on Arch Chromium 144) hard-crash
+      // with --disable-dev-shm-usage in headless mode. Keep this opt-in only.
+      const forceDisableDevShm = process.env.OPENCLAW_BROWSER_DISABLE_DEV_SHM_USAGE;
+      if (forceDisableDevShm === "1" || forceDisableDevShm?.toLowerCase() === "true") {
+        args.push("--disable-dev-shm-usage");
+      }
 
       // Workaround: On some Linux systems Chromium is launched with Ozone/Wayland
       // (often via distro wrappers that append --ozone-platform=wayland). We've
       // observed CDP Page.captureScreenshot hanging indefinitely in that mode.
       // If X11 is available, prefer it for the managed clawd browser.
-      if (process.env.DISPLAY?.trim()) {
+      if (!resolved.headless && process.env.DISPLAY?.trim()) {
         args.push("--ozone-platform=x11");
         args.push("--ozone-platform-hint=x11");
       }
@@ -245,6 +252,9 @@ export async function launchOpenClawChrome(
         ...process.env,
         // Reduce accidental sharing with the user's env.
         HOME: os.homedir(),
+        // Prevent Chromium launcher wrappers from loading the user's
+        // ~/.config/chromium-flags.conf into managed OpenClaw sessions.
+        XDG_CONFIG_HOME: isolatedXdgConfigHome,
       },
     });
   };

@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   calculateAuthProfileCooldownMs,
+  clearAuthProfileCooldown,
   ensureAuthProfileStore,
   markAuthProfileFailure,
 } from "./auth-profiles.js";
@@ -135,5 +136,58 @@ describe("calculateAuthProfileCooldownMs", () => {
     expect(calculateAuthProfileCooldownMs(3)).toBe(25 * 60_000);
     expect(calculateAuthProfileCooldownMs(4)).toBe(60 * 60_000);
     expect(calculateAuthProfileCooldownMs(5)).toBe(60 * 60_000);
+  });
+});
+
+describe("timeout cooldown reason tracking", () => {
+  it("stores timeout failure reason and uses shorter timeout cooldown backoff", async () => {
+    await withAuthProfileStore(async ({ agentDir, store }) => {
+      const startedAt = Date.now();
+      await markAuthProfileFailure({
+        store,
+        profileId: "anthropic:default",
+        reason: "timeout",
+        agentDir,
+      });
+
+      const firstStats = store.usageStats?.["anthropic:default"];
+      expect(firstStats?.lastFailureReason).toBe("timeout");
+      const firstRemainingMs = (firstStats?.cooldownUntil ?? 0) - startedAt;
+      expect(firstRemainingMs).toBeGreaterThan(10_000);
+      expect(firstRemainingMs).toBeLessThan(20_000);
+
+      const secondStart = Date.now();
+      await markAuthProfileFailure({
+        store,
+        profileId: "anthropic:default",
+        reason: "timeout",
+        agentDir,
+      });
+
+      const secondStats = store.usageStats?.["anthropic:default"];
+      expect(secondStats?.lastFailureReason).toBe("timeout");
+      const secondRemainingMs = (secondStats?.cooldownUntil ?? 0) - secondStart;
+      expect(secondRemainingMs).toBeGreaterThan(firstRemainingMs);
+      expect(secondRemainingMs).toBeLessThan(40_000);
+    });
+  });
+
+  it("clears stored failure reason when cooldown is manually cleared", async () => {
+    await withAuthProfileStore(async ({ agentDir, store }) => {
+      await markAuthProfileFailure({
+        store,
+        profileId: "anthropic:default",
+        reason: "timeout",
+        agentDir,
+      });
+      expect(store.usageStats?.["anthropic:default"]?.lastFailureReason).toBe("timeout");
+
+      await clearAuthProfileCooldown({
+        store,
+        profileId: "anthropic:default",
+        agentDir,
+      });
+      expect(store.usageStats?.["anthropic:default"]?.lastFailureReason).toBeUndefined();
+    });
   });
 });

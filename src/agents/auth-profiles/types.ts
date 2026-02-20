@@ -49,6 +49,7 @@ export type ProfileUsageStats = {
   errorCount?: number;
   failureCounts?: Partial<Record<AuthProfileFailureReason, number>>;
   lastFailureAt?: number;
+  lastFailureReason?: AuthProfileFailureReason;
 };
 
 export type AuthProfileStore = {
