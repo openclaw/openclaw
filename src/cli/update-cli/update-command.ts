@@ -117,7 +117,7 @@ function formatCommandFailure(stdout: string, stderr: string): string {
 async function refreshGatewayServiceEnv(params: {
   result: UpdateRunResult;
   jsonMode: boolean;
-}): Promise<void> {
+}): Promise<boolean> {
   const args = ["gateway", "install", "--force"];
   if (params.jsonMode) {
     args.push("--json");
@@ -131,7 +131,7 @@ async function refreshGatewayServiceEnv(params: {
       timeoutMs: SERVICE_REFRESH_TIMEOUT_MS,
     });
     if (res.code === 0) {
-      return;
+      return false; // entry.js refreshed env; caller still needs to restart
     }
     throw new Error(
       `updated install refresh failed (${candidate}): ${formatCommandFailure(res.stdout, res.stderr)}`,
@@ -139,6 +139,7 @@ async function refreshGatewayServiceEnv(params: {
   }
 
   await runDaemonInstall({ force: true, json: params.jsonMode || undefined });
+  return true; // runDaemonInstall includes launchctl kickstart; restart already done
 }
 
 async function tryInstallShellCompletion(opts: {
@@ -461,10 +462,15 @@ async function maybeRestartService(params: {
       let restartInitiated = false;
       if (params.refreshServiceEnv) {
         try {
-          await refreshGatewayServiceEnv({
+          const restarted = await refreshGatewayServiceEnv({
             result: params.result,
             jsonMode: Boolean(params.opts.json),
           });
+          // If refreshGatewayServiceEnv performed an internal restart (runDaemonInstall path),
+          // mark as initiated to prevent a second restart from runRestartScript or runDaemonRestart.
+          if (restarted) {
+            restartInitiated = true;
+          }
         } catch (err) {
           if (!params.opts.json) {
             defaultRuntime.log(
@@ -475,10 +481,10 @@ async function maybeRestartService(params: {
           }
         }
       }
-      if (params.restartScriptPath) {
+      if (!restartInitiated && params.restartScriptPath) {
         await runRestartScript(params.restartScriptPath);
         restartInitiated = true;
-      } else {
+      } else if (!restartInitiated) {
         restarted = await runDaemonRestart();
       }
 
