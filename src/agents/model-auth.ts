@@ -252,7 +252,9 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
   }
 
   if (normalized === "anthropic") {
-    return pick("ANTHROPIC_OAUTH_TOKEN") ?? pick("ANTHROPIC_API_KEY");
+    return (
+      pick("ANTHROPIC_OAUTH_TOKEN") ?? pick("ANTHROPIC_API_KEY") ?? pick("ANTHROPIC_AUTH_TOKEN")
+    );
   }
 
   if (normalized === "chutes") {
