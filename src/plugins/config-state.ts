@@ -191,6 +191,12 @@ export function resolveEnableState(
   if (origin === "bundled") {
     return { enabled: false, reason: "bundled (disabled by default)" };
   }
+  if (config.allow.length === 0) {
+    return {
+      enabled: false,
+      reason: "not in allowlist (empty allowlist blocks non-bundled plugins)",
+    };
+  }
   return { enabled: true };
 }
 
