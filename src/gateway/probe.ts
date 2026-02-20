@@ -50,6 +50,30 @@ export async function probeGateway(opts: {
       client.stop();
       resolve({ url: opts.url, ...result });
     };
+    const requestBudgetMs = Math.max(200, Math.floor(opts.timeoutMs / 4));
+    const requestWithBudget = async <T>(name: string, request: Promise<T>): Promise<T | null> => {
+      let timeoutId: ReturnType<typeof setTimeout> | null = null;
+      try {
+        return await Promise.race([
+          request,
+          new Promise<T>((_, reject) => {
+            timeoutId = setTimeout(
+              () => reject(new Error(`${name} request timed out after ${requestBudgetMs}ms`)),
+              requestBudgetMs,
+            );
+          }),
+        ]);
+      } catch (err) {
+        if (connectError == null) {
+          connectError = formatErrorMessage(err);
+        }
+        return null;
+      } finally {
+        if (timeoutId != null) {
+          clearTimeout(timeoutId);
+        }
+      }
+    };
 
     const client = new GatewayClient({
       url: opts.url,
@@ -68,35 +92,38 @@ export async function probeGateway(opts: {
       },
       onHelloOk: async () => {
         connectLatencyMs = Date.now() - startedAt;
-        try {
-          const [health, status, presence, configSnapshot] = await Promise.all([
-            client.request("health"),
-            client.request("status"),
-            client.request("system-presence"),
-            client.request("config.get", {}),
-          ]);
-          settle({
-            ok: true,
-            connectLatencyMs,
-            error: null,
-            close,
-            health,
-            status,
-            presence: Array.isArray(presence) ? (presence as SystemPresence[]) : null,
-            configSnapshot,
-          });
-        } catch (err) {
+        const health = await requestWithBudget("health", client.request("health"));
+
+        if (health == null) {
           settle({
             ok: false,
             connectLatencyMs,
-            error: formatErrorMessage(err),
+            error: connectError ?? "health probe failed",
             close,
             health: null,
             status: null,
             presence: null,
             configSnapshot: null,
           });
+          return;
         }
+
+        const [status, presence, configSnapshot] = await Promise.all([
+          requestWithBudget("status", client.request("status")),
+          requestWithBudget("system-presence", client.request("system-presence")),
+          requestWithBudget("config.get", client.request("config.get", {})),
+        ]);
+
+        settle({
+          ok: true,
+          connectLatencyMs,
+          error: null,
+          close,
+          health,
+          status: status ?? null,
+          presence: Array.isArray(presence) ? (presence as SystemPresence[]) : null,
+          configSnapshot,
+        });
       },
     });
 

@@ -9,14 +9,18 @@ export function resolveGatewayProbeAuth(cfg: ReturnType<typeof loadConfig>): {
   const remote = isRemoteMode ? cfg.gateway?.remote : undefined;
   const authToken = cfg.gateway?.auth?.token;
   const authPassword = cfg.gateway?.auth?.password;
+  const envToken =
+    process.env.OPENCLAW_GATEWAY_TOKEN?.trim() || process.env.CLAWDBOT_GATEWAY_TOKEN?.trim();
+  const envPassword =
+    process.env.OPENCLAW_GATEWAY_PASSWORD?.trim() || process.env.CLAWDBOT_GATEWAY_PASSWORD?.trim();
   const token = isRemoteMode
     ? typeof remote?.token === "string" && remote.token.trim().length > 0
       ? remote.token.trim()
       : undefined
-    : process.env.OPENCLAW_GATEWAY_TOKEN?.trim() ||
+    : envToken ||
       (typeof authToken === "string" && authToken.trim().length > 0 ? authToken.trim() : undefined);
   const password =
-    process.env.OPENCLAW_GATEWAY_PASSWORD?.trim() ||
+    envPassword ||
     (isRemoteMode
       ? typeof remote?.password === "string" && remote.password.trim().length > 0
         ? remote.password.trim()
