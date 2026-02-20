@@ -1,37 +1,17 @@
 import os from "node:os";
 import type { OpenClawConfig } from "../config/types.js";
+import { isSecureWebSocketUrl } from "../gateway/net.js";
 
 const DEFAULT_GATEWAY_PORT = 18789;
-
-function isLoopbackHost(hostname: string): boolean {
-  const normalized = hostname
-    .trim()
-    .toLowerCase()
-    .replace(/^\[|\]$/g, "");
-  if (!normalized) {
-    return false;
-  }
-  return (
-    normalized === "localhost" ||
-    normalized === "127.0.0.1" ||
-    normalized.startsWith("127.") ||
-    normalized === "::1" ||
-    normalized === "0:0:0:0:0:0:0:1" ||
-    normalized.startsWith("::ffff:127.")
-  );
-}
 
 function validateTransportSecurity(url: string): string | null {
   try {
     const parsed = new URL(url);
     const protocol = parsed.protocol.toLowerCase();
-    if (protocol === "wss:") {
-      return null;
-    }
-    if (protocol !== "ws:") {
+    if (protocol !== "ws:" && protocol !== "wss:") {
       return "Gateway URL must use ws:// or wss://.";
     }
-    if (isLoopbackHost(parsed.hostname)) {
+    if (isSecureWebSocketUrl(url)) {
       return null;
     }
     return "Refusing to generate setup code with insecure ws:// for non-loopback host. Use wss://.";
