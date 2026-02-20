@@ -23,7 +23,7 @@ use crate::api::{auth, client::SynoClient, download_station, file_station, note_
 use crate::crypto;
 use crate::markdown;
 
-// ── Types ──
+// 鈹€鈹€ Types 鈹€鈹€
 
 /// A cached Synology session (NAS connection).
 struct NasSession {
@@ -40,12 +40,42 @@ struct SseClient {
     created: Instant,
 }
 
+/// NAS connection config extracted from HTTP headers.
+#[derive(Clone)]
+struct NasConfig {
+    host: String,
+    port: u16,
+    https: bool,
+    username: String,
+    password: String,
+}
+
+impl NasConfig {
+    /// Try to extract from HTTP headers. Returns None if required headers are missing.
+    fn from_headers(headers: &axum::http::HeaderMap) -> Option<Self> {
+        let host = headers.get("X-Syno-Host")?.to_str().ok().filter(|s| !s.is_empty())?.to_string();
+        let username = headers.get("X-Syno-Username")?.to_str().ok().filter(|s| !s.is_empty())?.to_string();
+        let password = headers.get("X-Syno-Password")?.to_str().ok().filter(|s| !s.is_empty())?.to_string();
+        let port = headers.get("X-Syno-Port")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(5000);
+        let https = headers.get("X-Syno-Https")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        Some(Self { host, port, https, username, password })
+    }
+}
+
 /// Shared application state.
 struct AppState {
-    /// MCP session_id → SSE client sender
+    /// MCP session_id 鈫?SSE client sender
     sse_clients: Mutex<HashMap<String, SseClient>>,
-    /// NAS session_id → authenticated NAS connection
+    /// NAS session_id 鈫?authenticated NAS connection
     nas_sessions: Mutex<HashMap<String, NasSession>>,
+    /// MCP session_id 鈫?NAS config from headers (for auto re-login)
+    session_configs: Mutex<HashMap<String, NasConfig>>,
 }
 
 #[derive(Deserialize)]
@@ -54,7 +84,7 @@ struct SessionQuery {
     session_id: String,
 }
 
-// ── JSON-RPC ──
+// 鈹€鈹€ JSON-RPC 鈹€鈹€
 
 #[derive(Deserialize)]
 struct JsonRpcRequest {
@@ -95,14 +125,14 @@ impl JsonRpcResponse {
     }
 }
 
-// ── Tool definitions ──
+// 鈹€鈹€ Tool definitions 鈹€鈹€
 
 fn tool_definitions() -> Value {
     json!({
         "tools": [
             {
                 "name": "syno_login",
-                "description": "Login to a Synology NAS. Returns a nas_session_id for subsequent calls.",
+                "description": "Login to a Synology NAS. Returns a nas_session_id for subsequent calls. If the SSE connection was established with X-Syno-* headers, a session is auto-created and this call is optional.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -122,9 +152,9 @@ fn tool_definitions() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "nas_session_id": { "type": "string", "description": "Session ID from syno_login" }
+                        "nas_session_id": { "type": "string", "description": "Session ID from syno_login. Optional if headers auth is configured." }
                     },
-                    "required": ["nas_session_id"]
+                    "required": []
                 }
             },
             {
@@ -133,12 +163,12 @@ fn tool_definitions() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "nas_session_id": { "type": "string" },
+                        "nas_session_id": { "type": "string", "description": "Session ID from syno_login. Optional if headers auth is configured." },
                         "path": { "type": "string", "description": "Folder path (e.g. /volume1/homes). Omit to list shared folders." },
                         "offset": { "type": "integer", "description": "Pagination offset (default 0)" },
                         "limit": { "type": "integer", "description": "Pagination limit (default 100)" }
                     },
-                    "required": ["nas_session_id"]
+                    "required": []
                 }
             },
             {
@@ -147,10 +177,10 @@ fn tool_definitions() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "nas_session_id": { "type": "string" },
+                        "nas_session_id": { "type": "string", "description": "Session ID from syno_login. Optional if headers auth is configured." },
                         "path": { "type": "string", "description": "File or folder path" }
                     },
-                    "required": ["nas_session_id", "path"]
+                    "required": ["path"]
                 }
             },
             {
@@ -159,11 +189,11 @@ fn tool_definitions() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "nas_session_id": { "type": "string" },
+                        "nas_session_id": { "type": "string", "description": "Session ID from syno_login. Optional if headers auth is configured." },
                         "folder_path": { "type": "string", "description": "Parent folder path" },
                         "name": { "type": "string", "description": "New folder name" }
                     },
-                    "required": ["nas_session_id", "folder_path", "name"]
+                    "required": ["folder_path", "name"]
                 }
             },
             {
@@ -172,11 +202,11 @@ fn tool_definitions() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "nas_session_id": { "type": "string" },
+                        "nas_session_id": { "type": "string", "description": "Session ID from syno_login. Optional if headers auth is configured." },
                         "path": { "type": "string", "description": "Full path of the file/folder" },
                         "name": { "type": "string", "description": "New name" }
                     },
-                    "required": ["nas_session_id", "path", "name"]
+                    "required": ["path", "name"]
                 }
             },
             {
@@ -185,10 +215,10 @@ fn tool_definitions() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "nas_session_id": { "type": "string" },
+                        "nas_session_id": { "type": "string", "description": "Session ID from syno_login. Optional if headers auth is configured." },
                         "path": { "type": "string", "description": "Full path to delete" }
                     },
-                    "required": ["nas_session_id", "path"]
+                    "required": ["path"]
                 }
             },
             {
@@ -197,9 +227,9 @@ fn tool_definitions() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "nas_session_id": { "type": "string" }
+                        "nas_session_id": { "type": "string", "description": "Session ID from syno_login. Optional if headers auth is configured." }
                     },
-                    "required": ["nas_session_id"]
+                    "required": []
                 }
             },
             {
@@ -208,11 +238,11 @@ fn tool_definitions() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "nas_session_id": { "type": "string" },
+                        "nas_session_id": { "type": "string", "description": "Session ID from syno_login. Optional if headers auth is configured." },
                         "uri": { "type": "string", "description": "Download URL" },
                         "destination": { "type": "string", "description": "Destination folder on NAS (optional)" }
                     },
-                    "required": ["nas_session_id", "uri"]
+                    "required": ["uri"]
                 }
             },
             {
@@ -221,10 +251,10 @@ fn tool_definitions() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "nas_session_id": { "type": "string" },
+                        "nas_session_id": { "type": "string", "description": "Session ID from syno_login. Optional if headers auth is configured." },
                         "ids": { "type": "string", "description": "Comma-separated task IDs" }
                     },
-                    "required": ["nas_session_id", "ids"]
+                    "required": ["ids"]
                 }
             },
             {
@@ -233,10 +263,10 @@ fn tool_definitions() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "nas_session_id": { "type": "string" },
+                        "nas_session_id": { "type": "string", "description": "Session ID from syno_login. Optional if headers auth is configured." },
                         "ids": { "type": "string", "description": "Comma-separated task IDs" }
                     },
-                    "required": ["nas_session_id", "ids"]
+                    "required": ["ids"]
                 }
             },
             {
@@ -245,10 +275,10 @@ fn tool_definitions() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "nas_session_id": { "type": "string" },
+                        "nas_session_id": { "type": "string", "description": "Session ID from syno_login. Optional if headers auth is configured." },
                         "ids": { "type": "string", "description": "Comma-separated task IDs" }
                     },
-                    "required": ["nas_session_id", "ids"]
+                    "required": ["ids"]
                 }
             },
             {
@@ -257,9 +287,9 @@ fn tool_definitions() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "nas_session_id": { "type": "string" }
+                        "nas_session_id": { "type": "string", "description": "Session ID from syno_login. Optional if headers auth is configured." }
                     },
-                    "required": ["nas_session_id"]
+                    "required": []
                 }
             },
             {
@@ -268,12 +298,12 @@ fn tool_definitions() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "nas_session_id": { "type": "string" },
+                        "nas_session_id": { "type": "string", "description": "Session ID from syno_login. Optional if headers auth is configured." },
                         "notebook": { "type": "string", "description": "Notebook ID to filter (optional)" },
                         "offset": { "type": "integer", "description": "Pagination offset (default 0)" },
                         "limit": { "type": "integer", "description": "Pagination limit (default 50)" }
                     },
-                    "required": ["nas_session_id"]
+                    "required": []
                 }
             },
             {
@@ -282,11 +312,11 @@ fn tool_definitions() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "nas_session_id": { "type": "string" },
+                        "nas_session_id": { "type": "string", "description": "Session ID from syno_login. Optional if headers auth is configured." },
                         "id": { "type": "string", "description": "Note object ID" },
                         "password": { "type": "string", "description": "Password for encrypted notes (optional)" }
                     },
-                    "required": ["nas_session_id", "id"]
+                    "required": ["id"]
                 }
             },
             {
@@ -295,13 +325,13 @@ fn tool_definitions() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "nas_session_id": { "type": "string" },
+                        "nas_session_id": { "type": "string", "description": "Session ID from syno_login. Optional if headers auth is configured." },
                         "notebook_id": { "type": "string", "description": "Target notebook ID" },
                         "title": { "type": "string", "description": "Note title" },
                         "content": { "type": "string", "description": "Note content (HTML or Markdown)" },
                         "md": { "type": "boolean", "description": "Treat content as Markdown and convert to HTML (default false)" }
                     },
-                    "required": ["nas_session_id", "notebook_id", "title"]
+                    "required": ["notebook_id", "title"]
                 }
             },
             {
@@ -310,13 +340,13 @@ fn tool_definitions() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "nas_session_id": { "type": "string" },
+                        "nas_session_id": { "type": "string", "description": "Session ID from syno_login. Optional if headers auth is configured." },
                         "id": { "type": "string", "description": "Note object ID" },
                         "title": { "type": "string", "description": "New title (optional)" },
                         "content": { "type": "string", "description": "New content (optional)" },
                         "md": { "type": "boolean", "description": "Treat content as Markdown (default false)" }
                     },
-                    "required": ["nas_session_id", "id"]
+                    "required": ["id"]
                 }
             },
             {
@@ -325,10 +355,10 @@ fn tool_definitions() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "nas_session_id": { "type": "string" },
+                        "nas_session_id": { "type": "string", "description": "Session ID from syno_login. Optional if headers auth is configured." },
                         "id": { "type": "string", "description": "Note object ID" }
                     },
-                    "required": ["nas_session_id", "id"]
+                    "required": ["id"]
                 }
             },
             {
@@ -337,13 +367,13 @@ fn tool_definitions() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "nas_session_id": { "type": "string" },
+                        "nas_session_id": { "type": "string", "description": "Session ID from syno_login. Optional if headers auth is configured." },
                         "keyword": { "type": "string", "description": "Search keyword" },
                         "exact": { "type": "boolean", "description": "Exact phrase match (default false)" },
                         "offset": { "type": "integer" },
                         "limit": { "type": "integer" }
                     },
-                    "required": ["nas_session_id", "keyword"]
+                    "required": ["keyword"]
                 }
             },
             {
@@ -352,9 +382,9 @@ fn tool_definitions() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "nas_session_id": { "type": "string" }
+                        "nas_session_id": { "type": "string", "description": "Session ID from syno_login. Optional if headers auth is configured." }
                     },
-                    "required": ["nas_session_id"]
+                    "required": []
                 }
             },
             {
@@ -363,11 +393,11 @@ fn tool_definitions() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "nas_session_id": { "type": "string" },
+                        "nas_session_id": { "type": "string", "description": "Session ID from syno_login. Optional if headers auth is configured." },
                         "id": { "type": "string", "description": "Note object ID" },
                         "tag": { "type": "string", "description": "Tag name" }
                     },
-                    "required": ["nas_session_id", "id", "tag"]
+                    "required": ["id", "tag"]
                 }
             },
             {
@@ -376,11 +406,11 @@ fn tool_definitions() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "nas_session_id": { "type": "string" },
+                        "nas_session_id": { "type": "string", "description": "Session ID from syno_login. Optional if headers auth is configured." },
                         "id": { "type": "string", "description": "Note object ID" },
                         "tag": { "type": "string", "description": "Tag name to remove" }
                     },
-                    "required": ["nas_session_id", "id", "tag"]
+                    "required": ["id", "tag"]
                 }
             },
             {
@@ -389,11 +419,11 @@ fn tool_definitions() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "nas_session_id": { "type": "string" },
+                        "nas_session_id": { "type": "string", "description": "Session ID from syno_login. Optional if headers auth is configured." },
                         "id": { "type": "string", "description": "Note object ID" },
                         "notebook_id": { "type": "string", "description": "Target notebook ID" }
                     },
-                    "required": ["nas_session_id", "id", "notebook_id"]
+                    "required": ["id", "notebook_id"]
                 }
             },
             {
@@ -402,10 +432,10 @@ fn tool_definitions() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "nas_session_id": { "type": "string" },
+                        "nas_session_id": { "type": "string", "description": "Session ID from syno_login. Optional if headers auth is configured." },
                         "title": { "type": "string", "description": "Notebook title" }
                     },
-                    "required": ["nas_session_id", "title"]
+                    "required": ["title"]
                 }
             },
             {
@@ -414,11 +444,11 @@ fn tool_definitions() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "nas_session_id": { "type": "string" },
+                        "nas_session_id": { "type": "string", "description": "Session ID from syno_login. Optional if headers auth is configured." },
                         "id": { "type": "string", "description": "Notebook object ID" },
                         "title": { "type": "string", "description": "New title" }
                     },
-                    "required": ["nas_session_id", "id", "title"]
+                    "required": ["id", "title"]
                 }
             },
             {
@@ -427,10 +457,10 @@ fn tool_definitions() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "nas_session_id": { "type": "string" },
+                        "nas_session_id": { "type": "string", "description": "Session ID from syno_login. Optional if headers auth is configured." },
                         "id": { "type": "string", "description": "Notebook object ID" }
                     },
-                    "required": ["nas_session_id", "id"]
+                    "required": ["id"]
                 }
             },
             {
@@ -439,12 +469,12 @@ fn tool_definitions() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "nas_session_id": { "type": "string" },
+                        "nas_session_id": { "type": "string", "description": "Session ID from syno_login. Optional if headers auth is configured." },
                         "done": { "type": "boolean", "description": "Filter by done status (optional)" },
                         "offset": { "type": "integer" },
                         "limit": { "type": "integer" }
                     },
-                    "required": ["nas_session_id"]
+                    "required": []
                 }
             },
             {
@@ -453,10 +483,10 @@ fn tool_definitions() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "nas_session_id": { "type": "string" },
+                        "nas_session_id": { "type": "string", "description": "Session ID from syno_login. Optional if headers auth is configured." },
                         "title": { "type": "string", "description": "Todo title" }
                     },
-                    "required": ["nas_session_id", "title"]
+                    "required": ["title"]
                 }
             },
             {
@@ -465,7 +495,7 @@ fn tool_definitions() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "nas_session_id": { "type": "string" },
+                        "nas_session_id": { "type": "string", "description": "Session ID from syno_login. Optional if headers auth is configured." },
                         "id": { "type": "string", "description": "Todo object ID" },
                         "title": { "type": "string" },
                         "done": { "type": "boolean" },
@@ -474,7 +504,7 @@ fn tool_definitions() -> Value {
                         "comment": { "type": "string" },
                         "priority": { "type": "string", "description": "none, low, medium, high" }
                     },
-                    "required": ["nas_session_id", "id"]
+                    "required": ["id"]
                 }
             },
             {
@@ -483,10 +513,10 @@ fn tool_definitions() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "nas_session_id": { "type": "string" },
+                        "nas_session_id": { "type": "string", "description": "Session ID from syno_login. Optional if headers auth is configured." },
                         "id": { "type": "string", "description": "Todo object ID" }
                     },
-                    "required": ["nas_session_id", "id"]
+                    "required": ["id"]
                 }
             },
             {
@@ -495,34 +525,93 @@ fn tool_definitions() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "nas_session_id": { "type": "string" },
+                        "nas_session_id": { "type": "string", "description": "Session ID from syno_login. Optional if headers auth is configured." },
                         "id": { "type": "string", "description": "Todo object ID" },
                         "undo": { "type": "boolean", "description": "Set true to mark as undone (default false)" }
                     },
-                    "required": ["nas_session_id", "id"]
+                    "required": ["id"]
                 }
             }
         ]
     })
 }
 
-// ── Helper: get NAS session from state ──
+// 鈹€鈹€ Helper: get NAS session from state 鈹€鈹€
 
-async fn get_nas_session<'a>(
-    state: &'a AppState,
+/// Perform login with the given config, return a NasSession.
+async fn login_with_config(cfg: &NasConfig) -> Result<NasSession, String> {
+    let scheme = if cfg.https { "https" } else { "http" };
+    let base_url = format!("{scheme}://{}:{}", cfg.host, cfg.port);
+    let client = SynoClient::new(&base_url, cfg.https).map_err(|e| e.to_string())?;
+    let data = auth::login(&client, &cfg.username, &cfg.password, None)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(NasSession {
+        client,
+        sid: data.sid,
+        synotoken: data.synotoken,
+        created: Instant::now(),
+    })
+}
+
+/// Ensure the header-based session for an MCP session exists and is valid. Auto-(re)login if needed.
+async fn ensure_header_session(state: &AppState, mcp_session_id: &str) -> Result<(), String> {
+    let cfg = {
+        let configs = state.session_configs.lock().await;
+        configs.get(mcp_session_id).cloned()
+    };
+    let cfg = cfg.ok_or("No NAS session. Please call syno_login first or configure X-Syno-* headers.")?;
+
+    let nas_key = format!("__header_{mcp_session_id}__");
+    let need_login = {
+        let sessions = state.nas_sessions.lock().await;
+        match sessions.get(&nas_key) {
+            None => true,
+            Some(s) => s.created.elapsed() > Duration::from_secs(30 * 60),
+        }
+    };
+
+    if need_login {
+        let session = login_with_config(&cfg).await?;
+        state.nas_sessions.lock().await.insert(nas_key, session);
+    }
+    Ok(())
+}
+
+async fn get_nas_session(
+    state: &AppState,
     nas_session_id: &str,
 ) -> Result<(SynoClient, String, Option<String>), String> {
+    // Auto re-login for header-based sessions
+    if nas_session_id.starts_with("__header_") {
+        // mcp_session_id is embedded in the key
+        let mcp_id = nas_session_id
+            .strip_prefix("__header_")
+            .and_then(|s| s.strip_suffix("__"))
+            .unwrap_or("");
+        ensure_header_session(state, mcp_id).await?;
+    }
+
     let sessions = state.nas_sessions.lock().await;
     let s = sessions
         .get(nas_session_id)
         .ok_or_else(|| "Invalid or expired nas_session_id. Please call syno_login first.".to_string())?;
-    // Check 30 min expiry
-    if s.created.elapsed() > Duration::from_secs(30 * 60) {
+    // Check 30 min expiry (header sessions auto-renew above, others expire)
+    if !nas_session_id.starts_with("__header_") && s.created.elapsed() > Duration::from_secs(30 * 60) {
         drop(sessions);
         state.nas_sessions.lock().await.remove(nas_session_id);
         return Err("NAS session expired. Please call syno_login again.".to_string());
     }
     Ok((s.client.clone(), s.sid.clone(), s.synotoken.clone()))
+}
+
+/// Resolve the session ID: use provided value, or fall back to header-based session for this MCP connection.
+fn resolve_session_id(params: &Value, mcp_session_id: &str, has_header_config: bool) -> Result<String, String> {
+    match get_str(params, "nas_session_id") {
+        Some(id) => Ok(id),
+        None if has_header_config => Ok(format!("__header_{mcp_session_id}__")),
+        None => Err("Missing nas_session_id. Please call syno_login first or configure X-Syno-* headers.".to_string()),
+    }
 }
 
 fn get_str(params: &Value, key: &str) -> Option<String> {
@@ -545,10 +634,10 @@ fn get_bool_opt(params: &Value, key: &str) -> Option<bool> {
     params.get(key).and_then(|v| v.as_bool())
 }
 
-// ── Tool dispatch ──
+// 鈹€鈹€ Tool dispatch 鈹€鈹€
 
-async fn handle_tool_call(state: &AppState, name: &str, params: &Value) -> Value {
-    match dispatch_tool(state, name, params).await {
+async fn handle_tool_call(state: &AppState, name: &str, params: &Value, mcp_session_id: &str) -> Value {
+    match dispatch_tool(state, name, params, mcp_session_id).await {
         Ok(result) => json!({
             "content": [{ "type": "text", "text": result }]
         }),
@@ -559,12 +648,14 @@ async fn handle_tool_call(state: &AppState, name: &str, params: &Value) -> Value
     }
 }
 
-async fn dispatch_tool(state: &AppState, name: &str, params: &Value) -> Result<String, String> {
+async fn dispatch_tool(state: &AppState, name: &str, params: &Value, mcp_session_id: &str) -> Result<String, String> {
+    let has_header_config = {
+        state.session_configs.lock().await.contains_key(mcp_session_id)
+    };
     match name {
         "syno_login" => tool_login(state, params).await,
         _ => {
-            let sid = get_str(params, "nas_session_id")
-                .ok_or("Missing nas_session_id")?;
+            let sid = resolve_session_id(params, mcp_session_id, has_header_config)?;
             let (client, nas_sid, token) = get_nas_session(state, &sid).await?;
             let token_ref = token.as_deref();
 
@@ -605,14 +696,17 @@ async fn dispatch_tool(state: &AppState, name: &str, params: &Value) -> Result<S
     }
 }
 
-// ── Tool implementations ──
+// 鈹€鈹€ Tool implementations 鈹€鈹€
 
 async fn tool_login(state: &AppState, params: &Value) -> Result<String, String> {
-    let host = get_str(params, "host").ok_or("Missing host")?;
+    let host = get_str(params, "host")
+        .ok_or("Missing host")?;
     let port = get_u64(params, "port", 5000) as u16;
     let https = get_bool(params, "https", false);
-    let username = get_str(params, "username").ok_or("Missing username")?;
-    let password = get_str(params, "password").ok_or("Missing password")?;
+    let username = get_str(params, "username")
+        .ok_or("Missing username")?;
+    let password = get_str(params, "password")
+        .ok_or("Missing password")?;
     let otp = get_str(params, "otp");
 
     let scheme = if https { "https" } else { "http" };
@@ -935,9 +1029,9 @@ async fn tool_todo_done(client: &SynoClient, sid: &str, token: Option<&str>, par
     Ok(json!({"message": if done_val { "Marked as done" } else { "Marked as undone" }}).to_string())
 }
 
-// ── MCP protocol handler ──
+// 鈹€鈹€ MCP protocol handler 鈹€鈹€
 
-async fn handle_jsonrpc(state: &AppState, req: JsonRpcRequest) -> JsonRpcResponse {
+async fn handle_jsonrpc(state: &AppState, req: JsonRpcRequest, mcp_session_id: &str) -> JsonRpcResponse {
     let id = req.id.clone().unwrap_or(Value::Null);
 
     match req.method.as_str() {
@@ -964,7 +1058,7 @@ async fn handle_jsonrpc(state: &AppState, req: JsonRpcRequest) -> JsonRpcRespons
             let params = req.params.unwrap_or(Value::Null);
             let tool_name = params["name"].as_str().unwrap_or("");
             let tool_args = params.get("arguments").cloned().unwrap_or(json!({}));
-            let result = handle_tool_call(state, tool_name, &tool_args).await;
+            let result = handle_tool_call(state, tool_name, &tool_args, mcp_session_id).await;
             JsonRpcResponse::success(id, result)
         }
         "ping" => {
@@ -976,13 +1070,31 @@ async fn handle_jsonrpc(state: &AppState, req: JsonRpcRequest) -> JsonRpcRespons
     }
 }
 
-// ── HTTP handlers ──
+// 鈹€鈹€ HTTP handlers 鈹€鈹€
 
 async fn sse_handler(
     State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
 ) -> Sse<impl tokio_stream::Stream<Item = Result<Event, axum::Error>>> {
     let session_id = uuid::Uuid::new_v4().to_string();
     let (tx, rx) = mpsc::channel::<Result<Event, axum::Error>>(32);
+
+    // Extract NAS config from headers and auto-login
+    if let Some(cfg) = NasConfig::from_headers(&headers) {
+        eprintln!("SSE {session_id}: headers auth detected ({}:{})", cfg.host, cfg.port);
+        match login_with_config(&cfg).await {
+            Ok(session) => {
+                let nas_key = format!("__header_{session_id}__");
+                state.nas_sessions.lock().await.insert(nas_key, session);
+                state.session_configs.lock().await.insert(session_id.clone(), cfg);
+                eprintln!("SSE {session_id}: auto-login successful");
+            }
+            Err(e) => {
+                eprintln!("SSE {session_id}: auto-login failed: {e} (config saved for retry)");
+                state.session_configs.lock().await.insert(session_id.clone(), cfg);
+            }
+        }
+    }
 
     // Send the endpoint event so client knows where to POST
     let endpoint_msg = format!("/messages?sessionId={session_id}");
@@ -1032,8 +1144,8 @@ async fn messages_handler(
     let is_notification = req.id.is_none()
         || req.method.starts_with("notifications/");
 
-    // Handle the request
-    let response = handle_jsonrpc(&state, req).await;
+    // Handle the request, passing MCP session_id for NAS session resolution
+    let response = handle_jsonrpc(&state, req, session_id).await;
 
     // Try to send via SSE
     let clients = state.sse_clients.lock().await;
@@ -1054,7 +1166,7 @@ async fn health_handler() -> &'static str {
     "ok"
 }
 
-// ── Session cleanup task ──
+// 鈹€鈹€ Session cleanup task 鈹€鈹€
 
 async fn cleanup_expired_sessions(state: Arc<AppState>) {
     let mut interval = tokio::time::interval(Duration::from_secs(60));
@@ -1062,13 +1174,37 @@ async fn cleanup_expired_sessions(state: Arc<AppState>) {
         interval.tick().await;
         let now = Instant::now();
 
-        // Clean expired NAS sessions (30 min)
-        let mut nas = state.nas_sessions.lock().await;
-        nas.retain(|_, s| now.duration_since(s.created) < Duration::from_secs(30 * 60));
+        // Clean stale SSE clients (2 hours) and collect removed IDs
+        let removed_sse: Vec<String>;
+        {
+            let mut sse = state.sse_clients.lock().await;
+            let before: std::collections::HashSet<String> = sse.keys().cloned().collect();
+            sse.retain(|_, c| now.duration_since(c.created) < Duration::from_secs(2 * 60 * 60));
+            let after: std::collections::HashSet<String> = sse.keys().cloned().collect();
+            removed_sse = before.difference(&after).cloned().collect();
+        }
 
-        // Clean stale SSE clients (2 hours)
-        let mut sse = state.sse_clients.lock().await;
-        sse.retain(|_, c| now.duration_since(c.created) < Duration::from_secs(2 * 60 * 60));
+        // Clean NAS sessions: expire non-header sessions (30 min), and remove header sessions for cleaned-up SSE clients
+        {
+            let mut nas = state.nas_sessions.lock().await;
+            nas.retain(|key, s| {
+                if key.starts_with("__header_") {
+                    // Keep if the parent SSE session still exists
+                    let mcp_id = key.strip_prefix("__header_").and_then(|k| k.strip_suffix("__")).unwrap_or("");
+                    !removed_sse.contains(&mcp_id.to_string())
+                } else {
+                    now.duration_since(s.created) < Duration::from_secs(30 * 60)
+                }
+            });
+        }
+
+        // Clean session configs for removed SSE clients
+        if !removed_sse.is_empty() {
+            let mut configs = state.session_configs.lock().await;
+            for id in &removed_sse {
+                configs.remove(id);
+            }
+        }
     }
 }
 
@@ -1078,6 +1214,7 @@ pub async fn run_server(host: &str, port: u16) -> anyhow::Result<()> {
     let state = Arc::new(AppState {
         sse_clients: Mutex::new(HashMap::new()),
         nas_sessions: Mutex::new(HashMap::new()),
+        session_configs: Mutex::new(HashMap::new()),
     });
 
     // Spawn cleanup task

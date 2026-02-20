@@ -257,18 +257,59 @@ syno mcp
 syno mcp --host 127.0.0.1 --port 8080
 ```
 
-MCP 服务**不使用本地 .env 配置**，NAS 连接信息作为 tool 参数由客户端传入（公共服务设计）。
+### Headers 认证（推荐）
+
+MCP 客户端可在 SSE 连接时通过 HTTP headers 传递 NAS 登录信息。配置后：
+
+- 客户端建立 SSE 连接时**自动登录**，session 与该连接绑定
+- 所有工具的 `nas_session_id` 参数变为**可选**——不传时自动使用绑定的 session
+- session 过期（30 分钟）后**自动重新登录**，无需客户端干预
+
+**Headers：**
+
+| Header | 必填 | 说明 |
+|---|---|---|
+| `X-Syno-Host` | ✅ | NAS 地址（IP 或域名） |
+| `X-Syno-Port` | ❌ | 端口，默认 5000 |
+| `X-Syno-Https` | ❌ | 是否 HTTPS，默认 false |
+| `X-Syno-Username` | ✅ | 登录用户名 |
+| `X-Syno-Password` | ✅ | 登录密码 |
+
+**mcp.json 配置示例（CodeBuddy / Cursor 等）：**
+
+```json
+{
+  "syno": {
+    "url": "https://mcp.syno.leot.fun/sse",
+    "headers": {
+      "X-Syno-Host": "dsm.example.com",
+      "X-Syno-Port": "5001",
+      "X-Syno-Https": "true",
+      "X-Syno-Username": "admin",
+      "X-Syno-Password": "your_password"
+    }
+  }
+}
+```
+
+**无 headers 时**退回原有模式：客户端必须先调用 `syno_login` 传入完整连接信息。
 
 ### 协议
 
-- `GET /sse` — 建立 SSE 长连接，返回 `sessionId`
+- `GET /sse` — 建立 SSE 长连接，返回 `sessionId`（支持 `X-Syno-*` headers 自动登录）
 - `POST /messages?sessionId=xxx` — 发送 JSON-RPC 请求
 - `GET /health` — 健康检查
 
 ### 认证流程
 
+**方式一：Headers 认证（零参数调用）**
+
+客户端在 `mcp.json` 配置 headers 后，SSE 连接自动登录，直接调用任何工具即可。
+
+**方式二：显式登录（多 NAS / 公共服务）**
+
 1. 调用 `syno_login`（传入 host/username/password）→ 返回 `nas_session_id`
-2. 后续调用只传 `nas_session_id`（服务端内存缓存，30 分钟过期）
+2. 后续调用传 `nas_session_id`（服务端内存缓存，30 分钟过期）
 
 ### 线上部署
 
