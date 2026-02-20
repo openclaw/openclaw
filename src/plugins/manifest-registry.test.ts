@@ -107,8 +107,10 @@ describe("loadPluginManifestRegistry", () => {
 
     const registry = loadRegistry(candidates);
     expect(countDuplicateWarnings(registry)).toBe(0);
-    expect(registry.plugins.length).toBe(1);
-    expect(registry.plugins[0]?.origin).toBe("global");
+    // Both records are present so the loader can mark the bundled copy as disabled.
+    expect(registry.plugins.length).toBe(2);
+    expect(registry.plugins.find((p) => p.origin === "global")).toBeDefined();
+    expect(registry.plugins.find((p) => p.origin === "bundled")).toBeDefined();
   });
 
   it("suppresses duplicate warning when config plugin shadows bundled (config wins)", () => {
@@ -133,8 +135,10 @@ describe("loadPluginManifestRegistry", () => {
 
     const registry = loadRegistry(candidates);
     expect(countDuplicateWarnings(registry)).toBe(0);
-    expect(registry.plugins.length).toBe(1);
-    expect(registry.plugins[0]?.origin).toBe("config");
+    // Both records are present so the loader can mark the bundled copy as disabled.
+    expect(registry.plugins.length).toBe(2);
+    expect(registry.plugins.find((p) => p.origin === "config")).toBeDefined();
+    expect(registry.plugins.find((p) => p.origin === "bundled")).toBeDefined();
   });
 
   it("emits duplicate warning when two bundled plugins at different paths share the same id", () => {

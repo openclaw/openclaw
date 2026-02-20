@@ -201,18 +201,9 @@ export function loadPluginManifestRegistry(params: {
       const existingReal = safeRealpathSync(existing.candidate.rootDir, realpathCache);
       const candidateReal = safeRealpathSync(candidate.rootDir, realpathCache);
       const samePlugin = Boolean(existingReal && candidateReal && existingReal === candidateReal);
-      // When both candidates are the same physical directory (symlink / path
-      // alias) OR exactly one of them is a bundled plugin, silently prefer
-      // the higher-precedence copy. A warning is only appropriate when two
-      // genuinely different non-bundled plugins claim the same ID (or two
-      // bundled plugins at different paths, which shouldn't normally happen).
-      const existingIsBundled = existing.candidate.origin === "bundled";
-      const candidateIsBundled = candidate.origin === "bundled";
-      // XOR: exactly one is bundled (user-installed plugin shadowing a bundled one).
-      const oneBundled = existingIsBundled !== candidateIsBundled;
-      if (samePlugin || oneBundled) {
-        // Prefer higher-precedence origins even if candidates are passed in
-        // an unexpected order (config > workspace > global > bundled).
+      if (samePlugin) {
+        // Same physical directory (symlink / path alias): silently prefer
+        // the higher-precedence copy and skip adding a duplicate record.
         if (PLUGIN_ORIGIN_RANK[candidate.origin] < PLUGIN_ORIGIN_RANK[existing.candidate.origin]) {
           records[existing.recordIndex] = buildRecord({
             manifest,
@@ -225,12 +216,22 @@ export function loadPluginManifestRegistry(params: {
         }
         continue;
       }
-      diagnostics.push({
-        level: "warn",
-        pluginId: manifest.id,
-        source: candidate.source,
-        message: `duplicate plugin id detected; later plugin may be overridden (${candidate.source})`,
-      });
+      // A user-installed plugin shadowing a bundled one is expected behaviour
+      // and should not trigger a warning. Both records are still added so the
+      // loader can mark the lower-precedence copy as disabled. Only genuinely
+      // conflicting non-bundled plugins (or two bundled plugins at different
+      // paths) warrant a warning.
+      const existingIsBundled = existing.candidate.origin === "bundled";
+      const candidateIsBundled = candidate.origin === "bundled";
+      const oneBundled = existingIsBundled !== candidateIsBundled; // XOR
+      if (!oneBundled) {
+        diagnostics.push({
+          level: "warn",
+          pluginId: manifest.id,
+          source: candidate.source,
+          message: `duplicate plugin id detected; later plugin may be overridden (${candidate.source})`,
+        });
+      }
     } else {
       seenIds.set(manifest.id, { candidate, recordIndex: records.length });
     }
