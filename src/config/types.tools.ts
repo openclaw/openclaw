@@ -115,6 +115,15 @@ export type LinkToolsConfig = {
   timeoutSeconds?: number;
   /** Ordered model list (fallbacks in order). */
   models?: LinkModelConfig[];
+  /** Fall back to web search when all CLI models fail (e.g. 403 from Cloudflare). */
+  searchFallback?: {
+    /** Enable web search fallback (default: false). */
+    enabled?: boolean;
+    /** Max search results to include in the fallback summary (default: 3). */
+    maxResults?: number;
+    /** Timeout in seconds for the fallback search request (default: 15). */
+    timeoutSeconds?: number;
+  };
 };
 
 export type MediaToolsConfig = {
