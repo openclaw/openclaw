@@ -3,15 +3,26 @@
   "kind": "memory",
   "uiHints": {
     "embedding.apiKey": {
-      "label": "OpenAI API Key",
+      "label": "API Key",
       "sensitive": true,
       "placeholder": "sk-proj-...",
-      "help": "API key for OpenAI embeddings (or use ${OPENAI_API_KEY})"
+      "help": "API key for the embedding provider (or use ${OPENAI_API_KEY})"
     },
     "embedding.model": {
       "label": "Embedding Model",
       "placeholder": "text-embedding-3-small",
-      "help": "OpenAI embedding model to use"
+      "help": "Embedding model name. Any OpenAI-compatible model is supported."
+    },
+    "embedding.baseUrl": {
+      "label": "Base URL",
+      "placeholder": "https://api.openai.com/v1",
+      "help": "Custom endpoint for OpenAI-compatible APIs (Ollama, LM Studio, vLLM, etc.)",
+      "advanced": true
+    },
+    "embedding.dimensions": {
+      "label": "Vector Dimensions",
+      "help": "Override vector dimensions for custom models not in the built-in list",
+      "advanced": true
     },
     "dbPath": {
       "label": "Database Path",
@@ -46,7 +57,16 @@
           },
           "model": {
             "type": "string",
-            "enum": ["text-embedding-3-small", "text-embedding-3-large"]
+            "description": "Embedding model name. Defaults to text-embedding-3-small. Any OpenAI-compatible model is supported."
+          },
+          "baseUrl": {
+            "type": "string",
+            "description": "Custom base URL for OpenAI-compatible embedding APIs (e.g. http://localhost:11434/v1 for Ollama)"
+          },
+          "dimensions": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Vector dimensions for custom models not in the built-in list"
           }
         },
         "required": ["apiKey"]
