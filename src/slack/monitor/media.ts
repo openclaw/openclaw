@@ -6,6 +6,7 @@ import { saveMediaBuffer } from "../../media/store.js";
 import type { SlackAttachment, SlackFile } from "../types.js";
 
 import { createSlackWebClient } from "../client.js";
+import { logVerbose } from "../../globals.js";
 
 function isSlackHostname(hostname: string): boolean {
   const normalized = normalizeHostname(hostname);
@@ -494,19 +495,19 @@ export async function resolveSlackThreadHistory(params: {
   try {
     return await doFetch(params.client);
   } catch (err) {
-    console.warn(
+    logVerbose(
       `resolveSlackThreadHistory failed for channel=${params.channelId} thread=${params.threadTs}: ${String(err)}`,
     );
     // Fallback: retry with user token if available
     if (params.userToken) {
       try {
-        console.warn(
+        logVerbose(
           `resolveSlackThreadHistory: retrying with user token for channel=${params.channelId}`,
         );
         const userClient = createSlackWebClient(params.userToken);
         return await doFetch(userClient);
       } catch (retryErr) {
-        console.warn(
+        logVerbose(
           `resolveSlackThreadHistory user token fallback also failed: ${String(retryErr)}`,
         );
       }
