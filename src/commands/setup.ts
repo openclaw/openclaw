@@ -3,6 +3,7 @@ import JSON5 from "json5";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../agents/workspace.js";
 import { type OpenClawConfig, createConfigIO, writeConfigFile } from "../config/config.js";
 import { formatConfigPath, logConfigUpdated } from "../config/logging.js";
+import { resolveStateDir } from "../config/paths.js";
 import { resolveSessionTranscriptsDir } from "../config/sessions.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
@@ -32,6 +33,11 @@ export async function setupCommand(
     typeof opts?.workspace === "string" && opts.workspace.trim()
       ? opts.workspace.trim()
       : undefined;
+
+  // Ensure the state directory exists before config IO resolves paths.
+  // For MABOS product this creates ~/.mabos/ on first run.
+  const stateDir = resolveStateDir();
+  await fs.mkdir(stateDir, { recursive: true });
 
   const io = createConfigIO();
   const configPath = io.configPath;

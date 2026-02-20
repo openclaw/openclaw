@@ -934,6 +934,17 @@
             }
         }
     </style>
+
+<style>
+/* Fix: main content offset for fixed sidebar when served standalone */
+.main {
+    margin-left: 280px !important;
+    width: calc(100vw - 280px) !important;
+    padding: 24px !important;
+    overflow-y: auto !important;
+    height: 100vh !important;
+}
+</style>
 </head>
 <body>
     <div class="app">

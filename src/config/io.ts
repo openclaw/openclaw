@@ -36,7 +36,13 @@ import { ConfigIncludeError, resolveConfigIncludes } from "./includes.js";
 import { findLegacyConfigIssues } from "./legacy.js";
 import { applyMergePatch } from "./merge-patch.js";
 import { normalizeConfigPaths } from "./normalize-paths.js";
-import { resolveConfigPath, resolveDefaultConfigCandidates, resolveStateDir } from "./paths.js";
+import {
+  isMabosProduct,
+  resolveCanonicalConfigPath,
+  resolveConfigPath,
+  resolveDefaultConfigCandidates,
+  resolveStateDir,
+} from "./paths.js";
 import { applyConfigOverrides } from "./runtime-overrides.js";
 import type { OpenClawConfig, ConfigFileSnapshot, LegacyConfigIssue } from "./types.js";
 import {
@@ -523,8 +529,11 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
   const candidatePaths = deps.configPath
     ? [requestedConfigPath]
     : resolveDefaultConfigCandidates(deps.env, deps.homedir);
-  const configPath =
-    candidatePaths.find((candidate) => deps.fs.existsSync(candidate)) ?? requestedConfigPath;
+  // When running as MABOS product, always use the canonical path (~/.mabos/mabos.json)
+  // instead of searching for existing config files (which may find ~/.openclaw/openclaw.json).
+  const configPath = isMabosProduct(deps.env)
+    ? resolveCanonicalConfigPath(deps.env, resolveStateDir(deps.env, deps.homedir))
+    : (candidatePaths.find((candidate) => deps.fs.existsSync(candidate)) ?? requestedConfigPath);
 
   function loadConfig(): OpenClawConfig {
     try {

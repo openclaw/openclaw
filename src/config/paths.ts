@@ -82,13 +82,11 @@ export function resolveStateDir(
     return resolveUserPath(override, env, effectiveHomedir);
   }
 
-  // When running as MABOS product, prefer ~/.mabos
+  // When running as MABOS product, always use ~/.mabos.
+  // The setup/onboard command will create it if needed.
+  // Migration from ~/.openclaw is handled by \`mabos migrate\`.
   if (isMabosProduct(env)) {
-    const mabosDir = path.join(effectiveHomedir(), MABOS_STATE_DIRNAME);
-    if (fs.existsSync(mabosDir)) {
-      return mabosDir;
-    }
-    // Fall through to check ~/.openclaw for migration compatibility
+    return path.join(effectiveHomedir(), MABOS_STATE_DIRNAME);
   }
 
   const newDir = newStateDir(effectiveHomedir);
@@ -153,12 +151,9 @@ export function resolveCanonicalConfigPath(
   if (override) {
     return resolveUserPath(override, env, envHomedir(env));
   }
-  // When running as MABOS, prefer mabos.json if it exists
+  // When running as MABOS, always use mabos.json
   if (isMabosProduct(env)) {
-    const mabosConfig = path.join(stateDir, MABOS_CONFIG_FILENAME);
-    if (fs.existsSync(mabosConfig)) {
-      return mabosConfig;
-    }
+    return path.join(stateDir, MABOS_CONFIG_FILENAME);
   }
   return path.join(stateDir, CONFIG_FILENAME);
 }
@@ -199,6 +194,7 @@ export function resolveConfigPath(
   }
   const stateOverride = env.OPENCLAW_STATE_DIR?.trim();
   const candidates = [
+    ...(isMabosProduct(env) ? [path.join(stateDir, MABOS_CONFIG_FILENAME)] : []),
     path.join(stateDir, CONFIG_FILENAME),
     ...LEGACY_CONFIG_FILENAMES.map((name) => path.join(stateDir, name)),
   ];
@@ -239,6 +235,14 @@ export function resolveDefaultConfigCandidates(
   }
 
   const candidates: string[] = [];
+
+  // When running as MABOS, prioritise ~/.mabos/mabos.json
+  if (isMabosProduct(env)) {
+    const mabosDir = path.join(effectiveHomedir(), MABOS_STATE_DIRNAME);
+    candidates.push(path.join(mabosDir, MABOS_CONFIG_FILENAME));
+    candidates.push(path.join(mabosDir, CONFIG_FILENAME));
+  }
+
   const openclawStateDir = env.OPENCLAW_STATE_DIR?.trim() || env.CLAWDBOT_STATE_DIR?.trim();
   if (openclawStateDir) {
     const resolved = resolveUserPath(openclawStateDir, env, effectiveHomedir);
