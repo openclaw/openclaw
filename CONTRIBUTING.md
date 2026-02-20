@@ -58,6 +58,12 @@ Welcome to the lobster tank! 🦞
 - Keep PRs focused (one thing per PR; do not mix unrelated concerns)
 - Describe what & why
 
+**If you modify `AGENTS.md`:**
+
+- Also update `CLAUDE.md`: `cp AGENTS.md CLAUDE.md`
+- Both files must stay identical (CI will enforce this)
+- Background: `CLAUDE.md` is a real copy (not a symlink) to work across all platforms
+
 ## Control UI Decorators
 
 The Control UI uses Lit with **legacy** decorators (current Rollup parsing does not support

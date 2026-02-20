@@ -256,6 +256,15 @@ jobs:
         with:
           install-bun: "false"
 
+      - name: Verify CLAUDE.md and AGENTS.md are identical
+        run: |
+          if ! diff CLAUDE.md AGENTS.md; then
+            echo "❌ CLAUDE.md and AGENTS.md must be identical!"
+            echo "Run: cp AGENTS.md CLAUDE.md"
+            exit 1
+          fi
+          echo "✅ CLAUDE.md and AGENTS.md are in sync"
+
       - name: Check types and lint and oxfmt
         run: pnpm check
 
