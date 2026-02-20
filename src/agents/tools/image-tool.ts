@@ -1,7 +1,9 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { type Api, type Context, complete, type Model } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
+import { getMediaDir } from "../../media/store.js";
 import { resolveUserPath } from "../../utils.js";
 import { getDefaultLocalRoots, loadWebMedia } from "../../web/media.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "../auth-profiles.js";
@@ -209,10 +211,41 @@ type ImageSandboxConfig = {
   bridge: SandboxFsBridge;
 };
 
+type ResolvedSandboxImagePath = {
+  resolved: string;
+  rewrittenFrom?: string;
+  readMode?: "bridge" | "host";
+};
+
+function extractInboundMediaParts(filePath: string): string[] | null {
+  const parts = filePath
+    .replace(/\\/g, "/")
+    .split("/")
+    .filter((part) => part && part !== "." && part !== "..")
+    .map((part) => part.trim())
+    .filter((part) => !!part);
+  const mediaIndex = (() => {
+    for (let idx = parts.length - 1; idx >= 0; idx -= 1) {
+      if (parts[idx] === "media" && parts[idx + 1] === "inbound") {
+        return idx;
+      }
+    }
+    return -1;
+  })();
+  if (mediaIndex === -1) {
+    return null;
+  }
+  const remainder = parts
+    .slice(mediaIndex + 2)
+    .filter((part) => part && part !== "." && part !== "..");
+
+  return remainder.length ? remainder : null;
+}
+
 async function resolveSandboxedImagePath(params: {
   sandbox: ImageSandboxConfig;
   imagePath: string;
-}): Promise<{ resolved: string; rewrittenFrom?: string }> {
+}): Promise<ResolvedSandboxImagePath> {
   const normalize = (p: string) => (p.startsWith("file://") ? p.slice("file://".length) : p);
   const filePath = normalize(params.imagePath);
   try {
@@ -220,26 +253,52 @@ async function resolveSandboxedImagePath(params: {
       filePath,
       cwd: params.sandbox.root,
     });
-    return { resolved: resolved.hostPath };
+    const stat = await params.sandbox.bridge.stat({ filePath, cwd: params.sandbox.root });
+    if (stat && stat.type === "file") {
+      return { resolved: resolved.hostPath };
+    }
+    throw new Error(`No file at sandboxed image path: ${filePath}`);
   } catch (err) {
     const name = path.basename(filePath);
     const candidateRel = path.join("media", "inbound", name);
-    try {
-      const stat = await params.sandbox.bridge.stat({
-        filePath: candidateRel,
-        cwd: params.sandbox.root,
-      });
-      if (!stat) {
-        throw err;
-      }
-    } catch {
-      throw err;
+    const candidates = new Set<string>([candidateRel]);
+
+    const inboundParts = extractInboundMediaParts(filePath);
+    if (inboundParts) {
+      candidates.add(path.join("media", "inbound", ...inboundParts));
     }
-    const out = params.sandbox.bridge.resolvePath({
-      filePath: candidateRel,
-      cwd: params.sandbox.root,
-    });
-    return { resolved: out.hostPath, rewrittenFrom: filePath };
+
+    for (const candidate of candidates) {
+      try {
+        const stat = await params.sandbox.bridge.stat({
+          filePath: candidate,
+          cwd: params.sandbox.root,
+        });
+        if (stat && stat.type === "file") {
+          const out = params.sandbox.bridge.resolvePath({
+            filePath: candidate,
+            cwd: params.sandbox.root,
+          });
+          return { resolved: out.hostPath, rewrittenFrom: filePath };
+        }
+      } catch {
+        // continue
+      }
+    }
+
+    if (inboundParts) {
+      const mediaPath = path.join(getMediaDir(), "inbound", ...inboundParts);
+      try {
+        const stat = await fs.stat(mediaPath);
+        if (stat.isFile()) {
+          return { resolved: mediaPath, rewrittenFrom: filePath, readMode: "host" };
+        }
+      } catch {
+        // continue
+      }
+    }
+
+    throw err;
   }
 }
 
@@ -500,7 +559,7 @@ export function createImageTool(options?: {
           }
           return imageRaw;
         })();
-        const resolvedPathInfo: { resolved: string; rewrittenFrom?: string } = isDataUrl
+        const resolvedPathInfo: ResolvedSandboxImagePath = isDataUrl
           ? { resolved: "" }
           : sandboxConfig
             ? await resolveSandboxedImagePath({
@@ -521,7 +580,9 @@ export function createImageTool(options?: {
                 maxBytes,
                 sandboxValidated: true,
                 readFile: (filePath) =>
-                  sandboxConfig.bridge.readFile({ filePath, cwd: sandboxConfig.root }),
+                  resolvedPathInfo.readMode === "host"
+                    ? fs.readFile(filePath)
+                    : sandboxConfig.bridge.readFile({ filePath, cwd: sandboxConfig.root }),
               })
             : await loadWebMedia(resolvedPath ?? resolvedImage, {
                 maxBytes,

@@ -89,6 +89,39 @@ describe("buildWorkspaceSkillStatus", () => {
     }
   });
 
+  it("treats an empty allowlist as blocked bundled-skills", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-"));
+    const bundledDir = path.join(workspaceDir, ".bundled");
+    const bundledSkillDir = path.join(bundledDir, "peekaboo");
+    const originalBundled = process.env.OPENCLAW_BUNDLED_SKILLS_DIR;
+
+    await writeSkill({
+      dir: bundledSkillDir,
+      name: "peekaboo",
+      description: "Capture UI",
+      body: "# Peekaboo\n",
+    });
+
+    try {
+      process.env.OPENCLAW_BUNDLED_SKILLS_DIR = bundledDir;
+      const report = buildWorkspaceSkillStatus(workspaceDir, {
+        managedSkillsDir: path.join(workspaceDir, ".managed"),
+        config: { skills: { allowBundled: [] } },
+      });
+      const skill = report.skills.find((entry) => entry.name === "peekaboo");
+
+      expect(skill).toBeDefined();
+      expect(skill?.blockedByAllowlist).toBe(true);
+      expect(skill?.eligible).toBe(false);
+    } finally {
+      if (originalBundled === undefined) {
+        delete process.env.OPENCLAW_BUNDLED_SKILLS_DIR;
+      } else {
+        process.env.OPENCLAW_BUNDLED_SKILLS_DIR = originalBundled;
+      }
+    }
+  });
+
   it("filters install options by OS", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-"));
     const skillDir = path.join(workspaceDir, "skills", "install-skill");

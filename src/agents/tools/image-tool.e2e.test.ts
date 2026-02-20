@@ -412,6 +412,46 @@ describe("image tool implicit imageModel config", () => {
     expect(fetch).toHaveBeenCalledTimes(1);
     expect((res.details as { rewrittenFrom?: string }).rewrittenFrom).toContain("photo.png");
   });
+
+  it("resolves sandboxed media/inbound relative paths from host media directory", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-image-host-media-"));
+    const inboundDir = path.join(stateDir, "media", "inbound", "topic");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const agentDir = path.join(stateDir, "agent");
+    const sandboxRoot = path.join(stateDir, "sandbox");
+    await fs.mkdir(agentDir, { recursive: true });
+    await fs.mkdir(inboundDir, { recursive: true });
+    await fs.mkdir(sandboxRoot, { recursive: true });
+    const imagePath = path.join(inboundDir, "photo.png");
+    await fs.writeFile(imagePath, Buffer.from(ONE_PIXEL_PNG_B64, "base64"));
+
+    const fetch = stubMinimaxOkFetch();
+
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: { primary: "minimax/MiniMax-M2.1" },
+          imageModel: { primary: "minimax/MiniMax-VL-01" },
+        },
+      },
+    };
+    const sandbox = { root: sandboxRoot, bridge: createHostSandboxFsBridge(sandboxRoot) };
+    const tool = requireImageTool(createImageTool({ config: cfg, agentDir, sandbox }));
+
+    try {
+      const res = await tool.execute("t1", {
+        prompt: "Describe the image.",
+        image: path.join("media", "inbound", "topic", "photo.png"),
+      });
+
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect((res.details as { rewrittenFrom?: string }).rewrittenFrom).toContain(
+        path.join("media", "inbound", "topic", "photo.png"),
+      );
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("image tool data URL support", () => {
