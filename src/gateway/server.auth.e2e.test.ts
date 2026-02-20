@@ -851,6 +851,7 @@ describe("gateway server auth/connect", () => {
           });
           expect(res.ok).toBe(false);
           expect(res.error?.message ?? "").toContain("pairing required");
+          await approvePendingPairingIfNeeded();
           ws.close();
         });
       } finally {
