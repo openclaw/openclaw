@@ -135,7 +135,7 @@ describe("web media loading", () => {
 
   it("strips MEDIA: prefix before reading local file (including whitespace variants)", async () => {
     for (const input of [`MEDIA:${tinyPngFile}`, `  MEDIA :  ${tinyPngFile}`]) {
-      const result = await loadWebMedia(input, 1024 * 1024);
+      const result = await loadWebMedia(input, 1024 * 1024, { localRoots: [fixtureRoot] });
       expect(result.kind).toBe("image");
       expect(result.buffer.length).toBeGreaterThan(0);
     }
@@ -145,7 +145,7 @@ describe("web media loading", () => {
     const { buffer, file } = await createLargeTestJpeg();
 
     const cap = Math.floor(buffer.length * 0.8);
-    const result = await loadWebMedia(file, cap);
+    const result = await loadWebMedia(file, cap, { localRoots: [fixtureRoot] });
 
     expect(result.kind).toBe("image");
     expect(result.buffer.length).toBeLessThanOrEqual(cap);
@@ -156,7 +156,7 @@ describe("web media loading", () => {
     const { buffer, file } = await createLargeTestJpeg();
     const cap = Math.max(1, Math.floor(buffer.length * 0.8));
 
-    const result = await loadWebMedia(file, { maxBytes: cap });
+    const result = await loadWebMedia(file, { maxBytes: cap, localRoots: [fixtureRoot] });
 
     expect(result.buffer.length).toBeLessThanOrEqual(cap);
     expect(result.buffer.length).toBeLessThan(buffer.length);
@@ -166,13 +166,17 @@ describe("web media loading", () => {
     const { buffer, file } = await createLargeTestJpeg();
     const cap = Math.max(1, Math.floor(buffer.length * 0.8));
 
-    await expect(loadWebMedia(file, { maxBytes: cap, optimizeImages: false })).rejects.toThrow(
+    await expect(
+      loadWebMedia(file, { maxBytes: cap, optimizeImages: false, localRoots: [fixtureRoot] }),
+    ).rejects.toThrow(
       /Media exceeds/i,
     );
   });
 
   it("sniffs mime before extension when loading local files", async () => {
-    const result = await loadWebMedia(tinyPngWrongExtFile, 1024 * 1024);
+    const result = await loadWebMedia(tinyPngWrongExtFile, 1024 * 1024, {
+      localRoots: [fixtureRoot],
+    });
 
     expect(result.kind).toBe("image");
     expect(result.contentType).toBe("image/jpeg");
@@ -300,7 +304,7 @@ describe("web media loading", () => {
   });
 
   it("preserves PNG alpha when under the cap", async () => {
-    const result = await loadWebMedia(alphaPngFile, 1024 * 1024);
+    const result = await loadWebMedia(alphaPngFile, 1024 * 1024, { localRoots: [fixtureRoot] });
 
     expect(result.kind).toBe("image");
     expect(result.contentType).toBe("image/png");
@@ -309,7 +313,9 @@ describe("web media loading", () => {
   });
 
   it("falls back to JPEG when PNG alpha cannot fit under cap", async () => {
-    const result = await loadWebMedia(fallbackPngFile, fallbackPngCap);
+    const result = await loadWebMedia(fallbackPngFile, fallbackPngCap, {
+      localRoots: [fixtureRoot],
+    });
 
     expect(result.kind).toBe("image");
     expect(result.contentType).toBe("image/jpeg");
