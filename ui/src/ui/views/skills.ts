@@ -1,7 +1,8 @@
 import { html, nothing } from "lit";
 import type { SkillMessageMap } from "../controllers/skills.ts";
-import { clampText } from "../format.ts";
 import type { SkillStatusEntry, SkillStatusReport } from "../types.ts";
+import { clampText } from "../format.ts";
+import { t } from "../i18n/index.js";
 import { groupSkills } from "./skills-grouping.ts";
 import {
   computeSkillMissing,
@@ -39,24 +40,24 @@ export function renderSkills(props: SkillsProps) {
     <section class="card">
       <div class="row" style="justify-content: space-between;">
         <div>
-          <div class="card-title">Skills</div>
-          <div class="card-sub">Bundled, managed, and workspace skills.</div>
+          <div class="card-title">${t("Skills")}</div>
+          <div class="card-sub">${t("Bundled, managed, and workspace skills.")}</div>
         </div>
         <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
-          ${props.loading ? "Loading…" : "Refresh"}
+          ${props.loading ? t("Loading…") : t("Refresh")}
         </button>
       </div>
 
       <div class="filters" style="margin-top: 14px;">
         <label class="field" style="flex: 1;">
-          <span>Filter</span>
+          <span>${t("Filter")}</span>
           <input
             .value=${props.filter}
             @input=${(e: Event) => props.onFilterChange((e.target as HTMLInputElement).value)}
-            placeholder="Search skills"
+            placeholder="${t("Search skills")}"
           />
         </label>
-        <div class="muted">${filtered.length} shown</div>
+        <div class="muted">${filtered.length} ${t("shown")}</div>
       </div>
 
       ${
@@ -68,7 +69,7 @@ export function renderSkills(props: SkillsProps) {
       ${
         filtered.length === 0
           ? html`
-              <div class="muted" style="margin-top: 16px">No skills found.</div>
+              <div class="muted" style="margin-top: 16px">${t("No skills found.")}</div>
             `
           : html`
             <div class="agent-skills-groups" style="margin-top: 16px;">
@@ -77,7 +78,7 @@ export function renderSkills(props: SkillsProps) {
                 return html`
                   <details class="agent-skills-group" ?open=${!collapsedByDefault}>
                     <summary class="agent-skills-header">
-                      <span>${group.label}</span>
+                      <span>${t(group.label)}</span>
                       <span class="muted">${group.skills.length}</span>
                     </summary>
                     <div class="list skills-grid">
@@ -100,7 +101,8 @@ function renderSkill(skill: SkillStatusEntry, props: SkillsProps) {
   const canInstall = skill.install.length > 0 && skill.missing.bins.length > 0;
   const showBundledBadge = Boolean(skill.bundled && skill.source !== "openclaw-bundled");
   const missing = computeSkillMissing(skill);
-  const reasons = computeSkillReasons(skill);
+  const reasons = computeSkillReasons(skill).map((reason) => t(reason));
+  const installLabel = canInstall ? formatInstallLabel(skill.install[0].label) : "";
   return html`
     <div class="list-item">
       <div class="list-main">
@@ -113,7 +115,7 @@ function renderSkill(skill: SkillStatusEntry, props: SkillsProps) {
           missing.length > 0
             ? html`
               <div class="muted" style="margin-top: 6px;">
-                Missing: ${missing.join(", ")}
+                ${t("Missing:")} ${missing.join(", ")}
               </div>
             `
             : nothing
@@ -122,7 +124,7 @@ function renderSkill(skill: SkillStatusEntry, props: SkillsProps) {
           reasons.length > 0
             ? html`
               <div class="muted" style="margin-top: 6px;">
-                Reason: ${reasons.join(", ")}
+                ${t("Reason:")} ${reasons.join(", ")}
               </div>
             `
             : nothing
@@ -135,7 +137,7 @@ function renderSkill(skill: SkillStatusEntry, props: SkillsProps) {
             ?disabled=${busy}
             @click=${() => props.onToggle(skill.skillKey, skill.disabled)}
           >
-            ${skill.disabled ? "Enable" : "Disable"}
+            ${skill.disabled ? t("Enable") : t("Disable")}
           </button>
           ${
             canInstall
@@ -144,7 +146,7 @@ function renderSkill(skill: SkillStatusEntry, props: SkillsProps) {
                 ?disabled=${busy}
                 @click=${() => props.onInstall(skill.skillKey, skill.name, skill.install[0].id)}
               >
-                ${busy ? "Installing…" : skill.install[0].label}
+                ${busy ? t("Installing…") : installLabel}
               </button>`
               : nothing
           }
@@ -167,7 +169,7 @@ function renderSkill(skill: SkillStatusEntry, props: SkillsProps) {
           skill.primaryEnv
             ? html`
               <div class="field" style="margin-top: 10px;">
-                <span>API key</span>
+                <span>${t("API key")}</span>
                 <input
                   type="password"
                   .value=${apiKey}
@@ -181,7 +183,7 @@ function renderSkill(skill: SkillStatusEntry, props: SkillsProps) {
                 ?disabled=${busy}
                 @click=${() => props.onSaveKey(skill.skillKey)}
               >
-                Save key
+                ${t("Save key")}
               </button>
             `
             : nothing
@@ -189,4 +191,12 @@ function renderSkill(skill: SkillStatusEntry, props: SkillsProps) {
       </div>
     </div>
   `;
+}
+
+function formatInstallLabel(label: string) {
+  const prefix = "Install ";
+  if (label.startsWith(prefix)) {
+    return `${t("Install")} ${label.slice(prefix.length)}`;
+  }
+  return t(label);
 }

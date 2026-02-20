@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
-import { icons } from "../icons.ts";
 import type { ConfigUiHints } from "../types.ts";
+import { t } from "../i18n/index.js";
+import { icons } from "../icons.ts";
 import { renderNode } from "./config-form.node.ts";
 import { hintForPath, humanize, schemaType, type JsonSchema } from "./config-form.shared.ts";
 
@@ -355,14 +356,14 @@ function schemaMatches(schema: JsonSchema, query: string): boolean {
 export function renderConfigForm(props: ConfigFormProps) {
   if (!props.schema) {
     return html`
-      <div class="muted">Schema unavailable.</div>
+      <div class="muted">${t("Schema unavailable.")}</div>
     `;
   }
   const schema = props.schema;
   const value = props.value ?? {};
   if (schemaType(schema) !== "object" || !schema.properties) {
     return html`
-      <div class="callout danger">Unsupported schema. Use Raw.</div>
+      <div class="callout danger">${t("Unsupported schema. Use Raw.")}</div>
     `;
   }
   const unsupported = new Set(props.unsupportedPaths ?? []);
@@ -413,7 +414,11 @@ export function renderConfigForm(props: ConfigFormProps) {
       <div class="config-empty">
         <div class="config-empty__icon">${icons.search}</div>
         <div class="config-empty__text">
-          ${searchQuery ? `No settings match "${searchQuery}"` : "No settings in this section"}
+          ${
+            searchQuery
+              ? `${t("No settings match")} "${searchQuery}"`
+              : t("No settings in this section")
+          }
         </div>
       </div>
     `;
@@ -426,8 +431,10 @@ export function renderConfigForm(props: ConfigFormProps) {
           ? (() => {
               const { sectionKey, subsectionKey, schema: node } = subsectionContext;
               const hint = hintForPath([sectionKey, subsectionKey], props.uiHints);
-              const label = hint?.label ?? node.title ?? humanize(subsectionKey);
-              const description = hint?.help ?? node.description ?? "";
+              const rawLabel = hint?.label ?? node.title ?? humanize(subsectionKey);
+              const rawDescription = hint?.help ?? node.description ?? "";
+              const label = t(rawLabel);
+              const description = rawDescription ? t(rawDescription) : "";
               const sectionValue = value[sectionKey];
               const scopedValue =
                 sectionValue && typeof sectionValue === "object"
@@ -467,18 +474,16 @@ export function renderConfigForm(props: ConfigFormProps) {
                 label: key.charAt(0).toUpperCase() + key.slice(1),
                 description: node.description ?? "",
               };
+              const label = t(meta.label);
+              const description = meta.description ? t(meta.description) : "";
 
               return html`
               <section class="config-section-card" id="config-section-${key}">
                 <div class="config-section-card__header">
                   <span class="config-section-card__icon">${getSectionIcon(key)}</span>
                   <div class="config-section-card__titles">
-                    <h3 class="config-section-card__title">${meta.label}</h3>
-                    ${
-                      meta.description
-                        ? html`<p class="config-section-card__desc">${meta.description}</p>`
-                        : nothing
-                    }
+                    <h3 class="config-section-card__title">${label}</h3>
+                    ${description ? html`<p class="config-section-card__desc">${description}</p>` : nothing}
                   </div>
                 </div>
                 <div class="config-section-card__content">

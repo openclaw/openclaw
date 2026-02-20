@@ -1,9 +1,11 @@
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { AssistantIdentity } from "../assistant-identity.ts";
+import type { MessageGroup } from "../types/chat-types.ts";
+import { DEFAULT_ASSISTANT_NAME } from "../assistant-identity.ts";
+import { t } from "../i18n/index.js";
 import { toSanitizedMarkdownHtml } from "../markdown.ts";
 import { detectTextDirection } from "../text-direction.ts";
-import type { MessageGroup } from "../types/chat-types.ts";
 import { renderCopyAsMarkdownButton } from "./copy-as-markdown.ts";
 import {
   extractTextCached,
@@ -114,12 +116,13 @@ export function renderMessageGroup(
   },
 ) {
   const normalizedRole = normalizeRoleForGrouping(group.role);
-  const assistantName = opts.assistantName ?? "Assistant";
+  const assistantName = opts.assistantName?.trim() || DEFAULT_ASSISTANT_NAME;
+  const assistantLabel = assistantName === DEFAULT_ASSISTANT_NAME ? t("Assistant") : assistantName;
   const who =
     normalizedRole === "user"
-      ? "You"
+      ? t("You")
       : normalizedRole === "assistant"
-        ? assistantName
+        ? assistantLabel
         : normalizedRole;
   const roleClass =
     normalizedRole === "user" ? "user" : normalizedRole === "assistant" ? "assistant" : "other";
@@ -131,7 +134,7 @@ export function renderMessageGroup(
   return html`
     <div class="chat-group ${roleClass}">
       ${renderAvatar(group.role, {
-        name: assistantName,
+        name: assistantLabel,
         avatar: opts.assistantAvatar ?? null,
       })}
       <div class="chat-group-messages">
@@ -156,13 +159,14 @@ export function renderMessageGroup(
 
 function renderAvatar(role: string, assistant?: Pick<AssistantIdentity, "name" | "avatar">) {
   const normalized = normalizeRoleForGrouping(role);
-  const assistantName = assistant?.name?.trim() || "Assistant";
+  const assistantName = assistant?.name?.trim() || DEFAULT_ASSISTANT_NAME;
+  const assistantLabel = assistantName === DEFAULT_ASSISTANT_NAME ? t("Assistant") : assistantName;
   const assistantAvatar = assistant?.avatar?.trim() || "";
   const initial =
     normalized === "user"
       ? "U"
       : normalized === "assistant"
-        ? assistantName.charAt(0).toUpperCase() || "A"
+        ? assistantLabel.charAt(0).toUpperCase() || "A"
         : normalized === "tool"
           ? "⚙"
           : "?";
@@ -180,7 +184,7 @@ function renderAvatar(role: string, assistant?: Pick<AssistantIdentity, "name" |
       return html`<img
         class="chat-avatar ${className}"
         src="${assistantAvatar}"
-        alt="${assistantName}"
+        alt="${assistantLabel}"
       />`;
     }
     return html`<div class="chat-avatar ${className}">${assistantAvatar}</div>`;
@@ -239,8 +243,9 @@ function renderGroupedMessage(
   const extractedThinking =
     opts.showReasoning && role === "assistant" ? extractThinkingCached(message) : null;
   const markdownBase = extractedText?.trim() ? extractedText : null;
+  const translatedMarkdown = markdownBase ? translateChatText(markdownBase) : null;
   const reasoningMarkdown = extractedThinking ? formatReasoningMarkdown(extractedThinking) : null;
-  const markdown = markdownBase;
+  const markdown = translatedMarkdown;
   const canCopyMarkdown = role === "assistant" && Boolean(markdown?.trim());
 
   const bubbleClasses = [
@@ -279,4 +284,19 @@ function renderGroupedMessage(
       ${toolCards.map((card) => renderToolCardSidebar(card, onOpenSidebar))}
     </div>
   `;
+}
+
+function translateChatText(text: string): string {
+  if (
+    text ===
+    "A new session was started via /new or /reset. Greet the user in your configured persona, if one is provided. Be yourself - use your defined voice, mannerisms, and mood. Keep it to 1-3 sentences and ask what they want to do. If the runtime model differs from default_model in the system prompt, mention the default model. Do not mention internal steps, files, tools, or reasoning."
+  ) {
+    return t(
+      "A new session was started via /new or /reset. Greet the user in your configured persona, if one is provided. Be yourself - use your defined voice, mannerisms, and mood. Keep it to 1-3 sentences and ask what they want to do. If the runtime model differs from default_model in the system prompt, mention the default model. Do not mention internal steps, files, tools, or reasoning.",
+    );
+  }
+  if (text.toLowerCase() === "pairing required") {
+    return t("pairing required");
+  }
+  return text;
 }

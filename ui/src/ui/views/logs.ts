@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import type { LogEntry, LogLevel } from "../types.ts";
+import { t } from "../i18n/index.js";
 
 const LEVELS: LogLevel[] = ["trace", "debug", "info", "warn", "error", "fatal"];
 
@@ -51,18 +52,18 @@ export function renderLogs(props: LogsProps) {
     }
     return matchesFilter(entry, needle);
   });
-  const exportLabel = needle || levelFiltered ? "filtered" : "visible";
+  const exportLabel = needle || levelFiltered ? t("filtered") : t("visible");
 
   return html`
     <section class="card">
       <div class="row" style="justify-content: space-between;">
         <div>
-          <div class="card-title">Logs</div>
-          <div class="card-sub">Gateway file logs (JSONL).</div>
+          <div class="card-title">${t("Logs")}</div>
+          <div class="card-sub">${t("Gateway file logs (JSONL).")}</div>
         </div>
         <div class="row" style="gap: 8px;">
           <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
-            ${props.loading ? "Loading…" : "Refresh"}
+            ${props.loading ? t("Loading…") : t("Refresh")}
           </button>
           <button
             class="btn"
@@ -73,22 +74,22 @@ export function renderLogs(props: LogsProps) {
                 exportLabel,
               )}
           >
-            Export ${exportLabel}
+            ${t("Export")} ${exportLabel}
           </button>
         </div>
       </div>
 
       <div class="filters" style="margin-top: 14px;">
         <label class="field" style="min-width: 220px;">
-          <span>Filter</span>
+          <span>${t("Filter")}</span>
           <input
             .value=${props.filterText}
             @input=${(e: Event) => props.onFilterTextChange((e.target as HTMLInputElement).value)}
-            placeholder="Search logs"
+            placeholder=${t("Search logs")}
           />
         </label>
         <label class="field checkbox">
-          <span>Auto-follow</span>
+          <span>${t("Auto-follow")}</span>
           <input
             type="checkbox"
             .checked=${props.autoFollow}
@@ -116,13 +117,13 @@ export function renderLogs(props: LogsProps) {
 
       ${
         props.file
-          ? html`<div class="muted" style="margin-top: 10px;">File: ${props.file}</div>`
+          ? html`<div class="muted" style="margin-top: 10px;">${t("File:")} ${props.file}</div>`
           : nothing
       }
       ${
         props.truncated
           ? html`
-              <div class="callout" style="margin-top: 10px">Log output truncated; showing latest chunk.</div>
+              <div class="callout" style="margin-top: 10px">${t("Log output truncated; showing latest chunk.")}</div>
             `
           : nothing
       }
@@ -136,7 +137,7 @@ export function renderLogs(props: LogsProps) {
         ${
           filtered.length === 0
             ? html`
-                <div class="muted" style="padding: 12px">No log entries.</div>
+                <div class="muted" style="padding: 12px">${t("No log entries.")}</div>
               `
             : filtered.map(
                 (entry) => html`

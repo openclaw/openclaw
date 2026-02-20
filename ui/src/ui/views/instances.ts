@@ -1,6 +1,8 @@
 import { html, nothing } from "lit";
-import { formatPresenceAge, formatPresenceSummary } from "../presenter.ts";
 import type { PresenceEntry } from "../types.ts";
+import { translateUiError } from "../format.ts";
+import { t } from "../i18n/index.js";
+import { formatPresenceAge, formatPresenceSummary } from "../presenter.ts";
 
 export type InstancesProps = {
   loading: boolean;
@@ -15,17 +17,17 @@ export function renderInstances(props: InstancesProps) {
     <section class="card">
       <div class="row" style="justify-content: space-between;">
         <div>
-          <div class="card-title">Connected Instances</div>
-          <div class="card-sub">Presence beacons from the gateway and clients.</div>
+          <div class="card-title">${t("Connected Instances")}</div>
+          <div class="card-sub">${t("Presence beacons from the gateway and clients.")}</div>
         </div>
         <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
-          ${props.loading ? "Loading…" : "Refresh"}
+          ${props.loading ? t("Loading…") : t("Refresh")}
         </button>
       </div>
       ${
         props.lastError
           ? html`<div class="callout danger" style="margin-top: 12px;">
-            ${props.lastError}
+            ${translateUiError(props.lastError)}
           </div>`
           : nothing
       }
@@ -40,7 +42,7 @@ export function renderInstances(props: InstancesProps) {
         ${
           props.entries.length === 0
             ? html`
-                <div class="muted">No instances reported yet.</div>
+                <div class="muted">${t("No instances reported yet.")}</div>
               `
             : props.entries.map((entry) => renderEntry(entry))
         }
@@ -49,9 +51,25 @@ export function renderInstances(props: InstancesProps) {
   `;
 }
 
+function translatePresenceValue(value?: string | null): string {
+  if (!value) {
+    return "";
+  }
+  if (value === "unknown") {
+    return t("unknown");
+  }
+  if (value === "self") {
+    return t("self");
+  }
+  if (value === "connect") {
+    return t("connect");
+  }
+  return value;
+}
+
 function renderEntry(entry: PresenceEntry) {
   const lastInput = entry.lastInputSeconds != null ? `${entry.lastInputSeconds}s ago` : "n/a";
-  const mode = entry.mode ?? "unknown";
+  const mode = translatePresenceValue(entry.mode ?? "unknown");
   const roles = Array.isArray(entry.roles) ? entry.roles.filter(Boolean) : [];
   const scopes = Array.isArray(entry.scopes) ? entry.scopes.filter(Boolean) : [];
   const scopesLabel =
@@ -81,8 +99,8 @@ function renderEntry(entry: PresenceEntry) {
       </div>
       <div class="list-meta">
         <div>${formatPresenceAge(entry)}</div>
-        <div class="muted">Last input ${lastInput}</div>
-        <div class="muted">Reason ${entry.reason ?? ""}</div>
+        <div class="muted">${t("Last input")} ${lastInput}</div>
+        <div class="muted">${t("Reason")} ${translatePresenceValue(entry.reason ?? "")}</div>
       </div>
     </div>
   `;

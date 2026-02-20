@@ -1,4 +1,5 @@
 import { html, type TemplateResult } from "lit";
+import { t } from "../i18n/index.js";
 import { icons } from "../icons.ts";
 
 const COPIED_FOR_MS = 1500;
@@ -31,7 +32,7 @@ function setButtonLabel(button: HTMLButtonElement, label: string) {
 }
 
 function createCopyButton(options: CopyButtonOptions): TemplateResult {
-  const idleLabel = options.label ?? COPY_LABEL;
+  const idleLabel = t(options.label ?? COPY_LABEL);
   return html`
     <button
       class="chat-copy-btn"
@@ -60,7 +61,7 @@ function createCopyButton(options: CopyButtonOptions): TemplateResult {
 
         if (!copied) {
           btn.dataset.error = "1";
-          setButtonLabel(btn, ERROR_LABEL);
+          setButtonLabel(btn, t(ERROR_LABEL));
 
           window.setTimeout(() => {
             if (!btn.isConnected) {
@@ -73,7 +74,7 @@ function createCopyButton(options: CopyButtonOptions): TemplateResult {
         }
 
         btn.dataset.copied = "1";
-        setButtonLabel(btn, COPIED_LABEL);
+        setButtonLabel(btn, t(COPIED_LABEL));
 
         window.setTimeout(() => {
           if (!btn.isConnected) {

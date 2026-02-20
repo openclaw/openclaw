@@ -1,16 +1,16 @@
 import { html } from "lit";
 import { repeat } from "lit/directives/repeat.js";
-import { t } from "../i18n/index.ts";
-import { refreshChat } from "./app-chat.ts";
-import { syncUrlWithSessionKey } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
-import { OpenClawApp } from "./app.ts";
-import { ChatState, loadChatHistory } from "./controllers/chat.ts";
-import { icons } from "./icons.ts";
-import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
 import type { ThemeTransitionContext } from "./theme-transition.ts";
 import type { ThemeMode } from "./theme.ts";
 import type { SessionsListResult } from "./types.ts";
+import { refreshChat } from "./app-chat.ts";
+import { syncUrlWithSessionKey } from "./app-settings.ts";
+import { OpenClawApp } from "./app.ts";
+import { ChatState, loadChatHistory } from "./controllers/chat.ts";
+import { t, getLocale, setLocale, SUPPORTED_LOCALES, type LocaleCode } from "./i18n/index.js";
+import { icons } from "./icons.ts";
+import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
 
 type SessionDefaultsSnapshot = {
   mainSessionKey?: string;
@@ -187,7 +187,7 @@ export function renderChatControls(state: AppViewState) {
             });
           }
         }}
-        title=${t("chat.refreshTitle")}
+        title=${t("Refresh chat data")}
       >
         ${refreshIcon}
       </button>
@@ -205,7 +205,11 @@ export function renderChatControls(state: AppViewState) {
           });
         }}
         aria-pressed=${showThinking}
-        title=${disableThinkingToggle ? t("chat.onboardingDisabled") : t("chat.thinkingToggle")}
+        title=${
+          disableThinkingToggle
+            ? t("Disabled during onboarding")
+            : t("Toggle assistant thinking/working output")
+        }
       >
         ${icons.brain}
       </button>
@@ -222,7 +226,11 @@ export function renderChatControls(state: AppViewState) {
           });
         }}
         aria-pressed=${focusActive}
-        title=${disableFocusToggle ? t("chat.onboardingDisabled") : t("chat.focusToggle")}
+        title=${
+          disableFocusToggle
+            ? t("Disabled during onboarding")
+            : t("Toggle focus mode (hide sidebar + page header)")
+        }
       >
         ${focusIcon}
       </button>
@@ -283,7 +291,7 @@ function capitalize(s: string): string {
 export function parseSessionKey(key: string): SessionKeyInfo {
   // ── Main session ─────────────────────────────────
   if (key === "main" || key === "agent:main:main") {
-    return { prefix: "", fallbackName: "Main Session" };
+    return { prefix: "", fallbackName: t("Main Session") };
   }
 
   // ── Subagent ─────────────────────────────────────
@@ -293,7 +301,7 @@ export function parseSessionKey(key: string): SessionKeyInfo {
 
   // ── Cron job ─────────────────────────────────────
   if (key.includes(":cron:")) {
-    return { prefix: "Cron:", fallbackName: "Cron Job:" };
+    return { prefix: "Cron:", fallbackName: t("Cron Job:") };
   }
 
   // ── Direct chat  (agent:<x>:<channel>:direct:<id>) ──
@@ -332,19 +340,11 @@ export function resolveSessionDisplayName(
   const displayName = row?.displayName?.trim() || "";
   const { prefix, fallbackName } = parseSessionKey(key);
 
-  const applyTypedPrefix = (name: string): string => {
-    if (!prefix) {
-      return name;
-    }
-    const prefixPattern = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}\\s*`, "i");
-    return prefixPattern.test(name) ? name : `${prefix} ${name}`;
-  };
-
   if (label && label !== key) {
-    return applyTypedPrefix(label);
+    return prefix ? `${prefix} ${label}` : label;
   }
   if (displayName && displayName !== key) {
-    return applyTypedPrefix(displayName);
+    return prefix ? `${prefix} ${displayName}` : displayName;
   }
   return fallbackName;
 }
@@ -410,14 +410,14 @@ export function renderThemeToggle(state: AppViewState) {
 
   return html`
     <div class="theme-toggle" style="--theme-index: ${index};">
-      <div class="theme-toggle__track" role="group" aria-label="Theme">
+      <div class="theme-toggle__track" role="group" aria-label=${t("Theme")}>
         <span class="theme-toggle__indicator"></span>
         <button
           class="theme-toggle__button ${state.theme === "system" ? "active" : ""}"
           @click=${applyTheme("system")}
           aria-pressed=${state.theme === "system"}
-          aria-label="System theme"
-          title="System"
+          aria-label=${t("System theme")}
+          title=${t("System")}
         >
           ${renderMonitorIcon()}
         </button>
@@ -425,8 +425,8 @@ export function renderThemeToggle(state: AppViewState) {
           class="theme-toggle__button ${state.theme === "light" ? "active" : ""}"
           @click=${applyTheme("light")}
           aria-pressed=${state.theme === "light"}
-          aria-label="Light theme"
-          title="Light"
+          aria-label=${t("Light theme")}
+          title=${t("Light")}
         >
           ${renderSunIcon()}
         </button>
@@ -434,13 +434,48 @@ export function renderThemeToggle(state: AppViewState) {
           class="theme-toggle__button ${state.theme === "dark" ? "active" : ""}"
           @click=${applyTheme("dark")}
           aria-pressed=${state.theme === "dark"}
-          aria-label="Dark theme"
-          title="Dark"
+          aria-label=${t("Dark theme")}
+          title=${t("Dark")}
         >
           ${renderMoonIcon()}
         </button>
       </div>
     </div>
+  `;
+}
+
+export function renderLocaleSelector() {
+  const current = getLocale();
+  return html`
+    <select
+      class="locale-selector"
+      aria-label=${t("Select language")}
+      .value=${current}
+      @change=${(e: Event) => {
+        const next = (e.target as HTMLSelectElement).value as LocaleCode;
+        setLocale(next);
+        // Force full re-render by reloading the page
+        window.location.reload();
+      }}
+      style="
+        background: transparent;
+        border: 1px solid var(--border, #444);
+        color: inherit;
+        border-radius: 6px;
+        padding: 2px 6px;
+        font-size: 12px;
+        cursor: pointer;
+        margin-left: 8px;
+      "
+    >
+      ${SUPPORTED_LOCALES.map(
+        (loc) => html`
+          <option value=${loc.code} ?selected=${loc.code === current}>
+            ${loc.label}
+          </option>
+        `,
+      )}
+    </select>
   `;
 }
 

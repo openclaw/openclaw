@@ -1,13 +1,14 @@
 import { html, nothing } from "lit";
-import { formatRelativeTimestamp } from "../format.ts";
 import type { ChannelAccountSnapshot, NostrStatus } from "../types.ts";
+import type { ChannelsProps } from "./channels.types.ts";
+import { formatRelativeTimestamp } from "../format.ts";
+import { t } from "../i18n/index.ts";
 import { renderChannelConfigSection } from "./channels.config.ts";
 import {
   renderNostrProfileForm,
   type NostrProfileFormState,
   type NostrProfileFormCallbacks,
 } from "./channels.nostr-profile-form.ts";
-import type { ChannelsProps } from "./channels.types.ts";
 
 /**
  * Truncate a pubkey for display (shows first and last 8 chars)
@@ -66,19 +67,19 @@ export function renderNostrCard(params: {
         </div>
         <div class="status-list account-card-status">
           <div>
-            <span class="label">Running</span>
-            <span>${account.running ? "Yes" : "No"}</span>
+            <span class="label">${t("Running")}</span>
+            <span>${account.running ? t("Yes") : t("No")}</span>
           </div>
           <div>
-            <span class="label">Configured</span>
-            <span>${account.configured ? "Yes" : "No"}</span>
+            <span class="label">${t("Configured")}</span>
+            <span>${account.configured ? t("Yes") : t("No")}</span>
           </div>
           <div>
-            <span class="label">Public Key</span>
+            <span class="label">${t("Public Key")}</span>
             <span class="monospace" title="${publicKey ?? ""}">${truncatePubkey(publicKey)}</span>
           </div>
           <div>
-            <span class="label">Last inbound</span>
+            <span class="label">${t("Last inbound")}</span>
             <span>${account.lastInboundAt ? formatRelativeTimestamp(account.lastInboundAt) : "n/a"}</span>
           </div>
           ${
@@ -123,7 +124,7 @@ export function renderNostrCard(params: {
     return html`
       <div style="margin-top: 16px; padding: 12px; background: var(--bg-secondary); border-radius: 8px;">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-          <div style="font-weight: 500;">Profile</div>
+          <div style="font-weight: 500;">${t("Profile")}</div>
           ${
             summaryConfigured
               ? html`
@@ -132,7 +133,7 @@ export function renderNostrCard(params: {
                   @click=${onEditProfile}
                   style="font-size: 12px; padding: 4px 8px;"
                 >
-                  Edit Profile
+                  ${t("Edit Profile")}
                 </button>
               `
               : nothing
@@ -148,7 +149,7 @@ export function renderNostrCard(params: {
                       <div style="margin-bottom: 8px;">
                         <img
                           src=${picture}
-                          alt="Profile picture"
+                          alt="${t("Profile picture")}"
                           style="width: 48px; height: 48px; border-radius: 50%; object-fit: cover; border: 2px solid var(--border-color);"
                           @error=${(e: Event) => {
                             (e.target as HTMLImageElement).style.display = "none";
@@ -158,15 +159,15 @@ export function renderNostrCard(params: {
                     `
                     : nothing
                 }
-                ${name ? html`<div><span class="label">Name</span><span>${name}</span></div>` : nothing}
+                ${name ? html`<div><span class="label">${t("Name")}</span><span>${name}</span></div>` : nothing}
                 ${
                   displayName
-                    ? html`<div><span class="label">Display Name</span><span>${displayName}</span></div>`
+                    ? html`<div><span class="label">${t("Display Name")}</span><span>${displayName}</span></div>`
                     : nothing
                 }
                 ${
                   about
-                    ? html`<div><span class="label">About</span><span style="max-width: 300px; overflow: hidden; text-overflow: ellipsis;">${about}</span></div>`
+                    ? html`<div><span class="label">${t("About")}</span><span style="max-width: 300px; overflow: hidden; text-overflow: ellipsis;">${about}</span></div>`
                     : nothing
                 }
                 ${nip05 ? html`<div><span class="label">NIP-05</span><span>${nip05}</span></div>` : nothing}
@@ -174,7 +175,7 @@ export function renderNostrCard(params: {
             `
             : html`
                 <div style="color: var(--text-muted); font-size: 13px">
-                  No profile set. Click "Edit Profile" to add your name, bio, and avatar.
+                  ${t('No profile set. Click "Edit Profile" to add your name, bio, and avatar.')}
                 </div>
               `
         }
@@ -185,7 +186,7 @@ export function renderNostrCard(params: {
   return html`
     <div class="card">
       <div class="card-title">Nostr</div>
-      <div class="card-sub">Decentralized DMs via Nostr relays (NIP-04).</div>
+      <div class="card-sub">${t("Decentralized DMs via Nostr relays (NIP-04).")}</div>
       ${accountCountLabel}
 
       ${
@@ -198,21 +199,21 @@ export function renderNostrCard(params: {
           : html`
             <div class="status-list" style="margin-top: 16px;">
               <div>
-                <span class="label">Configured</span>
-                <span>${summaryConfigured ? "Yes" : "No"}</span>
+                <span class="label">${t("Configured")}</span>
+                <span>${summaryConfigured ? t("Yes") : t("No")}</span>
               </div>
               <div>
-                <span class="label">Running</span>
-                <span>${summaryRunning ? "Yes" : "No"}</span>
+                <span class="label">${t("Running")}</span>
+                <span>${summaryRunning ? t("Yes") : t("No")}</span>
               </div>
               <div>
-                <span class="label">Public Key</span>
+                <span class="label">${t("Public Key")}</span>
                 <span class="monospace" title="${summaryPublicKey ?? ""}"
                   >${truncatePubkey(summaryPublicKey)}</span
                 >
               </div>
               <div>
-                <span class="label">Last start</span>
+                <span class="label">${t("Last start")}</span>
                 <span>${summaryLastStartAt ? formatRelativeTimestamp(summaryLastStartAt) : "n/a"}</span>
               </div>
             </div>
@@ -230,7 +231,7 @@ export function renderNostrCard(params: {
       ${renderChannelConfigSection({ channelId: "nostr", props })}
 
       <div class="row" style="margin-top: 12px;">
-        <button class="btn" @click=${() => props.onRefresh(false)}>Refresh</button>
+        <button class="btn" @click=${() => props.onRefresh(false)}>${t("Refresh")}</button>
       </div>
     </div>
   `;

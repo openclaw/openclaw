@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import type { ChannelAccountSnapshot } from "../types.ts";
 import type { ChannelKey, ChannelsProps } from "./channels.types.ts";
+import { t } from "../i18n/index.js";
 
 export function channelEnabled(key: ChannelKey, props: ChannelsProps) {
   const snapshot = props.snapshot;
@@ -34,5 +35,5 @@ export function renderChannelAccountCount(
   if (count < 2) {
     return nothing;
   }
-  return html`<div class="account-count">Accounts (${count})</div>`;
+  return html`<div class="account-count">${t("Accounts")} (${count})</div>`;
 }

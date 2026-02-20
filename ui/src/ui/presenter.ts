@@ -1,10 +1,12 @@
-import { formatRelativeTimestamp, formatDurationHuman, formatMs } from "./format.ts";
 import type { CronJob, GatewaySessionRow, PresenceEntry } from "./types.ts";
+import { formatRelativeTimestamp, formatDurationHuman, formatMs } from "./format.ts";
+import { t } from "./i18n/index.js";
 
 export function formatPresenceSummary(entry: PresenceEntry): string {
-  const host = entry.host ?? "unknown";
+  const host = entry.host ?? t("unknown");
   const ip = entry.ip ? `(${entry.ip})` : "";
-  const mode = entry.mode ?? "";
+  const modeRaw = entry.mode ?? "";
+  const mode = modeRaw === "unknown" ? t("unknown") : modeRaw;
   const version = entry.version ?? "";
   return `${host} ${ip} ${mode} ${version}`.trim();
 }

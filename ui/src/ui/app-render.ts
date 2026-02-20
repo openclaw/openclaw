@@ -1,10 +1,14 @@
 import { html, nothing } from "lit";
+import type { AppViewState } from "./app-view-state.ts";
 import { parseAgentSessionKey } from "../../../src/routing/session-key.js";
-import { t } from "../i18n/index.ts";
 import { refreshChatAvatar } from "./app-chat.ts";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
-import { renderChatControls, renderTab, renderThemeToggle } from "./app-render.helpers.ts";
-import type { AppViewState } from "./app-view-state.ts";
+import {
+  renderChatControls,
+  renderTab,
+  renderThemeToggle,
+  renderLocaleSelector,
+} from "./app-render.helpers.ts";
 import { loadAgentFileContent, loadAgentFiles, saveAgentFile } from "./controllers/agent-files.ts";
 import { loadAgentIdentities, loadAgentIdentity } from "./controllers/agent-identity.ts";
 import { loadAgentSkills } from "./controllers/agent-skills.ts";
@@ -44,7 +48,7 @@ import {
 import { loadLogs } from "./controllers/logs.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
-import { deleteSessionAndRefresh, loadSessions, patchSession } from "./controllers/sessions.ts";
+import { deleteSession, loadSessions, patchSession } from "./controllers/sessions.ts";
 import {
   installSkill,
   loadSkills,
@@ -52,8 +56,15 @@ import {
   updateSkillEdit,
   updateSkillEnabled,
 } from "./controllers/skills.ts";
+import { t } from "./i18n/index.js";
 import { icons } from "./icons.ts";
-import { normalizeBasePath, TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
+import {
+  normalizeBasePath,
+  TAB_GROUPS,
+  subtitleForTab,
+  titleForTab,
+  groupLabel,
+} from "./navigation.ts";
 import { renderAgents } from "./views/agents.ts";
 import { renderChannels } from "./views/channels.ts";
 import { renderChat } from "./views/chat.ts";
@@ -92,7 +103,7 @@ export function renderApp(state: AppViewState) {
   const presenceCount = state.presenceEntries.length;
   const sessionsCount = state.sessionsResult?.count ?? null;
   const cronNext = state.cronStatus?.nextWakeAtMs ?? null;
-  const chatDisabledReason = state.connected ? null : t("chat.disconnected");
+  const chatDisabledReason = state.connected ? null : "Disconnected from gateway.";
   const isChat = state.tab === "chat";
   const chatFocus = isChat && (state.settings.chatFocusMode || state.onboarding);
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
@@ -118,8 +129,8 @@ export function renderApp(state: AppViewState) {
                 ...state.settings,
                 navCollapsed: !state.settings.navCollapsed,
               })}
-            title="${state.settings.navCollapsed ? t("nav.expand") : t("nav.collapse")}"
-            aria-label="${state.settings.navCollapsed ? t("nav.expand") : t("nav.collapse")}"
+            title="${state.settings.navCollapsed ? t("Expand sidebar") : t("Collapse sidebar")}"
+            aria-label="${state.settings.navCollapsed ? t("Expand sidebar") : t("Collapse sidebar")}"
           >
             <span class="nav-collapse-toggle__icon">${icons.menu}</span>
           </button>
@@ -129,17 +140,18 @@ export function renderApp(state: AppViewState) {
             </div>
             <div class="brand-text">
               <div class="brand-title">OPENCLAW</div>
-              <div class="brand-sub">Gateway Dashboard</div>
+              <div class="brand-sub">${t("Gateway Dashboard")}</div>
             </div>
           </div>
         </div>
         <div class="topbar-status">
           <div class="pill">
             <span class="statusDot ${state.connected ? "ok" : ""}"></span>
-            <span>${t("common.health")}</span>
-            <span class="mono">${state.connected ? t("common.ok") : t("common.offline")}</span>
+            <span>${t("Health")}</span>
+            <span class="mono">${state.connected ? "OK" : t("Offline")}</span>
           </div>
           ${renderThemeToggle(state)}
+          ${renderLocaleSelector()}
         </div>
       </header>
       <aside class="nav ${state.settings.navCollapsed ? "nav--collapsed" : ""}">
@@ -160,7 +172,7 @@ export function renderApp(state: AppViewState) {
                 }}
                 aria-expanded=${!isGroupCollapsed}
               >
-                <span class="nav-label__text">${t(`nav.${group.label}`)}</span>
+                <span class="nav-label__text">${groupLabel(group)}</span>
                 <span class="nav-label__chevron">${isGroupCollapsed ? "+" : "−"}</span>
               </button>
               <div class="nav-group__items">
@@ -171,7 +183,7 @@ export function renderApp(state: AppViewState) {
         })}
         <div class="nav-group nav-group--links">
           <div class="nav-label nav-label--static">
-            <span class="nav-label__text">${t("common.resources")}</span>
+            <span class="nav-label__text">${t("Resources")}</span>
           </div>
           <div class="nav-group__items">
             <a
@@ -179,28 +191,15 @@ export function renderApp(state: AppViewState) {
               href="https://docs.openclaw.ai"
               target="_blank"
               rel="noreferrer"
-              title="${t("common.docs")} (opens in new tab)"
+              title=${t("Docs (opens in new tab)")}
             >
               <span class="nav-item__icon" aria-hidden="true">${icons.book}</span>
-              <span class="nav-item__text">${t("common.docs")}</span>
+              <span class="nav-item__text">${t("Docs")}</span>
             </a>
           </div>
         </div>
       </aside>
       <main class="content ${isChat ? "content--chat" : ""}">
-        ${
-          state.updateAvailable
-            ? html`<div class="update-banner callout danger" role="alert">
-              <strong>Update available:</strong> v${state.updateAvailable.latestVersion}
-              (running v${state.updateAvailable.currentVersion}).
-              <button
-                class="btn btn--sm update-banner__btn"
-                ?disabled=${state.updateRunning || !state.connected}
-                @click=${() => runUpdate(state)}
-              >${state.updateRunning ? "Updating…" : "Update now"}</button>
-            </div>`
-            : nothing
-        }
         <section class="content-header">
           <div>
             ${state.tab === "usage" ? nothing : html`<div class="page-title">${titleForTab(state.tab)}</div>`}
@@ -314,7 +313,7 @@ export function renderApp(state: AppViewState) {
                 },
                 onRefresh: () => loadSessions(state),
                 onPatch: (key, patch) => patchSession(state, key, patch),
-                onDelete: (key) => deleteSessionAndRefresh(state, key),
+                onDelete: (key) => deleteSession(state, key),
               })
             : nothing
         }

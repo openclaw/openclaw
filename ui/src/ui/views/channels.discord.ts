@@ -1,8 +1,9 @@
 import { html, nothing } from "lit";
-import { formatRelativeTimestamp } from "../format.ts";
 import type { DiscordStatus } from "../types.ts";
-import { renderChannelConfigSection } from "./channels.config.ts";
 import type { ChannelsProps } from "./channels.types.ts";
+import { formatRelativeTimestamp, translateUiError } from "../format.ts";
+import { t } from "../i18n/index.js";
+import { renderChannelConfigSection } from "./channels.config.ts";
 
 export function renderDiscordCard(params: {
   props: ChannelsProps;
@@ -14,24 +15,24 @@ export function renderDiscordCard(params: {
   return html`
     <div class="card">
       <div class="card-title">Discord</div>
-      <div class="card-sub">Bot status and channel configuration.</div>
+      <div class="card-sub">${t("Bot status and channel configuration.")}</div>
       ${accountCountLabel}
 
       <div class="status-list" style="margin-top: 16px;">
         <div>
-          <span class="label">Configured</span>
-          <span>${discord?.configured ? "Yes" : "No"}</span>
+          <span class="label">${t("Configured")}</span>
+          <span>${discord?.configured ? t("Yes") : t("No")}</span>
         </div>
         <div>
-          <span class="label">Running</span>
-          <span>${discord?.running ? "Yes" : "No"}</span>
+          <span class="label">${t("Running")}</span>
+          <span>${discord?.running ? t("Yes") : t("No")}</span>
         </div>
         <div>
-          <span class="label">Last start</span>
+          <span class="label">${t("Last start")}</span>
           <span>${discord?.lastStartAt ? formatRelativeTimestamp(discord.lastStartAt) : "n/a"}</span>
         </div>
         <div>
-          <span class="label">Last probe</span>
+          <span class="label">${t("Last probe")}</span>
           <span>${discord?.lastProbeAt ? formatRelativeTimestamp(discord.lastProbeAt) : "n/a"}</span>
         </div>
       </div>
@@ -39,7 +40,7 @@ export function renderDiscordCard(params: {
       ${
         discord?.lastError
           ? html`<div class="callout danger" style="margin-top: 12px;">
-            ${discord.lastError}
+            ${translateUiError(discord.lastError)}
           </div>`
           : nothing
       }
@@ -47,7 +48,7 @@ export function renderDiscordCard(params: {
       ${
         discord?.probe
           ? html`<div class="callout" style="margin-top: 12px;">
-            Probe ${discord.probe.ok ? "ok" : "failed"} ·
+            ${t("Probe")} ${discord.probe.ok ? t("ok") : t("failed")} ·
             ${discord.probe.status ?? ""} ${discord.probe.error ?? ""}
           </div>`
           : nothing
@@ -57,7 +58,7 @@ export function renderDiscordCard(params: {
 
       <div class="row" style="margin-top: 12px;">
         <button class="btn" @click=${() => props.onRefresh(true)}>
-          Probe
+          ${t("Probe")}
         </button>
       </div>
     </div>
