@@ -67,21 +67,41 @@ const MOCK_ENV_FILES: Record<string, string> = {
   "/path/to/override.env": "TEST_VAR=overridden_value\nEXTRA_VAR=extra_value\n",
 };
 
-// Mock inspectPathPermissions from the shared security module.
-vi.mock("../../security/audit-fs.js", () => ({
-  inspectPathPermissions: vi.fn(async () => ({
+// Mock the shared security module (inspectPathPermissions + safeStat + bit helpers).
+const mockInspectPathPermissions = vi.hoisted(() =>
+  vi.fn(async () => ({
     ok: true,
     isSymlink: false,
     isDir: false,
-    mode: 0o100644,
-    bits: 0o644,
+    mode: 0o100600,
+    bits: 0o600,
     source: "posix" as const,
     worldWritable: false,
     groupWritable: false,
-    worldReadable: true,
-    groupReadable: true,
+    worldReadable: false,
+    groupReadable: false,
   })),
-}));
+);
+
+const mockSafeStat = vi.hoisted(() =>
+  vi.fn(async () => ({
+    ok: true,
+    isSymlink: false,
+    isDir: true,
+    mode: 0o040755,
+    uid: process.getuid?.() ?? 1000,
+    gid: process.getgid?.() ?? 1000,
+  })),
+);
+
+vi.mock("../../security/audit-fs.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../security/audit-fs.js")>();
+  return {
+    ...actual,
+    inspectPathPermissions: mockInspectPathPermissions,
+    safeStat: mockSafeStat,
+  };
+});
 
 vi.mock("node:fs/promises", async (_importOriginal) => {
   return {
@@ -235,5 +255,139 @@ describe("ensureSandboxContainer with envFile", () => {
     expect(cfg.docker.env).toHaveProperty("TEST_VAR", "explicit_value");
     // Secret from envFile is still in merged env for tool call injection.
     expect(cfg.docker.env).toHaveProperty("ANTHROPIC_API_KEY", "secret_value");
+  });
+
+  it("rejects world-readable envFile", async () => {
+    mockInspectPathPermissions.mockResolvedValueOnce({
+      ok: true,
+      isSymlink: false,
+      isDir: false,
+      mode: 0o100604,
+      bits: 0o604,
+      source: "posix" as const,
+      worldWritable: false,
+      groupWritable: false,
+      worldReadable: true,
+      groupReadable: false,
+    });
+
+    const cfg: SandboxConfig = {
+      mode: "all",
+      scope: "shared",
+      workspaceAccess: "rw",
+      workspaceRoot: "/tmp/sandboxes",
+      docker: {
+        image: "test-image",
+        containerPrefix: "prefix-",
+        workdir: "/app",
+        readOnlyRoot: false,
+        tmpfs: [],
+        network: "none",
+        capDrop: [],
+        env: {},
+        envFile: "/path/to/test.env",
+      },
+      browser: { enabled: false } as unknown as SandboxBrowserConfig,
+      tools: {} as unknown as SandboxToolPolicy,
+      prune: {} as unknown as SandboxPruneConfig,
+    };
+
+    await expect(
+      ensureSandboxContainer({
+        sessionKey: "session-world-readable",
+        workspaceDir: "/tmp/ws",
+        agentWorkspaceDir: "/tmp/aws",
+        cfg,
+      }),
+    ).rejects.toThrow("world-readable");
+  });
+
+  it("rejects group-readable envFile", async () => {
+    mockInspectPathPermissions.mockResolvedValueOnce({
+      ok: true,
+      isSymlink: false,
+      isDir: false,
+      mode: 0o100640,
+      bits: 0o640,
+      source: "posix" as const,
+      worldWritable: false,
+      groupWritable: false,
+      worldReadable: false,
+      groupReadable: true,
+    });
+
+    const cfg: SandboxConfig = {
+      mode: "all",
+      scope: "shared",
+      workspaceAccess: "rw",
+      workspaceRoot: "/tmp/sandboxes",
+      docker: {
+        image: "test-image",
+        containerPrefix: "prefix-",
+        workdir: "/app",
+        readOnlyRoot: false,
+        tmpfs: [],
+        network: "none",
+        capDrop: [],
+        env: {},
+        envFile: "/path/to/test.env",
+      },
+      browser: { enabled: false } as unknown as SandboxBrowserConfig,
+      tools: {} as unknown as SandboxToolPolicy,
+      prune: {} as unknown as SandboxPruneConfig,
+    };
+
+    await expect(
+      ensureSandboxContainer({
+        sessionKey: "session-group-readable",
+        workspaceDir: "/tmp/ws",
+        agentWorkspaceDir: "/tmp/aws",
+        cfg,
+      }),
+    ).rejects.toThrow("group-readable");
+  });
+
+  it("rejects envFile when parent directory is writable by another non-root user", async () => {
+    // File itself is fine (0o600).
+    // Parent directory is owned by a different non-root user and world-writable.
+    const otherUid = (process.getuid?.() ?? 1000) + 1;
+    mockSafeStat.mockResolvedValueOnce({
+      ok: true,
+      isSymlink: false,
+      isDir: true,
+      mode: 0o040757,
+      uid: otherUid,
+      gid: 0,
+    });
+
+    const cfg: SandboxConfig = {
+      mode: "all",
+      scope: "shared",
+      workspaceAccess: "rw",
+      workspaceRoot: "/tmp/sandboxes",
+      docker: {
+        image: "test-image",
+        containerPrefix: "prefix-",
+        workdir: "/app",
+        readOnlyRoot: false,
+        tmpfs: [],
+        network: "none",
+        capDrop: [],
+        env: {},
+        envFile: "/path/to/test.env",
+      },
+      browser: { enabled: false } as unknown as SandboxBrowserConfig,
+      tools: {} as unknown as SandboxToolPolicy,
+      prune: {} as unknown as SandboxPruneConfig,
+    };
+
+    await expect(
+      ensureSandboxContainer({
+        sessionKey: "session-unsafe-parent",
+        workspaceDir: "/tmp/ws",
+        agentWorkspaceDir: "/tmp/aws",
+        cfg,
+      }),
+    ).rejects.toThrow("writable by");
   });
 });

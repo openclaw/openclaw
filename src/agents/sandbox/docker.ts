@@ -1,7 +1,9 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
+import path from "node:path";
 import dotenv from "dotenv";
-import { inspectPathPermissions } from "../../security/audit-fs.js";
+import { inspectPathPermissions, safeStat } from "../../security/audit-fs.js";
+import { isGroupWritable, isWorldWritable, modeBits } from "../../security/audit-fs.js";
 import { sanitizeEnvVars } from "./sanitize-env-vars.js";
 
 type ExecDockerRawOptions = {
@@ -389,10 +391,62 @@ function formatSandboxRecreateHint(params: { scope: SandboxConfig["scope"]; sess
 }
 
 /**
+ * Walks from the file's parent directory up to the root, checking that no
+ * ancestor directory is writable by non-root users other than the process owner.
+ * This prevents directory-swap attacks where an attacker replaces an
+ * intermediate directory to point the file path at a malicious file.
+ *
+ * Root-owned directories are considered safe (root uid 0).
+ */
+async function checkParentDirSafety(filePath: string): Promise<void> {
+  const processUid = process.getuid?.() ?? 0;
+  let dir = path.dirname(filePath);
+  const seen = new Set<string>();
+  while (dir !== path.dirname(dir)) {
+    if (seen.has(dir)) {
+      break;
+    }
+    seen.add(dir);
+    const st = await safeStat(dir);
+    if (!st.ok) {
+      throw new Error(
+        `Sandbox security: cannot stat parent directory "${dir}" of envFile: ${st.error ?? "unknown error"}`,
+      );
+    }
+    if (st.isSymlink) {
+      throw new Error(
+        `Sandbox security: parent directory "${dir}" of envFile is a symlink, which is not permitted.`,
+      );
+    }
+    // Root-owned directories (uid 0) are inherently safe.
+    if (st.uid === 0) {
+      dir = path.dirname(dir);
+      continue;
+    }
+    // Directories owned by the current process user are safe.
+    if (st.uid === processUid) {
+      dir = path.dirname(dir);
+      continue;
+    }
+    // Directory owned by another non-root user: check if world/group writable.
+    const bits = modeBits(st.mode);
+    if (isWorldWritable(bits) || isGroupWritable(bits)) {
+      throw new Error(
+        `Sandbox security: parent directory "${dir}" of envFile is writable by ` +
+          "other users. Tighten permissions (e.g. chmod 755) or use a path owned by the current user.",
+      );
+    }
+    dir = path.dirname(dir);
+  }
+}
+
+/**
  * Reads a single env file with security validation via the shared
  * `inspectPathPermissions` utility (supports POSIX + Windows ACLs):
  * - Rejects symlinks to avoid late-stage path substitution attacks.
- * - Rejects world-writable files which could be silently tampered with.
+ * - Rejects group-readable and world-readable files to prevent secret leakage.
+ * - Rejects world-writable and group-writable files to prevent tampering.
+ * - Rejects paths whose parent directories are writable by non-owner/non-root users.
  * Returns the parsed key=value pairs from the file.
  */
 async function readEnvFileSafe(rawPath: string): Promise<Record<string, string>> {
@@ -417,6 +471,26 @@ async function readEnvFileSafe(rawPath: string): Promise<Record<string, string>>
         "Remove world-write permission before use (e.g. chmod o-w).",
     );
   }
+  if (perms.groupWritable) {
+    throw new Error(
+      `Sandbox security: envFile "${filePath}" is group-writable. ` +
+        "Remove group-write permission before use (e.g. chmod g-w).",
+    );
+  }
+  if (perms.worldReadable) {
+    throw new Error(
+      `Sandbox security: envFile "${filePath}" is world-readable. ` +
+        "Tighten permissions to owner-only (e.g. chmod 600).",
+    );
+  }
+  if (perms.groupReadable) {
+    throw new Error(
+      `Sandbox security: envFile "${filePath}" is group-readable. ` +
+        "Tighten permissions to owner-only (e.g. chmod 600).",
+    );
+  }
+  // Check parent directories for write access by other users.
+  await checkParentDirSafety(filePath);
   try {
     const content = await fs.readFile(filePath, "utf-8");
     return dotenv.parse(content);
