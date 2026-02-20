@@ -49,7 +49,9 @@ export function buildInboundMetaSystemPrompt(ctx: TemplateContext): string {
       has_reply_context: Boolean(ctx.ReplyToBody),
       has_forwarded_context: Boolean(ctx.ForwardedFrom),
       has_thread_starter: Boolean(safeTrim(ctx.ThreadStarterBody)),
-      history_count: Array.isArray(ctx.InboundHistory) ? ctx.InboundHistory.length : 0,
+      history_count: Array.isArray(ctx.InboundHistory)
+        ? ctx.InboundHistory.length
+        : 0,
     },
   };
 
@@ -75,12 +77,17 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
   const messageId = safeTrim(ctx.MessageSid);
   const messageIdFull = safeTrim(ctx.MessageSidFull);
   const conversationInfo = {
-    message_id: messageId,
-    message_id_full: messageIdFull && messageIdFull !== messageId ? messageIdFull : undefined,
+    message_id: isDirect ? undefined : messageId,
+    message_id_full:
+      messageIdFull && messageIdFull !== messageId ? messageIdFull : undefined,
     reply_to_id: safeTrim(ctx.ReplyToId),
     sender_id: safeTrim(ctx.SenderId),
     conversation_label: isDirect ? undefined : safeTrim(ctx.ConversationLabel),
-    sender: safeTrim(ctx.SenderE164) ?? safeTrim(ctx.SenderId) ?? safeTrim(ctx.SenderUsername),
+    sender: isDirect
+      ? undefined
+      : (safeTrim(ctx.SenderE164) ??
+        safeTrim(ctx.SenderId) ??
+        safeTrim(ctx.SenderUsername)),
     group_subject: safeTrim(ctx.GroupSubject),
     group_channel: safeTrim(ctx.GroupChannel),
     group_space: safeTrim(ctx.GroupSpace),
@@ -115,9 +122,12 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
       };
   if (senderInfo?.label) {
     blocks.push(
-      ["Sender (untrusted metadata):", "```json", JSON.stringify(senderInfo, null, 2), "```"].join(
-        "\n",
-      ),
+      [
+        "Sender (untrusted metadata):",
+        "```json",
+        JSON.stringify(senderInfo, null, 2),
+        "```",
+      ].join("\n"),
     );
   }
 
@@ -164,7 +174,10 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
             title: safeTrim(ctx.ForwardedFromTitle),
             signature: safeTrim(ctx.ForwardedFromSignature),
             chat_type: safeTrim(ctx.ForwardedFromChatType),
-            date_ms: typeof ctx.ForwardedDate === "number" ? ctx.ForwardedDate : undefined,
+            date_ms:
+              typeof ctx.ForwardedDate === "number"
+                ? ctx.ForwardedDate
+                : undefined,
           },
           null,
           2,
