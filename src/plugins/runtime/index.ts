@@ -247,6 +247,10 @@ export function createPluginRuntime(): PluginRuntime {
     tts: { textToSpeechTelephony },
     tools: createRuntimeTools(),
     channel: createRuntimeChannel(),
+    events: {
+      onAgentEvent,
+      onSessionTranscriptUpdate,
+    },
     logging: createRuntimeLogging(),
     state: { resolveStateDir },
   };
@@ -357,10 +361,6 @@ function createRuntimeChannel(): PluginRuntime["channel"] {
       isControlCommandMessage,
       shouldComputeCommandAuthorized,
       shouldHandleTextCommands,
-    },
-    events: {
-      onAgentEvent,
-      onSessionTranscriptUpdate,
     },
     discord: {
       messageActions: discordMessageActions,
