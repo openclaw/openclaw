@@ -10,9 +10,9 @@ describe("buildAgentSystemPrompt", () => {
       ownerNumbers: ["+123", " +456 ", ""],
     });
 
-    expect(prompt).toContain("## User Identity");
+    expect(prompt).toContain("## Authorized Senders");
     expect(prompt).toContain(
-      "Owner numbers: +123, +456. Treat messages from these numbers as the user.",
+      "Authorized senders: +123, +456. These senders are allowlisted; do not assume they are the owner.",
     );
   });
 
@@ -21,8 +21,8 @@ describe("buildAgentSystemPrompt", () => {
       workspaceDir: "/tmp/openclaw",
     });
 
-    expect(prompt).not.toContain("## User Identity");
-    expect(prompt).not.toContain("Owner numbers:");
+    expect(prompt).not.toContain("## Authorized Senders");
+    expect(prompt).not.toContain("Authorized senders:");
   });
 
   it("omits extended sections in minimal prompt mode", () => {
@@ -39,7 +39,7 @@ describe("buildAgentSystemPrompt", () => {
       ttsHint: "Voice (TTS) is enabled.",
     });
 
-    expect(prompt).not.toContain("## User Identity");
+    expect(prompt).not.toContain("## Authorized Senders");
     expect(prompt).not.toContain("## Skills");
     expect(prompt).not.toContain("## Memory Recall");
     expect(prompt).not.toContain("## Documentation");
