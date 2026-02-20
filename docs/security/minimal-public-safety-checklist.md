@@ -4,6 +4,7 @@ This page summarizes a **minimal, opinion-free baseline** that can be shared pub
 It is intentionally generic so it can be adapted by other users without exposing internal deployment details.
 
 ## Goal
+
 Keep tool-enabled assistants from taking unsafe actions when handling untrusted content.
 
 ## Minimal hardening rules
