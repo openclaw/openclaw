@@ -274,7 +274,8 @@ describe("Security: Channel Authorization Logic", () => {
     // The logic in resolveChannelAuthorization is:
     // const mode = rule?.mode ?? "restricted";
     // We verify this by checking undefined rule gives restricted
-    const rule: { mode?: "restricted" | "open" } | undefined = undefined;
+    type ModeRule = { mode?: "restricted" | "open" };
+    const rule = undefined as ModeRule | undefined;
     const mode = rule?.mode ?? "restricted";
     expect(mode).toBe("restricted");
   });
@@ -292,18 +293,19 @@ describe("Security: Channel Authorization Logic", () => {
 
   it("open mode should not check allowedShips", () => {
     // In open mode, any ship can send regardless of allowedShips
-    const mode = "open";
+    const mode: "open" | "restricted" = "open";
     // The check in monitor/index.ts is:
     // if (mode === "restricted") { /* check ships */ }
     // So open mode skips the ship check entirely
-    expect(mode === "restricted").toBe(false);
+    expect(mode).not.toBe("restricted");
   });
 
   it("settings should override file config for channel rules", () => {
     // Documented behavior: settingsRules[nest] ?? fileRules[nest]
     // This means settings take precedence
-    const fileRules = { "chat/~zod/test": { mode: "restricted" as const } };
-    const settingsRules = { "chat/~zod/test": { mode: "open" as const } };
+    type ChannelRule = { mode: "restricted" | "open" };
+    const fileRules: Record<string, ChannelRule> = { "chat/~zod/test": { mode: "restricted" } };
+    const settingsRules: Record<string, ChannelRule> = { "chat/~zod/test": { mode: "open" } };
     const nest = "chat/~zod/test";
 
     const effectiveRule = settingsRules[nest] ?? fileRules[nest];
