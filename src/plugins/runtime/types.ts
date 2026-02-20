@@ -169,6 +169,51 @@ type BuildTemplateMessageFromPayload =
   typeof import("../../line/template-messages.js").buildTemplateMessageFromPayload;
 type MonitorLineProvider = typeof import("../../line/monitor.js").monitorLineProvider;
 
+// ── Subagent runtime types ──────────────────────────────────────────
+
+export type SubagentRunParams = {
+  sessionKey: string;
+  message: string;
+  extraSystemPrompt?: string;
+  lane?: string;
+  deliver?: boolean;
+  idempotencyKey?: string;
+};
+
+export type SubagentRunResult = {
+  runId: string;
+};
+
+export type SubagentWaitParams = {
+  runId: string;
+  timeoutMs?: number;
+};
+
+export type SubagentWaitResult = {
+  status: "ok" | "error" | "timeout";
+  error?: string;
+};
+
+export type SubagentGetSessionMessagesParams = {
+  sessionKey: string;
+  limit?: number;
+};
+
+export type SubagentGetSessionMessagesResult = {
+  messages: unknown[];
+};
+
+/** @deprecated Use SubagentGetSessionMessagesParams. */
+export type SubagentGetSessionParams = SubagentGetSessionMessagesParams;
+
+/** @deprecated Use SubagentGetSessionMessagesResult. */
+export type SubagentGetSessionResult = SubagentGetSessionMessagesResult;
+
+export type SubagentDeleteSessionParams = {
+  sessionKey: string;
+  deleteTranscript?: boolean;
+};
+
 export type RuntimeLogger = {
   debug?: (message: string, meta?: Record<string, unknown>) => void;
   info: (message: string, meta?: Record<string, unknown>) => void;
@@ -181,6 +226,16 @@ export type PluginRuntime = {
   config: {
     loadConfig: LoadConfig;
     writeConfigFile: WriteConfigFile;
+  };
+  subagent: {
+    run: (params: SubagentRunParams) => Promise<SubagentRunResult>;
+    waitForRun: (params: SubagentWaitParams) => Promise<SubagentWaitResult>;
+    getSessionMessages: (
+      params: SubagentGetSessionMessagesParams,
+    ) => Promise<SubagentGetSessionMessagesResult>;
+    /** @deprecated Use getSessionMessages. */
+    getSession: (params: SubagentGetSessionParams) => Promise<SubagentGetSessionResult>;
+    deleteSession: (params: SubagentDeleteSessionParams) => Promise<void>;
   };
   system: {
     enqueueSystemEvent: EnqueueSystemEvent;
