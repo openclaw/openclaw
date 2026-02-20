@@ -1282,6 +1282,8 @@ describe("sendStickerTelegram", () => {
 describe("editMessageTelegram", () => {
   beforeEach(() => {
     botApi.editMessageText.mockReset();
+    botApi.editMessageCaption.mockReset();
+    botApi.editMessageReplyMarkup.mockReset();
     botCtorSpy.mockReset();
   });
 
@@ -1382,6 +1384,110 @@ describe("editMessageTelegram", () => {
         link_preview_options: { is_disabled: true },
       }),
     );
+  });
+
+  it("auto-detects captionable message: retries with editMessageCaption when editMessageText returns 'no text'", async () => {
+    botApi.editMessageText.mockRejectedValueOnce(
+      new Error("400: Bad Request: there is no text in the message to edit"),
+    );
+    botApi.editMessageCaption.mockResolvedValue({ message_id: 1, chat: { id: "123" } });
+
+    await editMessageTelegram("123", 1, "new caption", {
+      token: "tok",
+      cfg: {},
+    });
+
+    expect(botApi.editMessageText).toHaveBeenCalledTimes(1);
+    expect(botApi.editMessageCaption).toHaveBeenCalledTimes(1);
+    const extra = (botApi.editMessageCaption.mock.calls[0] ?? [])[2] as Record<string, unknown>;
+    expect(extra).toEqual(
+      expect.objectContaining({ caption: expect.any(String), parse_mode: "HTML" }),
+    );
+  });
+
+  it("auto-detect passes reply_markup to editMessageCaption when buttons are provided", async () => {
+    botApi.editMessageText.mockRejectedValueOnce(
+      new Error("400: Bad Request: there is no text in the message to edit"),
+    );
+    botApi.editMessageCaption.mockResolvedValue({ message_id: 1, chat: { id: "123" } });
+
+    await editMessageTelegram("123", 1, "new caption", {
+      token: "tok",
+      cfg: {},
+      buttons: [[{ text: "Click", callback_data: "cb" }]],
+    });
+
+    expect(botApi.editMessageCaption).toHaveBeenCalledTimes(1);
+    const extra = (botApi.editMessageCaption.mock.calls[0] ?? [])[2] as Record<string, unknown>;
+    expect(extra).toHaveProperty("reply_markup");
+  });
+
+  it("treats MESSAGE_NOT_MODIFIED as success after auto-detect caption retry", async () => {
+    botApi.editMessageText.mockRejectedValueOnce(
+      new Error("400: Bad Request: there is no text in the message to edit"),
+    );
+    botApi.editMessageCaption.mockRejectedValueOnce(
+      new Error(
+        "400: Bad Request: message is not modified: specified new message content and reply markup are exactly the same as a current content and reply markup of the message",
+      ),
+    );
+
+    await expect(
+      editMessageTelegram("123", 1, "unchanged caption", {
+        token: "tok",
+        cfg: {},
+      }),
+    ).resolves.toEqual({ ok: true, messageId: "1", chatId: "123" });
+    expect(botApi.editMessageText).toHaveBeenCalledTimes(1);
+    expect(botApi.editMessageCaption).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not swallow unrelated errors from editMessageText", async () => {
+    botApi.editMessageText.mockRejectedValueOnce(
+      new Error("400: Bad Request: message to edit not found"),
+    );
+
+    await expect(
+      editMessageTelegram("123", 1, "hi", {
+        token: "tok",
+        cfg: {},
+      }),
+    ).rejects.toThrow("message to edit not found");
+    expect(botApi.editMessageCaption).not.toHaveBeenCalled();
+  });
+
+  it("uses editMessageReplyMarkup when text is empty and buttons are provided", async () => {
+    botApi.editMessageReplyMarkup.mockResolvedValue({ message_id: 1, chat: { id: "123" } });
+
+    await editMessageTelegram("123", 1, "", {
+      token: "tok",
+      cfg: {},
+      buttons: [[{ text: "OK", callback_data: "ok" }]],
+    });
+
+    expect(botApi.editMessageReplyMarkup).toHaveBeenCalledTimes(1);
+    expect(botApi.editMessageText).not.toHaveBeenCalled();
+    expect(botApi.editMessageCaption).not.toHaveBeenCalled();
+    const extra = (botApi.editMessageReplyMarkup.mock.calls[0] ?? [])[2] as Record<string, unknown>;
+    expect(extra).toHaveProperty("reply_markup");
+  });
+
+  it("treats MESSAGE_NOT_MODIFIED as success when editing only buttons", async () => {
+    botApi.editMessageReplyMarkup.mockRejectedValueOnce(
+      new Error(
+        "400: Bad Request: message is not modified: specified new message content and reply markup are exactly the same as a current content and reply markup of the message",
+      ),
+    );
+
+    await expect(
+      editMessageTelegram("123", 1, "", {
+        token: "tok",
+        cfg: {},
+        buttons: [[{ text: "OK", callback_data: "ok" }]],
+      }),
+    ).resolves.toEqual({ ok: true, messageId: "1", chatId: "123" });
+    expect(botApi.editMessageReplyMarkup).toHaveBeenCalledTimes(1);
+    expect(botApi.editMessageText).not.toHaveBeenCalled();
   });
 });
 

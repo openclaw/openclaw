@@ -86,6 +86,7 @@ const THREAD_NOT_FOUND_RE = /400:\s*Bad Request:\s*message thread not found/i;
 const MESSAGE_NOT_MODIFIED_RE =
   /400:\s*Bad Request:\s*message is not modified|MESSAGE_NOT_MODIFIED/i;
 const CHAT_NOT_FOUND_RE = /400: Bad Request: chat not found/i;
+const NO_TEXT_IN_MESSAGE_RE = /400:\s*Bad Request:\s*there is no text in the message to edit/i;
 const diagLogger = createSubsystemLogger("telegram/diagnostic");
 
 function createTelegramHttpLogger(cfg: ReturnType<typeof loadConfig>) {
@@ -196,6 +197,10 @@ function isTelegramThreadNotFoundError(err: unknown): boolean {
 
 function isTelegramMessageNotModifiedError(err: unknown): boolean {
   return MESSAGE_NOT_MODIFIED_RE.test(formatErrorMessage(err));
+}
+
+function isTelegramNoTextInMessageError(err: unknown): boolean {
+  return NO_TEXT_IN_MESSAGE_RE.test(formatErrorMessage(err));
 }
 
 function hasMessageThreadIdParam(params?: Record<string, unknown>): boolean {
@@ -853,26 +858,78 @@ export async function editMessageTelegram(
     plainParams.reply_markup = replyMarkup;
   }
 
+  const textIsEmpty = !text || text.trim() === "";
+
   try {
-    await withTelegramHtmlParseFallback({
-      label: "editMessage",
-      verbose: opts.verbose,
-      requestHtml: (retryLabel) =>
-        requestWithEditShouldLog(
-          () => api.editMessageText(chatId, messageId, htmlText, editParams),
-          retryLabel,
-          (err) => !isTelegramMessageNotModifiedError(err),
-        ),
-      requestPlain: (retryLabel) =>
-        requestWithEditShouldLog(
-          () =>
-            Object.keys(plainParams).length > 0
-              ? api.editMessageText(chatId, messageId, text, plainParams)
-              : api.editMessageText(chatId, messageId, text),
-          retryLabel,
-          (plainErr) => !isTelegramMessageNotModifiedError(plainErr),
-        ),
-    });
+    // Case 1: Buttons-only update — use editMessageReplyMarkup directly.
+    // Works for both text and captionable (media) messages without needing to know the type.
+    if (textIsEmpty && shouldTouchButtons && replyMarkup !== undefined) {
+      await requestWithEditShouldLog(
+        () => api.editMessageReplyMarkup(chatId, messageId, { reply_markup: replyMarkup }),
+        "editMessageReplyMarkup",
+        (err) => !isTelegramMessageNotModifiedError(err),
+      );
+    } else {
+      // Case 2: Try editMessageText first.
+      // If Telegram rejects with "there is no text in the message", the message has a caption
+      // (photo, video, audio, document, etc.) — auto-detect and retry with editMessageCaption.
+      try {
+        await withTelegramHtmlParseFallback({
+          label: "editMessage",
+          verbose: opts.verbose,
+          requestHtml: (retryLabel) =>
+            requestWithEditShouldLog(
+              () => api.editMessageText(chatId, messageId, htmlText, editParams),
+              retryLabel,
+              (err) => !isTelegramMessageNotModifiedError(err),
+            ),
+          requestPlain: (retryLabel) =>
+            requestWithEditShouldLog(
+              () =>
+                Object.keys(plainParams).length > 0
+                  ? api.editMessageText(chatId, messageId, text, plainParams)
+                  : api.editMessageText(chatId, messageId, text),
+              retryLabel,
+              (plainErr) => !isTelegramMessageNotModifiedError(plainErr),
+            ),
+        });
+      } catch (innerErr) {
+        if (!isTelegramNoTextInMessageError(innerErr)) {
+          throw innerErr;
+        }
+        if (opts.verbose) {
+          console.warn(
+            `[telegram] editMessageText failed: message has a caption, retrying with editMessageCaption`,
+          );
+        }
+        // Case 3: Captionable message (photo, video, audio, document, etc.)
+        await withTelegramHtmlParseFallback({
+          label: "editCaption",
+          verbose: opts.verbose,
+          requestHtml: (retryLabel) =>
+            requestWithEditShouldLog(
+              () =>
+                api.editMessageCaption(chatId, messageId, {
+                  caption: htmlText,
+                  parse_mode: "HTML",
+                  ...(replyMarkup !== undefined && { reply_markup: replyMarkup }),
+                }),
+              retryLabel,
+              (err) => !isTelegramMessageNotModifiedError(err),
+            ),
+          requestPlain: (retryLabel) =>
+            requestWithEditShouldLog(
+              () =>
+                api.editMessageCaption(chatId, messageId, {
+                  caption: text,
+                  ...(replyMarkup !== undefined && { reply_markup: replyMarkup }),
+                }),
+              retryLabel,
+              (plainErr) => !isTelegramMessageNotModifiedError(plainErr),
+            ),
+        });
+      }
+    }
   } catch (err) {
     if (isTelegramMessageNotModifiedError(err)) {
       // no-op: Telegram reports message content unchanged, treat as success
