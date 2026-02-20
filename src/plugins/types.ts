@@ -328,14 +328,6 @@ export type PluginHookAgentContext = {
   sessionId?: string;
   workspaceDir?: string;
   messageProvider?: string;
-  /** Current compaction model metadata (available in compaction hooks). */
-  compactionModel?: {
-    provider: string;
-    id: string;
-    api: string;
-  };
-  /** Runtime API key for compaction model (best-effort; may be absent for non-key auth modes). */
-  compactionApiKey?: string;
 };
 
 // before_model_resolve hook
