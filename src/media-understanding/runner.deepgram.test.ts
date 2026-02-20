@@ -1,9 +1,16 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
+
+vi.mock("../agents/model-auth.js", () => ({
+  resolveApiKeyForProvider: vi.fn(async () => ({ key: "test-key" })),
+  requireApiKey: vi.fn(() => "test-key"),
+  collectProviderApiKeysForExecution: vi.fn(() => [{ apiKey: "test-key", source: "config" }]),
+}));
+
 import {
   buildProviderRegistry,
   createMediaAttachmentCache,

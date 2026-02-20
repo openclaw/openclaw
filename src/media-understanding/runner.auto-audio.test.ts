@@ -1,9 +1,17 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
+
+vi.mock("../agents/model-auth.js", () => ({
+  resolveApiKeyForProvider: vi.fn(async () => ({ key: "test-key" })),
+  requireApiKey: vi.fn(() => "test-key"),
+  collectProviderApiKeysForExecution: vi.fn(() => [{ apiKey: "test-key", source: "config" }]),
+}));
+
 import {
   buildProviderRegistry,
   createMediaAttachmentCache,
@@ -65,6 +73,9 @@ function createOpenAiAudioCfg(extra?: Partial<OpenClawConfig>): OpenClawConfig {
 
 describe("runCapability auto audio entries", () => {
   it("uses provider keys to auto-enable audio transcription", async () => {
+    vi.mocked(resolveApiKeyForProvider).mockResolvedValue({
+      key: "test-key",
+    } as never);
     await withAudioFixture(async ({ ctx, media, cache }) => {
       let seenModel: string | undefined;
       const providerRegistry = createOpenAiAudioProvider(async (req) => {
@@ -117,6 +128,9 @@ describe("runCapability auto audio entries", () => {
   });
 
   it("prefers explicitly configured audio model entries", async () => {
+    vi.mocked(resolveApiKeyForProvider).mockResolvedValue({
+      key: "test-key",
+    } as never);
     await withAudioFixture(async ({ ctx, media, cache }) => {
       let seenModel: string | undefined;
       const providerRegistry = createOpenAiAudioProvider(async (req) => {
