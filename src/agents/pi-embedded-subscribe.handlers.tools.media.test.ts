@@ -103,6 +103,42 @@ describe("handleToolExecutionEnd media emission", () => {
     });
   });
 
+  it("does NOT emit local media for untrusted tools", async () => {
+    const onToolResult = vi.fn();
+    const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "plugin_tool",
+      toolCallId: "tc-1",
+      isError: false,
+      result: {
+        content: [{ type: "text", text: "MEDIA:/tmp/secret.png" }],
+      },
+    });
+
+    expect(onToolResult).not.toHaveBeenCalled();
+  });
+
+  it("emits remote media for untrusted tools", async () => {
+    const onToolResult = vi.fn();
+    const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "plugin_tool",
+      toolCallId: "tc-1",
+      isError: false,
+      result: {
+        content: [{ type: "text", text: "MEDIA:https://example.com/file.png" }],
+      },
+    });
+
+    expect(onToolResult).toHaveBeenCalledWith({
+      mediaUrls: ["https://example.com/file.png"],
+    });
+  });
+
   it("does NOT emit media when verbose is full (emitToolOutput handles it)", async () => {
     const onToolResult = vi.fn();
     const ctx = createMockContext({ shouldEmitToolOutput: true, onToolResult });
