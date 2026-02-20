@@ -338,12 +338,13 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
   type HeredocSpec = {
     delimiter: string;
     stripTabs: boolean;
+    quoted: boolean;
   };
 
   const parseHeredocDelimiter = (
     source: string,
     start: number,
-  ): { delimiter: string; end: number } | null => {
+  ): { delimiter: string; end: number; quoted: boolean } | null => {
     let i = start;
     while (i < source.length && (source[i] === " " || source[i] === "\t")) {
       i += 1;
@@ -368,7 +369,7 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
           continue;
         }
         if (ch === quote) {
-          return { delimiter, end: i + 1 };
+          return { delimiter, end: i + 1, quoted: true };
         }
         delimiter += ch;
         i += 1;
@@ -388,7 +389,7 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
     if (!delimiter) {
       return null;
     }
-    return { delimiter, end: i };
+    return { delimiter, end: i, quoted: false };
   };
 
   const segments: string[] = [];
@@ -430,6 +431,19 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
           i += 1;
         }
       } else {
+        // When the heredoc delimiter is unquoted, the shell performs expansion
+        // on the body (variable substitution, command substitution, etc.).
+        // Reject commands that use unquoted heredocs containing expansion tokens
+        // to prevent allowlist bypass via embedded command substitution.
+        const currentHeredoc = pendingHeredocs[0];
+        if (currentHeredoc && !currentHeredoc.quoted) {
+          if (ch === "`") {
+            return { ok: false, reason: "command substitution in unquoted heredoc", segments: [] };
+          }
+          if (ch === "$" && (next === "(" || next === "{")) {
+            return { ok: false, reason: "command substitution in unquoted heredoc", segments: [] };
+          }
+        }
         heredocLine += ch;
       }
       continue;
@@ -530,7 +544,7 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
 
       const parsed = parseHeredocDelimiter(command, scanIndex);
       if (parsed) {
-        pendingHeredocs.push({ delimiter: parsed.delimiter, stripTabs });
+        pendingHeredocs.push({ delimiter: parsed.delimiter, stripTabs, quoted: parsed.quoted });
         buf += command.slice(scanIndex, parsed.end);
         i = parsed.end - 1;
       }
