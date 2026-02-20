@@ -367,13 +367,12 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
 
 function generateZshCompletion(program: Command): string {
   const rootCmd = program.name();
-  const script = `
-#compdef ${rootCmd}
+  const script = `#compdef ${rootCmd}
 
 _${rootCmd}_root_completion() {
   local -a commands
   local -a options
-  
+
   _arguments -C \\
     ${generateZshArgs(program)} \\
     ${generateZshSubcmdList(program)} \\
@@ -390,7 +389,10 @@ _${rootCmd}_root_completion() {
 
 ${generateZshSubcommands(program, rootCmd)}
 
-compdef _${rootCmd}_root_completion ${rootCmd}
+if (( $+functions[compdef] )); then
+  (( \${+_comps} )) || typeset -gHA _comps _services _patcomps _postpatcomps
+  compdef _${rootCmd}_root_completion ${rootCmd}
+fi
 `;
   return script;
 }
