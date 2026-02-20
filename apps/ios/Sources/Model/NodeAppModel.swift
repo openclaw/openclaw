@@ -1617,6 +1617,15 @@ private extension NodeAppModel {
                 let result = try await self.watchMessagingService.sendNotification(
                     id: req.id,
                     params: params)
+                if result.queuedForDelivery || !result.deliveredImmediately {
+                    let invokeID = req.id
+                    Task { @MainActor in
+                        await WatchPromptNotificationBridge.scheduleMirroredWatchPromptNotificationIfNeeded(
+                            invokeID: invokeID,
+                            params: params,
+                            sendResult: result)
+                    }
+                }
                 let payload = OpenClawWatchNotifyPayload(
                     deliveredImmediately: result.deliveredImmediately,
                     queuedForDelivery: result.queuedForDelivery,
@@ -2547,6 +2556,12 @@ extension NodeAppModel {
         self.applyGatewayConnectConfig(cfg)
         self.pushWakeLogger.info("Wake reconnect trigger applied wakeId=\(wakeId, privacy: .public)")
         return makeResult(true, "reconnect_triggered")
+    }
+}
+
+extension NodeAppModel {
+    func _bridgeConsumeMirroredWatchReply(_ event: WatchQuickReplyEvent) async {
+        await self.handleWatchQuickReply(event)
     }
 }
 
