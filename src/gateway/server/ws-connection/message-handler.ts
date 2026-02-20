@@ -662,7 +662,8 @@ export function attachGatewayWsMessageHandler(params: {
             // gateways) hit a deadlock: the CLI needs the new scopes to connect,
             // but can't connect to approve them.
             const isUpgrade = reason === "scope-upgrade" || reason === "role-upgrade";
-            const silent = (isLocalClient && reason === "not-paired") || (isUpgrade && paired != null);
+            const silent =
+              (isLocalClient && reason === "not-paired") || (isUpgrade && paired != null);
             const pairing = await requestDevicePairing({
               deviceId: device.id,
               publicKey: devicePublicKey,
