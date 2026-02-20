@@ -29,17 +29,14 @@ extension OnboardingView {
             if let url = GatewayDiscoveryHelpers.directUrl(for: gateway) {
                 self.state.remoteUrl = url
             }
-        } else if let host = GatewayDiscoveryHelpers.sanitizedTailnetHost(gateway.tailnetDns) ?? gateway.lanHost {
-            let user = NSUserName()
-            self.state.remoteTarget = GatewayDiscoveryModel.buildSSHTarget(
-                user: user,
-                host: host,
-                port: gateway.sshPort)
-            OpenClawConfigFile.setRemoteGatewayUrl(
-                host: gateway.serviceHost ?? host,
-                port: gateway.servicePort ?? gateway.gatewayPort)
+        } else if let target = GatewayDiscoveryHelpers.sshTarget(for: gateway) {
+            self.state.remoteTarget = target
         }
-        self.state.remoteCliPath = gateway.cliPath ?? ""
+        if let endpoint = GatewayDiscoveryHelpers.serviceEndpoint(for: gateway) {
+            OpenClawConfigFile.setRemoteGatewayUrl(
+                host: endpoint.host,
+                port: endpoint.port)
+        }
 
         self.state.connectionMode = .remote
         MacNodeModeCoordinator.shared.setPreferredGatewayStableID(gateway.stableID)

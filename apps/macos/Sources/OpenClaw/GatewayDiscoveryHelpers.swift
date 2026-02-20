@@ -2,11 +2,25 @@ import Foundation
 import OpenClawDiscovery
 
 enum GatewayDiscoveryHelpers {
+    static func serviceEndpoint(
+        for gateway: GatewayDiscoveryModel.DiscoveredGateway) -> (host: String, port: Int)?
+    {
+        self.serviceEndpoint(serviceHost: gateway.serviceHost, servicePort: gateway.servicePort)
+    }
+
+    static func serviceEndpoint(
+        serviceHost: String?,
+        servicePort: Int?) -> (host: String, port: Int)?
+    {
+        guard let host = self.trimmed(serviceHost), !host.isEmpty else { return nil }
+        guard let port = servicePort, port > 0, port <= 65535 else { return nil }
+        return (host, port)
+    }
+
     static func sshTarget(for gateway: GatewayDiscoveryModel.DiscoveredGateway) -> String? {
-        let host = self.sanitizedTailnetHost(gateway.tailnetDns) ?? gateway.lanHost
-        guard let host = self.trimmed(host), !host.isEmpty else { return nil }
+        guard let endpoint = self.serviceEndpoint(for: gateway) else { return nil }
         let user = NSUserName()
-        var target = "\(user)@\(host)"
+        var target = "\(user)@\(endpoint.host)"
         if gateway.sshPort != 22 {
             target += ":\(gateway.sshPort)"
         }
@@ -16,39 +30,21 @@ enum GatewayDiscoveryHelpers {
     static func directUrl(for gateway: GatewayDiscoveryModel.DiscoveredGateway) -> String? {
         self.directGatewayUrl(
             serviceHost: gateway.serviceHost,
-            servicePort: gateway.servicePort,
-            lanHost: gateway.lanHost,
-            gatewayPort: gateway.gatewayPort)
+            servicePort: gateway.servicePort)
     }
 
     static func directGatewayUrl(
         serviceHost: String?,
-        servicePort: Int?,
-        lanHost: String?,
-        gatewayPort: Int?) -> String?
+        servicePort: Int?) -> String?
     {
         // Security: do not route using unauthenticated TXT hints (tailnetDns/lanHost/gatewayPort).
         // Prefer the resolved service endpoint (SRV + A/AAAA).
-        if let host = self.trimmed(serviceHost), !host.isEmpty,
-           let port = servicePort, port > 0
-        {
-            let scheme = port == 443 ? "wss" : "ws"
-            let portSuffix = port == 443 ? "" : ":\(port)"
-            return "\(scheme)://\(host)\(portSuffix)"
-        }
-
-        // Legacy fallback (best-effort): keep existing behavior when we couldn't resolve SRV.
-        guard let lanHost = self.trimmed(lanHost), !lanHost.isEmpty else { return nil }
-        let port = gatewayPort ?? 18789
-        return "ws://\(lanHost):\(port)"
-    }
-
-    static func sanitizedTailnetHost(_ host: String?) -> String? {
-        guard let host = self.trimmed(host), !host.isEmpty else { return nil }
-        if host.hasSuffix(".internal.") || host.hasSuffix(".internal") {
+        guard let endpoint = self.serviceEndpoint(serviceHost: serviceHost, servicePort: servicePort) else {
             return nil
         }
-        return host
+        let scheme = endpoint.port == 443 ? "wss" : "ws"
+        let portSuffix = endpoint.port == 443 ? "" : ":\(endpoint.port)"
+        return "\(scheme)://\(endpoint.host)\(portSuffix)"
     }
 
     private static func trimmed(_ value: String?) -> String? {
