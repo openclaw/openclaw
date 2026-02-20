@@ -1,8 +1,9 @@
-import fs from "node:fs";
-import path from "node:path";
 import type { Command } from "commander";
 import { readSecretFromFile } from "../../acp/secret-file.js";
+import fs from "node:fs";
+import path from "node:path";
 import type { GatewayAuthMode, GatewayTailscaleMode } from "../../config/config.js";
+import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import {
   CONFIG_PATH,
   loadConfig,
@@ -13,7 +14,6 @@ import {
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { resolveGatewayAuth } from "../../gateway/auth.js";
 import { startGatewayServer } from "../../gateway/server.js";
-import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setGatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setVerbose } from "../../globals.js";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
@@ -26,6 +26,12 @@ import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { forceFreePortAndWait, waitForPortBindable } from "../ports.js";
+import {
+  applyCrashLoopGuard,
+  CrashLoopError,
+  clearGatewayCrashHistory,
+  recordGatewayCrash,
+} from "./crash-loop-guard.js";
 import { ensureDevGatewayConfig } from "./dev.js";
 import { runGatewayLoop } from "./run-loop.js";
 import {
@@ -198,6 +204,27 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   if (rawStreamPath) {
     process.env.OPENCLAW_RAW_STREAM_PATH = rawStreamPath;
   }
+
+  const stateDir = resolveStateDir(process.env);
+  try {
+    await applyCrashLoopGuard({
+      stateDir,
+      logger: gatewayLog,
+    });
+  } catch (err) {
+    if (err instanceof CrashLoopError) {
+      defaultRuntime.error(err.message);
+      defaultRuntime.exit(1);
+      return;
+    }
+    throw err;
+  }
+
+  process.on("exit", (code) => {
+    if (code !== 0) {
+      recordGatewayCrash(stateDir);
+    }
+  });
 
   if (devMode) {
     await ensureDevGatewayConfig({ reset: Boolean(opts.reset) });
@@ -428,12 +455,15 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     await runGatewayLoop({
       runtime: defaultRuntime,
       lockPort: port,
-      start: async () =>
-        await startGatewayServer(port, {
+      start: async () => {
+        const server = await startGatewayServer(port, {
           bind,
           auth: authOverride,
           tailscale: tailscaleOverride,
-        }),
+        });
+        clearGatewayCrashHistory(stateDir);
+        return server;
+      },
     });
 
   try {
