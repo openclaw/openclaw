@@ -10,7 +10,6 @@ import {
 
 describe("web monitor inbox – offline messages", () => {
   installWebMonitorInboxUnitTestHooks();
-  type InboxOnMessage = NonNullable<Parameters<typeof monitorWebInbox>[0]["onMessage"]>;
 
   async function tick() {
     await new Promise((resolve) => setImmediate(resolve));
