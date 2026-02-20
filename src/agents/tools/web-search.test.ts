@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { __testing } from "./web-search.js";
 
-const { inferPerplexityBaseUrlFromApiKey, resolvePerplexityBaseUrl, normalizeFreshness } =
-  __testing;
+const {
+  inferPerplexityBaseUrlFromApiKey,
+  resolvePerplexityBaseUrl,
+  resolveDesearchBaseUrl,
+  normalizeFreshness,
+} = __testing;
 
 describe("web_search perplexity baseUrl defaults", () => {
   it("detects a Perplexity key prefix", () => {
@@ -48,6 +52,32 @@ describe("web_search perplexity baseUrl defaults", () => {
   it("defaults to OpenRouter for unknown config key formats", () => {
     expect(resolvePerplexityBaseUrl(undefined, "config", "weird-key")).toBe(
       "https://openrouter.ai/api/v1",
+    );
+  });
+});
+
+describe("web_search desearch baseUrl defaults", () => {
+  it("accepts https base urls", () => {
+    expect(resolveDesearchBaseUrl({ baseUrl: "https://api.desearch.ai" })).toBe(
+      "https://api.desearch.ai",
+    );
+  });
+
+  it("accepts localhost over http for local testing", () => {
+    expect(resolveDesearchBaseUrl({ baseUrl: "http://localhost:8080" })).toBe(
+      "http://localhost:8080",
+    );
+  });
+
+  it("rejects non-http(s) localhost urls", () => {
+    expect(resolveDesearchBaseUrl({ baseUrl: "ftp://localhost:8080" })).toBe(
+      "https://api.desearch.ai",
+    );
+  });
+
+  it("rejects plaintext non-localhost urls", () => {
+    expect(resolveDesearchBaseUrl({ baseUrl: "http://example.com" })).toBe(
+      "https://api.desearch.ai",
     );
   });
 });

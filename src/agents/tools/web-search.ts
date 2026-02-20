@@ -307,7 +307,10 @@ function resolveDesearchBaseUrl(desearch?: DesearchConfig): string {
     // localhost is allowed for development/testing.
     try {
       const parsed = new URL(fromConfig);
-      if (parsed.protocol === "https:" || parsed.hostname === "localhost") {
+      if (
+        parsed.protocol === "https:" ||
+        (parsed.hostname === "localhost" && parsed.protocol === "http:")
+      ) {
         return fromConfig;
       }
     } catch {
@@ -708,5 +711,6 @@ export function createWebSearchTool(options?: {
 export const __testing = {
   inferPerplexityBaseUrlFromApiKey,
   resolvePerplexityBaseUrl,
+  resolveDesearchBaseUrl,
   normalizeFreshness,
 } as const;

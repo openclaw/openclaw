@@ -307,6 +307,89 @@ describe("web_search perplexity baseUrl defaults", () => {
   });
 });
 
+describe("web_search desearch provider", () => {
+  const priorFetch = global.fetch;
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    // @ts-expect-error global fetch cleanup
+    global.fetch = priorFetch;
+  });
+
+  it("calls DeSearch SSE endpoint and maps results", async () => {
+    vi.stubEnv("DESEARCH_API_KEY", "dt-test");
+    const ssePayload = [
+      'data: {"type":"search","content":[{"title":"Grant update","link":"https://example.com/grant","snippet":"Fresh update from source","date":"2026-02-20","source":"example.com"}]}',
+      'data: {"type":"search","content":[{"title":"Second hit","link":"https://x.com/example/status/1","snippet":"Thread mention"}]}',
+      'data: {"type":"done","content":[]}',
+    ].join("\n");
+    const mockFetch = vi.fn(() =>
+      Promise.resolve({
+        ok: true,
+        text: () => Promise.resolve(ssePayload),
+      } as Response),
+    );
+    // @ts-expect-error mock fetch
+    global.fetch = mockFetch;
+
+    const tool = createWebSearchTool({
+      config: { tools: { web: { search: { provider: "desearch" } } } },
+      sandboxed: true,
+    });
+    const result = await tool?.execute?.(1, { query: "energy efficiency grants", count: 2 });
+    const details = result?.details as {
+      provider?: string;
+      count?: number;
+      results?: Array<{
+        title?: string;
+        url?: string;
+        description?: string;
+        published?: string;
+        siteName?: string;
+      }>;
+    };
+
+    expect(mockFetch).toHaveBeenCalled();
+    expect(mockFetch.mock.calls[0]?.[0]).toBe("https://api.desearch.ai/desearch/ai/search");
+    const reqInit = mockFetch.mock.calls[0]?.[1] as RequestInit | undefined;
+    const headers = new Headers(reqInit?.headers);
+    expect(headers.get("accept")).toBe("text/event-stream");
+    expect(headers.get("authorization")).toBe("dt-test");
+    const body = JSON.parse((reqInit?.body as string | undefined) ?? "{}") as {
+      prompt?: string;
+      tools?: string[];
+      result_type?: string;
+    };
+    expect(body.prompt).toBe("energy efficiency grants");
+    expect(body.tools).toEqual(["web", "twitter"]);
+    expect(body.result_type).toBe("ONLY_LINKS");
+
+    expect(details.provider).toBe("desearch");
+    expect(details.count).toBe(2);
+    expect(details.results?.[0]?.url).toBe("https://example.com/grant");
+    expect(details.results?.[0]?.published).toBe("2026-02-20");
+    expect(details.results?.[0]?.siteName).toBe("example.com");
+    expect(details.results?.[0]?.title).toContain("<<<EXTERNAL_UNTRUSTED_CONTENT>>>");
+    expect(details.results?.[0]?.description).toContain("<<<EXTERNAL_UNTRUSTED_CONTENT>>>");
+  });
+
+  it("returns desearch-specific missing key error when no key is configured", async () => {
+    vi.stubEnv("DESEARCH_API_KEY", "");
+    const mockFetch = vi.fn();
+    // @ts-expect-error mock fetch
+    global.fetch = mockFetch;
+
+    const tool = createWebSearchTool({
+      config: { tools: { web: { search: { provider: "desearch" } } } },
+      sandboxed: true,
+    });
+    const result = await tool?.execute?.(1, { query: "missing-key-check" });
+
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(result?.details).toMatchObject({ error: "missing_desearch_api_key" });
+  });
+});
+
 describe("web_search external content wrapping", () => {
   const priorFetch = global.fetch;
 
