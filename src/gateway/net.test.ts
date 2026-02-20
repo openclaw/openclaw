@@ -300,6 +300,8 @@ describe("isSecureWebSocketUrl", () => {
       expect(isSecureWebSocketUrl("ws://remote.example.com:18789")).toBe(false);
       expect(isSecureWebSocketUrl("ws://192.168.1.100:18789")).toBe(false);
       expect(isSecureWebSocketUrl("ws://10.0.0.5:18789")).toBe(false);
+      expect(isSecureWebSocketUrl("ws://100.63.255.255:18789")).toBe(false);
+      expect(isSecureWebSocketUrl("ws://100.128.0.0:18789")).toBe(false);
     });
   });
 
