@@ -1,11 +1,13 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import { sanitizeToolUseResultPairing } from "../../src/agents/session-transcript-repair.js";
 import { memoryContextConfigSchema, type MemoryContextConfig } from "./src/core/config.js";
 import { createEmbeddingProvider } from "./src/core/embedding.js";
 import { KnowledgeStore } from "./src/core/knowledge-store.js";
 import { buildRecalledContextBlock } from "./src/core/recall-format.js";
 import { maybeRedact } from "./src/core/redaction.js";
 import { stripChannelPrefix } from "./src/core/shared.js";
+import { smartTrim, type MessageLike } from "./src/core/smart-trim.js";
 import { WarmStore } from "./src/core/store.js";
 
 type RuntimeState = {
@@ -68,6 +70,10 @@ function extractQueryFromRecentUserMessages(messages: AgentMessage[]): string {
     userMessages.unshift(content);
   }
   return userMessages.join(" ").trim();
+}
+
+function estimateMessageTokens(msg: MessageLike): number {
+  return Math.max(1, Math.ceil(extractText(msg as AgentMessage).length / 3));
 }
 
 async function getOrCreateRuntime(api: OpenClawPluginApi, ctx: HookCtx): Promise<RuntimeState> {
@@ -143,6 +149,40 @@ const memoryContextPlugin = {
       });
       if (filteredMessages.length !== messages.length) {
         messages.splice(0, messages.length, ...filteredMessages);
+      }
+
+      // Smart-trim in plugin mode:
+      // We don't have model-resolved reserve tokens in plugin hook context,
+      // so we use configured memory budget as a conservative safe limit.
+      const trimResult = smartTrim(messages as MessageLike[], query, {
+        protectedRecent: 6,
+        safeLimit: runtime.config.budget.maxTokens,
+        estimateTokens: estimateMessageTokens,
+      });
+
+      if (trimResult.didTrim) {
+        const repaired = sanitizeToolUseResultPairing(trimResult.kept as AgentMessage[]);
+        messages.splice(0, messages.length, ...repaired);
+
+        for (const msg of trimResult.trimmed) {
+          const role = msg.role;
+          if (role !== "user" && role !== "assistant") {
+            continue;
+          }
+          const text = extractText(msg as AgentMessage);
+          if (!text.trim() || text.includes(RECALLED_CONTEXT_MARKER)) {
+            continue;
+          }
+          const cleaned = stripChannelPrefix(text);
+          if (!cleaned) {
+            continue;
+          }
+          const archived = maybeRedact(cleaned, runtime.config.redaction);
+          if (runtime.rawStore.isArchived(role, archived)) {
+            continue;
+          }
+          await runtime.rawStore.addSegmentLite({ role, content: archived });
+        }
       }
 
       const details = await runtime.rawStore.hybridSearch(
