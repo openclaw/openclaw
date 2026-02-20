@@ -12,11 +12,16 @@ let searchImpl: () => Promise<unknown[]> = async () => [
     source: "memory" as const,
   },
 ];
-let readFileImpl: () => Promise<string> = async () => "";
+type MemoryReadParams = { relPath: string; from?: number; lines?: number };
+type MemoryReadResult = { text: string; path: string };
+let readFileImpl: (params: MemoryReadParams) => Promise<MemoryReadResult> = async (params) => ({
+  text: "",
+  path: params.relPath,
+});
 
 const stubManager = {
   search: vi.fn(async () => await searchImpl()),
-  readFile: vi.fn(async () => await readFileImpl()),
+  readFile: vi.fn(async (params: MemoryReadParams) => await readFileImpl(params)),
   status: () => ({
     backend,
     files: 1,
@@ -59,7 +64,7 @@ beforeEach(() => {
       source: "memory" as const,
     },
   ];
-  readFileImpl = async () => "";
+  readFileImpl = async (params: MemoryReadParams) => ({ text: "", path: params.relPath });
   vi.clearAllMocks();
 });
 
@@ -170,7 +175,7 @@ describe("memory tools", () => {
   });
 
   it("does not throw when memory_get fails", async () => {
-    readFileImpl = async () => {
+    readFileImpl = async (_params: MemoryReadParams) => {
       throw new Error("path required");
     };
 
@@ -187,6 +192,25 @@ describe("memory tools", () => {
       text: "",
       disabled: true,
       error: "path required",
+    });
+  });
+
+  it("returns empty text without error when file does not exist (ENOENT)", async () => {
+    readFileImpl = async (_params: MemoryReadParams) => {
+      return { text: "", path: "memory/2026-02-19.md" };
+    };
+
+    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const tool = createMemoryGetTool({ config: cfg });
+    expect(tool).not.toBeNull();
+    if (!tool) {
+      throw new Error("tool missing");
+    }
+
+    const result = await tool.execute("call_enoent", { path: "memory/2026-02-19.md" });
+    expect(result.details).toEqual({
+      text: "",
+      path: "memory/2026-02-19.md",
     });
   });
 });
