@@ -136,6 +136,7 @@ export type SearchTurnPayloadMatch = {
 export type DoltReadOnlyQueryHelpers = {
   getAvailability: () => DoltQueryAvailability;
   getRecord: (pointer: string) => DoltQueryRecord | null;
+  listDirectParents: (childPointer: string) => DoltLineageEdge[];
   listDirectChildren: (parentPointer: string) => DoltLineageEdge[];
   listDirectChildRecords: (parentPointer: string) => DoltQueryRecord[];
   listActiveLane: (
@@ -283,6 +284,32 @@ export function createDoltReadOnlyQueryRuntime(params: {
               )
               .get(normalizedPointer) as SqliteRecordRow | undefined;
             return row ? mapRecordRow(row) : null;
+          },
+        });
+      },
+
+      listDirectParents: (childPointer) => {
+        const normalizedChildPointer = normalizeOptionalString(childPointer);
+        if (!normalizedChildPointer) {
+          return [];
+        }
+        return readWithFallback({
+          db: ensureOpen(dbPath),
+          fallback: [],
+          logger: params.logger,
+          scope: "listDirectParents",
+          read: (db) => {
+            const rows = db
+              .prepare(
+                `
+                  SELECT parent_pointer, child_pointer, child_index, child_level, created_at_ms
+                  FROM dolt_lineage
+                  WHERE child_pointer = ?
+                  ORDER BY parent_pointer ASC
+                `,
+              )
+              .all(normalizedChildPointer) as SqliteLineageRow[];
+            return rows.map((row) => mapLineageRow(row));
           },
         });
       },

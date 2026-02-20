@@ -40,6 +40,7 @@ describe("createDoltReadOnlyQueryRuntime", () => {
       reason: "missing_db",
     });
     expect(queries.getRecord("turn:missing")).toBeNull();
+    expect(queries.listDirectParents("turn:missing")).toEqual([]);
     expect(queries.listDirectChildren("leaf:missing")).toEqual([]);
     expect(queries.listDirectChildRecords("leaf:missing")).toEqual([]);
     expect(queries.listActiveLane("session-1", "turn", true)).toEqual([]);
@@ -206,6 +207,9 @@ describe("createDoltReadOnlyQueryRuntime", () => {
 
     const bindleChildren = queries.listDirectChildren("bindle:session-1:100:1");
     expect(bindleChildren.map((row) => row.childPointer)).toEqual(["leaf:session-1:100:1"]);
+
+    const leafParents = queries.listDirectParents("leaf:session-1:100:1");
+    expect(leafParents.map((row) => row.parentPointer)).toEqual(["bindle:session-1:100:1"]);
 
     const leafChildren = queries.listDirectChildRecords("leaf:session-1:100:1");
     expect(leafChildren.map((row) => row.pointer)).toEqual(["turn:session-1:100:1"]);
