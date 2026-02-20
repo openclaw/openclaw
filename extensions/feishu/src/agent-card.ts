@@ -47,6 +47,40 @@ function mergeStreamText(prev: string, next: string): string {
   return prev + next;
 }
 
+function stripWhitespace(text: string): string {
+  return text.replace(/\s+/g, "");
+}
+
+function stripLeadingByNonWsPrefix(text: string, nonWsPrefix: string): string {
+  if (!text || !nonWsPrefix) {
+    return text;
+  }
+  let consumed = 0;
+  let cutIndex = 0;
+  while (cutIndex < text.length && consumed < nonWsPrefix.length) {
+    if (!/\s/.test(text[cutIndex] ?? "")) {
+      consumed += 1;
+    }
+    cutIndex += 1;
+  }
+  if (consumed < nonWsPrefix.length) {
+    return text;
+  }
+  return text.slice(cutIndex).replace(/^\s+/, "");
+}
+
+function stripProcessPrefixFromFinal(finalText: string, processText: string): string {
+  const finalWs = stripWhitespace(finalText);
+  const processWs = stripWhitespace(processText);
+  if (!finalWs || !processWs) {
+    return finalText;
+  }
+  if (!finalWs.startsWith(processWs)) {
+    return finalText;
+  }
+  return stripLeadingByNonWsPrefix(finalText, processWs);
+}
+
 function extractSystemTraceLines(text: string): { cleanedText: string; traceLines: string[] } {
   if (!text) {
     return { cleanedText: text, traceLines: [] };
@@ -182,31 +216,19 @@ function trimFinalDupBlocks(timeline: TimelineEntry[], answer: string): Timeline
   return out;
 }
 
-function appendTimelineFromText(params: {
+function appendTimelineBlockChunk(params: {
   text: string;
   timeline: TimelineEntry[];
-  previousText: string;
   carryLine: string;
-  allowBlock: boolean;
   flushIncompleteLine: boolean;
-}) {
-  const { text, timeline, previousText, carryLine, allowBlock, flushIncompleteLine } = params;
+}): { timeline: TimelineEntry[]; carryLine: string; processText: string } {
+  const { text, timeline, carryLine, flushIncompleteLine } = params;
   const nextText = text ?? "";
   if (!nextText) {
-    return { timeline, previousText, carryLine, sawReasoning: false };
+    return { timeline, carryLine, processText: "" };
   }
 
-  const mergedText = mergeStreamText(previousText, nextText);
-  const delta = mergedText.startsWith(previousText)
-    ? mergedText.slice(previousText.length)
-    : mergedText;
-
-  if (!delta) {
-    return { timeline, previousText: mergedText, carryLine, sawReasoning: false };
-  }
-
-  const out = [...timeline];
-  const combined = `${carryLine}${delta}`;
+  const combined = `${carryLine}${nextText}`;
   const lines = combined.split(/\r?\n/);
   const endsWithNewline = /\r?\n$/.test(combined);
   let nextCarryLine = endsWithNewline ? "" : (lines.pop() ?? "");
@@ -214,8 +236,10 @@ function appendTimelineFromText(params: {
     lines.push(nextCarryLine);
     nextCarryLine = "";
   }
+
+  const out = [...timeline];
+  const processParts: string[] = [];
   let inReasoning = false;
-  let sawReasoning = false;
 
   for (const line of lines) {
     const trimmed = line.trim();
@@ -225,7 +249,6 @@ function appendTimelineFromText(params: {
 
     if (/^Reasoning:\s*$/i.test(trimmed)) {
       inReasoning = true;
-      sawReasoning = true;
       continue;
     }
 
@@ -235,19 +258,18 @@ function appendTimelineFromText(params: {
         const cleaned = trimmed.replace(/^_+|_+$/g, "").trim();
         if (cleaned) {
           out.push({ kind: "reasoning", text: cleaned });
-          sawReasoning = true;
+          processParts.push(cleaned);
         }
         continue;
       }
       inReasoning = false;
     }
 
-    if (allowBlock || sawReasoning) {
-      out.push({ kind: "block", text: trimmed });
-    }
+    out.push({ kind: "block", text: trimmed });
+    processParts.push(trimmed);
   }
 
-  return { timeline: out, previousText: mergedText, carryLine: nextCarryLine, sawReasoning };
+  return { timeline: out, carryLine: nextCarryLine, processText: processParts.join("\n") };
 }
 
 function buildCard(params: {
@@ -412,11 +434,9 @@ export function createFeishuAgentCardRenderer(params: CreateFeishuAgentCardRende
   let updater: ReturnType<typeof createCardUpdateQueue> | null = null;
   let createMessagePromise: Promise<void> | null = null;
   let opQueue: Promise<void> = Promise.resolve();
-  let previousTimelineText = "";
   let timelineCarryLine = "";
-  let preTraceTimeline: TimelineEntry[] = [];
   let finalStreamStarted = false;
-  let hasTraceContext = false;
+  let processTextForFinalStrip = "";
 
   const render = (collapseTimeline: boolean) =>
     buildCard({
@@ -464,81 +484,69 @@ export function createFeishuAgentCardRenderer(params: CreateFeishuAgentCardRende
         const { cleanedText: textRaw, traceLines } = extractSystemTraceLines(textRawOriginal);
 
         if (traceLines.length > 0) {
-          if (!hasTraceContext && preTraceTimeline.length > 0) {
-            timeline = [...timeline, ...preTraceTimeline];
-            preTraceTimeline = [];
-          }
-          hasTraceContext = true;
           for (const line of traceLines) {
             timeline = [...timeline, { kind: "block", text: line }];
           }
+          processTextForFinalStrip = mergeStreamText(
+            processTextForFinalStrip,
+            `${traceLines.join("\n")}\n`,
+          );
         }
 
         if (info.kind === "tool") {
-          if (!finalStreamStarted && answer.trim()) {
-            answer = "";
-          }
-          if (!hasTraceContext && preTraceTimeline.length > 0) {
-            timeline = [...timeline, ...preTraceTimeline];
-            preTraceTimeline = [];
-          }
           const parsed = parseToolSummary(textRaw);
           if (parsed) {
             timeline = [...timeline, { kind: "tool", tool: parsed }];
             status = parsed.isError ? "error" : "tool";
-            hasTraceContext = true;
           } else if (textRaw.trim()) {
             timeline = [...timeline, { kind: "block", text: textRaw.trim() }];
-            hasTraceContext = true;
+            processTextForFinalStrip = mergeStreamText(
+              processTextForFinalStrip,
+              `${textRaw.trim()}\n`,
+            );
           }
           await sendOrUpdate(false);
           return;
         }
 
         if (info.kind === "block") {
-          const targetTimeline = hasTraceContext ? timeline : preTraceTimeline;
-          const appended = appendTimelineFromText({
+          const appended = appendTimelineBlockChunk({
             text: textRaw,
-            timeline: targetTimeline,
-            previousText: previousTimelineText,
+            timeline,
             carryLine: timelineCarryLine,
-            allowBlock: true,
             flushIncompleteLine: false,
           });
-          if (hasTraceContext) {
-            timeline = appended.timeline;
-          } else {
-            preTraceTimeline = appended.timeline;
-          }
-          previousTimelineText = appended.previousText;
+          timeline = appended.timeline;
           timelineCarryLine = appended.carryLine;
-          if (!hasTraceContext && appended.sawReasoning) {
-            hasTraceContext = true;
-            if (preTraceTimeline.length > 0) {
-              timeline = [...timeline, ...preTraceTimeline];
-              preTraceTimeline = [];
-            }
-          } else if (appended.sawReasoning) {
-            hasTraceContext = true;
+          if (appended.processText) {
+            processTextForFinalStrip = mergeStreamText(
+              processTextForFinalStrip,
+              `${appended.processText}\n`,
+            );
           }
+          await sendOrUpdate(false);
+          return;
         }
-        if (info.kind === "final" && timelineCarryLine.trim() && hasTraceContext) {
-          timeline = [...timeline, { kind: "block", text: timelineCarryLine.trim() }];
-          timelineCarryLine = "";
+        if (info.kind === "final") {
+          const flushed = appendTimelineBlockChunk({
+            text: "",
+            timeline,
+            carryLine: timelineCarryLine,
+            flushIncompleteLine: true,
+          });
+          timeline = flushed.timeline;
+          timelineCarryLine = flushed.carryLine;
         }
 
         const text = stripReasoningSection(textRaw);
 
-        if (
-          !finalStreamStarted &&
-          hasTraceContext &&
-          (info.kind === "final" || (info.kind === "block" && text))
-        ) {
+        if (!finalStreamStarted && info.kind === "final") {
           finalStreamStarted = true;
         }
 
-        if (info.kind === "final" && text) {
-          answer = mergeStreamText(answer, text);
+        if (info.kind === "final") {
+          const cleanedFinal = stripProcessPrefixFromFinal(text, processTextForFinalStrip);
+          answer = cleanedFinal.trim();
         }
         status = info.kind === "final" ? "completed" : status === "error" ? "error" : "thinking";
         await sendOrUpdate(info.kind === "final" || finalStreamStarted);
@@ -551,10 +559,8 @@ export function createFeishuAgentCardRenderer(params: CreateFeishuAgentCardRende
         if (!text) {
           return;
         }
-        if (!finalStreamStarted && hasTraceContext) {
-          finalStreamStarted = true;
-        }
-        answer = mergeStreamText(answer, text);
+        finalStreamStarted = true;
+        answer = stripProcessPrefixFromFinal(text, processTextForFinalStrip);
         if (status !== "error" && status !== "tool") {
           status = "thinking";
         }
