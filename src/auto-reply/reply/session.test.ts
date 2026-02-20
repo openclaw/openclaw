@@ -1129,6 +1129,91 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     archiveSpy.mockRestore();
   });
 
+  it("/new does NOT carry over modelOverride or providerOverride", async () => {
+    const storePath = await createStorePath("openclaw-reset-model-override-");
+    const sessionKey = "agent:main:telegram:dm:user-model";
+    const existingSessionId = "existing-session-model";
+    await seedSessionStoreWithOverrides({
+      storePath,
+      sessionKey,
+      sessionId: existingSessionId,
+      overrides: {
+        verboseLevel: "on",
+        thinkingLevel: "high",
+        modelOverride: "gpt-4o",
+        providerOverride: "openai",
+      },
+    });
+
+    const cfg = {
+      session: { store: storePath, idleMinutes: 999 },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "/new",
+        RawBody: "/new",
+        CommandBody: "/new",
+        From: "user-model",
+        To: "bot",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        Provider: "telegram",
+        Surface: "telegram",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.resetTriggered).toBe(true);
+    // UX preferences should carry over
+    expect(result.sessionEntry.verboseLevel).toBe("on");
+    expect(result.sessionEntry.thinkingLevel).toBe("high");
+    // Model overrides should NOT carry over
+    expect(result.sessionEntry.modelOverride).toBeUndefined();
+    expect(result.sessionEntry.providerOverride).toBeUndefined();
+  });
+
+  it("resume (no reset) preserves modelOverride and providerOverride", async () => {
+    const storePath = await createStorePath("openclaw-resume-model-override-");
+    const sessionKey = "agent:main:telegram:dm:user-resume";
+    const existingSessionId = "existing-session-resume";
+    await seedSessionStoreWithOverrides({
+      storePath,
+      sessionKey,
+      sessionId: existingSessionId,
+      overrides: {
+        modelOverride: "gpt-4o",
+        providerOverride: "openai",
+      },
+    });
+
+    const cfg = {
+      session: { store: storePath, idleMinutes: 999 },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "hello",
+        RawBody: "hello",
+        From: "user-resume",
+        To: "bot",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        Provider: "telegram",
+        Surface: "telegram",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(false);
+    expect(result.sessionEntry.sessionId).toBe(existingSessionId);
+    expect(result.sessionEntry.modelOverride).toBe("gpt-4o");
+    expect(result.sessionEntry.providerOverride).toBe("openai");
+  });
+
   it("idle-based new session does NOT preserve overrides (no entry to read)", async () => {
     const storePath = await createStorePath("openclaw-idle-no-preserve-");
     const sessionKey = "agent:main:telegram:dm:new-user";
