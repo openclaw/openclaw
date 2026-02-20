@@ -15,9 +15,13 @@ vi.mock("./agent-runner-execution.js", () => ({
   runAgentTurnWithFallback: (...args: unknown[]) => state.runAgentTurnWithFallbackMock(...args),
 }));
 
-vi.mock("./agent-verifier.js", () => ({
-  verifyAgentResponse: (...args: unknown[]) => state.verifyAgentResponseMock(...args),
-}));
+vi.mock("./agent-verifier.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./agent-verifier.js")>();
+  return {
+    ...actual,
+    verifyAgentResponse: (...args: unknown[]) => state.verifyAgentResponseMock(...args),
+  };
+});
 
 vi.mock("../../infra/agent-events.js", () => ({
   emitAgentEvent: (...args: unknown[]) => state.emitAgentEventMock(...args),
@@ -190,6 +194,23 @@ describe("agent verifier integration", () => {
     );
   });
 
+  it("passes enriched context (conversationHistory, workspaceDir, runMeta) to verifier", async () => {
+    state.runAgentTurnWithFallbackMock.mockResolvedValueOnce(
+      makeSuccessOutcome([{ text: "I'm done building the API." }]),
+    );
+    state.verifyAgentResponseMock.mockResolvedValueOnce({ passed: true });
+
+    const { run } = createVerifierRun({ config: verifierEnabledConfig() });
+    await run();
+
+    const verifyCallArgs = state.verifyAgentResponseMock.mock.calls[0][0] as Record<
+      string,
+      unknown
+    >;
+    expect(verifyCallArgs).toHaveProperty("runMeta");
+    expect(verifyCallArgs).toHaveProperty("workspaceDir");
+  });
+
   it("retries when first verification fails, then passes on second attempt", async () => {
     state.runAgentTurnWithFallbackMock
       .mockResolvedValueOnce(makeSuccessOutcome([{ text: "I'm done with the REST API." }]))
@@ -198,7 +219,11 @@ describe("agent verifier integration", () => {
       );
 
     state.verifyAgentResponseMock
-      .mockResolvedValueOnce({ passed: false, feedback: "Missing error handling" })
+      .mockResolvedValueOnce({
+        passed: false,
+        feedback: "Missing error handling",
+        failCategory: "incomplete",
+      })
       .mockResolvedValueOnce({ passed: true });
 
     const { run } = createVerifierRun({ config: verifierEnabledConfig() });
@@ -214,6 +239,15 @@ describe("agent verifier integration", () => {
     expect(phases).toContain("verification_fail");
     expect(phases).toContain("verification_retry");
     expect(phases).toContain("verification_pass");
+
+    const failEvent = state.emitAgentEventMock.mock.calls.find(
+      (c: unknown[]) =>
+        (c[0] as { data?: { phase?: string } })?.data?.phase === "verification_fail",
+    );
+    expect(failEvent).toBeDefined();
+    expect((failEvent![0] as { data: { failCategory?: string } }).data.failCategory).toBe(
+      "incomplete",
+    );
   });
 
   it("delivers latest response when max attempts exhausted (best-effort)", async () => {
