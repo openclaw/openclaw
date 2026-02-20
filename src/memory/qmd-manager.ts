@@ -3,8 +3,16 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
-import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type {
+  MemoryEmbeddingProbeResult,
+  MemoryProviderStatus,
+  MemorySearchManager,
+  MemorySearchResult,
+  MemorySource,
+  MemorySyncProgressUpdate,
+} from "./types.js";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveStateDir } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isFileMissingError, statRegularFile } from "./fs-utils.js";
@@ -15,14 +23,6 @@ import {
   type SessionFileEntry,
 } from "./session-files.js";
 import { requireNodeSqlite } from "./sqlite.js";
-import type {
-  MemoryEmbeddingProbeResult,
-  MemoryProviderStatus,
-  MemorySearchManager,
-  MemorySearchResult,
-  MemorySource,
-  MemorySyncProgressUpdate,
-} from "./types.js";
 
 type SqliteDatabase = import("node:sqlite").DatabaseSync;
 import type { ResolvedMemoryBackendConfig, ResolvedQmdConfig } from "./backend-config.js";
@@ -1203,13 +1203,21 @@ export class QmdMemoryManager implements MemorySearchManager {
     log.debug(
       `qmd query multi-collection workaround active (${collectionNames.length} collections)`,
     );
+    const results = await Promise.allSettled(
+      collectionNames.map(async (collectionName) => {
+        const args = this.buildSearchArgs("query", query, limit);
+        args.push("-c", collectionName);
+        const result = await this.runQmd(args, { timeoutMs: this.qmd.limits.timeoutMs });
+        return parseQmdQueryJson(result.stdout, result.stderr);
+      }),
+    );
+
     const bestByDocId = new Map<string, QmdQueryResult>();
-    for (const collectionName of collectionNames) {
-      const args = this.buildSearchArgs("query", query, limit);
-      args.push("-c", collectionName);
-      const result = await this.runQmd(args, { timeoutMs: this.qmd.limits.timeoutMs });
-      const parsed = parseQmdQueryJson(result.stdout, result.stderr);
-      for (const entry of parsed) {
+    for (const result of results) {
+      if (result.status !== "fulfilled") {
+        continue;
+      }
+      for (const entry of result.value) {
         if (typeof entry.docid !== "string" || !entry.docid.trim()) {
           continue;
         }
