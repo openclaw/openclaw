@@ -483,14 +483,14 @@ export function createFeishuAgentCardRenderer(params: CreateFeishuAgentCardRende
           return;
         }
 
-        if (info.kind === "block" || info.kind === "final") {
+        if (info.kind === "block") {
           const appended = appendTimelineFromText({
             text: textRaw,
             timeline,
             previousText: previousTimelineText,
             carryLine: timelineCarryLine,
             allowBlock: hasTraceContext,
-            flushIncompleteLine: info.kind === "final",
+            flushIncompleteLine: false,
           });
           timeline = appended.timeline;
           previousTimelineText = appended.previousText;
@@ -498,6 +498,10 @@ export function createFeishuAgentCardRenderer(params: CreateFeishuAgentCardRende
           if (appended.sawReasoning) {
             hasTraceContext = true;
           }
+        }
+        if (info.kind === "final" && timelineCarryLine.trim() && hasTraceContext) {
+          timeline = [...timeline, { kind: "block", text: timelineCarryLine.trim() }];
+          timelineCarryLine = "";
         }
 
         const text = stripReasoningSection(textRaw);
