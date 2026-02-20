@@ -150,7 +150,7 @@ export const AgentDefaultsSchema = z
           .max(5)
           .optional()
           .describe(
-            "Maximum nesting depth for sub-agent spawning. 1 = no nesting (default), 2 = sub-agents can spawn sub-sub-agents.",
+            "Maximum nesting depth for sub-agent spawning. Default is 2 (sub-agents can spawn sub-sub-agents).",
           ),
         maxChildrenPerAgent: z
           .number()

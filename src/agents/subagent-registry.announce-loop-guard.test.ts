@@ -151,4 +151,57 @@ describe("announce loop guard (#18264)", () => {
     const stored = runs.find((run) => run.runId === entry.runId);
     expect(stored?.cleanupCompletedAt).toBeDefined();
   });
+
+  test("does not consume retry budget while descendants are still active", async () => {
+    announceFn.mockClear();
+    registry.resetSubagentRegistryForTests();
+
+    const now = Date.now();
+    const parentEntry = {
+      runId: "test-parent-ended",
+      childSessionKey: "agent:main:subagent:parent-ended",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "agent:main:main",
+      task: "parent task",
+      cleanup: "keep" as const,
+      createdAt: now - 30_000,
+      startedAt: now - 20_000,
+      endedAt: now - 10_000,
+      expectsCompletionMessage: true,
+      cleanupHandled: false,
+    };
+    const activeDescendant = {
+      runId: "test-desc-active",
+      childSessionKey: "agent:main:subagent:parent-ended:subagent:leaf",
+      requesterSessionKey: "agent:main:subagent:parent-ended",
+      requesterDisplayKey: "agent:main:subagent:parent-ended",
+      task: "leaf task",
+      cleanup: "keep" as const,
+      createdAt: now - 5_000,
+      startedAt: now - 5_000,
+      expectsCompletionMessage: true,
+      cleanupHandled: false,
+    };
+
+    loadSubagentRegistryFromDisk.mockReturnValue(
+      new Map([
+        [parentEntry.runId, parentEntry],
+        [activeDescendant.runId, activeDescendant],
+      ]),
+    );
+
+    registry.initSubagentRegistry();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(announceFn).toHaveBeenCalledWith(
+      expect.objectContaining({ childRunId: parentEntry.runId }),
+    );
+    const parent = registry
+      .listSubagentRunsForRequester("agent:main:main")
+      .find((run) => run.runId === parentEntry.runId);
+    expect(parent?.announceRetryCount).toBeUndefined();
+    expect(parent?.cleanupCompletedAt).toBeUndefined();
+    expect(parent?.cleanupHandled).toBe(false);
+  });
 });
