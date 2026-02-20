@@ -285,6 +285,7 @@ export const FIELD_HELP: Record<string, string> = {
   "plugins.slots": "Select which plugins own exclusive slots (memory, etc.).",
   "plugins.slots.memory":
     'Select the active memory plugin by id, or "none" to disable memory plugins.',
+  "plugins.slots.contextEngine": "Select the active context-engine plugin by id.",
   "plugins.entries": "Per-plugin settings keyed by plugin id (enable/disable + config payloads).",
   "plugins.entries.*.enabled": "Overrides plugin enable/disable for this entry (restart required).",
   "plugins.entries.*.config": "Plugin-defined config payload (schema is provided by the plugin).",
