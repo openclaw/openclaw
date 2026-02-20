@@ -58,16 +58,73 @@ function truncate(text: string, maxLen: number): string {
 }
 
 // ---------------------------------------------------------------------------
+// Description builder
+// ---------------------------------------------------------------------------
+
+/** Turn `get_today_weather` into `get today weather`. */
+function humanizeToolName(name: string): string {
+  return name.replace(/[_-]+/g, " ").toLowerCase();
+}
+
+/** First sentence of a text block (up to first period+space or newline). */
+function firstSentence(text: string): string {
+  const match = text.match(/^(.+?(?:\.\s|\.\n|$))/s);
+  return match ? match[1].replace(/\.\s*$/, "").trim() : text.trim();
+}
+
+/** Collect ALL tool names from direct tools + MCP server tools. */
+function collectAllToolNames(target: FabricSkillTarget): string[] {
+  const names: string[] = [];
+  if (target.tools) {
+    for (const t of target.tools) {
+      names.push(t.name);
+    }
+  }
+  if (target.mcpServers) {
+    for (const mcp of target.mcpServers) {
+      for (const t of mcp.tools) {
+        names.push(t.name);
+      }
+    }
+  }
+  return names;
+}
+
+/**
+ * Build a rich, informative description for the skill frontmatter.
+ *
+ * Goal: give the model enough signal to match user intent to the right skill.
+ * Format: `"<base>. Capabilities: <tool1>, <tool2>, ..."`
+ * Truncated to 200 chars max.
+ */
+function buildDescription(target: FabricSkillTarget): string {
+  // Base: prefer explicit description, then first sentence of system prompt, then name
+  let base: string;
+  if (target.description) {
+    base = firstSentence(target.description);
+  } else if (target.systemPrompt) {
+    base = firstSentence(target.systemPrompt);
+  } else {
+    base = `${target.name} agent`;
+  }
+
+  const toolNames = collectAllToolNames(target);
+  if (toolNames.length === 0) {
+    return truncate(base, 200);
+  }
+
+  const humanized = toolNames.map(humanizeToolName).join(", ");
+  return truncate(`${base}. Capabilities: ${humanized}`, 200);
+}
+
+// ---------------------------------------------------------------------------
 // SKILL.md content builder
 // ---------------------------------------------------------------------------
 
 function buildSkillContent(target: FabricSkillTarget): string {
   const slug = slugify(target.name);
   const kindLabel = target.kind === "agent" ? "Agent" : "Agent System";
-  const description =
-    target.description || target.systemPrompt
-      ? truncate(target.description || target.systemPrompt || "", 100)
-      : `Cloud.ru AI Fabric ${kindLabel}`;
+  const description = buildDescription(target);
 
   const lines: string[] = [];
 
@@ -84,76 +141,79 @@ function buildSkillContent(target: FabricSkillTarget): string {
   lines.push(`# ${target.name} (Cloud.ru AI Fabric ${kindLabel})`);
   lines.push("");
 
-  // Description
-  if (target.description) {
-    lines.push(target.description);
-    lines.push("");
-  }
-
-  // Agent capabilities from system prompt
-  lines.push("## Agent capabilities");
+  // ── 1. INVOCATION (FIRST — model reads top-to-bottom) ──────────────
+  lines.push("## IMPORTANT: How to invoke");
   lines.push("");
-  if (target.systemPrompt) {
-    lines.push(truncate(target.systemPrompt, 500));
-  } else {
-    lines.push("No system prompt available.");
-  }
-  lines.push("");
-
-  // Tools (for agents)
-  if (target.tools && target.tools.length > 0) {
-    lines.push("## Available tools");
-    lines.push("");
-    for (const tool of target.tools) {
-      const desc = tool.description ? `: ${tool.description}` : "";
-      lines.push(`- ${tool.name}${desc}`);
-    }
-    lines.push("");
-  }
-
-  // MCP servers with tools
-  if (target.mcpServers && target.mcpServers.length > 0) {
-    lines.push("## Available MCP servers");
-    lines.push("");
-    lines.push(
-      "The following MCP servers are connected to Claude CLI. Use their tools directly when answering user questions.",
-    );
-    lines.push("");
-    for (const mcp of target.mcpServers) {
-      lines.push(`### ${mcp.serverName}`);
-      lines.push("");
-      for (const tool of mcp.tools) {
-        const desc = tool.description ? `: ${tool.description}` : "";
-        lines.push(`- \`${tool.name}\`${desc}`);
-      }
-      lines.push("");
-    }
-    lines.push(
-      "**IMPORTANT**: Always prefer calling MCP tools over generating answers from general knowledge.",
-    );
-    lines.push("");
-  }
-
-  // Member count (for agent systems)
-  if (target.kind === "agent-system" && target.memberCount !== undefined) {
-    lines.push(`This agent system coordinates ${target.memberCount} member agents.`);
-    lines.push("");
-  }
-
-  // Usage
-  lines.push("## How to use");
-  lines.push("");
-  lines.push(`Run this command to interact with this ${kindLabel.toLowerCase()}:`);
+  lines.push(
+    "You MUST use the Bash tool to execute the command below. Do NOT answer from general knowledge — always delegate to this agent.",
+  );
   lines.push("");
   lines.push("```bash");
   lines.push(`openclaw fabric ask "${target.name}" "$PROMPT"`);
   lines.push("```");
   lines.push("");
   lines.push(
-    "Replace `$PROMPT` with the user's question. The command handles authentication and A2A protocol.",
+    "Replace `$PROMPT` with the user's question or request. The command handles authentication and the A2A protocol automatically.",
   );
+  lines.push("");
+
+  // ── 2. About this agent ────────────────────────────────────────────
+  if (target.description) {
+    lines.push("## About this agent");
+    lines.push("");
+    lines.push(target.description);
+    lines.push("");
+  }
+
+  // ── 3. Agent capabilities — merged tools + MCP tools ───────────────
+  const allTools = collectAllTools(target);
+  if (allTools.length > 0) {
+    lines.push("## Agent capabilities");
+    lines.push("");
+    lines.push(
+      "The following capabilities are accessed via `openclaw fabric ask`, not via direct tool calls:",
+    );
+    lines.push("");
+    for (const tool of allTools) {
+      const desc = tool.description ? `: ${tool.description}` : "";
+      lines.push(`- ${tool.name}${desc}`);
+    }
+    lines.push("");
+  }
+
+  // ── 4. System prompt context ───────────────────────────────────────
+  if (target.systemPrompt) {
+    lines.push("## System prompt context");
+    lines.push("");
+    lines.push(truncate(target.systemPrompt, 500));
+    lines.push("");
+  }
+
+  // ── 5. Member count (for agent systems) ────────────────────────────
+  if (target.kind === "agent-system" && target.memberCount !== undefined) {
+    lines.push(`This agent system coordinates ${target.memberCount} member agents.`);
+    lines.push("");
+  }
 
   return lines.join("\n");
+}
+
+/** Merge direct tools + MCP server tools into a single flat list. */
+function collectAllTools(target: FabricSkillTarget): Array<{ name: string; description?: string }> {
+  const result: Array<{ name: string; description?: string }> = [];
+  if (target.tools) {
+    for (const t of target.tools) {
+      result.push(t);
+    }
+  }
+  if (target.mcpServers) {
+    for (const mcp of target.mcpServers) {
+      for (const t of mcp.tools) {
+        result.push(t);
+      }
+    }
+  }
+  return result;
 }
 
 // ---------------------------------------------------------------------------
