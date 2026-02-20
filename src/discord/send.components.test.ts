@@ -10,10 +10,9 @@ vi.mock("../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
-    loadConfig: (...args: unknown[]) => loadConfigMock(...args),
+    loadConfig: (...args: Parameters<typeof actual.loadConfig>) => loadConfigMock(...args),
   };
 });
-
 vi.mock("./components-registry.js", () => ({
   registerDiscordComponentEntries: vi.fn(),
 }));
