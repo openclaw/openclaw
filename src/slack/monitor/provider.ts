@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { Readable } from "node:stream";
 import SlackBolt from "@slack/bolt";
 import { resolveTextChunkLimit } from "../../auto-reply/chunk.js";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "../../auto-reply/reply/history.js";
@@ -18,6 +19,7 @@ import { createNonExitingRuntime, type RuntimeEnv } from "../../runtime.js";
 import { resolveSlackAccount } from "../accounts.js";
 import { resolveSlackWebClientOptions } from "../client.js";
 import { normalizeSlackWebhookPath, registerSlackHttpHandler } from "../http/index.js";
+import { verifySlackRequestSignature } from "../http/verify.js";
 import { resolveSlackChannelAllowlist } from "../resolve-channels.js";
 import { resolveSlackUserAllowlist } from "../resolve-users.js";
 import { resolveSlackAppToken, resolveSlackBotToken } from "../token.js";
@@ -151,22 +153,62 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const slackHttpHandler =
     slackMode === "http" && receiver
       ? async (req: IncomingMessage, res: ServerResponse) => {
-          const guard = installRequestBodyLimitGuard(req, res, {
-            maxBytes: SLACK_WEBHOOK_MAX_BODY_BYTES,
-            timeoutMs: SLACK_WEBHOOK_BODY_TIMEOUT_MS,
-            responseFormat: "text",
+          // Buffer the raw body so we can verify the HMAC signature before
+          // forwarding to Bolt's receiver. This is the canonical approach
+          // described at https://api.slack.com/authentication/verifying-requests-from-slack
+          //
+          // We enforce a body size limit manually here instead of using
+          // installRequestBodyLimitGuard so that we control the buffer before
+          // signature verification.
+          const chunks: Buffer[] = [];
+          let totalBytes = 0;
+          for await (const chunk of req as AsyncIterable<Buffer>) {
+            totalBytes += chunk.length;
+            if (totalBytes > SLACK_WEBHOOK_MAX_BODY_BYTES) {
+              res.writeHead(413, { "Content-Type": "text/plain" });
+              res.end("Request body too large");
+              return;
+            }
+            chunks.push(chunk);
+          }
+          const rawBody = Buffer.concat(chunks);
+
+          // Full HMAC-SHA256 verification. Rejects forged, tampered, or
+          // replayed requests before any business logic runs.
+          // CWE-345: Insufficient Verification of Data Authenticity
+          const verification = verifySlackRequestSignature({
+            signingSecret: signingSecret ?? "",
+            body: rawBody.toString("utf-8"),
+            timestamp: req.headers["x-slack-request-timestamp"] as string | undefined,
+            signature: req.headers["x-slack-signature"] as string | undefined,
           });
-          if (guard.isTripped()) {
+          if (!verification.ok) {
+            res.writeHead(verification.statusCode, { "Content-Type": "text/plain" });
+            res.end(verification.reason);
             return;
           }
+
+          // Re-wrap the already-consumed body as a Readable so Bolt's
+          // HTTPReceiver can process it normally. Bolt will re-verify the
+          // signature against the same body — this is acceptable defence-in-depth.
+          const bodyReadable = Readable.from(rawBody) as unknown as IncomingMessage;
+          Object.assign(bodyReadable, {
+            headers: req.headers,
+            method: req.method,
+            url: req.url,
+            socket: req.socket,
+            connection: req.socket,
+            httpVersion: req.httpVersion,
+            httpVersionMajor: req.httpVersionMajor,
+            httpVersionMinor: req.httpVersionMinor,
+          });
+
           try {
-            await Promise.resolve(receiver.requestListener(req, res));
-          } catch (err) {
-            if (!guard.isTripped()) {
-              throw err;
-            }
-          } finally {
-            guard.dispose();
+            await Promise.resolve(receiver.requestListener(bodyReadable, res));
+          } catch {
+            // Errors surfaced by Bolt after our verification have already been
+            // authenticated; rethrow so the gateway can log them.
+            throw new Error("Slack receiver error after signature verification");
           }
         }
       : null;
@@ -232,6 +274,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     unregisterHttpHandler = registerSlackHttpHandler({
       path: slackWebhookPath,
       handler: slackHttpHandler,
+      signingSecret: signingSecret ?? "",
       log: runtime.log,
       accountId: account.accountId,
     });
