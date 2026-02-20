@@ -1,7 +1,7 @@
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import { GATEWAY_EVENT_UPDATE_AVAILABLE } from "./events.js";
 
-const BASE_METHODS = [
+export const CORE_GATEWAY_METHODS = [
   "health",
   "logs.tail",
   "channels.status",
@@ -96,7 +96,7 @@ const BASE_METHODS = [
 
 export function listGatewayMethods(): string[] {
   const channelMethods = listChannelPlugins().flatMap((plugin) => plugin.gatewayMethods ?? []);
-  return Array.from(new Set([...BASE_METHODS, ...channelMethods]));
+  return Array.from(new Set([...CORE_GATEWAY_METHODS, ...channelMethods]));
 }
 
 export const GATEWAY_EVENTS = [
