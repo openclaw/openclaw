@@ -1,5 +1,6 @@
-import crypto from "node:crypto";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import crypto from "node:crypto";
+import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import {
   type ExecApprovalsFile,
   type ExecAsk,
@@ -18,7 +19,6 @@ import {
   createApprovalSlug,
   emitExecSystemEvent,
 } from "./bash-tools.exec-runtime.js";
-import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import { callGatewayTool } from "./tools/gateway.js";
 import { listNodes, resolveNodeIdFromList } from "./tools/nodes-utils.js";
 
@@ -203,10 +203,7 @@ export async function executeNodeHostCommand(
       if (decision === "deny") {
         deniedReason = "user-denied";
       } else if (!decision) {
-        if (askFallback === "full") {
-          approvedByAsk = true;
-          approvalDecision = "allow-once";
-        } else if (askFallback === "allowlist") {
+        if (askFallback === "allowlist") {
           // Defer allowlist enforcement to the node host.
         } else {
           deniedReason = "approval-timeout";
