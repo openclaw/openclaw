@@ -5,6 +5,10 @@ import { buildNoContextDataMessage } from "./common.js";
 
 const MAX_OUTPUT_CHARS = 40_000;
 
+/** Target token budget per page. We include the record that pushes past
+ *  this threshold then cut — so actual page size may slightly exceed it. */
+const PAGE_TOKEN_BUDGET = 2_000;
+
 type DoltExpandToolParams = {
   queries: DoltReadOnlyQueryHelpers;
   sessionKey?: string;
@@ -21,12 +25,21 @@ export function createDoltExpandTool(params: DoltExpandToolParams): AnyAgentTool
       "Expands a leaf or bindle to show child records. For bindles it shows child leaf summaries; for leaves it shows child turn messages. Only callable by sub-agents (spawn a Task). Use dolt_describe first.",
     parameters: Type.Object({
       pointer: Type.String({ description: "Leaf or bindle pointer to expand." }),
+      page: Type.Optional(
+        Type.Number({
+          description:
+            "Page number (1-indexed). Each page returns ~2k tokens of children. Defaults to 1.",
+          minimum: 1,
+        }),
+      ),
     }),
     async execute(_id: string, rawParams: Record<string, unknown>) {
       const pointer = typeof rawParams.pointer === "string" ? rawParams.pointer.trim() : "";
       if (!pointer) {
         throw new Error("pointer required");
       }
+      const requestedPage =
+        typeof rawParams.page === "number" ? Math.max(1, Math.floor(rawParams.page)) : 1;
 
       const availability = params.queries.getAvailability();
       if (!availability.available) {
@@ -68,41 +81,64 @@ export function createDoltExpandTool(params: DoltExpandToolParams): AnyAgentTool
       }
 
       const children = params.queries.listDirectChildRecords(pointer);
-      const header = buildHeader({
-        queries: params.queries,
-        record,
-      });
-      const headerLength = header.length + 2;
-      const bodyMaxChars = Math.max(0, MAX_OUTPUT_CHARS - headerLength);
-      const body =
-        children.length > 0
-          ? buildChildrenBody({
-              parentLevel: record.level,
-              children,
-              maxChars: bodyMaxChars,
-            })
-          : buildNoChildrenBody({
-              record,
-              maxChars: bodyMaxChars,
-            });
 
-      const text = `${header}\n\n${body.text}`.slice(0, MAX_OUTPUT_CHARS);
+      if (children.length === 0) {
+        const header = buildHeader({ queries: params.queries, record });
+        const bodyMaxChars = Math.max(0, MAX_OUTPUT_CHARS - header.length - 2);
+        const body = buildNoChildrenBody({ record, maxChars: bodyMaxChars });
+        const text = `${header}\n\n${body.text}`.slice(0, MAX_OUTPUT_CHARS);
+        return {
+          content: [{ type: "text", text }],
+          details: { pointer, availability, found: true, level: record.level, childCount: 0 },
+        };
+      }
+
+      // Paginate children by token budget.
+      const pages = paginateByTokenBudget(children, PAGE_TOKEN_BUDGET);
+      const totalPages = pages.length;
+      const pageIndex = Math.min(requestedPage, totalPages) - 1;
+      const pageChildren = pages[pageIndex];
+
+      const header = buildHeader({ queries: params.queries, record });
+      const paginationNote =
+        totalPages > 1
+          ? `Page ${pageIndex + 1} of ${totalPages} (${children.length} children total)`
+          : `${children.length} children total`;
+      const fullHeader = `${header}\n${paginationNote}`;
+
+      // Compute the child offset so numbering is globally consistent.
+      let childOffset = 0;
+      for (let p = 0; p < pageIndex; p++) {
+        childOffset += pages[p].length;
+      }
+
+      const bodyMaxChars = Math.max(0, MAX_OUTPUT_CHARS - fullHeader.length - 2);
+      const body = buildChildrenBody({
+        parentLevel: record.level,
+        children: pageChildren,
+        maxChars: bodyMaxChars,
+        childNumberOffset: childOffset,
+      });
+
+      // Append pagination guidance if there are more pages.
+      let footer = "";
+      if (pageIndex + 1 < totalPages) {
+        footer = `\n\n--- Page ${pageIndex + 1}/${totalPages}. Call dolt_expand with pointer="${pointer}" page=${pageIndex + 2} for the next page. ---`;
+      }
+
+      const text = `${fullHeader}\n\n${body.text}${footer}`.slice(0, MAX_OUTPUT_CHARS);
 
       return {
-        content: [
-          {
-            type: "text",
-            text,
-          },
-        ],
+        content: [{ type: "text", text }],
         details: {
           pointer,
           availability,
           found: true,
           level: record.level,
           childCount: children.length,
-          shownChildren: body.shownChildren,
-          truncatedChildren: body.truncatedChildren,
+          page: pageIndex + 1,
+          totalPages,
+          pageChildCount: pageChildren.length,
         },
       };
     },
@@ -170,10 +206,39 @@ function buildHeader(params: {
   return lines.join("\n");
 }
 
+/** Partition children into pages by token budget. Each page accumulates
+ *  children until the running token total meets or exceeds the budget —
+ *  the record that pushes past the threshold is included, then we cut. */
+function paginateByTokenBudget(children: DoltQueryRecord[], budget: number): DoltQueryRecord[][] {
+  if (children.length === 0) return [[]];
+  const pages: DoltQueryRecord[][] = [];
+  let currentPage: DoltQueryRecord[] = [];
+  let currentTokens = 0;
+
+  for (const child of children) {
+    currentPage.push(child);
+    currentTokens += child.tokenCount;
+    // Include the child that pushes us over, then cut.
+    if (currentTokens >= budget) {
+      pages.push(currentPage);
+      currentPage = [];
+      currentTokens = 0;
+    }
+  }
+  // Flush any remaining children into a final page.
+  if (currentPage.length > 0) {
+    pages.push(currentPage);
+  }
+  return pages;
+}
+
+/** Render the children for a single page. `childNumberOffset` shifts
+ *  numbering so page 2's first child isn't labeled "Child 1". */
 function buildChildrenBody(params: {
   parentLevel: DoltQueryRecord["level"];
   children: DoltQueryRecord[];
   maxChars: number;
+  childNumberOffset?: number;
 }): {
   text: string;
   shownChildren: number;
@@ -187,6 +252,7 @@ function buildChildrenBody(params: {
     };
   }
 
+  const offset = params.childNumberOffset ?? 0;
   let text = "";
   let shownChildren = 0;
   for (let idx = 0; idx < params.children.length; idx += 1) {
@@ -194,9 +260,11 @@ function buildChildrenBody(params: {
     const section = formatChildSection({
       parentLevel: params.parentLevel,
       child,
-      childNumber: idx + 1,
+      childNumber: offset + idx + 1,
     });
     const next = shownChildren === 0 ? section : `${text}\n\n${section}`;
+    // Char-level safety net — shouldn't trigger under normal token pagination
+    // but prevents blowout if individual payloads are huge.
     if (next.length > params.maxChars) {
       break;
     }
@@ -206,21 +274,13 @@ function buildChildrenBody(params: {
 
   const truncatedChildren = Math.max(0, params.children.length - shownChildren);
   if (truncatedChildren === 0) {
-    return {
-      text,
-      shownChildren,
-      truncatedChildren,
-    };
+    return { text, shownChildren, truncatedChildren };
   }
 
-  const marker = `--- Truncated: ${truncatedChildren} more children not shown. Use dolt_describe on individual child pointers. ---`;
+  const marker = `--- ${truncatedChildren} more children not shown (char limit). ---`;
   const withMarker = text ? `${text}\n\n${marker}` : marker;
   if (withMarker.length <= params.maxChars) {
-    return {
-      text: withMarker,
-      shownChildren,
-      truncatedChildren,
-    };
+    return { text: withMarker, shownChildren, truncatedChildren };
   }
 
   const keep = Math.max(0, params.maxChars - marker.length - 2);

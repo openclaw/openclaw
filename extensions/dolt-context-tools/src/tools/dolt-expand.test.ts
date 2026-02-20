@@ -270,6 +270,8 @@ describe("dolt_expand", () => {
       tokenCount: 400,
     });
 
+    // Each child has only 50 tokens but a huge payload string, so the char
+    // safety net in buildChildrenBody will kick in within a single page.
     const children = Array.from({ length: 50 }, (_unused, idx) =>
       createRecord({
         pointer: `leaf:session-4:${idx}:1`,
@@ -296,7 +298,152 @@ describe("dolt_expand", () => {
     const result = await tool.execute("call8", { pointer: bindle.pointer });
     const text = getText(result);
     expect(text.length).toBeLessThanOrEqual(40_000);
-    expect(text).toContain("--- Truncated:");
-    expect(text).toContain("Use dolt_describe on individual child pointers.");
+    expect(text).toContain("more children not shown");
+  });
+
+  it("paginates leaf turns by token budget (~2k tokens per page)", async () => {
+    const leaf = createRecord({
+      pointer: "leaf:session-5:100:1",
+      level: "leaf",
+      payload: { summary: "a leaf" },
+      tokenCount: 5000,
+    });
+
+    // 10 turns, each 500 tokens. Page budget is 2k, so:
+    //   page 1: turns 1-4 (2000 tokens, exactly at budget → cut)
+    //   page 2: turns 5-8 (2000 tokens)
+    //   page 3: turns 9-10 (1000 tokens, remainder)
+    const turns = Array.from({ length: 10 }, (_unused, idx) =>
+      createRecord({
+        pointer: `turn:session-5:${100 + idx}:1`,
+        level: "turn",
+        tokenCount: 500,
+        payload: { role: "assistant", content: `message ${idx + 1}` },
+      }),
+    );
+
+    const tool = createDoltExpandTool({
+      sessionKey: "agent:main:subagent:worker",
+      queries: createQueries({
+        records: { [leaf.pointer]: leaf },
+        childrenByParent: { [leaf.pointer]: turns },
+      }),
+    });
+
+    // Page 1 (default)
+    const r1 = await tool.execute("call-p1", { pointer: leaf.pointer });
+    const t1 = getText(r1);
+    expect(t1).toContain("Page 1 of 3");
+    expect(t1).toContain("10 children total");
+    expect(t1).toContain("--- Child 1");
+    expect(t1).toContain("--- Child 4");
+    expect(t1).not.toContain("--- Child 5");
+    expect(t1).toContain("page=2 for the next page");
+
+    // Page 2
+    const r2 = await tool.execute("call-p2", { pointer: leaf.pointer, page: 2 });
+    const t2 = getText(r2);
+    expect(t2).toContain("Page 2 of 3");
+    expect(t2).toContain("--- Child 5");
+    expect(t2).toContain("--- Child 8");
+    expect(t2).not.toContain("--- Child 9");
+    expect(t2).toContain("page=3 for the next page");
+
+    // Page 3 (last page — no "next page" prompt)
+    const r3 = await tool.execute("call-p3", { pointer: leaf.pointer, page: 3 });
+    const t3 = getText(r3);
+    expect(t3).toContain("Page 3 of 3");
+    expect(t3).toContain("--- Child 9");
+    expect(t3).toContain("--- Child 10");
+    expect(t3).not.toContain("next page");
+  });
+
+  it("clamps out-of-range page numbers to the last page", async () => {
+    const leaf = createRecord({
+      pointer: "leaf:session-6:100:1",
+      level: "leaf",
+      payload: { summary: "leaf" },
+      tokenCount: 1000,
+    });
+
+    const turns = Array.from({ length: 4 }, (_unused, idx) =>
+      createRecord({
+        pointer: `turn:session-6:${100 + idx}:1`,
+        level: "turn",
+        tokenCount: 800,
+        payload: { role: "user", content: `msg ${idx + 1}` },
+      }),
+    );
+
+    const tool = createDoltExpandTool({
+      sessionKey: "agent:main:subagent:worker",
+      queries: createQueries({
+        records: { [leaf.pointer]: leaf },
+        childrenByParent: { [leaf.pointer]: turns },
+      }),
+    });
+
+    // Page 999 should clamp to last page, not crash.
+    const result = await tool.execute("call-overflow", { pointer: leaf.pointer, page: 999 });
+    const text = getText(result);
+    expect(text).toContain("Child");
+    expect(result.details).toHaveProperty("page");
+    expect((result.details as Record<string, unknown>).totalPages).toBeGreaterThan(0);
+  });
+
+  it("includes the boundary-crossing record then cuts", async () => {
+    const leaf = createRecord({
+      pointer: "leaf:session-7:100:1",
+      level: "leaf",
+      payload: { summary: "leaf" },
+      tokenCount: 3000,
+    });
+
+    // 3 turns: 1300 + 1000 + 700 tokens. Budget is 2k.
+    // Page 1: turn 1 (1300) + turn 2 (1000) = 2300 ≥ 2000 → cut after turn 2
+    // Page 2: turn 3 (700)
+    const turns = [
+      createRecord({
+        pointer: "turn:s7:1:1",
+        level: "turn",
+        tokenCount: 1300,
+        payload: { role: "user", content: "big message" },
+      }),
+      createRecord({
+        pointer: "turn:s7:2:1",
+        level: "turn",
+        tokenCount: 1000,
+        payload: { role: "assistant", content: "reply" },
+      }),
+      createRecord({
+        pointer: "turn:s7:3:1",
+        level: "turn",
+        tokenCount: 700,
+        payload: { role: "user", content: "follow up" },
+      }),
+    ];
+
+    const tool = createDoltExpandTool({
+      sessionKey: "agent:main:subagent:worker",
+      queries: createQueries({
+        records: { [leaf.pointer]: leaf },
+        childrenByParent: { [leaf.pointer]: turns },
+      }),
+    });
+
+    // Page 1 should have 2 children (1300 + 1000 = 2300 tokens)
+    const r1 = await tool.execute("call-boundary", { pointer: leaf.pointer });
+    const t1 = getText(r1);
+    expect(t1).toContain("Page 1 of 2");
+    expect(t1).toContain("--- Child 1");
+    expect(t1).toContain("--- Child 2");
+    expect(t1).not.toContain("--- Child 3");
+
+    // Page 2 should have 1 child (700 tokens)
+    const r2 = await tool.execute("call-boundary-p2", { pointer: leaf.pointer, page: 2 });
+    const t2 = getText(r2);
+    expect(t2).toContain("Page 2 of 2");
+    expect(t2).toContain("--- Child 3");
+    expect(t2).not.toContain("next page");
   });
 });
