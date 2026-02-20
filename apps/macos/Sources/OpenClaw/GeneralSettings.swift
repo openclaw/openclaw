@@ -675,22 +675,17 @@ extension GeneralSettings {
     private func applyDiscoveredGateway(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) {
         MacNodeModeCoordinator.shared.setPreferredGatewayStableID(gateway.stableID)
 
-        let host = gateway.tailnetDns ?? gateway.lanHost
-        guard let host else { return }
-        let user = NSUserName()
         if self.state.remoteTransport == .direct {
             if let url = GatewayDiscoveryHelpers.directUrl(for: gateway) {
                 self.state.remoteUrl = url
             }
-        } else {
-            self.state.remoteTarget = GatewayDiscoveryModel.buildSSHTarget(
-                user: user,
-                host: host,
-                port: gateway.sshPort)
-            self.state.remoteCliPath = gateway.cliPath ?? ""
+        } else if let target = GatewayDiscoveryHelpers.sshTarget(for: gateway) {
+            self.state.remoteTarget = target
+        }
+        if let endpoint = GatewayDiscoveryHelpers.serviceEndpoint(for: gateway) {
             OpenClawConfigFile.setRemoteGatewayUrl(
-                host: gateway.serviceHost ?? host,
-                port: gateway.servicePort ?? gateway.gatewayPort)
+                host: endpoint.host,
+                port: endpoint.port)
         }
     }
 }
