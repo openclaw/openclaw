@@ -77,6 +77,7 @@ export type EmbeddedPiSubscribeState = {
   successfulCronAdds: number;
   pendingMessagingMediaUrls: Map<string, string[]>;
   lastAssistant?: AgentMessage;
+  agentStartedAt?: number;
 };
 
 export type EmbeddedPiSubscribeContext = {

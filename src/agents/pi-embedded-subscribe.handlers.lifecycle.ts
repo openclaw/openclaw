@@ -10,6 +10,7 @@ export {
 } from "./pi-embedded-subscribe.handlers.compaction.js";
 
 export function handleAgentStart(ctx: EmbeddedPiSubscribeContext) {
+  ctx.state.agentStartedAt = Date.now(); // track for durationMs in handleAgentEnd
   ctx.log.debug(`embedded run agent start: runId=${ctx.params.runId}`);
   emitAgentEvent({
     runId: ctx.params.runId,
@@ -79,5 +80,30 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
     ctx.resolveCompactionRetry();
   } else {
     ctx.maybeResolveCompactionWait();
+  }
+
+  // Fire agent_end plugin hook for streaming path.
+  // In non-streaming mode this is called in runEmbeddedAttempt(),
+  // but that code is never reached when streaming — so we fire it here.
+  // See: https://github.com/openclaw/openclaw/issues/21862
+  if (ctx.hookRunner?.hasHooks("agent_end")) {
+    ctx.hookRunner
+      .runAgentEnd(
+        {
+          messages: ctx.state.lastAssistant ? [ctx.state.lastAssistant] : [],
+          success: !isError,
+          error:
+            isError && lastAssistant
+              ? ((lastAssistant as { errorMessage?: string }).errorMessage ?? "LLM request failed.")
+              : undefined,
+          durationMs: ctx.state.agentStartedAt ? Date.now() - ctx.state.agentStartedAt : 0,
+        },
+        {
+          sessionKey: ctx.params.sessionKey,
+        },
+      )
+      .catch((err) => {
+        ctx.log.warn(`agent_end hook failed (streaming): ${String(err)}`);
+      });
   }
 }
