@@ -1,6 +1,5 @@
 import { LitElement } from "lit";
 import { customElement, state } from "lit/decorators.js";
-import { i18n, I18nController, isSupportedLocale } from "../i18n/index.ts";
 import {
   handleChannelConfigReload as handleChannelConfigReloadInternal,
   handleChannelConfigSave as handleChannelConfigSaveInternal,
@@ -51,8 +50,9 @@ import {
   type FallbackStatus,
 } from "./app-tool-stream.ts";
 import type { AppViewState } from "./app-view-state.ts";
-import { normalizeAssistantIdentity } from "./assistant-identity.ts";
+import { resolveInjectedAssistantIdentity } from "./assistant-identity.ts";
 import { loadAssistantIdentity as loadAssistantIdentityInternal } from "./controllers/assistant-identity.ts";
+import { loadClarityOS as loadClarityOSInternal } from "./controllers/clarityos.ts";
 import type { DevicePairingList } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
@@ -89,7 +89,7 @@ declare global {
   }
 }
 
-const bootAssistantIdentity = normalizeAssistantIdentity({});
+const injectedAssistantIdentity = resolveInjectedAssistantIdentity();
 
 function resolveOnboardingMode(): boolean {
   if (!window.location.search) {
@@ -106,14 +106,7 @@ function resolveOnboardingMode(): boolean {
 
 @customElement("openclaw-app")
 export class OpenClawApp extends LitElement {
-  private i18nController = new I18nController(this);
   @state() settings: UiSettings = loadSettings();
-  constructor() {
-    super();
-    if (isSupportedLocale(this.settings.locale)) {
-      void i18n.setLocale(this.settings.locale);
-    }
-  }
   @state() password = "";
   @state() tab: Tab = "chat";
   @state() onboarding = resolveOnboardingMode();
@@ -127,9 +120,9 @@ export class OpenClawApp extends LitElement {
   private toolStreamSyncTimer: number | null = null;
   private sidebarCloseTimer: number | null = null;
 
-  @state() assistantName = bootAssistantIdentity.name;
-  @state() assistantAvatar = bootAssistantIdentity.avatar;
-  @state() assistantAgentId = bootAssistantIdentity.agentId ?? null;
+  @state() assistantName = injectedAssistantIdentity.name;
+  @state() assistantAvatar = injectedAssistantIdentity.avatar;
+  @state() assistantAgentId = injectedAssistantIdentity.agentId ?? null;
 
   @state() sessionKey = this.settings.sessionKey;
   @state() chatLoading = false;
@@ -259,8 +252,6 @@ export class OpenClawApp extends LitElement {
   @state() usageTimeSeriesBreakdownMode: "total" | "by-type" = "by-type";
   @state() usageTimeSeries: import("./types.js").SessionUsageTimeSeries | null = null;
   @state() usageTimeSeriesLoading = false;
-  @state() usageTimeSeriesCursorStart: number | null = null;
-  @state() usageTimeSeriesCursorEnd: number | null = null;
   @state() usageSessionLogs: import("./views/usage.js").SessionLogEntry[] | null = null;
   @state() usageSessionLogsLoading = false;
   @state() usageSessionLogsExpanded = false;
@@ -293,6 +284,23 @@ export class OpenClawApp extends LitElement {
   // Non-reactive (don’t trigger renders just for timer bookkeeping).
   usageQueryDebounceTimer: number | null = null;
 
+  @state() clarityLoading = false;
+  @state() clarityError: string | null = null;
+  @state() clarityStatus: import("./types.js").ClarityStatusResult | null = null;
+  @state() claritySummaryPeriod: "daily" | "weekly" | "monthly" | "custom" = "daily";
+  @state() claritySummary: import("./types.js").ClaritySummaryResult | null = null;
+  @state() clarityTimeline: import("./types.js").ClarityTimelineResult | null = null;
+  @state() clarityTimelineLimit = 200;
+  @state() clarityTimelineFilters = {
+    q: "",
+    source: "",
+    eventType: "",
+    status: "",
+    since: "",
+    until: "",
+  };
+  @state() clarityProposals: import("./types.js").ClarityProposalsResult | null = null;
+  @state() clarityNightly: import("./types.js").ClarityNightlyResult | null = null;
   @state() cronLoading = false;
   @state() cronJobs: CronJob[] = [];
   @state() cronStatus: CronStatus | null = null;
@@ -347,6 +355,7 @@ export class OpenClawApp extends LitElement {
   private nodesPollInterval: number | null = null;
   private logsPollInterval: number | null = null;
   private debugPollInterval: number | null = null;
+  private clarityPollInterval: number | null = null;
   private logsScrollFrame: number | null = null;
   private toolStreamById = new Map<string, ToolStreamEntry>();
   private toolStreamOrder: string[] = [];
@@ -441,6 +450,10 @@ export class OpenClawApp extends LitElement {
 
   async loadCron() {
     await loadCronInternal(this as unknown as Parameters<typeof loadCronInternal>[0]);
+  }
+
+  async loadClarityOS() {
+    await loadClarityOSInternal(this as unknown as Parameters<typeof loadClarityOSInternal>[0]);
   }
 
   async handleAbortChat() {
