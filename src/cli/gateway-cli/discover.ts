@@ -81,6 +81,7 @@ export function renderBeaconLines(beacon: GatewayBonjourBeacon, rich: boolean): 
   const title = colorize(rich, theme.accentBright, nameRaw);
   const domain = colorize(rich, theme.muted, domainRaw);
 
+  const host = pickBeaconHost(beacon);
   const wsUrl = buildGatewayWsUrl(beacon);
 
   const lines = [`- ${title} ${domain}`];
