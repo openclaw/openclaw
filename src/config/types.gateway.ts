@@ -318,4 +318,11 @@ export type GatewayConfig = {
    * Set to 0 to disable. Default: 5.
    */
   channelHealthCheckMinutes?: number;
+  /**
+   * Maximum byte budget for chat history responses.
+   * Controls how much session history is returned via chat.history.
+   * Sessions with large base64 image payloads may need a higher limit.
+   * Default: 6MB (6291456).
+   */
+  maxChatHistoryBytes?: number;
 };

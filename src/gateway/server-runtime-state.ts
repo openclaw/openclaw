@@ -22,7 +22,7 @@ import {
   createChatRunState,
   createToolEventRecipientRegistry,
 } from "./server-chat.js";
-import { MAX_PAYLOAD_BYTES } from "./server-constants.js";
+import { MAX_PAYLOAD_BYTES, initMaxChatHistoryBytes } from "./server-constants.js";
 import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-http.js";
 import type { DedupeEntry } from "./server-shared.js";
 import { createGatewayHooksRequestHandler } from "./server/hooks.js";
@@ -155,6 +155,8 @@ export async function createGatewayRuntimeState(params: {
   if (!httpServer) {
     throw new Error("Gateway HTTP server failed to start");
   }
+
+  initMaxChatHistoryBytes(params.cfg.gateway);
 
   const wss = new WebSocketServer({
     noServer: true,
