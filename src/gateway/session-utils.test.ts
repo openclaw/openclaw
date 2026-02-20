@@ -563,4 +563,64 @@ describe("listSessionsFromStore search", () => {
     expect(missing?.totalTokens).toBeUndefined();
     expect(missing?.totalTokensFresh).toBe(false);
   });
+
+  test("searchContent filters sessions by transcript content", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-search-content-test-"));
+    const storePath = path.join(tmpDir, "sessions.json");
+    try {
+      // Write transcript files for sessions
+      const transcript1 = path.join(tmpDir, "sess-work-1.jsonl");
+      fs.writeFileSync(
+        transcript1,
+        [
+          JSON.stringify({ type: "session", version: 1, id: "sess-work-1" }),
+          JSON.stringify({ message: { role: "user", content: "How do I deploy to kubernetes?" } }),
+        ].join("\n"),
+        "utf-8",
+      );
+      const transcript2 = path.join(tmpDir, "sess-personal-1.jsonl");
+      fs.writeFileSync(
+        transcript2,
+        [
+          JSON.stringify({ type: "session", version: 1, id: "sess-personal-1" }),
+          JSON.stringify({ message: { role: "user", content: "What time is dinner?" } }),
+        ].join("\n"),
+        "utf-8",
+      );
+
+      const store: Record<string, SessionEntry> = {
+        "agent:main:work": {
+          sessionId: "sess-work-1",
+          updatedAt: Date.now(),
+          displayName: "Work Session",
+        } as SessionEntry,
+        "agent:main:personal": {
+          sessionId: "sess-personal-1",
+          updatedAt: Date.now() - 1000,
+          displayName: "Personal Session",
+        } as SessionEntry,
+      };
+
+      // Without searchContent: "kubernetes" matches nothing in metadata
+      const noContent = listSessionsFromStore({
+        cfg: baseCfg,
+        storePath,
+        store,
+        opts: { search: "kubernetes" },
+      });
+      expect(noContent.sessions.length).toBe(0);
+
+      // With searchContent: "kubernetes" matches transcript content
+      const withContent = listSessionsFromStore({
+        cfg: baseCfg,
+        storePath,
+        store,
+        opts: { search: "kubernetes", searchContent: true },
+      });
+      expect(withContent.sessions.length).toBe(1);
+      expect(withContent.sessions[0].displayName).toBe("Work Session");
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
 });

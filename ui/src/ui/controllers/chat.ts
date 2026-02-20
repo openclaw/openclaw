@@ -50,6 +50,46 @@ export async function loadChatHistory(state: ChatState) {
   }
 }
 
+export type ChatSearchMatch = {
+  index: number;
+  role: string;
+  snippet: string;
+};
+
+export type ChatSearchResult = {
+  sessionKey: string;
+  query: string;
+  matches: ChatSearchMatch[];
+  count: number;
+};
+
+export async function searchChatHistory(
+  state: ChatState,
+  query: string,
+  limit?: number,
+): Promise<ChatSearchResult | null> {
+  if (!state.client || !state.connected) {
+    return null;
+  }
+  const trimmed = query.trim();
+  if (!trimmed) {
+    return null;
+  }
+  try {
+    const params: Record<string, unknown> = {
+      sessionKey: state.sessionKey,
+      query: trimmed,
+    };
+    if (typeof limit === "number" && limit > 0) {
+      params.limit = limit;
+    }
+    return await state.client.request<ChatSearchResult>("chat.search", params);
+  } catch (err) {
+    state.lastError = String(err);
+    return null;
+  }
+}
+
 function dataUrlToBase64(dataUrl: string): { content: string; mimeType: string } | null {
   const match = /^data:([^;]+);base64,(.+)$/.exec(dataUrl);
   if (!match) {

@@ -113,6 +113,114 @@ export function readSessionMessages(
   return messages;
 }
 
+export type SearchMatch = {
+  index: number;
+  message: unknown;
+  snippet: string;
+};
+
+export function searchSessionTranscript(
+  sessionId: string,
+  storePath: string | undefined,
+  query: string,
+  opts?: { sessionFile?: string; agentId?: string; limit?: number },
+): SearchMatch[] {
+  if (!query) {
+    return [];
+  }
+  const candidates = resolveSessionTranscriptCandidates(
+    sessionId,
+    storePath,
+    opts?.sessionFile,
+    opts?.agentId,
+  );
+  const filePath = candidates.find((p) => fs.existsSync(p));
+  if (!filePath) {
+    return [];
+  }
+
+  const lowerQuery = query.toLowerCase();
+  const maxResults = opts?.limit ?? 50;
+  const matches: SearchMatch[] = [];
+
+  const raw = fs.readFileSync(filePath, "utf-8");
+  const lines = raw.split(/\r?\n/);
+  let messageIndex = 0;
+
+  for (const line of lines) {
+    if (!line.trim()) {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(line);
+      const msg = parsed?.message;
+      if (!msg) {
+        // Count compaction entries to stay aligned with readSessionMessages
+        if (parsed?.type === "compaction") {
+          messageIndex++;
+        }
+        continue;
+      }
+      const text = extractMessageText(msg);
+      if (text && text.toLowerCase().includes(lowerQuery)) {
+        const snippet = extractSnippet(text, lowerQuery, 120);
+        matches.push({ index: messageIndex, message: msg, snippet });
+        if (matches.length >= maxResults) {
+          break;
+        }
+      }
+      messageIndex++;
+    } catch {
+      // skip malformed lines
+    }
+  }
+  return matches;
+}
+
+function extractMessageText(message: unknown): string | null {
+  if (!message || typeof message !== "object") {
+    return null;
+  }
+  const msg = message as { role?: string; content?: unknown };
+  const content = msg.content;
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return null;
+  }
+  const parts: string[] = [];
+  for (const part of content) {
+    if (part && typeof part === "object" && typeof (part as { text?: string }).text === "string") {
+      parts.push((part as { text: string }).text);
+    }
+  }
+  return parts.length > 0 ? parts.join("\n") : null;
+}
+
+function extractSnippet(text: string, lowerQuery: string, maxLen: number): string {
+  const lowerText = text.toLowerCase();
+  const idx = lowerText.indexOf(lowerQuery);
+  if (idx < 0) {
+    return text.slice(0, maxLen);
+  }
+  const ellipsis = "...";
+  const contextBefore = 40;
+  const start = Math.max(0, idx - contextBefore);
+  const needsPrefix = start > 0;
+  const needsSuffix = start + maxLen < text.length;
+  const reservedChars = (needsPrefix ? ellipsis.length : 0) + (needsSuffix ? ellipsis.length : 0);
+  const sliceLen = Math.max(1, maxLen - reservedChars);
+  let snippet = text.slice(start, start + sliceLen);
+  if (needsPrefix) {
+    snippet = ellipsis + snippet;
+  }
+  if (needsSuffix) {
+    snippet = snippet + ellipsis;
+  }
+  return snippet;
+}
+
 export function resolveSessionTranscriptCandidates(
   sessionId: string,
   storePath: string | undefined,
