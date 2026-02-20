@@ -26,6 +26,7 @@ import { resolveSlackSlashCommandConfig } from "./commands.js";
 import { createSlackMonitorContext } from "./context.js";
 import { registerSlackMonitorEvents } from "./events.js";
 import { createSlackMessageHandler } from "./message-handler.js";
+import { performStartupCatchUp, startWatermarkFlushTimer } from "./catchup.js";
 import { registerSlackMonitorSlashCommands } from "./slash.js";
 import type { MonitorSlackOpts } from "./types.js";
 
@@ -342,10 +343,21 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   };
   opts.abortSignal?.addEventListener("abort", stopOnAbort, { once: true });
 
+  const stopWatermarkFlush = startWatermarkFlushTimer(account.accountId);
+
   try {
     if (slackMode === "socket") {
       await app.start();
       runtime.log?.("slack socket mode connected");
+
+      // Catch up on missed messages during downtime (fire-and-forget)
+      performStartupCatchUp({
+        ctx,
+        handleSlackMessage,
+        abortSignal: opts.abortSignal,
+      }).catch((err) => {
+        runtime.error?.(`slack catch-up failed for account ${account.accountId}: ${String(err)}`);
+      });
     } else {
       runtime.log?.(`slack http mode listening at ${slackWebhookPath}`);
     }
@@ -360,6 +372,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   } finally {
     opts.abortSignal?.removeEventListener("abort", stopOnAbort);
     unregisterHttpHandler?.();
+    await stopWatermarkFlush();
     await app.stop().catch(() => undefined);
   }
 }
