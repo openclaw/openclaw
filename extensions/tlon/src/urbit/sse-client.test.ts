@@ -27,7 +27,7 @@ describe("UrbitSSEClient", () => {
       const { urbitFetch } = await import("./fetch.js");
       const mockUrbitFetch = vi.mocked(urbitFetch);
       mockUrbitFetch.mockResolvedValue({
-        response: { ok: true, status: 200 },
+        response: { ok: true, status: 200 } as unknown as Response,
         finalUrl: "https://example.com",
         release: vi.fn().mockResolvedValue(undefined),
       });
@@ -45,9 +45,9 @@ describe("UrbitSSEClient", () => {
       expect(mockUrbitFetch).toHaveBeenCalledTimes(1);
       const callArgs = mockUrbitFetch.mock.calls[0][0];
       expect(callArgs.path).toContain("/~/channel/");
-      expect(callArgs.init.method).toBe("PUT");
+      expect(callArgs.init?.method).toBe("PUT");
 
-      const body = JSON.parse(callArgs.init.body as string);
+      const body = JSON.parse(callArgs.init?.body as string);
       expect(body).toHaveLength(1);
       expect(body[0]).toMatchObject({
         action: "subscribe",

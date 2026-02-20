@@ -113,6 +113,10 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
 
   const ssrfPolicy = ssrfPolicyFromAllowPrivateNetwork(account.allowPrivateNetwork);
 
+  // Store validated values for use in closures (TypeScript narrowing doesn't propagate)
+  const accountUrl = account.url;
+  const accountCode = account.code;
+
   // Helper to authenticate with retry logic
   async function authenticateWithRetry(maxAttempts = 10): Promise<string> {
     for (let attempt = 1; ; attempt++) {
@@ -120,8 +124,8 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         throw new Error("Aborted while waiting to authenticate");
       }
       try {
-        runtime.log?.(`[tlon] Attempting authentication to ${account.url}...`);
-        return await authenticate(account.url, account.code, { ssrfPolicy });
+        runtime.log?.(`[tlon] Attempting authentication to ${accountUrl}...`);
+        return await authenticate(accountUrl, accountCode, { ssrfPolicy });
       } catch (error: any) {
         runtime.error?.(
           `[tlon] Failed to authenticate (attempt ${attempt}): ${error?.message ?? String(error)}`,
