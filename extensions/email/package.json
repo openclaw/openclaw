@@ -1,0 +1,32 @@
+{
+  "name": "@openclaw/email",
+  "version": "2026.2.20",
+  "private": true,
+  "description": "OpenClaw Email channel plugin",
+  "type": "module",
+  "dependencies": {
+    "nodemailer": "^7.0.10"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "email",
+      "label": "Email",
+      "selectionLabel": "Email (SMTP)",
+      "docsPath": "/channels/email",
+      "docsLabel": "email",
+      "blurb": "SMTP outbound email channel for notifications and routing.",
+      "order": 70
+    },
+    "install": {
+      "npmSpec": "@openclaw/email",
+      "localPath": "extensions/email",
+      "defaultChoice": "npm"
+    }
+  }
+}
