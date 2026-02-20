@@ -7,6 +7,7 @@ const PREFERRED_PROVIDER_BY_AUTH_CHOICE: Partial<Record<AuthChoice, string>> = {
   token: "anthropic",
   apiKey: "anthropic",
   vllm: "vllm",
+  ollama: "ollama",
   "openai-codex": "openai-codex",
   "codex-cli": "openai-codex",
   chutes: "chutes",

@@ -47,6 +47,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["vllm"],
   },
   {
+    value: "ollama",
+    label: "Ollama",
+    hint: "Local + cloud models",
+    choices: ["ollama"],
+  },
+  {
     value: "minimax",
     label: "MiniMax",
     hint: "M2.5 (recommended)",
@@ -177,6 +183,11 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
     value: "vllm",
     label: "vLLM (custom URL + model)",
     hint: "Local/self-hosted OpenAI-compatible server",
+  },
+  {
+    value: "ollama",
+    label: "Ollama (local + cloud models)",
+    hint: "GLM-5, MiniMax-M2.5, Kimi-K2.5, Qwen-3.5, and more",
   },
   { value: "openai-api-key", label: "OpenAI API key" },
   { value: "xai-api-key", label: "xAI (Grok) API key" },
