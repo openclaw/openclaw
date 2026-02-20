@@ -48,6 +48,15 @@
   `pkill -9 -f openclaw-gateway || true; nohup openclaw gateway run --bind loopback --port 18789 --force > /tmp/openclaw-gateway.log 2>&1 &`
 - Verify: `openclaw channels status --probe`, `ss -ltnp | rg 18789`, `tail -n 120 /tmp/openclaw-gateway.log`.
 
+## Local Windows Gateway (Development)
+
+- Start gateway: `pnpm start gateway` or `node scripts/run-node.mjs gateway`
+- Running `pnpm start` alone prints CLI help; the `gateway` subcommand is required.
+- Verify: look for `[discord] logged in to discord` in startup output.
+- Diagnostics: `openclaw channels status --probe`, `openclaw doctor`.
+- The gateway does not auto-start after reboot; run manually or set up as a service.
+- Discord token: set via `openclaw config set channels.discord.token '"TOKEN"' --json` or `DISCORD_BOT_TOKEN` env var.
+
 ## Build, Test, and Development Commands
 
 - Runtime baseline: Node **22+** (keep Node + Bun paths working).
