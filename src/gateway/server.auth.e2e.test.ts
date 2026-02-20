@@ -948,6 +948,71 @@ describe("gateway server auth/connect", () => {
     restoreGatewayToken(prevToken);
   });
 
+  test("allows operator.read connect when device is paired with operator.admin", async () => {
+    const { mkdtemp } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem, signDevicePayload } =
+      await import("../infra/device-identity.js");
+    const { listDevicePairing } = await import("../infra/device-pairing.js");
+    const { server, ws, port, prevToken } = await startServerWithClient("secret");
+    const identityDir = await mkdtemp(join(tmpdir(), "openclaw-device-scope-"));
+    const identity = loadOrCreateDeviceIdentity(join(identityDir, "device.json"));
+    const client = {
+      id: GATEWAY_CLIENT_NAMES.TEST,
+      version: "1.0.0",
+      platform: "test",
+      mode: GATEWAY_CLIENT_MODES.TEST,
+    };
+    const buildDevice = (scopes: string[]) => {
+      const signedAtMs = Date.now();
+      const payload = buildDeviceAuthPayload({
+        deviceId: identity.deviceId,
+        clientId: client.id,
+        clientMode: client.mode,
+        role: "operator",
+        scopes,
+        signedAtMs,
+        token: "secret",
+      });
+      return {
+        id: identity.deviceId,
+        publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+        signature: signDevicePayload(identity.privateKeyPem, payload),
+        signedAt: signedAtMs,
+      };
+    };
+
+    const initial = await connectReq(ws, {
+      token: "secret",
+      scopes: ["operator.admin"],
+      client,
+      device: buildDevice(["operator.admin"]),
+    });
+    if (!initial.ok) {
+      await approvePendingPairingIfNeeded();
+    }
+
+    ws.close();
+
+    const ws2 = new WebSocket(`ws://127.0.0.1:${port}`);
+    await new Promise<void>((resolve) => ws2.once("open", resolve));
+    const res = await connectReq(ws2, {
+      token: "secret",
+      scopes: ["operator.read"],
+      client,
+      device: buildDevice(["operator.read"]),
+    });
+    expect(res.ok).toBe(true);
+    ws2.close();
+
+    const list = await listDevicePairing();
+    expect(list.pending).toEqual([]);
+
+    await server.close();
+    restoreGatewayToken(prevToken);
+  });
+
   test("allows legacy paired devices missing role/scope metadata", async () => {
     const { resolvePairingPaths, readJsonFile } = await import("../infra/pairing-files.js");
     const { writeJsonAtomic } = await import("../infra/json-files.js");
