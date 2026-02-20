@@ -256,8 +256,8 @@ export async function initSessionState(params: {
       persistedVerbose = entry.verboseLevel;
       persistedReasoning = entry.reasoningLevel;
       persistedTtsAuto = entry.ttsAuto;
-      persistedModelOverride = entry.modelOverride;
-      persistedProviderOverride = entry.providerOverride;
+      // Intentionally do NOT carry forward model/provider session overrides on
+      // /new or /reset. A reset should return model selection to configured defaults.
     }
   }
 
