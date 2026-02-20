@@ -79,6 +79,33 @@ We recommend migrating to the new `cacheRetention` parameter.
 OpenClaw includes the `extended-cache-ttl-2025-04-11` beta flag for Anthropic API
 requests; keep it if you override provider headers (see [/gateway/configuration](/gateway/configuration)).
 
+### Conversation history caching
+
+In addition to caching the system prompt, OpenClaw can place up to 2 cache markers on the stable portion of conversation history. This avoids re-processing older messages on every turn, reducing costs by an estimated 40-70% for interactive sessions. (Anthropic allows 4 `cache_control` blocks per request; 2 are used by the system prompt, leaving 2 for conversation history.)
+
+**How it works:** The last 30 messages (configurable) are kept uncached as the "hot zone" — these change frequently as the conversation progresses. The remaining older messages are divided into equal segments with cache breakpoints. Caching is skipped for short sessions (fewer than 20 stable messages) to avoid wasted cache writes.
+
+This feature activates automatically when `cacheRetention` is set (which is the default for API key auth). To customise or disable:
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "anthropic/claude-opus-4-6": {
+          params: {
+            // Number of recent messages to leave uncached (default: 30)
+            cacheConversationTail: 30,
+            // Set to 0 to disable conversation history caching
+            // cacheConversationTail: 0,
+          },
+        },
+      },
+    },
+  },
+}
+```
+
 ## 1M context window (Anthropic beta)
 
 Anthropic's 1M context window is beta-gated. In OpenClaw, enable it per model
