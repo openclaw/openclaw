@@ -314,6 +314,56 @@ When the linked self number is also present in `allowFrom`, WhatsApp self-chat s
   </Accordion>
 </AccordionGroup>
 
+## Offline message handling
+
+When WhatsApp reconnects after a disconnect, missed messages arrive as history catch-up (`append` type). By default these are marked as read but **not processed** — no auto-reply is sent. This prevents flooding old messages but means messages received during brief disconnects are silently lost.
+
+<AccordionGroup>
+  <Accordion title="Processing offline messages">
+    Enable `replyToOfflineMessages` to process missed messages after reconnect:
+
+    ```json5
+    {
+      channels: {
+        whatsapp: {
+          replyToOfflineMessages: true,
+          offlineMessageMaxAgeSeconds: 300, // default: 300 (5 minutes)
+        },
+      },
+    }
+    ```
+
+    Only messages newer than `offlineMessageMaxAgeSeconds` are processed. Older messages are still skipped to prevent flooding after extended disconnects.
+
+    Per-account override:
+
+    ```json5
+    {
+      channels: {
+        whatsapp: {
+          accounts: {
+            work: {
+              replyToOfflineMessages: true,
+              offlineMessageMaxAgeSeconds: 600,
+            },
+          },
+        },
+      },
+    }
+    ```
+
+  </Accordion>
+
+  <Accordion title="Why are messages lost after reconnect?">
+    When Baileys reconnects, offline messages arrive with `upsert.type === "append"` (history sync) rather than `"notify"` (real-time). By default, OpenClaw skips these to avoid replying to old history.
+
+    This also affects **group messages after gateway restart** — groups may deliver initial messages as `append` type during reconnection sync.
+
+    Enable `replyToOfflineMessages` to fix both scenarios.
+
+  </Accordion>
+</AccordionGroup>
+
 ## Acknowledgment reactions
 
 WhatsApp supports immediate ack reactions on inbound receipt via `channels.whatsapp.ackReaction`.
@@ -414,6 +464,14 @@ Behavior notes:
     - `groups` allowlist entries
     - mention gating (`requireMention` + mention patterns)
     - duplicate keys in `openclaw.json` (JSON5): later entries override earlier ones, so keep a single `groupPolicy` per scope
+    - after restart/reconnect: group messages may arrive as `append` type and be skipped — enable `replyToOfflineMessages: true` (see [Offline message handling](#offline-message-handling))
+
+  </Accordion>
+
+  <Accordion title="Messages lost after reconnect">
+    Messages sent while the gateway was disconnected are marked as read but not processed by default.
+
+    Fix: enable `channels.whatsapp.replyToOfflineMessages: true` with an appropriate `offlineMessageMaxAgeSeconds` value. See [Offline message handling](#offline-message-handling).
 
   </Accordion>
 
@@ -433,7 +491,7 @@ High-signal WhatsApp fields:
 - access: `dmPolicy`, `allowFrom`, `groupPolicy`, `groupAllowFrom`, `groups`
 - delivery: `textChunkLimit`, `chunkMode`, `mediaMaxMb`, `sendReadReceipts`, `ackReaction`
 - multi-account: `accounts.<id>.enabled`, `accounts.<id>.authDir`, account-level overrides
-- operations: `configWrites`, `debounceMs`, `web.enabled`, `web.heartbeatSeconds`, `web.reconnect.*`
+- operations: `configWrites`, `debounceMs`, `replyToOfflineMessages`, `offlineMessageMaxAgeSeconds`, `web.enabled`, `web.heartbeatSeconds`, `web.reconnect.*`
 - session behavior: `session.dmScope`, `historyLimit`, `dmHistoryLimit`, `dms.<id>.historyLimit`
 
 ## Related
