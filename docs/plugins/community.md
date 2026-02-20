@@ -42,3 +42,10 @@ Use this format when adding entries:
   npm: `@scope/package`
   repo: `https://github.com/org/repo`
   install: `openclaw plugins install @scope/package`
+
+## Plugins
+
+- **Apple PIM CLI** — Native macOS Calendar, Reminders, Contacts, and Mail.app tools via Swift CLIs
+  npm: `apple-pim-cli`
+  repo: `https://github.com/omarshahine/Apple-PIM-Agent-Plugin`
+  install: `openclaw plugins install apple-pim-cli`
