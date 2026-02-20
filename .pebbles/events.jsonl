@@ -100,3 +100,6 @@
 {"type":"status_update","timestamp":"2026-02-20T08:56:48.497229Z","issue_id":"clawdbot-276.1","payload":{"status":"in_progress"}}
 {"type":"close","timestamp":"2026-02-20T09:06:52.141522Z","issue_id":"clawdbot-276.1","payload":{}}
 {"type":"close","timestamp":"2026-02-20T09:09:02.954187Z","issue_id":"clawdbot-276.1","payload":{}}
+{"type":"status_update","timestamp":"2026-02-20T09:10:31.282568Z","issue_id":"clawdbot-276.2","payload":{"status":"in_progress"}}
+{"type":"close","timestamp":"2026-02-20T09:16:28.84546Z","issue_id":"clawdbot-276.2","payload":{}}
+{"type":"close","timestamp":"2026-02-20T09:20:02.866191Z","issue_id":"clawdbot-276.2","payload":{}}

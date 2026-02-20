@@ -9,6 +9,7 @@ import {
   validateDoltChildrenChronologicalOrder,
   validateDoltLineageEdgeLevels,
 } from "../contract.js";
+import { interceptDoltTurnPayloadForAccounting } from "../policy.js";
 import { ensureDoltStoreSchema } from "./schema.js";
 import { estimateDoltTokenCount } from "./token-count.js";
 import {
@@ -96,7 +97,11 @@ export class SqliteDoltStore implements DoltStore {
     const sessionId = requireNonEmptyString(params.sessionId, "sessionId");
     const level = requireRecordLevel(params.level);
     const existing = this.getRecord(pointer);
-    const payload = resolvePayloadForWrite(params.payload, existing);
+    const payload = resolvePayloadForWrite({
+      payload: params.payload,
+      existing,
+      level,
+    });
     const payloadJson = serializePayload(payload);
     const payloadChanged = didPayloadChange(existing, payloadJson);
     const summaryMetadata = validateRecordPayloadContract({
@@ -695,11 +700,20 @@ function requireTokenCountMethod(value: string): DoltTokenCountMethod {
   throw new Error(`Invalid Dolt token count method: ${value}`);
 }
 
-function resolvePayloadForWrite(payload: unknown, existing: DoltRecord | null): unknown {
-  if (payload === undefined) {
-    return existing?.payload ?? null;
+function resolvePayloadForWrite(params: {
+  payload: unknown;
+  existing: DoltRecord | null;
+  level: DoltRecordLevel;
+}): unknown {
+  const resolvedPayload =
+    params.payload === undefined ? (params.existing?.payload ?? null) : params.payload;
+  if (params.level !== "turn") {
+    return resolvedPayload;
   }
-  return payload;
+  const intercepted = interceptDoltTurnPayloadForAccounting({
+    payload: resolvedPayload,
+  });
+  return intercepted.payload;
 }
 
 function didPayloadChange(existing: DoltRecord | null, nextPayloadJson: string | null): boolean {

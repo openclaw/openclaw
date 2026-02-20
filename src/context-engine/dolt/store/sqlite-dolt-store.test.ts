@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { requireNodeSqlite } from "../../../memory/sqlite.js";
 import { serializeDoltSummaryFrontmatter } from "../contract.js";
 import { SqliteDoltStore } from "./sqlite-dolt-store.js";
+import { estimateDoltTokenCount } from "./token-count.js";
 
 type TestStore = {
   store: SqliteDoltStore;
@@ -331,6 +332,32 @@ describe("SqliteDoltStore", () => {
     });
     const turns = store.listRecordsBySession({ sessionId: "session-history", level: "turn" });
     expect(turns.map((row) => row.pointer)).toEqual(["turn-history-1", "turn-history-2"]);
+  });
+
+  it("intercepts oversized turn payloads before persisting lane accounting token counts", () => {
+    const { store } = createInMemoryStore(() => 6_100);
+    const hugePayload = {
+      role: "tool",
+      content: "x".repeat(70_000),
+    };
+
+    const rawEstimate = estimateDoltTokenCount({ payload: hugePayload });
+    const record = store.upsertRecord({
+      pointer: "turn-outlier",
+      sessionId: "session-a",
+      level: "turn",
+      eventTsMs: 200,
+      payload: hugePayload,
+    });
+
+    const persistedPayload = record.payload as {
+      doltAccountingIntercept?: { sourceTokenEstimate?: number; reason?: string };
+    };
+    expect(persistedPayload.doltAccountingIntercept?.reason).toBe("oversized_turn_payload");
+    expect(persistedPayload.doltAccountingIntercept?.sourceTokenEstimate).toBe(
+      rawEstimate.tokenCount,
+    );
+    expect(record.tokenCount).toBeLessThan(rawEstimate.tokenCount);
   });
 
   it("rejects malformed summary front-matter for leaf records", () => {
