@@ -6,7 +6,12 @@ COPY Cargo.toml Cargo.toml
 COPY src/ src/
 RUN cargo build --release && strip target/release/syno
 
-# Stage 2: Run
+# Stage 2: Export (导出静态二进制到本地)
+# docker build --target export --output type=local,dest=./out -f Dockerfile .
+FROM scratch AS export
+COPY --from=builder /src/target/release/syno /syno
+
+# Stage 3: Run (MCP SSE 服务镜像)
 FROM alpine:3.20
 RUN apk add --no-cache ca-certificates
 COPY --from=builder /src/target/release/syno /usr/local/bin/syno

@@ -11,40 +11,31 @@
 - HTTPS + rustls-tls，纯静态编译
 - 会话缓存，登录一次后续免认证
 
-## 交叉编译注意事项
+## 编译（Docker 方式）
 
-此工具依赖 `reqwest` → `rustls` → `ring`，`ring` crate 需要 C 编译器。
-其他 CLI（`calc-cli`、`date-remind`、`dacien-cli`）都是纯 Rust 依赖，不需要 C 编译器。
+此工具依赖 `reqwest` → `rustls` → `ring`，`ring` crate 需要 C 编译器。使用 Docker（`rust:alpine`）在容器内编译，无需本地配置交叉编译工具链。
 
-**需要安装 zig（通过 scoop）：**
-
-```bash
-scoop install zig
-```
-
-编译时使用 `zig-cc.bat` + `zig-cc.ps1` 作为交叉编译 C 编译器 wrapper（将 `--target=x86_64-unknown-linux-musl` 转换为 zig 识别的 `--target=x86_64-linux-musl`）。
-
-## 本地交叉编译（Windows → Linux 静态二进制）
+**⚠ 重要：所有路径必须使用绝对路径，相对路径会导致文件操作跑到错误目录（如项目根目录）。**
 
 ```bash
-# 安装 musl target（仅首次）
-rustup target add x86_64-unknown-linux-musl
+# 方式一：docker build --output（需 BuildKit）
+docker build --target export --output type=local,dest=./out -f Dockerfile .
 
-# 交叉编译（使用 zig 作为 C 编译器）
-cd d:\work\openclaw
-set CC_x86_64_unknown_linux_musl=d:\work\openclaw\cli\syno\zig-cc.bat
-set AR_x86_64_unknown_linux_musl=zig ar
-set CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=rust-lld
-cargo build --release --target x86_64-unknown-linux-musl --manifest-path cli\syno\Cargo.toml
+# 方式二：podman（不支持 --output，用 create + cp 提取，必须用绝对路径）
+podman build -t syno-mcp -f d:\work\agent\openclaw\cli\syno\Dockerfile d:\work\agent\openclaw\cli\syno
+podman create --name syno-export syno-mcp
+podman cp syno-export:/usr/local/bin/syno d:\work\agent\openclaw\cli\syno\out\syno
+podman rm syno-export
 
-# 产物：cli/syno/target/x86_64-unknown-linux-musl/release/syno (~3.2MB)
+# 或仅构建 MCP SSE 服务镜像
+docker build -t syno-mcp .
 ```
 
 ## 上传到服务器
 
 ```bash
 # 使用 MCP SSH 工具上传
-ssh_upload: cli/syno/target/x86_64-unknown-linux-musl/release/syno → /opt/leot_svr/tools/bin/syno
+ssh_upload: cli/syno/out/syno → /opt/leot_svr/tools/bin/syno
 # 设置可执行权限
 ssh_execute: chmod +x /opt/leot_svr/tools/bin/syno
 ```
@@ -82,6 +73,12 @@ syno note update <笔记ID> --title "新标题" --content "<p>新内容</p>"
 cat file.html | syno note update <笔记ID> --content-stdin
 syno note delete <笔记ID>
 syno note move <笔记ID> --notebook <目标笔记本ID>
+
+# 笔记拉取/推送（本地文件同步）
+syno note pull <笔记ID> /path/to/note.md
+syno note pull <笔记ID> /path/to/note.md --password "密码"
+syno note push <笔记ID> /path/to/note.md
+syno note push <笔记ID> /path/to/note.md --title "新标题"
 
 # 笔记本管理
 syno note create-notebook --title "新笔记本"

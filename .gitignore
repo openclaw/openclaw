@@ -78,6 +78,9 @@ USER.md
 # local tooling
 .serena/
 
+# CLI build output
+cli/*/out/
+
 # Agent credentials and memory (NEVER COMMIT)
 /memory/
 .agent/*.json

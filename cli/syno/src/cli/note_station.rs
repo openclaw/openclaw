@@ -738,6 +738,118 @@ pub async fn untag(args: &NoteTagArgs) -> Result<()> {
     Ok(())
 }
 
+#[derive(Args)]
+pub struct NotePullArgs {
+    /// Note object ID
+    pub id: String,
+    /// Local file path to save to (extension auto-adjusted: .md or .html)
+    pub path: String,
+    /// Password for encrypted notes
+    #[arg(short, long)]
+    pub password: Option<String>,
+}
+
+#[derive(Args)]
+pub struct NotePushArgs {
+    /// Note object ID to update
+    pub id: String,
+    /// Local file path to read from (.md auto-converted to HTML, .html/.htm pushed as-is)
+    pub path: String,
+    /// Optionally update the note title
+    #[arg(short, long)]
+    pub title: Option<String>,
+}
+
+/// Pull a note from NoteStation to a local file.
+/// Auto-detects if HTML→Markdown conversion is viable; if not, saves as raw HTML.
+pub async fn pull(args: &NotePullArgs) -> Result<()> {
+    let cfg = Config::load()?;
+    let session = Session::ensure(&cfg).await?;
+    let sid = session.require_sid()?;
+    let token = session.synotoken();
+    let client = SynoClient::new(&cfg.base_url(), cfg.https.unwrap_or(false))?;
+
+    let encrypt_token = match &args.password {
+        Some(pw) => {
+            let t = note_station::decrypt_note(&client, sid, token, &args.id, pw).await?;
+            Some(t)
+        }
+        None => None,
+    };
+
+    let mut data = note_station::get_note(&client, sid, token, &args.id, encrypt_token.as_deref()).await?;
+
+    // Decrypt if needed
+    if let Some(pw) = &args.password {
+        if let Some(content) = data["content"].as_str() {
+            if let Ok(plaintext) = crypto::decrypt_aes256cbc(content, pw) {
+                data["content"] = serde_json::Value::String(plaintext);
+            }
+        }
+        if let Some(title) = data["title"].as_str() {
+            if title.starts_with("U2FsdGVkX1") {
+                if let Ok(plain_title) = crypto::decrypt_aes256cbc(title, pw) {
+                    data["title"] = serde_json::Value::String(plain_title);
+                }
+            }
+        }
+    }
+
+    let title = data["title"].as_str().unwrap_or("Untitled");
+    let html_content = data["content"].as_str().unwrap_or("");
+
+    let md = markdown::html_to_md(html_content);
+    let html_len = html_content.len();
+    let md_len = md.trim().len();
+
+    // Decide format: if markdown conversion lost too much content, keep HTML
+    let (content, format) = if html_len == 0 || md_len == 0 {
+        (html_content.to_string(), "html")
+    } else if md_len * 100 / html_len < 20 {
+        (html_content.to_string(), "html")
+    } else {
+        (format!("# {}\n\n{}", title, md), "markdown")
+    };
+
+    // Auto-adjust file extension
+    let final_path = if format == "html" && !args.path.ends_with(".html") && !args.path.ends_with(".htm") {
+        std::path::Path::new(&args.path).with_extension("html").to_string_lossy().to_string()
+    } else if format == "markdown" && !args.path.ends_with(".md") {
+        std::path::Path::new(&args.path).with_extension("md").to_string_lossy().to_string()
+    } else {
+        args.path.clone()
+    };
+
+    std::fs::write(&final_path, &content)?;
+    println!("Pulled as {format}: {final_path} ({} bytes)", content.len());
+    Ok(())
+}
+
+/// Push a local file to update a note in NoteStation.
+/// .md files are converted to HTML; .html/.htm files are pushed as-is.
+pub async fn push(args: &NotePushArgs) -> Result<()> {
+    let cfg = Config::load()?;
+    let session = Session::ensure(&cfg).await?;
+    let sid = session.require_sid()?;
+    let token = session.synotoken();
+    let client = SynoClient::new(&cfg.base_url(), cfg.https.unwrap_or(false))?;
+
+    let file_content = std::fs::read_to_string(&args.path)?;
+
+    let is_html = args.path.ends_with(".html") || args.path.ends_with(".htm");
+    let html = if is_html {
+        file_content
+    } else {
+        markdown::md_to_html(&file_content)
+    };
+
+    note_station::update_note(&client, sid, token, &args.id, args.title.as_deref(), Some(&html)).await?;
+
+    let fmt = if is_html { "HTML" } else { "Markdown→HTML" };
+    println!("Pushed ({fmt}): {} → note {}", args.path, args.id);
+    Ok(())
+}
+
 /// Full-text search notes.
 pub async fn search(args: &SearchArgs) -> Result<()> {
     let cfg = Config::load()?;

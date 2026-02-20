@@ -159,6 +159,10 @@ enum NoteCmd {
     Done(cli::note_station::TodoDoneArgs),
     /// Full-text search notes
     Search(cli::note_station::SearchArgs),
+    /// Pull a note to a local file (auto HTML→Markdown conversion)
+    Pull(cli::note_station::NotePullArgs),
+    /// Push a local file to update a note (auto Markdown→HTML conversion)
+    Push(cli::note_station::NotePushArgs),
 }
 
 #[tokio::main]
@@ -221,6 +225,8 @@ async fn main() -> anyhow::Result<()> {
             NoteCmd::DeleteTodo(args) => cli::note_station::delete_todo(&args).await?,
             NoteCmd::Done(args) => cli::note_station::done_todo(&args).await?,
             NoteCmd::Search(args) => cli::note_station::search(&args).await?,
+            NoteCmd::Pull(args) => cli::note_station::pull(&args).await?,
+            NoteCmd::Push(args) => cli::note_station::push(&args).await?,
         },
     }
 

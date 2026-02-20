@@ -199,6 +199,18 @@ syno note delete <笔记ID>
 # 移动笔记到另一个笔记本
 syno note move <笔记ID> --notebook <目标笔记本ID>
 
+# 拉取笔记到本地文件（自动 HTML→Markdown 转换，扩展名自动调整）
+syno note pull <笔记ID> /path/to/note.md
+
+# 拉取加密笔记
+syno note pull <笔记ID> /path/to/note.md --password "密码"
+
+# 推送本地文件更新笔记（.md 自动转 HTML，.html 原样推送）
+syno note push <笔记ID> /path/to/note.md
+
+# 推送并同时更新标题
+syno note push <笔记ID> /path/to/note.md --title "新标题"
+
 # 创建笔记本
 syno note create-notebook --title "新笔记本"
 
@@ -366,7 +378,27 @@ Dockerfile 采用多阶段构建：在 `rust:alpine` 容器内编译，产出 al
 
 ### 构建镜像并推送
 
-**重点：`podman build` 必须使用绝对路径**，PowerShell 变量（如 `$PWD`）在 podman 的构建上下文中不会正确展开。
+Dockerfile 采用多阶段构建：在 `rust:alpine` 容器内编译，产出静态二进制，无需本地交叉编译。
+
+**导出 CLI 二进制（两种方式）：**
+
+> ⚠ **所有路径（`-f`、构建上下文、`cp` 目标）必须使用绝对路径**，相对路径会导致文件操作跑到错误目录（如项目根目录）。
+
+```bash
+# 方式一：docker build --output（需 BuildKit）
+docker build --target export --output type=local,dest=./out -f Dockerfile .
+# 产物：./out/syno
+
+# 方式二：podman（不支持 --output，用 create + cp 提取，必须用绝对路径）
+podman build -t syno-mcp -f d:\work\agent\openclaw\cli\syno\Dockerfile d:\work\agent\openclaw\cli\syno
+podman create --name syno-export syno-mcp
+podman cp syno-export:/usr/local/bin/syno d:\work\agent\openclaw\cli\syno\out\syno
+podman rm syno-export
+```
+
+**构建并推送 MCP 服务镜像：**
+
+**重点：`podman build` 必须使用绝对路径**，PowerShell 变量在 podman 构建上下文中不会正确展开。
 
 ```powershell
 # 构建（使用绝对路径）

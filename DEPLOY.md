@@ -561,21 +561,32 @@ mkdir -p /opt/leot_svr/tools/bin
 | `date-remind` | 日期提醒（农历/阳历生日纪念日，Rust 静态二进制，~845KB） | [cli/date-remind.md](cli/date-remind.md) |
 | `syno` | 群晖 NAS CLI（FileStation/DownloadStation/NoteStation，Rust 静态二进制，~3.2MB） | [cli/syno.md](cli/syno.md) |
 
-**通用交叉编译步骤**（Windows → Linux 静态二进制）：
+**编译方式：**
+
+- **有 Dockerfile 的工具**（如 `syno`）：使用 Docker/Podman 编译，无需本地交叉编译工具链
+  > ⚠ **podman/docker 的 `-f`、上下文路径、`cp` 目标路径必须使用绝对路径**，相对路径会导致文件操作跑到错误目录（如项目根目录）。
+  ```bash
+  # 方式一：docker build --output（需 BuildKit）
+  docker build --target export --output type=local,dest=./out -f Dockerfile .
+
+  # 方式二：podman（不支持 --output，用 create + cp 提取，必须用绝对路径）
+  podman build -t syno-mcp -f d:\work\agent\openclaw\cli\syno\Dockerfile d:\work\agent\openclaw\cli\syno
+  podman create --name syno-export syno-mcp
+  podman cp syno-export:/usr/local/bin/syno d:\work\agent\openclaw\cli\syno\out\syno
+  podman rm syno-export
+  ```
+- **纯 Rust 依赖的工具**（如 `calc-cli`、`date-remind`）：本地交叉编译即可
+  ```bash
+  rustup target add x86_64-unknown-linux-musl  # 仅首次
+  $env:CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER='rust-lld'
+  cargo build --release --target x86_64-unknown-linux-musl --manifest-path cli/calc-cli/Cargo.toml
+  ```
+
+**上传到服务器**（通过 MCP SSH 工具）：
 
 ```bash
-# 安装 musl target（仅首次）
-rustup target add x86_64-unknown-linux-musl
-
-# 编译（以 calc-cli 为例）
-$env:CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER='rust-lld'
-cargo build --release --target x86_64-unknown-linux-musl --manifest-path cli/calc-cli/Cargo.toml
-
-# 上传（通过 MCP SSH 工具）
-# 使用 ssh_upload 将二进制上传到服务器
-ssh_upload: cli/calc-cli/target/x86_64-unknown-linux-musl/release/calc-cli → /opt/leot_svr/tools/bin/calc-cli
-# 使用 ssh_execute 设置可执行权限
-ssh_execute: chmod +x /opt/leot_svr/tools/bin/calc-cli
+ssh_upload: <本地产物路径> → /opt/leot_svr/tools/bin/<工具名>
+ssh_execute: chmod +x /opt/leot_svr/tools/bin/<工具名>
 ```
 
 ### 3. 启动命令加挂载
