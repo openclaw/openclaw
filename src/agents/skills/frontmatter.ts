@@ -45,8 +45,13 @@ function parseInstallSpec(input: unknown): SkillInstallSpec | undefined {
   if (osList.length > 0) {
     spec.os = osList;
   }
-  if (typeof raw.formula === "string") {
-    spec.formula = raw.formula;
+  const formula = typeof raw.formula === "string" ? raw.formula.trim() : "";
+  if (formula) {
+    spec.formula = formula;
+  }
+  const cask = typeof raw.cask === "string" ? raw.cask.trim() : "";
+  if (!spec.formula && cask) {
+    spec.formula = cask;
   }
   if (typeof raw.package === "string") {
     spec.package = raw.package;

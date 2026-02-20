@@ -6,6 +6,7 @@ import {
   cameraTempPath,
   parseCameraClipPayload,
   parseCameraSnapPayload,
+  writeCameraClipPayloadToFile,
   writeBase64ToFile,
   writeUrlToFile,
 } from "../../cli/nodes-camera.js";
@@ -19,6 +20,7 @@ import { parseDurationMs } from "../../cli/parse-duration.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { imageMimeFromFormat } from "../../media/mime.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
+import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
 import { sanitizeToolResultImages } from "../tool-images.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
@@ -100,6 +102,7 @@ export function createNodesTool(options?: {
     sessionKey: options?.agentSessionKey,
     config: options?.config,
   });
+  const imageSanitization = resolveImageSanitizationLimits(options?.config);
   return {
     label: "Nodes",
     name: "nodes",
@@ -250,7 +253,7 @@ export function createNodesTool(options?: {
             }
 
             const result: AgentToolResult<unknown> = { content, details };
-            return await sanitizeToolResultImages(result, "nodes:camera_snap");
+            return await sanitizeToolResultImages(result, "nodes:camera_snap", imageSanitization);
           }
           case "camera_list": {
             const node = readStringParam(params, "node", { required: true });
@@ -298,16 +301,10 @@ export function createNodesTool(options?: {
               idempotencyKey: crypto.randomUUID(),
             });
             const payload = parseCameraClipPayload(raw?.payload);
-            const filePath = cameraTempPath({
-              kind: "clip",
+            const filePath = await writeCameraClipPayloadToFile({
+              payload,
               facing,
-              ext: payload.format,
             });
-            if (payload.url) {
-              await writeUrlToFile(filePath, payload.url);
-            } else if (payload.base64) {
-              await writeBase64ToFile(filePath, payload.base64);
-            }
             return {
               content: [{ type: "text", text: `FILE:${filePath}` }],
               details: {
