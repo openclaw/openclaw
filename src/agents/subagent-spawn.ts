@@ -179,16 +179,6 @@ export async function spawnSubagentDirect(
     to: ctx.agentTo,
     threadId: ctx.agentThreadId,
   });
-  if (requestThreadBinding) {
-    const channel = requesterOrigin?.channel?.trim().toLowerCase();
-    if (channel !== "discord") {
-      const channelLabel = requesterOrigin?.channel?.trim() || "unknown";
-      return {
-        status: "error",
-        error: `thread=true is not supported for channel "${channelLabel}". Only Discord thread-bound subagent sessions are supported right now.`,
-      };
-    }
-  }
   const runTimeoutSeconds =
     typeof params.runTimeoutSeconds === "number" && Number.isFinite(params.runTimeoutSeconds)
       ? Math.max(0, Math.floor(params.runTimeoutSeconds))
