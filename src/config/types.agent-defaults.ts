@@ -121,6 +121,20 @@ export type CliBackendConfig = {
   };
 };
 
+/** Self-verification loop configuration for agents. */
+export type AgentVerifierConfig = {
+  /** Enable the verifier (default: false). */
+  enabled?: boolean;
+  /** Verifier model reference (e.g. "anthropic/claude-sonnet-4-5"). */
+  model?: string;
+  /** Max attempts including original (default: 3). */
+  maxAttempts?: number;
+  /** Keywords that trigger verification (default: ["done", "completed", "finished", "ready", "here you go"]). */
+  triggerKeywords?: string[];
+  /** Timeout for verification in seconds (default: 30). */
+  timeoutSeconds?: number;
+};
+
 export type AgentDefaultsConfig = {
   /** Primary model and fallbacks (provider/model). */
   model?: AgentModelListConfig;
@@ -282,6 +296,8 @@ export type AgentDefaultsConfig = {
     /** Auto-prune sandbox containers. */
     prune?: SandboxPruneSettings;
   };
+  /** Self-verification loop configuration. */
+  verifier?: AgentVerifierConfig;
 };
 
 export type AgentCompactionMode = "default" | "safeguard";
