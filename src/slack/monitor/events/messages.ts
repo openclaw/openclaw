@@ -1,5 +1,5 @@
 import type { SlackEventMiddlewareArgs } from "@slack/bolt";
-import { danger } from "../../../globals.js";
+import { danger, logVerbose } from "../../../globals.js";
 import { enqueueSystemEvent } from "../../../infra/system-events.js";
 import type { SlackAppMentionEvent, SlackMessageEvent } from "../../types.js";
 import { resolveSlackChannelLabel } from "../channel-config.js";
@@ -27,6 +27,9 @@ export function registerSlackMessageEvents(params: {
         channelType,
       })
     ) {
+      logVerbose(
+        `[slack/system-event] channel not allowed: channelId=${channelId ?? "unknown"} name=${channelInfo?.name ?? "unknown"} type=${channelType ?? "unknown"}`,
+      );
       return null;
     }
 
@@ -49,6 +52,16 @@ export function registerSlackMessageEvents(params: {
       }
 
       const message = event as SlackMessageEvent;
+      // Log subtypes that are handled as system events (not regular messages)
+      if (
+        message.subtype === "message_deleted" ||
+        message.subtype === "message_changed" ||
+        message.subtype === "thread_broadcast"
+      ) {
+        ctx.runtime.log?.(
+          `[slack/event] subtype=${message.subtype} channel=${(event as { channel?: string }).channel ?? "unknown"}`,
+        );
+      }
       if (message.subtype === "message_changed") {
         const changed = event as SlackMessageChangedEvent;
         const channelId = changed.channel;
@@ -57,6 +70,45 @@ export function registerSlackMessageEvents(params: {
           return;
         }
         const messageId = changed.message?.ts ?? changed.previous_message?.ts;
+
+        // Detect tombstone: Slack sends message_changed (not message_deleted)
+        // when a thread parent is deleted. The new message has subtype "tombstone".
+        const isTombstone = changed.message?.subtype === "tombstone";
+        const hadThread = (changed.previous_message?.reply_count ?? 0) > 0;
+        if (isTombstone && hadThread && channelId && messageId) {
+          ctx.runtime.log?.(
+            `[message_changed/tombstone] thread parent deleted: channel=${channelId} thread=${messageId}`,
+          );
+          void (async () => {
+            try {
+              const { deleteSlackThreadRepliesFromBot } = await import("../../actions.js");
+              const deletedTsValues = await deleteSlackThreadRepliesFromBot(
+                channelId,
+                messageId,
+                ctx.botUserId,
+              );
+              if (deletedTsValues.length > 0) {
+                ctx.logger.info(
+                  `Deleted ${deletedTsValues.length} bot reply(ies) in thread ${messageId} (tombstone detected)`,
+                );
+              } else {
+                ctx.runtime.log?.(
+                  `[message_changed/tombstone] no bot replies found in thread ${messageId}`,
+                );
+              }
+            } catch (err) {
+              ctx.logger.warn(
+                `Failed to clean up bot replies after tombstone detection: ${String(err)}`,
+              );
+            }
+          })();
+          enqueueSystemEvent(`Slack message deleted in ${target.label} (thread parent removed).`, {
+            sessionKey: target.sessionKey,
+            contextKey: `slack:message:deleted:${channelId}:${messageId}`,
+          });
+          return;
+        }
+
         enqueueSystemEvent(`Slack message edited in ${target.label}.`, {
           sessionKey: target.sessionKey,
           contextKey: `slack:message:changed:${channelId ?? "unknown"}:${messageId ?? changed.event_ts ?? "unknown"}`,
@@ -66,14 +118,52 @@ export function registerSlackMessageEvents(params: {
       if (message.subtype === "message_deleted") {
         const deleted = event as SlackMessageDeletedEvent;
         const channelId = deleted.channel;
+        ctx.runtime.log?.(
+          `[message_deleted] received: channel=${channelId ?? "unknown"} deleted_ts=${deleted.deleted_ts ?? "unknown"} event_ts=${deleted.event_ts ?? "unknown"}`,
+        );
         const target = await resolveSlackChannelSystemEventTarget(channelId);
         if (!target) {
+          ctx.runtime.log?.(
+            `[message_deleted] dropped: channel=${channelId ?? "unknown"} not in allowlist`,
+          );
           return;
         }
+        ctx.runtime.log?.(
+          `[message_deleted] allowed: channel=${channelId ?? "unknown"} label=${target.label} sessionKey=${target.sessionKey}`,
+        );
         enqueueSystemEvent(`Slack message deleted in ${target.label}.`, {
           sessionKey: target.sessionKey,
           contextKey: `slack:message:deleted:${channelId ?? "unknown"}:${deleted.deleted_ts ?? deleted.event_ts ?? "unknown"}`,
         });
+        // Clean up bot replies when parent message is deleted
+        if (deleted.deleted_ts && channelId) {
+          void (async () => {
+            try {
+              const { deleteSlackThreadRepliesFromBot } = await import("../../actions.js");
+              ctx.runtime.log?.(
+                `[message_deleted] cleaning up bot replies: channel=${channelId} thread=${deleted.deleted_ts}`,
+              );
+              const deletedTsValues = await deleteSlackThreadRepliesFromBot(
+                channelId,
+                deleted.deleted_ts,
+                ctx.botUserId,
+              );
+              if (deletedTsValues.length > 0) {
+                ctx.logger.info(
+                  `Deleted ${deletedTsValues.length} bot reply(ies) in thread ${deleted.deleted_ts} (parent message deleted)`,
+                );
+              } else {
+                ctx.runtime.log?.(
+                  `[message_deleted] no bot replies found in thread ${deleted.deleted_ts}`,
+                );
+              }
+            } catch (err) {
+              ctx.logger.warn(
+                `Failed to clean up bot replies after parent message deletion: ${String(err)}`,
+              );
+            }
+          })();
+        }
         return;
       }
       if (message.subtype === "thread_broadcast") {

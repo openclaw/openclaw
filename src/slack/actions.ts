@@ -194,6 +194,39 @@ export async function deleteSlackMessage(
   });
 }
 
+export async function deleteSlackThreadRepliesFromBot(
+  channelId: string,
+  threadTs: string,
+  botUserId: string,
+  opts: SlackActionClientOpts = {},
+): Promise<string[]> {
+  const deleted: string[] = [];
+  let cursor: string | undefined;
+  do {
+    const client = await getClient(opts);
+    const result = await client.conversations.replies({
+      channel: channelId,
+      ts: threadTs,
+      limit: 200,
+      cursor,
+    });
+    const replies = (result.messages ?? []).filter(
+      (msg) => msg.ts !== threadTs && msg.user === botUserId,
+    );
+    for (const msg of replies) {
+      if (!msg.ts) continue;
+      try {
+        await deleteSlackMessage(channelId, msg.ts, opts);
+        deleted.push(msg.ts);
+      } catch (err) {
+        logVerbose(`Failed to delete bot reply ${msg.ts}: ${String(err)}`);
+      }
+    }
+    cursor = result.response_metadata?.next_cursor || undefined;
+  } while (cursor);
+  return deleted;
+}
+
 export async function readSlackMessages(
   channelId: string,
   opts: SlackActionClientOpts & {
