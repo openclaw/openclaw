@@ -15,6 +15,7 @@ import {
   type OpenAiEmbeddingClient,
   type VoyageEmbeddingClient,
 } from "./embeddings.js";
+import { isFileMissingError, statRegularFile } from "./fs-utils.js";
 import { bm25RankToScore, buildFtsQuery, mergeHybridResults } from "./hybrid.js";
 import { isMemoryPath, normalizeExtraMemoryPaths } from "./internal.js";
 import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
@@ -437,11 +438,19 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (!absPath.endsWith(".md")) {
       throw new Error("path required");
     }
-    const stat = await fs.lstat(absPath);
-    if (stat.isSymbolicLink() || !stat.isFile()) {
-      throw new Error("path required");
+    const statResult = await statRegularFile(absPath);
+    if (statResult.missing) {
+      return { text: "", path: relPath };
     }
-    const content = await fs.readFile(absPath, "utf-8");
+    let content: string;
+    try {
+      content = await fs.readFile(absPath, "utf-8");
+    } catch (err) {
+      if (isFileMissingError(err)) {
+        return { text: "", path: relPath };
+      }
+      throw err;
+    }
     if (!params.from && !params.lines) {
       return { text: content, path: relPath };
     }

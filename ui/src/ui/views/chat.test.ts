@@ -23,6 +23,7 @@ function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
     sending: false,
     canAbort: false,
     compactionStatus: null,
+    fallbackStatus: null,
     messages: [],
     toolMessages: [],
     stream: null,
@@ -108,6 +109,75 @@ describe("chat view", () => {
     );
 
     expect(container.querySelector(".compaction-indicator")).toBeNull();
+    nowSpy.mockRestore();
+  });
+
+  it("renders fallback indicator shortly after fallback event", () => {
+    const container = document.createElement("div");
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    render(
+      renderChat(
+        createProps({
+          fallbackStatus: {
+            selected: "fireworks/minimax-m2p5",
+            active: "deepinfra/moonshotai/Kimi-K2.5",
+            attempts: ["fireworks/minimax-m2p5: rate limit"],
+            occurredAt: 900,
+          },
+        }),
+      ),
+      container,
+    );
+
+    const indicator = container.querySelector(".compaction-indicator--fallback");
+    expect(indicator).not.toBeNull();
+    expect(indicator?.textContent).toContain("Fallback active: deepinfra/moonshotai/Kimi-K2.5");
+    nowSpy.mockRestore();
+  });
+
+  it("hides stale fallback indicator", () => {
+    const container = document.createElement("div");
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(20_000);
+    render(
+      renderChat(
+        createProps({
+          fallbackStatus: {
+            selected: "fireworks/minimax-m2p5",
+            active: "deepinfra/moonshotai/Kimi-K2.5",
+            attempts: [],
+            occurredAt: 0,
+          },
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".compaction-indicator--fallback")).toBeNull();
+    nowSpy.mockRestore();
+  });
+
+  it("renders fallback-cleared indicator shortly after transition", () => {
+    const container = document.createElement("div");
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    render(
+      renderChat(
+        createProps({
+          fallbackStatus: {
+            phase: "cleared",
+            selected: "fireworks/minimax-m2p5",
+            active: "fireworks/minimax-m2p5",
+            previous: "deepinfra/moonshotai/Kimi-K2.5",
+            attempts: [],
+            occurredAt: 900,
+          },
+        }),
+      ),
+      container,
+    );
+
+    const indicator = container.querySelector(".compaction-indicator--fallback-cleared");
+    expect(indicator).not.toBeNull();
+    expect(indicator?.textContent).toContain("Fallback cleared: fireworks/minimax-m2p5");
     nowSpy.mockRestore();
   });
 

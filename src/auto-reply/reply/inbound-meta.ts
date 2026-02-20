@@ -13,21 +13,33 @@ function safeTrim(value: unknown): string | undefined {
 export function buildInboundMetaSystemPrompt(ctx: TemplateContext): string {
   const chatType = normalizeChatType(ctx.ChatType);
   const isDirect = !chatType || chatType === "direct";
-  const messageId = safeTrim(ctx.MessageSid);
-  const messageIdFull = safeTrim(ctx.MessageSidFull);
-  const replyToId = safeTrim(ctx.ReplyToId);
-  const chatId = safeTrim(ctx.OriginatingTo);
 
   // Keep system metadata strictly free of attacker-controlled strings (sender names, group subjects, etc.).
   // Those belong in the user-role "untrusted context" blocks.
+  // Per-message identifiers (message_id, reply_to_id, sender_id) are also excluded here: they change
+  // on every turn and would bust prefix-based prompt caches on local model providers. They are
+  // included in the user-role conversation info block via buildInboundUserContextPrefix() instead.
+
+  // Resolve channel identity: prefer explicit channel, then surface, then provider.
+  // For webchat/Hub Chat sessions (when Surface is 'webchat' or undefined with no real channel),
+  // omit the channel field entirely rather than falling back to an unrelated provider.
+  let channelValue = safeTrim(ctx.OriginatingChannel) ?? safeTrim(ctx.Surface);
+  if (!channelValue) {
+    // Only fall back to Provider if it represents a real messaging channel.
+    // For webchat/internal sessions, ctx.Provider may be unrelated (e.g., the user's configured
+    // default channel), so skip it to avoid incorrect runtime labels like "channel=whatsapp".
+    const provider = safeTrim(ctx.Provider);
+    // Check if provider is "webchat" or if we're in an internal/webchat context
+    if (provider !== "webchat" && ctx.Surface !== "webchat") {
+      channelValue = provider;
+    }
+    // Otherwise leave channelValue undefined (no channel label)
+  }
+
   const payload = {
     schema: "openclaw.inbound_meta.v1",
-    message_id: messageId,
-    message_id_full: messageIdFull && messageIdFull !== messageId ? messageIdFull : undefined,
-    sender_id: safeTrim(ctx.SenderId),
-    chat_id: chatId,
-    reply_to_id: replyToId,
-    channel: safeTrim(ctx.OriginatingChannel) ?? safeTrim(ctx.Surface) ?? safeTrim(ctx.Provider),
+    chat_id: safeTrim(ctx.OriginatingTo),
+    channel: channelValue,
     provider: safeTrim(ctx.Provider),
     surface: safeTrim(ctx.Surface),
     chat_type: chatType ?? (isDirect ? "direct" : undefined),
@@ -60,8 +72,13 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
   const chatType = normalizeChatType(ctx.ChatType);
   const isDirect = !chatType || chatType === "direct";
 
+  const messageId = safeTrim(ctx.MessageSid);
+  const messageIdFull = safeTrim(ctx.MessageSidFull);
   const conversationInfo = {
-    message_id: safeTrim(ctx.MessageSid),
+    message_id: messageId,
+    message_id_full: messageIdFull && messageIdFull !== messageId ? messageIdFull : undefined,
+    reply_to_id: safeTrim(ctx.ReplyToId),
+    sender_id: safeTrim(ctx.SenderId),
     conversation_label: isDirect ? undefined : safeTrim(ctx.ConversationLabel),
     sender: safeTrim(ctx.SenderE164) ?? safeTrim(ctx.SenderId) ?? safeTrim(ctx.SenderUsername),
     group_subject: safeTrim(ctx.GroupSubject),
