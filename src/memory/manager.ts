@@ -1,4 +1,3 @@
-import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -16,6 +15,7 @@ import {
   type OpenAiEmbeddingClient,
   type VoyageEmbeddingClient,
 } from "./embeddings.js";
+import { isFileMissingError, statRegularFile } from "./fs-utils.js";
 import { bm25RankToScore, buildFtsQuery, mergeHybridResults } from "./hybrid.js";
 import { isMemoryPath, normalizeExtraMemoryPaths } from "./internal.js";
 import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
@@ -36,15 +36,6 @@ const EMBEDDING_CACHE_TABLE = "embedding_cache";
 const BATCH_FAILURE_LIMIT = 2;
 
 const log = createSubsystemLogger("memory");
-
-function isFileMissingError(err: unknown): err is NodeJS.ErrnoException & { code: "ENOENT" } {
-  return Boolean(
-    err &&
-    typeof err === "object" &&
-    "code" in err &&
-    (err as Partial<NodeJS.ErrnoException>).code === "ENOENT",
-  );
-}
 
 const INDEX_CACHE = new Map<string, MemoryIndexManager>();
 
@@ -447,17 +438,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (!absPath.endsWith(".md")) {
       throw new Error("path required");
     }
-    let stat: Stats;
-    try {
-      stat = await fs.lstat(absPath);
-    } catch (err) {
-      if (isFileMissingError(err)) {
-        return { text: "", path: relPath };
-      }
-      throw err;
-    }
-    if (stat.isSymbolicLink() || !stat.isFile()) {
-      throw new Error("path required");
+    const statResult = await statRegularFile(absPath);
+    if (statResult.missing) {
+      return { text: "", path: relPath };
     }
     let content: string;
     try {

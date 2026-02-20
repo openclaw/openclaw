@@ -28,6 +28,19 @@ The default workspace layout uses two memory layers:
 These files live under the workspace (`agents.defaults.workspace`, default
 `~/.openclaw/workspace`). See [Agent workspace](/concepts/agent-workspace) for the full layout.
 
+## Memory tools
+
+OpenClaw exposes two agent-facing tools for these Markdown files:
+
+- `memory_search` — semantic recall over indexed snippets.
+- `memory_get` — targeted read of a specific Markdown file/line range.
+
+`memory_get` now **degrades gracefully when a file doesn't exist** (for example,
+today's daily log before the first write). Both the builtin manager and the QMD
+backend return `{ text: "", path }` instead of throwing `ENOENT`, so agents can
+handle "nothing recorded yet" and continue their workflow without wrapping the
+tool call in try/catch logic.
+
 ## When to write memory
 
 - Decisions, preferences, and durable facts go to `MEMORY.md`.
