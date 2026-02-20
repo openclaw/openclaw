@@ -252,9 +252,23 @@ Obsidian 프로젝트 폴더(`01.PROJECT/{NN}.MAI{PROJECT_NAME}/`)에 직접 생
 
 프로젝트 문서(A/D/I/T 접두사)는 **항상 docs/ 폴더**에 → 심링크를 통해 Obsidian에서 자동 접근.
 
+### 8. MAI-Universe.md 업데이트
+
+파일: `C:\Users\jini9\OneDrive\Documents\JINI_SYNC\01.PROJECT\MAI-Universe.md`
+
+새 프로젝트를 생태계 문서에 반영:
+
+1. **세계관 다이어그램** — 적절한 위치에 새 프로젝트 추가 (코어/BOT Suite/사업 중 해당 카테고리)
+2. **역할 테이블** — 해당 카테고리 테이블에 행 추가 (역할, 비유, 수익 모델)
+3. **시너지 맵** — 기존 프로젝트와의 연결 관계 분석 + 추가
+4. **수익 구조** — 해당 수익 테이블에 행 추가
+5. **타임라인** — 시작 시점 표기
+
+BOT Suite 편입 대상이면 BOT 이름도 함께 결정 (BOT + 키워드 패턴).
+
 ## Post-Setup
 
-Confirm all 7 steps completed and share summary to Discord DM.
+Confirm all 8 steps completed and share summary to Discord DM.
 Summary should include:
 
 - 로컬 경로
@@ -262,3 +276,4 @@ Summary should include:
 - Obsidian 폴더 번호
 - 칸반 보드 위치
 - Dashboard 등록 확인
+- MAI-Universe.md 업데이트 확인
