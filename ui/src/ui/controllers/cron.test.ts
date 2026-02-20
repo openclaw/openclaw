@@ -4,6 +4,7 @@ import { addCronJob, normalizeCronFormState, type CronState } from "./cron.ts";
 
 function createState(overrides: Partial<CronState> = {}): CronState {
   return {
+    cronEditingId: null,
     client: null,
     connected: true,
     cronLoading: false,
