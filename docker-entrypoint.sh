@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env bash
 # docker-entrypoint.sh
 #
 # Load Docker secrets from /run/secrets/ into environment variables.
@@ -16,12 +16,14 @@ load_secret() {
   local secret_file="$2"
 
   # Skip if the variable is already set
-  if [ -n "$(eval echo "\$$env_name")" ]; then
+  if printenv "$env_name" >/dev/null 2>&1; then
     return
   fi
 
-  if [ -f "$secret_file" ]; then
-    export "$env_name"="$(cat "$secret_file")"
+  if [ -f "$secret_file" ] && [ -r "$secret_file" ]; then
+    if ! export "$env_name"="$(cat "$secret_file")"; then
+      echo "Warning: Failed to load secret from $secret_file" >&2
+    fi
   fi
 }
 

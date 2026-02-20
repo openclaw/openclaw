@@ -9,9 +9,13 @@ services:
       # Direct env vars still work as a fallback (entrypoint skips if already set).
     secrets:
       - openclaw_gateway_token
+      - openclaw_gateway_password
       - claude_ai_session_key
       - claude_web_session_key
       - claude_web_cookie
+      - openai_api_key
+      - anthropic_api_key
+      - gemini_api_key
     volumes:
       - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
       - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
@@ -39,9 +43,13 @@ services:
       BROWSER: echo
     secrets:
       - openclaw_gateway_token
+      - openclaw_gateway_password
       - claude_ai_session_key
       - claude_web_session_key
       - claude_web_cookie
+      - openai_api_key
+      - anthropic_api_key
+      - gemini_api_key
     volumes:
       - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
       - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
@@ -56,9 +64,17 @@ services:
 secrets:
   openclaw_gateway_token:
     file: ${OPENCLAW_SECRETS_DIR:-./secrets}/openclaw_gateway_token
+  openclaw_gateway_password:
+    file: ${OPENCLAW_SECRETS_DIR:-./secrets}/openclaw_gateway_password
   claude_ai_session_key:
     file: ${OPENCLAW_SECRETS_DIR:-./secrets}/claude_ai_session_key
   claude_web_session_key:
     file: ${OPENCLAW_SECRETS_DIR:-./secrets}/claude_web_session_key
   claude_web_cookie:
     file: ${OPENCLAW_SECRETS_DIR:-./secrets}/claude_web_cookie
+  openai_api_key:
+    file: ${OPENCLAW_SECRETS_DIR:-./secrets}/openai_api_key
+  anthropic_api_key:
+    file: ${OPENCLAW_SECRETS_DIR:-./secrets}/anthropic_api_key
+  gemini_api_key:
+    file: ${OPENCLAW_SECRETS_DIR:-./secrets}/gemini_api_key
