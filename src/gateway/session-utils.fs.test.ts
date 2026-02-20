@@ -446,6 +446,53 @@ describe("readSessionMessages", () => {
     storePath = nextStorePath;
   });
 
+  test("preserves session entry id on messages when present", () => {
+    const sessionId = "test-session-entry-id";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const lines = [
+      JSON.stringify({ type: "session", version: 1, id: sessionId }),
+      JSON.stringify({ id: "entry-1", message: { role: "user", content: "Hello" } }),
+      JSON.stringify({ id: "entry-2", message: { role: "assistant", content: "World" } }),
+      JSON.stringify({ message: { role: "user", content: "No id entry" } }),
+    ];
+    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
+
+    const out = readSessionMessages(sessionId, storePath);
+    expect(out).toHaveLength(3);
+
+    const first = out[0] as Record<string, unknown>;
+    expect(first.id).toBe("entry-1");
+    expect(first.role).toBe("user");
+    expect(first.content).toBe("Hello");
+
+    const second = out[1] as Record<string, unknown>;
+    expect(second.id).toBe("entry-2");
+    expect(second.role).toBe("assistant");
+    expect(second.content).toBe("World");
+
+    const third = out[2] as Record<string, unknown>;
+    expect(third.id).toBeUndefined();
+    expect(third.role).toBe("user");
+  });
+
+  test("does not overwrite existing id field on message", () => {
+    const sessionId = "test-session-existing-id";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const lines = [
+      JSON.stringify({
+        id: "entry-1",
+        message: { role: "assistant", content: "Hi", id: "msg-own-id" },
+      }),
+    ];
+    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
+
+    const out = readSessionMessages(sessionId, storePath);
+    expect(out).toHaveLength(1);
+
+    const msg = out[0] as Record<string, unknown>;
+    expect(msg.id).toBe("msg-own-id");
+  });
+
   test("includes synthetic compaction markers for compaction entries", () => {
     const sessionId = "test-session-compaction";
     const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);

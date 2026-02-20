@@ -87,7 +87,12 @@ export function readSessionMessages(
     try {
       const parsed = JSON.parse(line);
       if (parsed?.message) {
-        messages.push(parsed.message);
+        const msg = parsed.message as Record<string, unknown>;
+        if (typeof parsed.id === "string" && !("id" in msg)) {
+          messages.push({ ...msg, id: parsed.id });
+        } else {
+          messages.push(msg);
+        }
         continue;
       }
 
