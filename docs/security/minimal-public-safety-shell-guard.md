@@ -84,3 +84,13 @@ That keeps normal tool behavior unchanged while enabling safety when used.
 - approval tokens/notes from real incidents.
 
 Keep these as local policy extensions in your own repo.
+
+### Example script set
+
+Use these optional template files (copy + adjust):
+
+- `scripts/safety-guards/safe_exec.example.sh`
+- `scripts/safety-guards/web_input_guard.example.sh`
+- `scripts/safety-guards/public_publish_guard.example.sh`
+- `scripts/safety-guards/security_auto.example.sh`
+- `scripts/safety-guards/README.md`
