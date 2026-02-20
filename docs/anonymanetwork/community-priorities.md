@@ -1,4 +1,4 @@
-# AnonymanetworkClawBot Community Priorities (Web Research)
+# Anonymanetwork Community Priorities (Web Research)
 
 This file tracks what users ask for most around OpenClaw, based on public GitHub issue traffic and recurring support themes.
 

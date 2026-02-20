@@ -1,4 +1,4 @@
-# AnonymanetworkClawBot Troubleshooting
+# Anonymanetwork Troubleshooting
 
 ## Quick diagnostics
 
