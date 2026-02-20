@@ -100,14 +100,21 @@ async function assertLocalMediaAllowed(
     } catch {
       resolvedRoot = path.resolve(root);
     }
-    if (resolvedRoot === path.parse(resolvedRoot).root) {
-      throw new LocalMediaAccessError(
-        "invalid-root",
-        `Invalid localRoots entry (refuses filesystem root): ${root}. Pass a narrower directory.`,
-      );
-    }
-    if (resolved === resolvedRoot || resolved.startsWith(resolvedRoot + path.sep)) {
-      return;
+    const resolvedRootCandidates = new Set<string>([
+      path.resolve(root),
+      path.resolve(resolvedRoot),
+    ]);
+    for (const candidate of resolvedRootCandidates) {
+      if (candidate === path.parse(candidate).root) {
+        throw new LocalMediaAccessError(
+          "invalid-root",
+          `Invalid localRoots entry (refuses filesystem root): ${root}. Pass a narrower directory.`,
+        );
+      }
+      const rel = path.relative(candidate, resolved);
+      if (rel && !rel.startsWith("..") && !path.isAbsolute(rel)) {
+        return;
+      }
     }
   }
   throw new LocalMediaAccessError(
