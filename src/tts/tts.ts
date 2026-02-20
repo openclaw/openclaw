@@ -46,6 +46,7 @@ import {
 export { OPENAI_TTS_MODELS, OPENAI_TTS_VOICES } from "./tts-core.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
+const execFileAsync = promisify(execFile);
 const DEFAULT_TTS_MAX_LENGTH = 1500;
 const DEFAULT_TTS_SUMMARIZE = true;
 const DEFAULT_MAX_TEXT_LENGTH = 4096;
@@ -133,6 +134,10 @@ export type ResolvedTtsConfig = {
     saveSubtitles: boolean;
     proxy?: string;
     timeoutMs?: number;
+  };
+  stripMarkdown: boolean;
+  postProcess?: {
+    speed?: number;
   };
   prefsPath?: string;
   maxTextLength: number;
@@ -323,6 +328,8 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
       proxy: raw.edge?.proxy?.trim() || undefined,
       timeoutMs: raw.edge?.timeoutMs,
     },
+    stripMarkdown: raw.stripMarkdown ?? false,
+    postProcess: raw.postProcess ? { speed: raw.postProcess.speed } : undefined,
     prefsPath: raw.prefsPath,
     maxTextLength: raw.maxTextLength ?? DEFAULT_MAX_TEXT_LENGTH,
     timeoutMs: raw.timeoutMs ?? DEFAULT_TIMEOUT_MS,
@@ -588,6 +595,46 @@ function resolveTtsRequestSetup(params: {
   };
 }
 
+async function applyPostProcessSpeed(params: {
+  audioPath: string;
+  speed?: number;
+}): Promise<string> {
+  const speed = params.speed;
+  if (!speed || speed === 1) {
+    return params.audioPath;
+  }
+  if (!Number.isFinite(speed) || speed <= 0) {
+    return params.audioPath;
+  }
+  const dir = path.dirname(params.audioPath);
+  const ext = path.extname(params.audioPath);
+  const outputPath = path.join(dir, `voice-${Date.now()}-speed${ext}`);
+  try {
+    await execFileAsync("ffmpeg", [
+      "-y",
+      "-i",
+      params.audioPath,
+      "-filter:a",
+      `atempo=${speed}`,
+      outputPath,
+    ]);
+    try {
+      unlinkSync(params.audioPath);
+    } catch {
+      // ignore cleanup errors
+    }
+    return outputPath;
+  } catch (err) {
+    logVerbose(`TTS: post-process speed failed (${(err as Error).message}); using original audio.`);
+    try {
+      unlinkSync(outputPath);
+    } catch {
+      // ignore cleanup errors
+    }
+    return params.audioPath;
+  }
+}
+
 export async function textToSpeech(params: {
   text: string;
   cfg: OpenClawConfig;
@@ -672,11 +719,15 @@ export async function textToSpeech(params: {
         }
 
         scheduleCleanup(tempDir);
-        const voiceCompatible = isVoiceCompatibleAudio({ fileName: edgeResult.audioPath });
+        const processedPath = await applyPostProcessSpeed({
+          audioPath: edgeResult.audioPath,
+          speed: config.postProcess?.speed,
+        });
+        const voiceCompatible = isVoiceCompatibleAudio({ fileName: processedPath });
 
         return {
           success: true,
-          audioPath: edgeResult.audioPath,
+          audioPath: processedPath,
           latencyMs: Date.now() - providerStart,
           provider,
           outputFormat: edgeResult.outputFormat,
@@ -738,10 +789,14 @@ export async function textToSpeech(params: {
       const audioPath = path.join(tempDir, `voice-${Date.now()}${output.extension}`);
       writeFileSync(audioPath, audioBuffer);
       scheduleCleanup(tempDir);
+      const processedPath = await applyPostProcessSpeed({
+        audioPath,
+        speed: config.postProcess?.speed,
+      });
 
       return {
         success: true,
-        audioPath,
+        audioPath: processedPath,
         latencyMs,
         provider,
         outputFormat: provider === "openai" ? output.openai : output.elevenlabs,

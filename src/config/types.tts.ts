@@ -82,6 +82,11 @@ export type TtsConfig = {
     proxy?: string;
     timeoutMs?: number;
   };
+  /** Optional post-processing applied to generated audio. */
+  postProcess?: {
+    /** Playback speed multiplier applied via ffmpeg (0.5-2.0). */
+    speed?: number;
+  };
   /** Optional path for local TTS user preferences JSON. */
   prefsPath?: string;
   /** Hard cap for text sent to TTS (chars). */
