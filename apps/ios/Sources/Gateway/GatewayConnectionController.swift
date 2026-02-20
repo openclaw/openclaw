@@ -1,12 +1,15 @@
 import AVFoundation
+import Contacts
 import CoreLocation
 import CoreMotion
 import CryptoKit
+import EventKit
 import Foundation
 import Darwin
 import OpenClawKit
 import Network
 import Observation
+import Photos
 import ReplayKit
 import Security
 import Speech
@@ -701,7 +704,7 @@ final class GatewayConnectionController {
         var addr = in_addr()
         let parsed = host.withCString { inet_pton(AF_INET, $0, &addr) == 1 }
         guard parsed else { return false }
-        let value = UInt32(bigEndian: addr.s_addr)
+        let value = ntohl(addr.s_addr)
         let firstOctet = UInt8((value >> 24) & 0xFF)
         return firstOctet == 127
     }
@@ -780,7 +783,6 @@ final class GatewayConnectionController {
     }
 
     private func currentCaps() -> [String] {
-        let permissionSnapshot = IOSPermissionCenter.statusSnapshot()
         var caps = [OpenClawCapability.canvas.rawValue, OpenClawCapability.screen.rawValue]
 
         // Default-on: if the key doesn't exist yet, treat it as enabled.
@@ -801,19 +803,11 @@ final class GatewayConnectionController {
         if WatchMessagingService.isSupportedOnDevice() {
             caps.append(OpenClawCapability.watch.rawValue)
         }
-        if permissionSnapshot.photosAllowed {
-            caps.append(OpenClawCapability.photos.rawValue)
-        }
-        if permissionSnapshot.contactsAllowed {
-            caps.append(OpenClawCapability.contacts.rawValue)
-        }
-        if permissionSnapshot.calendarReadAllowed || permissionSnapshot.calendarWriteAllowed {
-            caps.append(OpenClawCapability.calendar.rawValue)
-        }
-        if permissionSnapshot.remindersReadAllowed || permissionSnapshot.remindersWriteAllowed {
-            caps.append(OpenClawCapability.reminders.rawValue)
-        }
-        if Self.motionAvailable() && permissionSnapshot.motionAllowed {
+        caps.append(OpenClawCapability.photos.rawValue)
+        caps.append(OpenClawCapability.contacts.rawValue)
+        caps.append(OpenClawCapability.calendar.rawValue)
+        caps.append(OpenClawCapability.reminders.rawValue)
+        if Self.motionAvailable() {
             caps.append(OpenClawCapability.motion.rawValue)
         }
 
@@ -821,7 +815,6 @@ final class GatewayConnectionController {
     }
 
     private func currentCommands() -> [String] {
-        let permissionSnapshot = IOSPermissionCenter.statusSnapshot()
         var commands: [String] = [
             OpenClawCanvasCommand.present.rawValue,
             OpenClawCanvasCommand.hide.rawValue,
@@ -865,20 +858,12 @@ final class GatewayConnectionController {
             commands.append(OpenClawContactsCommand.add.rawValue)
         }
         if caps.contains(OpenClawCapability.calendar.rawValue) {
-            if permissionSnapshot.calendarReadAllowed {
-                commands.append(OpenClawCalendarCommand.events.rawValue)
-            }
-            if permissionSnapshot.calendarWriteAllowed {
-                commands.append(OpenClawCalendarCommand.add.rawValue)
-            }
+            commands.append(OpenClawCalendarCommand.events.rawValue)
+            commands.append(OpenClawCalendarCommand.add.rawValue)
         }
         if caps.contains(OpenClawCapability.reminders.rawValue) {
-            if permissionSnapshot.remindersReadAllowed {
-                commands.append(OpenClawRemindersCommand.list.rawValue)
-            }
-            if permissionSnapshot.remindersWriteAllowed {
-                commands.append(OpenClawRemindersCommand.add.rawValue)
-            }
+            commands.append(OpenClawRemindersCommand.list.rawValue)
+            commands.append(OpenClawRemindersCommand.add.rawValue)
         }
         if caps.contains(OpenClawCapability.motion.rawValue) {
             commands.append(OpenClawMotionCommand.activity.rawValue)
@@ -889,7 +874,6 @@ final class GatewayConnectionController {
     }
 
     private func currentPermissions() -> [String: Bool] {
-        let permissionSnapshot = IOSPermissionCenter.statusSnapshot()
         var permissions: [String: Bool] = [:]
         permissions["camera"] = AVCaptureDevice.authorizationStatus(for: .video) == .authorized
         permissions["microphone"] = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
@@ -899,23 +883,22 @@ final class GatewayConnectionController {
             && CLLocationManager.locationServicesEnabled()
         permissions["screenRecording"] = RPScreenRecorder.shared().isAvailable
 
-        permissions["photos"] = permissionSnapshot.photosAllowed
-        permissions["photosDenied"] = permissionSnapshot.photos.isDeniedOrRestricted
-        permissions["contacts"] = permissionSnapshot.contactsAllowed
-        permissions["contactsDenied"] = permissionSnapshot.contacts.isDeniedOrRestricted
+        let photoStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        permissions["photos"] = photoStatus == .authorized || photoStatus == .limited
+        let contactsStatus = CNContactStore.authorizationStatus(for: .contacts)
+        permissions["contacts"] = contactsStatus == .authorized || contactsStatus == .limited
 
-        permissions["calendar"] = permissionSnapshot.calendarReadAllowed || permissionSnapshot.calendarWriteAllowed
-        permissions["calendarRead"] = permissionSnapshot.calendarReadAllowed
-        permissions["calendarWrite"] = permissionSnapshot.calendarWriteAllowed
-        permissions["calendarDenied"] = permissionSnapshot.calendar.isDeniedOrRestricted
+        let calendarStatus = EKEventStore.authorizationStatus(for: .event)
+        permissions["calendar"] =
+            calendarStatus == .authorized || calendarStatus == .fullAccess || calendarStatus == .writeOnly
+        let remindersStatus = EKEventStore.authorizationStatus(for: .reminder)
+        permissions["reminders"] =
+            remindersStatus == .authorized || remindersStatus == .fullAccess || remindersStatus == .writeOnly
 
-        permissions["reminders"] = permissionSnapshot.remindersReadAllowed || permissionSnapshot.remindersWriteAllowed
-        permissions["remindersRead"] = permissionSnapshot.remindersReadAllowed
-        permissions["remindersWrite"] = permissionSnapshot.remindersWriteAllowed
-        permissions["remindersDenied"] = permissionSnapshot.reminders.isDeniedOrRestricted
-
-        permissions["motion"] = permissionSnapshot.motionAllowed
-        permissions["motionDenied"] = permissionSnapshot.motion.isDeniedOrRestricted
+        let motionStatus = CMMotionActivityManager.authorizationStatus()
+        let pedometerStatus = CMPedometer.authorizationStatus()
+        permissions["motion"] =
+            motionStatus == .authorized || pedometerStatus == .authorized
 
         let watchStatus = WatchMessagingService.currentStatusSnapshot()
         permissions["watchSupported"] = watchStatus.supported
