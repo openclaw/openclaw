@@ -402,7 +402,15 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     try {
       await stopSlackStream({ session: finalStream });
     } catch (err) {
-      runtime.error?.(danger(`slack-stream: failed to stop stream: ${String(err)}`));
+      runtime.error?.(danger(`slack-stream: failed to stop stream: ${String(err)}, attempting fallback delivery`));
+      if (queuedFinal && finalStream.threadTs) {
+        try {
+          await deliverNormally(queuedFinal, finalStream.threadTs);
+          runtime.log?.(`slack-stream: fallback delivery succeeded to thread ${finalStream.threadTs}`);
+        } catch (fallbackErr) {
+          runtime.error?.(danger(`slack-stream: fallback delivery also failed: ${String(fallbackErr)}`));
+        }
+      }
     }
   }
 
