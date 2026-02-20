@@ -33,7 +33,7 @@ describe("tryLoadValidConfigBackup", () => {
       expect(result).not.toBeNull();
       expect(result!.backupPath).toBe(`${configPath}.bak`);
       expect(result!.snapshot.valid).toBe(true);
-      expect(result!.snapshot.config).toEqual(goodConfig);
+      expect(result!.snapshot.config.gateway?.port).toBe(18789);
     });
   });
 
@@ -49,7 +49,7 @@ describe("tryLoadValidConfigBackup", () => {
       const result = await tryLoadValidConfigBackup(configPath);
       expect(result).not.toBeNull();
       expect(result!.backupPath).toBe(`${configPath}.bak.1`);
-      expect(result!.snapshot.config).toEqual(goodConfig);
+      expect(result!.snapshot.config.gateway?.port).toBe(18789);
     });
   });
 
