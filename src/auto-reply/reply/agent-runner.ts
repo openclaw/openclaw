@@ -29,6 +29,7 @@ import {
   finalizeWithFollowup,
   isAudioPayload,
   signalTypingIfNeeded,
+  filterInternalChannel,
 } from "./agent-runner-helpers.js";
 import { runMemoryFlushIfNeeded } from "./agent-runner-memory.js";
 import { buildReplyPayloads } from "./agent-runner-payloads.js";
@@ -172,11 +173,16 @@ export async function runReplyAgent(params: {
   const pendingToolTasks = new Set<Promise<void>>();
   const blockReplyTimeoutMs = opts?.blockReplyTimeoutMs ?? BLOCK_REPLY_SEND_TIMEOUT_MS;
 
-  const replyToChannel =
+  // Internal synthetic providers (heartbeat, cron-event, exec-event, etc.) must not
+  // bleed into the reply routing channel.  Only real deliverable channel names should
+  // reach replyToChannel; everything else falls back to undefined so the downstream
+  // router uses the session's persisted lastChannel instead.
+  const replyToChannel = filterInternalChannel(
     sessionCtx.OriginatingChannel ??
-    ((sessionCtx.Surface ?? sessionCtx.Provider)?.toLowerCase() as
-      | OriginatingChannelType
-      | undefined);
+      ((sessionCtx.Surface ?? sessionCtx.Provider)?.toLowerCase() as
+        | OriginatingChannelType
+        | undefined),
+  );
   const replyToMode = resolveReplyToMode(
     followupRun.run.config,
     replyToChannel,

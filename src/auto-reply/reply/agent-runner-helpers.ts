@@ -1,9 +1,41 @@
 import { loadSessionStore } from "../../config/sessions.js";
 import { isAudioFileName } from "../../media/mime.js";
+import type { OriginatingChannelType } from "../templating.js";
 import { normalizeVerboseLevel, type VerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import { scheduleFollowupDrain } from "./queue.js";
 import type { TypingSignaler } from "./typing-mode.js";
+
+/**
+ * Synthetic/internal provider names that must never be treated as real deliverable
+ * reply channels.  These are injected by heartbeat-runner, cron service, and similar
+ * internal triggers that carry fake From/To/Provider values.  Using them as a
+ * replyToChannel would corrupt the session's outbound routing.
+ */
+export const INTERNAL_PROVIDER_NAMES = new Set([
+  "heartbeat",
+  "cron-event",
+  "exec-event",
+  "isolated",
+  "system",
+]);
+
+/**
+ * Returns undefined when the channel is an internal synthetic provider, otherwise
+ * returns the channel as-is.  Use this wherever a provider string is being promoted
+ * to a reply-routing channel.
+ */
+export function filterInternalChannel(
+  channel: string | undefined,
+): OriginatingChannelType | undefined {
+  if (!channel) {
+    return undefined;
+  }
+  if (INTERNAL_PROVIDER_NAMES.has(channel)) {
+    return undefined;
+  }
+  return channel as OriginatingChannelType;
+}
 
 const hasAudioMedia = (urls?: string[]): boolean =>
   Boolean(urls?.some((url) => isAudioFileName(url)));

@@ -39,13 +39,14 @@ export type GatewayBroadcastToConnIdsFn = (
 ) => void;
 
 function hasEventScope(client: GatewayWsClient, event: string): boolean {
+  const role = client.connect.role ?? "operator";
+  // Nodes never receive broadcast events — they get targeted delivery via nodeSendToSession
+  if (role !== "operator") {
+    return false;
+  }
   const required = EVENT_SCOPE_GUARDS[event];
   if (!required) {
     return true;
-  }
-  const role = client.connect.role ?? "operator";
-  if (role !== "operator") {
-    return false;
   }
   const scopes = Array.isArray(client.connect.scopes) ? client.connect.scopes : [];
   if (scopes.includes(ADMIN_SCOPE)) {

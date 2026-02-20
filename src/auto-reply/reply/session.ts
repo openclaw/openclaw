@@ -32,6 +32,7 @@ import { normalizeMainKey } from "../../routing/session-key.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
+import { INTERNAL_PROVIDER_NAMES } from "./agent-runner-helpers.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 
@@ -260,9 +261,17 @@ export async function initSessionState(params: {
   }
 
   const baseEntry = !isNewSession && freshEntry ? entry : undefined;
+  // Synthetic/internal providers must not overwrite the session's real reply route.
+  // Heartbeat, cron-event, exec-event, and similar internal triggers carry synthetic
+  // From/To/Provider values that are meaningless for outbound delivery routing.
+  const isInternalProvider = INTERNAL_PROVIDER_NAMES.has(ctx.Provider?.toLowerCase() ?? "");
   // Track the originating channel/to for announce routing (subagent announce-back).
+  // For internal providers, skip ctx.To (synthetic heartbeat sender) so it can't
+  // overwrite the session's real lastTo with a meaningless value like "heartbeat".
   const lastChannelRaw = (ctx.OriginatingChannel as string | undefined) || baseEntry?.lastChannel;
-  const lastToRaw = ctx.OriginatingTo || ctx.To || baseEntry?.lastTo;
+  const lastToRaw = isInternalProvider
+    ? ctx.OriginatingTo || baseEntry?.lastTo
+    : ctx.OriginatingTo || ctx.To || baseEntry?.lastTo;
   const lastAccountIdRaw = ctx.AccountId || baseEntry?.lastAccountId;
   // Only fall back to persisted threadId for thread sessions.  Non-thread
   // sessions (e.g. DM without topics) must not inherit a stale threadId from a

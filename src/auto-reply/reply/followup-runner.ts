@@ -13,6 +13,7 @@ import { stripHeartbeatToken } from "../heartbeat.js";
 import type { OriginatingChannelType } from "../templating.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { filterInternalChannel } from "./agent-runner-helpers.js";
 import { resolveRunAuthProfile } from "./agent-runner-utils.js";
 import type { FollowupRun } from "./queue.js";
 import {
@@ -232,9 +233,10 @@ export function createFollowupRunner(params: {
         }
         return [{ ...payload, text: stripped.text }];
       });
-      const replyToChannel =
+      const replyToChannel = filterInternalChannel(
         queued.originatingChannel ??
-        (queued.run.messageProvider?.toLowerCase() as OriginatingChannelType | undefined);
+          (queued.run.messageProvider?.toLowerCase() as OriginatingChannelType | undefined),
+      );
       const replyToMode = resolveReplyToMode(
         queued.run.config,
         replyToChannel,
