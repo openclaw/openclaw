@@ -43,17 +43,12 @@ export function validateTwilioSignature(
 
 /**
  * Timing-safe string comparison to prevent timing attacks.
+ * Uses SHA-256 hashing to normalize buffer lengths, eliminating
+ * length-based side channels.
  */
 function timingSafeEqual(a: string, b: string): boolean {
-  const bufA = Buffer.from(a);
-  const bufB = Buffer.from(b);
-  const maxLen = Math.max(bufA.length, bufB.length);
-  const paddedA = Buffer.alloc(maxLen);
-  const paddedB = Buffer.alloc(maxLen);
-  bufA.copy(paddedA);
-  bufB.copy(paddedB);
-  const equal = crypto.timingSafeEqual(paddedA, paddedB);
-  return equal && bufA.length === bufB.length;
+  const hash = (s: string) => crypto.createHash("sha256").update(s).digest();
+  return crypto.timingSafeEqual(hash(a), hash(b));
 }
 
 /**
@@ -545,12 +540,8 @@ function getBaseUrlNoQuery(url: string): string {
 }
 
 function timingSafeEqualString(a: string, b: string): boolean {
-  if (a.length !== b.length) {
-    const dummy = Buffer.from(a);
-    crypto.timingSafeEqual(dummy, dummy);
-    return false;
-  }
-  return crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
+  const hash = (s: string) => crypto.createHash("sha256").update(s).digest();
+  return crypto.timingSafeEqual(hash(a), hash(b));
 }
 
 function validatePlivoV2Signature(params: {
