@@ -112,13 +112,11 @@ function registerEventHandlers(
           chatHistories,
           accountId,
         });
-        if (fireAndForget) {
-          promise.catch((err) => {
-            error(`feishu[${accountId}]: error handling message: ${String(err)}`);
-          });
-        } else {
-          await promise;
-        }
+        // Always fire-and-forget: never block the event loop waiting for dispatch.
+        // Each message gets its own session (via topicSessionMode), so parallel is safe.
+        promise.catch((err) => {
+          error(`feishu[${accountId}]: error handling message: ${String(err)}`);
+        });
       } catch (err) {
         error(`feishu[${accountId}]: error handling message: ${String(err)}`);
       }

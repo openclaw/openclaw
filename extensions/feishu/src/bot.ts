@@ -698,14 +698,22 @@ export async function handleFeishuMessage(params: {
     // When topicSessionMode is enabled, messages within a topic (identified by root_id)
     // get a separate session from the main group chat.
     let peerId = isGroup ? ctx.chatId : ctx.senderOpenId;
-    if (isGroup && ctx.rootId) {
+    if (isGroup) {
       const groupConfig = resolveFeishuGroupConfig({ cfg: feishuCfg, groupId: ctx.chatId });
       const topicSessionMode =
         groupConfig?.topicSessionMode ?? feishuCfg?.topicSessionMode ?? "disabled";
       if (topicSessionMode === "enabled") {
-        // Use chatId:topic:rootId as peer ID for topic-scoped sessions
-        peerId = `${ctx.chatId}:topic:${ctx.rootId}`;
+        // Use rootId for thread replies, messageId for timeline messages
+        const topicKey = ctx.rootId ?? ctx.messageId;
+        peerId = `${ctx.chatId}:topic:${topicKey}`;
         log(`feishu[${account.accountId}]: topic session isolation enabled, peer=${peerId}`);
+      }
+    } else if (ctx.rootId) {
+      // DM topic session isolation
+      const topicSessionMode = feishuCfg?.topicSessionMode ?? "disabled";
+      if (topicSessionMode === "enabled") {
+        peerId = `${ctx.senderOpenId}:topic:${ctx.rootId}`;
+        log(`feishu[${account.accountId}]: DM topic session isolation enabled, peer=${peerId}`);
       }
     }
 
@@ -858,7 +866,7 @@ export async function handleFeishuMessage(params: {
         agentId: route.agentId,
         runtime: runtime as RuntimeEnv,
         chatId: ctx.chatId,
-        replyToMessageId: ctx.messageId,
+        replyToMessageId: ctx.rootId || ctx.messageId,
         accountId: account.accountId,
       });
 
@@ -943,7 +951,7 @@ export async function handleFeishuMessage(params: {
       agentId: route.agentId,
       runtime: runtime as RuntimeEnv,
       chatId: ctx.chatId,
-      replyToMessageId: ctx.messageId,
+      replyToMessageId: ctx.rootId || ctx.messageId,
       mentionTargets: ctx.mentionTargets,
       accountId: account.accountId,
     });
