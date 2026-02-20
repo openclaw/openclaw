@@ -78,6 +78,8 @@ export type SessionEntry = {
    * totalTokens as stale/unknown for context-utilization displays.
    */
   totalTokensFresh?: boolean;
+  cacheRead?: number;
+  cacheWrite?: number;
   modelProvider?: string;
   model?: string;
   /**
