@@ -248,6 +248,14 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
     requestedDecision === "allow-once" &&
     clientHasApprovals(opts.client)
   ) {
+    const approvingClientId = opts.client?.connect?.client?.id ?? null;
+    if (snapshot.requestedByClientId && approvingClientId === snapshot.requestedByClientId) {
+      return {
+        ok: false,
+        message: "self-approval not permitted",
+        details: { code: "SELF_APPROVAL_NOT_PERMITTED", runId },
+      };
+    }
     next.approved = true;
     next.approvalDecision = "allow-once";
     return { ok: true, params: next };
