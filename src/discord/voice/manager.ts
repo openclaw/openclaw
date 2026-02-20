@@ -620,15 +620,16 @@ export class DiscordVoiceManager {
       logger.warn(`discord voice: TTS failed: ${ttsResult.error ?? "unknown error"}`);
       return;
     }
+    const audioPath = ttsResult.audioPath;
     logVoiceVerbose(
       `tts ok (${speakText.length} chars): guild ${entry.guildId} channel ${entry.channelId}`,
     );
 
     this.enqueuePlayback(entry, async () => {
       logVoiceVerbose(
-        `playback start: guild ${entry.guildId} channel ${entry.channelId} file ${path.basename(ttsResult.audioPath)}`,
+        `playback start: guild ${entry.guildId} channel ${entry.channelId} file ${path.basename(audioPath)}`,
       );
-      const resource = createAudioResource(ttsResult.audioPath);
+      const resource = createAudioResource(audioPath);
       entry.player.play(resource);
       await entersState(entry.player, AudioPlayerStatus.Playing, PLAYBACK_READY_TIMEOUT_MS).catch(
         () => undefined,
