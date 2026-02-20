@@ -89,12 +89,7 @@ export abstract class MemoryManagerSyncOps {
   protected abstract readonly workspaceDir: string;
   protected abstract readonly settings: ResolvedMemorySearchConfig;
   protected provider: EmbeddingProvider | null = null;
-  protected fallbackFrom?:
-    | "openai"
-    | "local"
-    | "gemini"
-    | "voyage"
-    | "deepseek";
+  protected fallbackFrom?: "openai" | "local" | "gemini" | "voyage" | "deepseek";
   protected openAi?: OpenAiEmbeddingClient;
   protected gemini?: GeminiEmbeddingClient;
   protected voyage?: VoyageEmbeddingClient;
@@ -950,12 +945,7 @@ export abstract class MemoryManagerSyncOps {
     if (this.fallbackFrom) {
       return false;
     }
-    const fallbackFrom = this.provider.id as
-      | "openai"
-      | "gemini"
-      | "local"
-      | "voyage"
-      | "deepseek";
+    const fallbackFrom = this.provider.id as "openai" | "gemini" | "local" | "voyage" | "deepseek";
 
     const fallbackModel =
       fallback === "gemini"
