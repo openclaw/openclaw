@@ -93,3 +93,17 @@ package-lock.json
 
 # Local iOS signing overrides
 apps/ios/LocalSigning.xcconfig
+
+.openclaw/
+
+.playwright-mcp/
+
+MAIBOTtemp_dm_msgs.json
+
+gfpgan/
+
+nul
+
+temp_pdf/
+
+temp_list_nodes.ps1
