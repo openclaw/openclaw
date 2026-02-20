@@ -123,6 +123,7 @@ export OPENCLAW_EXTRA_MOUNTS="$HOME/.codex:/home/node/.codex:ro,$HOME/github:/ho
 참고:
 
 - 경로는 macOS/Windows에서 Docker Desktop과 공유해야 합니다.
+- 각 항목은 공백, 탭, 줄 바꿈 없이 `source:target[:options]` 형식이어야 합니다.
 - `OPENCLAW_EXTRA_MOUNTS`를 수정한 경우, `docker-setup.sh`를 다시 실행해 추가-compose 파일을 재생성하세요.
 - `docker-compose.extra.yml` 파일은 자동 생성됩니다. 직접 편집하지 마세요.
 
@@ -147,6 +148,7 @@ export OPENCLAW_EXTRA_MOUNTS="$HOME/.codex:/home/node/.codex:ro,$HOME/github:/ho
 
 참고:
 
+- 명명된 볼륨 이름은 `^[A-Za-z0-9][A-Za-z0-9_.-]*$` 패턴과 일치해야 합니다.
 - `OPENCLAW_HOME_VOLUME`를 변경한 경우, `docker-setup.sh`를 다시 실행해 추가 compose 파일을 재생성하세요.
 - 명명된 볼륨은 `docker volume rm <name>` 명령어로 제거될 때까지 유지됩니다.
 

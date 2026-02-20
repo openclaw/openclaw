@@ -27,6 +27,10 @@ Windows에서 OpenClaw를 실행하려면 [WSL2](https://learn.microsoft.com/en-
 **설치 스크립트**는 OpenClaw를 설치하는 데 권장되는 방법입니다. Node 감지, 설치 및 온보딩을 한 번에 처리합니다.
 </Tip>
 
+<Warning>
+VPS/클라우드 호스트의 경우, 가능한 한 타사 "1-클릭" 마켓플레이스 이미지는 피하세요. 깨끗한 기본 OS 이미지(예: Ubuntu LTS)를 선호하고, 설치 스크립트로 직접 OpenClaw를 설치하세요.
+</Warning>
+
 <AccordionGroup>
   <Accordion title="설치 스크립트" icon="rocket" defaultOpen>
     CLI를 다운로드하여 npm을 통해 전역 설치하고 온보딩 마법사를 실행합니다.

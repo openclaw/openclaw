@@ -21,18 +21,100 @@ Status: 공식 Discord 게이트웨이를 통해 다이렉트 메시지와 길�
   </Card>
 </CardGroup>
 
-## Quick setup
+## 빠른 설정
+
+봇이 있는 새 애플리케이션을 생성하고, 봇을 서버에 추가한 후 OpenClaw와 페어링해야 합니다. 봇을 자신의 비공개 서버에 추가하는 것을 권장합니다. 아직 없다면 [먼저 서버를 생성하세요](https://support.discord.com/hc/en-us/articles/204849977-How-do-I-create-a-server) (**Create My Own > For me and my friends** 선택).
 
 <Steps>
-  <Step title="Create a Discord bot and enable intents">
-    Discord 개발자 포털에서 애플리케이션을 생성하고 봇을 추가한 후 다음을 활성화합니다:
+  <Step title="Discord 애플리케이션 및 봇 생성">
+    [Discord 개발자 포털](https://discord.com/developers/applications)에서 **New Application**을 클릭합니다. "OpenClaw"와 같은 이름을 붙이세요.
 
-    - **Message Content Intent**
-    - **Server Members Intent** (역할 허용 목록 및 역할 기반 라우팅에 필요; 이름-to-ID 허용 목록 매칭에 권장)
+    사이드바에서 **Bot**을 클릭합니다. **Username**을 OpenClaw 에이전트 이름으로 설정하세요.
 
   </Step>
 
-  <Step title="Configure token">
+  <Step title="특권 인텐트 활성화">
+    **Bot** 페이지에서 아래로 스크롤하여 **Privileged Gateway Intents**를 활성화합니다:
+
+    - **Message Content Intent** (필수)
+    - **Server Members Intent** (권장; 역할 허용 목록 및 이름-to-ID 매칭에 필수)
+    - **Presence Intent** (선택; 프레즌스 업데이트가 필요한 경우에만)
+
+  </Step>
+
+  <Step title="봇 토큰 복사">
+    **Bot** 페이지 위로 스크롤하여 **Reset Token**을 클릭합니다.
+
+    <Note>
+    이름과 달리, 이 작업은 첫 번째 토큰을 생성합니다 — 실제로 "재설정"되는 것은 없습니다.
+    </Note>
+
+    토큰을 복사하여 저장하세요. 이것이 **봇 토큰**으로 곧 필요합니다.
+
+  </Step>
+
+  <Step title="초대 URL 생성 및 봇을 서버에 추가">
+    사이드바에서 **OAuth2**를 클릭합니다. 봇을 서버에 추가하기 위한 초대 URL을 생성합니다.
+
+    **OAuth2 URL Generator**로 스크롤하여 활성화합니다:
+
+    - `bot`
+    - `applications.commands`
+
+    아래에 **Bot Permissions** 섹션이 나타납니다. 다음을 활성화하세요:
+
+    - View Channels
+    - Send Messages
+    - Read Message History
+    - Embed Links
+    - Attach Files
+    - Add Reactions (선택)
+
+    하단의 생성된 URL을 복사하여 브라우저에 붙여넣고, 서버를 선택한 후 **Continue**를 클릭하여 연결합니다. 이제 Discord 서버에서 봇을 확인할 수 있습니다.
+
+  </Step>
+
+  <Step title="개발자 모드 활성화 및 ID 수집">
+    Discord 앱에서 내부 ID를 복사할 수 있도록 개발자 모드를 활성화해야 합니다.
+
+    1. **User Settings** (아바타 옆 기어 아이콘) → **Advanced** → **Developer Mode** 켜기
+    2. 사이드바의 **서버 아이콘**을 우클릭 → **Copy Server ID**
+    3. **자신의 아바타**를 우클릭 → **Copy User ID**
+
+    **서버 ID**와 **사용자 ID**를 봇 토큰과 함께 저장하세요 — 다음 단계에서 OpenClaw에 세 가지 모두 전달합니다.
+
+  </Step>
+
+  <Step title="서버 멤버의 DM 허용">
+    페어링이 작동하려면 Discord에서 봇이 DM을 보낼 수 있어야 합니다. **서버 아이콘**을 우클릭 → **Privacy Settings** → **Direct Messages**를 켜세요.
+
+    이렇게 하면 서버 멤버(봇 포함)가 DM을 보낼 수 있습니다. OpenClaw와 Discord DM을 사용하려면 이 설정을 켜둬야 합니다. 길드 채널만 사용할 계획이라면 페어링 후 DM을 비활성화할 수 있습니다.
+
+  </Step>
+
+  <Step title="0단계: 봇 토큰 안전하게 설정 (채팅으로 전송하지 마세요)">
+    Discord 봇 토큰은 비밀(패스워드 같은 것)입니다. 에이전트에게 메시지를 보내기 전에 OpenClaw가 실행 중인 기기에 설정하세요.
+
+```bash
+openclaw config set channels.discord.token '"YOUR_BOT_TOKEN"' --json
+openclaw config set channels.discord.enabled true --json
+openclaw gateway
+```
+
+    OpenClaw가 이미 백그라운드 서비스로 실행 중이라면 대신 `openclaw gateway restart`를 사용하세요.
+
+  </Step>
+
+  <Step title="OpenClaw 설정 및 페어링">
+
+    <Tabs>
+      <Tab title="에이전트에게 요청">
+        기존 채널(예: Telegram)에서 OpenClaw 에이전트와 채팅하여 알려주세요. Discord가 첫 번째 채널이라면 CLI / 설정 탭을 사용하세요.
+
+        > "Discord 봇 토큰을 config에 이미 설정했습니다. 사용자 ID `<user_id>`와 서버 ID `<server_id>`로 Discord 설정을 완료해 주세요."
+      </Tab>
+      <Tab title="CLI / 설정">
+        파일 기반 설정을 선호하는 경우 다음을 설정하세요:
 
 ```json5
 {
@@ -45,31 +127,39 @@ Status: 공식 Discord 게이트웨이를 통해 다이렉트 메시지와 길�
 }
 ```
 
-    기본 계정의 환경 변수 대체:
+        기본 계정의 환경 변수 대체:
 
 ```bash
 DISCORD_BOT_TOKEN=...
 ```
 
-  </Step>
-
-  <Step title="Invite the bot and start gateway">
-    메세지 권한으로 봇을 서버에 초대하세요.
-
-```bash
-openclaw gateway
-```
+      </Tab>
+    </Tabs>
 
   </Step>
 
-  <Step title="Approve first DM pairing">
+  <Step title="첫 번째 DM 페어링 승인">
+    게이트웨이가 실행 중일 때까지 기다린 후 Discord에서 봇에게 DM을 보내세요. 봇이 페어링 코드로 응답합니다.
+
+    <Tabs>
+      <Tab title="에이전트에게 요청">
+        기존 채널에서 에이전트에게 페어링 코드를 전달하세요:
+
+        > "이 Discord 페어링 코드를 승인해 주세요: `<CODE>`"
+      </Tab>
+      <Tab title="CLI">
 
 ```bash
 openclaw pairing list discord
 openclaw pairing approve discord <CODE>
 ```
 
+      </Tab>
+    </Tabs>
+
     페어링 코드는 1시간 후 만료됩니다.
+
+    이제 Discord DM을 통해 에이전트와 채팅할 수 있습니다.
 
   </Step>
 </Steps>
@@ -77,6 +167,87 @@ openclaw pairing approve discord <CODE>
 <Note>
 토큰 해상도는 계정 인식이 가능합니다. 설정 토큰 값이 환경 변수 대체보다 우선합니다. `DISCORD_BOT_TOKEN`은 기본 계정에만 사용됩니다.
 </Note>
+
+## 권장: 길드 워크스페이스 설정
+
+DM이 작동하면 Discord 서버를 각 채널이 자체 컨텍스트를 가진 에이전트 세션으로 전체 워크스페이스로 설정할 수 있습니다. 봇과 여러분만 있는 비공개 서버에 권장됩니다.
+
+<Steps>
+  <Step title="길드 허용 목록에 서버 추가">
+    이렇게 하면 에이전트가 DM뿐만 아니라 서버의 모든 채널에서 응답할 수 있습니다.
+
+    <Tabs>
+      <Tab title="에이전트에게 요청">
+        > "Discord 서버 ID `<server_id>`를 길드 허용 목록에 추가해 주세요"
+      </Tab>
+      <Tab title="설정">
+
+```json5
+{
+  channels: {
+    discord: {
+      groupPolicy: "allowlist",
+      guilds: {
+        YOUR_SERVER_ID: {
+          requireMention: true,
+          users: ["YOUR_USER_ID"],
+        },
+      },
+    },
+  },
+}
+```
+
+      </Tab>
+    </Tabs>
+
+  </Step>
+
+  <Step title="@멘션 없이 응답 허용">
+    기본적으로 에이전트는 @멘션 시에만 길드 채널에서 응답합니다. 비공개 서버의 경우 모든 메시지에 응답하게 설정하는 것이 편리합니다.
+
+    <Tabs>
+      <Tab title="에이전트에게 요청">
+        > "이 서버에서 @멘션 없이도 에이전트가 응답하도록 해 주세요"
+      </Tab>
+      <Tab title="설정">
+        길드 설정에서 `requireMention: false`로 설정하세요:
+
+```json5
+{
+  channels: {
+    discord: {
+      guilds: {
+        YOUR_SERVER_ID: {
+          requireMention: false,
+        },
+      },
+    },
+  },
+}
+```
+
+      </Tab>
+    </Tabs>
+
+  </Step>
+
+  <Step title="길드 채널에서의 메모리 계획">
+    기본적으로 장기 메모리(MEMORY.md)는 DM 세션에서만 로드됩니다. 길드 채널은 MEMORY.md를 자동으로 로드하지 않습니다.
+
+    <Tabs>
+      <Tab title="에이전트에게 요청">
+        > "Discord 채널에서 질문할 때 MEMORY.md에서 장기 컨텍스트가 필요하면 memory_search나 memory_get을 사용해 주세요."
+      </Tab>
+      <Tab title="수동">
+        모든 채널에서 공유 컨텍스트가 필요하다면 안정적인 지침을 `AGENTS.md` 또는 `USER.md`에 넣으세요 (모든 세션에 주입됩니다). 장기 메모를 `MEMORY.md`에 저장하고 메모리 도구를 통해 필요할 때 접근하세요.
+      </Tab>
+    </Tabs>
+
+  </Step>
+</Steps>
+
+Discord 서버에 채널을 만들고 채팅을 시작하세요. 에이전트는 채널 이름을 볼 수 있으며, 각 채널은 자체 격리 세션을 가집니다 — `#코딩`, `#홈`, `#연구` 등 워크플로우에 맞는 채널을 설정할 수 있습니다.
 
 ## Runtime model
 
@@ -572,12 +743,12 @@ Discord 메시지 작업에는 메시징, 채널 관리자, 모더레이션, 존
 
 기본 게이트 동작:
 
-| Action group                                                                                                                                                             | Default  |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------- |
-| 반응, 메시지, 스레드, 핀, 설문조사, 검색, 멤버 정보, 역할 정보, 채널 정보, 채널, 음성 상태, 이벤트, 스티커, 이모지 업로드, 스티커 업로드, 권한                    | enabled  |
-| 역할                                                                                                                                                                       | disabled |
-| 모더레이션                                                                                                                                                                  | disabled |
-| 존재                                                                                                                                                                      | disabled |
+| Action group                                                                                                                                   | Default  |
+| ---------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| 반응, 메시지, 스레드, 핀, 설문조사, 검색, 멤버 정보, 역할 정보, 채널 정보, 채널, 음성 상태, 이벤트, 스티커, 이모지 업로드, 스티커 업로드, 권한 | enabled  |
+| 역할                                                                                                                                           | disabled |
+| 모더레이션                                                                                                                                     | disabled |
+| 존재                                                                                                                                           | disabled |
 
 ## Components v2 UI
 

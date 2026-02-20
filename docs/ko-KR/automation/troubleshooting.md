@@ -89,7 +89,8 @@ openclaw channels status --probe
 
 - `heartbeat skipped` with `reason=quiet-hours` → `activeHours` 외부.
 - `requests-in-flight` → 메인 레인을 사용하는 중; 하트비트 연기됨.
-- `empty-heartbeat-file` → `HEARTBEAT.md`가 존재하지만 실행할 수 있는 내용이 없음.
+- `empty-heartbeat-file` → `HEARTBEAT.md`에 실행 가능한 내용이 없고 예약된 크론 이벤트가 없어 인터벌 하트비트가 건너뜀.
+- `no-heartbeat-file` → `HEARTBEAT.md`가 없고 예약된 크론 이벤트가 없어 인터벌 하트비트가 건너뜀.
 - `alerts-disabled` → 가시성 설정이 외부 하트비트 메시지를 억제함.
 
 ## 시간대 및 activeHours 주의사항

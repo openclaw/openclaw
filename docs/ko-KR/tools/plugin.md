@@ -107,6 +107,15 @@ OpenClaw는 다음 순서로 스캔합니다:
 
 번들 플러그인은 `plugins.entries.<id>.enabled` 또는 `openclaw plugins enable <id>`를 통해 명시적으로 활성화해야 합니다. 설치된 플러그인은 기본적으로 활성화되지만 동일한 방식으로 비활성화할 수 있습니다.
 
+강화 노트:
+
+- `plugins.allow`가 비어 있고 번들이 아닌 플러그인이 검색 가능한 경우, OpenClaw는 플러그인 ID와 소스를 포함한 시작 경고를 기록합니다.
+- 후보 경로는 검색 승인 전에 안전 검사를 받습니다. OpenClaw는 다음 경우 후보를 차단합니다:
+  - 확장 항목이 심볼릭 링크/경로 탐색 탈출을 포함하여 플러그인 루트 밖으로 해석되는 경우,
+  - 플러그인 루트/소스 경로가 전 세계 쓰기 가능한 경우,
+  - 번들이 아닌 플러그인에서 경로 소유권이 의심스러운 경우 (POSIX 소유자가 현재 uid나 root가 아닌 경우).
+- 설치/로드 경로 출처가 없는 번들이 아닌 로드된 플러그인은 신뢰를 고정(`plugins.allow`)하거나 설치 추적(`plugins.installs`)할 수 있도록 경고를 발생시킵니다.
+
 각 플러그인은 루트에 `openclaw.plugin.json` 파일을 포함해야 합니다. 경로가 파일을 가리키는 경우, 플러그인 루트는 파일의 디렉터리이며 매니페스트를 포함해야 합니다.
 
 동일한 id로 여러 플러그인이 해결되는 경우, 위의 순서에서 첫 번째로 일치하는 것이 우선하며, 우선순위가 낮은 복사본은 무시됩니다.
@@ -127,6 +136,8 @@ OpenClaw는 다음 순서로 스캔합니다:
 각 항목은 플러그인이 됩니다. 팩이 여러 확장을 나열할 경우, 플러그인 id는 `name/<fileBase>`가 됩니다.
 
 플러그인이 npm 종속성을 가져오는 경우, 해당 디렉터리에 설치하여 `node_modules`가 사용 가능하도록 하십시오 (`npm install` / `pnpm install`).
+
+보안 가드레일: 모든 `openclaw.extensions` 항목은 심볼릭 링크 해석 후 플러그인 디렉터리 내에 있어야 합니다. 패키지 디렉터리를 벗어나는 항목은 거부됩니다.
 
 보안 주의사항: `openclaw plugins install`은 `npm install --ignore-scripts`로 플러그인 종속성을 설치합니다 (라이프사이클 스크립트 없음). 플러그인 종속성 트리를 "순수 JS/TS"로 유지하고, `postinstall` 빌드가 필요한 패키지는 피하십시오.
 
@@ -269,6 +280,7 @@ openclaw plugins install ./plugin.tgz           # 로컬 타볼에서 설치
 openclaw plugins install ./plugin.zip           # 로컬 zip에서 설치
 openclaw plugins install -l ./extensions/voice-call # 링크 (복사 없음) 개발용
 openclaw plugins install @openclaw/voice-call # npm에서 설치
+openclaw plugins install @openclaw/voice-call --pin # 정확한 해결된 name@version 저장
 openclaw plugins update <id>
 openclaw plugins update --all
 openclaw plugins enable <id>
@@ -277,6 +289,7 @@ openclaw plugins doctor
 ```
 
 `plugins update`는 `plugins.installs`에 추적된 npm 설치에 대해서만 작동합니다.
+업데이트 간에 저장된 무결성 메타데이터가 변경되면, OpenClaw는 경고를 발생시키고 확인을 요청합니다 (전역 `--yes`를 사용하여 프롬프트를 건너뛰세요).
 
 플러그인은 자체 상위 수준의 명령어를 등록할 수도 있습니다 (예시: `openclaw voicecall`).
 

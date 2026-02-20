@@ -37,7 +37,7 @@ openclaw gateway run
 
 - 기본적으로 게이트웨이는 `~/.openclaw/openclaw.json` 에 `gateway.mode=local` 을 설정하지 않으면 시작이 거부됩니다. 임시/개발 실행의 경우 `--allow-unconfigured` 를 사용하세요.
 - 인증 없이 루프백을 넘어 바인딩하는 것은 차단됩니다 (안전 보호).
-- `SIGUSR1` 는 권한이 부여된 경우 인프로세스 재시작을 트리거합니다 (`commands.restart` 를 활성화하거나 게이트웨이 도구/설정을 적용/업데이트하세요).
+- `SIGUSR1` 는 권한이 부여된 경우 인프로세스 재시작을 트리거합니다 (`commands.restart`는 기본적으로 활성화됩니다; 수동 재시작을 차단하려면 `commands.restart: false`로 설정하세요. 게이트웨이 도구/설정 적용/업데이트는 계속 허용됩니다).
 - `SIGINT`/`SIGTERM` 핸들러는 게이트웨이 프로세스를 중지하지만 사용자 정의 터미널 상태를 복원하지는 않습니다. CLI를 TUI 또는 원시 모드 입력으로 감싸는 경우 종료 전에 터미널을 복원하세요.
 
 ### Options

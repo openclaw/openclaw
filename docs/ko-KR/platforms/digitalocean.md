@@ -41,6 +41,10 @@ title: "DigitalOcean"
 
 ## 1) Droplet 생성
 
+<Warning>
+깨끗한 기본 이미지(Ubuntu 24.04 LTS)를 사용하세요. 타사 마켓플레이스 1-클릭 이미지는 시작 스크립트와 방화벽 기본값을 검토하지 않는 한 피하세요.
+</Warning>
+
 1. [DigitalOcean](https://cloud.digitalocean.com/) 로그인
 2. **Create → Droplets** 클릭
 3. 선택 사항:

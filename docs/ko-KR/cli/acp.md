@@ -21,6 +21,9 @@ openclaw acp
 # 원격 게이트웨이
 openclaw acp --url wss://gateway-host:18789 --token <token>
 
+# 원격 게이트웨이 (파일에서 토큰 읽기)
+openclaw acp --url wss://gateway-host:18789 --token-file ~/.openclaw/gateway.token
+
 # 기존 세션 키에 연결
 openclaw acp --session agent:main:main
 
@@ -41,7 +44,7 @@ ACP 브리지를 스폰하고 상호작용적으로 프롬프트를 입력할 �
 openclaw acp client
 
 # 스폰된 브리지를 원격 게이트웨이에 연결
-openclaw acp client --server-args --url wss://gateway-host:18789 --token <token>
+openclaw acp client --server-args --url wss://gateway-host:18789 --token-file ~/.openclaw/gateway.token
 
 # 서버 명령어 재정의 (기본값: openclaw)
 openclaw acp client --server "node" --server-args openclaw.mjs acp --url ws://127.0.0.1:19001
@@ -66,6 +69,8 @@ openclaw config set gateway.remote.token <token>
 
 ```bash
 openclaw acp --url wss://gateway-host:18789 --token <token>
+# 로컬 프로세스 안전성을 위해 권장
+openclaw acp --url wss://gateway-host:18789 --token-file ~/.openclaw/gateway.token
 ```
 
 ## 에이전트 선택
@@ -151,13 +156,20 @@ ACP 클라이언트가 메타데이터를 지원하는 경우, 세션당 재정�
 
 - `--url <url>`: 게이트웨이 WebSocket URL (설정시 기본값은 gateway.remote.url).
 - `--token <token>`: 게이트웨이 인증 토큰.
+- `--token-file <path>`: 파일에서 게이트웨이 인증 토큰 읽기.
 - `--password <password>`: 게이트웨이 인증 비밀번호.
+- `--password-file <path>`: 파일에서 게이트웨이 인증 비밀번호 읽기.
 - `--session <key>`: 기본 세션 키.
 - `--session-label <label>`: 해결할 기본 세션 레이블.
 - `--require-existing`: 세션 키/레이블이 존재하지 않으면 실패.
 - `--reset-session`: 첫 사용 전에 세션 키 재설정.
 - `--no-prefix-cwd`: 프롬프트에 작업 디렉토리를 접두사로 붙이지 않음.
 - `--verbose, -v`: stderr에 자세한 로그 출력.
+
+보안 주의사항:
+
+- `--token`과 `--password`는 일부 시스템에서 로컬 프로세스 목록에 표시될 수 있습니다.
+- `--token-file`/`--password-file` 또는 환경 변수(`OPENCLAW_GATEWAY_TOKEN`, `OPENCLAW_GATEWAY_PASSWORD`) 사용을 권장합니다.
 
 ### `acp client` 옵션
 

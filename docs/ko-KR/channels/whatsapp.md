@@ -169,6 +169,7 @@ OpenClaw는 가능하면 별도의 번호에서 WhatsApp을 실행하는 것을 
     발신자 허용목록 대체:
 
     - `groupAllowFrom`이 설정되지 않은 경우, 런타임은 `allowFrom`을 사용할 수 있을 때 대체합니다.
+    - 발신자 허용 목록은 멘션/답장 활성화 전에 평가됩니다.
 
     참고: `channels.whatsapp` 블록이 전혀 없는 경우 런타임 그룹 정책 대체는 실질적으로 `open`입니다.
 
@@ -182,6 +183,11 @@ OpenClaw는 가능하면 별도의 번호에서 WhatsApp을 실행하는 것을 
     - 봇 식별에 대한 WhatsApp 명시적 멘션
     - 구성된 멘션 정규식 패턴 (`agents.list[].groupChat.mentionPatterns`, 대체값 `messages.groupChat.mentionPatterns`)
     - 봇에 대한 응답을 암시적으로 감지 (응답 발신자가 봇 식별과 일치)
+
+    보안 주의사항:
+
+    - 인용/답장은 멘션 게이팅만 충족시킵니다; 발신자 권한을 부여하지 **않습니다**
+    - `groupPolicy: "allowlist"` 설정 시, 허용 목록에 없는 발신자는 허용된 사용자의 메시지에 답장하더라도 여전히 차단됩니다
 
     세션 수준 활성화 명령:
 
@@ -407,6 +413,7 @@ WhatsApp은 수신 시 `channels.whatsapp.ackReaction`을 통해 즉각적인 �
     - `groupAllowFrom` / `allowFrom`
     - `groups` 허용 목록 항목
     - 멘션 게이팅 (`requireMention` + 멘션 패턴)
+    - `openclaw.json`의 중복 키 (JSON5): 나중 항목이 이전 항목을 덮어쓰므로, 스코프당 하나의 `groupPolicy`만 유지하세요
 
   </Accordion>
 

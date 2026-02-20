@@ -113,7 +113,7 @@ title: "슬래시 명령어"
 - 프로바이더 사용 내역의 전체 분석을 원한다면 `openclaw status --usage`를 사용하세요.
 - `/allowlist add|remove`는 `commands.config=true`가 필요하며 채널 `configWrites`를 존중합니다.
 - `/usage`는 응답별 사용 요약을 제어하며, `/usage cost`는 OpenClaw 세션 로그에서 현지 비용 요약을 출력합니다.
-- `/restart`는 기본적으로 비활성화되어 있습니다; 활성화하려면 `commands.restart: true`를 설정하세요.
+- `/restart`는 기본적으로 활성화되어 있습니다; 비활성화하려면 `commands.restart: false`를 설정하세요.
 - `/verbose`는 디버깅 및 추가 가시성을 목적으로 하며, 일반 사용 시는 **비활성화** 상태로 유지하세요.
 - `/reasoning`(및 `/verbose`)는 그룹 설정에서는 위험할 수 있습니다: 내부 추론이나 의도하지 않은 도구 출력이 드러날 수 있습니다. 특히 그룹 채팅에서는 비활성화를 권장합니다.
 - **빠른 경로:** 허용된 발신자로부터의 명령 전용 메시지는 즉시 처리됩니다 (대기열 및 모델을 우회).

@@ -117,6 +117,7 @@ Npm 사양은 레지스트리 전용입니다(패키지 이름 + 선택적 버�
 ```
 
 각 항목은 `HOOK.md` 및 `handler.ts`(또는 `index.ts`)가 포함된 후크 디렉토리를 가리킵니다. 후크 팩은 종속성을 포함할 수 있으며, `~/.openclaw/hooks/<id>`에 설치됩니다.
+각 `openclaw.hooks` 항목은 심링크 해석 후 패키지 디렉토리 내에 있어야 합니다; 이를 벗어나는 항목은 거부됩니다.
 
 보안 주의사항: `openclaw hooks install`은 `npm install --ignore-scripts`로 종속성을 설치합니다 (라이프사이클 스크립트 없음). 후크 팩 종속성 트리는 "순수 JS/TS"로 유지하고, `postinstall` 빌드에 의존하는 패키지를 피하십시오.
 

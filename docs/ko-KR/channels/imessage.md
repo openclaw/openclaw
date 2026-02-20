@@ -97,12 +97,19 @@ exec ssh -T gateway-host imsg "$@"
       cliPath: "~/.openclaw/scripts/imsg-ssh",
       remoteHost: "user@gateway-host", // SCP 첨부 파일 가져오기에 사용
       includeAttachments: true,
+      // 선택: 허용된 첨부 파일 루트 재정의.
+      // 기본값에는 /Users/*/Library/Messages/Attachments가 포함됩니다
+      attachmentRoots: ["/Users/*/Library/Messages/Attachments"],
+      remoteAttachmentRoots: ["/Users/*/Library/Messages/Attachments"],
     },
   },
 }
 ```
 
     `remoteHost`가 설정되지 않은 경우, OpenClaw는 SSH 래퍼 스크립트를 파싱하여 자동으로 감지하려고 시도합니다.
+    `remoteHost`는 `host` 또는 `user@host` 형식이어야 합니다 (공백이나 SSH 옵션 불가).
+    OpenClaw는 SCP에 엄격한 호스트 키 검사를 사용하므로, 릴레이 호스트 키가 이미 `~/.ssh/known_hosts`에 있어야 합니다.
+    첨부 파일 경로는 허용된 루트(`attachmentRoots` / `remoteAttachmentRoots`)에 대해 검증됩니다.
 
   </Tab>
 </Tabs>
@@ -224,13 +231,14 @@ exec ssh -T bot@mac-mini.tailnet-1234.ts.net imsg "$@"
 ```
 
     SSH 키를 사용하여 SSH 및 SCP가 비대화형으로 작동하도록 합니다.
+    먼저 호스트 키를 신뢰하세요 (예: `ssh bot@mac-mini.tailnet-1234.ts.net`) so `known_hosts`가 채워집니다.
 
   </Accordion>
 
   <Accordion title="멀티 계정 패턴">
     iMessage는 `channels.imessage.accounts` 하에 계정별 구성을 지원합니다.
 
-    각 계정은 `cliPath`, `dbPath`, `allowFrom`, `groupPolicy`, `mediaMaxMb`, 및 히스토리 설정과 같은 필드를 변경할 수 있습니다.
+    각 계정은 `cliPath`, `dbPath`, `allowFrom`, `groupPolicy`, `mediaMaxMb`, 히스토리 설정, 및 첨부 파일 루트 허용 목록과 같은 필드를 변경할 수 있습니다.
 
   </Accordion>
 </AccordionGroup>
@@ -241,6 +249,11 @@ exec ssh -T bot@mac-mini.tailnet-1234.ts.net imsg "$@"
   <Accordion title="첨부 파일 및 미디어">
     - 인바운드 첨부 파일 수집은 선택 사항: `channels.imessage.includeAttachments`
     - 원격 첨부 경로는 `remoteHost`가 설정된 경우 SCP를 통해 가져올 수 있음
+    - 첨부 파일 경로는 허용된 루트와 일치해야 합니다:
+      - `channels.imessage.attachmentRoots` (로컬)
+      - `channels.imessage.remoteAttachmentRoots` (원격 SCP 모드)
+      - 기본 루트 패턴: `/Users/*/Library/Messages/Attachments`
+    - SCP는 엄격한 호스트 키 검사 사용 (`StrictHostKeyChecking=yes`)
     - 아웃바운드 미디어 크기는 `channels.imessage.mediaMaxMb` 사용 (기본값 16MB)
   </Accordion>
 
@@ -325,7 +338,9 @@ openclaw channels status --probe
     확인하세요:
 
     - `channels.imessage.remoteHost`
+    - `channels.imessage.remoteAttachmentRoots`
     - 게이트웨이 호스트로부터 SSH/SCP 키 인증
+    - 게이트웨이 호스트의 `~/.ssh/known_hosts`에 호스트 키 존재 여부
     - Messages 를 실행 중인 Mac에서 원격 경로의 가독성
 
   </Accordion>

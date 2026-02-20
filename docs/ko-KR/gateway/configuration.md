@@ -370,6 +370,10 @@ OpenClaw 는 스키마와 완전히 일치하는 구성만 허용합니다. 알 
 
 ## 구성 RPC (프로그래밍 방식 업데이트)
 
+<Note>
+제어 플레인 쓰기 RPC (`config.apply`, `config.patch`, `update.run`)는 `deviceId+clientIp`당 **60초에 3개 요청**으로 속도 제한됩니다. 제한이 걸리면 RPC가 `retryAfterMs`와 함께 `UNAVAILABLE`을 반환합니다.
+</Note>
+
 <AccordionGroup>
   <Accordion title="config.apply (전체 교체)">
     전체 구성을 검증 + 작성하고 게이트웨이를 한 번에 재시작합니다.
@@ -385,6 +389,8 @@ OpenClaw 는 스키마와 완전히 일치하는 구성만 허용합니다. 알 
     - `sessionKey` (선택 사항) — 재시작 후 웨이크업 핑을 위한 세션 키
     - `note` (선택 사항) — 재시작 센티널을 위한 메모
     - `restartDelayMs` (선택 사항) — 재시작 전 지연 (기본값 2000)
+
+    재시작 요청은 하나가 이미 대기/진행 중일 때 통합되며, 재시작 사이클 사이에 30초의 쿨다운이 적용됩니다.
 
     ```bash
     openclaw gateway call config.get --params '{}'  # capture payload.hash
@@ -409,6 +415,8 @@ OpenClaw 는 스키마와 완전히 일치하는 구성만 허용합니다. 알 
     - `raw` (문자열) — 변경할 키만 포함된 JSON5
     - `baseHash` (필수) — `config.get` 에서 가져온 구성 해시
     - `sessionKey`, `note`, `restartDelayMs` — `config.apply` 와 동일
+
+    재시작 동작은 `config.apply`와 동일합니다: 대기 중인 재시작이 통합되며 재시작 사이클 사이에 30초의 쿨다운이 적용됩니다.
 
     ```bash
     openclaw gateway call config.patch --params '{

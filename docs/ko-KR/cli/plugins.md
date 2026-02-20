@@ -40,6 +40,7 @@ the plugin from loading and fail config validation.
 
 ```bash
 openclaw plugins install <path-or-spec>
+openclaw plugins install <npm-spec> --pin
 ```
 
 Security note: treat plugin installs like running code. Prefer pinned versions.
@@ -54,6 +55,9 @@ Use `--link` to avoid copying a local directory (adds to `plugins.load.paths`):
 ```bash
 openclaw plugins install -l ./my-plugin
 ```
+
+npm 설치 시 `--pin`을 사용하면 해결된 정확한 스펙(`name@version`)이
+`plugins.installs`에 저장되며, 기본 동작은 고정되지 않습니다.
 
 ### Uninstall
 
@@ -78,3 +82,7 @@ openclaw plugins update <id> --dry-run
 ```
 
 Updates only apply to plugins installed from npm (tracked in `plugins.installs`).
+
+저장된 무결성 해시가 존재하고 가져온 아티팩트 해시가 변경되면,
+OpenClaw는 경고를 출력하고 진행하기 전에 확인을 요청합니다. CI/비대화형 실행에서는
+전역 `--yes` 플래그를 사용하여 프롬프트를 건너뛰세요.

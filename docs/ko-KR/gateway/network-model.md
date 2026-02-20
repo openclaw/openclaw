@@ -15,5 +15,5 @@ title: "네트워크 모델"
 - 캔버스 호스트는 게이트웨이 HTTP 서버에 의해 **동일한 포트**로 서비스됩니다 (기본값 `18789`):
   - `/__openclaw__/canvas/`
   - `/__openclaw__/a2ui/`
-    `gateway.auth`가 구성되고 게이트웨이가 루프백을 넘어 바인딩되면, 이러한 경로는 게이트웨이 인증으로 보호됩니다 (루프백 요청은 면제됩니다). [게이트웨이 설정](/ko-KR/gateway/configuration) (`canvasHost`, `gateway`)을 참조하세요.
+    `gateway.auth`가 구성되고 게이트웨이가 루프백을 넘어 바인딩되면, 이러한 경로는 게이트웨이 인증으로 보호됩니다. 노드 클라이언트는 활성 WS 세션에 연결된 노드 범위 캐퍼빌리티 URL을 사용합니다. [게이트웨이 설정](/ko-KR/gateway/configuration) (`canvasHost`, `gateway`)을 참조하세요.
 - 원격 사용은 일반적으로 SSH 터널 또는 tailnet VPN입니다. [원격 접속](/ko-KR/gateway/remote) 및 [디바이스 검색](/ko-KR/gateway/discovery)을 참조하세요.

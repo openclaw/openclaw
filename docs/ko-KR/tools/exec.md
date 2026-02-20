@@ -37,6 +37,7 @@ title: "Exec Tool"
 - Windows가 아닌 호스트에서는, `exec`가 `SHELL`을 사용하고, `SHELL`이 `fish`인 경우, fish와 호환되지 않는 스크립트를 피하려고 `PATH`에서 `bash`(또는 `sh`)를 선호하며, 존재하지 않으면 `SHELL`로 되돌립니다.
 - 호스트 실행(`gateway`/`node`)은 바이너리 하이재킹 또는 주입된 코드를 방지하기 위해 `env.PATH`와 로더 재정의(`LD_*`/`DYLD_*`)를 거부합니다.
 - 중요: 샌드박스 격리는 **기본적으로 꺼져** 있습니다. 샌드박스 격리가 꺼져 있으면, `host=sandbox`는 게이트웨이 호스트에서 직접 실행됩니다 (컨테이너 없음) 그리고 **승인이 필요하지 않습니다**. 승인이 필요하면, `host=gateway`로 실행하고 exec 승인을 구성하십시오 (또는 샌드박스 격리를 활성화).
+- 스크립트 사전 검사 (일반적인 Python/Node 쉘 구문 오류 검사)는 유효한 `workdir` 경계 내의 파일만 검사합니다. 스크립트 경로가 `workdir` 밖으로 해석되는 경우, 해당 파일에 대한 사전 검사는 건너뜁니다.
 
 ## Config
 
@@ -47,7 +48,7 @@ title: "Exec Tool"
 - `tools.exec.ask` (기본값: `on-miss`)
 - `tools.exec.node` (기본값: 설정되지 않음)
 - `tools.exec.pathPrepend`: exec 실행을 위해 `PATH`에 추가할 디렉토리 목록 (게이트웨이 + 샌드박스 전용).
-- `tools.exec.safeBins`: 명시적 승인이 필요 없는 표준 입력 전용 안전 바이너리.
+- `tools.exec.safeBins`: 명시적 승인이 필요 없는 표준 입력 전용 안전 바이너리. 동작 세부 사항은 [안전한 바이너리](/tools/exec-approvals#safe-bins-stdin-only)를 참조하세요.
 
 예:
 

@@ -193,6 +193,8 @@ openclaw channels add
 }
 ```
 
+`connectionMode: "webhook"`을 사용하는 경우 `verificationToken`을 설정하세요. Feishu 웹훅 서버는 기본적으로 `127.0.0.1`에 바인딩됩니다; 다른 바인드 주소가 의도적으로 필요한 경우에만 `webhookHost`를 설정하세요.
+
 ### 환경 변수를 통한 구성
 
 ```bash
@@ -364,8 +366,8 @@ openclaw pairing list feishu
 
 ## 일반 명령어
 
-| Command   | Description       |
-| --------- | ----------------- |
+| Command   | Description        |
+| --------- | ------------------ |
 | `/status` | 봇 상태 표시하기   |
 | `/reset`  | 세션 재설정        |
 | `/model`  | 모델 표시/전환하기 |
@@ -374,13 +376,13 @@ openclaw pairing list feishu
 
 ## 게이트웨이 관리 명령어
 
-| Command                    | Description                   |
-| -------------------------- | ----------------------------- |
-| `openclaw gateway status`  | 게이트웨이 상태 표시          |
-| `openclaw gateway install` | 게이트웨이 서비스 설치/시작   |
-| `openclaw gateway stop`    | 게이트웨이 서비스 중지        |
-| `openclaw gateway restart` | 게이트웨이 서비스 재시작      |
-| `openclaw logs --follow`   | 게이트웨이 로그 조회          |
+| Command                    | Description                 |
+| -------------------------- | --------------------------- |
+| `openclaw gateway status`  | 게이트웨이 상태 표시        |
+| `openclaw gateway install` | 게이트웨이 서비스 설치/시작 |
+| `openclaw gateway stop`    | 게이트웨이 서비스 중지      |
+| `openclaw gateway restart` | 게이트웨이 서비스 재시작    |
+| `openclaw logs --follow`   | 게이트웨이 로그 조회        |
 
 ---
 
@@ -527,34 +529,39 @@ Feishu는 스트리밍 답장을 인터랙티브 카드로 지원합니다. 활�
 
 주요 옵션:
 
-| Setting                                           | Description                     | Default   |
-| ------------------------------------------------- | ------------------------------- | --------- |
-| `channels.feishu.enabled`                         | 채널 활성화/비활성화            | `true`    |
-| `channels.feishu.domain`                          | API 도메인 (`feishu` 또는 `lark`)| `feishu`  |
-| `channels.feishu.accounts.<id>.appId`             | App ID                          | -         |
-| `channels.feishu.accounts.<id>.appSecret`         | App Secret                      | -         |
-| `channels.feishu.accounts.<id>.domain`            | 계정별 API 도메인 덮어쓰기 설정 | `feishu`  |
-| `channels.feishu.dmPolicy`                        | DM 정책                         | `pairing` |
-| `channels.feishu.allowFrom`                       | DM 허용목록 (open_id 목록)      | -         |
-| `channels.feishu.groupPolicy`                     | 그룹 정책                       | `open`    |
-| `channels.feishu.groupAllowFrom`                  | 그룹 허용 목록                  | -         |
-| `channels.feishu.groups.<chat_id>.requireMention` | @mention 요구                   | `true`    |
-| `channels.feishu.groups.<chat_id>.enabled`        | 그룹 활성화                     | `true`    |
-| `channels.feishu.textChunkLimit`                  | 메시지 청크 크기                | `2000`    |
-| `channels.feishu.mediaMaxMb`                      | 미디어 크기 제한                | `30`      |
-| `channels.feishu.streaming`                       | 스트리밍 카드 출력 활성화        | `true`    |
-| `channels.feishu.blockStreaming`                  | 블록 스트리밍 활성화            | `true`    |
+| Setting                                           | Description                       | Default          |
+| ------------------------------------------------- | --------------------------------- | ---------------- |
+| `channels.feishu.enabled`                         | 채널 활성화/비활성화              | `true`           |
+| `channels.feishu.domain`                          | API 도메인 (`feishu` 또는 `lark`) | `feishu`         |
+| `channels.feishu.connectionMode`                  | 이벤트 전송 모드                  | `websocket`      |
+| `channels.feishu.verificationToken`               | 웹훅 모드에서 필수                | -                |
+| `channels.feishu.webhookPath`                     | 웹훅 경로                         | `/feishu/events` |
+| `channels.feishu.webhookHost`                     | 웹훅 바인드 호스트                | `127.0.0.1`      |
+| `channels.feishu.webhookPort`                     | 웹훅 바인드 포트                  | `3000`           |
+| `channels.feishu.accounts.<id>.appId`             | App ID                            | -                |
+| `channels.feishu.accounts.<id>.appSecret`         | App Secret                        | -                |
+| `channels.feishu.accounts.<id>.domain`            | 계정별 API 도메인 덮어쓰기 설정   | `feishu`         |
+| `channels.feishu.dmPolicy`                        | DM 정책                           | `pairing`        |
+| `channels.feishu.allowFrom`                       | DM 허용목록 (open_id 목록)        | -                |
+| `channels.feishu.groupPolicy`                     | 그룹 정책                         | `open`           |
+| `channels.feishu.groupAllowFrom`                  | 그룹 허용 목록                    | -                |
+| `channels.feishu.groups.<chat_id>.requireMention` | @mention 요구                     | `true`           |
+| `channels.feishu.groups.<chat_id>.enabled`        | 그룹 활성화                       | `true`           |
+| `channels.feishu.textChunkLimit`                  | 메시지 청크 크기                  | `2000`           |
+| `channels.feishu.mediaMaxMb`                      | 미디어 크기 제한                  | `30`             |
+| `channels.feishu.streaming`                       | 스트리밍 카드 출력 활성화         | `true`           |
+| `channels.feishu.blockStreaming`                  | 블록 스트리밍 활성화              | `true`           |
 
 ---
 
 ## dmPolicy 참조
 
-| Value         | Behavior                                                        |
-| ------------- | --------------------------------------------------------------- |
-| `"pairing"`   | **기본값.** 알 수 없는 사용자는 페어링 코드 받음; 승인 필요    |
-| `"allowlist"` | `allowFrom`에 있는 사용자만 채팅 가능                          |
-| `"open"`      | 모든 사용자 채팅 허용 (`allowFrom`에 `"*"` 필요)                |
-| `"disabled"`  | DM 비활성화                                                    |
+| Value         | Behavior                                                    |
+| ------------- | ----------------------------------------------------------- |
+| `"pairing"`   | **기본값.** 알 수 없는 사용자는 페어링 코드 받음; 승인 필요 |
+| `"allowlist"` | `allowFrom`에 있는 사용자만 채팅 가능                       |
+| `"open"`      | 모든 사용자 채팅 허용 (`allowFrom`에 `"*"` 필요)            |
+| `"disabled"`  | DM 비활성화                                                 |
 
 ---
 

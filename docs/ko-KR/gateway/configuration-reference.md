@@ -19,18 +19,18 @@ description: "완전한 필드별 참조를 위한 ~/.openclaw/openclaw.json"
 
 모든 채널은 다이렉트 메시지 정책과 그룹 정책을 지원합니다:
 
-| 다이렉트 메시지 정책 | 동작                                                           |
-| ------------------- | ------------------------------------------------------------- |
-| `pairing` (기본값)  | 알 수 없는 발신자는 일회성 페어링 코드를 받으며 소유자가 승인해야 합니다 |
-| `allowlist`         | `allowFrom` (또는 페어링된 allow 저장소)의 발신자만 허용       |
-| `open`              | 모든 수신 다이렉트 메시지를 허용 ( `allowFrom: ["*"]` 필요)    |
-| `disabled`          | 모든 수신 다이렉트 메시지 무시                                 |
+| 다이렉트 메시지 정책 | 동작                                                                     |
+| -------------------- | ------------------------------------------------------------------------ |
+| `pairing` (기본값)   | 알 수 없는 발신자는 일회성 페어링 코드를 받으며 소유자가 승인해야 합니다 |
+| `allowlist`          | `allowFrom` (또는 페어링된 allow 저장소)의 발신자만 허용                 |
+| `open`               | 모든 수신 다이렉트 메시지를 허용 ( `allowFrom: ["*"]` 필요)              |
+| `disabled`           | 모든 수신 다이렉트 메시지 무시                                           |
 
-| 그룹 정책             | 동작                                         |
-| --------------------- | -------------------------------------------- |
-| `allowlist` (기본값)  | 구성된 허용 목록과 일치하는 그룹에만 허용     |
-| `open`                | 그룹 허용 목록을 우회 (언급 게이팅은 여전히 적용됨) |
-| `disabled`            | 모든 그룹/방 메시지 차단                      |
+| 그룹 정책            | 동작                                                |
+| -------------------- | --------------------------------------------------- |
+| `allowlist` (기본값) | 구성된 허용 목록과 일치하는 그룹에만 허용           |
+| `open`               | 그룹 허용 목록을 우회 (언급 게이팅은 여전히 적용됨) |
+| `disabled`           | 모든 그룹/방 메시지 차단                            |
 
 <Note>
 `channels.defaults.groupPolicy` 는 프로바이더의 `groupPolicy` 가 설정되지 않았을 때 기본값을 설정합니다. 페어링 코드는 1 시간 후 만료됩니다. 대기 중인 다이렉트 메시지 페어링 요청은 **채널 당 3 개** 로 제한됩니다. Slack/Discord 는 특별한 예외 사항을 가지고 있습니다: 프로바이더 섹션이 완전히 없을 경우 런타임 그룹 정책은 `open` 으로 해결될 수 있습니다 (시작 경고와 함께).
@@ -329,12 +329,12 @@ WhatsApp 은 게이트웨이의 웹 채널 (Baileys Web) 을 통해 실행됩니
 
 **스레드 세션 격리:** `thread.historyScope` 는 스레드별 (기본값) 이거나 채널 전체 공유일 수 있습니다. `thread.inheritParent` 는 부모 채널의 대화를 새로운 스레드로 복사합니다.
 
-| 동작 그룹   | 기본값 | 비고                    |
-| ---------- | ------ | ---------------------- |
+| 동작 그룹  | 기본값 | 비고                    |
+| ---------- | ------ | ----------------------- |
 | reactions  | 활성화 | 반응 추가 및 목록 표시  |
 | messages   | 활성화 | 읽기/발송/편집/삭제     |
-| pins       | 활성화 | 고정/해제/목록         |
-| memberInfo | 활성화 | 회원 정보              |
+| pins       | 활성화 | 고정/해제/목록          |
+| memberInfo | 활성화 | 회원 정보               |
 | emojiList  | 활성화 | 사용자 정의 이모지 목록 |
 
 ### Mattermost
@@ -392,6 +392,8 @@ OpenClaw 는 `imsg rpc` (stdio 를 통한 JSON-RPC) 를 생성합니다. 데몬 
       allowFrom: ["+15555550123", "user@example.com", "chat_id:123"],
       historyLimit: 50,
       includeAttachments: false,
+      attachmentRoots: ["/Users/*/Library/Messages/Attachments"],
+      remoteAttachmentRoots: ["/Users/*/Library/Messages/Attachments"],
       mediaMaxMb: 16,
       service: "auto",
       region: "US",
@@ -402,7 +404,9 @@ OpenClaw 는 `imsg rpc` (stdio 를 통한 JSON-RPC) 를 생성합니다. 데몬 
 
 - 메시지 DB 에 대한 전체 디스크 접근 권한이 필요합니다.
 - `chat_id:<id>` 대상을 선호합니다. `imsg chats --limit 20` 을 사용하여 채팅 목록을 확인하세요.
-- `cliPath` 는 SSH 래퍼를 가리킬 수 있으며, 첨부 파일 수집을 위해 `remoteHost` 를 설정하십시오.
+- `cliPath` 는 SSH 래퍼를 가리킬 수 있으며, SCP 첨부 파일 수집을 위해 `remoteHost` (`host` 또는 `user@host`)를 설정하십시오.
+- `attachmentRoots` 및 `remoteAttachmentRoots`는 인바운드 첨부 파일 경로를 제한합니다 (기본값: `/Users/*/Library/Messages/Attachments`).
+- SCP는 엄격한 호스트 키 검사를 사용하므로 릴레이 호스트 키가 `~/.ssh/known_hosts`에 이미 있어야 합니다.
 
 <Accordion title="iMessage SSH 래퍼 예제">
 
@@ -666,7 +670,7 @@ exec ssh -T gateway-host imsg "$@"
 
 **내장된 별칭 단축키** (모델이 `agents.defaults.models` 에 있는 경우에만 적용):
 
-| 별칭           | 모델                           |
+| 별칭           | 모델                            |
 | -------------- | ------------------------------- |
 | `opus`         | `anthropic/claude-opus-4-6`     |
 | `sonnet`       | `anthropic/claude-sonnet-4-5`   |
@@ -1240,13 +1244,13 @@ scripts/sandbox-browser-setup.sh   # 선택적 브라우저 이미지
 
 **템플릿 변수:**
 
-| 변수              | 설명                         | 예제                        |
-| ----------------- | --------------------------- | --------------------------- |
-| `{model}`         | 약식 모델 이름               | `claude-opus-4-6`           |
-| `{modelFull}`     | 전체 모델 식별자            | `anthropic/claude-opus-4-6` |
-| `{provider}`      | 프로바이더 이름             | `anthropic`                 |
-| `{thinkingLevel}` | 현재 사고 수준              | `high`, `low`, `off`        |
-| `{identity.name}` | 에이전트 정체성 이름        | ( `"auto"` 와 동일)         |
+| 변수              | 설명                 | 예제                        |
+| ----------------- | -------------------- | --------------------------- |
+| `{model}`         | 약식 모델 이름       | `claude-opus-4-6`           |
+| `{modelFull}`     | 전체 모델 식별자     | `anthropic/claude-opus-4-6` |
+| `{provider}`      | 프로바이더 이름      | `anthropic`                 |
+| `{thinkingLevel}` | 현재 사고 수준       | `high`, `low`, `off`        |
+| `{identity.name}` | 에이전트 정체성 이름 | ( `"auto"` 와 동일)         |
 
 변수는 대소문자를 구분하지 않습니다. `{think}` 는 `{thinkingLevel}` 의 별칭입니다.
 
@@ -1340,27 +1344,27 @@ Talk 모드 (macOS/iOS/Android) 의 기본값입니다.
 
 `tools.profile` 은 `tools.allow`/`tools.deny` 전에 기본 허용 목록을 설정합니다:
 
-| 프로필      | 포함 항목                                                                   |
-| ----------- | -------------------------------------------------------------------------- |
-| `minimal`   | `session_status` 만                                                        |
-| `coding`    | `group:fs`, `group:runtime`, `group:sessions`, `group:memory`, `image`     |
+| 프로필      | 포함 항목                                                                                 |
+| ----------- | ----------------------------------------------------------------------------------------- |
+| `minimal`   | `session_status` 만                                                                       |
+| `coding`    | `group:fs`, `group:runtime`, `group:sessions`, `group:memory`, `image`                    |
 | `messaging` | `group:messaging`, `sessions_list`, `sessions_history`, `sessions_send`, `session_status` |
-| `full`      | 제한 없음 (설정하지 않은 경우와 동일합니다)                                |
+| `full`      | 제한 없음 (설정하지 않은 경우와 동일합니다)                                               |
 
 ### 도구 그룹
 
-| 그룹               | 도구 명                                                          |
-| ------------------ | ---------------------------------------------------------------- |
-| `group:runtime`    | `exec`, `process` (`bash` 는 `exec` 의 별칭으로 허용됨)            |
-| `group:fs`         | `read`, `write`, `edit`, `apply_patch`                            |
+| 그룹               | 도구 명                                                                                  |
+| ------------------ | ---------------------------------------------------------------------------------------- |
+| `group:runtime`    | `exec`, `process` (`bash` 는 `exec` 의 별칭으로 허용됨)                                  |
+| `group:fs`         | `read`, `write`, `edit`, `apply_patch`                                                   |
 | `group:sessions`   | `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`, `session_status` |
-| `group:memory`     | `memory_search`, `memory_get`                                     |
-| `group:web`        | `web_search`, `web_fetch`                                         |
-| `group:ui`         | `browser`, `canvas`                                               |
-| `group:automation` | `cron`, `gateway`                                                 |
-| `group:messaging`  | `message`                                                         |
-| `group:nodes`      | `nodes`                                                           |
-| `group:openclaw`   | 모든 내장 도구 (프로바이더 플러그인은 제외)                       |
+| `group:memory`     | `memory_search`, `memory_get`                                                            |
+| `group:web`        | `web_search`, `web_fetch`                                                                |
+| `group:ui`         | `browser`, `canvas`                                                                      |
+| `group:automation` | `cron`, `gateway`                                                                        |
+| `group:messaging`  | `message`                                                                                |
+| `group:nodes`      | `nodes`                                                                                  |
+| `group:openclaw`   | 모든 내장 도구 (프로바이더 플러그인은 제외)                                              |
 
 ### `tools.allow` / `tools.deny`
 
@@ -1974,7 +1978,7 @@ Anthropic 호환, 내장 프로바이더. 단축키: `openclaw onboard --auth-ch
     port: 18789,
     bind: "loopback",
     auth: {
-      mode: "token", // token | password | trusted-proxy
+      mode: "token", // none | token | password | trusted-proxy
       token: "your-token",
       // password: "your-password", // or OPENCLAW_GATEWAY_PASSWORD
       // trustedProxy: { userHeader: "x-forwarded-user" }, // for mode=trusted-proxy; see /gateway/trusted-proxy-auth
@@ -2020,6 +2024,7 @@ Anthropic 호환, 내장 프로바이더. 단축키: `openclaw onboard --auth-ch
 - `port`: WS + HTTP 용 단일 다중화 포트. 우선순위: `--port` > `OPENCLAW_GATEWAY_PORT` > `gateway.port` > `18789`.
 - `bind`: `auto`, `loopback` (기본값), `lan` (`0.0.0.0`), `tailnet` (Tailscale IP 전용) 또는 `custom`.
 - **인증**: 기본적으로 필수입니다. 비루프백 바인드는 공유 토큰/비밀번호가 필요합니다. 온보딩 마법사는 기본적으로 토큰을 생성합니다.
+- `auth.mode: "none"`: 명시적 인증 없음 모드. 신뢰할 수 있는 로컬 루프백 설정에서만 사용하세요; 온보딩 프롬프트에서는 의도적으로 제공되지 않습니다.
 - `auth.mode: "trusted-proxy"`: 인증을 인식하는 리버스 프록시에 인증을 위임하고 `gateway.trustedProxies` 의 ID 헤더를 신뢰합니다 ([Trusted Proxy Auth](/ko-KR/gateway/trusted-proxy-auth) 참조).
 - `auth.allowTailscale`: `true` 이면 Tailscale Serve ID 헤더가 인증을 충족합니다 (`tailscale whois` 를 통해 확인). `tailscale.mode = "serve"` 일 때 기본값은 `true` 입니다.
 - `auth.rateLimit`: 선택적 인증 실패 제한기. 클라이언트 IP 별 및 인증 범위별로 적용됩니다 (공유 비밀과 디바이스 토큰은 독립적으로 추적됩니다). 차단된 시도는 `429` + `Retry-After` 를 반환합니다.
@@ -2162,7 +2167,8 @@ openclaw gateway --port 19001
   - `http://<gateway-host>:<gateway.port>/__openclaw__/a2ui/`
 - 로컬 전용: `gateway.bind: "loopback"` (기본값) 을 유지하세요.
 - 비루프백 바인드: canvas 라우트에는 게이트웨이 인증 (토큰/비밀번호/trusted-proxy) 이 필요하며, 다른 게이트웨이 HTTP 표면과 동일합니다.
-- Node WebView 는 일반적으로 인증 헤더를 보내지 않습니다; 노드가 페어링되고 연결된 후, 게이트웨이는 개인 IP 폴백을 허용하여 노드가 URL 에 비밀을 노출하지 않고 canvas/A2UI 를 로드할 수 있도록 합니다.
+- Node WebView 는 일반적으로 인증 헤더를 보내지 않습니다; 노드가 페어링되고 연결된 후, 게이트웨이는 canvas/A2UI 접근을 위한 노드 범위 캐퍼빌리티 URL을 게시합니다.
+- 캐퍼빌리티 URL은 활성 노드 WS 세션에 바인딩되며 빠르게 만료됩니다. IP 기반 폴백은 사용되지 않습니다.
 - 제공된 HTML 에 라이브 리로드 클라이언트를 삽입합니다.
 - 비어있을 때 시작 `index.html` 을 자동으로 생성합니다.
 - `/__openclaw__/a2ui/` 에서 A2UI 도 제공합니다.
@@ -2387,27 +2393,27 @@ macOS 온보딩 어시스턴트가 작성합니다. 기본값을 유도합니다
 
 `tools.media.*.models[].args` 에서 확장되는 템플릿 플레이스홀더:
 
-| 변수               | 설명                                       |
-| ------------------ | ------------------------------------------ |
-| `{{Body}}`         | 전체 인바운드 메시지 본문                   |
-| `{{RawBody}}`      | 원시 본문 (기록/발신자 래퍼 없음)           |
-| `{{BodyStripped}}` | 그룹 언급이 제거된 본문                     |
-| `{{From}}`         | 발신자 식별자                               |
-| `{{To}}`           | 수신자 식별자                               |
-| `{{MessageSid}}`   | 채널 메시지 ID                              |
-| `{{SessionId}}`    | 현재 세션 UUID                              |
-| `{{IsNewSession}}` | 새 세션 생성 시 `"true"`                    |
-| `{{MediaUrl}}`     | 인바운드 미디어 의사 URL                    |
-| `{{MediaPath}}`    | 로컬 미디어 경로                            |
-| `{{MediaType}}`    | 미디어 유형 (image/audio/document/...)      |
-| `{{Transcript}}`   | 오디오 트랜스크립트                         |
-| `{{Prompt}}`       | CLI 항목에 대한 해결된 미디어 프롬프트       |
-| `{{MaxChars}}`     | CLI 항목에 대한 해결된 최대 출력 문자 수     |
-| `{{ChatType}}`     | `"direct"` 또는 `"group"`                   |
-| `{{GroupSubject}}` | 그룹 주제 (최선의 노력)                     |
-| `{{GroupMembers}}` | 그룹 멤버 미리보기 (최선의 노력)            |
-| `{{SenderName}}`   | 발신자 표시 이름 (최선의 노력)              |
-| `{{SenderE164}}`   | 발신자 전화번호 (최선의 노력)               |
+| 변수               | 설명                                             |
+| ------------------ | ------------------------------------------------ |
+| `{{Body}}`         | 전체 인바운드 메시지 본문                        |
+| `{{RawBody}}`      | 원시 본문 (기록/발신자 래퍼 없음)                |
+| `{{BodyStripped}}` | 그룹 언급이 제거된 본문                          |
+| `{{From}}`         | 발신자 식별자                                    |
+| `{{To}}`           | 수신자 식별자                                    |
+| `{{MessageSid}}`   | 채널 메시지 ID                                   |
+| `{{SessionId}}`    | 현재 세션 UUID                                   |
+| `{{IsNewSession}}` | 새 세션 생성 시 `"true"`                         |
+| `{{MediaUrl}}`     | 인바운드 미디어 의사 URL                         |
+| `{{MediaPath}}`    | 로컬 미디어 경로                                 |
+| `{{MediaType}}`    | 미디어 유형 (image/audio/document/...)           |
+| `{{Transcript}}`   | 오디오 트랜스크립트                              |
+| `{{Prompt}}`       | CLI 항목에 대한 해결된 미디어 프롬프트           |
+| `{{MaxChars}}`     | CLI 항목에 대한 해결된 최대 출력 문자 수         |
+| `{{ChatType}}`     | `"direct"` 또는 `"group"`                        |
+| `{{GroupSubject}}` | 그룹 주제 (최선의 노력)                          |
+| `{{GroupMembers}}` | 그룹 멤버 미리보기 (최선의 노력)                 |
+| `{{SenderName}}`   | 발신자 표시 이름 (최선의 노력)                   |
+| `{{SenderE164}}`   | 발신자 전화번호 (최선의 노력)                    |
 | `{{Provider}}`     | 프로바이더 힌트 (whatsapp, telegram, discord 등) |
 
 ---

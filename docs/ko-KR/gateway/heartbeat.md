@@ -164,7 +164,7 @@ Heartbeat 외부에서는, 메시지의 시작/끝에 있는 불필요한 `HEART
         heartbeat: {
           every: "1h",
           target: "telegram",
-          to: "12345678",
+          to: "12345678:topic:42", // 선택적: 특정 토픽/스레드로 라우팅
           accountId: "ops-bot",
         },
       },
@@ -193,7 +193,7 @@ Heartbeat 외부에서는, 메시지의 시작/끝에 있는 불필요한 `HEART
   - `last` (기본값): 마지막으로 사용된 외부 채널로 전달.
   - 명시적 채널: `whatsapp` / `telegram` / `discord` / `googlechat` / `slack` / `msteams` / `signal` / `imessage`.
   - `none`: Heartbeat를 실행하되, 외부로 **전달하지 않음**.
-- `to`: 선택적인 수신자 오버라이드 (채널-특정 id, 예: WhatsApp의 E.164 또는 Telegram 채팅 id).
+- `to`: 선택적인 수신자 오버라이드 (채널-특정 id, 예: WhatsApp의 E.164 또는 Telegram 채팅 id). Telegram 토픽/스레드의 경우 `<chatId>:topic:<messageThreadId>` 형식을 사용하세요.
 - `accountId`: 멀티-계정 채널을 위한 선택적 계정 id. `target: "last"`일 때, 계정 id는 계정을 지원하는 해석된 마지막 채널에 적용됩니다; 그렇지 않으면 무시됩니다. 계정 id가 해석된 채널의 구성된 계정과 일치하지 않으면, 전달이 건너뛰어집니다.
 - `prompt`: 기본 프롬프트 본문을 재정의합니다 (병합되지 않음).
 - `ackMaxChars`: 전달 전 `HEARTBEAT_OK` 후 허용되는 최대 문자 수.
@@ -268,12 +268,12 @@ channels:
 
 ### 일반 패턴
 
-| 목표                                     | 설정                                                                                      |
-| ---------------------------------------- | ---------------------------------------------------------------------------------------- |
-| 기본 동작 (조용한 OK, 경고 표시)         | _(구성 필요 없음)_                                                                       |
-| 완전히 조용 (메시지 없음, 표시기 없음)   | `channels.defaults.heartbeat: { showOk: false, showAlerts: false, useIndicator: false }` |
-| 표시기 전용 (메시지 없음)                 | `channels.defaults.heartbeat: { showOk: false, showAlerts: false, useIndicator: true }`  |
-| 한 채널에서만 OK 표시                     | `channels.telegram.heartbeat: { showOk: true }`                                          |
+| 목표                                   | 설정                                                                                     |
+| -------------------------------------- | ---------------------------------------------------------------------------------------- |
+| 기본 동작 (조용한 OK, 경고 표시)       | _(구성 필요 없음)_                                                                       |
+| 완전히 조용 (메시지 없음, 표시기 없음) | `channels.defaults.heartbeat: { showOk: false, showAlerts: false, useIndicator: false }` |
+| 표시기 전용 (메시지 없음)              | `channels.defaults.heartbeat: { showOk: false, showAlerts: false, useIndicator: true }`  |
+| 한 채널에서만 OK 표시                  | `channels.telegram.heartbeat: { showOk: true }`                                          |
 
 ## HEARTBEAT.md (선택 사항)
 

@@ -188,6 +188,7 @@ openclaw hooks disable command-logger
 
 ```bash
 openclaw hooks install <path-or-spec>
+openclaw hooks install <npm-spec> --pin
 ```
 
 로컬 폴더/아카이브 또는 npm에서 훅 팩을 설치합니다.
@@ -204,6 +205,7 @@ npm 사양은 **레지스트리 전용**입니다 (패키지 이름 + 선택적 
 **옵션:**
 
 - `-l, --link`: 복사하는 대신 로컬 디렉토리를 연결 (`hooks.internal.load.extraDirs`에 추가)
+- `--pin`: npm 설치를 `hooks.internal.installs`에 정확한 해결된 `name@version`으로 기록
 
 **지원되는 아카이브:** `.zip`, `.tgz`, `.tar.gz`, `.tar`
 
@@ -236,6 +238,10 @@ openclaw hooks update --all
 
 - `--all`: 추적된 모든 훅 팩 업데이트
 - `--dry-run`: 쓰기 없이 변경 사항 표시
+
+저장된 무결성 해시가 존재하고 가져온 아티팩트 해시가 변경되면,
+OpenClaw는 경고를 출력하고 진행하기 전에 확인을 요청합니다. CI/비대화형 실행에서는
+전역 `--yes` 플래그를 사용하여 프롬프트를 건너뛰세요.
 
 ## 번들된 훅
 
