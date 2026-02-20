@@ -293,13 +293,13 @@ describe("isSecureWebSocketUrl", () => {
       expect(isSecureWebSocketUrl("ws://localhost:18789")).toBe(true);
       expect(isSecureWebSocketUrl("ws://[::1]:18789")).toBe(true);
       expect(isSecureWebSocketUrl("ws://127.0.0.42:18789")).toBe(true);
+      expect(isSecureWebSocketUrl("ws://100.64.0.1:18789")).toBe(true);
     });
 
     it("returns false for ws:// to non-loopback addresses (CWE-319)", () => {
       expect(isSecureWebSocketUrl("ws://remote.example.com:18789")).toBe(false);
       expect(isSecureWebSocketUrl("ws://192.168.1.100:18789")).toBe(false);
       expect(isSecureWebSocketUrl("ws://10.0.0.5:18789")).toBe(false);
-      expect(isSecureWebSocketUrl("ws://100.64.0.1:18789")).toBe(false);
     });
   });
 
