@@ -127,7 +127,7 @@ describe("promptGatewayConfig", () => {
       requiredHeaders: ["x-forwarded-proto", "x-forwarded-host"],
       allowUsers: ["nick@example.com"],
     });
-    expect(result.config.gateway?.bind).toBe("lan");
+    expect(result.config.gateway?.bind).toBe("loopback");
     expect(result.config.gateway?.trustedProxies).toEqual(["10.0.1.10", "192.168.1.5"]);
   });
 
@@ -141,7 +141,7 @@ describe("promptGatewayConfig", () => {
       userHeader: "x-remote-user",
       // requiredHeaders and allowUsers should be undefined when empty
     });
-    expect(result.config.gateway?.bind).toBe("lan");
+    expect(result.config.gateway?.bind).toBe("loopback");
     expect(result.config.gateway?.trustedProxies).toEqual(["10.0.0.1"]);
   });
 
@@ -150,7 +150,7 @@ describe("promptGatewayConfig", () => {
       tailscaleMode: "serve",
       textQueue: ["18789", "x-forwarded-user", "", "", "10.0.0.1"],
     });
-    expect(result.config.gateway?.bind).toBe("lan");
+    expect(result.config.gateway?.bind).toBe("loopback");
     expect(result.config.gateway?.tailscale?.mode).toBe("off");
     expect(result.config.gateway?.tailscale?.resetOnExit).toBe(false);
   });

@@ -22,4 +22,8 @@ RUN pnpm install --frozen-lockfile
 RUN pnpm build
 RUN pnpm ui:build
 
+RUN useradd --create-home --shell /bin/bash appuser \
+  && chown -R appuser:appuser /app
+USER appuser
+
 CMD ["bash"]

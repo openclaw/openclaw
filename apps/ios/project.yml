@@ -100,6 +100,8 @@ targets:
         UIBackgroundModes:
           - audio
           - remote-notification
+        BGTaskSchedulerPermittedIdentifiers:
+          - ai.openclaw.ios.bgrefresh
         NSLocalNetworkUsageDescription: OpenClaw discovers and connects to your OpenClaw gateway on the local network.
         NSAppTransportSecurity:
           NSAllowsArbitraryLoadsInWebContent: true
