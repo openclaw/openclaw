@@ -71,6 +71,7 @@ import { formatGatewayAuthFailureMessage, type AuthProvidedKind } from "./auth-m
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
 const DEVICE_SIGNATURE_SKEW_MS = 10 * 60 * 1000;
+const DEFAULT_AUTO_PAIR_SCOPES = new Set(["operator.read", "operator.write"]);
 
 export function attachGatewayWsMessageHandler(params: {
   socket: WebSocket;
@@ -654,6 +655,10 @@ export function attachGatewayWsMessageHandler(params: {
           const requirePairing = async (
             reason: "not-paired" | "role-upgrade" | "scope-upgrade",
           ) => {
+            const silent = isLocalClient && reason === "not-paired";
+            const effectiveScopes = silent
+              ? scopes.filter((s) => DEFAULT_AUTO_PAIR_SCOPES.has(s))
+              : scopes;
             const pairing = await requestDevicePairing({
               deviceId: device.id,
               publicKey: devicePublicKey,
@@ -662,9 +667,9 @@ export function attachGatewayWsMessageHandler(params: {
               clientId: connectParams.client.id,
               clientMode: connectParams.client.mode,
               role,
-              scopes,
+              scopes: effectiveScopes,
               remoteIp: reportedClientIp,
-              silent: isLocalClient && reason === "not-paired",
+              silent,
             });
             const context = buildRequestContext();
             if (pairing.request.silent === true) {
