@@ -1,0 +1,90 @@
+# Phase 01: Core Documentator Agent Playbook
+
+This phase creates the **openclaw-documentator** — a read-only investigator agent skill that teaches AI agents how to systematically explore and answer questions about the OpenClaw codebase. By the end of this phase, there will be a fully functional `skills/documentator/SKILL.md` playbook that any AI agent can use to investigate the codebase on demand and produce structured Markdown answers for other agents. The documentator itself never modifies code — it only reads, searches, and reports.
+
+## Tasks
+
+- [x] Deep-dive exploration of the OpenClaw codebase and create a structured reference map:
+  > Completed 2026-02-19: Explored all ~50 src/ subsystems, 31 extensions, 51 skills, 4 entry points, 5 architectural patterns (DI, channel abstraction, plugin loading, dual-layer hooks, redaction-based config security), testing patterns (Vitest, colocated tests, E2E with Docker), and Mintlify docs structure. Results saved to `Auto Run Docs/Initiation/Working/codebase-exploration.md`.
+  - Read `AGENTS.md`, `package.json`, `pnpm-workspace.yaml`, and `tsconfig.json` to understand project conventions
+  - Explore every top-level directory and catalog its purpose (src/, extensions/, skills/, apps/, docs/, ui/, vendor/, scripts/, test/, packages/, Swabble/)
+  - Map all `src/` subdirectories (there are ~47 subsystems) — for each one, note its purpose, key files, and rough size
+  - Catalog all `extensions/` packages with their names and what they integrate with
+  - Catalog all `skills/` with their names
+  - Identify key entry points: `openclaw.mjs`, `src/entry.ts`, `src/index.ts`, `src/cli/program.js`
+  - Identify key architectural patterns: dependency injection via `createDefaultDeps`, channel abstraction, plugin loading, hook system, config encryption
+  - Note testing patterns: colocated `*.test.ts`, vitest config, E2E tests in `test/`
+  - Note documentation patterns: Mintlify docs in `docs/`, 44 subdirectories
+  - Save all findings as a structured Markdown file at `Auto Run Docs/Initiation/Working/codebase-exploration.md` with YAML front matter:
+    - type: research, title: "OpenClaw Codebase Exploration", tags: [codebase, structure, reference]
+  - Use wiki-links like `[[SKILL.md]]` to reference the eventual skill file
+
+- [ ] Create the documentator skill file with metadata, purpose statement, and comprehensive codebase structure map:
+  - Read the exploration notes from `Auto Run Docs/Initiation/Working/codebase-exploration.md`
+  - Read `skills/coding-agent/SKILL.md` to understand the existing skill file format (YAML front matter with name, description, metadata)
+  - Read `AGENTS.md` to understand the conventions for agent instructions
+  - Create `skills/documentator/SKILL.md` with the following sections:
+    - **YAML front matter**: name: documentator, description: "Read-only codebase investigator that answers questions about OpenClaw's architecture, code, and systems. Produces structured Markdown for AI agent consumption.", metadata with openclaw emoji and no binary requirements
+    - **Purpose & Constraints**: explain this is a read-only agent, must never modify files, output is Markdown for other AI agents
+    - **Codebase Structure Map**: comprehensive directory tree with purpose annotations for every major directory and subdirectory under src/
+    - **Key Files Reference Table**: table of the most important files (entry points, config, core modules) with file paths and one-line descriptions
+    - **Module Boundary Guide**: describe how src/ subdirectories map to features (e.g., src/telegram = Telegram channel, src/gateway = control plane server, src/agents = Pi agent implementation, etc.)
+    - **Extension & Plugin Registry**: list all extensions/ packages and what they do
+    - **Skills Catalog**: list all skills/ and their purposes
+
+- [ ] Add investigation methodology and search strategy sections to the SKILL.md:
+  - Read the current `skills/documentator/SKILL.md` to understand what's already written
+  - Add an **Investigation Methodology** section with:
+    - Step-by-step approach: 1) Understand the question scope, 2) Identify which module(s) are involved, 3) Find entry points, 4) Trace code paths, 5) Check tests for behavior confirmation, 6) Check docs for intended behavior, 7) Synthesize findings
+    - How to identify which module handles a given feature (keyword mapping from user concepts to src/ directories)
+    - How to trace a code path: start from entry point, follow imports, check for dependency injection via createDefaultDeps
+    - How to find related files: same-directory siblings, test files (*.test.ts), doc files in docs/
+    - How to understand cross-module interactions: check imports, grep for function/class usage across modules
+  - Add a **Search Strategy Guide** section with:
+    - Effective grep patterns: searching for class/function definitions, finding all usages, tracing imports
+    - Glob patterns: finding all files in a module (`src/telegram/**/*.ts`), finding test files, finding config files
+    - How to search across monorepo workspaces (root src/ vs extensions/ vs packages/)
+    - Tips for searching: prefer exact identifiers over fuzzy terms, check both src/ and extensions/ for channel code, use test files to understand expected behavior
+    - Common search starting points for different question types (channel questions → src/channels + src/<channel-name>, plugin questions → src/plugins + extensions/, config questions → src/config, CLI questions → src/cli + src/commands)
+  - Add a **Dependency Tracing** section with:
+    - How to trace npm dependencies: check package.json dependencies and devDependencies
+    - How to trace internal module dependencies: follow import statements
+    - How to understand the extension loading mechanism: src/channels/plugins/ loads extensions/*
+
+- [ ] Add output formatting rules and example investigation workflows to the SKILL.md:
+  - Read the current `skills/documentator/SKILL.md`
+  - Add an **Output Format Specification** section with:
+    - All answers must be structured Markdown
+    - Start with a one-line summary answering the question directly
+    - Follow with a "Key Files" section listing relevant file paths with line numbers where applicable
+    - Include a "How It Works" section with explanation of the code flow
+    - Include a "Related Modules" section noting connected systems
+    - Use fenced code blocks for code snippets with file path annotations
+    - Use tables for comparing options or listing items
+    - Keep answers factual — cite file paths and line numbers, never guess
+    - Format: `file_path:line_number` for code references (e.g., `src/telegram/bot.ts:42`)
+  - Add an **Example Investigation Workflows** section with 5 worked examples:
+    - Example 1: "How does WhatsApp message routing work?" — trace from src/channels → src/routing → src/web (WhatsApp via Baileys)
+    - Example 2: "How do I add a new extension channel?" — examine extensions/ structure, src/channels/plugins/, plugin-sdk
+    - Example 3: "What LLM providers are supported?" — check src/providers/, list all provider files
+    - Example 4: "How does the cron system work?" — trace src/cron/ module
+    - Example 5: "How does the browser automation work?" — trace src/browser/ with Playwright integration
+    - Each example should show: the question, which modules to check first, what to grep for, expected answer structure
+  - Add a **Quick Reference Cheat Sheet** section with:
+    - One-liner mappings: "channels → src/channels + src/<name>", "CLI commands → src/commands/", "gateway API → src/gateway/", etc.
+    - Common investigation shortcuts
+
+- [ ] Validate the documentator by running a test investigation and saving the result:
+  - Read the completed `skills/documentator/SKILL.md` in full
+  - Choose a non-trivial investigation question: "How does the hook lifecycle system work in OpenClaw?"
+  - Follow the playbook methodology step by step:
+    - Identify relevant modules (src/hooks/)
+    - Find entry points and key files
+    - Trace the code flow
+    - Check test files for behavior confirmation
+    - Check docs for intended behavior
+  - Produce a Markdown answer following the output format specification from the playbook
+  - Save the test investigation result to `Auto Run Docs/Initiation/Working/test-investigation-hooks.md` with YAML front matter:
+    - type: report, title: "Test Investigation: Hook Lifecycle System", tags: [validation, hooks, test]
+  - After saving, review the result against the playbook's output format spec and note any gaps or improvements needed
+  - If improvements are identified, update `skills/documentator/SKILL.md` to address them
