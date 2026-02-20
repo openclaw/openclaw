@@ -45,6 +45,12 @@ export async function loginWeb(
         await wait(retry);
         console.log(success("✅ Linked after restart; web session ready."));
         return;
+      } catch (retryErr) {
+        const formatted = formatError(retryErr);
+        console.error(
+          danger(`WhatsApp Web connection ended after restart before fully opening. ${formatted}`),
+        );
+        throw new Error(formatted, { cause: retryErr });
       } finally {
         setTimeout(() => retry.ws?.close(), 500);
       }
