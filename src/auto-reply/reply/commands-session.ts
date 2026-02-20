@@ -6,6 +6,7 @@ import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { scheduleGatewaySigusr1Restart, triggerOpenClawRestart } from "../../infra/restart.js";
 import { loadCostUsageSummary, loadSessionCostSummary } from "../../infra/session-cost-usage.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { formatTokenCount, formatUsd } from "../../utils/usage-format.js";
 import { parseActivationCommand } from "../group-activation.js";
 import { parseSendPolicyCommand } from "../send-policy.js";
@@ -176,6 +177,9 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
   const rawArgs = normalized === "/usage" ? "" : normalized.slice("/usage".length).trim();
   const requested = rawArgs ? normalizeUsageDisplay(rawArgs) : undefined;
   if (rawArgs.toLowerCase().startsWith("cost")) {
+    const agentId = params.sessionKey
+      ? resolveAgentIdFromSessionKey(params.sessionKey)
+      : undefined;
     const sessionSummary = await loadSessionCostSummary({
       sessionId: params.sessionEntry?.sessionId,
       sessionEntry: params.sessionEntry,
@@ -183,7 +187,7 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
       config: params.cfg,
       agentId: params.agentId,
     });
-    const summary = await loadCostUsageSummary({ days: 30, config: params.cfg });
+    const summary = await loadCostUsageSummary({ days: 30, config: params.cfg, agentId });
 
     const sessionCost = formatUsd(sessionSummary?.totalCost);
     const sessionTokens = sessionSummary?.totalTokens
