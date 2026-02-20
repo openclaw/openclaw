@@ -36,9 +36,9 @@ export function createStickyThreadTracker(opts?: {
   return {
     record: (channelId, threadTs) => {
       const key = makeKey(channelId, threadTs);
-      cache.delete(key);
-      cache.set(key, Date.now());
-      prune(Date.now());
+      const now = Date.now();
+      cache.set(key, now);
+      prune(now);
     },
     isActive: (channelId, threadTs) => {
       const key = makeKey(channelId, threadTs);
