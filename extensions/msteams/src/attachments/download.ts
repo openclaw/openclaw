@@ -184,7 +184,10 @@ export async function downloadMSTeamsAttachments(params: {
     .map(resolveDownloadCandidate)
     .filter(Boolean) as DownloadCandidate[];
 
-  const inlineCandidates = extractInlineImageCandidates(list);
+  const inlineCandidates = extractInlineImageCandidates(list, {
+    maxInlineBytes: params.maxBytes,
+    maxInlineTotalBytes: params.maxBytes,
+  });
 
   const seenUrls = new Set<string>();
   for (const inline of inlineCandidates) {
