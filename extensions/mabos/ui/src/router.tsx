@@ -11,6 +11,9 @@ import { AgentDetailPage } from "@/pages/AgentDetailPage";
 import { TasksPage } from "@/pages/TasksPage";
 import { PerformancePage } from "@/pages/PerformancePage";
 import { TimelinePage } from "@/pages/TimelinePage";
+import { InventoryPage } from "@/pages/InventoryPage";
+import { AccountingPage } from "@/pages/AccountingPage";
+import { HRPage } from "@/pages/HRPage";
 import { OnboardingPage } from "@/pages/OnboardingPage";
 
 // Root layout
@@ -21,35 +24,6 @@ const rootRoute = createRootRoute({
     </AppShell>
   ),
 });
-
-// Page components (inline placeholders for now)
-
-function InventoryPage() {
-  return (
-    <div>
-      <h1 className="text-2xl font-bold mb-2">Inventory</h1>
-      <p className="text-[var(--text-secondary)]">Stock management</p>
-    </div>
-  );
-}
-
-function AccountingPage() {
-  return (
-    <div>
-      <h1 className="text-2xl font-bold mb-2">Accounting</h1>
-      <p className="text-[var(--text-secondary)]">Financial management</p>
-    </div>
-  );
-}
-
-function HRPage() {
-  return (
-    <div>
-      <h1 className="text-2xl font-bold mb-2">HR</h1>
-      <p className="text-[var(--text-secondary)]">Workforce management</p>
-    </div>
-  );
-}
 
 // Route tree
 const indexRoute = createRoute({
