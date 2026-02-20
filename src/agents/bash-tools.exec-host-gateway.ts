@@ -7,8 +7,6 @@ import {
   buildSafeBinsShellCommand,
   buildSafeShellCommand,
   evaluateShellAllowlist,
-  maxAsk,
-  minSecurity,
   recordAllowlistUse,
   requiresExecApproval,
   resolveExecApprovals,
@@ -58,7 +56,7 @@ export async function processGatewayAllowlist(
     security: params.security,
     ask: params.ask,
   });
-  
+
   // Fix: if the tool didn't explicitly request a security/ask level, use the user's
   // configured setting directly. minSecurity("allowlist", "full") would produce "allowlist",
   // overriding the user's "Always Allow" — so we only call minSecurity when the tool

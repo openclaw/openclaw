@@ -98,13 +98,17 @@ describe("exec permission security regression", () => {
         ask: "off",
       });
       // If we reach here, the tool allowed execution -> SECURITY FAIL
-      throw new Error("Security Bypass Detected: User 'deny' was ignored because tool requested 'allowlist'");
-    } catch (err: any) {
-      if (err.message.includes("Security Bypass Detected")) {
+      throw new Error(
+        "Security Bypass Detected: User 'deny' was ignored because tool requested 'allowlist'",
+      );
+    } catch (err: unknown) {
+      if (err instanceof Error && err.message.includes("Security Bypass Detected")) {
         throw err;
       }
       // We EXPECT an error "exec denied: host=gateway security=deny"
-      expect(err.message).toContain("exec denied: host=gateway security=deny");
+      expect(err instanceof Error && err.message).toContain(
+        "exec denied: host=gateway security=deny",
+      );
     }
   });
 });
