@@ -20,6 +20,7 @@ services:
     tmpfs:
       - /tmp
       - /home/node/.npm
+      - /run
     cap_drop:
       - ALL
     command:
@@ -49,4 +50,11 @@ services:
     stdin_open: true
     tty: true
     init: true
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /home/node/.npm
+      - /run
+    cap_drop:
+      - ALL
     entrypoint: ["node", "dist/index.js"]
