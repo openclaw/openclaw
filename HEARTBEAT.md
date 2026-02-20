@@ -52,6 +52,12 @@
 
 - 고혈압약 복용 알림
 
+### 🧠 Mnemo 볼트 보강 (매일 05:00 KST)
+
+- `cd C:\TEST\MAISECONDBRAIN; $env:PYTHONIOENCODING="utf-8"; python scripts/daily_enrich.py`
+- 새 노트 자동: type/project/related/태그/백링크 + 그래프 재빌드 + 임베딩 갱신
+- **이슈 있을 때만 알림**
+
 ### 🌅 모닝 브리핑 (매일 06:00 KST)
 
 - 전체 프로젝트 git status 확인
