@@ -86,6 +86,8 @@ export async function persistSessionUsageUpdate(params: {
           const patch: Partial<SessionEntry> = {
             inputTokens: input,
             outputTokens: output,
+            cacheRead: params.usage?.cacheRead ?? 0,
+            cacheWrite: params.usage?.cacheWrite ?? 0,
             // Missing a last-call snapshot means context utilization is stale/unknown.
             totalTokens,
             totalTokensFresh: typeof totalTokens === "number",
