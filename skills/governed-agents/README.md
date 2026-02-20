@@ -41,11 +41,13 @@ print(result.reputation_delta)
 ## Reputation Database
 
 Default path:
+
 ```
 ~/.openclaw/workspace/.state/governed_agents/reputation.db
 ```
 
 Override:
+
 ```python
 spawn_governed(contract, db_path="/tmp/governed_reputation.db")
 ```
@@ -126,10 +128,10 @@ could embed adversarial instructions in its output to manipulate reviewers
 
 ### When to use which gate
 
-| Task type | Verification mode | Example |
-|-----------|------------------|---------|
-| Code with tests | `deterministic` | Bug fix, new endpoint |
-| Architecture / design | `council` | System design, API design |
-| Writing / documentation | `council` | README, technical spec |
-| Data transformation | `deterministic` | CSV processing, migration |
-| Open-ended analysis | `council` | Code review, research summary |
+| Task type               | Verification mode | Example                       |
+| ----------------------- | ----------------- | ----------------------------- |
+| Code with tests         | `deterministic`   | Bug fix, new endpoint         |
+| Architecture / design   | `council`         | System design, API design     |
+| Writing / documentation | `council`         | README, technical spec        |
+| Data transformation     | `deterministic`   | CSV processing, migration     |
+| Open-ended analysis     | `council`         | Code review, research summary |
