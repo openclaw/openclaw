@@ -73,9 +73,9 @@ async function assertLocalMediaAllowed(
     resolved = path.resolve(mediaPath);
   }
 
-  // Hardening: the default allowlist includes `os.tmpdir()`, and tests/CI may
+  // Hardening: the default allowlist includes the OpenClaw temp dir, and tests/CI may
   // override the state dir into tmp. Avoid accidentally allowing per-agent
-  // `workspace-*` state roots via the tmpdir prefix match; require explicit
+  // `workspace-*` state roots via the temp-root prefix match; require explicit
   // localRoots for those.
   if (localRoots === undefined) {
     const workspaceRoot = roots.find((root) => path.basename(root) === "workspace");
