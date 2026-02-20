@@ -75,12 +75,12 @@ export class OpenAITTSProvider {
   private instructions?: string;
 
   constructor(config: OpenAITTSConfig = {}) {
-    this.apiKey = config.apiKey || process.env.OPENAI_API_KEY || "";
+    this.apiKey = config.apiKey ?? process.env.OPENAI_API_KEY ?? "";
     // Default to gpt-4o-mini-tts for intelligent realtime applications
-    this.model = config.model || "gpt-4o-mini-tts";
+    this.model = config.model ?? "gpt-4o-mini-tts";
     // Default to coral - good balance of quality and natural tone
-    this.voice = (config.voice as OpenAITTSVoice) || "coral";
-    this.speed = config.speed || 1.0;
+    this.voice = (config.voice as OpenAITTSVoice) ?? "coral";
+    this.speed = config.speed ?? 1.0;
     this.instructions = config.instructions;
 
     if (!this.apiKey) {
