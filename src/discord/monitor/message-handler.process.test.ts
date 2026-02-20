@@ -159,10 +159,12 @@ describe("processDiscordMessage ack reactions", () => {
 
   it("shows stall emojis for long no-progress runs", async () => {
     vi.useFakeTimers();
+    let releaseDispatch!: () => void;
+    const dispatchGate = new Promise<void>((resolve) => {
+      releaseDispatch = () => resolve();
+    });
     dispatchInboundMessage.mockImplementationOnce(async () => {
-      await new Promise((resolve) => {
-        setTimeout(resolve, 31_000);
-      });
+      await dispatchGate;
       return { queuedFinal: false, counts: { final: 0, tool: 0, block: 0 } };
     });
 
@@ -170,7 +172,9 @@ describe("processDiscordMessage ack reactions", () => {
     // oxlint-disable-next-line typescript/no-explicit-any
     const runPromise = processDiscordMessage(ctx as any);
 
-    await vi.advanceTimersByTimeAsync(120_000);
+    await vi.advanceTimersByTimeAsync(30_001);
+    releaseDispatch();
+    await vi.runAllTimersAsync();
 
     await runPromise;
     const emojis = (

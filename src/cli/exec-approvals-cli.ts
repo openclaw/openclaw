@@ -292,6 +292,36 @@ async function loadWritableAllowlistAgent(opts: ExecApprovalsCliOpts): Promise<{
   return { nodeId, source, targetLabel, baseHash, file, agentKey, agent, allowlistEntries };
 }
 
+type WritableAllowlistAgentContext = Awaited<ReturnType<typeof loadWritableAllowlistAgent>> & {
+  trimmedPattern: string;
+};
+
+async function runAllowlistMutation(
+  pattern: string,
+  opts: ExecApprovalsCliOpts,
+  mutate: (context: WritableAllowlistAgentContext) => boolean | Promise<boolean>,
+): Promise<void> {
+  try {
+    const trimmedPattern = requireTrimmedNonEmpty(pattern, "Pattern required.");
+    const context = await loadWritableAllowlistAgent(opts);
+    const shouldSave = await mutate({ ...context, trimmedPattern });
+    if (!shouldSave) {
+      return;
+    }
+    await saveSnapshotTargeted({
+      opts,
+      source: context.source,
+      nodeId: context.nodeId,
+      file: context.file,
+      baseHash: context.baseHash,
+      targetLabel: context.targetLabel,
+    });
+  } catch (err) {
+    defaultRuntime.error(formatCliError(err));
+    defaultRuntime.exit(1);
+  }
+}
+
 export function registerExecApprovalsCli(program: Command) {
   const formatExample = (cmd: string, desc: string) =>
     `  ${theme.command(cmd)}\n    ${theme.muted(desc)}`;
@@ -393,22 +423,20 @@ export function registerExecApprovalsCli(program: Command) {
     .option("--gateway", "Force gateway approvals", false)
     .option("--agent <id>", 'Agent id (defaults to "*")')
     .action(async (pattern: string, opts: ExecApprovalsCliOpts) => {
-      try {
-        const trimmed = requireTrimmedNonEmpty(pattern, "Pattern required.");
-        const { nodeId, source, targetLabel, baseHash, file, agentKey, agent, allowlistEntries } =
-          await loadWritableAllowlistAgent(opts);
-        if (allowlistEntries.some((entry) => normalizeAllowlistEntry(entry) === trimmed)) {
-          defaultRuntime.log("Already allowlisted.");
-          return;
-        }
-        allowlistEntries.push({ pattern: trimmed, lastUsedAt: Date.now() });
-        agent.allowlist = allowlistEntries;
-        file.agents = { ...file.agents, [agentKey]: agent };
-        await saveSnapshotTargeted({ opts, source, nodeId, file, baseHash, targetLabel });
-      } catch (err) {
-        defaultRuntime.error(formatCliError(err));
-        defaultRuntime.exit(1);
-      }
+      await runAllowlistMutation(
+        pattern,
+        opts,
+        ({ trimmedPattern, file, agent, agentKey, allowlistEntries }) => {
+          if (allowlistEntries.some((entry) => normalizeAllowlistEntry(entry) === trimmedPattern)) {
+            defaultRuntime.log("Already allowlisted.");
+            return false;
+          }
+          allowlistEntries.push({ pattern: trimmedPattern, lastUsedAt: Date.now() });
+          agent.allowlist = allowlistEntries;
+          file.agents = { ...file.agents, [agentKey]: agent };
+          return true;
+        },
+      );
     });
   nodesCallOpts(allowlistAdd);
 
@@ -419,34 +447,32 @@ export function registerExecApprovalsCli(program: Command) {
     .option("--gateway", "Force gateway approvals", false)
     .option("--agent <id>", 'Agent id (defaults to "*")')
     .action(async (pattern: string, opts: ExecApprovalsCliOpts) => {
-      try {
-        const trimmed = requireTrimmedNonEmpty(pattern, "Pattern required.");
-        const { nodeId, source, targetLabel, baseHash, file, agentKey, agent, allowlistEntries } =
-          await loadWritableAllowlistAgent(opts);
-        const nextEntries = allowlistEntries.filter(
-          (entry) => normalizeAllowlistEntry(entry) !== trimmed,
-        );
-        if (nextEntries.length === allowlistEntries.length) {
-          defaultRuntime.log("Pattern not found.");
-          return;
-        }
-        if (nextEntries.length === 0) {
-          delete agent.allowlist;
-        } else {
-          agent.allowlist = nextEntries;
-        }
-        if (isEmptyAgent(agent)) {
-          const agents = { ...file.agents };
-          delete agents[agentKey];
-          file.agents = Object.keys(agents).length > 0 ? agents : undefined;
-        } else {
-          file.agents = { ...file.agents, [agentKey]: agent };
-        }
-        await saveSnapshotTargeted({ opts, source, nodeId, file, baseHash, targetLabel });
-      } catch (err) {
-        defaultRuntime.error(formatCliError(err));
-        defaultRuntime.exit(1);
-      }
+      await runAllowlistMutation(
+        pattern,
+        opts,
+        ({ trimmedPattern, file, agent, agentKey, allowlistEntries }) => {
+          const nextEntries = allowlistEntries.filter(
+            (entry) => normalizeAllowlistEntry(entry) !== trimmedPattern,
+          );
+          if (nextEntries.length === allowlistEntries.length) {
+            defaultRuntime.log("Pattern not found.");
+            return false;
+          }
+          if (nextEntries.length === 0) {
+            delete agent.allowlist;
+          } else {
+            agent.allowlist = nextEntries;
+          }
+          if (isEmptyAgent(agent)) {
+            const agents = { ...file.agents };
+            delete agents[agentKey];
+            file.agents = Object.keys(agents).length > 0 ? agents : undefined;
+          } else {
+            file.agents = { ...file.agents, [agentKey]: agent };
+          }
+          return true;
+        },
+      );
     });
   nodesCallOpts(allowlistRemove);
 }

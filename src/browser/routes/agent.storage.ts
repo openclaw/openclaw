@@ -5,7 +5,7 @@ import {
   resolveTargetIdFromQuery,
   withPlaywrightRouteContext,
 } from "./agent.shared.js";
-import type { BrowserRouteRegistrar } from "./types.js";
+import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
 import { jsonError, toBoolean, toNumber, toStringOrEmpty } from "./utils.js";
 
 type StorageKind = "local" | "session";
@@ -25,6 +25,42 @@ export function parseStorageMutationRequest(
     kind: parseStorageKind(toStringOrEmpty(kindParam)),
     targetId: resolveTargetIdFromBody(body),
   };
+}
+
+export function parseRequiredStorageMutationRequest(
+  kindParam: unknown,
+  body: Record<string, unknown>,
+): { kind: StorageKind; targetId: string | undefined } | null {
+  const parsed = parseStorageMutationRequest(kindParam, body);
+  if (!parsed.kind) {
+    return null;
+  }
+  return {
+    kind: parsed.kind,
+    targetId: parsed.targetId,
+  };
+}
+
+function parseStorageMutationOrRespond(
+  res: BrowserResponse,
+  kindParam: unknown,
+  body: Record<string, unknown>,
+) {
+  const parsed = parseRequiredStorageMutationRequest(kindParam, body);
+  if (!parsed) {
+    jsonError(res, 400, "kind must be local|session");
+    return null;
+  }
+  return parsed;
+}
+
+function parseStorageMutationFromRequest(req: BrowserRequest, res: BrowserResponse) {
+  const body = readBody(req);
+  const parsed = parseStorageMutationOrRespond(res, req.params.kind, body);
+  if (!parsed) {
+    return null;
+  }
+  return { body, parsed };
 }
 
 export function registerBrowserAgentStorageRoutes(
@@ -139,29 +175,27 @@ export function registerBrowserAgentStorageRoutes(
   });
 
   app.post("/storage/:kind/set", async (req, res) => {
-    const body = readBody(req);
-    const parsed = parseStorageMutationRequest(req.params.kind, body);
-    if (!parsed.kind) {
-      return jsonError(res, 400, "kind must be local|session");
+    const mutation = parseStorageMutationFromRequest(req, res);
+    if (!mutation) {
+      return;
     }
-    const kind = parsed.kind;
-    const key = toStringOrEmpty(body.key);
+    const key = toStringOrEmpty(mutation.body.key);
     if (!key) {
       return jsonError(res, 400, "key is required");
     }
-    const value = typeof body.value === "string" ? body.value : "";
+    const value = typeof mutation.body.value === "string" ? mutation.body.value : "";
 
     await withPlaywrightRouteContext({
       req,
       res,
       ctx,
-      targetId: parsed.targetId,
+      targetId: mutation.parsed.targetId,
       feature: "storage set",
       run: async ({ cdpUrl, tab, pw }) => {
         await pw.storageSetViaPlaywright({
           cdpUrl,
           targetId: tab.targetId,
-          kind,
+          kind: mutation.parsed.kind,
           key,
           value,
         });
@@ -171,24 +205,22 @@ export function registerBrowserAgentStorageRoutes(
   });
 
   app.post("/storage/:kind/clear", async (req, res) => {
-    const body = readBody(req);
-    const parsed = parseStorageMutationRequest(req.params.kind, body);
-    if (!parsed.kind) {
-      return jsonError(res, 400, "kind must be local|session");
+    const mutation = parseStorageMutationFromRequest(req, res);
+    if (!mutation) {
+      return;
     }
-    const kind = parsed.kind;
 
     await withPlaywrightRouteContext({
       req,
       res,
       ctx,
-      targetId: parsed.targetId,
+      targetId: mutation.parsed.targetId,
       feature: "storage clear",
       run: async ({ cdpUrl, tab, pw }) => {
         await pw.storageClearViaPlaywright({
           cdpUrl,
           targetId: tab.targetId,
-          kind,
+          kind: mutation.parsed.kind,
         });
         res.json({ ok: true, targetId: tab.targetId });
       },

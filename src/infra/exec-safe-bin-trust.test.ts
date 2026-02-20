@@ -54,4 +54,18 @@ describe("exec safe bin trust", () => {
       }),
     ).toBe(false);
   });
+
+  it("uses startup PATH snapshot when pathEnv is omitted", () => {
+    const originalPath = process.env.PATH;
+    const injected = `/tmp/openclaw-path-injected-${Date.now()}`;
+    const initial = getTrustedSafeBinDirs({ refresh: true });
+    try {
+      process.env.PATH = `${injected}${path.delimiter}${originalPath ?? ""}`;
+      const refreshed = getTrustedSafeBinDirs({ refresh: true });
+      expect(refreshed.has(path.resolve(injected))).toBe(false);
+      expect([...refreshed].toSorted()).toEqual([...initial].toSorted());
+    } finally {
+      process.env.PATH = originalPath;
+    }
+  });
 });

@@ -2,9 +2,13 @@ import SwiftUI
 import Foundation
 import os
 import UIKit
+import BackgroundTasks
 
 final class OpenClawAppDelegate: NSObject, UIApplicationDelegate {
     private let logger = Logger(subsystem: "ai.openclaw.ios", category: "Push")
+    private let backgroundWakeLogger = Logger(subsystem: "ai.openclaw.ios", category: "BackgroundWake")
+    private static let wakeRefreshTaskIdentifier = "ai.openclaw.ios.bgrefresh"
+    private var backgroundWakeTask: Task<Bool, Never>?
     private var pendingAPNsDeviceToken: Data?
     weak var appModel: NodeAppModel? {
         didSet {
@@ -21,6 +25,7 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate {
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool
     {
+        self.registerBackgroundWakeRefreshTask()
         application.registerForRemoteNotifications()
         return true
     }
@@ -49,12 +54,68 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate {
         Task { @MainActor in
             guard let appModel = self.appModel else {
                 self.logger.info("APNs wake skipped: appModel unavailable")
+                self.scheduleBackgroundWakeRefresh(afterSeconds: 90, reason: "silent_push_no_model")
                 completionHandler(.noData)
                 return
             }
             let handled = await appModel.handleSilentPushWake(userInfo)
             self.logger.info("APNs wake handled=\(handled, privacy: .public)")
+            if !handled {
+                self.scheduleBackgroundWakeRefresh(afterSeconds: 90, reason: "silent_push_not_applied")
+            }
             completionHandler(handled ? .newData : .noData)
+        }
+    }
+
+    func scenePhaseChanged(_ phase: ScenePhase) {
+        if phase == .background {
+            self.scheduleBackgroundWakeRefresh(afterSeconds: 120, reason: "scene_background")
+        }
+    }
+
+    private func registerBackgroundWakeRefreshTask() {
+        BGTaskScheduler.shared.register(
+            forTaskWithIdentifier: Self.wakeRefreshTaskIdentifier,
+            using: nil
+        ) { [weak self] task in
+            guard let refreshTask = task as? BGAppRefreshTask else {
+                task.setTaskCompleted(success: false)
+                return
+            }
+            self?.handleBackgroundWakeRefresh(task: refreshTask)
+        }
+    }
+
+    private func scheduleBackgroundWakeRefresh(afterSeconds delay: TimeInterval, reason: String) {
+        let request = BGAppRefreshTaskRequest(identifier: Self.wakeRefreshTaskIdentifier)
+        request.earliestBeginDate = Date().addingTimeInterval(max(60, delay))
+        do {
+            try BGTaskScheduler.shared.submit(request)
+            self.backgroundWakeLogger.info(
+                "Scheduled background wake refresh reason=\(reason, privacy: .public) delaySeconds=\(max(60, delay), privacy: .public)")
+        } catch {
+            self.backgroundWakeLogger.error(
+                "Failed scheduling background wake refresh reason=\(reason, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private func handleBackgroundWakeRefresh(task: BGAppRefreshTask) {
+        self.scheduleBackgroundWakeRefresh(afterSeconds: 15 * 60, reason: "reschedule")
+        self.backgroundWakeTask?.cancel()
+
+        let wakeTask = Task { @MainActor [weak self] in
+            guard let self, let appModel = self.appModel else { return false }
+            return await appModel.handleBackgroundRefreshWake(trigger: "bg_app_refresh")
+        }
+        self.backgroundWakeTask = wakeTask
+        task.expirationHandler = {
+            wakeTask.cancel()
+        }
+        Task {
+            let applied = await wakeTask.value
+            task.setTaskCompleted(success: applied)
+            self.backgroundWakeLogger.info(
+                "Background wake refresh finished applied=\(applied, privacy: .public)")
         }
     }
 }
@@ -89,6 +150,7 @@ struct OpenClawApp: App {
                 .onChange(of: self.scenePhase) { _, newValue in
                     self.appModel.setScenePhase(newValue)
                     self.gatewayController.setScenePhase(newValue)
+                    self.appDelegate.scenePhaseChanged(newValue)
                 }
         }
     }

@@ -76,6 +76,7 @@ If more than one person can DM your bot:
 - **Local disk hygiene** (permissions, symlinks, config includes, “synced folder” paths).
 - **Plugins** (extensions exist without an explicit allowlist).
 - **Policy drift/misconfig** (sandbox docker settings configured but sandbox mode off; ineffective `gateway.nodes.denyCommands` patterns; global `tools.profile="minimal"` overridden by per-agent profiles; extension plugin tools reachable under permissive tool policy).
+- **Runtime expectation drift** (for example `tools.exec.host="sandbox"` while sandbox mode is off, which runs directly on the gateway host).
 - **Model hygiene** (warn when configured models look legacy; not a hard block).
 
 If you run `--deep`, OpenClaw also attempts a best-effort live Gateway probe.
@@ -107,25 +108,28 @@ When the audit prints findings, treat this as a priority order:
 
 High-signal `checkId` values you will most likely see in real deployments (not exhaustive):
 
-| `checkId`                                    | Severity      | Why it matters                                           | Primary fix key/path                             | Auto-fix |
-| -------------------------------------------- | ------------- | -------------------------------------------------------- | ------------------------------------------------ | -------- |
-| `fs.state_dir.perms_world_writable`          | critical      | Other users/processes can modify full OpenClaw state     | filesystem perms on `~/.openclaw`                | yes      |
-| `fs.config.perms_writable`                   | critical      | Others can change auth/tool policy/config                | filesystem perms on `~/.openclaw/openclaw.json`  | yes      |
-| `fs.config.perms_world_readable`             | critical      | Config can expose tokens/settings                        | filesystem perms on config file                  | yes      |
-| `gateway.bind_no_auth`                       | critical      | Remote bind without shared secret                        | `gateway.bind`, `gateway.auth.*`                 | no       |
-| `gateway.loopback_no_auth`                   | critical      | Reverse-proxied loopback may become unauthenticated      | `gateway.auth.*`, proxy setup                    | no       |
-| `gateway.tools_invoke_http.dangerous_allow`  | warn/critical | Re-enables dangerous tools over HTTP API                 | `gateway.tools.allow`                            | no       |
-| `gateway.tailscale_funnel`                   | critical      | Public internet exposure                                 | `gateway.tailscale.mode`                         | no       |
-| `gateway.control_ui.insecure_auth`           | critical      | Token-only over HTTP, no device identity                 | `gateway.controlUi.allowInsecureAuth`            | no       |
-| `gateway.control_ui.device_auth_disabled`    | critical      | Disables device identity check                           | `gateway.controlUi.dangerouslyDisableDeviceAuth` | no       |
-| `hooks.token_too_short`                      | warn          | Easier brute force on hook ingress                       | `hooks.token`                                    | no       |
-| `hooks.request_session_key_enabled`          | warn/critical | External caller can choose sessionKey                    | `hooks.allowRequestSessionKey`                   | no       |
-| `hooks.request_session_key_prefixes_missing` | warn/critical | No bound on external session key shapes                  | `hooks.allowedSessionKeyPrefixes`                | no       |
-| `logging.redact_off`                         | warn          | Sensitive values leak to logs/status                     | `logging.redactSensitive`                        | yes      |
-| `sandbox.docker_config_mode_off`             | warn          | Sandbox Docker config present but inactive               | `agents.*.sandbox.mode`                          | no       |
-| `tools.profile_minimal_overridden`           | warn          | Agent overrides bypass global minimal profile            | `agents.list[].tools.profile`                    | no       |
-| `plugins.tools_reachable_permissive_policy`  | warn          | Extension tools reachable in permissive contexts         | `tools.profile` + tool allow/deny                | no       |
-| `models.small_params`                        | critical/info | Small models + unsafe tool surfaces raise injection risk | model choice + sandbox/tool policy               | no       |
+| `checkId`                                     | Severity      | Why it matters                                                          | Primary fix key/path                                          | Auto-fix |
+| --------------------------------------------- | ------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------- | -------- |
+| `fs.state_dir.perms_world_writable`           | critical      | Other users/processes can modify full OpenClaw state                    | filesystem perms on `~/.openclaw`                             | yes      |
+| `fs.config.perms_writable`                    | critical      | Others can change auth/tool policy/config                               | filesystem perms on `~/.openclaw/openclaw.json`               | yes      |
+| `fs.config.perms_world_readable`              | critical      | Config can expose tokens/settings                                       | filesystem perms on config file                               | yes      |
+| `gateway.bind_no_auth`                        | critical      | Remote bind without shared secret                                       | `gateway.bind`, `gateway.auth.*`                              | no       |
+| `gateway.loopback_no_auth`                    | critical      | Reverse-proxied loopback may become unauthenticated                     | `gateway.auth.*`, proxy setup                                 | no       |
+| `gateway.http.no_auth`                        | warn/critical | Gateway HTTP APIs reachable with `auth.mode="none"`                     | `gateway.auth.mode`, `gateway.http.endpoints.*`               | no       |
+| `gateway.tools_invoke_http.dangerous_allow`   | warn/critical | Re-enables dangerous tools over HTTP API                                | `gateway.tools.allow`                                         | no       |
+| `gateway.tailscale_funnel`                    | critical      | Public internet exposure                                                | `gateway.tailscale.mode`                                      | no       |
+| `gateway.control_ui.insecure_auth`            | critical      | Token-only over HTTP, no device identity                                | `gateway.controlUi.allowInsecureAuth`                         | no       |
+| `gateway.control_ui.device_auth_disabled`     | critical      | Disables device identity check                                          | `gateway.controlUi.dangerouslyDisableDeviceAuth`              | no       |
+| `hooks.token_too_short`                       | warn          | Easier brute force on hook ingress                                      | `hooks.token`                                                 | no       |
+| `hooks.request_session_key_enabled`           | warn/critical | External caller can choose sessionKey                                   | `hooks.allowRequestSessionKey`                                | no       |
+| `hooks.request_session_key_prefixes_missing`  | warn/critical | No bound on external session key shapes                                 | `hooks.allowedSessionKeyPrefixes`                             | no       |
+| `logging.redact_off`                          | warn          | Sensitive values leak to logs/status                                    | `logging.redactSensitive`                                     | yes      |
+| `sandbox.docker_config_mode_off`              | warn          | Sandbox Docker config present but inactive                              | `agents.*.sandbox.mode`                                       | no       |
+| `tools.exec.host_sandbox_no_sandbox_defaults` | warn          | `exec host=sandbox` resolves to host exec when sandbox is off           | `tools.exec.host`, `agents.defaults.sandbox.mode`             | no       |
+| `tools.exec.host_sandbox_no_sandbox_agents`   | warn          | Per-agent `exec host=sandbox` resolves to host exec when sandbox is off | `agents.list[].tools.exec.host`, `agents.list[].sandbox.mode` | no       |
+| `tools.profile_minimal_overridden`            | warn          | Agent overrides bypass global minimal profile                           | `agents.list[].tools.profile`                                 | no       |
+| `plugins.tools_reachable_permissive_policy`   | warn          | Extension tools reachable in permissive contexts                        | `tools.profile` + tool allow/deny                             | no       |
+| `models.small_params`                         | critical/info | Small models + unsafe tool surfaces raise injection risk                | model choice + sandbox/tool policy                            | no       |
 
 ## Control UI over HTTP
 
@@ -301,6 +305,8 @@ OpenClaw has two separate “who can trigger me?” layers:
     - `channels.whatsapp.groups`, `channels.telegram.groups`, `channels.imessage.groups`: per-group defaults like `requireMention`; when set, it also acts as a group allowlist (include `"*"` to keep allow-all behavior).
     - `groupPolicy="allowlist"` + `groupAllowFrom`: restrict who can trigger the bot _inside_ a group session (WhatsApp/Telegram/Signal/iMessage/Microsoft Teams).
     - `channels.discord.guilds` / `channels.slack.channels`: per-surface allowlists + mention defaults.
+  - Group checks run in this order: `groupPolicy`/group allowlists first, mention/reply activation second.
+  - Replying to a bot message (implicit mention) does **not** bypass sender allowlists like `groupAllowFrom`.
   - **Security note:** treat `dmPolicy="open"` and `groupPolicy="open"` as last-resort settings. They should be barely used; prefer pairing + allowlists unless you fully trust every member of the room.
 
 Details: [Configuration](/gateway/configuration) and [Groups](/channels/groups)
@@ -658,6 +664,8 @@ One “safe default” config that keeps the Gateway private, requires DM pairin
 ```
 
 If you want “safer by default” tool execution too, add a sandbox + deny dangerous tools for any non-owner agent (example below under “Per-agent access profiles”).
+
+Built-in baseline for chat-driven agent turns: non-owner senders cannot use the `cron` or `gateway` tools.
 
 ## Sandboxing (recommended)
 
