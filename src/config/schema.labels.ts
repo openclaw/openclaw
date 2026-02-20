@@ -377,6 +377,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.promptOverlays.gpt5": "GPT-5 Prompt Overlay",
   "agents.defaults.promptOverlays.gpt5.personality": "GPT-5 Personality Overlay",
   "agents.defaults.contextInjection": "Context Injection",
+  "agents.defaults.bootstrapTier": "Bootstrap Tier",
   "agents.defaults.bootstrapMaxChars": "Bootstrap Max Chars",
   "agents.defaults.bootstrapTotalMaxChars": "Bootstrap Total Max Chars",
   "agents.defaults.experimental": "Experimental Agent Flags",

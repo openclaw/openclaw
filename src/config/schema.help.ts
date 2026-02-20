@@ -922,6 +922,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Default workspace path exposed to agent runtime tools for filesystem context and repo-aware behavior. Set this explicitly when running from wrappers so path resolution stays deterministic.",
   "agents.defaults.contextInjection":
     'Controls when workspace bootstrap files are injected into the system prompt: "always" (default) or "continuation-skip" for safe continuation turns after a completed assistant response.',
+  "agents.defaults.bootstrapTier":
+    'Bootstrap loading tier: "minimal" (AGENTS.md + TOOLS.md), "standard" (recognized files, default), or "full" (standard + extra patterns).',
   "agents.defaults.bootstrapMaxChars":
     "Max characters of each workspace bootstrap file injected into the system prompt before truncation (default: 12000).",
   "agents.defaults.bootstrapTotalMaxChars":
