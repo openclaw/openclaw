@@ -55,6 +55,8 @@ class I18nManager {
           module = await import("../locales/zh-TW.ts");
         } else if (locale === "pt-BR") {
           module = await import("../locales/pt-BR.ts");
+        } else if (locale === "ko-KR") {
+          module = await import("../locales/ko-KR.ts");
         } else {
           return;
         }
