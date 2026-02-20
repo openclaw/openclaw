@@ -228,9 +228,11 @@ describe("discord tool result dispatch", () => {
       client,
     );
 
-    expect(dispatchMock).not.toHaveBeenCalled();
+    // Non-blocking pairing: dispatch is called AND pairing request is sent
+    expect(dispatchMock).toHaveBeenCalled();
     expect(upsertPairingRequestMock).toHaveBeenCalled();
-    expect(sendMock).toHaveBeenCalledTimes(1);
+    // sendMock called twice: once for pairing reply, once for dispatch response
+    expect(sendMock).toHaveBeenCalledTimes(2);
     expect(String(sendMock.mock.calls[0]?.[1] ?? "")).toContain("Your Discord user id: u2");
     expect(String(sendMock.mock.calls[0]?.[1] ?? "")).toContain("Pairing code: PAIRCODE");
   }, 10000);

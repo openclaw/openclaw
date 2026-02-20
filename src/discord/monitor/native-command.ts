@@ -628,8 +628,9 @@ async function dispatchDiscordCommandInteraction(params: {
           })
         : false;
       if (!permitted) {
-        commandAuthorized = false;
         if (dmPolicy === "pairing") {
+          // Non-blocking pairing: send pairing request but continue command execution.
+          // This allows commands (including subagent spawn) to proceed while pairing is pending.
           const { code, created } = await upsertChannelPairingRequest({
             channel: "discord",
             id: user.id,
@@ -648,10 +649,12 @@ async function dispatchDiscordCommandInteraction(params: {
               { ephemeral: true },
             );
           }
+          // commandAuthorized stays true — pairing is informational, not blocking
         } else {
+          commandAuthorized = false;
           await respond("You are not authorized to use this command.", { ephemeral: true });
+          return;
         }
-        return;
       }
       commandAuthorized = true;
     }

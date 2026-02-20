@@ -154,8 +154,9 @@ export async function preflightDiscordMessage(
       const allowMatchMeta = formatAllowlistMatchMeta(allowMatch);
       const permitted = allowMatch.allowed;
       if (!permitted) {
-        commandAuthorized = false;
         if (dmPolicy === "pairing") {
+          // Non-blocking pairing: send pairing request but continue message processing.
+          // This allows commands (including subagent spawn) to proceed while pairing is pending.
           const { code, created } = await upsertChannelPairingRequest({
             channel: "discord",
             id: author.id,
@@ -186,12 +187,14 @@ export async function preflightDiscordMessage(
               logVerbose(`discord pairing reply failed for ${author.id}: ${String(err)}`);
             }
           }
+          // commandAuthorized stays true — pairing is informational, not blocking
         } else {
+          commandAuthorized = false;
           logVerbose(
             `Blocked unauthorized discord sender ${sender.id} (dmPolicy=${dmPolicy}, ${allowMatchMeta})`,
           );
+          return null;
         }
-        return null;
       }
       commandAuthorized = true;
     }
