@@ -314,3 +314,49 @@ describe("config strict validation", () => {
     });
   });
 });
+
+describe("ModelDefinitionSchema input modalities", () => {
+  const baseProvider = { baseUrl: "https://api.example.com/v1" };
+
+  it("accepts text and image inputs", () => {
+    const result = OpenClawSchema.safeParse({
+      models: {
+        providers: {
+          custom: {
+            ...baseProvider,
+            models: [{ id: "model-1", name: "Model", input: ["text", "image"] }],
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts audio and video inputs", () => {
+    const result = OpenClawSchema.safeParse({
+      models: {
+        providers: {
+          custom: {
+            ...baseProvider,
+            models: [{ id: "model-1", name: "Model", input: ["text", "image", "audio", "video"] }],
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects unknown input modalities", () => {
+    const result = OpenClawSchema.safeParse({
+      models: {
+        providers: {
+          custom: {
+            ...baseProvider,
+            models: [{ id: "model-1", name: "Model", input: ["text", "pdf"] }],
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+});
