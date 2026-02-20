@@ -1,0 +1,20 @@
+name: Sync Upstream
+on:
+  schedule:
+    - cron: '0 0 * * *' # Runs every day at midnight
+  workflow_dispatch:   # Allows manual trigger
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Your Fork
+        uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Sync with Upstream
+        run: |
+          git remote add upstream https://github.com/openclaw/openclaw.git
+          git fetch upstream
+          git merge upstream/main
+          git push origin main
