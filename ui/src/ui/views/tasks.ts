@@ -1,5 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
 import type { OpenClawApp } from "../app.js";
+import { normalizeBasePath } from "../navigation.ts";
 
 type TasksHost = OpenClawApp & { tasksState?: TasksState };
 
@@ -90,6 +91,11 @@ function buildGatewayHttpHeaders(host: OpenClawApp): Record<string, string> {
   return authorization ? { Authorization: authorization } : {};
 }
 
+function apiPath(host: TasksHost, path: string): string {
+  const base = normalizeBasePath(host.basePath ?? "");
+  return base ? `${base}${path}` : path;
+}
+
 function parseTags(raw: string): string[] {
   return raw
     .split(",")
@@ -163,7 +169,7 @@ async function loadTasks(host: TasksHost) {
   host.requestUpdate();
 
   try {
-    const res = await fetch("/api/tasks", {
+    const res = await fetch(apiPath(host, "/api/tasks"), {
       method: "GET",
       headers: {
         ...buildGatewayHttpHeaders(host),
@@ -199,7 +205,7 @@ async function createTask(host: TasksHost) {
   st.error = null;
   host.requestUpdate();
   try {
-    const res = await fetch("/api/tasks", {
+    const res = await fetch(apiPath(host, "/api/tasks"), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -265,7 +271,7 @@ async function patchTask(host: TasksHost, id: string, patch: Partial<Task>) {
   st.error = null;
   host.requestUpdate();
   try {
-    const res = await fetch(`/api/tasks/${encodeURIComponent(id)}`, {
+    const res = await fetch(apiPath(host, `/api/tasks/${encodeURIComponent(id)}`), {
       method: "PATCH",
       headers: {
         "Content-Type": "application/json",
@@ -296,7 +302,7 @@ async function deleteTask(host: TasksHost, id: string) {
   st.error = null;
   host.requestUpdate();
   try {
-    const res = await fetch(`/api/tasks/${encodeURIComponent(id)}`, {
+    const res = await fetch(apiPath(host, `/api/tasks/${encodeURIComponent(id)}`), {
       method: "DELETE",
       headers: {
         ...buildGatewayHttpHeaders(host),
