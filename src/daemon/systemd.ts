@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
+import { stopGatewayViaLock } from "../infra/gateway-lock.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
 import {
@@ -296,14 +296,28 @@ export async function stopSystemdService({
   stdout: NodeJS.WritableStream;
   env?: Record<string, string | undefined>;
 }): Promise<void> {
-  await assertSystemdAvailable();
-  const serviceName = resolveSystemdServiceName(env ?? {});
-  const unitName = `${serviceName}.service`;
-  const res = await execSystemctl(["--user", "stop", unitName]);
-  if (res.code !== 0) {
-    throw new Error(`systemctl stop failed: ${res.stderr || res.stdout}`.trim());
+  try {
+    await assertSystemdAvailable();
+    const serviceName = resolveSystemdServiceName(env ?? {});
+    const unitName = `${serviceName}.service`;
+    const res = await execSystemctl(["--user", "stop", unitName]);
+    if (res.code !== 0) {
+      throw new Error(`systemctl stop failed: ${res.stderr || res.stdout}`.trim());
+    }
+    stdout.write(`${formatLine("Stopped systemd service", unitName)}\n`);
+  } catch (err) {
+    const detail = String(err);
+    if (detail.includes("systemctl not available") || detail.includes("systemctl --user unavailable")) {
+      const stopped = await stopGatewayViaLock({
+        env: (env ?? process.env) as NodeJS.ProcessEnv,
+        stdout,
+      });
+      if (stopped) {
+        return;
+      }
+    }
+    throw err;
   }
-  stdout.write(`${formatLine("Stopped systemd service", unitName)}\n`);
 }
 
 export async function restartSystemdService({
@@ -313,14 +327,29 @@ export async function restartSystemdService({
   stdout: NodeJS.WritableStream;
   env?: Record<string, string | undefined>;
 }): Promise<void> {
-  await assertSystemdAvailable();
-  const serviceName = resolveSystemdServiceName(env ?? {});
-  const unitName = `${serviceName}.service`;
-  const res = await execSystemctl(["--user", "restart", unitName]);
-  if (res.code !== 0) {
-    throw new Error(`systemctl restart failed: ${res.stderr || res.stdout}`.trim());
+  try {
+    await assertSystemdAvailable();
+    const serviceName = resolveSystemdServiceName(env ?? {});
+    const unitName = `${serviceName}.service`;
+    const res = await execSystemctl(["--user", "restart", unitName]);
+    if (res.code !== 0) {
+      throw new Error(`systemctl restart failed: ${res.stderr || res.stdout}`.trim());
+    }
+    stdout.write(`${formatLine("Restarted systemd service", unitName)}\n`);
+  } catch (err) {
+    const detail = String(err);
+    if (detail.includes("systemctl not available") || detail.includes("systemctl --user unavailable")) {
+      const stopped = await stopGatewayViaLock({
+        env: (env ?? process.env) as NodeJS.ProcessEnv,
+        stdout,
+      });
+      if (stopped) {
+        stdout.write("Gateway process stopped via fallback; it will be restarted by the system (if using cron/watcher) or can be started manually.\n");
+        return;
+      }
+    }
+    throw err;
   }
-  stdout.write(`${formatLine("Restarted systemd service", unitName)}\n`);
 }
 
 export async function isSystemdServiceEnabled(args: {
