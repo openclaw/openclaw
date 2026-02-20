@@ -19,6 +19,7 @@ import {
 import type { SlackStreamSession } from "../../streaming.js";
 import { appendSlackStream, startSlackStream, stopSlackStream } from "../../streaming.js";
 import { resolveSlackThreadTargets } from "../../threading.js";
+import { updateCatchupWatermark } from "../catchup.js";
 import { createSlackReplyDeliveryPlan, deliverReplies, resolveSlackThreadTs } from "../replies.js";
 import type { PreparedSlackMessage } from "./types.js";
 
@@ -404,6 +405,12 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     } catch (err) {
       runtime.error?.(danger(`slack-stream: failed to stop stream: ${String(err)}`));
     }
+  }
+
+  // Advance the catch-up watermark so this message is not re-processed on restart
+  const watermarkTs = message.ts ?? message.event_ts;
+  if (watermarkTs) {
+    updateCatchupWatermark(message.channel, watermarkTs, account.accountId);
   }
 
   const anyReplyDelivered = queuedFinal || (counts.block ?? 0) > 0 || (counts.final ?? 0) > 0;
