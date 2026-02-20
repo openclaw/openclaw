@@ -7,6 +7,7 @@
 - [Threat Model](./THREAT-MODEL-ATLAS.md) - MITRE ATLAS-based threat model for the OpenClaw ecosystem
 
 - [Minimal Public Safety Checklist](./minimal-public-safety-checklist.md) - Generic baseline for safe public templates
+- [Minimal Public Safety Shell Guard Templates](./minimal-public-safety-shell-guard.md) - Template-only shell hardening examples
 - [Contributing to the Threat Model](./CONTRIBUTING-THREAT-MODEL.md) - How to add threats, mitigations, and attack chains
 
 ## Reporting Vulnerabilities

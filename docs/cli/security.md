@@ -70,3 +70,7 @@ When preparing public templates or public-facing documentation, keep policy gene
 - Link to a generic baseline checklist instead of private tenant details.
 
 For a short, reusable template, see [Minimal Public Safety Checklist](/security/minimal-public-safety-checklist).
+## Template resources for minimal local safety
+
+- Public workflow template: [Minimal Public Safety Shell Guard Templates](/security/minimal-public-safety-shell-guard)
+- Checklist: [Minimal Public Safety Checklist](/security/minimal-public-safety-checklist)
