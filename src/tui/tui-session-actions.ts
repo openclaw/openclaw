@@ -122,11 +122,21 @@ export function createSessionActions(context: SessionActionContext) {
     }
   };
 
-  const resolveModelSelection = (entry?: SessionInfoEntry, defaults?: SessionInfoDefaults) => {
+  const resolveModelSelection = (
+    entry: SessionInfoEntry | undefined,
+    defaults: SessionInfoDefaults | undefined,
+    opts?: { keepCurrentWhenEntryMissing?: boolean },
+  ) => {
     const defaultModel = normalizeModelField(defaults?.model);
     const defaultProvider = normalizeModelField(defaults?.modelProvider);
     const runtimeModel = normalizeModelField(entry?.model);
     const runtimeProvider = normalizeModelField(entry?.modelProvider);
+    if (!entry && opts?.keepCurrentWhenEntryMissing) {
+      return {
+        modelProvider: state.sessionInfo.modelProvider,
+        model: state.sessionInfo.model,
+      };
+    }
     if (entry?.modelProvider || entry?.model) {
       return {
         modelProvider: runtimeProvider ?? defaultProvider ?? state.sessionInfo.modelProvider,
@@ -151,6 +161,7 @@ export function createSessionActions(context: SessionActionContext) {
     entry?: SessionInfoEntry | null;
     defaults?: SessionInfoDefaults | null;
     force?: boolean;
+    keepCurrentModelWhenEntryMissing?: boolean;
   }) => {
     const entry = params.entry ?? undefined;
     const defaults = params.defaults ?? lastSessionDefaults ?? undefined;
@@ -214,7 +225,9 @@ export function createSessionActions(context: SessionActionContext) {
       next.updatedAt = entry.updatedAt;
     }
 
-    const selection = resolveModelSelection(entry, defaults);
+    const selection = resolveModelSelection(entry, defaults, {
+      keepCurrentWhenEntryMissing: Boolean(params.keepCurrentModelWhenEntryMissing),
+    });
     if (selection.modelProvider !== undefined) {
       next.modelProvider = selection.modelProvider;
     }
@@ -261,6 +274,8 @@ export function createSessionActions(context: SessionActionContext) {
       applySessionInfo({
         entry,
         defaults: result.defaults,
+        keepCurrentModelWhenEntryMissing:
+          !entry && (state.currentSessionKey === "global" || state.currentSessionKey === "unknown"),
       });
     } catch (err) {
       chatLog.addSystem(`sessions list failed: ${String(err)}`);
