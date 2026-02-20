@@ -9,15 +9,19 @@ import {
   listSlackPins,
   listSlackReactions,
   pinSlackMessage,
+  pushSlackModal,
   reactSlackMessage,
   readSlackMessages,
   removeOwnSlackReactions,
   removeSlackReaction,
   sendSlackMessage,
+  openSlackModal,
   unpinSlackMessage,
+  updateSlackModal,
 } from "../../slack/actions.js";
 import { parseSlackBlocksInput } from "../../slack/blocks-input.js";
 import { parseSlackTarget, resolveSlackChannelId } from "../../slack/targets.js";
+import { parseSlackModalViewInput } from "../../slack/views-input.js";
 import { withNormalizedTimestamp } from "../date-time.js";
 import {
   createActionGate,
@@ -31,6 +35,7 @@ const messagingActions = new Set(["sendMessage", "editMessage", "deleteMessage",
 
 const reactionsActions = new Set(["react", "reactions"]);
 const pinActions = new Set(["pinMessage", "unpinMessage", "listPins"]);
+const modalActions = new Set(["openModal", "pushModal", "updateModal"]);
 
 export type SlackActionContext = {
   /** Current channel ID for auto-threading. */
@@ -87,6 +92,10 @@ function resolveThreadTsFromContext(
 
 function readSlackBlocksParam(params: Record<string, unknown>) {
   return parseSlackBlocksInput(params.blocks);
+}
+
+function readSlackModalViewParam(params: Record<string, unknown>) {
+  return parseSlackModalViewInput(params.view);
 }
 
 export async function handleSlackAction(
@@ -312,6 +321,37 @@ export async function handleSlackAction(
       return message ? { ...pin, message } : pin;
     });
     return jsonResult({ ok: true, pins: normalizedPins });
+  }
+
+  if (modalActions.has(action)) {
+    if (!isActionEnabled("modals")) {
+      throw new Error("Slack modals are disabled.");
+    }
+    const view = readSlackModalViewParam(params);
+    if (action === "openModal") {
+      const triggerId = readStringParam(params, "triggerId", { required: true });
+      const result = writeOpts
+        ? await openSlackModal(triggerId, view, writeOpts)
+        : await openSlackModal(triggerId, view);
+      return jsonResult({ ok: true, result });
+    }
+    if (action === "pushModal") {
+      const triggerId = readStringParam(params, "triggerId", { required: true });
+      const result = writeOpts
+        ? await pushSlackModal(triggerId, view, writeOpts)
+        : await pushSlackModal(triggerId, view);
+      return jsonResult({ ok: true, result });
+    }
+    const viewId = readStringParam(params, "viewId");
+    const externalId = readStringParam(params, "externalId");
+    if (!viewId && !externalId) {
+      throw new Error("Slack updateModal requires viewId or externalId.");
+    }
+    const hash = readStringParam(params, "hash");
+    const result = writeOpts
+      ? await updateSlackModal({ view, viewId, externalId, hash }, writeOpts)
+      : await updateSlackModal({ view, viewId, externalId, hash });
+    return jsonResult({ ok: true, result });
   }
 
   if (action === "memberInfo") {

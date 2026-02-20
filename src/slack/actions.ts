@@ -33,6 +33,12 @@ export type SlackPin = {
   file?: { id?: string; name?: string };
 };
 
+export type SlackModalViewResult = {
+  id?: string;
+  externalId?: string;
+  hash?: string;
+};
+
 function resolveToken(explicit?: string, accountId?: string) {
   const cfg = loadConfig();
   const account = resolveSlackAccount({ cfg, accountId });
@@ -270,4 +276,78 @@ export async function listSlackPins(
   const client = await getClient(opts);
   const result = await client.pins.list({ channel: channelId });
   return (result.items ?? []) as SlackPin[];
+}
+
+type SlackViewsClient = {
+  views: {
+    open: (args: { trigger_id: string; view: Record<string, unknown> }) => Promise<{
+      view?: { id?: string; external_id?: string; hash?: string };
+    }>;
+    push: (args: { trigger_id: string; view: Record<string, unknown> }) => Promise<{
+      view?: { id?: string; external_id?: string; hash?: string };
+    }>;
+    update: (args: {
+      view: Record<string, unknown>;
+      view_id?: string;
+      external_id?: string;
+      hash?: string;
+    }) => Promise<{
+      view?: { id?: string; external_id?: string; hash?: string };
+    }>;
+  };
+};
+
+function toSlackModalViewResult(raw: {
+  view?: { id?: string; external_id?: string; hash?: string };
+}): SlackModalViewResult {
+  return {
+    id: raw.view?.id,
+    externalId: raw.view?.external_id,
+    hash: raw.view?.hash,
+  };
+}
+
+export async function openSlackModal(
+  triggerId: string,
+  view: Record<string, unknown>,
+  opts: SlackActionClientOpts = {},
+): Promise<SlackModalViewResult> {
+  const client = (await getClient(opts)) as unknown as SlackViewsClient;
+  const result = await client.views.open({
+    trigger_id: triggerId,
+    view,
+  });
+  return toSlackModalViewResult(result);
+}
+
+export async function pushSlackModal(
+  triggerId: string,
+  view: Record<string, unknown>,
+  opts: SlackActionClientOpts = {},
+): Promise<SlackModalViewResult> {
+  const client = (await getClient(opts)) as unknown as SlackViewsClient;
+  const result = await client.views.push({
+    trigger_id: triggerId,
+    view,
+  });
+  return toSlackModalViewResult(result);
+}
+
+export async function updateSlackModal(
+  params: {
+    view: Record<string, unknown>;
+    viewId?: string;
+    externalId?: string;
+    hash?: string;
+  },
+  opts: SlackActionClientOpts = {},
+): Promise<SlackModalViewResult> {
+  const client = (await getClient(opts)) as unknown as SlackViewsClient;
+  const result = await client.views.update({
+    view: params.view,
+    ...(params.viewId ? { view_id: params.viewId } : {}),
+    ...(params.externalId ? { external_id: params.externalId } : {}),
+    ...(params.hash ? { hash: params.hash } : {}),
+  });
+  return toSlackModalViewResult(result);
 }
