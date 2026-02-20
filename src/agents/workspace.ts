@@ -1080,7 +1080,23 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
   return result;
 }
 
-const SUBAGENT_BOOTSTRAP_ALLOWLIST = new Set([DEFAULT_AGENTS_FILENAME, DEFAULT_TOOLS_FILENAME]);
+/**
+ * Bootstrap loading tiers control which workspace files are injected
+ * into a session's context window.
+ *
+ * - `"minimal"` — Only AGENTS.md and TOOLS.md for subagent sessions; cron
+ *   sessions additionally retain SOUL/IDENTITY/USER (see CRON_BOOTSTRAP_ALLOWLIST).
+ * - `"standard"` — All recognized bootstrap files (SOUL.md, IDENTITY.md,
+ *   USER.md, HEARTBEAT.md, BOOTSTRAP.md, MEMORY.md, plus minimal set).
+ *   Default for main sessions.
+ * - `"full"` — Standard set plus any extra bootstrap file patterns
+ *   configured via the `bootstrap-extra-files` hook (paths/patterns/files).
+ */
+export type BootstrapTier = "minimal" | "standard" | "full";
+
+const MINIMAL_BOOTSTRAP_ALLOWLIST = new Set([DEFAULT_AGENTS_FILENAME, DEFAULT_TOOLS_FILENAME]);
+
+const SUBAGENT_BOOTSTRAP_ALLOWLIST = MINIMAL_BOOTSTRAP_ALLOWLIST;
 
 const CRON_BOOTSTRAP_ALLOWLIST = new Set([
   DEFAULT_AGENTS_FILENAME,
@@ -1090,20 +1106,41 @@ const CRON_BOOTSTRAP_ALLOWLIST = new Set([
   DEFAULT_USER_FILENAME,
 ]);
 
+/**
+ * Resolve the effective bootstrap tier for a session.
+ *
+ * Priority: explicit tier override > session-type heuristic.
+ * Subagent and cron sessions default to `"minimal"`;
+ * all other sessions default to `"standard"`.
+ */
+export function resolveBootstrapTier(
+  sessionKey?: string,
+  tierOverride?: BootstrapTier,
+): BootstrapTier {
+  if (tierOverride) {
+    return tierOverride;
+  }
+  if (sessionKey && (isSubagentSessionKey(sessionKey) || isCronSessionKey(sessionKey))) {
+    return "minimal";
+  }
+  return "standard";
+}
+
 export function filterBootstrapFilesForSession(
   files: WorkspaceBootstrapFile[],
   sessionKey?: string,
+  tierOverride?: BootstrapTier,
 ): WorkspaceBootstrapFile[] {
-  if (!sessionKey) {
+  const tier = resolveBootstrapTier(sessionKey, tierOverride);
+  if (tier !== "minimal") {
+    // "standard" and "full" both include all loaded files.
+    // "full" additionally loads extra bootstrap patterns — handled by the caller.
     return files;
   }
-  if (isSubagentSessionKey(sessionKey)) {
-    return files.filter((file) => SUBAGENT_BOOTSTRAP_ALLOWLIST.has(file.name));
-  }
-  if (isCronSessionKey(sessionKey)) {
+  if (sessionKey && isCronSessionKey(sessionKey)) {
     return files.filter((file) => CRON_BOOTSTRAP_ALLOWLIST.has(file.name));
   }
-  return files;
+  return files.filter((file) => SUBAGENT_BOOTSTRAP_ALLOWLIST.has(file.name));
 }
 
 function hasGlobPattern(pattern: string): boolean {
