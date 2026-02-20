@@ -34,6 +34,10 @@ export async function monitorWebInbox(options: {
   debounceMs?: number;
   /** Optional debounce gating predicate. */
   shouldDebounce?: (msg: WebInboundMessage) => boolean;
+  /** Process offline/catch-up messages (upsert.type === "append") instead of skipping them. */
+  replyToOfflineMessages?: boolean;
+  /** Maximum age (seconds) for offline messages to process. Default: 300. */
+  offlineMessageMaxAgeSeconds?: number;
 }) {
   const inboundLogger = getChildLogger({ module: "web-inbound" });
   const inboundConsoleLog = createSubsystemLogger("gateway/channels/whatsapp").child("inbound");
@@ -232,9 +236,21 @@ export async function monitorWebInbox(options: {
         logVerbose(`Self-chat mode: skipping read receipt for ${id}`);
       }
 
-      // If this is history/offline catch-up, mark read above but skip auto-reply.
+      // If this is history/offline catch-up, decide whether to process or skip.
       if (upsert.type === "append") {
-        continue;
+        if (!options.replyToOfflineMessages) {
+          continue;
+        }
+        // Skip messages older than the configured threshold.
+        const maxAgeMs = (options.offlineMessageMaxAgeSeconds ?? 300) * 1000;
+        if (messageTimestampMs && Date.now() - messageTimestampMs > maxAgeMs) {
+          if (shouldLogVerbose()) {
+            logVerbose(
+              `Skipping offline message ${id ?? "unknown"} (age ${Math.floor((Date.now() - messageTimestampMs) / 1000)}s > ${options.offlineMessageMaxAgeSeconds ?? 300}s)`,
+            );
+          }
+          continue;
+        }
       }
 
       const location = extractLocationData(msg.message ?? undefined);
