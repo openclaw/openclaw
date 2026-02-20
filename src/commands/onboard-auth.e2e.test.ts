@@ -125,12 +125,13 @@ describe("writeOAuthCredentials", () => {
       expires: Date.now() + 60_000,
     } satisfies OAuthCredentials;
 
-    await writeOAuthCredentials("openai-codex", creds);
+    const profileId = await writeOAuthCredentials("openai-codex", creds);
+    expect(profileId).toBe("openai-codex:default");
 
     const parsed = await readAuthProfilesForAgent<{
       profiles?: Record<string, OAuthCredentials & { type?: string }>;
     }>(env.agentDir);
-    expect(parsed.profiles?.["openai-codex:default"]).toMatchObject({
+    expect(parsed.profiles?.[profileId]).toMatchObject({
       refresh: "refresh-token",
       access: "access-token",
       type: "oauth",
@@ -139,6 +140,32 @@ describe("writeOAuthCredentials", () => {
     await expect(
       fs.readFile(path.join(env.stateDir, "agents", "main", "agent", "auth-profiles.json"), "utf8"),
     ).rejects.toThrow();
+  });
+
+  it("uses OAuth email as profile id when provided", async () => {
+    const env = await setupAuthTestEnv("openclaw-oauth-");
+    lifecycle.setStateDir(env.stateDir);
+
+    const creds = {
+      email: "user@example.com",
+      refresh: "refresh-token",
+      access: "access-token",
+      expires: Date.now() + 60_000,
+    } satisfies OAuthCredentials;
+
+    const profileId = await writeOAuthCredentials("openai-codex", creds);
+    expect(profileId).toBe("openai-codex:user@example.com");
+
+    const parsed = await readAuthProfilesForAgent<{
+      profiles?: Record<string, OAuthCredentials & { type?: string }>;
+    }>(env.agentDir);
+    expect(parsed.profiles?.[profileId]).toMatchObject({
+      refresh: "refresh-token",
+      access: "access-token",
+      type: "oauth",
+      provider: "openai-codex",
+      email: "user@example.com",
+    });
   });
 });
 
