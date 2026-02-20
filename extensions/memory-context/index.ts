@@ -1,14 +1,17 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { completeSimple } from "@mariozechner/pi-ai";
+import { completeSimple, getModel } from "@mariozechner/pi-ai";
 import { sanitizeToolUseResultPairing } from "../../src/agents/session-transcript-repair.js";
-import { scheduleKnowledgeExtraction } from "./src/core/compaction-bridge.js";
+import {
+  archiveCompactedMessages,
+  scheduleKnowledgeExtraction,
+} from "./src/core/compaction-bridge.js";
 import { memoryContextConfigSchema, type MemoryContextConfig } from "./src/core/config.js";
 import { createEmbeddingProvider } from "./src/core/embedding.js";
 import { KnowledgeStore } from "./src/core/knowledge-store.js";
 import { buildRecalledContextBlock } from "./src/core/recall-format.js";
 import { maybeRedact } from "./src/core/redaction.js";
-import { stripChannelPrefix } from "./src/core/shared.js";
+import { SYSTEM_PREFIX_RE, stripChannelPrefix } from "./src/core/shared.js";
 import { smartTrim, type MessageLike } from "./src/core/smart-trim.js";
 import { WarmStore } from "./src/core/store.js";
 
@@ -64,6 +67,10 @@ function resolveSessionId(ctx: HookCtx): string {
   return ctx.sessionId || ctx.sessionKey || "default";
 }
 
+/**
+ * Extract search query from last 2-3 user messages (broader keyword coverage).
+ * Skips channel system-prefix messages and recalled-context blocks.
+ */
 function extractQueryFromRecentUserMessages(messages: AgentMessage[]): string {
   const userMessages: string[] = [];
   for (let i = messages.length - 1; i >= 0 && userMessages.length < 3; i--) {
@@ -71,8 +78,16 @@ function extractQueryFromRecentUserMessages(messages: AgentMessage[]): string {
     if ((msg as { role?: string }).role !== "user") {
       continue;
     }
-    const content = stripChannelPrefix(extractText(msg)).trim();
-    if (!content || content.includes(RECALLED_CONTEXT_MARKER)) {
+    const text = extractText(msg);
+    if (!text.trim() || text.includes(RECALLED_CONTEXT_MARKER)) {
+      continue;
+    }
+    // Skip channel-injected system prefix messages (e.g. Feishu metadata)
+    if (SYSTEM_PREFIX_RE.test(text.trim())) {
+      continue;
+    }
+    const content = stripChannelPrefix(text).trim();
+    if (!content) {
       continue;
     }
     userMessages.unshift(content);
@@ -84,18 +99,30 @@ function estimateMessageTokens(msg: MessageLike): number {
   return Math.max(1, Math.ceil(extractText(msg as AgentMessage).length / 3));
 }
 
+/**
+ * Create an LLM call function for knowledge extraction using the compaction
+ * model exposed via hook context. Returns undefined if model/apiKey unavailable.
+ */
 function createKnowledgeExtractionLlmCall(
   ctx: HookCtx,
 ): ((prompt: string) => Promise<string>) | undefined {
-  const model = ctx.compactionModel;
+  const modelMeta = ctx.compactionModel;
   const apiKey = ctx.compactionApiKey;
-  if (!model || !apiKey) {
+  if (!modelMeta || !apiKey) {
     return undefined;
+  }
+  // Resolve full Model object from provider registry for type safety
+  let resolvedModel: Parameters<typeof completeSimple>[0];
+  try {
+    resolvedModel = getModel(modelMeta.provider as any, modelMeta.id as any);
+  } catch {
+    // Model not in static registry — construct minimal compatible object
+    resolvedModel = { provider: modelMeta.provider, id: modelMeta.id, api: modelMeta.api } as any;
   }
   return async (prompt: string) => {
     try {
       const res = await completeSimple(
-        model,
+        resolvedModel,
         {
           messages: [
             {
@@ -124,6 +151,47 @@ function createKnowledgeExtractionLlmCall(
       return "";
     }
   };
+}
+
+/**
+ * Non-blocking archive of trimmed messages to Raw Store.
+ * Uses queueMicrotask to avoid blocking the recall path.
+ */
+function archiveTrimmedMessagesAsync(
+  trimmed: MessageLike[],
+  rawStore: WarmStore,
+  redaction: boolean,
+): void {
+  if (trimmed.length === 0) {
+    return;
+  }
+  queueMicrotask(() => {
+    void (async () => {
+      try {
+        for (const msg of trimmed) {
+          const role = msg.role;
+          if (role !== "user" && role !== "assistant") {
+            continue;
+          }
+          const text = extractText(msg as AgentMessage);
+          if (!text.trim() || text.includes(RECALLED_CONTEXT_MARKER)) {
+            continue;
+          }
+          const cleaned = stripChannelPrefix(text);
+          if (!cleaned) {
+            continue;
+          }
+          const archived = maybeRedact(cleaned, redaction);
+          if (rawStore.isArchived(role, archived)) {
+            continue;
+          }
+          await rawStore.addSegmentLite({ role, content: archived });
+        }
+      } catch (err) {
+        console.warn(`memory-context: async archive of trimmed messages failed: ${String(err)}`);
+      }
+    })();
+  });
 }
 
 async function getOrCreateRuntime(api: OpenClawPluginApi, ctx: HookCtx): Promise<RuntimeState> {
@@ -193,6 +261,7 @@ const memoryContextPlugin = {
         return;
       }
 
+      // Remove old recalled-context messages before processing
       const filteredMessages = messages.filter((msg) => {
         const text = extractText(msg);
         return !text.includes(RECALLED_CONTEXT_MARKER);
@@ -211,52 +280,86 @@ const memoryContextPlugin = {
       });
 
       if (trimResult.didTrim) {
+        // Repair tool_use / tool_result pairing after trimming
         const repaired = sanitizeToolUseResultPairing(trimResult.kept as AgentMessage[]);
         messages.splice(0, messages.length, ...repaired);
 
-        for (const msg of trimResult.trimmed) {
-          const role = msg.role;
-          if (role !== "user" && role !== "assistant") {
-            continue;
-          }
-          const text = extractText(msg as AgentMessage);
-          if (!text.trim() || text.includes(RECALLED_CONTEXT_MARKER)) {
-            continue;
-          }
-          const cleaned = stripChannelPrefix(text);
-          if (!cleaned) {
-            continue;
-          }
-          const archived = maybeRedact(cleaned, runtime.config.redaction);
-          if (runtime.rawStore.isArchived(role, archived)) {
-            continue;
-          }
-          await runtime.rawStore.addSegmentLite({ role, content: archived });
-        }
+        // Non-blocking archive of trimmed messages (don't block recall path)
+        archiveTrimmedMessagesAsync(trimResult.trimmed, runtime.rawStore, runtime.config.redaction);
+        console.info(
+          `memory-context: trimmed ${trimResult.trimmed.length} messages (kept ${trimResult.kept.length})`,
+        );
       }
 
-      const details = await runtime.rawStore.hybridSearch(
-        query,
-        Math.max(8, Math.ceil(runtime.config.autoRecallMaxTokens / 500)),
-        runtime.config.autoRecallMinScore,
-        runtime.config.search,
-      );
-      const knowledge = runtime.knowledgeStore.search(query);
-      const recalled = buildRecalledContextBlock(
-        knowledge,
-        details,
-        runtime.config.autoRecallMaxTokens,
-      );
+      try {
+        // Hybrid search with window expansion
+        const searchLimit = Math.max(8, Math.ceil(runtime.config.autoRecallMaxTokens / 500));
+        const details = await runtime.rawStore.hybridSearch(
+          query,
+          searchLimit,
+          runtime.config.autoRecallMinScore,
+          runtime.config.search,
+        );
 
-      if (!recalled.block) {
+        // ±2 timeline window expansion with decayed scores
+        const WINDOW_SIZE = 2;
+        const WINDOW_SCORE_DECAY = 0.15;
+        const windowedDetails = new Map<string, (typeof details)[number]>();
+
+        for (const result of details) {
+          const existing = windowedDetails.get(result.segment.id);
+          if (!existing || existing.score < result.score) {
+            windowedDetails.set(result.segment.id, result);
+          }
+
+          const neighbors = runtime.rawStore.getTimelineNeighbors(result.segment.id, WINDOW_SIZE);
+          for (const { segment, distance } of neighbors) {
+            if (distance === 0) {
+              continue;
+            }
+            const decayedScore = Math.max(0, result.score * (1 - distance * WINDOW_SCORE_DECAY));
+            const prev = windowedDetails.get(segment.id);
+            if (!prev || prev.score < decayedScore) {
+              windowedDetails.set(segment.id, {
+                segment,
+                score: decayedScore,
+                vectorScore: 0,
+                bm25Score: 0,
+              });
+            }
+          }
+        }
+
+        const expandedDetails = Array.from(windowedDetails.values());
+        console.info(
+          `memory-context: window expansion ${details.length} → ${expandedDetails.length} segments`,
+        );
+
+        const knowledge = runtime.knowledgeStore.search(query);
+        const recalled = buildRecalledContextBlock(
+          knowledge,
+          expandedDetails,
+          runtime.config.autoRecallMaxTokens,
+        );
+
+        if (!recalled.block) {
+          return;
+        }
+
+        console.info(
+          `memory-context: recalled ${recalled.knowledgeCount} knowledge + ${recalled.detailCount} detail (${recalled.tokens} tokens)`,
+        );
+
+        return {
+          prependContext: recalled.block,
+        };
+      } catch (err) {
+        console.warn(`memory-context: recall failed (non-fatal): ${String(err)}`);
         return;
       }
-
-      return {
-        prependContext: recalled.block,
-      };
     });
 
+    // Archive messages during compaction + optional async knowledge extraction
     api.on("before_compaction", async (event, ctx) => {
       const runtime = await getOrCreateRuntime(api, ctx);
       const messages = asMessageArray(event.messages);
@@ -264,30 +367,17 @@ const memoryContextPlugin = {
         return;
       }
 
-      for (const msg of messages) {
-        const role = (msg as { role?: string }).role;
-        if (role !== "user" && role !== "assistant") {
-          continue;
-        }
-        const rawText = extractText(msg);
-        if (!rawText.trim()) {
-          continue;
-        }
-        if (rawText.includes(RECALLED_CONTEXT_MARKER)) {
-          continue;
-        }
-        const cleaned = stripChannelPrefix(rawText);
-        if (!cleaned) {
-          continue;
-        }
-        const archived = maybeRedact(cleaned, runtime.config.redaction);
-        if (runtime.rawStore.isArchived(role, archived)) {
-          continue;
-        }
-        await runtime.rawStore.addSegmentLite({
-          role,
-          content: archived,
+      try {
+        // Use the bridge function for proper per-message error isolation
+        const archived = await archiveCompactedMessages(runtime.rawStore, messages, {
+          redaction: runtime.config.redaction,
         });
+        if (archived > 0) {
+          console.info(`memory-context: archived ${archived} segments from compaction`);
+        }
+      } catch (err) {
+        // Error isolation: archive failure must NOT block compaction
+        console.warn(`memory-context: archive failed (non-fatal): ${String(err)}`);
       }
 
       if (runtime.config.knowledgeExtraction) {
@@ -302,6 +392,26 @@ const memoryContextPlugin = {
           },
           runtime.config.redaction,
         );
+      }
+    });
+
+    // Archive messages before session reset (/new or /reset) to prevent data loss
+    api.on("before_reset", async (event, ctx) => {
+      try {
+        const runtime = await getOrCreateRuntime(api, ctx);
+        const messages = asMessageArray(event.messages);
+        if (messages.length === 0) {
+          return;
+        }
+
+        const archived = await archiveCompactedMessages(runtime.rawStore, messages, {
+          redaction: runtime.config.redaction,
+        });
+        if (archived > 0) {
+          console.info(`memory-context: archived ${archived} segments before session reset`);
+        }
+      } catch (err) {
+        console.warn(`memory-context: before_reset archive failed (non-fatal): ${String(err)}`);
       }
     });
 

@@ -12,6 +12,11 @@
 import type { KnowledgeStore } from "./knowledge-store.js";
 import type { WarmStore } from "./store.js";
 
+/**
+ * Legacy runtime config type for the Pi extension architecture.
+ * The plugin architecture uses MemoryContextConfig from ./config.ts instead.
+ * Kept for backward compatibility with tests and the computeHardCap utility.
+ */
 export type MemoryContextConfig = {
   enabled: boolean;
   hardCapTokens: number;
