@@ -1,5 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { OpenClawPluginApi, PluginHookAgentContext } from "openclaw/plugin-sdk";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { memoryContextConfigSchema, type MemoryContextConfig } from "./src/core/config.js";
 import { createEmbeddingProvider } from "./src/core/embedding.js";
 import { KnowledgeStore } from "./src/core/knowledge-store.js";
@@ -17,6 +17,11 @@ type RuntimeState = {
 const runtimes = new Map<string, Promise<RuntimeState>>();
 const cachedPromptBySession = new Map<string, string>();
 const RECALLED_CONTEXT_MARKER = '<recalled-context source="memory-context">';
+
+type HookCtx = {
+  sessionId?: string;
+  sessionKey?: string;
+};
 
 function asMessageArray(value: unknown): AgentMessage[] {
   if (!Array.isArray(value)) {
@@ -45,14 +50,27 @@ function extractText(msg: AgentMessage): string {
   return "";
 }
 
-function resolveSessionId(ctx: PluginHookAgentContext): string {
+function resolveSessionId(ctx: HookCtx): string {
   return ctx.sessionId || ctx.sessionKey || "default";
 }
 
-async function getOrCreateRuntime(
-  api: OpenClawPluginApi,
-  ctx: PluginHookAgentContext,
-): Promise<RuntimeState> {
+function extractQueryFromRecentUserMessages(messages: AgentMessage[]): string {
+  const userMessages: string[] = [];
+  for (let i = messages.length - 1; i >= 0 && userMessages.length < 3; i--) {
+    const msg = messages[i];
+    if ((msg as { role?: string }).role !== "user") {
+      continue;
+    }
+    const content = stripChannelPrefix(extractText(msg)).trim();
+    if (!content || content.includes(RECALLED_CONTEXT_MARKER)) {
+      continue;
+    }
+    userMessages.unshift(content);
+  }
+  return userMessages.join(" ").trim();
+}
+
+async function getOrCreateRuntime(api: OpenClawPluginApi, ctx: HookCtx): Promise<RuntimeState> {
   const sessionId = resolveSessionId(ctx);
   const existing = runtimes.get(sessionId);
   if (existing) {
@@ -111,7 +129,10 @@ const memoryContextPlugin = {
 
       const sessionId = resolveSessionId(ctx);
       const messages = asMessageArray(event.messages);
-      const query = cachedPromptBySession.get(sessionId)?.trim() || event.prompt.trim();
+      const query =
+        cachedPromptBySession.get(sessionId)?.trim() ||
+        extractQueryFromRecentUserMessages(messages) ||
+        event.prompt.trim();
       if (query.length < 3) {
         return;
       }
@@ -149,6 +170,9 @@ const memoryContextPlugin = {
     api.on("before_compaction", async (event, ctx) => {
       const runtime = await getOrCreateRuntime(api, ctx);
       const messages = asMessageArray(event.messages);
+      if (messages.length === 0) {
+        return;
+      }
 
       for (const msg of messages) {
         const role = (msg as { role?: string }).role;
@@ -166,7 +190,7 @@ const memoryContextPlugin = {
         if (!cleaned) {
           continue;
         }
-        const archived = maybeRedact(cleaned, true);
+        const archived = maybeRedact(cleaned, runtime.config.redaction);
         if (runtime.rawStore.isArchived(role, archived)) {
           continue;
         }

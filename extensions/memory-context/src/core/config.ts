@@ -19,6 +19,7 @@ export type BudgetConfig = {
 export type MemoryContextConfig = {
   embeddingDim: number;
   storagePath: string;
+  redaction: boolean;
   autoRecall: boolean;
   autoRecallMinScore: number;
   autoRecallMaxTokens: number;
@@ -156,6 +157,7 @@ export const memoryContextConfigSchema = {
       [
         "embeddingDim",
         "storagePath",
+        "redaction",
         "autoRecall",
         "autoRecallMinScore",
         "autoRecallMaxTokens",
@@ -181,6 +183,7 @@ export const memoryContextConfigSchema = {
       typeof cfg.storagePath === "string" ? cfg.storagePath : DEFAULT_STORAGE_PATH;
 
     const autoRecall = cfg.autoRecall !== false;
+    const redaction = cfg.redaction !== false;
 
     const autoRecallMinScore =
       cfg.autoRecallMinScore === undefined
@@ -231,6 +234,7 @@ export const memoryContextConfigSchema = {
     return {
       embeddingDim,
       storagePath,
+      redaction,
       autoRecall,
       autoRecallMinScore,
       autoRecallMaxTokens,
@@ -254,6 +258,11 @@ export const memoryContextConfigSchema = {
     autoRecall: {
       label: "Auto-Recall",
       help: "Automatically inject relevant conversation history into context",
+    },
+    redaction: {
+      label: "Redaction",
+      help: "Mask potential secrets before persisting compacted content",
+      advanced: true,
     },
     embeddingModel: {
       label: "Embedding Model",
