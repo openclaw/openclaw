@@ -220,12 +220,6 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     throw err;
   }
 
-  process.on("exit", (code) => {
-    if (code !== 0) {
-      recordGatewayCrash(stateDir);
-    }
-  });
-
   if (devMode) {
     await ensureDevGatewayConfig({ reset: Boolean(opts.reset) });
   }
@@ -451,7 +445,17 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
         }
       : undefined;
 
+<<<<<<< HEAD
   const startLoop = async () =>
+=======
+  process.on("exit", (code) => {
+    if (code !== 0) {
+      recordGatewayCrash(stateDir);
+    }
+  });
+
+  try {
+>>>>>>> 430b320cd0 (fix: register crash-recording exit handler after all validation passes)
     await runGatewayLoop({
       runtime: defaultRuntime,
       lockPort: port,
