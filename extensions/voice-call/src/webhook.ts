@@ -26,11 +26,23 @@ function firstHeaderValue(value: string | string[] | undefined): string | undefi
   return value;
 }
 
+function isMalformedHostHeaderValue(hostHeader: string): boolean {
+  return (
+    hostHeader.includes("@") ||
+    hostHeader.includes("\r") ||
+    hostHeader.includes("\n") ||
+    /\s/.test(hostHeader)
+  );
+}
+
 function parseHttpRequestUrl(params: {
   requestUrl: string | undefined;
   hostHeader: string | string[] | undefined;
 }): URL | null {
   const hostHeader = firstHeaderValue(params.hostHeader)?.trim();
+  if (hostHeader && isMalformedHostHeaderValue(hostHeader)) {
+    return null;
+  }
   const host = hostHeader || "localhost";
   try {
     return new URL(params.requestUrl || "/", `http://${host}`);

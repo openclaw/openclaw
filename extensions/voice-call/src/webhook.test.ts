@@ -92,6 +92,46 @@ async function sendRawUpgrade(params: {
   });
 }
 
+async function sendRawPost(params: {
+  host: string;
+  port: number;
+  path: string;
+  hostHeader: string;
+  body?: string;
+}): Promise<string> {
+  const body = params.body ?? "event=health-check";
+  return await new Promise((resolve, reject) => {
+    const socket = net.createConnection({ host: params.host, port: params.port });
+    socket.setEncoding("utf8");
+    socket.setTimeout(2000);
+
+    let response = "";
+
+    socket.on("connect", () => {
+      socket.write(
+        `POST ${params.path} HTTP/1.1\r\n` +
+          `Host: ${params.hostHeader}\r\n` +
+          "Content-Type: application/x-www-form-urlencoded\r\n" +
+          `Content-Length: ${Buffer.byteLength(body, "utf8")}\r\n` +
+          "Connection: close\r\n" +
+          "\r\n" +
+          body,
+      );
+    });
+
+    socket.on("data", (chunk) => {
+      response += chunk;
+    });
+
+    socket.on("timeout", () => {
+      socket.destroy(new Error("post request timed out"));
+    });
+
+    socket.on("error", reject);
+    socket.on("close", () => resolve(response));
+  });
+}
+
 describe("VoiceCallWebhookServer stale call reaper", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -207,6 +247,78 @@ describe("VoiceCallWebhookServer websocket upgrade hardening", () => {
         body: "event=health-check",
       });
       expect(healthyRes.status).toBe(200);
+    } finally {
+      await server.stop();
+    }
+  });
+});
+
+describe("VoiceCallWebhookServer HTTP host header hardening", () => {
+  function createServerForHttpHostTests() {
+    const config = createConfig({ staleCallReaperSeconds: 0 });
+    const manager = {
+      getActiveCalls: () => [],
+      endCall: vi.fn(async () => ({ success: true })),
+      getCallByProviderCallId: vi.fn(() => undefined),
+      getCall: vi.fn(() => undefined),
+      processEvent: vi.fn(),
+      speakInitialMessage: vi.fn(async () => {}),
+      speak: vi.fn(async () => {}),
+    } as unknown as CallManager;
+    return new VoiceCallWebhookServer(config, manager, provider);
+  }
+
+  it("rejects malformed POST host headers and keeps the server healthy", async () => {
+    const server = createServerForHttpHostTests();
+
+    try {
+      await server.start();
+      const listeningServer = (server as unknown as { server?: { address?: () => unknown } })
+        .server;
+      const address = listeningServer?.address?.() as { port?: number } | string | null | undefined;
+      if (!address || typeof address === "string" || typeof address.port !== "number") {
+        throw new Error("webhook server did not expose a listen address");
+      }
+      const webhookUrl = `http://127.0.0.1:${address.port}/voice/webhook`;
+
+      const malformedResponse = await sendRawPost({
+        host: "127.0.0.1",
+        port: address.port,
+        path: "/voice/webhook",
+        hostHeader: "[::1",
+      });
+      expect(malformedResponse).toContain("400 Bad Request");
+
+      const healthyRes = await fetch(webhookUrl, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: "event=health-check",
+      });
+      expect(healthyRes.status).toBe(200);
+    } finally {
+      await server.stop();
+    }
+  });
+
+  it("rejects POST host headers with user-info injection", async () => {
+    const server = createServerForHttpHostTests();
+
+    try {
+      await server.start();
+      const listeningServer = (server as unknown as { server?: { address?: () => unknown } })
+        .server;
+      const address = listeningServer?.address?.() as { port?: number } | string | null | undefined;
+      if (!address || typeof address === "string" || typeof address.port !== "number") {
+        throw new Error("webhook server did not expose a listen address");
+      }
+
+      const response = await sendRawPost({
+        host: "127.0.0.1",
+        port: address.port,
+        path: "/voice/webhook",
+        hostHeader: "attacker.example@legitimate.example",
+      });
+      expect(response).toContain("400 Bad Request");
     } finally {
       await server.stop();
     }
