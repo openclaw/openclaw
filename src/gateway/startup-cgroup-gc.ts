@@ -27,6 +27,10 @@ type CgroupCleanupResult = {
 const PROC_CGROUP_PATH = "/proc/self/cgroup";
 const CGROUP_ROOT = "/sys/fs/cgroup";
 const DEFAULT_GRACE_MS = 400;
+const SERVICE_CGROUP_PATTERN = /\/app\.slice\/[^/]+\.service$/;
+const STARTUP_CGROUP_GC_ENV_KEY = "OPENCLAW_ENABLE_STARTUP_CGROUP_GC";
+const SYSTEMD_UNIT_ENV_KEY = "OPENCLAW_SYSTEMD_UNIT";
+const INVOCATION_ID_ENV_KEY = "INVOCATION_ID";
 
 const defaultOps: CgroupCleanupOps = {
   platform: process.platform,
@@ -51,6 +55,50 @@ function parseUnifiedCgroupPath(raw: string): string | null {
     return cgroupPath;
   }
   return null;
+}
+
+function isServiceCgroupPath(cgroupPath: string): boolean {
+  return SERVICE_CGROUP_PATTERN.test(cgroupPath);
+}
+
+function parseProcStartTimeTicks(raw: string): number | null {
+  const tailStart = raw.lastIndexOf(") ");
+  if (tailStart < 0) {
+    return null;
+  }
+  const fields = raw
+    .slice(tailStart + 2)
+    .trim()
+    .split(/\s+/);
+  const startTime = Number.parseInt(fields[19] ?? "", 10);
+  if (!Number.isFinite(startTime) || startTime <= 0) {
+    return null;
+  }
+  return startTime;
+}
+
+async function readPidStartTimeTicks(ops: CgroupCleanupOps, pid: number): Promise<number | null> {
+  try {
+    const stat = await ops.readFile(`/proc/${pid}/stat`, "utf8");
+    return parseProcStartTimeTicks(stat);
+  } catch {
+    return null;
+  }
+}
+
+async function readPidInvocationId(ops: CgroupCleanupOps, pid: number): Promise<string | null> {
+  try {
+    const environ = await ops.readFile(`/proc/${pid}/environ`, "utf8");
+    for (const part of environ.split("\0")) {
+      if (part.startsWith(`${INVOCATION_ID_ENV_KEY}=`)) {
+        const value = part.slice(INVOCATION_ID_ENV_KEY.length + 1).trim();
+        return value.length > 0 ? value : null;
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 async function readPidParent(ops: CgroupCleanupOps, pid: number): Promise<number | null> {
@@ -108,12 +156,41 @@ function trySignal(ops: CgroupCleanupOps, pid: number, signal: NodeJS.Signals): 
   }
 }
 
+function parseBooleanEnv(raw: string | undefined): boolean | null {
+  if (raw === undefined) {
+    return null;
+  }
+  const value = raw.trim().toLowerCase();
+  if (value === "") {
+    return null;
+  }
+  if (value === "1" || value === "true" || value === "yes" || value === "on") {
+    return true;
+  }
+  if (value === "0" || value === "false" || value === "no" || value === "off") {
+    return false;
+  }
+  return null;
+}
+
+function isStartupCgroupCleanupEnabled(env: NodeJS.ProcessEnv): boolean {
+  const explicit = parseBooleanEnv(env[STARTUP_CGROUP_GC_ENV_KEY]);
+  if (explicit !== null) {
+    return explicit;
+  }
+  const unit = env[SYSTEMD_UNIT_ENV_KEY];
+  return typeof unit === "string" && unit.trim().length > 0;
+}
+
 export async function cleanupGatewayCgroupOrphans(params?: {
   logger?: LoggerLike;
   ops?: Partial<CgroupCleanupOps>;
   graceMs?: number;
 }): Promise<CgroupCleanupResult> {
   const logger = params?.logger;
+  if (!isStartupCgroupCleanupEnabled(process.env)) {
+    return { skipped: "disabled", scanned: 0, orphaned: 0, terminated: 0, killed: 0 };
+  }
   const ops: CgroupCleanupOps = {
     ...defaultOps,
     ...params?.ops,
@@ -126,6 +203,16 @@ export async function cleanupGatewayCgroupOrphans(params?: {
   const cgroupPath = parseUnifiedCgroupPath(cgroupRaw);
   if (!cgroupPath) {
     return { skipped: "missing-cgroup-path", scanned: 0, orphaned: 0, terminated: 0, killed: 0 };
+  }
+  if (!isServiceCgroupPath(cgroupPath)) {
+    return {
+      skipped: "non-service-cgroup",
+      cgroupPath,
+      scanned: 0,
+      orphaned: 0,
+      terminated: 0,
+      killed: 0,
+    };
   }
   const cgroupProcsPath = path.posix.join(CGROUP_ROOT, cgroupPath, "cgroup.procs");
   const cgroupPidsRaw = await ops.readFile(cgroupProcsPath, "utf8").catch(() => "");
@@ -144,6 +231,18 @@ export async function cleanupGatewayCgroupOrphans(params?: {
     .split("\n")
     .map((line) => Number.parseInt(line.trim(), 10))
     .filter((pid) => Number.isFinite(pid) && pid > 1);
+  const selfInvocationId = process.env[INVOCATION_ID_ENV_KEY]?.trim() || null;
+  const selfStartTimeTicks = await readPidStartTimeTicks(ops, ops.pid);
+  if (selfStartTimeTicks === null) {
+    return {
+      skipped: "missing-self-start-time",
+      cgroupPath,
+      scanned: cgroupPids.length,
+      orphaned: 0,
+      terminated: 0,
+      killed: 0,
+    };
+  }
 
   const orphaned: number[] = [];
   for (const pid of cgroupPids) {
@@ -151,6 +250,19 @@ export async function cleanupGatewayCgroupOrphans(params?: {
       continue;
     }
     if (await isDescendantOf({ ops, pid, ancestorPid: ops.pid })) {
+      continue;
+    }
+    if (await isDescendantOf({ ops, pid: ops.pid, ancestorPid: pid })) {
+      continue;
+    }
+    if (selfInvocationId) {
+      const pidInvocationId = await readPidInvocationId(ops, pid);
+      if (pidInvocationId === selfInvocationId) {
+        continue;
+      }
+    }
+    const pidStartTimeTicks = await readPidStartTimeTicks(ops, pid);
+    if (pidStartTimeTicks === null || pidStartTimeTicks >= selfStartTimeTicks) {
       continue;
     }
     orphaned.push(pid);

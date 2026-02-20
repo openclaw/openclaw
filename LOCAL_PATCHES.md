@@ -225,6 +225,23 @@ Quick status:
   - Add focused tests for config precedence and launch-arg behavior.
   - Update browser docs and configuration reference with per-profile examples.
 
+### 16) Gateway startup cgroup cleanup: keep orphan reaping, stop killing SSH/session siblings
+
+- Commit: `working tree (2026-02-20)` — pending commit
+- Why:
+  - The initial startup cgroup cleanup could terminate non-descendant processes in the current cgroup too aggressively.
+  - In SSH/manual runs this could kill the active SSH session; in systemd starts it could kill same-start invocation siblings (notably `ExecStartPost`), causing flapping (`control process exited, status=15/TERM`).
+  - We still want stale orphan cleanup to work for previous failed runs.
+- What:
+  - `src/gateway/startup-cgroup-gc.ts`
+    - keep cleanup enabled under systemd (`OPENCLAW_SYSTEMD_UNIT`) and explicit env override (`OPENCLAW_ENABLE_STARTUP_CGROUP_GC`).
+    - skip cleanup outside service cgroups.
+    - skip descendants/ancestors of the current gateway process.
+    - skip processes with the same `INVOCATION_ID` as the current systemd start (protects `ExecStartPost` siblings in the same start attempt).
+    - only reap older non-descendant PIDs (startup-time ordering guard).
+  - `src/gateway/startup-cgroup-gc.test.ts`
+    - add regression coverage for non-service cgroup skip and same-invocation sibling protection while still reaping eligible stale members.
+
 ## Operating rules
 
 - Treat this file as the **source of truth** for why a local commit exists.
