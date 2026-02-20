@@ -119,6 +119,12 @@ export type GatewayAuthConfig = {
    * Required when mode is "trusted-proxy".
    */
   trustedProxy?: GatewayTrustedProxyConfig;
+  /**
+   * Optional allowlist of user identities that can access the gateway.
+   * This applies across all auth methods that provide a user identity
+   * (e.g. Tailscale, Trusted Proxy).
+   */
+  whitelist?: string[];
 };
 
 export type GatewayAuthRateLimitConfig = {

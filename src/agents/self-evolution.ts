@@ -97,7 +97,7 @@ export class EvolutionaryEngine {
     }
 
     if (index % 3 === 0 && config.agents.defaults.model?.fallbacks) {
-      const fallbacks = [...(config.agents.defaults.model.fallbacks as string[])];
+      const fallbacks = [...config.agents.defaults.model.fallbacks];
       fallbacks.sort(() => Math.random() - 0.5);
       if (config.agents.defaults.model) {
         config.agents.defaults.model.fallbacks = fallbacks;
@@ -335,7 +335,7 @@ export class EvolutionaryEngine {
     switch (mutationType) {
       case "provider_priority":
         if (mutatedConfig.agents.defaults.model?.fallbacks) {
-          const fallbacks = [...(mutatedConfig.agents.defaults.model.fallbacks as string[])];
+          const fallbacks = [...mutatedConfig.agents.defaults.model.fallbacks];
           const idx1 = Math.floor(Math.random() * fallbacks.length);
           const idx2 = Math.floor(Math.random() * fallbacks.length);
           [fallbacks[idx1], fallbacks[idx2]] = [fallbacks[idx2], fallbacks[idx1]];
@@ -423,8 +423,8 @@ export class EvolutionaryEngine {
     const result = JSON.parse(JSON.stringify(config1)) as OpenClawConfig;
 
     if (config2.agents?.defaults?.model?.fallbacks && result.agents?.defaults?.model?.fallbacks) {
-      const fallbacks1 = result.agents.defaults.model.fallbacks as string[];
-      const fallbacks2 = config2.agents.defaults.model.fallbacks as string[];
+      const fallbacks1 = result.agents.defaults.model.fallbacks;
+      const fallbacks2 = config2.agents.defaults.model.fallbacks;
       const combined = [...new Set([...fallbacks1, ...fallbacks2])];
       result.agents.defaults.model.fallbacks = combined;
     }

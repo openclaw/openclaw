@@ -446,6 +446,7 @@ export const OpenClawSchema = z
               })
               .strict()
               .optional(),
+            whitelist: z.array(z.string()).optional(),
           })
           .strict()
           .optional(),

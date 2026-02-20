@@ -38,7 +38,15 @@ export function shouldSpawnWithShell(params: {
   // (like chat prompts passed as CLI args) into command-injection primitives.
   // If you need a shell, use an explicit shell-wrapper argv (e.g. `cmd.exe /c ...`)
   // and validate/escape at the call site.
-  void params;
+  // EXCEPTIONS: Node.js >= 20.x throws EINVAL when spawning .cmd/.bat files without
+  // shell: true (CVE-2024-27980). We must enable shell for these specific extensions,
+  // relying on Node's default argument escaping.
+  if (params.platform === "win32") {
+    const ext = path.extname(params.resolvedCommand).toLowerCase();
+    if (ext === ".cmd" || ext === ".bat") {
+      return true;
+    }
+  }
   return false;
 }
 

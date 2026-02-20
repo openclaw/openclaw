@@ -93,3 +93,20 @@ package-lock.json
 
 # Local iOS signing overrides
 apps/ios/LocalSigning.xcconfig
+
+# Windows / IDE artifacts
+nul
+%USERPROFILE%/
+.cursor/
+.specstory/
+.cursorindexingignore
+
+# Runtime databases and logs
+agents.db
+build.log
+build_output.log
+cli-test-out.txt
+configure_help.txt
+daemon_status.log
+models_help.txt
+openclaw_help.txt

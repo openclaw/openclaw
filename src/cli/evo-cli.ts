@@ -1,9 +1,9 @@
 import type { Command } from "commander";
+import { EvoDaemon, isDaemonRunning, readDaemonStatus } from "../agents/evo-daemon.js";
 import { EvolutionaryEngine } from "../agents/self-evolution.js";
+import { getSharedMetricsCollector } from "../agents/self-metrics.js";
 import { runSelfRepair, runHealthCheck } from "../agents/self-repair.js";
 import { SelfReplicationEngine } from "../agents/self-replication.js";
-import { EvoDaemon, isDaemonRunning, readDaemonStatus } from "../agents/evo-daemon.js";
-import { getSharedMetricsCollector } from "../agents/self-metrics.js";
 import { readConfigFileSnapshot } from "../config/io.js";
 import { info, success, warn } from "../globals.js";
 
@@ -52,7 +52,7 @@ export function registerEvoCommands(program: Command): void {
           success("All checks passed!");
         }
       } catch (error) {
-        warn(`Health check failed: ${error}`);
+        warn(`Health check failed: ${String(error)}`);
         process.exit(1);
       }
     });
@@ -90,7 +90,7 @@ export function registerEvoCommands(program: Command): void {
           process.exit(1);
         }
       } catch (error) {
-        warn(`Self-repair failed: ${error}`);
+        warn(`Self-repair failed: ${String(error)}`);
         process.exit(1);
       }
     });
@@ -142,7 +142,7 @@ export function registerEvoCommands(program: Command): void {
           success("Best configuration saved!");
         }
       } catch (error) {
-        warn(`Evolution failed: ${error}`);
+        warn(`Evolution failed: ${String(error)}`);
         process.exit(1);
       }
     });
@@ -167,7 +167,7 @@ export function registerEvoCommands(program: Command): void {
         console.log("  openclaw evo repair  - Auto-repair issues");
         console.log("  openclaw evo evolve  - Run optimization");
       } catch (error) {
-        console.log(`Status check failed: ${error}`);
+        console.log(`Status check failed: ${String(error)}`);
       }
     });
   // ---------------------------------------------------------------------------
@@ -210,23 +210,20 @@ export function registerEvoCommands(program: Command): void {
       if (status) {
         console.log(`  PID      : ${status.pid ?? "—"}`);
         console.log(
-          `  Started  : ${
-            status.startedAt ? new Date(status.startedAt).toLocaleString() : "—"
-          }`,
+          `  Started  : ${status.startedAt ? new Date(status.startedAt).toLocaleString() : "—"}`,
         );
         console.log(`  Repairs  : ${status.repairCount}`);
         console.log(`  Evolves  : ${status.evolveCount}`);
         console.log(`  Clones   : ${status.cloneCount}`);
         console.log(
-          `  BestFit  : ${
-            status.bestFitness !== null ? status.bestFitness.toFixed(4) : "—"
-          }`,
+          `  BestFit  : ${status.bestFitness !== null ? status.bestFitness.toFixed(4) : "—"}`,
         );
         console.log(`  Gen      : ${status.currentGeneration}`);
       } else {
         console.log("  No status file found.");
       }
       console.log("");
+      process.exit(0);
     });
 
   // ---------------------------------------------------------------------------
@@ -248,9 +245,11 @@ export function registerEvoCommands(program: Command): void {
       }
 
       console.log(`\n=== Agent Clones (${clones.length}/${engine.getMaxClones()} max) ===\n`);
-      for (const c of [...clones].sort((a, b) => b.fitness - a.fitness)) {
+      for (const c of [...clones].toSorted((a, b) => b.fitness - a.fitness)) {
         const age = Math.round((Date.now() - c.createdAt) / 60_000);
-        console.log(`  ${c.id.slice(0, 24)}  fit=${c.fitness.toFixed(4)}  gen=${c.generation}  age=${age}m`);
+        console.log(
+          `  ${c.id.slice(0, 24)}  fit=${c.fitness.toFixed(4)}  gen=${c.generation}  age=${age}m`,
+        );
         console.log(`    ${c.dir}`);
       }
       console.log("");
@@ -306,9 +305,7 @@ export function registerEvoCommands(program: Command): void {
       console.log(`  Error rate        : ${(m.errorRate * 100).toFixed(1)}%`);
       console.log(`  Task completion   : ${(m.taskCompletionRate * 100).toFixed(1)}%`);
       console.log(`  Memory pressure   : ${(m.memoryPressure * 100).toFixed(1)}%`);
-      console.log(
-        `  Last updated      : ${new Date(m.lastUpdatedAt).toLocaleString()}`,
-      );
+      console.log(`  Last updated      : ${new Date(m.lastUpdatedAt).toLocaleString()}`);
       console.log("");
     });
 }

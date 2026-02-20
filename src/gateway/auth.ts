@@ -34,6 +34,7 @@ export type ResolvedGatewayAuth = {
   password?: string;
   allowTailscale: boolean;
   trustedProxy?: GatewayTrustedProxyConfig;
+  whitelist?: string[];
 };
 
 export type GatewayAuthResult = {
@@ -216,6 +217,7 @@ export function resolveGatewayAuth(params: {
   const token = authConfig.token ?? env.OPENCLAW_GATEWAY_TOKEN ?? undefined;
   const password = authConfig.password ?? env.OPENCLAW_GATEWAY_PASSWORD ?? undefined;
   const trustedProxy = authConfig.trustedProxy;
+  const whitelist = authConfig.whitelist;
 
   let mode: ResolvedGatewayAuth["mode"];
   let modeSource: ResolvedGatewayAuth["modeSource"];
@@ -247,6 +249,7 @@ export function resolveGatewayAuth(params: {
     password,
     allowTailscale,
     trustedProxy,
+    whitelist,
   };
 }
 
@@ -330,6 +333,29 @@ export async function authorizeGatewayConnect(params: {
   /** Client IP used for rate-limit tracking. Falls back to proxy-aware request IP resolution. */
   clientIp?: string;
   /** Optional limiter scope; defaults to shared-secret auth scope. */
+  rateLimitScope?: string;
+}): Promise<GatewayAuthResult> {
+  const result = await authorizeGatewayConnectInner(params);
+
+  if (result.ok && result.user && params.auth.whitelist && params.auth.whitelist.length > 0) {
+    const user = result.user.toLowerCase();
+    const isWhitelisted = params.auth.whitelist.some((w) => w.toLowerCase() === user);
+    if (!isWhitelisted) {
+      return { ok: false, reason: "user_not_whitelisted", user: result.user };
+    }
+  }
+
+  return result;
+}
+
+async function authorizeGatewayConnectInner(params: {
+  auth: ResolvedGatewayAuth;
+  connectAuth?: ConnectAuth | null;
+  req?: IncomingMessage;
+  trustedProxies?: string[];
+  tailscaleWhois?: TailscaleWhoisLookup;
+  rateLimiter?: AuthRateLimiter;
+  clientIp?: string;
   rateLimitScope?: string;
 }): Promise<GatewayAuthResult> {
   const { auth, connectAuth, req, trustedProxies } = params;

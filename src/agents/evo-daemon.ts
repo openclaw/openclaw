@@ -14,9 +14,9 @@ import path from "node:path";
 import { readConfigFileSnapshot } from "../config/io.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { EvolutionaryEngine } from "./self-evolution.js";
+import { getSharedMetricsCollector } from "./self-metrics.js";
 import type { SelfRepairEngine } from "./self-repair.js";
 import type { SelfReplicationEngine } from "./self-replication.js";
-import { getSharedMetricsCollector } from "./self-metrics.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -51,8 +51,8 @@ export interface DaemonStatus {
 // ---------------------------------------------------------------------------
 
 const DEFAULT_CONFIG: DaemonConfig = {
-  repairIntervalMs: 5 * 60 * 1_000,       // 5 min
-  evolveIntervalMs: 60 * 60 * 1_000,       // 1 hour
+  repairIntervalMs: 5 * 60 * 1_000, // 5 min
+  evolveIntervalMs: 60 * 60 * 1_000, // 1 hour
   replicationIntervalMs: 2 * 60 * 60 * 1_000, // 2 hours
 };
 
@@ -135,9 +135,15 @@ export class EvoDaemon {
 
   /** Gracefully stop the daemon. */
   async stop(): Promise<void> {
-    if (this.repairTimer) clearInterval(this.repairTimer);
-    if (this.evolveTimer) clearInterval(this.evolveTimer);
-    if (this.replicationTimer) clearInterval(this.replicationTimer);
+    if (this.repairTimer) {
+      clearInterval(this.repairTimer);
+    }
+    if (this.evolveTimer) {
+      clearInterval(this.evolveTimer);
+    }
+    if (this.replicationTimer) {
+      clearInterval(this.replicationTimer);
+    }
 
     this.status.running = false;
     await this.saveStatus();
@@ -150,7 +156,9 @@ export class EvoDaemon {
 
   private async runRepairCycle(): Promise<void> {
     try {
-      if (!this._repairEngine) return;
+      if (!this._repairEngine) {
+        return;
+      }
       await this._repairEngine.loadConfig();
       const result = await this._repairEngine.repair();
       if (result.repairs.length > 0) {
@@ -166,7 +174,9 @@ export class EvoDaemon {
 
   private async runEvolveCycle(): Promise<void> {
     try {
-      if (!this._evolutionEngine) return;
+      if (!this._evolutionEngine) {
+        return;
+      }
       const metrics = getSharedMetricsCollector().compute();
       const best = await this._evolutionEngine.evolveWithMetrics(metrics);
       if (best) {
@@ -187,10 +197,14 @@ export class EvoDaemon {
 
   private async runReplicationCycle(): Promise<void> {
     try {
-      if (!this._evolutionEngine || !this._replicationEngine) return;
+      if (!this._evolutionEngine || !this._replicationEngine) {
+        return;
+      }
 
       const best = this._evolutionEngine.getBestIndividual();
-      if (!best || best.fitness < 0.7) return; // Only replicate genuinely good configs
+      if (!best || best.fitness < 0.7) {
+        return;
+      } // Only replicate genuinely good configs
 
       await this._replicationEngine.loadManifest();
       const clones = this._replicationEngine.getClones();
@@ -203,9 +217,7 @@ export class EvoDaemon {
         });
       } else {
         // Otherwise prune and make room for a new spawn
-        await this._replicationEngine.pruneWeakClones(
-          this._replicationEngine.getMaxClones() - 1,
-        );
+        await this._replicationEngine.pruneWeakClones(this._replicationEngine.getMaxClones() - 1);
         await this._replicationEngine.spawnClone(best.config, {
           generation: best.generation,
           fitness: best.fitness,
@@ -326,7 +338,9 @@ export async function isDaemonRunning(): Promise<boolean> {
   try {
     const pidStr = await fs.readFile(lockPath, "utf8");
     const pid = parseInt(pidStr.trim(), 10);
-    if (isNaN(pid)) return false;
+    if (isNaN(pid)) {
+      return false;
+    }
     process.kill(pid, 0);
     return true;
   } catch {

@@ -31,7 +31,7 @@ export class SelfRepairEngine {
 
   async loadConfig(): Promise<OpenClawConfig> {
     const snapshot = await readConfigFileSnapshot();
-    this.config = snapshot.config as OpenClawConfig;
+    this.config = snapshot.config;
     return this.config;
   }
 
@@ -215,7 +215,7 @@ export class SelfRepairEngine {
       if (!this.config!.agents!.defaults!.model) {
         this.config!.agents!.defaults!.model = {};
       }
-      this.config!.agents!.defaults!.model!.fallbacks = fallbacks;
+      this.config!.agents!.defaults!.model.fallbacks = fallbacks;
 
       this.repairHistory.push({
         type: "add_fallbacks",
@@ -234,7 +234,7 @@ export class SelfRepairEngine {
       if (!this.config!.agents!.defaults!.memorySearch) {
         this.config!.agents!.defaults!.memorySearch = {};
       }
-      this.config!.agents!.defaults!.memorySearch!.enabled = true;
+      this.config!.agents!.defaults!.memorySearch.enabled = true;
 
       this.repairHistory.push({
         type: "enable_memory",
@@ -253,7 +253,7 @@ export class SelfRepairEngine {
       if (!this.config!.agents!.defaults!.contextPruning) {
         this.config!.agents!.defaults!.contextPruning = {};
       }
-      this.config!.agents!.defaults!.contextPruning!.mode = "cache-ttl";
+      this.config!.agents!.defaults!.contextPruning.mode = "cache-ttl";
 
       this.repairHistory.push({
         type: "enable_pruning",

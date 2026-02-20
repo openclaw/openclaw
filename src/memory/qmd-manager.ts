@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -15,6 +16,7 @@ import {
   type SessionFileEntry,
 } from "./session-files.js";
 import { requireNodeSqlite } from "./sqlite.js";
+import { applyTemporalDecayToHybridResults } from "./temporal-decay.js";
 import type {
   MemoryEmbeddingProbeResult,
   MemoryProviderStatus,
@@ -442,6 +444,7 @@ export class QmdMemoryManager implements MemorySearchManager {
         throw err instanceof Error ? err : new Error(String(err));
       }
     }
+
     const results: MemorySearchResult[] = [];
     for (const entry of parsed) {
       const doc = await this.resolveDocLocation(entry.docid);
@@ -451,10 +454,6 @@ export class QmdMemoryManager implements MemorySearchManager {
       const snippet = entry.snippet?.slice(0, this.qmd.limits.maxSnippetChars) ?? "";
       const lines = this.extractSnippetLines(snippet);
       const score = typeof entry.score === "number" ? entry.score : 0;
-      const minScore = opts?.minScore ?? 0;
-      if (score < minScore) {
-        continue;
-      }
       results.push({
         path: doc.rel,
         startLine: lines.startLine,
@@ -464,7 +463,17 @@ export class QmdMemoryManager implements MemorySearchManager {
         source: doc.source,
       });
     }
-    return this.clampResultsByInjectedChars(results.slice(0, limit));
+
+    const memorySettings = resolveMemorySearchConfig(this.cfg, this.agentId);
+    const decayed = await applyTemporalDecayToHybridResults({
+      results,
+      temporalDecay: memorySettings?.query.hybrid.temporalDecay,
+      workspaceDir: this.workspaceDir,
+    });
+
+    const finalResults = decayed.filter((r) => r.score >= (opts?.minScore ?? 0)).slice(0, limit);
+
+    return this.clampResultsByInjectedChars(finalResults);
   }
 
   async sync(params?: {

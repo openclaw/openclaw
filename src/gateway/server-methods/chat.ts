@@ -9,6 +9,7 @@ import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.j
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
+import { sanitizeChatInput } from "../../security/sanitization.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import {
@@ -19,7 +20,7 @@ import {
   isChatStopCommandText,
   resolveChatRunExpiresAtMs,
 } from "../chat-abort.js";
-import { type ChatImageContent, parseMessageWithAttachments } from "../chat-attachments.js";
+import { parseMessageWithAttachments, type ChatImageContent } from "../chat-attachments.js";
 import { stripEnvelopeFromMessages } from "../chat-sanitize.js";
 import { GATEWAY_CLIENT_CAPS, hasGatewayClientCap } from "../protocol/client-info.js";
 import {
@@ -83,7 +84,9 @@ export function sanitizeChatSendMessageInput(
   if (normalized.includes("\u0000")) {
     return { ok: false, error: "message must not contain null bytes" };
   }
-  return { ok: true, message: stripDisallowedChatControlChars(normalized) };
+  const stripped = stripDisallowedChatControlChars(normalized);
+  const sanitized = sanitizeChatInput(stripped);
+  return { ok: true, message: sanitized };
 }
 
 function truncateChatHistoryText(text: string): { text: string; truncated: boolean } {
@@ -1030,6 +1033,8 @@ export const chatHandlers: GatewayRequestHandlers = {
       label?: string;
     };
 
+    const sanitizedMessage = sanitizeChatInput(p.message);
+
     // Load session to find transcript file
     const rawSessionKey = p.sessionKey;
     const { cfg, storePath, entry } = loadSessionEntry(rawSessionKey);
@@ -1040,7 +1045,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
 
     const appended = appendAssistantTranscriptMessage({
-      message: p.message,
+      message: sanitizedMessage,
       label: p.label,
       sessionId,
       storePath,

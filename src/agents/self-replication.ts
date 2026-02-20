@@ -156,7 +156,7 @@ export class SelfReplicationEngine {
     }
 
     // Sort descending by fitness — worst at the end
-    const sorted = [...this.manifest.clones].sort((a, b) => b.fitness - a.fitness);
+    const sorted = [...this.manifest.clones].toSorted((a, b) => b.fitness - a.fitness);
     const toRemove = sorted.slice(keepCount);
     const toKeep = sorted.slice(0, keepCount);
 
@@ -180,7 +180,9 @@ export class SelfReplicationEngine {
   async loadCloneConfig(cloneId: string): Promise<OpenClawConfig | null> {
     await this.loadManifest();
     const clone = this.manifest.clones.find((c) => c.id === cloneId);
-    if (!clone) return null;
+    if (!clone) {
+      return null;
+    }
     try {
       const raw = await fs.readFile(path.join(clone.dir, "config.json"), "utf8");
       return JSON.parse(raw) as OpenClawConfig;
@@ -195,11 +197,15 @@ export class SelfReplicationEngine {
    */
   async promotesBestClone(): Promise<CloneRecord | null> {
     await this.loadManifest();
-    if (this.manifest.clones.length === 0) return null;
+    if (this.manifest.clones.length === 0) {
+      return null;
+    }
 
-    const best = [...this.manifest.clones].sort((a, b) => b.fitness - a.fitness)[0];
+    const best = [...this.manifest.clones].toSorted((a, b) => b.fitness - a.fitness)[0];
     const bestConfig = await this.loadCloneConfig(best.id);
-    if (!bestConfig) return null;
+    if (!bestConfig) {
+      return null;
+    }
 
     const primaryDir = resolveOpenClawAgentDir();
     await fs.mkdir(primaryDir, { recursive: true, mode: 0o700 });
@@ -217,8 +223,10 @@ export class SelfReplicationEngine {
   }
 
   getBestClone(): CloneRecord | null {
-    if (this.manifest.clones.length === 0) return null;
-    return [...this.manifest.clones].sort((a, b) => b.fitness - a.fitness)[0];
+    if (this.manifest.clones.length === 0) {
+      return null;
+    }
+    return [...this.manifest.clones].toSorted((a, b) => b.fitness - a.fitness)[0];
   }
 
   getMaxClones(): number {
