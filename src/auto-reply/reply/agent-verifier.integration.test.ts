@@ -310,6 +310,51 @@ describe("agent verifier integration", () => {
     expect(payloads.some((p) => p?.text?.includes("intermediate analysis"))).toBe(true);
   });
 
+  it("verifyAll: true verifies even when no trigger keywords match", async () => {
+    state.runAgentTurnWithFallbackMock.mockResolvedValueOnce(
+      makeSuccessOutcome([{ text: "Here is some intermediate analysis of the problem." }]),
+    );
+    state.verifyAgentResponseMock.mockResolvedValueOnce({ passed: true });
+
+    const { run } = createVerifierRun({
+      config: verifierEnabledConfig({ verifyAll: true }),
+    });
+    const result = await run();
+
+    expect(state.verifyAgentResponseMock).toHaveBeenCalledTimes(1);
+    const payloads = Array.isArray(result) ? result : [result];
+    expect(payloads.some((p) => p?.text?.includes("intermediate analysis"))).toBe(true);
+    expect(getEmittedPhases()).toContain("verification_pass");
+  });
+
+  it("verifyAll: true retries on failure even without trigger keywords", async () => {
+    state.runAgentTurnWithFallbackMock
+      .mockResolvedValueOnce(makeSuccessOutcome([{ text: "Here is my analysis of the codebase." }]))
+      .mockResolvedValueOnce(
+        makeSuccessOutcome([{ text: "Updated analysis with deeper coverage." }]),
+      );
+
+    state.verifyAgentResponseMock
+      .mockResolvedValueOnce({ passed: false, feedback: "Too shallow" })
+      .mockResolvedValueOnce({ passed: true });
+
+    const { run } = createVerifierRun({
+      config: verifierEnabledConfig({ verifyAll: true }),
+    });
+    const result = await run();
+
+    expect(state.runAgentTurnWithFallbackMock).toHaveBeenCalledTimes(2);
+    expect(state.verifyAgentResponseMock).toHaveBeenCalledTimes(2);
+
+    const payloads = Array.isArray(result) ? result : [result];
+    expect(payloads.some((p) => p?.text?.includes("deeper coverage"))).toBe(true);
+
+    const phases = getEmittedPhases();
+    expect(phases).toContain("verification_fail");
+    expect(phases).toContain("verification_retry");
+    expect(phases).toContain("verification_pass");
+  });
+
   // Abort fires during verify. The current iteration completes (including one retry),
   // then the abort check at the top of the next iteration breaks the loop.
   it("delivers current response when abort signal fires during verification", async () => {

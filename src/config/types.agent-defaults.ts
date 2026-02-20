@@ -125,6 +125,8 @@ export type CliBackendConfig = {
 export type AgentVerifierConfig = {
   /** Enable the verifier (default: false). */
   enabled?: boolean;
+  /** Verify every response regardless of trigger keywords (default: false). */
+  verifyAll?: boolean;
   /** Verifier model reference (e.g. "anthropic/claude-sonnet-4-5"). */
   model?: string;
   /** Max attempts including original (default: 3). */

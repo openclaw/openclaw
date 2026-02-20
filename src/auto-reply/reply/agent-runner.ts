@@ -451,6 +451,7 @@ export async function runReplyAgent(params: {
         .map((p) => p.text)
         .join("\n");
 
+      const verifyAll = verifierConfig.verifyAll === true;
       const triggerKeywords = verifierConfig.triggerKeywords ?? [
         "done",
         "completed",
@@ -459,14 +460,14 @@ export async function runReplyAgent(params: {
         "here you go",
       ];
 
-      if (responseText && shouldVerifyResponse(responseText, triggerKeywords)) {
+      if (responseText && (verifyAll || shouldVerifyResponse(responseText, triggerKeywords))) {
         verificationAttempted = true;
         const maxAttempts = verifierConfig.maxAttempts ?? 3;
         const verifierModel = verifierConfig.model ?? defaultModel;
         const timeoutMs = (verifierConfig.timeoutSeconds ?? 30) * 1000;
 
         defaultRuntime.log?.(
-          `[verifier] triggered — verifying response with ${verifierModel} (max ${maxAttempts} attempts)`,
+          `[verifier] ${verifyAll ? "verifyAll" : "keyword-triggered"} — verifying response with ${verifierModel} (max ${maxAttempts} attempts)`,
         );
         emitAgentEvent({
           runId,
