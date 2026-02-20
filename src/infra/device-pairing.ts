@@ -152,59 +152,28 @@ function mergeScopes(...items: Array<string[] | undefined>): string[] | undefine
   return [...scopes];
 }
 
-function equalOptionalStringArray(a: string[] | undefined, b: string[] | undefined): boolean {
-  if (!a && !b) {
-    return true;
-  }
-  if (!a || !b || a.length !== b.length) {
-    return false;
-  }
-  for (let i = 0; i < a.length; i += 1) {
-    if (a[i] !== b[i]) {
-      return false;
-    }
-  }
-  return true;
-}
-
 function mergePendingDevicePairingRequest(
   existing: DevicePairingPendingRequest,
-  incoming: Omit<DevicePairingPendingRequest, "requestId" | "ts" | "isRepair"> & {
-    isRepair: boolean;
-  },
-): { request: DevicePairingPendingRequest; changed: boolean } {
+  incoming: Omit<DevicePairingPendingRequest, "requestId" | "ts" | "isRepair">,
+  isRepair: boolean,
+): DevicePairingPendingRequest {
   const existingRole = normalizeRole(existing.role);
   const incomingRole = normalizeRole(incoming.role);
-  const nextRole = existingRole ?? incomingRole ?? undefined;
-  const nextRoles = mergeRoles(existing.roles, existing.role, incoming.role);
-  const nextScopes = mergeScopes(existing.scopes, incoming.scopes);
-  const nextSilent = Boolean(existing.silent && incoming.silent);
-  const nextRequest: DevicePairingPendingRequest = {
+  return {
     ...existing,
     displayName: incoming.displayName ?? existing.displayName,
     platform: incoming.platform ?? existing.platform,
     clientId: incoming.clientId ?? existing.clientId,
     clientMode: incoming.clientMode ?? existing.clientMode,
-    role: nextRole,
-    roles: nextRoles,
-    scopes: nextScopes,
+    role: existingRole ?? incomingRole ?? undefined,
+    roles: mergeRoles(existing.roles, existing.role, incoming.role),
+    scopes: mergeScopes(existing.scopes, incoming.scopes),
     remoteIp: incoming.remoteIp ?? existing.remoteIp,
-    silent: nextSilent,
-    isRepair: existing.isRepair || incoming.isRepair,
+    // If either request is interactive, keep the pending request visible for approval.
+    silent: Boolean(existing.silent && incoming.silent),
+    isRepair: existing.isRepair || isRepair,
     ts: Date.now(),
   };
-  const changed =
-    nextRequest.displayName !== existing.displayName ||
-    nextRequest.platform !== existing.platform ||
-    nextRequest.clientId !== existing.clientId ||
-    nextRequest.clientMode !== existing.clientMode ||
-    nextRequest.role !== existing.role ||
-    !equalOptionalStringArray(nextRequest.roles, existing.roles) ||
-    !equalOptionalStringArray(nextRequest.scopes, existing.scopes) ||
-    nextRequest.remoteIp !== existing.remoteIp ||
-    nextRequest.silent !== existing.silent ||
-    nextRequest.isRepair !== existing.isRepair;
-  return { request: nextRequest, changed };
 }
 
 function newToken() {
@@ -276,15 +245,10 @@ export async function requestDevicePairing(
       (pending) => pending.deviceId === deviceId,
     );
     if (existing) {
-      const merged = mergePendingDevicePairingRequest(existing, {
-        ...req,
-        isRepair,
-      });
-      state.pendingById[existing.requestId] = merged.request;
-      if (merged.changed) {
-        await persistState(state, baseDir);
-      }
-      return { status: "pending" as const, request: merged.request, created: false };
+      const merged = mergePendingDevicePairingRequest(existing, req, isRepair);
+      state.pendingById[existing.requestId] = merged;
+      await persistState(state, baseDir);
+      return { status: "pending" as const, request: merged, created: false };
     }
 
     const request: DevicePairingPendingRequest = {

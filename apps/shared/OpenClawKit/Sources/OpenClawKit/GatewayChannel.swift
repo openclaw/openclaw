@@ -85,9 +85,9 @@ public struct GatewayConnectOptions: Sendable {
     public var clientId: String
     public var clientMode: String
     public var clientDisplayName: String?
-    // When false, the connection omits the signed device identity payload.
-    // This is useful for secondary "operator" connections where the shared gateway token
-    // should authorize without triggering device pairing flows.
+    // When false, the connection omits the signed device identity payload and cannot use
+    // device-scoped auth (role/scope upgrades will require pairing). Keep this true for
+    // role/scoped sessions such as operator UI clients.
     public var includeDeviceIdentity: Bool
 
     public init(
