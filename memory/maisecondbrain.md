@@ -1,3 +1,13 @@
+---
+type: project-memory
+project: MAISECONDBRAIN
+tags: [knowledge-graph, second-brain, mnemo, obsidian]
+related:
+  - "[[maioss|MAIOSS - OSS 보안]]"
+  - "[[maitutor|MAITUTOR - AI 튜터]]"
+  - "[[tech-intelligence|기술 인텔리전스]]"
+---
+
 # MAISECONDBRAIN (Mnemo)
 
 - **시작일:** 2026-02-20
@@ -33,40 +43,44 @@ Mnemo
 
 ### BOT Suite 시너지
 
-| BOT | Mnemo 연동 효과 |
-|-----|----------------|
-| BOTALKS | 대화 히스토리 → 지식그래프 → 맥락 기억 강화 |
-| BOTCON | 예약 패턴/선호도 → 그래프 → 개인화 추천 |
-| BOTTOK | TikTok 댓글 분석 → 지식 축적 → 트렌드 예측 |
-| BOTTUTOR | 학습 진도 → 그래프 관리 → 망각 곡선 복습 |
+| BOT      | Mnemo 연동 효과                             |
+| -------- | ------------------------------------------- |
+| BOTALKS  | 대화 히스토리 → 지식그래프 → 맥락 기억 강화 |
+| BOTCON   | 예약 패턴/선호도 → 그래프 → 개인화 추천     |
+| BOTTOK   | TikTok 댓글 분석 → 지식 축적 → 트렌드 예측  |
+| BOTTUTOR | 학습 진도 → 그래프 관리 → 망각 곡선 복습    |
 
 ## 수익화 5채널
 
-| # | 채널 | 가격 | 시기 |
-|---|------|------|------|
-| 1 | Obsidian 프리미엄 플러그인 | $5/월 | Phase 2 (4-8주) |
-| 2 | clawhub 스킬 | 구독 | Phase 3 (8-12주) |
-| 3 | BOTMEMO 앱 (BOT Suite #7) | ₩5,900/월 | Phase 3 (8-12주) |
-| 4 | 교육 코스 | $49 | Phase 4 (12주+) |
-| 5 | Mnemo Cloud (SaaS) | $15/월 | Phase 4 (12주+) |
+| #   | 채널                       | 가격      | 시기             |
+| --- | -------------------------- | --------- | ---------------- |
+| 1   | Obsidian 프리미엄 플러그인 | $5/월     | Phase 2 (4-8주)  |
+| 2   | clawhub 스킬               | 구독      | Phase 3 (8-12주) |
+| 3   | BOTMEMO 앱 (BOT Suite #7)  | ₩5,900/월 | Phase 3 (8-12주) |
+| 4   | 교육 코스                  | $49       | Phase 4 (12주+)  |
+| 5   | Mnemo Cloud (SaaS)         | $15/월    | Phase 4 (12주+)  |
 
 목표: 6개월 ~$825/월 → 12개월 ~$4,845/월
 
 ## 개발 로드맵
 
 ### Phase 1: MAIBOT 적용 (4주) ← 현재
+
 - Sprint 1 (W1-2): 볼트 파서 + NetworkX 그래프 빌더
 - Sprint 2 (W3-4): 임베딩 + GraphRAG 쿼리 + MAIBOT 연동
 
 ### Phase 2: Obsidian 플러그인 (4-8주)
+
 - Obsidian Plugin API (TypeScript)
 - 인라인 질의 UI + 관계 시각화
 
 ### Phase 3: clawhub + BOTMEMO (8-12주)
+
 - clawhub 스킬 배포
 - BOTMEMO 앱 (React Native, BOTALKS 인프라 공유)
 
 ### Phase 4: Cloud + 교육 (12주+)
+
 - Mnemo Cloud SaaS
 - 온라인 코스
 
@@ -106,13 +120,13 @@ Mnemo
 
 ## 문서 목록
 
-| 문서 | 내용 |
-|------|------|
-| A001-PRD.md | 제품 기획 전체 |
-| A002-경쟁분석.md | 7개 경쟁사 비교 |
-| A003-기술분석.md | 기술 스택 심층 |
-| A004-수익화-전략.md | 5채널 수익 + BOT Suite 시너지 + GTM |
-| D001-아키텍처-설계.md | 시스템 구성도 + API |
-| D002-온톨로지-스키마.md | 9개 엔티티 + 11개 관계 |
-| D003-노드링크-설계.md | 그래프 구조 + 옵시디언 적용법 |
-| I001-개발계획.md | Sprint 1-2 상세 + 마일스톤 |
+| 문서                    | 내용                                |
+| ----------------------- | ----------------------------------- |
+| A001-PRD.md             | 제품 기획 전체                      |
+| A002-경쟁분석.md        | 7개 경쟁사 비교                     |
+| A003-기술분석.md        | 기술 스택 심층                      |
+| A004-수익화-전략.md     | 5채널 수익 + BOT Suite 시너지 + GTM |
+| D001-아키텍처-설계.md   | 시스템 구성도 + API                 |
+| D002-온톨로지-스키마.md | 9개 엔티티 + 11개 관계              |
+| D003-노드링크-설계.md   | 그래프 구조 + 옵시디언 적용법       |
+| I001-개발계획.md        | Sprint 1-2 상세 + 마일스톤          |

@@ -1,3 +1,13 @@
+---
+type: project-memory
+project: MAIOSS
+tags: [security, oss, scanner, sbom, vulnerability]
+related:
+  - "[[maisecondbrain|MAISECONDBRAIN - 지식그래프]]"
+  - "[[maiax|MAIAX - 스마트제조]]"
+  - "[[tech-intelligence|기술 인텔리전스]]"
+---
+
 # 🔍 MAIOSS — Multi-source AI-powered OSS Scanner
 
 ## 개요

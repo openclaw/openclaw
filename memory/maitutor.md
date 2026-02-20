@@ -1,3 +1,12 @@
+---
+type: project-memory
+project: MAITUTOR
+tags: [education, ai-tutor, learning]
+related:
+  - "[[maisecondbrain|MAISECONDBRAIN - 지식그래프]]"
+  - "[[maibotalks|MAIBOTALKS - 음성대화]]"
+---
+
 # MAITUTOR
 
 - **시작일:** 2026-02-14

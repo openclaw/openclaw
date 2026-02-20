@@ -1,3 +1,11 @@
+---
+type: memory
+project: MAIBOT
+tags: [preferences, communication, user-profile]
+related:
+  - "[[maibot-commands|MAIBOT 명령어]]"
+---
+
 # 지니님 선호사항 & 커뮤니케이션
 
 ## 대화 스타일

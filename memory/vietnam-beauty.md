@@ -1,3 +1,13 @@
+---
+type: project-memory
+project: MAIBEAUTY
+tags: [vietnam, cosmetics, BnF, ecommerce, beauty]
+related:
+  - "[[maitok|MAITOK - TikTok 마케팅]]"
+  - "[[maistar7|MAISTAR7 - 인력 매칭]]"
+  - "[[maicon|MAICON - 로컬 서비스]]"
+---
+
 # 🇻🇳 베트남 호치민 화장품 사업 (BnF)
 
 ## 개요
