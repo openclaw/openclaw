@@ -123,7 +123,13 @@ export async function initSessionState(params: {
   const sessionScope = sessionCfg?.scope ?? "per-sender";
   const storePath = resolveStorePath(sessionCfg?.store, { agentId });
 
-  const sessionStore: Record<string, SessionEntry> = loadSessionStore(storePath);
+  // CRITICAL: Skip cache to ensure fresh data when resolving session identity.
+  // Stale cache (especially with multiple gateway processes or on Windows where
+  // mtime granularity may miss rapid writes) can cause incorrect sessionId
+  // generation, leading to orphaned transcript files. See #17971.
+  const sessionStore: Record<string, SessionEntry> = loadSessionStore(storePath, {
+    skipCache: true,
+  });
   let sessionKey: string | undefined;
   let sessionEntry: SessionEntry;
 
@@ -245,6 +251,9 @@ export async function initSessionState(params: {
     // When a reset trigger (/new, /reset) starts a new session, carry over
     // user-set behavior overrides (verbose, thinking, reasoning, ttsAuto)
     // so the user doesn't have to re-enable them every time.
+    // Model/provider overrides are intentionally NOT carried over — /new should
+    // start fresh on the configured default model. Users can combine
+    // `/new <model>` to both reset and switch (handled by applyResetModelOverride).
     if (resetTriggered && entry) {
       persistedThinking = entry.thinkingLevel;
       persistedVerbose = entry.verboseLevel;
@@ -258,7 +267,10 @@ export async function initSessionState(params: {
   const lastChannelRaw = (ctx.OriginatingChannel as string | undefined) || baseEntry?.lastChannel;
   const lastToRaw = ctx.OriginatingTo || ctx.To || baseEntry?.lastTo;
   const lastAccountIdRaw = ctx.AccountId || baseEntry?.lastAccountId;
-  const lastThreadIdRaw = ctx.MessageThreadId || baseEntry?.lastThreadId;
+  // Only fall back to persisted threadId for thread sessions.  Non-thread
+  // sessions (e.g. DM without topics) must not inherit a stale threadId from a
+  // previous interaction that happened inside a topic/thread.
+  const lastThreadIdRaw = ctx.MessageThreadId || (isThread ? baseEntry?.lastThreadId : undefined);
   const deliveryFields = normalizeSessionDeliveryFields({
     deliveryContext: {
       channel: lastChannelRaw,
