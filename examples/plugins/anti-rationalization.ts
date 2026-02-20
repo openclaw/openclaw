@@ -1,7 +1,7 @@
 /**
  * Anti-Rationalization Plugin
  *
- * Detects when the agent is rationalizing incomplete work and forces it to continue.
+ * Uses an LLM (Haiku) to detect when the agent is rationalizing incomplete work.
  *
  * Patterns caught:
  * - "These issues are pre-existing / out of scope"
@@ -15,86 +15,93 @@
  */
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { createModel } from "@mariozechner/pi-ai";
 
-const RATIONALIZATION_PATTERNS = [
-  /\b(pre-existing|out of scope|beyond the scope)\b/i,
-  /\btoo many (issues|errors|problems|failures)\b/i,
-  /\b(leave|defer|save) (this|that|these|those) for (a |the )?(follow-?up|later|future)\b/i,
-  /\bI'll (skip|defer|leave|ignore)\b/i,
-  /\b(can't|cannot|won't) (fix|address|resolve) (all|everything|these)\b/i,
-  /\b(should|would|could) be (fixed|addressed|resolved) separately\b/i,
-];
+const REVIEW_PROMPT = `Review the assistant's final response for signs of rationalizing incomplete work.
 
-const EXCUSE_PHRASES = [
-  "as mentioned",
-  "as noted",
-  "as discussed",
-  "not directly related",
-  "outside my scope",
-  "require manual",
-  "beyond what I can",
-];
+Common rationalization patterns:
+- Claiming issues are "pre-existing" or "out of scope" to avoid fixing them
+- Saying there are "too many issues" to address all of them  
+- Deferring work to a "follow-up" that was not requested
+- Listing problems without fixing them and calling that "done"
+- Skipping test/lint failures with excuses
+- Asking "want me to try again?" when the task is obviously incomplete
+
+Respond with JSON only:
+{
+  "incomplete": true/false,
+  "reason": "Brief explanation of why the work is incomplete (if true)",
+  "confidence": 0-100 (how confident you are in this judgment)
+}
+
+Assistant's response:
+"""
+{{ASSISTANT_MESSAGE}}
+"""
+
+Your judgment (JSON only):`;
 
 interface JudgmentResult {
   incomplete: boolean;
   reason?: string;
-  patterns?: string[];
+  confidence?: number;
 }
 
-function reviewForRationalization(message: string): JudgmentResult {
-  const matchedPatterns: string[] = [];
+async function reviewWithLLM(
+  message: string,
+  modelId: string,
+  config: any,
+  logger: any,
+): Promise<JudgmentResult | null> {
+  try {
+    const prompt = REVIEW_PROMPT.replace("{{ASSISTANT_MESSAGE}}", message);
 
-  // Check regex patterns
-  for (const pattern of RATIONALIZATION_PATTERNS) {
-    if (pattern.test(message)) {
-      matchedPatterns.push(pattern.toString());
-    }
+    // Create model instance from config
+    const model = createModel(modelId, config);
+
+    // Call model for judgment
+    const response = await model.generate({
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0,
+    });
+
+    // Extract text from response
+    const text = response.content?.[0]?.text || response.text || "";
+    
+    // Parse JSON response
+    const cleaned = text.trim().replace(/^```json\s*/, "").replace(/\s*```$/, "");
+    const judgment: JudgmentResult = JSON.parse(cleaned);
+
+    logger.debug(
+      `[anti-rationalization] LLM judgment: incomplete=${judgment.incomplete} confidence=${judgment.confidence}`,
+    );
+
+    return judgment;
+  } catch (err) {
+    logger.warn(`[anti-rationalization] LLM review failed: ${String(err)}`);
+    return null;
   }
+}
 
-  // Check excuse phrases
-  for (const phrase of EXCUSE_PHRASES) {
-    if (message.toLowerCase().includes(phrase)) {
-      matchedPatterns.push(`phrase: "${phrase}"`);
-    }
+function extractMessageText(msg: AgentMessage): string {
+  if (typeof msg.content === "string") {
+    return msg.content;
+  } else if (Array.isArray(msg.content)) {
+    return msg.content
+      .filter((c: any) => c.type === "text")
+      .map((c: any) => c.text)
+      .join("\n");
   }
-
-  // Additional heuristics
-  const hasListing = /^[-*]\s+/m.test(message); // Has bullet points
-  const hasCodeBlock = /```/g.test(message);
-  const listCount = (message.match(/^[-*]\s+/gm) || []).length;
-
-  // If message has many bullet points but no code changes, likely just listing issues
-  if (hasListing && !hasCodeBlock && listCount > 5) {
-    matchedPatterns.push("heuristic: lists many issues without code");
-  }
-
-  // Check for "want me to try again?" pattern
-  if (/\b(want|should) (me|I) (to )?(try again|continue|keep going)\??/i.test(message)) {
-    matchedPatterns.push("heuristic: asking permission when task is incomplete");
-  }
-
-  if (matchedPatterns.length === 0) {
-    return { incomplete: false };
-  }
-
-  // Build specific reason
-  const patternList = matchedPatterns
-    .slice(0, 3)
-    .map((p) => `  - ${p}`)
-    .join("\n");
-  const reason = `You are rationalizing incomplete work. Detected patterns:\n${patternList}\n\nGo back and finish the task properly.`;
-
-  return {
-    incomplete: true,
-    reason,
-    patterns: matchedPatterns,
-  };
+  return "";
 }
 
 export default function antiRationalizationPlugin(api: OpenClawPluginApi) {
   const config = api.pluginConfig;
   const enabled = config?.enabled !== false;
-  const aggressive = config?.aggressive === true;
+  const modelId = (config?.model as string) || "anthropic/claude-haiku-4-5-20251001";
+  const confidenceThreshold = (config?.confidenceThreshold as number) || 70;
+  const fallbackToRegex = config?.fallbackToRegex !== false;
 
   if (!enabled) {
     api.logger.info("[anti-rationalization] Disabled via config");
@@ -115,42 +122,50 @@ export default function antiRationalizationPlugin(api: OpenClawPluginApi) {
       return;
     }
 
-    // Extract text content
-    let messageText = "";
-    if (typeof lastMsg.content === "string") {
-      messageText = lastMsg.content;
-    } else if (Array.isArray(lastMsg.content)) {
-      messageText = lastMsg.content
-        .filter((c: any) => c.type === "text")
-        .map((c: any) => c.text)
-        .join("\n");
-    }
+    const messageText = extractMessageText(lastMsg);
 
     if (!messageText || messageText.length < 20) {
       api.logger.debug("[anti-rationalization] Message too short to review");
       return;
     }
 
-    // Review for rationalization
-    const judgment = reviewForRationalization(messageText);
+    // Review with LLM using OpenClaw's config
+    const judgment = await reviewWithLLM(messageText, modelId, api.config, api.logger);
 
-    if (judgment.incomplete) {
-      api.logger.warn(
-        `[anti-rationalization] Detected rationalization (${judgment.patterns?.length} patterns)`,
-      );
-
-      if (aggressive) {
-        // In aggressive mode, always force continuation
-        ctx.injectMessage?.(judgment.reason || "Continue with the task.");
-      } else {
-        // In normal mode, only continue if multiple patterns detected
-        if ((judgment.patterns?.length || 0) >= 2) {
-          ctx.injectMessage?.(judgment.reason || "Continue with the task.");
-        } else {
-          api.logger.info(
-            "[anti-rationalization] Single pattern detected, not forcing continuation (set aggressive: true to override)",
+    if (!judgment) {
+      if (fallbackToRegex) {
+        api.logger.info("[anti-rationalization] LLM review failed, falling back to regex");
+        // Simple regex fallback
+        if (
+          /\b(pre-existing|out of scope|too many issues|leave.*for.*follow-?up)\b/i.test(
+            messageText,
+          )
+        ) {
+          ctx.injectMessage?.(
+            "You appear to be rationalizing incomplete work. Please finish the task properly.",
           );
         }
+      }
+      return;
+    }
+
+    if (judgment.incomplete) {
+      const confidence = judgment.confidence || 0;
+
+      if (confidence >= confidenceThreshold) {
+        const reason =
+          judgment.reason ||
+          "You are rationalizing incomplete work. Go back and finish the task properly.";
+
+        api.logger.warn(
+          `[anti-rationalization] Forcing continuation (confidence: ${confidence}%)`,
+        );
+
+        ctx.injectMessage?.(reason);
+      } else {
+        api.logger.info(
+          `[anti-rationalization] Low confidence (${confidence}%), not forcing continuation (threshold: ${confidenceThreshold}%)`,
+        );
       }
     } else {
       api.logger.debug("[anti-rationalization] Work appears complete");
@@ -158,6 +173,6 @@ export default function antiRationalizationPlugin(api: OpenClawPluginApi) {
   });
 
   api.logger.info(
-    `[anti-rationalization] Loaded (aggressive: ${aggressive}, patterns: ${RATIONALIZATION_PATTERNS.length})`,
+    `[anti-rationalization] Loaded (model: ${modelId}, confidence threshold: ${confidenceThreshold}%)`,
   );
 }
