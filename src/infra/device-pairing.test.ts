@@ -55,6 +55,38 @@ describe("device pairing tokens", () => {
     expect(second.request.requestId).toBe(first.request.requestId);
   });
 
+  test("merges pending roles/scopes for the same device before approval", async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
+    const first = await requestDevicePairing(
+      {
+        deviceId: "device-1",
+        publicKey: "public-key-1",
+        role: "node",
+        scopes: [],
+      },
+      baseDir,
+    );
+    const second = await requestDevicePairing(
+      {
+        deviceId: "device-1",
+        publicKey: "public-key-1",
+        role: "operator",
+        scopes: ["operator.read", "operator.write"],
+      },
+      baseDir,
+    );
+
+    expect(second.created).toBe(false);
+    expect(second.request.requestId).toBe(first.request.requestId);
+    expect(second.request.roles).toEqual(["node", "operator"]);
+    expect(second.request.scopes).toEqual(["operator.read", "operator.write"]);
+
+    await approveDevicePairing(first.request.requestId, baseDir);
+    const paired = await getPairedDevice("device-1", baseDir);
+    expect(paired?.roles).toEqual(["node", "operator"]);
+    expect(paired?.scopes).toEqual(["operator.read", "operator.write"]);
+  });
+
   test("generates base64url device tokens with 256-bit entropy output length", async () => {
     const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
     await setupPairedOperatorDevice(baseDir, ["operator.admin"]);

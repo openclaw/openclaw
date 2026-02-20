@@ -6,7 +6,6 @@ import {
   pruneExpiredPending,
   readJsonFile,
   resolvePairingPaths,
-  upsertPendingPairingRequest,
   writeJsonAtomic,
 } from "./pairing-files.js";
 import { generatePairingToken, verifyPairingToken } from "./pairing-token.js";
@@ -153,6 +152,61 @@ function mergeScopes(...items: Array<string[] | undefined>): string[] | undefine
   return [...scopes];
 }
 
+function equalOptionalStringArray(a: string[] | undefined, b: string[] | undefined): boolean {
+  if (!a && !b) {
+    return true;
+  }
+  if (!a || !b || a.length !== b.length) {
+    return false;
+  }
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i] !== b[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function mergePendingDevicePairingRequest(
+  existing: DevicePairingPendingRequest,
+  incoming: Omit<DevicePairingPendingRequest, "requestId" | "ts" | "isRepair"> & {
+    isRepair: boolean;
+  },
+): { request: DevicePairingPendingRequest; changed: boolean } {
+  const existingRole = normalizeRole(existing.role);
+  const incomingRole = normalizeRole(incoming.role);
+  const nextRole = existingRole ?? incomingRole ?? undefined;
+  const nextRoles = mergeRoles(existing.roles, existing.role, incoming.role);
+  const nextScopes = mergeScopes(existing.scopes, incoming.scopes);
+  const nextSilent = Boolean(existing.silent && incoming.silent);
+  const nextRequest: DevicePairingPendingRequest = {
+    ...existing,
+    displayName: incoming.displayName ?? existing.displayName,
+    platform: incoming.platform ?? existing.platform,
+    clientId: incoming.clientId ?? existing.clientId,
+    clientMode: incoming.clientMode ?? existing.clientMode,
+    role: nextRole,
+    roles: nextRoles,
+    scopes: nextScopes,
+    remoteIp: incoming.remoteIp ?? existing.remoteIp,
+    silent: nextSilent,
+    isRepair: existing.isRepair || incoming.isRepair,
+    ts: Date.now(),
+  };
+  const changed =
+    nextRequest.displayName !== existing.displayName ||
+    nextRequest.platform !== existing.platform ||
+    nextRequest.clientId !== existing.clientId ||
+    nextRequest.clientMode !== existing.clientMode ||
+    nextRequest.role !== existing.role ||
+    !equalOptionalStringArray(nextRequest.roles, existing.roles) ||
+    !equalOptionalStringArray(nextRequest.scopes, existing.scopes) ||
+    nextRequest.remoteIp !== existing.remoteIp ||
+    nextRequest.silent !== existing.silent ||
+    nextRequest.isRepair !== existing.isRepair;
+  return { request: nextRequest, changed };
+}
+
 function newToken() {
   return generatePairingToken();
 }
@@ -217,29 +271,41 @@ export async function requestDevicePairing(
     if (!deviceId) {
       throw new Error("deviceId required");
     }
-
-    return await upsertPendingPairingRequest({
-      pendingById: state.pendingById,
-      isExisting: (pending) => pending.deviceId === deviceId,
-      isRepair: Boolean(state.pairedByDeviceId[deviceId]),
-      createRequest: (isRepair) => ({
-        requestId: randomUUID(),
-        deviceId,
-        publicKey: req.publicKey,
-        displayName: req.displayName,
-        platform: req.platform,
-        clientId: req.clientId,
-        clientMode: req.clientMode,
-        role: req.role,
-        roles: req.role ? [req.role] : undefined,
-        scopes: req.scopes,
-        remoteIp: req.remoteIp,
-        silent: req.silent,
+    const isRepair = Boolean(state.pairedByDeviceId[deviceId]);
+    const existing = Object.values(state.pendingById).find(
+      (pending) => pending.deviceId === deviceId,
+    );
+    if (existing) {
+      const merged = mergePendingDevicePairingRequest(existing, {
+        ...req,
         isRepair,
-        ts: Date.now(),
-      }),
-      persist: async () => await persistState(state, baseDir),
-    });
+      });
+      state.pendingById[existing.requestId] = merged.request;
+      if (merged.changed) {
+        await persistState(state, baseDir);
+      }
+      return { status: "pending" as const, request: merged.request, created: false };
+    }
+
+    const request: DevicePairingPendingRequest = {
+      requestId: randomUUID(),
+      deviceId,
+      publicKey: req.publicKey,
+      displayName: req.displayName,
+      platform: req.platform,
+      clientId: req.clientId,
+      clientMode: req.clientMode,
+      role: req.role,
+      roles: req.role ? [req.role] : undefined,
+      scopes: req.scopes,
+      remoteIp: req.remoteIp,
+      silent: req.silent,
+      isRepair,
+      ts: Date.now(),
+    };
+    state.pendingById[request.requestId] = request;
+    await persistState(state, baseDir);
+    return { status: "pending" as const, request, created: true };
   });
 }
 
