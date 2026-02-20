@@ -77,7 +77,7 @@ describe("approval timeout denial", () => {
       file: "/tmp/approvals.json",
       agent: { security: "allowlist", ask: "always", askFallback: "deny" },
       allowlist: [],
-    } as ReturnType<typeof resolveExecApprovals>);
+    } as unknown as ReturnType<typeof resolveExecApprovals>);
 
     vi.mocked(minSecurity).mockReturnValue("allowlist");
     vi.mocked(maxAsk).mockReturnValue("always");
@@ -86,7 +86,7 @@ describe("approval timeout denial", () => {
       allowlistSatisfied: false,
       allowlistMatches: [],
       segments: [],
-    } as ReturnType<typeof evaluateShellAllowlist>);
+    } as unknown as ReturnType<typeof evaluateShellAllowlist>);
     vi.mocked(requiresExecApproval).mockReturnValue(true);
     vi.mocked(requestExecApprovalDecision).mockResolvedValue(null);
 
@@ -119,7 +119,7 @@ describe("approval timeout denial", () => {
       file: "/tmp/approvals.json",
       agent: { security: "allowlist", ask: "always", askFallback: "allowlist" },
       allowlist: [],
-    } as ReturnType<typeof resolveExecApprovals>);
+    } as unknown as ReturnType<typeof resolveExecApprovals>);
 
     vi.mocked(minSecurity).mockReturnValue("allowlist");
     vi.mocked(maxAsk).mockReturnValue("always");
@@ -128,7 +128,7 @@ describe("approval timeout denial", () => {
       allowlistSatisfied: false,
       allowlistMatches: [],
       segments: [],
-    } as ReturnType<typeof evaluateShellAllowlist>);
+    } as unknown as ReturnType<typeof evaluateShellAllowlist>);
     vi.mocked(requiresExecApproval).mockReturnValue(true);
     vi.mocked(requestExecApprovalDecision).mockResolvedValue(null);
 
@@ -157,7 +157,7 @@ describe("approval timeout denial", () => {
       file: "/tmp/approvals.json",
       agent: { security: "allowlist", ask: "always", askFallback: "allowlist" },
       allowlist: [],
-    } as ReturnType<typeof resolveExecApprovals>);
+    } as unknown as ReturnType<typeof resolveExecApprovals>);
 
     vi.mocked(minSecurity).mockReturnValue("allowlist");
     vi.mocked(maxAsk).mockReturnValue("always");
@@ -166,7 +166,7 @@ describe("approval timeout denial", () => {
       allowlistSatisfied: true,
       allowlistMatches: [{ pattern: "/usr/bin/echo", type: "exact" }],
       segments: [{ resolution: { resolvedPath: "/usr/bin/echo" } }],
-    } as ReturnType<typeof evaluateShellAllowlist>);
+    } as unknown as ReturnType<typeof evaluateShellAllowlist>);
     vi.mocked(requiresExecApproval).mockReturnValue(true);
     vi.mocked(requestExecApprovalDecision).mockResolvedValue(null);
 
@@ -174,7 +174,7 @@ describe("approval timeout denial", () => {
     vi.mocked(runExecProcess).mockResolvedValue({
       session: mockSession,
       promise: Promise.resolve({ aggregated: "output", exitCode: 0, timedOut: false }),
-    } as Awaited<ReturnType<typeof runExecProcess>>);
+    } as unknown as Awaited<ReturnType<typeof runExecProcess>>);
 
     const { processGatewayAllowlist } = await import("./bash-tools.exec-host-gateway.js");
     await processGatewayAllowlist(makeDefaultParams());
@@ -202,7 +202,7 @@ describe("approval timeout denial", () => {
       file: "/tmp/approvals.json",
       agent: { security: "allowlist", ask: "always", askFallback: "deny" },
       allowlist: [],
-    } as ReturnType<typeof resolveExecApprovals>);
+    } as unknown as ReturnType<typeof resolveExecApprovals>);
 
     vi.mocked(minSecurity).mockReturnValue("allowlist");
     vi.mocked(maxAsk).mockReturnValue("always");
@@ -211,7 +211,7 @@ describe("approval timeout denial", () => {
       allowlistSatisfied: false,
       allowlistMatches: [],
       segments: [],
-    } as ReturnType<typeof evaluateShellAllowlist>);
+    } as unknown as ReturnType<typeof evaluateShellAllowlist>);
     vi.mocked(requiresExecApproval).mockReturnValue(true);
     vi.mocked(requestExecApprovalDecision).mockResolvedValue("deny");
 
