@@ -99,6 +99,28 @@ describe("applyCliProfileEnv", () => {
     expect(env.OPENCLAW_GATEWAY_PORT).toBeUndefined();
   });
 
+  it("clears inherited service env vars for profile isolation", () => {
+    // A running gateway sets these vars so its children can discover the parent's
+    // service. When a child starts a different profile's service, the inherited vars
+    // must not cause it to target the parent's launchd/systemd service.
+    const env: Record<string, string | undefined> = {
+      OPENCLAW_GATEWAY_PORT: "18789",
+      OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
+      OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service",
+      OPENCLAW_SERVICE_VERSION: "2026.1.0",
+    };
+    applyCliProfileEnv({
+      profile: "morebetter",
+      env,
+      homedir: () => "/home/peter",
+    });
+    expect(env.OPENCLAW_GATEWAY_PORT).toBeUndefined();
+    expect(env.OPENCLAW_LAUNCHD_LABEL).toBeUndefined();
+    expect(env.OPENCLAW_SYSTEMD_UNIT).toBeUndefined();
+    expect(env.OPENCLAW_SERVICE_VERSION).toBeUndefined();
+    expect(env.OPENCLAW_PROFILE).toBe("morebetter");
+  });
+
   it("uses OPENCLAW_HOME when deriving profile state dir", () => {
     const env: Record<string, string | undefined> = {
       OPENCLAW_HOME: "/srv/openclaw-home",

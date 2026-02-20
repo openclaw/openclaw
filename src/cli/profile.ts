@@ -110,16 +110,25 @@ export function applyCliProfileEnv(params: {
   }
 
   // Convenience only: fill defaults, never override explicit env values.
-  // Exception: OPENCLAW_GATEWAY_PORT is intentionally cleared for profile isolation.
-  // A parent process (e.g. an existing gateway) sets OPENCLAW_GATEWAY_PORT in the
-  // environment so its own port is discoverable by child processes. If a child then
-  // starts a second gateway under a *different* profile, that inherited port env var
-  // would cause resolveGatewayPort() to return the parent's port before it ever reads
-  // the profile's own config. Clearing it here ensures the profile-specific config (or
-  // DEFAULT_GATEWAY_PORT) takes precedence. The --port CLI flag is unaffected because
-  // it is passed as a portOverride that bypasses resolveGatewayPort entirely.
+  // Exception: several service-scoped env vars are intentionally cleared for profile
+  // isolation. A running gateway (or node daemon) sets these in the environment so its
+  // own child processes can discover the parent's port, launchd label, systemd unit,
+  // etc. When a child CLI starts a *different* profile's service, those inherited vars
+  // would cause the child to target the parent's service instead of the profile's own.
+  //
+  // OPENCLAW_GATEWAY_PORT — resolveGatewayPort() would return the parent's port.
+  // OPENCLAW_LAUNCHD_LABEL — resolveLaunchAgentLabel() would return the parent's
+  //   launchd label, causing `gateway start/stop/restart` to operate on the parent
+  //   gateway instead of the profile's own. This is the root cause of the "missing
+  //   tool result in session history" error: the child CLI restarts the *parent*
+  //   gateway mid-session, killing the running agent loop.
+  // OPENCLAW_SYSTEMD_UNIT — same problem on Linux (resolveSystemdServiceName).
+  // OPENCLAW_SERVICE_VERSION — harmless but misleading; let the child resolve its own.
   env.OPENCLAW_PROFILE = profile;
   delete env.OPENCLAW_GATEWAY_PORT;
+  delete env.OPENCLAW_LAUNCHD_LABEL;
+  delete env.OPENCLAW_SYSTEMD_UNIT;
+  delete env.OPENCLAW_SERVICE_VERSION;
 
   const stateDir = env.OPENCLAW_STATE_DIR?.trim() || resolveProfileStateDir(profile, env, homedir);
   if (!env.OPENCLAW_STATE_DIR?.trim()) {
