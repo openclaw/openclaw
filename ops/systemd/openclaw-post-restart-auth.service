@@ -1,0 +1,33 @@
+# OpenClaw Post-Restart Auth Check
+# Gateway 起動後に認証トークンの健全性を即座に確認する
+# - Gateway の /health エンドポイントが応答するまで待機
+# - models status --check で認証状態を検証 (exit 1=expired, 2=expiring)
+# - 問題があれば auth_monitor.py で Slack 通知
+#
+# NOTE: Adjust User, WorkingDirectory, ReadWritePaths, and EnvironmentFile
+# paths to match your deployment environment before installing this unit.
+[Unit]
+Description=OpenClaw Post-Restart Auth Check
+After=openclaw-gateway.service docker.service
+Requires=docker.service
+BindsTo=openclaw-gateway.service
+
+[Service]
+Type=oneshot
+# TODO: Change to your deployment user
+User=ubuntu
+# TODO: Change to your OpenClaw installation path
+WorkingDirectory=/home/ubuntu/openclaw
+SupplementaryGroups=docker
+# TODO: Adjust path to your auth-monitor env file (optional, dash prefix = no error if missing)
+EnvironmentFile=-/etc/openclaw/auth-monitor.env
+ExecStart=/bin/bash /home/ubuntu/openclaw/ops/post_restart_auth_check.sh
+TimeoutStartSec=180
+# Security: read-only + write only to ops dir for state
+NoNewPrivileges=yes
+ProtectSystem=strict
+# TODO: Must match WorkingDirectory + /ops
+ReadWritePaths=/home/ubuntu/openclaw/ops
+
+[Install]
+WantedBy=openclaw-gateway.service
