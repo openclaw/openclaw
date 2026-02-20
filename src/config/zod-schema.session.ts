@@ -120,6 +120,13 @@ export const MessagesSchema = z
   .strict()
   .optional();
 
+const CustomCommandSchema = z.object({
+  description: z.string().optional(),
+  exec: z.string(),
+  reply: z.boolean().optional(),
+  ownerOnly: z.boolean().optional(),
+});
+
 export const CommandsSchema = z
   .object({
     native: NativeCommandsSettingSchema.optional().default("auto"),
@@ -133,6 +140,7 @@ export const CommandsSchema = z
     useAccessGroups: z.boolean().optional(),
     ownerAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     allowFrom: ElevatedAllowFromSchema.optional(),
+    custom: z.record(z.string(), CustomCommandSchema).optional(),
   })
   .strict()
   .optional()
