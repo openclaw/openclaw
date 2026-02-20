@@ -264,6 +264,7 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     channel: createRuntimeChannel(),
     logging: createRuntimeLogging(),
     state: { resolveStateDir },
+    subagent: options.subagent ?? createUnavailableSubagentRuntime(),
   };
 }
 
@@ -315,7 +316,6 @@ function createRuntimeChannel(): PluginRuntime["channel"] {
       resolveMarkdownTableMode,
       convertMarkdownTables,
     },
-    subagent: options.subagent ?? createUnavailableSubagentRuntime(),
     reply: {
       dispatchReplyWithBufferedBlockDispatcher,
       createReplyDispatcherWithTyping,

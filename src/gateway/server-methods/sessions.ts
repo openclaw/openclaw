@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
+import type { GatewayClient, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { abortEmbeddedPiRun, waitForEmbeddedPiRunEnd } from "../../agents/pi-embedded.js";
 import { stopSubagentsForRequester } from "../../auto-reply/reply/abort.js";
@@ -45,10 +46,10 @@ import {
   type SessionsPatchResult,
   type SessionsPreviewEntry,
   type SessionsPreviewResult,
+  readSessionMessages,
 } from "../session-utils.js";
 import { applySessionsPatchToStore } from "../sessions-patch.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
-import type { GatewayClient, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 function requireSessionKey(key: unknown, respond: RespondFn): string | null {
@@ -479,6 +480,28 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
 
     respond(true, { ok: true, key: target.canonicalKey, deleted, archived }, undefined);
+  },
+  "sessions.get": ({ params, respond }) => {
+    const p = params;
+    const key = requireSessionKey(p.key ?? p.sessionKey, respond);
+    if (!key) {
+      return;
+    }
+    const limit =
+      typeof p.limit === "number" && Number.isFinite(p.limit)
+        ? Math.max(1, Math.floor(p.limit))
+        : 200;
+
+    const { target, storePath } = resolveGatewaySessionTargetFromKey(key);
+    const store = loadSessionStore(storePath);
+    const entry = target.storeKeys.map((k) => store[k]).find(Boolean);
+    if (!entry?.sessionId) {
+      respond(true, { messages: [] }, undefined);
+      return;
+    }
+    const allMessages = readSessionMessages(entry.sessionId, storePath, entry.sessionFile);
+    const messages = limit < allMessages.length ? allMessages.slice(-limit) : allMessages;
+    respond(true, { messages }, undefined);
   },
   "sessions.compact": async ({ params, respond }) => {
     if (!assertValidParams(params, validateSessionsCompactParams, "sessions.compact", respond)) {

@@ -38,7 +38,7 @@ describe("plugins.slots.contextEngine", () => {
     const result = OpenClawSchema.safeParse({
       plugins: {
         slots: {
-          contextEngine: "lcm",
+          contextEngine: "my-context-engine",
         },
       },
     });
