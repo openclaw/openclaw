@@ -180,6 +180,14 @@ describe("tts", () => {
       expect(output.voiceCompatible).toBe(true);
     });
 
+    it("uses Opus for WhatsApp", () => {
+      const output = resolveOutputFormat("whatsapp");
+      expect(output.openai).toBe("opus");
+      expect(output.elevenlabs).toBe("opus_48000_64");
+      expect(output.extension).toBe(".opus");
+      expect(output.voiceCompatible).toBe(true);
+    });
+
     it("uses MP3 for other channels", () => {
       const output = resolveOutputFormat("discord");
       expect(output.openai).toBe("mp3");
