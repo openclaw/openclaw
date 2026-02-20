@@ -267,7 +267,16 @@ export function createAgentEventHandler({
     error?: unknown,
   ) => {
     const text = chatRunState.buffers.get(clientRunId)?.trim() ?? "";
-    const shouldSuppressSilent = isSilentReplyText(text, SILENT_REPLY_TOKEN);
+    // Suppress partial silent tokens: if text is a prefix of NO_REPLY and has no spaces/punctuation,
+    // it's almost certainly a mid-stream truncation, not a real message.
+    const isPartialSilent =
+      text.length >= 2 &&
+      SILENT_REPLY_TOKEN.startsWith(text.toUpperCase()) &&
+      /^[A-Z_]+$/i.test(text);
+    const shouldSuppressSilent = isSilentReplyText(text, SILENT_REPLY_TOKEN) || isPartialSilent;
+    console.log(
+      `[DEBUG emitChatFinal] sessionKey=${sessionKey} text=${JSON.stringify(text)} suppress=${shouldSuppressSilent}`,
+    );
 
     chatRunState.buffers.delete(clientRunId);
     chatRunState.deltaSentAt.delete(clientRunId);
