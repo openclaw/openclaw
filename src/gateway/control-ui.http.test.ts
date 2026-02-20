@@ -34,7 +34,7 @@ describe("handleControlUiHttpRequest", () => {
     await withControlUiRoot({
       fn: async (tmp) => {
         const { res, setHeader } = makeMockHttpResponse();
-        const handled = handleControlUiHttpRequest(
+        const handled = await handleControlUiHttpRequest(
           { url: "/", method: "GET" } as IncomingMessage,
           res,
           {
@@ -58,7 +58,7 @@ describe("handleControlUiHttpRequest", () => {
       indexHtml: html,
       fn: async (tmp) => {
         const { res, end } = makeMockHttpResponse();
-        const handled = handleControlUiHttpRequest(
+        const handled = await handleControlUiHttpRequest(
           { url: "/", method: "GET" } as IncomingMessage,
           res,
           {
@@ -79,7 +79,7 @@ describe("handleControlUiHttpRequest", () => {
     await withControlUiRoot({
       fn: async (tmp) => {
         const { res, end } = makeMockHttpResponse();
-        const handled = handleControlUiHttpRequest(
+        const handled = await handleControlUiHttpRequest(
           { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
           res,
           {
@@ -104,7 +104,7 @@ describe("handleControlUiHttpRequest", () => {
     await withControlUiRoot({
       fn: async (tmp) => {
         const { res, end } = makeMockHttpResponse();
-        const handled = handleControlUiHttpRequest(
+        const handled = await handleControlUiHttpRequest(
           { url: `/openclaw${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`, method: "GET" } as IncomingMessage,
           res,
           {

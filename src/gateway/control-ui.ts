@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
@@ -89,11 +90,11 @@ function isValidAgentId(agentId: string): boolean {
   return /^[a-z0-9][a-z0-9_-]{0,63}$/i.test(agentId);
 }
 
-export function handleControlUiAvatarRequest(
+export async function handleControlUiAvatarRequest(
   req: IncomingMessage,
   res: ServerResponse,
   opts: { basePath?: string; resolveAvatar: (agentId: string) => ControlUiAvatarResolution },
-): boolean {
+): Promise<boolean> {
   const urlRaw = req.url;
   if (!urlRaw) {
     return false;
@@ -147,7 +148,7 @@ export function handleControlUiAvatarRequest(
     return true;
   }
 
-  serveFile(res, resolved.filePath);
+  await serveFile(res, resolved.filePath);
   return true;
 }
 
@@ -157,19 +158,31 @@ function respondNotFound(res: ServerResponse) {
   res.end("Not Found");
 }
 
-function serveFile(res: ServerResponse, filePath: string) {
+async function serveFile(res: ServerResponse, filePath: string) {
   const ext = path.extname(filePath).toLowerCase();
   res.setHeader("Content-Type", contentTypeForExt(ext));
   // Static UI should never be cached aggressively while iterating; allow the
   // browser to revalidate.
   res.setHeader("Cache-Control", "no-cache");
-  res.end(fs.readFileSync(filePath));
+  try {
+    res.end(await fsp.readFile(filePath));
+  } catch {
+    if (!res.headersSent) {
+      respondNotFound(res);
+    }
+  }
 }
 
-function serveIndexHtml(res: ServerResponse, indexPath: string) {
+async function serveIndexHtml(res: ServerResponse, indexPath: string) {
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache");
-  res.end(fs.readFileSync(indexPath, "utf8"));
+  try {
+    res.end(await fsp.readFile(indexPath, "utf8"));
+  } catch {
+    if (!res.headersSent) {
+      respondNotFound(res);
+    }
+  }
 }
 
 function isSafeRelativePath(relPath: string) {
@@ -186,11 +199,11 @@ function isSafeRelativePath(relPath: string) {
   return true;
 }
 
-export function handleControlUiHttpRequest(
+export async function handleControlUiHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
   opts?: ControlUiRequestOptions,
-): boolean {
+): Promise<boolean> {
   const urlRaw = req.url;
   if (!urlRaw) {
     return false;
@@ -318,20 +331,28 @@ export function handleControlUiHttpRequest(
     return true;
   }
 
-  if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
-    if (path.basename(filePath) === "index.html") {
-      serveIndexHtml(res, filePath);
+  try {
+    const stat = await fsp.stat(filePath);
+    if (stat.isFile()) {
+      if (path.basename(filePath) === "index.html") {
+        await serveIndexHtml(res, filePath);
+        return true;
+      }
+      await serveFile(res, filePath);
       return true;
     }
-    serveFile(res, filePath);
-    return true;
+  } catch {
+    // file not found, fall through to SPA fallback
   }
 
   // SPA fallback (client-side router): serve index.html for unknown paths.
   const indexPath = path.join(root, "index.html");
-  if (fs.existsSync(indexPath)) {
-    serveIndexHtml(res, indexPath);
+  try {
+    await fsp.access(indexPath);
+    await serveIndexHtml(res, indexPath);
     return true;
+  } catch {
+    // no index.html either
   }
 
   respondNotFound(res);
