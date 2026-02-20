@@ -9,6 +9,7 @@ import { handleApproveCommand } from "./commands-approve.js";
 import { handleBashCommand } from "./commands-bash.js";
 import { handleCompactCommand } from "./commands-compact.js";
 import { handleConfigCommand, handleDebugCommand } from "./commands-config.js";
+import { handleCustomCommand } from "./commands-custom.js";
 import {
   handleCommandsListCommand,
   handleContextCommand,
@@ -43,6 +44,8 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
     HANDLERS = [
       // Plugin commands are processed first, before built-in commands
       handlePluginCommand,
+      // Custom user-defined commands (bypass LLM, run shell scripts)
+      handleCustomCommand,
       handleBashCommand,
       handleActivationCommand,
       handleSendPolicyCommand,

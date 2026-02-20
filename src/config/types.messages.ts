@@ -125,6 +125,24 @@ export type CommandsConfig = {
    * Example: { "*": ["user1"], discord: ["user:123"] }
    */
   allowFrom?: CommandAllowFrom;
+  /**
+   * Custom user-defined commands that execute shell scripts directly,
+   * bypassing the LLM. Keys are command names (without slash prefix).
+   * Example: { "dnd": { "exec": "bash ${WORKSPACE}/skills/dnd/scripts/toggle.sh ${ARGS}", "reply": true } }
+   */
+  custom?: Record<
+    string,
+    {
+      /** Description shown in /commands list. */
+      description?: string;
+      /** Shell command to execute. Supports ${ARGS} and ${WORKSPACE} interpolation. */
+      exec: string;
+      /** Whether to reply with stdout (default: true). */
+      reply?: boolean;
+      /** Restrict to owner/authorized senders only (default: true). */
+      ownerOnly?: boolean;
+    }
+  >;
 };
 
 export type ProviderCommandsConfig = {
