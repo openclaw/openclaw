@@ -118,8 +118,8 @@ export function applyGroupGating(params: {
     conversationId: params.conversationId,
   });
   const requireMention = activation !== "always";
-  const selfJid = params.msg.selfJid?.replace(/:\\d+/, "");
-  const replySenderJid = params.msg.replyToSenderJid?.replace(/:\\d+/, "");
+  const selfJid = params.msg.selfJid?.replace(/:\d+/, "");
+  const replySenderJid = params.msg.replyToSenderJid?.replace(/:\d+/, "");
   const selfE164 = params.msg.selfE164 ? normalizeE164(params.msg.selfE164) : null;
   const replySenderE164 = params.msg.replyToSenderE164
     ? normalizeE164(params.msg.replyToSenderE164)
