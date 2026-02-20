@@ -1,4 +1,9 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolveLaunchAgentPlistPath } from "./launchd.js";
+import { buildLaunchAgentPlist } from "./launchd-plist.js";
 import {
   auditGatewayServiceConfig,
   checkTokenDrift,
@@ -135,5 +140,75 @@ describe("checkTokenDrift", () => {
     // This is not really drift - service will work, just config is incomplete
     const result = checkTokenDrift({ serviceToken: "service-token", configToken: undefined });
     expect(result).toBeNull();
+  });
+});
+
+describe("auditGatewayServiceConfig launchd policy", () => {
+  async function withTempHome(testFn: (env: Record<string, string>) => Promise<void>) {
+    const tmpHomeRaw = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-audit-"));
+    const tmpHome = tmpHomeRaw.replaceAll("\\", "/");
+    const env = { HOME: tmpHome, OPENCLAW_PROFILE: "default" };
+    try {
+      await testFn(env);
+    } finally {
+      await fs.rm(tmpHomeRaw, { recursive: true, force: true });
+    }
+  }
+
+  it("flags legacy KeepAlive=true plist and missing ThrottleInterval", async () => {
+    await withTempHome(async (env) => {
+      const plistPath = resolveLaunchAgentPlistPath(env);
+      await fs.mkdir(path.dirname(plistPath), { recursive: true });
+      await fs.writeFile(
+        plistPath,
+        `<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0">\n  <dict>\n    <key>RunAtLoad</key>\n    <true/>\n    <key>KeepAlive</key>\n    <true/>\n  </dict>\n</plist>\n`,
+        "utf8",
+      );
+
+      const audit = await auditGatewayServiceConfig({
+        env,
+        platform: "darwin",
+        command: {
+          programArguments: ["/usr/bin/node", "gateway"],
+          environment: { PATH: "/usr/bin:/bin" },
+        },
+      });
+
+      expect(audit.issues.some((i) => i.code === SERVICE_AUDIT_CODES.launchdKeepAlive)).toBe(true);
+      expect(
+        audit.issues.some((i) => i.code === SERVICE_AUDIT_CODES.launchdThrottleInterval),
+      ).toBe(true);
+    });
+  });
+
+  it("accepts KeepAlive.SuccessfulExit and ThrottleInterval=5", async () => {
+    await withTempHome(async (env) => {
+      const plistPath = resolveLaunchAgentPlistPath(env);
+      await fs.mkdir(path.dirname(plistPath), { recursive: true });
+      await fs.writeFile(
+        plistPath,
+        buildLaunchAgentPlist({
+          label: "ai.openclaw.gateway",
+          programArguments: ["/usr/bin/node", "gateway"],
+          stdoutPath: "/tmp/openclaw.out.log",
+          stderrPath: "/tmp/openclaw.err.log",
+        }),
+        "utf8",
+      );
+
+      const audit = await auditGatewayServiceConfig({
+        env,
+        platform: "darwin",
+        command: {
+          programArguments: ["/usr/bin/node", "gateway"],
+          environment: { PATH: "/usr/bin:/bin" },
+        },
+      });
+
+      expect(audit.issues.some((i) => i.code === SERVICE_AUDIT_CODES.launchdKeepAlive)).toBe(false);
+      expect(
+        audit.issues.some((i) => i.code === SERVICE_AUDIT_CODES.launchdThrottleInterval),
+      ).toBe(false);
+    });
   });
 });

@@ -41,6 +41,7 @@ export const SERVICE_AUDIT_CODES = {
   gatewayTokenDrift: "gateway-token-drift",
   launchdKeepAlive: "launchd-keep-alive",
   launchdRunAtLoad: "launchd-run-at-load",
+  launchdThrottleInterval: "launchd-throttle-interval",
   systemdAfterNetworkOnline: "systemd-after-network-online",
   systemdRestartSec: "systemd-restart-sec",
   systemdWantsNetworkOnline: "systemd-wants-network-online",
@@ -170,7 +171,13 @@ async function auditLaunchdPlist(
   }
 
   const hasRunAtLoad = /<key>RunAtLoad<\/key>\s*<true\s*\/>/i.test(content);
-  const hasKeepAlive = /<key>KeepAlive<\/key>\s*<true\s*\/>/i.test(content);
+  const hasKeepAliveSuccessfulExit =
+    /<key>KeepAlive<\/key>\s*<dict>[\s\S]*?<key>SuccessfulExit<\/key>\s*<true\s*\/>[\s\S]*?<\/dict>/i.test(
+      content,
+    );
+  const hasRecommendedThrottleInterval =
+    /<key>ThrottleInterval<\/key>\s*<integer>\s*5\s*<\/integer>/i.test(content);
+
   if (!hasRunAtLoad) {
     issues.push({
       code: SERVICE_AUDIT_CODES.launchdRunAtLoad,
@@ -179,10 +186,18 @@ async function auditLaunchdPlist(
       level: "recommended",
     });
   }
-  if (!hasKeepAlive) {
+  if (!hasKeepAliveSuccessfulExit) {
     issues.push({
       code: SERVICE_AUDIT_CODES.launchdKeepAlive,
-      message: "LaunchAgent is missing KeepAlive=true",
+      message: "LaunchAgent KeepAlive should be { SuccessfulExit: true }",
+      detail: plistPath,
+      level: "recommended",
+    });
+  }
+  if (!hasRecommendedThrottleInterval) {
+    issues.push({
+      code: SERVICE_AUDIT_CODES.launchdThrottleInterval,
+      message: "LaunchAgent ThrottleInterval should be 5",
       detail: plistPath,
       level: "recommended",
     });
