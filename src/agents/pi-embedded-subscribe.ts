@@ -344,7 +344,9 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       markdown: useMarkdown,
     });
     const message = `${agg}\n${formatToolOutputBlock(output)}`;
-    const { text: cleanedText, mediaUrls } = parseReplyDirectives(message);
+
+    const { text: cleanedText, mediaUrls: rawMediaUrls } = parseReplyDirectives(message);
+    const mediaUrls = rawMediaUrls?.filter((url) => !messagingToolSentMediaUrls.includes(url));
     if (!cleanedText && (!mediaUrls || mediaUrls.length === 0)) {
       return;
     }
