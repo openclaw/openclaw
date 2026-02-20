@@ -359,7 +359,9 @@ describe("message hooks", () => {
 
     it("should preserve sessionKey across event lifecycle", async () => {
       const events: InternalHookEvent[] = [];
-      registerInternalHook("message", (e) => events.push(e));
+      registerInternalHook("message", (e) => {
+        events.push(e);
+      });
 
       await triggerInternalHook(
         createInternalHookEvent("message", "received", "agent:main:telegram:abc", {
