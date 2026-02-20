@@ -588,11 +588,95 @@ export function createSandboxedWriteTool(params: SandboxToolParams) {
   return wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.write);
 }
 
+// Find all line numbers where a text pattern appears (supports multi-line)
+function findLineNumbers(content: string, searchText: string): number[] {
+  const lineNumbers: number[] = [];
+
+  // Normalize line endings for consistent matching
+  const normalizedContent = content.replace(/\r\n/g, "\n");
+  const normalizedSearch = searchText.replace(/\r\n/g, "\n");
+
+  let searchIndex = 0;
+  while (true) {
+    const index = normalizedContent.indexOf(normalizedSearch, searchIndex);
+    if (index === -1) {
+      break;
+    }
+
+    // Count newlines before this match to get line number
+    const beforeMatch = normalizedContent.substring(0, index);
+    const lineNumber = beforeMatch.split("\n").length;
+    lineNumbers.push(lineNumber);
+
+    // Move past this match
+    searchIndex = index + normalizedSearch.length;
+  }
+
+  return lineNumbers;
+}
+
+// Wrapper to intercept duplicate match errors and add line numbers
+function wrapEditToolWithLineNumbers(
+  tool: AnyAgentTool,
+  bridge: SandboxFsBridge,
+  root: string,
+): AnyAgentTool {
+  return {
+    ...tool,
+    execute: async (toolCallId, args, signal, onUpdate) => {
+      try {
+        return await tool.execute(toolCallId, args, signal, onUpdate);
+      } catch (error) {
+        // Intercept "Found X occurrences" error to add line numbers
+        if (error instanceof Error && /Found \d+ occurrences/.test(error.message)) {
+          const normalized = normalizeToolParams(args);
+          const record =
+            normalized ??
+            (args && typeof args === "object" ? (args as Record<string, unknown>) : undefined);
+          const filePath = typeof record?.path === "string" ? record.path : undefined;
+          const oldText = typeof record?.oldText === "string" ? record.oldText : undefined;
+
+          if (filePath && oldText) {
+            try {
+              const buffer = await bridge.readFile({ filePath, cwd: root });
+              const content = buffer.toString("utf-8");
+              const lineNumbers = findLineNumbers(content, oldText);
+
+              if (lineNumbers.length > 0) {
+                const lineNumbersStr =
+                  lineNumbers.length <= 5
+                    ? lineNumbers.join(", ")
+                    : `${lineNumbers.slice(0, 5).join(", ")}... (${lineNumbers.length} total)`;
+
+                const match = error.message.match(/Found (\d+) occurrences of the text in (.+?)\./);
+                if (match) {
+                  const [, count, path] = match;
+                  throw new Error(
+                    `Found ${count} occurrences of the text in ${path} (lines ${lineNumbersStr}). The text must be unique. Please provide more context to make it unique.`,
+                    { cause: error },
+                  );
+                }
+              }
+            } catch (enhanceError) {
+              // If we fail to enhance the error, just throw the original
+              if (enhanceError instanceof Error && enhanceError.message.startsWith("Found")) {
+                throw enhanceError;
+              }
+            }
+          }
+        }
+        throw error;
+      }
+    },
+  };
+}
+
 export function createSandboxedEditTool(params: SandboxToolParams) {
   const base = createEditTool(params.root, {
     operations: createSandboxEditOperations(params),
   }) as unknown as AnyAgentTool;
-  return wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.edit);
+  const withLineNumbers = wrapEditToolWithLineNumbers(base, params.bridge, params.root);
+  return wrapToolParamNormalization(withLineNumbers, CLAUDE_PARAM_GROUPS.edit);
 }
 
 export function createOpenClawReadTool(
