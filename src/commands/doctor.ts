@@ -28,6 +28,7 @@ import {
 } from "./doctor-auth.js";
 import { doctorShellCompletion } from "./doctor-completion.js";
 import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
+import { noteFallbackModelHealth } from "./doctor-fallback-models.js";
 import { maybeRepairGatewayDaemon } from "./doctor-gateway-daemon-flow.js";
 import { checkGatewayHealth } from "./doctor-gateway-health.js";
 import {
@@ -265,6 +266,7 @@ export async function doctorCommand(
 
   noteWorkspaceStatus(cfg);
   await noteMemorySearchHealth(cfg);
+  await noteFallbackModelHealth(cfg);
 
   // Check and fix shell completion
   await doctorShellCompletion(runtime, prompter, {
