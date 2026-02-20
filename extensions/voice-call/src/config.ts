@@ -3,6 +3,7 @@ import {
   TtsConfigSchema,
   TtsModeSchema,
   TtsProviderSchema,
+  isTruthyEnvValue,
 } from "openclaw/plugin-sdk";
 import { z } from "zod";
 
@@ -393,6 +394,37 @@ export function resolveVoiceCallConfig(config: VoiceCallConfig): VoiceCallConfig
   return resolved;
 }
 
+function normalizeBindHost(bind: string): string {
+  const normalized = bind.trim().toLowerCase();
+  if (!normalized) {
+    return "";
+  }
+  if (normalized.startsWith("[") && normalized.endsWith("]")) {
+    return normalized.slice(1, -1);
+  }
+  return normalized;
+}
+
+function normalizeIPv4MappedAddress(host: string): string {
+  if (host.startsWith("::ffff:")) {
+    return host.slice("::ffff:".length);
+  }
+  return host;
+}
+
+export function isLoopbackBindAddress(bind: string | undefined): boolean {
+  if (!bind?.trim()) {
+    return false;
+  }
+  const host = normalizeBindHost(bind);
+  const withoutZone = host.split("%")[0] ?? host;
+  if (withoutZone === "localhost" || withoutZone === "::1" || withoutZone === "0:0:0:0:0:0:0:1") {
+    return true;
+  }
+  const normalized = normalizeIPv4MappedAddress(withoutZone);
+  return normalized === "127.0.0.1" || normalized.startsWith("127.");
+}
+
 /**
  * Validate that the configuration has all required fields for the selected provider.
  */
@@ -417,16 +449,8 @@ export function validateProviderConfig(config: VoiceCallConfig): {
   if (config.skipSignatureVerification) {
     const env = process.env;
     const nodeEnv = (env.NODE_ENV ?? "").trim().toLowerCase();
-    const skipVerificationOverride = (env.OPENCLAW_UNSAFE_ALLOW_SKIP_SIGNATURE_VERIFICATION ?? "")
-      .trim()
-      .toLowerCase();
-    const allowUnsafeSkip =
-      skipVerificationOverride === "1" ||
-      skipVerificationOverride === "true" ||
-      skipVerificationOverride === "yes" ||
-      skipVerificationOverride === "on";
-    const bind = (config.serve?.bind ?? "").trim().toLowerCase();
-    const bindIsLoopback = bind === "127.0.0.1" || bind === "::1" || bind === "localhost";
+    const allowUnsafeSkip = isTruthyEnvValue(env.OPENCLAW_UNSAFE_ALLOW_SKIP_SIGNATURE_VERIFICATION);
+    const bindIsLoopback = isLoopbackBindAddress(config.serve?.bind);
     const hasRemoteExposure =
       !bindIsLoopback ||
       Boolean(config.publicUrl?.trim()) ||

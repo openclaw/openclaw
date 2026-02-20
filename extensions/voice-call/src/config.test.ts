@@ -215,6 +215,31 @@ describe("validateProviderConfig", () => {
 
       expect(result).toMatchObject({ valid: true, errors: [] });
     });
+
+    it("accepts mapped-loopback binds in development without extra exposure", () => {
+      process.env.NODE_ENV = "development";
+      const config = createBaseConfig("twilio");
+      config.skipSignatureVerification = true;
+      config.twilio = { accountSid: "AC123", authToken: "secret" };
+      config.serve.bind = "::ffff:127.0.0.1";
+
+      const result = validateProviderConfig(config);
+
+      expect(result).toMatchObject({ valid: true, errors: [] });
+    });
+
+    it("rejects wildcard bind in development without explicit override", () => {
+      process.env.NODE_ENV = "development";
+      const config = createBaseConfig("twilio");
+      config.skipSignatureVerification = true;
+      config.twilio = { accountSid: "AC123", authToken: "secret" };
+      config.serve.bind = "0.0.0.0";
+
+      const result = validateProviderConfig(config);
+
+      expect(result.valid).toBe(false);
+      expect(result.errors.some((error) => error.includes("skipSignatureVerification"))).toBe(true);
+    });
   });
 
   describe("plivo provider", () => {

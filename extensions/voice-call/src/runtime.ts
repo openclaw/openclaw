@@ -1,5 +1,5 @@
 import type { VoiceCallConfig } from "./config.js";
-import { resolveVoiceCallConfig, validateProviderConfig } from "./config.js";
+import { isLoopbackBindAddress, resolveVoiceCallConfig, validateProviderConfig } from "./config.js";
 import type { CoreConfig } from "./core-bridge.js";
 import { CallManager } from "./manager.js";
 import type { VoiceCallProvider } from "./providers/base.js";
@@ -33,17 +33,10 @@ type Logger = {
   debug?: (message: string) => void;
 };
 
-function isLoopbackBind(bind: string | undefined): boolean {
-  if (!bind) {
-    return false;
-  }
-  return bind === "127.0.0.1" || bind === "::1" || bind === "localhost";
-}
-
 function resolveProvider(config: VoiceCallConfig): VoiceCallProvider {
   const allowNgrokFreeTierLoopbackBypass =
     config.tunnel?.provider === "ngrok" &&
-    isLoopbackBind(config.serve?.bind) &&
+    isLoopbackBindAddress(config.serve?.bind) &&
     (config.tunnel?.allowNgrokFreeTierLoopbackBypass ?? false);
 
   switch (config.provider) {
