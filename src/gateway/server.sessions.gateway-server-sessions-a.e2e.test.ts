@@ -24,6 +24,10 @@ const sessionHookMocks = vi.hoisted(() => ({
   triggerInternalHook: vi.fn(async () => {}),
 }));
 
+const sessionResetLifecycleMocks = vi.hoisted(() => ({
+  runBeforeSessionResetLifecycle: vi.fn(async () => {}),
+}));
+
 vi.mock("../auto-reply/reply/queue.js", async () => {
   const actual = await vi.importActual<typeof import("../auto-reply/reply/queue.js")>(
     "../auto-reply/reply/queue.js",
@@ -51,6 +55,16 @@ vi.mock("../hooks/internal-hooks.js", async () => {
   return {
     ...actual,
     triggerInternalHook: sessionHookMocks.triggerInternalHook,
+  };
+});
+
+vi.mock("../context-engine/before-session-reset.js", async () => {
+  const actual = await vi.importActual<typeof import("../context-engine/before-session-reset.js")>(
+    "../context-engine/before-session-reset.js",
+  );
+  return {
+    ...actual,
+    runBeforeSessionResetLifecycle: sessionResetLifecycleMocks.runBeforeSessionResetLifecycle,
   };
 });
 
@@ -132,6 +146,7 @@ describe("gateway server sessions", () => {
     sessionCleanupMocks.clearSessionQueues.mockClear();
     sessionCleanupMocks.stopSubagentsForRequester.mockClear();
     sessionHookMocks.triggerInternalHook.mockClear();
+    sessionResetLifecycleMocks.runBeforeSessionResetLifecycle.mockClear();
   });
 
   test("lists and patches session store via sessions.* RPC", async () => {
@@ -625,6 +640,13 @@ describe("gateway server sessions", () => {
     expect(reset.ok).toBe(true);
     expect(reset.payload?.key).toBe("agent:main:main");
     expect(reset.payload?.entry.sessionId).not.toBe("sess-main");
+    expect(sessionResetLifecycleMocks.runBeforeSessionResetLifecycle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "sess-main",
+        sessionKey: "agent:main:main",
+        reason: "reset",
+      }),
+    );
     expectActiveRunCleanup(
       "agent:main:main",
       ["main", "agent:main:main", "sess-main"],
@@ -666,6 +688,13 @@ describe("gateway server sessions", () => {
       },
     });
     expect(event.context?.previousSessionEntry).toMatchObject({ sessionId: "sess-main" });
+    expect(sessionResetLifecycleMocks.runBeforeSessionResetLifecycle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "sess-main",
+        sessionKey: "agent:main:main",
+        reason: "new",
+      }),
+    );
     ws.close();
   });
 

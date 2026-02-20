@@ -12,6 +12,7 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
+import { runBeforeSessionResetLifecycle } from "../../context-engine/before-session-reset.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import {
@@ -302,6 +303,16 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       respond(false, undefined, cleanupError);
       return;
     }
+    await runBeforeSessionResetLifecycle({
+      cfg,
+      sessionId: entry?.sessionId,
+      sessionKey: target.canonicalKey ?? key,
+      sessionEntry: entry,
+      sessionFile: entry?.sessionFile,
+      storePath,
+      agentId: target.agentId,
+      reason: commandReason,
+    });
     let oldSessionId: string | undefined;
     let oldSessionFile: string | undefined;
     const next = await updateSessionStore(storePath, (store) => {

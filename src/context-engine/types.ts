@@ -113,6 +113,17 @@ export interface ContextEngine {
   }): Promise<void>;
 
   /**
+   * Execute optional lifecycle work before a session reset swaps to a new id.
+   * Engines can use this to persist final state from the outgoing session.
+   */
+  beforeSessionReset?(params: {
+    sessionId: string;
+    sessionKey?: string;
+    sessionFile: string;
+    reason: "new" | "reset";
+  }): Promise<void>;
+
+  /**
    * Assemble model context under a token budget.
    * Returns an ordered set of messages ready for the model.
    */

@@ -13,10 +13,24 @@ import { prependSystemEvents } from "./session-updates.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
 import { initSessionState } from "./session.js";
 
+const sessionResetLifecycleMocks = vi.hoisted(() => ({
+  runBeforeSessionResetLifecycle: vi.fn(async () => {}),
+}));
+
 // Perf: session-store locks are exercised elsewhere; most session tests don't need FS lock files.
 vi.mock("../../agents/session-write-lock.js", () => ({
   acquireSessionWriteLock: async () => ({ release: async () => {} }),
 }));
+
+vi.mock("../../context-engine/before-session-reset.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../context-engine/before-session-reset.js")
+  >("../../context-engine/before-session-reset.js");
+  return {
+    ...actual,
+    runBeforeSessionResetLifecycle: sessionResetLifecycleMocks.runBeforeSessionResetLifecycle,
+  };
+});
 
 vi.mock("../../agents/model-catalog.js", () => ({
   loadModelCatalog: vi.fn(async () => [
@@ -959,6 +973,10 @@ describe("applyResetModelOverride", () => {
 });
 
 describe("initSessionState preserves behavior overrides across /new and /reset", () => {
+  beforeEach(() => {
+    sessionResetLifecycleMocks.runBeforeSessionResetLifecycle.mockClear();
+  });
+
   async function seedSessionStoreWithOverrides(params: {
     storePath: string;
     sessionKey: string;
@@ -1119,6 +1137,13 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
 
     expect(result.isNewSession).toBe(true);
     expect(result.resetTriggered).toBe(true);
+    expect(sessionResetLifecycleMocks.runBeforeSessionResetLifecycle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: existingSessionId,
+        sessionKey,
+        reason: "new",
+      }),
+    );
     expect(archiveSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: existingSessionId,
@@ -1127,6 +1152,46 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       }),
     );
     archiveSpy.mockRestore();
+  });
+
+  it("runs shared beforeSessionReset lifecycle with reset reason", async () => {
+    const storePath = await createStorePath("openclaw-before-reset-hook-");
+    const sessionKey = "agent:main:telegram:dm:user-before-hook";
+    const existingSessionId = "existing-session-before-hook";
+    await seedSessionStoreWithOverrides({
+      storePath,
+      sessionKey,
+      sessionId: existingSessionId,
+      overrides: { verboseLevel: "on" },
+    });
+
+    const cfg = {
+      session: { store: storePath, idleMinutes: 999 },
+    } as OpenClawConfig;
+
+    await initSessionState({
+      ctx: {
+        Body: "/reset",
+        RawBody: "/reset",
+        CommandBody: "/reset",
+        From: "user-before-hook",
+        To: "bot",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        Provider: "telegram",
+        Surface: "telegram",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(sessionResetLifecycleMocks.runBeforeSessionResetLifecycle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: existingSessionId,
+        sessionKey,
+        reason: "reset",
+      }),
+    );
   });
 
   it("idle-based new session does NOT preserve overrides (no entry to read)", async () => {
