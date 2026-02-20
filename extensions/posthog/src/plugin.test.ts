@@ -146,8 +146,8 @@ describe("registerPostHogHooks", () => {
     expect(captured.properties.$ai_model).toBe("gpt-4o");
     expect(captured.properties.$ai_input_tokens).toBe(10);
     expect(captured.properties.$ai_output_tokens).toBe(5);
-    expect(captured.properties.$ai_input).toEqual(["What is 2+2?"]);
-    expect(captured.properties.$ai_output_choices).toEqual(["4"]);
+    expect(captured.properties.$ai_input).toEqual([{ role: "user", content: "What is 2+2?" }]);
+    expect(captured.properties.$ai_output_choices).toEqual([{ role: "assistant", content: "4" }]);
   });
 
   test("privacy mode redacts input/output content", async () => {

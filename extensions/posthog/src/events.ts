@@ -5,7 +5,13 @@ import type {
   PluginHookToolContext,
 } from "openclaw/plugin-sdk";
 import type { RunState } from "./types.js";
-import { generateSpanId, redactForPrivacy, safeStringify } from "./utils.js";
+import {
+  formatInputMessages,
+  formatOutputChoices,
+  generateSpanId,
+  redactForPrivacy,
+  safeStringify,
+} from "./utils.js";
 
 export type AiGenerationEvent = {
   event: "$ai_generation";
@@ -41,8 +47,8 @@ export function buildAiGeneration(
       $ai_span_id: runState.spanId,
       $ai_model: output.model,
       $ai_provider: output.provider,
-      $ai_input: redactForPrivacy(runState.input, privacyMode),
-      $ai_output_choices: redactForPrivacy(output.assistantTexts, privacyMode),
+      $ai_input: redactForPrivacy(formatInputMessages(runState.input), privacyMode),
+      $ai_output_choices: redactForPrivacy(formatOutputChoices(output.assistantTexts), privacyMode),
       $ai_input_tokens: output.usage?.input ?? null,
       $ai_output_tokens: output.usage?.output ?? null,
       $ai_latency: latency,

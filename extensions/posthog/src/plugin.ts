@@ -88,11 +88,13 @@ export function registerPostHogHooks(api: OpenClawPluginApi, config: PostHogPlug
   // -- Lifecycle Hooks --
 
   api.on("message_received", (_event, ctx) => {
-    // Start a new trace for this message cycle
-    const sessionKey = ctx.channelId;
-    if (sessionKey) {
-      const traceId = generateTraceId();
-      traces.set(sessionKey, traceId);
+    // Start a new trace for this message cycle.
+    // Key by channelId — the diagnostic event's sessionKey also resolves to this.
+    // Also clear any previous generation span so tool calls link correctly.
+    const key = ctx.channelId;
+    if (key) {
+      traces.set(key, generateTraceId());
+      generationSpans.delete(key);
     }
   });
 
@@ -102,13 +104,23 @@ export function registerPostHogHooks(api: OpenClawPluginApi, config: PostHogPlug
     const traceId = getOrCreateTraceId(ctx.sessionKey);
     const spanId = generateSpanId();
 
+    // Build the input message array: system prompt + history + current prompt
+    let input: unknown[] | null = null;
+    if (!config.privacyMode) {
+      input = [];
+      if (event.systemPrompt) {
+        input.push({ role: "system", content: event.systemPrompt });
+      }
+      input.push(...event.historyMessages, event.prompt);
+    }
+
     runs.set(event.runId, {
       traceId,
       spanId,
       startTime: Date.now(),
       model: event.model,
       provider: event.provider,
-      input: config.privacyMode ? null : [...event.historyMessages, event.prompt],
+      input,
       sessionKey: ctx.sessionKey,
       channel: ctx.messageProvider,
       agentId: ctx.agentId,

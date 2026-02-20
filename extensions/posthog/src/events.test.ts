@@ -51,7 +51,9 @@ describe("buildAiGeneration", () => {
     expect(result.properties.$ai_model).toBe("gpt-4o");
     expect(result.properties.$ai_provider).toBe("openai");
     expect(result.properties.$ai_input).toEqual([{ role: "user", content: "hello" }]);
-    expect(result.properties.$ai_output_choices).toEqual(["Hello! How can I help?"]);
+    expect(result.properties.$ai_output_choices).toEqual([
+      { role: "assistant", content: "Hello! How can I help?" },
+    ]);
     expect(result.properties.$ai_input_tokens).toBe(100);
     expect(result.properties.$ai_output_tokens).toBe(25);
     expect(result.properties.$ai_latency).toBeGreaterThan(0);
@@ -62,6 +64,117 @@ describe("buildAiGeneration", () => {
     expect(result.properties.cache_creation_input_tokens).toBe(10);
     expect(result.properties.$ai_channel).toBe("telegram");
     expect(result.properties.$ai_agent_id).toBe("agent-1");
+  });
+
+  test("normalizes raw OpenClaw messages to OpenAI format", () => {
+    const rawInput: unknown[] = [
+      // OpenClaw user message with content array + extra fields
+      {
+        role: "user",
+        content: [{ type: "text", text: "hi there" }],
+        timestamp: 1234567890,
+      },
+      // OpenClaw assistant message with thinking + text + extra metadata
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "Let me think..." },
+          { type: "text", text: "Hello!" },
+        ],
+        api: "openai-completions",
+        model: "gpt-4o",
+        provider: "openai",
+        stopReason: "stop",
+        timestamp: 1234567891,
+        usage: { input: 100, output: 25 },
+      },
+      // Bare string prompt (current user message)
+      "what is 2+2?",
+    ];
+
+    const runState: RunState = {
+      ...baseRunState,
+      input: rawInput,
+    };
+    const result = buildAiGeneration(runState, baseOutput, false);
+    const input = result.properties.$ai_input as Array<{ role: string; content: unknown }>;
+
+    expect(input).toHaveLength(3);
+    // User message: content array with single text item simplified to string
+    expect(input[0]).toEqual({ role: "user", content: "hi there" });
+    // Assistant message: thinking stripped, only text remains (simplified to string)
+    expect(input[1]).toEqual({ role: "assistant", content: "Hello!" });
+    // Bare string normalized to user message
+    expect(input[2]).toEqual({ role: "user", content: "what is 2+2?" });
+  });
+
+  test("converts Anthropic tool_use/tool_result to OpenAI format", () => {
+    const rawInput: unknown[] = [
+      { role: "user", content: "search for weather" },
+      // Anthropic-style assistant turn with tool_use
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Let me search..." },
+          { type: "tool_use", id: "call_1", name: "web_search", input: { query: "weather" } },
+        ],
+      },
+      // Anthropic-style user turn with tool_result
+      {
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: "call_1", content: "Sunny, 22°C" }],
+      },
+      // Final assistant text response
+      { role: "assistant", content: "It's sunny and 22°C!" },
+    ];
+
+    const runState: RunState = { ...baseRunState, input: rawInput };
+    const result = buildAiGeneration(runState, baseOutput, false);
+    const input = result.properties.$ai_input as Array<Record<string, unknown>>;
+
+    // [0] user text → stays as-is
+    expect(input[0]).toEqual({ role: "user", content: "search for weather" });
+    // [1] assistant with tool_calls (OpenAI format)
+    expect(input[1]).toMatchObject({
+      role: "assistant",
+      content: "Let me search...",
+      tool_calls: [
+        {
+          id: "call_1",
+          type: "function",
+          function: { name: "web_search", arguments: '{"query":"weather"}' },
+        },
+      ],
+    });
+    // [2] tool result → role:"tool" (OpenAI format)
+    expect(input[2]).toEqual({
+      role: "tool",
+      content: "Sunny, 22°C",
+      tool_call_id: "call_1",
+    });
+    // [3] final assistant text
+    expect(input[3]).toEqual({ role: "assistant", content: "It's sunny and 22°C!" });
+  });
+
+  test("skips assistant turns with only thinking blocks (empty content)", () => {
+    const rawInput: unknown[] = [
+      { role: "user", content: "hello" },
+      // Assistant turn with only thinking — produces empty content
+      {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "Hmm..." }],
+      },
+      { role: "assistant", content: "Hi!" },
+    ];
+
+    const runState: RunState = { ...baseRunState, input: rawInput };
+    const result = buildAiGeneration(runState, baseOutput, false);
+    const input = result.properties.$ai_input as Array<{ role: string; content: unknown }>;
+
+    // Thinking-only turn should be dropped
+    expect(input).toHaveLength(2);
+    expect(input[0]).toEqual({ role: "user", content: "hello" });
+    expect(input[1]).toEqual({ role: "assistant", content: "Hi!" });
   });
 
   test("redacts input/output in privacy mode", () => {
