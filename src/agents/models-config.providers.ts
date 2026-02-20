@@ -473,7 +473,7 @@ function buildMoonshotProvider(): ProviderConfig {
       {
         id: MOONSHOT_DEFAULT_MODEL_ID,
         name: "Kimi K2.5",
-        reasoning: false,
+        reasoning: true,
         input: ["text"],
         cost: MOONSHOT_DEFAULT_COST,
         contextWindow: MOONSHOT_DEFAULT_CONTEXT_WINDOW,
