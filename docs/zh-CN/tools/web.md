@@ -49,6 +49,7 @@ OpenClaw 提供两个轻量级 Web 工具：
     web: {
       search: {
         provider: "brave", // 或 "perplexity"
+        baseUrl: "https://api.search.brave.com", // 可选：Brave 端点覆盖
       },
     },
   },
@@ -147,6 +148,7 @@ Perplexity Sonar 模型具有内置的网络搜索功能，并返回带有引用
 - 所选提供商的 API 密钥：
   - **Brave**：`BRAVE_API_KEY` 或 `tools.web.search.apiKey`
   - **Perplexity**：`OPENROUTER_API_KEY`、`PERPLEXITY_API_KEY` 或 `tools.web.search.perplexity.apiKey`
+- 可选 Brave 端点覆盖：`tools.web.search.baseUrl`
 
 ### 配置
 
@@ -157,6 +159,7 @@ Perplexity Sonar 模型具有内置的网络搜索功能，并返回带有引用
       search: {
         enabled: true,
         apiKey: "BRAVE_API_KEY_HERE", // 如果设置了 BRAVE_API_KEY 则可选
+        baseUrl: "https://api.search.brave.com", // 可选
         maxResults: 5,
         timeoutSeconds: 30,
         cacheTtlMinutes: 15,

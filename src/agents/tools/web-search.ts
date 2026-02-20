@@ -22,7 +22,8 @@ const SEARCH_PROVIDERS = ["brave", "perplexity", "grok"] as const;
 const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
 
-const BRAVE_SEARCH_ENDPOINT = "https://api.search.brave.com/res/v1/web/search";
+const DEFAULT_BRAVE_BASE_URL = "https://api.search.brave.com";
+const BRAVE_SEARCH_PATH = "res/v1/web/search";
 const DEFAULT_PERPLEXITY_BASE_URL = "https://openrouter.ai/api/v1";
 const PERPLEXITY_DIRECT_BASE_URL = "https://api.perplexity.ai";
 const DEFAULT_PERPLEXITY_MODEL = "perplexity/sonar-pro";
@@ -94,6 +95,7 @@ type PerplexityConfig = {
   model?: string;
 };
 
+type BraveApiKeySource = "config" | "env" | "none";
 type PerplexityApiKeySource = "config" | "perplexity_env" | "openrouter_env" | "none";
 
 type GrokConfig = {
@@ -201,13 +203,84 @@ function resolveSearchEnabled(params: { search?: WebSearchConfig; sandboxed?: bo
   return true;
 }
 
-function resolveSearchApiKey(search?: WebSearchConfig): string | undefined {
+function resolveSearchApiKey(search?: WebSearchConfig): {
+  apiKey?: string;
+  source: BraveApiKeySource;
+} {
   const fromConfig =
     search && "apiKey" in search && typeof search.apiKey === "string"
       ? normalizeSecretInput(search.apiKey)
       : "";
+  if (fromConfig) {
+    return { apiKey: fromConfig, source: "config" };
+  }
   const fromEnv = normalizeSecretInput(process.env.BRAVE_API_KEY);
-  return fromConfig || fromEnv || undefined;
+  if (fromEnv) {
+    return { apiKey: fromEnv, source: "env" };
+  }
+  return { apiKey: undefined, source: "none" };
+}
+
+function resolveBraveBaseUrl(search?: WebSearchConfig): string {
+  const fromConfig =
+    search && "baseUrl" in search && typeof search.baseUrl === "string"
+      ? search.baseUrl.trim()
+      : "";
+  return fromConfig || DEFAULT_BRAVE_BASE_URL;
+}
+
+function resolveBraveSearchEndpoint(baseUrl: string): string {
+  const trimmed = baseUrl.trim().replace(/\/+$/, "");
+  if (!trimmed) {
+    return `${DEFAULT_BRAVE_BASE_URL}/${BRAVE_SEARCH_PATH}`;
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return `${DEFAULT_BRAVE_BASE_URL}/${BRAVE_SEARCH_PATH}`;
+  }
+  const normalizedBase = parsed.toString().replace(/\/+$/, "");
+  if (normalizedBase.endsWith(`/${BRAVE_SEARCH_PATH}`)) {
+    return normalizedBase;
+  }
+  return `${normalizedBase}/${BRAVE_SEARCH_PATH}`;
+}
+
+function isLoopbackUrl(rawUrl: string): boolean {
+  try {
+    const host = new URL(rawUrl).hostname.toLowerCase();
+    return host === "localhost" || host === "127.0.0.1" || host === "::1";
+  } catch {
+    return false;
+  }
+}
+
+function usesCustomBraveBaseUrl(baseUrl: string): boolean {
+  const defaultBase = DEFAULT_BRAVE_BASE_URL.replace(/\/+$/, "").toLowerCase();
+  const endpoint = resolveBraveSearchEndpoint(baseUrl).toLowerCase();
+  return !endpoint.startsWith(`${defaultBase}/`);
+}
+
+function validateBraveBaseUrlWithApiKeySource(params: {
+  baseUrl: string;
+  apiKeySource: BraveApiKeySource;
+}): { error: string; message: string; docs: string } | undefined {
+  if (params.apiKeySource !== "env") {
+    return undefined;
+  }
+  if (!usesCustomBraveBaseUrl(params.baseUrl)) {
+    return undefined;
+  }
+  if (isLoopbackUrl(params.baseUrl)) {
+    return undefined;
+  }
+  return {
+    error: "unsafe_brave_baseurl",
+    message:
+      "For security, web_search does not send BRAVE_API_KEY env credentials to non-loopback custom tools.web.search.baseUrl values. Use localhost/127.0.0.1/::1 for local proxies, or set tools.web.search.apiKey explicitly when using remote endpoints.",
+    docs: "https://docs.openclaw.ai/tools/web",
+  };
 }
 
 function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
@@ -580,6 +653,7 @@ async function runWebSearch(params: {
   timeoutSeconds: number;
   cacheTtlMs: number;
   provider: (typeof SEARCH_PROVIDERS)[number];
+  braveBaseUrl?: string;
   country?: string;
   search_lang?: string;
   ui_lang?: string;
@@ -591,7 +665,7 @@ async function runWebSearch(params: {
 }): Promise<Record<string, unknown>> {
   const cacheKey = normalizeCacheKey(
     params.provider === "brave"
-      ? `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || "default"}:${params.ui_lang || "default"}:${params.freshness || "default"}`
+      ? `${params.provider}:${params.query}:${params.count}:${params.braveBaseUrl ?? DEFAULT_BRAVE_BASE_URL}:${params.country || "default"}:${params.search_lang || "default"}:${params.ui_lang || "default"}:${params.freshness || "default"}`
       : params.provider === "perplexity"
         ? `${params.provider}:${params.query}:${params.perplexityBaseUrl ?? DEFAULT_PERPLEXITY_BASE_URL}:${params.perplexityModel ?? DEFAULT_PERPLEXITY_MODEL}:${params.freshness || "default"}`
         : `${params.provider}:${params.query}:${params.grokModel ?? DEFAULT_GROK_MODEL}:${String(params.grokInlineCitations ?? false)}`,
@@ -663,7 +737,7 @@ async function runWebSearch(params: {
     throw new Error("Unsupported web search provider.");
   }
 
-  const url = new URL(BRAVE_SEARCH_ENDPOINT);
+  const url = new URL(resolveBraveSearchEndpoint(params.braveBaseUrl ?? DEFAULT_BRAVE_BASE_URL));
   url.searchParams.set("q", params.query);
   url.searchParams.set("count", String(params.count));
   if (params.country) {
@@ -753,17 +827,28 @@ export function createWebSearchTool(options?: {
     description,
     parameters: WebSearchSchema,
     execute: async (_toolCallId, args) => {
+      const braveAuth = provider === "brave" ? resolveSearchApiKey(search) : undefined;
       const perplexityAuth =
         provider === "perplexity" ? resolvePerplexityApiKey(perplexityConfig) : undefined;
+      const braveBaseUrl = resolveBraveBaseUrl(search);
       const apiKey =
         provider === "perplexity"
           ? perplexityAuth?.apiKey
           : provider === "grok"
             ? resolveGrokApiKey(grokConfig)
-            : resolveSearchApiKey(search);
+            : braveAuth?.apiKey;
 
       if (!apiKey) {
         return jsonResult(missingSearchKeyPayload(provider));
+      }
+      if (provider === "brave") {
+        const validationError = validateBraveBaseUrlWithApiKeySource({
+          baseUrl: braveBaseUrl,
+          apiKeySource: braveAuth?.source ?? "none",
+        });
+        if (validationError) {
+          return jsonResult(validationError);
+        }
       }
       const params = args as Record<string, unknown>;
       const query = readStringParam(params, "query", { required: true });
@@ -796,6 +881,7 @@ export function createWebSearchTool(options?: {
         timeoutSeconds: resolveTimeoutSeconds(search?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS),
         cacheTtlMs: resolveCacheTtlMs(search?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
         provider,
+        braveBaseUrl,
         country,
         search_lang,
         ui_lang,
@@ -815,6 +901,10 @@ export function createWebSearchTool(options?: {
 }
 
 export const __testing = {
+  resolveSearchApiKey,
+  resolveBraveBaseUrl,
+  resolveBraveSearchEndpoint,
+  validateBraveBaseUrlWithApiKeySource,
   inferPerplexityBaseUrlFromApiKey,
   resolvePerplexityBaseUrl,
   isDirectPerplexityBaseUrl,

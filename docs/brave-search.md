@@ -25,6 +25,8 @@ OpenClaw uses Brave Search as the default provider for `web_search`.
       search: {
         provider: "brave",
         apiKey: "BRAVE_API_KEY_HERE",
+        // Optional endpoint override for proxies/self-hosted routing
+        baseUrl: "https://api.search.brave.com",
         maxResults: 5,
         timeoutSeconds: 30,
       },
@@ -37,5 +39,6 @@ OpenClaw uses Brave Search as the default provider for `web_search`.
 
 - The Data for AI plan is **not** compatible with `web_search`.
 - Brave provides a free tier plus paid plans; check the Brave API portal for current limits.
+- If `BRAVE_API_KEY` comes from environment, custom `tools.web.search.baseUrl` is restricted to loopback hosts (`localhost`, `127.0.0.1`, `::1`) for credential safety.
 
 See [Web tools](/tools/web) for the full web_search configuration.

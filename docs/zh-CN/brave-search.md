@@ -32,6 +32,8 @@ OpenClaw 使用 Brave Search 作为 `web_search` 的默认提供商。
       search: {
         provider: "brave",
         apiKey: "BRAVE_API_KEY_HERE",
+        // 可选：用于代理/自托管路由的端点覆盖
+        baseUrl: "https://api.search.brave.com",
         maxResults: 5,
         timeoutSeconds: 30,
       },

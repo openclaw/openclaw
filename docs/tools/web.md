@@ -44,6 +44,7 @@ Set the provider in config:
     web: {
       search: {
         provider: "brave", // or "perplexity"
+        baseUrl: "https://api.search.brave.com", // optional Brave endpoint override
       },
     },
   },
@@ -149,6 +150,8 @@ Search the web using your configured provider.
 - API key for your chosen provider:
   - **Brave**: `BRAVE_API_KEY` or `tools.web.search.apiKey`
   - **Perplexity**: `OPENROUTER_API_KEY`, `PERPLEXITY_API_KEY`, or `tools.web.search.perplexity.apiKey`
+- Optional Brave endpoint override: `tools.web.search.baseUrl`
+  - Security: when using `BRAVE_API_KEY` from environment, custom Brave `baseUrl` is limited to loopback (`localhost`, `127.0.0.1`, `::1`) to prevent key exfiltration via config tampering.
 
 ### Config
 
@@ -159,6 +162,7 @@ Search the web using your configured provider.
       search: {
         enabled: true,
         apiKey: "BRAVE_API_KEY_HERE", // optional if BRAVE_API_KEY is set
+        baseUrl: "https://api.search.brave.com", // optional
         maxResults: 5,
         timeoutSeconds: 30,
         cacheTtlMinutes: 15,
