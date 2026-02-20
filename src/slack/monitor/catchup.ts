@@ -316,6 +316,7 @@ export async function performStartupCatchUp(
         channel_type?: string;
         files?: unknown[];
         reply_count?: number;
+        latest_reply?: string;
       }>;
 
       if (messages.length === 0) {
@@ -407,7 +408,13 @@ export async function performStartupCatchUp(
       // Thread reply catch-up: scan threads with new replies
       // -----------------------------------------------------------------
       const threadParents = messages.filter(
-        (m) => m.ts && (m.reply_count ?? 0) > 0,
+        (m) =>
+          m.ts &&
+          (m.reply_count ?? 0) > 0 &&
+          // Only scan threads whose latest reply is at or after the watermark.
+          // Without this check we'd fetch replies for threads that have no
+          // new activity since the last catch-up, wasting API calls.
+          (m.latest_reply ?? m.ts!) >= oldest,
       );
 
       for (const parent of threadParents) {
