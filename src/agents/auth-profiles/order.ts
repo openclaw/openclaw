@@ -144,8 +144,7 @@ function orderProfilesByMode(order: string[], store: AuthProfileStore): string[]
     }
   }
 
-  // Sort available profiles by lastUsed (oldest first = round-robin)
-  // Then by lastUsed (oldest first = round-robin within type)
+  // Sort available profiles by type preference, then by lastUsed (oldest first = round-robin within type)
   const scored = available.map((profileId) => {
     const type = store.profiles[profileId]?.type;
     const typeScore = type === "oauth" ? 0 : type === "token" ? 1 : type === "api_key" ? 2 : 3;
