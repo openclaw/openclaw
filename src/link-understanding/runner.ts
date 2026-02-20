@@ -237,7 +237,7 @@ function formatSearchFallbackOutput(
 ): string {
   const lines: string[] = [];
   lines.push(
-    `[Web検索フォールバック] 直接アクセスできなかったため、Web検索結果から要約しました: ${originalUrl}`,
+    `[Web Search Fallback] Direct access failed. Summarized from web search results: ${originalUrl}`,
   );
   lines.push("");
 
@@ -295,7 +295,7 @@ async function runLinkEntries(params: {
     logVerbose(`Link understanding exhausted for ${params.url}`);
   }
 
-  // Web search fallback: try when all CLI entries failed or returned empty.
+  // Web search fallback: try when CLI entries threw errors (lastError truthy).
   if (lastError && params.cfg) {
     const fallback = await runSearchFallback({
       url: params.url,
