@@ -19,10 +19,27 @@ export function buildInboundMetaSystemPrompt(ctx: TemplateContext): string {
   // Per-message identifiers (message_id, reply_to_id, sender_id) are also excluded here: they change
   // on every turn and would bust prefix-based prompt caches on local model providers. They are
   // included in the user-role conversation info block via buildInboundUserContextPrefix() instead.
+
+  // Resolve channel identity: prefer explicit channel, then surface, then provider.
+  // For webchat/Hub Chat sessions (when Surface is 'webchat' or undefined with no real channel),
+  // omit the channel field entirely rather than falling back to an unrelated provider.
+  let channelValue = safeTrim(ctx.OriginatingChannel) ?? safeTrim(ctx.Surface);
+  if (!channelValue) {
+    // Only fall back to Provider if it represents a real messaging channel.
+    // For webchat/internal sessions, ctx.Provider may be unrelated (e.g., the user's configured
+    // default channel), so skip it to avoid incorrect runtime labels like "channel=whatsapp".
+    const provider = safeTrim(ctx.Provider);
+    // Check if provider is "webchat" or if we're in an internal/webchat context
+    if (provider !== "webchat" && ctx.Surface !== "webchat") {
+      channelValue = provider;
+    }
+    // Otherwise leave channelValue undefined (no channel label)
+  }
+
   const payload = {
     schema: "openclaw.inbound_meta.v1",
     chat_id: safeTrim(ctx.OriginatingTo),
-    channel: safeTrim(ctx.OriginatingChannel) ?? safeTrim(ctx.Surface) ?? safeTrim(ctx.Provider),
+    channel: channelValue,
     provider: safeTrim(ctx.Provider),
     surface: safeTrim(ctx.Surface),
     chat_type: chatType ?? (isDirect ? "direct" : undefined),
