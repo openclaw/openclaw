@@ -92,39 +92,31 @@ describe("web monitor inbox – offline messages", () => {
   });
 
   it("skips old append messages even when replyToOfflineMessages is true", async () => {
-    vi.useFakeTimers();
-    try {
-      const now = 1_700_000_600;
-      vi.setSystemTime(now * 1000);
+    const onMessage = vi.fn(async () => {});
+    const listener = await monitorWebInbox({
+      verbose: false,
+      onMessage,
+      accountId: DEFAULT_ACCOUNT_ID,
+      authDir: getAuthDir(),
+      replyToOfflineMessages: true,
+      offlineMessageMaxAgeSeconds: 300,
+    });
+    const sock = getSock();
 
-      const onMessage = vi.fn(async () => {});
-      const listener = await monitorWebInbox({
-        verbose: false,
-        onMessage,
-        accountId: DEFAULT_ACCOUNT_ID,
-        authDir: getAuthDir(),
-        replyToOfflineMessages: true,
-        offlineMessageMaxAgeSeconds: 300,
-      });
-      const sock = getSock();
+    // Message timestamp is 10 minutes ago (600s > 300s threshold)
+    const oldTimestamp = Math.floor(Date.now() / 1000) - 600;
+    const upsert = buildMessageUpsert({
+      id: "offline-old",
+      remoteJid: "999@s.whatsapp.net",
+      text: "very old message",
+      timestamp: oldTimestamp,
+      type: "append",
+    });
 
-      // Message is 600 seconds old (> 300s threshold)
-      const upsert = buildMessageUpsert({
-        id: "offline-old",
-        remoteJid: "999@s.whatsapp.net",
-        text: "very old message",
-        timestamp: 1_700_000_000,
-        type: "append",
-      });
+    sock.ev.emit("messages.upsert", upsert);
+    await tick();
 
-      sock.ev.emit("messages.upsert", upsert);
-      await vi.runAllTimersAsync();
-      await new Promise((resolve) => setImmediate(resolve));
-
-      expect(onMessage).not.toHaveBeenCalled();
-      await listener.close();
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(onMessage).not.toHaveBeenCalled();
+    await listener.close();
   });
 });
