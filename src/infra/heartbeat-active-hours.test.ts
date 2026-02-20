@@ -39,7 +39,7 @@ describe("isWithinActiveHours", () => {
     ).toBe(true);
   });
 
-  it("returns true when activeHours start equals end", () => {
+  it("returns false when activeHours start equals end", () => {
     const cfg = cfgWithUserTimezone("UTC");
     expect(
       isWithinActiveHours(
