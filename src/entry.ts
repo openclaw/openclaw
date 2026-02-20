@@ -93,6 +93,17 @@ if (!ensureExperimentalWarningSuppressed()) {
   // Prefer --profile flag; fall back to OPENCLAW_PROFILE env var so that
   // `OPENCLAW_PROFILE=morebetter openclaw gateway run` correctly derives
   // state/config paths (not just profile name) without requiring the flag.
+  // Always clear inherited service env vars. A running gateway/node daemon sets
+  // these for its own child processes, but when the user runs a new CLI command
+  // (e.g. `openclaw gateway start` from within an agent exec session), the inherited
+  // values would cause the child CLI to target the parent's service instead of
+  // resolving fresh. This is safe even outside daemon contexts (vars are simply absent).
+  delete process.env.OPENCLAW_LAUNCHD_LABEL;
+  delete process.env.OPENCLAW_SYSTEMD_UNIT;
+  delete process.env.OPENCLAW_SERVICE_VERSION;
+  delete process.env.OPENCLAW_SERVICE_KIND;
+  delete process.env.OPENCLAW_SERVICE_MARKER;
+
   const effectiveProfile = parsed.profile || process.env.OPENCLAW_PROFILE?.trim() || null;
   if (effectiveProfile) {
     applyCliProfileEnv({ profile: effectiveProfile });

@@ -140,7 +140,7 @@ export async function runServiceStart(params: {
   opts?: DaemonLifecycleOptions;
 }) {
   const json = Boolean(params.opts?.json);
-  const { stdout, emit, fail } = createActionIO({ action: "start", json });
+  const { emit, fail } = createActionIO({ action: "start", json });
 
   let loaded = false;
   try {
@@ -160,25 +160,21 @@ export async function runServiceStart(params: {
     });
     return;
   }
-  try {
-    await params.service.restart({ env: process.env, stdout });
-  } catch (err) {
-    const hints = params.renderStartHints();
-    fail(`${params.serviceNoun} start failed: ${String(err)}`, hints);
-    return;
-  }
 
-  let started = true;
-  try {
-    started = await params.service.isLoaded({ env: process.env });
-  } catch {
-    started = true;
-  }
+  // Service is already loaded — report success without restarting.
+  // Restarting here would kill any running sessions connected to the gateway,
+  // causing "missing tool result in session history" errors when `gateway start`
+  // is invoked from within a running OpenClaw session (e.g. via an agent exec call).
+  // Users who explicitly want to restart should use `gateway restart`.
   emit({
     ok: true,
-    result: "started",
-    service: buildDaemonServiceSnapshot(params.service, started),
+    result: "already-running",
+    message: `${params.serviceNoun} service already running.`,
+    service: buildDaemonServiceSnapshot(params.service, loaded),
   });
+  if (!json) {
+    defaultRuntime.log(`${params.serviceNoun} service already running.`);
+  }
 }
 
 export async function runServiceStop(params: {
