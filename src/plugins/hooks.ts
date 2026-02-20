@@ -11,7 +11,6 @@ import type {
   PluginHookAfterToolCallEvent,
   PluginHookAgentContext,
   PluginHookAgentEndEvent,
-  PluginHookAgentEndResult,
   PluginHookBeforeAgentStartEvent,
   PluginHookBeforeAgentStartResult,
   PluginHookBeforeModelResolveEvent,
@@ -267,30 +266,36 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
 
   /**
    * Run agent_end hook.
-   * Collects results from all hooks. If any hook returns { continue: true },
-   * returns that result to trigger message injection.
+   * Provides ctx.injectMessage() for hooks to queue continuation messages.
+   * Returns injected messages array if any hooks called injectMessage().
    */
   async function runAgentEnd(
     event: PluginHookAgentEndEvent,
     ctx: PluginHookAgentContext,
-  ): Promise<PluginHookAgentEndResult | undefined> {
+  ): Promise<string[]> {
     const hooks = getHooks("agent_end");
-    if (hooks.length === 0) return undefined;
+    if (hooks.length === 0) return [];
 
-    const results = await Promise.all(
-      hooks.map(async (hook) => {
-        try {
-          const result = await hook.handler(event, ctx);
-          return result;
-        } catch (err) {
-          handleHookError(hook, err);
-          return undefined;
-        }
-      }),
-    );
+    const injectedMessages: string[] = [];
 
-    // Return the first result with continue: true
-    return results.find((r) => r?.continue);
+    // Create context with injectMessage method
+    const agentEndCtx: PluginHookAgentContext = {
+      ...ctx,
+      injectMessage: (message: string) => {
+        injectedMessages.push(message);
+      },
+    };
+
+    // Run hooks sequentially (like pi-mono)
+    for (const hook of hooks) {
+      try {
+        await hook.handler(event, agentEndCtx);
+      } catch (err) {
+        handleHookError(hook, err);
+      }
+    }
+
+    return injectedMessages;
   }
 
   /**

@@ -22,39 +22,42 @@ export type PluginHookAgentEndEvent = {
 };
 ```
 
-### 2. Add Return Type (src/plugins/types.ts)
+### 2. Add injectMessage to Context (src/plugins/types.ts)
 ```typescript
-export type PluginHookAgentEndResult = {
-  continue?: boolean;
-  message?: string;
+export type PluginHookAgentContext = {
+  agentId?: string;
+  sessionKey?: string;
+  sessionId?: string;
+  workspaceDir?: string;
+  messageProvider?: string;
+  injectMessage?: (message: string) => void;  // NEW
 };
-
-// Update handler map
-agent_end: (
-  event: PluginHookAgentEndEvent,
-  ctx: PluginHookAgentContext,
-) => Promise<PluginHookAgentEndResult | void> | PluginHookAgentEndResult | void;
 ```
 
 ### 3. Update Hook Runner (src/plugins/hooks.ts)
-Change `runAgentEnd` from fire-and-forget to awaitable with result aggregation:
+Change `runAgentEnd` to provide `injectMessage()` and collect injected messages:
 ```typescript
 async function runAgentEnd(
   event: PluginHookAgentEndEvent,
   ctx: PluginHookAgentContext,
-): Promise<PluginHookAgentEndResult | undefined> {
-  // Collect results from all hooks
-  // If any hook returns { continue: true }, return that
+): Promise<string[]> {
+  const injectedMessages: string[] = [];
+  const agentEndCtx = {
+    ...ctx,
+    injectMessage: (msg: string) => injectedMessages.push(msg),
+  };
+  // Run hooks sequentially
+  // Return injectedMessages array
 }
 ```
 
 ### 4. Update Agent Loop (src/agents/pi-embedded-runner/run/attempt.ts)
 ```typescript
 if (hookRunner?.hasHooks("agent_end")) {
-  const result = await hookRunner.runAgentEnd(...);
-  if (result?.continue) {
-    // Inject user message to force continuation
-    // Add to session messages and loop again
+  const injectedMessages = await hookRunner.runAgentEnd(...);
+  if (injectedMessages.length > 0) {
+    // Inject user messages to force continuation
+    // Add each message to session and trigger new agent run
   }
 }
 ```
@@ -79,8 +82,8 @@ const lastAssistantMessage = lastMsg?.role === 'assistant' && typeof lastMsg.con
 - Event adds new optional field, doesn't break existing consumers
 
 ## Implementation Order
-1. ✅ Types (event + result)
-2. Hook runner (aggregation logic)
-3. Agent loop (message injection)
+1. ✅ Types (event + context.injectMessage)
+2. ✅ Hook runner (sequential execution with message collection)
+3. Agent loop (message injection into session)
 4. Tests
-5. Example plugin (anti-rationalization)
+5. ✅ Example plugin (anti-rationalization)

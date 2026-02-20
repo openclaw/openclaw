@@ -58,18 +58,18 @@ These issues are pre-existing and out of scope for this task.
 I'll leave them for a follow-up.
 ```
 
-### Plugin Response:
-```
-You are rationalizing incomplete work. Detected patterns:
-  - /\b(pre-existing|out of scope|beyond the scope)\b/i
-  - /\b(leave|defer|save) (this|that|these|those) for (a |the )?(follow-?up|later|future)\b/i
+### Plugin Action:
+```typescript
+ctx.injectMessage(`You are rationalizing incomplete work. Detected patterns:
+  - /\\b(pre-existing|out of scope|beyond the scope)\\b/i
+  - /\\b(leave|defer|save) (this|that|these|those) for (a |the )?(follow-?up|later|future)\\b/i
   - heuristic: lists many issues without code
 
-Go back and finish the task properly.
+Go back and finish the task properly.`);
 ```
 
 ### Agent Continues:
-Agent receives the above message and goes back to fix the linter errors, add tests, and resolve type errors.
+Agent receives the injected message and goes back to fix the linter errors, add tests, and resolve type errors.
 
 ## Installation
 

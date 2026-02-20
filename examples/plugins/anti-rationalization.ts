@@ -141,17 +141,11 @@ export default function antiRationalizationPlugin(api: OpenClawPluginApi) {
 
       if (aggressive) {
         // In aggressive mode, always force continuation
-        return {
-          continue: true,
-          message: judgment.reason || "Continue with the task.",
-        };
+        ctx.injectMessage?.(judgment.reason || "Continue with the task.");
       } else {
         // In normal mode, only continue if multiple patterns detected
         if ((judgment.patterns?.length || 0) >= 2) {
-          return {
-            continue: true,
-            message: judgment.reason || "Continue with the task.",
-          };
+          ctx.injectMessage?.(judgment.reason || "Continue with the task.");
         } else {
           api.logger.info(
             "[anti-rationalization] Single pattern detected, not forcing continuation (set aggressive: true to override)",
@@ -161,9 +155,6 @@ export default function antiRationalizationPlugin(api: OpenClawPluginApi) {
     } else {
       api.logger.debug("[anti-rationalization] Work appears complete");
     }
-
-    // Allow agent to finish
-    return undefined;
   });
 
   api.logger.info(
