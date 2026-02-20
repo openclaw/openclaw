@@ -14,6 +14,7 @@ import {
 } from "../../config/sessions.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import { GATEWAY_CLIENT_IDS } from "../protocol/client-info.js";
 import {
   ErrorCodes,
   errorShape,
@@ -74,7 +75,15 @@ function rejectWebchatSessionMutation(params: {
   isWebchatConnect: (params: GatewayClient["connect"] | null | undefined) => boolean;
   respond: RespondFn;
 }): boolean {
-  if (!params.client?.connect || !params.isWebchatConnect(params.client.connect)) {
+  const connect = params.client?.connect;
+  if (!connect) {
+    return false;
+  }
+  // Control UI is an operator surface and must retain session mutation APIs.
+  if (connect.client?.id === GATEWAY_CLIENT_IDS.CONTROL_UI) {
+    return false;
+  }
+  if (!params.isWebchatConnect(connect)) {
     return false;
   }
   params.respond(
