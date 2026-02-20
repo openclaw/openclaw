@@ -107,6 +107,7 @@ pnpm openclaw onboard --install-daemon
 pnpm gateway:watch
 
 # Windows (native PowerShell/cmd, no WSL2)
+openclaw gateway stop
 node scripts/watch-node.mjs gateway run --bind loopback --port 18789 --allow-unconfigured
 ```
 
