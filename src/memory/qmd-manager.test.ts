@@ -1079,6 +1079,42 @@ describe("QmdMemoryManager", () => {
     readFileSpy.mockRestore();
   });
 
+  it("returns empty text when a qmd workspace file does not exist", async () => {
+    const { manager } = await createManager();
+    const result = await manager.readFile({ relPath: "ghost.md" });
+    expect(result).toEqual({ text: "", path: "ghost.md" });
+    await manager.close();
+  });
+
+  it("returns empty text when a qmd file disappears before partial read", async () => {
+    const relPath = "qmd-window.md";
+    const absPath = path.join(workspaceDir, relPath);
+    await fs.writeFile(absPath, "one\ntwo\nthree", "utf-8");
+
+    const { manager } = await createManager();
+
+    const realOpen = fs.open;
+    let injected = false;
+    const openSpy = vi
+      .spyOn(fs, "open")
+      .mockImplementation(async (...args: Parameters<typeof realOpen>) => {
+        const [target, options] = args;
+        if (!injected && typeof target === "string" && path.resolve(target) === absPath) {
+          injected = true;
+          const err = new Error("gone") as NodeJS.ErrnoException;
+          err.code = "ENOENT";
+          throw err;
+        }
+        return realOpen(target, options);
+      });
+
+    const result = await manager.readFile({ relPath, from: 2, lines: 1 });
+    expect(result).toEqual({ text: "", path: relPath });
+
+    openSpy.mockRestore();
+    await manager.close();
+  });
+
   it("reuses exported session markdown files when inputs are unchanged", async () => {
     const writeFileSpy = vi.spyOn(fs, "writeFile");
     const sessionsDir = path.join(stateDir, "agents", agentId, "sessions");
@@ -1114,7 +1150,6 @@ describe("QmdMemoryManager", () => {
     await manager.sync({ reason: "manual" });
     expect(writeFileSpy.mock.calls.length).toBe(firstExportWrites);
 
-    await new Promise((resolve) => setTimeout(resolve, 5));
     await fs.writeFile(
       sessionFile,
       '{"type":"message","message":{"role":"user","content":"follow-up update"}}\n',

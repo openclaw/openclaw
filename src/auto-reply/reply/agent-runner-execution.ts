@@ -1,6 +1,5 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
-import { resolveAgentModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionId } from "../../agents/cli-session.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
@@ -14,7 +13,6 @@ import {
 } from "../../agents/pi-embedded-helpers.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import {
-  resolveAgentIdFromSessionKey,
   resolveGroupSessionKey,
   resolveSessionTranscriptPath,
   type SessionEntry,
@@ -33,22 +31,32 @@ import type { VerboseLevel } from "../thinking.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
-  buildEmbeddedContextFromTemplate,
-  buildTemplateSenderContext,
-  resolveRunAuthProfile,
+  buildEmbeddedRunBaseParams,
+  buildEmbeddedRunContexts,
+  resolveModelFallbackOptions,
 } from "./agent-runner-utils.js";
-import { resolveEnforceFinalTag } from "./agent-runner-utils.js";
 import { type BlockReplyPipeline } from "./block-reply-pipeline.js";
 import type { FollowupRun } from "./queue.js";
 import { createBlockReplyDeliveryHandler } from "./reply-delivery.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
+export type RuntimeFallbackAttempt = {
+  provider: string;
+  model: string;
+  error: string;
+  reason?: string;
+  status?: number;
+  code?: string;
+};
+
 export type AgentRunLoopResult =
   | {
       kind: "success";
+      runId: string;
       runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
       fallbackProvider?: string;
       fallbackModel?: string;
+      fallbackAttempts: RuntimeFallbackAttempt[];
       didLogHeartbeatStrip: boolean;
       autoCompactionCompleted: boolean;
       /** Payload keys sent directly (not via pipeline) during tool flush. */
@@ -91,7 +99,14 @@ export async function runAgentTurnWithFallback(params: {
   const directlySentBlockKeys = new Set<string>();
 
   const runId = params.opts?.runId ?? crypto.randomUUID();
-  params.opts?.onAgentRunStart?.(runId);
+  let didNotifyAgentRunStart = false;
+  const notifyAgentRunStart = () => {
+    if (didNotifyAgentRunStart) {
+      return;
+    }
+    didNotifyAgentRunStart = true;
+    params.opts?.onAgentRunStart?.(runId);
+  };
   if (params.sessionKey) {
     registerAgentRunContext(runId, {
       sessionKey: params.sessionKey,
@@ -102,18 +117,13 @@ export async function runAgentTurnWithFallback(params: {
   let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
   let fallbackProvider = params.followupRun.run.provider;
   let fallbackModel = params.followupRun.run.model;
+  let fallbackAttempts: RuntimeFallbackAttempt[] = [];
   let didResetAfterCompactionFailure = false;
   let didRetryTransientHttpError = false;
 
   while (true) {
     try {
-      const allowPartialStream = !(
-        params.followupRun.run.reasoningLevel === "stream" && params.opts?.onReasoningStream
-      );
       const normalizeStreamingText = (payload: ReplyPayload): { text?: string; skip: boolean } => {
-        if (!allowPartialStream) {
-          return { skip: true };
-        }
         let text = payload.text;
         if (!params.isHeartbeat && text?.includes("HEARTBEAT_OK")) {
           const stripped = stripHeartbeatToken(text, {
@@ -157,14 +167,7 @@ export async function runAgentTurnWithFallback(params: {
       const blockReplyPipeline = params.blockReplyPipeline;
       const onToolResult = params.opts?.onToolResult;
       const fallbackResult = await runWithModelFallback({
-        cfg: params.followupRun.run.config,
-        provider: params.followupRun.run.provider,
-        model: params.followupRun.run.model,
-        agentDir: params.followupRun.run.agentDir,
-        fallbacksOverride: resolveAgentModelFallbacksOverride(
-          params.followupRun.run.config,
-          resolveAgentIdFromSessionKey(params.followupRun.run.sessionKey),
-        ),
+        ...resolveModelFallbackOptions(params.followupRun.run),
         run: (provider, model) => {
           // Notify that model selection is complete (including after fallback).
           // This allows responsePrefix template interpolation with the actual model.
@@ -176,6 +179,7 @@ export async function runAgentTurnWithFallback(params: {
 
           if (isCliProvider(provider, params.followupRun.run.config)) {
             const startedAt = Date.now();
+            notifyAgentRunStart();
             emitAgentEvent({
               runId,
               stream: "lifecycle",
@@ -262,13 +266,19 @@ export async function runAgentTurnWithFallback(params: {
               }
             })();
           }
-          const authProfile = resolveRunAuthProfile(params.followupRun.run, provider);
-          const embeddedContext = buildEmbeddedContextFromTemplate({
+          const { authProfile, embeddedContext, senderContext } = buildEmbeddedRunContexts({
             run: params.followupRun.run,
             sessionCtx: params.sessionCtx,
             hasRepliedRef: params.opts?.hasRepliedRef,
+            provider,
           });
-          const senderContext = buildTemplateSenderContext(params.sessionCtx);
+          const runBaseParams = buildEmbeddedRunBaseParams({
+            run: params.followupRun.run,
+            provider,
+            model,
+            runId,
+            authProfile,
+          });
           return runEmbeddedPiAgent({
             ...embeddedContext,
             groupId: resolveGroupSessionKey(params.sessionCtx)?.id,
@@ -276,22 +286,9 @@ export async function runAgentTurnWithFallback(params: {
               params.sessionCtx.GroupChannel?.trim() ?? params.sessionCtx.GroupSubject?.trim(),
             groupSpace: params.sessionCtx.GroupSpace?.trim() ?? undefined,
             ...senderContext,
-            sessionFile: params.followupRun.run.sessionFile,
-            workspaceDir: params.followupRun.run.workspaceDir,
-            agentDir: params.followupRun.run.agentDir,
-            config: params.followupRun.run.config,
-            skillsSnapshot: params.followupRun.run.skillsSnapshot,
+            ...runBaseParams,
             prompt: params.commandBody,
             extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
-            ownerNumbers: params.followupRun.run.ownerNumbers,
-            enforceFinalTag: resolveEnforceFinalTag(params.followupRun.run, provider),
-            provider,
-            model,
-            ...authProfile,
-            thinkLevel: params.followupRun.run.thinkLevel,
-            verboseLevel: params.followupRun.run.verboseLevel,
-            reasoningLevel: params.followupRun.run.reasoningLevel,
-            execOverrides: params.followupRun.run.execOverrides,
             toolResultFormat: (() => {
               const channel = resolveMessageChannel(
                 params.sessionCtx.Surface,
@@ -303,25 +300,20 @@ export async function runAgentTurnWithFallback(params: {
               return isMarkdownCapableMessageChannel(channel) ? "markdown" : "plain";
             })(),
             suppressToolErrorWarnings: params.opts?.suppressToolErrorWarnings,
-            bashElevated: params.followupRun.run.bashElevated,
-            timeoutMs: params.followupRun.run.timeoutMs,
-            runId,
             images: params.opts?.images,
             abortSignal: params.opts?.abortSignal,
             blockReplyBreak: params.resolvedBlockStreamingBreak,
             blockReplyChunking: params.blockReplyChunking,
-            onPartialReply: allowPartialStream
-              ? async (payload) => {
-                  const textForTyping = await handlePartialForTyping(payload);
-                  if (!params.opts?.onPartialReply || textForTyping === undefined) {
-                    return;
-                  }
-                  await params.opts.onPartialReply({
-                    text: textForTyping,
-                    mediaUrls: payload.mediaUrls,
-                  });
-                }
-              : undefined,
+            onPartialReply: async (payload) => {
+              const textForTyping = await handlePartialForTyping(payload);
+              if (!params.opts?.onPartialReply || textForTyping === undefined) {
+                return;
+              }
+              await params.opts.onPartialReply({
+                text: textForTyping,
+                mediaUrls: payload.mediaUrls,
+              });
+            },
             onAssistantMessageStart: async () => {
               await params.typingSignals.signalMessageStart();
               await params.opts?.onAssistantMessageStart?.();
@@ -338,6 +330,12 @@ export async function runAgentTurnWithFallback(params: {
                 : undefined,
             onReasoningEnd: params.opts?.onReasoningEnd,
             onAgentEvent: async (evt) => {
+              // Signal run start only after the embedded agent emits real activity.
+              const hasLifecyclePhase =
+                evt.stream === "lifecycle" && typeof evt.data.phase === "string";
+              if (evt.stream !== "lifecycle" || hasLifecyclePhase) {
+                notifyAgentRunStart();
+              }
               // Trigger typing when tools start executing.
               // Must await to ensure typing indicator starts before tool summaries are emitted.
               if (evt.stream === "tool") {
@@ -381,29 +379,35 @@ export async function runAgentTurnWithFallback(params: {
             shouldEmitToolResult: params.shouldEmitToolResult,
             shouldEmitToolOutput: params.shouldEmitToolOutput,
             onToolResult: onToolResult
-              ? (payload) => {
-                  // `subscribeEmbeddedPiSession` may invoke tool callbacks without awaiting them.
-                  // If a tool callback starts typing after the run finalized, we can end up with
-                  // a typing loop that never sees a matching markRunComplete(). Track and drain.
-                  const task = (async () => {
-                    const { text, skip } = normalizeStreamingText(payload);
-                    if (skip) {
-                      return;
-                    }
-                    await params.typingSignals.signalTextDelta(text);
-                    await onToolResult({
-                      text,
-                      mediaUrls: payload.mediaUrls,
-                    });
-                  })()
-                    .catch((err) => {
-                      logVerbose(`tool result delivery failed: ${String(err)}`);
-                    })
-                    .finally(() => {
+              ? (() => {
+                  // Serialize tool result delivery to preserve message ordering.
+                  // Without this, concurrent tool callbacks race through typing signals
+                  // and message sends, causing out-of-order delivery to the user.
+                  // See: https://github.com/openclaw/openclaw/issues/11044
+                  let toolResultChain: Promise<void> = Promise.resolve();
+                  return (payload: ReplyPayload) => {
+                    toolResultChain = toolResultChain
+                      .then(async () => {
+                        const { text, skip } = normalizeStreamingText(payload);
+                        if (skip) {
+                          return;
+                        }
+                        await params.typingSignals.signalTextDelta(text);
+                        await onToolResult({
+                          text,
+                          mediaUrls: payload.mediaUrls,
+                        });
+                      })
+                      .catch((err) => {
+                        // Keep chain healthy after an error so later tool results still deliver.
+                        logVerbose(`tool result delivery failed: ${String(err)}`);
+                      });
+                    const task = toolResultChain.finally(() => {
                       params.pendingToolTasks.delete(task);
                     });
-                  params.pendingToolTasks.add(task);
-                }
+                    params.pendingToolTasks.add(task);
+                  };
+                })()
               : undefined,
           });
         },
@@ -411,6 +415,16 @@ export async function runAgentTurnWithFallback(params: {
       runResult = fallbackResult.result;
       fallbackProvider = fallbackResult.provider;
       fallbackModel = fallbackResult.model;
+      fallbackAttempts = Array.isArray(fallbackResult.attempts)
+        ? fallbackResult.attempts.map((attempt) => ({
+            provider: String(attempt.provider ?? ""),
+            model: String(attempt.model ?? ""),
+            error: String(attempt.error ?? ""),
+            reason: attempt.reason ? String(attempt.reason) : undefined,
+            status: typeof attempt.status === "number" ? attempt.status : undefined,
+            code: attempt.code ? String(attempt.code) : undefined,
+          }))
+        : [];
 
       // Some embedded runs surface context overflow as an error payload instead of throwing.
       // Treat those as a session-level failure and auto-recover by starting a fresh session.
@@ -557,9 +571,11 @@ export async function runAgentTurnWithFallback(params: {
 
   return {
     kind: "success",
+    runId,
     runResult,
     fallbackProvider,
     fallbackModel,
+    fallbackAttempts,
     didLogHeartbeatStrip,
     autoCompactionCompleted,
     directlySentBlockKeys: directlySentBlockKeys.size > 0 ? directlySentBlockKeys : undefined,

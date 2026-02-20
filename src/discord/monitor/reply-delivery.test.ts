@@ -52,16 +52,18 @@ describe("deliverDiscordReply", () => {
       1,
       "channel:123",
       "Hello there",
-      expect.objectContaining({ token: "token" }),
+      expect.objectContaining({ token: "token", replyTo: "reply-1" }),
     );
     expect(sendMessageDiscordMock).toHaveBeenNthCalledWith(
       2,
       "channel:123",
       "",
-      expect.objectContaining({ token: "token", mediaUrl: "https://example.com/extra.mp3" }),
+      expect.objectContaining({
+        token: "token",
+        mediaUrl: "https://example.com/extra.mp3",
+        replyTo: "reply-1",
+      }),
     );
-    expect(sendMessageDiscordMock.mock.calls[0]?.[2]).not.toHaveProperty("replyTo");
-    expect(sendMessageDiscordMock.mock.calls[1]?.[2]).not.toHaveProperty("replyTo");
   });
 
   it("skips follow-up text when the voice payload text is blank", async () => {

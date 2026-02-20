@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi, OpenClawPluginToolContext } from "../../../src/plugins/types.js";
 
 const spawnState = vi.hoisted(() => ({
@@ -57,16 +57,51 @@ function fakeCtx(overrides: Partial<OpenClawPluginToolContext> = {}): OpenClawPl
   };
 }
 
+function setProcessPlatform(platform: NodeJS.Platform) {
+  Object.defineProperty(process, "platform", {
+    value: platform,
+    configurable: true,
+  });
+}
+
 describe("lobster plugin tool", () => {
   let tempDir = "";
-  let lobsterBinPath = "";
+  const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+  const originalPath = process.env.PATH;
+  const originalPathAlt = process.env.Path;
+  const originalPathExt = process.env.PATHEXT;
+  const originalPathExtAlt = process.env.Pathext;
 
   beforeAll(async () => {
     ({ createLobsterTool } = await import("./lobster-tool.js"));
 
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lobster-plugin-"));
-    lobsterBinPath = path.join(tempDir, process.platform === "win32" ? "lobster.cmd" : "lobster");
-    await fs.writeFile(lobsterBinPath, "", { encoding: "utf8", mode: 0o755 });
+  });
+
+  afterEach(() => {
+    if (originalPlatform) {
+      Object.defineProperty(process, "platform", originalPlatform);
+    }
+    if (originalPath === undefined) {
+      delete process.env.PATH;
+    } else {
+      process.env.PATH = originalPath;
+    }
+    if (originalPathAlt === undefined) {
+      delete process.env.Path;
+    } else {
+      process.env.Path = originalPathAlt;
+    }
+    if (originalPathExt === undefined) {
+      delete process.env.PATHEXT;
+    } else {
+      process.env.PATHEXT = originalPathExt;
+    }
+    if (originalPathExtAlt === undefined) {
+      delete process.env.Pathext;
+    } else {
+      process.env.Pathext = originalPathExtAlt;
+    }
   });
 
   afterAll(async () => {
@@ -110,6 +145,28 @@ describe("lobster plugin tool", () => {
     });
   });
 
+  const queueSuccessfulEnvelope = (hello = "world") => {
+    spawnState.queue.push({
+      stdout: JSON.stringify({
+        ok: true,
+        status: "ok",
+        output: [{ hello }],
+        requiresApproval: null,
+      }),
+    });
+  };
+
+  const createWindowsShimFixture = async (params: {
+    shimPath: string;
+    scriptPath: string;
+    scriptToken: string;
+  }) => {
+    await fs.mkdir(path.dirname(params.scriptPath), { recursive: true });
+    await fs.mkdir(path.dirname(params.shimPath), { recursive: true });
+    await fs.writeFile(params.scriptPath, "module.exports = {};\n", "utf8");
+    await fs.writeFile(params.shimPath, `@echo off\r\n"${params.scriptToken}" %*\r\n`, "utf8");
+  };
+
   it("runs lobster and returns parsed envelope in details", async () => {
     spawnState.queue.push({
       stdout: JSON.stringify({
@@ -147,26 +204,43 @@ describe("lobster plugin tool", () => {
     expect(res.details).toMatchObject({ ok: true, status: "ok" });
   });
 
-  it("requires absolute lobsterPath when provided (even though it is ignored)", async () => {
+  it("requires action", async () => {
     const tool = createLobsterTool(fakeApi());
-    await expect(
-      tool.execute("call2", {
-        action: "run",
-        pipeline: "noop",
-        lobsterPath: "./lobster",
-      }),
-    ).rejects.toThrow(/absolute path/);
+    await expect(tool.execute("call-action-missing", {})).rejects.toThrow(/action required/);
   });
 
-  it("rejects lobsterPath (deprecated) when invalid", async () => {
+  it("requires pipeline for run action", async () => {
     const tool = createLobsterTool(fakeApi());
     await expect(
-      tool.execute("call2b", {
+      tool.execute("call-pipeline-missing", {
         action: "run",
-        pipeline: "noop",
-        lobsterPath: "/bin/bash",
       }),
-    ).rejects.toThrow(/lobster executable/);
+    ).rejects.toThrow(/pipeline required/);
+  });
+
+  it("requires token and approve for resume action", async () => {
+    const tool = createLobsterTool(fakeApi());
+    await expect(
+      tool.execute("call-resume-token-missing", {
+        action: "resume",
+        approve: true,
+      }),
+    ).rejects.toThrow(/token required/);
+    await expect(
+      tool.execute("call-resume-approve-missing", {
+        action: "resume",
+        token: "resume-token",
+      }),
+    ).rejects.toThrow(/approve required/);
+  });
+
+  it("rejects unknown action", async () => {
+    const tool = createLobsterTool(fakeApi());
+    await expect(
+      tool.execute("call-action-unknown", {
+        action: "explode",
+      }),
+    ).rejects.toThrow(/Unknown action/);
   });
 
   it("rejects absolute cwd", async () => {
@@ -191,29 +265,6 @@ describe("lobster plugin tool", () => {
     ).rejects.toThrow(/must stay within/);
   });
 
-  it("uses pluginConfig.lobsterPath when provided", async () => {
-    spawnState.queue.push({
-      stdout: JSON.stringify({
-        ok: true,
-        status: "ok",
-        output: [{ hello: "world" }],
-        requiresApproval: null,
-      }),
-    });
-
-    const tool = createLobsterTool(fakeApi({ pluginConfig: { lobsterPath: lobsterBinPath } }));
-    const res = await tool.execute("call-plugin-config", {
-      action: "run",
-      pipeline: "noop",
-      timeoutMs: 1000,
-    });
-
-    expect(spawnState.spawn).toHaveBeenCalled();
-    const [execPath] = spawnState.spawn.mock.calls[0] ?? [];
-    expect(execPath).toBe(lobsterBinPath);
-    expect(res.details).toMatchObject({ ok: true, status: "ok" });
-  });
-
   it("rejects invalid JSON from lobster", async () => {
     spawnState.queue.push({ stdout: "nope" });
 
@@ -224,6 +275,59 @@ describe("lobster plugin tool", () => {
         pipeline: "noop",
       }),
     ).rejects.toThrow(/invalid JSON/);
+  });
+
+  it("runs Windows cmd shims through Node without enabling shell", async () => {
+    setProcessPlatform("win32");
+    const shimScriptPath = path.join(tempDir, "shim-dist", "lobster-cli.cjs");
+    const shimPath = path.join(tempDir, "shim-bin", "lobster.cmd");
+    await createWindowsShimFixture({
+      shimPath,
+      scriptPath: shimScriptPath,
+      scriptToken: "%dp0%\\..\\shim-dist\\lobster-cli.cjs",
+    });
+    process.env.PATHEXT = ".CMD;.EXE";
+    process.env.PATH = `${path.dirname(shimPath)};${process.env.PATH ?? ""}`;
+    queueSuccessfulEnvelope();
+
+    const tool = createLobsterTool(fakeApi());
+    await tool.execute("call-win-shim", {
+      action: "run",
+      pipeline: "noop",
+    });
+
+    const [command, argv, options] = spawnState.spawn.mock.calls[0] ?? [];
+    expect(command).toBe(process.execPath);
+    expect(argv).toEqual([shimScriptPath, "run", "--mode", "tool", "noop"]);
+    expect(options).toMatchObject({ windowsHide: true });
+    expect(options).not.toHaveProperty("shell");
+  });
+
+  it("does not retry a failed Windows spawn with shell fallback", async () => {
+    setProcessPlatform("win32");
+    spawnState.spawn.mockReset();
+    spawnState.spawn.mockImplementationOnce(() => {
+      const child = new EventEmitter() as EventEmitter & {
+        stdout: PassThrough;
+        stderr: PassThrough;
+        kill: (signal?: string) => boolean;
+      };
+      child.stdout = new PassThrough();
+      child.stderr = new PassThrough();
+      child.kill = () => true;
+      const err = Object.assign(new Error("spawn failed"), { code: "ENOENT" });
+      setImmediate(() => child.emit("error", err));
+      return child;
+    });
+
+    const tool = createLobsterTool(fakeApi());
+    await expect(
+      tool.execute("call-win-no-retry", {
+        action: "run",
+        pipeline: "noop",
+      }),
+    ).rejects.toThrow(/spawn failed/);
+    expect(spawnState.spawn).toHaveBeenCalledTimes(1);
   });
 
   it("can be gated off in sandboxed contexts", async () => {

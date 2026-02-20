@@ -95,6 +95,8 @@ import {
   DevicePairApproveParamsSchema,
   type DevicePairListParams,
   DevicePairListParamsSchema,
+  type DevicePairRemoveParams,
+  DevicePairRemoveParamsSchema,
   type DevicePairRejectParams,
   DevicePairRejectParamsSchema,
   type DeviceTokenRevokeParams,
@@ -128,18 +130,6 @@ import {
   LogsTailParamsSchema,
   type LogsTailResult,
   LogsTailResultSchema,
-  type MeshPlanParams,
-  MeshPlanParamsSchema,
-  type MeshPlanAutoParams,
-  MeshPlanAutoParamsSchema,
-  type MeshRetryParams,
-  MeshRetryParamsSchema,
-  type MeshRunParams,
-  MeshRunParamsSchema,
-  type MeshStatusParams,
-  MeshStatusParamsSchema,
-  type MeshWorkflowPlan,
-  MeshWorkflowPlanSchema,
   type ModelsListParams,
   ModelsListParamsSchema,
   type NodeDescribeParams,
@@ -167,6 +157,9 @@ import {
   type PollParams,
   PollParamsSchema,
   PROTOCOL_VERSION,
+  type PushTestParams,
+  PushTestParamsSchema,
+  PushTestResultSchema,
   type PresenceEntry,
   PresenceEntrySchema,
   ProtocolSchemas,
@@ -287,6 +280,7 @@ export const validateNodeInvokeResultParams = ajv.compile<NodeInvokeResultParams
   NodeInvokeResultParamsSchema,
 );
 export const validateNodeEventParams = ajv.compile<NodeEventParams>(NodeEventParamsSchema);
+export const validatePushTestParams = ajv.compile<PushTestParams>(PushTestParamsSchema);
 export const validateSessionsListParams = ajv.compile<SessionsListParams>(SessionsListParamsSchema);
 export const validateSessionsPreviewParams = ajv.compile<SessionsPreviewParams>(
   SessionsPreviewParamsSchema,
@@ -345,6 +339,9 @@ export const validateDevicePairApproveParams = ajv.compile<DevicePairApprovePara
 export const validateDevicePairRejectParams = ajv.compile<DevicePairRejectParams>(
   DevicePairRejectParamsSchema,
 );
+export const validateDevicePairRemoveParams = ajv.compile<DevicePairRemoveParams>(
+  DevicePairRemoveParamsSchema,
+);
 export const validateDeviceTokenRotateParams = ajv.compile<DeviceTokenRotateParams>(
   DeviceTokenRotateParamsSchema,
 );
@@ -370,11 +367,6 @@ export const validateExecApprovalsNodeSetParams = ajv.compile<ExecApprovalsNodeS
   ExecApprovalsNodeSetParamsSchema,
 );
 export const validateLogsTailParams = ajv.compile<LogsTailParams>(LogsTailParamsSchema);
-export const validateMeshPlanParams = ajv.compile<MeshPlanParams>(MeshPlanParamsSchema);
-export const validateMeshPlanAutoParams = ajv.compile<MeshPlanAutoParams>(MeshPlanAutoParamsSchema);
-export const validateMeshRunParams = ajv.compile<MeshRunParams>(MeshRunParamsSchema);
-export const validateMeshStatusParams = ajv.compile<MeshStatusParams>(MeshStatusParamsSchema);
-export const validateMeshRetryParams = ajv.compile<MeshRetryParams>(MeshRetryParamsSchema);
 export const validateChatHistoryParams = ajv.compile(ChatHistoryParamsSchema);
 export const validateChatSendParams = ajv.compile(ChatSendParamsSchema);
 export const validateChatAbortParams = ajv.compile<ChatAbortParams>(ChatAbortParamsSchema);
@@ -434,18 +426,14 @@ export {
   StateVersionSchema,
   AgentEventSchema,
   ChatEventSchema,
-  MeshPlanParamsSchema,
-  MeshPlanAutoParamsSchema,
-  MeshWorkflowPlanSchema,
-  MeshRunParamsSchema,
-  MeshStatusParamsSchema,
-  MeshRetryParamsSchema,
   SendParamsSchema,
   PollParamsSchema,
   AgentParamsSchema,
   AgentIdentityParamsSchema,
   AgentIdentityResultSchema,
   WakeParamsSchema,
+  PushTestParamsSchema,
+  PushTestResultSchema,
   NodePairRequestParamsSchema,
   NodePairListParamsSchema,
   NodePairApproveParamsSchema,
@@ -539,12 +527,6 @@ export type {
   AgentIdentityResult,
   AgentWaitParams,
   ChatEvent,
-  MeshPlanParams,
-  MeshPlanAutoParams,
-  MeshWorkflowPlan,
-  MeshRunParams,
-  MeshStatusParams,
-  MeshRetryParams,
   TickEvent,
   ShutdownEvent,
   WakeParams,

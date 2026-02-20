@@ -1,6 +1,20 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "./types.js";
-import { clearExpiredCooldowns, isProfileInCooldown } from "./usage.js";
+import {
+  clearAuthProfileCooldown,
+  clearExpiredCooldowns,
+  isProfileInCooldown,
+  resolveProfileUnusableUntil,
+} from "./usage.js";
+
+vi.mock("./store.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("./store.js")>();
+  return {
+    ...original,
+    updateAuthProfileStoreWithLock: vi.fn().mockResolvedValue(null),
+    saveAuthProfileStore: vi.fn(),
+  };
+});
 
 function makeStore(usageStats: AuthProfileStore["usageStats"]): AuthProfileStore {
   return {
@@ -12,6 +26,18 @@ function makeStore(usageStats: AuthProfileStore["usageStats"]): AuthProfileStore
     usageStats,
   };
 }
+
+describe("resolveProfileUnusableUntil", () => {
+  it("returns null when both values are missing or invalid", () => {
+    expect(resolveProfileUnusableUntil({})).toBeNull();
+    expect(resolveProfileUnusableUntil({ cooldownUntil: 0, disabledUntil: Number.NaN })).toBeNull();
+  });
+
+  it("returns the latest active timestamp", () => {
+    expect(resolveProfileUnusableUntil({ cooldownUntil: 100, disabledUntil: 200 })).toBe(200);
+    expect(resolveProfileUnusableUntil({ cooldownUntil: 300 })).toBe(300);
+  });
+});
 
 // ---------------------------------------------------------------------------
 // isProfileInCooldown
@@ -265,5 +291,57 @@ describe("clearExpiredCooldowns", () => {
     });
 
     expect(clearExpiredCooldowns(store)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// clearAuthProfileCooldown
+// ---------------------------------------------------------------------------
+
+describe("clearAuthProfileCooldown", () => {
+  it("clears all error state fields including disabledUntil and failureCounts", async () => {
+    const store = makeStore({
+      "anthropic:default": {
+        cooldownUntil: Date.now() + 60_000,
+        disabledUntil: Date.now() + 3_600_000,
+        disabledReason: "billing",
+        errorCount: 5,
+        failureCounts: { billing: 3, rate_limit: 2 },
+      },
+    });
+
+    await clearAuthProfileCooldown({ store, profileId: "anthropic:default" });
+
+    const stats = store.usageStats?.["anthropic:default"];
+    expect(stats?.cooldownUntil).toBeUndefined();
+    expect(stats?.disabledUntil).toBeUndefined();
+    expect(stats?.disabledReason).toBeUndefined();
+    expect(stats?.errorCount).toBe(0);
+    expect(stats?.failureCounts).toBeUndefined();
+  });
+
+  it("preserves lastUsed and lastFailureAt timestamps", async () => {
+    const lastUsed = Date.now() - 10_000;
+    const lastFailureAt = Date.now() - 5_000;
+    const store = makeStore({
+      "anthropic:default": {
+        cooldownUntil: Date.now() + 60_000,
+        errorCount: 3,
+        lastUsed,
+        lastFailureAt,
+      },
+    });
+
+    await clearAuthProfileCooldown({ store, profileId: "anthropic:default" });
+
+    const stats = store.usageStats?.["anthropic:default"];
+    expect(stats?.lastUsed).toBe(lastUsed);
+    expect(stats?.lastFailureAt).toBe(lastFailureAt);
+  });
+
+  it("no-ops for unknown profile id", async () => {
+    const store = makeStore(undefined);
+    await clearAuthProfileCooldown({ store, profileId: "nonexistent" });
+    expect(store.usageStats).toBeUndefined();
   });
 });

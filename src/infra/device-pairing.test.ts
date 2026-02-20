@@ -5,6 +5,7 @@ import { describe, expect, test } from "vitest";
 import {
   approveDevicePairing,
   getPairedDevice,
+  removePairedDevice,
   requestDevicePairing,
   rotateDeviceToken,
   verifyDeviceToken,
@@ -32,6 +33,28 @@ function requireToken(token: string | undefined): string {
 }
 
 describe("device pairing tokens", () => {
+  test("reuses existing pending requests for the same device", async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
+    const first = await requestDevicePairing(
+      {
+        deviceId: "device-1",
+        publicKey: "public-key-1",
+      },
+      baseDir,
+    );
+    const second = await requestDevicePairing(
+      {
+        deviceId: "device-1",
+        publicKey: "public-key-1",
+      },
+      baseDir,
+    );
+
+    expect(first.created).toBe(true);
+    expect(second.created).toBe(false);
+    expect(second.request.requestId).toBe(first.request.requestId);
+  });
+
   test("generates base64url device tokens with 256-bit entropy output length", async () => {
     const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
     await setupPairedOperatorDevice(baseDir, ["operator.admin"]);
@@ -91,6 +114,31 @@ describe("device pairing tokens", () => {
     expect(mismatch.reason).toBe("token-mismatch");
   });
 
+  test("accepts operator.read requests with an operator.admin token scope", async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
+    await setupPairedOperatorDevice(baseDir, ["operator.admin"]);
+    const paired = await getPairedDevice("device-1", baseDir);
+    const token = requireToken(paired?.tokens?.operator?.token);
+
+    const readOk = await verifyDeviceToken({
+      deviceId: "device-1",
+      token,
+      role: "operator",
+      scopes: ["operator.read"],
+      baseDir,
+    });
+    expect(readOk.ok).toBe(true);
+
+    const writeMismatch = await verifyDeviceToken({
+      deviceId: "device-1",
+      token,
+      role: "operator",
+      scopes: ["operator.write"],
+      baseDir,
+    });
+    expect(writeMismatch).toEqual({ ok: false, reason: "scope-mismatch" });
+  });
+
   test("treats multibyte same-length token input as mismatch without throwing", async () => {
     const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
     await setupPairedOperatorDevice(baseDir, ["operator.read"]);
@@ -108,5 +156,16 @@ describe("device pairing tokens", () => {
         baseDir,
       }),
     ).resolves.toEqual({ ok: false, reason: "token-mismatch" });
+  });
+
+  test("removes paired devices by device id", async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
+    await setupPairedOperatorDevice(baseDir, ["operator.read"]);
+
+    const removed = await removePairedDevice("device-1", baseDir);
+    expect(removed).toEqual({ deviceId: "device-1" });
+    await expect(getPairedDevice("device-1", baseDir)).resolves.toBeNull();
+
+    await expect(removePairedDevice("device-1", baseDir)).resolves.toBeNull();
   });
 });
