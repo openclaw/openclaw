@@ -619,29 +619,7 @@ actor GatewayEndpointStore {
 }
 
 extension GatewayEndpointStore {
-    private static func normalizeDashboardPath(_ rawPath: String?) -> String {
-        let trimmed = (rawPath ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return "/" }
-        let withLeadingSlash = trimmed.hasPrefix("/") ? trimmed : "/" + trimmed
-        guard withLeadingSlash != "/" else { return "/" }
-        return withLeadingSlash.hasSuffix("/") ? withLeadingSlash : withLeadingSlash + "/"
-    }
-
-    private static func localControlUiBasePath() -> String {
-        let root = OpenClawConfigFile.loadDict()
-        guard let gateway = root["gateway"] as? [String: Any],
-              let controlUi = gateway["controlUi"] as? [String: Any]
-        else {
-            return "/"
-        }
-        return self.normalizeDashboardPath(controlUi["basePath"] as? String)
-    }
-
-    static func dashboardURL(
-        for config: GatewayConnection.Config,
-        mode: AppState.ConnectionMode,
-        localBasePath: String? = nil) throws -> URL
-    {
+    static func dashboardURL(for config: GatewayConnection.Config) throws -> URL {
         guard var components = URLComponents(url: config.url, resolvingAgainstBaseURL: false) else {
             throw NSError(domain: "Dashboard", code: 1, userInfo: [
                 NSLocalizedDescriptionKey: "Invalid gateway URL",
@@ -655,17 +633,7 @@ extension GatewayEndpointStore {
         default:
             components.scheme = "http"
         }
-
-        let urlPath = self.normalizeDashboardPath(components.path)
-        if urlPath != "/" {
-            components.path = urlPath
-        } else if mode == .local {
-            let fallbackPath = localBasePath ?? self.localControlUiBasePath()
-            components.path = self.normalizeDashboardPath(fallbackPath)
-        } else {
-            components.path = "/"
-        }
-
+        components.path = "/"
         var queryItems: [URLQueryItem] = []
         if let token = config.token?.trimmingCharacters(in: .whitespacesAndNewlines),
            !token.isEmpty

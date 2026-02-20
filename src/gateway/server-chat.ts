@@ -1,5 +1,4 @@
 import { normalizeVerboseLevel } from "../auto-reply/thinking.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { loadConfig } from "../config/config.js";
 import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
@@ -121,79 +120,6 @@ export function createChatRunState(): ChatRunState {
   };
 }
 
-export type ToolEventRecipientRegistry = {
-  add: (runId: string, connId: string) => void;
-  get: (runId: string) => ReadonlySet<string> | undefined;
-  markFinal: (runId: string) => void;
-};
-
-type ToolRecipientEntry = {
-  connIds: Set<string>;
-  updatedAt: number;
-  finalizedAt?: number;
-};
-
-const TOOL_EVENT_RECIPIENT_TTL_MS = 10 * 60 * 1000;
-const TOOL_EVENT_RECIPIENT_FINAL_GRACE_MS = 30 * 1000;
-
-export function createToolEventRecipientRegistry(): ToolEventRecipientRegistry {
-  const recipients = new Map<string, ToolRecipientEntry>();
-
-  const prune = () => {
-    if (recipients.size === 0) {
-      return;
-    }
-    const now = Date.now();
-    for (const [runId, entry] of recipients) {
-      const cutoff = entry.finalizedAt
-        ? entry.finalizedAt + TOOL_EVENT_RECIPIENT_FINAL_GRACE_MS
-        : entry.updatedAt + TOOL_EVENT_RECIPIENT_TTL_MS;
-      if (now >= cutoff) {
-        recipients.delete(runId);
-      }
-    }
-  };
-
-  const add = (runId: string, connId: string) => {
-    if (!runId || !connId) {
-      return;
-    }
-    const now = Date.now();
-    const existing = recipients.get(runId);
-    if (existing) {
-      existing.connIds.add(connId);
-      existing.updatedAt = now;
-    } else {
-      recipients.set(runId, {
-        connIds: new Set([connId]),
-        updatedAt: now,
-      });
-    }
-    prune();
-  };
-
-  const get = (runId: string) => {
-    const entry = recipients.get(runId);
-    if (!entry) {
-      return undefined;
-    }
-    entry.updatedAt = Date.now();
-    prune();
-    return entry.connIds;
-  };
-
-  const markFinal = (runId: string) => {
-    const entry = recipients.get(runId);
-    if (!entry) {
-      return;
-    }
-    entry.finalizedAt = Date.now();
-    prune();
-  };
-
-  return { add, get, markFinal };
-}
-
 export type ChatEventBroadcast = (
   event: string,
   payload: unknown,
@@ -204,34 +130,22 @@ export type NodeSendToSession = (sessionKey: string, event: string, payload: unk
 
 export type AgentEventHandlerOptions = {
   broadcast: ChatEventBroadcast;
-  broadcastToConnIds: (
-    event: string,
-    payload: unknown,
-    connIds: ReadonlySet<string>,
-    opts?: { dropIfSlow?: boolean },
-  ) => void;
   nodeSendToSession: NodeSendToSession;
   agentRunSeq: Map<string, number>;
   chatRunState: ChatRunState;
   resolveSessionKeyForRun: (runId: string) => string | undefined;
   clearAgentRunContext: (runId: string) => void;
-  toolEventRecipients: ToolEventRecipientRegistry;
 };
 
 export function createAgentEventHandler({
   broadcast,
-  broadcastToConnIds,
   nodeSendToSession,
   agentRunSeq,
   chatRunState,
   resolveSessionKeyForRun,
   clearAgentRunContext,
-  toolEventRecipients,
 }: AgentEventHandlerOptions) {
   const emitChatDelta = (sessionKey: string, clientRunId: string, seq: number, text: string) => {
-    if (isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
-      return;
-    }
     chatRunState.buffers.set(clientRunId, text);
     const now = Date.now();
     const last = chatRunState.deltaSentAt.get(clientRunId) ?? 0;
@@ -265,7 +179,6 @@ export function createAgentEventHandler({
     error?: unknown,
   ) => {
     const text = chatRunState.buffers.get(clientRunId)?.trim() ?? "";
-    const shouldSuppressSilent = isSilentReplyText(text, SILENT_REPLY_TOKEN);
     chatRunState.buffers.delete(clientRunId);
     chatRunState.deltaSentAt.delete(clientRunId);
     if (jobState === "done") {
@@ -274,14 +187,13 @@ export function createAgentEventHandler({
         sessionKey,
         seq,
         state: "final" as const,
-        message:
-          text && !shouldSuppressSilent
-            ? {
-                role: "assistant",
-                content: [{ type: "text", text }],
-                timestamp: Date.now(),
-              }
-            : undefined,
+        message: text
+          ? {
+              role: "assistant",
+              content: [{ type: "text", text }],
+              timestamp: Date.now(),
+            }
+          : undefined,
       };
       // Suppress webchat broadcast for heartbeat runs when showOk is false
       if (!shouldSuppressHeartbeatBroadcast(clientRunId)) {
@@ -301,59 +213,44 @@ export function createAgentEventHandler({
     nodeSendToSession(sessionKey, "chat", payload);
   };
 
-  const resolveToolVerboseLevel = (runId: string, sessionKey?: string) => {
+  const shouldEmitToolEvents = (runId: string, sessionKey?: string) => {
     const runContext = getAgentRunContext(runId);
     const runVerbose = normalizeVerboseLevel(runContext?.verboseLevel);
     if (runVerbose) {
-      return runVerbose;
+      return runVerbose === "on";
     }
     if (!sessionKey) {
-      return "off";
+      return false;
     }
     try {
       const { cfg, entry } = loadSessionEntry(sessionKey);
       const sessionVerbose = normalizeVerboseLevel(entry?.verboseLevel);
       if (sessionVerbose) {
-        return sessionVerbose;
+        return sessionVerbose === "on";
       }
       const defaultVerbose = normalizeVerboseLevel(cfg.agents?.defaults?.verboseDefault);
-      return defaultVerbose ?? "off";
+      return defaultVerbose === "on";
     } catch {
-      return "off";
+      return false;
     }
   };
 
   return (evt: AgentEventPayload) => {
     const chatLink = chatRunState.registry.peek(evt.runId);
-    const eventSessionKey =
-      typeof evt.sessionKey === "string" && evt.sessionKey.trim() ? evt.sessionKey : undefined;
-    const sessionKey =
-      chatLink?.sessionKey ?? eventSessionKey ?? resolveSessionKeyForRun(evt.runId);
+    const sessionKey = chatLink?.sessionKey ?? resolveSessionKeyForRun(evt.runId);
     const clientRunId = chatLink?.clientRunId ?? evt.runId;
-    const eventRunId = chatLink?.clientRunId ?? evt.runId;
-    const eventForClients = chatLink ? { ...evt, runId: eventRunId } : evt;
     const isAborted =
       chatRunState.abortedRuns.has(clientRunId) || chatRunState.abortedRuns.has(evt.runId);
     // Include sessionKey so Control UI can filter tool streams per session.
-    const agentPayload = sessionKey ? { ...eventForClients, sessionKey } : eventForClients;
+    const agentPayload = sessionKey ? { ...evt, sessionKey } : evt;
     const last = agentRunSeq.get(evt.runId) ?? 0;
-    const isToolEvent = evt.stream === "tool";
-    const toolVerbose = isToolEvent ? resolveToolVerboseLevel(evt.runId, sessionKey) : "off";
-    // Build tool payload: strip result/partialResult unless verbose=full
-    const toolPayload =
-      isToolEvent && toolVerbose !== "full"
-        ? (() => {
-            const data = evt.data ? { ...evt.data } : {};
-            delete data.result;
-            delete data.partialResult;
-            return sessionKey
-              ? { ...eventForClients, sessionKey, data }
-              : { ...eventForClients, data };
-          })()
-        : agentPayload;
+    if (evt.stream === "tool" && !shouldEmitToolEvents(evt.runId, sessionKey)) {
+      agentRunSeq.set(evt.runId, evt.seq);
+      return;
+    }
     if (evt.seq !== last + 1) {
       broadcast("agent", {
-        runId: eventRunId,
+        runId: evt.runId,
         stream: "error",
         ts: Date.now(),
         sessionKey,
@@ -365,28 +262,13 @@ export function createAgentEventHandler({
       });
     }
     agentRunSeq.set(evt.runId, evt.seq);
-    if (isToolEvent) {
-      // Always broadcast tool events to registered WS recipients with
-      // tool-events capability, regardless of verboseLevel. The verbose
-      // setting only controls whether tool details are sent as channel
-      // messages to messaging surfaces (Telegram, Discord, etc.).
-      const recipients = toolEventRecipients.get(evt.runId);
-      if (recipients && recipients.size > 0) {
-        broadcastToConnIds("agent", toolPayload, recipients);
-      }
-    } else {
-      broadcast("agent", agentPayload);
-    }
+    broadcast("agent", agentPayload);
 
     const lifecyclePhase =
       evt.stream === "lifecycle" && typeof evt.data?.phase === "string" ? evt.data.phase : null;
 
     if (sessionKey) {
-      // Send tool events to node/channel subscribers only when verbose is enabled;
-      // WS clients already received the event above via broadcastToConnIds.
-      if (!isToolEvent || toolVerbose !== "off") {
-        nodeSendToSession(sessionKey, "agent", isToolEvent ? toolPayload : agentPayload);
-      }
+      nodeSendToSession(sessionKey, "agent", agentPayload);
       if (!isAborted && evt.stream === "assistant" && typeof evt.data?.text === "string") {
         emitChatDelta(sessionKey, clientRunId, evt.seq, evt.data.text);
       } else if (!isAborted && (lifecyclePhase === "end" || lifecyclePhase === "error")) {
@@ -406,7 +288,7 @@ export function createAgentEventHandler({
         } else {
           emitChatFinal(
             sessionKey,
-            eventRunId,
+            evt.runId,
             evt.seq,
             lifecyclePhase === "error" ? "error" : "done",
             evt.data?.error,
@@ -424,10 +306,7 @@ export function createAgentEventHandler({
     }
 
     if (lifecyclePhase === "end" || lifecyclePhase === "error") {
-      toolEventRecipients.markFinal(evt.runId);
       clearAgentRunContext(evt.runId);
-      agentRunSeq.delete(evt.runId);
-      agentRunSeq.delete(clientRunId);
     }
   };
 }

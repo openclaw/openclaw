@@ -234,8 +234,9 @@ enum OpenClawOAuthStore {
             return URL(fileURLWithPath: expanded, isDirectory: true)
         }
         let home = FileManager().homeDirectoryForCurrentUser
-        return home.appendingPathComponent(".openclaw", isDirectory: true)
+        let preferred = home.appendingPathComponent(".openclaw", isDirectory: true)
             .appendingPathComponent("credentials", isDirectory: true)
+        return preferred
     }
 
     static func oauthURL() -> URL {

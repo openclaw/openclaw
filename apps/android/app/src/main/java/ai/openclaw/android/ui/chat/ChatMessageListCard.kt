@@ -33,9 +33,14 @@ fun ChatMessageListCard(
 ) {
   val listState = rememberLazyListState()
 
-  // With reverseLayout the newest item is at index 0 (bottom of screen).
   LaunchedEffect(messages.size, pendingRunCount, pendingToolCalls.size, streamingAssistantText) {
-    listState.animateScrollToItem(index = 0)
+    val total =
+      messages.size +
+        (if (pendingRunCount > 0) 1 else 0) +
+        (if (pendingToolCalls.isNotEmpty()) 1 else 0) +
+        (if (!streamingAssistantText.isNullOrBlank()) 1 else 0)
+    if (total <= 0) return@LaunchedEffect
+    listState.animateScrollToItem(index = total - 1)
   }
 
   Card(
@@ -51,17 +56,16 @@ fun ChatMessageListCard(
       LazyColumn(
         modifier = Modifier.fillMaxSize(),
         state = listState,
-        reverseLayout = true,
         verticalArrangement = Arrangement.spacedBy(14.dp),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(top = 12.dp, bottom = 12.dp, start = 12.dp, end = 12.dp),
       ) {
-        // With reverseLayout = true, index 0 renders at the BOTTOM.
-        // So we emit newest items first: streaming → tools → typing → messages (newest→oldest).
+        items(count = messages.size, key = { idx -> messages[idx].id }) { idx ->
+          ChatMessageBubble(message = messages[idx])
+        }
 
-        val stream = streamingAssistantText?.trim()
-        if (!stream.isNullOrEmpty()) {
-          item(key = "stream") {
-            ChatStreamingAssistantBubble(text = stream)
+        if (pendingRunCount > 0) {
+          item(key = "typing") {
+            ChatTypingIndicatorBubble()
           }
         }
 
@@ -71,14 +75,11 @@ fun ChatMessageListCard(
           }
         }
 
-        if (pendingRunCount > 0) {
-          item(key = "typing") {
-            ChatTypingIndicatorBubble()
+        val stream = streamingAssistantText?.trim()
+        if (!stream.isNullOrEmpty()) {
+          item(key = "stream") {
+            ChatStreamingAssistantBubble(text = stream)
           }
-        }
-
-        items(count = messages.size, key = { idx -> messages[messages.size - 1 - idx].id }) { idx ->
-          ChatMessageBubble(message = messages[messages.size - 1 - idx])
         }
       }
 

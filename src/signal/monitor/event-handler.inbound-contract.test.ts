@@ -1,82 +1,76 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildDispatchInboundContextCapture } from "../../../test/helpers/inbound-contract-capture.js";
-import { expectInboundContextContract } from "../../../test/helpers/inbound-contract.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
+import { expectInboundContextContract } from "../../../test/helpers/inbound-contract.js";
 
-const capture = vi.hoisted(() => ({ ctx: undefined as MsgContext | undefined }));
+let capturedCtx: MsgContext | undefined;
 
 vi.mock("../../auto-reply/dispatch.js", async (importOriginal) => {
-  return await buildDispatchInboundContextCapture(importOriginal, capture);
+  const actual = await importOriginal<typeof import("../../auto-reply/dispatch.js")>();
+  const dispatchInboundMessage = vi.fn(async (params: { ctx: MsgContext }) => {
+    capturedCtx = params.ctx;
+    return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+  });
+  return {
+    ...actual,
+    dispatchInboundMessage,
+    dispatchInboundMessageWithDispatcher: dispatchInboundMessage,
+    dispatchInboundMessageWithBufferedDispatcher: dispatchInboundMessage,
+  };
 });
 
 import { createSignalEventHandler } from "./event-handler.js";
-import {
-  createBaseSignalEventHandlerDeps,
-  createSignalReceiveEvent,
-} from "./event-handler.test-harness.js";
 
 describe("signal createSignalEventHandler inbound contract", () => {
   it("passes a finalized MsgContext to dispatchInboundMessage", async () => {
-    capture.ctx = undefined;
+    capturedCtx = undefined;
 
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        // oxlint-disable-next-line typescript/no-explicit-any
-        cfg: { messages: { inbound: { debounceMs: 0 } } } as any,
-        historyLimit: 0,
-      }),
-    );
+    const handler = createSignalEventHandler({
+      runtime: { log: () => {}, error: () => {} } as any,
+      cfg: { messages: { inbound: { debounceMs: 0 } } } as any,
+      baseUrl: "http://localhost",
+      accountId: "default",
+      historyLimit: 0,
+      groupHistories: new Map(),
+      textLimit: 4000,
+      dmPolicy: "open",
+      allowFrom: ["*"],
+      groupAllowFrom: ["*"],
+      groupPolicy: "open",
+      reactionMode: "off",
+      reactionAllowlist: [],
+      mediaMaxBytes: 1024,
+      ignoreAttachments: true,
+      sendReadReceipts: false,
+      readReceiptsViaDaemon: false,
+      fetchAttachment: async () => null,
+      deliverReplies: async () => {},
+      resolveSignalReactionTargets: () => [],
+      isSignalReactionMessage: () => false as any,
+      shouldEmitSignalReactionNotification: () => false,
+      buildSignalReactionSystemEventText: () => "reaction",
+    });
 
-    await handler(
-      createSignalReceiveEvent({
-        dataMessage: {
-          message: "hi",
-          attachments: [],
-          groupInfo: { groupId: "g1", groupName: "Test Group" },
+    await handler({
+      event: "receive",
+      data: JSON.stringify({
+        envelope: {
+          sourceNumber: "+15550001111",
+          sourceName: "Alice",
+          timestamp: 1700000000000,
+          dataMessage: {
+            message: "hi",
+            attachments: [],
+            groupInfo: { groupId: "g1", groupName: "Test Group" },
+          },
         },
       }),
-    );
+    });
 
-    expect(capture.ctx).toBeTruthy();
-    expectInboundContextContract(capture.ctx!);
-    const contextWithBody = capture.ctx as unknown as { Body?: string };
+    expect(capturedCtx).toBeTruthy();
+    expectInboundContextContract(capturedCtx!);
     // Sender should appear as prefix in group messages (no redundant [from:] suffix)
-    expect(String(contextWithBody.Body ?? "")).toContain("Alice");
-    expect(String(contextWithBody.Body ?? "")).toMatch(/Alice.*:/);
-    expect(String(contextWithBody.Body ?? "")).not.toContain("[from:");
-  });
-
-  it("normalizes direct chat To/OriginatingTo targets to canonical Signal ids", async () => {
-    capture.ctx = undefined;
-
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        // oxlint-disable-next-line typescript/no-explicit-any
-        cfg: { messages: { inbound: { debounceMs: 0 } } } as any,
-        historyLimit: 0,
-      }),
-    );
-
-    await handler(
-      createSignalReceiveEvent({
-        sourceNumber: "+15550002222",
-        sourceName: "Bob",
-        timestamp: 1700000000001,
-        dataMessage: {
-          message: "hello",
-          attachments: [],
-        },
-      }),
-    );
-
-    expect(capture.ctx).toBeTruthy();
-    const context = capture.ctx as unknown as {
-      ChatType?: string;
-      To?: string;
-      OriginatingTo?: string;
-    };
-    expect(context.ChatType).toBe("direct");
-    expect(context.To).toBe("+15550002222");
-    expect(context.OriginatingTo).toBe("+15550002222");
+    expect(String(capturedCtx?.Body ?? "")).toContain("Alice");
+    expect(String(capturedCtx?.Body ?? "")).toMatch(/Alice.*:/);
+    expect(String(capturedCtx?.Body ?? "")).not.toContain("[from:");
   });
 });

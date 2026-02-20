@@ -1,6 +1,6 @@
 import MarkdownIt from "markdown-it";
-import { chunkText } from "../auto-reply/chunk.js";
 import type { MarkdownTableMode } from "../config/types.base.js";
+import { chunkText } from "../auto-reply/chunk.js";
 
 type ListState = {
   type: "bullet" | "ordered";
@@ -24,14 +24,7 @@ type MarkdownToken = {
   attrGet?: (name: string) => string | null;
 };
 
-export type MarkdownStyle =
-  | "bold"
-  | "italic"
-  | "strikethrough"
-  | "code"
-  | "code_block"
-  | "spoiler"
-  | "blockquote";
+export type MarkdownStyle = "bold" | "italic" | "strikethrough" | "code" | "code_block" | "spoiler";
 
 export type MarkdownStyleSpan = {
   start: number;
@@ -364,14 +357,6 @@ function appendCell(state: RenderState, cell: TableCell) {
   }
 }
 
-function appendCellTextOnly(state: RenderState, cell: TableCell) {
-  if (!cell.text) {
-    return;
-  }
-  state.text += cell.text;
-  // Do not append styles - this is used for code blocks where inner styles would overlap
-}
-
 function renderTableAsBullets(state: RenderState) {
   if (!state.table) {
     return;
@@ -482,8 +467,7 @@ function renderTableAsCode(state: RenderState) {
       state.text += " ";
       const cell = cells[i];
       if (cell) {
-        // Use text-only append to avoid overlapping styles with code_block
-        appendCellTextOnly(state, cell);
+        appendCell(state, cell);
       }
       const pad = widths[i] - (cell?.text.length ?? 0);
       if (pad > 0) {
@@ -594,47 +578,29 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
         if (state.blockquotePrefix) {
           state.text += state.blockquotePrefix;
         }
-        openStyle(state, "blockquote");
         break;
       case "blockquote_close":
-        closeStyle(state, "blockquote");
+        state.text += "\n";
         break;
       case "bullet_list_open":
-        // Add newline before nested list starts (so nested items appear on new line)
-        if (state.env.listStack.length > 0) {
-          state.text += "\n";
-        }
         state.env.listStack.push({ type: "bullet", index: 0 });
         break;
       case "bullet_list_close":
         state.env.listStack.pop();
-        if (state.env.listStack.length === 0) {
-          state.text += "\n";
-        }
         break;
       case "ordered_list_open": {
-        // Add newline before nested list starts (so nested items appear on new line)
-        if (state.env.listStack.length > 0) {
-          state.text += "\n";
-        }
         const start = Number(getAttr(token, "start") ?? "1");
         state.env.listStack.push({ type: "ordered", index: start - 1 });
         break;
       }
       case "ordered_list_close":
         state.env.listStack.pop();
-        if (state.env.listStack.length === 0) {
-          state.text += "\n";
-        }
         break;
       case "list_item_open":
         appendListPrefix(state);
         break;
       case "list_item_close":
-        // Avoid double newlines (nested list's last item already added newline)
-        if (!state.text.endsWith("\n")) {
-          state.text += "\n";
-        }
+        state.text += "\n";
         break;
       case "code_block":
       case "fence":
@@ -705,8 +671,7 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
         break;
 
       case "hr":
-        // Render as a visual separator
-        state.text += "───\n\n";
+        state.text += "\n";
         break;
       default:
         if (token.children) {
@@ -770,13 +735,7 @@ function mergeStyleSpans(spans: MarkdownStyleSpan[]): MarkdownStyleSpan[] {
   const merged: MarkdownStyleSpan[] = [];
   for (const span of sorted) {
     const prev = merged[merged.length - 1];
-    if (
-      prev &&
-      prev.style === span.style &&
-      // Blockquotes are container blocks. Adjacent blockquote spans should not merge or
-      // consecutive blockquotes can "style bleed" across the paragraph boundary.
-      (span.start < prev.end || (span.start === prev.end && span.style !== "blockquote"))
-    ) {
+    if (prev && prev.style === span.style && span.start <= prev.end) {
       prev.end = Math.max(prev.end, span.end);
       continue;
     }

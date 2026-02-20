@@ -1,7 +1,7 @@
+import type { CronJobCreate, CronJobPatch } from "../../cron/types.js";
+import type { GatewayRequestHandlers } from "./types.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import { readCronRunLogEntries, resolveCronRunLogPath } from "../../cron/run-log.js";
-import type { CronJobCreate, CronJobPatch } from "../../cron/types.js";
-import { validateScheduleTimestamp } from "../../cron/validate-timestamp.js";
 import {
   ErrorCodes,
   errorShape,
@@ -15,7 +15,6 @@ import {
   validateCronUpdateParams,
   validateWakeParams,
 } from "../protocol/index.js";
-import type { GatewayRequestHandlers } from "./types.js";
 
 export const cronHandlers: GatewayRequestHandlers = {
   wake: ({ params, respond, context }) => {
@@ -83,17 +82,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const jobCreate = normalized as unknown as CronJobCreate;
-    const timestampValidation = validateScheduleTimestamp(jobCreate.schedule);
-    if (!timestampValidation.ok) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, timestampValidation.message),
-      );
-      return;
-    }
-    const job = await context.cron.add(jobCreate);
+    const job = await context.cron.add(normalized as unknown as CronJobCreate);
     respond(true, job, undefined);
   },
   "cron.update": async ({ params, respond, context }) => {
@@ -127,19 +116,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const patch = p.patch as unknown as CronJobPatch;
-    if (patch.schedule) {
-      const timestampValidation = validateScheduleTimestamp(patch.schedule);
-      if (!timestampValidation.ok) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, timestampValidation.message),
-        );
-        return;
-      }
-    }
-    const job = await context.cron.update(jobId, patch);
+    const job = await context.cron.update(jobId, p.patch as unknown as CronJobPatch);
     respond(true, job, undefined);
   },
   "cron.remove": async ({ params, respond, context }) => {
@@ -189,7 +166,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const result = await context.cron.run(jobId, p.mode ?? "force");
+    const result = await context.cron.run(jobId, p.mode);
     respond(true, result, undefined);
   },
   "cron.runs": async ({ params, respond, context }) => {

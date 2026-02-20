@@ -1,19 +1,12 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-
-let collectTelegramUnmentionedGroupIds: typeof import("./audit.js").collectTelegramUnmentionedGroupIds;
-let auditTelegramGroupMembership: typeof import("./audit.js").auditTelegramGroupMembership;
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 describe("telegram audit", () => {
-  beforeAll(async () => {
-    ({ collectTelegramUnmentionedGroupIds, auditTelegramGroupMembership } =
-      await import("./audit.js"));
-  });
-
   beforeEach(() => {
     vi.unstubAllGlobals();
   });
 
   it("collects unmentioned numeric group ids and flags wildcard", async () => {
+    const { collectTelegramUnmentionedGroupIds } = await import("./audit.js");
     const res = collectTelegramUnmentionedGroupIds({
       "*": { requireMention: false },
       "-1001": { requireMention: false },
@@ -27,6 +20,7 @@ describe("telegram audit", () => {
   });
 
   it("audits membership via getChatMember", async () => {
+    const { auditTelegramGroupMembership } = await import("./audit.js");
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValueOnce(
@@ -48,6 +42,7 @@ describe("telegram audit", () => {
   });
 
   it("reports bot not in group when status is left", async () => {
+    const { auditTelegramGroupMembership } = await import("./audit.js");
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValueOnce(

@@ -1,6 +1,8 @@
-import { formatCliCommand } from "../../../cli/command-format.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { DmPolicy } from "../../../config/types.js";
+import type { WizardPrompter } from "../../../wizard/prompts.js";
+import type { ChannelOnboardingAdapter, ChannelOnboardingDmPolicy } from "../onboarding-types.js";
+import { formatCliCommand } from "../../../cli/command-format.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../routing/session-key.js";
 import {
   listTelegramAccountIds,
@@ -8,10 +10,7 @@ import {
   resolveTelegramAccount,
 } from "../../../telegram/accounts.js";
 import { formatDocsLink } from "../../../terminal/links.js";
-import type { WizardPrompter } from "../../../wizard/prompts.js";
-import { fetchTelegramChatId } from "../../telegram/api.js";
-import type { ChannelOnboardingAdapter, ChannelOnboardingDmPolicy } from "../onboarding-types.js";
-import { addWildcardAllowFrom, mergeAllowFromEntries, promptAccountId } from "./helpers.js";
+import { addWildcardAllowFrom, promptAccountId } from "./helpers.js";
 
 const channel = "telegram" as const;
 
@@ -86,7 +85,25 @@ async function promptTelegramAllowFrom(params: {
       return null;
     }
     const username = stripped.startsWith("@") ? stripped : `@${stripped}`;
-    return await fetchTelegramChatId({ token, chatId: username });
+    const url = `https://api.telegram.org/bot${token}/getChat?chat_id=${encodeURIComponent(username)}`;
+    try {
+      const res = await fetch(url);
+      if (!res.ok) {
+        return null;
+      }
+      const data = (await res.json().catch(() => null)) as {
+        ok?: boolean;
+        result?: { id?: number | string };
+      } | null;
+      const id = data?.ok ? data?.result?.id : undefined;
+      if (typeof id === "number" || typeof id === "string") {
+        return String(id);
+      }
+      return null;
+    } catch {
+      // Network error during username lookup - return null to prompt user for numeric ID
+      return null;
+    }
   };
 
   const parseInput = (value: string) =>
@@ -98,7 +115,7 @@ async function promptTelegramAllowFrom(params: {
   let resolvedIds: string[] = [];
   while (resolvedIds.length === 0) {
     const entry = await prompter.text({
-      message: "Telegram allowFrom (numeric sender id; @username resolves to id)",
+      message: "Telegram allowFrom (username or user id)",
       placeholder: "@username",
       initialValue: existingAllowFrom[0] ? String(existingAllowFrom[0]) : undefined,
       validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
@@ -116,7 +133,11 @@ async function promptTelegramAllowFrom(params: {
     resolvedIds = results.filter(Boolean) as string[];
   }
 
-  const unique = mergeAllowFromEntries(existingAllowFrom, resolvedIds);
+  const merged = [
+    ...existingAllowFrom.map((item) => String(item).trim()).filter(Boolean),
+    ...resolvedIds,
+  ];
+  const unique = [...new Set(merged)];
 
   if (accountId === DEFAULT_ACCOUNT_ID) {
     return {

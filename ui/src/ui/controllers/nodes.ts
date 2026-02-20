@@ -1,4 +1,4 @@
-import type { GatewayBrowserClient } from "../gateway.ts";
+import type { GatewayBrowserClient } from "../gateway";
 
 export type NodesState = {
   client: GatewayBrowserClient | null;
@@ -9,23 +9,17 @@ export type NodesState = {
 };
 
 export async function loadNodes(state: NodesState, opts?: { quiet?: boolean }) {
-  if (!state.client || !state.connected) {
-    return;
-  }
-  if (state.nodesLoading) {
-    return;
-  }
+  if (!state.client || !state.connected) return;
+  if (state.nodesLoading) return;
   state.nodesLoading = true;
-  if (!opts?.quiet) {
-    state.lastError = null;
-  }
+  if (!opts?.quiet) state.lastError = null;
   try {
-    const res = await state.client.request<{ nodes?: Record<string, unknown> }>("node.list", {});
+    const res = (await state.client.request("node.list", {})) as {
+      nodes?: Array<Record<string, unknown>>;
+    };
     state.nodes = Array.isArray(res.nodes) ? res.nodes : [];
   } catch (err) {
-    if (!opts?.quiet) {
-      state.lastError = String(err);
-    }
+    if (!opts?.quiet) state.lastError = String(err);
   } finally {
     state.nodesLoading = false;
   }

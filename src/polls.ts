@@ -2,15 +2,6 @@ export type PollInput = {
   question: string;
   options: string[];
   maxSelections?: number;
-  /**
-   * Poll duration in seconds.
-   * Channel-specific limits apply (e.g. Telegram open_period is 5-600s).
-   */
-  durationSeconds?: number;
-  /**
-   * Poll duration in hours.
-   * Used by channels that model duration in hours (e.g. Discord).
-   */
   durationHours?: number;
 };
 
@@ -18,7 +9,6 @@ export type NormalizedPollInput = {
   question: string;
   options: string[];
   maxSelections: number;
-  durationSeconds?: number;
   durationHours?: number;
 };
 
@@ -53,16 +43,6 @@ export function normalizePollInput(
   if (maxSelections > cleaned.length) {
     throw new Error("maxSelections cannot exceed option count");
   }
-
-  const durationSecondsRaw = input.durationSeconds;
-  const durationSeconds =
-    typeof durationSecondsRaw === "number" && Number.isFinite(durationSecondsRaw)
-      ? Math.floor(durationSecondsRaw)
-      : undefined;
-  if (durationSeconds !== undefined && durationSeconds < 1) {
-    throw new Error("durationSeconds must be at least 1");
-  }
-
   const durationRaw = input.durationHours;
   const durationHours =
     typeof durationRaw === "number" && Number.isFinite(durationRaw)
@@ -71,14 +51,10 @@ export function normalizePollInput(
   if (durationHours !== undefined && durationHours < 1) {
     throw new Error("durationHours must be at least 1");
   }
-  if (durationSeconds !== undefined && durationHours !== undefined) {
-    throw new Error("durationSeconds and durationHours are mutually exclusive");
-  }
   return {
     question,
     options: cleaned,
     maxSelections,
-    durationSeconds,
     durationHours,
   };
 }

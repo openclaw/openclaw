@@ -13,7 +13,13 @@ export function shortenMeta(meta: string): string {
   if (!meta) {
     return meta;
   }
-  return shortenHomeInString(meta);
+  const colonIdx = meta.indexOf(":");
+  if (colonIdx === -1) {
+    return shortenHomeInString(meta);
+  }
+  const base = meta.slice(0, colonIdx);
+  const rest = meta.slice(colonIdx);
+  return `${shortenHomeInString(base)}${rest}`;
 }
 
 export function formatToolAggregate(

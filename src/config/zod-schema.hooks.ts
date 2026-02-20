@@ -1,35 +1,4 @@
-import path from "node:path";
 import { z } from "zod";
-import { InstallRecordShape } from "./zod-schema.installs.js";
-import { sensitive } from "./zod-schema.sensitive.js";
-
-function isSafeRelativeModulePath(raw: string): boolean {
-  const value = raw.trim();
-  if (!value) {
-    return false;
-  }
-  // Hook modules are loaded via file-path resolution + dynamic import().
-  // Keep this strictly relative to a configured base dir to avoid path traversal and surprises.
-  if (path.isAbsolute(value)) {
-    return false;
-  }
-  if (value.startsWith("~")) {
-    return false;
-  }
-  // Disallow URL-ish and drive-relative forms (e.g. "file:...", "C:foo").
-  if (value.includes(":")) {
-    return false;
-  }
-  const parts = value.split(/[\\/]+/g);
-  if (parts.some((part) => part === "..")) {
-    return false;
-  }
-  return true;
-}
-
-const SafeRelativeModulePathSchema = z
-  .string()
-  .refine(isSafeRelativeModulePath, "module must be a safe relative path (no absolute paths)");
 
 export const HookMappingSchema = z
   .object({
@@ -43,8 +12,7 @@ export const HookMappingSchema = z
     action: z.union([z.literal("wake"), z.literal("agent")]).optional(),
     wakeMode: z.union([z.literal("now"), z.literal("next-heartbeat")]).optional(),
     name: z.string().optional(),
-    agentId: z.string().optional(),
-    sessionKey: z.string().optional().register(sensitive),
+    sessionKey: z.string().optional(),
     messageTemplate: z.string().optional(),
     textTemplate: z.string().optional(),
     deliver: z.boolean().optional(),
@@ -55,7 +23,6 @@ export const HookMappingSchema = z
         z.literal("whatsapp"),
         z.literal("telegram"),
         z.literal("discord"),
-        z.literal("irc"),
         z.literal("slack"),
         z.literal("signal"),
         z.literal("imessage"),
@@ -68,7 +35,7 @@ export const HookMappingSchema = z
     timeoutSeconds: z.number().int().positive().optional(),
     transform: z
       .object({
-        module: SafeRelativeModulePathSchema,
+        module: z.string(),
         export: z.string().optional(),
       })
       .strict()
@@ -80,7 +47,7 @@ export const HookMappingSchema = z
 export const InternalHookHandlerSchema = z
   .object({
     event: z.string(),
-    module: SafeRelativeModulePathSchema,
+    module: z.string(),
     export: z.string().optional(),
   })
   .strict();
@@ -90,14 +57,16 @@ const HookConfigSchema = z
     enabled: z.boolean().optional(),
     env: z.record(z.string(), z.string()).optional(),
   })
-  // Hook configs are intentionally open-ended (handlers can define their own keys).
-  // Keep enabled/env typed, but allow additional per-hook keys without marking the
-  // whole config invalid (which triggers doctor/best-effort loads).
-  .passthrough();
+  .strict();
 
 const HookInstallRecordSchema = z
   .object({
-    ...InstallRecordShape,
+    source: z.union([z.literal("npm"), z.literal("archive"), z.literal("path")]),
+    spec: z.string().optional(),
+    sourcePath: z.string().optional(),
+    installPath: z.string().optional(),
+    version: z.string().optional(),
+    installedAt: z.string().optional(),
     hooks: z.array(z.string()).optional(),
   })
   .strict();
@@ -124,7 +93,7 @@ export const HooksGmailSchema = z
     label: z.string().optional(),
     topic: z.string().optional(),
     subscription: z.string().optional(),
-    pushToken: z.string().optional().register(sensitive),
+    pushToken: z.string().optional(),
     hookUrl: z.string().optional(),
     includeBody: z.boolean().optional(),
     maxBytes: z.number().int().positive().optional(),

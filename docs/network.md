@@ -21,7 +21,7 @@ devices across localhost, LAN, and tailnet.
 
 ## Pairing + identity
 
-- [Pairing overview (DM + nodes)](/channels/pairing)
+- [Pairing overview (DM + nodes)](/start/pairing)
 - [Gateway-owned node pairing](/gateway/pairing)
 - [Devices CLI (pairing + token rotation)](/cli/devices)
 - [Pairing CLI (DM approvals)](/cli/pairing)

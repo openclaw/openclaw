@@ -1,25 +1,28 @@
-import {
-  collectProviderApiKeysForExecution,
-  executeWithApiKeyRotation,
-} from "../agents/api-key-rotation.js";
-import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
-import { parseGeminiAuth } from "../infra/gemini-auth.js";
-import { debugEmbeddingsLog } from "./embeddings-debug.js";
 import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.js";
+import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
+import { isTruthyEnvValue } from "../infra/env.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 
 export type GeminiEmbeddingClient = {
   baseUrl: string;
   headers: Record<string, string>;
   model: string;
   modelPath: string;
-  apiKeys: string[];
 };
 
 const DEFAULT_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 export const DEFAULT_GEMINI_EMBEDDING_MODEL = "gemini-embedding-001";
-const GEMINI_MAX_INPUT_TOKENS: Record<string, number> = {
-  "text-embedding-004": 2048,
+const debugEmbeddings = isTruthyEnvValue(process.env.OPENCLAW_DEBUG_MEMORY_EMBEDDINGS);
+const log = createSubsystemLogger("memory/embeddings");
+
+const debugLog = (message: string, meta?: Record<string, unknown>) => {
+  if (!debugEmbeddings) {
+    return;
+  }
+  const suffix = meta ? ` ${JSON.stringify(meta)}` : "";
+  log.raw(`${message}${suffix}`);
 };
+
 function resolveRemoteApiKey(remoteApiKey?: string): string | undefined {
   const trimmed = remoteApiKey?.trim();
   if (!trimmed) {
@@ -67,40 +70,23 @@ export async function createGeminiEmbeddingProvider(
   const embedUrl = `${baseUrl}/${client.modelPath}:embedContent`;
   const batchUrl = `${baseUrl}/${client.modelPath}:batchEmbedContents`;
 
-  const fetchWithGeminiAuth = async (apiKey: string, endpoint: string, body: unknown) => {
-    const authHeaders = parseGeminiAuth(apiKey);
-    const headers = {
-      ...authHeaders.headers,
-      ...client.headers,
-    };
-    const res = await fetch(endpoint, {
+  const embedQuery = async (text: string): Promise<number[]> => {
+    if (!text.trim()) {
+      return [];
+    }
+    const res = await fetch(embedUrl, {
       method: "POST",
-      headers,
-      body: JSON.stringify(body),
+      headers: client.headers,
+      body: JSON.stringify({
+        content: { parts: [{ text }] },
+        taskType: "RETRIEVAL_QUERY",
+      }),
     });
     if (!res.ok) {
       const payload = await res.text();
       throw new Error(`gemini embeddings failed: ${res.status} ${payload}`);
     }
-    return (await res.json()) as {
-      embedding?: { values?: number[] };
-      embeddings?: Array<{ values?: number[] }>;
-    };
-  };
-
-  const embedQuery = async (text: string): Promise<number[]> => {
-    if (!text.trim()) {
-      return [];
-    }
-    const payload = await executeWithApiKeyRotation({
-      provider: "google",
-      apiKeys: client.apiKeys,
-      execute: (apiKey) =>
-        fetchWithGeminiAuth(apiKey, embedUrl, {
-          content: { parts: [{ text }] },
-          taskType: "RETRIEVAL_QUERY",
-        }),
-    });
+    const payload = (await res.json()) as { embedding?: { values?: number[] } };
     return payload.embedding?.values ?? [];
   };
 
@@ -113,14 +99,16 @@ export async function createGeminiEmbeddingProvider(
       content: { parts: [{ text }] },
       taskType: "RETRIEVAL_DOCUMENT",
     }));
-    const payload = await executeWithApiKeyRotation({
-      provider: "google",
-      apiKeys: client.apiKeys,
-      execute: (apiKey) =>
-        fetchWithGeminiAuth(apiKey, batchUrl, {
-          requests,
-        }),
+    const res = await fetch(batchUrl, {
+      method: "POST",
+      headers: client.headers,
+      body: JSON.stringify({ requests }),
     });
+    if (!res.ok) {
+      const payload = await res.text();
+      throw new Error(`gemini embeddings failed: ${res.status} ${payload}`);
+    }
+    const payload = (await res.json()) as { embeddings?: Array<{ values?: number[] }> };
     const embeddings = Array.isArray(payload.embeddings) ? payload.embeddings : [];
     return texts.map((_, index) => embeddings[index]?.values ?? []);
   };
@@ -129,7 +117,6 @@ export async function createGeminiEmbeddingProvider(
     provider: {
       id: "gemini",
       model: client.model,
-      maxInputTokens: GEMINI_MAX_INPUT_TOKENS[client.model],
       embedQuery,
       embedBatch,
     },
@@ -160,15 +147,13 @@ export async function resolveGeminiEmbeddingClient(
   const baseUrl = normalizeGeminiBaseUrl(rawBaseUrl);
   const headerOverrides = Object.assign({}, providerConfig?.headers, remote?.headers);
   const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "x-goog-api-key": apiKey,
     ...headerOverrides,
   };
-  const apiKeys = collectProviderApiKeysForExecution({
-    provider: "google",
-    primaryApiKey: apiKey,
-  });
   const model = normalizeGeminiModel(options.model);
   const modelPath = buildGeminiModelPath(model);
-  debugEmbeddingsLog("memory embeddings: gemini client", {
+  debugLog("memory embeddings: gemini client", {
     rawBaseUrl,
     baseUrl,
     model,
@@ -176,5 +161,5 @@ export async function resolveGeminiEmbeddingClient(
     embedEndpoint: `${baseUrl}/${modelPath}:embedContent`,
     batchEndpoint: `${baseUrl}/${modelPath}:batchEmbedContents`,
   });
-  return { baseUrl, headers, model, modelPath, apiKeys };
+  return { baseUrl, headers, model, modelPath };
 }

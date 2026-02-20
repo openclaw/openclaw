@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { probeTwitch } from "./probe.js";
 import type { TwitchAccountConfig } from "./types.js";
+import { probeTwitch } from "./probe.js";
 
 // Mock Twurple modules - Vitest v4 compatible mocking
 const mockUnbind = vi.fn();
@@ -26,8 +26,9 @@ const mockOnAuthenticationFailure = vi.fn((_handler: () => void) => {
 
 // Connect mock that triggers the registered handler
 const defaultConnectImpl = async () => {
-  // Simulate successful connection by calling the handler immediately.
+  // Simulate successful connection by calling the handler after a delay
   if (connectHandler) {
+    await new Promise((resolve) => setTimeout(resolve, 1));
     connectHandler();
   }
 };
@@ -53,8 +54,7 @@ vi.mock("@twurple/auth", () => ({
 describe("probeTwitch", () => {
   const mockAccount: TwitchAccountConfig = {
     username: "testbot",
-    accessToken: "oauth:test123456789",
-    clientId: "test-client-id",
+    token: "oauth:test123456789",
     channel: "testchannel",
   };
 
@@ -74,7 +74,7 @@ describe("probeTwitch", () => {
   });
 
   it("returns error when token is missing", async () => {
-    const account = { ...mockAccount, accessToken: "" };
+    const account = { ...mockAccount, token: "" };
     const result = await probeTwitch(account, 5000);
 
     expect(result.ok).toBe(false);
@@ -84,7 +84,7 @@ describe("probeTwitch", () => {
   it("attempts connection regardless of token prefix", async () => {
     // Note: probeTwitch doesn't validate token format - it tries to connect with whatever token is provided
     // The actual connection would fail in production with an invalid token
-    const account = { ...mockAccount, accessToken: "raw_token_no_prefix" };
+    const account = { ...mockAccount, token: "raw_token_no_prefix" };
     const result = await probeTwitch(account, 5000);
 
     // With mock, connection succeeds even without oauth: prefix
@@ -113,19 +113,15 @@ describe("probeTwitch", () => {
   });
 
   it("times out when connection takes too long", async () => {
-    vi.useFakeTimers();
-    try {
-      mockConnect.mockImplementationOnce(() => new Promise(() => {})); // Never resolves
-      const resultPromise = probeTwitch(mockAccount, 100);
-      await vi.advanceTimersByTimeAsync(100);
-      const result = await resultPromise;
+    mockConnect.mockImplementationOnce(() => new Promise(() => {})); // Never resolves
 
-      expect(result.ok).toBe(false);
-      expect(result.error).toContain("timeout");
-    } finally {
-      vi.useRealTimers();
-      mockConnect.mockImplementation(defaultConnectImpl);
-    }
+    const result = await probeTwitch(mockAccount, 100);
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("timeout");
+
+    // Reset mock
+    mockConnect.mockImplementation(defaultConnectImpl);
   });
 
   it("cleans up client even on failure", async () => {
@@ -133,6 +129,7 @@ describe("probeTwitch", () => {
       // Simulate connection failure by calling disconnect handler
       // onDisconnect signature: (manually: boolean, reason?: Error) => void
       if (disconnectHandler) {
+        await new Promise((resolve) => setTimeout(resolve, 1));
         disconnectHandler(false, new Error("Connection failed"));
       }
     });
@@ -152,6 +149,7 @@ describe("probeTwitch", () => {
       // Simulate connection failure by calling disconnect handler
       // onDisconnect signature: (manually: boolean, reason?: Error) => void
       if (disconnectHandler) {
+        await new Promise((resolve) => setTimeout(resolve, 1));
         disconnectHandler(false, new Error("Network error"));
       }
     });
@@ -168,7 +166,7 @@ describe("probeTwitch", () => {
   it("trims token before validation", async () => {
     const account: TwitchAccountConfig = {
       ...mockAccount,
-      accessToken: "  oauth:test123456789  ",
+      token: "  oauth:test123456789  ",
     };
 
     const result = await probeTwitch(account, 5000);
@@ -181,6 +179,7 @@ describe("probeTwitch", () => {
       // Simulate connection failure by calling disconnect handler
       // onDisconnect signature: (manually: boolean, reason?: Error) => void
       if (disconnectHandler) {
+        await new Promise((resolve) => setTimeout(resolve, 1));
         disconnectHandler(false, "String error" as unknown as Error);
       }
     });

@@ -85,11 +85,10 @@ async function main() {
     agents: {
       defaults: {
         model: {
-          primary: "anthropic/claude-opus-4-6",
+          primary: "anthropic/claude-opus-4-5",
           fallbacks: ["zai/glm-4.7"],
         },
         models: {
-          "anthropic/claude-opus-4-6": {},
           "anthropic/claude-opus-4-5": {},
           "zai/glm-4.7": {},
         },

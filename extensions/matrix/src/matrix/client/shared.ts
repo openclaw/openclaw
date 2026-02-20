@@ -1,11 +1,10 @@
 import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
 import { LogService } from "@vector-im/matrix-bot-sdk";
-import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import type { CoreConfig } from "../../types.js";
+import type { CoreConfig } from "../types.js";
+import type { MatrixAuth } from "./types.js";
 import { resolveMatrixAuth } from "./config.js";
 import { createMatrixClient } from "./create-client.js";
 import { DEFAULT_ACCOUNT_KEY } from "./storage.js";
-import type { MatrixAuth } from "./types.js";
 
 type SharedMatrixClientState = {
   client: MatrixClient;
@@ -14,19 +13,17 @@ type SharedMatrixClientState = {
   cryptoReady: boolean;
 };
 
-// Support multiple accounts with separate clients
-const sharedClientStates = new Map<string, SharedMatrixClientState>();
-const sharedClientPromises = new Map<string, Promise<SharedMatrixClientState>>();
-const sharedClientStartPromises = new Map<string, Promise<void>>();
+let sharedClientState: SharedMatrixClientState | null = null;
+let sharedClientPromise: Promise<SharedMatrixClientState> | null = null;
+let sharedClientStartPromise: Promise<void> | null = null;
 
 function buildSharedClientKey(auth: MatrixAuth, accountId?: string | null): string {
-  const normalizedAccountId = normalizeAccountId(accountId);
   return [
     auth.homeserver,
     auth.userId,
     auth.accessToken,
     auth.encryption ? "e2ee" : "plain",
-    normalizedAccountId || DEFAULT_ACCOUNT_KEY,
+    accountId ?? DEFAULT_ACCOUNT_KEY,
   ].join("|");
 }
 
@@ -60,13 +57,11 @@ async function ensureSharedClientStarted(params: {
   if (params.state.started) {
     return;
   }
-  const key = params.state.key;
-  const existingStartPromise = sharedClientStartPromises.get(key);
-  if (existingStartPromise) {
-    await existingStartPromise;
+  if (sharedClientStartPromise) {
+    await sharedClientStartPromise;
     return;
   }
-  const startPromise = (async () => {
+  sharedClientStartPromise = (async () => {
     const client = params.state.client;
 
     // Initialize crypto if enabled
@@ -74,9 +69,7 @@ async function ensureSharedClientStarted(params: {
       try {
         const joinedRooms = await client.getJoinedRooms();
         if (client.crypto) {
-          await (client.crypto as { prepare: (rooms?: string[]) => Promise<void> }).prepare(
-            joinedRooms,
-          );
+          await client.crypto.prepare(joinedRooms);
           params.state.cryptoReady = true;
         }
       } catch (err) {
@@ -87,11 +80,10 @@ async function ensureSharedClientStarted(params: {
     await client.start();
     params.state.started = true;
   })();
-  sharedClientStartPromises.set(key, startPromise);
   try {
-    await startPromise;
+    await sharedClientStartPromise;
   } finally {
-    sharedClientStartPromises.delete(key);
+    sharedClientStartPromise = null;
   }
 }
 
@@ -105,51 +97,48 @@ export async function resolveSharedMatrixClient(
     accountId?: string | null;
   } = {},
 ): Promise<MatrixClient> {
-  const accountId = normalizeAccountId(params.accountId);
-  const auth =
-    params.auth ?? (await resolveMatrixAuth({ cfg: params.cfg, env: params.env, accountId }));
-  const key = buildSharedClientKey(auth, accountId);
+  const auth = params.auth ?? (await resolveMatrixAuth({ cfg: params.cfg, env: params.env }));
+  const key = buildSharedClientKey(auth, params.accountId);
   const shouldStart = params.startClient !== false;
 
-  // Check if we already have a client for this key
-  const existingState = sharedClientStates.get(key);
-  if (existingState) {
+  if (sharedClientState?.key === key) {
     if (shouldStart) {
       await ensureSharedClientStarted({
-        state: existingState,
+        state: sharedClientState,
         timeoutMs: params.timeoutMs,
         initialSyncLimit: auth.initialSyncLimit,
         encryption: auth.encryption,
       });
     }
-    return existingState.client;
+    return sharedClientState.client;
   }
 
-  // Check if there's a pending creation for this key
-  const existingPromise = sharedClientPromises.get(key);
-  if (existingPromise) {
-    const pending = await existingPromise;
-    if (shouldStart) {
-      await ensureSharedClientStarted({
-        state: pending,
-        timeoutMs: params.timeoutMs,
-        initialSyncLimit: auth.initialSyncLimit,
-        encryption: auth.encryption,
-      });
+  if (sharedClientPromise) {
+    const pending = await sharedClientPromise;
+    if (pending.key === key) {
+      if (shouldStart) {
+        await ensureSharedClientStarted({
+          state: pending,
+          timeoutMs: params.timeoutMs,
+          initialSyncLimit: auth.initialSyncLimit,
+          encryption: auth.encryption,
+        });
+      }
+      return pending.client;
     }
-    return pending.client;
+    pending.client.stop();
+    sharedClientState = null;
+    sharedClientPromise = null;
   }
 
-  // Create a new client for this account
-  const createPromise = createSharedMatrixClient({
+  sharedClientPromise = createSharedMatrixClient({
     auth,
     timeoutMs: params.timeoutMs,
-    accountId,
+    accountId: params.accountId,
   });
-  sharedClientPromises.set(key, createPromise);
   try {
-    const created = await createPromise;
-    sharedClientStates.set(key, created);
+    const created = await sharedClientPromise;
+    sharedClientState = created;
     if (shouldStart) {
       await ensureSharedClientStarted({
         state: created,
@@ -160,7 +149,7 @@ export async function resolveSharedMatrixClient(
     }
     return created.client;
   } finally {
-    sharedClientPromises.delete(key);
+    sharedClientPromise = null;
   }
 }
 
@@ -173,29 +162,9 @@ export async function waitForMatrixSync(_params: {
   // This is kept for API compatibility but is essentially a no-op now
 }
 
-export function stopSharedClient(key?: string): void {
-  if (key) {
-    // Stop a specific client
-    const state = sharedClientStates.get(key);
-    if (state) {
-      state.client.stop();
-      sharedClientStates.delete(key);
-    }
-  } else {
-    // Stop all clients (backward compatible behavior)
-    for (const state of sharedClientStates.values()) {
-      state.client.stop();
-    }
-    sharedClientStates.clear();
+export function stopSharedClient(): void {
+  if (sharedClientState) {
+    sharedClientState.client.stop();
+    sharedClientState = null;
   }
-}
-
-/**
- * Stop the shared client for a specific account.
- * Use this instead of stopSharedClient() when shutting down a single account
- * to avoid stopping all accounts.
- */
-export function stopSharedClientForAccount(auth: MatrixAuth, accountId?: string | null): void {
-  const key = buildSharedClientKey(auth, normalizeAccountId(accountId));
-  stopSharedClient(key);
 }

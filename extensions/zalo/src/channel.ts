@@ -9,13 +9,10 @@ import {
   buildChannelConfigSchema,
   DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
-  chunkTextForOutbound,
-  formatAllowFromLowercase,
   formatPairingApproveHint,
   migrateBaseNameToDefaultAccount,
   normalizeAccountId,
   PAIRING_APPROVED_MESSAGE,
-  resolveChannelAccountConfigBasePath,
   setAccountEnabledInConfigSection,
 } from "openclaw/plugin-sdk";
 import {
@@ -66,7 +63,11 @@ export const zaloDock: ChannelDock = {
         String(entry),
       ),
     formatAllowFrom: ({ allowFrom }) =>
-      formatAllowFromLowercase({ allowFrom, stripPrefixRe: /^(zalo|zl):/i }),
+      allowFrom
+        .map((entry) => String(entry).trim())
+        .filter(Boolean)
+        .map((entry) => entry.replace(/^(zalo|zl):/i, ""))
+        .map((entry) => entry.toLowerCase()),
   },
   groups: {
     resolveRequireMention: () => true,
@@ -123,16 +124,19 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount> = {
         String(entry),
       ),
     formatAllowFrom: ({ allowFrom }) =>
-      formatAllowFromLowercase({ allowFrom, stripPrefixRe: /^(zalo|zl):/i }),
+      allowFrom
+        .map((entry) => String(entry).trim())
+        .filter(Boolean)
+        .map((entry) => entry.replace(/^(zalo|zl):/i, ""))
+        .map((entry) => entry.toLowerCase()),
   },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
       const resolvedAccountId = accountId ?? account.accountId ?? DEFAULT_ACCOUNT_ID;
-      const basePath = resolveChannelAccountConfigBasePath({
-        cfg,
-        channelKey: "zalo",
-        accountId: resolvedAccountId,
-      });
+      const useAccountPath = Boolean(cfg.channels?.zalo?.accounts?.[resolvedAccountId]);
+      const basePath = useAccountPath
+        ? `channels.zalo.accounts.${resolvedAccountId}.`
+        : "channels.zalo.";
       return {
         policy: account.config.dmPolicy ?? "pairing",
         allowFrom: account.config.allowFrom ?? [],
@@ -271,7 +275,37 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount> = {
   },
   outbound: {
     deliveryMode: "direct",
-    chunker: chunkTextForOutbound,
+    chunker: (text, limit) => {
+      if (!text) {
+        return [];
+      }
+      if (limit <= 0 || text.length <= limit) {
+        return [text];
+      }
+      const chunks: string[] = [];
+      let remaining = text;
+      while (remaining.length > limit) {
+        const window = remaining.slice(0, limit);
+        const lastNewline = window.lastIndexOf("\n");
+        const lastSpace = window.lastIndexOf(" ");
+        let breakIdx = lastNewline > 0 ? lastNewline : lastSpace;
+        if (breakIdx <= 0) {
+          breakIdx = limit;
+        }
+        const rawChunk = remaining.slice(0, breakIdx);
+        const chunk = rawChunk.trimEnd();
+        if (chunk.length > 0) {
+          chunks.push(chunk);
+        }
+        const brokeOnSeparator = breakIdx < remaining.length && /\s/.test(remaining[breakIdx]);
+        const nextStart = Math.min(remaining.length, breakIdx + (brokeOnSeparator ? 1 : 0));
+        remaining = remaining.slice(nextStart).trimStart();
+      }
+      if (remaining.length) {
+        chunks.push(remaining);
+      }
+      return chunks;
+    },
     chunkerMode: "text",
     textChunkLimit: 2000,
     sendText: async ({ to, text, accountId, cfg }) => {

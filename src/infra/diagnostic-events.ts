@@ -22,13 +22,6 @@ export type DiagnosticUsageEvent = DiagnosticBaseEvent & {
     promptTokens?: number;
     total?: number;
   };
-  lastCallUsage?: {
-    input?: number;
-    output?: number;
-    cacheRead?: number;
-    cacheWrite?: number;
-    total?: number;
-  };
   context?: {
     limit?: number;
     used?: number;
@@ -134,19 +127,6 @@ export type DiagnosticHeartbeatEvent = DiagnosticBaseEvent & {
   queued: number;
 };
 
-export type DiagnosticToolLoopEvent = DiagnosticBaseEvent & {
-  type: "tool.loop";
-  sessionKey?: string;
-  sessionId?: string;
-  toolName: string;
-  level: "warning" | "critical";
-  action: "warn" | "block";
-  detector: "generic_repeat" | "known_poll_no_progress" | "global_circuit_breaker" | "ping_pong";
-  count: number;
-  message: string;
-  pairedToolName?: string;
-};
-
 export type DiagnosticEventPayload =
   | DiagnosticUsageEvent
   | DiagnosticWebhookReceivedEvent
@@ -159,84 +139,41 @@ export type DiagnosticEventPayload =
   | DiagnosticLaneEnqueueEvent
   | DiagnosticLaneDequeueEvent
   | DiagnosticRunAttemptEvent
-  | DiagnosticHeartbeatEvent
-  | DiagnosticToolLoopEvent;
+  | DiagnosticHeartbeatEvent;
 
 export type DiagnosticEventInput = DiagnosticEventPayload extends infer Event
   ? Event extends DiagnosticEventPayload
     ? Omit<Event, "seq" | "ts">
     : never
   : never;
-
-type DiagnosticEventsGlobalState = {
-  seq: number;
-  listeners: Set<(evt: DiagnosticEventPayload) => void>;
-  dispatchDepth: number;
-};
-
-function getDiagnosticEventsState(): DiagnosticEventsGlobalState {
-  const globalStore = globalThis as typeof globalThis & {
-    __openclawDiagnosticEventsState?: DiagnosticEventsGlobalState;
-  };
-  if (!globalStore.__openclawDiagnosticEventsState) {
-    globalStore.__openclawDiagnosticEventsState = {
-      seq: 0,
-      listeners: new Set<(evt: DiagnosticEventPayload) => void>(),
-      dispatchDepth: 0,
-    };
-  }
-  return globalStore.__openclawDiagnosticEventsState;
-}
+let seq = 0;
+const listeners = new Set<(evt: DiagnosticEventPayload) => void>();
 
 export function isDiagnosticsEnabled(config?: OpenClawConfig): boolean {
   return config?.diagnostics?.enabled === true;
 }
 
 export function emitDiagnosticEvent(event: DiagnosticEventInput) {
-  const state = getDiagnosticEventsState();
-  if (state.dispatchDepth > 100) {
-    console.error(
-      `[diagnostic-events] recursion guard tripped at depth=${state.dispatchDepth}, dropping type=${event.type}`,
-    );
-    return;
-  }
-
   const enriched = {
     ...event,
-    seq: (state.seq += 1),
+    seq: (seq += 1),
     ts: Date.now(),
   } satisfies DiagnosticEventPayload;
-  state.dispatchDepth += 1;
-  for (const listener of state.listeners) {
+  for (const listener of listeners) {
     try {
       listener(enriched);
-    } catch (err) {
-      const errorMessage =
-        err instanceof Error
-          ? (err.stack ?? err.message)
-          : typeof err === "string"
-            ? err
-            : String(err);
-      console.error(
-        `[diagnostic-events] listener error type=${enriched.type} seq=${enriched.seq}: ${errorMessage}`,
-      );
+    } catch {
       // Ignore listener failures.
     }
   }
-  state.dispatchDepth -= 1;
 }
 
 export function onDiagnosticEvent(listener: (evt: DiagnosticEventPayload) => void): () => void {
-  const state = getDiagnosticEventsState();
-  state.listeners.add(listener);
-  return () => {
-    state.listeners.delete(listener);
-  };
+  listeners.add(listener);
+  return () => listeners.delete(listener);
 }
 
 export function resetDiagnosticEventsForTest(): void {
-  const state = getDiagnosticEventsState();
-  state.seq = 0;
-  state.listeners.clear();
-  state.dispatchDepth = 0;
+  seq = 0;
+  listeners.clear();
 }

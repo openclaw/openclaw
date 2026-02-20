@@ -1,14 +1,12 @@
-import { escapeRegExp } from "../../utils.js";
 import type { BrowserRouteContext } from "../server-context.js";
-import { registerBrowserRoutes } from "./index.js";
 import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
+import { registerBrowserRoutes } from "./index.js";
 
 type BrowserDispatchRequest = {
   method: "GET" | "POST" | "DELETE";
   path: string;
   query?: Record<string, unknown>;
   body?: unknown;
-  signal?: AbortSignal;
 };
 
 type BrowserDispatchResponse = {
@@ -24,6 +22,10 @@ type RouteEntry = {
   handler: (req: BrowserRequest, res: BrowserResponse) => void | Promise<void>;
 };
 
+function escapeRegex(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function compileRoute(path: string): { regex: RegExp; paramNames: string[] } {
   const paramNames: string[] = [];
   const parts = path.split("/").map((part) => {
@@ -32,7 +34,7 @@ function compileRoute(path: string): { regex: RegExp; paramNames: string[] } {
       paramNames.push(name);
       return "([^/]+)";
     }
-    return escapeRegExp(part);
+    return escapeRegex(part);
   });
   return { regex: new RegExp(`^${parts.join("/")}$`), paramNames };
 }
@@ -69,7 +71,6 @@ export function createBrowserRouteDispatcher(ctx: BrowserRouteContext) {
       const path = normalizePath(req.path);
       const query = req.query ?? {};
       const body = req.body;
-      const signal = req.signal;
 
       const match = registry.routes.find((route) => {
         if (route.method !== method) {
@@ -110,7 +111,6 @@ export function createBrowserRouteDispatcher(ctx: BrowserRouteContext) {
             params,
             query,
             body,
-            signal,
           },
           res,
         );

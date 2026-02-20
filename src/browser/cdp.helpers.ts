@@ -1,9 +1,6 @@
 import WebSocket from "ws";
-import { isLoopbackHost } from "../gateway/net.js";
 import { rawDataToString } from "../infra/ws.js";
 import { getChromeExtensionRelayAuthHeaders } from "./extension-relay.js";
-
-export { isLoopbackHost };
 
 type CdpResponse = {
   id: number;
@@ -16,11 +13,20 @@ type Pending = {
   reject: (err: Error) => void;
 };
 
-export type CdpSendFn = (
-  method: string,
-  params?: Record<string, unknown>,
-  sessionId?: string,
-) => Promise<unknown>;
+export type CdpSendFn = (method: string, params?: Record<string, unknown>) => Promise<unknown>;
+
+export function isLoopbackHost(host: string) {
+  const h = host.trim().toLowerCase();
+  return (
+    h === "localhost" ||
+    h === "127.0.0.1" ||
+    h === "0.0.0.0" ||
+    h === "[::1]" ||
+    h === "::1" ||
+    h === "[::]" ||
+    h === "::"
+  );
+}
 
 export function getHeadersWithAuth(url: string, headers: Record<string, string> = {}) {
   const relayHeaders = getChromeExtensionRelayAuthHeaders(url);
@@ -55,13 +61,9 @@ function createCdpSender(ws: WebSocket) {
   let nextId = 1;
   const pending = new Map<number, Pending>();
 
-  const send: CdpSendFn = (
-    method: string,
-    params?: Record<string, unknown>,
-    sessionId?: string,
-  ) => {
+  const send: CdpSendFn = (method: string, params?: Record<string, unknown>) => {
     const id = nextId++;
-    const msg = { id, method, params, sessionId };
+    const msg = { id, method, params };
     ws.send(JSON.stringify(msg));
     return new Promise<unknown>((resolve, reject) => {
       pending.set(id, { resolve, reject });
@@ -79,10 +81,6 @@ function createCdpSender(ws: WebSocket) {
       // ignore
     }
   };
-
-  ws.on("error", (err) => {
-    closeWithError(err instanceof Error ? err : new Error(String(err)));
-  });
 
   ws.on("message", (data) => {
     try {
@@ -113,41 +111,42 @@ function createCdpSender(ws: WebSocket) {
 }
 
 export async function fetchJson<T>(url: string, timeoutMs = 1500, init?: RequestInit): Promise<T> {
-  const res = await fetchChecked(url, timeoutMs, init);
-  return (await res.json()) as T;
-}
-
-async function fetchChecked(url: string, timeoutMs = 1500, init?: RequestInit): Promise<Response> {
   const ctrl = new AbortController();
-  const t = setTimeout(ctrl.abort.bind(ctrl), timeoutMs);
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const headers = getHeadersWithAuth(url, (init?.headers as Record<string, string>) || {});
     const res = await fetch(url, { ...init, headers, signal: ctrl.signal });
     if (!res.ok) {
       throw new Error(`HTTP ${res.status}`);
     }
-    return res;
+    return (await res.json()) as T;
   } finally {
     clearTimeout(t);
   }
 }
 
 export async function fetchOk(url: string, timeoutMs = 1500, init?: RequestInit): Promise<void> {
-  await fetchChecked(url, timeoutMs, init);
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const headers = getHeadersWithAuth(url, (init?.headers as Record<string, string>) || {});
+    const res = await fetch(url, { ...init, headers, signal: ctrl.signal });
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`);
+    }
+  } finally {
+    clearTimeout(t);
+  }
 }
 
 export async function withCdpSocket<T>(
   wsUrl: string,
   fn: (send: CdpSendFn) => Promise<T>,
-  opts?: { headers?: Record<string, string>; handshakeTimeoutMs?: number },
+  opts?: { headers?: Record<string, string> },
 ): Promise<T> {
   const headers = getHeadersWithAuth(wsUrl, opts?.headers ?? {});
-  const handshakeTimeoutMs =
-    typeof opts?.handshakeTimeoutMs === "number" && Number.isFinite(opts.handshakeTimeoutMs)
-      ? Math.max(1, Math.floor(opts.handshakeTimeoutMs))
-      : 5000;
   const ws = new WebSocket(wsUrl, {
-    handshakeTimeout: handshakeTimeoutMs,
+    handshakeTimeout: 5000,
     ...(Object.keys(headers).length ? { headers } : {}),
   });
   const { send, closeWithError } = createCdpSender(ws);
@@ -155,15 +154,9 @@ export async function withCdpSocket<T>(
   const openPromise = new Promise<void>((resolve, reject) => {
     ws.once("open", () => resolve());
     ws.once("error", (err) => reject(err));
-    ws.once("close", () => reject(new Error("CDP socket closed")));
   });
 
-  try {
-    await openPromise;
-  } catch (err) {
-    closeWithError(err instanceof Error ? err : new Error(String(err)));
-    throw err;
-  }
+  await openPromise;
 
   try {
     return await fn(send);

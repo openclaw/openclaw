@@ -1,5 +1,5 @@
-import Foundation
 import OpenClawIPC
+import Foundation
 
 extension OnboardingView {
     @MainActor

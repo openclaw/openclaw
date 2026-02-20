@@ -1,5 +1,5 @@
-import Foundation
 import OpenClawDiscovery
+import Foundation
 
 enum GatewayDiscoveryHelpers {
     static func sshTarget(for gateway: GatewayDiscoveryModel.DiscoveredGateway) -> String? {
@@ -15,29 +15,19 @@ enum GatewayDiscoveryHelpers {
 
     static func directUrl(for gateway: GatewayDiscoveryModel.DiscoveredGateway) -> String? {
         self.directGatewayUrl(
-            serviceHost: gateway.serviceHost,
-            servicePort: gateway.servicePort,
+            tailnetDns: gateway.tailnetDns,
             lanHost: gateway.lanHost,
             gatewayPort: gateway.gatewayPort)
     }
 
     static func directGatewayUrl(
-        serviceHost: String?,
-        servicePort: Int?,
+        tailnetDns: String?,
         lanHost: String?,
         gatewayPort: Int?) -> String?
     {
-        // Security: do not route using unauthenticated TXT hints (tailnetDns/lanHost/gatewayPort).
-        // Prefer the resolved service endpoint (SRV + A/AAAA).
-        if let host = self.trimmed(serviceHost), !host.isEmpty,
-           let port = servicePort, port > 0
-        {
-            let scheme = port == 443 ? "wss" : "ws"
-            let portSuffix = port == 443 ? "" : ":\(port)"
-            return "\(scheme)://\(host)\(portSuffix)"
+        if let tailnetDns = self.sanitizedTailnetHost(tailnetDns) {
+            return "wss://\(tailnetDns)"
         }
-
-        // Legacy fallback (best-effort): keep existing behavior when we couldn't resolve SRV.
         guard let lanHost = self.trimmed(lanHost), !lanHost.isEmpty else { return nil }
         let port = gatewayPort ?? 18789
         return "ws://\(lanHost):\(port)"

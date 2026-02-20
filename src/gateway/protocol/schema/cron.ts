@@ -1,58 +1,11 @@
-import { Type, type TSchema } from "@sinclair/typebox";
+import { Type } from "@sinclair/typebox";
 import { NonEmptyString } from "./primitives.js";
-
-function cronAgentTurnPayloadSchema(params: { message: TSchema }) {
-  return Type.Object(
-    {
-      kind: Type.Literal("agentTurn"),
-      message: params.message,
-      model: Type.Optional(Type.String()),
-      thinking: Type.Optional(Type.String()),
-      timeoutSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
-      allowUnsafeExternalContent: Type.Optional(Type.Boolean()),
-      deliver: Type.Optional(Type.Boolean()),
-      channel: Type.Optional(Type.String()),
-      to: Type.Optional(Type.String()),
-      bestEffortDeliver: Type.Optional(Type.Boolean()),
-    },
-    { additionalProperties: false },
-  );
-}
-
-const CronSessionTargetSchema = Type.Union([Type.Literal("main"), Type.Literal("isolated")]);
-const CronWakeModeSchema = Type.Union([Type.Literal("next-heartbeat"), Type.Literal("now")]);
-const CronCommonOptionalFields = {
-  agentId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
-  sessionKey: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
-  description: Type.Optional(Type.String()),
-  enabled: Type.Optional(Type.Boolean()),
-  deleteAfterRun: Type.Optional(Type.Boolean()),
-};
-
-function cronIdOrJobIdParams(extraFields: Record<string, TSchema>) {
-  return Type.Union([
-    Type.Object(
-      {
-        id: NonEmptyString,
-        ...extraFields,
-      },
-      { additionalProperties: false },
-    ),
-    Type.Object(
-      {
-        jobId: NonEmptyString,
-        ...extraFields,
-      },
-      { additionalProperties: false },
-    ),
-  ]);
-}
 
 export const CronScheduleSchema = Type.Union([
   Type.Object(
     {
       kind: Type.Literal("at"),
-      at: NonEmptyString,
+      atMs: Type.Integer({ minimum: 0 }),
     },
     { additionalProperties: false },
   ),
@@ -69,7 +22,6 @@ export const CronScheduleSchema = Type.Union([
       kind: Type.Literal("cron"),
       expr: NonEmptyString,
       tz: Type.Optional(Type.String()),
-      staggerMs: Type.Optional(Type.Integer({ minimum: 0 })),
     },
     { additionalProperties: false },
   ),
@@ -83,7 +35,20 @@ export const CronPayloadSchema = Type.Union([
     },
     { additionalProperties: false },
   ),
-  cronAgentTurnPayloadSchema({ message: NonEmptyString }),
+  Type.Object(
+    {
+      kind: Type.Literal("agentTurn"),
+      message: NonEmptyString,
+      model: Type.Optional(Type.String()),
+      thinking: Type.Optional(Type.String()),
+      timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1 })),
+      deliver: Type.Optional(Type.Boolean()),
+      channel: Type.Optional(Type.Union([Type.Literal("last"), NonEmptyString])),
+      to: Type.Optional(Type.String()),
+      bestEffortDeliver: Type.Optional(Type.Boolean()),
+    },
+    { additionalProperties: false },
+  ),
 ]);
 
 export const CronPayloadPatchSchema = Type.Union([
@@ -94,54 +59,27 @@ export const CronPayloadPatchSchema = Type.Union([
     },
     { additionalProperties: false },
   ),
-  cronAgentTurnPayloadSchema({ message: Type.Optional(NonEmptyString) }),
+  Type.Object(
+    {
+      kind: Type.Literal("agentTurn"),
+      message: Type.Optional(NonEmptyString),
+      model: Type.Optional(Type.String()),
+      thinking: Type.Optional(Type.String()),
+      timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1 })),
+      deliver: Type.Optional(Type.Boolean()),
+      channel: Type.Optional(Type.Union([Type.Literal("last"), NonEmptyString])),
+      to: Type.Optional(Type.String()),
+      bestEffortDeliver: Type.Optional(Type.Boolean()),
+    },
+    { additionalProperties: false },
+  ),
 ]);
 
-const CronDeliverySharedProperties = {
-  channel: Type.Optional(Type.Union([Type.Literal("last"), NonEmptyString])),
-  bestEffort: Type.Optional(Type.Boolean()),
-};
-
-const CronDeliveryNoopSchema = Type.Object(
+export const CronIsolationSchema = Type.Object(
   {
-    mode: Type.Literal("none"),
-    ...CronDeliverySharedProperties,
-    to: Type.Optional(Type.String()),
-  },
-  { additionalProperties: false },
-);
-
-const CronDeliveryAnnounceSchema = Type.Object(
-  {
-    mode: Type.Literal("announce"),
-    ...CronDeliverySharedProperties,
-    to: Type.Optional(Type.String()),
-  },
-  { additionalProperties: false },
-);
-
-const CronDeliveryWebhookSchema = Type.Object(
-  {
-    mode: Type.Literal("webhook"),
-    ...CronDeliverySharedProperties,
-    to: NonEmptyString,
-  },
-  { additionalProperties: false },
-);
-
-export const CronDeliverySchema = Type.Union([
-  CronDeliveryNoopSchema,
-  CronDeliveryAnnounceSchema,
-  CronDeliveryWebhookSchema,
-]);
-
-export const CronDeliveryPatchSchema = Type.Object(
-  {
-    mode: Type.Optional(
-      Type.Union([Type.Literal("none"), Type.Literal("announce"), Type.Literal("webhook")]),
-    ),
-    ...CronDeliverySharedProperties,
-    to: Type.Optional(Type.String()),
+    postToMainPrefix: Type.Optional(Type.String()),
+    postToMainMode: Type.Optional(Type.Union([Type.Literal("summary"), Type.Literal("full")])),
+    postToMainMaxChars: Type.Optional(Type.Integer({ minimum: 0 })),
   },
   { additionalProperties: false },
 );
@@ -156,7 +94,6 @@ export const CronJobStateSchema = Type.Object(
     ),
     lastError: Type.Optional(Type.String()),
     lastDurationMs: Type.Optional(Type.Integer({ minimum: 0 })),
-    consecutiveErrors: Type.Optional(Type.Integer({ minimum: 0 })),
   },
   { additionalProperties: false },
 );
@@ -165,7 +102,6 @@ export const CronJobSchema = Type.Object(
   {
     id: NonEmptyString,
     agentId: Type.Optional(NonEmptyString),
-    sessionKey: Type.Optional(NonEmptyString),
     name: NonEmptyString,
     description: Type.Optional(Type.String()),
     enabled: Type.Boolean(),
@@ -173,10 +109,10 @@ export const CronJobSchema = Type.Object(
     createdAtMs: Type.Integer({ minimum: 0 }),
     updatedAtMs: Type.Integer({ minimum: 0 }),
     schedule: CronScheduleSchema,
-    sessionTarget: CronSessionTargetSchema,
-    wakeMode: CronWakeModeSchema,
+    sessionTarget: Type.Union([Type.Literal("main"), Type.Literal("isolated")]),
+    wakeMode: Type.Union([Type.Literal("next-heartbeat"), Type.Literal("now")]),
     payload: CronPayloadSchema,
-    delivery: Type.Optional(CronDeliverySchema),
+    isolation: Type.Optional(CronIsolationSchema),
     state: CronJobStateSchema,
   },
   { additionalProperties: false },
@@ -194,12 +130,15 @@ export const CronStatusParamsSchema = Type.Object({}, { additionalProperties: fa
 export const CronAddParamsSchema = Type.Object(
   {
     name: NonEmptyString,
-    ...CronCommonOptionalFields,
+    agentId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+    description: Type.Optional(Type.String()),
+    enabled: Type.Optional(Type.Boolean()),
+    deleteAfterRun: Type.Optional(Type.Boolean()),
     schedule: CronScheduleSchema,
-    sessionTarget: CronSessionTargetSchema,
-    wakeMode: CronWakeModeSchema,
+    sessionTarget: Type.Union([Type.Literal("main"), Type.Literal("isolated")]),
+    wakeMode: Type.Union([Type.Literal("next-heartbeat"), Type.Literal("now")]),
     payload: CronPayloadSchema,
-    delivery: Type.Optional(CronDeliverySchema),
+    isolation: Type.Optional(CronIsolationSchema),
   },
   { additionalProperties: false },
 );
@@ -207,30 +146,85 @@ export const CronAddParamsSchema = Type.Object(
 export const CronJobPatchSchema = Type.Object(
   {
     name: Type.Optional(NonEmptyString),
-    ...CronCommonOptionalFields,
+    agentId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+    description: Type.Optional(Type.String()),
+    enabled: Type.Optional(Type.Boolean()),
+    deleteAfterRun: Type.Optional(Type.Boolean()),
     schedule: Type.Optional(CronScheduleSchema),
-    sessionTarget: Type.Optional(CronSessionTargetSchema),
-    wakeMode: Type.Optional(CronWakeModeSchema),
+    sessionTarget: Type.Optional(Type.Union([Type.Literal("main"), Type.Literal("isolated")])),
+    wakeMode: Type.Optional(Type.Union([Type.Literal("next-heartbeat"), Type.Literal("now")])),
     payload: Type.Optional(CronPayloadPatchSchema),
-    delivery: Type.Optional(CronDeliveryPatchSchema),
+    isolation: Type.Optional(CronIsolationSchema),
     state: Type.Optional(Type.Partial(CronJobStateSchema)),
   },
   { additionalProperties: false },
 );
 
-export const CronUpdateParamsSchema = cronIdOrJobIdParams({
-  patch: CronJobPatchSchema,
-});
+export const CronUpdateParamsSchema = Type.Union([
+  Type.Object(
+    {
+      id: NonEmptyString,
+      patch: CronJobPatchSchema,
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      jobId: NonEmptyString,
+      patch: CronJobPatchSchema,
+    },
+    { additionalProperties: false },
+  ),
+]);
 
-export const CronRemoveParamsSchema = cronIdOrJobIdParams({});
+export const CronRemoveParamsSchema = Type.Union([
+  Type.Object(
+    {
+      id: NonEmptyString,
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      jobId: NonEmptyString,
+    },
+    { additionalProperties: false },
+  ),
+]);
 
-export const CronRunParamsSchema = cronIdOrJobIdParams({
-  mode: Type.Optional(Type.Union([Type.Literal("due"), Type.Literal("force")])),
-});
+export const CronRunParamsSchema = Type.Union([
+  Type.Object(
+    {
+      id: NonEmptyString,
+      mode: Type.Optional(Type.Union([Type.Literal("due"), Type.Literal("force")])),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      jobId: NonEmptyString,
+      mode: Type.Optional(Type.Union([Type.Literal("due"), Type.Literal("force")])),
+    },
+    { additionalProperties: false },
+  ),
+]);
 
-export const CronRunsParamsSchema = cronIdOrJobIdParams({
-  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 5000 })),
-});
+export const CronRunsParamsSchema = Type.Union([
+  Type.Object(
+    {
+      id: NonEmptyString,
+      limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 5000 })),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      jobId: NonEmptyString,
+      limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 5000 })),
+    },
+    { additionalProperties: false },
+  ),
+]);
 
 export const CronRunLogEntrySchema = Type.Object(
   {
@@ -242,8 +236,6 @@ export const CronRunLogEntrySchema = Type.Object(
     ),
     error: Type.Optional(Type.String()),
     summary: Type.Optional(Type.String()),
-    sessionId: Type.Optional(NonEmptyString),
-    sessionKey: Type.Optional(NonEmptyString),
     runAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
     durationMs: Type.Optional(Type.Integer({ minimum: 0 })),
     nextRunAtMs: Type.Optional(Type.Integer({ minimum: 0 })),

@@ -1,9 +1,4 @@
-import {
-  emptyPluginConfigSchema,
-  type OpenClawPluginApi,
-  type ProviderAuthContext,
-  type ProviderAuthResult,
-} from "openclaw/plugin-sdk";
+import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
 
 const DEFAULT_BASE_URL = "http://localhost:3000/v1";
 const DEFAULT_API_KEY = "n/a";
@@ -16,7 +11,6 @@ const DEFAULT_MODEL_IDS = [
   "gpt-5.1-codex",
   "gpt-5.1-codex-max",
   "gpt-5-mini",
-  "claude-opus-4.6",
   "claude-opus-4.5",
   "claude-sonnet-4.5",
   "claude-haiku-4.5",
@@ -62,9 +56,9 @@ function buildModelDefinition(modelId: string) {
   return {
     id: modelId,
     name: modelId,
-    api: "openai-completions" as const,
+    api: "openai-completions",
     reasoning: false,
-    input: ["text", "image"] as Array<"text" | "image">,
+    input: ["text", "image"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: DEFAULT_CONTEXT_WINDOW,
     maxTokens: DEFAULT_MAX_TOKENS,
@@ -76,7 +70,7 @@ const copilotProxyPlugin = {
   name: "Copilot Proxy",
   description: "Local Copilot Proxy (VS Code LM) provider plugin",
   configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
+  register(api) {
     api.registerProvider({
       id: "copilot-proxy",
       label: "Copilot Proxy",
@@ -87,7 +81,7 @@ const copilotProxyPlugin = {
           label: "Local proxy",
           hint: "Configure base URL + models for the Copilot Proxy server",
           kind: "custom",
-          run: async (ctx: ProviderAuthContext): Promise<ProviderAuthResult> => {
+          run: async (ctx) => {
             const baseUrlInput = await ctx.prompter.text({
               message: "Copilot Proxy base URL",
               initialValue: DEFAULT_BASE_URL,
@@ -97,7 +91,7 @@ const copilotProxyPlugin = {
             const modelInput = await ctx.prompter.text({
               message: "Model IDs (comma-separated)",
               initialValue: DEFAULT_MODEL_IDS.join(", "),
-              validate: (value: string) =>
+              validate: (value) =>
                 parseModelIds(value).length > 0 ? undefined : "Enter at least one model id",
             });
 

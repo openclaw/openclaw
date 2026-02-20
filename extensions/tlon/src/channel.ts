@@ -1,5 +1,4 @@
 import type {
-  ChannelAccountSnapshot,
   ChannelOutboundAdapter,
   ChannelPlugin,
   ChannelSetupInput,
@@ -10,15 +9,12 @@ import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
 } from "openclaw/plugin-sdk";
-import { buildTlonAccountFields } from "./account-fields.js";
 import { tlonChannelConfigSchema } from "./config-schema.js";
 import { monitorTlonProvider } from "./monitor/index.js";
 import { tlonOnboardingAdapter } from "./onboarding.js";
 import { formatTargetHint, normalizeShip, parseTlonTarget } from "./targets.js";
 import { resolveTlonAccount, listTlonAccountIds } from "./types.js";
-import { authenticate } from "./urbit/auth.js";
-import { UrbitChannelClient } from "./urbit/channel-client.js";
-import { ssrfPolicyFromAllowPrivateNetwork } from "./urbit/context.js";
+import { ensureUrbitConnectPatched, Urbit } from "./urbit/http-api.js";
 import { buildMediaText, sendDm, sendGroupMessage } from "./urbit/send.js";
 
 const TLON_CHANNEL_ID = "tlon" as const;
@@ -27,7 +23,6 @@ type TlonSetupInput = ChannelSetupInput & {
   ship?: string;
   url?: string;
   code?: string;
-  allowPrivateNetwork?: boolean;
   groupChannels?: string[];
   dmAllowlist?: string[];
   autoDiscoverChannels?: boolean;
@@ -48,7 +43,16 @@ function applyTlonSetupConfig(params: {
   });
   const base = namedConfig.channels?.tlon ?? {};
 
-  const payload = buildTlonAccountFields(input);
+  const payload = {
+    ...(input.ship ? { ship: input.ship } : {}),
+    ...(input.url ? { url: input.url } : {}),
+    ...(input.code ? { code: input.code } : {}),
+    ...(input.groupChannels ? { groupChannels: input.groupChannels } : {}),
+    ...(input.dmAllowlist ? { dmAllowlist: input.dmAllowlist } : {}),
+    ...(typeof input.autoDiscoverChannels === "boolean"
+      ? { autoDiscoverChannels: input.autoDiscoverChannels }
+      : {}),
+  };
 
   if (useDefault) {
     return {
@@ -97,7 +101,7 @@ const tlonOutbound: ChannelOutboundAdapter = {
         error: new Error(`Invalid Tlon target. Use ${formatTargetHint()}`),
       };
     }
-    if (parsed.kind === "direct") {
+    if (parsed.kind === "dm") {
       return { ok: true, to: parsed.ship };
     }
     return { ok: true, to: parsed.nest };
@@ -113,16 +117,17 @@ const tlonOutbound: ChannelOutboundAdapter = {
       throw new Error(`Invalid Tlon target. Use ${formatTargetHint()}`);
     }
 
-    const ssrfPolicy = ssrfPolicyFromAllowPrivateNetwork(account.allowPrivateNetwork);
-    const cookie = await authenticate(account.url, account.code, { ssrfPolicy });
-    const api = new UrbitChannelClient(account.url, cookie, {
+    ensureUrbitConnectPatched();
+    const api = await Urbit.authenticate({
       ship: account.ship.replace(/^~/, ""),
-      ssrfPolicy,
+      url: account.url,
+      code: account.code,
+      verbose: false,
     });
 
     try {
       const fromShip = normalizeShip(account.ship);
-      if (parsed.kind === "direct") {
+      if (parsed.kind === "dm") {
         return await sendDm({
           api,
           fromShip,
@@ -140,12 +145,16 @@ const tlonOutbound: ChannelOutboundAdapter = {
         replyToId: replyId,
       });
     } finally {
-      await api.close();
+      try {
+        await api.delete();
+      } catch {
+        // ignore cleanup errors
+      }
     }
   },
   sendMedia: async ({ cfg, to, text, mediaUrl, accountId, replyToId, threadId }) => {
     const mergedText = buildMediaText(text, mediaUrl);
-    return await tlonOutbound.sendText!({
+    return await tlonOutbound.sendText({
       cfg,
       to,
       text: mergedText,
@@ -215,11 +224,9 @@ export const tlonPlugin: ChannelPlugin = {
     deleteAccount: ({ cfg, accountId }) => {
       const useDefault = !accountId || accountId === "default";
       if (useDefault) {
+        // @ts-expect-error
         // oxlint-disable-next-line no-unused-vars
-        const { ship, code, url, name, ...rest } = (cfg.channels?.tlon ?? {}) as Record<
-          string,
-          unknown
-        >;
+        const { ship, code, url, name, ...rest } = cfg.channels?.tlon ?? {};
         return {
           ...cfg,
           channels: {
@@ -228,9 +235,9 @@ export const tlonPlugin: ChannelPlugin = {
           },
         } as OpenClawConfig;
       }
+      // @ts-expect-error
       // oxlint-disable-next-line no-unused-vars
-      const { [accountId]: removed, ...remainingAccounts } = (cfg.channels?.tlon?.accounts ??
-        {}) as Record<string, unknown>;
+      const { [accountId]: removed, ...remainingAccounts } = cfg.channels?.tlon?.accounts ?? {};
       return {
         ...cfg,
         channels: {
@@ -291,7 +298,7 @@ export const tlonPlugin: ChannelPlugin = {
       if (!parsed) {
         return target.trim();
       }
-      if (parsed.kind === "direct") {
+      if (parsed.kind === "dm") {
         return parsed.ship;
       }
       return parsed.nest;
@@ -327,28 +334,29 @@ export const tlonPlugin: ChannelPlugin = {
     },
     buildChannelSummary: ({ snapshot }) => ({
       configured: snapshot.configured ?? false,
-      ship: (snapshot as { ship?: string | null }).ship ?? null,
-      url: (snapshot as { url?: string | null }).url ?? null,
+      ship: snapshot.ship ?? null,
+      url: snapshot.url ?? null,
     }),
     probeAccount: async ({ account }) => {
       if (!account.configured || !account.ship || !account.url || !account.code) {
         return { ok: false, error: "Not configured" };
       }
       try {
-        const ssrfPolicy = ssrfPolicyFromAllowPrivateNetwork(account.allowPrivateNetwork);
-        const cookie = await authenticate(account.url, account.code, { ssrfPolicy });
-        const api = new UrbitChannelClient(account.url, cookie, {
+        ensureUrbitConnectPatched();
+        const api = await Urbit.authenticate({
           ship: account.ship.replace(/^~/, ""),
-          ssrfPolicy,
+          url: account.url,
+          code: account.code,
+          verbose: false,
         });
         try {
           await api.getOurName();
           return { ok: true };
         } finally {
-          await api.close();
+          await api.delete();
         }
-      } catch (error) {
-        return { ok: false, error: (error as { message?: string })?.message ?? String(error) };
+      } catch (error: any) {
+        return { ok: false, error: error?.message ?? String(error) };
       }
     },
     buildAccountSnapshot: ({ account, runtime, probe }) => ({
@@ -372,7 +380,7 @@ export const tlonPlugin: ChannelPlugin = {
         accountId: account.accountId,
         ship: account.ship,
         url: account.url,
-      } as ChannelAccountSnapshot);
+      });
       ctx.log?.info(`[${account.accountId}] starting Tlon provider for ${account.ship ?? "tlon"}`);
       return monitorTlonProvider({
         runtime: ctx.runtime,

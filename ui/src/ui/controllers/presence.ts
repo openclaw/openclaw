@@ -1,5 +1,5 @@
-import type { GatewayBrowserClient } from "../gateway.ts";
-import type { PresenceEntry } from "../types.ts";
+import type { GatewayBrowserClient } from "../gateway";
+import type { PresenceEntry } from "../types";
 
 export type PresenceState = {
   client: GatewayBrowserClient | null;
@@ -11,17 +11,13 @@ export type PresenceState = {
 };
 
 export async function loadPresence(state: PresenceState) {
-  if (!state.client || !state.connected) {
-    return;
-  }
-  if (state.presenceLoading) {
-    return;
-  }
+  if (!state.client || !state.connected) return;
+  if (state.presenceLoading) return;
   state.presenceLoading = true;
   state.presenceError = null;
   state.presenceStatus = null;
   try {
-    const res = await state.client.request("system-presence", {});
+    const res = (await state.client.request("system-presence", {})) as PresenceEntry[] | undefined;
     if (Array.isArray(res)) {
       state.presenceEntries = res;
       state.presenceStatus = res.length === 0 ? "No instances yet." : null;

@@ -1,5 +1,5 @@
-import { clampPercent } from "./provider-usage.shared.js";
 import type { ProviderUsageSnapshot, UsageSummary, UsageWindow } from "./provider-usage.types.js";
+import { clampPercent } from "./provider-usage.shared.js";
 
 function formatResetRemaining(targetMs?: number, now?: number): string | null {
   if (!targetMs) {
@@ -31,6 +31,13 @@ function formatResetRemaining(targetMs?: number, now?: number): string | null {
     month: "short",
     day: "numeric",
   }).format(new Date(targetMs));
+}
+
+function pickPrimaryWindow(windows: UsageWindow[]): UsageWindow | undefined {
+  if (windows.length === 0) {
+    return undefined;
+  }
+  return windows.reduce((best, next) => (next.usedPercent > best.usedPercent ? next : best));
 }
 
 function formatWindowShort(window: UsageWindow, now?: number): string {
@@ -77,12 +84,19 @@ export function formatUsageSummaryLine(
     return null;
   }
 
-  const parts = providers.map((entry) => {
-    const window = entry.windows.reduce((best, next) =>
-      next.usedPercent > best.usedPercent ? next : best,
-    );
-    return `${entry.displayName} ${formatWindowShort(window, opts?.now)}`;
-  });
+  const parts = providers
+    .map((entry) => {
+      const window = pickPrimaryWindow(entry.windows);
+      if (!window) {
+        return null;
+      }
+      return `${entry.displayName} ${formatWindowShort(window, opts?.now)}`;
+    })
+    .filter(Boolean) as string[];
+
+  if (parts.length === 0) {
+    return null;
+  }
   return `📊 Usage: ${parts.join(" · ")}`;
 }
 

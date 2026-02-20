@@ -13,7 +13,6 @@ export type TypingController = {
 
 export function createTypingController(params: {
   onReplyStart?: () => Promise<void> | void;
-  onCleanup?: () => void;
   typingIntervalSeconds?: number;
   typingTtlMs?: number;
   silentToken?: string;
@@ -21,7 +20,6 @@ export function createTypingController(params: {
 }): TypingController {
   const {
     onReplyStart,
-    onCleanup,
     typingIntervalSeconds = 6,
     typingTtlMs = 2 * 60_000,
     silentToken = SILENT_REPLY_TOKEN,
@@ -64,11 +62,6 @@ export function createTypingController(params: {
     if (typingTimer) {
       clearInterval(typingTimer);
       typingTimer = undefined;
-    }
-    // Notify the channel to stop its typing indicator (e.g., on NO_REPLY).
-    // This fires only once (sealed prevents re-entry).
-    if (active) {
-      onCleanup?.();
     }
     resetCycle();
     sealed = true;

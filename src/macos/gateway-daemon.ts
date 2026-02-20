@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import process from "node:process";
 import type { GatewayLockHandle } from "../infra/gateway-lock.js";
-import { restartGatewayProcessWithFreshPid } from "../infra/process-respawn.js";
 
 declare const __OPENCLAW_VERSION__: string | undefined;
 
@@ -50,15 +49,9 @@ async function main() {
     { setGatewayWsLogStyle },
     { setVerbose },
     { acquireGatewayLock, GatewayLockError },
-    {
-      consumeGatewaySigusr1RestartAuthorization,
-      isGatewaySigusr1RestartExternallyAllowed,
-      markGatewaySigusr1RestartHandled,
-    },
+    { consumeGatewaySigusr1RestartAuthorization, isGatewaySigusr1RestartExternallyAllowed },
     { defaultRuntime },
     { enableConsoleCapture, setConsoleTimestampPrefix },
-    commandQueueMod,
-    { createRestartIterationHook },
   ] = await Promise.all([
     import("../config/config.js"),
     import("../gateway/server.js"),
@@ -68,8 +61,6 @@ async function main() {
     import("../infra/restart.js"),
     import("../runtime.js"),
     import("../logging.js"),
-    import("../process/command-queue.js"),
-    import("../process/restart-recovery.js"),
   ] as const);
 
   enableConsoleCapture();
@@ -141,32 +132,14 @@ async function main() {
       `gateway: received ${signal}; ${isRestart ? "restarting" : "shutting down"}`,
     );
 
-    const DRAIN_TIMEOUT_MS = 30_000;
-    const SHUTDOWN_TIMEOUT_MS = 5_000;
-    const forceExitMs = isRestart ? DRAIN_TIMEOUT_MS + SHUTDOWN_TIMEOUT_MS : SHUTDOWN_TIMEOUT_MS;
     forceExitTimer = setTimeout(() => {
       defaultRuntime.error("gateway: shutdown timed out; exiting without full cleanup");
       cleanupSignals();
       process.exit(0);
-    }, forceExitMs);
+    }, 5000);
 
     void (async () => {
       try {
-        if (isRestart) {
-          const activeTasks = commandQueueMod.getActiveTaskCount();
-          if (activeTasks > 0) {
-            defaultRuntime.log(
-              `gateway: draining ${activeTasks} active task(s) before restart (timeout ${DRAIN_TIMEOUT_MS}ms)`,
-            );
-            const { drained } = await commandQueueMod.waitForActiveTasks(DRAIN_TIMEOUT_MS);
-            if (drained) {
-              defaultRuntime.log("gateway: all active tasks drained");
-            } else {
-              defaultRuntime.log("gateway: drain timeout reached; proceeding with restart");
-            }
-          }
-        }
-
         await server?.close({
           reason: isRestart ? "gateway restarting" : "gateway stopping",
           restartExpectedMs: isRestart ? 1500 : null,
@@ -179,26 +152,8 @@ async function main() {
         }
         server = null;
         if (isRestart) {
-          const respawn = restartGatewayProcessWithFreshPid();
-          if (respawn.mode === "spawned" || respawn.mode === "supervised") {
-            const modeLabel =
-              respawn.mode === "spawned"
-                ? `spawned pid ${respawn.pid ?? "unknown"}`
-                : "supervisor restart";
-            defaultRuntime.log(`gateway: restart mode full process restart (${modeLabel})`);
-            cleanupSignals();
-            process.exit(0);
-          } else {
-            if (respawn.mode === "failed") {
-              defaultRuntime.log(
-                `gateway: full process restart failed (${respawn.detail ?? "unknown error"}); falling back to in-process restart`,
-              );
-            } else {
-              defaultRuntime.log("gateway: restart mode in-process restart (OPENCLAW_NO_RESPAWN)");
-            }
-            shuttingDown = false;
-            restartResolver?.();
-          }
+          shuttingDown = false;
+          restartResolver?.();
         } else {
           cleanupSignals();
           process.exit(0);
@@ -220,11 +175,10 @@ async function main() {
     const authorized = consumeGatewaySigusr1RestartAuthorization();
     if (!authorized && !isGatewaySigusr1RestartExternallyAllowed()) {
       defaultRuntime.log(
-        "gateway: SIGUSR1 restart ignored (not authorized; commands.restart=false or use gateway tool).",
+        "gateway: SIGUSR1 restart ignored (not authorized; enable commands.restart or use gateway tool).",
       );
       return;
     }
-    markGatewaySigusr1RestartHandled();
     request("restart", "SIGUSR1");
   };
 
@@ -242,17 +196,8 @@ async function main() {
       }
       throw err;
     }
-    const onIteration = createRestartIterationHook(() => {
-      // After an in-process restart (SIGUSR1), reset command-queue lane state.
-      // Interrupted tasks from the previous lifecycle may have left `active`
-      // counts elevated (their finally blocks never ran), permanently blocking
-      // new work from draining.
-      commandQueueMod.resetAllLanes();
-    });
-
     // eslint-disable-next-line no-constant-condition
     while (true) {
-      onIteration();
       try {
         server = await startGatewayServer(port, { bind });
       } catch (err) {
@@ -265,7 +210,7 @@ async function main() {
       });
     }
   } finally {
-    await lock?.release();
+    await (lock as GatewayLockHandle | null)?.release();
     cleanupSignals();
   }
 }

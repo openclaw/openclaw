@@ -18,8 +18,6 @@ export type TelegramActionConfig = {
   editMessage?: boolean;
   /** Enable sticker actions (send and search). */
   sticker?: boolean;
-  /** Enable forum topic creation. */
-  createForumTopic?: boolean;
 };
 
 export type TelegramNetworkConfig = {
@@ -72,11 +70,8 @@ export type TelegramAccountConfig = {
   /** Control reply threading when reply tags are present (off|first|all). */
   replyToMode?: ReplyToMode;
   groups?: Record<string, TelegramGroupConfig>;
-  /** DM allowlist (numeric Telegram user IDs). Onboarding can resolve @username to IDs. */
   allowFrom?: Array<string | number>;
-  /** Default delivery target for CLI `--deliver` when no explicit `--reply-to` is provided. */
-  defaultTo?: string | number;
-  /** Optional allowlist for Telegram group senders (numeric Telegram user IDs). */
+  /** Optional allowlist for Telegram group senders (user ids or usernames). */
   groupAllowFrom?: Array<string | number>;
   /**
    * Controls how group messages are handled:
@@ -97,11 +92,11 @@ export type TelegramAccountConfig = {
   chunkMode?: "length" | "newline";
   /** Disable block streaming for this account. */
   blockStreaming?: boolean;
-  /** Chunking config for Telegram stream previews in `streamMode: "block"`. */
+  /** Chunking config for draft streaming in `streamMode: "block"`. */
   draftChunk?: BlockStreamingChunkConfig;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
-  /** Telegram stream preview mode (off|partial|block). Default: partial. */
+  /** Draft streaming mode for Telegram (off|partial|block). Default: partial. */
   streamMode?: "off" | "partial" | "block";
   mediaMaxMb?: number;
   /** Telegram API client timeout in seconds (grammY ApiClientOptions). */
@@ -114,8 +109,6 @@ export type TelegramAccountConfig = {
   webhookUrl?: string;
   webhookSecret?: string;
   webhookPath?: string;
-  /** Local webhook listener bind host (default: 127.0.0.1). */
-  webhookHost?: string;
   /** Per-action tool gating (default: true for all). */
   actions?: TelegramActionConfig;
   /**
@@ -137,30 +130,15 @@ export type TelegramAccountConfig = {
   heartbeat?: ChannelHeartbeatVisibilityConfig;
   /** Controls whether link previews are shown in outbound messages. Default: true. */
   linkPreview?: boolean;
-  /**
-   * Per-channel outbound response prefix override.
-   *
-   * When set, this takes precedence over the global `messages.responsePrefix`.
-   * Use `""` to explicitly disable a global prefix for this channel.
-   * Use `"auto"` to derive `[{identity.name}]` from the routed agent.
-   */
-  responsePrefix?: string;
-  /**
-   * Per-channel ack reaction override.
-   * Telegram expects unicode emoji (e.g., "👀") rather than shortcodes.
-   */
-  ackReaction?: string;
 };
 
 export type TelegramTopicConfig = {
   requireMention?: boolean;
-  /** Per-topic override for group message policy (open|disabled|allowlist). */
-  groupPolicy?: GroupPolicy;
   /** If specified, only load these skills for this topic. Omit = all skills; empty = no skills. */
   skills?: string[];
   /** If false, disable the bot for this topic. */
   enabled?: boolean;
-  /** Optional allowlist for topic senders (numeric Telegram user IDs). */
+  /** Optional allowlist for topic senders (ids or usernames). */
   allowFrom?: Array<string | number>;
   /** Optional system prompt snippet for this topic. */
   systemPrompt?: string;
@@ -168,8 +146,6 @@ export type TelegramTopicConfig = {
 
 export type TelegramGroupConfig = {
   requireMention?: boolean;
-  /** Per-group override for group message policy (open|disabled|allowlist). */
-  groupPolicy?: GroupPolicy;
   /** Optional tool policy overrides for this group. */
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
@@ -179,7 +155,7 @@ export type TelegramGroupConfig = {
   topics?: Record<string, TelegramTopicConfig>;
   /** If false, disable the bot for this group (and its topics). */
   enabled?: boolean;
-  /** Optional allowlist for group senders (numeric Telegram user IDs). */
+  /** Optional allowlist for group senders (ids or usernames). */
   allowFrom?: Array<string | number>;
   /** Optional system prompt snippet for this group. */
   systemPrompt?: string;

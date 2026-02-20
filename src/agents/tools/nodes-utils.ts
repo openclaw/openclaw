@@ -1,9 +1,73 @@
-import { parseNodeList, parsePairingList } from "../../shared/node-list-parse.js";
-import type { NodeListNode } from "../../shared/node-list-types.js";
-import { resolveNodeIdFromCandidates } from "../../shared/node-match.js";
 import { callGatewayTool, type GatewayCallOptions } from "./gateway.js";
 
-export type { NodeListNode };
+export type NodeListNode = {
+  nodeId: string;
+  displayName?: string;
+  platform?: string;
+  version?: string;
+  coreVersion?: string;
+  uiVersion?: string;
+  remoteIp?: string;
+  deviceFamily?: string;
+  modelIdentifier?: string;
+  caps?: string[];
+  commands?: string[];
+  permissions?: Record<string, boolean>;
+  paired?: boolean;
+  connected?: boolean;
+};
+
+type PendingRequest = {
+  requestId: string;
+  nodeId: string;
+  displayName?: string;
+  platform?: string;
+  version?: string;
+  coreVersion?: string;
+  uiVersion?: string;
+  remoteIp?: string;
+  isRepair?: boolean;
+  ts: number;
+};
+
+type PairedNode = {
+  nodeId: string;
+  token?: string;
+  displayName?: string;
+  platform?: string;
+  version?: string;
+  coreVersion?: string;
+  uiVersion?: string;
+  remoteIp?: string;
+  permissions?: Record<string, boolean>;
+  createdAtMs?: number;
+  approvedAtMs?: number;
+};
+
+type PairingList = {
+  pending: PendingRequest[];
+  paired: PairedNode[];
+};
+
+function parseNodeList(value: unknown): NodeListNode[] {
+  const obj = typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
+  return Array.isArray(obj.nodes) ? (obj.nodes as NodeListNode[]) : [];
+}
+
+function parsePairingList(value: unknown): PairingList {
+  const obj = typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
+  const pending = Array.isArray(obj.pending) ? (obj.pending as PendingRequest[]) : [];
+  const paired = Array.isArray(obj.paired) ? (obj.paired as PairedNode[]) : [];
+  return { pending, paired };
+}
+
+function normalizeNodeKey(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+/, "")
+    .replace(/-+$/, "");
+}
 
 async function loadNodes(opts: GatewayCallOptions): Promise<NodeListNode[]> {
   try {
@@ -67,7 +131,40 @@ export function resolveNodeIdFromList(
     }
     throw new Error("node required");
   }
-  return resolveNodeIdFromCandidates(nodes, q);
+
+  const qNorm = normalizeNodeKey(q);
+  const matches = nodes.filter((n) => {
+    if (n.nodeId === q) {
+      return true;
+    }
+    if (typeof n.remoteIp === "string" && n.remoteIp === q) {
+      return true;
+    }
+    const name = typeof n.displayName === "string" ? n.displayName : "";
+    if (name && normalizeNodeKey(name) === qNorm) {
+      return true;
+    }
+    if (q.length >= 6 && n.nodeId.startsWith(q)) {
+      return true;
+    }
+    return false;
+  });
+
+  if (matches.length === 1) {
+    return matches[0].nodeId;
+  }
+  if (matches.length === 0) {
+    const known = nodes
+      .map((n) => n.displayName || n.remoteIp || n.nodeId)
+      .filter(Boolean)
+      .join(", ");
+    throw new Error(`unknown node: ${q}${known ? ` (known: ${known})` : ""}`);
+  }
+  throw new Error(
+    `ambiguous node: ${q} (matches: ${matches
+      .map((n) => n.displayName || n.remoteIp || n.nodeId)
+      .join(", ")})`,
+  );
 }
 
 export async function resolveNodeId(

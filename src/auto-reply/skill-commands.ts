@@ -1,11 +1,11 @@
 import fs from "node:fs";
+import type { OpenClawConfig } from "../config/config.js";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { buildWorkspaceSkillCommandSpecs, type SkillCommandSpec } from "../agents/skills.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { getRemoteSkillEligibility } from "../infra/skills-remote.js";
 import { listChatCommands } from "./commands-registry.js";
 
-export function listReservedChatSlashCommandNames(extraNames: string[] = []): Set<string> {
+function resolveReservedCommandNames(): Set<string> {
   const reserved = new Set<string>();
   for (const command of listChatCommands()) {
     if (command.nativeName) {
@@ -17,12 +17,6 @@ export function listReservedChatSlashCommandNames(extraNames: string[] = []): Se
         continue;
       }
       reserved.add(trimmed.slice(1).toLowerCase());
-    }
-  }
-  for (const name of extraNames) {
-    const trimmed = name.trim().toLowerCase();
-    if (trimmed) {
-      reserved.add(trimmed);
     }
   }
   return reserved;
@@ -37,7 +31,7 @@ export function listSkillCommandsForWorkspace(params: {
     config: params.cfg,
     skillFilter: params.skillFilter,
     eligibility: { remote: getRemoteSkillEligibility() },
-    reservedNames: listReservedChatSlashCommandNames(),
+    reservedNames: resolveReservedCommandNames(),
   });
 }
 
@@ -45,23 +39,14 @@ export function listSkillCommandsForAgents(params: {
   cfg: OpenClawConfig;
   agentIds?: string[];
 }): SkillCommandSpec[] {
-  const used = listReservedChatSlashCommandNames();
+  const used = resolveReservedCommandNames();
   const entries: SkillCommandSpec[] = [];
   const agentIds = params.agentIds ?? listAgentIds(params.cfg);
-  // Track visited workspace dirs to avoid registering duplicate commands
-  // when multiple agents share the same workspace directory (#5717).
-  const visitedDirs = new Set<string>();
   for (const agentId of agentIds) {
     const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
     if (!fs.existsSync(workspaceDir)) {
       continue;
     }
-    // Resolve to canonical path to handle symlinks and relative paths
-    const canonicalDir = fs.realpathSync(workspaceDir);
-    if (visitedDirs.has(canonicalDir)) {
-      continue;
-    }
-    visitedDirs.add(canonicalDir);
     const commands = buildWorkspaceSkillCommandSpecs(workspaceDir, {
       config: params.cfg,
       eligibility: { remote: getRemoteSkillEligibility() },

@@ -1,9 +1,10 @@
+import type { Command } from "commander";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import type { Command } from "commander";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { HookEntry } from "../hooks/types.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { loadConfig, writeConfigFile } from "../config/io.js";
 import {
   buildWorkspaceHookStatus,
@@ -16,7 +17,6 @@ import {
   resolveHookInstallDir,
 } from "../hooks/install.js";
 import { recordHookInstall } from "../hooks/installs.js";
-import type { HookEntry } from "../hooks/types.js";
 import { loadWorkspaceHookEntries } from "../hooks/workspace.js";
 import { resolveArchiveKind } from "../infra/archive.js";
 import { buildPluginStatusReport } from "../plugins/status.js";
@@ -26,7 +26,6 @@ import { renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
-import { promptYesNo } from "./prompt.js";
 
 export type HooksListOptions = {
   json?: boolean;
@@ -65,50 +64,6 @@ function buildHooksReport(config: OpenClawConfig): HookStatusReport {
   const pluginEntries = pluginReport.hooks.map((hook) => hook.entry);
   const entries = mergeHookEntries(pluginEntries, workspaceEntries);
   return buildWorkspaceHookStatus(workspaceDir, { config, entries });
-}
-
-function resolveHookForToggle(
-  report: HookStatusReport,
-  hookName: string,
-  opts?: { requireEligible?: boolean },
-): HookStatusEntry {
-  const hook = report.hooks.find((h) => h.name === hookName);
-  if (!hook) {
-    throw new Error(`Hook "${hookName}" not found`);
-  }
-  if (hook.managedByPlugin) {
-    throw new Error(
-      `Hook "${hookName}" is managed by plugin "${hook.pluginId ?? "unknown"}" and cannot be enabled/disabled.`,
-    );
-  }
-  if (opts?.requireEligible && !hook.eligible) {
-    throw new Error(`Hook "${hookName}" is not eligible (missing requirements)`);
-  }
-  return hook;
-}
-
-function buildConfigWithHookEnabled(params: {
-  config: OpenClawConfig;
-  hookName: string;
-  enabled: boolean;
-  ensureHooksEnabled?: boolean;
-}): OpenClawConfig {
-  const entries = { ...params.config.hooks?.internal?.entries };
-  entries[params.hookName] = { ...entries[params.hookName], enabled: params.enabled };
-
-  const internal = {
-    ...params.config.hooks?.internal,
-    ...(params.ensureHooksEnabled ? { enabled: true } : {}),
-    entries,
-  };
-
-  return {
-    ...params.config,
-    hooks: {
-      ...params.config.hooks,
-      internal,
-    },
-  };
 }
 
 function formatHookStatus(hook: HookStatusEntry): string {
@@ -153,32 +108,6 @@ function formatHookMissingSummary(hook: HookStatusEntry): string {
   return missing.join("; ");
 }
 
-function exitHooksCliWithError(err: unknown): never {
-  defaultRuntime.error(
-    `${theme.error("Error:")} ${err instanceof Error ? err.message : String(err)}`,
-  );
-  process.exit(1);
-}
-
-async function runHooksCliAction(action: () => Promise<void> | void): Promise<void> {
-  try {
-    await action();
-  } catch (err) {
-    exitHooksCliWithError(err);
-  }
-}
-
-function createInstallLogger() {
-  return {
-    info: (msg: string) => defaultRuntime.log(msg),
-    warn: (msg: string) => defaultRuntime.log(theme.warn(msg)),
-  };
-}
-
-function logGatewayRestartHint() {
-  defaultRuntime.log("Restart the gateway to load hooks.");
-}
-
 async function readInstalledPackageVersion(dir: string): Promise<string | undefined> {
   try {
     const raw = await fsp.readFile(path.join(dir, "package.json"), "utf-8");
@@ -187,31 +116,6 @@ async function readInstalledPackageVersion(dir: string): Promise<string | undefi
   } catch {
     return undefined;
   }
-}
-
-type HookInternalEntryLike = Record<string, unknown> & { enabled?: boolean };
-
-function enableInternalHookEntries(config: OpenClawConfig, hookNames: string[]): OpenClawConfig {
-  const entries = { ...config.hooks?.internal?.entries } as Record<string, HookInternalEntryLike>;
-
-  for (const hookName of hookNames) {
-    entries[hookName] = {
-      ...entries[hookName],
-      enabled: true,
-    };
-  }
-
-  return {
-    ...config,
-    hooks: {
-      ...config.hooks,
-      internal: {
-        ...config.hooks?.internal,
-        enabled: true,
-        entries,
-      },
-    },
-  };
 }
 
 /**
@@ -455,13 +359,38 @@ export function formatHooksCheck(report: HookStatusReport, opts: HooksCheckOptio
 
 export async function enableHook(hookName: string): Promise<void> {
   const config = loadConfig();
-  const hook = resolveHookForToggle(buildHooksReport(config), hookName, { requireEligible: true });
-  const nextConfig = buildConfigWithHookEnabled({
-    config,
-    hookName,
-    enabled: true,
-    ensureHooksEnabled: true,
-  });
+  const report = buildHooksReport(config);
+  const hook = report.hooks.find((h) => h.name === hookName);
+
+  if (!hook) {
+    throw new Error(`Hook "${hookName}" not found`);
+  }
+
+  if (hook.managedByPlugin) {
+    throw new Error(
+      `Hook "${hookName}" is managed by plugin "${hook.pluginId ?? "unknown"}" and cannot be enabled/disabled.`,
+    );
+  }
+
+  if (!hook.eligible) {
+    throw new Error(`Hook "${hookName}" is not eligible (missing requirements)`);
+  }
+
+  // Update config
+  const entries = { ...config.hooks?.internal?.entries };
+  entries[hookName] = { ...entries[hookName], enabled: true };
+
+  const nextConfig = {
+    ...config,
+    hooks: {
+      ...config.hooks,
+      internal: {
+        ...config.hooks?.internal,
+        enabled: true,
+        entries,
+      },
+    },
+  };
 
   await writeConfigFile(nextConfig);
   defaultRuntime.log(
@@ -471,8 +400,33 @@ export async function enableHook(hookName: string): Promise<void> {
 
 export async function disableHook(hookName: string): Promise<void> {
   const config = loadConfig();
-  const hook = resolveHookForToggle(buildHooksReport(config), hookName);
-  const nextConfig = buildConfigWithHookEnabled({ config, hookName, enabled: false });
+  const report = buildHooksReport(config);
+  const hook = report.hooks.find((h) => h.name === hookName);
+
+  if (!hook) {
+    throw new Error(`Hook "${hookName}" not found`);
+  }
+
+  if (hook.managedByPlugin) {
+    throw new Error(
+      `Hook "${hookName}" is managed by plugin "${hook.pluginId ?? "unknown"}" and cannot be enabled/disabled.`,
+    );
+  }
+
+  // Update config
+  const entries = { ...config.hooks?.internal?.entries };
+  entries[hookName] = { ...entries[hookName], enabled: false };
+
+  const nextConfig = {
+    ...config,
+    hooks: {
+      ...config.hooks,
+      internal: {
+        ...config.hooks?.internal,
+        entries,
+      },
+    },
+  };
 
   await writeConfigFile(nextConfig);
   defaultRuntime.log(
@@ -496,63 +450,87 @@ export function registerHooksCli(program: Command): void {
     .option("--eligible", "Show only eligible hooks", false)
     .option("--json", "Output as JSON", false)
     .option("-v, --verbose", "Show more details including missing requirements", false)
-    .action(async (opts) =>
-      runHooksCliAction(async () => {
+    .action(async (opts) => {
+      try {
         const config = loadConfig();
         const report = buildHooksReport(config);
         defaultRuntime.log(formatHooksList(report, opts));
-      }),
-    );
+      } catch (err) {
+        defaultRuntime.error(
+          `${theme.error("Error:")} ${err instanceof Error ? err.message : String(err)}`,
+        );
+        process.exit(1);
+      }
+    });
 
   hooks
     .command("info <name>")
     .description("Show detailed information about a hook")
     .option("--json", "Output as JSON", false)
-    .action(async (name, opts) =>
-      runHooksCliAction(async () => {
+    .action(async (name, opts) => {
+      try {
         const config = loadConfig();
         const report = buildHooksReport(config);
         defaultRuntime.log(formatHookInfo(report, name, opts));
-      }),
-    );
+      } catch (err) {
+        defaultRuntime.error(
+          `${theme.error("Error:")} ${err instanceof Error ? err.message : String(err)}`,
+        );
+        process.exit(1);
+      }
+    });
 
   hooks
     .command("check")
     .description("Check hooks eligibility status")
     .option("--json", "Output as JSON", false)
-    .action(async (opts) =>
-      runHooksCliAction(async () => {
+    .action(async (opts) => {
+      try {
         const config = loadConfig();
         const report = buildHooksReport(config);
         defaultRuntime.log(formatHooksCheck(report, opts));
-      }),
-    );
+      } catch (err) {
+        defaultRuntime.error(
+          `${theme.error("Error:")} ${err instanceof Error ? err.message : String(err)}`,
+        );
+        process.exit(1);
+      }
+    });
 
   hooks
     .command("enable <name>")
     .description("Enable a hook")
-    .action(async (name) =>
-      runHooksCliAction(async () => {
+    .action(async (name) => {
+      try {
         await enableHook(name);
-      }),
-    );
+      } catch (err) {
+        defaultRuntime.error(
+          `${theme.error("Error:")} ${err instanceof Error ? err.message : String(err)}`,
+        );
+        process.exit(1);
+      }
+    });
 
   hooks
     .command("disable <name>")
     .description("Disable a hook")
-    .action(async (name) =>
-      runHooksCliAction(async () => {
+    .action(async (name) => {
+      try {
         await disableHook(name);
-      }),
-    );
+      } catch (err) {
+        defaultRuntime.error(
+          `${theme.error("Error:")} ${err instanceof Error ? err.message : String(err)}`,
+        );
+        process.exit(1);
+      }
+    });
 
   hooks
     .command("install")
     .description("Install a hook pack (path, archive, or npm spec)")
     .argument("<path-or-spec>", "Path to a hook pack or npm package spec")
     .option("-l, --link", "Link a local path instead of copying", false)
-    .option("--pin", "Record npm installs as exact resolved <name>@<version>", false)
-    .action(async (raw: string, opts: { link?: boolean; pin?: boolean }) => {
+    .action(async (raw: string, opts: { link?: boolean }) => {
       const resolved = resolveUserPath(raw);
       const cfg = loadConfig();
 
@@ -587,7 +565,24 @@ export function registerHooksCli(program: Command): void {
             },
           };
 
-          next = enableInternalHookEntries(next, probe.hooks);
+          for (const hookName of probe.hooks) {
+            next = {
+              ...next,
+              hooks: {
+                ...next.hooks,
+                internal: {
+                  ...next.hooks?.internal,
+                  entries: {
+                    ...next.hooks?.internal?.entries,
+                    [hookName]: {
+                      ...(next.hooks?.internal?.entries?.[hookName] as object | undefined),
+                      enabled: true,
+                    },
+                  },
+                },
+              },
+            };
+          }
 
           next = recordHookInstall(next, {
             hookId: probe.hookPackId,
@@ -600,20 +595,54 @@ export function registerHooksCli(program: Command): void {
 
           await writeConfigFile(next);
           defaultRuntime.log(`Linked hook path: ${shortenHomePath(resolved)}`);
-          logGatewayRestartHint();
+          defaultRuntime.log(`Restart the gateway to load hooks.`);
           return;
         }
 
         const result = await installHooksFromPath({
           path: resolved,
-          logger: createInstallLogger(),
+          logger: {
+            info: (msg) => defaultRuntime.log(msg),
+            warn: (msg) => defaultRuntime.log(theme.warn(msg)),
+          },
         });
         if (!result.ok) {
           defaultRuntime.error(result.error);
           process.exit(1);
         }
 
-        let next = enableInternalHookEntries(cfg, result.hooks);
+        let next: OpenClawConfig = {
+          ...cfg,
+          hooks: {
+            ...cfg.hooks,
+            internal: {
+              ...cfg.hooks?.internal,
+              enabled: true,
+              entries: {
+                ...cfg.hooks?.internal?.entries,
+              },
+            },
+          },
+        };
+
+        for (const hookName of result.hooks) {
+          next = {
+            ...next,
+            hooks: {
+              ...next.hooks,
+              internal: {
+                ...next.hooks?.internal,
+                entries: {
+                  ...next.hooks?.internal?.entries,
+                  [hookName]: {
+                    ...(next.hooks?.internal?.entries?.[hookName] as object | undefined),
+                    enabled: true,
+                  },
+                },
+              },
+            },
+          };
+        }
 
         const source: "archive" | "path" = resolveArchiveKind(resolved) ? "archive" : "path";
 
@@ -628,7 +657,7 @@ export function registerHooksCli(program: Command): void {
 
         await writeConfigFile(next);
         defaultRuntime.log(`Installed hooks: ${result.hooks.join(", ")}`);
-        logGatewayRestartHint();
+        defaultRuntime.log(`Restart the gateway to load hooks.`);
         return;
       }
 
@@ -652,42 +681,60 @@ export function registerHooksCli(program: Command): void {
 
       const result = await installHooksFromNpmSpec({
         spec: raw,
-        logger: createInstallLogger(),
+        logger: {
+          info: (msg) => defaultRuntime.log(msg),
+          warn: (msg) => defaultRuntime.log(theme.warn(msg)),
+        },
       });
       if (!result.ok) {
         defaultRuntime.error(result.error);
         process.exit(1);
       }
 
-      let next = enableInternalHookEntries(cfg, result.hooks);
-      const resolvedSpec = result.npmResolution?.resolvedSpec;
-      const recordSpec = opts.pin && resolvedSpec ? resolvedSpec : raw;
-      if (opts.pin && !resolvedSpec) {
-        defaultRuntime.log(
-          theme.warn("Could not resolve exact npm version for --pin; storing original npm spec."),
-        );
-      }
-      if (opts.pin && resolvedSpec) {
-        defaultRuntime.log(`Pinned npm install record to ${resolvedSpec}.`);
+      let next: OpenClawConfig = {
+        ...cfg,
+        hooks: {
+          ...cfg.hooks,
+          internal: {
+            ...cfg.hooks?.internal,
+            enabled: true,
+            entries: {
+              ...cfg.hooks?.internal?.entries,
+            },
+          },
+        },
+      };
+
+      for (const hookName of result.hooks) {
+        next = {
+          ...next,
+          hooks: {
+            ...next.hooks,
+            internal: {
+              ...next.hooks?.internal,
+              entries: {
+                ...next.hooks?.internal?.entries,
+                [hookName]: {
+                  ...(next.hooks?.internal?.entries?.[hookName] as object | undefined),
+                  enabled: true,
+                },
+              },
+            },
+          },
+        };
       }
 
       next = recordHookInstall(next, {
         hookId: result.hookPackId,
         source: "npm",
-        spec: recordSpec,
+        spec: raw,
         installPath: result.targetDir,
         version: result.version,
-        resolvedName: result.npmResolution?.name,
-        resolvedVersion: result.npmResolution?.version,
-        resolvedSpec: result.npmResolution?.resolvedSpec,
-        integrity: result.npmResolution?.integrity,
-        shasum: result.npmResolution?.shasum,
-        resolvedAt: result.npmResolution?.resolvedAt,
         hooks: result.hooks,
       });
       await writeConfigFile(next);
       defaultRuntime.log(`Installed hooks: ${result.hooks.join(", ")}`);
-      logGatewayRestartHint();
+      defaultRuntime.log(`Restart the gateway to load hooks.`);
     });
 
   hooks
@@ -724,13 +771,7 @@ export function registerHooksCli(program: Command): void {
           continue;
         }
 
-        let installPath: string;
-        try {
-          installPath = record.installPath ?? resolveHookInstallDir(hookId);
-        } catch (err) {
-          defaultRuntime.log(theme.error(`Invalid install path for "${hookId}": ${String(err)}`));
-          continue;
-        }
+        const installPath = record.installPath ?? resolveHookInstallDir(hookId);
         const currentVersion = await readInstalledPackageVersion(installPath);
 
         if (opts.dryRun) {
@@ -739,19 +780,10 @@ export function registerHooksCli(program: Command): void {
             mode: "update",
             dryRun: true,
             expectedHookPackId: hookId,
-            expectedIntegrity: record.integrity,
-            onIntegrityDrift: async (drift) => {
-              const specLabel = drift.resolution.resolvedSpec ?? drift.spec;
-              defaultRuntime.log(
-                theme.warn(
-                  `Integrity drift detected for "${hookId}" (${specLabel})` +
-                    `\nExpected: ${drift.expectedIntegrity}` +
-                    `\nActual:   ${drift.actualIntegrity}`,
-                ),
-              );
-              return true;
+            logger: {
+              info: (msg) => defaultRuntime.log(msg),
+              warn: (msg) => defaultRuntime.log(theme.warn(msg)),
             },
-            logger: createInstallLogger(),
           });
           if (!probe.ok) {
             defaultRuntime.log(theme.error(`Failed to check ${hookId}: ${probe.error}`));
@@ -772,19 +804,10 @@ export function registerHooksCli(program: Command): void {
           spec: record.spec,
           mode: "update",
           expectedHookPackId: hookId,
-          expectedIntegrity: record.integrity,
-          onIntegrityDrift: async (drift) => {
-            const specLabel = drift.resolution.resolvedSpec ?? drift.spec;
-            defaultRuntime.log(
-              theme.warn(
-                `Integrity drift detected for "${hookId}" (${specLabel})` +
-                  `\nExpected: ${drift.expectedIntegrity}` +
-                  `\nActual:   ${drift.actualIntegrity}`,
-              ),
-            );
-            return await promptYesNo(`Continue updating "${hookId}" with this artifact?`);
+          logger: {
+            info: (msg) => defaultRuntime.log(msg),
+            warn: (msg) => defaultRuntime.log(theme.warn(msg)),
           },
-          logger: createInstallLogger(),
         });
         if (!result.ok) {
           defaultRuntime.log(theme.error(`Failed to update ${hookId}: ${result.error}`));
@@ -798,12 +821,6 @@ export function registerHooksCli(program: Command): void {
           spec: record.spec,
           installPath: result.targetDir,
           version: nextVersion,
-          resolvedName: result.npmResolution?.name,
-          resolvedVersion: result.npmResolution?.version,
-          resolvedSpec: result.npmResolution?.resolvedSpec,
-          integrity: result.npmResolution?.integrity,
-          shasum: result.npmResolution?.shasum,
-          resolvedAt: result.npmResolution?.resolvedAt,
           hooks: result.hooks,
         });
         updatedCount += 1;
@@ -819,15 +836,20 @@ export function registerHooksCli(program: Command): void {
 
       if (updatedCount > 0) {
         await writeConfigFile(nextCfg);
-        logGatewayRestartHint();
+        defaultRuntime.log("Restart the gateway to load hooks.");
       }
     });
 
-  hooks.action(async () =>
-    runHooksCliAction(async () => {
+  hooks.action(async () => {
+    try {
       const config = loadConfig();
       const report = buildHooksReport(config);
       defaultRuntime.log(formatHooksList(report, {}));
-    }),
-  );
+    } catch (err) {
+      defaultRuntime.error(
+        `${theme.error("Error:")} ${err instanceof Error ? err.message : String(err)}`,
+      );
+      process.exit(1);
+    }
+  });
 }

@@ -1,9 +1,12 @@
+import type { OpenClawConfig } from "../../config/config.js";
+import type { MsgContext } from "../templating.js";
 import { resolveAgentConfig } from "../../agents/agent-scope.js";
 import { getChannelDock } from "../../channels/dock.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
-import type { OpenClawConfig } from "../../config/config.js";
-import { escapeRegExp } from "../../utils.js";
-import type { MsgContext } from "../templating.js";
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 function deriveMentionPatterns(identity?: { name?: string; emoji?: string }) {
   const patterns: string[] = [];
@@ -90,24 +93,18 @@ export function matchesMentionWithExplicit(params: {
   text: string;
   mentionRegexes: RegExp[];
   explicit?: ExplicitMentionSignal;
-  transcript?: string;
 }): boolean {
   const cleaned = normalizeMentionText(params.text ?? "");
   const explicit = params.explicit?.isExplicitlyMentioned === true;
   const explicitAvailable = params.explicit?.canResolveExplicit === true;
   const hasAnyMention = params.explicit?.hasAnyMention === true;
-
-  // Check transcript if text is empty and transcript is provided
-  const transcriptCleaned = params.transcript ? normalizeMentionText(params.transcript) : "";
-  const textToCheck = cleaned || transcriptCleaned;
-
   if (hasAnyMention && explicitAvailable) {
-    return explicit || params.mentionRegexes.some((re) => re.test(textToCheck));
+    return explicit || params.mentionRegexes.some((re) => re.test(cleaned));
   }
-  if (!textToCheck) {
+  if (!cleaned) {
     return explicit;
   }
-  return explicit || params.mentionRegexes.some((re) => re.test(textToCheck));
+  return explicit || params.mentionRegexes.some((re) => re.test(cleaned));
 }
 
 export function stripStructuralPrefixes(text: string): string {

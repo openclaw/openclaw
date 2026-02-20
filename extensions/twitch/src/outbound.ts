@@ -5,13 +5,13 @@
  * Supports text and media (URL) sending with markdown stripping and chunking.
  */
 
-import { DEFAULT_ACCOUNT_ID, getAccountConfig } from "./config.js";
-import { sendMessageTwitchInternal } from "./send.js";
 import type {
   ChannelOutboundAdapter,
   ChannelOutboundContext,
   OutboundDeliveryResult,
 } from "./types.js";
+import { DEFAULT_ACCOUNT_ID, getAccountConfig } from "./config.js";
+import { sendMessageTwitchInternal } from "./send.js";
 import { chunkTextForTwitch } from "./utils/markdown.js";
 import { missingTargetError, normalizeTwitchChannel } from "./utils/twitch.js";
 
@@ -54,12 +54,6 @@ export const twitchOutbound: ChannelOutboundAdapter = {
     // If target is provided, normalize and validate it
     if (trimmed) {
       const normalizedTo = normalizeTwitchChannel(trimmed);
-      if (!normalizedTo) {
-        return {
-          ok: false,
-          error: missingTargetError("Twitch", "<channel-name>"),
-        };
-      }
 
       // For implicit/heartbeat modes with allowList, check against allowlist
       if (mode === "implicit" || mode === "heartbeat") {
@@ -69,22 +63,28 @@ export const twitchOutbound: ChannelOutboundAdapter = {
         if (allowList.includes(normalizedTo)) {
           return { ok: true, to: normalizedTo };
         }
-        return {
-          ok: false,
-          error: missingTargetError("Twitch", "<channel-name>"),
-        };
+        // Fallback to first allowFrom entry
+        // biome-ignore lint/style/noNonNullAssertion: length > 0 check ensures element exists
+        return { ok: true, to: allowList[0] };
       }
 
       // For explicit mode, accept any valid channel name
       return { ok: true, to: normalizedTo };
     }
 
-    // No target provided - error
+    // No target provided, use allowFrom fallback
+    if (allowList.length > 0) {
+      // biome-ignore lint/style/noNonNullAssertion: length > 0 check ensures element exists
+      return { ok: true, to: allowList[0] };
+    }
 
     // No target and no allowFrom - error
     return {
       ok: false,
-      error: missingTargetError("Twitch", "<channel-name>"),
+      error: missingTargetError(
+        "Twitch",
+        "<channel-name> or channels.twitch.accounts.<account>.allowFrom[0]",
+      ),
     };
   },
 
@@ -106,8 +106,7 @@ export const twitchOutbound: ChannelOutboundAdapter = {
    * });
    */
   sendText: async (params: ChannelOutboundContext): Promise<OutboundDeliveryResult> => {
-    const { cfg, to, text, accountId } = params;
-    const signal = (params as { signal?: AbortSignal }).signal;
+    const { cfg, to, text, accountId, signal } = params;
 
     if (signal?.aborted) {
       throw new Error("Outbound delivery aborted");
@@ -145,6 +144,7 @@ export const twitchOutbound: ChannelOutboundAdapter = {
       channel: "twitch",
       messageId: result.messageId,
       timestamp: Date.now(),
+      to: normalizeTwitchChannel(channel),
     };
   },
 
@@ -167,8 +167,7 @@ export const twitchOutbound: ChannelOutboundAdapter = {
    * });
    */
   sendMedia: async (params: ChannelOutboundContext): Promise<OutboundDeliveryResult> => {
-    const { text, mediaUrl } = params;
-    const signal = (params as { signal?: AbortSignal }).signal;
+    const { text, mediaUrl, signal } = params;
 
     if (signal?.aborted) {
       throw new Error("Outbound delivery aborted");

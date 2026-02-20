@@ -1,9 +1,7 @@
-import type { Block, KnownBlock, WebClient } from "@slack/web-api";
+import type { WebClient } from "@slack/web-api";
 import { loadConfig } from "../config/config.js";
 import { logVerbose } from "../globals.js";
 import { resolveSlackAccount } from "./accounts.js";
-import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
-import { validateSlackBlocksArray } from "./blocks-input.js";
 import { createSlackWebClient } from "./client.js";
 import { sendMessageSlack } from "./send.js";
 import { resolveSlackBotToken } from "./token.js";
@@ -149,11 +147,7 @@ export async function listSlackReactions(
 export async function sendSlackMessage(
   to: string,
   content: string,
-  opts: SlackActionClientOpts & {
-    mediaUrl?: string;
-    threadTs?: string;
-    blocks?: (Block | KnownBlock)[];
-  } = {},
+  opts: SlackActionClientOpts & { mediaUrl?: string; threadTs?: string } = {},
 ) {
   return await sendMessageSlack(to, content, {
     accountId: opts.accountId,
@@ -161,7 +155,6 @@ export async function sendSlackMessage(
     mediaUrl: opts.mediaUrl,
     client: opts.client,
     threadTs: opts.threadTs,
-    blocks: opts.blocks,
   });
 }
 
@@ -169,16 +162,13 @@ export async function editSlackMessage(
   channelId: string,
   messageId: string,
   content: string,
-  opts: SlackActionClientOpts & { blocks?: (Block | KnownBlock)[] } = {},
+  opts: SlackActionClientOpts = {},
 ) {
   const client = await getClient(opts);
-  const blocks = opts.blocks == null ? undefined : validateSlackBlocksArray(opts.blocks);
-  const trimmedContent = content.trim();
   await client.chat.update({
     channel: channelId,
     ts: messageId,
-    text: trimmedContent || (blocks ? buildSlackBlocksFallbackText(blocks) : " "),
-    ...(blocks ? { blocks } : {}),
+    text: content,
   });
 }
 

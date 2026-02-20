@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { generateUUID } from "./uuid.ts";
+import { generateUUID } from "./uuid";
 
 describe("generateUUID", () => {
   it("uses crypto.randomUUID when available", () => {
@@ -16,11 +16,7 @@ describe("generateUUID", () => {
   it("falls back to crypto.getRandomValues", () => {
     const id = generateUUID({
       getRandomValues: (bytes) => {
-        // @ts-expect-error
-        for (let i = 0; i < bytes.length; i++) {
-          // @ts-expect-error
-          bytes[i] = i;
-        }
+        for (let i = 0; i < bytes.length; i++) bytes[i] = i;
         return bytes;
       },
     });

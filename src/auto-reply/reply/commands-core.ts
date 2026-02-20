@@ -1,7 +1,10 @@
-import fs from "node:fs/promises";
+import type {
+  CommandHandler,
+  CommandHandlerResult,
+  HandleCommandsParams,
+} from "./commands-types.js";
 import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
-import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { shouldHandleTextCommands } from "../commands-registry.js";
 import { handleAllowlistCommand } from "./commands-allowlist.js";
@@ -12,7 +15,6 @@ import { handleConfigCommand, handleDebugCommand } from "./commands-config.js";
 import {
   handleCommandsListCommand,
   handleContextCommand,
-  handleExportSessionCommand,
   handleHelpCommand,
   handleStatusCommand,
   handleWhoamiCommand,
@@ -29,11 +31,6 @@ import {
 } from "./commands-session.js";
 import { handleSubagentsCommand } from "./commands-subagents.js";
 import { handleTtsCommands } from "./commands-tts.js";
-import type {
-  CommandHandler,
-  CommandHandlerResult,
-  HandleCommandsParams,
-} from "./commands-types.js";
 import { routeReply } from "./route-reply.js";
 
 let HANDLERS: CommandHandler[] | null = null;
@@ -55,7 +52,6 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
       handleAllowlistCommand,
       handleApproveCommand,
       handleContextCommand,
-      handleExportSessionCommand,
       handleWhoamiCommand,
       handleSubagentsCommand,
       handleConfigCommand,
@@ -90,7 +86,6 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
     // Send hook messages immediately if present
     if (hookEvent.messages.length > 0) {
       // Use OriginatingChannel/To if available, otherwise fall back to command channel/from
-      // oxlint-disable-next-line typescript/no-explicit-any
       const channel = params.ctx.OriginatingChannel || (params.command.channel as any);
       // For replies, use 'from' (the sender) not 'to' (which might be the bot itself)
       const to = params.ctx.OriginatingTo || params.command.from || params.command.to;
@@ -107,48 +102,6 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
           cfg: params.cfg,
         });
       }
-    }
-
-    // Fire before_reset plugin hook — extract memories before session history is lost
-    const hookRunner = getGlobalHookRunner();
-    if (hookRunner?.hasHooks("before_reset")) {
-      const prevEntry = params.previousSessionEntry;
-      const sessionFile = prevEntry?.sessionFile;
-      // Fire-and-forget: read old session messages and run hook
-      void (async () => {
-        try {
-          const messages: unknown[] = [];
-          if (sessionFile) {
-            const content = await fs.readFile(sessionFile, "utf-8");
-            for (const line of content.split("\n")) {
-              if (!line.trim()) {
-                continue;
-              }
-              try {
-                const entry = JSON.parse(line);
-                if (entry.type === "message" && entry.message) {
-                  messages.push(entry.message);
-                }
-              } catch {
-                // skip malformed lines
-              }
-            }
-          } else {
-            logVerbose("before_reset: no session file available, firing hook with empty messages");
-          }
-          await hookRunner.runBeforeReset(
-            { sessionFile, messages, reason: commandAction },
-            {
-              agentId: params.sessionKey?.split(":")[0] ?? "main",
-              sessionKey: params.sessionKey,
-              sessionId: prevEntry?.sessionId,
-              workspaceDir: params.workspaceDir,
-            },
-          );
-        } catch (err: unknown) {
-          logVerbose(`before_reset hook failed: ${String(err)}`);
-        }
-      })();
     }
   }
 

@@ -36,26 +36,17 @@ describe("telegram bot message processor", () => {
     resolveTelegramGroupConfig: () => ({}),
     runtime: {},
     replyToMode: "auto",
-    streamMode: "partial",
+    streamMode: "auto",
     textLimit: 4096,
     opts: {},
-  } as unknown as Parameters<typeof createTelegramMessageProcessor>[0];
+    resolveBotTopicsEnabled: () => false,
+  };
 
   it("dispatches when context is available", async () => {
     buildTelegramMessageContext.mockResolvedValue({ route: { sessionKey: "agent:main:main" } });
 
     const processMessage = createTelegramMessageProcessor(baseDeps);
-    await processMessage(
-      {
-        message: {
-          chat: { id: 123, type: "private", title: "chat" },
-          message_id: 456,
-        },
-      } as unknown as Parameters<typeof processMessage>[0],
-      [],
-      [],
-      {},
-    );
+    await processMessage({ message: { chat: { id: 123 }, message_id: 456 } }, [], [], {});
 
     expect(dispatchTelegramMessage).toHaveBeenCalledTimes(1);
   });
@@ -63,17 +54,7 @@ describe("telegram bot message processor", () => {
   it("skips dispatch when no context is produced", async () => {
     buildTelegramMessageContext.mockResolvedValue(null);
     const processMessage = createTelegramMessageProcessor(baseDeps);
-    await processMessage(
-      {
-        message: {
-          chat: { id: 123, type: "private", title: "chat" },
-          message_id: 456,
-        },
-      } as unknown as Parameters<typeof processMessage>[0],
-      [],
-      [],
-      {},
-    );
+    await processMessage({ message: { chat: { id: 123 }, message_id: 456 } }, [], [], {});
     expect(dispatchTelegramMessage).not.toHaveBeenCalled();
   });
 });

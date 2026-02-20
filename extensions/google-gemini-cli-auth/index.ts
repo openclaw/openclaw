@@ -1,9 +1,4 @@
-import {
-  buildOauthProviderAuthResult,
-  emptyPluginConfigSchema,
-  type OpenClawPluginApi,
-  type ProviderAuthContext,
-} from "openclaw/plugin-sdk";
+import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
 import { loginGeminiCliOAuth } from "./oauth.js";
 
 const PROVIDER_ID = "google-gemini-cli";
@@ -21,7 +16,7 @@ const geminiCliPlugin = {
   name: "Google Gemini CLI Auth",
   description: "OAuth flow for Gemini CLI (Google Code Assist)",
   configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
+  register(api) {
     api.registerProvider({
       id: PROVIDER_ID,
       label: PROVIDER_LABEL,
@@ -34,7 +29,7 @@ const geminiCliPlugin = {
           label: "Google OAuth",
           hint: "PKCE + localhost callback",
           kind: "oauth",
-          run: async (ctx: ProviderAuthContext) => {
+          run: async (ctx) => {
             const spin = ctx.prompter.progress("Starting Gemini CLI OAuth…");
             try {
               const result = await loginGeminiCliOAuth({
@@ -47,16 +42,34 @@ const geminiCliPlugin = {
               });
 
               spin.stop("Gemini CLI OAuth complete");
-              return buildOauthProviderAuthResult({
-                providerId: PROVIDER_ID,
+              const profileId = `google-gemini-cli:${result.email ?? "default"}`;
+              return {
+                profiles: [
+                  {
+                    profileId,
+                    credential: {
+                      type: "oauth",
+                      provider: PROVIDER_ID,
+                      access: result.access,
+                      refresh: result.refresh,
+                      expires: result.expires,
+                      email: result.email,
+                      projectId: result.projectId,
+                    },
+                  },
+                ],
+                configPatch: {
+                  agents: {
+                    defaults: {
+                      models: {
+                        [DEFAULT_MODEL]: {},
+                      },
+                    },
+                  },
+                },
                 defaultModel: DEFAULT_MODEL,
-                access: result.access,
-                refresh: result.refresh,
-                expires: result.expires,
-                email: result.email,
-                credentialExtra: { projectId: result.projectId },
                 notes: ["If requests fail, set GOOGLE_CLOUD_PROJECT or GOOGLE_CLOUD_PROJECT_ID."],
-              });
+              };
             } catch (err) {
               spin.stop("Gemini CLI OAuth failed");
               await ctx.prompter.note(

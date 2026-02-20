@@ -1,4 +1,3 @@
-import { escapeRegExp } from "../../utils.js";
 import type { NoticeLevel, ReasoningLevel } from "../thinking.js";
 import {
   type ElevatedLevel,
@@ -17,6 +16,8 @@ type ExtractedLevel<T> = {
   rawLevel?: string;
   hasDirective: boolean;
 };
+
+const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 const matchLevelDirective = (
   body: string,

@@ -1,18 +1,14 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
-import {
-  buildChannelAccountSnapshot,
-  formatChannelAllowFrom,
-} from "../../channels/account-summary.js";
-import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
-import { listChannelPlugins } from "../../channels/plugins/index.js";
 import type {
   ChannelAccountSnapshot,
   ChannelId,
   ChannelPlugin,
 } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { sha256HexPrefix } from "../../logging/redact-identifier.js";
-import { formatTimeAgo } from "./format.js";
+import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
+import { listChannelPlugins } from "../../channels/plugins/index.js";
+import { formatAge } from "./format.js";
 
 export type ChannelRow = {
   id: ChannelId;
@@ -61,13 +57,17 @@ function existsSyncMaybe(p: string | undefined): boolean | null {
   }
 }
 
+function sha256HexPrefix(value: string, len = 8): string {
+  return crypto.createHash("sha256").update(value).digest("hex").slice(0, len);
+}
+
 function formatTokenHint(token: string, opts: { showSecrets: boolean }): string {
   const t = token.trim();
   if (!t) {
     return "empty";
   }
   if (!opts.showSecrets) {
-    return `sha256:${sha256HexPrefix(t, 8)} · len ${t.length}`;
+    return `sha256:${sha256HexPrefix(t)} · len ${t.length}`;
   }
   const head = t.slice(0, 4);
   const tail = t.slice(-4);
@@ -109,6 +109,39 @@ const resolveAccountConfigured = async (
   return configured !== false;
 };
 
+const buildAccountSnapshot = (params: {
+  plugin: ChannelPlugin;
+  account: unknown;
+  cfg: OpenClawConfig;
+  accountId: string;
+  enabled: boolean;
+  configured: boolean;
+}): ChannelAccountSnapshot => {
+  const described = params.plugin.config.describeAccount?.(params.account, params.cfg);
+  return {
+    enabled: params.enabled,
+    configured: params.configured,
+    ...described,
+    accountId: params.accountId,
+  };
+};
+
+const formatAllowFrom = (params: {
+  plugin: ChannelPlugin;
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  allowFrom: Array<string | number>;
+}) => {
+  if (params.plugin.config.formatAllowFrom) {
+    return params.plugin.config.formatAllowFrom({
+      cfg: params.cfg,
+      accountId: params.accountId,
+      allowFrom: params.allowFrom,
+    });
+  }
+  return params.allowFrom.map((entry) => String(entry).trim()).filter(Boolean);
+};
+
 const buildAccountNotes = (params: {
   plugin: ChannelPlugin;
   cfg: OpenClawConfig;
@@ -148,7 +181,7 @@ const buildAccountNotes = (params: {
   const allowFrom =
     plugin.config.resolveAllowFrom?.({ cfg, accountId: snapshot.accountId }) ?? snapshot.allowFrom;
   if (allowFrom?.length) {
-    const formatted = formatChannelAllowFrom({
+    const formatted = formatAllowFrom({
       plugin,
       cfg,
       accountId: snapshot.accountId,
@@ -211,15 +244,14 @@ function summarizeTokenConfig(params: {
   }
 
   const accountRecs = enabled.map((a) => asRecord(a.account));
-  const hasBotTokenField = accountRecs.some((r) => "botToken" in r);
-  const hasAppTokenField = accountRecs.some((r) => "appToken" in r);
+  const hasBotOrAppTokenFields = accountRecs.some((r) => "botToken" in r || "appToken" in r);
   const hasTokenField = accountRecs.some((r) => "token" in r);
 
-  if (!hasBotTokenField && !hasAppTokenField && !hasTokenField) {
+  if (!hasBotOrAppTokenFields && !hasTokenField) {
     return { state: null, detail: null };
   }
 
-  if (hasBotTokenField && hasAppTokenField) {
+  if (hasBotOrAppTokenFields) {
     const ready = enabled.filter((a) => {
       const rec = asRecord(a.account);
       const bot = typeof rec.botToken === "string" ? rec.botToken.trim() : "";
@@ -263,30 +295,6 @@ function summarizeTokenConfig(params: {
     return {
       state: "ok",
       detail: `tokens ok (bot ${botSources.label}, app ${appSources.label})${hint} · accounts ${ready.length}/${enabled.length || 1}`,
-    };
-  }
-
-  if (hasBotTokenField) {
-    const ready = enabled.filter((a) => {
-      const rec = asRecord(a.account);
-      const bot = typeof rec.botToken === "string" ? rec.botToken.trim() : "";
-      return Boolean(bot);
-    });
-
-    if (ready.length === 0) {
-      return { state: "setup", detail: "no bot token" };
-    }
-
-    const sample = ready[0]?.account ? asRecord(ready[0].account) : {};
-    const botToken = typeof sample.botToken === "string" ? sample.botToken : "";
-    const botHint = botToken.trim()
-      ? formatTokenHint(botToken, { showSecrets: params.showSecrets })
-      : "";
-    const hint = botHint ? ` (${botHint})` : "";
-
-    return {
-      state: "ok",
-      detail: `bot token config${hint} · accounts ${ready.length}/${enabled.length || 1}`,
     };
   }
 
@@ -345,7 +353,7 @@ export async function buildChannelsTable(
       const account = plugin.config.resolveAccount(cfg, accountId);
       const enabled = resolveAccountEnabled(plugin, account, cfg);
       const configured = await resolveAccountConfigured(plugin, account, cfg);
-      const snapshot = buildChannelAccountSnapshot({
+      const snapshot = buildAccountSnapshot({
         plugin,
         cfg,
         accountId,
@@ -432,7 +440,7 @@ export async function buildChannelsTable(
           extra.push(link.selfE164);
         }
         if (link.linked && link.authAgeMs != null && link.authAgeMs >= 0) {
-          extra.push(`auth ${formatTimeAgo(link.authAgeMs)}`);
+          extra.push(`auth ${formatAge(link.authAgeMs)}`);
         }
         if (accounts.length > 1 || plugin.meta.forceAccountBinding) {
           extra.push(`accounts ${accounts.length || 1}`);

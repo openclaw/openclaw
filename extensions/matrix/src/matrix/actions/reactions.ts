@@ -1,6 +1,5 @@
 import { resolveMatrixRoomId } from "../send.js";
 import { resolveActionClient } from "./client.js";
-import { resolveMatrixActionLimit } from "./limits.js";
 import {
   EventType,
   RelationType,
@@ -10,23 +9,6 @@ import {
   type ReactionEventContent,
 } from "./types.js";
 
-function getReactionsPath(roomId: string, messageId: string): string {
-  return `/_matrix/client/v1/rooms/${encodeURIComponent(roomId)}/relations/${encodeURIComponent(messageId)}/${RelationType.Annotation}/${EventType.Reaction}`;
-}
-
-async function listReactionEvents(
-  client: NonNullable<MatrixActionClientOpts["client"]>,
-  roomId: string,
-  messageId: string,
-  limit: number,
-): Promise<MatrixRawEvent[]> {
-  const res = (await client.doRequest("GET", getReactionsPath(roomId, messageId), {
-    dir: "b",
-    limit,
-  })) as { chunk: MatrixRawEvent[] };
-  return res.chunk;
-}
-
 export async function listMatrixReactions(
   roomId: string,
   messageId: string,
@@ -35,10 +17,18 @@ export async function listMatrixReactions(
   const { client, stopOnDone } = await resolveActionClient(opts);
   try {
     const resolvedRoom = await resolveMatrixRoomId(client, roomId);
-    const limit = resolveMatrixActionLimit(opts.limit, 100);
-    const chunk = await listReactionEvents(client, resolvedRoom, messageId, limit);
+    const limit =
+      typeof opts.limit === "number" && Number.isFinite(opts.limit)
+        ? Math.max(1, Math.floor(opts.limit))
+        : 100;
+    // @vector-im/matrix-bot-sdk uses doRequest for relations
+    const res = (await client.doRequest(
+      "GET",
+      `/_matrix/client/v1/rooms/${encodeURIComponent(resolvedRoom)}/relations/${encodeURIComponent(messageId)}/${RelationType.Annotation}/${EventType.Reaction}`,
+      { dir: "b", limit },
+    )) as { chunk: MatrixRawEvent[] };
     const summaries = new Map<string, MatrixReactionSummary>();
-    for (const event of chunk) {
+    for (const event of res.chunk) {
       const content = event.content as ReactionEventContent;
       const key = content["m.relates_to"]?.key;
       if (!key) {
@@ -72,13 +62,17 @@ export async function removeMatrixReactions(
   const { client, stopOnDone } = await resolveActionClient(opts);
   try {
     const resolvedRoom = await resolveMatrixRoomId(client, roomId);
-    const chunk = await listReactionEvents(client, resolvedRoom, messageId, 200);
+    const res = (await client.doRequest(
+      "GET",
+      `/_matrix/client/v1/rooms/${encodeURIComponent(resolvedRoom)}/relations/${encodeURIComponent(messageId)}/${RelationType.Annotation}/${EventType.Reaction}`,
+      { dir: "b", limit: 200 },
+    )) as { chunk: MatrixRawEvent[] };
     const userId = await client.getUserId();
     if (!userId) {
       return { removed: 0 };
     }
     const targetEmoji = opts.emoji?.trim();
-    const toRemove = chunk
+    const toRemove = res.chunk
       .filter((event) => event.sender === userId)
       .filter((event) => {
         if (!targetEmoji) {

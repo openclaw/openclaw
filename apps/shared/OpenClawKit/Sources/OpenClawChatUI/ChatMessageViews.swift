@@ -173,8 +173,7 @@ private struct ChatMessageBody: View {
                     ToolResultCard(
                         title: self.toolResultTitle,
                         text: text,
-                        isUser: self.isUser,
-                        toolName: self.message.toolName)
+                        isUser: self.isUser)
                 }
             } else if self.isUser {
                 ChatMarkdownRenderer(
@@ -208,8 +207,7 @@ private struct ChatMessageBody: View {
                     ToolResultCard(
                         title: "\(display.emoji) \(display.title)",
                         text: toolResult.text ?? "",
-                        isUser: self.isUser,
-                        toolName: toolResult.name)
+                        isUser: self.isUser)
                 }
             }
         }
@@ -404,54 +402,47 @@ private struct ToolResultCard: View {
     let title: String
     let text: String
     let isUser: Bool
-    let toolName: String?
     @State private var expanded = false
 
     var body: some View {
-        if !self.displayContent.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 6) {
-                    Text(self.title)
-                        .font(.footnote.weight(.semibold))
-                    Spacer(minLength: 0)
-                }
-
-                Text(self.displayText)
-                    .font(.footnote.monospaced())
-                    .foregroundStyle(self.isUser ? OpenClawChatTheme.userText : OpenClawChatTheme.assistantText)
-                    .lineLimit(self.expanded ? nil : Self.previewLineLimit)
-
-                if self.shouldShowToggle {
-                    Button(self.expanded ? "Show less" : "Show full output") {
-                        self.expanded.toggle()
-                    }
-                    .buttonStyle(.plain)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                }
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Text(self.title)
+                    .font(.footnote.weight(.semibold))
+                Spacer(minLength: 0)
             }
-            .padding(10)
-            .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(OpenClawChatTheme.subtleCard)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)))
+
+            Text(self.displayText)
+                .font(.footnote.monospaced())
+                .foregroundStyle(self.isUser ? OpenClawChatTheme.userText : OpenClawChatTheme.assistantText)
+                .lineLimit(self.expanded ? nil : Self.previewLineLimit)
+
+            if self.shouldShowToggle {
+                Button(self.expanded ? "Show less" : "Show full output") {
+                    self.expanded.toggle()
+                }
+                .buttonStyle(.plain)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
         }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(OpenClawChatTheme.subtleCard)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)))
     }
 
     private static let previewLineLimit = 8
 
-    private var displayContent: String {
-        ToolResultTextFormatter.format(text: self.text, toolName: self.toolName)
-    }
-
     private var lines: [Substring] {
-        self.displayContent.components(separatedBy: .newlines).map { Substring($0) }
+        self.text.components(separatedBy: .newlines).map { Substring($0) }
     }
 
     private var displayText: String {
-        guard !self.expanded, self.lines.count > Self.previewLineLimit else { return self.displayContent }
+        guard !self.expanded, self.lines.count > Self.previewLineLimit else { return self.text }
         return self.lines.prefix(Self.previewLineLimit).joined(separator: "\n") + "\n…"
     }
 
@@ -467,7 +458,12 @@ struct ChatTypingIndicatorBubble: View {
     var body: some View {
         HStack(spacing: 10) {
             TypingDots()
-            Spacer(minLength: 0)
+            if self.style == .standard {
+                Text("OpenClaw is thinking…")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
         }
         .padding(.vertical, self.style == .standard ? 12 : 10)
         .padding(.horizontal, self.style == .standard ? 12 : 14)

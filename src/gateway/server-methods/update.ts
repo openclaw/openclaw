@@ -1,5 +1,4 @@
-import { loadConfig } from "../../config/config.js";
-import { extractDeliveryInfo } from "../../config/sessions.js";
+import type { GatewayRequestHandlers } from "./types.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import {
   formatDoctorNonInteractiveHint,
@@ -7,22 +6,40 @@ import {
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
-import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import { runGatewayUpdate } from "../../infra/update-runner.js";
-import { formatControlPlaneActor, resolveControlPlaneActor } from "../control-plane-audit.js";
-import { validateUpdateRunParams } from "../protocol/index.js";
-import { parseRestartRequestParams } from "./restart-request.js";
-import type { GatewayRequestHandlers } from "./types.js";
-import { assertValidParams } from "./validation.js";
+import {
+  ErrorCodes,
+  errorShape,
+  formatValidationErrors,
+  validateUpdateRunParams,
+} from "../protocol/index.js";
 
 export const updateHandlers: GatewayRequestHandlers = {
-  "update.run": async ({ params, respond, client, context }) => {
-    if (!assertValidParams(params, validateUpdateRunParams, "update.run", respond)) {
+  "update.run": async ({ params, respond }) => {
+    if (!validateUpdateRunParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid update.run params: ${formatValidationErrors(validateUpdateRunParams.errors)}`,
+        ),
+      );
       return;
     }
-    const actor = resolveControlPlaneActor(client);
-    const { sessionKey, note, restartDelayMs } = parseRestartRequestParams(params);
-    const { deliveryContext, threadId } = extractDeliveryInfo(sessionKey);
+    const sessionKey =
+      typeof (params as { sessionKey?: unknown }).sessionKey === "string"
+        ? (params as { sessionKey?: string }).sessionKey?.trim() || undefined
+        : undefined;
+    const note =
+      typeof (params as { note?: unknown }).note === "string"
+        ? (params as { note?: string }).note?.trim() || undefined
+        : undefined;
+    const restartDelayMsRaw = (params as { restartDelayMs?: unknown }).restartDelayMs;
+    const restartDelayMs =
+      typeof restartDelayMsRaw === "number" && Number.isFinite(restartDelayMsRaw)
+        ? Math.max(0, Math.floor(restartDelayMsRaw))
+        : undefined;
     const timeoutMsRaw = (params as { timeoutMs?: unknown }).timeoutMs;
     const timeoutMs =
       typeof timeoutMsRaw === "number" && Number.isFinite(timeoutMsRaw)
@@ -31,8 +48,6 @@ export const updateHandlers: GatewayRequestHandlers = {
 
     let result: Awaited<ReturnType<typeof runGatewayUpdate>>;
     try {
-      const config = loadConfig();
-      const configChannel = normalizeUpdateChannel(config.update?.channel);
       const root =
         (await resolveOpenClawPackageRoot({
           moduleUrl: import.meta.url,
@@ -43,7 +58,6 @@ export const updateHandlers: GatewayRequestHandlers = {
         timeoutMs,
         cwd: root,
         argv1: process.argv[1],
-        channel: configChannel ?? undefined,
       });
     } catch (err) {
       result = {
@@ -60,8 +74,6 @@ export const updateHandlers: GatewayRequestHandlers = {
       status: result.status,
       ts: Date.now(),
       sessionKey,
-      deliveryContext,
-      threadId,
       message: note ?? null,
       doctorHint: formatDoctorNonInteractiveHint(),
       stats: {
@@ -92,35 +104,15 @@ export const updateHandlers: GatewayRequestHandlers = {
       sentinelPath = null;
     }
 
-    // Only restart the gateway when the update actually succeeded.
-    // Restarting after a failed update leaves the process in a broken state
-    // (corrupted node_modules, partial builds) and causes a crash loop.
-    const restart =
-      result.status === "ok"
-        ? scheduleGatewaySigusr1Restart({
-            delayMs: restartDelayMs,
-            reason: "update.run",
-            audit: {
-              actor: actor.actor,
-              deviceId: actor.deviceId,
-              clientIp: actor.clientIp,
-              changedPaths: [],
-            },
-          })
-        : null;
-    context?.logGateway?.info(
-      `update.run completed ${formatControlPlaneActor(actor)} changedPaths=<n/a> restartReason=update.run status=${result.status}`,
-    );
-    if (restart?.coalesced) {
-      context?.logGateway?.warn(
-        `update.run restart coalesced ${formatControlPlaneActor(actor)} delayMs=${restart.delayMs}`,
-      );
-    }
+    const restart = scheduleGatewaySigusr1Restart({
+      delayMs: restartDelayMs,
+      reason: "update.run",
+    });
 
     respond(
       true,
       {
-        ok: result.status !== "error",
+        ok: true,
         result,
         restart,
         sentinel: {

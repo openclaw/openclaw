@@ -20,8 +20,6 @@ export type TelephonyTtsProvider = {
   synthesizeForTelephony: (text: string) => Promise<Buffer>;
 };
 
-const BLOCKED_MERGE_KEYS = new Set(["__proto__", "prototype", "constructor"]);
-
 export function createTelephonyTtsProvider(params: {
   coreConfig: CoreConfig;
   ttsOverride?: VoiceCallTtsConfig;
@@ -88,7 +86,7 @@ function deepMerge<T>(base: T, override: T): T {
   }
   const result: Record<string, unknown> = { ...base };
   for (const [key, value] of Object.entries(override)) {
-    if (BLOCKED_MERGE_KEYS.has(key) || value === undefined) {
+    if (value === undefined) {
       continue;
     }
     const existing = (base as Record<string, unknown>)[key];

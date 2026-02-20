@@ -1,7 +1,6 @@
 import { classifyFailoverReason, type FailoverReason } from "./pi-embedded-helpers.js";
 
-const TIMEOUT_HINT_RE =
-  /timeout|timed out|deadline exceeded|context deadline exceeded|stop reason:\s*abort|reason:\s*abort|unhandled stop reason:\s*abort/i;
+const TIMEOUT_HINT_RE = /timeout|timed out|deadline exceeded|context deadline exceeded/i;
 const ABORT_TIMEOUT_RE = /request was aborted|request aborted/i;
 
 export class FailoverError extends Error {
@@ -51,8 +50,6 @@ export function resolveFailoverStatus(reason: FailoverReason): number | undefine
       return 408;
     case "format":
       return 400;
-    case "model_not_found":
-      return 404;
     default:
       return undefined;
   }
@@ -162,12 +159,6 @@ export function resolveFailoverReasonFromError(err: unknown): FailoverReason | n
   }
   if (status === 408) {
     return "timeout";
-  }
-  if (status === 503) {
-    return "timeout";
-  }
-  if (status === 400) {
-    return "format";
   }
 
   const code = (getErrorCode(err) ?? "").toUpperCase();

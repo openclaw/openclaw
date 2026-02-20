@@ -180,12 +180,10 @@ struct OpenClawChatComposer: View {
         VStack(alignment: .leading, spacing: 8) {
             self.editorOverlay
 
-            if !self.isComposerCompacted {
-                Rectangle()
-                    .fill(OpenClawChatTheme.divider)
-                    .frame(height: 1)
-                    .padding(.horizontal, 2)
-            }
+            Rectangle()
+                .fill(OpenClawChatTheme.divider)
+                .frame(height: 1)
+                .padding(.horizontal, 2)
 
             HStack(alignment: .center, spacing: 8) {
                 if self.showsConnectionPill {
@@ -310,7 +308,7 @@ struct OpenClawChatComposer: View {
     }
 
     private var showsToolbar: Bool {
-        self.style == .standard && !self.isComposerCompacted
+        self.style == .standard
     }
 
     private var showsAttachments: Bool {
@@ -318,15 +316,15 @@ struct OpenClawChatComposer: View {
     }
 
     private var showsConnectionPill: Bool {
-        self.style == .standard && !self.isComposerCompacted
+        self.style == .standard
     }
 
     private var composerPadding: CGFloat {
-        self.style == .onboarding ? 5 : (self.isComposerCompacted ? 4 : 6)
+        self.style == .onboarding ? 5 : 6
     }
 
     private var editorPadding: CGFloat {
-        self.style == .onboarding ? 5 : (self.isComposerCompacted ? 4 : 6)
+        self.style == .onboarding ? 5 : 6
     }
 
     private var textMinHeight: CGFloat {
@@ -335,14 +333,6 @@ struct OpenClawChatComposer: View {
 
     private var textMaxHeight: CGFloat {
         self.style == .onboarding ? 52 : 64
-    }
-
-    private var isComposerCompacted: Bool {
-        #if os(macOS)
-        false
-        #else
-        self.style == .standard && self.isFocused
-        #endif
     }
 
     #if os(macOS)

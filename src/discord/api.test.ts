@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { fetchDiscord } from "./api.js";
 
 function jsonResponse(body: unknown, status = 200) {
@@ -8,7 +7,7 @@ function jsonResponse(body: unknown, status = 200) {
 
 describe("fetchDiscord", () => {
   it("formats rate limit payloads without raw JSON", async () => {
-    const fetcher = withFetchPreconnect(async () =>
+    const fetcher = async () =>
       jsonResponse(
         {
           message: "You are being rate limited.",
@@ -16,12 +15,11 @@ describe("fetchDiscord", () => {
           global: false,
         },
         429,
-      ),
-    );
+      );
 
     let error: unknown;
     try {
-      await fetchDiscord("/users/@me/guilds", "test", fetcher, {
+      await fetchDiscord("/users/@me/guilds", "test", fetcher as typeof fetch, {
         retry: { attempts: 1 },
       });
     } catch (err) {
@@ -37,9 +35,9 @@ describe("fetchDiscord", () => {
   });
 
   it("preserves non-JSON error text", async () => {
-    const fetcher = withFetchPreconnect(async () => new Response("Not Found", { status: 404 }));
+    const fetcher = async () => new Response("Not Found", { status: 404 });
     await expect(
-      fetchDiscord("/users/@me/guilds", "test", fetcher, {
+      fetchDiscord("/users/@me/guilds", "test", fetcher as typeof fetch, {
         retry: { attempts: 1 },
       }),
     ).rejects.toThrow("Discord API /users/@me/guilds failed (404): Not Found");
@@ -47,7 +45,7 @@ describe("fetchDiscord", () => {
 
   it("retries rate limits before succeeding", async () => {
     let calls = 0;
-    const fetcher = withFetchPreconnect(async () => {
+    const fetcher = async () => {
       calls += 1;
       if (calls === 1) {
         return jsonResponse(
@@ -60,12 +58,12 @@ describe("fetchDiscord", () => {
         );
       }
       return jsonResponse([{ id: "1", name: "Guild" }], 200);
-    });
+    };
 
     const result = await fetchDiscord<Array<{ id: string; name: string }>>(
       "/users/@me/guilds",
       "test",
-      fetcher,
+      fetcher as typeof fetch,
       { retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0 } },
     );
 

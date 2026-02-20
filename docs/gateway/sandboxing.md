@@ -71,12 +71,7 @@ Format: `host:container:mode` (e.g., `"/home/user/source:/source:rw"`).
 
 Global and per-agent binds are **merged** (not replaced). Under `scope: "shared"`, per-agent binds are ignored.
 
-`agents.defaults.sandbox.browser.binds` mounts additional host directories into the **sandbox browser** container only.
-
-- When set (including `[]`), it replaces `agents.defaults.sandbox.docker.binds` for the browser container.
-- When omitted, the browser container falls back to `agents.defaults.sandbox.docker.binds` (backwards compatible).
-
-Example (read-only source + an extra data directory):
+Example (read-only source + docker socket):
 
 ```json5
 {
@@ -84,7 +79,7 @@ Example (read-only source + an extra data directory):
     defaults: {
       sandbox: {
         docker: {
-          binds: ["/home/user/source:/source:ro", "/var/data/myapp:/data:ro"],
+          binds: ["/home/user/source:/source:ro", "/var/run/docker.sock:/var/run/docker.sock"],
         },
       },
     },
@@ -105,8 +100,7 @@ Example (read-only source + an extra data directory):
 Security notes:
 
 - Binds bypass the sandbox filesystem: they expose host paths with whatever mode you set (`:ro` or `:rw`).
-- OpenClaw blocks dangerous bind sources (for example: `docker.sock`, `/etc`, `/proc`, `/sys`, `/dev`, and parent mounts that would expose them).
-- Sensitive mounts (secrets, SSH keys, service credentials) should be `:ro` unless absolutely required.
+- Sensitive mounts (e.g., `docker.sock`, secrets, SSH keys) should be `:ro` unless absolutely required.
 - Combine with `workspaceAccess: "ro"` if you only need read access to the workspace; bind modes stay independent.
 - See [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) for how binds interact with tool policy and elevated exec.
 
@@ -174,7 +168,7 @@ Debugging:
 
 Each agent can override sandbox + tools:
 `agents.list[].sandbox` and `agents.list[].tools` (plus `agents.list[].tools.sandbox.tools` for sandbox tool policy).
-See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for precedence.
+See [Multi-Agent Sandbox & Tools](/multi-agent-sandbox-tools) for precedence.
 
 ## Minimal enable example
 
@@ -195,5 +189,5 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
 ## Related docs
 
 - [Sandbox Configuration](/gateway/configuration#agentsdefaults-sandbox)
-- [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools)
+- [Multi-Agent Sandbox & Tools](/multi-agent-sandbox-tools)
 - [Security](/gateway/security)

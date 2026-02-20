@@ -1,12 +1,12 @@
-import fs from "node:fs";
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
+import fs from "node:fs";
+import lockfile from "proper-lockfile";
+import type { AuthProfileCredential, AuthProfileStore, ProfileUsageStats } from "./types.js";
 import { resolveOAuthPath } from "../../config/paths.js";
-import { withFileLock } from "../../infra/file-lock.js";
 import { loadJsonFile, saveJsonFile } from "../../infra/json-file.js";
 import { AUTH_STORE_LOCK_OPTIONS, AUTH_STORE_VERSION, log } from "./constants.js";
 import { syncExternalCliCredentials } from "./external-cli-sync.js";
 import { ensureAuthStoreFile, resolveAuthStorePath, resolveLegacyAuthStorePath } from "./paths.js";
-import type { AuthProfileCredential, AuthProfileStore, ProfileUsageStats } from "./types.js";
 
 type LegacyAuthStore = Record<string, AuthProfileCredential>;
 
@@ -25,17 +25,25 @@ export async function updateAuthProfileStoreWithLock(params: {
   const authPath = resolveAuthStorePath(params.agentDir);
   ensureAuthStoreFile(authPath);
 
+  let release: (() => Promise<void>) | undefined;
   try {
-    return await withFileLock(authPath, AUTH_STORE_LOCK_OPTIONS, async () => {
-      const store = ensureAuthProfileStore(params.agentDir);
-      const shouldSave = params.updater(store);
-      if (shouldSave) {
-        saveAuthProfileStore(store, params.agentDir);
-      }
-      return store;
-    });
+    release = await lockfile.lock(authPath, AUTH_STORE_LOCK_OPTIONS);
+    const store = ensureAuthProfileStore(params.agentDir);
+    const shouldSave = params.updater(store);
+    if (shouldSave) {
+      saveAuthProfileStore(store, params.agentDir);
+    }
+    return store;
   } catch {
     return null;
+  } finally {
+    if (release) {
+      try {
+        await release();
+      } catch {
+        // ignore unlock errors
+      }
+    }
   }
 }
 
@@ -184,42 +192,6 @@ function mergeOAuthFileIntoStore(store: AuthProfileStore): boolean {
   return mutated;
 }
 
-function applyLegacyStore(store: AuthProfileStore, legacy: LegacyAuthStore): void {
-  for (const [provider, cred] of Object.entries(legacy)) {
-    const profileId = `${provider}:default`;
-    if (cred.type === "api_key") {
-      store.profiles[profileId] = {
-        type: "api_key",
-        provider: String(cred.provider ?? provider),
-        key: cred.key,
-        ...(cred.email ? { email: cred.email } : {}),
-      };
-      continue;
-    }
-    if (cred.type === "token") {
-      store.profiles[profileId] = {
-        type: "token",
-        provider: String(cred.provider ?? provider),
-        token: cred.token,
-        ...(typeof cred.expires === "number" ? { expires: cred.expires } : {}),
-        ...(cred.email ? { email: cred.email } : {}),
-      };
-      continue;
-    }
-    store.profiles[profileId] = {
-      type: "oauth",
-      provider: String(cred.provider ?? provider),
-      access: cred.access,
-      refresh: cred.refresh,
-      expires: cred.expires,
-      ...(cred.enterpriseUrl ? { enterpriseUrl: cred.enterpriseUrl } : {}),
-      ...(cred.projectId ? { projectId: cred.projectId } : {}),
-      ...(cred.accountId ? { accountId: cred.accountId } : {}),
-      ...(cred.email ? { email: cred.email } : {}),
-    };
-  }
-}
-
 export function loadAuthProfileStore(): AuthProfileStore {
   const authPath = resolveAuthStorePath();
   const raw = loadJsonFile(authPath);
@@ -240,7 +212,37 @@ export function loadAuthProfileStore(): AuthProfileStore {
       version: AUTH_STORE_VERSION,
       profiles: {},
     };
-    applyLegacyStore(store, legacy);
+    for (const [provider, cred] of Object.entries(legacy)) {
+      const profileId = `${provider}:default`;
+      if (cred.type === "api_key") {
+        store.profiles[profileId] = {
+          type: "api_key",
+          provider: String(cred.provider ?? provider),
+          key: cred.key,
+          ...(cred.email ? { email: cred.email } : {}),
+        };
+      } else if (cred.type === "token") {
+        store.profiles[profileId] = {
+          type: "token",
+          provider: String(cred.provider ?? provider),
+          token: cred.token,
+          ...(typeof cred.expires === "number" ? { expires: cred.expires } : {}),
+          ...(cred.email ? { email: cred.email } : {}),
+        };
+      } else {
+        store.profiles[profileId] = {
+          type: "oauth",
+          provider: String(cred.provider ?? provider),
+          access: cred.access,
+          refresh: cred.refresh,
+          expires: cred.expires,
+          ...(cred.enterpriseUrl ? { enterpriseUrl: cred.enterpriseUrl } : {}),
+          ...(cred.projectId ? { projectId: cred.projectId } : {}),
+          ...(cred.accountId ? { accountId: cred.accountId } : {}),
+          ...(cred.email ? { email: cred.email } : {}),
+        };
+      }
+    }
     syncExternalCliCredentials(store);
     return store;
   }
@@ -286,7 +288,37 @@ function loadAuthProfileStoreForAgent(
     profiles: {},
   };
   if (legacy) {
-    applyLegacyStore(store, legacy);
+    for (const [provider, cred] of Object.entries(legacy)) {
+      const profileId = `${provider}:default`;
+      if (cred.type === "api_key") {
+        store.profiles[profileId] = {
+          type: "api_key",
+          provider: String(cred.provider ?? provider),
+          key: cred.key,
+          ...(cred.email ? { email: cred.email } : {}),
+        };
+      } else if (cred.type === "token") {
+        store.profiles[profileId] = {
+          type: "token",
+          provider: String(cred.provider ?? provider),
+          token: cred.token,
+          ...(typeof cred.expires === "number" ? { expires: cred.expires } : {}),
+          ...(cred.email ? { email: cred.email } : {}),
+        };
+      } else {
+        store.profiles[profileId] = {
+          type: "oauth",
+          provider: String(cred.provider ?? provider),
+          access: cred.access,
+          refresh: cred.refresh,
+          expires: cred.expires,
+          ...(cred.enterpriseUrl ? { enterpriseUrl: cred.enterpriseUrl } : {}),
+          ...(cred.projectId ? { projectId: cred.projectId } : {}),
+          ...(cred.accountId ? { accountId: cred.accountId } : {}),
+          ...(cred.email ? { email: cred.email } : {}),
+        };
+      }
+    }
   }
 
   const mergedOAuth = mergeOAuthFileIntoStore(store);

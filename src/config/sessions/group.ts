@@ -1,12 +1,17 @@
 import type { MsgContext } from "../../auto-reply/templating.js";
-import { normalizeHyphenSlug } from "../../shared/string-normalization.js";
-import { listDeliverableMessageChannels } from "../../utils/message-channel.js";
 import type { GroupKeyResolution } from "./types.js";
+import { listDeliverableMessageChannels } from "../../utils/message-channel.js";
 
 const getGroupSurfaces = () => new Set<string>([...listDeliverableMessageChannels(), "webchat"]);
 
 function normalizeGroupLabel(raw?: string) {
-  return normalizeHyphenSlug(raw);
+  const trimmed = raw?.trim().toLowerCase() ?? "";
+  if (!trimmed) {
+    return "";
+  }
+  const dashed = trimmed.replace(/\s+/g, "-");
+  const cleaned = dashed.replace(/[^a-z0-9#@._+-]+/g, "-");
+  return cleaned.replace(/-{2,}/g, "-").replace(/^[-.]+|[-.]+$/g, "");
 }
 
 function shortenGroupId(value?: string) {

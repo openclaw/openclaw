@@ -1,8 +1,6 @@
 export type TypingCallbacks = {
   onReplyStart: () => Promise<void>;
   onIdle?: () => void;
-  /** Called when the typing controller is cleaned up (e.g., on NO_REPLY). */
-  onCleanup?: () => void;
 };
 
 export function createTypingCallbacks(params: {
@@ -20,11 +18,11 @@ export function createTypingCallbacks(params: {
     }
   };
 
-  const fireStop = stop
+  const onIdle = stop
     ? () => {
         void stop().catch((err) => (params.onStopError ?? params.onStartError)(err));
       }
     : undefined;
 
-  return { onReplyStart, onIdle: fireStop, onCleanup: fireStop };
+  return { onReplyStart, onIdle };
 }

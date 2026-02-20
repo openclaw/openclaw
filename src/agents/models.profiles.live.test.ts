@@ -21,7 +21,7 @@ const REQUIRE_PROFILE_KEYS = isTruthyEnvValue(process.env.OPENCLAW_LIVE_REQUIRE_
 
 const describeLive = LIVE ? describe : describe.skip;
 
-function parseCsvFilter(raw?: string): Set<string> | null {
+function parseProviderFilter(raw?: string): Set<string> | null {
   const trimmed = raw?.trim();
   if (!trimmed || trimmed === "all") {
     return null;
@@ -33,12 +33,16 @@ function parseCsvFilter(raw?: string): Set<string> | null {
   return ids.length ? new Set(ids) : null;
 }
 
-function parseProviderFilter(raw?: string): Set<string> | null {
-  return parseCsvFilter(raw);
-}
-
 function parseModelFilter(raw?: string): Set<string> | null {
-  return parseCsvFilter(raw);
+  const trimmed = raw?.trim();
+  if (!trimmed || trimmed === "all") {
+    return null;
+  }
+  const ids = trimmed
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return ids.length ? new Set(ids) : null;
 }
 
 function logProgress(message: string): void {
@@ -137,7 +141,7 @@ async function completeOkWithRetry(params: {
   apiKey: string;
   timeoutMs: number;
 }) {
-  const runOnce = async (maxTokens: number) => {
+  const runOnce = async () => {
     const res = await completeSimpleWithTimeout(
       params.model,
       {
@@ -152,7 +156,7 @@ async function completeOkWithRetry(params: {
       {
         apiKey: params.apiKey,
         reasoning: resolveTestReasoning(params.model),
-        maxTokens,
+        maxTokens: 64,
       },
       params.timeoutMs,
     );
@@ -163,13 +167,11 @@ async function completeOkWithRetry(params: {
     return { res, text };
   };
 
-  const first = await runOnce(64);
+  const first = await runOnce();
   if (first.text.length > 0) {
     return first;
   }
-  // Some providers (for example Moonshot Kimi and MiniMax M2.5) may emit
-  // reasoning blocks first and only return text once token budget is higher.
-  return await runOnce(256);
+  return await runOnce();
 }
 
 describeLive("live models (profile keys)", () => {

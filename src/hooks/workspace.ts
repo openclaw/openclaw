@@ -1,16 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { isPathInsideWithRealpath } from "../security/scan-paths.js";
-import { CONFIG_DIR, resolveUserPath } from "../utils.js";
-import { resolveBundledHooksDir } from "./bundled-dir.js";
-import { shouldIncludeHook } from "./config.js";
-import {
-  parseFrontmatter,
-  resolveOpenClawMetadata,
-  resolveHookInvocationPolicy,
-} from "./frontmatter.js";
 import type {
   Hook,
   HookEligibilityContext,
@@ -19,6 +9,15 @@ import type {
   HookSource,
   ParsedHookFrontmatter,
 } from "./types.js";
+import { MANIFEST_KEY } from "../compat/legacy-names.js";
+import { CONFIG_DIR, resolveUserPath } from "../utils.js";
+import { resolveBundledHooksDir } from "./bundled-dir.js";
+import { shouldIncludeHook } from "./config.js";
+import {
+  parseFrontmatter,
+  resolveOpenClawMetadata,
+  resolveHookInvocationPolicy,
+} from "./frontmatter.js";
 
 type HookPackageManifest = {
   name?: string;
@@ -51,19 +50,6 @@ function resolvePackageHooks(manifest: HookPackageManifest): string[] {
     return [];
   }
   return raw.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean);
-}
-
-function resolveContainedDir(baseDir: string, targetDir: string): string | null {
-  const base = path.resolve(baseDir);
-  const resolved = path.resolve(baseDir, targetDir);
-  if (
-    !isPathInsideWithRealpath(base, resolved, {
-      requireRealpath: true,
-    })
-  ) {
-    return null;
-  }
-  return resolved;
 }
 
 function loadHookFromDir(params: {
@@ -143,13 +129,7 @@ function loadHooksFromDir(params: { dir: string; source: HookSource; pluginId?: 
 
     if (packageHooks.length > 0) {
       for (const hookPath of packageHooks) {
-        const resolvedHookDir = resolveContainedDir(hookDir, hookPath);
-        if (!resolvedHookDir) {
-          console.warn(
-            `[hooks] Ignoring out-of-package hook path "${hookPath}" in ${hookDir} (must be within package directory)`,
-          );
-          continue;
-        }
+        const resolvedHookDir = path.resolve(hookDir, hookPath);
         const hook = loadHookFromDir({
           hookDir: resolvedHookDir,
           source,

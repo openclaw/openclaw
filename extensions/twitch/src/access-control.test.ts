@@ -1,13 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { checkTwitchAccessControl, extractMentions } from "./access-control.js";
 import type { TwitchAccountConfig, TwitchChatMessage } from "./types.js";
+import { checkTwitchAccessControl, extractMentions } from "./access-control.js";
 
 describe("checkTwitchAccessControl", () => {
   const mockAccount: TwitchAccountConfig = {
     username: "testbot",
-    accessToken: "test",
-    clientId: "test-client-id",
-    channel: "testchannel",
+    token: "oauth:test",
   };
 
   const mockMessage: TwitchChatMessage = {
@@ -137,7 +135,7 @@ describe("checkTwitchAccessControl", () => {
       expect(result.matchSource).toBe("allowlist");
     });
 
-    it("blocks users not in allowlist when allowFrom is set", () => {
+    it("allows users not in allowlist via fallback (open access)", () => {
       const account: TwitchAccountConfig = {
         ...mockAccount,
         allowFrom: ["789012"],
@@ -152,8 +150,8 @@ describe("checkTwitchAccessControl", () => {
         account,
         botUsername: "testbot",
       });
-      expect(result.allowed).toBe(false);
-      expect(result.reason).toContain("allowFrom");
+      // Falls through to final fallback since allowedRoles is not set
+      expect(result.allowed).toBe(true);
     });
 
     it("blocks messages without userId", () => {
@@ -196,7 +194,7 @@ describe("checkTwitchAccessControl", () => {
       expect(result.allowed).toBe(true);
     });
 
-    it("blocks user with role when not in allowlist", () => {
+    it("allows user with role even if not in allowlist", () => {
       const account: TwitchAccountConfig = {
         ...mockAccount,
         allowFrom: ["789012"],
@@ -214,11 +212,11 @@ describe("checkTwitchAccessControl", () => {
         account,
         botUsername: "testbot",
       });
-      expect(result.allowed).toBe(false);
-      expect(result.reason).toContain("allowFrom");
+      expect(result.allowed).toBe(true);
+      expect(result.matchSource).toBe("role");
     });
 
-    it("blocks user not in allowlist even when roles configured", () => {
+    it("blocks user with neither allowlist nor role", () => {
       const account: TwitchAccountConfig = {
         ...mockAccount,
         allowFrom: ["789012"],
@@ -237,7 +235,7 @@ describe("checkTwitchAccessControl", () => {
         botUsername: "testbot",
       });
       expect(result.allowed).toBe(false);
-      expect(result.reason).toContain("allowFrom");
+      expect(result.reason).toContain("does not have any of the required roles");
     });
   });
 

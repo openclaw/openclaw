@@ -1,5 +1,5 @@
 import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
-import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk";
+import type { PluginRuntime } from "openclaw/plugin-sdk";
 import type { MatrixAuth } from "../client.js";
 import type { MatrixRawEvent } from "./types.js";
 import { EventType } from "./types.js";
@@ -10,7 +10,7 @@ export function registerMatrixMonitorEvents(params: {
   logVerboseMessage: (message: string) => void;
   warnedEncryptedRooms: Set<string>;
   warnedCryptoMissingRooms: Set<string>;
-  logger: RuntimeLogger;
+  logger: { warn: (meta: Record<string, unknown>, message: string) => void };
   formatNativeDependencyHint: PluginRuntime["system"]["formatNativeDependencyHint"];
   onRoomMessage: (roomId: string, event: MatrixRawEvent) => void | Promise<void>;
 }): void {
@@ -42,11 +42,10 @@ export function registerMatrixMonitorEvents(params: {
   client.on(
     "room.failed_decryption",
     async (roomId: string, event: MatrixRawEvent, error: Error) => {
-      logger.warn("Failed to decrypt message", {
-        roomId,
-        eventId: event.event_id,
-        error: error.message,
-      });
+      logger.warn(
+        { roomId, eventId: event.event_id, error: error.message },
+        "Failed to decrypt message",
+      );
       logVerboseMessage(
         `matrix: failed decrypt room=${roomId} id=${event.event_id ?? "unknown"} error=${error.message}`,
       );
@@ -77,7 +76,7 @@ export function registerMatrixMonitorEvents(params: {
         warnedEncryptedRooms.add(roomId);
         const warning =
           "matrix: encrypted event received without encryption enabled; set channels.matrix.encryption=true and verify the device to decrypt";
-        logger.warn(warning, { roomId });
+        logger.warn({ roomId }, warning);
       }
       if (auth.encryption === true && !client.crypto && !warnedCryptoMissingRooms.has(roomId)) {
         warnedCryptoMissingRooms.add(roomId);
@@ -87,7 +86,7 @@ export function registerMatrixMonitorEvents(params: {
           downloadCommand: "node node_modules/@matrix-org/matrix-sdk-crypto-nodejs/download-lib.js",
         });
         const warning = `matrix: encryption enabled but crypto is unavailable; ${hint}`;
-        logger.warn(warning, { roomId });
+        logger.warn({ roomId }, warning);
       }
       return;
     }

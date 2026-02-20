@@ -84,13 +84,8 @@ struct SessionRow: Identifiable {
     let tokens: SessionTokenStats
     let model: String?
 
-    var ageText: String {
-        relativeAge(from: self.updatedAt)
-    }
-
-    var label: String {
-        self.displayName ?? self.key
-    }
+    var ageText: String { relativeAge(from: self.updatedAt) }
+    var label: String { self.displayName ?? self.key }
 
     var flagLabels: [String] {
         var flags: [String] = []
@@ -174,7 +169,7 @@ extension SessionRow {
                 systemSent: true,
                 abortedLastRun: true,
                 tokens: SessionTokenStats(input: 5000, output: 1200, total: 6200, contextTokens: 200_000),
-                model: "claude-opus-4-6"),
+                model: "claude-opus-4-5"),
             SessionRow(
                 id: "global",
                 key: "global",
@@ -247,7 +242,7 @@ struct SessionStoreSnapshot {
 
 @MainActor
 enum SessionLoader {
-    static let fallbackModel = "claude-opus-4-6"
+    static let fallbackModel = "claude-opus-4-5"
     static let fallbackContextTokens = 200_000
 
     static let defaultStorePath = standardize(

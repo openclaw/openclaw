@@ -21,11 +21,11 @@ struct CronSettings_Previews: PreviewProvider {
                     message: "Summarize inbox",
                     thinking: "low",
                     timeoutSeconds: 600,
-                    deliver: nil,
-                    channel: nil,
+                    deliver: true,
+                    channel: "last",
                     to: nil,
-                    bestEffortDeliver: nil),
-                delivery: CronDelivery(mode: .announce, channel: "last", to: nil, bestEffort: true),
+                    bestEffortDeliver: true),
+                isolation: CronIsolation(postToMainPrefix: "Cron"),
                 state: CronJobState(
                     nextRunAtMs: Int(Date().addingTimeInterval(3600).timeIntervalSince1970 * 1000),
                     runningAtMs: nil,
@@ -75,11 +75,11 @@ extension CronSettings {
                 message: "Summarize",
                 thinking: "low",
                 timeoutSeconds: 120,
-                deliver: nil,
-                channel: nil,
-                to: nil,
-                bestEffortDeliver: nil),
-            delivery: CronDelivery(mode: .announce, channel: "whatsapp", to: "+15551234567", bestEffort: true),
+                deliver: true,
+                channel: "whatsapp",
+                to: "+15551234567",
+                bestEffortDeliver: true),
+            isolation: CronIsolation(postToMainPrefix: "[cron] "),
             state: CronJobState(
                 nextRunAtMs: 1_700_000_200_000,
                 runningAtMs: nil,
@@ -111,7 +111,7 @@ extension CronSettings {
         _ = view.detailCard(job)
         _ = view.runHistoryCard(job)
         _ = view.runRow(run)
-        _ = view.payloadSummary(job)
+        _ = view.payloadSummary(job.payload)
         _ = view.scheduleSummary(job.schedule)
         _ = view.statusTint(job.state.lastStatus)
         _ = view.nextRunLabel(Date())

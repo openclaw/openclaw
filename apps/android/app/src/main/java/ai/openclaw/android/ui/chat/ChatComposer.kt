@@ -37,7 +37,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import ai.openclaw.android.chat.ChatSessionEntry
 
@@ -64,9 +63,8 @@ fun ChatComposer(
   var showSessionMenu by remember { mutableStateOf(false) }
 
   val sessionOptions = resolveSessionChoices(sessionKey, sessions, mainSessionKey = mainSessionKey)
-  val currentSessionLabel = friendlySessionName(
+  val currentSessionLabel =
     sessionOptions.firstOrNull { it.key == sessionKey }?.displayName ?: sessionKey
-  )
 
   val canSend = pendingRunCount == 0 && (input.trim().isNotEmpty() || attachments.isNotEmpty()) && healthOk
 
@@ -78,7 +76,7 @@ fun ChatComposer(
   ) {
     Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
       Row(
-        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+        modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
       ) {
@@ -87,13 +85,13 @@ fun ChatComposer(
             onClick = { showSessionMenu = true },
             contentPadding = ButtonDefaults.ContentPadding,
           ) {
-            Text(currentSessionLabel, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text("Session: $currentSessionLabel")
           }
 
           DropdownMenu(expanded = showSessionMenu, onDismissRequest = { showSessionMenu = false }) {
             for (entry in sessionOptions) {
               DropdownMenuItem(
-                text = { Text(friendlySessionName(entry.displayName ?: entry.key)) },
+                text = { Text(entry.displayName ?: entry.key) },
                 onClick = {
                   onSelectSession(entry.key)
                   showSessionMenu = false
@@ -115,7 +113,7 @@ fun ChatComposer(
             onClick = { showThinkingMenu = true },
             contentPadding = ButtonDefaults.ContentPadding,
           ) {
-            Text("🧠 ${thinkingLabel(thinkingLevel)}", maxLines = 1)
+            Text("Thinking: ${thinkingLabel(thinkingLevel)}")
           }
 
           DropdownMenu(expanded = showThinkingMenu, onDismissRequest = { showThinkingMenu = false }) {
@@ -125,6 +123,8 @@ fun ChatComposer(
             ThinkingMenuItem("high", thinkingLevel, onSetThinkingLevel) { showThinkingMenu = false }
           }
         }
+
+        Spacer(modifier = Modifier.weight(1f))
 
         FilledTonalIconButton(onClick = onRefresh, modifier = Modifier.size(42.dp)) {
           Icon(Icons.Default.Refresh, contentDescription = "Refresh")

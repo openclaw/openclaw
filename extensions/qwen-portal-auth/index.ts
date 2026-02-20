@@ -1,8 +1,4 @@
-import {
-  emptyPluginConfigSchema,
-  type OpenClawPluginApi,
-  type ProviderAuthContext,
-} from "openclaw/plugin-sdk";
+import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
 import { loginQwenPortalOAuth } from "./oauth.js";
 
 const PROVIDER_ID = "qwen-portal";
@@ -40,7 +36,7 @@ const qwenPortalPlugin = {
   name: "Qwen OAuth",
   description: "OAuth flow for Qwen (free-tier) models",
   configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
+  register(api) {
     api.registerProvider({
       id: PROVIDER_ID,
       label: PROVIDER_LABEL,
@@ -52,7 +48,7 @@ const qwenPortalPlugin = {
           label: "Qwen OAuth",
           hint: "Device code login",
           kind: "device_code",
-          run: async (ctx: ProviderAuthContext) => {
+          run: async (ctx) => {
             const progress = ctx.prompter.progress("Starting Qwen OAuth…");
             try {
               const result = await loginQwenPortalOAuth({

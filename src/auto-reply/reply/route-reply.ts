@@ -7,13 +7,13 @@
  * across multiple providers.
  */
 
+import type { OpenClawConfig } from "../../config/config.js";
+import type { OriginatingChannelType } from "../templating.js";
+import type { ReplyPayload } from "../types.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveEffectiveMessagesConfig } from "../../agents/identity.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
-import type { OpenClawConfig } from "../../config/config.js";
-import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
-import type { OriginatingChannelType } from "../templating.js";
-import type { ReplyPayload } from "../types.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
 
 export type RouteReplyParams = {
@@ -56,20 +56,15 @@ export type RouteReplyResult = {
  */
 export async function routeReply(params: RouteReplyParams): Promise<RouteReplyResult> {
   const { payload, channel, to, accountId, threadId, cfg, abortSignal } = params;
-  const normalizedChannel = normalizeMessageChannel(channel);
-  const resolvedAgentId = params.sessionKey
-    ? resolveSessionAgentId({
-        sessionKey: params.sessionKey,
-        config: cfg,
-      })
-    : undefined;
 
   // Debug: `pnpm test src/auto-reply/reply/route-reply.test.ts`
   const responsePrefix = params.sessionKey
     ? resolveEffectiveMessagesConfig(
         cfg,
-        resolvedAgentId ?? resolveSessionAgentId({ config: cfg }),
-        { channel: normalizedChannel, accountId },
+        resolveSessionAgentId({
+          sessionKey: params.sessionKey,
+          config: cfg,
+        }),
       ).responsePrefix
     : cfg.messages?.responsePrefix === "auto"
       ? undefined
@@ -126,13 +121,12 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       payloads: [normalized],
       replyToId: resolvedReplyToId ?? null,
       threadId: resolvedThreadId,
-      agentId: resolvedAgentId,
       abortSignal,
       mirror:
         params.mirror !== false && params.sessionKey
           ? {
               sessionKey: params.sessionKey,
-              agentId: resolvedAgentId,
+              agentId: resolveSessionAgentId({ sessionKey: params.sessionKey, config: cfg }),
               text,
               mediaUrls,
             }

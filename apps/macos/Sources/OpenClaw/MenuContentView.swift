@@ -337,7 +337,7 @@ struct MenuContent: View {
     private func openDashboard() async {
         do {
             let config = try await GatewayEndpointStore.shared.requireConfig()
-            let url = try GatewayEndpointStore.dashboardURL(for: config, mode: self.state.connectionMode)
+            let url = try GatewayEndpointStore.dashboardURL(for: config)
             NSWorkspace.shared.open(url)
         } catch {
             let alert = NSAlert()
@@ -400,6 +400,7 @@ struct MenuContent: View {
         }
     }
 
+    @ViewBuilder
     private func statusLine(label: String, color: Color) -> some View {
         HStack(spacing: 6) {
             Circle()
@@ -589,8 +590,6 @@ struct MenuContent: View {
     private struct AudioInputDevice: Identifiable, Equatable {
         let uid: String
         let name: String
-        var id: String {
-            self.uid
-        }
+        var id: String { self.uid }
     }
 }

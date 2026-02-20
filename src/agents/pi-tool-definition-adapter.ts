@@ -4,52 +4,13 @@ import type {
   AgentToolUpdateCallback,
 } from "@mariozechner/pi-agent-core";
 import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
-import { logDebug, logError } from "../logger.js";
-import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
-import { isPlainObject } from "../utils.js";
 import type { ClientToolDefinition } from "./pi-embedded-runner/run/params.js";
-import type { HookContext } from "./pi-tools.before-tool-call.js";
-import {
-  consumeAdjustedParamsForToolCall,
-  isToolWrappedWithBeforeToolCallHook,
-  runBeforeToolCallHook,
-} from "./pi-tools.before-tool-call.js";
+import { logDebug, logError } from "../logger.js";
 import { normalizeToolName } from "./tool-policy.js";
 import { jsonResult } from "./tools/common.js";
 
-type AnyAgentTool = AgentTool;
-
-type ToolExecuteArgsCurrent = [
-  string,
-  unknown,
-  AbortSignal | undefined,
-  AgentToolUpdateCallback<unknown> | undefined,
-  unknown,
-];
-type ToolExecuteArgsLegacy = [
-  string,
-  unknown,
-  AgentToolUpdateCallback<unknown> | undefined,
-  unknown,
-  AbortSignal | undefined,
-];
-type ToolExecuteArgs = ToolDefinition["execute"] extends (...args: infer P) => unknown
-  ? P
-  : ToolExecuteArgsCurrent;
-type ToolExecuteArgsAny = ToolExecuteArgs | ToolExecuteArgsLegacy | ToolExecuteArgsCurrent;
-
-function isAbortSignal(value: unknown): value is AbortSignal {
-  return typeof value === "object" && value !== null && "aborted" in value;
-}
-
-function isLegacyToolExecuteArgs(args: ToolExecuteArgsAny): args is ToolExecuteArgsLegacy {
-  const third = args[2];
-  const fifth = args[4];
-  if (typeof third === "function") {
-    return true;
-  }
-  return isAbortSignal(fifth);
-}
+// biome-ignore lint/suspicious/noExplicitAny: TypeBox schema type from pi-agent-core uses a different module instance.
+type AnyAgentTool = AgentTool<any, unknown>;
 
 function describeToolExecutionError(err: unknown): {
   message: string;
@@ -62,80 +23,27 @@ function describeToolExecutionError(err: unknown): {
   return { message: String(err) };
 }
 
-function splitToolExecuteArgs(args: ToolExecuteArgsAny): {
-  toolCallId: string;
-  params: unknown;
-  onUpdate: AgentToolUpdateCallback<unknown> | undefined;
-  signal: AbortSignal | undefined;
-} {
-  if (isLegacyToolExecuteArgs(args)) {
-    const [toolCallId, params, onUpdate, _ctx, signal] = args;
-    return {
-      toolCallId,
-      params,
-      onUpdate,
-      signal,
-    };
-  }
-  const [toolCallId, params, signal, onUpdate] = args;
-  return {
-    toolCallId,
-    params,
-    onUpdate,
-    signal,
-  };
-}
-
 export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
   return tools.map((tool) => {
     const name = tool.name || "tool";
     const normalizedName = normalizeToolName(name);
-    const beforeHookWrapped = isToolWrappedWithBeforeToolCallHook(tool);
     return {
       name,
       label: tool.label ?? name,
       description: tool.description ?? "",
+      // biome-ignore lint/suspicious/noExplicitAny: TypeBox schema from pi-agent-core uses a different module instance.
       parameters: tool.parameters,
-      execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
-        const { toolCallId, params, onUpdate, signal } = splitToolExecuteArgs(args);
-        let executeParams = params;
+      execute: async (
+        toolCallId,
+        params,
+        onUpdate: AgentToolUpdateCallback<unknown> | undefined,
+        _ctx,
+        signal,
+      ): Promise<AgentToolResult<unknown>> => {
+        // KNOWN: pi-coding-agent `ToolDefinition.execute` has a different signature/order
+        // than pi-agent-core `AgentTool.execute`. This adapter keeps our existing tools intact.
         try {
-          if (!beforeHookWrapped) {
-            const hookOutcome = await runBeforeToolCallHook({
-              toolName: name,
-              params,
-              toolCallId,
-            });
-            if (hookOutcome.blocked) {
-              throw new Error(hookOutcome.reason);
-            }
-            executeParams = hookOutcome.params;
-          }
-          const result = await tool.execute(toolCallId, executeParams, signal, onUpdate);
-          const afterParams = beforeHookWrapped
-            ? (consumeAdjustedParamsForToolCall(toolCallId) ?? executeParams)
-            : executeParams;
-
-          // Call after_tool_call hook
-          const hookRunner = getGlobalHookRunner();
-          if (hookRunner?.hasHooks("after_tool_call")) {
-            try {
-              await hookRunner.runAfterToolCall(
-                {
-                  toolName: name,
-                  params: isPlainObject(afterParams) ? afterParams : {},
-                  result,
-                },
-                { toolName: name },
-              );
-            } catch (hookErr) {
-              logDebug(
-                `after_tool_call hook failed: tool=${normalizedName} error=${String(hookErr)}`,
-              );
-            }
-          }
-
-          return result;
+          return await tool.execute(toolCallId, params, signal, onUpdate);
         } catch (err) {
           if (signal?.aborted) {
             throw err;
@@ -147,41 +55,16 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
           if (name === "AbortError") {
             throw err;
           }
-          if (beforeHookWrapped) {
-            consumeAdjustedParamsForToolCall(toolCallId);
-          }
           const described = describeToolExecutionError(err);
           if (described.stack && described.stack !== described.message) {
             logDebug(`tools: ${normalizedName} failed stack:\n${described.stack}`);
           }
           logError(`[tools] ${normalizedName} failed: ${described.message}`);
-
-          const errorResult = jsonResult({
+          return jsonResult({
             status: "error",
             tool: normalizedName,
             error: described.message,
           });
-
-          // Call after_tool_call hook for errors too
-          const hookRunner = getGlobalHookRunner();
-          if (hookRunner?.hasHooks("after_tool_call")) {
-            try {
-              await hookRunner.runAfterToolCall(
-                {
-                  toolName: normalizedName,
-                  params: isPlainObject(params) ? params : {},
-                  error: described.message,
-                },
-                { toolName: normalizedName },
-              );
-            } catch (hookErr) {
-              logDebug(
-                `after_tool_call hook failed: tool=${normalizedName} error=${String(hookErr)}`,
-              );
-            }
-          }
-
-          return errorResult;
         }
       },
     } satisfies ToolDefinition;
@@ -193,7 +76,6 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
 export function toClientToolDefinitions(
   tools: ClientToolDefinition[],
   onClientToolCall?: (toolName: string, params: Record<string, unknown>) => void,
-  hookContext?: HookContext,
 ): ToolDefinition[] {
   return tools.map((tool) => {
     const func = tool.function;
@@ -201,23 +83,17 @@ export function toClientToolDefinitions(
       name: func.name,
       label: func.name,
       description: func.description ?? "",
-      parameters: func.parameters as ToolDefinition["parameters"],
-      execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
-        const { toolCallId, params } = splitToolExecuteArgs(args);
-        const outcome = await runBeforeToolCallHook({
-          toolName: func.name,
-          params,
-          toolCallId,
-          ctx: hookContext,
-        });
-        if (outcome.blocked) {
-          throw new Error(outcome.reason);
-        }
-        const adjustedParams = outcome.params;
-        const paramsRecord = isPlainObject(adjustedParams) ? adjustedParams : {};
+      parameters: func.parameters as any,
+      execute: async (
+        toolCallId,
+        params,
+        _onUpdate: AgentToolUpdateCallback<unknown> | undefined,
+        _ctx,
+        _signal,
+      ): Promise<AgentToolResult<unknown>> => {
         // Notify handler that a client tool was called
         if (onClientToolCall) {
-          onClientToolCall(func.name, paramsRecord);
+          onClientToolCall(func.name, params as Record<string, unknown>);
         }
         // Return a pending result - the client will execute this tool
         return jsonResult({

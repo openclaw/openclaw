@@ -27,8 +27,7 @@ export async function listDiscordDirectoryGroupsLive(
     return [];
   }
   const query = normalizeQuery(params.query);
-  const rawGuilds = await fetchDiscord<DiscordGuild[]>("/users/@me/guilds", token);
-  const guilds = rawGuilds.filter((g) => g.id && g.name);
+  const guilds = await fetchDiscord<DiscordGuild[]>("/users/@me/guilds", token);
   const rows: ChannelDirectoryEntry[] = [];
 
   for (const guild of guilds) {
@@ -70,8 +69,7 @@ export async function listDiscordDirectoryPeersLive(
     return [];
   }
 
-  const rawGuilds = await fetchDiscord<DiscordGuild[]>("/users/@me/guilds", token);
-  const guilds = rawGuilds.filter((g) => g.id && g.name);
+  const guilds = await fetchDiscord<DiscordGuild[]>("/users/@me/guilds", token);
   const rows: ChannelDirectoryEntry[] = [];
   const limit = typeof params.limit === "number" && params.limit > 0 ? params.limit : 25;
 

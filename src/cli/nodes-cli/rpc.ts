@@ -1,10 +1,9 @@
 import type { Command } from "commander";
-import { callGateway, randomIdempotencyKey } from "../../gateway/call.js";
-import { resolveNodeIdFromCandidates } from "../../shared/node-match.js";
+import type { NodeListNode, NodesRpcOpts } from "./types.js";
+import { callGateway } from "../../gateway/call.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import { withProgress } from "../progress.js";
 import { parseNodeList, parsePairingList } from "./format.js";
-import type { NodeListNode, NodesRpcOpts } from "./types.js";
 
 export const nodesCallOpts = (cmd: Command, defaults?: { timeoutMs?: number }) =>
   cmd
@@ -13,12 +12,7 @@ export const nodesCallOpts = (cmd: Command, defaults?: { timeoutMs?: number }) =
     .option("--timeout <ms>", "Timeout in ms", String(defaults?.timeoutMs ?? 10_000))
     .option("--json", "Output JSON", false);
 
-export const callGatewayCli = async (
-  method: string,
-  opts: NodesRpcOpts,
-  params?: unknown,
-  callOpts?: { transportTimeoutMs?: number },
-) =>
+export const callGatewayCli = async (method: string, opts: NodesRpcOpts, params?: unknown) =>
   withProgress(
     {
       label: `Nodes ${method}`,
@@ -31,30 +25,11 @@ export const callGatewayCli = async (
         token: opts.token,
         method,
         params,
-        timeoutMs: callOpts?.transportTimeoutMs ?? Number(opts.timeout ?? 10_000),
+        timeoutMs: Number(opts.timeout ?? 10_000),
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,
       }),
   );
-
-export function buildNodeInvokeParams(params: {
-  nodeId: string;
-  command: string;
-  params?: Record<string, unknown>;
-  timeoutMs?: number;
-  idempotencyKey?: string;
-}): Record<string, unknown> {
-  const invokeParams: Record<string, unknown> = {
-    nodeId: params.nodeId,
-    command: params.command,
-    params: params.params,
-    idempotencyKey: params.idempotencyKey ?? randomIdempotencyKey(),
-  };
-  if (typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)) {
-    invokeParams.timeoutMs = params.timeoutMs;
-  }
-  return invokeParams;
-}
 
 export function unauthorizedHintForMessage(message: string): string | null {
   const haystack = message.toLowerCase();
@@ -70,6 +45,14 @@ export function unauthorizedHintForMessage(message: string): string | null {
     ].join(" ");
   }
   return null;
+}
+
+function normalizeNodeKey(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+/, "")
+    .replace(/-+$/, "");
 }
 
 export async function resolveNodeId(opts: NodesRpcOpts, query: string) {
@@ -93,5 +76,38 @@ export async function resolveNodeId(opts: NodesRpcOpts, query: string) {
       remoteIp: n.remoteIp,
     }));
   }
-  return resolveNodeIdFromCandidates(nodes, q);
+
+  const qNorm = normalizeNodeKey(q);
+  const matches = nodes.filter((n) => {
+    if (n.nodeId === q) {
+      return true;
+    }
+    if (typeof n.remoteIp === "string" && n.remoteIp === q) {
+      return true;
+    }
+    const name = typeof n.displayName === "string" ? n.displayName : "";
+    if (name && normalizeNodeKey(name) === qNorm) {
+      return true;
+    }
+    if (q.length >= 6 && n.nodeId.startsWith(q)) {
+      return true;
+    }
+    return false;
+  });
+
+  if (matches.length === 1) {
+    return matches[0].nodeId;
+  }
+  if (matches.length === 0) {
+    const known = nodes
+      .map((n) => n.displayName || n.remoteIp || n.nodeId)
+      .filter(Boolean)
+      .join(", ");
+    throw new Error(`unknown node: ${q}${known ? ` (known: ${known})` : ""}`);
+  }
+  throw new Error(
+    `ambiguous node: ${q} (matches: ${matches
+      .map((n) => n.displayName || n.remoteIp || n.nodeId)
+      .join(", ")})`,
+  );
 }

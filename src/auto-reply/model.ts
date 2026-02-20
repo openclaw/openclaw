@@ -1,4 +1,6 @@
-import { escapeRegExp } from "../utils.js";
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 export function extractModelDirective(
   body?: string,

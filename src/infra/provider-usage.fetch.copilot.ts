@@ -1,6 +1,6 @@
-import { buildUsageHttpErrorSnapshot, fetchJson } from "./provider-usage.fetch.shared.js";
-import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
 import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
+import { fetchJson } from "./provider-usage.fetch.shared.js";
+import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
 
 type CopilotUsageResponse = {
   quota_snapshots?: {
@@ -30,10 +30,12 @@ export async function fetchCopilotUsage(
   );
 
   if (!res.ok) {
-    return buildUsageHttpErrorSnapshot({
+    return {
       provider: "github-copilot",
-      status: res.status,
-    });
+      displayName: PROVIDER_LABELS["github-copilot"],
+      windows: [],
+      error: `HTTP ${res.status}`,
+    };
   }
 
   const data = (await res.json()) as CopilotUsageResponse;

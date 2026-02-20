@@ -2,10 +2,6 @@ import { note as clackNote } from "@clack/prompts";
 import { visibleWidth } from "./ansi.js";
 import { stylePromptTitle } from "./prompt-style.js";
 
-const URL_PREFIX_RE = /^(https?:\/\/|file:\/\/)/i;
-const WINDOWS_DRIVE_RE = /^[a-zA-Z]:[\\/]/;
-const FILE_LIKE_RE = /^[a-zA-Z0-9._-]+$/;
-
 function splitLongWord(word: string, maxLen: number): string[] {
   if (maxLen <= 0) {
     return [word];
@@ -16,31 +12,6 @@ function splitLongWord(word: string, maxLen: number): string[] {
     parts.push(chars.slice(i, i + maxLen).join(""));
   }
   return parts.length > 0 ? parts : [word];
-}
-
-function isCopySensitiveToken(word: string): boolean {
-  if (!word) {
-    return false;
-  }
-  if (URL_PREFIX_RE.test(word)) {
-    return true;
-  }
-  if (
-    word.startsWith("/") ||
-    word.startsWith("~/") ||
-    word.startsWith("./") ||
-    word.startsWith("../")
-  ) {
-    return true;
-  }
-  if (WINDOWS_DRIVE_RE.test(word) || word.startsWith("\\\\")) {
-    return true;
-  }
-  if (word.includes("/") || word.includes("\\")) {
-    return true;
-  }
-  // Preserve common file-like tokens (for example administrators_authorized_keys).
-  return word.includes("_") && FILE_LIKE_RE.test(word);
 }
 
 function wrapLine(line: string, maxWidth: number): string[] {
@@ -65,10 +36,6 @@ function wrapLine(line: string, maxWidth: number): string[] {
   for (const word of words) {
     if (!current) {
       if (visibleWidth(word) > available) {
-        if (isCopySensitiveToken(word)) {
-          current = word;
-          continue;
-        }
         const parts = splitLongWord(word, available);
         const first = parts.shift() ?? "";
         lines.push(prefix + first);
@@ -94,10 +61,6 @@ function wrapLine(line: string, maxWidth: number): string[] {
     available = nextWidth;
 
     if (visibleWidth(word) > available) {
-      if (isCopySensitiveToken(word)) {
-        current = word;
-        continue;
-      }
       const parts = splitLongWord(word, available);
       const first = parts.shift() ?? "";
       lines.push(prefix + first);

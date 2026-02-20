@@ -6,31 +6,9 @@ const DEFAULT_MAX_BUFFER_BYTES = 2 * 1024 * 1024;
 let lastAppliedKeys: string[] = [];
 let cachedShellPath: string | null | undefined;
 
-function resolveTimeoutMs(timeoutMs: number | undefined): number {
-  if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs)) {
-    return DEFAULT_TIMEOUT_MS;
-  }
-  return Math.max(0, timeoutMs);
-}
-
 function resolveShell(env: NodeJS.ProcessEnv): string {
   const shell = env.SHELL?.trim();
   return shell && shell.length > 0 ? shell : "/bin/sh";
-}
-
-function execLoginShellEnvZero(params: {
-  shell: string;
-  env: NodeJS.ProcessEnv;
-  exec: typeof execFileSync;
-  timeoutMs: number;
-}): Buffer {
-  return params.exec(params.shell, ["-l", "-c", "env -0"], {
-    encoding: "buffer",
-    timeout: params.timeoutMs,
-    maxBuffer: DEFAULT_MAX_BUFFER_BYTES,
-    env: params.env,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
 }
 
 function parseShellEnv(stdout: Buffer): Map<string, string> {
@@ -83,13 +61,22 @@ export function loadShellEnvFallback(opts: ShellEnvFallbackOptions): ShellEnvFal
     return { ok: true, applied: [], skippedReason: "already-has-keys" };
   }
 
-  const timeoutMs = resolveTimeoutMs(opts.timeoutMs);
+  const timeoutMs =
+    typeof opts.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
+      ? Math.max(0, opts.timeoutMs)
+      : DEFAULT_TIMEOUT_MS;
 
   const shell = resolveShell(opts.env);
 
   let stdout: Buffer;
   try {
-    stdout = execLoginShellEnvZero({ shell, env: opts.env, exec, timeoutMs });
+    stdout = exec(shell, ["-l", "-c", "env -0"], {
+      encoding: "buffer",
+      timeout: timeoutMs,
+      maxBuffer: DEFAULT_MAX_BUFFER_BYTES,
+      env: opts.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.warn(`[openclaw] shell env fallback failed: ${msg}`);
@@ -140,24 +127,31 @@ export function getShellPathFromLoginShell(opts: {
   env: NodeJS.ProcessEnv;
   timeoutMs?: number;
   exec?: typeof execFileSync;
-  platform?: NodeJS.Platform;
 }): string | null {
   if (cachedShellPath !== undefined) {
     return cachedShellPath;
   }
-  const platform = opts.platform ?? process.platform;
-  if (platform === "win32") {
+  if (process.platform === "win32") {
     cachedShellPath = null;
     return cachedShellPath;
   }
 
   const exec = opts.exec ?? execFileSync;
-  const timeoutMs = resolveTimeoutMs(opts.timeoutMs);
+  const timeoutMs =
+    typeof opts.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
+      ? Math.max(0, opts.timeoutMs)
+      : DEFAULT_TIMEOUT_MS;
   const shell = resolveShell(opts.env);
 
   let stdout: Buffer;
   try {
-    stdout = execLoginShellEnvZero({ shell, env: opts.env, exec, timeoutMs });
+    stdout = exec(shell, ["-l", "-c", "env -0"], {
+      encoding: "buffer",
+      timeout: timeoutMs,
+      maxBuffer: DEFAULT_MAX_BUFFER_BYTES,
+      env: opts.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
   } catch {
     cachedShellPath = null;
     return cachedShellPath;

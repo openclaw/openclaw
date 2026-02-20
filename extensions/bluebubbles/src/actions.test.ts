@@ -1,7 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { bluebubblesMessageActions } from "./actions.js";
-import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
 
 vi.mock("./accounts.js", () => ({
   resolveBlueBubblesAccount: vi.fn(({ cfg, accountId }) => {
@@ -42,22 +41,9 @@ vi.mock("./monitor.js", () => ({
   resolveBlueBubblesMessageId: vi.fn((id: string) => id),
 }));
 
-vi.mock("./probe.js", () => ({
-  isMacOS26OrHigher: vi.fn().mockReturnValue(false),
-  getCachedBlueBubblesPrivateApiStatus: vi.fn().mockReturnValue(null),
-}));
-
 describe("bluebubblesMessageActions", () => {
-  const listActions = bluebubblesMessageActions.listActions!;
-  const supportsAction = bluebubblesMessageActions.supportsAction!;
-  const extractToolSend = bluebubblesMessageActions.extractToolSend!;
-  const handleAction = bluebubblesMessageActions.handleAction!;
-  const callHandleAction = (ctx: Omit<Parameters<typeof handleAction>[0], "channel">) =>
-    handleAction({ channel: "bluebubbles", ...ctx });
-
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(getCachedBlueBubblesPrivateApiStatus).mockReturnValue(null);
   });
 
   describe("listActions", () => {
@@ -65,7 +51,7 @@ describe("bluebubblesMessageActions", () => {
       const cfg: OpenClawConfig = {
         channels: { bluebubbles: { enabled: false } },
       };
-      const actions = listActions({ cfg });
+      const actions = bluebubblesMessageActions.listActions({ cfg });
       expect(actions).toEqual([]);
     });
 
@@ -73,7 +59,7 @@ describe("bluebubblesMessageActions", () => {
       const cfg: OpenClawConfig = {
         channels: { bluebubbles: { enabled: true } },
       };
-      const actions = listActions({ cfg });
+      const actions = bluebubblesMessageActions.listActions({ cfg });
       expect(actions).toEqual([]);
     });
 
@@ -87,7 +73,7 @@ describe("bluebubblesMessageActions", () => {
           },
         },
       };
-      const actions = listActions({ cfg });
+      const actions = bluebubblesMessageActions.listActions({ cfg });
       expect(actions).toContain("react");
     });
 
@@ -102,66 +88,41 @@ describe("bluebubblesMessageActions", () => {
           },
         },
       };
-      const actions = listActions({ cfg });
+      const actions = bluebubblesMessageActions.listActions({ cfg });
       expect(actions).not.toContain("react");
       // Other actions should still be present
       expect(actions).toContain("edit");
       expect(actions).toContain("unsend");
     });
-
-    it("hides private-api actions when private API is disabled", () => {
-      vi.mocked(getCachedBlueBubblesPrivateApiStatus).mockReturnValueOnce(false);
-      const cfg: OpenClawConfig = {
-        channels: {
-          bluebubbles: {
-            enabled: true,
-            serverUrl: "http://localhost:1234",
-            password: "test-password",
-          },
-        },
-      };
-      const actions = listActions({ cfg });
-      expect(actions).toContain("sendAttachment");
-      expect(actions).not.toContain("react");
-      expect(actions).not.toContain("reply");
-      expect(actions).not.toContain("sendWithEffect");
-      expect(actions).not.toContain("edit");
-      expect(actions).not.toContain("unsend");
-      expect(actions).not.toContain("renameGroup");
-      expect(actions).not.toContain("setGroupIcon");
-      expect(actions).not.toContain("addParticipant");
-      expect(actions).not.toContain("removeParticipant");
-      expect(actions).not.toContain("leaveGroup");
-    });
   });
 
   describe("supportsAction", () => {
     it("returns true for react action", () => {
-      expect(supportsAction({ action: "react" })).toBe(true);
+      expect(bluebubblesMessageActions.supportsAction({ action: "react" })).toBe(true);
     });
 
     it("returns true for all supported actions", () => {
-      expect(supportsAction({ action: "edit" })).toBe(true);
-      expect(supportsAction({ action: "unsend" })).toBe(true);
-      expect(supportsAction({ action: "reply" })).toBe(true);
-      expect(supportsAction({ action: "sendWithEffect" })).toBe(true);
-      expect(supportsAction({ action: "renameGroup" })).toBe(true);
-      expect(supportsAction({ action: "setGroupIcon" })).toBe(true);
-      expect(supportsAction({ action: "addParticipant" })).toBe(true);
-      expect(supportsAction({ action: "removeParticipant" })).toBe(true);
-      expect(supportsAction({ action: "leaveGroup" })).toBe(true);
-      expect(supportsAction({ action: "sendAttachment" })).toBe(true);
+      expect(bluebubblesMessageActions.supportsAction({ action: "edit" })).toBe(true);
+      expect(bluebubblesMessageActions.supportsAction({ action: "unsend" })).toBe(true);
+      expect(bluebubblesMessageActions.supportsAction({ action: "reply" })).toBe(true);
+      expect(bluebubblesMessageActions.supportsAction({ action: "sendWithEffect" })).toBe(true);
+      expect(bluebubblesMessageActions.supportsAction({ action: "renameGroup" })).toBe(true);
+      expect(bluebubblesMessageActions.supportsAction({ action: "setGroupIcon" })).toBe(true);
+      expect(bluebubblesMessageActions.supportsAction({ action: "addParticipant" })).toBe(true);
+      expect(bluebubblesMessageActions.supportsAction({ action: "removeParticipant" })).toBe(true);
+      expect(bluebubblesMessageActions.supportsAction({ action: "leaveGroup" })).toBe(true);
+      expect(bluebubblesMessageActions.supportsAction({ action: "sendAttachment" })).toBe(true);
     });
 
     it("returns false for unsupported actions", () => {
-      expect(supportsAction({ action: "delete" as never })).toBe(false);
-      expect(supportsAction({ action: "unknown" as never })).toBe(false);
+      expect(bluebubblesMessageActions.supportsAction({ action: "delete" })).toBe(false);
+      expect(bluebubblesMessageActions.supportsAction({ action: "unknown" })).toBe(false);
     });
   });
 
   describe("extractToolSend", () => {
     it("extracts send params from sendMessage action", () => {
-      const result = extractToolSend({
+      const result = bluebubblesMessageActions.extractToolSend({
         args: {
           action: "sendMessage",
           to: "+15551234567",
@@ -175,14 +136,14 @@ describe("bluebubblesMessageActions", () => {
     });
 
     it("returns null for non-sendMessage action", () => {
-      const result = extractToolSend({
+      const result = bluebubblesMessageActions.extractToolSend({
         args: { action: "react", to: "+15551234567" },
       });
       expect(result).toBeNull();
     });
 
     it("returns null when to is missing", () => {
-      const result = extractToolSend({
+      const result = bluebubblesMessageActions.extractToolSend({
         args: { action: "sendMessage" },
       });
       expect(result).toBeNull();
@@ -200,8 +161,8 @@ describe("bluebubblesMessageActions", () => {
         },
       };
       await expect(
-        callHandleAction({
-          action: "unknownAction" as never,
+        bluebubblesMessageActions.handleAction({
+          action: "unknownAction",
           params: {},
           cfg,
           accountId: null,
@@ -219,33 +180,13 @@ describe("bluebubblesMessageActions", () => {
         },
       };
       await expect(
-        callHandleAction({
+        bluebubblesMessageActions.handleAction({
           action: "react",
           params: { messageId: "msg-123" },
           cfg,
           accountId: null,
         }),
       ).rejects.toThrow(/emoji/i);
-    });
-
-    it("throws a private-api error for private-only actions when disabled", async () => {
-      vi.mocked(getCachedBlueBubblesPrivateApiStatus).mockReturnValueOnce(false);
-      const cfg: OpenClawConfig = {
-        channels: {
-          bluebubbles: {
-            serverUrl: "http://localhost:1234",
-            password: "test-password",
-          },
-        },
-      };
-      await expect(
-        callHandleAction({
-          action: "react",
-          params: { emoji: "❤️", messageId: "msg-123", chatGuid: "iMessage;-;+15551234567" },
-          cfg,
-          accountId: null,
-        }),
-      ).rejects.toThrow("requires Private API");
     });
 
     it("throws when messageId is missing", async () => {
@@ -258,7 +199,7 @@ describe("bluebubblesMessageActions", () => {
         },
       };
       await expect(
-        callHandleAction({
+        bluebubblesMessageActions.handleAction({
           action: "react",
           params: { emoji: "❤️" },
           cfg,
@@ -280,7 +221,7 @@ describe("bluebubblesMessageActions", () => {
         },
       };
       await expect(
-        callHandleAction({
+        bluebubblesMessageActions.handleAction({
           action: "react",
           params: { emoji: "❤️", messageId: "msg-123", to: "+15551234567" },
           cfg,
@@ -300,7 +241,7 @@ describe("bluebubblesMessageActions", () => {
           },
         },
       };
-      const result = await callHandleAction({
+      const result = await bluebubblesMessageActions.handleAction({
         action: "react",
         params: {
           emoji: "❤️",
@@ -335,7 +276,7 @@ describe("bluebubblesMessageActions", () => {
           },
         },
       };
-      const result = await callHandleAction({
+      const result = await bluebubblesMessageActions.handleAction({
         action: "react",
         params: {
           emoji: "❤️",
@@ -371,7 +312,7 @@ describe("bluebubblesMessageActions", () => {
           },
         },
       };
-      await callHandleAction({
+      await bluebubblesMessageActions.handleAction({
         action: "react",
         params: {
           emoji: "👍",
@@ -401,7 +342,7 @@ describe("bluebubblesMessageActions", () => {
           },
         },
       };
-      await callHandleAction({
+      await bluebubblesMessageActions.handleAction({
         action: "react",
         params: {
           emoji: "😂",
@@ -433,7 +374,7 @@ describe("bluebubblesMessageActions", () => {
           },
         },
       };
-      await callHandleAction({
+      await bluebubblesMessageActions.handleAction({
         action: "react",
         params: {
           emoji: "👍",
@@ -472,7 +413,7 @@ describe("bluebubblesMessageActions", () => {
         },
       };
 
-      await callHandleAction({
+      await bluebubblesMessageActions.handleAction({
         action: "react",
         params: {
           emoji: "❤️",
@@ -507,7 +448,7 @@ describe("bluebubblesMessageActions", () => {
       };
 
       await expect(
-        callHandleAction({
+        bluebubblesMessageActions.handleAction({
           action: "react",
           params: {
             emoji: "❤️",
@@ -532,7 +473,7 @@ describe("bluebubblesMessageActions", () => {
         },
       };
 
-      await callHandleAction({
+      await bluebubblesMessageActions.handleAction({
         action: "edit",
         params: { messageId: "msg-123", message: "updated" },
         cfg,
@@ -558,7 +499,7 @@ describe("bluebubblesMessageActions", () => {
         },
       };
 
-      const result = await callHandleAction({
+      const result = await bluebubblesMessageActions.handleAction({
         action: "sendWithEffect",
         params: {
           message: "peekaboo",
@@ -593,7 +534,7 @@ describe("bluebubblesMessageActions", () => {
 
       const base64Buffer = Buffer.from("voice").toString("base64");
 
-      await callHandleAction({
+      await bluebubblesMessageActions.handleAction({
         action: "sendAttachment",
         params: {
           to: "+15551234567",
@@ -626,7 +567,7 @@ describe("bluebubblesMessageActions", () => {
       };
 
       await expect(
-        callHandleAction({
+        bluebubblesMessageActions.handleAction({
           action: "setGroupIcon",
           params: { chatGuid: "iMessage;-;chat-guid" },
           cfg,
@@ -651,7 +592,7 @@ describe("bluebubblesMessageActions", () => {
       const testBuffer = Buffer.from("fake-image-data");
       const base64Buffer = testBuffer.toString("base64");
 
-      const result = await callHandleAction({
+      const result = await bluebubblesMessageActions.handleAction({
         action: "setGroupIcon",
         params: {
           chatGuid: "iMessage;-;chat-guid",
@@ -688,7 +629,7 @@ describe("bluebubblesMessageActions", () => {
 
       const base64Buffer = Buffer.from("test").toString("base64");
 
-      await callHandleAction({
+      await bluebubblesMessageActions.handleAction({
         action: "setGroupIcon",
         params: {
           chatGuid: "iMessage;-;chat-guid",

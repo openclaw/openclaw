@@ -1,17 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { GatewayAuthResult } from "./auth.js";
 import { readJsonBody } from "./hooks.js";
-
-/**
- * Apply baseline security headers that are safe for all response types (API JSON,
- * HTML pages, static assets, SSE streams). Headers that restrict framing or set a
- * Content-Security-Policy are intentionally omitted here because some handlers
- * (canvas host, A2UI) serve content that may be loaded inside frames.
- */
-export function setDefaultSecurityHeaders(res: ServerResponse) {
-  res.setHeader("X-Content-Type-Options", "nosniff");
-  res.setHeader("Referrer-Policy", "no-referrer");
-}
 
 export function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.statusCode = status;
@@ -36,26 +24,6 @@ export function sendUnauthorized(res: ServerResponse) {
   });
 }
 
-export function sendRateLimited(res: ServerResponse, retryAfterMs?: number) {
-  if (retryAfterMs && retryAfterMs > 0) {
-    res.setHeader("Retry-After", String(Math.ceil(retryAfterMs / 1000)));
-  }
-  sendJson(res, 429, {
-    error: {
-      message: "Too many failed authentication attempts. Please try again later.",
-      type: "rate_limited",
-    },
-  });
-}
-
-export function sendGatewayAuthFailure(res: ServerResponse, authResult: GatewayAuthResult) {
-  if (authResult.rateLimited) {
-    sendRateLimited(res, authResult.retryAfterMs);
-    return;
-  }
-  sendUnauthorized(res);
-}
-
 export function sendInvalidRequest(res: ServerResponse, message: string) {
   sendJson(res, 400, {
     error: { message, type: "invalid_request_error" },
@@ -69,18 +37,6 @@ export async function readJsonBodyOrError(
 ): Promise<unknown> {
   const body = await readJsonBody(req, maxBytes);
   if (!body.ok) {
-    if (body.error === "payload too large") {
-      sendJson(res, 413, {
-        error: { message: "Payload too large", type: "invalid_request_error" },
-      });
-      return undefined;
-    }
-    if (body.error === "request body timeout") {
-      sendJson(res, 408, {
-        error: { message: "Request body timeout", type: "invalid_request_error" },
-      });
-      return undefined;
-    }
     sendInvalidRequest(res, body.error);
     return undefined;
   }

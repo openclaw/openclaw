@@ -35,7 +35,7 @@ describe("usage-format", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    } as OpenClawConfig;
 
     const cost = resolveModelCostConfig({
       provider: "test",

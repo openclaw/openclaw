@@ -1,7 +1,8 @@
-import fs from "node:fs";
 import { messagingApi } from "@line/bot-sdk";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { logVerbose } from "../globals.js";
-import { buildRandomTempFilePath } from "../plugin-sdk/temp-path.js";
 
 interface DownloadResult {
   path: string;
@@ -38,8 +39,10 @@ export async function downloadLineMedia(
   const contentType = detectContentType(buffer);
   const ext = getExtensionForContentType(contentType);
 
-  // Use random temp names; never derive paths from external message identifiers.
-  const filePath = buildRandomTempFilePath({ prefix: "line-media", extension: ext });
+  // Write to temp file
+  const tempDir = os.tmpdir();
+  const fileName = `line-media-${messageId}-${Date.now()}${ext}`;
+  const filePath = path.join(tempDir, fileName);
 
   await fs.promises.writeFile(filePath, buffer);
 

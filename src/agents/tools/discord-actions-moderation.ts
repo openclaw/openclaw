@@ -1,120 +1,105 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { DiscordActionConfig } from "../../config/config.js";
-import {
-  banMemberDiscord,
-  hasAnyGuildPermissionDiscord,
-  kickMemberDiscord,
-  timeoutMemberDiscord,
-} from "../../discord/send.js";
+import { banMemberDiscord, kickMemberDiscord, timeoutMemberDiscord } from "../../discord/send.js";
 import { type ActionGate, jsonResult, readStringParam } from "./common.js";
-import {
-  isDiscordModerationAction,
-  readDiscordModerationCommand,
-  requiredGuildPermissionForModerationAction,
-} from "./discord-actions-moderation-shared.js";
-
-async function verifySenderModerationPermission(params: {
-  guildId: string;
-  senderUserId?: string;
-  requiredPermission: bigint;
-  accountId?: string;
-}) {
-  // CLI/manual flows may not have sender context; enforce only when present.
-  if (!params.senderUserId) {
-    return;
-  }
-  const hasPermission = await hasAnyGuildPermissionDiscord(
-    params.guildId,
-    params.senderUserId,
-    [params.requiredPermission],
-    params.accountId ? { accountId: params.accountId } : undefined,
-  );
-  if (!hasPermission) {
-    throw new Error("Sender does not have required permissions for this moderation action.");
-  }
-}
 
 export async function handleDiscordModerationAction(
   action: string,
   params: Record<string, unknown>,
   isActionEnabled: ActionGate<DiscordActionConfig>,
 ): Promise<AgentToolResult<unknown>> {
-  if (!isDiscordModerationAction(action)) {
-    throw new Error(`Unknown action: ${action}`);
-  }
-  if (!isActionEnabled("moderation", false)) {
-    throw new Error("Discord moderation is disabled.");
-  }
-  const command = readDiscordModerationCommand(action, params);
   const accountId = readStringParam(params, "accountId");
-  const senderUserId = readStringParam(params, "senderUserId");
-  await verifySenderModerationPermission({
-    guildId: command.guildId,
-    senderUserId,
-    requiredPermission: requiredGuildPermissionForModerationAction(command.action),
-    accountId,
-  });
-  switch (command.action) {
+  switch (action) {
     case "timeout": {
+      if (!isActionEnabled("moderation", false)) {
+        throw new Error("Discord moderation is disabled.");
+      }
+      const guildId = readStringParam(params, "guildId", {
+        required: true,
+      });
+      const userId = readStringParam(params, "userId", {
+        required: true,
+      });
+      const durationMinutes =
+        typeof params.durationMinutes === "number" && Number.isFinite(params.durationMinutes)
+          ? params.durationMinutes
+          : undefined;
+      const until = readStringParam(params, "until");
+      const reason = readStringParam(params, "reason");
       const member = accountId
         ? await timeoutMemberDiscord(
             {
-              guildId: command.guildId,
-              userId: command.userId,
-              durationMinutes: command.durationMinutes,
-              until: command.until,
-              reason: command.reason,
+              guildId,
+              userId,
+              durationMinutes,
+              until,
+              reason,
             },
             { accountId },
           )
         : await timeoutMemberDiscord({
-            guildId: command.guildId,
-            userId: command.userId,
-            durationMinutes: command.durationMinutes,
-            until: command.until,
-            reason: command.reason,
+            guildId,
+            userId,
+            durationMinutes,
+            until,
+            reason,
           });
       return jsonResult({ ok: true, member });
     }
     case "kick": {
+      if (!isActionEnabled("moderation", false)) {
+        throw new Error("Discord moderation is disabled.");
+      }
+      const guildId = readStringParam(params, "guildId", {
+        required: true,
+      });
+      const userId = readStringParam(params, "userId", {
+        required: true,
+      });
+      const reason = readStringParam(params, "reason");
       if (accountId) {
-        await kickMemberDiscord(
-          {
-            guildId: command.guildId,
-            userId: command.userId,
-            reason: command.reason,
-          },
-          { accountId },
-        );
+        await kickMemberDiscord({ guildId, userId, reason }, { accountId });
       } else {
-        await kickMemberDiscord({
-          guildId: command.guildId,
-          userId: command.userId,
-          reason: command.reason,
-        });
+        await kickMemberDiscord({ guildId, userId, reason });
       }
       return jsonResult({ ok: true });
     }
     case "ban": {
+      if (!isActionEnabled("moderation", false)) {
+        throw new Error("Discord moderation is disabled.");
+      }
+      const guildId = readStringParam(params, "guildId", {
+        required: true,
+      });
+      const userId = readStringParam(params, "userId", {
+        required: true,
+      });
+      const reason = readStringParam(params, "reason");
+      const deleteMessageDays =
+        typeof params.deleteMessageDays === "number" && Number.isFinite(params.deleteMessageDays)
+          ? params.deleteMessageDays
+          : undefined;
       if (accountId) {
         await banMemberDiscord(
           {
-            guildId: command.guildId,
-            userId: command.userId,
-            reason: command.reason,
-            deleteMessageDays: command.deleteMessageDays,
+            guildId,
+            userId,
+            reason,
+            deleteMessageDays,
           },
           { accountId },
         );
       } else {
         await banMemberDiscord({
-          guildId: command.guildId,
-          userId: command.userId,
-          reason: command.reason,
-          deleteMessageDays: command.deleteMessageDays,
+          guildId,
+          userId,
+          reason,
+          deleteMessageDays,
         });
       }
       return jsonResult({ ok: true });
     }
+    default:
+      throw new Error(`Unknown action: ${action}`);
   }
 }

@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import { isAllowlistedCaller, normalizePhoneNumber } from "../allowlist.js";
 import type { CallRecord, CallState, NormalizedEvent } from "../types.js";
 import type { CallManagerContext } from "./context.js";
 import { findCall } from "./lookup.js";
@@ -13,21 +12,10 @@ import {
   startMaxDurationTimer,
 } from "./timers.js";
 
-type EventContext = Pick<
-  CallManagerContext,
-  | "activeCalls"
-  | "providerCallIdMap"
-  | "processedEventIds"
-  | "rejectedProviderCallIds"
-  | "provider"
-  | "config"
-  | "storePath"
-  | "transcriptWaiters"
-  | "maxDurationTimers"
-  | "onCallAnswered"
->;
-
-function shouldAcceptInbound(config: EventContext["config"], from: string | undefined): boolean {
+function shouldAcceptInbound(
+  config: CallManagerContext["config"],
+  from: string | undefined,
+): boolean {
   const { inboundPolicy: policy, allowFrom } = config;
 
   switch (policy) {
@@ -41,12 +29,11 @@ function shouldAcceptInbound(config: EventContext["config"], from: string | unde
 
     case "allowlist":
     case "pairing": {
-      const normalized = normalizePhoneNumber(from);
-      if (!normalized) {
-        console.log("[voice-call] Inbound call rejected: missing caller ID");
-        return false;
-      }
-      const allowed = isAllowlistedCaller(normalized, allowFrom);
+      const normalized = from?.replace(/\D/g, "") || "";
+      const allowed = (allowFrom || []).some((num) => {
+        const normalizedAllow = num.replace(/\D/g, "");
+        return normalized.endsWith(normalizedAllow) || normalizedAllow.endsWith(normalized);
+      });
       const status = allowed ? "accepted" : "rejected";
       console.log(
         `[voice-call] Inbound call ${status}: ${from} ${allowed ? "is in" : "not in"} allowlist`,
@@ -60,7 +47,7 @@ function shouldAcceptInbound(config: EventContext["config"], from: string | unde
 }
 
 function createInboundCall(params: {
-  ctx: EventContext;
+  ctx: CallManagerContext;
   providerCallId: string;
   from: string;
   to: string;
@@ -91,7 +78,7 @@ function createInboundCall(params: {
   return callRecord;
 }
 
-export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
+export function processEvent(ctx: CallManagerContext, event: NormalizedEvent): void {
   if (ctx.processedEventIds.has(event.id)) {
     return;
   }
@@ -105,29 +92,7 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
 
   if (!call && event.direction === "inbound" && event.providerCallId) {
     if (!shouldAcceptInbound(ctx.config, event.from)) {
-      const pid = event.providerCallId;
-      if (!ctx.provider) {
-        console.warn(
-          `[voice-call] Inbound call rejected by policy but no provider to hang up (providerCallId: ${pid}, from: ${event.from}); call will time out on provider side.`,
-        );
-        return;
-      }
-      if (ctx.rejectedProviderCallIds.has(pid)) {
-        return;
-      }
-      ctx.rejectedProviderCallIds.add(pid);
-      const callId = event.callId ?? pid;
-      console.log(`[voice-call] Rejecting inbound call by policy: ${pid}`);
-      void ctx.provider
-        .hangupCall({
-          callId,
-          providerCallId: pid,
-          reason: "hangup-bot",
-        })
-        .catch((err) => {
-          const message = err instanceof Error ? err.message : String(err);
-          console.warn(`[voice-call] Failed to reject inbound call ${pid}:`, message);
-        });
+      // TODO: Could hang up the call here.
       return;
     }
 
@@ -146,16 +111,9 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
     return;
   }
 
-  if (event.providerCallId && event.providerCallId !== call.providerCallId) {
-    const previousProviderCallId = call.providerCallId;
+  if (event.providerCallId && !call.providerCallId) {
     call.providerCallId = event.providerCallId;
     ctx.providerCallIdMap.set(event.providerCallId, call.callId);
-    if (previousProviderCallId) {
-      const mapped = ctx.providerCallIdMap.get(previousProviderCallId);
-      if (mapped === call.callId) {
-        ctx.providerCallIdMap.delete(previousProviderCallId);
-      }
-    }
   }
 
   call.processedEventIds.push(event.id);
@@ -179,7 +137,6 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
           await endCall(ctx, callId);
         },
       });
-      ctx.onCallAnswered?.(call);
       break;
 
     case "call.active":

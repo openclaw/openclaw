@@ -6,7 +6,6 @@ import type { ChannelId } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { findFenceSpanAt, isSafeFenceBreak, parseFenceSpans } from "../markdown/fences.js";
 import { normalizeAccountId } from "../routing/session-key.js";
-import { chunkTextByBreakResolver } from "../shared/text-chunking.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 
 export type TextChunkProvider = ChannelId | typeof INTERNAL_MESSAGE_CHANNEL;
@@ -299,7 +298,7 @@ function splitByNewline(
   return lines;
 }
 
-function resolveChunkEarlyReturn(text: string, limit: number): string[] | undefined {
+export function chunkText(text: string, limit: number): string[] {
   if (!text) {
     return [];
   }
@@ -309,26 +308,52 @@ function resolveChunkEarlyReturn(text: string, limit: number): string[] | undefi
   if (text.length <= limit) {
     return [text];
   }
-  return undefined;
-}
 
-export function chunkText(text: string, limit: number): string[] {
-  const early = resolveChunkEarlyReturn(text, limit);
-  if (early) {
-    return early;
-  }
-  return chunkTextByBreakResolver(text, limit, (window) => {
+  const chunks: string[] = [];
+  let remaining = text;
+
+  while (remaining.length > limit) {
+    const window = remaining.slice(0, limit);
+
     // 1) Prefer a newline break inside the window (outside parentheses).
     const { lastNewline, lastWhitespace } = scanParenAwareBreakpoints(window);
+
     // 2) Otherwise prefer the last whitespace (word boundary) inside the window.
-    return lastNewline > 0 ? lastNewline : lastWhitespace;
-  });
+    let breakIdx = lastNewline > 0 ? lastNewline : lastWhitespace;
+
+    // 3) Fallback: hard break exactly at the limit.
+    if (breakIdx <= 0) {
+      breakIdx = limit;
+    }
+
+    const rawChunk = remaining.slice(0, breakIdx);
+    const chunk = rawChunk.trimEnd();
+    if (chunk.length > 0) {
+      chunks.push(chunk);
+    }
+
+    // If we broke on whitespace/newline, skip that separator; for hard breaks keep it.
+    const brokeOnSeparator = breakIdx < remaining.length && /\s/.test(remaining[breakIdx]);
+    const nextStart = Math.min(remaining.length, breakIdx + (brokeOnSeparator ? 1 : 0));
+    remaining = remaining.slice(nextStart).trimStart();
+  }
+
+  if (remaining.length) {
+    chunks.push(remaining);
+  }
+
+  return chunks;
 }
 
 export function chunkMarkdownText(text: string, limit: number): string[] {
-  const early = resolveChunkEarlyReturn(text, limit);
-  if (early) {
-    return early;
+  if (!text) {
+    return [];
+  }
+  if (limit <= 0) {
+    return [text];
+  }
+  if (text.length <= limit) {
+    return [text];
   }
 
   const chunks: string[] = [];

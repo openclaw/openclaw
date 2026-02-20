@@ -15,11 +15,6 @@ import type { WizardPrompter } from "openclaw/plugin-sdk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TwitchAccountConfig } from "./types.js";
 
-vi.mock("openclaw/plugin-sdk", () => ({
-  formatDocsLink: (url: string, fallback: string) => fallback || url,
-  promptChannelAccessConfig: vi.fn(async () => null),
-}));
-
 // Mock the helpers we're testing
 const mockPromptText = vi.fn();
 const mockPromptConfirm = vi.fn();

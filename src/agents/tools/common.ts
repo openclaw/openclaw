@@ -1,13 +1,10 @@
-import fs from "node:fs/promises";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
+import fs from "node:fs/promises";
 import { detectMime } from "../../media/mime.js";
-import type { ImageSanitizationLimits } from "../image-sanitization.js";
 import { sanitizeToolResultImages } from "../tool-images.js";
 
-// oxlint-disable-next-line typescript/no-explicit-any
-export type AnyAgentTool = AgentTool<any, unknown> & {
-  ownerOnly?: boolean;
-};
+// biome-ignore lint/suspicious/noExplicitAny: TypeBox schema type from pi-agent-core uses a different module instance.
+export type AnyAgentTool = AgentTool<any, unknown>;
 
 export type StringParamOptions = {
   required?: boolean;
@@ -20,17 +17,6 @@ export type ActionGate<T extends Record<string, boolean | undefined>> = (
   key: keyof T,
   defaultValue?: boolean,
 ) => boolean;
-
-export const OWNER_ONLY_TOOL_ERROR = "Tool restricted to owner senders.";
-
-export class ToolInputError extends Error {
-  readonly status = 400;
-
-  constructor(message: string) {
-    super(message);
-    this.name = "ToolInputError";
-  }
-}
 
 export function createActionGate<T extends Record<string, boolean | undefined>>(
   actions: T | undefined,
@@ -63,14 +49,14 @@ export function readStringParam(
   const raw = params[key];
   if (typeof raw !== "string") {
     if (required) {
-      throw new ToolInputError(`${label} required`);
+      throw new Error(`${label} required`);
     }
     return undefined;
   }
   const value = trim ? raw.trim() : raw;
   if (!value && !allowEmpty) {
     if (required) {
-      throw new ToolInputError(`${label} required`);
+      throw new Error(`${label} required`);
     }
     return undefined;
   }
@@ -94,7 +80,7 @@ export function readStringOrNumberParam(
     }
   }
   if (required) {
-    throw new ToolInputError(`${label} required`);
+    throw new Error(`${label} required`);
   }
   return undefined;
 }
@@ -120,7 +106,7 @@ export function readNumberParam(
   }
   if (value === undefined) {
     if (required) {
-      throw new ToolInputError(`${label} required`);
+      throw new Error(`${label} required`);
     }
     return undefined;
   }
@@ -151,7 +137,7 @@ export function readStringArrayParam(
       .filter(Boolean);
     if (values.length === 0) {
       if (required) {
-        throw new ToolInputError(`${label} required`);
+        throw new Error(`${label} required`);
       }
       return undefined;
     }
@@ -161,14 +147,14 @@ export function readStringArrayParam(
     const value = raw.trim();
     if (!value) {
       if (required) {
-        throw new ToolInputError(`${label} required`);
+        throw new Error(`${label} required`);
       }
       return undefined;
     }
     return [value];
   }
   if (required) {
-    throw new ToolInputError(`${label} required`);
+    throw new Error(`${label} required`);
   }
   return undefined;
 }
@@ -195,7 +181,7 @@ export function readReactionParams(
     allowEmpty: true,
   });
   if (remove && !emoji) {
-    throw new ToolInputError(options.removeErrorMessage);
+    throw new Error(options.removeErrorMessage);
   }
   return { emoji, remove, isEmpty: !emoji };
 }
@@ -212,21 +198,6 @@ export function jsonResult(payload: unknown): AgentToolResult<unknown> {
   };
 }
 
-export function wrapOwnerOnlyToolExecution(
-  tool: AnyAgentTool,
-  senderIsOwner: boolean,
-): AnyAgentTool {
-  if (tool.ownerOnly !== true || senderIsOwner || !tool.execute) {
-    return tool;
-  }
-  return {
-    ...tool,
-    execute: async () => {
-      throw new Error(OWNER_ONLY_TOOL_ERROR);
-    },
-  };
-}
-
 export async function imageResult(params: {
   label: string;
   path: string;
@@ -234,7 +205,6 @@ export async function imageResult(params: {
   mimeType: string;
   extraText?: string;
   details?: Record<string, unknown>;
-  imageSanitization?: ImageSanitizationLimits;
 }): Promise<AgentToolResult<unknown>> {
   const content: AgentToolResult<unknown>["content"] = [
     {
@@ -251,7 +221,7 @@ export async function imageResult(params: {
     content,
     details: { path: params.path, ...params.details },
   };
-  return await sanitizeToolResultImages(result, params.label, params.imageSanitization);
+  return await sanitizeToolResultImages(result, params.label);
 }
 
 export async function imageResultFromFile(params: {
@@ -259,7 +229,6 @@ export async function imageResultFromFile(params: {
   path: string;
   extraText?: string;
   details?: Record<string, unknown>;
-  imageSanitization?: ImageSanitizationLimits;
 }): Promise<AgentToolResult<unknown>> {
   const buf = await fs.readFile(params.path);
   const mimeType = (await detectMime({ buffer: buf.slice(0, 256) })) ?? "image/png";
@@ -270,6 +239,5 @@ export async function imageResultFromFile(params: {
     mimeType,
     extraText: params.extraText,
     details: params.details,
-    imageSanitization: params.imageSanitization,
   });
 }

@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { validateConfigObject } from "./config.js";
+import { describe, expect, it, vi } from "vitest";
 
 describe("config msteams", () => {
-  it("accepts replyStyle at global/team/channel levels", () => {
+  it("accepts replyStyle at global/team/channel levels", async () => {
+    vi.resetModules();
+    const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({
       channels: {
         msteams: {
@@ -28,7 +29,9 @@ describe("config msteams", () => {
     }
   });
 
-  it("rejects invalid replyStyle", () => {
+  it("rejects invalid replyStyle", async () => {
+    vi.resetModules();
+    const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({
       channels: { msteams: { replyStyle: "nope" } },
     });

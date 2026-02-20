@@ -154,6 +154,7 @@ Notes:
 ## Install Lobster
 
 Install the Lobster CLI on the **same host** that runs the OpenClaw Gateway (see the [Lobster repo](https://github.com/openclaw/lobster)), and ensure `lobster` is on `PATH`.
+If you want to use a custom binary location, pass an **absolute** `lobsterPath` in the tool call.
 
 ## Enable the tool
 
@@ -255,7 +256,7 @@ Run a pipeline in tool mode.
 {
   "action": "run",
   "pipeline": "gog.gmail.search --query 'newer_than:1d' | email.triage",
-  "cwd": "workspace",
+  "cwd": "/path/to/workspace",
   "timeoutMs": 30000,
   "maxStdoutBytes": 512000
 }
@@ -285,7 +286,8 @@ Continue a halted workflow after approval.
 
 ### Optional inputs
 
-- `cwd`: Relative working directory for the pipeline (must stay within the current process working directory).
+- `lobsterPath`: Absolute path to the Lobster binary (omit to use `PATH`).
+- `cwd`: Working directory for the pipeline (defaults to the current process working directory).
 - `timeoutMs`: Kill the subprocess if it exceeds this duration (default: 20000).
 - `maxStdoutBytes`: Kill the subprocess if stdout exceeds this size (default: 512000).
 - `argsJson`: JSON string passed to `lobster run --args-json` (workflow files only).
@@ -318,7 +320,7 @@ OpenProse pairs well with Lobster: use `/prose` to orchestrate multi-agent prep,
 - **Local subprocess only** — no network calls from the plugin itself.
 - **No secrets** — Lobster doesn't manage OAuth; it calls OpenClaw tools that do.
 - **Sandbox-aware** — disabled when the tool context is sandboxed.
-- **Hardened** — fixed executable name (`lobster`) on `PATH`; timeouts and output caps enforced.
+- **Hardened** — `lobsterPath` must be absolute if specified; timeouts and output caps enforced.
 
 ## Troubleshooting
 
@@ -329,12 +331,12 @@ OpenProse pairs well with Lobster: use `/prose` to orchestrate multi-agent prep,
 
 ## Learn more
 
-- [Plugins](/tools/plugin)
+- [Plugins](/plugin)
 - [Plugin tool authoring](/plugins/agent-tools)
 
 ## Case study: community workflows
 
 One public example: a “second brain” CLI + Lobster pipelines that manage three Markdown vaults (personal, partner, shared). The CLI emits JSON for stats, inbox listings, and stale scans; Lobster chains those commands into workflows like `weekly-review`, `inbox-triage`, `memory-consolidation`, and `shared-task-sync`, each with approval gates. AI handles judgment (categorization) when available and falls back to deterministic rules when not.
 
-- Thread: [https://x.com/plattenschieber/status/2014508656335770033](https://x.com/plattenschieber/status/2014508656335770033)
-- Repo: [https://github.com/bloomedai/brain-cli](https://github.com/bloomedai/brain-cli)
+- Thread: https://x.com/plattenschieber/status/2014508656335770033
+- Repo: https://github.com/bloomedai/brain-cli

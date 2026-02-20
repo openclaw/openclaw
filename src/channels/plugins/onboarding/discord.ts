@@ -1,6 +1,8 @@
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { DiscordGuildEntry } from "../../../config/types.discord.js";
 import type { DmPolicy } from "../../../config/types.js";
+import type { WizardPrompter } from "../../../wizard/prompts.js";
+import type { ChannelOnboardingAdapter, ChannelOnboardingDmPolicy } from "../onboarding-types.js";
 import {
   listDiscordAccountIds,
   resolveDefaultDiscordAccountId,
@@ -14,28 +16,25 @@ import {
 import { resolveDiscordUserAllowlist } from "../../../discord/resolve-users.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../routing/session-key.js";
 import { formatDocsLink } from "../../../terminal/links.js";
-import type { WizardPrompter } from "../../../wizard/prompts.js";
-import type { ChannelOnboardingAdapter, ChannelOnboardingDmPolicy } from "../onboarding-types.js";
 import { promptChannelAccessConfig } from "./channel-access.js";
-import { addWildcardAllowFrom, promptAccountId, promptResolvedAllowFrom } from "./helpers.js";
+import { addWildcardAllowFrom, promptAccountId } from "./helpers.js";
 
 const channel = "discord" as const;
 
 function setDiscordDmPolicy(cfg: OpenClawConfig, dmPolicy: DmPolicy) {
-  const existingAllowFrom =
-    cfg.channels?.discord?.allowFrom ?? cfg.channels?.discord?.dm?.allowFrom;
-  const allowFrom = dmPolicy === "open" ? addWildcardAllowFrom(existingAllowFrom) : undefined;
+  const allowFrom =
+    dmPolicy === "open" ? addWildcardAllowFrom(cfg.channels?.discord?.dm?.allowFrom) : undefined;
   return {
     ...cfg,
     channels: {
       ...cfg.channels,
       discord: {
         ...cfg.channels?.discord,
-        dmPolicy,
-        ...(allowFrom ? { allowFrom } : {}),
         dm: {
           ...cfg.channels?.discord?.dm,
           enabled: cfg.channels?.discord?.dm?.enabled ?? true,
+          policy: dmPolicy,
+          ...(allowFrom ? { allowFrom } : {}),
         },
       },
     },
@@ -55,10 +54,10 @@ async function noteDiscordTokenHelp(prompter: WizardPrompter): Promise<void> {
   );
 }
 
-function patchDiscordConfigForAccount(
+function setDiscordGroupPolicy(
   cfg: OpenClawConfig,
   accountId: string,
-  patch: Record<string, unknown>,
+  groupPolicy: "open" | "allowlist" | "disabled",
 ): OpenClawConfig {
   if (accountId === DEFAULT_ACCOUNT_ID) {
     return {
@@ -68,7 +67,7 @@ function patchDiscordConfigForAccount(
         discord: {
           ...cfg.channels?.discord,
           enabled: true,
-          ...patch,
+          groupPolicy,
         },
       },
     };
@@ -85,20 +84,12 @@ function patchDiscordConfigForAccount(
           [accountId]: {
             ...cfg.channels?.discord?.accounts?.[accountId],
             enabled: cfg.channels?.discord?.accounts?.[accountId]?.enabled ?? true,
-            ...patch,
+            groupPolicy,
           },
         },
       },
     },
   };
-}
-
-function setDiscordGroupPolicy(
-  cfg: OpenClawConfig,
-  accountId: string,
-  groupPolicy: "open" | "allowlist" | "disabled",
-): OpenClawConfig {
-  return patchDiscordConfigForAccount(cfg, accountId, { groupPolicy });
 }
 
 function setDiscordGuildChannelAllowlist(
@@ -125,7 +116,37 @@ function setDiscordGuildChannelAllowlist(
       guilds[guildKey] = existing;
     }
   }
-  return patchDiscordConfigForAccount(cfg, accountId, { guilds });
+  if (accountId === DEFAULT_ACCOUNT_ID) {
+    return {
+      ...cfg,
+      channels: {
+        ...cfg.channels,
+        discord: {
+          ...cfg.channels?.discord,
+          enabled: true,
+          guilds,
+        },
+      },
+    };
+  }
+  return {
+    ...cfg,
+    channels: {
+      ...cfg.channels,
+      discord: {
+        ...cfg.channels?.discord,
+        enabled: true,
+        accounts: {
+          ...cfg.channels?.discord?.accounts,
+          [accountId]: {
+            ...cfg.channels?.discord?.accounts?.[accountId],
+            enabled: cfg.channels?.discord?.accounts?.[accountId]?.enabled ?? true,
+            guilds,
+          },
+        },
+      },
+    },
+  };
 }
 
 function setDiscordAllowFrom(cfg: OpenClawConfig, allowFrom: string[]): OpenClawConfig {
@@ -135,10 +156,10 @@ function setDiscordAllowFrom(cfg: OpenClawConfig, allowFrom: string[]): OpenClaw
       ...cfg.channels,
       discord: {
         ...cfg.channels?.discord,
-        allowFrom,
         dm: {
           ...cfg.channels?.discord?.dm,
           enabled: cfg.channels?.discord?.dm?.enabled ?? true,
+          allowFrom,
         },
       },
     },
@@ -163,8 +184,7 @@ async function promptDiscordAllowFrom(params: {
       : resolveDefaultDiscordAccountId(params.cfg);
   const resolved = resolveDiscordAccount({ cfg: params.cfg, accountId });
   const token = resolved.token;
-  const existing =
-    params.cfg.channels?.discord?.allowFrom ?? params.cfg.channels?.discord?.dm?.allowFrom ?? [];
+  const existing = params.cfg.channels?.discord?.dm?.allowFrom ?? [];
   await params.prompter.note(
     [
       "Allowlist Discord DMs by username (we resolve to user ids).",
@@ -195,32 +215,57 @@ async function promptDiscordAllowFrom(params: {
     return null;
   };
 
-  const unique = await promptResolvedAllowFrom({
-    prompter: params.prompter,
-    existing,
-    token,
-    message: "Discord allowFrom (usernames or ids)",
-    placeholder: "@alice, 123456789012345678",
-    label: "Discord allowlist",
-    parseInputs,
-    parseId,
-    invalidWithoutTokenNote: "Bot token missing; use numeric user ids (or mention form) only.",
-    resolveEntries: ({ token, entries }) =>
-      resolveDiscordUserAllowlist({
-        token,
-        entries,
-      }),
-  });
-  return setDiscordAllowFrom(params.cfg, unique);
+  while (true) {
+    const entry = await params.prompter.text({
+      message: "Discord allowFrom (usernames or ids)",
+      placeholder: "@alice, 123456789012345678",
+      initialValue: existing[0] ? String(existing[0]) : undefined,
+      validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
+    });
+    const parts = parseInputs(String(entry));
+    if (!token) {
+      const ids = parts.map(parseId).filter(Boolean) as string[];
+      if (ids.length !== parts.length) {
+        await params.prompter.note(
+          "Bot token missing; use numeric user ids (or mention form) only.",
+          "Discord allowlist",
+        );
+        continue;
+      }
+      const unique = [...new Set([...existing.map((v) => String(v).trim()), ...ids])].filter(
+        Boolean,
+      );
+      return setDiscordAllowFrom(params.cfg, unique);
+    }
+
+    const results = await resolveDiscordUserAllowlist({
+      token,
+      entries: parts,
+    }).catch(() => null);
+    if (!results) {
+      await params.prompter.note("Failed to resolve usernames. Try again.", "Discord allowlist");
+      continue;
+    }
+    const unresolved = results.filter((res) => !res.resolved || !res.id);
+    if (unresolved.length > 0) {
+      await params.prompter.note(
+        `Could not resolve: ${unresolved.map((res) => res.input).join(", ")}`,
+        "Discord allowlist",
+      );
+      continue;
+    }
+    const ids = results.map((res) => res.id as string);
+    const unique = [...new Set([...existing.map((v) => String(v).trim()).filter(Boolean), ...ids])];
+    return setDiscordAllowFrom(params.cfg, unique);
+  }
 }
 
 const dmPolicy: ChannelOnboardingDmPolicy = {
   label: "Discord",
   channel,
-  policyKey: "channels.discord.dmPolicy",
-  allowFromKey: "channels.discord.allowFrom",
-  getCurrent: (cfg) =>
-    cfg.channels?.discord?.dmPolicy ?? cfg.channels?.discord?.dm?.policy ?? "pairing",
+  policyKey: "channels.discord.dm.policy",
+  allowFromKey: "channels.discord.dm.allowFrom",
+  getCurrent: (cfg) => cfg.channels?.discord?.dm?.policy ?? "pairing",
   setPolicy: (cfg, policy) => setDiscordDmPolicy(cfg, policy),
   promptAllowFrom: promptDiscordAllowFrom,
 };
@@ -349,8 +394,7 @@ export const discordOnboardingAdapter: ChannelOnboardingAdapter = {
         const channels = value?.channels ?? {};
         const channelKeys = Object.keys(channels);
         if (channelKeys.length === 0) {
-          const input = /^\d+$/.test(guildKey) ? `guild:${guildKey}` : guildKey;
-          return [input];
+          return [guildKey];
         }
         return channelKeys.map((channelKey) => `${guildKey}/${channelKey}`);
       },

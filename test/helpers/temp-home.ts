@@ -9,7 +9,6 @@ type EnvSnapshot = {
   userProfile: string | undefined;
   homeDrive: string | undefined;
   homePath: string | undefined;
-  openclawHome: string | undefined;
   stateDir: string | undefined;
 };
 
@@ -19,7 +18,6 @@ function snapshotEnv(): EnvSnapshot {
     userProfile: process.env.USERPROFILE,
     homeDrive: process.env.HOMEDRIVE,
     homePath: process.env.HOMEPATH,
-    openclawHome: process.env.OPENCLAW_HOME,
     stateDir: process.env.OPENCLAW_STATE_DIR,
   };
 }
@@ -36,7 +34,6 @@ function restoreEnv(snapshot: EnvSnapshot) {
   restoreKey("USERPROFILE", snapshot.userProfile);
   restoreKey("HOMEDRIVE", snapshot.homeDrive);
   restoreKey("HOMEPATH", snapshot.homePath);
-  restoreKey("OPENCLAW_HOME", snapshot.openclawHome);
   restoreKey("OPENCLAW_STATE_DIR", snapshot.stateDir);
 }
 
@@ -61,8 +58,6 @@ function restoreExtraEnv(snapshot: Record<string, string | undefined>) {
 function setTempHome(base: string) {
   process.env.HOME = base;
   process.env.USERPROFILE = base;
-  // Ensure tests using HOME isolation aren't affected by leaked OPENCLAW_HOME.
-  delete process.env.OPENCLAW_HOME;
   process.env.OPENCLAW_STATE_DIR = path.join(base, ".openclaw");
 
   if (process.platform !== "win32") {
@@ -109,19 +104,12 @@ export async function withTempHome<T>(
     restoreExtraEnv(envSnapshot);
     restoreEnv(snapshot);
     try {
-      if (process.platform === "win32") {
-        await fs.rm(base, {
-          recursive: true,
-          force: true,
-          maxRetries: 10,
-          retryDelay: 50,
-        });
-      } else {
-        await fs.rm(base, {
-          recursive: true,
-          force: true,
-        });
-      }
+      await fs.rm(base, {
+        recursive: true,
+        force: true,
+        maxRetries: 10,
+        retryDelay: 50,
+      });
     } catch {
       // ignore cleanup failures in tests
     }

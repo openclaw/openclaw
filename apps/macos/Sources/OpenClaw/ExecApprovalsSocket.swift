@@ -1,8 +1,8 @@
 import AppKit
+import OpenClawKit
 import CryptoKit
 import Darwin
 import Foundation
-import OpenClawKit
 import OSLog
 
 struct ExecApprovalPromptRequest: Codable, Sendable {
@@ -76,9 +76,7 @@ private struct ExecHostResponse: Codable {
 enum ExecApprovalsSocketClient {
     private struct TimeoutError: LocalizedError {
         var message: String
-        var errorDescription: String? {
-            self.message
-        }
+        var errorDescription: String? { self.message }
     }
 
     static func requestDecision(
@@ -244,8 +242,6 @@ enum ExecApprovalsPromptPresenter {
         stack.orientation = .vertical
         stack.spacing = 8
         stack.alignment = .leading
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        stack.widthAnchor.constraint(greaterThanOrEqualToConstant: 380).isActive = true
 
         let commandTitle = NSTextField(labelWithString: "Command")
         commandTitle.font = NSFont.boldSystemFont(ofSize: NSFont.systemFontSize)
@@ -262,19 +258,16 @@ enum ExecApprovalsPromptPresenter {
         commandText.textContainer?.lineFragmentPadding = 0
         commandText.textContainer?.widthTracksTextView = true
         commandText.isHorizontallyResizable = false
-        commandText.isVerticallyResizable = true
+        commandText.isVerticallyResizable = false
 
         let commandScroll = NSScrollView()
         commandScroll.borderType = .lineBorder
-        commandScroll.hasVerticalScroller = true
+        commandScroll.hasVerticalScroller = false
         commandScroll.hasHorizontalScroller = false
-        commandScroll.autohidesScrollers = true
         commandScroll.documentView = commandText
         commandScroll.translatesAutoresizingMaskIntoConstraints = false
-        commandScroll.widthAnchor.constraint(greaterThanOrEqualToConstant: 380).isActive = true
         commandScroll.widthAnchor.constraint(lessThanOrEqualToConstant: 440).isActive = true
         commandScroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 56).isActive = true
-        commandScroll.heightAnchor.constraint(lessThanOrEqualToConstant: 120).isActive = true
         stack.addArrangedSubview(commandScroll)
 
         let contextTitle = NSTextField(labelWithString: "Context")

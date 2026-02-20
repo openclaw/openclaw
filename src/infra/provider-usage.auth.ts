@@ -1,18 +1,16 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { UsageProviderId } from "./provider-usage.types.js";
 import {
-  dedupeProfileIds,
   ensureAuthProfileStore,
   listProfilesForProvider,
   resolveApiKeyForProfile,
   resolveAuthProfileOrder,
 } from "../agents/auth-profiles.js";
-import { getCustomProviderApiKey } from "../agents/model-auth.js";
+import { getCustomProviderApiKey, resolveEnvApiKey } from "../agents/model-auth.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { loadConfig } from "../config/config.js";
-import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
-import type { UsageProviderId } from "./provider-usage.types.js";
 
 export type ProviderAuth = {
   provider: UsageProviderId;
@@ -21,6 +19,9 @@ export type ProviderAuth = {
 };
 
 function parseGoogleToken(apiKey: string): { token: string } | null {
+  if (!apiKey) {
+    return null;
+  }
   try {
     const parsed = JSON.parse(apiKey) as { token?: unknown };
     if (parsed && typeof parsed.token === "string") {
@@ -33,10 +34,14 @@ function parseGoogleToken(apiKey: string): { token: string } | null {
 }
 
 function resolveZaiApiKey(): string | undefined {
-  const envDirect =
-    normalizeSecretInput(process.env.ZAI_API_KEY) || normalizeSecretInput(process.env.Z_AI_API_KEY);
+  const envDirect = process.env.ZAI_API_KEY?.trim() || process.env.Z_AI_API_KEY?.trim();
   if (envDirect) {
     return envDirect;
+  }
+
+  const envResolved = resolveEnvApiKey("zai");
+  if (envResolved?.apiKey) {
+    return envResolved.apiKey;
   }
 
   const cfg = loadConfig();
@@ -52,8 +57,8 @@ function resolveZaiApiKey(): string | undefined {
   ].find((id) => store.profiles[id]?.type === "api_key");
   if (apiProfile) {
     const cred = store.profiles[apiProfile];
-    if (cred?.type === "api_key" && normalizeSecretInput(cred.key)) {
-      return normalizeSecretInput(cred.key);
+    if (cred?.type === "api_key" && cred.key?.trim()) {
+      return cred.key.trim();
     }
   }
 
@@ -73,52 +78,74 @@ function resolveZaiApiKey(): string | undefined {
 }
 
 function resolveMinimaxApiKey(): string | undefined {
-  return resolveProviderApiKeyFromConfigAndStore({
-    providerId: "minimax",
-    envDirect: [process.env.MINIMAX_CODE_PLAN_KEY, process.env.MINIMAX_API_KEY],
-  });
-}
-
-function resolveXiaomiApiKey(): string | undefined {
-  return resolveProviderApiKeyFromConfigAndStore({
-    providerId: "xiaomi",
-    envDirect: [process.env.XIAOMI_API_KEY],
-  });
-}
-
-function resolveProviderApiKeyFromConfigAndStore(params: {
-  providerId: UsageProviderId;
-  envDirect: Array<string | undefined>;
-}): string | undefined {
-  const envDirect = params.envDirect.map(normalizeSecretInput).find(Boolean);
+  const envDirect =
+    process.env.MINIMAX_CODE_PLAN_KEY?.trim() || process.env.MINIMAX_API_KEY?.trim();
   if (envDirect) {
     return envDirect;
   }
 
+  const envResolved = resolveEnvApiKey("minimax");
+  if (envResolved?.apiKey) {
+    return envResolved.apiKey;
+  }
+
   const cfg = loadConfig();
-  const key = getCustomProviderApiKey(cfg, params.providerId);
+  const key = getCustomProviderApiKey(cfg, "minimax");
   if (key) {
     return key;
   }
 
   const store = ensureAuthProfileStore();
-  const cred = listProfilesForProvider(store, params.providerId)
-    .map((id) => store.profiles[id])
-    .find(
-      (
-        profile,
-      ): profile is
-        | { type: "api_key"; provider: string; key: string }
-        | { type: "token"; provider: string; token: string } =>
-        profile?.type === "api_key" || profile?.type === "token",
-    );
-  if (!cred) {
+  const apiProfile = listProfilesForProvider(store, "minimax").find((id) => {
+    const cred = store.profiles[id];
+    return cred?.type === "api_key" || cred?.type === "token";
+  });
+  if (!apiProfile) {
     return undefined;
   }
-  if (cred.type === "api_key") {
-    return normalizeSecretInput(cred.key);
+  const cred = store.profiles[apiProfile];
+  if (cred?.type === "api_key" && cred.key?.trim()) {
+    return cred.key.trim();
   }
-  return normalizeSecretInput(cred.token);
+  if (cred?.type === "token" && cred.token?.trim()) {
+    return cred.token.trim();
+  }
+  return undefined;
+}
+
+function resolveXiaomiApiKey(): string | undefined {
+  const envDirect = process.env.XIAOMI_API_KEY?.trim();
+  if (envDirect) {
+    return envDirect;
+  }
+
+  const envResolved = resolveEnvApiKey("xiaomi");
+  if (envResolved?.apiKey) {
+    return envResolved.apiKey;
+  }
+
+  const cfg = loadConfig();
+  const key = getCustomProviderApiKey(cfg, "xiaomi");
+  if (key) {
+    return key;
+  }
+
+  const store = ensureAuthProfileStore();
+  const apiProfile = listProfilesForProvider(store, "xiaomi").find((id) => {
+    const cred = store.profiles[id];
+    return cred?.type === "api_key" || cred?.type === "token";
+  });
+  if (!apiProfile) {
+    return undefined;
+  }
+  const cred = store.profiles[apiProfile];
+  if (cred?.type === "api_key" && cred.key?.trim()) {
+    return cred.key.trim();
+  }
+  if (cred?.type === "token" && cred.token?.trim()) {
+    return cred.token.trim();
+  }
+  return undefined;
 }
 
 async function resolveOAuthToken(params: {
@@ -134,7 +161,14 @@ async function resolveOAuthToken(params: {
     store,
     provider: params.provider,
   });
-  const deduped = dedupeProfileIds(order);
+
+  const candidates = order;
+  const deduped: string[] = [];
+  for (const entry of candidates) {
+    if (!deduped.includes(entry)) {
+      deduped.push(entry);
+    }
+  }
 
   for (const profileId of deduped) {
     const cred = store.profiles[profileId];
@@ -150,21 +184,22 @@ async function resolveOAuthToken(params: {
         profileId,
         agentDir: params.agentDir,
       });
-      if (resolved) {
-        let token = resolved.apiKey;
-        if (params.provider === "google-gemini-cli" || params.provider === "google-antigravity") {
-          const parsed = parseGoogleToken(resolved.apiKey);
-          token = parsed?.token ?? resolved.apiKey;
-        }
-        return {
-          provider: params.provider,
-          token,
-          accountId:
-            cred.type === "oauth" && "accountId" in cred
-              ? (cred as { accountId?: string }).accountId
-              : undefined,
-        };
+      if (!resolved?.apiKey) {
+        continue;
       }
+      let token = resolved.apiKey;
+      if (params.provider === "google-gemini-cli" || params.provider === "google-antigravity") {
+        const parsed = parseGoogleToken(resolved.apiKey);
+        token = parsed?.token ?? resolved.apiKey;
+      }
+      return {
+        provider: params.provider,
+        token,
+        accountId:
+          cred.type === "oauth" && "accountId" in cred
+            ? (cred as { accountId?: string }).accountId
+            : undefined,
+      };
     } catch {
       // ignore
     }

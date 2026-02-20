@@ -90,8 +90,8 @@ async function syncMoonshotDocs() {
   let moonshotText = await readFile(moonshotDoc, "utf8");
   moonshotText = replaceBlockLines(
     moonshotText,
-    "{/_ moonshot-kimi-k2-ids:start _/ && null}",
-    "{/_ moonshot-kimi-k2-ids:end _/ && null}",
+    "<!-- moonshot-kimi-k2-ids:start -->",
+    "<!-- moonshot-kimi-k2-ids:end -->",
     renderKimiK2Ids(""),
   );
   moonshotText = replaceBlockLines(
@@ -110,8 +110,8 @@ async function syncMoonshotDocs() {
   let conceptsText = await readFile(conceptsDoc, "utf8");
   conceptsText = replaceBlockLines(
     conceptsText,
-    "{/_ moonshot-kimi-k2-model-refs:start _/ && null}",
-    "{/_ moonshot-kimi-k2-model-refs:end _/ && null}",
+    "<!-- moonshot-kimi-k2-model-refs:start -->",
+    "<!-- moonshot-kimi-k2-model-refs:end -->",
     renderKimiK2Ids("moonshot/"),
   );
 

@@ -110,7 +110,6 @@ cat ~/.openclaw/openclaw.json | jq '.gateway.bind'
 ```
 
 Then construct the URL:
-
 - **loopback**: `http://127.0.0.1:18793/__openclaw__/canvas/<file>.html`
 - **lan/tailnet/auto**: `http://<hostname>:18793/__openclaw__/canvas/<file>.html`
 

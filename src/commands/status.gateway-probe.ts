@@ -1,5 +1,4 @@
 import type { loadConfig } from "../config/config.js";
-export { pickGatewaySelfPresence } from "./gateway-presence.js";
 
 export function resolveGatewayProbeAuth(cfg: ReturnType<typeof loadConfig>): {
   token?: string;
@@ -25,4 +24,26 @@ export function resolveGatewayProbeAuth(cfg: ReturnType<typeof loadConfig>): {
         ? authPassword.trim()
         : undefined);
   return { token, password };
+}
+
+export function pickGatewaySelfPresence(presence: unknown): {
+  host?: string;
+  ip?: string;
+  version?: string;
+  platform?: string;
+} | null {
+  if (!Array.isArray(presence)) {
+    return null;
+  }
+  const entries = presence as Array<Record<string, unknown>>;
+  const self = entries.find((e) => e.mode === "gateway" && e.reason === "self") ?? null;
+  if (!self) {
+    return null;
+  }
+  return {
+    host: typeof self.host === "string" ? self.host : undefined,
+    ip: typeof self.ip === "string" ? self.ip : undefined,
+    version: typeof self.version === "string" ? self.version : undefined,
+    platform: typeof self.platform === "string" ? self.platform : undefined,
+  };
 }

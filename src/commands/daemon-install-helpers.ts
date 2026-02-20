@@ -1,15 +1,17 @@
+import type { OpenClawConfig } from "../config/types.js";
+import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { collectConfigEnvVars } from "../config/env-vars.js";
-import type { OpenClawConfig } from "../config/types.js";
 import { resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
-import { resolvePreferredNodePath } from "../daemon/runtime-paths.js";
-import { buildServiceEnvironment } from "../daemon/service-env.js";
 import {
-  emitNodeRuntimeWarning,
-  type DaemonInstallWarnFn,
-} from "./daemon-install-runtime-warning.js";
-import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
+  renderSystemNodeWarning,
+  resolvePreferredNodePath,
+  resolveSystemNodeInfo,
+} from "../daemon/runtime-paths.js";
+import { buildServiceEnvironment } from "../daemon/service-env.js";
+
+type WarnFn = (message: string, title?: string) => void;
 
 export type GatewayInstallPlan = {
   programArguments: string[];
@@ -30,7 +32,7 @@ export async function buildGatewayInstallPlan(params: {
   token?: string;
   devMode?: boolean;
   nodePath?: string;
-  warn?: DaemonInstallWarnFn;
+  warn?: WarnFn;
   /** Full config to extract env vars from (env vars + inline env keys). */
   config?: OpenClawConfig;
 }): Promise<GatewayInstallPlan> {
@@ -47,13 +49,13 @@ export async function buildGatewayInstallPlan(params: {
     runtime: params.runtime,
     nodePath,
   });
-  await emitNodeRuntimeWarning({
-    env: params.env,
-    runtime: params.runtime,
-    nodeProgram: programArguments[0],
-    warn: params.warn,
-    title: "Gateway runtime",
-  });
+  if (params.runtime === "node") {
+    const systemNode = await resolveSystemNodeInfo({ env: params.env });
+    const warning = renderSystemNodeWarning(systemNode, programArguments[0]);
+    if (warning) {
+      params.warn?.(warning, "Gateway runtime");
+    }
+  }
   const serviceEnvironment = buildServiceEnvironment({
     env: params.env,
     port: params.port,

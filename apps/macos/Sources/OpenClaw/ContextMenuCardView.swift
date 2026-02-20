@@ -70,6 +70,7 @@ struct ContextMenuCardView: View {
         return "\(count) sessions · 24h"
     }
 
+    @ViewBuilder
     private func sessionRow(_ row: SessionRow) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             ContextUsageBar(

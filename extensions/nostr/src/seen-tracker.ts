@@ -137,27 +137,6 @@ export function createSeenTracker(options?: SeenTrackerOptions): SeenTracker {
     entries.delete(idToEvict);
   }
 
-  function insertAtFront(id: string, seenAt: number): void {
-    const newEntry: Entry = {
-      seenAt,
-      prev: null,
-      next: head,
-    };
-
-    if (head) {
-      const headEntry = entries.get(head);
-      if (headEntry) {
-        headEntry.prev = id;
-      }
-    }
-
-    entries.set(id, newEntry);
-    head = id;
-    if (!tail) {
-      tail = id;
-    }
-  }
-
   // Prune expired entries
   function pruneExpired(): void {
     const now = Date.now();
@@ -201,7 +180,25 @@ export function createSeenTracker(options?: SeenTrackerOptions): SeenTracker {
       evictLRU();
     }
 
-    insertAtFront(id, now);
+    // Add new entry at front
+    const newEntry: Entry = {
+      seenAt: now,
+      prev: null,
+      next: head,
+    };
+
+    if (head) {
+      const headEntry = entries.get(head);
+      if (headEntry) {
+        headEntry.prev = id;
+      }
+    }
+
+    entries.set(id, newEntry);
+    head = id;
+    if (!tail) {
+      tail = id;
+    }
   }
 
   function has(id: string): boolean {
@@ -271,7 +268,24 @@ export function createSeenTracker(options?: SeenTrackerOptions): SeenTracker {
     for (let i = ids.length - 1; i >= 0; i--) {
       const id = ids[i];
       if (!entries.has(id) && entries.size < maxEntries) {
-        insertAtFront(id, now);
+        const newEntry: Entry = {
+          seenAt: now,
+          prev: null,
+          next: head,
+        };
+
+        if (head) {
+          const headEntry = entries.get(head);
+          if (headEntry) {
+            headEntry.prev = id;
+          }
+        }
+
+        entries.set(id, newEntry);
+        head = id;
+        if (!tail) {
+          tail = id;
+        }
       }
     }
   }

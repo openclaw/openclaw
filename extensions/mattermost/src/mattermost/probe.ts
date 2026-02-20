@@ -1,8 +1,9 @@
-import type { BaseProbeResult } from "openclaw/plugin-sdk";
 import { normalizeMattermostBaseUrl, type MattermostUser } from "./client.js";
 
-export type MattermostProbe = BaseProbeResult & {
+export type MattermostProbe = {
+  ok: boolean;
   status?: number | null;
+  error?: string | null;
   elapsedMs?: number | null;
   bot?: MattermostUser;
 };

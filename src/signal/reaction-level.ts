@@ -1,13 +1,17 @@
 import type { OpenClawConfig } from "../config/config.js";
-import {
-  resolveReactionLevel,
-  type ReactionLevel,
-  type ResolvedReactionLevel,
-} from "../utils/reaction-level.js";
 import { resolveSignalAccount } from "./accounts.js";
 
-export type SignalReactionLevel = ReactionLevel;
-export type ResolvedSignalReactionLevel = ResolvedReactionLevel;
+export type SignalReactionLevel = "off" | "ack" | "minimal" | "extensive";
+
+export type ResolvedSignalReactionLevel = {
+  level: SignalReactionLevel;
+  /** Whether ACK reactions (e.g., 👀 when processing) are enabled. */
+  ackEnabled: boolean;
+  /** Whether agent-controlled reactions are enabled. */
+  agentReactionsEnabled: boolean;
+  /** Guidance level for agent reactions (minimal = sparse, extensive = liberal). */
+  agentReactionGuidance?: "minimal" | "extensive";
+};
 
 /**
  * Resolve the effective reaction level and its implications for Signal.
@@ -26,9 +30,42 @@ export function resolveSignalReactionLevel(params: {
     cfg: params.cfg,
     accountId: params.accountId,
   });
-  return resolveReactionLevel({
-    value: account.config.reactionLevel,
-    defaultLevel: "minimal",
-    invalidFallback: "minimal",
-  });
+  const level = (account.config.reactionLevel ?? "minimal") as SignalReactionLevel;
+
+  switch (level) {
+    case "off":
+      return {
+        level,
+        ackEnabled: false,
+        agentReactionsEnabled: false,
+      };
+    case "ack":
+      return {
+        level,
+        ackEnabled: true,
+        agentReactionsEnabled: false,
+      };
+    case "minimal":
+      return {
+        level,
+        ackEnabled: false,
+        agentReactionsEnabled: true,
+        agentReactionGuidance: "minimal",
+      };
+    case "extensive":
+      return {
+        level,
+        ackEnabled: false,
+        agentReactionsEnabled: true,
+        agentReactionGuidance: "extensive",
+      };
+    default:
+      // Fallback to minimal behavior
+      return {
+        level: "minimal",
+        ackEnabled: false,
+        agentReactionsEnabled: true,
+        agentReactionGuidance: "minimal",
+      };
+  }
 }

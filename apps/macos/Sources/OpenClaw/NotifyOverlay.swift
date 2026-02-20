@@ -10,9 +10,7 @@ final class NotifyOverlayController {
     static let shared = NotifyOverlayController()
 
     private(set) var model = Model()
-    var isVisible: Bool {
-        self.model.isVisible
-    }
+    var isVisible: Bool { self.model.isVisible }
 
     struct Model {
         var title: String = ""

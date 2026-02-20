@@ -13,23 +13,9 @@ For model selection rules, see [/concepts/models](/concepts/models).
 
 ## Quick rules
 
-- Model refs use `provider/model` (example: `opencode/claude-opus-4-6`).
+- Model refs use `provider/model` (example: `opencode/claude-opus-4-5`).
 - If you set `agents.defaults.models`, it becomes the allowlist.
 - CLI helpers: `openclaw onboard`, `openclaw models list`, `openclaw models set <provider/model>`.
-
-## API key rotation
-
-- Supports generic provider rotation for selected providers.
-- Configure multiple keys via:
-  - `OPENCLAW_LIVE_<PROVIDER>_KEY` (single live override, highest priority)
-  - `<PROVIDER>_API_KEYS` (comma or semicolon list)
-  - `<PROVIDER>_API_KEY` (primary key)
-  - `<PROVIDER>_API_KEY_*` (numbered list, e.g. `<PROVIDER>_API_KEY_1`)
-- For Google providers, `GOOGLE_API_KEY` is also included as fallback.
-- Key selection order preserves priority and deduplicates values.
-- Requests are retried with the next key only on rate-limit responses (for example `429`, `rate_limit`, `quota`, `resource exhausted`).
-- Non-rate-limit failures fail immediately; no key rotation is attempted.
-- When all candidate keys fail, the final error is returned from the last attempt.
 
 ## Built-in providers (pi-ai catalog)
 
@@ -40,13 +26,12 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 
 - Provider: `openai`
 - Auth: `OPENAI_API_KEY`
-- Optional rotation: `OPENAI_API_KEYS`, `OPENAI_API_KEY_1`, `OPENAI_API_KEY_2`, plus `OPENCLAW_LIVE_OPENAI_KEY` (single override)
-- Example model: `openai/gpt-5.1-codex`
+- Example model: `openai/gpt-5.2`
 - CLI: `openclaw onboard --auth-choice openai-api-key`
 
 ```json5
 {
-  agents: { defaults: { model: { primary: "openai/gpt-5.1-codex" } } },
+  agents: { defaults: { model: { primary: "openai/gpt-5.2" } } },
 }
 ```
 
@@ -54,13 +39,12 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 
 - Provider: `anthropic`
 - Auth: `ANTHROPIC_API_KEY` or `claude setup-token`
-- Optional rotation: `ANTHROPIC_API_KEYS`, `ANTHROPIC_API_KEY_1`, `ANTHROPIC_API_KEY_2`, plus `OPENCLAW_LIVE_ANTHROPIC_KEY` (single override)
-- Example model: `anthropic/claude-opus-4-6`
+- Example model: `anthropic/claude-opus-4-5`
 - CLI: `openclaw onboard --auth-choice token` (paste setup-token) or `openclaw models auth paste-token --provider anthropic`
 
 ```json5
 {
-  agents: { defaults: { model: { primary: "anthropic/claude-opus-4-6" } } },
+  agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
 }
 ```
 
@@ -68,12 +52,12 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 
 - Provider: `openai-codex`
 - Auth: OAuth (ChatGPT)
-- Example model: `openai-codex/gpt-5.3-codex`
+- Example model: `openai-codex/gpt-5.2`
 - CLI: `openclaw onboard --auth-choice openai-codex` or `openclaw models auth login --provider openai-codex`
 
 ```json5
 {
-  agents: { defaults: { model: { primary: "openai-codex/gpt-5.3-codex" } } },
+  agents: { defaults: { model: { primary: "openai-codex/gpt-5.2" } } },
 }
 ```
 
@@ -81,12 +65,12 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 
 - Provider: `opencode`
 - Auth: `OPENCODE_API_KEY` (or `OPENCODE_ZEN_API_KEY`)
-- Example model: `opencode/claude-opus-4-6`
+- Example model: `opencode/claude-opus-4-5`
 - CLI: `openclaw onboard --auth-choice opencode-zen`
 
 ```json5
 {
-  agents: { defaults: { model: { primary: "opencode/claude-opus-4-6" } } },
+  agents: { defaults: { model: { primary: "opencode/claude-opus-4-5" } } },
 }
 ```
 
@@ -94,7 +78,6 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 
 - Provider: `google`
 - Auth: `GEMINI_API_KEY`
-- Optional rotation: `GEMINI_API_KEYS`, `GEMINI_API_KEY_1`, `GEMINI_API_KEY_2`, `GOOGLE_API_KEY` fallback, and `OPENCLAW_LIVE_GEMINI_KEY` (single override)
 - Example model: `google/gemini-3-pro-preview`
 - CLI: `openclaw onboard --auth-choice gemini-api-key`
 
@@ -123,7 +106,7 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 
 - Provider: `vercel-ai-gateway`
 - Auth: `AI_GATEWAY_API_KEY`
-- Example model: `vercel-ai-gateway/anthropic/claude-opus-4.6`
+- Example model: `vercel-ai-gateway/anthropic/claude-opus-4.5`
 - CLI: `openclaw onboard --auth-choice ai-gateway-api-key`
 
 ### Other built-in providers
@@ -137,7 +120,6 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
   - OpenAI-compatible base URL: `https://api.cerebras.ai/v1`.
 - Mistral: `mistral` (`MISTRAL_API_KEY`)
 - GitHub Copilot: `github-copilot` (`COPILOT_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN`)
-- Hugging Face Inference: `huggingface` (`HUGGINGFACE_HUB_TOKEN` or `HF_TOKEN`) — OpenAI-compatible router; example model: `huggingface/deepseek-ai/DeepSeek-R1`; CLI: `openclaw onboard --auth-choice huggingface-api-key`. See [Hugging Face (Inference)](/providers/huggingface).
 
 ## Providers via `models.providers` (custom/base URL)
 
@@ -151,17 +133,14 @@ Moonshot uses OpenAI-compatible endpoints, so configure it as a custom provider:
 - Provider: `moonshot`
 - Auth: `MOONSHOT_API_KEY`
 - Example model: `moonshot/kimi-k2.5`
-
-Kimi K2 model IDs:
-
-{/_moonshot-kimi-k2-model-refs:start_/ && null}
-
-- `moonshot/kimi-k2.5`
-- `moonshot/kimi-k2-0905-preview`
-- `moonshot/kimi-k2-turbo-preview`
-- `moonshot/kimi-k2-thinking`
-- `moonshot/kimi-k2-thinking-turbo`
-  {/_moonshot-kimi-k2-model-refs:end_/ && null}
+- Kimi K2 model IDs:
+  {/* moonshot-kimi-k2-model-refs:start */}
+  - `moonshot/kimi-k2.5`
+  - `moonshot/kimi-k2-0905-preview`
+  - `moonshot/kimi-k2-turbo-preview`
+  - `moonshot/kimi-k2-thinking`
+  - `moonshot/kimi-k2-thinking-turbo`
+  {/* moonshot-kimi-k2-model-refs:end */}
 
 ```json5
 {
@@ -260,7 +239,7 @@ Ollama is a local LLM runtime that provides an OpenAI-compatible API:
 - Provider: `ollama`
 - Auth: None required (local server)
 - Example model: `ollama/llama3.3`
-- Installation: [https://ollama.ai](https://ollama.ai)
+- Installation: https://ollama.ai
 
 ```bash
 # Install Ollama, then pull a model:
@@ -276,32 +255,6 @@ ollama pull llama3.3
 ```
 
 Ollama is automatically detected when running locally at `http://127.0.0.1:11434/v1`. See [/providers/ollama](/providers/ollama) for model recommendations and custom configuration.
-
-### vLLM
-
-vLLM is a local (or self-hosted) OpenAI-compatible server:
-
-- Provider: `vllm`
-- Auth: Optional (depends on your server)
-- Default base URL: `http://127.0.0.1:8000/v1`
-
-To opt in to auto-discovery locally (any value works if your server doesn’t enforce auth):
-
-```bash
-export VLLM_API_KEY="vllm-local"
-```
-
-Then set a model (replace with one of the IDs returned by `/v1/models`):
-
-```json5
-{
-  agents: {
-    defaults: { model: { primary: "vllm/your-model-id" } },
-  },
-}
-```
-
-See [/providers/vllm](/providers/vllm) for details.
 
 ### Local proxies (LM Studio, vLLM, LiteLLM, etc.)
 
@@ -353,7 +306,7 @@ Notes:
 
 ```bash
 openclaw onboard --auth-choice opencode-zen
-openclaw models set opencode/claude-opus-4-6
+openclaw models set opencode/claude-opus-4-5
 openclaw models list
 ```
 

@@ -21,8 +21,4 @@ openclaw logs
 openclaw logs --follow
 openclaw logs --json
 openclaw logs --limit 500
-openclaw logs --local-time
-openclaw logs --follow --local-time
 ```
-
-Use `--local-time` to render timestamps in your local timezone.

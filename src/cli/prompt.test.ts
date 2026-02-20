@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { isYes, setVerbose, setYes } from "../globals.js";
 
 vi.mock("node:readline/promises", () => {
-  const question = vi.fn(async () => "");
+  const question = vi.fn<[], Promise<string>>();
   const close = vi.fn();
   const createInterface = vi.fn(() => ({ question, close }));
   return { default: { createInterface } };
@@ -11,14 +11,14 @@ vi.mock("node:readline/promises", () => {
 type ReadlineMock = {
   default: {
     createInterface: () => {
-      question: ReturnType<typeof vi.fn>;
+      question: ReturnType<typeof vi.fn<[], Promise<string>>>;
       close: ReturnType<typeof vi.fn>;
     };
   };
 };
 
 const { promptYesNo } = await import("./prompt.js");
-const readline = (await import("node:readline/promises")) as unknown as ReadlineMock;
+const readline = (await import("node:readline/promises")) as ReadlineMock;
 
 describe("promptYesNo", () => {
   it("returns true when global --yes is set", async () => {

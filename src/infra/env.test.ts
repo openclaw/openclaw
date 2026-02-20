@@ -2,54 +2,48 @@ import { describe, expect, it } from "vitest";
 import { isTruthyEnvValue, normalizeZaiEnv } from "./env.js";
 
 describe("normalizeZaiEnv", () => {
-  function withZaiEnv(env: { zaiApiKey?: string; legacyZaiApiKey?: string }, run: () => void) {
+  it("copies Z_AI_API_KEY to ZAI_API_KEY when missing", () => {
     const prevZai = process.env.ZAI_API_KEY;
-    const prevLegacy = process.env.Z_AI_API_KEY;
-    if (env.zaiApiKey === undefined) {
+    const prevZAi = process.env.Z_AI_API_KEY;
+    process.env.ZAI_API_KEY = "";
+    process.env.Z_AI_API_KEY = "zai-legacy";
+
+    normalizeZaiEnv();
+
+    expect(process.env.ZAI_API_KEY).toBe("zai-legacy");
+
+    if (prevZai === undefined) {
       delete process.env.ZAI_API_KEY;
     } else {
-      process.env.ZAI_API_KEY = env.zaiApiKey;
+      process.env.ZAI_API_KEY = prevZai;
     }
-    if (env.legacyZaiApiKey === undefined) {
+    if (prevZAi === undefined) {
       delete process.env.Z_AI_API_KEY;
     } else {
-      process.env.Z_AI_API_KEY = env.legacyZaiApiKey;
+      process.env.Z_AI_API_KEY = prevZAi;
     }
-    try {
-      run();
-    } finally {
-      if (prevZai === undefined) {
-        delete process.env.ZAI_API_KEY;
-      } else {
-        process.env.ZAI_API_KEY = prevZai;
-      }
-      if (prevLegacy === undefined) {
-        delete process.env.Z_AI_API_KEY;
-      } else {
-        process.env.Z_AI_API_KEY = prevLegacy;
-      }
-    }
-  }
-
-  it("copies Z_AI_API_KEY to ZAI_API_KEY when missing", () => {
-    withZaiEnv({ zaiApiKey: "", legacyZaiApiKey: "zai-legacy" }, () => {
-      normalizeZaiEnv();
-      expect(process.env.ZAI_API_KEY).toBe("zai-legacy");
-    });
   });
 
   it("does not override existing ZAI_API_KEY", () => {
-    withZaiEnv({ zaiApiKey: "zai-current", legacyZaiApiKey: "zai-legacy" }, () => {
-      normalizeZaiEnv();
-      expect(process.env.ZAI_API_KEY).toBe("zai-current");
-    });
-  });
+    const prevZai = process.env.ZAI_API_KEY;
+    const prevZAi = process.env.Z_AI_API_KEY;
+    process.env.ZAI_API_KEY = "zai-current";
+    process.env.Z_AI_API_KEY = "zai-legacy";
 
-  it("ignores blank legacy Z_AI_API_KEY values", () => {
-    withZaiEnv({ zaiApiKey: "", legacyZaiApiKey: "   " }, () => {
-      normalizeZaiEnv();
-      expect(process.env.ZAI_API_KEY).toBe("");
-    });
+    normalizeZaiEnv();
+
+    expect(process.env.ZAI_API_KEY).toBe("zai-current");
+
+    if (prevZai === undefined) {
+      delete process.env.ZAI_API_KEY;
+    } else {
+      process.env.ZAI_API_KEY = prevZai;
+    }
+    if (prevZAi === undefined) {
+      delete process.env.Z_AI_API_KEY;
+    } else {
+      process.env.Z_AI_API_KEY = prevZAi;
+    }
   });
 });
 

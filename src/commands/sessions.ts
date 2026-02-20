@@ -1,18 +1,10 @@
+import type { RuntimeEnv } from "../runtime.js";
 import { lookupContextTokens } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
 import { loadConfig } from "../config/config.js";
-import {
-  loadSessionStore,
-  resolveFreshSessionTotalTokens,
-  resolveStorePath,
-  type SessionEntry,
-} from "../config/sessions.js";
-import { classifySessionKey, resolveSessionModelRef } from "../gateway/session-utils.js";
+import { loadSessionStore, resolveStorePath, type SessionEntry } from "../config/sessions.js";
 import { info } from "../globals.js";
-import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
-import { parseAgentSessionKey } from "../routing/session-key.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { isRich, theme } from "../terminal/theme.js";
 
 type SessionRow = {
@@ -32,11 +24,7 @@ type SessionRow = {
   inputTokens?: number;
   outputTokens?: number;
   totalTokens?: number;
-  totalTokensFresh?: boolean;
   model?: string;
-  modelProvider?: string;
-  providerOverride?: string;
-  modelOverride?: string;
   contextTokens?: number;
 };
 
@@ -72,15 +60,9 @@ const colorByPct = (label: string, pct: number | null, rich: boolean) => {
   return theme.muted(label);
 };
 
-const formatTokensCell = (
-  total: number | undefined,
-  contextTokens: number | null,
-  rich: boolean,
-) => {
-  if (total === undefined) {
-    const ctxLabel = contextTokens ? formatKTokens(contextTokens) : "?";
-    const label = `unknown/${ctxLabel} (?%)`;
-    return rich ? theme.muted(label.padEnd(TOKENS_PAD)) : label.padEnd(TOKENS_PAD);
+const formatTokensCell = (total: number, contextTokens: number | null, rich: boolean) => {
+  if (!total) {
+    return "-".padEnd(TOKENS_PAD);
   }
   const totalLabel = formatKTokens(total);
   const ctxLabel = contextTokens ? formatKTokens(contextTokens) : "?";
@@ -108,7 +90,7 @@ const formatKindCell = (kind: SessionRow["kind"], rich: boolean) => {
 };
 
 const formatAgeCell = (updatedAt: number | null | undefined, rich: boolean) => {
-  const ageLabel = updatedAt ? formatTimeAgo(Date.now() - updatedAt) : "unknown";
+  const ageLabel = updatedAt ? formatAge(Date.now() - updatedAt) : "unknown";
   const padded = ageLabel.padEnd(AGE_PAD);
   return rich ? theme.muted(padded) : padded;
 };
@@ -134,13 +116,48 @@ const formatFlagsCell = (row: SessionRow, rich: boolean) => {
   return label.length === 0 ? "" : rich ? theme.muted(label) : label;
 };
 
+const formatAge = (ms: number | null | undefined) => {
+  if (!ms || ms < 0) {
+    return "unknown";
+  }
+  const minutes = Math.round(ms / 60_000);
+  if (minutes < 1) {
+    return "just now";
+  }
+  if (minutes < 60) {
+    return `${minutes}m ago`;
+  }
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) {
+    return `${hours}h ago`;
+  }
+  const days = Math.round(hours / 24);
+  return `${days}d ago`;
+};
+
+function classifyKey(key: string, entry?: SessionEntry): SessionRow["kind"] {
+  if (key === "global") {
+    return "global";
+  }
+  if (key === "unknown") {
+    return "unknown";
+  }
+  if (entry?.chatType === "group" || entry?.chatType === "channel") {
+    return "group";
+  }
+  if (key.includes(":group:") || key.includes(":channel:")) {
+    return "group";
+  }
+  return "direct";
+}
+
 function toRows(store: Record<string, SessionEntry>): SessionRow[] {
   return Object.entries(store)
     .map(([key, entry]) => {
       const updatedAt = entry?.updatedAt ?? null;
       return {
         key,
-        kind: classifySessionKey(key, entry),
+        kind: classifyKey(key, entry),
         updatedAt,
         ageMs: updatedAt ? Date.now() - updatedAt : null,
         sessionId: entry?.sessionId,
@@ -155,11 +172,7 @@ function toRows(store: Record<string, SessionEntry>): SessionRow[] {
         inputTokens: entry?.inputTokens,
         outputTokens: entry?.outputTokens,
         totalTokens: entry?.totalTokens,
-        totalTokensFresh: entry?.totalTokensFresh,
         model: entry?.model,
-        modelProvider: entry?.modelProvider,
-        providerOverride: entry?.providerOverride,
-        modelOverride: entry?.modelOverride,
         contextTokens: entry?.contextTokens,
       } satisfies SessionRow;
     })
@@ -212,23 +225,12 @@ export async function sessionsCommand(
           path: storePath,
           count: rows.length,
           activeMinutes: activeMinutes ?? null,
-          sessions: rows.map((r) => {
-            const resolvedModel = resolveSessionModelRef(
-              cfg,
-              r,
-              parseAgentSessionKey(r.key)?.agentId,
-            );
-            const model = resolvedModel.model ?? configModel;
-            return {
-              ...r,
-              totalTokens: resolveFreshSessionTotalTokens(r) ?? null,
-              totalTokensFresh:
-                typeof r.totalTokens === "number" ? r.totalTokensFresh !== false : false,
-              contextTokens:
-                r.contextTokens ?? lookupContextTokens(model) ?? configContextTokens ?? null,
-              model,
-            };
-          }),
+          sessions: rows.map((r) => ({
+            ...r,
+            contextTokens:
+              r.contextTokens ?? lookupContextTokens(r.model) ?? configContextTokens ?? null,
+            model: r.model ?? configModel ?? null,
+          })),
         },
         null,
         2,
@@ -260,10 +262,11 @@ export async function sessionsCommand(
   runtime.log(rich ? theme.heading(header) : header);
 
   for (const row of rows) {
-    const resolvedModel = resolveSessionModelRef(cfg, row, parseAgentSessionKey(row.key)?.agentId);
-    const model = resolvedModel.model ?? configModel;
+    const model = row.model ?? configModel;
     const contextTokens = row.contextTokens ?? lookupContextTokens(model) ?? configContextTokens;
-    const total = resolveFreshSessionTotalTokens(row);
+    const input = row.inputTokens ?? 0;
+    const output = row.outputTokens ?? 0;
+    const total = row.totalTokens ?? input + output;
 
     const keyLabel = truncateKey(row.key).padEnd(KEY_PAD);
     const keyCell = rich ? theme.accent(keyLabel) : keyLabel;

@@ -1,7 +1,7 @@
-import { logVerbose } from "../../globals.js";
 import type { ReplyPayload } from "../types.js";
-import { createBlockReplyCoalescer } from "./block-reply-coalescer.js";
 import type { BlockStreamingCoalescing } from "./block-streaming.js";
+import { logVerbose } from "../../globals.js";
+import { createBlockReplyCoalescer } from "./block-reply-coalescer.js";
 
 export type BlockReplyPipeline = {
   enqueue: (payload: ReplyPayload) => void;

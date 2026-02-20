@@ -1,5 +1,3 @@
-import { escapeRegExp } from "../utils.js";
-
 const ESC = "\x1b";
 const CR = "\r";
 const TAB = "\t";
@@ -13,6 +11,10 @@ type Modifiers = {
   alt: boolean;
   shift: boolean;
 };
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 const namedKeyMap = new Map<string, string>([
   ["enter", CR],

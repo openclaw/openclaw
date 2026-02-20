@@ -2,20 +2,6 @@ import type { Command } from "commander";
 import { danger } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
 import { callBrowserRequest, type BrowserParentOpts } from "./browser-cli-shared.js";
-import { inheritOptionFromParent } from "./command-options.js";
-
-function resolveTargetId(rawTargetId: unknown, command: Command): string | undefined {
-  const local = typeof rawTargetId === "string" ? rawTargetId.trim() : "";
-  if (local) {
-    return local;
-  }
-  const inherited = inheritOptionFromParent<string>(command, "targetId");
-  if (typeof inherited !== "string") {
-    return undefined;
-  }
-  const trimmed = inherited.trim();
-  return trimmed ? trimmed : undefined;
-}
 
 export function registerBrowserCookiesAndStorageCommands(
   browser: Command,
@@ -28,7 +14,6 @@ export function registerBrowserCookiesAndStorageCommands(
     .action(async (opts, cmd) => {
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
-      const targetId = resolveTargetId(opts.targetId, cmd);
       try {
         const result = await callBrowserRequest<{ cookies?: unknown[] }>(
           parent,
@@ -36,7 +21,7 @@ export function registerBrowserCookiesAndStorageCommands(
             method: "GET",
             path: "/cookies",
             query: {
-              targetId,
+              targetId: opts.targetId?.trim() || undefined,
               profile,
             },
           },
@@ -63,7 +48,6 @@ export function registerBrowserCookiesAndStorageCommands(
     .action(async (name: string, value: string, opts, cmd) => {
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
-      const targetId = resolveTargetId(opts.targetId, cmd);
       try {
         const result = await callBrowserRequest(
           parent,
@@ -72,7 +56,7 @@ export function registerBrowserCookiesAndStorageCommands(
             path: "/cookies/set",
             query: profile ? { profile } : undefined,
             body: {
-              targetId,
+              targetId: opts.targetId?.trim() || undefined,
               cookie: { name, value, url: opts.url },
             },
           },
@@ -96,7 +80,6 @@ export function registerBrowserCookiesAndStorageCommands(
     .action(async (opts, cmd) => {
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
-      const targetId = resolveTargetId(opts.targetId, cmd);
       try {
         const result = await callBrowserRequest(
           parent,
@@ -105,7 +88,7 @@ export function registerBrowserCookiesAndStorageCommands(
             path: "/cookies/clear",
             query: profile ? { profile } : undefined,
             body: {
-              targetId,
+              targetId: opts.targetId?.trim() || undefined,
             },
           },
           { timeoutMs: 20000 },
@@ -134,7 +117,6 @@ export function registerBrowserCookiesAndStorageCommands(
       .action(async (key: string | undefined, opts, cmd2) => {
         const parent = parentOpts(cmd2);
         const profile = parent?.browserProfile;
-        const targetId = resolveTargetId(opts.targetId, cmd2);
         try {
           const result = await callBrowserRequest<{ values?: Record<string, string> }>(
             parent,
@@ -143,7 +125,7 @@ export function registerBrowserCookiesAndStorageCommands(
               path: `/storage/${kind}`,
               query: {
                 key: key?.trim() || undefined,
-                targetId,
+                targetId: opts.targetId?.trim() || undefined,
                 profile,
               },
             },
@@ -169,7 +151,6 @@ export function registerBrowserCookiesAndStorageCommands(
       .action(async (key: string, value: string, opts, cmd2) => {
         const parent = parentOpts(cmd2);
         const profile = parent?.browserProfile;
-        const targetId = resolveTargetId(opts.targetId, cmd2);
         try {
           const result = await callBrowserRequest(
             parent,
@@ -180,7 +161,7 @@ export function registerBrowserCookiesAndStorageCommands(
               body: {
                 key,
                 value,
-                targetId,
+                targetId: opts.targetId?.trim() || undefined,
               },
             },
             { timeoutMs: 20000 },
@@ -203,7 +184,6 @@ export function registerBrowserCookiesAndStorageCommands(
       .action(async (opts, cmd2) => {
         const parent = parentOpts(cmd2);
         const profile = parent?.browserProfile;
-        const targetId = resolveTargetId(opts.targetId, cmd2);
         try {
           const result = await callBrowserRequest(
             parent,
@@ -212,7 +192,7 @@ export function registerBrowserCookiesAndStorageCommands(
               path: `/storage/${kind}/clear`,
               query: profile ? { profile } : undefined,
               body: {
-                targetId,
+                targetId: opts.targetId?.trim() || undefined,
               },
             },
             { timeoutMs: 20000 },

@@ -1,6 +1,5 @@
 import type { DiscordPluralKitConfig } from "../discord/pluralkit.js";
 import type {
-  BlockStreamingChunkConfig,
   BlockStreamingCoalesceConfig,
   DmPolicy,
   GroupPolicy,
@@ -12,19 +11,17 @@ import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
 import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
-export type DiscordStreamMode = "partial" | "block" | "off";
-
 export type DiscordDmConfig = {
   /** If false, ignore all incoming Discord DMs. Default: true. */
   enabled?: boolean;
   /** Direct message access policy (default: pairing). */
   policy?: DmPolicy;
   /** Allowlist for DM senders (ids or names). */
-  allowFrom?: string[];
+  allowFrom?: Array<string | number>;
   /** If true, allow group DMs (default: false). */
   groupEnabled?: boolean;
   /** Optional allowlist for group DM channels (ids or slugs). */
-  groupChannels?: string[];
+  groupChannels?: Array<string | number>;
 };
 
 export type DiscordGuildChannelConfig = {
@@ -38,13 +35,9 @@ export type DiscordGuildChannelConfig = {
   /** If false, disable the bot for this channel. */
   enabled?: boolean;
   /** Optional allowlist for channel senders (ids or names). */
-  users?: string[];
-  /** Optional allowlist for channel senders by role ID. */
-  roles?: string[];
+  users?: Array<string | number>;
   /** Optional system prompt snippet for this channel. */
   systemPrompt?: string;
-  /** If false, omit thread starter context for this channel (default: true). */
-  includeThreadStarter?: boolean;
 };
 
 export type DiscordReactionNotificationMode = "off" | "own" | "all" | "allowlist";
@@ -57,10 +50,7 @@ export type DiscordGuildEntry = {
   toolsBySender?: GroupToolPolicyBySenderConfig;
   /** Reaction notification mode (off|own|all|allowlist). Default: own. */
   reactionNotifications?: DiscordReactionNotificationMode;
-  /** Optional allowlist for guild senders (ids or names). */
-  users?: string[];
-  /** Optional allowlist for guild senders by role ID. */
-  roles?: string[];
+  users?: Array<string | number>;
   channels?: Record<string, DiscordGuildChannelConfig>;
 };
 
@@ -83,8 +73,6 @@ export type DiscordActionConfig = {
   emojiUploads?: boolean;
   stickerUploads?: boolean;
   channels?: boolean;
-  /** Enable bot presence/activity changes (default: false). */
-  presence?: boolean;
 };
 
 export type DiscordIntentsConfig = {
@@ -98,31 +86,11 @@ export type DiscordExecApprovalConfig = {
   /** Enable exec approval forwarding to Discord DMs. Default: false. */
   enabled?: boolean;
   /** Discord user IDs to receive approval prompts. Required if enabled. */
-  approvers?: string[];
+  approvers?: Array<string | number>;
   /** Only forward approvals for these agent IDs. Omit = all agents. */
   agentFilter?: string[];
   /** Only forward approvals matching these session key patterns (substring or regex). */
   sessionFilter?: string[];
-  /** Delete approval DMs after approval, denial, or timeout. Default: false. */
-  cleanupAfterResolve?: boolean;
-  /** Where to send approval prompts. "dm" sends to approver DMs (default), "channel" sends to the
-   *  originating Discord channel, "both" sends to both. When target is "channel" or "both", buttons
-   *  are only usable by configured approvers; other users receive an ephemeral denial. */
-  target?: "dm" | "channel" | "both";
-};
-
-export type DiscordAgentComponentsConfig = {
-  /** Enable agent-controlled interactive components (buttons, select menus). Default: true. */
-  enabled?: boolean;
-};
-
-export type DiscordUiComponentsConfig = {
-  /** Accent color used by Discord component containers (hex). */
-  accentColor?: string;
-};
-
-export type DiscordUiConfig = {
-  components?: DiscordUiComponentsConfig;
 };
 
 export type DiscordAccountConfig = {
@@ -139,8 +107,6 @@ export type DiscordAccountConfig = {
   /** If false, do not start this Discord account. Default: true. */
   enabled?: boolean;
   token?: string;
-  /** HTTP(S) proxy URL for Discord gateway WebSocket connections. */
-  proxy?: string;
   /** Allow bot-authored messages to trigger replies (default: false). */
   allowBots?: boolean;
   /**
@@ -156,16 +122,6 @@ export type DiscordAccountConfig = {
   chunkMode?: "length" | "newline";
   /** Disable block streaming for this account. */
   blockStreaming?: boolean;
-  /**
-   * Live preview streaming mode (edit-based, like Telegram).
-   * - "partial": send a message and continuously edit it with new content as tokens arrive.
-   * - "block": stream previews in draft-sized chunks (like Telegram block mode).
-   * - "off": no preview streaming (default).
-   * When enabled, block streaming is automatically suppressed to avoid double-streaming.
-   */
-  streamMode?: DiscordStreamMode;
-  /** Chunking config for Discord stream previews in `streamMode: "block"`. */
-  draftChunk?: BlockStreamingChunkConfig;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
   /**
@@ -186,18 +142,6 @@ export type DiscordAccountConfig = {
   actions?: DiscordActionConfig;
   /** Control reply threading when reply tags are present (off|first|all). */
   replyToMode?: ReplyToMode;
-  /**
-   * Alias for dm.policy (prefer this so it inherits cleanly via base->account shallow merge).
-   * Legacy key: channels.discord.dm.policy.
-   */
-  dmPolicy?: DmPolicy;
-  /**
-   * Alias for dm.allowFrom (prefer this so it inherits cleanly via base->account shallow merge).
-   * Legacy key: channels.discord.dm.allowFrom.
-   */
-  allowFrom?: string[];
-  /** Default delivery target for CLI --deliver when no explicit --reply-to is provided. */
-  defaultTo?: string;
   dm?: DiscordDmConfig;
   /** New per-guild config keyed by guild id or slug. */
   guilds?: Record<string, DiscordGuildEntry>;
@@ -205,29 +149,10 @@ export type DiscordAccountConfig = {
   heartbeat?: ChannelHeartbeatVisibilityConfig;
   /** Exec approval forwarding configuration. */
   execApprovals?: DiscordExecApprovalConfig;
-  /** Agent-controlled interactive components (buttons, select menus). */
-  agentComponents?: DiscordAgentComponentsConfig;
-  /** Discord UI customization (components, modals, etc.). */
-  ui?: DiscordUiConfig;
   /** Privileged Gateway Intents (must also be enabled in Discord Developer Portal). */
   intents?: DiscordIntentsConfig;
   /** PluralKit identity resolution for proxied messages. */
   pluralkit?: DiscordPluralKitConfig;
-  /** Outbound response prefix override for this channel/account. */
-  responsePrefix?: string;
-  /**
-   * Per-channel ack reaction override.
-   * Discord supports both unicode emoji and custom emoji names.
-   */
-  ackReaction?: string;
-  /** Bot activity status text (e.g. "Watching X"). */
-  activity?: string;
-  /** Bot status (online|dnd|idle|invisible). Defaults to online when presence is configured. */
-  status?: "online" | "dnd" | "idle" | "invisible";
-  /** Activity type (0=Game, 1=Streaming, 2=Listening, 3=Watching, 4=Custom, 5=Competing). Defaults to 4 (Custom) when activity is set. */
-  activityType?: 0 | 1 | 2 | 3 | 4 | 5;
-  /** Streaming URL (Twitch/YouTube). Required when activityType=1. */
-  activityUrl?: string;
 };
 
 export type DiscordConfig = {

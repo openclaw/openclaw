@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { loadConfig, validateConfigObject } from "./config.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempHome } from "./test-helpers.js";
 
 describe("config discord", () => {
@@ -56,6 +55,8 @@ describe("config discord", () => {
         "utf-8",
       );
 
+      vi.resetModules();
+      const { loadConfig } = await import("./config.js");
       const cfg = loadConfig();
 
       expect(cfg.channels?.discord?.enabled).toBe(true);
@@ -67,33 +68,5 @@ describe("config discord", () => {
       expect(cfg.channels?.discord?.guilds?.["123"]?.slug).toBe("friends-of-openclaw");
       expect(cfg.channels?.discord?.guilds?.["123"]?.channels?.general?.allow).toBe(true);
     });
-  });
-
-  it("rejects numeric discord allowlist entries", () => {
-    const res = validateConfigObject({
-      channels: {
-        discord: {
-          allowFrom: [123],
-          dm: { allowFrom: [456], groupChannels: [789] },
-          guilds: {
-            "123": {
-              users: [111],
-              roles: [222],
-              channels: {
-                general: { users: [333], roles: [444] },
-              },
-            },
-          },
-          execApprovals: { approvers: [555] },
-        },
-      },
-    });
-
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(
-        res.issues.some((issue) => issue.message.includes("Discord IDs must be strings")),
-      ).toBe(true);
-    }
   });
 });

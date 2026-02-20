@@ -1,20 +1,13 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { ChannelMessageActionContext } from "../../types.js";
 import {
   readNumberParam,
   readStringArrayParam,
   readStringParam,
 } from "../../../../agents/tools/common.js";
-import {
-  isDiscordModerationAction,
-  readDiscordModerationCommand,
-} from "../../../../agents/tools/discord-actions-moderation-shared.js";
 import { handleDiscordAction } from "../../../../agents/tools/discord-actions.js";
-import type { ChannelMessageActionContext } from "../../types.js";
 
-type Ctx = Pick<
-  ChannelMessageActionContext,
-  "action" | "params" | "cfg" | "accountId" | "requesterSenderId"
->;
+type Ctx = Pick<ChannelMessageActionContext, "action" | "params" | "cfg" | "accountId">;
 
 export async function tryHandleDiscordMessageActionGuildAdmin(params: {
   ctx: Ctx;
@@ -190,11 +183,6 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     const rateLimitPerUser = readNumberParam(actionParams, "rateLimitPerUser", {
       integer: true,
     });
-    const archived = typeof actionParams.archived === "boolean" ? actionParams.archived : undefined;
-    const locked = typeof actionParams.locked === "boolean" ? actionParams.locked : undefined;
-    const autoArchiveDuration = readNumberParam(actionParams, "autoArchiveDuration", {
-      integer: true,
-    });
     return await handleDiscordAction(
       {
         action: "channelEdit",
@@ -206,9 +194,6 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
         parentId: parentId === undefined ? undefined : parentId,
         nsfw,
         rateLimitPerUser: rateLimitPerUser ?? undefined,
-        archived,
-        locked,
-        autoArchiveDuration: autoArchiveDuration ?? undefined,
       },
       cfg,
     );
@@ -349,26 +334,30 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     );
   }
 
-  if (isDiscordModerationAction(action)) {
-    const moderation = readDiscordModerationCommand(action, {
-      ...actionParams,
-      durationMinutes: readNumberParam(actionParams, "durationMin", { integer: true }),
-      deleteMessageDays: readNumberParam(actionParams, "deleteDays", {
-        integer: true,
-      }),
+  if (action === "timeout" || action === "kick" || action === "ban") {
+    const guildId = readStringParam(actionParams, "guildId", {
+      required: true,
     });
-    const senderUserId = ctx.requesterSenderId?.trim() || undefined;
+    const userId = readStringParam(actionParams, "userId", { required: true });
+    const durationMinutes = readNumberParam(actionParams, "durationMin", {
+      integer: true,
+    });
+    const until = readStringParam(actionParams, "until");
+    const reason = readStringParam(actionParams, "reason");
+    const deleteMessageDays = readNumberParam(actionParams, "deleteDays", {
+      integer: true,
+    });
+    const discordAction = action;
     return await handleDiscordAction(
       {
-        action: moderation.action,
+        action: discordAction,
         accountId: accountId ?? undefined,
-        guildId: moderation.guildId,
-        userId: moderation.userId,
-        durationMinutes: moderation.durationMinutes,
-        until: moderation.until,
-        reason: moderation.reason,
-        deleteMessageDays: moderation.deleteMessageDays,
-        senderUserId,
+        guildId,
+        userId,
+        durationMinutes,
+        until,
+        reason,
+        deleteMessageDays,
       },
       cfg,
     );

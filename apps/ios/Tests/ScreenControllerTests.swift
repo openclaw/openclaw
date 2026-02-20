@@ -2,38 +2,25 @@ import Testing
 import WebKit
 @testable import OpenClaw
 
-@MainActor
-private func mountScreen(_ screen: ScreenController) throws -> (ScreenWebViewCoordinator, WKWebView) {
-    let coordinator = ScreenWebViewCoordinator(controller: screen)
-    _ = coordinator.makeContainerView()
-    let webView = try #require(coordinator.managedWebView)
-    return (coordinator, webView)
-}
-
 @Suite struct ScreenControllerTests {
-    @Test @MainActor func canvasModeConfiguresWebViewForTouch() throws {
+    @Test @MainActor func canvasModeConfiguresWebViewForTouch() {
         let screen = ScreenController()
-        let (coordinator, webView) = try mountScreen(screen)
-        defer { coordinator.teardown() }
 
-        #expect(webView.isOpaque == true)
-        #expect(webView.backgroundColor == .black)
+        #expect(screen.webView.isOpaque == true)
+        #expect(screen.webView.backgroundColor == .black)
 
-        let scrollView = webView.scrollView
+        let scrollView = screen.webView.scrollView
         #expect(scrollView.backgroundColor == .black)
         #expect(scrollView.contentInsetAdjustmentBehavior == .never)
         #expect(scrollView.isScrollEnabled == false)
         #expect(scrollView.bounces == false)
     }
 
-    @Test @MainActor func navigateEnablesScrollForWebPages() throws {
+    @Test @MainActor func navigateEnablesScrollForWebPages() {
         let screen = ScreenController()
-        let (coordinator, webView) = try mountScreen(screen)
-        defer { coordinator.teardown() }
-
         screen.navigate(to: "https://example.com")
 
-        let scrollView = webView.scrollView
+        let scrollView = screen.webView.scrollView
         #expect(scrollView.isScrollEnabled == true)
         #expect(scrollView.bounces == true)
     }
@@ -47,9 +34,6 @@ private func mountScreen(_ screen: ScreenController) throws -> (ScreenWebViewCoo
 
     @Test @MainActor func evalExecutesJavaScript() async throws {
         let screen = ScreenController()
-        let (coordinator, _) = try mountScreen(screen)
-        defer { coordinator.teardown() }
-
         let deadline = ContinuousClock().now.advanced(by: .seconds(3))
 
         while true {

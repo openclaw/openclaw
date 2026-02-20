@@ -1,5 +1,7 @@
 import type { loadConfig } from "../../../config/config.js";
 import type { resolveAgentRoute } from "../../../routing/resolve-route.js";
+import type { WebInboundMsg } from "../types.js";
+import type { GroupHistoryEntry } from "./process-message.js";
 import { buildAgentSessionKey } from "../../../routing/resolve-route.js";
 import {
   buildAgentMainSessionKey,
@@ -8,8 +10,6 @@ import {
 } from "../../../routing/session-key.js";
 import { formatError } from "../../session.js";
 import { whatsappInboundLog } from "../loggers.js";
-import type { WebInboundMsg } from "../types.js";
-import type { GroupHistoryEntry } from "./process-message.js";
 
 export async function maybeBroadcastMessage(params: {
   cfg: ReturnType<typeof loadConfig>;
@@ -60,7 +60,7 @@ export async function maybeBroadcastMessage(params: {
         channel: "whatsapp",
         accountId: params.route.accountId,
         peer: {
-          kind: params.msg.chatType === "group" ? "group" : "direct",
+          kind: params.msg.chatType === "group" ? "group" : "dm",
           id: params.peerId,
         },
         dmScope: params.cfg.session?.dmScope,

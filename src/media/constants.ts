@@ -21,9 +21,6 @@ export function mediaKindFromMime(mime?: string | null): MediaKind {
   if (mime === "application/pdf") {
     return "document";
   }
-  if (mime.startsWith("text/")) {
-    return "document";
-  }
   if (mime.startsWith("application/")) {
     return "document";
   }

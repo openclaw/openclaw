@@ -29,14 +29,11 @@ async function fetchMatrixMediaBuffer(params: {
 
   // Use the client's download method which handles auth
   try {
-    const result = await params.client.downloadContent(params.mxcUrl);
-    const raw = result.data ?? result;
-    const buffer = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
-
+    const buffer = await params.client.downloadContent(params.mxcUrl);
     if (buffer.byteLength > params.maxBytes) {
       throw new Error("Matrix media exceeds configured size limit");
     }
-    return { buffer, headerType: result.contentType };
+    return { buffer: Buffer.from(buffer) };
   } catch (err) {
     throw new Error(`Matrix media download failed: ${String(err)}`, { cause: err });
   }
@@ -56,9 +53,7 @@ async function fetchEncryptedMediaBuffer(params: {
   }
 
   // decryptMedia handles downloading and decrypting the encrypted content internally
-  const decrypted = await params.client.crypto.decryptMedia(
-    params.file as Parameters<typeof params.client.crypto.decryptMedia>[0],
-  );
+  const decrypted = await params.client.crypto.decryptMedia(params.file);
 
   if (decrypted.byteLength > params.maxBytes) {
     throw new Error("Matrix media exceeds configured size limit");

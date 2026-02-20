@@ -1,5 +1,5 @@
-import Observation
 import OpenClawProtocol
+import Observation
 import SwiftUI
 
 struct CronJobEditor: View {
@@ -16,46 +16,43 @@ struct CronJobEditor: View {
             + "Use an isolated session for agent turns so your main chat stays clean."
     static let sessionTargetNote =
         "Main jobs post a system event into the current main session. "
-            + "Isolated jobs run OpenClaw in a dedicated session and can announce results to a channel."
+            + "Isolated jobs run OpenClaw in a dedicated session and can deliver results (WhatsApp/Telegram/Discord/etc)."
     static let scheduleKindNote =
         "“At” runs once, “Every” repeats with a duration, “Cron” uses a 5-field Unix expression."
     static let isolatedPayloadNote =
-        "Isolated jobs always run an agent turn. Announce sends a short summary to a channel."
+        "Isolated jobs always run an agent turn. The result can be delivered to a channel, "
+            + "and a short summary is posted back to your main chat."
     static let mainPayloadNote =
         "System events are injected into the current main session. Agent turns require an isolated session target."
+    static let mainSummaryNote =
+        "Controls the label used when posting the completion summary back to the main session."
 
     @State var name: String = ""
     @State var description: String = ""
     @State var agentId: String = ""
     @State var enabled: Bool = true
     @State var sessionTarget: CronSessionTarget = .main
-    @State var wakeMode: CronWakeMode = .now
+    @State var wakeMode: CronWakeMode = .nextHeartbeat
     @State var deleteAfterRun: Bool = false
 
-    enum ScheduleKind: String, CaseIterable, Identifiable { case at, every, cron; var id: String {
-        rawValue
-    } }
+    enum ScheduleKind: String, CaseIterable, Identifiable { case at, every, cron; var id: String { rawValue } }
     @State var scheduleKind: ScheduleKind = .every
     @State var atDate: Date = .init().addingTimeInterval(60 * 5)
     @State var everyText: String = "1h"
     @State var cronExpr: String = "0 9 * * 3"
     @State var cronTz: String = ""
 
-    enum PayloadKind: String, CaseIterable, Identifiable { case systemEvent, agentTurn; var id: String {
-        rawValue
-    } }
+    enum PayloadKind: String, CaseIterable, Identifiable { case systemEvent, agentTurn; var id: String { rawValue } }
     @State var payloadKind: PayloadKind = .systemEvent
     @State var systemEventText: String = ""
     @State var agentMessage: String = ""
-    enum DeliveryChoice: String, CaseIterable, Identifiable { case announce, none; var id: String {
-        rawValue
-    } }
-    @State var deliveryMode: DeliveryChoice = .announce
+    @State var deliver: Bool = false
     @State var channel: String = "last"
     @State var to: String = ""
     @State var thinking: String = ""
     @State var timeoutSeconds: String = ""
     @State var bestEffortDeliver: Bool = false
+    @State var postPrefix: String = "Cron"
 
     var channelOptions: [String] {
         let ordered = self.channelsStore.orderedChannelIds()
@@ -125,8 +122,8 @@ struct CronJobEditor: View {
                             GridRow {
                                 self.gridLabel("Wake mode")
                                 Picker("", selection: self.$wakeMode) {
-                                    Text("now").tag(CronWakeMode.now)
                                     Text("next-heartbeat").tag(CronWakeMode.nextHeartbeat)
+                                    Text("now").tag(CronWakeMode.now)
                                 }
                                 .labelsHidden()
                                 .pickerStyle(.segmented)
@@ -250,6 +247,28 @@ struct CronJobEditor: View {
                             }
                         }
                     }
+
+                    if self.sessionTarget == .isolated {
+                        GroupBox("Main session summary") {
+                            Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 10) {
+                                GridRow {
+                                    self.gridLabel("Prefix")
+                                    TextField("Cron", text: self.$postPrefix)
+                                        .textFieldStyle(.roundedBorder)
+                                        .frame(maxWidth: .infinity)
+                                }
+                                GridRow {
+                                    Color.clear
+                                        .frame(width: self.labelColumnWidth, height: 1)
+                                    Text(
+                                        Self.mainSummaryNote)
+                                        .font(.footnote)
+                                        .foregroundStyle(.secondary)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                            }
+                        }
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 2)
@@ -321,17 +340,13 @@ struct CronJobEditor: View {
                         .frame(width: 180, alignment: .leading)
                 }
                 GridRow {
-                    self.gridLabel("Delivery")
-                    Picker("", selection: self.$deliveryMode) {
-                        Text("Announce summary").tag(DeliveryChoice.announce)
-                        Text("None").tag(DeliveryChoice.none)
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.segmented)
+                    self.gridLabel("Deliver")
+                    Toggle("Deliver result to a channel", isOn: self.$deliver)
+                        .toggleStyle(.switch)
                 }
             }
 
-            if self.deliveryMode == .announce {
+            if self.deliver {
                 Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 10) {
                     GridRow {
                         self.gridLabel("Channel")
@@ -352,7 +367,7 @@ struct CronJobEditor: View {
                     }
                     GridRow {
                         self.gridLabel("Best-effort")
-                        Toggle("Do not fail the job if announce fails", isOn: self.$bestEffortDeliver)
+                        Toggle("Do not fail the job if delivery fails", isOn: self.$bestEffortDeliver)
                             .toggleStyle(.switch)
                     }
                 }

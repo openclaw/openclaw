@@ -13,11 +13,7 @@ export type NormalizedPluginsConfig = {
   entries: Record<string, { enabled?: boolean; config?: unknown }>;
 };
 
-export const BUNDLED_ENABLED_BY_DEFAULT = new Set<string>([
-  "device-pair",
-  "phone-control",
-  "talk-voice",
-]);
+export const BUNDLED_ENABLED_BY_DEFAULT = new Set<string>();
 
 const normalizeList = (value: unknown): string[] => {
   if (!Array.isArray(value)) {

@@ -2,7 +2,6 @@ import type { OpenClawConfig, DmPolicy } from "openclaw/plugin-sdk";
 import {
   addWildcardAllowFrom,
   formatDocsLink,
-  mergeAllowFromEntries,
   promptAccountId,
   type ChannelOnboardingAdapter,
   type ChannelOnboardingDmPolicy,
@@ -56,13 +55,13 @@ async function promptAllowFrom(params: {
 }): Promise<OpenClawConfig> {
   const current = params.cfg.channels?.["googlechat"]?.dm?.allowFrom ?? [];
   const entry = await params.prompter.text({
-    message: "Google Chat allowFrom (users/<id> or raw email; avoid users/<email>)",
+    message: "Google Chat allowFrom (user id or email)",
     placeholder: "users/123456789, name@example.com",
     initialValue: current[0] ? String(current[0]) : undefined,
     validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
   });
   const parts = parseAllowFromInput(String(entry));
-  const unique = mergeAllowFromEntries(undefined, parts);
+  const unique = [...new Set(parts)];
   return {
     ...params.cfg,
     channels: {

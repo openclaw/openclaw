@@ -1,20 +1,98 @@
 import "./test-helpers.js";
-import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
-import { monitorWebChannel } from "./auto-reply.js";
-import {
-  createMockWebListener,
-  installWebAutoReplyTestHomeHooks,
-  installWebAutoReplyUnitTestHooks,
-  resetLoadConfigMock,
-  setLoadConfigMock,
-} from "./auto-reply.test-harness.js";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-installWebAutoReplyTestHomeHooks();
+vi.mock("../agents/pi-embedded.js", () => ({
+  abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
+  isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
+  isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
+  runEmbeddedPiAgent: vi.fn(),
+  queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
+  resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
+}));
+
+import type { OpenClawConfig } from "../config/config.js";
+import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
+import { monitorWebChannel } from "./auto-reply.js";
+import { resetLoadConfigMock, setLoadConfigMock } from "./test-helpers.js";
+
+let previousHome: string | undefined;
+let tempHome: string | undefined;
+
+const rmDirWithRetries = async (dir: string): Promise<void> => {
+  // Some tests can leave async session-store writes in-flight; recursive deletion can race and throw ENOTEMPTY.
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    try {
+      await fs.rm(dir, { recursive: true, force: true });
+      return;
+    } catch (err) {
+      const code =
+        err && typeof err === "object" && "code" in err
+          ? String((err as { code?: unknown }).code)
+          : null;
+      if (code === "ENOTEMPTY" || code === "EBUSY" || code === "EPERM") {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  await fs.rm(dir, { recursive: true, force: true });
+};
+
+beforeEach(async () => {
+  resetInboundDedupe();
+  previousHome = process.env.HOME;
+  tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-web-home-"));
+  process.env.HOME = tempHome;
+});
+
+afterEach(async () => {
+  process.env.HOME = previousHome;
+  if (tempHome) {
+    await rmDirWithRetries(tempHome);
+    tempHome = undefined;
+  }
+});
+
+const _makeSessionStore = async (
+  entries: Record<string, unknown> = {},
+): Promise<{ storePath: string; cleanup: () => Promise<void> }> => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-"));
+  const storePath = path.join(dir, "sessions.json");
+  await fs.writeFile(storePath, JSON.stringify(entries));
+  const cleanup = async () => {
+    // Session store writes can be in-flight when the test finishes (e.g. updateLastRoute
+    // after a message flush). `fs.rm({ recursive })` can race and throw ENOTEMPTY.
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      try {
+        await fs.rm(dir, { recursive: true, force: true });
+        return;
+      } catch (err) {
+        const code =
+          err && typeof err === "object" && "code" in err
+            ? String((err as { code?: unknown }).code)
+            : null;
+        if (code === "ENOTEMPTY" || code === "EBUSY" || code === "EPERM") {
+          await new Promise((resolve) => setTimeout(resolve, 25));
+          continue;
+        }
+        throw err;
+      }
+    }
+
+    await fs.rm(dir, { recursive: true, force: true });
+  };
+  return {
+    storePath,
+    cleanup,
+  };
+};
 
 describe("typing controller idle", () => {
-  installWebAutoReplyUnitTestHooks();
-
   it("marks dispatch idle after replies flush", async () => {
     const markDispatchIdle = vi.fn();
     const typingMock = {
@@ -54,12 +132,11 @@ describe("typing controller idle", () => {
           timestamp: Date.now(),
           chatType: "direct",
           chatId: "direct:+1000",
-          accountId: "default",
           sendComposing,
           reply,
           sendMedia,
         });
-        return createMockWebListener();
+        return { close: vi.fn().mockResolvedValue(undefined) };
       },
       false,
       replyResolver,

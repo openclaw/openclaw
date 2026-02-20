@@ -10,25 +10,24 @@ OpenClaw.app uses SSH tunneling to connect to a remote gateway. This guide shows
 
 ## Overview
 
-```mermaid
-flowchart TB
-    subgraph Client["Client Machine"]
-        direction TB
-        A["OpenClaw.app"]
-        B["ws://127.0.0.1:18789\n(local port)"]
-        T["SSH Tunnel"]
-
-        A --> B
-        B --> T
-    end
-    subgraph Remote["Remote Machine"]
-        direction TB
-        C["Gateway WebSocket"]
-        D["ws://127.0.0.1:18789"]
-
-        C --> D
-    end
-    T --> C
+```
+┌─────────────────────────────────────────────────────────────┐
+│                        Client Machine                          │
+│                                                              │
+│  OpenClaw.app ──► ws://127.0.0.1:18789 (local port)           │
+│                     │                                        │
+│                     ▼                                        │
+│  SSH Tunnel ────────────────────────────────────────────────│
+│                     │                                        │
+└─────────────────────┼──────────────────────────────────────┘
+                      │
+                      ▼
+┌─────────────────────────────────────────────────────────────┐
+│                         Remote Machine                        │
+│                                                              │
+│  Gateway WebSocket ──► ws://127.0.0.1:18789 ──►              │
+│                                                              │
+└─────────────────────────────────────────────────────────────┘
 ```
 
 ## Quick Setup

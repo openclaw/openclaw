@@ -5,7 +5,6 @@ import type {
 } from "openclaw/plugin-sdk";
 import {
   createActionGate,
-  extractToolSend,
   jsonResult,
   readNumberParam,
   readReactionParams,
@@ -65,7 +64,16 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
     return Array.from(actions);
   },
   extractToolSend: ({ args }) => {
-    return extractToolSend(args, "sendMessage");
+    const action = typeof args.action === "string" ? args.action.trim() : "";
+    if (action !== "sendMessage") {
+      return null;
+    }
+    const to = typeof args.to === "string" ? args.to : undefined;
+    if (!to) {
+      return null;
+    }
+    const accountId = typeof args.accountId === "string" ? args.accountId.trim() : undefined;
+    return { to, accountId };
   },
   handleAction: async ({ action, params, cfg, accountId }) => {
     const account = resolveGoogleChatAccount({
@@ -89,11 +97,11 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
       if (mediaUrl) {
         const core = getGoogleChatRuntime();
         const maxBytes = (account.config.mediaMaxMb ?? 20) * 1024 * 1024;
-        const loaded = await core.channel.media.fetchRemoteMedia({ url: mediaUrl, maxBytes });
+        const loaded = await core.channel.media.fetchRemoteMedia(mediaUrl, { maxBytes });
         const upload = await uploadGoogleChatAttachment({
           account,
           space,
-          filename: loaded.fileName ?? "attachment",
+          filename: loaded.filename ?? "attachment",
           buffer: loaded.buffer,
           contentType: loaded.contentType,
         });
@@ -106,7 +114,7 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
             ? [
                 {
                   attachmentUploadToken: upload.attachmentUploadToken,
-                  contentName: loaded.fileName,
+                  contentName: loaded.filename,
                 },
               ]
             : undefined,

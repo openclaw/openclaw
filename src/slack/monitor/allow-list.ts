@@ -1,20 +1,21 @@
 import type { AllowlistMatch } from "../../channels/allowlist-match.js";
-import {
-  normalizeHyphenSlug,
-  normalizeStringEntries,
-  normalizeStringEntriesLower,
-} from "../../shared/string-normalization.js";
 
 export function normalizeSlackSlug(raw?: string) {
-  return normalizeHyphenSlug(raw);
+  const trimmed = raw?.trim().toLowerCase() ?? "";
+  if (!trimmed) {
+    return "";
+  }
+  const dashed = trimmed.replace(/\s+/g, "-");
+  const cleaned = dashed.replace(/[^a-z0-9#@._+-]+/g, "-");
+  return cleaned.replace(/-{2,}/g, "-").replace(/^[-.]+|[-.]+$/g, "");
 }
 
 export function normalizeAllowList(list?: Array<string | number>) {
-  return normalizeStringEntries(list);
+  return (list ?? []).map((entry) => String(entry).trim()).filter(Boolean);
 }
 
 export function normalizeAllowListLower(list?: Array<string | number>) {
-  return normalizeStringEntriesLower(list);
+  return normalizeAllowList(list).map((entry) => entry.toLowerCase());
 }
 
 export type SlackAllowListMatch = AllowlistMatch<

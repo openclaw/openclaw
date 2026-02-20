@@ -1,23 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { closePlaywrightBrowserConnection, getPageForTargetId } from "./pw-session.js";
-
-const connectOverCdpMock = vi.fn();
-const getChromeWebSocketUrlMock = vi.fn();
-
-vi.mock("playwright-core", () => ({
-  chromium: {
-    connectOverCDP: (...args: unknown[]) => connectOverCdpMock(...args),
-  },
-}));
-
-vi.mock("./chrome.js", () => ({
-  getChromeWebSocketUrl: (...args: unknown[]) => getChromeWebSocketUrlMock(...args),
-}));
 
 describe("pw-session getPageForTargetId", () => {
   it("falls back to the only page when CDP session attachment is blocked (extension relays)", async () => {
-    connectOverCdpMock.mockReset();
-    getChromeWebSocketUrlMock.mockReset();
+    vi.resetModules();
 
     const pageOn = vi.fn();
     const contextOn = vi.fn();
@@ -46,16 +31,24 @@ describe("pw-session getPageForTargetId", () => {
       close: browserClose,
     } as unknown as import("playwright-core").Browser;
 
-    connectOverCdpMock.mockResolvedValue(browser);
-    getChromeWebSocketUrlMock.mockResolvedValue(null);
+    vi.doMock("playwright-core", () => ({
+      chromium: {
+        connectOverCDP: vi.fn(async () => browser),
+      },
+    }));
 
-    const resolved = await getPageForTargetId({
+    vi.doMock("./chrome.js", () => ({
+      getChromeWebSocketUrl: vi.fn(async () => null),
+    }));
+
+    const mod = await import("./pw-session.js");
+    const resolved = await mod.getPageForTargetId({
       cdpUrl: "http://127.0.0.1:18792",
       targetId: "NOT_A_TAB",
     });
     expect(resolved).toBe(page);
 
-    await closePlaywrightBrowserConnection();
+    await mod.closePlaywrightBrowserConnection();
     expect(browserClose).toHaveBeenCalled();
   });
 });

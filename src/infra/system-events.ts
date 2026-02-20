@@ -2,7 +2,7 @@
 // prefixed to the next prompt. We intentionally avoid persistence to keep
 // events ephemeral. Events are session-scoped and require an explicit key.
 
-export type SystemEvent = { text: string; ts: number; contextKey?: string | null };
+export type SystemEvent = { text: string; ts: number };
 
 const MAX_EVENTS = 20;
 
@@ -65,17 +65,12 @@ export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
   if (!cleaned) {
     return;
   }
-  const normalizedContextKey = normalizeContextKey(options?.contextKey);
-  entry.lastContextKey = normalizedContextKey;
+  entry.lastContextKey = normalizeContextKey(options?.contextKey);
   if (entry.lastText === cleaned) {
     return;
   } // skip consecutive duplicates
   entry.lastText = cleaned;
-  entry.queue.push({
-    text: cleaned,
-    ts: Date.now(),
-    contextKey: normalizedContextKey,
-  });
+  entry.queue.push({ text: cleaned, ts: Date.now() });
   if (entry.queue.length > MAX_EVENTS) {
     entry.queue.shift();
   }
@@ -99,13 +94,9 @@ export function drainSystemEvents(sessionKey: string): string[] {
   return drainSystemEventEntries(sessionKey).map((event) => event.text);
 }
 
-export function peekSystemEventEntries(sessionKey: string): SystemEvent[] {
-  const key = requireSessionKey(sessionKey);
-  return queues.get(key)?.queue.map((event) => ({ ...event })) ?? [];
-}
-
 export function peekSystemEvents(sessionKey: string): string[] {
-  return peekSystemEventEntries(sessionKey).map((event) => event.text);
+  const key = requireSessionKey(sessionKey);
+  return queues.get(key)?.queue.map((e) => e.text) ?? [];
 }
 
 export function hasSystemEvents(sessionKey: string) {

@@ -72,9 +72,7 @@ enum IconOverrideSelection: String, CaseIterable, Identifiable {
     case mainBash, mainRead, mainWrite, mainEdit, mainOther
     case otherBash, otherRead, otherWrite, otherEdit, otherOther
 
-    var id: String {
-        self.rawValue
-    }
+    var id: String { self.rawValue }
 
     var label: String {
         switch self {

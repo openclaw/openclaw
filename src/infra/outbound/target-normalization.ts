@@ -1,5 +1,5 @@
-import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.js";
+import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 
 export function normalizeChannelTargetInput(raw: string): string {
   return raw.trim();
@@ -11,7 +11,8 @@ export function normalizeTargetForProvider(provider: string, raw?: string): stri
   }
   const providerId = normalizeChannelId(provider);
   const plugin = providerId ? getChannelPlugin(providerId) : undefined;
-  const normalized = plugin?.messaging?.normalizeTarget?.(raw) ?? (raw.trim() || undefined);
+  const normalized =
+    plugin?.messaging?.normalizeTarget?.(raw) ?? (raw.trim().toLowerCase() || undefined);
   return normalized || undefined;
 }
 

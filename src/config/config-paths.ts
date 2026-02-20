@@ -1,5 +1,3 @@
-import { isPlainObject } from "../utils.js";
-
 type PathNode = Record<string, unknown>;
 
 const BLOCKED_KEYS = new Set(["__proto__", "prototype", "constructor"]);
@@ -80,4 +78,13 @@ export function getConfigValueAtPath(root: PathNode, path: string[]): unknown {
     cursor = cursor[key];
   }
   return cursor;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.prototype.toString.call(value) === "[object Object]"
+  );
 }

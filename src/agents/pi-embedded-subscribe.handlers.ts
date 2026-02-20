@@ -1,3 +1,7 @@
+import type {
+  EmbeddedPiSubscribeContext,
+  EmbeddedPiSubscribeEvent,
+} from "./pi-embedded-subscribe.handlers.types.js";
 import {
   handleAgentEnd,
   handleAgentStart,
@@ -14,10 +18,6 @@ import {
   handleToolExecutionStart,
   handleToolExecutionUpdate,
 } from "./pi-embedded-subscribe.handlers.tools.js";
-import type {
-  EmbeddedPiSubscribeContext,
-  EmbeddedPiSubscribeEvent,
-} from "./pi-embedded-subscribe.handlers.types.js";
 
 export function createEmbeddedPiSessionEventHandler(ctx: EmbeddedPiSubscribeContext) {
   return (evt: EmbeddedPiSubscribeEvent) => {
@@ -42,10 +42,7 @@ export function createEmbeddedPiSessionEventHandler(ctx: EmbeddedPiSubscribeCont
         handleToolExecutionUpdate(ctx, evt as never);
         return;
       case "tool_execution_end":
-        // Async handler - best-effort, non-blocking
-        handleToolExecutionEnd(ctx, evt as never).catch((err) => {
-          ctx.log.debug(`tool_execution_end handler failed: ${String(err)}`);
-        });
+        handleToolExecutionEnd(ctx, evt as never);
         return;
       case "agent_start":
         handleAgentStart(ctx);

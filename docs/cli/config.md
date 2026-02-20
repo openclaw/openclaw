@@ -39,12 +39,12 @@ openclaw config set agents.list[1].tools.exec.node "node-id-or-name"
 ## Values
 
 Values are parsed as JSON5 when possible; otherwise they are treated as strings.
-Use `--strict-json` to require JSON5 parsing. `--json` remains supported as a legacy alias.
+Use `--json` to require JSON5 parsing.
 
 ```bash
 openclaw config set agents.defaults.heartbeat.every "0m"
-openclaw config set gateway.port 19001 --strict-json
-openclaw config set channels.whatsapp.groups '["*"]' --strict-json
+openclaw config set gateway.port 19001 --json
+openclaw config set channels.whatsapp.groups '["*"]' --json
 ```
 
 Restart the gateway after edits.

@@ -1,15 +1,10 @@
-import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
+import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
 import { normalizeProviderId } from "../model-selection.js";
 import {
   ensureAuthProfileStore,
   saveAuthProfileStore,
   updateAuthProfileStoreWithLock,
 } from "./store.js";
-import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
-
-export function dedupeProfileIds(profileIds: string[]): string[] {
-  return [...new Set(profileIds)];
-}
 
 export async function setAuthProfileOrder(params: {
   agentDir?: string;
@@ -21,7 +16,13 @@ export async function setAuthProfileOrder(params: {
     params.order && Array.isArray(params.order)
       ? params.order.map((entry) => String(entry).trim()).filter(Boolean)
       : [];
-  const deduped = dedupeProfileIds(sanitized);
+
+  const deduped: string[] = [];
+  for (const entry of sanitized) {
+    if (!deduped.includes(entry)) {
+      deduped.push(entry);
+    }
+  }
 
   return await updateAuthProfileStoreWithLock({
     agentDir: params.agentDir,
@@ -48,34 +49,9 @@ export function upsertAuthProfile(params: {
   credential: AuthProfileCredential;
   agentDir?: string;
 }): void {
-  const credential =
-    params.credential.type === "api_key"
-      ? {
-          ...params.credential,
-          ...(typeof params.credential.key === "string"
-            ? { key: normalizeSecretInput(params.credential.key) }
-            : {}),
-        }
-      : params.credential.type === "token"
-        ? { ...params.credential, token: normalizeSecretInput(params.credential.token) }
-        : params.credential;
   const store = ensureAuthProfileStore(params.agentDir);
-  store.profiles[params.profileId] = credential;
+  store.profiles[params.profileId] = params.credential;
   saveAuthProfileStore(store, params.agentDir);
-}
-
-export async function upsertAuthProfileWithLock(params: {
-  profileId: string;
-  credential: AuthProfileCredential;
-  agentDir?: string;
-}): Promise<AuthProfileStore | null> {
-  return await updateAuthProfileStoreWithLock({
-    agentDir: params.agentDir,
-    updater: (store) => {
-      store.profiles[params.profileId] = params.credential;
-      return true;
-    },
-  });
 }
 
 export function listProfilesForProvider(store: AuthProfileStore, provider: string): string[] {

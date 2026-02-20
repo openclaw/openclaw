@@ -1,10 +1,14 @@
 import { readFileSync } from "node:fs";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk";
 import type { CoreConfig, NextcloudTalkAccountConfig } from "./types.js";
 
+const TRUTHY_ENV = new Set(["true", "1", "yes", "on"]);
+
 function isTruthyEnvValue(value?: string): boolean {
-  const normalized = (value ?? "").trim().toLowerCase();
-  return normalized === "true" || normalized === "1" || normalized === "yes" || normalized === "on";
+  if (!value) {
+    return false;
+  }
+  return TRUTHY_ENV.has(value.trim().toLowerCase());
 }
 
 const debugAccounts = (...args: unknown[]) => {

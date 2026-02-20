@@ -11,37 +11,47 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func processFile(ctx context.Context, translator *PiTranslator, tm *TranslationMemory, docsRoot, filePath, srcLang, tgtLang string) (bool, error) {
-	absPath, relPath, err := resolveDocsPath(docsRoot, filePath)
+func processFile(ctx context.Context, translator *PiTranslator, tm *TranslationMemory, docsRoot, filePath, srcLang, tgtLang string) error {
+	absPath, err := filepath.Abs(filePath)
 	if err != nil {
-		return false, err
+		return err
+	}
+	relPath, err := filepath.Rel(docsRoot, absPath)
+	if err != nil {
+		return err
+	}
+	if relPath == "." || relPath == "" {
+		return fmt.Errorf("file %s resolves to docs root %s", absPath, docsRoot)
+	}
+	if filepath.IsAbs(relPath) || relPath == ".." || strings.HasPrefix(relPath, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("file %s not under docs root %s", absPath, docsRoot)
 	}
 
 	content, err := os.ReadFile(absPath)
 	if err != nil {
-		return false, err
+		return err
 	}
 
 	frontMatter, body := splitFrontMatter(string(content))
 	frontData := map[string]any{}
 	if frontMatter != "" {
 		if err := yaml.Unmarshal([]byte(frontMatter), &frontData); err != nil {
-			return false, fmt.Errorf("frontmatter parse failed for %s: %w", relPath, err)
+			return fmt.Errorf("frontmatter parse failed for %s: %w", relPath, err)
 		}
 	}
 
 	if err := translateFrontMatter(ctx, translator, tm, frontData, relPath, srcLang, tgtLang); err != nil {
-		return false, err
+		return err
 	}
 
 	body, err = translateHTMLBlocks(ctx, translator, body, srcLang, tgtLang)
 	if err != nil {
-		return false, err
+		return err
 	}
 
 	segments, err := extractSegments(body, relPath)
 	if err != nil {
-		return false, err
+		return err
 	}
 
 	namespace := cacheNamespace()
@@ -54,7 +64,7 @@ func processFile(ctx context.Context, translator *PiTranslator, tm *TranslationM
 		}
 		translated, err := translator.Translate(ctx, seg.Text, srcLang, tgtLang)
 		if err != nil {
-			return false, fmt.Errorf("translate failed (%s): %w", relPath, err)
+			return fmt.Errorf("translate failed (%s): %w", relPath, err)
 		}
 		seg.Translated = translated
 		entry := TMEntry{
@@ -76,16 +86,16 @@ func processFile(ctx context.Context, translator *PiTranslator, tm *TranslationM
 	translatedBody := applyTranslations(body, segments)
 	updatedFront, err := encodeFrontMatter(frontData, relPath, content)
 	if err != nil {
-		return false, err
+		return err
 	}
 
 	outputPath := filepath.Join(docsRoot, tgtLang, relPath)
 	if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
-		return false, err
+		return err
 	}
 
 	output := updatedFront + translatedBody
-	return false, os.WriteFile(outputPath, []byte(output), 0o644)
+	return os.WriteFile(outputPath, []byte(output), 0o644)
 }
 
 func splitFrontMatter(content string) (string, string) {
@@ -115,8 +125,8 @@ func splitFrontMatter(content string) (string, string) {
 }
 
 func encodeFrontMatter(frontData map[string]any, relPath string, source []byte) (string, error) {
-	if frontData == nil {
-		frontData = map[string]any{}
+	if len(frontData) == 0 {
+		return "", nil
 	}
 	frontData["x-i18n"] = map[string]any{
 		"source_path":  relPath,
@@ -143,13 +153,6 @@ func translateFrontMatter(ctx context.Context, translator *PiTranslator, tm *Tra
 			return err
 		}
 		data["summary"] = translated
-	}
-	if title, ok := data["title"].(string); ok {
-		translated, err := translateSnippet(ctx, translator, tm, relPath+":frontmatter:title", title, srcLang, tgtLang)
-		if err != nil {
-			return err
-		}
-		data["title"] = translated
 	}
 	if readWhen, ok := data["read_when"].([]any); ok {
 		translated := make([]any, 0, len(readWhen))

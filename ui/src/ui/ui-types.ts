@@ -29,8 +29,9 @@ export type CronFormState = {
   wakeMode: "next-heartbeat" | "now";
   payloadKind: "systemEvent" | "agentTurn";
   payloadText: string;
-  deliveryMode: "none" | "announce" | "webhook";
-  deliveryChannel: string;
-  deliveryTo: string;
+  deliver: boolean;
+  channel: string;
+  to: string;
   timeoutSeconds: string;
+  postToMainPrefix: string;
 };

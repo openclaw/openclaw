@@ -7,13 +7,7 @@ import { join, resolve } from "node:path";
 type PackFile = { path: string };
 type PackResult = { files?: PackFile[] };
 
-const requiredPathGroups = [
-  ["dist/index.js", "dist/index.mjs"],
-  ["dist/entry.js", "dist/entry.mjs"],
-  "dist/plugin-sdk/index.js",
-  "dist/plugin-sdk/index.d.ts",
-  "dist/build-info.json",
-];
+const requiredPaths = ["dist/discord/send.js", "dist/hooks/gmail.js", "dist/whatsapp/normalize.js"];
 const forbiddenPrefixes = ["dist/OpenClaw.app/"];
 
 type PackageJson = {
@@ -82,14 +76,7 @@ function main() {
   const files = results.flatMap((entry) => entry.files ?? []);
   const paths = new Set(files.map((file) => file.path));
 
-  const missing = requiredPathGroups
-    .flatMap((group) => {
-      if (Array.isArray(group)) {
-        return group.some((path) => paths.has(path)) ? [] : [group.join(" or ")];
-      }
-      return paths.has(group) ? [] : [group];
-    })
-    .toSorted();
+  const missing = requiredPaths.filter((path) => !paths.has(path));
   const forbidden = [...paths].filter((path) =>
     forbiddenPrefixes.some((prefix) => path.startsWith(prefix)),
   );

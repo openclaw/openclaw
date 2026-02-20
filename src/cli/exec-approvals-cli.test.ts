@@ -1,6 +1,5 @@
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createCliRuntimeCapture } from "./test-runtime-capture.js";
+import { describe, expect, it, vi } from "vitest";
 
 const callGatewayFromCli = vi.fn(async (method: string, _opts: unknown, params?: unknown) => {
   if (method.endsWith(".get")) {
@@ -14,7 +13,15 @@ const callGatewayFromCli = vi.fn(async (method: string, _opts: unknown, params?:
   return { method, params };
 });
 
-const { runtimeErrors, defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
+const runtimeLogs: string[] = [];
+const runtimeErrors: string[] = [];
+const defaultRuntime = {
+  log: (msg: string) => runtimeLogs.push(msg),
+  error: (msg: string) => runtimeErrors.push(msg),
+  exit: (code: number) => {
+    throw new Error(`__exit__:${code}`);
+  },
+};
 
 const localSnapshot = {
   path: "/tmp/local-exec-approvals.json",
@@ -23,10 +30,6 @@ const localSnapshot = {
   hash: "hash-local",
   file: { version: 1, agents: {} },
 };
-
-function resetLocalSnapshot() {
-  localSnapshot.file = { version: 1, agents: {} };
-}
 
 vi.mock("./gateway-rpc.js", () => ({
   callGatewayFromCli: (method: string, opts: unknown, params?: unknown) =>
@@ -56,42 +59,50 @@ vi.mock("../infra/exec-approvals.js", async () => {
   };
 });
 
-const { registerExecApprovalsCli } = await import("./exec-approvals-cli.js");
-const execApprovals = await import("../infra/exec-approvals.js");
-
 describe("exec approvals CLI", () => {
-  const createProgram = () => {
+  it("loads local approvals by default", async () => {
+    runtimeLogs.length = 0;
+    runtimeErrors.length = 0;
+    callGatewayFromCli.mockClear();
+
+    const { registerExecApprovalsCli } = await import("./exec-approvals-cli.js");
     const program = new Command();
     program.exitOverride();
     registerExecApprovalsCli(program);
-    return program;
-  };
 
-  const runApprovalsCommand = async (args: string[]) => {
-    const program = createProgram();
-    await program.parseAsync(args, { from: "user" });
-  };
-
-  beforeEach(() => {
-    resetLocalSnapshot();
-    resetRuntimeCapture();
-    callGatewayFromCli.mockClear();
-  });
-
-  it("routes get command to local, gateway, and node modes", async () => {
-    await runApprovalsCommand(["approvals", "get"]);
+    await program.parseAsync(["approvals", "get"], { from: "user" });
 
     expect(callGatewayFromCli).not.toHaveBeenCalled();
     expect(runtimeErrors).toHaveLength(0);
+  });
+
+  it("loads gateway approvals when --gateway is set", async () => {
+    runtimeLogs.length = 0;
+    runtimeErrors.length = 0;
     callGatewayFromCli.mockClear();
 
-    await runApprovalsCommand(["approvals", "get", "--gateway"]);
+    const { registerExecApprovalsCli } = await import("./exec-approvals-cli.js");
+    const program = new Command();
+    program.exitOverride();
+    registerExecApprovalsCli(program);
+
+    await program.parseAsync(["approvals", "get", "--gateway"], { from: "user" });
 
     expect(callGatewayFromCli).toHaveBeenCalledWith("exec.approvals.get", expect.anything(), {});
     expect(runtimeErrors).toHaveLength(0);
+  });
+
+  it("loads node approvals when --node is set", async () => {
+    runtimeLogs.length = 0;
+    runtimeErrors.length = 0;
     callGatewayFromCli.mockClear();
 
-    await runApprovalsCommand(["approvals", "get", "--node", "macbook"]);
+    const { registerExecApprovalsCli } = await import("./exec-approvals-cli.js");
+    const program = new Command();
+    program.exitOverride();
+    registerExecApprovalsCli(program);
+
+    await program.parseAsync(["approvals", "get", "--node", "macbook"], { from: "user" });
 
     expect(callGatewayFromCli).toHaveBeenCalledWith("exec.approvals.node.get", expect.anything(), {
       nodeId: "node-1",
@@ -100,10 +111,20 @@ describe("exec approvals CLI", () => {
   });
 
   it("defaults allowlist add to wildcard agent", async () => {
+    runtimeLogs.length = 0;
+    runtimeErrors.length = 0;
+    callGatewayFromCli.mockClear();
+
+    const execApprovals = await import("../infra/exec-approvals.js");
     const saveExecApprovals = vi.mocked(execApprovals.saveExecApprovals);
     saveExecApprovals.mockClear();
 
-    await runApprovalsCommand(["approvals", "allowlist", "add", "/usr/bin/uname"]);
+    const { registerExecApprovalsCli } = await import("./exec-approvals-cli.js");
+    const program = new Command();
+    program.exitOverride();
+    registerExecApprovalsCli(program);
+
+    await program.parseAsync(["approvals", "allowlist", "add", "/usr/bin/uname"], { from: "user" });
 
     expect(callGatewayFromCli).not.toHaveBeenCalledWith(
       "exec.approvals.set",
@@ -117,29 +138,5 @@ describe("exec approvals CLI", () => {
         }),
       }),
     );
-  });
-
-  it("removes wildcard allowlist entry and prunes empty agent", async () => {
-    localSnapshot.file = {
-      version: 1,
-      agents: {
-        "*": {
-          allowlist: [{ pattern: "/usr/bin/uname", lastUsedAt: Date.now() }],
-        },
-      },
-    };
-
-    const saveExecApprovals = vi.mocked(execApprovals.saveExecApprovals);
-    saveExecApprovals.mockClear();
-
-    await runApprovalsCommand(["approvals", "allowlist", "remove", "/usr/bin/uname"]);
-
-    expect(saveExecApprovals).toHaveBeenCalledWith(
-      expect.objectContaining({
-        version: 1,
-        agents: undefined,
-      }),
-    );
-    expect(runtimeErrors).toHaveLength(0);
   });
 });

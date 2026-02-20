@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearSessionStoreCacheForTest,
   loadSessionStore,
@@ -10,23 +10,12 @@ import {
 } from "./sessions.js";
 
 describe("Session Store Cache", () => {
-  let fixtureRoot = "";
-  let caseId = 0;
   let testDir: string;
   let storePath: string;
 
-  beforeAll(() => {
-    fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "session-cache-test-"));
-  });
-
-  afterAll(() => {
-    if (fixtureRoot) {
-      fs.rmSync(fixtureRoot, { recursive: true, force: true });
-    }
-  });
-
   beforeEach(() => {
-    testDir = path.join(fixtureRoot, `case-${caseId++}`);
+    // Create a temporary directory for test
+    testDir = path.join(os.tmpdir(), `session-cache-test-${Date.now()}`);
     fs.mkdirSync(testDir, { recursive: true });
     storePath = path.join(testDir, "sessions.json");
 
@@ -38,6 +27,10 @@ describe("Session Store Cache", () => {
   });
 
   afterEach(() => {
+    // Clean up test directory
+    if (fs.existsSync(testDir)) {
+      fs.rmSync(testDir, { recursive: true, force: true });
+    }
     clearSessionStoreCacheForTest();
     delete process.env.OPENCLAW_SESSION_CACHE_TTL_MS;
   });

@@ -11,7 +11,7 @@ export const ConfigSetParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
-const ConfigApplyLikeParamsSchema = Type.Object(
+export const ConfigApplyParamsSchema = Type.Object(
   {
     raw: NonEmptyString,
     baseHash: Type.Optional(NonEmptyString),
@@ -22,8 +22,16 @@ const ConfigApplyLikeParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const ConfigApplyParamsSchema = ConfigApplyLikeParamsSchema;
-export const ConfigPatchParamsSchema = ConfigApplyLikeParamsSchema;
+export const ConfigPatchParamsSchema = Type.Object(
+  {
+    raw: NonEmptyString,
+    baseHash: Type.Optional(NonEmptyString),
+    sessionKey: Type.Optional(Type.String()),
+    note: Type.Optional(Type.String()),
+    restartDelayMs: Type.Optional(Type.Integer({ minimum: 0 })),
+  },
+  { additionalProperties: false },
+);
 
 export const ConfigSchemaParamsSchema = Type.Object({}, { additionalProperties: false });
 

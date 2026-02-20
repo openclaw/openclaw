@@ -4,33 +4,6 @@ import { defaultRuntime } from "../../runtime.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { warnIfCronSchedulerDisabled } from "./shared.js";
 
-function registerCronToggleCommand(params: {
-  cron: Command;
-  name: "enable" | "disable";
-  description: string;
-  enabled: boolean;
-}) {
-  addGatewayClientOptions(
-    params.cron
-      .command(params.name)
-      .description(params.description)
-      .argument("<id>", "Job id")
-      .action(async (id, opts) => {
-        try {
-          const res = await callGatewayFromCli("cron.update", opts, {
-            id,
-            patch: { enabled: params.enabled },
-          });
-          defaultRuntime.log(JSON.stringify(res, null, 2));
-          await warnIfCronSchedulerDisabled(opts);
-        } catch (err) {
-          defaultRuntime.error(danger(String(err)));
-          defaultRuntime.exit(1);
-        }
-      }),
-  );
-}
-
 export function registerCronSimpleCommands(cron: Command) {
   addGatewayClientOptions(
     cron
@@ -51,18 +24,45 @@ export function registerCronSimpleCommands(cron: Command) {
       }),
   );
 
-  registerCronToggleCommand({
-    cron,
-    name: "enable",
-    description: "Enable a cron job",
-    enabled: true,
-  });
-  registerCronToggleCommand({
-    cron,
-    name: "disable",
-    description: "Disable a cron job",
-    enabled: false,
-  });
+  addGatewayClientOptions(
+    cron
+      .command("enable")
+      .description("Enable a cron job")
+      .argument("<id>", "Job id")
+      .action(async (id, opts) => {
+        try {
+          const res = await callGatewayFromCli("cron.update", opts, {
+            id,
+            patch: { enabled: true },
+          });
+          defaultRuntime.log(JSON.stringify(res, null, 2));
+          await warnIfCronSchedulerDisabled(opts);
+        } catch (err) {
+          defaultRuntime.error(danger(String(err)));
+          defaultRuntime.exit(1);
+        }
+      }),
+  );
+
+  addGatewayClientOptions(
+    cron
+      .command("disable")
+      .description("Disable a cron job")
+      .argument("<id>", "Job id")
+      .action(async (id, opts) => {
+        try {
+          const res = await callGatewayFromCli("cron.update", opts, {
+            id,
+            patch: { enabled: false },
+          });
+          defaultRuntime.log(JSON.stringify(res, null, 2));
+          await warnIfCronSchedulerDisabled(opts);
+        } catch (err) {
+          defaultRuntime.error(danger(String(err)));
+          defaultRuntime.exit(1);
+        }
+      }),
+  );
 
   addGatewayClientOptions(
     cron
@@ -92,12 +92,12 @@ export function registerCronSimpleCommands(cron: Command) {
       .command("run")
       .description("Run a cron job now (debug)")
       .argument("<id>", "Job id")
-      .option("--due", "Run only when due (default behavior in older versions)", false)
+      .option("--force", "Run even if not due", false)
       .action(async (id, opts) => {
         try {
           const res = await callGatewayFromCli("cron.run", opts, {
             id,
-            mode: opts.due ? "due" : "force",
+            mode: opts.force ? "force" : "due",
           });
           defaultRuntime.log(JSON.stringify(res, null, 2));
         } catch (err) {

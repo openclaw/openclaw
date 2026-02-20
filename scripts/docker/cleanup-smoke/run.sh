@@ -6,9 +6,6 @@ cd /repo
 export OPENCLAW_STATE_DIR="/tmp/openclaw-test"
 export OPENCLAW_CONFIG_PATH="${OPENCLAW_STATE_DIR}/openclaw.json"
 
-echo "==> Build"
-pnpm build
-
 echo "==> Seed state"
 mkdir -p "${OPENCLAW_STATE_DIR}/credentials"
 mkdir -p "${OPENCLAW_STATE_DIR}/agents/main/sessions"

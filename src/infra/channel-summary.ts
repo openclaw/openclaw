@@ -1,13 +1,8 @@
-import {
-  buildChannelAccountSnapshot,
-  formatChannelAllowFrom,
-} from "../channels/account-summary.js";
-import { listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelAccountSnapshot, ChannelPlugin } from "../channels/plugins/types.js";
+import { listChannelPlugins } from "../channels/plugins/index.js";
 import { type OpenClawConfig, loadConfig } from "../config/config.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { theme } from "../terminal/theme.js";
-import { formatTimeAgo } from "./format-time/format-relative.ts";
 
 export type ChannelSummaryOptions = {
   colorize?: boolean;
@@ -64,6 +59,41 @@ const resolveAccountConfigured = async (
   return true;
 };
 
+const buildAccountSnapshot = (params: {
+  plugin: ChannelPlugin;
+  account: unknown;
+  cfg: OpenClawConfig;
+  accountId: string;
+  enabled: boolean;
+  configured: boolean;
+}): ChannelAccountSnapshot => {
+  const described = params.plugin.config.describeAccount
+    ? params.plugin.config.describeAccount(params.account, params.cfg)
+    : undefined;
+  return {
+    enabled: params.enabled,
+    configured: params.configured,
+    ...described,
+    accountId: params.accountId,
+  };
+};
+
+const formatAllowFrom = (params: {
+  plugin: ChannelPlugin;
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  allowFrom: Array<string | number>;
+}) => {
+  if (params.plugin.config.formatAllowFrom) {
+    return params.plugin.config.formatAllowFrom({
+      cfg: params.cfg,
+      accountId: params.accountId,
+      allowFrom: params.allowFrom,
+    });
+  }
+  return params.allowFrom.map((entry) => String(entry).trim()).filter(Boolean);
+};
+
 const buildAccountDetails = (params: {
   entry: ChannelAccountEntry;
   plugin: ChannelPlugin;
@@ -101,7 +131,7 @@ const buildAccountDetails = (params: {
   }
 
   if (params.includeAllowFrom && snapshot.allowFrom?.length) {
-    const formatted = formatChannelAllowFrom({
+    const formatted = formatAllowFrom({
       plugin: params.plugin,
       cfg: params.cfg,
       accountId: snapshot.accountId,
@@ -135,7 +165,7 @@ export async function buildChannelSummary(
       const account = plugin.config.resolveAccount(effective, accountId);
       const enabled = resolveAccountEnabled(plugin, account, effective);
       const configured = await resolveAccountConfigured(plugin, account, effective);
-      const snapshot = buildChannelAccountSnapshot({
+      const snapshot = buildAccountSnapshot({
         plugin,
         account,
         cfg: effective,
@@ -194,7 +224,7 @@ export async function buildChannelSummary(
       line += ` ${self.e164}`;
     }
     if (authAgeMs != null && authAgeMs >= 0) {
-      line += ` auth ${formatTimeAgo(authAgeMs)}`;
+      line += ` auth ${formatAge(authAgeMs)}`;
     }
 
     lines.push(tint(line, statusColor));
@@ -221,4 +251,23 @@ export async function buildChannelSummary(
   }
 
   return lines;
+}
+
+export function formatAge(ms: number): string {
+  if (ms < 0) {
+    return "unknown";
+  }
+  const minutes = Math.round(ms / 60_000);
+  if (minutes < 1) {
+    return "just now";
+  }
+  if (minutes < 60) {
+    return `${minutes}m ago`;
+  }
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) {
+    return `${hours}h ago`;
+  }
+  const days = Math.round(hours / 24);
+  return `${days}d ago`;
 }

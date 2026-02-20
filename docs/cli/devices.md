@@ -21,15 +21,12 @@ openclaw devices list
 openclaw devices list --json
 ```
 
-### `openclaw devices approve [requestId] [--latest]`
+### `openclaw devices approve <requestId>`
 
-Approve a pending device pairing request. If `requestId` is omitted, OpenClaw
-automatically approves the most recent pending request.
+Approve a pending device pairing request.
 
 ```
-openclaw devices approve
 openclaw devices approve <requestId>
-openclaw devices approve --latest
 ```
 
 ### `openclaw devices reject <requestId>`
@@ -63,9 +60,6 @@ openclaw devices revoke --device <deviceId> --role node
 - `--password <password>`: Gateway password (password auth).
 - `--timeout <ms>`: RPC timeout.
 - `--json`: JSON output (recommended for scripting).
-
-Note: when you set `--url`, the CLI does not fall back to config or environment credentials.
-Pass `--token` or `--password` explicitly. Missing explicit credentials is an error.
 
 ## Notes
 

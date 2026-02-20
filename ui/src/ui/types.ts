@@ -1,5 +1,3 @@
-export type UpdateAvailable = import("../../../src/infra/update-startup.js").UpdateAvailable;
-
 export type ChannelsStatusSnapshot = {
   ts: number;
   channelOrder: string[];
@@ -311,8 +309,6 @@ export type PresenceEntry = {
   platform?: string | null;
   deviceFamily?: string | null;
   modelIdentifier?: string | null;
-  roles?: string[] | null;
-  scopes?: string[] | null;
   mode?: string | null;
   lastInputSeconds?: number | null;
   reason?: string | null;
@@ -342,41 +338,6 @@ export type AgentsListResult = {
   mainKey: string;
   scope: string;
   agents: GatewayAgentRow[];
-};
-
-export type AgentIdentityResult = {
-  agentId: string;
-  name: string;
-  avatar: string;
-  emoji?: string;
-};
-
-export type AgentFileEntry = {
-  name: string;
-  path: string;
-  missing: boolean;
-  size?: number;
-  updatedAtMs?: number;
-  content?: string;
-};
-
-export type AgentsFilesListResult = {
-  agentId: string;
-  workspace: string;
-  files: AgentFileEntry[];
-};
-
-export type AgentsFilesGetResult = {
-  agentId: string;
-  workspace: string;
-  file: AgentFileEntry;
-};
-
-export type AgentsFilesSetResult = {
-  ok: true;
-  agentId: string;
-  workspace: string;
-  file: AgentFileEntry;
 };
 
 export type GatewaySessionRow = {
@@ -426,18 +387,8 @@ export type SessionsPatchResult = {
   };
 };
 
-export type {
-  CostUsageDailyEntry,
-  CostUsageSummary,
-  SessionsUsageEntry,
-  SessionsUsageResult,
-  SessionsUsageTotals,
-  SessionUsageTimePoint,
-  SessionUsageTimeSeries,
-} from "./usage-types.ts";
-
 export type CronSchedule =
-  | { kind: "at"; at: string }
+  | { kind: "at"; atMs: number }
   | { kind: "every"; everyMs: number; anchorMs?: number }
   | { kind: "cron"; expr: string; tz?: string };
 
@@ -451,13 +402,22 @@ export type CronPayload =
       message: string;
       thinking?: string;
       timeoutSeconds?: number;
+      deliver?: boolean;
+      provider?:
+        | "last"
+        | "whatsapp"
+        | "telegram"
+        | "discord"
+        | "slack"
+        | "signal"
+        | "imessage"
+        | "msteams";
+      to?: string;
+      bestEffortDeliver?: boolean;
     };
 
-export type CronDelivery = {
-  mode: "none" | "announce" | "webhook";
-  channel?: string;
-  to?: string;
-  bestEffort?: boolean;
+export type CronIsolation = {
+  postToMainPrefix?: string;
 };
 
 export type CronJobState = {
@@ -482,7 +442,7 @@ export type CronJob = {
   sessionTarget: CronSessionTarget;
   wakeMode: CronWakeMode;
   payload: CronPayload;
-  delivery?: CronDelivery;
+  isolation?: CronIsolation;
   state?: CronJobState;
 };
 
@@ -499,12 +459,11 @@ export type CronRunLogEntry = {
   durationMs?: number;
   error?: string;
   summary?: string;
-  sessionId?: string;
-  sessionKey?: string;
 };
 
 export type SkillsStatusConfigCheck = {
   path: string;
+  value: unknown;
   satisfied: boolean;
 };
 
@@ -522,7 +481,6 @@ export type SkillStatusEntry = {
   filePath: string;
   baseDir: string;
   skillKey: string;
-  bundled?: boolean;
   primaryEnv?: string;
   emoji?: string;
   homepage?: string;

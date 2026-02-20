@@ -67,7 +67,7 @@ export async function sendGroupMessage({
   let formattedReplyId = replyToId;
   if (replyToId && /^\d+$/.test(replyToId)) {
     try {
-      formattedReplyId = scot("ud", BigInt(replyToId));
+      formattedReplyId = formatUd(BigInt(replyToId));
     } catch {
       // Fall back to raw ID if formatting fails
     }

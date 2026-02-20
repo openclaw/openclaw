@@ -10,11 +10,9 @@
  * ```
  */
 
+import JSON5 from "json5";
 import fs from "node:fs";
 import path from "node:path";
-import JSON5 from "json5";
-import { isPathInside } from "../security/scan-paths.js";
-import { isPlainObject } from "../utils.js";
 
 export const INCLUDE_KEY = "$include";
 export const MAX_INCLUDE_DEPTH = 10;
@@ -54,7 +52,14 @@ export class CircularIncludeError extends ConfigIncludeError {
 // Utilities
 // ============================================================================
 
-const BLOCKED_MERGE_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.prototype.toString.call(value) === "[object Object]"
+  );
+}
 
 /** Deep merge: arrays concatenate, objects merge recursively, primitives: source wins */
 export function deepMerge(target: unknown, source: unknown): unknown {
@@ -64,9 +69,6 @@ export function deepMerge(target: unknown, source: unknown): unknown {
   if (isPlainObject(target) && isPlainObject(source)) {
     const result: Record<string, unknown> = { ...target };
     for (const key of Object.keys(source)) {
-      if (BLOCKED_MERGE_KEYS.has(key)) {
-        continue;
-      }
       result[key] = key in result ? deepMerge(result[key], source[key]) : source[key];
     }
     return result;
@@ -81,17 +83,12 @@ export function deepMerge(target: unknown, source: unknown): unknown {
 class IncludeProcessor {
   private visited = new Set<string>();
   private depth = 0;
-  private readonly rootDir: string;
-  private readonly rootRealDir: string;
 
   constructor(
     private basePath: string,
     private resolver: IncludeResolver,
-    rootDir?: string,
   ) {
     this.visited.add(path.normalize(basePath));
-    this.rootDir = path.normalize(rootDir ?? path.dirname(basePath));
-    this.rootRealDir = path.normalize(safeRealpath(this.rootDir));
   }
 
   process(obj: unknown): unknown {
@@ -178,37 +175,10 @@ class IncludeProcessor {
   }
 
   private resolvePath(includePath: string): string {
-    const configDir = path.dirname(this.basePath);
     const resolved = path.isAbsolute(includePath)
       ? includePath
-      : path.resolve(configDir, includePath);
-    const normalized = path.normalize(resolved);
-
-    // SECURITY: Reject paths outside top-level config directory (CWE-22: Path Traversal)
-    if (!isPathInside(this.rootDir, normalized)) {
-      throw new ConfigIncludeError(
-        `Include path escapes config directory: ${includePath} (root: ${this.rootDir})`,
-        includePath,
-      );
-    }
-
-    // SECURITY: Resolve symlinks and re-validate to prevent symlink bypass
-    try {
-      const real = fs.realpathSync(normalized);
-      if (!isPathInside(this.rootRealDir, real)) {
-        throw new ConfigIncludeError(
-          `Include path resolves outside config directory (symlink): ${includePath} (root: ${this.rootDir})`,
-          includePath,
-        );
-      }
-    } catch (err) {
-      if (err instanceof ConfigIncludeError) {
-        throw err;
-      }
-      // File doesn't exist yet - normalized path check above is sufficient
-    }
-
-    return normalized;
+      : path.resolve(path.dirname(this.basePath), includePath);
+    return path.normalize(resolved);
   }
 
   private checkCircular(resolvedPath: string): void {
@@ -251,18 +221,10 @@ class IncludeProcessor {
   }
 
   private processNested(resolvedPath: string, parsed: unknown): unknown {
-    const nested = new IncludeProcessor(resolvedPath, this.resolver, this.rootDir);
+    const nested = new IncludeProcessor(resolvedPath, this.resolver);
     nested.visited = new Set([...this.visited, resolvedPath]);
     nested.depth = this.depth + 1;
     return nested.process(parsed);
-  }
-}
-
-function safeRealpath(target: string): string {
-  try {
-    return fs.realpathSync(target);
-  } catch {
-    return target;
   }
 }
 

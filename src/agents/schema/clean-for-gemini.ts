@@ -29,16 +29,6 @@ export const GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS = new Set([
   "maxProperties",
 ]);
 
-const SCHEMA_META_KEYS = ["description", "title", "default"] as const;
-
-function copySchemaMeta(from: Record<string, unknown>, to: Record<string, unknown>): void {
-  for (const key of SCHEMA_META_KEYS) {
-    if (key in from && from[key] !== undefined) {
-      to[key] = from[key];
-    }
-  }
-}
-
 // Check if an anyOf/oneOf array contains only literal values that can be flattened.
 // TypeBox Type.Literal generates { const: "value", type: "string" }.
 // Some schemas may use { enum: ["value"], type: "string" }.
@@ -174,39 +164,6 @@ function tryResolveLocalRef(ref: string, defs: SchemaDefs | undefined): unknown 
   return defs.get(name);
 }
 
-function simplifyUnionVariants(params: { obj: Record<string, unknown>; variants: unknown[] }): {
-  variants: unknown[];
-  simplified?: unknown;
-} {
-  const { obj, variants } = params;
-
-  const { variants: nonNullVariants, stripped } = stripNullVariants(variants);
-
-  const flattened = tryFlattenLiteralAnyOf(nonNullVariants);
-  if (flattened) {
-    const result: Record<string, unknown> = {
-      type: flattened.type,
-      enum: flattened.enum,
-    };
-    copySchemaMeta(obj, result);
-    return { variants: nonNullVariants, simplified: result };
-  }
-
-  if (stripped && nonNullVariants.length === 1) {
-    const lone = nonNullVariants[0];
-    if (lone && typeof lone === "object" && !Array.isArray(lone)) {
-      const result: Record<string, unknown> = {
-        ...(lone as Record<string, unknown>),
-      };
-      copySchemaMeta(obj, result);
-      return { variants: nonNullVariants, simplified: result };
-    }
-    return { variants: nonNullVariants, simplified: lone };
-  }
-
-  return { variants: stripped ? nonNullVariants : variants };
-}
-
 function cleanSchemaForGeminiWithDefs(
   schema: unknown,
   defs: SchemaDefs | undefined,
@@ -241,12 +198,20 @@ function cleanSchemaForGeminiWithDefs(
       const result: Record<string, unknown> = {
         ...(cleaned as Record<string, unknown>),
       };
-      copySchemaMeta(obj, result);
+      for (const key of ["description", "title", "default"]) {
+        if (key in obj && obj[key] !== undefined) {
+          result[key] = obj[key];
+        }
+      }
       return result;
     }
 
     const result: Record<string, unknown> = {};
-    copySchemaMeta(obj, result);
+    for (const key of ["description", "title", "default"]) {
+      if (key in obj && obj[key] !== undefined) {
+        result[key] = obj[key];
+      }
+    }
     return result;
   }
 
@@ -264,18 +229,74 @@ function cleanSchemaForGeminiWithDefs(
     : undefined;
 
   if (hasAnyOf) {
-    const simplified = simplifyUnionVariants({ obj, variants: cleanedAnyOf ?? [] });
-    cleanedAnyOf = simplified.variants;
-    if ("simplified" in simplified) {
-      return simplified.simplified;
+    const { variants: nonNullVariants, stripped } = stripNullVariants(cleanedAnyOf ?? []);
+    if (stripped) {
+      cleanedAnyOf = nonNullVariants;
+    }
+
+    const flattened = tryFlattenLiteralAnyOf(nonNullVariants);
+    if (flattened) {
+      const result: Record<string, unknown> = {
+        type: flattened.type,
+        enum: flattened.enum,
+      };
+      for (const key of ["description", "title", "default"]) {
+        if (key in obj && obj[key] !== undefined) {
+          result[key] = obj[key];
+        }
+      }
+      return result;
+    }
+    if (stripped && nonNullVariants.length === 1) {
+      const lone = nonNullVariants[0];
+      if (lone && typeof lone === "object" && !Array.isArray(lone)) {
+        const result: Record<string, unknown> = {
+          ...(lone as Record<string, unknown>),
+        };
+        for (const key of ["description", "title", "default"]) {
+          if (key in obj && obj[key] !== undefined) {
+            result[key] = obj[key];
+          }
+        }
+        return result;
+      }
+      return lone;
     }
   }
 
   if (hasOneOf) {
-    const simplified = simplifyUnionVariants({ obj, variants: cleanedOneOf ?? [] });
-    cleanedOneOf = simplified.variants;
-    if ("simplified" in simplified) {
-      return simplified.simplified;
+    const { variants: nonNullVariants, stripped } = stripNullVariants(cleanedOneOf ?? []);
+    if (stripped) {
+      cleanedOneOf = nonNullVariants;
+    }
+
+    const flattened = tryFlattenLiteralAnyOf(nonNullVariants);
+    if (flattened) {
+      const result: Record<string, unknown> = {
+        type: flattened.type,
+        enum: flattened.enum,
+      };
+      for (const key of ["description", "title", "default"]) {
+        if (key in obj && obj[key] !== undefined) {
+          result[key] = obj[key];
+        }
+      }
+      return result;
+    }
+    if (stripped && nonNullVariants.length === 1) {
+      const lone = nonNullVariants[0];
+      if (lone && typeof lone === "object" && !Array.isArray(lone)) {
+        const result: Record<string, unknown> = {
+          ...(lone as Record<string, unknown>),
+        };
+        for (const key of ["description", "title", "default"]) {
+          if (key in obj && obj[key] !== undefined) {
+            result[key] = obj[key];
+          }
+        }
+        return result;
+      }
+      return lone;
     }
   }
 

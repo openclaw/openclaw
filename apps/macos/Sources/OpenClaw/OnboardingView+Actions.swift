@@ -1,7 +1,7 @@
 import AppKit
-import Foundation
 import OpenClawDiscovery
 import OpenClawIPC
+import Foundation
 import SwiftUI
 
 extension OnboardingView {
@@ -35,9 +35,7 @@ extension OnboardingView {
                 user: user,
                 host: host,
                 port: gateway.sshPort)
-            OpenClawConfigFile.setRemoteGatewayUrl(
-                host: gateway.serviceHost ?? host,
-                port: gateway.servicePort ?? gateway.gatewayPort)
+            OpenClawConfigFile.setRemoteGatewayUrl(host: host, port: gateway.gatewayPort)
         }
         self.state.remoteCliPath = gateway.cliPath ?? ""
 

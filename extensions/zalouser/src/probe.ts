@@ -1,10 +1,11 @@
-import type { BaseProbeResult } from "openclaw/plugin-sdk";
 import type { ZcaUserInfo } from "./types.js";
 import { runZca, parseJsonOutput } from "./zca.js";
 
-export type ZalouserProbeResult = BaseProbeResult<string> & {
+export interface ZalouserProbeResult {
+  ok: boolean;
   user?: ZcaUserInfo;
-};
+  error?: string;
+}
 
 export async function probeZalouser(
   profile: string,

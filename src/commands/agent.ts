@@ -1,9 +1,9 @@
+import type { AgentCommandOpts } from "./agent/types.js";
 import {
   listAgentIds,
   resolveAgentDir,
-  resolveEffectiveModelFallbacks,
+  resolveAgentModelFallbacksOverride,
   resolveAgentModelPrimary,
-  resolveAgentSkillsFilter,
   resolveAgentWorkspaceDir,
 } from "../agents/agent-scope.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
@@ -11,14 +11,12 @@ import { clearSessionAuthProfileOverride } from "../agents/auth-profiles/session
 import { runCliAgent } from "../agents/cli-runner.js";
 import { getCliSessionId } from "../agents/cli-session.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { AGENT_LANE_SUBAGENT } from "../agents/lanes.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runWithModelFallback } from "../agents/model-fallback.js";
 import {
   buildAllowedModelSet,
   isCliProvider,
   modelKey,
-  normalizeModelRef,
   resolveConfiguredModelRef,
   resolveThinkingDefault,
 } from "../agents/model-selection.js";
@@ -61,125 +59,6 @@ import { deliverAgentCommandResult } from "./agent/delivery.js";
 import { resolveAgentRunContext } from "./agent/run-context.js";
 import { updateSessionStoreAfterAgentRun } from "./agent/session-store.js";
 import { resolveSession } from "./agent/session.js";
-import type { AgentCommandOpts } from "./agent/types.js";
-
-type PersistSessionEntryParams = {
-  sessionStore: Record<string, SessionEntry>;
-  sessionKey: string;
-  storePath: string;
-  entry: SessionEntry;
-};
-
-async function persistSessionEntry(params: PersistSessionEntryParams): Promise<void> {
-  params.sessionStore[params.sessionKey] = params.entry;
-  await updateSessionStore(params.storePath, (store) => {
-    store[params.sessionKey] = params.entry;
-  });
-}
-
-function resolveFallbackRetryPrompt(params: { body: string; isFallbackRetry: boolean }): string {
-  if (!params.isFallbackRetry) {
-    return params.body;
-  }
-  return "Continue where you left off. The previous model attempt failed or timed out.";
-}
-
-function runAgentAttempt(params: {
-  providerOverride: string;
-  modelOverride: string;
-  cfg: ReturnType<typeof loadConfig>;
-  sessionEntry: SessionEntry | undefined;
-  sessionId: string;
-  sessionKey: string | undefined;
-  sessionAgentId: string;
-  sessionFile: string;
-  workspaceDir: string;
-  body: string;
-  isFallbackRetry: boolean;
-  resolvedThinkLevel: ThinkLevel;
-  timeoutMs: number;
-  runId: string;
-  opts: AgentCommandOpts;
-  runContext: ReturnType<typeof resolveAgentRunContext>;
-  spawnedBy: string | undefined;
-  messageChannel: ReturnType<typeof resolveMessageChannel>;
-  skillsSnapshot: ReturnType<typeof buildWorkspaceSkillSnapshot> | undefined;
-  resolvedVerboseLevel: VerboseLevel | undefined;
-  agentDir: string;
-  onAgentEvent: (evt: { stream: string; data?: Record<string, unknown> }) => void;
-  primaryProvider: string;
-}) {
-  const effectivePrompt = resolveFallbackRetryPrompt({
-    body: params.body,
-    isFallbackRetry: params.isFallbackRetry,
-  });
-  if (isCliProvider(params.providerOverride, params.cfg)) {
-    const cliSessionId = getCliSessionId(params.sessionEntry, params.providerOverride);
-    return runCliAgent({
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      agentId: params.sessionAgentId,
-      sessionFile: params.sessionFile,
-      workspaceDir: params.workspaceDir,
-      config: params.cfg,
-      prompt: effectivePrompt,
-      provider: params.providerOverride,
-      model: params.modelOverride,
-      thinkLevel: params.resolvedThinkLevel,
-      timeoutMs: params.timeoutMs,
-      runId: params.runId,
-      extraSystemPrompt: params.opts.extraSystemPrompt,
-      cliSessionId,
-      images: params.isFallbackRetry ? undefined : params.opts.images,
-      streamParams: params.opts.streamParams,
-    });
-  }
-
-  const authProfileId =
-    params.providerOverride === params.primaryProvider
-      ? params.sessionEntry?.authProfileOverride
-      : undefined;
-  return runEmbeddedPiAgent({
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    agentId: params.sessionAgentId,
-    messageChannel: params.messageChannel,
-    agentAccountId: params.runContext.accountId,
-    messageTo: params.opts.replyTo ?? params.opts.to,
-    messageThreadId: params.opts.threadId,
-    groupId: params.runContext.groupId,
-    groupChannel: params.runContext.groupChannel,
-    groupSpace: params.runContext.groupSpace,
-    spawnedBy: params.spawnedBy,
-    currentChannelId: params.runContext.currentChannelId,
-    currentThreadTs: params.runContext.currentThreadTs,
-    replyToMode: params.runContext.replyToMode,
-    hasRepliedRef: params.runContext.hasRepliedRef,
-    senderIsOwner: true,
-    sessionFile: params.sessionFile,
-    workspaceDir: params.workspaceDir,
-    config: params.cfg,
-    skillsSnapshot: params.skillsSnapshot,
-    prompt: effectivePrompt,
-    images: params.isFallbackRetry ? undefined : params.opts.images,
-    clientTools: params.opts.clientTools,
-    provider: params.providerOverride,
-    model: params.modelOverride,
-    authProfileId,
-    authProfileIdSource: authProfileId ? params.sessionEntry?.authProfileOverrideSource : undefined,
-    thinkLevel: params.resolvedThinkLevel,
-    verboseLevel: params.resolvedVerboseLevel,
-    timeoutMs: params.timeoutMs,
-    runId: params.runId,
-    lane: params.opts.lane,
-    abortSignal: params.opts.abortSignal,
-    extraSystemPrompt: params.opts.extraSystemPrompt,
-    inputProvenance: params.opts.inputProvenance,
-    streamParams: params.opts.streamParams,
-    agentDir: params.agentDir,
-    onAgentEvent: params.onAgentEvent,
-  });
-}
 
 export async function agentCommand(
   opts: AgentCommandOpts,
@@ -243,19 +122,13 @@ export async function agentCommand(
     throw new Error('Invalid verbose level. Use "on", "full", or "off".');
   }
 
-  const laneRaw = typeof opts.lane === "string" ? opts.lane.trim() : "";
-  const isSubagentLane = laneRaw === String(AGENT_LANE_SUBAGENT);
   const timeoutSecondsRaw =
-    opts.timeout !== undefined
-      ? Number.parseInt(String(opts.timeout), 10)
-      : isSubagentLane
-        ? 0
-        : undefined;
+    opts.timeout !== undefined ? Number.parseInt(String(opts.timeout), 10) : undefined;
   if (
     timeoutSecondsRaw !== undefined &&
-    (Number.isNaN(timeoutSecondsRaw) || timeoutSecondsRaw < 0)
+    (Number.isNaN(timeoutSecondsRaw) || timeoutSecondsRaw <= 0)
   ) {
-    throw new Error("--timeout must be a non-negative integer (seconds; 0 means no timeout)");
+    throw new Error("--timeout must be a positive integer (seconds)");
   }
   const timeoutMs = resolveAgentTimeoutMs({
     cfg,
@@ -314,13 +187,11 @@ export async function agentCommand(
 
     const needsSkillsSnapshot = isNewSession || !sessionEntry?.skillsSnapshot;
     const skillsSnapshotVersion = getSkillsSnapshotVersion(workspaceDir);
-    const skillFilter = resolveAgentSkillsFilter(cfg, sessionAgentId);
     const skillsSnapshot = needsSkillsSnapshot
       ? buildWorkspaceSkillSnapshot(workspaceDir, {
           config: cfg,
           eligibility: { remote: getRemoteSkillEligibility() },
           snapshotVersion: skillsSnapshotVersion,
-          skillFilter,
         })
       : sessionEntry?.skillsSnapshot;
 
@@ -335,11 +206,9 @@ export async function agentCommand(
         updatedAt: Date.now(),
         skillsSnapshot,
       };
-      await persistSessionEntry({
-        sessionStore,
-        sessionKey,
-        storePath,
-        entry: next,
+      sessionStore[sessionKey] = next;
+      await updateSessionStore(storePath, (store) => {
+        store[sessionKey] = next;
       });
       sessionEntry = next;
     }
@@ -350,14 +219,16 @@ export async function agentCommand(
         sessionEntry ?? { sessionId, updatedAt: Date.now() };
       const next: SessionEntry = { ...entry, sessionId, updatedAt: Date.now() };
       if (thinkOverride) {
-        next.thinkingLevel = thinkOverride;
+        if (thinkOverride === "off") {
+          delete next.thinkingLevel;
+        } else {
+          next.thinkingLevel = thinkOverride;
+        }
       }
       applyVerboseOverride(next, verboseOverride);
-      await persistSessionEntry({
-        sessionStore,
-        sessionKey,
-        storePath,
-        entry: next,
+      sessionStore[sessionKey] = next;
+      await updateSessionStore(storePath, (store) => {
+        store[sessionKey] = next;
       });
     }
 
@@ -380,15 +251,11 @@ export async function agentCommand(
         }
       : cfg;
 
-    const configuredDefaultRef = resolveConfiguredModelRef({
+    const { provider: defaultProvider, model: defaultModel } = resolveConfiguredModelRef({
       cfg: cfgForModelSelection,
       defaultProvider: DEFAULT_PROVIDER,
       defaultModel: DEFAULT_MODEL,
     });
-    const { provider: defaultProvider, model: defaultModel } = normalizeModelRef(
-      configuredDefaultRef.provider,
-      configuredDefaultRef.model,
-    );
     let provider = defaultProvider;
     let model = defaultModel;
     const hasAllowlist = agentCfg?.models && Object.keys(agentCfg.models).length > 0;
@@ -417,10 +284,9 @@ export async function agentCommand(
       const overrideProvider = sessionEntry.providerOverride?.trim() || defaultProvider;
       const overrideModel = sessionEntry.modelOverride?.trim();
       if (overrideModel) {
-        const normalizedOverride = normalizeModelRef(overrideProvider, overrideModel);
-        const key = modelKey(normalizedOverride.provider, normalizedOverride.model);
+        const key = modelKey(overrideProvider, overrideModel);
         if (
-          !isCliProvider(normalizedOverride.provider, cfg) &&
+          !isCliProvider(overrideProvider, cfg) &&
           allowedModelKeys.size > 0 &&
           !allowedModelKeys.has(key)
         ) {
@@ -429,11 +295,9 @@ export async function agentCommand(
             selection: { provider: defaultProvider, model: defaultModel, isDefault: true },
           });
           if (updated) {
-            await persistSessionEntry({
-              sessionStore,
-              sessionKey,
-              storePath,
-              entry,
+            sessionStore[sessionKey] = entry;
+            await updateSessionStore(storePath, (store) => {
+              store[sessionKey] = entry;
             });
           }
         }
@@ -444,15 +308,14 @@ export async function agentCommand(
     const storedModelOverride = sessionEntry?.modelOverride?.trim();
     if (storedModelOverride) {
       const candidateProvider = storedProviderOverride || defaultProvider;
-      const normalizedStored = normalizeModelRef(candidateProvider, storedModelOverride);
-      const key = modelKey(normalizedStored.provider, normalizedStored.model);
+      const key = modelKey(candidateProvider, storedModelOverride);
       if (
-        isCliProvider(normalizedStored.provider, cfg) ||
+        isCliProvider(candidateProvider, cfg) ||
         allowedModelKeys.size === 0 ||
         allowedModelKeys.has(key)
       ) {
-        provider = normalizedStored.provider;
-        model = normalizedStored.model;
+        provider = candidateProvider;
+        model = storedModelOverride;
       }
     }
     if (sessionEntry) {
@@ -497,11 +360,9 @@ export async function agentCommand(
         const entry = sessionEntry;
         entry.thinkingLevel = "high";
         entry.updatedAt = Date.now();
-        await persistSessionEntry({
-          sessionStore,
-          sessionKey,
-          storePath,
-          entry,
+        sessionStore[sessionKey] = entry;
+        await updateSessionStore(storePath, (store) => {
+          store[sessionKey] = entry;
         });
       }
     }
@@ -522,49 +383,72 @@ export async function agentCommand(
         opts.replyChannel ?? opts.channel,
       );
       const spawnedBy = opts.spawnedBy ?? sessionEntry?.spawnedBy;
-      // Keep fallback candidate resolution centralized so session model overrides,
-      // per-agent overrides, and default fallbacks stay consistent across callers.
-      const effectiveFallbacksOverride = resolveEffectiveModelFallbacks({
-        cfg,
-        agentId: sessionAgentId,
-        hasSessionModelOverride: Boolean(storedModelOverride),
-      });
-
-      // Track model fallback attempts so retries on an existing session don't
-      // re-inject the original prompt as a duplicate user message.
-      let fallbackAttemptIndex = 0;
       const fallbackResult = await runWithModelFallback({
         cfg,
         provider,
         model,
         agentDir,
-        fallbacksOverride: effectiveFallbacksOverride,
+        fallbacksOverride: resolveAgentModelFallbacksOverride(cfg, sessionAgentId),
         run: (providerOverride, modelOverride) => {
-          const isFallbackRetry = fallbackAttemptIndex > 0;
-          fallbackAttemptIndex += 1;
-          return runAgentAttempt({
-            providerOverride,
-            modelOverride,
-            cfg,
-            sessionEntry,
+          if (isCliProvider(providerOverride, cfg)) {
+            const cliSessionId = getCliSessionId(sessionEntry, providerOverride);
+            return runCliAgent({
+              sessionId,
+              sessionKey,
+              sessionFile,
+              workspaceDir,
+              config: cfg,
+              prompt: body,
+              provider: providerOverride,
+              model: modelOverride,
+              thinkLevel: resolvedThinkLevel,
+              timeoutMs,
+              runId,
+              extraSystemPrompt: opts.extraSystemPrompt,
+              cliSessionId,
+              images: opts.images,
+              streamParams: opts.streamParams,
+            });
+          }
+          const authProfileId =
+            providerOverride === provider ? sessionEntry?.authProfileOverride : undefined;
+          return runEmbeddedPiAgent({
             sessionId,
             sessionKey,
-            sessionAgentId,
+            messageChannel,
+            agentAccountId: runContext.accountId,
+            messageTo: opts.replyTo ?? opts.to,
+            messageThreadId: opts.threadId,
+            groupId: runContext.groupId,
+            groupChannel: runContext.groupChannel,
+            groupSpace: runContext.groupSpace,
+            spawnedBy,
+            currentChannelId: runContext.currentChannelId,
+            currentThreadTs: runContext.currentThreadTs,
+            replyToMode: runContext.replyToMode,
+            hasRepliedRef: runContext.hasRepliedRef,
             sessionFile,
             workspaceDir,
-            body,
-            isFallbackRetry,
-            resolvedThinkLevel,
+            config: cfg,
+            skillsSnapshot,
+            prompt: body,
+            images: opts.images,
+            clientTools: opts.clientTools,
+            provider: providerOverride,
+            model: modelOverride,
+            authProfileId,
+            authProfileIdSource: authProfileId
+              ? sessionEntry?.authProfileOverrideSource
+              : undefined,
+            thinkLevel: resolvedThinkLevel,
+            verboseLevel: resolvedVerboseLevel,
             timeoutMs,
             runId,
-            opts,
-            runContext,
-            spawnedBy,
-            messageChannel,
-            skillsSnapshot,
-            resolvedVerboseLevel,
+            lane: opts.lane,
+            abortSignal: opts.abortSignal,
+            extraSystemPrompt: opts.extraSystemPrompt,
+            streamParams: opts.streamParams,
             agentDir,
-            primaryProvider: provider,
             onAgentEvent: (evt) => {
               // Track lifecycle end for fallback emission below.
               if (

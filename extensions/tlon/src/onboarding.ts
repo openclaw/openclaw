@@ -7,10 +7,8 @@ import {
   type ChannelOnboardingAdapter,
   type WizardPrompter,
 } from "openclaw/plugin-sdk";
-import { buildTlonAccountFields } from "./account-fields.js";
 import type { TlonResolvedAccount } from "./types.js";
 import { listTlonAccountIds, resolveTlonAccount } from "./types.js";
-import { isBlockedUrbitHostname, validateUrbitBaseUrl } from "./urbit/base-url.js";
 
 const channel = "tlon" as const;
 
@@ -26,7 +24,6 @@ function applyAccountConfig(params: {
     ship?: string;
     url?: string;
     code?: string;
-    allowPrivateNetwork?: boolean;
     groupChannels?: string[];
     dmAllowlist?: string[];
     autoDiscoverChannels?: boolean;
@@ -35,11 +32,6 @@ function applyAccountConfig(params: {
   const { cfg, accountId, input } = params;
   const useDefault = accountId === DEFAULT_ACCOUNT_ID;
   const base = cfg.channels?.tlon ?? {};
-  const nextValues = {
-    enabled: true,
-    ...(input.name ? { name: input.name } : {}),
-    ...buildTlonAccountFields(input),
-  };
 
   if (useDefault) {
     return {
@@ -48,7 +40,16 @@ function applyAccountConfig(params: {
         ...cfg.channels,
         tlon: {
           ...base,
-          ...nextValues,
+          enabled: true,
+          ...(input.name ? { name: input.name } : {}),
+          ...(input.ship ? { ship: input.ship } : {}),
+          ...(input.url ? { url: input.url } : {}),
+          ...(input.code ? { code: input.code } : {}),
+          ...(input.groupChannels ? { groupChannels: input.groupChannels } : {}),
+          ...(input.dmAllowlist ? { dmAllowlist: input.dmAllowlist } : {}),
+          ...(typeof input.autoDiscoverChannels === "boolean"
+            ? { autoDiscoverChannels: input.autoDiscoverChannels }
+            : {}),
         },
       },
     };
@@ -67,7 +68,16 @@ function applyAccountConfig(params: {
             ...(base as { accounts?: Record<string, Record<string, unknown>> }).accounts?.[
               accountId
             ],
-            ...nextValues,
+            enabled: true,
+            ...(input.name ? { name: input.name } : {}),
+            ...(input.ship ? { ship: input.ship } : {}),
+            ...(input.url ? { url: input.url } : {}),
+            ...(input.code ? { code: input.code } : {}),
+            ...(input.groupChannels ? { groupChannels: input.groupChannels } : {}),
+            ...(input.dmAllowlist ? { dmAllowlist: input.dmAllowlist } : {}),
+            ...(typeof input.autoDiscoverChannels === "boolean"
+              ? { autoDiscoverChannels: input.autoDiscoverChannels }
+              : {}),
           },
         },
       },
@@ -81,7 +91,6 @@ async function noteTlonHelp(prompter: WizardPrompter): Promise<void> {
       "You need your Urbit ship URL and login code.",
       "Example URL: https://your-ship-host",
       "Example ship: ~sampel-palnet",
-      "If your ship URL is on a private network (LAN/localhost), you must explicitly allow it during setup.",
       `Docs: ${formatDocsLink("/channels/tlon", "channels/tlon")}`,
     ].join("\n"),
     "Tlon setup",
@@ -142,31 +151,8 @@ export const tlonOnboardingAdapter: ChannelOnboardingAdapter = {
       message: "Ship URL",
       placeholder: "https://your-ship-host",
       initialValue: resolved.url ?? undefined,
-      validate: (value) => {
-        const next = validateUrbitBaseUrl(String(value ?? ""));
-        if (!next.ok) {
-          return next.error;
-        }
-        return undefined;
-      },
+      validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
     });
-
-    const validatedUrl = validateUrbitBaseUrl(String(url).trim());
-    if (!validatedUrl.ok) {
-      throw new Error(`Invalid URL: ${validatedUrl.error}`);
-    }
-
-    let allowPrivateNetwork = resolved.allowPrivateNetwork ?? false;
-    if (isBlockedUrbitHostname(validatedUrl.hostname)) {
-      allowPrivateNetwork = await prompter.confirm({
-        message:
-          "Ship URL looks like a private/internal host. Allow private network access? (SSRF risk)",
-        initialValue: allowPrivateNetwork,
-      });
-      if (!allowPrivateNetwork) {
-        throw new Error("Refusing private/internal Ship URL without explicit approval");
-      }
-    }
 
     const code = await prompter.text({
       message: "Login code",
@@ -217,7 +203,6 @@ export const tlonOnboardingAdapter: ChannelOnboardingAdapter = {
         ship: String(ship).trim(),
         url: String(url).trim(),
         code: String(code).trim(),
-        allowPrivateNetwork,
         groupChannels,
         dmAllowlist,
         autoDiscoverChannels,

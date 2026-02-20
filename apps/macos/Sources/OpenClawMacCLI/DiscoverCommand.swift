@@ -1,5 +1,5 @@
-import Foundation
 import OpenClawDiscovery
+import Foundation
 
 struct DiscoveryOptions {
     var timeoutMs: Int = 2000

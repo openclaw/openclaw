@@ -9,8 +9,6 @@ export function getSystemTheme(): ResolvedTheme {
 }
 
 export function resolveTheme(mode: ThemeMode): ResolvedTheme {
-  if (mode === "system") {
-    return getSystemTheme();
-  }
+  if (mode === "system") return getSystemTheme();
   return mode;
 }

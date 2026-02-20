@@ -1,18 +1,17 @@
 #!/usr/bin/env node
+import { AgentSideConnection, ndJsonStream } from "@agentclientprotocol/sdk";
 import { Readable, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
-import { AgentSideConnection, ndJsonStream } from "@agentclientprotocol/sdk";
+import type { AcpServerOptions } from "./types.js";
 import { loadConfig } from "../config/config.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { buildGatewayConnectionDetails } from "../gateway/call.js";
 import { GatewayClient } from "../gateway/client.js";
 import { isMainModule } from "../infra/is-main.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import { readSecretFromFile } from "./secret-file.js";
 import { AcpGatewayAgent } from "./translator.js";
-import type { AcpServerOptions } from "./types.js";
 
-export function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void> {
+export function serveAcpGateway(opts: AcpServerOptions = {}): void {
   const cfg = loadConfig();
   const connection = buildGatewayConnectionDetails({
     config: cfg,
@@ -35,12 +34,6 @@ export function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void> {
     auth.password;
 
   let agent: AcpGatewayAgent | null = null;
-  let onClosed!: () => void;
-  const closed = new Promise<void>((resolve) => {
-    onClosed = resolve;
-  });
-  let stopped = false;
-
   const gateway = new GatewayClient({
     url: connection.url,
     token: token || undefined,
@@ -57,28 +50,8 @@ export function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void> {
     },
     onClose: (code, reason) => {
       agent?.handleGatewayDisconnect(`${code}: ${reason}`);
-      // Resolve only on intentional shutdown (gateway.stop() sets closed
-      // which skips scheduleReconnect, then fires onClose).  Transient
-      // disconnects are followed by automatic reconnect attempts.
-      if (stopped) {
-        onClosed();
-      }
     },
   });
-
-  const shutdown = () => {
-    if (stopped) {
-      return;
-    }
-    stopped = true;
-    gateway.stop();
-    // If no WebSocket is active (e.g. between reconnect attempts),
-    // gateway.stop() won't trigger onClose, so resolve directly.
-    onClosed();
-  };
-
-  process.once("SIGINT", shutdown);
-  process.once("SIGTERM", shutdown);
 
   const input = Writable.toWeb(process.stdout);
   const output = Readable.toWeb(process.stdin) as unknown as ReadableStream<Uint8Array>;
@@ -91,13 +64,10 @@ export function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void> {
   }, stream);
 
   gateway.start();
-  return closed;
 }
 
 function parseArgs(args: string[]): AcpServerOptions {
   const opts: AcpServerOptions = {};
-  let tokenFile: string | undefined;
-  let passwordFile: string | undefined;
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
     if (arg === "--url" || arg === "--gateway-url") {
@@ -110,18 +80,8 @@ function parseArgs(args: string[]): AcpServerOptions {
       i += 1;
       continue;
     }
-    if (arg === "--token-file" || arg === "--gateway-token-file") {
-      tokenFile = args[i + 1];
-      i += 1;
-      continue;
-    }
     if (arg === "--password" || arg === "--gateway-password") {
       opts.gatewayPassword = args[i + 1];
-      i += 1;
-      continue;
-    }
-    if (arg === "--password-file" || arg === "--gateway-password-file") {
-      passwordFile = args[i + 1];
       i += 1;
       continue;
     }
@@ -156,18 +116,6 @@ function parseArgs(args: string[]): AcpServerOptions {
       process.exit(0);
     }
   }
-  if (opts.gatewayToken?.trim() && tokenFile?.trim()) {
-    throw new Error("Use either --token or --token-file.");
-  }
-  if (opts.gatewayPassword?.trim() && passwordFile?.trim()) {
-    throw new Error("Use either --password or --password-file.");
-  }
-  if (tokenFile?.trim()) {
-    opts.gatewayToken = readSecretFromFile(tokenFile, "Gateway token");
-  }
-  if (passwordFile?.trim()) {
-    opts.gatewayPassword = readSecretFromFile(passwordFile, "Gateway password");
-  }
   return opts;
 }
 
@@ -179,9 +127,7 @@ Gateway-backed ACP server for IDE integration.
 Options:
   --url <url>             Gateway WebSocket URL
   --token <token>         Gateway auth token
-  --token-file <path>     Read gateway auth token from file
   --password <password>   Gateway auth password
-  --password-file <path>  Read gateway auth password from file
   --session <key>         Default session key (e.g. "agent:main:main")
   --session-label <label> Default session label to resolve
   --require-existing      Fail if the session key/label does not exist
@@ -193,20 +139,6 @@ Options:
 }
 
 if (isMainModule({ currentFile: fileURLToPath(import.meta.url) })) {
-  const argv = process.argv.slice(2);
-  if (argv.includes("--token") || argv.includes("--gateway-token")) {
-    console.error(
-      "Warning: --token can be exposed via process listings. Prefer --token-file or OPENCLAW_GATEWAY_TOKEN.",
-    );
-  }
-  if (argv.includes("--password") || argv.includes("--gateway-password")) {
-    console.error(
-      "Warning: --password can be exposed via process listings. Prefer --password-file or OPENCLAW_GATEWAY_PASSWORD.",
-    );
-  }
-  const opts = parseArgs(argv);
-  serveAcpGateway(opts).catch((err) => {
-    console.error(String(err));
-    process.exit(1);
-  });
+  const opts = parseArgs(process.argv.slice(2));
+  serveAcpGateway(opts);
 }

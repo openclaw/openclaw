@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   clearInternalHooks,
@@ -12,19 +12,13 @@ import {
 import { loadInternalHooks } from "./loader.js";
 
 describe("loader", () => {
-  let fixtureRoot = "";
-  let caseId = 0;
   let tmpDir: string;
   let originalBundledDir: string | undefined;
-
-  beforeAll(async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hooks-loader-"));
-  });
 
   beforeEach(async () => {
     clearInternalHooks();
     // Create a temp directory for test modules
-    tmpDir = path.join(fixtureRoot, `case-${caseId++}`);
+    tmpDir = path.join(os.tmpdir(), `openclaw-test-${Date.now()}`);
     await fs.mkdir(tmpDir, { recursive: true });
 
     // Disable bundled hooks during tests by setting env var to non-existent directory
@@ -40,13 +34,12 @@ describe("loader", () => {
     } else {
       process.env.OPENCLAW_BUNDLED_HOOKS_DIR = originalBundledDir;
     }
-  });
-
-  afterAll(async () => {
-    if (!fixtureRoot) {
-      return;
+    // Clean up temp directory
+    try {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    } catch {
+      // Ignore cleanup errors
     }
-    await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
   describe("loadInternalHooks", () => {
@@ -86,7 +79,7 @@ describe("loader", () => {
             handlers: [
               {
                 event: "command:new",
-                module: path.basename(handlerPath),
+                module: handlerPath,
               },
             ],
           },
@@ -113,8 +106,8 @@ describe("loader", () => {
           internal: {
             enabled: true,
             handlers: [
-              { event: "command:new", module: path.basename(handler1Path) },
-              { event: "command:stop", module: path.basename(handler2Path) },
+              { event: "command:new", module: handler1Path },
+              { event: "command:stop", module: handler2Path },
             ],
           },
         },
@@ -145,7 +138,7 @@ describe("loader", () => {
             handlers: [
               {
                 event: "command:new",
-                module: path.basename(handlerPath),
+                module: handlerPath,
                 export: "myHandler",
               },
             ],
@@ -158,6 +151,8 @@ describe("loader", () => {
     });
 
     it("should handle module loading errors gracefully", async () => {
+      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
       const cfg: OpenClawConfig = {
         hooks: {
           internal: {
@@ -165,19 +160,26 @@ describe("loader", () => {
             handlers: [
               {
                 event: "command:new",
-                module: "missing-handler.js",
+                module: "/nonexistent/path/handler.js",
               },
             ],
           },
         },
       };
 
-      // Should not throw and should return 0 (handler failed to load)
       const count = await loadInternalHooks(cfg, tmpDir);
       expect(count).toBe(0);
+      expect(consoleError).toHaveBeenCalledWith(
+        expect.stringContaining("Failed to load hook handler"),
+        expect.any(String),
+      );
+
+      consoleError.mockRestore();
     });
 
     it("should handle non-function exports", async () => {
+      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
       // Create a module with a non-function export
       const handlerPath = path.join(tmpDir, "bad-export.js");
       await fs.writeFile(handlerPath, 'export default "not a function";', "utf-8");
@@ -189,16 +191,18 @@ describe("loader", () => {
             handlers: [
               {
                 event: "command:new",
-                module: path.basename(handlerPath),
+                module: handlerPath,
               },
             ],
           },
         },
       };
 
-      // Should not throw and should return 0 (handler is not a function)
       const count = await loadInternalHooks(cfg, tmpDir);
       expect(count).toBe(0);
+      expect(consoleError).toHaveBeenCalledWith(expect.stringContaining("is not a function"));
+
+      consoleError.mockRestore();
     });
 
     it("should handle relative paths", async () => {
@@ -206,8 +210,8 @@ describe("loader", () => {
       const handlerPath = path.join(tmpDir, "relative-handler.js");
       await fs.writeFile(handlerPath, "export default async function() {}", "utf-8");
 
-      // Relative to workspaceDir (tmpDir)
-      const relativePath = path.relative(tmpDir, handlerPath);
+      // Get relative path from cwd
+      const relativePath = path.relative(process.cwd(), handlerPath);
 
       const cfg: OpenClawConfig = {
         hooks: {
@@ -248,7 +252,7 @@ describe("loader", () => {
             handlers: [
               {
                 event: "command:new",
-                module: path.basename(handlerPath),
+                module: handlerPath,
               },
             ],
           },
@@ -265,74 +269,6 @@ describe("loader", () => {
       // the call count from this context without more complex test infrastructure
       // This test mainly verifies that loading and triggering doesn't crash
       expect(getRegisteredEventKeys()).toContain("command:new");
-    });
-
-    it("rejects directory hook handlers that escape hook dir via symlink", async () => {
-      const outsideHandlerPath = path.join(fixtureRoot, `outside-handler-${caseId}.js`);
-      await fs.writeFile(outsideHandlerPath, "export default async function() {}", "utf-8");
-
-      const hookDir = path.join(tmpDir, "hooks", "symlink-hook");
-      await fs.mkdir(hookDir, { recursive: true });
-      await fs.writeFile(
-        path.join(hookDir, "HOOK.md"),
-        [
-          "---",
-          "name: symlink-hook",
-          "description: symlink test",
-          'metadata: {"openclaw":{"events":["command:new"]}}',
-          "---",
-          "",
-          "# Symlink Hook",
-        ].join("\n"),
-        "utf-8",
-      );
-      try {
-        await fs.symlink(outsideHandlerPath, path.join(hookDir, "handler.js"));
-      } catch {
-        return;
-      }
-
-      const cfg: OpenClawConfig = {
-        hooks: {
-          internal: {
-            enabled: true,
-          },
-        },
-      };
-
-      const count = await loadInternalHooks(cfg, tmpDir);
-      expect(count).toBe(0);
-      expect(getRegisteredEventKeys()).not.toContain("command:new");
-    });
-
-    it("rejects legacy handler modules that escape workspace via symlink", async () => {
-      const outsideHandlerPath = path.join(fixtureRoot, `outside-legacy-${caseId}.js`);
-      await fs.writeFile(outsideHandlerPath, "export default async function() {}", "utf-8");
-
-      const linkedHandlerPath = path.join(tmpDir, "legacy-handler.js");
-      try {
-        await fs.symlink(outsideHandlerPath, linkedHandlerPath);
-      } catch {
-        return;
-      }
-
-      const cfg: OpenClawConfig = {
-        hooks: {
-          internal: {
-            enabled: true,
-            handlers: [
-              {
-                event: "command:new",
-                module: "legacy-handler.js",
-              },
-            ],
-          },
-        },
-      };
-
-      const count = await loadInternalHooks(cfg, tmpDir);
-      expect(count).toBe(0);
-      expect(getRegisteredEventKeys()).not.toContain("command:new");
     });
   });
 });

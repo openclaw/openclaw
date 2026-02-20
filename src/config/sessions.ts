@@ -7,4 +7,3 @@ export * from "./sessions/session-key.js";
 export * from "./sessions/store.js";
 export * from "./sessions/types.js";
 export * from "./sessions/transcript.js";
-export * from "./sessions/delivery-info.js";

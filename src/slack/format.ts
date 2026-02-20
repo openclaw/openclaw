@@ -94,20 +94,6 @@ type SlackMarkdownOptions = {
   tableMode?: MarkdownTableMode;
 };
 
-function buildSlackRenderOptions() {
-  return {
-    styleMarkers: {
-      bold: { open: "*", close: "*" },
-      italic: { open: "_", close: "_" },
-      strikethrough: { open: "~", close: "~" },
-      code: { open: "`", close: "`" },
-      code_block: { open: "```\n", close: "```" },
-    },
-    escapeText: escapeSlackMrkdwnText,
-    buildLink: buildSlackLink,
-  };
-}
-
 export function markdownToSlackMrkdwn(
   markdown: string,
   options: SlackMarkdownOptions = {},
@@ -119,7 +105,17 @@ export function markdownToSlackMrkdwn(
     blockquotePrefix: "> ",
     tableMode: options.tableMode,
   });
-  return renderMarkdownWithMarkers(ir, buildSlackRenderOptions());
+  return renderMarkdownWithMarkers(ir, {
+    styleMarkers: {
+      bold: { open: "*", close: "*" },
+      italic: { open: "_", close: "_" },
+      strikethrough: { open: "~", close: "~" },
+      code: { open: "`", close: "`" },
+      code_block: { open: "```\n", close: "```" },
+    },
+    escapeText: escapeSlackMrkdwnText,
+    buildLink: buildSlackLink,
+  });
 }
 
 export function markdownToSlackMrkdwnChunks(
@@ -135,6 +131,17 @@ export function markdownToSlackMrkdwnChunks(
     tableMode: options.tableMode,
   });
   const chunks = chunkMarkdownIR(ir, limit);
-  const renderOptions = buildSlackRenderOptions();
-  return chunks.map((chunk) => renderMarkdownWithMarkers(chunk, renderOptions));
+  return chunks.map((chunk) =>
+    renderMarkdownWithMarkers(chunk, {
+      styleMarkers: {
+        bold: { open: "*", close: "*" },
+        italic: { open: "_", close: "_" },
+        strikethrough: { open: "~", close: "~" },
+        code: { open: "`", close: "`" },
+        code_block: { open: "```\n", close: "```" },
+      },
+      escapeText: escapeSlackMrkdwnText,
+      buildLink: buildSlackLink,
+    }),
+  );
 }

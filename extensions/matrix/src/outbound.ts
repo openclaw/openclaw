@@ -7,14 +7,13 @@ export const matrixOutbound: ChannelOutboundAdapter = {
   chunker: (text, limit) => getMatrixRuntime().channel.text.chunkMarkdownText(text, limit),
   chunkerMode: "markdown",
   textChunkLimit: 4000,
-  sendText: async ({ to, text, deps, replyToId, threadId, accountId }) => {
+  sendText: async ({ to, text, deps, replyToId, threadId }) => {
     const send = deps?.sendMatrix ?? sendMessageMatrix;
     const resolvedThreadId =
       threadId !== undefined && threadId !== null ? String(threadId) : undefined;
     const result = await send(to, text, {
       replyToId: replyToId ?? undefined,
       threadId: resolvedThreadId,
-      accountId: accountId ?? undefined,
     });
     return {
       channel: "matrix",
@@ -22,7 +21,7 @@ export const matrixOutbound: ChannelOutboundAdapter = {
       roomId: result.roomId,
     };
   },
-  sendMedia: async ({ to, text, mediaUrl, deps, replyToId, threadId, accountId }) => {
+  sendMedia: async ({ to, text, mediaUrl, deps, replyToId, threadId }) => {
     const send = deps?.sendMatrix ?? sendMessageMatrix;
     const resolvedThreadId =
       threadId !== undefined && threadId !== null ? String(threadId) : undefined;
@@ -30,7 +29,6 @@ export const matrixOutbound: ChannelOutboundAdapter = {
       mediaUrl,
       replyToId: replyToId ?? undefined,
       threadId: resolvedThreadId,
-      accountId: accountId ?? undefined,
     });
     return {
       channel: "matrix",
@@ -38,12 +36,11 @@ export const matrixOutbound: ChannelOutboundAdapter = {
       roomId: result.roomId,
     };
   },
-  sendPoll: async ({ to, poll, threadId, accountId }) => {
+  sendPoll: async ({ to, poll, threadId }) => {
     const resolvedThreadId =
       threadId !== undefined && threadId !== null ? String(threadId) : undefined;
     const result = await sendPollMatrix(to, poll, {
       threadId: resolvedThreadId,
-      accountId: accountId ?? undefined,
     });
     return {
       channel: "matrix",

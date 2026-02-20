@@ -15,7 +15,6 @@ import {
   type ChannelDock,
   type ChannelMessageActionAdapter,
   type ChannelPlugin,
-  type ChannelStatusIssue,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk";
 import { GoogleChatConfigSchema } from "openclaw/plugin-sdk";
@@ -178,8 +177,6 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
         .map((entry) => String(entry))
         .filter(Boolean)
         .map(formatAllowFromEntry),
-    resolveDefaultTo: ({ cfg, accountId }) =>
-      resolveGoogleChatAccount({ cfg, accountId }).config.defaultTo?.trim() || undefined,
   },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
@@ -377,23 +374,40 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
     chunker: (text, limit) => getGoogleChatRuntime().channel.text.chunkMarkdownText(text, limit),
     chunkerMode: "markdown",
     textChunkLimit: 4000,
-    resolveTarget: ({ to }) => {
+    resolveTarget: ({ to, allowFrom, mode }) => {
       const trimmed = to?.trim() ?? "";
+      const allowListRaw = (allowFrom ?? []).map((entry) => String(entry).trim()).filter(Boolean);
+      const allowList = allowListRaw
+        .filter((entry) => entry !== "*")
+        .map((entry) => normalizeGoogleChatTarget(entry))
+        .filter((entry): entry is string => Boolean(entry));
 
       if (trimmed) {
         const normalized = normalizeGoogleChatTarget(trimmed);
         if (!normalized) {
+          if ((mode === "implicit" || mode === "heartbeat") && allowList.length > 0) {
+            return { ok: true, to: allowList[0] };
+          }
           return {
             ok: false,
-            error: missingTargetError("Google Chat", "<spaces/{space}|users/{user}>"),
+            error: missingTargetError(
+              "Google Chat",
+              "<spaces/{space}|users/{user}> or channels.googlechat.dm.allowFrom[0]",
+            ),
           };
         }
         return { ok: true, to: normalized };
       }
 
+      if (allowList.length > 0) {
+        return { ok: true, to: allowList[0] };
+      }
       return {
         ok: false,
-        error: missingTargetError("Google Chat", "<spaces/{space}|users/{user}>"),
+        error: missingTargetError(
+          "Google Chat",
+          "<spaces/{space}|users/{user}> or channels.googlechat.dm.allowFrom[0]",
+        ),
       };
     },
     sendText: async ({ cfg, to, text, accountId, replyToId, threadId }) => {
@@ -437,14 +451,13 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
           (cfg.channels?.["googlechat"] as { mediaMaxMb?: number } | undefined)?.mediaMaxMb,
         accountId,
       });
-      const loaded = await runtime.channel.media.fetchRemoteMedia({
-        url: mediaUrl,
+      const loaded = await runtime.channel.media.fetchRemoteMedia(mediaUrl, {
         maxBytes: maxBytes ?? (account.config.mediaMaxMb ?? 20) * 1024 * 1024,
       });
       const upload = await uploadGoogleChatAttachment({
         account,
         space,
-        filename: loaded.fileName ?? "attachment",
+        filename: loaded.filename ?? "attachment",
         buffer: loaded.buffer,
         contentType: loaded.contentType,
       });
@@ -454,7 +467,7 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
         text,
         thread,
         attachments: upload.attachmentUploadToken
-          ? [{ attachmentUploadToken: upload.attachmentUploadToken, contentName: loaded.fileName }]
+          ? [{ attachmentUploadToken: upload.attachmentUploadToken, contentName: loaded.filename }]
           : undefined,
       });
       return {
@@ -472,7 +485,7 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
       lastStopAt: null,
       lastError: null,
     },
-    collectStatusIssues: (accounts): ChannelStatusIssue[] =>
+    collectStatusIssues: (accounts) =>
       accounts.flatMap((entry) => {
         const accountId = String(entry.accountId ?? DEFAULT_ACCOUNT_ID);
         const enabled = entry.enabled !== false;
@@ -480,7 +493,7 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
         if (!enabled || !configured) {
           return [];
         }
-        const issues: ChannelStatusIssue[] = [];
+        const issues = [];
         if (!entry.audience) {
           issues.push({
             channel: "googlechat",

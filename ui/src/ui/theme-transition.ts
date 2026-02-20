@@ -1,4 +1,4 @@
-import type { ThemeMode } from "./theme.ts";
+import type { ThemeMode } from "./theme";
 
 export type ThemeTransitionContext = {
   element?: HTMLElement | null;
@@ -18,15 +18,9 @@ type DocumentWithViewTransition = Document & {
 };
 
 const clamp01 = (value: number) => {
-  if (Number.isNaN(value)) {
-    return 0.5;
-  }
-  if (value <= 0) {
-    return 0;
-  }
-  if (value >= 1) {
-    return 1;
-  }
+  if (Number.isNaN(value)) return 0.5;
+  if (value <= 0) return 0;
+  if (value >= 1) return 1;
   return value;
 };
 
@@ -49,9 +43,7 @@ export const startThemeTransition = ({
   context,
   currentTheme,
 }: ThemeTransitionOptions) => {
-  if (currentTheme === nextTheme) {
-    return;
-  }
+  if (currentTheme === nextTheme) return;
 
   const documentReference = globalThis.document ?? null;
   if (!documentReference) {

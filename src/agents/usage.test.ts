@@ -1,144 +1,49 @@
 import { describe, expect, it } from "vitest";
-import {
-  normalizeUsage,
-  hasNonzeroUsage,
-  derivePromptTokens,
-  deriveSessionTotalTokens,
-} from "./usage.js";
+import { hasNonzeroUsage, normalizeUsage } from "./usage.js";
 
 describe("normalizeUsage", () => {
-  it("normalizes cache fields from provider response", () => {
+  it("normalizes Anthropic-style snake_case usage", () => {
     const usage = normalizeUsage({
-      input: 1000,
-      output: 500,
-      cacheRead: 2000,
-      cacheWrite: 300,
+      input_tokens: 1200,
+      output_tokens: 340,
+      cache_creation_input_tokens: 200,
+      cache_read_input_tokens: 50,
+      total_tokens: 1790,
     });
     expect(usage).toEqual({
-      input: 1000,
-      output: 500,
-      cacheRead: 2000,
-      cacheWrite: 300,
-      total: undefined,
-    });
-  });
-
-  it("normalizes cache fields from alternate naming", () => {
-    const usage = normalizeUsage({
-      input_tokens: 1000,
-      output_tokens: 500,
-      cache_read_input_tokens: 2000,
-      cache_creation_input_tokens: 300,
-    });
-    expect(usage).toEqual({
-      input: 1000,
-      output: 500,
-      cacheRead: 2000,
-      cacheWrite: 300,
-      total: undefined,
-    });
-  });
-
-  it("handles cache_read and cache_write naming variants", () => {
-    const usage = normalizeUsage({
-      input: 1000,
-      cache_read: 1500,
-      cache_write: 200,
-    });
-    expect(usage).toEqual({
-      input: 1000,
-      output: undefined,
-      cacheRead: 1500,
+      input: 1200,
+      output: 340,
+      cacheRead: 50,
       cacheWrite: 200,
-      total: undefined,
+      total: 1790,
     });
   });
 
-  it("returns undefined when no valid fields are provided", () => {
-    const usage = normalizeUsage(null);
-    expect(usage).toBeUndefined();
+  it("normalizes OpenAI-style prompt/completion usage", () => {
+    const usage = normalizeUsage({
+      prompt_tokens: 987,
+      completion_tokens: 123,
+      total_tokens: 1110,
+    });
+    expect(usage).toEqual({
+      input: 987,
+      output: 123,
+      cacheRead: undefined,
+      cacheWrite: undefined,
+      total: 1110,
+    });
   });
 
-  it("handles undefined input", () => {
-    const usage = normalizeUsage(undefined);
-    expect(usage).toBeUndefined();
-  });
-});
-
-describe("hasNonzeroUsage", () => {
-  it("returns true when cache read is nonzero", () => {
-    const usage = { cacheRead: 100 };
-    expect(hasNonzeroUsage(usage)).toBe(true);
+  it("returns undefined for empty usage objects", () => {
+    expect(normalizeUsage({})).toBeUndefined();
   });
 
-  it("returns true when cache write is nonzero", () => {
-    const usage = { cacheWrite: 50 };
-    expect(hasNonzeroUsage(usage)).toBe(true);
-  });
-
-  it("returns true when both cache fields are nonzero", () => {
-    const usage = { cacheRead: 100, cacheWrite: 50 };
-    expect(hasNonzeroUsage(usage)).toBe(true);
-  });
-
-  it("returns false when cache fields are zero", () => {
-    const usage = { cacheRead: 0, cacheWrite: 0 };
-    expect(hasNonzeroUsage(usage)).toBe(false);
-  });
-
-  it("returns false for undefined usage", () => {
+  it("guards against empty/zero usage overwrites", () => {
     expect(hasNonzeroUsage(undefined)).toBe(false);
-  });
-});
-
-describe("derivePromptTokens", () => {
-  it("includes cache tokens in prompt total", () => {
-    const usage = {
-      input: 1000,
-      cacheRead: 500,
-      cacheWrite: 200,
-    };
-    const promptTokens = derivePromptTokens(usage);
-    expect(promptTokens).toBe(1700); // 1000 + 500 + 200
-  });
-
-  it("handles missing cache fields", () => {
-    const usage = {
-      input: 1000,
-    };
-    const promptTokens = derivePromptTokens(usage);
-    expect(promptTokens).toBe(1000);
-  });
-
-  it("returns undefined for empty usage", () => {
-    const promptTokens = derivePromptTokens({});
-    expect(promptTokens).toBeUndefined();
-  });
-});
-
-describe("deriveSessionTotalTokens", () => {
-  it("includes cache tokens in total calculation", () => {
-    const totalTokens = deriveSessionTotalTokens({
-      usage: {
-        input: 1000,
-        cacheRead: 500,
-        cacheWrite: 200,
-      },
-      contextTokens: 4000,
-    });
-    expect(totalTokens).toBe(1700); // 1000 + 500 + 200
-  });
-
-  it("prefers promptTokens override over derived total", () => {
-    const totalTokens = deriveSessionTotalTokens({
-      usage: {
-        input: 1000,
-        cacheRead: 500,
-        cacheWrite: 200,
-      },
-      contextTokens: 4000,
-      promptTokens: 2500, // Override
-    });
-    expect(totalTokens).toBe(2500);
+    expect(hasNonzeroUsage(null)).toBe(false);
+    expect(hasNonzeroUsage({})).toBe(false);
+    expect(hasNonzeroUsage({ input: 0, output: 0 })).toBe(false);
+    expect(hasNonzeroUsage({ input: 1 })).toBe(true);
+    expect(hasNonzeroUsage({ total: 1 })).toBe(true);
   });
 });

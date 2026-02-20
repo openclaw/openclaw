@@ -8,10 +8,6 @@ import { normalizeServePath } from "./gmail.js";
 let cachedPythonPath: string | null | undefined;
 const MAX_OUTPUT_CHARS = 800;
 
-export function resetGmailSetupUtilsCachesForTest(): void {
-  cachedPythonPath = undefined;
-}
-
 function trimOutput(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) {
@@ -23,17 +19,13 @@ function trimOutput(value: string): string {
   return `${trimmed.slice(0, MAX_OUTPUT_CHARS)}…`;
 }
 
-function formatCommandResultInternal(
-  command: string,
-  result: SpawnResult,
-  statusLabel: "failed" | "exited",
-): string {
+function formatCommandFailure(command: string, result: SpawnResult): string {
   const code = result.code ?? "null";
   const signal = result.signal ? `, signal=${result.signal}` : "";
   const killed = result.killed ? ", killed=true" : "";
   const stderr = trimOutput(result.stderr);
   const stdout = trimOutput(result.stdout);
-  const lines = [`${command} ${statusLabel} (code=${code}${signal}${killed})`];
+  const lines = [`${command} failed (code=${code}${signal}${killed})`];
   if (stderr) {
     lines.push(`stderr: ${stderr}`);
   }
@@ -43,12 +35,20 @@ function formatCommandResultInternal(
   return lines.join("\n");
 }
 
-function formatCommandFailure(command: string, result: SpawnResult): string {
-  return formatCommandResultInternal(command, result, "failed");
-}
-
 function formatCommandResult(command: string, result: SpawnResult): string {
-  return formatCommandResultInternal(command, result, "exited");
+  const code = result.code ?? "null";
+  const signal = result.signal ? `, signal=${result.signal}` : "";
+  const killed = result.killed ? ", killed=true" : "";
+  const stderr = trimOutput(result.stderr);
+  const stdout = trimOutput(result.stdout);
+  const lines = [`${command} exited (code=${code}${signal}${killed})`];
+  if (stderr) {
+    lines.push(`stderr: ${stderr}`);
+  }
+  if (stdout) {
+    lines.push(`stdout: ${stdout}`);
+  }
+  return lines.join("\n");
 }
 
 function formatJsonParseFailure(command: string, result: SpawnResult, err: unknown): string {

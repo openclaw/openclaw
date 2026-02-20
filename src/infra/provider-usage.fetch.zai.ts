@@ -1,6 +1,6 @@
-import { buildUsageHttpErrorSnapshot, fetchJson } from "./provider-usage.fetch.shared.js";
-import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
 import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
+import { fetchJson } from "./provider-usage.fetch.shared.js";
+import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
 
 type ZaiUsageResponse = {
   success?: boolean;
@@ -38,10 +38,12 @@ export async function fetchZaiUsage(
   );
 
   if (!res.ok) {
-    return buildUsageHttpErrorSnapshot({
+    return {
       provider: "zai",
-      status: res.status,
-    });
+      displayName: PROVIDER_LABELS.zai,
+      windows: [],
+      error: `HTTP ${res.status}`,
+    };
   }
 
   const data = (await res.json()) as ZaiUsageResponse;
