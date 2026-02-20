@@ -33,6 +33,20 @@ import { getTelegramRuntime } from "./runtime.js";
 
 const meta = getChatChannelMeta("telegram");
 
+function safeParseTelegramReplyToMessageId(
+  replyToId: string | null | undefined,
+): number | undefined {
+  if (typeof parseTelegramReplyToMessageId === "function") {
+    return parseTelegramReplyToMessageId(replyToId);
+  }
+  const raw = replyToId?.trim();
+  if (!raw) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
 const telegramMessageActions: ChannelMessageActionAdapter = {
   listActions: (ctx) =>
     getTelegramRuntime().channel.telegram.messageActions?.listActions?.(ctx) ?? [],
@@ -261,7 +275,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
     pollMaxOptions: 10,
     sendText: async ({ to, text, accountId, deps, replyToId, threadId, silent }) => {
       const send = deps?.sendTelegram ?? getTelegramRuntime().channel.telegram.sendMessageTelegram;
-      const replyToMessageId = parseTelegramReplyToMessageId(replyToId);
+      const replyToMessageId = safeParseTelegramReplyToMessageId(replyToId);
       const messageThreadId = parseTelegramThreadId(threadId);
       const result = await send(to, text, {
         verbose: false,
@@ -274,7 +288,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
     },
     sendMedia: async ({ to, text, mediaUrl, accountId, deps, replyToId, threadId, silent }) => {
       const send = deps?.sendTelegram ?? getTelegramRuntime().channel.telegram.sendMessageTelegram;
-      const replyToMessageId = parseTelegramReplyToMessageId(replyToId);
+      const replyToMessageId = safeParseTelegramReplyToMessageId(replyToId);
       const messageThreadId = parseTelegramThreadId(threadId);
       const result = await send(to, text, {
         verbose: false,

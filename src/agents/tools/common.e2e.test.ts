@@ -36,6 +36,11 @@ describe("readStringOrNumberParam", () => {
     expect(readStringOrNumberParam(params, "chatId")).toBe("abc");
   });
 
+  it("accepts snake_case aliases for camelCase keys", () => {
+    const params = { chat_id: "123" };
+    expect(readStringOrNumberParam(params, "chatId")).toBe("123");
+  });
+
   it("throws when required and missing", () => {
     expect(() => readStringOrNumberParam({}, "chatId", { required: true })).toThrow(
       /chatId required/,
@@ -52,6 +57,11 @@ describe("readNumberParam", () => {
   it("truncates when integer is true", () => {
     const params = { messageId: "42.9" };
     expect(readNumberParam(params, "messageId", { integer: true })).toBe(42);
+  });
+
+  it("accepts snake_case aliases for camelCase keys", () => {
+    const params = { message_id: "42" };
+    expect(readNumberParam(params, "messageId")).toBe(42);
   });
 
   it("throws when required and missing", () => {
