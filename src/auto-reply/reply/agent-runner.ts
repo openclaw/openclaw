@@ -39,6 +39,8 @@ import {
 import { runMemoryFlushIfNeeded } from "./agent-runner-memory.js";
 import { buildReplyPayloads } from "./agent-runner-payloads.js";
 import { appendUsageLine, formatResponseUsageLine } from "./agent-runner-utils.js";
+import { shouldVerifyResponse } from "./agent-verifier-trigger.js";
+import { verifyAgentResponse } from "./agent-verifier.js";
 import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveBlockStreamingCoalescing } from "./block-streaming.js";
 import { createFollowupRunner } from "./followup-runner.js";
@@ -415,7 +417,7 @@ export async function runReplyAgent(params: {
       }
     }
 
-    const payloadArray = runResult.payloads ?? [];
+    let payloadArray = runResult.payloads ?? [];
 
     if (blockReplyPipeline) {
       await blockReplyPipeline.flush({ force: true });
@@ -424,6 +426,170 @@ export async function runReplyAgent(params: {
     if (pendingToolTasks.size > 0) {
       await Promise.allSettled(pendingToolTasks);
     }
+
+    // ─── Self-verification loop ────────────────────────────────────────
+    // Verify the agent response quality and retry if it doesn't meet the
+    // user's request. Only runs when verifier is configured, the run
+    // succeeded, block streaming did not already deliver content, and
+    // trigger keywords are detected in the response text.
+    const verifierConfig = cfg.agents?.defaults?.verifier;
+    let verificationAttempted = false;
+    let verificationPassed: boolean | undefined;
+    let verificationAttemptCount = 0;
+
+    if (
+      verifierConfig?.enabled === true &&
+      !isHeartbeat &&
+      payloadArray.length > 0 &&
+      !(directlySentBlockKeys && directlySentBlockKeys.size > 0) &&
+      !isCliProvider(followupRun.run.provider, cfg)
+    ) {
+      const responseText = payloadArray
+        .filter(
+          (p): p is ReplyPayload & { text: string } => typeof p.text === "string" && !p.isError,
+        )
+        .map((p) => p.text)
+        .join("\n");
+
+      const triggerKeywords = verifierConfig.triggerKeywords ?? [
+        "done",
+        "completed",
+        "finished",
+        "ready",
+        "here you go",
+      ];
+
+      if (responseText && shouldVerifyResponse(responseText, triggerKeywords)) {
+        verificationAttempted = true;
+        const maxAttempts = verifierConfig.maxAttempts ?? 3;
+        const verifierModel = verifierConfig.model ?? defaultModel;
+        const timeoutMs = (verifierConfig.timeoutSeconds ?? 30) * 1000;
+
+        emitAgentEvent({
+          runId,
+          sessionKey,
+          stream: "lifecycle",
+          data: { phase: "verification_start", maxAttempts },
+        });
+
+        let attempt = 1;
+        let currentPayloadArray = payloadArray;
+
+        while (attempt <= maxAttempts) {
+          // Respect abort signal — deliver current response immediately
+          if (params.opts?.abortSignal?.aborted) {
+            break;
+          }
+
+          const currentText = currentPayloadArray
+            .filter(
+              (p): p is ReplyPayload & { text: string } => typeof p.text === "string" && !p.isError,
+            )
+            .map((p) => p.text)
+            .join("\n");
+
+          if (!currentText) {
+            break;
+          }
+
+          const verificationResult = await verifyAgentResponse({
+            userMessage: commandBody,
+            agentResponse: currentText,
+            model: verifierModel,
+            cfg,
+            timeoutMs,
+          });
+
+          verificationAttemptCount = attempt;
+
+          if (verificationResult.passed) {
+            verificationPassed = true;
+            emitAgentEvent({
+              runId,
+              sessionKey,
+              stream: "lifecycle",
+              data: { phase: "verification_pass", attempt },
+            });
+            break;
+          }
+
+          // Verification failed for this attempt
+          verificationPassed = false;
+          emitAgentEvent({
+            runId,
+            sessionKey,
+            stream: "lifecycle",
+            data: {
+              phase: "verification_fail",
+              attempt,
+              feedback: verificationResult.feedback,
+            },
+          });
+
+          if (attempt >= maxAttempts) {
+            emitAgentEvent({
+              runId,
+              sessionKey,
+              stream: "lifecycle",
+              data: { phase: "verification_exhausted", attempts: maxAttempts },
+            });
+            break;
+          }
+
+          // Retry: construct feedback prompt and re-run agent
+          emitAgentEvent({
+            runId,
+            sessionKey,
+            stream: "lifecycle",
+            data: { phase: "verification_retry", attempt: attempt + 1 },
+          });
+
+          const feedbackPrompt = `[Verification: your response did not fully meet the request. Feedback: ${verificationResult.feedback ?? "Response inadequate."}. Please review and address the issues.]`;
+
+          const retryOutcome = await runAgentTurnWithFallback({
+            commandBody: feedbackPrompt,
+            followupRun,
+            sessionCtx,
+            opts,
+            typingSignals,
+            blockReplyPipeline: null,
+            blockStreamingEnabled: false,
+            blockReplyChunking,
+            resolvedBlockStreamingBreak,
+            applyReplyToMode,
+            shouldEmitToolResult,
+            shouldEmitToolOutput,
+            pendingToolTasks,
+            resetSessionAfterCompactionFailure,
+            resetSessionAfterRoleOrderingConflict,
+            isHeartbeat,
+            sessionKey,
+            getActiveSessionEntry: () => activeSessionEntry,
+            activeSessionStore,
+            storePath,
+            resolvedVerboseLevel,
+          });
+
+          if (retryOutcome.kind === "final") {
+            // Retry produced an error/final payload — deliver current best response
+            break;
+          }
+
+          const retryPayloads = retryOutcome.runResult.payloads ?? [];
+          if (retryPayloads.length === 0) {
+            // Retry produced nothing — deliver current best response
+            break;
+          }
+
+          currentPayloadArray = retryPayloads;
+          attempt++;
+        }
+
+        // Use the latest payload array (verified or max-attempts exhausted)
+        payloadArray = currentPayloadArray;
+      }
+    }
+    // ─── End self-verification loop ────────────────────────────────────
 
     const usage = runResult.meta?.agentMeta?.usage;
     const promptTokens = runResult.meta?.agentMeta?.promptTokens;
@@ -690,6 +856,17 @@ export async function runReplyAgent(params: {
       if (verboseEnabled) {
         const suffix = typeof count === "number" ? ` (count ${count})` : "";
         verboseNotices.push({ text: `🧹 Auto-compaction complete${suffix}.` });
+      }
+    }
+    if (verboseEnabled && verificationAttempted) {
+      if (verificationPassed) {
+        verboseNotices.push({
+          text: `✅ Verification passed (attempt ${verificationAttemptCount}).`,
+        });
+      } else if (verificationPassed === false) {
+        verboseNotices.push({
+          text: `⚠️ Verification exhausted after ${verificationAttemptCount} attempt(s) — delivering best response.`,
+        });
       }
     }
     if (verboseNotices.length > 0) {
