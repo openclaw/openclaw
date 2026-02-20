@@ -646,9 +646,10 @@ export function wake(
   if (!text) {
     return { ok: false } as const;
   }
-  state.deps.enqueueSystemEvent(text);
+  const agentId = state.deps.defaultAgentId ?? DEFAULT_AGENT_ID;
+  state.deps.enqueueSystemEvent(text, { agentId });
   if (opts.mode === "now") {
-    state.deps.requestHeartbeatNow({ reason: "wake" });
+    state.deps.requestHeartbeatNow({ reason: "wake", agentId });
   }
   return { ok: true } as const;
 }
