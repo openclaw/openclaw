@@ -51,6 +51,19 @@ export type {
   ExecToolDetails,
 } from "./bash-tools.exec-types.js";
 
+/**
+ * Determine whether to use PTY for exec.
+ * On Windows (PowerShell), PTY is needed for proper output capture, so we default to true.
+ * On other platforms, PTY is opt-in via explicit param.pty=true.
+ */
+function shouldUsePty(paramPty: boolean | undefined, sandbox: boolean): boolean {
+  if (paramPty !== undefined) {
+    return paramPty === true && !sandbox;
+  }
+  // Default to PTY on Windows when not in sandbox
+  return !sandbox && process.platform === "win32";
+}
+
 function extractScriptTargetFromCommand(
   command: string,
 ): { kind: "python"; relOrAbsPath: string } | { kind: "node"; relOrAbsPath: string } | null {
@@ -385,7 +398,7 @@ export function createExecTool(
           command: params.command,
           workdir,
           env,
-          pty: params.pty === true && !sandbox,
+          pty: shouldUsePty(params.pty, sandbox),
           timeoutSec: params.timeout,
           defaultTimeoutSec,
           security,
@@ -410,7 +423,7 @@ export function createExecTool(
       const effectiveTimeout =
         typeof params.timeout === "number" ? params.timeout : defaultTimeoutSec;
       const getWarningText = () => (warnings.length ? `${warnings.join("\n")}\n\n` : "");
-      const usePty = params.pty === true && !sandbox;
+      const usePty = shouldUsePty(params.pty, sandbox);
 
       // Preflight: catch a common model failure mode (shell syntax leaking into Python/JS sources)
       // before we execute and burn tokens in cron loops.
