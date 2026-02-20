@@ -1,50 +1,48 @@
----
-summary: "Social media scraping via Apify (Instagram, TikTok, YouTube, LinkedIn)"
-read_when:
-  - You want to scrape social media platforms
-  - You need an Apify API key for social scraping
-  - You want Instagram, TikTok, YouTube, or LinkedIn data extraction
-title: "Social Tools"
----
+# Apify Social Scraper Plugin
 
-# Social tools
-
-OpenClaw ships a `social_platforms` tool backed by **Apify** Actors for structured
-social media data extraction. It supports **Instagram**, **TikTok**, **YouTube**, and **LinkedIn**.
+Social media scraping via Apify (Instagram, TikTok, YouTube, LinkedIn).
 
 ## How it works
 
 - `social_platforms` uses a two-phase async pattern: **start** fires off scraping jobs concurrently, **collect** fetches results.
 - Results are cached by run ID for 15 minutes (configurable).
-- Requires `APIFY_API_KEY` or `tools.social.apiKey` in config.
+- Requires `APIFY_API_KEY` env var or `apiKey` in plugin config.
 - Prefer `social_platforms` over `web_fetch` for social media URLs.
 
 ## Get an API key
 
 1. Create an Apify account at [https://console.apify.com/](https://console.apify.com/)
 2. Generate an API token in Account Settings.
-3. Store it in config or set `APIFY_API_KEY` in the gateway environment.
+3. Store it in plugin config or set `APIFY_API_KEY` in the gateway environment.
 
 ## Configure
 
 ```json5
 {
-  tools: {
-    social: {
-      enabled: true,
-      apiKey: "APIFY_API_KEY_HERE", // optional if APIFY_API_KEY is set
-      baseUrl: "https://api.apify.com",
-      cacheTtlMinutes: 15,
-      maxResults: 20,
-      allowedPlatforms: ["instagram", "tiktok", "youtube", "linkedin"],
+  plugins: {
+    entries: {
+      "apify-social": {
+        config: {
+          apiKey: "APIFY_API_KEY_HERE", // optional if APIFY_API_KEY env var is set
+          enabled: true,
+          baseUrl: "https://api.apify.com",
+          cacheTtlMinutes: 15,
+          maxResults: 20,
+          allowedPlatforms: ["instagram", "tiktok", "youtube", "linkedin"],
+        },
+      },
     },
+  },
+  // Make the tool available to agents:
+  tools: {
+    alsoAllow: ["social_platforms"], // or "apify-social" or "group:plugins"
   },
 }
 ```
 
 Notes:
 
-- `tools.social.enabled` defaults to true when an API key is present.
+- `enabled` defaults to true when an API key is present.
 - `allowedPlatforms` controls which platforms are available (default: all four).
 - `maxResults` sets the default result limit (default: 20, max: 100).
 
@@ -52,8 +50,8 @@ Notes:
 
 ### Requirements
 
-- `tools.social.enabled` must not be `false` (default: enabled when apiKey is set)
-- Apify API key: `tools.social.apiKey` or `APIFY_API_KEY`
+- Plugin must be enabled (default: enabled when apiKey is set)
+- Apify API key: plugin config `apiKey` or `APIFY_API_KEY` env var
 
 ### Two-phase async pattern
 
@@ -68,7 +66,7 @@ Notes:
 - `requests` (required): Array of request objects, each with:
   - `platform` (required): `"instagram"`, `"tiktok"`, `"youtube"`, or `"linkedin"`
   - Platform-specific parameters (see below)
-  - `maxResults` (optional): Maximum results to return (1–100, default: 20)
+  - `maxResults` (optional): Maximum results to return (1-100, default: 20)
   - `actorInput` (optional): Object with additional Actor-specific input parameters (see platform options below)
 
 #### Collect action
@@ -88,11 +86,11 @@ Notes:
 
 **actorInput options:**
 
-- `resultsType`: what to scrape — `posts` | `comments` | `details` | `mentions` | `reels`
+- `resultsType`: what to scrape -- `posts` | `comments` | `details` | `mentions` | `reels`
 - `resultsLimit`: max results per URL
 - `onlyPostsNewerThan`: date filter, e.g. `"2024-01-01"` or `"7 days"`
 - `searchType`: `user` | `hashtag` | `place`
-- `searchLimit`: max search results (1–250)
+- `searchLimit`: max search results (1-250)
 - `addParentData`: add source metadata to results
 
 #### TikTok
@@ -105,8 +103,8 @@ Notes:
 
 **actorInput options:**
 
-- `resultsPerPage`: results per hashtag/profile/search (1–1000000)
-- `profileScrapeSections`: sections to scrape — `["videos"]`, `["reposts"]`, or both
+- `resultsPerPage`: results per hashtag/profile/search (1-1000000)
+- `profileScrapeSections`: sections to scrape -- `["videos"]`, `["reposts"]`, or both
 - `profileSorting`: `latest` | `popular` | `oldest`
 - `excludePinnedPosts`: exclude pinned posts from profiles
 - `oldestPostDateUnified`: date filter, e.g. `"2024-01-01"` or `"30 days"`
@@ -167,12 +165,12 @@ Notes:
 
 **actorInput options:**
 
-- Profiles: `includeEmail` (boolean, default: false) — include email if available
-- Company posts: `limit` (number, 1–100, default: 100) — max posts per company
-- Jobs: `scrapeCompany` (boolean, default: true) — include company details with job listings
-- Jobs: `count` (number, min 100) — limit total jobs scraped
-- Jobs: `splitByLocation` (boolean, default: false) — split search by city to bypass 1000 job limit
-- Jobs: `splitCountry` (string) — country code for location split (e.g. `"US"`, `"GB"`)
+- Profiles: `includeEmail` (boolean, default: false) -- include email if available
+- Company posts: `limit` (number, 1-100, default: 100) -- max posts per company
+- Jobs: `scrapeCompany` (boolean, default: true) -- include company details with job listings
+- Jobs: `count` (number, min 100) -- limit total jobs scraped
+- Jobs: `splitByLocation` (boolean, default: false) -- split search by city to bypass 1000 job limit
+- Jobs: `splitCountry` (string) -- country code for location split (e.g. `"US"`, `"GB"`)
 
 ### Platform capabilities
 
@@ -208,14 +206,14 @@ const startResult = await social_platforms({
     },
   ],
 });
-// → { runs: [{ runId, platform, datasetId }, ...] }
+// -> { runs: [{ runId, platform, datasetId }, ...] }
 
 // Collect results
 const collectResult = await social_platforms({
   action: "collect",
   runs: startResult.runs,
 });
-// → { completed: [...], pending: [...] }
+// -> { completed: [...], pending: [...] }
 
 // YouTube with subtitles and date filter
 await social_platforms({
@@ -251,7 +249,7 @@ await social_platforms({
     },
   ],
 });
-// → company action returns 2 run refs (details + posts), profiles returns 1
+// -> company action returns 2 run refs (details + posts), profiles returns 1
 
 // LinkedIn: scrape job listings
 await social_platforms({
@@ -274,4 +272,3 @@ await social_platforms({
 
 - Responses are cached (default 15 minutes) to reduce repeated API calls.
 - If you use tool profiles/allowlists, add `social_platforms` or `group:plugins`.
-- See [Web tools](/tools/web) for web-specific scraping with `web_fetch`.

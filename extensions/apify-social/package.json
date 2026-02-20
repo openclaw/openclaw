@@ -1,0 +1,17 @@
+{
+  "name": "@openclaw/apify-social",
+  "version": "0.0.1",
+  "description": "Social media scraping via Apify (Instagram, TikTok, YouTube, LinkedIn)",
+  "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.48"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

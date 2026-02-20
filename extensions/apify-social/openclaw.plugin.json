@@ -1,0 +1,66 @@
+{
+  "id": "apify-social",
+  "name": "Apify Social Scraper",
+  "description": "Social media scraping via Apify (Instagram, TikTok, YouTube, LinkedIn)",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "description": "Enable social scraping tool (default: true when apiKey is set)."
+      },
+      "apiKey": {
+        "type": "string",
+        "description": "Apify API token (optional; defaults to APIFY_API_KEY env var)."
+      },
+      "baseUrl": {
+        "type": "string",
+        "description": "Apify API base URL (default: https://api.apify.com)."
+      },
+      "cacheTtlMinutes": {
+        "type": "number",
+        "minimum": 0,
+        "description": "Cache TTL in minutes (default: 15)."
+      },
+      "maxResults": {
+        "type": "number",
+        "minimum": 1,
+        "maximum": 100,
+        "description": "Max results default (default: 20)."
+      },
+      "allowedPlatforms": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "enum": ["instagram", "tiktok", "youtube", "linkedin"]
+        },
+        "description": "Platforms the user has enabled (default: all)."
+      }
+    }
+  },
+  "uiHints": {
+    "apiKey": {
+      "label": "Apify API Key",
+      "sensitive": true,
+      "help": "Get one at https://console.apify.com/"
+    },
+    "enabled": {
+      "label": "Enable Social Scraping"
+    },
+    "baseUrl": {
+      "label": "Apify API Base URL",
+      "advanced": true
+    },
+    "cacheTtlMinutes": {
+      "label": "Cache TTL (minutes)",
+      "advanced": true
+    },
+    "maxResults": {
+      "label": "Default Max Results"
+    },
+    "allowedPlatforms": {
+      "label": "Allowed Platforms"
+    }
+  }
+}

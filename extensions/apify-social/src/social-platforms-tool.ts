@@ -1,26 +1,20 @@
 import { Type } from "@sinclair/typebox";
-import type { OpenClawConfig } from "../../config/config.js";
-import { wrapExternalContent } from "../../security/external-content.js";
-import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
-import { stringEnum } from "../schema/typebox.js";
-import type { AnyAgentTool } from "./common.js";
-import {
-  jsonResult,
-  readNumberParam,
-  readStringParam,
-  readStringArrayParam,
-  ToolInputError,
-} from "./common.js";
+import { jsonResult, readNumberParam, readStringParam, stringEnum } from "openclaw/plugin-sdk";
+import type { AnyAgentTool } from "openclaw/plugin-sdk";
 import {
   CacheEntry,
   DEFAULT_CACHE_TTL_MINUTES,
+  ToolInputError,
   normalizeCacheKey,
+  normalizeSecretInput,
   readCache,
   readResponseText,
+  readStringArrayParam,
   resolveCacheTtlMs,
   withTimeout,
+  wrapExternalContent,
   writeCache,
-} from "./web-shared.js";
+} from "./util.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -171,31 +165,38 @@ const SocialPlatformsSchema = Type.Object({
 });
 
 // ---------------------------------------------------------------------------
-// Config resolution
+// Plugin config resolution
 // ---------------------------------------------------------------------------
 
-type SocialConfig = NonNullable<OpenClawConfig["tools"]>["social"];
-
-function resolveSocialConfig(cfg?: OpenClawConfig): SocialConfig {
-  return cfg?.tools?.social;
+interface SocialPluginConfig {
+  enabled?: boolean;
+  apiKey?: string;
+  baseUrl?: string;
+  cacheTtlMinutes?: number;
+  maxResults?: number;
+  allowedPlatforms?: string[];
 }
 
-function resolveSocialApiKey(config?: SocialConfig): string | undefined {
-  const fromConfig =
-    config && typeof config.apiKey === "string" ? normalizeSecretInput(config.apiKey) : "";
+function parsePluginConfig(raw?: Record<string, unknown>): SocialPluginConfig {
+  if (!raw) return {};
+  return raw as SocialPluginConfig;
+}
+
+function resolveSocialApiKey(config: SocialPluginConfig): string | undefined {
+  const fromConfig = typeof config.apiKey === "string" ? normalizeSecretInput(config.apiKey) : "";
   const fromEnv = normalizeSecretInput(process.env.APIFY_API_KEY);
   return fromConfig || fromEnv || undefined;
 }
 
-function resolveSocialEnabled(params: { config?: SocialConfig; apiKey?: string }): boolean {
-  if (typeof params.config?.enabled === "boolean") {
+function resolveSocialEnabled(params: { config: SocialPluginConfig; apiKey?: string }): boolean {
+  if (typeof params.config.enabled === "boolean") {
     return params.config.enabled;
   }
   return Boolean(params.apiKey);
 }
 
-function resolveSocialBaseUrl(config?: SocialConfig): string {
-  const raw = config && typeof config.baseUrl === "string" ? config.baseUrl.trim() : "";
+function resolveSocialBaseUrl(config: SocialPluginConfig): string {
+  const raw = typeof config.baseUrl === "string" ? config.baseUrl.trim() : "";
   const url = raw || DEFAULT_APIFY_BASE_URL;
   if (!url.startsWith(ALLOWED_APIFY_BASE_URL_PREFIX)) {
     throw new Error(
@@ -205,16 +206,16 @@ function resolveSocialBaseUrl(config?: SocialConfig): string {
   return url;
 }
 
-function resolveAllowedPlatforms(config?: SocialConfig): Set<SocialPlatform> {
-  const list = config?.allowedPlatforms;
+function resolveAllowedPlatforms(config: SocialPluginConfig): Set<SocialPlatform> {
+  const list = config.allowedPlatforms;
   if (Array.isArray(list) && list.length > 0) {
     return new Set(list.filter((p): p is SocialPlatform => SOCIAL_PLATFORMS.includes(p as never)));
   }
   return new Set(SOCIAL_PLATFORMS);
 }
 
-function resolveMaxResults(config?: SocialConfig): number {
-  const raw = config?.maxResults;
+function resolveMaxResults(config: SocialPluginConfig): number {
+  const raw = config.maxResults;
   if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
     return Math.min(100, Math.floor(raw));
   }
@@ -267,7 +268,6 @@ const HANDLERS: Record<SocialPlatform, PlatformHandler> = {
       if (!common.queries?.length) {
         throw new ToolInputError("Instagram search mode requires 'queries' parameter.");
       }
-      // The Actor's `search` field accepts a single string, so fire one run per query.
       return common.queries.map((query) => ({
         actorId: ACTOR_IDS.instagram,
         input: {
@@ -617,7 +617,6 @@ function formatYoutubeItem(item: Record<string, unknown>): string {
   return lines.join("\n");
 }
 
-// LinkedIn profile scraper returns { results: { [username]: {...} }, failedUsernames, ... }
 function formatLinkedInProfileItem(item: Record<string, unknown>): string {
   if (item.results && typeof item.results === "object") {
     const results = item.results as Record<string, Record<string, unknown>>;
@@ -906,7 +905,6 @@ async function handleStart(params: {
     throw new ToolInputError("'start' action requires 'requests' array with at least one request.");
   }
 
-  // Build all inputs up-front so validation errors fail fast before any API calls.
   const prepared: {
     platform: SocialPlatform;
     actorId: string;
@@ -935,10 +933,6 @@ async function handleStart(params: {
     const handler = HANDLERS[platform];
     const runs = handler.prepare(req, common);
     for (const run of runs) {
-      // Only merge actorInput into runs that don't have a separate runType
-      // (e.g. LinkedIn company fires two runs with different schemas —
-      // actorInput should only apply to company_details, not company_posts
-      // which has its own companyPostLimit param).
       const mergedInput =
         run.runType === "company_posts" ? run.input : { ...run.input, ...actorInput };
       prepared.push({
@@ -950,7 +944,6 @@ async function handleStart(params: {
     }
   }
 
-  // Fire all Actor starts concurrently.
   const results = await Promise.allSettled(
     prepared.map(async ({ platform, actorId, input, linkedinRunType }) => {
       const run = await startApifyActorRun({
@@ -1020,14 +1013,12 @@ async function handleCollect(params: {
         | LinkedinRunType
         | undefined;
 
-      // Return from cache if we already fetched this run.
       const cacheKey = normalizeCacheKey(`social:run:${runId}`);
       const cached = readCache(SOCIAL_CACHE, cacheKey);
       if (cached) {
         return { ...cached.value, cached: true };
       }
 
-      // Check run status.
       const runStatus = await getApifyRunStatus({
         runId,
         apiKey: params.apiKey,
@@ -1052,7 +1043,6 @@ async function handleCollect(params: {
         } as Record<string, unknown>;
       }
 
-      // Fetch dataset items.
       const items = await getApifyDatasetItems({
         datasetId,
         apiKey: params.apiKey,
@@ -1061,7 +1051,7 @@ async function handleCollect(params: {
 
       const text = formatPlatformResults(platform, items, linkedinRunType);
       const wrapped = wrapExternalContent(text, {
-        source: "social_platforms",
+        source: "Social Platforms",
         includeWarning: false,
       });
 
@@ -1119,9 +1109,9 @@ async function handleCollect(params: {
 // ---------------------------------------------------------------------------
 
 export function createSocialPlatformsTool(options?: {
-  config?: OpenClawConfig;
+  pluginConfig?: Record<string, unknown>;
 }): AnyAgentTool | null {
-  const config = resolveSocialConfig(options?.config);
+  const config = parsePluginConfig(options?.pluginConfig);
   const apiKey = resolveSocialApiKey(config);
   if (!resolveSocialEnabled({ config, apiKey })) {
     return null;
@@ -1130,7 +1120,7 @@ export function createSocialPlatformsTool(options?: {
   const allowedPlatforms = resolveAllowedPlatforms(config);
   const baseUrl = resolveSocialBaseUrl(config);
   const defaultMaxResults = resolveMaxResults(config);
-  const cacheTtlMs = resolveCacheTtlMs(config?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES);
+  const cacheTtlMs = resolveCacheTtlMs(config.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES);
   const description = buildToolDescription(allowedPlatforms);
 
   return {
@@ -1145,8 +1135,8 @@ export function createSocialPlatformsTool(options?: {
       if (!apiKey) {
         return jsonResult({
           error: "missing_api_key",
-          message: "Set APIFY_API_KEY env var or tools.social.apiKey in config.",
-          docs: "https://docs.openclaw.ai/tools/social",
+          message:
+            "Set APIFY_API_KEY env var or configure apiKey in the apify-social plugin config.",
         });
       }
 

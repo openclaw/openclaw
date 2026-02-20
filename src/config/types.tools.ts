@@ -451,21 +451,6 @@ export type ToolsConfig = {
       };
     };
   };
-  /** Social media scraping via Apify. */
-  social?: {
-    /** Enable social scraping tool (default: true when apiKey is set). */
-    enabled?: boolean;
-    /** Apify API token (optional; defaults to APIFY_API_KEY env var). */
-    apiKey?: string;
-    /** Apify API base URL (default: https://api.apify.com). */
-    baseUrl?: string;
-    /** Cache TTL in minutes (default: 15). */
-    cacheTtlMinutes?: number;
-    /** Max results default (default: 20). */
-    maxResults?: number;
-    /** Platforms the user has enabled (default: all). */
-    allowedPlatforms?: Array<"instagram" | "tiktok" | "youtube" | "linkedin">;
-  };
   media?: MediaToolsConfig;
   links?: LinkToolsConfig;
   /** Message tool configuration. */

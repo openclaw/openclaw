@@ -1,7 +1,16 @@
 import type { Mock } from "vitest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
-import { createSocialPlatformsTool } from "./social-platforms.js";
+import { createSocialPlatformsTool } from "./src/social-platforms-tool.js";
+
+// ---------------------------------------------------------------------------
+// Inlined withFetchPreconnect (from test-utils/fetch-mock.ts)
+// ---------------------------------------------------------------------------
+
+function withFetchPreconnect<T extends typeof fetch>(fn: T): T & { preconnect: () => void } {
+  return Object.assign(fn, {
+    preconnect: (_url: string | URL) => {},
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Mock helpers
@@ -66,7 +75,7 @@ function createAsyncMockFetch(items: unknown[]): MockFetch {
 }
 
 // ---------------------------------------------------------------------------
-// Test setup helpers (mirrors installMockFetch/createFetchTool pattern)
+// Test setup helpers
 // ---------------------------------------------------------------------------
 
 function setupMockFetch(items: unknown[] = []) {
@@ -77,7 +86,7 @@ function setupMockFetch(items: unknown[] = []) {
 
 function createTestTool(overrides?: Record<string, unknown>) {
   return createSocialPlatformsTool({
-    config: { tools: { social: { cacheTtlMinutes: 0, ...overrides } } },
+    pluginConfig: { cacheTtlMinutes: 0, ...overrides },
   })!;
 }
 
@@ -120,17 +129,17 @@ describe("social_platforms", () => {
 
   it("returns null when no API key is set", () => {
     vi.stubEnv("APIFY_API_KEY", "");
-    expect(createSocialPlatformsTool({ config: {} })).toBeNull();
+    expect(createSocialPlatformsTool({ pluginConfig: {} })).toBeNull();
   });
 
   it("creates tool from env var", () => {
-    const tool = createSocialPlatformsTool({ config: {} });
+    const tool = createSocialPlatformsTool({ pluginConfig: {} });
     expect(tool?.name).toBe("social_platforms");
   });
 
   it("rejects disabled platform", async () => {
     const tool = createSocialPlatformsTool({
-      config: { tools: { social: { allowedPlatforms: ["youtube"] } } },
+      pluginConfig: { allowedPlatforms: ["youtube"] },
     });
     await expect(
       tool?.execute?.("call", {
