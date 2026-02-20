@@ -165,7 +165,7 @@ function setupIptables(proxyPort: number, log: SetupLogger): void {
       // Rule didn't exist — that's fine.
     }
 
-    execSync(`iptables -t nat -A OUTPUT -p tcp --dport 80 -j REDIRECT --to-port ${proxyPort}`, {
+    execSync(`iptables -t nat -A OUTPUT -p tcp --dport 80 -j REDIRECT --to-port ${portStr}`, {
       stdio: "pipe",
     });
     log.info(`  ✓ iptables: port 80 → ${proxyPort}`);
