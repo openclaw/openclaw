@@ -44,6 +44,8 @@ async function runNewWithPreviousSessionEntry(params: {
   tempDir: string;
   previousSessionEntry: { sessionId: string; sessionFile?: string };
   cfg?: OpenClawConfig;
+  /** When set (e.g. "session-summaries"), read from this dir instead of "memory" */
+  outputDir?: string;
 }): Promise<{ files: string[]; memoryContent: string }> {
   const event = createHookEvent("command", "new", "agent:main:main", {
     cfg:
@@ -56,10 +58,15 @@ async function runNewWithPreviousSessionEntry(params: {
 
   await handler(event);
 
-  const memoryDir = path.join(params.tempDir, "memory");
-  const files = await fs.readdir(memoryDir);
+  const readDir = path.join(params.tempDir, params.outputDir ?? "memory");
+  let files: string[] = [];
+  try {
+    files = await fs.readdir(readDir);
+  } catch {
+    // Dir may not exist if hook fell back or failed
+  }
   const memoryContent =
-    files.length > 0 ? await fs.readFile(path.join(memoryDir, files[0]), "utf-8") : "";
+    files.length > 0 ? await fs.readFile(path.join(readDir, files[0]), "utf-8") : "";
   return { files, memoryContent };
 }
 
@@ -94,20 +101,27 @@ async function runNewWithPreviousSession(params: {
   return { tempDir, files, memoryContent };
 }
 
-function makeSessionMemoryConfig(tempDir: string, messages?: number): OpenClawConfig {
+function makeSessionMemoryConfig(
+  tempDir: string,
+  messages?: number,
+  outputDir?: string,
+): OpenClawConfig {
+  const sessionMemoryEntry: Record<string, unknown> = { enabled: true };
+  if (typeof messages === "number") {
+    sessionMemoryEntry.messages = messages;
+  }
+  if (outputDir !== undefined && outputDir !== "") {
+    sessionMemoryEntry.outputDir = outputDir;
+  }
   return {
     agents: { defaults: { workspace: tempDir } },
-    ...(typeof messages === "number"
-      ? {
-          hooks: {
-            internal: {
-              entries: {
-                "session-memory": { enabled: true, messages },
-              },
-            },
-          },
-        }
-      : {}),
+    hooks: {
+      internal: {
+        entries: {
+          "session-memory": sessionMemoryEntry,
+        },
+      },
+    },
   } satisfies OpenClawConfig;
 }
 
@@ -424,5 +438,51 @@ describe("session-memory hook", () => {
     // Both messages should be included
     expect(memoryContent).toContain("user: Only message 1");
     expect(memoryContent).toContain("assistant: Only message 2");
+  });
+
+  it("writes to custom outputDir when configured", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-session-memory-");
+    const sessionsDir = path.join(tempDir, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = await writeWorkspaceFile({
+      dir: sessionsDir,
+      name: "test-session.jsonl",
+      content: createMockSessionContent([
+        { role: "user", content: "Custom dir test" },
+        { role: "assistant", content: "Written to session-summaries" },
+      ]),
+    });
+    const { files, memoryContent } = await runNewWithPreviousSessionEntry({
+      tempDir,
+      cfg: makeSessionMemoryConfig(tempDir, undefined, "session-summaries"),
+      previousSessionEntry: { sessionId: "test-123", sessionFile },
+      outputDir: "session-summaries",
+    });
+    expect(files.length).toBe(1);
+    expect(memoryContent).toContain("user: Custom dir test");
+    expect(memoryContent).toContain("assistant: Written to session-summaries");
+  });
+
+  it("falls back to memory/ when outputDir escapes workspace", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-session-memory-");
+    const sessionsDir = path.join(tempDir, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = await writeWorkspaceFile({
+      dir: sessionsDir,
+      name: "test-session.jsonl",
+      content: createMockSessionContent([
+        { role: "user", content: "Escape attempt" },
+        { role: "assistant", content: "Fallback to memory" },
+      ]),
+    });
+    const { files, memoryContent } = await runNewWithPreviousSessionEntry({
+      tempDir,
+      cfg: makeSessionMemoryConfig(tempDir, undefined, "../../other"),
+      previousSessionEntry: { sessionId: "test-123", sessionFile },
+      outputDir: "memory",
+    });
+    expect(files.length).toBe(1);
+    expect(memoryContent).toContain("user: Escape attempt");
+    expect(memoryContent).toContain("assistant: Fallback to memory");
   });
 });

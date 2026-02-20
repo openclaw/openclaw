@@ -184,7 +184,32 @@ const saveSessionToMemory: HookHandler = async (event) => {
     const workspaceDir = cfg
       ? resolveAgentWorkspaceDir(cfg, agentId)
       : path.join(resolveStateDir(process.env, os.homedir), "workspace");
-    const memoryDir = path.join(workspaceDir, "memory");
+
+    const hookConfig = resolveHookConfig(cfg, "session-memory");
+    const rawOutputDir =
+      typeof hookConfig?.outputDir === "string" && hookConfig.outputDir.trim()
+        ? hookConfig.outputDir.trim()
+        : null;
+    let workspaceReal: string;
+    try {
+      workspaceReal = await fs.realpath(workspaceDir);
+    } catch {
+      workspaceReal = path.resolve(workspaceDir);
+    }
+    const candidateDir = rawOutputDir
+      ? path.resolve(workspaceReal, rawOutputDir)
+      : path.join(workspaceDir, "memory");
+    const resolvedMemoryDir = path.resolve(candidateDir);
+    const workspaceRealWithSep = workspaceReal + path.sep;
+    const isUnderWorkspace =
+      resolvedMemoryDir === workspaceReal || resolvedMemoryDir.startsWith(workspaceRealWithSep);
+    const memoryDir = isUnderWorkspace ? resolvedMemoryDir : path.join(workspaceDir, "memory");
+    if (!isUnderWorkspace && rawOutputDir) {
+      log.warn("session-memory outputDir escapes workspace, using memory/", {
+        outputDir: rawOutputDir,
+      });
+    }
+
     await fs.mkdir(memoryDir, { recursive: true });
 
     // Get today's date for filename
@@ -232,7 +257,6 @@ const saveSessionToMemory: HookHandler = async (event) => {
     const sessionFile = currentSessionFile || undefined;
 
     // Read message count from hook config (default: 15)
-    const hookConfig = resolveHookConfig(cfg, "session-memory");
     const messageCount =
       typeof hookConfig?.messages === "number" && hookConfig.messages > 0
         ? hookConfig.messages

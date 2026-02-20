@@ -533,7 +533,20 @@ Saves session context to memory when you issue `/new`.
 
 **Requirements**: `workspace.dir` must be configured
 
-**Output**: `<workspace>/memory/YYYY-MM-DD-slug.md` (defaults to `~/.openclaw/workspace`)
+**Output**: `<workspace>/memory/YYYY-MM-DD-slug.md` by default (workspace defaults to `~/.openclaw/workspace`). The directory can be overridden with `outputDir` so summaries are written outside `memory/` (for example to avoid vector memory index inclusion).
+
+**Config**:
+
+- `outputDir` (optional): Workspace-relative directory for summary files. Default `"memory"`. Use a path outside `memory/` (e.g. `"session-summaries"`) if you want these files excluded from vector memory search. Must stay inside the workspace; if it would escape, the hook falls back to `memory/`.
+
+**Example config**:
+
+```json
+"session-memory": {
+  "enabled": true,
+  "outputDir": "session-summaries"
+}
+```
 
 **What it does**:
 
