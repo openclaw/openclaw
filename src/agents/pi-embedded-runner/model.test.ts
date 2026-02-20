@@ -170,6 +170,36 @@ describe("resolveModel", () => {
     expect(result.model?.id).toBe("missing-model");
   });
 
+  it("hydrates missing discovered model api from provider config", () => {
+    mockDiscoveredModel({
+      provider: "ollama",
+      modelId: "qwen2.5-coder:7b",
+      templateModel: {
+        ...makeModel("qwen2.5-coder:7b"),
+        provider: "ollama",
+        baseUrl: "http://127.0.0.1:11434/v1",
+        api: undefined,
+      },
+    });
+    const cfg = {
+      models: {
+        providers: {
+          ollama: {
+            api: "openai-completions",
+            baseUrl: "http://127.0.0.1:11434/v1",
+            models: [{ ...makeModel("qwen2.5-coder:7b") }],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModel("ollama", "qwen2.5-coder:7b", "/tmp/agent", cfg);
+
+    expect(result.model?.api).toBe("openai-completions");
+    expect(result.model?.provider).toBe("ollama");
+    expect(result.error).toBeUndefined();
+  });
+
   it("builds an openai-codex fallback for gpt-5.3-codex", () => {
     mockDiscoveredModel({
       provider: "openai-codex",
