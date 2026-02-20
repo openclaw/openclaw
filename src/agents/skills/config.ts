@@ -43,7 +43,7 @@ function normalizeAllowlist(input: unknown): string[] | undefined {
     return undefined;
   }
   const normalized = input.map((entry) => String(entry).trim()).filter(Boolean);
-  return normalized.length > 0 ? normalized : undefined;
+  return normalized;
 }
 
 const BUNDLED_SOURCES = new Set(["openclaw-bundled"]);
@@ -57,8 +57,11 @@ export function resolveBundledAllowlist(config?: OpenClawConfig): string[] | und
 }
 
 export function isBundledSkillAllowed(entry: SkillEntry, allowlist?: string[]): boolean {
-  if (!allowlist || allowlist.length === 0) {
+  if (allowlist === undefined) {
     return true;
+  }
+  if (allowlist.length === 0) {
+    return false;
   }
   if (!isBundledSkill(entry)) {
     return true;
