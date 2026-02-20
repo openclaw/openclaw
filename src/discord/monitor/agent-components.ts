@@ -32,6 +32,7 @@ import type { DiscordAccountConfig } from "../../config/types.discord.js";
 import { logVerbose } from "../../globals.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { logDebug, logError } from "../../logger.js";
+import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
 import {
   readChannelAllowFromStore,
@@ -891,6 +892,7 @@ async function dispatchDiscordComponentEvent(params: {
           maxLinesPerMessage: ctx.discordConfig?.maxLinesPerMessage,
           tableMode,
           chunkMode: resolveChunkMode(ctx.cfg, "discord", accountId),
+          mediaLocalRoots: getAgentScopedMediaLocalRoots(ctx.cfg, agentId),
         });
         replyReference.markSent();
       },

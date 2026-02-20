@@ -66,6 +66,37 @@ describe("deliverDiscordReply", () => {
     );
   });
 
+  it("forwards mediaLocalRoots to sendMessageDiscord for media payloads", async () => {
+    const roots = ["/tmp", "/workspace/agent-1"];
+    await deliverDiscordReply({
+      replies: [
+        {
+          text: "image caption",
+          mediaUrls: ["https://example.com/a.png", "https://example.com/b.png"],
+        },
+      ],
+      target: "channel:789",
+      token: "token",
+      runtime,
+      textLimit: 2000,
+      mediaLocalRoots: roots,
+    });
+
+    expect(sendMessageDiscordMock).toHaveBeenCalledTimes(2);
+    expect(sendMessageDiscordMock).toHaveBeenNthCalledWith(
+      1,
+      "channel:789",
+      "image caption",
+      expect.objectContaining({ mediaLocalRoots: roots }),
+    );
+    expect(sendMessageDiscordMock).toHaveBeenNthCalledWith(
+      2,
+      "channel:789",
+      "",
+      expect.objectContaining({ mediaLocalRoots: roots }),
+    );
+  });
+
   it("skips follow-up text when the voice payload text is blank", async () => {
     await deliverDiscordReply({
       replies: [
