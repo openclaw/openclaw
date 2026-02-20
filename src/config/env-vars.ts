@@ -1,4 +1,18 @@
+import { logWarn } from "../logger.js";
 import type { OpenClawConfig } from "./types.js";
+
+const BLOCKED_ENV_KEYS = new Set([
+  "NODE_OPTIONS",
+  "NODE_DEBUG",
+  "LD_PRELOAD",
+  "LD_LIBRARY_PATH",
+  "DYLD_INSERT_LIBRARIES",
+  "DYLD_LIBRARY_PATH",
+  "PATH",
+  "HOME",
+  "USER",
+  "SHELL",
+]);
 
 export function collectConfigEnvVars(cfg?: OpenClawConfig): Record<string, string> {
   const envConfig = cfg?.env;
@@ -13,6 +27,10 @@ export function collectConfigEnvVars(cfg?: OpenClawConfig): Record<string, strin
       if (!value) {
         continue;
       }
+      if (BLOCKED_ENV_KEYS.has(key.toUpperCase())) {
+        logWarn(`config: blocked dangerous environment variable "${key}" from config injection`);
+        continue;
+      }
       entries[key] = value;
     }
   }
@@ -22,6 +40,10 @@ export function collectConfigEnvVars(cfg?: OpenClawConfig): Record<string, strin
       continue;
     }
     if (typeof value !== "string" || !value.trim()) {
+      continue;
+    }
+    if (BLOCKED_ENV_KEYS.has(key.toUpperCase())) {
+      logWarn(`config: blocked dangerous environment variable "${key}" from config injection`);
       continue;
     }
     entries[key] = value;
