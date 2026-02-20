@@ -1,12 +1,19 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import {
   formatSkillsForPrompt,
   loadSkillsFromDir,
   type Skill,
 } from "@mariozechner/pi-coding-agent";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { OpenClawConfig } from "../../config/config.js";
+import type {
+  ParsedSkillFrontmatter,
+  SkillEligibilityContext,
+  SkillCommandSpec,
+  SkillEntry,
+  SkillSnapshot,
+} from "./types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { CONFIG_DIR, resolveUserPath } from "../../utils.js";
 import { resolveSandboxPath } from "../sandbox-paths.js";
@@ -20,13 +27,6 @@ import {
 } from "./frontmatter.js";
 import { resolvePluginSkillDirs } from "./plugin-skills.js";
 import { serializeByKey } from "./serialize.js";
-import type {
-  ParsedSkillFrontmatter,
-  SkillEligibilityContext,
-  SkillCommandSpec,
-  SkillEntry,
-  SkillSnapshot,
-} from "./types.js";
 
 const fsp = fs.promises;
 const skillsLogger = createSubsystemLogger("skills");
@@ -539,6 +539,26 @@ export function resolveSkillsPromptForRun(params: {
   config?: OpenClawConfig;
   workspaceDir: string;
 }): string {
+  // When the snapshot contains resolved skills, re-generate the prompt at
+  // runtime so that `compactSkillPaths()` resolves against the *current*
+  // machine's home directory. This fixes portability: a snapshot created on
+  // machine A (e.g. /Users/alice/…) produces correct `~/…` paths when the
+  // session is later loaded on machine B (e.g. /home/node/…).
+  if (params.skillsSnapshot?.resolvedSkills && params.skillsSnapshot.resolvedSkills.length > 0) {
+    const { skillsForPrompt, truncated } = applySkillsPromptLimits({
+      skills: params.skillsSnapshot.resolvedSkills,
+      config: params.config,
+    });
+    const truncationNote = truncated
+      ? `⚠️ Skills truncated: included ${skillsForPrompt.length} of ${params.skillsSnapshot.resolvedSkills.length}. Run \`openclaw skills check\` to audit.`
+      : "";
+    const prompt = [truncationNote, formatSkillsForPrompt(compactSkillPaths(skillsForPrompt))]
+      .filter(Boolean)
+      .join("\n");
+    return prompt.trim() ? prompt : "";
+  }
+  // Fall back to the cached prompt string when resolvedSkills are unavailable
+  // (legacy snapshots before resolvedSkills was added).
   const snapshotPrompt = params.skillsSnapshot?.prompt?.trim();
   if (snapshotPrompt) {
     return snapshotPrompt;
