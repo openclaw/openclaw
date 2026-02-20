@@ -103,6 +103,27 @@ describe("resolveDiscordTarget", () => {
     ).resolves.toMatchObject({ kind: "user", id: "123" });
     expect(listPeers).not.toHaveBeenCalled();
   });
+
+  it("resolves prefixed usernames via directory lookup", async () => {
+    listPeers.mockResolvedValueOnce([{ kind: "user", id: "user:120", name: "muso.sk" } as const]);
+
+    await expect(
+      resolveDiscordTarget("user:muso.sk", { cfg, accountId: "default" }),
+    ).resolves.toMatchObject({ kind: "user", id: "120", normalized: "user:120" });
+    expect(listPeers).toHaveBeenCalledWith(
+      expect.objectContaining({
+        query: "muso.sk",
+      }),
+    );
+  });
+
+  it("throws a clear error for unresolved prefixed usernames", async () => {
+    listPeers.mockResolvedValueOnce([]);
+
+    await expect(
+      resolveDiscordTarget("user:muso.sk", { cfg, accountId: "default" }),
+    ).rejects.toThrow(/require a user id or resolvable username/i);
+  });
 });
 
 describe("normalizeDiscordMessagingTarget", () => {

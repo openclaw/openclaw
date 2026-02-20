@@ -4,7 +4,7 @@ import type {
   AgentToolUpdateCallback,
 } from "@mariozechner/pi-agent-core";
 import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
-import { logDebug, logError } from "../logger.js";
+import { logDebug } from "../logger.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { isPlainObject } from "../utils.js";
 import type { ClientToolDefinition } from "./pi-embedded-runner/run/params.js";
@@ -56,10 +56,49 @@ function describeToolExecutionError(err: unknown): {
   stack?: string;
 } {
   if (err instanceof Error) {
-    const message = err.message?.trim() ? err.message : String(err);
+    const message = sanitizeToolErrorMessage(err.message?.trim() ? err.message : String(err));
     return { message, stack: err.stack };
   }
-  return { message: String(err) };
+  return { message: sanitizeToolErrorMessage(String(err)) };
+}
+
+function sanitizeToolErrorMessage(message: string): string {
+  let text = typeof message === "string" ? message : String(message ?? "");
+  // oxlint-disable-next-line eslint/no-control-regex
+  text = text.replace(new RegExp("\\u001B\\[[0-9;?]*[ -/]*[@-~]", "g"), "");
+  // oxlint-disable-next-line eslint/no-control-regex
+  text = text.replace(new RegExp("\\u001B\\][^\\u0007]*(?:\\u0007|\\u001B\\\\)", "g"), "");
+  text = text.replace(/\]0;[^\r\n]*/g, "");
+  text = text.replace(/\[(?:\?[\d;]+[hl]|(?:\d{1,3}(?:;\d{1,3})*)?[A-Za-z])/g, "");
+  text = text.replaceAll("\u001B", "").replaceAll("\u0007", "");
+  return text.trim();
+}
+
+function normalizeToolExecuteParams(toolName: string, params: unknown): unknown {
+  if (process.platform !== "win32") {
+    return params;
+  }
+  if (toolName !== "exec") {
+    return params;
+  }
+  if (!params || typeof params !== "object" || Array.isArray(params)) {
+    return params;
+  }
+  const paramsRecord = params as Record<string, unknown>;
+  const command = typeof paramsRecord.command === "string" ? paramsRecord.command : "";
+  const trimmed = command.trimStart().toLowerCase();
+  if (trimmed.startsWith("cmd ")) {
+    return params;
+  }
+  const needsCmdShim = command.includes("&&") || command.includes("||");
+  if (!needsCmdShim) {
+    return params;
+  }
+  const escapedForPowerShellSingleQuote = command.replaceAll("'", "''");
+  return {
+    ...paramsRecord,
+    command: `cmd /d /s /c '${escapedForPowerShellSingleQuote}'`,
+  };
 }
 
 function splitToolExecuteArgs(args: ToolExecuteArgsAny): {
@@ -98,7 +137,7 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
       parameters: tool.parameters,
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
         const { toolCallId, params, onUpdate, signal } = splitToolExecuteArgs(args);
-        let executeParams = params;
+        let executeParams = normalizeToolExecuteParams(normalizedName, params);
         try {
           if (!beforeHookWrapped) {
             const hookOutcome = await runBeforeToolCallHook({
@@ -109,7 +148,7 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
             if (hookOutcome.blocked) {
               throw new Error(hookOutcome.reason);
             }
-            executeParams = hookOutcome.params;
+            executeParams = normalizeToolExecuteParams(normalizedName, hookOutcome.params);
           }
           const result = await tool.execute(toolCallId, executeParams, signal, onUpdate);
           const afterParams = beforeHookWrapped
@@ -154,7 +193,7 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
           if (described.stack && described.stack !== described.message) {
             logDebug(`tools: ${normalizedName} failed stack:\n${described.stack}`);
           }
-          logError(`[tools] ${normalizedName} failed: ${described.message}`);
+          logDebug(`[tools] ${normalizedName} failed: ${described.message}`);
 
           const errorResult = jsonResult({
             status: "error",

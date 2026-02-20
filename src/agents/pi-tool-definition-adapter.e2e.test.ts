@@ -1,6 +1,6 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { toToolDefinitions } from "./pi-tool-definition-adapter.js";
 
 type ToolExecute = ReturnType<typeof toToolDefinitions>[number]["execute"];
@@ -45,5 +45,90 @@ describe("pi tool definition adapter", () => {
       tool: "exec",
       error: "nope",
     });
+  });
+
+  it("sanitizes control sequences from tool error messages", async () => {
+    const tool = {
+      name: "bash",
+      label: "Bash",
+      description: "throws",
+      parameters: Type.Object({}),
+      execute: async () => {
+        throw new Error("\u001B]0;codex\u0007[?25h failure");
+      },
+    } satisfies AgentTool;
+
+    const defs = toToolDefinitions([tool]);
+    const result = await defs[0].execute("call3", {}, undefined, undefined, extensionContext);
+
+    expect(result.details).toMatchObject({
+      status: "error",
+      tool: "exec",
+      error: "failure",
+    });
+  });
+
+  it("normalizes exec params for shell operators on Windows", async () => {
+    const execute = vi.fn(async (_toolCallId: string, params: unknown) => ({
+      content: [],
+      details: params,
+    }));
+    const tool = {
+      name: "bash",
+      label: "Bash",
+      description: "runs commands",
+      parameters: Type.Object({}),
+      execute,
+    } satisfies AgentTool;
+
+    const defs = toToolDefinitions([tool]);
+    await defs[0].execute(
+      "call4",
+      { command: 'echo "one" && echo two' },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    const calledParams = execute.mock.calls[0]?.[1] as { command?: string } | undefined;
+    if (process.platform === "win32") {
+      expect(calledParams?.command).toBe("cmd /d /s /c 'echo \"one\" && echo two'");
+      return;
+    }
+    expect(calledParams?.command).toBe('echo "one" && echo two');
+  });
+
+  it("keeps Windows paths and embedded quotes intact when shimming through cmd", async () => {
+    const execute = vi.fn(async (_toolCallId: string, params: unknown) => ({
+      content: [],
+      details: params,
+    }));
+    const tool = {
+      name: "bash",
+      label: "Bash",
+      description: "runs commands",
+      parameters: Type.Object({}),
+      execute,
+    } satisfies AgentTool;
+
+    const defs = toToolDefinitions([tool]);
+    await defs[0].execute(
+      "call5",
+      { command: '"C:\\path\\to\\file.exe" "C:\\with space\\a.txt" && echo "done"' },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    const calledParams = execute.mock.calls[0]?.[1] as { command?: string } | undefined;
+    if (process.platform === "win32") {
+      expect(calledParams?.command).toBe(
+        `cmd /d /s /c '"C:\\path\\to\\file.exe" "C:\\with space\\a.txt" && echo "done"'`,
+      );
+      return;
+    }
+    expect(calledParams?.command).toBe(
+      '"C:\\path\\to\\file.exe" "C:\\with space\\a.txt" && echo "done"',
+    );
   });
 });

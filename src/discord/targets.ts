@@ -89,13 +89,18 @@ export async function resolveDiscordTarget(
     return undefined;
   }
 
-  const likelyUsername = isLikelyUsername(trimmed);
+  const lookupQuery = stripDiscordLookupPrefix(trimmed);
+  const likelyUsername = isLikelyUsername(lookupQuery);
   const shouldLookup = isExplicitUserLookup(trimmed, parseOptions) || likelyUsername;
 
   // Parse directly if it's already a known format. Use a safe parse so ambiguous
   // numeric targets don't throw when we still want to attempt username lookup.
   const directParse = safeParseDiscordTarget(trimmed, parseOptions);
-  if (directParse && directParse.kind !== "channel" && !likelyUsername) {
+  if (
+    directParse &&
+    directParse.kind !== "channel" &&
+    !shouldResolveUserViaDirectory(trimmed, directParse)
+  ) {
     return directParse;
   }
 
@@ -107,7 +112,7 @@ export async function resolveDiscordTarget(
   try {
     const directoryEntries = await listDiscordDirectoryPeersLive({
       ...options,
-      query: trimmed,
+      query: lookupQuery,
       limit: 1,
     });
 
@@ -120,6 +125,12 @@ export async function resolveDiscordTarget(
   } catch {
     // Directory lookup failed - fall through to parse as-is
     // This preserves existing behavior for channel names
+  }
+
+  if (isExplicitUserLookup(trimmed, parseOptions) && !isNumericDiscordId(lookupQuery)) {
+    throw new Error(
+      `Discord DMs require a user id or resolvable username (could not resolve "${trimmed}")`,
+    );
   }
 
   // Fallback to original parsing (for channels, etc.)
@@ -164,4 +175,25 @@ function isLikelyUsername(input: string): boolean {
   }
   // Likely a username if it doesn't match known patterns
   return true;
+}
+
+function stripDiscordLookupPrefix(input: string): string {
+  return input.replace(/^(?:user:|discord:|@)/i, "").trim();
+}
+
+function isNumericDiscordId(input: string): boolean {
+  return /^\d+$/.test(input);
+}
+
+function shouldResolveUserViaDirectory(
+  input: string,
+  target: MessagingTarget | undefined,
+): boolean {
+  if (!target || target.kind !== "user") {
+    return false;
+  }
+  if (!isExplicitUserLookup(input, {})) {
+    return false;
+  }
+  return !isNumericDiscordId(target.id);
 }

@@ -59,13 +59,13 @@ function shouldShowToolErrorWarning(params: {
   if ((normalizedToolName === "exec" || normalizedToolName === "bash") && !verboseEnabled) {
     return false;
   }
+  if (params.suppressToolErrors) {
+    return false;
+  }
   const isMutatingToolError =
     params.lastToolError.mutatingAction ?? isLikelyMutatingToolName(params.lastToolError.toolName);
   if (isMutatingToolError) {
     return true;
-  }
-  if (params.suppressToolErrors) {
-    return false;
   }
   return !params.hasUserFacingReply && !isRecoverableToolError(params.lastToolError.error);
 }

@@ -94,9 +94,9 @@ async function resolveDiscordSendTarget(
   to: string,
   opts: DiscordSendOpts,
 ): Promise<{ rest: RequestClient; request: DiscordClientRequest; channelId: string }> {
+  const recipient = await parseAndResolveRecipient(to, opts.accountId);
   const cfg = loadConfig();
   const { rest, request } = createDiscordClient(opts, cfg);
-  const recipient = await parseAndResolveRecipient(to, opts.accountId);
   const { channelId } = await resolveChannelId(rest, recipient, request);
   return { rest, request, channelId };
 }
@@ -118,8 +118,8 @@ export async function sendMessageDiscord(
   });
   const chunkMode = resolveChunkMode(cfg, "discord", accountInfo.accountId);
   const textWithTables = convertMarkdownTables(text ?? "", tableMode);
-  const { token, rest, request } = createDiscordClient(opts, cfg);
   const recipient = await parseAndResolveRecipient(to, opts.accountId);
+  const { token, rest, request } = createDiscordClient(opts, cfg);
   const { channelId } = await resolveChannelId(rest, recipient, request);
 
   // Forum/Media channels reject POST /messages; auto-create a thread post instead.
@@ -393,11 +393,11 @@ export async function sendVoiceMessageDiscord(
       cfg,
       accountId: opts.accountId,
     });
+    const recipient = await parseAndResolveRecipient(to, opts.accountId);
     const client = createDiscordClient(opts, cfg);
     token = client.token;
     rest = client.rest;
     const request = client.request;
-    const recipient = await parseAndResolveRecipient(to, opts.accountId);
     channelId = (await resolveChannelId(rest, recipient, request)).channelId;
 
     // Convert to OGG/Opus if needed

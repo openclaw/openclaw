@@ -40,6 +40,32 @@ describe("resolveDiscordChannelAllowlist", () => {
     expect(res[0]?.channelId).toBe("c1");
   });
 
+  it("resolves numeric guild/channel input via channel id lookup", async () => {
+    const fetcher = withFetchPreconnect(async (input: RequestInfo | URL) => {
+      const url = urlToString(input);
+      if (url.endsWith("/users/@me/guilds")) {
+        return jsonResponse([{ id: "111", name: "Guild One" }]);
+      }
+      if (url.endsWith("/channels/222")) {
+        return jsonResponse({ id: "222", name: "general", guild_id: "111", type: 0 });
+      }
+      if (url.endsWith("/guilds/111/channels")) {
+        throw new Error("numeric guild/channel should resolve through /channels/<id>");
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    const res = await resolveDiscordChannelAllowlist({
+      token: "test",
+      entries: ["111/222"],
+      fetcher,
+    });
+
+    expect(res[0]?.resolved).toBe(true);
+    expect(res[0]?.guildId).toBe("111");
+    expect(res[0]?.channelId).toBe("222");
+  });
+
   it("resolves channel id to guild", async () => {
     const fetcher = withFetchPreconnect(async (input: RequestInfo | URL) => {
       const url = urlToString(input);

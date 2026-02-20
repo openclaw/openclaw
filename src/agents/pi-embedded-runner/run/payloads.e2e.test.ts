@@ -226,15 +226,13 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads).toHaveLength(0);
   });
 
-  it("still shows mutating tool errors when messages.suppressToolErrors is enabled", () => {
+  it("suppresses mutating tool errors when messages.suppressToolErrors is enabled", () => {
     const payloads = buildPayloads({
       lastToolError: { toolName: "write", error: "connection timeout" },
       config: { messages: { suppressToolErrors: true } },
     });
 
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.isError).toBe(true);
-    expect(payloads[0]?.text).toContain("connection timeout");
+    expect(payloads).toHaveLength(0);
   });
 
   it("suppresses mutating tool errors when suppressToolErrorWarnings is enabled", () => {
