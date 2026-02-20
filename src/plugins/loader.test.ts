@@ -277,6 +277,7 @@ describe("loadOpenClawPlugins", () => {
       config: {
         plugins: {
           load: { paths: [plugin.file] },
+          allow: ["configurable"],
           entries: {
             configurable: {
               config: "nope" as unknown as Record<string, unknown>,
