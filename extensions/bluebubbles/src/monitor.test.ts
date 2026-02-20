@@ -263,6 +263,13 @@ function createMockRuntime(): PluginRuntime {
         () => "/tmp/openclaw",
       ) as unknown as PluginRuntime["state"]["resolveStateDir"],
     },
+    subagent: {
+      run: vi.fn() as unknown as PluginRuntime["subagent"]["run"],
+      waitForRun: vi.fn() as unknown as PluginRuntime["subagent"]["waitForRun"],
+      getSessionMessages: vi.fn() as unknown as PluginRuntime["subagent"]["getSessionMessages"],
+      getSession: vi.fn() as unknown as PluginRuntime["subagent"]["getSession"],
+      deleteSession: vi.fn() as unknown as PluginRuntime["subagent"]["deleteSession"],
+    },
   };
 }
 
