@@ -96,6 +96,11 @@ import {
 } from "../system-prompt.js";
 import { installToolResultContextGuard } from "../tool-result-context-guard.js";
 import { splitSdkTools } from "../tool-split.js";
+import {
+  evaluateUsagePreflight,
+  UsagePreflightError,
+  usagePreflightDecisionMessage,
+} from "../usage-preflight.js";
 import { describeUnknownError, mapThinkingLevel } from "../utils.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
 import {
@@ -952,6 +957,31 @@ export async function runEmbeddedAttempt(
           log.warn(
             `Removed orphaned user message to prevent consecutive user turns. ` +
               `runId=${params.runId} sessionId=${params.sessionId}`,
+          );
+        }
+
+        const usagePreflightDecision = await evaluateUsagePreflight({
+          provider: params.provider,
+          prompt: effectivePrompt,
+          historyMessages: activeSession.messages,
+          timeoutMs: Math.min(2_000, Math.max(750, Math.floor(params.timeoutMs / 4))),
+        });
+        if (usagePreflightDecision.warning) {
+          const remainingLabel =
+            usagePreflightDecision.remainingPercent !== undefined
+              ? `${usagePreflightDecision.remainingPercent.toFixed(0)}%`
+              : "unknown";
+          log.warn(
+            `[usage-preflight] low remaining quota detected for ${params.provider}: ` +
+              `remaining=${remainingLabel} window=${usagePreflightDecision.windowLabel ?? "unknown"} ` +
+              `estimatedPromptTokens=${usagePreflightDecision.estimatedPromptTokens}`,
+          );
+        }
+        if (usagePreflightDecision.blocked) {
+          throw new UsagePreflightError(
+            usagePreflightDecision,
+            usagePreflightDecisionMessage(usagePreflightDecision) ??
+              "Usage guard: request blocked due to low remaining provider quota.",
           );
         }
 

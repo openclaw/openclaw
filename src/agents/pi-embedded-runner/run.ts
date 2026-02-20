@@ -57,6 +57,7 @@ import {
   sessionLikelyHasOversizedToolResults,
 } from "./tool-result-truncation.js";
 import type { EmbeddedPiAgentMeta, EmbeddedPiRunResult } from "./types.js";
+import { isUsagePreflightError } from "./usage-preflight.js";
 import { describeUnknownError } from "./utils.js";
 
 type ApiKeyInfo = ResolvedProviderAuth;
@@ -765,6 +766,25 @@ export async function runEmbeddedPiAgent(
           }
 
           if (promptError && !aborted) {
+            if (isUsagePreflightError(promptError)) {
+              return {
+                payloads: [
+                  {
+                    text: promptError.userMessage,
+                    isError: true,
+                  },
+                ],
+                meta: {
+                  durationMs: Date.now() - started,
+                  agentMeta: {
+                    sessionId: sessionIdUsed,
+                    provider,
+                    model: model.id,
+                  },
+                  systemPromptReport: attempt.systemPromptReport,
+                },
+              };
+            }
             const errorText = describeUnknownError(promptError);
             // Handle role ordering errors with a user-friendly message
             if (/incorrect role information|roles must alternate/i.test(errorText)) {
