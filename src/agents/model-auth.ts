@@ -223,13 +223,26 @@ export async function resolveApiKeyForProvider(params: {
 
   const authStorePath = resolveAuthStorePathForDisplay(params.agentDir);
   const resolvedAgentDir = path.dirname(authStorePath);
-  throw new Error(
-    [
-      `No API key found for provider "${provider}".`,
+
+  const localProviderHints: Record<string, string> = {
+    ollama:
+      'Ollama needs any value as API key to register as a provider. Set OLLAMA_API_KEY="ollama-local" or run "openclaw configure". Docs: https://docs.openclaw.ai/providers/ollama',
+    vllm: 'vLLM needs any value as API key to register as a provider. Set VLLM_API_KEY="vllm-local" or run "openclaw configure". Docs: https://docs.openclaw.ai/providers/vllm',
+    lmstudio:
+      'LM Studio needs any value as API key to register as a provider. Set LMSTUDIO_API_KEY="lmstudio-local" or run "openclaw configure". Docs: https://docs.openclaw.ai/providers/lmstudio',
+  };
+  const localHint = localProviderHints[normalized];
+
+  const parts = [`No API key found for provider "${provider}".`];
+  if (localHint) {
+    parts.push(localHint);
+  } else {
+    parts.push(
       `Auth store: ${authStorePath} (agentDir: ${resolvedAgentDir}).`,
       `Configure auth for this agent (${formatCliCommand("openclaw agents add <id>")}) or copy auth-profiles.json from the main agentDir.`,
-    ].join(" "),
-  );
+    );
+  }
+  throw new Error(parts.join(" "));
 }
 
 export type EnvApiKeyResult = { apiKey: string; source: string };
