@@ -640,6 +640,17 @@ export async function compactEmbeddedPiSessionDirect(
         const result = await compactWithSafetyTimeout(() =>
           session.compact(params.customInstructions),
         );
+
+        // Post-compaction safety: compaction can drop/move toolResult blocks or
+        // leave tool_use blocks without their matching tool results.
+        // Re-run pairing repair to avoid strict-provider 400s on the next run.
+        if (transcriptPolicy.repairToolUseResultPairing) {
+          const repaired = sanitizeToolUseResultPairing(session.messages);
+          if (repaired !== session.messages && repaired.length > 0) {
+            session.agent.replaceMessages(repaired);
+          }
+        }
+
         // Estimate tokens after compaction by summing token estimates for remaining messages
         let tokensAfter: number | undefined;
         try {
