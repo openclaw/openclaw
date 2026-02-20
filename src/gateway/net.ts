@@ -401,6 +401,35 @@ export function isLoopbackHost(host: string): boolean {
 }
 
 /**
+ * Returns true when URL is plaintext ws:// to a literal private IP (or loopback).
+ * Hostname targets are rejected to avoid DNS ambiguity.
+ */
+export function isPlaintextPrivateWebSocketUrl(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== "ws:") {
+    return false;
+  }
+  const hostname = parsed.hostname.trim();
+  if (!hostname) {
+    return false;
+  }
+  if (isLoopbackHost(hostname)) {
+    return true;
+  }
+  const unbracketed =
+    hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
+  if (net.isIP(unbracketed) === 0) {
+    return false;
+  }
+  return isPrivateOrLoopbackAddress(unbracketed);
+}
+
+/**
  * Security check for WebSocket URLs (CWE-319: Cleartext Transmission of Sensitive Information).
  *
  * Returns true if the URL is secure for transmitting data:

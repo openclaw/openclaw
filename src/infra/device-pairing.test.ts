@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import {
   approveDevicePairing,
+  ensureDeviceToken,
   getPairedDevice,
   removePairedDevice,
   requestDevicePairing,
@@ -114,11 +115,20 @@ describe("device pairing tokens", () => {
     expect(mismatch.reason).toBe("token-mismatch");
   });
 
-  test("accepts operator.read requests with an operator.admin token scope", async () => {
+  test("accepts operator.admin token for operator.write requests", async () => {
     const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
     await setupPairedOperatorDevice(baseDir, ["operator.admin"]);
     const paired = await getPairedDevice("device-1", baseDir);
     const token = requireToken(paired?.tokens?.operator?.token);
+
+    const ok = await verifyDeviceToken({
+      deviceId: "device-1",
+      token,
+      role: "operator",
+      scopes: ["operator.write"],
+      baseDir,
+    });
+    expect(ok.ok).toBe(true);
 
     const readOk = await verifyDeviceToken({
       deviceId: "device-1",
@@ -128,15 +138,22 @@ describe("device pairing tokens", () => {
       baseDir,
     });
     expect(readOk.ok).toBe(true);
+  });
 
-    const writeMismatch = await verifyDeviceToken({
+  test("reuses existing operator.admin token for operator.write", async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
+    await setupPairedOperatorDevice(baseDir, ["operator.admin"]);
+    const pairedBefore = await getPairedDevice("device-1", baseDir);
+    const tokenBefore = pairedBefore?.tokens?.operator?.token;
+    expect(tokenBefore).toBeDefined();
+
+    const ensured = await ensureDeviceToken({
       deviceId: "device-1",
-      token,
       role: "operator",
       scopes: ["operator.write"],
       baseDir,
     });
-    expect(writeMismatch).toEqual({ ok: false, reason: "scope-mismatch" });
+    expect(ensured?.token).toBe(tokenBefore);
   });
 
   test("treats multibyte same-length token input as mismatch without throwing", async () => {

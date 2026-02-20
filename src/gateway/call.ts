@@ -21,7 +21,7 @@ import {
   resolveLeastPrivilegeOperatorScopesForMethod,
   type OperatorScope,
 } from "./method-scopes.js";
-import { isSecureWebSocketUrl, pickPrimaryLanIPv4 } from "./net.js";
+import { isPlaintextPrivateWebSocketUrl, isSecureWebSocketUrl, pickPrimaryLanIPv4 } from "./net.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
 
 type CallGatewayBaseOptions = {
@@ -107,7 +107,12 @@ export function ensureExplicitGatewayAuth(params: {
 }
 
 export function buildGatewayConnectionDetails(
-  options: { config?: OpenClawConfig; url?: string; configPath?: string } = {},
+  options: {
+    config?: OpenClawConfig;
+    url?: string;
+    configPath?: string;
+    allowPlaintextPrivateWs?: boolean;
+  } = {},
 ): GatewayConnectionDetails {
   const config = options.config ?? loadConfig();
   const configPath =
@@ -155,7 +160,12 @@ export function buildGatewayConnectionDetails(
   // Security check: block ALL insecure ws:// to non-loopback addresses (CWE-319, CVSS 9.8)
   // This applies to the FINAL resolved URL, regardless of source (config, CLI override, etc).
   // Both credentials and chat/conversation data must not be transmitted over plaintext to remote hosts.
-  if (!isSecureWebSocketUrl(url)) {
+  const allowedPlaintextPrivateWs =
+    options.allowPlaintextPrivateWs === true && isPlaintextPrivateWebSocketUrl(url);
+  if (!isSecureWebSocketUrl(url) && !allowedPlaintextPrivateWs) {
+    const privateWsHint = isPlaintextPrivateWebSocketUrl(url)
+      ? "Temporary local override: set OPENCLAW_ALLOW_PLAINTEXT_PRIVATE_WS=1 and keep gateway token/password auth enabled."
+      : undefined;
     throw new Error(
       [
         `SECURITY ERROR: Gateway URL "${url}" uses plaintext ws:// to a non-loopback address.`,
@@ -163,6 +173,7 @@ export function buildGatewayConnectionDetails(
         `Source: ${urlSource}`,
         `Config: ${configPath}`,
         "Fix: Use wss:// for the gateway URL, or connect via SSH tunnel to localhost.",
+        privateWsHint,
       ].join("\n"),
     );
   }
@@ -202,6 +213,8 @@ type ResolvedGatewayCallContext = {
   remoteUrl?: string;
   explicitAuth: ExplicitGatewayAuth;
 };
+
+const ALLOW_PLAINTEXT_PRIVATE_WS_ENV = "OPENCLAW_ALLOW_PLAINTEXT_PRIVATE_WS";
 
 function trimToUndefined(value: unknown): string | undefined {
   if (typeof value !== "string") {
@@ -275,6 +288,32 @@ function resolveGatewayCredentials(context: ResolvedGatewayCallContext): {
   return { token, password };
 }
 
+function isTruthyEnv(value: string | undefined): boolean {
+  if (!value) {
+    return false;
+  }
+  const normalized = value.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes";
+}
+
+function shouldAllowPlaintextPrivateWs(params: {
+  context: ResolvedGatewayCallContext;
+  token?: string;
+  password?: string;
+}): boolean {
+  if (!isTruthyEnv(process.env[ALLOW_PLAINTEXT_PRIVATE_WS_ENV])) {
+    return false;
+  }
+  if (!params.token && !params.password) {
+    return false;
+  }
+  if (params.context.urlOverride || params.context.remoteUrl || params.context.isRemoteMode) {
+    return false;
+  }
+  const bindMode = params.context.config.gateway?.bind ?? "loopback";
+  return bindMode === "lan";
+}
+
 async function resolveGatewayTlsFingerprint(params: {
   opts: CallGatewayBaseOptions;
   context: ResolvedGatewayCallContext;
@@ -329,10 +368,20 @@ async function executeGatewayRequestWithScopes<T>(params: {
   tlsFingerprint?: string;
   timeoutMs: number;
   safeTimerTimeoutMs: number;
+  allowPlaintextPrivateWs: boolean;
   connectionDetails: GatewayConnectionDetails;
 }): Promise<T> {
-  const { opts, scopes, url, token, password, tlsFingerprint, timeoutMs, safeTimerTimeoutMs } =
-    params;
+  const {
+    opts,
+    scopes,
+    url,
+    token,
+    password,
+    tlsFingerprint,
+    timeoutMs,
+    safeTimerTimeoutMs,
+    allowPlaintextPrivateWs,
+  } = params;
   return await new Promise<T>((resolve, reject) => {
     let settled = false;
     let ignoreClose = false;
@@ -362,6 +411,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
       mode: opts.mode ?? GATEWAY_CLIENT_MODES.CLI,
       role: "operator",
       scopes,
+      allowPlaintextPrivateWs,
       deviceIdentity: loadOrCreateDeviceIdentity(),
       minProtocol: opts.minProtocol ?? PROTOCOL_VERSION,
       maxProtocol: opts.maxProtocol ?? PROTOCOL_VERSION,
@@ -412,14 +462,20 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     configPath: context.configPath,
   });
   ensureRemoteModeUrlConfigured(context);
+  const { token, password } = resolveGatewayCredentials(context);
+  const allowPlaintextPrivateWs = shouldAllowPlaintextPrivateWs({
+    context,
+    token,
+    password,
+  });
   const connectionDetails = buildGatewayConnectionDetails({
     config: context.config,
     url: context.urlOverride,
+    allowPlaintextPrivateWs,
     ...(opts.configPath ? { configPath: opts.configPath } : {}),
   });
   const url = connectionDetails.url;
   const tlsFingerprint = await resolveGatewayTlsFingerprint({ opts, context, url });
-  const { token, password } = resolveGatewayCredentials(context);
   return await executeGatewayRequestWithScopes<T>({
     opts,
     scopes,
@@ -429,6 +485,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     tlsFingerprint,
     timeoutMs,
     safeTimerTimeoutMs,
+    allowPlaintextPrivateWs,
     connectionDetails,
   });
 }

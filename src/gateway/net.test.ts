@@ -1,6 +1,7 @@
 import os from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  isPlaintextPrivateWebSocketUrl,
   isPrivateOrLoopbackAddress,
   isSecureWebSocketUrl,
   isTrustedProxyAddress,
@@ -313,5 +314,23 @@ describe("isSecureWebSocketUrl", () => {
       expect(isSecureWebSocketUrl("http://127.0.0.1:18789")).toBe(false);
       expect(isSecureWebSocketUrl("https://127.0.0.1:18789")).toBe(false);
     });
+  });
+});
+
+describe("isPlaintextPrivateWebSocketUrl", () => {
+  it("returns true for ws:// to loopback or private literal IPs", () => {
+    expect(isPlaintextPrivateWebSocketUrl("ws://127.0.0.1:18789")).toBe(true);
+    expect(isPlaintextPrivateWebSocketUrl("ws://192.168.1.100:18789")).toBe(true);
+    expect(isPlaintextPrivateWebSocketUrl("ws://100.64.0.1:18789")).toBe(true);
+  });
+
+  it("returns false for public IPs and hostnames", () => {
+    expect(isPlaintextPrivateWebSocketUrl("ws://8.8.8.8:18789")).toBe(false);
+    expect(isPlaintextPrivateWebSocketUrl("ws://remote.example.com:18789")).toBe(false);
+  });
+
+  it("returns false for non-ws protocols or malformed URLs", () => {
+    expect(isPlaintextPrivateWebSocketUrl("wss://192.168.1.100:18789")).toBe(false);
+    expect(isPlaintextPrivateWebSocketUrl("not-a-url")).toBe(false);
   });
 });
