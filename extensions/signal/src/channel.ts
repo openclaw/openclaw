@@ -103,6 +103,8 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
         .filter(Boolean)
         .map((entry) => (entry === "*" ? "*" : normalizeE164(entry.replace(/^signal:/i, ""))))
         .filter(Boolean),
+    resolveDefaultTo: ({ cfg, accountId }) =>
+      resolveSignalAccount({ cfg, accountId }).config.defaultTo?.trim() || undefined,
   },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {

@@ -203,7 +203,7 @@ git worktree add -b fix/issue-99 /tmp/issue-99 main
 
 # 2. Launch Codex in each (background + PTY!)
 bash pty:true workdir:/tmp/issue-78 background:true command:"pnpm install && codex --yolo 'Fix issue #78: <description>. Commit and push.'"
-bash pty:true workdir:/tmp/issue-99 background:true command:"pnpm install && codex --yolo 'Fix issue #99: <description>. Commit and push.'"
+bash pty:true workdir:/tmp/issue-99 background:true command:"pnpm install && codex --yolo 'Fix issue #99 from the approved ticket summary. Implement only the in-scope edits and commit after review.'"
 
 # 3. Monitor progress
 process action:list
