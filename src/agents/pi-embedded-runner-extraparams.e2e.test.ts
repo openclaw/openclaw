@@ -149,7 +149,8 @@ describe("applyExtraParamsToAgent", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]?.headers).toEqual({
       "X-Custom": "1",
-      "anthropic-beta": "context-1m-2025-08-07",
+      "anthropic-beta":
+        "fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14,context-1m-2025-08-07",
     });
   });
 
@@ -175,7 +176,8 @@ describe("applyExtraParamsToAgent", () => {
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.headers).toEqual({
-      "anthropic-beta": "prompt-caching-2024-07-31,files-api-2025-04-14,context-1m-2025-08-07",
+      "anthropic-beta":
+        "prompt-caching-2024-07-31,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14,files-api-2025-04-14,context-1m-2025-08-07",
     });
   });
 
@@ -261,5 +263,108 @@ describe("applyExtraParamsToAgent", () => {
     void agent.streamFn?.(model, context, {});
 
     expect(payload.store).toBe(false);
+  });
+
+  it("preserves OAuth betas alongside context1m when using OAuth token", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    const cfg = buildAnthropicModelConfig("anthropic/claude-opus-4-6", { context1m: true });
+
+    applyExtraParamsToAgent(agent, cfg, "anthropic", "claude-opus-4-6");
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-opus-4-6",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, {
+      apiKey: "sk-ant-oat01-test-token",
+    } as SimpleStreamOptions);
+
+    expect(calls).toHaveLength(1);
+    const betaHeader = calls[0]?.headers?.["anthropic-beta"] ?? "";
+    const betas = betaHeader.split(",");
+    expect(betas).toContain("oauth-2025-04-20");
+    expect(betas).toContain("claude-code-20250219");
+    expect(betas).toContain("fine-grained-tool-streaming-2025-05-14");
+    expect(betas).toContain("interleaved-thinking-2025-05-14");
+    expect(betas).toContain("context-1m-2025-08-07");
+  });
+
+  it("does not include OAuth betas when using a regular API key with context1m", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    const cfg = buildAnthropicModelConfig("anthropic/claude-opus-4-6", { context1m: true });
+
+    applyExtraParamsToAgent(agent, cfg, "anthropic", "claude-opus-4-6");
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-opus-4-6",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, {
+      apiKey: "sk-ant-api03-regular-key",
+    } as SimpleStreamOptions);
+
+    expect(calls).toHaveLength(1);
+    const betaHeader = calls[0]?.headers?.["anthropic-beta"] ?? "";
+    const betas = betaHeader.split(",");
+    expect(betas).toContain("fine-grained-tool-streaming-2025-05-14");
+    expect(betas).toContain("interleaved-thinking-2025-05-14");
+    expect(betas).toContain("context-1m-2025-08-07");
+    expect(betas).not.toContain("oauth-2025-04-20");
+    expect(betas).not.toContain("claude-code-20250219");
+  });
+
+  it("preserves OAuth betas alongside custom anthropicBeta config", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    const cfg = buildAnthropicModelConfig("anthropic/claude-sonnet-4-5", {
+      anthropicBeta: ["files-api-2025-04-14"],
+    });
+
+    applyExtraParamsToAgent(agent, cfg, "anthropic", "claude-sonnet-4-5");
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-sonnet-4-5",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, {
+      apiKey: "sk-ant-oat01-oauth-token",
+    } as SimpleStreamOptions);
+
+    expect(calls).toHaveLength(1);
+    const betaHeader = calls[0]?.headers?.["anthropic-beta"] ?? "";
+    const betas = betaHeader.split(",");
+    expect(betas).toContain("oauth-2025-04-20");
+    expect(betas).toContain("claude-code-20250219");
+    expect(betas).toContain("fine-grained-tool-streaming-2025-05-14");
+    expect(betas).toContain("interleaved-thinking-2025-05-14");
+    expect(betas).toContain("files-api-2025-04-14");
+  });
+
+  it("does not apply beta wrapper when no extra betas are configured", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+
+    applyExtraParamsToAgent(agent, undefined, "anthropic", "claude-opus-4-6");
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-opus-4-6",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, { headers: { "X-Custom": "1" } });
+
+    expect(calls).toHaveLength(1);
+    // No beta wrapper applied, so headers pass through unchanged
+    // (only the OpenAI Responses store wrapper is applied, which doesn't touch headers)
+    expect(calls[0]?.headers).toEqual({ "X-Custom": "1" });
   });
 });

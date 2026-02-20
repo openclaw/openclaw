@@ -1,6 +1,6 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { SimpleStreamOptions } from "@mariozechner/pi-ai";
-import { streamSimple } from "@mariozechner/pi-ai";
+import { getEnvApiKey, streamSimple } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../config/config.js";
 import { log } from "./logger.js";
 
@@ -10,6 +10,16 @@ const OPENROUTER_APP_HEADERS: Record<string, string> = {
 };
 const ANTHROPIC_CONTEXT_1M_BETA = "context-1m-2025-08-07";
 const ANTHROPIC_1M_MODEL_PREFIXES = ["claude-opus-4", "claude-sonnet-4"] as const;
+
+/** pi-ai base betas always set in defaultHeaders for Anthropic clients */
+const PI_AI_BASE_BETAS = ["fine-grained-tool-streaming-2025-05-14"] as const;
+
+/** Additional betas pi-ai sets for OAuth tokens (sk-ant-oat*) */
+const PI_AI_OAUTH_BETAS = ["claude-code-20250219", "oauth-2025-04-20"] as const;
+
+/** Thinking beta — pi-ai defaults interleavedThinking to true */
+const PI_AI_THINKING_BETA = "interleaved-thinking-2025-05-14";
+
 // NOTE: We only force `store=true` for *direct* OpenAI Responses.
 // Codex responses (chatgpt.com/backend-api/codex/responses) require `store=false`.
 const OPENAI_RESPONSES_APIS = new Set(["openai-responses"]);
@@ -223,11 +233,27 @@ function createAnthropicBetaHeadersWrapper(
   betas: string[],
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
-  return (model, context, options) =>
-    underlying(model, context, {
+  return (model, context, options) => {
+    // Detect OAuth token at stream time.
+    // pi-agent-core's agent loop sets options.apiKey; fall back to env.
+    const apiKey =
+      ((options as Record<string, unknown> | undefined)?.apiKey as string | undefined) ??
+      getEnvApiKey("anthropic") ??
+      "";
+    const isOAuth = apiKey.startsWith("sk-ant-oat");
+
+    // Build complete beta set: pi-ai defaults + our extras.
+    // options.headers["anthropic-beta"] overwrites defaultHeaders via Object.assign
+    // in pi-ai's mergeHeaders, so we must include ALL betas here.
+    const piDefaults = isOAuth
+      ? [...PI_AI_OAUTH_BETAS, ...PI_AI_BASE_BETAS, PI_AI_THINKING_BETA]
+      : [...PI_AI_BASE_BETAS, PI_AI_THINKING_BETA];
+
+    return underlying(model, context, {
       ...options,
-      headers: mergeAnthropicBetaHeader(options?.headers, betas),
+      headers: mergeAnthropicBetaHeader(options?.headers, [...piDefaults, ...betas]),
     });
+  };
 }
 
 /**
