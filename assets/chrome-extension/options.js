@@ -54,12 +54,39 @@ async function checkRelayReachable(port, token) {
     }
     if (res.error) throw new Error(res.error)
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
+
+    // Validate that this is a CDP relay /json/version payload, not gateway HTML.
+    const contentType = String(res.contentType || '')
+    const data = res.json
+    if (!contentType.includes('application/json')) {
+      setStatus(
+        'error',
+        'Wrong port: this is likely the gateway, not the relay. Use gateway port + 3 (for gateway 18789, relay is 18792).',
+      )
+      return
+    }
+    if (!data || typeof data !== 'object' || !('Browser' in data) || !('Protocol-Version' in data)) {
+      setStatus(
+        'error',
+        'Wrong port: expected relay /json/version response. Use gateway port + 3 (for gateway 18789, relay is 18792).',
+      )
+      return
+    }
+
     setStatus('ok', `Relay reachable and authenticated at http://127.0.0.1:${port}/`)
-  } catch {
-    setStatus(
-      'error',
-      `Relay not reachable/authenticated at http://127.0.0.1:${port}/. Start OpenClaw browser relay and verify token.`,
-    )
+  } catch (err) {
+    const message = String(err || '').toLowerCase()
+    if (message.includes('json') || message.includes('syntax')) {
+      setStatus(
+        'error',
+        'Wrong port: this is not a relay endpoint. Use gateway port + 3 (for gateway 18789, relay is 18792).',
+      )
+    } else {
+      setStatus(
+        'error',
+        `Relay not reachable/authenticated at http://127.0.0.1:${port}/. Start OpenClaw browser relay and verify token.`,
+      )
+    }
   }
 }
 
