@@ -144,13 +144,63 @@ describe("applyExtraParamsToAgent", () => {
     } as Model<"anthropic-messages">;
     const context: Context = { messages: [] };
 
-    void agent.streamFn?.(model, context, { headers: { "X-Custom": "1" } });
+    // Simulate pi-agent-core passing apiKey in options (API key, not OAuth token)
+    void agent.streamFn?.(model, context, {
+      apiKey: "sk-ant-api03-test",
+      headers: { "X-Custom": "1" },
+    });
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.headers).toEqual({
       "X-Custom": "1",
-      "anthropic-beta": "context-1m-2025-08-07",
+      // Includes pi-ai default betas (preserved to avoid overwrite) + context1m
+      "anthropic-beta":
+        "fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14,context-1m-2025-08-07",
     });
+  });
+
+  it("preserves oauth-2025-04-20 beta when context1m is enabled with an OAuth token", () => {
+    const calls: Array<SimpleStreamOptions | undefined> = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      calls.push(options);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/claude-sonnet-4-6": {
+              params: {
+                context1m: true,
+              },
+            },
+          },
+        },
+      },
+    };
+
+    applyExtraParamsToAgent(agent, cfg, "anthropic", "claude-sonnet-4-6");
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+
+    // Simulate pi-agent-core passing an OAuth token (sk-ant-oat-*) as apiKey
+    void agent.streamFn?.(model, context, {
+      apiKey: "sk-ant-oat01-test-oauth-token",
+      headers: { "X-Custom": "1" },
+    });
+
+    expect(calls).toHaveLength(1);
+    const betaHeader = calls[0]?.headers?.["anthropic-beta"] as string;
+    // Must include the OAuth-required betas so they aren't stripped by pi-ai's mergeHeaders
+    expect(betaHeader).toContain("oauth-2025-04-20");
+    expect(betaHeader).toContain("claude-code-20250219");
+    expect(betaHeader).toContain("context-1m-2025-08-07");
   });
 
   it("merges existing anthropic-beta headers with configured betas", () => {
@@ -170,12 +220,14 @@ describe("applyExtraParamsToAgent", () => {
     const context: Context = { messages: [] };
 
     void agent.streamFn?.(model, context, {
+      apiKey: "sk-ant-api03-test",
       headers: { "anthropic-beta": "prompt-caching-2024-07-31" },
     });
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.headers).toEqual({
-      "anthropic-beta": "prompt-caching-2024-07-31,files-api-2025-04-14,context-1m-2025-08-07",
+      "anthropic-beta":
+        "prompt-caching-2024-07-31,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14,files-api-2025-04-14,context-1m-2025-08-07",
     });
   });
 
