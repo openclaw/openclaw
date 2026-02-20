@@ -126,6 +126,20 @@ function channelChatType(kind: ChatType): "direct" | "group" | "channel" {
   return "channel";
 }
 
+export function resolveMattermostRequireMentionPolicy(params: {
+  kind: ChatType;
+  accountRequireMention?: boolean;
+  resolveGroupRequireMention: () => boolean;
+}): boolean {
+  if (params.kind === "direct") {
+    return false;
+  }
+  if (typeof params.accountRequireMention === "boolean") {
+    return params.accountRequireMention;
+  }
+  return params.resolveGroupRequireMention();
+}
+
 function normalizeAllowEntry(entry: string): string {
   const trimmed = entry.trim();
   if (!trimmed) {
@@ -547,14 +561,17 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       : { triggered: false, stripped: rawText };
     const oncharTriggered = oncharResult.triggered;
 
-    const shouldRequireMention =
-      kind !== "direct" &&
-      core.channel.groups.resolveRequireMention({
-        cfg,
-        channel: "mattermost",
-        accountId: account.accountId,
-        groupId: channelId,
-      });
+    const shouldRequireMention = resolveMattermostRequireMentionPolicy({
+      kind,
+      accountRequireMention: account.requireMention,
+      resolveGroupRequireMention: () =>
+        core.channel.groups.resolveRequireMention({
+          cfg,
+          channel: "mattermost",
+          accountId: account.accountId,
+          groupId: channelId,
+        }),
+    });
     const shouldBypassMention =
       isControlCommand && shouldRequireMention && !wasMentioned && commandAuthorized;
     const effectiveWasMentioned = wasMentioned || shouldBypassMention || oncharTriggered;
