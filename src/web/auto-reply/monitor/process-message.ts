@@ -27,6 +27,7 @@ import type { getChildLogger } from "../../../logging.js";
 import { getAgentScopedMediaLocalRoots } from "../../../media/local-roots.js";
 import { readChannelAllowFromStore } from "../../../pairing/pairing-store.js";
 import type { resolveAgentRoute } from "../../../routing/resolve-route.js";
+import { resolveSendPolicy } from "../../../sessions/send-policy.js";
 import { jidToE164, normalizeE164 } from "../../../utils.js";
 import { resolveWhatsAppAccount } from "../../accounts.js";
 import { newConnectionId } from "../../reconnect.js";
@@ -193,6 +194,17 @@ export async function processMessage(params: {
   if (params.echoHas(combinedEchoKey)) {
     logVerbose("Skipping auto-reply: detected echo for combined message");
     params.echoForget(combinedEchoKey);
+    return false;
+  }
+
+  const sendPolicy = resolveSendPolicy({
+    cfg: params.cfg,
+    sessionKey: params.route.sessionKey,
+    channel: "whatsapp",
+    chatType: params.msg.chatType,
+  });
+  if (sendPolicy === "deny") {
+    logVerbose(`Skipping auto-reply: send policy denied for ${params.route.sessionKey}`);
     return false;
   }
 
