@@ -24,7 +24,11 @@ export const TlonAccountSchema = z.object({
   dmAllowlist: z.array(ShipSchema).optional(),
   autoDiscoverChannels: z.boolean().optional(),
   showModelSignature: z.boolean().optional(),
-  responsePrefix: z.string().optional(),
+  // Auto-accept settings
+  autoAcceptDmInvites: z.boolean().optional(), // Auto-accept DMs from ships in dmAllowlist
+  autoAcceptGroupInvites: z.boolean().optional(), // Auto-accept all group invites
+  // Owner ship for approval system
+  ownerShip: ShipSchema.optional(), // Ship that receives approval requests and can approve/deny
 });
 
 export const TlonConfigSchema = z.object({
@@ -38,10 +42,14 @@ export const TlonConfigSchema = z.object({
   dmAllowlist: z.array(ShipSchema).optional(),
   autoDiscoverChannels: z.boolean().optional(),
   showModelSignature: z.boolean().optional(),
-  responsePrefix: z.string().optional(),
   authorization: TlonAuthorizationSchema.optional(),
   defaultAuthorizedShips: z.array(ShipSchema).optional(),
   accounts: z.record(z.string(), TlonAccountSchema).optional(),
+  // Auto-accept settings
+  autoAcceptDmInvites: z.boolean().optional(), // Auto-accept DMs from ships in dmAllowlist
+  autoAcceptGroupInvites: z.boolean().optional(), // Auto-accept all group invites
+  // Owner ship for approval system
+  ownerShip: ShipSchema.optional(), // Ship that receives approval requests and can approve/deny
 });
 
 export const tlonChannelConfigSchema = buildChannelConfigSchema(TlonConfigSchema);

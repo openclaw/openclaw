@@ -54,6 +54,11 @@ export class UrbitSSEClient {
   fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
   streamRelease: (() => Promise<void>) | null = null;
 
+  // Event ack tracking - must ack every ~50 events to keep channel healthy
+  private lastHeardEventId = -1;
+  private lastAcknowledgedEventId = -1;
+  private readonly ackThreshold = 20;
+
   constructor(url: string, cookie: string, options: UrbitSseOptions = {}) {
     const ctx = getUrbitContext(url, options.ship);
     this.url = ctx.baseUrl;
@@ -248,8 +253,12 @@ export class UrbitSSEClient {
   processEvent(eventData: string) {
     const lines = eventData.split("\n");
     let data: string | null = null;
+    let eventId: number | null = null;
 
     for (const line of lines) {
+      if (line.startsWith("id: ")) {
+        eventId = parseInt(line.substring(4), 10);
+      }
       if (line.startsWith("data: ")) {
         data = line.substring(6);
       }
@@ -257,6 +266,21 @@ export class UrbitSSEClient {
 
     if (!data) {
       return;
+    }
+
+    // Track event ID and send ack if needed
+    if (eventId !== null && !isNaN(eventId)) {
+      if (eventId > this.lastHeardEventId) {
+        this.lastHeardEventId = eventId;
+        if (eventId - this.lastAcknowledgedEventId > this.ackThreshold) {
+          this.logger.log?.(
+            `[SSE] Acking event ${eventId} (last acked: ${this.lastAcknowledgedEventId})`,
+          );
+          this.ack(eventId).catch((err) => {
+            this.logger.error?.(`Failed to ack event ${eventId}: ${String(err)}`);
+          });
+        }
+      }
     }
 
     try {
@@ -317,17 +341,66 @@ export class UrbitSSEClient {
     );
   }
 
+  /**
+   * Update the cookie used for authentication.
+   * Call this when re-authenticating after session expiry.
+   */
+  updateCookie(newCookie: string): void {
+    this.cookie = normalizeUrbitCookie(newCookie);
+  }
+
+  private async ack(eventId: number): Promise<void> {
+    this.lastAcknowledgedEventId = eventId;
+
+    const ackData = {
+      id: Date.now(),
+      action: "ack",
+      "event-id": eventId,
+    };
+
+    const { response, release } = await urbitFetch({
+      baseUrl: this.url,
+      path: `/~/channel/${this.channelId}`,
+      init: {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: this.cookie,
+        },
+        body: JSON.stringify([ackData]),
+      },
+      ssrfPolicy: this.ssrfPolicy,
+      lookupFn: this.lookupFn,
+      fetchImpl: this.fetchImpl,
+      timeoutMs: 10_000,
+      auditContext: "tlon-urbit-ack",
+    });
+
+    try {
+      if (!response.ok) {
+        throw new Error(`Ack failed with status ${response.status}`);
+      }
+    } finally {
+      await release();
+    }
+  }
+
   async attemptReconnect() {
     if (this.aborted || !this.autoReconnect) {
       this.logger.log?.("[SSE] Reconnection aborted or disabled");
       return;
     }
 
+    // If we've hit max attempts, wait longer then reset and keep trying
     if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      this.logger.error?.(
-        `[SSE] Max reconnection attempts (${this.maxReconnectAttempts}) reached. Giving up.`,
+      this.logger.log?.(
+        `[SSE] Max reconnection attempts (${this.maxReconnectAttempts}) reached. Waiting 10s before resetting...`,
       );
-      return;
+      // Wait 10 seconds before resetting and trying again
+      const extendedBackoff = 10000; // 10 seconds
+      await new Promise((resolve) => setTimeout(resolve, extendedBackoff));
+      this.reconnectAttempts = 0; // Reset counter to continue trying
+      this.logger.log?.("[SSE] Reconnection attempts reset, resuming reconnection...");
     }
 
     this.reconnectAttempts += 1;
