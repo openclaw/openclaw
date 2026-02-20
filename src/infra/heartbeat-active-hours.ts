@@ -83,7 +83,7 @@ export function isWithinActiveHours(
     return true;
   }
   if (startMin === endMin) {
-    return true;
+    return false;
   }
 
   const timeZone = resolveActiveHoursTimezone(cfg, active.timezone);
