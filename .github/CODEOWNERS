@@ -29,19 +29,23 @@ src/gateway/                            @joshp123
 apps/ios/                               @obviyus @mbelinky
 
 # Agents, subagents, cron, BlueBubbles, macOS app
-src/agents/                             @tyler6204
+src/agents/                             @tyler6204 @vincentkoc
 src/cron/                               @tyler6204
 extensions/bluebubbles/                 @tyler6204
 apps/macos/                             @tyler6204
+
+# Telemetry, Hooks
+src/hooks/                              @vincentkoc
+extensions/diagnostics-otel/            @vincentkoc
 
 # Docs, Runtime Hardening
 docs/                                   @sebslight
 src/infra/                              @sebslight
 
 # Security (after src/infra/ so specific files override the broad rule)
-src/security/                           @mbelinky
-src/infra/net/fetch-guard.ts            @mbelinky
-src/infra/net/fetch-guard.ssrf.test.ts  @mbelinky
+src/security/                           @mbelinky @vincentkoc
+src/infra/net/fetch-guard.ts            @mbelinky @vincentkoc
+src/infra/net/fetch-guard.ssrf.test.ts  @mbelinky @vincentkoc
 
 # JS Infra (build, CI, packaging)
 package.json                            @cpojer
