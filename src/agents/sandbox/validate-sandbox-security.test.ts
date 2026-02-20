@@ -28,12 +28,22 @@ describe("validateBindMounts", () => {
   it("allows legitimate project directory mounts", () => {
     expect(() =>
       validateBindMounts([
-        "/home/user/source:/source:rw",
-        "/home/user/projects:/projects:ro",
+        "/srv/myproject/source:/source:rw",
+        "/opt/myapp/projects:/projects:ro",
         "/var/data/myapp:/data",
         "/opt/myapp/config:/config:ro",
       ]),
     ).not.toThrow();
+  });
+
+  it("blocks /home mount", () => {
+    expect(() => validateBindMounts(["/home/user/data:/data"])).toThrow(/blocked path "\/home"/);
+  });
+
+  it("blocks /Users mount", () => {
+    expect(() => validateBindMounts(["/Users/dev/project:/project"])).toThrow(
+      /blocked path "\/Users"/,
+    );
   });
 
   it("allows undefined or empty binds", () => {
@@ -65,7 +75,7 @@ describe("validateBindMounts", () => {
   });
 
   it("blocks paths with .. traversal to dangerous directories", () => {
-    expect(() => validateBindMounts(["/home/user/../../etc/shadow:/mnt/shadow"])).toThrow(
+    expect(() => validateBindMounts(["/srv/user/../../etc/shadow:/mnt/shadow"])).toThrow(
       /blocked path "\/etc"/,
     );
   });
@@ -143,7 +153,7 @@ describe("validateSandboxSecurity", () => {
   it("passes with safe config", () => {
     expect(() =>
       validateSandboxSecurity({
-        binds: ["/home/user/src:/src:rw"],
+        binds: ["/srv/user/src:/src:rw"],
         network: "none",
         seccompProfile: "/tmp/seccomp.json",
         apparmorProfile: "openclaw-sandbox",

@@ -18,6 +18,9 @@ export const BLOCKED_HOST_PATHS = [
   "/dev",
   "/root",
   "/boot",
+  // User home directories — may contain SSH keys, cloud credentials, etc.
+  "/home",
+  "/Users",
   // Directories that commonly contain (or alias) the Docker socket.
   "/run",
   "/var/run",
@@ -114,7 +117,7 @@ function formatBindBlockedError(params: { bind: string; reason: BlockedBindReaso
   return new Error(
     `Sandbox security: bind mount "${params.bind}" ${verb} blocked path "${params.reason.blockedPath}". ` +
       "Mounting system directories (or Docker socket paths) into sandbox containers is not allowed. " +
-      "Use project-specific paths instead (e.g. /home/user/myproject).",
+      "Use project-specific paths instead (e.g. /srv/myproject or /opt/myproject).",
   );
 }
 
