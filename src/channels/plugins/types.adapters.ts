@@ -63,6 +63,10 @@ export type ChannelConfigAdapter<ResolvedAccount> = {
     accountId?: string | null;
     allowFrom: Array<string | number>;
   }) => string[];
+  resolveDefaultTo?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+  }) => string | undefined;
 };
 
 export type ChannelGroupAdapter = {

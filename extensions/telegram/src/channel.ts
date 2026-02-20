@@ -119,6 +119,10 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
         .filter(Boolean)
         .map((entry) => entry.replace(/^(telegram|tg):/i, ""))
         .map((entry) => entry.toLowerCase()),
+    resolveDefaultTo: ({ cfg, accountId }) => {
+      const val = resolveTelegramAccount({ cfg, accountId }).config.defaultTo;
+      return val != null ? String(val) : undefined;
+    },
   },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {

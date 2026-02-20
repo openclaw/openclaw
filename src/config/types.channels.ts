@@ -31,6 +31,8 @@ export type ChannelDefaultsConfig = {
 export type ExtensionChannelConfig = {
   enabled?: boolean;
   allowFrom?: string | string[];
+  /** Default delivery target for CLI --deliver when no explicit --reply-to is provided. */
+  defaultTo?: string;
   dmPolicy?: string;
   groupPolicy?: GroupPolicy;
   accounts?: Record<string, unknown>;
