@@ -113,10 +113,12 @@ export function resolveTargets(cfg: OpenClawConfig, explicitUrl?: string): Gatew
   }
 
   const port = resolveGatewayPort(cfg);
+  const tlsEnabled = cfg.gateway?.tls?.enabled === true;
+  const wsScheme = tlsEnabled ? "wss" : "ws";
   add({
     id: "localLoopback",
     kind: "localLoopback",
-    url: `ws://127.0.0.1:${port}`,
+    url: `${wsScheme}://127.0.0.1:${port}`,
     active: cfg.gateway?.mode !== "remote",
   });
 
@@ -247,9 +249,11 @@ export function extractConfigSummary(snapshotUnknown: unknown): GatewayConfigSum
 export function buildNetworkHints(cfg: OpenClawConfig) {
   const tailnetIPv4 = pickPrimaryTailnetIPv4();
   const port = resolveGatewayPort(cfg);
+  const tlsEnabled = cfg.gateway?.tls?.enabled === true;
+  const wsScheme = tlsEnabled ? "wss" : "ws";
   return {
-    localLoopbackUrl: `ws://127.0.0.1:${port}`,
-    localTailnetUrl: tailnetIPv4 ? `ws://${tailnetIPv4}:${port}` : null,
+    localLoopbackUrl: `${wsScheme}://127.0.0.1:${port}`,
+    localTailnetUrl: tailnetIPv4 ? `${wsScheme}://${tailnetIPv4}:${port}` : null,
     tailnetIPv4: tailnetIPv4 ?? null,
   };
 }

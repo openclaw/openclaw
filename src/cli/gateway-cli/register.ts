@@ -237,7 +237,8 @@ export function registerGatewayCli(program: Command) {
           const enriched = deduped.map((b) => {
             const host = pickBeaconHost(b);
             const port = pickGatewayPort(b);
-            return { ...b, wsUrl: host ? `ws://${host}:${port}` : null };
+            const scheme = b.gatewayTls ? "wss" : "ws";
+            return { ...b, wsUrl: host ? `${scheme}://${host}:${port}` : null };
           });
           defaultRuntime.log(
             JSON.stringify(

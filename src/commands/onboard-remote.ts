@@ -95,7 +95,7 @@ export async function promptRemoteGatewayConfig(
         ],
       });
       if (mode === "direct") {
-        suggestedUrl = `ws://${host}:${port}`;
+        suggestedUrl = `${selectedBeacon.gatewayTls ? "wss" : "ws"}://${host}:${port}`;
       } else {
         suggestedUrl = DEFAULT_GATEWAY_URL;
         await prompter.note(
