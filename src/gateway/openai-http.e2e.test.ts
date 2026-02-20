@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
 import {
   agentCommand,
   getFreePort,
@@ -104,6 +105,21 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       agentCommand.mockReset();
       agentCommand.mockResolvedValueOnce({ payloads } as never);
     };
+    const expectAgentSessionKeyMatch = async (request: {
+      body: unknown;
+      headers?: Record<string, string>;
+      matcher: RegExp;
+    }) => {
+      mockAgentOnce([{ text: "hello" }]);
+      const res = await postChatCompletions(port, request.body, request.headers);
+      expect(res.status).toBe(200);
+      expect(agentCommand).toHaveBeenCalledTimes(1);
+      const opts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+      expect((opts as { sessionKey?: string } | undefined)?.sessionKey ?? "").toMatch(
+        request.matcher,
+      );
+      await res.text();
+    };
 
     try {
       {
@@ -126,56 +142,32 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       }
 
       {
-        mockAgentOnce([{ text: "hello" }]);
-        const res = await postChatCompletions(
-          port,
-          { model: "openclaw", messages: [{ role: "user", content: "hi" }] },
-          { "x-openclaw-agent-id": "beta" },
-        );
-        expect(res.status).toBe(200);
-
-        expect(agentCommand).toHaveBeenCalledTimes(1);
-        const [opts] = agentCommand.mock.calls[0] ?? [];
-        expect((opts as { sessionKey?: string } | undefined)?.sessionKey ?? "").toMatch(
-          /^agent:beta:/,
-        );
-        await res.text();
-      }
-
-      {
-        mockAgentOnce([{ text: "hello" }]);
-        const res = await postChatCompletions(port, {
-          model: "openclaw:beta",
-          messages: [{ role: "user", content: "hi" }],
+        await expectAgentSessionKeyMatch({
+          body: { model: "openclaw", messages: [{ role: "user", content: "hi" }] },
+          headers: { "x-openclaw-agent-id": "beta" },
+          matcher: /^agent:beta:/,
         });
-        expect(res.status).toBe(200);
-
-        expect(agentCommand).toHaveBeenCalledTimes(1);
-        const [opts] = agentCommand.mock.calls[0] ?? [];
-        expect((opts as { sessionKey?: string } | undefined)?.sessionKey ?? "").toMatch(
-          /^agent:beta:/,
-        );
-        await res.text();
       }
 
       {
-        mockAgentOnce([{ text: "hello" }]);
-        const res = await postChatCompletions(
-          port,
-          {
+        await expectAgentSessionKeyMatch({
+          body: {
             model: "openclaw:beta",
             messages: [{ role: "user", content: "hi" }],
           },
-          { "x-openclaw-agent-id": "alpha" },
-        );
-        expect(res.status).toBe(200);
+          matcher: /^agent:beta:/,
+        });
+      }
 
-        expect(agentCommand).toHaveBeenCalledTimes(1);
-        const [opts] = agentCommand.mock.calls[0] ?? [];
-        expect((opts as { sessionKey?: string } | undefined)?.sessionKey ?? "").toMatch(
-          /^agent:alpha:/,
-        );
-        await res.text();
+      {
+        await expectAgentSessionKeyMatch({
+          body: {
+            model: "openclaw:beta",
+            messages: [{ role: "user", content: "hi" }],
+          },
+          headers: { "x-openclaw-agent-id": "alpha" },
+          matcher: /^agent:alpha:/,
+        });
       }
 
       {
@@ -190,7 +182,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         );
         expect(res.status).toBe(200);
 
-        const [opts] = agentCommand.mock.calls[0] ?? [];
+        const opts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
         expect((opts as { sessionKey?: string } | undefined)?.sessionKey).toBe(
           "agent:beta:openai:custom",
         );
@@ -206,7 +198,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         });
         expect(res.status).toBe(200);
 
-        const [opts] = agentCommand.mock.calls[0] ?? [];
+        const opts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
         expect((opts as { sessionKey?: string } | undefined)?.sessionKey ?? "").toContain(
           "openai-user:alice",
         );
@@ -229,7 +221,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         });
         expect(res.status).toBe(200);
 
-        const [opts] = agentCommand.mock.calls[0] ?? [];
+        const opts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
         expect((opts as { message?: string } | undefined)?.message).toBe("hello\nworld");
         await res.text();
       }
@@ -247,7 +239,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         });
         expect(res.status).toBe(200);
 
-        const [opts] = agentCommand.mock.calls[0] ?? [];
+        const opts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
         const message = (opts as { message?: string } | undefined)?.message ?? "";
         expect(message).toContain(HISTORY_CONTEXT_MARKER);
         expect(message).toContain("User: Hello, who are you?");
@@ -268,7 +260,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         });
         expect(res.status).toBe(200);
 
-        const [opts] = agentCommand.mock.calls[0] ?? [];
+        const opts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
         const message = (opts as { message?: string } | undefined)?.message ?? "";
         expect(message).not.toContain(HISTORY_CONTEXT_MARKER);
         expect(message).not.toContain(CURRENT_MESSAGE_MARKER);
@@ -287,7 +279,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         });
         expect(res.status).toBe(200);
 
-        const [opts] = agentCommand.mock.calls[0] ?? [];
+        const opts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
         const extraSystemPrompt =
           (opts as { extraSystemPrompt?: string } | undefined)?.extraSystemPrompt ?? "";
         expect(extraSystemPrompt).toBe("You are a helpful assistant.");
@@ -307,7 +299,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         });
         expect(res.status).toBe(200);
 
-        const [opts] = agentCommand.mock.calls[0] ?? [];
+        const opts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
         const message = (opts as { message?: string } | undefined)?.message ?? "";
         expect(message).toContain(HISTORY_CONTEXT_MARKER);
         expect(message).toContain("User: What's the weather?");
@@ -398,12 +390,13 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     try {
       {
         agentCommand.mockReset();
-        agentCommand.mockImplementationOnce(async (opts: unknown) => {
-          const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
-          emitAgentEvent({ runId, stream: "assistant", data: { delta: "he" } });
-          emitAgentEvent({ runId, stream: "assistant", data: { delta: "llo" } });
-          return { payloads: [{ text: "hello" }] } as never;
-        });
+        agentCommand.mockImplementationOnce((async (opts: unknown) =>
+          buildAssistantDeltaResult({
+            opts,
+            emit: emitAgentEvent,
+            deltas: ["he", "llo"],
+            text: "hello",
+          })) as never);
 
         const res = await postChatCompletions(port, {
           stream: true,
@@ -431,12 +424,13 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
 
       {
         agentCommand.mockReset();
-        agentCommand.mockImplementationOnce(async (opts: unknown) => {
-          const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
-          emitAgentEvent({ runId, stream: "assistant", data: { delta: "hi" } });
-          emitAgentEvent({ runId, stream: "assistant", data: { delta: "hi" } });
-          return { payloads: [{ text: "hihi" }] } as never;
-        });
+        agentCommand.mockImplementationOnce((async (opts: unknown) =>
+          buildAssistantDeltaResult({
+            opts,
+            emit: emitAgentEvent,
+            deltas: ["hi", "hi"],
+            text: "hihi",
+          })) as never);
 
         const repeatedRes = await postChatCompletions(port, {
           stream: true,

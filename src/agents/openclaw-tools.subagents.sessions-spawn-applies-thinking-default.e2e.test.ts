@@ -52,36 +52,40 @@ function findLastCall(calls: GatewayCall[], predicate: (call: GatewayCall) => bo
   return undefined;
 }
 
+async function expectThinkingPropagation(params: {
+  callId: string;
+  payload: Record<string, unknown>;
+  expectedThinking: string;
+}) {
+  const tool = createSessionsSpawnTool({ agentSessionKey: "agent:test:main" });
+  const result = await tool.execute(params.callId, params.payload);
+  expect(result.details).toMatchObject({ status: "accepted" });
+
+  const calls = await getGatewayCalls();
+  const agentCall = findLastCall(calls, (call) => call.method === "agent");
+  const thinkingPatch = findLastCall(
+    calls,
+    (call) => call.method === "sessions.patch" && call.params?.thinkingLevel !== undefined,
+  );
+
+  expect(agentCall?.params?.thinking).toBe(params.expectedThinking);
+  expect(thinkingPatch?.params?.thinkingLevel).toBe(params.expectedThinking);
+}
+
 describe("sessions_spawn thinking defaults", () => {
   it("applies agents.defaults.subagents.thinking when thinking is omitted", async () => {
-    const tool = createSessionsSpawnTool({ agentSessionKey: "agent:test:main" });
-    const result = await tool.execute("call-1", { task: "hello" });
-    expect(result.details).toMatchObject({ status: "accepted" });
-
-    const calls = await getGatewayCalls();
-    const agentCall = findLastCall(calls, (call) => call.method === "agent");
-    const thinkingPatch = findLastCall(
-      calls,
-      (call) => call.method === "sessions.patch" && call.params?.thinkingLevel !== undefined,
-    );
-
-    expect(agentCall?.params?.thinking).toBe("high");
-    expect(thinkingPatch?.params?.thinkingLevel).toBe("high");
+    await expectThinkingPropagation({
+      callId: "call-1",
+      payload: { task: "hello" },
+      expectedThinking: "high",
+    });
   });
 
   it("prefers explicit sessions_spawn.thinking over config default", async () => {
-    const tool = createSessionsSpawnTool({ agentSessionKey: "agent:test:main" });
-    const result = await tool.execute("call-2", { task: "hello", thinking: "low" });
-    expect(result.details).toMatchObject({ status: "accepted" });
-
-    const calls = await getGatewayCalls();
-    const agentCall = findLastCall(calls, (call) => call.method === "agent");
-    const thinkingPatch = findLastCall(
-      calls,
-      (call) => call.method === "sessions.patch" && call.params?.thinkingLevel !== undefined,
-    );
-
-    expect(agentCall?.params?.thinking).toBe("low");
-    expect(thinkingPatch?.params?.thinkingLevel).toBe("low");
+    await expectThinkingPropagation({
+      callId: "call-2",
+      payload: { task: "hello", thinking: "low" },
+      expectedThinking: "low",
+    });
   });
 });

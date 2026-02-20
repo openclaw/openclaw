@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import type { SandboxToolPolicy } from "./sandbox/types.js";
-import type { AnyAgentTool } from "./tools/common.js";
 import { isToolAllowed, resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
+import type { SandboxToolPolicy } from "./sandbox/types.js";
 import { TOOL_POLICY_CONFORMANCE } from "./tool-policy.conformance.js";
 import {
   applyOwnerOnlyToolPolicy,
@@ -12,6 +11,34 @@ import {
   resolveToolProfilePolicy,
   TOOL_GROUPS,
 } from "./tool-policy.js";
+import type { AnyAgentTool } from "./tools/common.js";
+
+function createOwnerPolicyTools() {
+  return [
+    {
+      name: "read",
+      // oxlint-disable-next-line typescript/no-explicit-any
+      execute: async () => ({ content: [], details: {} }) as any,
+    },
+    {
+      name: "cron",
+      ownerOnly: true,
+      // oxlint-disable-next-line typescript/no-explicit-any
+      execute: async () => ({ content: [], details: {} }) as any,
+    },
+    {
+      name: "gateway",
+      ownerOnly: true,
+      // oxlint-disable-next-line typescript/no-explicit-any
+      execute: async () => ({ content: [], details: {} }) as any,
+    },
+    {
+      name: "whatsapp_login",
+      // oxlint-disable-next-line typescript/no-explicit-any
+      execute: async () => ({ content: [], details: {} }) as any,
+    },
+  ] as unknown as AnyAgentTool[];
+}
 
 describe("tool-policy", () => {
   it("expands groups and normalizes aliases", () => {
@@ -48,43 +75,34 @@ describe("tool-policy", () => {
 
   it("identifies owner-only tools", () => {
     expect(isOwnerOnlyToolName("whatsapp_login")).toBe(true);
+    expect(isOwnerOnlyToolName("cron")).toBe(true);
+    expect(isOwnerOnlyToolName("gateway")).toBe(true);
     expect(isOwnerOnlyToolName("read")).toBe(false);
   });
 
   it("strips owner-only tools for non-owner senders", async () => {
-    const tools = [
-      {
-        name: "read",
-        // oxlint-disable-next-line typescript/no-explicit-any
-        execute: async () => ({ content: [], details: {} }) as any,
-      },
-      {
-        name: "whatsapp_login",
-        // oxlint-disable-next-line typescript/no-explicit-any
-        execute: async () => ({ content: [], details: {} }) as any,
-      },
-    ] as unknown as AnyAgentTool[];
-
+    const tools = createOwnerPolicyTools();
     const filtered = applyOwnerOnlyToolPolicy(tools, false);
     expect(filtered.map((t) => t.name)).toEqual(["read"]);
   });
 
   it("keeps owner-only tools for the owner sender", async () => {
+    const tools = createOwnerPolicyTools();
+    const filtered = applyOwnerOnlyToolPolicy(tools, true);
+    expect(filtered.map((t) => t.name)).toEqual(["read", "cron", "gateway", "whatsapp_login"]);
+  });
+
+  it("honors ownerOnly metadata for custom tool names", async () => {
     const tools = [
       {
-        name: "read",
-        // oxlint-disable-next-line typescript/no-explicit-any
-        execute: async () => ({ content: [], details: {} }) as any,
-      },
-      {
-        name: "whatsapp_login",
+        name: "custom_admin_tool",
+        ownerOnly: true,
         // oxlint-disable-next-line typescript/no-explicit-any
         execute: async () => ({ content: [], details: {} }) as any,
       },
     ] as unknown as AnyAgentTool[];
-
-    const filtered = applyOwnerOnlyToolPolicy(tools, true);
-    expect(filtered.map((t) => t.name)).toEqual(["read", "whatsapp_login"]);
+    expect(applyOwnerOnlyToolPolicy(tools, false)).toEqual([]);
+    expect(applyOwnerOnlyToolPolicy(tools, true)).toHaveLength(1);
   });
 });
 

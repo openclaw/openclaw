@@ -13,6 +13,7 @@ const setRegistry = (registry: ReturnType<typeof createTestRegistry>) => {
 const callGatewayMock = vi.fn();
 vi.mock("../../gateway/call.js", () => ({
   callGateway: (...args: unknown[]) => callGatewayMock(...args),
+  callGatewayLeastPrivilege: (...args: unknown[]) => callGatewayMock(...args),
   randomIdempotencyKey: () => "idem-1",
 }));
 
@@ -89,7 +90,7 @@ describe("sendMessage replyToId threading", () => {
     setRegistry(emptyRegistry);
   });
 
-  it("passes replyToId through to the outbound adapter", async () => {
+  const setupMattermostCapture = () => {
     const capturedCtx: Record<string, unknown>[] = [];
     const plugin = createMattermostLikePlugin({
       onSendText: (ctx) => {
@@ -97,6 +98,11 @@ describe("sendMessage replyToId threading", () => {
       },
     });
     setRegistry(createTestRegistry([{ pluginId: "mattermost", source: "test", plugin }]));
+    return capturedCtx;
+  };
+
+  it("passes replyToId through to the outbound adapter", async () => {
+    const capturedCtx = setupMattermostCapture();
 
     await sendMessage({
       cfg: {},
@@ -111,13 +117,7 @@ describe("sendMessage replyToId threading", () => {
   });
 
   it("passes threadId through to the outbound adapter", async () => {
-    const capturedCtx: Record<string, unknown>[] = [];
-    const plugin = createMattermostLikePlugin({
-      onSendText: (ctx) => {
-        capturedCtx.push(ctx);
-      },
-    });
-    setRegistry(createTestRegistry([{ pluginId: "mattermost", source: "test", plugin }]));
+    const capturedCtx = setupMattermostCapture();
 
     await sendMessage({
       cfg: {},

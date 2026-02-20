@@ -2,10 +2,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AuthProfileStore } from "./types.js";
 import { captureEnv } from "../../test-utils/env.js";
 import { resolveApiKeyForProfile } from "./oauth.js";
 import { ensureAuthProfileStore } from "./store.js";
+import type { AuthProfileStore } from "./types.js";
 
 describe("resolveApiKeyForProfile fallback to main agent", () => {
   const envSnapshot = captureEnv([
@@ -112,6 +112,205 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
       access: "fresh-access-token",
       expires: freshTime,
     });
+  });
+
+  it("adopts newer OAuth token from main agent even when secondary token is still valid", async () => {
+    const profileId = "anthropic:claude-cli";
+    const now = Date.now();
+    const secondaryExpiry = now + 30 * 60 * 1000;
+    const mainExpiry = now + 2 * 60 * 60 * 1000;
+
+    const secondaryStore: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        [profileId]: {
+          type: "oauth",
+          provider: "anthropic",
+          access: "secondary-access-token",
+          refresh: "secondary-refresh-token",
+          expires: secondaryExpiry,
+        },
+      },
+    };
+    await fs.writeFile(
+      path.join(secondaryAgentDir, "auth-profiles.json"),
+      JSON.stringify(secondaryStore),
+    );
+
+    const mainStore: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        [profileId]: {
+          type: "oauth",
+          provider: "anthropic",
+          access: "main-newer-access-token",
+          refresh: "main-newer-refresh-token",
+          expires: mainExpiry,
+        },
+      },
+    };
+    await fs.writeFile(path.join(mainAgentDir, "auth-profiles.json"), JSON.stringify(mainStore));
+
+    const loadedSecondaryStore = ensureAuthProfileStore(secondaryAgentDir);
+    const result = await resolveApiKeyForProfile({
+      store: loadedSecondaryStore,
+      profileId,
+      agentDir: secondaryAgentDir,
+    });
+
+    expect(result?.apiKey).toBe("main-newer-access-token");
+
+    const updatedSecondaryStore = JSON.parse(
+      await fs.readFile(path.join(secondaryAgentDir, "auth-profiles.json"), "utf8"),
+    ) as AuthProfileStore;
+    expect(updatedSecondaryStore.profiles[profileId]).toMatchObject({
+      access: "main-newer-access-token",
+      expires: mainExpiry,
+    });
+  });
+
+  it("adopts main token when secondary expires is NaN/malformed", async () => {
+    const profileId = "anthropic:claude-cli";
+    const now = Date.now();
+    const mainExpiry = now + 2 * 60 * 60 * 1000;
+
+    const secondaryStore: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        [profileId]: {
+          type: "oauth",
+          provider: "anthropic",
+          access: "secondary-stale",
+          refresh: "secondary-refresh",
+          expires: NaN,
+        },
+      },
+    };
+    await fs.writeFile(
+      path.join(secondaryAgentDir, "auth-profiles.json"),
+      JSON.stringify(secondaryStore),
+    );
+
+    const mainStore: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        [profileId]: {
+          type: "oauth",
+          provider: "anthropic",
+          access: "main-fresh-token",
+          refresh: "main-refresh",
+          expires: mainExpiry,
+        },
+      },
+    };
+    await fs.writeFile(path.join(mainAgentDir, "auth-profiles.json"), JSON.stringify(mainStore));
+
+    const loadedSecondaryStore = ensureAuthProfileStore(secondaryAgentDir);
+    const result = await resolveApiKeyForProfile({
+      store: loadedSecondaryStore,
+      profileId,
+      agentDir: secondaryAgentDir,
+    });
+
+    expect(result?.apiKey).toBe("main-fresh-token");
+  });
+
+  it("accepts mode=token + type=oauth for legacy compatibility", async () => {
+    const profileId = "anthropic:default";
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        [profileId]: {
+          type: "oauth",
+          provider: "anthropic",
+          access: "oauth-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 60_000,
+        },
+      },
+    };
+
+    const result = await resolveApiKeyForProfile({
+      cfg: {
+        auth: {
+          profiles: {
+            [profileId]: {
+              provider: "anthropic",
+              mode: "token",
+            },
+          },
+        },
+      },
+      store,
+      profileId,
+    });
+
+    expect(result?.apiKey).toBe("oauth-token");
+  });
+
+  it("accepts mode=oauth + type=token (regression)", async () => {
+    const profileId = "anthropic:default";
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        [profileId]: {
+          type: "token",
+          provider: "anthropic",
+          token: "static-token",
+          expires: Date.now() + 60_000,
+        },
+      },
+    };
+
+    const result = await resolveApiKeyForProfile({
+      cfg: {
+        auth: {
+          profiles: {
+            [profileId]: {
+              provider: "anthropic",
+              mode: "oauth",
+            },
+          },
+        },
+      },
+      store,
+      profileId,
+    });
+
+    expect(result?.apiKey).toBe("static-token");
+  });
+
+  it("rejects true mode/type mismatches", async () => {
+    const profileId = "anthropic:default";
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        [profileId]: {
+          type: "oauth",
+          provider: "anthropic",
+          access: "oauth-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 60_000,
+        },
+      },
+    };
+
+    const result = await resolveApiKeyForProfile({
+      cfg: {
+        auth: {
+          profiles: {
+            [profileId]: {
+              provider: "anthropic",
+              mode: "api_key",
+            },
+          },
+        },
+      },
+      store,
+      profileId,
+    });
+
+    expect(result).toBeNull();
   });
 
   it("throws error when both secondary and main agent credentials are expired", async () => {

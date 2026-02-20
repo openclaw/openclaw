@@ -24,6 +24,7 @@ export {
   resolveSessionReference,
   shouldResolveSessionIdInput,
 } from "./sessions-resolution.js";
+import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { sanitizeUserFacingText } from "../pi-embedded-helpers.js";
 import {
   stripDowngradedToolCallText,
@@ -126,7 +127,7 @@ export function stripToolMessages(messages: unknown[]): unknown[] {
       return true;
     }
     const role = (msg as { role?: unknown }).role;
-    return role !== "toolResult";
+    return role !== "toolResult" && role !== "tool";
   });
 }
 
@@ -152,23 +153,12 @@ export function extractAssistantText(message: unknown): string | undefined {
   if (!Array.isArray(content)) {
     return undefined;
   }
-  const chunks: string[] = [];
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    if ((block as { type?: unknown }).type !== "text") {
-      continue;
-    }
-    const text = (block as { text?: unknown }).text;
-    if (typeof text === "string") {
-      const sanitized = sanitizeTextContent(text);
-      if (sanitized.trim()) {
-        chunks.push(sanitized);
-      }
-    }
-  }
-  const joined = chunks.join("").trim();
+  const joined =
+    extractTextFromChatContent(content, {
+      sanitizeText: sanitizeTextContent,
+      joinWith: "",
+      normalizeText: (text) => text.trim(),
+    }) ?? "";
   const stopReason = (message as { stopReason?: unknown }).stopReason;
   const errorMessage = (message as { errorMessage?: unknown }).errorMessage;
   const errorContext =

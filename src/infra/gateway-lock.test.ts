@@ -62,6 +62,25 @@ function makeProcStat(pid: number, startTime: number) {
   return `${pid} (node) ${fields.join(" ")}`;
 }
 
+function createLockPayload(params: { configPath: string; startTime: number; createdAt?: string }) {
+  return {
+    pid: process.pid,
+    createdAt: params.createdAt ?? new Date().toISOString(),
+    configPath: params.configPath,
+    startTime: params.startTime,
+  };
+}
+
+function mockProcStatRead(params: { onProcRead: () => string }) {
+  const readFileSync = fsSync.readFileSync;
+  return vi.spyOn(fsSync, "readFileSync").mockImplementation((filePath, encoding) => {
+    if (filePath === `/proc/${process.pid}/stat`) {
+      return params.onProcRead();
+    }
+    return readFileSync(filePath as never, encoding as never) as never;
+  });
+}
+
 describe("gateway lock", () => {
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-lock-"));
@@ -119,21 +138,12 @@ describe("gateway lock", () => {
     vi.setSystemTime(new Date("2026-02-06T10:05:00.000Z"));
     const { env, cleanup } = await makeEnv();
     const { lockPath, configPath } = resolveLockPath(env);
-    const payload = {
-      pid: process.pid,
-      createdAt: new Date().toISOString(),
-      configPath,
-      startTime: 111,
-    };
+    const payload = createLockPayload({ configPath, startTime: 111 });
     await fs.writeFile(lockPath, JSON.stringify(payload), "utf8");
 
-    const readFileSync = fsSync.readFileSync;
     const statValue = makeProcStat(process.pid, 222);
-    const spy = vi.spyOn(fsSync, "readFileSync").mockImplementation((filePath, encoding) => {
-      if (filePath === `/proc/${process.pid}/stat`) {
-        return statValue;
-      }
-      return readFileSync(filePath as never, encoding as never) as never;
+    const spy = mockProcStatRead({
+      onProcRead: () => statValue,
     });
 
     const lock = await acquireGatewayLock({
@@ -154,20 +164,13 @@ describe("gateway lock", () => {
     vi.useRealTimers();
     const { env, cleanup } = await makeEnv();
     const { lockPath, configPath } = resolveLockPath(env);
-    const payload = {
-      pid: process.pid,
-      createdAt: new Date().toISOString(),
-      configPath,
-      startTime: 111,
-    };
+    const payload = createLockPayload({ configPath, startTime: 111 });
     await fs.writeFile(lockPath, JSON.stringify(payload), "utf8");
 
-    const readFileSync = fsSync.readFileSync;
-    const spy = vi.spyOn(fsSync, "readFileSync").mockImplementation((filePath, encoding) => {
-      if (filePath === `/proc/${process.pid}/stat`) {
+    const spy = mockProcStatRead({
+      onProcRead: () => {
         throw new Error("EACCES");
-      }
-      return readFileSync(filePath as never, encoding as never) as never;
+      },
     });
 
     const pending = acquireGatewayLock({
@@ -182,17 +185,17 @@ describe("gateway lock", () => {
 
     spy.mockRestore();
 
-    const stalePayload = {
-      ...payload,
+    const stalePayload = createLockPayload({
+      configPath,
+      startTime: 111,
       createdAt: new Date(0).toISOString(),
-    };
+    });
     await fs.writeFile(lockPath, JSON.stringify(stalePayload), "utf8");
 
-    const staleSpy = vi.spyOn(fsSync, "readFileSync").mockImplementation((filePath, encoding) => {
-      if (filePath === `/proc/${process.pid}/stat`) {
+    const staleSpy = mockProcStatRead({
+      onProcRead: () => {
         throw new Error("EACCES");
-      }
-      return readFileSync(filePath as never, encoding as never) as never;
+      },
     });
 
     const lock = await acquireGatewayLock({

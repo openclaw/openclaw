@@ -1,13 +1,14 @@
+import { EventEmitter } from "node:events";
 import type { AgentMessage, AgentTool } from "@mariozechner/pi-agent-core";
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
 import type { TSchema } from "@sinclair/typebox";
-import { EventEmitter } from "node:events";
-import type { TranscriptPolicy } from "../transcript-policy.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { registerUnhandledRejectionHandler } from "../../infra/unhandled-rejections.js";
 import {
   hasInterSessionUserProvenance,
   normalizeInputProvenance,
 } from "../../sessions/input-provenance.js";
+import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import {
   downgradeOpenAIReasoningBlocks,
   isCompactionFailureError,
@@ -21,6 +22,7 @@ import {
   stripToolResultDetails,
   sanitizeToolUseResultPairing,
 } from "../session-transcript-repair.js";
+import type { TranscriptPolicy } from "../transcript-policy.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import { log } from "./logger.js";
 import { describeUnknownError } from "./utils.js";
@@ -99,6 +101,12 @@ export function sanitizeAntigravityThinkingBlocks(messages: AgentMessage[]): Age
       const candidate =
         rec.thinkingSignature ?? rec.signature ?? rec.thought_signature ?? rec.thoughtSignature;
       if (!isValidAntigravitySignature(candidate)) {
+        // Preserve reasoning content as plain text when signatures are invalid/missing.
+        // Antigravity Claude rejects unsigned thinking blocks, but dropping them loses context.
+        const thinkingText = (block as { thinking?: unknown }).thinking;
+        if (typeof thinkingText === "string" && thinkingText.trim()) {
+          nextContent.push({ type: "text", text: thinkingText } as AssistantContentBlock);
+        }
         contentChanged = true;
         continue;
       }
@@ -245,7 +253,11 @@ export function sanitizeToolsForGoogle<
   tools: AgentTool<TSchemaType, TResult>[];
   provider: string;
 }): AgentTool<TSchemaType, TResult>[] {
-  if (params.provider !== "google-antigravity" && params.provider !== "google-gemini-cli") {
+  // Cloud Code Assist uses the OpenAPI 3.03 `parameters` field for both Gemini
+  // AND Claude models.  This field does not support JSON Schema keywords such as
+  // patternProperties, additionalProperties, $ref, etc.  We must clean schemas
+  // for every provider that routes through this path.
+  if (params.provider !== "google-gemini-cli" && params.provider !== "google-antigravity") {
     return params.tools;
   }
   return params.tools.map((tool) => {
@@ -412,6 +424,7 @@ export async function sanitizeSessionHistory(params: {
   modelApi?: string | null;
   modelId?: string;
   provider?: string;
+  config?: OpenClawConfig;
   sessionManager: SessionManager;
   sessionId: string;
   policy?: TranscriptPolicy;
@@ -434,6 +447,7 @@ export async function sanitizeSessionHistory(params: {
       toolCallIdMode: policy.toolCallIdMode,
       preserveSignatures: policy.preserveSignatures,
       sanitizeThoughtSignatures: policy.sanitizeThoughtSignatures,
+      ...resolveImageSanitizationLimits(params.config),
     },
   );
   const sanitizedThinking = policy.normalizeAntigravityThinkingBlocks
@@ -457,10 +471,9 @@ export async function sanitizeSessionHistory(params: {
         modelId: params.modelId,
       })
     : false;
-  const sanitizedOpenAI =
-    isOpenAIResponsesApi && modelChanged
-      ? downgradeOpenAIReasoningBlocks(sanitizedToolResults)
-      : sanitizedToolResults;
+  const sanitizedOpenAI = isOpenAIResponsesApi
+    ? downgradeOpenAIReasoningBlocks(sanitizedToolResults)
+    : sanitizedToolResults;
 
   if (hasSnapshot && (!priorSnapshot || modelChanged)) {
     appendModelSnapshot(params.sessionManager, {

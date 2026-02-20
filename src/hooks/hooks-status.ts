@@ -1,10 +1,10 @@
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
+import { evaluateEntryMetadataRequirementsForCurrentPlatform } from "../shared/entry-status.js";
 import type { RequirementConfigCheck, Requirements } from "../shared/requirements.js";
-import type { HookEligibilityContext, HookEntry, HookInstallSpec } from "./types.js";
-import { evaluateEntryMetadataRequirements } from "../shared/entry-status.js";
 import { CONFIG_DIR } from "../utils.js";
 import { hasBinary, isConfigPathTruthy, resolveHookConfig } from "./config.js";
+import type { HookEligibilityContext, HookEntry, HookInstallSpec } from "./types.js";
 import { loadWorkspaceHookEntries } from "./workspace.js";
 
 export type HookStatusConfigCheck = RequirementConfigCheck;
@@ -87,18 +87,21 @@ function buildHookStatus(
   const disabled = managedByPlugin ? false : hookConfig?.enabled === false;
   const always = entry.metadata?.always === true;
   const events = entry.metadata?.events ?? [];
+  const isEnvSatisfied = (envName: string) =>
+    Boolean(process.env[envName] || hookConfig?.env?.[envName]);
+  const isConfigSatisfied = (pathStr: string) => isConfigPathTruthy(config, pathStr);
 
+  const requirementStatus = evaluateEntryMetadataRequirementsForCurrentPlatform({
+    always,
+    metadata: entry.metadata,
+    frontmatter: entry.frontmatter,
+    hasLocalBin: hasBinary,
+    remote: eligibility?.remote,
+    isEnvSatisfied,
+    isConfigSatisfied,
+  });
   const { emoji, homepage, required, missing, requirementsSatisfied, configChecks } =
-    evaluateEntryMetadataRequirements({
-      always,
-      metadata: entry.metadata,
-      frontmatter: entry.frontmatter,
-      hasLocalBin: hasBinary,
-      localPlatform: process.platform,
-      remote: eligibility?.remote,
-      isEnvSatisfied: (envName) => Boolean(process.env[envName] || hookConfig?.env?.[envName]),
-      isConfigSatisfied: (pathStr) => isConfigPathTruthy(config, pathStr),
-    });
+    requirementStatus;
 
   const eligible = !disabled && requirementsSatisfied;
 

@@ -1,10 +1,10 @@
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { buildModelAliasIndex, modelKey } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { RuntimeEnv } from "../runtime.js";
-import type { WizardPrompter } from "../wizard/prompts.js";
-import { DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { buildModelAliasIndex, modelKey } from "../agents/model-selection.js";
 import { fetchWithTimeout } from "../utils/fetch-timeout.js";
+import type { WizardPrompter } from "../wizard/prompts.js";
 import { applyPrimaryModel } from "./model-picker.js";
 import { normalizeAlias } from "./models/shared.js";
 
@@ -258,33 +258,39 @@ type VerificationResult = {
   error?: unknown;
 };
 
-async function requestOpenAiVerification(params: {
+function resolveVerificationEndpoint(params: {
   baseUrl: string;
-  apiKey: string;
   modelId: string;
-}): Promise<VerificationResult> {
-  // Transform Azure URLs to include the deployment path
+  endpointPath: "chat/completions" | "messages";
+}) {
   const resolvedUrl = isAzureUrl(params.baseUrl)
     ? transformAzureUrl(params.baseUrl, params.modelId)
     : params.baseUrl;
-  const endpoint = new URL(
-    "chat/completions",
+  const endpointUrl = new URL(
+    params.endpointPath,
     resolvedUrl.endsWith("/") ? resolvedUrl : `${resolvedUrl}/`,
-  ).href;
+  );
+  if (isAzureUrl(params.baseUrl)) {
+    endpointUrl.searchParams.set("api-version", "2024-10-21");
+  }
+  return endpointUrl.href;
+}
+
+async function requestVerification(params: {
+  endpoint: string;
+  headers: Record<string, string>;
+  body: Record<string, unknown>;
+}): Promise<VerificationResult> {
   try {
     const res = await fetchWithTimeout(
-      endpoint,
+      params.endpoint,
       {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          ...buildOpenAiHeaders(params.apiKey),
+          ...params.headers,
         },
-        body: JSON.stringify({
-          model: params.modelId,
-          messages: [{ role: "user", content: "Hi" }],
-          max_tokens: 5,
-        }),
+        body: JSON.stringify(params.body),
       },
       VERIFY_TIMEOUT_MS,
     );
@@ -294,40 +300,52 @@ async function requestOpenAiVerification(params: {
   }
 }
 
+async function requestOpenAiVerification(params: {
+  baseUrl: string;
+  apiKey: string;
+  modelId: string;
+}): Promise<VerificationResult> {
+  const endpoint = resolveVerificationEndpoint({
+    baseUrl: params.baseUrl,
+    modelId: params.modelId,
+    endpointPath: "chat/completions",
+  });
+  return await requestVerification({
+    endpoint,
+    headers: buildOpenAiHeaders(params.apiKey),
+    body: {
+      model: params.modelId,
+      messages: [{ role: "user", content: "Hi" }],
+      max_tokens: 5,
+    },
+  });
+}
+
 async function requestAnthropicVerification(params: {
   baseUrl: string;
   apiKey: string;
   modelId: string;
 }): Promise<VerificationResult> {
-  // Note: Azure AI Foundry exposes OpenAI-compatible API, not Anthropic.
-  // The transform below produces an invalid URL for Anthropic, which is
-  // intentional - verification should fail for invalid endpoints.
-  const resolvedUrl = isAzureUrl(params.baseUrl)
-    ? transformAzureUrl(params.baseUrl, params.modelId)
-    : params.baseUrl;
-  const endpoint = new URL("messages", resolvedUrl.endsWith("/") ? resolvedUrl : `${resolvedUrl}/`)
-    .href;
-  try {
-    const res = await fetchWithTimeout(
-      endpoint,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...buildAnthropicHeaders(params.apiKey),
-        },
-        body: JSON.stringify({
-          model: params.modelId,
-          max_tokens: 16,
-          messages: [{ role: "user", content: "Hi" }],
-        }),
-      },
-      VERIFY_TIMEOUT_MS,
-    );
-    return { ok: res.ok, status: res.status };
-  } catch (error) {
-    return { ok: false, error };
-  }
+  // Use a base URL with /v1 injected for this raw fetch only. The rest of the app uses the
+  // Anthropic client, which appends /v1 itself; config should store the base URL
+  // without /v1 to avoid /v1/v1/messages at runtime. See docs/gateway/configuration-reference.md.
+  const baseUrlForRequest = /\/v1\/?$/.test(params.baseUrl.trim())
+    ? params.baseUrl.trim()
+    : params.baseUrl.trim().replace(/\/?$/, "") + "/v1";
+  const endpoint = resolveVerificationEndpoint({
+    baseUrl: baseUrlForRequest,
+    modelId: params.modelId,
+    endpointPath: "messages",
+  });
+  return await requestVerification({
+    endpoint,
+    headers: buildAnthropicHeaders(params.apiKey),
+    body: {
+      model: params.modelId,
+      max_tokens: 16,
+      messages: [{ role: "user", content: "Hi" }],
+    },
+  });
 }
 
 async function promptBaseUrlAndKey(params: {

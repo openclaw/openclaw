@@ -7,10 +7,15 @@ function createLimiterSpy(): AuthRateLimiter & {
   recordFailure: ReturnType<typeof vi.fn>;
   reset: ReturnType<typeof vi.fn>;
 } {
+  const check = vi.fn<AuthRateLimiter["check"]>(
+    (_ip, _scope) => ({ allowed: true, remaining: 10, retryAfterMs: 0 }) as const,
+  );
+  const recordFailure = vi.fn<AuthRateLimiter["recordFailure"]>((_ip, _scope) => {});
+  const reset = vi.fn<AuthRateLimiter["reset"]>((_ip, _scope) => {});
   return {
-    check: vi.fn(() => ({ allowed: true, remaining: 10, retryAfterMs: 0 })),
-    recordFailure: vi.fn(),
-    reset: vi.fn(),
+    check,
+    recordFailure,
+    reset,
     size: () => 0,
     prune: () => {},
     dispose: () => {},
@@ -29,6 +34,7 @@ describe("gateway auth", () => {
       }),
     ).toMatchObject({
       mode: "password",
+      modeSource: "password",
       token: "env-token",
       password: "env-password",
     });
@@ -44,9 +50,39 @@ describe("gateway auth", () => {
         } as NodeJS.ProcessEnv,
       }),
     ).toMatchObject({
-      mode: "none",
+      mode: "token",
+      modeSource: "default",
       token: undefined,
       password: undefined,
+    });
+  });
+
+  it("resolves explicit auth mode none from config", () => {
+    expect(
+      resolveGatewayAuth({
+        authConfig: { mode: "none" },
+        env: {} as NodeJS.ProcessEnv,
+      }),
+    ).toMatchObject({
+      mode: "none",
+      modeSource: "config",
+      token: undefined,
+      password: undefined,
+    });
+  });
+
+  it("marks mode source as override when runtime mode override is provided", () => {
+    expect(
+      resolveGatewayAuth({
+        authConfig: { mode: "password", password: "config-password" },
+        authOverride: { mode: "token" },
+        env: {} as NodeJS.ProcessEnv,
+      }),
+    ).toMatchObject({
+      mode: "token",
+      modeSource: "override",
+      token: undefined,
+      password: "config-password",
     });
   });
 
@@ -83,6 +119,34 @@ describe("gateway auth", () => {
     });
     expect(res.ok).toBe(false);
     expect(res.reason).toBe("token_missing_config");
+  });
+
+  it("allows explicit auth mode none", async () => {
+    const res = await authorizeGatewayConnect({
+      auth: { mode: "none", allowTailscale: false },
+      connectAuth: null,
+    });
+    expect(res.ok).toBe(true);
+    expect(res.method).toBe("none");
+  });
+
+  it("keeps none mode authoritative even when token is present", async () => {
+    const auth = resolveGatewayAuth({
+      authConfig: { mode: "none", token: "configured-token" },
+      env: {} as NodeJS.ProcessEnv,
+    });
+    expect(auth).toMatchObject({
+      mode: "none",
+      modeSource: "config",
+      token: "configured-token",
+    });
+
+    const res = await authorizeGatewayConnect({
+      auth,
+      connectAuth: null,
+    });
+    expect(res.ok).toBe(true);
+    expect(res.method).toBe("none");
   });
 
   it("reports missing and mismatched password reasons", async () => {
@@ -183,29 +247,43 @@ describe("gateway auth", () => {
 });
 
 describe("trusted-proxy auth", () => {
+  type GatewayConnectInput = Parameters<typeof authorizeGatewayConnect>[0];
   const trustedProxyConfig = {
     userHeader: "x-forwarded-user",
     requiredHeaders: ["x-forwarded-proto"],
     allowUsers: [],
   };
 
-  it("accepts valid request from trusted proxy", async () => {
-    const res = await authorizeGatewayConnect({
-      auth: {
+  function authorizeTrustedProxy(options?: {
+    auth?: GatewayConnectInput["auth"];
+    trustedProxies?: string[];
+    remoteAddress?: string;
+    headers?: Record<string, string>;
+  }) {
+    return authorizeGatewayConnect({
+      auth: options?.auth ?? {
         mode: "trusted-proxy",
         allowTailscale: false,
         trustedProxy: trustedProxyConfig,
       },
       connectAuth: null,
-      trustedProxies: ["10.0.0.1"],
+      trustedProxies: options?.trustedProxies ?? ["10.0.0.1"],
       req: {
-        socket: { remoteAddress: "10.0.0.1" },
+        socket: { remoteAddress: options?.remoteAddress ?? "10.0.0.1" },
         headers: {
           host: "gateway.local",
-          "x-forwarded-user": "nick@example.com",
-          "x-forwarded-proto": "https",
+          ...options?.headers,
         },
       } as never,
+    });
+  }
+
+  it("accepts valid request from trusted proxy", async () => {
+    const res = await authorizeTrustedProxy({
+      headers: {
+        "x-forwarded-user": "nick@example.com",
+        "x-forwarded-proto": "https",
+      },
     });
 
     expect(res.ok).toBe(true);
@@ -214,22 +292,12 @@ describe("trusted-proxy auth", () => {
   });
 
   it("rejects request from untrusted source", async () => {
-    const res = await authorizeGatewayConnect({
-      auth: {
-        mode: "trusted-proxy",
-        allowTailscale: false,
-        trustedProxy: trustedProxyConfig,
+    const res = await authorizeTrustedProxy({
+      remoteAddress: "192.168.1.100",
+      headers: {
+        "x-forwarded-user": "attacker@evil.com",
+        "x-forwarded-proto": "https",
       },
-      connectAuth: null,
-      trustedProxies: ["10.0.0.1"],
-      req: {
-        socket: { remoteAddress: "192.168.1.100" },
-        headers: {
-          host: "gateway.local",
-          "x-forwarded-user": "attacker@evil.com",
-          "x-forwarded-proto": "https",
-        },
-      } as never,
     });
 
     expect(res.ok).toBe(false);
@@ -237,22 +305,10 @@ describe("trusted-proxy auth", () => {
   });
 
   it("rejects request with missing user header", async () => {
-    const res = await authorizeGatewayConnect({
-      auth: {
-        mode: "trusted-proxy",
-        allowTailscale: false,
-        trustedProxy: trustedProxyConfig,
+    const res = await authorizeTrustedProxy({
+      headers: {
+        "x-forwarded-proto": "https",
       },
-      connectAuth: null,
-      trustedProxies: ["10.0.0.1"],
-      req: {
-        socket: { remoteAddress: "10.0.0.1" },
-        headers: {
-          host: "gateway.local",
-          "x-forwarded-proto": "https",
-          // missing x-forwarded-user
-        },
-      } as never,
     });
 
     expect(res.ok).toBe(false);
@@ -260,22 +316,10 @@ describe("trusted-proxy auth", () => {
   });
 
   it("rejects request with missing required headers", async () => {
-    const res = await authorizeGatewayConnect({
-      auth: {
-        mode: "trusted-proxy",
-        allowTailscale: false,
-        trustedProxy: trustedProxyConfig,
+    const res = await authorizeTrustedProxy({
+      headers: {
+        "x-forwarded-user": "nick@example.com",
       },
-      connectAuth: null,
-      trustedProxies: ["10.0.0.1"],
-      req: {
-        socket: { remoteAddress: "10.0.0.1" },
-        headers: {
-          host: "gateway.local",
-          "x-forwarded-user": "nick@example.com",
-          // missing x-forwarded-proto
-        },
-      } as never,
     });
 
     expect(res.ok).toBe(false);
@@ -283,7 +327,7 @@ describe("trusted-proxy auth", () => {
   });
 
   it("rejects user not in allowlist", async () => {
-    const res = await authorizeGatewayConnect({
+    const res = await authorizeTrustedProxy({
       auth: {
         mode: "trusted-proxy",
         allowTailscale: false,
@@ -292,15 +336,9 @@ describe("trusted-proxy auth", () => {
           allowUsers: ["admin@example.com", "nick@example.com"],
         },
       },
-      connectAuth: null,
-      trustedProxies: ["10.0.0.1"],
-      req: {
-        socket: { remoteAddress: "10.0.0.1" },
-        headers: {
-          host: "gateway.local",
-          "x-forwarded-user": "stranger@other.com",
-        },
-      } as never,
+      headers: {
+        "x-forwarded-user": "stranger@other.com",
+      },
     });
 
     expect(res.ok).toBe(false);
@@ -308,7 +346,7 @@ describe("trusted-proxy auth", () => {
   });
 
   it("accepts user in allowlist", async () => {
-    const res = await authorizeGatewayConnect({
+    const res = await authorizeTrustedProxy({
       auth: {
         mode: "trusted-proxy",
         allowTailscale: false,
@@ -317,15 +355,9 @@ describe("trusted-proxy auth", () => {
           allowUsers: ["admin@example.com", "nick@example.com"],
         },
       },
-      connectAuth: null,
-      trustedProxies: ["10.0.0.1"],
-      req: {
-        socket: { remoteAddress: "10.0.0.1" },
-        headers: {
-          host: "gateway.local",
-          "x-forwarded-user": "nick@example.com",
-        },
-      } as never,
+      headers: {
+        "x-forwarded-user": "nick@example.com",
+      },
     });
 
     expect(res.ok).toBe(true);
@@ -334,21 +366,11 @@ describe("trusted-proxy auth", () => {
   });
 
   it("rejects when no trustedProxies configured", async () => {
-    const res = await authorizeGatewayConnect({
-      auth: {
-        mode: "trusted-proxy",
-        allowTailscale: false,
-        trustedProxy: trustedProxyConfig,
-      },
-      connectAuth: null,
+    const res = await authorizeTrustedProxy({
       trustedProxies: [],
-      req: {
-        socket: { remoteAddress: "10.0.0.1" },
-        headers: {
-          host: "gateway.local",
-          "x-forwarded-user": "nick@example.com",
-        },
-      } as never,
+      headers: {
+        "x-forwarded-user": "nick@example.com",
+      },
     });
 
     expect(res.ok).toBe(false);
@@ -356,21 +378,14 @@ describe("trusted-proxy auth", () => {
   });
 
   it("rejects when trustedProxy config missing", async () => {
-    const res = await authorizeGatewayConnect({
+    const res = await authorizeTrustedProxy({
       auth: {
         mode: "trusted-proxy",
         allowTailscale: false,
-        // trustedProxy missing
       },
-      connectAuth: null,
-      trustedProxies: ["10.0.0.1"],
-      req: {
-        socket: { remoteAddress: "10.0.0.1" },
-        headers: {
-          host: "gateway.local",
-          "x-forwarded-user": "nick@example.com",
-        },
-      } as never,
+      headers: {
+        "x-forwarded-user": "nick@example.com",
+      },
     });
 
     expect(res.ok).toBe(false);
@@ -378,7 +393,7 @@ describe("trusted-proxy auth", () => {
   });
 
   it("supports Pomerium-style headers", async () => {
-    const res = await authorizeGatewayConnect({
+    const res = await authorizeTrustedProxy({
       auth: {
         mode: "trusted-proxy",
         allowTailscale: false,
@@ -387,16 +402,12 @@ describe("trusted-proxy auth", () => {
           requiredHeaders: ["x-pomerium-jwt-assertion"],
         },
       },
-      connectAuth: null,
       trustedProxies: ["172.17.0.1"],
-      req: {
-        socket: { remoteAddress: "172.17.0.1" },
-        headers: {
-          host: "gateway.local",
-          "x-pomerium-claim-email": "nick@example.com",
-          "x-pomerium-jwt-assertion": "eyJ...",
-        },
-      } as never,
+      remoteAddress: "172.17.0.1",
+      headers: {
+        "x-pomerium-claim-email": "nick@example.com",
+        "x-pomerium-jwt-assertion": "eyJ...",
+      },
     });
 
     expect(res.ok).toBe(true);
@@ -405,7 +416,7 @@ describe("trusted-proxy auth", () => {
   });
 
   it("trims whitespace from user header value", async () => {
-    const res = await authorizeGatewayConnect({
+    const res = await authorizeTrustedProxy({
       auth: {
         mode: "trusted-proxy",
         allowTailscale: false,
@@ -413,15 +424,9 @@ describe("trusted-proxy auth", () => {
           userHeader: "x-forwarded-user",
         },
       },
-      connectAuth: null,
-      trustedProxies: ["10.0.0.1"],
-      req: {
-        socket: { remoteAddress: "10.0.0.1" },
-        headers: {
-          host: "gateway.local",
-          "x-forwarded-user": "  nick@example.com  ",
-        },
-      } as never,
+      headers: {
+        "x-forwarded-user": "  nick@example.com  ",
+      },
     });
 
     expect(res.ok).toBe(true);

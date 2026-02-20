@@ -1,7 +1,8 @@
+import fs from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
+import type { OpenClawConfig } from "../config/config.js";
 
 // Avoid exporting vitest mock types (TS2742 under pnpm + d.ts emit).
 // oxlint-disable-next-line typescript/no-explicit-any
@@ -134,6 +135,72 @@ export function makeCfg(home: string): OpenClawConfig {
   } as OpenClawConfig;
 }
 
+export async function loadGetReplyFromConfig() {
+  return (await import("./reply.js")).getReplyFromConfig;
+}
+
+export function requireSessionStorePath(cfg: { session?: { store?: string } }): string {
+  const storePath = cfg.session?.store;
+  if (!storePath) {
+    throw new Error("expected session store path");
+  }
+  return storePath;
+}
+
+export function makeWhatsAppElevatedCfg(
+  home: string,
+  opts?: { elevatedEnabled?: boolean; requireMentionInGroups?: boolean },
+): OpenClawConfig {
+  const cfg = makeCfg(home);
+  cfg.channels ??= {};
+  cfg.channels.whatsapp = {
+    ...cfg.channels.whatsapp,
+    allowFrom: ["+1000"],
+  };
+  if (opts?.requireMentionInGroups !== undefined) {
+    cfg.channels.whatsapp.groups = { "*": { requireMention: opts.requireMentionInGroups } };
+  }
+
+  cfg.tools = {
+    ...cfg.tools,
+    elevated: {
+      allowFrom: { whatsapp: ["+1000"] },
+      ...(opts?.elevatedEnabled === false ? { enabled: false } : {}),
+    },
+  };
+  return cfg;
+}
+
+export async function runDirectElevatedToggleAndLoadStore(params: {
+  cfg: OpenClawConfig;
+  getReplyFromConfig: typeof import("./reply.js").getReplyFromConfig;
+  body?: string;
+}): Promise<{
+  text: string | undefined;
+  store: Record<string, { elevatedLevel?: string }>;
+}> {
+  const res = await params.getReplyFromConfig(
+    {
+      Body: params.body ?? "/elevated on",
+      From: "+1000",
+      To: "+2000",
+      Provider: "whatsapp",
+      SenderE164: "+1000",
+      CommandAuthorized: true,
+    },
+    {},
+    params.cfg,
+  );
+  const text = Array.isArray(res) ? res[0]?.text : res?.text;
+  const storePath = params.cfg.session?.store;
+  if (!storePath) {
+    throw new Error("session.store is required in test config");
+  }
+  const storeRaw = await fs.readFile(storePath, "utf-8");
+  const store = JSON.parse(storeRaw) as Record<string, { elevatedLevel?: string }>;
+  return { text, store };
+}
+
 export async function runGreetingPromptForBareNewOrReset(params: {
   home: string;
   body: "/new" | "/reset";
@@ -168,4 +235,28 @@ export function installTriggerHandlingE2eTestHooks() {
   afterEach(() => {
     vi.restoreAllMocks();
   });
+}
+
+export function mockRunEmbeddedPiAgentOk(text = "ok"): AnyMock {
+  const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
+  runEmbeddedPiAgentMock.mockResolvedValue({
+    payloads: [{ text }],
+    meta: {
+      durationMs: 1,
+      agentMeta: { sessionId: "s", provider: "p", model: "m" },
+    },
+  });
+  return runEmbeddedPiAgentMock;
+}
+
+export function createBlockReplyCollector() {
+  const blockReplies: Array<{ text?: string }> = [];
+  return {
+    blockReplies,
+    handlers: {
+      onBlockReply: async (payload: { text?: string }) => {
+        blockReplies.push(payload);
+      },
+    },
+  };
 }

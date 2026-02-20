@@ -76,4 +76,52 @@ import Testing
             timeoutSeconds: nil,
             key: nil)))
     }
+
+    @Test func parseGatewayLinkParsesCommonFields() {
+        let url = URL(
+            string: "openclaw://gateway?host=openclaw.local&port=18789&tls=1&token=abc&password=def")!
+        #expect(
+            DeepLinkParser.parse(url) == .gateway(
+                .init(host: "openclaw.local", port: 18789, tls: true, token: "abc", password: "def")))
+    }
+
+    @Test func parseGatewaySetupCodeParsesBase64UrlPayload() {
+        let payload = #"{"url":"wss://gateway.example.com:443","token":"tok","password":"pw"}"#
+        let encoded = Data(payload.utf8)
+            .base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+
+        let link = GatewayConnectDeepLink.fromSetupCode(encoded)
+
+        #expect(link == .init(
+            host: "gateway.example.com",
+            port: 443,
+            tls: true,
+            token: "tok",
+            password: "pw"))
+    }
+
+    @Test func parseGatewaySetupCodeRejectsInvalidInput() {
+        #expect(GatewayConnectDeepLink.fromSetupCode("not-a-valid-setup-code") == nil)
+    }
+
+    @Test func parseGatewaySetupCodeDefaultsTo443ForWssWithoutPort() {
+        let payload = #"{"url":"wss://gateway.example.com","token":"tok"}"#
+        let encoded = Data(payload.utf8)
+            .base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+
+        let link = GatewayConnectDeepLink.fromSetupCode(encoded)
+
+        #expect(link == .init(
+            host: "gateway.example.com",
+            port: 443,
+            tls: true,
+            token: "tok",
+            password: nil))
+    }
 }
