@@ -23,10 +23,10 @@ export async function noteMemorySearchHealth(cfg: OpenClawConfig): Promise<void>
     return;
   }
 
-  // QMD backend handles embeddings internally (e.g. embeddinggemma) — no
-  // separate embedding provider is needed. Skip the provider check entirely.
+  // QMD and remote backends handle embeddings internally — no separate
+  // embedding provider is needed. Skip the provider check entirely.
   const backendConfig = resolveMemoryBackendConfig({ cfg, agentId });
-  if (backendConfig.backend === "qmd") {
+  if (backendConfig.backend === "qmd" || backendConfig.backend === "remote") {
     return;
   }
 

@@ -10,17 +10,17 @@ export async function startGatewayMemoryBackend(params: {
   const agentIds = listAgentIds(params.cfg);
   for (const agentId of agentIds) {
     const resolved = resolveMemoryBackendConfig({ cfg: params.cfg, agentId });
-    if (resolved.backend !== "qmd" || !resolved.qmd) {
+    if (resolved.backend !== "qmd" && resolved.backend !== "remote") {
       continue;
     }
 
     const { manager, error } = await getMemorySearchManager({ cfg: params.cfg, agentId });
     if (!manager) {
       params.log.warn(
-        `qmd memory startup initialization failed for agent "${agentId}": ${error ?? "unknown error"}`,
+        `${resolved.backend} memory startup initialization failed for agent "${agentId}": ${error ?? "unknown error"}`,
       );
       continue;
     }
-    params.log.info?.(`qmd memory startup initialization armed for agent "${agentId}"`);
+    params.log.info?.(`${resolved.backend} memory startup initialization armed for agent "${agentId}"`);
   }
 }

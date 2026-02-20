@@ -85,11 +85,27 @@ const MemoryQmdSchema = z
   })
   .strict();
 
+const MemoryRemoteSchema = z
+  .object({
+    baseUrl: z.string().optional(),
+    apiKey: z.string().optional(),
+    headers: z.record(z.string(), z.string()).optional(),
+    vectorStoreId: z.string().optional(),
+    vectorStoreName: z.string().optional(),
+    syncIntervalMs: z.number().int().positive().optional(),
+    searchMaxResults: z.number().int().positive().optional(),
+    searchScoreThreshold: z.number().min(0).max(1).optional(),
+  })
+  .strict();
+
 const MemorySchema = z
   .object({
-    backend: z.union([z.literal("builtin"), z.literal("qmd")]).optional(),
+    backend: z
+      .union([z.literal("builtin"), z.literal("qmd"), z.literal("remote")])
+      .optional(),
     citations: z.union([z.literal("auto"), z.literal("on"), z.literal("off")]).optional(),
     qmd: MemoryQmdSchema.optional(),
+    remote: MemoryRemoteSchema.optional(),
   })
   .strict()
   .optional();

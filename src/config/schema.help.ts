@@ -226,7 +226,8 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.memorySearch.cache.enabled":
     "Cache chunk embeddings in SQLite to speed up reindexing and frequent updates (default: true).",
   memory: "Memory backend configuration (global).",
-  "memory.backend": 'Memory backend ("builtin" for OpenClaw embeddings, "qmd" for QMD sidecar).',
+  "memory.backend":
+    'Memory backend ("builtin" for OpenClaw embeddings, "qmd" for QMD sidecar, "remote" for a remote vector store API).',
   "memory.citations": 'Default citation behavior ("auto", "on", or "off").',
   "memory.qmd.command": "Path to the qmd binary (default: resolves from PATH).",
   "memory.qmd.includeDefaultMemory":
@@ -262,6 +263,20 @@ export const FIELD_HELP: Record<string, string> = {
   "memory.qmd.limits.timeoutMs": "Per-query timeout for QMD searches (default: 4000).",
   "memory.qmd.scope":
     "Session/channel scope for QMD recall (same syntax as session.sendPolicy; default: direct-only). Use match.rawKeyPrefix to match full agent-prefixed session keys.",
+  "memory.remote.baseUrl":
+    "Base URL of the remote vector store API (e.g. http://localhost:8080). Required when backend is remote.",
+  "memory.remote.apiKey": "Optional API key for the remote vector store (sent as Bearer token).",
+  "memory.remote.headers": "Optional extra HTTP headers for remote vector store requests.",
+  "memory.remote.vectorStoreId":
+    "Existing vector store ID to use. If omitted, one is auto-created with vectorStoreName.",
+  "memory.remote.vectorStoreName":
+    "Name for auto-created vector store (default: openclaw-memory-{agentId}).",
+  "memory.remote.syncIntervalMs":
+    "How often to sync local memory files to the remote store in milliseconds (default: 300000).",
+  "memory.remote.searchMaxResults":
+    "Default max results returned from remote search (default: 10).",
+  "memory.remote.searchScoreThreshold":
+    "Minimum similarity score for remote search results, 0–1 (default: 0.3).",
   "agents.defaults.memorySearch.cache.maxEntries":
     "Optional cap on cached embeddings (best-effort).",
   "agents.defaults.memorySearch.sync.onSearch":
