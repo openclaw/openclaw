@@ -22,8 +22,16 @@ const normalizeChannelId = vi.fn((raw: string) => {
 });
 const getPairingAdapter = vi.fn((channel: string) => ({
   idLabel: pairingIdLabels[channel] ?? "userId",
+  generateQrCode:
+    channel === "deltachat"
+      ? vi.fn().mockResolvedValue({
+          ok: true,
+          qrCodeData: "https://test.example.com/qr",
+          qrCodeImage: "[QR code ASCII]",
+        })
+      : undefined,
 }));
-const listPairingChannels = vi.fn(() => ["telegram", "discord", "imessage"]);
+const listPairingChannels = vi.fn(() => ["telegram", "discord", "imessage", "deltachat"]);
 
 vi.mock("../pairing/pairing-store.js", () => ({
   listChannelPairingRequests,
@@ -220,19 +228,85 @@ describe("pairing cli", () => {
     });
   });
 
-  it("defaults approve to the sole available channel when only code is provided", async () => {
-    listPairingChannels.mockReturnValueOnce(["slack"]);
-    mockApprovedPairing();
-
-    await runPairing(["pairing", "approve", "ABCDEFGH"]);
-
-    expect(approveChannelPairingCode).toHaveBeenCalledWith({
-      channel: "slack",
-      code: "ABCDEFGH",
-    });
+  it("generates QR code for deltachat with default options", async () => {
+    const _log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await runPairing(["pairing", "generate"]);
+      const output = _log.mock.calls.map((call) => call.join(" ")).join("\n");
+      expect(output).toContain("[QR code ASCII]");
+      expect(output).toContain("https://test.example.com/qr");
+    } finally {
+      _log.mockRestore();
+    }
   });
 
-  it("keeps approve usage error when multiple channels exist and channel is omitted", async () => {
-    await expect(runPairing(["pairing", "approve", "ABCDEFGH"])).rejects.toThrow("Usage:");
+  it("generates QR code for deltachat with file output", async () => {
+    getPairingAdapter.mockClear();
+    await runPairing(["pairing", "generate", "--output", "/tmp/qr.txt"]);
+    expect(getPairingAdapter).toHaveBeenCalledWith("deltachat");
+  });
+
+  it("throws error when channel does not support QR generation", async () => {
+    getPairingAdapter.mockReturnValueOnce({ idLabel: "userId", generateQrCode: undefined }); // No generateQrCode method
+
+    await expect(runPairing(["pairing", "generate", "--channel", "telegram"])).rejects.toThrow(
+      "Channel telegram does not support QR code generation",
+    );
+  });
+
+  it("accepts --channel and --code options for approve", async () => {
+    approveChannelPairingCode.mockResolvedValueOnce({
+      id: "456",
+      entry: {
+        id: "456",
+        code: "5NQ7DX6G",
+        createdAt: "2026-01-08T00:00:00Z",
+        lastSeenAt: "2026-01-08T00:00:00Z",
+      },
+    });
+
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await runPairing(["pairing", "approve", "--channel", "deltachat", "--code", "5NQ7DX6G"]);
+
+      expect(approveChannelPairingCode).toHaveBeenCalledWith({
+        channel: "deltachat",
+        code: "5NQ7DX6G",
+      });
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("Approved"));
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it("accepts --channel with positional code for approve", async () => {
+    approveChannelPairingCode.mockResolvedValueOnce({
+      id: "789",
+      entry: {
+        id: "789",
+        code: "XYZ999",
+        createdAt: "2026-01-08T00:00:00Z",
+        lastSeenAt: "2026-01-08T00:00:00Z",
+      },
+    });
+
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await runPairing(["pairing", "approve", "--channel", "telegram", "XYZ999"]);
+
+      expect(approveChannelPairingCode).toHaveBeenCalledWith({
+        channel: "telegram",
+        code: "XYZ999",
+      });
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("Approved"));
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it("throws error when --code is used without --channel", async () => {
+    await expect(runPairing(["pairing", "approve", "--code", "5NQ7DX6G"])).rejects.toThrow(
+      "Channel required",
+    );
   });
 });

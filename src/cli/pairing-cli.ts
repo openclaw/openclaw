@@ -1,6 +1,10 @@
 import type { Command } from "commander";
 import { normalizeChannelId } from "../channels/plugins/index.js";
-import { listPairingChannels, notifyPairingApproved } from "../channels/plugins/pairing.js";
+import {
+  getPairingAdapter,
+  listPairingChannels,
+  notifyPairingApproved,
+} from "../channels/plugins/pairing.js";
 import { loadConfig } from "../config/config.js";
 import { resolvePairingIdLabel } from "../pairing/pairing-labels.js";
 import {
@@ -116,31 +120,37 @@ export function registerPairingCli(program: Command) {
     .description("Approve a pairing code and allow that sender")
     .option("--channel <channel>", `Channel (${channels.join(", ")})`)
     .option("--account <accountId>", "Account id (for multi-account channels)")
-    .argument("<codeOrChannel>", "Pairing code (or channel when using 2 args)")
+    .option("--code <code>", "Pairing code to approve")
+    .argument("[codeOrChannel]", "Pairing code (or channel when using positional args)")
     .argument("[code]", "Pairing code (when channel is passed as the 1st arg)")
     .option("--notify", "Notify the requester on the same channel", false)
     .action(async (codeOrChannel, code, opts) => {
-      const defaultChannel = channels.length === 1 ? channels[0] : "";
-      const usingExplicitChannel = Boolean(opts.channel);
-      const hasPositionalCode = code != null;
-      const channelRaw = usingExplicitChannel
-        ? opts.channel
-        : hasPositionalCode
-          ? codeOrChannel
-          : defaultChannel;
-      const resolvedCode = usingExplicitChannel
-        ? codeOrChannel
-        : hasPositionalCode
-          ? code
-          : codeOrChannel;
-      if (!channelRaw || !resolvedCode) {
+      // Determine channel and code from various input formats
+      let channelRaw: string;
+      let resolvedCode: string;
+
+      if (opts.channel && opts.code) {
+        // --channel and --code options
+        channelRaw = opts.channel;
+        resolvedCode = opts.code;
+      } else if (opts.channel && codeOrChannel) {
+        // --channel option with positional code
+        channelRaw = opts.channel;
+        resolvedCode = codeOrChannel;
+      } else if (!opts.channel && codeOrChannel && code) {
+        // Positional: <channel> <code>
+        channelRaw = codeOrChannel;
+        resolvedCode = code;
+      } else if (!opts.channel && opts.code) {
+        // Only --code option (channel will be determined from pairing message context)
+        // This is not supported - need channel
         throw new Error(
-          `Usage: ${formatCliCommand("openclaw pairing approve <channel> <code>")} (or: ${formatCliCommand("openclaw pairing approve --channel <channel> <code>")})`,
+          `Channel required. Use: ${formatCliCommand("openclaw pairing approve --channel <channel> --code <code>")}`,
         );
-      }
-      if (opts.channel && code != null) {
+      } else {
+        // Invalid combination
         throw new Error(
-          `Too many arguments. Use: ${formatCliCommand("openclaw pairing approve --channel <channel> <code>")}`,
+          `Usage: ${formatCliCommand("openclaw pairing approve --channel <channel> --code <code>")} (or: ${formatCliCommand("openclaw pairing approve <channel> <code>")})`,
         );
       }
       const channel = parseChannel(channelRaw, channels);
@@ -169,5 +179,54 @@ export function registerPairingCli(program: Command) {
       await notifyApproved(channel, approved.id).catch((err) => {
         defaultRuntime.log(theme.warn(`Failed to notify requester: ${String(err)}`));
       });
+    });
+
+  pairing
+    .command("generate")
+    .description("Generate a QR code for pairing a channel client")
+    .option("--channel <channel>", `Channel (${channels.join(", ")})`, "deltachat")
+    .option("--account <id>", "Account id (default when omitted)")
+    .option("--output <path>", "Output format: terminal (default) or file path")
+    .option("--format <format>", "QR code format: text (ASCII) or image")
+    .action(async (opts) => {
+      const channelRaw = opts.channel;
+      const channel = parseChannel(channelRaw, channels);
+      const adapter = getPairingAdapter(channel);
+
+      if (!adapter?.generateQrCode) {
+        throw new Error(`Channel ${channel} does not support QR code generation`);
+      }
+
+      const cfg = loadConfig();
+      defaultRuntime.log(`Generating pairing QR code for channel: ${channel}`);
+      const result = await adapter.generateQrCode({
+        cfg,
+        accountId: opts.account,
+        output: opts.output ?? "terminal",
+        format: opts.format ?? "text",
+      });
+
+      if (!result.ok) {
+        const errorMessage =
+          typeof result.error === "string"
+            ? result.error
+            : result.error
+              ? JSON.stringify(result.error)
+              : "Failed to generate QR code";
+        throw new Error(errorMessage);
+      }
+
+      if (result.qrCodeImage) {
+        defaultRuntime.log(result.qrCodeImage);
+      }
+
+      if (result.qrCodeData) {
+        defaultRuntime.log(`\n${theme.muted("QR Data:")}`);
+        defaultRuntime.log(result.qrCodeData);
+      }
+
+      if (result.filePath) {
+        defaultRuntime.log(`\n${theme.success("Saved to:")} ${result.filePath}`);
+      }
     });
 }

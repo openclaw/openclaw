@@ -679,3 +679,94 @@ describe("role-based agent routing", () => {
     });
   });
 });
+
+describe("deltachat session key derivation", () => {
+  test("DM defaults to main session (dmScope=main)", () => {
+    const cfg: OpenClawConfig = {};
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "deltachat",
+      accountId: "1",
+      peer: { kind: "direct", id: "alice@example.com" },
+    });
+    expect(route.sessionKey).toBe("agent:main:main");
+  });
+
+  test("dmScope=per-peer isolates DM sessions by email", () => {
+    const cfg: OpenClawConfig = { session: { dmScope: "per-peer" } };
+    const alice = resolveAgentRoute({
+      cfg,
+      channel: "deltachat",
+      accountId: "1",
+      peer: { kind: "direct", id: "alice@example.com" },
+    });
+    const bob = resolveAgentRoute({
+      cfg,
+      channel: "deltachat",
+      accountId: "1",
+      peer: { kind: "direct", id: "bob@example.com" },
+    });
+    expect(alice.sessionKey).toBe("agent:main:direct:alice@example.com");
+    expect(bob.sessionKey).toBe("agent:main:direct:bob@example.com");
+    expect(alice.sessionKey).not.toBe(bob.sessionKey);
+  });
+
+  test("dmScope=per-channel-peer scopes by channel+email", () => {
+    const cfg: OpenClawConfig = { session: { dmScope: "per-channel-peer" } };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "deltachat",
+      accountId: "1",
+      peer: { kind: "direct", id: "alice@example.com" },
+    });
+    expect(route.sessionKey).toBe("agent:main:deltachat:direct:alice@example.com");
+  });
+
+  test("dmScope=per-account-channel-peer scopes by account+channel+email", () => {
+    const cfg: OpenClawConfig = { session: { dmScope: "per-account-channel-peer" } };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "deltachat",
+      accountId: "42",
+      peer: { kind: "direct", id: "alice@example.com" },
+    });
+    expect(route.sessionKey).toBe("agent:main:deltachat:42:direct:alice@example.com");
+  });
+
+  test("group messages are isolated by chatId regardless of dmScope", () => {
+    const cfg: OpenClawConfig = {};
+    const group1 = resolveAgentRoute({
+      cfg,
+      channel: "deltachat",
+      accountId: "1",
+      peer: { kind: "group", id: "101" },
+    });
+    const group2 = resolveAgentRoute({
+      cfg,
+      channel: "deltachat",
+      accountId: "1",
+      peer: { kind: "group", id: "202" },
+    });
+    expect(group1.sessionKey).toBe("agent:main:deltachat:group:101");
+    expect(group2.sessionKey).toBe("agent:main:deltachat:group:202");
+    expect(group1.sessionKey).not.toBe(group2.sessionKey);
+  });
+
+  test("different DM senders share session under dmScope=main (default)", () => {
+    const cfg: OpenClawConfig = {};
+    const alice = resolveAgentRoute({
+      cfg,
+      channel: "deltachat",
+      accountId: "1",
+      peer: { kind: "direct", id: "alice@example.com" },
+    });
+    const bob = resolveAgentRoute({
+      cfg,
+      channel: "deltachat",
+      accountId: "1",
+      peer: { kind: "direct", id: "bob@example.com" },
+    });
+    expect(alice.sessionKey).toBe("agent:main:main");
+    expect(bob.sessionKey).toBe("agent:main:main");
+  });
+});

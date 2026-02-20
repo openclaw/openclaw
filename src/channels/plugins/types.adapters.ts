@@ -197,6 +197,19 @@ export type ChannelPairingAdapter = {
     id: string;
     runtime?: RuntimeEnv;
   }) => Promise<void>;
+  generateQrCode?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string;
+    output?: "terminal" | (string & {});
+    format?: "text" | "image";
+    runtime?: RuntimeEnv;
+  }) => Promise<{
+    ok: boolean;
+    qrCodeData?: string;
+    qrCodeImage?: string;
+    filePath?: string;
+    error?: string;
+  }>;
 };
 
 export type ChannelGatewayAdapter<ResolvedAccount = unknown> = {
