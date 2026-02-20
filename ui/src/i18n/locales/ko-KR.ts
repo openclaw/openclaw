@@ -38,7 +38,7 @@ export const ko_KR: TranslationMap = {
   },
   subtitles: {
     agents: "에이전트 워크스페이스, 도구, 식별자를 관리합니다.",
-    overview: "게이트웨이 상태, 진입점, 빠른 상태 확인.",
+    overview: "Gateway 상태, 진입점, 빠른 상태 확인.",
     channels: "채널 및 설정을 관리합니다.",
     instances: "연결된 클라이언트 및 노드의 현재 상태를 표시합니다.",
     sessions: "활성 세션을 확인하고 세션별 기본값을 조정합니다.",
