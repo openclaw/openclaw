@@ -44,12 +44,22 @@
 	</array>
 	<key>NSCameraUsageDescription</key>
 	<string>OpenClaw can capture photos or short video clips when requested via the gateway.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>OpenClaw can read your photo library when you ask it to share recent photos.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>OpenClaw can read and create contacts when requested via the gateway.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>OpenClaw discovers and connects to your OpenClaw gateway on the local network.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
 	<string>OpenClaw can share your location in the background when you enable Always.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>OpenClaw uses your location when you allow location sharing.</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>OpenClaw can read and add calendar events when requested via the gateway.</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>OpenClaw can read and add reminders when requested via the gateway.</string>
+	<key>NSMotionUsageDescription</key>
+	<string>OpenClaw uses Motion &amp; Fitness data for activity and pedometer commands.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>OpenClaw needs microphone access for voice wake.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
