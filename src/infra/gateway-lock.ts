@@ -139,7 +139,7 @@ function resolveGatewayOwnerStatus(
   return isGatewayArgv(args) ? "alive" : "dead";
 }
 
-async function readLockPayload(lockPath: string): Promise<LockPayload | null> {
+export async function readLockPayload(lockPath: string): Promise<LockPayload | null> {
   try {
     const raw = await fs.readFile(lockPath, "utf8");
     const parsed = JSON.parse(raw) as Partial<LockPayload>;
@@ -164,13 +164,61 @@ async function readLockPayload(lockPath: string): Promise<LockPayload | null> {
   }
 }
 
-function resolveGatewayLockPath(env: NodeJS.ProcessEnv) {
+export function resolveGatewayLockPath(env: NodeJS.ProcessEnv) {
   const stateDir = resolveStateDir(env);
   const configPath = resolveConfigPath(env, stateDir);
   const hash = createHash("sha1").update(configPath).digest("hex").slice(0, 8);
   const lockDir = resolveGatewayLockDir();
   const lockPath = path.join(lockDir, `gateway.${hash}.lock`);
   return { lockPath, configPath };
+}
+
+/**
+ * Attempt to stop a running gateway by reading its PID from the lock file
+ * and sending SIGTERM.
+ */
+export async function stopGatewayViaLock(opts: {
+  env: NodeJS.ProcessEnv;
+  stdout: NodeJS.WritableStream;
+  timeoutMs?: number;
+}): Promise<boolean> {
+  const { lockPath } = resolveGatewayLockPath(opts.env);
+  const payload = await readLockPayload(lockPath);
+  if (!payload || !payload.pid) {
+    return false;
+  }
+
+  const pid = payload.pid;
+  if (!isAlive(pid)) {
+    return false;
+  }
+
+  opts.stdout.write(`Stopping gateway (pid ${pid})...\n`);
+  try {
+    process.kill(pid, "SIGTERM");
+  } catch (err) {
+    opts.stdout.write(`Failed to send SIGTERM to pid ${pid}: ${String(err)}\n`);
+    return false;
+  }
+
+  // Wait for it to die
+  const timeoutMs = opts.timeoutMs ?? 5000;
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    if (!isAlive(pid)) {
+      opts.stdout.write(`Gateway (pid ${pid}) stopped.\n`);
+      return true;
+    }
+    await new Promise((r) => setTimeout(r, 200));
+  }
+
+  opts.stdout.write(`Gateway (pid ${pid}) did not stop after ${timeoutMs}ms. Sending SIGKILL...\n`);
+  try {
+    process.kill(pid, "SIGKILL");
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export async function acquireGatewayLock(
