@@ -207,6 +207,23 @@ When the linked self number is also present in `allowFrom`, WhatsApp self-chat s
 - ignore mention-JID auto-trigger behavior that would otherwise ping yourself
 - if `messages.responsePrefix` is unset, self-chat replies default to `[{identity.name}]` or `[openclaw]`
 
+If you want group replies only when the bot is explicitly @mentioned, set:
+
+```json5
+{
+  channels: {
+    whatsapp: {
+      selfChatMode: false,
+      groups: {
+        "*": { requireMention: true },
+      },
+    },
+  },
+}
+```
+
+`selfChatMode: true` is intended for personal-number self-chat safety and can suppress mention-JID triggers in groups.
+
 ## Message normalization and context
 
 <AccordionGroup>

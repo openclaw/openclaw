@@ -6,6 +6,7 @@ import type { WebInboundMsg } from "./types.js";
 export type MentionConfig = {
   mentionRegexes: RegExp[];
   allowFrom?: Array<string | number>;
+  selfChatMode?: boolean;
 };
 
 export type MentionTargets = {
@@ -19,7 +20,11 @@ export function buildMentionConfig(
   agentId?: string,
 ): MentionConfig {
   const mentionRegexes = buildMentionRegexes(cfg, agentId);
-  return { mentionRegexes, allowFrom: cfg.channels?.whatsapp?.allowFrom };
+  return {
+    mentionRegexes,
+    allowFrom: cfg.channels?.whatsapp?.allowFrom,
+    selfChatMode: cfg.channels?.whatsapp?.selfChatMode,
+  };
 }
 
 export function resolveMentionTargets(msg: WebInboundMsg, authDir?: string): MentionTargets {
@@ -41,7 +46,8 @@ export function isBotMentionedFromTargets(
     // Remove zero-width and directionality markers WhatsApp injects around display names
     normalizeMentionText(text);
 
-  const isSelfChat = isSelfChatMode(targets.selfE164, mentionCfg.allowFrom);
+  const inferredSelfChat = isSelfChatMode(targets.selfE164, mentionCfg.allowFrom);
+  const isSelfChat = mentionCfg.selfChatMode === false ? false : inferredSelfChat;
 
   const hasMentions = (msg.mentionedJids?.length ?? 0) > 0;
   if (hasMentions && !isSelfChat) {
