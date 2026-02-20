@@ -14,7 +14,11 @@ import {
 } from "../infra/shell-env.js";
 import { VERSION } from "../version.js";
 import { DuplicateAgentDirError, findDuplicateAgentDirs } from "./agent-dirs.js";
-import { rotateConfigBackups } from "./backup-rotation.js";
+import {
+  resolveConfigBackupDir,
+  resolveConfigBackupPath,
+  rotateConfigBackups,
+} from "./backup-rotation.js";
 import {
   applyCompactionDefaults,
   applyContextPruningDefaults,
@@ -926,7 +930,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       const changeSummary =
         typeof changedPathCount === "number" ? `, changedPaths=${changedPathCount}` : "";
       deps.logger.warn(
-        `Config overwrite: ${configPath} (sha256 ${previousHash ?? "unknown"} -> ${nextHash}, backup=${configPath}.bak${changeSummary})`,
+        `Config overwrite: ${configPath} (sha256 ${previousHash ?? "unknown"} -> ${nextHash}, backup=${resolveConfigBackupDir(configPath)}/${changeSummary})`,
       );
     };
     const logConfigWriteAnomalies = () => {
@@ -1005,8 +1009,13 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       });
 
       if (deps.fs.existsSync(configPath)) {
+        const backupDir = resolveConfigBackupDir(configPath);
+        await deps.fs.promises.mkdir(backupDir, { recursive: true, mode: 0o700 }).catch(() => {
+          // best-effort
+        });
         await rotateConfigBackups(configPath, deps.fs.promises);
-        await deps.fs.promises.copyFile(configPath, `${configPath}.bak`).catch(() => {
+        const backupPath = resolveConfigBackupPath(configPath);
+        await deps.fs.promises.copyFile(configPath, backupPath).catch(() => {
           // best-effort
         });
       }
