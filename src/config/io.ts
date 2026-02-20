@@ -612,9 +612,17 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     const candidates = names
       .filter((name) => name === prefix || name.startsWith(`${prefix}.`))
       .map((name) => path.join(dir, name));
+    const safeMtimeMs = (candidate: string): number => {
+      try {
+        return deps.fs.statSync(candidate).mtimeMs;
+      } catch {
+        // Backup files can disappear between directory scan and stat.
+        return Number.NEGATIVE_INFINITY;
+      }
+    };
     candidates.sort((a, b) => {
-      const aTime = deps.fs.statSync(a).mtimeMs;
-      const bTime = deps.fs.statSync(b).mtimeMs;
+      const aTime = safeMtimeMs(a);
+      const bTime = safeMtimeMs(b);
       return bTime - aTime;
     });
     return candidates;
@@ -633,6 +641,11 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         if (code === "INVALID_CONFIG") {
           continue;
         }
+        if (err instanceof DuplicateAgentDirError) {
+          throw err;
+        }
+        const message = err instanceof Error ? err.message : String(err);
+        deps.logger.warn(`Failed to load backup config candidate ${candidate}: ${message}`);
       }
     }
     if (primaryErrorDetails) {
