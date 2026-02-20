@@ -24,6 +24,8 @@ export type SlackCatchupState = {
 const CATCHUP_WINDOW_SEC = 30 * 60; // 30 minutes max lookback
 const CATCHUP_PER_CHANNEL_LIMIT = 20; // max messages per channel
 const CATCHUP_INTER_CHANNEL_DELAY_MS = 200; // pause between channels
+const CATCHUP_INTER_THREAD_DELAY_MS = 150; // pause between thread reply fetches
+const CATCHUP_THREAD_REPLY_LIMIT = 10; // max replies per thread
 const WATERMARK_FLUSH_INTERVAL_MS = 30_000; // 30 seconds
 
 // ---------------------------------------------------------------------------
@@ -313,6 +315,7 @@ export async function performStartupCatchUp(
         channel?: string;
         channel_type?: string;
         files?: unknown[];
+        reply_count?: number;
       }>;
 
       if (messages.length === 0) {
@@ -396,6 +399,113 @@ export async function performStartupCatchUp(
         } catch (err) {
           runtime.error?.(
             `slack catch-up [${accountId}]: failed to process message ${msg.ts} in ${channelId}: ${String(err)}`,
+          );
+        }
+      }
+
+      // -----------------------------------------------------------------
+      // Thread reply catch-up: scan threads with new replies
+      // -----------------------------------------------------------------
+      const threadParents = messages.filter(
+        (m) => m.ts && (m.reply_count ?? 0) > 0,
+      );
+
+      for (const parent of threadParents) {
+        if (abortSignal?.aborted) {
+          break;
+        }
+
+        try {
+          // Small delay between thread fetches to respect rate limits
+          await sleep(CATCHUP_INTER_THREAD_DELAY_MS);
+
+          const repliesResult = await ctx.app.client.conversations.replies({
+            token: ctx.botToken,
+            channel: channelId,
+            ts: parent.ts!,
+            oldest,
+            limit: CATCHUP_THREAD_REPLY_LIMIT,
+            inclusive: false,
+          });
+
+          const replies = (repliesResult.messages ?? []) as Array<{
+            type?: string;
+            user?: string;
+            bot_id?: string;
+            subtype?: string;
+            text?: string;
+            ts?: string;
+            thread_ts?: string;
+            event_ts?: string;
+            files?: unknown[];
+          }>;
+
+          // Sort oldest first and skip the thread parent (first message returned)
+          const sortedReplies = [...replies]
+            .filter((r) => r.ts !== parent.ts)
+            .sort((a, b) => {
+              const tsA = a.ts ?? "0";
+              const tsB = b.ts ?? "0";
+              return tsA < tsB ? -1 : tsA > tsB ? 1 : 0;
+            });
+
+          for (const reply of sortedReplies) {
+            // Skip bot's own messages
+            if (reply.user === ctx.botUserId) {
+              continue;
+            }
+
+            // Skip subtypes except file_share
+            if (reply.subtype && reply.subtype !== "file_share") {
+              continue;
+            }
+
+            // For requireMention channels, only catch up replies that mention the bot
+            if (requireMention && ctx.botUserId) {
+              const text = reply.text ?? "";
+              if (!text.includes(`<@${ctx.botUserId}>`)) {
+                continue;
+              }
+            }
+
+            const replyEvent: SlackMessageEvent = {
+              type: "message",
+              user: reply.user,
+              bot_id: reply.bot_id,
+              subtype: reply.subtype,
+              text: reply.text,
+              ts: reply.ts,
+              thread_ts: reply.thread_ts ?? parent.ts,
+              event_ts: reply.event_ts ?? reply.ts,
+              channel: channelId,
+              channel_type: channelType,
+              files: reply.files as SlackMessageEvent["files"],
+            };
+
+            const wasMentioned = ctx.botUserId
+              ? Boolean(replyEvent.text?.includes(`<@${ctx.botUserId}>`))
+              : false;
+
+            try {
+              await handleSlackMessage(replyEvent, {
+                source: "message",
+                wasMentioned,
+              });
+              channelCount++;
+              totalMessages++;
+
+              if (reply.ts) {
+                updateCatchupWatermark(channelId, reply.ts, accountId);
+              }
+            } catch (err) {
+              runtime.error?.(
+                `slack catch-up [${accountId}]: failed to process thread reply ${reply.ts} in ${channelId}/${parent.ts}: ${String(err)}`,
+              );
+            }
+          }
+        } catch (err) {
+          runtime.error?.(
+            `slack catch-up [${accountId}]: failed to fetch thread replies for ${channelId}/${parent.ts}: ${String(err)}`,
           );
         }
       }
