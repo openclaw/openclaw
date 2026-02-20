@@ -25,9 +25,9 @@ export async function syncMemoryFiles(params: {
   model: string;
 }) {
   const files = await listMemoryFiles(params.workspaceDir, params.extraPaths);
-  const fileEntries = await Promise.all(
-    files.map(async (file) => buildFileEntry(file, params.workspaceDir)),
-  );
+  const fileEntries = (
+    await Promise.all(files.map(async (file) => buildFileEntry(file, params.workspaceDir)))
+  ).filter((entry): entry is MemoryFileEntry => entry !== null);
 
   log.debug("memory sync: indexing memory files", {
     files: fileEntries.length,

@@ -74,6 +74,8 @@ export type TelegramAccountConfig = {
   groups?: Record<string, TelegramGroupConfig>;
   /** DM allowlist (numeric Telegram user IDs). Onboarding can resolve @username to IDs. */
   allowFrom?: Array<string | number>;
+  /** Default delivery target for CLI `--deliver` when no explicit `--reply-to` is provided. */
+  defaultTo?: string | number;
   /** Optional allowlist for Telegram group senders (numeric Telegram user IDs). */
   groupAllowFrom?: Array<string | number>;
   /**

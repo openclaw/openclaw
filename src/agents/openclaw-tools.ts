@@ -61,6 +61,8 @@ export function createOpenClawTools(options?: {
   requireExplicitMessageTarget?: boolean;
   /** If true, omit the message tool from the tool list. */
   disableMessageTool?: boolean;
+  /** Trusted sender id from inbound context (not tool args). */
+  requesterSenderId?: string | null;
   /** Whether the requesting sender is an owner. */
   senderIsOwner?: boolean;
 }): AnyAgentTool[] {
@@ -98,6 +100,7 @@ export function createOpenClawTools(options?: {
         hasRepliedRef: options?.hasRepliedRef,
         sandboxRoot: options?.sandboxRoot,
         requireExplicitTarget: options?.requireExplicitMessageTarget,
+        requesterSenderId: options?.requesterSenderId ?? undefined,
       });
   const tools: AnyAgentTool[] = [
     createBrowserTool({
@@ -111,7 +114,6 @@ export function createOpenClawTools(options?: {
     }),
     createCronTool({
       agentSessionKey: options?.agentSessionKey,
-      senderIsOwner: options?.senderIsOwner,
     }),
     ...(messageTool ? [messageTool] : []),
     createTtsTool({
@@ -121,7 +123,6 @@ export function createOpenClawTools(options?: {
     createGatewayTool({
       agentSessionKey: options?.agentSessionKey,
       config: options?.config,
-      senderIsOwner: options?.senderIsOwner,
     }),
     createAgentsListTool({
       agentSessionKey: options?.agentSessionKey,

@@ -166,6 +166,11 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.memorySearch.query.hybrid.textWeight": "Memory Search Text Weight",
   "agents.defaults.memorySearch.query.hybrid.candidateMultiplier":
     "Memory Search Hybrid Candidate Multiplier",
+  "agents.defaults.memorySearch.query.hybrid.mmr.enabled": "Memory Search MMR Re-ranking",
+  "agents.defaults.memorySearch.query.hybrid.mmr.lambda": "Memory Search MMR Lambda",
+  "agents.defaults.memorySearch.query.hybrid.temporalDecay.enabled": "Memory Search Temporal Decay",
+  "agents.defaults.memorySearch.query.hybrid.temporalDecay.halfLifeDays":
+    "Memory Search Temporal Decay Half-life (Days)",
   "agents.defaults.memorySearch.cache.enabled": "Memory Search Embedding Cache",
   "agents.defaults.memorySearch.cache.maxEntries": "Memory Search Embedding Cache Max Entries",
   memory: "Memory",
@@ -310,7 +315,6 @@ export const FIELD_LABELS: Record<string, string> = {
   "plugins.allow": "Plugin Allowlist",
   "plugins.deny": "Plugin Denylist",
   "plugins.load.paths": "Plugin Load Paths",
-  "plugins.runtime.allowLegacyExec": "Allow Legacy Plugin Runtime Exec",
   "plugins.slots": "Plugin Slots",
   "plugins.slots.memory": "Memory Plugin",
   "plugins.entries": "Plugin Entries",
@@ -322,5 +326,11 @@ export const FIELD_LABELS: Record<string, string> = {
   "plugins.installs.*.sourcePath": "Plugin Install Source Path",
   "plugins.installs.*.installPath": "Plugin Install Path",
   "plugins.installs.*.version": "Plugin Install Version",
+  "plugins.installs.*.resolvedName": "Plugin Resolved Package Name",
+  "plugins.installs.*.resolvedVersion": "Plugin Resolved Package Version",
+  "plugins.installs.*.resolvedSpec": "Plugin Resolved Package Spec",
+  "plugins.installs.*.integrity": "Plugin Resolved Integrity",
+  "plugins.installs.*.shasum": "Plugin Resolved Shasum",
+  "plugins.installs.*.resolvedAt": "Plugin Resolution Time",
   "plugins.installs.*.installedAt": "Plugin Install Time",
 };

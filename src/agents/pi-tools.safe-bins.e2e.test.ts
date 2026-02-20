@@ -222,6 +222,26 @@ describe("createOpenClawCodingTools safeBins", () => {
     }
   });
 
+  it("blocks shell redirection metacharacters in safeBins mode", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const { tmpDir, execTool } = await createSafeBinsExecTool({
+      tmpPrefix: "openclaw-safe-bins-redirect-",
+      safeBins: ["head"],
+      files: [{ name: "source.txt", contents: "line1\nline2\n" }],
+    });
+
+    await expect(
+      execTool.execute("call1", {
+        command: "head -n 1 source.txt > blocked-redirect.txt",
+        workdir: tmpDir,
+      }),
+    ).rejects.toThrow("exec denied: allowlist miss");
+    expect(fs.existsSync(path.join(tmpDir, "blocked-redirect.txt"))).toBe(false);
+  });
+
   it("blocks grep recursive flags from reading cwd via safeBins", async () => {
     if (process.platform === "win32") {
       return;

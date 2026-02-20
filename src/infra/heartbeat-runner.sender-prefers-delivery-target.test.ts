@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
+import { seedSessionStore } from "./heartbeat-runner.test-utils.js";
 
 // Avoid pulling optional runtime deps during isolated runs.
 vi.mock("jiti", () => ({ createJiti: () => () => ({}) }));
@@ -35,22 +36,11 @@ describe("runHeartbeatOnce", () => {
       };
       const sessionKey = resolveMainSessionKey(cfg);
 
-      await fs.writeFile(
-        storePath,
-        JSON.stringify(
-          {
-            [sessionKey]: {
-              sessionId: "sid",
-              updatedAt: Date.now(),
-              lastChannel: "telegram",
-              lastProvider: "telegram",
-              lastTo: "1644620762",
-            },
-          },
-          null,
-          2,
-        ),
-      );
+      await seedSessionStore(storePath, sessionKey, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: "1644620762",
+      });
 
       replySpy.mockImplementation(async (ctx) => {
         expect(ctx.To).toBe("C0A9P2N8QHY");

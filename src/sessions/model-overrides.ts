@@ -64,7 +64,11 @@ export function applyModelOverrideToSessionEntry(params: {
     }
   }
 
+  // Clear stale fallback notice when the user explicitly switches models.
   if (updated) {
+    delete entry.fallbackNoticeSelectedModel;
+    delete entry.fallbackNoticeActiveModel;
+    delete entry.fallbackNoticeReason;
     entry.updatedAt = Date.now();
   }
 
