@@ -77,10 +77,15 @@ async function runNewWithPreviousSessionEntry(params: {
 
   await handler(event);
 
-  const memoryDir = path.join(params.tempDir, "memory");
-  const files = await fs.readdir(memoryDir);
-  const memoryContent =
-    files.length > 0 ? await fs.readFile(path.join(memoryDir, files[0]), "utf-8") : "";
+  const contextPath = path.join(params.tempDir, "SESSION_CONTEXT.md");
+  let memoryContent = "";
+  let files: string[] = [];
+  try {
+    memoryContent = await fs.readFile(contextPath, "utf-8");
+    files = ["SESSION_CONTEXT.md"];
+  } catch {
+    // File doesn't exist
+  }
   return { files, memoryContent };
 }
 
@@ -190,9 +195,9 @@ describe("session-memory hook", () => {
 
     await handler(event);
 
-    // Memory directory should not be created for non-command events
-    const memoryDir = path.join(tempDir, "memory");
-    await expect(fs.access(memoryDir)).rejects.toThrow();
+    // SESSION_CONTEXT.md should not be created for non-command events
+    const contextPath = path.join(tempDir, "SESSION_CONTEXT.md");
+    await expect(fs.access(contextPath)).rejects.toThrow();
   });
 
   it("skips commands other than new", async () => {
@@ -204,9 +209,9 @@ describe("session-memory hook", () => {
 
     await handler(event);
 
-    // Memory directory should not be created for other commands
-    const memoryDir = path.join(tempDir, "memory");
-    await expect(fs.access(memoryDir)).rejects.toThrow();
+    // SESSION_CONTEXT.md should not be created for other commands
+    const contextPath = path.join(tempDir, "SESSION_CONTEXT.md");
+    await expect(fs.access(contextPath)).rejects.toThrow();
   });
 
   it("creates memory file with session content on /new command", async () => {
@@ -695,9 +700,9 @@ describe("session-memory hook", () => {
 
       await handler(event);
 
-      // Memory directory should not be created
-      const memoryDir = path.join(tempDir, "memory");
-      await expect(fs.access(memoryDir)).rejects.toThrow();
+      // SESSION_CONTEXT.md should not be created when using LanceDB target
+      const contextPath = path.join(tempDir, "SESSION_CONTEXT.md");
+      await expect(fs.access(contextPath)).rejects.toThrow();
     });
 
     it("handles Gateway API errors gracefully", async () => {
@@ -778,10 +783,10 @@ describe("session-memory hook", () => {
 
       await handler(event);
 
-      // Should fall back to file target
-      const memoryDir = path.join(tempDir, "memory");
-      const files = await fs.readdir(memoryDir);
-      expect(files.length).toBe(1);
+      // Should fall back to file target (SESSION_CONTEXT.md)
+      const contextPath = path.join(tempDir, "SESSION_CONTEXT.md");
+      const contextContent = await fs.readFile(contextPath, "utf-8");
+      expect(contextContent.length).toBeGreaterThan(0);
 
       // Gateway API (LanceDB) should not have been called (slug generation may still use fetch)
       const gatewayCalls = fetchCalls.filter((c) => c.url.includes("/tools/invoke"));

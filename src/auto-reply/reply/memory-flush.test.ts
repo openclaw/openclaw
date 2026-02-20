@@ -24,6 +24,18 @@ describe("resolveMemoryFlushPromptForRun", () => {
     expect(prompt).toContain("(America/New_York)");
   });
 
+  it("works with prompts that have no YYYY-MM-DD placeholder", () => {
+    const prompt = resolveMemoryFlushPromptForRun({
+      prompt: "Write a fresh SESSION_CONTEXT.md in the workspace root.",
+      cfg,
+      nowMs: Date.UTC(2026, 1, 16, 15, 0, 0),
+    });
+
+    expect(prompt).toContain("SESSION_CONTEXT.md");
+    expect(prompt).toContain("Current time:");
+    expect(prompt).not.toContain("YYYY-MM-DD");
+  });
+
   it("does not append a duplicate current time line", () => {
     const prompt = resolveMemoryFlushPromptForRun({
       prompt: "Store notes.\nCurrent time: already present",

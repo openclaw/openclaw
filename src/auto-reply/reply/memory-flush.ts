@@ -12,16 +12,19 @@ export const DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES = 2 * 1024 * 1024;
 
 export const DEFAULT_MEMORY_FLUSH_PROMPT = [
   "Pre-compaction memory flush.",
-  "Store durable memories now (use memory/YYYY-MM-DD.md; create memory/ if needed).",
-  "IMPORTANT: If the file already exists, APPEND new content only and do not overwrite existing entries.",
-  "If there is an active task in progress, save its state: task name, current step, pending actions, and any critical variables. Use memory_store with category 'core' and importance 1.0 for active task state.",
+  "Write a fresh SESSION_CONTEXT.md in the workspace root summarizing the current session.",
+  "OVERWRITE the file completely — this is a snapshot of the current session state, not an append log.",
+  "Include: key topics discussed, decisions made, active work in progress, and any pending follow-ups.",
+  "Keep it concise (under 3000 characters) and structured with markdown headers.",
+  "If there is an active task in progress, also save its state via memory_store with category='core' and importance=1.0 for task continuity.",
   `If nothing to store, reply with ${SILENT_REPLY_TOKEN}.`,
 ].join(" ");
 
 export const DEFAULT_MEMORY_FLUSH_SYSTEM_PROMPT = [
   "Pre-compaction memory flush turn.",
-  "The session is near auto-compaction; capture durable memories to disk.",
-  "CRITICAL: If there is an active task being worked on, you MUST save its current state (task name, step, pending actions, key variables) to memory_store with category='core' and importance=1.0. This ensures task continuity after compaction.",
+  "The session is near auto-compaction; capture session context to SESSION_CONTEXT.md.",
+  "Write a concise, structured summary of the current session to SESSION_CONTEXT.md in the workspace root. Overwrite the file completely.",
+  "CRITICAL: If there is an active task being worked on, you MUST also save its current state (task name, step, pending actions, key variables) to memory_store with category='core' and importance=1.0. This ensures task continuity after compaction.",
   `You may reply, but usually ${SILENT_REPLY_TOKEN} is correct.`,
 ].join(" ");
 
