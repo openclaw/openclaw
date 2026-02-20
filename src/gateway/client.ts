@@ -41,6 +41,8 @@ type Pending = {
 
 export type GatewayClientOptions = {
   url?: string; // ws://127.0.0.1:18789
+  /** When true, allow plaintext ws:// to private network addresses (e.g. Docker bridge). */
+  allowPrivateNetwork?: boolean;
   connectDelayMs?: number;
   tickWatchMinIntervalMs?: number;
   token?: string;
@@ -114,7 +116,7 @@ export class GatewayClient {
     // Security check: block ALL plaintext ws:// to non-loopback addresses (CWE-319, CVSS 9.8)
     // This protects both credentials AND chat/conversation data from MITM attacks.
     // Device tokens may be loaded later in sendConnect(), so we block regardless of hasCredentials.
-    if (!isSecureWebSocketUrl(url)) {
+    if (!isSecureWebSocketUrl(url, { allowPrivateNetwork: this.opts.allowPrivateNetwork })) {
       // Safe hostname extraction - avoid throwing on malformed URLs in error path
       let displayHost = url;
       try {

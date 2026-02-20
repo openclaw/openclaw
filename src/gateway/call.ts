@@ -66,6 +66,8 @@ export type GatewayConnectionDetails = {
   urlSource: string;
   bindDetail?: string;
   remoteFallbackNote?: string;
+  /** True when ws:// to private network addresses is safe (locally resolved bind=lan). */
+  allowPrivateNetwork?: boolean;
   message: string;
 };
 
@@ -152,10 +154,11 @@ export function buildGatewayConnectionDetails(
     : undefined;
   const bindDetail = !urlOverride && !remoteUrl ? `Bind: ${bindMode}` : undefined;
 
-  // Security check: block ALL insecure ws:// to non-loopback addresses (CWE-319, CVSS 9.8)
-  // This applies to the FINAL resolved URL, regardless of source (config, CLI override, etc).
-  // Both credentials and chat/conversation data must not be transmitted over plaintext to remote hosts.
-  if (!isSecureWebSocketUrl(url)) {
+  // Security check: block insecure ws:// to non-loopback addresses (CWE-319).
+  // When the URL was locally resolved from bind=lan, private network addresses are
+  // acceptable — the traffic stays on the host (Docker bridge, LAN interface).
+  const isLocallyResolved = !urlOverride && !remoteUrl;
+  if (!isSecureWebSocketUrl(url, { allowPrivateNetwork: isLocallyResolved && preferLan })) {
     throw new Error(
       [
         `SECURITY ERROR: Gateway URL "${url}" uses plaintext ws:// to a non-loopback address.`,
@@ -182,6 +185,7 @@ export function buildGatewayConnectionDetails(
     urlSource,
     bindDetail,
     remoteFallbackNote,
+    allowPrivateNetwork: isLocallyResolved && preferLan,
     message,
   };
 }
@@ -351,6 +355,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
 
     const client = new GatewayClient({
       url,
+      allowPrivateNetwork: params.connectionDetails.allowPrivateNetwork,
       token,
       password,
       tlsFingerprint,
