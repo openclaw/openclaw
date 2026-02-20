@@ -137,6 +137,28 @@ describe("tool display details", () => {
     expect(detail).toBe("check git status (in /tmp)");
   });
 
+  it("strips cd preamble with || separator", () => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "exec",
+        args: { command: "cd /app || npm install" },
+      }),
+    );
+
+    expect(detail).toBe("install dependencies (in /app)");
+  });
+
+  it("explicit workdir takes priority over cd path", () => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "exec",
+        args: { command: "cd /tmp && npm install", workdir: "/app" },
+      }),
+    );
+
+    expect(detail).toBe("install dependencies (in /app)");
+  });
+
   it("summarizes all stages joined by && or ;", () => {
     const detail = formatToolDetail(
       resolveToolDisplay({
