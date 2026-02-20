@@ -39,12 +39,20 @@ const MINIMAX_DEFAULT_VISION_MODEL_ID = "MiniMax-VL-01";
 const MINIMAX_DEFAULT_CONTEXT_WINDOW = 200000;
 const MINIMAX_DEFAULT_MAX_TOKENS = 8192;
 const MINIMAX_OAUTH_PLACEHOLDER = "minimax-oauth";
-// Pricing: MiniMax doesn't publish public rates. Override in models.json for accurate costs.
+// Pricing: https://platform.minimaxi.com/document/Price
+// Standard M2.5 pricing (per 1M tokens)
 const MINIMAX_API_COST = {
-  input: 15,
-  output: 60,
-  cacheRead: 2,
-  cacheWrite: 10,
+  input: 0.3,
+  output: 1.2,
+  cacheRead: 0.03,
+  cacheWrite: 0.375,
+};
+// M2.5-Lightning has higher output cost
+const MINIMAX_LIGHTNING_API_COST = {
+  input: 0.3,
+  output: 2.4,
+  cacheRead: 0.03,
+  cacheWrite: 0.375,
 };
 
 type ProviderModelConfig = NonNullable<ProviderConfig["models"]>[number];
@@ -54,13 +62,14 @@ function buildMinimaxModel(params: {
   name: string;
   reasoning: boolean;
   input: ProviderModelConfig["input"];
+  cost?: typeof MINIMAX_API_COST;
 }): ProviderModelConfig {
   return {
     id: params.id,
     name: params.name,
     reasoning: params.reasoning,
     input: params.input,
-    cost: MINIMAX_API_COST,
+    cost: params.cost ?? MINIMAX_API_COST,
     contextWindow: MINIMAX_DEFAULT_CONTEXT_WINDOW,
     maxTokens: MINIMAX_DEFAULT_MAX_TOKENS,
   };
@@ -70,6 +79,7 @@ function buildMinimaxTextModel(params: {
   id: string;
   name: string;
   reasoning: boolean;
+  cost?: typeof MINIMAX_API_COST;
 }): ProviderModelConfig {
   return buildMinimaxModel({ ...params, input: ["text"] });
 }
@@ -425,6 +435,7 @@ function buildMinimaxProvider(): ProviderConfig {
         id: "MiniMax-M2.1-lightning",
         name: "MiniMax M2.1 Lightning",
         reasoning: false,
+        cost: MINIMAX_LIGHTNING_API_COST,
       }),
       buildMinimaxModel({
         id: MINIMAX_DEFAULT_VISION_MODEL_ID,
@@ -441,6 +452,7 @@ function buildMinimaxProvider(): ProviderConfig {
         id: "MiniMax-M2.5-Lightning",
         name: "MiniMax M2.5 Lightning",
         reasoning: true,
+        cost: MINIMAX_LIGHTNING_API_COST,
       }),
     ],
   };
