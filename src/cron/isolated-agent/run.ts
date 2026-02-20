@@ -640,7 +640,9 @@ export async function runCronIsolatedAgentTurn(params: {
             channel: resolvedDelivery.channel,
             to: resolvedDelivery.to,
             accountId: resolvedDelivery.accountId,
-            threadId: resolvedDelivery.threadId,
+            // Cron delivery has no explicit threadId; drop session-inherited
+            // values so messages post at the channel top level.
+            threadId: undefined,
             payloads: payloadsForDelivery,
             agentId,
             identity,
@@ -673,7 +675,9 @@ export async function runCronIsolatedAgentTurn(params: {
           channel: resolvedDelivery.channel,
           to: resolvedDelivery.to,
           accountId: resolvedDelivery.accountId,
-          threadId: resolvedDelivery.threadId,
+          // Do not pass session-inherited threadId; cron announce should
+          // target the top-level channel, not a stale thread.
+          threadId: undefined,
         },
       });
       const taskLabel =
@@ -736,7 +740,11 @@ export async function runCronIsolatedAgentTurn(params: {
             channel: resolvedDelivery.channel,
             to: resolvedDelivery.to,
             accountId: resolvedDelivery.accountId,
-            threadId: resolvedDelivery.threadId,
+            // Cron delivery config has no threadId field, so any threadId here
+            // was inherited from the channel session's last conversation.
+            // Passing it through would cause announce messages to land in a
+            // stale thread instead of the channel's top level.
+            threadId: undefined,
           },
           requesterDisplayKey: announceSessionKey,
           task: taskLabel,
