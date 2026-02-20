@@ -1,9 +1,11 @@
+import fs from "node:fs";
 import path from "node:path";
 import { type Api, getEnvApiKey, type Model } from "@mariozechner/pi-ai";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   normalizeOptionalSecretInput,
   normalizeSecretInput,
@@ -19,6 +21,8 @@ import {
 import { normalizeProviderId } from "./model-selection.js";
 
 export { ensureAuthProfileStore, resolveAuthProfileOrder } from "./auth-profiles.js";
+
+const log = createSubsystemLogger("agents/model-auth");
 
 const AWS_BEARER_ENV = "AWS_BEARER_TOKEN_BEDROCK";
 const AWS_ACCESS_KEY_ENV = "AWS_ACCESS_KEY_ID";
@@ -47,11 +51,27 @@ function resolveProviderConfig(
   );
 }
 
+function readApiKeyFile(filePath: string): string | undefined {
+  if (!fs.existsSync(filePath)) {
+    log.warn(`apiKeyFile not found: ${filePath}`);
+    return undefined;
+  }
+  try {
+    return fs.readFileSync(filePath, "utf-8").trim() || undefined;
+  } catch (err) {
+    log.warn(`apiKeyFile read failed: ${filePath}: ${String(err)}`);
+    return undefined;
+  }
+}
+
 export function getCustomProviderApiKey(
   cfg: OpenClawConfig | undefined,
   provider: string,
 ): string | undefined {
   const entry = resolveProviderConfig(cfg, provider);
+  if (entry?.apiKeyFile) {
+    return readApiKeyFile(entry.apiKeyFile);
+  }
   return normalizeOptionalSecretInput(entry?.apiKey);
 }
 
@@ -204,7 +224,9 @@ export async function resolveApiKeyForProvider(params: {
 
   const customKey = getCustomProviderApiKey(cfg, provider);
   if (customKey) {
-    return { apiKey: customKey, source: "models.json", mode: "api-key" };
+    const entry = resolveProviderConfig(cfg, provider);
+    const source = entry?.apiKeyFile ? "apiKeyFile" : "models.json";
+    return { apiKey: customKey, source, mode: "api-key" };
   }
 
   const normalized = normalizeProviderId(provider);

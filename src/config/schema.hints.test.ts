@@ -19,6 +19,7 @@ describe("isSensitiveConfigPath", () => {
       "tokenLimit",
       "tokenBudget",
       "channels.irc.nickserv.passwordFile",
+      "models.providers.custom.apiKeyFile",
     ];
     for (const path of whitelistedPaths) {
       expect(isSensitiveConfigPath(path)).toBe(false);

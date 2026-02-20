@@ -360,8 +360,17 @@ export function normalizeProviders(params: {
     const normalizedKey = key.trim();
     let normalizedProvider = provider;
 
+    // When apiKeyFile is set, populate apiKey with a placeholder so
+    // ModelRegistry registers the models. The real key is resolved at
+    // runtime by getCustomProviderApiKey() which reads the file.
+    if (normalizedProvider.apiKeyFile && !normalizedProvider.apiKey?.trim()) {
+      mutated = true;
+      normalizedProvider = { ...normalizedProvider, apiKey: "__apiKeyFile__" };
+    }
+
     // Fix common misconfig: apiKey set to "${ENV_VAR}" instead of "ENV_VAR".
     if (
+      !normalizedProvider.apiKeyFile &&
       normalizedProvider.apiKey &&
       normalizeApiKeyConfig(normalizedProvider.apiKey) !== normalizedProvider.apiKey
     ) {
