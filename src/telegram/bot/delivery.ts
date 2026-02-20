@@ -558,6 +558,7 @@ async function sendTelegramText(
           ...baseParams,
         }),
     });
+    runtime.log?.(`telegram sendMessage ok chat=${chatId} message=${res.message_id}`);
     return res.message_id;
   } catch (err) {
     const errText = formatErrorMessage(err);
@@ -574,6 +575,7 @@ async function sendTelegramText(
             ...baseParams,
           }),
       });
+      runtime.log?.(`telegram sendMessage ok chat=${chatId} message=${res.message_id} (plain)`);
       return res.message_id;
     }
     throw err;

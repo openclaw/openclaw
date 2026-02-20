@@ -320,6 +320,29 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
+  it("disables block streaming when streamMode is off even if blockStreaming config is true", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "off",
+      telegramCfg: { blockStreaming: true },
+    });
+
+    expect(createTelegramDraftStream).not.toHaveBeenCalled();
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyOptions: expect.objectContaining({
+          disableBlockStreaming: true,
+        }),
+      }),
+    );
+  });
+
   it("forces new message when new assistant message starts after previous output", async () => {
     const draftStream = createDraftStream(999);
     createTelegramDraftStream.mockReturnValue(draftStream);
@@ -478,5 +501,235 @@ describe("dispatchTelegramMessage draft streaming", () => {
         replies: [expect.objectContaining({ text: expect.stringContaining("⚠️") })],
       }),
     );
+  });
+
+  it("clears preview for error-only finals", async () => {
+    const draftStream = createDraftStream(999);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "tool failed", isError: true }, { kind: "final" });
+      await dispatcherOptions.deliver({ text: "another error", isError: true }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext() });
+
+    // Error payloads skip preview finalization — preview must be cleaned up
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears preview after media final delivery", async () => {
+    const draftStream = createDraftStream(999);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ mediaUrl: "file:///tmp/a.png" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears stale preview when response is NO_REPLY", async () => {
+    const draftStream = createDraftStream(999);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
+      queuedFinal: false,
+    });
+
+    await dispatchWithContext({ context: createContext() });
+
+    // Preview contains stale partial text — must be cleaned up
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back when all finals are skipped and clears preview", async () => {
+    const draftStream = createDraftStream(999);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      dispatcherOptions.onSkip?.({ text: "" }, { reason: "no_reply", kind: "final" });
+      return { queuedFinal: false };
+    });
+    deliverReplies.mockResolvedValueOnce({ delivered: true });
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [
+          expect.objectContaining({
+            text: expect.stringContaining("No response"),
+          }),
+        ],
+      }),
+    );
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends fallback and clears preview when deliver throws (dispatcher swallows error)", async () => {
+    const draftStream = createDraftStream();
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      try {
+        await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
+      } catch (err) {
+        dispatcherOptions.onError(err, { kind: "final" });
+      }
+      return { queuedFinal: false };
+    });
+    deliverReplies
+      .mockRejectedValueOnce(new Error("network down"))
+      .mockResolvedValueOnce({ delivered: true });
+
+    await expect(dispatchWithContext({ context: createContext() })).resolves.toBeUndefined();
+    // Fallback should be sent because failedDeliveries > 0
+    expect(deliverReplies).toHaveBeenCalledTimes(2);
+    expect(deliverReplies).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        replies: [
+          expect.objectContaining({
+            text: expect.stringContaining("No response"),
+          }),
+        ],
+      }),
+    );
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends fallback in off mode when deliver throws", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      try {
+        await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
+      } catch (err) {
+        dispatcherOptions.onError(err, { kind: "final" });
+      }
+      return { queuedFinal: false };
+    });
+    deliverReplies
+      .mockRejectedValueOnce(new Error("403 bot blocked"))
+      .mockResolvedValueOnce({ delivered: true });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "off" });
+
+    expect(createTelegramDraftStream).not.toHaveBeenCalled();
+    expect(deliverReplies).toHaveBeenCalledTimes(2);
+    expect(deliverReplies).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        replies: [
+          expect.objectContaining({
+            text: expect.stringContaining("No response"),
+          }),
+        ],
+      }),
+    );
+  });
+
+  it("handles error block + response final — error delivered, response finalizes preview", async () => {
+    const draftStream = createDraftStream(999);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    editMessageTelegram.mockResolvedValue({ ok: true });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        replyOptions?.onPartialReply?.({ text: "Processing..." });
+        await dispatcherOptions.deliver(
+          { text: "⚠️ exec failed", isError: true },
+          { kind: "block" },
+        );
+        await dispatcherOptions.deliver(
+          { text: "The command timed out. Here's what I found..." },
+          { kind: "final" },
+        );
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext() });
+
+    // Block error went through deliverReplies
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
+    // Final was finalized via preview edit
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      999,
+      "The command timed out. Here's what I found...",
+      expect.any(Object),
+    );
+    expect(draftStream.clear).not.toHaveBeenCalled();
+  });
+
+  it("cleans up preview even when fallback delivery throws (double failure)", async () => {
+    const draftStream = createDraftStream();
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      try {
+        await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
+      } catch (err) {
+        dispatcherOptions.onError(err, { kind: "final" });
+      }
+      return { queuedFinal: false };
+    });
+    // No preview message id → deliver goes through deliverReplies directly
+    // Primary delivery fails
+    deliverReplies
+      .mockRejectedValueOnce(new Error("network down"))
+      // Fallback also fails
+      .mockRejectedValueOnce(new Error("still down"));
+
+    // Fallback throws, but cleanup still runs via try/finally.
+    await dispatchWithContext({ context: createContext() }).catch(() => {});
+
+    // Verify fallback was attempted and preview still cleaned up
+    expect(deliverReplies).toHaveBeenCalledTimes(2);
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears preview when dispatcher throws before fallback phase", async () => {
+    const draftStream = createDraftStream(999);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockRejectedValue(new Error("dispatcher exploded"));
+
+    await expect(dispatchWithContext({ context: createContext() })).rejects.toThrow(
+      "dispatcher exploded",
+    );
+
+    expect(draftStream.stop).toHaveBeenCalledTimes(1);
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("supports concurrent dispatches with independent previews", async () => {
+    const draftA = createDraftStream(11);
+    const draftB = createDraftStream(22);
+    createTelegramDraftStream.mockReturnValueOnce(draftA).mockReturnValueOnce(draftB);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "partial" });
+        await dispatcherOptions.deliver({ mediaUrl: "file:///tmp/a.png" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await Promise.all([
+      dispatchWithContext({
+        context: createContext({
+          chatId: 1,
+          msg: { chat: { id: 1, type: "private" }, message_id: 1 } as never,
+        }),
+      }),
+      dispatchWithContext({
+        context: createContext({
+          chatId: 2,
+          msg: { chat: { id: 2, type: "private" }, message_id: 2 } as never,
+        }),
+      }),
+    ]);
+
+    expect(draftA.clear).toHaveBeenCalledTimes(1);
+    expect(draftB.clear).toHaveBeenCalledTimes(1);
   });
 });
