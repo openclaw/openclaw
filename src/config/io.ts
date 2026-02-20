@@ -50,6 +50,7 @@ import { resolveConfigPath, resolveDefaultConfigCandidates, resolveStateDir } fr
 import { isBlockedObjectKey } from "./prototype-keys.js";
 import { REDACTED_SENTINEL } from "./redact-snapshot.js";
 import { applyConfigOverrides } from "./runtime-overrides.js";
+import type { OpenClawConfig, ConfigFileSnapshot, LegacyConfigIssue } from "./types.js";
 import {
   validateConfigObjectRawWithPlugins,
   validateConfigObjectWithPlugins,
@@ -1191,15 +1192,16 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     const json = JSON.stringify(stampedOutputConfig, null, 2).trimEnd().concat("\n");
 
     if (json.includes(REDACTED_SENTINEL)) {
-      deps.logger.error(
-        `Config write blocked: redaction sentinel "${REDACTED_SENTINEL}" found in output — ` +
-          `writing would destroy credentials. Config file was NOT modified.`,
-      );
-      throw new Error(
-        `Refusing to write config: found redaction sentinel "${REDACTED_SENTINEL}". ` +
-          `This is a bug — credentials would be permanently lost. ` +
+      const sentinel_err = new Error(
+        `Refusing to write config for "${configPath}": found redaction sentinel ` +
+          `"${REDACTED_SENTINEL}". This is a bug — credentials would be permanently lost. ` +
           `The config file on disk was not changed.`,
       );
+      deps.logger.error(
+        `Config write blocked for "${configPath}": redaction sentinel "${REDACTED_SENTINEL}" ` +
+          `found in output — writing would destroy credentials. Config file was NOT modified.\n${sentinel_err.stack}`,
+      );
+      throw sentinel_err;
     }
 
     const nextHash = hashConfigRaw(json);
