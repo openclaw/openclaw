@@ -206,6 +206,18 @@ export function handleMessageUpdate(
       shouldEmit = Boolean(deltaText || hasMedia || hasAudio);
     }
 
+    // Hold back emission if accumulated text could be a partial silent reply token
+    // (e.g. "NO" arriving before "_REPLY"). Only at response start (nothing emitted yet).
+    const trimmedCleaned = cleanedText.trim();
+    if (
+      shouldEmit &&
+      !previousCleaned &&
+      trimmedCleaned.length < SILENT_REPLY_TOKEN.length &&
+      SILENT_REPLY_TOKEN.startsWith(trimmedCleaned)
+    ) {
+      shouldEmit = false;
+    }
+
     ctx.state.lastStreamedAssistant = next;
     ctx.state.lastStreamedAssistantCleaned = cleanedText;
 
