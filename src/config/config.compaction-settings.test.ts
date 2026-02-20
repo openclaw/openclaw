@@ -17,6 +17,7 @@ describe("config compaction settings", () => {
               defaults: {
                 compaction: {
                   mode: "safeguard",
+                  model: "anthropic/claude-sonnet-4-6",
                   reserveTokensFloor: 12_345,
                   memoryFlush: {
                     enabled: false,
@@ -36,6 +37,7 @@ describe("config compaction settings", () => {
 
       const cfg = loadConfig();
 
+      expect(cfg.agents?.defaults?.compaction?.model).toBe("anthropic/claude-sonnet-4-6");
       expect(cfg.agents?.defaults?.compaction?.reserveTokensFloor).toBe(12_345);
       expect(cfg.agents?.defaults?.compaction?.mode).toBe("safeguard");
       expect(cfg.agents?.defaults?.compaction?.memoryFlush?.enabled).toBe(false);

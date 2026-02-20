@@ -30,7 +30,7 @@ import { listChannelSupportedActions, resolveChannelMessageToolHints } from "../
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { resolveOpenClawDocsPath } from "../docs-path.js";
-import { getApiKeyForModel, resolveModelAuthMode } from "../model-auth.js";
+import { resolveModelAuthMode } from "../model-auth.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import {
   ensureSessionHeader,
@@ -59,6 +59,7 @@ import {
   type SkillSnapshot,
 } from "../skills.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
+import { resolveCompactionModelForRun } from "./compact-model-selection.js";
 import {
   compactWithSafetyTimeout,
   EMBEDDED_COMPACTION_TIMEOUT_MS,
@@ -72,7 +73,7 @@ import {
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "./history.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
-import { buildModelAliasLines, resolveModel } from "./model.js";
+import { buildModelAliasLines } from "./model.js";
 import { buildEmbeddedSandboxInfo } from "./sandbox-info.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "./session-manager-cache.js";
 import {
@@ -256,12 +257,14 @@ export async function compactEmbeddedPiSessionDirect(
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   const prevCwd = process.cwd();
 
-  const provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
-  const modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
+  const sessionProvider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
+  const sessionModelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
+  let diagProvider = sessionProvider;
+  let diagModelId = sessionModelId;
   const fail = (reason: string): EmbeddedPiCompactResult => {
     log.warn(
       `[compaction-diag] end runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
-        `diagId=${diagId} trigger=${trigger} provider=${provider}/${modelId} ` +
+        `diagId=${diagId} trigger=${trigger} provider=${diagProvider}/${diagModelId} ` +
         `attempt=${attempt} maxAttempts=${maxAttempts} outcome=failed reason=${classifyCompactionReason(reason)} ` +
         `durationMs=${Date.now() - startedAt}`,
     );
@@ -273,43 +276,22 @@ export async function compactEmbeddedPiSessionDirect(
   };
   const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
   await ensureOpenClawModelsJson(params.config, agentDir);
-  const { model, error, authStorage, modelRegistry } = resolveModel(
-    provider,
-    modelId,
+  const resolvedModel = await resolveCompactionModelForRun({
+    sessionProvider,
+    sessionModelId,
+    overrideRaw: params.config?.agents?.defaults?.compaction?.model,
+    cfg: params.config,
     agentDir,
-    params.config,
-  );
-  if (!model) {
-    const reason = error ?? `Unknown model: ${provider}/${modelId}`;
-    return fail(reason);
+    authProfileId: params.authProfileId,
+    logInfo: (message) => log.info(message),
+    logWarn: (message) => log.warn(message),
+  });
+  if (!resolvedModel.ok) {
+    return fail(resolvedModel.reason);
   }
-  try {
-    const apiKeyInfo = await getApiKeyForModel({
-      model,
-      cfg: params.config,
-      profileId: params.authProfileId,
-      agentDir,
-    });
-
-    if (!apiKeyInfo.apiKey) {
-      if (apiKeyInfo.mode !== "aws-sdk") {
-        throw new Error(
-          `No API key resolved for provider "${model.provider}" (auth mode: ${apiKeyInfo.mode}).`,
-        );
-      }
-    } else if (model.provider === "github-copilot") {
-      const { resolveCopilotApiToken } = await import("../../providers/github-copilot-token.js");
-      const copilotToken = await resolveCopilotApiToken({
-        githubToken: apiKeyInfo.apiKey,
-      });
-      authStorage.setRuntimeApiKey(model.provider, copilotToken.token);
-    } else {
-      authStorage.setRuntimeApiKey(model.provider, apiKeyInfo.apiKey);
-    }
-  } catch (err) {
-    const reason = describeUnknownError(err);
-    return fail(reason);
-  }
+  const { model, authStorage, modelRegistry, provider, modelId } = resolvedModel.value;
+  diagProvider = provider;
+  diagModelId = modelId;
 
   await fs.mkdir(resolvedWorkspace, { recursive: true });
   const sandboxSessionKey = params.sessionKey?.trim() || params.sessionId;
