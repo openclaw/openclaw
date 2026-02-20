@@ -6,7 +6,7 @@ const removeReactionDiscord = vi.fn(async () => {});
 const editMessageDiscord = vi.fn(async () => ({}));
 const deliverDiscordReply = vi.fn(async () => {});
 const createDiscordDraftStream = vi.fn(() => ({
-  update: vi.fn(() => {}),
+  update: vi.fn<(text: string) => void>(() => {}),
   flush: vi.fn(async () => {}),
   messageId: vi.fn(() => "preview-1"),
   clear: vi.fn(async () => {}),
@@ -332,7 +332,7 @@ describe("processDiscordMessage draft streaming", () => {
 
   it("streams block previews using draft chunking", async () => {
     const draftStream = {
-      update: vi.fn(() => {}),
+      update: vi.fn<(text: string) => void>(() => {}),
       flush: vi.fn(async () => {}),
       messageId: vi.fn(() => "preview-1"),
       clear: vi.fn(async () => {}),
@@ -368,7 +368,7 @@ describe("processDiscordMessage draft streaming", () => {
 
   it("forces new preview messages on assistant boundaries in block mode", async () => {
     const draftStream = {
-      update: vi.fn(() => {}),
+      update: vi.fn<(text: string) => void>(() => {}),
       flush: vi.fn(async () => {}),
       messageId: vi.fn(() => "preview-1"),
       clear: vi.fn(async () => {}),
