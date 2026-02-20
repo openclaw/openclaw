@@ -90,7 +90,7 @@ export function createGatewayHooksRequestHandler(params: {
           sessionKey: mainSessionKey,
         });
         if (value.wakeMode === "now") {
-          requestHeartbeatNow({ reason: `hook:${jobId}` });
+          requestHeartbeatNow({ reason: `hook:${jobId}`, sessionKey: mainSessionKey });
         }
       } catch (err) {
         logHooks.warn(`hook agent failed: ${String(err)}`);
@@ -98,7 +98,7 @@ export function createGatewayHooksRequestHandler(params: {
           sessionKey: mainSessionKey,
         });
         if (value.wakeMode === "now") {
-          requestHeartbeatNow({ reason: `hook:${jobId}:error` });
+          requestHeartbeatNow({ reason: `hook:${jobId}:error`, sessionKey: mainSessionKey });
         }
       }
     })();
