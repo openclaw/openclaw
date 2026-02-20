@@ -29,6 +29,21 @@ describe("argv helpers", () => {
       argv: ["node", "openclaw", "status"],
       expected: false,
     },
+    {
+      name: "root -v alias",
+      argv: ["node", "openclaw", "-v"],
+      expected: true,
+    },
+    {
+      name: "root -v alias with profile",
+      argv: ["node", "openclaw", "--profile", "work", "-v"],
+      expected: true,
+    },
+    {
+      name: "subcommand -v should not be treated as version",
+      argv: ["node", "openclaw", "acp", "-v"],
+      expected: false,
+    },
   ])("detects help/version flags: $name", ({ argv, expected }) => {
     expect(hasHelpOrVersion(argv)).toBe(expected);
   });
