@@ -22,6 +22,10 @@ function createGatewayParentLikeCommand() {
   const gateway = new Command().name("gateway");
   // Mirror overlapping root gateway options that conflict with service subcommand options.
   gateway.option("--port <port>", "Port for the gateway WebSocket");
+  gateway.option(
+    "--systemd-kill-mode <mode>",
+    'Linux/systemd only: KillMode ("process"|"mixed"|"control-group").',
+  );
   gateway.option("--token <token>", "Gateway token");
   gateway.option("--password <password>", "Gateway password");
   gateway.option("--force", "Gateway run --force", false);
@@ -41,14 +45,27 @@ describe("addGatewayServiceCommands", () => {
 
   it("forwards install option collisions from parent gateway command", async () => {
     const gateway = createGatewayParentLikeCommand();
-    await gateway.parseAsync(["install", "--force", "--port", "19000", "--token", "tok_test"], {
-      from: "user",
-    });
+    await gateway.parseAsync(
+      [
+        "install",
+        "--force",
+        "--port",
+        "19000",
+        "--systemd-kill-mode",
+        "mixed",
+        "--token",
+        "tok_test",
+      ],
+      {
+        from: "user",
+      },
+    );
 
     expect(runDaemonInstall).toHaveBeenCalledWith(
       expect.objectContaining({
         force: true,
         port: "19000",
+        systemdKillMode: "mixed",
         token: "tok_test",
       }),
     );

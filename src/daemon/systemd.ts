@@ -188,6 +188,7 @@ export async function installSystemdService({
   workingDirectory,
   environment,
   description,
+  systemdKillMode,
 }: GatewayServiceInstallArgs): Promise<{ unitPath: string }> {
   await assertSystemdAvailable();
 
@@ -199,6 +200,7 @@ export async function installSystemdService({
     programArguments,
     workingDirectory,
     environment,
+    killMode: systemdKillMode,
   });
   await fs.writeFile(unitPath, unit, "utf8");
 

@@ -1,3 +1,5 @@
+import type { SystemdKillMode } from "./systemd-unit.js";
+
 export type GatewayServiceEnv = Record<string, string | undefined>;
 
 export type GatewayServiceInstallArgs = {
@@ -7,6 +9,7 @@ export type GatewayServiceInstallArgs = {
   workingDirectory?: string;
   environment?: GatewayServiceEnv;
   description?: string;
+  systemdKillMode?: SystemdKillMode;
 };
 
 export type GatewayServiceManageArgs = {
@@ -35,4 +38,5 @@ export type GatewayServiceRenderArgs = {
   programArguments: string[];
   workingDirectory?: string;
   environment?: GatewayServiceEnv;
+  killMode?: SystemdKillMode;
 };

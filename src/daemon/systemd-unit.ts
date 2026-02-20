@@ -1,6 +1,9 @@
 import { splitArgsPreservingQuotes } from "./arg-split.js";
 import type { GatewayServiceRenderArgs } from "./service-types.js";
 
+export const SYSTEMD_KILL_MODES = ["process", "mixed", "control-group"] as const;
+export type SystemdKillMode = (typeof SYSTEMD_KILL_MODES)[number];
+
 function systemdEscapeArg(value: string): string {
   if (!/[\\s"\\\\]/.test(value)) {
     return value;
@@ -28,9 +31,11 @@ export function buildSystemdUnit({
   programArguments,
   workingDirectory,
   environment,
+  killMode,
 }: GatewayServiceRenderArgs): string {
   const execStart = programArguments.map(systemdEscapeArg).join(" ");
   const descriptionLine = `Description=${description?.trim() || "OpenClaw Gateway"}`;
+  const resolvedKillMode = killMode ?? "process";
   const workingDirLine = workingDirectory
     ? `WorkingDirectory=${systemdEscapeArg(workingDirectory)}`
     : null;
@@ -45,10 +50,10 @@ export function buildSystemdUnit({
     `ExecStart=${execStart}`,
     "Restart=always",
     "RestartSec=5",
-    // KillMode=process ensures systemd only waits for the main process to exit.
+    // KillMode defaults to process.
     // Without this, podman's conmon (container monitor) processes block shutdown
     // since they run as children of the gateway and stay in the same cgroup.
-    "KillMode=process",
+    `KillMode=${resolvedKillMode}`,
     workingDirLine,
     ...envLines,
     "",
