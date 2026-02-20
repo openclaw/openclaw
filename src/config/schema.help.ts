@@ -160,6 +160,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional per-provider overrides for billing backoff (hours).",
   "auth.cooldowns.billingMaxHours": "Cap (hours) for billing backoff (default: 24).",
   "auth.cooldowns.failureWindowHours": "Failure window (hours) for backoff counters (default: 24).",
+  "auth.cooldowns.rateLimitBackoffMinutes":
+    "Backoff for rate_limit in minutes (e.g. 0.5 = 30 sec). When set, retries happen sooner than the default 1–5–25–60 min curve.",
   "agents.defaults.bootstrapMaxChars":
     "Max characters of each workspace bootstrap file injected into the system prompt before truncation (default: 20000).",
   "agents.defaults.bootstrapTotalMaxChars":

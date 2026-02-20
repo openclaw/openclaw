@@ -1,12 +1,13 @@
+import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
 import fs from "node:fs";
 import path from "node:path";
-import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
+import type { MsgContext } from "../../auto-reply/templating.js";
+import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveThinkingDefault } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
-import type { MsgContext } from "../../auto-reply/templating.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
@@ -41,7 +42,6 @@ import {
 import { formatForLog } from "../ws-log.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
-import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 
 type TranscriptAppendResult = {
   ok: boolean;
@@ -872,10 +872,12 @@ export const chatHandlers: GatewayRequestHandlers = {
         channel: INTERNAL_MESSAGE_CHANNEL,
       });
       const finalReplyParts: string[] = [];
+      let lastDispatchError: string | null = null;
       const dispatcher = createReplyDispatcher({
         ...prefixOptions,
         onError: (err) => {
-          context.logGateway.warn(`webchat dispatch failed: ${formatForLog(err)}`);
+          lastDispatchError = formatForLog(err);
+          context.logGateway.warn(`webchat dispatch failed: ${lastDispatchError}`);
         },
         deliver: async (payload, info) => {
           if (info.kind !== "final") {
@@ -921,12 +923,12 @@ export const chatHandlers: GatewayRequestHandlers = {
         },
       })
         .then(() => {
+          const combinedReply = finalReplyParts
+            .map((part) => part.trim())
+            .filter(Boolean)
+            .join("\n\n")
+            .trim();
           if (!agentRunStarted) {
-            const combinedReply = finalReplyParts
-              .map((part) => part.trim())
-              .filter(Boolean)
-              .join("\n\n")
-              .trim();
             let message: Record<string, unknown> | undefined;
             if (combinedReply) {
               const { storePath: latestStorePath, entry: latestEntry } =
@@ -963,6 +965,18 @@ export const chatHandlers: GatewayRequestHandlers = {
               runId: clientRunId,
               sessionKey: rawSessionKey,
               message,
+            });
+          } else if (!combinedReply) {
+            // Run started but failed with no reply (e.g. rate limit, auth error). Surface so UI shows error.
+            const errorMessage =
+              lastDispatchError ??
+              "Agent run failed (no response). Check gateway logs; add a fallback model (e.g. OpenAI) in agents.defaults.model.fallbacks to try another provider.";
+            context.logGateway.warn(`webchat run failed with no reply: ${errorMessage}`);
+            broadcastChatError({
+              context,
+              runId: clientRunId,
+              sessionKey: rawSessionKey,
+              errorMessage,
             });
           }
           context.dedupe.set(`chat:${clientRunId}`, {

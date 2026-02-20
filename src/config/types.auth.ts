@@ -25,5 +25,10 @@ export type AuthConfig = {
      * this window, counters reset. Default: 24.
      */
     failureWindowHours?: number;
+    /**
+     * Backoff for rate_limit (minutes). When set, overrides the default 1–5–25–60 min
+     * progression so retries happen sooner. E.g. 0.5 = 30 seconds.
+     */
+    rateLimitBackoffMinutes?: number;
   };
 };

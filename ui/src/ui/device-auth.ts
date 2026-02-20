@@ -93,3 +93,12 @@ export function clearDeviceAuthToken(params: { deviceId: string; role: string })
   delete next.tokens[role];
   writeStore(next);
 }
+
+/** Clears all stored device auth so the next connect uses shared token and gets a new device token. */
+export function clearAllDeviceAuth(): void {
+  try {
+    window.localStorage.removeItem(STORAGE_KEY);
+  } catch {
+    // best-effort
+  }
+}

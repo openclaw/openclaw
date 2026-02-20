@@ -582,6 +582,11 @@ const ERROR_PATTERNS = {
     "quota exceeded",
     "resource_exhausted",
     "usage limit",
+    "api limit",
+    "request limit",
+    "limit exceeded",
+    "throttl",
+    "capacity",
   ],
   overloaded: [
     /overloaded_error|"type"\s*:\s*"overloaded_error"/i,

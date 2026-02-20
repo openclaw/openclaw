@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../../config/config.js";
+import type { AuthProfileFailureReason, AuthProfileStore, ProfileUsageStats } from "./types.js";
 import { normalizeProviderId } from "../model-selection.js";
 import { saveAuthProfileStore, updateAuthProfileStoreWithLock } from "./store.js";
-import type { AuthProfileFailureReason, AuthProfileStore, ProfileUsageStats } from "./types.js";
 
 export function resolveProfileUnusableUntil(
   stats: Pick<ProfileUsageStats, "cooldownUntil" | "disabledUntil">,
@@ -186,6 +186,8 @@ type ResolvedAuthCooldownConfig = {
   billingBackoffMs: number;
   billingMaxMs: number;
   failureWindowMs: number;
+  /** When set, use this for rate_limit instead of the default backoff curve (minutes → ms). */
+  rateLimitBackoffMs?: number;
 };
 
 function resolveAuthCooldownConfig(params: {
@@ -225,10 +227,19 @@ function resolveAuthCooldownConfig(params: {
     defaults.failureWindowHours,
   );
 
+  const rateLimitMinutes = (() => {
+    const raw = cooldowns?.rateLimitBackoffMinutes;
+    if (typeof raw !== "number" || !Number.isFinite(raw) || raw < 0) {
+      return undefined;
+    }
+    return Math.min(raw, 60); // cap at 60 minutes
+  })();
+
   return {
     billingBackoffMs: billingBackoffHours * 60 * 60 * 1000,
     billingMaxMs: billingMaxHours * 60 * 60 * 1000,
     failureWindowMs: failureWindowHours * 60 * 60 * 1000,
+    rateLimitBackoffMs: rateLimitMinutes !== undefined ? rateLimitMinutes * 60 * 1000 : undefined,
   };
 }
 
@@ -290,7 +301,13 @@ function computeNextProfileUsageStats(params: {
     updatedStats.disabledUntil = params.now + backoffMs;
     updatedStats.disabledReason = "billing";
   } else {
-    const backoffMs = calculateAuthProfileCooldownMs(nextErrorCount);
+    const backoffMs =
+      params.reason === "rate_limit" && params.cfgResolved.rateLimitBackoffMs !== undefined
+        ? Math.min(
+            params.cfgResolved.rateLimitBackoffMs,
+            calculateAuthProfileCooldownMs(nextErrorCount),
+          )
+        : calculateAuthProfileCooldownMs(nextErrorCount);
     updatedStats.cooldownUntil = params.now + backoffMs;
   }
 

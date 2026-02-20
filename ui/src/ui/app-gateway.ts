@@ -2,8 +2,14 @@ import {
   GATEWAY_EVENT_UPDATE_AVAILABLE,
   type GatewayUpdateAvailableEventPayload,
 } from "../../../src/gateway/events.js";
-import { CHAT_SESSIONS_ACTIVE_MINUTES, flushChatQueueForEvent } from "./app-chat.ts";
 import type { EventLogEntry } from "./app-events.ts";
+import type { OpenClawApp } from "./app.ts";
+import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
+import type { GatewayEventFrame, GatewayHelloOk } from "./gateway.ts";
+import type { Tab } from "./navigation.ts";
+import type { UiSettings } from "./storage.ts";
+import type { AgentsListResult, PresenceEntry, HealthSnapshot, StatusSummary, UpdateAvailable } from "./types.ts";
+import { CHAT_SESSIONS_ACTIVE_MINUTES, flushChatQueueForEvent } from "./app-chat.ts";
 import {
   applySettings,
   loadCron,
@@ -11,13 +17,11 @@ import {
   setLastActiveSessionKey,
 } from "./app-settings.ts";
 import { handleAgentEvent, resetToolStream, type AgentEventPayload } from "./app-tool-stream.ts";
-import type { OpenClawApp } from "./app.ts";
 import { loadAgents } from "./controllers/agents.ts";
 import { loadAssistantIdentity } from "./controllers/assistant-identity.ts";
 import { loadChatHistory } from "./controllers/chat.ts";
 import { handleChatEvent, type ChatEventPayload } from "./controllers/chat.ts";
 import { loadDevices } from "./controllers/devices.ts";
-import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import {
   addExecApproval,
   parseExecApprovalRequested,
@@ -26,17 +30,8 @@ import {
 } from "./controllers/exec-approval.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 import { loadSessions } from "./controllers/sessions.ts";
-import type { GatewayEventFrame, GatewayHelloOk } from "./gateway.ts";
+import { clearAllDeviceAuth } from "./device-auth.ts";
 import { GatewayBrowserClient } from "./gateway.ts";
-import type { Tab } from "./navigation.ts";
-import type { UiSettings } from "./storage.ts";
-import type {
-  AgentsListResult,
-  PresenceEntry,
-  HealthSnapshot,
-  StatusSummary,
-  UpdateAvailable,
-} from "./types.ts";
 
 type GatewayHost = {
   settings: UiSettings;
@@ -165,6 +160,11 @@ export function connectGateway(host: GatewayHost) {
         return;
       }
       host.connected = false;
+      // Device token mismatch: clear stored device auth so next connect re-pairs with shared token
+      const reasonStr = (reason ?? "").toLowerCase();
+      if (reasonStr.includes("device token mismatch")) {
+        clearAllDeviceAuth();
+      }
       // Code 1012 = Service Restart (expected during config saves, don't show as error)
       if (code !== 1012) {
         host.lastError = `disconnected (${code}): ${reason || "no reason"}`;
