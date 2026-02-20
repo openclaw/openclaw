@@ -1,7 +1,7 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
-import { resolveForwardCompatModel } from "./model-forward-compat.js";
 import type { ModelRegistry } from "./pi-model-discovery.js";
+import { resolveForwardCompatModel } from "./model-forward-compat.js";
 
 function createTemplateModel(provider: string, id: string): Model<Api> {
   return {

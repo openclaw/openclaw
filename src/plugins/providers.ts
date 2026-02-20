@@ -1,7 +1,7 @@
+import type { ProviderPlugin } from "./types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { loadOpenClawPlugins, type PluginLoadOptions } from "./loader.js";
 import { createPluginLoaderLogger } from "./logger.js";
-import type { ProviderPlugin } from "./types.js";
 
 const log = createSubsystemLogger("plugins");
 

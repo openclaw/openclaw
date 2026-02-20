@@ -1,9 +1,9 @@
 import * as fs from "fs";
-import * as os from "os";
-import * as path from "path";
 import Imap from "imap";
 import { simpleParser } from "mailparser";
 import nodemailer from "nodemailer";
+import * as os from "os";
+import * as path from "path";
 
 interface EmailConfig {
   imap: {

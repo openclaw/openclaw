@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import type { MsgContext } from "../../auto-reply/templating.js";
 import { buildDispatchInboundContextCapture } from "../../../test/helpers/inbound-contract-capture.js";
 import { expectInboundContextContract } from "../../../test/helpers/inbound-contract.js";
-import type { MsgContext } from "../../auto-reply/templating.js";
 
 const capture = vi.hoisted(() => ({ ctx: undefined as MsgContext | undefined }));
 
