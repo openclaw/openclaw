@@ -579,16 +579,17 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         deps.logger.warn(`Config warnings:\\n${details}`);
       }
       warnIfConfigFromFuture(validated.config, deps.logger);
-      const cfg = applyModelDefaults(
-        applyCompactionDefaults(
-          applyContextPruningDefaults(
-            applyAgentDefaults(
-              applySessionDefaults(applyLoggingDefaults(applyMessageDefaults(validated.config))),
+      const cfg = normalizeConfigPaths(
+        applyModelDefaults(
+          applyCompactionDefaults(
+            applyContextPruningDefaults(
+              applyAgentDefaults(
+                applySessionDefaults(applyLoggingDefaults(applyMessageDefaults(validated.config))),
+              ),
             ),
           ),
         ),
       );
-      normalizeConfigPaths(cfg);
 
       const duplicates = findDuplicateAgentDirs(cfg, {
         env: deps.env,
