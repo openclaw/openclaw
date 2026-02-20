@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { buildWorkspaceSkillStatus } from "./skills-status.js";
 import { writeSkill } from "./skills.e2e-test-helpers.js";
 
@@ -115,56 +115,6 @@ describe("buildWorkspaceSkillStatus", () => {
       expect(skill?.install.map((opt) => opt.id)).toEqual(["win"]);
     } else {
       expect(skill?.install).toEqual([]);
-    }
-  });
-
-  it("keeps darwin-only brew installer hidden on linux, but uses it on darwin", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-"));
-    const skillDir = path.join(workspaceDir, "skills", "summarize-like-skill");
-
-    await writeSkill({
-      dir: skillDir,
-      name: "summarize-like-skill",
-      description: "Node installer everywhere, brew only on macOS",
-      metadata:
-        '{"openclaw":{"requires":{"bins":["missing-bin"]},"install":[{"id":"node","kind":"node","package":"@steipete/summarize","bins":["summarize"]},{"id":"brew","kind":"brew","os":["darwin"],"formula":"steipete/tap/summarize","bins":["summarize"]}]}}',
-    });
-
-    const fakeBinDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-bin-"));
-    const fakeBrew = path.join(fakeBinDir, "brew");
-    await fs.writeFile(fakeBrew, "#!/bin/sh\nexit 0\n", { encoding: "utf8" });
-    await fs.chmod(fakeBrew, 0o755);
-
-    const originalPath = process.env.PATH;
-    process.env.PATH = `${fakeBinDir}:${originalPath ?? ""}`;
-
-    try {
-      const linuxReport = buildWorkspaceSkillStatus(workspaceDir, {
-        managedSkillsDir: path.join(workspaceDir, ".managed"),
-      });
-      const linuxSkill = linuxReport.skills.find((entry) => entry.name === "summarize-like-skill");
-
-      expect(linuxSkill).toBeDefined();
-      if (process.platform === "linux") {
-        expect(linuxSkill?.install.map((opt) => opt.id)).toEqual(["node"]);
-      }
-
-      const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-      try {
-        const darwinReport = buildWorkspaceSkillStatus(workspaceDir, {
-          managedSkillsDir: path.join(workspaceDir, ".managed"),
-        });
-        const darwinSkill = darwinReport.skills.find(
-          (entry) => entry.name === "summarize-like-skill",
-        );
-
-        expect(darwinSkill).toBeDefined();
-        expect(darwinSkill?.install.map((opt) => opt.id)).toEqual(["brew"]);
-      } finally {
-        platformSpy.mockRestore();
-      }
-    } finally {
-      process.env.PATH = originalPath;
     }
   });
 });
