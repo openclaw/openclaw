@@ -40,6 +40,25 @@ function mergeStreamText(prev: string, next: string): string {
   return prev + next;
 }
 
+function extractSystemTraceLines(text: string): { cleanedText: string; traceLines: string[] } {
+  if (!text) {
+    return { cleanedText: text, traceLines: [] };
+  }
+  const traceLines: string[] = [];
+  const keptLines: string[] = [];
+
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (/^🧭\s+New session:\s+/i.test(trimmed)) {
+      traceLines.push(trimmed);
+      continue;
+    }
+    keptLines.push(line);
+  }
+
+  return { cleanedText: keptLines.join("\n"), traceLines };
+}
+
 function stripReasoningSection(text: string): string {
   if (!text) {
     return text;
@@ -105,11 +124,11 @@ function parseToolSummary(rawText: string): ToolEntry | null {
 }
 
 function formatToolLine(entry: ToolEntry): string {
-  const header = `调用\`${entry.name}\`工具:`;
+  const header = `调用\`${entry.name}\`工具`;
   if (!entry.detail) {
     return header;
   }
-  return `${header}${entry.detail}`;
+  return `${header}: ${entry.detail}`;
 }
 
 function formatTimelineLine(entry: TimelineEntry): string {
@@ -425,7 +444,15 @@ export function createFeishuAgentCardRenderer(params: CreateFeishuAgentCardRende
   return {
     async deliver(payload: ReplyPayload, info: ReplyDeliverInfo) {
       await enqueueOp(async () => {
-        const textRaw = payload.text ?? "";
+        const textRawOriginal = payload.text ?? "";
+        const { cleanedText: textRaw, traceLines } = extractSystemTraceLines(textRawOriginal);
+
+        if (traceLines.length > 0) {
+          for (const line of traceLines) {
+            timeline = [...timeline, { kind: "block", text: line }];
+          }
+          hasTraceContext = true;
+        }
 
         if (info.kind === "tool") {
           const parsed = parseToolSummary(textRaw);
@@ -474,7 +501,8 @@ export function createFeishuAgentCardRenderer(params: CreateFeishuAgentCardRende
     },
     async onPartialReply(payload: ReplyPayload) {
       await enqueueOp(async () => {
-        const text = stripReasoningSection(payload.text ?? "");
+        const { cleanedText } = extractSystemTraceLines(payload.text ?? "");
+        const text = stripReasoningSection(cleanedText);
         if (!text) {
           return;
         }
