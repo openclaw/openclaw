@@ -44,6 +44,7 @@ import { firstDefined, isSenderAllowed, normalizeAllowFromWithStore } from "./bo
 import {
   buildCappedTelegramMenuCommands,
   buildPluginTelegramMenuCommands,
+  filterAndOrderTelegramMenuCommands,
   syncTelegramMenuCommands,
 } from "./bot-native-command-menu.js";
 import { TelegramUpdateKeyContext } from "./bot-updates.js";
@@ -362,9 +363,16 @@ export const registerTelegramNativeCommands = ({
     ...(nativeEnabled ? pluginCatalog.commands : []),
     ...customCommands,
   ];
+
+  // Apply commandConfig filtering and ordering
+  const filteredAndOrderedCommands = filterAndOrderTelegramMenuCommands({
+    commands: allCommandsFull,
+    commandConfig: telegramCfg.commandConfig,
+  });
+
   const { commandsToRegister, totalCommands, maxCommands, overflowCount } =
     buildCappedTelegramMenuCommands({
-      allCommands: allCommandsFull,
+      allCommands: filteredAndOrderedCommands,
     });
   if (overflowCount > 0) {
     runtime.log?.(

@@ -98,6 +98,14 @@ const validateTelegramCustomCommands = (
   }
 };
 
+const TelegramCommandConfigSchema = z
+  .object({
+    aliases: z.record(z.string(), z.string()).optional(),
+    hidden: z.array(z.string()).optional(),
+    pinned: z.array(z.string()).optional(),
+  })
+  .strict();
+
 export const TelegramAccountSchemaBase = z
   .object({
     name: z.string().optional(),
@@ -106,6 +114,7 @@ export const TelegramAccountSchemaBase = z
     enabled: z.boolean().optional(),
     commands: ProviderCommandsSchema,
     customCommands: z.array(TelegramCustomCommandSchema).optional(),
+    commandConfig: TelegramCommandConfigSchema.optional(),
     configWrites: z.boolean().optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),
     botToken: z.string().optional().register(sensitive),

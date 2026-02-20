@@ -1,0 +1,16 @@
+{
+  "id": "bitnet-guard",
+  "name": "BitNet Guard",
+  "description": "BitNet-powered prompt injection & destructive command guard",
+  "entry": "index.cjs",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": { "type": "boolean", "default": true },
+      "blockOnSuspicious": { "type": "boolean", "default": true },
+      "logOnly": { "type": "boolean", "default": false },
+      "bitnetUrl": { "type": "string", "default": "http://127.0.0.1:8080/v1/completions" }
+    }
+  }
+}
