@@ -108,11 +108,22 @@ describe("session_status tool", () => {
     const tool = getSessionStatusTool();
 
     const result = await tool.execute("call1", {});
-    const details = result.details as { ok?: boolean; statusText?: string };
+    const details = result.details as {
+      ok?: boolean;
+      statusText?: string;
+      fallbackActive?: boolean;
+      fallbackSelectedModel?: string;
+      fallbackActiveModel?: string;
+      fallbackReason?: string;
+    };
     expect(details.ok).toBe(true);
     expect(details.statusText).toContain("OpenClaw");
     expect(details.statusText).toContain("🧠 Model:");
     expect(details.statusText).not.toContain("OAuth/token status");
+    expect(details.fallbackActive).toBe(false);
+    expect(details.fallbackSelectedModel).toBeUndefined();
+    expect(details.fallbackActiveModel).toBeUndefined();
+    expect(details.fallbackReason).toBeUndefined();
   });
 
   it("errors for unknown session keys", async () => {
@@ -236,5 +247,40 @@ describe("session_status tool", () => {
     expect(saved.providerOverride).toBeUndefined();
     expect(saved.modelOverride).toBeUndefined();
     expect(saved.authProfileOverride).toBeUndefined();
+  });
+
+  it("returns fallback metadata in details when fallback state exists", async () => {
+    resetSessionStore({
+      main: {
+        sessionId: "s-fallback",
+        updatedAt: 10,
+        providerOverride: "openai",
+        modelOverride: "gpt-4.1-mini",
+        modelProvider: "anthropic",
+        model: "claude-haiku-4-5",
+        fallbackNoticeSelectedModel: "openai/gpt-4.1-mini",
+        fallbackNoticeActiveModel: "anthropic/claude-haiku-4-5",
+        fallbackNoticeReason: "rate limit",
+      },
+    });
+
+    const tool = getSessionStatusTool();
+
+    const result = await tool.execute("call7", {});
+    const details = result.details as {
+      ok?: boolean;
+      fallbackActive?: boolean;
+      fallbackSelectedModel?: string;
+      fallbackActiveModel?: string;
+      fallbackReason?: string;
+      statusText?: string;
+    };
+
+    expect(details.ok).toBe(true);
+    expect(details.fallbackActive).toBe(true);
+    expect(details.fallbackSelectedModel).toBe("openai/gpt-4.1-mini");
+    expect(details.fallbackActiveModel).toBe("anthropic/claude-haiku-4-5");
+    expect(details.fallbackReason).toBe("rate limit");
+    expect(details.statusText).toContain("Fallback: anthropic/claude-haiku-4-5");
   });
 });

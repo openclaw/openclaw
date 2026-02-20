@@ -384,6 +384,11 @@ export function createSessionStatusTool(opts?: {
         includeTranscriptUsage: false,
       });
 
+      const fallbackSelectedModel = resolved.entry.fallbackNoticeSelectedModel?.trim();
+      const fallbackActiveModel = resolved.entry.fallbackNoticeActiveModel?.trim();
+      const fallbackReason = resolved.entry.fallbackNoticeReason?.trim();
+      const fallbackActive = Boolean(fallbackSelectedModel && fallbackActiveModel);
+
       return {
         content: [{ type: "text", text: statusText }],
         details: {
@@ -391,6 +396,10 @@ export function createSessionStatusTool(opts?: {
           sessionKey: resolved.key,
           changedModel,
           statusText,
+          fallbackActive,
+          fallbackSelectedModel,
+          fallbackActiveModel,
+          fallbackReason,
         },
       };
     },
