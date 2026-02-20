@@ -126,9 +126,7 @@ export async function processGatewayAllowlist(
       if (decision === "deny") {
         deniedReason = "user-denied";
       } else if (!decision) {
-        if (askFallback === "full") {
-          approvedByAsk = true;
-        } else if (askFallback === "allowlist") {
+        if (askFallback === "allowlist") {
           if (!analysisOk || !allowlistSatisfied) {
             deniedReason = "approval-timeout (allowlist-miss)";
           } else {

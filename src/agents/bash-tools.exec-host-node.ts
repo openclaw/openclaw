@@ -203,10 +203,7 @@ export async function executeNodeHostCommand(
       if (decision === "deny") {
         deniedReason = "user-denied";
       } else if (!decision) {
-        if (askFallback === "full") {
-          approvedByAsk = true;
-          approvalDecision = "allow-once";
-        } else if (askFallback === "allowlist") {
+        if (askFallback === "allowlist") {
           // Defer allowlist enforcement to the node host.
         } else {
           deniedReason = "approval-timeout";
