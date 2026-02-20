@@ -127,6 +127,7 @@ export function createTelegramDraftStream(params: {
     }
     try {
       await params.api.deleteMessage(chatId, messageId);
+      params.log?.(`telegram stream preview deleted (chat=${chatId}, message=${messageId})`);
     } catch (err) {
       params.warn?.(
         `telegram stream preview cleanup failed: ${err instanceof Error ? err.message : String(err)}`,

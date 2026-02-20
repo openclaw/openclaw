@@ -189,11 +189,13 @@ export const dispatchTelegramMessage = async ({
   };
 
   const disableBlockStreaming =
-    typeof telegramCfg.blockStreaming === "boolean"
-      ? !telegramCfg.blockStreaming
-      : draftStream || streamMode === "off"
-        ? true
-        : undefined;
+    streamMode === "off"
+      ? true // off mode must always disable block streaming
+      : typeof telegramCfg.blockStreaming === "boolean"
+        ? !telegramCfg.blockStreaming
+        : draftStream
+          ? true
+          : undefined;
 
   const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
     cfg,
@@ -269,8 +271,26 @@ export const dispatchTelegramMessage = async ({
   const deliveryState = {
     delivered: false,
     skippedNonSilent: 0,
+    failedDeliveries: 0,
   };
   let finalizedViaPreviewMessage = false;
+
+  /**
+   * Clean up the draft preview message.  The preview must be removed in every
+   * case EXCEPT when it was successfully finalized as the actual response via
+   * an in-place edit (`finalizedViaPreviewMessage === true`).
+   */
+  const clearDraftPreviewIfNeeded = async () => {
+    if (finalizedViaPreviewMessage) {
+      return;
+    }
+    try {
+      await draftStream?.clear();
+    } catch (err) {
+      logVerbose(`telegram: draft preview cleanup failed: ${String(err)}`);
+    }
+  };
+
   const clearGroupHistory = () => {
     if (isGroup && historyKey) {
       clearHistoryEntriesIfEnabled({ historyMap: groupHistories, historyKey, limit: historyLimit });
@@ -292,6 +312,7 @@ export const dispatchTelegramMessage = async ({
   };
 
   let queuedFinal = false;
+  let dispatchError: unknown;
   try {
     ({ queuedFinal } = await dispatchReplyWithBufferedBlockDispatcher({
       ctx: ctxPayload,
@@ -340,6 +361,9 @@ export const dispatchTelegramMessage = async ({
                 });
                 finalizedViaPreviewMessage = true;
                 deliveryState.delivered = true;
+                logVerbose(
+                  `telegram: finalized response via preview edit (messageId=${previewMessageId})`,
+                );
                 return;
               } catch (err) {
                 logVerbose(
@@ -382,6 +406,9 @@ export const dispatchTelegramMessage = async ({
                 });
                 finalizedViaPreviewMessage = true;
                 deliveryState.delivered = true;
+                logVerbose(
+                  `telegram: finalized response via post-stop preview edit (messageId=${messageIdAfterStop})`,
+                );
                 return;
               } catch (err) {
                 logVerbose(
@@ -397,6 +424,13 @@ export const dispatchTelegramMessage = async ({
           });
           if (result.delivered) {
             deliveryState.delivered = true;
+            logVerbose(
+              `telegram: ${info.kind} reply delivered to chat ${chatId}${payload.isError ? " (error payload)" : ""}`,
+            );
+          } else {
+            logVerbose(
+              `telegram: ${info.kind} reply delivery returned not-delivered for chat ${chatId}`,
+            );
           }
         },
         onSkip: (_payload, info) => {
@@ -405,6 +439,7 @@ export const dispatchTelegramMessage = async ({
           }
         },
         onError: (err, info) => {
+          deliveryState.failedDeliveries += 1;
           runtime.error?.(danger(`telegram ${info.kind} reply failed: ${String(err)}`));
         },
         onReplyStart: createTypingCallbacks({
@@ -453,20 +488,29 @@ export const dispatchTelegramMessage = async ({
         onModelSelected,
       },
     }));
+  } catch (err) {
+    dispatchError = err;
   } finally {
-    // Must stop() first to flush debounced content before clear() wipes state
     await draftStream?.stop();
-    if (!finalizedViaPreviewMessage) {
-      await draftStream?.clear();
-    }
   }
   let sentFallback = false;
-  if (!deliveryState.delivered && deliveryState.skippedNonSilent > 0) {
-    const result = await deliverReplies({
-      replies: [{ text: EMPTY_RESPONSE_FALLBACK }],
-      ...deliveryBaseOptions,
-    });
-    sentFallback = result.delivered;
+  try {
+    if (
+      !dispatchError &&
+      !deliveryState.delivered &&
+      (deliveryState.skippedNonSilent > 0 || deliveryState.failedDeliveries > 0)
+    ) {
+      const result = await deliverReplies({
+        replies: [{ text: EMPTY_RESPONSE_FALLBACK }],
+        ...deliveryBaseOptions,
+      });
+      sentFallback = result.delivered;
+    }
+  } finally {
+    await clearDraftPreviewIfNeeded();
+  }
+  if (dispatchError) {
+    throw dispatchError;
   }
 
   const hasFinalResponse = queuedFinal || sentFallback;
