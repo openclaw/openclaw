@@ -69,6 +69,12 @@ const processSchema = Type.Object({
       minimum: 0,
     }),
   ),
+  delayMs: Type.Optional(
+    Type.Number({
+      description: "For send-keys: delay between key tokens in milliseconds",
+      minimum: 0,
+    }),
+  ),
 });
 
 const MAX_POLL_WAIT_MS = 120_000;
@@ -81,6 +87,21 @@ function resolvePollWaitMs(value: unknown) {
     const parsed = Number.parseInt(value.trim(), 10);
     if (Number.isFinite(parsed)) {
       return Math.max(0, Math.min(MAX_POLL_WAIT_MS, parsed));
+    }
+  }
+  return 0;
+}
+
+const MAX_SEND_KEYS_DELAY_MS = 5000;
+
+function resolveSendKeysDelayMs(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Math.max(0, Math.min(MAX_SEND_KEYS_DELAY_MS, Math.floor(value)));
+  }
+  if (typeof value === "string") {
+    const parsed = Number.parseInt(value.trim(), 10);
+    if (Number.isFinite(parsed)) {
+      return Math.max(0, Math.min(MAX_SEND_KEYS_DELAY_MS, parsed));
     }
   }
   return 0;
@@ -176,6 +197,7 @@ export function createProcessTool(
         offset?: number;
         limit?: number;
         timeout?: unknown;
+        delayMs?: number;
       };
 
       if (params.action === "list") {
@@ -474,12 +496,47 @@ export function createProcessTool(
           if (!resolved.ok) {
             return resolved.result;
           }
-          const { data, warnings } = encodeKeySequence({
-            keys: params.keys,
+
+          const warnings: string[] = [];
+          let bytesSent = 0;
+          const delayMs = resolveSendKeysDelayMs(params.delayMs);
+
+          const { data: prefixData, warnings: prefixWarnings } = encodeKeySequence({
             hex: params.hex,
             literal: params.literal,
           });
-          if (!data) {
+          warnings.push(...prefixWarnings);
+          if (prefixData) {
+            await writeToStdin(resolved.stdin, prefixData);
+            bytesSent += prefixData.length;
+          }
+
+          const keyTokens = params.keys ?? [];
+          if (keyTokens.length > 0 && delayMs > 0) {
+            for (let i = 0; i < keyTokens.length; i += 1) {
+              const { data: tokenData, warnings: tokenWarnings } = encodeKeySequence({
+                keys: [keyTokens[i] ?? ""],
+              });
+              warnings.push(...tokenWarnings);
+              if (!tokenData) {
+                continue;
+              }
+              await writeToStdin(resolved.stdin, tokenData);
+              bytesSent += tokenData.length;
+              if (i < keyTokens.length - 1) {
+                await new Promise((resolveDelay) => setTimeout(resolveDelay, delayMs));
+              }
+            }
+          } else if (keyTokens.length > 0) {
+            const { data: keyData, warnings: keyWarnings } = encodeKeySequence({ keys: keyTokens });
+            warnings.push(...keyWarnings);
+            if (keyData) {
+              await writeToStdin(resolved.stdin, keyData);
+              bytesSent += keyData.length;
+            }
+          }
+
+          if (bytesSent === 0) {
             return {
               content: [
                 {
@@ -490,13 +547,13 @@ export function createProcessTool(
               details: { status: "failed" },
             };
           }
-          await writeToStdin(resolved.stdin, data);
+
           return {
             content: [
               {
                 type: "text",
                 text:
-                  `Sent ${data.length} bytes to session ${params.sessionId}.` +
+                  `Sent ${bytesSent} bytes to session ${params.sessionId}.` +
                   (warnings.length ? `\nWarnings:\n- ${warnings.join("\n- ")}` : ""),
               },
             ],
