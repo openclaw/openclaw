@@ -191,6 +191,43 @@ export function parseCliJson(raw: string, backend: CliBackendConfig): CliOutput 
   } catch {
     return null;
   }
+  // Handle JSON array output (Claude Code v2.1.49+ outputs an array of event objects)
+  if (Array.isArray(parsed)) {
+    let sessionId: string | undefined;
+    let usage: CliUsage | undefined;
+    for (const entry of parsed) {
+      if (!isRecord(entry)) {
+        continue;
+      }
+      if (!sessionId) {
+        sessionId = pickSessionId(entry, backend);
+      }
+      if (isRecord(entry.usage)) {
+        usage = toUsage(entry.usage) ?? usage;
+      }
+    }
+    // Prefer the "result" entry, then fall back to "assistant"
+    const resultEntry = parsed.find((e: unknown) => isRecord(e) && e.type === "result");
+    if (resultEntry && isRecord(resultEntry)) {
+      const text = collectText(resultEntry.result) || collectText(resultEntry);
+      if (isRecord(resultEntry.usage)) {
+        usage = toUsage(resultEntry.usage) ?? usage;
+      }
+      if (!sessionId) {
+        sessionId = pickSessionId(resultEntry, backend);
+      }
+      return text.trim() ? { text: text.trim(), sessionId, usage } : null;
+    }
+    const assistantEntry = parsed.find((e: unknown) => isRecord(e) && e.type === "assistant");
+    if (assistantEntry && isRecord(assistantEntry)) {
+      const text = collectText(assistantEntry);
+      if (!sessionId && isRecord(assistantEntry)) {
+        sessionId = pickSessionId(assistantEntry, backend);
+      }
+      return text.trim() ? { text: text.trim(), sessionId, usage } : null;
+    }
+    return null;
+  }
   if (!isRecord(parsed)) {
     return null;
   }
