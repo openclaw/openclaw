@@ -21,6 +21,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Suppress tool error warning payloads during heartbeat runs.",
   "agents.list[].heartbeat.suppressToolErrorWarnings":
     "Suppress tool error warning payloads during heartbeat runs.",
+  "agents.list.*.memory.allowReadFrom":
+    'Allow this agent to read memory from other agents (ids or "*"); self is always allowed.',
+  "agents.list[].memory.allowReadFrom":
+    'Allow this agent to read memory from other agents (ids or "*"); self is always allowed.',
   "discovery.mdns.mode":
     'mDNS broadcast mode ("minimal" default, "full" includes cliPath/sshPort, "off" disables mDNS).',
   "gateway.auth.token":
