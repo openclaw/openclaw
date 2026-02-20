@@ -3,15 +3,10 @@ import * as authModule from "../agents/model-auth.js";
 import { type FetchMock, withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { createVoyageEmbeddingProvider, normalizeVoyageModel } from "./embeddings-voyage.js";
 
-vi.mock("../agents/model-auth.js", () => ({
-  resolveApiKeyForProvider: vi.fn(),
-  requireApiKey: (auth: { apiKey?: string; mode?: string }, provider: string) => {
-    if (auth?.apiKey) {
-      return auth.apiKey;
-    }
-    throw new Error(`No API key resolved for provider "${provider}" (auth mode: ${auth?.mode}).`);
-  },
-}));
+vi.mock("../agents/model-auth.js", async () => {
+  const { createModelAuthMockModule } = await import("../test-utils/model-auth-mock.js");
+  return createModelAuthMockModule();
+});
 
 const createFetchMock = () => {
   const fetchMock = vi.fn<FetchMock>(
@@ -24,6 +19,28 @@ const createFetchMock = () => {
   return withFetchPreconnect(fetchMock);
 };
 
+function mockVoyageApiKey() {
+  vi.mocked(authModule.resolveApiKeyForProvider).mockResolvedValue({
+    apiKey: "voyage-key-123",
+    mode: "api-key",
+    source: "test",
+  });
+}
+
+async function createDefaultVoyageProvider(
+  model: string,
+  fetchMock: ReturnType<typeof createFetchMock>,
+) {
+  vi.stubGlobal("fetch", fetchMock);
+  mockVoyageApiKey();
+  return createVoyageEmbeddingProvider({
+    config: {} as never,
+    provider: "voyage",
+    model,
+    fallback: "none",
+  });
+}
+
 describe("voyage embedding provider", () => {
   afterEach(() => {
     vi.resetAllMocks();
@@ -32,20 +49,7 @@ describe("voyage embedding provider", () => {
 
   it("configures client with correct defaults and headers", async () => {
     const fetchMock = createFetchMock();
-    vi.stubGlobal("fetch", fetchMock);
-
-    vi.mocked(authModule.resolveApiKeyForProvider).mockResolvedValue({
-      apiKey: "voyage-key-123",
-      mode: "api-key",
-      source: "test",
-    });
-
-    const result = await createVoyageEmbeddingProvider({
-      config: {} as never,
-      provider: "voyage",
-      model: "voyage-4-large",
-      fallback: "none",
-    });
+    const result = await createDefaultVoyageProvider("voyage-4-large", fetchMock);
 
     await result.provider.embedQuery("test query");
 
@@ -110,20 +114,7 @@ describe("voyage embedding provider", () => {
           ),
       ),
     );
-    vi.stubGlobal("fetch", fetchMock);
-
-    vi.mocked(authModule.resolveApiKeyForProvider).mockResolvedValue({
-      apiKey: "voyage-key-123",
-      mode: "api-key",
-      source: "test",
-    });
-
-    const result = await createVoyageEmbeddingProvider({
-      config: {} as never,
-      provider: "voyage",
-      model: "voyage-4-large",
-      fallback: "none",
-    });
+    const result = await createDefaultVoyageProvider("voyage-4-large", fetchMock);
 
     await result.provider.embedBatch(["doc1", "doc2"]);
 

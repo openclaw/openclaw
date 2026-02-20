@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-choice.js";
@@ -22,7 +23,9 @@ vi.mock("../providers/github-copilot-auth.js", () => ({
   githubCopilotLoginCommand: vi.fn(async () => {}),
 }));
 
-const loginOpenAICodexOAuth = vi.hoisted(() => vi.fn(async () => null));
+const loginOpenAICodexOAuth = vi.hoisted(() =>
+  vi.fn<() => Promise<OAuthCredentials | null>>(async () => null),
+);
 vi.mock("./openai-codex-oauth.js", () => ({
   loginOpenAICodexOAuth,
 }));
@@ -121,6 +124,41 @@ describe("applyAuthChoice", () => {
         setDefaultModel: false,
       }),
     ).resolves.toEqual({ config: {} });
+  });
+
+  it("stores openai-codex OAuth with email profile id", async () => {
+    await setupTempState();
+
+    loginOpenAICodexOAuth.mockResolvedValueOnce({
+      email: "user@example.com",
+      refresh: "refresh-token",
+      access: "access-token",
+      expires: Date.now() + 60_000,
+    });
+
+    const prompter = createPrompter({});
+    const runtime = createExitThrowingRuntime();
+
+    const result = await applyAuthChoice({
+      authChoice: "openai-codex",
+      config: {},
+      prompter,
+      runtime,
+      setDefaultModel: false,
+    });
+
+    expect(result.config.auth?.profiles?.["openai-codex:user@example.com"]).toMatchObject({
+      provider: "openai-codex",
+      mode: "oauth",
+    });
+    expect(result.config.auth?.profiles?.["openai-codex:default"]).toBeUndefined();
+    expect(await readAuthProfile("openai-codex:user@example.com")).toMatchObject({
+      type: "oauth",
+      provider: "openai-codex",
+      refresh: "refresh-token",
+      access: "access-token",
+      email: "user@example.com",
+    });
   });
 
   it("prompts and writes MiniMax API key when selecting minimax-api", async () => {
@@ -399,54 +437,47 @@ describe("applyAuthChoice", () => {
     expect(result.agentModelOverride).toBe("opencode/claude-opus-4-6");
   });
 
-  it("does not persist literal 'undefined' when Anthropic API key prompt returns undefined", async () => {
-    await setupTempState();
-    delete process.env.ANTHROPIC_API_KEY;
+  it("does not persist literal 'undefined' when API key prompts return undefined", async () => {
+    const scenarios = [
+      {
+        authChoice: "apiKey" as const,
+        envKey: "ANTHROPIC_API_KEY",
+        profileId: "anthropic:default",
+        provider: "anthropic",
+      },
+      {
+        authChoice: "openrouter-api-key" as const,
+        envKey: "OPENROUTER_API_KEY",
+        profileId: "openrouter:default",
+        provider: "openrouter",
+      },
+    ];
 
-    const text = vi.fn(async () => undefined as unknown as string);
-    const prompter = createPrompter({ text });
-    const runtime = createExitThrowingRuntime();
+    for (const scenario of scenarios) {
+      await setupTempState();
+      delete process.env[scenario.envKey];
 
-    const result = await applyAuthChoice({
-      authChoice: "apiKey",
-      config: {},
-      prompter,
-      runtime,
-      setDefaultModel: false,
-    });
+      const text = vi.fn(async () => undefined as unknown as string);
+      const prompter = createPrompter({ text });
+      const runtime = createExitThrowingRuntime();
 
-    expect(result.config.auth?.profiles?.["anthropic:default"]).toMatchObject({
-      provider: "anthropic",
-      mode: "api_key",
-    });
+      const result = await applyAuthChoice({
+        authChoice: scenario.authChoice,
+        config: {},
+        prompter,
+        runtime,
+        setDefaultModel: false,
+      });
 
-    expect((await readAuthProfile("anthropic:default"))?.key).toBe("");
-    expect((await readAuthProfile("anthropic:default"))?.key).not.toBe("undefined");
-  });
+      expect(result.config.auth?.profiles?.[scenario.profileId]).toMatchObject({
+        provider: scenario.provider,
+        mode: "api_key",
+      });
 
-  it("does not persist literal 'undefined' when OpenRouter API key prompt returns undefined", async () => {
-    await setupTempState();
-    delete process.env.OPENROUTER_API_KEY;
-
-    const text = vi.fn(async () => undefined as unknown as string);
-    const prompter = createPrompter({ text });
-    const runtime = createExitThrowingRuntime();
-
-    const result = await applyAuthChoice({
-      authChoice: "openrouter-api-key",
-      config: {},
-      prompter,
-      runtime,
-      setDefaultModel: false,
-    });
-
-    expect(result.config.auth?.profiles?.["openrouter:default"]).toMatchObject({
-      provider: "openrouter",
-      mode: "api_key",
-    });
-
-    expect((await readAuthProfile("openrouter:default"))?.key).toBe("");
-    expect((await readAuthProfile("openrouter:default"))?.key).not.toBe("undefined");
+      const profile = await readAuthProfile(scenario.profileId);
+      expect(profile?.key).toBe("");
+      expect(profile?.key).not.toBe("undefined");
+    }
   });
 
   it("uses existing OPENROUTER_API_KEY when selecting openrouter-api-key", async () => {

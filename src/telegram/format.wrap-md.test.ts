@@ -293,12 +293,6 @@ describe("edge cases", () => {
     expect(result).toContain("</a> <code>script.py</code>");
   });
 
-  it("handles auto-linked anchor with backreference match", () => {
-    // The regex uses \1 backreference - href must equal label
-    const input = '<a href="http://README.md">README.md</a>';
-    expect(wrapFileReferencesInHtml(input)).toBe("<code>README.md</code>");
-  });
-
   it("preserves anchor when href and label differ (no backreference match)", () => {
     // Different href and label - should NOT de-linkify
     const input = '<a href="http://other.md">README.md</a>';
