@@ -335,6 +335,14 @@ describe("classifyFailoverReason", () => {
       ),
     ).toBe("timeout");
     expect(classifyFailoverReason("string should match pattern")).toBe("format");
+    expect(
+      classifyFailoverReason(
+        "request body is not valid JSON: no low surrogate in string: line 1 column 123",
+      ),
+    ).toBe("format");
+    expect(classifyFailoverReason("invalid request payload: lone surrogate in string")).toBe(
+      "format",
+    );
     expect(classifyFailoverReason("bad request")).toBeNull();
     expect(
       classifyFailoverReason(

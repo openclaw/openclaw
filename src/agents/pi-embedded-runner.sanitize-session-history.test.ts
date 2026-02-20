@@ -14,6 +14,7 @@ import {
   sanitizeWithOpenAIResponses,
   TEST_SESSION_ID,
 } from "./pi-embedded-runner.sanitize-session-history.test-harness.js";
+import { hasUnpairedSurrogates } from "./pi-embedded-runner/unicode-safety.js";
 
 let sanitizeSessionHistory: SanitizeSessionHistoryFn;
 
@@ -283,5 +284,36 @@ describe("sanitizeSessionHistory", () => {
           (msg as { toolCallId?: string }).toolCallId === "tool_01VihkDRptyLpX1ApUPe7ooU",
       ),
     ).toBe(false);
+  });
+
+  it("repairs invalid UTF-16 surrogate sequences in session messages", async () => {
+    const messages = [
+      { role: "user", content: "hello \ud83d world" },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "bad low surrogate \udc00 here" }],
+      },
+    ] as unknown as AgentMessage[];
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-responses",
+      provider: "openai",
+      sessionManager: mockSessionManager,
+      sessionId: TEST_SESSION_ID,
+    });
+
+    const userText = (result[0] as { content?: unknown })?.content;
+    expect(typeof userText).toBe("string");
+    expect(userText).toContain("\uFFFD");
+    expect(hasUnpairedSurrogates(userText as string)).toBe(false);
+
+    const assistantContent = (result[1] as { content?: unknown })?.content;
+    const assistantText = Array.isArray(assistantContent)
+      ? (assistantContent[0] as { text?: unknown })?.text
+      : undefined;
+    expect(typeof assistantText).toBe("string");
+    expect(assistantText).toContain("\uFFFD");
+    expect(hasUnpairedSurrogates(assistantText as string)).toBe(false);
   });
 });

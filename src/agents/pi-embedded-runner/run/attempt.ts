@@ -96,6 +96,7 @@ import {
 } from "../system-prompt.js";
 import { installToolResultContextGuard } from "../tool-result-context-guard.js";
 import { splitSdkTools } from "../tool-split.js";
+import { sanitizeUnpairedSurrogatesWithStats } from "../unicode-safety.js";
 import { describeUnknownError, mapThinkingLevel } from "../utils.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
 import {
@@ -928,6 +929,14 @@ export async function runEmbeddedAttempt(
               `hooks: prepended context to prompt (${hookResult.prependContext.length} chars)`,
             );
           }
+        }
+        const promptUnicodeResult = sanitizeUnpairedSurrogatesWithStats(effectivePrompt);
+        if (promptUnicodeResult.replacements > 0) {
+          effectivePrompt = promptUnicodeResult.value;
+          log.warn(
+            `prompt unicode sanitizer repaired ${promptUnicodeResult.replacements} invalid UTF-16 surrogate code unit(s) ` +
+              `(runId=${params.runId} sessionId=${params.sessionId})`,
+          );
         }
 
         log.debug(`embedded run prompt start: runId=${params.runId} sessionId=${params.sessionId}`);
