@@ -294,12 +294,5 @@ export async function monitorMSTeamsProvider(
     });
   };
 
-  // Handle abort signal
-  if (opts.abortSignal) {
-    opts.abortSignal.addEventListener("abort", () => {
-      void shutdown();
-    });
-  }
-
   return { app: expressApp, shutdown };
 }

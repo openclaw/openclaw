@@ -444,11 +444,22 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
       const port = ctx.cfg.channels?.msteams?.webhook?.port ?? 3978;
       ctx.setStatus({ accountId: ctx.accountId, port });
       ctx.log?.info(`starting provider (port ${port})`);
-      return monitorMSTeamsProvider({
+
+      const monitor = await monitorMSTeamsProvider({
         cfg: ctx.cfg,
         runtime: ctx.runtime,
         abortSignal: ctx.abortSignal,
       });
+
+      // Keep the account task alive until stop/restart aborts it.
+      // Resolving this promise early is interpreted as provider exit by the channel manager.
+      if (!ctx.abortSignal.aborted) {
+        await new Promise<void>((resolve) => {
+          ctx.abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      }
+
+      await monitor.shutdown();
     },
   },
 };
