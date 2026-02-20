@@ -44,7 +44,27 @@ RUN pnpm ui:build
 
 ENV NODE_ENV=production
 
+# Docker-specific startup optimizations:
+# - Skip the process respawn that adds ~200ms (warning flag passed via CMD instead)
+ENV OPENCLAW_NO_RESPAWN=1
+# - Skip mDNS/Bonjour discovery (not useful inside a container)
+ENV OPENCLAW_DISABLE_BONJOUR=1
+# - Skip canvas host server startup probe
+ENV OPENCLAW_SKIP_CANVAS_HOST=1
+# - Enable Node.js compile cache for faster subsequent startups
+ENV NODE_COMPILE_CACHE=/app/.node-compile-cache
+
+# Pre-warm the Node.js compile cache so it's baked into the image.
+RUN node --disable-warning=ExperimentalWarning openclaw.mjs --help 2>/dev/null || true
+
+# Pre-warm jiti's filesystem cache for bundled plugins.
+# jiti transpiles TypeScript extensions at runtime; without a warm cache this
+# adds ~16s to cold start. The cache lives in node_modules/.cache/jiti.
+RUN mkdir -p node_modules/.cache/jiti && \
+    node --disable-warning=ExperimentalWarning scripts/warmup-jiti-cache.mjs 2>/dev/null || true
+
 # Allow non-root user to write temp files during runtime/tests.
+# Runs after cache pre-warming so warm cache files are also owned by node.
 RUN chown -R node:node /app
 
 # Security hardening: Run as non-root user
@@ -57,5 +77,5 @@ USER node
 #
 # For container platforms requiring external health checks:
 #   1. Set OPENCLAW_GATEWAY_TOKEN or OPENCLAW_GATEWAY_PASSWORD env var
-#   2. Override CMD: ["node","openclaw.mjs","gateway","--allow-unconfigured","--bind","lan"]
-CMD ["node", "openclaw.mjs", "gateway", "--allow-unconfigured"]
+#   2. Override CMD: ["node","--disable-warning=ExperimentalWarning","openclaw.mjs","gateway","--allow-unconfigured","--bind","lan"]
+CMD ["node", "--disable-warning=ExperimentalWarning", "openclaw.mjs", "gateway", "--allow-unconfigured"]

@@ -19,7 +19,8 @@ services:
     command:
       [
         "node",
-        "dist/index.js",
+        "--disable-warning=ExperimentalWarning",
+        "openclaw.mjs",
         "gateway",
         "--bind",
         "${OPENCLAW_GATEWAY_BIND:-lan}",
