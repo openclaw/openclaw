@@ -243,15 +243,7 @@ export async function executePluginCommand(params: {
   chatId?: string;
   messageId?: string;
 }): Promise<PluginCommandResult> {
-  const {
-    command,
-    args,
-    senderId,
-    channel,
-    isAuthorizedSender,
-    commandBody,
-    config,
-  } = params;
+  const { command, args, senderId, channel, isAuthorizedSender, commandBody, config } = params;
 
   // Check authorization
   const requireAuth = command.requireAuth !== false; // Default to true
