@@ -54,6 +54,7 @@ import { getBearerToken } from "./http-utils.js";
 import { handleOpenAiHttpRequest } from "./openai-http.js";
 import { handleOpenResponsesHttpRequest } from "./openresponses-http.js";
 import { GATEWAY_CLIENT_MODES, normalizeGatewayClientMode } from "./protocol/client-info.js";
+import { applySecurityHeaders } from "./security-headers.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { handleToolsInvokeHttpRequest } from "./tools-invoke-http.js";
 
@@ -506,6 +507,10 @@ export function createGatewayHttpServer(opts: {
         req.url = scopedCanvas.rewrittenUrl;
       }
       const requestPath = new URL(req.url ?? "/", "http://localhost").pathname;
+
+      // Apply security response headers early, before any handler sends a body.
+      applySecurityHeaders(res, requestPath, { tlsEnabled: Boolean(opts.tlsOptions) });
+
       if (await handleHooksRequest(req, res)) {
         return;
       }
