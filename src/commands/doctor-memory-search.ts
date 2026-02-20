@@ -76,7 +76,7 @@ export async function noteMemorySearchHealth(cfg: OpenClawConfig): Promise<void>
   if (hasLocalEmbeddings(resolved.local)) {
     return;
   }
-  for (const provider of ["openai", "gemini", "voyage"] as const) {
+  for (const provider of ["openai", "gemini", "voyage", "deepseek"] as const) {
     if (hasRemoteApiKey || (await hasApiKeyForProvider(provider, cfg, agentDir))) {
       return;
     }
@@ -119,7 +119,7 @@ function hasLocalEmbeddings(local: { modelPath?: string }): boolean {
 }
 
 async function hasApiKeyForProvider(
-  provider: "openai" | "gemini" | "voyage",
+  provider: "openai" | "gemini" | "voyage" | "deepseek",
   cfg: OpenClawConfig,
   agentDir: string,
 ): Promise<boolean> {
@@ -141,6 +141,8 @@ function providerEnvVar(provider: string): string {
       return "GEMINI_API_KEY";
     case "voyage":
       return "VOYAGE_API_KEY";
+    case "deepseek":
+      return "DEEPSEEK_API_KEY";
     default:
       return `${provider.toUpperCase()}_API_KEY`;
   }

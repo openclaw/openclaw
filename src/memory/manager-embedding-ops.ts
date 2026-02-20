@@ -223,6 +223,20 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         }),
       );
     }
+    if (this.provider.id === "deepseek" && this.deepseek) {
+      const entries = Object.entries(this.deepseek.headers)
+        .filter(([key]) => key.toLowerCase() !== "authorization")
+        .toSorted(([a], [b]) => a.localeCompare(b))
+        .map(([key, value]) => [key, value]);
+      return hashText(
+        JSON.stringify({
+          provider: "deepseek",
+          baseUrl: this.deepseek.baseUrl,
+          model: this.deepseek.model,
+          headers: entries,
+        }),
+      );
+    }
     if (this.provider.id === "gemini" && this.gemini) {
       const entries = Object.entries(this.gemini.headers)
         .filter(([key]) => {
