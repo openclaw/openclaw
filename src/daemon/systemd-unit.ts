@@ -1,8 +1,17 @@
 import { splitArgsPreservingQuotes } from "./arg-split.js";
 import type { GatewayServiceRenderArgs } from "./service-types.js";
 
+const SYSTEMD_LINE_BREAKS = /[\r\n]/;
+
+function assertNoSystemdLineBreaks(value: string, label: string): void {
+  if (SYSTEMD_LINE_BREAKS.test(value)) {
+    throw new Error(`${label} cannot contain CR or LF characters.`);
+  }
+}
+
 function systemdEscapeArg(value: string): string {
-  if (!/[\\s"\\\\]/.test(value)) {
+  assertNoSystemdLineBreaks(value, "Systemd unit values");
+  if (!/[\s"\\]/.test(value)) {
     return value;
   }
   return `"${value.replace(/\\\\/g, "\\\\\\\\").replace(/"/g, '\\\\"')}"`;
@@ -18,9 +27,12 @@ function renderEnvLines(env: Record<string, string | undefined> | undefined): st
   if (entries.length === 0) {
     return [];
   }
-  return entries.map(
-    ([key, value]) => `Environment=${systemdEscapeArg(`${key}=${value?.trim() ?? ""}`)}`,
-  );
+  return entries.map(([key, value]) => {
+    const rawValue = value ?? "";
+    assertNoSystemdLineBreaks(key, "Systemd environment variable names");
+    assertNoSystemdLineBreaks(rawValue, "Systemd environment variable values");
+    return `Environment=${systemdEscapeArg(`${key}=${rawValue.trim()}`)}`;
+  });
 }
 
 export function buildSystemdUnit({
@@ -30,7 +42,9 @@ export function buildSystemdUnit({
   environment,
 }: GatewayServiceRenderArgs): string {
   const execStart = programArguments.map(systemdEscapeArg).join(" ");
-  const descriptionLine = `Description=${description?.trim() || "OpenClaw Gateway"}`;
+  const descriptionValue = description?.trim() || "OpenClaw Gateway";
+  assertNoSystemdLineBreaks(descriptionValue, "Systemd Description");
+  const descriptionLine = `Description=${descriptionValue}`;
   const workingDirLine = workingDirectory
     ? `WorkingDirectory=${systemdEscapeArg(workingDirectory)}`
     : null;
