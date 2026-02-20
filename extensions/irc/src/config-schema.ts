@@ -71,6 +71,8 @@ export const IrcAccountSchemaBase = z
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     responsePrefix: z.string().optional(),
     mediaMaxMb: z.number().positive().optional(),
+    tlsInsecure: z.boolean().optional(),
+    tlsFingerprints: z.array(z.string()).optional(),
   })
   .strict();
 

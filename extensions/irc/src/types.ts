@@ -59,6 +59,8 @@ export type IrcAccountConfig = {
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
   responsePrefix?: string;
   mediaMaxMb?: number;
+  tlsInsecure?: boolean;
+  tlsFingerprints?: string[];
 };
 
 export type IrcConfig = IrcAccountConfig & {

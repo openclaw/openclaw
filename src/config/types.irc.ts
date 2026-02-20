@@ -100,6 +100,10 @@ export type IrcAccountConfig = {
   responsePrefix?: string;
   /** Max outbound media size in MB. */
   mediaMaxMb?: number;
+  /** Skip all TLS certificate verification (insecure; vulnerable to MITM). */
+  tlsInsecure?: boolean;
+  /** Accept only TLS certificates matching these SHA-256 fingerprints (colon-separated hex). */
+  tlsFingerprints?: string[];
 };
 
 export type IrcConfig = {

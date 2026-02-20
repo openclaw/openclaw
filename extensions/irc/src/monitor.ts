@@ -60,10 +60,19 @@ export async function monitorIrcProvider(opts: IrcMonitorOptions): Promise<{ sto
 
   let client: IrcClient | null = null;
 
+  logger.info(
+    `[${account.accountId}] connecting to ${account.host}:${account.port} ` +
+      `(tls=${account.tls}, tlsInsecure=${account.tlsInsecure}, ` +
+      `tlsFingerprints=[${account.tlsFingerprints.join(", ")}])`,
+  );
+
   client = await connectIrcClient(
     buildIrcConnectOptions(account, {
       channels: account.config.channels,
       abortSignal: opts.abortSignal,
+      log: (message) => {
+        logger.info(`[${account.accountId}] ${message}`);
+      },
       onLine: (line) => {
         if (core.logging.shouldLogVerbose()) {
           logger.debug?.(`[${account.accountId}] << ${line}`);
@@ -138,10 +147,13 @@ export async function monitorIrcProvider(opts: IrcMonitorOptions): Promise<{ sto
     `[${account.accountId}] connected to ${account.host}:${account.port}${account.tls ? " (tls)" : ""} as ${client.nick}`,
   );
 
-  return {
-    stop: () => {
-      client?.quit("shutdown");
-      client = null;
-    },
+  const stop = () => {
+    client?.quit("shutdown");
+    client = null;
   };
+
+  // Stay alive until the socket closes so the gateway doesn't auto-restart.
+  await client.closed;
+
+  return { stop };
 }
