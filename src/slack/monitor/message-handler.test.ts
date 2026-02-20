@@ -1,7 +1,7 @@
 import type { App } from "@slack/bolt";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../config/config.js";
-import type { RuntimeEnv } from "../../../runtime.js";
+import type { OpenClawConfig } from "../../../src/config/config.js";
+import type { RuntimeEnv } from "../../../src/runtime.js";
 import type { SlackMessageEvent } from "../types.js";
 import { createSlackMonitorContext } from "./context.js";
 import { createSlackMessageHandler } from "./message-handler.js";
@@ -120,7 +120,7 @@ describe("slack createSlackMessageHandler", () => {
       type: "app_mention",
       ts: undefined,
       event_ts: sharedTs,
-    } as SlackMessageEvent;
+    } as unknown as SlackMessageEvent;
 
     await handler(slackMessage, { source: "message" });
     await handler(slackMention, { source: "app_mention", wasMentioned: true });
