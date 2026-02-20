@@ -417,6 +417,26 @@ export type ToolsConfig = {
         /** Include inline citations in response text as markdown links (default: false). */
         inlineCitations?: boolean;
       };
+      /** Brave-specific configuration (used when provider="brave"). */
+      brave?: {
+        /** Search mode: "web" (default) for standard search, "llm-context" for LLM Context API. */
+        mode?: "web" | "llm-context";
+        /** Configuration for the LLM Context API endpoint (only used when mode="llm-context"). */
+        llmContext?: {
+          /** Maximum total tokens in the response (1024-32768, default: 8192). */
+          maxTokens?: number;
+          /** Maximum number of URLs to include (1-50, default: 20). */
+          maxUrls?: number;
+          /** Relevance threshold for filtering results ("strict" | "balanced" | "lenient" | "disabled"). */
+          thresholdMode?: "strict" | "balanced" | "lenient" | "disabled";
+          /** Maximum number of snippets across all results (1-100). */
+          maxSnippets?: number;
+          /** Maximum tokens per individual URL (512-8192). */
+          maxTokensPerUrl?: number;
+          /** Maximum snippets per individual URL (1-100). */
+          maxSnippetsPerUrl?: number;
+        };
+      };
     };
     fetch?: {
       /** Enable web fetch tool (default: true). */

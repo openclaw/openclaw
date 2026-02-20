@@ -248,6 +248,30 @@ export const ToolsWebSearchSchema = z
       })
       .strict()
       .optional(),
+    brave: z
+      .object({
+        mode: z.union([z.literal("web"), z.literal("llm-context")]).optional(),
+        llmContext: z
+          .object({
+            maxTokens: z.number().int().min(1024).max(32768).optional(),
+            maxUrls: z.number().int().min(1).max(50).optional(),
+            thresholdMode: z
+              .union([
+                z.literal("strict"),
+                z.literal("balanced"),
+                z.literal("lenient"),
+                z.literal("disabled"),
+              ])
+              .optional(),
+            maxSnippets: z.number().int().min(1).max(100).optional(),
+            maxTokensPerUrl: z.number().int().min(512).max(8192).optional(),
+            maxSnippetsPerUrl: z.number().int().min(1).max(100).optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .optional();

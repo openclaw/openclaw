@@ -23,6 +23,7 @@ const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
 
 const BRAVE_SEARCH_ENDPOINT = "https://api.search.brave.com/res/v1/web/search";
+const BRAVE_LLM_CONTEXT_ENDPOINT = "https://api.search.brave.com/res/v1/llm/context";
 const DEFAULT_PERPLEXITY_BASE_URL = "https://openrouter.ai/api/v1";
 const PERPLEXITY_DIRECT_BASE_URL = "https://api.perplexity.ai";
 const DEFAULT_PERPLEXITY_MODEL = "perplexity/sonar-pro";
@@ -131,6 +132,38 @@ type GrokSearchResponse = {
     end_index: number;
     url: string;
   }>;
+};
+
+type BraveConfig = {
+  mode?: "web" | "llm-context";
+  llmContext?: {
+    maxTokens?: number;
+    maxUrls?: number;
+    thresholdMode?: "strict" | "balanced" | "lenient" | "disabled";
+    maxSnippets?: number;
+    maxTokensPerUrl?: number;
+    maxSnippetsPerUrl?: number;
+  };
+};
+
+type BraveLlmContextGroundingItem = {
+  url?: string;
+  title?: string;
+  snippets?: string[];
+};
+
+type BraveLlmContextResponse = {
+  grounding?: {
+    generic?: BraveLlmContextGroundingItem[];
+  };
+  sources?: Record<
+    string,
+    {
+      title?: string;
+      hostname?: string;
+      age?: string[];
+    }
+  >;
 };
 
 type PerplexitySearchResponse = {
@@ -389,6 +422,24 @@ function resolveGrokInlineCitations(grok?: GrokConfig): boolean {
   return grok?.inlineCitations === true;
 }
 
+function resolveBraveConfig(search?: WebSearchConfig): BraveConfig {
+  if (!search || typeof search !== "object") {
+    return {};
+  }
+  const brave = "brave" in search ? search.brave : undefined;
+  if (!brave || typeof brave !== "object") {
+    return {};
+  }
+  return brave as BraveConfig;
+}
+
+function resolveBraveMode(brave?: BraveConfig): "web" | "llm-context" {
+  if (brave?.mode === "llm-context") {
+    return "llm-context";
+  }
+  return "web";
+}
+
 function resolveSearchCount(value: unknown, fallback: number): number {
   const parsed = typeof value === "number" && Number.isFinite(value) ? value : fallback;
   const clamped = Math.max(1, Math.min(MAX_SEARCH_COUNT, Math.floor(parsed)));
@@ -573,6 +624,80 @@ async function runGrokSearch(params: {
   return { content, citations, inlineCitations };
 }
 
+async function runBraveLlmContextSearch(params: {
+  query: string;
+  apiKey: string;
+  timeoutSeconds: number;
+  llmContext?: BraveConfig["llmContext"];
+  country?: string;
+  search_lang?: string;
+}): Promise<{
+  results: Array<{ title: string; url: string; content: string; siteName?: string }>;
+  sourceCount: number;
+}> {
+  const url = new URL(BRAVE_LLM_CONTEXT_ENDPOINT);
+  url.searchParams.set("q", params.query);
+  if (params.country) {
+    url.searchParams.set("country", params.country);
+  }
+  if (params.search_lang) {
+    url.searchParams.set("search_lang", params.search_lang);
+  }
+
+  const ctx = params.llmContext;
+  if (ctx?.maxTokens != null) {
+    url.searchParams.set("maximum_number_of_tokens", String(ctx.maxTokens));
+  }
+  if (ctx?.maxUrls != null) {
+    url.searchParams.set("maximum_number_of_urls", String(ctx.maxUrls));
+  }
+  if (ctx?.thresholdMode) {
+    url.searchParams.set("context_threshold_mode", ctx.thresholdMode);
+  }
+  if (ctx?.maxSnippets != null) {
+    url.searchParams.set("maximum_number_of_snippets", String(ctx.maxSnippets));
+  }
+  if (ctx?.maxTokensPerUrl != null) {
+    url.searchParams.set("maximum_number_of_tokens_per_url", String(ctx.maxTokensPerUrl));
+  }
+  if (ctx?.maxSnippetsPerUrl != null) {
+    url.searchParams.set("maximum_number_of_snippets_per_url", String(ctx.maxSnippetsPerUrl));
+  }
+
+  const res = await fetch(url.toString(), {
+    method: "GET",
+    headers: {
+      Accept: "application/json",
+      "X-Subscription-Token": params.apiKey,
+    },
+    signal: withTimeout(undefined, params.timeoutSeconds * 1000),
+  });
+
+  if (!res.ok) {
+    const detailResult = await readResponseText(res, { maxBytes: 64_000 });
+    const detail = detailResult.text;
+    throw new Error(`Brave LLM Context API error (${res.status}): ${detail || res.statusText}`);
+  }
+
+  const data = (await res.json()) as BraveLlmContextResponse;
+  const items = Array.isArray(data.grounding?.generic) ? data.grounding.generic : [];
+  const sources = data.sources ?? {};
+  const results = items.map((item) => {
+    const snippetTexts = (item.snippets ?? []).filter((t) => t.length > 0);
+    const content = snippetTexts.join("\n\n");
+    const itemUrl = item.url ?? "";
+    const sourceInfo = itemUrl ? sources[itemUrl] : undefined;
+    return {
+      title: item.title ? wrapWebContent(item.title, "web_search") : "",
+      url: itemUrl,
+      content: content ? wrapWebContent(content) : "",
+      siteName: sourceInfo?.hostname || resolveSiteName(itemUrl) || undefined,
+    };
+  });
+
+  return { results, sourceCount: Object.keys(sources).length };
+}
+
 async function runWebSearch(params: {
   query: string;
   count: number;
@@ -588,13 +713,17 @@ async function runWebSearch(params: {
   perplexityModel?: string;
   grokModel?: string;
   grokInlineCitations?: boolean;
+  braveMode?: "web" | "llm-context";
+  braveLlmContext?: BraveConfig["llmContext"];
 }): Promise<Record<string, unknown>> {
   const cacheKey = normalizeCacheKey(
-    params.provider === "brave"
-      ? `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || "default"}:${params.ui_lang || "default"}:${params.freshness || "default"}`
-      : params.provider === "perplexity"
-        ? `${params.provider}:${params.query}:${params.perplexityBaseUrl ?? DEFAULT_PERPLEXITY_BASE_URL}:${params.perplexityModel ?? DEFAULT_PERPLEXITY_MODEL}:${params.freshness || "default"}`
-        : `${params.provider}:${params.query}:${params.grokModel ?? DEFAULT_GROK_MODEL}:${String(params.grokInlineCitations ?? false)}`,
+    params.provider === "brave" && params.braveMode === "llm-context"
+      ? `${params.provider}:llm-context:${params.query}:${params.country || "default"}:${params.search_lang || "default"}:${params.braveLlmContext?.maxTokens ?? ""}:${params.braveLlmContext?.maxUrls ?? ""}:${params.braveLlmContext?.thresholdMode ?? ""}:${params.braveLlmContext?.maxSnippets ?? ""}:${params.braveLlmContext?.maxTokensPerUrl ?? ""}:${params.braveLlmContext?.maxSnippetsPerUrl ?? ""}`
+      : params.provider === "brave"
+        ? `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || "default"}:${params.ui_lang || "default"}:${params.freshness || "default"}`
+        : params.provider === "perplexity"
+          ? `${params.provider}:${params.query}:${params.perplexityBaseUrl ?? DEFAULT_PERPLEXITY_BASE_URL}:${params.perplexityModel ?? DEFAULT_PERPLEXITY_MODEL}:${params.freshness || "default"}`
+          : `${params.provider}:${params.query}:${params.grokModel ?? DEFAULT_GROK_MODEL}:${String(params.grokInlineCitations ?? false)}`,
   );
   const cached = readCache(SEARCH_CACHE, cacheKey);
   if (cached) {
@@ -602,6 +731,35 @@ async function runWebSearch(params: {
   }
 
   const start = Date.now();
+
+  if (params.provider === "brave" && params.braveMode === "llm-context") {
+    const { results, sourceCount } = await runBraveLlmContextSearch({
+      query: params.query,
+      apiKey: params.apiKey,
+      timeoutSeconds: params.timeoutSeconds,
+      llmContext: params.braveLlmContext,
+      country: params.country,
+      search_lang: params.search_lang,
+    });
+
+    const payload = {
+      query: params.query,
+      provider: params.provider,
+      mode: "llm-context" as const,
+      count: results.length,
+      sourceCount,
+      tookMs: Date.now() - start,
+      externalContent: {
+        untrusted: true,
+        source: "web_search",
+        provider: params.provider,
+        wrapped: true,
+      },
+      results,
+    };
+    writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+    return payload;
+  }
 
   if (params.provider === "perplexity") {
     const { content, citations } = await runPerplexitySearch({
@@ -739,13 +897,14 @@ export function createWebSearchTool(options?: {
   const provider = resolveSearchProvider(search);
   const perplexityConfig = resolvePerplexityConfig(search);
   const grokConfig = resolveGrokConfig(search);
-
+  const braveConfig = resolveBraveConfig(search);
+  const braveMode = resolveBraveMode(braveConfig);
   const description =
     provider === "perplexity"
       ? "Search the web using Perplexity Sonar (direct or via OpenRouter). Returns AI-synthesized answers with citations from real-time web search."
       : provider === "grok"
         ? "Search the web using xAI Grok. Returns AI-synthesized answers with citations from real-time web search."
-        : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
+        : "Search the web using Brave Search API. Mode depends on config: standard web search returns titles, URLs, and snippets; llm-context mode returns pre-extracted content optimized for LLM consumption.";
 
   return {
     label: "Web Search",
@@ -780,6 +939,14 @@ export function createWebSearchTool(options?: {
           docs: "https://docs.openclaw.ai/tools/web",
         });
       }
+      if (rawFreshness && provider === "brave" && braveMode === "llm-context") {
+        return jsonResult({
+          error: "unsupported_freshness",
+          message:
+            "freshness is not supported by the Brave LLM Context API. Remove the freshness parameter or switch to standard Brave web search mode.",
+          docs: "https://docs.openclaw.ai/tools/web",
+        });
+      }
       const freshness = rawFreshness ? normalizeFreshness(rawFreshness) : undefined;
       if (rawFreshness && !freshness) {
         return jsonResult({
@@ -808,6 +975,8 @@ export function createWebSearchTool(options?: {
         perplexityModel: resolvePerplexityModel(perplexityConfig),
         grokModel: resolveGrokModel(grokConfig),
         grokInlineCitations: resolveGrokInlineCitations(grokConfig),
+        braveMode,
+        braveLlmContext: braveConfig.llmContext,
       });
       return jsonResult(result);
     },
@@ -825,4 +994,6 @@ export const __testing = {
   resolveGrokModel,
   resolveGrokInlineCitations,
   extractGrokContent,
+  resolveBraveConfig,
+  resolveBraveMode,
 } as const;

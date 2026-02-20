@@ -13,6 +13,8 @@ const {
   resolveGrokModel,
   resolveGrokInlineCitations,
   extractGrokContent,
+  resolveBraveConfig,
+  resolveBraveMode,
 } = __testing;
 
 describe("web_search perplexity baseUrl defaults", () => {
@@ -240,5 +242,52 @@ describe("web_search grok response parsing", () => {
     } as Parameters<typeof extractGrokContent>[0]);
     expect(result.text).toBe("direct output text");
     expect(result.annotationCitations).toEqual(["https://example.com/direct"]);
+  });
+});
+
+describe("web_search brave config resolution", () => {
+  it("returns empty config when search is undefined", () => {
+    expect(resolveBraveConfig(undefined)).toEqual({});
+  });
+
+  it("returns empty config when brave block is missing", () => {
+    expect(resolveBraveConfig({ enabled: true } as never)).toEqual({});
+  });
+
+  it("returns brave config when present", () => {
+    const search = { brave: { mode: "llm-context" } } as never;
+    expect(resolveBraveConfig(search)).toEqual({ mode: "llm-context" });
+  });
+
+  it("returns full llmContext config when present", () => {
+    const search = {
+      brave: {
+        mode: "llm-context",
+        llmContext: { maxTokens: 16384, maxUrls: 10, thresholdMode: "strict" },
+      },
+    } as never;
+    const result = resolveBraveConfig(search);
+    expect(result).toEqual({
+      mode: "llm-context",
+      llmContext: { maxTokens: 16384, maxUrls: 10, thresholdMode: "strict" },
+    });
+  });
+});
+
+describe("web_search brave mode resolution", () => {
+  it("defaults to web when config is undefined", () => {
+    expect(resolveBraveMode(undefined)).toBe("web");
+  });
+
+  it("defaults to web when mode is not set", () => {
+    expect(resolveBraveMode({})).toBe("web");
+  });
+
+  it("returns web when explicitly set", () => {
+    expect(resolveBraveMode({ mode: "web" })).toBe("web");
+  });
+
+  it("returns llm-context when explicitly set", () => {
+    expect(resolveBraveMode({ mode: "llm-context" })).toBe("llm-context");
   });
 });

@@ -116,6 +116,20 @@ export const FIELD_HELP: Record<string, string> = {
     "Perplexity base URL override (default: https://openrouter.ai/api/v1 or https://api.perplexity.ai).",
   "tools.web.search.perplexity.model":
     'Perplexity model override (default: "perplexity/sonar-pro").',
+  "tools.web.search.brave.mode":
+    'Brave search mode: "web" (default) for standard search, "llm-context" for pre-extracted LLM-optimized content.',
+  "tools.web.search.brave.llmContext.maxTokens":
+    "Maximum total tokens in the LLM Context response (1024-32768, default: 8192).",
+  "tools.web.search.brave.llmContext.maxUrls":
+    "Maximum number of URLs to include in LLM Context results (1-50, default: 20).",
+  "tools.web.search.brave.llmContext.thresholdMode":
+    'Relevance threshold for LLM Context filtering ("strict", "balanced", "lenient", or "disabled").',
+  "tools.web.search.brave.llmContext.maxSnippets":
+    "Maximum number of snippets across all LLM Context results (1-100).",
+  "tools.web.search.brave.llmContext.maxTokensPerUrl":
+    "Maximum tokens per individual URL in LLM Context results (512-8192).",
+  "tools.web.search.brave.llmContext.maxSnippetsPerUrl":
+    "Maximum snippets per individual URL in LLM Context results (1-100).",
   "tools.web.fetch.enabled": "Enable the web_fetch tool (lightweight HTTP fetch).",
   "tools.web.fetch.maxChars": "Max characters returned by web_fetch (truncated).",
   "tools.web.fetch.maxCharsCap":
