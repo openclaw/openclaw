@@ -341,6 +341,108 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
     }
   });
 
+  it("does not rotate on timeout when agent had tool activity", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-"));
+    try {
+      await writeAuthStore(agentDir);
+
+      runEmbeddedAttemptMock.mockResolvedValueOnce(
+        makeAttempt({
+          aborted: true,
+          timedOut: true,
+          timedOutDuringCompaction: false,
+          assistantTexts: ["partial response"],
+          toolMetas: [{ toolName: "exec", meta: "ls -la" }],
+          lastAssistant: buildAssistant({
+            stopReason: "stop",
+            content: [{ type: "text", text: "partial response" }],
+          }),
+        }),
+      );
+
+      const result = await runEmbeddedPiAgent({
+        sessionId: "session:test",
+        sessionKey: "agent:test:tool-activity-timeout",
+        sessionFile: path.join(workspaceDir, "session.jsonl"),
+        workspaceDir,
+        agentDir,
+        config: makeConfig(),
+        prompt: "hello",
+        provider: "openai",
+        model: "mock-1",
+        authProfileId: "openai:p1",
+        authProfileIdSource: "auto",
+        timeoutMs: 5_000,
+        runId: "run:tool-activity-timeout",
+      });
+
+      // Should NOT rotate — agent was doing real work, not stalled on an API call
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
+      expect(result.meta.aborted).toBe(true);
+
+      await expectProfileP2UsageUnchanged(agentDir);
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rotates on timeout when no tool activity occurred", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-"));
+    try {
+      await writeAuthStore(agentDir);
+
+      runEmbeddedAttemptMock
+        .mockResolvedValueOnce(
+          makeAttempt({
+            aborted: true,
+            timedOut: true,
+            timedOutDuringCompaction: false,
+            assistantTexts: [],
+            toolMetas: [],
+          }),
+        )
+        .mockResolvedValueOnce(
+          makeAttempt({
+            assistantTexts: ["ok"],
+            lastAssistant: buildAssistant({
+              stopReason: "stop",
+              content: [{ type: "text", text: "ok" }],
+            }),
+          }),
+        );
+
+      await runEmbeddedPiAgent({
+        sessionId: "session:test",
+        sessionKey: "agent:test:no-activity-timeout",
+        sessionFile: path.join(workspaceDir, "session.jsonl"),
+        workspaceDir,
+        agentDir,
+        config: makeConfig(),
+        prompt: "hello",
+        provider: "openai",
+        model: "mock-1",
+        authProfileId: "openai:p1",
+        authProfileIdSource: "auto",
+        timeoutMs: 5_000,
+        runId: "run:no-activity-timeout",
+      });
+
+      // SHOULD rotate — no tool activity means likely an API stall
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
+
+      const stored = JSON.parse(
+        await fs.readFile(path.join(agentDir, "auth-profiles.json"), "utf-8"),
+      ) as { usageStats?: Record<string, { lastUsed?: number }> };
+      expect(typeof stored.usageStats?.["openai:p2"]?.lastUsed).toBe("number");
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
   it("does not rotate for user-pinned profiles", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-"));

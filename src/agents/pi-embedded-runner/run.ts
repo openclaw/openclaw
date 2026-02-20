@@ -898,10 +898,24 @@ export async function runEmbeddedPiAgent(
             );
           }
 
-          // Treat timeout as potential rate limit (Antigravity hangs on rate limit)
-          // But exclude post-prompt compaction timeouts (model succeeded; no profile issue)
+          // Treat timeout as potential rate limit (Antigravity hangs on rate limit).
+          // Exclude post-prompt compaction timeouts (model succeeded; no profile issue)
+          // AND timeouts during active tool use (agent was doing legitimate work via
+          // exec/sub-agents, not stalled on an API call). The streaming inactivity
+          // watchdog already catches genuine API hangs.
+          const hadToolActivity =
+            timedOut && (attempt.toolMetas.length > 0 || attempt.assistantTexts.length > 0);
           const shouldRotate =
-            (!aborted && failoverFailure) || (timedOut && !timedOutDuringCompaction);
+            (!aborted && failoverFailure) ||
+            (timedOut && !timedOutDuringCompaction && !hadToolActivity);
+
+          if (hadToolActivity && !timedOutDuringCompaction && !isProbeSession) {
+            log.info(
+              `Run timed out during active tool use (not an API stall). ` +
+                `tools=${attempt.toolMetas.length} texts=${attempt.assistantTexts.length} ` +
+                `runId=${params.runId} sessionId=${params.sessionId} — skipping profile rotation.`,
+            );
+          }
 
           if (shouldRotate) {
             if (lastProfileId) {
