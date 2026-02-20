@@ -5,7 +5,8 @@ Describe the problem and fix in 2–5 bullets:
 - Problem: paused tool executions had no first-class gateway interrupt primitive, so approvals could not pause/resume across process restarts.
 - Why it matters: approval-gated tool calls need durable, bindable, resumable state so operator decisions are reliable and replay-safe.
 - What changed: added persistent tool interrupt state + RPC (`tool.interrupt.emit` / `tool.interrupt.resume`), pause-for-approval tool wrapper (`wrapToolWithPauseForApproval`), and resume wait flow bound to `runId + sessionKey + toolCallId`.
-- What changed: resume tokens are unguessable, only token hashes are persisted, resume enforces expiry + binding + timing-safe hash compare.
+- What changed: hardening pass adds atomic consume-on-resume ordering, optional `toolName + normalizedArgsHash` payload binding, safe/redacted interrupt summaries for broadcasts, and decision metadata capture (`approvedBy`, reason/policy/timestamps/opaque metadata).
+- What changed: resume tokens are unguessable, only token hashes are persisted, resume enforces expiry + binding + timing-safe hash compare, and the persisted interrupt store now has bounded-growth pruning.
 - What did NOT change (scope boundary): no UI workflow redesign; this PR adds protocol/runtime plumbing only.
 
 ## Change Type (select all)

@@ -84,6 +84,96 @@ describe("ToolInterruptManager", () => {
     manager.stop();
   });
 
+  it("enforces payload binding using toolName + normalizedArgsHash", async () => {
+    const filePath = await createTempInterruptPath();
+    const manager = new ToolInterruptManager({ filePath });
+    await manager.load();
+
+    const emitted = await manager.emit({
+      approvalRequestId: "approval-bind-1",
+      runId: "run-2",
+      sessionKey: "agent:main:main",
+      toolCallId: "tool-2",
+      toolName: "browser",
+      normalizedArgsHash: "a".repeat(64),
+      interrupt: { type: "approval" },
+      timeoutMs: 60_000,
+    });
+
+    const mismatch = await manager.resume({
+      approvalRequestId: "approval-bind-1",
+      runId: "run-2",
+      sessionKey: "agent:main:main",
+      toolCallId: "tool-2",
+      toolName: "browser",
+      normalizedArgsHash: "b".repeat(64),
+      resumeToken: emitted.requested.resumeToken,
+      result: { ok: true },
+    });
+    expect(mismatch).toMatchObject({ ok: false, code: "binding_mismatch" });
+
+    const resumed = await manager.resume({
+      approvalRequestId: "approval-bind-1",
+      runId: "run-2",
+      sessionKey: "agent:main:main",
+      toolCallId: "tool-2",
+      toolName: "browser",
+      normalizedArgsHash: "a".repeat(64),
+      resumeToken: emitted.requested.resumeToken,
+      result: { ok: true },
+      decisionReason: "human approved",
+      policyRuleId: "rule-42",
+      decisionAtMs: 12345,
+      decisionMeta: { ticket: "ABC-1" },
+    });
+    expect(resumed.ok).toBe(true);
+
+    const snapshot = manager.getSnapshot("approval-bind-1");
+    expect(snapshot?.decisionReason).toBe("human approved");
+    expect(snapshot?.policyRuleId).toBe("rule-42");
+    expect(snapshot?.decisionAtMs).toBe(12345);
+    expect(snapshot?.decisionMeta).toEqual({ ticket: "ABC-1" });
+    manager.stop();
+  });
+
+  it("allows only one successful resume under double-approve race", async () => {
+    const filePath = await createTempInterruptPath();
+    const manager = new ToolInterruptManager({ filePath });
+    await manager.load();
+
+    const emitted = await manager.emit({
+      approvalRequestId: "approval-race-1",
+      runId: "run-2",
+      sessionKey: "agent:main:main",
+      toolCallId: "tool-2",
+      interrupt: { type: "approval" },
+      timeoutMs: 60_000,
+    });
+
+    const [a, b] = await Promise.all([
+      manager.resume({
+        approvalRequestId: "approval-race-1",
+        runId: "run-2",
+        sessionKey: "agent:main:main",
+        toolCallId: "tool-2",
+        resumeToken: emitted.requested.resumeToken,
+        result: { winner: "a" },
+      }),
+      manager.resume({
+        approvalRequestId: "approval-race-1",
+        runId: "run-2",
+        sessionKey: "agent:main:main",
+        toolCallId: "tool-2",
+        resumeToken: emitted.requested.resumeToken,
+        result: { winner: "b" },
+      }),
+    ]);
+
+    expect([a.ok, b.ok].filter(Boolean)).toHaveLength(1);
+    expect([a, b].some((item) => !item.ok && item.code === "already_resumed")).toBe(true);
+    manager.stop();
+  });
+
   it("enforces expiry and survives restart with persisted records", async () => {
     const filePath = await createTempInterruptPath();
     let now = 1_000_000;

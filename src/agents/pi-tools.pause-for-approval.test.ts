@@ -8,7 +8,7 @@ vi.mock("./tools/gateway.js", () => ({
   callGatewayTool: gatewayMocks.callGatewayTool,
 }));
 
-const { waitForResume, wrapToolWithPauseForApproval } =
+const { waitForResume, wrapToolWithPauseForApproval, __testing } =
   await import("./pi-tools.pause-for-approval.js");
 
 describe("pause-for-approval wrapper", () => {
@@ -59,10 +59,12 @@ describe("pause-for-approval wrapper", () => {
       },
     );
 
-    await expect(wrapped.execute?.("tool-call-1", {}, undefined, undefined)).resolves.toEqual({
-      content: [{ type: "text", text: "approved" }],
-      details: { status: "completed" },
-    });
+    await expect(wrapped.execute?.("tool-call-1", { a: 1 }, undefined, undefined)).resolves.toEqual(
+      {
+        content: [{ type: "text", text: "approved" }],
+        details: { status: "completed" },
+      },
+    );
     expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
       "tool.interrupt.emit",
       expect.objectContaining({ timeoutMs: 27_345 }),
@@ -71,6 +73,8 @@ describe("pause-for-approval wrapper", () => {
         runId: "run-1",
         sessionKey: "agent:main:main",
         toolCallId: "tool-call-1",
+        toolName: "demo",
+        normalizedArgsHash: __testing.hashToolArgs({ a: 1 }),
         interrupt: { type: "approval", reason: "confirm" },
         timeoutMs: 12_345,
       }),
@@ -109,6 +113,8 @@ describe("pause-for-approval wrapper", () => {
         runId: "run-1",
         sessionKey: "agent:main:main",
         toolCallId: "tool-1",
+        toolName: "demo",
+        normalizedArgsHash: "a".repeat(64),
         approvalRequestId: "approval-1",
         interrupt: { type: "approval" },
       }),

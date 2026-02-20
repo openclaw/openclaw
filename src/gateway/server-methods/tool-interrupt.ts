@@ -10,6 +10,22 @@ import type { GatewayRequestHandlers } from "./types.js";
 
 const DEFAULT_INTERRUPT_TIMEOUT_MS = 10 * 60 * 1000;
 
+function summarizeInterrupt(interrupt: Record<string, unknown>): Record<string, unknown> {
+  const summary: Record<string, unknown> = {
+    redacted: true,
+  };
+  if (typeof interrupt.type === "string" && interrupt.type.trim()) {
+    summary.type = interrupt.type.trim();
+  }
+  if (typeof interrupt.text === "string" && interrupt.text.trim()) {
+    summary.text = `${interrupt.text.trim().slice(0, 120)}${interrupt.text.length > 120 ? "…" : ""}`;
+  }
+  if (typeof interrupt.reason === "string" && interrupt.reason.trim()) {
+    summary.reason = `${interrupt.reason.trim().slice(0, 120)}${interrupt.reason.length > 120 ? "…" : ""}`;
+  }
+  return summary;
+}
+
 export function createToolInterruptHandlers(manager: ToolInterruptManager): GatewayRequestHandlers {
   return {
     "tool.interrupt.emit": async ({ params, respond, context }) => {
@@ -32,6 +48,8 @@ export function createToolInterruptHandlers(manager: ToolInterruptManager): Gate
         runId: string;
         sessionKey: string;
         toolCallId: string;
+        toolName?: string;
+        normalizedArgsHash?: string;
         interrupt: Record<string, unknown>;
         timeoutMs?: number;
         twoPhase?: boolean;
@@ -75,6 +93,8 @@ export function createToolInterruptHandlers(manager: ToolInterruptManager): Gate
           runId: p.runId,
           sessionKey: p.sessionKey,
           toolCallId: p.toolCallId,
+          toolName: p.toolName,
+          normalizedArgsHash: p.normalizedArgsHash,
           interrupt: p.interrupt,
           timeoutMs: typeof p.timeoutMs === "number" ? p.timeoutMs : DEFAULT_INTERRUPT_TIMEOUT_MS,
         });
@@ -86,7 +106,16 @@ export function createToolInterruptHandlers(manager: ToolInterruptManager): Gate
       context.broadcast(
         "tool.interrupt.requested",
         {
-          ...emitted.requested,
+          approvalRequestId: emitted.requested.approvalRequestId,
+          runId: emitted.requested.runId,
+          sessionKey: emitted.requested.sessionKey,
+          toolCallId: emitted.requested.toolCallId,
+          createdAtMs: emitted.requested.createdAtMs,
+          expiresAtMs: emitted.requested.expiresAtMs,
+          resumeToken: emitted.requested.resumeToken,
+          toolName: p.toolName,
+          normalizedArgsHash: p.normalizedArgsHash,
+          interruptSummary: summarizeInterrupt(emitted.requested.interrupt),
           created: emitted.created,
         },
         { dropIfSlow: true },
@@ -136,7 +165,13 @@ export function createToolInterruptHandlers(manager: ToolInterruptManager): Gate
         runId: string;
         sessionKey: string;
         toolCallId: string;
+        toolName?: string;
+        normalizedArgsHash?: string;
         resumeToken: string;
+        decisionReason?: string | null;
+        policyRuleId?: string | null;
+        decisionAtMs?: number;
+        decisionMeta?: Record<string, unknown>;
         result: unknown;
       };
 
@@ -146,7 +181,13 @@ export function createToolInterruptHandlers(manager: ToolInterruptManager): Gate
         runId: p.runId,
         sessionKey: p.sessionKey,
         toolCallId: p.toolCallId,
+        toolName: p.toolName,
+        normalizedArgsHash: p.normalizedArgsHash,
         resumeToken: p.resumeToken,
+        decisionReason: p.decisionReason,
+        policyRuleId: p.policyRuleId,
+        decisionAtMs: p.decisionAtMs,
+        decisionMeta: p.decisionMeta,
         result: p.result,
         resumedBy: resolvedBy ?? null,
       });
@@ -165,6 +206,13 @@ export function createToolInterruptHandlers(manager: ToolInterruptManager): Gate
           toolCallId: resumed.waitResult.toolCallId,
           resumedAtMs: resumed.waitResult.resumedAtMs,
           resumedBy: resumed.waitResult.resumedBy,
+          decisionReason: p.decisionReason ?? null,
+          policyRuleId: p.policyRuleId ?? null,
+          decisionAtMs:
+            typeof p.decisionAtMs === "number" && Number.isFinite(p.decisionAtMs)
+              ? Math.floor(p.decisionAtMs)
+              : resumed.waitResult.resumedAtMs,
+          decisionMeta: p.decisionMeta ?? null,
           ts: Date.now(),
         },
         { dropIfSlow: true },

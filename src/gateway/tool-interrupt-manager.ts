@@ -8,6 +8,7 @@ const TOOL_INTERRUPTS_FILE_VERSION = 2;
 const DEFAULT_INTERRUPT_TIMEOUT_MS = 10 * 60 * 1000;
 const MIN_INTERRUPT_TIMEOUT_MS = 1_000;
 const MAX_INTERRUPT_TIMEOUT_MS = 24 * 60 * 60 * 1000;
+const MAX_STORED_INTERRUPTS = 2_000;
 const SETTLED_PENDING_GRACE_MS = 15_000;
 const RESUMED_RECORD_RETENTION_MS = 15 * 60 * 1000;
 const EXPIRED_RECORD_RETENTION_MS = 15 * 60 * 1000;
@@ -21,11 +22,17 @@ export type ToolInterruptBinding = {
 
 type StoredToolInterruptRecord = ToolInterruptBinding & {
   interrupt: Record<string, unknown>;
+  toolName?: string;
+  normalizedArgsHash?: string;
   createdAtMs: number;
   expiresAtMs: number;
   resumeTokenHash: string;
   resumedAtMs?: number;
   resumedBy?: string | null;
+  decisionReason?: string | null;
+  policyRuleId?: string | null;
+  decisionAtMs?: number;
+  decisionMeta?: Record<string, unknown>;
   resumedResult?: unknown;
   expiredAtMs?: number;
 };
@@ -156,6 +163,7 @@ function parseStoredRecord(value: unknown): StoredToolInterruptRecord | null {
       : undefined;
 
   const resumedResult = (record as { resumedResult?: unknown }).resumedResult;
+  const decisionMeta = asRecord((record as { decisionMeta?: unknown }).decisionMeta);
 
   return {
     approvalRequestId: record.approvalRequestId.trim(),
@@ -163,6 +171,15 @@ function parseStoredRecord(value: unknown): StoredToolInterruptRecord | null {
     sessionKey: record.sessionKey.trim(),
     toolCallId: record.toolCallId.trim(),
     interrupt: { ...interrupt },
+    toolName:
+      typeof record.toolName === "string" && record.toolName.trim()
+        ? record.toolName.trim()
+        : undefined,
+    normalizedArgsHash:
+      typeof record.normalizedArgsHash === "string" &&
+      /^[a-f0-9]{64}$/.test(record.normalizedArgsHash)
+        ? record.normalizedArgsHash
+        : undefined,
     createdAtMs: Math.floor(record.createdAtMs),
     expiresAtMs: Math.floor(record.expiresAtMs),
     resumeTokenHash: record.resumeTokenHash.trim(),
@@ -171,6 +188,19 @@ function parseStoredRecord(value: unknown): StoredToolInterruptRecord | null {
       typeof record.resumedBy === "string" || record.resumedBy === null
         ? record.resumedBy
         : undefined,
+    decisionReason:
+      typeof record.decisionReason === "string" || record.decisionReason === null
+        ? record.decisionReason
+        : undefined,
+    policyRuleId:
+      typeof record.policyRuleId === "string" || record.policyRuleId === null
+        ? record.policyRuleId
+        : undefined,
+    decisionAtMs:
+      typeof record.decisionAtMs === "number" && Number.isFinite(record.decisionAtMs)
+        ? Math.floor(record.decisionAtMs)
+        : undefined,
+    decisionMeta: decisionMeta ? { ...decisionMeta } : undefined,
     resumedResult,
     expiredAtMs: expiredAtMs ? Math.floor(expiredAtMs) : undefined,
   };
@@ -253,17 +283,28 @@ export class ToolInterruptManager {
       sessionKey: record.sessionKey,
       toolCallId: record.toolCallId,
       interrupt: { ...record.interrupt },
+      toolName: record.toolName,
+      normalizedArgsHash: record.normalizedArgsHash,
       createdAtMs: record.createdAtMs,
       expiresAtMs: record.expiresAtMs,
       resumedAtMs: record.resumedAtMs,
       resumedBy: record.resumedBy,
+      decisionReason: record.decisionReason,
+      policyRuleId: record.policyRuleId,
+      decisionAtMs: record.decisionAtMs,
+      decisionMeta: record.decisionMeta ? { ...record.decisionMeta } : undefined,
       resumedResult: record.resumedResult,
       expiredAtMs: record.expiredAtMs,
     };
   }
 
   async emit(
-    params: ToolInterruptBinding & { interrupt: Record<string, unknown>; timeoutMs?: number },
+    params: ToolInterruptBinding & {
+      interrupt: Record<string, unknown>;
+      timeoutMs?: number;
+      toolName?: string;
+      normalizedArgsHash?: string;
+    },
   ) {
     const id = params.approvalRequestId.trim();
     if (!id) {
@@ -280,6 +321,15 @@ export class ToolInterruptManager {
     }
 
     const timeoutMs = normalizeTimeoutMs(params.timeoutMs);
+    const toolName =
+      typeof params.toolName === "string" && params.toolName.trim()
+        ? params.toolName.trim()
+        : undefined;
+    const normalizedArgsHash =
+      typeof params.normalizedArgsHash === "string" &&
+      /^[a-f0-9]{64}$/.test(params.normalizedArgsHash)
+        ? params.normalizedArgsHash
+        : undefined;
     const resumeToken = mintResumeToken();
     const resumeTokenHash = hashResumeToken(resumeToken);
     let created = false;
@@ -301,6 +351,8 @@ export class ToolInterruptManager {
         record = {
           ...binding,
           interrupt: { ...params.interrupt },
+          toolName,
+          normalizedArgsHash,
           createdAtMs: now,
           expiresAtMs: now + timeoutMs,
           resumeTokenHash,
@@ -311,6 +363,8 @@ export class ToolInterruptManager {
         this.records.set(binding.approvalRequestId, record);
       } else {
         record.interrupt = { ...params.interrupt };
+        record.toolName = toolName;
+        record.normalizedArgsHash = normalizedArgsHash;
         record.expiresAtMs = now + timeoutMs;
         record.resumeTokenHash = resumeTokenHash;
         record.expiredAtMs = undefined;
@@ -346,7 +400,6 @@ export class ToolInterruptManager {
       throw new Error("failed to create tool interrupt");
     }
 
-    // Narrowing hint: TS sometimes fails to narrow pending/requested across the async lock.
     const pendingEntry = pending as PendingInterruptEntry;
     const requestedEntry = requested as ToolInterruptRequested;
 
@@ -362,6 +415,12 @@ export class ToolInterruptManager {
       resumeToken: string;
       result: unknown;
       resumedBy?: string | null;
+      toolName?: string;
+      normalizedArgsHash?: string;
+      decisionReason?: string | null;
+      policyRuleId?: string | null;
+      decisionAtMs?: number;
+      decisionMeta?: Record<string, unknown>;
     },
   ): Promise<ToolInterruptResumeResult> {
     const binding: ToolInterruptBinding = {
@@ -412,6 +471,27 @@ export class ToolInterruptManager {
         result = { ok: false, code: "already_resumed", message: "interrupt already resumed" };
         return;
       }
+      if (record.toolName || record.normalizedArgsHash) {
+        const toolName = typeof params.toolName === "string" ? params.toolName.trim() : "";
+        if (!record.toolName || toolName !== record.toolName) {
+          result = {
+            ok: false,
+            code: "binding_mismatch",
+            message: "interrupt tool binding mismatch",
+          };
+          return;
+        }
+        const argsHash =
+          typeof params.normalizedArgsHash === "string" ? params.normalizedArgsHash : "";
+        if (!record.normalizedArgsHash || argsHash !== record.normalizedArgsHash) {
+          result = {
+            ok: false,
+            code: "binding_mismatch",
+            message: "interrupt args binding mismatch",
+          };
+          return;
+        }
+      }
       if (record.expiredAtMs || now >= record.expiresAtMs) {
         record.expiredAtMs = record.expiredAtMs ?? now;
         this.settlePendingLocked(binding.approvalRequestId, {
@@ -446,10 +526,23 @@ export class ToolInterruptManager {
       };
       record.resumedAtMs = resumedAtMs;
       record.resumedBy = params.resumedBy ?? null;
+      record.decisionReason =
+        typeof params.decisionReason === "string" || params.decisionReason === null
+          ? params.decisionReason
+          : undefined;
+      record.policyRuleId =
+        typeof params.policyRuleId === "string" || params.policyRuleId === null
+          ? params.policyRuleId
+          : undefined;
+      record.decisionAtMs =
+        typeof params.decisionAtMs === "number" && Number.isFinite(params.decisionAtMs)
+          ? Math.floor(params.decisionAtMs)
+          : resumedAtMs;
+      record.decisionMeta = params.decisionMeta ? { ...params.decisionMeta } : undefined;
       record.resumedResult = params.result;
-      this.settlePendingLocked(binding.approvalRequestId, waitResult);
       this.pruneRecordsLocked(now);
       await this.persistLocked();
+      this.settlePendingLocked(binding.approvalRequestId, waitResult);
       result = {
         ok: true,
         waitResult,
@@ -556,6 +649,25 @@ export class ToolInterruptManager {
         this.records.delete(id);
       }
     }
+    if (this.records.size <= MAX_STORED_INTERRUPTS) {
+      return;
+    }
+    const records = [...this.records.values()].toSorted((a, b) => {
+      const aSettled = a.resumedAtMs ?? a.expiredAtMs ?? Number.POSITIVE_INFINITY;
+      const bSettled = b.resumedAtMs ?? b.expiredAtMs ?? Number.POSITIVE_INFINITY;
+      if (aSettled !== bSettled) {
+        return aSettled - bSettled;
+      }
+      return a.createdAtMs - b.createdAtMs;
+    });
+    while (this.records.size > MAX_STORED_INTERRUPTS && records.length > 0) {
+      const next = records.shift();
+      if (!next) {
+        break;
+      }
+      this.records.delete(next.approvalRequestId);
+      this.pending.delete(next.approvalRequestId);
+    }
   }
 
   private clearPendingEntries() {
@@ -574,11 +686,17 @@ export class ToolInterruptManager {
         sessionKey: record.sessionKey,
         toolCallId: record.toolCallId,
         interrupt: { ...record.interrupt },
+        toolName: record.toolName,
+        normalizedArgsHash: record.normalizedArgsHash,
         createdAtMs: record.createdAtMs,
         expiresAtMs: record.expiresAtMs,
         resumeTokenHash: record.resumeTokenHash,
         resumedAtMs: record.resumedAtMs,
         resumedBy: record.resumedBy,
+        decisionReason: record.decisionReason,
+        policyRuleId: record.policyRuleId,
+        decisionAtMs: record.decisionAtMs,
+        decisionMeta: record.decisionMeta ? { ...record.decisionMeta } : undefined,
         resumedResult: record.resumedResult,
         expiredAtMs: record.expiredAtMs,
       };

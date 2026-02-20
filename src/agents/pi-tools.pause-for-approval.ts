@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import { callGatewayTool, type GatewayCallOptions } from "./tools/gateway.js";
@@ -24,6 +25,28 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     return null;
   }
   return value as Record<string, unknown>;
+}
+
+function normalizeForHash(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => normalizeForHash(entry));
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const record = value as Record<string, unknown>;
+  const keys = Object.keys(record).toSorted((a, b) => a.localeCompare(b));
+  const normalized: Record<string, unknown> = {};
+  for (const key of keys) {
+    normalized[key] = normalizeForHash(record[key]);
+  }
+  return normalized;
+}
+
+function hashToolArgs(value: unknown): string {
+  const normalized = normalizeForHash(value);
+  const json = JSON.stringify(normalized);
+  return createHash("sha256").update(json).digest("hex");
 }
 
 function parsePauseForApproval(value: unknown): PauseForApprovalDetails | null {
@@ -120,6 +143,8 @@ export async function waitForResume(params: {
   runId: string;
   sessionKey: string;
   toolCallId: string;
+  toolName: string;
+  normalizedArgsHash: string;
   approvalRequestId: string;
   interrupt: Record<string, unknown>;
   timeoutMs?: number;
@@ -142,6 +167,8 @@ export async function waitForResume(params: {
       runId: params.runId,
       sessionKey: params.sessionKey,
       toolCallId: params.toolCallId,
+      toolName: params.toolName,
+      normalizedArgsHash: params.normalizedArgsHash,
       interrupt: params.interrupt,
       timeoutMs,
     },
@@ -183,6 +210,8 @@ export function wrapToolWithPauseForApproval(
         runId,
         sessionKey,
         toolCallId: callId,
+        toolName,
+        normalizedArgsHash: hashToolArgs(params),
         approvalRequestId: paused.approvalRequestId,
         interrupt: paused.interrupt,
         timeoutMs: paused.timeoutMs,
@@ -195,4 +224,5 @@ export function wrapToolWithPauseForApproval(
 
 export const __testing = {
   extractPauseForApproval,
+  hashToolArgs,
 };
