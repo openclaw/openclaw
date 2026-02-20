@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { RuntimeEnv } from "../runtime.js";
 import { monitorLineProvider } from "./monitor.js";
 
 describe("monitorLineProvider lifecycle", () => {
@@ -10,7 +11,7 @@ describe("monitorLineProvider lifecycle", () => {
       channelSecret: "test-secret",
       accountId: "test",
       config: {},
-      runtime: {},
+      runtime: {} as RuntimeEnv,
       abortSignal: abortController.signal,
     });
 
@@ -40,7 +41,7 @@ describe("monitorLineProvider lifecycle", () => {
       channelSecret: "test-secret",
       accountId: "test",
       config: {},
-      runtime: {},
+      runtime: {} as RuntimeEnv,
       abortSignal: abortController.signal,
     });
 
