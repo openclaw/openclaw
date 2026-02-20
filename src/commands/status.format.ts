@@ -21,18 +21,37 @@ export const shortenText = (value: string, maxLen: number) => {
 };
 
 export const formatTokensCompact = (
-  sess: Pick<SessionStatus, "totalTokens" | "contextTokens" | "percentUsed">,
+  sess: Pick<
+    SessionStatus,
+    "totalTokens" | "contextTokens" | "percentUsed" | "cacheRead" | "cacheWrite"
+  >,
 ) => {
   const used = sess.totalTokens;
   const ctx = sess.contextTokens;
+  const cacheRead = sess.cacheRead;
+  const cacheWrite = sess.cacheWrite;
+
+  let result = "";
   if (used == null) {
-    return ctx ? `unknown/${formatKTokens(ctx)} (?%)` : "unknown used";
+    result = ctx ? `unknown/${formatKTokens(ctx)} (?%)` : "unknown used";
+  } else if (!ctx) {
+    result = `${formatKTokens(used)} used`;
+  } else {
+    const pctLabel = sess.percentUsed != null ? `${sess.percentUsed}%` : "?%";
+    result = `${formatKTokens(used)}/${formatKTokens(ctx)} (${pctLabel})`;
   }
-  if (!ctx) {
-    return `${formatKTokens(used)} used`;
+
+  // Add cache hit rate if there are cached reads
+  if (typeof cacheRead === "number" && cacheRead > 0) {
+    const total =
+      typeof used === "number"
+        ? used
+        : cacheRead + (typeof cacheWrite === "number" ? cacheWrite : 0);
+    const hitRate = Math.round((cacheRead / total) * 100);
+    result += ` · 🗄️ ${hitRate}% cached`;
   }
-  const pctLabel = sess.percentUsed != null ? `${sess.percentUsed}%` : "?%";
-  return `${formatKTokens(used)}/${formatKTokens(ctx)} (${pctLabel})`;
+
+  return result;
 };
 
 export const formatDaemonRuntimeShort = (runtime?: {
