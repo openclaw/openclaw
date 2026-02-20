@@ -8,7 +8,7 @@ export type ModelCatalogEntry = {
   provider: string;
   contextWindow?: number;
   reasoning?: boolean;
-  input?: Array<"text" | "image">;
+  input?: Array<"text" | "image" | "video" | "audio">;
 };
 
 type DiscoveredModel = {
@@ -17,7 +17,7 @@ type DiscoveredModel = {
   provider: string;
   contextWindow?: number;
   reasoning?: boolean;
-  input?: Array<"text" | "image">;
+  input?: Array<"text" | "image" | "video" | "audio">;
 };
 
 type PiSdkModule = typeof import("./pi-model-discovery.js");

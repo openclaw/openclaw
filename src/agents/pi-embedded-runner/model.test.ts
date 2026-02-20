@@ -24,7 +24,7 @@ function buildForwardCompatTemplate(params: {
   provider: string;
   api: "anthropic-messages" | "google-gemini-cli" | "openai-completions";
   baseUrl: string;
-  input?: readonly ["text"] | readonly ["text", "image"];
+  input?: readonly ("text" | "image" | "video" | "audio")[];
   cost?: { input: number; output: number; cacheRead: number; cacheWrite: number };
   contextWindow?: number;
   maxTokens?: number;

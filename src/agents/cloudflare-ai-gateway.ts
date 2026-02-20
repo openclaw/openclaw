@@ -17,7 +17,7 @@ export function buildCloudflareAiGatewayModelDefinition(params?: {
   id?: string;
   name?: string;
   reasoning?: boolean;
-  input?: Array<"text" | "image">;
+  input?: Array<"text" | "image" | "video" | "audio">;
 }): ModelDefinitionConfig {
   const id = params?.id?.trim() || CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_ID;
   return {

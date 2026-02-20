@@ -20,7 +20,7 @@ function buildLitellmModelDefinition(): {
   id: string;
   name: string;
   reasoning: boolean;
-  input: Array<"text" | "image">;
+  input: Array<"text" | "image" | "video" | "audio">;
   cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
   contextWindow: number;
   maxTokens: number;

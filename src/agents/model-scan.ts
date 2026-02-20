@@ -99,6 +99,8 @@ function normalizeCreatedAtMs(value: unknown): number | null {
 }
 
 function parseModality(modality: string | null): Array<"text" | "image"> {
+  // Return type constrained to "text" | "image" for SDK Model<Api> compatibility.
+  // User-configured models can declare "video" | "audio" via ModelDefinitionConfig.
   if (!modality) {
     return ["text"];
   }
