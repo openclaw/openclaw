@@ -1,10 +1,11 @@
+import JSON5 from "json5";
+import { ensureOwnerDisplaySecret } from "../agents/owner-display.js";
+import type { OpenClawConfig, ConfigFileSnapshot, LegacyConfigIssue } from "./types.js";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import JSON5 from "json5";
-import { ensureOwnerDisplaySecret } from "../agents/owner-display.js";
 import { loadDotEnv } from "../infra/dotenv.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import {
@@ -47,8 +48,8 @@ import { normalizeExecSafeBinProfilesInConfig } from "./normalize-exec-safe-bin.
 import { normalizeConfigPaths } from "./normalize-paths.js";
 import { resolveConfigPath, resolveDefaultConfigCandidates, resolveStateDir } from "./paths.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
+import { REDACTED_SENTINEL } from "./redact-snapshot.js";
 import { applyConfigOverrides } from "./runtime-overrides.js";
-import type { OpenClawConfig, ConfigFileSnapshot, LegacyConfigIssue } from "./types.js";
 import {
   validateConfigObjectRawWithPlugins,
   validateConfigObjectWithPlugins,
@@ -1188,6 +1189,19 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     // explicitly set values. Runtime defaults are applied when loading (issue #6070).
     const stampedOutputConfig = stampConfigVersion(outputConfig);
     const json = JSON.stringify(stampedOutputConfig, null, 2).trimEnd().concat("\n");
+
+    if (json.includes(REDACTED_SENTINEL)) {
+      deps.logger.error(
+        `Config write blocked: redaction sentinel "${REDACTED_SENTINEL}" found in output — ` +
+          `writing would destroy credentials. Config file was NOT modified.`,
+      );
+      throw new Error(
+        `Refusing to write config: found redaction sentinel "${REDACTED_SENTINEL}". ` +
+          `This is a bug — credentials would be permanently lost. ` +
+          `The config file on disk was not changed.`,
+      );
+    }
+
     const nextHash = hashConfigRaw(json);
     const previousHash = resolveConfigSnapshotHash(snapshot);
     const changedPathCount = changedPaths?.size;
