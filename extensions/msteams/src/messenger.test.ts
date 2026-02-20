@@ -1,6 +1,10 @@
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { buildRandomTempFilePath, SILENT_REPLY_TOKEN, type PluginRuntime } from "openclaw/plugin-sdk";
+import {
+  buildRandomTempFilePath,
+  SILENT_REPLY_TOKEN,
+  type PluginRuntime,
+} from "openclaw/plugin-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPluginRuntimeMock } from "../../test-utils/plugin-runtime-mock.js";
 import { resolvePreferredOpenClawTmpDir } from "../../../src/infra/tmp-openclaw-dir.js";
