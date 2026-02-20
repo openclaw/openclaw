@@ -151,7 +151,9 @@ Isolated jobs run a dedicated agent turn in session `cron:<jobId>`.
 Key behaviors:
 
 - Prompt is prefixed with `[cron:<jobId> <job name>]` for traceability.
-- Each run starts a **fresh session id** (no prior conversation carry-over).
+- By default, each run starts a **fresh session id** (no prior conversation carry-over).
+- Set `sessionReuse: true` to opt into reusing the same isolated cron session across runs.
+- In Control UI (`/cron`), this is exposed as a **Session reuse** toggle for isolated `agentTurn` jobs.
 - Default behavior: if `delivery` is omitted, isolated jobs announce a summary (`delivery.mode = "announce"`).
 - `delivery.mode` chooses what happens:
   - `announce`: deliver a summary to the target channel and post a brief summary to the main session.
