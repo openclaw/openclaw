@@ -144,4 +144,33 @@ describe("BrowserProfilesService", () => {
     expect(result.deleted).toBe(true);
     expect(movePathToTrash).toHaveBeenCalledWith(path.dirname(userDataDir));
   });
+
+  it("deletes profiles with specified userDataDir", async () => {
+    const tempDir = fs.mkdtempSync(path.join("/tmp", "openclaw-profile-"));
+    const userDataDir = path.join(tempDir, "custom", "user-data");
+    const resolved = resolveBrowserConfig({
+      profiles: {
+        custom: { cdpPort: 18801, color: "#0066CC", userDataDir },
+      },
+    });
+    const { ctx } = createCtx(resolved);
+
+    vi.mocked(loadConfig).mockReturnValue({
+      browser: {
+        defaultProfile: "openclaw",
+        profiles: {
+          openclaw: { cdpPort: 18800, color: "#FF4500" },
+          custom: { cdpPort: 18801, color: "#0066CC", userDataDir },
+        },
+      },
+    });
+
+    fs.mkdirSync(path.dirname(userDataDir), { recursive: true });
+
+    const service = createBrowserProfilesService(ctx);
+    const result = await service.deleteProfile("custom");
+
+    expect(result.deleted).toBe(true);
+    expect(movePathToTrash).toHaveBeenCalledWith(userDataDir);
+  });
 });
