@@ -30,6 +30,11 @@ describe("parseModelCallbackData", () => {
     expect(result).toEqual({ type: "list", provider: "open-ai", page: 1 });
   });
 
+  it("parses mdl_list callback with colon in provider name", () => {
+    const result = parseModelCallbackData("mdl_list_ollama:cloud_1");
+    expect(result).toEqual({ type: "list", provider: "ollama:cloud", page: 1 });
+  });
+
   it("parses mdl_sel callback with provider/model", () => {
     const result = parseModelCallbackData("mdl_sel_anthropic/claude-sonnet-4-5");
     expect(result).toEqual({
