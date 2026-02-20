@@ -43,3 +43,47 @@ describe("extractThinkingCached", () => {
     expect(extractThinkingCached(message)).toBe("Plan A");
   });
 });
+
+describe("extractText — reply tag stripping", () => {
+  it("strips [[reply_to_current]] from assistant messages", () => {
+    const message = {
+      role: "assistant",
+      content: "[[reply_to_current]] Here is my response.",
+    };
+    expect(extractText(message)).toBe("Here is my response.");
+  });
+
+  it("strips [[reply_to: <id>]] from assistant messages", () => {
+    const message = {
+      role: "assistant",
+      content: "[[reply_to: abc123]] Here is my response.",
+    };
+    expect(extractText(message)).toBe("Here is my response.");
+  });
+
+  it("strips reply tags with extra whitespace inside brackets", () => {
+    const message = {
+      role: "assistant",
+      content: "[[ reply_to_current ]] Here is my response.",
+    };
+    expect(extractText(message)).toBe("Here is my response.");
+  });
+
+  it("does not strip reply tags from user messages", () => {
+    const message = {
+      role: "user",
+      content: "[[reply_to_current]] some user text",
+    };
+    // user messages go through stripEnvelope, not stripReplyTags
+    const result = extractText(message);
+    expect(result).toContain("some user text");
+  });
+
+  it("strips reply tags from assistant content arrays", () => {
+    const message = {
+      role: "assistant",
+      content: [{ type: "text", text: "[[reply_to_current]] Here is my response." }],
+    };
+    expect(extractText(message)).toBe("Here is my response.");
+  });
+});

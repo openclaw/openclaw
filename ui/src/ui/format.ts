@@ -58,3 +58,15 @@ export function parseList(input: string): string[] {
 export function stripThinkingTags(value: string): string {
   return stripReasoningTagsFromText(value, { mode: "preserve", trim: "start" });
 }
+
+/**
+ * Strips inline reply directive tags (e.g. `[[reply_to_current]]`, `[[reply_to: <id>]]`)
+ * from assistant message text before rendering in the webchat UI.
+ * These tags are routing directives for supported channels and should never be
+ * shown to the user as literal text.
+ */
+const REPLY_TAG_RE = /\[\[\s*(?:reply_to_current|reply_to\s*:\s*[^\]\n]+)\s*\]\]/gi;
+
+export function stripReplyTags(value: string): string {
+  return value.replace(REPLY_TAG_RE, "").replace(/[ \t]{2,}/g, " ").trim();
+}
