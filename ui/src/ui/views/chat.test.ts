@@ -224,4 +224,26 @@ describe("chat view", () => {
     expect(onNewSession).toHaveBeenCalledTimes(1);
     expect(container.textContent).not.toContain("Stop");
   });
+
+  it("renders assistant bubbles without fade-in class", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "Final reply" }],
+              timestamp: 1,
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    const bubble = container.querySelector(".chat-bubble");
+    expect(bubble).not.toBeNull();
+    expect(bubble?.classList.contains("fade-in")).toBe(false);
+  });
 });

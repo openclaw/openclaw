@@ -75,12 +75,18 @@ describe("handleChatEvent", () => {
     expect(state.chatStreamStartedAt).toBe(123);
   });
 
-  it("processes final from own run and clears state", () => {
+  it("processes final from own run, preserves streamed reply, and clears state", () => {
+    const existingMessage = {
+      role: "user",
+      content: [{ type: "text", text: "Hi" }],
+      timestamp: 1,
+    };
     const state = createState({
       sessionKey: "main",
       chatRunId: "run-1",
       chatStream: "Reply",
       chatStreamStartedAt: 100,
+      chatMessages: [existingMessage],
     });
     const payload: ChatEventPayload = {
       runId: "run-1",
@@ -91,6 +97,44 @@ describe("handleChatEvent", () => {
     expect(state.chatRunId).toBe(null);
     expect(state.chatStream).toBe(null);
     expect(state.chatStreamStartedAt).toBe(null);
+    expect(state.chatMessages).toHaveLength(2);
+    expect(state.chatMessages[0]).toEqual(existingMessage);
+    expect(state.chatMessages[1]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "Reply" }],
+    });
+  });
+
+  it("prefers final payload assistant message over stream fallback", () => {
+    const existingMessage = {
+      role: "user",
+      content: [{ type: "text", text: "Hi" }],
+      timestamp: 1,
+    };
+    const finalAssistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "Complete reply" }],
+      timestamp: 2,
+    };
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Partial",
+      chatStreamStartedAt: 100,
+      chatMessages: [existingMessage],
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: finalAssistantMessage,
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatRunId).toBe(null);
+    expect(state.chatStream).toBe(null);
+    expect(state.chatStreamStartedAt).toBe(null);
+    expect(state.chatMessages).toEqual([existingMessage, finalAssistantMessage]);
   });
 
   it("processes aborted from own run and keeps partial assistant message", () => {
