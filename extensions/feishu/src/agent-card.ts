@@ -249,12 +249,10 @@ function buildCard(params: {
       ? trimFinalDupBlocks(params.timeline, params.answer)
       : params.timeline;
 
-  const timelineMarkdown = filteredTimeline.length
-    ? filteredTimeline
-        .map((entry) => formatTimelineLine(entry))
-        .filter(Boolean)
-        .join("\n")
-    : "暂无过程记录";
+  const timelineMarkdown = filteredTimeline
+    .map((entry) => formatTimelineLine(entry))
+    .filter(Boolean)
+    .join("\n");
 
   const answer = params.answer.trim();
   const timelineContent = answer ? `${timelineMarkdown}\n\n` : timelineMarkdown;
