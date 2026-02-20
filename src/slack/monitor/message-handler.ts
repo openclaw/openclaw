@@ -110,7 +110,13 @@ export function createSlackMessageHandler(params: {
     ) {
       return;
     }
-    if (ctx.markMessageSeen(message.channel, message.ts)) {
+    // Allow app_mention events to bypass dedup. Slack sends both `message` and
+    // `app_mention` for the same @mention with no delivery-order guarantee. If
+    // the `message` event arrives first it is marked seen; without this guard the
+    // subsequent `app_mention` (which carries the authoritative `wasMentioned`
+    // flag) would be silently dropped, causing missed mentions and lost thread
+    // context.  See: https://github.com/openclaw/openclaw/issues/20151
+    if (opts.source !== "app_mention" && ctx.markMessageSeen(message.channel, message.ts)) {
       return;
     }
     const resolvedMessage = await threadTsResolver.resolve({ message, source: opts.source });
