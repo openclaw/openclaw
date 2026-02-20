@@ -296,7 +296,7 @@ export function applyVeniceProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
   const models = { ...cfg.agents?.defaults?.models };
   models[VENICE_DEFAULT_MODEL_REF] = {
     ...models[VENICE_DEFAULT_MODEL_REF],
-    alias: models[VENICE_DEFAULT_MODEL_REF]?.alias ?? "Llama 3.3 70B",
+    alias: models[VENICE_DEFAULT_MODEL_REF]?.alias ?? "Kimi K2.5",
   };
 
   const veniceModels = VENICE_MODEL_CATALOG.map(buildVeniceModelDefinition);
