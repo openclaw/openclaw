@@ -110,6 +110,8 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     "Optional PDF model (provider/model) for the PDF analysis tool. Defaults to imageModel, then session model.",
   "agents.defaults.pdfModel.fallbacks": "Ordered fallback PDF models (provider/model).",
   "agents.defaults.pdfMaxMb": "Maximum PDF file size in megabytes for the PDF tool (default: 10).",
+  "agents.defaults.bootstrapTier":
+    'Bootstrap loading tier: "minimal" (AGENTS.md + TOOLS.md), "standard" (recognized files, default), or "full" (standard + extra patterns).',
   "agents.defaults.pdfMaxPages":
     "Maximum number of PDF pages to process for the PDF tool (default: 20).",
   "agents.defaults.imageMaxDimensionPx":
