@@ -25,11 +25,10 @@ function stripEnvelopeFromContent(content: unknown[]): { content: unknown[]; cha
   return { content: next, changed };
 }
 
-const INBOUND_META_BLOCK_RE =
-  /\[Conversation info \(untrusted metadata\):\n```json[\s\S]*?```\]\n\n/g;
+const INBOUND_META_BLOCK_RE = /Conversation info \(untrusted metadata\):\n```json[\s\S]*?```\n\n/g;
 
 export function stripInboundMeta(text: string): string {
-  if (!text.includes("[Conversation info (untrusted metadata):")) {
+  if (!text.includes("Conversation info (untrusted metadata):")) {
     return text;
   }
   return text.replace(INBOUND_META_BLOCK_RE, "");

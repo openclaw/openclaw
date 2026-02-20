@@ -39,4 +39,13 @@ describe("stripEnvelopeFromMessage", () => {
     const result = stripEnvelopeFromMessage(input) as { content?: string };
     expect(result.content).toBe("note\n[message_id: 123]");
   });
+  test("removes inbound un-bracketed conversation info blocks from user messages", () => {
+    const input = {
+      role: "user",
+      content:
+        'Conversation info (untrusted metadata):\n```json\n{\n  "message_id": "123"\n}\n```\n\nHello there',
+    };
+    const result = stripEnvelopeFromMessage(input) as { content?: string };
+    expect(result.content).toBe("Hello there");
+  });
 });
