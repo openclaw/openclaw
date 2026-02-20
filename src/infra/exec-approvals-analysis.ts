@@ -4,7 +4,7 @@ import { splitShellArgs } from "../utils/shell-argv.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.js";
 import { expandHomePrefix } from "./home-dir.js";
 
-export const DEFAULT_SAFE_BINS = ["jq", "grep", "cut", "sort", "uniq", "head", "tail", "tr", "wc"];
+export const DEFAULT_SAFE_BINS = ["jq", "cut", "uniq", "head", "tail", "tr", "wc"];
 
 export type CommandResolution = {
   rawExecutable: string;
@@ -227,6 +227,78 @@ export type ExecCommandSegment = {
   argv: string[];
   resolution: CommandResolution | null;
 };
+
+export type ExecArgvToken =
+  | {
+      kind: "empty";
+      raw: string;
+    }
+  | {
+      kind: "terminator";
+      raw: string;
+    }
+  | {
+      kind: "stdin";
+      raw: string;
+    }
+  | {
+      kind: "positional";
+      raw: string;
+    }
+  | {
+      kind: "option";
+      raw: string;
+      style: "long";
+      flag: string;
+      inlineValue?: string;
+    }
+  | {
+      kind: "option";
+      raw: string;
+      style: "short-cluster";
+      cluster: string;
+      flags: string[];
+    };
+
+/**
+ * Tokenizes a single argv entry into a normalized option/positional model.
+ * Consumers can share this model to keep argv parsing behavior consistent.
+ */
+export function parseExecArgvToken(raw: string): ExecArgvToken {
+  if (!raw) {
+    return { kind: "empty", raw };
+  }
+  if (raw === "--") {
+    return { kind: "terminator", raw };
+  }
+  if (raw === "-") {
+    return { kind: "stdin", raw };
+  }
+  if (!raw.startsWith("-")) {
+    return { kind: "positional", raw };
+  }
+  if (raw.startsWith("--")) {
+    const eqIndex = raw.indexOf("=");
+    if (eqIndex > 0) {
+      return {
+        kind: "option",
+        raw,
+        style: "long",
+        flag: raw.slice(0, eqIndex),
+        inlineValue: raw.slice(eqIndex + 1),
+      };
+    }
+    return { kind: "option", raw, style: "long", flag: raw };
+  }
+  const cluster = raw.slice(1);
+  return {
+    kind: "option",
+    raw,
+    style: "short-cluster",
+    cluster,
+    flags: cluster.split("").map((entry) => `-${entry}`),
+  };
+}
 
 export type ExecCommandAnalysis = {
   ok: boolean;

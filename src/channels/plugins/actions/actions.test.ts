@@ -353,6 +353,32 @@ describe("handleDiscordMessageAction", () => {
       expect.any(Object),
     );
   });
+
+  it("uses trusted requesterSenderId for moderation and ignores params senderUserId", async () => {
+    await handleDiscordMessageAction({
+      action: "timeout",
+      params: {
+        guildId: "guild-1",
+        userId: "user-2",
+        durationMin: 5,
+        senderUserId: "spoofed-admin-id",
+      },
+      cfg: {} as OpenClawConfig,
+      requesterSenderId: "trusted-sender-id",
+      toolContext: { currentChannelProvider: "discord" },
+    });
+
+    expect(handleDiscordAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "timeout",
+        guildId: "guild-1",
+        userId: "user-2",
+        durationMinutes: 5,
+        senderUserId: "trusted-sender-id",
+      }),
+      expect.any(Object),
+    );
+  });
 });
 
 describe("telegramMessageActions", () => {

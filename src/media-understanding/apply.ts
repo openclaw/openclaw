@@ -21,6 +21,7 @@ import {
   buildProviderRegistry,
   createMediaAttachmentCache,
   normalizeMediaAttachments,
+  resolveMediaAttachmentLocalRoots,
   runCapability,
 } from "./runner.js";
 import type {
@@ -473,7 +474,9 @@ export async function applyMediaUnderstanding(params: {
 
   const attachments = normalizeMediaAttachments(ctx);
   const providerRegistry = buildProviderRegistry(params.providers);
-  const cache = createMediaAttachmentCache(attachments);
+  const cache = createMediaAttachmentCache(attachments, {
+    localPathRoots: resolveMediaAttachmentLocalRoots({ cfg, ctx }),
+  });
 
   try {
     const tasks = CAPABILITY_ORDER.map((capability) => async () => {

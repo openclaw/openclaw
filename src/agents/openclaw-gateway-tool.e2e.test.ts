@@ -13,9 +13,21 @@ vi.mock("./tools/gateway.js", () => ({
     }
     return { ok: true };
   }),
+  readGatewayCallOptions: vi.fn(() => ({})),
 }));
 
 describe("gateway tool", () => {
+  it("marks gateway as owner-only", async () => {
+    const tool = createOpenClawTools({
+      config: { commands: { restart: true } },
+    }).find((candidate) => candidate.name === "gateway");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing gateway tool");
+    }
+    expect(tool.ownerOnly).toBe(true);
+  });
+
   it("schedules SIGUSR1 restart", async () => {
     vi.useFakeTimers();
     const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
