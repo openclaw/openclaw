@@ -71,15 +71,24 @@ async function handleSendAction(opts: {
     if (account.botToken) setInteractionSecret(account.botToken);
     const callbackUrl = resolveInteractionCallbackUrl(account.accountId, cfg);
 
-    const buttons = (params.buttons as Array<Record<string, unknown>>).map((btn) => ({
-      id: String(btn.id ?? btn.callback_data ?? ""),
-      name: String(btn.text ?? btn.name ?? btn.label ?? ""),
-      style: (btn.style as "default" | "primary" | "danger") ?? "default",
-      context:
-        typeof btn.context === "object" && btn.context !== null
-          ? (btn.context as Record<string, unknown>)
-          : undefined,
-    }));
+    // Flatten 2D array (rows of buttons) to 1D — core schema sends Array<Array<Button>>
+    // but Mattermost doesn't have row layout, so we flatten all rows into a single list.
+    // Also supports 1D arrays for backward compatibility.
+    const rawButtons = (params.buttons as Array<unknown>).flatMap((item) =>
+      Array.isArray(item) ? item : [item],
+    ) as Array<Record<string, unknown>>;
+
+    const buttons = rawButtons
+      .map((btn) => ({
+        id: String(btn.id ?? btn.callback_data ?? ""),
+        name: String(btn.text ?? btn.name ?? btn.label ?? ""),
+        style: (btn.style as "default" | "primary" | "danger") ?? "default",
+        context:
+          typeof btn.context === "object" && btn.context !== null
+            ? (btn.context as Record<string, unknown>)
+            : undefined,
+      }))
+      .filter((btn) => btn.id && btn.name);
 
     const attachmentText =
       typeof params.attachmentText === "string" ? params.attachmentText : undefined;
