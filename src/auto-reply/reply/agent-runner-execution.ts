@@ -40,12 +40,23 @@ import type { FollowupRun } from "./queue.js";
 import { createBlockReplyDeliveryHandler } from "./reply-delivery.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
+export type RuntimeFallbackAttempt = {
+  provider: string;
+  model: string;
+  error: string;
+  reason?: string;
+  status?: number;
+  code?: string;
+};
+
 export type AgentRunLoopResult =
   | {
       kind: "success";
+      runId: string;
       runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
       fallbackProvider?: string;
       fallbackModel?: string;
+      fallbackAttempts: RuntimeFallbackAttempt[];
       didLogHeartbeatStrip: boolean;
       autoCompactionCompleted: boolean;
       /** Payload keys sent directly (not via pipeline) during tool flush. */
@@ -106,6 +117,7 @@ export async function runAgentTurnWithFallback(params: {
   let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
   let fallbackProvider = params.followupRun.run.provider;
   let fallbackModel = params.followupRun.run.model;
+  let fallbackAttempts: RuntimeFallbackAttempt[] = [];
   let didResetAfterCompactionFailure = false;
   let didRetryTransientHttpError = false;
 
@@ -367,29 +379,35 @@ export async function runAgentTurnWithFallback(params: {
             shouldEmitToolResult: params.shouldEmitToolResult,
             shouldEmitToolOutput: params.shouldEmitToolOutput,
             onToolResult: onToolResult
-              ? (payload) => {
-                  // `subscribeEmbeddedPiSession` may invoke tool callbacks without awaiting them.
-                  // If a tool callback starts typing after the run finalized, we can end up with
-                  // a typing loop that never sees a matching markRunComplete(). Track and drain.
-                  const task = (async () => {
-                    const { text, skip } = normalizeStreamingText(payload);
-                    if (skip) {
-                      return;
-                    }
-                    await params.typingSignals.signalTextDelta(text);
-                    await onToolResult({
-                      text,
-                      mediaUrls: payload.mediaUrls,
-                    });
-                  })()
-                    .catch((err) => {
-                      logVerbose(`tool result delivery failed: ${String(err)}`);
-                    })
-                    .finally(() => {
+              ? (() => {
+                  // Serialize tool result delivery to preserve message ordering.
+                  // Without this, concurrent tool callbacks race through typing signals
+                  // and message sends, causing out-of-order delivery to the user.
+                  // See: https://github.com/openclaw/openclaw/issues/11044
+                  let toolResultChain: Promise<void> = Promise.resolve();
+                  return (payload: ReplyPayload) => {
+                    toolResultChain = toolResultChain
+                      .then(async () => {
+                        const { text, skip } = normalizeStreamingText(payload);
+                        if (skip) {
+                          return;
+                        }
+                        await params.typingSignals.signalTextDelta(text);
+                        await onToolResult({
+                          text,
+                          mediaUrls: payload.mediaUrls,
+                        });
+                      })
+                      .catch((err) => {
+                        // Keep chain healthy after an error so later tool results still deliver.
+                        logVerbose(`tool result delivery failed: ${String(err)}`);
+                      });
+                    const task = toolResultChain.finally(() => {
                       params.pendingToolTasks.delete(task);
                     });
-                  params.pendingToolTasks.add(task);
-                }
+                    params.pendingToolTasks.add(task);
+                  };
+                })()
               : undefined,
           });
         },
@@ -397,6 +415,16 @@ export async function runAgentTurnWithFallback(params: {
       runResult = fallbackResult.result;
       fallbackProvider = fallbackResult.provider;
       fallbackModel = fallbackResult.model;
+      fallbackAttempts = Array.isArray(fallbackResult.attempts)
+        ? fallbackResult.attempts.map((attempt) => ({
+            provider: String(attempt.provider ?? ""),
+            model: String(attempt.model ?? ""),
+            error: String(attempt.error ?? ""),
+            reason: attempt.reason ? String(attempt.reason) : undefined,
+            status: typeof attempt.status === "number" ? attempt.status : undefined,
+            code: attempt.code ? String(attempt.code) : undefined,
+          }))
+        : [];
 
       // Some embedded runs surface context overflow as an error payload instead of throwing.
       // Treat those as a session-level failure and auto-recover by starting a fresh session.
@@ -543,9 +571,11 @@ export async function runAgentTurnWithFallback(params: {
 
   return {
     kind: "success",
+    runId,
     runResult,
     fallbackProvider,
     fallbackModel,
+    fallbackAttempts,
     didLogHeartbeatStrip,
     autoCompactionCompleted,
     directlySentBlockKeys: directlySentBlockKeys.size > 0 ? directlySentBlockKeys : undefined,
