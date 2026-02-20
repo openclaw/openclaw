@@ -17,6 +17,7 @@ import type {
   ConfigSnapshot,
   ConfigUiHints,
   CronJob,
+  OpsRuntimeRunsResult,
   CronRunLogEntry,
   CronStatus,
   HealthSnapshot,
@@ -31,7 +32,12 @@ import type {
   SkillStatusReport,
   StatusSummary,
 } from "./types.ts";
-import type { ChatAttachment, ChatQueueItem, CronFormState } from "./ui-types.ts";
+import type {
+  ChatAttachment,
+  ChatQueueItem,
+  CronFormState,
+  CronRuntimeRunsFilters,
+} from "./ui-types.ts";
 import type { NostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
 import type { SessionLogEntry } from "./views/usage.ts";
 
@@ -192,6 +198,10 @@ export type AppViewState = {
   cronForm: CronFormState;
   cronRunsJobId: string | null;
   cronRuns: CronRunLogEntry[];
+  cronRuntimeRunsLoading: boolean;
+  cronRuntimeRunsError: string | null;
+  cronRuntimeRunsFilters: CronRuntimeRunsFilters;
+  cronRuntimeRuns: OpsRuntimeRunsResult | null;
   cronBusy: boolean;
   skillsLoading: boolean;
   skillsReport: SkillStatusReport | null;

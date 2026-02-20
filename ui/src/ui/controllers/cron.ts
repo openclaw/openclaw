@@ -1,7 +1,7 @@
 import { toNumber } from "../format.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
-import type { CronJob, CronRunLogEntry, CronStatus } from "../types.ts";
-import type { CronFormState } from "../ui-types.ts";
+import type { CronJob, CronRunLogEntry, CronStatus, OpsRuntimeRunsResult } from "../types.ts";
+import type { CronFormState, CronRuntimeRunsFilters } from "../ui-types.ts";
 
 export type CronState = {
   client: GatewayBrowserClient | null;
@@ -13,6 +13,10 @@ export type CronState = {
   cronForm: CronFormState;
   cronRunsJobId: string | null;
   cronRuns: CronRunLogEntry[];
+  cronRuntimeRunsLoading: boolean;
+  cronRuntimeRunsError: string | null;
+  cronRuntimeRunsFilters: CronRuntimeRunsFilters;
+  cronRuntimeRuns: OpsRuntimeRunsResult | null;
   cronBusy: boolean;
 };
 
@@ -166,6 +170,7 @@ export async function addCronJob(state: CronState) {
     };
     await loadCronJobs(state);
     await loadCronStatus(state);
+    await loadOpsRuntimeRuns(state);
   } catch (err) {
     state.cronError = String(err);
   } finally {
@@ -183,6 +188,7 @@ export async function toggleCronJob(state: CronState, job: CronJob, enabled: boo
     await state.client.request("cron.update", { id: job.id, patch: { enabled } });
     await loadCronJobs(state);
     await loadCronStatus(state);
+    await loadOpsRuntimeRuns(state);
   } catch (err) {
     state.cronError = String(err);
   } finally {
@@ -199,6 +205,7 @@ export async function runCronJob(state: CronState, job: CronJob) {
   try {
     await state.client.request("cron.run", { id: job.id, mode: "force" });
     await loadCronRuns(state, job.id);
+    await loadOpsRuntimeRuns(state);
   } catch (err) {
     state.cronError = String(err);
   } finally {
@@ -220,6 +227,7 @@ export async function removeCronJob(state: CronState, job: CronJob) {
     }
     await loadCronJobs(state);
     await loadCronStatus(state);
+    await loadOpsRuntimeRuns(state);
   } catch (err) {
     state.cronError = String(err);
   } finally {
@@ -241,4 +249,163 @@ export async function loadCronRuns(state: CronState, jobId: string) {
   } catch (err) {
     state.cronError = String(err);
   }
+}
+
+const DEFAULT_RUNTIME_RUNS_SUMMARY = {
+  jobsScanned: 0,
+  jobsTotal: 0,
+  jobsTruncated: false,
+  totalRuns: 0,
+  okRuns: 0,
+  errorRuns: 0,
+  skippedRuns: 0,
+  timeoutRuns: 0,
+  jobsWithFailures: 0,
+  needsAction: 0,
+};
+
+export function applyCronRuntimeRunsPreset(
+  state: Pick<CronState, "cronRuntimeRunsFilters">,
+  preset: "1h" | "6h" | "24h" | "7d" | "clear",
+) {
+  if (preset === "clear") {
+    state.cronRuntimeRunsFilters = {
+      ...state.cronRuntimeRunsFilters,
+      fromLocal: "",
+      toLocal: "",
+    };
+    return;
+  }
+  const now = Date.now();
+  const minutes =
+    preset === "1h" ? 60 : preset === "6h" ? 360 : preset === "24h" ? 24 * 60 : 7 * 24 * 60;
+  const fromMs = now - minutes * 60_000;
+  state.cronRuntimeRunsFilters = {
+    ...state.cronRuntimeRunsFilters,
+    fromLocal: formatDateTimeLocalInput(fromMs),
+    toLocal: formatDateTimeLocalInput(now),
+  };
+}
+
+export async function loadOpsRuntimeRuns(state: CronState) {
+  if (!state.client || !state.connected) {
+    return;
+  }
+  if (state.cronRuntimeRunsLoading) {
+    return;
+  }
+
+  const paramsResult = buildOpsRuntimeRunsParams(state.cronRuntimeRunsFilters);
+  if (!paramsResult.ok) {
+    state.cronRuntimeRunsError = paramsResult.error;
+    return;
+  }
+
+  state.cronRuntimeRunsLoading = true;
+  state.cronRuntimeRunsError = null;
+  try {
+    const res = await state.client.request<OpsRuntimeRunsResult>(
+      "ops.runtime.runs",
+      paramsResult.params,
+    );
+    state.cronRuntimeRuns = normalizeOpsRuntimeRunsResult(res);
+  } catch (err) {
+    state.cronRuntimeRunsError = resolveOpsRuntimeRunsError(err);
+  } finally {
+    state.cronRuntimeRunsLoading = false;
+  }
+}
+
+function buildOpsRuntimeRunsParams(
+  filters: CronRuntimeRunsFilters,
+): { ok: true; params: Record<string, unknown> } | { ok: false; error: string } {
+  const fromMs = parseDateTimeLocalInput(filters.fromLocal);
+  if (filters.fromLocal.trim() && fromMs == null) {
+    return { ok: false, error: 'Invalid "From" time. Use a valid date/time.' };
+  }
+  const toMs = parseDateTimeLocalInput(filters.toLocal);
+  if (filters.toLocal.trim() && toMs == null) {
+    return { ok: false, error: 'Invalid "To" time. Use a valid date/time.' };
+  }
+  if (fromMs != null && toMs != null && fromMs > toMs) {
+    return { ok: false, error: '"From" time cannot be later than "To" time.' };
+  }
+
+  const limit = Math.max(1, Math.min(500, toNumber(filters.limit, 100)));
+  const search = filters.search.trim();
+  const status = filters.status === "all" ? undefined : filters.status;
+
+  return {
+    ok: true,
+    params: {
+      limit,
+      perJobLimit: 120,
+      search: search || undefined,
+      status,
+      fromMs,
+      toMs,
+      includeDisabledCron: filters.includeDisabledCron,
+    },
+  };
+}
+
+function normalizeOpsRuntimeRunsResult(
+  input: OpsRuntimeRunsResult | null | undefined,
+): OpsRuntimeRunsResult {
+  const summary =
+    input && typeof input.summary === "object" && input.summary
+      ? {
+          jobsScanned: toNumber(String(input.summary.jobsScanned ?? 0), 0),
+          jobsTotal: toNumber(String(input.summary.jobsTotal ?? 0), 0),
+          jobsTruncated: Boolean(input.summary.jobsTruncated),
+          totalRuns: toNumber(String(input.summary.totalRuns ?? 0), 0),
+          okRuns: toNumber(String(input.summary.okRuns ?? 0), 0),
+          errorRuns: toNumber(String(input.summary.errorRuns ?? 0), 0),
+          skippedRuns: toNumber(String(input.summary.skippedRuns ?? 0), 0),
+          timeoutRuns: toNumber(String(input.summary.timeoutRuns ?? 0), 0),
+          jobsWithFailures: toNumber(String(input.summary.jobsWithFailures ?? 0), 0),
+          needsAction: toNumber(String(input.summary.needsAction ?? 0), 0),
+        }
+      : DEFAULT_RUNTIME_RUNS_SUMMARY;
+  return {
+    ts: typeof input?.ts === "number" ? input.ts : Date.now(),
+    summary,
+    runs: Array.isArray(input?.runs) ? input.runs : [],
+    failures: Array.isArray(input?.failures) ? input.failures : [],
+  };
+}
+
+function resolveOpsRuntimeRunsError(error: unknown): string {
+  const text = String(error);
+  const normalized = text.toLowerCase();
+  if (
+    normalized.includes("unknown method") ||
+    normalized.includes("method not found") ||
+    normalized.includes("ops.runtime.runs")
+  ) {
+    return "Gateway version does not expose ops.runtime.runs yet.";
+  }
+  return text;
+}
+
+function parseDateTimeLocalInput(value: string): number | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const parsed = Date.parse(trimmed);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function formatDateTimeLocalInput(ms: number): string {
+  const date = new Date(ms);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  const hour = String(date.getHours()).padStart(2, "0");
+  const minute = String(date.getMinutes()).padStart(2, "0");
+  return `${year}-${month}-${day}T${hour}:${minute}`;
 }

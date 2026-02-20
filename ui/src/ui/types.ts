@@ -503,6 +503,60 @@ export type CronRunLogEntry = {
   sessionKey?: string;
 };
 
+export type OpsRuntimeRunsSummary = {
+  jobsScanned: number;
+  jobsTotal: number;
+  jobsTruncated: boolean;
+  totalRuns: number;
+  okRuns: number;
+  errorRuns: number;
+  skippedRuns: number;
+  timeoutRuns: number;
+  jobsWithFailures: number;
+  needsAction: number;
+};
+
+export type OpsRuntimeRunItem = {
+  ts: number;
+  ageMs: number;
+  jobId: string;
+  jobName: string;
+  enabled: boolean;
+  status: "ok" | "error" | "skipped";
+  error?: string;
+  summary?: string;
+  sessionId?: string;
+  sessionKey?: string;
+  runAtMs?: number;
+  durationMs?: number;
+  nextRunAtMs?: number;
+  model?: string;
+  provider?: string;
+  logPath: string;
+};
+
+export type OpsRuntimeFailureItem = {
+  jobId: string;
+  jobName: string;
+  enabled: boolean;
+  totalRuns: number;
+  errors: number;
+  timeoutErrors: number;
+  consecutiveErrors: number;
+  lastStatus?: string;
+  lastError?: string;
+  lastErrorAtMs?: number;
+  needsAction: boolean;
+  logPath: string;
+};
+
+export type OpsRuntimeRunsResult = {
+  ts: number;
+  summary: OpsRuntimeRunsSummary;
+  runs: OpsRuntimeRunItem[];
+  failures: OpsRuntimeFailureItem[];
+};
+
 export type SkillsStatusConfigCheck = {
   path: string;
   satisfied: boolean;

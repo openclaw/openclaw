@@ -2,8 +2,16 @@ import { html, nothing } from "lit";
 import { formatRelativeTimestamp, formatMs } from "../format.ts";
 import { pathForTab } from "../navigation.ts";
 import { formatCronSchedule, formatNextRun } from "../presenter.ts";
-import type { ChannelUiMetaEntry, CronJob, CronRunLogEntry, CronStatus } from "../types.ts";
-import type { CronFormState } from "../ui-types.ts";
+import type {
+  ChannelUiMetaEntry,
+  CronJob,
+  CronRunLogEntry,
+  CronStatus,
+  OpsRuntimeFailureItem,
+  OpsRuntimeRunItem,
+  OpsRuntimeRunsResult,
+} from "../types.ts";
+import type { CronFormState, CronRuntimeRunsFilters } from "../ui-types.ts";
 
 export type CronProps = {
   basePath: string;
@@ -18,6 +26,10 @@ export type CronProps = {
   channelMeta?: ChannelUiMetaEntry[];
   runsJobId: string | null;
   runs: CronRunLogEntry[];
+  runtimeRunsLoading: boolean;
+  runtimeRunsError: string | null;
+  runtimeRunsFilters: CronRuntimeRunsFilters;
+  runtimeRunsResult: OpsRuntimeRunsResult | null;
   onFormChange: (patch: Partial<CronFormState>) => void;
   onRefresh: () => void;
   onAdd: () => void;
@@ -25,6 +37,11 @@ export type CronProps = {
   onRun: (job: CronJob) => void;
   onRemove: (job: CronJob) => void;
   onLoadRuns: (jobId: string) => void;
+  onRuntimeFiltersChange: (patch: Partial<CronRuntimeRunsFilters>) => void;
+  onRuntimeApply: () => void;
+  onRuntimeRefresh: () => void;
+  onRuntimeClear: () => void;
+  onRuntimePreset: (preset: "1h" | "6h" | "24h" | "7d" | "clear") => void;
 };
 
 function buildChannelOptions(props: CronProps): string[] {
@@ -60,6 +77,9 @@ export function renderCron(props: CronProps) {
     props.runsJobId == null ? undefined : props.jobs.find((job) => job.id === props.runsJobId);
   const selectedRunTitle = selectedJob?.name ?? props.runsJobId ?? "(select a job)";
   const orderedRuns = props.runs.toSorted((a, b) => b.ts - a.ts);
+  const runtimeSummary = props.runtimeRunsResult?.summary;
+  const runtimeRuns = props.runtimeRunsResult?.runs ?? [];
+  const runtimeFailures = props.runtimeRunsResult?.failures ?? [];
   const supportsAnnounce =
     props.form.sessionTarget === "isolated" && props.form.payloadKind === "agentTurn";
   const selectedDeliveryMode =
@@ -339,6 +359,224 @@ export function renderCron(props: CronProps) {
             `
       }
     </section>
+
+    <section class="card" style="margin-top: 18px;">
+      <div class="card-title">Runtime runs</div>
+      <div class="card-sub">
+        Cross-job history with failure aggregation (${runtimeSummary?.jobsScanned ?? 0}/${runtimeSummary?.jobsTotal ?? 0} jobs).
+      </div>
+      ${renderRuntimeRunsControls(props)}
+      ${
+        props.runtimeRunsError
+          ? html`<div class="muted" style="margin-top: 10px">${props.runtimeRunsError}</div>`
+          : nothing
+      }
+      ${
+        runtimeSummary
+          ? html`
+              <div class="chip-row" style="margin-top: 12px;">
+                <span class="chip">runs ${runtimeSummary.totalRuns}</span>
+                <span class="chip chip-ok">ok ${runtimeSummary.okRuns}</span>
+                <span class="chip ${runtimeSummary.errorRuns > 0 ? "chip-danger" : ""}">
+                  error ${runtimeSummary.errorRuns}
+                </span>
+                <span class="chip">skipped ${runtimeSummary.skippedRuns}</span>
+                <span class="chip ${runtimeSummary.timeoutRuns > 0 ? "chip-warn" : ""}">
+                  timeout ${runtimeSummary.timeoutRuns}
+                </span>
+                <span class="chip ${runtimeSummary.needsAction > 0 ? "chip-danger" : ""}">
+                  needsAction ${runtimeSummary.needsAction}
+                </span>
+              </div>
+            `
+          : nothing
+      }
+      <div class="grid grid-cols-2" style="margin-top: 12px;">
+        <div class="card">
+          <div class="card-title">Failures</div>
+          <div class="card-sub">Jobs that currently look unhealthy.</div>
+          ${
+            runtimeFailures.length === 0
+              ? html`
+                  <div class="muted" style="margin-top: 12px">No failure rollups.</div>
+                `
+              : html`
+                  <div class="list" style="margin-top: 12px;">
+                    ${runtimeFailures.map((item) => renderRuntimeFailure(item))}
+                  </div>
+                `
+          }
+        </div>
+        <div class="card">
+          <div class="card-title">Runs</div>
+          <div class="card-sub">Recent runs across cron jobs.</div>
+          ${
+            runtimeRuns.length === 0
+              ? html`
+                  <div class="muted" style="margin-top: 12px">No runs in selected range.</div>
+                `
+              : html`
+                  <div class="list" style="margin-top: 12px;">
+                    ${runtimeRuns.map((item) => renderRuntimeRun(item, props.basePath))}
+                  </div>
+                `
+          }
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function renderRuntimeRunsControls(props: CronProps) {
+  const filters = props.runtimeRunsFilters;
+  return html`
+    <div class="form-grid cron-runtime-filters" style="margin-top: 12px;">
+      <label class="field">
+        <span>Search</span>
+        <input
+          .value=${filters.search}
+          placeholder="jobId / name / error / model"
+          @input=${(event: Event) =>
+            props.onRuntimeFiltersChange({
+              search: (event.target as HTMLInputElement).value,
+            })}
+          @keydown=${(event: KeyboardEvent) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              props.onRuntimeApply();
+            }
+          }}
+        />
+      </label>
+      <label class="field">
+        <span>Status</span>
+        <select
+          .value=${filters.status}
+          @change=${(event: Event) =>
+            props.onRuntimeFiltersChange({
+              status: (event.target as HTMLSelectElement).value as CronRuntimeRunsFilters["status"],
+            })}
+        >
+          <option value="all">all</option>
+          <option value="error">error</option>
+          <option value="ok">ok</option>
+          <option value="skipped">skipped</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>From</span>
+        <input
+          type="datetime-local"
+          .value=${filters.fromLocal}
+          @change=${(event: Event) =>
+            props.onRuntimeFiltersChange({
+              fromLocal: (event.target as HTMLInputElement).value,
+            })}
+        />
+      </label>
+      <label class="field">
+        <span>To</span>
+        <input
+          type="datetime-local"
+          .value=${filters.toLocal}
+          @change=${(event: Event) =>
+            props.onRuntimeFiltersChange({
+              toLocal: (event.target as HTMLInputElement).value,
+            })}
+        />
+      </label>
+      <label class="field">
+        <span>Limit</span>
+        <input
+          .value=${filters.limit}
+          @input=${(event: Event) =>
+            props.onRuntimeFiltersChange({
+              limit: (event.target as HTMLInputElement).value,
+            })}
+        />
+      </label>
+      <label class="field checkbox">
+        <span>Include disabled</span>
+        <input
+          type="checkbox"
+          .checked=${filters.includeDisabledCron}
+          @change=${(event: Event) =>
+            props.onRuntimeFiltersChange({
+              includeDisabledCron: (event.target as HTMLInputElement).checked,
+            })}
+        />
+      </label>
+    </div>
+    <div class="row" style="margin-top: 10px;">
+      <button class="btn btn-sm" @click=${() => props.onRuntimePreset("1h")}>Last 1h</button>
+      <button class="btn btn-sm" @click=${() => props.onRuntimePreset("6h")}>Last 6h</button>
+      <button class="btn btn-sm" @click=${() => props.onRuntimePreset("24h")}>Last 24h</button>
+      <button class="btn btn-sm" @click=${() => props.onRuntimePreset("7d")}>Last 7d</button>
+      <button class="btn btn-sm" @click=${() => props.onRuntimePreset("clear")}>Clear range</button>
+      <button class="btn primary btn-sm" ?disabled=${props.runtimeRunsLoading} @click=${props.onRuntimeApply}>
+        ${props.runtimeRunsLoading ? "Loading…" : "Apply filters"}
+      </button>
+      <button class="btn btn-sm" ?disabled=${props.runtimeRunsLoading} @click=${props.onRuntimeRefresh}>
+        Refresh
+      </button>
+      <button class="btn btn-sm" ?disabled=${props.runtimeRunsLoading} @click=${props.onRuntimeClear}>
+        Reset filters
+      </button>
+    </div>
+  `;
+}
+
+function renderRuntimeFailure(item: OpsRuntimeFailureItem) {
+  return html`
+    <div class="list-item">
+      <div class="list-main">
+        <div class="list-title">${item.jobName}</div>
+        <div class="list-sub">${item.jobId}</div>
+        <div class="muted">
+          lastStatus=${item.lastStatus ?? "n/a"} · consecutiveErrors=${item.consecutiveErrors}
+        </div>
+        ${item.lastError ? html`<div class="muted">lastError: ${item.lastError}</div>` : nothing}
+      </div>
+      <div class="list-meta">
+        <div>${item.needsAction ? "needsAction" : "watch"}</div>
+        <div class="muted">errors ${item.errors}</div>
+        <div class="muted">timeouts ${item.timeoutErrors}</div>
+        <div class="muted">runs ${item.totalRuns}</div>
+        <div class="muted">${formatMs(item.lastErrorAtMs)}</div>
+      </div>
+    </div>
+  `;
+}
+
+function renderRuntimeRun(item: OpsRuntimeRunItem, basePath: string) {
+  const statusClass =
+    item.status === "ok"
+      ? "cron-job-status-ok"
+      : item.status === "error"
+        ? "cron-job-status-error"
+        : "cron-job-status-skipped";
+  const chatUrl =
+    typeof item.sessionKey === "string" && item.sessionKey.trim().length > 0
+      ? `${pathForTab("chat", basePath)}?session=${encodeURIComponent(item.sessionKey)}`
+      : null;
+  return html`
+    <div class="list-item">
+      <div class="list-main">
+        <div class="list-title">${item.jobName}</div>
+        <div class="list-sub">${item.jobId}</div>
+        <div class="muted">${item.summary ?? item.error ?? "-"}</div>
+      </div>
+      <div class="list-meta">
+        <div><span class=${`cron-job-status-pill ${statusClass}`}>${item.status}</span></div>
+        <div class="muted">${formatMs(item.ts)}</div>
+        <div class="muted">${item.durationMs ?? 0}ms</div>
+        ${
+          chatUrl
+            ? html`<div><a class="session-link" href=${chatUrl}>Open run chat</a></div>`
+            : nothing
+        }
+      </div>
+    </div>
   `;
 }
 

@@ -1,7 +1,7 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_CRON_FORM } from "../app-defaults.ts";
-import type { CronJob } from "../types.ts";
+import type { CronJob, OpsRuntimeRunsResult } from "../types.ts";
 import { renderCron, type CronProps } from "./cron.ts";
 
 function createJob(id: string): CronJob {
@@ -19,6 +19,23 @@ function createJob(id: string): CronJob {
 }
 
 function createProps(overrides: Partial<CronProps> = {}): CronProps {
+  const runtimeRuns: OpsRuntimeRunsResult = {
+    ts: Date.now(),
+    summary: {
+      jobsScanned: 0,
+      jobsTotal: 0,
+      jobsTruncated: false,
+      totalRuns: 0,
+      okRuns: 0,
+      errorRuns: 0,
+      skippedRuns: 0,
+      timeoutRuns: 0,
+      jobsWithFailures: 0,
+      needsAction: 0,
+    },
+    runs: [],
+    failures: [],
+  };
   return {
     basePath: "",
     loading: false,
@@ -31,6 +48,17 @@ function createProps(overrides: Partial<CronProps> = {}): CronProps {
     channelLabels: {},
     runsJobId: null,
     runs: [],
+    runtimeRunsLoading: false,
+    runtimeRunsError: null,
+    runtimeRunsFilters: {
+      search: "",
+      status: "all",
+      fromLocal: "",
+      toLocal: "",
+      limit: "100",
+      includeDisabledCron: true,
+    },
+    runtimeRunsResult: runtimeRuns,
     onFormChange: () => undefined,
     onRefresh: () => undefined,
     onAdd: () => undefined,
@@ -38,6 +66,11 @@ function createProps(overrides: Partial<CronProps> = {}): CronProps {
     onRun: () => undefined,
     onRemove: () => undefined,
     onLoadRuns: () => undefined,
+    onRuntimeFiltersChange: () => undefined,
+    onRuntimeApply: () => undefined,
+    onRuntimeRefresh: () => undefined,
+    onRuntimeClear: () => undefined,
+    onRuntimePreset: () => undefined,
     ...overrides,
   };
 }
@@ -221,5 +254,47 @@ describe("cron view", () => {
     expect(container.textContent).toContain("Delivery");
     expect(container.textContent).toContain("webhook");
     expect(container.textContent).toContain("https://example.invalid/cron");
+  });
+
+  it("renders runtime runs filters and applies enter-to-search", () => {
+    const container = document.createElement("div");
+    const onRuntimeApply = vi.fn();
+    const onRuntimeFiltersChange = vi.fn();
+    render(
+      renderCron(
+        createProps({
+          onRuntimeApply,
+          onRuntimeFiltersChange,
+        }),
+      ),
+      container,
+    );
+
+    const searchInput = container.querySelector(
+      '.cron-runtime-filters input[placeholder="jobId / name / error / model"]',
+    );
+    expect(searchInput).not.toBeNull();
+    searchInput?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(onRuntimeApply).toHaveBeenCalledTimes(1);
+  });
+
+  it("triggers runtime range preset actions", () => {
+    const container = document.createElement("div");
+    const onRuntimePreset = vi.fn();
+    render(
+      renderCron(
+        createProps({
+          onRuntimePreset,
+        }),
+      ),
+      container,
+    );
+
+    const presetButton = Array.from(container.querySelectorAll("button")).find(
+      (btn) => btn.textContent?.trim() === "Last 24h",
+    );
+    expect(presetButton).not.toBeUndefined();
+    presetButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onRuntimePreset).toHaveBeenCalledWith("24h");
   });
 });

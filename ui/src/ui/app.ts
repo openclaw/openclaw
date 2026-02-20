@@ -19,7 +19,11 @@ import {
   handleSendChat as handleSendChatInternal,
   removeQueuedMessage as removeQueuedMessageInternal,
 } from "./app-chat.ts";
-import { DEFAULT_CRON_FORM, DEFAULT_LOG_LEVEL_FILTERS } from "./app-defaults.ts";
+import {
+  DEFAULT_CRON_FORM,
+  DEFAULT_CRON_RUNTIME_RUNS_FILTERS,
+  DEFAULT_LOG_LEVEL_FILTERS,
+} from "./app-defaults.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import { connectGateway as connectGatewayInternal } from "./app-gateway.ts";
 import {
@@ -68,6 +72,7 @@ import type {
   ConfigSnapshot,
   ConfigUiHints,
   CronJob,
+  OpsRuntimeRunsResult,
   CronRunLogEntry,
   CronStatus,
   HealthSnapshot,
@@ -80,7 +85,12 @@ import type {
   StatusSummary,
   NostrProfile,
 } from "./types.ts";
-import { type ChatAttachment, type ChatQueueItem, type CronFormState } from "./ui-types.ts";
+import {
+  type ChatAttachment,
+  type ChatQueueItem,
+  type CronFormState,
+  type CronRuntimeRunsFilters,
+} from "./ui-types.ts";
 import type { NostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
 
 declare global {
@@ -300,6 +310,12 @@ export class OpenClawApp extends LitElement {
   @state() cronForm: CronFormState = { ...DEFAULT_CRON_FORM };
   @state() cronRunsJobId: string | null = null;
   @state() cronRuns: CronRunLogEntry[] = [];
+  @state() cronRuntimeRunsLoading = false;
+  @state() cronRuntimeRunsError: string | null = null;
+  @state() cronRuntimeRunsFilters: CronRuntimeRunsFilters = {
+    ...DEFAULT_CRON_RUNTIME_RUNS_FILTERS,
+  };
+  @state() cronRuntimeRuns: OpsRuntimeRunsResult | null = null;
   @state() cronBusy = false;
 
   @state() updateAvailable: import("./types.js").UpdateAvailable | null = null;

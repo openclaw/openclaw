@@ -34,3 +34,12 @@ export type CronFormState = {
   deliveryTo: string;
   timeoutSeconds: string;
 };
+
+export type CronRuntimeRunsFilters = {
+  search: string;
+  status: "all" | "ok" | "error" | "skipped";
+  fromLocal: string;
+  toLocal: string;
+  limit: string;
+  includeDisabledCron: boolean;
+};

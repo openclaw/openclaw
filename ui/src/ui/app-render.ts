@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import { parseAgentSessionKey } from "../../../src/routing/session-key.js";
 import { t } from "../i18n/index.ts";
 import { refreshChatAvatar } from "./app-chat.ts";
+import { DEFAULT_CRON_RUNTIME_RUNS_FILTERS } from "./app-defaults.ts";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
 import { renderChatControls, renderTab, renderThemeToggle } from "./app-render.helpers.ts";
 import type { AppViewState } from "./app-view-state.ts";
@@ -20,7 +21,9 @@ import {
   removeConfigFormValue,
 } from "./controllers/config.ts";
 import {
+  applyCronRuntimeRunsPreset,
   loadCronRuns,
+  loadOpsRuntimeRuns,
   toggleCronJob,
   runCronJob,
   removeCronJob,
@@ -338,6 +341,10 @@ export function renderApp(state: AppViewState) {
                 channelMeta: state.channelsSnapshot?.channelMeta ?? [],
                 runsJobId: state.cronRunsJobId,
                 runs: state.cronRuns,
+                runtimeRunsLoading: state.cronRuntimeRunsLoading,
+                runtimeRunsError: state.cronRuntimeRunsError,
+                runtimeRunsFilters: state.cronRuntimeRunsFilters,
+                runtimeRunsResult: state.cronRuntimeRuns,
                 onFormChange: (patch) =>
                   (state.cronForm = normalizeCronFormState({ ...state.cronForm, ...patch })),
                 onRefresh: () => state.loadCron(),
@@ -346,6 +353,21 @@ export function renderApp(state: AppViewState) {
                 onRun: (job) => runCronJob(state, job),
                 onRemove: (job) => removeCronJob(state, job),
                 onLoadRuns: (jobId) => loadCronRuns(state, jobId),
+                onRuntimeFiltersChange: (patch) =>
+                  (state.cronRuntimeRunsFilters = {
+                    ...state.cronRuntimeRunsFilters,
+                    ...patch,
+                  }),
+                onRuntimeApply: () => loadOpsRuntimeRuns(state),
+                onRuntimeRefresh: () => loadOpsRuntimeRuns(state),
+                onRuntimeClear: () => {
+                  state.cronRuntimeRunsFilters = { ...DEFAULT_CRON_RUNTIME_RUNS_FILTERS };
+                  void loadOpsRuntimeRuns(state);
+                },
+                onRuntimePreset: (preset) => {
+                  applyCronRuntimeRunsPreset(state, preset);
+                  void loadOpsRuntimeRuns(state);
+                },
               })
             : nothing
         }

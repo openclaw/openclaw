@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import { DEFAULT_CRON_FORM } from "../app-defaults.ts";
-import { addCronJob, normalizeCronFormState, type CronState } from "./cron.ts";
+import { DEFAULT_CRON_FORM, DEFAULT_CRON_RUNTIME_RUNS_FILTERS } from "../app-defaults.ts";
+import {
+  addCronJob,
+  applyCronRuntimeRunsPreset,
+  loadOpsRuntimeRuns,
+  normalizeCronFormState,
+  type CronState,
+} from "./cron.ts";
 
 function createState(overrides: Partial<CronState> = {}): CronState {
   return {
@@ -13,6 +19,10 @@ function createState(overrides: Partial<CronState> = {}): CronState {
     cronForm: { ...DEFAULT_CRON_FORM },
     cronRunsJobId: null,
     cronRuns: [],
+    cronRuntimeRunsLoading: false,
+    cronRuntimeRunsError: null,
+    cronRuntimeRunsFilters: { ...DEFAULT_CRON_RUNTIME_RUNS_FILTERS },
+    cronRuntimeRuns: null,
     cronBusy: false,
     ...overrides,
   };
@@ -126,5 +136,82 @@ describe("cron controller", () => {
     });
     expect((addCall?.[1] as { delivery?: unknown } | undefined)?.delivery).toBeUndefined();
     expect(state.cronForm.deliveryMode).toBe("none");
+  });
+
+  it("loads ops runtime runs with filters", async () => {
+    const request = vi.fn(async (method: string, payload?: Record<string, unknown>) => {
+      if (method === "ops.runtime.runs") {
+        expect(payload?.status).toBe("error");
+        expect(payload?.search).toBe("failover");
+        expect(typeof payload?.fromMs).toBe("number");
+        expect(typeof payload?.toMs).toBe("number");
+        return {
+          ts: Date.now(),
+          summary: {
+            jobsScanned: 1,
+            jobsTotal: 1,
+            jobsTruncated: false,
+            totalRuns: 1,
+            okRuns: 0,
+            errorRuns: 1,
+            skippedRuns: 0,
+            timeoutRuns: 1,
+            jobsWithFailures: 1,
+            needsAction: 1,
+          },
+          runs: [
+            {
+              ts: Date.now(),
+              ageMs: 0,
+              jobId: "job-1",
+              jobName: "job-1",
+              enabled: true,
+              status: "error",
+              logPath: "runs/job-1.jsonl",
+            },
+          ],
+          failures: [
+            {
+              jobId: "job-1",
+              jobName: "job-1",
+              enabled: true,
+              totalRuns: 1,
+              errors: 1,
+              timeoutErrors: 1,
+              consecutiveErrors: 2,
+              needsAction: true,
+              logPath: "runs/job-1.jsonl",
+            },
+          ],
+        };
+      }
+      return {};
+    });
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+      cronRuntimeRunsFilters: {
+        ...DEFAULT_CRON_RUNTIME_RUNS_FILTERS,
+        search: "failover",
+        status: "error",
+        fromLocal: "2026-02-20T09:00",
+        toLocal: "2026-02-20T18:00",
+      },
+    });
+
+    await loadOpsRuntimeRuns(state);
+    expect(state.cronRuntimeRunsError).toBeNull();
+    expect(state.cronRuntimeRuns?.summary.errorRuns).toBe(1);
+    expect(state.cronRuntimeRuns?.runs.length).toBe(1);
+  });
+
+  it("applies runtime range presets", () => {
+    const state = createState();
+    applyCronRuntimeRunsPreset(state, "24h");
+    expect(state.cronRuntimeRunsFilters.fromLocal.length).toBeGreaterThan(0);
+    expect(state.cronRuntimeRunsFilters.toLocal.length).toBeGreaterThan(0);
+
+    applyCronRuntimeRunsPreset(state, "clear");
+    expect(state.cronRuntimeRunsFilters.fromLocal).toBe("");
+    expect(state.cronRuntimeRunsFilters.toLocal).toBe("");
   });
 });
