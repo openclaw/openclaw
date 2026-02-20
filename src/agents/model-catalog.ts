@@ -118,8 +118,21 @@ export async function loadModelCatalog(params?: {
           | Array<DiscoveredModel>
           | {
               getAll: () => Array<DiscoveredModel>;
+              getError?: () => string | undefined;
             };
       })(authStorage, join(agentDir, "models.json"));
+
+      // Surface models.json validation errors so users can diagnose misconfigurations.
+      // Without this, a single invalid provider silently drops ALL custom overrides (#21584).
+      if (!Array.isArray(registry) && typeof registry.getError === "function") {
+        const loadError = registry.getError();
+        if (loadError) {
+          console.warn(
+            `[model-catalog] models.json validation error — custom models and provider overrides may be missing:\n${loadError}`,
+          );
+        }
+      }
+
       const entries = Array.isArray(registry) ? registry : registry.getAll();
       for (const entry of entries) {
         const id = String(entry?.id ?? "").trim();
