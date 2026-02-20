@@ -51,10 +51,10 @@ export function getLineSourceInfo(source: EventSource): LineSourceInfo {
 
 function buildPeerId(source: EventSource): string {
   if (source.type === "group" && source.groupId) {
-    return `group:${source.groupId}`;
+    return source.groupId;
   }
   if (source.type === "room" && source.roomId) {
-    return `room:${source.roomId}`;
+    return source.roomId;
   }
   if (source.type === "user" && source.userId) {
     return source.userId;

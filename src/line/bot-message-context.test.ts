@@ -83,4 +83,78 @@ describe("buildLineMessageContext", () => {
     expect(context?.ctxPayload.OriginatingTo).toBe("line:group:group-2");
     expect(context?.ctxPayload.To).toBe("line:group:group-2");
   });
+
+  it("group peer binding matches raw groupId without prefix (#21907)", async () => {
+    const groupId = "Cc7e3bece1234567890abcdef";
+    const bindingCfg: OpenClawConfig = {
+      session: { store: storePath },
+      agents: {
+        list: [{ id: "main" }, { id: "line-group-agent" }],
+      },
+      bindings: [
+        {
+          agentId: "line-group-agent",
+          match: { channel: "line", peer: { kind: "group", id: groupId } },
+        },
+      ],
+    };
+
+    const event = {
+      type: "message",
+      message: { id: "msg-1", type: "text", text: "hello" },
+      replyToken: "reply-token",
+      timestamp: Date.now(),
+      source: { type: "group", groupId, userId: "user-1" },
+      mode: "active",
+      webhookEventId: "evt-1",
+      deliveryContext: { isRedelivery: false },
+    } as MessageEvent;
+
+    const context = await buildLineMessageContext({
+      event,
+      allMedia: [],
+      cfg: bindingCfg,
+      account,
+    });
+    expect(context).not.toBeNull();
+    expect(context!.route.agentId).toBe("line-group-agent");
+    expect(context!.route.matchedBy).toBe("binding.peer");
+  });
+
+  it("room peer binding matches raw roomId without prefix (#21907)", async () => {
+    const roomId = "Rr1234567890abcdef";
+    const bindingCfg: OpenClawConfig = {
+      session: { store: storePath },
+      agents: {
+        list: [{ id: "main" }, { id: "line-room-agent" }],
+      },
+      bindings: [
+        {
+          agentId: "line-room-agent",
+          match: { channel: "line", peer: { kind: "group", id: roomId } },
+        },
+      ],
+    };
+
+    const event = {
+      type: "message",
+      message: { id: "msg-2", type: "text", text: "hello" },
+      replyToken: "reply-token",
+      timestamp: Date.now(),
+      source: { type: "room", roomId, userId: "user-2" },
+      mode: "active",
+      webhookEventId: "evt-2",
+      deliveryContext: { isRedelivery: false },
+    } as MessageEvent;
+
+    const context = await buildLineMessageContext({
+      event,
+      allMedia: [],
+      cfg: bindingCfg,
+      account,
+    });
+    expect(context).not.toBeNull();
+    expect(context!.route.agentId).toBe("line-room-agent");
+    expect(context!.route.matchedBy).toBe("binding.peer");
+  });
 });

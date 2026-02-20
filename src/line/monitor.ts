@@ -311,6 +311,18 @@ export async function monitorLineProvider(
 
   abortSignal?.addEventListener("abort", stopHandler);
 
+  // Block until the abort signal fires, keeping the provider "alive" from
+  // the gateway framework's perspective.  Without this the async function
+  // resolves immediately and the framework treats it as an exit, triggering
+  // an auto-restart crash-loop.  (Same pattern used by the Slack provider.)
+  await new Promise<void>((resolve) => {
+    if (abortSignal?.aborted) {
+      resolve();
+      return;
+    }
+    abortSignal?.addEventListener("abort", () => resolve(), { once: true });
+  });
+
   return {
     account: bot.account,
     handleWebhook: bot.handleWebhook,
