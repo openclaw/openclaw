@@ -55,9 +55,11 @@ function isActive(summary: BedrockModelSummary): boolean {
   return typeof status === "string" ? status.toUpperCase() === "ACTIVE" : false;
 }
 
-function mapInputModalities(summary: BedrockModelSummary): Array<"text" | "image"> {
+function mapInputModalities(
+  summary: BedrockModelSummary,
+): Array<"text" | "image" | "video" | "audio"> {
   const inputs = summary.inputModalities ?? [];
-  const mapped = new Set<"text" | "image">();
+  const mapped = new Set<"text" | "image" | "video" | "audio">();
   for (const modality of inputs) {
     const lower = modality.toLowerCase();
     if (lower === "text") {
@@ -65,6 +67,12 @@ function mapInputModalities(summary: BedrockModelSummary): Array<"text" | "image
     }
     if (lower === "image") {
       mapped.add("image");
+    }
+    if (lower === "video") {
+      mapped.add("video");
+    }
+    if (lower === "audio") {
+      mapped.add("audio");
     }
   }
   if (mapped.size === 0) {
