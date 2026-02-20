@@ -21,6 +21,7 @@ import { upsertPresence } from "../../../infra/system-presence.js";
 import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
 import { rawDataToString } from "../../../infra/ws.js";
 import type { createSubsystemLogger } from "../../../logging/subsystem.js";
+import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
 import { isGatewayCliClient, isWebchatClient } from "../../../utils/message-channel.js";
 import { resolveRuntimeServiceVersion } from "../../../version.js";
 import {
@@ -711,42 +712,49 @@ export function attachGatewayWsMessageHandler(params: {
               return;
             }
           } else {
+            const hasLegacyPairedMetadata =
+              paired.roles === undefined && paired.scopes === undefined;
             const pairedRoles = Array.isArray(paired.roles)
               ? paired.roles
               : paired.role
                 ? [paired.role]
                 : [];
-            const allowedRoles = new Set(pairedRoles);
-            if (allowedRoles.size === 0) {
-              logUpgradeAudit("role-upgrade", pairedRoles, paired.scopes);
-              const ok = await requirePairing("role-upgrade");
-              if (!ok) {
-                return;
-              }
-            } else if (!allowedRoles.has(role)) {
-              logUpgradeAudit("role-upgrade", pairedRoles, paired.scopes);
-              const ok = await requirePairing("role-upgrade");
-              if (!ok) {
-                return;
-              }
-            }
-
-            const pairedScopes = Array.isArray(paired.scopes) ? paired.scopes : [];
-            if (scopes.length > 0) {
-              if (pairedScopes.length === 0) {
-                logUpgradeAudit("scope-upgrade", pairedRoles, pairedScopes);
-                const ok = await requirePairing("scope-upgrade");
+            if (!hasLegacyPairedMetadata) {
+              const allowedRoles = new Set(pairedRoles);
+              if (allowedRoles.size === 0) {
+                logUpgradeAudit("role-upgrade", pairedRoles, paired.scopes);
+                const ok = await requirePairing("role-upgrade");
                 if (!ok) {
                   return;
                 }
-              } else {
-                const allowedScopes = new Set(pairedScopes);
-                const missingScope = scopes.find((scope) => !allowedScopes.has(scope));
-                if (missingScope) {
+              } else if (!allowedRoles.has(role)) {
+                logUpgradeAudit("role-upgrade", pairedRoles, paired.scopes);
+                const ok = await requirePairing("role-upgrade");
+                if (!ok) {
+                  return;
+                }
+              }
+
+              const pairedScopes = Array.isArray(paired.scopes) ? paired.scopes : [];
+              if (scopes.length > 0) {
+                if (pairedScopes.length === 0) {
                   logUpgradeAudit("scope-upgrade", pairedRoles, pairedScopes);
                   const ok = await requirePairing("scope-upgrade");
                   if (!ok) {
                     return;
+                  }
+                } else {
+                  const scopesAllowed = roleScopesAllow({
+                    role,
+                    requestedScopes: scopes,
+                    allowedScopes: pairedScopes,
+                  });
+                  if (!scopesAllowed) {
+                    logUpgradeAudit("scope-upgrade", pairedRoles, pairedScopes);
+                    const ok = await requirePairing("scope-upgrade");
+                    if (!ok) {
+                      return;
+                    }
                   }
                 }
               }
