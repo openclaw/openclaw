@@ -194,6 +194,92 @@ export async function deleteSlackMessage(
   });
 }
 
+export async function deleteSlackThreadRepliesFromBot(
+  channelId: string,
+  threadTs: string,
+  botUserId: string,
+  opts: SlackActionClientOpts = {},
+): Promise<string[]> {
+  const result = await deleteSlackThreadReplies(channelId, threadTs, {
+    ...opts,
+    botUserId,
+  });
+  return result.deletedBot;
+}
+
+/**
+ * Delete thread replies. By default only deletes bot's own replies.
+ * When `userToken` is provided, also deletes other users' messages using the User OAuth token.
+ */
+export async function deleteSlackThreadReplies(
+  channelId: string,
+  threadTs: string,
+  opts: SlackActionClientOpts & {
+    botUserId: string;
+    userToken?: string;
+  },
+): Promise<{ deletedBot: string[]; deletedUser: string[]; failed: string[] }> {
+  const botClient = await getClient(opts);
+
+  let allReplies: Array<{ ts: string; user?: string }> = [];
+  try {
+    const fetchLimit = 200;
+    let cursor: string | undefined;
+
+    do {
+      const result = await botClient.conversations.replies({
+        channel: channelId,
+        ts: threadTs,
+        limit: fetchLimit,
+        ...(cursor ? { cursor } : {}),
+      });
+
+      const page = (result.messages ?? [])
+        .filter((msg: any) => msg.ts !== threadTs)
+        .map((msg: any) => ({ ts: msg.ts, user: msg.user }));
+      allReplies.push(...page);
+
+      const next = result.response_metadata?.next_cursor;
+      cursor = typeof next === "string" && next.trim().length > 0 ? next.trim() : undefined;
+    } while (cursor);
+  } catch {
+    // Thread may not exist or may not have replies
+    return { deletedBot: [], deletedUser: [], failed: [] };
+  }
+
+  const botReplies = allReplies.filter((msg) => msg.user === opts.botUserId);
+  const userReplies = allReplies.filter((msg) => msg.user !== opts.botUserId);
+
+  const deletedBot: string[] = [];
+  for (const reply of botReplies) {
+    if (!reply.ts) continue;
+    try {
+      await deleteSlackMessage(channelId, reply.ts, opts);
+      deletedBot.push(reply.ts);
+    } catch (err) {
+      failed.push(reply.ts);
+      logVerbose(`Failed to delete bot reply ${reply.ts} in ${channelId}: ${String(err)}`);
+    }
+  }
+
+  const deletedUser: string[] = [];
+  const failed: string[] = [];
+  if (opts.userToken && userReplies.length > 0) {
+    const userClient = createSlackWebClient(opts.userToken);
+    for (const reply of userReplies) {
+      if (!reply.ts) continue;
+      try {
+        await userClient.chat.delete({ channel: channelId, ts: reply.ts });
+        deletedUser.push(reply.ts);
+      } catch {
+        failed.push(reply.ts);
+      }
+    }
+  }
+
+  return { deletedBot, deletedUser, failed };
+}
+
 export async function readSlackMessages(
   channelId: string,
   opts: SlackActionClientOpts & {

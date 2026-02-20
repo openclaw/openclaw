@@ -57,6 +57,48 @@ export function registerSlackMessageEvents(params: {
           return;
         }
         const messageId = changed.message?.ts ?? changed.previous_message?.ts;
+
+        // Detect tombstone: Slack sends message_changed (not message_deleted)
+        // when a thread parent is deleted. The new message has subtype "tombstone".
+        const isTombstone = changed.message?.subtype === "tombstone";
+        const hadThread = (changed.previous_message?.reply_count ?? 0) > 0;
+        if (isTombstone && hadThread && channelId && messageId) {
+          ctx.runtime.log?.(
+            `[message_changed/tombstone] thread parent deleted: channel=${channelId} thread=${messageId}`,
+          );
+          void (async () => {
+            try {
+              const { deleteSlackThreadReplies } = await import("../../actions.js");
+              const userTokenForDelete =
+                ctx.userToken && !ctx.userTokenReadOnly ? ctx.userToken : undefined;
+              const result = await deleteSlackThreadReplies(channelId, messageId, {
+                botUserId: ctx.botUserId,
+                userToken: userTokenForDelete,
+              });
+              const totalDeleted = result.deletedBot.length + result.deletedUser.length;
+              if (totalDeleted > 0) {
+                ctx.logger.info(
+                  `Deleted ${result.deletedBot.length} bot + ${result.deletedUser.length} user reply(ies) in thread ${messageId} (tombstone)` +
+                    (result.failed.length > 0 ? ` (${result.failed.length} failed)` : ""),
+                );
+              } else {
+                ctx.runtime.log?.(
+                  `[message_changed/tombstone] no replies found in thread ${messageId}`,
+                );
+              }
+            } catch (err) {
+              ctx.logger.warn(
+                `Failed to clean up replies after tombstone detection: ${String(err)}`,
+              );
+            }
+          })();
+          enqueueSystemEvent(`Slack message deleted in ${target.label} (thread parent removed).`, {
+            sessionKey: target.sessionKey,
+            contextKey: `slack:message:deleted:${channelId}:${messageId}`,
+          });
+          return;
+        }
+
         enqueueSystemEvent(`Slack message edited in ${target.label}.`, {
           sessionKey: target.sessionKey,
           contextKey: `slack:message:changed:${channelId ?? "unknown"}:${messageId ?? changed.event_ts ?? "unknown"}`,
@@ -74,6 +116,39 @@ export function registerSlackMessageEvents(params: {
           sessionKey: target.sessionKey,
           contextKey: `slack:message:deleted:${channelId ?? "unknown"}:${deleted.deleted_ts ?? deleted.event_ts ?? "unknown"}`,
         });
+        // Clean up replies when parent message is deleted
+        if (deleted.deleted_ts && channelId) {
+          void (async () => {
+            try {
+              const { deleteSlackThreadReplies } = await import("../../actions.js");
+              const userTokenForDelete =
+                ctx.userToken && !ctx.userTokenReadOnly ? ctx.userToken : undefined;
+              ctx.runtime.log?.(
+                `[message_deleted] cleaning up replies: channel=${channelId} thread=${deleted.deleted_ts}` +
+                  (userTokenForDelete ? " (with user token)" : " (bot only)"),
+              );
+              const result = await deleteSlackThreadReplies(channelId, deleted.deleted_ts!, {
+                botUserId: ctx.botUserId,
+                userToken: userTokenForDelete,
+              });
+              const totalDeleted = result.deletedBot.length + result.deletedUser.length;
+              if (totalDeleted > 0) {
+                ctx.logger.info(
+                  `Deleted ${result.deletedBot.length} bot + ${result.deletedUser.length} user reply(ies) in thread ${deleted.deleted_ts} (parent deleted)` +
+                    (result.failed.length > 0 ? ` (${result.failed.length} failed)` : ""),
+                );
+              } else {
+                ctx.runtime.log?.(
+                  `[message_deleted] no replies found in thread ${deleted.deleted_ts}`,
+                );
+              }
+            } catch (err) {
+              ctx.logger.warn(
+                `Failed to clean up replies after parent message deletion: ${String(err)}`,
+              );
+            }
+          })();
+        }
         return;
       }
       if (message.subtype === "thread_broadcast") {

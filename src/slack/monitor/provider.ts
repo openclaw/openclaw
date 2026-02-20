@@ -200,6 +200,8 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     botUserId,
     teamId,
     apiAppId,
+    userToken: slackCfg.userToken?.trim() || undefined,
+    userTokenReadOnly: slackCfg.userTokenReadOnly ?? true,
     historyLimit,
     sessionScope,
     mainKey,
@@ -341,6 +343,14 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     }
   };
   opts.abortSignal?.addEventListener("abort", stopOnAbort, { once: true });
+
+  if (slackCfg.userToken && slackCfg.userTokenReadOnly === false) {
+    runtime.log?.(
+      warn(
+        "slack: userTokenReadOnly=false — user token will be used for destructive operations (thread cleanup)",
+      ),
+    );
+  }
 
   try {
     if (slackMode === "socket") {
