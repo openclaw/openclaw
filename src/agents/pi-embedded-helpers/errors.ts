@@ -826,8 +826,7 @@ export function isFailoverAssistantError(msg: AssistantMessage | undefined): boo
   return isFailoverErrorMessage(msg.errorMessage ?? "");
 }
 
-const THINKING_IMMUTABILITY_RE =
-  /thinking or redacted_thinking blocks.*cannot be modified/i;
+const THINKING_IMMUTABILITY_RE = /thinking or redacted_thinking blocks.*cannot be modified/i;
 
 export function isThinkingImmutabilityError(raw: string): boolean {
   if (!raw) {
