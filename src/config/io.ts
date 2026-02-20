@@ -49,6 +49,7 @@ import { normalizeConfigPaths } from "./normalize-paths.js";
 import { resolveConfigPath, resolveDefaultConfigCandidates, resolveStateDir } from "./paths.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
 import { applyConfigOverrides } from "./runtime-overrides.js";
+import type { OpenClawConfig, ConfigFileSnapshot, LegacyConfigIssue } from "./types.js";
 import {
   validateConfigObjectRawWithPlugins,
   validateConfigObjectWithPlugins,
@@ -1560,7 +1561,9 @@ export async function writeConfigFile(
 
 /**
  * Iterate through config backup files (.bak, .bak.1, …) and return the first
- * snapshot that passes validation.  Returns `null` when no usable backup exists.
+ * snapshot that passes the full config read pipeline ($include resolution,
+ * ${ENV} substitution, and Zod validation).
+ * Returns `null` when no usable backup exists.
  */
 export async function tryLoadValidConfigBackup(
   configPath: string,
@@ -1573,34 +1576,16 @@ export async function tryLoadValidConfigBackup(
 
   for (const candidate of candidates) {
     try {
-      const raw = await fs.promises.readFile(candidate, "utf-8");
-      const parsed = JSON5.parse(raw);
-      if (typeof parsed !== "object" || parsed === null) {
+      if (!fs.existsSync(candidate)) {
         continue;
       }
-
-      const validated = validateConfigObjectRawWithPlugins(parsed);
-      if (!validated.ok) {
-        continue;
+      const io = createConfigIO({ configPath: candidate });
+      const snapshot = await io.readConfigFileSnapshot();
+      if (snapshot.exists && snapshot.valid) {
+        return { snapshot, backupPath: candidate };
       }
-
-      return {
-        snapshot: {
-          path: candidate,
-          exists: true,
-          raw,
-          parsed,
-          resolved: parsed as OpenClawConfig,
-          valid: true,
-          config: parsed as OpenClawConfig,
-          issues: [],
-          warnings: validated.warnings ?? [],
-          legacyIssues: [],
-        },
-        backupPath: candidate,
-      };
     } catch {
-      // Backup missing or unreadable — try the next one.
+      // Backup unreadable or invalid — try the next one.
     }
   }
 
