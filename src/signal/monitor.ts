@@ -19,6 +19,7 @@ import type {
   SignalReactionMessage,
   SignalReactionTarget,
 } from "./monitor/event-handler.types.js";
+import type { SignalEnhancementDeps } from "./monitor/signal-enhancements.js";
 import { sendMessageSignal } from "./send.js";
 import { runSignalSseLoop } from "./sse-reconnect.js";
 
@@ -322,6 +323,18 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       });
     }
 
+    // Signal enhancements: build enhancement deps
+    const enhancementDeps: SignalEnhancementDeps = {
+      cfg,
+      baseUrl,
+      account,
+      accountId: accountInfo.accountId,
+      mediaMaxBytes,
+      ignoreAttachments,
+      fetchAttachment,
+      groups: accountInfo.config.groups,
+    };
+
     const handleEvent = createSignalEventHandler({
       runtime,
       cfg,
@@ -348,6 +361,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       isSignalReactionMessage,
       shouldEmitSignalReactionNotification,
       buildSignalReactionSystemEventText,
+      enhancementDeps,
     });
 
     await runSignalSseLoop({

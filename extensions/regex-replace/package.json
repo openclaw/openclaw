@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/regex-replace",
+  "version": "2026.2.11",
+  "private": true,
+  "description": "Apply regex-based find-and-replace rules to outgoing agent messages.",
+  "type": "module",
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

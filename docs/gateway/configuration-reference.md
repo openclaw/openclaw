@@ -666,6 +666,7 @@ Time format in system prompt. Default: `auto` (OS preference).
 ```
 
 - `model.primary`: format `provider/model` (e.g. `anthropic/claude-opus-4-6`). If you omit the provider, OpenClaw assumes `anthropic` (deprecated).
+- `model.compact`: optionally sets a dedicated model for compaction summarization. Falls back to primary if unset or if the compact model fails. Useful when the primary model does not support the summarization API (e.g. some CLI-based providers return 400 on compaction).
 - `models`: the configured model catalog and allowlist for `/model`. Each entry can include `alias` (shortcut) and `params` (provider-specific: `temperature`, `maxTokens`).
 - `imageModel`: only used if the primary model lacks image input.
 - `maxConcurrent`: max parallel agent runs across sessions (each session still serialized). Default: 1.

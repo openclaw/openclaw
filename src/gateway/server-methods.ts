@@ -39,6 +39,10 @@ function authorizeGatewayMethod(method: string, client: GatewayRequestOptions["c
   if (!client?.connect) {
     return null;
   }
+  // health is a basic liveness check — always allow regardless of role/scopes
+  if (method === "health") {
+    return null;
+  }
   const role = client.connect.role ?? "operator";
   const scopes = client.connect.scopes ?? [];
   if (isNodeRoleMethod(method)) {

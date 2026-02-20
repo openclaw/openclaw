@@ -4,6 +4,10 @@ import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
 import {
+  promoteCallTagsToBlocks,
+  promoteHistoricalContextToBlocks,
+} from "./custom-context-to-blocks.js";
+import {
   isMessagingToolDuplicateNormalized,
   normalizeTextForComparison,
 } from "./pi-embedded-helpers.js";
@@ -258,6 +262,8 @@ export function handleMessageEnd(
   const assistantMessage = msg;
   ctx.noteLastAssistant(assistantMessage);
   ctx.recordAssistantUsage((assistantMessage as { usage?: unknown }).usage);
+  promoteCallTagsToBlocks(assistantMessage);
+  promoteHistoricalContextToBlocks(assistantMessage);
   promoteThinkingTagsToBlocks(assistantMessage);
 
   const rawText = extractAssistantText(assistantMessage);

@@ -1,7 +1,7 @@
 import { normalizeE164 } from "../utils.js";
 
 export type SignalSender =
-  | { kind: "phone"; raw: string; e164: string }
+  | { kind: "phone"; raw: string; e164: string; uuid?: string }
   | { kind: "uuid"; raw: string };
 
 type SignalAllowEntry =
@@ -37,6 +37,8 @@ export function resolveSignalSender(params: {
       kind: "phone",
       raw: sourceNumber,
       e164: normalizeE164(sourceNumber),
+      // Preserve UUID so allowlist entries using uuid: format still match
+      uuid: params.sourceUuid?.trim() || undefined,
     };
   }
   const sourceUuid = params.sourceUuid?.trim();
@@ -109,8 +111,14 @@ export function isSignalSenderAllowed(sender: SignalSender, allowFrom: string[])
     if (entry.kind === "phone" && sender.kind === "phone") {
       return entry.e164 === sender.e164;
     }
-    if (entry.kind === "uuid" && sender.kind === "uuid") {
-      return entry.raw === sender.raw;
+    if (entry.kind === "uuid") {
+      if (sender.kind === "uuid") {
+        return entry.raw === sender.raw;
+      }
+      // Cross-kind: match uuid allowlist entry against phone sender's uuid
+      if (sender.kind === "phone" && sender.uuid) {
+        return entry.raw === sender.uuid;
+      }
     }
     return false;
   });

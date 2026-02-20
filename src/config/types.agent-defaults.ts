@@ -22,6 +22,8 @@ export type AgentModelEntryConfig = {
 
 export type AgentModelListConfig = {
   primary?: string;
+  /** Model override for compaction (provider/model). Falls back to primary. */
+  compact?: string;
   fallbacks?: string[];
 };
 

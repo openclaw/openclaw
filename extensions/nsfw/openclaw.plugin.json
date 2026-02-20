@@ -1,0 +1,10 @@
+{
+  "id": "nsfw",
+  "name": "NSFW - Unrestricted Content",
+  "description": "Toggle-able system prompt injection via /nsfw command.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

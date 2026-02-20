@@ -1,0 +1,10 @@
+{
+  "id": "regex-replace",
+  "name": "Regex Replace",
+  "description": "Apply regex-based find-and-replace rules to outgoing agent messages.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

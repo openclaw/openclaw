@@ -1,0 +1,37 @@
+diff --git a/dist/providers/google-shared.js b/dist/providers/google-shared.js
+index d272b57da187bd4d7708fe49b6e553892678b52d..2e6bf309cb5cd42c7b3a94cbc2552690ae9df183 100644
+--- a/dist/providers/google-shared.js
++++ b/dist/providers/google-shared.js
+@@ -141,13 +141,14 @@ export function convertMessages(model, context) {
+                     // convert unsigned function calls to text to avoid API validation errors.
+                     // We include a note telling the model this is historical context to prevent mimicry.
+                     const isGemini3 = model.id.toLowerCase().includes("gemini-3");
+-                    if (isGemini3 && !thoughtSignature) {
+-                        const argsStr = JSON.stringify(block.arguments ?? {}, null, 2);
+-                        parts.push({
+-                            text: `[Historical context: a different model called tool "${block.name}" with arguments: ${argsStr}. Do not mimic this format - use proper function calling.]`,
+-                        });
+-                    }
+-                    else {
++                    // For Gemini 3, unsigned cross-model tool calls use the official
++                    // dummy signature to skip thought-signature validation instead of
++                    // degrading to text (which leaks into model output).
++                    // See: https://ai.google.dev/gemini-api/docs/thought-signatures
++                    const effectiveSignature = (isGemini3 && !thoughtSignature)
++                        ? "context_engineering_is_the_way_to_go"
++                        : thoughtSignature;
++                    {
+                         const part = {
+                             functionCall: {
+                                 name: block.name,
+@@ -155,8 +156,8 @@ export function convertMessages(model, context) {
+                                 ...(requiresToolCallId(model.id) ? { id: block.id } : {}),
+                             },
+                         };
+-                        if (thoughtSignature) {
+-                            part.thoughtSignature = thoughtSignature;
++                        if (effectiveSignature) {
++                            part.thoughtSignature = effectiveSignature;
+                         }
+                         parts.push(part);
+                     }

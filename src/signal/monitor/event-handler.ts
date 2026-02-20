@@ -49,8 +49,25 @@ import {
 import { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } from "../send.js";
 import type { SignalEventHandlerDeps, SignalReceivePayload } from "./event-handler.types.js";
 import { renderSignalMentions } from "./mentions.js";
-export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
+import {
+  buildEnhancedMessage,
+  checkRequireMention,
+  loadSignalMediaCache,
+  preCacheGroupMedia,
+  hasNativeSignalMention,
+  stripMentionPlaceholders,
+  type SignalEnhancementDeps,
+} from "./signal-enhancements.js";
+
+export function createSignalEventHandler(
+  deps: SignalEventHandlerDeps & { enhancementDeps?: SignalEnhancementDeps },
+) {
   const inboundDebounceMs = resolveInboundDebounceMs({ cfg: deps.cfg, channel: "signal" });
+
+  // Signal enhancements: load persistent media cache on startup
+  if (deps.enhancementDeps) {
+    void loadSignalMediaCache();
+  }
 
   type SignalInboundEntry = {
     senderName: string;
@@ -501,10 +518,27 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       }
     }
 
+    // Signal enhancements: pre-cache group media + requireMention gate
+    const eDeps = deps.enhancementDeps;
+    if (eDeps && isGroup) {
+      await preCacheGroupMedia({
+        dataMessage,
+        senderRecipient,
+        senderAllowId,
+        groupId,
+        deps: eDeps,
+      });
+    }
+    if (eDeps && checkRequireMention({ dataMessage, isGroup, groupId, deps: eDeps })) {
+      return;
+    }
+
     const useAccessGroups = deps.cfg.commands?.useAccessGroups !== false;
     const ownerAllowedForCommands = isSignalSenderAllowed(sender, effectiveDmAllow);
     const groupAllowedForCommands = isSignalSenderAllowed(sender, effectiveGroupAllow);
-    const hasControlCommandInMessage = hasControlCommand(messageText, deps.cfg);
+    // Strip U+FFFC mention placeholders so commands like "@bot /new" detect correctly
+    const textForCmd = eDeps ? stripMentionPlaceholders(messageText) : messageText;
+    const hasControlCommandInMessage = hasControlCommand(textForCmd, deps.cfg);
     const commandGate = resolveControlCommandGate({
       useAccessGroups,
       authorizers: [
@@ -535,8 +569,14 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       },
     });
     const mentionRegexes = buildMentionRegexes(deps.cfg, route.agentId);
-    const wasMentioned = isGroup && matchesMentionPatterns(messageText, mentionRegexes);
+    // Detect both text-based mention patterns AND Signal native @mentions
+    const nativeMention = isGroup && eDeps && hasNativeSignalMention(dataMessage, deps.account);
+    const wasMentioned =
+      isGroup && (matchesMentionPatterns(messageText, mentionRegexes) || Boolean(nativeMention));
+    // When custom enhancement deps are present, checkRequireMention (above) is
+    // the sole mention gate — skip upstream's gating to avoid conflicting defaults.
     const requireMention =
+      !eDeps &&
       isGroup &&
       resolveChannelGroupRequireMention({
         cfg: deps.cfg,
@@ -625,7 +665,28 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       placeholder = "<media:attachment>";
     }
 
-    const bodyText = messageText || placeholder || dataMessage.quote?.text?.trim() || "";
+    // Signal enhancements: sticker, quote, U+FFFC stripping, enhanced bodyText
+    let bodyText: string;
+    if (eDeps) {
+      const enhanced = await buildEnhancedMessage({
+        dataMessage,
+        messageText,
+        mediaPath,
+        mediaType,
+        placeholder,
+        senderRecipient,
+        groupId,
+        deps: eDeps,
+      });
+      bodyText = enhanced.bodyText;
+      if (enhanced.mediaPath) {
+        mediaPath = enhanced.mediaPath;
+        mediaType = enhanced.mediaType;
+      }
+      placeholder = enhanced.placeholder;
+    } else {
+      bodyText = messageText || placeholder || dataMessage.quote?.text?.trim() || "";
+    }
     if (!bodyText) {
       return;
     }

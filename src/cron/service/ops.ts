@@ -28,37 +28,44 @@ async function ensureLoadedForRead(state: CronServiceState) {
 }
 
 export async function start(state: CronServiceState) {
-  await locked(state, async () => {
-    if (!state.deps.cronEnabled) {
-      state.deps.log.info({ enabled: false }, "cron: disabled");
-      return;
-    }
-    await ensureLoaded(state, { skipRecompute: true });
-    const jobs = state.store?.jobs ?? [];
-    const startupInterruptedJobIds = new Set<string>();
-    for (const job of jobs) {
-      if (typeof job.state.runningAtMs === "number") {
-        state.deps.log.warn(
-          { jobId: job.id, runningAtMs: job.state.runningAtMs },
-          "cron: clearing stale running marker on startup",
-        );
-        job.state.runningAtMs = undefined;
-        startupInterruptedJobIds.add(job.id);
+  if (!state.deps.cronEnabled) {
+    state.deps.log.info({ enabled: false }, "cron: disabled");
+    return;
+  }
+  try {
+    await locked(state, async () => {
+      await ensureLoaded(state, { skipRecompute: true });
+      const jobs = state.store?.jobs ?? [];
+      const startupInterruptedJobIds = new Set<string>();
+      for (const job of jobs) {
+        if (typeof job.state.runningAtMs === "number") {
+          state.deps.log.warn(
+            { jobId: job.id, runningAtMs: job.state.runningAtMs },
+            "cron: clearing stale running marker on startup",
+          );
+          job.state.runningAtMs = undefined;
+          startupInterruptedJobIds.add(job.id);
+        }
       }
-    }
-    await runMissedJobs(state, { skipJobIds: startupInterruptedJobIds });
-    recomputeNextRuns(state);
-    await persist(state);
-    armTimer(state);
-    state.deps.log.info(
-      {
-        enabled: true,
-        jobs: state.store?.jobs.length ?? 0,
-        nextWakeAtMs: nextWakeAtMs(state) ?? null,
-      },
-      "cron: started",
-    );
-  });
+      await runMissedJobs(state, { skipJobIds: startupInterruptedJobIds });
+      recomputeNextRuns(state);
+      await persist(state);
+    });
+  } catch (err) {
+    // Log but don't propagate — armTimer below will still schedule the next tick
+    // which will retry ensureLoaded/persist, preventing permanent startup failure.
+    state.deps.log.error({ err: String(err) }, "cron: start failed, will retry on next tick");
+  }
+  // Always arm the timer so the scheduler recovers from transient startup errors.
+  armTimer(state);
+  state.deps.log.info(
+    {
+      enabled: true,
+      jobs: state.store?.jobs.length ?? 0,
+      nextWakeAtMs: nextWakeAtMs(state) ?? null,
+    },
+    "cron: started",
+  );
 }
 
 export function stop(state: CronServiceState) {

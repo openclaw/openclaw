@@ -119,6 +119,8 @@ export type CompactEmbeddedPiSessionParams = {
   enqueue?: typeof enqueueCommand;
   extraSystemPrompt?: string;
   ownerNumbers?: string[];
+  /** @internal Skip compact model override (used for primary-model fallback retry). */
+  _skipCompactOverride?: boolean;
 };
 
 type CompactionMessageMetrics = {
@@ -240,8 +242,41 @@ function classifyCompactionReason(reason?: string): string {
 /**
  * Core compaction logic without lane queueing.
  * Use this when already inside a session/global lane to avoid deadlocks.
+ *
+ * If a dedicated compact model is configured (`model.compact`) and the attempt
+ * fails, automatically retries with the caller's (primary) model.
  */
 export async function compactEmbeddedPiSessionDirect(
+  params: CompactEmbeddedPiSessionParams,
+): Promise<EmbeddedPiCompactResult> {
+  // Check whether a distinct compact model is configured.
+  const compactRef = resolveCompactModelRef({
+    config: params._skipCompactOverride ? undefined : params.config,
+    callerProvider: params.provider,
+    callerModel: params.model,
+  });
+  const primaryRef = resolveCompactModelRef({
+    callerProvider: params.provider,
+    callerModel: params.model,
+  });
+  const isDistinctCompactModel =
+    compactRef.provider !== primaryRef.provider || compactRef.modelId !== primaryRef.modelId;
+
+  if (!isDistinctCompactModel) {
+    // No override or compact === primary — run once with primary model.
+    return compactEmbeddedPiSessionCore(params);
+  }
+  // Try dedicated compact model first; fall back to primary on failure.
+  const result = await compactEmbeddedPiSessionCore(params);
+  if (!result.ok) {
+    log.warn(`Compact model failed (${result.reason}); falling back to primary model`);
+    return compactEmbeddedPiSessionCore({ ...params, _skipCompactOverride: true });
+  }
+  return result;
+}
+
+/** @internal Core implementation — callers should use `compactEmbeddedPiSessionDirect`. */
+async function compactEmbeddedPiSessionCore(
   params: CompactEmbeddedPiSessionParams,
 ): Promise<EmbeddedPiCompactResult> {
   const startedAt = Date.now();
@@ -253,8 +288,12 @@ export async function compactEmbeddedPiSessionDirect(
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   const prevCwd = process.cwd();
 
-  const provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
-  const modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
+  // Resolve compact model: prefer config model.compact, fall back to caller's provider/model.
+  const { provider, modelId } = resolveCompactModelRef({
+    config: params._skipCompactOverride ? undefined : params.config,
+    callerProvider: params.provider,
+    callerModel: params.model,
+  });
   const fail = (reason: string): EmbeddedPiCompactResult => {
     log.warn(
       `[compaction-diag] end runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
@@ -562,11 +601,13 @@ export async function compactEmbeddedPiSessionDirect(
       applySystemPromptOverrideToSession(session, systemPromptOverride());
 
       try {
+        // Omit modelApi/modelId/provider so sanitizeSessionHistory skips the
+        // model-snapshot side-effect.  The transcript policy (which drives the
+        // actual sanitization) is already resolved above.  Without a snapshot
+        // write the next real run won't see a spurious "model changed" event
+        // caused by the transient compact model.
         const prior = await sanitizeSessionHistory({
           messages: session.messages,
-          modelApi: model.api,
-          modelId,
-          provider,
           config: params.config,
           sessionManager,
           sessionId: params.sessionId,
@@ -717,6 +758,35 @@ export async function compactEmbeddedPiSessionDirect(
     restoreSkillEnv?.();
     process.chdir(prevCwd);
   }
+}
+
+/**
+ * Resolve the provider/model to use for compaction.
+ * Checks `agents.defaults.model.compact` config first, falls back to the
+ * caller-supplied provider/model (which itself defaults to primary).
+ */
+export function resolveCompactModelRef(params: {
+  config?: OpenClawConfig;
+  callerProvider?: string;
+  callerModel?: string;
+}): { provider: string; modelId: string } {
+  const compactRef = params.config?.agents?.defaults?.model?.compact?.trim();
+  if (compactRef) {
+    const slashIdx = compactRef.indexOf("/");
+    if (slashIdx > 0) {
+      return {
+        provider: compactRef.slice(0, slashIdx),
+        modelId: compactRef.slice(slashIdx + 1),
+      };
+    }
+    // No provider separator — use the caller's provider with the overridden model id.
+    const provider = (params.callerProvider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
+    return { provider, modelId: compactRef };
+  }
+  return {
+    provider: (params.callerProvider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER,
+    modelId: (params.callerModel ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL,
+  };
 }
 
 /**
