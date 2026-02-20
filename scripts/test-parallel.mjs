@@ -53,8 +53,9 @@ const nodeMajor = Number.parseInt(process.versions.node.split(".")[0] ?? "", 10)
 // OPENCLAW_TEST_VM_FORKS=0, and let users force-enable with =1.
 const supportsVmForks = Number.isFinite(nodeMajor) ? nodeMajor !== 24 : true;
 const useVmForks =
-  process.env.OPENCLAW_TEST_VM_FORKS === "1" ||
-  (process.env.OPENCLAW_TEST_VM_FORKS !== "0" && !isWindows && supportsVmForks);
+  !(isCI && isMacOS) &&
+  (process.env.OPENCLAW_TEST_VM_FORKS === "1" ||
+    (process.env.OPENCLAW_TEST_VM_FORKS !== "0" && !isWindows && supportsVmForks));
 const disableIsolation = process.env.OPENCLAW_TEST_NO_ISOLATE === "1";
 const runs = [
   ...(useVmForks
