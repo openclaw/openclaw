@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
-import type { ContextEngine } from "./types.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
+import type { ContextEngine } from "./types.js";
 
 /**
  * A factory that creates a ContextEngine instance.
