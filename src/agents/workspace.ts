@@ -314,34 +314,44 @@ export async function ensureAgentWorkspace(params?: {
   const bootstrapPath = path.join(dir, DEFAULT_BOOTSTRAP_FILENAME);
   const statePath = resolveWorkspaceStatePath(dir);
 
-  const isBrandNewWorkspace = await (async () => {
-    const paths = [agentsPath, soulPath, toolsPath, identityPath, userPath, heartbeatPath];
-    const existing = await Promise.all(
-      paths.map(async (p) => {
-        try {
-          await fs.access(p);
-          return true;
-        } catch {
-          return false;
-        }
-      }),
-    );
-    return existing.every((v) => !v);
-  })();
+  // Check which files are missing - only load templates for those
+  const filesToCheck = [
+    { path: agentsPath, template: DEFAULT_AGENTS_FILENAME },
+    { path: soulPath, template: DEFAULT_SOUL_FILENAME },
+    { path: toolsPath, template: DEFAULT_TOOLS_FILENAME },
+    { path: identityPath, template: DEFAULT_IDENTITY_FILENAME },
+    { path: userPath, template: DEFAULT_USER_FILENAME },
+    { path: heartbeatPath, template: DEFAULT_HEARTBEAT_FILENAME },
+  ];
 
-  const agentsTemplate = await loadTemplate(DEFAULT_AGENTS_FILENAME);
-  const soulTemplate = await loadTemplate(DEFAULT_SOUL_FILENAME);
-  const toolsTemplate = await loadTemplate(DEFAULT_TOOLS_FILENAME);
-  const identityTemplate = await loadTemplate(DEFAULT_IDENTITY_FILENAME);
-  const userTemplate = await loadTemplate(DEFAULT_USER_FILENAME);
-  const heartbeatTemplate = await loadTemplate(DEFAULT_HEARTBEAT_FILENAME);
-  await writeFileIfMissing(agentsPath, agentsTemplate);
-  await writeFileIfMissing(soulPath, soulTemplate);
-  await writeFileIfMissing(toolsPath, toolsTemplate);
-  await writeFileIfMissing(identityPath, identityTemplate);
-  await writeFileIfMissing(userPath, userTemplate);
-  await writeFileIfMissing(heartbeatPath, heartbeatTemplate);
+  const missingFiles = await Promise.all(
+    filesToCheck.map(async ({ path: filePath, template }) => {
+      try {
+        await fs.access(filePath);
+        return null; // File exists, no need to load template
+      } catch {
+        return { path: filePath, template };
+      }
+    }),
+  );
 
+  const filesToCreate = missingFiles.filter(
+    (f): f is { path: string; template: string } => f !== null,
+  );
+  const isBrandNewWorkspace = filesToCreate.length === filesToCheck.length;
+
+  // Only load and write templates for files that are actually missing
+  // Also collect templates we need for legacy migration check
+  const templateCache: Map<string, string> = new Map();
+  await Promise.all(
+    filesToCreate.map(async ({ path: filePath, template }) => {
+      const content = await loadTemplate(template);
+      templateCache.set(template, content);
+      await writeFileIfMissing(filePath, content);
+    }),
+  );
+
+  // Onboarding state management
   let state = await readWorkspaceOnboardingState(statePath);
   let stateDirty = false;
   const markState = (next: Partial<WorkspaceOnboardingState>) => {
@@ -362,12 +372,25 @@ export async function ensureAgentWorkspace(params?: {
   if (!state.bootstrapSeededAt && !state.onboardingCompletedAt && !bootstrapExists) {
     // Legacy migration path: if USER/IDENTITY diverged from templates, treat onboarding as complete
     // and avoid recreating BOOTSTRAP for already-onboarded workspaces.
-    const [identityContent, userContent] = await Promise.all([
-      fs.readFile(identityPath, "utf-8"),
-      fs.readFile(userPath, "utf-8"),
-    ]);
-    const legacyOnboardingCompleted =
-      identityContent !== identityTemplate || userContent !== userTemplate;
+    const identityFresh = filesToCreate.some((f) => f.template === DEFAULT_IDENTITY_FILENAME);
+    const userFresh = filesToCreate.some((f) => f.template === DEFAULT_USER_FILENAME);
+    const bothFresh = identityFresh && userFresh;
+
+    // Fresh files = first-time onboarding, will need bootstrap; only compare if files pre-existed
+    let legacyOnboardingCompleted = false;
+    if (!bothFresh) {
+      const [identityTemplate, userTemplate] = await Promise.all([
+        templateCache.get(DEFAULT_IDENTITY_FILENAME) ?? loadTemplate(DEFAULT_IDENTITY_FILENAME),
+        templateCache.get(DEFAULT_USER_FILENAME) ?? loadTemplate(DEFAULT_USER_FILENAME),
+      ]);
+      const [identityContent, userContent] = await Promise.all([
+        fs.readFile(identityPath, "utf-8"),
+        fs.readFile(userPath, "utf-8"),
+      ]);
+      legacyOnboardingCompleted =
+        identityContent !== identityTemplate || userContent !== userTemplate;
+    }
+
     if (legacyOnboardingCompleted) {
       markState({ onboardingCompletedAt: nowIso() });
     } else {
