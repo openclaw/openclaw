@@ -185,8 +185,9 @@ export async function runPreparedReply(
       })
     : "";
   const groupSystemPrompt = sessionCtx.GroupSystemPrompt?.trim() ?? "";
+  const shouldInjectThreadContext = isNewSession || ctx.IsFirstThreadTurn;
   const inboundMetaPrompt = buildInboundMetaSystemPrompt(
-    isNewSession ? sessionCtx : { ...sessionCtx, ThreadStarterBody: undefined },
+    shouldInjectThreadContext ? sessionCtx : { ...sessionCtx, ThreadStarterBody: undefined },
   );
   const extraSystemPrompt = [inboundMetaPrompt, groupChatContext, groupIntro, groupSystemPrompt]
     .filter(Boolean)
@@ -210,7 +211,7 @@ export async function runPreparedReply(
     ((baseBodyTrimmedRaw.length === 0 && rawBodyTrimmed.length > 0) || isBareNewOrReset);
   const baseBodyFinal = isBareSessionReset ? BARE_SESSION_RESET_PROMPT : baseBody;
   const inboundUserContext = buildInboundUserContextPrefix(
-    isNewSession
+    shouldInjectThreadContext
       ? {
           ...sessionCtx,
           ...(sessionCtx.ThreadHistoryBody?.trim()
@@ -261,9 +262,9 @@ export async function runPreparedReply(
   const threadStarterBody = ctx.ThreadStarterBody?.trim();
   const threadHistoryBody = ctx.ThreadHistoryBody?.trim();
   const threadContextNote =
-    isNewSession && threadHistoryBody
+    shouldInjectThreadContext && threadHistoryBody
       ? `[Thread history - for context]\n${threadHistoryBody}`
-      : isNewSession && threadStarterBody
+      : shouldInjectThreadContext && threadStarterBody
         ? `[Thread starter - for context]\n${threadStarterBody}`
         : undefined;
   const skillResult = await ensureSkillSnapshot({

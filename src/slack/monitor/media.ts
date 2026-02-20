@@ -1,4 +1,5 @@
 import type { WebClient as SlackWebClient } from "@slack/web-api";
+import { logVerbose } from "../../globals.js";
 import { normalizeHostname } from "../../infra/net/hostname.js";
 import type { FetchLike } from "../../media/fetch.js";
 import { fetchRemoteMedia } from "../../media/fetch.js";
@@ -485,7 +486,10 @@ export async function resolveSlackThreadHistory(params: {
       ts: msg.ts,
       files: msg.files,
     }));
-  } catch {
+  } catch (err) {
+    logVerbose(
+      `slack: resolveSlackThreadHistory failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
     return [];
   }
 }
