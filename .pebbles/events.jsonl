@@ -118,3 +118,6 @@
 {"type":"dep_add","timestamp":"2026-02-20T10:26:02.73343Z","issue_id":"clawdbot-276.12","payload":{"dep_type":"parent-child","depends_on":"clawdbot-276"}}
 {"type":"dep_add","timestamp":"2026-02-20T10:26:02.783763Z","issue_id":"clawdbot-276.12","payload":{"dep_type":"blocks","depends_on":"clawdbot-276.7"}}
 {"type":"dep_add","timestamp":"2026-02-20T10:26:02.833182Z","issue_id":"clawdbot-276","payload":{"dep_type":"blocks","depends_on":"clawdbot-276.12"}}
+{"type":"status_update","timestamp":"2026-02-20T10:29:17.884664Z","issue_id":"clawdbot-276.12","payload":{"status":"in_progress"}}
+{"type":"close","timestamp":"2026-02-20T10:37:15.789848Z","issue_id":"clawdbot-276.12","payload":{}}
+{"type":"close","timestamp":"2026-02-20T10:57:51.24705Z","issue_id":"clawdbot-276.12","payload":{}}

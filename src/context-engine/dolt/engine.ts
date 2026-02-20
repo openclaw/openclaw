@@ -1,10 +1,6 @@
-import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { resolveAgentDir } from "../../agents/agent-scope.js";
+import path from "node:path";
 import type { OpenClawConfig } from "../../config/config.js";
-import { resolveStateDir } from "../../config/paths.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
-import { registerContextEngine } from "../registry.js";
 import type {
   AssembleResult,
   BootstrapResult,
@@ -14,7 +10,12 @@ import type {
   IngestBatchResult,
   IngestResult,
 } from "../types.js";
-import { assembleDoltContext } from "./assembly.js";
+import type { DoltRecord, DoltRecordLevel, DoltStore } from "./store/types.js";
+import { resolveAgentDir } from "../../agents/agent-scope.js";
+import { resolveStateDir } from "../../config/paths.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
+import { registerContextEngine } from "../registry.js";
+import { assembleDoltContext, writeDoltContextSnapshot } from "./assembly.js";
 import { hydrateDoltBootstrapState } from "./bootstrap.js";
 import { enforceDoltBindleOldestFirstEviction } from "./eviction.js";
 import {
@@ -26,7 +27,6 @@ import {
 import { finalizeDoltReset } from "./reset-finalization.js";
 import { executeDoltRollup } from "./rollup.js";
 import { openSqliteDoltStore } from "./store/sqlite-dolt-store.js";
-import type { DoltRecord, DoltRecordLevel, DoltStore } from "./store/types.js";
 
 type DoltContextEngineOptions = {
   agentId?: string;
@@ -176,6 +176,19 @@ export class DoltContextEngine implements ContextEngine {
       sessionId: params.sessionId,
       tokenBudget: params.tokenBudget,
     });
+
+    // Write an atomic snapshot file alongside the DB for live inspection.
+    try {
+      const snapshotPath = this.resolveDbPath().replace(/\.db$/, ".context.json");
+      writeDoltContextSnapshot({
+        result: assembled,
+        sessionId: params.sessionId,
+        snapshotPath,
+      });
+    } catch {
+      // Snapshot is best-effort — never block context assembly.
+    }
+
     return {
       messages: assembled.messages,
       estimatedTokens: assembled.estimatedTokens,
