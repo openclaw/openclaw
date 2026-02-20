@@ -163,6 +163,50 @@ function normalizeAllowedHosts(allowedHosts?: string[]): Set<string> | null {
   return normalized.size > 0 ? normalized : null;
 }
 
+function normalizeIpForTrustMatch(value?: string): string | null {
+  const raw = value?.trim().toLowerCase();
+  if (!raw) {
+    return null;
+  }
+
+  let candidate = raw;
+  if (candidate.startsWith("[")) {
+    const endBracket = candidate.indexOf("]");
+    if (endBracket !== -1) {
+      candidate = candidate.slice(1, endBracket);
+    }
+  }
+
+  const zoneSeparator = candidate.indexOf("%");
+  if (zoneSeparator !== -1) {
+    candidate = candidate.slice(0, zoneSeparator);
+  }
+
+  if (candidate.includes(".") && candidate.includes(":")) {
+    const firstColon = candidate.indexOf(":");
+    const lastColon = candidate.lastIndexOf(":");
+    if (firstColon === lastColon && lastColon > 0) {
+      candidate = candidate.slice(0, lastColon);
+    }
+  }
+
+  if (candidate.startsWith("::ffff:")) {
+    return candidate.slice("::ffff:".length);
+  }
+  return candidate;
+}
+
+function isTrustedProxyIp(remoteIP: string | undefined, trustedProxyIPs: string[]): boolean {
+  const normalizedRemote = normalizeIpForTrustMatch(remoteIP);
+  if (!normalizedRemote) {
+    return false;
+  }
+  return trustedProxyIPs.some((candidate) => {
+    const normalizedCandidate = normalizeIpForTrustMatch(candidate);
+    return normalizedCandidate ? normalizedCandidate === normalizedRemote : false;
+  });
+}
+
 /**
  * Reconstruct the public webhook URL from request headers.
  *
@@ -194,8 +238,7 @@ export function reconstructWebhookUrl(ctx: WebhookContext, options?: WebhookUrlO
   const trustedProxyIPs = options?.trustedProxyIPs?.filter(Boolean) ?? [];
   const hasTrustedProxyIPs = trustedProxyIPs.length > 0;
   const remoteIP = options?.remoteIP ?? ctx.remoteAddress;
-  const fromTrustedProxy =
-    hasTrustedProxyIPs && (remoteIP ? trustedProxyIPs.includes(remoteIP) : false);
+  const fromTrustedProxy = hasTrustedProxyIPs && isTrustedProxyIp(remoteIP, trustedProxyIPs);
 
   // Only trust forwarding headers if: (has whitelist OR explicitly trusted) AND from trusted proxy
   const shouldTrustForwardingHeaders = (hasAllowedHosts || explicitlyTrusted) && fromTrustedProxy;
@@ -306,13 +349,14 @@ function getHeader(
 }
 
 function isLoopbackAddress(address?: string): boolean {
-  if (!address) {
+  const normalized = normalizeIpForTrustMatch(address);
+  if (!normalized) {
     return false;
   }
-  if (address === "127.0.0.1" || address === "::1") {
+  if (normalized === "::1") {
     return true;
   }
-  if (address.startsWith("::ffff:127.")) {
+  if (normalized === "127.0.0.1" || normalized.startsWith("127.")) {
     return true;
   }
   return false;
