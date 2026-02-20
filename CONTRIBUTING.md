@@ -45,6 +45,8 @@ Welcome to the lobster tank! 🦞
 - **Gustavo Madeira Santana** - Multi-agents, CLI, web UI
   - GitHub: [@gumadeiras](https://github.com/gumadeiras) · X: [@gumadeiras](https://x.com/gumadeiras)
 
+> **Note:** Maintainer areas are enforced via [`.github/CODEOWNERS`](.github/CODEOWNERS). When maintainer responsibilities change, update both this list and the CODEOWNERS file.
+
 ## How to Contribute
 
 1. **Bugs & small fixes** → Open a PR!
