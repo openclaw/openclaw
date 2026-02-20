@@ -80,6 +80,12 @@ export type ChatProps = {
   onCloseSidebar?: () => void;
   onSplitRatioChange?: (ratio: number) => void;
   onChatScroll?: (event: Event) => void;
+  // Chat loop props
+  isLoop?: boolean;
+  loopDraft?: string;
+  loopSending?: boolean;
+  onLoopDraftChange?: (next: string) => void;
+  onLoopSend?: () => void;
 };
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
@@ -417,6 +423,45 @@ export function renderChat(props: ChatProps) {
               New messages ${icons.arrowDown}
             </button>
           `
+          : nothing
+      }
+
+      ${
+        props.isLoop
+          ? html`
+        <div class="chat-compose chat-compose--loop">
+          <div class="chat-compose__row">
+            <label class="field chat-compose__field">
+              <span>→ GPT-5.2</span>
+              <textarea
+                ${ref((el) => el && adjustTextareaHeight(el as HTMLTextAreaElement))}
+                .value=${props.loopDraft ?? ""}
+                ?disabled=${!props.connected || props.loopSending}
+                @keydown=${(e: KeyboardEvent) => {
+                  if (e.key !== "Enter" || e.shiftKey || e.isComposing || e.keyCode === 229) return;
+                  e.preventDefault();
+                  if (props.loopDraft?.trim() && props.onLoopSend) props.onLoopSend();
+                }}
+                @input=${(e: Event) => {
+                  const target = e.target as HTMLTextAreaElement;
+                  adjustTextareaHeight(target);
+                  props.onLoopDraftChange?.(target.value);
+                }}
+                placeholder="Claude의 답변이 여기에 채워집니다. 편집 후 Send to GPT →"
+              ></textarea>
+            </label>
+            <div class="chat-compose__actions">
+              <button
+                class="btn primary"
+                ?disabled=${!props.connected || props.loopSending || !props.loopDraft?.trim()}
+                @click=${props.onLoopSend}
+              >
+                ${props.loopSending ? "Sending..." : "Send to GPT"}<kbd class="btn-kbd">↵</kbd>
+              </button>
+            </div>
+          </div>
+        </div>
+      `
           : nothing
       }
 

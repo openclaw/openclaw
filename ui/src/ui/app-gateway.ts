@@ -12,6 +12,7 @@ import {
 } from "./app-settings.ts";
 import { handleAgentEvent, resetToolStream, type AgentEventPayload } from "./app-tool-stream.ts";
 import type { OpenClawApp } from "./app.ts";
+import { extractText } from "./chat/message-extract.ts";
 import { loadAgents } from "./controllers/agents.ts";
 import { loadAssistantIdentity } from "./controllers/assistant-identity.ts";
 import { loadChatHistory } from "./controllers/chat.ts";
@@ -37,6 +38,117 @@ import type {
   StatusSummary,
   UpdateAvailable,
 } from "./types.ts";
+
+/** Fetch CHATLOOP.md system prompt via gateway RPC. */
+async function loadChatLoopSystemPrompt(host: GatewayHost): Promise<string | null> {
+  const client = host.client;
+  if (!client) return null;
+  try {
+    const res = await client.request<{ file?: { content?: string } } | null>("agents.files.get", {
+      agentId: "main",
+      name: "CHATLOOP.md",
+    });
+    return res?.file?.content?.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Chat-loop: fill the loop draft with the last assistant message. */
+function fillChatLoopDraft(host: GatewayHost) {
+  const app = host as unknown as Record<string, unknown>;
+  const chatMessages = app.chatMessages as Array<{ role: string; content: unknown }> | undefined;
+  if (!chatMessages || chatMessages.length === 0) return;
+
+  const last = [...chatMessages].reverse().find((m) => m.role === "assistant");
+  if (!last) return;
+
+  const text = extractText(last);
+  if (text) {
+    app.chatLoopDraft = text;
+  }
+}
+
+const LOOP_SESSION_KEY = "agent:main:chatloop-gpt";
+const LOOP_MODEL = "openai/gpt-5.2";
+let loopSessionReady = false;
+
+/** Ensure the GPT session exists with the right model override. */
+async function ensureLoopSession(host: GatewayHost) {
+  if (loopSessionReady || !host.client) return;
+  try {
+    await host.client.request("sessions.patch", {
+      key: LOOP_SESSION_KEY,
+      model: LOOP_MODEL,
+    });
+    loopSessionReady = true;
+  } catch {
+    // session might not exist yet — first chat.send will create it
+    loopSessionReady = true; // still proceed, chat.send may auto-create
+  }
+}
+
+/** Chat-loop: send the loop draft to GPT-5.2 via a sub-session and fill the main input. */
+async function sendChatLoop(host: GatewayHost, message: string) {
+  const app = host as unknown as Record<string, unknown>;
+  const client = host.client;
+  if (!client) return;
+
+  app.chatLoopSending = true;
+
+  try {
+    // Ensure the loop session has the GPT model override
+    await ensureLoopSession(host);
+
+    // Send to the GPT session via chat.send RPC — this uses the session's model override
+    const runId = `loop_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    await client.request("chat.send", {
+      sessionKey: LOOP_SESSION_KEY,
+      message,
+      deliver: false,
+      idempotencyKey: runId,
+    });
+
+    // Wait for the response by polling chat.history
+    // The chat.send triggers an agent run; we need to wait for it to complete
+    let attempts = 0;
+    const maxAttempts = 60; // 60 seconds max
+    let reply: string | null = null;
+
+    while (attempts < maxAttempts) {
+      await new Promise((r) => setTimeout(r, 1000));
+      attempts++;
+
+      try {
+        const history = await client.request<{
+          messages?: Array<{ role: string; content: unknown }>;
+        }>("chat.history", { sessionKey: LOOP_SESSION_KEY, limit: 1 });
+        const lastMsg = history?.messages?.at(-1);
+        if (lastMsg?.role === "assistant") {
+          const text = extractText(lastMsg);
+          if (text && text !== (app._lastLoopReply as string)) {
+            reply = text;
+            app._lastLoopReply = text;
+            break;
+          }
+        }
+      } catch {
+        // ignore polling errors
+      }
+    }
+
+    if (reply) {
+      app.chatMessage = reply;
+    }
+  } catch {
+    // silently ignore loop errors
+  } finally {
+    app.chatLoopSending = false;
+  }
+}
+
+// Expose sendChatLoop for use by the UI
+export { sendChatLoop };
 
 type GatewayHost = {
   settings: UiSettings;
@@ -239,7 +351,11 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
       }
     }
     if (state === "final") {
-      void loadChatHistory(host as unknown as OpenClawApp);
+      void loadChatHistory(host as unknown as OpenClawApp).then(() => {
+        if (host.tab === "chatloop") {
+          fillChatLoopDraft(host);
+        }
+      });
     }
     return;
   }

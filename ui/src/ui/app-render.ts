@@ -1,7 +1,8 @@
 import { html, nothing } from "lit";
 import { parseAgentSessionKey } from "../../../src/routing/session-key.js";
 import { t } from "../i18n/index.ts";
-import { refreshChatAvatar } from "./app-chat.ts";
+import { ChatHost, refreshChatAvatar } from "./app-chat.ts";
+import { sendChatLoop } from "./app-gateway.ts";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
 import { renderChatControls, renderTab, renderThemeToggle } from "./app-render.helpers.ts";
 import type { AppViewState } from "./app-view-state.ts";
@@ -93,7 +94,7 @@ export function renderApp(state: AppViewState) {
   const sessionsCount = state.sessionsResult?.count ?? null;
   const cronNext = state.cronStatus?.nextWakeAtMs ?? null;
   const chatDisabledReason = state.connected ? null : t("chat.disconnected");
-  const isChat = state.tab === "chat";
+  const isChat = state.tab === "chat" || state.tab === "chatloop";
   const chatFocus = isChat && (state.settings.chatFocusMode || state.onboarding);
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
   const assistantAvatarUrl = resolveAssistantAvatarUrl(state);
@@ -797,7 +798,7 @@ export function renderApp(state: AppViewState) {
         }
 
         ${
-          state.tab === "chat"
+          state.tab === "chat" || state.tab === "chatloop"
             ? renderChat({
                 sessionKey: state.sessionKey,
                 onSessionKeyChange: (next) => {
@@ -872,6 +873,16 @@ export function renderApp(state: AppViewState) {
                 onSplitRatioChange: (ratio: number) => state.handleSplitRatioChange(ratio),
                 assistantName: state.assistantName,
                 assistantAvatar: state.assistantAvatar,
+                // Chat loop props
+                isLoop: state.tab === "chatloop",
+                loopDraft: state.chatLoopDraft,
+                loopSending: state.chatLoopSending,
+                onLoopDraftChange: (next: string) => (state.chatLoopDraft = next),
+                onLoopSend: () => {
+                  const draft = state.chatLoopDraft?.trim();
+                  if (!draft) return;
+                  void sendChatLoop(state as unknown as Parameters<typeof sendChatLoop>[0], draft);
+                },
               })
             : nothing
         }
