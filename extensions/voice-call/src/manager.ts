@@ -11,6 +11,7 @@ import {
   initiateCall as initiateCallWithContext,
   speak as speakWithContext,
   speakInitialMessage as speakInitialMessageWithContext,
+  type SpeakOptions,
 } from "./manager/outbound.js";
 import { getCallHistoryFromStore, loadActiveCallsFromStore } from "./manager/store.js";
 import type { VoiceCallProvider } from "./providers/base.js";
@@ -57,10 +58,16 @@ export class CallManager {
     }
   >();
   private maxDurationTimers = new Map<CallId, NodeJS.Timeout>();
+  private onCallEnded?: (call: CallRecord) => void;
 
-  constructor(config: VoiceCallConfig, storePath?: string) {
+  constructor(
+    config: VoiceCallConfig,
+    storePath?: string,
+    onCallEnded?: (call: CallRecord) => void,
+  ) {
     this.config = config;
     this.storePath = resolveDefaultStoreBase(config, storePath);
+    this.onCallEnded = onCallEnded;
   }
 
   /**
@@ -100,8 +107,12 @@ export class CallManager {
   /**
    * Speak to user in an active call.
    */
-  async speak(callId: CallId, text: string): Promise<{ success: boolean; error?: string }> {
-    return speakWithContext(this.getContext(), callId, text);
+  async speak(
+    callId: CallId,
+    text: string,
+    options?: SpeakOptions,
+  ): Promise<{ success: boolean; error?: string }> {
+    return speakWithContext(this.getContext(), callId, text, options);
   }
 
   /**
@@ -144,6 +155,7 @@ export class CallManager {
       onCallAnswered: (call) => {
         this.maybeSpeakInitialMessageOnAnswered(call);
       },
+      onCallEnded: this.onCallEnded,
     };
   }
 

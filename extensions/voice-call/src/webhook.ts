@@ -402,8 +402,14 @@ export class VoiceCallWebhookServer {
       }
 
       if (result.text) {
-        console.log(`[voice-call] AI response: "${result.text}"`);
-        await this.manager.speak(callId, result.text);
+        const speakResult = await this.manager.speak(callId, result.text);
+        if (speakResult.success) {
+          console.log(`[voice-call] AI response delivered: "${result.text}"`);
+        } else {
+          console.warn(
+            `[voice-call] Failed to speak AI response for ${callId}: ${speakResult.error ?? "unknown error"}`,
+          );
+        }
       }
     } catch (err) {
       console.error(`[voice-call] Auto-response error:`, err);

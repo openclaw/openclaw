@@ -9,6 +9,7 @@ import {
 } from "./src/config.js";
 import type { CoreConfig } from "./src/core-bridge.js";
 import { createVoiceCallRuntime, type VoiceCallRuntime } from "./src/runtime.js";
+import type { CallRecord } from "./src/types.js";
 
 const voiceCallConfigSchema = {
   parse(value: unknown): VoiceCallConfig {
@@ -163,6 +164,53 @@ const voiceCallPlugin = {
     let runtimePromise: Promise<VoiceCallRuntime> | null = null;
     let runtime: VoiceCallRuntime | null = null;
 
+    // Resolve the main session key using core's canonical logic so transcript
+    // bridging targets the same queue regardless of agent-id/session-key config.
+    let mainSessionKey = "agent:main:main";
+    try {
+      mainSessionKey = api.runtime.system.resolveMainSessionKey(api.config);
+    } catch (err) {
+      api.logger.warn(
+        `[voice-call] resolveMainSessionKey failed, using default: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
+    // Max transcript lines/chars to inject as a system event to avoid bloating prompts.
+    const MAX_TRANSCRIPT_LINES = 40;
+    const MAX_TRANSCRIPT_CHARS = 2000;
+
+    const onCallEnded = (call: CallRecord): void => {
+      if (!call.transcript.length) {
+        return;
+      }
+      const duration =
+        call.endedAt && call.startedAt ? Math.round((call.endedAt - call.startedAt) / 1000) : null;
+      const durationStr =
+        duration != null ? `${Math.floor(duration / 60)}m ${duration % 60}s` : "unknown";
+
+      const lines = call.transcript
+        .map((e) => `${e.speaker === "bot" ? "You" : "Caller"}: ${e.text}`)
+        .slice(-MAX_TRANSCRIPT_LINES);
+
+      let body = lines.join("\n");
+      if (body.length > MAX_TRANSCRIPT_CHARS) {
+        body = `…${body.slice(-MAX_TRANSCRIPT_CHARS)}`;
+      }
+
+      const maskedFrom = call.from.length > 4 ? `***${call.from.slice(-4)}` : "***";
+      const text = `Voice call ended (${call.direction}, from ${maskedFrom}, duration: ${durationStr}):\n${body}`;
+      try {
+        api.runtime.system.enqueueSystemEvent(text, {
+          sessionKey: mainSessionKey,
+          contextKey: "voice-call-transcript",
+        });
+      } catch (err) {
+        api.logger.warn(
+          `[voice-call] Failed to bridge transcript: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    };
+
     const ensureRuntime = async () => {
       if (!config.enabled) {
         throw new Error("Voice call disabled in plugin config");
@@ -179,6 +227,7 @@ const voiceCallPlugin = {
           coreConfig: api.config as CoreConfig,
           ttsRuntime: api.runtime.tts,
           logger: api.logger,
+          onCallEnded,
         });
       }
       runtime = await runtimePromise;

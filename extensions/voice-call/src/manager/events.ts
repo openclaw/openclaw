@@ -25,6 +25,7 @@ type EventContext = Pick<
   | "transcriptWaiters"
   | "maxDurationTimers"
   | "onCallAnswered"
+  | "onCallEnded"
 >;
 
 function shouldAcceptInbound(config: EventContext["config"], from: string | undefined): boolean {
@@ -208,6 +209,14 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
       if (call.providerCallId) {
         ctx.providerCallIdMap.delete(call.providerCallId);
       }
+      try {
+        ctx.onCallEnded?.(call);
+      } catch (err) {
+        console.error(
+          "[voice-call] onCallEnded callback error:",
+          err instanceof Error ? err.message : String(err),
+        );
+      }
       break;
 
     case "call.error":
@@ -220,6 +229,14 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
         ctx.activeCalls.delete(call.callId);
         if (call.providerCallId) {
           ctx.providerCallIdMap.delete(call.providerCallId);
+        }
+        try {
+          ctx.onCallEnded?.(call);
+        } catch (err) {
+          console.error(
+            "[voice-call] onCallEnded callback error:",
+            err instanceof Error ? err.message : String(err),
+          );
         }
       }
       break;

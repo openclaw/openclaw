@@ -250,4 +250,84 @@ describe("processEvent (functional)", () => {
     expect(() => processEvent(ctx, event)).not.toThrow();
     expect(ctx.activeCalls.size).toBe(0);
   });
+
+  it("fires onCallEnded on call.ended event", () => {
+    const now = Date.now();
+    const endedCalls: string[] = [];
+    const ctx = createContext({
+      onCallEnded: (call) => {
+        endedCalls.push(call.callId);
+      },
+    });
+    ctx.activeCalls.set("call-ended-hook", {
+      callId: "call-ended-hook",
+      providerCallId: "provider-ended-hook",
+      provider: "plivo",
+      direction: "outbound",
+      state: "answered",
+      from: "+15550000000",
+      to: "+15550000001",
+      startedAt: now,
+      transcript: [],
+      processedEventIds: [],
+      metadata: {},
+    });
+    ctx.providerCallIdMap.set("provider-ended-hook", "call-ended-hook");
+
+    const event: NormalizedEvent = {
+      id: "evt-ended-hook",
+      type: "call.ended",
+      callId: "call-ended-hook",
+      providerCallId: "provider-ended-hook",
+      timestamp: now + 100,
+      reason: "hangup-user",
+    };
+
+    processEvent(ctx, event);
+
+    expect(endedCalls).toHaveLength(1);
+    expect(endedCalls[0]).toBe("call-ended-hook");
+    expect(ctx.activeCalls.size).toBe(0);
+  });
+
+  it("fires onCallEnded on non-retryable call.error", () => {
+    const now = Date.now();
+    const endedCalls: { callId: string; endReason: string | undefined }[] = [];
+    const ctx = createContext({
+      onCallEnded: (call) => {
+        endedCalls.push({ callId: call.callId, endReason: call.endReason });
+      },
+    });
+    ctx.activeCalls.set("call-error-hook", {
+      callId: "call-error-hook",
+      providerCallId: "provider-error-hook",
+      provider: "plivo",
+      direction: "outbound",
+      state: "answered",
+      from: "+15550000000",
+      to: "+15550000001",
+      startedAt: now,
+      transcript: [],
+      processedEventIds: [],
+      metadata: {},
+    });
+    ctx.providerCallIdMap.set("provider-error-hook", "call-error-hook");
+
+    const event: NormalizedEvent = {
+      id: "evt-error-hook",
+      type: "call.error",
+      callId: "call-error-hook",
+      providerCallId: "provider-error-hook",
+      timestamp: now + 100,
+      error: "provider crashed",
+      retryable: false,
+    };
+
+    processEvent(ctx, event);
+
+    expect(endedCalls).toHaveLength(1);
+    expect(endedCalls[0].callId).toBe("call-error-hook");
+    expect(endedCalls[0].endReason).toBe("error");
+    expect(ctx.activeCalls.size).toBe(0);
+  });
 });

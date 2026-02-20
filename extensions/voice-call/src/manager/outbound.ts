@@ -49,7 +49,12 @@ type EndCallContext = Pick<
   | "storePath"
   | "transcriptWaiters"
   | "maxDurationTimers"
+  | "onCallEnded"
 >;
+
+export type SpeakOptions = {
+  recordTranscript?: boolean;
+};
 
 export async function initiateCall(
   ctx: InitiateContext,
@@ -148,6 +153,7 @@ export async function speak(
   ctx: SpeakContext,
   callId: CallId,
   text: string,
+  options?: SpeakOptions,
 ): Promise<{ success: boolean; error?: string }> {
   const call = ctx.activeCalls.get(callId);
   if (!call) {
@@ -163,7 +169,9 @@ export async function speak(
     transitionState(call, "speaking");
     persistCallRecord(ctx.storePath, call);
 
-    addTranscriptEntry(call, "bot", text);
+    if (options?.recordTranscript !== false) {
+      addTranscriptEntry(call, "bot", text);
+    }
 
     const voice = ctx.provider?.name === "twilio" ? ctx.config.tts?.openai?.voice : undefined;
     await ctx.provider.playTts({
@@ -331,6 +339,15 @@ export async function endCall(
     ctx.activeCalls.delete(callId);
     if (call.providerCallId) {
       ctx.providerCallIdMap.delete(call.providerCallId);
+    }
+
+    try {
+      ctx.onCallEnded?.(call);
+    } catch (cbErr) {
+      console.error(
+        "[voice-call] onCallEnded callback error:",
+        cbErr instanceof Error ? cbErr.message : String(cbErr),
+      );
     }
 
     return { success: true };

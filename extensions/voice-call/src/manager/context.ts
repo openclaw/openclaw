@@ -32,6 +32,8 @@ export type CallManagerTransientState = {
 export type CallManagerHooks = {
   /** Optional runtime hook invoked after an event transitions a call into answered state. */
   onCallAnswered?: (call: CallRecord) => void;
+  /** Optional runtime hook invoked when a call ends (completed, error, or bot hangup). */
+  onCallEnded?: (call: CallRecord) => void;
 };
 
 export type CallManagerContext = CallManagerRuntimeState &

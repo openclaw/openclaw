@@ -482,4 +482,284 @@ describe("CallManager", () => {
     expect(provider.startListeningCalls).toHaveLength(5);
     expect(provider.stopListeningCalls).toHaveLength(5);
   });
+
+  it("fires onCallEnded callback when a call completes", async () => {
+    const config = VoiceCallConfigSchema.parse({
+      enabled: true,
+      provider: "plivo",
+      fromNumber: "+15550000000",
+    });
+
+    const storePath = path.join(os.tmpdir(), `openclaw-voice-call-test-${Date.now()}`);
+    const provider = new FakeProvider();
+    const endedCalls: { callId: string; direction: string }[] = [];
+    const manager = new CallManager(config, storePath, (call) => {
+      endedCalls.push({ callId: call.callId, direction: call.direction });
+    });
+    manager.initialize(provider, "https://example.com/voice/webhook");
+
+    const started = await manager.initiateCall("+15550000099");
+    expect(started.success).toBe(true);
+
+    manager.processEvent({
+      id: "evt-end-answered",
+      type: "call.answered",
+      callId: started.callId,
+      providerCallId: "request-uuid",
+      timestamp: Date.now(),
+    });
+
+    manager.processEvent({
+      id: "evt-end-completed",
+      type: "call.ended",
+      callId: started.callId,
+      providerCallId: "request-uuid",
+      timestamp: Date.now(),
+      reason: "hangup-user",
+    });
+
+    expect(endedCalls).toHaveLength(1);
+    expect(endedCalls[0].callId).toBe(started.callId);
+    expect(endedCalls[0].direction).toBe("outbound");
+  });
+
+  it("fires onCallEnded callback on bot hangup via endCall", async () => {
+    const config = VoiceCallConfigSchema.parse({
+      enabled: true,
+      provider: "plivo",
+      fromNumber: "+15550000000",
+    });
+
+    const storePath = path.join(os.tmpdir(), `openclaw-voice-call-test-${Date.now()}`);
+    const provider = new FakeProvider();
+    const endedCalls: string[] = [];
+    const manager = new CallManager(config, storePath, (call) => {
+      endedCalls.push(call.callId);
+    });
+    manager.initialize(provider, "https://example.com/voice/webhook");
+
+    const started = await manager.initiateCall("+15550000098");
+    expect(started.success).toBe(true);
+
+    manager.processEvent({
+      id: "evt-bot-hang-answered",
+      type: "call.answered",
+      callId: started.callId,
+      providerCallId: "request-uuid",
+      timestamp: Date.now(),
+    });
+
+    const result = await manager.endCall(started.callId);
+    expect(result.success).toBe(true);
+    expect(endedCalls).toHaveLength(1);
+    expect(endedCalls[0]).toBe(started.callId);
+  });
+
+  it("fires onCallEnded callback on non-retryable call.error", async () => {
+    const config = VoiceCallConfigSchema.parse({
+      enabled: true,
+      provider: "plivo",
+      fromNumber: "+15550000000",
+    });
+
+    const storePath = path.join(os.tmpdir(), `openclaw-voice-call-test-${Date.now()}`);
+    const provider = new FakeProvider();
+    const endedCalls: { callId: string; endReason: string | undefined }[] = [];
+    const manager = new CallManager(config, storePath, (call) => {
+      endedCalls.push({ callId: call.callId, endReason: call.endReason });
+    });
+    manager.initialize(provider, "https://example.com/voice/webhook");
+
+    const started = await manager.initiateCall("+15550000097");
+    expect(started.success).toBe(true);
+
+    manager.processEvent({
+      id: "evt-err-answered",
+      type: "call.answered",
+      callId: started.callId,
+      providerCallId: "request-uuid",
+      timestamp: Date.now(),
+    });
+
+    manager.processEvent({
+      id: "evt-err-fatal",
+      type: "call.error",
+      callId: started.callId,
+      providerCallId: "request-uuid",
+      timestamp: Date.now(),
+      error: "provider unavailable",
+      retryable: false,
+    });
+
+    expect(endedCalls).toHaveLength(1);
+    expect(endedCalls[0].callId).toBe(started.callId);
+    expect(endedCalls[0].endReason).toBe("error");
+  });
+
+  it("does not fire onCallEnded callback on retryable call.error", async () => {
+    const config = VoiceCallConfigSchema.parse({
+      enabled: true,
+      provider: "plivo",
+      fromNumber: "+15550000000",
+    });
+
+    const storePath = path.join(os.tmpdir(), `openclaw-voice-call-test-${Date.now()}`);
+    const provider = new FakeProvider();
+    const endedCalls: string[] = [];
+    const manager = new CallManager(config, storePath, (call) => {
+      endedCalls.push(call.callId);
+    });
+    manager.initialize(provider, "https://example.com/voice/webhook");
+
+    const started = await manager.initiateCall("+15550000096");
+    expect(started.success).toBe(true);
+
+    manager.processEvent({
+      id: "evt-retry-answered",
+      type: "call.answered",
+      callId: started.callId,
+      providerCallId: "request-uuid",
+      timestamp: Date.now(),
+    });
+
+    manager.processEvent({
+      id: "evt-retry-err",
+      type: "call.error",
+      callId: started.callId,
+      providerCallId: "request-uuid",
+      timestamp: Date.now(),
+      error: "temporary glitch",
+      retryable: true,
+    });
+
+    expect(endedCalls).toHaveLength(0);
+  });
+
+  it("fires onCallEnded exactly once when endCall and call.ended both trigger", async () => {
+    const config = VoiceCallConfigSchema.parse({
+      enabled: true,
+      provider: "plivo",
+      fromNumber: "+15550000000",
+    });
+
+    const storePath = path.join(os.tmpdir(), `openclaw-voice-call-test-${Date.now()}`);
+    const provider = new FakeProvider();
+    const endedCalls: string[] = [];
+    const manager = new CallManager(config, storePath, (call) => {
+      endedCalls.push(call.callId);
+    });
+    manager.initialize(provider, "https://example.com/voice/webhook");
+
+    const started = await manager.initiateCall("+15550000095");
+    expect(started.success).toBe(true);
+
+    manager.processEvent({
+      id: "evt-dedup-answered",
+      type: "call.answered",
+      callId: started.callId,
+      providerCallId: "request-uuid",
+      timestamp: Date.now(),
+    });
+
+    // Bot hangs up -- this should fire the callback.
+    const result = await manager.endCall(started.callId);
+    expect(result.success).toBe(true);
+
+    // Provider sends a call.ended webhook after the bot hangup.
+    // The call is already removed from activeCalls, so this should be a no-op.
+    manager.processEvent({
+      id: "evt-dedup-ended",
+      type: "call.ended",
+      callId: started.callId,
+      providerCallId: "request-uuid",
+      timestamp: Date.now(),
+      reason: "hangup-bot",
+    });
+
+    expect(endedCalls).toHaveLength(1);
+    expect(endedCalls[0]).toBe(started.callId);
+  });
+
+  it("does not throw when onCallEnded callback throws", async () => {
+    const config = VoiceCallConfigSchema.parse({
+      enabled: true,
+      provider: "plivo",
+      fromNumber: "+15550000000",
+    });
+
+    const storePath = path.join(os.tmpdir(), `openclaw-voice-call-test-${Date.now()}`);
+    const provider = new FakeProvider();
+    const manager = new CallManager(config, storePath, () => {
+      throw new Error("callback boom");
+    });
+    manager.initialize(provider, "https://example.com/voice/webhook");
+
+    const started = await manager.initiateCall("+15550000094");
+    expect(started.success).toBe(true);
+
+    manager.processEvent({
+      id: "evt-throw-answered",
+      type: "call.answered",
+      callId: started.callId,
+      providerCallId: "request-uuid",
+      timestamp: Date.now(),
+    });
+
+    // The callback throws, but processEvent should catch it gracefully.
+    expect(() => {
+      manager.processEvent({
+        id: "evt-throw-ended",
+        type: "call.ended",
+        callId: started.callId,
+        providerCallId: "request-uuid",
+        timestamp: Date.now(),
+        reason: "hangup-user",
+      });
+    }).not.toThrow();
+
+    // Call should be cleaned up despite the callback error.
+    expect(manager.getCall(started.callId)).toBeUndefined();
+  });
+
+  it("speak with recordTranscript=false does not add transcript entry", async () => {
+    const config = VoiceCallConfigSchema.parse({
+      enabled: true,
+      provider: "plivo",
+      fromNumber: "+15550000000",
+    });
+
+    const storePath = path.join(os.tmpdir(), `openclaw-voice-call-test-${Date.now()}`);
+    const provider = new FakeProvider();
+    const manager = new CallManager(config, storePath);
+    manager.initialize(provider, "https://example.com/voice/webhook");
+
+    const started = await manager.initiateCall("+15550000093");
+    expect(started.success).toBe(true);
+
+    manager.processEvent({
+      id: "evt-speak-opt-answered",
+      type: "call.answered",
+      callId: started.callId,
+      providerCallId: "request-uuid",
+      timestamp: Date.now(),
+    });
+
+    // Speak with recordTranscript: false -- should NOT add a transcript entry.
+    await manager.speak(started.callId, "acknowledgement text", { recordTranscript: false });
+
+    let call = manager.getCall(started.callId);
+    expect(call?.transcript.find((e) => e.text === "acknowledgement text")).toBeUndefined();
+
+    // Speak without options -- should add a transcript entry.
+    await manager.speak(started.callId, "real response");
+
+    call = manager.getCall(started.callId);
+    const transcriptTexts = call?.transcript.map((e) => e.text) ?? [];
+    expect(transcriptTexts).toEqual(["real response"]);
+
+    // Verify the provider received both TTS calls.
+    expect(provider.playTtsCalls).toHaveLength(2);
+    expect(provider.playTtsCalls[0]?.text).toBe("acknowledgement text");
+    expect(provider.playTtsCalls[1]?.text).toBe("real response");
+  });
 });

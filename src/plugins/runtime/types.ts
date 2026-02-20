@@ -75,6 +75,8 @@ type GetChannelActivity = typeof import("../../infra/channel-activity.js").getCh
 type EnqueueSystemEvent = typeof import("../../infra/system-events.js").enqueueSystemEvent;
 type RunCommandWithTimeout = typeof import("../../process/exec.js").runCommandWithTimeout;
 type FormatNativeDependencyHint = typeof import("./native-deps.js").formatNativeDependencyHint;
+type ResolveMainSessionKey =
+  typeof import("../../config/sessions/main-session.js").resolveMainSessionKey;
 type LoadWebMedia = typeof import("../../web/media.js").loadWebMedia;
 type DetectMime = typeof import("../../media/mime.js").detectMime;
 type MediaKindFromMime = typeof import("../../media/constants.js").mediaKindFromMime;
@@ -184,6 +186,7 @@ export type PluginRuntime = {
   };
   system: {
     enqueueSystemEvent: EnqueueSystemEvent;
+    resolveMainSessionKey: ResolveMainSessionKey;
     runCommandWithTimeout: RunCommandWithTimeout;
     formatNativeDependencyHint: FormatNativeDependencyHint;
   };

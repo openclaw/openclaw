@@ -41,6 +41,7 @@ describe("handleFeishuMessage command authorization", () => {
     setFeishuRuntime({
       system: {
         enqueueSystemEvent: vi.fn(),
+        resolveMainSessionKey: vi.fn(() => "agent:main:main"),
       },
       channel: {
         routing: {
