@@ -20,6 +20,7 @@ import { healthHandlers } from "./server-methods/health.js";
 import { logsHandlers } from "./server-methods/logs.js";
 import { modelsHandlers } from "./server-methods/models.js";
 import { nodeHandlers } from "./server-methods/nodes.js";
+import { opsRuntimeHandlers } from "./server-methods/ops-runtime.js";
 import { pushHandlers } from "./server-methods/push.js";
 import { sendHandlers } from "./server-methods/send.js";
 import { sessionsHandlers } from "./server-methods/sessions.js";
@@ -75,6 +76,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...execApprovalsHandlers,
   ...webHandlers,
   ...modelsHandlers,
+  ...opsRuntimeHandlers,
   ...configHandlers,
   ...wizardHandlers,
   ...talkHandlers,
