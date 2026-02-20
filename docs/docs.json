@@ -324,6 +324,10 @@
       "destination": "/install/podman"
     },
     {
+      "source": "/apple-container",
+      "destination": "/install/apple-container"
+    },
+    {
       "source": "/doctor",
       "destination": "/gateway/doctor"
     },
